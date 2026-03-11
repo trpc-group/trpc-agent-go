@@ -330,9 +330,33 @@ func (s *Service) UpdateMemory(
 	topics []string,
 	opts ...memory.UpdateOption,
 ) error {
-	ep := memory.ResolveUpdateOptions(opts)
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
+	}
+	ep := memory.ResolveUpdateOptions(opts)
+
+	selectQuery := fmt.Sprintf(
+		"SELECT memory_id, app_name, user_id, memory_content, topics, "+
+			"memory_kind, event_time, participants, location, "+
+			"created_at, updated_at FROM %s WHERE memory_id = $1 AND app_name = $2 AND user_id = $3",
+		s.tableName,
+	)
+	if s.opts.softDelete {
+		selectQuery += " AND deleted_at IS NULL"
+	}
+	var entry *memory.Entry
+	if err := s.db.Query(ctx, func(rows *sql.Rows) error {
+		if !rows.Next() {
+			return sql.ErrNoRows
+		}
+		var scanErr error
+		entry, scanErr = scanMemoryEntry(rows)
+		return scanErr
+	}, selectQuery, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+		}
+		return fmt.Errorf("load memory entry failed: %w", err)
 	}
 
 	// Generate new embedding for the updated memory content.
@@ -347,58 +371,42 @@ func (s *Service) UpdateMemory(
 
 	now := time.Now()
 	vector := pgvector.NewVector(convertToFloat32(embedding))
+	newID := imemory.ApplyMemoryUpdate(
+		entry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		ep,
+		now,
+	)
+	ef := resolveMetadata(entry.Memory)
 
-	patch := &memory.Memory{}
-	imemory.ApplyMetadataPatch(patch, ep)
-
-	assignments := []string{
-		"memory_content = $1",
-		"topics = $2",
-		"embedding = $3",
-		"updated_at = $4",
+	updateQuery := fmt.Sprintf(
+		"UPDATE %s SET memory_id = $1, memory_content = $2, topics = $3, embedding = $4, "+
+			"memory_kind = $5, event_time = $6, participants = $7, location = $8, updated_at = $9 "+
+			"WHERE memory_id = $10 AND app_name = $11 AND user_id = $12",
+		s.tableName,
+	)
+	if s.opts.softDelete {
+		updateQuery += " AND deleted_at IS NULL"
 	}
-	args := []any{
+	res, err := s.db.ExecContext(
+		ctx,
+		updateQuery,
+		newID,
 		memoryStr,
 		pq.Array(topics),
 		vector,
+		ef.kind,
+		ef.eventTime,
+		pq.Array(ef.participants),
+		ef.location,
 		now,
-	}
-	argIdx := 5
-	if patch.Kind != "" {
-		assignments = append(assignments, fmt.Sprintf("memory_kind = $%d", argIdx))
-		args = append(args, string(patch.Kind))
-		argIdx++
-	}
-	if patch.EventTime != nil {
-		assignments = append(assignments, fmt.Sprintf("event_time = $%d", argIdx))
-		args = append(args, *patch.EventTime)
-		argIdx++
-	}
-	if len(patch.Participants) > 0 {
-		assignments = append(assignments, fmt.Sprintf("participants = $%d", argIdx))
-		args = append(args, pq.Array(patch.Participants))
-		argIdx++
-	}
-	if patch.Location != "" {
-		assignments = append(assignments, fmt.Sprintf("location = $%d", argIdx))
-		args = append(args, patch.Location)
-		argIdx++
-	}
-
-	var updateQuery strings.Builder
-	fmt.Fprintf(&updateQuery,
-		"UPDATE %s SET %s WHERE memory_id = $%d AND app_name = $%d AND user_id = $%d",
-		s.tableName,
-		strings.Join(assignments, ", "),
-		argIdx,
-		argIdx+1,
-		argIdx+2,
+		memoryKey.MemoryID,
+		memoryKey.AppName,
+		memoryKey.UserID,
 	)
-	if s.opts.softDelete {
-		updateQuery.WriteString(" AND deleted_at IS NULL")
-	}
-	args = append(args, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
-	res, err := s.db.ExecContext(ctx, updateQuery.String(), args...)
 	if err != nil {
 		return fmt.Errorf("update memory entry failed: %w", err)
 	}
@@ -408,6 +416,9 @@ func (s *Service) UpdateMemory(
 	}
 	if affected == 0 {
 		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+	}
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
 	}
 
 	return nil
@@ -642,7 +653,11 @@ func (s *Service) executeVectorSearch(
 	}
 
 	if opts.Kind != "" {
-		fmt.Fprintf(&searchQuery, " AND memory_kind = $%d", argIdx)
+		if opts.Kind == memory.KindFact {
+			fmt.Fprintf(&searchQuery, " AND (memory_kind = $%d OR memory_kind = '')", argIdx)
+		} else {
+			fmt.Fprintf(&searchQuery, " AND memory_kind = $%d", argIdx)
+		}
 		args = append(args, string(opts.Kind))
 		argIdx++
 	}
@@ -717,7 +732,11 @@ func (s *Service) executeKeywordSearch(
 	}
 
 	if opts.Kind != "" {
-		fmt.Fprintf(&searchQuery, " AND memory_kind = $%d", argIdx)
+		if opts.Kind == memory.KindFact {
+			fmt.Fprintf(&searchQuery, " AND (memory_kind = $%d OR memory_kind = '')", argIdx)
+		} else {
+			fmt.Fprintf(&searchQuery, " AND memory_kind = $%d", argIdx)
+		}
 		args = append(args, string(opts.Kind))
 		argIdx++
 	}
@@ -1036,6 +1055,7 @@ func buildEntry(
 	if location.Valid {
 		mem.Location = location.String
 	}
+	imemory.NormalizeMemory(mem)
 
 	return &memory.Entry{
 		ID:        memoryID,
@@ -1073,9 +1093,8 @@ func resolveMetadata(mem *memory.Memory) metadataSQLFields {
 	if mem == nil {
 		return f
 	}
-	if mem.Kind != "" {
-		f.kind = string(mem.Kind)
-	}
+	imemory.NormalizeMemory(mem)
+	f.kind = string(mem.Kind)
 	f.eventTime = mem.EventTime
 	if len(mem.Participants) > 0 {
 		f.participants = mem.Participants

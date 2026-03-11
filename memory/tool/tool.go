@@ -107,7 +107,9 @@ func NewUpdateTool() tool.CallableTool {
 
 		memoryKey := memory.Key{AppName: appName, UserID: userID, MemoryID: req.MemoryID}
 		ep := buildMetadata(req.MemoryKind, req.EventTime, req.Participants, req.Location)
+		result := &memory.UpdateResult{MemoryID: req.MemoryID}
 		var opts []memory.UpdateOption
+		opts = append(opts, memory.WithUpdateResult(result))
 		if ep != nil {
 			opts = append(opts, memory.WithUpdateMetadata(ep))
 		}
@@ -118,7 +120,7 @@ func NewUpdateTool() tool.CallableTool {
 
 		return &UpdateMemoryResponse{
 			Message:  "Memory updated successfully",
-			MemoryID: req.MemoryID,
+			MemoryID: result.MemoryID,
 			Memory:   req.Memory,
 			Topics:   req.Topics,
 		}, nil

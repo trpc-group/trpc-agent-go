@@ -84,6 +84,7 @@ type UpdateOption func(*updateOptions)
 
 type updateOptions struct {
 	metadata *Metadata
+	result   *UpdateResult
 }
 
 // WithUpdateMetadata attaches episodic metadata to an
@@ -92,19 +93,41 @@ func WithUpdateMetadata(m *Metadata) UpdateOption {
 	return func(o *updateOptions) { o.metadata = m }
 }
 
+// UpdateResult captures the effective memory ID after an update.
+// When memory identity changes due to updated content or metadata,
+// MemoryID contains the rotated canonical key.
+type UpdateResult struct {
+	MemoryID string
+}
+
+// WithUpdateResult attaches an UpdateResult sink to an UpdateMemory call.
+func WithUpdateResult(result *UpdateResult) UpdateOption {
+	return func(o *updateOptions) { o.result = result }
+}
+
 // ResolveUpdateOptions applies UpdateOption funcs and
 // returns the aggregated metadata pointer (may be nil).
 func ResolveUpdateOptions(
 	opts []UpdateOption,
 ) *Metadata {
+	return resolveUpdateConfig(opts).metadata
+}
+
+// ResolveUpdateResult applies UpdateOption funcs and returns the
+// configured update result sink (may be nil).
+func ResolveUpdateResult(opts []UpdateOption) *UpdateResult {
+	return resolveUpdateConfig(opts).result
+}
+
+func resolveUpdateConfig(opts []UpdateOption) updateOptions {
 	if len(opts) == 0 {
-		return nil
+		return updateOptions{}
 	}
-	var o updateOptions
+	o := updateOptions{}
 	for _, fn := range opts {
 		fn(&o)
 	}
-	return o.metadata
+	return o
 }
 
 // SearchOption configures optional parameters for SearchMemory.

@@ -274,14 +274,19 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		return fmt.Errorf(
 			"unmarshal memory entry failed: %w", err)
 	}
+	imemory.NormalizeEntry(entry)
 
 	now := time.Now()
-	entry.Memory.Memory = memoryStr
-	entry.Memory.Topics = topics
-	entry.Memory.LastUpdated = &now
 	ep := memory.ResolveUpdateOptions(opts)
-	imemory.ApplyMetadataPatch(entry.Memory, ep)
-	entry.UpdatedAt = now
+	newID := imemory.ApplyMemoryUpdate(
+		entry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		ep,
+		now,
+	)
 
 	updated, err := json.Marshal(entry)
 	if err != nil {
@@ -290,19 +295,22 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	}
 
 	updateQuery := fmt.Sprintf(
-		"UPDATE %s SET memory_data = $1, updated_at = $2 "+
-			"WHERE memory_id = $3 AND app_name = $4 "+
-			"AND user_id = $5",
+		"UPDATE %s SET memory_id = $1, memory_data = $2, updated_at = $3 "+
+			"WHERE memory_id = $4 AND app_name = $5 "+
+			"AND user_id = $6",
 		s.tableName,
 	)
 	if s.opts.softDelete {
 		updateQuery += " AND deleted_at IS NULL"
 	}
-	_, err = s.db.ExecContext(ctx, updateQuery, updated, now,
+	_, err = s.db.ExecContext(ctx, updateQuery, newID, updated, now,
 		memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
 	if err != nil {
 		return fmt.Errorf(
 			"update memory entry failed: %w", err)
+	}
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
 	}
 	return nil
 }
@@ -399,6 +407,7 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 			if err := json.Unmarshal(memoryData, e); err != nil {
 				return fmt.Errorf("unmarshal memory entry failed: %w", err)
 			}
+			imemory.NormalizeEntry(e)
 			entries = append(entries, e)
 		}
 		return nil
@@ -439,6 +448,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey,
 			if err := json.Unmarshal(memoryData, e); err != nil {
 				return fmt.Errorf("unmarshal memory entry failed: %w", err)
 			}
+			imemory.NormalizeEntry(e)
 
 			entries = append(entries, e)
 		}

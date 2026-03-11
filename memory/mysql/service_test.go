@@ -667,7 +667,7 @@ func TestUpdateMemory_Success(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(entryJSON))
 
 	mock.ExpectExec("UPDATE").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "app", "user", "mem123").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "app", "user", "mem123").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err := s.UpdateMemory(ctx, memKey, "updated memory", []string{"new"})
@@ -706,8 +706,8 @@ func TestUpdateMemory_SoftDeleteFalse(t *testing.T) {
 		WithArgs("app", "user", "mem123").
 		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(existingJSON))
 
-	mock.ExpectExec("UPDATE.*SET memory_data").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "app", "user", "mem123").
+	mock.ExpectExec("UPDATE.*SET memory_id = .*memory_data").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "app", "user", "mem123").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err := s.UpdateMemory(ctx, memKey, "new memory", []string{"new"})
@@ -786,7 +786,7 @@ func TestUpdateMemory_UpdateError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(entryJSON))
 
 	mock.ExpectExec("UPDATE").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "app", "user", "mem123").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "app", "user", "mem123").
 		WillReturnError(errors.New("update error"))
 
 	err := s.UpdateMemory(ctx, memKey, "updated memory", []string{"new"})

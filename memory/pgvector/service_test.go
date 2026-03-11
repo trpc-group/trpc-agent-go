@@ -68,6 +68,45 @@ func newMockEmbedderWithError(err error) *mockEmbedder {
 	return &mockEmbedder{err: err}
 }
 
+func expectUpdateLoad(
+	mock sqlmock.Sqlmock,
+	memKey memory.Key,
+	softDelete bool,
+	memoryContent string,
+	topics []string,
+	kind string,
+	eventTime any,
+	participants []string,
+	location any,
+) {
+	query := "SELECT memory_id, app_name, user_id, memory_content, topics, memory_kind, event_time, participants, location, created_at, updated_at FROM memories WHERE memory_id = \\$1 AND app_name = \\$2 AND user_id = \\$3"
+	if softDelete {
+		query += " AND deleted_at IS NULL"
+	}
+	now := time.Now()
+	mock.ExpectQuery(query).
+		WithArgs(memKey.MemoryID, memKey.AppName, memKey.UserID).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{
+				"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
+				"created_at", "updated_at",
+			},
+		).AddRow(
+			memKey.MemoryID,
+			memKey.AppName,
+			memKey.UserID,
+			memoryContent,
+			pq.Array(topics),
+			kind,
+			eventTime,
+			pq.Array(participants),
+			location,
+			now,
+			now,
+		))
+}
+
 // Options tests.
 
 func TestServiceOpts_Defaults(t *testing.T) {
@@ -743,7 +782,7 @@ func TestService_UpdateMemory(t *testing.T) {
 	ctx := context.Background()
 	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
 
-	// Mock UPDATE query.
+	expectUpdateLoad(mock, memKey, false, "old memory", []string{"old-topic"}, "", nil, []string{}, nil)
 	mock.ExpectExec("UPDATE").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -762,12 +801,30 @@ func TestService_UpdateMemory_WithoutMetadataDoesNotOverwriteMetadataColumns(t *
 
 	ctx := context.Background()
 	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
+	eventTime := time.Date(2024, 5, 6, 0, 0, 0, 0, time.UTC)
 
-	mock.ExpectExec(`UPDATE .* SET memory_content = \$1, topics = \$2, embedding = \$3, updated_at = \$4 WHERE memory_id = \$5 AND app_name = \$6 AND user_id = \$7`).
+	expectUpdateLoad(
+		mock,
+		memKey,
+		false,
+		"old memory",
+		[]string{"old-topic"},
+		string(memory.KindEpisode),
+		eventTime,
+		[]string{"Alice"},
+		"Kyoto",
+	)
+
+	mock.ExpectExec(`UPDATE .* SET memory_id = \$1, memory_content = \$2, topics = \$3, embedding = \$4, memory_kind = \$5, event_time = \$6, participants = \$7, location = \$8, updated_at = \$9 WHERE memory_id = \$10 AND app_name = \$11 AND user_id = \$12`).
 		WithArgs(
+			sqlmock.AnyArg(),
 			"updated memory",
 			pq.Array([]string{"new-topic"}),
 			sqlmock.AnyArg(),
+			string(memory.KindEpisode),
+			eventTime,
+			pq.Array([]string{"Alice"}),
+			"Kyoto",
 			sqlmock.AnyArg(),
 			memKey.MemoryID,
 			memKey.AppName,
@@ -792,13 +849,29 @@ func TestService_UpdateMemory_PartialMetadataPatchOnlyUpdatesProvidedColumns(t *
 	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
 	eventTime := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
 
-	mock.ExpectExec(`UPDATE .* SET memory_content = \$1, topics = \$2, embedding = \$3, updated_at = \$4, event_time = \$5 WHERE memory_id = \$6 AND app_name = \$7 AND user_id = \$8`).
+	expectUpdateLoad(
+		mock,
+		memKey,
+		false,
+		"old memory",
+		[]string{"old-topic"},
+		string(memory.KindFact),
+		nil,
+		[]string{"Alice"},
+		"Kyoto",
+	)
+
+	mock.ExpectExec(`UPDATE .* SET memory_id = \$1, memory_content = \$2, topics = \$3, embedding = \$4, memory_kind = \$5, event_time = \$6, participants = \$7, location = \$8, updated_at = \$9 WHERE memory_id = \$10 AND app_name = \$11 AND user_id = \$12`).
 		WithArgs(
+			sqlmock.AnyArg(),
 			"updated memory",
 			pq.Array([]string{"new-topic"}),
 			sqlmock.AnyArg(),
-			sqlmock.AnyArg(),
+			string(memory.KindFact),
 			eventTime,
+			pq.Array([]string{"Alice"}),
+			"Kyoto",
+			sqlmock.AnyArg(),
 			memKey.MemoryID,
 			memKey.AppName,
 			memKey.UserID,
@@ -827,9 +900,15 @@ func TestService_UpdateMemory_NotFound(t *testing.T) {
 	ctx := context.Background()
 	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "non-existent"}
 
-	// Mock UPDATE query affecting 0 rows (not found).
-	mock.ExpectExec("UPDATE").
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+		WithArgs(memKey.MemoryID, memKey.AppName, memKey.UserID).
+		WillReturnRows(sqlmock.NewRows(
+			[]string{
+				"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
+				"created_at", "updated_at",
+			},
+		))
 
 	err := svc.UpdateMemory(ctx, memKey, "updated memory", nil)
 	require.Error(t, err)
@@ -1674,6 +1753,7 @@ func TestService_UpdateMemory_EmbeddingError(t *testing.T) {
 	ctx := context.Background()
 	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
 
+	expectUpdateLoad(mock, memKey, false, "old memory", []string{"old-topic"}, "", nil, []string{}, nil)
 	err := svc.UpdateMemory(ctx, memKey, "updated", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "generate embedding failed")
@@ -1693,6 +1773,7 @@ func TestService_UpdateMemory_DimensionMismatch(t *testing.T) {
 	ctx := context.Background()
 	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
 
+	expectUpdateLoad(mock, memKey, false, "old memory", []string{"old-topic"}, "", nil, []string{}, nil)
 	err := svc.UpdateMemory(ctx, memKey, "updated", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "embedding dimension mismatch")
@@ -1708,7 +1789,7 @@ func TestService_UpdateMemory_SoftDelete(t *testing.T) {
 	ctx := context.Background()
 	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
 
-	// Mock UPDATE with soft delete filter.
+	expectUpdateLoad(mock, memKey, true, "old memory", []string{"old-topic"}, "", nil, []string{}, nil)
 	mock.ExpectExec("UPDATE").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -1728,7 +1809,7 @@ func TestService_UpdateMemory_SQLError(t *testing.T) {
 	ctx := context.Background()
 	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
 
-	// Mock UPDATE query with error.
+	expectUpdateLoad(mock, memKey, false, "old memory", []string{"old-topic"}, "", nil, []string{}, nil)
 	mock.ExpectExec("UPDATE").
 		WillReturnError(fmt.Errorf("connection timeout"))
 
@@ -1747,7 +1828,7 @@ func TestService_UpdateMemory_RowsAffectedError(t *testing.T) {
 	ctx := context.Background()
 	memKey := memory.Key{AppName: "test-app", UserID: "u1", MemoryID: "mem-123"}
 
-	// Mock UPDATE query with RowsAffected error.
+	expectUpdateLoad(mock, memKey, false, "old memory", []string{"old-topic"}, "", nil, []string{}, nil)
 	mock.ExpectExec("UPDATE").
 		WillReturnResult(sqlmock.NewErrorResult(fmt.Errorf("rows affected failed")))
 

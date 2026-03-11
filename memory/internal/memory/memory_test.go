@@ -196,6 +196,17 @@ func TestApplyMetadata(t *testing.T) {
 		assert.Empty(t, mem.Location)
 	})
 
+	t.Run("missing metadata defaults kind to fact", func(t *testing.T) {
+		mem := &memory.Memory{Memory: "profile"}
+
+		ApplyMetadata(mem, nil)
+
+		assert.Equal(t, memory.KindFact, mem.Kind)
+		assert.Nil(t, mem.EventTime)
+		assert.Empty(t, mem.Participants)
+		assert.Empty(t, mem.Location)
+	})
+
 	t.Run("episode metadata is applied", func(t *testing.T) {
 		mem := &memory.Memory{Memory: "trip"}
 		meta := &memory.Metadata{
@@ -276,6 +287,38 @@ func TestApplyMetadataPatch(t *testing.T) {
 	require.NotNil(t, mem.EventTime)
 	assert.Equal(t, later, *mem.EventTime)
 	assert.Equal(t, "Kyoto", mem.Location)
+}
+
+func TestApplyMemoryUpdate(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+	entry := &memory.Entry{
+		ID:      GenerateMemoryID(&memory.Memory{Memory: "old memory"}, "app", "user"),
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory: "old memory",
+			Topics: []string{"old"},
+		},
+		CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now.Add(-time.Hour),
+	}
+
+	newID := ApplyMemoryUpdate(
+		entry,
+		"app",
+		"user",
+		"new memory",
+		[]string{"new"},
+		nil,
+		now,
+	)
+
+	assert.NotEmpty(t, newID)
+	assert.NotEqual(t, entry.CreatedAt, entry.UpdatedAt)
+	assert.Equal(t, newID, entry.ID)
+	assert.Equal(t, memory.KindFact, entry.Memory.Kind)
+	assert.Equal(t, "new memory", entry.Memory.Memory)
+	assert.Equal(t, []string{"new"}, entry.Memory.Topics)
 }
 
 func TestMatchMemoryEntry(t *testing.T) {
@@ -840,6 +883,14 @@ func TestGenerateMemoryID(t *testing.T) {
 		assert.NotEqual(t, id1, id2)
 		assert.NotEqual(t, id1, id3)
 		assert.NotEqual(t, id2, id3)
+	})
+
+	t.Run("explicit fact without episodic metadata keeps legacy identity", func(t *testing.T) {
+		mem1 := &memory.Memory{Memory: "User likes coffee"}
+		mem2 := &memory.Memory{Memory: "User likes coffee", Kind: memory.KindFact}
+		id1 := GenerateMemoryID(mem1, testAppName, testUserID)
+		id2 := GenerateMemoryID(mem2, testAppName, testUserID)
+		assert.Equal(t, id1, id2)
 	})
 }
 

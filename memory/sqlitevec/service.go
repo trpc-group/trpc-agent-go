@@ -360,6 +360,34 @@ func (s *Service) UpdateMemory(
 	}
 	ep := memory.ResolveUpdateOptions(opts)
 
+	const selectSQL = `SELECT
+memory_id, memory_content, topics, memory_kind, event_time,
+participants, location, created_at, updated_at
+FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?`
+	selectQuery := fmt.Sprintf(selectSQL, s.tableName)
+	selectArgs := []any{memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID}
+	if s.opts.softDelete {
+		selectQuery += fmt.Sprintf(" AND deleted_at = %d", notDeletedAtNs)
+	}
+	rows, err := s.db.QueryContext(ctx, selectQuery, selectArgs...)
+	if err != nil {
+		return fmt.Errorf("load memory: %w", err)
+	}
+	var entry *memory.Entry
+	if rows.Next() {
+		entry, err = scanEntry(rows, memoryKey.AppName, memoryKey.UserID)
+	}
+	closeErr := rows.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close memory rows: %w", closeErr)
+	}
+	if entry == nil {
+		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+	}
+
 	embedding, err := s.opts.embedder.GetEmbedding(ctx, memoryStr)
 	if err != nil {
 		return fmt.Errorf("generate embedding: %w", err)
@@ -384,62 +412,117 @@ func (s *Service) UpdateMemory(
 
 	now := time.Now()
 	updatedAtNs := now.UTC().UnixNano()
-	patch := &memory.Memory{}
-	imemory.ApplyMetadataPatch(patch, ep)
-
-	assignments := []string{
-		"embedding = " + sqlVectorFromBlob,
-		"updated_at = ?",
-		"memory_content = ?",
-		"topics = ?",
+	newID := imemory.ApplyMemoryUpdate(
+		entry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		ep,
+		now,
+	)
+	participantsJSON, err := marshalStringSlice(entry.Memory.Participants)
+	if err != nil {
+		return fmt.Errorf("marshal participants: %w", err)
 	}
+	query := fmt.Sprintf(
+		`UPDATE %s SET
+embedding = `+sqlVectorFromBlob+`,
+updated_at = ?, memory_content = ?, topics = ?,
+memory_kind = ?, event_time = ?, participants = ?, location = ?
+WHERE app_name = ? AND user_id = ? AND memory_id = ?`,
+		s.tableName,
+	)
 	args := []any{
 		blob,
 		updatedAtNs,
 		memoryStr,
 		string(topicsJSON),
+		string(entry.Memory.Kind),
+		metadataEventTimeNS(entry.Memory.EventTime),
+		participantsJSON,
+		metadataLocationValue(entry.Memory.Location),
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryKey.MemoryID,
 	}
-	if patch.Kind != "" {
-		assignments = append(assignments, "memory_kind = ?")
-		args = append(args, string(patch.Kind))
-	}
-	if patch.EventTime != nil {
-		assignments = append(assignments, "event_time = ?")
-		args = append(args, metadataEventTimeNS(patch.EventTime))
-	}
-	if len(patch.Participants) > 0 {
-		participantsJSON, err := marshalStringSlice(patch.Participants)
-		if err != nil {
-			return fmt.Errorf("marshal participants: %w", err)
-		}
-		assignments = append(assignments, "participants = ?")
-		args = append(args, participantsJSON)
-	}
-	if patch.Location != "" {
-		assignments = append(assignments, "location = ?")
-		args = append(args, metadataLocationValue(patch.Location))
-	}
-
-	query := fmt.Sprintf(
-		"UPDATE %s SET %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
-		s.tableName,
-		strings.Join(assignments, ", "),
-	)
-	args = append(args, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
 	if s.opts.softDelete {
 		query += fmt.Sprintf(" AND deleted_at = %d", notDeletedAtNs)
 	}
+	if newID == memoryKey.MemoryID {
+		res, err := s.db.ExecContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("update memory: %w", err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("update memory rows affected: %w", err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+		}
+	} else {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
 
-	res, err := s.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("update memory: %w", err)
+		deleteQuery := fmt.Sprintf(
+			"DELETE FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+			s.tableName,
+		)
+		deleteArgs := []any{memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID}
+		if s.opts.softDelete {
+			deleteQuery += fmt.Sprintf(" AND deleted_at = %d", notDeletedAtNs)
+		}
+		res, err := tx.ExecContext(ctx, deleteQuery, deleteArgs...)
+		if err != nil {
+			return fmt.Errorf("delete rotated memory: %w", err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("delete rotated memory rows affected: %w", err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+		}
+
+		insertQuery := fmt.Sprintf(
+			`INSERT INTO %s (
+memory_id, embedding, app_name, user_id,
+created_at, updated_at, deleted_at,
+memory_content, topics, memory_kind, event_time,
+participants, location
+) VALUES (?, `+sqlVectorFromBlob+`, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			s.tableName,
+		)
+		_, err = tx.ExecContext(
+			ctx,
+			insertQuery,
+			newID,
+			blob,
+			memoryKey.AppName,
+			memoryKey.UserID,
+			entry.CreatedAt.UTC().UnixNano(),
+			updatedAtNs,
+			notDeletedAtNs,
+			memoryStr,
+			string(topicsJSON),
+			string(entry.Memory.Kind),
+			metadataEventTimeNS(entry.Memory.EventTime),
+			participantsJSON,
+			metadataLocationValue(entry.Memory.Location),
+		)
+		if err != nil {
+			return fmt.Errorf("insert rotated memory: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit rotated memory: %w", err)
+		}
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update memory rows affected: %w", err)
-	}
-	if affected == 0 {
-		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
 	}
 
 	return nil
@@ -696,7 +779,7 @@ func scanEntry(
 		eventTime = &t
 	}
 
-	return &memory.Entry{
+	entry := &memory.Entry{
 		ID:      memoryID,
 		AppName: appName,
 		UserID:  userID,
@@ -711,7 +794,9 @@ func scanEntry(
 		},
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
-	}, nil
+	}
+	imemory.NormalizeEntry(entry)
+	return entry, nil
 }
 
 func parseTopics(in string) ([]string, error) {

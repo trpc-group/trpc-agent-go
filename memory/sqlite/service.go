@@ -258,11 +258,15 @@ func (s *Service) UpdateMemory(
 	}
 
 	now := time.Now()
-	entry.Memory.Memory = memoryStr
-	entry.Memory.Topics = topics
-	entry.Memory.LastUpdated = &now
-	imemory.ApplyMetadataPatch(entry.Memory, ep)
-	entry.UpdatedAt = now
+	newID := imemory.ApplyMemoryUpdate(
+		entry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		ep,
+		now,
+	)
 
 	updated, err := json.Marshal(entry)
 	if err != nil {
@@ -270,11 +274,11 @@ func (s *Service) UpdateMemory(
 	}
 
 	const updateSQL = `UPDATE %s
-SET memory_data = ?, updated_at = ?
+SET memory_id = ?, memory_data = ?, updated_at = ?
 WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 	query := fmt.Sprintf(updateSQL, s.tableName)
 	args := []any{
-		updated, now.UTC().UnixNano(),
+		newID, updated, now.UTC().UnixNano(),
 		memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID,
 	}
 	if s.opts.softDelete {
@@ -284,6 +288,9 @@ WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 	_, err = s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update memory entry: %w", err)
+	}
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
 	}
 	return nil
 }
@@ -320,6 +327,7 @@ WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 	if err := json.Unmarshal(memoryData, entry); err != nil {
 		return nil, fmt.Errorf("unmarshal memory entry: %w", err)
 	}
+	imemory.NormalizeEntry(entry)
 	return entry, nil
 }
 
@@ -443,6 +451,7 @@ WHERE app_name = ? AND user_id = ?`
 		if err := json.Unmarshal(memoryData, e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry: %w", err)
 		}
+		imemory.NormalizeEntry(e)
 		entries = append(entries, e)
 	}
 
@@ -489,6 +498,7 @@ WHERE app_name = ? AND user_id = ?`
 		if err := json.Unmarshal(memoryData, e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry: %w", err)
 		}
+		imemory.NormalizeEntry(e)
 		entries = append(entries, e)
 	}
 

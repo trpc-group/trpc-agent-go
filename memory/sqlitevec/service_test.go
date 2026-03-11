@@ -146,13 +146,15 @@ func TestService_CRUD_HardDelete(t *testing.T) {
 		UserID:   userKey.UserID,
 		MemoryID: got[0].ID,
 	}
+	updateResult := &memory.UpdateResult{}
 	require.NoError(t,
-		svc.UpdateMemory(ctx, memKey, "alpha", []string{"updated"}))
+		svc.UpdateMemory(ctx, memKey, "gamma", []string{"updated"}, memory.WithUpdateResult(updateResult)))
+	memKey.MemoryID = updateResult.MemoryID
 
-	results, err := svc.SearchMemories(ctx, userKey, "alpha")
+	results, err := svc.SearchMemories(ctx, userKey, "gamma")
 	require.NoError(t, err)
 	require.NotEmpty(t, results)
-	require.Equal(t, "alpha", results[0].Memory.Memory)
+	require.Equal(t, "gamma", results[0].Memory.Memory)
 
 	require.NoError(t, svc.DeleteMemory(ctx, memKey))
 	got, err = svc.ReadMemories(ctx, userKey, 0)

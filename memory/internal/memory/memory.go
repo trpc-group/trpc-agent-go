@@ -100,14 +100,27 @@ func metadataIdentityKind(mem *memory.Memory) memory.Kind {
 	if mem == nil {
 		return ""
 	}
-	if mem.Kind != "" {
+	hasEventMetadata := mem.EventTime != nil || len(mem.Participants) > 0 ||
+		strings.TrimSpace(mem.Location) != ""
+	if mem.Kind != "" && mem.Kind != memory.KindFact {
 		return mem.Kind
 	}
-	if mem.EventTime != nil || len(mem.Participants) > 0 ||
-		strings.TrimSpace(mem.Location) != "" {
+	if hasEventMetadata {
 		return memory.KindFact
 	}
 	return ""
+}
+
+// EffectiveKind returns the runtime memory kind. Legacy records that did not
+// persist kind explicitly are treated as facts.
+func EffectiveKind(mem *memory.Memory) memory.Kind {
+	if mem == nil {
+		return ""
+	}
+	if mem.Kind != "" {
+		return mem.Kind
+	}
+	return memory.KindFact
 }
 
 func metadataIdentityParticipants(mem *memory.Memory) []string {
@@ -441,38 +454,44 @@ func isStopword(s string) bool {
 // part of the struct definition.
 // If ep is nil, no fields are modified.
 func ApplyMetadata(mem *memory.Memory, ep *memory.Metadata) {
-	if ep == nil || mem == nil {
+	if mem == nil {
 		return
 	}
-	ep = normalizeAddMetadata(ep)
-	if ep.Kind != "" {
-		mem.Kind = ep.Kind
+	if ep != nil {
+		ep = normalizeAddMetadata(ep)
+		if ep.Kind != "" {
+			mem.Kind = ep.Kind
+		}
+		mem.EventTime = ep.EventTime
+		mem.Participants = ep.Participants
+		mem.Location = ep.Location
 	}
-	mem.EventTime = ep.EventTime
-	mem.Participants = ep.Participants
-	mem.Location = ep.Location
+	NormalizeMemory(mem)
 }
 
 // ApplyMetadataPatch updates only the metadata fields that are explicitly
 // present on ep. Zero values are treated as "not provided" so update paths
 // preserve stored metadata unless the caller supplied a replacement value.
 func ApplyMetadataPatch(mem *memory.Memory, ep *memory.Metadata) {
-	if ep == nil || mem == nil {
+	if mem == nil {
 		return
 	}
-	ep = normalizeUpdateMetadata(ep)
-	if ep.Kind != "" {
-		mem.Kind = ep.Kind
+	if ep != nil {
+		ep = normalizeUpdateMetadata(ep)
+		if ep.Kind != "" {
+			mem.Kind = ep.Kind
+		}
+		if ep.EventTime != nil {
+			mem.EventTime = ep.EventTime
+		}
+		if len(ep.Participants) > 0 {
+			mem.Participants = ep.Participants
+		}
+		if ep.Location != "" {
+			mem.Location = ep.Location
+		}
 	}
-	if ep.EventTime != nil {
-		mem.EventTime = ep.EventTime
-	}
-	if len(ep.Participants) > 0 {
-		mem.Participants = ep.Participants
-	}
-	if ep.Location != "" {
-		mem.Location = ep.Location
-	}
+	NormalizeMemory(mem)
 }
 
 func normalizeAddMetadata(ep *memory.Metadata) *memory.Metadata {
@@ -503,6 +522,50 @@ func normalizeUpdateMetadata(ep *memory.Metadata) *memory.Metadata {
 		Participants: metadataIdentityParticipants(&memory.Memory{Participants: ep.Participants}),
 		Location:     strings.TrimSpace(ep.Location),
 	}
+}
+
+// NormalizeMemory canonicalizes memory metadata for runtime use and new writes.
+func NormalizeMemory(mem *memory.Memory) {
+	if mem == nil {
+		return
+	}
+	mem.Kind = EffectiveKind(mem)
+	mem.Participants = metadataIdentityParticipants(mem)
+	mem.Location = strings.TrimSpace(mem.Location)
+}
+
+// NormalizeEntry canonicalizes the in-memory representation of an entry.
+func NormalizeEntry(entry *memory.Entry) {
+	if entry == nil {
+		return
+	}
+	NormalizeMemory(entry.Memory)
+}
+
+// ApplyMemoryUpdate applies an update patch in-place and returns the effective
+// canonical memory ID after the updated content and metadata are normalized.
+func ApplyMemoryUpdate(
+	entry *memory.Entry,
+	appName, userID, memoryStr string,
+	topics []string,
+	ep *memory.Metadata,
+	now time.Time,
+) string {
+	if entry == nil {
+		return ""
+	}
+	if entry.Memory == nil {
+		entry.Memory = &memory.Memory{}
+	}
+	entry.AppName = appName
+	entry.UserID = userID
+	entry.Memory.Memory = memoryStr
+	entry.Memory.Topics = topics
+	entry.Memory.LastUpdated = &now
+	ApplyMetadataPatch(entry.Memory, ep)
+	entry.UpdatedAt = now
+	entry.ID = GenerateMemoryID(entry.Memory, appName, userID)
+	return entry.ID
 }
 
 // MatchMemoryEntry checks if a memory entry matches the given query.
@@ -712,7 +775,7 @@ func matchesSearchFilters(entry *memory.Entry, opts memory.SearchOptions) bool {
 	if entry == nil || entry.Memory == nil {
 		return false
 	}
-	if opts.Kind != "" && entry.Memory.Kind != opts.Kind {
+	if opts.Kind != "" && EffectiveKind(entry.Memory) != opts.Kind {
 		return false
 	}
 	if opts.TimeAfter != nil && entry.Memory.EventTime != nil &&
@@ -764,7 +827,7 @@ func MergeSearchResults(
 		if seen[e.ID] {
 			continue
 		}
-		if e.Memory != nil && e.Memory.Kind == preferredKind {
+		if EffectiveKind(e.Memory) == preferredKind {
 			kindMatch = append(kindMatch, e)
 		} else {
 			kindOther = append(kindOther, e)

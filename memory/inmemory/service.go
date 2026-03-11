@@ -196,19 +196,33 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, 
 	if app.memories[memoryKey.UserID] == nil {
 		return fmt.Errorf("user %s not found", memoryKey.UserID)
 	}
-	memoryEntry, exists := app.memories[memoryKey.UserID][memoryKey.MemoryID]
+	userMemories := app.memories[memoryKey.UserID]
+	memoryEntry, exists := userMemories[memoryKey.MemoryID]
 	if !exists {
 		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 	}
 
 	now := time.Now()
-	memoryEntry.Memory.Memory = memoryStr
-	memoryEntry.Memory.Topics = topics
-	memoryEntry.Memory.LastUpdated = &now
 	ep := memory.ResolveUpdateOptions(opts)
-	imemory.ApplyMetadataPatch(memoryEntry.Memory, ep)
-	memoryEntry.UpdatedAt = now
-	app.memories[memoryKey.UserID][memoryKey.MemoryID] = memoryEntry
+	newID := imemory.ApplyMemoryUpdate(
+		memoryEntry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		ep,
+		now,
+	)
+	if newID != memoryKey.MemoryID {
+		if _, conflict := userMemories[newID]; conflict {
+			return fmt.Errorf("memory with id %s already exists", newID)
+		}
+		delete(userMemories, memoryKey.MemoryID)
+	}
+	userMemories[newID] = memoryEntry
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
+	}
 	return nil
 }
 

@@ -184,20 +184,46 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	if err := json.Unmarshal(bytes, entry); err != nil {
 		return fmt.Errorf("unmarshal memory entry failed: %w", err)
 	}
+	imemory.NormalizeEntry(entry)
 	now := time.Now()
-	entry.Memory.Memory = memoryStr
-	entry.Memory.Topics = topics
-	entry.Memory.LastUpdated = &now
 	ep := memory.ResolveUpdateOptions(opts)
-	imemory.ApplyMetadataPatch(entry.Memory, ep)
-	entry.UpdatedAt = now
+	newID := imemory.ApplyMemoryUpdate(
+		entry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		ep,
+		now,
+	)
+	if newID != memoryKey.MemoryID {
+		exists, err := s.redisClient.HExists(ctx, key, newID).Result()
+		if err != nil {
+			return fmt.Errorf("check rotated memory id failed: %w", err)
+		}
+		if exists {
+			return fmt.Errorf("memory with id %s already exists", newID)
+		}
+	}
 
 	updated, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal updated memory entry failed: %w", err)
 	}
-	if err := s.redisClient.HSet(ctx, key, entry.ID, updated).Err(); err != nil {
-		return fmt.Errorf("update memory entry failed: %w", err)
+	if newID == memoryKey.MemoryID {
+		if err := s.redisClient.HSet(ctx, key, newID, updated).Err(); err != nil {
+			return fmt.Errorf("update memory entry failed: %w", err)
+		}
+	} else {
+		pipe := s.redisClient.TxPipeline()
+		pipe.HSet(ctx, key, newID, updated)
+		pipe.HDel(ctx, key, memoryKey.MemoryID)
+		if _, err := pipe.Exec(ctx); err != nil {
+			return fmt.Errorf("update memory entry failed: %w", err)
+		}
+	}
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
 	}
 	return nil
 }
@@ -246,6 +272,7 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 		if err := json.Unmarshal([]byte(v), e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry failed: %w", err)
 		}
+		imemory.NormalizeEntry(e)
 		entries = append(entries, e)
 	}
 	// Sort by updated time (newest first), tie-breaker by created time.
@@ -282,6 +309,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey,
 		if err := json.Unmarshal([]byte(v), e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry failed: %w", err)
 		}
+		imemory.NormalizeEntry(e)
 		entries = append(entries, e)
 	}
 	return imemory.SearchEntries(

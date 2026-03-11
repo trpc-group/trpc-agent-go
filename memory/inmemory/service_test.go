@@ -126,6 +126,44 @@ func TestMemoryService_UpdateMemory(t *testing.T) {
 	assert.Equal(t, "updated memory", memories[0].Memory.Memory, "Expected updated memory content")
 }
 
+func TestMemoryService_UpdateMemory_RotatesIDAndReturnsResult(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	require.NoError(t, service.AddMemory(ctx, userKey, "first memory", nil))
+	memories, err := service.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, memories, 1)
+
+	oldID := memories[0].ID
+	result := &memory.UpdateResult{}
+	memKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: oldID,
+	}
+	require.NoError(t, service.UpdateMemory(
+		ctx,
+		memKey,
+		"updated memory",
+		[]string{"updated"},
+		memory.WithUpdateResult(result),
+	))
+
+	assert.NotEmpty(t, result.MemoryID)
+	assert.NotEqual(t, oldID, result.MemoryID)
+
+	memories, err = service.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, memories, 1)
+	assert.Equal(t, result.MemoryID, memories[0].ID)
+	assert.Equal(t, memory.KindFact, memories[0].Memory.Kind)
+}
+
 func TestMemoryService_UpdateMemory_PreservesMetadataWhenNotProvided(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
