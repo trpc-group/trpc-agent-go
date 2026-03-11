@@ -1,0 +1,107 @@
+name: OpenClaw Release
+on:
+  push:
+    tags:
+      - 'openclaw-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, for example v0.0.1
+        required: true
+        type: string
+permissions:
+  contents: write
+jobs:
+  prepare:
+    name: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
+      tag: ${{ steps.vars.outputs.tag }}
+    steps:
+      - id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            raw='${{ inputs.version }}'
+          fi
+          raw="${raw#openclaw-}"
+          case "${raw}" in
+            v*)
+              version="${raw}"
+              ;;
+            *)
+              version="v${raw}"
+              ;;
+          esac
+          tag="openclaw-${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+  build:
+    name: build (${{ matrix.target }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: linux/amd64
+            artifact_name: linux_amd64
+          - runner: ubuntu-24.04-arm
+            target: linux/arm64
+            artifact_name: linux_arm64
+          - runner: macos-13
+            target: darwin/amd64
+            artifact_name: darwin_amd64
+          - runner: macos-14
+            target: darwin/arm64
+            artifact_name: darwin_arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: openclaw/go.mod
+      - name: Build release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ./openclaw/release.sh build \
+            --version '${{ needs.prepare.outputs.version }}' \
+            --target '${{ matrix.target }}'
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-${{ matrix.artifact_name }}
+          path: openclaw/dist/${{ needs.prepare.outputs.version }}/*.tar.gz
+          if-no-files-found: error
+  release:
+    name: release
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: openclaw-*
+          merge-multiple: true
+          path: openclaw/dist/${{ needs.prepare.outputs.version }}
+      - name: Assemble shared assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ./openclaw/release.sh assemble \
+            --version '${{ needs.prepare.outputs.version }}'
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            openclaw/dist/${{ needs.prepare.outputs.version }}/*
