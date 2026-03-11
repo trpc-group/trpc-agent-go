@@ -619,6 +619,21 @@ func (*bareExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
 }
 
+// nilEngineExec implements CodeExecutor and EngineProvider but returns
+// a nil Engine.  At runtime ensureEngine treats this the same as "no
+// engine" and falls back to local, so interactive should be true.
+type nilEngineExec struct{}
+
+func (*nilEngineExec) ExecuteCode(
+	_ context.Context, _ codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+func (*nilEngineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+func (*nilEngineExec) Engine() codeexecutor.Engine { return nil }
+
 func TestLLMAgent_ExecToolsOmittedForNonInteractiveExecutor(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
@@ -683,6 +698,28 @@ func TestLLMAgent_ExecToolsRegisteredForFallbackExecutor(t *testing.T) {
 	require.True(t, names["skill_kill_session"])
 }
 
+func TestLLMAgent_ExecToolsRegisteredForNilEngineExecutor(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New("tester", WithSkills(repo), WithCodeExecutor(&nilEngineExec{}))
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+
+	require.True(t, names["skill_load"])
+	require.True(t, names["skill_run"])
+	require.True(t, names["skill_exec"],
+		"nilEngineExec returns nil Engine; runtime falls back to local which supports interactive")
+	require.True(t, names["skill_write_stdin"])
+	require.True(t, names["skill_poll_session"])
+	require.True(t, names["skill_kill_session"])
+}
+
 func TestExecutorSupportsInteractive(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -707,6 +744,11 @@ func TestExecutorSupportsInteractive(t *testing.T) {
 		{
 			name:     "no EngineProvider falls back to local (interactive)",
 			executor: &bareExec{},
+			want:     true,
+		},
+		{
+			name:     "EngineProvider returns nil engine falls back to local (interactive)",
+			executor: &nilEngineExec{},
 			want:     true,
 		},
 	}
