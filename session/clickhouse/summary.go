@@ -26,7 +26,7 @@ func (s *Service) CreateSessionSummary(
 	filterKey string,
 	force bool,
 ) error {
-	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerProvider) {
+	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
 		return nil
 	}
 
@@ -41,7 +41,7 @@ func (s *Service) CreateSessionSummary(
 	summarizer, err := isummary.ResolveSessionSummarizer(
 		ctx,
 		s.opts.summarizer,
-		s.opts.summarizerProvider,
+		s.opts.summarizerResolver,
 		sess,
 		filterKey,
 		force,
@@ -85,7 +85,7 @@ func (s *Service) CreateSessionSummary(
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
 func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerProvider) {
+	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
 		return nil
 	}
 

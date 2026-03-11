@@ -298,11 +298,11 @@ func TestSessionSQLite_EnqueueSummaryJob_ProviderPersistsCopiedFullSummary(t *te
 
 	svc, err := NewService(
 		db,
-		WithSummarizerProvider(summary.SessionSummarizerProviderFunc(func(
+		WithSessionSummarizerResolver(summary.SessionSummarizerResolver(func(
 			ctx context.Context,
-			req *summary.SummarizerResolveRequest,
+			req summary.SessionSummaryRequest,
 		) (summary.SessionSummarizer, error) {
-			if req != nil && req.FilterKey == "branch" {
+			if req.FilterKey == "branch" {
 				return &fakeSummarizer{}, nil
 			}
 			return nil, nil

@@ -155,17 +155,17 @@ func TestServiceOptions(t *testing.T) {
 			},
 		},
 		{
-			name: "WithSummarizerProvider",
+			name: "WithSessionSummarizerResolver",
 			opts: []ServiceOpt{
-				WithSummarizerProvider(psummary.SessionSummarizerProviderFunc(func(
+				WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
 					context.Context,
-					*psummary.SummarizerResolveRequest,
+					psummary.SessionSummaryRequest,
 				) (psummary.SessionSummarizer, error) {
 					return nil, nil
 				})),
 			},
 			validate: func(t *testing.T, opts *ServiceOpts) {
-				assert.NotNil(t, opts.summarizerProvider)
+				assert.NotNil(t, opts.summarizerResolver)
 			},
 		},
 		{

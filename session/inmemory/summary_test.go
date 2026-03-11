@@ -858,20 +858,19 @@ func (c *providerCaptureSummarizer) Metadata() map[string]any {
 	return map[string]any{}
 }
 
-func TestMemoryService_CreateSessionSummary_UsesSummarizerProviderOnce(t *testing.T) {
+func TestMemoryService_CreateSessionSummary_UsesSummarizerResolverOnce(t *testing.T) {
 	var mu sync.Mutex
 	providerCalls := 0
 	resolved := &providerCaptureSummarizer{}
 
 	s := NewSessionService(
-		WithSummarizerProvider(psummary.SessionSummarizerProviderFunc(func(
+		WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
 			ctx context.Context,
-			req *psummary.SummarizerResolveRequest,
+			req psummary.SessionSummaryRequest,
 		) (psummary.SessionSummarizer, error) {
 			mu.Lock()
 			providerCalls++
 			mu.Unlock()
-			require.NotNil(t, req)
 			require.NotNil(t, req.Session)
 			require.Equal(t, "", req.FilterKey)
 			require.False(t, req.Force)
@@ -913,9 +912,9 @@ func TestMemoryService_CreateSessionSummary_UsesSummarizerProviderOnce(t *testin
 func TestMemoryService_CreateSessionSummary_ProviderFallsBackToStaticSummarizer(t *testing.T) {
 	s := NewSessionService(
 		WithSummarizer(&fakeSummarizer{allow: true, out: "fallback-summary"}),
-		WithSummarizerProvider(psummary.SessionSummarizerProviderFunc(func(
+		WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
 			context.Context,
-			*psummary.SummarizerResolveRequest,
+			psummary.SessionSummaryRequest,
 		) (psummary.SessionSummarizer, error) {
 			return nil, nil
 		})),
@@ -987,14 +986,13 @@ func TestMemoryService_EnqueueSummaryJob_ProviderContextValuePreserved(t *testin
 	s := NewSessionService(
 		WithAsyncSummaryNum(1),
 		WithSummaryQueueSize(10),
-		WithSummarizerProvider(psummary.SessionSummarizerProviderFunc(func(
+		WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
 			ctx context.Context,
-			req *psummary.SummarizerResolveRequest,
+			req psummary.SessionSummaryRequest,
 		) (psummary.SessionSummarizer, error) {
 			mu.Lock()
 			capturedVal = ctx.Value(traceIDKey)
 			mu.Unlock()
-			require.NotNil(t, req)
 			require.NotNil(t, req.Session)
 			return &ctxCaptureSummarizer{done: done}, nil
 		})),

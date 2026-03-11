@@ -68,9 +68,9 @@ sessionService := inmemory.NewSessionService(
 
 // 按请求动态选择摘要器（例如根据 ctx 中的用户模型配置）
 sessionService := inmemory.NewSessionService(
-    inmemory.WithSummarizerProvider(summary.SessionSummarizerProviderFunc(func(
+    inmemory.WithSessionSummarizerResolver(summary.SessionSummarizerResolver(func(
         ctx context.Context,
-        req *summary.SummarizerResolveRequest,
+        req summary.SessionSummaryRequest,
     ) (summary.SessionSummarizer, error) {
         dynamicModel := pickSummaryModelFromCtx(ctx)
         return summary.NewSummarizer(
@@ -166,26 +166,24 @@ type SessionSummarizer interface {
 }
 ```
 
-## SessionSummarizerProvider 接口
+## SessionSummarizerResolver
 
-当摘要模型需要按请求动态决定时，可以在 session service 上配置 provider，而不是修改 `SessionSummarizer` 接口本身：
+当摘要模型需要按请求动态决定时，可以在 session service 上配置 resolver，而不是修改 `SessionSummarizer` 接口本身：
 
 ```go
-type SummarizerResolveRequest struct {
+type SessionSummaryRequest struct {
     Session   *session.Session
     FilterKey string
     Force     bool
 }
 
-type SessionSummarizerProvider interface {
-    ResolveSessionSummarizer(
-        ctx context.Context,
-        req *SummarizerResolveRequest,
-    ) (SessionSummarizer, error)
-}
+type SessionSummarizerResolver func(
+    ctx context.Context,
+    req SessionSummaryRequest,
+) (SessionSummarizer, error)
 ```
 
-provider 会在每次摘要尝试开始时解析一次，并在同一次流程中复用同一个 summarizer 进行 `ShouldSummarize` 和 `Summarize`，避免并发场景下通过 `SetModel` 修改共享实例。
+resolver 会在每次摘要尝试开始时解析一次，并在同一次流程中复用同一个 summarizer 进行 `ShouldSummarize` 和 `Summarize`，避免并发场景下通过 `SetModel` 修改共享实例。
 
 ## 摘要器选项
 

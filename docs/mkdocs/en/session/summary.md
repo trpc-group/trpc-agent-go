@@ -66,9 +66,9 @@ sessionService := inmemory.NewSessionService(
 
 // Dynamically resolve a summarizer per request, for example from ctx values.
 sessionService := inmemory.NewSessionService(
-    inmemory.WithSummarizerProvider(summary.SessionSummarizerProviderFunc(func(
+    inmemory.WithSessionSummarizerResolver(summary.SessionSummarizerResolver(func(
         ctx context.Context,
-        req *summary.SummarizerResolveRequest,
+        req summary.SessionSummaryRequest,
     ) (summary.SessionSummarizer, error) {
         dynamicModel := pickSummaryModelFromCtx(ctx)
         return summary.NewSummarizer(
@@ -161,26 +161,24 @@ type SessionSummarizer interface {
 }
 ```
 
-## SessionSummarizerProvider Interface
+## SessionSummarizerResolver
 
-When the summary model must be selected dynamically per request, configure a provider on the session service instead of changing the `SessionSummarizer` interface:
+When the summary model must be selected dynamically per request, configure a resolver on the session service instead of changing the `SessionSummarizer` interface:
 
 ```go
-type SummarizerResolveRequest struct {
+type SessionSummaryRequest struct {
     Session   *session.Session
     FilterKey string
     Force     bool
 }
 
-type SessionSummarizerProvider interface {
-    ResolveSessionSummarizer(
-        ctx context.Context,
-        req *SummarizerResolveRequest,
-    ) (SessionSummarizer, error)
-}
+type SessionSummarizerResolver func(
+    ctx context.Context,
+    req SessionSummaryRequest,
+) (SessionSummarizer, error)
 ```
 
-The provider is resolved once per summary attempt, and the same summarizer instance is reused for both `ShouldSummarize` and `Summarize`. This avoids mutating a shared summarizer with `SetModel` under concurrent workloads.
+The resolver is evaluated once per summary attempt, and the same summarizer instance is reused for both `ShouldSummarize` and `Summarize`. This avoids mutating a shared summarizer with `SetModel` under concurrent workloads.
 
 ## Summarizer Options
 

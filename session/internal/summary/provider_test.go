@@ -19,24 +19,24 @@ import (
 )
 
 func TestHasSummarizer(t *testing.T) {
-	provider := psummary.SessionSummarizerProviderFunc(func(
+	resolver := psummary.SessionSummarizerResolver(func(
 		context.Context,
-		*psummary.SummarizerResolveRequest,
+		psummary.SessionSummaryRequest,
 	) (psummary.SessionSummarizer, error) {
 		return nil, nil
 	})
 
 	require.False(t, HasSummarizer(nil, nil))
 	require.True(t, HasSummarizer(&fakeSummarizer{}, nil))
-	require.True(t, HasSummarizer(nil, provider))
-	require.True(t, HasSummarizer(&fakeSummarizer{}, provider))
+	require.True(t, HasSummarizer(nil, resolver))
+	require.True(t, HasSummarizer(&fakeSummarizer{}, resolver))
 }
 
 func TestResolveSessionSummarizer(t *testing.T) {
 	sess := session.NewSession("app", "user", "sid")
 	staticSummarizer := &fakeSummarizer{allow: true, out: "static"}
 
-	t.Run("returns static summarizer without provider", func(t *testing.T) {
+	t.Run("returns static summarizer without resolver", func(t *testing.T) {
 		resolved, err := ResolveSessionSummarizer(
 			context.Background(),
 			staticSummarizer,
@@ -49,35 +49,34 @@ func TestResolveSessionSummarizer(t *testing.T) {
 		require.Same(t, staticSummarizer, resolved)
 	})
 
-	t.Run("provider overrides static summarizer", func(t *testing.T) {
-		providerSummarizer := &fakeSummarizer{allow: true, out: "provider"}
-		provider := psummary.SessionSummarizerProviderFunc(func(
+	t.Run("resolver overrides static summarizer", func(t *testing.T) {
+		resolverSummarizer := &fakeSummarizer{allow: true, out: "resolver"}
+		resolver := psummary.SessionSummarizerResolver(func(
 			ctx context.Context,
-			req *psummary.SummarizerResolveRequest,
+			req psummary.SessionSummaryRequest,
 		) (psummary.SessionSummarizer, error) {
-			require.NotNil(t, req)
 			require.Same(t, sess, req.Session)
 			require.Equal(t, "branch", req.FilterKey)
 			require.True(t, req.Force)
-			return providerSummarizer, nil
+			return resolverSummarizer, nil
 		})
 
 		resolved, err := ResolveSessionSummarizer(
 			context.Background(),
 			staticSummarizer,
-			provider,
+			resolver,
 			sess,
 			"branch",
 			true,
 		)
 		require.NoError(t, err)
-		require.Same(t, providerSummarizer, resolved)
+		require.Same(t, resolverSummarizer, resolved)
 	})
 
-	t.Run("provider nil falls back to static summarizer", func(t *testing.T) {
-		provider := psummary.SessionSummarizerProviderFunc(func(
+	t.Run("resolver nil falls back to static summarizer", func(t *testing.T) {
+		resolver := psummary.SessionSummarizerResolver(func(
 			context.Context,
-			*psummary.SummarizerResolveRequest,
+			psummary.SessionSummaryRequest,
 		) (psummary.SessionSummarizer, error) {
 			return nil, nil
 		})
@@ -85,7 +84,7 @@ func TestResolveSessionSummarizer(t *testing.T) {
 		resolved, err := ResolveSessionSummarizer(
 			context.Background(),
 			staticSummarizer,
-			provider,
+			resolver,
 			sess,
 			"branch",
 			false,
@@ -94,11 +93,11 @@ func TestResolveSessionSummarizer(t *testing.T) {
 		require.Same(t, staticSummarizer, resolved)
 	})
 
-	t.Run("provider error is returned", func(t *testing.T) {
+	t.Run("resolver error is returned", func(t *testing.T) {
 		wantErr := errors.New("resolve failed")
-		provider := psummary.SessionSummarizerProviderFunc(func(
+		resolver := psummary.SessionSummarizerResolver(func(
 			context.Context,
-			*psummary.SummarizerResolveRequest,
+			psummary.SessionSummaryRequest,
 		) (psummary.SessionSummarizer, error) {
 			return nil, wantErr
 		})
@@ -106,7 +105,7 @@ func TestResolveSessionSummarizer(t *testing.T) {
 		resolved, err := ResolveSessionSummarizer(
 			context.Background(),
 			staticSummarizer,
-			provider,
+			resolver,
 			sess,
 			"branch",
 			false,

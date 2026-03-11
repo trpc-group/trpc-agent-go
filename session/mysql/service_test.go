@@ -2797,7 +2797,7 @@ func TestNewService_WithAllOptions(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestNewService_WithSummarizerProviderStartsAsyncWorker(t *testing.T) {
+func TestNewService_WithSessionSummarizerResolverStartsAsyncWorker(t *testing.T) {
 	db, _, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
 	defer db.Close()
@@ -2813,9 +2813,9 @@ func TestNewService_WithSummarizerProviderStartsAsyncWorker(t *testing.T) {
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
 		WithSkipDBInit(true),
 		WithAsyncSummaryNum(2),
-		WithSummarizerProvider(psummary.SessionSummarizerProviderFunc(func(
+		WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
 			context.Context,
-			*psummary.SummarizerResolveRequest,
+			psummary.SessionSummaryRequest,
 		) (psummary.SessionSummarizer, error) {
 			return nil, nil
 		})),

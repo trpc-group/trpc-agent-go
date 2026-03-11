@@ -50,7 +50,7 @@ type ServiceOpts struct {
 
 	// summarizer integrates LLM summarization.
 	summarizer         summary.SessionSummarizer
-	summarizerProvider summary.SessionSummarizerProvider
+	summarizerResolver summary.SessionSummarizerResolver
 	asyncSummaryNum    int
 	summaryQueueSize   int
 	summaryJobTimeout  time.Duration
@@ -143,10 +143,10 @@ func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
 	}
 }
 
-// WithSummarizerProvider injects a request-scoped summarizer resolver.
-func WithSummarizerProvider(p summary.SessionSummarizerProvider) ServiceOpt {
+// WithSessionSummarizerResolver injects a request-scoped summarizer resolver.
+func WithSessionSummarizerResolver(p summary.SessionSummarizerResolver) ServiceOpt {
 	return func(opts *ServiceOpts) {
-		opts.summarizerProvider = p
+		opts.summarizerResolver = p
 	}
 }
 

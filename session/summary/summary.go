@@ -45,9 +45,9 @@ type SessionSummarizer interface {
 	Metadata() map[string]any
 }
 
-// SummarizerResolveRequest carries request-scoped inputs for selecting a
+// SessionSummaryRequest carries request-scoped inputs for selecting a
 // summarizer dynamically.
-type SummarizerResolveRequest struct {
+type SessionSummaryRequest struct {
 	// Session is the session being summarized.
 	Session *session.Session
 	// FilterKey scopes the summary to a branch or substream. Empty means the
@@ -58,28 +58,12 @@ type SummarizerResolveRequest struct {
 	Force bool
 }
 
-// SessionSummarizerProvider resolves a request-scoped summarizer.
-type SessionSummarizerProvider interface {
-	ResolveSessionSummarizer(
-		ctx context.Context,
-		req *SummarizerResolveRequest,
-	) (SessionSummarizer, error)
-}
-
-// SessionSummarizerProviderFunc adapts a function into a
-// SessionSummarizerProvider.
-type SessionSummarizerProviderFunc func(
+// SessionSummarizerResolver resolves the summarizer to use for a single
+// summary attempt.
+type SessionSummarizerResolver func(
 	context.Context,
-	*SummarizerResolveRequest,
+	SessionSummaryRequest,
 ) (SessionSummarizer, error)
-
-// ResolveSessionSummarizer resolves the request-scoped summarizer.
-func (f SessionSummarizerProviderFunc) ResolveSessionSummarizer(
-	ctx context.Context,
-	req *SummarizerResolveRequest,
-) (SessionSummarizer, error) {
-	return f(ctx, req)
-}
 
 // SessionSummary represents a summary of a session's conversation history.
 type SessionSummary struct {

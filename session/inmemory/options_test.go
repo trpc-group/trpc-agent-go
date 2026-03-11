@@ -73,19 +73,19 @@ func TestWithSummarizer(t *testing.T) {
 	assert.Equal(t, s, opts.summarizer)
 }
 
-func TestWithSummarizerProvider(t *testing.T) {
+func TestWithSessionSummarizerResolver(t *testing.T) {
 	opts := serviceOpts{}
-	provider := psummary.SessionSummarizerProviderFunc(func(
+	resolver := psummary.SessionSummarizerResolver(func(
 		context.Context,
-		*psummary.SummarizerResolveRequest,
+		psummary.SessionSummaryRequest,
 	) (psummary.SessionSummarizer, error) {
 		return &fakeOptionsSummarizer{}, nil
 	})
-	WithSummarizerProvider(provider)(&opts)
-	require.NotNil(t, opts.summarizerProvider)
-	resolved, err := opts.summarizerProvider.ResolveSessionSummarizer(
+	WithSessionSummarizerResolver(resolver)(&opts)
+	require.NotNil(t, opts.summarizerResolver)
+	resolved, err := opts.summarizerResolver(
 		context.Background(),
-		&psummary.SummarizerResolveRequest{},
+		psummary.SessionSummaryRequest{},
 	)
 	require.NoError(t, err)
 	assert.IsType(t, &fakeOptionsSummarizer{}, resolved)

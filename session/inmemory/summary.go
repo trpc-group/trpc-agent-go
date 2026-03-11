@@ -20,7 +20,7 @@ import (
 // CreateSessionSummary generates a summary for the session and stores it on the session object.
 // This implementation preserves original events and updates session.Summaries only.
 func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerProvider) {
+	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
 		return nil
 	}
 
@@ -36,7 +36,7 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 	summarizer, err := isummary.ResolveSessionSummarizer(
 		ctx,
 		s.opts.summarizer,
-		s.opts.summarizerProvider,
+		s.opts.summarizerResolver,
 		sess,
 		filterKey,
 		force,
@@ -117,7 +117,7 @@ func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *sessio
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
 func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerProvider) {
+	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
 		return nil
 	}
 

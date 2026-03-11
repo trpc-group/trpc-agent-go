@@ -16,30 +16,30 @@ import (
 )
 
 // HasSummarizer reports whether summary generation is configured either through
-// a static summarizer or a request-scoped provider.
+// a static summarizer or a request-scoped resolver.
 func HasSummarizer(
 	summarizer psummary.SessionSummarizer,
-	provider psummary.SessionSummarizerProvider,
+	resolver psummary.SessionSummarizerResolver,
 ) bool {
-	return summarizer != nil || provider != nil
+	return summarizer != nil || resolver != nil
 }
 
 // ResolveSessionSummarizer resolves the summarizer for the current summary
-// attempt. A provider takes precedence; returning nil falls back to the static
+// attempt. A resolver takes precedence; returning nil falls back to the static
 // summarizer when present.
 func ResolveSessionSummarizer(
 	ctx context.Context,
 	summarizer psummary.SessionSummarizer,
-	provider psummary.SessionSummarizerProvider,
+	resolver psummary.SessionSummarizerResolver,
 	sess *session.Session,
 	filterKey string,
 	force bool,
 ) (psummary.SessionSummarizer, error) {
-	if provider == nil {
+	if resolver == nil {
 		return summarizer, nil
 	}
 
-	resolved, err := provider.ResolveSessionSummarizer(ctx, &psummary.SummarizerResolveRequest{
+	resolved, err := resolver(ctx, psummary.SessionSummaryRequest{
 		Session:   sess,
 		FilterKey: filterKey,
 		Force:     force,

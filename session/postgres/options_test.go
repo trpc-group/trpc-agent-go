@@ -293,21 +293,21 @@ func TestServiceOptions(t *testing.T) {
 		assert.Nil(t, opts.summarizer)
 	})
 
-	t.Run("WithSummarizerProvider", func(t *testing.T) {
+	t.Run("WithSessionSummarizerResolver", func(t *testing.T) {
 		opts := &ServiceOpts{}
 		called := false
-		WithSummarizerProvider(psummary.SessionSummarizerProviderFunc(func(
+		WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
 			context.Context,
-			*psummary.SummarizerResolveRequest,
+			psummary.SessionSummaryRequest,
 		) (psummary.SessionSummarizer, error) {
 			called = true
 			return nil, nil
 		}))(opts)
 
-		require.NotNil(t, opts.summarizerProvider)
-		_, err := opts.summarizerProvider.ResolveSessionSummarizer(
+		require.NotNil(t, opts.summarizerResolver)
+		_, err := opts.summarizerResolver(
 			context.Background(),
-			&psummary.SummarizerResolveRequest{FilterKey: "branch"},
+			psummary.SessionSummaryRequest{FilterKey: "branch"},
 		)
 		require.NoError(t, err)
 		assert.True(t, called)

@@ -171,10 +171,10 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 	}
 
 	// Start async summary workers if summary generation is configured.
-	if isummary.HasSummarizer(opts.summarizer, opts.summarizerProvider) && opts.asyncSummaryNum > 0 {
+	if isummary.HasSummarizer(opts.summarizer, opts.summarizerResolver) && opts.asyncSummaryNum > 0 {
 		s.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
 			Summarizer:         opts.summarizer,
-			SummarizerProvider: opts.summarizerProvider,
+			SummarizerResolver: opts.summarizerResolver,
 			AsyncSummaryNum:    opts.asyncSummaryNum,
 			SummaryQueueSize:   opts.summaryQueueSize,
 			SummaryJobTimeout:  opts.summaryJobTimeout,
