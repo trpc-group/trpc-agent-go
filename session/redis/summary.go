@@ -76,9 +76,6 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	if err != nil {
 		return err
 	}
-	if summarizer == nil {
-		return nil
-	}
 
 	updated, err := isummary.SummarizeSession(ctx, summarizer, sess, filterKey, force)
 	if err != nil || !updated {
