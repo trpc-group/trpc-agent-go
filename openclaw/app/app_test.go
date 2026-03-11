@@ -1634,6 +1634,18 @@ func TestResolveSkillRoots_UsesInstalledBundledSkills(t *testing.T) {
 	)
 }
 
+func TestResolveBundledSkillsRoot_RepoFallback(t *testing.T) {
+	cwd := t.TempDir()
+	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
+	require.NoError(t, os.MkdirAll(repoBundled, 0o700))
+
+	require.Equal(
+		t,
+		repoBundled,
+		resolveBundledSkillsRoot(cwd, t.TempDir()),
+	)
+}
+
 type stubGateway struct{}
 
 func (stubGateway) SendMessage(

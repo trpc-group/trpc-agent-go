@@ -12,6 +12,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,21 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestTopLevelRequestHelpers(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, isTopLevelVersionRequest([]string{"version"}))
+	require.True(t, isTopLevelVersionRequest([]string{"--version"}))
+	require.False(t, isTopLevelVersionRequest(nil))
+
+	require.True(t, isTopLevelUpgradeRequest([]string{"upgrade"}))
+	require.False(t, isTopLevelUpgradeRequest(nil))
+	require.False(t, isTopLevelUpgradeRequest([]string{"doctor"}))
+
+	require.True(t, isHelpRequest(" --help "))
+	require.False(t, isHelpRequest("version"))
+}
 
 func TestCompareReleaseVersions(t *testing.T) {
 	t.Parallel()
@@ -67,6 +83,18 @@ func TestCompareReleaseVersions(t *testing.T) {
 			Right:    "v1.2.3",
 			Expected: -1,
 		},
+		{
+			Name:     "valid beats invalid",
+			Left:     "v1.2.3",
+			Right:    "dev",
+			Expected: 1,
+		},
+		{
+			Name:     "both invalid compare lexically",
+			Left:     "beta",
+			Right:    "alpha",
+			Expected: 1,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -80,6 +108,13 @@ func TestCompareReleaseVersions(t *testing.T) {
 			)
 		})
 	}
+}
+
+func TestVersionPart(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 2, versionPart([]int{1, 2, 3}, 1))
+	require.Equal(t, 0, versionPart([]int{1, 2, 3}, 8))
 }
 
 func TestParseUpgradePaths(t *testing.T) {
@@ -132,6 +167,50 @@ func TestParseUpgradePathsRejectsUnknownArg(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParseUpgradePathsRejectsMissingValue(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseUpgradePaths([]string{"--config"})
+	require.Error(t, err)
+
+	_, err = parseUpgradePaths([]string{"--state-dir"})
+	require.Error(t, err)
+}
+
+func TestResolveUpgradeConfigPathUsesEnv(t *testing.T) {
+	t.Setenv(openClawConfigEnvName, "./custom.yaml")
+
+	got, err := resolveUpgradeConfigPath("")
+	require.NoError(t, err)
+	require.Equal(t, filepath.Clean("custom.yaml"), filepath.Base(got))
+}
+
+func TestResolveUpgradeConfigPathHomeError(t *testing.T) {
+	old := userHomeDirFunc
+	userHomeDirFunc = func() (string, error) {
+		return "", errors.New("boom")
+	}
+	t.Cleanup(func() {
+		userHomeDirFunc = old
+	})
+
+	_, err := resolveUpgradeConfigPath("")
+	require.Error(t, err)
+}
+
+func TestResolveUpgradeStateDirHomeError(t *testing.T) {
+	old := userHomeDirFunc
+	userHomeDirFunc = func() (string, error) {
+		return "", errors.New("boom")
+	}
+	t.Cleanup(func() {
+		userHomeDirFunc = old
+	})
+
+	_, err := resolveUpgradeStateDir("")
+	require.Error(t, err)
+}
+
 func TestFetchLatestReleaseVersion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +234,30 @@ func TestFetchLatestReleaseVersion(t *testing.T) {
 	version, err := fetchLatestReleaseVersion(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "v1.3.0", version)
+}
+
+func TestFetchLatestReleaseVersionErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Query().Get("mode") {
+			case "bad-json":
+				_, _ = w.Write([]byte("{"))
+			default:
+				_, _ = w.Write([]byte(`[{"tag_name":"v1.2.3"}]`))
+			}
+		},
+	))
+	defer server.Close()
+
+	t.Setenv(releaseRepoEnvName, "trpc-group/trpc-agent-go")
+
+	t.Setenv(releaseAPIBaseURLEnvName, server.URL+"?mode=bad-json")
+	_, err := fetchLatestReleaseVersion(context.Background())
+	require.Error(t, err)
+
+	t.Setenv(releaseAPIBaseURLEnvName, server.URL)
+	_, err = fetchLatestReleaseVersion(context.Background())
+	require.Error(t, err)
 }
 
 func TestUpgradeToLatestNoOpWhenAlreadyCurrent(t *testing.T) {
@@ -203,6 +306,43 @@ func TestUpgradeToLatestNoOpWhenAlreadyCurrent(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Contains(t, stdout.String(), "already up to date")
+}
+
+func TestUpgradeToLatestReturnsBinaryDirError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`[{"tag_name":"openclaw-v9.9.9"}]`))
+		},
+	))
+	defer server.Close()
+
+	t.Setenv(releaseAPIBaseURLEnvName, server.URL)
+	t.Setenv(releaseRepoEnvName, "trpc-group/trpc-agent-go")
+
+	oldVersion := releaseVersion
+	releaseVersion = "v1.0.0"
+	t.Cleanup(func() {
+		releaseVersion = oldVersion
+	})
+
+	oldExecutable := executablePathFunc
+	executablePathFunc = func() (string, error) {
+		return "", errors.New("boom")
+	}
+	t.Cleanup(func() {
+		executablePathFunc = oldExecutable
+	})
+
+	err := upgradeToLatest(
+		context.Background(),
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+		upgradePaths{
+			ConfigPath: "/tmp/configs/openclaw.yaml",
+			StateDir:   "/tmp/state",
+		},
+	)
+	require.Error(t, err)
 }
 
 func TestUpgradeToLatestInstallsLatestRelease(t *testing.T) {
@@ -272,6 +412,91 @@ func TestUpgradeToLatestInstallsLatestRelease(t *testing.T) {
 	require.Equal(t, "/tmp/state", gotStateDir)
 }
 
+func TestRunUpgradeCommand(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`[{"tag_name":"openclaw-v9.9.9"}]`))
+		},
+	))
+	defer server.Close()
+
+	t.Setenv(releaseAPIBaseURLEnvName, server.URL)
+	t.Setenv(releaseRepoEnvName, "trpc-group/trpc-agent-go")
+
+	oldVersion := releaseVersion
+	releaseVersion = "v1.0.0"
+	t.Cleanup(func() {
+		releaseVersion = oldVersion
+	})
+
+	exeDir := t.TempDir()
+	oldExecutable := executablePathFunc
+	executablePathFunc = func() (string, error) {
+		return filepath.Join(exeDir, "openclaw"), nil
+	}
+	t.Cleanup(func() {
+		executablePathFunc = oldExecutable
+	})
+
+	oldInstall := installReleaseFunc
+	installReleaseFunc = func(
+		_ context.Context,
+		_ string,
+		_ string,
+		_ string,
+		_ string,
+		_, _ io.Writer,
+	) error {
+		return nil
+	}
+	t.Cleanup(func() {
+		installReleaseFunc = oldInstall
+	})
+
+	require.Equal(t, 0, runUpgradeCommand([]string{"--help"}))
+	require.Equal(t, 2, runUpgradeCommand([]string{"--bad-flag"}))
+	require.Equal(
+		t,
+		0,
+		runUpgradeCommand([]string{"--state-dir", t.TempDir()}),
+	)
+}
+
+func TestInstallRelease(t *testing.T) {
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	script := "#!/usr/bin/env bash\nset -e\nprintf '%s\\n' \"$@\" > \"$ARGS_FILE\"\n"
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(script))
+		},
+	))
+	defer server.Close()
+
+	t.Setenv(installScriptEnvName, server.URL)
+	t.Setenv("ARGS_FILE", argsFile)
+
+	err := installRelease(
+		context.Background(),
+		"v1.2.3",
+		"/tmp/bin",
+		"/tmp/config",
+		"/tmp/state",
+		&bytes.Buffer{},
+		&bytes.Buffer{},
+	)
+	require.NoError(t, err)
+
+	body, err := os.ReadFile(argsFile)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"--version\nv1.2.3\n--bin-dir\n/tmp/bin\n--config-dir\n"+
+			"/tmp/config\n--state-dir\n/tmp/state\n",
+		string(body),
+	)
+}
+
 func TestDownloadInstallScript(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
@@ -291,4 +516,79 @@ func TestDownloadInstallScript(t *testing.T) {
 	body, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, "#!/usr/bin/env bash\n", string(body))
+}
+
+func TestDownloadInstallScriptError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "boom", http.StatusInternalServerError)
+		},
+	))
+	defer server.Close()
+
+	t.Setenv(installScriptEnvName, server.URL)
+	_, err := downloadInstallScript(context.Background())
+	require.Error(t, err)
+}
+
+func TestFetchReleaseAssetErrors(t *testing.T) {
+	t.Parallel()
+
+	_, err := fetchReleaseAsset(context.Background(), "://bad")
+	require.Error(t, err)
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "boom", http.StatusInternalServerError)
+		},
+	))
+	defer server.Close()
+
+	_, err = fetchReleaseAsset(context.Background(), server.URL)
+	require.Error(t, err)
+}
+
+func TestOverrideHelpers(t *testing.T) {
+	t.Setenv(installScriptEnvName, "https://example.com/install.sh")
+	t.Setenv(releaseAPIBaseURLEnvName, "https://api.example.com/")
+	t.Setenv(releaseRepoEnvName, "example/openclaw")
+
+	require.Equal(
+		t,
+		"https://example.com/install.sh",
+		installScriptURL(),
+	)
+	require.Equal(t, "https://api.example.com", releaseAPIBaseURL())
+	require.Equal(t, "example/openclaw", releaseRepo())
+	require.Contains(t, latestReleaseAPIURL(), "/repos/example/openclaw/")
+}
+
+func TestOverrideHelpersDefaults(t *testing.T) {
+	t.Setenv(installScriptEnvName, "")
+	t.Setenv(releaseAPIBaseURLEnvName, "")
+	t.Setenv(releaseRepoEnvName, "")
+
+	require.Equal(t, defaultInstallScriptURL, installScriptURL())
+	require.Equal(t, defaultGitHubAPIBaseURL, releaseAPIBaseURL())
+	require.Equal(t, defaultReleaseRepo, releaseRepo())
+}
+
+func TestCurrentBinaryDir(t *testing.T) {
+	oldExecutable := executablePathFunc
+	executablePathFunc = func() (string, error) {
+		return "/tmp/bin/openclaw", nil
+	}
+	t.Cleanup(func() {
+		executablePathFunc = oldExecutable
+	})
+
+	dir, err := currentBinaryDir()
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/bin", dir)
+
+	executablePathFunc = func() (string, error) {
+		return "", errors.New("boom")
+	}
+	_, err = currentBinaryDir()
+	require.Error(t, err)
 }
