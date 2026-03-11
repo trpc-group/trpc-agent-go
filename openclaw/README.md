@@ -13,6 +13,10 @@ OpenClaw-like shape on top of `trpc-agent-go`:
 It is intended as a starting point for adding more channels
 (Enterprise WeChat, Slack, etc.) and hardening operational controls.
 
+Detailed guide:
+[OpenClaw Runtime guide (English)](../docs/mkdocs/en/openclaw-runtime.md)
+| [OpenClaw Runtime 指南（中文）](../docs/mkdocs/zh/openclaw-runtime.md)
+
 ## Quick start
 
 Run with a mock model (no external model credentials needed):

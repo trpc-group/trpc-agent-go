@@ -11,6 +11,10 @@
 
 本项目旨在作为添加更多通道（企业微信、Slack 等）和强化运维控制的起点。
 
+详细指南：
+[OpenClaw Runtime Guide (English)](../docs/mkdocs/en/openclaw-runtime.md)
+| [OpenClaw Runtime 指南（中文）](../docs/mkdocs/zh/openclaw-runtime.md)
+
 ## 快速开始
 
 使用 mock 模型运行（无需外部模型凭据）：

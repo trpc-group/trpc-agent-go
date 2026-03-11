@@ -57,6 +57,7 @@ nav:
     - Gateway: gateway.md
     - AG-UI: agui.md
     - A2A: a2a.md
+    - OpenClaw Runtime: openclaw-runtime.md
   - Observability: observability.md
   - Ecosystem: ecosystem.md
 
@@ -125,6 +126,7 @@ plugins:
               - Gateway: gateway.md
               - AG-UI: agui.md
               - A2A: a2a.md
+              - OpenClaw Runtime: openclaw-runtime.md
             - 可观测: observability.md
             - 生态: ecosystem.md
   - git-revision-date-localized:
