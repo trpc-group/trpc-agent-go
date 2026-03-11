@@ -61,7 +61,7 @@ require (
 	github.com/xuri/excelize/v2 v2.9.0
 	github.com/yuin/goldmark v1.7.13
 	gopkg.in/yaml.v3 v3.0.1
-	trpc.group/trpc-go/trpc-agent-go v1.5.0
+	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.5.0
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v0.0.0-20260226120000-4e084c8c87d8
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres v1.5.0
