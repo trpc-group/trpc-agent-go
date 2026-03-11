@@ -45,6 +45,42 @@ type SessionSummarizer interface {
 	Metadata() map[string]any
 }
 
+// SummarizerResolveRequest carries request-scoped inputs for selecting a
+// summarizer dynamically.
+type SummarizerResolveRequest struct {
+	// Session is the session being summarized.
+	Session *session.Session
+	// FilterKey scopes the summary to a branch or substream. Empty means the
+	// full-session summary.
+	FilterKey string
+	// Force indicates whether summarization should proceed even when no delta
+	// events are found.
+	Force bool
+}
+
+// SessionSummarizerProvider resolves a request-scoped summarizer.
+type SessionSummarizerProvider interface {
+	ResolveSessionSummarizer(
+		ctx context.Context,
+		req *SummarizerResolveRequest,
+	) (SessionSummarizer, error)
+}
+
+// SessionSummarizerProviderFunc adapts a function into a
+// SessionSummarizerProvider.
+type SessionSummarizerProviderFunc func(
+	context.Context,
+	*SummarizerResolveRequest,
+) (SessionSummarizer, error)
+
+// ResolveSessionSummarizer resolves the request-scoped summarizer.
+func (f SessionSummarizerProviderFunc) ResolveSessionSummarizer(
+	ctx context.Context,
+	req *SummarizerResolveRequest,
+) (SessionSummarizer, error) {
+	return f(ctx, req)
+}
+
 // SessionSummary represents a summary of a session's conversation history.
 type SessionSummary struct {
 	// ID is the ID of the session.

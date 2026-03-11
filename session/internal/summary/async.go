@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
@@ -40,11 +41,16 @@ type AsyncSummaryWorker struct {
 
 // AsyncSummaryConfig contains configuration for async summary worker.
 type AsyncSummaryConfig struct {
-	Summarizer        summary.SessionSummarizer
-	AsyncSummaryNum   int
-	SummaryQueueSize  int
-	SummaryJobTimeout time.Duration
-	CreateSummaryFunc func(context.Context, *session.Session, string, bool) error
+	Summarizer         summary.SessionSummarizer
+	SummarizerProvider summary.SessionSummarizerProvider
+	AsyncSummaryNum    int
+	SummaryQueueSize   int
+	SummaryJobTimeout  time.Duration
+	CreateSummaryFunc  func(context.Context, *session.Session, string, bool) error
+}
+
+func (c AsyncSummaryConfig) hasSummarizer() bool {
+	return c.Summarizer != nil || c.SummarizerProvider != nil
 }
 
 // NewAsyncSummaryWorker creates a new async summary worker.
@@ -61,7 +67,7 @@ func (w *AsyncSummaryWorker) Start() {
 	if w.started {
 		return
 	}
-	if w.config.Summarizer == nil {
+	if !w.config.hasSummarizer() {
 		return
 	}
 	num := w.config.AsyncSummaryNum
@@ -110,7 +116,7 @@ func (w *AsyncSummaryWorker) EnqueueJob(
 	filterKey string,
 	force bool,
 ) error {
-	if w.config.Summarizer == nil {
+	if !w.config.hasSummarizer() {
 		return nil
 	}
 
@@ -124,8 +130,12 @@ func (w *AsyncSummaryWorker) EnqueueJob(
 	}
 
 	// Create job with detached context.
+	jobCtx := ctx
+	if jobCtx == nil {
+		jobCtx = context.Background()
+	}
 	job := &summaryJob{
-		ctx:       context.WithoutCancel(ctx),
+		ctx:       context.WithoutCancel(agent.CloneContext(jobCtx)),
 		filterKey: filterKey,
 		force:     force,
 		session:   sess,
