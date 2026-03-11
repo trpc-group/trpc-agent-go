@@ -36,6 +36,7 @@ const (
 type Client struct {
 	handler      http.Handler
 	messagesPath string
+	streamPath   string
 	cancelPath   string
 }
 
@@ -45,21 +46,43 @@ func New(
 	messagesPath string,
 	cancelPath string,
 ) (*Client, error) {
+	return NewWithStreamPath(
+		handler,
+		messagesPath,
+		messagesPath+gwproto.MessagesStreamSuffix,
+		cancelPath,
+	)
+}
+
+// NewWithStreamPath creates a client with an explicit stream path.
+func NewWithStreamPath(
+	handler http.Handler,
+	messagesPath string,
+	streamPath string,
+	cancelPath string,
+) (*Client, error) {
 	if handler == nil {
 		return nil, errors.New("gwclient: nil handler")
 	}
 	if messagesPath == "" {
 		return nil, errors.New("gwclient: empty messages path")
 	}
+	if streamPath == "" {
+		return nil, errors.New("gwclient: empty stream path")
+	}
 	return &Client{
 		handler:      handler,
 		messagesPath: messagesPath,
+		streamPath:   streamPath,
 		cancelPath:   cancelPath,
 	}, nil
 }
 
 // MessageRequest matches the gateway /messages JSON payload.
 type MessageRequest = gwproto.MessageRequest
+
+// StreamEvent matches the gateway streaming event payload.
+type StreamEvent = gwproto.StreamEvent
 
 // APIError matches gateway error payloads.
 type APIError = gwproto.APIError

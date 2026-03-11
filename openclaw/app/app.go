@@ -47,6 +47,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
@@ -78,6 +79,14 @@ const (
 		"Keep replies concise."
 
 	openClawToolingGuidance = "For general local shell work, use " +
+		"read_document or read_spreadsheet first for common PDF, " +
+		"DOCX, text, CSV, and spreadsheet uploads already in the " +
+		"chat. Only fall back to " +
+		"exec_command when those tools cannot satisfy the task. " +
+		"Do not call exec_command just to print OPENCLAW_* upload " +
+		"vars or inspect recent upload metadata when a matching " +
+		"chat file is already available. For general local shell " +
+		"work, use " +
 		"exec_command. For interactive follow-up input, use " +
 		"write_stdin and kill_session when needed. Use message " +
 		"to send to the current chat or an explicit target. " +
@@ -195,6 +204,8 @@ func Main(args []string) int {
 			return runDoctor(args[1:])
 		case subcmdInspect:
 			return runInspect(args[1:])
+		case subcmdBootstrap:
+			return runBootstrap(args[1:])
 		}
 	}
 
@@ -284,6 +295,10 @@ func gatewayStartupLines(
 		{text: fmt.Sprintf("Gateway listening on %s", httpAddr)},
 		{text: fmt.Sprintf("Health:   GET  %s", gwSrv.HealthPath())},
 		{text: fmt.Sprintf("Messages: POST %s", gwSrv.MessagesPath())},
+		{text: fmt.Sprintf(
+			"Stream:   POST %s",
+			gwSrv.MessagesStreamPath(),
+		)},
 		{text: fmt.Sprintf(
 			"Status:   GET  %s?request_id=...",
 			gwSrv.StatusPath(),
@@ -1059,6 +1074,7 @@ func run(ctx context.Context, args []string) error {
 	errCh := make(chan error, workerCount)
 
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
+	logStartupLines(toolDepsStartupLines(openClawTools.deps))
 	go func() {
 		//nolint:gosec
 		errCh <- httpSrv.ListenAndServe()
@@ -1770,6 +1786,7 @@ type openClawToolsBundle struct {
 	execMgr  *octool.Manager
 	router   *outbound.Router
 	cronTool *cron.Tool
+	deps     *deps.Report
 }
 
 func buildOpenClawTools(
@@ -1780,15 +1797,27 @@ func buildOpenClawTools(
 		return openClawToolsBundle{}
 	}
 
-	mgr := octool.NewManager()
+	mgr := octool.NewManager(
+		octool.WithBaseEnv(deps.ToolEnv(stateDir)),
+	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
 	var uploadStore *uploads.Store
 	if store, err := uploads.NewStore(stateDir); err == nil {
 		uploadStore = store
 	}
+	var depsReport *deps.Report
+	if sources, err := deps.SourcesForProfiles(deps.DefaultProfiles()); err ==
+		nil {
+		report, err := deps.InspectStartup(stateDir, sources)
+		if err == nil {
+			depsReport = &report
+		}
+	}
 
 	tools := []tool.Tool{
+		octool.NewReadDocumentTool(uploadStore),
+		octool.NewReadSpreadsheetTool(uploadStore),
 		octool.NewExecCommandTool(mgr, uploadStore),
 		octool.NewWriteStdinTool(mgr),
 		octool.NewKillSessionTool(mgr),
@@ -1800,6 +1829,7 @@ func buildOpenClawTools(
 		execMgr:  mgr,
 		router:   router,
 		cronTool: cronTool,
+		deps:     depsReport,
 	}
 }
 

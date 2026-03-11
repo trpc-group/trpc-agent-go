@@ -48,6 +48,71 @@ type MessageResponse struct {
 	Error     *APIError `json:"error,omitempty"`
 }
 
+// StreamEventType identifies one streaming gateway event.
+type StreamEventType string
+
+// StreamProgressStage identifies one high-level run progress stage.
+type StreamProgressStage string
+
+const (
+	// MessagesStreamSuffix is the default suffix for stream routes.
+	MessagesStreamSuffix = ":stream"
+	// SSEContentType is the HTTP Content-Type for gateway event streams.
+	SSEContentType = "text/event-stream"
+	// SSEEventPrefix is the raw SSE prefix for event lines.
+	SSEEventPrefix = "event:"
+	// SSEDataPrefix is the raw SSE prefix for data lines.
+	SSEDataPrefix = "data:"
+	// SSEEventLinePrefix is the emitted SSE event line prefix.
+	SSEEventLinePrefix = SSEEventPrefix + " "
+	// SSEDataLinePrefix is the emitted SSE data line prefix.
+	SSEDataLinePrefix = SSEDataPrefix + " "
+	// SSELineEnding terminates one SSE event.
+	SSELineEnding = "\n\n"
+
+	// StreamEventTypeRunStarted marks the start of one gateway run.
+	StreamEventTypeRunStarted StreamEventType = "run.started"
+	// StreamEventTypeRunIgnored marks a request ignored by policy.
+	StreamEventTypeRunIgnored StreamEventType = "run.ignored"
+	// StreamEventTypeMessageDelta carries an incremental text delta.
+	StreamEventTypeMessageDelta StreamEventType = "message.delta"
+	// StreamEventTypeMessageCompleted carries the final reply text.
+	StreamEventTypeMessageCompleted StreamEventType = "message.completed"
+	// StreamEventTypeRunProgress carries a high-level run status update.
+	StreamEventTypeRunProgress StreamEventType = "run.progress"
+	// StreamEventTypeRunCompleted marks successful stream completion.
+	StreamEventTypeRunCompleted StreamEventType = "run.completed"
+	// StreamEventTypeRunError marks a terminal stream error.
+	StreamEventTypeRunError StreamEventType = "run.error"
+
+	// StreamProgressStagePreparing marks pre-tool request setup.
+	StreamProgressStagePreparing StreamProgressStage = "preparing"
+	// StreamProgressStageReadingDocument marks document extraction.
+	StreamProgressStageReadingDocument StreamProgressStage = "reading_document"
+	// StreamProgressStageReadingSpreadsheet marks tabular extraction.
+	StreamProgressStageReadingSpreadsheet StreamProgressStage = "reading_spreadsheet"
+	// StreamProgressStageRunningTool marks a generic tool run.
+	StreamProgressStageRunningTool StreamProgressStage = "running_tool"
+	// StreamProgressStageSummarizing marks post-tool answer generation.
+	StreamProgressStageSummarizing StreamProgressStage = "summarizing"
+)
+
+// StreamEvent is one gateway streaming event payload.
+type StreamEvent struct {
+	Type StreamEventType `json:"type"`
+
+	SessionID string `json:"session_id,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
+
+	Delta     string              `json:"delta,omitempty"`
+	Reply     string              `json:"reply,omitempty"`
+	Stage     StreamProgressStage `json:"stage,omitempty"`
+	Summary   string              `json:"summary,omitempty"`
+	ElapsedMS int64               `json:"elapsed_ms,omitempty"`
+	Ignored   bool                `json:"ignored,omitempty"`
+	Error     *APIError           `json:"error,omitempty"`
+}
+
 // ContentPartType is the type discriminator for ContentPart.
 type ContentPartType string
 

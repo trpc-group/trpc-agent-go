@@ -18,9 +18,17 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 )
+
+type preparedMessageRun struct {
+	userID    string
+	sessionID string
+	requestID string
+	userMsg   model.Message
+}
 
 // ProcessMessage processes a gateway message request without an HTTP hop.
 //
@@ -73,99 +81,41 @@ func (s *Server) ProcessMessage(
 		_ = trace.Record(debugrecorder.KindGatewayReq, summary)
 	}
 
-	userMsg, mentionText, err := s.normalizeUserMessage(ctx, req)
-	if err != nil {
+	prepared, earlyRsp, earlyStatus := s.prepareMessageRun(
+		ctx,
+		req,
+		trace,
+	)
+	if earlyRsp != nil {
+		rsp = *earlyRsp
+		status = earlyStatus
 		if trace != nil {
-			_ = trace.RecordError(err)
-		}
-		return gwproto.MessageResponse{
-			Error: &gwproto.APIError{
-				Type:    errTypeInvalidRequest,
-				Message: err.Error(),
-			},
-		}, http.StatusBadRequest
-	}
-
-	msg := inboundFromRequest(req, mentionText)
-
-	userID := strings.TrimSpace(req.UserID)
-	if userID == "" {
-		userID = msg.From
-	}
-	if userID == "" {
-		errMsg := "missing user_id or from"
-		if trace != nil {
-			_ = trace.RecordError(errString(errMsg))
-		}
-		return gwproto.MessageResponse{
-			Error: &gwproto.APIError{
-				Type:    errTypeInvalidRequest,
-				Message: errMsg,
-			},
-		}, http.StatusBadRequest
-	}
-
-	if !s.isUserAllowed(userID) {
-		errMsg := "user is not allowed"
-		if trace != nil {
-			_ = trace.RecordError(errString(errMsg))
-		}
-		return gwproto.MessageResponse{
-			Error: &gwproto.APIError{
-				Type:    errTypeUnauthorized,
-				Message: errMsg,
-			},
-		}, http.StatusForbidden
-	}
-
-	if s.requireMention && msg.Thread != "" {
-		if !containsAny(msg.Text, s.mentionPatterns) {
-			if trace != nil {
-				_ = trace.Record(
-					debugrecorder.KindGatewayRsp,
-					map[string]any{
-						"ignored": true,
-						"reason":  "missing mention",
-					},
-				)
+			record := map[string]any{
+				"status":     status,
+				"session_id": rsp.SessionID,
+				"request_id": rsp.RequestID,
+				"ignored":    rsp.Ignored,
 			}
-			return gwproto.MessageResponse{Ignored: true}, http.StatusOK
-		}
-	}
-
-	sessionID := strings.TrimSpace(req.SessionID)
-	if sessionID == "" {
-		sessionIDFunc := s.sessionIDFunc
-		if sessionIDFunc == nil {
-			sessionIDFunc = DefaultSessionID
-		}
-		sessionID, err = sessionIDFunc(msg)
-		if err != nil {
-			if trace != nil {
-				_ = trace.RecordError(err)
+			if rsp.Error != nil {
+				record["error"] = rsp.Error.Message
 			}
-			return gwproto.MessageResponse{
-				Error: &gwproto.APIError{
-					Type:    errTypeInvalidRequest,
-					Message: err.Error(),
-				},
-			}, http.StatusBadRequest
+			_ = trace.Record(debugrecorder.KindGatewayRsp, record)
 		}
+		return rsp, status
 	}
 
-	requestID := strings.TrimSpace(req.RequestID)
 	reply, resolvedRequestID, err := s.run(
 		ctx,
-		userID,
-		sessionID,
-		requestID,
-		userMsg,
+		prepared.userID,
+		prepared.sessionID,
+		prepared.requestID,
+		prepared.userMsg,
 	)
 	if err != nil {
 		if errors.Is(err, errEmptyReplyValue) {
 			reply = emptyReplyFallbackText
 			rsp = gwproto.MessageResponse{
-				SessionID: sessionID,
+				SessionID: prepared.sessionID,
 				RequestID: resolvedRequestID,
 				Reply:     reply,
 			}
@@ -175,7 +125,7 @@ func (s *Server) ProcessMessage(
 					debugrecorder.KindGatewayRsp,
 					map[string]any{
 						"status":     status,
-						"session_id": sessionID,
+						"session_id": prepared.sessionID,
 						"request_id": resolvedRequestID,
 						"reply":      reply,
 						"warning":    err.Error(),
@@ -204,7 +154,7 @@ func (s *Server) ProcessMessage(
 	}
 
 	rsp = gwproto.MessageResponse{
-		SessionID: sessionID,
+		SessionID: prepared.sessionID,
 		RequestID: resolvedRequestID,
 		Reply:     reply,
 	}
@@ -215,13 +165,102 @@ func (s *Server) ProcessMessage(
 			debugrecorder.KindGatewayRsp,
 			map[string]any{
 				"status":     status,
-				"session_id": sessionID,
+				"session_id": prepared.sessionID,
 				"request_id": resolvedRequestID,
 				"reply":      reply,
 			},
 		)
 	}
 	return rsp, status
+}
+
+func (s *Server) prepareMessageRun(
+	ctx context.Context,
+	req gwproto.MessageRequest,
+	trace *debugrecorder.Trace,
+) (preparedMessageRun, *gwproto.MessageResponse, int) {
+	userMsg, mentionText, err := s.normalizeUserMessage(ctx, req)
+	if err != nil {
+		if trace != nil {
+			_ = trace.RecordError(err)
+		}
+		rsp := gwproto.MessageResponse{
+			Error: &gwproto.APIError{
+				Type:    errTypeInvalidRequest,
+				Message: err.Error(),
+			},
+		}
+		return preparedMessageRun{}, &rsp, http.StatusBadRequest
+	}
+
+	msg := inboundFromRequest(req, mentionText)
+
+	userID := strings.TrimSpace(req.UserID)
+	if userID == "" {
+		userID = msg.From
+	}
+	if userID == "" {
+		errMsg := "missing user_id or from"
+		if trace != nil {
+			_ = trace.RecordError(errString(errMsg))
+		}
+		rsp := gwproto.MessageResponse{
+			Error: &gwproto.APIError{
+				Type:    errTypeInvalidRequest,
+				Message: errMsg,
+			},
+		}
+		return preparedMessageRun{}, &rsp, http.StatusBadRequest
+	}
+
+	if !s.isUserAllowed(userID) {
+		errMsg := "user is not allowed"
+		if trace != nil {
+			_ = trace.RecordError(errString(errMsg))
+		}
+		rsp := gwproto.MessageResponse{
+			Error: &gwproto.APIError{
+				Type:    errTypeUnauthorized,
+				Message: errMsg,
+			},
+		}
+		return preparedMessageRun{}, &rsp, http.StatusForbidden
+	}
+
+	if s.requireMention && msg.Thread != "" {
+		if !containsAny(msg.Text, s.mentionPatterns) {
+			rsp := gwproto.MessageResponse{Ignored: true}
+			return preparedMessageRun{}, &rsp, http.StatusOK
+		}
+	}
+
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		sessionIDFunc := s.sessionIDFunc
+		if sessionIDFunc == nil {
+			sessionIDFunc = DefaultSessionID
+		}
+		sessionID, err = sessionIDFunc(msg)
+		if err != nil {
+			if trace != nil {
+				_ = trace.RecordError(err)
+			}
+			rsp := gwproto.MessageResponse{
+				Error: &gwproto.APIError{
+					Type:    errTypeInvalidRequest,
+					Message: err.Error(),
+				},
+			}
+			return preparedMessageRun{}, &rsp, http.StatusBadRequest
+		}
+	}
+
+	return preparedMessageRun{
+		userID:    userID,
+		sessionID: sessionID,
+		requestID: strings.TrimSpace(req.RequestID),
+		userMsg:   userMsg,
+	}, nil, http.StatusOK
 }
 
 // CancelRequest cancels an in-flight run by request ID.

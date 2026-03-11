@@ -1,0 +1,648 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+)
+
+const (
+	traceStatusOK      = "ok"
+	traceStatusIgnored = "ignored"
+	traceStatusError   = "error"
+
+	streamToolExecCommand    = "exec_command"
+	streamToolReadDocument   = "read_document"
+	streamToolReadSheet      = "read_spreadsheet"
+	progressSummaryPrepare   = "Preparing request"
+	progressSummaryDoc       = "Reading document"
+	progressSummarySheet     = "Reading spreadsheet"
+	progressSummaryTool      = "Running local tool"
+	progressSummaryAnswering = "Preparing final answer"
+)
+
+type streamOutcome struct {
+	status string
+	errMsg string
+}
+
+type progressState struct {
+	startedAt time.Time
+	stage     gwproto.StreamProgressStage
+	summary   string
+}
+
+// StreamMessage processes a request and returns a stream of gateway
+// events. Validation errors are returned as APIError/status pairs.
+func (s *Server) StreamMessage(
+	ctx context.Context,
+	req gwproto.MessageRequest,
+) (<-chan gwproto.StreamEvent, *gwproto.APIError, int) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil {
+		return nil, &gwproto.APIError{
+			Type:    errTypeInternal,
+			Message: "nil server",
+		}, http.StatusInternalServerError
+	}
+
+	trace, created := s.ensureTrace(ctx, req)
+	if created && trace != nil {
+		ctx = debugrecorder.WithTrace(ctx, trace)
+	}
+	if trace != nil {
+		summary, err := debugrecorder.SummarizeRequest(trace, req)
+		if err != nil {
+			_ = trace.RecordError(err)
+		}
+		_ = trace.Record(debugrecorder.KindGatewayReq, summary)
+	}
+
+	prepared, earlyRsp, earlyStatus := s.prepareMessageRun(
+		ctx,
+		req,
+		trace,
+	)
+	if earlyRsp != nil {
+		if created && trace != nil {
+			end := debugrecorder.TraceEnd{
+				Duration: 0,
+			}
+			if earlyRsp.Ignored {
+				end.Status = traceStatusIgnored
+			} else {
+				end.Status = traceStatusError
+			}
+			if earlyRsp.Error != nil {
+				end.Error = earlyRsp.Error.Message
+			}
+			_ = trace.Close(end)
+		}
+		if earlyRsp.Ignored {
+			events := singleStreamEvents(
+				gwproto.StreamEvent{
+					Type:    gwproto.StreamEventTypeRunIgnored,
+					Ignored: true,
+				},
+				gwproto.StreamEvent{
+					Type: gwproto.StreamEventTypeRunCompleted,
+				},
+			)
+			return events, nil, http.StatusOK
+		}
+		return nil, earlyRsp.Error, earlyStatus
+	}
+
+	out := make(chan gwproto.StreamEvent, 16)
+	go func() {
+		startedAt := time.Now()
+		outcome := streamOutcome{status: traceStatusError}
+		defer close(out)
+		if created && trace != nil {
+			defer func() {
+				_ = trace.Close(debugrecorder.TraceEnd{
+					Duration: time.Since(startedAt),
+					Status:   outcome.status,
+					Error:    outcome.errMsg,
+				})
+			}()
+		}
+
+		s.lanes.withLock(prepared.sessionID, func() {
+			outcome = s.streamLocked(
+				ctx,
+				prepared,
+				trace,
+				out,
+			)
+		})
+	}()
+
+	return out, nil, http.StatusOK
+}
+
+func (s *Server) handleMessagesStream(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		w.Header().Set(headerAllow, methodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		s.writeError(w, gwproto.APIError{
+			Type:    errTypeInternal,
+			Message: "streaming not supported",
+		}, http.StatusInternalServerError)
+		return
+	}
+
+	var req gwproto.MessageRequest
+	if err := s.decodeJSON(r, &req); err != nil {
+		s.writeError(w, gwproto.APIError{
+			Type:    errTypeInvalidRequest,
+			Message: err.Error(),
+		}, http.StatusBadRequest)
+		return
+	}
+
+	events, apiErr, status := s.StreamMessage(r.Context(), req)
+	if apiErr != nil {
+		s.writeError(w, *apiErr, status)
+		return
+	}
+
+	w.Header().Set(headerContentType, gwproto.SSEContentType)
+	w.Header().Set(headerCacheCtrl, cacheControlNoCache)
+	w.Header().Set(headerConnection, connectionKeepAlive)
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	for evt := range events {
+		if !writeSSEEvent(w, flusher, evt) {
+			return
+		}
+	}
+}
+
+func writeSSEEvent(
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	evt gwproto.StreamEvent,
+) bool {
+	data, err := json.Marshal(evt)
+	if err != nil {
+		log.Warnf("gateway: marshal stream event: %v", err)
+		return false
+	}
+
+	if _, err := fmt.Fprintf(
+		w,
+		"%s%s\n%s%s%s",
+		gwproto.SSEEventLinePrefix,
+		evt.Type,
+		gwproto.SSEDataLinePrefix,
+		data,
+		gwproto.SSELineEnding,
+	); err != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
+}
+
+func (s *Server) streamLocked(
+	ctx context.Context,
+	run preparedMessageRun,
+	trace *debugrecorder.Trace,
+	out chan<- gwproto.StreamEvent,
+) streamOutcome {
+	if trace != nil {
+		_ = trace.Record(
+			debugrecorder.KindGatewayRun,
+			map[string]any{
+				"user_id":    run.userID,
+				"session_id": run.sessionID,
+				"request_id": run.requestID,
+				"stream":     true,
+			},
+		)
+	}
+
+	if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+		Type:      gwproto.StreamEventTypeRunStarted,
+		SessionID: run.sessionID,
+		RequestID: run.requestID,
+	}) {
+		return streamOutcome{
+			status: traceStatusError,
+			errMsg: contextErrMessage(ctx),
+		}
+	}
+	progress := progressState{startedAt: time.Now()}
+	if !sendProgressUpdate(
+		ctx,
+		out,
+		run,
+		&progress,
+		gwproto.StreamProgressStagePreparing,
+		progressSummaryPrepare,
+	) {
+		return streamOutcome{
+			status: traceStatusError,
+			errMsg: contextErrMessage(ctx),
+		}
+	}
+
+	events, err := s.runner.Run(
+		ctx,
+		run.userID,
+		run.sessionID,
+		run.userMsg,
+		s.runOptions(run.userID, run.sessionID, run.requestID)...,
+	)
+	if err != nil {
+		apiErr := gwproto.APIError{
+			Type:    errTypeInternal,
+			Message: err.Error(),
+		}
+		_ = sendStreamEvent(ctx, out, gwproto.StreamEvent{
+			Type:      gwproto.StreamEventTypeRunError,
+			SessionID: run.sessionID,
+			RequestID: run.requestID,
+			Error:     &apiErr,
+		})
+		return streamOutcome{
+			status: traceStatusError,
+			errMsg: err.Error(),
+		}
+	}
+
+	result := newReplyAccumulator()
+	sentText := false
+	for evt := range events {
+		if trace != nil && evt != nil {
+			_ = trace.Record(debugrecorder.KindRunnerEvent, evt)
+		}
+		if evt == nil {
+			continue
+		}
+
+		if !sentText {
+			if update, ok := progressUpdateFromRunnerEvent(evt); ok {
+				if !sendProgressUpdate(
+					ctx,
+					out,
+					run,
+					&progress,
+					update.stage,
+					update.summary,
+				) {
+					return streamOutcome{
+						status: traceStatusError,
+						errMsg: contextErrMessage(ctx),
+					}
+				}
+			}
+		}
+
+		if apiErr := apiErrorFromEvent(evt); apiErr != nil {
+			requestID := resolvedStreamRequestID(
+				evt.RequestID,
+				run.requestID,
+			)
+			_ = sendStreamEvent(ctx, out, gwproto.StreamEvent{
+				Type:      gwproto.StreamEventTypeRunError,
+				SessionID: run.sessionID,
+				RequestID: requestID,
+				Error:     apiErr,
+			})
+			return streamOutcome{
+				status: traceStatusError,
+				errMsg: apiErr.Message,
+			}
+		}
+
+		result.Consume(evt)
+		delta := streamDeltaText(evt, sentText)
+		if delta == "" {
+			continue
+		}
+		sentText = true
+		if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+			Type:      gwproto.StreamEventTypeMessageDelta,
+			SessionID: run.sessionID,
+			RequestID: resolvedStreamRequestID(
+				result.RequestID,
+				run.requestID,
+			),
+			Delta: delta,
+		}) {
+			return streamOutcome{
+				status: traceStatusError,
+				errMsg: contextErrMessage(ctx),
+			}
+		}
+	}
+
+	if result.Error != nil {
+		apiErr := gwproto.APIError{
+			Type:    errTypeInternal,
+			Message: result.Error.Error(),
+		}
+		_ = sendStreamEvent(ctx, out, gwproto.StreamEvent{
+			Type:      gwproto.StreamEventTypeRunError,
+			SessionID: run.sessionID,
+			RequestID: resolvedStreamRequestID(
+				result.RequestID,
+				run.requestID,
+			),
+			Error: &apiErr,
+		})
+		return streamOutcome{
+			status: traceStatusError,
+			errMsg: result.Error.Error(),
+		}
+	}
+
+	reply := strings.TrimSpace(result.Text)
+	if reply == "" {
+		reply = emptyReplyFallbackText
+	}
+	requestID := resolvedStreamRequestID(
+		result.RequestID,
+		run.requestID,
+	)
+	if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+		Type:      gwproto.StreamEventTypeMessageCompleted,
+		SessionID: run.sessionID,
+		RequestID: requestID,
+		Reply:     reply,
+	}) {
+		return streamOutcome{
+			status: traceStatusError,
+			errMsg: contextErrMessage(ctx),
+		}
+	}
+	if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+		Type:      gwproto.StreamEventTypeRunCompleted,
+		SessionID: run.sessionID,
+		RequestID: requestID,
+	}) {
+		return streamOutcome{
+			status: traceStatusError,
+			errMsg: contextErrMessage(ctx),
+		}
+	}
+	return streamOutcome{status: traceStatusOK}
+}
+
+func sendStreamEvent(
+	ctx context.Context,
+	out chan<- gwproto.StreamEvent,
+	evt gwproto.StreamEvent,
+) bool {
+	select {
+	case out <- evt:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+type progressUpdate struct {
+	stage   gwproto.StreamProgressStage
+	summary string
+}
+
+func progressUpdateFromRunnerEvent(
+	evt *event.Event,
+) (progressUpdate, bool) {
+	if evt == nil || evt.Response == nil {
+		return progressUpdate{}, false
+	}
+	if evt.Response.IsToolCallResponse() {
+		toolCall, ok := firstToolCall(evt.Response)
+		if !ok {
+			return progressUpdate{}, false
+		}
+		return progressFromToolCall(toolCall)
+	}
+	if evt.Object == model.ObjectTypeToolResponse {
+		return progressUpdate{
+			stage:   gwproto.StreamProgressStageSummarizing,
+			summary: progressSummaryAnswering,
+		}, true
+	}
+	return progressUpdate{}, false
+}
+
+func firstToolCall(rsp *model.Response) (model.ToolCall, bool) {
+	if rsp == nil {
+		return model.ToolCall{}, false
+	}
+	for _, choice := range rsp.Choices {
+		if len(choice.Message.ToolCalls) > 0 {
+			return choice.Message.ToolCalls[0], true
+		}
+		if len(choice.Delta.ToolCalls) > 0 {
+			return choice.Delta.ToolCalls[0], true
+		}
+	}
+	return model.ToolCall{}, false
+}
+
+func progressFromToolCall(
+	toolCall model.ToolCall,
+) (progressUpdate, bool) {
+	name := strings.TrimSpace(toolCall.Function.Name)
+	switch name {
+	case streamToolReadDocument:
+		return progressUpdate{
+			stage:   gwproto.StreamProgressStageReadingDocument,
+			summary: readDocumentProgressSummary(toolCall),
+		}, true
+	case streamToolReadSheet:
+		return progressUpdate{
+			stage:   gwproto.StreamProgressStageReadingSpreadsheet,
+			summary: readSpreadsheetProgressSummary(toolCall),
+		}, true
+	case streamToolExecCommand:
+		return progressUpdate{
+			stage:   gwproto.StreamProgressStageRunningTool,
+			summary: progressSummaryTool,
+		}, true
+	default:
+		if name == "" {
+			return progressUpdate{}, false
+		}
+		return progressUpdate{
+			stage:   gwproto.StreamProgressStageRunningTool,
+			summary: "Running " + name,
+		}, true
+	}
+}
+
+func readDocumentProgressSummary(toolCall model.ToolCall) string {
+	const defaultSummary = progressSummaryDoc
+
+	var args struct {
+		Page *int `json:"page,omitempty"`
+	}
+	if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+		return defaultSummary
+	}
+	if args.Page == nil || *args.Page <= 0 {
+		return defaultSummary
+	}
+	return fmt.Sprintf("%s page %d", defaultSummary, *args.Page)
+}
+
+func readSpreadsheetProgressSummary(toolCall model.ToolCall) string {
+	const defaultSummary = progressSummarySheet
+
+	var args struct {
+		Row      *int   `json:"row,omitempty"`
+		StartRow *int   `json:"start_row,omitempty"`
+		EndRow   *int   `json:"end_row,omitempty"`
+		Sheet    string `json:"sheet,omitempty"`
+	}
+	if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+		return defaultSummary
+	}
+	if args.Row != nil && *args.Row > 0 {
+		return fmt.Sprintf("%s row %d", defaultSummary, *args.Row)
+	}
+	if args.StartRow != nil && *args.StartRow > 0 {
+		if args.EndRow != nil && *args.EndRow >= *args.StartRow {
+			return fmt.Sprintf(
+				"%s rows %d-%d",
+				defaultSummary,
+				*args.StartRow,
+				*args.EndRow,
+			)
+		}
+		return fmt.Sprintf("%s from row %d", defaultSummary,
+			*args.StartRow)
+	}
+	if strings.TrimSpace(args.Sheet) != "" {
+		return fmt.Sprintf("%s sheet %s", defaultSummary,
+			strings.TrimSpace(args.Sheet))
+	}
+	return defaultSummary
+}
+
+func sendProgressUpdate(
+	ctx context.Context,
+	out chan<- gwproto.StreamEvent,
+	run preparedMessageRun,
+	state *progressState,
+	stage gwproto.StreamProgressStage,
+	summary string,
+) bool {
+	if state == nil || stage == "" {
+		return true
+	}
+	if state.stage == stage && state.summary == summary {
+		return true
+	}
+	state.stage = stage
+	state.summary = summary
+	return sendStreamEvent(ctx, out, gwproto.StreamEvent{
+		Type:      gwproto.StreamEventTypeRunProgress,
+		SessionID: run.sessionID,
+		RequestID: run.requestID,
+		Stage:     stage,
+		Summary:   summary,
+		ElapsedMS: time.Since(state.startedAt).Milliseconds(),
+	})
+}
+
+func singleStreamEvents(
+	events ...gwproto.StreamEvent,
+) <-chan gwproto.StreamEvent {
+	out := make(chan gwproto.StreamEvent, len(events))
+	for _, evt := range events {
+		out <- evt
+	}
+	close(out)
+	return out
+}
+
+func contextErrMessage(ctx context.Context) string {
+	if ctx == nil || ctx.Err() == nil {
+		return "stream canceled"
+	}
+	return ctx.Err().Error()
+}
+
+func resolvedStreamRequestID(
+	requestID string,
+	fallback string,
+) string {
+	requestID = strings.TrimSpace(requestID)
+	if requestID != "" {
+		return requestID
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func apiErrorFromEvent(evt *event.Event) *gwproto.APIError {
+	if evt == nil || evt.Response == nil || evt.Error == nil {
+		return nil
+	}
+
+	errType := strings.TrimSpace(evt.Error.Type)
+	if errType == "" {
+		errType = errTypeInternal
+	}
+	return &gwproto.APIError{
+		Type:    errType,
+		Message: evt.Error.Message,
+	}
+}
+
+func streamDeltaText(
+	evt *event.Event,
+	sentText bool,
+) string {
+	if evt == nil || evt.Response == nil {
+		return ""
+	}
+
+	switch evt.Object {
+	case model.ObjectTypeChatCompletionChunk:
+		return deltaTextFromResponse(evt.Response)
+	case model.ObjectTypeChatCompletion:
+		if sentText {
+			return ""
+		}
+		return fullTextFromResponse(evt.Response)
+	default:
+		return ""
+	}
+}
+
+func fullTextFromResponse(rsp *model.Response) string {
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return ""
+	}
+	return rsp.Choices[0].Message.Content
+}
+
+func deltaTextFromResponse(rsp *model.Response) string {
+	if rsp == nil {
+		return ""
+	}
+	var builder strings.Builder
+	for _, choice := range rsp.Choices {
+		if choice.Delta.Content == "" {
+			continue
+		}
+		builder.WriteString(choice.Delta.Content)
+	}
+	return builder.String()
+}
