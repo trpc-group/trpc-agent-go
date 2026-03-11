@@ -14,10 +14,8 @@ package skill
 import (
 	"archive/tar"
 	"archive/zip"
-	"bufio"
 	"bytes"
 	"compress/gzip"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -292,24 +290,15 @@ func TestParseHelpers_And_DocFlags(t *testing.T) {
 	require.Equal(t, "nm", full.Name)
 	require.Contains(t, body, "Body here")
 
-	// readFrontMatter: missing leading '---' should error.
-	rd := bufio.NewReader(strings.NewReader("nope\n"))
-	_, _, err = readFrontMatter(rd)
-	require.Error(t, err)
-
 	// splitFrontMatter variations.
-	m, bod := splitFrontMatter("hello")
+	m, bod, fmErr := splitFrontMatter("hello")
+	require.NoError(t, fmErr)
 	require.Equal(t, 0, len(m))
 	require.Equal(t, "hello", bod)
-	m, bod = splitFrontMatter("---\nname: z\n---\nB")
+	m, bod, fmErr = splitFrontMatter("---\nname: z\n---\nB")
+	require.NoError(t, fmErr)
 	require.Equal(t, "z", m["name"])
 	require.Equal(t, "B", bod)
-
-	// ioReadAll helper returns the remaining text.
-	rd2 := bufio.NewReader(strings.NewReader("A\nB\n"))
-	s, err := ioReadAll(rd2)
-	require.NoError(t, err)
-	require.Equal(t, "A\nB\n", s)
 
 	// isDocFile helper
 	require.True(t, isDocFile("x.md"))
@@ -345,32 +334,111 @@ func TestFSRepository_DuplicateSkill_PrefersFirst(t *testing.T) {
 
 func TestSplitFrontMatter_NoClosing(t *testing.T) {
 	txt := "---\nname: z\n"
-	m, body := splitFrontMatter(txt)
+	m, body, err := splitFrontMatter(txt)
+	require.NoError(t, err)
 	// No closing delimiter: body should be original text.
 	require.Equal(t, 0, len(m))
 	require.Equal(t, txt, body)
 }
 
-// errAfterReader returns one line then a non-EOF error to exercise the
-// ioReadAll branch that returns accumulated text on unexpected errors.
-type errAfterReader struct {
-	gave bool
-}
-
-func (e *errAfterReader) Read(p []byte) (int, error) {
-	if !e.gave {
-		e.gave = true
-		copy(p, []byte("A\n"))
-		return 2, nil
+func TestSplitFrontMatter_MultiLineDescription(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantName string
+		wantDesc string
+		wantBody string
+	}{
+		{
+			name: "folded block scalar (>)",
+			input: "---\nname: my-skill\ndescription: >\n" +
+				"  First line of desc.\n  Second line of desc.\n" +
+				"---\n# Body\n",
+			wantName: "my-skill",
+			wantDesc: "First line of desc. Second line of desc.",
+			wantBody: "# Body\n",
+		},
+		{
+			name: "literal block scalar (|)",
+			input: "---\nname: my-skill\ndescription: |\n" +
+				"  Line one.\n  Line two.\n" +
+				"---\n# Body\n",
+			wantName: "my-skill",
+			wantDesc: "Line one.\nLine two.",
+			wantBody: "# Body\n",
+		},
+		{
+			name: "folded strip (>-)",
+			input: "---\nname: my-skill\ndescription: >-\n" +
+				"  No trailing newline.\n" +
+				"---\n# Body\n",
+			wantName: "my-skill",
+			wantDesc: "No trailing newline.",
+			wantBody: "# Body\n",
+		},
+		{
+			name: "folded with embedded colons",
+			input: "---\nname: multi-lang-tool\ndescription: >\n" +
+				"  A tool for translations. Usage: invoke \"skill: multi-lang-tool\".\n" +
+				"---\n# Skill Body\n",
+			wantName: "multi-lang-tool",
+			wantDesc: "A tool for translations. Usage: invoke \"skill: multi-lang-tool\".",
+			wantBody: "# Skill Body\n",
+		},
 	}
-	return 0, errors.New("boom")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m, body, err := splitFrontMatter(tc.input)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantName, m["name"])
+			require.Equal(t, tc.wantDesc, m["description"])
+			require.Equal(t, tc.wantBody, body)
+		})
+	}
 }
 
-func TestIOReadAll_NonEOFErrorReturnsAccumulated(t *testing.T) {
-	rd := bufio.NewReader(&errAfterReader{})
-	s, err := ioReadAll(rd)
+func TestSplitFrontMatter_InvalidYAMLReturnsError(t *testing.T) {
+	input := "---\n: invalid yaml [\n---\nbody\n"
+	_, _, err := splitFrontMatter(input)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid YAML front matter")
+}
+
+func TestSplitFrontMatter_TrimSpace(t *testing.T) {
+	input := "---\nname: \" my-skill \"\ndescription: |+\n  hello\n\n\n---\nbody\n"
+	m, body, err := splitFrontMatter(input)
 	require.NoError(t, err)
-	require.Equal(t, "A\n", s)
+	require.Equal(t, "my-skill", m["name"])
+	require.Equal(t, "hello", m["description"])
+	require.Equal(t, "body\n", body)
+}
+
+func TestFSRepository_MalformedYAML_StillDiscoverable(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "bad-yaml")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	// Valid --- delimiters but malformed YAML content between them.
+	err := os.WriteFile(
+		filepath.Join(dir, skillFile),
+		[]byte("---\n: invalid yaml [\n---\n# Body\n"),
+		0o644,
+	)
+	require.NoError(t, err)
+
+	repo, err := NewFSRepository(root)
+	require.NoError(t, err)
+
+	// Skill should still be discovered using folder name.
+	sums := repo.Summaries()
+	require.Len(t, sums, 1)
+	require.Equal(t, "bad-yaml", sums[0].Name)
+
+	// Get should return the body even though metadata is empty.
+	sk, err := repo.Get("bad-yaml")
+	require.NoError(t, err)
+	require.Equal(t, "bad-yaml", sk.Summary.Name)
+	require.Contains(t, sk.Body, "# Body")
 }
 
 func TestFSRepository_Summaries_IgnoresBrokenAfterScan(t *testing.T) {
@@ -405,32 +473,6 @@ func TestParseFull_ErrorOnMissingFile(t *testing.T) {
 	_, _, err := parseFull(filepath.Join(t.TempDir(),
 		"does-not-exist.md"))
 	require.Error(t, err)
-}
-
-func TestReadFrontMatter_UnclosedReturnsError(t *testing.T) {
-	rd := bufio.NewReader(strings.NewReader(
-		"---\nkey: v\n"))
-	_, _, err := readFrontMatter(rd)
-	require.Error(t, err)
-}
-
-// closedAfterReader yields one line then os.ErrClosed.
-type closedAfterReader struct{ gave bool }
-
-func (c *closedAfterReader) Read(p []byte) (int, error) {
-	if !c.gave {
-		c.gave = true
-		copy(p, []byte("X\n"))
-		return 2, nil
-	}
-	return 0, os.ErrClosed
-}
-
-func TestIOReadAll_ClosedReturnsAccumulated(t *testing.T) {
-	rd := bufio.NewReader(&closedAfterReader{})
-	s, err := ioReadAll(rd)
-	require.NoError(t, err)
-	require.Equal(t, "X\n", s)
 }
 
 func TestFSRepository_Summaries_NameFallback(t *testing.T) {

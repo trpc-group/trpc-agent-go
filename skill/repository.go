@@ -18,14 +18,14 @@
 package skill
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // skillFile is the canonical skill definition filename.
@@ -223,116 +223,70 @@ func (r *FSRepository) readDocs(dir string) []Doc {
 }
 
 // parseSummary returns front matter name/description only.
+// YAML parse errors are treated as empty metadata (matching
+// openclaw/internal/skills.Repository.index behaviour) so that a skill
+// with malformed frontmatter is still discoverable via folder name.
 func parseSummary(path string) (Summary, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return Summary{}, err
 	}
-	fm, _ := splitFrontMatter(string(b))
-	s := Summary{
+	fm, _, _ := splitFrontMatter(string(b))
+	if fm == nil {
+		fm = map[string]string{}
+	}
+	return Summary{
 		Name:        fm["name"],
 		Description: fm["description"],
-	}
-	return s, nil
+	}, nil
 }
 
 // parseFull returns front matter and the Markdown body.
+// Like parseSummary, YAML errors are non-fatal; the body is always
+// returned so the skill remains usable with degraded metadata.
 func parseFull(path string) (Summary, string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return Summary{}, "", err
 	}
-	text := string(b)
-	fm, body := splitFrontMatter(text)
-	s := Summary{
+	fm, body, _ := splitFrontMatter(string(b))
+	if fm == nil {
+		fm = map[string]string{}
+	}
+	return Summary{
 		Name:        fm["name"],
 		Description: fm["description"],
-	}
-	return s, body, nil
+	}, body, nil
 }
 
-// readFrontMatter reads YAML front matter block into a simple map.
-func readFrontMatter(r *bufio.Reader) (map[string]string, string,
-	error) {
-	line, err := r.ReadString('\n')
-	if err != nil {
-		return nil, "", err
-	}
-	if strings.TrimSpace(line) != "---" {
-		return nil, "", errors.New("no front matter")
-	}
-	m := map[string]string{}
-	var b strings.Builder
-	for {
-		l, err2 := r.ReadString('\n')
-		if err2 != nil {
-			return nil, "", err2
-		}
-		if strings.TrimSpace(l) == "---" {
-			break
-		}
-		b.WriteString(l)
-	}
-	for _, l := range strings.Split(b.String(), "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "#") {
-			continue
-		}
-		// crude YAML: key: value
-		if i := strings.Index(l, ":"); i >= 0 {
-			k := strings.TrimSpace(l[:i])
-			v := strings.TrimSpace(l[i+1:])
-			m[k] = strings.Trim(v, " \"'")
-		}
-	}
-	rest, _ := ioReadAll(r)
-	return m, rest, nil
-}
-
-// splitFrontMatter splits text into map and body.
-func splitFrontMatter(text string) (map[string]string, string) {
+// splitFrontMatter splits text into a map and body using proper YAML parsing
+// so that multi-line scalars (>, |, etc.) are handled correctly.
+// It returns a non-nil error when the delimited YAML block is malformed,
+// matching the error semantics of openclaw/internal/skills.parseFrontMatter.
+// Missing front matter (no opening/closing ---) is not an error; callers
+// fall back to the folder name in that case.
+func splitFrontMatter(text string) (map[string]string, string, error) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	if !strings.HasPrefix(text, "---\n") {
-		return map[string]string{}, text
+		return map[string]string{}, text, nil
 	}
 	idx := strings.Index(text[4:], "\n---\n")
 	if idx < 0 {
-		// No closing; treat whole as body.
-		return map[string]string{}, text
+		return map[string]string{}, text, nil
 	}
 	fm := text[4 : 4+idx]
 	body := text[4+idx+5:]
-	m := map[string]string{}
-	for _, l := range strings.Split(fm, "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "#") {
-			continue
-		}
-		if i := strings.Index(l, ":"); i >= 0 {
-			k := strings.TrimSpace(l[:i])
-			v := strings.TrimSpace(l[i+1:])
-			m[k] = strings.Trim(v, " \"'")
+	raw := map[string]any{}
+	if err := yaml.Unmarshal([]byte(fm), &raw); err != nil {
+		return nil, body, fmt.Errorf("invalid YAML front matter: %w", err)
+	}
+	m := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if s, ok := v.(string); ok {
+			m[k] = strings.TrimSpace(s)
 		}
 	}
-	return m, body
-}
-
-func ioReadAll(r *bufio.Reader) (string, error) {
-	var b strings.Builder
-	for {
-		s, err := r.ReadString('\n')
-		b.WriteString(s)
-		if err != nil {
-			if errors.Is(err, os.ErrClosed) {
-				break
-			}
-			if err.Error() == "EOF" {
-				break
-			}
-			return b.String(), nil
-		}
-	}
-	return b.String(), nil
+	return m, body, nil
 }
 
 func isDocFile(name string) bool {
