@@ -91,6 +91,7 @@ class TRPCAgentGoKnowledgeBase(KnowledgeBase):
             raise RuntimeError(f"Go binary not found at {GO_SERVICE_PATH}")
 
         print(f"Starting Go service on port {self.port} (search_mode={self.search_mode})...")
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
         # nosec B603: GO_SERVICE_PATH is a static local binary, args are internal config not user input.
         TRPCAgentGoKnowledgeBase._process = subprocess.Popen(  # nosec B603
             [GO_SERVICE_PATH, f"--port={self.port}", f"--vectorstore={self.vectorstore}", f"--search-mode={self.search_mode}"],

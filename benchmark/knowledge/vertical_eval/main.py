@@ -75,8 +75,8 @@ def main():
     parser.add_argument(
         "--timeout",
         type=int,
-        default=6000000,
-        help="Timeout in seconds for evaluation (default: 6000000)",
+        default=600,
+        help="Timeout in seconds for evaluation (default: 600)",
     )
     parser.add_argument(
         "--pg-table",
