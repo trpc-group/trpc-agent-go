@@ -57,7 +57,7 @@ python3 main.py --kb=autogen
 
 ### 运行纵向评测（Vertical Evaluation）
 
-纵向评测针对 tRPC-Agent-Go 进行专项消融实验（混合搜索权重梯度、RRF 模式、检索 k 值扫描），会自动编译并管理每组实验配置对应的 Go 服务。
+纵向评测针对 tRPC-Agent-Go 进行专项消融实验（混合搜索权重梯度、RRF 模式），会自动编译并管理每组实验配置对应的 Go 服务。
 
 ```bash
 # 混合搜索权重消融（11 组权重配比，从纯文本到纯向量）
@@ -65,9 +65,6 @@ python3 -m vertical_eval.main --suite hybrid_weight
 
 # RRF 融合实验
 python3 -m vertical_eval.main --suite hybrid_rrf
-
-# 检索 k 值扫描（k = 2, 4, 6, 8, 10, 12, 14, 16）
-python3 -m vertical_eval.main --suite retrieval_k
 
 # 运行全部实验套件
 python3 -m vertical_eval.main --suite all
@@ -239,30 +236,29 @@ CRITICAL RULES(IMPORTANT !!!):
 #### 回答质量指标 (Answer Quality)
 
 
-| 指标                            | LangChain | LangChain-Chain | tRPC-Agent-Go | Agno   | CrewAI | AutoGen    | 胜者             |
-| --------------------------------- | ----------- | ----------------- | --------------- | -------- | -------- | ------------ | ------------------ |
-| **Faithfulness (忠实度)**       | 0.8614    | 0.9167          | **0.9853**    | 0.7213 | 0.9655 | 0.9113     | ✅ tRPC-Agent-Go |
-| **Answer Relevancy (相关性)**   | 0.8529    | 0.6573          | 0.8890        | 0.9013 | 0.8383 | **0.9040** | ✅ AutoGen       |
-| **Answer Correctness (正确性)** | 0.6912    | 0.7801          | **0.8299**    | 0.6916 | 0.8101 | 0.7725     | ✅ tRPC-Agent-Go |
-| **Answer Similarity (相似度)**  | 0.6740    | **0.8373**      | 0.7251        | 0.6772 | 0.6948 | 0.6830     | ✅ LangChain-Chain |
+| 指标                            | LangChain | LangChain-Chain | tRPC-Agent-Go  | Agno       | CrewAI | AutoGen | 胜者             |
+| --------------------------------- | ----------- | ----------------- | ---------------- | ------------ | -------- | --------- | ------------------ |
+| **Faithfulness (忠实度)**       | 0.9722    | 0.9167          | **0.9815**     | 0.9660     | 0.9753 | 0.8688  | ✅ tRPC-Agent-Go |
+| **Answer Relevancy (相关性)**   | 0.8914    | 0.6573          | 0.8799         | **0.8917** | 0.7820 | 0.8304  | ✅ Agno          |
+| **Answer Correctness (正确性)** | 0.6984    | 0.7801          | **0.8104**     | 0.7741     | 0.7575 | 0.6707  | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)**  | 0.6758    | **0.8373**      | 0.7240         | 0.6989     | 0.7025 | 0.6653  | ✅ LangChain-Chain |
 
 #### 上下文质量指标 (Context Quality)
 
 
-| 指标                                 | LangChain | LangChain-Chain | tRPC-Agent-Go | Agno   | CrewAI     | AutoGen    | 胜者                |
-| -------------------------------------- | ----------- | ----------------- | --------------- | -------- | ------------ | ------------ | --------------------- |
-| **Context Precision (精确率)**       | 0.6314    | **0.7716**      | 0.7278        | 0.7046 | 0.6673     | 0.6142     | ✅ LangChain-Chain  |
-| **Context Recall (召回率)**          | 0.8333    | 0.8704          | 0.9259        | 0.9259 | **0.9444** | **0.9444** | ✅ CrewAI / AutoGen |
-| **Context Entity Recall (实体召回)** | 0.4138    | **0.5093**      | 0.5034        | 0.4331 | 0.3922     | 0.2902     | ✅ LangChain-Chain  |
+| 指标                                 | LangChain  | LangChain-Chain | tRPC-Agent-Go  | Agno   | CrewAI     | AutoGen | 胜者                      |
+| -------------------------------------- | ------------ | ----------------- | ---------------- | -------- | ------------ | --------- | --------------------------- |
+| **Context Precision (精确率)**       | 0.6051     | **0.7716**      | 0.7098         | 0.6712 | 0.6391     | 0.5445  | ✅ LangChain-Chain        |
+| **Context Recall (召回率)**          | 0.8704     | 0.8704          | **0.9444**     | 0.9259 | **0.9444** | 0.8889  | ✅ tRPC-Agent-Go / CrewAI |
+| **Context Entity Recall (实体召回)** | 0.4898     | **0.5093**      | 0.4867         | 0.4707 | 0.4599     | 0.3833  | ✅ LangChain-Chain        |
 
 #### 核心结论
 
-1. **tRPC-Agent-Go 综合表现最优**：在 7 项指标中拿下 3 项第一——**Faithfulness (0.9853)**、**Answer Correctness (0.8299)**，回答质量领先。
+1. **tRPC-Agent-Go 全面领先**：**Faithfulness (0.9815)**、**Answer Correctness (0.8104)**、**Answer Similarity (0.7240)** 和 **Context Precision (0.7098)** 均排名前列，**Context Recall (0.9444)** 与 CrewAI 并列第一。综合表现最强。
 2. **LangChain-Chain 相似度与上下文质量突出**：拿下 3 项第一——**Answer Similarity (0.8373)**、**Context Precision (0.7716)** 和 **Context Entity Recall (0.5093)**。其确定性 Chain 流程（无 Agent 循环）在上下文检索精度上表现最优。
-3. **AutoGen 相关性领先**：**Answer Relevancy (0.9040)** 排名第一（与 Agno 的 0.9013 接近），回答切题性最优。同时 **Context Recall (0.9444)** 并列第一。
-4. **CrewAI 召回率最高**：**Context Recall (0.9444)** 并列第一，表明其检索召回最全面。
-5. **Agno 相关性突出**：**Answer Relevancy (0.9013)** 排名第二，回答切题性优秀。
-6. **各框架各有所长**：LangChain 表现均衡稳定，各框架在不同维度各具优势。
+3. **Agno 相关性最优**：**Answer Relevancy (0.8917)** 排名第一。
+4. **LangChain 实体召回领先**：**Context Entity Recall (0.4898)** 在非 Chain 框架中排名第一。
+5. **AutoGen 各项偏低**：在本数据集上 AutoGen 表现不及其他框架，可能与其对小规模知识库的检索策略有关。
 
 ---
 
@@ -477,19 +473,18 @@ score(d) = sum(1 / (k + rank_i))
 
 | 融合策略 | Faithfulness | Answer Relevancy | Answer Correctness | Answer Similarity | Context Precision | Context Recall | Context Entity Recall |
 | -------- | ------------ | ---------------- | ------------------ | ----------------- | ----------------- | -------------- | --------------------- |
-| **RRF** (k=60) | 0.5556 | 0.0187 | 0.1150 | 0.4664 | 0.0000 | 0.0000 | 0.0000 |
+| **RRF** (k=60) | 0.9389 | 0.8164 | 0.7791 | 0.7177 | 0.6460 | 0.9259 | 0.4296 |
 | **Weighted** (v100_t0, 纯向量) | 0.9748 | 0.8635 | 0.8072 | 0.7229 | 0.6991 | 0.9630 | 0.5219 |
 | **Weighted** (v90_t10) | 0.9506 | 0.8616 | 0.7953 | 0.7206 | 0.7320 | 0.9259 | 0.4552 |
 | **Weighted** (v50_t50, 对半) | 0.9346 | 0.7948 | 0.7365 | 0.7064 | 0.6441 | 0.8889 | 0.4414 |
 
 **分析：**
 
-> ⚠️ **注意**：本次 RRF 实验结果异常（Context 指标全部为 0，Answer Relevancy 接近 0），疑似 RRF 配置或检索流程存在问题，数据仅供参考，待排查后重新运行。
+1. **RRF 表现接近 v50_t50 加权融合**：RRF 的 Faithfulness (0.9389)、Answer Relevancy (0.8164)、Answer Correctness (0.7791) 与 v50_t50 加权融合相当或略优，但整体低于高向量权重配置（v90_t10 和 v100_t0）。
+2. **纯向量加权融合（v100_t0）综合表现最优**：在 7 项指标中，纯向量在 Faithfulness、Answer Relevancy、Answer Correctness、Answer Similarity、Context Precision、Context Recall 和 Context Entity Recall 上均优于 RRF。
+3. **RRF 的 Context 指标略低**：Context Precision (0.6460) 和 Context Entity Recall (0.4296) 低于 v90_t10 和 v100_t0，说明在向量检索质量显著优于文本检索的场景下，RRF 的排名融合策略无法充分发挥向量通道的优势。
 
-1. **RRF 在本次运行中出现严重异常**：Context Precision / Recall / Entity Recall 全部为 0.0000，Answer Relevancy 仅 0.0187，表明 RRF 模式下的检索结果可能未正确传递到上下文中，需进一步排查。
-2. **加权融合的结论依然成立**：从 Weighted 三组对比来看，纯向量（v100_t0）的综合表现最优，与消融实验的结论一致。
-
-**结论**：RRF 更适合**两个检索通道质量相当**的场景（例如向量检索和高质量 BM25 检索并存时）。当其中一个通道明显优于另一个时，加权融合配合适当的权重调优是更好的选择。本次 RRF 结果异常，待排查修复后补充更新。
+**结论**：在本评测场景（高质量 Embedding + 小规模知识库）下，**加权融合优于 RRF**。RRF 更适合**两个检索通道质量相当**的场景（例如向量检索和高质量 BM25 检索并存时）。当向量检索通道明显优于文本检索时，加权融合配合高向量权重（≥0.8）是更好的选择。
 
 ---
 

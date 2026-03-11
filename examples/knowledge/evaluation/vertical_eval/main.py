@@ -1,12 +1,11 @@
 """
 Main entry point for vertical evaluation of trpc-agent-go knowledge system.
 
-Runs a suite of experiments with different configurations (hybrid weights,
-retrieval k) against the HuggingFace dataset, and generates a comparison report.
+Runs a suite of experiments with different configurations (hybrid weights)
+against the HuggingFace dataset, and generates a comparison report.
 
 Usage:
     python -m vertical_eval.main --suite hybrid_weight
-    python -m vertical_eval.main --suite retrieval_k
     python -m vertical_eval.main --suite all
     python -m vertical_eval.main --suite hybrid_weight --pg-table my_table
     python -m vertical_eval.main --suite hybrid_rrf --skip-load --pg-table veval_hw_rrf

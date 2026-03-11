@@ -142,60 +142,9 @@ HYBRID_WEIGHT_EXPERIMENTS = [
     ),
 ]
 
-RETRIEVAL_K_EXPERIMENTS = [
-    ExperimentConfig(
-        name="k2",
-        description="Retrieve top-2 documents",
-        retrieval_k=2,
-        pg_table="veval_k2",
-    ),
-    ExperimentConfig(
-        name="k4",
-        description="Retrieve top-4 documents (default)",
-        retrieval_k=4,
-        pg_table="veval_k4",
-    ),
-    ExperimentConfig(
-        name="k6",
-        description="Retrieve top-6 documents",
-        retrieval_k=6,
-        pg_table="veval_k6",
-    ),
-    ExperimentConfig(
-        name="k8",
-        description="Retrieve top-8 documents",
-        retrieval_k=8,
-        pg_table="veval_k8",
-    ),
-    ExperimentConfig(
-        name="k10",
-        description="Retrieve top-10 documents",
-        retrieval_k=10,
-        pg_table="veval_k10",
-    ),
-    ExperimentConfig(
-        name="k12",
-        description="Retrieve top-12 documents",
-        retrieval_k=12,
-        pg_table="veval_k12",
-    ),
-    ExperimentConfig(
-        name="k14",
-        description="Retrieve top-14 documents",
-        retrieval_k=14,
-        pg_table="veval_k14",
-    ),
-    ExperimentConfig(
-        name="k16",
-        description="Retrieve top-16 documents",
-        retrieval_k=16,
-        pg_table="veval_k16",
-    ),
-]
 
 # All experiment suites keyed by name
 EXPERIMENT_SUITES = {
     "hybrid_weight": HYBRID_WEIGHT_EXPERIMENTS,
     "hybrid_rrf": HYBRID_RRF_EXPERIMENTS,
-    "retrieval_k": RETRIEVAL_K_EXPERIMENTS,
 }
