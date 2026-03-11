@@ -1607,10 +1607,43 @@ func TestResolveSkillRoots_IncludesExpectedRoots(t *testing.T) {
 	require.Contains(
 		t,
 		roots,
-		filepath.Join(cwd, appName, defaultSkillsDir),
+		filepath.Join(stateDir, defaultBundledSkillsDir),
 	)
 	require.Contains(t, roots, "extra1")
 	require.Contains(t, roots, "extra2")
+}
+
+func TestResolveSkillRoots_UsesInstalledBundledSkills(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cwd := t.TempDir()
+	stateDir := t.TempDir()
+	installedBundled := filepath.Join(
+		stateDir,
+		defaultBundledSkillsDir,
+	)
+	require.NoError(t, os.MkdirAll(installedBundled, 0o700))
+
+	roots := resolveSkillRoots(cwd, agentConfig{StateDir: stateDir})
+	require.Contains(t, roots, installedBundled)
+	require.NotContains(
+		t,
+		roots,
+		filepath.Join(cwd, appName, defaultSkillsDir),
+	)
+}
+
+func TestResolveBundledSkillsRoot_RepoFallback(t *testing.T) {
+	cwd := t.TempDir()
+	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
+	require.NoError(t, os.MkdirAll(repoBundled, 0o700))
+
+	require.Equal(
+		t,
+		repoBundled,
+		resolveBundledSkillsRoot(cwd, t.TempDir()),
+	)
 }
 
 type stubGateway struct{}
