@@ -67,6 +67,17 @@ type GatewayClient interface {
 	Cancel(ctx context.Context, requestID string) (bool, error)
 }
 
+// StreamingGatewayClient is an optional gateway client extension for
+// streaming replies.
+type StreamingGatewayClient interface {
+	GatewayClient
+
+	StreamMessage(
+		ctx context.Context,
+		req gwclient.MessageRequest,
+	) (<-chan gwclient.StreamEvent, error)
+}
+
 // ChannelDeps are dependencies passed to channel factories.
 type ChannelDeps struct {
 	// Ctx is the application context for channel initialization.

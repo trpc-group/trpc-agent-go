@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 )
 
 func TestParseFrontMatter_OpenClawMetadata(t *testing.T) {
@@ -62,6 +64,52 @@ metadata: '{"openclaw":{"requires":{"anyBins":["codex"]}}}'
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, []string{"codex"}, meta.Requires.AnyBins)
+}
+
+func TestParseFrontMatter_OpenClawMetadata_InstallEntries(t *testing.T) {
+	content := `---
+name: coding-agent
+description: "Test skill"
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "python":
+              [
+                {
+                  "module": "pypdf",
+                  "package": "pypdf",
+                },
+              ],
+          },
+        "install":
+          [
+            {
+              "id": "brew",
+              "kind": "brew",
+              "formula": "poppler",
+              "bins": ["pdftotext"],
+            },
+          ],
+      },
+  }
+---
+
+# Body
+`
+	fm, err := parseFrontMatter(content)
+	require.NoError(t, err)
+
+	meta, ok, err := parseOpenClawMetadata(fm)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, meta.Requires.Python, 1)
+	require.Equal(t, "pypdf", meta.Requires.Python[0].Module)
+	require.Len(t, meta.Install, 1)
+	require.Equal(t, "brew", meta.Install[0].Kind)
+	require.Equal(t, "poppler", meta.Install[0].Formula)
 }
 
 func TestParseFrontMatter_NoFrontMatter(t *testing.T) {
@@ -969,6 +1017,137 @@ metadata:
 	require.Equal(t, "pin", metaonly.Emoji)
 	require.Equal(t, "https://example.com", metaonly.Homepage)
 	require.Nil(t, metaonly.Requires)
+}
+
+func TestRepository_DependencySources(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "doc", `---
+name: doc
+description: doc
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "python":
+              [
+                {
+                  "module": "pypdf",
+                  "package": "pypdf",
+                },
+              ],
+          },
+      },
+  }
+---
+
+# doc
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	sources, err := repo.DependencySources([]string{"doc"})
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.Equal(t, "doc", sources[0].Name)
+	require.Len(t, sources[0].Requires.Python, 1)
+	require.Equal(t, "pypdf", sources[0].Requires.Python[0].Module)
+}
+
+func TestRepository_DependencySources_UnknownSkill(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "doc", `---
+name: doc
+description: doc
+---
+
+# doc
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	_, err = repo.DependencySources([]string{"missing"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown skill")
+}
+
+func TestRepository_HelperFunctions(t *testing.T) {
+	t.Parallel()
+
+	var nilRepo *Repository
+	sources, err := nilRepo.DependencySources(nil)
+	require.NoError(t, err)
+	require.Nil(t, sources)
+
+	require.True(t, containsSource([]deps.Source{{Name: "a"}}, "a"))
+	require.False(t, containsSource([]deps.Source{{Name: "a"}}, "b"))
+	require.True(t, containsString([]string{"a", "b"}, "b"))
+	require.False(t, containsString([]string{"a", "b"}, "c"))
+	require.Equal(
+		t,
+		[]string{"b", "a"},
+		normalizeSkillNames([]string{" b ", "", "a", "b"}),
+	)
+}
+
+func TestRepository_DependencySources_AllSkillsSorted(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "b", `---
+name: b
+description: skill b
+metadata:
+  {
+    "openclaw": {},
+  }
+---
+
+# b
+`)
+	writeSkill(t, root, "a", `---
+name: a
+description: skill a
+metadata:
+  {
+    "openclaw": {},
+  }
+---
+
+# a
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	sources, err := repo.DependencySources(nil)
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	require.Equal(t, "a", sources[0].Name)
+	require.Equal(t, "skill a", sources[0].Description)
+	require.Equal(t, "b", sources[1].Name)
+	require.Equal(t, "skill b", sources[1].Description)
+}
+
+func TestRepository_SkillRunEnv_NilAndBlank(t *testing.T) {
+	t.Parallel()
+
+	var nilRepo *Repository
+	env, err := nilRepo.SkillRunEnv(context.Background(), "skill")
+	require.NoError(t, err)
+	require.Nil(t, env)
+
+	repo := &Repository{}
+	env, err = repo.SkillRunEnv(context.Background(), " ")
+	require.NoError(t, err)
+	require.Nil(t, env)
 }
 
 func TestBundledSkills_ParseFrontMatterAndMetadata(t *testing.T) {

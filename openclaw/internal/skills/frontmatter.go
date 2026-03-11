@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 )
 
 const (
@@ -35,26 +37,19 @@ type parsedFrontMatter struct {
 }
 
 type openClawMetadata struct {
-	Always     bool                `yaml:"always"`
-	SkillKey   string              `yaml:"skillKey"`
-	PrimaryEnv string              `yaml:"primaryEnv"`
-	Emoji      string              `yaml:"emoji"`
-	Homepage   string              `yaml:"homepage"`
-	OS         []string            `yaml:"os"`
-	Requires   openClawRequires    `yaml:"requires"`
-	Install    []openClawInstallID `yaml:"install"`
+	Always     bool                   `yaml:"always"`
+	SkillKey   string                 `yaml:"skillKey"`
+	PrimaryEnv string                 `yaml:"primaryEnv"`
+	Emoji      string                 `yaml:"emoji"`
+	Homepage   string                 `yaml:"homepage"`
+	OS         []string               `yaml:"os"`
+	Requires   openClawRequires       `yaml:"requires"`
+	Install    []openClawInstallEntry `yaml:"install"`
 }
 
-type openClawRequires struct {
-	Bins    []string `yaml:"bins"`
-	AnyBins []string `yaml:"anyBins"`
-	Env     []string `yaml:"env"`
-	Config  []string `yaml:"config"`
-}
+type openClawRequires = deps.Requirement
 
-type openClawInstallID struct {
-	ID string `yaml:"id"`
-}
+type openClawInstallEntry = deps.InstallAction
 
 func parseFrontMatterFile(path string) (parsedFrontMatter, error) {
 	b, err := os.ReadFile(path)

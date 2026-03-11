@@ -65,6 +65,28 @@ func TestExecTool_Foreground(t *testing.T) {
 	require.Equal(t, 0, res.ExitCode)
 }
 
+func TestExecTool_UsesManagerBaseEnv(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithBaseEnv(map[string]string{
+		"OPENCLAW_TEST_ENV": "ok",
+	}))
+	tool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf %s \"$OPENCLAW_TEST_ENV\"",
+		"yieldMs": 0,
+	})
+	out, err := tool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.Contains(t, strings.TrimSpace(res.Output), "ok")
+}
+
 func TestAnnotateExecResult_ParsesMediaMarkers(t *testing.T) {
 	t.Parallel()
 
@@ -316,7 +338,7 @@ func TestManager_MergedEnvAndExitCode(t *testing.T) {
 		t.Skip("bash is not available")
 	}
 
-	env := mergedEnv(map[string]string{
+	env := mergedEnv(nil, map[string]string{
 		"FOO":  "bar",
 		"PATH": "testpath",
 	})
@@ -695,7 +717,7 @@ func TestUploadEnvFromContext(t *testing.T) {
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	env := (&execTool{}).uploadEnvFromContext(ctx)
+	env := uploadEnvFromContext(ctx, nil)
 	require.Equal(t, videoPath, env[envLastUploadPath])
 	require.Equal(t, uploads.HostRef(videoPath), env[envLastUploadHostRef])
 	require.Equal(t, dir, env[envSessionUploadsDir])
@@ -777,7 +799,7 @@ func TestUploadEnvFromContext_UsesUploadStore(t *testing.T) {
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	env := (&execTool{uploads: store}).uploadEnvFromContext(ctx)
+	env := uploadEnvFromContext(ctx, store)
 	require.Equal(t, derived.Path, env[envLastUploadPath])
 	require.Equal(t, derived.HostRef, env[envLastUploadHostRef])
 	require.Equal(t, derived.Path, env[envLastPDFPath])
@@ -825,7 +847,7 @@ func TestUploadEnvFromContext_RewritesGeneratedUploadNames(t *testing.T) {
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	env := (&execTool{}).uploadEnvFromContext(ctx)
+	env := uploadEnvFromContext(ctx, nil)
 	require.Equal(t, "video.mp4", env[envLastUploadName])
 	require.Equal(t, "video.mp4", env[envLastVideoName])
 
@@ -858,7 +880,7 @@ func TestUploadEnvFromContext_UsesSessionDirWithoutRecentUploads(
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	env := (&execTool{uploads: store}).uploadEnvFromContext(ctx)
+	env := uploadEnvFromContext(ctx, store)
 	require.Equal(
 		t,
 		store.ScopeDir(uploads.Scope{

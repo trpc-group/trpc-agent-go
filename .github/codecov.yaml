@@ -1,4 +1,5 @@
 ignore:
+  - ".github/scripts/**"
   - "examples/**"
   - "openclaw/examples/**"
   - "benchmark/**"

@@ -43,10 +43,12 @@ import (
 const (
 	defaultBasePath = "/v1"
 
-	defaultMessagesPath = "/gateway/messages"
-	defaultStatusPath   = "/gateway/status"
-	defaultCancelPath   = "/gateway/cancel"
-	defaultHealthPath   = "/healthz"
+	defaultMessagesPath       = "/gateway/messages"
+	defaultMessagesStreamPath = defaultMessagesPath +
+		gwproto.MessagesStreamSuffix
+	defaultStatusPath = "/gateway/status"
+	defaultCancelPath = "/gateway/cancel"
+	defaultHealthPath = "/healthz"
 
 	defaultChannelName = "http"
 	threadKindDM       = "dm"
@@ -54,8 +56,12 @@ const (
 
 	headerAllow       = "Allow"
 	headerContentType = "Content-Type"
+	headerCacheCtrl   = "Cache-Control"
+	headerConnection  = "Connection"
 
-	contentTypeJSON = "application/json"
+	contentTypeJSON     = "application/json"
+	cacheControlNoCache = "no-cache"
+	connectionKeepAlive = "keep-alive"
 
 	methodPost = "POST"
 	methodGet  = "GET"
@@ -115,6 +121,7 @@ func DefaultSessionID(msg InboundMessage) (string, error) {
 type Server struct {
 	basePath     string
 	messagesPath string
+	streamPath   string
 	statusPath   string
 	cancelPath   string
 	healthPath   string
@@ -160,6 +167,10 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gateway: join messages path: %w", err)
 	}
+	streamPath, err := joinURLPath(options.basePath, options.streamPath)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: join stream path: %w", err)
+	}
 	statusPath, err := joinURLPath(options.basePath, options.statusPath)
 	if err != nil {
 		return nil, fmt.Errorf("gateway: join status path: %w", err)
@@ -200,6 +211,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 	s := &Server{
 		basePath:         options.basePath,
 		messagesPath:     messagesPath,
+		streamPath:       streamPath,
 		statusPath:       statusPath,
 		cancelPath:       cancelPath,
 		healthPath:       options.healthPath,
@@ -240,6 +252,12 @@ func (s *Server) MessagesPath() string {
 	return s.messagesPath
 }
 
+// MessagesStreamPath returns the full path for the streaming messages
+// endpoint.
+func (s *Server) MessagesStreamPath() string {
+	return s.streamPath
+}
+
 // StatusPath returns the full path for the status endpoint.
 func (s *Server) StatusPath() string {
 	return s.statusPath
@@ -258,6 +276,8 @@ func (s *Server) HealthPath() string {
 func (s *Server) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(s.messagesPath, s.handleMessages)
 	mux.HandleFunc(s.messagesPath+"/", s.handleMessages)
+	mux.HandleFunc(s.streamPath, s.handleMessagesStream)
+	mux.HandleFunc(s.streamPath+"/", s.handleMessagesStream)
 
 	mux.HandleFunc(s.statusPath, s.handleStatus)
 	mux.HandleFunc(s.statusPath+"/", s.handleStatus)
@@ -458,20 +478,6 @@ func (s *Server) runLocked(
 ) (string, string, error) {
 	trace := debugrecorder.TraceFromContext(ctx)
 
-	runOpts := make([]agent.RunOption, 0, 1)
-	if requestID != "" {
-		runOpts = append(runOpts, agent.WithRequestID(requestID))
-	}
-	if messages := s.injectedContextMessages(
-		userID,
-		sessionID,
-	); len(messages) > 0 {
-		runOpts = append(
-			runOpts,
-			agent.WithInjectedContextMessages(messages),
-		)
-	}
-
 	if trace != nil {
 		_ = trace.Record(
 			debugrecorder.KindGatewayRun,
@@ -483,7 +489,13 @@ func (s *Server) runLocked(
 		)
 	}
 
-	events, err := s.runner.Run(ctx, userID, sessionID, msg, runOpts...)
+	events, err := s.runner.Run(
+		ctx,
+		userID,
+		sessionID,
+		msg,
+		s.runOptions(userID, sessionID, requestID)...,
+	)
 	if err != nil {
 		if trace != nil {
 			_ = trace.RecordError(err)
@@ -512,6 +524,27 @@ func (s *Server) runLocked(
 		return "", result.RequestID, errEmptyReplyValue
 	}
 	return result.Text, result.RequestID, nil
+}
+
+func (s *Server) runOptions(
+	userID string,
+	sessionID string,
+	requestID string,
+) []agent.RunOption {
+	runOpts := make([]agent.RunOption, 0, 1)
+	if requestID != "" {
+		runOpts = append(runOpts, agent.WithRequestID(requestID))
+	}
+	if messages := s.injectedContextMessages(
+		userID,
+		sessionID,
+	); len(messages) > 0 {
+		runOpts = append(
+			runOpts,
+			agent.WithInjectedContextMessages(messages),
+		)
+	}
+	return runOpts
 }
 
 type replyAccumulator struct {

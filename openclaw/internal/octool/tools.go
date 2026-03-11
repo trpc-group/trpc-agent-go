@@ -121,6 +121,9 @@ func (t *execTool) Declaration() *tool.Declaration {
 			"OPENCLAW_SESSION_UPLOADS_DIR, and " +
 			"OPENCLAW_RECENT_UPLOADS_JSON point to stable " +
 			"attachment metadata, host refs, and host paths. " +
+			"Do not use this just to inspect a PDF or spreadsheet " +
+			"already in chat; prefer read_document or " +
+			"read_spreadsheet for that. " +
 			"Write derived " +
 			"outputs under OPENCLAW_SESSION_UPLOADS_DIR when " +
 			"you plan to send them back to the user. " +
@@ -218,7 +221,7 @@ func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
 	tty := firstBool(in.TTY, in.PTY)
-	env := mergeExecEnv(in.Env, t.uploadEnvFromContext(ctx))
+	env := mergeExecEnv(in.Env, uploadEnvFromContext(ctx, t.uploads))
 
 	res, err := t.mgr.Exec(ctx, execParams{
 		Command:    in.Command,
@@ -581,8 +584,9 @@ func mergeExecEnv(
 	return out
 }
 
-func (t *execTool) uploadEnvFromContext(
+func uploadEnvFromContext(
 	ctx context.Context,
+	store *uploads.Store,
 ) map[string]string {
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.Session == nil {
@@ -591,8 +595,8 @@ func (t *execTool) uploadEnvFromContext(
 
 	env := make(map[string]string)
 	if scope, ok := uploadScopeFromInvocation(inv); ok &&
-		t.uploads != nil {
-		dir := strings.TrimSpace(t.uploads.ScopeDir(scope))
+		store != nil {
+		dir := strings.TrimSpace(store.ScopeDir(scope))
 		if dir != "" {
 			env[envSessionUploadsDir] = dir
 		}
@@ -600,7 +604,7 @@ func (t *execTool) uploadEnvFromContext(
 
 	recent := recentUploadsFromInvocation(
 		inv,
-		t.uploads,
+		store,
 		recentUploadsLimit,
 	)
 	if len(recent) == 0 {

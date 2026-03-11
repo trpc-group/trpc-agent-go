@@ -10,6 +10,7 @@
 package app
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	ocdeps "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 	_ "trpc.group/trpc-go/trpc-agent-go/openclaw/plugins/telegram"
 )
 
@@ -84,6 +86,284 @@ func TestRunInspect_ConfigKeys(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestRunInspect_Deps_WithSkill(t *testing.T) {
+	root := t.TempDir()
+	writeDepsSkill(t, root, "depskill", `---
+name: depskill
+description: deps skill
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "bins": ["definitely_missing_bin"],
+            "python":
+              [
+                {
+                  "module": "definitely_missing_python_module",
+                  "package": "definitely-missing-python-package",
+                },
+              ],
+          },
+      },
+  }
+---
+
+# depskill
+`)
+
+	stdout, stderr := captureInspectOutput(t, func() {
+		require.Equal(t, 0, runInspect([]string{
+			inspectCmdDeps,
+			"-state-dir",
+			t.TempDir(),
+			"-skills-root",
+			root,
+			"-skill",
+			"depskill",
+		}))
+	})
+
+	require.Empty(t, stderr)
+	require.Contains(t, stdout, "depskill")
+	require.Contains(t, stdout, "definitely_missing_bin")
+	require.Contains(t, stdout, "definitely_missing_python_module")
+}
+
+func TestRunBootstrapDeps_DryRun(t *testing.T) {
+	root := t.TempDir()
+	writeDepsSkill(t, root, "depskill", `---
+name: depskill
+description: deps skill
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "python":
+              [
+                {
+                  "module": "definitely_missing_python_module",
+                  "package": "definitely-missing-python-package",
+                },
+              ],
+          },
+      },
+  }
+---
+
+# depskill
+`)
+
+	stdout, stderr := captureInspectOutput(t, func() {
+		require.Equal(t, 0, runBootstrap([]string{
+			bootstrapCmdDeps,
+			"-state-dir",
+			t.TempDir(),
+			"-skills-root",
+			root,
+			"-skill",
+			"depskill",
+		}))
+	})
+
+	require.Empty(t, stderr)
+	require.Contains(t, stdout, "Install Python packages")
+	require.Contains(t, stdout, "definitely-missing-python-package")
+}
+
+func TestRunBootstrap_HelpAndUnknownCommand(t *testing.T) {
+	stdout, stderr := captureInspectOutput(t, func() {
+		require.Equal(t, 2, runBootstrap(nil))
+		require.Equal(t, 2, runBootstrap([]string{"unknown"}))
+	})
+
+	require.Empty(t, stdout)
+	require.Contains(t, stderr, "Usage:")
+	require.Contains(t, stderr, "unknown bootstrap command")
+}
+
+func TestRunInspect_Deps_JSONOutput(t *testing.T) {
+	root := t.TempDir()
+	writeDepsSkill(t, root, "depskill", `---
+name: depskill
+description: deps skill
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "python":
+              [
+                {
+                  "module": "definitely_missing_python_module",
+                  "package": "definitely-missing-python-package",
+                },
+              ],
+          },
+      },
+  }
+---
+
+# depskill
+`)
+
+	stdout, stderr := captureInspectOutput(t, func() {
+		require.Equal(t, 0, runInspect([]string{
+			inspectCmdDeps,
+			"-json",
+			"-state-dir",
+			t.TempDir(),
+			"-skills-root",
+			root,
+			"-skill",
+			"depskill",
+		}))
+	})
+
+	require.Empty(t, stderr)
+
+	var report ocdeps.Report
+	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
+	require.True(t, ocdeps.HasMissing(report))
+	require.NotEmpty(t, report.Sources)
+}
+
+func TestRunBootstrapDeps_JSONOutput(t *testing.T) {
+	root := t.TempDir()
+	writeDepsSkill(t, root, "depskill", `---
+name: depskill
+description: deps skill
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "python":
+              [
+                {
+                  "module": "definitely_missing_python_module",
+                  "package": "definitely-missing-python-package",
+                },
+              ],
+          },
+      },
+  }
+---
+
+# depskill
+`)
+
+	stdout, stderr := captureInspectOutput(t, func() {
+		require.Equal(t, 0, runBootstrap([]string{
+			bootstrapCmdDeps,
+			"-json",
+			"-state-dir",
+			t.TempDir(),
+			"-skills-root",
+			root,
+			"-skill",
+			"depskill",
+		}))
+	})
+
+	require.Empty(t, stderr)
+
+	var plan ocdeps.Plan
+	require.NoError(t, json.Unmarshal([]byte(stdout), &plan))
+	require.NotEmpty(t, plan.Steps)
+	require.Contains(t, plan.Steps[0].CommandLine, "-m venv")
+}
+
+func TestDepsCommandHelpers(t *testing.T) {
+	opts, code, err := parseDepsCommandOptions(
+		subcmdInspect,
+		inspectCmdDeps,
+		nil,
+		false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 0, code)
+	require.Equal(
+		t,
+		strings.Join(ocdeps.DefaultProfiles(), ","),
+		opts.Profiles,
+	)
+
+	_, code, err = parseDepsCommandOptions(
+		subcmdInspect,
+		inspectCmdDeps,
+		[]string{"extra"},
+		false,
+	)
+	require.Error(t, err)
+	require.Equal(t, 2, code)
+
+	lines := toolDepsStartupLines(&ocdeps.Report{
+		Missing: ocdeps.Missing{
+			Bins: []string{"pdftotext"},
+		},
+	})
+	require.Len(t, lines, 2)
+	require.Contains(t, lines[0].text, "pdftotext")
+	require.Contains(t, lines[1].text, "bootstrap deps")
+	require.Nil(t, toolDepsStartupLines(&ocdeps.Report{}))
+	require.Nil(t, toolDepsStartupLines(nil))
+
+	stdout, stderr := captureInspectOutput(t, func() {
+		printApplyResult(ocdeps.ApplyResult{
+			Steps: []ocdeps.StepResult{{
+				Step:     ocdeps.Step{Label: "install"},
+				ExitCode: 0,
+			}},
+		})
+		printToolchain(ocdeps.Toolchain{})
+		require.Equal(t, 0, printJSON(map[string]string{"ok": "yes"}))
+		require.Equal(
+			t,
+			1,
+			printJSON(map[string]any{"bad": make(chan int)}),
+		)
+	})
+
+	require.Contains(t, stdout, "Applied:")
+	require.Contains(t, stdout, "install (exit=0)")
+	require.Contains(t, stdout, "Python: not found")
+	require.Contains(t, stdout, "\"ok\": \"yes\"")
+	require.Contains(t, stderr, "unsupported type")
+
+	require.Equal(t, "missing", statusText(false, ""))
+	require.Equal(t, "found: /bin/tool", statusText(true, "/bin/tool"))
+	require.Equal(
+		t,
+		"found: a, b",
+		anyBinStatusText(ocdeps.AnyBinStatus{
+			Satisfied: true,
+			Found: []ocdeps.BinStatus{
+				{Name: "a"},
+				{Name: "b"},
+			},
+		}),
+	)
+	require.Equal(
+		t,
+		"bins=a; anyBins=b|c; python=mod",
+		formatMissing(ocdeps.Missing{
+			Bins: []string{"a"},
+			AnyBins: [][]string{
+				{"b", "c"},
+			},
+			Python: []ocdeps.PythonPackage{
+				{Module: "mod"},
+			},
+		}),
+	)
+}
+
 func captureInspectOutput(
 	t *testing.T,
 	fn func(),
@@ -116,6 +396,23 @@ func captureInspectOutput(
 	require.NoError(t, err)
 
 	return string(out), string(errOut)
+}
+
+func writeDepsSkill(
+	t *testing.T,
+	root string,
+	name string,
+	body string,
+) {
+	t.Helper()
+
+	dir := filepath.Join(root, name)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "SKILL.md"),
+		[]byte(body),
+		0o644,
+	))
 }
 
 func TestResolveSkillConfigKeys_IncludesPluginAndYAMLKeys(t *testing.T) {

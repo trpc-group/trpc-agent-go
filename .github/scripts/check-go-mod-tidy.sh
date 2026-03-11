@@ -5,6 +5,26 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 cd "${repo_root}"
 
+tmp_dir="$(mktemp -d)"
+trap 'chmod -R u+w "${tmp_dir}" >/dev/null 2>&1 || true; rm -rf "${tmp_dir}"' EXIT
+
+export GOMODCACHE="${tmp_dir}/gomodcache"
+export GOPROXY="https://proxy.golang.org,direct"
+export GOSUMDB="sum.golang.org"
+# Setting these to empty does not reliably override values from `go env -w`.
+# Use a non-empty pattern that matches nothing to ensure public settings win.
+export GOPRIVATE="example.invalid"
+export GONOSUMDB="example.invalid"
+export GONOPROXY="example.invalid"
+export GOTOOLCHAIN="auto"
+if [ -n "${GOFLAGS:-}" ]; then
+  export GOFLAGS="${GOFLAGS} -modcacherw"
+else
+  export GOFLAGS="-modcacherw"
+fi
+
+mkdir -p "${GOMODCACHE}"
+
 echo "::group::Checking go.mod/go.sum are tidy for all modules"
 
 # Find all go.mod files that are part of published modules.
