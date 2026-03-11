@@ -116,11 +116,14 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 // pipeline and forwards all events to the provided output channel.
 func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event) {
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, ga.description, "", nil)
+	effectiveGenConfig := model.GenerationConfig{}
+	if invocation.RunOptions.Stream != nil {
+		effectiveGenConfig.Stream = *invocation.RunOptions.Stream
+	}
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, ga.description, "", &effectiveGenConfig)
 	defer close(out)
 	var trackerErr error
-	stream := invocation.RunOptions.Stream != nil && *invocation.RunOptions.Stream
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, effectiveGenConfig.Stream, &trackerErr)
 	tokenUsage := &itelemetry.TokenUsage{}
 	var fullRespEvent *event.Event
 	recordTraceEvent := func(evt *event.Event) {

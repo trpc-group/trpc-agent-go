@@ -1914,9 +1914,11 @@ func TestGraphAgent_Run_TraceAfterInvokeAgent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
+	stream := true
 	eventChan, err := ga.Run(ctx, &agent.Invocation{
 		InvocationID: "inv-trace-after",
 		Message:      model.NewUserMessage("test"),
+		RunOptions:   agent.RunOptions{Stream: &stream},
 	})
 	require.NoError(t, err)
 
@@ -1930,6 +1932,17 @@ func TestGraphAgent_Run_TraceAfterInvokeAgent(t *testing.T) {
 	require.NotEmpty(t, spans, "expected at least one span to be created")
 
 	attrs := spans[0].getAttributes()
+	var requestIsStream bool
+	var foundRequestIsStream bool
+	for _, attr := range attrs {
+		if string(attr.Key) == string(semconvtrace.KeyGenAIRequestIsStream) {
+			requestIsStream = attr.Value.AsBool()
+			foundRequestIsStream = true
+			break
+		}
+	}
+	require.True(t, foundRequestIsStream, "expected request stream attribute to be set")
+	require.True(t, requestIsStream, "expected request stream attribute to be true")
 	var outputMessages string
 	for _, attr := range attrs {
 		if string(attr.Key) == string(semconvtrace.KeyGenAIOutputMessages) {
