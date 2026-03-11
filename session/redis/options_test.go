@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	psummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 type fakeRedisOptionsSummarizer struct{}
@@ -124,6 +125,27 @@ func TestWithSummaryJobTimeout(t *testing.T) {
 			assert.Equal(t, tt.expected, opts.summaryJobTimeout)
 		})
 	}
+}
+
+func TestWithSummarizerProvider(t *testing.T) {
+	opts := ServiceOpts{}
+	called := false
+
+	WithSummarizerProvider(psummary.SessionSummarizerProviderFunc(func(
+		context.Context,
+		*psummary.SummarizerResolveRequest,
+	) (psummary.SessionSummarizer, error) {
+		called = true
+		return nil, nil
+	}))(&opts)
+
+	require.NotNil(t, opts.summarizerProvider)
+	_, err := opts.summarizerProvider.ResolveSessionSummarizer(
+		context.Background(),
+		&psummary.SummarizerResolveRequest{FilterKey: "branch"},
+	)
+	require.NoError(t, err)
+	assert.True(t, called)
 }
 
 func TestServiceOptsIntegration(t *testing.T) {

@@ -10,11 +10,13 @@
 package mysql
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	psummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 func TestWithSessionEventLimit(t *testing.T) {
@@ -96,6 +98,27 @@ func TestWithSummarizer(t *testing.T) {
 	summarizer := &mockSummarizer{}
 	WithSummarizer(summarizer)(opts)
 	assert.Equal(t, summarizer, opts.summarizer)
+}
+
+func TestWithSummarizerProvider(t *testing.T) {
+	opts := &ServiceOpts{}
+	called := false
+
+	WithSummarizerProvider(psummary.SessionSummarizerProviderFunc(func(
+		context.Context,
+		*psummary.SummarizerResolveRequest,
+	) (psummary.SessionSummarizer, error) {
+		called = true
+		return nil, nil
+	}))(opts)
+
+	require.NotNil(t, opts.summarizerProvider)
+	_, err := opts.summarizerProvider.ResolveSessionSummarizer(
+		context.Background(),
+		&psummary.SummarizerResolveRequest{FilterKey: "branch"},
+	)
+	require.NoError(t, err)
+	assert.True(t, called)
 }
 
 func TestWithAsyncSummaryNum(t *testing.T) {

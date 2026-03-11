@@ -50,7 +50,7 @@ type AsyncSummaryConfig struct {
 }
 
 func (c AsyncSummaryConfig) hasSummarizer() bool {
-	return c.Summarizer != nil || c.SummarizerProvider != nil
+	return HasSummarizer(c.Summarizer, c.SummarizerProvider)
 }
 
 // NewAsyncSummaryWorker creates a new async summary worker.
