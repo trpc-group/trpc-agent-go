@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
@@ -619,9 +620,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		),
 	)
 	effectiveGenConfig := a.genConfig
-	if invocation.RunOptions.Stream != nil {
-		effectiveGenConfig.Stream = *invocation.RunOptions.Stream
-	}
+	effectiveGenConfig.Stream = iagent.ResolveInvokeAgentStream(invocation, &effectiveGenConfig)
 
 	promptText := a.systemPromptForInvocation(invocation) +
 		a.instructionForInvocation(invocation)

@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -2117,19 +2118,6 @@ func mapParentInputFromLastResponse(
 	return cloned
 }
 
-func resolveInvokeAgentStream(
-	invocation *agent.Invocation,
-	genCfg *model.GenerationConfig,
-) bool {
-	if invocation != nil && invocation.RunOptions.Stream != nil {
-		return *invocation.RunOptions.Stream
-	}
-	if genCfg != nil {
-		return genCfg.Stream
-	}
-	return false
-}
-
 func setSubgraphInterruptState(
 	ctx context.Context,
 	state State,
@@ -2248,7 +2236,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			cfg.llmGenerationConfig,
 		)
 
-		stream := resolveInvokeAgentStream(invocation, cfg.llmGenerationConfig)
+		stream := iagent.ResolveInvokeAgentStream(invocation, cfg.llmGenerationConfig)
 		tracker := itelemetry.NewInvokeAgentTracker(
 			ctx,
 			invocation,

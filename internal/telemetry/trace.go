@@ -241,7 +241,10 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 		attribute.String(semconvtrace.KeyGenAISystemInstructions, instructions),
 	)
 	if genConfig != nil {
-		span.SetAttributes(attribute.StringSlice(semconvtrace.KeyGenAIRequestStopSequences, genConfig.Stop))
+		span.SetAttributes(attribute.Bool(semconvtrace.KeyGenAIRequestIsStream, genConfig.Stream))
+		if len(genConfig.Stop) > 0 {
+			span.SetAttributes(attribute.StringSlice(semconvtrace.KeyGenAIRequestStopSequences, genConfig.Stop))
+		}
 		if fp := genConfig.FrequencyPenalty; fp != nil {
 			span.SetAttributes(attribute.Float64(semconvtrace.KeyGenAIRequestFrequencyPenalty, *fp))
 		}
