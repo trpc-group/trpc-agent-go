@@ -2120,14 +2120,14 @@ func mapParentInputFromLastResponse(
 func resolveInvokeAgentStream(
 	invocation *agent.Invocation,
 	genCfg *model.GenerationConfig,
-) bool {
+) *bool {
 	if invocation != nil && invocation.RunOptions.Stream != nil {
-		return *invocation.RunOptions.Stream
+		return invocation.RunOptions.Stream
 	}
 	if genCfg != nil {
-		return genCfg.Stream
+		return &genCfg.Stream
 	}
-	return false
+	return nil
 }
 
 func setSubgraphInterruptState(
@@ -2240,15 +2240,30 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			cfg.userInputKey,
 		)
 
-		itelemetry.TraceBeforeInvokeAgent(
-			span,
-			invocation,
-			targetAgent.Info().Description,
-			"",
-			cfg.llmGenerationConfig,
-		)
-
 		stream := resolveInvokeAgentStream(invocation, cfg.llmGenerationConfig)
+		traceAttrs := &itelemetry.TraceBeforeInvokeAgentAttributes{
+			SpanAttributes:   invocation.RunOptions.SpanAttributes,
+			InputMessages:    []model.Message{invocation.Message},
+			AgentName:        invocation.AgentName,
+			InvocationID:     invocation.InvocationID,
+			AgentDescription: targetAgent.Info().Description,
+			Stream:           stream,
+		}
+		if invocation.Session != nil {
+			traceAttrs.SessionID = invocation.Session.ID
+			traceAttrs.UserID = invocation.Session.UserID
+		}
+		if cfg.llmGenerationConfig != nil {
+			traceAttrs.Stop = cfg.llmGenerationConfig.Stop
+			traceAttrs.FrequencyPenalty = cfg.llmGenerationConfig.FrequencyPenalty
+			traceAttrs.MaxTokens = cfg.llmGenerationConfig.MaxTokens
+			traceAttrs.PresencePenalty = cfg.llmGenerationConfig.PresencePenalty
+			traceAttrs.Temperature = cfg.llmGenerationConfig.Temperature
+			traceAttrs.TopP = cfg.llmGenerationConfig.TopP
+			traceAttrs.ThinkingEnabled = cfg.llmGenerationConfig.ThinkingEnabled
+		}
+		itelemetry.TraceBeforeInvokeAgent(span, traceAttrs)
+
 		tracker := itelemetry.NewInvokeAgentTracker(
 			ctx,
 			invocation,

@@ -102,6 +102,38 @@ func newRecordingSpan() *recordingSpan {
 	return &recordingSpan{Span: sp}
 }
 
+func newTraceBeforeInvokeAgentAttributes(
+	inv *agent.Invocation,
+	agentDescription, instructions string,
+	genConfig *model.GenerationConfig,
+) *TraceBeforeInvokeAgentAttributes {
+	attrs := &TraceBeforeInvokeAgentAttributes{
+		AgentDescription:   agentDescription,
+		SystemInstructions: instructions,
+	}
+	if inv != nil {
+		attrs.SpanAttributes = inv.RunOptions.SpanAttributes
+		attrs.InputMessages = []model.Message{inv.Message}
+		attrs.AgentName = inv.AgentName
+		attrs.InvocationID = inv.InvocationID
+		if inv.Session != nil {
+			attrs.SessionID = inv.Session.ID
+			attrs.UserID = inv.Session.UserID
+		}
+	}
+	if genConfig != nil {
+		attrs.Stop = genConfig.Stop
+		attrs.Stream = &genConfig.Stream
+		attrs.FrequencyPenalty = genConfig.FrequencyPenalty
+		attrs.MaxTokens = genConfig.MaxTokens
+		attrs.PresencePenalty = genConfig.PresencePenalty
+		attrs.Temperature = genConfig.Temperature
+		attrs.TopP = genConfig.TopP
+		attrs.ThinkingEnabled = genConfig.ThinkingEnabled
+	}
+	return attrs
+}
+
 func hasAttr(attrs []attribute.KeyValue, key string, want any) bool {
 	for _, kv := range attrs {
 		if string(kv.Key) == key {
@@ -253,7 +285,7 @@ func TestTraceFunctions_NonRecordingSpan_ReturnsEarly(t *testing.T) {
 	require.False(t, span.IsRecording(), "expected noop span to be non-recording")
 
 	TraceWorkflow(span, &Workflow{Name: "wf", ID: "wf-1"})
-	TraceBeforeInvokeAgent(span, nil, "", "", nil)
+	TraceBeforeInvokeAgent(span, nil)
 	TraceAfterInvokeAgent(span, nil, nil, 0)
 	TraceChat(span, nil)
 }
@@ -261,12 +293,24 @@ func TestTraceFunctions_NonRecordingSpan_ReturnsEarly(t *testing.T) {
 func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	// Before invoke
 	fp, mt, pp, tp, topP := 0.5, 128, 0.25, 0.7, 0.9
-	gc := &model.GenerationConfig{Stop: []string{"END"}, FrequencyPenalty: &fp, MaxTokens: &mt, PresencePenalty: &pp, Temperature: &tp, TopP: &topP}
+	stream := true
+	gc := &model.GenerationConfig{
+		Stop:             []string{"END"},
+		Stream:           stream,
+		FrequencyPenalty: &fp,
+		MaxTokens:        &mt,
+		PresencePenalty:  &pp,
+		Temperature:      &tp,
+		TopP:             &topP,
+	}
 	inv := &agent.Invocation{AgentName: "alpha", InvocationID: "inv-1", Session: &session.Session{ID: "sess-1", UserID: "u-1"}}
 	s := newRecordingSpan()
-	TraceBeforeInvokeAgent(s, inv, "desc", "inst", gc)
+	TraceBeforeInvokeAgent(s, newTraceBeforeInvokeAgentAttributes(inv, "desc", "inst", gc))
 	if !hasAttr(s.attrs, semconvtrace.KeyGenAIAgentName, "alpha") {
 		t.Fatalf("missing agent name")
+	}
+	if !hasAttr(s.attrs, semconvtrace.KeyGenAIRequestIsStream, true) {
+		t.Fatalf("missing stream attribute")
 	}
 
 	// After invoke with error and choices
@@ -379,7 +423,7 @@ func TestTraceBeforeInvokeAgent_WithSpanAttributes(t *testing.T) {
 		RunOptions:   agent.RunOptions{SpanAttributes: []attribute.KeyValue{attribute.String("custom.attr", "v1")}},
 	}
 	span := newRecordingSpan()
-	TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+	TraceBeforeInvokeAgent(span, newTraceBeforeInvokeAgentAttributes(inv, "desc", "inst", nil))
 	require.True(t, hasAttr(span.attrs, "custom.attr", "v1"), "custom span attribute should be applied")
 }
 
@@ -548,39 +592,44 @@ func TestTraceMergedToolCalls_NilPaths(t *testing.T) {
 
 func TestTraceBeforeInvokeAgent_NilPaths(t *testing.T) {
 	tests := []struct {
-		name      string
-		invoke    *agent.Invocation
-		genConfig *model.GenerationConfig
+		name  string
+		attrs *TraceBeforeInvokeAgentAttributes
 	}{
 		{
 			name: "nil generation config",
-			invoke: &agent.Invocation{
+			attrs: newTraceBeforeInvokeAgentAttributes(&agent.Invocation{
 				AgentName:    "test-agent",
 				InvocationID: "inv1",
 				Session:      &session.Session{ID: "sess1", UserID: "user1"},
-			},
-			genConfig: nil,
+			}, "desc", "instructions", nil),
 		},
 		{
 			name: "nil session",
-			invoke: &agent.Invocation{
+			attrs: newTraceBeforeInvokeAgentAttributes(&agent.Invocation{
 				AgentName:    "test-agent",
 				InvocationID: "inv1",
 				Session:      nil,
-			},
-			genConfig: &model.GenerationConfig{},
+			}, "desc", "instructions", &model.GenerationConfig{}),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			span := newRecordingSpan()
-			TraceBeforeInvokeAgent(span, tt.invoke, "desc", "instructions", tt.genConfig)
+			TraceBeforeInvokeAgent(span, tt.attrs)
 
 			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "test-agent"))
 			require.True(t, hasAttr(span.attrs, semconvtrace.KeyInvocationID, "inv1"))
 		})
 	}
+}
+
+func TestTraceBeforeInvokeAgent_NilAttributes(t *testing.T) {
+	span := newRecordingSpan()
+
+	TraceBeforeInvokeAgent(span, nil)
+
+	require.Empty(t, span.attrs)
 }
 
 func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
@@ -991,7 +1040,7 @@ func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
 		Message:      model.Message{Role: model.RoleUser, Content: "test"},
 	}
 
-	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
+	TraceBeforeInvokeAgent(span, newTraceBeforeInvokeAgentAttributes(inv, "desc", "instructions", nil))
 
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "test-agent"))
 }

@@ -217,56 +217,87 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	)
 }
 
+// TraceBeforeInvokeAgentAttributes contains TraceBeforeInvokeAgent inputs other than span.
+//
+// It is used to keep TraceBeforeInvokeAgent signatures stable as parameters evolve.
+type TraceBeforeInvokeAgentAttributes struct {
+	SpanAttributes []attribute.KeyValue
+
+	InputMessages []model.Message
+
+	AgentName    string
+	InvocationID string
+	SessionID    string
+	UserID       string
+
+	AgentDescription   string
+	SystemInstructions string
+
+	Stop             []string
+	Stream           *bool
+	FrequencyPenalty *float64
+	MaxTokens        *int
+	PresencePenalty  *float64
+	Temperature      *float64
+	TopP             *float64
+	ThinkingEnabled  *bool
+}
+
 // TraceBeforeInvokeAgent traces the before invocation of an agent.
-func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDescription, instructions string, genConfig *model.GenerationConfig) {
-	if !span.IsRecording() {
+func TraceBeforeInvokeAgent(span trace.Span, attrs *TraceBeforeInvokeAgentAttributes) {
+	if !span.IsRecording() || attrs == nil {
 		return
 	}
-	if invoke != nil && len(invoke.RunOptions.SpanAttributes) > 0 {
-		span.SetAttributes(invoke.RunOptions.SpanAttributes...)
+	if len(attrs.SpanAttributes) > 0 {
+		span.SetAttributes(attrs.SpanAttributes...)
 	}
-	if bts, err := json.Marshal([]model.Message{invoke.Message}); err == nil {
-		span.SetAttributes(
-			attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
-		)
-	} else {
-		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
+	if len(attrs.InputMessages) > 0 {
+		if bts, err := json.Marshal(attrs.InputMessages); err == nil {
+			span.SetAttributes(
+				attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
+			)
+		} else {
+			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
+		}
 	}
 	span.SetAttributes(
 		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
 		attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
-		attribute.String(semconvtrace.KeyGenAIAgentName, invoke.AgentName),
-		attribute.String(semconvtrace.KeyInvocationID, invoke.InvocationID),
-		attribute.String(semconvtrace.KeyGenAIAgentDescription, agentDescription),
-		attribute.String(semconvtrace.KeyGenAISystemInstructions, instructions),
+		attribute.String(semconvtrace.KeyGenAIAgentName, attrs.AgentName),
+		attribute.String(semconvtrace.KeyInvocationID, attrs.InvocationID),
+		attribute.String(semconvtrace.KeyGenAIAgentDescription, attrs.AgentDescription),
+		attribute.String(semconvtrace.KeyGenAISystemInstructions, attrs.SystemInstructions),
 	)
-	if genConfig != nil {
-		span.SetAttributes(attribute.StringSlice(semconvtrace.KeyGenAIRequestStopSequences, genConfig.Stop))
-		if fp := genConfig.FrequencyPenalty; fp != nil {
-			span.SetAttributes(attribute.Float64(semconvtrace.KeyGenAIRequestFrequencyPenalty, *fp))
-		}
-		if mt := genConfig.MaxTokens; mt != nil {
-			span.SetAttributes(attribute.Int(semconvtrace.KeyGenAIRequestMaxTokens, *mt))
-		}
-		if pp := genConfig.PresencePenalty; pp != nil {
-			span.SetAttributes(attribute.Float64(semconvtrace.KeyGenAIRequestPresencePenalty, *pp))
-		}
-		if tp := genConfig.Temperature; tp != nil {
-			span.SetAttributes(attribute.Float64(semconvtrace.KeyGenAIRequestTemperature, *tp))
-		}
-		if tp := genConfig.TopP; tp != nil {
-			span.SetAttributes(attribute.Float64(semconvtrace.KeyGenAIRequestTopP, *tp))
-		}
-		if te := genConfig.ThinkingEnabled; te != nil {
-			span.SetAttributes(attribute.Bool(semconvtrace.KeyGenAIRequestThinkingEnabled, *te))
-		}
+	if len(attrs.Stop) > 0 {
+		span.SetAttributes(attribute.StringSlice(semconvtrace.KeyGenAIRequestStopSequences, attrs.Stop))
+	}
+	if attrs.Stream != nil && *attrs.Stream {
+		span.SetAttributes(attribute.Bool(semconvtrace.KeyGenAIRequestIsStream, true))
+	}
+	if fp := attrs.FrequencyPenalty; fp != nil {
+		span.SetAttributes(attribute.Float64(semconvtrace.KeyGenAIRequestFrequencyPenalty, *fp))
+	}
+	if mt := attrs.MaxTokens; mt != nil {
+		span.SetAttributes(attribute.Int(semconvtrace.KeyGenAIRequestMaxTokens, *mt))
+	}
+	if pp := attrs.PresencePenalty; pp != nil {
+		span.SetAttributes(attribute.Float64(semconvtrace.KeyGenAIRequestPresencePenalty, *pp))
+	}
+	if tp := attrs.Temperature; tp != nil {
+		span.SetAttributes(attribute.Float64(semconvtrace.KeyGenAIRequestTemperature, *tp))
+	}
+	if tp := attrs.TopP; tp != nil {
+		span.SetAttributes(attribute.Float64(semconvtrace.KeyGenAIRequestTopP, *tp))
+	}
+	if te := attrs.ThinkingEnabled; te != nil {
+		span.SetAttributes(attribute.Bool(semconvtrace.KeyGenAIRequestThinkingEnabled, *te))
 	}
 
-	if invoke.Session != nil {
-		span.SetAttributes(
-			attribute.String(semconvtrace.KeyRunnerUserID, invoke.Session.UserID),
-			attribute.String(semconvtrace.KeyGenAIConversationID, invoke.Session.ID),
-		)
+	if attrs.UserID != "" {
+		span.SetAttributes(attribute.String(semconvtrace.KeyRunnerUserID, attrs.UserID))
+	}
+	if attrs.SessionID != "" {
+		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIConversationID, attrs.SessionID))
 	}
 }
 

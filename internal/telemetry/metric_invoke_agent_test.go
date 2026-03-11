@@ -29,6 +29,10 @@ import (
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -42,7 +46,7 @@ func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 				AppName:   "test-app",
 				UserID:    "user-123",
 				System:    "gpt-4",
-				Stream:    true,
+				Stream:    boolPtr(true),
 				ErrorType: "rate_limit",
 				Error:     errors.New("test error"),
 			},
@@ -57,10 +61,10 @@ func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 			},
 		},
 		{
-			name: "minimal fields",
+			name: "minimal fields with explicit false stream",
 			attrs: invokeAgentAttributes{
 				System: "gpt-3.5",
-				Stream: false,
+				Stream: boolPtr(false),
 			},
 			expected: []attribute.KeyValue{
 				attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
@@ -76,7 +80,6 @@ func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 			},
 			expected: []attribute.KeyValue{
 				attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
-				attribute.Bool(metrics.KeyTRPCAgentGoStream, false),
 				attribute.String(semconvtrace.KeyGenAISystem, "gpt-4"),
 				attribute.String(semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType),
 			},
@@ -92,7 +95,6 @@ func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 			},
 			expected: []attribute.KeyValue{
 				attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
-				attribute.Bool(metrics.KeyTRPCAgentGoStream, false),
 				attribute.String(semconvtrace.KeyGenAISystem, "claude-3"),
 			},
 		},
@@ -127,7 +129,7 @@ func TestNewInvokeAgentTracker(t *testing.T) {
 	}
 	var err error
 
-	tracker := NewInvokeAgentTracker(ctx, invocation, true, &err)
+	tracker := NewInvokeAgentTracker(ctx, invocation, boolPtr(true), &err)
 
 	if tracker == nil {
 		t.Fatal("expected non-nil tracker")
@@ -150,7 +152,7 @@ func TestNewInvokeAgentTracker(t *testing.T) {
 	if tracker.attributes.AppName != "test-app" {
 		t.Errorf("expected AppName=test-app, got %s", tracker.attributes.AppName)
 	}
-	if !tracker.attributes.Stream {
+	if tracker.attributes.Stream == nil || !*tracker.attributes.Stream {
 		t.Error("expected Stream to be true")
 	}
 	if tracker.start.IsZero() {
@@ -171,7 +173,7 @@ func TestNewInvokeAgentTracker_NilInvocation(t *testing.T) {
 	ctx := context.Background()
 	var err error
 
-	tracker := NewInvokeAgentTracker(ctx, nil, false, &err)
+	tracker := NewInvokeAgentTracker(ctx, nil, nil, &err)
 
 	if tracker == nil {
 		t.Fatal("expected non-nil tracker")
@@ -182,8 +184,8 @@ func TestNewInvokeAgentTracker_NilInvocation(t *testing.T) {
 	if tracker.attributes.System != "" {
 		t.Error("expected empty System")
 	}
-	if tracker.attributes.Stream {
-		t.Error("expected Stream to be false")
+	if tracker.attributes.Stream != nil {
+		t.Error("expected Stream to be nil")
 	}
 }
 
@@ -383,7 +385,7 @@ func TestInvokeAgentTracker_TrackResponse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			var err error
-			tracker := NewInvokeAgentTracker(ctx, nil, false, &err)
+			tracker := NewInvokeAgentTracker(ctx, nil, nil, &err)
 
 			for i, response := range tt.responses {
 				if i == 0 && tt.waitBeforeFirstResponse {
@@ -400,7 +402,7 @@ func TestInvokeAgentTracker_TrackResponse(t *testing.T) {
 func TestInvokeAgentTracker_SetResponseErrorType(t *testing.T) {
 	ctx := context.Background()
 	var err error
-	tracker := NewInvokeAgentTracker(ctx, nil, false, &err)
+	tracker := NewInvokeAgentTracker(ctx, nil, nil, &err)
 
 	if tracker.attributes.ErrorType != "" {
 		t.Error("expected empty ErrorType initially")
@@ -420,7 +422,7 @@ func TestInvokeAgentTracker_SetResponseErrorType(t *testing.T) {
 func TestInvokeAgentTracker_FirstTokenTimeDuration(t *testing.T) {
 	ctx := context.Background()
 	var err error
-	tracker := NewInvokeAgentTracker(ctx, nil, false, &err)
+	tracker := NewInvokeAgentTracker(ctx, nil, nil, &err)
 
 	if tracker.FirstTokenTimeDuration() != 0 {
 		t.Error("initial FirstTokenTimeDuration should be 0")
@@ -494,7 +496,7 @@ func TestInvokeAgentTracker_RecordMetrics(t *testing.T) {
 		},
 	}
 
-	tracker := NewInvokeAgentTracker(ctx, inv, true, &err)
+	tracker := NewInvokeAgentTracker(ctx, inv, boolPtr(true), &err)
 
 	// Simulate some responses
 	time.Sleep(10 * time.Millisecond)
@@ -579,7 +581,7 @@ func TestInvokeAgentTracker_RecordMetrics_WithError(t *testing.T) {
 
 	ctx := context.Background()
 	testErr := errors.New("test error")
-	tracker := NewInvokeAgentTracker(ctx, nil, false, &testErr)
+	tracker := NewInvokeAgentTracker(ctx, nil, nil, &testErr)
 	tracker.SetResponseErrorType("rate_limit")
 
 	recordFunc := tracker.RecordMetrics()
@@ -637,7 +639,7 @@ func TestInvokeAgentTracker_RecordMetrics_NoTokens(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	tracker := NewInvokeAgentTracker(ctx, nil, false, &err)
+	tracker := NewInvokeAgentTracker(ctx, nil, nil, &err)
 
 	// Record metrics without any responses
 	recordFunc := tracker.RecordMetrics()
@@ -653,5 +655,5 @@ func TestInvokeAgentTracker_RecordMetrics_NoTokens(t *testing.T) {
 		t.Error("expected metrics to be recorded even without tokens")
 	}
 	metricNames := collectMetricNames(rm)
-	require.NotContains(t, metricNames, metrics.MetricTRPCAgentGoClientTimeToFirstToken)
+	require.Contains(t, metricNames, metrics.MetricTRPCAgentGoClientTimeToFirstToken)
 }

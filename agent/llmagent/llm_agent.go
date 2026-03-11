@@ -618,24 +618,35 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 			a.name,
 		),
 	)
-	effectiveGenConfig := a.genConfig
-	if invocation.RunOptions.Stream != nil {
-		effectiveGenConfig.Stream = *invocation.RunOptions.Stream
-	}
+	stream := resolveInvokeAgentStream(invocation, &a.genConfig)
 
 	promptText := a.systemPromptForInvocation(invocation) +
 		a.instructionForInvocation(invocation)
-	itelemetry.TraceBeforeInvokeAgent(
-		span,
-		invocation,
-		a.description,
-		promptText,
-		&effectiveGenConfig,
-	)
+	traceAttrs := &itelemetry.TraceBeforeInvokeAgentAttributes{
+		SpanAttributes:     invocation.RunOptions.SpanAttributes,
+		InputMessages:      []model.Message{invocation.Message},
+		AgentName:          invocation.AgentName,
+		InvocationID:       invocation.InvocationID,
+		AgentDescription:   a.description,
+		SystemInstructions: promptText,
+		Stop:               a.genConfig.Stop,
+		Stream:             stream,
+		FrequencyPenalty:   a.genConfig.FrequencyPenalty,
+		MaxTokens:          a.genConfig.MaxTokens,
+		PresencePenalty:    a.genConfig.PresencePenalty,
+		Temperature:        a.genConfig.Temperature,
+		TopP:               a.genConfig.TopP,
+		ThinkingEnabled:    a.genConfig.ThinkingEnabled,
+	}
+	if invocation.Session != nil {
+		traceAttrs.SessionID = invocation.Session.ID
+		traceAttrs.UserID = invocation.Session.UserID
+	}
+	itelemetry.TraceBeforeInvokeAgent(span, traceAttrs)
 	tracker := itelemetry.NewInvokeAgentTracker(
 		ctx,
 		invocation,
-		effectiveGenConfig.Stream,
+		stream,
 		&err,
 	)
 
@@ -655,6 +666,19 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	}
 
 	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker), nil
+}
+
+func resolveInvokeAgentStream(
+	invocation *agent.Invocation,
+	genCfg *model.GenerationConfig,
+) *bool {
+	if invocation != nil && invocation.RunOptions.Stream != nil {
+		return invocation.RunOptions.Stream
+	}
+	if genCfg != nil {
+		return &genCfg.Stream
+	}
+	return nil
 }
 
 // executeAgentFlow executes the agent flow with before agent callbacks.

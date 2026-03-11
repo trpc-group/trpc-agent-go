@@ -43,7 +43,7 @@ type invokeAgentAttributes struct {
 	AppName   string
 	UserID    string
 	System    string
-	Stream    bool
+	Stream    *bool
 	ErrorType string
 	Error     error
 }
@@ -51,8 +51,10 @@ type invokeAgentAttributes struct {
 func (a invokeAgentAttributes) toAttributes() []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
 		attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
-		attribute.Bool(metrics.KeyTRPCAgentGoStream, a.Stream),
 		attribute.String(semconvtrace.KeyGenAISystem, a.System),
+	}
+	if a.Stream != nil {
+		attrs = append(attrs, attribute.Bool(metrics.KeyTRPCAgentGoStream, *a.Stream))
 	}
 	if a.AppName != "" {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyTRPCAgentGoAppName, a.AppName))
@@ -88,7 +90,7 @@ type InvokeAgentTracker struct {
 func NewInvokeAgentTracker(
 	ctx context.Context,
 	invocation *agent.Invocation,
-	stream bool,
+	stream *bool,
 	err *error,
 ) *InvokeAgentTracker {
 	attributes := invokeAgentAttributes{Stream: stream, Error: *err}

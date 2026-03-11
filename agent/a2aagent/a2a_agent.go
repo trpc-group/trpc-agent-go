@@ -159,11 +159,24 @@ func (r *A2AAgent) validateA2ARequestOptions(invocation *agent.Invocation) error
 
 // Run implements the Agent interface
 func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	var err error
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, r.name))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, r.description, "", nil)
 	useStreaming := r.shouldUseStreaming(invocation)
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err)
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, r.name))
+	traceAttrs := &itelemetry.TraceBeforeInvokeAgentAttributes{
+		SpanAttributes:   invocation.RunOptions.SpanAttributes,
+		InputMessages:    []model.Message{invocation.Message},
+		AgentName:        invocation.AgentName,
+		InvocationID:     invocation.InvocationID,
+		AgentDescription: r.description,
+		Stream:           &useStreaming,
+	}
+	if invocation.Session != nil {
+		traceAttrs.SessionID = invocation.Session.ID
+		traceAttrs.UserID = invocation.Session.UserID
+	}
+	itelemetry.TraceBeforeInvokeAgent(span, traceAttrs)
+
+	var err error
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, &useStreaming, &err)
 
 	if r.a2aClient == nil {
 		span.SetStatus(codes.Error, "A2A client is nil")

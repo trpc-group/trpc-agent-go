@@ -85,9 +85,23 @@ func (a *ChainAgent) executeChainRun(
 	eventChan chan<- *event.Event,
 ) {
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, "chain-agent", "", nil)
+	stream := resolveInvokeAgentStream(invocation, nil)
+
+	traceAttrs := &itelemetry.TraceBeforeInvokeAgentAttributes{
+		SpanAttributes:   invocation.RunOptions.SpanAttributes,
+		InputMessages:    []model.Message{invocation.Message},
+		AgentName:        invocation.AgentName,
+		InvocationID:     invocation.InvocationID,
+		AgentDescription: "chain-agent",
+		Stream:           stream,
+	}
+	if invocation.Session != nil {
+		traceAttrs.SessionID = invocation.Session.ID
+		traceAttrs.UserID = invocation.Session.UserID
+	}
+	itelemetry.TraceBeforeInvokeAgent(span, traceAttrs)
 	var trackerErr error
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, false, &trackerErr)
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
 	defer func() {
 		tracker.RecordMetrics()()
 		span.End()
@@ -113,6 +127,19 @@ func (a *ChainAgent) executeChainRun(
 		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e)
 	}
 	itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage, tracker.FirstTokenTimeDuration())
+}
+
+func resolveInvokeAgentStream(
+	invocation *agent.Invocation,
+	genCfg *model.GenerationConfig,
+) *bool {
+	if invocation != nil && invocation.RunOptions.Stream != nil {
+		return invocation.RunOptions.Stream
+	}
+	if genCfg != nil {
+		return &genCfg.Stream
+	}
+	return nil
 }
 
 // setupInvocation prepares the invocation for execution.
