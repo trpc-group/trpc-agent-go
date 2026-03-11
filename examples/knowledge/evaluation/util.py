@@ -6,9 +6,9 @@ import os
 from urllib.parse import quote_plus
 
 # Default configuration values
-DEFAULT_EMBEDDING_MODEL = "bge-m3"
+DEFAULT_EMBEDDING_MODEL = "server:274214"
 DEFAULT_MODEL_NAME = "deepseek-v3.2"
-DEFAULT_EVAL_MODEL_NAME = "gemini-3-flash"  # Default evaluation model
+DEFAULT_EVAL_MODEL_NAME = "qwen3.5-397b-a17b"  # Default evaluation model
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 # PGVector defaults
@@ -16,7 +16,7 @@ DEFAULT_PGVECTOR_HOST = "127.0.0.1"
 DEFAULT_PGVECTOR_PORT = "5432"
 DEFAULT_PGVECTOR_USER = "root"
 DEFAULT_PGVECTOR_PASSWORD = "123"
-DEFAULT_PGVECTOR_DATABASE = "vector"
+DEFAULT_PGVECTOR_DATABASE = "rgb"
 
 # ChromaDB defaults
 DEFAULT_CHROMADB_PATH = "./chromadb_storage"
