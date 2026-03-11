@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -85,9 +86,10 @@ func (a *ChainAgent) executeChainRun(
 	eventChan chan<- *event.Event,
 ) {
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, "chain-agent", "", nil)
+	stream := iagent.ResolveInvokeAgentStream(invocation, nil)
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, "chain-agent", "", &model.GenerationConfig{Stream: stream})
 	var trackerErr error
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, false, &trackerErr)
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
 	defer func() {
 		tracker.RecordMetrics()()
 		span.End()
