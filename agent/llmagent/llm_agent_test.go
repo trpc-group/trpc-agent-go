@@ -2000,3 +2000,63 @@ func TestLLMAgent_MessageFilterMode(t *testing.T) {
 	require.Equal(t, options.messageTimelineFilterMode, "request")
 	require.Equal(t, options.messageBranchFilterMode, "exact")
 }
+
+// TestLLMAgent_RunOptionInstruction_NoStaticInstruction verifies that
+// InstructionProcessor is registered even when no static instruction is
+// configured at construction time (regression test for the bug where the
+// processor was skipped entirely when options.Instruction == "").
+func TestLLMAgent_RunOptionInstruction_NoStaticInstruction(t *testing.T) {
+	// Agent created WITHOUT any WithInstruction / WithGlobalInstruction.
+	agt := New("test-agent")
+
+	reqProcs := buildRequestProcessorsWithAgent(agt, &agt.option)
+
+	var instrProc *processor.InstructionRequestProcessor
+	for _, rp := range reqProcs {
+		if p, ok := rp.(*processor.InstructionRequestProcessor); ok {
+			instrProc = p
+			break
+		}
+	}
+	// The processor must be present so that run-time WithInstruction works.
+	require.NotNil(t, instrProc,
+		"InstructionRequestProcessor must be registered even when no static instruction is set")
+}
+
+// TestLLMAgent_RunOptionInstruction_OverridesAtRuntime verifies that passing
+// agent.WithInstruction as a RunOption actually injects the instruction into
+// the request when no static instruction was set at construction time.
+func TestLLMAgent_RunOptionInstruction_OverridesAtRuntime(t *testing.T) {
+	const runtimeInstruction = "you are a helpful assistant at runtime"
+
+	// Agent created WITHOUT any WithInstruction.
+	agt := New("test-agent")
+
+	reqProcs := buildRequestProcessorsWithAgent(agt, &agt.option)
+
+	var instrProc *processor.InstructionRequestProcessor
+	for _, rp := range reqProcs {
+		if p, ok := rp.(*processor.InstructionRequestProcessor); ok {
+			instrProc = p
+			break
+		}
+	}
+	require.NotNil(t, instrProc)
+
+	// Simulate what runner.Run does: create an Invocation and apply RunOptions.
+	inv := &agent.Invocation{}
+	agent.WithInstruction(runtimeInstruction)(&inv.RunOptions)
+	agt.setupInvocation(inv)
+
+	req := &model.Request{
+		Messages: []model.Message{},
+	}
+	eventCh := make(chan *event.Event, 10)
+	instrProc.ProcessRequest(context.Background(), inv, req, eventCh)
+
+	// The run-time instruction must have been injected into the request.
+	require.NotEmpty(t, req.Messages,
+		"instruction message should have been prepended to the request")
+	require.Contains(t, req.Messages[0].Content, runtimeInstruction,
+		"run-time instruction should appear in the first message")
+}
