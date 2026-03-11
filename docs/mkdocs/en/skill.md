@@ -15,13 +15,15 @@ Background references:
 
 ### 🎯 What You Get
 
+- 🧭 Built-in tool profiles: `full` (default) or `knowledge_only`
 - 🔎 Overview injection (name + description) to guide selection
 - 📥 `skill_load` to pull `SKILL.md` body and selected docs on demand
 - 📚 `skill_select_docs` to add/replace/clear docs
 - 🧾 `skill_list_docs` to list available docs
-- 🏃 `skill_run` to execute commands, returning stdout/stderr and
+- 🏃 `skill_run` to execute commands in the `full` profile, returning stdout/stderr and
   output files
-- ⌨️ `skill_exec` plus session tools for interactive stdin/TTY flows
+- ⌨️ `skill_exec` plus session tools for interactive stdin/TTY flows in the
+  `full` profile
 - 🗂️ Output file collection via glob patterns with MIME detection
 - 🧩 Pluggable local or container workspace executors (local by default)
 - 🧱 Declarative `inputs`/`outputs`: map inputs and collect/inline/
@@ -221,8 +223,7 @@ export SKILLS_ROOT=/path/to/skills
 
 ### 2) Enable Skills in an Agent
 
-Provide a repository and an executor. If not set, a local executor is
-used for convenience during development.
+Provide a repository to `LLMAgent`.
 
 ```go
 import (
@@ -238,8 +239,21 @@ agent := llmagent.New(
     "skills-assistant",
     llmagent.WithSkills(repo),
     llmagent.WithCodeExecutor(exec),
+    llmagent.WithEnableCodeExecutionResponseProcessor(false),
     // Optional: keep the system prompt stable for prompt caching.
     llmagent.WithSkillsLoadedContentInToolResults(true),
+)
+```
+
+Knowledge-only mode:
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillToolProfile(
+        llmagent.SkillToolProfileKnowledgeOnly,
+    ),
 )
 ```
 
@@ -247,9 +261,16 @@ Key points:
 - Request processor injects overview and on‑demand content:
   [internal/flow/processor/skills.go]
   (https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/skills.go)
-- Tools are auto‑registered with `WithSkills`: `skill_load`,
-  `skill_select_docs`, `skill_list_docs`, and `skill_run` show up
-  automatically; no manual wiring required.
+- `WithSkills` auto-registers built-in skill tools; no manual wiring is
+  required.
+  - Default `full` profile: `skill_load`, `skill_select_docs`,
+    `skill_list_docs`, `skill_run`, `skill_exec`,
+    `skill_write_stdin`, `skill_poll_session`, `skill_kill_session`.
+  - `knowledge_only` profile: only `skill_load`, `skill_select_docs`,
+    and `skill_list_docs`.
+  - Executor requirement follows the profile:
+    `full` usually also needs `WithCodeExecutor(...)`;
+    `knowledge_only` does not.
 - Note: when `WithCodeExecutor` is set, LLMAgent will (by default) try to
   execute Markdown fenced code blocks in model responses. If you only need
   the executor for `skill_run`, disable this behavior with
@@ -258,8 +279,8 @@ Key points:
   block after the `Available skills:` list in the system message.
   - Disable it (to save prompt tokens): `llmagent.WithSkillsToolingGuidance("")`.
   - Or replace it with your own text: `llmagent.WithSkillsToolingGuidance("...")`.
-  - If you disable it, make sure your instruction tells the model when to use
-    `skill_load`, `skill_select_docs`, and `skill_run`.
+  - If you disable it, make sure your instruction tells the model which
+    skill tools are available in your chosen profile.
   - Loader: [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
   - Runner: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
@@ -267,6 +288,11 @@ Key points:
 
 Interactive demo:
 [examples/skillrun/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
+
+This demo and the related skill-focused examples ( `skill`, `skilldynamicschema` and
+`structuredoutputskills`) explicitly set
+`llmagent.WithEnableCodeExecutionResponseProcessor(false)` so fenced code
+blocks in assistant text do not auto-execute while `skill_run` is enabled.
 
 ```bash
 cd examples/skillrun
@@ -282,6 +308,9 @@ for skills like `whisper` (audio) and `ocr` (images).
 
 SkillLoadMode demo (no API key required):
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
+
+SkillToolProfile demo (no API key required):
+[examples/skilltoolprofile/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skilltoolprofile/README.md)
 
 Sub-agent skill isolation demo (AgentTool + Skills):
 [examples/skillisolation/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillisolation/README.md)
@@ -308,6 +337,8 @@ Natural prompts:
   needed based on the overview.
 - When needed, the model calls `skill_load` for body/docs, then
   `skill_run` to execute and return output files.
+- In `knowledge_only`, the model can still load skill instructions/docs,
+  but it must use them as guidance rather than execute skill scripts.
 
 ## SKILL.md Anatomy
 

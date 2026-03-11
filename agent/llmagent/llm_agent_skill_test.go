@@ -33,6 +33,7 @@ const (
 	testSkillName = "echoer"
 
 	skillsOverviewHeader        = "Available skills:"
+	skillsCapabilityHeader      = "Skill tool availability:"
 	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
 )
 
@@ -77,6 +78,33 @@ func TestLLMAgent_SkillRunToolRegistered(t *testing.T) {
 	require.True(t, names["skill_write_stdin"])
 	require.True(t, names["skill_poll_session"])
 	require.True(t, names["skill_kill_session"])
+}
+
+func TestLLMAgent_SkillKnowledgeOnlyToolsRegistered(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillToolProfile(SkillToolProfileKnowledgeOnly),
+	)
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		d := tl.Declaration()
+		if d != nil {
+			names[d.Name] = true
+		}
+	}
+	require.True(t, names["skill_load"])
+	require.True(t, names["skill_select_docs"])
+	require.True(t, names["skill_list_docs"])
+	require.False(t, names["skill_run"])
+	require.False(t, names["skill_exec"])
+	require.False(t, names["skill_write_stdin"])
+	require.False(t, names["skill_poll_session"])
+	require.False(t, names["skill_kill_session"])
 }
 
 func TestLLMAgent_SkillRunToolExecutes(t *testing.T) {
@@ -265,6 +293,7 @@ func TestLLMAgent_WithSkillsToolingGuidance_Disabled(t *testing.T) {
 			}
 		}
 		require.NotEmpty(t, sys)
+		require.NotContains(t, sys, skillsCapabilityHeader)
 		require.Contains(t, sys, skillsToolingGuidanceHeader)
 	}
 
@@ -284,8 +313,89 @@ func TestLLMAgent_WithSkillsToolingGuidance_Disabled(t *testing.T) {
 			}
 		}
 		require.NotEmpty(t, sys)
+		require.NotContains(t, sys, skillsCapabilityHeader)
 		require.NotContains(t, sys, skillsToolingGuidanceHeader)
 	}
+}
+
+func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_WiresPrompt(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillToolProfile(SkillToolProfileKnowledgeOnly)(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, skillsCapabilityHeader)
+	require.Contains(t, sys, "skill discovery and knowledge loading only")
+	require.Contains(t, sys, "Execution-oriented skill tools are unavailable")
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.NotContains(t, sys, "skill_run runs with CWD")
+}
+
+func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_GuidanceDisabled(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillToolProfile(SkillToolProfileKnowledgeOnly)(opts)
+	WithSkillsToolingGuidance("")(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, skillsToolingGuidanceHeader)
 }
 
 func TestLLMAgent_SkillRun_DeniedCommands_Enforced(t *testing.T) {

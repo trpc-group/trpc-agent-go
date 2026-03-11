@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -25,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
 func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
@@ -45,13 +47,13 @@ func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 				Error:     errors.New("test error"),
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationInvokeAgent),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
 				attribute.Bool(metrics.KeyTRPCAgentGoStream, true),
-				attribute.String(KeyGenAISystem, "gpt-4"),
-				attribute.String(KeyTRPCAgentGoAppName, "test-app"),
-				attribute.String(KeyTRPCAgentGoUserID, "user-123"),
-				attribute.String(KeyGenAIAgentName, "test-agent"),
-				attribute.String(KeyErrorType, "rate_limit"),
+				attribute.String(semconvtrace.KeyGenAISystem, "gpt-4"),
+				attribute.String(semconvtrace.KeyTRPCAgentGoAppName, "test-app"),
+				attribute.String(semconvtrace.KeyTRPCAgentGoUserID, "user-123"),
+				attribute.String(semconvtrace.KeyGenAIAgentName, "test-agent"),
+				attribute.String(semconvtrace.KeyErrorType, "rate_limit"),
 			},
 		},
 		{
@@ -61,9 +63,9 @@ func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 				Stream: false,
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationInvokeAgent),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
 				attribute.Bool(metrics.KeyTRPCAgentGoStream, false),
-				attribute.String(KeyGenAISystem, "gpt-3.5"),
+				attribute.String(semconvtrace.KeyGenAISystem, "gpt-3.5"),
 			},
 		},
 		{
@@ -73,10 +75,10 @@ func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 				Error:  errors.New("some error"),
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationInvokeAgent),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
 				attribute.Bool(metrics.KeyTRPCAgentGoStream, false),
-				attribute.String(KeyGenAISystem, "gpt-4"),
-				attribute.String(KeyErrorType, ValueDefaultErrorType),
+				attribute.String(semconvtrace.KeyGenAISystem, "gpt-4"),
+				attribute.String(semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType),
 			},
 		},
 		{
@@ -89,9 +91,9 @@ func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 				ErrorType: "",
 			},
 			expected: []attribute.KeyValue{
-				attribute.String(KeyGenAIOperationName, OperationInvokeAgent),
+				attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
 				attribute.Bool(metrics.KeyTRPCAgentGoStream, false),
-				attribute.String(KeyGenAISystem, "claude-3"),
+				attribute.String(semconvtrace.KeyGenAISystem, "claude-3"),
 			},
 		},
 	}
@@ -650,4 +652,6 @@ func TestInvokeAgentTracker_RecordMetrics_NoTokens(t *testing.T) {
 	if len(rm.ScopeMetrics) == 0 {
 		t.Error("expected metrics to be recorded even without tokens")
 	}
+	metricNames := collectMetricNames(rm)
+	require.NotContains(t, metricNames, metrics.MetricTRPCAgentGoClientTimeToFirstToken)
 }

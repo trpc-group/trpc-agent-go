@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
 var (
@@ -43,26 +44,26 @@ type ExecuteToolAttributes struct {
 
 func (a ExecuteToolAttributes) toAttributes() []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
-		attribute.String(KeyGenAIOperationName, OperationExecuteTool),
-		attribute.String(KeyGenAISystem, a.RequestModelName),
-		attribute.String(KeyGenAIToolName, a.ToolName),
+		attribute.String(semconvtrace.KeyGenAIOperationName, OperationExecuteTool),
+		attribute.String(semconvtrace.KeyGenAISystem, a.RequestModelName),
+		attribute.String(semconvtrace.KeyGenAIToolName, a.ToolName),
 	}
 	if a.AppName != "" {
-		attrs = append(attrs, attribute.String(KeyTRPCAgentGoAppName, a.AppName))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyTRPCAgentGoAppName, a.AppName))
 	}
 	if a.UserID != "" {
-		attrs = append(attrs, attribute.String(KeyTRPCAgentGoUserID, a.UserID))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyTRPCAgentGoUserID, a.UserID))
 	}
 	if a.SessionID != "" {
-		attrs = append(attrs, attribute.String(KeyGenAIConversationID, a.SessionID))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIConversationID, a.SessionID))
 	}
 	if a.AgentName != "" {
-		attrs = append(attrs, attribute.String(KeyGenAIAgentName, a.AgentName))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentName, a.AgentName))
 	}
 	if a.ErrorType != "" {
-		attrs = append(attrs, attribute.String(KeyErrorType, a.ErrorType))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyErrorType, a.ErrorType))
 	} else if a.Error != nil {
-		attrs = append(attrs, attribute.String(KeyErrorType, ToErrorType(a.Error, ValueDefaultErrorType)))
+		attrs = append(attrs, attribute.String(semconvtrace.KeyErrorType, ToErrorType(a.Error, semconvtrace.ValueDefaultErrorType)))
 	}
 	return attrs
 }

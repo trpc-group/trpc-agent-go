@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"unicode"
@@ -349,7 +350,7 @@ func isStopword(s string) bool {
 
 // MatchMemoryEntry checks if a memory entry matches the given query.
 // Kept for backward compatibility; returns true when the relevance
-// score is above the minimum threshold.
+// score is greater than zero.
 func MatchMemoryEntry(entry *memory.Entry, query string) bool {
 	return ScoreMemoryEntry(entry, query) > 0
 }
@@ -410,4 +411,71 @@ func ScoreMemoryEntry(entry *memory.Entry, query string) float64 {
 	}
 
 	return float64(matched) / float64(len(tokens))
+}
+
+// SearchOptions controls score filtering and result truncation for
+// keyword-based memory search.
+type SearchOptions struct {
+	MinScore   float64
+	MaxResults int
+}
+
+const (
+	// DefaultSearchMinScore is the default minimum keyword-search score.
+	DefaultSearchMinScore = 0.3
+	// DefaultMaxSearchResults is the default maximum number of keyword-search results.
+	DefaultMaxSearchResults = 10
+)
+
+// SearchMemoryEntries ranks keyword-search matches using shared scoring
+// and sorting semantics, while leaving backend-specific thresholds and
+// truncation to the caller.
+func SearchMemoryEntries(
+	entries []*memory.Entry,
+	query string,
+	opts SearchOptions,
+) []*memory.Entry {
+	type scoredEntry struct {
+		entry *memory.Entry
+		score float64
+	}
+
+	candidates := make([]scoredEntry, 0, len(entries))
+	for _, entry := range entries {
+		score := ScoreMemoryEntry(entry, query)
+		if !passesMinScore(score, opts.MinScore) {
+			continue
+		}
+		candidates = append(candidates, scoredEntry{entry: entry, score: score})
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		if !candidates[i].entry.UpdatedAt.Equal(candidates[j].entry.UpdatedAt) {
+			return candidates[i].entry.UpdatedAt.After(candidates[j].entry.UpdatedAt)
+		}
+		if !candidates[i].entry.CreatedAt.Equal(candidates[j].entry.CreatedAt) {
+			return candidates[i].entry.CreatedAt.After(candidates[j].entry.CreatedAt)
+		}
+		return candidates[i].entry.ID < candidates[j].entry.ID
+	})
+
+	if opts.MaxResults > 0 && len(candidates) > opts.MaxResults {
+		candidates = candidates[:opts.MaxResults]
+	}
+
+	results := make([]*memory.Entry, 0, len(candidates))
+	for _, candidate := range candidates {
+		results = append(results, candidate.entry)
+	}
+	return results
+}
+
+func passesMinScore(score float64, minScore float64) bool {
+	if minScore > 0 {
+		return score >= minScore
+	}
+	return score > 0
 }
