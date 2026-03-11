@@ -231,6 +231,12 @@ type nonFlushingRecorder struct {
 	body   bytes.Buffer
 }
 
+type failingFlusherRecorder struct {
+	header http.Header
+	code   int
+	err    error
+}
+
 func (r *nonFlushingRecorder) Header() http.Header {
 	if r.header == nil {
 		r.header = make(http.Header)
@@ -248,6 +254,29 @@ func (r *nonFlushingRecorder) Write(b []byte) (int, error) {
 	}
 	return r.body.Write(b)
 }
+
+func (r *failingFlusherRecorder) Header() http.Header {
+	if r.header == nil {
+		r.header = make(http.Header)
+	}
+	return r.header
+}
+
+func (r *failingFlusherRecorder) WriteHeader(code int) {
+	r.code = code
+}
+
+func (r *failingFlusherRecorder) Write(b []byte) (int, error) {
+	if r.code == 0 {
+		r.code = http.StatusOK
+	}
+	if r.err == nil {
+		r.err = errors.New("write failed")
+	}
+	return 0, r.err
+}
+
+func (r *failingFlusherRecorder) Flush() {}
 
 func (m *managedRunnerStub) Cancel(requestID string) bool {
 	m.cancelMu.Lock()
@@ -2716,6 +2745,287 @@ func TestServer_StreamMessage_EmptyReplyFallback(t *testing.T) {
 	)
 }
 
+func TestServer_StreamMessage_DebugRecorderPaths(t *testing.T) {
+	t.Parallel()
+
+	mode, err := debugrecorder.ParseMode("safe")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	rec, err := debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err := New(
+		&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: "ok"},
+					}},
+				},
+				RequestID: "req-1",
+			}},
+		},
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+
+	stream, apiErr, status := srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{From: "u1", Text: "hello"},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+	require.Len(t, collectGatewayStreamEvents(t, stream), 5)
+
+	matches, err := filepath.Glob(
+		filepath.Join(dir, "*", "*", debugEventsFile),
+	)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	dir = t.TempDir()
+	rec, err = debugrecorder.New(dir, mode)
+	require.NoError(t, err)
+
+	srv, err = New(
+		&staticRunner{},
+		WithDebugRecorder(rec),
+		WithRequireMentionInThreads(true),
+		WithMentionPatterns("@bot"),
+	)
+	require.NoError(t, err)
+
+	stream, apiErr, status = srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From:   "u1",
+			Thread: "thread-1",
+			Text:   "hello",
+		},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+	require.Len(t, collectGatewayStreamEvents(t, stream), 2)
+
+	matches, err = filepath.Glob(
+		filepath.Join(dir, "*", "*", debugEventsFile),
+	)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+}
+
+func TestServer_StreamMessage_APIErrorEvent(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{{
+			Response: &model.Response{
+				Error: &model.ResponseError{
+					Type:    errTypeUnauthorized,
+					Message: "no access",
+				},
+			},
+			RequestID: "req-1",
+		}},
+	})
+	require.NoError(t, err)
+
+	stream, apiErr, status := srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{From: "u1", Text: "hello"},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 3)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunError,
+		events[2].Type,
+	)
+	require.NotNil(t, events[2].Error)
+	require.Equal(t, errTypeUnauthorized, events[2].Error.Type)
+	require.Equal(t, "no access", events[2].Error.Message)
+}
+
+func TestServer_StreamLocked_SendFailures(t *testing.T) {
+	t.Parallel()
+
+	run := preparedMessageRun{
+		userID:    "u1",
+		sessionID: "s1",
+		requestID: "r1",
+		userMsg:   model.NewUserMessage("hello"),
+	}
+
+	t.Run("run started", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		outcome := srv.streamLocked(
+			ctx,
+			run,
+			nil,
+			make(chan gwproto.StreamEvent),
+		)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("preparing progress", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 1)
+		cancelWhenChannelLen(t, out, 1, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("tool progress", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{{
+								Function: model.FunctionDefinitionParam{
+									Name: streamToolReadDocument,
+									Arguments: []byte(
+										`{"page":1}`,
+									),
+								},
+							}},
+						},
+					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 2)
+		cancelWhenChannelLen(t, out, 2, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("message delta", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: "ok"},
+					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 2)
+		cancelWhenChannelLen(t, out, 2, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("message completed", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("ok"),
+					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 3)
+		cancelWhenChannelLen(t, out, 3, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+
+	t.Run("run completed", func(t *testing.T) {
+		t.Parallel()
+
+		srv, err := New(&staticRunner{
+			events: []*event.Event{{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("ok"),
+					}},
+				},
+			}},
+		})
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan gwproto.StreamEvent, 4)
+		cancelWhenChannelLen(t, out, 4, cancel)
+
+		outcome := srv.streamLocked(ctx, run, nil, out)
+		require.Equal(t, traceStatusError, outcome.status)
+		require.Equal(t, context.Canceled.Error(), outcome.errMsg)
+	})
+}
+
+func TestServer_HandleMessagesStream_WriteError(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{{
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletionChunk,
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "ok"},
+				}},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	rr := &failingFlusherRecorder{}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesStreamPath(),
+		bytes.NewBufferString(`{"from":"u1","text":"hi"}`),
+	)
+
+	srv.handleMessagesStream(rr, req)
+	require.Equal(t, http.StatusOK, rr.code)
+}
+
 func TestLaneLocker_ReclaimsEntries(t *testing.T) {
 	t.Parallel()
 
@@ -2753,6 +3063,36 @@ func collectGatewayStreamEvents(
 			t.Fatal("timeout waiting for gateway stream")
 		}
 	}
+}
+
+func cancelWhenChannelLen(
+	t *testing.T,
+	ch chan gwproto.StreamEvent,
+	want int,
+	cancel context.CancelFunc,
+) {
+	t.Helper()
+
+	go func() {
+		timer := time.NewTimer(testTimeout)
+		defer timer.Stop()
+
+		tick := time.NewTicker(time.Millisecond)
+		defer tick.Stop()
+
+		for {
+			select {
+			case <-timer.C:
+				cancel()
+				return
+			case <-tick.C:
+				if len(ch) >= want {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 }
 
 func TestNewOptions_DefaultsAndNormalization(t *testing.T) {

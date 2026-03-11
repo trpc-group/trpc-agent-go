@@ -1081,13 +1081,73 @@ description: doc
 func TestRepository_HelperFunctions(t *testing.T) {
 	t.Parallel()
 
+	var nilRepo *Repository
+	sources, err := nilRepo.DependencySources(nil)
+	require.NoError(t, err)
+	require.Nil(t, sources)
+
 	require.True(t, containsSource([]deps.Source{{Name: "a"}}, "a"))
 	require.False(t, containsSource([]deps.Source{{Name: "a"}}, "b"))
+	require.True(t, containsString([]string{"a", "b"}, "b"))
+	require.False(t, containsString([]string{"a", "b"}, "c"))
 	require.Equal(
 		t,
 		[]string{"b", "a"},
 		normalizeSkillNames([]string{" b ", "", "a", "b"}),
 	)
+}
+
+func TestRepository_DependencySources_AllSkillsSorted(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "b", `---
+name: b
+description: skill b
+metadata:
+  {
+    "openclaw": {},
+  }
+---
+
+# b
+`)
+	writeSkill(t, root, "a", `---
+name: a
+description: skill a
+metadata:
+  {
+    "openclaw": {},
+  }
+---
+
+# a
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	sources, err := repo.DependencySources(nil)
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	require.Equal(t, "a", sources[0].Name)
+	require.Equal(t, "skill a", sources[0].Description)
+	require.Equal(t, "b", sources[1].Name)
+	require.Equal(t, "skill b", sources[1].Description)
+}
+
+func TestRepository_SkillRunEnv_NilAndBlank(t *testing.T) {
+	t.Parallel()
+
+	var nilRepo *Repository
+	env, err := nilRepo.SkillRunEnv(context.Background(), "skill")
+	require.NoError(t, err)
+	require.Nil(t, env)
+
+	repo := &Repository{}
+	env, err = repo.SkillRunEnv(context.Background(), " ")
+	require.NoError(t, err)
+	require.Nil(t, env)
 }
 
 func TestBundledSkills_ParseFrontMatterAndMetadata(t *testing.T) {

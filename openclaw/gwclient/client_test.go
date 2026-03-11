@@ -435,6 +435,12 @@ type streamContentTypeHandler struct {
 	body        string
 }
 
+type blockingStreamHandler struct{}
+
+type invalidSSEHandler struct{}
+
+type errReader struct{}
+
 func (h *streamContentTypeHandler) ServeHTTP(
 	w http.ResponseWriter,
 	_ *http.Request,
@@ -442,6 +448,26 @@ func (h *streamContentTypeHandler) ServeHTTP(
 	w.Header().Set(headerContentType, h.contentType)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(h.body))
+}
+
+func (h *blockingStreamHandler) ServeHTTP(
+	_ http.ResponseWriter,
+	r *http.Request,
+) {
+	<-r.Context().Done()
+}
+
+func (h *invalidSSEHandler) ServeHTTP(
+	w http.ResponseWriter,
+	_ *http.Request,
+) {
+	w.Header().Set(headerContentType, gwproto.SSEContentType)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("event: run.started\ndata: {\n\n"))
+}
+
+func (r errReader) Read(_ []byte) (int, error) {
+	return 0, io.ErrUnexpectedEOF
 }
 
 func TestClient_StreamMessage_ContentTypeError(t *testing.T) {
@@ -463,6 +489,84 @@ func TestClient_StreamMessage_ContentTypeError(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), contentTypeJSON)
+}
+
+func TestClient_StreamMessage_ValidationAndRequestErrors(t *testing.T) {
+	t.Parallel()
+
+	cli := &Client{handler: http.NewServeMux()}
+	_, err := cli.StreamMessage(context.Background(), MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty stream path")
+
+	cli, err = NewWithStreamPath(
+		http.NewServeMux(),
+		"/v1/gateway/messages",
+		"http://[::1",
+		"/v1/gateway/cancel",
+	)
+	require.NoError(t, err)
+
+	_, err = cli.StreamMessage(context.Background(), MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "new request")
+}
+
+func TestClient_StreamMessage_WaitHeaderError(t *testing.T) {
+	t.Parallel()
+
+	cli, err := New(
+		&blockingStreamHandler{},
+		"/v1/gateway/messages",
+		"/v1/gateway/cancel",
+	)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		5*time.Millisecond,
+	)
+	defer cancel()
+
+	_, err = cli.StreamMessage(ctx, MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "wait stream header")
+}
+
+func TestClient_StreamMessage_ParseErrorEmitsRunError(t *testing.T) {
+	t.Parallel()
+
+	cli, err := New(
+		&invalidSSEHandler{},
+		"/v1/gateway/messages",
+		"/v1/gateway/cancel",
+	)
+	require.NoError(t, err)
+
+	stream, err := cli.StreamMessage(context.Background(), MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.NoError(t, err)
+
+	events := collectClientStreamEvents(t, stream)
+	require.Len(t, events, 1)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunError,
+		events[0].Type,
+	)
+	require.NotNil(t, events[0].Error)
+	require.Contains(t, events[0].Error.Message, "decode stream event")
 }
 
 func TestParseSSEStream_EventFallbackAndErrors(t *testing.T) {
@@ -497,6 +601,13 @@ func TestParseSSEStream_EventFallbackAndErrors(t *testing.T) {
 		make(chan StreamEvent),
 	)
 	require.ErrorIs(t, err, context.Canceled)
+
+	err = parseSSEStream(
+		context.Background(),
+		errReader{},
+		make(chan StreamEvent, 1),
+	)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 }
 
 func TestStreamResponseRecorderHelpers(t *testing.T) {
