@@ -15,7 +15,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -267,7 +266,7 @@ func resolveSkillDependencySources(
 	repo, err := ocskills.NewRepository(
 		resolveSkillRoots(cwd, cfg),
 		ocskills.WithBundledSkillsRoot(
-			filepath.Join(cwd, appName, defaultSkillsDir),
+			resolveBundledSkillsRoot(cwd, stateDir),
 		),
 		ocskills.WithAllowBundled(cfg.SkillsAllowBundled),
 	)

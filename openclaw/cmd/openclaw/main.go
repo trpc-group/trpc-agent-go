@@ -12,6 +12,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/app"
@@ -20,10 +21,22 @@ import (
 	_ "trpc.group/trpc-go/trpc-agent-go/openclaw/plugins/telegram"
 )
 
+var (
+	runAppFunc            = app.Main
+	runUpgradeCommandFunc = runUpgradeCommand
+)
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
 func run(args []string) int {
-	return app.Main(args)
+	if isTopLevelVersionRequest(args) {
+		_, _ = fmt.Fprintln(os.Stdout, currentVersion())
+		return 0
+	}
+	if isTopLevelUpgradeRequest(args) {
+		return runUpgradeCommandFunc(args[1:])
+	}
+	return runAppFunc(args)
 }

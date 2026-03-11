@@ -17,6 +17,30 @@ Detailed guide:
 [OpenClaw Runtime guide (English)](../docs/mkdocs/en/openclaw-runtime.md)
 | [OpenClaw Runtime 指南（中文）](../docs/mkdocs/zh/openclaw-runtime.md)
 
+## Install a prebuilt release
+
+If you want a runnable binary instead of `go run`, use the public install
+script:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  | bash
+```
+
+The default install profile is `stdin`, so the first run works without
+model credentials:
+
+```bash
+openclaw
+```
+
+More details:
+[INSTALL.md](./INSTALL.md)
+| [INSTALL.zh_CN.md](./INSTALL.zh_CN.md)
+| [RELEASE.md](./RELEASE.md)
+| [RELEASE.zh_CN.md](./RELEASE.zh_CN.md)
+
 ## Quick start
 
 Run with a mock model (no external model credentials needed):
@@ -903,11 +927,16 @@ Skills are loaded from these locations (highest precedence first):
 2) Project AgentSkills: `./.agents/skills`
 3) Personal AgentSkills: `$HOME/.agents/skills`
 4) Managed skills: `<state-dir>/skills`
-5) Repo bundled skills (when running from repo root): `./openclaw/skills`
-6) Extra dirs: `-skills-extra-dirs` (comma-separated, lowest precedence)
+5) Installed bundled skills: `<state-dir>/bundled-skills`
+6) Repo bundled skills (when running from repo root): `./openclaw/skills`
+7) Extra dirs: `-skills-extra-dirs` (comma-separated, lowest precedence)
 
 If two skills have the same `name`, the one from the higher-precedence
 location wins.
+
+Prebuilt release installs refresh `<state-dir>/bundled-skills` on each
+install or upgrade, while leaving `<state-dir>/skills` available for your
+own managed skills.
 
 ### OpenClaw metadata gating (optional)
 
