@@ -2268,6 +2268,253 @@ func TestServer_StreamMessage_ProgressStages(t *testing.T) {
 	)
 }
 
+func TestStreamProgressHelpers(t *testing.T) {
+	t.Parallel()
+
+	update, ok := progressUpdateFromRunnerEvent(nil)
+	require.False(t, ok)
+	require.Equal(t, progressUpdate{}, update)
+
+	update, ok = progressUpdateFromRunnerEvent(&event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					ToolCalls: []model.ToolCall{{
+						Function: model.FunctionDefinitionParam{
+							Name:      streamToolReadDocument,
+							Arguments: []byte(`{"page":2}`),
+						},
+					}},
+				},
+			}},
+		},
+	})
+	require.True(t, ok)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageReadingDocument,
+		update.stage,
+	)
+	require.Equal(t, "Reading document page 2", update.summary)
+
+	update, ok = progressUpdateFromRunnerEvent(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+		},
+	})
+	require.True(t, ok)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageSummarizing,
+		update.stage,
+	)
+	require.Equal(t, progressSummaryAnswering, update.summary)
+}
+
+func TestToolCallProgressSummaries(t *testing.T) {
+	t.Parallel()
+
+	update, ok := progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name:      streamToolReadSheet,
+			Arguments: []byte(`{"start_row":2,"end_row":4}`),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageReadingSpreadsheet,
+		update.stage,
+	)
+	require.Equal(t, "Reading spreadsheet rows 2-4", update.summary)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name:      streamToolExecCommand,
+			Arguments: []byte(`{}`),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(
+		t,
+		gwproto.StreamProgressStageRunningTool,
+		update.stage,
+	)
+	require.Equal(t, progressSummaryTool, update.summary)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name: "custom_tool",
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, "Running custom_tool", update.summary)
+
+	_, ok = progressFromToolCall(model.ToolCall{})
+	require.False(t, ok)
+
+	require.Equal(
+		t,
+		progressSummaryDoc,
+		readDocumentProgressSummary(model.ToolCall{
+			Function: model.FunctionDefinitionParam{
+				Arguments: []byte("{"),
+			},
+		}),
+	)
+	require.Equal(
+		t,
+		"Reading spreadsheet sheet Data",
+		readSpreadsheetProgressSummary(model.ToolCall{
+			Function: model.FunctionDefinitionParam{
+				Arguments: []byte(`{"sheet":"Data"}`),
+			},
+		}),
+	)
+}
+
+func TestSendProgressUpdateAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	out := make(chan gwproto.StreamEvent, 4)
+	state := &progressState{startedAt: time.Now()}
+	run := preparedMessageRun{
+		sessionID: "s1",
+		requestID: "r1",
+	}
+
+	require.True(t, sendProgressUpdate(
+		ctx,
+		out,
+		run,
+		state,
+		gwproto.StreamProgressStagePreparing,
+		progressSummaryPrepare,
+	))
+	require.True(t, sendProgressUpdate(
+		ctx,
+		out,
+		run,
+		state,
+		gwproto.StreamProgressStagePreparing,
+		progressSummaryPrepare,
+	))
+	require.Len(t, out, 1)
+	evt := <-out
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, evt.Type)
+	require.Equal(t, progressSummaryPrepare, evt.Summary)
+
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	require.False(t, sendStreamEvent(
+		canceledCtx,
+		make(chan gwproto.StreamEvent),
+		gwproto.StreamEvent{},
+	))
+	require.False(t, sendProgressUpdate(
+		canceledCtx,
+		make(chan gwproto.StreamEvent),
+		run,
+		&progressState{startedAt: time.Now()},
+		gwproto.StreamProgressStagePreparing,
+		progressSummaryPrepare,
+	))
+
+	collected := collectGatewayStreamEvents(
+		t,
+		singleStreamEvents(
+			gwproto.StreamEvent{Type: gwproto.StreamEventTypeRunStarted},
+			gwproto.StreamEvent{Type: gwproto.StreamEventTypeRunCompleted},
+		),
+	)
+	require.Len(t, collected, 2)
+	require.Equal(t, "stream canceled", contextErrMessage(nil))
+	require.Equal(
+		t,
+		context.Canceled.Error(),
+		contextErrMessage(canceledCtx),
+	)
+	require.Equal(t, "req", resolvedStreamRequestID(" req ", "fb"))
+	require.Equal(t, "fb", resolvedStreamRequestID(" ", " fb "))
+}
+
+func TestStreamResponseHelpers(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, apiErrorFromEvent(nil))
+	require.Nil(t, apiErrorFromEvent(&event.Event{
+		Response: &model.Response{},
+	}))
+
+	apiErr := apiErrorFromEvent(&event.Event{
+		Response: &model.Response{
+			Error: &model.ResponseError{Message: "boom"},
+		},
+	})
+	require.NotNil(t, apiErr)
+	require.Equal(t, errTypeInternal, apiErr.Type)
+	require.Equal(t, "boom", apiErr.Message)
+
+	deltaEvt := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{
+				{Delta: model.Message{Content: "a"}},
+				{Delta: model.Message{Content: "b"}},
+			},
+		},
+	}
+	require.Equal(t, "ab", streamDeltaText(deltaEvt, false))
+
+	fullEvt := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("full")},
+			},
+		},
+	}
+	require.Equal(t, "full", streamDeltaText(fullEvt, false))
+	require.Empty(t, streamDeltaText(fullEvt, true))
+	require.Empty(t, streamDeltaText(nil, false))
+
+	require.Equal(
+		t,
+		model.ToolCall{
+			Function: model.FunctionDefinitionParam{
+				Name: "from-delta",
+			},
+		},
+		func() model.ToolCall {
+			call, ok := firstToolCall(&model.Response{
+				Choices: []model.Choice{{
+					Delta: model.Message{
+						ToolCalls: []model.ToolCall{{
+							Function: model.FunctionDefinitionParam{
+								Name: "from-delta",
+							},
+						}},
+					},
+				}},
+			})
+			require.True(t, ok)
+			return call
+		}(),
+	)
+	call, ok := firstToolCall(&model.Response{})
+	require.False(t, ok)
+	require.Equal(t, model.ToolCall{}, call)
+
+	require.Empty(t, fullTextFromResponse(&model.Response{}))
+	require.Equal(t, "x", fullTextFromResponse(&model.Response{
+		Choices: []model.Choice{
+			{Message: model.NewAssistantMessage("x")},
+		},
+	}))
+	require.Empty(t, deltaTextFromResponse(nil))
+}
+
 func TestServer_HandleMessagesStream_Success(t *testing.T) {
 	t.Parallel()
 

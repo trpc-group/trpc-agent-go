@@ -11,8 +11,10 @@
 package gwclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"sync"
 	"testing"
@@ -461,6 +463,78 @@ func TestClient_StreamMessage_ContentTypeError(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), contentTypeJSON)
+}
+
+func TestParseSSEStream_EventFallbackAndErrors(t *testing.T) {
+	t.Parallel()
+
+	out := make(chan StreamEvent, 2)
+	err := parseSSEStream(
+		context.Background(),
+		bytes.NewBufferString(
+			"event: run.progress\n"+
+				"data: {\"summary\":\"Preparing\"}\n\n",
+		),
+		out,
+	)
+	require.NoError(t, err)
+	require.Equal(t, gwproto.StreamEventTypeRunProgress, (<-out).Type)
+
+	err = parseSSEStream(
+		context.Background(),
+		bytes.NewBufferString("data: {\n\n"),
+		make(chan StreamEvent, 1),
+	)
+	require.Error(t, err)
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = parseSSEStream(
+		canceledCtx,
+		bytes.NewBufferString(
+			"data: {\"type\":\"run.started\"}\n\n",
+		),
+		make(chan StreamEvent),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestStreamResponseRecorderHelpers(t *testing.T) {
+	t.Parallel()
+
+	rr := newStreamResponseRecorder()
+	rr.Flush()
+	require.Equal(t, http.StatusOK, rr.Code())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, rr.waitHeader(ctx), context.Canceled)
+
+	rr.finish(io.EOF)
+	rr.finish(nil)
+
+	rr = newStreamResponseRecorder()
+	rr.WriteHeader(http.StatusCreated)
+	_, err := rr.Write([]byte("body"))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, rr.Code())
+	require.Equal(t, "body", string(rr.BodyBytes()))
+	rr.closeReader()
+}
+
+func TestStreamStatusError_NoPayload(t *testing.T) {
+	t.Parallel()
+
+	err := streamStatusError(http.StatusInternalServerError, []byte("{}"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "status 500")
+
+	err = streamStatusError(
+		http.StatusBadRequest,
+		[]byte(`{"error":{"type":"bad","message":"no"}}`),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "bad")
 }
 
 type managedRunnerStub struct {
