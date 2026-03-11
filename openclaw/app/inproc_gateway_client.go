@@ -119,6 +119,21 @@ func (c *inProcGatewayClient) SendMessage(
 	return out, nil
 }
 
+func (c *inProcGatewayClient) StreamMessage(
+	ctx context.Context,
+	req gwclient.MessageRequest,
+) (<-chan gwclient.StreamEvent, error) {
+	if c == nil || c.srv == nil {
+		return nil, errors.New(errNilGatewayServer)
+	}
+
+	stream, apiErr, status := c.srv.StreamMessage(ctx, req)
+	if err := errorForGWStatus(status, apiErr); err != nil {
+		return nil, err
+	}
+	return stream, nil
+}
+
 func (c *inProcGatewayClient) Cancel(
 	ctx context.Context,
 	requestID string,
