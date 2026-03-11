@@ -64,7 +64,7 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 		{
 			name:     "empty memories",
 			memories: []*memory.Entry{},
-			contains: []string{"## User Memories", "The following are memories about the user:"},
+			contains: []string{"## User Memories"},
 		},
 		{
 			name: "single memory",
@@ -76,7 +76,7 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 					UserID:  "user",
 				},
 			},
-			contains: []string{"ID: mem-1", "Memory: User likes coffee"},
+			contains: []string{"[mem-1]", "User likes coffee"},
 		},
 		{
 			name: "multiple memories",
@@ -97,8 +97,35 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				},
 			},
 			contains: []string{
-				"ID: mem-1", "Memory: User likes coffee",
-				"ID: mem-2", "Memory: User works in tech",
+				"[mem-1]", "User likes coffee",
+				"[mem-2]", "User works in tech",
+			},
+		},
+		{
+			name: "episodic metadata is rendered inline",
+			memories: []*memory.Entry{
+				{
+					ID:      "mem-episode",
+					AppName: "app",
+					UserID:  "user",
+					Memory: &memory.Memory{
+						Memory:       "User hiked in Kyoto",
+						Topics:       []string{"travel", "hiking"},
+						Kind:         memory.KindEpisode,
+						EventTime:    func() *time.Time { t := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC); return &t }(),
+						Participants: []string{"Alice", "Bob"},
+						Location:     "Kyoto",
+					},
+				},
+			},
+			contains: []string{
+				"The following are stored memories about the user.",
+				"[mem-episode] User hiked in Kyoto",
+				"kind=episode",
+				"date=2024-05-07",
+				"with=Alice, Bob",
+				"at=Kyoto",
+				"topics=travel, hiking",
 			},
 		},
 		{
@@ -119,8 +146,8 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				},
 			},
 			contains: []string{
-				"ID: mem-1", "Memory: User likes coffee",
-				"ID: mem-2", "Memory: User works in tech",
+				"[mem-1]", "User likes coffee",
+				"[mem-2]", "User works in tech",
 			},
 		},
 		{
@@ -146,10 +173,10 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				},
 			},
 			contains: []string{
-				"ID: mem-1", "Memory: User likes coffee",
-				"ID: mem-3", "Memory: User works in tech",
+				"[mem-1]", "User likes coffee",
+				"[mem-3]", "User works in tech",
 			},
-			excludes: []string{"ID: mem-2"},
+			excludes: []string{"[mem-2]"},
 		},
 		{
 			name: "all nil or nil memory returns header only",
@@ -158,9 +185,9 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				{ID: "mem-1", Memory: nil, AppName: "app", UserID: "user"},
 			},
 			contains: []string{
-				"## User Memories", "The following are memories about the user:",
+				"## User Memories",
 			},
-			excludes: []string{"ID: mem-1"},
+			excludes: []string{"[mem-1]"},
 		},
 	}
 
@@ -185,11 +212,11 @@ type mockMemoryService struct {
 	readLimit  int
 }
 
-func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
+func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string, _ ...memory.AddOption) error {
 	return nil
 }
 
-func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string, topics []string) error {
+func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string, topics []string, _ ...memory.UpdateOption) error {
 	return nil
 }
 
@@ -210,7 +237,7 @@ func (m *mockMemoryService) ReadMemories(ctx context.Context, userKey memory.Use
 	return m.memories, nil
 }
 
-func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, _ ...memory.SearchOption) ([]*memory.Entry, error) {
 	return nil, nil
 }
 

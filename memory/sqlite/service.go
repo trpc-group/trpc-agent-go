@@ -106,10 +106,13 @@ func (s *Service) AddMemory(
 	userKey memory.UserKey,
 	memoryStr string,
 	topics []string,
+	opts ...memory.AddOption,
 ) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
+
+	ep := memory.ResolveAddOptions(opts)
 
 	now := time.Now()
 	mem := &memory.Memory{
@@ -117,18 +120,14 @@ func (s *Service) AddMemory(
 		Topics:      topics,
 		LastUpdated: &now,
 	}
+	imemory.ApplyMetadata(mem, ep)
 	memoryID := imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
 
 	if s.opts.memoryLimit > 0 {
-		deletedAt, exists, err := s.getDeletedAt(
-			ctx,
-			userKey,
-			memoryID,
-		)
+		deletedAt, exists, err := s.getDeletedAt(ctx, userKey, memoryID)
 		if err != nil {
 			return err
 		}
-
 		needLimit := !exists
 		if exists && s.opts.softDelete && deletedAt.Valid {
 			needLimit = true
@@ -166,19 +165,13 @@ ON CONFLICT(memory_id) DO UPDATE SET
 
 	query := fmt.Sprintf(insertSQL, s.tableName)
 	_, err = s.db.ExecContext(
-		ctx,
-		query,
-		entry.ID,
-		userKey.AppName,
-		userKey.UserID,
-		memoryData,
-		now.UTC().UnixNano(),
-		now.UTC().UnixNano(),
+		ctx, query,
+		entry.ID, userKey.AppName, userKey.UserID, memoryData,
+		now.UTC().UnixNano(), now.UTC().UnixNano(),
 	)
 	if err != nil {
 		return fmt.Errorf("store memory entry: %w", err)
 	}
-
 	return nil
 }
 
@@ -251,10 +244,13 @@ func (s *Service) UpdateMemory(
 	memoryKey memory.Key,
 	memoryStr string,
 	topics []string,
+	opts ...memory.UpdateOption,
 ) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
+
+	ep := memory.ResolveUpdateOptions(opts)
 
 	entry, err := s.getEntry(ctx, memoryKey)
 	if err != nil {
@@ -262,10 +258,15 @@ func (s *Service) UpdateMemory(
 	}
 
 	now := time.Now()
-	entry.Memory.Memory = memoryStr
-	entry.Memory.Topics = topics
-	entry.Memory.LastUpdated = &now
-	entry.UpdatedAt = now
+	newID := imemory.ApplyMemoryUpdate(
+		entry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		ep,
+		now,
+	)
 
 	updated, err := json.Marshal(entry)
 	if err != nil {
@@ -273,15 +274,12 @@ func (s *Service) UpdateMemory(
 	}
 
 	const updateSQL = `UPDATE %s
-SET memory_data = ?, updated_at = ?
+SET memory_id = ?, memory_data = ?, updated_at = ?
 WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 	query := fmt.Sprintf(updateSQL, s.tableName)
 	args := []any{
-		updated,
-		now.UTC().UnixNano(),
-		memoryKey.AppName,
-		memoryKey.UserID,
-		memoryKey.MemoryID,
+		newID, updated, now.UTC().UnixNano(),
+		memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID,
 	}
 	if s.opts.softDelete {
 		query += " AND deleted_at IS NULL"
@@ -291,7 +289,9 @@ WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 	if err != nil {
 		return fmt.Errorf("update memory entry: %w", err)
 	}
-
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
+	}
 	return nil
 }
 
@@ -327,6 +327,7 @@ WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 	if err := json.Unmarshal(memoryData, entry); err != nil {
 		return nil, fmt.Errorf("unmarshal memory entry: %w", err)
 	}
+	imemory.NormalizeEntry(entry)
 	return entry, nil
 }
 
@@ -450,6 +451,7 @@ WHERE app_name = ? AND user_id = ?`
 		if err := json.Unmarshal(memoryData, e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry: %w", err)
 		}
+		imemory.NormalizeEntry(e)
 		entries = append(entries, e)
 	}
 
@@ -465,6 +467,7 @@ func (s *Service) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
 	queryStr string,
+	opts ...memory.SearchOption,
 ) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
@@ -495,6 +498,7 @@ WHERE app_name = ? AND user_id = ?`
 		if err := json.Unmarshal(memoryData, e); err != nil {
 			return nil, fmt.Errorf("unmarshal memory entry: %w", err)
 		}
+		imemory.NormalizeEntry(e)
 		entries = append(entries, e)
 	}
 
@@ -502,10 +506,12 @@ WHERE app_name = ? AND user_id = ?`
 		return nil, fmt.Errorf("iterate memories: %w", err)
 	}
 
-	return imemory.SearchMemoryEntries(entries, queryStr, imemory.SearchOptions{
-		MinScore:   s.opts.searchMinScore,
-		MaxResults: s.opts.maxSearchResults,
-	}), nil
+	return imemory.SearchEntries(
+		entries,
+		memory.ResolveSearchOptions(queryStr, opts),
+		s.opts.searchMinScore,
+		s.opts.maxSearchResults,
+	), nil
 }
 
 // Tools returns the list of available memory tools.

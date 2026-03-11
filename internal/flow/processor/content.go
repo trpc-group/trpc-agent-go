@@ -1539,13 +1539,35 @@ func (p *ContentRequestProcessor) getPreloadMemoryMessage(
 func formatMemoryContent(memories []*memory.Entry) string {
 	var sb strings.Builder
 	sb.WriteString("## User Memories\n\n")
-	sb.WriteString("The following are memories about the user:\n\n")
+	sb.WriteString("The following are stored memories about the user. ")
+	sb.WriteString("Use these to answer questions. Episodic memories include ")
+	sb.WriteString("event details (time, participants, location).\n\n")
 	for _, mem := range memories {
 		if mem == nil || mem.Memory == nil {
 			continue
 		}
-		fmt.Fprintf(&sb, "ID: %s\n", mem.ID)
-		fmt.Fprintf(&sb, "Memory: %s\n\n", mem.Memory.Memory)
+		fmt.Fprintf(&sb, "- [%s] %s", mem.ID, mem.Memory.Memory)
+		// Append metadata inline for richer context.
+		var meta []string
+		if mem.Memory.Kind != "" {
+			meta = append(meta, fmt.Sprintf("kind=%s", mem.Memory.Kind))
+		}
+		if mem.Memory.EventTime != nil {
+			meta = append(meta, fmt.Sprintf("date=%s", mem.Memory.EventTime.Format("2006-01-02")))
+		}
+		if len(mem.Memory.Participants) > 0 {
+			meta = append(meta, fmt.Sprintf("with=%s", strings.Join(mem.Memory.Participants, ", ")))
+		}
+		if mem.Memory.Location != "" {
+			meta = append(meta, fmt.Sprintf("at=%s", mem.Memory.Location))
+		}
+		if len(mem.Memory.Topics) > 0 {
+			meta = append(meta, fmt.Sprintf("topics=%s", strings.Join(mem.Memory.Topics, ", ")))
+		}
+		if len(meta) > 0 {
+			fmt.Fprintf(&sb, " (%s)", strings.Join(meta, "; "))
+		}
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

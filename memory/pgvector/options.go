@@ -32,7 +32,7 @@ const (
 const (
 	defaultTableName      = "memories"
 	defaultIndexDimension = 1536
-	defaultMaxResults     = 10
+	defaultMaxResults     = 15
 )
 
 // Default HNSW index parameters.
@@ -40,6 +40,12 @@ const (
 	defaultHNSWM              = 16
 	defaultHNSWEfConstruction = 64
 )
+
+// Default similarity threshold. Results with cosine similarity below this
+// are filtered out even if within the top-K limit. A value of 0 disables
+// threshold filtering. The default of 0.35 removes very low relevance
+// results that add noise without contributing useful information.
+const defaultSimilarityThreshold = 0.30
 
 // Default timeout settings.
 const (
@@ -56,13 +62,14 @@ type HNSWIndexParams struct {
 }
 
 var defaultOptions = ServiceOpts{
-	tableName:      defaultTableName,
-	indexDimension: defaultIndexDimension,
-	maxResults:     defaultMaxResults,
-	memoryLimit:    imemory.DefaultMemoryLimit,
-	toolCreators:   imemory.AllToolCreators,
-	enabledTools:   imemory.DefaultEnabledTools,
-	asyncMemoryNum: imemory.DefaultAsyncMemoryNum,
+	tableName:           defaultTableName,
+	indexDimension:      defaultIndexDimension,
+	maxResults:          defaultMaxResults,
+	memoryLimit:         imemory.DefaultMemoryLimit,
+	similarityThreshold: defaultSimilarityThreshold,
+	toolCreators:        imemory.AllToolCreators,
+	enabledTools:        imemory.DefaultEnabledTools,
+	asyncMemoryNum:      imemory.DefaultAsyncMemoryNum,
 	hnswParams: &HNSWIndexParams{
 		M:              defaultHNSWM,
 		EfConstruction: defaultHNSWEfConstruction,
@@ -88,6 +95,10 @@ type ServiceOpts struct {
 	maxResults     int
 	memoryLimit    int
 	softDelete     bool
+
+	// similarityThreshold filters out search results with cosine similarity
+	// below this value (range 0-1). A value of 0 disables filtering.
+	similarityThreshold float64
 
 	// Vector index configuration.
 	hnswParams *HNSWIndexParams
@@ -375,6 +386,18 @@ func WithHNSWIndexParams(params *HNSWIndexParams) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		if params != nil {
 			opts.hnswParams = params
+		}
+	}
+}
+
+// WithSimilarityThreshold sets the minimum cosine similarity threshold
+// for search results. Results below this threshold are filtered out.
+// Value should be between 0 and 1. A value of 0 disables filtering.
+// Default is 0 (disabled).
+func WithSimilarityThreshold(threshold float64) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if threshold >= 0 && threshold <= 1 {
+			opts.similarityThreshold = threshold
 		}
 	}
 }
