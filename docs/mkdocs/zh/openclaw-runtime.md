@@ -559,8 +559,8 @@ Gateway 之后，`openclaw` 直接复用 tRPC-Agent-Go 现有的执行体系。
 - Agent 类型：`llm`、`claude-code`
 - Session backend：`inmemory`、`redis`、`sqlite`、`mysql`、
   `postgres`、`clickhouse`
-- Memory backend：`inmemory`、`redis`、`mysql`、`postgres`、
-  `pgvector`
+- Memory backend：`inmemory`、`redis`、`sqlite`、`mysql`、
+  `postgres`、`pgvector`
 - Tool providers：`duckduckgo`、`webfetch_http`
 - ToolSet providers：`mcp`、`file`、`openapi`、`google`、
   `wikipedia`、`arxivsearch`、`email`

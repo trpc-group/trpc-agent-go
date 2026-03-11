@@ -602,8 +602,8 @@ capabilities:
 - Agent types: `llm`, `claude-code`
 - Session backends: `inmemory`, `redis`, `sqlite`, `mysql`,
   `postgres`, `clickhouse`
-- Memory backends: `inmemory`, `redis`, `mysql`, `postgres`,
-  `pgvector`
+- Memory backends: `inmemory`, `redis`, `sqlite`, `mysql`,
+  `postgres`, `pgvector`
 - Tool providers: `duckduckgo`, `webfetch_http`
 - ToolSet providers: `mcp`, `file`, `openapi`, `google`,
   `wikipedia`, `arxivsearch`, `email`
