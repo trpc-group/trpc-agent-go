@@ -1,0 +1,26 @@
+{
+  "evalSetId": "jieba-rouge-zh",
+  "name": "jieba-rouge-zh",
+  "evalCases": [
+    {
+      "evalId": "rewrite-weather",
+      "conversation": [
+        {
+          "invocationId": "rewrite-weather-1",
+          "userContent": {
+            "role": "user",
+            "content": "今天天气很好，我们一起去公园散步。"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "天气不错，一起去公园散步吧"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "jieba-eval-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}

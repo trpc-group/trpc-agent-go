@@ -10,7 +10,6 @@
 package finalresponse
 
 import (
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	cjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	crouge "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/rouge"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
@@ -24,8 +23,10 @@ type options struct {
 	json *cjson.JSONCriterion
 	// rouge configures ROUGE scoring comparison.
 	rouge *crouge.RougeCriterion
+	// compareName selects a registered comparison implementation by name.
+	compareName string
 	// compare overrides built-in comparison when provided.
-	compare func(actual, expected *evalset.Invocation) (bool, error)
+	compare CompareFunc
 }
 
 // newOptions applies functional options to build a criterion configuration.
@@ -54,8 +55,15 @@ func WithJSONCriterion(criterion *cjson.JSONCriterion) Option {
 	}
 }
 
+// WithCompareName sets the name of the registered compare function.
+func WithCompareName(compareName string) Option {
+	return func(o *options) {
+		o.compareName = compareName
+	}
+}
+
 // WithCompare sets the custom compare function.
-func WithCompare(compare func(actual, expected *evalset.Invocation) (bool, error)) Option {
+func WithCompare(compare CompareFunc) Option {
 	return func(o *options) {
 		o.compare = compare
 	}

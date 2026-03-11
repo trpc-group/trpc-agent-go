@@ -50,6 +50,7 @@ func (s *local) resolveEvaluateOptions(opt ...service.Option) (*service.Options,
 	callOpts := &service.Options{
 		EvalSetManager:                    s.evalSetManager,
 		Registry:                          s.registry,
+		MetricRegistry:                    s.metricRegistry,
 		Callbacks:                         s.callbacks,
 		EvalCaseParallelism:               s.evalCaseParallelism,
 		EvalCaseParallelInferenceEnabled:  s.evalCaseParallelInferenceEnabled,
@@ -63,6 +64,9 @@ func (s *local) resolveEvaluateOptions(opt ...service.Option) (*service.Options,
 	}
 	if callOpts.Registry == nil {
 		return nil, errors.New("registry is nil")
+	}
+	if callOpts.MetricRegistry == nil {
+		return nil, errors.New("metric registry is nil")
 	}
 	if callOpts.EvalCaseParallelEvaluationEnabled {
 		if callOpts.EvalCaseParallelism <= 0 {

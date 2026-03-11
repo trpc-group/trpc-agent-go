@@ -13,7 +13,8 @@ type options struct {
 	ignore          bool
 	caseInsensitive bool
 	matchStrategy   TextMatchStrategy
-	compare         func(actual, expected string) (bool, error)
+	compareName     string
+	compare         CompareFunc
 }
 
 func newOptions(opt ...Option) *options {
@@ -48,8 +49,15 @@ func WithMatchStrategy(matchStrategy TextMatchStrategy) Option {
 	}
 }
 
+// WithCompareName sets the name of the registered compare function.
+func WithCompareName(compareName string) Option {
+	return func(o *options) {
+		o.compareName = compareName
+	}
+}
+
 // WithCompare sets the custom compare function.
-func WithCompare(compare func(actual, expected string) (bool, error)) Option {
+func WithCompare(compare CompareFunc) Option {
 	return func(o *options) {
 		o.compare = compare
 	}

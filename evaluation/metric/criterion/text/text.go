@@ -16,6 +16,9 @@ import (
 	"strings"
 )
 
+// CompareFunc defines custom text comparison logic.
+type CompareFunc func(actual, expected string) (bool, error)
+
 // TextCriterion governs how two strings should be compared.
 type TextCriterion struct {
 	// Ignore skips comparison when true.
@@ -24,8 +27,10 @@ type TextCriterion struct {
 	CaseInsensitive bool `json:"caseInsensitive,omitempty"`
 	// MatchStrategy selects the comparison rule.
 	MatchStrategy TextMatchStrategy `json:"matchStrategy,omitempty"`
+	// CompareName selects a registered comparison implementation by name.
+	CompareName string `json:"compareName,omitempty"`
 	// Compare overrides built-in strategies.
-	Compare func(actual, expected string) (bool, error) `json:"-"`
+	Compare CompareFunc `json:"-"`
 }
 
 // TextMatchStrategy enumerates supported text comparison strategies.
@@ -47,6 +52,7 @@ func New(opt ...Option) *TextCriterion {
 		Ignore:          opts.ignore,
 		CaseInsensitive: opts.caseInsensitive,
 		MatchStrategy:   opts.matchStrategy,
+		CompareName:     opts.compareName,
 		Compare:         opts.compare,
 	}
 }

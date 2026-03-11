@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -28,6 +29,7 @@ type Options struct {
 	EvalSetManager                    evalset.Manager                  // EvalSetManager is used to store and retrieve eval set.
 	EvalResultManager                 evalresult.Manager               // EvalResultManager is used to store and retrieve eval results.
 	Registry                          registry.Registry                // Registry is used to store and retrieve evaluator.
+	MetricRegistry                    metricregistry.Registry          // MetricRegistry resolves runtime metric extensions.
 	SessionIDSupplier                 func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
 	ExpectedRunner                    runner.Runner                    // ExpectedRunner is used to generate dynamic expected outputs.
 	Callbacks                         *Callbacks                       // Callbacks holds evaluation callbacks.
@@ -46,6 +48,7 @@ func NewOptions(opt ...Option) *Options {
 		EvalSetManager:    evalsetinmemory.New(),
 		EvalResultManager: evalresultinmemory.New(),
 		Registry:          registry.New(),
+		MetricRegistry:    metricregistry.New(),
 		SessionIDSupplier: func(ctx context.Context) string {
 			return uuid.New().String()
 		},
@@ -80,6 +83,13 @@ func WithEvalResultManager(m evalresult.Manager) Option {
 func WithRegistry(r registry.Registry) Option {
 	return func(o *Options) {
 		o.Registry = r
+	}
+}
+
+// WithMetricRegistry sets the metric runtime registry.
+func WithMetricRegistry(r metricregistry.Registry) Option {
+	return func(o *Options) {
+		o.MetricRegistry = r
 	}
 }
 

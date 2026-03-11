@@ -1087,6 +1087,90 @@ finalResponseCriterion := cfinalresponse.New(
 }
 ```
 
+##### MetricRegistry 扩展
+
+当评估指标来自本地文件或数据库时，`compare`、`tokenizer` 这类运行时对象无法直接写入 JSON。此时可以在配置文件中写入实现名称，再在代码里通过 `evaluation.WithMetricRegistry(...)` 注册并解析对应实现。
+
+这套机制适用于以下场景：
+
+- `text.compareName`
+- `json.compareName`
+- `toolTrajectory.compareName`
+- `finalResponse.compareName`
+- `rouge.tokenizerName`
+
+如果使用本地文件 Manager，可以像下面这样在指标文件中声明 `tokenizerName`：
+
+```json
+[
+  {
+    "metricName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "rouge": {
+          "rougeType": "rouge1",
+          "measure": "f1",
+          "threshold": {
+            "precision": 0.3,
+            "recall": 0.6,
+            "f1": 0.4
+          },
+          "tokenizerName": "jieba"
+        }
+      }
+    }
+  }
+]
+```
+
+再在代码中注册名为 `jieba` 的 tokenizer，并通过 `evaluation.WithMetricRegistry(...)` 注入：
+
+```go
+import (
+	"github.com/yanyiwu/gojieba"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
+)
+
+type jiebaTokenizer struct {
+	segmenter *gojieba.Jieba
+}
+
+func (t jiebaTokenizer) Tokenize(text string) []string {
+	segments := t.segmenter.Cut(text, true)
+	tokens := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if segment != "" {
+			tokens = append(tokens, segment)
+		}
+	}
+	return tokens
+}
+
+segmenter := gojieba.NewJieba()
+defer segmenter.Free()
+
+metricRegistry := metricregistry.New()
+if err := metricRegistry.RegisterRougeTokenizer("jieba", jiebaTokenizer{segmenter: segmenter}); err != nil {
+	log.Fatalf("register jieba tokenizer: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithMetricRegistry(metricRegistry),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+```
+
+运行评估时，框架会先从 `metricManager` 读取指标配置，再根据 `tokenizerName` 或 `compareName` 到 `MetricRegistry` 中解析真实实现。
+
+完整示例参见 [examples/evaluation/jieba](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/jieba)。
+
 ##### ToolTrajectoryCriterion
 	
 ToolTrajectoryCriterion 用于对比工具轨迹，按轮处理 Invocation，并在每一轮对比工具调用列表，结构定义如下。

@@ -1085,6 +1085,90 @@ Example metric JSON config:
 }
 ```
 
+##### MetricRegistry Extensions
+
+When evaluation metrics come from local files or a database, runtime objects such as `compare` and `tokenizer` cannot be written directly into JSON. In this case, you can write the implementation name in the config file, and then register and resolve the actual implementation in code through `evaluation.WithMetricRegistry(...)`.
+
+This mechanism applies to the following cases:
+
+- `text.compareName`
+- `json.compareName`
+- `toolTrajectory.compareName`
+- `finalResponse.compareName`
+- `rouge.tokenizerName`
+
+If you use a local file manager, you can declare `tokenizerName` in the metric file like this:
+
+```json
+[
+  {
+    "metricName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "rouge": {
+          "rougeType": "rouge1",
+          "measure": "f1",
+          "threshold": {
+            "precision": 0.3,
+            "recall": 0.6,
+            "f1": 0.4
+          },
+          "tokenizerName": "jieba"
+        }
+      }
+    }
+  }
+]
+```
+
+Then register a tokenizer named `jieba` in code and inject it through `evaluation.WithMetricRegistry(...)`:
+
+```go
+import (
+	"github.com/yanyiwu/gojieba"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
+)
+
+type jiebaTokenizer struct {
+	segmenter *gojieba.Jieba
+}
+
+func (t jiebaTokenizer) Tokenize(text string) []string {
+	segments := t.segmenter.Cut(text, true)
+	tokens := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if segment != "" {
+			tokens = append(tokens, segment)
+		}
+	}
+	return tokens
+}
+
+segmenter := gojieba.NewJieba()
+defer segmenter.Free()
+
+metricRegistry := metricregistry.New()
+if err := metricRegistry.RegisterRougeTokenizer("jieba", jiebaTokenizer{segmenter: segmenter}); err != nil {
+	log.Fatalf("register jieba tokenizer: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithMetricRegistry(metricRegistry),
+)
+if err != nil {
+	log.Fatalf("create evaluator: %v", err)
+}
+```
+
+During evaluation, the framework first reads metric configs from `metricManager`, and then resolves the actual implementation from `MetricRegistry` according to `tokenizerName` or `compareName`.
+
+For a complete example, see [examples/evaluation/jieba](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/jieba).
+
 ##### ToolTrajectoryCriterion
 
 ToolTrajectoryCriterion compares tool trajectories per turn by comparing tool call lists. The structure is defined as follows.

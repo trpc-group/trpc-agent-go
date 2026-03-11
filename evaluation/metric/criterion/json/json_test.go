@@ -36,6 +36,36 @@ func TestMapCriterionCompareOverride(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestJSONCriterionJSONRoundTrip(t *testing.T) {
+	tolerance := 1e-3
+	criterion := New(
+		WithIgnore(true),
+		WithIgnoreTree(map[string]any{"timestamp": true}),
+		WithMatchStrategy(JSONMatchStrategyExact),
+		WithNumberTolerance(tolerance),
+		WithCompareName("allow_delta"),
+	)
+	data, err := json.Marshal(criterion)
+	assert.NoError(t, err)
+	assert.JSONEq(t, `{
+		"ignore": true,
+		"ignoreTree": {"timestamp": true},
+		"matchStrategy": "exact",
+		"numberTolerance": 0.001,
+		"compareName": "allow_delta"
+	}`, string(data))
+
+	var decoded JSONCriterion
+	err = json.Unmarshal(data, &decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, criterion.Ignore, decoded.Ignore)
+	assert.Equal(t, criterion.MatchStrategy, decoded.MatchStrategy)
+	assert.Equal(t, criterion.CompareName, decoded.CompareName)
+	if assert.NotNil(t, decoded.NumberTolerance) {
+		assert.Equal(t, tolerance, *decoded.NumberTolerance)
+	}
+}
+
 func TestMapCriterionDeepEqualMismatch(t *testing.T) {
 	criterion := &JSONCriterion{}
 	ok, err := criterion.Match(map[string]any{"k": "v"}, map[string]any{"k": "diff"})

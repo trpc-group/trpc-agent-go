@@ -30,6 +30,7 @@ import (
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -283,6 +284,7 @@ func defaultTestOptions(ae *agentEvaluator) *options {
 		evalResultManager: ae.evalResultManager,
 		metricManager:     ae.metricManager,
 		registry:          ae.registry,
+		metricRegistry:    ae.metricRegistry,
 		evalService:       ae.evalService,
 		judgeRunner:       ae.judgeRunner,
 		numRuns:           ae.numRuns,
@@ -489,6 +491,7 @@ func TestAgentEvaluatorEvaluateAttachesInvocation(t *testing.T) {
 		metricManager:     metricinmemory.New(),
 		evalResultManager: evalresultinmemory.New(),
 		registry:          registry.New(),
+		metricRegistry:    metricregistry.New(),
 		numRuns:           1,
 	}
 
@@ -1120,6 +1123,44 @@ func TestAgentEvaluatorRunEvaluationInjectsJudgeRunnerIntoLLMJudgeMetrics(t *tes
 		return
 	}
 	assert.Equal(t, judgeRunner, gotMetric.Criterion.LLMJudge.JudgeRunnerOptions.Runner)
+}
+
+func TestAgentEvaluatorRunEvaluationPassesMetricRegistryToService(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{{}},
+	}
+	metricMgr := metricinmemory.New()
+	err := metricMgr.Add(ctx, appName, evalSetID, &metric.EvalMetric{MetricName: "metric"})
+	if !assert.NoError(t, err) {
+		return
+	}
+	customMetricRegistry := metricregistry.New()
+	res, err := New(
+		appName,
+		&stubRunner{},
+		WithEvaluationService(svc),
+		WithMetricManager(metricMgr),
+		WithMetricRegistry(customMetricRegistry),
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	ae, ok := res.(*agentEvaluator)
+	if !assert.True(t, ok) {
+		return
+	}
+
+	_, err = ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
+	if !assert.NoError(t, err) {
+		return
+	}
+	if !assert.Len(t, svc.evaluateOptions, 1) {
+		return
+	}
+	assert.Equal(t, customMetricRegistry, svc.evaluateOptions[0].MetricRegistry)
 }
 
 func TestAgentEvaluatorRunEvaluationNilRunResult(t *testing.T) {

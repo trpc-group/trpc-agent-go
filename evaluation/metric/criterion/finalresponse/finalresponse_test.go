@@ -25,11 +25,13 @@ import (
 // TestFinalResponseCriterion_JSONRoundTrip verifies JSON marshal and unmarshal behavior for the criterion.
 func TestFinalResponseCriterion_JSONRoundTrip(t *testing.T) {
 	c := &FinalResponseCriterion{
-		Text: &text.TextCriterion{MatchStrategy: text.TextMatchStrategyContains},
+		CompareName: "trim_equal",
+		Text:        &text.TextCriterion{MatchStrategy: text.TextMatchStrategyContains},
 		Rouge: &criterionrouge.RougeCriterion{
-			RougeType:  "rouge1",
-			Measure:    criterionrouge.RougeMeasureF1,
-			UseStemmer: true,
+			RougeType:     "rouge1",
+			Measure:       criterionrouge.RougeMeasureF1,
+			UseStemmer:    true,
+			TokenizerName: "whitespace",
 		},
 	}
 	data, err := json.Marshal(c)
@@ -38,12 +40,14 @@ func TestFinalResponseCriterion_JSONRoundTrip(t *testing.T) {
 	var decoded FinalResponseCriterion
 	err = json.Unmarshal(data, &decoded)
 	assert.NoError(t, err)
+	assert.Equal(t, "trim_equal", decoded.CompareName)
 	assert.NotNil(t, decoded.Text)
 	assert.Equal(t, text.TextMatchStrategyContains, decoded.Text.MatchStrategy)
 	assert.NotNil(t, decoded.Rouge)
 	assert.Equal(t, "rouge1", decoded.Rouge.RougeType)
 	assert.Equal(t, criterionrouge.RougeMeasureF1, decoded.Rouge.Measure)
 	assert.True(t, decoded.Rouge.UseStemmer)
+	assert.Equal(t, "whitespace", decoded.Rouge.TokenizerName)
 }
 
 // TestFinalResponseCriterion_EmptyCriteriaError verifies that missing sub-criteria returns an error.
@@ -175,12 +179,14 @@ func TestFinalResponseCriterion_NewAppliesOptions(t *testing.T) {
 		WithTextCriterion(textCriterion),
 		WithJSONCriterion(jsonCriterion),
 		WithRougeCriterion(rougeCriterion),
+		WithCompareName("always_pass"),
 		WithCompare(compare),
 	)
 
 	assert.Same(t, textCriterion, criterion.Text)
 	assert.Same(t, jsonCriterion, criterion.JSON)
 	assert.Same(t, rougeCriterion, criterion.Rouge)
+	assert.Equal(t, "always_pass", criterion.CompareName)
 
 	ok, err := criterion.Match(context.Background(), nil, nil)
 	assert.True(t, ok)

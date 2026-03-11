@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/internal/callback"
 	istatus "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/internal/inference"
 	evalstatus "trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -44,6 +45,7 @@ type local struct {
 	evalSetManager                    evalset.Manager
 	evalResultManager                 evalresult.Manager
 	registry                          registry.Registry
+	metricRegistry                    metricregistry.Registry
 	sessionIDSupplier                 func(ctx context.Context) string
 	callbacks                         *service.Callbacks
 	runOptions                        []agent.RunOption
@@ -75,6 +77,9 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 	if opts.Registry == nil {
 		return nil, errors.New("registry is nil")
 	}
+	if opts.MetricRegistry == nil {
+		return nil, errors.New("metric registry is nil")
+	}
 	if opts.SessionIDSupplier == nil {
 		return nil, errors.New("session id supplier is nil")
 	}
@@ -84,6 +89,7 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 		evalSetManager:                    opts.EvalSetManager,
 		evalResultManager:                 opts.EvalResultManager,
 		registry:                          opts.Registry,
+		metricRegistry:                    opts.MetricRegistry,
 		sessionIDSupplier:                 opts.SessionIDSupplier,
 		callbacks:                         opts.Callbacks,
 		runOptions:                        append([]agent.RunOption(nil), opts.RunOptions...),
@@ -218,6 +224,9 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt 
 		return nil, fmt.Errorf("run before evaluate set callbacks (app=%s, evalSetID=%s): %w",
 			req.AppName, req.EvalSetID, err)
 	}
+	if err := s.resolveMetricExtensions(req.EvaluateConfig, callOpts.MetricRegistry); err != nil {
+		return nil, fmt.Errorf("resolve metric extensions (app=%s, evalSetID=%s): %w", req.AppName, req.EvalSetID, err)
+	}
 	setStartTime := time.Now()
 	defer func() {
 		afterErr := s.runAfterEvaluateSetCallbacks(ctx, callOpts.Callbacks, req, runResult, err, setStartTime)
@@ -236,6 +245,24 @@ func (s *local) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt 
 		EvalCaseResults: evalCaseResults,
 	}
 	return runResult, nil
+}
+
+func (s *local) resolveMetricExtensions(
+	evaluateConfig *service.EvaluateConfig,
+	metricRegistry metricregistry.Registry,
+) error {
+	if evaluateConfig == nil {
+		return errors.New("evaluate config is nil")
+	}
+	if metricRegistry == nil {
+		return errors.New("metric registry is nil")
+	}
+	for idx, evalMetric := range evaluateConfig.EvalMetrics {
+		if err := metricRegistry.Resolve(evalMetric); err != nil {
+			return fmt.Errorf("resolve metric at index %d: %w", idx, err)
+		}
+	}
+	return nil
 }
 
 func (s *local) evaluateCaseResults(ctx context.Context, req *service.EvaluateRequest, opts *service.Options) ([]*evalresult.EvalCaseResult, error) {
