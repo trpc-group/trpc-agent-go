@@ -32,7 +32,7 @@ Usage:
 
 Options:
   --version <version>          Install a specific version, for example
-                               v0.1.0 or 0.1.0.
+                               v0.0.1 or 0.0.1.
   --profile <name>             Config profile:
                                stdin | stdin-sqlite | telegram
   --repo <owner/name>          GitHub repository. Default:

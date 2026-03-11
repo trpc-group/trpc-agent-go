@@ -25,7 +25,7 @@ Commands:
       Generate checksums and copy install/docs assets into dist/<version>.
 
 Options:
-  --version <version>      Release version, for example v0.1.0.
+  --version <version>      Release version, for example v0.0.1.
   --target <os/arch>       Target triple. Default: current host target.
   --dist-dir <dir>         Dist directory. Default: openclaw/dist
   --go-bin <path>          Go binary to use.

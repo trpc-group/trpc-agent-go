@@ -44,7 +44,7 @@ Install a pinned version:
 ```bash
 curl -fsSL \
   https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
-  | bash -s -- --version v0.1.0
+  | bash -s -- --version v0.0.1
 ```
 
 ## Install locations

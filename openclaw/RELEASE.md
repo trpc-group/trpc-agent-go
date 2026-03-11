@@ -26,8 +26,8 @@ Each release publishes:
 Create and push a tag:
 
 ```bash
-git tag openclaw-v0.1.0
-git push origin openclaw-v0.1.0
+git tag openclaw-v0.0.1
+git push origin openclaw-v0.0.1
 ```
 
 The workflow builds each target on a matching native GitHub-hosted
@@ -35,7 +35,7 @@ runner, assembles the shared assets, and creates or updates the GitHub
 release for that tag.
 
 You can also run the workflow manually with `workflow_dispatch` and a
-`version` input such as `v0.1.0`.
+`version` input such as `v0.0.1`.
 
 ## Local dry run
 
@@ -43,14 +43,14 @@ Build a host-native archive:
 
 ```bash
 cd openclaw
-bash ./release.sh build --version v0.1.0
+bash ./release.sh build --version v0.0.1
 ```
 
-Assemble the shared assets in `openclaw/dist/v0.1.0/`:
+Assemble the shared assets in `openclaw/dist/v0.0.1/`:
 
 ```bash
 cd openclaw
-bash ./release.sh assemble --version v0.1.0
+bash ./release.sh assemble --version v0.0.1
 ```
 
 `build` intentionally targets only the current host. Multi-architecture

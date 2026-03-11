@@ -42,7 +42,7 @@ curl -fsSL \
 ```bash
 curl -fsSL \
   https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
-  | bash -s -- --version v0.1.0
+  | bash -s -- --version v0.0.1
 ```
 
 ## 安装位置
