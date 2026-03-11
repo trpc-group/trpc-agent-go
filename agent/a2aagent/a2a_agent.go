@@ -161,8 +161,8 @@ func (r *A2AAgent) validateA2ARequestOptions(invocation *agent.Invocation) error
 func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	var err error
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, r.name))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, r.description, "", nil)
 	useStreaming := r.shouldUseStreaming(invocation)
+	itelemetry.TraceBeforeInvokeAgent(span, invocation, r.description, "", &model.GenerationConfig{Stream: useStreaming})
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err)
 
 	if r.a2aClient == nil {
