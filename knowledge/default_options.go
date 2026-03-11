@@ -79,6 +79,14 @@ func WithSources(sources []source.Source) Option {
 // For concurrent loading the callback may be invoked from multiple goroutines
 // concurrently; the order of events across different sources is not guaranteed.
 // Callers must synchronise any shared state accessed inside the callback.
+//
+// An event is always in exactly one of three states:
+//
+//	Done=false, Err=nil  — normal progress update for a source.
+//	Done=false, Err≠nil  — a source encountered an error.
+//	Done=true,  Err=nil  — the entire Load operation finished successfully.
+//
+// The combination Done=true with Err≠nil never occurs.
 type LoadProgressEvent struct {
 	// SourceNames lists all source names involved in the current Load call.
 	// The slice is determined once at the start of Load and is the same for

@@ -597,10 +597,12 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 				return
 			}
 			log.InfofContext(ctx, "Fetched %d document(s) from source %s", len(docs), sourceName)
-			if err := dk.processDocuments(ctx, docs, docPool, source, &globalProcessed, reporter); err != nil {
+			processed, err := dk.processDocuments(ctx, docs, docPool, source, &globalProcessed, reporter)
+			if err != nil {
 				reporter.Error(ctx, LoadProgressEvent{
-					SourceName:  sourceName,
-					SourceTotal: len(docs),
+					SourceName:      sourceName,
+					SourceProcessed: processed,
+					SourceTotal:     len(docs),
 				}, err)
 				errCh <- fmt.Errorf("failed to process documents for source %s: %w", sourceName, err)
 				return
@@ -636,7 +638,8 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 }
 
 // processDocuments embeds and stores all documents from a single source using
-// document-level parallelism.
+// document-level parallelism. It returns the number of documents successfully
+// processed and the first error encountered, if any.
 func (dk *BuiltinKnowledge) processDocuments(
 	ctx context.Context,
 	docs []*document.Document,
@@ -644,7 +647,7 @@ func (dk *BuiltinKnowledge) processDocuments(
 	src source.Source,
 	globalProcessed *atomic.Int64,
 	reporter *loadReporter,
-) error {
+) (int, error) {
 	var wgDoc sync.WaitGroup
 	errCh := make(chan error, len(docs))
 	var completedCount atomic.Int64
@@ -700,13 +703,14 @@ func (dk *BuiltinKnowledge) processDocuments(
 	wgDoc.Wait()
 	close(errCh)
 
+	processed := int(completedCount.Load())
 	// Check for any errors
 	for err := range errCh {
 		if err != nil {
-			return err
+			return processed, err
 		}
 	}
-	return nil
+	return processed, nil
 }
 
 // buildLoadConfig creates a load configuration with defaults and applies the given options.

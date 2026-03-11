@@ -2280,3 +2280,301 @@ func TestWithLoadProgressCallback_CoexistsWithShowProgress(t *testing.T) {
 		t.Error("expected callback to be invoked alongside ShowProgress, but it was not")
 	}
 }
+
+// TestWithLoadProgressCallback_NilCallback_Concurrent verifies that nil callback
+// does not panic when loading concurrently.
+func TestWithLoadProgressCallback_NilCallback_Concurrent(t *testing.T) {
+	kb := New(WithSources([]source.Source{
+		&mockSource{name: "src-a", docCount: 3},
+		&mockSource{name: "src-b", docCount: 3},
+	}))
+	kb.vectorStore = &stubVectorStore{}
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+	err := kb.Load(ctx,
+		WithSourceConcurrency(2),
+		WithDocConcurrency(2),
+		WithLoadProgressCallback(nil),
+	)
+	if err != nil {
+		t.Fatalf("Load with nil callback (concurrent) failed: %v", err)
+	}
+}
+
+// TestWithLoadProgressCallback_ConcurrentElapsedAndETA verifies that concurrent
+// progress events carry non-zero SourceElapsed and reasonable SourceETA values.
+func TestWithLoadProgressCallback_ConcurrentElapsedAndETA(t *testing.T) {
+	const docCount = 5
+
+	var mu sync.Mutex
+	var progressEvents []LoadProgressEvent
+
+	kb := New(WithSources([]source.Source{&mockSource{name: "src1", docCount: docCount}}))
+	kb.vectorStore = &stubVectorStore{}
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+	err := kb.Load(ctx,
+		WithSourceConcurrency(2),
+		WithDocConcurrency(2),
+		WithProgressStepSize(1),
+		WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+			mu.Lock()
+			if !ev.Done && ev.Err == nil {
+				progressEvents = append(progressEvents, ev)
+			}
+			mu.Unlock()
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(progressEvents) == 0 {
+		t.Fatal("expected at least one progress event, got none")
+	}
+
+	for _, ev := range progressEvents {
+		if ev.SourceElapsed < 0 {
+			t.Errorf("SourceElapsed should be non-negative, got %s", ev.SourceElapsed)
+		}
+		if ev.SourceETA < 0 {
+			t.Errorf("SourceETA should be non-negative, got %s", ev.SourceETA)
+		}
+	}
+
+	// Concurrent events may arrive in any order; find the maximum.
+	var maxProcessed int
+	for _, ev := range progressEvents {
+		if ev.SourceProcessed > maxProcessed {
+			maxProcessed = ev.SourceProcessed
+		}
+	}
+	if maxProcessed != docCount {
+		t.Errorf("max SourceProcessed: want %d, got %d", docCount, maxProcessed)
+	}
+}
+
+// failAfterNVectorStore fails the Add call after n successful invocations.
+type failAfterNVectorStore struct {
+	stubVectorStore
+	n     int
+	count atomic.Int64
+}
+
+func (f *failAfterNVectorStore) Add(ctx context.Context, doc *document.Document, emb []float64) error {
+	if int(f.count.Add(1)) > f.n {
+		return fmt.Errorf("simulated add failure")
+	}
+	return nil
+}
+
+// TestWithLoadProgressCallback_ConcurrentErrorHasSourceProcessed verifies that
+// the error event in concurrent loading populates SourceProcessed.
+func TestWithLoadProgressCallback_ConcurrentErrorHasSourceProcessed(t *testing.T) {
+	const docCount = 5
+	const failAfter = 2
+
+	var mu sync.Mutex
+	var errorEvents []LoadProgressEvent
+
+	kb := New(WithSources([]source.Source{&mockSource{name: "src1", docCount: docCount}}))
+	kb.vectorStore = &failAfterNVectorStore{n: failAfter}
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+	_ = kb.Load(ctx,
+		WithSourceConcurrency(1),
+		WithDocConcurrency(1),
+		WithProgressStepSize(1),
+		WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+			mu.Lock()
+			if ev.Err != nil {
+				errorEvents = append(errorEvents, ev)
+			}
+			mu.Unlock()
+		}),
+	)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(errorEvents) == 0 {
+		t.Fatal("expected at least one error event, got none")
+	}
+
+	for _, ev := range errorEvents {
+		if ev.SourceTotal != docCount {
+			t.Errorf("error event: want SourceTotal=%d, got %d", docCount, ev.SourceTotal)
+		}
+		if ev.SourceName != "src1" {
+			t.Errorf("error event: want SourceName=src1, got %s", ev.SourceName)
+		}
+	}
+}
+
+// TestWithLoadProgressCallback_SequentialErrorHasElapsed verifies that the error
+// event in sequential loading populates SourceElapsed.
+func TestWithLoadProgressCallback_SequentialErrorHasElapsed(t *testing.T) {
+	const docCount = 4
+	const failAfter = 2
+
+	var mu sync.Mutex
+	var errorEvents []LoadProgressEvent
+
+	kb := New(WithSources([]source.Source{&mockSource{name: "src1", docCount: docCount}}))
+	kb.vectorStore = &failAfterNVectorStore{n: failAfter}
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+	_ = kb.Load(ctx,
+		WithSourceConcurrency(1),
+		WithDocConcurrency(1),
+		WithProgressStepSize(1),
+		WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+			mu.Lock()
+			if ev.Err != nil {
+				errorEvents = append(errorEvents, ev)
+			}
+			mu.Unlock()
+		}),
+	)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(errorEvents) == 0 {
+		t.Fatal("expected at least one error event, got none")
+	}
+
+	ev := errorEvents[0]
+	if ev.SourceProcessed != failAfter {
+		t.Errorf("error event: want SourceProcessed=%d, got %d", failAfter, ev.SourceProcessed)
+	}
+	if ev.SourceElapsed <= 0 {
+		t.Errorf("error event: want positive SourceElapsed, got %s", ev.SourceElapsed)
+	}
+}
+
+// TestWithLoadProgressCallback_DoneEventState verifies the Done event is the
+// final event with Done=true and Err=nil.
+func TestWithLoadProgressCallback_DoneEventState(t *testing.T) {
+	const docCount = 3
+
+	var mu sync.Mutex
+	var events []LoadProgressEvent
+
+	kb := New(WithSources([]source.Source{
+		&mockSource{name: "src1", docCount: docCount},
+		&mockSource{name: "src2", docCount: docCount},
+	}))
+	kb.vectorStore = &stubVectorStore{}
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+	err := kb.Load(ctx,
+		WithSourceConcurrency(2),
+		WithDocConcurrency(2),
+		WithProgressStepSize(1),
+		WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+			mu.Lock()
+			events = append(events, ev)
+			mu.Unlock()
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(events) == 0 {
+		t.Fatal("expected at least one event, got none")
+	}
+
+	lastEv := events[len(events)-1]
+	if !lastEv.Done {
+		t.Error("last event should have Done=true")
+	}
+	if lastEv.Err != nil {
+		t.Errorf("Done event should have nil Err, got %v", lastEv.Err)
+	}
+
+	// Verify no event has Done=true AND Err!=nil.
+	for i, ev := range events {
+		if ev.Done && ev.Err != nil {
+			t.Errorf("event[%d]: Done=true with Err=%v, this combination should never occur", i, ev.Err)
+		}
+	}
+
+	// Verify Done appears exactly once.
+	doneCount := 0
+	for _, ev := range events {
+		if ev.Done {
+			doneCount++
+		}
+	}
+	if doneCount != 1 {
+		t.Errorf("expected exactly 1 Done event, got %d", doneCount)
+	}
+}
+
+// TestWithLoadProgressCallback_SequentialTotalField verifies that the Total
+// field (global processed count) is populated in sequential progress events.
+func TestWithLoadProgressCallback_SequentialTotalField(t *testing.T) {
+	const docCount = 4
+
+	var mu sync.Mutex
+	var events []LoadProgressEvent
+
+	kb := New(WithSources([]source.Source{
+		&mockSource{name: "src1", docCount: docCount},
+		&mockSource{name: "src2", docCount: docCount},
+	}))
+	kb.vectorStore = &stubVectorStore{}
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+	err := kb.Load(ctx,
+		WithSourceConcurrency(1),
+		WithDocConcurrency(1),
+		WithProgressStepSize(1),
+		WithLoadProgressCallback(func(_ context.Context, ev LoadProgressEvent) {
+			mu.Lock()
+			if !ev.Done && ev.Err == nil {
+				events = append(events, ev)
+			}
+			mu.Unlock()
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(events) == 0 {
+		t.Fatal("expected at least one progress event, got none")
+	}
+
+	// Total should be monotonically non-decreasing.
+	var prevTotal int
+	for _, ev := range events {
+		if ev.Total < prevTotal {
+			t.Errorf("Total decreased from %d to %d", prevTotal, ev.Total)
+		}
+		prevTotal = ev.Total
+	}
+
+	// The last progress event should have Total == 2*docCount.
+	last := events[len(events)-1]
+	if last.Total != 2*docCount {
+		t.Errorf("last event: want Total=%d, got %d", 2*docCount, last.Total)
+	}
+}
