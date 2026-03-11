@@ -225,6 +225,30 @@ type managedRunnerStub struct {
 	status   runner.RunStatus
 }
 
+type nonFlushingRecorder struct {
+	header http.Header
+	code   int
+	body   bytes.Buffer
+}
+
+func (r *nonFlushingRecorder) Header() http.Header {
+	if r.header == nil {
+		r.header = make(http.Header)
+	}
+	return r.header
+}
+
+func (r *nonFlushingRecorder) WriteHeader(code int) {
+	r.code = code
+}
+
+func (r *nonFlushingRecorder) Write(b []byte) (int, error) {
+	if r.code == 0 {
+		r.code = http.StatusOK
+	}
+	return r.body.Write(b)
+}
+
 func (m *managedRunnerStub) Cancel(requestID string) bool {
 	m.cancelMu.Lock()
 	defer m.cancelMu.Unlock()
@@ -2156,6 +2180,60 @@ func TestServer_StreamMessage_RunError(t *testing.T) {
 	require.Equal(t, "boom", events[2].Error.Message)
 }
 
+func TestServer_StreamMessage_EarlyResponses(t *testing.T) {
+	t.Parallel()
+
+	var nilSrv *Server
+	stream, apiErr, status := nilSrv.StreamMessage(
+		nil,
+		gwproto.MessageRequest{},
+	)
+	require.Nil(t, stream)
+	require.NotNil(t, apiErr)
+	require.Equal(t, http.StatusInternalServerError, status)
+	require.Equal(t, "nil server", apiErr.Message)
+
+	srv, err := New(
+		&staticRunner{},
+		WithRequireMentionInThreads(true),
+		WithMentionPatterns("@bot"),
+	)
+	require.NoError(t, err)
+
+	stream, apiErr, status = srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From:   "u1",
+			Thread: "thread-1",
+			Text:   "hello",
+		},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(
+		t,
+		[]gwproto.StreamEvent{
+			{
+				Type:    gwproto.StreamEventTypeRunIgnored,
+				Ignored: true,
+			},
+			{
+				Type: gwproto.StreamEventTypeRunCompleted,
+			},
+		},
+		collectGatewayStreamEvents(t, stream),
+	)
+
+	stream, apiErr, status = srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{Text: "hello"},
+	)
+	require.Nil(t, stream)
+	require.NotNil(t, apiErr)
+	require.Equal(t, http.StatusBadRequest, status)
+	require.Contains(t, apiErr.Message, "from")
+}
+
 func TestServer_StreamMessage_ProgressStages(t *testing.T) {
 	t.Parallel()
 
@@ -2559,6 +2637,85 @@ func TestServer_HandleMessagesStream_Success(t *testing.T) {
 	require.Contains(t, rr.Body.String(), `"reply":"ok"`)
 }
 
+func TestServer_HandleMessagesStream_ErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(
+		&staticRunner{},
+		WithAllowUsers("telegram:u1"),
+	)
+	require.NoError(t, err)
+
+	methodRR := httptest.NewRecorder()
+	methodReq := httptest.NewRequest(
+		http.MethodGet,
+		srv.MessagesStreamPath(),
+		nil,
+	)
+	srv.Handler().ServeHTTP(methodRR, methodReq)
+	require.Equal(t, http.StatusMethodNotAllowed, methodRR.Code)
+
+	invalidRR := httptest.NewRecorder()
+	invalidReq := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesStreamPath(),
+		bytes.NewBufferString("{"),
+	)
+	srv.Handler().ServeHTTP(invalidRR, invalidReq)
+	require.Equal(t, http.StatusBadRequest, invalidRR.Code)
+	require.Contains(t, invalidRR.Body.String(), errTypeInvalidRequest)
+
+	noFlush := &nonFlushingRecorder{}
+	srv.handleMessagesStream(
+		noFlush,
+		httptest.NewRequest(
+			http.MethodPost,
+			srv.MessagesStreamPath(),
+			bytes.NewBufferString(`{"from":"u1","text":"hi"}`),
+		),
+	)
+	require.Equal(t, http.StatusInternalServerError, noFlush.code)
+	require.Contains(t, noFlush.body.String(), "streaming not supported")
+
+	authRR := httptest.NewRecorder()
+	authReq := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesStreamPath(),
+		bytes.NewBufferString(
+			`{"from":"u1","user_id":"telegram:u2","text":"hi"}`,
+		),
+	)
+	srv.Handler().ServeHTTP(authRR, authReq)
+	require.Equal(t, http.StatusForbidden, authRR.Code)
+	require.Contains(t, authRR.Body.String(), errTypeUnauthorized)
+}
+
+func TestServer_StreamMessage_EmptyReplyFallback(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{})
+	require.NoError(t, err)
+
+	stream, apiErr, status := srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From: "u1",
+			Text: "hello",
+		},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 4)
+	require.Equal(t, emptyReplyFallbackText, events[2].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[3].Type,
+	)
+}
+
 func TestLaneLocker_ReclaimsEntries(t *testing.T) {
 	t.Parallel()
 
@@ -2660,6 +2817,23 @@ func TestNewOptions_DerivesStreamPathFromMessagesPath(t *testing.T) {
 		"/custom/messages"+gwproto.MessagesStreamSuffix,
 		o.streamPath,
 	)
+}
+
+func TestNewOptions_ExplicitStreamAndStores(t *testing.T) {
+	t.Parallel()
+
+	store := &persona.Store{}
+	transcriber := &stubAudioTranscriber{}
+
+	o := newOptions(
+		WithMessagesStreamPath(" /custom/stream "),
+		WithPersonaStore(store),
+		WithAudioTranscriber(transcriber),
+	)
+
+	require.Equal(t, " /custom/stream ", o.streamPath)
+	require.Same(t, store, o.personaStore)
+	require.Same(t, transcriber, o.audioTranscriber)
 }
 
 func TestWithMentionPatterns_EmptyResets(t *testing.T) {

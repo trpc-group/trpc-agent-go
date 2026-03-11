@@ -45,3 +45,26 @@ func TestSourcesForProfiles_NormalizesInstallMetadata(t *testing.T) {
 	require.NotEmpty(t, sources[0].Install)
 	require.Equal(t, "pypdf", sources[0].Requires.Python[0].Module)
 }
+
+func TestCatalogHelpers(t *testing.T) {
+	t.Parallel()
+
+	profiles := Profiles()
+	require.NotEmpty(t, profiles)
+	require.Equal(t, DefaultProfiles(), []string{ProfileCommonFileTools})
+	require.Equal(t, profiles[0].Name, ProfileAudio)
+	require.Contains(t, ProfileNames(), ProfileCommonFileTools)
+
+	_, err := ResolveProfiles([]string{"unknown"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown dependency profile")
+
+	merged := MergeSources(
+		Source{Name: " b "},
+		Source{Name: "a"},
+		Source{},
+	)
+	require.Len(t, merged, 2)
+	require.Equal(t, "a", merged[0].Name)
+	require.Equal(t, "b", merged[1].Name)
+}

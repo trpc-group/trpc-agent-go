@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 )
 
 func TestParseFrontMatter_OpenClawMetadata(t *testing.T) {
@@ -1054,6 +1056,38 @@ metadata:
 	require.Equal(t, "doc", sources[0].Name)
 	require.Len(t, sources[0].Requires.Python, 1)
 	require.Equal(t, "pypdf", sources[0].Requires.Python[0].Module)
+}
+
+func TestRepository_DependencySources_UnknownSkill(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "doc", `---
+name: doc
+description: doc
+---
+
+# doc
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	_, err = repo.DependencySources([]string{"missing"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown skill")
+}
+
+func TestRepository_HelperFunctions(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, containsSource([]deps.Source{{Name: "a"}}, "a"))
+	require.False(t, containsSource([]deps.Source{{Name: "a"}}, "b"))
+	require.Equal(
+		t,
+		[]string{"b", "a"},
+		normalizeSkillNames([]string{" b ", "", "a", "b"}),
+	)
 }
 
 func TestBundledSkills_ParseFrontMatterAndMetadata(t *testing.T) {
