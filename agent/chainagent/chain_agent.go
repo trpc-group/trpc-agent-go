@@ -85,7 +85,10 @@ func (a *ChainAgent) executeChainRun(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
+	// Setup invocation before tracing so span name and telemetry attributes
+	// share the same Invocation.AgentName source.
+	a.setupInvocation(invocation)
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName))
 	stream := iagent.ResolveInvokeAgentStream(invocation, nil)
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, "chain-agent", "", &model.GenerationConfig{Stream: stream})
 	var trackerErr error
@@ -94,8 +97,6 @@ func (a *ChainAgent) executeChainRun(
 		tracker.RecordMetrics()()
 		span.End()
 	}()
-	// Setup invocation.
-	a.setupInvocation(invocation)
 
 	// Handle before agent callbacks.
 	var shouldReturn bool

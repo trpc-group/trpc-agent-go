@@ -12,6 +12,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -20,6 +21,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -28,6 +31,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -2003,6 +2007,14 @@ func (p *testSubAgentProvider) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+type aliasSubAgentProvider struct {
+	sub agent.Agent
+}
+
+func (p *aliasSubAgentProvider) FindSubAgent(string) agent.Agent {
+	return p.sub
+}
+
 func (m *streamRecordingModel) GenerateContent(
 	ctx context.Context,
 	req *model.Request,
@@ -2176,6 +2188,80 @@ func TestAgentNodeFunc_OverridesStreamFromRunOptions(t *testing.T) {
 	nodeFn := NewAgentNodeFunc(testAgentName)
 	_, err := nodeFn(ctx, state)
 	require.NoError(t, err)
+}
+
+func TestAgentNodeFunc_SpanAttributesMatchInvocationAgentName(t *testing.T) {
+	originalTracer := trace.Tracer
+	defer func() {
+		trace.Tracer = originalTracer
+	}()
+
+	spanRecorder := tracetest.NewSpanRecorder()
+	tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
+	defer func() {
+		_ = tp.Shutdown(context.Background())
+	}()
+	trace.Tracer = tp.Tracer("test")
+
+	const (
+		testInvocationID  = "inv-1"
+		testNodeID        = "node-1"
+		requestedAgent    = "agent-alias"
+		resolvedAgentName = "resolved-agent"
+	)
+
+	target := &dummyAgent{name: resolvedAgentName}
+	provider := &aliasSubAgentProvider{sub: target}
+
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationID(testInvocationID),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parentInv)
+
+	eventCh := make(chan *event.Event, 8)
+	exec := &ExecutionContext{
+		InvocationID: testInvocationID,
+		EventChan:    eventCh,
+	}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: testNodeID,
+		StateKeyParentAgent:   provider,
+		StateKeyUserInput:     "hi",
+	}
+
+	nodeFn := NewAgentNodeFunc(requestedAgent)
+	_, err := nodeFn(ctx, state)
+	require.NoError(t, err)
+
+	spans := spanRecorder.Ended()
+	require.NotEmpty(t, spans)
+
+	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, resolvedAgentName)
+	unexpectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, requestedAgent)
+
+	var agentSpan tracesdk.ReadOnlySpan
+	for _, span := range spans {
+		require.NotEqual(t, unexpectedSpanName, span.Name(), "span name should not use unresolved lookup name")
+		if span.Name() == expectedSpanName {
+			agentSpan = span
+		}
+	}
+	require.NotNil(t, agentSpan, "expected invoke_agent span to use resolved invocation agent name")
+
+	var gotAgentName string
+	var gotAgentID string
+	for _, attr := range agentSpan.Attributes() {
+		switch string(attr.Key) {
+		case semconvtrace.KeyGenAIAgentName:
+			gotAgentName = attr.Value.AsString()
+		case semconvtrace.KeyGenAIAgentID:
+			gotAgentID = attr.Value.AsString()
+		}
+	}
+
+	require.Equal(t, resolvedAgentName, gotAgentName)
+	require.Equal(t, resolvedAgentName, gotAgentID)
 }
 
 func TestLLMRunner_OneShotMessagesByNode_TakesPrecedence(t *testing.T) {

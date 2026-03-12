@@ -268,6 +268,9 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	if !hasAttr(s.attrs, semconvtrace.KeyGenAIAgentName, "alpha") {
 		t.Fatalf("missing agent name")
 	}
+	if !hasAttr(s.attrs, semconvtrace.KeyGenAIAgentID, "alpha") {
+		t.Fatalf("missing agent id")
+	}
 	if !hasAttr(s.attrs, semconvtrace.KeyGenAIRequestIsStream, true) {
 		t.Fatalf("missing request stream attribute")
 	}
@@ -581,9 +584,23 @@ func TestTraceBeforeInvokeAgent_NilPaths(t *testing.T) {
 			TraceBeforeInvokeAgent(span, tt.invoke, "desc", "instructions", tt.genConfig)
 
 			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "test-agent"))
+			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentID, "test-agent"))
 			require.True(t, hasAttr(span.attrs, semconvtrace.KeyInvocationID, "inv1"))
 		})
 	}
+}
+
+func TestTraceBeforeInvokeAgent_UsesInvocationAgentNameOnly(t *testing.T) {
+	span := newRecordingSpan()
+	inv := &agent.Invocation{
+		InvocationID: "inv-fallback",
+		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+	}
+
+	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
+
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, ""))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentID, ""))
 }
 
 func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
@@ -1008,6 +1025,7 @@ func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
 	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
 
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "test-agent"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentID, "test-agent"))
 }
 
 func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {

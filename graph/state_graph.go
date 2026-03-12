@@ -2191,12 +2191,6 @@ func finalizeAgentNodeOutput(
 func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	cfg := agentNodeConfigFromOptions(opts...)
 	return func(ctx context.Context, state State) (a any, err error) {
-		ctx, span := trace.Tracer.Start(
-			ctx,
-			fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName),
-		)
-		defer finalizeInvokeAgentSpan(span, &err)
-
 		// Extract execution context for event emission.
 		invocationID, _, _, _, eventChan := extractExecutionContext(state)
 
@@ -2227,6 +2221,12 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			cfg.scope,
 			cfg.userInputKey,
 		)
+
+		ctx, span := trace.Tracer.Start(
+			ctx,
+			fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName),
+		)
+		defer finalizeInvokeAgentSpan(span, &err)
 
 		itelemetry.TraceBeforeInvokeAgent(
 			span,

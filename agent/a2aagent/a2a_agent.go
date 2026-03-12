@@ -157,10 +157,19 @@ func (r *A2AAgent) validateA2ARequestOptions(invocation *agent.Invocation) error
 	return nil
 }
 
+func (r *A2AAgent) setupInvocation(invocation *agent.Invocation) {
+	if invocation == nil {
+		return
+	}
+	invocation.Agent = r
+	invocation.AgentName = r.name
+}
+
 // Run implements the Agent interface
 func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	var err error
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, r.name))
+	r.setupInvocation(invocation)
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName))
 	useStreaming := r.shouldUseStreaming(invocation)
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, r.description, "", &model.GenerationConfig{Stream: useStreaming})
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err)

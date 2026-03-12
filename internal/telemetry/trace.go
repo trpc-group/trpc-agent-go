@@ -217,26 +217,43 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 	)
 }
 
+func resolveInvocationAgentIdentity(invoke *agent.Invocation) (string, string) {
+	if invoke == nil {
+		return "", ""
+	}
+	// Invocation does not carry a canonical agent ID today, so use
+	// Invocation.AgentName as the fallback for gen_ai.agent.id.
+	return invoke.AgentName, invoke.AgentName
+}
+
 // TraceBeforeInvokeAgent traces the before invocation of an agent.
 func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDescription, instructions string, genConfig *model.GenerationConfig) {
 	if !span.IsRecording() {
 		return
 	}
+	agentName, agentID := resolveInvocationAgentIdentity(invoke)
+	invocationID := ""
 	if invoke != nil && len(invoke.RunOptions.SpanAttributes) > 0 {
 		span.SetAttributes(invoke.RunOptions.SpanAttributes...)
 	}
-	if bts, err := json.Marshal([]model.Message{invoke.Message}); err == nil {
-		span.SetAttributes(
-			attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
-		)
-	} else {
-		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
+	if invoke != nil {
+		invocationID = invoke.InvocationID
+	}
+	if invoke != nil {
+		if bts, err := json.Marshal([]model.Message{invoke.Message}); err == nil {
+			span.SetAttributes(
+				attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
+			)
+		} else {
+			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
+		}
 	}
 	span.SetAttributes(
 		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
 		attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
-		attribute.String(semconvtrace.KeyGenAIAgentName, invoke.AgentName),
-		attribute.String(semconvtrace.KeyInvocationID, invoke.InvocationID),
+		attribute.String(semconvtrace.KeyGenAIAgentName, agentName),
+		attribute.String(semconvtrace.KeyGenAIAgentID, agentID),
+		attribute.String(semconvtrace.KeyInvocationID, invocationID),
 		attribute.String(semconvtrace.KeyGenAIAgentDescription, agentDescription),
 		attribute.String(semconvtrace.KeyGenAISystemInstructions, instructions),
 	)
@@ -265,7 +282,7 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 		}
 	}
 
-	if invoke.Session != nil {
+	if invoke != nil && invoke.Session != nil {
 		span.SetAttributes(
 			attribute.String(semconvtrace.KeyRunnerUserID, invoke.Session.UserID),
 			attribute.String(semconvtrace.KeyGenAIConversationID, invoke.Session.ID),
