@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
@@ -120,10 +121,11 @@ type ChatMetricsTracker struct {
 	timingInfo *model.TimingInfo
 
 	// Configuration
-	invocation *agent.Invocation
-	llmRequest *model.Request
-	taskType   *string
-	err        *error // pointer to capture final error
+	invocation       *agent.Invocation
+	sourceInvocation *agent.Invocation
+	llmRequest       *model.Request
+	taskType         *string
+	err              *error // pointer to capture final error
 }
 
 // NewChatMetricsTracker creates a new telemetry tracker.
@@ -138,14 +140,37 @@ func NewChatMetricsTracker(
 	err *error,
 ) *ChatMetricsTracker {
 	return &ChatMetricsTracker{
-		ctx:          ctx,
-		start:        time.Now(),
-		isFirstToken: true,
-		invocation:   invocation,
-		llmRequest:   llmRequest,
-		taskType:     taskType,
-		err:          err,
-		timingInfo:   timingInfo,
+		ctx:              ctx,
+		start:            time.Now(),
+		isFirstToken:     true,
+		invocation:       metricsInvocationView(invocation),
+		sourceInvocation: invocation,
+		llmRequest:       llmRequest,
+		taskType:         taskType,
+		err:              err,
+		timingInfo:       timingInfo,
+	}
+}
+
+func metricsSessionView(sess *session.Session) *session.Session {
+	if sess == nil {
+		return nil
+	}
+	return &session.Session{
+		ID:      sess.ID,
+		UserID:  sess.UserID,
+		AppName: sess.AppName,
+	}
+}
+
+func metricsInvocationView(invocation *agent.Invocation) *agent.Invocation {
+	if invocation == nil {
+		return nil
+	}
+	return &agent.Invocation{
+		AgentName: invocation.AgentName,
+		Model:     invocation.Model,
+		Session:   metricsSessionView(invocation.Session),
 	}
 }
 
@@ -225,6 +250,102 @@ func (t *ChatMetricsTracker) FirstTokenTimeDuration() time.Duration {
 // GetTimingInfo returns the current TimingInfo for attaching to responses.
 func (t *ChatMetricsTracker) GetTimingInfo() *model.TimingInfo {
 	return t.timingInfo
+}
+
+// SetInvocationState refreshes invocation-scoped tracking state for later chunks.
+func (t *ChatMetricsTracker) SetInvocationState(
+	invocation *agent.Invocation,
+	timingInfo *model.TimingInfo,
+) {
+	if t == nil {
+		return
+	}
+	t.invocation = mergeInvocationForMetrics(t.invocation, invocation)
+	t.sourceInvocation = invocation
+	if timingInfo == nil {
+		return
+	}
+	if timingInfo == t.timingInfo {
+		return
+	}
+	if timingInfo.FirstTokenDuration == 0 &&
+		!t.isFirstToken &&
+		t.firstTokenTimeDuration != 0 {
+		timingInfo.FirstTokenDuration = t.firstTokenTimeDuration
+	}
+	if timingInfo.ReasoningDuration == 0 &&
+		t.timingInfo != nil &&
+		t.timingInfo.ReasoningDuration != 0 {
+		timingInfo.ReasoningDuration = t.timingInfo.ReasoningDuration
+	}
+	t.timingInfo = timingInfo
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func sameMetricsSessionView(previous *session.Session, current *session.Session) bool {
+	if previous == nil || current == nil {
+		return previous == current
+	}
+	return previous.ID == current.ID &&
+		previous.UserID == current.UserID &&
+		previous.AppName == current.AppName
+}
+
+func mergeMetricsSessionView(
+	previous *session.Session,
+	current *session.Session,
+) *session.Session {
+	if previous == nil {
+		return metricsSessionView(current)
+	}
+	if current == nil {
+		return previous
+	}
+	sessionView := &session.Session{
+		ID:      firstNonEmptyString(previous.ID, current.ID),
+		UserID:  firstNonEmptyString(previous.UserID, current.UserID),
+		AppName: firstNonEmptyString(previous.AppName, current.AppName),
+	}
+	if sameMetricsSessionView(previous, sessionView) {
+		return previous
+	}
+	return sessionView
+}
+
+func mergeInvocationForMetrics(
+	previous *agent.Invocation,
+	current *agent.Invocation,
+) *agent.Invocation {
+	if previous == nil {
+		return metricsInvocationView(current)
+	}
+	if current == nil {
+		return previous
+	}
+	agentName := firstNonEmptyString(previous.AgentName, current.AgentName)
+	modelValue := previous.Model
+	if modelValue == nil {
+		modelValue = current.Model
+	}
+	sessionView := mergeMetricsSessionView(previous.Session, current.Session)
+	if agentName == previous.AgentName &&
+		modelValue == previous.Model &&
+		sameMetricsSessionView(previous.Session, sessionView) {
+		return previous
+	}
+	return &agent.Invocation{
+		AgentName: agentName,
+		Model:     modelValue,
+		Session:   sessionView,
+	}
 }
 
 func chatMetricsEnabled() bool {

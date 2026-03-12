@@ -12,16 +12,27 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	semconvmetrics "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -61,6 +72,199 @@ func (s *simpleToolSet) Name() string { return s.name }
 // stubAgent is a minimal agent implementation used for subgraph tests.
 type stubAgent struct {
 	name string
+}
+
+type iterErrorModel struct {
+	err error
+}
+
+func (m *iterErrorModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (m *iterErrorModel) GenerateContentIter(ctx context.Context, req *model.Request) (model.Seq[*model.Response], error) {
+	return nil, m.err
+}
+
+func (m *iterErrorModel) Info() model.Info {
+	return model.Info{Name: "iter-error-model"}
+}
+
+type nilIterModel struct{}
+
+func (m *nilIterModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (m *nilIterModel) GenerateContentIter(ctx context.Context, req *model.Request) (model.Seq[*model.Response], error) {
+	return nil, nil
+}
+
+func (m *nilIterModel) Info() model.Info {
+	return model.Info{Name: "nil-iter-model"}
+}
+
+type noResponseModel struct{}
+
+func (m *noResponseModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (m *noResponseModel) Info() model.Info {
+	return model.Info{Name: "no-response-model"}
+}
+
+type multiResponseModel struct {
+	responses []*model.Response
+	delay     time.Duration
+}
+
+func (m *multiResponseModel) GenerateContent(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, len(m.responses))
+	for _, response := range m.responses {
+		if m.delay > 0 {
+			time.Sleep(m.delay)
+		}
+		ch <- response
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *multiResponseModel) Info() model.Info {
+	return model.Info{Name: "multi-response-model"}
+}
+
+// graphRecordingSpan captures trace attributes for assertions.
+type graphRecordingSpan struct {
+	oteltrace.Span
+	attrs []attribute.KeyValue
+}
+
+func newGraphRecordingSpan() *graphRecordingSpan {
+	_, span := oteltrace.NewNoopTracerProvider().Tracer("test").Start(context.Background(), "graph-test")
+	return &graphRecordingSpan{Span: span}
+}
+
+func (s *graphRecordingSpan) IsRecording() bool {
+	return true
+}
+
+func (s *graphRecordingSpan) SetAttributes(kv ...attribute.KeyValue) {
+	s.attrs = append(s.attrs, kv...)
+	s.Span.SetAttributes(kv...)
+}
+
+func graphHasAttr(attrs []attribute.KeyValue, key string, want any) bool {
+	for _, kv := range attrs {
+		if string(kv.Key) == key && kv.Value.AsInterface() == want {
+			return true
+		}
+	}
+	return false
+}
+
+func graphHasNonEmptyStringAttr(attrs []attribute.KeyValue, key string) bool {
+	for _, kv := range attrs {
+		if string(kv.Key) == key && kv.Value.AsString() != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// collectModelExecutionPhases drains model execution events from the channel.
+func collectModelExecutionPhases(ch <-chan *event.Event) []ModelExecutionPhase {
+	var phases []ModelExecutionPhase
+	for {
+		select {
+		case e, ok := <-ch:
+			if !ok {
+				return phases
+			}
+			if e == nil || e.StateDelta == nil {
+				continue
+			}
+			b, ok := e.StateDelta[MetadataKeyModel]
+			if !ok {
+				continue
+			}
+			var meta ModelExecutionMetadata
+			_ = json.Unmarshal(b, &meta)
+			phases = append(phases, meta.Phase)
+		default:
+			return phases
+		}
+	}
+}
+
+func collectModelExecutionEvents(ch <-chan *event.Event) []*event.Event {
+	var events []*event.Event
+	for {
+		select {
+		case e, ok := <-ch:
+			if !ok {
+				return events
+			}
+			if e == nil || e.StateDelta == nil {
+				continue
+			}
+			if _, ok := e.StateDelta[MetadataKeyModel]; !ok {
+				continue
+			}
+			events = append(events, e)
+		default:
+			return events
+		}
+	}
+}
+
+func requireModelExecutionEventMetadata(
+	t *testing.T,
+	events []*event.Event,
+	invocationID string,
+	parentInvocationID string,
+	branch string,
+	filterKey string,
+	requestID string,
+) {
+	t.Helper()
+	require.Len(t, events, 2)
+	for _, evt := range events {
+		var meta ModelExecutionMetadata
+		require.NoError(t, json.Unmarshal(evt.StateDelta[MetadataKeyModel], &meta))
+		require.Equal(t, invocationID, evt.InvocationID)
+		require.Equal(t, invocationID, meta.InvocationID)
+		require.Equal(t, parentInvocationID, evt.ParentInvocationID)
+		require.Equal(t, branch, evt.Branch)
+		require.Equal(t, filterKey, evt.FilterKey)
+		require.Equal(t, requestID, evt.RequestID)
+	}
+}
+
+func collectModelExecutionPhasesFromEvents(events []*event.Event) []ModelExecutionPhase {
+	phases := make([]ModelExecutionPhase, 0, len(events))
+	for _, evt := range events {
+		if evt == nil || evt.StateDelta == nil {
+			continue
+		}
+		b, ok := evt.StateDelta[MetadataKeyModel]
+		if !ok {
+			continue
+		}
+		var meta ModelExecutionMetadata
+		if err := json.Unmarshal(b, &meta); err != nil {
+			continue
+		}
+		phases = append(phases, meta.Phase)
+	}
+	return phases
 }
 
 func (a *stubAgent) Run(
@@ -180,6 +384,2300 @@ func TestAddLLMNode_GenerationConfigOption(t *testing.T) {
 	}
 	require.Equal(t, cfg.Stop, got.Stop)
 
+}
+
+func TestRunModelStream_IterModelError(t *testing.T) {
+	iterErr := errors.New("iter boom")
+
+	_, _, err := runModelStream(
+		context.Background(),
+		nil,
+		nil,
+		&iterErrorModel{err: iterErr},
+		&model.Request{},
+		nil,
+	)
+	require.ErrorIs(t, err, iterErr)
+	require.ErrorContains(t, err, "failed to generate content")
+}
+
+func TestRunModel_NilIterSequence(t *testing.T) {
+	ctx, ch, err := runModel(
+		context.Background(),
+		nil,
+		&nilIterModel{},
+		&model.Request{},
+	)
+	require.ErrorContains(t, err, errMsgNoModelResponse)
+	require.Nil(t, ch)
+	require.NotNil(t, ctx)
+}
+
+func TestExecuteModelAndProcessResponses_NilIterSequence(t *testing.T) {
+	resp, err := executeModelAndProcessResponses(
+		context.Background(),
+		modelExecutionConfig{
+			LLMModel:     &nilIterModel{},
+			Request:      &model.Request{},
+			InvocationID: "inv-nil-iter",
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.Nil(t, resp)
+	require.ErrorContains(t, err, errMsgNoModelResponse)
+}
+
+func TestEmitFastModelResponseEvent_DisablesPartialMetadata(t *testing.T) {
+	t.Run("partial response omits generated ID and timestamp", func(t *testing.T) {
+		ch := make(chan *event.Event, 1)
+		respTimestamp := time.Unix(1, 0).UTC()
+		resp := &model.Response{
+			IsPartial: true,
+			Timestamp: respTimestamp,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("partial")},
+			},
+		}
+
+		ev, err := emitFastModelResponseEvent(
+			context.Background(),
+			agent.NewInvocation(agent.WithInvocationID("inv-fast")),
+			modelExecutionConfig{
+				InvocationID: "inv-fast",
+				EventChan:    ch,
+				Span:         noop.Span{},
+			},
+			resp,
+			"llm",
+			true,
+			true,
+			nil,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, ev)
+		require.Empty(t, ev.ID)
+		require.Equal(t, respTimestamp, ev.Timestamp)
+		require.Same(t, ev, <-ch)
+	})
+
+	t.Run("response error is surfaced", func(t *testing.T) {
+		resp := &model.Response{
+			Error: &model.ResponseError{Message: "api boom"},
+		}
+
+		ev, err := emitFastModelResponseEvent(
+			context.Background(),
+			agent.NewInvocation(agent.WithInvocationID("inv-fast-err")),
+			modelExecutionConfig{
+				InvocationID: "inv-fast-err",
+				Span:         noop.Span{},
+			},
+			resp,
+			"llm",
+			false,
+			false,
+			&event.Event{},
+		)
+		require.ErrorContains(t, err, "model API error: api boom")
+		require.NotNil(t, ev)
+		require.Same(t, resp, ev.Response)
+	})
+
+	t.Run("partial response uses event creation time by default", func(t *testing.T) {
+		ch := make(chan *event.Event, 1)
+		respTimestamp := time.Unix(1, 0).UTC()
+		resp := &model.Response{
+			IsPartial: true,
+			Timestamp: respTimestamp,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("partial")},
+			},
+		}
+		ev, err := emitFastModelResponseEvent(
+			context.Background(),
+			agent.NewInvocation(agent.WithInvocationID("inv-fast-default-ts")),
+			modelExecutionConfig{
+				InvocationID: "inv-fast-default-ts",
+				EventChan:    ch,
+				Span:         noop.Span{},
+			},
+			resp,
+			"llm",
+			false,
+			false,
+			nil,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, ev)
+		require.False(t, ev.Timestamp.IsZero())
+		require.True(t, ev.Timestamp.After(respTimestamp))
+		require.Same(t, ev, <-ch)
+	})
+
+	t.Run("done response still keeps trace metadata without emitting", func(t *testing.T) {
+		ch := make(chan *event.Event, 1)
+		resp := &model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("final")},
+			},
+		}
+
+		ev, err := emitFastModelResponseEvent(
+			context.Background(),
+			agent.NewInvocation(agent.WithInvocationID("inv-fast-done")),
+			modelExecutionConfig{
+				InvocationID: "inv-fast-done",
+				EventChan:    ch,
+				Span:         noop.Span{},
+			},
+			resp,
+			"llm",
+			false,
+			false,
+			nil,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, ev)
+		require.NotEmpty(t, ev.ID)
+		require.False(t, ev.Timestamp.IsZero())
+		select {
+		case emitted := <-ch:
+			require.FailNowf(t, "unexpected emitted event", "got %+v", emitted)
+		default:
+		}
+	})
+}
+
+func TestModelResponseProcessorConsume_FastPathSeq(t *testing.T) {
+	ch := make(chan *event.Event, 2)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-fast-seq"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableResponseUsageTracking:  true,
+			DisablePartialEventIDs:        true,
+			DisablePartialEventTimestamps: true,
+		}),
+	)
+	var runErr error
+	processor := newModelResponseProcessor(
+		context.Background(),
+		modelExecutionConfig{
+			Invocation:   invocation,
+			InvocationID: invocation.InvocationID,
+			EventChan:    ch,
+			Request:      &model.Request{},
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+		invocation,
+		&runErr,
+	)
+	require.True(t, processor.fastResponsePath)
+
+	err := processor.consume(modelResponseStream{
+		Seq: func(yield func(*model.Response) bool) {
+			if !yield(nil) {
+				return
+			}
+			yield(&model.Response{
+				IsPartial: true,
+				Choices: []model.Choice{
+					{Message: model.NewAssistantMessage("partial")},
+				},
+				Timestamp: time.Now(),
+			})
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, processor.lastEvent)
+	require.NotNil(t, processor.finalResponse)
+	require.Same(t, processor.lastEvent, <-ch)
+}
+
+func TestModelResponseProcessorConsume_FastPathDoneResponse_TracesEventID(t *testing.T) {
+	ch := make(chan *event.Event, 1)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-fast-done-trace"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableResponseUsageTracking: true,
+		}),
+	)
+	span := newGraphRecordingSpan()
+	var runErr error
+	processor := newModelResponseProcessor(
+		context.Background(),
+		modelExecutionConfig{
+			Invocation:   invocation,
+			InvocationID: invocation.InvocationID,
+			EventChan:    ch,
+			Request:      &model.Request{},
+			Span:         span,
+			NodeID:       "llm",
+		},
+		invocation,
+		&runErr,
+	)
+	require.True(t, processor.fastResponsePath)
+	err := processor.consume(modelResponseStream{
+		Seq: func(yield func(*model.Response) bool) {
+			yield(&model.Response{
+				Done: true,
+				Choices: []model.Choice{
+					{Message: model.NewAssistantMessage("final")},
+				},
+			})
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, processor.lastEvent)
+	require.NotEmpty(t, processor.lastEvent.ID)
+	require.True(t, graphHasNonEmptyStringAttr(span.attrs, semconvtrace.KeyEventID))
+	select {
+	case emitted := <-ch:
+		require.FailNowf(t, "unexpected emitted event", "got %+v", emitted)
+	default:
+	}
+}
+
+func TestNewModelResponseProcessor_FastPathWhenOnlyOnePartialToggleIsDisabled(t *testing.T) {
+	tests := []struct {
+		name       string
+		runOptions agent.RunOptions
+	}{
+		{
+			name: "disable partial ids only",
+			runOptions: agent.RunOptions{
+				DisablePartialEventIDs: true,
+			},
+		},
+		{
+			name: "disable partial timestamps only",
+			runOptions: agent.RunOptions{
+				DisablePartialEventTimestamps: true,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			invocation := agent.NewInvocation(
+				agent.WithInvocationID("inv-fast-path"),
+				agent.WithInvocationRunOptions(tt.runOptions),
+			)
+			var runErr error
+			processor := newModelResponseProcessor(
+				context.Background(),
+				modelExecutionConfig{
+					Invocation:   invocation,
+					InvocationID: invocation.InvocationID,
+					EventChan:    make(chan *event.Event, 1),
+					Request:      &model.Request{},
+					Span:         noop.Span{},
+					NodeID:       "llm",
+				},
+				invocation,
+				&runErr,
+			)
+			require.True(t, processor.fastResponsePath)
+		})
+	}
+}
+
+func TestNewModelResponseProcessor_FastPathWithBeforeModelCallbacksOnly(t *testing.T) {
+	tests := []struct {
+		name           string
+		invocation     *agent.Invocation
+		modelCallbacks *model.Callbacks
+	}{
+		{
+			name: "local before model callbacks only",
+			invocation: agent.NewInvocation(
+				agent.WithInvocationID("inv-local-before-only"),
+			),
+			modelCallbacks: model.NewCallbacks().RegisterBeforeModel(
+				func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+					return &model.BeforeModelResult{}, nil
+				},
+			),
+		},
+		{
+			name: "plugin before model callbacks only",
+			invocation: agent.NewInvocation(
+				agent.WithInvocationID("inv-plugin-before-only"),
+				agent.WithInvocationPlugins(plugin.MustNewManager(&hookPlugin{
+					name: "before-only",
+					reg: func(r *plugin.Registry) {
+						r.BeforeModel(func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+							return &model.BeforeModelResult{}, nil
+						})
+					},
+				})),
+			),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var runErr error
+			processor := newModelResponseProcessor(
+				context.Background(),
+				modelExecutionConfig{
+					Invocation:     tt.invocation,
+					InvocationID:   tt.invocation.InvocationID,
+					ModelCallbacks: tt.modelCallbacks,
+					EventChan:      make(chan *event.Event, 1),
+					Request:        &model.Request{},
+					Span:           noop.Span{},
+					NodeID:         "llm",
+				},
+				tt.invocation,
+				&runErr,
+			)
+			require.True(t, processor.fastResponsePath)
+		})
+	}
+}
+
+func TestProcessModelResponse_DisablesPartialMetadataOnSlowPath(t *testing.T) {
+	ch := make(chan *event.Event, 1)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-slow-partial"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisablePartialEventIDs:        true,
+			DisablePartialEventTimestamps: true,
+		}),
+	)
+	var ctx context.Context = agent.NewInvocationContext(context.Background(), invocation)
+	resp := &model.Response{
+		IsPartial: true,
+		Choices: []model.Choice{
+			{Message: model.NewAssistantMessage("partial")},
+		},
+	}
+	ctx, ev, err := processModelResponse(ctx, modelResponseConfig{
+		Response:     resp,
+		EventChan:    ch,
+		InvocationID: invocation.InvocationID,
+		Request:      &model.Request{},
+		Span:         noop.Span{},
+		NodeID:       "llm",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, ctx)
+	require.NotNil(t, ev)
+	require.Empty(t, ev.ID)
+	require.True(t, ev.Timestamp.IsZero())
+	require.Same(t, ev, <-ch)
+}
+
+func TestProcessModelResponse_UsesFallbackInvocationFromConfig(t *testing.T) {
+	ch := make(chan *event.Event, 1)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-slow-fallback"),
+		agent.WithInvocationEventFilterKey("graph/llm"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID:                     "req-slow-fallback",
+			DisablePartialEventIDs:        true,
+			DisablePartialEventTimestamps: true,
+		}),
+	)
+	resp := &model.Response{
+		IsPartial: true,
+		Choices: []model.Choice{
+			{Message: model.NewAssistantMessage("partial")},
+		},
+	}
+	ctx, ev, err := processModelResponse(context.Background(), modelResponseConfig{
+		Response:     resp,
+		Invocation:   invocation,
+		EventChan:    ch,
+		InvocationID: "inv-config-only",
+		Request:      &model.Request{},
+		Span:         noop.Span{},
+		NodeID:       "llm",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, ctx)
+	require.NotNil(t, ev)
+	require.Equal(t, invocation.InvocationID, ev.InvocationID)
+	require.Equal(t, invocation.RunOptions.RequestID, ev.RequestID)
+	require.Equal(t, invocation.GetEventFilterKey(), ev.FilterKey)
+	require.Empty(t, ev.ID)
+	require.True(t, ev.Timestamp.IsZero())
+	require.Same(t, ev, <-ch)
+}
+
+func TestProcessModelResponse_PreservesStableEventMetadataWhenContextInvocationIsSparse(t *testing.T) {
+	ch := make(chan *event.Event, 1)
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-slow-base"),
+		agent.WithInvocationEventFilterKey("graph/base"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-slow-base",
+		}),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-slow-updated"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisablePartialEventIDs:        true,
+			DisablePartialEventTimestamps: true,
+		}),
+	)
+	resp := &model.Response{
+		IsPartial: true,
+		Choices: []model.Choice{
+			{Message: model.NewAssistantMessage("partial")},
+		},
+	}
+	ctx, ev, err := processModelResponse(
+		agent.NewInvocationContext(context.Background(), updatedInvocation),
+		modelResponseConfig{
+			Response:         resp,
+			Invocation:       baseInvocation,
+			StableInvocation: baseInvocation,
+			EventChan:        ch,
+			InvocationID:     baseInvocation.InvocationID,
+			Request:          &model.Request{},
+			Span:             noop.Span{},
+			NodeID:           "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ctx)
+	require.NotNil(t, ev)
+	require.Equal(t, baseInvocation.InvocationID, ev.InvocationID)
+	require.Equal(t, baseInvocation.RunOptions.RequestID, ev.RequestID)
+	require.Equal(t, baseInvocation.GetEventFilterKey(), ev.FilterKey)
+	require.Empty(t, ev.ID)
+	require.True(t, ev.Timestamp.IsZero())
+	require.Same(t, ev, <-ch)
+}
+
+func TestExecuteModelAndProcessResponses_UsesInvocationFromCallbackContext(t *testing.T) {
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-base"),
+		agent.WithInvocationRunOptions(agent.RunOptions{}),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-updated"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableResponseUsageTracking: true,
+		}),
+	)
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel:       &captureModel{},
+			Request:        &model.Request{},
+			InvocationID:   baseInvocation.InvocationID,
+			Span:           noop.Span{},
+			NodeID:         "llm",
+		},
+	)
+	require.NoError(t, err)
+	finalResponse, ok := resp.(*model.Response)
+	require.True(t, ok)
+	require.Nil(t, finalResponse.Usage)
+}
+
+func TestExecuteModelAndProcessResponses_DisableResponseUsageTrackingStillRecordsMetrics(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := itelemetry.MeterProvider
+	originalMeter := itelemetry.ChatMeter
+	originalRequestCnt := itelemetry.ChatMetricTRPCAgentGoClientRequestCnt
+	originalTokenUsage := itelemetry.ChatMetricGenAIClientTokenUsage
+	originalOperationDuration := itelemetry.ChatMetricGenAIClientOperationDuration
+	originalServerTimeToFirstToken := itelemetry.ChatMetricGenAIServerTimeToFirstToken
+	originalClientTimeToFirstToken := itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken
+	originalTimePerOutputToken := itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken
+	originalOutputTokenPerTime := itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime
+	defer func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.ChatMeter = originalMeter
+		itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = originalRequestCnt
+		itelemetry.ChatMetricGenAIClientTokenUsage = originalTokenUsage
+		itelemetry.ChatMetricGenAIClientOperationDuration = originalOperationDuration
+		itelemetry.ChatMetricGenAIServerTimeToFirstToken = originalServerTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = originalClientTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = originalTimePerOutputToken
+		itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = originalOutputTokenPerTime
+	}()
+	itelemetry.MeterProvider = provider
+	itelemetry.ChatMeter = provider.Meter(semconvmetrics.MeterNameChat)
+	requestCnt, err := itelemetry.ChatMeter.Int64Counter("trpc_agent_go.client.request.cnt")
+	require.NoError(t, err)
+	itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = requestCnt
+	itelemetry.ChatMetricGenAIClientTokenUsage = nil
+	itelemetry.ChatMetricGenAIClientOperationDuration = nil
+	itelemetry.ChatMetricGenAIServerTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = nil
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-disable-usage-metrics"),
+		agent.WithInvocationModel(&captureModel{}),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableResponseUsageTracking: true,
+		}),
+		agent.WithInvocationSession(&session.Session{ID: "sess-disable-usage-metrics"}),
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), invocation),
+		modelExecutionConfig{
+			Invocation:   invocation,
+			LLMModel:     invocation.Model,
+			Request:      &model.Request{},
+			InvocationID: invocation.InvocationID,
+			SessionID:    invocation.Session.ID,
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.NoError(t, err)
+	finalResponse, ok := resp.(*model.Response)
+	require.True(t, ok)
+	require.Nil(t, finalResponse.Usage)
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	require.NotEmpty(t, rm.ScopeMetrics)
+}
+
+func TestExecuteModelAndProcessResponses_UsesStableInvocationForMetricsMetadata(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := itelemetry.MeterProvider
+	originalMeter := itelemetry.ChatMeter
+	originalRequestCnt := itelemetry.ChatMetricTRPCAgentGoClientRequestCnt
+	originalTokenUsage := itelemetry.ChatMetricGenAIClientTokenUsage
+	originalOperationDuration := itelemetry.ChatMetricGenAIClientOperationDuration
+	originalServerTimeToFirstToken := itelemetry.ChatMetricGenAIServerTimeToFirstToken
+	originalClientTimeToFirstToken := itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken
+	originalTimePerOutputToken := itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken
+	originalOutputTokenPerTime := itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime
+	defer func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.ChatMeter = originalMeter
+		itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = originalRequestCnt
+		itelemetry.ChatMetricGenAIClientTokenUsage = originalTokenUsage
+		itelemetry.ChatMetricGenAIClientOperationDuration = originalOperationDuration
+		itelemetry.ChatMetricGenAIServerTimeToFirstToken = originalServerTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = originalClientTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = originalTimePerOutputToken
+		itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = originalOutputTokenPerTime
+	}()
+	itelemetry.MeterProvider = provider
+	itelemetry.ChatMeter = provider.Meter(semconvmetrics.MeterNameChat)
+	requestCnt, err := itelemetry.ChatMeter.Int64Counter("trpc_agent_go.client.request.cnt")
+	require.NoError(t, err)
+	itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = requestCnt
+	itelemetry.ChatMetricGenAIClientTokenUsage = nil
+	itelemetry.ChatMetricGenAIClientOperationDuration = nil
+	itelemetry.ChatMetricGenAIServerTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = nil
+	baseModel := &mockModel{name: "base-metrics-model"}
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-base-metrics"),
+		agent.WithInvocationModel(baseModel),
+		agent.WithInvocationSession(&session.Session{
+			ID:      "sess-base-metrics",
+			UserID:  "user-base-metrics",
+			AppName: "app-base-metrics",
+		}),
+	)
+	baseInvocation.AgentName = "agent-base-metrics"
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-updated-metrics"),
+		agent.WithInvocationModel(&mockModel{name: "updated-metrics-model"}),
+		agent.WithInvocationSession(&session.Session{
+			ID: "sess-updated-metrics",
+		}),
+	)
+	updatedInvocation.AgentName = "agent-updated-metrics"
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel:       baseModel,
+			Request:        &model.Request{},
+			InvocationID:   baseInvocation.InvocationID,
+			SessionID:      baseInvocation.Session.ID,
+			Span:           noop.Span{},
+			NodeID:         "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIAgentName, baseInvocation.AgentName))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIRequestModel, baseModel.Info().Name))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIConversationID, baseInvocation.Session.ID))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoUserID, baseInvocation.Session.UserID))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoAppName, baseInvocation.Session.AppName))
+	require.False(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIAgentName, updatedInvocation.AgentName))
+	require.False(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIRequestModel, updatedInvocation.Model.Info().Name))
+	require.False(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIConversationID, updatedInvocation.Session.ID))
+}
+
+func TestExecuteModelAndProcessResponses_UsesUpdatedInvocationForMetricsMetadataWhenBaseIsSparse(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := itelemetry.MeterProvider
+	originalMeter := itelemetry.ChatMeter
+	originalRequestCnt := itelemetry.ChatMetricTRPCAgentGoClientRequestCnt
+	originalTokenUsage := itelemetry.ChatMetricGenAIClientTokenUsage
+	originalOperationDuration := itelemetry.ChatMetricGenAIClientOperationDuration
+	originalServerTimeToFirstToken := itelemetry.ChatMetricGenAIServerTimeToFirstToken
+	originalClientTimeToFirstToken := itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken
+	originalTimePerOutputToken := itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken
+	originalOutputTokenPerTime := itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime
+	defer func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.ChatMeter = originalMeter
+		itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = originalRequestCnt
+		itelemetry.ChatMetricGenAIClientTokenUsage = originalTokenUsage
+		itelemetry.ChatMetricGenAIClientOperationDuration = originalOperationDuration
+		itelemetry.ChatMetricGenAIServerTimeToFirstToken = originalServerTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = originalClientTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = originalTimePerOutputToken
+		itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = originalOutputTokenPerTime
+	}()
+	itelemetry.MeterProvider = provider
+	itelemetry.ChatMeter = provider.Meter(semconvmetrics.MeterNameChat)
+	requestCnt, err := itelemetry.ChatMeter.Int64Counter("trpc_agent_go.client.request.cnt")
+	require.NoError(t, err)
+	itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = requestCnt
+	itelemetry.ChatMetricGenAIClientTokenUsage = nil
+	itelemetry.ChatMetricGenAIClientOperationDuration = nil
+	itelemetry.ChatMetricGenAIServerTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = nil
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-base-sparse-metrics"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableResponseUsageTracking: true,
+		}),
+	)
+	updatedModel := &mockModel{name: "updated-metrics-model"}
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-updated-full-metrics"),
+		agent.WithInvocationModel(updatedModel),
+		agent.WithInvocationSession(&session.Session{
+			ID:      "sess-updated-full-metrics",
+			UserID:  "user-updated-full-metrics",
+			AppName: "app-updated-full-metrics",
+		}),
+	)
+	updatedInvocation.AgentName = "agent-updated-full-metrics"
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), updatedInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel:       updatedModel,
+			Request:        &model.Request{},
+			InvocationID:   baseInvocation.InvocationID,
+			SessionID:      updatedInvocation.Session.ID,
+			Span:           noop.Span{},
+			NodeID:         "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIAgentName, updatedInvocation.AgentName))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIRequestModel, updatedModel.Info().Name))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIConversationID, updatedInvocation.Session.ID))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoUserID, updatedInvocation.Session.UserID))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoAppName, updatedInvocation.Session.AppName))
+}
+
+func TestExecuteModelAndProcessResponses_AnchorsMetricsRequestModelToLLMModel(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := itelemetry.MeterProvider
+	originalMeter := itelemetry.ChatMeter
+	originalRequestCnt := itelemetry.ChatMetricTRPCAgentGoClientRequestCnt
+	originalTokenUsage := itelemetry.ChatMetricGenAIClientTokenUsage
+	originalOperationDuration := itelemetry.ChatMetricGenAIClientOperationDuration
+	originalServerTimeToFirstToken := itelemetry.ChatMetricGenAIServerTimeToFirstToken
+	originalClientTimeToFirstToken := itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken
+	originalTimePerOutputToken := itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken
+	originalOutputTokenPerTime := itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime
+	defer func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.ChatMeter = originalMeter
+		itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = originalRequestCnt
+		itelemetry.ChatMetricGenAIClientTokenUsage = originalTokenUsage
+		itelemetry.ChatMetricGenAIClientOperationDuration = originalOperationDuration
+		itelemetry.ChatMetricGenAIServerTimeToFirstToken = originalServerTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = originalClientTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = originalTimePerOutputToken
+		itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = originalOutputTokenPerTime
+	}()
+	itelemetry.MeterProvider = provider
+	itelemetry.ChatMeter = provider.Meter(semconvmetrics.MeterNameChat)
+	requestCnt, err := itelemetry.ChatMeter.Int64Counter("trpc_agent_go.client.request.cnt")
+	require.NoError(t, err)
+	itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = requestCnt
+	itelemetry.ChatMetricGenAIClientTokenUsage = nil
+	itelemetry.ChatMetricGenAIClientOperationDuration = nil
+	itelemetry.ChatMetricGenAIServerTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = nil
+	requestModel := &mockModel{name: "request-model"}
+	callbackModel := &mockModel{name: "callback-model"}
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-base-no-model"),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-updated-with-model"),
+		agent.WithInvocationModel(callbackModel),
+		agent.WithInvocationSession(&session.Session{
+			ID:      "sess-updated-with-model",
+			UserID:  "user-updated-with-model",
+			AppName: "app-updated-with-model",
+		}),
+	)
+	updatedInvocation.AgentName = "agent-updated-with-model"
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel:       requestModel,
+			Request:        &model.Request{},
+			InvocationID:   baseInvocation.InvocationID,
+			SessionID:      updatedInvocation.Session.ID,
+			Span:           noop.Span{},
+			NodeID:         "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIAgentName, updatedInvocation.AgentName))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIRequestModel, requestModel.Info().Name))
+	require.False(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIRequestModel, callbackModel.Info().Name))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIConversationID, updatedInvocation.Session.ID))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoUserID, updatedInvocation.Session.UserID))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoAppName, updatedInvocation.Session.AppName))
+}
+
+func TestExecuteModelAndProcessResponses_UsesConfigFallbackForSparseStableMetricsMetadata(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := itelemetry.MeterProvider
+	originalMeter := itelemetry.ChatMeter
+	originalRequestCnt := itelemetry.ChatMetricTRPCAgentGoClientRequestCnt
+	originalTokenUsage := itelemetry.ChatMetricGenAIClientTokenUsage
+	originalOperationDuration := itelemetry.ChatMetricGenAIClientOperationDuration
+	originalServerTimeToFirstToken := itelemetry.ChatMetricGenAIServerTimeToFirstToken
+	originalClientTimeToFirstToken := itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken
+	originalTimePerOutputToken := itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken
+	originalOutputTokenPerTime := itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime
+	defer func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.ChatMeter = originalMeter
+		itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = originalRequestCnt
+		itelemetry.ChatMetricGenAIClientTokenUsage = originalTokenUsage
+		itelemetry.ChatMetricGenAIClientOperationDuration = originalOperationDuration
+		itelemetry.ChatMetricGenAIServerTimeToFirstToken = originalServerTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = originalClientTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = originalTimePerOutputToken
+		itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = originalOutputTokenPerTime
+	}()
+	itelemetry.MeterProvider = provider
+	itelemetry.ChatMeter = provider.Meter(semconvmetrics.MeterNameChat)
+	requestCnt, err := itelemetry.ChatMeter.Int64Counter("trpc_agent_go.client.request.cnt")
+	require.NoError(t, err)
+	itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = requestCnt
+	itelemetry.ChatMetricGenAIClientTokenUsage = nil
+	itelemetry.ChatMetricGenAIClientOperationDuration = nil
+	itelemetry.ChatMetricGenAIServerTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = nil
+	requestModel := &mockModel{name: "config-fallback-model"}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-sparse-config-fallback"),
+	)
+	invocation.AgentName = "agent-sparse-config-fallback"
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), invocation),
+		modelExecutionConfig{
+			Invocation:   invocation,
+			LLMModel:     requestModel,
+			Request:      &model.Request{},
+			InvocationID: invocation.InvocationID,
+			SessionID:    "sess-config-fallback",
+			UserID:       "user-config-fallback",
+			AppName:      "app-config-fallback",
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIAgentName, invocation.AgentName))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIRequestModel, requestModel.Info().Name))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIConversationID, "sess-config-fallback"))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoUserID, "user-config-fallback"))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoAppName, "app-config-fallback"))
+}
+
+func TestExecuteModelAndProcessResponses_UsesUpdatedInvocationForMetricsMetadataAfterCallbackOnSingleChunk(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := itelemetry.MeterProvider
+	originalMeter := itelemetry.ChatMeter
+	originalRequestCnt := itelemetry.ChatMetricTRPCAgentGoClientRequestCnt
+	originalTokenUsage := itelemetry.ChatMetricGenAIClientTokenUsage
+	originalOperationDuration := itelemetry.ChatMetricGenAIClientOperationDuration
+	originalServerTimeToFirstToken := itelemetry.ChatMetricGenAIServerTimeToFirstToken
+	originalClientTimeToFirstToken := itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken
+	originalTimePerOutputToken := itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken
+	originalOutputTokenPerTime := itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime
+	defer func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.ChatMeter = originalMeter
+		itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = originalRequestCnt
+		itelemetry.ChatMetricGenAIClientTokenUsage = originalTokenUsage
+		itelemetry.ChatMetricGenAIClientOperationDuration = originalOperationDuration
+		itelemetry.ChatMetricGenAIServerTimeToFirstToken = originalServerTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = originalClientTimeToFirstToken
+		itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = originalTimePerOutputToken
+		itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = originalOutputTokenPerTime
+	}()
+	itelemetry.MeterProvider = provider
+	itelemetry.ChatMeter = provider.Meter(semconvmetrics.MeterNameChat)
+	requestCnt, err := itelemetry.ChatMeter.Int64Counter("trpc_agent_go.client.request.cnt")
+	require.NoError(t, err)
+	itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = requestCnt
+	itelemetry.ChatMetricGenAIClientTokenUsage = nil
+	itelemetry.ChatMetricGenAIClientOperationDuration = nil
+	itelemetry.ChatMetricGenAIServerTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = nil
+	baseModel := &mockModel{name: "base-after-metrics-model"}
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-base-after-metrics"),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-updated-after-metrics"),
+		agent.WithInvocationModel(baseModel),
+		agent.WithInvocationSession(&session.Session{
+			ID:      "sess-updated-after-metrics",
+			UserID:  "user-updated-after-metrics",
+			AppName: "app-updated-after-metrics",
+		}),
+	)
+	updatedInvocation.AgentName = "agent-updated-after-metrics"
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			return &model.AfterModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel:       baseModel,
+			Request:        &model.Request{},
+			InvocationID:   baseInvocation.InvocationID,
+			SessionID:      updatedInvocation.Session.ID,
+			Span:           noop.Span{},
+			NodeID:         "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIAgentName, updatedInvocation.AgentName))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIRequestModel, baseModel.Info().Name))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyGenAIConversationID, updatedInvocation.Session.ID))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoUserID, updatedInvocation.Session.UserID))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyTRPCAgentGoAppName, updatedInvocation.Session.AppName))
+}
+
+func TestExecuteModelAndProcessResponses_UsesUpdatedInvocationForResponseUsageTimingOnSingleChunk(t *testing.T) {
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-base-single-usage"),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-updated-single-usage"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableResponseUsageTracking: true,
+		}),
+	)
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			return &model.AfterModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel:       &mockModel{name: "single-usage-model"},
+			Request:        &model.Request{},
+			InvocationID:   baseInvocation.InvocationID,
+			Span:           noop.Span{},
+			NodeID:         "llm",
+		},
+	)
+	require.NoError(t, err)
+	finalResponse, ok := resp.(*model.Response)
+	require.True(t, ok)
+	require.Nil(t, finalResponse.Usage)
+}
+
+func TestExecuteModelAndProcessResponses_UsesUpdatedInvocationForResponseUsageTiming(t *testing.T) {
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-usage-base"),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-usage-updated"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableResponseUsageTracking: true,
+		}),
+	)
+	responses := []*model.Response{
+		{
+			IsPartial: true,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("partial")},
+			},
+		},
+		{
+			IsPartial: true,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("partial-updated")},
+			},
+		},
+		{
+			Done: true,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("done")},
+			},
+		},
+	}
+	var callbackCount int
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			callbackCount++
+			if callbackCount == 2 {
+				return &model.AfterModelResult{
+					Context: agent.NewInvocationContext(ctx, updatedInvocation),
+				}, nil
+			}
+			return &model.AfterModelResult{}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel: &multiResponseModel{
+				responses: responses,
+			},
+			Request:      &model.Request{},
+			InvocationID: baseInvocation.InvocationID,
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, responses[0].Usage)
+	require.Nil(t, responses[1].Usage)
+}
+
+func TestExecuteModelAndProcessResponses_PreservesTimingInfoWhenInvocationChanges(t *testing.T) {
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-usage-base"),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-usage-updated"),
+	)
+	responses := []*model.Response{
+		{
+			IsPartial: true,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("partial")},
+			},
+		},
+		{
+			IsPartial: true,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("partial-updated")},
+			},
+		},
+		{
+			Done: true,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("done")},
+			},
+		},
+	}
+	var callbackCount int
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			callbackCount++
+			if callbackCount == 2 {
+				return &model.AfterModelResult{
+					Context: agent.NewInvocationContext(ctx, updatedInvocation),
+				}, nil
+			}
+			return &model.AfterModelResult{}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel: &multiResponseModel{
+				responses: responses,
+				delay:     time.Millisecond,
+			},
+			Request:      &model.Request{},
+			InvocationID: baseInvocation.InvocationID,
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, responses[0].Usage)
+	require.NotNil(t, responses[1].Usage)
+	require.NotSame(t, responses[0].Usage, responses[1].Usage)
+	require.Same(t, baseInvocation.GetOrCreateTimingInfo(), responses[0].Usage.TimingInfo)
+	require.Same(t, updatedInvocation.GetOrCreateTimingInfo(), responses[1].Usage.TimingInfo)
+	require.NotZero(t, responses[1].Usage.TimingInfo.FirstTokenDuration)
+	require.Equal(
+		t,
+		responses[0].Usage.TimingInfo.FirstTokenDuration,
+		responses[1].Usage.TimingInfo.FirstTokenDuration,
+	)
+}
+
+func TestExecuteModelAndProcessResponses_PreservesReasoningTimingWhenInvocationChanges(t *testing.T) {
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-reasoning-base"),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-reasoning-updated"),
+	)
+	responses := []*model.Response{
+		{
+			IsPartial: true,
+			Choices: []model.Choice{
+				{Delta: model.Message{ReasoningContent: "thinking"}},
+			},
+		},
+		{
+			IsPartial: true,
+			Choices: []model.Choice{
+				{Delta: model.Message{ReasoningContent: "thinking-more"}},
+			},
+		},
+		{
+			Done: true,
+			Choices: []model.Choice{
+				{Delta: model.Message{Content: "done"}},
+			},
+		},
+	}
+	var callbackCount int
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			callbackCount++
+			if callbackCount == 1 {
+				return &model.AfterModelResult{
+					Context: agent.NewInvocationContext(ctx, updatedInvocation),
+				}, nil
+			}
+			return &model.AfterModelResult{}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel: &multiResponseModel{
+				responses: responses,
+				delay:     time.Millisecond,
+			},
+			Request: &model.Request{
+				GenerationConfig: model.GenerationConfig{
+					Stream: true,
+				},
+			},
+			InvocationID: baseInvocation.InvocationID,
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Zero(t, baseInvocation.GetOrCreateTimingInfo().ReasoningDuration)
+	require.Greater(t, updatedInvocation.GetOrCreateTimingInfo().ReasoningDuration, time.Duration(0))
+}
+
+func TestExecuteModelAndProcessResponses_PreservesReasoningTimingWhenTrackingDisabledMidStream(t *testing.T) {
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-disable-reasoning-base"),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-disable-reasoning-updated"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableResponseUsageTracking: true,
+		}),
+	)
+	responses := []*model.Response{
+		{
+			IsPartial: true,
+			Choices: []model.Choice{
+				{Delta: model.Message{ReasoningContent: "thinking"}},
+			},
+		},
+		{
+			IsPartial: true,
+			Choices: []model.Choice{
+				{Delta: model.Message{ReasoningContent: "thinking-more"}},
+			},
+		},
+		{
+			Done: true,
+			Choices: []model.Choice{
+				{Delta: model.Message{Content: "done"}},
+			},
+		},
+	}
+	var callbackCount int
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			callbackCount++
+			if callbackCount == 1 {
+				return &model.AfterModelResult{
+					Context: agent.NewInvocationContext(ctx, updatedInvocation),
+				}, nil
+			}
+			return &model.AfterModelResult{}, nil
+		},
+	)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel: &multiResponseModel{
+				responses: responses,
+				delay:     time.Millisecond,
+			},
+			Request: &model.Request{
+				GenerationConfig: model.GenerationConfig{
+					Stream: true,
+				},
+			},
+			InvocationID: baseInvocation.InvocationID,
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Greater(t, baseInvocation.GetOrCreateTimingInfo().ReasoningDuration, time.Duration(0))
+	require.Nil(t, responses[1].Usage)
+	require.Nil(t, responses[2].Usage)
+}
+
+func TestExecuteModelAndProcessResponses_PreservesStableEventMetadataOnFastPath(t *testing.T) {
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-fast-base"),
+		agent.WithInvocationEventFilterKey("graph/fast"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-fast-base",
+		}),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-fast-updated"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisablePartialEventIDs:        true,
+			DisablePartialEventTimestamps: true,
+		}),
+	)
+	responses := []*model.Response{
+		{
+			IsPartial: true,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("partial")},
+			},
+		},
+		{
+			Done: true,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("done")},
+			},
+		},
+	}
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	ch := make(chan *event.Event, 4)
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel: &multiResponseModel{
+				responses: responses,
+			},
+			Request:      &model.Request{},
+			EventChan:    ch,
+			InvocationID: baseInvocation.InvocationID,
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	ev := <-ch
+	require.NotNil(t, ev)
+	require.Equal(t, baseInvocation.InvocationID, ev.InvocationID)
+	require.Equal(t, baseInvocation.RunOptions.RequestID, ev.RequestID)
+	require.Equal(t, baseInvocation.GetEventFilterKey(), ev.FilterKey)
+	require.Empty(t, ev.ID)
+	require.True(t, ev.Timestamp.IsZero())
+}
+
+func TestExecuteModelAndProcessResponses_UsesStableInvocationForTraceMetadata(t *testing.T) {
+	modelImpl := &captureModel{}
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-trace-base"),
+		agent.WithInvocationModel(modelImpl),
+		agent.WithInvocationSession(&session.Session{
+			ID:     "sess-trace-base",
+			UserID: "user-trace-base",
+		}),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-trace-updated"),
+	)
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			return &model.AfterModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	span := newGraphRecordingSpan()
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		modelExecutionConfig{
+			Invocation:     baseInvocation,
+			ModelCallbacks: callbacks,
+			LLMModel:       modelImpl,
+			Request:        &model.Request{},
+			InvocationID:   baseInvocation.InvocationID,
+			SessionID:      baseInvocation.Session.ID,
+			Span:           span,
+			NodeID:         "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyInvocationID, baseInvocation.InvocationID))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyGenAIConversationID, baseInvocation.Session.ID))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyRunnerUserID, baseInvocation.Session.UserID))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyGenAIRequestModel, modelImpl.Info().Name))
+}
+
+func TestExecuteModelAndProcessResponses_UsesConfigFallbackForSparseStableTraceMetadata(t *testing.T) {
+	modelImpl := &captureModel{}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-trace-sparse-fallback"),
+	)
+	span := newGraphRecordingSpan()
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), invocation),
+		modelExecutionConfig{
+			Invocation:   invocation,
+			LLMModel:     modelImpl,
+			Request:      &model.Request{},
+			InvocationID: invocation.InvocationID,
+			SessionID:    "sess-trace-fallback",
+			UserID:       "user-trace-fallback",
+			AppName:      "app-trace-fallback",
+			Span:         span,
+			NodeID:       "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyInvocationID, invocation.InvocationID))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyGenAIConversationID, "sess-trace-fallback"))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyRunnerUserID, "user-trace-fallback"))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyGenAIRequestModel, modelImpl.Info().Name))
+}
+
+func TestExecuteModelAndProcessResponses_RefreshesStableTraceMetadataAfterInPlaceInvocationUpdate(t *testing.T) {
+	modelImpl := &captureModel{}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-trace-in-place"),
+	)
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			invocation.Session = &session.Session{
+				ID:     "sess-trace-in-place",
+				UserID: "user-trace-in-place",
+			}
+			return nil, nil
+		},
+	)
+	span := newGraphRecordingSpan()
+	resp, err := executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), invocation),
+		modelExecutionConfig{
+			Invocation:     invocation,
+			ModelCallbacks: callbacks,
+			LLMModel:       modelImpl,
+			Request:        &model.Request{},
+			InvocationID:   invocation.InvocationID,
+			Span:           span,
+			NodeID:         "llm",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyInvocationID, invocation.InvocationID))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyGenAIConversationID, invocation.Session.ID))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyRunnerUserID, invocation.Session.UserID))
+	require.True(t, graphHasAttr(span.attrs, semconvtrace.KeyGenAIRequestModel, modelImpl.Info().Name))
+}
+
+func TestRefreshObservabilityInvocationView_ReusesViewWithoutNewStableMetadata(t *testing.T) {
+	modelImpl := &captureModel{}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-observability-refresh"),
+	)
+	view := observabilityInvocationView(invocation, modelExecutionConfig{
+		InvocationID: invocation.InvocationID,
+		LLMModel:     modelImpl,
+	})
+	require.NotNil(t, view)
+	refreshed := refreshObservabilityInvocationView(view, invocation, modelExecutionConfig{
+		InvocationID: invocation.InvocationID,
+		LLMModel:     modelImpl,
+	})
+	require.Same(t, view, refreshed)
+	invocation.Session = &session.Session{
+		ID:     "sess-observability-refresh",
+		UserID: "user-observability-refresh",
+	}
+	refreshed = refreshObservabilityInvocationView(view, invocation, modelExecutionConfig{
+		InvocationID: invocation.InvocationID,
+		LLMModel:     modelImpl,
+	})
+	require.NotSame(t, view, refreshed)
+	require.Equal(t, invocation.Session.ID, refreshed.Session.ID)
+	require.Equal(t, invocation.Session.UserID, refreshed.Session.UserID)
+}
+
+func TestAddLLMNode_SkipsModelExecutionEventsWhenCallbackDisablesModelExecutionEvents(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode("llm", &captureModel{}, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-base"),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-updated"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableModelExecutionEvents: true,
+		}),
+	)
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:    exec,
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.NoError(t, err)
+	phases := collectModelExecutionPhases(ch)
+	require.Empty(t, phases)
+}
+
+func TestAddLLMNode_EmitsCompleteWhenAfterModelDisablesModelExecutionEvents(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode("llm", &captureModel{}, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-base"),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-updated"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableModelExecutionEvents: true,
+		}),
+	)
+	callbacks := model.NewCallbacks().RegisterAfterModel(
+		func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+			return &model.AfterModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:    exec,
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.NoError(t, err)
+	phases := collectModelExecutionPhases(ch)
+	require.Equal(t, []ModelExecutionPhase{
+		ModelExecutionPhaseStart,
+		ModelExecutionPhaseComplete,
+	}, phases)
+}
+
+func TestAddLLMNode_UsesUpdatedInvocationIDInModelExecutionEvents(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode("llm", &captureModel{}, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-base"),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-updated"),
+	)
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:    exec,
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.NoError(t, err)
+	events := collectModelExecutionEvents(ch)
+	require.Len(t, events, 2)
+	for _, evt := range events {
+		var meta ModelExecutionMetadata
+		require.NoError(t, json.Unmarshal(evt.StateDelta[MetadataKeyModel], &meta))
+		require.Equal(t, updatedInvocation.InvocationID, evt.InvocationID)
+		require.Equal(t, updatedInvocation.InvocationID, meta.InvocationID)
+	}
+}
+
+func TestAddLLMNode_PreservesStableRequestMetadataInModelExecutionEvents(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode("llm", &captureModel{}, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-base-stable"),
+		agent.WithInvocationEventFilterKey("graph/stable"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-stable",
+		}),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-updated-stable"),
+	)
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:    exec,
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.NoError(t, err)
+	events := collectModelExecutionEvents(ch)
+	require.Len(t, events, 2)
+	for _, evt := range events {
+		var meta ModelExecutionMetadata
+		require.NoError(t, json.Unmarshal(evt.StateDelta[MetadataKeyModel], &meta))
+		require.Equal(t, updatedInvocation.InvocationID, evt.InvocationID)
+		require.Equal(t, updatedInvocation.InvocationID, meta.InvocationID)
+		require.Equal(t, baseInvocation.RunOptions.RequestID, evt.RequestID)
+		require.Equal(t, baseInvocation.GetEventFilterKey(), evt.FilterKey)
+	}
+}
+
+func TestAddLLMNode_UsesUpdatedInvocationLineageInModelExecutionEvents(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode("llm", &captureModel{}, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	baseInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-base-lineage"),
+		agent.WithInvocationBranch("graph/base"),
+		agent.WithInvocationEventFilterKey("graph/base/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-base-lineage",
+		}),
+	)
+	updatedInvocation := baseInvocation.Clone(
+		agent.WithInvocationID("inv-updated-lineage"),
+		agent.WithInvocationBranch("graph/updated"),
+		agent.WithInvocationEventFilterKey("graph/updated/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-updated-lineage",
+		}),
+	)
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:    exec,
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.NoError(t, err)
+	events := collectModelExecutionEvents(ch)
+	require.Len(t, events, 2)
+	for _, evt := range events {
+		var meta ModelExecutionMetadata
+		require.NoError(t, json.Unmarshal(evt.StateDelta[MetadataKeyModel], &meta))
+		require.Equal(t, updatedInvocation.InvocationID, evt.InvocationID)
+		require.Equal(t, updatedInvocation.InvocationID, meta.InvocationID)
+		require.Equal(t, baseInvocation.InvocationID, evt.ParentInvocationID)
+		require.Equal(t, updatedInvocation.Branch, evt.Branch)
+		require.Equal(t, updatedInvocation.GetEventFilterKey(), evt.FilterKey)
+		require.Equal(t, updatedInvocation.RunOptions.RequestID, evt.RequestID)
+	}
+}
+
+func TestAddLLMNode_MergesSparseUpdatedInvocationLineageInModelExecutionEvents(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode("llm", &captureModel{}, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	parentInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-parent-lineage"),
+	)
+	baseInvocation := parentInvocation.Clone(
+		agent.WithInvocationID("inv-base-lineage"),
+		agent.WithInvocationBranch("graph/base"),
+		agent.WithInvocationEventFilterKey("graph/base/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-base-lineage",
+		}),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-updated-sparse-lineage"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-updated-lineage",
+		}),
+	)
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:    exec,
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.NoError(t, err)
+	events := collectModelExecutionEvents(ch)
+	require.Len(t, events, 2)
+	for _, evt := range events {
+		var meta ModelExecutionMetadata
+		require.NoError(t, json.Unmarshal(evt.StateDelta[MetadataKeyModel], &meta))
+		require.Equal(t, updatedInvocation.InvocationID, evt.InvocationID)
+		require.Equal(t, updatedInvocation.InvocationID, meta.InvocationID)
+		require.Equal(t, baseInvocation.GetParentInvocation().InvocationID, evt.ParentInvocationID)
+		require.Equal(t, baseInvocation.Branch, evt.Branch)
+		require.Equal(t, baseInvocation.GetEventFilterKey(), evt.FilterKey)
+		require.Equal(t, updatedInvocation.RunOptions.RequestID, evt.RequestID)
+	}
+}
+
+func TestAddLLMNode_DoesNotFallbackParentForUpdatedRootInvocationInModelExecutionEvents(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddLLMNode("llm", &captureModel{}, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	parentInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-root-parent"),
+	)
+	baseInvocation := parentInvocation.Clone(
+		agent.WithInvocationID("inv-root-base"),
+		agent.WithInvocationBranch("graph/root-base"),
+		agent.WithInvocationEventFilterKey("graph/root-base/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-root-base",
+		}),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-root-updated"),
+		agent.WithInvocationBranch("graph/root-updated"),
+		agent.WithInvocationEventFilterKey("graph/root-updated/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-root-updated",
+		}),
+	)
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+			}, nil
+		},
+	)
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:    exec,
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.NoError(t, err)
+	events := collectModelExecutionEvents(ch)
+	require.Len(t, events, 2)
+	for _, evt := range events {
+		var meta ModelExecutionMetadata
+		require.NoError(t, json.Unmarshal(evt.StateDelta[MetadataKeyModel], &meta))
+		require.Equal(t, updatedInvocation.InvocationID, evt.InvocationID)
+		require.Equal(t, updatedInvocation.InvocationID, meta.InvocationID)
+		require.Empty(t, evt.ParentInvocationID)
+		require.Equal(t, updatedInvocation.Branch, evt.Branch)
+		require.Equal(t, updatedInvocation.GetEventFilterKey(), evt.FilterKey)
+		require.Equal(t, updatedInvocation.RunOptions.RequestID, evt.RequestID)
+	}
+}
+
+func TestAddLLMNode_EmitsModelExecutionEventsForPluginBeforeModelCustomResponse(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	cm := &captureModel{}
+	sg.AddLLMNode("llm", cm, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeModel(func(
+				ctx context.Context,
+				args *model.BeforeModelArgs,
+			) (*model.BeforeModelResult, error) {
+				return &model.BeforeModelResult{
+					CustomResponse: &model.Response{
+						Done: true,
+						Choices: []model.Choice{
+							{Message: model.NewAssistantMessage("plugin-custom")},
+						},
+					},
+				}, nil
+			})
+		},
+	}
+	pm := plugin.MustNewManager(p)
+	parentInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-plugin-parent"),
+	)
+	baseInvocation := parentInvocation.Clone(
+		agent.WithInvocationID("inv-plugin-base"),
+		agent.WithInvocationBranch("graph/plugin-custom"),
+		agent.WithInvocationEventFilterKey("graph/plugin-custom/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-plugin-custom",
+		}),
+	)
+	baseInvocation.Plugins = pm
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: "llm",
+		StateKeyUserInput:     "hi",
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.NoError(t, err)
+	events := collectModelExecutionEvents(ch)
+	require.Nil(t, cm.lastReq)
+	phases := collectModelExecutionPhasesFromEvents(events)
+	require.Equal(t, []ModelExecutionPhase{
+		ModelExecutionPhaseStart,
+		ModelExecutionPhaseComplete,
+	}, phases)
+	requireModelExecutionEventMetadata(
+		t,
+		events,
+		baseInvocation.InvocationID,
+		parentInvocation.InvocationID,
+		baseInvocation.Branch,
+		baseInvocation.GetEventFilterKey(),
+		baseInvocation.RunOptions.RequestID,
+	)
+}
+
+func TestAddLLMNode_MergesSparseExecutionMetadataForBeforeModelCustomResponseContext(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	cm := &captureModel{}
+	sg.AddLLMNode("llm", cm, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	parentInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-before-custom-context-parent"),
+	)
+	baseInvocation := parentInvocation.Clone(
+		agent.WithInvocationID("inv-before-custom-context-base"),
+		agent.WithInvocationBranch("graph/before-custom-context"),
+		agent.WithInvocationEventFilterKey("graph/before-custom-context/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-before-custom-context-base",
+		}),
+	)
+	updatedInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-before-custom-context-updated"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-before-custom-context-updated",
+		}),
+	)
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				Context: agent.NewInvocationContext(ctx, updatedInvocation),
+				CustomResponse: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("custom")},
+					},
+				},
+			}, nil
+		},
+	)
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:    exec,
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.NoError(t, err)
+	events := collectModelExecutionEvents(ch)
+	require.Nil(t, cm.lastReq)
+	require.Equal(t, []ModelExecutionPhase{
+		ModelExecutionPhaseStart,
+		ModelExecutionPhaseComplete,
+	}, collectModelExecutionPhasesFromEvents(events))
+	requireModelExecutionEventMetadata(
+		t,
+		events,
+		updatedInvocation.InvocationID,
+		parentInvocation.InvocationID,
+		baseInvocation.Branch,
+		baseInvocation.GetEventFilterKey(),
+		updatedInvocation.RunOptions.RequestID,
+	)
+}
+
+func TestAddLLMNode_EmitsModelExecutionEventsForBeforeModelCustomResponse(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	cm := &captureModel{}
+	sg.AddLLMNode("llm", cm, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	parentInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-before-custom-parent"),
+	)
+	baseInvocation := parentInvocation.Clone(
+		agent.WithInvocationID("inv-before-custom"),
+		agent.WithInvocationBranch("graph/before-custom"),
+		agent.WithInvocationEventFilterKey("graph/before-custom/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-before-custom",
+		}),
+	)
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return &model.BeforeModelResult{
+				CustomResponse: &model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("custom")},
+					},
+				},
+			}, nil
+		},
+	)
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:    exec,
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.NoError(t, err)
+	events := collectModelExecutionEvents(ch)
+	require.Nil(t, cm.lastReq)
+	phases := collectModelExecutionPhasesFromEvents(events)
+	require.Equal(t, []ModelExecutionPhase{
+		ModelExecutionPhaseStart,
+		ModelExecutionPhaseComplete,
+	}, phases)
+	requireModelExecutionEventMetadata(
+		t,
+		events,
+		baseInvocation.InvocationID,
+		parentInvocation.InvocationID,
+		baseInvocation.Branch,
+		baseInvocation.GetEventFilterKey(),
+		baseInvocation.RunOptions.RequestID,
+	)
+}
+
+func TestAddLLMNode_UsesRootExecutionMetadataForPluginBeforeModelCustomResponseContext(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	cm := &captureModel{}
+	sg.AddLLMNode("llm", cm, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeModel(func(
+				ctx context.Context,
+				args *model.BeforeModelArgs,
+			) (*model.BeforeModelResult, error) {
+				updatedInvocation := agent.NewInvocation(
+					agent.WithInvocationID("inv-plugin-custom-context-updated"),
+					agent.WithInvocationBranch("graph/plugin-custom-context-updated"),
+					agent.WithInvocationEventFilterKey("graph/plugin-custom-context-updated/filter"),
+					agent.WithInvocationRunOptions(agent.RunOptions{
+						RequestID: "req-plugin-custom-context-updated",
+					}),
+				)
+				return &model.BeforeModelResult{
+					Context: agent.NewInvocationContext(ctx, updatedInvocation),
+					CustomResponse: &model.Response{
+						Done: true,
+						Choices: []model.Choice{
+							{Message: model.NewAssistantMessage("plugin-custom")},
+						},
+					},
+				}, nil
+			})
+		},
+	}
+	pm := plugin.MustNewManager(p)
+	parentInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-plugin-custom-context-parent"),
+	)
+	baseInvocation := parentInvocation.Clone(
+		agent.WithInvocationID("inv-plugin-custom-context-base"),
+		agent.WithInvocationBranch("graph/plugin-custom-context-base"),
+		agent.WithInvocationEventFilterKey("graph/plugin-custom-context-base/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-plugin-custom-context-base",
+		}),
+	)
+	baseInvocation.Plugins = pm
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: "llm",
+		StateKeyUserInput:     "hi",
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.NoError(t, err)
+	events := collectModelExecutionEvents(ch)
+	require.Nil(t, cm.lastReq)
+	require.Equal(t, []ModelExecutionPhase{
+		ModelExecutionPhaseStart,
+		ModelExecutionPhaseComplete,
+	}, collectModelExecutionPhasesFromEvents(events))
+	require.Len(t, events, 2)
+	for _, evt := range events {
+		var meta ModelExecutionMetadata
+		require.NoError(t, json.Unmarshal(evt.StateDelta[MetadataKeyModel], &meta))
+		require.Equal(t, "inv-plugin-custom-context-updated", evt.InvocationID)
+		require.Equal(t, "inv-plugin-custom-context-updated", meta.InvocationID)
+		require.Empty(t, evt.ParentInvocationID)
+		require.Equal(t, "graph/plugin-custom-context-updated", evt.Branch)
+		require.Equal(t, "graph/plugin-custom-context-updated/filter", evt.FilterKey)
+		require.Equal(t, "req-plugin-custom-context-updated", evt.RequestID)
+	}
+}
+
+func TestAddLLMNode_EmitsModelExecutionEventsForBeforeModelError(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	cm := &captureModel{}
+	sg.AddLLMNode("llm", cm, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	parentInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-before-error-parent"),
+	)
+	baseInvocation := parentInvocation.Clone(
+		agent.WithInvocationID("inv-before-error"),
+		agent.WithInvocationBranch("graph/before-error"),
+		agent.WithInvocationEventFilterKey("graph/before-error/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-before-error",
+		}),
+	)
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(ctx context.Context, args *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+			return nil, errors.New("before failed")
+		},
+	)
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:    exec,
+		StateKeyCurrentNodeID:  "llm",
+		StateKeyUserInput:      "hi",
+		StateKeyModelCallbacks: callbacks,
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.ErrorContains(t, err, "callback before model error: before failed")
+	events := collectModelExecutionEvents(ch)
+	require.Nil(t, cm.lastReq)
+	phases := collectModelExecutionPhasesFromEvents(events)
+	require.Equal(t, []ModelExecutionPhase{
+		ModelExecutionPhaseStart,
+		ModelExecutionPhaseComplete,
+	}, phases)
+	requireModelExecutionEventMetadata(
+		t,
+		events,
+		baseInvocation.InvocationID,
+		parentInvocation.InvocationID,
+		baseInvocation.Branch,
+		baseInvocation.GetEventFilterKey(),
+		baseInvocation.RunOptions.RequestID,
+	)
+}
+
+func TestAddLLMNode_EmitsModelExecutionEventsForPluginBeforeModelError(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	cm := &captureModel{}
+	sg.AddLLMNode("llm", cm, "inst", nil)
+	n, ok := sg.graph.nodes["llm"]
+	require.True(t, ok)
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeModel(func(
+				ctx context.Context,
+				args *model.BeforeModelArgs,
+			) (*model.BeforeModelResult, error) {
+				return nil, errors.New("plugin before failed")
+			})
+		},
+	}
+	pm := plugin.MustNewManager(p)
+	parentInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-plugin-before-error-parent"),
+	)
+	baseInvocation := parentInvocation.Clone(
+		agent.WithInvocationID("inv-plugin-before-error"),
+		agent.WithInvocationBranch("graph/plugin-before-error"),
+		agent.WithInvocationEventFilterKey("graph/plugin-before-error/filter"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-plugin-before-error",
+		}),
+	)
+	baseInvocation.Plugins = pm
+	ch := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-llm", EventChan: ch}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: "llm",
+		StateKeyUserInput:     "hi",
+	}
+	_, err := n.Function(
+		agent.NewInvocationContext(context.Background(), baseInvocation),
+		state,
+	)
+	require.ErrorContains(t, err, "callback before model error:")
+	require.ErrorContains(t, err, "plugin before failed")
+	events := collectModelExecutionEvents(ch)
+	require.Nil(t, cm.lastReq)
+	phases := collectModelExecutionPhasesFromEvents(events)
+	require.Equal(t, []ModelExecutionPhase{
+		ModelExecutionPhaseStart,
+		ModelExecutionPhaseComplete,
+	}, phases)
+	requireModelExecutionEventMetadata(
+		t,
+		events,
+		baseInvocation.InvocationID,
+		parentInvocation.InvocationID,
+		baseInvocation.Branch,
+		baseInvocation.GetEventFilterKey(),
+		baseInvocation.RunOptions.RequestID,
+	)
+}
+
+func TestExecuteModelAndProcessResponses_TracksFinalizeErrors(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := itelemetry.MeterProvider
+	originalMeter := itelemetry.ChatMeter
+	originalRequestCnt := itelemetry.ChatMetricTRPCAgentGoClientRequestCnt
+	defer func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.ChatMeter = originalMeter
+		itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = originalRequestCnt
+	}()
+	itelemetry.MeterProvider = provider
+	itelemetry.ChatMeter = provider.Meter(semconvmetrics.MeterNameChat)
+	requestCnt, err := itelemetry.ChatMeter.Int64Counter("trpc_agent_go.client.request.cnt")
+	require.NoError(t, err)
+	itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = requestCnt
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-metrics"),
+		agent.WithInvocationModel(&noResponseModel{}),
+		agent.WithInvocationSession(&session.Session{ID: "sess-metrics"}),
+	)
+	_, err = executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), invocation),
+		modelExecutionConfig{
+			Invocation:   invocation,
+			LLMModel:     invocation.Model,
+			Request:      &model.Request{},
+			InvocationID: invocation.InvocationID,
+			SessionID:    invocation.Session.ID,
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.ErrorContains(t, err, errMsgNoModelResponse)
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType))
+}
+
+func TestExecuteModelAndProcessResponses_TracksFinalizeErrorsForNilIterSequence(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := itelemetry.MeterProvider
+	originalMeter := itelemetry.ChatMeter
+	originalRequestCnt := itelemetry.ChatMetricTRPCAgentGoClientRequestCnt
+	defer func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.ChatMeter = originalMeter
+		itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = originalRequestCnt
+	}()
+	itelemetry.MeterProvider = provider
+	itelemetry.ChatMeter = provider.Meter(semconvmetrics.MeterNameChat)
+	requestCnt, err := itelemetry.ChatMeter.Int64Counter("trpc_agent_go.client.request.cnt")
+	require.NoError(t, err)
+	itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = requestCnt
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-metrics-nil-iter"),
+		agent.WithInvocationModel(&nilIterModel{}),
+		agent.WithInvocationSession(&session.Session{ID: "sess-metrics-nil-iter"}),
+	)
+	_, err = executeModelAndProcessResponses(
+		agent.NewInvocationContext(context.Background(), invocation),
+		modelExecutionConfig{
+			Invocation:   invocation,
+			LLMModel:     invocation.Model,
+			Request:      &model.Request{},
+			InvocationID: invocation.InvocationID,
+			SessionID:    invocation.Session.ID,
+			Span:         noop.Span{},
+			NodeID:       "llm",
+		},
+	)
+	require.ErrorContains(t, err, errMsgNoModelResponse)
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	require.True(t, resourceMetricsContainAttribute(rm, semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType))
+}
+
+func resourceMetricsContainAttribute(rm metricdata.ResourceMetrics, key, value string) bool {
+	for _, scopeMetric := range rm.ScopeMetrics {
+		for _, metric := range scopeMetric.Metrics {
+			switch data := metric.Data.(type) {
+			case metricdata.Sum[int64]:
+				for _, point := range data.DataPoints {
+					if attributeSetContains(point.Attributes, key, value) {
+						return true
+					}
+				}
+			case metricdata.Sum[float64]:
+				for _, point := range data.DataPoints {
+					if attributeSetContains(point.Attributes, key, value) {
+						return true
+					}
+				}
+			case metricdata.Histogram[int64]:
+				for _, point := range data.DataPoints {
+					if attributeSetContains(point.Attributes, key, value) {
+						return true
+					}
+				}
+			case metricdata.Histogram[float64]:
+				for _, point := range data.DataPoints {
+					if attributeSetContains(point.Attributes, key, value) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func attributeSetContains(set attribute.Set, key, value string) bool {
+	for _, kv := range set.ToSlice() {
+		if string(kv.Key) == key && kv.Value.AsString() == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuilderOptions_Destinations_And_Callbacks(t *testing.T) {

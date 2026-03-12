@@ -38,6 +38,8 @@ const (
 	// Timeout for event completion signaling.
 	eventCompletionTimeout = 5 * time.Second
 
+	errMsgNoModelResponse = "no response received from model"
+
 	flowRunPanicLogFmt = "Flow execution panic (invocation: %s, " +
 		"agent: %s): %v\n%s"
 
@@ -353,6 +355,11 @@ func (f *Flow) runOneStep(
 }
 
 // processStreamingResponses handles the streaming response processing logic.
+type partialUsageState struct {
+	usage      *model.Usage
+	timingInfo *model.TimingInfo
+}
+
 func (f *Flow) processStreamingResponses(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -361,60 +368,113 @@ func (f *Flow) processStreamingResponses(
 	eventChan chan<- *event.Event,
 	span oteltrace.Span,
 ) (lastEvent *event.Event, err error) {
-	// Get or create timing info from invocation (only record first LLM call)
-	timingInfo := invocation.GetOrCreateTimingInfo()
-
-	// Create telemetry tracker and defer metrics recording
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, llmRequest, timingInfo, nil, &err)
-	defer tracker.RecordMetrics()()
+	currentInvocation := invocationFromContextOrDefault(ctx, invocation)
+	metricsInvocation := invocation
+	if metricsInvocation == nil {
+		metricsInvocation = currentInvocation
+	}
+	var tracker *itelemetry.ChatMetricsTracker
+	var timingInfo *model.TimingInfo
+	var partialUsageState partialUsageState
+	if metricsInvocation != nil {
+		timingInfo = responseUsageTimingInfo(currentInvocation)
+		tracker = itelemetry.NewChatMetricsTracker(
+			ctx,
+			metricsInvocation,
+			llmRequest,
+			timingInfo,
+			nil,
+			&err,
+		)
+		defer tracker.RecordMetrics()()
+	}
 
 	responseSeq(func(response *model.Response) bool {
-		// Track response for telemetry (token usage and timing info)
-		tracker.TrackResponse(response)
-
-		// Attach timing info to response
-		if response.Usage == nil {
-			response.Usage = &model.Usage{}
+		currentInvocation = invocationFromContextOrDefault(
+			ctx,
+			currentInvocation,
+		)
+		timingInfo = responseUsageTimingInfo(currentInvocation)
+		if tracker != nil {
+			tracker.SetInvocationState(currentInvocation, timingInfo)
 		}
-		// set timing info to response
-		response.Usage.TimingInfo = timingInfo
-
+		trackModelResponseTelemetry(
+			response,
+			tracker,
+		)
+		eventInvocation := invocation
+		if eventInvocation == nil {
+			eventInvocation = currentInvocation
+		}
 		// Handle after model callbacks.
-		customResp, cbErr := f.handleAfterModelCallbacks(ctx, invocation, llmRequest, response, eventChan)
+		updatedCtx, customResp, cbErr := f.handleAfterModelCallbacks(
+			ctx,
+			eventInvocation,
+			currentInvocation,
+			llmRequest,
+			response,
+			eventChan,
+		)
 		if cbErr != nil {
 			err = cbErr
 			return false
 		}
+		ctx = updatedCtx
 		if customResp != nil {
 			response = customResp
 		}
+		currentInvocation = invocationFromContextOrDefault(
+			ctx,
+			currentInvocation,
+		)
+		timingInfo = responseUsageTimingInfo(currentInvocation)
+		if tracker != nil {
+			tracker.SetInvocationState(currentInvocation, timingInfo)
+		}
+		attachResponseUsageTiming(response, timingInfo, &partialUsageState)
 		// Repair tool call arguments in place when needed.
-		if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+		if currentInvocation != nil &&
+			jsonrepair.IsToolCallArgumentsJSONRepairEnabled(currentInvocation) {
 			jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, response)
 		}
 		// 4. Create and send LLM response using the clean constructor.
-		llmResponseEvent := f.createLLMResponseEvent(invocation, response, llmRequest)
-		agent.EmitEvent(ctx, invocation, eventChan, llmResponseEvent)
+		llmResponseEvent := f.createLLMResponseEvent(
+			eventInvocation,
+			currentInvocation,
+			response,
+			llmRequest,
+		)
+		agent.EmitEvent(ctx, eventInvocation, eventChan, llmResponseEvent)
 		lastEvent = llmResponseEvent
-		tracker.SetLastEvent(lastEvent)
+		if tracker != nil {
+			tracker.SetLastEvent(lastEvent)
+		}
 		// 5. Check context cancellation.
 		if err = agent.CheckContextCancelled(ctx); err != nil {
 			return false
 		}
-
 		// 6. Postprocess response.
-		f.postprocess(ctx, invocation, llmRequest, response, eventChan)
+		f.postprocess(
+			ctx,
+			eventInvocation,
+			llmRequest,
+			response,
+			eventChan,
+		)
 		if ctxErr := agent.CheckContextCancelled(ctx); ctxErr != nil {
 			err = ctxErr
 			return false
 		}
-
+		var ttfb time.Duration
+		if tracker != nil {
+			ttfb = tracker.FirstTokenTimeDuration()
+		}
 		itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
-			Invocation:       invocation,
+			Invocation:       eventInvocation,
 			Request:          llmRequest,
 			Response:         response,
 			EventID:          llmResponseEvent.ID,
-			TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+			TimeToFirstToken: ttfb,
 		})
 		return true
 	})
@@ -427,11 +487,12 @@ func (f *Flow) processStreamingResponses(
 // handleAfterModelCallbacks processes after model callbacks.
 func (f *Flow) handleAfterModelCallbacks(
 	ctx context.Context,
+	eventInvocation *agent.Invocation,
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 	response *model.Response,
 	eventChan chan<- *event.Event,
-) (*model.Response, error) {
+) (context.Context, *model.Response, error) {
 	ctx, customResp, err := f.runAfterModelCallbacks(
 		ctx,
 		invocation,
@@ -440,33 +501,122 @@ func (f *Flow) handleAfterModelCallbacks(
 	)
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
-			return nil, err
+			return ctx, nil, err
 		}
-
 		log.ErrorfContext(
 			ctx,
 			"After model callback failed for agent %s: %v",
-			invocation.AgentName,
+			flowAgentName(eventInvocation),
 			err,
 		)
-		agent.EmitEvent(ctx, invocation, eventChan, event.NewErrorEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
+		agent.EmitEvent(ctx, eventInvocation, eventChan, event.NewErrorEvent(
+			flowInvocationID(eventInvocation),
+			flowAgentName(eventInvocation),
 			model.ErrorTypeFlowError,
 			err.Error(),
 		))
-		return nil, err
+		return ctx, nil, err
 	}
-	return customResp, nil
+	return ctx, customResp, nil
 }
 
 // createLLMResponseEvent creates a new LLM response event.
-func (f *Flow) createLLMResponseEvent(invocation *agent.Invocation, response *model.Response, llmRequest *model.Request) *event.Event {
-	llmResponseEvent := event.New(invocation.InvocationID, invocation.AgentName, event.WithResponse(response))
+func (f *Flow) createLLMResponseEvent(
+	eventInvocation *agent.Invocation,
+	optionsInvocation *agent.Invocation,
+	response *model.Response,
+	llmRequest *model.Request,
+) *event.Event {
+	invocationID, agentName := "", ""
+	if eventInvocation != nil {
+		invocationID = eventInvocation.InvocationID
+		agentName = eventInvocation.AgentName
+	}
+	llmResponseEvent := event.New(
+		invocationID,
+		agentName,
+		event.WithResponse(response),
+	)
+	applyPartialEventMetadataOverrides(
+		llmResponseEvent,
+		response,
+		optionsInvocation,
+	)
 	if len(response.Choices) > 0 && len(response.Choices[0].Message.ToolCalls) > 0 {
 		llmResponseEvent.LongRunningToolIDs = collectLongRunningToolIDs(response.Choices[0].Message.ToolCalls, llmRequest.Tools)
 	}
 	return llmResponseEvent
+}
+
+func invocationFromContextOrDefault(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) *agent.Invocation {
+	if updatedInvocation, ok := agent.InvocationFromContext(ctx); ok &&
+		updatedInvocation != nil {
+		return updatedInvocation
+	}
+	return invocation
+}
+
+func trackModelResponseTelemetry(
+	response *model.Response,
+	tracker *itelemetry.ChatMetricsTracker,
+) {
+	if tracker == nil || response == nil {
+		return
+	}
+	tracker.TrackResponse(response)
+}
+
+func attachResponseUsageTiming(
+	response *model.Response,
+	timingInfo *model.TimingInfo,
+	partialUsageState *partialUsageState,
+) {
+	if response == nil || timingInfo == nil {
+		return
+	}
+	if response.Usage == nil {
+		if response.IsPartial {
+			if partialUsageState == nil {
+				response.Usage = &model.Usage{}
+			} else {
+				if partialUsageState.usage == nil ||
+					partialUsageState.timingInfo != timingInfo {
+					partialUsageState.usage = &model.Usage{}
+					partialUsageState.timingInfo = timingInfo
+				}
+				response.Usage = partialUsageState.usage
+			}
+		} else {
+			response.Usage = &model.Usage{}
+		}
+	}
+	response.Usage.TimingInfo = timingInfo
+}
+
+func responseUsageTimingInfo(invocation *agent.Invocation) *model.TimingInfo {
+	if invocation == nil || invocation.RunOptions.DisableResponseUsageTracking {
+		return nil
+	}
+	return invocation.GetOrCreateTimingInfo()
+}
+
+func applyPartialEventMetadataOverrides(
+	ev *event.Event,
+	response *model.Response,
+	invocation *agent.Invocation,
+) {
+	if ev == nil || response == nil || !response.IsPartial || invocation == nil {
+		return
+	}
+	if invocation.RunOptions.DisablePartialEventIDs {
+		ev.ID = ""
+	}
+	if invocation.RunOptions.DisablePartialEventTimestamps {
+		ev.Timestamp = response.Timestamp
+	}
 }
 
 func collectLongRunningToolIDs(ToolCalls []model.ToolCall, tools map[string]tool.Tool) map[string]struct{} {
@@ -777,6 +927,9 @@ func (f *Flow) generateContentSeq(
 				err,
 			)
 			return nil, err
+		}
+		if seq == nil {
+			return nil, errors.New(errMsgNoModelResponse)
 		}
 		return seq, nil
 	}
