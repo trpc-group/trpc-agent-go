@@ -119,13 +119,23 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName))
 	stream := iagent.ResolveInvokeAgentStream(invocation, nil)
 	itelemetry.TraceBeforeInvokeAgent(span, invocation, ga.description, "", &model.GenerationConfig{Stream: stream})
-	defer span.End()
 	defer close(out)
+	var trackerErr error
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
+	tokenUsage := &itelemetry.TokenUsage{}
+	var fullRespEvent *event.Event
+	defer func() {
+		if fullRespEvent != nil {
+			itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
+		}
+		span.End()
+	}()
 	// Emit a barrier event and wait for completion in a dedicated goroutine so that the runner can append all prior
 	// events before GraphAgent reads history.
 	if err := ga.emitStartBarrierAndWait(ctx, invocation, out); err != nil {
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
+		fullRespEvent = evt
 		span.SetStatus(codes.Error, err.Error())
 		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
 		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
@@ -137,6 +147,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	if err != nil {
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
+		fullRespEvent = evt
 		span.SetStatus(codes.Error, err.Error())
 		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
 		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
@@ -145,6 +156,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 		return
 	}
 	for evt := range innerChan {
+		fullRespEvent = recordTraceEvent(tracker, tokenUsage, fullRespEvent, evt)
 		if err := event.EmitEvent(ctx, out, evt); err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
@@ -152,6 +164,33 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 			return
 		}
 	}
+}
+
+func recordTraceEvent(
+	tracker *itelemetry.InvokeAgentTracker,
+	tokenUsage *itelemetry.TokenUsage,
+	fullRespEvent *event.Event,
+	evt *event.Event,
+) *event.Event {
+	if evt == nil || evt.Response == nil {
+		return fullRespEvent
+	}
+	if tracker != nil {
+		tracker.TrackResponse(evt.Response)
+	}
+	if evt.Response.IsPartial {
+		return fullRespEvent
+	}
+	if !evt.IsError() && !evt.Response.IsValidContent() &&
+		!(evt.Done && evt.Object == graph.ObjectTypeGraphExecution) {
+		return fullRespEvent
+	}
+	if evt.Response.Usage != nil && tokenUsage != nil {
+		tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
+		tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
+		tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+	}
+	return evt
 }
 
 // emitStartBarrierAndWait emits a barrier event and waits until the runner has processed it,

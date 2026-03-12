@@ -588,19 +588,26 @@ func TestTraceBeforeInvokeAgent_NilPaths(t *testing.T) {
 
 func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 	tests := []struct {
-		name       string
-		rspEvent   *event.Event
-		tokenUsage *TokenUsage
+		name             string
+		rspEvent         *event.Event
+		tokenUsage       *TokenUsage
+		timeToFirstToken time.Duration
 	}{
 		{
-			name:       "nil rspEvent",
-			rspEvent:   nil,
-			tokenUsage: nil,
+			name:     "nil rspEvent still records token usage and ttft",
+			rspEvent: nil,
+			tokenUsage: &TokenUsage{
+				PromptTokens:     10,
+				CompletionTokens: 20,
+				TotalTokens:      30,
+			},
+			timeToFirstToken: 2 * time.Second,
 		},
 		{
-			name:       "rspEvent with nil response",
-			rspEvent:   event.New("evt1", "author"),
-			tokenUsage: nil,
+			name:             "rspEvent with nil response",
+			rspEvent:         &event.Event{},
+			tokenUsage:       nil,
+			timeToFirstToken: 0,
 		},
 		{
 			name: "with token usage",
@@ -614,17 +621,21 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 				CompletionTokens: 20,
 				TotalTokens:      30,
 			},
+			timeToFirstToken: 0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			span := newRecordingSpan()
-			TraceAfterInvokeAgent(span, tt.rspEvent, tt.tokenUsage, 0)
+			TraceAfterInvokeAgent(span, tt.rspEvent, tt.tokenUsage, tt.timeToFirstToken)
 
-			if tt.tokenUsage != nil && tt.rspEvent != nil && tt.rspEvent.Response != nil {
+			if tt.tokenUsage != nil {
 				require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUsageInputTokens, int64(tt.tokenUsage.PromptTokens)))
 				require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUsageOutputTokens, int64(tt.tokenUsage.CompletionTokens)))
+			}
+			if tt.timeToFirstToken > 0 {
+				require.True(t, hasAttr(span.attrs, semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, tt.timeToFirstToken.Seconds()))
 			}
 		})
 	}
