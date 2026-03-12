@@ -14,13 +14,10 @@ package loader
 
 import "trpc.group/trpc-go/trpc-agent-go/log"
 
-// This file provides Stats, a small helper to collect document-size statistics
-// in a concurrency-safe manner when used in combination with the Aggregator.
+// This file provides Stats, a small helper to collect document-size statistics.
 
 // Stats tracks statistics for document sizes during a load run.
-// This is a near-copy of the original sizeStats type but is placed in an
-// internal package so it can be updated safely by a single goroutine that
-// owns all state.
+// It is shared by both source-level and load-level reporting paths.
 type Stats struct {
 	TotalDocs  int
 	TotalSize  int

@@ -320,6 +320,49 @@ err := kb.Load(ctx,
 > - Adjust `WithSourceConcurrency()` and `WithDocConcurrency()` according to throughput, cost, and rate limits.
 > - Default values are balanced for most scenarios; increase for speed if needed, decrease if rate limiting occurs.
 
+### Load Progress Callback
+
+Use `WithLoadProgressCallback` to register a structured progress callback for driving custom UIs, metrics collection, or other observability integrations without parsing log output:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge"
+
+err := kb.Load(ctx,
+    knowledge.WithLoadProgressCallback(func(ctx context.Context, evt knowledge.LoadProgressEvent) {
+        if evt.Done {
+            fmt.Printf("All sources loaded. total: %d docs, elapsed: %s\n",
+                evt.Total, evt.TotalElapsed)
+            return
+        }
+        if evt.Err != nil {
+            fmt.Printf("Source %s failed: %v\n", evt.SourceName, evt.Err)
+            return
+        }
+        fmt.Printf("Source %s: %d/%d docs, ETA: %s\n",
+            evt.SourceName, evt.SourceProcessed, evt.SourceTotal, evt.SourceETA)
+    }),
+)
+```
+
+`LoadProgressEvent` contains the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `SourceNames` | `[]string` | All source names involved in the current Load call |
+| `SourceName` | `string` | Name of the source currently being loaded |
+| `SourceProcessed` | `int` | Number of documents processed so far in this source |
+| `SourceTotal` | `int` | Total number of documents in this source |
+| `SourceElapsed` | `time.Duration` | Time elapsed since this source started loading |
+| `SourceETA` | `time.Duration` | Estimated time remaining for this source |
+| `Total` | `int` | Cumulative documents processed across all sources |
+| `TotalElapsed` | `time.Duration` | Wall-clock time elapsed since the Load call started |
+| `Done` | `bool` | Whether the entire Load operation has finished |
+| `Err` | `error` | Non-nil when a source encounters an error |
+
+> **Note**: When using concurrent loading (`WithSourceConcurrency > 1` or `WithDocConcurrency > 1`), the callback may be invoked from multiple goroutines concurrently. Callers must synchronize any shared state accessed inside the callback.
+
+For a complete example, see [examples/knowledge/basic](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/basic), which demonstrates a multi-line progress bar UI built on top of the progress callback.
+
 ## Evaluation and Comparison
 
 We have conducted comprehensive RAG quality evaluation of tRPC-Agent-Go, LangChain, Agno, and CrewAI using the [RAGAS](https://docs.ragas.io/) framework.
