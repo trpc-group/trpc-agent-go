@@ -226,12 +226,15 @@ func (s *Service) Head(
 	}
 
 	objectKey := iartifact.BuildObjectName(req.SessionInfo, req.Filename, targetVersion)
-	size, contentType, err := s.client.HeadObject(ctx, objectKey)
+	head, err := s.client.HeadObject(ctx, &s3storage.HeadObjectRequest{Key: objectKey})
 	if err != nil {
 		if errors.Is(err, s3storage.ErrNotFound) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to head artifact: %w", err)
+	}
+	if head == nil {
+		return nil, fmt.Errorf("failed to head artifact: empty response")
 	}
 
 	o := artifact.HeadOptions{}
@@ -250,8 +253,8 @@ func (s *Service) Head(
 	return &artifact.HeadResponse{
 		Filename: req.Filename,
 		Version:  targetVersion,
-		Size:     size,
-		MimeType: cmp.Or(contentType, defaultContentType),
+		Size:     head.Size,
+		MimeType: cmp.Or(head.ContentType, defaultContentType),
 		URL:      url,
 		Name:     req.Filename,
 	}, nil

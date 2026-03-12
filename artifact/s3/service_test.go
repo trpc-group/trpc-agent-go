@@ -63,15 +63,26 @@ func (m *mockStorage) GetObject(ctx context.Context, key string) ([]byte, string
 	return append([]byte(nil), obj.data...), obj.contentType, nil
 }
 
-func (m *mockStorage) HeadObject(ctx context.Context, key string) (int64, string, error) {
+func (m *mockStorage) HeadObject(
+	ctx context.Context,
+	req *s3storage.HeadObjectRequest,
+	_ ...s3storage.HeadObjectOption,
+) (*s3storage.HeadObjectResponse, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	obj, ok := m.objects[key]
-	if !ok {
-		return 0, "", s3storage.ErrNotFound
+	if req == nil {
+		return nil, errors.New("head object request is nil")
 	}
-	return int64(len(obj.data)), obj.contentType, nil
+
+	obj, ok := m.objects[req.Key]
+	if !ok {
+		return nil, s3storage.ErrNotFound
+	}
+	return &s3storage.HeadObjectResponse{
+		Size:        int64(len(obj.data)),
+		ContentType: obj.contentType,
+	}, nil
 }
 
 func (m *mockStorage) ListObjects(ctx context.Context, prefix string) ([]string, error) {
