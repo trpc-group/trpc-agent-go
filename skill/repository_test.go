@@ -304,6 +304,15 @@ func TestParseHelpers_And_DocFlags(t *testing.T) {
 	m, bod = splitFrontMatter("---\nname: z\n---\nB")
 	require.Equal(t, "z", m["name"])
 	require.Equal(t, "B", bod)
+	m, bod = splitFrontMatter("---\nname: z\n---")
+	require.Equal(t, "z", m["name"])
+	require.Empty(t, bod)
+
+	rd3 := bufio.NewReader(strings.NewReader("---\nname: z\n---"))
+	m, bod, err = readFrontMatter(rd3)
+	require.NoError(t, err)
+	require.Equal(t, "z", m["name"])
+	require.Empty(t, bod)
 
 	// ioReadAll helper returns the remaining text.
 	rd2 := bufio.NewReader(strings.NewReader("A\nB\n"))
@@ -315,6 +324,19 @@ func TestParseHelpers_And_DocFlags(t *testing.T) {
 	require.True(t, isDocFile("x.md"))
 	require.True(t, isDocFile("y.TXT"))
 	require.False(t, isDocFile("z.bin"))
+}
+
+func TestParseFull_FrontMatterClosingFenceAtEOF(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, skillFile)
+	data := "---\nname: eof\ndescription: desc\n---"
+	require.NoError(t, os.WriteFile(p, []byte(data), 0o644))
+
+	sum, body, err := parseFull(p)
+	require.NoError(t, err)
+	require.Equal(t, "eof", sum.Name)
+	require.Equal(t, "desc", sum.Description)
+	require.Empty(t, body)
 }
 
 func TestFSRepository_DuplicateSkill_PrefersFirst(t *testing.T) {

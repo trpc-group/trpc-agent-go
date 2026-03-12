@@ -21,6 +21,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -30,6 +31,8 @@ import (
 
 // skillFile is the canonical skill definition filename.
 const skillFile = "SKILL.md"
+
+const frontMatterDelimiter = "---"
 
 // EnvSkillsRoot is the environment variable name that points to the
 // skills repository root directory used by examples and runtimes.
@@ -255,25 +258,53 @@ func parseFull(path string) (Summary, string, error) {
 func readFrontMatter(r *bufio.Reader) (map[string]string, string,
 	error) {
 	line, err := r.ReadString('\n')
-	if err != nil {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, "", err
 	}
-	if strings.TrimSpace(line) != "---" {
+	if strings.TrimSpace(line) != frontMatterDelimiter {
 		return nil, "", errors.New("no front matter")
 	}
-	m := map[string]string{}
 	var b strings.Builder
 	for {
 		l, err2 := r.ReadString('\n')
+		if err2 != nil && !errors.Is(err2, io.EOF) {
+			return nil, "", err2
+		}
+		if strings.TrimSpace(l) == frontMatterDelimiter {
+			break
+		}
 		if err2 != nil {
 			return nil, "", err2
 		}
-		if strings.TrimSpace(l) == "---" {
-			break
-		}
 		b.WriteString(l)
 	}
-	for _, l := range strings.Split(b.String(), "\n") {
+	m := parseFrontMatterMap(b.String())
+	rest, _ := ioReadAll(r)
+	return m, rest, nil
+}
+
+// splitFrontMatter splits text into map and body.
+func splitFrontMatter(text string) (map[string]string, string) {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	if len(lines) == 0 || lines[0] != frontMatterDelimiter {
+		return map[string]string{}, text
+	}
+	for i := 1; i < len(lines); i++ {
+		if lines[i] != frontMatterDelimiter {
+			continue
+		}
+		fm := strings.Join(lines[1:i], "\n")
+		body := strings.Join(lines[i+1:], "\n")
+		return parseFrontMatterMap(fm), body
+	}
+	// No closing; treat whole as body.
+	return map[string]string{}, text
+}
+
+func parseFrontMatterMap(text string) map[string]string {
+	m := map[string]string{}
+	for _, l := range strings.Split(text, "\n") {
 		l = strings.TrimSpace(l)
 		if l == "" || strings.HasPrefix(l, "#") {
 			continue
@@ -285,36 +316,7 @@ func readFrontMatter(r *bufio.Reader) (map[string]string, string,
 			m[k] = strings.Trim(v, " \"'")
 		}
 	}
-	rest, _ := ioReadAll(r)
-	return m, rest, nil
-}
-
-// splitFrontMatter splits text into map and body.
-func splitFrontMatter(text string) (map[string]string, string) {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	if !strings.HasPrefix(text, "---\n") {
-		return map[string]string{}, text
-	}
-	idx := strings.Index(text[4:], "\n---\n")
-	if idx < 0 {
-		// No closing; treat whole as body.
-		return map[string]string{}, text
-	}
-	fm := text[4 : 4+idx]
-	body := text[4+idx+5:]
-	m := map[string]string{}
-	for _, l := range strings.Split(fm, "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "#") {
-			continue
-		}
-		if i := strings.Index(l, ":"); i >= 0 {
-			k := strings.TrimSpace(l[:i])
-			v := strings.TrimSpace(l[i+1:])
-			m[k] = strings.Trim(v, " \"'")
-		}
-	}
-	return m, body
+	return m
 }
 
 func ioReadAll(r *bufio.Reader) (string, error) {
