@@ -309,9 +309,15 @@ Notes:
 - For secrets (model keys, Telegram tokens), keep them out of version control.
   Prefer environment variables when available.
 - The sample Telegram config enables the native `browser` tool against the
-  local browser-server defaults. Start `openclaw/browser-server` before
-  asking for browser snapshots, screenshots, downloads, uploads, or relay
-  actions. See `openclaw/examples/browser_server_use/`.
+  local browser-server defaults. When `server_url` points at
+  `http://127.0.0.1:19790`, `go run ./cmd/openclaw` now probes that address
+  and auto-starts `openclaw/browser-server` if it is not already running.
+  The checkout must already have `openclaw/browser-server` dependencies
+  installed (`npm install` and `npx playwright install chromium`), and the
+  managed process logs are written under `<state_dir>/debug/services/` and
+  surfaced in the admin Browser card. If auto-start cannot find the local
+  browser-server checkout, set `OPENCLAW_BROWSER_SERVER_DIR` or start the
+  server manually. See `openclaw/examples/browser_server_use/`.
 - The sample config in `./openclaw.yaml` is ready to use with
   `go run ./cmd/openclaw -config ./openclaw.yaml`.
 - The sample config in `./openclaw.stdin.yaml` is ready to use with

@@ -110,7 +110,8 @@ type Config struct {
 }
 
 type BrowserConfig struct {
-	Providers []BrowserProvider `json:"providers,omitempty"`
+	Providers []BrowserProvider            `json:"providers,omitempty"`
+	Managed   BrowserManagedStatusProvider `json:"-"`
 }
 
 type BrowserProvider struct {
@@ -137,6 +138,28 @@ type BrowserProfile struct {
 type BrowserNode struct {
 	ID        string `json:"id,omitempty"`
 	ServerURL string `json:"server_url,omitempty"`
+}
+
+type BrowserManagedStatusProvider interface {
+	BrowserManagedStatus() BrowserManagedService
+}
+
+type BrowserManagedService struct {
+	Enabled         bool       `json:"enabled"`
+	Managed         bool       `json:"managed"`
+	State           string     `json:"state,omitempty"`
+	URL             string     `json:"url,omitempty"`
+	PID             int        `json:"pid,omitempty"`
+	WorkDir         string     `json:"work_dir,omitempty"`
+	Command         string     `json:"command,omitempty"`
+	LogPath         string     `json:"log_path,omitempty"`
+	LogRelativePath string     `json:"log_relative_path,omitempty"`
+	LogURL          string     `json:"log_url,omitempty"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	StoppedAt       *time.Time `json:"stopped_at,omitempty"`
+	ExitCode        *int       `json:"exit_code,omitempty"`
+	LastError       string     `json:"last_error,omitempty"`
+	RecentLogs      []string   `json:"recent_logs,omitempty"`
 }
 
 type Service struct {
@@ -237,6 +260,7 @@ type browserStatus struct {
 	ProviderCount int                   `json:"provider_count"`
 	ProfileCount  int                   `json:"profile_count"`
 	NodeCount     int                   `json:"node_count"`
+	Managed       BrowserManagedService `json:"managed,omitempty"`
 	Providers     []browserProviderView `json:"providers,omitempty"`
 }
 
@@ -377,17 +401,36 @@ func (s *Service) Snapshot() snapshot {
 }
 
 func (s *Service) browserStatus() browserStatus {
-	if len(s.cfg.Browser.Providers) == 0 {
+	if len(s.cfg.Browser.Providers) == 0 &&
+		s.cfg.Browser.Managed == nil {
 		return browserStatus{}
 	}
 
 	probes := make(map[string]browserEndpointView)
-	out := browserStatus{
-		Enabled:       true,
-		ProviderCount: len(s.cfg.Browser.Providers),
-		Providers: make([]browserProviderView, 0,
-			len(s.cfg.Browser.Providers)),
+	out := browserStatus{}
+	if s.cfg.Browser.Managed != nil {
+		managed := s.cfg.Browser.Managed.BrowserManagedStatus()
+		managed.LogRelativePath = filepath.ToSlash(strings.TrimSpace(
+			managed.LogRelativePath,
+		))
+		if managed.LogURL == "" &&
+			managed.LogRelativePath != "" {
+			managed.LogURL = routeDebugFile + "?" + url.Values{
+				queryPath: {managed.LogRelativePath},
+			}.Encode()
+		}
+		if len(managed.RecentLogs) > 0 {
+			managed.RecentLogs = append(
+				[]string(nil),
+				managed.RecentLogs...,
+			)
+		}
+		out.Managed = managed
 	}
+	out.Enabled = len(s.cfg.Browser.Providers) > 0 || out.Managed.Enabled
+	out.ProviderCount = len(s.cfg.Browser.Providers)
+	out.Providers = make([]browserProviderView, 0,
+		len(s.cfg.Browser.Providers))
 	for i := range s.cfg.Browser.Providers {
 		provider := s.cfg.Browser.Providers[i]
 		view := browserProviderView{
@@ -676,7 +719,8 @@ func (s *Service) handleDebugFile(
 
 	tracePath := strings.TrimSpace(r.URL.Query().Get(queryTrace))
 	name := strings.TrimSpace(r.URL.Query().Get(queryName))
-	filePath, err := s.resolveDebugFile(tracePath, name)
+	relPath := strings.TrimSpace(r.URL.Query().Get(queryPath))
+	filePath, err := s.resolveDebugFile(tracePath, name, relPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -988,10 +1032,14 @@ func browserEndpointSummary(view browserEndpointView) string {
 func (s *Service) resolveDebugFile(
 	tracePath string,
 	name string,
+	relPath string,
 ) (string, error) {
 	root := strings.TrimSpace(s.cfg.DebugDir)
 	if root == "" {
 		return "", fmt.Errorf("debug recorder is not configured")
+	}
+	if strings.TrimSpace(relPath) != "" {
+		return resolveDebugRootFile(root, relPath)
 	}
 	if strings.TrimSpace(tracePath) == "" {
 		return "", fmt.Errorf("trace path is required")
@@ -1022,6 +1070,42 @@ func (s *Service) resolveDebugFile(
 	}
 	if _, err := os.Stat(absCandidate); err != nil {
 		return "", fmt.Errorf("debug file not found")
+	}
+	return absCandidate, nil
+}
+
+func resolveDebugRootFile(root string, relPath string) (string, error) {
+	clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(relPath)))
+	if clean == "." || clean == "" {
+		return "", fmt.Errorf("debug path is required")
+	}
+	if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+		return "", fmt.Errorf("invalid debug path")
+	}
+
+	candidate := filepath.Join(root, clean)
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve debug root: %w", err)
+	}
+	absCandidate, err := filepath.Abs(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve debug file: %w", err)
+	}
+	if absCandidate != absRoot &&
+		!strings.HasPrefix(
+			absCandidate,
+			absRoot+string(os.PathSeparator),
+		) {
+		return "", fmt.Errorf("debug file escapes debug root")
+	}
+
+	info, err := os.Stat(absCandidate)
+	if err != nil {
+		return "", fmt.Errorf("debug file not found")
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("debug path is a directory")
 	}
 	return absCandidate, nil
 }
@@ -1270,7 +1354,13 @@ const adminPageHTML = `<!doctype html>
           <dt>App</dt>
           <dd>{{.Snapshot.AppName}}</dd>
           <dt>Agent Type</dt>
-          <dd>{{if .Snapshot.AgentType}}{{.Snapshot.AgentType}}{{else}}-{{end}}</dd>
+          <dd>
+            {{if .Snapshot.AgentType}}
+              {{.Snapshot.AgentType}}
+            {{else}}
+              -
+            {{end}}
+          </dd>
           <dt>Model</dt>
           <dd>
             {{if .Snapshot.ModelName}}
@@ -1280,11 +1370,29 @@ const adminPageHTML = `<!doctype html>
             {{else}}-{{end}}
           </dd>
           <dt>Session Backend</dt>
-          <dd>{{if .Snapshot.SessionBackend}}{{.Snapshot.SessionBackend}}{{else}}-{{end}}</dd>
+          <dd>
+            {{if .Snapshot.SessionBackend}}
+              {{.Snapshot.SessionBackend}}
+            {{else}}
+              -
+            {{end}}
+          </dd>
           <dt>Memory Backend</dt>
-          <dd>{{if .Snapshot.MemoryBackend}}{{.Snapshot.MemoryBackend}}{{else}}-{{end}}</dd>
+          <dd>
+            {{if .Snapshot.MemoryBackend}}
+              {{.Snapshot.MemoryBackend}}
+            {{else}}
+              -
+            {{end}}
+          </dd>
           <dt>Host</dt>
-          <dd>{{if .Snapshot.Hostname}}{{.Snapshot.Hostname}}{{else}}-{{end}}</dd>
+          <dd>
+            {{if .Snapshot.Hostname}}
+              {{.Snapshot.Hostname}}
+            {{else}}
+              -
+            {{end}}
+          </dd>
           <dt>PID</dt>
           <dd>{{if .Snapshot.PID}}{{.Snapshot.PID}}{{else}}-{{end}}</dd>
           <dt>Started</dt>
@@ -1292,7 +1400,11 @@ const adminPageHTML = `<!doctype html>
           <dt>Uptime</dt>
           <dd>{{.Snapshot.Uptime}}</dd>
           <dt>Gateway URL</dt>
-          <dd><a href="{{.Snapshot.GatewayURL}}">{{.Snapshot.GatewayURL}}</a></dd>
+          <dd>
+            <a href="{{.Snapshot.GatewayURL}}">
+              {{.Snapshot.GatewayURL}}
+            </a>
+          </dd>
           <dt>Admin URL</dt>
           <dd><a href="{{.Snapshot.AdminURL}}">{{.Snapshot.AdminURL}}</a></dd>
           <dt>Admin Auto Port</dt>
@@ -1320,7 +1432,9 @@ const adminPageHTML = `<!doctype html>
           <dt>Channels</dt>
           <dd>
             {{if .Snapshot.Channels}}
-              {{range $i, $ch := .Snapshot.Channels}}{{if $i}}, {{end}}{{$ch}}{{end}}
+              {{range $i, $ch := .Snapshot.Channels}}
+                {{if $i}}, {{end}}{{$ch}}
+              {{end}}
             {{else}}none{{end}}
           </dd>
           <dt>JSON</dt>
@@ -1426,7 +1540,9 @@ const adminPageHTML = `<!doctype html>
           <dt>By Kind</dt>
           <dd>
             {{if .Snapshot.Uploads.KindCounts}}
-              {{range $i, $item := .Snapshot.Uploads.KindCounts}}{{if $i}}, {{end}}{{$item.Kind}} {{$item.Count}}{{end}}
+              {{range $i, $item := .Snapshot.Uploads.KindCounts}}
+                {{if $i}}, {{end}}{{$item.Kind}} {{$item.Count}}
+              {{end}}
             {{else}}
               -
             {{end}}
@@ -1434,7 +1550,9 @@ const adminPageHTML = `<!doctype html>
           <dt>By Source</dt>
           <dd>
             {{if .Snapshot.Uploads.SourceCounts}}
-              {{range $i, $item := .Snapshot.Uploads.SourceCounts}}{{if $i}}, {{end}}{{$item.Source}} {{$item.Count}}{{end}}
+              {{range $i, $item := .Snapshot.Uploads.SourceCounts}}
+                {{if $i}}, {{end}}{{$item.Source}} {{$item.Count}}
+              {{end}}
             {{else}}
               -
             {{end}}
@@ -1469,13 +1587,102 @@ const adminPageHTML = `<!doctype html>
           <dd>{{.Snapshot.Browser.NodeCount}}</dd>
           <dt>Status</dt>
           <dd>
-            {{if .Snapshot.Browser.Enabled}}
+            {{if .Snapshot.Browser.Managed.Enabled}}
+              {{if .Snapshot.Browser.Managed.State}}
+                {{.Snapshot.Browser.Managed.State}}
+              {{else}}
+                configured
+              {{end}}
+            {{else if .Snapshot.Browser.Enabled}}
               ready
             {{else}}
               idle
             {{end}}
           </dd>
         </dl>
+        {{if .Snapshot.Browser.Managed.Enabled}}
+        <h3 style="margin: 16px 0 8px;">Local browser-server</h3>
+        <dl class="meta">
+          <dt>Managed</dt>
+          <dd>{{.Snapshot.Browser.Managed.Managed}}</dd>
+          <dt>URL</dt>
+          <dd>
+            {{if .Snapshot.Browser.Managed.URL}}
+              <code>{{.Snapshot.Browser.Managed.URL}}</code>
+            {{else}}
+              -
+            {{end}}
+          </dd>
+          <dt>PID</dt>
+          <dd>
+            {{if .Snapshot.Browser.Managed.PID}}
+              {{.Snapshot.Browser.Managed.PID}}
+            {{else}}
+              -
+            {{end}}
+          </dd>
+          <dt>Work Dir</dt>
+          <dd>
+            {{if .Snapshot.Browser.Managed.WorkDir}}
+              <code>{{.Snapshot.Browser.Managed.WorkDir}}</code>
+            {{else}}
+              -
+            {{end}}
+          </dd>
+          <dt>Command</dt>
+          <dd>
+            {{if .Snapshot.Browser.Managed.Command}}
+              <code>{{.Snapshot.Browser.Managed.Command}}</code>
+            {{else}}
+              -
+            {{end}}
+          </dd>
+          <dt>Log</dt>
+          <dd>
+            {{if .Snapshot.Browser.Managed.LogURL}}
+              <a
+                href="{{.Snapshot.Browser.Managed.LogURL}}"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                open log
+              </a>
+              <br><code>{{.Snapshot.Browser.Managed.LogPath}}</code>
+            {{else if .Snapshot.Browser.Managed.LogPath}}
+              <code>{{.Snapshot.Browser.Managed.LogPath}}</code>
+            {{else}}
+              -
+            {{end}}
+          </dd>
+          <dt>Started</dt>
+          <dd>{{formatTime .Snapshot.Browser.Managed.StartedAt}}</dd>
+          <dt>Stopped</dt>
+          <dd>{{formatTime .Snapshot.Browser.Managed.StoppedAt}}</dd>
+          <dt>Exit</dt>
+          <dd>
+            {{if .Snapshot.Browser.Managed.ExitCode}}
+              {{.Snapshot.Browser.Managed.ExitCode}}
+            {{else}}
+              -
+            {{end}}
+          </dd>
+          <dt>Error</dt>
+          <dd>
+            {{if .Snapshot.Browser.Managed.LastError}}
+              {{.Snapshot.Browser.Managed.LastError}}
+            {{else}}
+              -
+            {{end}}
+          </dd>
+        </dl>
+        {{if .Snapshot.Browser.Managed.RecentLogs}}
+        <pre
+          style="margin-top: 12px; white-space: pre-wrap;"
+        >{{range .Snapshot.Browser.Managed.RecentLogs}}
+{{.}}
+{{end}}</pre>
+        {{end}}
+        {{end}}
         {{if .Snapshot.Browser.Providers}}
         <table>
           <thead>
@@ -1493,7 +1700,13 @@ const adminPageHTML = `<!doctype html>
             {{range .Snapshot.Browser.Providers}}
             <tr>
               <td>{{if .Name}}{{.Name}}{{else}}browser{{end}}</td>
-              <td>{{if .DefaultProfile}}{{.DefaultProfile}}{{else}}-{{end}}</td>
+              <td>
+                {{if .DefaultProfile}}
+                  {{.DefaultProfile}}
+                {{else}}
+                  -
+                {{end}}
+              </td>
               <td>
                 {{if .Host.URL}}
                   <code>{{.Host.URL}}</code><br>
@@ -1503,7 +1716,9 @@ const adminPageHTML = `<!doctype html>
               <td>
                 {{if .Sandbox.URL}}
                   <code>{{.Sandbox.URL}}</code><br>
-                  <span class="subtle">{{browserEndpointSummary .Sandbox}}</span>
+                  <span class="subtle">
+                    {{browserEndpointSummary .Sandbox}}
+                  </span>
                 {{else}}-{{end}}
               </td>
               <td>
@@ -1513,13 +1728,22 @@ const adminPageHTML = `<!doctype html>
               </td>
               <td>
                 {{if .Profiles}}
-                  {{range $i, $profile := .Profiles}}{{if $i}}, {{end}}{{$profile.Name}}{{end}}
+                  {{range $i, $profile := .Profiles}}
+                    {{if $i}}, {{end}}{{$profile.Name}}
+                  {{end}}
                 {{else}}-{{end}}
               </td>
               <td>
                 {{if .Nodes}}
-                  {{range $i, $node := .Nodes}}{{if $i}}<br>{{end}}{{$node.ID}}
-                  {{if $node.Status.URL}}<br><span class="subtle">{{browserEndpointSummary $node.Status}}</span>{{end}}{{end}}
+                  {{range $i, $node := .Nodes}}
+                    {{if $i}}<br>{{end}}{{$node.ID}}
+                    {{if $node.Status.URL}}
+                      <br>
+                      <span class="subtle">
+                        {{browserEndpointSummary $node.Status}}
+                      </span>
+                    {{end}}
+                  {{end}}
                 {{else}}-{{end}}
               </td>
             </tr>
@@ -1558,11 +1782,18 @@ const adminPageHTML = `<!doctype html>
             </td>
             <td>{{.Schedule}}</td>
             <td>
-              {{if .Channel}}{{.Channel}} → {{.Target}}{{else}}no delivery target{{end}}
+              {{if .Channel}}
+                {{.Channel}} → {{.Target}}
+              {{else}}
+                no delivery target
+              {{end}}
             </td>
             <td>
               {{if .LastStatus}}{{.LastStatus}}{{else}}idle{{end}}
-              {{if .LastError}}<br><span class="subtle">{{.LastError}}</span>{{end}}
+              {{if .LastError}}
+                <br>
+                <span class="subtle">{{.LastError}}</span>
+              {{end}}
             </td>
             <td>
               next {{formatTime .NextRunAt}}<br>
@@ -1777,12 +2008,21 @@ const adminPageHTML = `<!doctype html>
             <td>
               {{formatTime .LastTraceAt}}<br>
               {{if .Channel}}{{.Channel}}{{end}}
-              {{if .RequestID}}<br><span class="subtle">{{.RequestID}}</span>{{end}}
+              {{if .RequestID}}
+                <br>
+                <span class="subtle">{{.RequestID}}</span>
+              {{end}}
             </td>
             <td>
-              {{if .MetaURL}}<a href="{{.MetaURL}}" target="_blank">meta</a>{{end}}
-              {{if .EventsURL}} · <a href="{{.EventsURL}}" target="_blank">events</a>{{end}}
-              {{if .ResultURL}} · <a href="{{.ResultURL}}" target="_blank">result</a>{{end}}
+              {{if .MetaURL}}
+                <a href="{{.MetaURL}}" target="_blank">meta</a>
+              {{end}}
+              {{if .EventsURL}}
+                · <a href="{{.EventsURL}}" target="_blank">events</a>
+              {{end}}
+              {{if .ResultURL}}
+                · <a href="{{.ResultURL}}" target="_blank">result</a>
+              {{end}}
             </td>
           </tr>
           {{end}}
@@ -1812,14 +2052,31 @@ const adminPageHTML = `<!doctype html>
             <td>{{formatTime .StartedAt}}</td>
             <td>
               {{if .Channel}}{{.Channel}}{{else}}-{{end}}
-              {{if .RequestID}}<br><span class="subtle">{{.RequestID}}</span>{{end}}
-              {{if .MessageID}}<br><span class="subtle">msg {{.MessageID}}</span>{{end}}
+              {{if .RequestID}}
+                <br>
+                <span class="subtle">{{.RequestID}}</span>
+              {{end}}
+              {{if .MessageID}}
+                <br>
+                <span class="subtle">msg {{.MessageID}}</span>
+              {{end}}
             </td>
             <td>
-              {{if .MetaURL}}<a href="{{.MetaURL}}" target="_blank">meta</a>{{end}}
-              {{if .EventsURL}} · <a href="{{.EventsURL}}" target="_blank">events</a>{{end}}
-              {{if .ResultURL}} · <a href="{{.ResultURL}}" target="_blank">result</a>{{end}}
-              {{if .TracePath}}<br><span class="subtle"><code>{{.TracePath}}</code></span>{{end}}
+              {{if .MetaURL}}
+                <a href="{{.MetaURL}}" target="_blank">meta</a>
+              {{end}}
+              {{if .EventsURL}}
+                · <a href="{{.EventsURL}}" target="_blank">events</a>
+              {{end}}
+              {{if .ResultURL}}
+                · <a href="{{.ResultURL}}" target="_blank">result</a>
+              {{end}}
+              {{if .TracePath}}
+                <br>
+                <span class="subtle">
+                  <code>{{.TracePath}}</code>
+                </span>
+              {{end}}
             </td>
           </tr>
           {{end}}

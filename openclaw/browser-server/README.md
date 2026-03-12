@@ -52,6 +52,14 @@ profile and for the relay smoke tests. The relay smoke defaults to the
 Playwright-bundled Chromium because extension sideloading is no longer a
 reliable automation path in Chrome/Edge.
 
+When OpenClaw itself runs with a browser provider whose `server_url`
+points at `http://127.0.0.1:19790`, `go run ./cmd/openclaw` now probes
+that address and auto-starts this browser-server if needed. Auto-start
+expects the dependencies above to already be installed and logs the
+managed process under `<state_dir>/debug/services/browser-server.log`.
+If your checkout lives somewhere custom, point
+`OPENCLAW_BROWSER_SERVER_DIR` at `openclaw/browser-server`.
+
 Environment variables:
 
 - `OPENCLAW_BROWSER_SERVER_ADDR`

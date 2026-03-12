@@ -299,8 +299,14 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 - 对于密钥（模型 key、Telegram token），请勿将其纳入版本控制。
   建议尽可能使用环境变量。
 - 示例 Telegram 配置已经把原生 `browser` 工具接到了本地默认
-  browser-server 地址。发起 browser snapshot、screenshot、download、
-  upload 或 relay 操作前，请先启动 `openclaw/browser-server`。
+  browser-server 地址。当 `server_url` 指向
+  `http://127.0.0.1:19790` 时，`go run ./cmd/openclaw` 会先探活该地址，
+  如果未启动则自动拉起 `openclaw/browser-server`。前提是当前仓库里的
+  `openclaw/browser-server` 依赖已经安装好（`npm install` 和
+  `npx playwright install chromium`），并且托管进程日志会写到
+  `<state_dir>/debug/services/`，同时显示在 admin 的 Browser 卡片里。
+  如果自动拉起找不到本地 browser-server 目录，可以设置
+  `OPENCLAW_BROWSER_SERVER_DIR`，或者手动启动该服务。
   参见 `openclaw/examples/browser_server_use/`。
 - `./openclaw.yaml` 中的示例配置可直接用于
   `go run ./cmd/openclaw -config ./openclaw.yaml`。

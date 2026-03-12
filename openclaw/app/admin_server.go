@@ -116,6 +116,7 @@ func buildAdminConfig(
 	routes admin.Routes,
 	cronSvc *cron.Service,
 	execMgr *octool.Manager,
+	browserManaged admin.BrowserManagedStatusProvider,
 	adminAddr string,
 	adminURL string,
 ) admin.Config {
@@ -140,13 +141,19 @@ func buildAdminConfig(
 		DebugDir:       debugDir,
 		Channels:       channelIDs(channels),
 		GatewayRoutes:  routes,
-		Browser:        buildBrowserAdminConfig(opts.ToolProviders),
-		Cron:           cronSvc,
-		Exec:           execMgr,
+		Browser: buildBrowserAdminConfig(
+			opts.ToolProviders,
+			browserManaged,
+		),
+		Cron: cronSvc,
+		Exec: execMgr,
 	}
 }
 
-func buildBrowserAdminConfig(specs []pluginSpec) admin.BrowserConfig {
+func buildBrowserAdminConfig(
+	specs []pluginSpec,
+	managed admin.BrowserManagedStatusProvider,
+) admin.BrowserConfig {
 	providers := make([]admin.BrowserProvider, 0, len(specs))
 	for i := range specs {
 		spec := specs[i]
@@ -219,7 +226,10 @@ func buildBrowserAdminConfig(specs []pluginSpec) admin.BrowserConfig {
 		}
 		providers = append(providers, provider)
 	}
-	return admin.BrowserConfig{Providers: providers}
+	return admin.BrowserConfig{
+		Providers: providers,
+		Managed:   managed,
+	}
 }
 
 func runtimeHostname() string {

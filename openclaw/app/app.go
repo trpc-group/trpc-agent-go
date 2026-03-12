@@ -516,6 +516,10 @@ func NewRuntime(
 			Err:  fmt.Errorf("debug recorder config failed: %w", err),
 		}
 	}
+	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
+	if debugRec != nil {
+		debugDir = debugRec.Dir()
+	}
 
 	needsModel := agentType == agentTypeLLM ||
 		opts.SessionSummaryEnabled ||
@@ -702,10 +706,6 @@ func NewRuntime(
 		CancelPath:   gwSrv.CancelPath(),
 	}
 
-	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
-	if debugRec != nil {
-		debugDir = debugRec.Dir()
-	}
 	gw := newInProcGatewayClient(
 		gwSrv,
 		opts.AppName,
@@ -787,6 +787,7 @@ func NewRuntime(
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			nil,
 			opts.AdminAddr,
 			adminURL,
 		))
@@ -861,6 +862,19 @@ func run(ctx context.Context, args []string) error {
 			Code: 1,
 			Err:  fmt.Errorf("debug recorder config failed: %w", err),
 		}
+	}
+	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
+	if debugRec != nil {
+		debugDir = debugRec.Dir()
+	}
+
+	browserServerSup, err := maybeStartBrowserServerSupervisor(
+		ctx,
+		opts.ToolProviders,
+		debugDir,
+	)
+	if err != nil {
+		log.Warnf("browser server auto-start failed: %v", err)
 	}
 
 	needsModel := agentType == agentTypeLLM ||
@@ -1040,10 +1054,6 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
-	if debugRec != nil {
-		debugDir = debugRec.Dir()
-	}
 	gw := newInProcGatewayClient(
 		gwSrv,
 		opts.AppName,
@@ -1146,6 +1156,7 @@ func run(ctx context.Context, args []string) error {
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			browserServerSup,
 			adminBinding.addr,
 			adminBinding.url,
 		))
@@ -1167,6 +1178,7 @@ func run(ctx context.Context, args []string) error {
 		channels,
 		needsModel,
 	))
+	logStartupLines(browserServerSup.startupLines())
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
 	logStartupLines(toolDepsStartupLines(openClawTools.deps))
 	go func() {
@@ -1216,6 +1228,11 @@ func run(ctx context.Context, args []string) error {
 	}
 	if cronRunner != nil {
 		_ = cronRunner.Close()
+	}
+	if browserServerSup != nil {
+		if err := browserServerSup.Close(); err != nil {
+			log.Warnf("close browser server failed: %v", err)
+		}
 	}
 	_ = r.Close()
 

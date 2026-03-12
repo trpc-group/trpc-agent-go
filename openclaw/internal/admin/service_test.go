@@ -34,6 +34,14 @@ type stubRunner struct {
 	reply string
 }
 
+type stubBMP struct {
+	status BrowserManagedService
+}
+
+func (p stubBMP) BrowserManagedStatus() BrowserManagedService {
+	return p.status
+}
+
 func (r *stubRunner) Run(
 	ctx context.Context,
 	userID string,
@@ -263,8 +271,25 @@ func TestServiceSnapshotIncludesCronSummary(t *testing.T) {
 func TestServiceSnapshotIncludesBrowserSummary(t *testing.T) {
 	t.Parallel()
 
+	startedAt := time.Unix(1700000000, 0)
+
 	svc := New(Config{
 		Browser: BrowserConfig{
+			Managed: stubBMP{
+				status: BrowserManagedService{
+					Enabled:         true,
+					Managed:         true,
+					State:           "running",
+					URL:             "http://127.0.0.1:19790",
+					PID:             4321,
+					LogPath:         "/tmp/debug/services/browser-server.log",
+					LogRelativePath: "services/browser-server.log",
+					StartedAt:       &startedAt,
+					RecentLogs: []string{
+						"OpenClaw browser server listening",
+					},
+				},
+			},
 			Providers: []BrowserProvider{{
 				Name:             "primary",
 				DefaultProfile:   "openclaw",
@@ -298,6 +323,15 @@ func TestServiceSnapshotIncludesBrowserSummary(t *testing.T) {
 		"http://127.0.0.1:19790",
 		snap.Browser.Providers[0].HostServerURL,
 	)
+	require.True(t, snap.Browser.Managed.Enabled)
+	require.True(t, snap.Browser.Managed.Managed)
+	require.Equal(t, "running", snap.Browser.Managed.State)
+	require.Equal(
+		t,
+		"/debug/file?path=services%2Fbrowser-server.log",
+		snap.Browser.Managed.LogURL,
+	)
+	require.Len(t, snap.Browser.Managed.RecentLogs, 1)
 }
 
 func TestServiceSnapshotProbesBrowserEndpoints(t *testing.T) {
@@ -859,11 +893,19 @@ func TestReadDebugTrace_RejectsEscapeAndBadJSON(t *testing.T) {
 	svc := New(Config{DebugDir: root})
 
 	require.NoError(t, os.WriteFile(refPath, []byte("{"), 0o600))
-	_, ok, err := svc.readDebugTrace(root, filepath.Join(root, debugBySessionDir), refPath, "")
+	_, ok, err := svc.readDebugTrace(
+		root,
+		filepath.Join(root, debugBySessionDir),
+		refPath,
+		"",
+	)
 	require.Error(t, err)
 	require.False(t, ok)
 
-	ref := `{"trace_dir":"../../../../escape","started_at":"2026-03-07T00:00:00Z"}`
+	ref := `{
+  "trace_dir":"../../../../escape",
+  "started_at":"2026-03-07T00:00:00Z"
+}`
 	require.NoError(t, os.WriteFile(refPath, []byte(ref), 0o600))
 	_, ok, err = svc.readDebugTrace(
 		root,
@@ -1214,17 +1256,37 @@ func TestServiceResolveDebugFileAndMethodChecks(t *testing.T) {
 	require.NoError(t, os.WriteFile(metaPath, []byte("{}"), 0o600))
 
 	svc := New(Config{DebugDir: debugDir})
-	got, err := svc.resolveDebugFile("20260307/trace", debugMetaFileName)
+	got, err := svc.resolveDebugFile(
+		"20260307/trace",
+		debugMetaFileName,
+		"",
+	)
 	require.NoError(t, err)
 	require.Equal(t, metaPath, got)
 
-	_, err = svc.resolveDebugFile("", debugMetaFileName)
+	serviceLog := filepath.Join(debugDir, "services", "browser-server.log")
+	require.NoError(
+		t,
+		os.MkdirAll(filepath.Dir(serviceLog), 0o755),
+	)
+	require.NoError(
+		t,
+		os.WriteFile(serviceLog, []byte("ready\n"), 0o600),
+	)
+
+	got, err = svc.resolveDebugFile("", "", "services/browser-server.log")
+	require.NoError(t, err)
+	require.Equal(t, serviceLog, got)
+
+	_, err = svc.resolveDebugFile("", debugMetaFileName, "")
 	require.Error(t, err)
-	_, err = svc.resolveDebugFile("20260307/trace", "notes.txt")
+	_, err = svc.resolveDebugFile("20260307/trace", "notes.txt", "")
 	require.Error(t, err)
-	_, err = svc.resolveDebugFile("../escape", debugMetaFileName)
+	_, err = svc.resolveDebugFile("../escape", debugMetaFileName, "")
 	require.Error(t, err)
-	_, err = svc.resolveDebugFile("20260307/missing", debugMetaFileName)
+	_, err = svc.resolveDebugFile("20260307/missing", debugMetaFileName, "")
+	require.Error(t, err)
+	_, err = svc.resolveDebugFile("", "", "../escape")
 	require.Error(t, err)
 
 	handler := svc.Handler()

@@ -95,6 +95,7 @@ nodes:
 		admin.Routes{},
 		nil,
 		nil,
+		nil,
 		"127.0.0.1:8081",
 		"http://127.0.0.1:8081",
 	)
