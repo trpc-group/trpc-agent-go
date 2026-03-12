@@ -126,6 +126,15 @@ func hasAttr(attrs []attribute.KeyValue, key string, want any) bool {
 	return false
 }
 
+func hasAttrKey(attrs []attribute.KeyValue, key string) bool {
+	for _, kv := range attrs {
+		if string(kv.Key) == key {
+			return true
+		}
+	}
+	return false
+}
+
 func TestNewWorkflowSpanName(t *testing.T) {
 	require.Equal(t, "workflow myflow", NewWorkflowSpanName("myflow"))
 }
@@ -599,8 +608,9 @@ func TestTraceBeforeInvokeAgent_UsesInvocationAgentNameOnly(t *testing.T) {
 
 	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
 
-	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, ""))
-	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentID, ""))
+	require.False(t, hasAttrKey(span.attrs, semconvtrace.KeyGenAIAgentName))
+	require.False(t, hasAttrKey(span.attrs, semconvtrace.KeyGenAIAgentID))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyInvocationID, "inv-fallback"))
 }
 
 func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {

@@ -231,15 +231,16 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 	if !span.IsRecording() {
 		return
 	}
-	agentName, agentID := resolveInvocationAgentIdentity(invoke)
-	invocationID := ""
-	if invoke != nil && len(invoke.RunOptions.SpanAttributes) > 0 {
-		span.SetAttributes(invoke.RunOptions.SpanAttributes...)
+	attrs := []attribute.KeyValue{
+		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
+		attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
+		attribute.String(semconvtrace.KeyGenAIAgentDescription, agentDescription),
+		attribute.String(semconvtrace.KeyGenAISystemInstructions, instructions),
 	}
 	if invoke != nil {
-		invocationID = invoke.InvocationID
-	}
-	if invoke != nil {
+		if len(invoke.RunOptions.SpanAttributes) > 0 {
+			span.SetAttributes(invoke.RunOptions.SpanAttributes...)
+		}
 		if bts, err := json.Marshal([]model.Message{invoke.Message}); err == nil {
 			span.SetAttributes(
 				attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
@@ -247,16 +248,23 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 		} else {
 			span.SetAttributes(attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
 		}
+		agentName, agentID := resolveInvocationAgentIdentity(invoke)
+		if agentName != "" {
+			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentName, agentName))
+		}
+		if agentID != "" {
+			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentID, agentID))
+		}
+		attrs = append(attrs, attribute.String(semconvtrace.KeyInvocationID, invoke.InvocationID))
+
+		if invoke.Session != nil {
+			attrs = append(attrs,
+				attribute.String(semconvtrace.KeyRunnerUserID, invoke.Session.UserID),
+				attribute.String(semconvtrace.KeyGenAIConversationID, invoke.Session.ID),
+			)
+		}
 	}
-	span.SetAttributes(
-		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
-		attribute.String(semconvtrace.KeyGenAIOperationName, OperationInvokeAgent),
-		attribute.String(semconvtrace.KeyGenAIAgentName, agentName),
-		attribute.String(semconvtrace.KeyGenAIAgentID, agentID),
-		attribute.String(semconvtrace.KeyInvocationID, invocationID),
-		attribute.String(semconvtrace.KeyGenAIAgentDescription, agentDescription),
-		attribute.String(semconvtrace.KeyGenAISystemInstructions, instructions),
-	)
+	span.SetAttributes(attrs...)
 	if genConfig != nil {
 		span.SetAttributes(attribute.Bool(semconvtrace.KeyGenAIRequestIsStream, genConfig.Stream))
 		if len(genConfig.Stop) > 0 {
@@ -280,13 +288,6 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 		if te := genConfig.ThinkingEnabled; te != nil {
 			span.SetAttributes(attribute.Bool(semconvtrace.KeyGenAIRequestThinkingEnabled, *te))
 		}
-	}
-
-	if invoke != nil && invoke.Session != nil {
-		span.SetAttributes(
-			attribute.String(semconvtrace.KeyRunnerUserID, invoke.Session.UserID),
-			attribute.String(semconvtrace.KeyGenAIConversationID, invoke.Session.ID),
-		)
 	}
 }
 
