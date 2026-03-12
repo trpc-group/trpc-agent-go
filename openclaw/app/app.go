@@ -67,8 +67,9 @@ const (
 
 	defaultOpenAIModel = "gpt-5"
 
-	defaultSkillsDir = "skills"
-	defaultAgentsDir = ".agents"
+	defaultSkillsDir        = "skills"
+	defaultAgentsDir        = ".agents"
+	defaultBundledSkillsDir = "bundled-skills"
 
 	csvDelimiter = ","
 
@@ -1520,7 +1521,7 @@ func newAgent(
 
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
-	bundledRoot := filepath.Join(cwd, appName, defaultSkillsDir)
+	bundledRoot := resolveBundledSkillsRoot(cwd, cfg.StateDir)
 	repo, err := ocskills.NewRepository(
 		roots,
 		ocskills.WithDebug(cfg.SkillsDebug),
@@ -1847,14 +1848,15 @@ func resolveSkillRoots(cwd string, cfg agentConfig) []string {
 		defaultSkillsDir,
 	)
 	managedSkills := filepath.Join(cfg.StateDir, defaultSkillsDir)
-	bundledSkills := filepath.Join(cwd, appName, defaultSkillsDir)
+	bundledSkills := resolveBundledSkillsRoot(cwd, cfg.StateDir)
 
 	roots := make([]string, 0, 6+len(cfg.SkillsExtraDirs))
 	roots = append(roots, workspaceSkills)
 	roots = append(roots, projectAgentsSkills)
 	roots = append(roots, personalAgentsSkills)
 	roots = append(roots, managedSkills)
-	if bundledSkills != workspaceSkills {
+	if bundledSkills != workspaceSkills &&
+		bundledSkills != managedSkills {
 		roots = append(roots, bundledSkills)
 	}
 	roots = append(roots, cfg.SkillsExtraDirs...)
@@ -1885,6 +1887,25 @@ func dirExists(path string) bool {
 		return false
 	}
 	return st.IsDir()
+}
+
+func resolveBundledSkillsRoot(cwd, stateDir string) string {
+	installedBundled := filepath.Join(
+		stateDir,
+		defaultBundledSkillsDir,
+	)
+	if dirExists(installedBundled) {
+		return installedBundled
+	}
+
+	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
+	if dirExists(repoBundled) {
+		return repoBundled
+	}
+	if strings.TrimSpace(stateDir) != "" {
+		return installedBundled
+	}
+	return repoBundled
 }
 
 func resolveStateDir(raw string) (string, error) {

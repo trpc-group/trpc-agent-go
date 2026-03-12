@@ -15,6 +15,29 @@
 [OpenClaw Runtime Guide (English)](../docs/mkdocs/en/openclaw-runtime.md)
 | [OpenClaw Runtime 指南（中文）](../docs/mkdocs/zh/openclaw-runtime.md)
 
+## 安装预编译 release
+
+如果你想直接拿到可运行的二进制，而不是通过 `go run`，可以使用公网安装
+脚本：
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  | bash
+```
+
+默认安装 profile 是 `stdin`，因此第一次运行不需要模型凭据：
+
+```bash
+openclaw
+```
+
+更多说明：
+[INSTALL.md](./INSTALL.md)
+| [INSTALL.zh_CN.md](./INSTALL.zh_CN.md)
+| [RELEASE.md](./RELEASE.md)
+| [RELEASE.zh_CN.md](./RELEASE.zh_CN.md)
+
 ## 快速开始
 
 使用 mock 模型运行（无需外部模型凭据）：
@@ -820,10 +843,15 @@ OpenClaw 将上游 OpenClaw 技能包打包在 `openclaw/skills/` 下
 2) 项目 AgentSkills：`./.agents/skills`
 3) 个人 AgentSkills：`$HOME/.agents/skills`
 4) 托管技能：`<state-dir>/skills`
-5) 仓库内置技能（从仓库根目录运行时）：`./openclaw/skills`
-6) 额外目录：`-skills-extra-dirs`（逗号分隔，最低优先级）
+5) 已安装 release 自带的内置技能：`<state-dir>/bundled-skills`
+6) 仓库内置技能（从仓库根目录运行时）：`./openclaw/skills`
+7) 额外目录：`-skills-extra-dirs`（逗号分隔，最低优先级）
 
 如果两个技能同名，优先级更高的那个生效。
+
+预编译 release 每次安装和升级时都会刷新
+`<state-dir>/bundled-skills`，而 `<state-dir>/skills` 仍然留给你放自己的
+托管技能。
 
 ### OpenClaw 元数据过滤（可选）
 

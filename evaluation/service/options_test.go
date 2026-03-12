@@ -20,6 +20,7 @@ import (
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -39,6 +40,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.EvalSetManager)
 	assert.NotNil(t, opts.EvalResultManager)
 	assert.NotNil(t, opts.Registry)
+	assert.NotNil(t, opts.MetricRegistry)
 	assert.NotNil(t, opts.SessionIDSupplier)
 	assert.Nil(t, opts.ExpectedRunner)
 	assert.Nil(t, opts.Callbacks)
@@ -65,6 +67,12 @@ func TestWithRegistry(t *testing.T) {
 	custom := registry.New()
 	opts := NewOptions(WithRegistry(custom))
 	assert.Equal(t, custom, opts.Registry)
+}
+
+func TestWithMetricRegistry(t *testing.T) {
+	custom := metricregistry.New()
+	opts := NewOptions(WithMetricRegistry(custom))
+	assert.Equal(t, custom, opts.MetricRegistry)
 }
 
 func TestWithSessionIDSupplier(t *testing.T) {

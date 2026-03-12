@@ -324,7 +324,7 @@ err := kb.Load(ctx,
 
 We have conducted comprehensive RAG quality evaluation of tRPC-Agent-Go, LangChain, Agno, and CrewAI using the [RAGAS](https://docs.ragas.io/) framework.
 
-> **Detailed Documentation**: For complete evaluation plan, parameter configuration, and result analysis, please refer to [examples/knowledge/evaluation/README.md](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/evaluation/README.md)
+> **Detailed Documentation**: For complete evaluation plan, parameter configuration, and result analysis, please refer to [benchmark/knowledge/README.md](https://github.com/trpc-group/trpc-agent-go/tree/main/benchmark/knowledge/README.md)
 
 
 ### Evaluation Plan
