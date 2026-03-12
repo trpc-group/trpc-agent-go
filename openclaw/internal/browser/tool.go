@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -174,6 +175,7 @@ type Tool struct {
 	nodeTargets     map[string]serverTargetConfig
 	profiles        map[string]ProfileConfig
 	drivers         map[string]driver
+	serverDriversMu sync.RWMutex
 	serverDrivers   map[string]driver
 }
 
@@ -542,16 +544,25 @@ func (t *Tool) serverDriverForTarget(
 		return nil, false
 	}
 	key := target.ServerURL + "\x00" + target.AuthToken + "\x00" + profile
-	if drv, ok := t.serverDrivers[key]; ok {
+	t.serverDriversMu.RLock()
+	drv, ok := t.serverDrivers[key]
+	t.serverDriversMu.RUnlock()
+	if ok {
 		return drv, true
 	}
-	drv := newServerProfileDriver(
+
+	created := newServerProfileDriver(
 		target.ServerURL,
 		target.AuthToken,
 		profile,
 	)
-	t.serverDrivers[key] = drv
-	return drv, true
+	t.serverDriversMu.Lock()
+	defer t.serverDriversMu.Unlock()
+	if drv, ok = t.serverDrivers[key]; ok {
+		return drv, true
+	}
+	t.serverDrivers[key] = created
+	return created, true
 }
 
 func (t *Tool) handleProfiles(

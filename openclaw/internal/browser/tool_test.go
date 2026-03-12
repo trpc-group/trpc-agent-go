@@ -12,6 +12,8 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -573,7 +575,9 @@ func TestToolCall_UsesBrowserServerDriverForHostTarget(t *testing.T) {
 	)
 }
 
-func TestToolStatusDriver_UsesHostServerForServerBackedProfiles(t *testing.T) {
+func TestToolStatusDriver_UsesHostServerForServerBackedProfiles(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	tool := newToolWithDrivers(
@@ -593,7 +597,10 @@ func TestToolStatusDriver_UsesHostServerForServerBackedProfiles(t *testing.T) {
 		nil,
 	)
 
-	drv := tool.statusDriver(defaultProfileName, tool.profiles[defaultProfileName])
+	drv := tool.statusDriver(
+		defaultProfileName,
+		tool.profiles[defaultProfileName],
+	)
 	serverDrv, ok := drv.(*serverProfileDriver)
 	require.True(t, ok)
 	require.Equal(t, "http://127.0.0.1:4321", serverDrv.baseURL)
@@ -634,6 +641,64 @@ func TestToolResolveDriver_NodeTargetUsesConfiguredNode(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "http://node.example:7777", serverDrv.baseURL)
 	require.Equal(t, "node-token", serverDrv.token)
+}
+
+func TestToolServerDriverForTarget_ConcurrentCache(t *testing.T) {
+	t.Parallel()
+
+	const goroutineCount = 32
+
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		nil,
+	)
+	target := &serverTargetConfig{
+		ID:        targetHost,
+		ServerURL: "http://127.0.0.1:4321",
+		AuthToken: "secret",
+	}
+	errDriverMissing := errors.New("expected cached browser driver")
+	results := make([]driver, goroutineCount)
+	errs := make(chan error, goroutineCount)
+
+	var wg sync.WaitGroup
+	for i := 0; i < goroutineCount; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+
+			drv, ok := tool.serverDriverForTarget(
+				target,
+				defaultProfileName,
+			)
+			if !ok || drv == nil {
+				errs <- errDriverMissing
+				return
+			}
+			results[index] = drv
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	require.Len(t, tool.serverDrivers, 1)
+	first := results[0]
+	require.NotNil(t, first)
+	for _, drv := range results[1:] {
+		require.Same(t, first, drv)
+	}
 }
 
 func TestNewTool_DeclarationExposesSchema(t *testing.T) {

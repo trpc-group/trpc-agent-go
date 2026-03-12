@@ -254,6 +254,12 @@ function relayExecutor(command) {
     "[tabindex]"
   ].join(",");
 
+  function textResult(text) {
+    return {
+      content: [{ type: "text", text }]
+    };
+  }
+
   function visible(node) {
     const style = window.getComputedStyle(node);
     if (style.visibility === "hidden" || style.display === "none") {
