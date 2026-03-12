@@ -226,20 +226,32 @@ export class HostProfile {
 
   async screenshot(targetId, options = {}) {
     const page = this.requirePageOrCurrent(targetId);
+    const imageType = options.type === "jpeg" ? "jpeg" : "png";
+    const selector = `${options.element || ""}`.trim();
+    if ((options.ref || selector) && options.fullPage) {
+      throw new Error(
+        "fullPage is not supported for element screenshots"
+      );
+    }
     let buffer;
     if (options.ref) {
       const locator = page.locator(`[data-openclaw-ref="${options.ref}"]`);
       buffer = await locator.screenshot({
-        type: options.type === "jpeg" ? "jpeg" : "png"
+        type: imageType
+      });
+    } else if (selector) {
+      buffer = await page.locator(selector).first().screenshot({
+        type: imageType
       });
     } else {
       buffer = await page.screenshot({
         fullPage: Boolean(options.fullPage),
-        type: options.type === "jpeg" ? "jpeg" : "png"
+        type: imageType
       });
     }
-    const mimeType =
-      options.type === "jpeg" ? "image/jpeg" : "image/png";
+    const mimeType = imageType === "jpeg"
+      ? "image/jpeg"
+      : "image/png";
     return {
       targetId: this.pageIds.get(page),
       content: [{
@@ -250,11 +262,20 @@ export class HostProfile {
     };
   }
 
-  async consoleMessages(targetId) {
+  async consoleMessages(targetId, options = {}) {
     this.requirePageOrCurrent(targetId);
-    const lines = this.consoleEntries.slice(-50).map((entry) => {
-      return `${entry.type}: ${entry.text}`;
-    });
+    const level = `${options.level || ""}`.trim();
+    const lines = this.consoleEntries
+      .slice(-50)
+      .filter((entry) => {
+        if (!level) {
+          return true;
+        }
+        return entry.type === level;
+      })
+      .map((entry) => {
+        return `${entry.type}: ${entry.text}`;
+      });
     return textContent(lines.join("\n") || "No console messages.");
   }
 
@@ -268,14 +289,42 @@ export class HostProfile {
     });
   }
 
-  async uploadFiles(targetId, inputRef, paths) {
+  async uploadFiles(targetId, options = {}) {
     const page = this.requirePageOrCurrent(targetId);
-    const ref = `${inputRef || ""}`.trim();
-    if (!ref) {
-      throw new Error("upload requires inputRef");
+    const paths = Array.isArray(options.paths) ? options.paths : [];
+    if (paths.length === 0) {
+      throw new Error("upload requires paths");
     }
-    const locator = page.locator(`[data-openclaw-ref="${ref}"]`);
-    await locator.setInputFiles(paths);
+    const inputRef = `${options.inputRef || ""}`.trim();
+    const element = `${options.element || ""}`.trim();
+    const ref = `${options.ref || ""}`.trim();
+    const timeoutMs = waitTimeoutMs(options);
+    if (ref && (inputRef || element)) {
+      throw new Error("ref cannot be combined with inputRef/element");
+    }
+    if (inputRef && element) {
+      throw new Error("inputRef and element are mutually exclusive");
+    }
+    if (inputRef || element) {
+      const locator = inputRef
+        ? page.locator(`[data-openclaw-ref="${inputRef}"]`)
+        : page.locator(element).first();
+      await locator.setInputFiles(paths, {
+        timeout: timeoutMs
+      });
+      return textContent(`Uploaded ${paths.length} file(s).`);
+    }
+    if (!ref) {
+      throw new Error("upload requires ref, inputRef, or element");
+    }
+    const chooserPromise = page.waitForEvent("filechooser", {
+      timeout: timeoutMs
+    });
+    await page.locator(`[data-openclaw-ref="${ref}"]`).click({
+      timeout: timeoutMs
+    });
+    const chooser = await chooserPromise;
+    await chooser.setFiles(paths);
     return textContent(`Uploaded ${paths.length} file(s).`);
   }
 
@@ -303,7 +352,9 @@ export class HostProfile {
         await this.type(page, request, ref);
         return textContent(`Typed into ${ref}.`);
       case "hover":
-        await page.locator(`[data-openclaw-ref="${ref}"]`).hover();
+        await page.locator(`[data-openclaw-ref="${ref}"]`).hover({
+          timeout: waitTimeoutMs(request)
+        });
         return textContent(`Hovered ${ref}.`);
       case "scrollIntoView":
         await this.scrollIntoView(page, request, ref);
@@ -315,16 +366,25 @@ export class HostProfile {
         );
       case "select":
         await page.locator(`[data-openclaw-ref="${ref}"]`).selectOption(
-          request.values || []
+          request.values || [],
+          {
+            timeout: waitTimeoutMs(request)
+          }
         );
         return textContent(`Selected ${ref}.`);
       case "fill":
-        for (const field of request.fields || []) {
-          await page.locator(`[data-openclaw-ref="${field.ref}"]`).fill(
-            `${field.text || ""}`
-          );
+        {
+          const timeoutMs = waitTimeoutMs(request);
+          for (const field of request.fields || []) {
+            await page.locator(`[data-openclaw-ref="${field.ref}"]`).fill(
+              `${field.text || ""}`,
+              {
+                timeout: timeoutMs
+              }
+            );
+          }
+          return textContent("Filled form fields.");
         }
-        return textContent("Filled form fields.");
       case "press":
         await page.keyboard.press(`${request.key || ""}`, {
           delay: Number(request.delayMs) || 0
@@ -422,7 +482,8 @@ export class HostProfile {
     const locator = page.locator(`[data-openclaw-ref="${ref}"]`);
     const options = {
       button: request.button || "left",
-      modifiers: normalizeModifiers(request.modifiers)
+      modifiers: normalizeModifiers(request.modifiers),
+      timeout: waitTimeoutMs(request)
     };
     if (request.doubleClick) {
       await locator.dblclick(options);
@@ -442,14 +503,15 @@ export class HostProfile {
   async type(page, request, ref) {
     const locator = page.locator(`[data-openclaw-ref="${ref}"]`);
     const text = `${request.text || ""}`;
+    const timeoutMs = waitTimeoutMs(request);
     if (request.slowly) {
-      await locator.click();
-      await locator.fill("");
+      await locator.click({ timeout: timeoutMs });
+      await locator.fill("", { timeout: timeoutMs });
       await page.keyboard.type(text, {
         delay: defaultSlowTypeDelayMs
       });
     } else {
-      await locator.fill(text);
+      await locator.fill(text, { timeout: timeoutMs });
     }
     if (request.submit) {
       await page.keyboard.press("Enter");
@@ -463,7 +525,10 @@ export class HostProfile {
       throw new Error("drag requires startRef and endRef");
     }
     await page.locator(`[data-openclaw-ref="${startRef}"]`).dragTo(
-      page.locator(`[data-openclaw-ref="${endRef}"]`)
+      page.locator(`[data-openclaw-ref="${endRef}"]`),
+      {
+        timeout: waitTimeoutMs(request)
+      }
     );
   }
 

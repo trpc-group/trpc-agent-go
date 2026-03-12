@@ -196,7 +196,7 @@ async function executeCommand(command) {
     case "snapshot":
       return await executeInTab(tabId, "snapshot", command.args);
     case "screenshot":
-      return await captureTab(tabId);
+      return await captureTab(tabId, command.args);
     case "click":
     case "hover":
     case "type":
@@ -230,17 +230,137 @@ async function executeInTab(tabId, action, args) {
   return results[0]?.result;
 }
 
-async function captureTab(tabId) {
-  const tab = await chrome.tabs.get(tabId);
-  const data = await chrome.tabs.captureVisibleTab(tab.windowId, {
-    format: "png"
+function screenshotFormat(args = {}) {
+  return `${args.type || "png"}`.trim() === "jpeg"
+    ? "jpeg"
+    : "png";
+}
+
+function screenshotMimeType(format) {
+  return format === "jpeg" ? "image/jpeg" : "image/png";
+}
+
+function base64Payload(dataURL) {
+  return dataURL.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "");
+}
+
+function bytesToBase64(bytes) {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(bytes).toString("base64");
+  }
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+async function captureClip(tabId, args = {}) {
+  const ref = `${args.ref || ""}`.trim();
+  const element = `${args.element || ""}`.trim();
+  if (!ref && !element) {
+    return null;
+  }
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (options) => {
+      const refAttr = "data-openclaw-ref";
+      const ref = `${options.ref || ""}`.trim();
+      const element = `${options.element || ""}`.trim();
+      const node = ref
+        ? document.querySelector(`[${refAttr}="${ref}"]`)
+        : document.querySelector(element);
+      if (!node) {
+        throw new Error(
+          ref ? `Unknown ref: ${ref}` : `Unknown element: ${element}`
+        );
+      }
+      const rect = node.getBoundingClientRect();
+      return {
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        devicePixelRatio: window.devicePixelRatio || 1
+      };
+    },
+    args: [{
+      ref,
+      element
+    }]
   });
+  return results[0]?.result || null;
+}
+
+async function cropCapturedImage(dataURL, clip, format) {
+  if (!clip) {
+    return base64Payload(dataURL);
+  }
+  if (
+    typeof OffscreenCanvas !== "function" ||
+    typeof createImageBitmap !== "function" ||
+    typeof fetch !== "function"
+  ) {
+    return base64Payload(dataURL);
+  }
+  const response = await fetch(dataURL);
+  const blob = await response.blob();
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const scale = Number(clip.devicePixelRatio) > 0
+      ? Number(clip.devicePixelRatio)
+      : 1;
+    const x = Math.max(0, Math.floor(Number(clip.x) * scale));
+    const y = Math.max(0, Math.floor(Number(clip.y) * scale));
+    if (x >= bitmap.width || y >= bitmap.height) {
+      throw new Error("Screenshot target is outside the viewport");
+    }
+    const width = Math.max(
+      1,
+      Math.min(
+        bitmap.width - x,
+        Math.ceil(Math.max(0, Number(clip.width)) * scale)
+      )
+    );
+    const height = Math.max(
+      1,
+      Math.min(
+        bitmap.height - y,
+        Math.ceil(Math.max(0, Number(clip.height)) * scale)
+      )
+    );
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Failed to create screenshot canvas");
+    }
+    context.drawImage(bitmap, x, y, width, height, 0, 0, width, height);
+    const output = await canvas.convertToBlob({
+      type: screenshotMimeType(format)
+    });
+    return bytesToBase64(new Uint8Array(await output.arrayBuffer()));
+  } finally {
+    if (typeof bitmap.close === "function") {
+      bitmap.close();
+    }
+  }
+}
+
+async function captureTab(tabId, args = {}) {
+  const tab = await chrome.tabs.get(tabId);
+  const format = screenshotFormat(args);
+  const data = await chrome.tabs.captureVisibleTab(tab.windowId, {
+    format
+  });
+  const clip = await captureClip(tabId, args);
   return {
     targetId: relayTargetId(tabId),
     content: [{
       type: "image",
-      mimeType: "image/png",
-      data: data.replace(/^data:image\/png;base64,/, "")
+      mimeType: screenshotMimeType(format),
+      data: await cropCapturedImage(data, clip, format)
     }]
   };
 }

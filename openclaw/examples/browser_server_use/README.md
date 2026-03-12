@@ -91,8 +91,8 @@ npm run smoke:relay:headed
 ```
 The relay smoke uses Playwright's bundled Chromium by default so the
 extension can load in both headless and headed runs, and the smoke now
-checks snapshot, scrollIntoView, wait, wait-by-fn, evaluate, and
-screenshot end to end.
+checks snapshot, scrollIntoView, wait, wait-by-fn, evaluate, cropped
+relay screenshots, and host upload flows end to end.
 
 You can also validate the extension logic without launching a browser:
 

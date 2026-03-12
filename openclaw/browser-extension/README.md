@@ -41,7 +41,8 @@ http://127.0.0.1:19790?token=secret-token
 Current relay limits:
 
 - `console`, `pdf`, `upload`, and `dialog` remain host-profile features
-- screenshots capture the visible tab, not a cropped DOM element
+- screenshots are still limited to the visible tab viewport, but they
+  can now crop to a visible `ref` or CSS `element`
 - waits in the relay are best-effort DOM/browser checks, not full CDP
   lifecycle hooks
 - relay `evaluate` and `wait --fn` accept a constrained arrow-function

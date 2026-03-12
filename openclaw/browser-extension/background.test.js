@@ -11,7 +11,31 @@ const backgroundPath = path.join(currentDir, "background.js");
 
 function chromeStub(overrides = {}) {
   const windows = {
-    async update() {}
+    async update() {},
+    ...(overrides.windows || {})
+  };
+  const tabs = {
+    onActivated: { addListener() {} },
+    onUpdated: { addListener() {} },
+    onRemoved: { addListener() {} },
+    async query() {
+      return [];
+    },
+    async get() {
+      return { id: 1, windowId: 1 };
+    },
+    async update() {},
+    async remove() {},
+    async captureVisibleTab() {
+      return "data:image/png;base64,";
+    },
+    ...(overrides.tabs || {})
+  };
+  const scripting = {
+    async executeScript() {
+      return [{ result: null }];
+    },
+    ...(overrides.scripting || {})
   };
   return {
     runtime: {
@@ -26,29 +50,13 @@ function chromeStub(overrides = {}) {
         async set() {}
       }
     },
-    tabs: {
-      onActivated: { addListener() {} },
-      onUpdated: { addListener() {} },
-      onRemoved: { addListener() {} },
-      async query() {
-        return [];
-      },
-      async get() {
-        return { id: 1, windowId: 1 };
-      },
-      async update() {},
-      async remove() {},
-      async captureVisibleTab() {
-        return "data:image/png;base64,";
-      }
-    },
+    tabs,
     windows,
-    scripting: {
-      async executeScript() {
-        return [{ result: null }];
-      }
-    },
-    ...overrides
+    scripting,
+    ...overrides,
+    tabs,
+    windows,
+    scripting
   };
 }
 
@@ -56,9 +64,14 @@ function loadBackgroundSandbox(overrides = {}) {
   const source = fs.readFileSync(backgroundPath, "utf8");
   const sandbox = {
     URL,
+    Buffer,
     Map,
     JSON,
     Promise,
+    Uint8Array,
+    btoa(value) {
+      return Buffer.from(value, "binary").toString("base64");
+    },
     setTimeout,
     clearTimeout,
     chrome: chromeStub(overrides.chrome),
@@ -68,6 +81,7 @@ function loadBackgroundSandbox(overrides = {}) {
       }
     },
     WebSocket: class WebSocketStub {},
+    ...overrides.globals,
     globalThis: null
   };
   sandbox.globalThis = sandbox;
@@ -308,4 +322,118 @@ test("executeCommand resize updates the tab window", async () => {
   assert.equal(updates[0].options.width, 900);
   assert.equal(updates[0].options.height, 700);
   assert.equal(result.content[0].text, "Resized window.");
+});
+
+test("executeCommand screenshot crops relay refs and honors jpeg", async () => {
+  const calls = {
+    drawImage: null,
+    executeArgs: null,
+    format: "",
+    type: ""
+  };
+  class OffscreenCanvasStub {
+    constructor(width, height) {
+      calls.canvas = { width, height };
+    }
+
+    getContext(kind) {
+      assert.equal(kind, "2d");
+      return {
+        drawImage(...args) {
+          calls.drawImage = args;
+        }
+      };
+    }
+
+    async convertToBlob(options) {
+      calls.type = options.type;
+      return {
+        async arrayBuffer() {
+          return Uint8Array.from(Buffer.from("cropped")).buffer;
+        }
+      };
+    }
+  }
+
+  const sandbox = loadBackgroundSandbox({
+    chrome: chromeStub({
+      tabs: {
+        async get() {
+          return { id: 1, windowId: 7 };
+        },
+        async captureVisibleTab(windowId, options) {
+          assert.equal(windowId, 7);
+          calls.format = options.format;
+          return "data:image/png;base64,ZmFrZS1mdWxs";
+        }
+      },
+      scripting: {
+        async executeScript(options) {
+          calls.executeArgs = options.args;
+          return [{
+            result: {
+              x: 10,
+              y: 20,
+              width: 30,
+              height: 40,
+              devicePixelRatio: 2
+            }
+          }];
+        }
+      }
+    }),
+    globals: {
+      async fetch(url) {
+        assert.equal(url, "data:image/png;base64,ZmFrZS1mdWxs");
+        return {
+          async blob() {
+            return { kind: "image" };
+          }
+        };
+      },
+      async createImageBitmap(blob) {
+        assert.deepEqual(blob, { kind: "image" });
+        return {
+          width: 500,
+          height: 400,
+          close() {}
+        };
+      },
+      OffscreenCanvas: OffscreenCanvasStub
+    }
+  });
+
+  const result = await sandbox.executeCommand({
+    action: "screenshot",
+    tabId: 1,
+    args: {
+      ref: "e1",
+      type: "jpeg"
+    }
+  });
+
+  assert.equal(calls.format, "jpeg");
+  assert.equal(calls.executeArgs.length, 1);
+  assert.equal(calls.executeArgs[0].ref, "e1");
+  assert.equal(calls.executeArgs[0].element, "");
+  assert.deepEqual(calls.canvas, {
+    width: 60,
+    height: 80
+  });
+  assert.deepEqual(calls.drawImage.slice(1), [
+    20,
+    40,
+    60,
+    80,
+    0,
+    0,
+    60,
+    80
+  ]);
+  assert.equal(calls.type, "image/jpeg");
+  assert.equal(result.content[0].mimeType, "image/jpeg");
+  assert.equal(
+    result.content[0].data,
+    Buffer.from("cropped").toString("base64")
+  );
 });

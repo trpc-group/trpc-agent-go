@@ -1027,6 +1027,25 @@ func (t *Tool) handleUpload(
 	if inputRef := strings.TrimSpace(in.InputRef); inputRef != "" {
 		args["inputRef"] = inputRef
 	}
+	if driverType != driverTypeBrowserServer &&
+		(strings.TrimSpace(in.Ref) != "" ||
+			strings.TrimSpace(in.Element) != "") {
+		return Result{}, errors.New(
+			"browser upload with ref or element is only " +
+				"supported by the browser-server driver",
+		)
+	}
+	if driverType == driverTypeBrowserServer {
+		if ref := strings.TrimSpace(in.Ref); ref != "" {
+			args["ref"] = ref
+		}
+		if element := strings.TrimSpace(in.Element); element != "" {
+			args["element"] = element
+		}
+		if timeout := intValue(in.TimeoutMs); timeout > 0 {
+			args["timeoutMs"] = timeout
+		}
+	}
 
 	raw, err := drv.Call(ctx, mcpToolUpload, args)
 	if err != nil {
@@ -1162,21 +1181,25 @@ func (t *Tool) executeAct(
 	kind := strings.ToLower(strings.TrimSpace(req.Kind))
 	switch kind {
 	case actClick:
-		return drv.Call(ctx, mcpToolClick, map[string]any{
+		args := map[string]any{
 			"ref":         strings.TrimSpace(req.Ref),
 			"element":     describeElement(req.Ref, ""),
 			"button":      strings.TrimSpace(req.Button),
 			"doubleClick": boolValue(req.DoubleClick),
 			"modifiers":   req.Modifiers,
-		})
+		}
+		addServerTimeoutArg(args, driverType, req.TimeoutMs)
+		return drv.Call(ctx, mcpToolClick, args)
 	case actType:
-		return drv.Call(ctx, mcpToolType, map[string]any{
+		args := map[string]any{
 			"ref":     strings.TrimSpace(req.Ref),
 			"element": describeElement(req.Ref, ""),
 			"text":    req.Text,
 			"submit":  boolValue(req.Submit),
 			"slowly":  boolValue(req.Slowly),
-		})
+		}
+		addServerTimeoutArg(args, driverType, req.TimeoutMs)
+		return drv.Call(ctx, mcpToolType, args)
 	case actPress:
 		args := map[string]any{
 			"key": strings.TrimSpace(req.Key),
@@ -1186,10 +1209,12 @@ func (t *Tool) executeAct(
 		}
 		return drv.Call(ctx, mcpToolPressKey, args)
 	case actHover:
-		return drv.Call(ctx, mcpToolHover, map[string]any{
+		args := map[string]any{
 			"ref":     strings.TrimSpace(req.Ref),
 			"element": describeElement(req.Ref, ""),
-		})
+		}
+		addServerTimeoutArg(args, driverType, req.TimeoutMs)
+		return drv.Call(ctx, mcpToolHover, args)
 	case strings.ToLower(actScrollIntoView):
 		if driverType != driverTypeBrowserServer {
 			return nil, errors.New(
@@ -1197,24 +1222,30 @@ func (t *Tool) executeAct(
 					"browser-server driver",
 			)
 		}
-		return drv.Call(ctx, mcpToolScroll, map[string]any{
+		args := map[string]any{
 			"ref": strings.TrimSpace(req.Ref),
-		})
+		}
+		addServerTimeoutArg(args, driverType, req.TimeoutMs)
+		return drv.Call(ctx, mcpToolScroll, args)
 	case actDrag:
-		return drv.Call(ctx, mcpToolDrag, map[string]any{
+		args := map[string]any{
 			"startRef":     strings.TrimSpace(req.StartRef),
 			"startElement": describeElement(req.StartRef, "start"),
 			"endRef":       strings.TrimSpace(req.EndRef),
 			"endElement":   describeElement(req.EndRef, "end"),
-		})
+		}
+		addServerTimeoutArg(args, driverType, req.TimeoutMs)
+		return drv.Call(ctx, mcpToolDrag, args)
 	case actSelect:
-		return drv.Call(ctx, mcpToolSelect, map[string]any{
+		args := map[string]any{
 			"ref":     strings.TrimSpace(req.Ref),
 			"element": describeElement(req.Ref, ""),
 			"values":  req.Values,
-		})
+		}
+		addServerTimeoutArg(args, driverType, req.TimeoutMs)
+		return drv.Call(ctx, mcpToolSelect, args)
 	case actFill:
-		return t.executeFill(ctx, drv, req)
+		return t.executeFill(ctx, drv, req, driverType)
 	case actResize:
 		return drv.Call(ctx, mcpToolResize, map[string]any{
 			"width":  intValue(req.Width),
@@ -1249,13 +1280,16 @@ func (t *Tool) executeFill(
 	ctx context.Context,
 	drv driver,
 	req actRequest,
+	driverType string,
 ) (any, error) {
 	if len(req.Fields) == 0 {
 		return nil, errors.New("browser fill requires fields")
 	}
-	return drv.Call(ctx, mcpToolFillForm, map[string]any{
+	args := map[string]any{
 		"fields": req.Fields,
-	})
+	}
+	addServerTimeoutArg(args, driverType, req.TimeoutMs)
+	return drv.Call(ctx, mcpToolFillForm, args)
 }
 
 func (t *Tool) executeWait(
@@ -1394,6 +1428,19 @@ func intValue(v *int) int {
 		return 0
 	}
 	return *v
+}
+
+func addServerTimeoutArg(
+	args map[string]any,
+	driverType string,
+	timeout *int,
+) {
+	if driverType != driverTypeBrowserServer {
+		return
+	}
+	if value := intValue(timeout); value > 0 {
+		args["timeoutMs"] = value
+	}
 }
 
 func describeElement(ref string, fallback string) string {

@@ -249,6 +249,23 @@ func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
 			},
 		},
 		{
+			name:     "upload with ref",
+			toolName: mcpToolUpload,
+			args: map[string]any{
+				"paths":     []string{"/tmp/a.txt"},
+				"ref":       "e1",
+				"timeoutMs": 2500,
+			},
+			wantPath:   "/upload",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, []any{"/tmp/a.txt"}, body["paths"])
+				require.Equal(t, "e1", body["ref"])
+				require.Equal(t, float64(2500), body["timeoutMs"])
+			},
+		},
+		{
 			name:       "dialog",
 			toolName:   mcpToolDialog,
 			args:       map[string]any{"accept": true},

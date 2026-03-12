@@ -21,6 +21,16 @@ Action coverage:
 - `chrome` relay still does not expose console capture, pdf export, file
   upload, or dialog hooks
 
+Notable behavior details:
+
+- host screenshots accept `ref` and CSS `element`; element shots reject
+  `fullPage`
+- host upload accepts `inputRef`, CSS `element`, or a clickable `ref`
+  that arms a file chooser
+- relay screenshots can return `jpeg` and crop to a visible `ref` inside
+  the current viewport
+- host console capture accepts `level` filtering such as `error`
+
 ## Run
 
 ```bash
@@ -77,12 +87,14 @@ What they verify:
   - opens `https://example.com`
   - verifies snapshot, scrollIntoView, wait, wait-by-fn, evaluate, and
     screenshot
+  - injects a file input and verifies upload through both CSS selector
+    and clickable ref flows
 - `smoke:relay`
   - starts the browser server
   - launches Chromium with the relay extension loaded
   - attaches the current tab through the extension background
   - verifies `profile=chrome` tabs, snapshot, scrollIntoView, wait,
-    wait-by-fn, evaluate, and screenshot
+    wait-by-fn, evaluate, and cropped `jpeg` screenshots
 - `smoke:host:headed`
   - repeats the managed browser smoke with a visible Chromium window
 - `smoke:relay:headed`

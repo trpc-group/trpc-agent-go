@@ -173,7 +173,7 @@ export class BrowserRuntime {
     if (profile === "chrome") {
       return textResult("Console capture is not available in chrome relay.");
     }
-    return this.hostProfile.consoleMessages(payload.targetId);
+    return this.hostProfile.consoleMessages(payload.targetId, payload);
   }
 
   async pdf(profile, payload) {
@@ -190,11 +190,7 @@ export class BrowserRuntime {
     if (profile === "chrome") {
       return textResult("File upload is not available in chrome relay.");
     }
-    return this.hostProfile.uploadFiles(
-      payload.targetId,
-      payload.inputRef,
-      payload.paths || []
-    );
+    return this.hostProfile.uploadFiles(payload.targetId, payload);
   }
 
   async dialog(profile, payload) {

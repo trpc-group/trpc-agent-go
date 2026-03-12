@@ -153,9 +153,29 @@ async function main() {
     const screenshot = await fetchJSON(`${baseURL}/screenshot`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ profile: "chrome" })
+      body: JSON.stringify({
+        profile: "chrome",
+        type: "jpeg"
+      })
     });
     assert.ok((screenshot.content || []).length > 0);
+    assert.equal(screenshot.content?.[0]?.mimeType, "image/jpeg");
+
+    const refShot = await fetchJSON(`${baseURL}/screenshot`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "chrome",
+        ref,
+        type: "jpeg"
+      })
+    });
+    assert.ok((refShot.content || []).length > 0);
+    assert.equal(refShot.content?.[0]?.mimeType, "image/jpeg");
+    assert.ok(
+      (refShot.content?.[0]?.data || "").length <
+        (screenshot.content?.[0]?.data || "").length
+    );
 
     console.log(JSON.stringify({
       ok: true,
@@ -168,7 +188,8 @@ async function main() {
       relayClients: relayStatus.clients,
       attachedTabs: tabs.tabs,
       snapshotPreview: text.split("\n").slice(0, 4),
-      screenshotBytes: (screenshot.content?.[0]?.data || "").length
+      screenshotBytes: (screenshot.content?.[0]?.data || "").length,
+      refScreenshotBytes: (refShot.content?.[0]?.data || "").length
     }));
   } finally {
     if (context) {

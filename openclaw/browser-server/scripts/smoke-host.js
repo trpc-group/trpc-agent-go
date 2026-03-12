@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { startServer } from "../src/server.js";
 import {
   authHeaders,
@@ -28,6 +31,11 @@ async function main() {
     "content-type": "application/json",
     ...authHeaders(config.token)
   };
+  const uploadDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-host-upload-")
+  );
+  const uploadPath = path.join(uploadDir, "fixture.txt");
+  await fs.writeFile(uploadPath, "fixture\n", "utf8");
   try {
     await fetchJSON(`${baseURL}/start`, {
       method: "POST",
@@ -112,9 +120,128 @@ async function main() {
     const screenshot = await fetchJSON(`${baseURL}/screenshot`, {
       method: "POST",
       headers,
-      body: JSON.stringify({ profile: "openclaw" })
+      body: JSON.stringify({
+        profile: "openclaw",
+        type: "jpeg"
+      })
     });
     assert.ok((screenshot.content || []).length > 0);
+    assert.equal(screenshot.content?.[0]?.mimeType, "image/jpeg");
+
+    const elementShot = await fetchJSON(`${baseURL}/screenshot`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        element: "h1",
+        type: "jpeg"
+      })
+    });
+    assert.ok((elementShot.content || []).length > 0);
+    assert.equal(elementShot.content?.[0]?.mimeType, "image/jpeg");
+    assert.ok(
+      (elementShot.content?.[0]?.data || "").length <
+        (screenshot.content?.[0]?.data || "").length
+    );
+
+    const prepared = await fetchJSON(`${baseURL}/act`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        request: {
+          kind: "evaluate",
+          fn: `() => {
+            document.body.innerHTML = "";
+            const button = document.createElement("button");
+            button.id = "upload-button";
+            button.textContent = "Choose file";
+            const input = document.createElement("input");
+            input.id = "upload-input";
+            input.type = "file";
+            button.addEventListener("click", () => input.click());
+            document.body.append(button, input);
+            return document.body.innerText;
+          }`
+        }
+      })
+    });
+    assert.match(extractText(prepared), /Choose file/);
+
+    const uploadSnapshot = await fetchJSON(`${baseURL}/snapshot`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ profile: "openclaw" })
+    });
+    const uploadButtonRef = extractFirstRef(extractText(uploadSnapshot));
+    assert.ok(uploadButtonRef);
+
+    const elementUpload = await fetchJSON(`${baseURL}/upload`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        element: "#upload-input",
+        paths: [uploadPath],
+        timeoutMs: 5000
+      })
+    });
+    assert.match(extractText(elementUpload), /Uploaded 1 file/);
+
+    const uploadedByElement = await fetchJSON(`${baseURL}/act`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        request: {
+          kind: "evaluate",
+          fn: `() => document.getElementById("upload-input").files.length`
+        }
+      })
+    });
+    assert.match(extractText(uploadedByElement), /1/);
+
+    const cleared = await fetchJSON(`${baseURL}/act`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        request: {
+          kind: "evaluate",
+          fn: `() => {
+            const input = document.getElementById("upload-input");
+            input.value = "";
+            return input.files.length;
+          }`
+        }
+      })
+    });
+    assert.match(extractText(cleared), /0/);
+
+    const refUpload = await fetchJSON(`${baseURL}/upload`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        ref: uploadButtonRef,
+        paths: [uploadPath],
+        timeoutMs: 5000
+      })
+    });
+    assert.match(extractText(refUpload), /Uploaded 1 file/);
+
+    const uploadedByRef = await fetchJSON(`${baseURL}/act`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        request: {
+          kind: "evaluate",
+          fn: `() => document.getElementById("upload-input").files.length`
+        }
+      })
+    });
+    assert.match(extractText(uploadedByRef), /1/);
 
     console.log(JSON.stringify({
       ok: true,
@@ -123,9 +250,12 @@ async function main() {
       executablePath,
       targetId: snapshot.targetId,
       snapshotPreview: text.split("\n").slice(0, 4),
-      screenshotBytes: (screenshot.content?.[0]?.data || "").length
+      uploadButtonRef,
+      screenshotBytes: (screenshot.content?.[0]?.data || "").length,
+      elementScreenshotBytes: (elementShot.content?.[0]?.data || "").length
     }));
   } finally {
+    await fs.rm(uploadDir, { recursive: true, force: true });
     await closeServer(server, runtime);
   }
 }

@@ -983,6 +983,111 @@ func TestToolCall_UploadRequiresPaths(t *testing.T) {
 	require.Contains(t, err.Error(), "requires paths")
 }
 
+func TestToolCall_UploadPassesBrowserServerElementArgs(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolUpload: textPayload("uploaded"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":    actionUpload,
+			"element":   "#upload-input",
+			"paths":     []string{"/tmp/a.txt"},
+			"timeoutMs": 2500,
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionUpload, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolUpload, drv.calls[0].Tool)
+	require.Equal(t, "#upload-input", drv.calls[0].Args["element"])
+	require.Equal(t, 2500, drv.calls[0].Args["timeoutMs"])
+}
+
+func TestToolCall_UploadPassesBrowserServerRefArgs(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolUpload: textPayload("uploaded"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":    actionUpload,
+			"ref":       "e1",
+			"paths":     []string{"/tmp/a.txt"},
+			"timeoutMs": 2500,
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionUpload, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolUpload, drv.calls[0].Tool)
+	require.Equal(t, "e1", drv.calls[0].Args["ref"])
+	require.Equal(t, 2500, drv.calls[0].Args["timeoutMs"])
+}
+
+func TestToolCall_UploadRejectsElementForMCPDriver(t *testing.T) {
+	t.Parallel()
+
+	_, err := newTestTool(&fakeDriver{}).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":  actionUpload,
+			"element": "#upload-input",
+			"paths":   []string{"/tmp/a.txt"},
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "browser-server")
+}
+
 func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 	t.Parallel()
 
@@ -1105,6 +1210,149 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 			require.Len(t, drv.calls, 1)
 			require.Equal(t, tc.wantTool, drv.calls[0].Tool)
 			tc.assertArg(t, drv.calls[0])
+		})
+	}
+}
+
+func TestToolCall_ActPassesTimeoutToBrowserServer(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		input    map[string]any
+		wantTool string
+	}{
+		{
+			name: "click",
+			input: map[string]any{
+				"action": actionAct,
+				"request": map[string]any{
+					"kind":      actClick,
+					"ref":       "e1",
+					"timeoutMs": 2500,
+				},
+			},
+			wantTool: mcpToolClick,
+		},
+		{
+			name: "type",
+			input: map[string]any{
+				"action": actionAct,
+				"request": map[string]any{
+					"kind":      actType,
+					"ref":       "e1",
+					"text":      "hello",
+					"timeoutMs": 2500,
+				},
+			},
+			wantTool: mcpToolType,
+		},
+		{
+			name: "hover",
+			input: map[string]any{
+				"action": actionAct,
+				"request": map[string]any{
+					"kind":      actHover,
+					"ref":       "e1",
+					"timeoutMs": 2500,
+				},
+			},
+			wantTool: mcpToolHover,
+		},
+		{
+			name: "scroll",
+			input: map[string]any{
+				"action": actionAct,
+				"request": map[string]any{
+					"kind":      actScrollIntoView,
+					"ref":       "e1",
+					"timeoutMs": 2500,
+				},
+			},
+			wantTool: mcpToolScroll,
+		},
+		{
+			name: "drag",
+			input: map[string]any{
+				"action": actionAct,
+				"request": map[string]any{
+					"kind":      actDrag,
+					"startRef":  "e1",
+					"endRef":    "e2",
+					"timeoutMs": 2500,
+				},
+			},
+			wantTool: mcpToolDrag,
+		},
+		{
+			name: "select",
+			input: map[string]any{
+				"action": actionAct,
+				"request": map[string]any{
+					"kind":      actSelect,
+					"ref":       "e1",
+					"values":    []string{"a"},
+					"timeoutMs": 2500,
+				},
+			},
+			wantTool: mcpToolSelect,
+		},
+		{
+			name: "fill",
+			input: map[string]any{
+				"action": actionAct,
+				"request": map[string]any{
+					"kind": actFill,
+					"fields": []map[string]any{{
+						"ref":  "e1",
+						"text": "hello",
+					}},
+					"timeoutMs": 2500,
+				},
+			},
+			wantTool: mcpToolFillForm,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			drv := &fakeDriver{
+				callResult: map[string]any{
+					tc.wantTool: textPayload(tc.name),
+				},
+			}
+			tool := newToolWithDrivers(
+				defaultProfileName,
+				false,
+				navigationPolicy{},
+				nil,
+				nil,
+				nil,
+				map[string]ProfileConfig{
+					defaultProfileName: {
+						Name:             defaultProfileName,
+						BrowserServerURL: "http://127.0.0.1:19790",
+					},
+				},
+				map[string]driver{
+					defaultProfileName: drv,
+				},
+			)
+
+			raw, err := tool.Call(
+				context.Background(),
+				mustJSON(t, tc.input),
+			)
+			require.NoError(t, err)
+
+			got := raw.(Result)
+			require.Equal(t, actionAct, got.Action)
+			require.Len(t, drv.calls, 1)
+			require.Equal(t, tc.wantTool, drv.calls[0].Tool)
+			require.Equal(t, 2500, drv.calls[0].Args["timeoutMs"])
 		})
 	}
 }
