@@ -218,7 +218,38 @@ func TestCheckPythonPackages_CommandFailure(t *testing.T) {
 		},
 		[]PythonPackage{{Module: "mod", Package: "pkg"}},
 	)
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.Len(t, status, 1)
 	require.False(t, status[0].Found)
+}
+
+func TestPythonExecCommand_AcceptsVersionedInterpreterPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell assertions run on unix-like systems")
+	}
+
+	path := writeTestCommand(
+		t,
+		t.TempDir(),
+		"python3.11",
+		"printf ok",
+	)
+	cmd, err := pythonExecCommand(path)
+	require.NoError(t, err)
+
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err)
+	require.Equal(t, "ok", string(out))
+}
+
+func TestResolveExecutable_RejectsNonExecutablePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable bits are platform-specific")
+	}
+
+	path := filepath.Join(t.TempDir(), "python3")
+	require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
+
+	_, err := resolveExecutable(path, "")
+	require.Error(t, err)
 }
