@@ -22,7 +22,7 @@
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash
 ```
 

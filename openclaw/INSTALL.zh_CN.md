@@ -5,7 +5,7 @@
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash
 ```
 
@@ -41,13 +41,13 @@ openclaw
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash -s -- --profile stdin-sqlite
 ```
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash -s -- --profile telegram
 ```
 
@@ -55,7 +55,7 @@ curl -fsSL \
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash -s -- --version v0.0.1
 ```
 
@@ -79,7 +79,7 @@ profile，可以加 `--force-config`。`bundled-skills` 会在每次安装和升
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash -s -- \
       --bin-dir "$HOME/bin" \
       --config-dir "$HOME/.config/openclaw" \

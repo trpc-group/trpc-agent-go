@@ -5,7 +5,7 @@ running `go build`, use the public install script:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash
 ```
 
@@ -44,13 +44,13 @@ Examples:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash -s -- --profile stdin-sqlite
 ```
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash -s -- --profile telegram
 ```
 
@@ -58,7 +58,7 @@ Install a pinned version:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash -s -- --version v0.0.1
 ```
 
@@ -82,7 +82,7 @@ Custom install paths:
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash -s -- \
       --bin-dir "$HOME/bin" \
       --config-dir "$HOME/.config/openclaw" \

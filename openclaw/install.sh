@@ -23,6 +23,9 @@ readonly profileStdin="stdin"
 readonly profileStdinSQLite="stdin-sqlite"
 readonly profileTelegram="telegram"
 
+readonly githubTokenEnvName="GITHUB_TOKEN"
+readonly ghTokenEnvName="GH_TOKEN"
+
 usage() {
   cat <<'EOF'
 Install the OpenClaw prebuilt release from GitHub Releases.
@@ -157,6 +160,15 @@ profile_file_name() {
 
 download_text() {
   local url="$1"
+  local token
+
+  token="$(github_token)"
+  if [ -n "$token" ]; then
+    curl -fsSL --retry 3 \
+      -H "Authorization: Bearer ${token}" \
+      "$url"
+    return
+  fi
 
   curl -fsSL --retry 3 "$url"
 }
@@ -164,11 +176,35 @@ download_text() {
 download_file() {
   local url="$1"
   local output="$2"
+  local token
+
+  token="$(github_token)"
+  if [ -n "$token" ]; then
+    curl -fsSL --retry 3 \
+      -H "Authorization: Bearer ${token}" \
+      "$url" \
+      -o "$output"
+    return
+  fi
 
   curl -fsSL --retry 3 "$url" -o "$output"
 }
 
-extract_latest_tag() {
+github_token() {
+  if [ -n "${!ghTokenEnvName:-}" ]; then
+    printf '%s' "${!ghTokenEnvName}"
+    return
+  fi
+
+  if [ -n "${!githubTokenEnvName:-}" ]; then
+    printf '%s' "${!githubTokenEnvName}"
+    return
+  fi
+
+  printf '%s' ""
+}
+
+extract_latest_tag_from_json() {
   local payload="$1"
   local prefix="$2"
 
@@ -177,10 +213,38 @@ extract_latest_tag() {
     head -n 1 | sed -E 's/.*"([^"]+)"/\1/'
 }
 
+extract_latest_tag_from_atom() {
+  local payload="$1"
+  local prefix="$2"
+
+  printf '%s\n' "$payload" | tr '\n' ' ' | grep -o \
+    "<title>${prefix}v[^<]*</title>" | \
+    head -n 1 | sed -E 's#<title>([^<]+)</title>#\1#'
+}
+
+release_api_url() {
+  local api_base_url="$1"
+  local repo="$2"
+
+  printf '%s/repos/%s/releases?per_page=100' \
+    "$(trim_trailing_slash "$api_base_url")" \
+    "$repo"
+}
+
+release_feed_url() {
+  local download_base_url="$1"
+  local repo="$2"
+
+  printf '%s/%s/releases.atom' \
+    "$(trim_trailing_slash "$download_base_url")" \
+    "$repo"
+}
+
 resolve_version() {
   local requested="$1"
   local repo="$2"
   local api_base_url="$3"
+  local download_base_url="$4"
   local payload tag
 
   if [ -n "$requested" ]; then
@@ -188,14 +252,29 @@ resolve_version() {
     return
   fi
 
-  payload="$(download_text \
-    "$(trim_trailing_slash "$api_base_url")/repos/${repo}/releases?per_page=100")"
-  tag="$(extract_latest_tag "$payload" "$DEFAULT_RELEASE_PREFIX")"
-  if [ -z "$tag" ]; then
-    die "no published OpenClaw releases found in ${repo}"
+  if payload="$(download_text \
+    "$(release_api_url "$api_base_url" "$repo")" 2>/dev/null)"; then
+    tag="$(extract_latest_tag_from_json \
+      "$payload" \
+      "$DEFAULT_RELEASE_PREFIX")"
+    if [ -n "$tag" ]; then
+      printf '%s' "$(normalize_version "$tag")"
+      return
+    fi
   fi
 
-  printf '%s' "$(normalize_version "$tag")"
+  if payload="$(download_text \
+    "$(release_feed_url "$download_base_url" "$repo")" 2>/dev/null)"; then
+    tag="$(extract_latest_tag_from_atom \
+      "$payload" \
+      "$DEFAULT_RELEASE_PREFIX")"
+    if [ -n "$tag" ]; then
+      printf '%s' "$(normalize_version "$tag")"
+      return
+    fi
+  fi
+
+  die "no published OpenClaw releases found in ${repo}"
 }
 
 archive_name() {
@@ -396,7 +475,11 @@ main() {
   local package_root metadata_file
   local package_version sqlite_backend
 
-  resolved_version="$(resolve_version "$version" "$repo" "$api_base_url")"
+  resolved_version="$(resolve_version \
+    "$version" \
+    "$repo" \
+    "$api_base_url" \
+    "$download_base_url")"
   [ -n "$resolved_version" ] || die "empty release version"
 
   goos="$(detect_os)"
