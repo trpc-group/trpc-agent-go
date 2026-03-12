@@ -59,7 +59,7 @@ func NewChatSpanName(requestModel string) string {
 
 // NewExecuteToolSpanName creates a new execute tool span name.
 func NewExecuteToolSpanName(toolName string) string {
-	return fmt.Sprintf("%s %s", OperationExecuteTool, toolName)
+	return OperationExecuteTool + " " + toolName
 }
 
 const (
@@ -80,7 +80,7 @@ type Workflow struct {
 
 // NewWorkflowSpanName creates a new workflow span name.
 func NewWorkflowSpanName(workflowName string) string {
-	return fmt.Sprintf("%s %s", OperationWorkflow, workflowName)
+	return OperationWorkflow + " " + workflowName
 }
 
 // TraceWorkflow traces the workflow.
@@ -121,7 +121,7 @@ func newInferenceSpanName(operationNames, requestModel string) string {
 	if requestModel == "" {
 		return operationNames
 	}
-	return fmt.Sprintf("%s %s", operationNames, requestModel)
+	return operationNames + " " + requestModel
 }
 
 const (
@@ -285,6 +285,13 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 	if !span.IsRecording() {
 		return
 	}
+	if tokenUsage != nil {
+		span.SetAttributes(attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, tokenUsage.PromptTokens))
+		span.SetAttributes(attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, tokenUsage.CompletionTokens))
+	}
+	if timeToFirstToken > 0 {
+		span.SetAttributes(attribute.Float64(semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, timeToFirstToken.Seconds()))
+	}
 	if rspEvent == nil {
 		return
 	}
@@ -307,21 +314,13 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 			}
 		}
 		span.SetAttributes(attribute.StringSlice(semconvtrace.KeyGenAIResponseFinishReasons, finishReasons))
-
 	}
 	span.SetAttributes(attribute.String(semconvtrace.KeyGenAIResponseModel, rsp.Model))
-	if tokenUsage != nil {
-		span.SetAttributes(attribute.Int(semconvtrace.KeyGenAIUsageInputTokens, tokenUsage.PromptTokens))
-		span.SetAttributes(attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, tokenUsage.CompletionTokens))
-	}
 	span.SetAttributes(attribute.String(semconvtrace.KeyGenAIResponseID, rsp.ID))
 
 	if e := rsp.Error; e != nil {
 		span.SetStatus(codes.Error, e.Message)
 		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, e.Type), attribute.String(semconvtrace.KeyErrorMessage, e.Message))
-	}
-	if timeToFirstToken > 0 {
-		span.SetAttributes(attribute.Float64(semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, timeToFirstToken.Seconds()))
 	}
 }
 

@@ -95,7 +95,7 @@ func SummarizeSession(
 	filterKey string,
 	force bool,
 ) (updated bool, err error) {
-	if m == nil || base == nil {
+	if base == nil {
 		return false, nil
 	}
 
@@ -127,6 +127,10 @@ func SummarizeSession(
 		}
 		base.SummariesMu.Unlock()
 		return true, nil
+	}
+
+	if m == nil {
+		return false, nil
 	}
 
 	// Compute delta events with both time and filterKey filtering in one pass.

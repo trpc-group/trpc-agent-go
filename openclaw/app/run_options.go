@@ -28,7 +28,7 @@ import (
 const (
 	openClawConfigEnvName = "OPENCLAW_CONFIG"
 
-	defaultConfigRootDir = ".trpc-agent-go"
+	defaultConfigRootDir = ".trpc-agent-go-github"
 	defaultConfigAppDir  = "openclaw"
 	defaultConfigFile    = "openclaw.yaml"
 	defaultAdminAddr     = "127.0.0.1:19789"
@@ -689,6 +689,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		}
 		return opts, nil
 	}
+	opts.ConfigPath = cfgPath
 
 	cfg, err := loadConfigFile(cfgPath)
 	if err != nil {

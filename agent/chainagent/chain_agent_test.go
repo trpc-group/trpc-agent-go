@@ -12,6 +12,7 @@ package chainagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -119,6 +121,30 @@ func (m *mockErrorEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<
 		_ = agent.EmitEvent(ctx, inv, ch, evt)
 	}()
 	return ch, nil
+}
+
+func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	recorder := tracetest.NewSpanRecorder()
+	provider := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(recorder))
+	originalProvider := trace.TracerProvider
+	originalTracer := trace.Tracer
+	trace.TracerProvider = provider
+	trace.Tracer = provider.Tracer("chain-agent-disable-tracing-test")
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		trace.TracerProvider = originalProvider
+		trace.Tracer = originalTracer
+	})
+	return recorder
+}
+
+func findEndedSpanByName(spans []tracesdk.ReadOnlySpan, spanName string) tracesdk.ReadOnlySpan {
+	for _, span := range spans {
+		if span.Name() == spanName {
+			return span
+		}
+	}
+	return nil
 }
 
 type countingAgent struct {
@@ -436,6 +462,24 @@ func TestCreateSubAgentInvocation(t *testing.T) {
 	require.Equal(t, "parent"+agent.BranchDelimiter+"child", inv.Branch)
 }
 
+func TestChainAgent_Run_DisableTracingSkipsSpanCreation(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	chain := New("chain", WithSubAgents([]agent.Agent{
+		&mockAgent{name: "child", eventCount: 1, eventContent: "ok"},
+	}))
+	invocation := &agent.Invocation{
+		InvocationID: "chain-disable-tracing",
+		RunOptions: agent.RunOptions{
+			DisableTracing: true,
+		},
+	}
+	events, err := chain.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	for range events {
+	}
+	require.Empty(t, recorder.Ended())
+}
+
 func TestChainAgent_FindSubAgentAndInfo(t *testing.T) {
 	a1 := &mockMinimalAgent{name: "a1"}
 	a2 := &mockMinimalAgent{name: "a2"}
@@ -721,10 +765,14 @@ func TestChainAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 	}
 
 	spans := spanRecorder.Ended()
-	require.Len(t, spans, 1)
+	require.NotEmpty(t, spans)
+
+	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, chainAgent.Info().Name)
+	agentSpan := findEndedSpanByName(spans, expectedSpanName)
+	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
 
 	found := false
-	for _, attr := range spans[0].Attributes() {
+	for _, attr := range agentSpan.Attributes() {
 		if string(attr.Key) == semconvtrace.KeyGenAIRequestIsStream {
 			found = true
 			require.True(t, attr.Value.AsBool())
@@ -732,4 +780,66 @@ func TestChainAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 		}
 	}
 	require.True(t, found, "expected stream trace attribute to be recorded")
+}
+
+func TestChainAgent_Run_PreservesFinalResponseWhenAfterCallbackReturnsNil(t *testing.T) {
+	originalTracer := trace.Tracer
+	defer func() {
+		trace.Tracer = originalTracer
+	}()
+
+	spanRecorder := tracetest.NewSpanRecorder()
+	tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
+	defer func() {
+		_ = tp.Shutdown(context.Background())
+	}()
+	trace.Tracer = tp.Tracer("test")
+
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return nil, nil
+	})
+
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{
+			&mockAgent{
+				name:         "child",
+				eventCount:   1,
+				eventContent: "final content",
+			},
+		}),
+		WithAgentCallbacks(callbacks),
+	)
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+	}
+
+	events, err := chainAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+
+	var received []*event.Event
+	for evt := range events {
+		received = append(received, evt)
+	}
+	require.Len(t, received, 1)
+
+	spans := spanRecorder.Ended()
+	require.NotEmpty(t, spans)
+
+	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, chainAgent.Info().Name)
+	agentSpan := findEndedSpanByName(spans, expectedSpanName)
+	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
+
+	var outputMessages string
+	for _, attr := range agentSpan.Attributes() {
+		if string(attr.Key) == semconvtrace.KeyGenAIOutputMessages {
+			outputMessages = attr.Value.AsString()
+			break
+		}
+	}
+	require.NotEmpty(t, outputMessages, "expected output messages attribute to be recorded")
+	require.Contains(t, outputMessages, "final content")
 }

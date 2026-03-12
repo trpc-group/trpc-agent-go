@@ -81,9 +81,50 @@ tRPC-Agent-Go 中的 `openclaw` 正是在这个背景下出现的。
 本节目标很明确：从 GitHub 仓库里的现成配置出发，
 把一个真实消息入口跑起来，并建立对整条运行链路的直观认识。
 
-### 环境准备
+### 路径 A：先安装预编译 release
 
-如果你打算从源码运行 `openclaw`，先准备下面几项：
+如果你的目标是尽快跑起来，不要一上来就 `go run`。先安装已经发布的
+二进制：
+
+```bash
+curl -fsSL \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
+  | bash
+```
+
+默认安装 profile 是 `stdin`，而这个 profile 使用的是内置 `mock`
+模型。所以第一次启动时既不需要模型密钥，也不需要 Telegram
+这类消息入口凭据。
+
+安装脚本默认会把 GitHub 版本的配置和状态目录写到
+`~/.trpc-agent-go-github/openclaw`。
+
+如果安装后还找不到 `openclaw`，直接执行安装脚本输出里的 PATH 命令。
+对于 bash，持久化写法如下：
+
+```bash
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
+```
+
+然后直接启动 OpenClaw：
+
+```bash
+openclaw
+```
+
+启动后你就已经进入本地终端聊天模式了。先发一条 `hello`
+这样的简单消息即可。你也可以先用 `/help` 看基础命令，
+最后再用 `/quit` 或 `/exit` 退出。
+
+如果你当前最关心的是“先拿到一个能启动、能验证链路的可运行二进制”，
+这条路径最合适。等它稳定以后，再继续接真实模型或真实消息渠道。
+
+### 路径 B：从源码运行
+
+如果你的目标是开发或修改 OpenClaw 本身，再按源码方式运行。
+先准备下面几项：
 
 - Go 开发环境
 - tRPC-Agent-Go 仓库代码
@@ -530,14 +571,14 @@ session:
   summary:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/sessions.sqlite"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/sessions.sqlite"
 
 memory:
   backend: "sqlite"
   auto:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/memories.db"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/memories.db"
 ```
 
 这段配置要表达的意思很简单：

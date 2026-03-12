@@ -341,12 +341,55 @@ err := kb.Load(ctx,
 > - 请根据吞吐、成本与限流情况调节 `WithSourceConcurrency()`、`WithDocConcurrency()`
 > - 默认值在多数场景下较为均衡；需要更快速度可适当上调，遇到限流则下调
 
+### 加载进度回调
+
+通过 `WithLoadProgressCallback` 可以注册一个结构化的进度回调函数，用于驱动自定义 UI、指标采集或其他可观测性集成，无需解析日志输出：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/knowledge"
+
+err := kb.Load(ctx,
+    knowledge.WithLoadProgressCallback(func(ctx context.Context, evt knowledge.LoadProgressEvent) {
+        if evt.Done {
+            fmt.Printf("All sources loaded. total: %d docs, elapsed: %s\n",
+                evt.Total, evt.TotalElapsed)
+            return
+        }
+        if evt.Err != nil {
+            fmt.Printf("Source %s failed: %v\n", evt.SourceName, evt.Err)
+            return
+        }
+        fmt.Printf("Source %s: %d/%d docs, ETA: %s\n",
+            evt.SourceName, evt.SourceProcessed, evt.SourceTotal, evt.SourceETA)
+    }),
+)
+```
+
+`LoadProgressEvent` 包含以下字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `SourceNames` | `[]string` | 当前 Load 调用涉及的所有 source 名称列表 |
+| `SourceName` | `string` | 当前正在加载的 source 名称 |
+| `SourceProcessed` | `int` | 当前 source 已处理的文档数 |
+| `SourceTotal` | `int` | 当前 source 的文档总数 |
+| `SourceElapsed` | `time.Duration` | 当前 source 已耗时 |
+| `SourceETA` | `time.Duration` | 当前 source 的预估剩余时间 |
+| `Total` | `int` | 所有 source 累计已处理的文档数 |
+| `TotalElapsed` | `time.Duration` | 整个 Load 调用的总耗时 |
+| `Done` | `bool` | 是否所有 source 已加载完成 |
+| `Err` | `error` | source 加载出错时非 nil |
+
+> **注意**：当使用并发加载时（`WithSourceConcurrency > 1` 或 `WithDocConcurrency > 1`），回调可能从多个 goroutine 并发调用，调用方需自行同步回调内部访问的共享状态。
+
+完整示例参见 [examples/knowledge/basic](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/basic)，其中演示了基于进度回调实现的多行进度条 UI。
+
 ## 评测对比
 
 我们使用 [RAGAS](https://docs.ragas.io/) 框架对 tRPC-Agent-Go、LangChain、Agno 和 CrewAI 进行了全面的 RAG 质量评测。
 
 
-> **详细文档**: 完整的评测方案、参数配置和结果分析请参考 [examples/knowledge/evaluation/README_CN.md](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/evaluation/README_CN.md)
+> **详细文档**: 完整的评测方案、参数配置和结果分析请参考 [benchmark/knowledge/README.zh_CN.md](https://github.com/trpc-group/trpc-agent-go/tree/main/benchmark/knowledge/README.zh_CN.md)
 
 
 ### 评测方案

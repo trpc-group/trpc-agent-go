@@ -25,10 +25,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
@@ -340,8 +340,10 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	index int,
 	toolCall model.ToolCall,
 ) (*event.Event, error) {
-	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
-	defer span.End()
+	ctx, span, startedSpan := itrace.StartSpan(ctx, invocation, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
+	if startedSpan {
+		defer span.End()
+	}
 	startTime := time.Now()
 	ctx, choices, modifiedArgs, shouldIgnoreError, err := p.executeToolCall(
 		ctx, invocation, toolCall, tools, index, eventChan,
@@ -408,7 +410,9 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		}
 	}
 
-	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolEvent, err)
+	if startedSpan {
+		itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolEvent, err)
+	}
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
 		RequestModelName: modelName,
 		ToolName:         toolCall.Function.Name,
@@ -507,10 +511,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			p.sendToolResult(ctx, resultChan, toolResult{index: index, event: errorEvent})
 		}
 	}()
-
 	// Trace the tool execution for observability.
-	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(tc.Function.Name))
-	defer span.End()
+	ctx, span, startedSpan := itrace.StartSpan(ctx, invocation, itelemetry.NewExecuteToolSpanName(tc.Function.Name))
+	if startedSpan {
+		defer span.End()
+	}
 	startTime := time.Now()
 	// Execute the tool (streamable or callable) with callbacks.
 	ctx, choices, modifiedArgs, shouldIgnoreError, err := p.executeToolCall(
@@ -599,7 +604,9 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			toolCallResponseEvent,
 		)
 	}
-	itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
+	if startedSpan {
+		itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
+	}
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
 		RequestModelName: modelName,
 		ToolName:         tc.Function.Name,
@@ -740,9 +747,15 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 		mergedEvent = mergeParallelToolCallResponseEvents(toolCallEvents)
 	}
 	if len(toolCallEvents) > 1 {
-		_, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(itelemetry.ToolNameMergedTools))
-		itelemetry.TraceMergedToolCalls(span, mergedEvent)
-		span.End()
+		_, span, startedSpan := itrace.StartSpan(
+			ctx,
+			invocation,
+			itelemetry.NewExecuteToolSpanName(itelemetry.ToolNameMergedTools),
+		)
+		if startedSpan {
+			itelemetry.TraceMergedToolCalls(span, mergedEvent)
+			span.End()
+		}
 	}
 	return mergedEvent
 }

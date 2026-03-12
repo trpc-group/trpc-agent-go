@@ -32,11 +32,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
@@ -278,6 +278,12 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			skillsOpts = append(
 				skillsOpts,
 				processor.WithSkillsLoadedContentInToolResults(true),
+			)
+		}
+		if !executorSupportsInteractive(options) {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithSkillExecToolsDisabled(),
 			)
 		}
 		skillsProcessor := processor.NewSkillsRequestProcessor(
@@ -540,6 +546,9 @@ func appendSkillTools(
 	if !skillFlags.RequiresExecSessionTools() {
 		return allTools
 	}
+	if !executorSupportsInteractive(options) {
+		return allTools
+	}
 
 	execTool := toolskill.NewExecTool(runTool)
 	if skillFlags.Exec {
@@ -606,13 +615,38 @@ func buildSkillRunTool(options *Options) *toolskill.RunTool {
 	)
 }
 
+// executorSupportsInteractive reports whether the effective engine
+// behind the configured code executor exposes an
+// InteractiveProgramRunner.  The check mirrors the fallback logic in
+// RunTool.ensureEngine: when the executor does not implement
+// EngineProvider (or returns a nil engine), the runtime falls back to
+// a local engine which does support interactive sessions, so we
+// return true in those cases.
+func executorSupportsInteractive(options *Options) bool {
+	exec := options.codeExecutor
+	if exec == nil {
+		exec = defaultCodeExecutor()
+	}
+	ep, ok := exec.(codeexecutor.EngineProvider)
+	if !ok {
+		// ensureEngine falls back to localexec which supports interactive.
+		return true
+	}
+	eng := ep.Engine()
+	if eng == nil {
+		return true
+	}
+	_, interactive := eng.Runner().(codeexecutor.InteractiveProgramRunner)
+	return interactive
+}
+
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
-
-	ctx, span := trace.Tracer.Start(
+	ctx, span, startedSpan := itrace.StartSpan(
 		ctx,
+		invocation,
 		fmt.Sprintf(
 			"%s %s",
 			itelemetry.OperationInvokeAgent,
@@ -621,39 +655,42 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	)
 	effectiveGenConfig := a.genConfig
 	effectiveGenConfig.Stream = iagent.ResolveInvokeAgentStream(invocation, &effectiveGenConfig)
-
 	promptText := a.systemPromptForInvocation(invocation) +
 		a.instructionForInvocation(invocation)
-	itelemetry.TraceBeforeInvokeAgent(
-		span,
-		invocation,
-		a.description,
-		promptText,
-		&effectiveGenConfig,
-	)
+	if startedSpan {
+		itelemetry.TraceBeforeInvokeAgent(
+			span,
+			invocation,
+			a.description,
+			promptText,
+			&effectiveGenConfig,
+		)
+	}
 	tracker := itelemetry.NewInvokeAgentTracker(
 		ctx,
 		invocation,
 		effectiveGenConfig.Stream,
 		&err,
 	)
-
 	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {
 		// Check if this is a custom response error (early return)
 		var customErr *haveCustomResponseError
 		if errors.As(err, &customErr) {
-			span.End()
+			if startedSpan {
+				span.End()
+			}
 			return customErr.EventChan, nil
 		}
 		// Handle actual errors
-		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
-		span.End()
+		if startedSpan {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
+			span.End()
+		}
 		return nil, err
 	}
-
-	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker), nil
+	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker, startedSpan), nil
 }
 
 // executeAgentFlow executes the agent flow with before agent callbacks.
@@ -747,25 +784,26 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 	originalChan <-chan *event.Event,
 	span sdktrace.Span,
 	tracker *itelemetry.InvokeAgentTracker,
+	startedSpan bool,
 ) <-chan *event.Event {
 	// Create a new channel with the same capacity as the original channel
 	wrappedChan := make(chan *event.Event, cap(originalChan))
-
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
 		var responseErrorType string
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
-			if fullRespEvent != nil {
+			if startedSpan && fullRespEvent != nil {
 				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 			}
 			tracker.SetResponseErrorType(responseErrorType)
 			tracker.RecordMetrics()()
-			span.End()
+			if startedSpan {
+				span.End()
+			}
 			close(wrappedChan)
 		}()
-
 		// Forward all events from the original channel
 		for evt := range originalChan {
 			if evt != nil && evt.Response != nil {
@@ -778,13 +816,11 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 					}
 					fullRespEvent = evt
 				}
-
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
 		}
-
 		// Collect error from the final response event.
 		var agentErr error
 		if fullRespEvent != nil && fullRespEvent.Response != nil && fullRespEvent.Response.Error != nil {

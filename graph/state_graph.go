@@ -24,10 +24,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
-
+	"go.opentelemetry.io/otel/trace/noop"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
@@ -447,6 +448,35 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 	}
 }
 
+// tracingDisabled reports whether tracing is disabled for the invocation.
+func tracingDisabled(invocation *agent.Invocation) bool {
+	return invocation != nil && invocation.RunOptions.DisableTracing
+}
+
+// tracingDisabledInContext reports whether tracing is disabled for the invocation in context.
+func tracingDisabledInContext(ctx context.Context) bool {
+	invocation, ok := agent.InvocationFromContext(ctx)
+	return ok && tracingDisabled(invocation)
+}
+
+// startNodeSpan returns a no-op span when tracing is disabled and otherwise starts a new span.
+func startNodeSpan(ctx context.Context, spanName string) (context.Context, oteltrace.Span, bool) {
+	if tracingDisabledInContext(ctx) {
+		return ctx, noop.Span{}, false
+	}
+	ctx, span := trace.Tracer.Start(ctx, spanName)
+	return ctx, span, true
+}
+
+// startNodeSpanForInvocation returns a no-op span when tracing is disabled for the invocation or context.
+func startNodeSpanForInvocation(ctx context.Context, invocation *agent.Invocation, spanName string) (context.Context, oteltrace.Span, bool) {
+	if tracingDisabled(invocation) || tracingDisabledInContext(ctx) {
+		return ctx, noop.Span{}, false
+	}
+	ctx, span := trace.Tracer.Start(ctx, spanName)
+	return ctx, span, true
+}
+
 // AddNode adds a node with the given ID and function.
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
@@ -461,6 +491,10 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 	}
 
 	node.Function = func(ctx context.Context, state State) (any, error) {
+		if tracingDisabledInContext(ctx) {
+			return function(ctx, state)
+		}
+
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
 		workflow := &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id, Request: state.safeClone()}
 		defer func() {
@@ -482,8 +516,8 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 		return sg
 	}
 
-	// Automatically set up Pregel-style configuration
-	// Create a trigger channel for this node
+	// Automatically set up Pregel-style configuration.
+	// Create a trigger channel for this node.
 	triggerChannel := fmt.Sprintf("trigger:%s", id)
 	sg.graph.addChannel(triggerChannel, channel.BehaviorLastValue)
 	sg.graph.addNodeTriggerChannel(id, triggerChannel)
@@ -494,38 +528,99 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 // AddLLMNode adds a node that uses the model package directly.
 func (sg *StateGraph) AddLLMNode(
 	id string,
-	model model.Model,
+	llmModel model.Model,
 	instruction string,
 	tools map[string]tool.Tool,
 	opts ...Option,
 ) *StateGraph {
-	node := &Node{}
+	node := &Node{
+		ID:   id,
+		Name: id,
+		Type: NodeTypeLLM,
+	}
 	for _, opt := range opts {
 		opt(node)
 	}
-	// Build LLM-specific options from node config
-	llmOptsForFunc := []LLMNodeFuncOption{
-		WithLLMNodeID(id),
-		WithLLMUserInputKey(node.userInputKey),
-		WithLLMRefreshToolSetsOnRun(node.refreshToolSetsOnRun),
-		WithLLMToolSets(node.toolSets),
+	runner := &llmRunner{
+		llmModel:             llmModel,
+		instruction:          instruction,
+		tools:                tools,
+		refreshToolSetsOnRun: node.refreshToolSetsOnRun,
+		nodeID:               id,
+		generationConfig:     model.GenerationConfig{Stream: true},
+		userInputKey:         node.userInputKey,
+		streamOutputName:     node.streamOutputName,
+	}
+	if len(node.toolSets) > 0 {
+		if runner.refreshToolSetsOnRun {
+			runner.toolSets = append(runner.toolSets, node.toolSets...)
+		} else {
+			runner.tools = mergeToolsWithToolSets(context.Background(), runner.tools, node.toolSets)
+		}
 	}
 	if node.llmGenerationConfig != nil {
-		llmOptsForFunc = append(
-			llmOptsForFunc,
-			WithLLMGenerationConfig(*node.llmGenerationConfig),
-		)
+		runner.generationConfig = *node.llmGenerationConfig
 	}
-	if node.streamOutputName != "" {
-		llmOptsForFunc = append(
-			llmOptsForFunc,
-			WithLLMStreamOutput(node.streamOutputName),
-		)
+
+	workflowName := "execute_function_node " + id
+	workflowSpanName := itelemetry.NewWorkflowSpanName(workflowName)
+	modelName := ""
+	if runner.llmModel != nil {
+		modelName = runner.llmModel.Info().Name
 	}
-	llmNodeFunc := NewLLMNodeFunc(model, instruction, tools, llmOptsForFunc...)
-	// Add LLM node type option
-	llmOpts := append([]Option{WithNodeType(NodeTypeLLM)}, opts...)
-	sg.AddNode(id, llmNodeFunc, llmOpts...)
+	chatSpanName := itelemetry.NewChatSpanName(modelName)
+
+	node.Function = func(ctx context.Context, state State) (any, error) {
+		ctx, wfSpan, startedWorkflowSpan := startNodeSpan(
+			ctx,
+			workflowSpanName,
+		)
+		recordWorkflow := startedWorkflowSpan && wfSpan != nil && wfSpan.IsRecording()
+		var workflow *itelemetry.Workflow
+		if recordWorkflow {
+			workflow = &itelemetry.Workflow{Name: workflowName, ID: id, Request: state.safeClone()}
+		}
+		defer func() {
+			if recordWorkflow {
+				itelemetry.TraceWorkflow(wfSpan, workflow)
+			}
+			if startedWorkflowSpan && wfSpan != nil {
+				wfSpan.End()
+			}
+		}()
+
+		ctx, span, startedSpan := startNodeSpan(ctx, chatSpanName)
+		defer func() {
+			if startedSpan && span != nil {
+				span.End()
+			}
+		}()
+		result, err := runner.execute(ctx, state, span)
+		if recordWorkflow {
+			workflow.Response = result
+		}
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			wrapped := fmt.Errorf("failed to run model: %w", err)
+			if recordWorkflow {
+				workflow.Error = wrapped
+			}
+			return result, wrapped
+		}
+		return result, nil
+	}
+
+	if err := sg.graph.addNode(node); err != nil {
+		sg.addBuildError(fmt.Errorf("AddNode(%q): %w", id, err))
+		return sg
+	}
+
+	// Automatically set up Pregel-style configuration.
+	// Create a trigger channel for this node.
+	triggerChannel := fmt.Sprintf("trigger:%s", id)
+	sg.graph.addChannel(triggerChannel, channel.BehaviorLastValue)
+	sg.graph.addNodeTriggerChannel(id, triggerChannel)
 	return sg
 }
 
@@ -1011,9 +1106,10 @@ func NewLLMNodeFunc(
 		opt(runner)
 	}
 	return func(ctx context.Context, state State) (any, error) {
-
-		_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(llmModel.Info().Name))
-		defer span.End()
+		_, span, startedSpan := startNodeSpan(ctx, itelemetry.NewChatSpanName(llmModel.Info().Name))
+		if startedSpan {
+			defer span.End()
+		}
 		result, err := runner.execute(ctx, state, span)
 		if err != nil {
 			span.RecordError(err)
@@ -1091,7 +1187,9 @@ func (r *llmRunner) executeOneShotStage(
 	if err != nil {
 		return nil, err
 	}
-	var ops []MessageOp
+	// Preallocate the common fast-path operations slice to avoid re-slicing
+	// growth on hot paths.
+	ops := make([]MessageOp, 0, 2)
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		ops = append(ops, ReplaceLastUser{Content: used[len(used)-1].Content})
 	}
@@ -1148,12 +1246,10 @@ func (r *llmRunner) executeUserInputStage(
 		userInputKey = StateKeyUserInput
 	}
 	return State{
-		StateKeyMessages:     ops,
-		userInputKey:         "", // Clear user input after execution.
-		StateKeyLastResponse: asst.Content,
-		StateKeyLastResponseID: func() string {
-			return extractResponseID(result)
-		}(),
+		StateKeyMessages:       ops,
+		userInputKey:           "", // Clear user input after execution.
+		StateKeyLastResponse:   asst.Content,
+		StateKeyLastResponseID: extractResponseID(result),
 		StateKeyNodeResponses: map[string]any{
 			r.nodeID: asst.Content,
 		},
@@ -1176,17 +1272,45 @@ func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span o
 	asst := extractAssistantMessage(result)
 	if asst != nil {
 		return State{
-			StateKeyMessages:     AppendMessages{Items: []model.Message{*asst}},
-			StateKeyLastResponse: asst.Content,
-			StateKeyLastResponseID: func() string {
-				return extractResponseID(result)
-			}(),
+			StateKeyMessages:       AppendMessages{Items: []model.Message{*asst}},
+			StateKeyLastResponse:   asst.Content,
+			StateKeyLastResponseID: extractResponseID(result),
 			StateKeyNodeResponses: map[string]any{
 				r.nodeID: asst.Content,
 			},
 		}, nil
 	}
 	return nil, nil
+}
+
+func applyInvocationRequestOverrides(
+	request *model.Request,
+	invocation *agent.Invocation,
+	nodeID string,
+) {
+	if invocation == nil {
+		return
+	}
+	if opts := graphCallOptionsFromConfigs(
+		invocation.RunOptions.CustomAgentConfigs,
+	); opts != nil {
+		patch := generationPatchForNode(opts, nodeID)
+		request.GenerationConfig = model.ApplyGenerationConfigPatch(
+			request.GenerationConfig,
+			patch,
+		)
+	}
+	if invocation.RunOptions.Stream != nil {
+		request.GenerationConfig.Stream = *invocation.RunOptions.Stream
+	}
+}
+
+func extractModelResponseSummary(result any) (string, string) {
+	finalResponse, ok := result.(*model.Response)
+	if !ok || finalResponse == nil || len(finalResponse.Choices) == 0 {
+		return "", ""
+	}
+	return finalResponse.Choices[0].Message.Content, finalResponse.ID
 }
 
 func (r *llmRunner) executeModel(
@@ -1211,25 +1335,11 @@ func (r *llmRunner) executeModel(
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
 	request.Messages = toolcall.SanitizeMessagesWithTools(request.Messages, request.Tools)
-	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-		if opts := graphCallOptionsFromConfigs(
-			inv.RunOptions.CustomAgentConfigs,
-		); opts != nil {
-			patch := generationPatchForNode(opts, nodeID)
-			request.GenerationConfig = model.ApplyGenerationConfigPatch(
-				request.GenerationConfig,
-				patch,
-			)
-		}
-		if inv.RunOptions.Stream != nil {
-			request.GenerationConfig.Stream = *inv.RunOptions.Stream
-		}
-	}
+	invocation := invocationFromContextOrDefault(ctx, nil)
+	applyInvocationRequestOverrides(request, invocation, nodeID)
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
-	// Build model input metadata from the original state and instruction
-	// so events accurately reflect both instruction and user input.
-	modelInput := extractModelInput(state, instructionUsed, r.userInputKey)
+	emittedModelStartEvent := false
 
 	var streamWriter *agent.StreamWriter
 	if r.streamOutputName != "" {
@@ -1240,10 +1350,16 @@ func (r *llmRunner) executeModel(
 		streamWriter = w
 	}
 
-	startTime := time.Now()
-	modelName := getModelName(r.llmModel)
-	emitModelStartEvent(ctx, eventChan, invocationID, modelName, nodeID, modelInput, startTime)
-	result, err := executeModelWithEvents(ctx, modelExecutionConfig{
+	var (
+		modelInput               string
+		modelName                string
+		modelEventBaseInvocation *agent.Invocation
+		modelEventInvocation     *agent.Invocation
+		modelEventInvocationID   string
+		startTime                time.Time
+	)
+	ctx, invocation, result, err := executeModelAndProcessResponsesWithContext(ctx, modelExecutionConfig{
+		Invocation:     invocation,
 		ModelCallbacks: modelCallbacks,
 		LLMModel:       r.llmModel,
 		Request:        request,
@@ -1255,6 +1371,38 @@ func (r *llmRunner) executeModel(
 		Span:           span,
 		NodeID:         nodeID,
 		DeltaStream:    streamWriter,
+		BeforeGenerate: func(modelCtx context.Context) {
+			modelInvocation := invocationFromContextOrDefault(modelCtx, invocation)
+			if shouldDisableModelExecutionEvents(modelInvocation) {
+				return
+			}
+			modelEventBaseInvocation = invocation
+			if modelEventBaseInvocation == nil {
+				modelEventBaseInvocation = modelInvocation
+			}
+			modelEventInvocation = modelInvocation
+			modelEventInvocationID = invocationID
+			if modelEventInvocation != nil && modelEventInvocation.InvocationID != "" {
+				modelEventInvocationID = modelEventInvocation.InvocationID
+			}
+			// Build model input metadata from the original state and instruction
+			// so events accurately reflect both instruction and user input.
+			modelInput = extractModelInput(state, instructionUsed, r.userInputKey)
+			startTime = time.Now()
+			modelName = getModelName(r.llmModel)
+			emitModelStartEvent(
+				modelCtx,
+				modelEventBaseInvocation,
+				modelEventInvocation,
+				eventChan,
+				modelEventInvocationID,
+				modelName,
+				nodeID,
+				modelInput,
+				startTime,
+			)
+			emittedModelStartEvent = true
+		},
 	})
 	endTime := time.Now()
 
@@ -1265,28 +1413,28 @@ func (r *llmRunner) executeModel(
 			_ = streamWriter.Close()
 		}
 	}
-
-	var modelOutput string
-	var responseID string
-	if err == nil && result != nil {
-		if finalResponse, ok := result.(*model.Response); ok && len(finalResponse.Choices) > 0 {
-			modelOutput = finalResponse.Choices[0].Message.Content
-			responseID = finalResponse.ID
+	if emittedModelStartEvent {
+		modelOutput := ""
+		responseID := ""
+		if err == nil {
+			modelOutput, responseID = extractModelResponseSummary(result)
 		}
+		emitModelCompleteEvent(
+			ctx,
+			modelEventBaseInvocation,
+			modelEventInvocation,
+			eventChan,
+			modelEventInvocationID,
+			modelName,
+			nodeID,
+			modelInput,
+			modelOutput,
+			responseID,
+			startTime,
+			endTime,
+			err,
+		)
 	}
-	emitModelCompleteEvent(
-		ctx,
-		eventChan,
-		invocationID,
-		modelName,
-		nodeID,
-		modelInput,
-		modelOutput,
-		responseID,
-		startTime,
-		endTime,
-		err,
-	)
 	return result, err
 }
 
@@ -1378,14 +1526,18 @@ func extractExecutionContext(state State) (invocationID, sessionID, appName, use
 
 // modelResponseConfig contains configuration for processing model responses.
 type modelResponseConfig struct {
-	Response       *model.Response
-	ModelCallbacks *model.Callbacks
-	EventChan      chan<- *event.Event
-	InvocationID   string
-	SessionID      string
-	LLMModel       model.Model
-	Request        *model.Request
-	Span           oteltrace.Span
+	Response         *model.Response
+	Invocation       *agent.Invocation
+	StableInvocation *agent.Invocation
+	Tracker          *itelemetry.ChatMetricsTracker
+	PartialUsage     *partialUsageState
+	ModelCallbacks   *model.Callbacks
+	EventChan        chan<- *event.Event
+	InvocationID     string
+	SessionID        string
+	LLMModel         model.Model
+	Request          *model.Request
+	Span             oteltrace.Span
 	// NodeID, when provided, is used as the event author.
 	NodeID string
 }
@@ -1395,6 +1547,87 @@ func responseModelError(rsp *model.Response) error {
 		return nil
 	}
 	return fmt.Errorf("%s: %s", rsp.Error.Type, rsp.Error.Message)
+}
+
+func invocationFromContextOrDefault(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) *agent.Invocation {
+	if updatedInvocation, ok := agent.InvocationFromContext(ctx); ok &&
+		updatedInvocation != nil {
+		return updatedInvocation
+	}
+	return invocation
+}
+
+func shouldDisableModelExecutionEvents(invocation *agent.Invocation) bool {
+	return invocation != nil && invocation.RunOptions.DisableModelExecutionEvents
+}
+
+func applyBeforeModelPluginCallbacks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	request *model.Request,
+	span oteltrace.Span,
+) (context.Context, bool, *model.Response, error) {
+	if invocation == nil || invocation.Plugins == nil {
+		return ctx, false, nil, nil
+	}
+	callbacks := invocation.Plugins.ModelCallbacks()
+	if callbacks == nil {
+		return ctx, false, nil, nil
+	}
+	args := &model.BeforeModelArgs{Request: request}
+	result, err := callbacks.RunBeforeModel(ctx, args)
+	if err != nil {
+		span.SetAttributes(
+			attribute.String("trpc.go.agent.error", err.Error()),
+		)
+		return ctx, false, nil, fmt.Errorf(
+			"callback before model error: %w",
+			err,
+		)
+	}
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
+		return ctx, true, result.CustomResponse, nil
+	}
+	return ctx, false, nil, nil
+}
+
+func applyBeforeModelCallbacks(
+	ctx context.Context,
+	callbacks *model.Callbacks,
+	request *model.Request,
+	span oteltrace.Span,
+) (context.Context, *model.Response, error) {
+	if callbacks == nil {
+		return ctx, nil, nil
+	}
+	args := &model.BeforeModelArgs{Request: request}
+	result, err := callbacks.RunBeforeModel(ctx, args)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return ctx, nil, fmt.Errorf("callback before model error: %w", err)
+	}
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	if result != nil && result.CustomResponse != nil {
+		return ctx, result.CustomResponse, nil
+	}
+	return ctx, nil, nil
+}
+
+func singleResponseStream(response *model.Response) modelResponseStream {
+	return modelResponseStream{
+		Seq: func(yield func(*model.Response) bool) {
+			yield(response)
+		},
+	}
 }
 
 func applyAfterModelPluginCallbacks(
@@ -1471,19 +1704,35 @@ func modelResponseAuthor(config modelResponseConfig) string {
 	return config.LLMModel.Info().Name
 }
 
+func applyPartialEventMetadataOverrides(
+	ev *event.Event,
+	resp *model.Response,
+	invocation *agent.Invocation,
+) {
+	if ev == nil || resp == nil || !resp.IsPartial || invocation == nil {
+		return
+	}
+	if invocation.RunOptions.DisablePartialEventIDs {
+		ev.ID = ""
+	}
+	if invocation.RunOptions.DisablePartialEventTimestamps {
+		ev.Timestamp = resp.Timestamp
+	}
+}
+
 func emitModelResponseEvent(
 	ctx context.Context,
 	config modelResponseConfig,
+	eventInvocation *agent.Invocation,
+	optionsInvocation *agent.Invocation,
 	ev *event.Event,
 ) error {
 	if config.EventChan == nil ||
-		!shouldEmitModelResponseEvent(ctx, config.Response) {
+		!shouldEmitModelResponseEvent(config.Response, optionsInvocation) {
 		return nil
 	}
-
-	invocation, ok := agent.InvocationFromContext(ctx)
-	if !ok {
-		invocation = agent.NewInvocation(
+	if eventInvocation == nil {
+		eventInvocation = agent.NewInvocation(
 			agent.WithInvocationID(config.InvocationID),
 			agent.WithInvocationModel(config.LLMModel),
 			agent.WithInvocationSession(
@@ -1491,20 +1740,17 @@ func emitModelResponseEvent(
 			),
 		)
 	}
-	return agent.EmitEvent(ctx, invocation, config.EventChan, ev)
+	return agent.EmitEvent(ctx, eventInvocation, config.EventChan, ev)
 }
 
 func shouldEmitModelResponseEvent(
-	ctx context.Context,
 	rsp *model.Response,
+	invocation *agent.Invocation,
 ) bool {
 	if rsp == nil {
 		return false
 	}
-	invocation, ok := agent.InvocationFromContext(ctx)
-	if ok &&
-		invocation != nil &&
-		invocation.RunOptions.GraphEmitFinalModelResponses {
+	if invocation != nil && invocation.RunOptions.GraphEmitFinalModelResponses {
 		return shouldEmitModelResponse(rsp)
 	}
 	return !rsp.Done
@@ -1545,8 +1791,21 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 			config.Response = customResponse
 		}
 	}
-	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
-		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+	currentInvocation := invocationFromContextOrDefault(ctx, config.Invocation)
+	timingInfo := responseUsageTimingInfo(currentInvocation)
+	if config.Tracker != nil {
+		config.Tracker.SetInvocationState(currentInvocation, timingInfo)
+	}
+	attachResponseUsageTiming(config.Response, timingInfo, config.PartialUsage)
+	eventInvocation := config.StableInvocation
+	if eventInvocation == nil {
+		eventInvocation = config.Invocation
+	}
+	if eventInvocation == nil {
+		eventInvocation = currentInvocation
+	}
+	if currentInvocation != nil &&
+		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(currentInvocation) {
 		jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, config.Response)
 	}
 	llmEvent := event.NewResponseEvent(
@@ -1554,8 +1813,16 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		modelResponseAuthor(config),
 		config.Response,
 	)
+	applyPartialEventMetadataOverrides(llmEvent, config.Response, currentInvocation)
+	agent.InjectIntoEvent(eventInvocation, llmEvent)
 
-	if err := emitModelResponseEvent(ctx, config, llmEvent); err != nil {
+	if err := emitModelResponseEvent(
+		ctx,
+		config,
+		eventInvocation,
+		currentInvocation,
+		llmEvent,
+	); err != nil {
 		return ctx, nil, err
 	}
 
@@ -1595,73 +1862,147 @@ func shouldEmitModelResponse(rsp *model.Response) bool {
 	return false
 }
 
+type modelResponseStream struct {
+	// Ch is the response channel returned by model.Model.GenerateContent.
+	Ch <-chan *model.Response
+	// Seq is the iterator returned by model.IterModel.GenerateContentIter.
+	Seq model.Seq[*model.Response]
+}
+
+func generateModelStream(
+	ctx context.Context,
+	llmModel model.Model,
+	request *model.Request,
+	span oteltrace.Span,
+) (modelResponseStream, error) {
+	// Generate content.
+	if iterModel, ok := llmModel.(model.IterModel); ok {
+		seq, err := iterModel.GenerateContentIter(ctx, request)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return modelResponseStream{}, fmt.Errorf("failed to generate content: %w", err)
+		}
+		if seq == nil {
+			err = errors.New(errMsgNoModelResponse)
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		return modelResponseStream{Seq: seq}, nil
+	}
+	responseChan, err := llmModel.GenerateContent(ctx, request)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return modelResponseStream{}, fmt.Errorf("failed to generate content: %w", err)
+	}
+	return modelResponseStream{Ch: responseChan}, nil
+}
+
+func runModelStream(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	modelCallbacks *model.Callbacks,
+	llmModel model.Model,
+	request *model.Request,
+	beforeGenerate func(context.Context),
+) (context.Context, modelResponseStream, error) {
+	ctx, span, startedSpan := startNodeSpanForInvocation(ctx, invocation, "run_model")
+	if startedSpan {
+		defer span.End()
+	}
+
+	// Set span attributes for model execution.
+	if span != nil && span.IsRecording() {
+		span.SetAttributes(
+			attribute.String("trpc.go.agent.model_name", llmModel.Info().Name),
+		)
+	}
+	pluginOverride := false
+	customResponse := (*model.Response)(nil)
+	var err error
+	ctx, pluginOverride, customResponse, err = applyBeforeModelPluginCallbacks(
+		ctx,
+		invocation,
+		request,
+		span,
+	)
+	if err != nil {
+		if beforeGenerate != nil {
+			beforeGenerate(ctx)
+		}
+		return ctx, modelResponseStream{}, err
+	}
+	if pluginOverride {
+		if beforeGenerate != nil {
+			beforeGenerate(ctx)
+		}
+		return ctx, singleResponseStream(customResponse), nil
+	}
+	ctx, customResponse, err = applyBeforeModelCallbacks(
+		ctx,
+		modelCallbacks,
+		request,
+		span,
+	)
+	if err != nil {
+		if beforeGenerate != nil {
+			beforeGenerate(ctx)
+		}
+		return ctx, modelResponseStream{}, err
+	}
+	if customResponse != nil {
+		if beforeGenerate != nil {
+			beforeGenerate(ctx)
+		}
+		return ctx, singleResponseStream(customResponse), nil
+	}
+	if beforeGenerate != nil {
+		beforeGenerate(ctx)
+	}
+	stream, err := generateModelStream(ctx, llmModel, request, span)
+	return ctx, stream, err
+}
+
+// runModel preserves the pre-refactor test-facing helper signature by
+// adapting iterator-based model streams back to the legacy channel form.
 func runModel(
 	ctx context.Context,
 	modelCallbacks *model.Callbacks,
 	llmModel model.Model,
 	request *model.Request,
 ) (context.Context, <-chan *model.Response, error) {
-	ctx, span := trace.Tracer.Start(ctx, "run_model")
-	defer span.End()
-
-	// Set span attributes for model execution.
-	span.SetAttributes(
-		attribute.String("trpc.go.agent.model_name", llmModel.Info().Name),
+	invocation, _ := agent.InvocationFromContext(ctx)
+	ctx, stream, err := runModelStream(
+		ctx,
+		invocation,
+		modelCallbacks,
+		llmModel,
+		request,
+		nil,
 	)
-
-	if invocation, ok := agent.InvocationFromContext(ctx); ok &&
-		invocation != nil && invocation.Plugins != nil {
-		callbacks := invocation.Plugins.ModelCallbacks()
-		if callbacks != nil {
-			args := &model.BeforeModelArgs{Request: request}
-			result, err := callbacks.RunBeforeModel(ctx, args)
-			if err != nil {
-				span.SetAttributes(
-					attribute.String("trpc.go.agent.error", err.Error()),
-				)
-				return ctx, nil, fmt.Errorf(
-					"callback before model error: %w",
-					err,
-				)
-			}
-			if result != nil && result.Context != nil {
-				ctx = result.Context
-			}
-			if result != nil && result.CustomResponse != nil {
-				responseChan := make(chan *model.Response, 1)
-				responseChan <- result.CustomResponse
-				close(responseChan)
-				return ctx, responseChan, nil
-			}
-		}
-	}
-
-	if modelCallbacks != nil {
-		args := &model.BeforeModelArgs{Request: request}
-		result, err := modelCallbacks.RunBeforeModel(ctx, args)
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return ctx, nil, fmt.Errorf("callback before model error: %w", err)
-		}
-		// Use the context from result if provided.
-		if result != nil && result.Context != nil {
-			ctx = result.Context
-		}
-		if result != nil && result.CustomResponse != nil {
-			responseChan := make(chan *model.Response, 1)
-			responseChan <- result.CustomResponse
-			close(responseChan)
-			return ctx, responseChan, nil
-		}
-	}
-	// Generate content.
-	responseChan, err := llmModel.GenerateContent(ctx, request)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return ctx, nil, fmt.Errorf("failed to generate content: %w", err)
+		return ctx, nil, err
 	}
+	if stream.Ch != nil {
+		return ctx, stream.Ch, nil
+	}
+	if stream.Seq == nil {
+		return ctx, nil, errors.New(errMsgNoModelResponse)
+	}
+
+	responseChan := make(chan *model.Response, 1)
+	go func() {
+		defer close(responseChan)
+		stream.Seq(func(response *model.Response) bool {
+			select {
+			case responseChan <- response:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		})
+	}()
 	return ctx, responseChan, nil
 }
 
@@ -1692,17 +2033,22 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 	configuredCallbacks := node.toolCallbacks
 
 	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
-		workflow := &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node", Request: state.safeClone()}
-		defer func() {
-			itelemetry.TraceWorkflow(span, workflow)
-			span.End()
-		}()
+		ctx, span, startedSpan := startNodeSpan(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
+		var workflow *itelemetry.Workflow
+		if startedSpan {
+			workflow = &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node", Request: state.safeClone()}
+			defer func() {
+				itelemetry.TraceWorkflow(span, workflow)
+				span.End()
+			}()
+		}
 
 		// Extract and validate messages from state.
 		toolCalls, err := extractToolCallsFromState(state, span)
 		if err != nil {
-			workflow.Error = err
+			if workflow != nil {
+				workflow.Error = err
+			}
 			return nil, err
 		}
 
@@ -1736,7 +2082,9 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			ToolCallbacks:  toolCallbacks,
 		})
 		if err != nil {
-			workflow.Error = err
+			if workflow != nil {
+				workflow.Error = err
+			}
 			return nil, err
 		}
 		upd := State{StateKeyMessages: newMessages}
@@ -1769,7 +2117,9 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			}
 		}
 
-		workflow.Response = upd
+		if workflow != nil {
+			workflow.Response = upd
+		}
 		return upd, nil
 	}
 }
@@ -2191,11 +2541,13 @@ func finalizeAgentNodeOutput(
 func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	cfg := agentNodeConfigFromOptions(opts...)
 	return func(ctx context.Context, state State) (a any, err error) {
-		ctx, span := trace.Tracer.Start(
+		ctx, span, startedSpan := startNodeSpan(
 			ctx,
 			fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName),
 		)
-		defer finalizeInvokeAgentSpan(span, &err)
+		if startedSpan {
+			defer finalizeInvokeAgentSpan(span, &err)
+		}
 
 		// Extract execution context for event emission.
 		invocationID, _, _, _, eventChan := extractExecutionContext(state)
@@ -2228,13 +2580,15 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			cfg.userInputKey,
 		)
 
-		itelemetry.TraceBeforeInvokeAgent(
-			span,
-			invocation,
-			targetAgent.Info().Description,
-			"",
-			cfg.llmGenerationConfig,
-		)
+		if startedSpan {
+			itelemetry.TraceBeforeInvokeAgent(
+				span,
+				invocation,
+				targetAgent.Info().Description,
+				"",
+				cfg.llmGenerationConfig,
+			)
+		}
 
 		stream := iagent.ResolveInvokeAgentStream(invocation, cfg.llmGenerationConfig)
 		tracker := itelemetry.NewInvokeAgentTracker(
@@ -3019,6 +3373,8 @@ func getModelName(llmModel model.Model) string {
 // emitModelStartEvent emits a model execution start event.
 func emitModelStartEvent(
 	ctx context.Context,
+	baseInvocation *agent.Invocation,
+	currentInvocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 	invocationID, modelName, nodeID, modelInput string,
 	startTime time.Time,
@@ -3035,13 +3391,21 @@ func emitModelStartEvent(
 		WithModelEventStartTime(startTime),
 		WithModelEventInput(modelInput),
 	)
-	invocation, _ := agent.InvocationFromContext(ctx)
-	agent.EmitEvent(ctx, invocation, eventChan, modelStartEvent)
+	emitInvocationScopedEvent(
+		ctx,
+		baseInvocation,
+		currentInvocation,
+		eventChan,
+		invocationID,
+		modelStartEvent,
+	)
 }
 
 // emitModelCompleteEvent emits a model execution complete event.
 func emitModelCompleteEvent(
 	ctx context.Context,
+	baseInvocation *agent.Invocation,
+	currentInvocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 	invocationID, modelName, nodeID, modelInput, modelOutput, responseID string,
 	startTime, endTime time.Time,
@@ -3063,13 +3427,98 @@ func emitModelCompleteEvent(
 		WithModelEventError(err),
 		WithModelEventResponseID(responseID),
 	)
+	emitInvocationScopedEvent(
+		ctx,
+		baseInvocation,
+		currentInvocation,
+		eventChan,
+		invocationID,
+		modelCompleteEvent,
+	)
+}
 
-	invocation, _ := agent.InvocationFromContext(ctx)
-	agent.EmitEvent(ctx, invocation, eventChan, modelCompleteEvent)
+func emitInvocationScopedEvent(
+	ctx context.Context,
+	baseInvocation *agent.Invocation,
+	currentInvocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	invocationID string,
+	ev *event.Event,
+) {
+	if ev == nil || eventChan == nil {
+		return
+	}
+	if requestID := modelExecutionEventRequestID(baseInvocation, currentInvocation); requestID != "" {
+		ev.RequestID = requestID
+	}
+	if parentInvocationID := modelExecutionEventParentInvocationID(baseInvocation, currentInvocation); parentInvocationID != "" {
+		ev.ParentInvocationID = parentInvocationID
+	}
+	if branch := modelExecutionEventBranch(baseInvocation, currentInvocation); branch != "" {
+		ev.Branch = branch
+	}
+	if filterKey := modelExecutionEventFilterKey(baseInvocation, currentInvocation); filterKey != "" {
+		ev.FilterKey = filterKey
+	}
+	if invocationID != "" {
+		ev.InvocationID = invocationID
+	}
+	_ = event.EmitEvent(ctx, eventChan, ev)
+}
+
+func modelExecutionEventRequestID(baseInvocation, currentInvocation *agent.Invocation) string {
+	if currentInvocation != nil && currentInvocation.RunOptions.RequestID != "" {
+		return currentInvocation.RunOptions.RequestID
+	}
+	if baseInvocation != nil {
+		return baseInvocation.RunOptions.RequestID
+	}
+	return ""
+}
+
+func modelExecutionEventParentInvocationID(baseInvocation, currentInvocation *agent.Invocation) string {
+	if currentInvocation != nil {
+		if parent := currentInvocation.GetParentInvocation(); parent != nil {
+			return parent.InvocationID
+		}
+		if currentInvocation.Branch != "" ||
+			currentInvocation.GetEventFilterKey() != "" {
+			return ""
+		}
+	}
+	if baseInvocation != nil {
+		if parent := baseInvocation.GetParentInvocation(); parent != nil {
+			return parent.InvocationID
+		}
+	}
+	return ""
+}
+
+func modelExecutionEventBranch(baseInvocation, currentInvocation *agent.Invocation) string {
+	if currentInvocation != nil && currentInvocation.Branch != "" {
+		return currentInvocation.Branch
+	}
+	if baseInvocation != nil {
+		return baseInvocation.Branch
+	}
+	return ""
+}
+
+func modelExecutionEventFilterKey(baseInvocation, currentInvocation *agent.Invocation) string {
+	if currentInvocation != nil {
+		if filterKey := currentInvocation.GetEventFilterKey(); filterKey != "" {
+			return filterKey
+		}
+	}
+	if baseInvocation != nil {
+		return baseInvocation.GetEventFilterKey()
+	}
+	return ""
 }
 
 // modelExecutionConfig contains configuration for model execution with events.
 type modelExecutionConfig struct {
+	Invocation     *agent.Invocation
 	ModelCallbacks *model.Callbacks
 	LLMModel       model.Model
 	Request        *model.Request
@@ -3081,6 +3530,7 @@ type modelExecutionConfig struct {
 	NodeID         string // Add NodeID for parallel execution support
 	NodeResultKey  string // Add NodeResultKey for configurable result key pattern
 	DeltaStream    *agent.StreamWriter
+	BeforeGenerate func(context.Context)
 	Span           oteltrace.Span
 }
 
@@ -3189,37 +3639,529 @@ func mergeToolCallsIntoFinalResponse(
 	resp.Choices[0].Message.ToolCalls = toolCalls
 }
 
-func traceChatIfLastEvent(
+func hasAfterModelCallbacks(
+	invocation *agent.Invocation,
+	modelCallbacks *model.Callbacks,
+) bool {
+	if hasRegisteredAfterModelCallbacks(modelCallbacks) {
+		return true
+	}
+	if invocation == nil || invocation.Plugins == nil {
+		return false
+	}
+	return hasRegisteredAfterModelCallbacks(
+		invocation.Plugins.ModelCallbacks(),
+	)
+}
+
+func hasRegisteredAfterModelCallbacks(callbacks *model.Callbacks) bool {
+	return callbacks != nil && len(callbacks.AfterModel) > 0
+}
+
+func nextReusableModelEvent(
+	reusableEvents []event.Event,
+	reusableEventIdx *int,
+) *event.Event {
+	if *reusableEventIdx >= len(reusableEvents) {
+		return nil
+	}
+	ev := &reusableEvents[*reusableEventIdx]
+	*reusableEventIdx++
+	return ev
+}
+
+func trackModelResponseTelemetry(
+	response *model.Response,
+	tracker *itelemetry.ChatMetricsTracker,
+) {
+	if tracker == nil || response == nil {
+		return
+	}
+	tracker.TrackResponse(response)
+}
+
+type partialUsageState struct {
+	usage      *model.Usage
+	timingInfo *model.TimingInfo
+}
+
+func attachResponseUsageTiming(
+	response *model.Response,
+	timingInfo *model.TimingInfo,
+	partialUsageState *partialUsageState,
+) {
+	if response == nil || timingInfo == nil {
+		return
+	}
+	if response.Usage == nil {
+		if response.IsPartial {
+			if partialUsageState == nil {
+				response.Usage = &model.Usage{}
+			} else {
+				if partialUsageState.usage == nil ||
+					partialUsageState.timingInfo != timingInfo {
+					partialUsageState.usage = &model.Usage{}
+					partialUsageState.timingInfo = timingInfo
+				}
+				response.Usage = partialUsageState.usage
+			}
+		} else {
+			response.Usage = &model.Usage{}
+		}
+	}
+	response.Usage.TimingInfo = timingInfo
+}
+
+func responseUsageTimingInfo(invocation *agent.Invocation) *model.TimingInfo {
+	if invocation == nil || invocation.RunOptions.DisableResponseUsageTracking {
+		return nil
+	}
+	return invocation.GetOrCreateTimingInfo()
+}
+
+func emitFastModelResponseEvent(
+	ctx context.Context,
+	eventInvocation *agent.Invocation,
+	config modelExecutionConfig,
+	response *model.Response,
+	author string,
+	partialEventIDsDisabled bool,
+	partialEventTimestampsDisabled bool,
+	reusableEvent *event.Event,
+) (*event.Event, error) {
+	llmEvent := reusableEvent
+	if llmEvent == nil {
+		llmEvent = &event.Event{}
+	}
+
+	shouldEmit := !response.Done
+	eventID := ""
+	if !response.IsPartial || !partialEventIDsDisabled {
+		eventID = uuid.NewString()
+	}
+	eventTimestamp := time.Now()
+	if response.IsPartial && partialEventTimestampsDisabled {
+		eventTimestamp = response.Timestamp
+	}
+
+	llmEvent.Response = response
+	llmEvent.ID = eventID
+	llmEvent.Timestamp = eventTimestamp
+	llmEvent.InvocationID = config.InvocationID
+	llmEvent.Author = author
+	llmEvent.Version = event.CurrentVersion
+
+	if shouldEmit {
+		if err := agent.EmitEvent(ctx, eventInvocation, config.EventChan, llmEvent); err != nil {
+			return nil, err
+		}
+	}
+	if response.Error != nil {
+		config.Span.SetAttributes(attribute.String("trpc.go.agent.error", response.Error.Message))
+		return llmEvent, fmt.Errorf("model API error: %s", response.Error.Message)
+	}
+	return llmEvent, nil
+}
+
+func traceProcessedModelResponse(
 	span oteltrace.Span,
 	tracker *itelemetry.ChatMetricsTracker,
 	invocation *agent.Invocation,
-	req *model.Request,
-	resp *model.Response,
+	request *model.Request,
+	response *model.Response,
 	lastEvent *event.Event,
 ) {
-	if tracker == nil || lastEvent == nil {
+	if lastEvent == nil {
 		return
 	}
-	tracker.SetLastEvent(lastEvent)
+	if tracker != nil {
+		tracker.SetLastEvent(lastEvent)
+	}
+	if invocation != nil && invocation.RunOptions.DisableTracing {
+		return
+	}
+	var ttfb time.Duration
+	if tracker != nil {
+		ttfb = tracker.FirstTokenTimeDuration()
+	}
 	itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
 		Invocation:       invocation,
-		Request:          req,
-		Response:         resp,
+		Request:          request,
+		Response:         response,
 		EventID:          lastEvent.ID,
-		TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+		TimeToFirstToken: ttfb,
 	})
 }
 
-// executeModelWithEvents executes the model with event processing.
-func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
-	ctx, responseChan, err := runModel(ctx, config.ModelCallbacks, config.LLMModel, config.Request)
+type modelResponseProcessor struct {
+	ctx                            context.Context
+	config                         modelExecutionConfig
+	stableInvocation               *agent.Invocation
+	observabilityInvocation        *agent.Invocation
+	invocation                     *agent.Invocation
+	tracker                        *itelemetry.ChatMetricsTracker
+	timingInfo                     *model.TimingInfo
+	partialUsageState              partialUsageState
+	tap                            *modelDeltaStreamTap
+	reusableEvents                 []event.Event
+	reusableEventIdx               int
+	author                         string
+	fastResponsePath               bool
+	partialEventIDsDisabled        bool
+	partialEventTimestampsDisabled bool
+	lastEvent                      *event.Event
+	finalResponse                  *model.Response
+	toolCalls                      []model.ToolCall
+}
+
+func newModelResponseProcessor(
+	ctx context.Context,
+	config modelExecutionConfig,
+	invocation *agent.Invocation,
+	runErr *error,
+) *modelResponseProcessor {
+	p := &modelResponseProcessor{
+		ctx:              ctx,
+		config:           config,
+		stableInvocation: config.Invocation,
+		invocation:       invocation,
+		tap:              newModelDeltaStreamTap(config.DeltaStream),
+	}
+	if p.stableInvocation == nil {
+		p.stableInvocation = invocation
+	}
+	p.observabilityInvocation = observabilityInvocationView(p.stableInvocation, config)
+	if p.observabilityInvocation != nil {
+		p.timingInfo = responseUsageTimingInfo(invocation)
+		p.tracker = itelemetry.NewChatMetricsTracker(
+			ctx,
+			p.observabilityInvocation,
+			config.Request,
+			p.timingInfo,
+			nil,
+			runErr,
+		)
+	}
+
+	p.author = config.NodeID
+	if p.author == "" && config.LLMModel != nil {
+		p.author = config.LLMModel.Info().Name
+	}
+
+	needAfterCallbacks := hasAfterModelCallbacks(invocation, config.ModelCallbacks)
+	jsonRepairEnabled := invocation != nil &&
+		jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation)
+	p.partialEventIDsDisabled = invocation != nil && invocation.RunOptions.DisablePartialEventIDs
+	p.partialEventTimestampsDisabled = invocation != nil &&
+		invocation.RunOptions.DisablePartialEventTimestamps
+	emitFinalModelResponses := invocation != nil && invocation.RunOptions.GraphEmitFinalModelResponses
+	p.fastResponsePath = config.EventChan != nil &&
+		!needAfterCallbacks &&
+		!jsonRepairEnabled &&
+		invocation != nil &&
+		!emitFinalModelResponses
+
+	return p
+}
+
+func observabilityInvocationView(
+	invocation *agent.Invocation,
+	config modelExecutionConfig,
+) *agent.Invocation {
+	if invocation == nil &&
+		config.InvocationID == "" &&
+		config.SessionID == "" &&
+		config.UserID == "" &&
+		config.AppName == "" &&
+		config.LLMModel == nil {
+		return nil
+	}
+	var (
+		invocationID string
+		agentName    string
+		sessionID    string
+		userID       string
+		appName      string
+		sessionView  *session.Session
+	)
+	if invocation != nil {
+		invocationID = invocation.InvocationID
+		agentName = invocation.AgentName
+		if invocation.Session != nil {
+			sessionID = invocation.Session.ID
+			userID = invocation.Session.UserID
+			appName = invocation.Session.AppName
+		}
+	}
+	if invocationID == "" {
+		invocationID = config.InvocationID
+	}
+	if sessionID == "" {
+		sessionID = config.SessionID
+	}
+	if userID == "" {
+		userID = config.UserID
+	}
+	if appName == "" {
+		appName = config.AppName
+	}
+	if sessionID != "" || userID != "" || appName != "" {
+		sessionView = &session.Session{
+			ID:      sessionID,
+			UserID:  userID,
+			AppName: appName,
+		}
+	}
+	modelValue := config.LLMModel
+	if modelValue == nil && invocation != nil {
+		modelValue = invocation.Model
+	}
+	return &agent.Invocation{
+		InvocationID: invocationID,
+		AgentName:    agentName,
+		Model:        modelValue,
+		Session:      sessionView,
+	}
+}
+
+func hasObservabilityModelValue(
+	invocation *agent.Invocation,
+	config modelExecutionConfig,
+) bool {
+	return config.LLMModel != nil || (invocation != nil && invocation.Model != nil)
+}
+
+func hasObservabilityInvocationIDValue(
+	invocation *agent.Invocation,
+	config modelExecutionConfig,
+) bool {
+	return config.InvocationID != "" || (invocation != nil && invocation.InvocationID != "")
+}
+
+func hasObservabilitySessionIDValue(
+	invocation *agent.Invocation,
+	config modelExecutionConfig,
+) bool {
+	return config.SessionID != "" ||
+		(invocation != nil && invocation.Session != nil && invocation.Session.ID != "")
+}
+
+func hasObservabilityUserIDValue(
+	invocation *agent.Invocation,
+	config modelExecutionConfig,
+) bool {
+	return config.UserID != "" ||
+		(invocation != nil && invocation.Session != nil && invocation.Session.UserID != "")
+}
+
+func hasObservabilityAppNameValue(
+	invocation *agent.Invocation,
+	config modelExecutionConfig,
+) bool {
+	return config.AppName != "" ||
+		(invocation != nil && invocation.Session != nil && invocation.Session.AppName != "")
+}
+
+func shouldRefreshObservabilitySessionView(
+	currentSession *session.Session,
+	invocation *agent.Invocation,
+	config modelExecutionConfig,
+) bool {
+	if currentSession == nil {
+		return hasObservabilitySessionIDValue(invocation, config) ||
+			hasObservabilityUserIDValue(invocation, config) ||
+			hasObservabilityAppNameValue(invocation, config)
+	}
+	if currentSession.ID == "" && hasObservabilitySessionIDValue(invocation, config) {
+		return true
+	}
+	if currentSession.UserID == "" && hasObservabilityUserIDValue(invocation, config) {
+		return true
+	}
+	if currentSession.AppName == "" && hasObservabilityAppNameValue(invocation, config) {
+		return true
+	}
+	return false
+}
+
+func shouldRefreshObservabilityInvocationView(
+	currentView *agent.Invocation,
+	invocation *agent.Invocation,
+	config modelExecutionConfig,
+) bool {
+	if currentView.InvocationID == "" &&
+		hasObservabilityInvocationIDValue(invocation, config) {
+		return true
+	}
+	if currentView.AgentName == "" && invocation != nil && invocation.AgentName != "" {
+		return true
+	}
+	if currentView.Model == nil && hasObservabilityModelValue(invocation, config) {
+		return true
+	}
+	return shouldRefreshObservabilitySessionView(
+		currentView.Session,
+		invocation,
+		config,
+	)
+}
+
+func refreshObservabilityInvocationView(
+	currentView *agent.Invocation,
+	invocation *agent.Invocation,
+	config modelExecutionConfig,
+) *agent.Invocation {
+	if currentView == nil {
+		return observabilityInvocationView(invocation, config)
+	}
+	if shouldRefreshObservabilityInvocationView(currentView, invocation, config) {
+		return observabilityInvocationView(invocation, config)
+	}
+	return currentView
+}
+
+func (p *modelResponseProcessor) close() {
+	if p == nil || p.tracker == nil {
+		return
+	}
+	p.tracker.RecordMetrics()()
+}
+
+func (p *modelResponseProcessor) consume(stream modelResponseStream) error {
+	if stream.Ch != nil && cap(stream.Ch) > 0 {
+		p.reusableEvents = make([]event.Event, cap(stream.Ch))
+	}
+	if stream.Ch != nil {
+		for response := range stream.Ch {
+			ok, err := p.handleResponse(response)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return nil
+			}
+		}
+		return nil
+	}
+	if stream.Seq == nil {
+		return nil
+	}
+
+	var streamErr error
+	stream.Seq(func(response *model.Response) bool {
+		ok, err := p.handleResponse(response)
+		if err != nil {
+			streamErr = err
+			return false
+		}
+		return ok
+	})
+	return streamErr
+}
+
+func (p *modelResponseProcessor) handleResponse(response *model.Response) (bool, error) {
+	if response == nil {
+		return true, nil
+	}
+	p.invocation = invocationFromContextOrDefault(p.ctx, p.invocation)
+	p.timingInfo = responseUsageTimingInfo(p.invocation)
+	if p.tracker != nil {
+		p.tracker.SetInvocationState(p.invocation, p.timingInfo)
+	}
+	p.tap.WriteDelta(response)
+	trackModelResponseTelemetry(response, p.tracker)
+	p.toolCalls = collectToolCallsFromResponse(p.toolCalls, response)
+	p.finalResponse = response
+	reusableEvent := nextReusableModelEvent(p.reusableEvents, &p.reusableEventIdx)
+	if p.fastResponsePath {
+		attachResponseUsageTiming(response, p.timingInfo, &p.partialUsageState)
+		lastEvent, err := emitFastModelResponseEvent(
+			p.ctx,
+			p.stableInvocation,
+			p.config,
+			response,
+			p.author,
+			p.partialEventIDsDisabled,
+			p.partialEventTimestampsDisabled,
+			reusableEvent,
+		)
+		p.lastEvent = lastEvent
+		if err != nil {
+			return false, err
+		}
+	} else {
+		var err error
+		p.ctx, p.lastEvent, err = processModelResponse(p.ctx, modelResponseConfig{
+			Response:         response,
+			Invocation:       p.invocation,
+			StableInvocation: p.stableInvocation,
+			Tracker:          p.tracker,
+			PartialUsage:     &p.partialUsageState,
+			ModelCallbacks:   p.config.ModelCallbacks,
+			EventChan:        p.config.EventChan,
+			InvocationID:     p.config.InvocationID,
+			SessionID:        p.config.SessionID,
+			LLMModel:         p.config.LLMModel,
+			Request:          p.config.Request,
+			Span:             p.config.Span,
+			NodeID:           p.config.NodeID,
+		})
+		if err != nil {
+			return false, err
+		}
+	}
+	p.invocation = invocationFromContextOrDefault(p.ctx, p.invocation)
+	p.observabilityInvocation = refreshObservabilityInvocationView(
+		p.observabilityInvocation,
+		p.stableInvocation,
+		p.config,
+	)
+	traceProcessedModelResponse(
+		p.config.Span,
+		p.tracker,
+		p.observabilityInvocation,
+		p.config.Request,
+		response,
+		p.lastEvent,
+	)
+	return true, nil
+}
+
+func (p *modelResponseProcessor) finalize() (*model.Response, error) {
+	finalResponse, err := validateFinalModelResponse(p.config.Span, p.finalResponse)
+	if err != nil {
+		return nil, err
+	}
+	mergeToolCallsIntoFinalResponse(finalResponse, p.toolCalls)
+	p.tap.WriteFinalIfNoDelta(finalResponse)
+	return finalResponse, nil
+}
+
+// executeModelAndProcessResponses runs the model call and handles response-side
+// behavior such as streaming, callbacks, response events, telemetry, and final
+// response assembly. DisableModelExecutionEvents only controls the model
+// lifecycle events emitted around this call site; it does not bypass model
+// execution or response processing.
+func executeModelAndProcessResponsesWithContext(
+	ctx context.Context,
+	config modelExecutionConfig,
+) (context.Context, *agent.Invocation, any, error) {
+	invocation := invocationFromContextOrDefault(ctx, config.Invocation)
+	ctx, stream, err := runModelStream(
+		ctx,
+		invocation,
+		config.ModelCallbacks,
+		config.LLMModel,
+		config.Request,
+		config.BeforeGenerate,
+	)
 	if err != nil {
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
-		return nil, fmt.Errorf("failed to run model: %w", err)
+		return ctx, invocation, nil, fmt.Errorf("failed to run model: %w", err)
 	}
-	invocation, ok := agent.InvocationFromContext(ctx)
-	if !ok {
+	invocation = invocationFromContextOrDefault(ctx, invocation)
+	if invocation == nil {
 		invocation = agent.NewInvocation(
 			agent.WithInvocationID(config.InvocationID),
 			agent.WithInvocationModel(config.LLMModel),
@@ -3227,63 +4169,35 @@ func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (a
 		)
 	}
 
-	var lastEvent *event.Event
-	// Get or create timing info from invocation (only record first LLM call)
-	timingInfo := invocation.GetOrCreateTimingInfo()
-	// Create telemetry tracker and defer metrics recording
-	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, config.Request, timingInfo, nil, &err)
-	defer tracker.RecordMetrics()()
+	processor := newModelResponseProcessor(ctx, config, invocation, &err)
+	defer processor.close()
 
-	tap := newModelDeltaStreamTap(config.DeltaStream)
-
-	// Process response.
-	var finalResponse *model.Response
-	var toolCalls []model.ToolCall
-	for response := range responseChan {
-		// Track response for telemetry
-		tracker.TrackResponse(response)
-		tap.WriteDelta(response)
-
-		// set timing info to response
-		if response.Usage == nil {
-			response.Usage = &model.Usage{}
-		}
-		response.Usage.TimingInfo = timingInfo
-
-		ctx, lastEvent, err = processModelResponse(ctx, modelResponseConfig{
-			Response:       response,
-			ModelCallbacks: config.ModelCallbacks,
-			EventChan:      config.EventChan,
-			InvocationID:   config.InvocationID,
-			SessionID:      config.SessionID,
-			LLMModel:       config.LLMModel,
-			Request:        config.Request,
-			Span:           config.Span,
-			NodeID:         config.NodeID,
-		})
-		if err != nil {
-			return nil, err
-		}
-		traceChatIfLastEvent(
-			config.Span,
-			tracker,
-			invocation,
-			config.Request,
-			response,
-			lastEvent,
-		)
-
-		toolCalls = collectToolCallsFromResponse(toolCalls, response)
-		finalResponse = response
+	if err = processor.consume(stream); err != nil {
+		return processor.ctx, invocationFromContextOrDefault(processor.ctx, invocation), nil, err
 	}
-	finalResponse, err = validateFinalModelResponse(config.Span, finalResponse)
 	if err != nil {
-		return nil, err
+		return processor.ctx, invocationFromContextOrDefault(processor.ctx, invocation), nil, err
 	}
-	mergeToolCallsIntoFinalResponse(finalResponse, toolCalls)
+	finalResponse, finalizeErr := processor.finalize()
+	err = finalizeErr
+	if err != nil {
+		return processor.ctx, invocationFromContextOrDefault(processor.ctx, invocation), nil, err
+	}
+	return processor.ctx, invocationFromContextOrDefault(processor.ctx, invocation), finalResponse, nil
+}
 
-	tap.WriteFinalIfNoDelta(finalResponse)
-	return finalResponse, nil
+func executeModelAndProcessResponses(
+	ctx context.Context,
+	config modelExecutionConfig,
+) (any, error) {
+	_, _, result, err := executeModelAndProcessResponsesWithContext(ctx, config)
+	return result, err
+}
+
+// executeModelWithEvents preserves the previous helper name for existing
+// tests while delegating to the refactored response-processing pipeline.
+func executeModelWithEvents(ctx context.Context, config modelExecutionConfig) (any, error) {
+	return executeModelAndProcessResponses(ctx, config)
 }
 
 // extractToolCallsFromState extracts and validates tool calls from the state.
@@ -3482,7 +4396,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	}
 
 	// Execute the tool with callbacks and get modified arguments.
-	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
+	ctx, span, startedSpan := startNodeSpan(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
 	ctx, result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t, config.State)
 
 	// Emit tool execution start event with modified arguments.
@@ -3516,7 +4430,9 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		Arguments:    modifiedArgs,
 		ResponseID:   responseID,
 	})
-	itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event, err)
+	if startedSpan {
+		itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event, err)
+	}
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
 		RequestModelName: "trpc-agent-go-graph",
 		ToolName:         name,
@@ -3526,7 +4442,9 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		SessionID:        sessInfo.ID,
 		Error:            err,
 	}, time.Since(startTime))
-	span.End()
+	if startedSpan {
+		span.End()
+	}
 
 	if err != nil {
 		if interruptErr != nil {

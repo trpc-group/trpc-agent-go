@@ -16,6 +16,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	oteltrace "go.opentelemetry.io/otel/trace"
+
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -121,6 +125,35 @@ func TestSearchTools_UsesDeltaContentIfMessageEmpty(t *testing.T) {
 	if !reflect.DeepEqual(got, []string{"a"}) {
 		t.Fatalf("got %v", got)
 	}
+}
+
+func TestSearchTools_ReturnsOriginalParentSpanContext(t *testing.T) {
+	t.Parallel()
+	provider := sdktrace.NewTracerProvider()
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+	})
+	parentCtx, parentSpan := provider.Tracer("toolsearch-parent").Start(context.Background(), "parent")
+	defer parentSpan.End()
+	m := &fakeModel{
+		generate: func(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+			return respCh(&model.Response{
+				Choices: []model.Choice{
+					{Message: model.NewAssistantMessage(`{"tools":["weather"]}`)},
+				},
+			}), nil
+		},
+	}
+	returnedCtx, selectedTools, err := searchTools(parentCtx, m, &model.Request{}, map[string]tool.Tool{
+		"weather": fakeTool{decl: &tool.Declaration{Name: "weather"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"weather"}, selectedTools)
+	require.Equal(
+		t,
+		parentSpan.SpanContext().SpanID(),
+		oteltrace.SpanFromContext(returnedCtx).SpanContext().SpanID(),
+	)
 }
 
 func TestSearchTools_ParsesJSONFromSurroundingText(t *testing.T) {

@@ -19,6 +19,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	criteriontext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 )
 
 type fixedLocator struct {
@@ -38,7 +41,15 @@ func TestLocalManagerLifecycle(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, names)
 
-	err = mgr.Add(ctx, "app", "set", &metric.EvalMetric{MetricName: "accuracy", Threshold: 0.9})
+	err = mgr.Add(ctx, "app", "set", &metric.EvalMetric{
+		MetricName: "accuracy",
+		Threshold:  0.9,
+		Criterion: &criterion.Criterion{
+			FinalResponse: &finalresponse.FinalResponseCriterion{
+				Text: &criteriontext.TextCriterion{CompareName: "trim_equal"},
+			},
+		},
+	})
 	assert.NoError(t, err)
 
 	err = mgr.Add(ctx, "app", "set", &metric.EvalMetric{MetricName: "accuracy", Threshold: 1})
@@ -56,10 +67,18 @@ func TestLocalManagerLifecycle(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, stored, 1)
 	assert.Equal(t, 0.9, stored[0].Threshold)
+	if assert.NotNil(t, stored[0].Criterion) && assert.NotNil(t, stored[0].Criterion.FinalResponse) &&
+		assert.NotNil(t, stored[0].Criterion.FinalResponse.Text) {
+		assert.Equal(t, "trim_equal", stored[0].Criterion.FinalResponse.Text.CompareName)
+	}
 
 	got, err := mgr.Get(ctx, "app", "set", "accuracy")
 	assert.NoError(t, err)
 	assert.Equal(t, 0.9, got.Threshold)
+	if assert.NotNil(t, got.Criterion) && assert.NotNil(t, got.Criterion.FinalResponse) &&
+		assert.NotNil(t, got.Criterion.FinalResponse.Text) {
+		assert.Equal(t, "trim_equal", got.Criterion.FinalResponse.Text.CompareName)
+	}
 
 	got.Threshold = 0.1
 	fresh, err := mgr.Get(ctx, "app", "set", "accuracy")

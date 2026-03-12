@@ -18,9 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -85,25 +85,37 @@ func (a *ChainAgent) executeChainRun(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name))
 	stream := iagent.ResolveInvokeAgentStream(invocation, nil)
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, "chain-agent", "", &model.GenerationConfig{Stream: stream})
+	ctx, span, startedSpan := itrace.StartSpan(
+		ctx,
+		invocation,
+		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name),
+	)
+	if startedSpan {
+		itelemetry.TraceBeforeInvokeAgent(
+			span,
+			invocation,
+			"chain-agent",
+			"",
+			&model.GenerationConfig{Stream: stream},
+		)
+	}
 	var trackerErr error
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
 	defer func() {
 		tracker.RecordMetrics()()
-		span.End()
+		if startedSpan {
+			span.End()
+		}
 	}()
 	// Setup invocation.
 	a.setupInvocation(invocation)
-
 	// Handle before agent callbacks.
 	var shouldReturn bool
 	ctx, shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)
 	if shouldReturn {
 		return
 	}
-
 	// Execute sub-agents in sequence.
 	e, tokenUsage := a.executeSubAgents(ctx, invocation, eventChan, tracker)
 	if e != nil && e.Error != nil {
@@ -112,9 +124,13 @@ func (a *ChainAgent) executeChainRun(
 	}
 	// Handle after agent callbacks.
 	if a.agentCallbacks != nil {
-		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e)
+		if afterEvent := a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e); afterEvent != nil {
+			e = afterEvent
+		}
 	}
-	itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage, tracker.FirstTokenTimeDuration())
+	if startedSpan {
+		itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage, tracker.FirstTokenTimeDuration())
+	}
 }
 
 // setupInvocation prepares the invocation for execution.

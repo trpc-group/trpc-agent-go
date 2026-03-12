@@ -36,6 +36,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -46,10 +47,12 @@ import (
 )
 
 var (
-	defaultQuery = "What are Large Language Models and how do they work?"
-	modelName    = getEnvOrDefault("MODEL_NAME", "deepseek-chat")
-	vectorStore  = flag.String("vectorstore", "inmemory", "Vector store type: inmemory|pgvector|tcvector|elasticsearch")
-	query        = flag.String("query", defaultQuery, "Query to ask the knowledge base")
+	defaultQuery   = "What are Large Language Models and how do they work?"
+	modelName      = getEnvOrDefault("MODEL_NAME", "deepseek-chat")
+	vectorStore    = flag.String("vectorstore", "inmemory", "Vector store type: inmemory|pgvector|tcvector|elasticsearch")
+	query          = flag.String("query", defaultQuery, "Query to ask the knowledge base")
+	showProgress   = flag.Bool("show-progress", false, "Show load progress (log-based)")
+	prettyProgress = flag.Bool("pretty-progress", true, "Show pretty multi-line progress bars (overrides -show-progress)")
 )
 
 func main() {
@@ -61,8 +64,12 @@ func main() {
 	fmt.Println(strings.Repeat("=", 50))
 
 	// 1. Create file source
-	src := file.New(
+	fileSrc := file.New(
 		[]string{util.ExampleDataPath("file/llm.md")},
+	)
+
+	dirSrc := dir.New(
+		[]string{util.ExampleDataPath("dir/")},
 	)
 
 	// 2. Create vector store (in-memory)
@@ -80,11 +87,24 @@ func main() {
 	kb := knowledge.New(
 		knowledge.WithVectorStore(vs),
 		knowledge.WithEmbedder(emb),
-		knowledge.WithSources([]source.Source{src}),
+		knowledge.WithSources([]source.Source{fileSrc, dirSrc}),
 	)
 
 	// 5. Load knowledge base
-	if err := kb.Load(ctx); err != nil {
+	loadOpts := []knowledge.LoadOption{}
+	if *prettyProgress {
+		pp := newProgressPrinter()
+		loadOpts = append(loadOpts,
+			knowledge.WithShowProgress(false),
+			knowledge.WithShowStats(false),
+			knowledge.WithLoadProgressCallback(pp.onProgress),
+		)
+	} else {
+		loadOpts = append(loadOpts,
+			knowledge.WithShowProgress(*showProgress),
+		)
+	}
+	if err := kb.Load(ctx, loadOpts...); err != nil {
 		log.Fatalf("Failed to load knowledge: %v", err)
 	}
 
@@ -146,9 +166,6 @@ func main() {
 
 	fmt.Println("\n✅ Done!")
 }
-
-func floatPtr(f float64) *float64 { return &f }
-func intPtr(i int) *int           { return &i }
 
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {

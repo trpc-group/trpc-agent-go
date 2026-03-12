@@ -459,3 +459,29 @@ func (m *mockArtifactService) DeleteArtifact(ctx context.Context, info artifact.
 func (m *mockArtifactService) ListVersions(ctx context.Context, info artifact.SessionInfo, filename string) ([]int, error) {
 	return nil, nil
 }
+
+func TestWithDisableTracing(t *testing.T) {
+	opts := &RunOptions{}
+
+	WithDisableTracing(true)(opts)
+	require.True(t, opts.DisableTracing)
+
+	WithDisableTracing(false)(opts)
+	require.False(t, opts.DisableTracing)
+}
+
+func TestModelResponseRunOptionSetters(t *testing.T) {
+	opts := &RunOptions{}
+
+	WithDisableResponseUsageTracking(true)(opts)
+	require.True(t, opts.DisableResponseUsageTracking)
+
+	WithDisableModelExecutionEvents(true)(opts)
+	require.True(t, opts.DisableModelExecutionEvents)
+
+	WithDisablePartialEventIDs(true)(opts)
+	require.True(t, opts.DisablePartialEventIDs)
+
+	WithDisablePartialEventTimestamps(true)(opts)
+	require.True(t, opts.DisablePartialEventTimestamps)
+}

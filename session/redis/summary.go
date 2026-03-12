@@ -11,48 +11,20 @@ package redis
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"time"
 
-	"github.com/redis/go-redis/v9"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
-)
-
-// luaSummariesSetIfNewer atomically merges one filterKey summary into the stored
-// JSON map only if the incoming UpdatedAt is newer-or-equal.
-// KEYS[1] = [prefix:]sesssum:{app}:{user}  (prefix is optional, set via WithKeyPrefix)
-// ARGV[1] = sessionID
-// ARGV[2] = filterKey
-// ARGV[3] = newSummaryJSON -> {"Summary":"...","UpdatedAt":"RFC3339 time"}
-var luaSummariesSetIfNewer = redis.NewScript(
-	"local cur = redis.call('HGET', KEYS[1], ARGV[1])\n" +
-		"local fk = ARGV[2]\n" +
-		"local newSum = cjson.decode(ARGV[3])\n" +
-		"if not cur or cur == '' then\n" +
-		"  local m = {}\n" +
-		"  m[fk] = newSum\n" +
-		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(m))\n" +
-		"  return 1\n" +
-		"end\n" +
-		"local map = cjson.decode(cur)\n" +
-		"local old = map[fk]\n" +
-		"local old_ts = nil\n" +
-		"local new_ts = nil\n" +
-		"if old and old['updated_at'] then old_ts = old['updated_at'] end\n" +
-		"if newSum and newSum['updated_at'] then new_ts = newSum['updated_at'] end\n" +
-		"if not old or (old_ts and new_ts and old_ts <= new_ts) then\n" +
-		"  map[fk] = newSum\n" +
-		"  redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(map))\n" +
-		"  return 1\n" +
-		"end\n" +
-		"return 0\n",
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
 
 // CreateSessionSummary generates a summary for the session (async-ready).
 // It performs per-filterKey delta summarization; when filterKey=="", it means full-session summary.
+// Strategy: Summary storage version follows session storage version.
 func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if s.opts.summarizer == nil {
+	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
 		return nil
 	}
 
@@ -61,11 +33,26 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 	}
 
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	ctx, span := s.startSpan(ctx, "create_session_summary", key)
+	defer span.End()
+
 	if err := key.CheckSessionKey(); err != nil {
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	summarizer, err := isummary.ResolveSessionSummarizer(
+		ctx,
+		s.opts.summarizer,
+		s.opts.summarizerResolver,
+		sess,
+		filterKey,
+		force,
+	)
+	if err != nil {
+		return err
+	}
+
+	updated, err := isummary.SummarizeSession(ctx, summarizer, sess, filterKey, force)
 	if err != nil || !updated {
 		return err
 	}
@@ -79,30 +66,39 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return nil
 	}
 
-	payload, err := json.Marshal(sum)
+	// Fast path: use version tag from session
+	switch ver := getSessionVersion(sess); ver {
+	case util.StorageTypeHashIdx:
+		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeHashIdx)
+		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+	case util.StorageTypeZset:
+		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeZset)
+		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+	}
+
+	// Slow path: check which storage has the session
+	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
 	if err != nil {
-		return fmt.Errorf("marshal summary failed: %w", err)
+		log.WarnfContext(ctx, "checkSessionExists failed: %v", err)
 	}
 
-	sumKey := s.getSessionSummaryKey(key)
-	if _, err := luaSummariesSetIfNewer.Run(
-		ctx, s.redisClient, []string{sumKey}, sess.ID, filterKey, string(payload),
-	).Result(); err != nil {
-		return fmt.Errorf("store summaries (lua) failed: %w", err)
+	if s.compatEnabled() && zsetExists {
+		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeZset)
+		return s.zsetClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
+	}
+	if hashidxExists {
+		s.recordStorageRoute(ctx, opCreateSessionSummary, util.StorageTypeHashIdx)
+		return s.hashidxClient.CreateSummary(ctx, key, filterKey, sum, s.opts.sessionTTL)
 	}
 
-	if s.opts.sessionTTL > 0 {
-		if err := s.redisClient.Expire(ctx, sumKey, s.opts.sessionTTL).Err(); err != nil {
-			return fmt.Errorf("expire summaries failed: %w", err)
-		}
-	}
-
+	log.WarnfContext(ctx, "session not found when creating summary: %s/%s/%s", key.AppName, key.UserID, key.SessionID)
 	return nil
 }
 
 // GetSessionSummaryText returns the latest summary text from the session state if present.
 // When no options are provided, returns the full-session summary (SummaryFilterKeyAllContents).
 // Use session.WithSummaryFilterKey to specify a different filter key.
+// Strategy: Summary storage version follows session storage version.
 func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Session, opts ...session.SummaryOption) (string, bool) {
 	// Check session validity.
 	if sess == nil {
@@ -110,6 +106,9 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 	}
 
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	ctx, span := s.startSpan(ctx, "get_session_summary_text", key)
+	defer span.End()
+
 	if err := key.CheckSessionKey(); err != nil {
 		return "", false
 	}
@@ -119,23 +118,64 @@ func (s *Service) GetSessionSummaryText(ctx context.Context, sess *session.Sessi
 		return text, true
 	}
 
-	// Fall back to Redis-stored summaries.
-	bytes, err := s.redisClient.HGet(ctx, s.getSessionSummaryKey(key), key.SessionID).Bytes()
-	if err != nil || len(bytes) == 0 {
+	filterKey := isummary.GetFilterKeyFromOptions(opts...)
+
+	// Fast path: use version tag from session to avoid checkSessionExists round-trip.
+	switch ver := getSessionVersion(sess); ver {
+	case util.StorageTypeHashIdx:
+		s.recordStorageRoute(ctx, opGetSessionSummaryText, util.StorageTypeHashIdx)
+		return s.getSummaryFromHashIdx(ctx, key, filterKey, sess.CreatedAt)
+	case util.StorageTypeZset:
+		s.recordStorageRoute(ctx, opGetSessionSummaryText, util.StorageTypeZset)
+		return s.getSummaryFromZSet(ctx, key, filterKey, sess.CreatedAt)
+	}
+
+	// Slow path: no version tag, check which storage has the session.
+	zsetExists, hashidxExists, err := s.checkSessionExists(ctx, key)
+	if err != nil {
+		log.WarnfContext(ctx, "checkSessionExists failed: %v", err)
 		return "", false
 	}
 
-	var summaries map[string]*session.Summary
-	if err := json.Unmarshal(bytes, &summaries); err != nil {
-		return "", false
+	if s.compatEnabled() && zsetExists {
+		s.recordStorageRoute(ctx, opGetSessionSummaryText, util.StorageTypeZset)
+		return s.getSummaryFromZSet(ctx, key, filterKey, sess.CreatedAt)
+	}
+	if hashidxExists {
+		s.recordStorageRoute(ctx, opGetSessionSummaryText, util.StorageTypeHashIdx)
+		return s.getSummaryFromHashIdx(ctx, key, filterKey, sess.CreatedAt)
 	}
 
-	return isummary.PickSummaryText(summaries, isummary.GetFilterKeyFromOptions(opts...), sess.CreatedAt)
+	return "", false
+}
+
+func (s *Service) getSummaryFromHashIdx(ctx context.Context, key session.Key, filterKey string, createdAt time.Time) (string, bool) {
+	summaries, err := s.hashidxClient.GetSummary(ctx, key)
+	if err != nil {
+		log.WarnfContext(ctx, "get hashidx summary failed: %v", err)
+		return "", false
+	}
+	if summaries != nil {
+		return isummary.PickSummaryText(summaries, filterKey, createdAt)
+	}
+	return "", false
+}
+
+func (s *Service) getSummaryFromZSet(ctx context.Context, key session.Key, filterKey string, createdAt time.Time) (string, bool) {
+	summaries, err := s.zsetClient.GetSummary(ctx, key)
+	if err != nil {
+		log.WarnfContext(ctx, "get zset summary failed: %v", err)
+		return "", false
+	}
+	if summaries != nil {
+		return isummary.PickSummaryText(summaries, filterKey, createdAt)
+	}
+	return "", false
 }
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
 func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if s.opts.summarizer == nil {
+	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
 		return nil
 	}
 

@@ -67,8 +67,9 @@ const (
 
 	defaultOpenAIModel = "gpt-5"
 
-	defaultSkillsDir = "skills"
-	defaultAgentsDir = ".agents"
+	defaultSkillsDir        = "skills"
+	defaultAgentsDir        = ".agents"
+	defaultBundledSkillsDir = "bundled-skills"
 
 	csvDelimiter = ","
 
@@ -285,6 +286,84 @@ func logStartupLines(lines []startupLogLine) {
 		}
 		log.Info(line.text)
 	}
+}
+
+func runtimeStartupLines(
+	opts runOptions,
+	stateDir string,
+	channels []channel.Channel,
+	needsModel bool,
+) []startupLogLine {
+	return []startupLogLine{
+		{text: fmt.Sprintf("App name: %s", strings.TrimSpace(opts.AppName))},
+		{text: configStartupSummary(opts.ConfigPath)},
+		{text: fmt.Sprintf(
+			"State dir: %s",
+			startupPathSummary(stateDir),
+		)},
+		{text: fmt.Sprintf(
+			"Channels: %s",
+			channelStartupSummary(channels),
+		)},
+		{text: fmt.Sprintf(
+			"Model: %s",
+			modelStartupSummary(opts, needsModel),
+		)},
+		{text: fmt.Sprintf(
+			"Storage: session=%s memory=%s",
+			strings.TrimSpace(opts.SessionBackend),
+			strings.TrimSpace(opts.MemoryBackend),
+		)},
+	}
+}
+
+func configStartupSummary(configPath string) string {
+	path := strings.TrimSpace(configPath)
+	if path == "" {
+		return "Config: built-in defaults and CLI flags"
+	}
+	return fmt.Sprintf("Config: %s", startupPathSummary(path))
+}
+
+func startupPathSummary(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	absPath, err := filepath.Abs(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	return absPath
+}
+
+func channelStartupSummary(channels []channel.Channel) string {
+	ids := channelIDs(channels)
+	if len(ids) == 0 {
+		return "none"
+	}
+	return strings.Join(ids, ", ")
+}
+
+func modelStartupSummary(
+	opts runOptions,
+	needsModel bool,
+) string {
+	if !needsModel {
+		return "disabled"
+	}
+	mode := strings.ToLower(strings.TrimSpace(opts.ModelMode))
+	if mode == "" {
+		mode = modeOpenAI
+	}
+	if mode != modeOpenAI {
+		return mode
+	}
+	modelName := strings.TrimSpace(opts.OpenAIModel)
+	if modelName == "" {
+		return mode
+	}
+	return fmt.Sprintf("%s/%s", mode, modelName)
 }
 
 func gatewayStartupLines(
@@ -1073,6 +1152,12 @@ func run(ctx context.Context, args []string) error {
 	}
 	errCh := make(chan error, workerCount)
 
+	logStartupLines(runtimeStartupLines(
+		opts,
+		resolvedStateDir,
+		channels,
+		needsModel,
+	))
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
 	logStartupLines(toolDepsStartupLines(openClawTools.deps))
 	go func() {
@@ -1520,7 +1605,7 @@ func newAgent(
 
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
-	bundledRoot := filepath.Join(cwd, appName, defaultSkillsDir)
+	bundledRoot := resolveBundledSkillsRoot(cwd, cfg.StateDir)
 	repo, err := ocskills.NewRepository(
 		roots,
 		ocskills.WithDebug(cfg.SkillsDebug),
@@ -1847,14 +1932,15 @@ func resolveSkillRoots(cwd string, cfg agentConfig) []string {
 		defaultSkillsDir,
 	)
 	managedSkills := filepath.Join(cfg.StateDir, defaultSkillsDir)
-	bundledSkills := filepath.Join(cwd, appName, defaultSkillsDir)
+	bundledSkills := resolveBundledSkillsRoot(cwd, cfg.StateDir)
 
 	roots := make([]string, 0, 6+len(cfg.SkillsExtraDirs))
 	roots = append(roots, workspaceSkills)
 	roots = append(roots, projectAgentsSkills)
 	roots = append(roots, personalAgentsSkills)
 	roots = append(roots, managedSkills)
-	if bundledSkills != workspaceSkills {
+	if bundledSkills != workspaceSkills &&
+		bundledSkills != managedSkills {
 		roots = append(roots, bundledSkills)
 	}
 	roots = append(roots, cfg.SkillsExtraDirs...)
@@ -1887,6 +1973,25 @@ func dirExists(path string) bool {
 	return st.IsDir()
 }
 
+func resolveBundledSkillsRoot(cwd, stateDir string) string {
+	installedBundled := filepath.Join(
+		stateDir,
+		defaultBundledSkillsDir,
+	)
+	if dirExists(installedBundled) {
+		return installedBundled
+	}
+
+	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
+	if dirExists(repoBundled) {
+		return repoBundled
+	}
+	if strings.TrimSpace(stateDir) != "" {
+		return installedBundled
+	}
+	return repoBundled
+}
+
 func resolveStateDir(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 	if s != "" {
@@ -1896,7 +2001,7 @@ func resolveStateDir(raw string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".trpc-agent-go", appName), nil
+	return filepath.Join(home, ".trpc-agent-go-github", appName), nil
 }
 
 func maybeEnableDebugRecorder(

@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 func TestSessionSQLite_EnqueueSummaryJob_And_Fallback(t *testing.T) {
@@ -289,6 +290,66 @@ func TestSessionSQLite_CreateSummary_Denied_NoPersist(t *testing.T) {
 	)
 	_, ok := svc.GetSessionSummaryText(ctx, fresh)
 	require.False(t, ok)
+}
+
+func TestSessionSQLite_EnqueueSummaryJob_ProviderPersistsCopiedFullSummary(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithSessionSummarizerResolver(summary.SessionSummarizerResolver(func(
+			ctx context.Context,
+			req summary.SessionSummaryRequest,
+		) (summary.SessionSummarizer, error) {
+			if req.FilterKey == "branch" {
+				return &fakeSummarizer{}, nil
+			}
+			return nil, nil
+		})),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	require.NotNil(t, svc.asyncWorker)
+	svc.asyncWorker.Stop()
+	svc.asyncWorker = nil
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s-provider-copy"}
+	sess, err := svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	ev := newUserEvent("hi")
+	ev.FilterKey = "branch"
+	require.NoError(t, svc.AppendEvent(ctx, sess, ev))
+
+	require.NoError(t, svc.EnqueueSummaryJob(ctx, sess, "branch", false))
+
+	branchText, ok := svc.GetSessionSummaryText(
+		ctx,
+		session.NewSession(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			session.WithSessionCreatedAt(sess.CreatedAt),
+		),
+		session.WithSummaryFilterKey("branch"),
+	)
+	require.True(t, ok)
+	require.Equal(t, "summary", branchText)
+
+	fullText, ok := svc.GetSessionSummaryText(
+		ctx,
+		session.NewSession(
+			sess.AppName,
+			sess.UserID,
+			sess.ID,
+			session.WithSessionCreatedAt(sess.CreatedAt),
+		),
+	)
+	require.True(t, ok)
+	require.Equal(t, "summary", fullText)
 }
 
 func TestSessionSQLite_GetSessionSummaryText_InMemory(t *testing.T) {
