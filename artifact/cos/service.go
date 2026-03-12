@@ -249,87 +249,33 @@ func (s *Service) Head(
 	req *artifact.HeadRequest,
 	opts ...artifact.HeadOption,
 ) (*artifact.HeadResponse, error) {
-	if req == nil {
-		return nil, fmt.Errorf("head request is nil")
-	}
-	if err := validateSessionInfo(req.SessionInfo); err != nil {
+	if err := validateHeadRequest(req); err != nil {
 		return nil, err
 	}
-	if err := validateFilename(req.Filename); err != nil {
+
+	targetVersion, ok, err := s.resolveHeadVersion(ctx, req)
+	if err != nil {
 		return nil, err
 	}
-	if req.Version != nil && *req.Version < 0 {
-		return nil, fmt.Errorf("version must be >= 0")
+	if !ok {
+		return nil, nil
 	}
 
-	var targetVersion int
-	if req.Version == nil {
-		versions, err := s.ListVersions(ctx, req.SessionInfo, req.Filename)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list versions: %w", err)
-		}
-		if len(versions) == 0 {
-			return nil, nil
-		}
-		targetVersion = versions[len(versions)-1]
-	} else {
-		targetVersion = *req.Version
-	}
-
-	objectName, legacyObjectName := buildObjectNameCandidates(
+	resolvedKey, size, contentType, ok, err := s.resolveHeadMetadata(
+		ctx,
 		req.SessionInfo,
 		req.Filename,
 		targetVersion,
 	)
-
-	resolvedKey := objectName
-	header, size, err := s.cosClient.HeadObject(ctx, objectName)
 	if err != nil {
-		if !cos.IsNotFoundError(err) {
-			return nil, fmt.Errorf("failed to head artifact: %w", err)
-		}
-		header, size, err = s.cosClient.HeadObject(ctx, legacyObjectName)
-		if err != nil {
-			if cos.IsNotFoundError(err) {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("failed to head artifact: %w", err)
-		}
-		resolvedKey = legacyObjectName
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
 	}
 
-	contentType := ""
-	if header != nil {
-		contentType = header.Get("Content-Type")
-	}
-	if contentType == "" {
-		contentType = defaultContentType
-	}
-
-	o := artifact.HeadOptions{}
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		opt(&o)
-	}
-
-	url := ""
-	if o.IncludeURL {
-		if o.PresignedURL {
-			expires := o.PresignedURLExpires
-			if expires <= 0 {
-				expires = defaultPresignedURLExpire
-			}
-			if signed, err := s.cosClient.PresignedGetURL(ctx, resolvedKey, expires); err == nil && signed != "" {
-				url = signed
-			} else {
-				url = s.cosClient.ObjectURL(resolvedKey)
-			}
-		} else {
-			url = s.cosClient.ObjectURL(resolvedKey)
-		}
-	}
+	o := resolveHeadOptions(opts)
+	url := s.resolveHeadURL(ctx, resolvedKey, o)
 
 	return &artifact.HeadResponse{
 		Filename: req.Filename,
@@ -339,6 +285,130 @@ func (s *Service) Head(
 		URL:      url,
 		Name:     req.Filename,
 	}, nil
+}
+
+func validateHeadRequest(req *artifact.HeadRequest) error {
+	if req == nil {
+		return fmt.Errorf("head request is nil")
+	}
+	if err := validateSessionInfo(req.SessionInfo); err != nil {
+		return err
+	}
+	if err := validateFilename(req.Filename); err != nil {
+		return err
+	}
+	if req.Version != nil {
+		if *req.Version < 0 {
+			return fmt.Errorf("version must be >= 0")
+		}
+	}
+	return nil
+}
+
+func (s *Service) resolveHeadVersion(
+	ctx context.Context,
+	req *artifact.HeadRequest,
+) (int, bool, error) {
+	if req.Version != nil {
+		return *req.Version, true, nil
+	}
+
+	versions, err := s.ListVersions(ctx, req.SessionInfo, req.Filename)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to list versions: %w", err)
+	}
+	if len(versions) == 0 {
+		return 0, false, nil
+	}
+	return versions[len(versions)-1], true, nil
+}
+
+func (s *Service) resolveHeadMetadata(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	version int,
+) (resolvedKey string, size int64, contentType string, ok bool, err error) {
+	objectName, legacyObjectName := buildObjectNameCandidates(sessionInfo, filename, version)
+
+	size, contentType, ok, err = s.tryHeadObject(ctx, objectName)
+	if err != nil {
+		return "", 0, "", false, err
+	}
+	if ok {
+		return objectName, size, contentType, true, nil
+	}
+
+	size, contentType, ok, err = s.tryHeadObject(ctx, legacyObjectName)
+	if err != nil {
+		return "", 0, "", false, err
+	}
+	if ok {
+		return legacyObjectName, size, contentType, true, nil
+	}
+
+	return "", 0, "", false, nil
+}
+
+func (s *Service) tryHeadObject(
+	ctx context.Context,
+	key string,
+) (size int64, contentType string, ok bool, err error) {
+	header, size, err := s.cosClient.HeadObject(ctx, key)
+	if err != nil {
+		if cos.IsNotFoundError(err) {
+			return 0, "", false, nil
+		}
+		return 0, "", false, fmt.Errorf("failed to head artifact: %w", err)
+	}
+
+	contentType = ""
+	if header != nil {
+		contentType = header.Get("Content-Type")
+	}
+	if contentType == "" {
+		contentType = defaultContentType
+	}
+
+	return size, contentType, true, nil
+}
+
+func resolveHeadOptions(opts []artifact.HeadOption) artifact.HeadOptions {
+	o := artifact.HeadOptions{}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(&o)
+	}
+	return o
+}
+
+func (s *Service) resolveHeadURL(
+	ctx context.Context,
+	key string,
+	o artifact.HeadOptions,
+) string {
+	if !o.IncludeURL {
+		return ""
+	}
+	if !o.PresignedURL {
+		return s.cosClient.ObjectURL(key)
+	}
+
+	expires := o.PresignedURLExpires
+	if expires <= 0 {
+		expires = defaultPresignedURLExpire
+	}
+
+	signed, err := s.cosClient.PresignedGetURL(ctx, key, expires)
+	if err == nil {
+		if signed != "" {
+			return signed
+		}
+	}
+
+	return s.cosClient.ObjectURL(key)
 }
 
 // ListArtifactKeys lists all the artifact filenames within a session from TCOS.
