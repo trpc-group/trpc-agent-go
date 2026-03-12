@@ -144,6 +144,25 @@ func TestExtractMCPImages_UnmarshalErrorReturnsNil(t *testing.T) {
 	require.Nil(t, images)
 }
 
+func TestExtractMCPImages_UnwrapsNestedContent(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte("fake image bytes")
+	encoded := base64.StdEncoding.EncodeToString(raw)
+
+	images := extractMCPImages(context.Background(), map[string]any{
+		"action": "screenshot",
+		"content": []mcpContentItem{{
+			Type:     "image",
+			Data:     encoded,
+			MimeType: "image/png",
+		}},
+	})
+	require.Len(t, images, 1)
+	require.Equal(t, raw, images[0].Data)
+	require.Equal(t, "png", images[0].Format)
+}
+
 func TestExtractMCPImages_UnsupportedMimeIsSkipped(t *testing.T) {
 	t.Parallel()
 

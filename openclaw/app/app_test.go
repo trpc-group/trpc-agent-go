@@ -889,6 +889,34 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 	)
 }
 
+func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, []tool.Tool{
+		stubTool{name: "browser"},
+	}, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.Contains(
+		t,
+		sys,
+		"For real browser automation, use browser.",
+	)
+}
+
 func TestNewAgent_SkillsLoadModeTurnClearsLoadedState(t *testing.T) {
 	t.Parallel()
 

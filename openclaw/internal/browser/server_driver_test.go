@@ -1,0 +1,508 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package browser
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestServerProfileDriver_StatusReadsProfilesPayload(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/profiles", r.URL.Path)
+		require.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"profiles": []map[string]any{{
+				"name":  "openclaw",
+				"state": stateReady,
+				"tabs":  2,
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	drv := newServerProfileDriver(srv.URL, "secret", defaultProfileName)
+	status, err := drv.Status(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, stateReady, status.State)
+	require.Equal(t, 2, status.ToolCount)
+}
+
+func TestServerProfileDriver_CallTabsListUsesQueryProfile(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/tabs", r.URL.Path)
+		require.Equal(t, defaultProfileName, r.URL.Query().Get("profile"))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"content": []map[string]any{{
+				"type": "text",
+				"text": "ok",
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	drv := newServerProfileDriver(srv.URL, "", defaultProfileName)
+	raw, err := drv.Call(context.Background(), mcpToolTabs, map[string]any{
+		"action": tabActionList,
+	})
+	require.NoError(t, err)
+
+	body := raw.(map[string]any)
+	require.NotNil(t, body["content"])
+}
+
+func TestServerProfileDriver_CallWaitWrapsActRequest(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, "/act", r.URL.Path)
+
+		var payload map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+		require.Equal(t, defaultProfileName, payload["profile"])
+
+		request := payload["request"].(map[string]any)
+		require.Equal(t, actWait, request["kind"])
+		require.Equal(t, "selector", request["selector"])
+		require.Equal(t, float64(1.5), request["time"])
+
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"content": []map[string]any{{
+				"type": "text",
+				"text": "waited",
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	drv := newServerProfileDriver(srv.URL, "", defaultProfileName)
+	raw, err := drv.Call(context.Background(), mcpToolWait, map[string]any{
+		"time":     1.5,
+		"selector": "selector",
+	})
+	require.NoError(t, err)
+
+	body := raw.(map[string]any)
+	require.NotNil(t, body["content"])
+}
+
+func TestServerProfileDriver_StartAndStop(t *testing.T) {
+	t.Parallel()
+
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case "/start":
+			require.Equal(t, http.MethodPost, r.Method)
+			var payload map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			require.Equal(t, defaultProfileName, payload["profile"])
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		case "/stop":
+			require.Equal(t, http.MethodPost, r.Method)
+			var payload map[string]any
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+			require.Equal(t, defaultProfileName, payload["profile"])
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		case "/profiles":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"profiles": []map[string]any{{
+					"name":  defaultProfileName,
+					"state": stateReady,
+					"tabs":  1,
+				}},
+			})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	drv := newServerProfileDriver(srv.URL, "", defaultProfileName)
+	status, err := drv.Start(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, stateReady, status.State)
+
+	require.NoError(t, drv.Stop())
+	require.Equal(
+		t,
+		[]string{
+			"POST /start",
+			"GET /profiles",
+			"POST /stop",
+		},
+		calls,
+	)
+}
+
+func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		toolName   string
+		args       map[string]any
+		wantPath   string
+		wantMethod string
+		assertBody func(*testing.T, map[string]any)
+	}{
+		{
+			name:       "snapshot",
+			toolName:   mcpToolSnapshot,
+			args:       map[string]any{"filename": "page.txt"},
+			wantPath:   "/snapshot",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "page.txt", body["filename"])
+			},
+		},
+		{
+			name:       "screenshot",
+			toolName:   mcpToolScreenshot,
+			args:       map[string]any{"type": "png"},
+			wantPath:   "/screenshot",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "png", body["type"])
+			},
+		},
+		{
+			name:       "navigate",
+			toolName:   mcpToolNavigate,
+			args:       map[string]any{"url": "https://example.com"},
+			wantPath:   "/navigate",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "https://example.com", body["url"])
+			},
+		},
+		{
+			name:       "console",
+			toolName:   mcpToolConsole,
+			args:       map[string]any{"level": "error"},
+			wantPath:   "/console",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "error", body["level"])
+			},
+		},
+		{
+			name:       "pdf",
+			toolName:   mcpToolPDF,
+			args:       map[string]any{"filename": "page.pdf"},
+			wantPath:   "/pdf",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "page.pdf", body["filename"])
+			},
+		},
+		{
+			name:       "upload",
+			toolName:   mcpToolUpload,
+			args:       map[string]any{"paths": []string{"/tmp/a.txt"}},
+			wantPath:   "/upload",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, []any{"/tmp/a.txt"}, body["paths"])
+			},
+		},
+		{
+			name:       "dialog",
+			toolName:   mcpToolDialog,
+			args:       map[string]any{"accept": true},
+			wantPath:   "/dialog",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, true, body["accept"])
+			},
+		},
+		{
+			name:       "click",
+			toolName:   mcpToolClick,
+			args:       map[string]any{"ref": "e1"},
+			wantPath:   "/act",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				request := body["request"].(map[string]any)
+				require.Equal(t, actClick, request["kind"])
+				require.Equal(t, "e1", request["ref"])
+			},
+		},
+		{
+			name:       "resize",
+			toolName:   mcpToolResize,
+			args:       map[string]any{"width": 1280, "height": 720},
+			wantPath:   "/act",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				request := body["request"].(map[string]any)
+				require.Equal(t, actResize, request["kind"])
+				require.Equal(t, float64(1280), request["width"])
+			},
+		},
+		{
+			name:       "evaluate",
+			toolName:   mcpToolEvaluate,
+			args:       map[string]any{"function": "() => 1"},
+			wantPath:   "/act",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				request := body["request"].(map[string]any)
+				require.Equal(t, actEvaluate, request["kind"])
+				require.Equal(t, "() => 1", request["function"])
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(
+				w http.ResponseWriter,
+				r *http.Request,
+			) {
+				require.Equal(t, tc.wantMethod, r.Method)
+				require.Equal(t, tc.wantPath, r.URL.Path)
+
+				var payload map[string]any
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+				require.Equal(t, defaultProfileName, payload["profile"])
+				tc.assertBody(t, payload)
+
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"content": []map[string]any{{
+						"type": "text",
+						"text": "ok",
+					}},
+				})
+			}))
+			t.Cleanup(srv.Close)
+
+			drv := newServerProfileDriver(
+				srv.URL,
+				"secret",
+				defaultProfileName,
+			)
+			raw, err := drv.Call(
+				context.Background(),
+				tc.toolName,
+				tc.args,
+			)
+			require.NoError(t, err)
+
+			body := raw.(map[string]any)
+			require.NotNil(t, body["content"])
+		})
+	}
+}
+
+func TestServerProfileDriver_CallTabActions(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		args       map[string]any
+		wantPath   string
+		wantMethod string
+		assertReq  func(*testing.T, *http.Request, map[string]any)
+	}{
+		{
+			name: "open",
+			args: map[string]any{
+				"action": tabActionNew,
+				"url":    "https://example.com",
+			},
+			wantPath:   "/tabs/open",
+			wantMethod: http.MethodPost,
+			assertReq: func(t *testing.T, r *http.Request, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "https://example.com", body["url"])
+			},
+		},
+		{
+			name: "focus",
+			args: map[string]any{
+				"action": tabActionSelect,
+				"index":  7,
+			},
+			wantPath:   "/tabs/focus",
+			wantMethod: http.MethodPost,
+			assertReq: func(t *testing.T, r *http.Request, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "tab-7", body["targetId"])
+			},
+		},
+		{
+			name: "close",
+			args: map[string]any{
+				"action": tabActionClose,
+				"index":  7,
+			},
+			wantPath:   "/tabs/tab-7",
+			wantMethod: http.MethodDelete,
+			assertReq: func(t *testing.T, r *http.Request, body map[string]any) {
+				t.Helper()
+				require.Equal(
+					t,
+					defaultProfileName,
+					r.URL.Query().Get("profile"),
+				)
+				require.Nil(t, body)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(
+				w http.ResponseWriter,
+				r *http.Request,
+			) {
+				require.Equal(t, tc.wantMethod, r.Method)
+				require.Equal(t, tc.wantPath, r.URL.Path)
+
+				var payload map[string]any
+				if r.Body != nil && tc.wantMethod == http.MethodPost {
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
+				}
+				tc.assertReq(t, r, payload)
+
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"content": []map[string]any{{
+						"type": "text",
+						"text": "ok",
+					}},
+				})
+			}))
+			t.Cleanup(srv.Close)
+
+			drv := newServerProfileDriver(srv.URL, "", defaultProfileName)
+			raw, err := drv.Call(
+				context.Background(),
+				mcpToolTabs,
+				tc.args,
+			)
+			require.NoError(t, err)
+
+			body := raw.(map[string]any)
+			require.NotNil(t, body["content"])
+		})
+	}
+}
+
+func TestServerProfileDriver_ErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	drv := newServerProfileDriver("http://127.0.0.1:1", "", defaultProfileName)
+	_, err := drv.Call(context.Background(), "unknown_tool", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported browser server tool")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		http.Error(w, "bad request", http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+
+	drv = newServerProfileDriver(srv.URL, "", defaultProfileName)
+	_, err = drv.Status(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed")
+}
+
+func TestServerProfileDriver_HelperConversions(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "value", stringValue(" value "))
+	require.Empty(t, stringValue(1))
+	require.Equal(t, 3, numberValue(3))
+	require.Equal(t, 7, numberValue(float64(7)))
+	require.Zero(t, numberValue("bad"))
+}
+
+func TestServerProfileDriver_StatusReturnsStoppedWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"profiles": []map[string]any{{
+				"name": "chrome",
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	drv := newServerProfileDriver(srv.URL, "", defaultProfileName)
+	status, err := drv.Status(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, stateStopped, status.State)
+}
+
+func TestServerProfileDriver_StatusRejectsBadJSON(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		_, _ = w.Write([]byte("{"))
+	}))
+	t.Cleanup(srv.Close)
+
+	drv := newServerProfileDriver(srv.URL, "", defaultProfileName)
+	_, err := drv.Status(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decode browser server status")
+}

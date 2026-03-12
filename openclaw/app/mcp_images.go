@@ -75,11 +75,12 @@ func mcpImageResultMessages(
 }
 
 func extractMCPImages(ctx context.Context, result any) []mcpImage {
-	if result == nil {
+	payload := unwrapMCPResultContent(result)
+	if payload == nil {
 		return nil
 	}
 
-	body, err := json.Marshal(result)
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil
 	}
@@ -124,6 +125,33 @@ func extractMCPImages(ctx context.Context, result any) []mcpImage {
 		return nil
 	}
 	return images
+}
+
+func unwrapMCPResultContent(result any) any {
+	if result == nil {
+		return nil
+	}
+
+	body, err := json.Marshal(result)
+	if err != nil {
+		return result
+	}
+
+	var envelope struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return result
+	}
+	if len(envelope.Content) == 0 {
+		return result
+	}
+
+	var payload any
+	if err := json.Unmarshal(envelope.Content, &payload); err != nil {
+		return result
+	}
+	return payload
 }
 
 func mcpImageFormatFromMime(mime string) (string, bool) {

@@ -66,6 +66,7 @@ const (
 	maxDebugSessionRows = 12
 	maxDebugTraceRows   = 18
 	maxJobOutputRunes   = 120
+	browserProbeTimeout = 1500 * time.Millisecond
 
 	formatTimeLayout = "2006-01-02 15:04:05 MST"
 )
@@ -102,14 +103,46 @@ type Config struct {
 
 	Channels      []string
 	GatewayRoutes Routes
+	Browser       BrowserConfig
 
 	Cron *cron.Service
 	Exec *octool.Manager
 }
 
+type BrowserConfig struct {
+	Providers []BrowserProvider `json:"providers,omitempty"`
+}
+
+type BrowserProvider struct {
+	Name             string           `json:"name,omitempty"`
+	DefaultProfile   string           `json:"default_profile,omitempty"`
+	EvaluateEnabled  bool             `json:"evaluate_enabled"`
+	HostServerURL    string           `json:"host_server_url,omitempty"`
+	SandboxServerURL string           `json:"sandbox_server_url,omitempty"`
+	AllowLoopback    bool             `json:"allow_loopback"`
+	AllowPrivateNet  bool             `json:"allow_private_networks"`
+	AllowFileURLs    bool             `json:"allow_file_urls"`
+	Profiles         []BrowserProfile `json:"profiles,omitempty"`
+	Nodes            []BrowserNode    `json:"nodes,omitempty"`
+}
+
+type BrowserProfile struct {
+	Name             string `json:"name,omitempty"`
+	Description      string `json:"description,omitempty"`
+	Transport        string `json:"transport,omitempty"`
+	ServerURL        string `json:"server_url,omitempty"`
+	BrowserServerURL string `json:"browser_server_url,omitempty"`
+}
+
+type BrowserNode struct {
+	ID        string `json:"id,omitempty"`
+	ServerURL string `json:"server_url,omitempty"`
+}
+
 type Service struct {
-	cfg Config
-	now func() time.Time
+	cfg               Config
+	now               func() time.Time
+	browserHTTPClient *http.Client
 }
 
 type Option func(*Service)
@@ -122,10 +155,21 @@ func WithClock(fn func() time.Time) Option {
 	}
 }
 
+func WithBrowserHTTPClient(client *http.Client) Option {
+	return func(s *Service) {
+		if s != nil && client != nil {
+			s.browserHTTPClient = client
+		}
+	}
+}
+
 func New(cfg Config, opts ...Option) *Service {
 	svc := &Service{
 		cfg: cfg,
 		now: time.Now,
+		browserHTTPClient: &http.Client{
+			Timeout: browserProbeTimeout,
+		},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -181,10 +225,62 @@ type snapshot struct {
 
 	Channels []string      `json:"channels,omitempty"`
 	Routes   Routes        `json:"routes,omitempty"`
+	Browser  browserStatus `json:"browser"`
 	Exec     execStatus    `json:"exec"`
 	Uploads  uploadsStatus `json:"uploads"`
 	Cron     cronStatus    `json:"cron"`
 	Debug    debugStatus   `json:"debug"`
+}
+
+type browserStatus struct {
+	Enabled       bool                  `json:"enabled"`
+	ProviderCount int                   `json:"provider_count"`
+	ProfileCount  int                   `json:"profile_count"`
+	NodeCount     int                   `json:"node_count"`
+	Providers     []browserProviderView `json:"providers,omitempty"`
+}
+
+type browserProviderView struct {
+	Name             string               `json:"name,omitempty"`
+	DefaultProfile   string               `json:"default_profile,omitempty"`
+	EvaluateEnabled  bool                 `json:"evaluate_enabled"`
+	HostServerURL    string               `json:"host_server_url,omitempty"`
+	SandboxServerURL string               `json:"sandbox_server_url,omitempty"`
+	AllowLoopback    bool                 `json:"allow_loopback"`
+	AllowPrivateNet  bool                 `json:"allow_private_networks"`
+	AllowFileURLs    bool                 `json:"allow_file_urls"`
+	Host             browserEndpointView  `json:"host,omitempty"`
+	Sandbox          browserEndpointView  `json:"sandbox,omitempty"`
+	Profiles         []browserProfileView `json:"profiles,omitempty"`
+	Nodes            []browserNodeView    `json:"nodes,omitempty"`
+}
+
+type browserProfileView struct {
+	Name             string `json:"name,omitempty"`
+	Description      string `json:"description,omitempty"`
+	Transport        string `json:"transport,omitempty"`
+	ServerURL        string `json:"server_url,omitempty"`
+	BrowserServerURL string `json:"browser_server_url,omitempty"`
+}
+
+type browserEndpointView struct {
+	URL       string               `json:"url,omitempty"`
+	Reachable bool                 `json:"reachable"`
+	Error     string               `json:"error,omitempty"`
+	Profiles  []browserRemoteProbe `json:"profiles,omitempty"`
+}
+
+type browserRemoteProbe struct {
+	Name   string `json:"name,omitempty"`
+	State  string `json:"state,omitempty"`
+	Driver string `json:"driver,omitempty"`
+	Tabs   int    `json:"tabs,omitempty"`
+}
+
+type browserNodeView struct {
+	ID        string              `json:"id,omitempty"`
+	ServerURL string              `json:"server_url,omitempty"`
+	Status    browserEndpointView `json:"status,omitempty"`
 }
 
 type cronStatus struct {
@@ -247,6 +343,7 @@ func (s *Service) Snapshot() snapshot {
 		StateDir:       strings.TrimSpace(s.cfg.StateDir),
 		DebugDir:       strings.TrimSpace(s.cfg.DebugDir),
 		Routes:         s.cfg.GatewayRoutes,
+		Browser:        s.browserStatus(),
 		Exec:           s.execStatus(),
 		Uploads:        s.uploadsStatus(),
 		Debug:          s.debugStatus(),
@@ -277,6 +374,132 @@ func (s *Service) Snapshot() snapshot {
 		out.Cron.Jobs = append(out.Cron.Jobs, jobViewFromJob(job))
 	}
 	return out
+}
+
+func (s *Service) browserStatus() browserStatus {
+	if len(s.cfg.Browser.Providers) == 0 {
+		return browserStatus{}
+	}
+
+	probes := make(map[string]browserEndpointView)
+	out := browserStatus{
+		Enabled:       true,
+		ProviderCount: len(s.cfg.Browser.Providers),
+		Providers: make([]browserProviderView, 0,
+			len(s.cfg.Browser.Providers)),
+	}
+	for i := range s.cfg.Browser.Providers {
+		provider := s.cfg.Browser.Providers[i]
+		view := browserProviderView{
+			Name:             strings.TrimSpace(provider.Name),
+			DefaultProfile:   strings.TrimSpace(provider.DefaultProfile),
+			EvaluateEnabled:  provider.EvaluateEnabled,
+			HostServerURL:    strings.TrimSpace(provider.HostServerURL),
+			SandboxServerURL: strings.TrimSpace(provider.SandboxServerURL),
+			AllowLoopback:    provider.AllowLoopback,
+			AllowPrivateNet:  provider.AllowPrivateNet,
+			AllowFileURLs:    provider.AllowFileURLs,
+		}
+		view.Host = s.probeBrowserEndpoint(view.HostServerURL, probes)
+		view.Sandbox = s.probeBrowserEndpoint(
+			view.SandboxServerURL,
+			probes,
+		)
+		out.NodeCount += len(provider.Nodes)
+		if len(provider.Profiles) > 0 {
+			view.Profiles = make([]browserProfileView, 0,
+				len(provider.Profiles))
+		}
+		for j := range provider.Profiles {
+			profile := provider.Profiles[j]
+			view.Profiles = append(view.Profiles, browserProfileView{
+				Name:        strings.TrimSpace(profile.Name),
+				Description: strings.TrimSpace(profile.Description),
+				Transport:   strings.TrimSpace(profile.Transport),
+				ServerURL:   strings.TrimSpace(profile.ServerURL),
+				BrowserServerURL: strings.TrimSpace(
+					profile.BrowserServerURL,
+				),
+			})
+		}
+		if len(provider.Nodes) > 0 {
+			view.Nodes = make([]browserNodeView, 0, len(provider.Nodes))
+		}
+		for j := range provider.Nodes {
+			node := provider.Nodes[j]
+			serverURL := strings.TrimSpace(node.ServerURL)
+			view.Nodes = append(view.Nodes, browserNodeView{
+				ID:        strings.TrimSpace(node.ID),
+				ServerURL: serverURL,
+				Status: s.probeBrowserEndpoint(
+					serverURL,
+					probes,
+				),
+			})
+		}
+		out.ProfileCount += len(view.Profiles)
+		sort.Slice(view.Profiles, func(a, b int) bool {
+			return view.Profiles[a].Name < view.Profiles[b].Name
+		})
+		sort.Slice(view.Nodes, func(a, b int) bool {
+			return view.Nodes[a].ID < view.Nodes[b].ID
+		})
+		out.Providers = append(out.Providers, view)
+	}
+	sort.Slice(out.Providers, func(a, b int) bool {
+		return out.Providers[a].Name < out.Providers[b].Name
+	})
+	return out
+}
+
+func (s *Service) probeBrowserEndpoint(
+	rawURL string,
+	cache map[string]browserEndpointView,
+) browserEndpointView {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return browserEndpointView{}
+	}
+	if cached, ok := cache[trimmed]; ok {
+		return cached
+	}
+
+	view := browserEndpointView{
+		URL: trimmed,
+	}
+	client := s.browserHTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: browserProbeTimeout}
+	}
+	resp, err := client.Get(strings.TrimRight(trimmed, "/") + "/profiles")
+	if err != nil {
+		view.Error = err.Error()
+		cache[trimmed] = view
+		return view
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		view.Error = fmt.Sprintf("unexpected status %s", resp.Status)
+		cache[trimmed] = view
+		return view
+	}
+
+	var payload struct {
+		Profiles []browserRemoteProbe `json:"profiles"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		view.Error = fmt.Sprintf("decode profiles: %v", err)
+		cache[trimmed] = view
+		return view
+	}
+	view.Reachable = true
+	view.Profiles = append([]browserRemoteProbe(nil), payload.Profiles...)
+	sort.Slice(view.Profiles, func(a, b int) bool {
+		return view.Profiles[a].Name < view.Profiles[b].Name
+	})
+	cache[trimmed] = view
+	return view
 }
 
 func (s *Service) handleIndex(
@@ -725,6 +948,43 @@ func formatUptime(startedAt time.Time, now time.Time) string {
 	return now.Sub(startedAt).Round(time.Second).String()
 }
 
+func browserEndpointSummary(view browserEndpointView) string {
+	if strings.TrimSpace(view.URL) == "" {
+		return "-"
+	}
+	if !view.Reachable {
+		if strings.TrimSpace(view.Error) != "" {
+			return "down: " + strings.TrimSpace(view.Error)
+		}
+		return "down"
+	}
+	if len(view.Profiles) == 0 {
+		return "reachable"
+	}
+	parts := make([]string, 0, len(view.Profiles))
+	for i := range view.Profiles {
+		profile := view.Profiles[i]
+		name := strings.TrimSpace(profile.Name)
+		state := strings.TrimSpace(profile.State)
+		if name == "" && state == "" {
+			continue
+		}
+		if state == "" {
+			parts = append(parts, name)
+			continue
+		}
+		if name == "" {
+			parts = append(parts, state)
+			continue
+		}
+		parts = append(parts, name+"="+state)
+	}
+	if len(parts) == 0 {
+		return "reachable"
+	}
+	return strings.Join(parts, ", ")
+}
+
 func (s *Service) resolveDebugFile(
 	tracePath string,
 	name string,
@@ -777,7 +1037,8 @@ func isAllowedDebugFile(name string) bool {
 
 var adminPage = template.Must(
 	template.New("admin").Funcs(template.FuncMap{
-		"formatTime": formatTime,
+		"formatTime":             formatTime,
+		"browserEndpointSummary": browserEndpointSummary,
 	}).Parse(adminPageHTML),
 )
 
@@ -989,6 +1250,10 @@ const adminPageHTML = `<!doctype html>
         <span class="stat-value">{{.Snapshot.Uploads.FileCount}}</span>
       </article>
       <article class="card">
+        <span class="stat-label">Browser Profiles</span>
+        <span class="stat-value">{{.Snapshot.Browser.ProfileCount}}</span>
+      </article>
+      <article class="card">
         <span class="stat-label">Debug Sessions</span>
         <span class="stat-value">{{.Snapshot.Debug.SessionCount}}</span>
       </article>
@@ -1185,6 +1450,85 @@ const adminPageHTML = `<!doctype html>
             {{end}}
           </dd>
         </dl>
+      </article>
+
+      <article class="card">
+        <h2>Browser Surface</h2>
+        <p class="subtle">
+          Native browser tool wiring, including host browser-server routing,
+          sandbox targets, node targets, and profile inventory.
+        </p>
+        <dl class="meta">
+          <dt>Enabled</dt>
+          <dd>{{.Snapshot.Browser.Enabled}}</dd>
+          <dt>Providers</dt>
+          <dd>{{.Snapshot.Browser.ProviderCount}}</dd>
+          <dt>Profiles</dt>
+          <dd>{{.Snapshot.Browser.ProfileCount}}</dd>
+          <dt>Nodes</dt>
+          <dd>{{.Snapshot.Browser.NodeCount}}</dd>
+          <dt>Status</dt>
+          <dd>
+            {{if .Snapshot.Browser.Enabled}}
+              ready
+            {{else}}
+              idle
+            {{end}}
+          </dd>
+        </dl>
+        {{if .Snapshot.Browser.Providers}}
+        <table>
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Default</th>
+              <th>Host</th>
+              <th>Sandbox</th>
+              <th>Guards</th>
+              <th>Profiles</th>
+              <th>Nodes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Snapshot.Browser.Providers}}
+            <tr>
+              <td>{{if .Name}}{{.Name}}{{else}}browser{{end}}</td>
+              <td>{{if .DefaultProfile}}{{.DefaultProfile}}{{else}}-{{end}}</td>
+              <td>
+                {{if .Host.URL}}
+                  <code>{{.Host.URL}}</code><br>
+                  <span class="subtle">{{browserEndpointSummary .Host}}</span>
+                {{else}}-{{end}}
+              </td>
+              <td>
+                {{if .Sandbox.URL}}
+                  <code>{{.Sandbox.URL}}</code><br>
+                  <span class="subtle">{{browserEndpointSummary .Sandbox}}</span>
+                {{else}}-{{end}}
+              </td>
+              <td>
+                loopback={{.AllowLoopback}},
+                private={{.AllowPrivateNet}},
+                file={{.AllowFileURLs}}
+              </td>
+              <td>
+                {{if .Profiles}}
+                  {{range $i, $profile := .Profiles}}{{if $i}}, {{end}}{{$profile.Name}}{{end}}
+                {{else}}-{{end}}
+              </td>
+              <td>
+                {{if .Nodes}}
+                  {{range $i, $node := .Nodes}}{{if $i}}<br>{{end}}{{$node.ID}}
+                  {{if $node.Status.URL}}<br><span class="subtle">{{browserEndpointSummary $node.Status}}</span>{{end}}{{end}}
+                {{else}}-{{end}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        {{else}}
+        <p class="empty">Browser tool is not configured for this runtime.</p>
+        {{end}}
       </article>
     </section>
 

@@ -115,6 +115,67 @@ CLI flags always override config file values.
 The config file supports environment variable placeholders in the form `${NAME}`.
 Missing environment variables cause OpenClaw to fail fast with a config error.
 
+### Native Browser Use
+
+OpenClaw now supports a native `browser` tool provider for real browser
+automation.
+
+Use it when the task needs:
+
+- JS-heavy pages
+- tabs and page navigation
+- screenshots or page snapshots
+- clicking, typing, selecting, or dialog handling
+
+The provider exposes one `browser` tool and uses Playwright MCP under
+the hood. That keeps the model-facing interface stable while preserving
+image forwarding for screenshots.
+
+By default, browser navigation blocks:
+
+- loopback hosts such as `localhost`
+- private-network IPs
+- `file://` URLs
+
+You can relax or refine that policy with:
+`allowed_domains`, `blocked_domains`, `allow_loopback`,
+`allow_private_networks`, and `allow_file_urls`.
+
+Example config:
+
+```yaml
+tools:
+  providers:
+    - type: "browser"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        allowed_domains: ["example.com"]
+        profiles:
+          - name: "openclaw"
+            transport: "stdio"
+            command: "npx"
+            args:
+              - "--yes"
+              - "@playwright/mcp@latest"
+              - "--headless"
+              - "--isolated"
+              - "--caps"
+              - "vision,pdf"
+            timeout: "5m"
+```
+
+Runnable example:
+[examples/browser_use/README.md](./examples/browser_use/README.md)
+
+Browser-server example:
+[examples/browser_server_use/README.md](./examples/browser_server_use/README.md)
+
+The full browser plane scaffolding also lives in:
+
+- [`./browser-server/`](./browser-server/)
+- [`./browser-extension/`](./browser-extension/)
+
 ### Debug recorder (optional)
 
 When debugging multi-step flows (especially Telegram "Processing..." messages),

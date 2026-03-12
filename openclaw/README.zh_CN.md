@@ -107,6 +107,66 @@ CLI 参数始终会覆盖配置文件中的值。
 配置文件支持 `${NAME}` 形式的环境变量占位符。
 缺少的环境变量会导致 OpenClaw 立即报错退出。
 
+### 原生 Browser Use
+
+OpenClaw 现在支持原生 `browser` tool provider，用来做真实浏览器
+自动化。
+
+适合这些场景：
+
+- JS 很重的页面
+- tab 管理和页面跳转
+- 截图或页面快照
+- 点击、输入、选择、弹窗处理
+
+这个 provider 对模型暴露的是一个统一的 `browser` 工具，底层仍然
+复用 Playwright MCP，因此截图图片仍然会被转发回模型。
+
+默认情况下，browser 导航会拦截：
+
+- `localhost` 这类 loopback host
+- 私有网段 IP
+- `file://` URL
+
+如果需要放开或细化，可以使用这些配置项：
+`allowed_domains`、`blocked_domains`、`allow_loopback`、
+`allow_private_networks`、`allow_file_urls`。
+
+示例配置：
+
+```yaml
+tools:
+  providers:
+    - type: "browser"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        allowed_domains: ["example.com"]
+        profiles:
+          - name: "openclaw"
+            transport: "stdio"
+            command: "npx"
+            args:
+              - "--yes"
+              - "@playwright/mcp@latest"
+              - "--headless"
+              - "--isolated"
+              - "--caps"
+              - "vision,pdf"
+            timeout: "5m"
+```
+
+可运行示例：
+[examples/browser_use/README.md](./examples/browser_use/README.md)
+
+browser-server 示例：
+[examples/browser_server_use/README.md](./examples/browser_server_use/README.md)
+
+完整的 browser runtime 脚手架还在这里：
+
+- [`./browser-server/`](./browser-server/)
+- [`./browser-extension/`](./browser-extension/)
+
 ### 调试记录器（可选）
 
 在调试多步流程（尤其是 Telegram "处理中..." 消息）时，

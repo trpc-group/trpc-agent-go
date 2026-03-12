@@ -260,6 +260,96 @@ func TestServiceSnapshotIncludesCronSummary(t *testing.T) {
 	require.Equal(t, "every 5m", snap.Cron.Jobs[0].Schedule)
 }
 
+func TestServiceSnapshotIncludesBrowserSummary(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Browser: BrowserConfig{
+			Providers: []BrowserProvider{{
+				Name:             "primary",
+				DefaultProfile:   "openclaw",
+				HostServerURL:    "http://127.0.0.1:19790",
+				SandboxServerURL: "http://127.0.0.1:20790",
+				AllowLoopback:    true,
+				Profiles: []BrowserProfile{{
+					Name:      "openclaw",
+					Transport: "stdio",
+				}, {
+					Name:             "chrome",
+					BrowserServerURL: "http://127.0.0.1:19790",
+				}},
+				Nodes: []BrowserNode{{
+					ID:        "edge",
+					ServerURL: "http://node.example:7777",
+				}},
+			}},
+		},
+	})
+
+	snap := svc.Snapshot()
+	require.True(t, snap.Browser.Enabled)
+	require.Equal(t, 1, snap.Browser.ProviderCount)
+	require.Equal(t, 2, snap.Browser.ProfileCount)
+	require.Equal(t, 1, snap.Browser.NodeCount)
+	require.Len(t, snap.Browser.Providers, 1)
+	require.Equal(t, "primary", snap.Browser.Providers[0].Name)
+	require.Equal(
+		t,
+		"http://127.0.0.1:19790",
+		snap.Browser.Providers[0].HostServerURL,
+	)
+}
+
+func TestServiceSnapshotProbesBrowserEndpoints(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, "/profiles", r.URL.Path)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"profiles": []map[string]any{{
+				"name":   "openclaw",
+				"state":  "ready",
+				"driver": "playwright",
+				"tabs":   1,
+			}},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	svc := New(
+		Config{
+			Browser: BrowserConfig{
+				Providers: []BrowserProvider{{
+					Name:           "primary",
+					DefaultProfile: "openclaw",
+					HostServerURL:  server.URL,
+					Nodes: []BrowserNode{{
+						ID:        "edge",
+						ServerURL: server.URL,
+					}},
+				}},
+			},
+		},
+		WithBrowserHTTPClient(server.Client()),
+	)
+
+	snap := svc.Snapshot()
+	require.True(t, snap.Browser.Enabled)
+	require.Len(t, snap.Browser.Providers, 1)
+	require.True(t, snap.Browser.Providers[0].Host.Reachable)
+	require.Len(t, snap.Browser.Providers[0].Host.Profiles, 1)
+	require.Equal(
+		t,
+		"openclaw",
+		snap.Browser.Providers[0].Host.Profiles[0].Name,
+	)
+	require.Len(t, snap.Browser.Providers[0].Nodes, 1)
+	require.True(t, snap.Browser.Providers[0].Nodes[0].Status.Reachable)
+}
+
 func TestServiceSnapshotIncludesUploadSourceCounts(t *testing.T) {
 	t.Parallel()
 
