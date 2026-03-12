@@ -1359,6 +1359,10 @@ func TestModel_GenerateContent_Streaming_UsageWhenAccumulatorSkipped(t *testing.
 		"First second",
 		final.Choices[0].Message.ReasoningContent,
 	)
+	require.NotNil(t, final.Usage)
+	assert.Equal(t, 5, final.Usage.PromptTokens)
+	assert.Equal(t, 1, final.Usage.CompletionTokens)
+	assert.Equal(t, 6, final.Usage.TotalTokens)
 }
 
 // TestModel_CallbackParameters verifies that callback functions receive the

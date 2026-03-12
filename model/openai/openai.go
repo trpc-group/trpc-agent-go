@@ -1585,11 +1585,13 @@ func (m *Model) sendFinalResponse(
 
 		// If accumulator is empty but we have aggregated reasoning, create a response with it.
 		if len(acc.Choices) == 0 && aggregatedReasoning != "" {
+			usage := completionUsageToModelUsage(acc.Usage)
 			finalResponse := &model.Response{
 				Object:    model.ObjectTypeChatCompletion,
 				ID:        acc.ID,
 				Created:   acc.Created,
 				Model:     acc.Model,
+				Usage:     &usage,
 				Timestamp: time.Now(),
 				Done:      true,
 				IsPartial: false,
