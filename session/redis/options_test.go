@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	psummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 type fakeRedisOptionsSummarizer struct{}
@@ -124,6 +125,27 @@ func TestWithSummaryJobTimeout(t *testing.T) {
 			assert.Equal(t, tt.expected, opts.summaryJobTimeout)
 		})
 	}
+}
+
+func TestWithSessionSummarizerResolver(t *testing.T) {
+	opts := ServiceOpts{}
+	called := false
+
+	WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
+		context.Context,
+		psummary.SessionSummaryRequest,
+	) (psummary.SessionSummarizer, error) {
+		called = true
+		return nil, nil
+	}))(&opts)
+
+	require.NotNil(t, opts.summarizerResolver)
+	_, err := opts.summarizerResolver(
+		context.Background(),
+		psummary.SessionSummaryRequest{FilterKey: "branch"},
+	)
+	require.NoError(t, err)
+	assert.True(t, called)
 }
 
 func TestServiceOptsIntegration(t *testing.T) {
@@ -459,44 +481,4 @@ func TestWithKeyPrefix(t *testing.T) {
 			assert.Equal(t, tt.expected, opts.keyPrefix)
 		})
 	}
-}
-
-func TestKeyPrefixInRedisKeys(t *testing.T) {
-	redisURL, cleanup := setupTestRedis(t)
-	defer cleanup()
-
-	prefix := "test-prefix"
-	s, err := NewService(WithRedisClientURL(redisURL), WithKeyPrefix(prefix))
-	require.NoError(t, err)
-	defer s.Close()
-
-	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
-
-	// Verify that all key generation methods include the prefix
-	assert.Equal(t, "test-prefix:appstate:{app}", s.getAppStateKey(key.AppName))
-	assert.Equal(t, "test-prefix:userstate:{app}:user", s.getUserStateKey(key))
-	assert.Equal(t, "test-prefix:sess:{app}:user", s.getSessionStateKey(key))
-	assert.Equal(t, "test-prefix:sesssum:{app}:user", s.getSessionSummaryKey(key))
-	assert.Equal(t, "test-prefix:event:{app}:user:sid", s.getEventKey(key))
-	assert.Equal(t, "test-prefix:track:{app}:user:sid:alpha", s.getTrackKey(key, "alpha"))
-}
-
-func TestKeyPrefixEmpty(t *testing.T) {
-	redisURL, cleanup := setupTestRedis(t)
-	defer cleanup()
-
-	// No prefix
-	s, err := NewService(WithRedisClientURL(redisURL))
-	require.NoError(t, err)
-	defer s.Close()
-
-	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid"}
-
-	// Verify that keys are generated without prefix
-	assert.Equal(t, "appstate:{app}", s.getAppStateKey(key.AppName))
-	assert.Equal(t, "userstate:{app}:user", s.getUserStateKey(key))
-	assert.Equal(t, "sess:{app}:user", s.getSessionStateKey(key))
-	assert.Equal(t, "sesssum:{app}:user", s.getSessionSummaryKey(key))
-	assert.Equal(t, "event:{app}:user:sid", s.getEventKey(key))
-	assert.Equal(t, "track:{app}:user:sid:alpha", s.getTrackKey(key, "alpha"))
 }

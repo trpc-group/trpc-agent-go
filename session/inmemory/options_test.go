@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	psummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 func TestWithSessionEventLimit(t *testing.T) {
@@ -70,6 +71,24 @@ func TestWithSummarizer(t *testing.T) {
 	s := &fakeOptionsSummarizer{}
 	WithSummarizer(s)(&opts)
 	assert.Equal(t, s, opts.summarizer)
+}
+
+func TestWithSessionSummarizerResolver(t *testing.T) {
+	opts := serviceOpts{}
+	resolver := psummary.SessionSummarizerResolver(func(
+		context.Context,
+		psummary.SessionSummaryRequest,
+	) (psummary.SessionSummarizer, error) {
+		return &fakeOptionsSummarizer{}, nil
+	})
+	WithSessionSummarizerResolver(resolver)(&opts)
+	require.NotNil(t, opts.summarizerResolver)
+	resolved, err := opts.summarizerResolver(
+		context.Background(),
+		psummary.SessionSummaryRequest{},
+	)
+	require.NoError(t, err)
+	assert.IsType(t, &fakeOptionsSummarizer{}, resolved)
 }
 
 func TestWithAsyncSummaryNum(t *testing.T) {

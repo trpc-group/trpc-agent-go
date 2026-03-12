@@ -1477,7 +1477,7 @@ func TestShouldEmitModelResponse_Cases(t *testing.T) {
 func TestShouldEmitModelResponseEvent_NilResponse(t *testing.T) {
 	require.False(
 		t,
-		shouldEmitModelResponseEvent(context.Background(), nil),
+		shouldEmitModelResponseEvent(nil, nil),
 	)
 }
 
