@@ -10,56 +10,35 @@ const interactiveSelector = [
   "[contenteditable='true']",
   "[tabindex]"
 ].join(",");
-
-function isVisible(node) {
-  if (!node || !(node instanceof Element)) {
-    return false;
-  }
-  const style = window.getComputedStyle(node);
-  if (style.visibility === "hidden" || style.display === "none") {
-    return false;
-  }
-  const rect = node.getBoundingClientRect();
-  return rect.width > 0 && rect.height > 0;
-}
-
-function textFor(node) {
-  const parts = [
-    node.getAttribute("aria-label"),
-    node.getAttribute("placeholder"),
-    node.innerText,
-    node.textContent,
-    node.value
-  ];
-  for (const raw of parts) {
-    const text = `${raw || ""}`.trim().replace(/\s+/g, " ");
-    if (text) {
-      return text;
-    }
-  }
-  return "";
-}
-
-function roleFor(node) {
-  return (
-    node.getAttribute("role") ||
-    node.tagName.toLowerCase()
-  );
-}
-
-function ensureRef(node) {
-  let ref = node.getAttribute(refAttr);
-  if (ref) {
-    return ref;
-  }
-  ref = `e${Math.random().toString(36).slice(2, 8)}`;
-  node.setAttribute(refAttr, ref);
-  return ref;
-}
+const meaningfulSelector = [
+  "main",
+  "section",
+  "article",
+  "nav",
+  "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "p",
+  "ul",
+  "ol",
+  "li",
+  "label",
+  "a[href]",
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "[role]",
+  "[contenteditable='true']"
+].join(",");
 
 export function snapshotDOM(options = {}) {
-  const localRefAttr = "data-openclaw-ref";
-  const localInteractiveSelector = [
+  const snapshotRefAttr = "data-openclaw-ref";
+  const snapshotInteractiveSelector = [
     "a[href]",
     "button",
     "input",
@@ -70,7 +49,32 @@ export function snapshotDOM(options = {}) {
     "[contenteditable='true']",
     "[tabindex]"
   ].join(",");
-  function localIsVisible(node) {
+  const snapshotMeaningfulSelector = [
+    "main",
+    "section",
+    "article",
+    "nav",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "p",
+    "ul",
+    "ol",
+    "li",
+    "label",
+    "a[href]",
+    "button",
+    "input",
+    "select",
+    "textarea",
+    "[role]",
+    "[contenteditable='true']"
+  ].join(",");
+  function isVisible(node) {
     if (!node || !(node instanceof Element)) {
       return false;
     }
@@ -81,7 +85,7 @@ export function snapshotDOM(options = {}) {
     const rect = node.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   }
-  function localTextFor(node) {
+  function textFor(node) {
     const parts = [
       node.getAttribute("aria-label"),
       node.getAttribute("placeholder"),
@@ -97,58 +101,108 @@ export function snapshotDOM(options = {}) {
     }
     return "";
   }
-  function localRoleFor(node) {
+  function roleFor(node) {
     return (
       node.getAttribute("role") ||
       node.tagName.toLowerCase()
     );
   }
-  function localEnsureRef(node) {
-    let ref = node.getAttribute(localRefAttr);
+  function ensureRef(node) {
+    let ref = node.getAttribute(snapshotRefAttr);
     if (ref) {
       return ref;
     }
     ref = `e${Math.random().toString(36).slice(2, 8)}`;
-    node.setAttribute(localRefAttr, ref);
+    node.setAttribute(snapshotRefAttr, ref);
     return ref;
   }
+  function matchesSelector(node, selector) {
+    return typeof node.matches === "function" && node.matches(selector);
+  }
+  function isInteractive(node) {
+    return matchesSelector(node, snapshotInteractiveSelector);
+  }
+  function isMeaningful(node, interactiveOnly) {
+    if (isInteractive(node)) {
+      return true;
+    }
+    if (interactiveOnly) {
+      return false;
+    }
+    return (
+      matchesSelector(node, snapshotMeaningfulSelector) ||
+      textFor(node) !== ""
+    );
+  }
+  function snapshotLine(item, compact) {
+    const indent = "  ".repeat(item.depth || 0);
+    const ref = item.ref ? `[${item.ref}] ` : "";
+    const label = item.text ? ` "${item.text}"` : "";
+    if (compact) {
+      return `${indent}${ref}${item.role}${label}`;
+    }
+    const tag = item.tag && item.tag !== item.role
+      ? ` tag=${item.tag}`
+      : "";
+    const kind = item.type ? ` type=${item.type}` : "";
+    const disabled = item.disabled ? " disabled" : "";
+    return `${indent}${ref}${item.role}${tag}${kind}${disabled}${label}`;
+  }
+
   const selector = `${options?.selector || ""}`.trim();
-  const limit = Math.max(0, Number(options?.limit) || 0);
-  const root = selector ? document.querySelector(selector) : document;
+  const limit = Math.max(0, Number(options?.limit) || 0) || 200;
+  const interactiveOnly = options?.interactive !== false;
+  const compact = options?.compact === true;
+  const maxDepth = Number.isFinite(Number(options?.depth)) &&
+    Number(options?.depth) >= 0
+    ? Number(options?.depth)
+    : undefined;
+  const root = selector
+    ? document.querySelector(selector)
+    : document.body || document.documentElement;
   if (!root) {
     throw new Error(`Snapshot selector not found: ${selector}`);
   }
 
-  const discovered = Array.from(
-    root.querySelectorAll(localInteractiveSelector)
-  );
-  if (
-    root !== document &&
-    typeof root.matches === "function" &&
-    root.matches(localInteractiveSelector)
-  ) {
-    discovered.unshift(root);
+  const items = [];
+  const stack = [{
+    node: root,
+    depth: 0
+  }];
+  while (stack.length > 0 && items.length < limit) {
+    const current = stack.pop();
+    const node = current?.node;
+    if (!node || !isVisible(node)) {
+      continue;
+    }
+    const include = isMeaningful(node, interactiveOnly);
+    if (include) {
+      if (maxDepth === undefined || current.depth <= maxDepth) {
+        items.push({
+          ref: isInteractive(node) ? ensureRef(node) : "",
+          role: roleFor(node),
+          text: textFor(node),
+          tag: node.tagName.toLowerCase(),
+          type: node.getAttribute("type") || "",
+          disabled: Boolean(node.disabled),
+          depth: current.depth,
+          interactive: isInteractive(node)
+        });
+      }
+    }
+    const nextDepth = include ? current.depth + 1 : current.depth;
+    if (maxDepth !== undefined && nextDepth > maxDepth) {
+      continue;
+    }
+    const children = Array.from(node.children || []);
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      stack.push({
+        node: children[index],
+        depth: nextDepth
+      });
+    }
   }
 
-  const seen = new Set();
-  const nodes = discovered
-    .filter((node) => {
-      if (seen.has(node)) {
-        return false;
-      }
-      seen.add(node);
-      return true;
-    })
-    .filter(localIsVisible)
-    .slice(0, limit || 200);
-  const items = nodes.map((node) => ({
-    ref: localEnsureRef(node),
-    role: localRoleFor(node),
-    text: localTextFor(node),
-    tag: node.tagName.toLowerCase(),
-    type: node.getAttribute("type") || "",
-    disabled: Boolean(node.disabled)
-  }));
   const lines = [
     `Page: ${document.title || ""}`,
     `URL: ${window.location.href}`
@@ -157,10 +211,7 @@ export function snapshotDOM(options = {}) {
     lines.push(`Selector: ${selector}`);
   }
   for (const item of items) {
-    const label = item.text ? ` "${item.text}"` : "";
-    const kind = item.type ? ` type=${item.type}` : "";
-    const disabled = item.disabled ? " disabled" : "";
-    lines.push(`[${item.ref}] ${item.role}${kind}${disabled}${label}`);
+    lines.push(snapshotLine(item, compact));
   }
   return {
     title: document.title || "",
@@ -187,7 +238,7 @@ export function executeRelayCommand(command) {
   const { action, args = {} } = command;
   switch (action) {
     case "snapshot":
-      return snapshotDOM();
+      return snapshotDOM(args);
     case "click": {
       const node = queryByRef(args.ref);
       if (!node) {

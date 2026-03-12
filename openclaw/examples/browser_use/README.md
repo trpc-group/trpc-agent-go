@@ -11,6 +11,8 @@ What you get:
   back to the model as real image messages.
 - If you want host/sandbox/node routing or a current-tab relay, use the
   browser-server example in `openclaw/examples/browser_server_use/`.
+  That path now also covers download/wait-download, advanced snapshots,
+  cookies/storage, and host-side browser state controls.
 
 ## Requirements
 

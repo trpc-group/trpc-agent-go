@@ -154,14 +154,79 @@ func (d *serverProfileDriver) Call(
 	case mcpToolConsole:
 		path = "/console"
 		body = args
+	case mcpToolCookies:
+		method = http.MethodGet
+		path = "/cookies"
+		body = args
+	case mcpToolCookiesSet:
+		path = "/cookies/set"
+		body = args
+	case mcpToolCookiesClear:
+		path = "/cookies/clear"
+		body = args
+	case mcpToolStorageGet:
+		method = http.MethodGet
+		switch stringValue(args["kind"]) {
+		case "session":
+			path = "/storage/session"
+		default:
+			path = "/storage/local"
+		}
+		body = args
+	case mcpToolStorageSet:
+		switch stringValue(args["kind"]) {
+		case "session":
+			path = "/storage/session/set"
+		default:
+			path = "/storage/local/set"
+		}
+		body = args
+	case mcpToolStorageClear:
+		switch stringValue(args["kind"]) {
+		case "session":
+			path = "/storage/session/clear"
+		default:
+			path = "/storage/local/clear"
+		}
+		body = args
 	case mcpToolPDF:
 		path = "/pdf"
+		body = args
+	case mcpToolDownload:
+		path = "/download"
+		body = args
+	case mcpToolWaitDownload:
+		path = "/wait/download"
 		body = args
 	case mcpToolUpload:
 		path = "/upload"
 		body = args
 	case mcpToolDialog:
 		path = "/dialog"
+		body = args
+	case mcpToolSetOffline:
+		path = "/set/offline"
+		body = args
+	case mcpToolSetHeaders:
+		path = "/set/headers"
+		body = args
+	case mcpToolSetCreds:
+		path = "/set/credentials"
+		body = args
+	case mcpToolSetGeo:
+		path = "/set/geolocation"
+		body = args
+	case mcpToolSetMedia:
+		path = "/set/media"
+		body = args
+	case mcpToolSetTZ:
+		path = "/set/timezone"
+		body = args
+	case mcpToolSetLocale:
+		path = "/set/locale"
+		body = args
+	case mcpToolSetDevice:
+		path = "/set/device"
 		body = args
 	case mcpToolClick:
 		body = map[string]any{"request": mapActArgs(actClick, args)}
@@ -247,6 +312,9 @@ func (d *serverProfileDriver) request(
 		if d.profile != "" {
 			values.Set("profile", d.profile)
 		}
+		for key, value := range queryArgs(body) {
+			values.Set(key, value)
+		}
 		if strings.Contains(fullURL, "?") {
 			fullURL += "&" + values.Encode()
 		} else {
@@ -301,4 +369,23 @@ func (d *serverProfileDriver) request(
 		)
 	}
 	return data, nil
+}
+
+func queryArgs(body any) map[string]string {
+	args, ok := body.(map[string]any)
+	if !ok {
+		return nil
+	}
+	values := make(map[string]string)
+	for key, value := range args {
+		text := strings.TrimSpace(fmt.Sprint(value))
+		if text == "" {
+			continue
+		}
+		if text == "<nil>" {
+			continue
+		}
+		values[key] = text
+	}
+	return values
 }

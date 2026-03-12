@@ -74,6 +74,10 @@ The model can now use:
 - `{"action":"snapshot","profile":"chrome"}`
 - `{"action":"act","profile":"chrome","request":{"kind":"click","ref":"..."}}`
 - `{"action":"act","profile":"chrome","request":{"kind":"scrollIntoView","ref":"..."}}`
+- `{"action":"storage","profile":"chrome","operation":"set","store":"local","key":"token","value":"abc"}`
+- `{"action":"cookies","profile":"openclaw","operation":"get"}`
+- `{"action":"download","profile":"openclaw","ref":"...","path":"report.txt"}`
+- `{"action":"timezone","profile":"openclaw","timezoneId":"Asia/Shanghai"}`
 - `{"action":"snapshot","target":"sandbox"}`
 - `{"action":"snapshot","target":"node","node":"edge"}`
 
@@ -91,8 +95,9 @@ npm run smoke:relay:headed
 ```
 The relay smoke uses Playwright's bundled Chromium by default so the
 extension can load in both headless and headed runs, and the smoke now
-checks snapshot, scrollIntoView, wait, wait-by-fn, evaluate, cropped
-relay screenshots, and host upload flows end to end.
+checks snapshot, scrollIntoView, wait, wait-by-fn, cookies, storage,
+evaluate, cropped relay screenshots, host upload flows, download flows,
+and host advanced snapshot options end to end.
 
 You can also validate the extension logic without launching a browser:
 

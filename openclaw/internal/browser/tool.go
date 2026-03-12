@@ -34,9 +34,21 @@ const (
 	actionScreenshot = "screenshot"
 	actionNavigate   = "navigate"
 	actionConsole    = "console"
+	actionCookies    = "cookies"
+	actionStorage    = "storage"
 	actionPDF        = "pdf"
+	actionDownload   = "download"
+	actionWaitDL     = "waitDownload"
 	actionUpload     = "upload"
 	actionDialog     = "dialog"
+	actionOffline    = "offline"
+	actionHeaders    = "headers"
+	actionCreds      = "credentials"
+	actionGeo        = "geolocation"
+	actionMedia      = "media"
+	actionTimezone   = "timezone"
+	actionLocale     = "locale"
+	actionDevice     = "device"
 	actionAct        = "act"
 )
 
@@ -68,6 +80,12 @@ const (
 	tabActionClose  = "close"
 )
 
+const (
+	stateOpGet   = "get"
+	stateOpSet   = "set"
+	stateOpClear = "clear"
+)
+
 var supportedActions = []string{
 	actionStatus,
 	actionStart,
@@ -81,9 +99,21 @@ var supportedActions = []string{
 	actionScreenshot,
 	actionNavigate,
 	actionConsole,
+	actionCookies,
+	actionStorage,
 	actionPDF,
+	actionDownload,
+	actionWaitDL,
 	actionUpload,
 	actionDialog,
+	actionOffline,
+	actionHeaders,
+	actionCreds,
+	actionGeo,
+	actionMedia,
+	actionTimezone,
+	actionLocale,
+	actionDevice,
 	actionAct,
 }
 
@@ -115,55 +145,73 @@ type actRequest struct {
 }
 
 type input struct {
-	Action         string           `json:"action"`
-	Target         string           `json:"target,omitempty"`
-	Node           string           `json:"node,omitempty"`
-	Profile        string           `json:"profile,omitempty"`
-	TargetURL      string           `json:"targetUrl,omitempty"`
-	URL            string           `json:"url,omitempty"`
-	TargetID       string           `json:"targetId,omitempty"`
-	Limit          *int             `json:"limit,omitempty"`
-	MaxChars       *int             `json:"maxChars,omitempty"`
-	Mode           string           `json:"mode,omitempty"`
-	SnapshotFormat string           `json:"snapshotFormat,omitempty"`
-	Refs           string           `json:"refs,omitempty"`
-	Interactive    *bool            `json:"interactive,omitempty"`
-	Compact        *bool            `json:"compact,omitempty"`
-	Depth          *int             `json:"depth,omitempty"`
-	Selector       string           `json:"selector,omitempty"`
-	Frame          string           `json:"frame,omitempty"`
-	Labels         *bool            `json:"labels,omitempty"`
-	FullPage       *bool            `json:"fullPage,omitempty"`
-	Ref            string           `json:"ref,omitempty"`
-	Element        string           `json:"element,omitempty"`
-	Type           string           `json:"type,omitempty"`
-	Level          string           `json:"level,omitempty"`
-	Paths          []string         `json:"paths,omitempty"`
-	InputRef       string           `json:"inputRef,omitempty"`
-	Filename       string           `json:"filename,omitempty"`
-	TimeoutMs      *int             `json:"timeoutMs,omitempty"`
-	Accept         *bool            `json:"accept,omitempty"`
-	PromptText     string           `json:"promptText,omitempty"`
-	Request        *actRequest      `json:"request,omitempty"`
-	Kind           string           `json:"kind,omitempty"`
-	DoubleClick    *bool            `json:"doubleClick,omitempty"`
-	Button         string           `json:"button,omitempty"`
-	Modifiers      []string         `json:"modifiers,omitempty"`
-	Text           string           `json:"text,omitempty"`
-	Submit         *bool            `json:"submit,omitempty"`
-	Slowly         *bool            `json:"slowly,omitempty"`
-	Key            string           `json:"key,omitempty"`
-	DelayMs        *int             `json:"delayMs,omitempty"`
-	StartRef       string           `json:"startRef,omitempty"`
-	EndRef         string           `json:"endRef,omitempty"`
-	Values         []string         `json:"values,omitempty"`
-	Fields         []map[string]any `json:"fields,omitempty"`
-	Width          *int             `json:"width,omitempty"`
-	Height         *int             `json:"height,omitempty"`
-	TimeMs         *int             `json:"timeMs,omitempty"`
-	TextGone       string           `json:"textGone,omitempty"`
-	LoadState      string           `json:"loadState,omitempty"`
-	Fn             string           `json:"fn,omitempty"`
+	Action         string            `json:"action"`
+	Target         string            `json:"target,omitempty"`
+	Node           string            `json:"node,omitempty"`
+	Profile        string            `json:"profile,omitempty"`
+	TargetURL      string            `json:"targetUrl,omitempty"`
+	URL            string            `json:"url,omitempty"`
+	TargetID       string            `json:"targetId,omitempty"`
+	Operation      string            `json:"operation,omitempty"`
+	Store          string            `json:"store,omitempty"`
+	Value          string            `json:"value,omitempty"`
+	Limit          *int              `json:"limit,omitempty"`
+	MaxChars       *int              `json:"maxChars,omitempty"`
+	Mode           string            `json:"mode,omitempty"`
+	SnapshotFormat string            `json:"snapshotFormat,omitempty"`
+	Refs           string            `json:"refs,omitempty"`
+	Interactive    *bool             `json:"interactive,omitempty"`
+	Compact        *bool             `json:"compact,omitempty"`
+	Depth          *int              `json:"depth,omitempty"`
+	Selector       string            `json:"selector,omitempty"`
+	Frame          string            `json:"frame,omitempty"`
+	Labels         *bool             `json:"labels,omitempty"`
+	FullPage       *bool             `json:"fullPage,omitempty"`
+	Ref            string            `json:"ref,omitempty"`
+	Element        string            `json:"element,omitempty"`
+	Type           string            `json:"type,omitempty"`
+	Level          string            `json:"level,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	Offline        *bool             `json:"offline,omitempty"`
+	Username       string            `json:"username,omitempty"`
+	Password       string            `json:"password,omitempty"`
+	Cookie         map[string]any    `json:"cookie,omitempty"`
+	Path           string            `json:"path,omitempty"`
+	Paths          []string          `json:"paths,omitempty"`
+	InputRef       string            `json:"inputRef,omitempty"`
+	Filename       string            `json:"filename,omitempty"`
+	TimeoutMs      *int              `json:"timeoutMs,omitempty"`
+	Clear          *bool             `json:"clear,omitempty"`
+	Accept         *bool             `json:"accept,omitempty"`
+	PromptText     string            `json:"promptText,omitempty"`
+	Latitude       *float64          `json:"latitude,omitempty"`
+	Longitude      *float64          `json:"longitude,omitempty"`
+	Accuracy       *float64          `json:"accuracy,omitempty"`
+	Origin         string            `json:"origin,omitempty"`
+	ColorScheme    string            `json:"colorScheme,omitempty"`
+	TimezoneID     string            `json:"timezoneId,omitempty"`
+	Locale         string            `json:"locale,omitempty"`
+	Name           string            `json:"name,omitempty"`
+	Request        *actRequest       `json:"request,omitempty"`
+	Kind           string            `json:"kind,omitempty"`
+	DoubleClick    *bool             `json:"doubleClick,omitempty"`
+	Button         string            `json:"button,omitempty"`
+	Modifiers      []string          `json:"modifiers,omitempty"`
+	Text           string            `json:"text,omitempty"`
+	Submit         *bool             `json:"submit,omitempty"`
+	Slowly         *bool             `json:"slowly,omitempty"`
+	Key            string            `json:"key,omitempty"`
+	DelayMs        *int              `json:"delayMs,omitempty"`
+	StartRef       string            `json:"startRef,omitempty"`
+	EndRef         string            `json:"endRef,omitempty"`
+	Values         []string          `json:"values,omitempty"`
+	Fields         []map[string]any  `json:"fields,omitempty"`
+	Width          *int              `json:"width,omitempty"`
+	Height         *int              `json:"height,omitempty"`
+	TimeMs         *int              `json:"timeMs,omitempty"`
+	TextGone       string            `json:"textGone,omitempty"`
+	LoadState      string            `json:"loadState,omitempty"`
+	Fn             string            `json:"fn,omitempty"`
 }
 
 // Tool implements the first-class browser tool contract.
@@ -267,18 +315,19 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 		return nil, fmt.Errorf("invalid browser args: %w", err)
 	}
 
-	action := strings.ToLower(strings.TrimSpace(in.Action))
+	action := strings.TrimSpace(in.Action)
 	if action == "" {
 		return nil, errors.New("browser action is required")
 	}
+	actionKey := strings.ToLower(action)
 	if err := validateTargetSelection(in); err != nil {
 		return nil, err
 	}
 
-	switch action {
-	case actionProfiles:
+	switch actionKey {
+	case strings.ToLower(actionProfiles):
 		return t.handleProfiles(ctx), nil
-	case actionStatus:
+	case strings.ToLower(actionStatus):
 		return t.handleStatus(ctx)
 	}
 
@@ -288,22 +337,22 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 	driverType := t.driverTypeForInput(profileName, in)
 
-	switch action {
-	case actionStart:
+	switch actionKey {
+	case strings.ToLower(actionStart):
 		return t.handleStart(ctx, profileName, driverType, drv)
-	case actionStop:
+	case strings.ToLower(actionStop):
 		return t.handleStop(profileName, driverType, drv)
-	case actionTabs:
+	case strings.ToLower(actionTabs):
 		return t.handleTabs(ctx, profileName, driverType, drv, in)
-	case actionOpen:
+	case strings.ToLower(actionOpen):
 		return t.handleOpen(ctx, profileName, driverType, drv, in)
-	case actionFocus:
+	case strings.ToLower(actionFocus):
 		return t.handleFocus(ctx, profileName, driverType, drv, in)
-	case actionClose:
+	case strings.ToLower(actionClose):
 		return t.handleClose(ctx, profileName, driverType, drv, in)
-	case actionSnapshot:
+	case strings.ToLower(actionSnapshot):
 		return t.handleSnapshot(ctx, profileName, driverType, drv, in)
-	case actionScreenshot:
+	case strings.ToLower(actionScreenshot):
 		return t.handleScreenshot(
 			ctx,
 			profileName,
@@ -311,7 +360,7 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 			drv,
 			in,
 		)
-	case actionNavigate:
+	case strings.ToLower(actionNavigate):
 		return t.handleNavigate(
 			ctx,
 			profileName,
@@ -319,15 +368,111 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 			drv,
 			in,
 		)
-	case actionConsole:
+	case strings.ToLower(actionConsole):
 		return t.handleConsole(ctx, profileName, driverType, drv, in)
-	case actionPDF:
+	case strings.ToLower(actionCookies):
+		return t.handleCookies(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionStorage):
+		return t.handleStorage(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionPDF):
 		return t.handlePDF(ctx, profileName, driverType, drv, in)
-	case actionUpload:
+	case strings.ToLower(actionDownload):
+		return t.handleDownload(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionWaitDL):
+		return t.handleWaitDownload(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionUpload):
 		return t.handleUpload(ctx, profileName, driverType, drv, in)
-	case actionDialog:
+	case strings.ToLower(actionDialog):
 		return t.handleDialog(ctx, profileName, driverType, drv, in)
-	case actionAct:
+	case strings.ToLower(actionOffline):
+		return t.handleOffline(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionHeaders):
+		return t.handleHeaders(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionCreds):
+		return t.handleCredentials(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionGeo):
+		return t.handleGeolocation(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionMedia):
+		return t.handleMedia(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionTimezone):
+		return t.handleTimezone(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionLocale):
+		return t.handleLocale(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionDevice):
+		return t.handleDevice(
+			ctx,
+			profileName,
+			driverType,
+			drv,
+			in,
+		)
+	case strings.ToLower(actionAct):
 		return t.handleAct(ctx, profileName, driverType, drv, in)
 	default:
 		return nil, fmt.Errorf(
@@ -379,6 +524,9 @@ func browserSchema() *tool.Schema {
 		"targetUrl":      stringSchema("Alias for open URL."),
 		"url":            stringSchema("Browser URL."),
 		"targetId":       stringSchema("Tab target id."),
+		"operation":      stringSchema("State operation."),
+		"store":          stringSchema("Storage scope."),
+		"value":          stringSchema("State value."),
 		"limit":          numberSchema("Tab list limit."),
 		"maxChars":       numberSchema("Max untrusted text chars."),
 		"mode":           stringSchema("Snapshot mode."),
@@ -395,24 +543,47 @@ func browserSchema() *tool.Schema {
 		"element":        stringSchema("Element description."),
 		"type":           stringSchema("Image type."),
 		"level":          stringSchema("Console level."),
-		"paths":          stringArraySchema("Upload paths."),
-		"inputRef":       stringSchema("Upload input ref."),
-		"filename":       stringSchema("Optional output filename."),
-		"timeoutMs":      numberSchema("Timeout in milliseconds."),
-		"accept":         boolSchema("Dialog accept flag."),
-		"promptText":     stringSchema("Dialog prompt text."),
-		"kind":           stringSchema("Legacy act kind."),
-		"doubleClick":    boolSchema("Double click."),
-		"button":         stringSchema("Mouse button."),
-		"modifiers":      stringArraySchema("Key modifiers."),
-		"text":           stringSchema("Input text."),
-		"submit":         boolSchema("Submit after typing."),
-		"slowly":         boolSchema("Type slowly."),
-		"key":            stringSchema("Keyboard key."),
-		"delayMs":        numberSchema("Key delay."),
-		"startRef":       stringSchema("Drag start ref."),
-		"endRef":         stringSchema("Drag end ref."),
-		"values":         stringArraySchema("Selected option values."),
+		"headers": {
+			Type: "object",
+			AdditionalProperties: &tool.Schema{
+				Type: "string",
+			},
+		},
+		"offline":  boolSchema("Offline mode."),
+		"username": stringSchema("HTTP auth username."),
+		"password": stringSchema("HTTP auth password."),
+		"cookie": {
+			Type:                 "object",
+			AdditionalProperties: true,
+		},
+		"path":        stringSchema("Download output path."),
+		"paths":       stringArraySchema("Upload paths."),
+		"inputRef":    stringSchema("Upload input ref."),
+		"filename":    stringSchema("Optional output filename."),
+		"timeoutMs":   numberSchema("Timeout in milliseconds."),
+		"clear":       boolSchema("Clear existing override."),
+		"accept":      boolSchema("Dialog accept flag."),
+		"promptText":  stringSchema("Dialog prompt text."),
+		"latitude":    numberSchema("Geolocation latitude."),
+		"longitude":   numberSchema("Geolocation longitude."),
+		"accuracy":    numberSchema("Geolocation accuracy."),
+		"origin":      stringSchema("Permission origin."),
+		"colorScheme": stringSchema("Color scheme."),
+		"timezoneId":  stringSchema("Timezone override."),
+		"locale":      stringSchema("Locale override."),
+		"name":        stringSchema("Device name."),
+		"kind":        stringSchema("Legacy act kind."),
+		"doubleClick": boolSchema("Double click."),
+		"button":      stringSchema("Mouse button."),
+		"modifiers":   stringArraySchema("Key modifiers."),
+		"text":        stringSchema("Input text."),
+		"submit":      boolSchema("Submit after typing."),
+		"slowly":      boolSchema("Type slowly."),
+		"key":         stringSchema("Keyboard or state key."),
+		"delayMs":     numberSchema("Key delay."),
+		"startRef":    stringSchema("Drag start ref."),
+		"endRef":      stringSchema("Drag end ref."),
+		"values":      stringArraySchema("Selected option values."),
 		"fields": {
 			Type: "array",
 			Items: &tool.Schema{
@@ -849,25 +1020,29 @@ func (t *Tool) handleSnapshot(
 	if filename := strings.TrimSpace(in.Filename); filename != "" {
 		args["filename"] = filename
 	}
+	if driverType != driverTypeBrowserServer &&
+		hasServerSnapshotArgs(in) {
+		return Result{}, errors.New(
+			"advanced snapshot options are only supported by " +
+				"the browser-server driver",
+		)
+	}
 	if driverType == driverTypeBrowserServer {
-		if limit := intValue(in.Limit); limit > 0 {
-			args["limit"] = limit
-		}
-		if selector := strings.TrimSpace(in.Selector); selector != "" {
-			args["selector"] = selector
-		}
+		addServerSnapshotArgs(args, in)
 	}
 	raw, err := drv.Call(ctx, mcpToolSnapshot, args)
 	if err != nil {
 		return Result{}, err
 	}
-	return t.textResult(
+	result := t.textResult(
 		actionSnapshot,
 		profile,
 		driverType,
 		in.MaxChars,
 		raw,
-	), nil
+	)
+	result.Content = raw
+	return result, nil
 }
 
 func (t *Tool) handleScreenshot(
@@ -979,6 +1154,447 @@ func (t *Tool) handleConsole(
 	), nil
 }
 
+func (t *Tool) handleCookies(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser cookies are only supported by the " +
+				"browser-server driver",
+		)
+	}
+
+	op := stateOperation(in.Operation)
+	args := map[string]any{}
+	toolName := mcpToolCookies
+	switch op {
+	case "", stateOpGet:
+	case stateOpSet:
+		if len(in.Cookie) == 0 {
+			return Result{}, errors.New(
+				"browser cookies set requires cookie",
+			)
+		}
+		toolName = mcpToolCookiesSet
+		args["cookie"] = in.Cookie
+	case stateOpClear:
+		toolName = mcpToolCookiesClear
+	default:
+		return Result{}, fmt.Errorf(
+			"unsupported cookies operation %q",
+			in.Operation,
+		)
+	}
+
+	raw, err := drv.Call(ctx, toolName, args)
+	if err != nil {
+		return Result{}, err
+	}
+	result := t.textResult(
+		actionCookies,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	)
+	result.Content = raw
+	return result, nil
+}
+
+func (t *Tool) handleStorage(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser storage is only supported by the " +
+				"browser-server driver",
+		)
+	}
+
+	scope := storageScope(in.Store)
+	args := map[string]any{
+		"kind": scope,
+	}
+	if key := strings.TrimSpace(in.Key); key != "" {
+		args["key"] = key
+	}
+
+	op := stateOperation(in.Operation)
+	toolName := mcpToolStorageGet
+	switch op {
+	case "", stateOpGet:
+	case stateOpSet:
+		if strings.TrimSpace(in.Key) == "" {
+			return Result{}, errors.New(
+				"browser storage set requires key",
+			)
+		}
+		toolName = mcpToolStorageSet
+		args["value"] = in.Value
+	case stateOpClear:
+		toolName = mcpToolStorageClear
+	default:
+		return Result{}, fmt.Errorf(
+			"unsupported storage operation %q",
+			in.Operation,
+		)
+	}
+
+	raw, err := drv.Call(ctx, toolName, args)
+	if err != nil {
+		return Result{}, err
+	}
+	result := t.textResult(
+		actionStorage,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	)
+	result.Content = raw
+	return result, nil
+}
+
+func (t *Tool) handleOffline(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser offline is only supported by the " +
+				"browser-server driver",
+		)
+	}
+	if in.Offline == nil {
+		return Result{}, errors.New("browser offline requires offline")
+	}
+
+	raw, err := drv.Call(ctx, mcpToolSetOffline, map[string]any{
+		"offline": *in.Offline,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	result := t.textResult(
+		actionOffline,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	)
+	result.Content = raw
+	return result, nil
+}
+
+func (t *Tool) handleHeaders(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser headers are only supported by the " +
+				"browser-server driver",
+		)
+	}
+
+	headers := map[string]string{}
+	for key, value := range in.Headers {
+		headers[key] = value
+	}
+	raw, err := drv.Call(ctx, mcpToolSetHeaders, map[string]any{
+		"headers": headers,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	result := t.textResult(
+		actionHeaders,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	)
+	result.Content = raw
+	return result, nil
+}
+
+func (t *Tool) handleCredentials(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser credentials are only supported by the " +
+				"browser-server driver",
+		)
+	}
+
+	args := map[string]any{}
+	if boolValue(in.Clear) {
+		args["clear"] = true
+	} else {
+		username := strings.TrimSpace(in.Username)
+		if username == "" {
+			return Result{}, errors.New(
+				"browser credentials requires username or clear",
+			)
+		}
+		args["username"] = username
+		args["password"] = in.Password
+	}
+
+	raw, err := drv.Call(ctx, mcpToolSetCreds, args)
+	if err != nil {
+		return Result{}, err
+	}
+	result := t.textResult(
+		actionCreds,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	)
+	result.Content = raw
+	return result, nil
+}
+
+func (t *Tool) handleGeolocation(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser geolocation is only supported by the " +
+				"browser-server driver",
+		)
+	}
+
+	args := map[string]any{}
+	if boolValue(in.Clear) {
+		args["clear"] = true
+	} else {
+		if in.Latitude == nil || in.Longitude == nil {
+			return Result{}, errors.New(
+				"browser geolocation requires latitude and longitude",
+			)
+		}
+		args["latitude"] = *in.Latitude
+		args["longitude"] = *in.Longitude
+		if in.Accuracy != nil {
+			args["accuracy"] = *in.Accuracy
+		}
+	}
+	if origin := strings.TrimSpace(in.Origin); origin != "" {
+		args["origin"] = origin
+	}
+
+	raw, err := drv.Call(ctx, mcpToolSetGeo, args)
+	if err != nil {
+		return Result{}, err
+	}
+	result := t.textResult(
+		actionGeo,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	)
+	result.Content = raw
+	return result, nil
+}
+
+func (t *Tool) handleMedia(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser media is only supported by the " +
+				"browser-server driver",
+		)
+	}
+	colorScheme := strings.TrimSpace(in.ColorScheme)
+	if colorScheme == "" {
+		return Result{}, errors.New("browser media requires colorScheme")
+	}
+
+	raw, err := drv.Call(ctx, mcpToolSetMedia, map[string]any{
+		"colorScheme": colorScheme,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	result := t.textResult(
+		actionMedia,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	)
+	result.Content = raw
+	return result, nil
+}
+
+func (t *Tool) handleTimezone(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser timezone is only supported by the " +
+				"browser-server driver",
+		)
+	}
+	timezoneID := strings.TrimSpace(in.TimezoneID)
+	if timezoneID == "" {
+		return Result{}, errors.New(
+			"browser timezone requires timezoneId",
+		)
+	}
+
+	raw, err := drv.Call(ctx, mcpToolSetTZ, map[string]any{
+		"timezoneId": timezoneID,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	result := t.textResult(
+		actionTimezone,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	)
+	result.Content = raw
+	return result, nil
+}
+
+func (t *Tool) handleLocale(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser locale is only supported by the " +
+				"browser-server driver",
+		)
+	}
+	locale := strings.TrimSpace(in.Locale)
+	if locale == "" {
+		return Result{}, errors.New("browser locale requires locale")
+	}
+
+	raw, err := drv.Call(ctx, mcpToolSetLocale, map[string]any{
+		"locale": locale,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	result := t.textResult(
+		actionLocale,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	)
+	result.Content = raw
+	return result, nil
+}
+
+func (t *Tool) handleDevice(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser device is only supported by the " +
+				"browser-server driver",
+		)
+	}
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		return Result{}, errors.New("browser device requires name")
+	}
+
+	raw, err := drv.Call(ctx, mcpToolSetDevice, map[string]any{
+		"name": name,
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	result := t.textResult(
+		actionDevice,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	)
+	result.Content = raw
+	return result, nil
+}
+
 func (t *Tool) handlePDF(
 	ctx context.Context,
 	profile string,
@@ -1000,6 +1616,88 @@ func (t *Tool) handlePDF(
 	}
 	return t.textResult(
 		actionPDF,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	), nil
+}
+
+func (t *Tool) handleDownload(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser download is only supported by the " +
+				"browser-server driver",
+		)
+	}
+	ref := strings.TrimSpace(in.Ref)
+	if ref == "" {
+		return Result{}, errors.New("browser download requires ref")
+	}
+
+	args := map[string]any{
+		"ref": ref,
+	}
+	if outputPath := downloadOutputPath(in); outputPath != "" {
+		args["path"] = outputPath
+	}
+	if timeout := intValue(in.TimeoutMs); timeout > 0 {
+		args["timeoutMs"] = timeout
+	}
+
+	raw, err := drv.Call(ctx, mcpToolDownload, args)
+	if err != nil {
+		return Result{}, err
+	}
+	return t.textResult(
+		actionDownload,
+		profile,
+		driverType,
+		in.MaxChars,
+		raw,
+	), nil
+}
+
+func (t *Tool) handleWaitDownload(
+	ctx context.Context,
+	profile string,
+	driverType string,
+	drv driver,
+	in input,
+) (Result, error) {
+	if err := selectTarget(ctx, drv, in.TargetID); err != nil {
+		return Result{}, err
+	}
+	if driverType != driverTypeBrowserServer {
+		return Result{}, errors.New(
+			"browser waitDownload is only supported by the " +
+				"browser-server driver",
+		)
+	}
+
+	args := map[string]any{}
+	if outputPath := downloadOutputPath(in); outputPath != "" {
+		args["path"] = outputPath
+	}
+	if timeout := intValue(in.TimeoutMs); timeout > 0 {
+		args["timeoutMs"] = timeout
+	}
+
+	raw, err := drv.Call(ctx, mcpToolWaitDownload, args)
+	if err != nil {
+		return Result{}, err
+	}
+	return t.textResult(
+		actionWaitDL,
 		profile,
 		driverType,
 		in.MaxChars,
@@ -1430,6 +2128,19 @@ func intValue(v *int) int {
 	return *v
 }
 
+func stateOperation(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
+}
+
+func storageScope(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "session":
+		return "session"
+	default:
+		return "local"
+	}
+}
+
 func addServerTimeoutArg(
 	args map[string]any,
 	driverType string,
@@ -1441,6 +2152,59 @@ func addServerTimeoutArg(
 	if value := intValue(timeout); value > 0 {
 		args["timeoutMs"] = value
 	}
+}
+
+func hasServerSnapshotArgs(in input) bool {
+	return intValue(in.Limit) > 0 ||
+		strings.TrimSpace(in.Mode) != "" ||
+		strings.TrimSpace(in.SnapshotFormat) != "" ||
+		strings.TrimSpace(in.Refs) != "" ||
+		in.Interactive != nil ||
+		in.Compact != nil ||
+		intValue(in.Depth) > 0 ||
+		strings.TrimSpace(in.Selector) != "" ||
+		strings.TrimSpace(in.Frame) != "" ||
+		in.Labels != nil
+}
+
+func addServerSnapshotArgs(args map[string]any, in input) {
+	if limit := intValue(in.Limit); limit > 0 {
+		args["limit"] = limit
+	}
+	if mode := strings.TrimSpace(in.Mode); mode != "" {
+		args["mode"] = mode
+	}
+	if format := strings.TrimSpace(in.SnapshotFormat); format != "" {
+		args["snapshotFormat"] = format
+	}
+	if refs := strings.TrimSpace(in.Refs); refs != "" {
+		args["refs"] = refs
+	}
+	if in.Interactive != nil {
+		args["interactive"] = *in.Interactive
+	}
+	if in.Compact != nil {
+		args["compact"] = *in.Compact
+	}
+	if depth := intValue(in.Depth); depth > 0 {
+		args["depth"] = depth
+	}
+	if selector := strings.TrimSpace(in.Selector); selector != "" {
+		args["selector"] = selector
+	}
+	if frame := strings.TrimSpace(in.Frame); frame != "" {
+		args["frame"] = frame
+	}
+	if in.Labels != nil {
+		args["labels"] = *in.Labels
+	}
+}
+
+func downloadOutputPath(in input) string {
+	if outputPath := strings.TrimSpace(in.Path); outputPath != "" {
+		return outputPath
+	}
+	return strings.TrimSpace(in.Filename)
 }
 
 func describeElement(ref string, fallback string) string {

@@ -1514,6 +1514,381 @@ func TestToolCall_SnapshotPassesBrowserServerOptions(t *testing.T) {
 	require.Equal(t, 5, drv.calls[0].Args["limit"])
 }
 
+func TestToolCall_SnapshotPassesAdvancedBrowserServerOptions(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolSnapshot: map[string]any{
+				"content": []map[string]any{{
+					"type": "text",
+					"text": "snapshot",
+				}},
+				"labels": true,
+			},
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":         actionSnapshot,
+			"mode":           "efficient",
+			"snapshotFormat": "role",
+			"refs":           "role",
+			"interactive":    true,
+			"compact":        true,
+			"depth":          4,
+			"selector":       "#main",
+			"frame":          "iframe#main",
+			"labels":         true,
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionSnapshot, got.Action)
+	require.NotNil(t, got.Content)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, "efficient", drv.calls[0].Args["mode"])
+	require.Equal(t, "role", drv.calls[0].Args["snapshotFormat"])
+	require.Equal(t, "role", drv.calls[0].Args["refs"])
+	require.Equal(t, true, drv.calls[0].Args["interactive"])
+	require.Equal(t, true, drv.calls[0].Args["compact"])
+	require.Equal(t, 4, drv.calls[0].Args["depth"])
+	require.Equal(t, "#main", drv.calls[0].Args["selector"])
+	require.Equal(t, "iframe#main", drv.calls[0].Args["frame"])
+	require.Equal(t, true, drv.calls[0].Args["labels"])
+}
+
+func TestToolCall_SnapshotRejectsAdvancedOptionsForMCPDriver(t *testing.T) {
+	t.Parallel()
+
+	_, err := newTestTool(&fakeDriver{}).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionSnapshot,
+			"labels": true,
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "browser-server")
+}
+
+func TestToolCall_DownloadPassesBrowserServerArgs(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolDownload: textPayload("downloaded"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":    actionDownload,
+			"ref":       "e1",
+			"path":      "report.pdf",
+			"timeoutMs": 2500,
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionDownload, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolDownload, drv.calls[0].Tool)
+	require.Equal(t, "e1", drv.calls[0].Args["ref"])
+	require.Equal(t, "report.pdf", drv.calls[0].Args["path"])
+	require.Equal(t, 2500, drv.calls[0].Args["timeoutMs"])
+}
+
+func TestToolCall_WaitDownloadPassesBrowserServerArgs(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolWaitDownload: textPayload("downloaded"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":    actionWaitDL,
+			"path":      "report.pdf",
+			"timeoutMs": 2500,
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionWaitDL, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolWaitDownload, drv.calls[0].Tool)
+	require.Equal(t, "report.pdf", drv.calls[0].Args["path"])
+	require.Equal(t, 2500, drv.calls[0].Args["timeoutMs"])
+}
+
+func TestToolCall_DownloadRejectsMCPDriver(t *testing.T) {
+	t.Parallel()
+
+	_, err := newTestTool(&fakeDriver{}).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionDownload,
+			"ref":    "e1",
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "browser-server")
+}
+
+func TestToolCall_CookiesSetPassesBrowserServerArgs(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolCookiesSet: textPayload("set"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":    actionCookies,
+			"operation": "set",
+			"cookie": map[string]any{
+				"name":  "sid",
+				"value": "abc",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionCookies, got.Action)
+	require.NotNil(t, got.Content)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolCookiesSet, drv.calls[0].Tool)
+	cookie := drv.calls[0].Args["cookie"].(map[string]any)
+	require.Equal(t, "sid", cookie["name"])
+	require.Equal(t, "abc", cookie["value"])
+}
+
+func TestToolCall_StorageSetPassesBrowserServerArgs(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolStorageSet: textPayload("set"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":    actionStorage,
+			"operation": "set",
+			"store":     "session",
+			"key":       "token",
+			"value":     "abc",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionStorage, got.Action)
+	require.NotNil(t, got.Content)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolStorageSet, drv.calls[0].Tool)
+	require.Equal(t, "session", drv.calls[0].Args["kind"])
+	require.Equal(t, "token", drv.calls[0].Args["key"])
+	require.Equal(t, "abc", drv.calls[0].Args["value"])
+}
+
+func TestToolCall_HeadersPassesBrowserServerArgs(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolSetHeaders: textPayload("headers"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionHeaders,
+			"headers": map[string]string{
+				"X-Test": "1",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionHeaders, got.Action)
+	require.NotNil(t, got.Content)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolSetHeaders, drv.calls[0].Tool)
+	headers := drv.calls[0].Args["headers"].(map[string]string)
+	require.Equal(t, "1", headers["X-Test"])
+}
+
+func TestToolCall_GeolocationRequiresCoordinates(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolSetGeo: textPayload("geo"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionGeo,
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "latitude and longitude")
+}
+
+func TestToolCall_TimezoneRejectsMCPDriver(t *testing.T) {
+	t.Parallel()
+
+	_, err := newTestTool(&fakeDriver{}).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":     actionTimezone,
+			"timezoneId": "Asia/Shanghai",
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "browser-server")
+}
+
 func TestToolCall_ActWaitPassesSupportedArgs(t *testing.T) {
 	t.Parallel()
 

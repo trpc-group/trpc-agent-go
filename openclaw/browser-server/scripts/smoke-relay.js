@@ -62,7 +62,7 @@ async function main() {
     let [worker] = context.serviceWorkers();
     if (!worker) {
       worker = await context.waitForEvent("serviceworker", {
-        timeout: 10000
+        timeout: 30000
       });
     }
 
@@ -136,6 +136,43 @@ async function main() {
       })
     });
     assert.match(extractText(waitedByFn), /Wait predicate matched/);
+
+    const cookieSet = await fetchJSON(`${baseURL}/cookies/set`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "chrome",
+        cookie: {
+          name: "sid",
+          value: "abc"
+        }
+      })
+    });
+    assert.match(extractText(cookieSet), /Set cookie sid/);
+
+    const cookies = await fetchJSON(`${baseURL}/cookies?profile=chrome`, {
+      headers: authHeaders(config.token)
+    });
+    assert.match(extractText(cookies), /sid=abc/);
+
+    const storageSet = await fetchJSON(`${baseURL}/storage/local/set`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "chrome",
+        key: "token",
+        value: "abc"
+      })
+    });
+    assert.match(extractText(storageSet), /Set localStorage token/);
+
+    const storage = await fetchJSON(
+      `${baseURL}/storage/local?profile=chrome&key=token`,
+      {
+        headers: authHeaders(config.token)
+      }
+    );
+    assert.match(extractText(storage), /token=abc/);
 
     const evaluated = await fetchJSON(`${baseURL}/act`, {
       method: "POST",

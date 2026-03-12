@@ -7,7 +7,8 @@ What it gives you:
 
 - a `chrome` browser profile backed by your current tab
 - attach and detach from the popup
-- snapshots, screenshots, navigation, and tab focus/close
+- snapshots, screenshots, navigation, cookies, storage, and tab
+  focus/close
 - relay-side `act` support for `click`, `type`, `press`, `hover`,
   `scrollIntoView`, `select`, `fill`, `drag`, `wait`, `evaluate`, and
   `resize`
@@ -41,8 +42,12 @@ http://127.0.0.1:19790?token=secret-token
 Current relay limits:
 
 - `console`, `pdf`, `upload`, and `dialog` remain host-profile features
+- cookies and storage are scoped to the current page origin and visible
+  page context
 - screenshots are still limited to the visible tab viewport, but they
   can now crop to a visible `ref` or CSS `element`
+- snapshots support `selector`, `interactive`, `compact`, `depth`, and
+  optional overlay labels; `frame` remains unsupported in relay mode
 - waits in the relay are best-effort DOM/browser checks, not full CDP
   lifecycle hooks
 - relay `evaluate` and `wait --fn` accept a constrained arrow-function

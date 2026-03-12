@@ -437,3 +437,177 @@ test("executeCommand screenshot crops relay refs and honors jpeg", async () => {
     Buffer.from("cropped").toString("base64")
   );
 });
+
+test("executeCommand snapshot with labels appends an image", async () => {
+  const actions = [];
+  const sandbox = loadBackgroundSandbox({
+    chrome: chromeStub({
+      tabs: {
+        async get() {
+          return { id: 1, windowId: 9 };
+        },
+        async captureVisibleTab(windowId, options) {
+          assert.equal(windowId, 9);
+          assert.equal(options.format, "png");
+          return "data:image/png;base64,ZmFrZS1pbWFnZQ==";
+        }
+      },
+      scripting: {
+        async executeScript(options) {
+          const action = options.args[0].action;
+          actions.push(action);
+          if (action === "snapshot_prepare_labels") {
+            return [{
+              result: {
+                snapshot: {
+                  title: "Example",
+                  url: "https://example.com",
+                  items: [{ ref: "e1" }],
+                  text: "Page: Example"
+                },
+                content: [{
+                  type: "text",
+                  text: "Page: Example"
+                }],
+                labels: true,
+                labelsCount: 1,
+                labelsSkipped: 0
+              }
+            }];
+          }
+          return [{ result: { ok: true } }];
+        }
+      }
+    })
+  });
+
+  const result = await sandbox.executeCommand({
+    action: "snapshot",
+    tabId: 1,
+    args: {
+      labels: true
+    }
+  });
+
+  assert.deepEqual(actions, [
+    "snapshot_prepare_labels",
+    "snapshot_cleanup_labels"
+  ]);
+  assert.equal(result.labels, true);
+  assert.equal(result.content.length, 2);
+  assert.equal(result.content[1].type, "image");
+  assert.equal(result.content[1].mimeType, "image/png");
+});
+
+test("relayExecutor storage actions read and write page storage", async () => {
+  const relayExecutor = loadRelayExecutor();
+  const storage = new Map();
+  const storageAPI = {
+    get length() {
+      return storage.size;
+    },
+    key(index) {
+      return Array.from(storage.keys())[index] || null;
+    },
+    getItem(key) {
+      return storage.has(key) ? storage.get(key) : null;
+    },
+    setItem(key, value) {
+      storage.set(key, value);
+    },
+    clear() {
+      storage.clear();
+    }
+  };
+  const sandbox = executorSandbox({
+    getAttribute() {
+      return null;
+    }
+  });
+  sandbox.window.localStorage = storageAPI;
+  sandbox.window.sessionStorage = storageAPI;
+  const isolatedExecutor = vm.runInNewContext(
+    `(${relayExecutor.toString()})`,
+    sandbox
+  );
+
+  await isolatedExecutor({
+    action: "storage_set",
+    args: {
+      kind: "local",
+      key: "token",
+      value: "abc"
+    }
+  });
+  const result = await isolatedExecutor({
+    action: "storage_get",
+    args: {
+      kind: "local",
+      key: "token"
+    }
+  });
+
+  assert.equal(storage.get("token"), "abc");
+  assert.equal(result.values.token, "abc");
+  assert.match(result.content[0].text, /token=abc/);
+});
+
+test("relayExecutor cookies actions update visible page cookies", async () => {
+  const relayExecutor = loadRelayExecutor();
+  const cookies = new Map();
+  const sandbox = executorSandbox({
+    getAttribute() {
+      return null;
+    }
+  });
+  Object.defineProperty(sandbox.document, "cookie", {
+    get() {
+      return Array.from(cookies.entries()).map(([key, value]) => {
+        return `${key}=${value}`;
+      }).join("; ");
+    },
+    set(value) {
+      const [pair, ...parts] = `${value || ""}`.split(";");
+      const [rawName, ...rawValue] = pair.split("=");
+      const name = decodeURIComponent((rawName || "").trim());
+      const cookieValue = decodeURIComponent(rawValue.join("=") || "");
+      const expired = parts.some((part) => {
+        return part.toLowerCase().includes("expires=thu, 01 jan 1970");
+      });
+      if (!name) {
+        return;
+      }
+      if (expired || cookieValue === "") {
+        cookies.delete(name);
+        return;
+      }
+      cookies.set(name, cookieValue);
+    }
+  });
+  const isolatedExecutor = vm.runInNewContext(
+    `(${relayExecutor.toString()})`,
+    sandbox
+  );
+
+  await isolatedExecutor({
+    action: "cookies_set",
+    args: {
+      cookie: {
+        name: "sid",
+        value: "abc"
+      }
+    }
+  });
+  const afterSet = await isolatedExecutor({
+    action: "cookies_get",
+    args: {}
+  });
+  await isolatedExecutor({
+    action: "cookies_clear",
+    args: {}
+  });
+
+  assert.equal(afterSet.cookies[0].name, "sid");
+  assert.equal(afterSet.cookies[0].value, "abc");
+  assert.equal(cookies.size, 0);
+});

@@ -137,8 +137,64 @@ export async function startServer(env = process.env) {
         json(res, 200, await runtime.console(profile, body));
         return;
       }
+      if (req.method === "GET" && url.pathname === "/cookies") {
+        json(res, 200, await runtime.cookies(profile, {
+          targetId: `${url.searchParams.get("targetId") || ""}`.trim()
+        }));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/cookies/set") {
+        json(res, 200, await runtime.cookiesSet(profile, body));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/cookies/clear") {
+        json(res, 200, await runtime.cookiesClear(profile, body));
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/storage/local") {
+        json(res, 200, await runtime.storage(profile, "local", {
+          targetId: `${url.searchParams.get("targetId") || ""}`.trim(),
+          key: `${url.searchParams.get("key") || ""}`.trim()
+        }));
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/storage/session") {
+        json(res, 200, await runtime.storage(profile, "session", {
+          targetId: `${url.searchParams.get("targetId") || ""}`.trim(),
+          key: `${url.searchParams.get("key") || ""}`.trim()
+        }));
+        return;
+      }
+      if (req.method === "POST" &&
+        url.pathname === "/storage/local/set") {
+        json(res, 200, await runtime.storageSet(profile, "local", body));
+        return;
+      }
+      if (req.method === "POST" &&
+        url.pathname === "/storage/session/set") {
+        json(res, 200, await runtime.storageSet(profile, "session", body));
+        return;
+      }
+      if (req.method === "POST" &&
+        url.pathname === "/storage/local/clear") {
+        json(res, 200, await runtime.storageClear(profile, "local", body));
+        return;
+      }
+      if (req.method === "POST" &&
+        url.pathname === "/storage/session/clear") {
+        json(res, 200, await runtime.storageClear(profile, "session", body));
+        return;
+      }
       if (req.method === "POST" && url.pathname === "/pdf") {
         json(res, 200, await runtime.pdf(profile, body));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/download") {
+        json(res, 200, await runtime.download(profile, body));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/wait/download") {
+        json(res, 200, await runtime.waitDownload(profile, body));
         return;
       }
       if (req.method === "POST" && url.pathname === "/upload") {
@@ -147,6 +203,40 @@ export async function startServer(env = process.env) {
       }
       if (req.method === "POST" && url.pathname === "/dialog") {
         json(res, 200, await runtime.dialog(profile, body));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/set/offline") {
+        json(res, 200, await runtime.setOffline(profile, body));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/set/headers") {
+        json(res, 200, await runtime.setHeaders(profile, body));
+        return;
+      }
+      if (req.method === "POST" &&
+        url.pathname === "/set/credentials") {
+        json(res, 200, await runtime.setCredentials(profile, body));
+        return;
+      }
+      if (req.method === "POST" &&
+        url.pathname === "/set/geolocation") {
+        json(res, 200, await runtime.setGeolocation(profile, body));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/set/media") {
+        json(res, 200, await runtime.setMedia(profile, body));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/set/timezone") {
+        json(res, 200, await runtime.setTimezone(profile, body));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/set/locale") {
+        json(res, 200, await runtime.setLocale(profile, body));
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/set/device") {
+        json(res, 200, await runtime.setDevice(profile, body));
         return;
       }
       if (req.method === "POST" && url.pathname === "/act") {

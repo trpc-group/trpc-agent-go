@@ -63,6 +63,18 @@ async function main() {
     const ref = extractFirstRef(text);
     assert.ok(ref);
 
+    const labeledSnapshot = await fetchJSON(`${baseURL}/snapshot`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        mode: "efficient",
+        labels: true
+      })
+    });
+    assert.equal((labeledSnapshot.content || []).length, 2);
+    assert.equal(labeledSnapshot.content?.[1]?.type, "image");
+
     const scrolled = await fetchJSON(`${baseURL}/act`, {
       method: "POST",
       headers,
@@ -103,6 +115,73 @@ async function main() {
       })
     });
     assert.match(extractText(waitedByFn), /Wait predicate matched/);
+
+    const cookieSet = await fetchJSON(`${baseURL}/cookies/set`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        cookie: {
+          name: "sid",
+          value: "abc"
+        }
+      })
+    });
+    assert.match(extractText(cookieSet), /Set cookie sid/);
+
+    const cookies = await fetchJSON(`${baseURL}/cookies?profile=openclaw`, {
+      headers: authHeaders(config.token)
+    });
+    assert.match(extractText(cookies), /sid=abc/);
+
+    const storageSet = await fetchJSON(`${baseURL}/storage/local/set`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        key: "token",
+        value: "abc"
+      })
+    });
+    assert.match(extractText(storageSet), /Set localStorage token/);
+
+    const storage = await fetchJSON(
+      `${baseURL}/storage/local?profile=openclaw&key=token`,
+      {
+        headers: authHeaders(config.token)
+      }
+    );
+    assert.match(extractText(storage), /token=abc/);
+
+    const offlineOn = await fetchJSON(`${baseURL}/set/offline`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        offline: true
+      })
+    });
+    assert.match(extractText(offlineOn), /enabled/);
+
+    const offlineOff = await fetchJSON(`${baseURL}/set/offline`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        offline: false
+      })
+    });
+    assert.match(extractText(offlineOff), /disabled/);
+
+    const timezone = await fetchJSON(`${baseURL}/set/timezone`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        timezoneId: "Asia/Shanghai"
+      })
+    });
+    assert.match(extractText(timezone), /Asia\/Shanghai/);
 
     const evaluated = await fetchJSON(`${baseURL}/act`, {
       method: "POST",
@@ -159,22 +238,44 @@ async function main() {
             const input = document.createElement("input");
             input.id = "upload-input";
             input.type = "file";
+            const blob = new Blob(["browser report"], {
+              type: "text/plain"
+            });
+            const link = document.createElement("a");
+            link.id = "download-link";
+            link.textContent = "Download report";
+            link.href = URL.createObjectURL(blob);
+            link.download = "report.txt";
             button.addEventListener("click", () => input.click());
-            document.body.append(button, input);
+            document.body.append(button, input, link);
             return document.body.innerText;
           }`
         }
       })
     });
     assert.match(extractText(prepared), /Choose file/);
+    assert.match(extractText(prepared), /Download report/);
 
     const uploadSnapshot = await fetchJSON(`${baseURL}/snapshot`, {
       method: "POST",
       headers,
       body: JSON.stringify({ profile: "openclaw" })
     });
-    const uploadButtonRef = extractFirstRef(extractText(uploadSnapshot));
+    const uploadSnapshotText = extractText(uploadSnapshot);
+    const uploadButtonRef = uploadSnapshotText
+      .split("\n")
+      .find((line) => {
+        return line.includes("Choose file");
+      })
+      ?.match(/\[([^\]]+)\]/)?.[1] || "";
+    const downloadRef = uploadSnapshotText
+      .split("\n")
+      .find((line) => {
+        return line.includes("Download report");
+      })
+      ?.match(/\[([^\]]+)\]/)?.[1] || "";
     assert.ok(uploadButtonRef);
+    assert.ok(downloadRef);
 
     const elementUpload = await fetchJSON(`${baseURL}/upload`, {
       method: "POST",
@@ -243,6 +344,56 @@ async function main() {
     });
     assert.match(extractText(uploadedByRef), /1/);
 
+    const downloaded = await fetchJSON(`${baseURL}/download`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        ref: downloadRef,
+        path: "report.txt",
+        timeoutMs: 5000
+      })
+    });
+    assert.match(extractText(downloaded), /Saved download/);
+    const downloadedText = await fs.readFile(
+      downloaded.download.path,
+      "utf8"
+    );
+    assert.equal(downloadedText, "browser report");
+
+    await fetchJSON(`${baseURL}/act`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        request: {
+          kind: "evaluate",
+          fn: `() => {
+            setTimeout(() => {
+              document.getElementById("download-link").click();
+            }, 100);
+            return true;
+          }`
+        }
+      })
+    });
+
+    const waitedDownload = await fetchJSON(`${baseURL}/wait/download`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "openclaw",
+        path: "wait-report.txt",
+        timeoutMs: 5000
+      })
+    });
+    assert.match(extractText(waitedDownload), /Saved download/);
+    const waitedDownloadText = await fs.readFile(
+      waitedDownload.download.path,
+      "utf8"
+    );
+    assert.equal(waitedDownloadText, "browser report");
+
     console.log(JSON.stringify({
       ok: true,
       baseURL,
@@ -251,8 +402,11 @@ async function main() {
       targetId: snapshot.targetId,
       snapshotPreview: text.split("\n").slice(0, 4),
       uploadButtonRef,
+      downloadRef,
       screenshotBytes: (screenshot.content?.[0]?.data || "").length,
-      elementScreenshotBytes: (elementShot.content?.[0]?.data || "").length
+      elementScreenshotBytes: (elementShot.content?.[0]?.data || "").length,
+      labeledSnapshotBytes:
+        (labeledSnapshot.content?.[1]?.data || "").length
     }));
   } finally {
     await fs.rm(uploadDir, { recursive: true, force: true });

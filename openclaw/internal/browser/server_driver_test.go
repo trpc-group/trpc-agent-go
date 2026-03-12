@@ -190,6 +190,35 @@ func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
 			},
 		},
 		{
+			name:     "snapshot advanced",
+			toolName: mcpToolSnapshot,
+			args: map[string]any{
+				"mode":           "efficient",
+				"compact":        true,
+				"depth":          4,
+				"selector":       "#main",
+				"frame":          "iframe#main",
+				"labels":         true,
+				"refs":           "role",
+				"interactive":    true,
+				"snapshotFormat": "role",
+			},
+			wantPath:   "/snapshot",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "efficient", body["mode"])
+				require.Equal(t, true, body["compact"])
+				require.Equal(t, float64(4), body["depth"])
+				require.Equal(t, "#main", body["selector"])
+				require.Equal(t, "iframe#main", body["frame"])
+				require.Equal(t, true, body["labels"])
+				require.Equal(t, "role", body["refs"])
+				require.Equal(t, true, body["interactive"])
+				require.Equal(t, "role", body["snapshotFormat"])
+			},
+		},
+		{
 			name:       "screenshot",
 			toolName:   mcpToolScreenshot,
 			args:       map[string]any{"type": "png"},
@@ -223,6 +252,45 @@ func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
 			},
 		},
 		{
+			name:       "cookies",
+			toolName:   mcpToolCookies,
+			args:       map[string]any{"targetId": "tab-1"},
+			wantPath:   "/cookies",
+			wantMethod: http.MethodGet,
+		},
+		{
+			name:       "cookies set",
+			toolName:   mcpToolCookiesSet,
+			args:       map[string]any{"cookie": map[string]any{"name": "sid"}},
+			wantPath:   "/cookies/set",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				cookie := body["cookie"].(map[string]any)
+				require.Equal(t, "sid", cookie["name"])
+			},
+		},
+		{
+			name:       "storage get",
+			toolName:   mcpToolStorageGet,
+			args:       map[string]any{"kind": "session", "key": "token"},
+			wantPath:   "/storage/session",
+			wantMethod: http.MethodGet,
+		},
+		{
+			name:       "storage set",
+			toolName:   mcpToolStorageSet,
+			args:       map[string]any{"kind": "local", "key": "token", "value": "x"},
+			wantPath:   "/storage/local/set",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "local", body["kind"])
+				require.Equal(t, "token", body["key"])
+				require.Equal(t, "x", body["value"])
+			},
+		},
+		{
 			name:       "pdf",
 			toolName:   mcpToolPDF,
 			args:       map[string]any{"filename": "page.pdf"},
@@ -231,6 +299,38 @@ func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
 			assertBody: func(t *testing.T, body map[string]any) {
 				t.Helper()
 				require.Equal(t, "page.pdf", body["filename"])
+			},
+		},
+		{
+			name:     "download",
+			toolName: mcpToolDownload,
+			args: map[string]any{
+				"ref":       "e1",
+				"path":      "report.pdf",
+				"timeoutMs": 2500,
+			},
+			wantPath:   "/download",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "e1", body["ref"])
+				require.Equal(t, "report.pdf", body["path"])
+				require.Equal(t, float64(2500), body["timeoutMs"])
+			},
+		},
+		{
+			name:     "wait download",
+			toolName: mcpToolWaitDownload,
+			args: map[string]any{
+				"path":      "report.pdf",
+				"timeoutMs": 2500,
+			},
+			wantPath:   "/wait/download",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "report.pdf", body["path"])
+				require.Equal(t, float64(2500), body["timeoutMs"])
 			},
 		},
 		{
@@ -274,6 +374,40 @@ func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
 			assertBody: func(t *testing.T, body map[string]any) {
 				t.Helper()
 				require.Equal(t, true, body["accept"])
+			},
+		},
+		{
+			name:       "offline",
+			toolName:   mcpToolSetOffline,
+			args:       map[string]any{"offline": true},
+			wantPath:   "/set/offline",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, true, body["offline"])
+			},
+		},
+		{
+			name:       "headers",
+			toolName:   mcpToolSetHeaders,
+			args:       map[string]any{"headers": map[string]string{"X-Test": "1"}},
+			wantPath:   "/set/headers",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				headers := body["headers"].(map[string]any)
+				require.Equal(t, "1", headers["X-Test"])
+			},
+		},
+		{
+			name:       "timezone",
+			toolName:   mcpToolSetTZ,
+			args:       map[string]any{"timezoneId": "Asia/Shanghai"},
+			wantPath:   "/set/timezone",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "Asia/Shanghai", body["timezoneId"])
 			},
 		},
 		{
@@ -329,10 +463,29 @@ func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
 				require.Equal(t, tc.wantMethod, r.Method)
 				require.Equal(t, tc.wantPath, r.URL.Path)
 
-				var payload map[string]any
-				require.NoError(t, json.NewDecoder(r.Body).Decode(&payload))
-				require.Equal(t, defaultProfileName, payload["profile"])
-				tc.assertBody(t, payload)
+				payload := map[string]any{}
+				if r.Method == http.MethodGet ||
+					r.Method == http.MethodDelete {
+					for key, values := range r.URL.Query() {
+						if len(values) == 0 {
+							continue
+						}
+						payload[key] = values[len(values)-1]
+					}
+				} else {
+					require.NoError(
+						t,
+						json.NewDecoder(r.Body).Decode(&payload),
+					)
+				}
+				require.Equal(
+					t,
+					defaultProfileName,
+					payload["profile"],
+				)
+				if tc.assertBody != nil {
+					tc.assertBody(t, payload)
+				}
 
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"content": []map[string]any{{

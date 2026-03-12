@@ -194,9 +194,15 @@ async function executeCommand(command) {
       await chrome.tabs.update(tabId, { url: command.args.url });
       return textResult(`Navigated to ${command.args.url}`);
     case "snapshot":
-      return await executeInTab(tabId, "snapshot", command.args);
+      return await captureSnapshotResult(tabId, command.args);
     case "screenshot":
       return await captureTab(tabId, command.args);
+    case "cookies_get":
+    case "cookies_set":
+    case "cookies_clear":
+    case "storage_get":
+    case "storage_set":
+    case "storage_clear":
     case "click":
     case "hover":
     case "type":
@@ -228,6 +234,28 @@ async function executeInTab(tabId, action, args) {
     args: [{ action, args }]
   });
   return results[0]?.result;
+}
+
+async function captureSnapshotResult(tabId, args = {}) {
+  if (`${args.frame || ""}`.trim()) {
+    throw new Error("Snapshot frame is not supported by chrome relay");
+  }
+  if (!args.labels) {
+    return await executeInTab(tabId, "snapshot", args);
+  }
+  const snapshot = await executeInTab(tabId, "snapshot_prepare_labels", args);
+  try {
+    const image = await captureTab(tabId, { type: "png" });
+    return {
+      ...snapshot,
+      content: [
+        ...(snapshot.content || []),
+        ...(image.content || [])
+      ]
+    };
+  } finally {
+    await executeInTab(tabId, "snapshot_cleanup_labels", {});
+  }
 }
 
 function screenshotFormat(args = {}) {
@@ -373,6 +401,7 @@ function textResult(text) {
 
 async function relayExecutor(command) {
   const refAttr = "data-openclaw-ref";
+  const snapshotLabelAttr = "data-openclaw-labels";
   const interactiveSelector = [
     "a[href]",
     "button",
@@ -383,6 +412,31 @@ async function relayExecutor(command) {
     "[role='link']",
     "[contenteditable='true']",
     "[tabindex]"
+  ].join(",");
+  const meaningfulSelector = [
+    "main",
+    "section",
+    "article",
+    "nav",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "p",
+    "ul",
+    "ol",
+    "li",
+    "label",
+    "a[href]",
+    "button",
+    "input",
+    "select",
+    "textarea",
+    "[role]",
+    "[contenteditable='true']"
   ].join(",");
 
   function textResult(text) {
@@ -415,8 +469,8 @@ async function relayExecutor(command) {
     return ref;
   }
 
-  function describe(node) {
-    const text = (
+  function textFor(node) {
+    return (
       node.getAttribute("aria-label") ||
       node.getAttribute("placeholder") ||
       node.innerText ||
@@ -424,34 +478,115 @@ async function relayExecutor(command) {
       node.value ||
       ""
     ).trim().replace(/\s+/g, " ");
+  }
+
+  function matchesSelector(node, selector) {
+    return typeof node.matches === "function" && node.matches(selector);
+  }
+
+  function interactiveNode(node) {
+    return matchesSelector(node, interactiveSelector);
+  }
+
+  function meaningfulNode(node, interactiveOnly) {
+    if (interactiveNode(node)) {
+      return true;
+    }
+    if (interactiveOnly) {
+      return false;
+    }
+    return matchesSelector(node, meaningfulSelector) || textFor(node) !== "";
+  }
+
+  function snapshotLine(item, compact) {
+    const indent = "  ".repeat(item.depth || 0);
+    const ref = item.ref ? `[${item.ref}] ` : "";
+    const label = item.text ? ` "${item.text}"` : "";
+    if (compact) {
+      return `${indent}${ref}${item.role}${label}`;
+    }
+    const tag = item.tag && item.tag !== item.role
+      ? ` tag=${item.tag}`
+      : "";
+    const kind = item.type ? ` type=${item.type}` : "";
+    const disabled = item.disabled ? " disabled" : "";
+    return `${indent}${ref}${item.role}${tag}${kind}${disabled}${label}`;
+  }
+
+  function snapshotOptions(args) {
+    const frame = `${args.frame || ""}`.trim();
+    if (frame) {
+      throw new Error("Snapshot frame is not supported by chrome relay");
+    }
+    const snapshotFormat = `${args.snapshotFormat || ""}`.trim();
+    const refs = `${args.refs || ""}`.trim();
+    if (
+      (snapshotFormat && snapshotFormat !== "role") ||
+      (refs && refs !== "role")
+    ) {
+      throw new Error("chrome relay snapshots only support role refs");
+    }
+    const mode = `${args.mode || ""}`.trim();
+    const depth = Number(args.depth);
     return {
-      ref: ensureRef(node),
-      role: node.getAttribute("role") || node.tagName.toLowerCase(),
-      text
+      selector: `${args.selector || ""}`.trim(),
+      limit: Math.max(0, Number(args.limit) || 0) || 200,
+      interactive: args.interactive !== false,
+      compact: args.compact === true || mode === "efficient",
+      depth: Number.isFinite(depth) && depth >= 0
+        ? depth
+        : mode === "efficient"
+          ? 6
+          : undefined
     };
   }
 
   function snapshot(args) {
-    const selector = `${args.selector || ""}`.trim();
+    const options = snapshotOptions(args);
+    const selector = options.selector;
     const root = selector
       ? document.querySelector(selector)
-      : document;
+      : document.body || document.documentElement;
     if (!root) {
       throw new Error(`Snapshot selector not found: ${selector}`);
     }
-    const limit = Math.max(0, Number(args.limit) || 0);
-    const discovered = Array.from(root.querySelectorAll(interactiveSelector));
-    if (
-      root !== document &&
-      typeof root.matches === "function" &&
-      root.matches(interactiveSelector)
-    ) {
-      discovered.unshift(root);
+    const items = [];
+    const stack = [{
+      node: root,
+      depth: 0
+    }];
+    while (stack.length > 0 && items.length < options.limit) {
+      const current = stack.pop();
+      const node = current?.node;
+      if (!node || !visible(node)) {
+        continue;
+      }
+      const include = meaningfulNode(node, options.interactive);
+      if (include) {
+        if (options.depth === undefined || current.depth <= options.depth) {
+          items.push({
+            ref: interactiveNode(node) ? ensureRef(node) : "",
+            role: node.getAttribute("role") || node.tagName.toLowerCase(),
+            text: textFor(node),
+            tag: node.tagName.toLowerCase(),
+            type: node.getAttribute("type") || "",
+            disabled: Boolean(node.disabled),
+            depth: current.depth
+          });
+        }
+      }
+      const nextDepth = include ? current.depth + 1 : current.depth;
+      if (options.depth !== undefined && nextDepth > options.depth) {
+        continue;
+      }
+      const children = Array.from(node.children || []);
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        stack.push({
+          node: children[index],
+          depth: nextDepth
+        });
+      }
     }
-    const items = Array.from(new Set(discovered))
-      .filter(visible)
-      .slice(0, limit || 200)
-      .map(describe);
     const lines = [
       `Page: ${document.title || ""}`,
       `URL: ${window.location.href}`
@@ -460,8 +595,7 @@ async function relayExecutor(command) {
       lines.push(`Selector: ${selector}`);
     }
     for (const item of items) {
-      const label = item.text ? ` "${item.text}"` : "";
-      lines.push(`[${item.ref}] ${item.role}${label}`);
+      lines.push(snapshotLine(item, options.compact));
     }
     return {
       snapshot: {
@@ -472,6 +606,58 @@ async function relayExecutor(command) {
       },
       content: [{ type: "text", text: lines.join("\n") }]
     };
+  }
+
+  function clearSnapshotLabels() {
+    document.querySelectorAll(`[${snapshotLabelAttr}]`).forEach((node) => {
+      node.remove();
+    });
+  }
+
+  function applySnapshotLabels(items) {
+    clearSnapshotLabels();
+    let labels = 0;
+    let skipped = 0;
+    for (const item of items) {
+      if (!item.ref) {
+        continue;
+      }
+      const node = byRef(item.ref);
+      const rect = node.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        skipped += 1;
+        continue;
+      }
+      const box = document.createElement("div");
+      box.setAttribute(snapshotLabelAttr, "1");
+      box.style.position = "fixed";
+      box.style.left = `${rect.left}px`;
+      box.style.top = `${rect.top}px`;
+      box.style.width = `${rect.width}px`;
+      box.style.height = `${rect.height}px`;
+      box.style.border = "2px solid #d83b01";
+      box.style.background = "rgba(216, 59, 1, 0.08)";
+      box.style.pointerEvents = "none";
+      box.style.zIndex = "2147483647";
+
+      const tag = document.createElement("div");
+      tag.setAttribute(snapshotLabelAttr, "1");
+      tag.textContent = item.ref;
+      tag.style.position = "fixed";
+      tag.style.left = `${Math.max(0, rect.left)}px`;
+      tag.style.top = `${Math.max(0, rect.top - 20)}px`;
+      tag.style.padding = "1px 4px";
+      tag.style.background = "#d83b01";
+      tag.style.color = "#fff";
+      tag.style.font = "12px monospace";
+      tag.style.borderRadius = "4px";
+      tag.style.pointerEvents = "none";
+      tag.style.zIndex = "2147483647";
+
+      document.body.append(box, tag);
+      labels += 1;
+    }
+    return { labels, skipped };
   }
 
   function byRef(ref) {
@@ -809,10 +995,158 @@ async function relayExecutor(command) {
     };
   }
 
+  function cookiePairs() {
+    const raw = `${document.cookie || ""}`.trim();
+    if (!raw) {
+      return [];
+    }
+    return raw
+      .split(/;\s*/)
+      .filter(Boolean)
+      .map((entry) => {
+        const [name, ...valueParts] = entry.split("=");
+        return {
+          name: decodeURIComponent(name || ""),
+          value: decodeURIComponent(valueParts.join("=") || "")
+        };
+      });
+  }
+
+  function cookiesGet() {
+    const cookies = cookiePairs();
+    const text = cookies.length === 0
+      ? "No cookies."
+      : cookies.map((cookie) => {
+          return `${cookie.name}=${cookie.value}`;
+        }).join("\n");
+    return {
+      cookies,
+      content: [{
+        type: "text",
+        text
+      }]
+    };
+  }
+
+  function cookiesSet(args) {
+    const cookie = args.cookie && typeof args.cookie === "object"
+      ? args.cookie
+      : args;
+    const name = `${cookie.name || ""}`.trim();
+    if (!name) {
+      throw new Error("cookie name is required");
+    }
+    if (cookie.value === undefined) {
+      throw new Error("cookie value is required");
+    }
+    const parts = [
+      `${encodeURIComponent(name)}=` +
+        `${encodeURIComponent(`${cookie.value || ""}`)}`
+    ];
+    const cookiePath = `${cookie.path || "/"}`.trim() || "/";
+    parts.push(`path=${cookiePath}`);
+    const domain = `${cookie.domain || ""}`.trim();
+    if (domain) {
+      parts.push(`domain=${domain}`);
+    }
+    const sameSite = `${cookie.sameSite || ""}`.trim();
+    if (sameSite) {
+      parts.push(`SameSite=${sameSite}`);
+    }
+    if (cookie.secure) {
+      parts.push("Secure");
+    }
+    document.cookie = parts.join("; ");
+    return textResult(`Set cookie ${name}.`);
+  }
+
+  function cookiesClear() {
+    for (const cookie of cookiePairs()) {
+      document.cookie = [
+        `${encodeURIComponent(cookie.name)}=`,
+        "expires=Thu, 01 Jan 1970 00:00:00 GMT",
+        "path=/"
+      ].join("; ");
+    }
+    return textResult("Cleared visible page cookies.");
+  }
+
+  function storageKind(kind) {
+    return `${kind || "local"}`.trim() === "session"
+      ? window.sessionStorage
+      : window.localStorage;
+  }
+
+  function storageGet(args) {
+    const store = storageKind(args.kind);
+    const key = `${args.key || ""}`.trim();
+    const values = {};
+    if (key) {
+      const value = store.getItem(key);
+      if (value !== null) {
+        values[key] = value;
+      }
+    } else {
+      for (let index = 0; index < store.length; index += 1) {
+        const itemKey = store.key(index);
+        if (!itemKey) {
+          continue;
+        }
+        const value = store.getItem(itemKey);
+        if (value !== null) {
+          values[itemKey] = value;
+        }
+      }
+    }
+    const entries = Object.entries(values);
+    return {
+      values,
+      content: [{
+        type: "text",
+        text: entries.length === 0
+          ? `No ${args.kind || "local"}Storage values.`
+          : entries.map(([entryKey, entryValue]) => {
+              return `${entryKey}=${entryValue}`;
+            }).join("\n")
+      }]
+    };
+  }
+
+  function storageSet(args) {
+    const key = `${args.key || ""}`.trim();
+    if (!key) {
+      throw new Error("storage key is required");
+    }
+    storageKind(args.kind).setItem(key, `${args.value || ""}`);
+    return textResult(
+      `Set ${args.kind || "local"}Storage ${key}.`
+    );
+  }
+
+  function storageClear(args) {
+    storageKind(args.kind).clear();
+    return textResult(
+      `Cleared ${args.kind || "local"}Storage.`
+    );
+  }
+
   const { action, args = {} } = command;
   switch (action) {
     case "snapshot":
       return snapshot(args);
+    case "snapshot_prepare_labels": {
+      const result = snapshot(args);
+      const labels = applySnapshotLabels(result.snapshot.items || []);
+      return {
+        ...result,
+        labels: true,
+        labelsCount: labels.labels,
+        labelsSkipped: labels.skipped
+      };
+    }
+    case "snapshot_cleanup_labels":
+      clearSnapshotLabels();
+      return { ok: true };
     case "click":
       clickNode(byRef(args.ref), args);
       return textResult(`Clicked ${args.ref}.`);
@@ -849,6 +1183,18 @@ async function relayExecutor(command) {
       return await dragBetween(args);
     case "evaluate":
       return evaluateArgs(args);
+    case "cookies_get":
+      return cookiesGet();
+    case "cookies_set":
+      return cookiesSet(args);
+    case "cookies_clear":
+      return cookiesClear();
+    case "storage_get":
+      return storageGet(args);
+    case "storage_set":
+      return storageSet(args);
+    case "storage_clear":
+      return storageClear(args);
     case "wait":
       return await waitForArgs(args);
     default:

@@ -13,20 +13,27 @@ It provides:
 Action coverage:
 
 - `openclaw` profile: tabs, snapshot, screenshot, navigate, click, type,
-  press, hover, scrollIntoView, drag, select, fill, wait, evaluate, pdf,
-  upload, dialog
+  press, hover, scrollIntoView, drag, select, fill, wait, evaluate,
+  cookies, storage, pdf, download, waitDownload, upload, dialog,
+  offline, headers, credentials, geolocation, media, timezone, locale,
+  and device
 - `chrome` profile: tabs, snapshot, screenshot, navigate, click, type,
   press, hover, scrollIntoView, drag, select, fill, wait, evaluate,
-  resize
+  resize, cookies, and storage
 - `chrome` relay still does not expose console capture, pdf export, file
-  upload, or dialog hooks
+  upload, dialog hooks, or host-side emulation/network overrides
 
 Notable behavior details:
 
 - host screenshots accept `ref` and CSS `element`; element shots reject
   `fullPage`
+- host snapshots accept `mode`, `compact`, `depth`, `selector`, `frame`,
+  and optional overlay `labels`
 - host upload accepts `inputRef`, CSS `element`, or a clickable `ref`
   that arms a file chooser
+- host cookies/storage actions work against the full Playwright context
+- relay cookies/storage actions work against the current page origin and
+  visible page state only
 - relay screenshots can return `jpeg` and crop to a visible `ref` inside
   the current viewport
 - host console capture accepts `level` filtering such as `error`
@@ -85,8 +92,9 @@ What they verify:
   - starts the browser server
   - launches a managed browser profile
   - opens `https://example.com`
-  - verifies snapshot, scrollIntoView, wait, wait-by-fn, evaluate, and
-    screenshot
+  - verifies snapshot, labeled snapshot, scrollIntoView, wait,
+    wait-by-fn, cookies, storage, offline toggles, timezone override,
+    evaluate, download, wait-download, and screenshot
   - injects a file input and verifies upload through both CSS selector
     and clickable ref flows
 - `smoke:relay`
@@ -94,7 +102,8 @@ What they verify:
   - launches Chromium with the relay extension loaded
   - attaches the current tab through the extension background
   - verifies `profile=chrome` tabs, snapshot, scrollIntoView, wait,
-    wait-by-fn, evaluate, and cropped `jpeg` screenshots
+    wait-by-fn, cookies, storage, evaluate, and cropped `jpeg`
+    screenshots
 - `smoke:host:headed`
   - repeats the managed browser smoke with a visible Chromium window
 - `smoke:relay:headed`
@@ -119,9 +128,28 @@ before running the command.
 - `POST /screenshot`
 - `POST /navigate`
 - `POST /console`
+- `GET /cookies`
+- `POST /cookies/set`
+- `POST /cookies/clear`
+- `GET /storage/local`
+- `POST /storage/local/set`
+- `POST /storage/local/clear`
+- `GET /storage/session`
+- `POST /storage/session/set`
+- `POST /storage/session/clear`
 - `POST /pdf`
+- `POST /download`
+- `POST /wait/download`
 - `POST /upload`
 - `POST /dialog`
+- `POST /set/offline`
+- `POST /set/headers`
+- `POST /set/credentials`
+- `POST /set/geolocation`
+- `POST /set/media`
+- `POST /set/timezone`
+- `POST /set/locale`
+- `POST /set/device`
 - `POST /act`
 
 The extension WebSocket endpoint is:
