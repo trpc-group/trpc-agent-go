@@ -274,6 +274,25 @@ func EmitEvent(ctx context.Context, ch chan<- *Event, e *Event) error {
 	return EmitEventWithTimeout(ctx, ch, e, EmitWithoutTimeout)
 }
 
+func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (bool, error) {
+	select {
+	case ch <- e:
+		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+		return true, nil
+	case <-ctx.Done():
+		err := ctx.Err()
+		log.WarnfContext(
+			ctx,
+			"EmitEventWithTimeout: context error: %v, event: %+v",
+			err,
+			*e,
+		)
+		return true, err
+	default:
+		return false, nil
+	}
+}
+
 // EmitEventWithTimeout sends an event to the channel with optional timeout.
 func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	e *Event, timeout time.Duration) error {
@@ -299,6 +318,10 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		e.RequestID, cap(ch), len(ch), e.Branch)
 
 	if timeout == EmitWithoutTimeout {
+		if handled, err := tryEmitReadyEvent(ctx, ch, e); handled {
+			return err
+		}
+		// Fall back to a blocking send when the fast path cannot make progress.
 		select {
 		case ch <- e:
 			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
@@ -313,6 +336,10 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 			return err
 		}
 		return nil
+	}
+
+	if handled, err := tryEmitReadyEvent(ctx, ch, e); handled {
+		return err
 	}
 
 	timer := time.NewTimer(timeout)
