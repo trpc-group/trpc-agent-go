@@ -68,9 +68,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash ./openclaw/release.sh build \
-            --version '${{ needs.prepare.outputs.version }}' \
-            --target '${{ matrix.target }}'
+          case '${{ matrix.target }}' in
+            linux/*)
+              docker run --rm \
+                -e HOME=/tmp \
+                -e PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+                --user "$(id -u):$(id -g)" \
+                -v "$PWD:/work" \
+                -w /work \
+                golang:1.24-bullseye \
+                bash -c "bash ./openclaw/release.sh build \
+                  --version '${{ needs.prepare.outputs.version }}' \
+                  --target '${{ matrix.target }}'"
+              ;;
+            *)
+              bash ./openclaw/release.sh build \
+                --version '${{ needs.prepare.outputs.version }}' \
+                --target '${{ matrix.target }}'
+              ;;
+          esac
       - name: Upload release archive
         uses: actions/upload-artifact@v4
         with:
