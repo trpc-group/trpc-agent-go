@@ -112,7 +112,9 @@ func (a *ChainAgent) executeChainRun(
 	}
 	// Handle after agent callbacks.
 	if a.agentCallbacks != nil {
-		e = a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e)
+		if afterEvent := a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e); afterEvent != nil {
+			e = afterEvent
+		}
 	}
 	itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage, tracker.FirstTokenTimeDuration())
 }
