@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	psummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 )
 
@@ -2794,6 +2795,35 @@ func TestNewService_WithAllOptions(t *testing.T) {
 	err = svc.Close()
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNewService_WithSessionSummarizerResolverStartsAsyncWorker(t *testing.T) {
+	db, _, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
+	require.NoError(t, err)
+	defer db.Close()
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+
+	storage.SetClientBuilder(func(builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockMySQLClient{db: db}, nil
+	})
+
+	svc, err := NewService(
+		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
+		WithSkipDBInit(true),
+		WithAsyncSummaryNum(2),
+		WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
+			context.Context,
+			psummary.SessionSummaryRequest,
+		) (psummary.SessionSummarizer, error) {
+			return nil, nil
+		})),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc)
+	assert.NotNil(t, svc.asyncWorker)
+	assert.NoError(t, svc.Close())
 }
 
 // mockDBInit mocks the database initialization process

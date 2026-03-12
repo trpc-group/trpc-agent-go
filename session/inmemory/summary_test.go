@@ -12,6 +12,7 @@ package inmemory
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	psummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 type fakeSummarizer struct {
@@ -841,6 +843,102 @@ func (c *ctxCaptureSummarizer) SetPrompt(prompt string)  {}
 func (c *ctxCaptureSummarizer) SetModel(m model.Model)   {}
 func (c *ctxCaptureSummarizer) Metadata() map[string]any { return map[string]any{} }
 
+type providerCaptureSummarizer struct {
+	capturedVal any
+}
+
+func (c *providerCaptureSummarizer) ShouldSummarize(*session.Session) bool { return true }
+func (c *providerCaptureSummarizer) Summarize(ctx context.Context, _ *session.Session) (string, error) {
+	c.capturedVal = ctx.Value(traceIDKey)
+	return "provider-summary", nil
+}
+func (c *providerCaptureSummarizer) SetPrompt(string)     {}
+func (c *providerCaptureSummarizer) SetModel(model.Model) {}
+func (c *providerCaptureSummarizer) Metadata() map[string]any {
+	return map[string]any{}
+}
+
+func TestMemoryService_CreateSessionSummary_UsesSummarizerResolverOnce(t *testing.T) {
+	var mu sync.Mutex
+	providerCalls := 0
+	resolved := &providerCaptureSummarizer{}
+
+	s := NewSessionService(
+		WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
+			ctx context.Context,
+			req psummary.SessionSummaryRequest,
+		) (psummary.SessionSummarizer, error) {
+			mu.Lock()
+			providerCalls++
+			mu.Unlock()
+			require.NotNil(t, req.Session)
+			require.Equal(t, "", req.FilterKey)
+			require.False(t, req.Force)
+			require.Equal(t, "trace-sync", ctx.Value(traceIDKey))
+			return resolved, nil
+		})),
+	)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-provider-sync"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	e := event.New("inv", "user")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role:    model.RoleUser,
+		Content: "hello",
+	}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	err = s.CreateSessionSummary(
+		context.WithValue(context.Background(), traceIDKey, "trace-sync"),
+		sess,
+		"",
+		false,
+	)
+	require.NoError(t, err)
+
+	mu.Lock()
+	assert.Equal(t, 1, providerCalls)
+	mu.Unlock()
+	assert.Equal(t, "trace-sync", resolved.capturedVal)
+
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.True(t, ok)
+	assert.Equal(t, "provider-summary", text)
+}
+
+func TestMemoryService_CreateSessionSummary_ProviderFallsBackToStaticSummarizer(t *testing.T) {
+	s := NewSessionService(
+		WithSummarizer(&fakeSummarizer{allow: true, out: "fallback-summary"}),
+		WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
+			context.Context,
+			psummary.SessionSummaryRequest,
+		) (psummary.SessionSummarizer, error) {
+			return nil, nil
+		})),
+	)
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-provider-fallback"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	e := event.New("inv", "user")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role:    model.RoleUser,
+		Content: "hello",
+	}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "", false))
+
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.True(t, ok)
+	assert.Equal(t, "fallback-summary", text)
+}
+
 func TestMemoryService_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 	captureSummarizer := &ctxCaptureSummarizer{done: make(chan struct{})}
 	s := NewSessionService(
@@ -878,4 +976,56 @@ func TestMemoryService_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 
 	// Verify the context value was preserved in async worker.
 	assert.Equal(t, "trace-12345", captureSummarizer.capturedVal)
+}
+
+func TestMemoryService_EnqueueSummaryJob_ProviderContextValuePreserved(t *testing.T) {
+	var mu sync.Mutex
+	var capturedVal any
+	done := make(chan struct{})
+
+	s := NewSessionService(
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(10),
+		WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
+			ctx context.Context,
+			req psummary.SessionSummaryRequest,
+		) (psummary.SessionSummarizer, error) {
+			mu.Lock()
+			capturedVal = ctx.Value(traceIDKey)
+			mu.Unlock()
+			require.NotNil(t, req.Session)
+			return &ctxCaptureSummarizer{done: done}, nil
+		})),
+	)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-provider-ctx"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	e := event.New("inv", "user")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role:    model.RoleUser,
+		Content: "hello",
+	}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	err = s.EnqueueSummaryJob(
+		context.WithValue(context.Background(), traceIDKey, "trace-provider"),
+		sess,
+		"",
+		false,
+	)
+	require.NoError(t, err)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for provider-backed summarizer to be called")
+	}
+
+	mu.Lock()
+	assert.Equal(t, "trace-provider", capturedVal)
+	mu.Unlock()
 }

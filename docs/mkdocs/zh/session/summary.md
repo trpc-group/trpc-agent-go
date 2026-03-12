@@ -48,9 +48,14 @@ summarizer := summary.NewSummarizer(
 
 ```go
 import (
+    "context"
     "time"
+    "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/session/mysql"
+    "trpc.group/trpc-go/trpc-agent-go/session/postgres"
     "trpc.group/trpc-go/trpc-agent-go/session/redis"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 // 内存存储（开发/测试）
@@ -59,6 +64,21 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithAsyncSummaryNum(2),                // 2 个异步 worker
     inmemory.WithSummaryQueueSize(100),             // 队列大小 100
     inmemory.WithSummaryJobTimeout(60*time.Second), // 单个任务超时 60 秒
+)
+
+// 按请求动态选择摘要器（例如根据 ctx 中的用户模型配置）
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSessionSummarizerResolver(summary.SessionSummarizerResolver(func(
+        ctx context.Context,
+        req summary.SessionSummaryRequest,
+    ) (summary.SessionSummarizer, error) {
+        dynamicModel := pickSummaryModelFromCtx(ctx)
+        return summary.NewSummarizer(
+            dynamicModel,
+            summary.WithEventThreshold(20),
+        ), nil
+    })),
+    inmemory.WithAsyncSummaryNum(2),
 )
 
 // Redis 存储（生产环境）
@@ -145,6 +165,25 @@ type SessionSummarizer interface {
     Metadata() map[string]any
 }
 ```
+
+## SessionSummarizerResolver
+
+当摘要模型需要按请求动态决定时，可以在 session service 上配置 resolver，而不是修改 `SessionSummarizer` 接口本身：
+
+```go
+type SessionSummaryRequest struct {
+    Session   *session.Session
+    FilterKey string
+    Force     bool
+}
+
+type SessionSummarizerResolver func(
+    ctx context.Context,
+    req SessionSummaryRequest,
+) (SessionSummarizer, error)
+```
+
+resolver 会在每次摘要尝试开始时解析一次，并在同一次流程中复用同一个 summarizer 进行 `ShouldSummarize` 和 `Summarize`，避免并发场景下通过 `SetModel` 修改共享实例。
 
 ## 摘要器选项
 
