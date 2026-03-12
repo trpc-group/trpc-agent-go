@@ -238,7 +238,10 @@ admin:
 
 agent:
   # Short instruction text (optional).
-  instruction: "You are a helpful assistant. Reply in a friendly tone."
+  instruction: |
+    You are a helpful assistant. Reply in a friendly tone.
+    Use browser for JS-heavy sites, page interactions, snapshots,
+    screenshots, downloads, uploads, and current-tab relay workflows.
   # Optional: load and merge multiple markdown files into the system prompt.
   # Files are read in alphabetical order.
   # system_prompt_dir: "./prompts/system"
@@ -261,6 +264,19 @@ tools:
   # When enabled and the model returns multiple tool calls in one step,
   # OpenClaw executes them concurrently.
   enable_parallel_tools: true
+  providers:
+    - type: "browser"
+      name: "browser-runtime"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        server_url: "http://127.0.0.1:19790"
+        sandbox_server_url: "http://127.0.0.1:20790"
+        profiles:
+          - name: "openclaw"
+            description: "Managed Playwright profile from browser-server."
+          - name: "chrome"
+            description: "Current Chromium tab attached through relay."
 
 channels:
   - type: "telegram"
@@ -292,6 +308,10 @@ Notes:
 - Duration fields use Go-style strings like `60s`, `10m`, `1h`.
 - For secrets (model keys, Telegram tokens), keep them out of version control.
   Prefer environment variables when available.
+- The sample Telegram config enables the native `browser` tool against the
+  local browser-server defaults. Start `openclaw/browser-server` before
+  asking for browser snapshots, screenshots, downloads, uploads, or relay
+  actions. See `openclaw/examples/browser_server_use/`.
 - The sample config in `./openclaw.yaml` is ready to use with
   `go run ./cmd/openclaw -config ./openclaw.yaml`.
 - The sample config in `./openclaw.stdin.yaml` is ready to use with

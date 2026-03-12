@@ -9,7 +9,10 @@ admin:
   auto_port: true
 
 agent:
-  instruction: "You are a helpful assistant. Reply in a friendly tone."
+  instruction: |
+    You are a helpful assistant. Reply in a friendly tone.
+    Use browser for JS-heavy sites, page interactions, snapshots,
+    screenshots, downloads, uploads, and current-tab relay workflows.
 
 model:
   mode: "openai"
@@ -18,6 +21,19 @@ model:
 
 tools:
   enable_parallel_tools: true
+  providers:
+    - type: "browser"
+      name: "browser-runtime"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        server_url: "http://127.0.0.1:19790"
+        sandbox_server_url: "http://127.0.0.1:20790"
+        profiles:
+          - name: "openclaw"
+            description: "Managed Playwright profile from browser-server."
+          - name: "chrome"
+            description: "Current Chromium tab attached through relay."
 
 channels:
   - type: "telegram"

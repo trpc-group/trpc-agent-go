@@ -229,7 +229,10 @@ admin:
 
 agent:
   # 简短指令文本（可选）。
-  instruction: "You are a helpful assistant. Reply in a friendly tone."
+  instruction: |
+    You are a helpful assistant. Reply in a friendly tone.
+    Use browser for JS-heavy sites, page interactions, snapshots,
+    screenshots, downloads, uploads, and current-tab relay workflows.
   # 可选：加载并合并多个 markdown 文件到 system prompt 中。
   # 文件按字母顺序读取。
   # system_prompt_dir: "./prompts/system"
@@ -251,6 +254,19 @@ tools:
   # 启用后，当模型在一个步骤中返回多个 tool call 时，
   # OpenClaw 会并发执行它们。
   enable_parallel_tools: true
+  providers:
+    - type: "browser"
+      name: "browser-runtime"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        server_url: "http://127.0.0.1:19790"
+        sandbox_server_url: "http://127.0.0.1:20790"
+        profiles:
+          - name: "openclaw"
+            description: "Managed Playwright profile from browser-server."
+          - name: "chrome"
+            description: "Current Chromium tab attached through relay."
 
 channels:
   - type: "telegram"
@@ -282,6 +298,10 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 - 时长字段使用 Go 风格的字符串，如 `60s`、`10m`、`1h`。
 - 对于密钥（模型 key、Telegram token），请勿将其纳入版本控制。
   建议尽可能使用环境变量。
+- 示例 Telegram 配置已经把原生 `browser` 工具接到了本地默认
+  browser-server 地址。发起 browser snapshot、screenshot、download、
+  upload 或 relay 操作前，请先启动 `openclaw/browser-server`。
+  参见 `openclaw/examples/browser_server_use/`。
 - `./openclaw.yaml` 中的示例配置可直接用于
   `go run ./cmd/openclaw -config ./openclaw.yaml`。
 - `./openclaw.stdin.yaml` 中的示例配置可直接用于
