@@ -147,11 +147,6 @@ message DeleteUserRequest {
 		t.Errorf("expected UserService, got %s", services[0])
 	}
 
-	// Check messages
-	if messages, ok := firstDoc.Metadata["trpc_ast_messages"].([]string); !ok || len(messages) != 4 {
-		t.Errorf("expected 4 messages, got %v (len=%d)", firstDoc.Metadata["trpc_ast_messages"], len(messages))
-	}
-
 	// Check go_package metadata extracted from option
 	if goPkg, ok := firstDoc.Metadata["trpc_ast_go_package"].(string); !ok || goPkg != "github.com/example/api" {
 		t.Errorf("expected trpc_ast_go_package='github.com/example/api', got %v", firstDoc.Metadata["trpc_ast_go_package"])
@@ -291,15 +286,6 @@ import weak "optional.proto";`,
 service OrderService {}`,
 			expected: map[string]any{
 				"trpc_ast_service_count": 2,
-			},
-		},
-		{
-			name: "extract messages",
-			content: `message User {}
-message Order {}
-message Item {}`,
-			expected: map[string]any{
-				"trpc_ast_message_count": 3,
 			},
 		},
 	}
@@ -575,9 +561,6 @@ message Ack {
 		t.Errorf("expected signature to contain 'stream', got: %s", sig)
 	}
 
-	if _, ok := streamingRPC.Metadata["trpc_ast_messages"]; ok {
-		t.Errorf("expected rpc doc not to include trpc_ast_messages, got %v", streamingRPC.Metadata["trpc_ast_messages"])
-	}
 	if _, ok := streamingRPC.Metadata["trpc_ast_services"]; ok {
 		t.Errorf("expected rpc doc not to include trpc_ast_services, got %v", streamingRPC.Metadata["trpc_ast_services"])
 	}

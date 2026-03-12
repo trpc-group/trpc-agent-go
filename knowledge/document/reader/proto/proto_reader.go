@@ -241,7 +241,6 @@ type entityExtractor struct {
 	javaPackage     string
 	imports         []string
 	lines           []string
-	allMessageNames []string
 	allServiceNames []string
 }
 
@@ -251,8 +250,8 @@ func (e *entityExtractor) extract() ([]*document.Document, error) {
 	fd := e.result.FileDescriptorProto()
 	chunkIndex := 0
 
-	// Pre-collect all message and service names for file-level metadata
-	e.collectAllNames(fd)
+	// Pre-collect service names for file-level metadata
+	e.collectAllServiceNames(fd)
 
 	// Extract messages (including nested messages)
 	for _, msg := range fd.GetMessageType() {
@@ -282,13 +281,8 @@ func (e *entityExtractor) extract() ([]*document.Document, error) {
 	return docs, nil
 }
 
-// collectAllNames collects all message and service names for file-level metadata.
-func (e *entityExtractor) collectAllNames(fd *descriptorpb.FileDescriptorProto) {
-	// Collect top-level message names
-	for _, msg := range fd.GetMessageType() {
-		e.allMessageNames = append(e.allMessageNames, msg.GetName())
-	}
-
+// collectAllServiceNames collects all service names for file-level metadata.
+func (e *entityExtractor) collectAllServiceNames(fd *descriptorpb.FileDescriptorProto) {
 	// Collect service names
 	for _, svc := range fd.GetService() {
 		e.allServiceNames = append(e.allServiceNames, svc.GetName())
@@ -333,10 +327,6 @@ func (e *entityExtractor) addFileMetadata(doc *document.Document) {
 		if len(e.allServiceNames) > 0 {
 			doc.Metadata["trpc_ast_services"] = e.allServiceNames
 			doc.Metadata["trpc_ast_service_count"] = len(e.allServiceNames)
-		}
-		if len(e.allMessageNames) > 0 {
-			doc.Metadata["trpc_ast_messages"] = e.allMessageNames
-			doc.Metadata["trpc_ast_message_count"] = len(e.allMessageNames)
 		}
 	}
 }
@@ -714,13 +704,6 @@ func (r *Reader) extractFileMetadata(content string) map[string]any {
 		metadata["trpc_ast_service_count"] = len(services)
 	}
 
-	// Extract message names for file-level metadata
-	messages := r.extractMessageNames(content)
-	if len(messages) > 0 {
-		metadata["trpc_ast_messages"] = messages
-		metadata["trpc_ast_message_count"] = len(messages)
-	}
-
 	return metadata
 }
 
@@ -746,10 +729,6 @@ func (r *Reader) buildFileEmbeddingText(content, fileName string, fileMetadata m
 	if services, ok := fileMetadata["trpc_ast_services"]; ok {
 		data["services"] = services
 	}
-	if messages, ok := fileMetadata["trpc_ast_messages"]; ok {
-		data["messages"] = messages
-	}
-
 	// Include the code content for semantic understanding
 	data["code"] = content
 
@@ -761,19 +740,6 @@ func (r *Reader) buildFileEmbeddingText(content, fileName string, fileMetadata m
 func (r *Reader) extractServiceNames(content string) []string {
 	var names []string
 	re := regexp.MustCompile(`(?m)^[\s]*service\s+(\w+)\s*\{`)
-	matches := re.FindAllStringSubmatch(content, -1)
-	for _, match := range matches {
-		if len(match) > 1 {
-			names = append(names, match[1])
-		}
-	}
-	return names
-}
-
-// extractMessageNames extracts just the message names (for metadata).
-func (r *Reader) extractMessageNames(content string) []string {
-	var names []string
-	re := regexp.MustCompile(`(?m)^[\s]*message\s+(\w+)\s*\{`)
 	matches := re.FindAllStringSubmatch(content, -1)
 	for _, match := range matches {
 		if len(match) > 1 {
