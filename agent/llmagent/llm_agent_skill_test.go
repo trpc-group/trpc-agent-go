@@ -573,3 +573,267 @@ func TestLLMAgent_WithMaxLoadedSkills_WiresProcessor(t *testing.T) {
 		require.Equal(t, []byte("1"), v)
 	}
 }
+
+// interactiveStubRunner wraps stubRunner and adds InteractiveProgramRunner
+// support so the executor advertises interactive capability.
+type interactiveStubRunner struct {
+	stubRunner
+}
+
+func (r *interactiveStubRunner) StartProgram(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ codeexecutor.InteractiveProgramSpec,
+) (codeexecutor.ProgramSession, error) {
+	return nil, nil
+}
+
+// interactiveStubExec is like stubExec but its Engine exposes an
+// InteractiveProgramRunner, so skill_exec tools should be registered.
+type interactiveStubExec struct{ ran bool }
+
+func (s *interactiveStubExec) ExecuteCode(
+	_ context.Context,
+	_ codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+func (s *interactiveStubExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+func (s *interactiveStubExec) Engine() codeexecutor.Engine {
+	return codeexecutor.NewEngine(&stubMgr{}, &stubFS{}, &interactiveStubRunner{})
+}
+
+// bareExec implements CodeExecutor but not EngineProvider.  At runtime
+// ensureEngine falls back to local which supports interactive, so the
+// registration check should also return true.
+type bareExec struct{}
+
+func (*bareExec) ExecuteCode(
+	_ context.Context, _ codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+func (*bareExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+// nilEngineExec implements CodeExecutor and EngineProvider but returns
+// a nil Engine.  At runtime ensureEngine treats this the same as "no
+// engine" and falls back to local, so interactive should be true.
+type nilEngineExec struct{}
+
+func (*nilEngineExec) ExecuteCode(
+	_ context.Context, _ codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+func (*nilEngineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+func (*nilEngineExec) Engine() codeexecutor.Engine { return nil }
+
+func TestLLMAgent_ExecToolsOmittedForNonInteractiveExecutor(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New("tester", WithSkills(repo), WithCodeExecutor(&stubExec{}))
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+
+	require.True(t, names["skill_load"], "knowledge tools should be present")
+	require.True(t, names["skill_run"], "skill_run should be present")
+	require.False(t, names["skill_exec"], "skill_exec should be omitted")
+	require.False(t, names["skill_write_stdin"], "skill_write_stdin should be omitted")
+	require.False(t, names["skill_poll_session"], "skill_poll_session should be omitted")
+	require.False(t, names["skill_kill_session"], "skill_kill_session should be omitted")
+}
+
+func TestLLMAgent_ExecToolsRegisteredForInteractiveExecutor(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New("tester", WithSkills(repo), WithCodeExecutor(&interactiveStubExec{}))
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+
+	require.True(t, names["skill_load"])
+	require.True(t, names["skill_run"])
+	require.True(t, names["skill_exec"])
+	require.True(t, names["skill_write_stdin"])
+	require.True(t, names["skill_poll_session"])
+	require.True(t, names["skill_kill_session"])
+}
+
+func TestLLMAgent_ExecToolsRegisteredForFallbackExecutor(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New("tester", WithSkills(repo), WithCodeExecutor(&bareExec{}))
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+
+	require.True(t, names["skill_load"])
+	require.True(t, names["skill_run"])
+	require.True(t, names["skill_exec"],
+		"bareExec has no EngineProvider; runtime falls back to local which supports interactive")
+	require.True(t, names["skill_write_stdin"])
+	require.True(t, names["skill_poll_session"])
+	require.True(t, names["skill_kill_session"])
+}
+
+func TestLLMAgent_ExecToolsRegisteredForNilEngineExecutor(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New("tester", WithSkills(repo), WithCodeExecutor(&nilEngineExec{}))
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+
+	require.True(t, names["skill_load"])
+	require.True(t, names["skill_run"])
+	require.True(t, names["skill_exec"],
+		"nilEngineExec returns nil Engine; runtime falls back to local which supports interactive")
+	require.True(t, names["skill_write_stdin"])
+	require.True(t, names["skill_poll_session"])
+	require.True(t, names["skill_kill_session"])
+}
+
+func TestExecutorSupportsInteractive(t *testing.T) {
+	tests := []struct {
+		name     string
+		executor codeexecutor.CodeExecutor
+		want     bool
+	}{
+		{
+			name:     "nil executor uses default local (supports interactive)",
+			executor: nil,
+			want:     true,
+		},
+		{
+			name:     "EngineProvider with non-interactive runner",
+			executor: &stubExec{},
+			want:     false,
+		},
+		{
+			name:     "EngineProvider with interactive runner",
+			executor: &interactiveStubExec{},
+			want:     true,
+		},
+		{
+			name:     "no EngineProvider falls back to local (interactive)",
+			executor: &bareExec{},
+			want:     true,
+		},
+		{
+			name:     "EngineProvider returns nil engine falls back to local (interactive)",
+			executor: &nilEngineExec{},
+			want:     true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &Options{codeExecutor: tt.executor}
+			got := executorSupportsInteractive(opts)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestLLMAgent_GuidanceOmitsExecForNonInteractiveExecutor(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithCodeExecutor(&stubExec{})(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.NotContains(t, sys, "skill_exec",
+		"guidance should not mention skill_exec when executor is non-interactive")
+	require.NotContains(t, sys, "skill_write_stdin")
+	require.NotContains(t, sys, "skill_poll_session")
+	require.NotContains(t, sys, "skill_kill_session")
+}
+
+func TestLLMAgent_GuidanceIncludesExecForInteractiveExecutor(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithCodeExecutor(&interactiveStubExec{})(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.Contains(t, sys, "skill_exec")
+	require.Contains(t, sys, "skill_write_stdin")
+}

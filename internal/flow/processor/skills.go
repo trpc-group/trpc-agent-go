@@ -47,11 +47,12 @@ const (
 )
 
 type skillsRequestProcessorOptions struct {
-	toolingGuidance *string
-	loadMode        string
-	toolResultMode  bool
-	maxLoadedSkills int
-	toolProfile     string
+	toolingGuidance   *string
+	loadMode          string
+	toolResultMode    bool
+	maxLoadedSkills   int
+	toolProfile       string
+	execToolsDisabled bool
 }
 
 // SkillsRequestProcessorOption configures SkillsRequestProcessor.
@@ -110,6 +111,17 @@ func WithSkillToolProfile(profile string) SkillsRequestProcessorOption {
 	}
 }
 
+// WithSkillExecToolsDisabled tells the processor that skill_exec and its
+// companion session tools were not registered (e.g. because the executor
+// does not support interactive sessions).  The processor omits the
+// corresponding guidance lines so the model is never taught to use tools
+// it cannot call.
+func WithSkillExecToolsDisabled() SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.execToolsDisabled = true
+	}
+}
+
 // WithMaxLoadedSkills caps how many skills remain "loaded" in session
 // state.
 //
@@ -136,12 +148,13 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 //   - skill.DocsKey(agentName, skillName) ->
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
-	repo            skill.Repository
-	toolingGuidance *string
-	loadMode        string
-	toolResultMode  bool
-	maxLoadedSkills int
-	toolProfile     string
+	repo              skill.Repository
+	toolingGuidance   *string
+	loadMode          string
+	toolResultMode    bool
+	maxLoadedSkills   int
+	toolProfile       string
+	execToolsDisabled bool
 }
 
 const (
@@ -161,12 +174,13 @@ func NewSkillsRequestProcessor(
 		opt(&options)
 	}
 	return &SkillsRequestProcessor{
-		repo:            repo,
-		toolingGuidance: options.toolingGuidance,
-		loadMode:        normalizeSkillLoadMode(options.loadMode),
-		toolResultMode:  options.toolResultMode,
-		maxLoadedSkills: options.maxLoadedSkills,
-		toolProfile:     skillprofile.Normalize(options.toolProfile),
+		repo:              repo,
+		toolingGuidance:   options.toolingGuidance,
+		loadMode:          normalizeSkillLoadMode(options.loadMode),
+		toolResultMode:    options.toolResultMode,
+		maxLoadedSkills:   options.maxLoadedSkills,
+		toolProfile:       skillprofile.Normalize(options.toolProfile),
+		execToolsDisabled: options.execToolsDisabled,
 	}
 }
 
@@ -582,7 +596,9 @@ func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
 
 func (p *SkillsRequestProcessor) toolingGuidanceText() string {
 	if p.toolingGuidance == nil {
-		return defaultToolingAndWorkspaceGuidance(p.toolProfile)
+		return defaultToolingAndWorkspaceGuidance(
+			p.toolProfile, p.execToolsDisabled,
+		)
 	}
 	return normalizeGuidance(*p.toolingGuidance)
 }
@@ -610,11 +626,13 @@ func (p *SkillsRequestProcessor) capabilityGuidanceText() string {
 	return b.String()
 }
 
-func defaultToolingAndWorkspaceGuidance(profile string) string {
+func defaultToolingAndWorkspaceGuidance(
+	profile string, execToolsDisabled bool,
+) string {
 	if skillprofile.IsKnowledgeOnly(profile) {
 		return defaultKnowledgeOnlyGuidance()
 	}
-	return defaultFullToolingAndWorkspaceGuidance()
+	return defaultFullToolingAndWorkspaceGuidance(execToolsDisabled)
 }
 
 func defaultKnowledgeOnlyGuidance() string {
@@ -636,7 +654,7 @@ func defaultKnowledgeOnlyGuidance() string {
 	return b.String()
 }
 
-func defaultFullToolingAndWorkspaceGuidance() string {
+func defaultFullToolingAndWorkspaceGuidance(execToolsDisabled bool) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(skillsToolingGuidanceHeader)
@@ -715,14 +733,20 @@ func defaultFullToolingAndWorkspaceGuidance() string {
 	b.WriteString("the skill docs or bundled scripts, plus the minimal ")
 	b.WriteString("read-only probe commands needed to verify external ")
 	b.WriteString("CLI behavior.\n")
-	b.WriteString("- Use skill_exec when a command may stay running, ")
-	b.WriteString("prompt for input, or require incremental stdin/TTY ")
-	b.WriteString("interaction. Then use skill_write_stdin or ")
-	b.WriteString("skill_poll_session until it exits, and ")
-	b.WriteString("skill_kill_session to stop it if needed.\n")
-	b.WriteString("- For CLIs that launch $EDITOR, prefer editor_text ")
-	b.WriteString("on skill_run or skill_exec instead of trying to ")
-	b.WriteString("drive a full-screen editor through stdin.\n")
+	if !execToolsDisabled {
+		b.WriteString("- Use skill_exec when a command may stay running, ")
+		b.WriteString("prompt for input, or require incremental stdin/TTY ")
+		b.WriteString("interaction. Then use skill_write_stdin or ")
+		b.WriteString("skill_poll_session until it exits, and ")
+		b.WriteString("skill_kill_session to stop it if needed.\n")
+		b.WriteString("- For CLIs that launch $EDITOR, prefer editor_text ")
+		b.WriteString("on skill_run or skill_exec instead of trying to ")
+		b.WriteString("drive a full-screen editor through stdin.\n")
+	} else {
+		b.WriteString("- For CLIs that launch $EDITOR, prefer editor_text ")
+		b.WriteString("on skill_run instead of trying to drive a ")
+		b.WriteString("full-screen editor through stdin.\n")
+	}
 	b.WriteString("- Safe probe commands include patterns such as ")
 	b.WriteString("`--help`, `-h`, `--version`, or `<subcommand> ")
 	b.WriteString("--help` when exact syntax is uncertain or a command ")

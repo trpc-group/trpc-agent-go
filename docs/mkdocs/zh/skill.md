@@ -246,8 +246,10 @@ agent := llmagent.New(
   (https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/skills.go)
 - `WithSkills` 会自动注册内置 skill 工具，无需手动添加。
   - 默认 `full` 档位：`skill_load`、`skill_select_docs`、
-    `skill_list_docs`、`skill_run`、`skill_exec`、
-    `skill_write_stdin`、`skill_poll_session`、`skill_kill_session`。
+    `skill_list_docs`、`skill_run`，以及——当执行器支持交互式
+    会话时——`skill_exec`、`skill_write_stdin`、`skill_poll_session`、
+    `skill_kill_session`。若执行器未实现 `InteractiveProgramRunner`
+    （且无本地回退），这些会话工具将被省略，相应的提示文案也会被跳过。
   - `knowledge_only` 档位：只注册 `skill_load`、
     `skill_select_docs` 与 `skill_list_docs`。
   - 执行器是否需要，也取决于档位：

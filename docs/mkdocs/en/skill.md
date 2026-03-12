@@ -264,8 +264,12 @@ Key points:
 - `WithSkills` auto-registers built-in skill tools; no manual wiring is
   required.
   - Default `full` profile: `skill_load`, `skill_select_docs`,
-    `skill_list_docs`, `skill_run`, `skill_exec`,
-    `skill_write_stdin`, `skill_poll_session`, `skill_kill_session`.
+    `skill_list_docs`, `skill_run`, and — when the executor supports
+    interactive sessions — `skill_exec`, `skill_write_stdin`,
+    `skill_poll_session`, `skill_kill_session`.  If the executor does
+    not implement `InteractiveProgramRunner` (and no local fallback
+    applies), these session tools are omitted and the corresponding
+    prompt guidance is suppressed.
   - `knowledge_only` profile: only `skill_load`, `skill_select_docs`,
     and `skill_list_docs`.
   - Executor requirement follows the profile:

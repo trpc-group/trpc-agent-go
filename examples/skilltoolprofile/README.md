@@ -37,8 +37,9 @@ go run . -profile knowledge_only
 
 In `full` mode:
 
-- `skill_load`, `skill_list_docs`, `skill_select_docs`, `skill_run`,
-  `skill_exec`, and session tools are registered
+- `skill_load`, `skill_list_docs`, `skill_select_docs`, `skill_run`
+  are registered; `skill_exec` and session tools are also registered
+  when the executor supports interactive sessions
 - a local executor is attached
 - the mock model calls `skill_load`, then `skill_run`
 

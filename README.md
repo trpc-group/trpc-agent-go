@@ -550,12 +550,15 @@ Example: [examples/skillrun](examples/skillrun)
 
 - Skills are folders with a `SKILL.md` spec + optional docs/scripts.
 - Built-in tools: `skill_load`, `skill_list_docs`, `skill_select_docs`,
-  `skill_run`, `skill_exec`, `skill_write_stdin`,
-  `skill_poll_session`, `skill_kill_session`.
+  `skill_run`, and (when the executor supports interactive sessions)
+  `skill_exec`, `skill_write_stdin`, `skill_poll_session`,
+  `skill_kill_session`.
 - `skill_run` is the default one-shot command runner in an isolated
   workspace.
 - `skill_exec` and the session tools cover interactive stdin/TTY flows
-  without inlining full scripts into the prompt.
+  without inlining full scripts into the prompt. They are registered
+  only when the code executor exposes `InteractiveProgramRunner`
+  (or falls back to a local engine that does).
 - Prefer using `skill_run` only for commands required by the selected skill
   docs, not for generic shell exploration.
 - When `LLMAgent` uses `WithCodeExecutor(...)` only to support `skill_run`,
