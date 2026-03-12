@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -453,72 +454,83 @@ func (dk *BuiltinKnowledge) loadSequential(
 
 	// Initialise statistics helpers.
 	sizeBuckets := defaultSizeBuckets
-	stats := newSizeStats(sizeBuckets)
 
 	totalSources := len(sources)
 	log.InfofContext(ctx, "Starting knowledge base loading with %d sources", totalSources)
 
+	sourceNames := make([]string, 0, totalSources)
+	for _, s := range sources {
+		sourceNames = append(sourceNames, s.Name())
+	}
+
 	var allAddedIDs []string
 	var processedDocs int
+	reporter := newLoadReporter(config, sourceNames, startTime, sizeBuckets, func() int { return processedDocs })
+	defer reporter.Close()
+
 	for i, src := range sources {
 		sourceName := src.Name()
 		sourceType := src.Type()
 		log.InfofContext(ctx, "Loading source %d/%d: %s (type: %s)",
 			i+1, totalSources, sourceName, sourceType)
 
-		srcStartTime := time.Now()
 		docs, err := src.ReadDocuments(ctx)
 		if err != nil {
 			log.ErrorfContext(ctx, "Failed to read documents from source %s: %v",
 				sourceName, err)
+			reporter.Error(ctx, LoadProgressEvent{SourceName: sourceName}, err)
 			return nil, fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
 		}
 
 		log.InfofContext(ctx, "Fetched %d document(s) from source %s", len(docs), sourceName)
 
 		// Per-source statistics.
-		srcStats := newSizeStats(sizeBuckets)
+		srcStats := loader.NewStats(sizeBuckets)
 		for _, d := range docs {
 			sz := len(d.Content)
-			srcStats.add(sz, sizeBuckets)
-			stats.add(sz, sizeBuckets)
+			srcStats.Add(sz, sizeBuckets)
+			reporter.RecordStat(sz)
 		}
 
 		if config.showStats {
 			log.InfofContext(ctx, "Statistics for source %s:", sourceName)
-			srcStats.log(sizeBuckets)
+			srcStats.Log(sizeBuckets)
 		}
 
 		log.InfofContext(ctx, "Start embedding & storing documents from source %s...", sourceName)
 
-		// Process documents with progress logging if enabled.
+		// srcStartTime tracks only the embed+store phase, so that Elapsed and ETA
+		// in progress events and logs reflect actual indexing throughput rather than
+		// including the (often slow) ReadDocuments I/O time.
+		srcStartTime := time.Now()
+
 		for j, doc := range docs {
 			if err := dk.addDocumentWithSync(ctx, doc, src); err != nil {
 				log.ErrorfContext(ctx, "Failed to add document from source %s: %v",
 					sourceName, err)
+				reporter.Error(ctx, LoadProgressEvent{
+					SourceName:      sourceName,
+					SourceProcessed: j,
+					SourceTotal:     len(docs),
+					SourceElapsed:   time.Since(srcStartTime),
+				}, err)
 				return nil, fmt.Errorf("failed to add document from source %s: %w", sourceName, err)
 			}
 
 			allAddedIDs = append(allAddedIDs, doc.ID)
 			processedDocs++
 
-			// Log progress based on configuration.
-			if config.showProgress {
-				srcProcessed := j + 1
-				totalSrc := len(docs)
-
-				// Respect progressStepSize for logging frequency.
-				if srcProcessed%config.progressStepSize == 0 || srcProcessed == totalSrc {
-					etaSrc := calcETA(srcStartTime, srcProcessed, totalSrc)
-					elapsedSrc := time.Since(srcStartTime)
-
-					log.InfofContext(ctx,
-						"Processed %d/%d doc(s) | source %s | elapsed %s | ETA %s",
-						srcProcessed, totalSrc, sourceName,
-						elapsedSrc.Truncate(time.Second),
-						etaSrc.Truncate(time.Second))
-				}
-			}
+			srcProcessed := j + 1
+			totalSrc := len(docs)
+			etaSrc := calcETA(srcStartTime, srcProcessed, totalSrc)
+			elapsedSrc := time.Since(srcStartTime)
+			reporter.Progress(ctx, LoadProgressEvent{
+				SourceName:      sourceName,
+				SourceProcessed: srcProcessed,
+				SourceTotal:     totalSrc,
+				SourceElapsed:   elapsedSrc,
+				SourceETA:       etaSrc,
+			})
 		}
 		log.InfofContext(ctx, "Successfully loaded source %s", sourceName)
 	}
@@ -527,10 +539,7 @@ func (dk *BuiltinKnowledge) loadSequential(
 	log.InfofContext(ctx, "Knowledge base loading completed in %s (%d sources)",
 		elapsedTotal, totalSources)
 
-	// Output statistics if requested.
-	if config.showStats && stats.totalDocs > 0 {
-		stats.log(sizeBuckets)
-	}
+	reporter.Done(ctx)
 	return allAddedIDs, nil
 }
 
@@ -539,10 +548,6 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 	ctx context.Context,
 	config *loadConfig,
 	sources []source.Source) ([]string, error) {
-	// Create aggregator for collecting results
-	aggr := loader.NewAggregator(defaultSizeBuckets, config.showStats, config.showProgress, config.progressStepSize)
-	defer aggr.Close()
-
 	// Create worker pool for source processing
 	srcPool, err := ants.NewPool(config.srcParallelism)
 	if err != nil {
@@ -561,6 +566,18 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 	var allAddedIDs []string
 	var mu sync.Mutex
 	errCh := make(chan error, len(sources))
+	var globalProcessed atomic.Int64
+	loadStartTime := time.Now()
+	sizeBuckets := defaultSizeBuckets
+
+	sourceNames := make([]string, 0, len(sources))
+	for _, s := range sources {
+		sourceNames = append(sourceNames, s.Name())
+	}
+
+	reporter := newLoadReporter(config, sourceNames, loadStartTime, sizeBuckets,
+		func() int { return int(globalProcessed.Load()) })
+	defer reporter.Close()
 
 	for i, src := range sources {
 		wg.Add(1)
@@ -575,11 +592,18 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 				srcIdx+1, len(sources), sourceName, sourceType)
 			docs, err := source.ReadDocuments(ctx)
 			if err != nil {
+				reporter.Error(ctx, LoadProgressEvent{SourceName: sourceName}, err)
 				errCh <- fmt.Errorf("failed to read documents from source %s: %w", sourceName, err)
 				return
 			}
 			log.InfofContext(ctx, "Fetched %d document(s) from source %s", len(docs), sourceName)
-			if err := dk.processDocuments(ctx, docs, config, aggr, docPool, source); err != nil {
+			processed, err := dk.processDocuments(ctx, docs, docPool, source, &globalProcessed, reporter)
+			if err != nil {
+				reporter.Error(ctx, LoadProgressEvent{
+					SourceName:      sourceName,
+					SourceProcessed: processed,
+					SourceTotal:     len(docs),
+				}, err)
 				errCh <- fmt.Errorf("failed to process documents for source %s: %w", sourceName, err)
 				return
 			}
@@ -608,38 +632,58 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 		}
 	}
 
+	reporter.Done(ctx)
+
 	return allAddedIDs, nil
 }
 
 // processDocuments embeds and stores all documents from a single source using
-// document-level parallelism.
+// document-level parallelism. It returns the number of documents successfully
+// processed and the first error encountered, if any.
 func (dk *BuiltinKnowledge) processDocuments(
 	ctx context.Context,
 	docs []*document.Document,
-	cfg *loadConfig,
-	aggr *loader.Aggregator,
 	pool *ants.Pool,
 	src source.Source,
-) error {
+	globalProcessed *atomic.Int64,
+	reporter *loadReporter,
+) (int, error) {
 	var wgDoc sync.WaitGroup
 	errCh := make(chan error, len(docs))
+	var completedCount atomic.Int64
+	startTime := time.Now()
 
 	processDoc := func(doc *document.Document, docIndex int) func() {
 		return func() {
 			defer wgDoc.Done()
 			if err := dk.addDocumentWithSync(ctx, doc, src); err != nil {
+				reporter.Error(ctx, LoadProgressEvent{
+					SourceName:      src.Name(),
+					SourceProcessed: int(completedCount.Load()),
+					SourceTotal:     len(docs),
+					SourceElapsed:   time.Since(startTime),
+				}, err)
 				errCh <- fmt.Errorf("add document: %w", err)
 				return
 			}
 
-			aggr.StatCh() <- loader.StatEvent{Size: len(doc.Content)}
-			if cfg.showProgress {
-				aggr.ProgCh() <- loader.ProgEvent{
-					SrcName:      src.Name(),
-					SrcProcessed: docIndex + 1,
-					SrcTotal:     len(docs),
-				}
+			completed := int(completedCount.Add(1))
+			total := len(docs)
+			globalProcessed.Add(1)
+			reporter.RecordStat(len(doc.Content))
+
+			elapsed := time.Since(startTime)
+			var eta time.Duration
+			if completed > 0 {
+				eta = time.Duration(float64(elapsed) / float64(completed) * float64(total-completed))
 			}
+			reporter.Progress(ctx, LoadProgressEvent{
+				SourceName:      src.Name(),
+				SourceProcessed: completed,
+				SourceTotal:     total,
+				SourceElapsed:   elapsed,
+				SourceETA:       eta,
+			})
 		}
 	}
 
@@ -659,13 +703,14 @@ func (dk *BuiltinKnowledge) processDocuments(
 	wgDoc.Wait()
 	close(errCh)
 
+	processed := int(completedCount.Load())
 	// Check for any errors
 	for err := range errCh {
 		if err != nil {
-			return err
+			return processed, err
 		}
 	}
-	return nil
+	return processed, nil
 }
 
 // buildLoadConfig creates a load configuration with defaults and applies the given options.
@@ -1081,80 +1126,6 @@ func convertQueryFilter(qf *SearchFilter) *retriever.QueryFilter {
 		DocumentIDs:     qf.DocumentIDs,
 		Metadata:        qf.Metadata,
 		FilterCondition: qf.FilterCondition,
-	}
-}
-
-// sizeStats tracks statistics for document sizes during a load run.
-type sizeStats struct {
-	totalDocs  int
-	totalSize  int
-	minSize    int
-	maxSize    int
-	bucketCnts []int
-}
-
-// newSizeStats returns a sizeStats initialised for the provided buckets.
-func newSizeStats(buckets []int) *sizeStats {
-	return &sizeStats{
-		minSize:    int(^uint(0) >> 1), // Initialise with max-int.
-		bucketCnts: make([]int, len(buckets)+1),
-	}
-}
-
-// add records the size of a document.
-func (ss *sizeStats) add(size int, buckets []int) {
-	ss.totalDocs++
-	ss.totalSize += size
-	if size < ss.minSize {
-		ss.minSize = size
-	}
-	if size > ss.maxSize {
-		ss.maxSize = size
-	}
-
-	placed := false
-	for i, upper := range buckets {
-		if size < upper {
-			ss.bucketCnts[i]++
-			placed = true
-			break
-		}
-	}
-	if !placed {
-		ss.bucketCnts[len(ss.bucketCnts)-1]++
-	}
-}
-
-// avg returns the average document size.
-func (ss *sizeStats) avg() float64 {
-	if ss.totalDocs == 0 {
-		return 0
-	}
-	return float64(ss.totalSize) / float64(ss.totalDocs)
-}
-
-// log outputs the collected statistics.
-func (ss *sizeStats) log(buckets []int) {
-	log.Infof(
-		"Document statistics - total: %d, avg: %.1f B, min: %d B, max: %d B",
-		ss.totalDocs, ss.avg(), ss.minSize, ss.maxSize,
-	)
-
-	lower := 0
-	for i, upper := range buckets {
-		if ss.bucketCnts[i] == 0 {
-			lower = upper
-			continue
-		}
-		log.Infof("  [%d, %d): %d document(s)", lower, upper,
-			ss.bucketCnts[i])
-		lower = upper
-	}
-
-	lastCnt := ss.bucketCnts[len(ss.bucketCnts)-1]
-	if lastCnt > 0 {
-		log.Infof("  [>= %d]: %d document(s)", buckets[len(buckets)-1],
-			lastCnt)
 	}
 }
 
