@@ -1,6 +1,6 @@
 # AST-based Proto File Source
 
-Demonstrates how proto files are parsed using AST-based reader with knowledge base integration.
+Demonstrates how proto files are parsed using an AST-based reader with knowledge base integration.
 
 ## Overview
 
@@ -42,14 +42,14 @@ The proto reader extracts structured metadata with `trpc_ast_` prefix:
 
 | Metadata Key | Description |
 |-------------|-------------|
-| `trpc_ast_proto_syntax` | proto2 or proto3 |
-| `trpc_ast_proto_package` | Package name (e.g., `example.v1`) |
-| `trpc_ast_proto_imports` | List of imported files |
-| `trpc_ast_proto_import_count` | Number of imports |
-| `trpc_ast_proto_services` | List of service names |
-| `trpc_ast_proto_service_count` | Number of services |
-| `trpc_ast_proto_messages` | List of message names |
-| `trpc_ast_proto_message_count` | Number of messages |
+| `trpc_ast_syntax` | proto2 or proto3 |
+| `trpc_ast_package` | Package name (e.g., `example.v1`) |
+| `trpc_ast_imports` | List of imported files |
+| `trpc_ast_import_count` | Number of imports |
+| `trpc_ast_services` | List of service names |
+| `trpc_ast_service_count` | Number of services |
+| `trpc_ast_messages` | List of message names |
+| `trpc_ast_message_count` | Number of messages |
 
 ### 3. Knowledge Base Integration
 
@@ -85,10 +85,10 @@ Vector Store: inmemory
 Loading documents: 3 chunks processed
 
 1. 🔍 Query: What services are defined in the API?
-   🤖 Response: The API defines a UserService with methods including GetUser, CreateUser, and ListUsers...
+   🤖 Response: The API defines AgentService and KnowledgeService...
 
-2. 🔍 Query: Tell me about the User message structure
-   🤖 Response: The User message contains fields: id (int64), name (string), email (string), and created_at (Timestamp)...
+2. 🔍 Query: Tell me about the AgentRequest message structure
+   🤖 Response: AgentRequest includes fields like query, session_id, and context...
 
 ✅ Demo completed!
 ```

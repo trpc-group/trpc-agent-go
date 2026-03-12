@@ -179,7 +179,6 @@ func (r *Reader) parseAndExtract(content, name string) ([]*document.Document, er
 	}
 	imports := fd.GetDependency()
 	goPackage, javaPackage := extractFileOptions(fd)
-
 	// Split content into lines for extracting source code ranges
 	lines := strings.Split(content, "\n")
 
@@ -201,17 +200,17 @@ func (r *Reader) parseAndExtract(content, name string) ([]*document.Document, er
 
 // entityExtractor holds context for extracting entities from a parsed proto file.
 type entityExtractor struct {
-	fileNode          *ast.FileNode
-	result            parser.Result
-	fileName          string
-	protoPackage      string
-	syntax            string
-	goPackage         string
-	javaPackage       string
-	imports           []string
-	lines             []string
-	allMessageNames   []string
-	allServiceNames   []string
+	fileNode        *ast.FileNode
+	result          parser.Result
+	fileName        string
+	protoPackage    string
+	syntax          string
+	goPackage       string
+	javaPackage     string
+	imports         []string
+	lines           []string
+	allMessageNames []string
+	allServiceNames []string
 }
 
 // extract extracts all entities (messages, enums, services, RPCs) from the parsed proto file.
@@ -277,6 +276,12 @@ func (e *entityExtractor) addFileMetadata(doc *document.Document) {
 	if e.protoPackage != "" {
 		doc.Metadata["trpc_ast_package"] = e.protoPackage
 	}
+	if e.goPackage != "" {
+		doc.Metadata["trpc_ast_go_package"] = e.goPackage
+	}
+	if e.javaPackage != "" {
+		doc.Metadata["trpc_ast_java_package"] = e.javaPackage
+	}
 	if len(e.imports) > 0 {
 		doc.Metadata["trpc_ast_imports"] = e.imports
 		doc.Metadata["trpc_ast_import_count"] = len(e.imports)
@@ -304,7 +309,7 @@ func (e *entityExtractor) extractService(svc *descriptorpb.ServiceDescriptorProt
 	comment := e.extractComment(svcASTNode)
 
 	// Create service document
-	svcDoc := e.createEntityDocument(code, svcName, "Service", svcFullName, comment, startLine, endLine, chunkIndex)
+	svcDoc := e.createEntityDocument(code, svcName, "Service", svcFullName, comment, "", startLine, endLine, chunkIndex)
 	svcDoc.Metadata["trpc_ast_type"] = "service"
 	svcDoc.Metadata["trpc_ast_name"] = svcName
 	svcDoc.Metadata["trpc_ast_full_name"] = svcFullName
@@ -354,7 +359,7 @@ func (e *entityExtractor) extractRPC(method *descriptorpb.MethodDescriptorProto,
 	code := e.extractCode(startLine, endLine)
 	comment := e.extractComment(methodASTNode)
 
-	doc := e.createEntityDocument(code, rpcName, "RPC", rpcFullName, comment, startLine, endLine, chunkIndex)
+	doc := e.createEntityDocument(code, rpcName, "RPC", rpcFullName, comment, sig, startLine, endLine, chunkIndex)
 	doc.Metadata["trpc_ast_type"] = "rpc"
 	doc.Metadata["trpc_ast_name"] = rpcName
 	doc.Metadata["trpc_ast_full_name"] = rpcFullName
@@ -390,7 +395,7 @@ func (e *entityExtractor) extractMessage(msg *descriptorpb.DescriptorProto, pare
 	comment := e.extractComment(msgASTNode)
 
 	// Create message document
-	doc := e.createEntityDocument(code, msgName, "Message", msgFullName, comment, startLine, endLine, chunkIndex)
+	doc := e.createEntityDocument(code, msgName, "Message", msgFullName, comment, "", startLine, endLine, chunkIndex)
 	doc.Metadata["trpc_ast_type"] = "message"
 	doc.Metadata["trpc_ast_name"] = msgName
 	doc.Metadata["trpc_ast_full_name"] = msgFullName
@@ -435,7 +440,7 @@ func (e *entityExtractor) extractEnum(enum *descriptorpb.EnumDescriptorProto, pa
 		enumValues = append(enumValues, value.GetName())
 	}
 
-	doc := e.createEntityDocument(code, enumName, "Enum", enumFullName, comment, startLine, endLine, chunkIndex)
+	doc := e.createEntityDocument(code, enumName, "Enum", enumFullName, comment, "", startLine, endLine, chunkIndex)
 	doc.Metadata["trpc_ast_type"] = "enum"
 	doc.Metadata["trpc_ast_name"] = enumName
 	doc.Metadata["trpc_ast_full_name"] = enumFullName
@@ -451,7 +456,7 @@ func (e *entityExtractor) extractEnum(enum *descriptorpb.EnumDescriptorProto, pa
 }
 
 // createEntityDocument creates a document for a proto entity with full metadata.
-func (e *entityExtractor) createEntityDocument(code, name, entityType, fullName, comment string, startLine, endLine int, chunkIndex *int) *document.Document {
+func (e *entityExtractor) createEntityDocument(code, name, entityType, fullName, comment, signature string, startLine, endLine int, chunkIndex *int) *document.Document {
 	doc := idocument.CreateDocument(code, e.fileName)
 
 	// Initialize metadata
@@ -462,6 +467,12 @@ func (e *entityExtractor) createEntityDocument(code, name, entityType, fullName,
 	// Set entity-specific metadata
 	doc.Metadata["trpc_ast_package"] = e.protoPackage
 	doc.Metadata["trpc_ast_syntax"] = e.syntax
+	if e.goPackage != "" {
+		doc.Metadata["trpc_ast_go_package"] = e.goPackage
+	}
+	if e.javaPackage != "" {
+		doc.Metadata["trpc_ast_java_package"] = e.javaPackage
+	}
 	if len(e.imports) > 0 {
 		doc.Metadata["trpc_ast_imports"] = e.imports
 		doc.Metadata["trpc_ast_import_count"] = len(e.imports)
@@ -470,8 +481,9 @@ func (e *entityExtractor) createEntityDocument(code, name, entityType, fullName,
 	doc.Metadata["trpc_ast_line_end"] = endLine
 	doc.Metadata["trpc_ast_chunk_index"] = *chunkIndex
 
-	// Build embedding text with metadata JSON
-	doc.EmbeddingText = e.buildEmbeddingText(code, name, entityType, fullName, comment, "")
+	// Build embedding text with metadata JSON.
+	// For RPC entities, include the human-readable signature in embedding payload.
+	doc.EmbeddingText = e.buildEmbeddingText(code, name, entityType, fullName, comment, signature)
 
 	*chunkIndex++
 	return doc
@@ -480,6 +492,9 @@ func (e *entityExtractor) createEntityDocument(code, name, entityType, fullName,
 // createFileDocument creates a document for the entire proto file.
 func (r *Reader) createFileDocument(content, name string) *document.Document {
 	doc := idocument.CreateDocument(content, name)
+	if doc.Metadata == nil {
+		doc.Metadata = make(map[string]any)
+	}
 
 	// Extract file-level metadata
 	fileMetadata := r.extractFileMetadata(content)
@@ -628,6 +643,14 @@ func (r *Reader) extractFileMetadata(content string) map[string]any {
 		metadata["trpc_ast_import_count"] = len(imports)
 	}
 
+	// Extract option packages
+	if goPkg := r.extractOptionString(content, "go_package"); goPkg != "" {
+		metadata["trpc_ast_go_package"] = goPkg
+	}
+	if javaPkg := r.extractOptionString(content, "java_package"); javaPkg != "" {
+		metadata["trpc_ast_java_package"] = javaPkg
+	}
+
 	// Extract service names for file-level metadata
 	services := r.extractServiceNames(content)
 	if len(services) > 0 {
@@ -737,6 +760,16 @@ func (r *Reader) extractImports(content string) []string {
 	return imports
 }
 
+// extractOptionString extracts option string values like go_package/java_package.
+func (r *Reader) extractOptionString(content, optionName string) string {
+	re := regexp.MustCompile(`(?m)^\s*option\s+` + regexp.QuoteMeta(optionName) + `\s*=\s*"([^"]+)"\s*;`)
+	matches := re.FindStringSubmatch(content)
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return ""
+}
+
 // extractFileNameFromURL extracts a file name from a URL.
 func (r *Reader) extractFileNameFromURL(url string) string {
 	parts := strings.Split(url, "/")
@@ -785,6 +818,8 @@ func (r *Reader) SupportedExtensions() []string {
 }
 
 // extractFileOptions extracts go_package and java_package from the file descriptor proto.
+// Since ResultFromAST stores options as UninterpretedOption (not in typed fields),
+// we iterate over them to find the well-known option names.
 func extractFileOptions(fd *descriptorpb.FileDescriptorProto) (goPackage, javaPackage string) {
 	opts := fd.GetOptions()
 	if opts == nil {

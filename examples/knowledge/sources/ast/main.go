@@ -113,8 +113,8 @@ func main() {
 
 	queries := []string{
 		"What services are defined in the API?",
-		"Tell me about the User message structure",
-		"What RPC methods are available for UserService?",
+		"Tell me about the AgentRequest message structure",
+		"What RPC methods are available for AgentService and KnowledgeService?",
 	}
 
 	for i, q := range queries {
