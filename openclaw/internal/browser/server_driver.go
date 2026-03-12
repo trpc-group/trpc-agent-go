@@ -175,6 +175,10 @@ func (d *serverProfileDriver) Call(
 		body = map[string]any{"request": mapActArgs(actPress, args)}
 	case mcpToolResize:
 		body = map[string]any{"request": mapActArgs(actResize, args)}
+	case mcpToolScroll:
+		body = map[string]any{
+			"request": mapActArgs(actScrollIntoView, args),
+		}
 	case mcpToolEvaluate:
 		body = map[string]any{"request": mapActArgs(actEvaluate, args)}
 	case mcpToolWait:

@@ -1222,6 +1222,50 @@ func TestToolCall_ScreenshotPassesOptions(t *testing.T) {
 	require.Equal(t, "png", drv.calls[1].Args["type"])
 }
 
+func TestToolCall_SnapshotPassesBrowserServerOptions(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolSnapshot: textPayload("snapshot"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":   actionSnapshot,
+			"selector": "#main",
+			"limit":    5,
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionSnapshot, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolSnapshot, drv.calls[0].Tool)
+	require.Equal(t, "#main", drv.calls[0].Args["selector"])
+	require.Equal(t, 5, drv.calls[0].Args["limit"])
+}
+
 func TestToolCall_ActWaitPassesSupportedArgs(t *testing.T) {
 	t.Parallel()
 
@@ -1258,6 +1302,141 @@ func TestToolCall_ActWaitPassesSupportedArgs(t *testing.T) {
 	require.Equal(t, 2000, drv.calls[0].Args["timeoutMs"])
 }
 
+func TestToolCall_ActWaitAllowsBrowserServerSelectors(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolWait: textPayload("waited"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":      actWait,
+				"selector":  "#main",
+				"loadState": "load",
+				"url":       "https://example.com",
+				"timeoutMs": 2000,
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolWait, drv.calls[0].Tool)
+	require.Equal(t, "#main", drv.calls[0].Args["selector"])
+	require.Equal(t, "load", drv.calls[0].Args["loadState"])
+	require.Equal(t, "https://example.com", drv.calls[0].Args["url"])
+	require.Equal(t, 2000, drv.calls[0].Args["timeoutMs"])
+}
+
+func TestToolCall_ActWaitPassesBrowserServerFunction(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolWait: textPayload("waited"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		true,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":      actWait,
+				"fn":        "() => document.title",
+				"timeoutMs": 2000,
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolWait, drv.calls[0].Tool)
+	require.Equal(
+		t,
+		"() => document.title",
+		drv.calls[0].Args["fn"],
+	)
+	require.Equal(t, 2000, drv.calls[0].Args["timeoutMs"])
+}
+
+func TestToolCall_ActWaitRejectsFunctionWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	_, err := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: &fakeDriver{},
+		},
+	).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind": actWait,
+				"fn":   "() => document.title",
+			},
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disabled")
+}
+
 func TestToolCall_ActRejectsUnsupportedWaitShape(t *testing.T) {
 	t.Parallel()
 
@@ -1273,6 +1452,98 @@ func TestToolCall_ActRejectsUnsupportedWaitShape(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not supported")
+}
+
+func TestToolCall_ActScrollIntoViewPassesBrowserServerRef(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolScroll: textPayload("scrolled"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind": actScrollIntoView,
+				"ref":  "e1",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolScroll, drv.calls[0].Tool)
+	require.Equal(t, "e1", drv.calls[0].Args["ref"])
+}
+
+func TestToolCall_ActScrollIntoViewRejectsMCPDriver(t *testing.T) {
+	t.Parallel()
+
+	_, err := newTestTool(&fakeDriver{}).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind": actScrollIntoView,
+				"ref":  "e1",
+			},
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "browser-server")
+}
+
+func TestToolCall_ActPressPassesDelayMS(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolPressKey: textPayload("pressed"),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":    actPress,
+				"key":     "Enter",
+				"delayMs": 75,
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolPressKey, drv.calls[0].Tool)
+	require.Equal(t, 75, drv.calls[0].Args["delayMs"])
 }
 
 func TestToolCall_ActFillRequiresFields(t *testing.T) {

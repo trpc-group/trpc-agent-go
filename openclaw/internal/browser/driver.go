@@ -42,6 +42,7 @@ const (
 	mcpToolPDF        = "browser_pdf_save"
 	mcpToolPressKey   = "browser_press_key"
 	mcpToolResize     = "browser_resize"
+	mcpToolScroll     = "browser_scroll_into_view"
 	mcpToolScreenshot = "browser_take_screenshot"
 	mcpToolSelect     = "browser_select_option"
 	mcpToolSnapshot   = "browser_snapshot"
@@ -65,6 +66,7 @@ var supportedMCPTools = []string{
 	mcpToolPDF,
 	mcpToolPressKey,
 	mcpToolResize,
+	mcpToolScroll,
 	mcpToolScreenshot,
 	mcpToolSelect,
 	mcpToolSnapshot,

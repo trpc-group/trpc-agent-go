@@ -50,6 +50,7 @@ as:
 - `{"action":"open","url":"https://example.com"}`
 - `{"action":"snapshot"}`
 - `{"action":"act","request":{"kind":"click","ref":"..."} }`
+- `{"action":"act","request":{"kind":"wait","text":"Example Domain"}}`
 
 ## Security defaults
 
@@ -121,3 +122,6 @@ use:
 - `openclaw/examples/browser_server_use/`
 - `openclaw/browser-server/`
 - `openclaw/browser-extension/`
+
+That browser-server path needs one extra setup step before smoke tests:
+run `npx playwright install chromium` inside `openclaw/browser-server`.

@@ -144,7 +144,7 @@ export class BrowserRuntime {
     if (profile === "chrome") {
       return this.chromeRelay.execute(payload.targetId, "snapshot", payload);
     }
-    return this.hostProfile.snapshot(payload.targetId);
+    return this.hostProfile.snapshot(payload.targetId, payload);
   }
 
   async screenshot(profile, payload) {

@@ -5,11 +5,54 @@ import { chromium } from "playwright";
 import { snapshotDOM } from "./dom-tools.js";
 import { validateNavigationURL } from "./ssrf.js";
 
+const defaultWaitTimeoutMs = 30000;
+const defaultWaitDurationMs = 1000;
+const defaultSlowTypeDelayMs = 50;
+
 function textContent(text, extra = {}) {
   return {
     ...extra,
     content: [{ type: "text", text }]
   };
+}
+
+function normalizeModifiers(modifiers) {
+  const allowed = new Set(["Alt", "Control", "Meta", "Shift"]);
+  return (modifiers || [])
+    .map((value) => `${value || ""}`.trim())
+    .filter((value) => allowed.has(value));
+}
+
+function waitTimeoutMs(request) {
+  const timeoutMs = Number(request.timeoutMs);
+  if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    return timeoutMs;
+  }
+  return defaultWaitTimeoutMs;
+}
+
+function waitDurationMs(request) {
+  const timeMs = Number(request.timeMs);
+  if (Number.isFinite(timeMs) && timeMs > 0) {
+    return timeMs;
+  }
+  const timeSeconds = Number(request.time);
+  if (Number.isFinite(timeSeconds) && timeSeconds > 0) {
+    return timeSeconds * 1000;
+  }
+  return defaultWaitDurationMs;
+}
+
+function evaluateSource(request) {
+  return `${request.fn || request.function || ""}`.trim();
+}
+
+function formatEvaluatedValue(value) {
+  const text = JSON.stringify(value, null, 2);
+  if (text !== undefined) {
+    return text;
+  }
+  return String(value);
 }
 
 function formatTabs(tabs) {
@@ -169,9 +212,12 @@ export class HostProfile {
     });
   }
 
-  async snapshot(targetId) {
+  async snapshot(targetId, options = {}) {
     const page = this.requirePageOrCurrent(targetId);
-    const snapshot = await page.evaluate(snapshotDOM);
+    const snapshot = await page.evaluate(snapshotDOM, {
+      limit: Number(options.limit) || 0,
+      selector: `${options.selector || ""}`.trim()
+    });
     return textContent(snapshot.text, {
       targetId: this.pageIds.get(page),
       snapshot
@@ -251,18 +297,22 @@ export class HostProfile {
     const ref = `${request.ref || ""}`.trim();
     switch (`${request.kind || ""}`.trim()) {
       case "click":
-        await page.locator(`[data-openclaw-ref="${ref}"]`).click({
-          button: request.button || "left"
-        });
+        await this.click(page, request, ref);
         return textContent(`Clicked ${ref}.`);
       case "type":
-        await page.locator(`[data-openclaw-ref="${ref}"]`).fill(
-          `${request.text || ""}`
-        );
+        await this.type(page, request, ref);
         return textContent(`Typed into ${ref}.`);
       case "hover":
         await page.locator(`[data-openclaw-ref="${ref}"]`).hover();
         return textContent(`Hovered ${ref}.`);
+      case "scrollIntoView":
+        await this.scrollIntoView(page, request, ref);
+        return textContent(`Scrolled ${ref} into view.`);
+      case "drag":
+        await this.drag(page, request);
+        return textContent(
+          `Dragged ${request.startRef} -> ${request.endRef}.`
+        );
       case "select":
         await page.locator(`[data-openclaw-ref="${ref}"]`).selectOption(
           request.values || []
@@ -276,7 +326,9 @@ export class HostProfile {
         }
         return textContent("Filled form fields.");
       case "press":
-        await page.keyboard.press(`${request.key || ""}`);
+        await page.keyboard.press(`${request.key || ""}`, {
+          delay: Number(request.delayMs) || 0
+        });
         return textContent(`Pressed ${request.key}.`);
       case "resize":
         await page.setViewportSize({
@@ -297,21 +349,28 @@ export class HostProfile {
   }
 
   async waitFor(page, request) {
+    const timeoutMs = waitTimeoutMs(request);
     if (request.selector) {
       await page.waitForSelector(request.selector, {
-        timeout: Number(request.timeoutMs) || 30000
+        timeout: timeoutMs
       });
       return textContent(`Selector appeared: ${request.selector}`);
     }
+    if (request.url) {
+      await page.waitForURL(request.url, {
+        timeout: timeoutMs
+      });
+      return textContent(`URL matched: ${request.url}`);
+    }
     if (request.loadState) {
       await page.waitForLoadState(request.loadState, {
-        timeout: Number(request.timeoutMs) || 30000
+        timeout: timeoutMs
       });
       return textContent(`Load state reached: ${request.loadState}`);
     }
     if (request.text) {
       await page.getByText(request.text).waitFor({
-        timeout: Number(request.timeoutMs) || 30000
+        timeout: timeoutMs
       });
       return textContent(`Text appeared: ${request.text}`);
     }
@@ -319,21 +378,93 @@ export class HostProfile {
       await page.waitForFunction((value) => {
         return !document.body.innerText.includes(value);
       }, request.textGone, {
-        timeout: Number(request.timeoutMs) || 30000
+        timeout: timeoutMs
       });
       return textContent(`Text disappeared: ${request.textGone}`);
     }
-    await page.waitForTimeout(Number(request.timeMs) || 1000);
+    const fnText = evaluateSource(request);
+    if (fnText) {
+      await page.waitForFunction((source) => {
+        const fn = (0, eval)(`(${source})`);
+        return Boolean(fn());
+      }, fnText, {
+        timeout: timeoutMs
+      });
+      return textContent("Wait predicate matched.");
+    }
+    await page.waitForTimeout(waitDurationMs(request));
     return textContent("Wait completed.");
   }
 
   async evaluate(page, request) {
-    const fnText = `${request.fn || ""}`.trim();
+    const fnText = evaluateSource(request);
     if (!fnText) {
       throw new Error("evaluate requires fn");
     }
-    const value = await page.evaluate(`(${fnText})()`);
-    return textContent(JSON.stringify(value, null, 2), { value });
+    let value;
+    if (`${request.ref || ""}`.trim()) {
+      value = await page.locator(
+        `[data-openclaw-ref="${request.ref}"]`
+      ).evaluate((element, source) => {
+        const fn = (0, eval)(`(${source})`);
+        return fn(element);
+      }, fnText);
+    } else {
+      value = await page.evaluate((source) => {
+        const fn = (0, eval)(`(${source})`);
+        return fn();
+      }, fnText);
+    }
+    return textContent(formatEvaluatedValue(value), { value });
+  }
+
+  async click(page, request, ref) {
+    const locator = page.locator(`[data-openclaw-ref="${ref}"]`);
+    const options = {
+      button: request.button || "left",
+      modifiers: normalizeModifiers(request.modifiers)
+    };
+    if (request.doubleClick) {
+      await locator.dblclick(options);
+      return;
+    }
+    await locator.click(options);
+  }
+
+  async scrollIntoView(page, request, ref) {
+    await page.locator(
+      `[data-openclaw-ref="${ref}"]`
+    ).scrollIntoViewIfNeeded({
+      timeout: waitTimeoutMs(request)
+    });
+  }
+
+  async type(page, request, ref) {
+    const locator = page.locator(`[data-openclaw-ref="${ref}"]`);
+    const text = `${request.text || ""}`;
+    if (request.slowly) {
+      await locator.click();
+      await locator.fill("");
+      await page.keyboard.type(text, {
+        delay: defaultSlowTypeDelayMs
+      });
+    } else {
+      await locator.fill(text);
+    }
+    if (request.submit) {
+      await page.keyboard.press("Enter");
+    }
+  }
+
+  async drag(page, request) {
+    const startRef = `${request.startRef || ""}`.trim();
+    const endRef = `${request.endRef || ""}`.trim();
+    if (!startRef || !endRef) {
+      throw new Error("drag requires startRef and endRef");
+    }
+    await page.locator(`[data-openclaw-ref="${startRef}"]`).dragTo(
+      page.locator(`[data-openclaw-ref="${endRef}"]`)
+    );
   }
 
   trackPage(page) {

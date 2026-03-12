@@ -41,17 +41,18 @@ const (
 )
 
 const (
-	actClick    = "click"
-	actType     = "type"
-	actPress    = "press"
-	actHover    = "hover"
-	actDrag     = "drag"
-	actSelect   = "select"
-	actFill     = "fill"
-	actResize   = "resize"
-	actWait     = "wait"
-	actEvaluate = "evaluate"
-	actClose    = "close"
+	actClick          = "click"
+	actType           = "type"
+	actPress          = "press"
+	actHover          = "hover"
+	actScrollIntoView = "scrollIntoView"
+	actDrag           = "drag"
+	actSelect         = "select"
+	actFill           = "fill"
+	actResize         = "resize"
+	actWait           = "wait"
+	actEvaluate       = "evaluate"
+	actClose          = "close"
 )
 
 const (
@@ -338,16 +339,20 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 
 func browserSchema() *tool.Schema {
 	requestProps := map[string]*tool.Schema{
-		"kind":      stringSchema("Browser act kind."),
-		"targetId":  stringSchema("Tab target id from tabs output."),
-		"ref":       stringSchema("Snapshot ref id."),
-		"button":    stringSchema("Mouse button for click."),
-		"modifiers": stringArraySchema("Optional key modifiers."),
-		"text":      stringSchema("Text input."),
-		"key":       stringSchema("Keyboard key."),
-		"startRef":  stringSchema("Drag start ref."),
-		"endRef":    stringSchema("Drag end ref."),
-		"values":    stringArraySchema("Selected option values."),
+		"kind":        stringSchema("Browser act kind."),
+		"targetId":    stringSchema("Tab target id from tabs output."),
+		"ref":         stringSchema("Snapshot ref id."),
+		"doubleClick": boolSchema("Double click."),
+		"button":      stringSchema("Mouse button for click."),
+		"modifiers":   stringArraySchema("Optional key modifiers."),
+		"text":        stringSchema("Text input."),
+		"submit":      boolSchema("Submit after typing."),
+		"slowly":      boolSchema("Type slowly."),
+		"key":         stringSchema("Keyboard key."),
+		"delayMs":     numberSchema("Key delay."),
+		"startRef":    stringSchema("Drag start ref."),
+		"endRef":      stringSchema("Drag end ref."),
+		"values":      stringArraySchema("Selected option values."),
 		"fields": {
 			Type: "array",
 			Items: &tool.Schema{
@@ -844,6 +849,14 @@ func (t *Tool) handleSnapshot(
 	if filename := strings.TrimSpace(in.Filename); filename != "" {
 		args["filename"] = filename
 	}
+	if driverType == driverTypeBrowserServer {
+		if limit := intValue(in.Limit); limit > 0 {
+			args["limit"] = limit
+		}
+		if selector := strings.TrimSpace(in.Selector); selector != "" {
+			args["selector"] = selector
+		}
+	}
 	raw, err := drv.Call(ctx, mcpToolSnapshot, args)
 	if err != nil {
 		return Result{}, err
@@ -1072,7 +1085,7 @@ func (t *Tool) handleAct(
 		return Result{}, err
 	}
 
-	raw, err := t.executeAct(ctx, drv, req)
+	raw, err := t.executeAct(ctx, drv, req, driverType)
 	if err != nil {
 		return Result{}, err
 	}
@@ -1144,6 +1157,7 @@ func (t *Tool) executeAct(
 	ctx context.Context,
 	drv driver,
 	req actRequest,
+	driverType string,
 ) (any, error) {
 	kind := strings.ToLower(strings.TrimSpace(req.Kind))
 	switch kind {
@@ -1164,13 +1178,27 @@ func (t *Tool) executeAct(
 			"slowly":  boolValue(req.Slowly),
 		})
 	case actPress:
-		return drv.Call(ctx, mcpToolPressKey, map[string]any{
+		args := map[string]any{
 			"key": strings.TrimSpace(req.Key),
-		})
+		}
+		if delay := intValue(req.DelayMs); delay > 0 {
+			args["delayMs"] = delay
+		}
+		return drv.Call(ctx, mcpToolPressKey, args)
 	case actHover:
 		return drv.Call(ctx, mcpToolHover, map[string]any{
 			"ref":     strings.TrimSpace(req.Ref),
 			"element": describeElement(req.Ref, ""),
+		})
+	case strings.ToLower(actScrollIntoView):
+		if driverType != driverTypeBrowserServer {
+			return nil, errors.New(
+				"scrollIntoView is only supported by the " +
+					"browser-server driver",
+			)
+		}
+		return drv.Call(ctx, mcpToolScroll, map[string]any{
+			"ref": strings.TrimSpace(req.Ref),
 		})
 	case actDrag:
 		return drv.Call(ctx, mcpToolDrag, map[string]any{
@@ -1193,7 +1221,7 @@ func (t *Tool) executeAct(
 			"height": intValue(req.Height),
 		})
 	case actWait:
-		return t.executeWait(ctx, drv, req)
+		return t.executeWait(ctx, drv, req, driverType)
 	case actEvaluate:
 		if !t.evaluateEnabled {
 			return nil, errors.New(
@@ -1234,17 +1262,42 @@ func (t *Tool) executeWait(
 	ctx context.Context,
 	drv driver,
 	req actRequest,
+	driverType string,
 ) (any, error) {
-	if strings.TrimSpace(req.URL) != "" ||
-		strings.TrimSpace(req.LoadState) != "" ||
-		strings.TrimSpace(req.Selector) != "" {
+	supportsExtendedWait := driverType == driverTypeBrowserServer
+	fn := strings.TrimSpace(req.Fn)
+	if fn != "" && !t.evaluateEnabled {
 		return nil, errors.New(
-			"wait with url, loadState, or selector is not " +
-				"supported by the current browser driver",
+			"browser evaluate is disabled by config",
+		)
+	}
+	if !supportsExtendedWait && (strings.TrimSpace(req.URL) != "" ||
+		strings.TrimSpace(req.LoadState) != "" ||
+		strings.TrimSpace(req.Selector) != "" ||
+		fn != "") {
+		return nil, errors.New(
+			"wait with url, loadState, selector, or fn " +
+				"is not supported by the current browser " +
+				"driver",
 		)
 	}
 
 	args := map[string]any{}
+	if selector := strings.TrimSpace(req.Selector); selector != "" {
+		args["selector"] = selector
+	}
+	if rawURL := strings.TrimSpace(req.URL); rawURL != "" {
+		if err := t.navigation.Validate(rawURL); err != nil {
+			return nil, err
+		}
+		args["url"] = rawURL
+	}
+	if loadState := strings.TrimSpace(req.LoadState); loadState != "" {
+		args["loadState"] = loadState
+	}
+	if fn != "" {
+		args["fn"] = fn
+	}
 	if req.TimeMs != nil {
 		args["time"] = float64(*req.TimeMs) / 1000
 	}

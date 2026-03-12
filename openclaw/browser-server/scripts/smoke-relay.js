@@ -6,14 +6,19 @@ import { chromium } from "playwright";
 import { startServer } from "../src/server.js";
 import {
   authHeaders,
+  buildRelayLaunchOptions,
   closeServer,
+  extractFirstRef,
   extractText,
   fetchJSON,
-  findBrowserExecutable
+  relayChromiumChannel,
+  resolveHeadlessMode
 } from "./common.js";
 
 async function main() {
-  const executablePath = await findBrowserExecutable();
+  const executablePath =
+    `${process.env.OPENCLAW_BROWSER_EXECUTABLE_PATH || ""}`.trim();
+  const headless = resolveHeadlessMode();
   const env = {
     ...process.env,
     OPENCLAW_BROWSER_SERVER_ADDR:
@@ -21,10 +26,9 @@ async function main() {
     OPENCLAW_BROWSER_SERVER_TOKEN:
       process.env.OPENCLAW_BROWSER_SERVER_TOKEN || "",
     OPENCLAW_BROWSER_EXECUTABLE_PATH: executablePath,
-    OPENCLAW_BROWSER_HEADLESS:
-      process.env.OPENCLAW_BROWSER_HEADLESS || "true"
+    OPENCLAW_BROWSER_HEADLESS: headless ? "true" : "false"
   };
-  const { server, config } = await startServer(env);
+  const { server, runtime, config } = await startServer(env);
   const baseURL = `http://${config.host}:${config.port}`;
   const relayURL = config.token
     ? `${baseURL}?token=${encodeURIComponent(config.token)}`
@@ -37,16 +41,17 @@ async function main() {
   const userDataDir = await fs.mkdtemp(
     path.join(os.tmpdir(), "openclaw-relay-")
   );
+  const launchOptions = buildRelayLaunchOptions({
+    extensionPath,
+    executablePath,
+    headless
+  });
   let context;
   try {
-    context = await chromium.launchPersistentContext(userDataDir, {
-      executablePath,
-      headless: env.OPENCLAW_BROWSER_HEADLESS !== "false",
-      args: [
-        `--disable-extensions-except=${extensionPath}`,
-        `--load-extension=${extensionPath}`
-      ]
-    });
+    context = await chromium.launchPersistentContext(
+      userDataDir,
+      launchOptions
+    );
 
     const page = await context.newPage();
     await page.goto("https://example.com", {
@@ -88,6 +93,62 @@ async function main() {
     });
     const text = extractText(snapshot);
     assert.match(text, /Example Domain/);
+    const ref = extractFirstRef(text);
+    assert.ok(ref);
+
+    const scrolled = await fetchJSON(`${baseURL}/act`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "chrome",
+        request: {
+          kind: "scrollIntoView",
+          ref
+        }
+      })
+    });
+    assert.match(extractText(scrolled), /Scrolled/);
+
+    const waited = await fetchJSON(`${baseURL}/act`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "chrome",
+        request: {
+          kind: "wait",
+          text: "Example Domain",
+          timeoutMs: 5000
+        }
+      })
+    });
+    assert.match(extractText(waited), /Text appeared/);
+
+    const waitedByFn = await fetchJSON(`${baseURL}/act`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "chrome",
+        request: {
+          kind: "wait",
+          fn: "() => document.title",
+          timeoutMs: 5000
+        }
+      })
+    });
+    assert.match(extractText(waitedByFn), /Wait predicate matched/);
+
+    const evaluated = await fetchJSON(`${baseURL}/act`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        profile: "chrome",
+        request: {
+          kind: "evaluate",
+          fn: "() => document.title"
+        }
+      })
+    });
+    assert.match(extractText(evaluated), /Example Domain/);
 
     const screenshot = await fetchJSON(`${baseURL}/screenshot`, {
       method: "POST",
@@ -99,7 +160,10 @@ async function main() {
     console.log(JSON.stringify({
       ok: true,
       baseURL,
-      executablePath,
+      browser:
+        launchOptions.executablePath || launchOptions.channel ||
+        relayChromiumChannel,
+      headless,
       targetId: attached.targetId,
       relayClients: relayStatus.clients,
       attachedTabs: tabs.tabs,
@@ -111,7 +175,7 @@ async function main() {
       await context.close();
     }
     await fs.rm(userDataDir, { recursive: true, force: true });
-    await closeServer(server);
+    await closeServer(server, runtime);
   }
 }
 

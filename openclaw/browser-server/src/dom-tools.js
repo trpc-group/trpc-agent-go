@@ -57,7 +57,7 @@ function ensureRef(node) {
   return ref;
 }
 
-export function snapshotDOM() {
+export function snapshotDOM(options = {}) {
   const localRefAttr = "data-openclaw-ref";
   const localInteractiveSelector = [
     "a[href]",
@@ -112,11 +112,35 @@ export function snapshotDOM() {
     node.setAttribute(localRefAttr, ref);
     return ref;
   }
-  const nodes = Array.from(
-    document.querySelectorAll(localInteractiveSelector)
-  )
+  const selector = `${options?.selector || ""}`.trim();
+  const limit = Math.max(0, Number(options?.limit) || 0);
+  const root = selector ? document.querySelector(selector) : document;
+  if (!root) {
+    throw new Error(`Snapshot selector not found: ${selector}`);
+  }
+
+  const discovered = Array.from(
+    root.querySelectorAll(localInteractiveSelector)
+  );
+  if (
+    root !== document &&
+    typeof root.matches === "function" &&
+    root.matches(localInteractiveSelector)
+  ) {
+    discovered.unshift(root);
+  }
+
+  const seen = new Set();
+  const nodes = discovered
+    .filter((node) => {
+      if (seen.has(node)) {
+        return false;
+      }
+      seen.add(node);
+      return true;
+    })
     .filter(localIsVisible)
-    .slice(0, 200);
+    .slice(0, limit || 200);
   const items = nodes.map((node) => ({
     ref: localEnsureRef(node),
     role: localRoleFor(node),
@@ -129,6 +153,9 @@ export function snapshotDOM() {
     `Page: ${document.title || ""}`,
     `URL: ${window.location.href}`
   ];
+  if (selector) {
+    lines.push(`Selector: ${selector}`);
+  }
   for (const item of items) {
     const label = item.text ? ` "${item.text}"` : "";
     const kind = item.type ? ` type=${item.type}` : "";

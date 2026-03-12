@@ -14,6 +14,8 @@ What you get:
 
 - Go
 - Node.js
+- Playwright Chromium via `npx playwright install chromium`
+- Browser extension tests via `npm test` in `openclaw/browser-extension`
 - An OpenAI-compatible API key
 
 ## 1. Start the browser server
@@ -21,6 +23,7 @@ What you get:
 ```bash
 cd openclaw/browser-server
 npm install
+npx playwright install chromium
 npm start
 ```
 
@@ -70,6 +73,7 @@ The model can now use:
 - `{"action":"tabs","profile":"openclaw"}`
 - `{"action":"snapshot","profile":"chrome"}`
 - `{"action":"act","profile":"chrome","request":{"kind":"click","ref":"..."}}`
+- `{"action":"act","profile":"chrome","request":{"kind":"scrollIntoView","ref":"..."}}`
 - `{"action":"snapshot","target":"sandbox"}`
 - `{"action":"snapshot","target":"node","node":"edge"}`
 
@@ -82,11 +86,17 @@ cd openclaw/browser-server
 npm install
 npm run smoke:host
 npm run smoke:relay
+npm run smoke:host:headed
+npm run smoke:relay:headed
 ```
+The relay smoke uses Playwright's bundled Chromium by default so the
+extension can load in both headless and headed runs, and the smoke now
+checks snapshot, scrollIntoView, wait, wait-by-fn, evaluate, and
+screenshot end to end.
 
-Later, in a graphical desktop environment, rerun the relay smoke with:
+You can also validate the extension logic without launching a browser:
 
 ```bash
-cd openclaw/browser-server
-OPENCLAW_BROWSER_HEADLESS=false npm run smoke:relay
+cd openclaw/browser-extension
+npm test
 ```

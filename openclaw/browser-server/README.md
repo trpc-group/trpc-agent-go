@@ -10,13 +10,30 @@ It provides:
 - HTTP routes for browser actions
 - a WebSocket bridge for the browser extension
 
+Action coverage:
+
+- `openclaw` profile: tabs, snapshot, screenshot, navigate, click, type,
+  press, hover, scrollIntoView, drag, select, fill, wait, evaluate, pdf,
+  upload, dialog
+- `chrome` profile: tabs, snapshot, screenshot, navigate, click, type,
+  press, hover, scrollIntoView, drag, select, fill, wait, evaluate,
+  resize
+- `chrome` relay still does not expose console capture, pdf export, file
+  upload, or dialog hooks
+
 ## Run
 
 ```bash
 cd openclaw/browser-server
 npm install
+npx playwright install chromium
 npm start
 ```
+
+`npx playwright install chromium` is required for the managed host
+profile and for the relay smoke tests. The relay smoke defaults to the
+Playwright-bundled Chromium because extension sideloading is no longer a
+reliable automation path in Chrome/Edge.
 
 Environment variables:
 
@@ -48,6 +65,8 @@ After `npm install`, you can run:
 cd openclaw/browser-server
 npm run smoke:host
 npm run smoke:relay
+npm run smoke:host:headed
+npm run smoke:relay:headed
 ```
 
 What they verify:
@@ -56,19 +75,22 @@ What they verify:
   - starts the browser server
   - launches a managed browser profile
   - opens `https://example.com`
-  - verifies snapshot and screenshot
+  - verifies snapshot, scrollIntoView, wait, wait-by-fn, evaluate, and
+    screenshot
 - `smoke:relay`
   - starts the browser server
   - launches Chromium with the relay extension loaded
   - attaches the current tab through the extension background
-  - verifies `profile=chrome` tabs, snapshot, and screenshot
+  - verifies `profile=chrome` tabs, snapshot, scrollIntoView, wait,
+    wait-by-fn, evaluate, and screenshot
+- `smoke:host:headed`
+  - repeats the managed browser smoke with a visible Chromium window
+- `smoke:relay:headed`
+  - repeats the relay smoke with a visible Chromium window
 
-If you later move to a graphical environment, you can rerun the same
-smokes with:
-
-```bash
-OPENCLAW_BROWSER_HEADLESS=false npm run smoke:relay
-```
+If you want to override the default bundled browser for relay smokes, set
+`OPENCLAW_BROWSER_EXECUTABLE_PATH` to a Chromium-compatible executable
+before running the command.
 
 ## Main routes
 

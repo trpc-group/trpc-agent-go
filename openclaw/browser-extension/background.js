@@ -203,8 +203,19 @@ async function executeCommand(command) {
     case "select":
     case "fill":
     case "press":
+    case "scrollIntoView":
+    case "drag":
     case "wait":
+    case "evaluate":
       return await executeInTab(tabId, command.action, command.args);
+    case "resize": {
+      const tab = await chrome.tabs.get(tabId);
+      await chrome.windows.update(tab.windowId, {
+        width: Number(command.args.width) || 1280,
+        height: Number(command.args.height) || 720
+      });
+      return textResult("Resized window.");
+    }
     default:
       throw new Error(`Unsupported relay action: ${command.action}`);
   }
@@ -240,7 +251,7 @@ function textResult(text) {
   };
 }
 
-function relayExecutor(command) {
+async function relayExecutor(command) {
   const refAttr = "data-openclaw-ref";
   const interactiveSelector = [
     "a[href]",
@@ -258,6 +269,12 @@ function relayExecutor(command) {
     return {
       content: [{ type: "text", text }]
     };
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
   }
 
   function visible(node) {
@@ -294,15 +311,34 @@ function relayExecutor(command) {
     };
   }
 
-  function snapshot() {
-    const items = Array.from(document.querySelectorAll(interactiveSelector))
+  function snapshot(args) {
+    const selector = `${args.selector || ""}`.trim();
+    const root = selector
+      ? document.querySelector(selector)
+      : document;
+    if (!root) {
+      throw new Error(`Snapshot selector not found: ${selector}`);
+    }
+    const limit = Math.max(0, Number(args.limit) || 0);
+    const discovered = Array.from(root.querySelectorAll(interactiveSelector));
+    if (
+      root !== document &&
+      typeof root.matches === "function" &&
+      root.matches(interactiveSelector)
+    ) {
+      discovered.unshift(root);
+    }
+    const items = Array.from(new Set(discovered))
       .filter(visible)
-      .slice(0, 200)
+      .slice(0, limit || 200)
       .map(describe);
     const lines = [
       `Page: ${document.title || ""}`,
       `URL: ${window.location.href}`
     ];
+    if (selector) {
+      lines.push(`Selector: ${selector}`);
+    }
     for (const item of items) {
       const label = item.text ? ` "${item.text}"` : "";
       lines.push(`[${item.ref}] ${item.role}${label}`);
@@ -319,7 +355,11 @@ function relayExecutor(command) {
   }
 
   function byRef(ref) {
-    return document.querySelector(`[${refAttr}="${ref}"]`);
+    const node = document.querySelector(`[${refAttr}="${ref}"]`);
+    if (!node) {
+      throw new Error(`Unknown ref: ${ref}`);
+    }
+    return node;
   }
 
   function setValue(node, value) {
@@ -331,20 +371,338 @@ function relayExecutor(command) {
     node.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
+  function modifierState(modifiers) {
+    const state = {
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false
+    };
+    for (const modifier of modifiers || []) {
+      switch (`${modifier || ""}`.trim().toLowerCase()) {
+        case "alt":
+          state.altKey = true;
+          break;
+        case "control":
+        case "ctrl":
+          state.ctrlKey = true;
+          break;
+        case "meta":
+        case "cmd":
+        case "command":
+          state.metaKey = true;
+          break;
+        case "shift":
+          state.shiftKey = true;
+          break;
+        default:
+          break;
+      }
+    }
+    return state;
+  }
+
+  function buttonCode(button) {
+    switch (`${button || "left"}`.trim().toLowerCase()) {
+      case "middle":
+        return 1;
+      case "right":
+        return 2;
+      default:
+        return 0;
+    }
+  }
+
+  function mouseOptions(node, args, detail) {
+    const rect = node.getBoundingClientRect();
+    return {
+      bubbles: true,
+      cancelable: true,
+      button: buttonCode(args.button),
+      buttons: 1,
+      detail,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      ...modifierState(args.modifiers)
+    };
+  }
+
+  function clickNode(node, args) {
+    const hasModifiers = (args.modifiers || []).length > 0;
+    if (!args.doubleClick &&
+      `${args.button || "left"}`.trim().toLowerCase() === "left" &&
+      !hasModifiers &&
+      typeof node.click === "function") {
+      node.click();
+      return;
+    }
+    const options = mouseOptions(node, args, 1);
+    node.dispatchEvent(new MouseEvent("mousedown", options));
+    node.dispatchEvent(new MouseEvent("mouseup", options));
+    node.dispatchEvent(new MouseEvent("click", options));
+    if (args.doubleClick) {
+      const repeat = mouseOptions(node, args, 2);
+      node.dispatchEvent(new MouseEvent("mousedown", repeat));
+      node.dispatchEvent(new MouseEvent("mouseup", repeat));
+      node.dispatchEvent(new MouseEvent("click", repeat));
+      node.dispatchEvent(new MouseEvent("dblclick", repeat));
+    }
+  }
+
+  async function typeNode(node, args) {
+    const text = `${args.text || ""}`;
+    if (!args.slowly) {
+      setValue(node, text);
+    } else {
+      setValue(node, "");
+      let current = "";
+      for (const char of text) {
+        current += char;
+        setValue(node, current);
+        await sleep(50);
+      }
+    }
+    if (args.submit) {
+      node.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true
+      }));
+      if (node.form && typeof node.form.requestSubmit === "function") {
+        node.form.requestSubmit();
+      }
+    }
+  }
+
+  async function pressKey(args) {
+    const node = document.activeElement || document.body;
+    const init = {
+      key: `${args.key || ""}`,
+      bubbles: true,
+      ...modifierState(args.modifiers)
+    };
+    node.dispatchEvent(new KeyboardEvent("keydown", init));
+    await sleep(Math.max(0, Number(args.delayMs) || 0));
+    node.dispatchEvent(new KeyboardEvent("keyup", init));
+  }
+
+  function scrollNode(node) {
+    if (typeof node.scrollIntoView === "function") {
+      node.scrollIntoView({
+        block: "center",
+        inline: "nearest"
+      });
+    }
+  }
+
+  async function waitFor(predicate, timeoutMs) {
+    const startedAt = Date.now();
+    while (!predicate()) {
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error("Wait timed out");
+      }
+      await sleep(50);
+    }
+  }
+
+  function loadStateReached(state) {
+    switch (`${state || ""}`.trim()) {
+      case "domcontentloaded":
+        return document.readyState !== "loading";
+      case "load":
+      case "networkidle":
+      default:
+        return document.readyState === "complete";
+    }
+  }
+
+  async function waitForArgs(args) {
+    const timeoutMs = Math.max(1, Number(args.timeoutMs) || 30000);
+    if (args.selector) {
+      await waitFor(() => Boolean(document.querySelector(args.selector)),
+        timeoutMs);
+      return textResult(`Selector appeared: ${args.selector}`);
+    }
+    if (args.url) {
+      await waitFor(() => window.location.href === args.url, timeoutMs);
+      return textResult(`URL matched: ${args.url}`);
+    }
+    if (args.loadState) {
+      await waitFor(() => loadStateReached(args.loadState), timeoutMs);
+      return textResult(`Load state reached: ${args.loadState}`);
+    }
+    if (args.text) {
+      await waitFor(() => {
+        return document.body?.innerText?.includes(args.text);
+      }, timeoutMs);
+      return textResult(`Text appeared: ${args.text}`);
+    }
+    if (args.textGone) {
+      await waitFor(() => {
+        return !document.body?.innerText?.includes(args.textGone);
+      }, timeoutMs);
+      return textResult(`Text disappeared: ${args.textGone}`);
+    }
+    const fnText = `${args.fn || args.function || ""}`.trim();
+    if (fnText) {
+      const parsed = parseEvaluateExpression(fnText);
+      if (!parsed) {
+        throw new Error("relay wait requires an arrow function");
+      }
+      await waitFor(() => {
+        return Boolean(evaluateParsedArgs(args, parsed));
+      }, timeoutMs);
+      return textResult("Wait predicate matched.");
+    }
+    const waitMs = Math.max(0, Number(args.timeMs) || 0) ||
+      Math.max(0, Number(args.time) || 1) * 1000;
+    await sleep(waitMs);
+    return textResult("Wait completed.");
+  }
+
+  async function dragBetween(args) {
+    const start = byRef(args.startRef);
+    const end = byRef(args.endRef);
+    const DragEventType = typeof DragEvent === "function"
+      ? DragEvent
+      : MouseEvent;
+    const data = typeof DataTransfer === "function"
+      ? new DataTransfer()
+      : undefined;
+    const init = {
+      bubbles: true,
+      cancelable: true,
+      dataTransfer: data
+    };
+    start.dispatchEvent(new DragEventType("dragstart", init));
+    end.dispatchEvent(new DragEventType("dragenter", init));
+    end.dispatchEvent(new DragEventType("dragover", init));
+    end.dispatchEvent(new DragEventType("drop", init));
+    start.dispatchEvent(new DragEventType("dragend", init));
+    return textResult(`Dragged ${args.startRef} -> ${args.endRef}.`);
+  }
+
+  function escapePattern(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function parseEvaluateExpression(fnText) {
+    const block = fnText.match(
+      /^\s*\(?\s*([A-Za-z_$][\w$]*)?\s*\)?\s*=>\s*\{\s*return\s+([\s\S]+?);\s*\}\s*$/
+    );
+    if (block) {
+      return {
+        parameter: block[1] || "",
+        expression: block[2].trim()
+      };
+    }
+    const inline = fnText.match(
+      /^\s*\(?\s*([A-Za-z_$][\w$]*)?\s*\)?\s*=>\s*([\s\S]+)$/
+    );
+    if (!inline) {
+      return null;
+    }
+    return {
+      parameter: inline[1] || "",
+      expression: inline[2].trim()
+    };
+  }
+
+  function evaluatePageExpression(expression) {
+    const normalized = expression.replace(/\s+/g, "");
+    switch (normalized) {
+      case "document.title":
+        return document.title || "";
+      case "document.URL":
+      case "window.location.href":
+      case "location.href":
+        return window.location.href;
+      case "document.body.innerText":
+        return document.body?.innerText || "";
+      case "document.body.textContent":
+        return document.body?.textContent || "";
+      default:
+        throw new Error(
+          `Unsupported relay evaluate expression: ${expression}`
+        );
+    }
+  }
+
+  function evaluateElementExpression(node, expression, parameter) {
+    const alias = parameter ? parameter : "element";
+    const normalized = expression
+      .replace(new RegExp(`\\b${escapePattern(alias)}\\b`, "g"), "element")
+      .replace(/\s+/g, "");
+    switch (normalized) {
+      case "element.textContent":
+        return node.textContent || "";
+      case "element.innerText":
+        return node.innerText || "";
+      case "element.value":
+        return node.value || "";
+      case "element.outerHTML":
+        return node.outerHTML || "";
+      case "element.innerHTML":
+        return node.innerHTML || "";
+      case "element.href":
+        return node.href || "";
+      default: {
+        const attrMatch = normalized.match(
+          /^element\.getAttribute\((['"])([^'"]+)\1\)$/
+        );
+        if (attrMatch) {
+          return node.getAttribute(attrMatch[2]);
+        }
+        throw new Error(
+          `Unsupported relay evaluate expression: ${expression}`
+        );
+      }
+    }
+  }
+
+  function evaluateParsedArgs(args, parsed) {
+    return args.ref
+      ? evaluateElementExpression(
+          byRef(args.ref),
+          parsed.expression,
+          parsed.parameter
+        )
+      : evaluatePageExpression(parsed.expression);
+  }
+
+  function evaluateArgs(args) {
+    const fnText = `${args.fn || args.function || ""}`.trim();
+    if (!fnText) {
+      throw new Error("evaluate requires fn");
+    }
+    const parsed = parseEvaluateExpression(fnText);
+    if (!parsed) {
+      throw new Error("relay evaluate requires an arrow function");
+    }
+    const value = evaluateParsedArgs(args, parsed);
+    const text = JSON.stringify(value, null, 2);
+    return {
+      value,
+      content: [{
+        type: "text",
+        text: text === undefined ? String(value) : text
+      }]
+    };
+  }
+
   const { action, args = {} } = command;
   switch (action) {
     case "snapshot":
-      return snapshot();
+      return snapshot(args);
     case "click":
-      byRef(args.ref)?.click();
+      clickNode(byRef(args.ref), args);
       return textResult(`Clicked ${args.ref}.`);
     case "hover":
-      byRef(args.ref)?.dispatchEvent(new MouseEvent("mouseover", {
+      byRef(args.ref).dispatchEvent(new MouseEvent("mouseover", {
         bubbles: true
       }));
       return textResult(`Hovered ${args.ref}.`);
     case "type":
-      setValue(byRef(args.ref), `${args.text || ""}`);
+      await typeNode(byRef(args.ref), args);
       return textResult(`Typed into ${args.ref}.`);
     case "select": {
       const node = byRef(args.ref);
@@ -362,15 +720,17 @@ function relayExecutor(command) {
       }
       return textResult("Filled form fields.");
     case "press":
-      (document.activeElement || document.body).dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: `${args.key || ""}`,
-          bubbles: true
-        })
-      );
+      await pressKey(args);
       return textResult(`Pressed ${args.key}.`);
+    case "scrollIntoView":
+      scrollNode(byRef(args.ref));
+      return textResult(`Scrolled ${args.ref} into view.`);
+    case "drag":
+      return await dragBetween(args);
+    case "evaluate":
+      return evaluateArgs(args);
     case "wait":
-      return textResult("Wait completed.");
+      return await waitForArgs(args);
     default:
       throw new Error(`Unsupported action: ${action}`);
   }
