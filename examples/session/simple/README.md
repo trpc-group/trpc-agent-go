@@ -19,6 +19,7 @@ This implementation highlights the power of session management in conversational
 - **History Recap**: Ask the agent to summarize conversation with `/history`
 - **Backend Flexibility**: Choose from in-memory, SQLite, Redis, PostgreSQL, MySQL, or ClickHouse storage
 - **Context Preservation**: Each session maintains independent conversation history
+- **Langfuse Tracing**: Optional OpenTelemetry tracing for Redis session operations via Langfuse
 
 ## Prerequisites
 
@@ -65,16 +66,26 @@ This implementation highlights the power of session management in conversational
 | `MYSQL_PASSWORD` | MySQL password     | ``               |
 | `MYSQL_DATABASE` | MySQL database     | `trpc_agent_go`  |
 
+**Langfuse Tracing (optional):**
+
+| Variable              | Description                                | Default Value     |
+| --------------------- | ------------------------------------------ | ----------------- |
+| `LANGFUSE_SECRET_KEY`  | Langfuse secret key                       | -                 |
+| `LANGFUSE_PUBLIC_KEY`  | Langfuse public key                       | -                 |
+| `LANGFUSE_HOST`        | Langfuse host (host:port, no scheme)      | -                 |
+| `LANGFUSE_INSECURE`    | Use HTTP instead of HTTPS (`true`/`false`)| `false`           |
+
 ## Command Line Arguments
 
 | Argument           | Description                                         | Default Value    |
 | ------------------ | --------------------------------------------------- | ---------------- |
 | `-model`           | Name of the model to use                            | `MODEL_NAME` env var |
-| `-session`         | Session backend: inmemory/sqlite/redis/postgres/mysql/clickhouse | `inmemory` |
+| `-session`         | Session backend: inmemory/sqlite/redis/postgres/mysql/clickhouse | `redis` |
 | `-streaming`       | Enable streaming mode for responses                 | `true`           |
 | `-event-limit`     | Maximum number of events to store per session       | `1000`           |
 | `-session-ttl`     | Session time-to-live duration                       | `10s`            |
 | `-debug`           | Enable debug mode to print session events           | `true`           |
+| `-enable-trace`    | Enable Langfuse tracing for session operations      | `true`           |
 
 ## Usage
 
@@ -169,6 +180,27 @@ export OPENAI_API_KEY="your-api-key"
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 export SQLITE_SESSION_DSN="file:sessions.db?_busy_timeout=5000"
 go run . -session sqlite
+```
+
+### With Langfuse Tracing
+
+When using Redis backend, you can enable Langfuse tracing to observe session operations (create_session, get_session, append_event, etc.) in the Langfuse console.
+
+The example creates a root span before each `runner.Run()` call, so that all session spans become children of this root span via context propagation. This is necessary because session operations are executed by the Runner *before and after* the Agent's `Run()` call, while the Agent's own root span is created inside `agent.Run()`.
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+export LANGFUSE_SECRET_KEY="sk-lf-..."
+export LANGFUSE_PUBLIC_KEY="pk-lf-..."
+export LANGFUSE_HOST="localhost:3000"
+export LANGFUSE_INSECURE="true"
+go run . -session redis -enable-trace
+```
+
+To disable tracing:
+```bash
+go run . -session redis -enable-trace=false
 ```
 
 ## Session Commands

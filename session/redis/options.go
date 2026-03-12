@@ -27,6 +27,34 @@ const (
 	defaultSummaryJobTimeout = 60 * time.Second
 )
 
+// CompatMode defines the zset/hashidx compatibility mode for the redis session service.
+// HashIdx is the improved version with separated data and index storage, offering:
+//   - Better scalability: no hot spot on app-level hash tags
+//   - Flexible indexing: supports custom indexes beyond time-based
+//   - Cleaner data structure: Hash for data, ZSet for indexes
+type CompatMode int
+
+const (
+	// CompatModeNone disables zset compatibility entirely.
+	// - Read: hashidx only
+	// - Write: hashidx only
+	// Use this when all instances are upgraded and zset data has expired.
+	CompatModeNone CompatMode = iota
+
+	// CompatModeLegacy enables zset read fallback only (no dual-write).
+	// - Read: zset first if data exists, fallback to hashidx
+	// - Write: hashidx only
+	// Use this after all instances are upgraded but zset data still exists.
+	CompatModeLegacy
+
+	// CompatModeTransition forces new session creation to use zset storage only.
+	// - Read: zset first if data exists, fallback to hashidx
+	// - Write: zset only (new sessions created in zset)
+	// Use this during rolling upgrades when old zset-only instances are still running.
+	// After all instances are upgraded, switch to CompatModeLegacy to start using hashidx.
+	CompatModeTransition
+)
+
 // ServiceOpts is the options for the redis session service.
 type ServiceOpts struct {
 	sessionEventLimit  int
@@ -53,6 +81,11 @@ type ServiceOpts struct {
 	// hooks for session operations.
 	appendEventHooks []session.AppendEventHook
 	getSessionHooks  []session.GetSessionHook
+	// compatMode controls zset/hashidx compatibility behavior.
+	// See CompatMode constants for details.
+	// Default: CompatModeLegacy (safe for most scenarios).
+	compatMode    CompatMode
+	enableTracing bool
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -69,6 +102,7 @@ var (
 		asyncSummaryNum:    defaultAsyncSummaryNum,
 		summaryQueueSize:   defaultSummaryQueueSize,
 		summaryJobTimeout:  defaultSummaryJobTimeout,
+		compatMode:         CompatModeLegacy,
 	}
 )
 
@@ -104,7 +138,8 @@ func WithExtraOptions(extraOptions ...any) ServiceOpt {
 }
 
 // WithSessionTTL sets the TTL for session state and event list.
-// If not set, session will expire in 30 min, set 0 will not expire.
+// Default is 0 (no expiration). TTL is refreshed on write operations
+// (CreateSession, AppendEvent) but not on reads (GetSession).
 func WithSessionTTL(ttl time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.sessionTTL = ttl
@@ -197,11 +232,40 @@ func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
 	}
 }
 
-// WithKeyPrefix sets the prefix for all redis keys.
-// If set, all keys will be prefixed with this value followed by a colon.
-// For example, if keyPrefix is "myapp", key "sess:{app}:user" becomes "myapp:sess:{app}:user".
+// WithCompatMode sets the zset/hashidx compatibility mode.
+//
+// Available modes:
+//   - CompatModeNone: hashidx only, no zset compatibility
+//   - CompatModeLegacy: hashidx write + zset read fallback (default)
+//   - CompatModeTransition: zset only (identical behavior to old zset-only instances)
+//
+// Migration path:
+//  1. Rolling upgrade: WithCompatMode(CompatModeTransition) - all nodes write zset, safe mixed deployment
+//  2. All upgraded: WithCompatMode(CompatModeLegacy) - new sessions use hashidx, old sessions fallback to zset
+//  3. zset TTL expired: WithCompatMode(CompatModeNone) - pure hashidx mode
+//
+// Default: CompatModeLegacy (safe for most scenarios where zset data may still exist).
+func WithCompatMode(mode CompatMode) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.compatMode = mode
+	}
+}
+
+// WithKeyPrefix sets the key prefix for all Redis keys.
+// Both zset and hashidx keys will use this prefix:
+//   - zset: prefix:sess:{app}:user, prefix:event:{app}:user:sess, etc.
+//   - hashidx: prefix:hashidx:meta:app:{user}:sess, prefix:hashidx:evtdata:app:{user}:sess, etc.
+//
+// This is typically used to namespace keys when multiple applications share the same Redis instance.
 func WithKeyPrefix(prefix string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.keyPrefix = prefix
+	}
+}
+
+// WithEnableTracing enables OpenTelemetry tracing for redis session operations.
+func WithEnableTracing(enable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.enableTracing = enable
 	}
 }
