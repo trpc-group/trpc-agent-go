@@ -29,10 +29,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -160,27 +160,39 @@ func (r *A2AAgent) validateA2ARequestOptions(invocation *agent.Invocation) error
 // Run implements the Agent interface
 func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	var err error
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, r.name))
 	useStreaming := r.shouldUseStreaming(invocation)
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, r.description, "", &model.GenerationConfig{Stream: useStreaming})
+	ctx, span, startedSpan := itrace.StartSpan(
+		ctx,
+		invocation,
+		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, r.name),
+	)
+	if startedSpan {
+		itelemetry.TraceBeforeInvokeAgent(
+			span,
+			invocation,
+			r.description,
+			"",
+			&model.GenerationConfig{Stream: useStreaming},
+		)
+	}
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err)
-
 	if r.a2aClient == nil {
-		span.SetStatus(codes.Error, "A2A client is nil")
-
-		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
-		span.End()
+		if startedSpan {
+			span.SetStatus(codes.Error, "A2A client is nil")
+			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
+			span.End()
+		}
 		return nil, fmt.Errorf("A2A client is nil")
 	}
-
 	// Validate A2A request options early
 	if err := r.validateA2ARequestOptions(invocation); err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
-		span.End()
+		if startedSpan {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
+			span.End()
+		}
 		return nil, err
 	}
-
 	var (
 		eventChan <-chan *event.Event
 	)
@@ -190,13 +202,14 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		eventChan, err = r.runNonStreaming(ctx, invocation)
 	}
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
-		span.End()
+		if startedSpan {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
+			span.End()
+		}
 		return nil, err
 	}
-
-	return r.wrapEventChannelWithTelemetry(ctx, invocation, eventChan, span, tracker), nil
+	return r.wrapEventChannelWithTelemetry(ctx, invocation, eventChan, span, tracker, startedSpan), nil
 }
 
 // shouldUseStreaming determines whether to use streaming protocol.
@@ -445,26 +458,26 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 	originalChan <-chan *event.Event,
 	span sdktrace.Span,
 	tracker *itelemetry.InvokeAgentTracker,
+	startedSpan bool,
 ) <-chan *event.Event {
 	wrappedChan := make(chan *event.Event, cap(originalChan))
-
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
 		var responseErrorType string
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
-			if fullRespEvent != nil {
+			if startedSpan && fullRespEvent != nil {
 				log.DebugContext(ctx, "fullRespEvent is not ni")
 				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 			}
-
 			tracker.SetResponseErrorType(responseErrorType)
 			tracker.RecordMetrics()()
-			span.End()
+			if startedSpan {
+				span.End()
+			}
 			close(wrappedChan)
 		}()
-
 		for evt := range originalChan {
 			if evt != nil && evt.Response != nil {
 				tracker.TrackResponse(evt.Response)

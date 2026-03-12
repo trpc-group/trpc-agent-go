@@ -15,14 +15,19 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/embedded"
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -33,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	semconvmetrics "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
+	teletrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -68,6 +74,63 @@ func (s *simpleToolSet) Tools(ctx context.Context) []tool.Tool {
 }
 func (s *simpleToolSet) Close() error { return nil }
 func (s *simpleToolSet) Name() string { return s.name }
+
+func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	originalProvider := teletrace.TracerProvider
+	originalTracer := teletrace.Tracer
+	teletrace.TracerProvider = provider
+	teletrace.Tracer = provider.Tracer("state-graph-disable-tracing-test")
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		teletrace.TracerProvider = originalProvider
+		teletrace.Tracer = originalTracer
+	})
+	return recorder
+}
+
+type trackingSpan struct {
+	embedded.Span
+	mu             sync.Mutex
+	attributes     []attribute.KeyValue
+	recordedErrors []error
+	statusCode     codes.Code
+}
+
+func (s *trackingSpan) End(options ...oteltrace.SpanEndOption)                 {}
+func (s *trackingSpan) AddEvent(name string, options ...oteltrace.EventOption) {}
+func (s *trackingSpan) AddLink(link oteltrace.Link)                            {}
+func (s *trackingSpan) IsRecording() bool                                      { return true }
+
+func (s *trackingSpan) RecordError(err error, options ...oteltrace.EventOption) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recordedErrors = append(s.recordedErrors, err)
+}
+
+func (s *trackingSpan) SpanContext() oteltrace.SpanContext {
+	return oteltrace.NewSpanContext(oteltrace.SpanContextConfig{})
+}
+
+func (s *trackingSpan) SetStatus(code codes.Code, description string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.statusCode = code
+}
+
+func (s *trackingSpan) SetName(name string) {}
+
+func (s *trackingSpan) SetAttributes(kv ...attribute.KeyValue) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attributes = append(s.attributes, kv...)
+}
+
+func (s *trackingSpan) TracerProvider() oteltrace.TracerProvider { return noop.NewTracerProvider() }
 
 // stubAgent is a minimal agent implementation used for subgraph tests.
 type stubAgent struct {
@@ -2851,6 +2914,135 @@ func TestLLMNode_PlaceholdersOptionalMissing(t *testing.T) {
 	require.Contains(t, sys.Content, "AI")
 	require.NotContains(t, sys.Content, "{user:topics?")
 	require.NotContains(t, sys.Content, "{app:banner?")
+}
+
+func TestLLMNode_DisableTracingUsesCurrentSpan(t *testing.T) {
+	schema := MessagesStateSchema()
+	cm := &captureModel{}
+	sg := NewStateGraph(schema)
+	sg.AddLLMNode("llm", cm, "inst", nil)
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{DisableTracing: true}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
+	node := sg.graph.nodes["llm"]
+
+	_, err := node.Function(ctx, State{StateKeyUserInput: "hi"})
+	require.NoError(t, err)
+	require.NotNil(t, cm.lastReq)
+
+	_, ch, err := runModel(ctx, nil, cm, &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}})
+	require.NoError(t, err)
+	for range ch {
+	}
+}
+
+func TestAddLLMNode_DisableTracingSkipsSpanCreation(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	schema := MessagesStateSchema()
+	cm := &captureModel{}
+	sg := NewStateGraph(schema)
+	sg.AddLLMNode("llm", cm, "inst", nil)
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{DisableTracing: true}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
+	node := sg.graph.nodes["llm"]
+
+	_, err := node.Function(ctx, State{StateKeyUserInput: "hi"})
+	require.NoError(t, err)
+	require.NotNil(t, cm.lastReq)
+	require.Empty(t, recorder.Ended())
+}
+
+func TestStartNodeSpan_DisableTracingUsesNoopSpan(t *testing.T) {
+	parentSpan := &trackingSpan{}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{DisableTracing: true}),
+	)
+	ctx := agent.NewInvocationContext(
+		oteltrace.ContextWithSpan(context.Background(), parentSpan),
+		invocation,
+	)
+
+	_, span, startedSpan := startNodeSpan(ctx, "ignored")
+	require.False(t, startedSpan)
+
+	span.SetAttributes(attribute.String("key", "value"))
+	span.RecordError(errors.New("boom"))
+	span.SetStatus(codes.Error, "boom")
+	itelemetry.TraceAfterInvokeAgent(
+		span,
+		event.NewResponseEvent(
+			"invocation-id",
+			"agent-name",
+			&model.Response{
+				ID:      "response-id",
+				Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}},
+			},
+		),
+		nil,
+		0,
+	)
+
+	require.Empty(t, parentSpan.attributes)
+	require.Empty(t, parentSpan.recordedErrors)
+	require.NotEqual(t, codes.Error, parentSpan.statusCode)
+}
+
+func TestTraceProcessedModelResponse_DisableTracing(t *testing.T) {
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{DisableTracing: true}),
+	)
+	tracker := itelemetry.NewChatMetricsTracker(
+		context.Background(),
+		invocation,
+		&model.Request{},
+		nil,
+		nil,
+		nil,
+	)
+
+	traceProcessedModelResponse(
+		noop.Span{},
+		tracker,
+		invocation,
+		&model.Request{},
+		&model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}}},
+		&event.Event{ID: "evt-1"},
+	)
+}
+
+func TestToolsNode_DisableTracingSkipsSpanCreation(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddToolsNode("tools", map[string]tool.Tool{"echo": &echoTool{name: "echo"}})
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{DisableTracing: true}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), invocation)
+	node := sg.graph.nodes["tools"]
+	state := State{
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("hi"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "echo",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		},
+	}
+	_, err := node.Function(ctx, state)
+	require.NoError(t, err)
+	require.Empty(t, recorder.Ended())
 }
 
 // Verify StateSchema.ApplyUpdate skips unknown internal keys while still

@@ -14,9 +14,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 // mockFlow implements flow.Flow returning predefined events.
@@ -31,6 +34,21 @@ func (m *mockFlow) Run(ctx context.Context, inv *agent.Invocation) (<-chan *even
 		}
 	}()
 	return ch, nil
+}
+
+func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	originalProvider := trace.TracerProvider
+	originalTracer := trace.Tracer
+	trace.TracerProvider = provider
+	trace.Tracer = provider.Tracer("llm-agent-disable-tracing-test")
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		trace.TracerProvider = originalProvider
+		trace.Tracer = originalTracer
+	})
+	return recorder
 }
 
 func TestLLMAgent_Run_BeforeCallbackCust(t *testing.T) {
@@ -147,4 +165,22 @@ func TestLLMAgent_Run_StreamOverride(t *testing.T) {
 
 	for range events {
 	}
+}
+
+func TestLLMAgent_Run_DisableTracingSkipsSpanCreation(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	a := New("agent")
+	a.flow = &mockFlow{done: true}
+	invocation := &agent.Invocation{
+		InvocationID: "id-disable-tracing",
+		Message:      model.NewUserMessage("hi"),
+		RunOptions: agent.RunOptions{
+			DisableTracing: true,
+		},
+	}
+	events, err := a.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	for range events {
+	}
+	require.Empty(t, recorder.Ended())
 }

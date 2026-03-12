@@ -142,7 +142,7 @@ func TestLLMAgent_AfterCb(t *testing.T) {
 	inv := &agent.Invocation{InvocationID: "id", AgentName: "agent"}
 
 	llm := &LLMAgent{agentCallbacks: cb}
-	wrapped := llm.wrapEventChannelWithTelemetry(context.Background(), inv, orig, noop.Span{}, &itelemetry.InvokeAgentTracker{})
+	wrapped := llm.wrapEventChannelWithTelemetry(context.Background(), inv, orig, noop.Span{}, &itelemetry.InvokeAgentTracker{}, false)
 
 	var objs []string
 	for e := range wrapped {
@@ -166,7 +166,7 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 	inv := &agent.Invocation{InvocationID: "id2", AgentName: "agent2"}
 
 	llm := &LLMAgent{}
-	wrapped := llm.wrapEventChannelWithTelemetry(context.Background(), inv, orig, noop.Span{}, &itelemetry.InvokeAgentTracker{})
+	wrapped := llm.wrapEventChannelWithTelemetry(context.Background(), inv, orig, noop.Span{}, &itelemetry.InvokeAgentTracker{}, false)
 
 	// Expect exactly one event propagated from original channel and no extras.
 	count := 0

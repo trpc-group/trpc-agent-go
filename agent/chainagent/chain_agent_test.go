@@ -123,6 +123,21 @@ func (m *mockErrorEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<
 	return ch, nil
 }
 
+func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	recorder := tracetest.NewSpanRecorder()
+	provider := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(recorder))
+	originalProvider := trace.TracerProvider
+	originalTracer := trace.Tracer
+	trace.TracerProvider = provider
+	trace.Tracer = provider.Tracer("chain-agent-disable-tracing-test")
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		trace.TracerProvider = originalProvider
+		trace.Tracer = originalTracer
+	})
+	return recorder
+}
+
 func findEndedSpanByName(spans []tracesdk.ReadOnlySpan, spanName string) tracesdk.ReadOnlySpan {
 	for _, span := range spans {
 		if span.Name() == spanName {
@@ -445,6 +460,24 @@ func TestCreateSubAgentInvocation(t *testing.T) {
 	require.Equal(t, "root", base.GetEventFilterKey())
 	// Ensure original invocation not mutated.
 	require.Equal(t, "parent"+agent.BranchDelimiter+"child", inv.Branch)
+}
+
+func TestChainAgent_Run_DisableTracingSkipsSpanCreation(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	chain := New("chain", WithSubAgents([]agent.Agent{
+		&mockAgent{name: "child", eventCount: 1, eventContent: "ok"},
+	}))
+	invocation := &agent.Invocation{
+		InvocationID: "chain-disable-tracing",
+		RunOptions: agent.RunOptions{
+			DisableTracing: true,
+		},
+	}
+	events, err := chain.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	for range events {
+	}
+	require.Empty(t, recorder.Ended())
 }
 
 func TestChainAgent_FindSubAgentAndInfo(t *testing.T) {

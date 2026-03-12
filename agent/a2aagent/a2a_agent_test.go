@@ -387,9 +387,8 @@ func TestWrapEventChannelWithTelemetry_AccumulatesTokenUsage(t *testing.T) {
 	tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
 	ctx, span := tp.Tracer("test").Start(context.Background(), "wrap")
 	sdkSpan := span
-
 	originalChan := make(chan *event.Event, 2)
-	wrappedChan := (&A2AAgent{}).wrapEventChannelWithTelemetry(ctx, &agent.Invocation{}, originalChan, sdkSpan, &itelemetry.InvokeAgentTracker{})
+	wrappedChan := (&A2AAgent{}).wrapEventChannelWithTelemetry(ctx, &agent.Invocation{}, originalChan, sdkSpan, &itelemetry.InvokeAgentTracker{}, true)
 
 	partialEvent := &event.Event{
 		Response: &model.Response{
@@ -437,6 +436,21 @@ func TestWrapEventChannelWithTelemetry_AccumulatesTokenUsage(t *testing.T) {
 	if !hasAttr(attrs, attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, finalEvent.Response.Usage.CompletionTokens)) {
 		t.Fatalf("expected output token usage to be recorded, attrs=%v", attrs)
 	}
+}
+
+func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	recorder := tracetest.NewSpanRecorder()
+	provider := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(recorder))
+	originalProvider := teletrace.TracerProvider
+	originalTracer := teletrace.Tracer
+	teletrace.TracerProvider = provider
+	teletrace.Tracer = provider.Tracer("a2a-agent-disable-tracing-test")
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		teletrace.TracerProvider = originalProvider
+		teletrace.Tracer = originalTracer
+	})
+	return recorder
 }
 
 func TestA2AAgent_shouldUseStreaming(t *testing.T) {
@@ -699,6 +713,19 @@ func TestA2AAgent_Run_ErrorCases(t *testing.T) {
 			tc.validateFunc(t, eventChan, err)
 		})
 	}
+}
+
+func TestA2AAgent_Run_DisableTracingSkipsSpanCreation(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	a2aAgent := &A2AAgent{name: "test-agent"}
+	invocation := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			DisableTracing: true,
+		},
+	}
+	_, err := a2aAgent.Run(context.Background(), invocation)
+	require.Error(t, err)
+	require.Empty(t, recorder.Ended())
 }
 
 func TestWithTransferStateKey(t *testing.T) {
