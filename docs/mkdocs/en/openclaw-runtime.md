@@ -96,9 +96,51 @@ The goal of this section is simple: start from the repository's
 existing configuration, run a real message entry point, and build an
 intuitive understanding of the end-to-end runtime path.
 
-### Environment Preparation
+### Path A: Install the prebuilt release
 
-If you want to run `openclaw` from source, prepare the following:
+If you want the shortest path, do not start with `go run`. Install the
+published binary first:
+
+```bash
+curl -fsSL \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
+  | bash
+```
+
+The default install profile is `stdin`, and that profile uses the
+built-in `mock` model. So the very first launch does not need model
+credentials or Telegram credentials.
+
+The installer keeps the GitHub build's config and state under
+`~/.trpc-agent-go-github/openclaw` by default.
+
+If `openclaw` is not found after install, run the PATH commands printed
+by the installer. For bash, the persistent form is:
+
+```bash
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
+```
+
+Then start OpenClaw:
+
+```bash
+openclaw
+```
+
+At that point, you should already be in the local terminal chat mode.
+Try a small input such as `hello`. Use `/help` to inspect the basic
+commands, and `/quit` or `/exit` to stop.
+
+This route is the best choice when your immediate goal is "download a
+working binary and verify that the runtime starts cleanly." Once that is
+stable, move on to a real model or a real message channel.
+
+### Path B: Run from source
+
+If you want to develop or modify OpenClaw itself, run it from source.
+Prepare the following:
 
 - A Go development environment
 - The tRPC-Agent-Go repository
@@ -572,14 +614,14 @@ session:
   summary:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/sessions.sqlite"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/sessions.sqlite"
 
 memory:
   backend: "sqlite"
   auto:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/memories.db"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/memories.db"
 ```
 
 The meaning of this split is simple:

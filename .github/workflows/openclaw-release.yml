@@ -47,13 +47,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - runner: ubuntu-22.04
             target: linux/amd64
             artifact_name: linux_amd64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-22.04-arm
             target: linux/arm64
             artifact_name: linux_arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             target: darwin/amd64
             artifact_name: darwin_amd64
           - runner: macos-14
@@ -68,9 +68,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash ./openclaw/release.sh build \
-            --version '${{ needs.prepare.outputs.version }}' \
-            --target '${{ matrix.target }}'
+          case '${{ matrix.target }}' in
+            linux/*)
+              docker run --rm \
+                -e HOME=/tmp \
+                -e PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+                --user "$(id -u):$(id -g)" \
+                -v "$PWD:/work" \
+                -w /work \
+                golang:1.24-bullseye \
+                bash -c "bash ./openclaw/release.sh build \
+                  --version '${{ needs.prepare.outputs.version }}' \
+                  --target '${{ matrix.target }}'"
+              ;;
+            *)
+              bash ./openclaw/release.sh build \
+                --version '${{ needs.prepare.outputs.version }}' \
+                --target '${{ matrix.target }}'
+              ;;
+          esac
       - name: Upload release archive
         uses: actions/upload-artifact@v4
         with:
