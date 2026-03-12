@@ -124,25 +124,6 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
 	tokenUsage := &itelemetry.TokenUsage{}
 	var fullRespEvent *event.Event
-	recordTraceEvent := func(evt *event.Event) {
-		if evt == nil || evt.Response == nil {
-			return
-		}
-		tracker.TrackResponse(evt.Response)
-		if evt.Response.IsPartial {
-			return
-		}
-		if !evt.IsError() && !evt.Response.IsValidContent() &&
-			!(evt.Done && evt.Object == graph.ObjectTypeGraphExecution) {
-			return
-		}
-		if evt.Response.Usage != nil {
-			tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
-			tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
-			tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
-		}
-		fullRespEvent = evt
-	}
 	defer func() {
 		if fullRespEvent != nil {
 			itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
@@ -175,7 +156,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 		return
 	}
 	for evt := range innerChan {
-		recordTraceEvent(evt)
+		fullRespEvent = recordTraceEvent(tracker, tokenUsage, fullRespEvent, evt)
 		if err := event.EmitEvent(ctx, out, evt); err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
@@ -183,6 +164,33 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 			return
 		}
 	}
+}
+
+func recordTraceEvent(
+	tracker *itelemetry.InvokeAgentTracker,
+	tokenUsage *itelemetry.TokenUsage,
+	fullRespEvent *event.Event,
+	evt *event.Event,
+) *event.Event {
+	if evt == nil || evt.Response == nil {
+		return fullRespEvent
+	}
+	if tracker != nil {
+		tracker.TrackResponse(evt.Response)
+	}
+	if evt.Response.IsPartial {
+		return fullRespEvent
+	}
+	if !evt.IsError() && !evt.Response.IsValidContent() &&
+		!(evt.Done && evt.Object == graph.ObjectTypeGraphExecution) {
+		return fullRespEvent
+	}
+	if evt.Response.Usage != nil && tokenUsage != nil {
+		tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
+		tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
+		tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+	}
+	return evt
 }
 
 // emitStartBarrierAndWait emits a barrier event and waits until the runner has processed it,

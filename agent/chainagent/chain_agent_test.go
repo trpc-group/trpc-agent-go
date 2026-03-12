@@ -12,6 +12,7 @@ package chainagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -119,6 +121,15 @@ func (m *mockErrorEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<
 		_ = agent.EmitEvent(ctx, inv, ch, evt)
 	}()
 	return ch, nil
+}
+
+func findEndedSpanByName(spans []tracesdk.ReadOnlySpan, spanName string) tracesdk.ReadOnlySpan {
+	for _, span := range spans {
+		if span.Name() == spanName {
+			return span
+		}
+	}
+	return nil
 }
 
 type countingAgent struct {
@@ -721,10 +732,14 @@ func TestChainAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 	}
 
 	spans := spanRecorder.Ended()
-	require.Len(t, spans, 1)
+	require.NotEmpty(t, spans)
+
+	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, chainAgent.Info().Name)
+	agentSpan := findEndedSpanByName(spans, expectedSpanName)
+	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
 
 	found := false
-	for _, attr := range spans[0].Attributes() {
+	for _, attr := range agentSpan.Attributes() {
 		if string(attr.Key) == semconvtrace.KeyGenAIRequestIsStream {
 			found = true
 			require.True(t, attr.Value.AsBool())
@@ -779,10 +794,14 @@ func TestChainAgent_Run_PreservesFinalResponseWhenAfterCallbackReturnsNil(t *tes
 	require.Len(t, received, 1)
 
 	spans := spanRecorder.Ended()
-	require.Len(t, spans, 1)
+	require.NotEmpty(t, spans)
+
+	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, chainAgent.Info().Name)
+	agentSpan := findEndedSpanByName(spans, expectedSpanName)
+	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
 
 	var outputMessages string
-	for _, attr := range spans[0].Attributes() {
+	for _, attr := range agentSpan.Attributes() {
 		if string(attr.Key) == semconvtrace.KeyGenAIOutputMessages {
 			outputMessages = attr.Value.AsString()
 			break

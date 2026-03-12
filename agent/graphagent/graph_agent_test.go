@@ -1734,6 +1734,7 @@ func TestGraphAgent_WithExecutorOptions_OverrideMappedOptions(t *testing.T) {
 type recordingSpanForEmitError struct {
 	oteltrace.Span
 	mu         sync.Mutex
+	name       string
 	statusCode codes.Code
 	statusDesc string
 	attributes []attribute.KeyValue
@@ -1788,9 +1789,147 @@ func (t *recordingTracerForEmitError) Start(ctx context.Context, spanName string
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	_, baseSpan := t.Tracer.Start(ctx, spanName, opts...)
-	recordingSpan := &recordingSpanForEmitError{Span: baseSpan}
+	recordingSpan := &recordingSpanForEmitError{Span: baseSpan, name: spanName}
 	t.spans = append(t.spans, recordingSpan)
 	return ctx, recordingSpan
+}
+
+func findRecordingSpanForEmitErrorByName(spans []*recordingSpanForEmitError, spanName string) *recordingSpanForEmitError {
+	for _, span := range spans {
+		if span.name == spanName {
+			return span
+		}
+	}
+	return nil
+}
+
+func TestRecordTraceEvent(t *testing.T) {
+	newTracker := func() *itelemetry.InvokeAgentTracker {
+		var trackerErr error
+		return itelemetry.NewInvokeAgentTracker(
+			context.Background(),
+			&agent.Invocation{AgentName: "trace-agent"},
+			true,
+			&trackerErr,
+		)
+	}
+	newUsage := func() *model.Usage {
+		return &model.Usage{
+			PromptTokens:     1,
+			CompletionTokens: 2,
+			TotalTokens:      3,
+		}
+	}
+
+	tests := []struct {
+		name           string
+		buildEvent     func() *event.Event
+		sleepBefore    time.Duration
+		wantUpdate     bool
+		wantTokenUsage itelemetry.TokenUsage
+		wantFirstToken bool
+	}{
+		{
+			name:           "ignores nil event",
+			buildEvent:     func() *event.Event { return nil },
+			wantTokenUsage: itelemetry.TokenUsage{},
+		},
+		{
+			name: "ignores event without response",
+			buildEvent: func() *event.Event {
+				return &event.Event{InvocationID: "inv", Author: "graph-agent"}
+			},
+			wantTokenUsage: itelemetry.TokenUsage{},
+		},
+		{
+			name: "tracks partial response without updating final event",
+			buildEvent: func() *event.Event {
+				return event.NewResponseEvent("inv", "graph-agent", &model.Response{
+					IsPartial: true,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "chunk",
+						},
+					}},
+					Usage: newUsage(),
+				})
+			},
+			sleepBefore:    time.Millisecond,
+			wantTokenUsage: itelemetry.TokenUsage{},
+			wantFirstToken: true,
+		},
+		{
+			name: "ignores invalid non terminal response",
+			buildEvent: func() *event.Event {
+				return event.NewResponseEvent("inv", "graph-agent", &model.Response{
+					Usage: newUsage(),
+				})
+			},
+			wantTokenUsage: itelemetry.TokenUsage{},
+		},
+		{
+			name: "records graph execution completion response",
+			buildEvent: func() *event.Event {
+				return event.NewResponseEvent("inv", "graph-agent", &model.Response{
+					Object: graph.ObjectTypeGraphExecution,
+					Done:   true,
+					Usage:  newUsage(),
+				})
+			},
+			wantUpdate: true,
+			wantTokenUsage: itelemetry.TokenUsage{
+				PromptTokens:     1,
+				CompletionTokens: 2,
+				TotalTokens:      3,
+			},
+		},
+		{
+			name: "records error response",
+			buildEvent: func() *event.Event {
+				evt := event.NewErrorEvent("inv", "graph-agent", model.ErrorTypeFlowError, "boom")
+				evt.Usage = newUsage()
+				return evt
+			},
+			wantUpdate: true,
+			wantTokenUsage: itelemetry.TokenUsage{
+				PromptTokens:     1,
+				CompletionTokens: 2,
+				TotalTokens:      3,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tracker := newTracker()
+			tokenUsage := &itelemetry.TokenUsage{}
+			initialFullRespEvent := event.NewResponseEvent("inv", "graph-agent", &model.Response{
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("existing"),
+				}},
+			})
+
+			if tt.sleepBefore > 0 {
+				time.Sleep(tt.sleepBefore)
+			}
+			evt := tt.buildEvent()
+			got := recordTraceEvent(tracker, tokenUsage, initialFullRespEvent, evt)
+
+			if tt.wantUpdate {
+				require.Same(t, evt, got)
+			} else {
+				require.Same(t, initialFullRespEvent, got)
+			}
+			require.Equal(t, tt.wantTokenUsage, *tokenUsage)
+
+			if tt.wantFirstToken {
+				require.Greater(t, tracker.FirstTokenTimeDuration(), time.Duration(0))
+			} else {
+				require.Zero(t, tracker.FirstTokenTimeDuration())
+			}
+		})
+	}
 }
 
 func TestGraphAgent_RunWithBarrier_EmitEventError(t *testing.T) {
@@ -1863,14 +2002,8 @@ func TestGraphAgent_RunWithBarrier_EmitEventError(t *testing.T) {
 
 	require.NotEmpty(t, spans, "expected at least one span to be created")
 
-	// Find the span for the agent invocation
-	var agentSpan *recordingSpanForEmitError
-	for _, span := range spans {
-		// The span name should contain the operation and agent name
-		agentSpan = span
-		break
-	}
-
+	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, inv.AgentName)
+	agentSpan := findRecordingSpanForEmitErrorByName(spans, expectedSpanName)
 	require.NotNil(t, agentSpan, "expected agent span to be created")
 
 	// Verify SetStatus was called with Error code
@@ -2000,7 +2133,11 @@ func TestGraphAgent_Run_TraceAfterInvokeAgent(t *testing.T) {
 
 	require.NotEmpty(t, spans, "expected at least one span to be created")
 
-	attrs := spans[0].getAttributes()
+	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, ga.Info().Name)
+	agentSpan := findRecordingSpanForEmitErrorByName(spans, expectedSpanName)
+	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
+
+	attrs := agentSpan.getAttributes()
 	var requestIsStream bool
 	var foundRequestIsStream bool
 	for _, attr := range attrs {
