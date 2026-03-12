@@ -146,3 +146,34 @@ func TestExecuteModelWithEvents_RunModelError_RecordsSpanAndWrapsError(t *testin
 	require.Equal(t, codes.Error, sp.statusCode)
 	require.True(t, strings.Contains(sp.statusDesc, "failed to generate content:"), sp.statusDesc)
 }
+
+func TestRunModelStream_NilIterSequence_RecordsSpanError(t *testing.T) {
+	origTracer := trace.Tracer
+	rt := &recordingTracer{}
+	trace.Tracer = rt
+	defer func() { trace.Tracer = origTracer }()
+
+	_, stream, err := runModelStream(
+		context.Background(),
+		nil,
+		nil,
+		&nilIterModel{},
+		&model.Request{},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Nil(t, stream.Ch)
+	require.Nil(t, stream.Seq)
+
+	rt.mu.Lock()
+	sp := rt.spans["run_model"]
+	rt.mu.Unlock()
+	require.NotNil(t, sp)
+
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	require.Len(t, sp.recordedErrors, 1)
+	require.ErrorContains(t, sp.recordedErrors[0], errMsgNoModelResponse)
+	require.Equal(t, codes.Error, sp.statusCode)
+	require.Equal(t, errMsgNoModelResponse, sp.statusDesc)
+}
