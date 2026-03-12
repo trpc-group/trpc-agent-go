@@ -61,7 +61,7 @@ runner 上执行，而不是在一台机器上做交叉编译。
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash
 ```
 

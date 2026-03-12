@@ -485,7 +485,7 @@ Good for local use where you want persistence across restarts.
 If `session.config` is omitted, it defaults to:
 
 - `<state_dir>/sessions.sqlite` (where `state_dir` defaults to
-  `~/.trpc-agent-go/openclaw`)
+  `~/.trpc-agent-go-github/openclaw`)
 - `<state_dir>/debug` (when `debug_recorder.enabled: true`)
 
 Explicit path example:

@@ -1338,7 +1338,11 @@ func TestResolveStateDir_DefaultHome(t *testing.T) {
 
 	got, err := resolveStateDir("")
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(home, ".trpc-agent-go", appName), got)
+	require.Equal(
+		t,
+		filepath.Join(home, ".trpc-agent-go-github", appName),
+		got,
+	)
 }
 
 func TestMaybeEnableDebugRecorder_Disabled(t *testing.T) {
@@ -1818,6 +1822,76 @@ func TestAdminStartupLines(t *testing.T) {
 	)
 
 	require.Nil(t, adminStartupLines("127.0.0.1:19789", nil))
+}
+
+func TestRuntimeStartupLines(t *testing.T) {
+	t.Parallel()
+
+	lines := runtimeStartupLines(
+		runOptions{
+			AppName:        "openclaw-stdin",
+			ConfigPath:     "openclaw.yaml",
+			ModelMode:      modeMock,
+			SessionBackend: sessionBackendInMemory,
+			MemoryBackend:  memoryBackendInMemory,
+		},
+		"/tmp/state",
+		[]occhannel.Channel{
+			&stubChannel{id: "stdin"},
+			&stubChannel{id: "telegram"},
+		},
+		true,
+	)
+	require.Equal(t,
+		[]startupLogLine{
+			{text: "App name: openclaw-stdin"},
+			{text: "Config: " + filepath.Join(
+				mustGetwd(t),
+				"openclaw.yaml",
+			)},
+			{text: "State dir: /tmp/state"},
+			{text: "Channels: stdin, telegram"},
+			{text: "Model: mock"},
+			{text: "Storage: session=inmemory memory=inmemory"},
+		},
+		lines,
+	)
+}
+
+func TestRuntimeStartupLinesWithoutConfigFile(t *testing.T) {
+	t.Parallel()
+
+	lines := runtimeStartupLines(
+		runOptions{
+			AppName:        "openclaw",
+			ModelMode:      modeOpenAI,
+			OpenAIModel:    "gpt-5",
+			SessionBackend: sessionBackendSQLite,
+			MemoryBackend:  memoryBackendSQLite,
+		},
+		"/tmp/state",
+		nil,
+		false,
+	)
+	require.Equal(t,
+		[]startupLogLine{
+			{text: "App name: openclaw"},
+			{text: "Config: built-in defaults and CLI flags"},
+			{text: "State dir: /tmp/state"},
+			{text: "Channels: none"},
+			{text: "Model: disabled"},
+			{text: "Storage: session=sqlite memory=sqlite"},
+		},
+		lines,
+	)
+}
+
+func mustGetwd(t *testing.T) string {
+	t.Helper()
+
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	return wd
 }
 
 type toolProviderCfg struct {

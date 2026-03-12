@@ -6,9 +6,10 @@ readonly DEFAULT_API_BASE_URL="https://api.github.com"
 readonly DEFAULT_DOWNLOAD_BASE_URL="https://github.com"
 readonly DEFAULT_RELEASE_PREFIX="openclaw-"
 readonly DEFAULT_PROFILE="stdin"
+readonly DEFAULT_CONFIG_ROOT_DIR=".trpc-agent-go-github"
 readonly DEFAULT_BIN_SUBDIR=".local/bin"
-readonly DEFAULT_CONFIG_SUBDIR=".trpc-agent-go/openclaw"
-readonly DEFAULT_STATE_SUBDIR=".trpc-agent-go/openclaw"
+readonly DEFAULT_CONFIG_SUBDIR="${DEFAULT_CONFIG_ROOT_DIR}/openclaw"
+readonly DEFAULT_STATE_SUBDIR="${DEFAULT_CONFIG_ROOT_DIR}/openclaw"
 
 readonly PROFILE_DIR_NAME="profiles"
 readonly BUNDLED_SKILLS_DIR_NAME="bundled-skills"
@@ -22,6 +23,9 @@ readonly CHECKSUMS_FILE_NAME="checksums.txt"
 readonly profileStdin="stdin"
 readonly profileStdinSQLite="stdin-sqlite"
 readonly profileTelegram="telegram"
+
+readonly githubTokenEnvName="GITHUB_TOKEN"
+readonly ghTokenEnvName="GH_TOKEN"
 
 usage() {
   cat <<'EOF'
@@ -69,7 +73,7 @@ resolve_dir_path() {
   mkdir -p "$dir"
   (
     cd "$dir"
-    pwd -P
+    pwd -L
   )
 }
 
@@ -157,6 +161,15 @@ profile_file_name() {
 
 download_text() {
   local url="$1"
+  local token
+
+  token="$(github_token)"
+  if [ -n "$token" ]; then
+    curl -fsSL --retry 3 \
+      -H "Authorization: Bearer ${token}" \
+      "$url"
+    return
+  fi
 
   curl -fsSL --retry 3 "$url"
 }
@@ -164,11 +177,35 @@ download_text() {
 download_file() {
   local url="$1"
   local output="$2"
+  local token
+
+  token="$(github_token)"
+  if [ -n "$token" ]; then
+    curl -fsSL --retry 3 \
+      -H "Authorization: Bearer ${token}" \
+      "$url" \
+      -o "$output"
+    return
+  fi
 
   curl -fsSL --retry 3 "$url" -o "$output"
 }
 
-extract_latest_tag() {
+github_token() {
+  if [ -n "${!ghTokenEnvName:-}" ]; then
+    printf '%s' "${!ghTokenEnvName}"
+    return
+  fi
+
+  if [ -n "${!githubTokenEnvName:-}" ]; then
+    printf '%s' "${!githubTokenEnvName}"
+    return
+  fi
+
+  printf '%s' ""
+}
+
+extract_latest_tag_from_json() {
   local payload="$1"
   local prefix="$2"
 
@@ -177,10 +214,38 @@ extract_latest_tag() {
     head -n 1 | sed -E 's/.*"([^"]+)"/\1/'
 }
 
+extract_latest_tag_from_atom() {
+  local payload="$1"
+  local prefix="$2"
+
+  printf '%s\n' "$payload" | tr '\n' ' ' | grep -o \
+    "<title>${prefix}v[^<]*</title>" | \
+    head -n 1 | sed -E 's#<title>([^<]+)</title>#\1#'
+}
+
+release_api_url() {
+  local api_base_url="$1"
+  local repo="$2"
+
+  printf '%s/repos/%s/releases?per_page=100' \
+    "$(trim_trailing_slash "$api_base_url")" \
+    "$repo"
+}
+
+release_feed_url() {
+  local download_base_url="$1"
+  local repo="$2"
+
+  printf '%s/%s/releases.atom' \
+    "$(trim_trailing_slash "$download_base_url")" \
+    "$repo"
+}
+
 resolve_version() {
   local requested="$1"
   local repo="$2"
   local api_base_url="$3"
+  local download_base_url="$4"
   local payload tag
 
   if [ -n "$requested" ]; then
@@ -188,14 +253,29 @@ resolve_version() {
     return
   fi
 
-  payload="$(download_text \
-    "$(trim_trailing_slash "$api_base_url")/repos/${repo}/releases?per_page=100")"
-  tag="$(extract_latest_tag "$payload" "$DEFAULT_RELEASE_PREFIX")"
-  if [ -z "$tag" ]; then
-    die "no published OpenClaw releases found in ${repo}"
+  if payload="$(download_text \
+    "$(release_api_url "$api_base_url" "$repo")" 2>/dev/null)"; then
+    tag="$(extract_latest_tag_from_json \
+      "$payload" \
+      "$DEFAULT_RELEASE_PREFIX")"
+    if [ -n "$tag" ]; then
+      printf '%s' "$(normalize_version "$tag")"
+      return
+    fi
   fi
 
-  printf '%s' "$(normalize_version "$tag")"
+  if payload="$(download_text \
+    "$(release_feed_url "$download_base_url" "$repo")" 2>/dev/null)"; then
+    tag="$(extract_latest_tag_from_atom \
+      "$payload" \
+      "$DEFAULT_RELEASE_PREFIX")"
+    if [ -n "$tag" ]; then
+      printf '%s' "$(normalize_version "$tag")"
+      return
+    fi
+  fi
+
+  die "no published OpenClaw releases found in ${repo}"
 }
 
 archive_name() {
@@ -252,6 +332,12 @@ verify_checksum() {
 
 print_path_hint() {
   local bin_dir="$1"
+  local display_bin_dir rc_path display_rc_path export_line
+
+  display_bin_dir="$(display_path "$bin_dir")"
+  rc_path="$(shell_rc_path)"
+  display_rc_path="$(display_path "$rc_path")"
+  export_line="export PATH=\"${display_bin_dir}:\$PATH\""
 
   case ":${PATH}:" in
     *":${bin_dir}:"*)
@@ -259,7 +345,36 @@ print_path_hint() {
     *)
       log ""
       log "Add this directory to PATH before using ${BINARY_NAME}:"
-      log "  export PATH=\"${bin_dir}:\$PATH\""
+      log "  ${export_line}"
+      log ""
+      log "Persist PATH for future shells:"
+      log "  grep -qxF '${export_line}' \"${display_rc_path}\" || \\"
+      log "    printf '\\n${export_line}\\n' >> \"${display_rc_path}\""
+      log "  . \"${display_rc_path}\""
+      ;;
+  esac
+}
+
+display_path() {
+  local path="$1"
+
+  case "$path" in
+    "${HOME}"/*)
+      printf '$HOME%s' "${path#${HOME}}"
+      ;;
+    *)
+      printf '%s' "$path"
+      ;;
+  esac
+}
+
+shell_rc_path() {
+  case "$(basename "${SHELL:-bash}")" in
+    zsh)
+      printf '%s/.zshrc' "${HOME}"
+      ;;
+    *)
+      printf '%s/.bashrc' "${HOME}"
       ;;
   esac
 }
@@ -268,16 +383,20 @@ print_profile_hint() {
   local profile="$1"
   local config_dir="$2"
   local state_dir="$3"
+  local display_config_dir display_state_dir
+
+  display_config_dir="$(display_path "$config_dir")"
+  display_state_dir="$(display_path "$state_dir")"
 
   log ""
   log "Profiles:"
-  log "  ${config_dir}/${PROFILE_DIR_NAME}/openclaw.stdin.yaml"
-  log "  ${config_dir}/${PROFILE_DIR_NAME}/openclaw.stdin.sqlite.yaml"
-  log "  ${config_dir}/${PROFILE_DIR_NAME}/openclaw.telegram.yaml"
+  log "  ${display_config_dir}/${PROFILE_DIR_NAME}/openclaw.stdin.yaml"
+  log "  ${display_config_dir}/${PROFILE_DIR_NAME}/openclaw.stdin.sqlite.yaml"
+  log "  ${display_config_dir}/${PROFILE_DIR_NAME}/openclaw.telegram.yaml"
   log "Bundled skills:"
-  log "  ${state_dir}/${BUNDLED_SKILLS_DIR_NAME}"
+  log "  ${display_state_dir}/${BUNDLED_SKILLS_DIR_NAME}"
   log "Managed skills:"
-  log "  ${state_dir}/${MANAGED_SKILLS_DIR_NAME}"
+  log "  ${display_state_dir}/${MANAGED_SKILLS_DIR_NAME}"
 
   case "$profile" in
     "$profileTelegram")
@@ -395,8 +514,13 @@ main() {
   local archive selected_profile_path
   local package_root metadata_file
   local package_version sqlite_backend
+  local display_bin_dir display_config_dir display_state_dir
 
-  resolved_version="$(resolve_version "$version" "$repo" "$api_base_url")"
+  resolved_version="$(resolve_version \
+    "$version" \
+    "$repo" \
+    "$api_base_url" \
+    "$download_base_url")"
   [ -n "$resolved_version" ] || die "empty release version"
 
   goos="$(detect_os)"
@@ -463,17 +587,21 @@ main() {
     sqlite_backend="${SQLITE_BACKEND:-unknown}"
   fi
 
+  display_bin_dir="$(display_path "$bin_dir")"
+  display_config_dir="$(display_path "$config_dir")"
+  display_state_dir="$(display_path "$state_dir")"
+
   log ""
   log "openclaw installed."
   log "Package: ${package_version}"
-  log "Binary: ${bin_dir}/${BINARY_NAME}"
+  log "Binary: ${display_bin_dir}/${BINARY_NAME}"
   log "Profile: ${profile}"
-  log "Config: ${config_dir}/openclaw.yaml"
-  log "State:  ${state_dir}"
+  log "Config: ${display_config_dir}/openclaw.yaml"
+  log "State:  ${display_state_dir}"
   log "SQLite: ${sqlite_backend}"
   log ""
   log "Run:"
-  log "  ${bin_dir}/${BINARY_NAME}"
+  log "  ${display_bin_dir}/${BINARY_NAME}"
 
   print_profile_hint "$profile" "$config_dir" "$state_dir"
   print_path_hint "$bin_dir"
