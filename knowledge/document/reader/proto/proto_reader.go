@@ -95,10 +95,14 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 	}
 	defer file.Close()
 
-	// Get file name for document naming
-	fileName := filepath.Base(filePath)
+	// Read content from file
+	content, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
 
-	return r.ReadFromReader(fileName, file)
+	// Use full file path for document naming (consistent with trpc-ast-rag)
+	return r.processContent(string(content), filePath)
 }
 
 // ReadFromURL reads proto content from a URL and returns a list of documents.
@@ -300,7 +304,7 @@ func (e *entityExtractor) extractService(svc *descriptorpb.ServiceDescriptorProt
 	comment := e.extractComment(svcASTNode)
 
 	// Create service document
-	svcDoc := e.createEntityDocument(code, svcName, "service", svcFullName, comment, startLine, endLine, chunkIndex)
+	svcDoc := e.createEntityDocument(code, svcName, "Service", svcFullName, comment, startLine, endLine, chunkIndex)
 	svcDoc.Metadata["trpc_ast_type"] = "service"
 	svcDoc.Metadata["trpc_ast_name"] = svcName
 	svcDoc.Metadata["trpc_ast_full_name"] = svcFullName
@@ -350,7 +354,7 @@ func (e *entityExtractor) extractRPC(method *descriptorpb.MethodDescriptorProto,
 	code := e.extractCode(startLine, endLine)
 	comment := e.extractComment(methodASTNode)
 
-	doc := e.createEntityDocument(code, rpcName, "rpc", rpcFullName, comment, startLine, endLine, chunkIndex)
+	doc := e.createEntityDocument(code, rpcName, "RPC", rpcFullName, comment, startLine, endLine, chunkIndex)
 	doc.Metadata["trpc_ast_type"] = "rpc"
 	doc.Metadata["trpc_ast_name"] = rpcName
 	doc.Metadata["trpc_ast_full_name"] = rpcFullName
@@ -386,7 +390,7 @@ func (e *entityExtractor) extractMessage(msg *descriptorpb.DescriptorProto, pare
 	comment := e.extractComment(msgASTNode)
 
 	// Create message document
-	doc := e.createEntityDocument(code, msgName, "message", msgFullName, comment, startLine, endLine, chunkIndex)
+	doc := e.createEntityDocument(code, msgName, "Message", msgFullName, comment, startLine, endLine, chunkIndex)
 	doc.Metadata["trpc_ast_type"] = "message"
 	doc.Metadata["trpc_ast_name"] = msgName
 	doc.Metadata["trpc_ast_full_name"] = msgFullName
@@ -431,7 +435,7 @@ func (e *entityExtractor) extractEnum(enum *descriptorpb.EnumDescriptorProto, pa
 		enumValues = append(enumValues, value.GetName())
 	}
 
-	doc := e.createEntityDocument(code, enumName, "enum", enumFullName, comment, startLine, endLine, chunkIndex)
+	doc := e.createEntityDocument(code, enumName, "Enum", enumFullName, comment, startLine, endLine, chunkIndex)
 	doc.Metadata["trpc_ast_type"] = "enum"
 	doc.Metadata["trpc_ast_name"] = enumName
 	doc.Metadata["trpc_ast_full_name"] = enumFullName

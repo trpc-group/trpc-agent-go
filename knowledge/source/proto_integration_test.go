@@ -66,11 +66,11 @@ message GetDataResponse {
 		t.Fatal("expected metadata to be present")
 	}
 
-	if syntax, ok := firstDoc.Metadata["trpc_ast_proto_syntax"]; !ok || syntax != "proto3" {
+	if syntax, ok := firstDoc.Metadata["trpc_ast_syntax"]; !ok || syntax != "proto3" {
 		t.Errorf("expected proto_syntax='proto3', got %v", syntax)
 	}
 
-	if pkg, ok := firstDoc.Metadata["trpc_ast_proto_package"]; !ok || pkg != "test.v1" {
+	if pkg, ok := firstDoc.Metadata["trpc_ast_package"]; !ok || pkg != "test.v1" {
 		t.Errorf("expected proto_package='test.v1', got %v", pkg)
 	}
 
@@ -163,7 +163,7 @@ message Response {}
 		t.Fatal("expected metadata to be present")
 	}
 
-	if _, ok := firstDoc.Metadata["trpc_ast_proto_syntax"]; !ok {
+	if _, ok := firstDoc.Metadata["trpc_ast_syntax"]; !ok {
 		t.Error("expected proto_syntax metadata")
 	}
 

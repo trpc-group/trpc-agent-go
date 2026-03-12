@@ -10,6 +10,7 @@
 package proto
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -640,5 +641,120 @@ message GetOrderRequest { string id = 1; }
 	}
 	if entityCounts["rpc"] != 3 {
 		t.Errorf("expected 3 RPCs, got %d", entityCounts["rpc"])
+	}
+}
+
+// TestEmbeddingTextTypeAndFilePath verifies that embedding text uses correct type values
+// and file_path format (aligned with trpc-ast-rag conventions).
+func TestEmbeddingTextTypeAndFilePath(t *testing.T) {
+	protoContent := `syntax = "proto3";
+package example.v1;
+
+// User message
+message User {
+  string id = 1;
+}
+
+// Status enum
+enum Status {
+  UNKNOWN = 0;
+}
+
+// UserService service
+service UserService {
+  rpc GetUser(GetUserRequest) returns (User);
+}
+
+message GetUserRequest { string id = 1; }
+`
+
+	r := New()
+	docs, err := r.ReadFromReader("test.proto", strings.NewReader(protoContent))
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	for _, doc := range docs {
+		if doc.EmbeddingText == "" {
+			t.Errorf("expected embedding text for %s", doc.Metadata["trpc_ast_name"])
+			continue
+		}
+
+		// Parse embedding text to verify type value
+		var embeddingData map[string]string
+		if err := json.Unmarshal([]byte(doc.EmbeddingText), &embeddingData); err != nil {
+			t.Errorf("failed to parse embedding text: %v", err)
+			continue
+		}
+
+		// Verify type values are capitalized (aligned with trpc-ast-rag)
+		entityType := embeddingData["type"]
+		switch entityType {
+		case "Message", "Enum", "Service", "RPC":
+			// Correct format
+		case "message", "enum", "service", "rpc":
+			t.Errorf("type should be capitalized, got: %s", entityType)
+		default:
+			// For file documents, "proto" is acceptable
+			if entityType != "proto" {
+				t.Errorf("unexpected type value: %s", entityType)
+			}
+		}
+
+		// Verify file_path contains the file name
+		if filePath, ok := embeddingData["file_path"]; !ok || filePath == "" {
+			t.Errorf("file_path should be present in embedding text")
+		} else if filePath != "test.proto" {
+			t.Errorf("file_path should be 'test.proto', got: %s", filePath)
+		}
+	}
+}
+
+// TestEmbeddingTextFromFile verifies file_path uses full path when reading from file
+func TestEmbeddingTextFromFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	protoFile := filepath.Join(tmpDir, "subdir", "api.proto")
+
+	// Create subdirectory
+	if err := os.MkdirAll(filepath.Dir(protoFile), 0755); err != nil {
+		t.Fatalf("failed to create subdir: %v", err)
+	}
+
+	protoContent := `syntax = "proto3";
+package example.v1;
+
+message User { string id = 1; }
+`
+
+	if err := os.WriteFile(protoFile, []byte(protoContent), 0644); err != nil {
+		t.Fatalf("failed to write proto file: %v", err)
+	}
+
+	r := New()
+	docs, err := r.ReadFromFile(protoFile)
+	if err != nil {
+		t.Fatalf("failed to read proto file: %v", err)
+	}
+
+	// Verify file_path contains full path
+	for _, doc := range docs {
+		if doc.EmbeddingText == "" {
+			continue
+		}
+
+		var embeddingData map[string]string
+		if err := json.Unmarshal([]byte(doc.EmbeddingText), &embeddingData); err != nil {
+			t.Errorf("failed to parse embedding text: %v", err)
+			continue
+		}
+
+		// Verify file_path contains the full path (not just filename)
+		filePath := embeddingData["file_path"]
+		if !strings.Contains(filePath, "subdir") {
+			t.Errorf("file_path should contain 'subdir', got: %s", filePath)
+		}
+		if !strings.HasSuffix(filePath, "api.proto") {
+			t.Errorf("file_path should end with 'api.proto', got: %s", filePath)
+		}
 	}
 }
