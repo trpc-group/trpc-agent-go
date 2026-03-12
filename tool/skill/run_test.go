@@ -1543,6 +1543,13 @@ func (e *errArtifactService) LoadArtifact(
 ) (*artifact.Artifact, error) {
 	return nil, nil
 }
+func (e *errArtifactService) Head(
+	ctx context.Context,
+	req *artifact.HeadRequest,
+	_ ...artifact.HeadOption,
+) (*artifact.HeadResponse, error) {
+	return nil, nil
+}
 func (e *errArtifactService) ListArtifactKeys(
 	ctx context.Context, sessionInfo artifact.SessionInfo,
 ) ([]string, error) {

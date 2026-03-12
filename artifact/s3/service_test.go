@@ -63,6 +63,17 @@ func (m *mockStorage) GetObject(ctx context.Context, key string) ([]byte, string
 	return append([]byte(nil), obj.data...), obj.contentType, nil
 }
 
+func (m *mockStorage) HeadObject(ctx context.Context, key string) (int64, string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	obj, ok := m.objects[key]
+	if !ok {
+		return 0, "", s3storage.ErrNotFound
+	}
+	return int64(len(obj.data)), obj.contentType, nil
+}
+
 func (m *mockStorage) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -400,6 +411,79 @@ func TestLoadArtifact(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Nil(t, art)
 	})
+}
+
+func TestHeadArtifact(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	info := testSessionInfo()
+
+	// Not found.
+	got, err := svc.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: info,
+		Filename:    "missing.txt",
+	})
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	// Save multiple versions.
+	dataV0 := []byte("v0")
+	v0, err := svc.SaveArtifact(ctx, info, "doc.txt", &artifact.Artifact{
+		Data:     dataV0,
+		MimeType: "text/plain",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, v0)
+
+	dataV1 := []byte("v1")
+	v1, err := svc.SaveArtifact(ctx, info, "doc.txt", &artifact.Artifact{
+		Data:     dataV1,
+		MimeType: "text/plain",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, v1)
+
+	// Head latest.
+	got, err = svc.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: info,
+		Filename:    "doc.txt",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "doc.txt", got.Filename)
+	assert.Equal(t, 1, got.Version)
+	assert.Equal(t, int64(len(dataV1)), got.Size)
+	assert.Equal(t, "text/plain", got.MimeType)
+
+	// Head specific version.
+	got, err = svc.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: info,
+		Filename:    "doc.txt",
+		Version:     &v0,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, 0, got.Version)
+	assert.Equal(t, int64(len(dataV0)), got.Size)
+
+	// Version not found.
+	v999 := 999
+	got, err = svc.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: info,
+		Filename:    "doc.txt",
+		Version:     &v999,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got)
+
+	// Invalid version.
+	neg := -1
+	_, err = svc.Head(ctx, &artifact.HeadRequest{
+		SessionInfo: info,
+		Filename:    "doc.txt",
+		Version:     &neg,
+	})
+	require.Error(t, err)
 }
 
 func TestListArtifactKeys(t *testing.T) {

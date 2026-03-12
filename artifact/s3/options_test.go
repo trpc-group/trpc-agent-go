@@ -255,6 +255,10 @@ func (m *mockTestClient) GetObject(ctx context.Context, key string) ([]byte, str
 	return nil, "", nil
 }
 
+func (m *mockTestClient) HeadObject(ctx context.Context, key string) (int64, string, error) {
+	return 0, "", nil
+}
+
 func (m *mockTestClient) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	return nil, nil
 }

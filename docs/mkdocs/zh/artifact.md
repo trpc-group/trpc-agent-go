@@ -309,6 +309,9 @@ type Service interface {
     // 加载制品（如果 version 为 nil 则加载最新版本）
     LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*Artifact, error)
     
+    // 获取制品元数据（不下载内容；req.Version 为 nil 则返回最新版本）
+    Head(ctx context.Context, req *HeadRequest, opts ...HeadOption) (*HeadResponse, error)
+    
     // 列出会话中的所有制品文件名
     ListArtifactKeys(ctx context.Context, sessionInfo SessionInfo) ([]string, error)
     
