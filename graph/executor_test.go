@@ -22,10 +22,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	teletrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -289,6 +291,124 @@ func TestExecutor_NodeStartEvent_UsesCustomUserInputKey(t *testing.T) {
 		got = meta.ModelInput
 	}
 	require.Equal(t, testCustomInput, got)
+}
+
+func TestExecutorExecute_TracingBranches(t *testing.T) {
+	newExecutor := func(t *testing.T, fn NodeFunc) *Executor {
+		sg := NewStateGraph(NewStateSchema())
+		sg.AddNode("n", fn)
+		sg.SetEntryPoint("n")
+		sg.SetFinishPoint("n")
+
+		g, err := sg.Compile()
+		require.NoError(t, err)
+
+		exec, err := NewExecutor(g)
+		require.NoError(t, err)
+		return exec
+	}
+
+	setupRecordingTracer := func(t *testing.T) {
+		originalProvider := teletrace.TracerProvider
+		originalTracer := teletrace.Tracer
+
+		provider := sdktrace.NewTracerProvider()
+		teletrace.TracerProvider = provider
+		teletrace.Tracer = provider.Tracer("executor-test")
+
+		t.Cleanup(func() {
+			_ = provider.Shutdown(context.Background())
+			teletrace.TracerProvider = originalProvider
+			teletrace.Tracer = originalTracer
+		})
+	}
+
+	drainEvents := func(ch <-chan *event.Event) (sawError bool) {
+		for evt := range ch {
+			if evt != nil && evt.Error != nil {
+				sawError = true
+			}
+		}
+		return sawError
+	}
+
+	t.Run("disable tracing uses context span path", func(t *testing.T) {
+		exec := newExecutor(t, func(context.Context, State) (any, error) {
+			return State{"ok": true}, nil
+		})
+		invocation := agent.NewInvocation(
+			agent.WithInvocationID("inv-disable-tracing"),
+			agent.WithInvocationRunOptions(agent.RunOptions{DisableTracing: true}),
+		)
+		invocation.AgentName = "trace-agent"
+
+		ch, err := exec.Execute(context.Background(), State{}, invocation)
+		require.NoError(t, err)
+		require.False(t, drainEvents(ch))
+	})
+
+	t.Run("recording span success traces workflow", func(t *testing.T) {
+		setupRecordingTracer(t)
+		exec := newExecutor(t, func(context.Context, State) (any, error) {
+			return State{"ok": true}, nil
+		})
+		invocation := agent.NewInvocation(agent.WithInvocationID("inv-trace-success"))
+		invocation.AgentName = "trace-agent"
+
+		ch, err := exec.Execute(context.Background(), State{}, invocation)
+		require.NoError(t, err)
+		require.False(t, drainEvents(ch))
+	})
+
+	t.Run("recording span error stores workflow error", func(t *testing.T) {
+		setupRecordingTracer(t)
+		exec := newExecutor(t, func(context.Context, State) (any, error) {
+			return nil, errors.New("boom")
+		})
+		invocation := agent.NewInvocation(agent.WithInvocationID("inv-trace-error"))
+		invocation.AgentName = "trace-agent"
+
+		ch, err := exec.Execute(context.Background(), State{}, invocation)
+		require.NoError(t, err)
+		require.True(t, drainEvents(ch))
+	})
+
+	t.Run("recording span panic stores workflow panic", func(t *testing.T) {
+		setupRecordingTracer(t)
+		exec := newExecutor(t, func(context.Context, State) (any, error) {
+			panic("kaboom")
+		})
+		invocation := agent.NewInvocation(agent.WithInvocationID("inv-trace-panic"))
+		invocation.AgentName = "trace-agent"
+
+		ch, err := exec.Execute(context.Background(), State{}, invocation)
+		require.NoError(t, err)
+		require.True(t, drainEvents(ch))
+	})
+
+	t.Run("checkpoint restore panic stores workflow panic", func(t *testing.T) {
+		setupRecordingTracer(t)
+		sg := NewStateGraph(NewStateSchema())
+		sg.AddNode("a", func(context.Context, State) (any, error) {
+			return State{}, nil
+		})
+		sg.SetEntryPoint("a")
+		sg.SetFinishPoint("a")
+
+		g, err := sg.Compile()
+		require.NoError(t, err)
+
+		saver := &panicGetTupleSaver{mockSaver: newMockSaver()}
+		exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+		require.NoError(t, err)
+
+		invocation := agent.NewInvocation(agent.WithInvocationID("inv-trace-checkpoint"))
+		invocation.AgentName = "trace-agent"
+
+		ch, err := exec.Execute(context.Background(), State{}, invocation)
+		require.NoError(t, err)
+		require.True(t, drainEvents(ch))
+	})
 }
 
 // Ensure handleInterrupt still emits the interrupt event even when
