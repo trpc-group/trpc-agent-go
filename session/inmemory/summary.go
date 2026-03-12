@@ -20,7 +20,7 @@ import (
 // CreateSessionSummary generates a summary for the session and stores it on the session object.
 // This implementation preserves original events and updates session.Summaries only.
 func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if s.opts.summarizer == nil {
+	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
 		return nil
 	}
 
@@ -33,7 +33,19 @@ func (s *SessionService) CreateSessionSummary(ctx context.Context, sess *session
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
+	summarizer, err := isummary.ResolveSessionSummarizer(
+		ctx,
+		s.opts.summarizer,
+		s.opts.summarizerResolver,
+		sess,
+		filterKey,
+		force,
+	)
+	if err != nil {
+		return err
+	}
+
+	updated, err := isummary.SummarizeSession(ctx, summarizer, sess, filterKey, force)
 	if err != nil || !updated {
 		return err
 	}
@@ -105,7 +117,7 @@ func (s *SessionService) GetSessionSummaryText(ctx context.Context, sess *sessio
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
 func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if s.opts.summarizer == nil {
+	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
 		return nil
 	}
 

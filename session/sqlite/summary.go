@@ -27,7 +27,7 @@ func (s *Service) CreateSessionSummary(
 	filterKey string,
 	force bool,
 ) error {
-	if s.opts.summarizer == nil {
+	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
 		return nil
 	}
 	if sess == nil {
@@ -43,9 +43,21 @@ func (s *Service) CreateSessionSummary(
 		return fmt.Errorf("check session key: %w", err)
 	}
 
-	updated, err := isummary.SummarizeSession(
+	summarizer, err := isummary.ResolveSessionSummarizer(
 		ctx,
 		s.opts.summarizer,
+		s.opts.summarizerResolver,
+		sess,
+		filterKey,
+		force,
+	)
+	if err != nil {
+		return err
+	}
+
+	updated, err := isummary.SummarizeSession(
+		ctx,
+		summarizer,
 		sess,
 		filterKey,
 		force,
@@ -100,7 +112,7 @@ func (s *Service) EnqueueSummaryJob(
 	filterKey string,
 	force bool,
 ) error {
-	if s.opts.summarizer == nil {
+	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
 		return nil
 	}
 	if sess == nil {

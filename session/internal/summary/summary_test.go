@@ -1215,6 +1215,32 @@ func TestSummarizeSession_NeedsPersistOnly(t *testing.T) {
 			sum.UpdatedAt.Equal(after.Add(time.Second)))
 	})
 
+	t.Run("copied summary persists without summarizer", func(t *testing.T) {
+		base := &session.Session{
+			ID:      "s1",
+			AppName: "a",
+			UserID:  "u",
+			Events: []event.Event{
+				makeEvent("e1", now.Add(-2*time.Minute), ""),
+				makeEvent("e2", now.Add(-1*time.Minute), ""),
+			},
+			Summaries: map[string]*session.Summary{
+				"": {Summary: "copied summary", UpdatedAt: time.Time{}},
+			},
+		}
+
+		updated, err := SummarizeSession(context.Background(), nil, base, "", false)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		base.SummariesMu.RLock()
+		sum := base.Summaries[""]
+		base.SummariesMu.RUnlock()
+		require.NotNil(t, sum)
+		require.Equal(t, "copied summary", sum.Summary)
+		require.True(t, sum.UpdatedAt.Equal(now.Add(-1*time.Minute).UTC()))
+	})
+
 	t.Run("copied summary with filterKey uses filtered events timestamp", func(t *testing.T) {
 		base := &session.Session{
 			ID:      "s1",

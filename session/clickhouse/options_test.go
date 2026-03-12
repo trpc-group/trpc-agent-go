@@ -10,11 +10,13 @@
 package clickhouse
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	psummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 func TestServiceOptions(t *testing.T) {
@@ -150,6 +152,20 @@ func TestServiceOptions(t *testing.T) {
 			},
 			validate: func(t *testing.T, opts *ServiceOpts) {
 				assert.NotNil(t, opts.summarizer)
+			},
+		},
+		{
+			name: "WithSessionSummarizerResolver",
+			opts: []ServiceOpt{
+				WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
+					context.Context,
+					psummary.SessionSummaryRequest,
+				) (psummary.SessionSummarizer, error) {
+					return nil, nil
+				})),
+			},
+			validate: func(t *testing.T, opts *ServiceOpts) {
+				assert.NotNil(t, opts.summarizerResolver)
 			},
 		},
 		{
