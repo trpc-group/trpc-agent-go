@@ -10,11 +10,14 @@
 package postgres
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
+	psummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 func TestValidateTablePrefix(t *testing.T) {
@@ -288,6 +291,26 @@ func TestServiceOptions(t *testing.T) {
 		// Just verify the function doesn't crash with nil
 		WithSummarizer(nil)(opts)
 		assert.Nil(t, opts.summarizer)
+	})
+
+	t.Run("WithSessionSummarizerResolver", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		called := false
+		WithSessionSummarizerResolver(psummary.SessionSummarizerResolver(func(
+			context.Context,
+			psummary.SessionSummaryRequest,
+		) (psummary.SessionSummarizer, error) {
+			called = true
+			return nil, nil
+		}))(opts)
+
+		require.NotNil(t, opts.summarizerResolver)
+		_, err := opts.summarizerResolver(
+			context.Background(),
+			psummary.SessionSummaryRequest{FilterKey: "branch"},
+		)
+		require.NoError(t, err)
+		assert.True(t, called)
 	})
 
 	t.Run("WithAsyncSummaryNum", func(t *testing.T) {

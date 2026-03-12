@@ -49,10 +49,11 @@ type ServiceOpts struct {
 	cleanupInterval    time.Duration
 
 	// summarizer integrates LLM summarization.
-	summarizer        summary.SessionSummarizer
-	asyncSummaryNum   int
-	summaryQueueSize  int
-	summaryJobTimeout time.Duration
+	summarizer         summary.SessionSummarizer
+	summarizerResolver summary.SessionSummarizerResolver
+	asyncSummaryNum    int
+	summaryQueueSize   int
+	summaryJobTimeout  time.Duration
 
 	// skipDBInit skips database initialization.
 	skipDBInit bool
@@ -139,6 +140,13 @@ func WithCleanupInterval(interval time.Duration) ServiceOpt {
 func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.summarizer = s
+	}
+}
+
+// WithSessionSummarizerResolver injects a request-scoped summarizer resolver.
+func WithSessionSummarizerResolver(p summary.SessionSummarizerResolver) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.summarizerResolver = p
 	}
 }
 

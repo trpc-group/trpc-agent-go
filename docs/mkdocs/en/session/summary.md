@@ -46,9 +46,14 @@ Integrate the summarizer into a session service:
 
 ```go
 import (
+    "context"
     "time"
+    "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/session/mysql"
+    "trpc.group/trpc-go/trpc-agent-go/session/postgres"
     "trpc.group/trpc-go/trpc-agent-go/session/redis"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 // Memory storage (dev/test)
@@ -57,6 +62,21 @@ sessionService := inmemory.NewSessionService(
     inmemory.WithAsyncSummaryNum(2),
     inmemory.WithSummaryQueueSize(100),
     inmemory.WithSummaryJobTimeout(60*time.Second),
+)
+
+// Dynamically resolve a summarizer per request, for example from ctx values.
+sessionService := inmemory.NewSessionService(
+    inmemory.WithSessionSummarizerResolver(summary.SessionSummarizerResolver(func(
+        ctx context.Context,
+        req summary.SessionSummaryRequest,
+    ) (summary.SessionSummarizer, error) {
+        dynamicModel := pickSummaryModelFromCtx(ctx)
+        return summary.NewSummarizer(
+            dynamicModel,
+            summary.WithEventThreshold(20),
+        ), nil
+    })),
+    inmemory.WithAsyncSummaryNum(2),
 )
 
 // Redis storage (production)
@@ -140,6 +160,25 @@ type SessionSummarizer interface {
     Metadata() map[string]any
 }
 ```
+
+## SessionSummarizerResolver
+
+When the summary model must be selected dynamically per request, configure a resolver on the session service instead of changing the `SessionSummarizer` interface:
+
+```go
+type SessionSummaryRequest struct {
+    Session   *session.Session
+    FilterKey string
+    Force     bool
+}
+
+type SessionSummarizerResolver func(
+    ctx context.Context,
+    req SessionSummaryRequest,
+) (SessionSummarizer, error)
+```
+
+The resolver is evaluated once per summary attempt, and the same summarizer instance is reused for both `ShouldSummarize` and `Summarize`. This avoids mutating a shared summarizer with `SetModel` under concurrent workloads.
 
 ## Summarizer Options
 
