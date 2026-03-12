@@ -36,6 +36,10 @@ func Start(ctx context.Context, opts ...Option) (clean func(context.Context) err
 	for _, opt := range opts {
 		opt(config)
 	}
+	config.spanProcessorMode = normalizeSpanProcessorMode(config.spanProcessorMode)
+	if err := validateSpanProcessorMode(config.spanProcessorMode); err != nil {
+		return nil, err
+	}
 
 	// Apply truncation config early so callers can rely on it even if Start returns an error.
 	setObservationMaxBytes(config.maxObservationLeafValueBytes)
@@ -57,10 +61,15 @@ func Start(ctx context.Context, opts ...Option) (clean func(context.Context) err
 		otelOpts = append(otelOpts, otlptracehttp.WithInsecure())
 	}
 
-	return start(ctx, otelOpts...)
+	return start(ctx, config.spanProcessorMode, otelOpts...)
 }
 
-func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(context.Context) error, err error) {
+func start(ctx context.Context, processorMode SpanProcessorMode, opts ...otlptracehttp.Option) (clean func(context.Context) error, err error) {
+	processorMode = normalizeSpanProcessorMode(processorMode)
+	if err := validateSpanProcessorMode(processorMode); err != nil {
+		return nil, err
+	}
+
 	p := atrace.TracerProvider
 	_, ok := p.(noop.TracerProvider)
 	var provider *sdktrace.TracerProvider
@@ -76,7 +85,10 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 	if err != nil {
 		return nil, err
 	}
-	processor := newSpanProcessor(exp)
+	processor, err := newSpanProcessor(exp, processorMode)
+	if err != nil {
+		return nil, err
+	}
 	if provider == nil {
 		res, err := resource.New(ctx,
 			resource.WithAttributes(
