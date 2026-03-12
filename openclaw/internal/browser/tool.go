@@ -1008,9 +1008,14 @@ func (t *Tool) handleUpload(
 		return Result{}, errors.New("browser upload requires paths")
 	}
 
-	raw, err := drv.Call(ctx, mcpToolUpload, map[string]any{
+	args := map[string]any{
 		"paths": in.Paths,
-	})
+	}
+	if inputRef := strings.TrimSpace(in.InputRef); inputRef != "" {
+		args["inputRef"] = inputRef
+	}
+
+	raw, err := drv.Call(ctx, mcpToolUpload, args)
 	if err != nil {
 		return Result{}, err
 	}

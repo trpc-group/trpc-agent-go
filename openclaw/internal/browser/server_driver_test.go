@@ -234,14 +234,18 @@ func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
 			},
 		},
 		{
-			name:       "upload",
-			toolName:   mcpToolUpload,
-			args:       map[string]any{"paths": []string{"/tmp/a.txt"}},
+			name:     "upload",
+			toolName: mcpToolUpload,
+			args: map[string]any{
+				"paths":    []string{"/tmp/a.txt"},
+				"inputRef": "file-input",
+			},
 			wantPath:   "/upload",
 			wantMethod: http.MethodPost,
 			assertBody: func(t *testing.T, body map[string]any) {
 				t.Helper()
 				require.Equal(t, []any{"/tmp/a.txt"}, body["paths"])
+				require.Equal(t, "file-input", body["inputRef"])
 			},
 		},
 		{

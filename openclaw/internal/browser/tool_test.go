@@ -914,6 +914,7 @@ func TestToolCall_ConsolePDFUploadAndDialog(t *testing.T) {
 			input: map[string]any{
 				"action":   actionUpload,
 				"targetId": "tab-2",
+				"inputRef": "file-input",
 				"paths":    []string{"/tmp/a.txt"},
 			},
 			wantTool:   mcpToolUpload,
@@ -921,6 +922,7 @@ func TestToolCall_ConsolePDFUploadAndDialog(t *testing.T) {
 			assertCall: func(t *testing.T, call fakeCall) {
 				t.Helper()
 				require.Equal(t, []string{"/tmp/a.txt"}, call.Args["paths"])
+				require.Equal(t, "file-input", call.Args["inputRef"])
 			},
 		},
 		{
