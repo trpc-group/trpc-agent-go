@@ -11,6 +11,7 @@ package proto
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 func TestNew(t *testing.T) {
@@ -149,6 +151,50 @@ message DeleteUserRequest {
 	if messages, ok := firstDoc.Metadata["trpc_ast_messages"].([]string); !ok || len(messages) != 4 {
 		t.Errorf("expected 4 messages, got %v (len=%d)", firstDoc.Metadata["trpc_ast_messages"], len(messages))
 	}
+
+	// Check go_package metadata extracted from option
+	if goPkg, ok := firstDoc.Metadata["trpc_ast_go_package"].(string); !ok || goPkg != "github.com/example/api" {
+		t.Errorf("expected trpc_ast_go_package='github.com/example/api', got %v", firstDoc.Metadata["trpc_ast_go_package"])
+	}
+
+	// Check file-source style metadata is attached when reading from file
+	if srcType, ok := firstDoc.Metadata[source.MetaSource].(string); !ok || srcType != source.TypeFile {
+		t.Errorf("expected %s='%s', got %v", source.MetaSource, source.TypeFile, firstDoc.Metadata[source.MetaSource])
+	}
+	if fileName, ok := firstDoc.Metadata[source.MetaFileName].(string); !ok || fileName != filepath.Base(protoFile) {
+		t.Errorf("expected %s='%s', got %v", source.MetaFileName, filepath.Base(protoFile), firstDoc.Metadata[source.MetaFileName])
+	}
+	if ext, ok := firstDoc.Metadata[source.MetaFileExt].(string); !ok || ext != ".proto" {
+		t.Errorf("expected %s='.proto', got %v", source.MetaFileExt, firstDoc.Metadata[source.MetaFileExt])
+	}
+	if sourceName, ok := firstDoc.Metadata[source.MetaSourceName].(string); !ok || sourceName != "Proto Reader" {
+		t.Errorf("expected %s='Proto Reader', got %v", source.MetaSourceName, firstDoc.Metadata[source.MetaSourceName])
+	}
+	if uriVal, ok := firstDoc.Metadata[source.MetaURI].(string); !ok {
+		t.Fatalf("expected %s to be present", source.MetaURI)
+	} else {
+		parsed, err := url.Parse(uriVal)
+		if err != nil {
+			t.Fatalf("failed to parse %s: %v", source.MetaURI, err)
+		}
+		if parsed.Scheme != "file" {
+			t.Errorf("expected %s scheme=file, got %s", source.MetaURI, parsed.Scheme)
+		}
+	}
+
+	// Check common chunk metadata
+	if _, ok := firstDoc.Metadata[source.MetaChunkIndex].(int); !ok {
+		t.Errorf("expected %s metadata to be int, got %T", source.MetaChunkIndex, firstDoc.Metadata[source.MetaChunkIndex])
+	}
+	if _, ok := firstDoc.Metadata["trpc_ast_chunk_index"]; ok {
+		t.Errorf("expected trpc_ast_chunk_index to be removed, got %v", firstDoc.Metadata["trpc_ast_chunk_index"])
+	}
+	if chunkSize, ok := firstDoc.Metadata[source.MetaChunkSize].(int); !ok || chunkSize <= 0 {
+		t.Errorf("expected %s to be positive int, got %v", source.MetaChunkSize, firstDoc.Metadata[source.MetaChunkSize])
+	}
+	if contentLength, ok := firstDoc.Metadata[source.MetaContentLength].(int); !ok || contentLength <= 0 {
+		t.Errorf("expected %s to be positive int, got %v", source.MetaContentLength, firstDoc.Metadata[source.MetaContentLength])
+	}
 }
 
 func TestReadFromFile_NotFound(t *testing.T) {
@@ -182,6 +228,17 @@ message Simple {
 	// Check metadata
 	if syntax, ok := docs[0].Metadata["trpc_ast_syntax"]; !ok || syntax != "proto2" {
 		t.Errorf("expected proto_syntax='proto2', got %v", syntax)
+	}
+
+	// Check common chunk metadata (available even for reader input)
+	if _, ok := docs[0].Metadata[source.MetaChunkIndex].(int); !ok {
+		t.Errorf("expected %s metadata to be int, got %T", source.MetaChunkIndex, docs[0].Metadata[source.MetaChunkIndex])
+	}
+	if chunkSize, ok := docs[0].Metadata[source.MetaChunkSize].(int); !ok || chunkSize <= 0 {
+		t.Errorf("expected %s to be positive int, got %v", source.MetaChunkSize, docs[0].Metadata[source.MetaChunkSize])
+	}
+	if contentLength, ok := docs[0].Metadata[source.MetaContentLength].(int); !ok || contentLength <= 0 {
+		t.Errorf("expected %s to be positive int, got %v", source.MetaContentLength, docs[0].Metadata[source.MetaContentLength])
 	}
 }
 
@@ -516,6 +573,13 @@ message Ack {
 
 	if !strings.Contains(sig, "stream") {
 		t.Errorf("expected signature to contain 'stream', got: %s", sig)
+	}
+
+	if _, ok := streamingRPC.Metadata["trpc_ast_messages"]; ok {
+		t.Errorf("expected rpc doc not to include trpc_ast_messages, got %v", streamingRPC.Metadata["trpc_ast_messages"])
+	}
+	if _, ok := streamingRPC.Metadata["trpc_ast_services"]; ok {
+		t.Errorf("expected rpc doc not to include trpc_ast_services, got %v", streamingRPC.Metadata["trpc_ast_services"])
 	}
 }
 

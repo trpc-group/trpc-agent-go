@@ -30,6 +30,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	util "trpc.group/trpc-go/trpc-agent-go/examples/knowledge"
@@ -139,7 +141,10 @@ func main() {
 	fmt.Println("\nKey features demonstrated:")
 	fmt.Println("- .proto files are automatically detected by extension")
 	fmt.Println("- AST-based parsing extracts structured metadata")
-	fmt.Println("- Metadata uses trpc_ast_ prefix (compatible with trpc-ast-rag)")
+	fmt.Println("- Metadata has two groups:")
+	fmt.Println("  * trpc_agent_go_*: framework/common metadata (source, uri, chunk info)")
+	fmt.Println("  * trpc_ast_*: proto AST semantic metadata (entity type/name/signature/package)")
+	fmt.Println("- Search tool result does NOT return all metadata fields; only key metadata is returned")
 	fmt.Println("- Knowledge search can query services, messages, and RPC methods")
 }
 
@@ -160,14 +165,54 @@ func demonstrateChunkingAndMetadata(protoFile string) {
 		fmt.Printf("\n--- Chunk %d/%d ---\n", i+1, len(docs))
 		fmt.Printf("Content (len=%d):\n%s\n", len(doc.Content), doc.Content)
 
-		fmt.Println("Metadata:")
-		for key, val := range doc.Metadata {
-			fmt.Printf("  %s: %v\n", key, val)
-		}
+		fmt.Println("Metadata (grouped):")
+		printMetadataByPrefix(doc.Metadata)
 
 		// Show the embedding text (metadata JSON used for embedding)
 		if doc.EmbeddingText != "" {
 			fmt.Printf("\nEmbedding Text (len=%d):\n%s\n", len(doc.EmbeddingText), doc.EmbeddingText)
+		}
+	}
+}
+
+func printMetadataByPrefix(metadata map[string]any) {
+	var frameworkKeys []string
+	var astKeys []string
+	var otherKeys []string
+
+	for key := range metadata {
+		switch {
+		case strings.HasPrefix(key, "trpc_agent_go_"):
+			frameworkKeys = append(frameworkKeys, key)
+		case strings.HasPrefix(key, "trpc_ast_"):
+			astKeys = append(astKeys, key)
+		default:
+			otherKeys = append(otherKeys, key)
+		}
+	}
+
+	sort.Strings(frameworkKeys)
+	sort.Strings(astKeys)
+	sort.Strings(otherKeys)
+
+	if len(frameworkKeys) > 0 {
+		fmt.Println("  trpc_agent_go_* (framework/common):")
+		for _, key := range frameworkKeys {
+			fmt.Printf("    %s: %v\n", key, metadata[key])
+		}
+	}
+
+	if len(astKeys) > 0 {
+		fmt.Println("  trpc_ast_* (AST semantic):")
+		for _, key := range astKeys {
+			fmt.Printf("    %s: %v\n", key, metadata[key])
+		}
+	}
+
+	if len(otherKeys) > 0 {
+		fmt.Println("  other metadata:")
+		for _, key := range otherKeys {
+			fmt.Printf("    %s: %v\n", key, metadata[key])
 		}
 	}
 }

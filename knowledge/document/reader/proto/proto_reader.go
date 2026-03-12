@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/bufbuild/protocompile/ast"
 	"github.com/bufbuild/protocompile/parser"
@@ -33,6 +34,7 @@ import (
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	itransform "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/transform"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
@@ -77,7 +79,7 @@ func (r *Reader) ReadFromReader(name string, rd io.Reader) ([]*document.Document
 		return nil, err
 	}
 
-	return r.processContent(string(content), name)
+	return r.processContent(string(content), name, nil)
 }
 
 // ReadFromFile reads a proto file and returns a list of documents.
@@ -101,8 +103,31 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	baseMetadata := map[string]any{
+		source.MetaSource:        source.TypeFile,
+		source.MetaFilePath:      filePath,
+		source.MetaFileName:      filepath.Base(filePath),
+		source.MetaFileExt:       filepath.Ext(filePath),
+		source.MetaFileSize:      fileInfo.Size(),
+		source.MetaFileMode:      fileInfo.Mode().String(),
+		source.MetaModifiedAt:    fileInfo.ModTime().UTC(),
+		source.MetaURI:           (&url.URL{Scheme: "file", Path: absPath}).String(),
+		source.MetaSourceName:    r.Name(),
+		source.MetaContentLength: utf8.RuneCount(content),
+	}
+
 	// Use full file path for document naming (consistent with trpc-ast-rag)
-	return r.processContent(string(content), filePath)
+	return r.processContent(string(content), filePath, baseMetadata)
 }
 
 // ReadFromURL reads proto content from a URL and returns a list of documents.
@@ -127,27 +152,32 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 	// Extract file name from URL
 	fileName := r.extractFileNameFromURL(urlStr)
 
-	return r.ReadFromReader(fileName, resp.Body)
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read URL content: %w", err)
+	}
+
+	return r.processContent(string(content), fileName, nil)
 }
 
 // processContent processes proto content and extracts AST-based entities.
 // Each entity (message, enum, service, rpc) becomes a separate document.
-func (r *Reader) processContent(content, name string) ([]*document.Document, error) {
+func (r *Reader) processContent(content, name string, baseMetadata map[string]any) ([]*document.Document, error) {
 	// If chunking is disabled, return the entire file as one document
 	if !r.chunk {
-		doc := r.createFileDocument(content, name)
+		doc := r.createFileDocument(content, name, baseMetadata)
 		return r.applyTransformers([]*document.Document{doc})
 	}
 
 	// Parse proto content using protocompile
-	docs, err := r.parseAndExtract(content, name)
+	docs, err := r.parseAndExtract(content, name, baseMetadata)
 	if err != nil {
 		return nil, err
 	}
 
 	// If no entities found, return the entire file as one document
 	if len(docs) == 0 {
-		doc := r.createFileDocument(content, name)
+		doc := r.createFileDocument(content, name, baseMetadata)
 		return r.applyTransformers([]*document.Document{doc})
 	}
 
@@ -155,7 +185,7 @@ func (r *Reader) processContent(content, name string) ([]*document.Document, err
 }
 
 // parseAndExtract parses proto content using protocompile and extracts all entities.
-func (r *Reader) parseAndExtract(content, name string) ([]*document.Document, error) {
+func (r *Reader) parseAndExtract(content, name string, baseMetadata map[string]any) ([]*document.Document, error) {
 	// Parse proto file into AST
 	handler := reporter.NewHandler(nil)
 	fileNode, err := parser.Parse(name, strings.NewReader(content), handler)
@@ -187,6 +217,7 @@ func (r *Reader) parseAndExtract(content, name string) ([]*document.Document, er
 		fileNode:     fileNode,
 		result:       result,
 		fileName:     name,
+		baseMetadata: baseMetadata,
 		protoPackage: protoPackage,
 		syntax:       syntax,
 		goPackage:    goPackage,
@@ -203,6 +234,7 @@ type entityExtractor struct {
 	fileNode        *ast.FileNode
 	result          parser.Result
 	fileName        string
+	baseMetadata    map[string]any
 	protoPackage    string
 	syntax          string
 	goPackage       string
@@ -268,6 +300,15 @@ func (e *entityExtractor) addFileMetadata(doc *document.Document) {
 	if doc.Metadata == nil {
 		doc.Metadata = make(map[string]any)
 	}
+	for k, v := range e.baseMetadata {
+		// Keep chunk-level values computed per entity document.
+		// baseMetadata carries file-level content length for ReadFromFile,
+		// which should not override entity-level MetaContentLength/MetaChunkSize/MetaChunkIndex.
+		if k == source.MetaContentLength || k == source.MetaChunkSize || k == source.MetaChunkIndex {
+			continue
+		}
+		doc.Metadata[k] = v
+	}
 
 	// Add file-level metadata (same for all entities in this file)
 	if e.syntax != "" {
@@ -286,13 +327,17 @@ func (e *entityExtractor) addFileMetadata(doc *document.Document) {
 		doc.Metadata["trpc_ast_imports"] = e.imports
 		doc.Metadata["trpc_ast_import_count"] = len(e.imports)
 	}
-	if len(e.allServiceNames) > 0 {
-		doc.Metadata["trpc_ast_services"] = e.allServiceNames
-		doc.Metadata["trpc_ast_service_count"] = len(e.allServiceNames)
-	}
-	if len(e.allMessageNames) > 0 {
-		doc.Metadata["trpc_ast_messages"] = e.allMessageNames
-		doc.Metadata["trpc_ast_message_count"] = len(e.allMessageNames)
+
+	entityType, _ := doc.Metadata["trpc_ast_type"].(string)
+	if entityType != "rpc" {
+		if len(e.allServiceNames) > 0 {
+			doc.Metadata["trpc_ast_services"] = e.allServiceNames
+			doc.Metadata["trpc_ast_service_count"] = len(e.allServiceNames)
+		}
+		if len(e.allMessageNames) > 0 {
+			doc.Metadata["trpc_ast_messages"] = e.allMessageNames
+			doc.Metadata["trpc_ast_message_count"] = len(e.allMessageNames)
+		}
 	}
 }
 
@@ -463,6 +508,9 @@ func (e *entityExtractor) createEntityDocument(code, name, entityType, fullName,
 	if doc.Metadata == nil {
 		doc.Metadata = make(map[string]any)
 	}
+	for k, v := range e.baseMetadata {
+		doc.Metadata[k] = v
+	}
 
 	// Set entity-specific metadata
 	doc.Metadata["trpc_ast_package"] = e.protoPackage
@@ -479,7 +527,9 @@ func (e *entityExtractor) createEntityDocument(code, name, entityType, fullName,
 	}
 	doc.Metadata["trpc_ast_line_start"] = startLine
 	doc.Metadata["trpc_ast_line_end"] = endLine
-	doc.Metadata["trpc_ast_chunk_index"] = *chunkIndex
+	doc.Metadata[source.MetaChunkIndex] = *chunkIndex
+	doc.Metadata[source.MetaChunkSize] = utf8.RuneCountInString(code)
+	doc.Metadata[source.MetaContentLength] = utf8.RuneCountInString(code)
 
 	// Build embedding text with metadata JSON.
 	// For RPC entities, include the human-readable signature in embedding payload.
@@ -490,10 +540,13 @@ func (e *entityExtractor) createEntityDocument(code, name, entityType, fullName,
 }
 
 // createFileDocument creates a document for the entire proto file.
-func (r *Reader) createFileDocument(content, name string) *document.Document {
+func (r *Reader) createFileDocument(content, name string, baseMetadata map[string]any) *document.Document {
 	doc := idocument.CreateDocument(content, name)
 	if doc.Metadata == nil {
 		doc.Metadata = make(map[string]any)
+	}
+	for k, v := range baseMetadata {
+		doc.Metadata[k] = v
 	}
 
 	// Extract file-level metadata
@@ -508,6 +561,9 @@ func (r *Reader) createFileDocument(content, name string) *document.Document {
 	doc.Metadata["trpc_ast_language"] = "proto"
 	doc.Metadata["trpc_ast_exported"] = true
 	doc.Metadata["trpc_ast_scope"] = "code"
+	doc.Metadata[source.MetaChunkIndex] = 0
+	doc.Metadata[source.MetaChunkSize] = utf8.RuneCountInString(content)
+	doc.Metadata[source.MetaContentLength] = utf8.RuneCountInString(content)
 
 	// Build embedding text
 	doc.EmbeddingText = r.buildFileEmbeddingText(content, name, fileMetadata)
