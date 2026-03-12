@@ -96,9 +96,46 @@ The goal of this section is simple: start from the repository's
 existing configuration, run a real message entry point, and build an
 intuitive understanding of the end-to-end runtime path.
 
-### Environment Preparation
+### Path A: Install the prebuilt release
 
-If you want to run `openclaw` from source, prepare the following:
+If you want the shortest path, do not start with `go run`. Install the
+published binary first:
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  | bash
+```
+
+The default install profile is `stdin`, and that profile uses the
+built-in `mock` model. So the very first launch does not need model
+credentials or Telegram credentials.
+
+If your shell does not already include `~/.local/bin` in `PATH`, load it
+once:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then start OpenClaw:
+
+```bash
+openclaw
+```
+
+At that point, you should already be in the local terminal chat mode.
+Try a small input such as `hello`. Use `/help` to inspect the basic
+commands, and `/quit` or `/exit` to stop.
+
+This route is the best choice when your immediate goal is "download a
+working binary and verify that the runtime starts cleanly." Once that is
+stable, move on to a real model or a real message channel.
+
+### Path B: Run from source
+
+If you want to develop or modify OpenClaw itself, run it from source.
+Prepare the following:
 
 - A Go development environment
 - The tRPC-Agent-Go repository

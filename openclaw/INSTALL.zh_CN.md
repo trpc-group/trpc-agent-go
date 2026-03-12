@@ -9,11 +9,25 @@ curl -fsSL \
   | bash
 ```
 
-默认 profile 是 `stdin`，所以第一次启动不需要模型凭据：
+## 最快首跑路径
+
+默认 profile 是 `stdin`，它使用内置 `mock` 模型。也就是说，
+第一次启动不需要 API Key，也不需要 Telegram 这类消息入口凭据。
+
+如果你当前 shell 的 `PATH` 里还没有 `~/.local/bin`，先补这一行：
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+然后直接启动：
 
 ```bash
 openclaw
 ```
+
+启动后你会直接进入本地终端聊天模式。可以先输入 `hello`
+试一下，再用 `/quit` 或 `/exit` 退出。
 
 ## 安装 profile
 
@@ -106,7 +120,7 @@ openclaw
 - 安装脚本会从 `trpc-group/trpc-agent-go` 的 GitHub Releases 解析
   OpenClaw release，并下载与你当前机器匹配的
   `openclaw-v<version>-<os>-<arch>.tar.gz` 包。
+- 如果你的 `PATH` 里还没有 `~/.local/bin`，安装脚本会直接打印出
+  需要补上的 `export PATH=...`。
 - release 包里包含本仓库自带的 OpenClaw bundled skills，因此预编译安装和
   源码 checkout 一样，都能直接使用这些内置技能。
-- 如果你的 `PATH` 里还没有 `~/.local/bin`，安装脚本会打印出需要补的
-  `export PATH=...`。

@@ -19,8 +19,8 @@ Detailed guide:
 
 ## Install a prebuilt release
 
-If you want a runnable binary instead of `go run`, use the public install
-script:
+If you want the shortest path from "nothing installed" to "OpenClaw is
+running", use the public install script:
 
 ```bash
 curl -fsSL \
@@ -28,12 +28,25 @@ curl -fsSL \
   | bash
 ```
 
-The default install profile is `stdin`, so the first run works without
-model credentials:
+The installer uses the `stdin` profile by default, and that profile uses
+the built-in `mock` model. That means the first run works without model
+credentials or Telegram credentials.
+
+If `~/.local/bin` is not already on your `PATH`, load it once in the same
+shell:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then start OpenClaw:
 
 ```bash
 openclaw
 ```
+
+You should see the local terminal channel start immediately. Type a short
+message such as `hello`, then use `/quit` or `/exit` to stop.
 
 More details:
 [INSTALL.md](./INSTALL.md)
@@ -41,7 +54,7 @@ More details:
 | [RELEASE.md](./RELEASE.md)
 | [RELEASE.zh_CN.md](./RELEASE.zh_CN.md)
 
-## Quick start
+## Run from source
 
 Run with a mock model (no external model credentials needed):
 

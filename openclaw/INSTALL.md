@@ -9,12 +9,27 @@ curl -fsSL \
   | bash
 ```
 
-The default profile is `stdin`, so the first launch works without model
-credentials:
+## Fastest first run
+
+The default profile is `stdin`, and that profile uses the built-in `mock`
+model. In other words, the first run does not need an API key or a chat
+channel credential.
+
+If your shell does not already include `~/.local/bin` in `PATH`, load it
+before the first launch:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Then start OpenClaw:
 
 ```bash
 openclaw
 ```
+
+You should immediately enter the local terminal chat mode. Try a message
+such as `hello`. Use `/quit` or `/exit` to stop.
 
 ## Install profiles
 
@@ -110,8 +125,8 @@ openclaw
   `trpc-group/trpc-agent-go` and downloads the matching
   `openclaw-v<version>-<os>-<arch>.tar.gz` archive for the current
   machine.
+- The installer prints the exact `export PATH=...` line when
+  `~/.local/bin` is not already on your `PATH`.
 - Release archives include the OpenClaw bundled skills pack from this
   repo, so prebuilt installs have the same built-in skills as source
   checkouts.
-- If `~/.local/bin` is not on your `PATH`, the installer prints the exact
-  export line to add.
