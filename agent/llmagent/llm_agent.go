@@ -280,6 +280,12 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 				processor.WithSkillsLoadedContentInToolResults(true),
 			)
 		}
+		if !executorSupportsInteractive(options) {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithSkillExecToolsDisabled(),
+			)
+		}
 		skillsProcessor := processor.NewSkillsRequestProcessor(
 			options.skillsRepository,
 			skillsOpts...,
@@ -540,6 +546,9 @@ func appendSkillTools(
 	if !skillFlags.RequiresExecSessionTools() {
 		return allTools
 	}
+	if !executorSupportsInteractive(options) {
+		return allTools
+	}
 
 	execTool := toolskill.NewExecTool(runTool)
 	if skillFlags.Exec {
@@ -604,6 +613,31 @@ func buildSkillRunTool(options *Options) *toolskill.RunTool {
 		exec,
 		runOpts...,
 	)
+}
+
+// executorSupportsInteractive reports whether the effective engine
+// behind the configured code executor exposes an
+// InteractiveProgramRunner.  The check mirrors the fallback logic in
+// RunTool.ensureEngine: when the executor does not implement
+// EngineProvider (or returns a nil engine), the runtime falls back to
+// a local engine which does support interactive sessions, so we
+// return true in those cases.
+func executorSupportsInteractive(options *Options) bool {
+	exec := options.codeExecutor
+	if exec == nil {
+		exec = defaultCodeExecutor()
+	}
+	ep, ok := exec.(codeexecutor.EngineProvider)
+	if !ok {
+		// ensureEngine falls back to localexec which supports interactive.
+		return true
+	}
+	eng := ep.Engine()
+	if eng == nil {
+		return true
+	}
+	_, interactive := eng.Runner().(codeexecutor.InteractiveProgramRunner)
+	return interactive
 }
 
 // Run implements the agent.Agent interface.
