@@ -96,10 +96,16 @@ curl -fsSL \
 模型。所以第一次启动时既不需要模型密钥，也不需要 Telegram
 这类消息入口凭据。
 
-如果你当前 shell 的 `PATH` 里还没有 `~/.local/bin`，先补一次：
+安装脚本默认会把 GitHub 版本的配置和状态目录写到
+`~/.trpc-agent-go-github/openclaw`。
+
+如果安装后还找不到 `openclaw`，直接执行安装脚本输出里的 PATH 命令。
+对于 bash，持久化写法如下：
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
 ```
 
 然后直接启动 OpenClaw：
@@ -565,14 +571,14 @@ session:
   summary:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/sessions.sqlite"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/sessions.sqlite"
 
 memory:
   backend: "sqlite"
   auto:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/memories.db"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/memories.db"
 ```
 
 这段配置要表达的意思很简单：

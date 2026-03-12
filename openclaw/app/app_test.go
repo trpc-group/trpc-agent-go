@@ -1338,7 +1338,11 @@ func TestResolveStateDir_DefaultHome(t *testing.T) {
 
 	got, err := resolveStateDir("")
 	require.NoError(t, err)
-	require.Equal(t, filepath.Join(home, ".trpc-agent-go", appName), got)
+	require.Equal(
+		t,
+		filepath.Join(home, ".trpc-agent-go-github", appName),
+		got,
+	)
 }
 
 func TestMaybeEnableDebugRecorder_Disabled(t *testing.T) {

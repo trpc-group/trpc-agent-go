@@ -111,11 +111,16 @@ The default install profile is `stdin`, and that profile uses the
 built-in `mock` model. So the very first launch does not need model
 credentials or Telegram credentials.
 
-If your shell does not already include `~/.local/bin` in `PATH`, load it
-once:
+The installer keeps the GitHub build's config and state under
+`~/.trpc-agent-go-github/openclaw` by default.
+
+If `openclaw` is not found after install, run the PATH commands printed
+by the installer. For bash, the persistent form is:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
 ```
 
 Then start OpenClaw:
@@ -609,14 +614,14 @@ session:
   summary:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/sessions.sqlite"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/sessions.sqlite"
 
 memory:
   backend: "sqlite"
   auto:
     enabled: false
   config:
-    path: "${HOME}/.trpc-agent-go/openclaw/memories.db"
+    path: "${HOME}/.trpc-agent-go-github/openclaw/memories.db"
 ```
 
 The meaning of this split is simple:

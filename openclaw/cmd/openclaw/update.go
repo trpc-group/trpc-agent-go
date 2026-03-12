@@ -35,7 +35,7 @@ const (
 
 	openClawConfigEnvName = "OPENCLAW_CONFIG"
 
-	defaultConfigRootDir = ".trpc-agent-go"
+	defaultConfigRootDir = ".trpc-agent-go-github"
 	defaultConfigAppDir  = "openclaw"
 	defaultConfigFile    = "openclaw.yaml"
 

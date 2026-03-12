@@ -28,7 +28,7 @@ import (
 const (
 	openClawConfigEnvName = "OPENCLAW_CONFIG"
 
-	defaultConfigRootDir = ".trpc-agent-go"
+	defaultConfigRootDir = ".trpc-agent-go-github"
 	defaultConfigAppDir  = "openclaw"
 	defaultConfigFile    = "openclaw.yaml"
 	defaultAdminAddr     = "127.0.0.1:19789"

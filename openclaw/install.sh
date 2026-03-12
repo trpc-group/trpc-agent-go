@@ -6,9 +6,10 @@ readonly DEFAULT_API_BASE_URL="https://api.github.com"
 readonly DEFAULT_DOWNLOAD_BASE_URL="https://github.com"
 readonly DEFAULT_RELEASE_PREFIX="openclaw-"
 readonly DEFAULT_PROFILE="stdin"
+readonly DEFAULT_CONFIG_ROOT_DIR=".trpc-agent-go-github"
 readonly DEFAULT_BIN_SUBDIR=".local/bin"
-readonly DEFAULT_CONFIG_SUBDIR=".trpc-agent-go/openclaw"
-readonly DEFAULT_STATE_SUBDIR=".trpc-agent-go/openclaw"
+readonly DEFAULT_CONFIG_SUBDIR="${DEFAULT_CONFIG_ROOT_DIR}/openclaw"
+readonly DEFAULT_STATE_SUBDIR="${DEFAULT_CONFIG_ROOT_DIR}/openclaw"
 
 readonly PROFILE_DIR_NAME="profiles"
 readonly BUNDLED_SKILLS_DIR_NAME="bundled-skills"
@@ -72,7 +73,7 @@ resolve_dir_path() {
   mkdir -p "$dir"
   (
     cd "$dir"
-    pwd -P
+    pwd -L
   )
 }
 
@@ -331,6 +332,12 @@ verify_checksum() {
 
 print_path_hint() {
   local bin_dir="$1"
+  local display_bin_dir rc_path display_rc_path export_line
+
+  display_bin_dir="$(display_path "$bin_dir")"
+  rc_path="$(shell_rc_path)"
+  display_rc_path="$(display_path "$rc_path")"
+  export_line="export PATH=\"${display_bin_dir}:\$PATH\""
 
   case ":${PATH}:" in
     *":${bin_dir}:"*)
@@ -338,7 +345,36 @@ print_path_hint() {
     *)
       log ""
       log "Add this directory to PATH before using ${BINARY_NAME}:"
-      log "  export PATH=\"${bin_dir}:\$PATH\""
+      log "  ${export_line}"
+      log ""
+      log "Persist PATH for future shells:"
+      log "  grep -qxF '${export_line}' \"${display_rc_path}\" || \\"
+      log "    printf '\\n${export_line}\\n' >> \"${display_rc_path}\""
+      log "  . \"${display_rc_path}\""
+      ;;
+  esac
+}
+
+display_path() {
+  local path="$1"
+
+  case "$path" in
+    "${HOME}"/*)
+      printf '$HOME%s' "${path#${HOME}}"
+      ;;
+    *)
+      printf '%s' "$path"
+      ;;
+  esac
+}
+
+shell_rc_path() {
+  case "$(basename "${SHELL:-bash}")" in
+    zsh)
+      printf '%s/.zshrc' "${HOME}"
+      ;;
+    *)
+      printf '%s/.bashrc' "${HOME}"
       ;;
   esac
 }
@@ -347,16 +383,20 @@ print_profile_hint() {
   local profile="$1"
   local config_dir="$2"
   local state_dir="$3"
+  local display_config_dir display_state_dir
+
+  display_config_dir="$(display_path "$config_dir")"
+  display_state_dir="$(display_path "$state_dir")"
 
   log ""
   log "Profiles:"
-  log "  ${config_dir}/${PROFILE_DIR_NAME}/openclaw.stdin.yaml"
-  log "  ${config_dir}/${PROFILE_DIR_NAME}/openclaw.stdin.sqlite.yaml"
-  log "  ${config_dir}/${PROFILE_DIR_NAME}/openclaw.telegram.yaml"
+  log "  ${display_config_dir}/${PROFILE_DIR_NAME}/openclaw.stdin.yaml"
+  log "  ${display_config_dir}/${PROFILE_DIR_NAME}/openclaw.stdin.sqlite.yaml"
+  log "  ${display_config_dir}/${PROFILE_DIR_NAME}/openclaw.telegram.yaml"
   log "Bundled skills:"
-  log "  ${state_dir}/${BUNDLED_SKILLS_DIR_NAME}"
+  log "  ${display_state_dir}/${BUNDLED_SKILLS_DIR_NAME}"
   log "Managed skills:"
-  log "  ${state_dir}/${MANAGED_SKILLS_DIR_NAME}"
+  log "  ${display_state_dir}/${MANAGED_SKILLS_DIR_NAME}"
 
   case "$profile" in
     "$profileTelegram")
@@ -474,6 +514,7 @@ main() {
   local archive selected_profile_path
   local package_root metadata_file
   local package_version sqlite_backend
+  local display_bin_dir display_config_dir display_state_dir
 
   resolved_version="$(resolve_version \
     "$version" \
@@ -546,17 +587,21 @@ main() {
     sqlite_backend="${SQLITE_BACKEND:-unknown}"
   fi
 
+  display_bin_dir="$(display_path "$bin_dir")"
+  display_config_dir="$(display_path "$config_dir")"
+  display_state_dir="$(display_path "$state_dir")"
+
   log ""
   log "openclaw installed."
   log "Package: ${package_version}"
-  log "Binary: ${bin_dir}/${BINARY_NAME}"
+  log "Binary: ${display_bin_dir}/${BINARY_NAME}"
   log "Profile: ${profile}"
-  log "Config: ${config_dir}/openclaw.yaml"
-  log "State:  ${state_dir}"
+  log "Config: ${display_config_dir}/openclaw.yaml"
+  log "State:  ${display_state_dir}"
   log "SQLite: ${sqlite_backend}"
   log ""
   log "Run:"
-  log "  ${bin_dir}/${BINARY_NAME}"
+  log "  ${display_bin_dir}/${BINARY_NAME}"
 
   print_profile_hint "$profile" "$config_dir" "$state_dir"
   print_path_hint "$bin_dir"

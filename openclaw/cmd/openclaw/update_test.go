@@ -156,12 +156,17 @@ func TestParseUpgradePaths(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(
 		t,
-		filepath.Join(home, ".trpc-agent-go", "openclaw", "openclaw.yaml"),
+		filepath.Join(
+			home,
+			".trpc-agent-go-github",
+			"openclaw",
+			"openclaw.yaml",
+		),
 		paths.ConfigPath,
 	)
 	require.Equal(
 		t,
-		filepath.Join(home, ".trpc-agent-go", "openclaw"),
+		filepath.Join(home, ".trpc-agent-go-github", "openclaw"),
 		paths.StateDir,
 	)
 }
@@ -345,7 +350,7 @@ func TestResolveUpgradeStateDirIgnoresRelativeConfigStateDir(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(
 		t,
-		filepath.Join(home, ".trpc-agent-go", "openclaw"),
+		filepath.Join(home, ".trpc-agent-go-github", "openclaw"),
 		stateDir,
 	)
 }

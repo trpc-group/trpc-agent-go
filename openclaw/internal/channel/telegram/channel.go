@@ -40,7 +40,7 @@ const (
 	tgChatMemberStatusKicked = "kicked"
 	tgChatMemberStatusLeft   = "left"
 
-	defaultStateRootDir = ".trpc-agent-go"
+	defaultStateRootDir = ".trpc-agent-go-github"
 	defaultStateAppName = "openclaw"
 
 	mentionPrefix = "@"

@@ -1917,7 +1917,7 @@ func resolveStateDir(raw string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".trpc-agent-go", appName), nil
+	return filepath.Join(home, ".trpc-agent-go-github", appName), nil
 }
 
 func maybeEnableDebugRecorder(

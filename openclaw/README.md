@@ -32,11 +32,16 @@ The installer uses the `stdin` profile by default, and that profile uses
 the built-in `mock` model. That means the first run works without model
 credentials or Telegram credentials.
 
-If `~/.local/bin` is not already on your `PATH`, load it once in the same
-shell:
+The installer keeps the GitHub build's config and state under
+`~/.trpc-agent-go-github/openclaw` by default.
+
+If `openclaw` is not found after install, run the PATH commands printed
+by the installer. For bash, the persistent form is:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
 ```
 
 Then start OpenClaw:
@@ -101,7 +106,8 @@ OpenClaw supports a YAML config file to avoid a long list of CLI flags.
 
 - Pass `-config /path/to/openclaw.yaml`, or
 - set `OPENCLAW_CONFIG=/path/to/openclaw.yaml`.
-- If neither is set, OpenClaw also tries `~/.trpc-agent-go/openclaw/openclaw.yaml`
+- If neither is set, OpenClaw also tries
+  `~/.trpc-agent-go-github/openclaw/openclaw.yaml`
   (only if the file exists).
 
 CLI flags always override config file values.
@@ -802,7 +808,7 @@ DM (direct message, i.e. a private chat) or a group message:
 OpenClaw stores the Telegram `getUpdates` offset on disk so restarts
 can resume from the last processed update.
 
-- Default state dir: `$HOME/.trpc-agent-go/openclaw`
+- Default state dir: `$HOME/.trpc-agent-go-github/openclaw`
 - Override with: `-state-dir`
 
 On the first run (when no offset file exists), the poller drains pending

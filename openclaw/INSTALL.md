@@ -15,11 +15,16 @@ The default profile is `stdin`, and that profile uses the built-in `mock`
 model. In other words, the first run does not need an API key or a chat
 channel credential.
 
-If your shell does not already include `~/.local/bin` in `PATH`, load it
-before the first launch:
+The installer keeps the GitHub build's config and state under
+`~/.trpc-agent-go-github/openclaw` by default.
+
+If `openclaw` is not found after install, run the PATH commands printed
+by the installer. For bash, the persistent form is:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
 ```
 
 Then start OpenClaw:
@@ -67,12 +72,12 @@ curl -fsSL \
 By default the script writes:
 
 - Binary: `~/.local/bin/openclaw`
-- Active config: `~/.trpc-agent-go/openclaw/openclaw.yaml`
-- Profile templates: `~/.trpc-agent-go/openclaw/profiles/`
-- State dir: `~/.trpc-agent-go/openclaw`
-- Managed skills: `~/.trpc-agent-go/openclaw/skills`
+- Active config: `~/.trpc-agent-go-github/openclaw/openclaw.yaml`
+- Profile templates: `~/.trpc-agent-go-github/openclaw/profiles/`
+- State dir: `~/.trpc-agent-go-github/openclaw`
+- Managed skills: `~/.trpc-agent-go-github/openclaw/skills`
 - Bundled release skills:
-  `~/.trpc-agent-go/openclaw/bundled-skills`
+  `~/.trpc-agent-go-github/openclaw/bundled-skills`
 
 `openclaw.yaml` is only replaced when it does not exist yet, or when you
 pass `--force-config`. The bundled skills directory is refreshed on every
@@ -125,8 +130,8 @@ openclaw
   `trpc-group/trpc-agent-go` and downloads the matching
   `openclaw-v<version>-<os>-<arch>.tar.gz` archive for the current
   machine.
-- The installer prints the exact `export PATH=...` line when
-  `~/.local/bin` is not already on your `PATH`.
+- The installer prints the exact commands to update the current shell and
+  your shell rc file when `~/.local/bin` is not already on your `PATH`.
 - Release archives include the OpenClaw bundled skills pack from this
   repo, so prebuilt installs have the same built-in skills as source
   checkouts.

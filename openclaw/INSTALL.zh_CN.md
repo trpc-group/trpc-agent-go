@@ -14,10 +14,16 @@ curl -fsSL \
 默认 profile 是 `stdin`，它使用内置 `mock` 模型。也就是说，
 第一次启动不需要 API Key，也不需要 Telegram 这类消息入口凭据。
 
-如果你当前 shell 的 `PATH` 里还没有 `~/.local/bin`，先补这一行：
+安装脚本默认会把 GitHub 版本的配置和状态目录写到
+`~/.trpc-agent-go-github/openclaw`。
+
+如果安装后还找不到 `openclaw`，直接执行安装脚本输出里的 PATH 命令。
+对于 bash，持久化写法如下：
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
 ```
 
 然后直接启动：
@@ -64,12 +70,12 @@ curl -fsSL \
 默认会写入：
 
 - 二进制：`~/.local/bin/openclaw`
-- 主配置：`~/.trpc-agent-go/openclaw/openclaw.yaml`
-- profile 模板：`~/.trpc-agent-go/openclaw/profiles/`
-- state dir：`~/.trpc-agent-go/openclaw`
-- 托管 skills：`~/.trpc-agent-go/openclaw/skills`
+- 主配置：`~/.trpc-agent-go-github/openclaw/openclaw.yaml`
+- profile 模板：`~/.trpc-agent-go-github/openclaw/profiles/`
+- state dir：`~/.trpc-agent-go-github/openclaw`
+- 托管 skills：`~/.trpc-agent-go-github/openclaw/skills`
 - release 自带的内置 skills：
-  `~/.trpc-agent-go/openclaw/bundled-skills`
+  `~/.trpc-agent-go-github/openclaw/bundled-skills`
 
 `openclaw.yaml` 只有在目标文件不存在时才会写入；如果你想强制覆盖为选中的
 profile，可以加 `--force-config`。`bundled-skills` 会在每次安装和升级时
@@ -121,6 +127,6 @@ openclaw
   OpenClaw release，并下载与你当前机器匹配的
   `openclaw-v<version>-<os>-<arch>.tar.gz` 包。
 - 如果你的 `PATH` 里还没有 `~/.local/bin`，安装脚本会直接打印出
-  需要补上的 `export PATH=...`。
+  更新当前 shell 和 shell rc 文件所需的完整命令。
 - release 包里包含本仓库自带的 OpenClaw bundled skills，因此预编译安装和
   源码 checkout 一样，都能直接使用这些内置技能。
