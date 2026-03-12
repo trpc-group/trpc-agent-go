@@ -22,6 +22,7 @@ import (
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/proto"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
 )
 
@@ -128,6 +129,8 @@ func GetFileType(filePath string) string {
 		return "csv"
 	case ".docx", ".doc":
 		return "docx"
+	case ".proto":
+		return "proto"
 	default:
 		return "text"
 	}
@@ -171,6 +174,8 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 		return "csv"
 	case ".docx", ".doc":
 		return "docx"
+	case ".proto":
+		return "proto"
 	default:
 		// Unknown extension, fallback to text reader
 		return "text"

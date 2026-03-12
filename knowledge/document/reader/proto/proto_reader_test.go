@@ -1,0 +1,644 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package proto
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+)
+
+func TestNew(t *testing.T) {
+	r := New()
+	if r == nil {
+		t.Fatal("expected reader to be created, got nil")
+	}
+
+	protoReader, ok := r.(*Reader)
+	if !ok {
+		t.Fatal("expected *Reader type")
+	}
+
+	if protoReader.chunk != true {
+		t.Errorf("expected chunk to be true by default, got %v", protoReader.chunk)
+	}
+
+	if protoReader.Name() != "Proto Reader" {
+		t.Errorf("expected name 'Proto Reader', got %s", protoReader.Name())
+	}
+}
+
+func TestNewWithOptions(t *testing.T) {
+	r := New(
+		reader.WithChunkSize(500),
+		reader.WithChunkOverlap(50),
+	)
+	if r == nil {
+		t.Fatal("expected reader to be created, got nil")
+	}
+
+	protoReader, ok := r.(*Reader)
+	if !ok {
+		t.Fatal("expected *Reader type")
+	}
+
+	// AST-based proto reader doesn't use chunking strategy - it extracts entities
+	if protoReader.chunk != true {
+		t.Error("expected chunk to be true by default")
+	}
+}
+
+func TestReadFromFile(t *testing.T) {
+	// Create a temporary proto file
+	tmpDir := t.TempDir()
+	protoFile := filepath.Join(tmpDir, "test.proto")
+
+	protoContent := `syntax = "proto3";
+
+package example.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+option go_package = "github.com/example/api";
+
+// User represents a user in the system
+message User {
+  string id = 1;
+  string name = 2;
+  string email = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+// UserService provides user management operations
+service UserService {
+  rpc GetUser(GetUserRequest) returns (User);
+  rpc CreateUser(CreateUserRequest) returns (User);
+  rpc DeleteUser(DeleteUserRequest) returns (google.protobuf.Empty);
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+
+message CreateUserRequest {
+  string name = 1;
+  string email = 2;
+}
+
+message DeleteUserRequest {
+  string id = 1;
+}
+`
+
+	if err := os.WriteFile(protoFile, []byte(protoContent), 0644); err != nil {
+		t.Fatalf("failed to write proto file: %v", err)
+	}
+
+	r := New()
+	docs, err := r.ReadFromFile(protoFile)
+	if err != nil {
+		t.Fatalf("failed to read proto file: %v", err)
+	}
+
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+
+	// Check metadata extraction
+	firstDoc := docs[0]
+	if firstDoc.Metadata == nil {
+		t.Fatal("expected metadata to be present")
+	}
+
+	// Check syntax
+	if syntax, ok := firstDoc.Metadata["trpc_ast_syntax"]; !ok || syntax != "proto3" {
+		t.Errorf("expected proto_syntax='proto3', got %v", syntax)
+	}
+
+	// Check package
+	if pkg, ok := firstDoc.Metadata["trpc_ast_package"]; !ok || pkg != "example.v1" {
+		t.Errorf("expected proto_package='example.v1', got %v", pkg)
+	}
+
+	// Check imports
+	if imports, ok := firstDoc.Metadata["trpc_ast_imports"].([]string); !ok || len(imports) != 2 {
+		t.Errorf("expected 2 imports, got %v", firstDoc.Metadata["trpc_ast_imports"])
+	}
+
+	// Check services
+	if services, ok := firstDoc.Metadata["trpc_ast_services"].([]string); !ok || len(services) != 1 {
+		t.Errorf("expected 1 service, got %v", firstDoc.Metadata["trpc_ast_services"])
+	} else if services[0] != "UserService" {
+		t.Errorf("expected UserService, got %s", services[0])
+	}
+
+	// Check messages
+	if messages, ok := firstDoc.Metadata["trpc_ast_messages"].([]string); !ok || len(messages) != 4 {
+		t.Errorf("expected 4 messages, got %v (len=%d)", firstDoc.Metadata["trpc_ast_messages"], len(messages))
+	}
+}
+
+func TestReadFromFile_NotFound(t *testing.T) {
+	r := New()
+	_, err := r.ReadFromFile("/nonexistent/path/file.proto")
+	if err == nil {
+		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestReadFromReader(t *testing.T) {
+	protoContent := `syntax = "proto2";
+
+package test;
+
+message Simple {
+  required string name = 1;
+}
+`
+
+	r := New()
+	docs, err := r.ReadFromReader("test.proto", strings.NewReader(protoContent))
+	if err != nil {
+		t.Fatalf("failed to read from reader: %v", err)
+	}
+
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+
+	// Check metadata
+	if syntax, ok := docs[0].Metadata["trpc_ast_syntax"]; !ok || syntax != "proto2" {
+		t.Errorf("expected proto_syntax='proto2', got %v", syntax)
+	}
+}
+
+func TestSupportedExtensions(t *testing.T) {
+	r := New()
+	exts := r.SupportedExtensions()
+	if len(exts) != 1 || exts[0] != ".proto" {
+		t.Errorf("expected ['.proto'], got %v", exts)
+	}
+}
+
+func TestExtractMetadata(t *testing.T) {
+	r := &Reader{}
+
+	tests := []struct {
+		name     string
+		content  string
+		expected map[string]any
+	}{
+		{
+			name: "extract syntax",
+			content: `syntax = "proto3";
+package test;`,
+			expected: map[string]any{
+				"trpc_ast_syntax": "proto3",
+			},
+		},
+		{
+			name: "extract package",
+			content: `syntax = "proto3";
+package example.v1.service;`,
+			expected: map[string]any{
+				"trpc_ast_package": "example.v1.service",
+			},
+		},
+		{
+			name: "extract imports",
+			content: `import "google/protobuf/timestamp.proto";
+import public "common.proto";
+import weak "optional.proto";`,
+			expected: map[string]any{
+				"trpc_ast_import_count": 3,
+			},
+		},
+		{
+			name: "extract services",
+			content: `service UserService {
+  rpc GetUser(Request) returns (Response);
+}
+service OrderService {}`,
+			expected: map[string]any{
+				"trpc_ast_service_count": 2,
+			},
+		},
+		{
+			name: "extract messages",
+			content: `message User {}
+message Order {}
+message Item {}`,
+			expected: map[string]any{
+				"trpc_ast_message_count": 3,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metadata := r.extractFileMetadata(tt.content)
+			for key, expectedValue := range tt.expected {
+				if actualValue, ok := metadata[key]; !ok {
+					t.Errorf("expected metadata key %s not found", key)
+				} else {
+					switch expected := expectedValue.(type) {
+					case string:
+						if actual := actualValue.(string); actual != expected {
+							t.Errorf("expected %s='%s', got '%s'", key, expected, actual)
+						}
+					case int:
+						switch actual := actualValue.(type) {
+						case int:
+							if actual != expected {
+								t.Errorf("expected %s=%d, got %d", key, expected, actual)
+							}
+						case int64:
+							if int(actual) != expected {
+								t.Errorf("expected %s=%d, got %d", key, expected, actual)
+							}
+						default:
+							t.Errorf("unexpected type for %s: %T", key, actualValue)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestExtractFileNameFromURL(t *testing.T) {
+	r := &Reader{}
+
+	tests := []struct {
+		url      string
+		expected string
+	}{
+		{"https://example.com/path/to/file.proto", "file"},
+		{"https://example.com/file.proto?query=1", "file"},
+		{"https://example.com/file.proto#fragment", "file"},
+		{"https://example.com/path/", "proto_file"},
+		{"https://example.com/some-name.proto", "some-name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			result := r.extractFileNameFromURL(tt.url)
+			if result != tt.expected {
+				t.Errorf("expected %s, got %s", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestChunkingDisabled(t *testing.T) {
+	protoContent := strings.Repeat("message Test { string field = 1; }\n", 100)
+
+	r := New(reader.WithChunk(false))
+	docs, err := r.ReadFromReader("large.proto", strings.NewReader(protoContent))
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	if len(docs) != 1 {
+		t.Errorf("expected 1 document when chunking disabled, got %d", len(docs))
+	}
+}
+
+func TestASTExtraction_LineNumbers(t *testing.T) {
+	protoContent := `syntax = "proto3";
+
+package test;
+
+// User message comment
+message User {
+  string id = 1;
+  string name = 2;
+}
+
+// Status enum comment
+enum Status {
+  UNKNOWN = 0;
+  ACTIVE = 1;
+}
+
+// UserService comment
+service UserService {
+  rpc GetUser(GetUserRequest) returns (User);
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+`
+
+	r := New()
+	docs, err := r.ReadFromReader("test.proto", strings.NewReader(protoContent))
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	// Should have: User (msg), Status (enum), UserService (svc), GetUser (rpc), GetUserRequest (msg)
+	if len(docs) < 5 {
+		t.Fatalf("expected at least 5 documents, got %d", len(docs))
+	}
+
+	// Find User message document
+	var userDoc *document.Document
+	for _, doc := range docs {
+		if doc.Metadata["trpc_ast_type"] == "message" &&
+			doc.Metadata["trpc_ast_name"] == "User" {
+			userDoc = doc
+			break
+		}
+	}
+
+	if userDoc == nil {
+		t.Fatal("User message document not found")
+	}
+
+	// Check line numbers (User message starts at line 6)
+	if startLine, ok := userDoc.Metadata["trpc_ast_line_start"].(int); !ok || startLine != 6 {
+		t.Errorf("expected line_start=6 for User message, got %v", userDoc.Metadata["trpc_ast_line_start"])
+	}
+}
+
+func TestASTExtraction_Comments(t *testing.T) {
+	protoContent := `syntax = "proto3";
+package test;
+
+// This is the User service
+// It handles user operations
+service UserService {
+  // Get a user by ID
+  rpc GetUser(GetUserRequest) returns (User);
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+
+message User {
+  string id = 1;
+}
+`
+
+	r := New()
+	docs, err := r.ReadFromReader("test.proto", strings.NewReader(protoContent))
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	// Find service document
+	var svcDoc *document.Document
+	for _, doc := range docs {
+		if doc.Metadata["trpc_ast_type"] == "service" {
+			svcDoc = doc
+			break
+		}
+	}
+
+	if svcDoc == nil {
+		t.Fatal("service document not found")
+	}
+
+	// Check that comment is included in embedding text
+	if !strings.Contains(svcDoc.EmbeddingText, "User service") {
+		t.Error("expected embedding text to contain 'User service' comment")
+	}
+}
+
+func TestASTExtraction_EnumValues(t *testing.T) {
+	protoContent := `syntax = "proto3";
+package test;
+
+enum Status {
+  UNKNOWN = 0;
+  ACTIVE = 1;
+  INACTIVE = 2;
+}
+`
+
+	r := New()
+	docs, err := r.ReadFromReader("test.proto", strings.NewReader(protoContent))
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	// Find enum document
+	var enumDoc *document.Document
+	for _, doc := range docs {
+		if doc.Metadata["trpc_ast_type"] == "enum" {
+			enumDoc = doc
+			break
+		}
+	}
+
+	if enumDoc == nil {
+		t.Fatal("enum document not found")
+	}
+
+	// Check enum values
+	values, ok := enumDoc.Metadata["trpc_ast_enum_values"].([]string)
+	if !ok {
+		t.Fatalf("expected enum values, got %T", enumDoc.Metadata["trpc_ast_enum_values"])
+	}
+
+	if len(values) != 3 {
+		t.Errorf("expected 3 enum values, got %d", len(values))
+	}
+}
+
+func TestASTExtraction_StreamingRPC(t *testing.T) {
+	protoContent := `syntax = "proto3";
+package test;
+
+service ChatService {
+  rpc Chat(stream ChatMessage) returns (stream ChatMessage);
+  rpc SendMessage(ChatMessage) returns (Ack);
+}
+
+message ChatMessage {
+  string text = 1;
+}
+
+message Ack {
+  bool success = 1;
+}
+`
+
+	r := New()
+	docs, err := r.ReadFromReader("test.proto", strings.NewReader(protoContent))
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	// Find streaming RPC
+	var streamingRPC *document.Document
+	for _, doc := range docs {
+		if doc.Metadata["trpc_ast_type"] == "rpc" &&
+			doc.Metadata["trpc_ast_name"] == "Chat" {
+			streamingRPC = doc
+			break
+		}
+	}
+
+	if streamingRPC == nil {
+		t.Fatal("streaming RPC document not found")
+	}
+
+	// Check streaming flags
+	if clientStreaming, ok := streamingRPC.Metadata["trpc_ast_client_streaming"].(bool); !ok || !clientStreaming {
+		t.Error("expected Chat RPC to have client_streaming=true")
+	}
+
+	if serverStreaming, ok := streamingRPC.Metadata["trpc_ast_server_streaming"].(bool); !ok || !serverStreaming {
+		t.Error("expected Chat RPC to have server_streaming=true")
+	}
+
+	// Check signature
+	sig, ok := streamingRPC.Metadata["trpc_ast_signature"].(string)
+	if !ok {
+		t.Fatal("expected RPC signature in metadata")
+	}
+
+	if !strings.Contains(sig, "stream") {
+		t.Errorf("expected signature to contain 'stream', got: %s", sig)
+	}
+}
+
+func TestASTExtraction_NestedMessages(t *testing.T) {
+	protoContent := `syntax = "proto3";
+package test;
+
+message Outer {
+  string name = 1;
+
+  message Inner {
+    int32 value = 1;
+  }
+
+  Inner inner = 2;
+}
+`
+
+	r := New()
+	docs, err := r.ReadFromReader("test.proto", strings.NewReader(protoContent))
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	// Should have both Outer and Inner messages
+	var outerFound, innerFound bool
+	for _, doc := range docs {
+		if doc.Metadata["trpc_ast_type"] == "message" {
+			if doc.Metadata["trpc_ast_name"] == "Outer" {
+				outerFound = true
+			}
+			if doc.Metadata["trpc_ast_name"] == "Inner" {
+				innerFound = true
+			}
+		}
+	}
+
+	if !outerFound {
+		t.Error("Outer message not found")
+	}
+	if !innerFound {
+		t.Error("Inner message not found")
+	}
+}
+
+func TestEntityCount(t *testing.T) {
+	protoContent := `syntax = "proto3";
+package example.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/example/api";
+
+// User represents a user
+message User {
+  string id = 1;
+  string name = 2;
+}
+
+// Order represents an order
+message Order {
+  string id = 1;
+  double amount = 2;
+}
+
+// Status enum
+enum Status {
+  UNKNOWN = 0;
+  PENDING = 1;
+  COMPLETED = 2;
+}
+
+// UserService provides user operations
+service UserService {
+  rpc GetUser(GetUserRequest) returns (User);
+  rpc CreateUser(CreateUserRequest) returns (User);
+}
+
+// OrderService provides order operations
+service OrderService {
+  rpc GetOrder(GetOrderRequest) returns (Order);
+}
+
+message GetUserRequest { string id = 1; }
+message CreateUserRequest { string name = 1; }
+message GetOrderRequest { string id = 1; }
+`
+
+	r := New()
+	docs, err := r.ReadFromReader("test.proto", strings.NewReader(protoContent))
+	if err != nil {
+		t.Fatalf("failed to read: %v", err)
+	}
+
+	// Expected: User, Order, GetUserRequest, CreateUserRequest, GetOrderRequest (5 messages)
+	// + Status (1 enum)
+	// + UserService, OrderService (2 services)
+	// + GetUser, CreateUser, GetOrder (3 RPCs)
+	// Total: 11 entities
+
+	entityCounts := map[string]int{
+		"message": 0,
+		"enum":    0,
+		"service": 0,
+		"rpc":     0,
+	}
+
+	for _, doc := range docs {
+		entityType, ok := doc.Metadata["trpc_ast_type"].(string)
+		if ok {
+			entityCounts[entityType]++
+		}
+	}
+
+	if entityCounts["message"] != 5 {
+		t.Errorf("expected 5 messages, got %d", entityCounts["message"])
+	}
+	if entityCounts["enum"] != 1 {
+		t.Errorf("expected 1 enum, got %d", entityCounts["enum"])
+	}
+	if entityCounts["service"] != 2 {
+		t.Errorf("expected 2 services, got %d", entityCounts["service"])
+	}
+	if entityCounts["rpc"] != 3 {
+		t.Errorf("expected 3 RPCs, got %d", entityCounts["rpc"])
+	}
+}
