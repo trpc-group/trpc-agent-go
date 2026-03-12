@@ -11,16 +11,49 @@ package proto
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"google.golang.org/protobuf/types/descriptorpb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
+
+type failingReader struct{}
+
+func (f failingReader) Read(_ []byte) (int, error) {
+	return 0, errors.New("read failed")
+}
+
+type mockProtoTransformer struct {
+	failPre  bool
+	failPost bool
+}
+
+func (m *mockProtoTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	if m.failPre {
+		return nil, errors.New("preprocess failed")
+	}
+	return docs, nil
+}
+
+func (m *mockProtoTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	if m.failPost {
+		return nil, errors.New("postprocess failed")
+	}
+	return docs, nil
+}
+
+func (m *mockProtoTransformer) Name() string {
+	return "mockProtoTransformer"
+}
 
 func TestNew(t *testing.T) {
 	r := New()
@@ -200,6 +233,17 @@ func TestReadFromFile_NotFound(t *testing.T) {
 	}
 }
 
+func TestReadFromFile_UnsupportedExtension(t *testing.T) {
+	r := New()
+	_, err := r.ReadFromFile("not_proto.txt")
+	if err == nil {
+		t.Fatal("expected unsupported extension error")
+	}
+	if !strings.Contains(err.Error(), "unsupported file extension") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestReadFromReader(t *testing.T) {
 	protoContent := `syntax = "proto2";
 
@@ -234,6 +278,238 @@ message Simple {
 	}
 	if contentLength, ok := docs[0].Metadata[source.MetaContentLength].(int); !ok || contentLength <= 0 {
 		t.Errorf("expected %s to be positive int, got %v", source.MetaContentLength, docs[0].Metadata[source.MetaContentLength])
+	}
+}
+
+func TestReadFromReader_Error(t *testing.T) {
+	r := New()
+	_, err := r.ReadFromReader("test.proto", failingReader{})
+	if err == nil {
+		t.Fatal("expected read error")
+	}
+}
+
+func TestReadFromURL(t *testing.T) {
+	protoContent := `syntax = "proto3";
+package test;
+message A { string id = 1; }
+`
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(protoContent))
+	}))
+	defer ts.Close()
+
+	r := New()
+	docs, err := r.ReadFromURL(ts.URL + "/api.proto")
+	if err != nil {
+		t.Fatalf("expected successful ReadFromURL, got error: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected documents from URL")
+	}
+}
+
+func TestReadFromURL_InvalidURL(t *testing.T) {
+	r := New()
+	_, err := r.ReadFromURL("://bad")
+	if err == nil {
+		t.Fatal("expected invalid URL error")
+	}
+}
+
+func TestReadFromURL_HTTPError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer ts.Close()
+
+	r := New()
+	_, err := r.ReadFromURL(ts.URL + "/api.proto")
+	if err == nil {
+		t.Fatal("expected HTTP error")
+	}
+	if !strings.Contains(err.Error(), "HTTP error") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReader_WithTransformers(t *testing.T) {
+	protoContent := `syntax = "proto3";
+package test;
+message A { string id = 1; }`
+
+	tests := []struct {
+		name        string
+		transformer *mockProtoTransformer
+		wantErr     string
+	}{
+		{
+			name:        "success",
+			transformer: &mockProtoTransformer{},
+		},
+		{
+			name:        "preprocess error",
+			transformer: &mockProtoTransformer{failPre: true},
+			wantErr:     "failed to apply preprocess",
+		},
+		{
+			name:        "postprocess error",
+			transformer: &mockProtoTransformer{failPost: true},
+			wantErr:     "failed to apply postprocess",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := New(reader.WithTransformers(tt.transformer))
+			docs, err := r.ReadFromReader("test.proto", strings.NewReader(protoContent))
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if len(docs) == 0 {
+					t.Fatal("expected documents")
+				}
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("expected error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestProcessContent_NoEntitiesFallbackToFileDocument(t *testing.T) {
+	protoContent := `syntax = "proto3";
+package test;
+import "google/protobuf/empty.proto";
+`
+	r := New().(*Reader)
+	docs, err := r.ReadFromReader("empty.proto", strings.NewReader(protoContent))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("expected single file document, got %d", len(docs))
+	}
+	if typ, _ := docs[0].Metadata["trpc_ast_type"].(string); typ != "file" {
+		t.Fatalf("expected fallback file document, got type=%q", typ)
+	}
+}
+
+func TestHelperFunctions_EmptyBranches(t *testing.T) {
+	e := &entityExtractor{protoPackage: ""}
+
+	if got := e.qualifiedName("Foo"); got != "Foo" {
+		t.Fatalf("qualifiedName empty package mismatch: %s", got)
+	}
+	if got := e.qualifiedNameWithParent("Inner", ""); got != "Inner" {
+		t.Fatalf("qualifiedNameWithParent empty parent mismatch: %s", got)
+	}
+
+	e.lines = []string{"line1", "line2"}
+	if got := e.extractCode(0, 1); got != "" {
+		t.Fatalf("expected empty extractCode for invalid start, got %q", got)
+	}
+	if got := e.extractCode(3, 4); got != "" {
+		t.Fatalf("expected empty extractCode for out-of-range start, got %q", got)
+	}
+}
+
+func TestExtractOptionString_NotFound(t *testing.T) {
+	r := &Reader{}
+	content := `syntax = "proto3";
+package test;`
+	if got := r.extractOptionString(content, "go_package"); got != "" {
+		t.Fatalf("expected empty option string, got %q", got)
+	}
+}
+
+func TestBuildFileEmbeddingText_MinimalMetadata(t *testing.T) {
+	r := &Reader{}
+	text := r.buildFileEmbeddingText("message A {}", "a.proto", map[string]any{})
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(text), &got); err != nil {
+		t.Fatalf("failed to unmarshal embedding text: %v", err)
+	}
+	if _, ok := got["messages"]; ok {
+		t.Fatalf("messages should not be present")
+	}
+	if _, ok := got["services"]; ok {
+		t.Fatalf("services should not be present")
+	}
+}
+
+func TestExtractFileOptionsBranches(t *testing.T) {
+	// nil options
+	fd := &descriptorpb.FileDescriptorProto{}
+	goPkg, javaPkg := extractFileOptions(fd)
+	if goPkg != "" || javaPkg != "" {
+		t.Fatalf("expected empty options, got go=%q java=%q", goPkg, javaPkg)
+	}
+
+	// uninterpreted option with composite name should be skipped
+	fd2 := &descriptorpb.FileDescriptorProto{
+		Options: &descriptorpb.FileOptions{
+			UninterpretedOption: []*descriptorpb.UninterpretedOption{
+				{
+					Name: []*descriptorpb.UninterpretedOption_NamePart{
+						{NamePart: strPtr("foo"), IsExtension: boolPtr(false)},
+						{NamePart: strPtr("bar"), IsExtension: boolPtr(false)},
+					},
+					StringValue: []byte("ignored"),
+				},
+				{
+					Name: []*descriptorpb.UninterpretedOption_NamePart{
+						{NamePart: strPtr("go_package"), IsExtension: boolPtr(false)},
+					},
+					StringValue: []byte("x/y/z"),
+				},
+			},
+		},
+	}
+	goPkg, javaPkg = extractFileOptions(fd2)
+	if goPkg != "x/y/z" || javaPkg != "" {
+		t.Fatalf("unexpected options: go=%q java=%q", goPkg, javaPkg)
+	}
+}
+
+func TestExtractMessage_SkipsMapEntry(t *testing.T) {
+	protoContent := `syntax = "proto3";
+package test;
+message Holder {
+  map<string, int32> attrs = 1;
+}`
+	r := New().(*Reader)
+	docs, err := r.ReadFromReader("map.proto", strings.NewReader(protoContent))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, d := range docs {
+		if name, _ := d.Metadata["trpc_ast_name"].(string); strings.Contains(name, "AttrsEntry") {
+			t.Fatalf("map entry synthetic message should be skipped, got %q", name)
+		}
+	}
+}
+
+func strPtr(v string) *string { return &v }
+func boolPtr(v bool) *bool    { return &v }
+
+func TestReadFromURL_FetchError(t *testing.T) {
+	r := New()
+	_, err := r.ReadFromURL("http://127.0.0.1:1/nope.proto")
+	if err == nil {
+		t.Fatal("expected fetch error")
+	}
+	if !strings.Contains(err.Error(), "failed to fetch URL") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
