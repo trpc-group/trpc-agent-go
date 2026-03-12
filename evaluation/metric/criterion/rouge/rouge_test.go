@@ -10,6 +10,7 @@ package rouge
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -23,6 +24,30 @@ type whitespaceTokenizer struct{}
 // Tokenize splits text on whitespace without normalization.
 func (whitespaceTokenizer) Tokenize(text string) []string {
 	return strings.Fields(text)
+}
+
+// TestNew verifies that options are applied when constructing a RougeCriterion.
+func TestNew(t *testing.T) {
+	criterion := New(
+		WithIgnore(true),
+		WithRougeType("rougeLsum"),
+		WithMeasure(RougeMeasureRecall),
+		WithThreshold(Score{Precision: 0.2, Recall: 0.4, F1: 0.3}),
+		WithUseStemmer(true),
+		WithSplitSummaries(true),
+		WithTokenizerName("whitespace"),
+		WithTokenizer(whitespaceTokenizer{}),
+	)
+	assert.Equal(t, &RougeCriterion{
+		Ignore:         true,
+		RougeType:      "rougeLsum",
+		Measure:        RougeMeasureRecall,
+		Threshold:      Score{Precision: 0.2, Recall: 0.4, F1: 0.3},
+		UseStemmer:     true,
+		SplitSummaries: true,
+		TokenizerName:  "whitespace",
+		Tokenizer:      whitespaceTokenizer{},
+	}, criterion)
 }
 
 // TestRougeCriterion_Match_DefaultMeasure verifies default measure selection and scoring values.
@@ -76,6 +101,35 @@ func TestRougeCriterion_Match_WithTokenizer(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.InDelta(t, 0.0, customScores.Value, 1e-12)
+}
+
+// TestRougeCriterion_JSONRoundTrip verifies that tokenizer names can be persisted without runtime tokenizers.
+func TestRougeCriterion_JSONRoundTrip(t *testing.T) {
+	criterion := &RougeCriterion{
+		RougeType:      "rougeLsum",
+		Measure:        RougeMeasureRecall,
+		Threshold:      Score{Precision: 0.2, Recall: 0.4, F1: 0.3},
+		UseStemmer:     true,
+		SplitSummaries: true,
+		TokenizerName:  "whitespace",
+		Tokenizer:      whitespaceTokenizer{},
+	}
+	data, err := json.Marshal(criterion)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"rougeType":"rougeLsum",
+		"measure":"recall",
+		"threshold":{"precision":0.2,"recall":0.4,"f1":0.3},
+		"useStemmer":true,
+		"splitSummaries":true,
+		"tokenizerName":"whitespace"
+	}`, string(data))
+
+	var decoded RougeCriterion
+	err = json.Unmarshal(data, &decoded)
+	require.NoError(t, err)
+	assert.Equal(t, "whitespace", decoded.TokenizerName)
+	assert.Nil(t, decoded.Tokenizer)
 }
 
 // TestRougeCriterion_Match_PassedFlag verifies that pass/fail decisions respect the configured measure threshold.

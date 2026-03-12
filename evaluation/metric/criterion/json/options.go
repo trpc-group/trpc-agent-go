@@ -19,7 +19,8 @@ type options struct {
 	onlyTree        map[string]any
 	matchStrategy   JSONMatchStrategy
 	numberTolerance *float64
-	compare         func(actual, expected any) (bool, error)
+	compareName     string
+	compare         CompareFunc
 }
 
 // newOptions creates a Options with the provided options.
@@ -69,8 +70,15 @@ func WithNumberTolerance(tolerance float64) Option {
 	}
 }
 
+// WithCompareName sets the name of the registered compare function.
+func WithCompareName(compareName string) Option {
+	return func(o *options) {
+		o.compareName = compareName
+	}
+}
+
 // WithCompare sets the compare function.
-func WithCompare(compare func(actual, expected any) (bool, error)) Option {
+func WithCompare(compare CompareFunc) Option {
 	return func(o *options) {
 		o.compare = compare
 	}

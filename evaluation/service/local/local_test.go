@@ -14,6 +14,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,6 +31,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	criteriontext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -222,6 +228,122 @@ func makeEvalCase(appName, caseID, prompt string) *evalset.EvalCase {
 			State:   map[string]any{},
 		},
 	}
+}
+
+func TestLocalEvaluateResolvesMetricRegistryCompareName(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	evalCaseID := "case-1"
+	evalSetManager := evalsetinmemory.New()
+	_, err := evalSetManager.Create(ctx, appName, evalSetID)
+	if !assert.NoError(t, err) {
+		return
+	}
+	expectedCase := makeEvalCase(appName, evalCaseID, "question")
+	expectedCase.Conversation[0].FinalResponse = &model.Message{
+		Role:    model.RoleAssistant,
+		Content: " answer ",
+	}
+	err = evalSetManager.AddCase(ctx, appName, evalSetID, expectedCase)
+	if !assert.NoError(t, err) {
+		return
+	}
+	metricDir := t.TempDir()
+	metricManager := metriclocal.New(metric.WithBaseDir(metricDir))
+	err = metricManager.Add(ctx, appName, evalSetID, &metric.EvalMetric{
+		MetricName: "final_response_avg_score",
+		Threshold:  1.0,
+		Criterion: &criterion.Criterion{
+			FinalResponse: &finalresponse.FinalResponseCriterion{
+				Text: &criteriontext.TextCriterion{CompareName: "trim_equal"},
+			},
+		},
+	})
+	if !assert.NoError(t, err) {
+		return
+	}
+	loadedMetric, err := metricManager.Get(ctx, appName, evalSetID, "final_response_avg_score")
+	if !assert.NoError(t, err) {
+		return
+	}
+	customMetricRegistry := metricregistry.New()
+	err = customMetricRegistry.RegisterTextCompare("trim_equal", func(actual, expected string) (bool, error) {
+		return strings.TrimSpace(actual) == strings.TrimSpace(expected), nil
+	})
+	if !assert.NoError(t, err) {
+		return
+	}
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(evalSetManager),
+		service.WithRegistry(registry.New()),
+		service.WithMetricRegistry(customMetricRegistry),
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	result, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:   appName,
+		EvalSetID: evalSetID,
+		InferenceResults: []*service.InferenceResult{
+			{
+				AppName:    appName,
+				EvalSetID:  evalSetID,
+				EvalCaseID: evalCaseID,
+				SessionID:  "session",
+				UserID:     "user",
+				Status:     status.EvalStatusPassed,
+				Inferences: []*evalset.Invocation{
+					makeActualInvocation(evalCaseID+"-1", "question", "answer"),
+				},
+			},
+		},
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{loadedMetric},
+		},
+	})
+	if !assert.NoError(t, err) {
+		return
+	}
+	if !assert.Len(t, result.EvalCaseResults, 1) {
+		return
+	}
+	caseResult := result.EvalCaseResults[0]
+	assert.Equal(t, status.EvalStatusPassed, caseResult.FinalEvalStatus)
+	if assert.Len(t, caseResult.OverallEvalMetricResults, 1) {
+		assert.Equal(t, status.EvalStatusPassed, caseResult.OverallEvalMetricResults[0].EvalStatus)
+	}
+	if assert.NotNil(t, loadedMetric.Criterion) && assert.NotNil(t, loadedMetric.Criterion.FinalResponse) &&
+		assert.NotNil(t, loadedMetric.Criterion.FinalResponse.Text) {
+		assert.NotNil(t, loadedMetric.Criterion.FinalResponse.Text.Compare)
+	}
+}
+
+func TestLocalResolveMetricExtensionsValidation(t *testing.T) {
+	svc := &local{}
+	assert.ErrorContains(t, svc.resolveMetricExtensions(nil, metricregistry.New()), "evaluate config is nil")
+	assert.ErrorContains(t, svc.resolveMetricExtensions(&service.EvaluateConfig{}, nil), "metric registry is nil")
+}
+
+func TestLocalResolveMetricExtensionsReturnsResolveError(t *testing.T) {
+	svc := &local{}
+	err := svc.resolveMetricExtensions(
+		&service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{
+				{
+					Criterion: &criterion.Criterion{
+						FinalResponse: &finalresponse.FinalResponseCriterion{
+							Text: &criteriontext.TextCriterion{CompareName: "missing"},
+						},
+					},
+				},
+			},
+		},
+		metricregistry.New(),
+	)
+	assert.ErrorContains(t, err, "resolve metric at index 0")
+	assert.ErrorContains(t, err, "text compare missing not found")
 }
 
 func makeInferenceResult(appName, evalSetID, caseID, sessionID string, inferences []*evalset.Invocation) *service.InferenceResult {
@@ -3013,7 +3135,12 @@ func TestLocalEvaluateAfterEvaluateSetReceivesNilResultWhenEvaluateFails(t *test
 		return nil, nil
 	})
 
-	svc := &local{callbacks: callbacks, evalSetManager: evalsetinmemory.New(), registry: registry.New()}
+	svc := &local{
+		callbacks:      callbacks,
+		evalSetManager: evalsetinmemory.New(),
+		registry:       registry.New(),
+		metricRegistry: metricregistry.New(),
+	}
 	_, err := svc.Evaluate(ctx, req)
 	assert.Error(t, err)
 	assert.NotNil(t, got)
@@ -3051,7 +3178,12 @@ func TestLocalEvaluateAfterEvaluateSetReceivesRunResultOnSuccess(t *testing.T) {
 		return nil, nil
 	})
 
-	svc := &local{callbacks: callbacks, evalSetManager: evalsetinmemory.New(), registry: registry.New()}
+	svc := &local{
+		callbacks:      callbacks,
+		evalSetManager: evalsetinmemory.New(),
+		registry:       registry.New(),
+		metricRegistry: metricregistry.New(),
+	}
 	res, err := svc.Evaluate(ctx, req)
 	assert.NoError(t, err)
 	assert.NotNil(t, res)

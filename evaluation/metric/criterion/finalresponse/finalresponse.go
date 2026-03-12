@@ -23,6 +23,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 )
 
+// CompareFunc defines custom final response comparison logic.
+type CompareFunc func(actual, expected *evalset.Invocation) (bool, error)
+
 // FinalResponseCriterion provides comparison rules for final response messages.
 type FinalResponseCriterion struct {
 	// Text compares the final response content as plain text.
@@ -31,18 +34,21 @@ type FinalResponseCriterion struct {
 	JSON *cjson.JSONCriterion `json:"json,omitempty"`
 	// Rouge scores the final response content with ROUGE.
 	Rouge *crouge.RougeCriterion `json:"rouge,omitempty"`
+	// CompareName selects a registered comparison implementation by name.
+	CompareName string `json:"compareName,omitempty"`
 	// Compare allows overriding the built-in matching logic.
-	Compare func(actual, expected *evalset.Invocation) (bool, error) `json:"-"`
+	Compare CompareFunc `json:"-"`
 }
 
 // New creates a FinalResponseCriterion with the provided options.
 func New(opt ...Option) *FinalResponseCriterion {
 	opts := newOptions(opt...)
 	return &FinalResponseCriterion{
-		Text:    opts.text,
-		JSON:    opts.json,
-		Rouge:   opts.rouge,
-		Compare: opts.compare,
+		Text:        opts.text,
+		JSON:        opts.json,
+		Rouge:       opts.rouge,
+		CompareName: opts.compareName,
+		Compare:     opts.compare,
 	}
 }
 
