@@ -156,12 +156,17 @@ func TestParseUpgradePaths(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(
 		t,
-		filepath.Join(home, ".trpc-agent-go", "openclaw", "openclaw.yaml"),
+		filepath.Join(
+			home,
+			".trpc-agent-go-github",
+			"openclaw",
+			"openclaw.yaml",
+		),
 		paths.ConfigPath,
 	)
 	require.Equal(
 		t,
-		filepath.Join(home, ".trpc-agent-go", "openclaw"),
+		filepath.Join(home, ".trpc-agent-go-github", "openclaw"),
 		paths.StateDir,
 	)
 }
@@ -345,7 +350,7 @@ func TestResolveUpgradeStateDirIgnoresRelativeConfigStateDir(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(
 		t,
-		filepath.Join(home, ".trpc-agent-go", "openclaw"),
+		filepath.Join(home, ".trpc-agent-go-github", "openclaw"),
 		stateDir,
 	)
 }
@@ -390,28 +395,59 @@ func TestFetchLatestReleaseVersion(t *testing.T) {
 	require.Equal(t, "v1.3.0", version)
 }
 
-func TestFetchLatestReleaseVersionErrors(t *testing.T) {
+func TestFetchLatestReleaseVersionFallsBackToFeed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Query().Get("mode") {
-			case "bad-json":
-				_, _ = w.Write([]byte("{"))
+			switch r.URL.Path {
+			case "/repos/trpc-group/trpc-agent-go/releases":
+				http.Error(w, "forbidden", http.StatusForbidden)
+			case "/trpc-group/trpc-agent-go/releases.atom":
+				_, _ = w.Write([]byte(`
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><title>v9.9.9</title></entry>
+  <entry><title>openclaw-v1.4.0</title></entry>
+</feed>`))
 			default:
-				_, _ = w.Write([]byte(`[{"tag_name":"v1.2.3"}]`))
+				t.Fatalf("unexpected path: %s", r.URL.Path)
 			}
 		},
 	))
 	defer server.Close()
 
+	t.Setenv(releaseAPIBaseURLEnvName, server.URL)
+	t.Setenv(releaseDownloadBaseURLEnvName, server.URL)
 	t.Setenv(releaseRepoEnvName, "trpc-group/trpc-agent-go")
 
-	t.Setenv(releaseAPIBaseURLEnvName, server.URL+"?mode=bad-json")
-	_, err := fetchLatestReleaseVersion(context.Background())
-	require.Error(t, err)
+	version, err := fetchLatestReleaseVersion(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "v1.4.0", version)
+}
+
+func TestFetchLatestReleaseVersionErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/repos/trpc-group/trpc-agent-go/releases":
+				_, _ = w.Write([]byte("{"))
+			case "/trpc-group/trpc-agent-go/releases.atom":
+				_, _ = w.Write([]byte(`
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><title>v1.2.3</title></entry>
+</feed>`))
+			default:
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+		},
+	))
+	defer server.Close()
 
 	t.Setenv(releaseAPIBaseURLEnvName, server.URL)
-	_, err = fetchLatestReleaseVersion(context.Background())
+	t.Setenv(releaseDownloadBaseURLEnvName, server.URL)
+	t.Setenv(releaseRepoEnvName, "trpc-group/trpc-agent-go")
+
+	_, err := fetchLatestReleaseVersion(context.Background())
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "resolve latest release")
 }
 
 func TestUpgradeToLatestNoOpWhenAlreadyCurrent(t *testing.T) {
@@ -707,6 +743,10 @@ func TestFetchReleaseAssetErrors(t *testing.T) {
 func TestOverrideHelpers(t *testing.T) {
 	t.Setenv(installScriptEnvName, "https://example.com/install.sh")
 	t.Setenv(releaseAPIBaseURLEnvName, "https://api.example.com/")
+	t.Setenv(
+		releaseDownloadBaseURLEnvName,
+		"https://downloads.example.com/",
+	)
 	t.Setenv(releaseRepoEnvName, "example/openclaw")
 
 	require.Equal(
@@ -715,17 +755,33 @@ func TestOverrideHelpers(t *testing.T) {
 		installScriptURL(),
 	)
 	require.Equal(t, "https://api.example.com", releaseAPIBaseURL())
+	require.Equal(
+		t,
+		"https://downloads.example.com",
+		releaseDownloadBaseURL(),
+	)
 	require.Equal(t, "example/openclaw", releaseRepo())
 	require.Contains(t, latestReleaseAPIURL(), "/repos/example/openclaw/")
+	require.Equal(
+		t,
+		"https://downloads.example.com/example/openclaw/releases.atom",
+		latestReleaseFeedURL(),
+	)
 }
 
 func TestOverrideHelpersDefaults(t *testing.T) {
 	t.Setenv(installScriptEnvName, "")
 	t.Setenv(releaseAPIBaseURLEnvName, "")
+	t.Setenv(releaseDownloadBaseURLEnvName, "")
 	t.Setenv(releaseRepoEnvName, "")
 
 	require.Equal(t, defaultInstallScriptURL, installScriptURL())
 	require.Equal(t, defaultGitHubAPIBaseURL, releaseAPIBaseURL())
+	require.Equal(
+		t,
+		defaultGitHubDownloadBaseURL,
+		releaseDownloadBaseURL(),
+	)
 	require.Equal(t, defaultReleaseRepo, releaseRepo())
 }
 

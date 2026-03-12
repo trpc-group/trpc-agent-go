@@ -49,6 +49,7 @@ gateway:
 	require.Equal(t, "demo", opts.AppName)
 	require.Equal(t, ":9999", opts.HTTPAddr)
 	require.Equal(t, "u1,u2", opts.AllowUsers)
+	require.Equal(t, cfgPath, opts.ConfigPath)
 }
 
 func TestParseRunOptions_UsesDefaultConfigPath(t *testing.T) {
@@ -69,6 +70,7 @@ func TestParseRunOptions_UsesDefaultConfigPath(t *testing.T) {
 	opts, err := parseRunOptions(nil)
 	require.NoError(t, err)
 	require.Equal(t, "demo", opts.AppName)
+	require.Equal(t, cfgPath, opts.ConfigPath)
 }
 
 func TestApplyOpenClawToolDefaults_LLMEnablesTools(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,7 +35,7 @@ const (
 
 	openClawConfigEnvName = "OPENCLAW_CONFIG"
 
-	defaultConfigRootDir = ".trpc-agent-go"
+	defaultConfigRootDir = ".trpc-agent-go-github"
 	defaultConfigAppDir  = "openclaw"
 	defaultConfigFile    = "openclaw.yaml"
 
@@ -43,14 +44,17 @@ const (
 	installMetadataKeyCfg   = "config_dir"
 	installMetadataKeyState = "state_dir"
 
-	defaultGitHubAPIBaseURL = "https://api.github.com"
-	defaultReleaseRepo      = "trpc-group/trpc-agent-go"
-	defaultInstallScriptURL = "https://raw.githubusercontent.com/" +
-		"trpc-group/trpc-agent-go/main/openclaw/install.sh"
+	defaultGitHubAPIBaseURL      = "https://api.github.com"
+	defaultGitHubDownloadBaseURL = "https://github.com"
+	defaultReleaseRepo           = "trpc-group/trpc-agent-go"
+	defaultInstallScriptURL      = "https://github.com/" +
+		"trpc-group/trpc-agent-go/releases/latest/" +
+		"download/openclaw-install.sh"
 
-	releaseAPIBaseURLEnvName = "OPENCLAW_RELEASE_API_BASE_URL"
-	releaseRepoEnvName       = "OPENCLAW_RELEASE_REPO"
-	installScriptEnvName     = "OPENCLAW_INSTALL_SCRIPT_URL"
+	releaseAPIBaseURLEnvName      = "OPENCLAW_RELEASE_API_BASE_URL"
+	releaseDownloadBaseURLEnvName = "OPENCLAW_RELEASE_DOWNLOAD_BASE_URL"
+	releaseRepoEnvName            = "OPENCLAW_RELEASE_REPO"
+	installScriptEnvName          = "OPENCLAW_INSTALL_SCRIPT_URL"
 
 	upgradeCommandTimeout = 10 * time.Minute
 )
@@ -83,6 +87,14 @@ type installMetadata struct {
 
 type githubRelease struct {
 	TagName string `json:"tag_name"`
+}
+
+type githubReleaseFeed struct {
+	Entries []githubReleaseFeedEntry `xml:"entry"`
+}
+
+type githubReleaseFeedEntry struct {
+	Title string `xml:"title"`
 }
 
 type upgradeConfigFile struct {
@@ -462,6 +474,27 @@ func upgradeToLatest(
 }
 
 func fetchLatestReleaseVersion(ctx context.Context) (string, error) {
+	version, err := fetchLatestReleaseVersionFromAPI(ctx)
+	if err == nil {
+		return version, nil
+	}
+
+	version, feedErr := fetchLatestReleaseVersionFromFeed(ctx)
+	if feedErr == nil {
+		return version, nil
+	}
+
+	return "", fmt.Errorf(
+		"resolve latest release: api failed: %v; "+
+			"feed failed: %w",
+		err,
+		feedErr,
+	)
+}
+
+func fetchLatestReleaseVersionFromAPI(
+	ctx context.Context,
+) (string, error) {
 	body, err := fetchReleaseAsset(ctx, latestReleaseAPIURL())
 	if err != nil {
 		return "", err
@@ -472,14 +505,41 @@ func fetchLatestReleaseVersion(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("decode releases: %w", err)
 	}
 
+	tags := make([]string, 0, len(releases))
 	for _, release := range releases {
-		version := normalizeReleaseVersion(release.TagName)
+		tags = append(tags, release.TagName)
+	}
+	return latestReleaseVersionFromTags(tags)
+}
+
+func fetchLatestReleaseVersionFromFeed(
+	ctx context.Context,
+) (string, error) {
+	body, err := fetchReleaseAsset(ctx, latestReleaseFeedURL())
+	if err != nil {
+		return "", err
+	}
+
+	var feed githubReleaseFeed
+	if err := xml.Unmarshal(body, &feed); err != nil {
+		return "", fmt.Errorf("decode releases feed: %w", err)
+	}
+
+	tags := make([]string, 0, len(feed.Entries))
+	for _, entry := range feed.Entries {
+		tags = append(tags, entry.Title)
+	}
+	return latestReleaseVersionFromTags(tags)
+}
+
+func latestReleaseVersionFromTags(tags []string) (string, error) {
+	for _, rawTag := range tags {
+		tag := strings.TrimSpace(rawTag)
+		version := normalizeReleaseVersion(tag)
 		if version == "" {
 			continue
 		}
-		if releaseTagForVersion(version) != strings.TrimSpace(
-			release.TagName,
-		) {
+		if releaseTagForVersion(version) != tag {
 			continue
 		}
 		return version, nil
@@ -578,6 +638,11 @@ func latestReleaseAPIURL() string {
 		"/repos/" + releaseRepo() + "/releases?per_page=100"
 }
 
+func latestReleaseFeedURL() string {
+	return strings.TrimRight(releaseDownloadBaseURL(), "/") +
+		"/" + releaseRepo() + "/releases.atom"
+}
+
 func installScriptURL() string {
 	override := strings.TrimSpace(os.Getenv(installScriptEnvName))
 	if override != "" {
@@ -592,6 +657,16 @@ func releaseAPIBaseURL() string {
 		return strings.TrimRight(override, "/")
 	}
 	return defaultGitHubAPIBaseURL
+}
+
+func releaseDownloadBaseURL() string {
+	override := strings.TrimSpace(
+		os.Getenv(releaseDownloadBaseURLEnvName),
+	)
+	if override != "" {
+		return strings.TrimRight(override, "/")
+	}
+	return defaultGitHubDownloadBaseURL
 }
 
 func releaseRepo() string {

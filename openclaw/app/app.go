@@ -288,6 +288,84 @@ func logStartupLines(lines []startupLogLine) {
 	}
 }
 
+func runtimeStartupLines(
+	opts runOptions,
+	stateDir string,
+	channels []channel.Channel,
+	needsModel bool,
+) []startupLogLine {
+	return []startupLogLine{
+		{text: fmt.Sprintf("App name: %s", strings.TrimSpace(opts.AppName))},
+		{text: configStartupSummary(opts.ConfigPath)},
+		{text: fmt.Sprintf(
+			"State dir: %s",
+			startupPathSummary(stateDir),
+		)},
+		{text: fmt.Sprintf(
+			"Channels: %s",
+			channelStartupSummary(channels),
+		)},
+		{text: fmt.Sprintf(
+			"Model: %s",
+			modelStartupSummary(opts, needsModel),
+		)},
+		{text: fmt.Sprintf(
+			"Storage: session=%s memory=%s",
+			strings.TrimSpace(opts.SessionBackend),
+			strings.TrimSpace(opts.MemoryBackend),
+		)},
+	}
+}
+
+func configStartupSummary(configPath string) string {
+	path := strings.TrimSpace(configPath)
+	if path == "" {
+		return "Config: built-in defaults and CLI flags"
+	}
+	return fmt.Sprintf("Config: %s", startupPathSummary(path))
+}
+
+func startupPathSummary(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	absPath, err := filepath.Abs(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	return absPath
+}
+
+func channelStartupSummary(channels []channel.Channel) string {
+	ids := channelIDs(channels)
+	if len(ids) == 0 {
+		return "none"
+	}
+	return strings.Join(ids, ", ")
+}
+
+func modelStartupSummary(
+	opts runOptions,
+	needsModel bool,
+) string {
+	if !needsModel {
+		return "disabled"
+	}
+	mode := strings.ToLower(strings.TrimSpace(opts.ModelMode))
+	if mode == "" {
+		mode = modeOpenAI
+	}
+	if mode != modeOpenAI {
+		return mode
+	}
+	modelName := strings.TrimSpace(opts.OpenAIModel)
+	if modelName == "" {
+		return mode
+	}
+	return fmt.Sprintf("%s/%s", mode, modelName)
+}
+
 func gatewayStartupLines(
 	httpAddr string,
 	gwSrv *gateway.Server,
@@ -1074,6 +1152,12 @@ func run(ctx context.Context, args []string) error {
 	}
 	errCh := make(chan error, workerCount)
 
+	logStartupLines(runtimeStartupLines(
+		opts,
+		resolvedStateDir,
+		channels,
+		needsModel,
+	))
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
 	logStartupLines(toolDepsStartupLines(openClawTools.deps))
 	go func() {
@@ -1917,7 +2001,7 @@ func resolveStateDir(raw string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".trpc-agent-go", appName), nil
+	return filepath.Join(home, ".trpc-agent-go-github", appName), nil
 }
 
 func maybeEnableDebugRecorder(

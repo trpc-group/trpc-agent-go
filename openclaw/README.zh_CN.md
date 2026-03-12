@@ -22,11 +22,24 @@
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/trpc-group/trpc-agent-go/main/openclaw/install.sh \
+  https://github.com/trpc-group/trpc-agent-go/releases/latest/download/openclaw-install.sh \
   | bash
 ```
 
-默认安装 profile 是 `stdin`，因此第一次运行不需要模型凭据：
+默认安装 profile 是 `stdin`，因此第一次运行不需要模型凭据。
+安装脚本默认会把 GitHub 版本的配置和状态目录写到
+`~/.trpc-agent-go-github/openclaw`。
+
+如果安装后还找不到 `openclaw`，直接执行安装脚本输出里的 PATH 命令。
+对于 bash，持久化写法如下：
+
+```bash
+grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
+  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.bashrc"
+. "$HOME/.bashrc"
+```
+
+然后直接启动：
 
 ```bash
 openclaw
@@ -85,7 +98,8 @@ OpenClaw 支持 YAML 配置文件，以避免冗长的 CLI 参数列表。
 
 - 传入 `-config /path/to/openclaw.yaml`，或
 - 设置 `OPENCLAW_CONFIG=/path/to/openclaw.yaml`。
-- 如果两者都未设置，OpenClaw 还会尝试 `~/.trpc-agent-go/openclaw/openclaw.yaml`
+- 如果两者都未设置，OpenClaw 还会尝试
+  `~/.trpc-agent-go-github/openclaw/openclaw.yaml`
   （仅当文件存在时）。
 
 CLI 参数始终会覆盖配置文件中的值。
@@ -710,7 +724,7 @@ OpenClaw 根据入站消息是 DM（私聊）还是群组消息来派生 `sessio
 OpenClaw 将 Telegram `getUpdates` 偏移存储在磁盘上，以便重启后
 可以从上次处理的更新继续。
 
-- 默认 state 目录：`$HOME/.trpc-agent-go/openclaw`
+- 默认 state 目录：`$HOME/.trpc-agent-go-github/openclaw`
 - 通过 `-state-dir` 覆盖
 
 首次运行时（当偏移文件不存在时），轮询器默认会排空待处理的更新，
