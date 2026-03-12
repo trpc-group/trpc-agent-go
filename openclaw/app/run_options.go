@@ -689,6 +689,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		}
 		return opts, nil
 	}
+	opts.ConfigPath = cfgPath
 
 	cfg, err := loadConfigFile(cfgPath)
 	if err != nil {
