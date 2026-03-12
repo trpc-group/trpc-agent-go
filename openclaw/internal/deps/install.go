@@ -127,13 +127,15 @@ func ApplyPlan(
 			)
 		}
 
-		cmd := exec.CommandContext(ctx, step.Command[0], step.Command[1:]...)
-		cmd.Env = os.Environ()
-		if step.Kind == stepKindPython ||
-			step.Kind == stepKindVenv {
-			cmd.Env = mergedPlanEnv(plan.Toolchain)
+		cmd, err := planStepCommand(plan.Toolchain, step)
+		if err != nil {
+			return result, fmt.Errorf(
+				"step %q is invalid: %w",
+				step.Label,
+				err,
+			)
 		}
-		out, err := cmd.CombinedOutput()
+		out, err := combinedOutputContext(ctx, cmd)
 		exitCode := 0
 		if err != nil {
 			exitCode = -1

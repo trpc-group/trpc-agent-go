@@ -109,22 +109,30 @@ func TestApplyPlan_RunsStepsAndCapturesFailures(t *testing.T) {
 
 	stateDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(ManagedBinDir(stateDir), 0o755))
+	envCmd := writeTestCommand(
+		t,
+		t.TempDir(),
+		"python3",
+		`printf '%s|%s|%s' `+
+			`"$OPENCLAW_TOOLCHAIN_ROOT" `+
+			`"$OPENCLAW_TOOLCHAIN_PYTHON" `+
+			`"$PIP_DISABLE_PIP_VERSION_CHECK"`,
+	)
+	failCmd := writeTestCommand(
+		t,
+		t.TempDir(),
+		"python3",
+		"printf fail\nexit 3",
+	)
 
 	plan := Plan{
 		Toolchain: Toolchain{StateDir: stateDir},
 		Steps: []Step{
 			{},
 			{
-				Label: "print env",
-				Kind:  stepKindPython,
-				Command: []string{
-					"sh",
-					"-c",
-					`printf '%s|%s|%s' ` +
-						`"$OPENCLAW_TOOLCHAIN_ROOT" ` +
-						`"$OPENCLAW_TOOLCHAIN_PYTHON" ` +
-						`"$PIP_DISABLE_PIP_VERSION_CHECK"`,
-				},
+				Label:   "print env",
+				Kind:    stepKindPython,
+				Command: []string{envCmd},
 			},
 		},
 	}
@@ -151,13 +159,9 @@ func TestApplyPlan_RunsStepsAndCapturesFailures(t *testing.T) {
 	failPlan := Plan{
 		Toolchain: Toolchain{StateDir: stateDir},
 		Steps: []Step{{
-			Label: "fail",
-			Kind:  stepKindPython,
-			Command: []string{
-				"sh",
-				"-c",
-				"printf fail && exit 3",
-			},
+			Label:   "fail",
+			Kind:    stepKindPython,
+			Command: []string{failCmd},
 		}},
 	}
 	result, err = ApplyPlan(context.Background(), failPlan)
@@ -165,6 +169,21 @@ func TestApplyPlan_RunsStepsAndCapturesFailures(t *testing.T) {
 	require.Len(t, result.Steps, 1)
 	require.Equal(t, 3, result.Steps[0].ExitCode)
 	require.Equal(t, "fail", result.Steps[0].Output)
+}
+
+func TestApplyPlan_RejectsUnsupportedExecutable(t *testing.T) {
+	t.Parallel()
+
+	result, err := ApplyPlan(context.Background(), Plan{
+		Steps: []Step{{
+			Label:   "invalid",
+			Kind:    stepKindPython,
+			Command: []string{filepath.Join(t.TempDir(), "custom-python")},
+		}},
+	})
+	require.Error(t, err)
+	require.Empty(t, result.Steps)
+	require.Contains(t, err.Error(), "invalid")
 }
 
 func TestApplyPlan_RejectsRootOnlyStep(t *testing.T) {
@@ -278,4 +297,18 @@ func TestInstallHelpers(t *testing.T) {
 			{Name: "b"},
 		}),
 	)
+}
+
+func writeTestCommand(
+	t *testing.T,
+	dir string,
+	name string,
+	body string,
+) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+	script := "#!/bin/sh\nset -eu\n" + body + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	return path
 }

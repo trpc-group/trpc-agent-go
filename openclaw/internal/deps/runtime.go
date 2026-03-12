@@ -12,6 +12,7 @@ package deps
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -316,7 +317,18 @@ func CheckPythonPackages(
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(python.Path, "-c", script, string(rawMods))
+	cmd, err := pythonExecCommand(
+		python.Path,
+		"-c",
+		script,
+		string(rawMods),
+	)
+	if err != nil {
+		return out, fmt.Errorf(
+			"build python package check command: %w",
+			err,
+		)
+	}
 	outBytes, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, nil
@@ -448,7 +460,11 @@ func HasMissing(report Report) bool {
 
 func pythonVersion(path string) string {
 	script := "import sys; print(sys.version.split()[0])"
-	out, err := exec.Command(path, "-c", script).CombinedOutput()
+	cmd, err := pythonExecCommand(path, "-c", script)
+	if err != nil {
+		return ""
+	}
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return ""
 	}
