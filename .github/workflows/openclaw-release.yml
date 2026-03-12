@@ -53,7 +53,7 @@ jobs:
           - runner: ubuntu-24.04-arm
             target: linux/arm64
             artifact_name: linux_arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             target: darwin/amd64
             artifact_name: darwin_amd64
           - runner: macos-14
