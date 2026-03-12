@@ -241,26 +241,26 @@ curl -sS 'http://127.0.0.1:8080/healthz'
 
 例如，上传 PDF 后可以直接提取指定内容：
 
-<img src="../assets/img/openclaw-runtime/telegram-pdf-text-extraction.png" alt="提取 PDF 文字" style="display: block; margin: 20px auto; max-width: 100%; max-height: 700px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-pdf-text-extraction.png" alt="提取 PDF 文字" style="display: block; margin: 20px auto; max-width: 100%; max-height: 700px;" />
 
 也可以把一个 PDF 拆分为多个页面后再回传新文件：
 
-<img src="../assets/img/openclaw-runtime/telegram-pdf-splitting.png" alt="拆分 PDF" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-pdf-splitting.png" alt="拆分 PDF" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
 
 语音输入同样可以驱动文档处理。下面这个例子中，
 用户通过语音要求把指定页面合并成一个 PDF：
 
-<img src="../assets/img/openclaw-runtime/telegram-voice-pdf-merge.jpg" alt="通过语音合并 PDF" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-voice-pdf-merge.jpg" alt="通过语音合并 PDF" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
 
 系统也可以基于输入材料直接生成汇报用 Word 文档：
 
-<img src="../assets/img/openclaw-runtime/telegram-voice-word-generation.jpg" alt="通过语音生成 Word 文档" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-voice-word-generation.jpg" alt="通过语音生成 Word 文档" style="display: block; margin: 20px auto; max-width: 100%; max-height: 760px;" />
 
 Excel 处理也沿用同一条链路。下面这个例子里，
 用户通过语音要求保留第一行并删除其余行，
 处理后的表格文件会直接回传：
 
-<img src="../assets/img/openclaw-runtime/telegram-voice-excel-edit.jpg" alt="通过语音操作 Excel" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-voice-excel-edit.jpg" alt="通过语音操作 Excel" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 这组能力说明的是，同一套 Runtime 可以同时承接文件输入、
 多模态理解、工具执行和文件输出，而不必为不同文件类型
@@ -270,21 +270,21 @@ Excel 处理也沿用同一条链路。下面这个例子里，
 
 在图像理解场景下，图片可以直接作为多模态输入进入模型能力：
 
-<img src="../assets/img/openclaw-runtime/telegram-image-understanding.png" alt="图片识别" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-image-understanding.png" alt="图片识别" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
 
 视频场景则通常要经过“先处理媒体，再交给模型”的链路。
 例如下面这个例子中，用户要求提取视频第一帧并回发图片：
 
-<img src="../assets/img/openclaw-runtime/telegram-video-frame-extraction.jpg" alt="视频处理" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-video-frame-extraction.jpg" alt="视频处理" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 在视频 OCR 场景中，系统可以先定位目标帧，再继续做文字识别。
 下面这个例子先提取出最后一帧：
 
-<img src="../assets/img/openclaw-runtime/telegram-video-ocr-step-1.jpg" alt="视频提取文字 1" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-video-ocr-step-1.jpg" alt="视频提取文字 1" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 确认目标帧后，再返回识别出的文字内容：
 
-<img src="../assets/img/openclaw-runtime/telegram-video-ocr-step-2.jpg" alt="视频提取文字 2" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-video-ocr-step-2.jpg" alt="视频提取文字 2" style="display: block; margin: 20px auto; max-width: 100%; max-height: 820px;" />
 
 这部分展示的重点不是某一个具体工具，
 而是多模态输入在进入 Gateway 后，
@@ -298,19 +298,19 @@ Excel 处理也沿用同一条链路。下面这个例子里，
 例如下面这个例子中，系统先做天气查询，
 再把当前聊天记录写入 Apple 备忘录：
 
-<img src="../assets/img/openclaw-runtime/telegram-skill-apple-notes.png" alt="使用 Skill 与新建备忘录" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
+<img src="../../assets/img/openclaw-runtime/telegram-skill-apple-notes.png" alt="使用 Skill 与新建备忘录" style="display: block; margin: 20px auto; max-width: 100%; max-height: 620px;" />
 
 对应的备忘录结果如下：
 
-<img src="../assets/img/openclaw-runtime/apple-notes-result.png" alt="Apple 备忘录创建成功" style="display: block; margin: 20px auto; max-width: 100%; max-height: 240px;" />
+<img src="../../assets/img/openclaw-runtime/apple-notes-result.png" alt="Apple 备忘录创建成功" style="display: block; margin: 20px auto; max-width: 100%; max-height: 240px;" />
 
 类似地，也可以在会话中直接创建提醒事项：
 
-<img src="../assets/img/openclaw-runtime/create-reminder.png" alt="创建提醒事项" style="display: block; margin: 20px auto; max-width: 100%; max-height: 360px;" />
+<img src="../../assets/img/openclaw-runtime/create-reminder.png" alt="创建提醒事项" style="display: block; margin: 20px auto; max-width: 100%; max-height: 360px;" />
 
 对应结果如下：
 
-<img src="../assets/img/openclaw-runtime/reminder-result.png" alt="提醒事项创建成功" style="display: block; margin: 20px auto; max-width: 100%; max-height: 320px;" />
+<img src="../../assets/img/openclaw-runtime/reminder-result.png" alt="提醒事项创建成功" style="display: block; margin: 20px auto; max-width: 100%; max-height: 320px;" />
 
 这类场景说明，运行时中的“动作”不必局限在文本输出，
 Agent 可以真正把工具和系统能力组织成一条可执行链路。
@@ -321,13 +321,13 @@ Agent 可以真正把工具和系统能力组织成一条可执行链路。
 下面这个例子中，用户先查看并清理当前任务，
 再要求系统每分钟回报一次本机 CPU 使用率：
 
-<img src="../assets/img/openclaw-runtime/scheduled-tasks.png" alt="定时任务" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
+<img src="../../assets/img/openclaw-runtime/scheduled-tasks.png" alt="定时任务" style="display: block; margin: 20px auto; max-width: 100%; max-height: 720px;" />
 
 除了会话内命令，当前实现还提供本地 Admin UI，
 用于查看实例信息、Gateway 路由、任务、执行会话、
 上传文件和调试痕迹：
 
-<img src="../assets/img/openclaw-runtime/admin-ui.png" alt="Admin UI" style="display: block; margin: 20px auto; max-width: 100%; max-height: 520px;" />
+<img src="../../assets/img/openclaw-runtime/admin-ui.png" alt="Admin UI" style="display: block; margin: 20px auto; max-width: 100%; max-height: 520px;" />
 
 这一部分对应的是运行时配套能力。
 它不直接决定模型是否聪明，但直接决定系统是否可维护、

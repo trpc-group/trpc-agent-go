@@ -55,15 +55,10 @@ def _dedupe_queries(queries: List[str]) -> List[str]:
 
 def extract_retrieval_queries(
     question: str,
-    eval_mode: str,
     search_results: List[Any],
     fallback_trace: Optional[dict] = None,
 ) -> List[str]:
     """Extract retrieval queries from search-result metadata or agent trace."""
-    if eval_mode == "strict":
-        # Strict mode always issues one deterministic retrieval by question text.
-        return [question]
-
     queries: List[str] = []
 
     # CrewAI path: tool query is attached to per-result metadata.
@@ -109,12 +104,9 @@ def extract_retrieval_queries(
 def build_run_manifest(
     kb_name: str,
     evaluator_name: str,
-    eval_mode: str,
-    max_docs: Optional[int],
-    max_qa_items: Optional[int],
+    dataset_name: str,
     retrieval_k: int,
     skip_load: bool,
-    force_reload: bool,
 ) -> Dict[str, Any]:
     """Build a manifest capturing all key configuration for reproducibility."""
     from util import get_config
@@ -125,15 +117,12 @@ def build_run_manifest(
         "python_version": platform.python_version(),
         "knowledge_base": kb_name,
         "evaluator": evaluator_name,
-        "eval_mode": eval_mode,
+        "dataset": dataset_name,
         "model_name": config.get("model_name", ""),
         "eval_model_name": config.get("eval_model_name", ""),
         "embedding_model": config.get("embedding_model", ""),
         "retrieval_k": retrieval_k,
-        "max_docs": max_docs,
-        "max_qa_items": max_qa_items,
         "skip_load": skip_load,
-        "force_reload": force_reload,
     }
 
 
@@ -141,16 +130,13 @@ def run_evaluation(
     kb: KnowledgeBase,
     dataset: BaseDataset,
     evaluator: Evaluator,
-    max_docs: Optional[int] = 100,
-    max_qa_items: Optional[int] = 10,
     retrieval_k: int = 4,
     skip_load: bool = False,
-    full_log: bool = False,
+    full_log: bool = True,
     output_file: Optional[str] = None,
-    force_reload: bool = True,
-    eval_mode: str = "native",
     kb_name: str = "unknown",
     evaluator_name: str = "unknown",
+    dataset_name: str = "unknown",
 ) -> str:
     """
     Run RAG evaluation with specified evaluator.
@@ -159,33 +145,25 @@ def run_evaluation(
         kb: Knowledge base instance implementing KnowledgeBase interface.
         dataset: Dataset instance implementing BaseDataset interface.
         evaluator: Evaluator instance implementing Evaluator interface.
-        max_docs: Maximum documents to load into knowledge base.
-        max_qa_items: Maximum QA items for evaluation.
         retrieval_k: Number of documents to retrieve per query.
         skip_load: If True, skip loading documents into knowledge base.
         full_log: If True, print full answer results for each question.
         output_file: Optional path to save evaluation results as JSON.
-        force_reload: If True (default), force reload documents even if already cached.
-        eval_mode: Evaluation mode - "strict" uses a single search() call for contexts
-                   (decoupled from agent); "native" uses contexts from agent tool calls.
         kb_name: Name of the knowledge base implementation (for manifest).
         evaluator_name: Name of the evaluator (for manifest).
+        dataset_name: Name of the dataset (for manifest).
 
     Returns:
         Evaluation results as formatted string.
     """
-    print(f"=== RAG Evaluation (mode={eval_mode}) ===\n")
+    print("=== RAG Evaluation ===\n")
 
-    # Build and print run manifest for reproducibility
     manifest = build_run_manifest(
         kb_name=kb_name,
         evaluator_name=evaluator_name,
-        eval_mode=eval_mode,
-        max_docs=max_docs,
-        max_qa_items=max_qa_items,
+        dataset_name=dataset_name,
         retrieval_k=retrieval_k,
         skip_load=skip_load,
-        force_reload=force_reload,
     )
     print("📋 Run Manifest:")
     for k, v in manifest.items():
@@ -194,7 +172,7 @@ def run_evaluation(
 
     # Step 1: Load QA items
     print("1. Loading QA items...")
-    qa_items = dataset.load_qa_items(max_qa_items, filter_extensions=[".md"])
+    qa_items = dataset.load_qa_items()
     print(f"   Loaded {len(qa_items)} QA items.\n")
 
     # Step 2: Load documents if needed
@@ -202,7 +180,7 @@ def run_evaluation(
         print("2. Skipping document loading (--skip-load enabled)...\n")
     else:
         print("2. Loading documents...")
-        doc_dir = dataset.load_documents(max_docs, filter_extensions=[".md"], force_reload=force_reload)
+        doc_dir = dataset.load_documents(force_reload=True)
 
         file_paths = []
         for filename in sorted(os.listdir(doc_dir)):
@@ -217,7 +195,7 @@ def run_evaluation(
         print("   Knowledge base built.\n")
 
     # Step 3: Run Q&A
-    print(f"4. Running Q&A with fresh sessions (mode={eval_mode})...")
+    print("4. Running Q&A with fresh sessions...")
     samples = []
     errors = []
     qa_times = []
@@ -229,24 +207,11 @@ def run_evaluation(
         qa_start = time.time()
 
         try:
-            if eval_mode == "strict":
-                # Strict mode: decouple context retrieval from agent answer.
-                # 1) One deterministic search() call for contexts.
-                # 2) One answer() call for the generated answer.
-                # This ensures every framework is evaluated on the same
-                # single-pass retrieval result regardless of how the agent
-                # internally invokes tools.
-                search_results = kb.search(qa.question, k=retrieval_k)
-                contexts = [r.content for r in search_results]
-                answer, _ = kb.answer(qa.question, k=retrieval_k)
-            else:
-                # Native mode: contexts come from the agent's tool calls.
-                answer, search_results = kb.answer(qa.question, k=retrieval_k)
-                contexts = [r.content for r in search_results]
+            answer, search_results = kb.answer(qa.question, k=retrieval_k)
+            contexts = [r.content for r in search_results]
 
             retrieval_queries = extract_retrieval_queries(
                 question=qa.question,
-                eval_mode=eval_mode,
                 search_results=search_results,
                 fallback_trace=getattr(kb, "last_trace", None),
             )
@@ -393,18 +358,6 @@ def main():
         help="Knowledge base implementation to use (default: langchain)",
     )
     parser.add_argument(
-        "--max-docs",
-        type=int,
-        default=None,
-        help="Maximum documents to load (default: all documents)",
-    )
-    parser.add_argument(
-        "--max-qa",
-        type=int,
-        default=None,
-        help="Maximum QA items for evaluation (default: all QA items)",
-    )
-    parser.add_argument(
         "--k",
         type=int,
         default=4,
@@ -414,17 +367,12 @@ def main():
         "--skip-load",
         action="store_true",
         default=False,
-        help="Skip loading documents into knowledge base (default: True)",
+        help="Skip loading documents into knowledge base (default: False)",
     )
     parser.add_argument(
         "--load",
         action="store_true",
         help="Force loading documents into knowledge base",
-    )
-    parser.add_argument(
-        "--full-log",
-        action="store_true",
-        help="Print full answer results for each question",
     )
     parser.add_argument(
         "--output",
@@ -433,35 +381,40 @@ def main():
         help="Output file path to save evaluation results as JSON",
     )
     parser.add_argument(
-        "--eval-mode",
-        choices=["strict", "native"],
-        default="native",
-        help="Evaluation mode: 'strict' uses a single search() for contexts "
-             "(fair baseline); 'native' uses contexts from agent tool calls "
-             "(real-world behavior). Default: native",
+        "--dataset",
+        choices=["huggingface", "rgb", "multihop-rag"],
+        default="huggingface",
+        help="Dataset to use for evaluation (default: huggingface)",
     )
     parser.add_argument(
-        "--cache-document",
-        action="store_true",
-        help="Reuse cached documents if available (default: always re-pull)",
+        "--rgb-subset",
+        choices=["en", "zh", "en_int", "zh_int", "en_fact", "zh_fact"],
+        default="en",
+        help="RGB dataset subset (default: en). Only used when --dataset=rgb",
     )
     parser.add_argument(
         "--timeout",
         type=int,
-        default=6000000000,
+        default=60000000000,
         help="Timeout in seconds for evaluation (default: 600)",
     )
     parser.add_argument(
         "--workers",
         type=int,
-        default=10,
-        help="Number of concurrent workers for evaluation (default: 1)",
+        default=30,
+        help="Number of concurrent workers for evaluation (default: 30)",
     )
     args = parser.parse_args()
 
     # Initialize dataset
-    from dataset.huggingface.loader import HuggingFaceDocDataset
-    dataset = HuggingFaceDocDataset()
+    from dataset import create_dataset
+    dataset_kwargs = {}
+    if args.dataset == "rgb":
+        dataset_kwargs = {
+            "subset": args.rgb_subset,
+        }
+    dataset = create_dataset(args.dataset, **dataset_kwargs)
+    print(f"Using dataset: {args.dataset}")
 
     # Initialize knowledge base
     if args.kb == "trpc-agent-go":
@@ -500,16 +453,13 @@ def main():
         kb=kb,
         dataset=dataset,
         evaluator=evaluator,
-        max_docs=args.max_docs,
-        max_qa_items=args.max_qa,
         retrieval_k=args.k,
         skip_load=skip_load,
-        full_log=args.full_log,
+        full_log=True,
         output_file=args.output,
-        force_reload=not args.cache_document,
-        eval_mode=args.eval_mode,
         kb_name=args.kb,
         evaluator_name=args.evaluator,
+        dataset_name=args.dataset,
     )
 
 

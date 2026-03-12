@@ -59,34 +59,55 @@ const (
 	VectorStorePGVector VectorStoreType = "pgvector"
 )
 
+// ServiceConfig holds all tunable parameters for the knowledge service.
+type ServiceConfig struct {
+	StoreType          VectorStoreType
+	ModelName          string
+	SearchMode         int
+	HybridVectorWeight float64
+	HybridTextWeight   float64
+	PGTable            string // overrides PGVECTOR_TABLE env var if non-empty
+}
+
 // KnowledgeService manages knowledge base operations.
 type KnowledgeService struct {
 	kb         *knowledge.BuiltinKnowledge
 	vs         vectorstore.VectorStore
 	emb        embedder.Embedder
 	lock       sync.RWMutex
+	config     *ServiceConfig
 	storeType  VectorStoreType
 	modelName  string
 	searchMode int // default search mode: 0=hybrid, 1=vector, 2=keyword, 3=filter
 }
 
-// NewKnowledgeService creates a new KnowledgeService instance.
+// NewKnowledgeService creates a new KnowledgeService instance with default config.
 // searchMode: 0=hybrid (default), 1=vector, 2=keyword, 3=filter.
 func NewKnowledgeService(storeType VectorStoreType, modelName string, searchMode int) (*KnowledgeService, error) {
+	return NewKnowledgeServiceWithConfig(&ServiceConfig{
+		StoreType:          storeType,
+		ModelName:          modelName,
+		SearchMode:         searchMode,
+		HybridVectorWeight: 0.99999,
+		HybridTextWeight:   0.00001,
+	})
+}
+
+// NewKnowledgeServiceWithConfig creates a new KnowledgeService with full configuration.
+func NewKnowledgeServiceWithConfig(cfg *ServiceConfig) (*KnowledgeService, error) {
 	svc := &KnowledgeService{
-		storeType:  storeType,
-		modelName:  modelName,
-		searchMode: searchMode,
+		config:     cfg,
+		storeType:  cfg.StoreType,
+		modelName:  cfg.ModelName,
+		searchMode: cfg.SearchMode,
 	}
 
 	var err error
-	svc.vs, err = svc.newVectorStoreByType(storeType)
+	svc.vs, err = svc.newVectorStoreByType(cfg.StoreType)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create vector store: %w", err)
 	}
 
-	// Use EMBEDDING_MODEL env var for consistency with Python evaluation
-	// Must explicitly pass API key and base URL for venus API compatibility
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	baseURL := os.Getenv("OPENAI_BASE_URL")
 	svc.emb = openai.New(
@@ -120,8 +141,20 @@ func (s *KnowledgeService) newPGVectorStore() (vectorstore.VectorStore, error) {
 	port, _ := strconv.Atoi(portStr)
 	user := getEnvOrDefault("PGVECTOR_USER", "root")
 	password := getEnvOrDefault("PGVECTOR_PASSWORD", "123")
-	database := getEnvOrDefault("PGVECTOR_DATABASE", "vector")
+	database := getEnvOrDefault("PGVECTOR_DATABASE", "rgb")
 	table := getEnvOrDefault("PGVECTOR_TABLE", "trpc_agent_go_eval")
+
+	// Command-line --pg-table overrides env var
+	if s.config != nil && s.config.PGTable != "" {
+		table = s.config.PGTable
+	}
+
+	vectorWeight := 0.99999
+	textWeight := 0.00001
+	if s.config != nil {
+		vectorWeight = s.config.HybridVectorWeight
+		textWeight = s.config.HybridTextWeight
+	}
 
 	encodedUser := url.QueryEscape(user)
 	encodedPassword := url.QueryEscape(password)
@@ -131,8 +164,8 @@ func (s *KnowledgeService) newPGVectorStore() (vectorstore.VectorStore, error) {
 	return pgvector.New(
 		pgvector.WithPGVectorClientDSN(dsn),
 		pgvector.WithTable(table),
-		pgvector.WithIndexDimension(1024), // Match embedding model dimension
-		pgvector.WithHybridSearchWeights(0.99999, 0.00001),
+		pgvector.WithIndexDimension(1024),
+		pgvector.WithHybridSearchWeights(vectorWeight, textWeight),
 	)
 }
 
