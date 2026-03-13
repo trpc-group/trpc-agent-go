@@ -88,6 +88,12 @@ var defaultCodeBlockDelimiter = codeexecutor.CodeBlockDelimiter{
 	End:   "```",
 }
 
+const (
+	codeFilePatternBase = "code_*"
+	pythonFileExt       = ".py"
+	shellFileExt        = ".sh"
+)
+
 // New creates a local CodeExecutor.
 func New(options ...CodeExecutorOption) *CodeExecutor {
 	executor := &CodeExecutor{
@@ -146,7 +152,6 @@ func (e *CodeExecutor) ExecuteCode(
 			ctx,
 			workDir,
 			block,
-			i,
 			e.WorkDir != "" && e.CleanTempFiles,
 		)
 		if err != nil {
@@ -169,10 +174,9 @@ func (e *CodeExecutor) ExecuteCode(
 func (e *CodeExecutor) executeCodeBlock(
 	ctx context.Context, workDir string,
 	block codeexecutor.CodeBlock,
-	blockIndex int,
 	cleanupSource bool,
 ) (string, error) {
-	filePath, err := e.prepareCodeFile(workDir, block, blockIndex)
+	filePath, err := e.prepareCodeFile(workDir, block)
 	if err != nil {
 		return "", err
 	}
@@ -183,21 +187,14 @@ func (e *CodeExecutor) executeCodeBlock(
 	return e.executeCommand(ctx, workDir, cmdArgs)
 }
 
-// prepareCodeFile writes code to a temporary file.
+// prepareCodeFile writes code to a temporary helper file.
 func (e *CodeExecutor) prepareCodeFile(
-	workDir string, block codeexecutor.CodeBlock, blockIndex int,
-) (string, error) {
-	ext := ""
-	switch strings.ToLower(block.Language) {
-	case "python", "py", "python3":
-		ext = ".py"
-	case "bash", "sh":
-		ext = ".sh"
-	default:
-		return "", fmt.Errorf("unsupported language: %s", block.Language)
+	workDir string, block codeexecutor.CodeBlock,
+) (filePath string, err error) {
+	ext, err := helperFileExtension(block.Language)
+	if err != nil {
+		return "", err
 	}
-	fileName := fmt.Sprintf("code_%d%s", blockIndex, ext)
-	filePath := filepath.Join(workDir, fileName)
 	content := strings.TrimSpace(block.Code)
 	if strings.EqualFold(block.Language, "python") ||
 		strings.EqualFold(block.Language, "py") ||
@@ -207,12 +204,53 @@ func (e *CodeExecutor) prepareCodeFile(
 			content = content + "\n"
 		}
 	}
+	helperFile, err := os.CreateTemp(
+		workDir, codeFilePatternBase+ext,
+	)
+	if err != nil {
+		return "", fmt.Errorf(
+			"failed to create %s file: %w", block.Language, err,
+		)
+	}
+	filePath = helperFile.Name()
+	defer func() {
+		closeErr := helperFile.Close()
+		if err == nil && closeErr != nil {
+			err = fmt.Errorf(
+				"failed to close %s file: %w",
+				block.Language,
+				closeErr,
+			)
+		}
+		if err != nil {
+			_ = os.Remove(filePath)
+		}
+	}()
 	fileMode := e.getFileMode(block.Language)
-	if err := os.WriteFile(filePath, []byte(content), fileMode); err != nil {
-		return "", fmt.Errorf("failed to write %s file: %w",
-			block.Language, err)
+	if _, err = helperFile.WriteString(content); err != nil {
+		return "", fmt.Errorf(
+			"failed to write %s file: %w", block.Language, err,
+		)
+	}
+	if err = helperFile.Chmod(fileMode); err != nil {
+		return "", fmt.Errorf(
+			"failed to set %s file mode: %w",
+			block.Language,
+			err,
+		)
 	}
 	return filePath, nil
+}
+
+func helperFileExtension(language string) (string, error) {
+	switch strings.ToLower(language) {
+	case "python", "py", "python3":
+		return pythonFileExt, nil
+	case "bash", "sh":
+		return shellFileExt, nil
+	default:
+		return "", fmt.Errorf("unsupported language: %s", language)
+	}
 }
 
 func (e *CodeExecutor) getFileMode(language string) os.FileMode {
