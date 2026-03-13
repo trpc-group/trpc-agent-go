@@ -294,7 +294,7 @@ func (s *Service) CreateSession(
 				WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,
 				s.tableSessionStates,
 			),
-			sessBytes, sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
+			string(sessBytes), sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID,
 		)
 	} else {
@@ -304,7 +304,7 @@ func (s *Service) CreateSession(
 				VALUES (?, ?, ?, ?, ?, ?, ?)`,
 				s.tableSessionStates,
 			),
-			key.AppName, key.UserID, key.SessionID, sessBytes,
+			key.AppName, key.UserID, key.SessionID, string(sessBytes),
 			sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
 		)
 	}
@@ -633,7 +633,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 	_, err = s.mysqlClient.Exec(ctx,
 		fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 		 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-		updatedStateBytes, now, expiresAt,
+		string(updatedStateBytes), now, expiresAt,
 		key.AppName, key.UserID, key.SessionID)
 
 	if err != nil {
