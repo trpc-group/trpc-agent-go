@@ -137,6 +137,66 @@ func TestPreprocess_AddsAgentToolsWhenPresent(t *testing.T) {
 	require.Contains(t, req.Tools, "t1")
 }
 
+func TestPreprocess_DowngradesOrphanToolCallBeforeModel(t *testing.T) {
+	modelStub := &mockModel{
+		responses: []*model.Response{
+			{
+				Choices: []model.Choice{{
+					Message: model.Message{Role: model.RoleAssistant, Content: "ok"},
+				}},
+			},
+		},
+	}
+	f := New(
+		[]flow.RequestProcessor{
+			&seedMessagesRequestProcessor{
+				messages: []model.Message{
+					model.NewUserMessage("read file"),
+					{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{
+								ID: "call_orphan",
+								Function: model.FunctionDefinitionParam{
+									Name:      "test_tool",
+									Arguments: []byte(`{"path":"a.txt"}`),
+								},
+							},
+						},
+					},
+					model.NewUserMessage("retry"),
+				},
+			},
+		},
+		nil,
+		Options{},
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{tools: []tool.Tool{
+			&mockLongRunnerTool{name: "test_tool"},
+		}}),
+		agent.WithInvocationModel(modelStub),
+	)
+	req := &model.Request{Tools: map[string]tool.Tool{}}
+	ch := make(chan *event.Event, 4)
+
+	f.preprocess(context.Background(), inv, req, ch)
+	_, seq, err := f.callLLM(context.Background(), inv, req)
+	require.NoError(t, err)
+	seq(func(resp *model.Response) bool { return false })
+
+	captured := modelStub.LastRequest()
+	require.NotNil(t, captured)
+	require.Len(t, captured.Messages, 3)
+	require.Equal(t, model.RoleUser, captured.Messages[0].Role)
+	require.Equal(t, "read file", captured.Messages[0].Content)
+	require.Equal(t, model.RoleUser, captured.Messages[1].Role)
+	require.Contains(t, captured.Messages[1].Content, "[orphan_tool_call]")
+	require.Empty(t, captured.Messages[1].ToolCalls)
+	require.Equal(t, model.RoleUser, captured.Messages[2].Role)
+	require.Equal(t, "retry", captured.Messages[2].Content)
+}
+
 func TestCreateLLMResponseEvent_LongRunningIDs(t *testing.T) {
 	f := New(nil, nil, Options{})
 	inv := agent.NewInvocation()
@@ -1254,6 +1314,8 @@ type mockModel struct {
 	ShouldError bool
 	responses   []*model.Response
 	currentIdx  int
+	mu          sync.Mutex
+	requests    []*model.Request
 }
 
 func (m *mockModel) Info() model.Info {
@@ -1266,6 +1328,7 @@ func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 	if m.ShouldError {
 		return nil, errors.New("mock model error")
 	}
+	m.recordRequest(req)
 
 	respChan := make(chan *model.Response, len(m.responses))
 
@@ -1281,6 +1344,44 @@ func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 	}()
 
 	return respChan, nil
+}
+
+func (m *mockModel) recordRequest(req *model.Request) {
+	if req == nil {
+		return
+	}
+	cloned := &model.Request{
+		Messages: cloneMessagesForTest(req.Messages),
+	}
+	m.mu.Lock()
+	m.requests = append(m.requests, cloned)
+	m.mu.Unlock()
+}
+
+func (m *mockModel) LastRequest() *model.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.requests) == 0 {
+		return nil
+	}
+	return m.requests[len(m.requests)-1]
+}
+
+func cloneMessagesForTest(messages []model.Message) []model.Message {
+	if messages == nil {
+		return nil
+	}
+	cloned := make([]model.Message, len(messages))
+	for i, msg := range messages {
+		cloned[i] = msg
+		if len(msg.ContentParts) > 0 {
+			cloned[i].ContentParts = append([]model.ContentPart(nil), msg.ContentParts...)
+		}
+		if len(msg.ToolCalls) > 0 {
+			cloned[i].ToolCalls = append([]model.ToolCall(nil), msg.ToolCalls...)
+		}
+	}
+	return cloned
 }
 
 type mockIterModel struct {
@@ -1335,6 +1436,19 @@ func (m *mockRequestProcessor) ProcessRequest(
 	case ch <- evt:
 	default:
 	}
+}
+
+type seedMessagesRequestProcessor struct {
+	messages []model.Message
+}
+
+func (p *seedMessagesRequestProcessor) ProcessRequest(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	ch chan<- *event.Event,
+) {
+	req.Messages = append(req.Messages, cloneMessagesForTest(p.messages)...)
 }
 
 const flowRunPanicTestMsg = "boom"

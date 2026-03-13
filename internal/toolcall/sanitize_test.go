@@ -193,7 +193,7 @@ func TestSanitizeMessagesWithTools_DowngradesOrphanToolResult(t *testing.T) {
 	}
 }
 
-func TestSanitizeMessagesWithTools_PreservesNonObjectJSONArgumentsWhenToolsUnknown(t *testing.T) {
+func TestSanitizeMessagesWithTools_DowngradesOrphanToolCall(t *testing.T) {
 	in := []model.Message{
 		{
 			Role: model.RoleAssistant,
@@ -210,10 +210,83 @@ func TestSanitizeMessagesWithTools_PreservesNonObjectJSONArgumentsWhenToolsUnkno
 	}
 	out := SanitizeMessagesWithTools(in, nil)
 	if assert.Len(t, out, 1) {
+		assert.Equal(t, model.RoleUser, out[0].Role)
+		assert.Contains(t, out[0].Content, orphanToolCallTag)
+		assert.Contains(t, out[0].Content, "call_1")
+	}
+}
+
+func TestSanitizeMessagesWithTools_SplitsMatchedAndOrphanToolCalls(t *testing.T) {
+	in := []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "call_keep",
+					Function: model.FunctionDefinitionParam{
+						Name:      "test_tool",
+						Arguments: []byte(`{"a":1}`),
+					},
+				},
+				{
+					ID: "call_orphan",
+					Function: model.FunctionDefinitionParam{
+						Name:      "test_tool",
+						Arguments: []byte(`{"b":2}`),
+					},
+				},
+			},
+		},
+		{
+			Role:     model.RoleTool,
+			ToolID:   "call_keep",
+			ToolName: "test_tool",
+			Content:  "ok",
+		},
+	}
+	out := SanitizeMessagesWithTools(in, nil)
+	if assert.Len(t, out, 3) {
+		assert.Equal(t, model.RoleAssistant, out[0].Role)
+		if assert.Len(t, out[0].ToolCalls, 1) {
+			assert.Equal(t, "call_keep", out[0].ToolCalls[0].ID)
+		}
+		assert.Equal(t, model.RoleTool, out[1].Role)
+		assert.Equal(t, "call_keep", out[1].ToolID)
+		assert.Equal(t, model.RoleUser, out[2].Role)
+		assert.Contains(t, out[2].Content, orphanToolCallTag)
+		assert.Contains(t, out[2].Content, "call_orphan")
+	}
+}
+
+func TestSanitizeMessagesWithTools_PreservesNonObjectJSONArgumentsWhenToolsUnknown(t *testing.T) {
+	in := []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "call_1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "test_tool",
+						Arguments: []byte(`"string"`),
+					},
+				},
+			},
+		},
+		{
+			Role:     model.RoleTool,
+			ToolID:   "call_1",
+			ToolName: "test_tool",
+			Content:  "ok",
+		},
+	}
+	out := SanitizeMessagesWithTools(in, nil)
+	if assert.Len(t, out, 2) {
 		assert.Equal(t, model.RoleAssistant, out[0].Role)
 		if assert.Len(t, out[0].ToolCalls, 1) {
 			assert.Equal(t, []byte(`"string"`), out[0].ToolCalls[0].Function.Arguments)
 		}
+		assert.Equal(t, model.RoleTool, out[1].Role)
+		assert.Equal(t, "call_1", out[1].ToolID)
 	}
 }
 
