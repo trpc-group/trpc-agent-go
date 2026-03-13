@@ -7,7 +7,7 @@ Demonstrates how proto files are parsed using an AST-based reader with knowledge
 This example shows how the knowledge module handles `.proto` files:
 
 - **Automatic Detection**: Proto files are automatically detected by `.proto` extension
-- **Metadata Extraction**: Extracts syntax, package, imports, services, and messages
+- **Metadata Extraction**: Extracts syntax, package, imports, service names, and per-entity AST metadata
 - **trpc_ast_* Prefix**: Metadata uses `trpc_ast_` prefix (compatible with trpc-ast-rag)
 - **Knowledge Integration**: Uses auto source with LLM agent for semantic search
 
@@ -46,10 +46,10 @@ The proto reader extracts structured metadata with `trpc_ast_` prefix:
 | `trpc_ast_package` | Package name (e.g., `example.v1`) |
 | `trpc_ast_imports` | List of imported files |
 | `trpc_ast_import_count` | Number of imports |
+| `trpc_ast_go_package` | `go_package` option value |
+| `trpc_ast_java_package` | `java_package` option value, if present |
 | `trpc_ast_services` | List of service names |
 | `trpc_ast_service_count` | Number of services |
-| `trpc_ast_messages` | List of message names |
-| `trpc_ast_message_count` | Number of messages |
 
 ### 3. Knowledge Base Integration
 
@@ -88,7 +88,7 @@ Loading documents: 3 chunks processed
    🤖 Response: The API defines AgentService and KnowledgeService...
 
 2. 🔍 Query: Tell me about the AgentRequest message structure
-   🤖 Response: AgentRequest includes fields like query, session_id, and context...
+   🤖 Response: AgentRequest includes `request_id`, `query`, `context`, and `created_at`...
 
 ✅ Demo completed!
 ```
