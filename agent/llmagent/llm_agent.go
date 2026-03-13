@@ -671,6 +671,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		invocation,
 		effectiveGenConfig.Stream,
 		&err,
+		"",
 	)
 	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {

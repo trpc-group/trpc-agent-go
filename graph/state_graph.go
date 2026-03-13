@@ -2541,19 +2541,16 @@ func finalizeAgentNodeOutput(
 func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	cfg := agentNodeConfigFromOptions(opts...)
 	return func(ctx context.Context, state State) (a any, err error) {
+		// Extract current node ID from state.
+		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
+		telemetrySpanName := fmt.Sprintf("%s_%s", agentName, nodeID)
 		ctx, span, startedSpan := startNodeSpan(
 			ctx,
-			fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName),
+			fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, telemetrySpanName),
 		)
 		if startedSpan {
 			defer finalizeInvokeAgentSpan(span, &err)
 		}
-
-		// Extract execution context for event emission.
-		invocationID, _, _, _, eventChan := extractExecutionContext(state)
-
-		// Extract current node ID from state.
-		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 
 		targetAgent, err := targetAgentFromState(state, agentName)
 		if err != nil {
@@ -2596,11 +2593,14 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			invocation,
 			stream,
 			&err,
+			nodeID,
 		)
 		defer tracker.RecordMetrics()()
 
 		// Emit agent execution start event.
 		startTime := time.Now()
+		// Extract execution context for event emission.
+		invocationID, _, _, _, eventChan := extractExecutionContext(state)
 		emitAgentStartEvent(ctx, eventChan, invocationID, nodeID, startTime)
 
 		// Execute the target agent.

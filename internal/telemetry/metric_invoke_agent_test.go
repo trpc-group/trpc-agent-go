@@ -127,7 +127,7 @@ func TestNewInvokeAgentTracker(t *testing.T) {
 	}
 	var err error
 
-	tracker := NewInvokeAgentTracker(ctx, invocation, true, &err)
+	tracker := NewInvokeAgentTracker(ctx, invocation, true, &err, "node-123")
 
 	if tracker == nil {
 		t.Fatal("expected non-nil tracker")
@@ -138,8 +138,8 @@ func TestNewInvokeAgentTracker(t *testing.T) {
 	if !tracker.isFirstToken {
 		t.Error("isFirstToken should be true initially")
 	}
-	if tracker.attributes.AgentName != "test-agent" {
-		t.Errorf("expected AgentName=test-agent, got %s", tracker.attributes.AgentName)
+	if tracker.attributes.AgentName != "test-agent_node-123" {
+		t.Errorf("expected AgentName=test-agent_node-123, got %s", tracker.attributes.AgentName)
 	}
 	if tracker.attributes.System != "gpt-4" {
 		t.Errorf("expected System=gpt-4, got %s", tracker.attributes.System)
@@ -171,7 +171,7 @@ func TestNewInvokeAgentTracker_NilInvocation(t *testing.T) {
 	ctx := context.Background()
 	var err error
 
-	tracker := NewInvokeAgentTracker(ctx, nil, false, &err)
+	tracker := NewInvokeAgentTracker(ctx, nil, false, &err, "")
 
 	if tracker == nil {
 		t.Fatal("expected non-nil tracker")
@@ -383,7 +383,7 @@ func TestInvokeAgentTracker_TrackResponse(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			var err error
-			tracker := NewInvokeAgentTracker(ctx, nil, false, &err)
+			tracker := NewInvokeAgentTracker(ctx, nil, false, &err, "")
 
 			for i, response := range tt.responses {
 				if i == 0 && tt.waitBeforeFirstResponse {
@@ -400,7 +400,7 @@ func TestInvokeAgentTracker_TrackResponse(t *testing.T) {
 func TestInvokeAgentTracker_SetResponseErrorType(t *testing.T) {
 	ctx := context.Background()
 	var err error
-	tracker := NewInvokeAgentTracker(ctx, nil, false, &err)
+	tracker := NewInvokeAgentTracker(ctx, nil, false, &err, "")
 
 	if tracker.attributes.ErrorType != "" {
 		t.Error("expected empty ErrorType initially")
@@ -420,7 +420,7 @@ func TestInvokeAgentTracker_SetResponseErrorType(t *testing.T) {
 func TestInvokeAgentTracker_FirstTokenTimeDuration(t *testing.T) {
 	ctx := context.Background()
 	var err error
-	tracker := NewInvokeAgentTracker(ctx, nil, false, &err)
+	tracker := NewInvokeAgentTracker(ctx, nil, false, &err, "")
 
 	if tracker.FirstTokenTimeDuration() != 0 {
 		t.Error("initial FirstTokenTimeDuration should be 0")
@@ -494,7 +494,7 @@ func TestInvokeAgentTracker_RecordMetrics(t *testing.T) {
 		},
 	}
 
-	tracker := NewInvokeAgentTracker(ctx, inv, true, &err)
+	tracker := NewInvokeAgentTracker(ctx, inv, true, &err, "node-123")
 
 	// Simulate some responses
 	time.Sleep(10 * time.Millisecond)
@@ -579,7 +579,7 @@ func TestInvokeAgentTracker_RecordMetrics_WithError(t *testing.T) {
 
 	ctx := context.Background()
 	testErr := errors.New("test error")
-	tracker := NewInvokeAgentTracker(ctx, nil, false, &testErr)
+	tracker := NewInvokeAgentTracker(ctx, nil, false, &testErr, "")
 	tracker.SetResponseErrorType("rate_limit")
 
 	recordFunc := tracker.RecordMetrics()
@@ -637,7 +637,7 @@ func TestInvokeAgentTracker_RecordMetrics_NoTokens(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	tracker := NewInvokeAgentTracker(ctx, nil, false, &err)
+	tracker := NewInvokeAgentTracker(ctx, nil, false, &err, "")
 
 	// Record metrics without any responses
 	recordFunc := tracker.RecordMetrics()

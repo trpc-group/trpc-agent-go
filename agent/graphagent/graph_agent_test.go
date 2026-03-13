@@ -1969,6 +1969,7 @@ func TestRecordTraceEvent(t *testing.T) {
 			&agent.Invocation{AgentName: "trace-agent"},
 			true,
 			&trackerErr,
+			"",
 		)
 	}
 	newUsage := func() *model.Usage {

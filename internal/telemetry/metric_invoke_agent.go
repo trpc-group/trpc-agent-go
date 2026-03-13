@@ -90,11 +90,15 @@ func NewInvokeAgentTracker(
 	invocation *agent.Invocation,
 	stream bool,
 	err *error,
+	nodeID string,
 ) *InvokeAgentTracker {
 	attributes := invokeAgentAttributes{Stream: stream, Error: *err}
 	if invocation != nil {
 		if invocation.AgentName != "" {
 			attributes.AgentName = invocation.AgentName
+			if nodeID != "" {
+				attributes.AgentName += "_" + nodeID
+			}
 		}
 		if invocation.Model != nil {
 			attributes.System = invocation.Model.Info().Name

@@ -101,7 +101,7 @@ func (a *ChainAgent) executeChainRun(
 		)
 	}
 	var trackerErr error
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr, "")
 	defer func() {
 		tracker.RecordMetrics()()
 		if startedSpan {

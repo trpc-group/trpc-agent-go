@@ -175,7 +175,7 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 			&model.GenerationConfig{Stream: useStreaming},
 		)
 	}
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err)
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err, "")
 	if r.a2aClient == nil {
 		if startedSpan {
 			span.SetStatus(codes.Error, "A2A client is nil")

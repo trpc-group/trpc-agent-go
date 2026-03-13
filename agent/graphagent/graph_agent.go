@@ -160,7 +160,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	}
 	defer close(out)
 	var trackerErr error
-	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr, "")
 	tokenUsage := &itelemetry.TokenUsage{}
 	var fullRespEvent *event.Event
 	defer func() {
