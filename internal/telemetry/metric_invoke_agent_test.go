@@ -114,6 +114,38 @@ func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 	}
 }
 
+func TestBuildNodeScopedAgentName(t *testing.T) {
+	tests := []struct {
+		name      string
+		agentName string
+		nodeID    string
+		expected  string
+	}{
+		{
+			name:      "with node id",
+			agentName: "test-agent",
+			nodeID:    "node-123",
+			expected:  "test-agent_node-123",
+		},
+		{
+			name:      "without node id",
+			agentName: "test-agent",
+			expected:  "test-agent",
+		},
+		{
+			name:     "without agent name",
+			nodeID:   "node-123",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, BuildNodeScopedAgentName(tt.agentName, tt.nodeID))
+		})
+	}
+}
+
 func TestNewInvokeAgentTracker(t *testing.T) {
 	ctx := context.Background()
 	invocation := &agent.Invocation{

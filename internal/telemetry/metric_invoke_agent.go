@@ -84,6 +84,14 @@ type InvokeAgentTracker struct {
 	attributes invokeAgentAttributes
 }
 
+// BuildNodeScopedAgentName returns agentName suffixed with nodeID when nodeID is present.
+func BuildNodeScopedAgentName(agentName, nodeID string) string {
+	if agentName == "" || nodeID == "" {
+		return agentName
+	}
+	return agentName + "_node-id(" + nodeID + ")"
+}
+
 // NewInvokeAgentTracker creates a new telemetry tracker for agent invocation.
 func NewInvokeAgentTracker(
 	ctx context.Context,
@@ -95,10 +103,7 @@ func NewInvokeAgentTracker(
 	attributes := invokeAgentAttributes{Stream: stream, Error: *err}
 	if invocation != nil {
 		if invocation.AgentName != "" {
-			attributes.AgentName = invocation.AgentName
-			if nodeID != "" {
-				attributes.AgentName += "_" + nodeID
-			}
+			attributes.AgentName = BuildNodeScopedAgentName(invocation.AgentName, nodeID)
 		}
 		if invocation.Model != nil {
 			attributes.System = invocation.Model.Info().Name

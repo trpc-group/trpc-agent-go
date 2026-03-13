@@ -2543,10 +2543,9 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	return func(ctx context.Context, state State) (a any, err error) {
 		// Extract current node ID from state.
 		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
-		telemetrySpanName := fmt.Sprintf("%s_%s", agentName, nodeID)
 		ctx, span, startedSpan := startNodeSpan(
 			ctx,
-			fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, telemetrySpanName),
+			fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, itelemetry.BuildNodeScopedAgentName(agentName, nodeID)),
 		)
 		if startedSpan {
 			defer finalizeInvokeAgentSpan(span, &err)
