@@ -512,7 +512,29 @@ func (c *Callbacks) runAfterToolCallback(
 		toolName,
 		&err,
 	)
+	restore := normalizeAfterToolArgsResult(args)
+	defer restore()
 	return cb(ctx, args)
+}
+
+// normalizeAfterToolArgsResult temporarily rewrites args.Result to the
+// callback-facing result shape and returns a restore function.
+func normalizeAfterToolArgsResult(args *AfterToolArgs) func() {
+	if args == nil {
+		return func() {}
+	}
+	type callbackResultGetter interface {
+		GetCallbackResult() any
+	}
+	rg, ok := args.Result.(callbackResultGetter)
+	if !ok {
+		return func() {}
+	}
+	original := args.Result
+	args.Result = rg.GetCallbackResult()
+	return func() {
+		args.Result = original
+	}
 }
 
 // RunAfterTool runs all after tool callbacks in order.

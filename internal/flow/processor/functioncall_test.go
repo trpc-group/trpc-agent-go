@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
+	trpcmcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
 // mockModel implements model.Model for testing
@@ -95,6 +96,19 @@ type mockCallableTool struct {
 func (m *mockCallableTool) Declaration() *tool.Declaration { return m.declaration }
 func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 	return m.callFn(ctx, args)
+}
+
+type mockCallbackCompatibleResult struct {
+	callbackResult any
+	meta           map[string]any
+}
+
+func (m *mockCallbackCompatibleResult) GetCallbackResult() any {
+	return m.callbackResult
+}
+
+func (m *mockCallbackCompatibleResult) GetMeta() map[string]any {
+	return m.meta
 }
 
 func TestExecuteSingleToolCallSequential_DisableTracingSkipsSpanCreation(t *testing.T) {
@@ -3490,6 +3504,115 @@ func TestExecuteToolWithCallbacks_PluginAfterToolOverrides(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, localAfterCalled)
 	require.Equal(t, map[string]any{"p": true}, res)
+}
+
+func TestExecuteToolWithCallbacks_AfterToolReceivesNormalizedResultAndMeta(t *testing.T) {
+	var (
+		gotResult any
+		gotMeta   map[string]any
+	)
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		gotResult = args.Result
+		gotMeta = args.Meta
+		return nil, nil
+	})
+
+	expectedResult := []trpcmcp.Content{trpcmcp.NewTextContent("hello")}
+	expectedMeta := map[string]any{"source": "mcp"}
+	rawResult := &mockCallbackCompatibleResult{
+		callbackResult: expectedResult,
+		meta:           expectedMeta,
+	}
+
+	proc := NewFunctionCallResponseProcessor(false, callbacks)
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return rawResult, nil
+		},
+	}
+
+	_, res, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		nil,
+		model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}},
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+
+	toolResultContents, ok := gotResult.([]trpcmcp.Content)
+	require.True(t, ok)
+	require.Len(t, toolResultContents, 1)
+
+	textContent, ok := toolResultContents[0].(trpcmcp.TextContent)
+	require.True(t, ok)
+	require.Equal(t, "hello", textContent.Text)
+	require.Equal(t, expectedMeta, gotMeta)
+	require.Same(t, rawResult, res)
+}
+
+func TestExecuteToolWithCallbacks_PluginAfterToolReceivesNormalizedResultAndMeta(t *testing.T) {
+	var (
+		gotResult any
+		gotMeta   map[string]any
+	)
+
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterTool(func(
+				ctx context.Context,
+				args *tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				gotResult = args.Result
+				gotMeta = args.Meta
+				return nil, nil
+			})
+		},
+	}
+
+	pm := plugin.MustNewManager(p)
+	proc := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{Plugins: pm}
+
+	expectedResult := []trpcmcp.Content{trpcmcp.NewTextContent("hello")}
+	expectedMeta := map[string]any{"source": "mcp"}
+	rawResult := &mockCallbackCompatibleResult{
+		callbackResult: expectedResult,
+		meta:           expectedMeta,
+	}
+
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return rawResult, nil
+		},
+	}
+
+	_, res, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}},
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+
+	toolResultContents, ok := gotResult.([]trpcmcp.Content)
+	require.True(t, ok)
+	require.Len(t, toolResultContents, 1)
+
+	textContent, ok := toolResultContents[0].(trpcmcp.TextContent)
+	require.True(t, ok)
+	require.Equal(t, "hello", textContent.Text)
+	require.Equal(t, expectedMeta, gotMeta)
+	require.Same(t, rawResult, res)
 }
 
 func TestExecuteToolWithCallbacks_PluginBeforeToolError(t *testing.T) {
