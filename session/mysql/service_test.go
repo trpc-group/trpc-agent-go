@@ -124,9 +124,14 @@ type sessionStateJSONMatcher struct {
 
 func (m *sessionStateJSONMatcher) Match(v driver.Value) bool {
 	m.t.Helper()
-	stateBytes, ok := v.([]byte)
-	if !ok {
-		m.t.Errorf("expected []byte for state, got %T", v)
+	var stateBytes []byte
+	switch vv := v.(type) {
+	case []byte:
+		stateBytes = vv
+	case string:
+		stateBytes = []byte(vv)
+	default:
+		m.t.Errorf("expected []byte or string for state, got %T", v)
 		return false
 	}
 
