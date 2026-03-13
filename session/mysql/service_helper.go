@@ -308,7 +308,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		_, err := tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 			 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-			updatedStateBytes, sessState.UpdatedAt, expiresAt,
+			string(updatedStateBytes), sessState.UpdatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -319,7 +319,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			_, err = tx.ExecContext(ctx,
 				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
-				key.AppName, key.UserID, key.SessionID, eventBytes, now, now)
+				key.AppName, key.UserID, key.SessionID, string(eventBytes), now, now)
 			if err != nil {
 				return fmt.Errorf("insert event failed: %w", err)
 			}
@@ -396,7 +396,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		_, err := tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 			 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-			updatedStateBytes, sessState.UpdatedAt, expiresAt,
+			string(updatedStateBytes), sessState.UpdatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -406,7 +406,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at, expires_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionTracks),
-			key.AppName, key.UserID, key.SessionID, trackEvent.Track, eventBytes,
+			key.AppName, key.UserID, key.SessionID, trackEvent.Track, string(eventBytes),
 			trackEvent.Timestamp, trackEvent.Timestamp, expiresAt)
 		if err != nil {
 			return fmt.Errorf("insert track event failed: %w", err)
