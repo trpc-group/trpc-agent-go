@@ -234,6 +234,34 @@ func TestDefaultA2AMessageToAgentMessage_ConvertToAgentMessage(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "audio file part via common format value (no metadata)",
+			message: protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.FilePart{
+						File: &protocol.FileWithBytes{
+							Name:     stringPtr("voice-note"),
+							MimeType: stringPtr("mp3"),
+							Bytes:    base64.StdEncoding.EncodeToString([]byte("audio shorthand bytes")),
+						},
+					},
+				},
+			},
+			expected: &model.Message{
+				Role:    model.RoleUser,
+				Content: "",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeAudio,
+						Audio: &model.Audio{
+							Format: "mp3",
+							Data:   []byte("audio shorthand bytes"),
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
 			name: "image file part with URI",
 			message: protocol.Message{
 				Parts: []protocol.Part{

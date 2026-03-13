@@ -92,8 +92,8 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 				continue
 			}
 			// Convert FilePart to model.ContentPart.
-			// The "name" field is used by the client to encode the original content type
-			// ("image", "audio", or a real filename for generic files).
+			// The original content type is primarily preserved by metadata["content_type"].
+			// MimeType and Name are only fallback signals for compatibility.
 			contentParts = append(contentParts, convertFilePart(filePart)...)
 		case protocol.KindData:
 			var dataPart *protocol.DataPart
@@ -561,7 +561,8 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AStreamingMessage(
 //
 // Content type resolution order (highest to lowest priority):
 //  1. FilePart.Metadata["content_type"] — set explicitly by trpc-agent-go clients
-//  2. MimeType prefix — "image/*" → ContentTypeImage, "audio/*" → ContentTypeAudio
+//  2. MimeType or common format value — "image/*"/"png" → ContentTypeImage,
+//     "audio/*"/"mp3" → ContentTypeAudio
 //  3. FilePart.Name — legacy fallback for older clients that used name="image"/"audio"
 //
 // FileWithBytes.Bytes is a base64-encoded string per the A2A spec; it is decoded here.
@@ -650,7 +651,7 @@ func convertFilePart(filePart *protocol.FilePart) []model.ContentPart {
 //
 // Priority:
 //  1. Metadata["content_type"] (set by trpc-agent-go clients, unambiguous)
-//  2. MimeType prefix ("image/*", "audio/*")
+//  2. MimeType or common format value ("image/*", "audio/*", "png", "mp3")
 //  3. Name field (legacy: older clients used name="image"/"audio" as a type hint)
 func resolveFilePartContentType(filePart *protocol.FilePart) string {
 	// 1. Explicit metadata (highest priority, set by current client)
@@ -660,7 +661,7 @@ func resolveFilePartContentType(filePart *protocol.FilePart) string {
 		}
 	}
 
-	// 2. Infer from MimeType prefix
+	// 2. Infer from MimeType or common format value
 	var mimeType string
 	switch fd := filePart.File.(type) {
 	case *protocol.FileWithBytes:
@@ -672,11 +673,8 @@ func resolveFilePartContentType(filePart *protocol.FilePart) string {
 			mimeType = *fd.MimeType
 		}
 	}
-	if strings.HasPrefix(mimeType, "image/") {
-		return ia2a.FilePartMetadataContentTypeImage
-	}
-	if strings.HasPrefix(mimeType, "audio/") {
-		return ia2a.FilePartMetadataContentTypeAudio
+	if inferred := inferContentTypeFromMimeType(mimeType); inferred != "" {
+		return inferred
 	}
 
 	// 3. Legacy name-based fallback (older clients that used name="image"/"audio")
@@ -697,4 +695,26 @@ func resolveFilePartContentType(filePart *protocol.FilePart) string {
 	}
 
 	return ia2a.FilePartMetadataContentTypeFile
+}
+
+func inferContentTypeFromMimeType(mimeType string) string {
+	mimeType = strings.TrimSpace(strings.ToLower(mimeType))
+	if mimeType == "" {
+		return ""
+	}
+	if strings.HasPrefix(mimeType, "image/") {
+		return ia2a.FilePartMetadataContentTypeImage
+	}
+	if strings.HasPrefix(mimeType, "audio/") {
+		return ia2a.FilePartMetadataContentTypeAudio
+	}
+
+	switch mimeType {
+	case "png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff":
+		return ia2a.FilePartMetadataContentTypeImage
+	case "mp3", "wav", "mpeg", "mpga", "ogg", "flac", "m4a", "aac":
+		return ia2a.FilePartMetadataContentTypeAudio
+	default:
+		return ""
+	}
 }
