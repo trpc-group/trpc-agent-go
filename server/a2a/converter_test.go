@@ -533,6 +533,28 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 			wantErr:  false,
 		},
 		{
+			name: "graph event with state delta",
+			event: &event.Event{
+				ID:     "evt-graph-1",
+				Author: "graph.node:planner",
+				Response: &model.Response{
+					ID:     "resp-graph-1",
+					Object: "graph.node.start",
+					Choices: []model.Choice{{
+						Message: model.Message{},
+					}},
+				},
+				StateDelta: map[string][]byte{
+					"_node_metadata": []byte(`{"nodeId":"planner","phase":"start","modelName":"gpt-4o"}`),
+				},
+			},
+			expected: func() protocol.UnaryMessageResult {
+				msg := protocol.NewMessage(protocol.MessageRoleAgent, nil)
+				return &msg
+			}(),
+			wantErr: false,
+		},
+		{
 			name:     "nil response",
 			event:    &event.Event{Response: nil},
 			expected: nil,
@@ -691,6 +713,36 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			expected: nil,
 			wantErr:  false,
 		},
+		{
+			name: "streaming graph node start event with state delta",
+			event: &event.Event{
+				ID:     "evt-graph-1",
+				Author: "graph.node:planner",
+				Response: &model.Response{
+					ID:     "resp-graph-1",
+					Object: "graph.node.start",
+					Choices: []model.Choice{{
+						Delta: model.Message{},
+					}},
+				},
+				StateDelta: map[string][]byte{
+					"_node_metadata": []byte(`{"nodeId":"planner","phase":"start","modelName":"gpt-4o"}`),
+				},
+			},
+			expected: func() protocol.StreamingMessageResult {
+				isLastChunk := false
+				taskEvent := protocol.NewTaskArtifactUpdateEvent(
+					"test-task-id",
+					"test-ctx-id",
+					protocol.Artifact{
+						ArtifactID: "resp-graph-1",
+					},
+					isLastChunk,
+				)
+				return &taskEvent
+			}(),
+			wantErr: false,
+		},
 	}
 
 	converter := &defaultEventToA2AMessage{}
@@ -709,6 +761,61 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 				t.Errorf("ConvertStreamingToA2AMessage() = %+v, want %+v", result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestDefaultEventToA2AMessage_StateDeltaMetadata(t *testing.T) {
+	converter := &defaultEventToA2AMessage{}
+	evt := &event.Event{
+		ID:     "evt-graph-meta",
+		Author: "graph.node:planner",
+		Response: &model.Response{
+			ID:     "resp-graph-meta",
+			Object: "graph.node.start",
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
+		},
+		StateDelta: map[string][]byte{
+			"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+		},
+	}
+
+	unaryResult, err := converter.ConvertToA2AMessage(context.Background(), evt, EventToA2AUnaryOptions{})
+	if err != nil {
+		t.Fatalf("ConvertToA2AMessage() error: %v", err)
+	}
+	msg, ok := unaryResult.(*protocol.Message)
+	if !ok {
+		t.Fatalf("expected *protocol.Message, got %T", unaryResult)
+	}
+	if len(msg.Parts) != 0 {
+		t.Fatalf("expected no parts, got %d", len(msg.Parts))
+	}
+	if got := msg.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != "graph.node.start" {
+		t.Fatalf("expected object_type graph.node.start, got %v", got)
+	}
+	if _, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]; !ok {
+		t.Fatal("expected state_delta in unary metadata")
+	}
+
+	streamingResult, err := converter.ConvertStreamingToA2AMessage(
+		context.Background(),
+		evt,
+		EventToA2AStreamingOptions{CtxID: "ctx-1", TaskID: "task-1"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToA2AMessage() error: %v", err)
+	}
+	taskEvent, ok := streamingResult.(*protocol.TaskArtifactUpdateEvent)
+	if !ok {
+		t.Fatalf("expected *protocol.TaskArtifactUpdateEvent, got %T", streamingResult)
+	}
+	if len(taskEvent.Artifact.Parts) != 0 {
+		t.Fatalf("expected no parts in artifact, got %d", len(taskEvent.Artifact.Parts))
+	}
+	if _, ok := taskEvent.Metadata[ia2a.MessageMetadataStateDeltaKey]; !ok {
+		t.Fatal("expected state_delta in streaming metadata")
 	}
 }
 
@@ -2466,6 +2573,40 @@ func TestDefaultEventToA2AMessage_ADKCompatibility(t *testing.T) {
 				}
 				if _, hasADKType := dataPart.Metadata["adk_type"]; hasADKType {
 					t.Error("Should not have adk_type in metadata when ADK compatibility is disabled")
+				}
+			},
+		},
+		{
+			name:             "ADK compatibility enabled - state delta metadata event",
+			adkCompatibility: true,
+			event: &event.Event{
+				ID:     "evt-graph-adk",
+				Author: "graph.node:planner",
+				Response: &model.Response{
+					ID:     "resp-graph-adk",
+					Object: "graph.node.start",
+					Choices: []model.Choice{{
+						Message: model.Message{},
+					}},
+				},
+				StateDelta: map[string][]byte{
+					"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+				},
+			},
+			checkMetadata: func(t *testing.T, result protocol.UnaryMessageResult) {
+				msg, ok := result.(*protocol.Message)
+				if !ok {
+					t.Errorf("Expected Message type, got %T", result)
+					return
+				}
+				if len(msg.Parts) != 0 {
+					t.Fatalf("Expected no parts, got %d", len(msg.Parts))
+				}
+				if _, hasStateDelta := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]; !hasStateDelta {
+					t.Fatal("Expected state_delta in message metadata")
+				}
+				if got := msg.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != "graph.node.start" {
+					t.Errorf("Expected object_type 'graph.node.start', got %v", got)
 				}
 			},
 		},

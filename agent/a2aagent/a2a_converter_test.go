@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -1993,6 +1994,149 @@ func TestParseA2AMessageParts_Tag(t *testing.T) {
 			result := parseA2AMessageParts(tt.msg)
 			tt.validateFunc(t, result)
 		})
+	}
+}
+
+func TestParseA2AMessageParts_StateDeltaMetadata(t *testing.T) {
+	msg := &protocol.Message{
+		Parts: nil,
+		Metadata: map[string]any{
+			"object_type": "graph.node.start",
+			ia2a.MessageMetadataStateDeltaKey: map[string]any{
+				"_node_metadata": map[string]any{
+					"nodeId": "planner",
+					"phase":  "start",
+				},
+			},
+		},
+	}
+
+	result := parseA2AMessageParts(msg)
+	if result.objectType != "graph.node.start" {
+		t.Fatalf("expected objectType graph.node.start, got %s", result.objectType)
+	}
+	if result.stateDelta == nil {
+		t.Fatal("expected stateDelta to be restored from metadata")
+	}
+
+	raw, ok := result.stateDelta["_node_metadata"]
+	if !ok {
+		t.Fatal("expected _node_metadata in stateDelta")
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("failed to unmarshal restored stateDelta: %v", err)
+	}
+	if got["nodeId"] != "planner" || got["phase"] != "start" {
+		t.Fatalf("unexpected restored stateDelta: %+v", got)
+	}
+}
+
+func TestConvertToEvents_StateDeltaMetadata(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{InvocationID: "inv-state-delta"}
+
+	events, err := converter.ConvertToEvents(protocol.MessageResult{
+		Result: &protocol.Message{
+			Kind:      protocol.KindMessage,
+			MessageID: "msg-state-delta",
+			Role:      protocol.MessageRoleAgent,
+			Metadata: map[string]any{
+				"object_type": "graph.node.start",
+				ia2a.MessageMetadataStateDeltaKey: map[string]any{
+					"_node_metadata": map[string]any{
+						"nodeId": "planner",
+						"phase":  "start",
+					},
+				},
+			},
+		},
+	}, "test-agent", invocation)
+	if err != nil {
+		t.Fatalf("ConvertToEvents() error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Object != "graph.node.start" {
+		t.Fatalf("expected object graph.node.start, got %s", events[0].Object)
+	}
+	if events[0].StateDelta == nil {
+		t.Fatal("expected StateDelta on converted event")
+	}
+	if _, ok := events[0].StateDelta["_node_metadata"]; !ok {
+		t.Fatal("expected _node_metadata in converted event StateDelta")
+	}
+}
+
+func TestConvertToEvents_GraphExecutionMarksDone(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{InvocationID: "inv-graph-exec"}
+
+	events, err := converter.ConvertToEvents(protocol.MessageResult{
+		Result: &protocol.Message{
+			Kind:      protocol.KindMessage,
+			MessageID: "msg-graph-exec",
+			Role:      protocol.MessageRoleAgent,
+			Metadata: map[string]any{
+				ia2a.MessageMetadataObjectTypeKey: graph.ObjectTypeGraphExecution,
+				ia2a.MessageMetadataStateDeltaKey: map[string]any{
+					"child_done": true,
+				},
+			},
+		},
+	}, "test-agent", invocation)
+	if err != nil {
+		t.Fatalf("ConvertToEvents() error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if !events[0].Done {
+		t.Fatal("expected graph.execution event to be marked done")
+	}
+	if events[0].IsPartial {
+		t.Fatal("expected graph.execution event to be non-partial")
+	}
+	if events[0].Object != graph.ObjectTypeGraphExecution {
+		t.Fatalf("expected object %q, got %q", graph.ObjectTypeGraphExecution, events[0].Object)
+	}
+}
+
+func TestConvertStreamingToEvents_GraphExecutionMarksDone(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{InvocationID: "inv-graph-exec-stream"}
+
+	events, err := converter.ConvertStreamingToEvents(protocol.StreamingMessageEvent{
+		Result: &protocol.TaskArtifactUpdateEvent{
+			TaskID:    "task-graph-exec",
+			ContextID: "ctx-graph-exec",
+			Artifact: protocol.Artifact{
+				ArtifactID: "artifact-graph-exec",
+			},
+			Metadata: map[string]any{
+				ia2a.MessageMetadataObjectTypeKey: graph.ObjectTypeGraphExecution,
+				ia2a.MessageMetadataStateDeltaKey: map[string]any{
+					"child_done": true,
+				},
+			},
+		},
+	}, "test-agent", invocation)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToEvents() error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if !events[0].Done {
+		t.Fatal("expected streaming graph.execution event to be marked done")
+	}
+	if events[0].IsPartial {
+		t.Fatal("expected streaming graph.execution event to be non-partial")
+	}
+	if events[0].Object != graph.ObjectTypeGraphExecution {
+		t.Fatalf("expected object %q, got %q", graph.ObjectTypeGraphExecution, events[0].Object)
 	}
 }
 

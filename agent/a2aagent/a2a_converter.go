@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -333,6 +334,9 @@ type parseResult struct {
 
 	// responseID holds the original LLM Response.ID from A2A message metadata
 	responseID string
+
+	// stateDelta holds structured state updates reconstructed from A2A metadata.
+	stateDelta map[string][]byte
 }
 
 // toolResponseData holds tool response information
@@ -372,6 +376,9 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 		}
 		if responseID, ok := msg.Metadata[ia2a.MessageMetadataResponseIDKey].(string); ok {
 			result.responseID = responseID
+		}
+		if stateDelta, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]; ok {
+			result.stateDelta = decodeStateDeltaMetadata(stateDelta)
 		}
 	}
 
@@ -579,6 +586,9 @@ func buildEventResponse(
 	if result.tag != "" {
 		opts = append(opts, event.WithTag(result.tag))
 	}
+	if result.stateDelta != nil {
+		opts = append(opts, event.WithStateDelta(result.stateDelta))
+	}
 
 	evt := event.New(invocation.InvocationID, agentName, opts...)
 
@@ -594,8 +604,50 @@ func buildEventResponse(
 	} else {
 		evt.Response = buildNonStreamingResponse(respID, result, role)
 	}
+	markGraphCompletionEvent(evt, result)
 
 	return evt
+}
+
+func markGraphCompletionEvent(evt *event.Event, result *parseResult) {
+	if evt == nil || evt.Response == nil || result == nil {
+		return
+	}
+	if result.objectType != graph.ObjectTypeGraphExecution {
+		return
+	}
+
+	// graph.execution is a terminal subgraph event. Preserve completion
+	// semantics so parent graph agent nodes can reconstruct final state.
+	evt.Response.Done = true
+	evt.Response.IsPartial = false
+}
+
+func decodeStateDeltaMetadata(raw any) map[string][]byte {
+	stateDelta, ok := raw.(map[string]any)
+	if !ok || len(stateDelta) == 0 {
+		return nil
+	}
+
+	decoded := make(map[string][]byte, len(stateDelta))
+	for key, value := range stateDelta {
+		switch v := value.(type) {
+		case string:
+			decoded[key] = []byte(v)
+		default:
+			jsonBytes, err := json.Marshal(v)
+			if err != nil {
+				log.Warnf("failed to marshal state_delta metadata for key %q: %v", key, err)
+				continue
+			}
+			decoded[key] = jsonBytes
+		}
+	}
+
+	if len(decoded) == 0 {
+		return nil
+	}
+	return decoded
 }
 
 // buildStreamingResponse creates a response for streaming mode.
