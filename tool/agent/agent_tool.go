@@ -51,6 +51,7 @@ type agentToolOptions struct {
 	skipSummarization bool
 	streamInner       bool
 	historyScope      HistoryScope
+	description       *string
 }
 
 // WithSkipSummarization sets whether to skip summarization of the agent output.
@@ -66,6 +67,14 @@ func WithSkipSummarization(skip bool) Option {
 func WithStreamInner(enabled bool) Option {
 	return func(opts *agentToolOptions) {
 		opts.streamInner = enabled
+	}
+}
+
+// WithDescription sets the description exposed by the agent tool declaration.
+func WithDescription(description string) Option {
+	return func(opts *agentToolOptions) {
+		copiedDescription := description
+		opts.description = &copiedDescription
 	}
 }
 
@@ -138,13 +147,17 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 			Description: "The response from the agent",
 		}
 	}
+	description := info.Description
+	if options.description != nil {
+		description = *options.description
+	}
 	return &Tool{
 		agent:             agent,
 		skipSummarization: options.skipSummarization,
 		streamInner:       options.streamInner,
 		historyScope:      options.historyScope,
 		name:              info.Name,
-		description:       info.Description,
+		description:       description,
 		inputSchema:       inputSchema,
 		outputSchema:      outputSchema,
 	}

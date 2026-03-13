@@ -125,6 +125,45 @@ func TestTool_Declaration(t *testing.T) {
 	}
 }
 
+func TestNewTool_WithDescription(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent for testing",
+	}
+
+	agentTool := NewTool(mockAgent, WithDescription("Custom tool description"))
+
+	if agentTool.description != "Custom tool description" {
+		t.Errorf("Expected description 'Custom tool description', got '%s'", agentTool.description)
+	}
+}
+
+func TestTool_Declaration_WithDescription(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent for testing",
+	}
+
+	declaration := NewTool(mockAgent, WithDescription("Custom tool description")).Declaration()
+
+	if declaration.Description != "Custom tool description" {
+		t.Errorf("Expected description 'Custom tool description', got '%s'", declaration.Description)
+	}
+}
+
+func TestTool_Declaration_WithEmptyDescription(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent for testing",
+	}
+
+	declaration := NewTool(mockAgent, WithDescription("")).Declaration()
+
+	if declaration.Description != "" {
+		t.Errorf("Expected empty description, got '%s'", declaration.Description)
+	}
+}
+
 func TestTool_Call(t *testing.T) {
 	mockAgent := &mockAgent{
 		name:        "test-agent",
