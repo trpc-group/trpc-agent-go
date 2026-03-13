@@ -24,6 +24,7 @@ import (
 const (
 	invalidToolCallTag   = "[invalid_tool_call]"
 	invalidToolResultTag = "[invalid_tool_result]"
+	orphanToolCallTag    = "[orphan_tool_call]"
 	orphanToolResultTag  = "[orphan_tool_result]"
 )
 
@@ -40,8 +41,9 @@ var (
 // removes such tool calls from assistant messages and emits equivalent user messages that
 // preserve the original payload for context.
 //
-// This function also downgrades orphan tool result messages that are not associated with a
-// kept tool call message to avoid invalid tool message sequences in strict chat APIs.
+// This function also downgrades orphan tool calls that are not associated with a kept
+// tool result message, and orphan tool result messages that are not associated with a
+// kept tool call message, to avoid invalid tool message sequences in strict chat APIs.
 func SanitizeMessagesWithTools(messages []model.Message, tools map[string]tool.Tool) []model.Message {
 	if len(messages) == 0 {
 		return messages
@@ -87,26 +89,32 @@ type toolResultSplit struct {
 	orphan      []model.Message
 }
 
+type toolCallSplit struct {
+	kept   []model.ToolCall
+	orphan []model.ToolCall
+}
+
 // sanitizeToolRound sanitizes a single assistant tool-call round with its following tool results.
 func sanitizeToolRound(assistant model.Message, toolResults []model.Message, tools map[string]tool.Tool) []model.Message {
 	validation := validateToolCalls(assistant.ToolCalls, tools)
-	if len(validation.invalidToolCalls) == 0 {
-		assistant.ToolCalls = validation.validToolCalls
-		msgs := make([]model.Message, 0, 1+len(toolResults))
-		msgs = append(msgs, assistant)
-		msgs = append(msgs, toolResults...)
-		return msgs
-	}
+	split := splitToolResults(toolResults, validation.validIDs, validation.invalidIDs)
+	toolCallSplit := splitToolCalls(validation.validToolCalls, split.kept)
 	filteredAssistant := assistant
-	filteredAssistant.ToolCalls = validation.validToolCalls
+	filteredAssistant.ToolCalls = toolCallSplit.kept
 	if len(filteredAssistant.ToolCalls) == 0 {
 		filteredAssistant.ToolCalls = nil
 	}
-	split := splitToolResults(toolResults, validation.validIDs, validation.invalidIDs)
-	out := make([]model.Message, 0, 1+len(toolResults)+len(validation.invalidToolCalls)+len(split.orphan))
+	out := make(
+		[]model.Message,
+		0,
+		1+len(toolResults)+len(validation.invalidToolCalls)+len(toolCallSplit.orphan)+len(split.orphan),
+	)
 	if !isEmptyAssistantMessage(filteredAssistant) {
 		out = append(out, filteredAssistant)
 		out = append(out, split.kept...)
+	}
+	for _, orphanCall := range toolCallSplit.orphan {
+		out = append(out, downgradeOrphanToolCall(orphanCall))
 	}
 	for _, invalid := range validation.invalidToolCalls {
 		out = append(out, downgradeInvalidToolCall(invalid.call, invalid.reason))
@@ -116,6 +124,29 @@ func sanitizeToolRound(assistant model.Message, toolResults []model.Message, too
 	}
 	for _, orphan := range split.orphan {
 		out = append(out, downgradeOrphanToolResult(orphan))
+	}
+	return out
+}
+
+func splitToolCalls(toolCalls []model.ToolCall, toolResults []model.Message) toolCallSplit {
+	out := toolCallSplit{
+		kept: make([]model.ToolCall, 0, len(toolCalls)),
+	}
+	respondedIDs := make(map[string]struct{}, len(toolResults))
+	for _, tr := range toolResults {
+		if tr.ToolID == "" {
+			continue
+		}
+		respondedIDs[tr.ToolID] = struct{}{}
+	}
+	for _, tc := range toolCalls {
+		if tc.ID != "" {
+			if _, ok := respondedIDs[tc.ID]; ok {
+				out.kept = append(out.kept, tc)
+				continue
+			}
+		}
+		out.orphan = append(out.orphan, tc)
 	}
 	return out
 }
@@ -385,6 +416,21 @@ func downgradeInvalidToolCall(call model.ToolCall, reason string) model.Message 
 		"%s Tool call arguments were downgraded to a user message (%s).\nname: %s\nid: %s\narguments:\n```text\n%s\n```",
 		invalidToolCallTag,
 		reason,
+		call.Function.Name,
+		call.ID,
+		string(call.Function.Arguments),
+	)
+	return model.Message{
+		Role:    model.RoleUser,
+		Content: content,
+	}
+}
+
+// downgradeOrphanToolCall converts a tool call without a matching tool result into a user message.
+func downgradeOrphanToolCall(call model.ToolCall) model.Message {
+	content := fmt.Sprintf(
+		"%s Tool call was downgraded to a user message because no matching tool result exists.\nname: %s\nid: %s\narguments:\n```text\n%s\n```",
+		orphanToolCallTag,
 		call.Function.Name,
 		call.ID,
 		string(call.Function.Arguments),
