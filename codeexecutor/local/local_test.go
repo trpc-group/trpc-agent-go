@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1023,6 +1024,53 @@ func TestLocalCodeExecutor_CleanTempFiles_PreservesExistingFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, codeFiles, 1)
 	require.Equal(t, existingPath, codeFiles[0])
+}
+
+func TestLocalCodeExecutor_CleanTempFiles_ReadOnlyWorkDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping permission test on Windows")
+	}
+
+	const (
+		readOnlyDirMode = 0o555
+		writableDirMode = 0o755
+	)
+
+	baseDir := t.TempDir()
+	workDir := filepath.Join(baseDir, "readonly")
+	require.NoError(t, os.MkdirAll(workDir, writableDirMode))
+	require.NoError(t, os.Chmod(workDir, readOnlyDirMode))
+	t.Cleanup(func() {
+		_ = os.Chmod(workDir, writableDirMode)
+	})
+
+	probeFile, err := os.CreateTemp(workDir, "probe_*")
+	if err == nil {
+		probePath := probeFile.Name()
+		require.NoError(t, probeFile.Close())
+		require.NoError(t, os.Remove(probePath))
+		t.Skip("Skipping because the work directory remains writable")
+	}
+
+	executor := local.New(
+		local.WithWorkDir(workDir),
+		local.WithCleanTempFiles(true),
+	)
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "bash",
+			Code:     "echo should-not-run",
+		}},
+		ExecutionID: "clean-temp-files-readonly",
+	}
+
+	result, execErr := executor.ExecuteCode(context.Background(), input)
+	require.NoError(t, execErr)
+	require.Contains(
+		t,
+		result.Output,
+		"failed to create bash file",
+	)
 }
 
 func TestLocal_PythonNoPrintAddsNewline(t *testing.T) {

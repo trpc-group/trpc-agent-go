@@ -213,33 +213,27 @@ func (e *CodeExecutor) prepareCodeFile(
 		)
 	}
 	filePath = helperFile.Name()
-	defer func() {
-		closeErr := helperFile.Close()
-		if err == nil && closeErr != nil {
-			err = fmt.Errorf(
-				"failed to close %s file: %w",
-				block.Language,
-				closeErr,
-			)
-		}
-		if err != nil {
-			_ = os.Remove(filePath)
-		}
-	}()
+	_ = helperFile.Close()
 	fileMode := e.getFileMode(block.Language)
-	if _, err = helperFile.WriteString(content); err != nil {
+	if err = writeHelperFile(filePath, content, fileMode); err != nil {
 		return "", fmt.Errorf(
-			"failed to write %s file: %w", block.Language, err,
-		)
-	}
-	if err = helperFile.Chmod(fileMode); err != nil {
-		return "", fmt.Errorf(
-			"failed to set %s file mode: %w",
-			block.Language,
-			err,
+			"failed to prepare %s file: %w", block.Language, err,
 		)
 	}
 	return filePath, nil
+}
+
+func writeHelperFile(
+	filePath, content string,
+	fileMode os.FileMode,
+) error {
+	if err := os.WriteFile(filePath, []byte(content), fileMode); err != nil {
+		return fmt.Errorf("write helper file: %w", err)
+	}
+	if err := os.Chmod(filePath, fileMode); err != nil {
+		return fmt.Errorf("set helper file mode: %w", err)
+	}
+	return nil
 }
 
 func helperFileExtension(language string) (string, error) {
