@@ -180,9 +180,6 @@ func (e *CodeExecutor) executeCodeBlock(
 		defer removeHelperFile(filePath)
 	}
 	cmdArgs := e.buildCommandArgs(block.Language, filePath)
-	if len(cmdArgs) == 0 {
-		return "", fmt.Errorf("unsupported language: %s", block.Language)
-	}
 	return e.executeCommand(ctx, workDir, cmdArgs)
 }
 
@@ -261,9 +258,6 @@ func (e *CodeExecutor) executeCommand(
 }
 
 func removeHelperFile(path string) {
-	if path == "" {
-		return
-	}
 	_ = os.Remove(path)
 }
 
