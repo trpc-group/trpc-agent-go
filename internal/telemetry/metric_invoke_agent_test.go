@@ -125,7 +125,7 @@ func TestBuildNodeScopedAgentName(t *testing.T) {
 			name:      "with node id",
 			agentName: "test-agent",
 			nodeID:    "node-123",
-			expected:  "test-agent_node-123",
+			expected:  "test-agent_node-id(node-123)",
 		},
 		{
 			name:      "without node id",
@@ -170,8 +170,8 @@ func TestNewInvokeAgentTracker(t *testing.T) {
 	if !tracker.isFirstToken {
 		t.Error("isFirstToken should be true initially")
 	}
-	if tracker.attributes.AgentName != "test-agent_node-123" {
-		t.Errorf("expected AgentName=test-agent_node-123, got %s", tracker.attributes.AgentName)
+	if tracker.attributes.AgentName != "test-agent_node-id(node-123)" {
+		t.Errorf("expected AgentName=test-agent_node-id(node-123), got %s", tracker.attributes.AgentName)
 	}
 	if tracker.attributes.System != "gpt-4" {
 		t.Errorf("expected System=gpt-4, got %s", tracker.attributes.System)
