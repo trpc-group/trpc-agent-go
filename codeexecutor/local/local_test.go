@@ -837,11 +837,6 @@ nonexistent-command-that-will-fail
 }
 
 func TestLocalCodeExecutor_IntegrationTest_CleanTempFiles(t *testing.T) {
-	// Create a temporary directory for testing
-	tempDir, err := os.MkdirTemp("", "integration-clean-test-")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
 	input := `Create a temporary file:
 
 ` + "```bash" + `
@@ -856,6 +851,7 @@ cat temp_file.txt
 
 	// Test with CleanTempFiles = false
 	t.Run("with_clean_temp_files_false", func(t *testing.T) {
+		tempDir := t.TempDir()
 		executor := local.New(
 			local.WithWorkDir(tempDir),
 			local.WithCleanTempFiles(false),
@@ -884,6 +880,7 @@ cat temp_file.txt
 
 	// Test with CleanTempFiles = true (default)
 	t.Run("with_clean_temp_files_true", func(t *testing.T) {
+		tempDir := t.TempDir()
 		executor := local.New(
 			local.WithWorkDir(tempDir),
 			local.WithCleanTempFiles(true),
@@ -900,10 +897,65 @@ cat temp_file.txt
 		assert.Contains(t, result.Output, "Temporary content")
 		assert.Contains(t, result.String(), "Code execution result:")
 
-		// Code files should be cleaned up. This is timing-dependent,
-		// so the test might not catch it reliably.
-		// The important thing is that execution succeeded
+		codeFiles, err := filepath.Glob(
+			filepath.Join(tempDir, "code_*.sh"),
+		)
+		assert.NoError(t, err)
+		assert.Empty(
+			t,
+			codeFiles,
+			"Code files should be cleaned when CleanTempFiles is true",
+		)
 	})
+}
+
+func TestLocalCodeExecutor_CleanTempFiles_KeepProjectCWD(t *testing.T) {
+	if !isExecutableAvailable("bash") {
+		t.Skip("Skipping test because bash is not available")
+	}
+
+	const (
+		mainRelDir = "cmd/hello"
+		mainFile   = "main.go"
+	)
+
+	tempDir := t.TempDir()
+	mainDir := filepath.Join(tempDir, "cmd", "hello")
+	require.NoError(t, os.MkdirAll(mainDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(mainDir, mainFile),
+		[]byte(
+			"package main\n\n"+
+				"import \"fmt\"\n\n"+
+				"func main() {\n"+
+				"\tfmt.Println(\"cleanup works\")\n"+
+				"}\n",
+		),
+		0o644,
+	))
+
+	executor := local.New(
+		local.WithWorkDir(tempDir),
+		local.WithCleanTempFiles(true),
+		local.WithTimeout(20*time.Second),
+	)
+
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "bash",
+			Code: "test -f ./" + mainRelDir + "/" + mainFile +
+				"\npwd",
+		}},
+		ExecutionID: "test-workdir-cleanup-project",
+	}
+
+	result, err := executor.ExecuteCode(context.Background(), input)
+	require.NoError(t, err)
+	require.Contains(t, result.Output, tempDir)
+
+	codeFiles, err := filepath.Glob(filepath.Join(tempDir, "code_*.sh"))
+	require.NoError(t, err)
+	require.Empty(t, codeFiles)
 }
 
 func TestLocal_PythonNoPrintAddsNewline(t *testing.T) {

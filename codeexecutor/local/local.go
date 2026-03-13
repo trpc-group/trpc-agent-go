@@ -50,7 +50,7 @@ func WithTimeout(timeout time.Duration) CodeExecutorOption {
 	return func(l *CodeExecutor) { l.Timeout = timeout }
 }
 
-// WithCleanTempFiles toggles cleanup of temporary files.
+// WithCleanTempFiles toggles cleanup of temporary helper files.
 func WithCleanTempFiles(clean bool) CodeExecutorOption {
 	return func(l *CodeExecutor) { l.CleanTempFiles = clean }
 }
@@ -142,7 +142,13 @@ func (e *CodeExecutor) ExecuteCode(
 	}
 
 	for i, block := range input.CodeBlocks {
-		blockOutput, err := e.executeCodeBlock(ctx, workDir, block, i)
+		blockOutput, err := e.executeCodeBlock(
+			ctx,
+			workDir,
+			block,
+			i,
+			e.WorkDir != "" && e.CleanTempFiles,
+		)
 		if err != nil {
 			output.WriteString(fmt.Sprintf(
 				"Error executing code block %d: %v\n", i, err,
@@ -162,11 +168,16 @@ func (e *CodeExecutor) ExecuteCode(
 
 func (e *CodeExecutor) executeCodeBlock(
 	ctx context.Context, workDir string,
-	block codeexecutor.CodeBlock, blockIndex int,
+	block codeexecutor.CodeBlock,
+	blockIndex int,
+	cleanupSource bool,
 ) (string, error) {
 	filePath, err := e.prepareCodeFile(workDir, block, blockIndex)
 	if err != nil {
 		return "", err
+	}
+	if cleanupSource {
+		defer removeHelperFile(filePath)
 	}
 	cmdArgs := e.buildCommandArgs(block.Language, filePath)
 	if len(cmdArgs) == 0 {
@@ -247,6 +258,13 @@ func (e *CodeExecutor) executeCommand(
 		)
 	}
 	return string(output), nil
+}
+
+func removeHelperFile(path string) {
+	if path == "" {
+		return
+	}
+	_ = os.Remove(path)
 }
 
 // CodeBlockDelimiter returns the code block delimiter used by the local
