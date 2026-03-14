@@ -44,15 +44,16 @@ from knowledge_system.base import KnowledgeBase, SearchResult
 
 RAG_PROMPT = ChatPromptTemplate.from_messages([
     ("system",
-     "You are a helpful assistant that answers questions based on the provided context.\n\n"
-     "CRITICAL RULES (IMPORTANT !!!):\n"
-     "1. Answer ONLY using information from the context below.\n"
-     "2. Do NOT add external knowledge, explanations, or context not found in the provided documents.\n"
-     "3. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated.\n"
-     "4. Be concise and stick strictly to the facts from the provided context.\n"
-     "5. Give only the direct answer.\n\n"
-     "Context:\n{context}"),
-    ("human", "{question}"),
+     "You are a helpful assistant that answers questions using a knowledge base search tool.\n\n"
+     "CRITICAL RULES(IMPORTANT !!!):\n"
+     "1. You MUST call the search tool AT LEAST ONCE before answering. NEVER answer without searching first.\n"
+     "2. Answer ONLY using information retrieved from the search tool.\n"
+     "3. Do NOT add external knowledge, explanations, or context not found in the retrieved documents.\n"
+     "4. Do NOT provide additional details, synonyms, or interpretations beyond what is explicitly stated in the search results.\n"
+     "5. Use the search tool at most 3 times. If you haven't found the answer after 3 searches, provide the best answer from what you found.\n"
+     "6. Be concise and stick strictly to the facts from the retrieved information.\n"
+     "7. Give only the direct answer."),
+    ("human", "Question:\n{question}\n\nSearch tool results:\n{context}"),
 ])
 
 
@@ -135,9 +136,12 @@ class LangChainChainKnowledgeBase(KnowledgeBase):
                 collection_name=self._collection_name,
                 connection=self._pg_connection,
                 use_jsonb=True,
-            )
+                )
         except Exception as e:
-            print(f"   Truncate tables skipped: {e}")
+            raise RuntimeError(
+                "Failed to reset PGVector tables before loading documents. "
+                "Aborting to avoid mixing old and new data."
+            ) from e
 
         texts = []
         file_metadatas = []

@@ -139,9 +139,10 @@ class LangChainKnowledgeBase(KnowledgeBase):
                 use_jsonb=True,
             )
         except Exception as e:
-            # If truncation fails, silently continue
-            # The tables will be created fresh when adding documents
-            print(f"   Truncate tables skipped: {e}")
+            raise RuntimeError(
+                "Failed to reset PGVector tables before loading documents. "
+                "Aborting to avoid mixing old and new data."
+            ) from e
 
         texts = []
         file_metadatas = []
@@ -217,9 +218,9 @@ class LangChainKnowledgeBase(KnowledgeBase):
             if not results:
                 return "No relevant documents found."
 
-            return "\n\n---\n\n".join(
-                f"[Score: {r.score:.3f}]\n{r.content}" for r in results
-            )
+            # Keep the tool observation content-focused to avoid score tokens
+            # leaking into model answer style.
+            return "\n\n---\n\n".join(r.content for r in results)
 
         llm = ChatOpenAI(
             model=self._llm_model,
