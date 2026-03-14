@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -275,9 +276,13 @@ func EmitEvent(ctx context.Context, ch chan<- *Event, e *Event) error {
 }
 
 func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (bool, error) {
+	// Snapshot the event string before sending. Once ch <- e completes, the
+	// receiver owns *e and may mutate it concurrently (e.g. runner copies
+	// invocation fields into it). Reading *e after the send is a data race.
+	eventStr := fmt.Sprintf("%+v", *e)
 	select {
 	case ch <- e:
-		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
 		return true, nil
 	case <-ctx.Done():
 		err := ctx.Err()
@@ -321,10 +326,11 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		if handled, err := tryEmitReadyEvent(ctx, ch, e); handled {
 			return err
 		}
-		// Fall back to a blocking send when the fast path cannot make progress.
+		// Fall back to a blocking send. Snapshot before send — same race as above.
+		eventStr := fmt.Sprintf("%+v", *e)
 		select {
 		case ch <- e:
-			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
 		case <-ctx.Done():
 			err := ctx.Err()
 			log.WarnfContext(
@@ -344,9 +350,11 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	// Snapshot before send — same race as above.
+	eventStr := fmt.Sprintf("%+v", *e)
 	select {
 	case ch <- e:
-		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
 	case <-ctx.Done():
 		err := ctx.Err()
 		log.WarnfContext(
