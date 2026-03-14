@@ -183,7 +183,7 @@ Feb 10, 2022                                 Runtime:                           
 
 `en_int`
 Q: `Who is the director of 'Carole King & James Taylor: Just Call Out My Name' and when is its premiere?`
-A: `January 2 2022`
+A: `Frank Marshall; January 2 2022`
 
 `positive` 文档：
 ```text
