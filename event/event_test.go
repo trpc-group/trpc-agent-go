@@ -277,6 +277,25 @@ func TestEmitEventWithTimeout_TraceEnabled(t *testing.T) {
 	require.Same(t, evt, <-buffered)
 }
 
+func TestEmitEventWithTimeout_TraceEnabled_BlockingSend(t *testing.T) {
+	log.SetTraceEnabled(true)
+	t.Cleanup(func() { log.SetTraceEnabled(false) })
+
+	ctx := context.Background()
+	evt := New("invocationID", "author")
+
+	// Unbuffered channel — tryEmitReadyEvent will return (false, nil) and
+	// fall through to the blocking send, exercising snapshotEvent when trace is on.
+	ch := make(chan *Event)
+	go func() { <-ch }()
+	require.NoError(t, EmitEventWithTimeout(ctx, ch, evt, EmitWithoutTimeout))
+
+	// Timer-based blocking send with trace enabled.
+	ch2 := make(chan *Event)
+	go func() { <-ch2 }()
+	require.NoError(t, EmitEventWithTimeout(ctx, ch2, evt, time.Second))
+}
+
 func TestTryEmitReadyEvent(t *testing.T) {
 	evt := New("invocationID", "author")
 	t.Run("ready send", func(t *testing.T) {

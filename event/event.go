@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -274,10 +275,25 @@ func EmitEvent(ctx context.Context, ch chan<- *Event, e *Event) error {
 	return EmitEventWithTimeout(ctx, ch, e, EmitWithoutTimeout)
 }
 
+// snapshotEvent returns a string representation of e if trace logging is
+// enabled, or an empty string otherwise. The snapshot must be taken while the
+// caller still holds exclusive ownership of *e — before ch <- e — because
+// once the send completes the receiver may mutate the struct concurrently.
+func snapshotEvent(e *Event) string {
+	if !log.IsTraceEnabled() {
+		return ""
+	}
+	return fmt.Sprintf("%+v", *e)
+}
+
 func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (bool, error) {
+	// Snapshot before send: once ch <- e returns, the receiver owns *e and
+	// may mutate it concurrently (runner.copyEventInvocationFields). Reading
+	// *e after the send for logging is a data race.
+	eventStr := snapshotEvent(e)
 	select {
 	case ch <- e:
-		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
 		return true, nil
 	case <-ctx.Done():
 		err := ctx.Err()
@@ -321,10 +337,11 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 		if handled, err := tryEmitReadyEvent(ctx, ch, e); handled {
 			return err
 		}
-		// Fall back to a blocking send when the fast path cannot make progress.
+		// Fall back to a blocking send. Snapshot before send — same race as above.
+		eventStr := snapshotEvent(e)
 		select {
 		case ch <- e:
-			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
 		case <-ctx.Done():
 			err := ctx.Err()
 			log.WarnfContext(
@@ -344,9 +361,11 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	// Snapshot before send — same race as above.
+	eventStr := snapshotEvent(e)
 	select {
 	case ch <- e:
-		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %+v", *e)
+		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
 	case <-ctx.Done():
 		err := ctx.Err()
 		log.WarnfContext(
