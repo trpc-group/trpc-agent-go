@@ -1970,3 +1970,236 @@ func TestModel_Streaming_NormalPathCallbacks(t *testing.T) {
 	require.NotNil(t, completeCallbackResp)
 	require.True(t, completeCallbackResp.Done)
 }
+
+// TestModel_ContextCancellation_NonStreaming verifies that when the context is
+// cancelled and the response channel is unbuffered (no reader), the select
+// branches in the non-streaming path take the ctx.Done() arm without deadlock.
+// Because Go's select is non-deterministic between equally-ready cases, the
+// tests drain the channel but do not assert the exact response count — the
+// important property is that the goroutine terminates (channel closes) without
+// hanging.
+func TestModel_ContextCancellation_NonStreaming(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	}
+	malformedResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+	goodResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{
+				Content:      genai.NewContentFromText("ok", genai.RoleModel),
+				FinishReason: genai.FinishReason("STOP"),
+			},
+		},
+	}
+	apiErr := errors.New("api error")
+
+	drainWithTimeout := func(t *testing.T, ch <-chan *model.Response) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			for range ch {
+			}
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("channel did not close: goroutine likely deadlocked")
+		}
+	}
+
+	t.Run("error_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, apiErr)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("retry_error_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		gomock.InOrder(
+			mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(malformedResp, nil),
+			mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, apiErr),
+		)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("exhausted_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(malformedResp, nil).Times(malformedFunctionCallRetries + 1)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("success_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(goodResp, nil)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+}
+
+// TestModel_ContextCancellation_Streaming verifies that ctx.Done() arms in the
+// streaming path do not deadlock when the context is pre-cancelled.
+func TestModel_ContextCancellation_Streaming(t *testing.T) {
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	malformedChunk := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+	goodChunk := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{
+				Content:      genai.NewContentFromText("ok", genai.RoleModel),
+				FinishReason: genai.FinishReason("STOP"),
+			},
+		},
+	}
+	malformedNonStream := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+	apiErr := errors.New("stream api error")
+
+	drainWithTimeout := func(t *testing.T, ch <-chan *model.Response) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			for range ch {
+			}
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("channel did not close: goroutine likely deadlocked")
+		}
+	}
+
+	t.Run("streaming_retry_error_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSlice([]*genai.GenerateContentResponse{malformedChunk}))
+		mockModels.EXPECT().
+			GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, apiErr)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("streaming_exhausted_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSlice([]*genai.GenerateContentResponse{malformedChunk}))
+		mockModels.EXPECT().
+			GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(malformedNonStream, nil).Times(malformedFunctionCallRetries)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("streaming_normal_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSlice([]*genai.GenerateContentResponse{goodChunk}))
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("mid_stream_error_flush_ctx_cancelled", func(t *testing.T) {
+		// ctx.Done() arm at lines 296-297: mid-stream error with buffered chunks,
+		// ctx pre-cancelled so chunk-flush select takes ctx.Done().
+		streamErr := errors.New("stream fail")
+		successChunk := &genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{
+				{Content: &genai.Content{Parts: []*genai.Part{{Text: "partial"}}}},
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSliceWithError([]*genai.GenerateContentResponse{successChunk}, streamErr))
+
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+}
