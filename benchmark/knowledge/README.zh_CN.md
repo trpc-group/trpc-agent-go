@@ -452,32 +452,35 @@ The game was played on February 7, 2021, at Raymond James Stadium in Glendale, A
 - **Agent 模型**: `DeepSeek-V3.2`
 - **评测模型**: `Qwen3.5-397B-A17B`
 
+> **LangChain-Chain 作为单次检索基线**：与 RGB-en_int 子集类似，我们额外加入 LangChain-Chain（确定性 Chain 流程，每个查询仅触发一次检索）作为基线，用于验证 Agentic 多步检索在多跳推理场景下的优势。
+
 **回答质量：**
 
 
-| 指标                            | LangChain | tRPC-Agent-Go | Agno       | CrewAI | AutoGen    | 胜者             |
-| --------------------------------- | ----------- | --------------- | ------------ | -------- | ------------ | ------------------ |
-| **Faithfulness (忠实度)**       | 0.7639    | 0.7060        | **0.7887** | 0.7460 | 0.7468     | ✅ Agno          |
-| **Answer Relevancy (相关性)**   | 0.5955    | **0.6424**    | 0.5638     | 0.5639 | 0.5342     | ✅ tRPC-Agent-Go |
-| **Answer Correctness (正确性)** | 0.4243    | **0.4984**    | 0.4524     | 0.4371 | 0.4495     | ✅ tRPC-Agent-Go |
-| **Answer Similarity (相似度)**  | 0.4376    | 0.4699        | 0.4715     | 0.4615 | **0.4904** | ✅ AutoGen       |
+| 指标                            | LangChain-Chain *（基线）* | LangChain | tRPC-Agent-Go | Agno       | CrewAI | AutoGen | 胜者             |
+| --------------------------------- | ---------------------------- | ----------- | --------------- | ------------ | -------- | --------- | ------------------ |
+| **Faithfulness (忠实度)**       | 0.4672                     | 0.7639    | 0.7060        | **0.7887** | 0.7460 | 0.7468  | ✅ Agno          |
+| **Answer Relevancy (相关性)**   | 0.5213                     | 0.5955    | **0.6424**    | 0.5638     | 0.5639 | 0.5342  | ✅ tRPC-Agent-Go |
+| **Answer Correctness (正确性)** | 0.4677                     | 0.4243    | **0.4984**    | 0.4524     | 0.4371 | 0.4495  | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)**  | **0.5118**                 | 0.4376    | 0.4699        | 0.4715     | 0.4615 | 0.4904  | ✅ LangChain-Chain |
 
 **上下文质量：**
 
 
-| 指标                                 | LangChain  | tRPC-Agent-Go | Agno   | CrewAI | AutoGen    | 胜者             |
-| -------------------------------------- | ------------ | --------------- | -------- | -------- | ------------ | ------------------ |
-| **Context Precision (精确率)**       | 0.3209     | **0.3574**    | 0.3526 | 0.3409 | 0.3520     | ✅ tRPC-Agent-Go |
-| **Context Recall (召回率)**          | 0.7416     | 0.7733        | 0.7756 | 0.7523 | **0.8111** | ✅ AutoGen       |
-| **Context Entity Recall (实体召回)** | **0.2711** | 0.2667        | 0.2622 | 0.2599 | 0.2556     | ✅ LangChain     |
+| 指标                                 | LangChain-Chain *（基线）* | LangChain  | tRPC-Agent-Go | Agno   | CrewAI | AutoGen    | 胜者               |
+| -------------------------------------- | ---------------------------- | ------------ | --------------- | -------- | -------- | ------------ | -------------------- |
+| **Context Precision (精确率)**       | **0.3820**                 | 0.3209     | 0.3574        | 0.3526 | 0.3409 | 0.3520     | ✅ LangChain-Chain |
+| **Context Recall (召回率)**          | 0.5644                     | 0.7416     | 0.7733        | 0.7756 | 0.7523 | **0.8111** | ✅ AutoGen         |
+| **Context Entity Recall (实体召回)** | 0.2422                     | **0.2711** | 0.2667        | 0.2622 | 0.2599 | 0.2556     | ✅ LangChain       |
 
 **观察：**
 
 1. **多跳查询难度显著高于单跳**：所有指标相比 RGB 和 HuggingFace 数据集均大幅下降，反映了跨文档推理的固有难度。
 2. **tRPC-Agent-Go 在回答质量上领先**：**Answer Relevancy** (0.6424) 和 **Answer Correctness** (0.4984) 均排名第一，继续保持生成准确答案的优势。
-3. **AutoGen 上下文召回最强**：**Context Recall** (0.8111) 显著领先其他框架，**Answer Similarity** (0.4904) 也排名第一，表明检索到了更全面的证据。
+3. **AutoGen 上下文召回最强**：**Context Recall** (0.8111) 显著领先其他框架，表明检索到了更全面的证据。
 4. **Agno 忠实度最高**：**Faithfulness** (0.7887) 排名第一，表明在多跳推理中更好地遵循了检索内容。
-5. **Context Precision 普遍偏低（~0.32-0.36）**：与 RGB-en_int 子集类似，多跳查询使所有框架的检索精度下降，因为相关证据分散在多个文档中。
+5. **Context Precision 普遍偏低（~0.32-0.38）**：与 RGB-en_int 子集类似，多跳查询使所有框架的检索精度下降，因为相关证据分散在多个文档中。
+6. **Agentic 多步检索 vs 单次检索**：LangChain-Chain（单次检索）Faithfulness 仅 0.4672、Context Recall 0.5644，远低于所有 Agentic 框架（Faithfulness 0.70–0.79、Context Recall 0.74–0.81）。但 LangChain-Chain 在 Answer Similarity (0.5118) 和 Context Precision (0.3820) 排名第一，与 RGB-en_int 的规律一致——单次检索返回的上下文更紧凑，精确率更高，但召回率和忠实度显著不足。
 
 ---
 

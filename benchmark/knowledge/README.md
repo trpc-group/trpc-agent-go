@@ -396,30 +396,33 @@ Factual queries with different question characteristics from en subset. (Origina
 - **Agent Model**: `DeepSeek-V3.2`
 - **Evaluation Model**: `Qwen3.5-397B-A17B`
 
+> **LangChain-Chain as single-retrieval baseline**: Similar to the RGB-en_int subset, we additionally include LangChain-Chain (deterministic chain pipeline, exactly one retrieval per query) as a baseline to demonstrate the advantage of agentic multi-step retrieval in multi-hop reasoning scenarios.
+
 **Answer Quality:**
 
-| Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
-|--------|-----------|---------------|------|--------|---------|------|
-| **Faithfulness** | 0.7639 | 0.7060 | **0.7887** | 0.7460 | 0.7468 | ✅ Agno |
-| **Answer Relevancy** | 0.5955 | **0.6424** | 0.5638 | 0.5639 | 0.5342 | ✅ tRPC-Agent-Go |
-| **Answer Correctness** | 0.4243 | **0.4984** | 0.4524 | 0.4371 | 0.4495 | ✅ tRPC-Agent-Go |
-| **Answer Similarity** | 0.4376 | 0.4699 | 0.4715 | 0.4615 | **0.4904** | ✅ AutoGen |
+| Metric | LangChain-Chain *(baseline)* | LangChain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
+|--------|------------------------------|-----------|---------------|------|--------|---------|------|
+| **Faithfulness** | 0.4672 | 0.7639 | 0.7060 | **0.7887** | 0.7460 | 0.7468 | ✅ Agno |
+| **Answer Relevancy** | 0.5213 | 0.5955 | **0.6424** | 0.5638 | 0.5639 | 0.5342 | ✅ tRPC-Agent-Go |
+| **Answer Correctness** | 0.4677 | 0.4243 | **0.4984** | 0.4524 | 0.4371 | 0.4495 | ✅ tRPC-Agent-Go |
+| **Answer Similarity** | **0.5118** | 0.4376 | 0.4699 | 0.4715 | 0.4615 | 0.4904 | ✅ LangChain-Chain |
 
 **Context Quality:**
 
-| Metric | LangChain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
-|--------|-----------|---------------|------|--------|---------|------|
-| **Context Precision** | 0.3209 | **0.3574** | 0.3526 | 0.3409 | 0.3520 | ✅ tRPC-Agent-Go |
-| **Context Recall** | 0.7416 | 0.7733 | 0.7756 | 0.7523 | **0.8111** | ✅ AutoGen |
-| **Context Entity Recall** | **0.2711** | 0.2667 | 0.2622 | 0.2599 | 0.2556 | ✅ LangChain |
+| Metric | LangChain-Chain *(baseline)* | LangChain | tRPC-Agent-Go | Agno | CrewAI | AutoGen | Best |
+|--------|------------------------------|-----------|---------------|------|--------|---------|------|
+| **Context Precision** | **0.3820** | 0.3209 | 0.3574 | 0.3526 | 0.3409 | 0.3520 | ✅ LangChain-Chain |
+| **Context Recall** | 0.5644 | 0.7416 | 0.7733 | 0.7756 | 0.7523 | **0.8111** | ✅ AutoGen |
+| **Context Entity Recall** | 0.2422 | **0.2711** | 0.2667 | 0.2622 | 0.2599 | 0.2556 | ✅ LangChain |
 
 **Observations:**
 
 1. **Multi-hop queries are significantly harder than single-hop**: All metrics drop substantially compared to RGB and HuggingFace datasets, reflecting the inherent difficulty of reasoning across multiple documents.
 2. **tRPC-Agent-Go leads in answer quality**: Ranks 1st in **Answer Relevancy** (0.6424) and **Answer Correctness** (0.4984), continuing its advantage in generating accurate answers.
-3. **AutoGen has the strongest context recall**: **Context Recall** (0.8111) significantly outperforms all other frameworks, and **Answer Similarity** (0.4904) also ranks 1st, indicating more comprehensive evidence retrieval.
+3. **AutoGen has the strongest context recall**: **Context Recall** (0.8111) significantly outperforms all other frameworks, indicating more comprehensive evidence retrieval.
 4. **Agno has the highest faithfulness**: **Faithfulness** (0.7887) ranks 1st, indicating better adherence to retrieved content for multi-hop reasoning.
-5. **Context Precision is universally low (~0.32-0.36)**: Similar to the RGB-en_int subset, multi-hop queries push all frameworks' retrieval precision down, as relevant evidence is scattered across multiple documents.
+5. **Context Precision is universally low (~0.32-0.38)**: Similar to the RGB-en_int subset, multi-hop queries push all frameworks' retrieval precision down, as relevant evidence is scattered across multiple documents.
+6. **Agentic multi-step retrieval vs single-retrieval**: LangChain-Chain (single retrieval) scores only 0.4672 Faithfulness and 0.5644 Context Recall, far below all agentic frameworks (Faithfulness 0.70–0.79, Context Recall 0.74–0.81). However, LangChain-Chain ranks 1st in Answer Similarity (0.5118) and Context Precision (0.3820), consistent with the RGB-en_int pattern — single retrieval returns more compact context with higher precision, but significantly lacks recall and faithfulness.
 
 ---
 
