@@ -137,11 +137,21 @@ const malformedFunctionCallRetries = 2
 func retryConfigForMalformed(cfg *genai.GenerateContentConfig) *genai.GenerateContentConfig {
 	retry := *cfg // shallow copy — sufficient for scalar fields
 	retry.Temperature = genai.Ptr(float32(0))
-	retry.ToolConfig = &genai.ToolConfig{
-		FunctionCallingConfig: &genai.FunctionCallingConfig{
-			Mode: genai.FunctionCallingConfigModeAny,
-		},
+
+	// Clone ToolConfig so we don't mutate the caller's config, then only
+	// override FunctionCallingConfig.Mode.  All other ToolConfig fields
+	// (e.g. AllowedFunctionNames) are preserved.
+	toolCfg := &genai.ToolConfig{}
+	if cfg.ToolConfig != nil {
+		*toolCfg = *cfg.ToolConfig
 	}
+	fcCfg := &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeAny}
+	if cfg.ToolConfig != nil && cfg.ToolConfig.FunctionCallingConfig != nil {
+		*fcCfg = *cfg.ToolConfig.FunctionCallingConfig
+		fcCfg.Mode = genai.FunctionCallingConfigModeAny
+	}
+	toolCfg.FunctionCallingConfig = fcCfg
+	retry.ToolConfig = toolCfg
 	return &retry
 }
 
@@ -224,6 +234,23 @@ func (m *Model) handleNonStreamingResponse(
 			}
 			return
 		}
+	}
+
+	// If all retries are exhausted but the response is still malformed, return
+	// an error rather than silently emitting a broken response.
+	if isMalformedFunctionCall(chatCompletion) {
+		select {
+		case responseChan <- &model.Response{
+			Error: &model.ResponseError{
+				Message: "gemini: MALFORMED_FUNCTION_CALL persists after retries",
+				Type:    model.ErrorTypeAPIError,
+			},
+			Timestamp: time.Now(),
+			Done:      true,
+		}:
+		case <-ctx.Done():
+		}
+		return
 	}
 
 	// Call response callback on successful completion.
@@ -309,6 +336,22 @@ func (m *Model) handleStreamingResponse(
 			}
 			select {
 			case responseChan <- errorResponse:
+			case <-ctx.Done():
+			}
+			return
+		}
+		// If all retries exhausted but still malformed, emit an error rather
+		// than silently returning a broken response.
+		if isMalformedFunctionCall(retryRaw) {
+			select {
+			case responseChan <- &model.Response{
+				Error: &model.ResponseError{
+					Message: "gemini: MALFORMED_FUNCTION_CALL persists after retries",
+					Type:    model.ErrorTypeAPIError,
+				},
+				Timestamp: time.Now(),
+				Done:      true,
+			}:
 			case <-ctx.Done():
 			}
 			return

@@ -1491,22 +1491,48 @@ func TestIsMalformedModelResponse(t *testing.T) {
 // TestRetryConfigForMalformed verifies that retryConfigForMalformed sets
 // temperature=0 and FunctionCallingMode=ANY while preserving other fields.
 func TestRetryConfigForMalformed(t *testing.T) {
-	origTemp := float32(0.9)
-	orig := &genai.GenerateContentConfig{
-		Temperature:     &origTemp,
-		MaxOutputTokens: 100,
-	}
-	retry := retryConfigForMalformed(orig)
+	t.Run("no existing ToolConfig", func(t *testing.T) {
+		origTemp := float32(0.9)
+		orig := &genai.GenerateContentConfig{
+			Temperature:     &origTemp,
+			MaxOutputTokens: 100,
+		}
+		retry := retryConfigForMalformed(orig)
 
-	require.NotNil(t, retry.Temperature)
-	require.Equal(t, float32(0), *retry.Temperature, "temperature must be 0")
-	require.NotNil(t, retry.ToolConfig)
-	require.NotNil(t, retry.ToolConfig.FunctionCallingConfig)
-	require.Equal(t, genai.FunctionCallingConfigModeAny, retry.ToolConfig.FunctionCallingConfig.Mode)
-	// Original must not be mutated (shallow copy).
-	require.Equal(t, float32(0.9), *orig.Temperature)
-	// Non-temperature fields preserved.
-	require.Equal(t, int32(100), retry.MaxOutputTokens)
+		require.NotNil(t, retry.Temperature)
+		require.Equal(t, float32(0), *retry.Temperature, "temperature must be 0")
+		require.NotNil(t, retry.ToolConfig)
+		require.NotNil(t, retry.ToolConfig.FunctionCallingConfig)
+		require.Equal(t, genai.FunctionCallingConfigModeAny, retry.ToolConfig.FunctionCallingConfig.Mode)
+		// Original must not be mutated.
+		require.Equal(t, float32(0.9), *orig.Temperature)
+		require.Nil(t, orig.ToolConfig)
+		// Non-temperature fields preserved.
+		require.Equal(t, int32(100), retry.MaxOutputTokens)
+	})
+
+	t.Run("preserves existing ToolConfig fields", func(t *testing.T) {
+		origTemp := float32(0.7)
+		allowedFns := []string{"myFunc"}
+		orig := &genai.GenerateContentConfig{
+			Temperature: &origTemp,
+			ToolConfig: &genai.ToolConfig{
+				FunctionCallingConfig: &genai.FunctionCallingConfig{
+					Mode:                 genai.FunctionCallingConfigModeAuto,
+					AllowedFunctionNames: allowedFns,
+				},
+			},
+		}
+		retry := retryConfigForMalformed(orig)
+
+		require.Equal(t, float32(0), *retry.Temperature)
+		// Mode is overridden to ANY.
+		require.Equal(t, genai.FunctionCallingConfigModeAny, retry.ToolConfig.FunctionCallingConfig.Mode)
+		// AllowedFunctionNames is preserved.
+		require.Equal(t, allowedFns, retry.ToolConfig.FunctionCallingConfig.AllowedFunctionNames)
+		// Original ToolConfig is not mutated.
+		require.Equal(t, genai.FunctionCallingConfigModeAuto, orig.ToolConfig.FunctionCallingConfig.Mode)
+	})
 }
 
 // TestModel_NonStreaming_MalformedFunctionCallRetry verifies that when
@@ -1639,8 +1665,8 @@ func TestModel_Streaming_MalformedFunctionCallRetry(t *testing.T) {
 	for r := range respChan {
 		responses = append(responses, r)
 	}
-	// The malformed chunk is emitted as a partial, then the final Done
-	// response is replaced with the retry result.
+	// Partial chunks from the malformed stream are emitted with Done=false.
+	// The final Done=true response is the retry result, not the malformed one.
 	var finalResp *model.Response
 	for _, r := range responses {
 		if r.Done {
@@ -1749,4 +1775,91 @@ func TestModel_Streaming_MalformedFunctionCallWithCallback(t *testing.T) {
 
 	require.NotNil(t, callbackResp, "chatStreamCompleteCallback must be called")
 	require.Equal(t, "callback-ok", callbackResp.Choices[0].Message.Content)
+}
+
+// TestModel_NonStreaming_MalformedFunctionCallExhausted verifies that when all
+// retries are exhausted and the response is still MALFORMED_FUNCTION_CALL, an
+// error response is emitted instead of silently returning the broken response.
+func TestModel_NonStreaming_MalformedFunctionCallExhausted(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	}
+	malformedResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	// Initial call + malformedFunctionCallRetries (2) retries all return malformed.
+	mockModels.EXPECT().
+		GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(malformedResp, nil).
+		Times(1 + malformedFunctionCallRetries)
+
+	m := &Model{client: mockClient}
+	respChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for r := range respChan {
+		responses = append(responses, r)
+	}
+	require.Len(t, responses, 1)
+	require.True(t, responses[0].Done)
+	require.NotNil(t, responses[0].Error)
+	require.Contains(t, responses[0].Error.Message, "MALFORMED_FUNCTION_CALL persists after retries")
+}
+
+// TestModel_Streaming_MalformedFunctionCallExhausted verifies that when all
+// non-streaming retries after a malformed stream are exhausted and still
+// malformed, an error response is emitted instead of the broken response.
+func TestModel_Streaming_MalformedFunctionCallExhausted(t *testing.T) {
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	malformedChunk := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	mockModels.EXPECT().
+		GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(seqFromSlice([]*genai.GenerateContentResponse{malformedChunk}))
+	// All non-streaming retries also return malformed.
+	mockModels.EXPECT().
+		GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(malformedChunk, nil).
+		Times(malformedFunctionCallRetries)
+
+	m := &Model{client: mockClient}
+	respChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for r := range respChan {
+		responses = append(responses, r)
+	}
+	var errResp *model.Response
+	for _, r := range responses {
+		if r.Error != nil {
+			errResp = r
+		}
+	}
+	require.NotNil(t, errResp, "error response must be emitted when all retries exhausted")
+	require.True(t, errResp.Done)
+	require.Contains(t, errResp.Error.Message, "MALFORMED_FUNCTION_CALL persists after retries")
 }
