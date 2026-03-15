@@ -14,7 +14,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/genai"
@@ -23,6 +27,14 @@ import (
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+// geminiCallSeq is a process-wide counter used to generate synthetic IDs for
+// Gemini FunctionCall objects that do not include an ID in the response.
+// Vertex AI does not always populate FunctionCall.ID (it is optional per the
+// genai API). Without a non-empty ID, the framework's SanitizeMessagesWithTools
+// treats the corresponding tool result as orphaned and downgrades it to a user
+// message, injecting "[orphan_tool_result]" noise into the conversation history.
+var geminiCallSeq uint64
 
 // Model implements the model.Model interface for Gemini API.
 type Model struct {
@@ -222,8 +234,20 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 				}
 				if part.FunctionCall != nil {
 					args, _ := json.Marshal(part.FunctionCall.Args)
+					// Vertex AI does not always populate FunctionCall.ID.
+					// Without a non-empty ID, SanitizeMessagesWithTools treats the
+					// corresponding tool result as orphaned and downgrades it to a
+					// user message, injecting "[orphan_tool_result]" noise into the
+					// conversation history. Generate a synthetic sequential ID so
+					// the framework can match results to their calls.
+					// Note: generateContent matching is by name and position, not by
+					// ID; the synthetic ID only serves the framework's internal tracking.
+					id := part.FunctionCall.ID
+					if id == "" {
+						id = fmt.Sprintf("gemini_call_%d", atomic.AddUint64(&geminiCallSeq, 1))
+					}
 					toolCalls = append(toolCalls, model.ToolCall{
-						ID: part.FunctionCall.ID,
+						ID: id,
 						Function: model.FunctionDefinitionParam{
 							Name:      part.FunctionCall.Name,
 							Arguments: args,
@@ -450,6 +474,25 @@ func (m *Model) convertMessages(messages []model.Message) []*genai.Content {
 func (m *Model) convertMessageContent(
 	msg model.Message,
 ) []*genai.Content {
+	// Gemini generateContent requires tool results to be sent as FunctionResponse
+	// parts (role=user) rather than plain text. The API matches responses to calls
+	// by name and position in the contents array; no explicit ID is required.
+	// See: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling
+	if msg.Role == model.RoleTool {
+		var result map[string]any
+		if err := json.Unmarshal([]byte(msg.Content), &result); err != nil {
+			// Non-JSON content (e.g. error strings) — wrap in a plain map so
+			// the FunctionResponse.Response field is always a valid JSON object.
+			result = map[string]any{"output": msg.Content}
+		}
+		part := &genai.Part{
+			FunctionResponse: &genai.FunctionResponse{
+				Name:     msg.ToolName,
+				Response: result,
+			},
+		}
+		return []*genai.Content{genai.NewContentFromParts([]*genai.Part{part}, genai.RoleUser)}
+	}
 	var (
 		contentParts []*genai.Content
 	)
@@ -476,8 +519,17 @@ func (m *Model) convertMessageContent(
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
-	result := make([]*genai.Tool, 0, len(tools))
-	for _, t := range tools {
+	// Vertex AI requires all function declarations to be grouped into a single
+	// Tool object. Sending one Tool per function causes a 400 INVALID_ARGUMENT:
+	// "Multiple tools are supported only when they are all search tools."
+	if len(tools) == 0 {
+		return nil
+	}
+	// Sort keys for deterministic declaration order across runs.
+	keys := slices.Sorted(maps.Keys(tools))
+	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
+	for _, k := range keys {
+		t := tools[k]
 		decl := t.Declaration()
 		funcDeclaration := &genai.FunctionDeclaration{
 			Description: decl.Description,
@@ -491,13 +543,9 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 		if decl.OutputSchema != nil {
 			funcDeclaration.ResponseJsonSchema = normalizeToolSchema(decl.Name, "output", decl.OutputSchema)
 		}
-		result = append(result, &genai.Tool{
-			FunctionDeclarations: []*genai.FunctionDeclaration{
-				funcDeclaration,
-			},
-		})
+		decls = append(decls, funcDeclaration)
 	}
-	return result
+	return []*genai.Tool{{FunctionDeclarations: decls}}
 }
 
 func normalizeToolSchema(toolName, schemaKind string, schema *tool.Schema) any {

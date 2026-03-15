@@ -261,6 +261,63 @@ func TestNormalizeToolSchema_MarshalErrorFallsBack(t *testing.T) {
 	require.Empty(t, props)
 }
 
+// namedTool is a test helper like Tool but with a configurable name,
+// used to create distinct tool entries when testing multi-tool behaviour.
+type namedTool struct {
+	name        string
+	inputSchema *tool.Schema
+}
+
+func (t *namedTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        t.name,
+		Description: t.name + " description",
+		InputSchema: t.inputSchema,
+	}
+}
+
+// TestModel_convertTools_EmptyMapReturnsNil verifies that convertTools returns
+// nil (not an empty slice) when the tool map is empty, so the caller never
+// sends an empty "tools" array to the Gemini API.
+func TestModel_convertTools_EmptyMapReturnsNil(t *testing.T) {
+	m := &Model{}
+	require.Nil(t, m.convertTools(nil))
+	require.Nil(t, m.convertTools(map[string]tool.Tool{}))
+}
+
+// TestModel_convertTools_MultipleToolsGroupedIntoSingleTool verifies the
+// Vertex AI compatibility fix: all function declarations must be grouped into
+// a single *genai.Tool object. Vertex AI rejects multiple Tool objects with:
+// "Multiple tools are supported only when they are all search tools."
+// It also verifies that declarations are emitted in sorted-key order so the
+// output is deterministic across runs.
+func TestModel_convertTools_MultipleToolsGroupedIntoSingleTool(t *testing.T) {
+	m := &Model{}
+
+	tools := map[string]tool.Tool{
+		"alpha": &namedTool{name: "alpha", inputSchema: &tool.Schema{Type: "object"}},
+		"beta":  &namedTool{name: "beta"},
+		"gamma": &namedTool{name: "gamma", inputSchema: &tool.Schema{Type: "string"}},
+	}
+
+	converted := m.convertTools(tools)
+
+	// Must produce exactly one *genai.Tool (Vertex AI constraint).
+	require.Len(t, converted, 1, "all declarations must be grouped into a single genai.Tool")
+
+	// Must contain one declaration per input tool.
+	require.Len(t, converted[0].FunctionDeclarations, len(tools),
+		"every tool must produce exactly one FunctionDeclaration")
+
+	// Declarations must be in sorted (alphabetical) key order for determinism.
+	got := make([]string, len(converted[0].FunctionDeclarations))
+	for i, fd := range converted[0].FunctionDeclarations {
+		got[i] = fd.Name
+	}
+	require.Equal(t, []string{"alpha", "beta", "gamma"}, got,
+		"declarations must be sorted by tool name for deterministic output")
+}
+
 func TestNormalizeToolSchema_NilSchemaReturnsNil(t *testing.T) {
 	require.Nil(t, normalizeToolSchema("tool", "input", nil))
 }
@@ -1310,4 +1367,92 @@ func TestModel_convertContentPartNil(t *testing.T) {
 			assert.Equalf(t, tt.want, m.convertContentPart(tt.args.part), "convertContentPart(%v)", tt.args.part)
 		})
 	}
+}
+
+// TestModel_convertContentBlock_SyntheticFunctionCallID verifies the Vertex AI
+// compatibility fix: when Gemini omits FunctionCall.ID, convertContentBlock
+// generates a synthetic sequential ID ("gemini_call_N") so the framework's
+// SanitizeMessagesWithTools can match tool results to their calls.
+func TestModel_convertContentBlock_SyntheticFunctionCallID(t *testing.T) {
+	m := &Model{}
+
+	candidates := []*genai.Candidate{
+		{
+			Content: genai.NewContentFromParts([]*genai.Part{
+				{FunctionCall: &genai.FunctionCall{Name: "my_tool", Args: map[string]any{"x": 1.0}}},
+			}, genai.RoleModel),
+		},
+	}
+
+	msg, _ := m.convertContentBlock(candidates)
+
+	require.Len(t, msg.ToolCalls, 1)
+	tc := msg.ToolCalls[0]
+	require.NotEmpty(t, tc.ID, "ID must be non-empty when Vertex AI omits FunctionCall.ID")
+	require.Contains(t, tc.ID, "gemini_call_", "synthetic ID must follow the gemini_call_N pattern")
+	require.Equal(t, "my_tool", tc.Function.Name)
+}
+
+// TestModel_convertContentBlock_PreservesExistingFunctionCallID verifies that
+// when Gemini (non-Vertex) does populate FunctionCall.ID, that original ID is
+// preserved unchanged.
+func TestModel_convertContentBlock_PreservesExistingFunctionCallID(t *testing.T) {
+	m := &Model{}
+
+	const wantID = "call-abc-123"
+	candidates := []*genai.Candidate{
+		{
+			Content: genai.NewContentFromParts([]*genai.Part{
+				{FunctionCall: &genai.FunctionCall{ID: wantID, Name: "my_tool"}},
+			}, genai.RoleModel),
+		},
+	}
+
+	msg, _ := m.convertContentBlock(candidates)
+
+	require.Len(t, msg.ToolCalls, 1)
+	require.Equal(t, wantID, msg.ToolCalls[0].ID, "existing ID must not be replaced by a synthetic one")
+}
+
+// TestModel_convertMessageContent_ToolRoleProducesFunctionResponse verifies
+// that a RoleTool message is converted to a FunctionResponse part (role=user)
+// rather than plain text, as required by the Gemini generateContent API.
+func TestModel_convertMessageContent_ToolRoleProducesFunctionResponse(t *testing.T) {
+	m := &Model{}
+
+	msg := model.Message{
+		Role:     model.RoleTool,
+		ToolName: "my_tool",
+		Content:  `{"status":"ok","value":42}`,
+	}
+
+	contents := m.convertMessageContent(msg)
+
+	require.Len(t, contents, 1)
+	require.Equal(t, genai.RoleUser, contents[0].Role)
+	require.Len(t, contents[0].Parts, 1)
+	fr := contents[0].Parts[0].FunctionResponse
+	require.NotNil(t, fr, "part must be a FunctionResponse, not plain text")
+	require.Equal(t, "my_tool", fr.Name)
+	require.Equal(t, map[string]any{"status": "ok", "value": float64(42)}, fr.Response)
+}
+
+// TestModel_convertMessageContent_ToolRoleNonJSONWrapsInOutput verifies that
+// non-JSON tool output (e.g. an error string) is wrapped in {"output": ...}
+// so the FunctionResponse.Response field is always a valid JSON object.
+func TestModel_convertMessageContent_ToolRoleNonJSONWrapsInOutput(t *testing.T) {
+	m := &Model{}
+
+	msg := model.Message{
+		Role:     model.RoleTool,
+		ToolName: "my_tool",
+		Content:  "tool execution failed: permission denied",
+	}
+
+	contents := m.convertMessageContent(msg)
+
+	require.Len(t, contents, 1)
+	fr := contents[0].Parts[0].FunctionResponse
+	require.NotNil(t, fr)
+	require.Equal(t, map[string]any{"output": "tool execution failed: permission denied"}, fr.Response)
 }
