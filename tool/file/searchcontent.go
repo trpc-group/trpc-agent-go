@@ -29,16 +29,16 @@ import (
 // searchContentRequest represents the input for the search content operation.
 type searchContentRequest struct {
 	// Path is a relative directory under base_directory.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"description=Relative directory path under base_directory or workspace:// directory ref; can also be a single local file path"`
 	// FilePattern selects files (glob or workspace://... for an exported
 	// workspace file).
-	FilePattern string `json:"file_pattern"`
+	FilePattern string `json:"file_pattern" jsonschema:"description=Glob pattern for files to search or a direct workspace:// or artifact:// file ref"`
 	// FileCaseSensitive controls glob case matching.
-	FileCaseSensitive bool `json:"file_case_sensitive"`
+	FileCaseSensitive bool `json:"file_case_sensitive" jsonschema:"description=Whether file pattern matching should be case-sensitive"`
 	// ContentPattern is a regex applied per line.
-	ContentPattern string `json:"content_pattern"`
+	ContentPattern string `json:"content_pattern" jsonschema:"description=Regular expression to search for within matched files"`
 	// ContentCaseSensitive controls regex case matching.
-	ContentCaseSensitive bool `json:"content_case_sensitive"`
+	ContentCaseSensitive bool `json:"content_case_sensitive" jsonschema:"description=Whether regular expression matching should be case-sensitive"`
 }
 
 // searchContentResponse represents the output from the search content
