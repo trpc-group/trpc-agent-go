@@ -261,6 +261,62 @@ func TestNormalizeToolSchema_MarshalErrorFallsBack(t *testing.T) {
 	require.Empty(t, props)
 }
 
+// namedTool is a test helper like Tool but with a configurable name,
+// used to create distinct tool entries when testing multi-tool behaviour.
+type namedTool struct {
+	name        string
+	inputSchema *tool.Schema
+}
+
+func (t *namedTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        t.name,
+		Description: t.name + " description",
+		InputSchema: t.inputSchema,
+	}
+}
+
+// TestModel_convertTools_EmptyMapReturnsNil verifies that convertTools returns
+// nil (not an empty slice) when the tool map is empty, so the caller never
+// sends an empty "tools" array to the Gemini API.
+func TestModel_convertTools_EmptyMapReturnsNil(t *testing.T) {
+	m := &Model{}
+	require.Nil(t, m.convertTools(nil))
+	require.Nil(t, m.convertTools(map[string]tool.Tool{}))
+}
+
+// TestModel_convertTools_MultipleToolsGroupedIntoSingleTool verifies the
+// Vertex AI compatibility fix: all function declarations must be grouped into
+// a single *genai.Tool object. Vertex AI rejects multiple Tool objects with:
+// "Multiple tools are supported only when they are all search tools."
+func TestModel_convertTools_MultipleToolsGroupedIntoSingleTool(t *testing.T) {
+	m := &Model{}
+
+	tools := map[string]tool.Tool{
+		"alpha": &namedTool{name: "alpha", inputSchema: &tool.Schema{Type: "object"}},
+		"beta":  &namedTool{name: "beta"},
+		"gamma": &namedTool{name: "gamma", inputSchema: &tool.Schema{Type: "string"}},
+	}
+
+	converted := m.convertTools(tools)
+
+	// Must produce exactly one *genai.Tool (Vertex AI constraint).
+	require.Len(t, converted, 1, "all declarations must be grouped into a single genai.Tool")
+
+	// Must contain one declaration per input tool.
+	require.Len(t, converted[0].FunctionDeclarations, len(tools),
+		"every tool must produce exactly one FunctionDeclaration")
+
+	// Each declaration must have its name preserved.
+	names := make(map[string]bool, len(tools))
+	for _, fd := range converted[0].FunctionDeclarations {
+		names[fd.Name] = true
+	}
+	for name := range tools {
+		require.True(t, names[name], "declaration for %q must be present", name)
+	}
+}
+
 func TestNormalizeToolSchema_NilSchemaReturnsNil(t *testing.T) {
 	require.Nil(t, normalizeToolSchema("tool", "input", nil))
 }

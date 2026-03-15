@@ -476,7 +476,13 @@ func (m *Model) convertMessageContent(
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
-	result := make([]*genai.Tool, 0, len(tools))
+	// Vertex AI requires all function declarations to be grouped into a single
+	// Tool object. Sending one Tool per function causes a 400 INVALID_ARGUMENT:
+	// "Multiple tools are supported only when they are all search tools."
+	if len(tools) == 0 {
+		return nil
+	}
+	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
 	for _, t := range tools {
 		decl := t.Declaration()
 		funcDeclaration := &genai.FunctionDeclaration{
@@ -491,13 +497,9 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 		if decl.OutputSchema != nil {
 			funcDeclaration.ResponseJsonSchema = normalizeToolSchema(decl.Name, "output", decl.OutputSchema)
 		}
-		result = append(result, &genai.Tool{
-			FunctionDeclarations: []*genai.FunctionDeclaration{
-				funcDeclaration,
-			},
-		})
+		decls = append(decls, funcDeclaration)
 	}
-	return result
+	return []*genai.Tool{{FunctionDeclarations: decls}}
 }
 
 func normalizeToolSchema(toolName, schemaKind string, schema *tool.Schema) any {
