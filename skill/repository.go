@@ -303,7 +303,7 @@ func splitFrontMatter(text string) (map[string]string, string) {
 // receive a plain string.
 func parseFrontMatterYAML(src string) map[string]string {
 	m := map[string]string{}
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := yaml.Unmarshal([]byte(src), &raw); err != nil {
 		return m
 	}
