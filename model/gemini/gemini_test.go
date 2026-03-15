@@ -1368,3 +1368,91 @@ func TestModel_convertContentPartNil(t *testing.T) {
 		})
 	}
 }
+
+// TestModel_convertContentBlock_SyntheticFunctionCallID verifies the Vertex AI
+// compatibility fix: when Gemini omits FunctionCall.ID, convertContentBlock
+// generates a synthetic sequential ID ("gemini_call_N") so the framework's
+// SanitizeMessagesWithTools can match tool results to their calls.
+func TestModel_convertContentBlock_SyntheticFunctionCallID(t *testing.T) {
+	m := &Model{}
+
+	candidates := []*genai.Candidate{
+		{
+			Content: genai.NewContentFromParts([]*genai.Part{
+				{FunctionCall: &genai.FunctionCall{Name: "my_tool", Args: map[string]any{"x": 1.0}}},
+			}, genai.RoleModel),
+		},
+	}
+
+	msg, _ := m.convertContentBlock(candidates)
+
+	require.Len(t, msg.ToolCalls, 1)
+	tc := msg.ToolCalls[0]
+	require.NotEmpty(t, tc.ID, "ID must be non-empty when Vertex AI omits FunctionCall.ID")
+	require.Contains(t, tc.ID, "gemini_call_", "synthetic ID must follow the gemini_call_N pattern")
+	require.Equal(t, "my_tool", tc.Function.Name)
+}
+
+// TestModel_convertContentBlock_PreservesExistingFunctionCallID verifies that
+// when Gemini (non-Vertex) does populate FunctionCall.ID, that original ID is
+// preserved unchanged.
+func TestModel_convertContentBlock_PreservesExistingFunctionCallID(t *testing.T) {
+	m := &Model{}
+
+	const wantID = "call-abc-123"
+	candidates := []*genai.Candidate{
+		{
+			Content: genai.NewContentFromParts([]*genai.Part{
+				{FunctionCall: &genai.FunctionCall{ID: wantID, Name: "my_tool"}},
+			}, genai.RoleModel),
+		},
+	}
+
+	msg, _ := m.convertContentBlock(candidates)
+
+	require.Len(t, msg.ToolCalls, 1)
+	require.Equal(t, wantID, msg.ToolCalls[0].ID, "existing ID must not be replaced by a synthetic one")
+}
+
+// TestModel_convertMessageContent_ToolRoleProducesFunctionResponse verifies
+// that a RoleTool message is converted to a FunctionResponse part (role=user)
+// rather than plain text, as required by the Gemini generateContent API.
+func TestModel_convertMessageContent_ToolRoleProducesFunctionResponse(t *testing.T) {
+	m := &Model{}
+
+	msg := model.Message{
+		Role:     model.RoleTool,
+		ToolName: "my_tool",
+		Content:  `{"status":"ok","value":42}`,
+	}
+
+	contents := m.convertMessageContent(msg)
+
+	require.Len(t, contents, 1)
+	require.Equal(t, genai.RoleUser, contents[0].Role)
+	require.Len(t, contents[0].Parts, 1)
+	fr := contents[0].Parts[0].FunctionResponse
+	require.NotNil(t, fr, "part must be a FunctionResponse, not plain text")
+	require.Equal(t, "my_tool", fr.Name)
+	require.Equal(t, map[string]any{"status": "ok", "value": float64(42)}, fr.Response)
+}
+
+// TestModel_convertMessageContent_ToolRoleNonJSONWrapsInOutput verifies that
+// non-JSON tool output (e.g. an error string) is wrapped in {"output": ...}
+// so the FunctionResponse.Response field is always a valid JSON object.
+func TestModel_convertMessageContent_ToolRoleNonJSONWrapsInOutput(t *testing.T) {
+	m := &Model{}
+
+	msg := model.Message{
+		Role:     model.RoleTool,
+		ToolName: "my_tool",
+		Content:  "tool execution failed: permission denied",
+	}
+
+	contents := m.convertMessageContent(msg)
+
+	require.Len(t, contents, 1)
+	fr := contents[0].Parts[0].FunctionResponse
+	require.NotNil(t, fr)
+	require.Equal(t, map[string]any{"output": "tool execution failed: permission denied"}, fr.Response)
+}
