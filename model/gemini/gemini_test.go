@@ -1620,9 +1620,9 @@ func TestModel_NonStreaming_MalformedFunctionCallRetryError(t *testing.T) {
 }
 
 // TestModel_Streaming_MalformedFunctionCallRetry verifies that when the
-// streaming accumulator ends with MALFORMED_FUNCTION_CALL, the implementation
-// falls back to a non-streaming retry and emits the retry response as the
-// final Done=true message.
+// streaming accumulator ends with MALFORMED_FUNCTION_CALL, all buffered chunks
+// are suppressed and the implementation falls back to a non-streaming retry,
+// emitting only the retry result (Done=true) to the caller.
 func TestModel_Streaming_MalformedFunctionCallRetry(t *testing.T) {
 	req := &model.Request{
 		Messages:         []model.Message{{Role: model.RoleUser, Content: "hello"}},
@@ -1665,16 +1665,11 @@ func TestModel_Streaming_MalformedFunctionCallRetry(t *testing.T) {
 	for r := range respChan {
 		responses = append(responses, r)
 	}
-	// Partial chunks from the malformed stream are emitted with Done=false.
-	// The final Done=true response is the retry result, not the malformed one.
-	var finalResp *model.Response
-	for _, r := range responses {
-		if r.Done {
-			finalResp = r
-		}
-	}
-	require.NotNil(t, finalResp)
-	require.Equal(t, "retry-ok", finalResp.Choices[0].Message.Content)
+	// With buffering the malformed stream is fully suppressed: no partial
+	// chunks are emitted. Only the retry result (Done=true) is sent.
+	require.Len(t, responses, 1)
+	require.True(t, responses[0].Done)
+	require.Equal(t, "retry-ok", responses[0].Choices[0].Message.Content)
 }
 
 // TestModel_Streaming_MalformedFunctionCallRetryError verifies that when the

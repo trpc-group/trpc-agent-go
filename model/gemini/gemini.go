@@ -265,6 +265,13 @@ func (m *Model) handleNonStreamingResponse(
 }
 
 // handleStreamingResponse handles streaming chat completion responses.
+//
+// All chunks are buffered before being forwarded to responseChan. This ensures
+// that if the stream ends with MALFORMED_FUNCTION_CALL, nothing from the failed
+// attempt is ever visible to the caller — not even the partial chunks that
+// carry the MALFORMED_FUNCTION_CALL finish_reason. Consumers that inspect
+// finish_reason on partial chunks (e.g. OpenAI-compatible clients) will
+// therefore never see the malformed result.
 func (m *Model) handleStreamingResponse(
 	ctx context.Context,
 	chatRequest []*genai.Content,
@@ -274,42 +281,45 @@ func (m *Model) handleStreamingResponse(
 	chatCompletion := m.client.Models().GenerateContentStream(
 		ctx, m.name, chatRequest, generateConfig)
 	acc := &Accumulator{}
+	var chunks []*model.Response
+	var rawChunks []*genai.GenerateContentResponse
 	for chunk, err := range chatCompletion {
-		// Check for errors from the stream
 		if err != nil {
-			errorResponse := &model.Response{
+			// Flush already-buffered chunks so the caller sees partial data
+			// before the error (e.g. network interruption mid-stream).
+			for i, c := range chunks {
+				if m.chatChunkCallback != nil {
+					m.chatChunkCallback(ctx, chatRequest, generateConfig, rawChunks[i])
+				}
+				select {
+				case responseChan <- c:
+				case <-ctx.Done():
+					return
+				}
+			}
+			select {
+			case responseChan <- &model.Response{
 				Error: &model.ResponseError{
 					Message: err.Error(),
 					Type:    model.ErrorTypeAPIError,
 				},
 				Timestamp: time.Now(),
 				Done:      true,
-			}
-			select {
-			case responseChan <- errorResponse:
+			}:
 			case <-ctx.Done():
 			}
 			return
 		}
 		response := m.buildChunkResponse(chunk)
 		acc.Accumulate(response)
-		if m.chatChunkCallback != nil {
-			m.chatChunkCallback(ctx, chatRequest, generateConfig, chunk)
-		}
-		select {
-		case responseChan <- response:
-		case <-ctx.Done():
-			return
-		}
+		chunks = append(chunks, response)
+		rawChunks = append(rawChunks, chunk)
 	}
 	finalResponse := acc.BuildResponse()
 
-	// When the stream ends with MALFORMED_FUNCTION_CALL, silently retry using
-	// non-streaming + temperature=0 + mode=ANY. The already-emitted partial
-	// chunks are IsPartial=true and do not trigger the flow loop exit; only
-	// the final Done=true response controls continuation. We suppress the
-	// malformed final and replace it with the retry result so that nothing
-	// from the failed attempt enters the session history.
+	// When the stream ends with MALFORMED_FUNCTION_CALL, retry non-streaming
+	// with temperature=0 + mode=ANY. Because all chunks were buffered, the
+	// caller has not seen any part of the failed attempt yet.
 	if isMalformedModelResponse(finalResponse) {
 		retryCfg := retryConfigForMalformed(generateConfig)
 		var retryRaw *genai.GenerateContentResponse
@@ -326,22 +336,19 @@ func (m *Model) handleStreamingResponse(
 			}
 		}
 		if retryErr != nil {
-			errorResponse := &model.Response{
+			select {
+			case responseChan <- &model.Response{
 				Error: &model.ResponseError{
 					Message: retryErr.Error(),
 					Type:    model.ErrorTypeAPIError,
 				},
 				Timestamp: time.Now(),
 				Done:      true,
-			}
-			select {
-			case responseChan <- errorResponse:
+			}:
 			case <-ctx.Done():
 			}
 			return
 		}
-		// If all retries exhausted but still malformed, emit an error rather
-		// than silently returning a broken response.
 		if isMalformedFunctionCall(retryRaw) {
 			select {
 			case responseChan <- &model.Response{
@@ -357,8 +364,27 @@ func (m *Model) handleStreamingResponse(
 			return
 		}
 		finalResponse = m.buildFinalResponse(retryRaw)
+		if m.chatStreamCompleteCallback != nil {
+			m.chatStreamCompleteCallback(ctx, chatRequest, generateConfig, finalResponse)
+		}
+		select {
+		case responseChan <- finalResponse:
+		case <-ctx.Done():
+		}
+		return
 	}
 
+	// Normal path: flush buffered chunks then the final Done=true response.
+	for i, chunk := range chunks {
+		if m.chatChunkCallback != nil {
+			m.chatChunkCallback(ctx, chatRequest, generateConfig, rawChunks[i])
+		}
+		select {
+		case responseChan <- chunk:
+		case <-ctx.Done():
+			return
+		}
+	}
 	if m.chatStreamCompleteCallback != nil {
 		m.chatStreamCompleteCallback(ctx, chatRequest, generateConfig, finalResponse)
 	}
