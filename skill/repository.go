@@ -26,6 +26,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // skillFile is the canonical skill definition filename.
@@ -252,8 +254,9 @@ func parseFull(path string) (Summary, string, error) {
 }
 
 // readFrontMatter reads YAML front matter block into a simple map.
-func readFrontMatter(r *bufio.Reader) (map[string]string, string,
-	error) {
+// It uses gopkg.in/yaml.v3 to correctly handle multi-line block scalars
+// (e.g. "description: |-\n  text") that the previous hand-rolled parser missed.
+func readFrontMatter(r *bufio.Reader) (map[string]string, string, error) {
 	line, err := r.ReadString('\n')
 	if err != nil {
 		return nil, "", err
@@ -261,7 +264,6 @@ func readFrontMatter(r *bufio.Reader) (map[string]string, string,
 	if strings.TrimSpace(line) != "---" {
 		return nil, "", errors.New("no front matter")
 	}
-	m := map[string]string{}
 	var b strings.Builder
 	for {
 		l, err2 := r.ReadString('\n')
@@ -273,23 +275,14 @@ func readFrontMatter(r *bufio.Reader) (map[string]string, string,
 		}
 		b.WriteString(l)
 	}
-	for _, l := range strings.Split(b.String(), "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "#") {
-			continue
-		}
-		// crude YAML: key: value
-		if i := strings.Index(l, ":"); i >= 0 {
-			k := strings.TrimSpace(l[:i])
-			v := strings.TrimSpace(l[i+1:])
-			m[k] = strings.Trim(v, " \"'")
-		}
-	}
+	m := parseFrontMatterYAML(b.String())
 	rest, _ := ioReadAll(r)
 	return m, rest, nil
 }
 
-// splitFrontMatter splits text into map and body.
+// splitFrontMatter splits text into a front-matter map and the Markdown body.
+// It uses gopkg.in/yaml.v3 to correctly handle multi-line block scalars
+// (e.g. "description: |-\n  text") that the previous hand-rolled parser missed.
 func splitFrontMatter(text string) (map[string]string, string) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	if !strings.HasPrefix(text, "---\n") {
@@ -297,24 +290,34 @@ func splitFrontMatter(text string) (map[string]string, string) {
 	}
 	idx := strings.Index(text[4:], "\n---\n")
 	if idx < 0 {
-		// No closing; treat whole as body.
+		// No closing delimiter; treat whole as body.
 		return map[string]string{}, text
 	}
 	fm := text[4 : 4+idx]
 	body := text[4+idx+5:]
+	return parseFrontMatterYAML(fm), body
+}
+
+// parseFrontMatterYAML unmarshals a YAML block into a flat map[string]string.
+// Values that are not scalars are converted via fmt.Sprintf so callers always
+// receive a plain string.
+func parseFrontMatterYAML(src string) map[string]string {
 	m := map[string]string{}
-	for _, l := range strings.Split(fm, "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "#") {
-			continue
-		}
-		if i := strings.Index(l, ":"); i >= 0 {
-			k := strings.TrimSpace(l[:i])
-			v := strings.TrimSpace(l[i+1:])
-			m[k] = strings.Trim(v, " \"'")
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal([]byte(src), &raw); err != nil {
+		return m
+	}
+	for k, v := range raw {
+		switch s := v.(type) {
+		case string:
+			m[k] = s
+		case nil:
+			// skip
+		default:
+			m[k] = fmt.Sprintf("%v", s)
 		}
 	}
-	return m, body
+	return m
 }
 
 func ioReadAll(r *bufio.Reader) (string, error) {

@@ -351,6 +351,74 @@ func TestSplitFrontMatter_NoClosing(t *testing.T) {
 	require.Equal(t, txt, body)
 }
 
+// TestSplitFrontMatter_BlockScalarDescription verifies that multi-line YAML
+// block scalars (the "|-" and "|" chomping indicators) are parsed correctly.
+// The previous hand-rolled parser only handled "key: value" on a single line
+// and left Description empty for skills that used block scalar syntax.
+func TestSplitFrontMatter_BlockScalarDescription(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantKey string
+		wantVal string
+	}{
+		{
+			name: "strip_block_scalar",
+			input: "---\nname: my-skill\ndescription: |-\n  A multi-line\n  description.\n---\nbody\n",
+			wantKey: "description",
+			wantVal: "A multi-line\ndescription.",
+		},
+		{
+			name: "literal_block_scalar",
+			input: "---\nname: my-skill\ndescription: |\n  Line one.\n  Line two.\n---\nbody\n",
+			wantKey: "description",
+			wantVal: "Line one.\nLine two.",
+		},
+		{
+			name: "folded_block_scalar",
+			input: "---\nname: my-skill\ndescription: >\n  Folded line one.\n  Folded line two.\n---\nbody\n",
+			wantKey: "description",
+			wantVal: "Folded line one. Folded line two.",
+		},
+		{
+			name: "plain_single_line",
+			input: "---\nname: my-skill\ndescription: plain description\n---\nbody\n",
+			wantKey: "description",
+			wantVal: "plain description",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m, body := splitFrontMatter(tc.input)
+			require.Equal(t, tc.wantVal, m[tc.wantKey],
+				"description must be parsed correctly from front matter")
+			require.Equal(t, "my-skill", m["name"])
+			require.Equal(t, "body\n", body)
+		})
+	}
+}
+
+// TestParseSummary_BlockScalarDescription verifies the end-to-end path:
+// writing a SKILL.md with a block-scalar description and reading it back
+// via parseSummary / Summaries() returns the correct description.
+func TestParseSummary_BlockScalarDescription(t *testing.T) {
+	dir := t.TempDir()
+	sdir := filepath.Join(dir, "explore-repos")
+	require.NoError(t, os.MkdirAll(sdir, 0o755))
+	content := "---\nname: explore-repos\ndescription: |-\n  Explore repository structure\n  and list files.\n---\n# Skill body\n"
+	require.NoError(t, os.WriteFile(filepath.Join(sdir, "SKILL.md"), []byte(content), 0o644))
+
+	repo, err := NewFSRepository(dir)
+	require.NoError(t, err)
+
+	summaries := repo.Summaries()
+	require.Len(t, summaries, 1)
+	require.Equal(t, "explore-repos", summaries[0].Name)
+	require.Equal(t, "Explore repository structure\nand list files.", summaries[0].Description,
+		"block scalar description must be parsed correctly by Summaries()")
+}
+
 // errAfterReader returns one line then a non-EOF error to exercise the
 // ioReadAll branch that returns accumulated text on unexpected errors.
 type errAfterReader struct {
