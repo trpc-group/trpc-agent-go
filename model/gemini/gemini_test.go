@@ -1315,6 +1315,54 @@ func TestModel_GenerateContentStreamingError(t *testing.T) {
 		assert.False(t, chunkCallbackCalled, "chunk callback should not be called on immediate error")
 		assert.False(t, completeCallbackCalled, "complete callback should not be called on error")
 	})
+
+	t.Run("mid_stream_error_with_chunk_callback", func(t *testing.T) {
+		// When a mid-stream error occurs after some buffered chunks, the
+		// chatChunkCallback must be invoked for each flushed chunk before the
+		// error response is emitted.  This exercises lines 291-292 of gemini.go.
+		streamErr := errors.New("mid-stream interruption")
+		successChunk := &genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{
+				{Content: &genai.Content{Parts: []*genai.Part{{Text: "partial"}}}},
+			},
+		}
+
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSliceWithError([]*genai.GenerateContentResponse{successChunk}, streamErr))
+
+		var chunkCallbackRaw []*genai.GenerateContentResponse
+		m := &Model{
+			client: mockClient,
+			chatChunkCallback: func(_ context.Context, _ []*genai.Content,
+				_ *genai.GenerateContentConfig, r *genai.GenerateContentResponse) {
+				chunkCallbackRaw = append(chunkCallbackRaw, r)
+			},
+		}
+		respChan, err := m.GenerateContent(context.Background(), req)
+		require.NoError(t, err)
+
+		var responses []*model.Response
+		for r := range respChan {
+			responses = append(responses, r)
+		}
+
+		// One partial chunk then one error response.
+		require.Len(t, responses, 2)
+		require.Nil(t, responses[0].Error)
+		require.Equal(t, "partial", responses[0].Choices[0].Delta.Content)
+		require.NotNil(t, responses[1].Error)
+		require.Equal(t, "mid-stream interruption", responses[1].Error.Message)
+		// chatChunkCallback must have been called once (for the flushed chunk).
+		require.Len(t, chunkCallbackRaw, 1)
+		require.Equal(t, successChunk, chunkCallbackRaw[0])
+	})
 }
 
 func TestModel_convertContentPartNil(t *testing.T) {
