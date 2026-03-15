@@ -1858,3 +1858,67 @@ func TestModel_Streaming_MalformedFunctionCallExhausted(t *testing.T) {
 	require.True(t, errResp.Done)
 	require.Contains(t, errResp.Error.Message, "MALFORMED_FUNCTION_CALL persists after retries")
 }
+
+// TestModel_Streaming_NormalPathCallbacks verifies that chatChunkCallback and
+// chatStreamCompleteCallback are both invoked on the normal (non-malformed)
+// streaming path, and that buffered chunks are flushed to the caller.
+func TestModel_Streaming_NormalPathCallbacks(t *testing.T) {
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	chunk1 := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{Content: genai.NewContentFromText("hello", genai.RoleModel)},
+		},
+	}
+	chunk2 := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{
+				Content:      genai.NewContentFromText(" world", genai.RoleModel),
+				FinishReason: genai.FinishReason("STOP"),
+			},
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	mockModels.EXPECT().
+		GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(seqFromSlice([]*genai.GenerateContentResponse{chunk1, chunk2}))
+
+	var chunkCallbackRaws []*genai.GenerateContentResponse
+	var completeCallbackResp *model.Response
+	m := &Model{
+		client: mockClient,
+		chatChunkCallback: func(_ context.Context, _ []*genai.Content,
+			_ *genai.GenerateContentConfig, raw *genai.GenerateContentResponse) {
+			chunkCallbackRaws = append(chunkCallbackRaws, raw)
+		},
+		chatStreamCompleteCallback: func(_ context.Context, _ []*genai.Content,
+			_ *genai.GenerateContentConfig, r *model.Response) {
+			completeCallbackResp = r
+		},
+	}
+	respChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for r := range respChan {
+		responses = append(responses, r)
+	}
+
+	// 2 partial chunks + 1 final Done response.
+	require.Len(t, responses, 3)
+	// chatChunkCallback called once per chunk.
+	require.Len(t, chunkCallbackRaws, 2)
+	require.Equal(t, chunk1, chunkCallbackRaws[0])
+	require.Equal(t, chunk2, chunkCallbackRaws[1])
+	// chatStreamCompleteCallback called with the accumulated final response.
+	require.NotNil(t, completeCallbackResp)
+	require.True(t, completeCallbackResp.Done)
+}
