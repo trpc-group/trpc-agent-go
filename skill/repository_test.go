@@ -1109,3 +1109,16 @@ func TestParseFrontMatterYAML_BlockScalarEmptyProducesEmptyString(t *testing.T) 
 	require.Equal(t, "", m["key"], "empty block scalar must yield empty string")
 	require.Equal(t, "skill", m["name"])
 }
+
+// TestReadFrontMatter_SuccessPath verifies the happy path of readFrontMatter:
+// a valid "---\n...\n---\nbody" input returns the parsed map and the body text.
+// This exercises the parseFrontMatterYAML delegation on line 279 of repository.go.
+func TestReadFrontMatter_SuccessPath(t *testing.T) {
+	input := "---\nname: my-skill\ndescription: does things\n---\nBody text here\n"
+	rd := bufio.NewReader(strings.NewReader(input))
+	m, body, err := readFrontMatter(rd)
+	require.NoError(t, err)
+	require.Equal(t, "my-skill", m["name"])
+	require.Equal(t, "does things", m["description"])
+	require.Contains(t, body, "Body text here")
+}
