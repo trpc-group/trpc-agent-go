@@ -24,13 +24,13 @@ import (
 // replaceContentRequest represents the input for the replace content
 // operation.
 type replaceContentRequest struct {
-	FileName string `json:"file_name"`
+	FileName string `json:"file_name" jsonschema:"description=Relative file path under base_directory to modify"`
 	// OldString is replaced by NewString. It can be multi-line.
-	OldString string `json:"old_string"`
+	OldString string `json:"old_string" jsonschema:"description=Existing text to replace; supports multi-line content"`
 	// NewString is inserted in place of OldString. It can be multi-line.
-	NewString string `json:"new_string"`
+	NewString string `json:"new_string" jsonschema:"description=Replacement text; supports multi-line content"`
 	// NumReplacements limits replacements (default 1). Negative means all.
-	NumReplacements int `json:"num_replacements,omitempty"`
+	NumReplacements int `json:"num_replacements,omitempty" jsonschema:"description=Optional replacement limit; 0 means 1 and negative means replace all matches"`
 }
 
 // replaceContentResponse represents the output from the replace content

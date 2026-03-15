@@ -25,11 +25,11 @@ import (
 // searchFileRequest represents the input for the search file operation.
 type searchFileRequest struct {
 	// Path is a relative directory under base_directory.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"description=Relative directory path under base_directory or workspace:// directory ref; empty means the base directory"`
 	// Pattern is a glob to match file names.
-	Pattern string `json:"pattern"`
+	Pattern string `json:"pattern" jsonschema:"description=Glob pattern to match files or folders such as *.go or **/*.md"`
 	// CaseSensitive controls glob case matching.
-	CaseSensitive bool `json:"case_sensitive"`
+	CaseSensitive bool `json:"case_sensitive" jsonschema:"description=Whether glob matching should be case-sensitive"`
 }
 
 // searchFileResponse represents the output from the search file operation.

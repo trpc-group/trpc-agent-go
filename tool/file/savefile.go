@@ -24,11 +24,11 @@ import (
 // saveFileRequest represents the input for the save file operation.
 type saveFileRequest struct {
 	// FileName is a path relative to base_directory.
-	FileName string `json:"file_name"`
+	FileName string `json:"file_name" jsonschema:"description=Relative file path under base_directory to write"`
 	// Contents is the file content to write.
-	Contents string `json:"contents"`
+	Contents string `json:"contents" jsonschema:"description=Text content to write into the file"`
 	// Overwrite controls whether an existing file is replaced.
-	Overwrite bool `json:"overwrite"`
+	Overwrite bool `json:"overwrite" jsonschema:"description=Whether to replace the file if it already exists"`
 }
 
 // saveFileResponse represents the output from the save file operation.
