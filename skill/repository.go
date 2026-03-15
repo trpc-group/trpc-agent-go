@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -359,10 +360,10 @@ func parseFrontMatterYAML(src string) map[string]string {
 				}
 			}
 			var raw map[string]any
-			if err := yaml.Unmarshal([]byte(b.String()), &raw); err == nil {
-				if s, ok := raw[key].(string); ok {
-					m[key] = strings.TrimRight(s, "\n")
-				}
+			if err := yaml.Unmarshal([]byte(b.String()), &raw); err != nil {
+				log.Printf("skill: front matter YAML parse error for key %q: %v", key, err)
+			} else if s, ok := raw[key].(string); ok {
+				m[key] = strings.TrimRight(s, "\n")
 			}
 		} else {
 			// Plain single-line value: use the raw text as-is so that '#' and
