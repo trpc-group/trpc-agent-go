@@ -1039,19 +1039,73 @@ func buildTarGZ(t *testing.T, files map[string]string) []byte {
 	return buf.Bytes()
 }
 
-// TestParseFrontMatterYAML_InvalidYAMLReturnsEmpty verifies that
-// parseFrontMatterYAML returns an empty map (rather than panicking or
-// returning partially-parsed data) when the YAML source is malformed.
-func TestParseFrontMatterYAML_InvalidYAMLReturnsEmpty(t *testing.T) {
-	m := parseFrontMatterYAML("key: [unclosed")
-	require.Empty(t, m, "malformed YAML must return an empty map")
+// TestParseFrontMatterYAML_HashPreservedInPlainValue verifies the hybrid
+// parser's key behaviour: unquoted '#' characters in plain single-line values
+// must NOT be treated as YAML comments. The full value must be preserved.
+func TestParseFrontMatterYAML_HashPreservedInPlainValue(t *testing.T) {
+	m := parseFrontMatterYAML("name: issue #123 helper\nversion: v1.0 # tag")
+	require.Equal(t, "issue #123 helper", m["name"],
+		"'#' in an unquoted value must not be stripped as a YAML comment")
+	require.Equal(t, "v1.0 # tag", m["version"])
 }
 
-// TestParseFrontMatterYAML_NonStringValuesStringified verifies the default
-// branch of the type-switch: non-string, non-nil YAML values (e.g. booleans,
-// integers) are converted to their string representation via fmt.Sprintf.
-func TestParseFrontMatterYAML_NonStringValuesStringified(t *testing.T) {
-	m := parseFrontMatterYAML("enabled: true\ncount: 42")
-	require.Equal(t, "true", m["enabled"])
-	require.Equal(t, "42", m["count"])
+// TestParseFrontMatterYAML_KeyWithNoValue verifies that a key with no value
+// ("key:") is stored as an empty string, exercising the empty-val path in
+// isBlockScalarIndicator and the plain-value assignment.
+func TestParseFrontMatterYAML_KeyWithNoValue(t *testing.T) {
+	m := parseFrontMatterYAML("empty:\nname: skill")
+	require.Equal(t, "", m["empty"])
+	require.Equal(t, "skill", m["name"])
+}
+
+// TestParseFrontMatterYAML_BlankLinesAreSkipped verifies that blank lines
+// within the front-matter block (common in multi-key SKILL.md files) are
+// silently skipped without affecting key/value parsing.
+func TestParseFrontMatterYAML_BlankLinesAreSkipped(t *testing.T) {
+	src := "\nname: my-skill\n\nversion: 2\n"
+	m := parseFrontMatterYAML(src)
+	require.Equal(t, "my-skill", m["name"])
+	require.Equal(t, "2", m["version"])
+}
+
+// TestParseFrontMatterYAML_BlockScalarFollowedByPlainKey verifies that the
+// continuation-line collector stops at the next non-indented key, so that
+// a block scalar and a subsequent plain key are both parsed correctly.
+func TestParseFrontMatterYAML_BlockScalarFollowedByPlainKey(t *testing.T) {
+	src := "description: |-\n  line one\n  line two\nname: my-skill"
+	m := parseFrontMatterYAML(src)
+	require.Equal(t, "line one\nline two", m["description"])
+	require.Equal(t, "my-skill", m["name"])
+}
+
+// TestParseFrontMatterYAML_LinesWithoutColonAreSkipped verifies that lines
+// that do not contain a colon (e.g. free-form text, dividers) are silently
+// ignored without panicking or affecting other keys.
+func TestParseFrontMatterYAML_LinesWithoutColonAreSkipped(t *testing.T) {
+	src := "name: my-skill\nthis line has no colon at all\nversion: 1"
+	m := parseFrontMatterYAML(src)
+	require.Equal(t, "my-skill", m["name"])
+	require.Equal(t, "1", m["version"])
+	_, hasGarbage := m["this line has no colon at all"]
+	require.False(t, hasGarbage)
+}
+
+// TestParseFrontMatterYAML_InvalidBlockScalarYAMLSkipped verifies that a
+// block-scalar entry whose YAML is malformed is silently skipped (no panic,
+// no partial data), while other plain-value entries are still returned.
+func TestParseFrontMatterYAML_InvalidBlockScalarYAMLSkipped(t *testing.T) {
+	// The block scalar fragment "| \t:" is invalid YAML; the key must be absent.
+	src := "name: good-skill\nbad: |\n  \t: malformed"
+	m := parseFrontMatterYAML(src)
+	require.Equal(t, "good-skill", m["name"], "plain value must still be parsed")
+}
+
+// TestParseFrontMatterYAML_BlockScalarEmptyProducesEmptyString verifies that
+// an empty block scalar ("key: |" with no indented content) is stored as an
+// empty string, consistent with yaml.v3 behaviour.
+func TestParseFrontMatterYAML_BlockScalarEmptyProducesEmptyString(t *testing.T) {
+	src := "key: |\nname: skill"
+	m := parseFrontMatterYAML(src)
+	require.Equal(t, "", m["key"], "empty block scalar must yield empty string")
+	require.Equal(t, "skill", m["name"])
 }

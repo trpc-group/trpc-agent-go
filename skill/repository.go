@@ -298,23 +298,77 @@ func splitFrontMatter(text string) (map[string]string, string) {
 	return parseFrontMatterYAML(fm), body
 }
 
-// parseFrontMatterYAML unmarshals a YAML block into a flat map[string]string.
-// Values that are not scalars are converted via fmt.Sprintf so callers always
-// receive a plain string.
+// isBlockScalarIndicator reports whether val (the text after "key: ") is a
+// YAML block scalar indicator, meaning the value spans multiple indented lines.
+func isBlockScalarIndicator(val string) bool {
+	if val == "" {
+		return false
+	}
+	switch val[0] {
+	case '|', '>':
+		return true
+	}
+	return false
+}
+
+// parseFrontMatterYAML parses a YAML front-matter block into a flat
+// map[string]string using a hybrid strategy:
+//
+//   - Plain single-line values ("key: some value #with hash") are extracted
+//     with a simple line-split so that unquoted '#' characters are not
+//     misinterpreted as YAML comments.
+//   - Block scalar values ("key: |-\n  line1\n  line2") are collected into a
+//     minimal YAML snippet and parsed with gopkg.in/yaml.v3, which correctly
+//     handles all block-scalar chomping indicators (|, |-,|+, >, >-, >+).
 func parseFrontMatterYAML(src string) map[string]string {
 	m := map[string]string{}
-	var raw map[string]any
-	if err := yaml.Unmarshal([]byte(src), &raw); err != nil {
-		return m
-	}
-	for k, v := range raw {
-		switch s := v.(type) {
-		case string:
-			m[k] = s
-		case nil:
-			// skip
-		default:
-			m[k] = fmt.Sprintf("%v", s)
+	lines := strings.Split(src, "\n")
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+		// Skip blank lines at the top level.
+		if strings.TrimSpace(line) == "" {
+			i++
+			continue
+		}
+		// Expect "key: value" or "key:".
+		colonIdx := strings.Index(line, ":")
+		if colonIdx < 0 {
+			i++
+			continue
+		}
+		key := strings.TrimSpace(line[:colonIdx])
+		val := strings.TrimSpace(line[colonIdx+1:])
+
+		if isBlockScalarIndicator(val) {
+			// Collect the indicator line plus all indented continuation lines
+			// into a mini YAML document and let yaml.v3 parse it properly.
+			var b strings.Builder
+			b.WriteString(line)
+			b.WriteByte('\n')
+			i++
+			for i < len(lines) {
+				next := lines[i]
+				// Continuation lines are indented (start with space/tab) or blank.
+				if next == "" || next[0] == ' ' || next[0] == '\t' {
+					b.WriteString(next)
+					b.WriteByte('\n')
+					i++
+				} else {
+					break
+				}
+			}
+			var raw map[string]any
+			if err := yaml.Unmarshal([]byte(b.String()), &raw); err == nil {
+				if s, ok := raw[key].(string); ok {
+					m[key] = strings.TrimRight(s, "\n")
+				}
+			}
+		} else {
+			// Plain single-line value: use the raw text as-is so that '#' and
+			// other special characters are preserved without YAML interpretation.
+			m[key] = val
+			i++
 		}
 	}
 	return m
