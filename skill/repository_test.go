@@ -1038,3 +1038,20 @@ func buildTarGZ(t *testing.T, files map[string]string) []byte {
 	require.NoError(t, gz.Close())
 	return buf.Bytes()
 }
+
+// TestParseFrontMatterYAML_InvalidYAMLReturnsEmpty verifies that
+// parseFrontMatterYAML returns an empty map (rather than panicking or
+// returning partially-parsed data) when the YAML source is malformed.
+func TestParseFrontMatterYAML_InvalidYAMLReturnsEmpty(t *testing.T) {
+	m := parseFrontMatterYAML("key: [unclosed")
+	require.Empty(t, m, "malformed YAML must return an empty map")
+}
+
+// TestParseFrontMatterYAML_NonStringValuesStringified verifies the default
+// branch of the type-switch: non-string, non-nil YAML values (e.g. booleans,
+// integers) are converted to their string representation via fmt.Sprintf.
+func TestParseFrontMatterYAML_NonStringValuesStringified(t *testing.T) {
+	m := parseFrontMatterYAML("enabled: true\ncount: 42")
+	require.Equal(t, "true", m["enabled"])
+	require.Equal(t, "42", m["count"])
+}
