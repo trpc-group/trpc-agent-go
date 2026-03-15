@@ -363,26 +363,26 @@ func TestSplitFrontMatter_BlockScalarDescription(t *testing.T) {
 		wantVal string
 	}{
 		{
-			name: "strip_block_scalar",
-			input: "---\nname: my-skill\ndescription: |-\n  A multi-line\n  description.\n---\nbody\n",
+			name:    "strip_block_scalar",
+			input:   "---\nname: my-skill\ndescription: |-\n  A multi-line\n  description.\n---\nbody\n",
 			wantKey: "description",
 			wantVal: "A multi-line\ndescription.",
 		},
 		{
-			name: "literal_block_scalar",
-			input: "---\nname: my-skill\ndescription: |\n  Line one.\n  Line two.\n---\nbody\n",
+			name:    "literal_block_scalar",
+			input:   "---\nname: my-skill\ndescription: |\n  Line one.\n  Line two.\n---\nbody\n",
 			wantKey: "description",
 			wantVal: "Line one.\nLine two.",
 		},
 		{
-			name: "folded_block_scalar",
-			input: "---\nname: my-skill\ndescription: >\n  Folded line one.\n  Folded line two.\n---\nbody\n",
+			name:    "folded_block_scalar",
+			input:   "---\nname: my-skill\ndescription: >\n  Folded line one.\n  Folded line two.\n---\nbody\n",
 			wantKey: "description",
 			wantVal: "Folded line one. Folded line two.",
 		},
 		{
-			name: "plain_single_line",
-			input: "---\nname: my-skill\ndescription: plain description\n---\nbody\n",
+			name:    "plain_single_line",
+			input:   "---\nname: my-skill\ndescription: plain description\n---\nbody\n",
 			wantKey: "description",
 			wantVal: "plain description",
 		},
