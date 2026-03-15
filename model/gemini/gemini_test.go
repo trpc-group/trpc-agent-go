@@ -1456,3 +1456,34 @@ func TestModel_convertMessageContent_ToolRoleNonJSONWrapsInOutput(t *testing.T) 
 	require.NotNil(t, fr)
 	require.Equal(t, map[string]any{"output": "tool execution failed: permission denied"}, fr.Response)
 }
+
+// TestIsMalformedFunctionCall verifies the helper that detects
+// MALFORMED_FUNCTION_CALL in a raw genai response.
+func TestIsMalformedFunctionCall(t *testing.T) {
+	require.False(t, isMalformedFunctionCall(nil))
+	require.False(t, isMalformedFunctionCall(&genai.GenerateContentResponse{}))
+	require.False(t, isMalformedFunctionCall(&genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{{FinishReason: genai.FinishReason("STOP")}},
+	}))
+	require.True(t, isMalformedFunctionCall(&genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")}},
+	}))
+}
+
+// TestIsMalformedModelResponse verifies the helper that detects
+// MALFORMED_FUNCTION_CALL in an already-converted model.Response.
+func TestIsMalformedModelResponse(t *testing.T) {
+	reason := "MALFORMED_FUNCTION_CALL"
+	other := "STOP"
+	require.False(t, isMalformedModelResponse(nil))
+	require.False(t, isMalformedModelResponse(&model.Response{}))
+	require.False(t, isMalformedModelResponse(&model.Response{
+		Choices: []model.Choice{{FinishReason: &other}},
+	}))
+	require.False(t, isMalformedModelResponse(&model.Response{
+		Choices: []model.Choice{{FinishReason: nil}},
+	}))
+	require.True(t, isMalformedModelResponse(&model.Response{
+		Choices: []model.Choice{{FinishReason: &reason}},
+	}))
+}

@@ -125,6 +125,55 @@ func (m *Model) GenerateContent(
 	return responseChan, nil
 }
 
+// malformedFunctionCallRetries is the number of silent retries performed when
+// Gemini returns MALFORMED_FUNCTION_CALL. Each retry uses temperature=0 and
+// FunctionCallingMode=ANY. The malformed attempt is never emitted to the
+// response channel, so nothing is added to the agent's conversation history.
+const malformedFunctionCallRetries = 2
+
+// retryConfigForMalformed clones cfg and applies temperature=0 +
+// FunctionCallingMode=ANY, which are the two knobs that most reliably correct
+// MALFORMED_FUNCTION_CALL responses per production evidence.
+func retryConfigForMalformed(cfg *genai.GenerateContentConfig) *genai.GenerateContentConfig {
+	retry := *cfg // shallow copy — sufficient for scalar fields
+	retry.Temperature = genai.Ptr(float32(0))
+	retry.ToolConfig = &genai.ToolConfig{
+		FunctionCallingConfig: &genai.FunctionCallingConfig{
+			Mode: genai.FunctionCallingConfigModeAny,
+		},
+	}
+	return &retry
+}
+
+// isMalformedFunctionCall reports whether a raw Gemini response was rejected
+// by the server because the model generated a malformed function call.
+func isMalformedFunctionCall(rsp *genai.GenerateContentResponse) bool {
+	if rsp == nil {
+		return false
+	}
+	for _, c := range rsp.Candidates {
+		if string(c.FinishReason) == "MALFORMED_FUNCTION_CALL" {
+			return true
+		}
+	}
+	return false
+}
+
+// isMalformedModelResponse reports whether an already-converted model.Response
+// carries the MALFORMED_FUNCTION_CALL finish reason. Used after streaming
+// accumulation where the raw genai response is no longer available.
+func isMalformedModelResponse(rsp *model.Response) bool {
+	if rsp == nil {
+		return false
+	}
+	for _, c := range rsp.Choices {
+		if c.FinishReason != nil && *c.FinishReason == "MALFORMED_FUNCTION_CALL" {
+			return true
+		}
+	}
+	return false
+}
+
 // handleNonStreamingResponse handles non-streaming chat completion responses.
 func (m *Model) handleNonStreamingResponse(
 	ctx context.Context,
@@ -150,6 +199,33 @@ func (m *Model) handleNonStreamingResponse(
 		}
 		return
 	}
+
+	// Silently retry when Gemini rejects the function call as malformed.
+	// The malformed attempt is never emitted, so it does not enter the
+	// session history. Each retry uses temperature=0 + mode=ANY which
+	// are the two most effective mitigations per production data.
+	retryCfg := retryConfigForMalformed(generateConfig)
+	for attempt := 0; attempt < malformedFunctionCallRetries && isMalformedFunctionCall(chatCompletion); attempt++ {
+		log.Warnf("gemini: MALFORMED_FUNCTION_CALL (attempt %d/%d), retrying with temperature=0 mode=ANY",
+			attempt+1, malformedFunctionCallRetries)
+		chatCompletion, err = m.client.Models().GenerateContent(ctx, m.name, chatRequest, retryCfg)
+		if err != nil {
+			errorResponse := &model.Response{
+				Error: &model.ResponseError{
+					Message: err.Error(),
+					Type:    model.ErrorTypeAPIError,
+				},
+				Timestamp: time.Now(),
+				Done:      true,
+			}
+			select {
+			case responseChan <- errorResponse:
+			case <-ctx.Done():
+			}
+			return
+		}
+	}
+
 	// Call response callback on successful completion.
 	if m.chatResponseCallback != nil {
 		m.chatResponseCallback(ctx, chatRequest, generateConfig, chatCompletion)
@@ -200,6 +276,45 @@ func (m *Model) handleStreamingResponse(
 		}
 	}
 	finalResponse := acc.BuildResponse()
+
+	// When the stream ends with MALFORMED_FUNCTION_CALL, silently retry using
+	// non-streaming + temperature=0 + mode=ANY. The already-emitted partial
+	// chunks are IsPartial=true and do not trigger the flow loop exit; only
+	// the final Done=true response controls continuation. We suppress the
+	// malformed final and replace it with the retry result so that nothing
+	// from the failed attempt enters the session history.
+	if isMalformedModelResponse(finalResponse) {
+		retryCfg := retryConfigForMalformed(generateConfig)
+		var retryRaw *genai.GenerateContentResponse
+		var retryErr error
+		for attempt := 0; attempt < malformedFunctionCallRetries; attempt++ {
+			log.Warnf("gemini: MALFORMED_FUNCTION_CALL in stream (attempt %d/%d), retrying non-streaming with temperature=0 mode=ANY",
+				attempt+1, malformedFunctionCallRetries)
+			retryRaw, retryErr = m.client.Models().GenerateContent(ctx, m.name, chatRequest, retryCfg)
+			if retryErr != nil {
+				break
+			}
+			if !isMalformedFunctionCall(retryRaw) {
+				break
+			}
+		}
+		if retryErr != nil {
+			errorResponse := &model.Response{
+				Error: &model.ResponseError{
+					Message: retryErr.Error(),
+					Type:    model.ErrorTypeAPIError,
+				},
+				Timestamp: time.Now(),
+				Done:      true,
+			}
+			select {
+			case responseChan <- errorResponse:
+			case <-ctx.Done():
+			}
+			return
+		}
+		finalResponse = m.buildFinalResponse(retryRaw)
+	}
 
 	if m.chatStreamCompleteCallback != nil {
 		m.chatStreamCompleteCallback(ctx, chatRequest, generateConfig, finalResponse)
