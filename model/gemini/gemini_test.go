@@ -289,6 +289,8 @@ func TestModel_convertTools_EmptyMapReturnsNil(t *testing.T) {
 // Vertex AI compatibility fix: all function declarations must be grouped into
 // a single *genai.Tool object. Vertex AI rejects multiple Tool objects with:
 // "Multiple tools are supported only when they are all search tools."
+// It also verifies that declarations are emitted in sorted-key order so the
+// output is deterministic across runs.
 func TestModel_convertTools_MultipleToolsGroupedIntoSingleTool(t *testing.T) {
 	m := &Model{}
 
@@ -307,14 +309,13 @@ func TestModel_convertTools_MultipleToolsGroupedIntoSingleTool(t *testing.T) {
 	require.Len(t, converted[0].FunctionDeclarations, len(tools),
 		"every tool must produce exactly one FunctionDeclaration")
 
-	// Each declaration must have its name preserved.
-	names := make(map[string]bool, len(tools))
-	for _, fd := range converted[0].FunctionDeclarations {
-		names[fd.Name] = true
+	// Declarations must be in sorted (alphabetical) key order for determinism.
+	got := make([]string, len(converted[0].FunctionDeclarations))
+	for i, fd := range converted[0].FunctionDeclarations {
+		got[i] = fd.Name
 	}
-	for name := range tools {
-		require.True(t, names[name], "declaration for %q must be present", name)
-	}
+	require.Equal(t, []string{"alpha", "beta", "gamma"}, got,
+		"declarations must be sorted by tool name for deterministic output")
 }
 
 func TestNormalizeToolSchema_NilSchemaReturnsNil(t *testing.T) {

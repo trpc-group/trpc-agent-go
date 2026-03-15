@@ -14,6 +14,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -482,8 +484,11 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 	if len(tools) == 0 {
 		return nil
 	}
+	// Sort keys for deterministic declaration order across runs.
+	keys := slices.Sorted(maps.Keys(tools))
 	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
-	for _, t := range tools {
+	for _, k := range keys {
+		t := tools[k]
 		decl := t.Declaration()
 		funcDeclaration := &genai.FunctionDeclaration{
 			Description: decl.Description,
