@@ -147,6 +147,21 @@ func TestWorkspaceReadFileTool_RejectsBinaryFiles(t *testing.T) {
 	require.Contains(t, err.Error(), "UTF-8 text files")
 }
 
+func TestWorkspaceReadFileTool_RejectsGlobPaths(t *testing.T) {
+	repo := createWorkspaceToolRepo(t)
+	runTool := NewRunTool(repo, localexec.New())
+	tl := NewWorkspaceReadFileTool(runTool)
+
+	args, err := json.Marshal(map[string]any{
+		"path": "skills/*/SKILL.md",
+	})
+	require.NoError(t, err)
+
+	_, err = tl.(tool.CallableTool).Call(context.Background(), args)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "glob patterns")
+}
+
 func TestWorkspaceListDirTool_RejectsSymlinkEscape(t *testing.T) {
 	repo := createWorkspaceToolRepo(t)
 	runTool := NewRunTool(repo, localexec.New())
@@ -320,6 +335,23 @@ func TestWorkspaceReplaceContentTool_NotFound(t *testing.T) {
 	require.Equal(t, "alpha beta alpha\n", readOut.Content)
 }
 
+func TestWorkspaceReplaceContentTool_RejectsGlobPaths(t *testing.T) {
+	repo := createWorkspaceToolRepo(t)
+	runTool := NewRunTool(repo, localexec.New())
+	tl := NewWorkspaceReplaceContentTool(runTool)
+
+	args, err := json.Marshal(map[string]any{
+		"path":       "out/*.txt",
+		"old_string": "alpha",
+		"new_string": "omega",
+	})
+	require.NoError(t, err)
+
+	_, err = tl.(tool.CallableTool).Call(context.Background(), args)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "glob patterns")
+}
+
 func TestWorkspaceWriteFileTool_RejectsInputsDir(t *testing.T) {
 	repo := createWorkspaceToolRepo(t)
 	runTool := NewRunTool(repo, localexec.New())
@@ -426,7 +458,7 @@ func TestArtifactPublishTool_RejectsGlobAndLargeFiles(t *testing.T) {
 	require.NoError(t, err)
 	_, err = tl.(tool.CallableTool).Call(ctx, globArgs)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "explicit file paths")
+	require.Contains(t, err.Error(), "glob patterns")
 
 	eng := runTool.ensureEngine()
 	ws, err := runTool.createWorkspace(ctx, eng, workspaceToolsWorkspaceID)

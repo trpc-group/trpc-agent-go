@@ -996,6 +996,11 @@ func normalizeWorkspaceInspectPath(
 		return "", errors.New("path is required")
 	}
 	s = strings.ReplaceAll(s, "\\", "/")
+	if containsGlobMeta(s) {
+		return "", errors.New(
+			"workspace tools only support explicit file or directory paths, not glob patterns",
+		)
+	}
 	if normalized := codeexecutor.NormalizeGlobs([]string{s}); len(normalized) > 0 {
 		s = normalized[0]
 	}
@@ -1013,6 +1018,13 @@ func normalizeWorkspaceInspectPath(
 }
 
 func normalizeWorkspaceWritePath(input string) (string, error) {
+	s := strings.TrimSpace(input)
+	s = strings.ReplaceAll(s, "\\", "/")
+	if containsGlobMeta(s) {
+		return "", errors.New(
+			"workspace tools only support explicit file or directory paths, not glob patterns",
+		)
+	}
 	rel, err := normalizeWorkspaceInspectPath(input, "")
 	if err != nil {
 		return "", err
