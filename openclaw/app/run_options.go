@@ -22,6 +22,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
 
@@ -1173,13 +1174,11 @@ func (cfg *fileConfig) apply(
 		}
 		if cfg.A2A.Host != nil &&
 			!flagWasSet(set, flagA2AHost) {
-			opts.A2AHost = strings.TrimSpace(*cfg.A2A.Host)
+			opts.A2AHost = *cfg.A2A.Host
 		}
 		if cfg.A2A.UserIDHeader != nil &&
 			!flagWasSet(set, flagA2AUserIDHeader) {
-			opts.A2AUserIDHeader = strings.TrimSpace(
-				*cfg.A2A.UserIDHeader,
-			)
+			opts.A2AUserIDHeader = *cfg.A2A.UserIDHeader
 		}
 		if cfg.A2A.Streaming != nil &&
 			!flagWasSet(set, flagA2AStreaming) {
@@ -1191,14 +1190,13 @@ func (cfg *fileConfig) apply(
 		}
 		if cfg.A2A.Name != nil &&
 			!flagWasSet(set, flagA2AName) {
-			opts.A2AName = strings.TrimSpace(*cfg.A2A.Name)
+			opts.A2AName = *cfg.A2A.Name
 		}
 		if cfg.A2A.Description != nil &&
 			!flagWasSet(set, flagA2ADescription) {
-			opts.A2ADescription = strings.TrimSpace(
-				*cfg.A2A.Description,
-			)
+			opts.A2ADescription = *cfg.A2A.Description
 		}
+		normalizeA2AOptions(opts)
 	}
 
 	if cfg.Agent != nil {
@@ -1742,11 +1740,26 @@ func finalizeRunOptions(opts *runOptions) error {
 	if opts.AdminEnabled && opts.AdminAddr == "" {
 		opts.AdminAddr = defaultAdminAddr
 	}
-	opts.A2AHost = strings.TrimSpace(opts.A2AHost)
+	normalizeA2AOptions(opts)
+	return nil
+}
+
+func normalizeA2AOptions(opts *runOptions) {
+	if opts == nil {
+		return
+	}
+	opts.A2AHost = normalizeA2AHost(opts.A2AHost)
 	opts.A2AUserIDHeader = strings.TrimSpace(opts.A2AUserIDHeader)
 	opts.A2AName = strings.TrimSpace(opts.A2AName)
 	opts.A2ADescription = strings.TrimSpace(opts.A2ADescription)
-	return nil
+}
+
+func normalizeA2AHost(raw string) string {
+	host := strings.TrimSpace(raw)
+	if host == "" {
+		return ""
+	}
+	return ia2a.NormalizeURL(host)
 }
 
 func normalizeSkillsLoadMode(raw string) (string, error) {

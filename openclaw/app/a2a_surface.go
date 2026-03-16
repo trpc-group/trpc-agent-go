@@ -61,20 +61,20 @@ func newA2ASurface(
 		return A2ASurface{}, errors.New("a2a runner is nil")
 	}
 
-	host := strings.TrimSpace(opts.A2AHost)
+	normalizeA2AOptions(&opts)
+	host := opts.A2AHost
 	if host == "" {
 		return A2ASurface{}, errors.New(
 			"a2a host is required when a2a is enabled",
 		)
 	}
-	host = ia2a.NormalizeURL(host)
 
 	basePath, err := extractA2ABasePath(host)
 	if err != nil {
 		return A2ASurface{}, err
 	}
 
-	userIDHeader := strings.TrimSpace(opts.A2AUserIDHeader)
+	userIDHeader := opts.A2AUserIDHeader
 	if userIDHeader == "" {
 		userIDHeader = defaultA2AUserIDHeader
 	}
