@@ -475,12 +475,19 @@ func processFunctionResponse(d *protocol.DataPart) (content string, id string, n
 		name = toolName
 	}
 
-	// Extract response content - server sends it as raw string
+	// Extract response content. Keep strings as-is, otherwise prefer JSON for
+	// structured values.
 	if response, ok := data[ia2a.ToolCallFieldResponse]; ok {
 		if responseStr, ok := response.(string); ok {
 			content = responseStr
+		} else if jsonBytes, err := json.Marshal(response); err == nil {
+			content = string(jsonBytes)
 		} else {
-			log.Debugf("Tool response is not a string: %T, skip", response)
+			log.Infof(
+				"Tool response JSON marshal failed for type %T, skip: %v",
+				response,
+				err,
+			)
 		}
 	}
 
