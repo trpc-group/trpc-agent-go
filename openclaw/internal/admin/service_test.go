@@ -230,6 +230,66 @@ func TestServiceJobEndpoints(t *testing.T) {
 	require.Nil(t, cronSvc.Get(job.ID))
 }
 
+func TestBrowserEndpointSummary(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		view browserEndpointView
+		want string
+	}{
+		{
+			name: "empty",
+			want: "-",
+		},
+		{
+			name: "down with error",
+			view: browserEndpointView{
+				URL:   "http://127.0.0.1:19790",
+				Error: "connection refused",
+			},
+			want: "down: connection refused",
+		},
+		{
+			name: "down",
+			view: browserEndpointView{
+				URL: "http://127.0.0.1:19790",
+			},
+			want: "down",
+		},
+		{
+			name: "reachable without profiles",
+			view: browserEndpointView{
+				URL:       "http://127.0.0.1:19790",
+				Reachable: true,
+			},
+			want: "reachable",
+		},
+		{
+			name: "reachable with profiles",
+			view: browserEndpointView{
+				URL:       "http://127.0.0.1:19790",
+				Reachable: true,
+				Profiles: []browserRemoteProbe{
+					{Name: "chrome", State: "ready"},
+					{Name: "", State: "busy"},
+					{Name: "edge"},
+					{},
+				},
+			},
+			want: "chrome=ready, busy, edge",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, browserEndpointSummary(tc.view))
+		})
+	}
+}
+
 func TestServiceSnapshotIncludesCronSummary(t *testing.T) {
 	t.Parallel()
 

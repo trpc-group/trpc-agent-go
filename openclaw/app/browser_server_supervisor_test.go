@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -167,6 +168,349 @@ func TestBrowserServerSupervisorRecordsStartFailure(t *testing.T) {
 	require.Contains(t, status.LastError, "missing browser-server dir")
 }
 
+func TestMaybeStartBrowserServerSupervisorWithoutPlan(t *testing.T) {
+	t.Parallel()
+
+	sup, err := maybeStartBrowserServerSupervisor(
+		context.Background(),
+		nil,
+		t.TempDir(),
+	)
+	require.NoError(t, err)
+	require.Nil(t, sup)
+}
+
+func TestManagedBrowserServerHelpers(t *testing.T) {
+	t.Parallel()
+
+	serverURL, err := parseBrowserServerURL("127.0.0.1:19790")
+	require.NoError(t, err)
+	require.Equal(t, browserServerScheme, serverURL.Scheme)
+	require.Equal(t, "127.0.0.1:19790", serverURL.Host)
+
+	_, err = parseBrowserServerURL(" ")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty")
+
+	addr, ok := managedBrowserServerAddr("localhost:19790")
+	require.True(t, ok)
+	require.Equal(t, "localhost:19790", addr)
+
+	_, ok = managedBrowserServerAddr("https://127.0.0.1:19790")
+	require.False(t, ok)
+
+	_, ok = managedBrowserServerAddr("http://127.0.0.1:17777")
+	require.False(t, ok)
+
+	_, ok = managedBrowserServerAddr("http://example.com:19790")
+	require.False(t, ok)
+
+	require.True(t, isManagedBrowserServerHost("localhost"))
+	require.True(t, isManagedBrowserServerHost("127.0.0.1"))
+	require.False(t, isManagedBrowserServerHost("example.com"))
+}
+
+func TestBrowserServerWorkDirHelpers(t *testing.T) {
+	root := t.TempDir()
+	direct := filepath.Join(root, browserServerDirName)
+	writeBrowserServerWorkDir(t, direct)
+
+	require.True(t, isBrowserServerWorkDir(direct))
+	require.False(
+		t,
+		isBrowserServerWorkDir(filepath.Join(root, "missing")),
+	)
+
+	found, ok := browserServerWorkDirIn(root)
+	require.True(t, ok)
+	require.Equal(t, direct, found)
+
+	nestedRoot := t.TempDir()
+	nested := filepath.Join(
+		nestedRoot,
+		appName,
+		browserServerDirName,
+	)
+	writeBrowserServerWorkDir(t, nested)
+
+	found, ok = browserServerWorkDirIn(nestedRoot)
+	require.True(t, ok)
+	require.Equal(t, nested, found)
+
+	t.Run("env override", func(t *testing.T) {
+		t.Setenv(browserServerDirEnv, direct)
+
+		workDir, err := defaultBrowserServerWorkDir()
+		require.NoError(t, err)
+		require.Equal(t, direct, workDir)
+	})
+
+	t.Run("bad env override", func(t *testing.T) {
+		t.Setenv(
+			browserServerDirEnv,
+			filepath.Join(root, "bad-browser-server"),
+		)
+
+		_, err := defaultBrowserServerWorkDir()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), browserServerDirEnv)
+	})
+
+	t.Run("search from cwd", func(t *testing.T) {
+		t.Setenv(browserServerDirEnv, "")
+
+		searchRoot := t.TempDir()
+		want := filepath.Join(
+			searchRoot,
+			appName,
+			browserServerDirName,
+		)
+		writeBrowserServerWorkDir(t, want)
+
+		cwd, err := os.Getwd()
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, os.Chdir(cwd))
+		})
+
+		workingDir := filepath.Join(searchRoot, appName, "tmp", "cwd")
+		require.NoError(t, os.MkdirAll(workingDir, 0o755))
+		require.NoError(t, os.Chdir(workingDir))
+
+		workDir, err := defaultBrowserServerWorkDir()
+		require.NoError(t, err)
+		resolvedWant, err := filepath.EvalSymlinks(want)
+		require.NoError(t, err)
+		resolvedWorkDir, err := filepath.EvalSymlinks(workDir)
+		require.NoError(t, err)
+		require.Equal(t, resolvedWant, resolvedWorkDir)
+	})
+}
+
+func TestDefaultBrowserServerCommand(t *testing.T) {
+	workDir := t.TempDir()
+
+	nodePath, err := exec.LookPath(browserServerNodeBin)
+	if err != nil {
+		t.Skip("node not found")
+	}
+
+	cmd, command, err := defaultBrowserServerCommand(
+		workDir,
+		[]string{"A=B"},
+		io.Discard,
+		io.Discard,
+	)
+	require.NoError(t, err)
+	require.Equal(t, nodePath, cmd.Path)
+	require.Equal(t, workDir, cmd.Dir)
+	require.Equal(t, []string{"A=B"}, cmd.Env)
+	require.Contains(t, command, browserServerScriptName)
+	require.Equal(
+		t,
+		browserServerScriptName,
+		filepath.Base(cmd.Args[1]),
+	)
+
+	t.Setenv("PATH", "")
+	_, _, err = defaultBrowserServerCommand(
+		workDir,
+		nil,
+		io.Discard,
+		io.Discard,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "find node")
+}
+
+func TestBrowserServerSupervisorStartupLines(t *testing.T) {
+	t.Parallel()
+
+	var nilSup *browserServerSup
+	require.Nil(t, nilSup.startupLines())
+
+	external := newBrowserServerSupervisor(
+		browserServerPlan{ServerURL: "http://127.0.0.1:19790"},
+		t.TempDir(),
+	)
+	external.state = browserServerStateExternal
+	lines := external.startupLines()
+	require.Len(t, lines, 1)
+	require.Contains(t, lines[0].text, "already available")
+
+	running := newBrowserServerSupervisor(
+		browserServerPlan{ServerURL: "http://127.0.0.1:19790"},
+		t.TempDir(),
+	)
+	running.state = browserServerStateRunning
+	running.managed = true
+	running.pid = 42
+	lines = running.startupLines()
+	require.Len(t, lines, 2)
+	require.Contains(t, lines[0].text, "auto-started")
+	require.Contains(t, lines[1].text, "Browser server log:")
+
+	failed := newBrowserServerSupervisor(
+		browserServerPlan{ServerURL: "http://127.0.0.1:19790"},
+		t.TempDir(),
+	)
+	failed.state = browserServerStateFailed
+	failed.lastError = "boom"
+	lines = failed.startupLines()
+	require.Len(t, lines, 1)
+	require.True(t, lines[0].warn)
+	require.Contains(t, lines[0].text, "boom")
+
+	starting := newBrowserServerSupervisor(
+		browserServerPlan{ServerURL: "http://127.0.0.1:19790"},
+		t.TempDir(),
+	)
+	starting.state = browserServerStateStarting
+	require.Nil(t, starting.startupLines())
+}
+
+func TestBrowserServerTailHelpers(t *testing.T) {
+	t.Parallel()
+
+	tail := newBrowserServerTail(0)
+	require.Equal(t, browserServerTailLines, tail.limit)
+
+	_, err := tail.Write([]byte(" first \n\n second "))
+	require.NoError(t, err)
+	require.Equal(t, []string{"first", "second"}, tail.Lines())
+
+	limited := newBrowserServerTail(2)
+	limited.append("one")
+	limited.append("two")
+	limited.append("three")
+	require.Equal(t, []string{"two", "three"}, limited.Lines())
+
+	var nilTail *browserServerTail
+	require.Nil(t, nilTail.Lines())
+	require.Zero(t, processExitCode(nil))
+}
+
+func TestProbeBrowserServerEndpoint(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, "/profiles", r.URL.Path)
+		require.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	require.NoError(
+		t,
+		probeBrowserServerEndpoint(
+			context.Background(),
+			server.URL,
+			"secret",
+		),
+	)
+
+	badServer := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		_ *http.Request,
+	) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(badServer.Close)
+
+	err := probeBrowserServerEndpoint(
+		context.Background(),
+		badServer.URL,
+		"",
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unexpected status")
+}
+
+func TestBrowserServerSupervisorWaitUntilReadyExitPaths(
+	t *testing.T,
+) {
+	originalProbe := browserServerProbeFunc
+	browserServerProbeFunc = func(
+		ctx context.Context,
+		serverURL string,
+		authToken string,
+	) error {
+		return fmt.Errorf("not ready")
+	}
+	t.Cleanup(func() {
+		browserServerProbeFunc = originalProbe
+	})
+
+	sup := newBrowserServerSupervisor(
+		browserServerPlan{ServerURL: "http://127.0.0.1:19790"},
+		t.TempDir(),
+	)
+
+	t.Run("closed channel", func(t *testing.T) {
+		doneCh := make(chan browserServerProcessExit)
+		close(doneCh)
+
+		err := sup.waitUntilReady(context.Background(), doneCh)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "exited before ready")
+	})
+
+	t.Run("exit error", func(t *testing.T) {
+		doneCh := make(chan browserServerProcessExit, 1)
+		doneCh <- browserServerProcessExit{
+			Code: 2,
+			Err:  fmt.Errorf("boom"),
+		}
+		close(doneCh)
+
+		err := sup.waitUntilReady(context.Background(), doneCh)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "boom")
+	})
+
+	t.Run("exit code", func(t *testing.T) {
+		doneCh := make(chan browserServerProcessExit, 1)
+		doneCh <- browserServerProcessExit{Code: 2}
+		close(doneCh)
+
+		err := sup.waitUntilReady(context.Background(), doneCh)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "code 2")
+	})
+
+	t.Run("deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(
+			context.Background(),
+			10*time.Millisecond,
+		)
+		defer cancel()
+
+		doneCh := make(chan browserServerProcessExit)
+		err := sup.waitUntilReady(ctx, doneCh)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "wait for browser server ready")
+	})
+}
+
+func TestBrowserServerSupervisorOpenLogFileRequiresPath(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	sup := newBrowserServerSupervisor(
+		browserServerPlan{ServerURL: "http://127.0.0.1:19790"},
+		t.TempDir(),
+	)
+	sup.logPath = ""
+
+	_, err := sup.openLogFile()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "log path is empty")
+}
+
 func TestBrowserServerSupervisorHelperProcess(t *testing.T) {
 	if os.Getenv(browserServerHelperEnv) == "" {
 		return
@@ -266,4 +610,27 @@ func stubBrowserServerLauncher(
 		browserServerWorkDir = originalWorkDir
 		browserServerCommand = originalCommand
 	}
+}
+
+func writeBrowserServerWorkDir(t *testing.T, dir string) {
+	t.Helper()
+
+	scriptPath := filepath.Join(
+		dir,
+		browserServerBinDirName,
+		browserServerScriptName,
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(scriptPath), 0o755))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(dir, browserServerPackage),
+			[]byte("{}\n"),
+			0o600,
+		),
+	)
+	require.NoError(
+		t,
+		os.WriteFile(scriptPath, []byte("console.log('ok')\n"), 0o700),
+	)
 }

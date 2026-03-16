@@ -79,3 +79,76 @@ func TestNormalizeDomains_DedupesAndTrims(t *testing.T) {
 	require.True(t, hostMatchesDomain("docs.example.com", "example.com"))
 	require.False(t, hostMatchesDomain("google.com", "example.com"))
 }
+
+func TestNavigationPolicy_AdditionalBranches(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		policy navigationPolicy
+		raw    string
+		want   string
+	}{
+		{
+			name: "empty url",
+			raw:  "",
+		},
+		{
+			name: "invalid url",
+			raw:  "http://[::1",
+			want: "invalid browser url",
+		},
+		{
+			name: "about page",
+			raw:  "about:blank",
+		},
+		{
+			name: "unsupported scheme",
+			raw:  "mailto:test@example.com",
+			want: "not allowed",
+		},
+		{
+			name: "empty host",
+			raw:  "https:///docs",
+		},
+		{
+			name: "loopback allowed",
+			policy: navigationPolicy{
+				AllowLoopback: true,
+			},
+			raw: "http://api.localhost:8080",
+		},
+		{
+			name: "private network allowed",
+			policy: navigationPolicy{
+				AllowPrivateNet: true,
+			},
+			raw: "http://10.0.0.8",
+		},
+		{
+			name: "blocked domain",
+			policy: navigationPolicy{
+				BlockedDomains: []string{"example.com"},
+			},
+			raw:  "https://docs.example.com",
+			want: "blocked",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tc.policy.Validate(tc.raw)
+			if tc.want == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+
+	require.True(t, isLoopbackHost("api.localhost"))
+}

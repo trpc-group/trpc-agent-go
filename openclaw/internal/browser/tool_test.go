@@ -1839,6 +1839,330 @@ func TestToolCall_HeadersPassesBrowserServerArgs(t *testing.T) {
 	require.Equal(t, "1", headers["X-Test"])
 }
 
+func TestToolCall_BrowserServerStateActions(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		input      map[string]any
+		wantTool   string
+		wantAction string
+		assertCall func(*testing.T, fakeCall)
+	}{
+		{
+			name: "offline",
+			input: map[string]any{
+				"action":  actionOffline,
+				"offline": true,
+			},
+			wantTool:   mcpToolSetOffline,
+			wantAction: actionOffline,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, true, call.Args["offline"])
+			},
+		},
+		{
+			name: "credentials",
+			input: map[string]any{
+				"action":   actionCreds,
+				"username": "alice",
+				"password": "secret",
+			},
+			wantTool:   mcpToolSetCreds,
+			wantAction: actionCreds,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, "alice", call.Args["username"])
+				require.Equal(t, "secret", call.Args["password"])
+			},
+		},
+		{
+			name: "credentials clear",
+			input: map[string]any{
+				"action": actionCreds,
+				"clear":  true,
+			},
+			wantTool:   mcpToolSetCreds,
+			wantAction: actionCreds,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, true, call.Args["clear"])
+			},
+		},
+		{
+			name: "geolocation",
+			input: map[string]any{
+				"action":    actionGeo,
+				"latitude":  31.2,
+				"longitude": 121.5,
+				"accuracy":  15,
+				"origin":    "https://example.com",
+			},
+			wantTool:   mcpToolSetGeo,
+			wantAction: actionGeo,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, 31.2, call.Args["latitude"])
+				require.Equal(t, 121.5, call.Args["longitude"])
+				require.Equal(t, 15.0, call.Args["accuracy"])
+				require.Equal(
+					t,
+					"https://example.com",
+					call.Args["origin"],
+				)
+			},
+		},
+		{
+			name: "geolocation clear",
+			input: map[string]any{
+				"action": actionGeo,
+				"clear":  true,
+				"origin": "https://example.com",
+			},
+			wantTool:   mcpToolSetGeo,
+			wantAction: actionGeo,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, true, call.Args["clear"])
+				require.Equal(
+					t,
+					"https://example.com",
+					call.Args["origin"],
+				)
+			},
+		},
+		{
+			name: "media",
+			input: map[string]any{
+				"action":      actionMedia,
+				"colorScheme": "dark",
+			},
+			wantTool:   mcpToolSetMedia,
+			wantAction: actionMedia,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, "dark", call.Args["colorScheme"])
+			},
+		},
+		{
+			name: "timezone",
+			input: map[string]any{
+				"action":     actionTimezone,
+				"timezoneId": "Asia/Shanghai",
+			},
+			wantTool:   mcpToolSetTZ,
+			wantAction: actionTimezone,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(
+					t,
+					"Asia/Shanghai",
+					call.Args["timezoneId"],
+				)
+			},
+		},
+		{
+			name: "locale",
+			input: map[string]any{
+				"action": actionLocale,
+				"locale": "zh-CN",
+			},
+			wantTool:   mcpToolSetLocale,
+			wantAction: actionLocale,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, "zh-CN", call.Args["locale"])
+			},
+		},
+		{
+			name: "device",
+			input: map[string]any{
+				"action": actionDevice,
+				"name":   "iPhone 15",
+			},
+			wantTool:   mcpToolSetDevice,
+			wantAction: actionDevice,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, "iPhone 15", call.Args["name"])
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			drv := &fakeDriver{
+				callResult: map[string]any{
+					tc.wantTool: textPayload(tc.name),
+				},
+			}
+
+			raw, err := newBrowserServerTestTool(drv).Call(
+				context.Background(),
+				mustJSON(t, tc.input),
+			)
+			require.NoError(t, err)
+
+			got := raw.(Result)
+			require.Equal(t, tc.wantAction, got.Action)
+			require.Contains(t, got.Text, tc.name)
+			require.NotNil(t, got.Content)
+			require.Len(t, drv.calls, 1)
+			require.Equal(t, tc.wantTool, drv.calls[0].Tool)
+			tc.assertCall(t, drv.calls[0])
+		})
+	}
+}
+
+func TestToolCall_BrowserServerStateActionsValidateInputs(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		input map[string]any
+		want  string
+	}{
+		{
+			name: "offline",
+			input: map[string]any{
+				"action": actionOffline,
+			},
+			want: "requires offline",
+		},
+		{
+			name: "credentials",
+			input: map[string]any{
+				"action": actionCreds,
+			},
+			want: "requires username or clear",
+		},
+		{
+			name: "media",
+			input: map[string]any{
+				"action": actionMedia,
+			},
+			want: "requires colorScheme",
+		},
+		{
+			name: "timezone",
+			input: map[string]any{
+				"action": actionTimezone,
+			},
+			want: "requires timezoneId",
+		},
+		{
+			name: "locale",
+			input: map[string]any{
+				"action": actionLocale,
+			},
+			want: "requires locale",
+		},
+		{
+			name: "device",
+			input: map[string]any{
+				"action": actionDevice,
+			},
+			want: "requires name",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := newBrowserServerTestTool(&fakeDriver{}).Call(
+				context.Background(),
+				mustJSON(t, tc.input),
+			)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestToolCall_BrowserServerStateActionsRejectMCPDriver(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		input map[string]any
+	}{
+		{
+			name: "offline",
+			input: map[string]any{
+				"action":  actionOffline,
+				"offline": true,
+			},
+		},
+		{
+			name: "credentials",
+			input: map[string]any{
+				"action":   actionCreds,
+				"username": "alice",
+			},
+		},
+		{
+			name: "geolocation",
+			input: map[string]any{
+				"action":    actionGeo,
+				"latitude":  31.2,
+				"longitude": 121.5,
+			},
+		},
+		{
+			name: "media",
+			input: map[string]any{
+				"action":      actionMedia,
+				"colorScheme": "dark",
+			},
+		},
+		{
+			name: "timezone",
+			input: map[string]any{
+				"action":     actionTimezone,
+				"timezoneId": "Asia/Shanghai",
+			},
+		},
+		{
+			name: "locale",
+			input: map[string]any{
+				"action": actionLocale,
+				"locale": "zh-CN",
+			},
+		},
+		{
+			name: "device",
+			input: map[string]any{
+				"action": actionDevice,
+				"name":   "iPhone 15",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := newTestTool(&fakeDriver{}).Call(
+				context.Background(),
+				mustJSON(t, tc.input),
+			)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "browser-server")
+		})
+	}
+}
+
 func TestToolCall_GeolocationRequiresCoordinates(t *testing.T) {
 	t.Parallel()
 
@@ -1873,6 +2197,139 @@ func TestToolCall_GeolocationRequiresCoordinates(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "latitude and longitude")
+}
+
+func TestToolCall_CookiesAndStorageBranches(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		input      map[string]any
+		wantTool   string
+		wantAction string
+		assertCall func(*testing.T, fakeCall)
+	}{
+		{
+			name: "cookies get",
+			input: map[string]any{
+				"action": actionCookies,
+			},
+			wantTool:   mcpToolCookies,
+			wantAction: actionCookies,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Empty(t, call.Args)
+			},
+		},
+		{
+			name: "cookies clear",
+			input: map[string]any{
+				"action":    actionCookies,
+				"operation": "clear",
+			},
+			wantTool:   mcpToolCookiesClear,
+			wantAction: actionCookies,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Empty(t, call.Args)
+			},
+		},
+		{
+			name: "storage get",
+			input: map[string]any{
+				"action": actionStorage,
+			},
+			wantTool:   mcpToolStorageGet,
+			wantAction: actionStorage,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, "local", call.Args["kind"])
+			},
+		},
+		{
+			name: "storage clear",
+			input: map[string]any{
+				"action":    actionStorage,
+				"operation": "clear",
+				"key":       "token",
+			},
+			wantTool:   mcpToolStorageClear,
+			wantAction: actionStorage,
+			assertCall: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, "local", call.Args["kind"])
+				require.Equal(t, "token", call.Args["key"])
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			drv := &fakeDriver{
+				callResult: map[string]any{
+					tc.wantTool: textPayload(tc.name),
+				},
+			}
+
+			raw, err := newBrowserServerTestTool(drv).Call(
+				context.Background(),
+				mustJSON(t, tc.input),
+			)
+			require.NoError(t, err)
+
+			got := raw.(Result)
+			require.Equal(t, tc.wantAction, got.Action)
+			require.Contains(t, got.Text, tc.name)
+			require.Len(t, drv.calls, 1)
+			require.Equal(t, tc.wantTool, drv.calls[0].Tool)
+			tc.assertCall(t, drv.calls[0])
+		})
+	}
+}
+
+func TestToolCall_CookiesAndStorageValidateInputs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		input map[string]any
+		want  string
+	}{
+		{
+			name: "cookies set missing cookie",
+			input: map[string]any{
+				"action":    actionCookies,
+				"operation": "set",
+			},
+			want: "requires cookie",
+		},
+		{
+			name: "storage set missing key",
+			input: map[string]any{
+				"action":    actionStorage,
+				"operation": "set",
+				"value":     "abc",
+			},
+			want: "requires key",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := newBrowserServerTestTool(&fakeDriver{}).Call(
+				context.Background(),
+				mustJSON(t, tc.input),
+			)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
 }
 
 func TestToolCall_TimezoneRejectsMCPDriver(t *testing.T) {
@@ -2291,9 +2748,104 @@ func TestToolDriverHelpers(t *testing.T) {
 	require.False(t, boolValue(nil))
 	require.Equal(t, 12, intValue(&size))
 	require.Zero(t, intValue(nil))
+	require.Equal(t, "session", storageScope("session"))
+	require.Equal(t, "local", storageScope(" local "))
+	require.Equal(
+		t,
+		"report.txt",
+		downloadOutputPath(input{Path: "report.txt"}),
+	)
+	require.Equal(
+		t,
+		"report.txt",
+		downloadOutputPath(input{Filename: "report.txt"}),
+	)
 	require.Equal(t, "element e1", describeElement("e1", ""))
 	require.Equal(t, "element fallback", describeElement("", "fallback"))
 	require.Equal(t, "element", describeElement("", ""))
+}
+
+func TestToolDriverTypeHelpers(t *testing.T) {
+	t.Parallel()
+
+	withHost := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		&serverTargetConfig{
+			ID:        targetHost,
+			ServerURL: "http://127.0.0.1:19790",
+		},
+		&serverTargetConfig{
+			ID:        targetSandbox,
+			ServerURL: "http://127.0.0.1:29790",
+		},
+		map[string]serverTargetConfig{
+			"edge": {
+				ID:        "edge",
+				ServerURL: "http://node.example:7777",
+			},
+		},
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+			"chrome": {
+				Name:             "chrome",
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
+			"mcp": {
+				Name:      "mcp",
+				Transport: transportStdio,
+			},
+		},
+		nil,
+	)
+
+	require.Equal(
+		t,
+		driverTypeBrowserServer,
+		withHost.driverTypeForProfile("missing"),
+	)
+	require.Equal(
+		t,
+		driverTypeBrowserServer,
+		withHost.driverTypeForProfile("chrome"),
+	)
+	require.Equal(
+		t,
+		driverTypePlaywrightMCP,
+		withHost.driverTypeForProfile("mcp"),
+	)
+	require.Equal(
+		t,
+		driverTypeBrowserServer,
+		withHost.driverTypeForInput("mcp", input{}),
+	)
+	require.Equal(
+		t,
+		driverTypeBrowserServer,
+		withHost.driverTypeForInput("mcp", input{
+			Target: targetSandbox,
+		}),
+	)
+	require.Equal(
+		t,
+		driverTypeBrowserServer,
+		withHost.driverTypeForInput("mcp", input{
+			Target: targetNode,
+		}),
+	)
+
+	plain := newTestTool(&fakeDriver{})
+	require.Equal(
+		t,
+		driverTypePlaywrightMCP,
+		plain.driverTypeForProfile(defaultProfileName),
+	)
+	require.Equal(
+		t,
+		driverTypePlaywrightMCP,
+		plain.driverTypeForInput(defaultProfileName, input{}),
+	)
 }
 
 func textPayload(text string) []map[string]any {
@@ -2320,6 +2872,26 @@ func newTestTool(drv driver) *Tool {
 		nil,
 		map[string]ProfileConfig{
 			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+}
+
+func newBrowserServerTestTool(drv driver) *Tool {
+	return newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {
+				Name:             defaultProfileName,
+				BrowserServerURL: "http://127.0.0.1:19790",
+			},
 		},
 		map[string]driver{
 			defaultProfileName: drv,
