@@ -638,9 +638,8 @@ func (sg *StateGraph) AddToolsNode(
 	tools map[string]tool.Tool,
 	opts ...Option,
 ) *StateGraph {
-	toolsNodeFunc := NewToolsNodeFunc(tools, opts...)
-	// Add tool node type option
 	toolOpts := append([]Option{WithNodeType(NodeTypeTool)}, opts...)
+	toolsNodeFunc := NewToolsNodeFunc(tools, toolOpts...)
 	sg.AddNode(id, toolsNodeFunc, toolOpts...)
 	return sg
 }

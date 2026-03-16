@@ -3045,6 +3045,50 @@ func TestToolsNode_DisableTracingSkipsSpanCreation(t *testing.T) {
 	require.Empty(t, recorder.Ended())
 }
 
+func TestAddToolsNode_WorkflowSpanIncludesToolType(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddToolsNode("tools", map[string]tool.Tool{"echo": &echoTool{name: "echo"}})
+
+	node := sg.graph.nodes["tools"]
+	state := State{
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("hi"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "echo",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		},
+	}
+
+	_, err := node.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	var workflowSpan sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == itelemetry.NewWorkflowSpanName("execute_tools_node") {
+			workflowSpan = span
+			break
+		}
+	}
+	require.NotNil(t, workflowSpan)
+	require.True(
+		t,
+		graphHasAttr(
+			workflowSpan.Attributes(),
+			semconvtrace.KeyGenAIWorkflowType,
+			NodeTypeTool.String(),
+		),
+	)
+}
+
 // Verify StateSchema.ApplyUpdate skips unknown internal keys while still
 // applying other unknown keys using default override behavior.
 func TestStateSchema_ApplyUpdate_SkipsInternalUnknownKeys(t *testing.T) {
