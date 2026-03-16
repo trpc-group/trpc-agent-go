@@ -17,7 +17,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 func TestSessionSQLite_EnqueueSummaryJob_And_Fallback(t *testing.T) {
@@ -292,21 +291,13 @@ func TestSessionSQLite_CreateSummary_Denied_NoPersist(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestSessionSQLite_EnqueueSummaryJob_ProviderPersistsCopiedFullSummary(t *testing.T) {
+func TestSessionSQLite_EnqueueSummaryJob_PersistsCopiedFullSummary(t *testing.T) {
 	db, _, cleanup := openTempSQLiteDB(t)
 	defer cleanup()
 
 	svc, err := NewService(
 		db,
-		WithSessionSummarizerResolver(summary.SessionSummarizerResolver(func(
-			ctx context.Context,
-			req summary.SessionSummaryRequest,
-		) (summary.SessionSummarizer, error) {
-			if req.FilterKey == "branch" {
-				return &fakeSummarizer{}, nil
-			}
-			return nil, nil
-		})),
+		WithSummarizer(&fakeSummarizer{}),
 	)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, svc.Close()) }()
