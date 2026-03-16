@@ -155,7 +155,11 @@ func run() error {
 	}()
 	defer shutdownServer(httpSrv)
 
-	if err := waitForReady(addr, rt.A2A.AgentCardPath); err != nil {
+	if err := waitForReady(
+		context.Background(),
+		addr,
+		rt.A2A.AgentCardPath,
+	); err != nil {
 		return err
 	}
 
@@ -303,7 +307,11 @@ func writeConfigStub() (string, func(), error) {
 	}, nil
 }
 
-func waitForReady(addr string, cardPath string) error {
+func waitForReady(
+	ctx context.Context,
+	addr string,
+	cardPath string,
+) error {
 	deadline := time.Now().Add(startupTimeout)
 	url := "http://" + addr + cardPath
 	client := &http.Client{
@@ -311,12 +319,24 @@ func waitForReady(addr string, cardPath string) error {
 	}
 
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(url)
+		req, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodGet,
+			url,
+			nil,
+		)
+		if err != nil {
+			return fmt.Errorf("build readiness request failed: %w", err)
+		}
+		resp, err := client.Do(req)
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				return nil
 			}
+		} else if errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) {
+			return err
 		}
 		time.Sleep(pollInterval)
 	}

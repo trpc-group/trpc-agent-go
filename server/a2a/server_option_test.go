@@ -341,15 +341,22 @@ func TestSingleMsgSubscriber(t *testing.T) {
 }
 
 func TestWithOptions(t *testing.T) {
+	expectedRunner := runner.Runner(&mockRunner{})
+
 	tests := []struct {
-		name     string
-		option   Option
-		validate func(*testing.T, *options)
+		name           string
+		option         Option
+		expectedRunner runner.Runner
+		validate       func(*testing.T, *options, runner.Runner)
 	}{
 		{
 			name:   "WithSessionService",
 			option: WithSessionService(&mockSessionService{}),
-			validate: func(t *testing.T, opts *options) {
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
 				if opts.sessionService == nil {
 					t.Error("WithSessionService() should set sessionService")
 				}
@@ -358,7 +365,11 @@ func TestWithOptions(t *testing.T) {
 		{
 			name:   "WithHost",
 			option: WithHost("localhost:9999"),
-			validate: func(t *testing.T, opts *options) {
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
 				if opts.host != "localhost:9999" {
 					t.Errorf("WithHost() host = %v, want %v", opts.host, "localhost:9999")
 				}
@@ -367,18 +378,27 @@ func TestWithOptions(t *testing.T) {
 		{
 			name:   "WithAgentCard",
 			option: WithAgentCard(a2a.AgentCard{Name: "test-card"}),
-			validate: func(t *testing.T, opts *options) {
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
 				if opts.agentCard == nil || opts.agentCard.Name != "test-card" {
 					t.Error("WithAgentCard() should set agentCard")
 				}
 			},
 		},
 		{
-			name:   "WithRunner",
-			option: WithRunner(runner.Runner(&mockRunner{})),
-			validate: func(t *testing.T, opts *options) {
-				if opts.runner == nil {
-					t.Error("WithRunner() should set runner")
+			name:           "WithRunner",
+			option:         WithRunner(expectedRunner),
+			expectedRunner: expectedRunner,
+			validate: func(
+				t *testing.T,
+				opts *options,
+				expected runner.Runner,
+			) {
+				if opts.runner != expected {
+					t.Error("WithRunner() should set the provided runner")
 				}
 			},
 		},
@@ -387,7 +407,11 @@ func TestWithOptions(t *testing.T) {
 			option: WithProcessorBuilder(func(agent agent.Agent, sessionService session.Service) taskmanager.MessageProcessor {
 				return &mockTaskManager{}
 			}),
-			validate: func(t *testing.T, opts *options) {
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
 				if opts.processorBuilder == nil {
 					t.Error("WithProcessorBuilder() should set processorBuilder")
 				}
@@ -398,7 +422,11 @@ func TestWithOptions(t *testing.T) {
 			option: WithProcessMessageHook(func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
 				return next
 			}),
-			validate: func(t *testing.T, opts *options) {
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
 				if opts.processorHook == nil {
 					t.Error("WithProcessMessageHook() should set processorHook")
 				}
@@ -410,7 +438,11 @@ func TestWithOptions(t *testing.T) {
 				// Return nil for testing purposes - we just want to test the option is set
 				return nil
 			}),
-			validate: func(t *testing.T, opts *options) {
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
 				if opts.taskManagerBuilder == nil {
 					t.Error("WithTaskManagerBuilder() should set taskManagerBuilder")
 				}
@@ -419,7 +451,11 @@ func TestWithOptions(t *testing.T) {
 		{
 			name:   "WithA2AToAgentConverter",
 			option: WithA2AToAgentConverter(&mockA2AToAgentConverter{}),
-			validate: func(t *testing.T, opts *options) {
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
 				if opts.a2aToAgentConverter == nil {
 					t.Error("WithA2AToAgentConverter() should set a2aToAgentConverter")
 				}
@@ -428,7 +464,11 @@ func TestWithOptions(t *testing.T) {
 		{
 			name:   "WithEventToA2AConverter",
 			option: WithEventToA2AConverter(&mockEventToA2AConverter{}),
-			validate: func(t *testing.T, opts *options) {
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
 				if opts.eventToA2AConverter == nil {
 					t.Error("WithEventToA2AConverter() should set eventToA2AConverter")
 				}
@@ -437,7 +477,11 @@ func TestWithOptions(t *testing.T) {
 		{
 			name:   "WithDebugLogging",
 			option: WithDebugLogging(true),
-			validate: func(t *testing.T, opts *options) {
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
 				if !opts.debugLogging {
 					t.Error("WithDebugLogging() should set debugLogging to true")
 				}
@@ -448,7 +492,11 @@ func TestWithOptions(t *testing.T) {
 			option: WithErrorHandler(func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
 				return nil, nil
 			}),
-			validate: func(t *testing.T, opts *options) {
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
 				if opts.errorHandler == nil {
 					t.Error("WithErrorHandler() should set errorHandler")
 				}
@@ -457,7 +505,11 @@ func TestWithOptions(t *testing.T) {
 		{
 			name:   "WithExtraA2AOptions",
 			option: WithExtraA2AOptions(),
-			validate: func(t *testing.T, opts *options) {
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
 				// Just validate the function doesn't panic
 				// extraOptions slice should be initialized
 				if opts.extraOptions == nil {
@@ -473,7 +525,7 @@ func TestWithOptions(t *testing.T) {
 				errorHandler: defaultErrorHandler,
 			}
 			tt.option(opts)
-			tt.validate(t, opts)
+			tt.validate(t, opts, tt.expectedRunner)
 		})
 	}
 }
