@@ -92,6 +92,7 @@ const (
 	codeFilePatternBase = "code_*"
 	pythonFileExt       = ".py"
 	shellFileExt        = ".sh"
+	prepareFileErrFmt   = "failed to prepare %s file: %w"
 )
 
 // New creates a local CodeExecutor.
@@ -216,9 +217,7 @@ func (e *CodeExecutor) prepareCodeFile(
 	_ = helperFile.Close()
 	fileMode := e.getFileMode(block.Language)
 	if err = writeHelperFile(filePath, content, fileMode); err != nil {
-		return "", fmt.Errorf(
-			"failed to prepare %s file: %w", block.Language, err,
-		)
+		return "", fmt.Errorf(prepareFileErrFmt, block.Language, err)
 	}
 	return filePath, nil
 }
@@ -228,12 +227,9 @@ func writeHelperFile(
 	fileMode os.FileMode,
 ) error {
 	if err := os.WriteFile(filePath, []byte(content), fileMode); err != nil {
-		return fmt.Errorf("write helper file: %w", err)
+		return err
 	}
-	if err := os.Chmod(filePath, fileMode); err != nil {
-		return fmt.Errorf("set helper file mode: %w", err)
-	}
-	return nil
+	return os.Chmod(filePath, fileMode)
 }
 
 func helperFileExtension(language string) (string, error) {
