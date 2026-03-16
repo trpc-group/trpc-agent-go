@@ -85,7 +85,7 @@ func (s *Service) CreateSessionSummary(
 				deleted_at = NULL`,
 			s.tableSessionSummaries,
 		),
-		key.AppName, key.UserID, key.SessionID, filterKey, summaryBytes, sum.UpdatedAt, nil)
+		key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), sum.UpdatedAt, nil)
 	if err != nil {
 		return fmt.Errorf("upsert summary failed: %w", err)
 	}

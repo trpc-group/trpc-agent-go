@@ -16,6 +16,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	oteltrace "go.opentelemetry.io/otel/trace"
+
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -137,6 +141,37 @@ func TestKnowledgeSearcher_Search_UpsertsAndSearches(t *testing.T) {
 	if vs.lastSearchQuery.Filter == nil || len(vs.lastSearchQuery.Filter.IDs) != 2 {
 		t.Fatalf("expected IDs filter, got %#v", vs.lastSearchQuery.Filter)
 	}
+}
+
+func TestKnowledgeSearcher_RewriteQueryReturnsOriginalParentSpanContext(t *testing.T) {
+	t.Parallel()
+	provider := sdktrace.NewTracerProvider()
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+	})
+	parentCtx, parentSpan := provider.Tracer("toolsearch-parent").Start(context.Background(), "parent")
+	defer parentSpan.End()
+	searcher := &knowledgeSearcher{
+		model: &fakeModel{
+			generate: func(ctx context.Context, req *model.Request) (<-chan *model.Response, error) {
+				return respCh(&model.Response{
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("weather information")},
+					},
+				}), nil
+			},
+		},
+		systemPrompt: defaultSystemPromptWithToolKnowledge,
+	}
+	rewrittenCtx, query, usage, err := searcher.rewriteQuery(parentCtx, "weather in beijing")
+	require.NoError(t, err)
+	require.Equal(t, "weather information", query)
+	require.NotNil(t, usage)
+	require.Equal(
+		t,
+		parentSpan.SpanContext().SpanID(),
+		oteltrace.SpanFromContext(rewrittenCtx).SpanContext().SpanID(),
+	)
 }
 
 func TestToolToText(t *testing.T) {

@@ -22,6 +22,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
@@ -29,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
@@ -68,6 +71,21 @@ func (m *mockModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 	return respChan, nil
 }
 
+func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	originalProvider := trace.TracerProvider
+	originalTracer := trace.Tracer
+	trace.TracerProvider = provider
+	trace.Tracer = provider.Tracer("function-call-disable-tracing-test")
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		trace.TracerProvider = originalProvider
+		trace.Tracer = originalTracer
+	})
+	return recorder
+}
+
 // Minimal callable tool used by tests above
 type mockCallableTool struct {
 	declaration *tool.Declaration
@@ -77,6 +95,85 @@ type mockCallableTool struct {
 func (m *mockCallableTool) Declaration() *tool.Declaration { return m.declaration }
 func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 	return m.callFn(ctx, args)
+}
+
+func TestExecuteSingleToolCallSequential_DisableTracingSkipsSpanCreation(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	p := NewFunctionCallResponseProcessor(false, nil)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableTracing: true,
+		}),
+	)
+	invocation.AgentName = "test-agent"
+	response := &model.Response{}
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "echo",
+			Arguments: []byte(`{"message":"hello"}`),
+		},
+	}
+	tools := map[string]tool.Tool{
+		"echo": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "echo"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "ok", nil
+			},
+		},
+	}
+	eventChan := make(chan *event.Event, 1)
+	toolEvent, err := p.executeSingleToolCallSequential(context.Background(), invocation, response, tools, eventChan, 0, toolCall)
+	require.NoError(t, err)
+	require.NotNil(t, toolEvent)
+	require.Empty(t, recorder.Ended())
+}
+
+func TestExecuteToolCallsInParallel_DisableTracingSkipsSpanCreation(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	p := NewFunctionCallResponseProcessor(true, nil)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			DisableTracing: true,
+		}),
+	)
+	invocation.AgentName = "test-agent"
+	response := &model.Response{}
+	toolCalls := []model.ToolCall{
+		{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "tool1",
+				Arguments: []byte(`{}`),
+			},
+		},
+		{
+			ID: "call-2",
+			Function: model.FunctionDefinitionParam{
+				Name:      "tool2",
+				Arguments: []byte(`{}`),
+			},
+		},
+	}
+	tools := map[string]tool.Tool{
+		"tool1": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "tool1"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "ok-1", nil
+			},
+		},
+		"tool2": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "tool2"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "ok-2", nil
+			},
+		},
+	}
+	eventChan := make(chan *event.Event, 2)
+	mergedEvent, err := p.executeToolCallsInParallel(context.Background(), invocation, response, toolCalls, tools, eventChan)
+	require.NoError(t, err)
+	require.NotNil(t, mergedEvent)
+	require.Empty(t, recorder.Ended())
 }
 
 type mockInvocationStateDeltaTool struct {

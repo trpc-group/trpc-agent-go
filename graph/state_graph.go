@@ -28,10 +28,10 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
-	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -41,7 +41,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -447,6 +446,35 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 	}
 }
 
+// tracingDisabled reports whether tracing is disabled for the invocation.
+func tracingDisabled(invocation *agent.Invocation) bool {
+	return invocation != nil && invocation.RunOptions.DisableTracing
+}
+
+// tracingDisabledInContext reports whether tracing is disabled for the invocation in context.
+func tracingDisabledInContext(ctx context.Context) bool {
+	invocation, ok := agent.InvocationFromContext(ctx)
+	return ok && tracingDisabled(invocation)
+}
+
+// startNodeSpan returns a no-op span when tracing is disabled and otherwise starts a new span.
+func startNodeSpan(ctx context.Context, spanName string) (context.Context, oteltrace.Span, bool) {
+	if tracingDisabledInContext(ctx) {
+		return ctx, noop.Span{}, false
+	}
+	ctx, span := trace.Tracer.Start(ctx, spanName)
+	return ctx, span, true
+}
+
+// startNodeSpanForInvocation returns a no-op span when tracing is disabled for the invocation or context.
+func startNodeSpanForInvocation(ctx context.Context, invocation *agent.Invocation, spanName string) (context.Context, oteltrace.Span, bool) {
+	if tracingDisabled(invocation) || tracingDisabledInContext(ctx) {
+		return ctx, noop.Span{}, false
+	}
+	ctx, span := trace.Tracer.Start(ctx, spanName)
+	return ctx, span, true
+}
+
 // AddNode adds a node with the given ID and function.
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
@@ -461,6 +489,10 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 	}
 
 	node.Function = func(ctx context.Context, state State) (any, error) {
+		if tracingDisabledInContext(ctx) {
+			return function(ctx, state)
+		}
+
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
 		workflow := &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id, Request: state.safeClone()}
 		defer func() {
@@ -537,8 +569,11 @@ func (sg *StateGraph) AddLLMNode(
 	chatSpanName := itelemetry.NewChatSpanName(modelName)
 
 	node.Function = func(ctx context.Context, state State) (any, error) {
-		ctx, wfSpan := trace.Tracer.Start(ctx, workflowSpanName)
-		recordWorkflow := wfSpan != nil && wfSpan.IsRecording()
+		ctx, wfSpan, startedWorkflowSpan := startNodeSpan(
+			ctx,
+			workflowSpanName,
+		)
+		recordWorkflow := startedWorkflowSpan && wfSpan != nil && wfSpan.IsRecording()
 		var workflow *itelemetry.Workflow
 		if recordWorkflow {
 			workflow = &itelemetry.Workflow{Name: workflowName, ID: id, Request: state.safeClone()}
@@ -547,14 +582,14 @@ func (sg *StateGraph) AddLLMNode(
 			if recordWorkflow {
 				itelemetry.TraceWorkflow(wfSpan, workflow)
 			}
-			if wfSpan != nil {
+			if startedWorkflowSpan && wfSpan != nil {
 				wfSpan.End()
 			}
 		}()
 
-		ctx, span := trace.Tracer.Start(ctx, chatSpanName)
+		ctx, span, startedSpan := startNodeSpan(ctx, chatSpanName)
 		defer func() {
-			if span != nil {
+			if startedSpan && span != nil {
 				span.End()
 			}
 		}()
@@ -1069,9 +1104,10 @@ func NewLLMNodeFunc(
 		opt(runner)
 	}
 	return func(ctx context.Context, state State) (any, error) {
-
-		_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(llmModel.Info().Name))
-		defer span.End()
+		_, span, startedSpan := startNodeSpan(ctx, itelemetry.NewChatSpanName(llmModel.Info().Name))
+		if startedSpan {
+			defer span.End()
+		}
 		result, err := runner.execute(ctx, state, span)
 		if err != nil {
 			span.RecordError(err)
@@ -1869,8 +1905,10 @@ func runModelStream(
 	request *model.Request,
 	beforeGenerate func(context.Context),
 ) (context.Context, modelResponseStream, error) {
-	ctx, span := trace.Tracer.Start(ctx, "run_model")
-	defer span.End()
+	ctx, span, startedSpan := startNodeSpanForInvocation(ctx, invocation, "run_model")
+	if startedSpan {
+		defer span.End()
+	}
 
 	// Set span attributes for model execution.
 	if span != nil && span.IsRecording() {
@@ -1993,17 +2031,22 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 	configuredCallbacks := node.toolCallbacks
 
 	return func(ctx context.Context, state State) (any, error) {
-		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
-		workflow := &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node", Request: state.safeClone()}
-		defer func() {
-			itelemetry.TraceWorkflow(span, workflow)
-			span.End()
-		}()
+		ctx, span, startedSpan := startNodeSpan(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
+		var workflow *itelemetry.Workflow
+		if startedSpan {
+			workflow = &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node", Request: state.safeClone()}
+			defer func() {
+				itelemetry.TraceWorkflow(span, workflow)
+				span.End()
+			}()
+		}
 
 		// Extract and validate messages from state.
 		toolCalls, err := extractToolCallsFromState(state, span)
 		if err != nil {
-			workflow.Error = err
+			if workflow != nil {
+				workflow.Error = err
+			}
 			return nil, err
 		}
 
@@ -2037,7 +2080,9 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			ToolCallbacks:  toolCallbacks,
 		})
 		if err != nil {
-			workflow.Error = err
+			if workflow != nil {
+				workflow.Error = err
+			}
 			return nil, err
 		}
 		upd := State{StateKeyMessages: newMessages}
@@ -2070,7 +2115,9 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			}
 		}
 
-		workflow.Response = upd
+		if workflow != nil {
+			workflow.Response = upd
+		}
 		return upd, nil
 	}
 }
@@ -2263,20 +2310,6 @@ func agentNodeConfigFromOptions(opts ...Option) agentNodeConfig {
 		userInputKey:        dummyNode.userInputKey,
 		streamOutputName:    dummyNode.streamOutputName,
 	}
-}
-
-func finalizeInvokeAgentSpan(span oteltrace.Span, errp *error) {
-	if errp == nil || *errp == nil {
-		span.End()
-		return
-	}
-	err := *errp
-	span.SetStatus(codes.Error, err.Error())
-	span.SetAttributes(attribute.String(
-		semconvtrace.KeyErrorType,
-		itelemetry.ToErrorType(err, semconvtrace.ValueDefaultErrorType),
-	))
-	span.End()
 }
 
 func targetAgentFromState(state State, agentName string) (agent.Agent, error) {
@@ -2491,7 +2524,7 @@ func finalizeAgentNodeOutput(
 // The agent name should correspond to a sub-agent in the parent GraphAgent's sub-agent list.
 func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 	cfg := agentNodeConfigFromOptions(opts...)
-	return func(ctx context.Context, state State) (a any, err error) {
+	return func(ctx context.Context, state State) (any, error) {
 		// Extract execution context for event emission.
 		invocationID, _, _, _, eventChan := extractExecutionContext(state)
 
@@ -2523,29 +2556,6 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			cfg.userInputKey,
 		)
 
-		ctx, span := trace.Tracer.Start(
-			ctx,
-			fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName),
-		)
-		defer finalizeInvokeAgentSpan(span, &err)
-
-		itelemetry.TraceBeforeInvokeAgent(
-			span,
-			invocation,
-			targetAgent.Info().Description,
-			"",
-			cfg.llmGenerationConfig,
-		)
-
-		stream := iagent.ResolveInvokeAgentStream(invocation, cfg.llmGenerationConfig)
-		tracker := itelemetry.NewInvokeAgentTracker(
-			ctx,
-			invocation,
-			stream,
-			&err,
-		)
-		defer tracker.RecordMetrics()()
-
 		// Emit agent execution start event.
 		startTime := time.Now()
 		emitAgentStartEvent(ctx, eventChan, invocationID, nodeID, startTime)
@@ -2559,9 +2569,6 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			// Emit agent execution error event.
 			endTime := time.Now()
 			emitAgentErrorEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime, err)
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			tracker.SetResponseErrorType(semconvtrace.ValueDefaultErrorType)
 			return nil, fmt.Errorf("failed to run agent %s: %w", agentName, err)
 		}
 
@@ -2575,7 +2582,6 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			eventChan,
 			agentName,
 			cfg.streamOutputName,
-			tracker,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process agent event stream: %w", err)
@@ -2596,13 +2602,6 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			intr.TaskID = streamRes.interrupt.TaskID
 			return nil, intr
 		}
-
-		itelemetry.TraceAfterInvokeAgent(
-			span,
-			streamRes.fullRespEvent,
-			streamRes.tokenUsage,
-			tracker.FirstTokenTimeDuration(),
-		)
 
 		// Emit agent execution complete event.
 		endTime := time.Now()
@@ -2639,8 +2638,6 @@ type agentEventStreamResult struct {
 	finalState       State
 	rawDelta         map[string][]byte
 	structuredOutput any
-	fullRespEvent    *event.Event
-	tokenUsage       *itelemetry.TokenUsage
 	interrupt        *InterruptError
 }
 
@@ -2733,11 +2730,9 @@ func updateAgentStreamResultFromEvent(
 	ctx context.Context,
 	res *agentEventStreamResult,
 	ev *event.Event,
-	tracker *itelemetry.InvokeAgentTracker,
 ) {
 	updateAgentLastResponse(res, ev)
 	updateAgentStructuredOutput(res, ev)
-	updateAgentTokenUsage(res, ev, tracker)
 	updateAgentInterrupt(res, ev)
 	updateAgentFinalState(ctx, res, ev)
 }
@@ -2764,29 +2759,6 @@ func updateAgentStructuredOutput(res *agentEventStreamResult, ev *event.Event) {
 		return
 	}
 	res.structuredOutput = ev.StructuredOutput
-}
-
-func updateAgentTokenUsage(
-	res *agentEventStreamResult,
-	ev *event.Event,
-	tracker *itelemetry.InvokeAgentTracker,
-) {
-	if res == nil || ev == nil || ev.Response == nil {
-		return
-	}
-	if tracker != nil {
-		tracker.TrackResponse(ev.Response)
-	}
-	if ev.Response.IsPartial {
-		return
-	}
-	if ev.Response.Usage != nil {
-		res.tokenUsage.PromptTokens += ev.Response.Usage.PromptTokens
-		res.tokenUsage.CompletionTokens +=
-			ev.Response.Usage.CompletionTokens
-		res.tokenUsage.TotalTokens += ev.Response.Usage.TotalTokens
-	}
-	res.fullRespEvent = ev
 }
 
 func updateAgentInterrupt(res *agentEventStreamResult, ev *event.Event) {
@@ -2855,12 +2827,7 @@ func processAgentEventStream(
 	eventChan chan<- *event.Event,
 	agentName string,
 	streamName string,
-	tracker *itelemetry.InvokeAgentTracker,
 ) (res agentEventStreamResult, err error) {
-	res = agentEventStreamResult{
-		tokenUsage: &itelemetry.TokenUsage{},
-	}
-
 	tap, err := newAgentDeltaStreamTap(ctx, streamName, &res.lastResponse)
 	if err != nil {
 		return res, err
@@ -2884,7 +2851,7 @@ func processAgentEventStream(
 
 		tap.WriteDelta(agentEvent)
 
-		updateAgentStreamResultFromEvent(ctx, &res, agentEvent, tracker)
+		updateAgentStreamResultFromEvent(ctx, &res, agentEvent)
 	}
 
 	return res, nil
@@ -3724,6 +3691,9 @@ func traceProcessedModelResponse(
 	if tracker != nil {
 		tracker.SetLastEvent(lastEvent)
 	}
+	if invocation != nil && invocation.RunOptions.DisableTracing {
+		return
+	}
 	var ttfb time.Duration
 	if tracker != nil {
 		ttfb = tracker.FirstTokenTimeDuration()
@@ -4340,7 +4310,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	}
 
 	// Execute the tool with callbacks and get modified arguments.
-	ctx, span := trace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
+	ctx, span, startedSpan := startNodeSpan(ctx, itelemetry.NewExecuteToolSpanName(config.ToolCall.Function.Name))
 	ctx, result, modifiedArgs, err := runTool(ctx, config.ToolCall, config.ToolCallbacks, t, config.State)
 
 	// Emit tool execution start event with modified arguments.
@@ -4374,7 +4344,9 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		Arguments:    modifiedArgs,
 		ResponseID:   responseID,
 	})
-	itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event, err)
+	if startedSpan {
+		itelemetry.TraceToolCall(span, sessInfo, t.Declaration(), modifiedArgs, event, err)
+	}
 	itelemetry.ReportExecuteToolMetrics(ctx, itelemetry.ExecuteToolAttributes{
 		RequestModelName: "trpc-agent-go-graph",
 		ToolName:         name,
@@ -4384,7 +4356,9 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		SessionID:        sessInfo.ID,
 		Error:            err,
 	}, time.Since(startTime))
-	span.End()
+	if startedSpan {
+		span.End()
+	}
 
 	if err != nil {
 		if interruptErr != nil {

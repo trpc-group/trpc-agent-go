@@ -18,9 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -86,16 +86,30 @@ func (a *ChainAgent) executeChainRun(
 	eventChan chan<- *event.Event,
 ) {
 	// Setup invocation before tracing so span name and telemetry attributes
-	// share the same Invocation.AgentName source.
+	// share the same invocation agent identity.
 	a.setupInvocation(invocation)
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName))
 	stream := iagent.ResolveInvokeAgentStream(invocation, nil)
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, "chain-agent", "", &model.GenerationConfig{Stream: stream})
+	ctx, span, startedSpan := itrace.StartSpan(
+		ctx,
+		invocation,
+		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName),
+	)
+	if startedSpan {
+		itelemetry.TraceBeforeInvokeAgent(
+			span,
+			invocation,
+			"chain-agent",
+			"",
+			&model.GenerationConfig{Stream: stream},
+		)
+	}
 	var trackerErr error
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
 	defer func() {
 		tracker.RecordMetrics()()
-		span.End()
+		if startedSpan {
+			span.End()
+		}
 	}()
 
 	// Handle before agent callbacks.
@@ -104,7 +118,6 @@ func (a *ChainAgent) executeChainRun(
 	if shouldReturn {
 		return
 	}
-
 	// Execute sub-agents in sequence.
 	e, tokenUsage := a.executeSubAgents(ctx, invocation, eventChan, tracker)
 	if e != nil && e.Error != nil {
@@ -117,7 +130,9 @@ func (a *ChainAgent) executeChainRun(
 			e = afterEvent
 		}
 	}
-	itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage, tracker.FirstTokenTimeDuration())
+	if startedSpan {
+		itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage, tracker.FirstTokenTimeDuration())
+	}
 }
 
 // setupInvocation prepares the invocation for execution.

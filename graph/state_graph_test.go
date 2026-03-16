@@ -373,7 +373,6 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 		parentEventChan,
 		"agent",
 		"",
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "", res.lastResponse)
@@ -381,7 +380,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	require.Len(t, res.rawDelta, 1)
 }
 
-func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
+func TestProcessAgentEventStream_CapturesLastResponseFromFinalEvent(t *testing.T) {
 	ctx := context.Background()
 	agentEvents := make(chan *event.Event, 2)
 	parentEventChan := make(chan *event.Event, 2)
@@ -422,18 +421,9 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 		parentEventChan,
 		"agent",
 		"",
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "final", res.lastResponse)
-	require.Equal(t, finalUsage.PromptTokens, res.tokenUsage.PromptTokens)
-	require.Equal(
-		t,
-		finalUsage.CompletionTokens,
-		res.tokenUsage.CompletionTokens,
-	)
-	require.Equal(t, finalUsage.TotalTokens, res.tokenUsage.TotalTokens)
-	require.Equal(t, finalEvent, res.fullRespEvent)
 	require.Len(t, parentEventChan, 2)
 }
 
@@ -485,7 +475,6 @@ func TestProcessAgentEventStream_StreamOutputWritesDeltas(t *testing.T) {
 		parentEventChan,
 		"agent",
 		streamName,
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 
@@ -527,7 +516,6 @@ func TestProcessAgentEventStream_StreamOutputWritesFinalWhenNoDeltas(
 		parentEventChan,
 		"agent",
 		streamName,
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 
@@ -572,7 +560,6 @@ func TestProcessAgentEventStream_StreamOutputCloseWithError(
 		parentEventChan,
 		"agent",
 		streamName,
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.ErrorIs(t, err, context.Canceled)
 
@@ -639,7 +626,6 @@ func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
 		parentEventChan,
 		"agent",
 		"",
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "final", res.lastResponse)

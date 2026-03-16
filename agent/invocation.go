@@ -318,6 +318,14 @@ func WithStreamMode(modes ...StreamMode) RunOption {
 	}
 }
 
+// WithDisableTracing requests supported agent and flow execution paths to skip
+// creating OpenTelemetry spans for this run.
+func WithDisableTracing(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableTracing = disable
+	}
+}
+
 // WithDisableResponseUsageTracking disables attaching usage and timing info to streaming responses.
 func WithDisableResponseUsageTracking(disable bool) RunOption {
 	return func(opts *RunOptions) {
@@ -647,6 +655,10 @@ type RunOptions struct {
 	// When StreamModeEnabled is false, runners should not apply any stream
 	// filtering and preserve the existing behavior.
 	StreamModes []StreamMode
+
+	// DisableTracing requests supported agent and flow execution paths to skip
+	// creating OpenTelemetry spans for this run.
+	DisableTracing bool
 
 	// DisableResponseUsageTracking disables attaching usage and timing info to streaming responses.
 	DisableResponseUsageTracking bool
