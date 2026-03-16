@@ -22,14 +22,12 @@ import (
 
 const (
 	envTelemetryEnabled = "TRPC_AGENT_TELEMETRY_ENABLED"
-	envTelemetryBackend = "TRPC_AGENT_TELEMETRY_BACKEND"
 	envTelemetryConfig  = "TRPC_AGENT_TELEMETRY_CONFIG"
 
 	telemetryBackendLangfuse = "langfuse"
 )
 
-type config struct {
-	Enabled                      *bool  `yaml:"enabled"`
+type langfuseConfig struct {
 	PublicKey                    string `yaml:"public_key"`
 	SecretKey                    string `yaml:"secret_key"`
 	Host                         string `yaml:"host"`
@@ -38,21 +36,27 @@ type config struct {
 	Processor                    string `yaml:"processor"`
 }
 
-func resolveConfigFromEnv() (config, bool, error) {
+type telemetryConfigFile struct {
+	Enabled  *bool          `yaml:"enabled"`
+	Backend  string         `yaml:"backend"`
+	Langfuse langfuseConfig `yaml:"langfuse"`
+}
+
+func resolveConfigFromEnv() (langfuseConfig, bool, error) {
 	enabledOverride, err := getBoolEnv(envTelemetryEnabled)
 	if err != nil {
-		return config{}, false, err
+		return langfuseConfig{}, false, err
 	}
 	if enabledOverride != nil && !*enabledOverride {
-		return config{}, false, nil
+		return langfuseConfig{}, false, nil
 	}
 
 	configPath := strings.TrimSpace(os.Getenv(envTelemetryConfig))
-	cfg := config{}
+	fileCfg := telemetryConfigFile{}
 	if configPath != "" {
-		cfg, err = loadConfigFromFile(configPath)
+		fileCfg, err = loadConfigFromFile(configPath)
 		if err != nil {
-			return config{}, false, err
+			return langfuseConfig{}, false, err
 		}
 	}
 
@@ -60,33 +64,45 @@ func resolveConfigFromEnv() (config, bool, error) {
 	switch {
 	case enabledOverride != nil:
 		enabled = *enabledOverride
-	case cfg.Enabled != nil:
-		enabled = *cfg.Enabled
+	case fileCfg.Enabled != nil:
+		enabled = *fileCfg.Enabled
 	}
 	if !enabled {
-		return cfg, false, nil
+		return fileCfg.Langfuse, false, nil
 	}
 
-	backend := strings.TrimSpace(os.Getenv(envTelemetryBackend))
-	if backend != "" && !strings.EqualFold(backend, telemetryBackendLangfuse) {
-		return config{}, false, fmt.Errorf("testing/telemetry/langfuse: unsupported backend %q", backend)
+	if configPath != "" {
+		if err := validateTelemetryConfig(fileCfg); err != nil {
+			return langfuseConfig{}, false, err
+		}
 	}
-	return cfg, true, nil
+	return fileCfg.Langfuse, true, nil
 }
 
-func loadConfigFromFile(path string) (config, error) {
+func loadConfigFromFile(path string) (telemetryConfigFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return config{}, fmt.Errorf("testing/telemetry/langfuse: read config %q: %w", path, err)
+		return telemetryConfigFile{}, fmt.Errorf("testing/telemetry/langfuse: read config %q: %w", path, err)
 	}
-	cfg := config{}
+	cfg := telemetryConfigFile{}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return config{}, fmt.Errorf("testing/telemetry/langfuse: decode config %q: %w", path, err)
+		return telemetryConfigFile{}, fmt.Errorf("testing/telemetry/langfuse: decode config %q: %w", path, err)
 	}
 	return cfg, nil
 }
 
-func buildStartOptions(cfg config) ([]baselangfuse.Option, error) {
+func validateTelemetryConfig(cfg telemetryConfigFile) error {
+	backend := strings.TrimSpace(cfg.Backend)
+	if backend == "" {
+		return fmt.Errorf("testing/telemetry/langfuse: missing backend in telemetry config")
+	}
+	if !strings.EqualFold(backend, telemetryBackendLangfuse) {
+		return fmt.Errorf("testing/telemetry/langfuse: unsupported backend %q", cfg.Backend)
+	}
+	return nil
+}
+
+func buildStartOptions(cfg langfuseConfig) ([]baselangfuse.Option, error) {
 	processorMode, err := resolveProcessorMode(cfg.Processor)
 	if err != nil {
 		return nil, err

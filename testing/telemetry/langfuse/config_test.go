@@ -24,12 +24,14 @@ func TestLoadConfigFromFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "langfuse.yaml")
 	content := []byte(`enabled: true
-public_key: pk
-secret_key: sk
-host: localhost:3000
-insecure: true
-observation_leaf_value_max_bytes: 256
-processor: batch
+backend: langfuse
+langfuse:
+  public_key: pk
+  secret_key: sk
+  host: localhost:3000
+  insecure: true
+  observation_leaf_value_max_bytes: 256
+  processor: batch
 `)
 	require.NoError(t, os.WriteFile(path, content, 0o644))
 
@@ -38,16 +40,17 @@ processor: batch
 	if assert.NotNil(t, cfg.Enabled) {
 		assert.True(t, *cfg.Enabled)
 	}
-	assert.Equal(t, "pk", cfg.PublicKey)
-	assert.Equal(t, "sk", cfg.SecretKey)
-	assert.Equal(t, "localhost:3000", cfg.Host)
-	if assert.NotNil(t, cfg.Insecure) {
-		assert.True(t, *cfg.Insecure)
+	assert.Equal(t, telemetryBackendLangfuse, cfg.Backend)
+	assert.Equal(t, "pk", cfg.Langfuse.PublicKey)
+	assert.Equal(t, "sk", cfg.Langfuse.SecretKey)
+	assert.Equal(t, "localhost:3000", cfg.Langfuse.Host)
+	if assert.NotNil(t, cfg.Langfuse.Insecure) {
+		assert.True(t, *cfg.Langfuse.Insecure)
 	}
-	if assert.NotNil(t, cfg.ObservationLeafValueMaxBytes) {
-		assert.Equal(t, 256, *cfg.ObservationLeafValueMaxBytes)
+	if assert.NotNil(t, cfg.Langfuse.ObservationLeafValueMaxBytes) {
+		assert.Equal(t, 256, *cfg.Langfuse.ObservationLeafValueMaxBytes)
 	}
-	assert.Equal(t, "batch", cfg.Processor)
+	assert.Equal(t, "batch", cfg.Langfuse.Processor)
 }
 
 func TestResolveConfigFromEnv_ExplicitDisableSkipsConfigLoad(t *testing.T) {
@@ -63,8 +66,10 @@ func TestResolveConfigFromEnv_UsesYAMLWhenEnabled(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "langfuse.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`enabled: true
-host: localhost:3000
-processor: batch
+backend: langfuse
+langfuse:
+  host: localhost:3000
+  processor: batch
 `), 0o644))
 	t.Setenv(envTelemetryConfig, path)
 
@@ -75,12 +80,12 @@ processor: batch
 	assert.Equal(t, "batch", cfg.Processor)
 }
 
-func TestResolveConfigFromEnv_EnvOverrideWins(t *testing.T) {
+func TestResolveConfigFromEnv_UsesBackendFromYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "langfuse.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(`enabled: false
+	require.NoError(t, os.WriteFile(path, []byte(`enabled: true
+backend: langfuse
 `), 0o644))
-	t.Setenv(envTelemetryEnabled, "true")
 	t.Setenv(envTelemetryConfig, path)
 
 	_, enabled, err := resolveConfigFromEnv()
@@ -88,12 +93,43 @@ func TestResolveConfigFromEnv_EnvOverrideWins(t *testing.T) {
 	assert.True(t, enabled)
 }
 
-func TestResolveConfigFromEnv_RejectsUnsupportedBackend(t *testing.T) {
-	t.Setenv(envTelemetryEnabled, "true")
-	t.Setenv(envTelemetryBackend, "jaeger")
+func TestResolveConfigFromEnv_RejectsMissingBackendInYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "langfuse.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`enabled: true
+langfuse:
+  host: localhost:3000
+`), 0o644))
+	t.Setenv(envTelemetryConfig, path)
 
 	_, _, err := resolveConfigFromEnv()
 	require.Error(t, err)
+}
+
+func TestResolveConfigFromEnv_RejectsUnsupportedBackendInYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "langfuse.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`enabled: true
+backend: jaeger
+`), 0o644))
+	t.Setenv(envTelemetryConfig, path)
+
+	_, _, err := resolveConfigFromEnv()
+	require.Error(t, err)
+}
+
+func TestResolveConfigFromEnv_EnvOverrideWins(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "langfuse.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`enabled: false
+backend: langfuse
+`), 0o644))
+	t.Setenv(envTelemetryEnabled, "true")
+	t.Setenv(envTelemetryConfig, path)
+
+	_, enabled, err := resolveConfigFromEnv()
+	require.NoError(t, err)
+	assert.True(t, enabled)
 }
 
 func TestResolveProcessorMode(t *testing.T) {

@@ -35,7 +35,7 @@ func TestStartWithConfigAndCloseIsIdempotent(t *testing.T) {
 		}, nil
 	}
 
-	require.NoError(t, startWithConfig(config{}))
+	require.NoError(t, startWithConfig(langfuseConfig{}))
 	require.NoError(t, Close(context.Background()))
 	require.NoError(t, Close(context.Background()))
 	assert.Equal(t, 1, startCalls)

@@ -1,0 +1,9 @@
+enabled: true
+backend: langfuse
+langfuse:
+  public_key: ""
+  secret_key: ""
+  host: localhost:3000
+  insecure: true
+  processor: simple
+  observation_leaf_value_max_bytes: 4096

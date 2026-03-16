@@ -7,6 +7,8 @@
 //
 //
 
+// Package langfuse provides test helpers that auto-start Langfuse telemetry
+// from environment configuration and clean it up on process shutdown.
 package langfuse
 
 import (
@@ -58,7 +60,7 @@ func autoStart() {
 	}
 }
 
-func startWithConfig(cfg config) error {
+func startWithConfig(cfg langfuseConfig) error {
 	stateMu.Lock()
 	if state.cleanup != nil {
 		stateMu.Unlock()
