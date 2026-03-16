@@ -107,6 +107,82 @@ func TestLLMAgent_SkillKnowledgeOnlyToolsRegistered(t *testing.T) {
 	require.False(t, names["skill_kill_session"])
 }
 
+func TestLLMAgent_WorkspaceFileToolsRegisteredByDefault(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+	)
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		d := tl.Declaration()
+		if d != nil {
+			names[d.Name] = true
+		}
+	}
+	require.True(t, names["workspace_read_file"])
+	require.True(t, names["workspace_list_dir"])
+	require.True(t, names["workspace_write_file"])
+	require.True(t, names["workspace_replace_content"])
+	require.True(t, names["artifact_publish"])
+}
+
+func TestLLMAgent_WorkspaceFileToolsOmittedWithoutLiveWorkspaceEngine(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithCodeExecutor(&bareExec{}),
+	)
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		d := tl.Declaration()
+		if d != nil {
+			names[d.Name] = true
+		}
+	}
+	require.False(t, names["workspace_read_file"])
+	require.False(t, names["workspace_list_dir"])
+	require.False(t, names["workspace_write_file"])
+	require.False(t, names["workspace_replace_content"])
+	require.False(t, names["artifact_publish"])
+}
+
+func TestLLMAgent_WorkspaceFileToolsOmittedForKnowledgeOnlyProfile(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillToolProfile(SkillToolProfileKnowledgeOnly),
+	)
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		d := tl.Declaration()
+		if d != nil {
+			names[d.Name] = true
+		}
+	}
+	require.True(t, names["skill_load"])
+	require.True(t, names["skill_select_docs"])
+	require.True(t, names["skill_list_docs"])
+	require.False(t, names["workspace_read_file"])
+	require.False(t, names["workspace_list_dir"])
+	require.False(t, names["workspace_write_file"])
+	require.False(t, names["workspace_replace_content"])
+	require.False(t, names["artifact_publish"])
+}
+
 func TestLLMAgent_SkillRunToolExecutes(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
@@ -316,6 +392,43 @@ func TestLLMAgent_WithSkillsToolingGuidance_Disabled(t *testing.T) {
 		require.NotContains(t, sys, skillsCapabilityHeader)
 		require.NotContains(t, sys, skillsToolingGuidanceHeader)
 	}
+}
+
+func TestLLMAgent_WorkspaceFileTools_WirePrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, "shared workspace roots are skills/, work/, out/, and runs/")
+	require.Contains(t, sys, "workspace_read_file and workspace_list_dir")
+	require.Contains(t, sys, "workspace_write_file and workspace_replace_content")
+	require.Contains(t, sys, "artifact_publish")
 }
 
 func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_WiresPrompt(
@@ -634,6 +747,20 @@ func (*nilEngineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 }
 func (*nilEngineExec) Engine() codeexecutor.Engine { return nil }
 
+type missingRunnerExec struct{}
+
+func (*missingRunnerExec) ExecuteCode(
+	_ context.Context, _ codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+func (*missingRunnerExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+func (*missingRunnerExec) Engine() codeexecutor.Engine {
+	return codeexecutor.NewEngine(&stubMgr{}, &stubFS{}, nil)
+}
+
 func TestLLMAgent_ExecToolsOmittedForNonInteractiveExecutor(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
@@ -653,6 +780,36 @@ func TestLLMAgent_ExecToolsOmittedForNonInteractiveExecutor(t *testing.T) {
 	require.False(t, names["skill_write_stdin"], "skill_write_stdin should be omitted")
 	require.False(t, names["skill_poll_session"], "skill_poll_session should be omitted")
 	require.False(t, names["skill_kill_session"], "skill_kill_session should be omitted")
+}
+
+func TestExecutorSupportsWorkspaceFileTools(t *testing.T) {
+	t.Run("nil executor falls back to local", func(t *testing.T) {
+		require.True(t, executorSupportsWorkspaceFileTools(&Options{}))
+	})
+
+	t.Run("missing engine provider disables workspace tools", func(t *testing.T) {
+		require.False(t, executorSupportsWorkspaceFileTools(&Options{
+			codeExecutor: &bareExec{},
+		}))
+	})
+
+	t.Run("nil engine disables workspace tools", func(t *testing.T) {
+		require.False(t, executorSupportsWorkspaceFileTools(&Options{
+			codeExecutor: &nilEngineExec{},
+		}))
+	})
+
+	t.Run("missing runner disables workspace tools", func(t *testing.T) {
+		require.False(t, executorSupportsWorkspaceFileTools(&Options{
+			codeExecutor: &missingRunnerExec{},
+		}))
+	})
+
+	t.Run("complete engine enables workspace tools", func(t *testing.T) {
+		require.True(t, executorSupportsWorkspaceFileTools(&Options{
+			codeExecutor: &stubExec{},
+		}))
+	})
 }
 
 func TestLLMAgent_ExecToolsRegisteredForInteractiveExecutor(t *testing.T) {

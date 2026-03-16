@@ -286,6 +286,12 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 				processor.WithSkillExecToolsDisabled(),
 			)
 		}
+		if executorSupportsWorkspaceFileTools(options) {
+			skillsOpts = append(
+				skillsOpts,
+				processor.WithWorkspaceFileToolsEnabled(),
+			)
+		}
 		skillsProcessor := processor.NewSkillsRequestProcessor(
 			options.skillsRepository,
 			skillsOpts...,
@@ -543,6 +549,16 @@ func appendSkillTools(
 	if skillFlags.Run {
 		allTools = append(allTools, runTool)
 	}
+	if executorSupportsWorkspaceFileTools(options) {
+		allTools = append(
+			allTools,
+			toolskill.NewWorkspaceReadFileTool(runTool),
+			toolskill.NewWorkspaceListDirTool(runTool),
+			toolskill.NewWorkspaceWriteFileTool(runTool),
+			toolskill.NewWorkspaceReplaceContentTool(runTool),
+			toolskill.NewArtifactPublishTool(runTool),
+		)
+	}
 	if !skillFlags.RequiresExecSessionTools() {
 		return allTools
 	}
@@ -638,6 +654,29 @@ func executorSupportsInteractive(options *Options) bool {
 	}
 	_, interactive := eng.Runner().(codeexecutor.InteractiveProgramRunner)
 	return interactive
+}
+
+// executorSupportsWorkspaceFileTools reports whether lightweight live workspace
+// file inspection tools can safely bind to the configured executor.
+//
+// Unlike skill_run, these tools should not silently fall back to a local
+// engine when the caller explicitly provides a custom executor without a live
+// workspace EngineProvider, because that would expose a different workspace
+// from the one the user expects.
+func executorSupportsWorkspaceFileTools(options *Options) bool {
+	exec := options.codeExecutor
+	if exec == nil {
+		return true
+	}
+	ep, ok := exec.(codeexecutor.EngineProvider)
+	if !ok || ep == nil {
+		return false
+	}
+	eng := ep.Engine()
+	if eng == nil {
+		return false
+	}
+	return eng.Manager() != nil && eng.FS() != nil && eng.Runner() != nil
 }
 
 // Run implements the agent.Agent interface.

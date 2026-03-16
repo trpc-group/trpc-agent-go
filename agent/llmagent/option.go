@@ -311,7 +311,6 @@ type Options struct {
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
 	skillRunDeniedCommands []string
-
 	// skillRunForceSaveArtifacts forces skill_run to persist collected
 	// outputs via the artifact service when possible.
 	skillRunForceSaveArtifacts bool

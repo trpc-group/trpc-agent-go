@@ -47,12 +47,13 @@ const (
 )
 
 type skillsRequestProcessorOptions struct {
-	toolingGuidance   *string
-	loadMode          string
-	toolResultMode    bool
-	maxLoadedSkills   int
-	toolProfile       string
-	execToolsDisabled bool
+	toolingGuidance           *string
+	loadMode                  string
+	toolResultMode            bool
+	maxLoadedSkills           int
+	toolProfile               string
+	execToolsDisabled         bool
+	workspaceFileToolsEnabled bool
 }
 
 // SkillsRequestProcessorOption configures SkillsRequestProcessor.
@@ -122,6 +123,15 @@ func WithSkillExecToolsDisabled() SkillsRequestProcessorOption {
 	}
 }
 
+// WithWorkspaceFileToolsEnabled tells the processor that lightweight live
+// workspace inspection tools were registered. The processor can then teach the
+// model to prefer them over skill_run for simple file inspection tasks.
+func WithWorkspaceFileToolsEnabled() SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.workspaceFileToolsEnabled = true
+	}
+}
+
 // WithMaxLoadedSkills caps how many skills remain "loaded" in session
 // state.
 //
@@ -148,13 +158,14 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 //   - skill.DocsKey(agentName, skillName) ->
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
-	repo              skill.Repository
-	toolingGuidance   *string
-	loadMode          string
-	toolResultMode    bool
-	maxLoadedSkills   int
-	toolProfile       string
-	execToolsDisabled bool
+	repo                      skill.Repository
+	toolingGuidance           *string
+	loadMode                  string
+	toolResultMode            bool
+	maxLoadedSkills           int
+	toolProfile               string
+	execToolsDisabled         bool
+	workspaceFileToolsEnabled bool
 }
 
 const (
@@ -174,13 +185,14 @@ func NewSkillsRequestProcessor(
 		opt(&options)
 	}
 	return &SkillsRequestProcessor{
-		repo:              repo,
-		toolingGuidance:   options.toolingGuidance,
-		loadMode:          normalizeSkillLoadMode(options.loadMode),
-		toolResultMode:    options.toolResultMode,
-		maxLoadedSkills:   options.maxLoadedSkills,
-		toolProfile:       skillprofile.Normalize(options.toolProfile),
-		execToolsDisabled: options.execToolsDisabled,
+		repo:                      repo,
+		toolingGuidance:           options.toolingGuidance,
+		loadMode:                  normalizeSkillLoadMode(options.loadMode),
+		toolResultMode:            options.toolResultMode,
+		maxLoadedSkills:           options.maxLoadedSkills,
+		toolProfile:               skillprofile.Normalize(options.toolProfile),
+		execToolsDisabled:         options.execToolsDisabled,
+		workspaceFileToolsEnabled: options.workspaceFileToolsEnabled,
 	}
 }
 
@@ -597,7 +609,9 @@ func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
 func (p *SkillsRequestProcessor) toolingGuidanceText() string {
 	if p.toolingGuidance == nil {
 		return defaultToolingAndWorkspaceGuidance(
-			p.toolProfile, p.execToolsDisabled,
+			p.toolProfile,
+			p.execToolsDisabled,
+			p.workspaceFileToolsEnabled,
 		)
 	}
 	return normalizeGuidance(*p.toolingGuidance)
@@ -627,12 +641,17 @@ func (p *SkillsRequestProcessor) capabilityGuidanceText() string {
 }
 
 func defaultToolingAndWorkspaceGuidance(
-	profile string, execToolsDisabled bool,
+	profile string,
+	execToolsDisabled bool,
+	workspaceFileToolsEnabled bool,
 ) string {
 	if skillprofile.IsKnowledgeOnly(profile) {
 		return defaultKnowledgeOnlyGuidance()
 	}
-	return defaultFullToolingAndWorkspaceGuidance(execToolsDisabled)
+	return defaultFullToolingAndWorkspaceGuidance(
+		execToolsDisabled,
+		workspaceFileToolsEnabled,
+	)
 }
 
 func defaultKnowledgeOnlyGuidance() string {
@@ -654,7 +673,10 @@ func defaultKnowledgeOnlyGuidance() string {
 	return b.String()
 }
 
-func defaultFullToolingAndWorkspaceGuidance(execToolsDisabled bool) string {
+func defaultFullToolingAndWorkspaceGuidance(
+	execToolsDisabled bool,
+	workspaceFileToolsEnabled bool,
+) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(skillsToolingGuidanceHeader)
@@ -668,6 +690,11 @@ func defaultFullToolingAndWorkspaceGuidance(execToolsDisabled bool) string {
 	b.WriteString("a subdir). $SKILLS_DIR alone is the parent dir.\n")
 	b.WriteString("- Prefer $WORK_DIR, $OUTPUT_DIR, $RUN_DIR, and ")
 	b.WriteString("$WORKSPACE_DIR over hard-coded paths.\n")
+	b.WriteString("- The shared workspace roots are skills/, work/, ")
+	b.WriteString("out/, and runs/. skills/<skill>/out, ")
+	b.WriteString("skills/<skill>/work, and skills/<skill>/inputs ")
+	b.WriteString("are convenience links into shared workspace ")
+	b.WriteString("directories, not private per-skill directories.\n")
 	b.WriteString("- Treat $WORK_DIR/inputs (and a skill's inputs/ ")
 	b.WriteString("directory) as the place where tools stage user or ")
 	b.WriteString("host input files. Avoid overwriting or mutating ")
@@ -716,6 +743,14 @@ func defaultFullToolingAndWorkspaceGuidance(execToolsDisabled bool) string {
 	b.WriteString("results from $OUTPUT_DIR (or a skill's out/ ")
 	b.WriteString("directory) instead of copying them back into ")
 	b.WriteString("inputs directories.\n")
+	if workspaceFileToolsEnabled {
+		b.WriteString("- Prefer workspace_read_file and ")
+		b.WriteString("workspace_list_dir for simple live workspace ")
+		b.WriteString("inspection, workspace_write_file and ")
+		b.WriteString("workspace_replace_content for small text edits, ")
+		b.WriteString("and artifact_publish when you need stable ")
+		b.WriteString("artifact:// refs without rerunning skill_run.\n")
+	}
 	b.WriteString("- Treat loaded skill docs as guidance, not perfect ")
 	b.WriteString("truth; when runtime help or stderr disagrees, trust ")
 	b.WriteString("observed runtime behavior.\n")
