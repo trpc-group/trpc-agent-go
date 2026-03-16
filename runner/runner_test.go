@@ -25,7 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
-	alog "trpc.group/trpc-go/trpc-agent-go/log"
+	runnerlog "trpc.group/trpc-go/trpc-agent-go/log"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -208,13 +208,13 @@ func TestRunner_SessionIntegration(t *testing.T) {
 }
 
 func TestRunnerRun_WarnsOnMessageWithEmptyRole(t *testing.T) {
-	original := alog.WarnfContext
+	original := runnerlog.WarnfContext
 	warnCalls := 0
-	alog.WarnfContext = func(ctx context.Context, format string, args ...any) {
+	runnerlog.WarnfContext = func(ctx context.Context, format string, args ...any) {
 		warnCalls++
 	}
 	defer func() {
-		alog.WarnfContext = original
+		runnerlog.WarnfContext = original
 	}()
 
 	ag := &capturingRoleAgent{name: "test-agent"}

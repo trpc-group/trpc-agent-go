@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	alog "trpc.group/trpc-go/trpc-agent-go/log"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -38,11 +38,11 @@ func TestNewInvocation(t *testing.T) {
 }
 
 func TestNewInvocation_WarnsOnMessageWithEmptyRole(t *testing.T) {
-	original := alog.Default
+	original := agentlog.Default
 	logger := &testWarnLogger{}
-	alog.Default = logger
+	agentlog.Default = logger
 	defer func() {
-		alog.Default = original
+		agentlog.Default = original
 	}()
 
 	inv := NewInvocation(
