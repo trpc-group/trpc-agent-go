@@ -22,10 +22,13 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // skillFile is the canonical skill definition filename.
@@ -252,8 +255,9 @@ func parseFull(path string) (Summary, string, error) {
 }
 
 // readFrontMatter reads YAML front matter block into a simple map.
-func readFrontMatter(r *bufio.Reader) (map[string]string, string,
-	error) {
+// It uses gopkg.in/yaml.v3 to correctly handle multi-line block scalars
+// (e.g. "description: |-\n  text") that the previous hand-rolled parser missed.
+func readFrontMatter(r *bufio.Reader) (map[string]string, string, error) {
 	line, err := r.ReadString('\n')
 	if err != nil {
 		return nil, "", err
@@ -261,7 +265,6 @@ func readFrontMatter(r *bufio.Reader) (map[string]string, string,
 	if strings.TrimSpace(line) != "---" {
 		return nil, "", errors.New("no front matter")
 	}
-	m := map[string]string{}
 	var b strings.Builder
 	for {
 		l, err2 := r.ReadString('\n')
@@ -273,23 +276,14 @@ func readFrontMatter(r *bufio.Reader) (map[string]string, string,
 		}
 		b.WriteString(l)
 	}
-	for _, l := range strings.Split(b.String(), "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "#") {
-			continue
-		}
-		// crude YAML: key: value
-		if i := strings.Index(l, ":"); i >= 0 {
-			k := strings.TrimSpace(l[:i])
-			v := strings.TrimSpace(l[i+1:])
-			m[k] = strings.Trim(v, " \"'")
-		}
-	}
+	m := parseFrontMatterYAML(b.String())
 	rest, _ := ioReadAll(r)
 	return m, rest, nil
 }
 
-// splitFrontMatter splits text into map and body.
+// splitFrontMatter splits text into a front-matter map and the Markdown body.
+// It uses gopkg.in/yaml.v3 to correctly handle multi-line block scalars
+// (e.g. "description: |-\n  text") that the previous hand-rolled parser missed.
 func splitFrontMatter(text string) (map[string]string, string) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	if !strings.HasPrefix(text, "---\n") {
@@ -297,24 +291,88 @@ func splitFrontMatter(text string) (map[string]string, string) {
 	}
 	idx := strings.Index(text[4:], "\n---\n")
 	if idx < 0 {
-		// No closing; treat whole as body.
+		// No closing delimiter; treat whole as body.
 		return map[string]string{}, text
 	}
 	fm := text[4 : 4+idx]
 	body := text[4+idx+5:]
+	return parseFrontMatterYAML(fm), body
+}
+
+// isBlockScalarIndicator reports whether val (the text after "key: ") is a
+// YAML block scalar indicator, meaning the value spans multiple indented lines.
+func isBlockScalarIndicator(val string) bool {
+	if val == "" {
+		return false
+	}
+	switch val[0] {
+	case '|', '>':
+		return true
+	}
+	return false
+}
+
+// parseFrontMatterYAML parses a YAML front-matter block into a flat
+// map[string]string using a hybrid strategy:
+//
+//   - Plain single-line values ("key: some value #with hash") are extracted
+//     with a simple line-split so that unquoted '#' characters are not
+//     misinterpreted as YAML comments.
+//   - Block scalar values ("key: |-\n  line1\n  line2") are collected into a
+//     minimal YAML snippet and parsed with gopkg.in/yaml.v3, which correctly
+//     handles all block-scalar chomping indicators (|, |-,|+, >, >-, >+).
+func parseFrontMatterYAML(src string) map[string]string {
 	m := map[string]string{}
-	for _, l := range strings.Split(fm, "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "#") {
+	lines := strings.Split(src, "\n")
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+		// Skip blank lines at the top level.
+		if strings.TrimSpace(line) == "" {
+			i++
 			continue
 		}
-		if i := strings.Index(l, ":"); i >= 0 {
-			k := strings.TrimSpace(l[:i])
-			v := strings.TrimSpace(l[i+1:])
-			m[k] = strings.Trim(v, " \"'")
+		// Expect "key: value" or "key:".
+		colonIdx := strings.Index(line, ":")
+		if colonIdx < 0 {
+			i++
+			continue
+		}
+		key := strings.TrimSpace(line[:colonIdx])
+		val := strings.TrimSpace(line[colonIdx+1:])
+
+		if isBlockScalarIndicator(val) {
+			// Collect the indicator line plus all indented continuation lines
+			// into a mini YAML document and let yaml.v3 parse it properly.
+			var b strings.Builder
+			b.WriteString(line)
+			b.WriteByte('\n')
+			i++
+			for i < len(lines) {
+				next := lines[i]
+				// Continuation lines are indented (start with space/tab) or blank.
+				if next == "" || next[0] == ' ' || next[0] == '\t' {
+					b.WriteString(next)
+					b.WriteByte('\n')
+					i++
+				} else {
+					break
+				}
+			}
+			var raw map[string]any
+			if err := yaml.Unmarshal([]byte(b.String()), &raw); err != nil {
+				log.Printf("skill: front matter YAML parse error for key %q: %v", key, err)
+			} else if s, ok := raw[key].(string); ok {
+				m[key] = strings.TrimRight(s, "\n")
+			}
+		} else {
+			// Plain single-line value: use the raw text as-is so that '#' and
+			// other special characters are preserved without YAML interpretation.
+			m[key] = val
+			i++
 		}
 	}
-	return m, body
+	return m
 }
 
 func ioReadAll(r *bufio.Reader) (string, error) {
