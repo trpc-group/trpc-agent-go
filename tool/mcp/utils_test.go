@@ -363,3 +363,27 @@ func TestConvertMCPSchema_TopLevelRef(t *testing.T) {
 	schema := convertMCPSchemaToSchema(mcpSchema)
 	require.Equal(t, "#/$defs/MyType", schema.Ref)
 }
+
+func TestConvertDefs_InvalidEntriesIgnored(t *testing.T) {
+	mcpSchema := map[string]any{
+		"type": "object",
+		"$defs": map[string]any{
+			"Address": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"street": map[string]any{"type": "string"},
+					"city":   map[string]any{"type": "string"},
+				},
+				"required": []any{"street", "city"},
+			},
+			"Invalid": "not an object",
+		},
+	}
+
+	schema := convertMCPSchemaToSchema(mcpSchema)
+
+	require.NotNil(t, schema.Defs)
+	require.Contains(t, schema.Defs, "Address")
+	require.NotContains(t, schema.Defs, "Invalid")
+	require.Equal(t, "object", schema.Defs["Address"].Type)
+}
