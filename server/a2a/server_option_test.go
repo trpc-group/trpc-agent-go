@@ -20,6 +20,7 @@ import (
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -369,6 +370,15 @@ func TestWithOptions(t *testing.T) {
 			validate: func(t *testing.T, opts *options) {
 				if opts.agentCard == nil || opts.agentCard.Name != "test-card" {
 					t.Error("WithAgentCard() should set agentCard")
+				}
+			},
+		},
+		{
+			name:   "WithRunner",
+			option: WithRunner(runner.Runner(&mockRunner{})),
+			validate: func(t *testing.T, opts *options) {
+				if opts.runner == nil {
+					t.Error("WithRunner() should set runner")
 				}
 			},
 		},
