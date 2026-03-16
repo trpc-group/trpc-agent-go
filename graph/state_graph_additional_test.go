@@ -242,6 +242,28 @@ func graphHasNonEmptyStringAttr(attrs []attribute.KeyValue, key string) bool {
 	return false
 }
 
+func TestWorkflowTypeFromNodeType(t *testing.T) {
+	tests := []struct {
+		name     string
+		nodeType NodeType
+		want     itelemetry.WorkflowType
+	}{
+		{name: "function", nodeType: NodeTypeFunction, want: itelemetry.WorkflowTypeFunction},
+		{name: "llm", nodeType: NodeTypeLLM, want: itelemetry.WorkflowTypeLLM},
+		{name: "tool", nodeType: NodeTypeTool, want: itelemetry.WorkflowTypeTool},
+		{name: "agent", nodeType: NodeTypeAgent, want: itelemetry.WorkflowTypeAgent},
+		{name: "join", nodeType: NodeTypeJoin, want: itelemetry.WorkflowTypeJoin},
+		{name: "router", nodeType: NodeTypeRouter, want: itelemetry.WorkflowTypeRouter},
+		{name: "unknown passthrough", nodeType: NodeType("custom"), want: itelemetry.WorkflowType("custom")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, workflowTypeFromNodeType(tt.nodeType))
+		})
+	}
+}
+
 // collectModelExecutionPhases drains model execution events from the channel.
 func collectModelExecutionPhases(ch <-chan *event.Event) []ModelExecutionPhase {
 	var phases []ModelExecutionPhase
@@ -3084,7 +3106,7 @@ func TestAddToolsNode_WorkflowSpanIncludesToolType(t *testing.T) {
 		graphHasAttr(
 			workflowSpan.Attributes(),
 			semconvtrace.KeyGenAIWorkflowType,
-			NodeTypeTool.String(),
+			itelemetry.WorkflowTypeTool.String(),
 		),
 	)
 }

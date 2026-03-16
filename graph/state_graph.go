@@ -475,6 +475,25 @@ func startNodeSpanForInvocation(ctx context.Context, invocation *agent.Invocatio
 	return ctx, span, true
 }
 
+func workflowTypeFromNodeType(nodeType NodeType) itelemetry.WorkflowType {
+	switch nodeType {
+	case NodeTypeFunction:
+		return itelemetry.WorkflowTypeFunction
+	case NodeTypeLLM:
+		return itelemetry.WorkflowTypeLLM
+	case NodeTypeTool:
+		return itelemetry.WorkflowTypeTool
+	case NodeTypeAgent:
+		return itelemetry.WorkflowTypeAgent
+	case NodeTypeJoin:
+		return itelemetry.WorkflowTypeJoin
+	case NodeTypeRouter:
+		return itelemetry.WorkflowTypeRouter
+	default:
+		return itelemetry.WorkflowType(nodeType)
+	}
+}
+
 // AddNode adds a node with the given ID and function.
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
@@ -497,7 +516,7 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 		workflow := &itelemetry.Workflow{
 			Name:    fmt.Sprintf("execute_function_node %s", id),
 			ID:      id,
-			Type:    node.Type.String(),
+			Type:    workflowTypeFromNodeType(node.Type),
 			Request: state.safeClone(),
 		}
 		defer func() {
@@ -584,7 +603,7 @@ func (sg *StateGraph) AddLLMNode(
 			workflow = &itelemetry.Workflow{
 				Name:    workflowName,
 				ID:      id,
-				Type:    node.Type.String(),
+				Type:    workflowTypeFromNodeType(node.Type),
 				Request: state.safeClone(),
 			}
 		}
@@ -2046,7 +2065,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			workflow = &itelemetry.Workflow{
 				Name:    "execute_tools_node",
 				ID:      "execute_tools_node",
-				Type:    node.Type.String(),
+				Type:    workflowTypeFromNodeType(node.Type),
 				Request: state.safeClone(),
 			}
 			defer func() {

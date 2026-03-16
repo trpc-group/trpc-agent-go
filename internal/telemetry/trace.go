@@ -62,11 +62,30 @@ func NewExecuteToolSpanName(toolName string) string {
 	return OperationExecuteTool + " " + toolName
 }
 
+// WorkflowType is the normalized type vocabulary used by workflow spans.
+type WorkflowType string
+
+// Standard workflow type values.
+const (
+	WorkflowTypeGraph    WorkflowType = "graph"
+	WorkflowTypeFunction WorkflowType = "function"
+	WorkflowTypeLLM      WorkflowType = "llm"
+	WorkflowTypeTool     WorkflowType = "tool"
+	WorkflowTypeAgent    WorkflowType = "agent"
+	WorkflowTypeJoin     WorkflowType = "join"
+	WorkflowTypeRouter   WorkflowType = "router"
+)
+
+// String returns the string representation of the workflow type.
+func (wt WorkflowType) String() string {
+	return string(wt)
+}
+
 // Workflow is the workflow information.
 type Workflow struct {
 	Name     string
 	ID       string
-	Type     string
+	Type     WorkflowType
 	Request  any
 	Response any
 	Error    error
@@ -88,7 +107,7 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 		attribute.String(semconvtrace.KeyGenAIWorkflowID, workflow.ID),
 	)
 	if workflow.Type != "" {
-		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIWorkflowType, workflow.Type))
+		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIWorkflowType, workflow.Type.String()))
 	}
 	if workflow.Request != nil {
 		request, err := json.Marshal(workflow.Request)
