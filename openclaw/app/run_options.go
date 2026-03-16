@@ -1167,27 +1167,34 @@ func (cfg *fileConfig) apply(
 		}
 	}
 	if cfg.A2A != nil {
-		if cfg.A2A.Enabled != nil {
+		if cfg.A2A.Enabled != nil &&
+			!flagWasSet(set, flagA2AEnabled) {
 			opts.A2AEnabled = *cfg.A2A.Enabled
 		}
-		if cfg.A2A.Host != nil {
+		if cfg.A2A.Host != nil &&
+			!flagWasSet(set, flagA2AHost) {
 			opts.A2AHost = strings.TrimSpace(*cfg.A2A.Host)
 		}
-		if cfg.A2A.UserIDHeader != nil {
+		if cfg.A2A.UserIDHeader != nil &&
+			!flagWasSet(set, flagA2AUserIDHeader) {
 			opts.A2AUserIDHeader = strings.TrimSpace(
 				*cfg.A2A.UserIDHeader,
 			)
 		}
-		if cfg.A2A.Streaming != nil {
+		if cfg.A2A.Streaming != nil &&
+			!flagWasSet(set, flagA2AStreaming) {
 			opts.A2AStreaming = *cfg.A2A.Streaming
 		}
-		if cfg.A2A.AdvertiseTools != nil {
+		if cfg.A2A.AdvertiseTools != nil &&
+			!flagWasSet(set, flagA2AAdvertiseTools) {
 			opts.A2AAdvertiseTools = *cfg.A2A.AdvertiseTools
 		}
-		if cfg.A2A.Name != nil {
+		if cfg.A2A.Name != nil &&
+			!flagWasSet(set, flagA2AName) {
 			opts.A2AName = strings.TrimSpace(*cfg.A2A.Name)
 		}
-		if cfg.A2A.Description != nil {
+		if cfg.A2A.Description != nil &&
+			!flagWasSet(set, flagA2ADescription) {
 			opts.A2ADescription = strings.TrimSpace(
 				*cfg.A2A.Description,
 			)
