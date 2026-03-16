@@ -45,25 +45,17 @@ type SessionSummarizer interface {
 	Metadata() map[string]any
 }
 
-// SessionSummaryRequest carries request-scoped inputs for selecting a
-// summarizer dynamically.
-type SessionSummaryRequest struct {
-	// Session is the session being summarized.
-	Session *session.Session
-	// FilterKey scopes the summary to a branch or substream. Empty means the
-	// full-session summary.
-	FilterKey string
-	// Force indicates whether summarization should proceed even when no delta
-	// events are found.
-	Force bool
-}
+// ContextAwareSummarizer is an optional extension interface for
+// SessionSummarizer implementations that need request-scoped context during
+// the summary decision phase.
+type ContextAwareSummarizer interface {
+	// SessionSummarizer is the base interface that all summarizers must implement.
+	SessionSummarizer
 
-// SessionSummarizerResolver resolves the summarizer to use for a single
-// summary attempt.
-type SessionSummarizerResolver func(
-	context.Context,
-	SessionSummaryRequest,
-) (SessionSummarizer, error)
+	// ShouldSummarizeWithContext checks if the session should be summarized
+	// using the current request context.
+	ShouldSummarizeWithContext(context.Context, *session.Session) bool
+}
 
 // SessionSummary represents a summary of a session's conversation history.
 type SessionSummary struct {

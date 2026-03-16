@@ -23,6 +23,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
+var _ SessionSummarizer = (*sessionSummarizer)(nil)
+var _ ContextAwareSummarizer = (*sessionSummarizer)(nil)
+
 // Common metadata field keys.
 const (
 	// metadataKeyModelName is the key for model name in metadata.
@@ -147,7 +150,7 @@ type sessionSummarizer struct {
 	model           model.Model
 	name            string
 	prompt          string
-	checks          []Checker
+	checks          []ContextChecker
 	maxSummaryWords int
 	skipRecentFunc  SkipRecentFunc
 
@@ -167,10 +170,10 @@ type sessionSummarizer struct {
 // NewSummarizer creates a new session summarizer.
 func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
-		prompt:          "",          // Will be set after processing options.
-		checks:          []Checker{}, // No default checks - summarization only when explicitly configured.
-		maxSummaryWords: 0,           // 0 means no word limit.
-		skipRecentFunc:  nil,         // nil means no events are skipped.
+		prompt:          "",                 // Will be set after processing options.
+		checks:          []ContextChecker{}, // No default checks - summarization only when explicitly configured.
+		maxSummaryWords: 0,                  // 0 means no word limit.
+		skipRecentFunc:  nil,                // nil means no events are skipped.
 	}
 	s.model = m
 
@@ -190,12 +193,21 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 
 // ShouldSummarize checks if the session should be summarized.
 func (s *sessionSummarizer) ShouldSummarize(sess *session.Session) bool {
-	if len(sess.Events) == 0 {
+	return s.ShouldSummarizeWithContext(context.Background(), sess)
+}
+
+// ShouldSummarizeWithContext evaluates configured checks using the current
+// request context when available.
+func (s *sessionSummarizer) ShouldSummarizeWithContext(
+	ctx context.Context,
+	sess *session.Session,
+) bool {
+	if sess == nil || len(sess.Events) == 0 {
 		return false
 	}
 
 	for _, check := range s.checks {
-		if !check(sess) {
+		if !check(ctx, sess) {
 			return false
 		}
 	}

@@ -62,6 +62,38 @@ func TestOptions(t *testing.T) {
 		assert.True(t, sIso.ShouldSummarize(sess))
 	})
 
+	t.Run("WithTokenThreshold uses request context when available", func(t *testing.T) {
+		defer SetTokenCounter(nil)
+
+		counter := &testContextTokenCounter{
+			key:   "trace",
+			value: "req-1",
+		}
+		SetTokenCounter(counter)
+
+		s := NewSummarizer(&testModel{}, WithTokenThreshold(100))
+		contextual, ok := s.(ContextAwareSummarizer)
+		assert.True(t, ok)
+
+		sess := &session.Session{Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "a"},
+				}}},
+			},
+		}}
+
+		assert.False(t, contextual.ShouldSummarizeWithContext(context.Background(), sess))
+		assert.True(t, contextual.ShouldSummarizeWithContext(
+			context.WithValue(context.Background(), "trace", "req-1"),
+			sess,
+		))
+		assert.Equal(t, 1, counter.hit)
+		assert.Equal(t, 1, counter.miss)
+	})
+
 	t.Run("WithEventThreshold", func(t *testing.T) {
 		s := NewSummarizer(&testModel{}, WithEventThreshold(2))
 		md := s.Metadata()

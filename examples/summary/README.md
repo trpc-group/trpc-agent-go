@@ -12,6 +12,7 @@ This example demonstrates LLM-driven session summarization integrated with the f
 - LLM-based summarization per session turn.
 - Simple trigger configuration using event-count threshold.
 - Prompt construction that injects the latest summary and recent events.
+- Context-aware routing can be found in `examples/summary/contextaware`.
 - Backend-specific persistence:
   - Summary text is stored in `sess.Summaries[filterKey]` for both backends.
 

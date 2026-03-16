@@ -26,7 +26,7 @@ func (s *Service) CreateSessionSummary(
 	filterKey string,
 	force bool,
 ) error {
-	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
+	if !isummary.HasSummarizer(s.opts.summarizer) {
 		return nil
 	}
 
@@ -38,19 +38,7 @@ func (s *Service) CreateSessionSummary(
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	summarizer, err := isummary.ResolveSessionSummarizer(
-		ctx,
-		s.opts.summarizer,
-		s.opts.summarizerResolver,
-		sess,
-		filterKey,
-		force,
-	)
-	if err != nil {
-		return err
-	}
-
-	updated, err := isummary.SummarizeSession(ctx, summarizer, sess, filterKey, force)
+	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil {
 		return fmt.Errorf("summarize and persist failed: %w", err)
 	}
@@ -85,7 +73,7 @@ func (s *Service) CreateSessionSummary(
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
 func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
+	if !isummary.HasSummarizer(s.opts.summarizer) {
 		return nil
 	}
 

@@ -26,6 +26,10 @@ import (
 // When no custom checkers are supplied, a default set is used.
 type Checker func(sess *session.Session) bool
 
+// ContextChecker evaluates whether a summary should be triggered using the
+// current request context.
+type ContextChecker func(context.Context, *session.Session) bool
+
 var (
 	defaultTokenCounterMu sync.RWMutex
 	defaultTokenCounter   model.TokenCounter = model.NewSimpleTokenCounter()
@@ -183,14 +187,21 @@ func CheckTimeThreshold(interval time.Duration) Checker {
 }
 
 // checkTokenThresholdFromText checks if the token count of the given text exceeds the threshold.
-func checkTokenThresholdFromText(tokenCount int, conversationText string) bool {
+func checkTokenThresholdFromText(
+	ctx context.Context,
+	tokenCount int,
+	conversationText string,
+) bool {
 	if conversationText == "" {
 		return false
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	// SimpleTokenCounter.CountTokens currently never returns an error.
 	tokens, _ := getTokenCounter().CountTokens(
-		context.Background(),
+		ctx,
 		model.Message{Content: conversationText},
 	)
 	return tokens > tokenCount
@@ -205,23 +216,46 @@ func checkTokenThresholdFromText(tokenCount int, conversationText string) bool {
 // Token accounting via model usage is not stable once session summary
 // injection is enabled. For consistent gating, we estimate tokens from
 // the delta events.
+//
+// Because Checker does not accept a context, this legacy helper evaluates
+// token counts with context.Background(). Use CheckTokenThresholdContext or
+// WithTokenThreshold when token counting depends on request-scoped context.
 func CheckTokenThreshold(tokenCount int) Checker {
 	return func(sess *session.Session) bool {
-		delta := filterDeltaEvents(sess)
-		if len(delta) == 0 {
-			return false
-		}
-		primary := filterPrimaryEvents(delta, sess.AppName)
-		if len(primary) == 0 {
-			return false
-		}
-		conversationText := extractConversationText(
-			primary, nil, nil,
-		)
-		return checkTokenThresholdFromText(
-			tokenCount, conversationText,
-		)
+		return checkTokenThreshold(context.Background(), tokenCount, sess)
 	}
+}
+
+// CheckTokenThresholdContext creates a context-aware checker that triggers
+// when the estimated token count of the primary-agent events since the last
+// summary exceeds the given threshold.
+func CheckTokenThresholdContext(tokenCount int) ContextChecker {
+	return func(ctx context.Context, sess *session.Session) bool {
+		return checkTokenThreshold(ctx, tokenCount, sess)
+	}
+}
+
+func checkTokenThreshold(
+	ctx context.Context,
+	tokenCount int,
+	sess *session.Session,
+) bool {
+	delta := filterDeltaEvents(sess)
+	if len(delta) == 0 {
+		return false
+	}
+	primary := filterPrimaryEvents(delta, sess.AppName)
+	if len(primary) == 0 {
+		return false
+	}
+	conversationText := extractConversationText(
+		primary, nil, nil,
+	)
+	return checkTokenThresholdFromText(
+		ctx,
+		tokenCount,
+		conversationText,
+	)
 }
 
 // ChecksAll composes multiple checkers using AND logic.
@@ -245,6 +279,34 @@ func ChecksAny(checks []Checker) Checker {
 	return func(sess *session.Session) bool {
 		for _, check := range checks {
 			if check(sess) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func wrapChecker(check Checker) ContextChecker {
+	return func(_ context.Context, sess *session.Session) bool {
+		return check(sess)
+	}
+}
+
+func allContextChecks(checks []ContextChecker) ContextChecker {
+	return func(ctx context.Context, sess *session.Session) bool {
+		for _, check := range checks {
+			if !check(ctx, sess) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func anyContextChecks(checks []ContextChecker) ContextChecker {
+	return func(ctx context.Context, sess *session.Session) bool {
+		for _, check := range checks {
+			if check(ctx, sess) {
 				return true
 			}
 		}

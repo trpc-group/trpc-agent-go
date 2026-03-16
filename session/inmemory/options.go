@@ -40,8 +40,6 @@ type serviceOpts struct {
 	cleanupInterval time.Duration
 	// summarizer integrates LLM summarization.
 	summarizer summary.SessionSummarizer
-	// summarizerResolver resolves request-scoped summarizers dynamically.
-	summarizerResolver summary.SessionSummarizerResolver
 	// asyncSummaryNum is the number of worker goroutines for async summary.
 	asyncSummaryNum int
 	// summaryQueueSize is the size of summary job queue.
@@ -111,13 +109,6 @@ func WithCleanupInterval(interval time.Duration) ServiceOpt {
 func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.summarizer = s
-	}
-}
-
-// WithSessionSummarizerResolver injects a request-scoped summarizer resolver.
-func WithSessionSummarizerResolver(p summary.SessionSummarizerResolver) ServiceOpt {
-	return func(opts *serviceOpts) {
-		opts.summarizerResolver = p
 	}
 }
 

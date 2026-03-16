@@ -355,7 +355,7 @@ func TestSessionSummarizer_Metadata_NilModel(t *testing.T) {
 	s := &sessionSummarizer{
 		model:           nil,
 		maxSummaryWords: 100,
-		checks:          []Checker{},
+		checks:          []ContextChecker{},
 	}
 	md := s.Metadata()
 	assert.Equal(t, "", md[metadataKeyModelName])

@@ -507,6 +507,38 @@ func (c testFixedTokenCounter) CountTokensRange(
 	return c.tokens * (end - start), nil
 }
 
+type testContextTokenCounter struct {
+	key   any
+	value any
+	hit   int
+	miss  int
+}
+
+func (c *testContextTokenCounter) CountTokens(ctx context.Context, _ model.Message) (int, error) {
+	if ctx != nil && ctx.Value(c.key) == c.value {
+		c.hit++
+		return 1000, nil
+	}
+	c.miss++
+	return 0, nil
+}
+
+func (c *testContextTokenCounter) CountTokensRange(
+	ctx context.Context,
+	_ []model.Message,
+	start,
+	end int,
+) (int, error) {
+	if start >= end {
+		return 0, nil
+	}
+	tokens, err := c.CountTokens(ctx, model.Message{})
+	if err != nil {
+		return 0, err
+	}
+	return tokens * (end - start), nil
+}
+
 func TestSetTokenCounter_AffectsCheckTokenThreshold(t *testing.T) {
 	defer SetTokenCounter(nil)
 	SetTokenCounter(testFixedTokenCounter{tokens: 1000})
