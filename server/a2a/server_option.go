@@ -84,23 +84,23 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 }
 
 type options struct {
-	sessionService          session.Service
-	agent                   agent.Agent
-	enableStreaming         bool
-	allowedGraphObjectTypes []string
-	streamingEventType      StreamingEventType
-	agentCard               *a2a.AgentCard
-	processorBuilder        ProcessorBuilder
-	processorHook           ProcessMessageHook
-	taskManagerBuilder      TaskManagerBuilder
-	a2aToAgentConverter     A2AMessageToAgentMessage
-	eventToA2AConverter     EventToA2AMessage
-	host                    string
-	extraOptions            []a2a.Option
-	errorHandler            ErrorHandler
-	debugLogging            bool
-	userIDHeader            string
-	adkCompatibility        bool
+	sessionService            session.Service
+	agent                     agent.Agent
+	enableStreaming           bool
+	graphEventObjectAllowlist []string
+	streamingEventType        StreamingEventType
+	agentCard                 *a2a.AgentCard
+	processorBuilder          ProcessorBuilder
+	processorHook             ProcessMessageHook
+	taskManagerBuilder        TaskManagerBuilder
+	a2aToAgentConverter       A2AMessageToAgentMessage
+	eventToA2AConverter       EventToA2AMessage
+	host                      string
+	extraOptions              []a2a.Option
+	errorHandler              ErrorHandler
+	debugLogging              bool
+	userIDHeader              string
+	adkCompatibility          bool
 }
 
 // Option is a function that configures a Server.
@@ -138,7 +138,7 @@ func WithAgent(agent agent.Agent, enableStreaming bool) Option {
 	}
 }
 
-// WithAllowedGraphObjectTypes configures which graph object types (evt.Response.Object)
+// WithGraphEventObjectAllowlist configures which graph object types (evt.Response.Object)
 // are forwarded through A2A.
 //
 // Matching applies only when object type starts with "graph.".
@@ -146,9 +146,9 @@ func WithAgent(agent agent.Agent, enableStreaming bool) Option {
 //   - exact rule: "graph.node.start"
 //   - prefix rule: "graph.node.*" (trailing '*' means prefix match)
 //   - wildcard rule: "*" (allow all graph.* object types)
-func WithAllowedGraphObjectTypes(objectTypes ...string) Option {
+func WithGraphEventObjectAllowlist(objectTypes ...string) Option {
 	return func(opts *options) {
-		opts.allowedGraphObjectTypes = normalizeGraphObjectTypes(objectTypes)
+		opts.graphEventObjectAllowlist = normalizeGraphObjectTypes(objectTypes)
 	}
 }
 

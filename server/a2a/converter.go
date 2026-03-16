@@ -127,9 +127,9 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 type defaultEventToA2AMessage struct {
 	// Enable ADK-compatible metadata keys (for example, "adk_type" instead
 	// of "type").
-	adkCompatibility        bool
-	allowedGraphObjectTypes []string
-	streamingEventType      StreamingEventType
+	adkCompatibility          bool
+	graphEventObjectAllowlist []string
+	streamingEventType        StreamingEventType
 }
 
 const graphObjectPrefix = "graph."
@@ -220,7 +220,7 @@ func (c *defaultEventToA2AMessage) shouldEmitEvent(evt *event.Event) bool {
 		return true
 	}
 
-	allowedObjectTypes := c.allowedGraphObjectTypes
+	allowedObjectTypes := c.graphEventObjectAllowlist
 	if allowedObjectTypes == nil {
 		allowedObjectTypes = defaultAllowedGraphObjectTypes
 	}

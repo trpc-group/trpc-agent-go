@@ -149,7 +149,7 @@ If you need node-level traces for debugging, extend the graph object allowlist:
 server, _ := a2aserver.New(
 	a2aserver.WithHost("localhost:8080"),
 	a2aserver.WithAgent(agent, true),
-	a2aserver.WithAllowedGraphObjectTypes(
+	a2aserver.WithGraphEventObjectAllowlist(
 		"graph.execution", // keep terminal event
 		"graph.node.*",    // include node lifecycle events
 	),
@@ -159,7 +159,7 @@ server, _ := a2aserver.New(
 Notes:
 
 - If this option is not set, the default allowlist is `["graph.execution"]`.
-- If you explicitly call `WithAllowedGraphObjectTypes()` with no arguments,
+- If you explicitly call `WithGraphEventObjectAllowlist()` with no arguments,
   all `graph.*` events will be filtered out (including `graph.execution`).
 
 Use this in debug/diagnostic scenarios. Keeping it off by default reduces noise

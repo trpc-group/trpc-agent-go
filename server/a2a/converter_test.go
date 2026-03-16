@@ -835,7 +835,7 @@ func TestDefaultEventToA2AMessage_GraphEventFilter(t *testing.T) {
 	})
 
 	t.Run("allowlist enables internal graph events", func(t *testing.T) {
-		converter := &defaultEventToA2AMessage{allowedGraphObjectTypes: []string{"graph.*"}}
+		converter := &defaultEventToA2AMessage{graphEventObjectAllowlist: []string{"graph.*"}}
 
 		unaryInternal, err := converter.ConvertToA2AMessage(context.Background(), internalEvt, EventToA2AUnaryOptions{})
 		if err != nil {
@@ -860,7 +860,7 @@ func TestDefaultEventToA2AMessage_GraphEventFilter(t *testing.T) {
 }
 
 func TestDefaultEventToA2AMessage_StateDeltaMetadata(t *testing.T) {
-	converter := &defaultEventToA2AMessage{allowedGraphObjectTypes: []string{"graph.*"}}
+	converter := &defaultEventToA2AMessage{graphEventObjectAllowlist: []string{"graph.*"}}
 	originalStateDelta := map[string][]byte{
 		"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
 		"json_string":    []byte(`"hello"`),
@@ -924,7 +924,7 @@ func TestDefaultEventToA2AMessage_StateDeltaMetadata(t *testing.T) {
 }
 
 func TestDefaultEventToA2AMessage_MetadataOnlyWithoutStateDelta(t *testing.T) {
-	converter := &defaultEventToA2AMessage{allowedGraphObjectTypes: []string{"graph.*"}}
+	converter := &defaultEventToA2AMessage{graphEventObjectAllowlist: []string{"graph.*"}}
 	evt := &event.Event{
 		ID:     "evt-meta-only",
 		Author: "graph.node:planner",
@@ -2050,8 +2050,8 @@ func TestDefaultEventToA2AMessage_CodeExecution(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			converter := &defaultEventToA2AMessage{
-				adkCompatibility:        tt.adkCompatibility,
-				allowedGraphObjectTypes: []string{"graph.*"},
+				adkCompatibility:          tt.adkCompatibility,
+				graphEventObjectAllowlist: []string{"graph.*"},
 			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {
@@ -2493,8 +2493,8 @@ func TestMessageMetadataTag(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			converter := &defaultEventToA2AMessage{
-				adkCompatibility:        tt.adkCompatibility,
-				allowedGraphObjectTypes: []string{"graph.*"},
+				adkCompatibility:          tt.adkCompatibility,
+				graphEventObjectAllowlist: []string{"graph.*"},
 			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {
@@ -2600,8 +2600,8 @@ func TestConvertCodeExecutionToA2AMessage_TagDistinction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			converter := &defaultEventToA2AMessage{
-				adkCompatibility:        tt.adkCompatibility,
-				allowedGraphObjectTypes: []string{"graph.*"},
+				adkCompatibility:          tt.adkCompatibility,
+				graphEventObjectAllowlist: []string{"graph.*"},
 			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {
@@ -2818,8 +2818,8 @@ func TestDefaultEventToA2AMessage_ADKCompatibility(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			converter := &defaultEventToA2AMessage{
-				adkCompatibility:        tt.adkCompatibility,
-				allowedGraphObjectTypes: []string{"graph.*"},
+				adkCompatibility:          tt.adkCompatibility,
+				graphEventObjectAllowlist: []string{"graph.*"},
 			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {

@@ -143,7 +143,7 @@ func main() {
 server, _ := a2aserver.New(
 	a2aserver.WithHost("localhost:8080"),
 	a2aserver.WithAgent(agent, true),
-	a2aserver.WithAllowedGraphObjectTypes(
+	a2aserver.WithGraphEventObjectAllowlist(
 		"graph.execution", // 保留终态事件
 		"graph.node.*",    // 透传节点生命周期事件
 	),
@@ -153,7 +153,7 @@ server, _ := a2aserver.New(
 说明：
 
 - 不设置该选项时，默认白名单是 `["graph.execution"]`。
-- 如果显式调用 `WithAllowedGraphObjectTypes()` 且不传参数，
+- 如果显式调用 `WithGraphEventObjectAllowlist()` 且不传参数，
   那么所有 `graph.*` 事件都会被过滤（包括 `graph.execution`）。
 
 建议仅在调试场景开启，生产环境默认关闭可以减少噪音与带宽开销。

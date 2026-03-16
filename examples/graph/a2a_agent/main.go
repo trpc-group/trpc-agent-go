@@ -118,6 +118,7 @@ func run(ctx context.Context) error {
 	server, err := a2aserver.New(
 		a2aserver.WithAgent(remoteAgent, *streaming),
 		a2aserver.WithHost(resolvedHost),
+		a2aserver.WithGraphEventObjectAllowlist(graph.ObjectTypeGraphExecution, "graph.node.*"),
 		a2aserver.WithDebugLogging(false),
 	)
 	if err != nil {

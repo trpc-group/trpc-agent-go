@@ -112,9 +112,9 @@ func buildProcessor(agent agent.Agent, sessionService session.Service, options *
 	eventToA2AConverter := options.eventToA2AConverter
 	if eventToA2AConverter == nil {
 		eventToA2AConverter = &defaultEventToA2AMessage{
-			adkCompatibility:        options.adkCompatibility,
-			allowedGraphObjectTypes: options.allowedGraphObjectTypes,
-			streamingEventType:      options.streamingEventType,
+			adkCompatibility:          options.adkCompatibility,
+			graphEventObjectAllowlist: options.graphEventObjectAllowlist,
+			streamingEventType:        options.streamingEventType,
 		}
 	}
 

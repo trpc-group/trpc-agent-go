@@ -434,13 +434,13 @@ func TestWithOptions(t *testing.T) {
 			},
 		},
 		{
-			name:   "WithAllowedGraphObjectTypes",
-			option: WithAllowedGraphObjectTypes("graph.execution", "graph.node.*"),
+			name:   "WithGraphEventObjectAllowlist",
+			option: WithGraphEventObjectAllowlist("graph.execution", "graph.node.*"),
 			validate: func(t *testing.T, opts *options) {
-				if len(opts.allowedGraphObjectTypes) != 2 {
+				if len(opts.graphEventObjectAllowlist) != 2 {
 					t.Error(
-						"WithAllowedGraphObjectTypes() should set " +
-							"allowedGraphObjectTypes",
+						"WithGraphEventObjectAllowlist() should set " +
+							"graphEventObjectAllowlist",
 					)
 				}
 			},
@@ -641,9 +641,9 @@ func TestWithStreamingEventType(t *testing.T) {
 	assert.Equal(t, StreamingEventTypeMessage, opts.streamingEventType)
 }
 
-func TestWithAllowedGraphObjectTypes_Normalize(t *testing.T) {
+func TestWithGraphEventObjectAllowlist_Normalize(t *testing.T) {
 	opts := &options{}
-	WithAllowedGraphObjectTypes(
+	WithGraphEventObjectAllowlist(
 		" graph.execution ",
 		"graph.node.*",
 		"graph.node.*",
@@ -652,13 +652,13 @@ func TestWithAllowedGraphObjectTypes_Normalize(t *testing.T) {
 	assert.Equal(
 		t,
 		[]string{"graph.execution", "graph.node.*"},
-		opts.allowedGraphObjectTypes,
+		opts.graphEventObjectAllowlist,
 	)
 }
 
-func TestWithAllowedGraphObjectTypes_Empty(t *testing.T) {
+func TestWithGraphEventObjectAllowlist_Empty(t *testing.T) {
 	opts := &options{}
-	WithAllowedGraphObjectTypes()(opts)
-	assert.NotNil(t, opts.allowedGraphObjectTypes)
-	assert.Empty(t, opts.allowedGraphObjectTypes)
+	WithGraphEventObjectAllowlist()(opts)
+	assert.NotNil(t, opts.graphEventObjectAllowlist)
+	assert.Empty(t, opts.graphEventObjectAllowlist)
 }
