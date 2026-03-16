@@ -261,6 +261,63 @@ func TestNormalizeToolSchema_MarshalErrorFallsBack(t *testing.T) {
 	require.Empty(t, props)
 }
 
+// namedTool is a test helper like Tool but with a configurable name,
+// used to create distinct tool entries when testing multi-tool behaviour.
+type namedTool struct {
+	name        string
+	inputSchema *tool.Schema
+}
+
+func (t *namedTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        t.name,
+		Description: t.name + " description",
+		InputSchema: t.inputSchema,
+	}
+}
+
+// TestModel_convertTools_EmptyMapReturnsNil verifies that convertTools returns
+// nil (not an empty slice) when the tool map is empty, so the caller never
+// sends an empty "tools" array to the Gemini API.
+func TestModel_convertTools_EmptyMapReturnsNil(t *testing.T) {
+	m := &Model{}
+	require.Nil(t, m.convertTools(nil))
+	require.Nil(t, m.convertTools(map[string]tool.Tool{}))
+}
+
+// TestModel_convertTools_MultipleToolsGroupedIntoSingleTool verifies the
+// Vertex AI compatibility fix: all function declarations must be grouped into
+// a single *genai.Tool object. Vertex AI rejects multiple Tool objects with:
+// "Multiple tools are supported only when they are all search tools."
+// It also verifies that declarations are emitted in sorted-key order so the
+// output is deterministic across runs.
+func TestModel_convertTools_MultipleToolsGroupedIntoSingleTool(t *testing.T) {
+	m := &Model{}
+
+	tools := map[string]tool.Tool{
+		"alpha": &namedTool{name: "alpha", inputSchema: &tool.Schema{Type: "object"}},
+		"beta":  &namedTool{name: "beta"},
+		"gamma": &namedTool{name: "gamma", inputSchema: &tool.Schema{Type: "string"}},
+	}
+
+	converted := m.convertTools(tools)
+
+	// Must produce exactly one *genai.Tool (Vertex AI constraint).
+	require.Len(t, converted, 1, "all declarations must be grouped into a single genai.Tool")
+
+	// Must contain one declaration per input tool.
+	require.Len(t, converted[0].FunctionDeclarations, len(tools),
+		"every tool must produce exactly one FunctionDeclaration")
+
+	// Declarations must be in sorted (alphabetical) key order for determinism.
+	got := make([]string, len(converted[0].FunctionDeclarations))
+	for i, fd := range converted[0].FunctionDeclarations {
+		got[i] = fd.Name
+	}
+	require.Equal(t, []string{"alpha", "beta", "gamma"}, got,
+		"declarations must be sorted by tool name for deterministic output")
+}
+
 func TestNormalizeToolSchema_NilSchemaReturnsNil(t *testing.T) {
 	require.Nil(t, normalizeToolSchema("tool", "input", nil))
 }
@@ -1258,6 +1315,54 @@ func TestModel_GenerateContentStreamingError(t *testing.T) {
 		assert.False(t, chunkCallbackCalled, "chunk callback should not be called on immediate error")
 		assert.False(t, completeCallbackCalled, "complete callback should not be called on error")
 	})
+
+	t.Run("mid_stream_error_with_chunk_callback", func(t *testing.T) {
+		// When a mid-stream error occurs after some buffered chunks, the
+		// chatChunkCallback must be invoked for each flushed chunk before the
+		// error response is emitted.  This exercises lines 291-292 of gemini.go.
+		streamErr := errors.New("mid-stream interruption")
+		successChunk := &genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{
+				{Content: &genai.Content{Parts: []*genai.Part{{Text: "partial"}}}},
+			},
+		}
+
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSliceWithError([]*genai.GenerateContentResponse{successChunk}, streamErr))
+
+		var chunkCallbackRaw []*genai.GenerateContentResponse
+		m := &Model{
+			client: mockClient,
+			chatChunkCallback: func(_ context.Context, _ []*genai.Content,
+				_ *genai.GenerateContentConfig, r *genai.GenerateContentResponse) {
+				chunkCallbackRaw = append(chunkCallbackRaw, r)
+			},
+		}
+		respChan, err := m.GenerateContent(context.Background(), req)
+		require.NoError(t, err)
+
+		var responses []*model.Response
+		for r := range respChan {
+			responses = append(responses, r)
+		}
+
+		// One partial chunk then one error response.
+		require.Len(t, responses, 2)
+		require.Nil(t, responses[0].Error)
+		require.Equal(t, "partial", responses[0].Choices[0].Delta.Content)
+		require.NotNil(t, responses[1].Error)
+		require.Equal(t, "mid-stream interruption", responses[1].Error.Message)
+		// chatChunkCallback must have been called once (for the flushed chunk).
+		require.Len(t, chunkCallbackRaw, 1)
+		require.Equal(t, successChunk, chunkCallbackRaw[0])
+	})
 }
 
 func TestModel_convertContentPartNil(t *testing.T) {
@@ -1310,4 +1415,791 @@ func TestModel_convertContentPartNil(t *testing.T) {
 			assert.Equalf(t, tt.want, m.convertContentPart(tt.args.part), "convertContentPart(%v)", tt.args.part)
 		})
 	}
+}
+
+// TestModel_convertContentBlock_SyntheticFunctionCallID verifies the Vertex AI
+// compatibility fix: when Gemini omits FunctionCall.ID, convertContentBlock
+// generates a synthetic sequential ID ("gemini_call_N") so the framework's
+// SanitizeMessagesWithTools can match tool results to their calls.
+func TestModel_convertContentBlock_SyntheticFunctionCallID(t *testing.T) {
+	m := &Model{}
+
+	candidates := []*genai.Candidate{
+		{
+			Content: genai.NewContentFromParts([]*genai.Part{
+				{FunctionCall: &genai.FunctionCall{Name: "my_tool", Args: map[string]any{"x": 1.0}}},
+			}, genai.RoleModel),
+		},
+	}
+
+	msg, _ := m.convertContentBlock(candidates)
+
+	require.Len(t, msg.ToolCalls, 1)
+	tc := msg.ToolCalls[0]
+	require.NotEmpty(t, tc.ID, "ID must be non-empty when Vertex AI omits FunctionCall.ID")
+	require.Contains(t, tc.ID, "gemini_call_", "synthetic ID must follow the gemini_call_N pattern")
+	require.Equal(t, "my_tool", tc.Function.Name)
+}
+
+// TestModel_convertContentBlock_PreservesExistingFunctionCallID verifies that
+// when Gemini (non-Vertex) does populate FunctionCall.ID, that original ID is
+// preserved unchanged.
+func TestModel_convertContentBlock_PreservesExistingFunctionCallID(t *testing.T) {
+	m := &Model{}
+
+	const wantID = "call-abc-123"
+	candidates := []*genai.Candidate{
+		{
+			Content: genai.NewContentFromParts([]*genai.Part{
+				{FunctionCall: &genai.FunctionCall{ID: wantID, Name: "my_tool"}},
+			}, genai.RoleModel),
+		},
+	}
+
+	msg, _ := m.convertContentBlock(candidates)
+
+	require.Len(t, msg.ToolCalls, 1)
+	require.Equal(t, wantID, msg.ToolCalls[0].ID, "existing ID must not be replaced by a synthetic one")
+}
+
+// TestModel_convertMessageContent_ToolRoleProducesFunctionResponse verifies
+// that a RoleTool message is converted to a FunctionResponse part (role=user)
+// rather than plain text, as required by the Gemini generateContent API.
+func TestModel_convertMessageContent_ToolRoleProducesFunctionResponse(t *testing.T) {
+	m := &Model{}
+
+	msg := model.Message{
+		Role:     model.RoleTool,
+		ToolName: "my_tool",
+		Content:  `{"status":"ok","value":42}`,
+	}
+
+	contents := m.convertMessageContent(msg)
+
+	require.Len(t, contents, 1)
+	require.Equal(t, genai.RoleUser, contents[0].Role)
+	require.Len(t, contents[0].Parts, 1)
+	fr := contents[0].Parts[0].FunctionResponse
+	require.NotNil(t, fr, "part must be a FunctionResponse, not plain text")
+	require.Equal(t, "my_tool", fr.Name)
+	require.Equal(t, map[string]any{"status": "ok", "value": float64(42)}, fr.Response)
+}
+
+// TestModel_convertMessageContent_ToolRoleNonJSONWrapsInOutput verifies that
+// non-JSON tool output (e.g. an error string) is wrapped in {"output": ...}
+// so the FunctionResponse.Response field is always a valid JSON object.
+func TestModel_convertMessageContent_ToolRoleNonJSONWrapsInOutput(t *testing.T) {
+	m := &Model{}
+
+	msg := model.Message{
+		Role:     model.RoleTool,
+		ToolName: "my_tool",
+		Content:  "tool execution failed: permission denied",
+	}
+
+	contents := m.convertMessageContent(msg)
+
+	require.Len(t, contents, 1)
+	fr := contents[0].Parts[0].FunctionResponse
+	require.NotNil(t, fr)
+	require.Equal(t, map[string]any{"output": "tool execution failed: permission denied"}, fr.Response)
+}
+
+// TestIsMalformedFunctionCall verifies the helper that detects
+// MALFORMED_FUNCTION_CALL in a raw genai response.
+func TestIsMalformedFunctionCall(t *testing.T) {
+	require.False(t, isMalformedFunctionCall(nil))
+	require.False(t, isMalformedFunctionCall(&genai.GenerateContentResponse{}))
+	require.False(t, isMalformedFunctionCall(&genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{{FinishReason: genai.FinishReason("STOP")}},
+	}))
+	require.True(t, isMalformedFunctionCall(&genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")}},
+	}))
+}
+
+// TestIsMalformedModelResponse verifies the helper that detects
+// MALFORMED_FUNCTION_CALL in an already-converted model.Response.
+func TestIsMalformedModelResponse(t *testing.T) {
+	reason := "MALFORMED_FUNCTION_CALL"
+	other := "STOP"
+	require.False(t, isMalformedModelResponse(nil))
+	require.False(t, isMalformedModelResponse(&model.Response{}))
+	require.False(t, isMalformedModelResponse(&model.Response{
+		Choices: []model.Choice{{FinishReason: &other}},
+	}))
+	require.False(t, isMalformedModelResponse(&model.Response{
+		Choices: []model.Choice{{FinishReason: nil}},
+	}))
+	require.True(t, isMalformedModelResponse(&model.Response{
+		Choices: []model.Choice{{FinishReason: &reason}},
+	}))
+}
+
+// TestRetryConfigForMalformed verifies that retryConfigForMalformed sets
+// temperature=0 and FunctionCallingMode=ANY while preserving other fields.
+func TestRetryConfigForMalformed(t *testing.T) {
+	t.Run("no existing ToolConfig", func(t *testing.T) {
+		origTemp := float32(0.9)
+		orig := &genai.GenerateContentConfig{
+			Temperature:     &origTemp,
+			MaxOutputTokens: 100,
+		}
+		retry := retryConfigForMalformed(orig)
+
+		require.NotNil(t, retry.Temperature)
+		require.Equal(t, float32(0), *retry.Temperature, "temperature must be 0")
+		require.NotNil(t, retry.ToolConfig)
+		require.NotNil(t, retry.ToolConfig.FunctionCallingConfig)
+		require.Equal(t, genai.FunctionCallingConfigModeAny, retry.ToolConfig.FunctionCallingConfig.Mode)
+		// Original must not be mutated.
+		require.Equal(t, float32(0.9), *orig.Temperature)
+		require.Nil(t, orig.ToolConfig)
+		// Non-temperature fields preserved.
+		require.Equal(t, int32(100), retry.MaxOutputTokens)
+	})
+
+	t.Run("preserves existing ToolConfig fields", func(t *testing.T) {
+		origTemp := float32(0.7)
+		allowedFns := []string{"myFunc"}
+		orig := &genai.GenerateContentConfig{
+			Temperature: &origTemp,
+			ToolConfig: &genai.ToolConfig{
+				FunctionCallingConfig: &genai.FunctionCallingConfig{
+					Mode:                 genai.FunctionCallingConfigModeAuto,
+					AllowedFunctionNames: allowedFns,
+				},
+			},
+		}
+		retry := retryConfigForMalformed(orig)
+
+		require.Equal(t, float32(0), *retry.Temperature)
+		// Mode is overridden to ANY.
+		require.Equal(t, genai.FunctionCallingConfigModeAny, retry.ToolConfig.FunctionCallingConfig.Mode)
+		// AllowedFunctionNames is preserved.
+		require.Equal(t, allowedFns, retry.ToolConfig.FunctionCallingConfig.AllowedFunctionNames)
+		// Original ToolConfig is not mutated.
+		require.Equal(t, genai.FunctionCallingConfigModeAuto, orig.ToolConfig.FunctionCallingConfig.Mode)
+	})
+}
+
+// TestModel_NonStreaming_MalformedFunctionCallRetry verifies that when
+// handleNonStreamingResponse receives MALFORMED_FUNCTION_CALL on the first
+// attempt, it silently retries and emits the successful retry response.
+func TestModel_NonStreaming_MalformedFunctionCallRetry(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	}
+	malformedResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+	goodResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{
+				Content:      genai.NewContentFromText("ok", genai.RoleModel),
+				FinishReason: genai.FinishReason("STOP"),
+			},
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	// First call returns malformed; second (retry) returns good.
+	gomock.InOrder(
+		mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(malformedResp, nil),
+		mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(goodResp, nil),
+	)
+
+	m := &Model{client: mockClient}
+	respChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for r := range respChan {
+		responses = append(responses, r)
+	}
+	require.Len(t, responses, 1)
+	require.Equal(t, "ok", responses[0].Choices[0].Message.Content)
+}
+
+// TestModel_NonStreaming_MalformedFunctionCallRetryError verifies that when a
+// retry itself returns an error, that error is propagated as a model.Response
+// with Done=true and a non-nil Error field.
+func TestModel_NonStreaming_MalformedFunctionCallRetryError(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	}
+	malformedResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+	retryErr := errors.New("network error on retry")
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	gomock.InOrder(
+		mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(malformedResp, nil),
+		mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, retryErr),
+	)
+
+	m := &Model{client: mockClient}
+	respChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for r := range respChan {
+		responses = append(responses, r)
+	}
+	require.Len(t, responses, 1)
+	require.True(t, responses[0].Done)
+	require.NotNil(t, responses[0].Error)
+	require.Equal(t, "network error on retry", responses[0].Error.Message)
+}
+
+// TestModel_Streaming_MalformedFunctionCallRetry verifies that when the
+// streaming accumulator ends with MALFORMED_FUNCTION_CALL, all buffered chunks
+// are suppressed and the implementation falls back to a non-streaming retry,
+// emitting only the retry result (Done=true) to the caller.
+func TestModel_Streaming_MalformedFunctionCallRetry(t *testing.T) {
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	malformedChunk := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+	goodResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{
+				Content:      genai.NewContentFromText("retry-ok", genai.RoleModel),
+				FinishReason: genai.FinishReason("STOP"),
+			},
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	// Stream returns a single malformed chunk.
+	mockModels.EXPECT().
+		GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(seqFromSlice([]*genai.GenerateContentResponse{malformedChunk}))
+	// Non-streaming retry returns good response.
+	mockModels.EXPECT().
+		GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(goodResp, nil)
+
+	m := &Model{client: mockClient}
+	respChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for r := range respChan {
+		responses = append(responses, r)
+	}
+	// With buffering the malformed stream is fully suppressed: no partial
+	// chunks are emitted. Only the retry result (Done=true) is sent.
+	require.Len(t, responses, 1)
+	require.True(t, responses[0].Done)
+	require.Equal(t, "retry-ok", responses[0].Choices[0].Message.Content)
+}
+
+// TestModel_Streaming_MalformedFunctionCallRetryError verifies that when the
+// non-streaming retry for a malformed stream response itself returns an error,
+// that error is propagated as a Done=true response with a non-nil Error field.
+func TestModel_Streaming_MalformedFunctionCallRetryError(t *testing.T) {
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	malformedChunk := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+	retryErr := errors.New("network error on stream retry")
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	mockModels.EXPECT().
+		GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(seqFromSlice([]*genai.GenerateContentResponse{malformedChunk}))
+	// The first retry attempt returns an error; loop breaks immediately.
+	mockModels.EXPECT().
+		GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(nil, retryErr).Times(1)
+
+	m := &Model{client: mockClient}
+	respChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for r := range respChan {
+		responses = append(responses, r)
+	}
+	var errResp *model.Response
+	for _, r := range responses {
+		if r.Error != nil {
+			errResp = r
+		}
+	}
+	require.NotNil(t, errResp, "error response must be emitted when retry fails")
+	require.True(t, errResp.Done)
+	require.Equal(t, "network error on stream retry", errResp.Error.Message)
+}
+
+// TestModel_Streaming_MalformedFunctionCallWithCallback verifies that the
+// chatStreamCompleteCallback is invoked with the retry result (not the
+// malformed response) when a streaming fallback retry succeeds.
+func TestModel_Streaming_MalformedFunctionCallWithCallback(t *testing.T) {
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	malformedChunk := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+	goodResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{
+				Content:      genai.NewContentFromText("callback-ok", genai.RoleModel),
+				FinishReason: genai.FinishReason("STOP"),
+			},
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	mockModels.EXPECT().
+		GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(seqFromSlice([]*genai.GenerateContentResponse{malformedChunk}))
+	mockModels.EXPECT().
+		GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(goodResp, nil)
+
+	var callbackResp *model.Response
+	m := &Model{
+		client: mockClient,
+		chatStreamCompleteCallback: func(_ context.Context, _ []*genai.Content,
+			_ *genai.GenerateContentConfig, r *model.Response) {
+			callbackResp = r
+		},
+	}
+	respChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+	for range respChan {
+	}
+
+	require.NotNil(t, callbackResp, "chatStreamCompleteCallback must be called")
+	require.Equal(t, "callback-ok", callbackResp.Choices[0].Message.Content)
+}
+
+// TestModel_NonStreaming_MalformedFunctionCallExhausted verifies that when all
+// retries are exhausted and the response is still MALFORMED_FUNCTION_CALL, an
+// error response is emitted instead of silently returning the broken response.
+func TestModel_NonStreaming_MalformedFunctionCallExhausted(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	}
+	malformedResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	// Initial call + malformedFunctionCallRetries (2) retries all return malformed.
+	mockModels.EXPECT().
+		GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(malformedResp, nil).
+		Times(1 + malformedFunctionCallRetries)
+
+	m := &Model{client: mockClient}
+	respChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for r := range respChan {
+		responses = append(responses, r)
+	}
+	require.Len(t, responses, 1)
+	require.True(t, responses[0].Done)
+	require.NotNil(t, responses[0].Error)
+	require.Contains(t, responses[0].Error.Message, "MALFORMED_FUNCTION_CALL persists after retries")
+}
+
+// TestModel_Streaming_MalformedFunctionCallExhausted verifies that when all
+// non-streaming retries after a malformed stream are exhausted and still
+// malformed, an error response is emitted instead of the broken response.
+func TestModel_Streaming_MalformedFunctionCallExhausted(t *testing.T) {
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	malformedChunk := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	mockModels.EXPECT().
+		GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(seqFromSlice([]*genai.GenerateContentResponse{malformedChunk}))
+	// All non-streaming retries also return malformed.
+	mockModels.EXPECT().
+		GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(malformedChunk, nil).
+		Times(malformedFunctionCallRetries)
+
+	m := &Model{client: mockClient}
+	respChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for r := range respChan {
+		responses = append(responses, r)
+	}
+	var errResp *model.Response
+	for _, r := range responses {
+		if r.Error != nil {
+			errResp = r
+		}
+	}
+	require.NotNil(t, errResp, "error response must be emitted when all retries exhausted")
+	require.True(t, errResp.Done)
+	require.Contains(t, errResp.Error.Message, "MALFORMED_FUNCTION_CALL persists after retries")
+}
+
+// TestModel_Streaming_NormalPathCallbacks verifies that chatChunkCallback and
+// chatStreamCompleteCallback are both invoked on the normal (non-malformed)
+// streaming path, and that buffered chunks are flushed to the caller.
+func TestModel_Streaming_NormalPathCallbacks(t *testing.T) {
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hello"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	chunk1 := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{Content: genai.NewContentFromText("hello", genai.RoleModel)},
+		},
+	}
+	chunk2 := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{
+				Content:      genai.NewContentFromText(" world", genai.RoleModel),
+				FinishReason: genai.FinishReason("STOP"),
+			},
+		},
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := NewMockClient(ctrl)
+	mockModels := NewMockModels(ctrl)
+	mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+	mockModels.EXPECT().
+		GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(seqFromSlice([]*genai.GenerateContentResponse{chunk1, chunk2}))
+
+	var chunkCallbackRaws []*genai.GenerateContentResponse
+	var completeCallbackResp *model.Response
+	m := &Model{
+		client: mockClient,
+		chatChunkCallback: func(_ context.Context, _ []*genai.Content,
+			_ *genai.GenerateContentConfig, raw *genai.GenerateContentResponse) {
+			chunkCallbackRaws = append(chunkCallbackRaws, raw)
+		},
+		chatStreamCompleteCallback: func(_ context.Context, _ []*genai.Content,
+			_ *genai.GenerateContentConfig, r *model.Response) {
+			completeCallbackResp = r
+		},
+	}
+	respChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for r := range respChan {
+		responses = append(responses, r)
+	}
+
+	// 2 partial chunks + 1 final Done response.
+	require.Len(t, responses, 3)
+	// chatChunkCallback called once per chunk.
+	require.Len(t, chunkCallbackRaws, 2)
+	require.Equal(t, chunk1, chunkCallbackRaws[0])
+	require.Equal(t, chunk2, chunkCallbackRaws[1])
+	// chatStreamCompleteCallback called with the accumulated final response.
+	require.NotNil(t, completeCallbackResp)
+	require.True(t, completeCallbackResp.Done)
+}
+
+// TestModel_ContextCancellation_NonStreaming verifies that when the context is
+// cancelled and the response channel is unbuffered (no reader), the select
+// branches in the non-streaming path take the ctx.Done() arm without deadlock.
+// Because Go's select is non-deterministic between equally-ready cases, the
+// tests drain the channel but do not assert the exact response count — the
+// important property is that the goroutine terminates (channel closes) without
+// hanging.
+func TestModel_ContextCancellation_NonStreaming(t *testing.T) {
+	req := &model.Request{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hi"}},
+	}
+	malformedResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+	goodResp := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{
+				Content:      genai.NewContentFromText("ok", genai.RoleModel),
+				FinishReason: genai.FinishReason("STOP"),
+			},
+		},
+	}
+	apiErr := errors.New("api error")
+
+	drainWithTimeout := func(t *testing.T, ch <-chan *model.Response) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			for range ch {
+			}
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("channel did not close: goroutine likely deadlocked")
+		}
+	}
+
+	t.Run("error_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, apiErr)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("retry_error_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		gomock.InOrder(
+			mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(malformedResp, nil),
+			mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, apiErr),
+		)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("exhausted_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(malformedResp, nil).Times(malformedFunctionCallRetries + 1)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("success_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(goodResp, nil)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+}
+
+// TestModel_ContextCancellation_Streaming verifies that ctx.Done() arms in the
+// streaming path do not deadlock when the context is pre-cancelled.
+func TestModel_ContextCancellation_Streaming(t *testing.T) {
+	req := &model.Request{
+		Messages:         []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	malformedChunk := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+	goodChunk := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{
+				Content:      genai.NewContentFromText("ok", genai.RoleModel),
+				FinishReason: genai.FinishReason("STOP"),
+			},
+		},
+	}
+	malformedNonStream := &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{
+			{FinishReason: genai.FinishReason("MALFORMED_FUNCTION_CALL")},
+		},
+	}
+	apiErr := errors.New("stream api error")
+
+	drainWithTimeout := func(t *testing.T, ch <-chan *model.Response) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() {
+			for range ch {
+			}
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("channel did not close: goroutine likely deadlocked")
+		}
+	}
+
+	t.Run("streaming_retry_error_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSlice([]*genai.GenerateContentResponse{malformedChunk}))
+		mockModels.EXPECT().
+			GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(nil, apiErr)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("streaming_exhausted_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSlice([]*genai.GenerateContentResponse{malformedChunk}))
+		mockModels.EXPECT().
+			GenerateContent(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(malformedNonStream, nil).Times(malformedFunctionCallRetries)
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("streaming_normal_ctx_cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSlice([]*genai.GenerateContentResponse{goodChunk}))
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
+
+	t.Run("mid_stream_error_flush_ctx_cancelled", func(t *testing.T) {
+		// ctx.Done() arm at lines 296-297: mid-stream error with buffered chunks,
+		// ctx pre-cancelled so chunk-flush select takes ctx.Done().
+		streamErr := errors.New("stream fail")
+		successChunk := &genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{
+				{Content: &genai.Content{Parts: []*genai.Part{{Text: "partial"}}}},
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSliceWithError([]*genai.GenerateContentResponse{successChunk}, streamErr))
+
+		m := &Model{client: mockClient}
+		respChan, err := m.GenerateContent(ctx, req)
+		require.NoError(t, err)
+		drainWithTimeout(t, respChan)
+	})
 }
