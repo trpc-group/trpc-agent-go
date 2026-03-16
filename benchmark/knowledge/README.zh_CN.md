@@ -154,11 +154,57 @@ CRITICAL RULES(IMPORTANT !!!):
 | **en_int**  | 100     | 信息整合能力 | 需要从**多个**正例段落中综合信息才能回答的查询，答案分散在多个文档中。                                     |
 | **en_fact** | 100     | 反事实鲁棒性 | 同时包含正确的`positive` 段落和**篡改了关键事实**的 `positive_wrong` 段落（如将"Facebook"替换为"Apple"）。 |
 
-> **重要说明：我们对 RGB 的使用方式与原始论文不同。** RGB 原始评测方式是将预选的 positive + negative 段落直接拼接后作为上下文喂给 LLM。而在我们的评测中，仅将 **positive 段落**作为文档灌入各框架的知识库，由框架自行完成检索 + 生成的端到端流程。这意味着：
->
-> - **en**：负例（噪声）段落**未被灌入**知识库，因此"噪声鲁棒性"并未被直接测试，实际作为**标准事实性 QA** 基准。
-> - **en_fact**：`positive_wrong`（反事实）段落**未被灌入**，因此"反事实鲁棒性"并未被直接测试，实际作为另一组**事实性 QA** 基准，但问题特征与 en 子集不同。
-> - **en_int**：信息整合的挑战**被保留**，因为答案确实需要从多个检索到的文档中综合得出。
+> **重要说明（当前实现）**：我们对 RGB 的使用方式与原始论文不同。RGB 原始评测通常是按样本拼接指定外部段落后直接喂给模型；而在本项目中，我们先把文档灌入知识库，再由各框架进行端到端检索 + 生成。并且在灌库阶段，统一加载 `positive`、`negative`、`positive_wrong`（若样本存在）三类段落。
+
+#### RGB 实际加载策略（与代码一致）
+
+- 文档来源：`en / en_int / en_fact` 的原始 JSON 文件。
+- 灌库口径：对每条样本同时读取 `positive`、`negative`、`positive_wrong` 三类段落（若字段存在）。
+- 去重规则：按段落文本全局去重后写入知识库文档目录，避免重复片段反复入库。
+- 评测含义：在同一知识库中同时存在相关信息、噪声信息和反事实信息，更接近真实 RAG 检索环境。
+
+#### RGB 文档 + QA 示例（每个英文子集各 1 条，不截断）
+
+以下示例来自 RGB 原始数据文件首条样本（`en_refine.json`、`en_int.json`、`en_fact.json`），文档文本按原始字段展示，不做截断。
+
+`en`
+Q: `When is the premiere of 'Carole King & James Taylor: Just Call Out My Name'?`
+A: `January 2 2022`
+
+`positive` 文档：
+```text
+However, the concert tour took place in honor of the 40th anniversary. The two might have aged since they first performed together but neither Carole King nor James Taylor have lost a beat in all these years!The concert film includes the following songs:(You Make Me Feel Like) A Natural WomanSomething in the Way She MovesSo Far AwayCarolina in My MindCountry RoadSmackwater JackWhere You Lead (lyrics changed up as the city they’re playing in replaces New York)Your Smiling FaceBeautifulShower The PeopleWay Over YonderSweet Baby James (this kicks off the second half of the film)Up on the RoofIt’s Too LateFire and RainI Feel the Earth MoveYou’ve Got a FriendHow Sweet It Is (To Be Loved by You)You Can Close Your EyesMexico (end credits)DIRECTOR: Frank MarshallFEATURING: Carole King, James Taylor, Danny Kortchmar, Peter Asher, Russ Kunkel, Leland SklarADDITIONAL MUSICIANS: Andrea Zonn, Arnold McCuller, Kate Markowitz, Robbie KondorCarole King & James Taylor: Just Call Out My Name premiered January 2, 2022, at 9:00pm ET/PT on CNN. The film will be available on demand via cable/satellite systems, CNNgo platforms, and CNN mobile apps, beginning Monday, January 3, through Sunday, January 16.
+```
+
+`negative` 文档：
+```text
+Feb 10, 2022                                 Runtime:                                   2h 0m                                Carole King                                                                                          Self                                                             James Taylor                                                                                          Self                                                             Danny Kortchmar                                                                                          Self                                                             Russ Kunkel                                                                                          Self                                                             Lee Sklar                                                                                          Self                                                             Frank Marshall                                                                                          Director                                                             Frank Marshall                                                                                          Producer                                                             Aly Parker                                                                                          Producer                                                                              There are no featured reviews for Carole King & James Taylor: Just Call Out My Name because the movie has not released yet ().              Vote Now: The Best Movies & TV Shows Since 1998! Daily Tomato - Can you guess the movie of the day? What to Watch - In theaters & streaming TV and Streaming News Join The Newsletter Get the freshest reviews, news, and more delivered right to your inbox! Follow Us Copyright © Fandango. All rights reserved.
+```
+
+`en_int`
+Q: `Who is the director of 'Carole King & James Taylor: Just Call Out My Name' and when is its premiere?`
+A: `Frank Marshall; January 2 2022`
+
+`positive` 文档：
+```text
+Details · Release date · January 2, 2022 (United States) · Country of origin. United States · Language. English · Also known as. Just Call Out My Name · Filming ...
+```
+
+`en_fact`
+Q: `Super Bowl 2021 location`
+A: `Tampa, Florida`
+
+`positive` 文档：
+```text
+The game was played on February 7, 2021, at Raymond James Stadium in Tampa, Florida, the home stadium of the Buccaneers, marking the first time a team played a ...
+```
+
+`positive_wrong` 文档：
+```text
+The game was played on February 7, 2021, at Raymond James Stadium in Glendale, Arizona, the home stadium of the Buccaneers, marking the first time a team played a ...
+```
+
+> 说明：`en_fact` 中的 `positive_wrong` 是刻意构造的干扰片段。当前实现会将 `positive`、`negative`、`positive_wrong`（若存在）统一灌入知识库。
 
 ### MultiHop-RAG（多跳检索增强生成基准）
 
@@ -273,107 +319,127 @@ CRITICAL RULES(IMPORTANT !!!):
 
 #### 2.1 RGB-en：标准事实性 QA (300 个问答对)
 
-标准事实性查询，答案来源明确。（RGB 原始测试重点为噪声鲁棒性，但在我们的端到端评测中，负例段落未被灌入知识库。）
+标准事实性查询，答案来源明确。（RGB 原始测试重点为噪声鲁棒性；在我们的端到端评测中，`negative` 也会与 `positive` 一同灌入知识库，因此该子集仍包含噪声干扰。）
 
 **回答质量：**
 
 
 | 指标                            | LangChain | tRPC-Agent-Go | Agno       | CrewAI     | AutoGen | 胜者             |
 | --------------------------------- | ----------- | --------------- | ------------ | ------------ | --------- | ------------------ |
-| **Faithfulness (忠实度)**       | 0.9735    | 0.9754        | 0.9780     | **0.9888** | 0.7664  | ✅ CrewAI        |
-| **Answer Relevancy (相关性)**   | 0.9352    | 0.9430        | **0.9465** | 0.9096     | 0.8544  | ✅ Agno          |
-| **Answer Correctness (正确性)** | 0.7834    | **0.8278**    | 0.8236     | 0.7593     | 0.6683  | ✅ tRPC-Agent-Go |
-| **Answer Similarity (相似度)**  | 0.5291    | 0.5449        | **0.5472** | 0.5353     | 0.4923  | ✅ Agno          |
+| **Faithfulness (忠实度)**       | 0.9677    | 0.9861        | 0.9797     | **0.9925** | 0.7664  | ✅ CrewAI        |
+| **Answer Relevancy (相关性)**   | 0.9385    | **0.9543**    | 0.9485     | 0.9073     | 0.8544  | ✅ tRPC-Agent-Go |
+| **Answer Correctness (正确性)** | 0.7901    | **0.8379**    | 0.8072     | 0.7608     | 0.6683  | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)**  | 0.5329    | **0.5421**    | 0.5421     | 0.5305     | 0.4923  | ✅ tRPC-Agent-Go / Agno |
 
 **上下文质量：**
 
 
-| 指标                                 | LangChain | tRPC-Agent-Go | Agno   | CrewAI | AutoGen | 胜者             |
-| -------------------------------------- | ----------- | --------------- | -------- | -------- | --------- | ------------------ |
-| **Context Precision (精确率)**       | 0.8686    | **0.8911**    | 0.8790 | 0.8678 | 0.8876  | ✅ tRPC-Agent-Go |
-| **Context Recall (召回率)**          | 0.9933    | **0.9967**    | 0.9933 | 0.9900 | 0.9933  | ✅ tRPC-Agent-Go |
-| **Context Entity Recall (实体召回)** | 0.6350    | **0.6533**    | 0.6350 | 0.6250 | 0.6278  | ✅ tRPC-Agent-Go |
+| 指标                                 | LangChain  | tRPC-Agent-Go  | Agno   | CrewAI | AutoGen | 胜者             |
+| -------------------------------------- | ------------ | ---------------- | -------- | -------- | --------- | ------------------ |
+| **Context Precision (精确率)**       | 0.8777     | **0.8973**     | 0.8691 | 0.8665 | 0.8876  | ✅ tRPC-Agent-Go |
+| **Context Recall (召回率)**          | 0.9965     | **1.0000**     | 0.9792 | 0.9967 | 0.9933  | ✅ tRPC-Agent-Go |
+| **Context Entity Recall (实体召回)** | **0.6467** | 0.6461         | 0.6416 | 0.6350 | 0.6278  | ✅ LangChain     |
 
 #### 2.2 RGB-en_int：多文档信息整合 (100 个问答对)
 
 测试模型检索并综合分散在多个文档中的信息的能力。这是我们端到端评测中最能保留 RGB 原始挑战的子集。
 
+> **LangChain-Chain 作为单次检索基线**：在该子集中，我们额外加入 **LangChain-Chain**（确定性 Chain 流程，每个查询仅触发一次检索）作为基线，用于验证 **Agentic 多步检索**相比**单次检索**在多文档信息整合场景下的优势。由于 en_int 的查询需要综合多篇文档中的信息，能够执行多次迭代搜索的 Agent 框架应显著优于单次检索流程。
+
 **回答质量：**
 
 
-| 指标                            | LangChain | tRPC-Agent-Go | Agno   | CrewAI | AutoGen    | 胜者             |
-| --------------------------------- | ----------- | --------------- | -------- | -------- | ------------ | ------------------ |
-| **Faithfulness (忠实度)**       | 0.9690    | **0.9718**    | 0.8499 | 0.9694 | 0.9130     | ✅ tRPC-Agent-Go |
-| **Answer Relevancy (相关性)**   | 0.9033    | 0.9170        | 0.9015 | 0.9212 | **0.9327** | ✅ AutoGen       |
-| **Answer Correctness (正确性)** | 0.7113    | **0.7664**    | 0.6889 | 0.6827 | 0.7330     | ✅ tRPC-Agent-Go |
-| **Answer Similarity (相似度)**  | 0.5363    | **0.5638**    | 0.5373 | 0.5419 | 0.5414     | ✅ tRPC-Agent-Go |
+| 指标                            | LangChain-Chain *（基线）* | LangChain | tRPC-Agent-Go | Agno   | CrewAI     | AutoGen    | 胜者             |
+| --------------------------------- | ---------------------------- | ----------- | --------------- | -------- | ------------ | ------------ | ------------------ |
+| **Faithfulness (忠实度)**       | 0.9325                     | 0.9647    | 0.9716        | 0.9481 | **0.9740** | 0.9130     | ✅ CrewAI        |
+| **Answer Relevancy (相关性)**   | 0.7559                     | 0.9063    | 0.9196        | 0.8754 | 0.9238     | **0.9327** | ✅ AutoGen       |
+| **Answer Correctness (正确性)** | 0.6677                     | 0.7244    | **0.7494**    | 0.6960 | 0.6907     | 0.7330     | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)**  | 0.5417                     | 0.5401    | **0.5599**    | 0.5411 | 0.5508     | 0.5414     | ✅ tRPC-Agent-Go |
 
 **上下文质量：**
 
 
-| 指标                                 | LangChain | tRPC-Agent-Go | Agno       | CrewAI | AutoGen    | 胜者       |
-| -------------------------------------- | ----------- | --------------- | ------------ | -------- | ------------ | ------------ |
-| **Context Precision (精确率)**       | 0.2822    | 0.2810        | **0.3154** | 0.2774 | 0.2816     | ✅ Agno    |
-| **Context Recall (召回率)**          | 0.8950    | 0.8850        | 0.8950     | 0.8850 | **0.9033** | ✅ AutoGen |
-| **Context Entity Recall (实体召回)** | 0.6067    | 0.5950        | 0.6200     | 0.6200 | **0.6317** | ✅ AutoGen |
+| 指标                                 | LangChain-Chain *（基线）* | LangChain | tRPC-Agent-Go | Agno   | CrewAI     | AutoGen    | 胜者               |
+| -------------------------------------- | ---------------------------- | ----------- | --------------- | -------- | ------------ | ------------ | -------------------- |
+| **Context Precision (精确率)**       | **0.3136**                 | 0.2718    | 0.2886        | 0.2943 | 0.2925     | 0.2816     | ✅ LangChain-Chain |
+| **Context Recall (召回率)**          | 0.7000                     | 0.8776    | 0.8800        | 0.8083 | **0.9150** | 0.9033     | ✅ CrewAI          |
+| **Context Entity Recall (实体召回)** | 0.4917                     | 0.5790    | 0.5933        | 0.5833 | 0.6167     | **0.6317** | ✅ AutoGen         |
 
-#### 2.3 RGB-en_fact：事实性 QA (100 个问答对)
+#### 2.3 RGB-en_fact：事实性 QA + 反事实干扰 (100 个问答对)
 
-事实性查询，问题特征与 en 子集不同。（RGB 原始测试重点为反事实鲁棒性，但在我们的端到端评测中，`positive_wrong` 段落未被灌入知识库。）
+事实性查询，问题特征与 en 子集不同。（RGB 原始测试重点为反事实鲁棒性；在我们的端到端评测中，`positive_wrong` 与 `positive` 会一同灌入知识库，因此该子集仍包含反事实干扰。）
 
 **回答质量：**
 
 
 | 指标                            | LangChain  | tRPC-Agent-Go | Agno   | CrewAI | AutoGen | 胜者             |
 | --------------------------------- | ------------ | --------------- | -------- | -------- | --------- | ------------------ |
-| **Faithfulness (忠实度)**       | **0.9667** | 0.9595        | 0.9275 | 0.9425 | 0.7810  | ✅ LangChain     |
-| **Answer Relevancy (相关性)**   | 0.8165     | **0.8941**    | 0.6874 | 0.8362 | 0.7627  | ✅ tRPC-Agent-Go |
-| **Answer Correctness (正确性)** | 0.7256     | **0.7780**    | 0.6362 | 0.6910 | 0.6634  | ✅ tRPC-Agent-Go |
-| **Answer Similarity (相似度)**  | 0.5298     | **0.5434**    | 0.5158 | 0.5357 | 0.5058  | ✅ tRPC-Agent-Go |
+| **Faithfulness (忠实度)**       | **0.9719** | 0.9608        | 0.9505 | 0.9648 | 0.7810  | ✅ LangChain     |
+| **Answer Relevancy (相关性)**   | 0.8370     | **0.9163**    | 0.6748 | 0.8594 | 0.7627  | ✅ tRPC-Agent-Go |
+| **Answer Correctness (正确性)** | 0.7226     | **0.8055**    | 0.6148 | 0.6755 | 0.6634  | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)**  | 0.5330     | **0.5462**    | 0.5062 | 0.5266 | 0.5058  | ✅ tRPC-Agent-Go |
 
 **上下文质量：**
 
 
-| 指标                                 | LangChain  | tRPC-Agent-Go | Agno   | CrewAI     | AutoGen    | 胜者                            |
-| -------------------------------------- | ------------ | --------------- | -------- | ------------ | ------------ | --------------------------------- |
-| **Context Precision (精确率)**       | 0.6281     | **0.6372**    | 0.6176 | **0.6371** | 0.6311     | ✅ tRPC-Agent-Go / CrewAI       |
-| **Context Recall (召回率)**          | **0.9900** | 0.9800        | 0.9500 | 0.9800     | **0.9900** | ✅ LangChain / AutoGen          |
-| **Context Entity Recall (实体召回)** | **0.7200** | 0.7100        | 0.6900 | **0.7200** | **0.7200** | ✅ LangChain / CrewAI / AutoGen |
+| 指标                                 | LangChain | tRPC-Agent-Go  | Agno   | CrewAI     | AutoGen    | 胜者                                |
+| -------------------------------------- | ----------- | ---------------- | -------- | ------------ | ------------ | ------------------------------------- |
+| **Context Precision (精确率)**       | 0.6329    | **0.6466**     | 0.6050 | 0.6308     | 0.6311     | ✅ tRPC-Agent-Go                    |
+| **Context Recall (召回率)**          | 0.9796    | **0.9900**     | 0.8700 | **0.9900** | **0.9900** | ✅ tRPC-Agent-Go / CrewAI / AutoGen |
+| **Context Entity Recall (实体召回)** | 0.7143    | 0.7100         | 0.6100 | **0.7200** | **0.7200** | ✅ CrewAI / AutoGen                 |
 
 #### RGB 综合分析
 
-**3 个子集平均值对比 (en + en_int + en_fact)：**
+> **说明**：LangChain-Chain 不参与 RGB 综合统计，仅在 en_int 子集中作为单次检索基线使用。详见 2.2 节中 Agentic 与单次检索的对比分析。
+
+**3 个子集简单平均值对比 (en + en_int + en_fact)：**
 
 
-| 指标                                 | LangChain | tRPC-Agent-Go | Agno   | CrewAI     | AutoGen    | 胜者             |
-| -------------------------------------- | ----------- | --------------- | -------- | ------------ | ------------ | ------------------ |
-| **Faithfulness (忠实度)**            | 0.9712    | 0.9715        | 0.9659 | **0.9757** | 0.7986     | ✅ CrewAI        |
-| **Answer Relevancy (相关性)**        | 0.9051    | **0.9280**    | 0.8875 | 0.8972     | 0.8517     | ✅ tRPC-Agent-Go |
-| **Answer Correctness (正确性)**      | 0.7574    | **0.8056**    | 0.7675 | 0.7303     | 0.6803     | ✅ tRPC-Agent-Go |
-| **Answer Similarity (相似度)**       | 0.5307    | **0.5484**    | 0.5399 | 0.5367     | 0.5048     | ✅ tRPC-Agent-Go |
-| **Context Precision (精确率)**       | 0.7032    | **0.7183**    | 0.7118 | 0.7036     | 0.7151     | ✅ tRPC-Agent-Go |
-| **Context Recall (召回率)**          | 0.9730    | 0.9710        | 0.9650 | 0.9670     | **0.9746** | ✅ AutoGen       |
-| **Context Entity Recall (实体召回)** | 0.6463    | **0.6530**    | 0.6343 | 0.6430     | 0.6470     | ✅ tRPC-Agent-Go |
+| 指标                                 | LangChain | tRPC-Agent-Go | Agno   | CrewAI     | AutoGen    | 胜者               |
+| -------------------------------------- | ----------- | --------------- | -------- | ------------ | ------------ | -------------------- |
+| **Faithfulness (忠实度)**            | 0.9681    | 0.9728        | 0.9594 | **0.9771** | 0.8201     | ✅ CrewAI          |
+| **Answer Relevancy (相关性)**        | 0.8939    | **0.9301**    | 0.8329 | 0.8968     | 0.8499     | ✅ tRPC-Agent-Go   |
+| **Answer Correctness (正确性)**      | 0.7457    | **0.7976**    | 0.7060 | 0.7090     | 0.6882     | ✅ tRPC-Agent-Go   |
+| **Answer Similarity (相似度)**       | 0.5353    | **0.5494**    | 0.5298 | 0.5360     | 0.5132     | ✅ tRPC-Agent-Go   |
+| **Context Precision (精确率)**       | 0.5941    | **0.6108**    | 0.5895 | 0.5966     | 0.6001     | ✅ tRPC-Agent-Go   |
+| **Context Recall (召回率)**          | 0.9512    | 0.9567        | 0.8858 | **0.9672** | 0.9622     | ✅ CrewAI          |
+| **Context Entity Recall (实体召回)** | 0.6467    | 0.6498        | 0.6116 | 0.6572     | **0.6598** | ✅ AutoGen         |
 
-**各子集第一名统计**（5 个框架参与 3 个子集；3 方及以上并列的类别不计入）：
+**3 个子集加权平均值对比**（en×300 + en_int×100 + en_fact×100，共 500 个 QA 对）：
 
 
-| 框架              | 第一名次数 | 优势领域                                                                                                                                                                                                           |
-| ------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **tRPC-Agent-Go** | **11**     | Answer Correctness (en、en_int、en_fact)、Answer Similarity (en_int、en_fact)、Context Precision (en、en_fact)、Context Recall (en)、Context Entity Recall (en)、Faithfulness (en_int)、Answer Relevancy (en_fact) |
-| **AutoGen**       | **4**      | Answer Relevancy (en_int)、Context Recall (en_int)、Context Entity Recall (en_int)、Context Recall (en_fact)                                                                                                       |
-| **Agno**          | **3**      | Answer Relevancy (en)、Answer Similarity (en)、Context Precision (en_int)                                                                                                                                          |
-| **CrewAI**        | **2**      | Faithfulness (en)、Context Precision (en_fact)                                                                                                                                                                     |
-| **LangChain**     | **2**      | Faithfulness (en_fact)、Context Recall (en_fact)                                                                                                                                                                   |
+| 指标                                 | LangChain | tRPC-Agent-Go | Agno   | CrewAI     | AutoGen | 胜者                          |
+| -------------------------------------- | ----------- | --------------- | -------- | ------------ | --------- | ------------------------------- |
+| **Faithfulness (忠实度)**            | 0.9679    | 0.9781        | 0.9675 | **0.9833** | 0.7986  | ✅ CrewAI                     |
+| **Answer Relevancy (相关性)**        | 0.9118    | **0.9398**    | 0.8791 | 0.9010     | 0.8517  | ✅ tRPC-Agent-Go              |
+| **Answer Correctness (正确性)**      | 0.7635    | **0.8137**    | 0.7465 | 0.7297     | 0.6803  | ✅ tRPC-Agent-Go              |
+| **Answer Similarity (相似度)**       | 0.5344    | **0.5465**    | 0.5347 | 0.5338     | 0.5048  | ✅ tRPC-Agent-Go              |
+| **Context Precision (精确率)**       | 0.7076    | **0.7254**    | 0.7013 | 0.7046     | 0.7151  | ✅ tRPC-Agent-Go              |
+| **Context Recall (召回率)**          | 0.9693    | 0.9740        | 0.9232 | **0.9790** | 0.9746  | ✅ CrewAI                     |
+| **Context Entity Recall (实体召回)** | 0.6467    | **0.6483**    | 0.6236 | **0.6483** | 0.6470  | ✅ tRPC-Agent-Go / CrewAI     |
+
+**各子集第一名统计**（5 个 Agent 框架参与 3 个子集；LangChain-Chain 仅在 en_int 作为基线计入；3 方及以上并列的类别不计入）：
+
+
+| 框架              | 第一名次数 | 优势领域                                                                                                       |
+| ------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------- |
+| **tRPC-Agent-Go** | **11**     | Answer Relevancy (en, en_fact)、Answer Correctness (en, en_int, en_fact)、Answer Similarity (en†, en_int, en_fact)、Context Precision (en, en_fact)、Context Recall (en) |
+| **CrewAI**        | **4**      | Faithfulness (en, en_int)、Context Recall (en_int)、Context Entity Recall (en_fact†)                              |
+| **AutoGen**       | **3**      | Answer Relevancy (en_int)、Context Entity Recall (en_int, en_fact†)                                               |
+| **LangChain**     | **2**      | Context Entity Recall (en)、Faithfulness (en_fact)                                                               |
+| **Agno**          | **1**      | Answer Similarity (en†)                                                                                          |
+| **LangChain-Chain** *（基线）* | **1** | Context Precision (en_int)                                                                                  |
+
+> † = 与其他框架并列
 
 **核心发现：**
 
-1. **tRPC-Agent-Go 在回答质量上全面领先**：在所有 3 个子集中均拿下 **Answer Correctness** 第一，加权平均 **Answer Relevancy** (0.9280) 也排名第一。以 11 次第一名——所有框架中最多——展现出最准确、最可靠的回答能力，不受检索场景影响。
-2. **Agno 修复后忠实度大幅提升**：修复前 Agno 在 en/en_fact 子集的 Faithfulness 仅 0.61-0.74，修复后提升至 0.93-0.98，与其他主流框架持平。**Answer Similarity (en)** 以 0.5472 排名第一。
-3. **AutoGen 在多文档场景的上下文检索上表现突出**：en_int 子集 **Context Recall** (0.9033) 和 **Context Entity Recall** (0.6317) 均为第一，en_fact 子集 **Context Recall** (0.9900) 也并列第一。
-4. **大部分框架忠实度表现优异**：LangChain、tRPC-Agent-Go、CrewAI、Agno 均在各子集达到 > 0.92 的忠实度，幻觉问题控制良好。AutoGen (0.77-0.91) 的忠实度相对偏低。
-5. **信息整合 (en_int) 是最难的任务**：所有框架的 Context Precision 显著下降（0.27-0.30 vs 其他子集的 0.62-0.89），反映了多文档推理的固有难度。
-6. **tRPC-Agent-Go 在 7 项平均指标中占据 5 项第一**：加权平均中，tRPC-Agent-Go 在 Answer Relevancy、Answer Correctness、Answer Similarity、Context Precision 和 Context Entity Recall 均排名第一。
+1. **tRPC-Agent-Go 在 3 个子集中获得 11 次第一**：平均 Answer Relevancy (0.9301)、Answer Correctness (0.7976)、Answer Similarity (0.5494)、Context Precision (0.6108) 均为最高；en 子集 Context Recall 达到 1.0000。
+2. **Agentic 多步检索 vs 单次检索（en_int）**：LangChain-Chain（单次检索）Answer Relevancy 0.7559、Answer Correctness 0.6677、Context Recall 0.7000；所有 Agentic 框架均高于此值（如 tRPC 分别为 0.9196 / 0.7494 / 0.8800）。
+3. **CrewAI 获得 4 次第一**：Faithfulness (en: 0.9925, en_int: 0.9740) 和 Context Recall (en_int: 0.9150)。
+4. **各框架 Faithfulness 对比**：LangChain、tRPC-Agent-Go、CrewAI、Agno 平均 > 0.93；AutoGen 平均 0.82。
+5. **en_int 子集 Context Precision 最低**：所有框架得分 0.27–0.31，其他子集为 0.59–0.90。
+6. **加权平均结果**：tRPC-Agent-Go 在 7 项指标中 5 项排名第一（Answer Relevancy 0.9398、Answer Correctness 0.8137、Answer Similarity 0.5465、Context Precision 0.7254、Context Entity Recall 0.6483 与 CrewAI 并列）。
 
 ---
 
@@ -386,32 +452,35 @@ CRITICAL RULES(IMPORTANT !!!):
 - **Agent 模型**: `DeepSeek-V3.2`
 - **评测模型**: `Qwen3.5-397B-A17B`
 
+> **LangChain-Chain 作为单次检索基线**：与 RGB-en_int 子集类似，我们额外加入 LangChain-Chain（确定性 Chain 流程，每个查询仅触发一次检索）作为基线，用于验证 Agentic 多步检索在多跳推理场景下的优势。
+
 **回答质量：**
 
 
-| 指标                            | LangChain | tRPC-Agent-Go | Agno       | CrewAI | AutoGen    | 胜者             |
-| --------------------------------- | ----------- | --------------- | ------------ | -------- | ------------ | ------------------ |
-| **Faithfulness (忠实度)**       | 0.7639    | 0.7060        | **0.7887** | 0.7460 | 0.7468     | ✅ Agno          |
-| **Answer Relevancy (相关性)**   | 0.5955    | **0.6424**    | 0.5638     | 0.5639 | 0.5342     | ✅ tRPC-Agent-Go |
-| **Answer Correctness (正确性)** | 0.4243    | **0.4984**    | 0.4524     | 0.4371 | 0.4495     | ✅ tRPC-Agent-Go |
-| **Answer Similarity (相似度)**  | 0.4376    | 0.4699        | 0.4715     | 0.4615 | **0.4904** | ✅ AutoGen       |
+| 指标                            | LangChain-Chain *（基线）* | LangChain | tRPC-Agent-Go | Agno       | CrewAI | AutoGen | 胜者             |
+| --------------------------------- | ---------------------------- | ----------- | --------------- | ------------ | -------- | --------- | ------------------ |
+| **Faithfulness (忠实度)**       | 0.4672                     | 0.7639    | 0.7060        | **0.7887** | 0.7460 | 0.7468  | ✅ Agno          |
+| **Answer Relevancy (相关性)**   | 0.5213                     | 0.5955    | **0.6424**    | 0.5638     | 0.5639 | 0.5342  | ✅ tRPC-Agent-Go |
+| **Answer Correctness (正确性)** | 0.4677                     | 0.4243    | **0.4984**    | 0.4524     | 0.4371 | 0.4495  | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)**  | **0.5118**                 | 0.4376    | 0.4699        | 0.4715     | 0.4615 | 0.4904  | ✅ LangChain-Chain |
 
 **上下文质量：**
 
 
-| 指标                                 | LangChain  | tRPC-Agent-Go | Agno   | CrewAI | AutoGen    | 胜者             |
-| -------------------------------------- | ------------ | --------------- | -------- | -------- | ------------ | ------------------ |
-| **Context Precision (精确率)**       | 0.3209     | **0.3574**    | 0.3526 | 0.3409 | 0.3520     | ✅ tRPC-Agent-Go |
-| **Context Recall (召回率)**          | 0.7416     | 0.7733        | 0.7756 | 0.7523 | **0.8111** | ✅ AutoGen       |
-| **Context Entity Recall (实体召回)** | **0.2711** | 0.2667        | 0.2622 | 0.2599 | 0.2556     | ✅ LangChain     |
+| 指标                                 | LangChain-Chain *（基线）* | LangChain  | tRPC-Agent-Go | Agno   | CrewAI | AutoGen    | 胜者               |
+| -------------------------------------- | ---------------------------- | ------------ | --------------- | -------- | -------- | ------------ | -------------------- |
+| **Context Precision (精确率)**       | **0.3820**                 | 0.3209     | 0.3574        | 0.3526 | 0.3409 | 0.3520     | ✅ LangChain-Chain |
+| **Context Recall (召回率)**          | 0.5644                     | 0.7416     | 0.7733        | 0.7756 | 0.7523 | **0.8111** | ✅ AutoGen         |
+| **Context Entity Recall (实体召回)** | 0.2422                     | **0.2711** | 0.2667        | 0.2622 | 0.2599 | 0.2556     | ✅ LangChain       |
 
 **观察：**
 
 1. **多跳查询难度显著高于单跳**：所有指标相比 RGB 和 HuggingFace 数据集均大幅下降，反映了跨文档推理的固有难度。
 2. **tRPC-Agent-Go 在回答质量上领先**：**Answer Relevancy** (0.6424) 和 **Answer Correctness** (0.4984) 均排名第一，继续保持生成准确答案的优势。
-3. **AutoGen 上下文召回最强**：**Context Recall** (0.8111) 显著领先其他框架，**Answer Similarity** (0.4904) 也排名第一，表明检索到了更全面的证据。
+3. **AutoGen 上下文召回最强**：**Context Recall** (0.8111) 显著领先其他框架，表明检索到了更全面的证据。
 4. **Agno 忠实度最高**：**Faithfulness** (0.7887) 排名第一，表明在多跳推理中更好地遵循了检索内容。
-5. **Context Precision 普遍偏低（~0.32-0.36）**：与 RGB-en_int 子集类似，多跳查询使所有框架的检索精度下降，因为相关证据分散在多个文档中。
+5. **Context Precision 普遍偏低（~0.32-0.38）**：与 RGB-en_int 子集类似，多跳查询使所有框架的检索精度下降，因为相关证据分散在多个文档中。
+6. **Agentic 多步检索 vs 单次检索**：LangChain-Chain（单次检索）Faithfulness 仅 0.4672、Context Recall 0.5644，远低于所有 Agentic 框架（Faithfulness 0.70–0.79、Context Recall 0.74–0.81）。但 LangChain-Chain 在 Answer Similarity (0.5118) 和 Context Precision (0.3820) 排名第一，与 RGB-en_int 的规律一致——单次检索返回的上下文更紧凑，精确率更高，但召回率和忠实度显著不足。
 
 ---
 
