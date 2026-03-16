@@ -20,24 +20,18 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"net"
 	"os"
 	"reflect"
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-	a2alog "trpc.group/trpc-go/trpc-a2a-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
@@ -163,10 +157,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("build parent graph agent: %w", err)
 	}
 
-	completionEvent, err := runOnce(ctx, parentAgent, *input)
+	runResult, err := runOnce(ctx, parentAgent, *input)
 	if err != nil {
 		return err
 	}
+	completionEvent := runResult.completionEvent
 
 	remoteReply, err := decodeJSONString(completionEvent.StateDelta, parentStateKeyValue)
 	if err != nil {
@@ -202,40 +197,14 @@ func run(ctx context.Context) error {
 	fmt.Printf("A2A streaming: %v\n", *streaming)
 	fmt.Printf("Remote model streaming: %v\n", *modelStreaming)
 	fmt.Printf("Input: %s\n\n", *input)
+	if len(runResult.remoteTrace) > 0 {
+		fmt.Printf("Remote graph event trace:\n%s\n\n", formatRemoteTrace(runResult.remoteTrace))
+	}
 	fmt.Printf("Remote agent reply:\n%s\n\n", remoteReply)
 	fmt.Printf("Transferred remote state: OK\n%s\n\n", prettyJSON(remotePayload))
 	fmt.Printf("Raw state delta seen by parent mapper: %v\n", rawDeltaOK)
 	fmt.Printf("Parent graph confirmation:\n%s\n", finalResponseText(completionEvent))
 	return nil
-}
-
-func setupLogging() {
-	config := zap.NewProductionConfig()
-	config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
-	logger, _ := config.Build()
-	a2alog.Default = logger.Sugar()
-	agentlog.Default = logger.Sugar()
-}
-
-func getEnvOrDefault(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func resolveHost(raw string) (string, error) {
-	if strings.TrimSpace(raw) != "" {
-		return strings.TrimSpace(raw), nil
-	}
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", fmt.Errorf("allocate tcp port: %w", err)
-	}
-	defer listener.Close()
-
-	return listener.Addr().String(), nil
 }
 
 func buildRemoteGraphAgent(modelName, baseURL, apiKey string, modelStreaming bool) (agent.Agent, error) {
@@ -296,17 +265,6 @@ func stashRemoteInput(_ context.Context, state graph.State) (any, error) {
 	return graph.State{
 		remoteStateKeyOriginalInput: userInput,
 	}, nil
-}
-
-func buildOpenAIOptions(baseURL, apiKey string) []openai.Option {
-	var opts []openai.Option
-	if strings.TrimSpace(baseURL) != "" {
-		opts = append(opts, openai.WithBaseURL(baseURL))
-	}
-	if strings.TrimSpace(apiKey) != "" {
-		opts = append(opts, openai.WithAPIKey(apiKey))
-	}
-	return opts
 }
 
 func buildRemoteStateCaptureNode(modelName string) graph.NodeFunc {
@@ -447,225 +405,4 @@ func finalizeParentState(_ context.Context, state graph.State) (any, error) {
 			echoValue,
 		),
 	}, nil
-}
-
-func runOnce(
-	ctx context.Context,
-	agt agent.Agent,
-	userInput string,
-) (*event.Event, error) {
-	invocation := agent.NewInvocation(
-		agent.WithInvocationAgent(agt),
-		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
-	)
-
-	eventCh, err := agt.Run(ctx, invocation)
-	if err != nil {
-		return nil, err
-	}
-
-	var completionEvent *event.Event
-	var fallbackCompletionEvent *event.Event
-	var lastErr error
-	for ev := range eventCh {
-		if ev == nil {
-			continue
-		}
-		if *verboseEvents {
-			fmt.Printf(
-				"event author=%s object=%s done=%v partial=%v keys=%s\n",
-				ev.Author,
-				ev.Object,
-				ev.Done,
-				ev.IsPartial,
-				formatStateKeys(ev.StateDelta),
-			)
-		}
-		if ev.IsError() {
-			if ev.Error != nil && ev.Error.Message != "" {
-				lastErr = fmt.Errorf("agent returned error event: %s", ev.Error.Message)
-			} else {
-				lastErr = fmt.Errorf("agent returned error event with object %q", ev.Object)
-			}
-		}
-		if isGraphCompletionEvent(ev) {
-			if isParentGraphCompletion(ev) {
-				completionEvent = ev
-				continue
-			}
-			fallbackCompletionEvent = ev
-		}
-	}
-
-	if completionEvent == nil {
-		if lastErr != nil {
-			return nil, lastErr
-		}
-	}
-	if completionEvent == nil && fallbackCompletionEvent != nil {
-		completionEvent = fallbackCompletionEvent
-	}
-	if completionEvent == nil {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("run context ended before graph completion: %w", err)
-		}
-		return nil, fmt.Errorf("no graph completion event received")
-	}
-	return completionEvent, nil
-}
-
-func isGraphCompletionEvent(ev *event.Event) bool {
-	if ev == nil || !ev.Done {
-		return false
-	}
-	if ev.Object == graph.ObjectTypeGraphExecution {
-		return true
-	}
-	return ev.Response != nil && ev.Response.Object == graph.ObjectTypeGraphExecution
-}
-
-func isParentGraphCompletion(ev *event.Event) bool {
-	if ev == nil {
-		return false
-	}
-	if ev.Author == graph.AuthorGraphExecutor {
-		return true
-	}
-	return hasStateKey(ev.StateDelta, parentStateKeyValue) ||
-		hasStateKey(ev.StateDelta, parentStateKeyPayload) ||
-		hasStateKey(ev.StateDelta, parentStateKeyEcho)
-}
-
-func finalResponseText(ev *event.Event) string {
-	if ev == nil || ev.Response == nil || len(ev.Response.Choices) == 0 {
-		return ""
-	}
-	return ev.Response.Choices[0].Message.Content
-}
-
-func decodeJSONString(stateDelta map[string][]byte, key string) (string, error) {
-	raw, ok := stateDelta[key]
-	if !ok {
-		return "", fmt.Errorf("missing state key %q; available keys: %s", key, formatStateKeys(stateDelta))
-	}
-
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return "", fmt.Errorf("decode state key %q: %w", key, err)
-	}
-	return value, nil
-}
-
-func decodeJSONBool(stateDelta map[string][]byte, key string) (bool, error) {
-	raw, ok := stateDelta[key]
-	if !ok {
-		return false, fmt.Errorf("missing state key %q; available keys: %s", key, formatStateKeys(stateDelta))
-	}
-
-	var value bool
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return false, fmt.Errorf("decode state key %q: %w", key, err)
-	}
-	return value, nil
-}
-
-func decodeJSONMap(stateDelta map[string][]byte, key string) (map[string]any, error) {
-	raw, ok := stateDelta[key]
-	if !ok {
-		return nil, fmt.Errorf("missing state key %q; available keys: %s", key, formatStateKeys(stateDelta))
-	}
-
-	var value map[string]any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil, fmt.Errorf("decode state key %q: %w", key, err)
-	}
-	return value, nil
-}
-
-func decodeStateMap(state graph.State, key string) map[string]any {
-	if state == nil {
-		return nil
-	}
-	if value, ok := state[key].(map[string]any); ok {
-		return value
-	}
-	return nil
-}
-
-func decodeRawString(rawState map[string][]byte, key string) string {
-	if len(rawState) == 0 {
-		return ""
-	}
-	raw, ok := rawState[key]
-	if !ok {
-		return ""
-	}
-
-	var decoded string
-	if err := json.Unmarshal(raw, &decoded); err == nil {
-		return decoded
-	}
-	return string(raw)
-}
-
-func decodeRawMap(rawState map[string][]byte, key string) map[string]any {
-	if len(rawState) == 0 {
-		return nil
-	}
-	raw, ok := rawState[key]
-	if !ok {
-		return nil
-	}
-
-	var decoded map[string]any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil
-	}
-	return decoded
-}
-
-func formatStateKeys(stateDelta map[string][]byte) string {
-	if len(stateDelta) == 0 {
-		return "(none)"
-	}
-	keys := make([]string, 0, len(stateDelta))
-	for key := range stateDelta {
-		keys = append(keys, key)
-	}
-	return strings.Join(keys, ", ")
-}
-
-func hasStateKey(stateDelta map[string][]byte, key string) bool {
-	if len(stateDelta) == 0 {
-		return false
-	}
-	_, ok := stateDelta[key]
-	return ok
-}
-
-func mapKeys(state graph.State) []string {
-	if len(state) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(state))
-	for key := range state {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-func prettyJSON(value any) string {
-	bytes, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return fmt.Sprintf("%v", value)
-	}
-	return string(bytes)
-}
-
-func intPtr(v int) *int {
-	return &v
-}
-
-func floatPtr(v float64) *float64 {
-	return &v
 }

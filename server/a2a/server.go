@@ -764,10 +764,8 @@ func (m *messageProcessor) processMessage(
 			if task, ok := convertedResult.(*protocol.Task); ok {
 				// Extract messages from task artifacts.
 				for _, artifact := range task.Artifacts {
-					artifactMsg := protocol.NewMessage(
-						protocol.MessageRoleAgent,
-						artifact.Parts,
-					)
+					artifactMsg := protocol.NewMessage(protocol.MessageRoleAgent, artifact.Parts)
+					artifactMsg.Metadata = artifact.Metadata
 					messages = append(messages, artifactMsg)
 				}
 			}
@@ -827,6 +825,7 @@ func (m *messageProcessor) processMessage(
 	task.Artifacts = []protocol.Artifact{{
 		ArtifactID: lastMsg.MessageID,
 		Parts:      lastMsg.Parts,
+		Metadata:   lastMsg.Metadata,
 	}}
 
 	return &taskmanager.MessageProcessingResult{

@@ -80,6 +80,7 @@ func (d *defaultA2AEventConverter) ConvertToEvents(
 				Role:      protocol.MessageRoleAgent,
 				MessageID: v.Artifacts[i].ArtifactID,
 				Parts:     v.Artifacts[i].Parts,
+				Metadata:  v.Artifacts[i].Metadata,
 			}
 			if evt := d.buildRespEvent(false, artifactMsg, agentName, invocation); evt != nil {
 				events = append(events, evt)
@@ -378,7 +379,7 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 			result.responseID = responseID
 		}
 		if stateDelta, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]; ok {
-			result.stateDelta = decodeStateDeltaMetadata(stateDelta)
+			result.stateDelta = ia2a.DecodeStateDeltaMetadata(stateDelta)
 		}
 	}
 
@@ -621,33 +622,6 @@ func markGraphCompletionEvent(evt *event.Event, result *parseResult) {
 	// semantics so parent graph agent nodes can reconstruct final state.
 	evt.Response.Done = true
 	evt.Response.IsPartial = false
-}
-
-func decodeStateDeltaMetadata(raw any) map[string][]byte {
-	stateDelta, ok := raw.(map[string]any)
-	if !ok || len(stateDelta) == 0 {
-		return nil
-	}
-
-	decoded := make(map[string][]byte, len(stateDelta))
-	for key, value := range stateDelta {
-		switch v := value.(type) {
-		case string:
-			decoded[key] = []byte(v)
-		default:
-			jsonBytes, err := json.Marshal(v)
-			if err != nil {
-				log.Warnf("failed to marshal state_delta metadata for key %q: %v", key, err)
-				continue
-			}
-			decoded[key] = jsonBytes
-		}
-	}
-
-	if len(decoded) == 0 {
-		return nil
-	}
-	return decoded
 }
 
 // buildStreamingResponse creates a response for streaming mode.

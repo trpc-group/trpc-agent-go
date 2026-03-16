@@ -10,6 +10,7 @@
 package a2a
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"reflect"
@@ -766,6 +767,13 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 
 func TestDefaultEventToA2AMessage_StateDeltaMetadata(t *testing.T) {
 	converter := &defaultEventToA2AMessage{}
+	originalStateDelta := map[string][]byte{
+		"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+		"json_string":    []byte(`"hello"`),
+		"plain_text":     []byte("raw-text"),
+		"empty_value":    []byte{},
+		"deleted":        nil,
+	}
 	evt := &event.Event{
 		ID:     "evt-graph-meta",
 		Author: "graph.node:planner",
@@ -776,8 +784,63 @@ func TestDefaultEventToA2AMessage_StateDeltaMetadata(t *testing.T) {
 				Message: model.Message{},
 			}},
 		},
-		StateDelta: map[string][]byte{
-			"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+		StateDelta: originalStateDelta,
+	}
+
+	unaryResult, err := converter.ConvertToA2AMessage(context.Background(), evt, EventToA2AUnaryOptions{})
+	if err != nil {
+		t.Fatalf("ConvertToA2AMessage() error: %v", err)
+	}
+	msg, ok := unaryResult.(*protocol.Message)
+	if !ok {
+		t.Fatalf("expected *protocol.Message, got %T", unaryResult)
+	}
+	if len(msg.Parts) != 0 {
+		t.Fatalf("expected no parts, got %d", len(msg.Parts))
+	}
+	if got := msg.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != "graph.node.start" {
+		t.Fatalf("expected object_type graph.node.start, got %v", got)
+	}
+	rawStateDelta, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]
+	if !ok {
+		t.Fatal("expected state_delta in unary metadata")
+	}
+	assertStateDeltaRoundTrip(t, originalStateDelta, rawStateDelta)
+
+	streamingResult, err := converter.ConvertStreamingToA2AMessage(
+		context.Background(),
+		evt,
+		EventToA2AStreamingOptions{CtxID: "ctx-1", TaskID: "task-1"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToA2AMessage() error: %v", err)
+	}
+	taskEvent, ok := streamingResult.(*protocol.TaskArtifactUpdateEvent)
+	if !ok {
+		t.Fatalf("expected *protocol.TaskArtifactUpdateEvent, got %T", streamingResult)
+	}
+	if len(taskEvent.Artifact.Parts) != 0 {
+		t.Fatalf("expected no parts in artifact, got %d", len(taskEvent.Artifact.Parts))
+	}
+	rawStateDelta, ok = taskEvent.Metadata[ia2a.MessageMetadataStateDeltaKey]
+	if !ok {
+		t.Fatal("expected state_delta in streaming metadata")
+	}
+	assertStateDeltaRoundTrip(t, originalStateDelta, rawStateDelta)
+}
+
+func TestDefaultEventToA2AMessage_MetadataOnlyWithoutStateDelta(t *testing.T) {
+	converter := &defaultEventToA2AMessage{}
+	evt := &event.Event{
+		ID:     "evt-meta-only",
+		Author: "graph.node:planner",
+		Tag:    "planner;trace",
+		Response: &model.Response{
+			ID:     "resp-meta-only",
+			Object: "graph.node.start",
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
 		},
 	}
 
@@ -795,8 +858,14 @@ func TestDefaultEventToA2AMessage_StateDeltaMetadata(t *testing.T) {
 	if got := msg.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != "graph.node.start" {
 		t.Fatalf("expected object_type graph.node.start, got %v", got)
 	}
-	if _, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]; !ok {
-		t.Fatal("expected state_delta in unary metadata")
+	if got := msg.Metadata[ia2a.MessageMetadataTagKey]; got != "planner;trace" {
+		t.Fatalf("expected tag planner;trace, got %v", got)
+	}
+	if got := msg.Metadata[ia2a.MessageMetadataResponseIDKey]; got != "resp-meta-only" {
+		t.Fatalf("expected response id resp-meta-only, got %v", got)
+	}
+	if _, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]; ok {
+		t.Fatal("did not expect state_delta in metadata")
 	}
 
 	streamingResult, err := converter.ConvertStreamingToA2AMessage(
@@ -814,8 +883,42 @@ func TestDefaultEventToA2AMessage_StateDeltaMetadata(t *testing.T) {
 	if len(taskEvent.Artifact.Parts) != 0 {
 		t.Fatalf("expected no parts in artifact, got %d", len(taskEvent.Artifact.Parts))
 	}
-	if _, ok := taskEvent.Metadata[ia2a.MessageMetadataStateDeltaKey]; !ok {
-		t.Fatal("expected state_delta in streaming metadata")
+	if got := taskEvent.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != "graph.node.start" {
+		t.Fatalf("expected object_type graph.node.start, got %v", got)
+	}
+	if got := taskEvent.Metadata[ia2a.MessageMetadataTagKey]; got != "planner;trace" {
+		t.Fatalf("expected tag planner;trace, got %v", got)
+	}
+	if got := taskEvent.Metadata[ia2a.MessageMetadataResponseIDKey]; got != "resp-meta-only" {
+		t.Fatalf("expected response id resp-meta-only, got %v", got)
+	}
+}
+
+func assertStateDeltaRoundTrip(t *testing.T, want map[string][]byte, raw any) {
+	t.Helper()
+
+	got := ia2a.DecodeStateDeltaMetadata(raw)
+	if len(got) != len(want) {
+		t.Fatalf("expected %d state_delta entries, got %d", len(want), len(got))
+	}
+
+	for key, wantValue := range want {
+		gotValue, ok := got[key]
+		if !ok {
+			t.Fatalf("missing state_delta key %q", key)
+		}
+		if wantValue == nil {
+			if gotValue != nil {
+				t.Fatalf("expected nil state_delta for key %q, got %v", key, gotValue)
+			}
+			continue
+		}
+		if gotValue == nil {
+			t.Fatalf("expected non-nil state_delta for key %q", key)
+		}
+		if !bytes.Equal(wantValue, gotValue) {
+			t.Fatalf("unexpected state_delta value for key %q: got %q want %q", key, gotValue, wantValue)
+		}
 	}
 }
 
@@ -853,8 +956,6 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage_MessageType(
 				)
 				msg.MessageID = "resp-123"
 				msg.Metadata = map[string]any{
-					ia2a.MessageMetadataObjectTypeKey: "",
-					ia2a.MessageMetadataTagKey:        "",
 					ia2a.MessageMetadataResponseIDKey: "resp-123",
 				}
 				return &msg
@@ -907,8 +1008,6 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage_MessageType(
 				)
 				msg.MessageID = "resp-stc1"
 				msg.Metadata = map[string]any{
-					ia2a.MessageMetadataObjectTypeKey: "",
-					ia2a.MessageMetadataTagKey:        "",
 					ia2a.MessageMetadataResponseIDKey: "resp-stc1",
 				}
 				return &msg
@@ -2285,9 +2384,8 @@ func TestMessageMetadataTag(t *testing.T) {
 					t.Error("expected metadata")
 					return
 				}
-				// Empty tag should still be present in metadata
-				if msg.Metadata["tag"] != "" {
-					t.Errorf("expected empty tag, got %v", msg.Metadata["tag"])
+				if _, ok := msg.Metadata["tag"]; ok {
+					t.Errorf("expected empty tag to be omitted, got %v", msg.Metadata["tag"])
 				}
 			},
 		},

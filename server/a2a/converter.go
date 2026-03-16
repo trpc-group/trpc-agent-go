@@ -12,7 +12,6 @@ package a2a
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -161,25 +160,29 @@ func (c *defaultEventToA2AMessage) buildMessageMetadata(evt *event.Event) map[st
 		return nil
 	}
 
-	metadata := map[string]any{
-		ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
-		ia2a.MessageMetadataTagKey:        evt.Tag,
-		ia2a.MessageMetadataResponseIDKey: evt.Response.ID,
+	metadata := make(map[string]any, 4)
+	if evt.Response.Object != "" {
+		metadata[ia2a.MessageMetadataObjectTypeKey] = evt.Response.Object
+	}
+	if evt.Tag != "" {
+		metadata[ia2a.MessageMetadataTagKey] = evt.Tag
+	}
+	if evt.Response.ID != "" {
+		metadata[ia2a.MessageMetadataResponseIDKey] = evt.Response.ID
 	}
 
-	if stateDelta := decodeStateDelta(evt.StateDelta); len(stateDelta) > 0 {
+	if stateDelta := ia2a.EncodeStateDeltaMetadata(evt.StateDelta); len(stateDelta) > 0 {
 		metadata[ia2a.MessageMetadataStateDeltaKey] = stateDelta
 	}
 
+	if len(metadata) == 0 {
+		return nil
+	}
 	return metadata
 }
 
 func hasStructuredMetadata(metadata map[string]any) bool {
-	if metadata == nil {
-		return false
-	}
-	_, ok := metadata[ia2a.MessageMetadataStateDeltaKey]
-	return ok
+	return len(metadata) > 0
 }
 
 // ConvertToA2AMessage converts an Agent event to an A2A protocol message.
@@ -378,29 +381,6 @@ func (c *defaultEventToA2AMessage) convertMetadataOnlyToA2AStreamingMessage(
 		return nil, false
 	}
 	return c.convertPartsToA2AStreamingResultWithMetadata(evt, options, nil, metadata), true
-}
-
-func decodeStateDelta(stateDelta map[string][]byte) map[string]any {
-	if len(stateDelta) == 0 {
-		return nil
-	}
-
-	decoded := make(map[string]any, len(stateDelta))
-	for key, raw := range stateDelta {
-		if len(raw) == 0 {
-			decoded[key] = ""
-			continue
-		}
-
-		var value any
-		if err := json.Unmarshal(raw, &value); err != nil {
-			decoded[key] = string(raw)
-			continue
-		}
-		decoded[key] = value
-	}
-
-	return decoded
 }
 
 func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResult(
