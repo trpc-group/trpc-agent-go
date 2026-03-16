@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -126,8 +127,15 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 type defaultEventToA2AMessage struct {
 	// Enable ADK-compatible metadata keys (for example, "adk_type" instead
 	// of "type").
-	adkCompatibility   bool
-	streamingEventType StreamingEventType
+	adkCompatibility        bool
+	allowedGraphObjectTypes []string
+	streamingEventType      StreamingEventType
+}
+
+const graphObjectPrefix = "graph."
+
+var defaultAllowedGraphObjectTypes = []string{
+	graph.ObjectTypeGraphExecution,
 }
 
 // setMetadata writes value under the standard key, and additionally under the
@@ -185,6 +193,40 @@ func hasStructuredMetadata(metadata map[string]any) bool {
 	return len(metadata) > 0
 }
 
+func matchesAllowedGraphObjectType(objectType string, allowedObjectTypes []string) bool {
+	for _, allowed := range allowedObjectTypes {
+		if allowed == objectType || allowed == "*" {
+			return true
+		}
+		if strings.HasSuffix(allowed, "*") {
+			prefix := strings.TrimSuffix(allowed, "*")
+			if strings.HasPrefix(objectType, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *defaultEventToA2AMessage) shouldEmitEvent(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil {
+		return true
+	}
+	objectType := evt.Response.Object
+	if objectType == "" {
+		return true
+	}
+	if !strings.HasPrefix(objectType, graphObjectPrefix) {
+		return true
+	}
+
+	allowedObjectTypes := c.allowedGraphObjectTypes
+	if allowedObjectTypes == nil {
+		allowedObjectTypes = defaultAllowedGraphObjectTypes
+	}
+	return matchesAllowedGraphObjectType(objectType, allowedObjectTypes)
+}
+
 // ConvertToA2AMessage converts an Agent event to an A2A protocol message.
 // For non-streaming responses, it returns the full content including
 // tool calls.
@@ -194,6 +236,9 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 	options EventToA2AUnaryOptions,
 ) (protocol.UnaryMessageResult, error) {
 	if event.Response == nil {
+		return nil, nil
+	}
+	if !c.shouldEmitEvent(event) {
 		return nil, nil
 	}
 
@@ -322,6 +367,9 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, error) {
 	if evt.Response == nil {
+		return nil, nil
+	}
+	if !c.shouldEmitEvent(evt) {
 		return nil, nil
 	}
 

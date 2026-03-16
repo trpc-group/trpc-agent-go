@@ -2811,7 +2811,7 @@ func TestMessageProcessor_ProcessMessage_MultipleEvents_PreservesArtifactMetadat
 				ch <- &event.Event{
 					Response: &model.Response{
 						ID:     "resp-final",
-						Object: "graph.node.start",
+						Object: "graph.execution",
 						Choices: []model.Choice{{
 							Message: model.Message{},
 						}},
@@ -2836,7 +2836,7 @@ func TestMessageProcessor_ProcessMessage_MultipleEvents_PreservesArtifactMetadat
 	if !assert.Len(t, resultTask.Artifacts, 1) {
 		return
 	}
-	assert.Equal(t, "graph.node.start", resultTask.Artifacts[0].Metadata[ia2a.MessageMetadataObjectTypeKey])
+	assert.Equal(t, "graph.execution", resultTask.Artifacts[0].Metadata[ia2a.MessageMetadataObjectTypeKey])
 	rawStateDelta, ok := resultTask.Artifacts[0].Metadata[ia2a.MessageMetadataStateDeltaKey]
 	if assert.True(t, ok, "expected state_delta in artifact metadata") {
 		decoded := ia2a.DecodeStateDeltaMetadata(rawStateDelta)

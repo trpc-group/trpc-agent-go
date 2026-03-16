@@ -434,6 +434,18 @@ func TestWithOptions(t *testing.T) {
 			},
 		},
 		{
+			name:   "WithAllowedGraphObjectTypes",
+			option: WithAllowedGraphObjectTypes("graph.execution", "graph.node.*"),
+			validate: func(t *testing.T, opts *options) {
+				if len(opts.allowedGraphObjectTypes) != 2 {
+					t.Error(
+						"WithAllowedGraphObjectTypes() should set " +
+							"allowedGraphObjectTypes",
+					)
+				}
+			},
+		},
+		{
 			name: "WithErrorHandler",
 			option: WithErrorHandler(func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
 				return nil, nil
@@ -627,4 +639,26 @@ func TestWithStreamingEventType(t *testing.T) {
 	opts := &options{}
 	WithStreamingEventType(StreamingEventTypeMessage)(opts)
 	assert.Equal(t, StreamingEventTypeMessage, opts.streamingEventType)
+}
+
+func TestWithAllowedGraphObjectTypes_Normalize(t *testing.T) {
+	opts := &options{}
+	WithAllowedGraphObjectTypes(
+		" graph.execution ",
+		"graph.node.*",
+		"graph.node.*",
+		"",
+	)(opts)
+	assert.Equal(
+		t,
+		[]string{"graph.execution", "graph.node.*"},
+		opts.allowedGraphObjectTypes,
+	)
+}
+
+func TestWithAllowedGraphObjectTypes_Empty(t *testing.T) {
+	opts := &options{}
+	WithAllowedGraphObjectTypes()(opts)
+	assert.NotNil(t, opts.allowedGraphObjectTypes)
+	assert.Empty(t, opts.allowedGraphObjectTypes)
 }

@@ -534,7 +534,7 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name: "graph event with state delta",
+			name: "graph internal event with state delta is filtered by default",
 			event: &event.Event{
 				ID:     "evt-graph-1",
 				Author: "graph.node:planner",
@@ -549,11 +549,8 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 					"_node_metadata": []byte(`{"nodeId":"planner","phase":"start","modelName":"gpt-4o"}`),
 				},
 			},
-			expected: func() protocol.UnaryMessageResult {
-				msg := protocol.NewMessage(protocol.MessageRoleAgent, nil)
-				return &msg
-			}(),
-			wantErr: false,
+			expected: nil,
+			wantErr:  false,
 		},
 		{
 			name:     "nil response",
@@ -715,7 +712,7 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name: "streaming graph node start event with state delta",
+			name: "streaming graph internal event with state delta is filtered by default",
 			event: &event.Event{
 				ID:     "evt-graph-1",
 				Author: "graph.node:planner",
@@ -730,19 +727,8 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 					"_node_metadata": []byte(`{"nodeId":"planner","phase":"start","modelName":"gpt-4o"}`),
 				},
 			},
-			expected: func() protocol.StreamingMessageResult {
-				isLastChunk := false
-				taskEvent := protocol.NewTaskArtifactUpdateEvent(
-					"test-task-id",
-					"test-ctx-id",
-					protocol.Artifact{
-						ArtifactID: "resp-graph-1",
-					},
-					isLastChunk,
-				)
-				return &taskEvent
-			}(),
-			wantErr: false,
+			expected: nil,
+			wantErr:  false,
 		},
 	}
 
@@ -765,8 +751,116 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 	}
 }
 
+func TestDefaultEventToA2AMessage_GraphEventFilter(t *testing.T) {
+	internalEvt := &event.Event{
+		ID: "evt-internal",
+		Response: &model.Response{
+			ID:     "resp-internal",
+			Object: "graph.node.start",
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
+		},
+	}
+	pregelEvt := &event.Event{
+		ID: "evt-pregel",
+		Response: &model.Response{
+			ID:     "resp-pregel",
+			Object: "graph.pregel.step",
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
+		},
+	}
+	terminalEvt := &event.Event{
+		ID: "evt-terminal",
+		Response: &model.Response{
+			ID:     "resp-terminal",
+			Object: "graph.execution",
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
+		},
+	}
+
+	t.Run("default filters internal graph events", func(t *testing.T) {
+		converter := &defaultEventToA2AMessage{}
+
+		unaryInternal, err := converter.ConvertToA2AMessage(context.Background(), internalEvt, EventToA2AUnaryOptions{})
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage(internal) error: %v", err)
+		}
+		if unaryInternal != nil {
+			t.Fatalf("expected nil unary result for internal graph event, got %T", unaryInternal)
+		}
+
+		streamingInternal, err := converter.ConvertStreamingToA2AMessage(
+			context.Background(),
+			internalEvt,
+			EventToA2AStreamingOptions{CtxID: "ctx-1", TaskID: "task-1"},
+		)
+		if err != nil {
+			t.Fatalf("ConvertStreamingToA2AMessage(internal) error: %v", err)
+		}
+		if streamingInternal != nil {
+			t.Fatalf("expected nil streaming result for internal graph event, got %T", streamingInternal)
+		}
+
+		unaryPregel, err := converter.ConvertToA2AMessage(
+			context.Background(),
+			pregelEvt,
+			EventToA2AUnaryOptions{},
+		)
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage(pregel) error: %v", err)
+		}
+		if unaryPregel != nil {
+			t.Fatalf("expected nil unary result for graph.pregel.* event, got %T", unaryPregel)
+		}
+
+		unaryTerminal, err := converter.ConvertToA2AMessage(context.Background(), terminalEvt, EventToA2AUnaryOptions{})
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage(terminal) error: %v", err)
+		}
+		if unaryTerminal == nil {
+			t.Fatal("expected non-nil unary result for graph.execution")
+		}
+		msg, ok := unaryTerminal.(*protocol.Message)
+		if !ok {
+			t.Fatalf("expected *protocol.Message, got %T", unaryTerminal)
+		}
+		if got := msg.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != "graph.execution" {
+			t.Fatalf("expected object_type graph.execution, got %v", got)
+		}
+	})
+
+	t.Run("allowlist enables internal graph events", func(t *testing.T) {
+		converter := &defaultEventToA2AMessage{allowedGraphObjectTypes: []string{"graph.*"}}
+
+		unaryInternal, err := converter.ConvertToA2AMessage(context.Background(), internalEvt, EventToA2AUnaryOptions{})
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage(internal) error: %v", err)
+		}
+		if unaryInternal == nil {
+			t.Fatal("expected non-nil unary result for internal graph event when allowlist matches")
+		}
+
+		streamingInternal, err := converter.ConvertStreamingToA2AMessage(
+			context.Background(),
+			internalEvt,
+			EventToA2AStreamingOptions{CtxID: "ctx-1", TaskID: "task-1"},
+		)
+		if err != nil {
+			t.Fatalf("ConvertStreamingToA2AMessage(internal) error: %v", err)
+		}
+		if streamingInternal == nil {
+			t.Fatal("expected non-nil streaming result for internal graph event when allowlist matches")
+		}
+	})
+}
+
 func TestDefaultEventToA2AMessage_StateDeltaMetadata(t *testing.T) {
-	converter := &defaultEventToA2AMessage{}
+	converter := &defaultEventToA2AMessage{allowedGraphObjectTypes: []string{"graph.*"}}
 	originalStateDelta := map[string][]byte{
 		"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
 		"json_string":    []byte(`"hello"`),
@@ -830,7 +924,7 @@ func TestDefaultEventToA2AMessage_StateDeltaMetadata(t *testing.T) {
 }
 
 func TestDefaultEventToA2AMessage_MetadataOnlyWithoutStateDelta(t *testing.T) {
-	converter := &defaultEventToA2AMessage{}
+	converter := &defaultEventToA2AMessage{allowedGraphObjectTypes: []string{"graph.*"}}
 	evt := &event.Event{
 		ID:     "evt-meta-only",
 		Author: "graph.node:planner",
@@ -1955,7 +2049,10 @@ func TestDefaultEventToA2AMessage_CodeExecution(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			converter := &defaultEventToA2AMessage{adkCompatibility: tt.adkCompatibility}
+			converter := &defaultEventToA2AMessage{
+				adkCompatibility:        tt.adkCompatibility,
+				allowedGraphObjectTypes: []string{"graph.*"},
+			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {
 				t.Errorf("ConvertToA2AMessage() unexpected error: %v", err)
@@ -2395,7 +2492,10 @@ func TestMessageMetadataTag(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			converter := &defaultEventToA2AMessage{adkCompatibility: tt.adkCompatibility}
+			converter := &defaultEventToA2AMessage{
+				adkCompatibility:        tt.adkCompatibility,
+				allowedGraphObjectTypes: []string{"graph.*"},
+			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {
 				t.Errorf("ConvertToA2AMessage() unexpected error: %v", err)
@@ -2499,7 +2599,10 @@ func TestConvertCodeExecutionToA2AMessage_TagDistinction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			converter := &defaultEventToA2AMessage{adkCompatibility: tt.adkCompatibility}
+			converter := &defaultEventToA2AMessage{
+				adkCompatibility:        tt.adkCompatibility,
+				allowedGraphObjectTypes: []string{"graph.*"},
+			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {
 				t.Errorf("ConvertToA2AMessage() unexpected error: %v", err)
@@ -2714,7 +2817,10 @@ func TestDefaultEventToA2AMessage_ADKCompatibility(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			converter := &defaultEventToA2AMessage{adkCompatibility: tt.adkCompatibility}
+			converter := &defaultEventToA2AMessage{
+				adkCompatibility:        tt.adkCompatibility,
+				allowedGraphObjectTypes: []string{"graph.*"},
+			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {
 				t.Errorf("ConvertToA2AMessage() unexpected error: %v", err)
