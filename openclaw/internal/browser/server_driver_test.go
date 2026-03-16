@@ -271,6 +271,13 @@ func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
 			},
 		},
 		{
+			name:       "cookies clear",
+			toolName:   mcpToolCookiesClear,
+			args:       map[string]any{"targetId": "tab-1"},
+			wantPath:   "/cookies/clear",
+			wantMethod: http.MethodPost,
+		},
+		{
 			name:       "storage get",
 			toolName:   mcpToolStorageGet,
 			args:       map[string]any{"kind": "session", "key": "token"},
@@ -288,6 +295,57 @@ func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
 				require.Equal(t, "local", body["kind"])
 				require.Equal(t, "token", body["key"])
 				require.Equal(t, "x", body["value"])
+			},
+		},
+		{
+			name:       "storage clear",
+			toolName:   mcpToolStorageClear,
+			args:       map[string]any{"kind": "session"},
+			wantPath:   "/storage/session/clear",
+			wantMethod: http.MethodPost,
+		},
+		{
+			name:       "credentials",
+			toolName:   mcpToolSetCreds,
+			args:       map[string]any{"username": "u", "password": "p"},
+			wantPath:   "/set/credentials",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "u", body["username"])
+				require.Equal(t, "p", body["password"])
+			},
+		},
+		{
+			name:     "geolocation",
+			toolName: mcpToolSetGeo,
+			args: map[string]any{
+				"latitude":  37.7,
+				"longitude": -122.4,
+				"origin":    "https://example.com",
+			},
+			wantPath:   "/set/geolocation",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, 37.7, body["latitude"])
+				require.Equal(t, -122.4, body["longitude"])
+				require.Equal(
+					t,
+					"https://example.com",
+					body["origin"],
+				)
+			},
+		},
+		{
+			name:       "media",
+			toolName:   mcpToolSetMedia,
+			args:       map[string]any{"colorScheme": "dark"},
+			wantPath:   "/set/media",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "dark", body["colorScheme"])
 			},
 		},
 		{
@@ -411,6 +469,28 @@ func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
 			},
 		},
 		{
+			name:       "locale",
+			toolName:   mcpToolSetLocale,
+			args:       map[string]any{"locale": "en-US"},
+			wantPath:   "/set/locale",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "en-US", body["locale"])
+			},
+		},
+		{
+			name:       "device",
+			toolName:   mcpToolSetDevice,
+			args:       map[string]any{"name": "iPhone 15"},
+			wantPath:   "/set/device",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				require.Equal(t, "iPhone 15", body["name"])
+			},
+		},
+		{
 			name:       "click",
 			toolName:   mcpToolClick,
 			args:       map[string]any{"ref": "e1"},
@@ -421,6 +501,59 @@ func TestServerProfileDriver_CallRoutesBrowserActions(t *testing.T) {
 				request := body["request"].(map[string]any)
 				require.Equal(t, actClick, request["kind"])
 				require.Equal(t, "e1", request["ref"])
+			},
+		},
+		{
+			name:       "hover",
+			toolName:   mcpToolHover,
+			args:       map[string]any{"ref": "e1"},
+			wantPath:   "/act",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				request := body["request"].(map[string]any)
+				require.Equal(t, actHover, request["kind"])
+				require.Equal(t, "e1", request["ref"])
+			},
+		},
+		{
+			name:       "scroll",
+			toolName:   mcpToolScroll,
+			args:       map[string]any{"ref": "e2"},
+			wantPath:   "/act",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				request := body["request"].(map[string]any)
+				require.Equal(t, actScrollIntoView, request["kind"])
+				require.Equal(t, "e2", request["ref"])
+			},
+		},
+		{
+			name:       "fill form",
+			toolName:   mcpToolFillForm,
+			args:       map[string]any{"fields": []string{"email"}},
+			wantPath:   "/act",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				request := body["request"].(map[string]any)
+				require.Equal(t, actFill, request["kind"])
+				require.Equal(t, []any{"email"}, request["fields"])
+			},
+		},
+		{
+			name:       "drag",
+			toolName:   mcpToolDrag,
+			args:       map[string]any{"startRef": "a", "endRef": "b"},
+			wantPath:   "/act",
+			wantMethod: http.MethodPost,
+			assertBody: func(t *testing.T, body map[string]any) {
+				t.Helper()
+				request := body["request"].(map[string]any)
+				require.Equal(t, actDrag, request["kind"])
+				require.Equal(t, "a", request["startRef"])
+				require.Equal(t, "b", request["endRef"])
 			},
 		},
 		{
@@ -568,6 +701,23 @@ func TestServerProfileDriver_CallTabActions(t *testing.T) {
 				require.Nil(t, body)
 			},
 		},
+		{
+			name: "close current tab",
+			args: map[string]any{
+				"action": tabActionClose,
+			},
+			wantPath:   "/act",
+			wantMethod: http.MethodPost,
+			assertReq: func(
+				t *testing.T,
+				r *http.Request,
+				body map[string]any,
+			) {
+				t.Helper()
+				request := body["request"].(map[string]any)
+				require.Equal(t, actClose, request["kind"])
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -633,6 +783,23 @@ func TestServerProfileDriver_ErrorPaths(t *testing.T) {
 	require.Contains(t, err.Error(), "failed")
 }
 
+func TestServerProfileDriver_CallRejectsBadJSONPayload(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		_, _ = w.Write([]byte("{"))
+	}))
+	t.Cleanup(srv.Close)
+
+	drv := newServerProfileDriver(srv.URL, "", defaultProfileName)
+	_, err := drv.Call(context.Background(), mcpToolSnapshot, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decode browser server payload")
+}
+
 func TestServerProfileDriver_HelperConversions(t *testing.T) {
 	t.Parallel()
 
@@ -640,7 +807,21 @@ func TestServerProfileDriver_HelperConversions(t *testing.T) {
 	require.Empty(t, stringValue(1))
 	require.Equal(t, 3, numberValue(3))
 	require.Equal(t, 7, numberValue(float64(7)))
+	require.Equal(t, 9, numberValue(json.Number("9")))
 	require.Zero(t, numberValue("bad"))
+
+	require.Equal(t, map[string]any{
+		"kind": actClick,
+		"ref":  "e1",
+	}, mapActArgs(actClick, map[string]any{"ref": "e1"}))
+	require.Nil(t, queryArgs(nil))
+	require.Equal(t, map[string]string{
+		"ref": "e1",
+	}, queryArgs(map[string]any{
+		"ref":   "e1",
+		"empty": " ",
+		"nil":   nil,
+	}))
 }
 
 func TestServerProfileDriver_StatusReturnsStoppedWhenMissing(t *testing.T) {

@@ -967,6 +967,36 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 	)
 }
 
+func TestNewAgent_ToolProviderErrorIsReturned(t *testing.T) {
+	t.Parallel()
+
+	typeName := strings.ReplaceAll(t.Name(), "/", "_")
+	require.NoError(t, registry.RegisterToolProvider(
+		typeName,
+		func(
+			_ registry.ToolProviderDeps,
+			spec registry.PluginSpec,
+		) ([]tool.Tool, error) {
+			return nil, errors.New("tool provider boom")
+		},
+	))
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("{}"), &node))
+
+	_, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: createAppTestSkill(t),
+		StateDir:   t.TempDir(),
+		ToolProviders: []pluginSpec{{
+			Type:   typeName,
+			Config: &node,
+		}},
+	}, nil, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tool provider boom")
+}
+
 func TestNewAgent_SkillsLoadModeTurnClearsLoadedState(t *testing.T) {
 	t.Parallel()
 

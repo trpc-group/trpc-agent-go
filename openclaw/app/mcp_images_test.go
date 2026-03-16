@@ -12,6 +12,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -175,6 +176,30 @@ func TestExtractMCPImages_UnsupportedMimeIsSkipped(t *testing.T) {
 		MimeType: "image/tiff",
 	}})
 	require.Nil(t, images)
+}
+
+func TestUnwrapMCPResultContent_FallsBackToOriginalResult(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	plain := map[string]any{"message": "hello"}
+	require.Equal(t, plain, unwrapMCPResultContent(plain))
+
+	raw := func() {}
+	got := unwrapMCPResultContent(raw)
+	require.NotNil(t, got)
+	_, ok := got.(func())
+	require.True(t, ok)
+
+	type invalidEnvelope struct {
+		Content json.RawMessage `json:"content"`
+	}
+	got = unwrapMCPResultContent(invalidEnvelope{
+		Content: json.RawMessage("{"),
+	})
+	_, ok = got.(invalidEnvelope)
+	require.True(t, ok)
 }
 
 func TestMCPImageFormatFromMime_Unsupported(t *testing.T) {

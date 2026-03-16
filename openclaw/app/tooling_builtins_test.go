@@ -113,6 +113,31 @@ profiles:
 	require.Equal(t, "browser", tools[0].Declaration().Name)
 }
 
+func TestNewBrowserTools_ErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	_, err := newBrowserTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{
+			Config: yamlNode(t, "unknown_field: true\n"),
+		},
+	)
+	require.Error(t, err)
+
+	_, err = newBrowserTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{
+			Config: yamlNode(t, `
+profiles:
+  - name: "openclaw"
+    transport: "bad"
+`),
+		},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported transport")
+}
+
 func TestValidateMCPConnection_StdioRequiresCommand(t *testing.T) {
 	t.Parallel()
 

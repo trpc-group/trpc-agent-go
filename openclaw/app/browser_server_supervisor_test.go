@@ -61,6 +61,34 @@ profiles:
 	require.False(t, ok)
 }
 
+func TestDetectManagedBrowserServerPlan_SkipsInvalidSpecs(t *testing.T) {
+	t.Parallel()
+
+	plan, ok := detectManagedBrowserServerPlan([]pluginSpec{
+		{Type: "search", Name: "web"},
+		{
+			Type: toolProviderBrowser,
+			Name: "broken",
+			Config: yamlNode(t, `
+unknown_field: true
+`),
+		},
+		{
+			Type: toolProviderBrowser,
+			Name: "browser-runtime",
+			Config: yamlNode(t, `
+server_url: "http://127.0.0.1:19790"
+auth_token: "secret"
+profiles:
+  - name: "openclaw"
+`),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, "browser-runtime", plan.ProviderName)
+	require.Equal(t, "secret", plan.AuthToken)
+}
+
 func TestBrowserServerSupervisorUsesExistingServer(t *testing.T) {
 	t.Parallel()
 
@@ -178,6 +206,39 @@ func TestMaybeStartBrowserServerSupervisorWithoutPlan(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Nil(t, sup)
+}
+
+func TestMaybeStartBrowserServerSupervisorReturnsSupOnError(
+	t *testing.T,
+) {
+	original := browserServerWorkDir
+	browserServerWorkDir = func() (string, error) {
+		return "", fmt.Errorf("missing browser-server dir")
+	}
+	t.Cleanup(func() {
+		browserServerWorkDir = original
+	})
+
+	sup, err := maybeStartBrowserServerSupervisor(
+		context.Background(),
+		[]pluginSpec{{
+			Type: toolProviderBrowser,
+			Name: "browser-runtime",
+			Config: yamlNode(t, `
+server_url: "http://127.0.0.1:19790"
+profiles:
+  - name: "openclaw"
+`),
+		}},
+		t.TempDir(),
+	)
+	require.Error(t, err)
+	require.NotNil(t, sup)
+	require.Equal(
+		t,
+		browserServerStateFailed,
+		sup.BrowserManagedStatus().State,
+	)
 }
 
 func TestManagedBrowserServerHelpers(t *testing.T) {
@@ -509,6 +570,86 @@ func TestBrowserServerSupervisorOpenLogFileRequiresPath(
 	_, err := sup.openLogFile()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "log path is empty")
+}
+
+func TestBrowserServerSupervisorStartManagedErrorPaths(
+	t *testing.T,
+) {
+	workDir := t.TempDir()
+	writeBrowserServerWorkDir(t, workDir)
+
+	originalWorkDir := browserServerWorkDir
+	originalCommand := browserServerCommand
+	browserServerWorkDir = func() (string, error) {
+		return workDir, nil
+	}
+	t.Cleanup(func() {
+		browserServerWorkDir = originalWorkDir
+		browserServerCommand = originalCommand
+	})
+
+	t.Run("command build error", func(t *testing.T) {
+		var gotEnv []string
+		browserServerCommand = func(
+			workDir string,
+			env []string,
+			stdout io.Writer,
+			stderr io.Writer,
+		) (*exec.Cmd, string, error) {
+			gotEnv = append([]string(nil), env...)
+			return nil, "", fmt.Errorf("build command failed")
+		}
+
+		sup := newBrowserServerSupervisor(
+			browserServerPlan{
+				ServerURL: "http://127.0.0.1:19790",
+				Addr:      "127.0.0.1:19790",
+				AuthToken: "secret",
+			},
+			t.TempDir(),
+		)
+
+		err := sup.startManaged(context.Background())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "build command failed")
+		require.Contains(
+			t,
+			strings.Join(gotEnv, "\n"),
+			browserServerTokenEnv+"=secret",
+		)
+		require.Equal(
+			t,
+			browserServerStateFailed,
+			sup.BrowserManagedStatus().State,
+		)
+	})
+
+	t.Run("start error", func(t *testing.T) {
+		browserServerCommand = func(
+			workDir string,
+			env []string,
+			stdout io.Writer,
+			stderr io.Writer,
+		) (*exec.Cmd, string, error) {
+			return exec.Command("/path/does/not/exist"), "missing", nil
+		}
+
+		sup := newBrowserServerSupervisor(
+			browserServerPlan{
+				ServerURL: "http://127.0.0.1:19790",
+				Addr:      "127.0.0.1:19790",
+			},
+			t.TempDir(),
+		)
+
+		err := sup.startManaged(context.Background())
+		require.Error(t, err)
+		require.Equal(
+			t,
+			browserServerStateFailed,
+			sup.BrowserManagedStatus().State,
+		)
+	})
 }
 
 func TestBrowserServerSupervisorHelperProcess(t *testing.T) {

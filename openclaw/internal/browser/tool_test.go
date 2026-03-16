@@ -575,6 +575,43 @@ func TestToolCall_UsesBrowserServerDriverForHostTarget(t *testing.T) {
 	)
 }
 
+func TestToolCall_StatusActionUsesHandleStatus(t *testing.T) {
+	t.Parallel()
+
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		&serverTargetConfig{
+			ID:        targetHost,
+			ServerURL: "http://127.0.0.1:19790",
+		},
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: &fakeDriver{},
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{"action": actionStatus}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionStatus, got.Action)
+	require.Len(t, got.Profiles, 1)
+	require.Equal(
+		t,
+		driverTypeBrowserServer,
+		got.Profiles[0].Driver,
+	)
+}
+
 func TestToolStatusDriver_UsesHostServerForServerBackedProfiles(
 	t *testing.T,
 ) {
@@ -720,6 +757,35 @@ func TestNewTool_DeclarationExposesSchema(t *testing.T) {
 	require.Equal(t, "object", decl.InputSchema.Type)
 	require.Contains(t, decl.InputSchema.Properties, "action")
 	require.Contains(t, decl.InputSchema.Properties, "request")
+}
+
+func TestNewTool_InitializesServerAndMCPDrivers(t *testing.T) {
+	t.Parallel()
+
+	tool, err := NewTool(Config{
+		Profiles: []ProfileConfig{{
+			Name:             defaultProfileName,
+			BrowserServerURL: "http://127.0.0.1:9223",
+		}, {
+			Name:      "mcp",
+			Transport: transportStdio,
+			Command:   "npx",
+		}},
+	})
+	require.NoError(t, err)
+
+	_, ok := tool.drivers[defaultProfileName].(*serverProfileDriver)
+	require.True(t, ok)
+
+	_, ok = tool.drivers["mcp"].(*mcpProfileDriver)
+	require.True(t, ok)
+}
+
+func TestNewTool_InvalidConfigFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewTool(Config{})
+	require.Error(t, err)
 }
 
 func TestLookupTool_ValidatesCallableTools(t *testing.T) {
@@ -2736,6 +2802,110 @@ func TestToolResolveDriver_ErrorPaths(t *testing.T) {
 	_, _, err = tool.resolveDriver(input{Profile: "missing"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not configured")
+}
+
+func TestValidateTargetSelection_AllowsServerTargets(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, validateTargetSelection(input{
+		Target: targetSandbox,
+	}))
+	require.NoError(t, validateTargetSelection(input{
+		Target: targetNode,
+		Node:   "edge",
+	}))
+}
+
+func TestToolResolveDriver_TargetFallbackPaths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sandbox", func(t *testing.T) {
+		tool := newToolWithDrivers(
+			defaultProfileName,
+			false,
+			navigationPolicy{},
+			nil,
+			&serverTargetConfig{
+				ID:        targetSandbox,
+				ServerURL: "http://127.0.0.1:20790",
+			},
+			nil,
+			map[string]ProfileConfig{
+				defaultProfileName: {Name: defaultProfileName},
+			},
+			map[string]driver{
+				defaultProfileName: &fakeDriver{},
+			},
+		)
+
+		profile, drv, err := tool.resolveDriver(input{
+			Target: targetSandbox,
+		})
+		require.NoError(t, err)
+		require.Equal(t, defaultProfileName, profile)
+
+		serverDrv, ok := drv.(*serverProfileDriver)
+		require.True(t, ok)
+		require.Equal(t, "http://127.0.0.1:20790", serverDrv.baseURL)
+	})
+
+	t.Run("single node auto select", func(t *testing.T) {
+		tool := newToolWithDrivers(
+			defaultProfileName,
+			false,
+			navigationPolicy{},
+			nil,
+			nil,
+			map[string]serverTargetConfig{
+				"edge": {
+					ID:        "edge",
+					ServerURL: "http://node.example:7777",
+				},
+			},
+			map[string]ProfileConfig{
+				defaultProfileName: {Name: defaultProfileName},
+			},
+			map[string]driver{
+				defaultProfileName: &fakeDriver{},
+			},
+		)
+
+		profile, drv, err := tool.resolveDriver(input{
+			Target: targetNode,
+		})
+		require.NoError(t, err)
+		require.Equal(t, defaultProfileName, profile)
+
+		serverDrv, ok := drv.(*serverProfileDriver)
+		require.True(t, ok)
+		require.Equal(t, "http://node.example:7777", serverDrv.baseURL)
+	})
+
+	t.Run("node without server url", func(t *testing.T) {
+		tool := newToolWithDrivers(
+			defaultProfileName,
+			false,
+			navigationPolicy{},
+			nil,
+			nil,
+			map[string]serverTargetConfig{
+				"edge": {ID: "edge"},
+			},
+			map[string]ProfileConfig{
+				defaultProfileName: {Name: defaultProfileName},
+			},
+			map[string]driver{
+				defaultProfileName: &fakeDriver{},
+			},
+		)
+
+		_, _, err := tool.resolveDriver(input{
+			Target: targetNode,
+			Node:   "edge",
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "has no server url")
+	})
 }
 
 func TestToolDriverHelpers(t *testing.T) {

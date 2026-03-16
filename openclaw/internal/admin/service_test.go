@@ -290,6 +290,109 @@ func TestBrowserEndpointSummary(t *testing.T) {
 	}
 }
 
+func TestServiceProbeBrowserEndpoint_CachesAndHandlesErrors(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	t.Run("caches reachable result", func(t *testing.T) {
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter,
+			r *http.Request,
+		) {
+			requestCount++
+			require.Equal(t, "/profiles", r.URL.Path)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"profiles": []map[string]any{{
+					"name": "chrome",
+				}, {
+					"name": "alpha",
+				}},
+			})
+		}))
+		t.Cleanup(server.Close)
+
+		svc := New(Config{})
+		cache := make(map[string]browserEndpointView)
+
+		view := svc.probeBrowserEndpoint(server.URL, cache)
+		require.True(t, view.Reachable)
+		require.Len(t, view.Profiles, 2)
+		require.Equal(t, "alpha", view.Profiles[0].Name)
+		require.Equal(t, "chrome", view.Profiles[1].Name)
+
+		cached := svc.probeBrowserEndpoint(server.URL, cache)
+		require.Equal(t, view, cached)
+		require.Equal(t, 1, requestCount)
+	})
+
+	t.Run("bad status", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter,
+			r *http.Request,
+		) {
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+		}))
+		t.Cleanup(server.Close)
+
+		view := New(Config{}).probeBrowserEndpoint(
+			server.URL,
+			make(map[string]browserEndpointView),
+		)
+		require.False(t, view.Reachable)
+		require.Contains(t, view.Error, "unexpected status")
+	})
+
+	t.Run("bad json", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter,
+			r *http.Request,
+		) {
+			_, _ = w.Write([]byte("{"))
+		}))
+		t.Cleanup(server.Close)
+
+		view := New(Config{}).probeBrowserEndpoint(
+			server.URL,
+			make(map[string]browserEndpointView),
+		)
+		require.False(t, view.Reachable)
+		require.Contains(t, view.Error, "decode profiles")
+	})
+}
+
+func TestResolveDebugRootFile_ErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	serviceDir := filepath.Join(root, "services")
+	require.NoError(t, os.MkdirAll(serviceDir, 0o755))
+
+	logPath := filepath.Join(serviceDir, "browser-server.log")
+	require.NoError(t, os.WriteFile(logPath, []byte("ready\n"), 0o600))
+
+	got, err := resolveDebugRootFile(root, "services/browser-server.log")
+	require.NoError(t, err)
+	require.Equal(t, logPath, got)
+
+	_, err = resolveDebugRootFile(root, ".")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "required")
+
+	_, err = resolveDebugRootFile(root, "/tmp/browser-server.log")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid debug path")
+
+	_, err = resolveDebugRootFile(root, "services/missing.log")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found")
+
+	_, err = resolveDebugRootFile(root, "services")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "directory")
+}
+
 func TestServiceSnapshotIncludesCronSummary(t *testing.T) {
 	t.Parallel()
 

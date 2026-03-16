@@ -58,6 +58,53 @@ func TestResolveConfig_DefaultProfileMustExist(t *testing.T) {
 	require.Contains(t, err.Error(), "default_profile")
 }
 
+func TestResolveConfig_EvaluateEnabledAndDuplicateProfile(t *testing.T) {
+	t.Parallel()
+
+	evaluateEnabled := true
+	got, err := resolveConfig(Config{
+		EvaluateEnabled: &evaluateEnabled,
+		Profiles: []ProfileConfig{{
+			Name:      defaultProfileName,
+			Transport: transportStdio,
+			Command:   "npx",
+		}},
+	})
+	require.NoError(t, err)
+	require.True(t, got.EvaluateEnabled)
+
+	_, err = resolveConfig(Config{
+		Profiles: []ProfileConfig{{
+			Name:      defaultProfileName,
+			Transport: transportStdio,
+			Command:   "npx",
+		}, {
+			Name:      defaultProfileName,
+			Transport: transportStdio,
+			Command:   "node",
+		}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicated")
+}
+
+func TestResolveConfig_ProfileErrorsPropagate(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveConfig(Config{
+		Profiles: []ProfileConfig{{
+			Name:      defaultProfileName,
+			Transport: transportStdio,
+			Command:   "npx",
+		}, {
+			Transport: transportStdio,
+			Command:   "node",
+		}},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing name")
+}
+
 func TestResolveConfig_NavigationPolicyApplied(t *testing.T) {
 	t.Parallel()
 
@@ -171,6 +218,44 @@ func TestResolveProfile_RejectsMixedBrowserServerAndTransport(t *testing.T) {
 	require.Contains(t, err.Error(), "cannot mix")
 }
 
+func TestResolveProfile_BrowserServerURLKeepsAuthToken(t *testing.T) {
+	t.Parallel()
+
+	got, err := resolveProfile(ProfileConfig{
+		Name:             defaultProfileName,
+		Description:      "chrome relay",
+		BrowserServerURL: "http://127.0.0.1:9223",
+		AuthToken:        "secret",
+	}, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:9223", got.BrowserServerURL)
+	require.Equal(t, "secret", got.AuthToken)
+	require.Equal(t, "chrome relay", got.Description)
+}
+
+func TestResolveProfile_RequiresNameAfterFirstProfile(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveProfile(ProfileConfig{
+		Transport: transportStdio,
+		Command:   "npx",
+	}, 1, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing name")
+}
+
+func TestResolveProfile_ValidationErrorsAreWrapped(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveProfile(ProfileConfig{
+		Name:      defaultProfileName,
+		Transport: transportSSE,
+	}, 0, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), defaultProfileName)
+	require.Contains(t, err.Error(), "requires server_url")
+}
+
 func TestValidateConnection_RejectsUnsupportedTransport(t *testing.T) {
 	t.Parallel()
 
@@ -185,6 +270,27 @@ func TestValidateConnection_RequiresCommandForStdio(t *testing.T) {
 	err := validateConnection(connectionConfig(transportStdio, "", ""))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires command")
+}
+
+func TestResolveNodeTargets_ReturnsNilWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	got := resolveNodeTargets([]NodeConfig{{
+		ID:        "missing-url",
+		ServerURL: " ",
+	}, {
+		ID:        " ",
+		ServerURL: "http://node.example:9444",
+	}})
+	require.Nil(t, got)
+}
+
+func TestValidateConnection_RequiresServerURLForNetwork(t *testing.T) {
+	t.Parallel()
+
+	err := validateConnection(connectionConfig(transportSSE, "", ""))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires server_url")
 }
 
 func connectionConfig(
