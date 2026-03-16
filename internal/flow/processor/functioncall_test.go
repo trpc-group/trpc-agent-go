@@ -35,7 +35,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
-	trpcmcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
 // mockModel implements model.Model for testing
@@ -3522,7 +3521,7 @@ func TestExecuteToolWithCallbacks_AfterToolReceivesNormalizedResultAndMeta(t *te
 		return nil, nil
 	})
 
-	expectedResult := []trpcmcp.Content{trpcmcp.NewTextContent("hello")}
+	expectedResult := []map[string]string{{"type": "text", "text": "hello"}}
 	expectedMeta := map[string]any{"source": "mcp"}
 	rawResult := &mockCallbackCompatibleResult{
 		callbackResult: expectedResult,
@@ -3546,13 +3545,7 @@ func TestExecuteToolWithCallbacks_AfterToolReceivesNormalizedResultAndMeta(t *te
 	)
 	require.NoError(t, err)
 
-	toolResultContents, ok := gotResult.([]trpcmcp.Content)
-	require.True(t, ok)
-	require.Len(t, toolResultContents, 1)
-
-	textContent, ok := toolResultContents[0].(trpcmcp.TextContent)
-	require.True(t, ok)
-	require.Equal(t, "hello", textContent.Text)
+	require.Equal(t, expectedResult, gotResult)
 	require.Equal(t, expectedMeta, gotMeta)
 	require.Same(t, rawResult, res)
 }
@@ -3581,7 +3574,7 @@ func TestExecuteToolWithCallbacks_PluginAfterToolReceivesNormalizedResultAndMeta
 	proc := NewFunctionCallResponseProcessor(false, nil)
 	inv := &agent.Invocation{Plugins: pm}
 
-	expectedResult := []trpcmcp.Content{trpcmcp.NewTextContent("hello")}
+	expectedResult := []map[string]string{{"type": "text", "text": "hello"}}
 	expectedMeta := map[string]any{"source": "mcp"}
 	rawResult := &mockCallbackCompatibleResult{
 		callbackResult: expectedResult,
@@ -3604,13 +3597,7 @@ func TestExecuteToolWithCallbacks_PluginAfterToolReceivesNormalizedResultAndMeta
 	)
 	require.NoError(t, err)
 
-	toolResultContents, ok := gotResult.([]trpcmcp.Content)
-	require.True(t, ok)
-	require.Len(t, toolResultContents, 1)
-
-	textContent, ok := toolResultContents[0].(trpcmcp.TextContent)
-	require.True(t, ok)
-	require.Equal(t, "hello", textContent.Text)
+	require.Equal(t, expectedResult, gotResult)
 	require.Equal(t, expectedMeta, gotMeta)
 	require.Same(t, rawResult, res)
 }
