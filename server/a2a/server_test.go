@@ -2373,6 +2373,55 @@ func TestWithRunOptions(t *testing.T) {
 	assert.Len(t, opts.runOptions, 1)
 }
 
+func TestMessageProcessor_ProcessMessage_SharedRuntimeStateNotMutated(t *testing.T) {
+	ctxID := "shared-state-session"
+
+	originalState := map[string]any{
+		"shared_key": "original-value",
+	}
+
+	proc := &messageProcessor{
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ro := agent.RunOptions{}
+				for _, opt := range opts {
+					opt(&ro)
+				}
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &defaultEventToA2AMessage{},
+		errorHandler:        defaultErrorHandler,
+		agentName:           "test-agent",
+		runOptions: []agent.RunOption{
+			agent.WithRuntimeState(originalState),
+		},
+	}
+
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: "user"})
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "shared-msg",
+		Role:      protocol.MessageRoleUser,
+		Metadata:  map[string]any{"request_key": "request-value"},
+		Parts:     []protocol.Part{protocol.NewTextPart("hello")},
+	}
+
+	_, err := proc.ProcessMessage(ctx, msg, taskmanager.ProcessOptions{Streaming: false}, &mockTaskHandler{})
+	assert.NoError(t, err)
+
+	// The original shared map must not be mutated by the merge logic.
+	assert.Equal(t, map[string]any{"shared_key": "original-value"}, originalState)
+}
+
 func TestMessageProcessor_AddTaskMetadataUsesAppName(t *testing.T) {
 	proc := &messageProcessor{
 		adkCompatibility: true,

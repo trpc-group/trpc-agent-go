@@ -233,7 +233,7 @@ a2aAgent, _ := a2aagent.New(
 
 **BuildMessageHook + ProcessMessageHook 联动**：
 
-```
+```text
 ┌──────────────────┐                    ┌───────────────────┐
 │    A2AAgent      │   A2A protocol     │    A2A Server     │
 │                  │                    │                   │
@@ -776,7 +776,7 @@ a2aAgent, _ := a2aagent.New(
 | `WithRunOptions(opts...)` | 为每次调用追加 RunOption |
 | `WithStreamingEventType(type)` | 流式输出事件类型（Artifact/Message） |
 | `WithUserIDHeader(header)` | 自定义 UserID HTTP Header |
-| `WithADKCompatibility(enabled)` | ADK 兼容模式 |
+| `WithADKCompatibility(enabled)` | ADK 兼容模式（默认：开启） |
 | `WithErrorHandler(handler)` | 自定义错误处理 |
 | `WithA2AToAgentConverter(conv)` | 自定义 A2A→Agent 消息转换 |
 | `WithEventToA2AConverter(conv)` | 自定义 Event→A2A 消息转换 |

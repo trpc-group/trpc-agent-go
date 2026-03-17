@@ -426,14 +426,23 @@ func (m *messageProcessor) ProcessMessage(
 	runnerOpts := make([]agent.RunOption, 0, len(m.runOptions)+1)
 	runnerOpts = append(runnerOpts, m.runOptions...)
 	runnerOpts = append(runnerOpts, func(opts *agent.RunOptions) {
+		if len(message.Metadata) == 0 {
+			return
+		}
 		a2aState := buildRuntimeState(message.Metadata)
 		if opts.RuntimeState == nil {
 			opts.RuntimeState = a2aState
 			return
 		}
-		for k, v := range a2aState {
-			opts.RuntimeState[k] = v
+		// Copy existing state to avoid mutating the shared map from WithRunOptions.
+		merged := make(map[string]any, len(opts.RuntimeState)+len(a2aState))
+		for k, v := range opts.RuntimeState {
+			merged[k] = v
 		}
+		for k, v := range a2aState {
+			merged[k] = v
+		}
+		opts.RuntimeState = merged
 	})
 
 	if options.Streaming {

@@ -930,6 +930,41 @@ func TestWithBuildMessageHook(t *testing.T) {
 		require.Nil(t, msg)
 		require.Contains(t, err.Error(), "hook error")
 	})
+
+	t.Run("short-circuit hook does not skip transferStateKey", func(t *testing.T) {
+		customMsg := protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]protocol.Part{protocol.NewTextPart("custom")},
+		)
+
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"state_key"},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					return &customMsg, nil
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"state_key": "state_value",
+				},
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+		require.Equal(t, "state_value", msg.Metadata["state_key"])
+	})
 }
 
 func TestWithStreamingRespHandler(t *testing.T) {

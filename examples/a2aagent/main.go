@@ -205,12 +205,13 @@ func (h *hookProcessor) ProcessMessage(
 	fmt.Printf("A2A Server: received message: %+v\n", message.MessageID)
 	fmt.Printf("A2A Server: received metadata: %+v\n", message.Metadata)
 
-	// Print custom data injected by client-side BuildMessageHook
-	if traceID, ok := message.Metadata["trace_id"]; ok {
-		fmt.Printf("A2A Server: [BuildMessageHook] trace_id = %v\n", traceID)
-	}
-	if bizTag, ok := message.Metadata["business_tag"]; ok {
-		fmt.Printf("A2A Server: [BuildMessageHook] business_tag = %v\n", bizTag)
+	if message.Metadata != nil {
+		if traceID, ok := message.Metadata["trace_id"]; ok {
+			fmt.Printf("A2A Server: [BuildMessageHook] trace_id = %v\n", traceID)
+		}
+		if bizTag, ok := message.Metadata["business_tag"]; ok {
+			fmt.Printf("A2A Server: [BuildMessageHook] business_tag = %v\n", bizTag)
+		}
 	}
 
 	return h.next.ProcessMessage(ctx, message, options, handler)

@@ -244,10 +244,10 @@ func (r *A2AAgent) shouldUseStreaming(invocation *agent.Invocation) bool {
 // buildA2AMessage constructs A2A message from session events.
 // It assembles a middleware chain around the base converter:
 //
-//	user hook → transferStateKey → base converter
+//	transferStateKey → user hook → base converter
 //
-// This allows the user hook to intercept before/after the conversion,
-// and transferStateKey is always applied as a built-in layer.
+// transferStateKey is the outermost layer so it always runs even if
+// the user hook short-circuits (skips calling next).
 func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) (*protocol.Message, error) {
 	if r.a2aMessageConverter == nil {
 		return nil, fmt.Errorf("a2a message converter not set")
@@ -256,14 +256,15 @@ func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) 
 	// Base converter function.
 	convertFn := r.a2aMessageConverter.ConvertToA2AMessage
 
-	// Built-in layer: transfer state keys into message metadata.
-	if len(r.transferStateKey) > 0 {
-		convertFn = r.wrapWithTransferState(convertFn)
-	}
-
-	// User hook layer (outermost).
+	// User hook layer wraps the base converter.
 	if r.buildMessageHook != nil {
 		convertFn = r.buildMessageHook(convertFn)
+	}
+
+	// Built-in layer (outermost): transfer state keys into message metadata.
+	// Placed after hook so it always runs regardless of hook behavior.
+	if len(r.transferStateKey) > 0 {
+		convertFn = r.wrapWithTransferState(convertFn)
 	}
 
 	message, err := convertFn(isStream, r.name, invocation)

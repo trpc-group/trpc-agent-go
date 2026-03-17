@@ -237,7 +237,7 @@ a2aAgent, _ := a2aagent.New(
 
 **BuildMessageHook + ProcessMessageHook interaction**:
 
-```
+```text
 ┌──────────────────┐                    ┌───────────────────┐
 │    A2AAgent      │   A2A protocol     │    A2A Server     │
 │                  │                    │                   │
@@ -783,7 +783,7 @@ Through the combined use of A2A Server and A2AAgent, you can easily build distri
 | `WithRunOptions(opts...)` | Append RunOptions to every invocation |
 | `WithStreamingEventType(type)` | Streaming output event type (Artifact/Message) |
 | `WithUserIDHeader(header)` | Custom UserID HTTP Header |
-| `WithADKCompatibility(enabled)` | ADK compatibility mode |
+| `WithADKCompatibility(enabled)` | ADK compatibility mode (default: enabled) |
 | `WithErrorHandler(handler)` | Custom error handler |
 | `WithA2AToAgentConverter(conv)` | Custom A2A→Agent message converter |
 | `WithEventToA2AConverter(conv)` | Custom Event→A2A message converter |
