@@ -3121,6 +3121,7 @@ func runAfterToolPluginCallbacks(
 		Arguments:   toolCall.Function.Arguments,
 		Result:      result,
 		Error:       runErr,
+		Meta:        extractMetaFromResult(result),
 	}
 	afterResult, err := callbacks.RunAfterTool(ctx, args)
 	if afterResult != nil && afterResult.Context != nil {
@@ -3158,6 +3159,7 @@ func runAfterToolCallbacks(
 		Arguments:   toolCall.Function.Arguments,
 		Result:      result,
 		Error:       runErr,
+		Meta:        extractMetaFromResult(result),
 	}
 	afterResult, err := toolCallbacks.RunAfterTool(ctx, args)
 	if afterResult != nil && afterResult.Context != nil {
@@ -3174,6 +3176,20 @@ func runAfterToolCallbacks(
 		return ctx, nil, fmt.Errorf(errCallbackAfterTool, err)
 	}
 	return ctx, nil, nil
+}
+
+// extractMetaFromResult extracts metadata from tool result when available.
+func extractMetaFromResult(result any) map[string]any {
+	if result == nil {
+		return nil
+	}
+	type metaGetter interface {
+		GetMeta() map[string]any
+	}
+	if mg, ok := result.(metaGetter); ok {
+		return mg.GetMeta()
+	}
+	return nil
 }
 
 // runTool executes a tool with before/after callbacks and returns the result.
