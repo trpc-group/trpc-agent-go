@@ -101,7 +101,14 @@ func buildAgentCard(options *options) a2a.AgentCard {
 
 func buildProcessor(agent agent.Agent, sessionService session.Service, options *options) *messageProcessor {
 	agentName := agent.Info().Name
-	runner := runner.NewRunner(agentName, agent, runner.WithSessionService(sessionService))
+	procRunner := options.runner
+	if procRunner == nil {
+		procRunner = runner.NewRunner(
+			agentName,
+			agent,
+			runner.WithSessionService(sessionService),
+		)
+	}
 
 	// Use custom converters if provided, otherwise use defaults
 	a2aToAgentConverter := options.a2aToAgentConverter
@@ -119,7 +126,7 @@ func buildProcessor(agent agent.Agent, sessionService session.Service, options *
 	}
 
 	return &messageProcessor{
-		runner:              runner,
+		runner:              procRunner,
 		a2aToAgentConverter: a2aToAgentConverter,
 		eventToA2AConverter: eventToA2AConverter,
 		errorHandler:        options.errorHandler,

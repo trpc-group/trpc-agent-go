@@ -428,6 +428,7 @@ func adminStartupLines(
 // default OpenClaw runner + channel wiring.
 type Runtime struct {
 	Gateway  Gateway
+	A2A      A2ASurface
 	Admin    AdminSurface
 	Channels []channel.Channel
 
@@ -691,6 +692,13 @@ func NewRuntime(
 		MessagesPath: gwSrv.MessagesPath(),
 		StatusPath:   gwSrv.StatusPath(),
 		CancelPath:   gwSrv.CancelPath(),
+	}
+	rt.A2A, err = newA2ASurface(ag, r, opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create a2a failed: %w", err),
+		}
 	}
 
 	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
@@ -1045,12 +1053,31 @@ func run(ctx context.Context, args []string) error {
 	)
 	gw.SetPersonaStore(personaStore)
 
+	a2aSurface, err := newA2ASurface(ag, r, opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create a2a failed: %w", err),
+		}
+	}
+
+	httpHandler, err := buildRuntimeHTTPHandler(
+		gwSrv.Handler(),
+		a2aSurface,
+	)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("build runtime handler failed: %w", err),
+		}
+	}
+
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 
 	httpSrv := &http.Server{
 		Addr:              opts.HTTPAddr,
-		Handler:           gwSrv.Handler(),
+		Handler:           httpHandler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	var (
@@ -1159,6 +1186,7 @@ func run(ctx context.Context, args []string) error {
 		needsModel,
 	))
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
+	logStartupLines(a2aStartupLines(a2aSurface))
 	logStartupLines(toolDepsStartupLines(openClawTools.deps))
 	go func() {
 		//nolint:gosec
