@@ -416,9 +416,7 @@ func TestReduceReasoningMessageChunkAllowsNilDelta(t *testing.T) {
 	chunk := aguievents.NewReasoningMessageChunkEvent(&messageID, nil)
 	msgs, err := Reduce(testAppName, testUserID, trackEventsFrom(chunk))
 	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, "reasoning-msg-1", msgs[0].ID)
-	assert.Nil(t, msgs[0].Content)
+	require.Empty(t, msgs)
 }
 
 func TestReduceReasoningEncryptedValue(t *testing.T) {
@@ -447,6 +445,23 @@ func TestReduceReasoningEncryptedValueCreatesMessageWhenMissing(t *testing.T) {
 	assert.Equal(t, "reasoning-msg-1", msgs[0].ID)
 	assert.Equal(t, types.RoleReasoning, msgs[0].Role)
 	assert.Equal(t, "encrypted", msgs[0].EncryptedValue)
+	content, ok := msgs[0].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "", content)
+}
+
+func TestReduceKeepsOpenReasoningMessageWithoutContent(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewReasoningMessageStartEvent("reasoning-msg-1", "assistant"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "reasoning-msg-1", msgs[0].ID)
+	assert.Equal(t, types.RoleReasoning, msgs[0].Role)
+	content, ok := msgs[0].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "", content)
 }
 
 func TestReduceReasoningEncryptedValueIgnoresToolCallSubtype(t *testing.T) {
