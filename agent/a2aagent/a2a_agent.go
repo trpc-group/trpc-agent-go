@@ -33,7 +33,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -170,7 +169,6 @@ func (r *A2AAgent) setupInvocation(invocation *agent.Invocation) {
 func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	var err error
 	r.setupInvocation(invocation)
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName))
 	useStreaming := r.shouldUseStreaming(invocation)
 	ctx, span, startedSpan := itrace.StartSpan(
 		ctx,
