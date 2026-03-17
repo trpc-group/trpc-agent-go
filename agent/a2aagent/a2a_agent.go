@@ -158,9 +158,6 @@ func (r *A2AAgent) validateA2ARequestOptions(invocation *agent.Invocation) error
 }
 
 func (r *A2AAgent) setupInvocation(invocation *agent.Invocation) {
-	if invocation == nil {
-		return
-	}
 	invocation.Agent = r
 	invocation.AgentName = r.name
 }
@@ -168,7 +165,9 @@ func (r *A2AAgent) setupInvocation(invocation *agent.Invocation) {
 // Run implements the Agent interface
 func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	var err error
-	r.setupInvocation(invocation)
+	if invocation != nil {
+		r.setupInvocation(invocation)
+	}
 	useStreaming := r.shouldUseStreaming(invocation)
 	ctx, span, startedSpan := itrace.StartSpan(
 		ctx,
