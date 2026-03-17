@@ -22,6 +22,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
 
@@ -91,6 +92,14 @@ const (
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
 	flagAdminAutoPort = "admin-auto-port"
+
+	flagA2AEnabled        = "a2a"
+	flagA2AHost           = "a2a-host"
+	flagA2AUserIDHeader   = "a2a-user-id-header"
+	flagA2AStreaming      = "a2a-streaming"
+	flagA2AAdvertiseTools = "a2a-advertise-tools"
+	flagA2AName           = "a2a-name"
+	flagA2ADescription    = "a2a-description"
 )
 
 type runOptions struct {
@@ -102,6 +111,14 @@ type runOptions struct {
 	AdminEnabled  bool
 	AdminAddr     string
 	AdminAutoPort bool
+
+	A2AEnabled        bool
+	A2AHost           string
+	A2AUserIDHeader   string
+	A2AStreaming      bool
+	A2AAdvertiseTools bool
+	A2AName           string
+	A2ADescription    string
 
 	AddSessionSummary bool
 	MaxHistoryRuns    int
@@ -206,6 +223,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		AdminEnabled:  true,
 		AdminAddr:     defaultAdminAddr,
 		AdminAutoPort: defaultAdminAutoPort,
+		A2AStreaming:  true,
 
 		AgentType: agentTypeLLM,
 
@@ -260,6 +278,48 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagAdminAutoPort,
 		defaultAdminAutoPort,
 		"Auto-pick a nearby free admin port when the preferred one is busy",
+	)
+	fs.BoolVar(
+		&opts.A2AEnabled,
+		flagA2AEnabled,
+		false,
+		"Enable the OpenClaw A2A surface",
+	)
+	fs.StringVar(
+		&opts.A2AHost,
+		flagA2AHost,
+		"",
+		"Public A2A base URL; must include a non-root path",
+	)
+	fs.StringVar(
+		&opts.A2AUserIDHeader,
+		flagA2AUserIDHeader,
+		"",
+		"HTTP header name used to read user IDs on the A2A surface",
+	)
+	fs.BoolVar(
+		&opts.A2AStreaming,
+		flagA2AStreaming,
+		true,
+		"Enable streaming responses on the A2A surface",
+	)
+	fs.BoolVar(
+		&opts.A2AAdvertiseTools,
+		flagA2AAdvertiseTools,
+		false,
+		"Publish individual tools in the OpenClaw A2A agent card",
+	)
+	fs.StringVar(
+		&opts.A2AName,
+		flagA2AName,
+		"",
+		"Override the advertised A2A agent name",
+	)
+	fs.StringVar(
+		&opts.A2ADescription,
+		flagA2ADescription,
+		"",
+		"Override the advertised A2A agent description",
 	)
 	fs.StringVar(
 		&opts.AgentType,
@@ -778,6 +838,7 @@ type fileConfig struct {
 
 	HTTP     *httpConfig      `yaml:"http,omitempty"`
 	Admin    *adminConfig     `yaml:"admin,omitempty"`
+	A2A      *a2aConfig       `yaml:"a2a,omitempty"`
 	Agent    *agentRunConfig  `yaml:"agent,omitempty"`
 	Model    *modelConfig     `yaml:"model,omitempty"`
 	Gateway  *gatewayConfig   `yaml:"gateway,omitempty"`
@@ -797,6 +858,16 @@ type adminConfig struct {
 	Enabled  *bool   `yaml:"enabled,omitempty"`
 	Addr     *string `yaml:"addr,omitempty"`
 	AutoPort *bool   `yaml:"auto_port,omitempty"`
+}
+
+type a2aConfig struct {
+	Enabled        *bool   `yaml:"enabled,omitempty"`
+	Host           *string `yaml:"host,omitempty"`
+	UserIDHeader   *string `yaml:"user_id_header,omitempty"`
+	Streaming      *bool   `yaml:"streaming,omitempty"`
+	AdvertiseTools *bool   `yaml:"advertise_tools,omitempty"`
+	Name           *string `yaml:"name,omitempty"`
+	Description    *string `yaml:"description,omitempty"`
 }
 
 type debugRecorderConfig struct {
@@ -1094,6 +1165,37 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, flagAdminAutoPort) {
 			opts.AdminAutoPort = *cfg.Admin.AutoPort
 		}
+	}
+	if cfg.A2A != nil {
+		if cfg.A2A.Enabled != nil &&
+			!flagWasSet(set, flagA2AEnabled) {
+			opts.A2AEnabled = *cfg.A2A.Enabled
+		}
+		if cfg.A2A.Host != nil &&
+			!flagWasSet(set, flagA2AHost) {
+			opts.A2AHost = *cfg.A2A.Host
+		}
+		if cfg.A2A.UserIDHeader != nil &&
+			!flagWasSet(set, flagA2AUserIDHeader) {
+			opts.A2AUserIDHeader = *cfg.A2A.UserIDHeader
+		}
+		if cfg.A2A.Streaming != nil &&
+			!flagWasSet(set, flagA2AStreaming) {
+			opts.A2AStreaming = *cfg.A2A.Streaming
+		}
+		if cfg.A2A.AdvertiseTools != nil &&
+			!flagWasSet(set, flagA2AAdvertiseTools) {
+			opts.A2AAdvertiseTools = *cfg.A2A.AdvertiseTools
+		}
+		if cfg.A2A.Name != nil &&
+			!flagWasSet(set, flagA2AName) {
+			opts.A2AName = *cfg.A2A.Name
+		}
+		if cfg.A2A.Description != nil &&
+			!flagWasSet(set, flagA2ADescription) {
+			opts.A2ADescription = *cfg.A2A.Description
+		}
+		normalizeA2AOptions(opts)
 	}
 
 	if cfg.Agent != nil {
@@ -1637,7 +1739,26 @@ func finalizeRunOptions(opts *runOptions) error {
 	if opts.AdminEnabled && opts.AdminAddr == "" {
 		opts.AdminAddr = defaultAdminAddr
 	}
+	normalizeA2AOptions(opts)
 	return nil
+}
+
+func normalizeA2AOptions(opts *runOptions) {
+	if opts == nil {
+		return
+	}
+	opts.A2AHost = normalizeA2AHost(opts.A2AHost)
+	opts.A2AUserIDHeader = strings.TrimSpace(opts.A2AUserIDHeader)
+	opts.A2AName = strings.TrimSpace(opts.A2AName)
+	opts.A2ADescription = strings.TrimSpace(opts.A2ADescription)
+}
+
+func normalizeA2AHost(raw string) string {
+	host := strings.TrimSpace(raw)
+	if host == "" {
+		return ""
+	}
+	return ia2a.NormalizeURL(host)
 }
 
 func normalizeSkillsLoadMode(raw string) (string, error) {

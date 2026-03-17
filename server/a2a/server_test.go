@@ -2103,6 +2103,14 @@ func TestBuildProcessor(t *testing.T) {
 				eventToA2AConverter: &mockEventToA2AConverter{},
 			},
 		},
+		{
+			name:    "custom runner",
+			agent:   &mockAgent{name: "test-agent", description: "test description"},
+			session: inmemory.NewSessionService(),
+			options: &options{
+				runner: &mockRunner{},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -2120,6 +2128,10 @@ func TestBuildProcessor(t *testing.T) {
 			}
 			if processor.eventToA2AConverter == nil {
 				t.Errorf("buildProcessor() eventToA2AConverter is nil")
+			}
+			if tt.options.runner != nil &&
+				processor.runner != tt.options.runner {
+				t.Errorf("buildProcessor() should reuse custom runner")
 			}
 		})
 	}

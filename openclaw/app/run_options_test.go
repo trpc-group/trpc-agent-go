@@ -39,6 +39,10 @@ func TestParseRunOptions_UsesEnvConfig(t *testing.T) {
 app_name: demo
 http:
   addr: ":9999"
+a2a:
+  enabled: true
+  host: "http://127.0.0.1:8080/a2a"
+  streaming: false
 gateway:
   allow_users: ["u1","u2"]
 `)
@@ -48,8 +52,92 @@ gateway:
 	require.NoError(t, err)
 	require.Equal(t, "demo", opts.AppName)
 	require.Equal(t, ":9999", opts.HTTPAddr)
+	require.True(t, opts.A2AEnabled)
+	require.Equal(t, "http://127.0.0.1:8080/a2a", opts.A2AHost)
+	require.False(t, opts.A2AStreaming)
 	require.Equal(t, "u1,u2", opts.AllowUsers)
 	require.Equal(t, cfgPath, opts.ConfigPath)
+}
+
+func TestParseRunOptions_A2AConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+a2a:
+  enabled: true
+  host: " 127.0.0.1:8080/a2a/ "
+  user_id_header: " X-Caller-User "
+  streaming: false
+  advertise_tools: true
+  name: " openclaw-sandbox "
+  description: " sandbox subagent "
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.True(t, opts.A2AEnabled)
+	require.Equal(t, "http://127.0.0.1:8080/a2a/", opts.A2AHost)
+	require.Equal(t, "X-Caller-User", opts.A2AUserIDHeader)
+	require.False(t, opts.A2AStreaming)
+	require.True(t, opts.A2AAdvertiseTools)
+	require.Equal(t, "openclaw-sandbox", opts.A2AName)
+	require.Equal(t, "sandbox subagent", opts.A2ADescription)
+}
+
+func TestParseRunOptions_A2AFlags(t *testing.T) {
+	t.Parallel()
+
+	opts, err := parseRunOptions([]string{
+		"-a2a",
+		"-a2a-host", " 127.0.0.1:8080/a2a/ ",
+		"-a2a-user-id-header", " X-Caller-User ",
+		"-a2a-streaming=false",
+		"-a2a-advertise-tools=true",
+		"-a2a-name", " openclaw-sandbox ",
+		"-a2a-description", " sandbox subagent ",
+	})
+	require.NoError(t, err)
+	require.True(t, opts.A2AEnabled)
+	require.Equal(t, "http://127.0.0.1:8080/a2a/", opts.A2AHost)
+	require.Equal(t, "X-Caller-User", opts.A2AUserIDHeader)
+	require.False(t, opts.A2AStreaming)
+	require.True(t, opts.A2AAdvertiseTools)
+	require.Equal(t, "openclaw-sandbox", opts.A2AName)
+	require.Equal(t, "sandbox subagent", opts.A2ADescription)
+}
+
+func TestParseRunOptions_A2AFlagsOverrideConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+a2a:
+  enabled: true
+  host: "http://127.0.0.1:8080/a2a"
+  user_id_header: "X-Config-User"
+  streaming: false
+  advertise_tools: true
+  name: "config-name"
+  description: "config-description"
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-a2a=false",
+		"-a2a-host", "http://127.0.0.1:9090/subagent",
+		"-a2a-user-id-header", "X-Flag-User",
+		"-a2a-streaming=true",
+		"-a2a-advertise-tools=false",
+		"-a2a-name", "flag-name",
+		"-a2a-description", "flag-description",
+	})
+	require.NoError(t, err)
+	require.False(t, opts.A2AEnabled)
+	require.Equal(t, "http://127.0.0.1:9090/subagent", opts.A2AHost)
+	require.Equal(t, "X-Flag-User", opts.A2AUserIDHeader)
+	require.True(t, opts.A2AStreaming)
+	require.False(t, opts.A2AAdvertiseTools)
+	require.Equal(t, "flag-name", opts.A2AName)
+	require.Equal(t, "flag-description", opts.A2ADescription)
 }
 
 func TestParseRunOptions_UsesDefaultConfigPath(t *testing.T) {

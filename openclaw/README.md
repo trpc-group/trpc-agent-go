@@ -6,6 +6,7 @@ This directory is a small runnable binary that implements an
 OpenClaw-like shape on top of `trpc-agent-go`:
 
 - A long-running **gateway** process (HTTP endpoints).
+- An optional **A2A** surface for sub-agent and sandbox access.
 - A real IM **channel**: Telegram (long polling).
 - A stable **session_id** derived from DM (direct message) vs group chat.
 - Skills support via the built-in skills tooling in `llmagent`.
@@ -248,6 +249,45 @@ Notes:
     built-in types shipped in this repo. Custom types still require a
     custom binary. See `openclaw/INTEGRATIONS.md` and
     `openclaw/EXTENDING.md`.
+
+## Expose OpenClaw as an A2A sub-agent
+
+OpenClaw can publish a native A2A surface alongside the HTTP gateway.
+This is the preferred way to attach a sandboxed OpenClaw runtime as a
+sub-agent for another `trpc-agent-go` process.
+
+YAML:
+
+```yaml
+a2a:
+  enabled: true
+  host: "http://127.0.0.1:8080/a2a"
+  user_id_header: "X-User-ID" # optional
+  streaming: true
+  advertise_tools: false
+  name: "openclaw-sandbox"
+  description: "Sandbox agent for bundled skills and host binaries."
+```
+
+CLI:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -a2a \
+  -a2a-host http://127.0.0.1:8080/a2a
+```
+
+Notes:
+
+- `a2a.host` must include a non-root path such as `/a2a`.
+- The A2A surface reuses the same OpenClaw runner, session service,
+  memory service, skills, and tools as the gateway.
+- By default, the agent card publishes one stable "OpenClaw sandbox"
+  skill instead of enumerating every tool. Set `advertise_tools: true`
+  only when your caller needs per-tool card metadata.
+- A runnable example is available in
+  [`./examples/a2a_subagent`](./examples/a2a_subagent/).
 
 ## Customize prompts
 
