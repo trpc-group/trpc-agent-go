@@ -1,19 +1,22 @@
 # Error Handling
 
-## Why this page exists
+## Overview
 
-Agent applications usually need two different things at the same time:
+This document defines the standard error-handling model for graph workflows,
+Runner completion, subgraph propagation, and A2A transport.
+
+Agent applications usually need two things at the same time:
 
 - A machine-readable error signal for branching, retries, and reporting
 - A stable way to keep useful business error details after the run has ended
 
-In a graph workflow, those details may come from:
+In practice, those details may come from:
 
 - A local node error
 - A child subgraph or sub-agent
 - A remote A2A agent
 
-tRPC-Agent-Go now provides a standard path for all three.
+tRPC-Agent-Go provides one standard path for all three.
 
 ## Design goals
 
@@ -24,10 +27,10 @@ The framework design follows four rules:
 3. Let recoverable errors continue execution without losing the record.
 4. Let fatal errors still publish fallback business state before the run stops.
 
-## What this design covers
+## Covered Scenarios
 
-This design is meant to cover the common requirements that used to push
-business teams into maintaining a separate graph error package:
+This design covers the requirements that often pushed business teams to keep
+separate node-error helpers:
 
 - collect local node errors, including recoverable ones
 - keep business-visible error details after the run ends
@@ -35,33 +38,31 @@ business teams into maintaining a separate graph error package:
 - let Runner expose fatal-path fallback state on `runner.completion`
 - carry structured A2A task failures back into `Response.Error`
 
-If your older design stored node errors in graph state and then read them back
-after completion, `graph.ExecutionErrorCollector` is the standard framework
-version of that pattern.
+If an existing implementation stores node errors in graph state and reads them
+back after completion, `graph.ExecutionErrorCollector` is the framework
+equivalent of that pattern.
 
-## How to read this page
+## Document Structure
 
-Use this order if you are new to the design:
+The main sections are:
 
-1. Read "Managing business error codes" first.
-2. Read "Recommended graph usage" for framework integration.
-3. Read "Reading errors after the run" for the Runner consumption pattern.
+1. "Managing business error codes" explains the error-code model and ownership.
+2. "Recommended graph usage" shows framework integration in graph workflows.
+3. "Reading errors after the run" defines the Runner-side consumption pattern.
 4. Read the subgraph and A2A sections only if your system crosses those
    boundaries.
 
-## Framework responsibilities and business responsibilities
+## Responsibility Split
 
 The framework owns transport, propagation, and collection mechanics.
 
-It standardizes:
+Framework responsibilities:
 
 - where transport failures live: `Response.Error`
 - where business-visible records live: graph state
 - how fatal fallback state reaches `runner.completion`
 - how child fallback state is separated from normal child completion
 - how structured A2A task failures become `Response.Error` again
-
-Business code still owns the business catalog and policy.
 
 Business code decides:
 
@@ -71,18 +72,16 @@ Business code decides:
 - whether multiple records should be deduplicated or aggregated
 - how errors should be persisted, alerted, or reported
 
-The framework intentionally does not try to own a global business error-code
-registry. It carries structured codes well, but the code namespace itself
-belongs to the application or domain.
+The framework does not define a global business error-code registry. It
+standardizes how structured codes are carried and collected. The code namespace
+itself remains application-specific.
 
 ## Managing business error codes
 
-This is the part many teams care about most.
+The framework supports error codes as a transport and normalization mechanism.
+It does not define a centralized business registry.
 
-The framework does support error-code management, but it supports it as a
-transport and normalization mechanism, not as a centralized registry.
-
-Short answer:
+Summary:
 
 - the framework does not own your business error-code catalog
 - `model.ResponseError.Code` is a `string`, so collected and transported codes
@@ -91,11 +90,11 @@ Short answer:
   strings automatically
 - for new business errors, prefer stable string code constants
 
-### Why `Code` is a string
+### Code representation
 
 `model.ResponseError.Code` is defined as `*string`.
 
-That is intentional:
+This representation is intentional:
 
 - event streams and A2A metadata are easier to keep stable with string values
 - string codes support namespaced business identifiers such as
@@ -103,16 +102,15 @@ That is intentional:
 - cross-language or cross-service integrations do not need to guess numeric
   ranges or enum ownership
 
-If your organization already has numeric codes, keep them if they are already
-standardized. The framework will convert them into strings at the transport
-boundary.
+If a system already uses numeric codes, they remain supported. The framework
+converts them into strings at the transport boundary.
 
-### Which error conventions are recognized
+### Supported error conventions
 
 By default, `graph.NewExecutionError(...)` uses
 `model.ResponseErrorFromError(err, model.ErrorTypeFlowError)`.
 
-Go does not support overloaded methods. The list below describes alternative
+Go does not support overloaded methods. The table below describes alternative
 conventions across different error types. A single concrete error type would
 normally implement one code convention, not all of them.
 
