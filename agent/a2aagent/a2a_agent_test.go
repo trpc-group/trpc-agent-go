@@ -1182,6 +1182,8 @@ func TestA2AAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 		}
 	}
 	require.True(t, found, "expected stream trace attribute to be recorded")
+	require.True(t, hasAttr(spans[0].Attributes(), attribute.String(semconvtrace.KeyGenAIAgentName, "remote-agent")))
+	require.True(t, hasAttr(spans[0].Attributes(), attribute.String(semconvtrace.KeyGenAIAgentID, "remote-agent")))
 }
 
 // Helper function to create bool pointer

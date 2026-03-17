@@ -772,14 +772,25 @@ func TestChainAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
 
 	found := false
+	foundAgentName := false
+	foundAgentID := false
 	for _, attr := range agentSpan.Attributes() {
 		if string(attr.Key) == semconvtrace.KeyGenAIRequestIsStream {
 			found = true
 			require.True(t, attr.Value.AsBool())
-			break
+		}
+		if string(attr.Key) == semconvtrace.KeyGenAIAgentName {
+			foundAgentName = true
+			require.Equal(t, chainAgent.Info().Name, attr.Value.AsString())
+		}
+		if string(attr.Key) == semconvtrace.KeyGenAIAgentID {
+			foundAgentID = true
+			require.Equal(t, chainAgent.Info().Name, attr.Value.AsString())
 		}
 	}
 	require.True(t, found, "expected stream trace attribute to be recorded")
+	require.True(t, foundAgentName, "expected agent name trace attribute to be recorded")
+	require.True(t, foundAgentID, "expected agent id trace attribute to be recorded")
 }
 
 func TestChainAgent_Run_PreservesFinalResponseWhenAfterCallbackReturnsNil(t *testing.T) {

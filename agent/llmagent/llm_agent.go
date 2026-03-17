@@ -647,7 +647,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		fmt.Sprintf(
 			"%s %s",
 			itelemetry.OperationInvokeAgent,
-			a.name,
+			invocation.AgentName,
 		),
 	)
 	effectiveGenConfig := a.genConfig
