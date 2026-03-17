@@ -119,6 +119,15 @@ func TestWithNumRuns(t *testing.T) {
 	assert.Equal(t, 5, opts.numRuns)
 }
 
+func TestWithNumRunsParallelEnabled(t *testing.T) {
+	opts := newOptions(WithNumRunsParallelEnabled(true))
+	assert.NotNil(t, opts.numRunsParallelEnabled)
+	if opts.numRunsParallelEnabled == nil {
+		return
+	}
+	assert.True(t, *opts.numRunsParallelEnabled)
+}
+
 func TestWithEvalCaseParallelism(t *testing.T) {
 	opts := newOptions(WithEvalCaseParallelism(8))
 	assert.NotNil(t, opts.evalCaseParallelism)

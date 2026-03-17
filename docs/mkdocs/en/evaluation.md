@@ -2722,9 +2722,15 @@ When parallel inference is enabled via `evaluation.WithEvalCaseParallelInference
 
 When parallel evaluation is enabled via `evaluation.WithEvalCaseParallelEvaluationEnabled(true)`, evaluation case-level callbacks may also run concurrently. Because `args.Request` points to the same `*EvaluateRequest`, treat it as read-only. If you need to modify the request, do it in a set-level callback.
 
+When run-level parallelism is enabled via `evaluation.WithNumRunsParallelEnabled(true)`, set-level callbacks from different runs within the same `Evaluate` may also run concurrently. Although each run uses its own `Request`, callback logic must still ensure concurrency safety if it depends on shared mutable state.
+
 A single EvalCase inference or evaluation failure usually does not return through `error`. It is written into `Result.Status` and `Result.ErrorMessage`. Therefore, `After*CaseArgs.Error` does not carry per-case failure reasons. Check `args.Result.Status` and `args.Result.ErrorMessage` to detect failures.
 
-### EvalCase-Level Parallel Inference
+### Parallel Execution
+
+The framework supports concurrency at three levels: EvalCase inference, EvalCase evaluation, and NumRuns. These concurrency controls are independent and can be enabled individually or combined as needed to reduce overall evaluation time.
+
+#### EvalCase-Level Parallel Inference
 
 When an evaluation set has many cases, inference is often the dominant cost. The framework supports EvalCase-level parallel inference to reduce overall duration.
 
@@ -2745,7 +2751,7 @@ Parallel inference only affects inference across different cases. Turns within a
 
 After enabling concurrency, ensure that Runner, tool implementations, external dependencies, and callback logic are safe for concurrent calls to avoid interference from shared mutable state.
 
-### EvalCase-Level Parallel Evaluation
+#### EvalCase-Level Parallel Evaluation
 
 When evaluators are slow, such as LLM judges, the evaluation phase can become the bottleneck. The framework supports EvalCase-level parallel evaluation to reduce overall duration.
 
@@ -2763,6 +2769,27 @@ agentEvaluator, err := evaluation.New(
 ```
 
 Parallel evaluation only affects evaluation across different cases. Turns within a case are still sequential, and evaluators are executed in metric order. The returned `EvalCaseResults` preserve the order of the input `InferenceResults`.
+
+#### NumRuns-Level Parallel Execution
+
+When the same evaluation set needs to be run repeatedly, total duration grows with `numRuns`. The framework supports run-level parallel execution for repeated runs to reduce overall duration.
+
+Specify the repeated run count and explicitly enable run-level parallelism when creating AgentEvaluator. There is currently no separate run-level parallelism option. Once enabled, the framework runs `numRuns` runs concurrently. If it is not enabled, runs remain serial even when `evaluation.WithNumRuns(n)` is set.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/evaluation"
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithNumRuns(4),
+	evaluation.WithNumRunsParallelEnabled(true),
+)
+```
+
+Run-level parallelism works at the level of full runs. Each run still performs a complete inference and evaluation cycle independently, and the final results are aggregated into the same `EvalSetResult`. Detailed results for the same EvalCase across different runs are written into `EvalCaseResults` and distinguished by `runId`.
+
+After enabling concurrency, ensure that Runner, tool implementations, external dependencies, and callback logic are safe for concurrent calls. In particular, set-level callbacks from different runs within the same `Evaluate` may run concurrently. If they rely on shared mutable state, you must ensure concurrency safety yourself.
 
 ### Context Injection
 

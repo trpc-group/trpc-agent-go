@@ -40,6 +40,7 @@ type options struct {
 	callbacks                         *service.Callbacks
 	judgeRunner                       runner.Runner
 	numRuns                           int
+	numRunsParallelEnabled            *bool
 	evalCaseParallelism               *int
 	evalCaseParallelInferenceEnabled  *bool
 	evalCaseParallelEvaluationEnabled *bool
@@ -134,6 +135,13 @@ func WithExpectedRunner(r runner.Runner) Option {
 func WithNumRuns(numRuns int) Option {
 	return func(o *options) {
 		o.numRuns = numRuns
+	}
+}
+
+// WithNumRunsParallelEnabled enables or disables parallel execution across evaluation runs.
+func WithNumRunsParallelEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.numRunsParallelEnabled = &enabled
 	}
 }
 

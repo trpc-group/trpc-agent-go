@@ -17,6 +17,7 @@ import (
 	"sort"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -62,6 +63,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		evalService:                       opts.evalService,
 		callbacks:                         opts.callbacks,
 		numRuns:                           opts.numRuns,
+		numRunsParallelEnabled:            opts.numRunsParallelEnabled,
 		runOptions:                        opts.runOptions,
 		evalCaseParallelism:               opts.evalCaseParallelism,
 		evalCaseParallelInferenceEnabled:  opts.evalCaseParallelInferenceEnabled,
@@ -111,6 +113,7 @@ type agentEvaluator struct {
 	evalService                       service.Service
 	callbacks                         *service.Callbacks
 	numRuns                           int
+	numRunsParallelEnabled            *bool
 	runOptions                        []agent.RunOption
 	evalCaseParallelism               *int
 	evalCaseParallelInferenceEnabled  *bool
@@ -176,6 +179,7 @@ func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 		evalService:                       a.evalService,
 		callbacks:                         a.callbacks,
 		numRuns:                           a.numRuns,
+		numRunsParallelEnabled:            a.numRunsParallelEnabled,
 		runOptions:                        append([]agent.RunOption(nil), a.runOptions...),
 		evalCaseParallelism:               a.evalCaseParallelism,
 		evalCaseParallelInferenceEnabled:  a.evalCaseParallelInferenceEnabled,
@@ -274,7 +278,7 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string, op
 	}
 	evalMetrics := make([]*metric.EvalMetric, 0, len(metricNames))
 	for _, metricName := range metricNames {
-		evalMetric, err := a.metricManager.Get(ctx, a.appName, evalSetID, metricName)
+		evalMetric, err := opts.metricManager.Get(ctx, a.appName, evalSetID, metricName)
 		if err != nil {
 			return nil, fmt.Errorf("get metric %s: %w", metricName, err)
 		}
@@ -285,65 +289,25 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string, op
 		}
 		evalMetrics = append(evalMetrics, evalMetric)
 	}
-	allCaseResults := make([]*evalresult.EvalCaseResult, 0)
-	for runID := 1; runID <= opts.numRuns; runID++ {
-		inferenceRequest := &service.InferenceRequest{
-			AppName:   a.appName,
-			EvalSetID: evalSetID,
-		}
-		inferenceOpts := []service.Option{
-			service.WithEvalSetManager(opts.evalSetManager),
-			service.WithRunOptions(opts.runOptions...),
-		}
-		if opts.callbacks != nil {
-			inferenceOpts = append(inferenceOpts, service.WithCallbacks(opts.callbacks))
-		}
-		if opts.evalCaseParallelism != nil {
-			inferenceOpts = append(inferenceOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))
-		}
-		if opts.evalCaseParallelInferenceEnabled != nil {
-			inferenceOpts = append(inferenceOpts, service.WithEvalCaseParallelInferenceEnabled(*opts.evalCaseParallelInferenceEnabled))
-		}
-		runInferenceResults, err := opts.evalService.Inference(ctx, inferenceRequest, inferenceOpts...)
+	var runCaseResults [][]*evalresult.EvalCaseResult
+	if opts != nil && opts.numRunsParallelEnabled != nil && *opts.numRunsParallelEnabled {
+		runCaseResults, err = a.runEvaluationInParallel(ctx, evalSetID, opts, evalMetrics)
 		if err != nil {
-			return nil, fmt.Errorf("inference: %w", err)
+			return nil, err
 		}
-		evaluateRequest := &service.EvaluateRequest{
-			AppName:          a.appName,
-			EvalSetID:        evalSetID,
-			InferenceResults: runInferenceResults,
-			EvaluateConfig: &service.EvaluateConfig{
-				EvalMetrics: evalMetrics,
-			},
-		}
-		evaluateOpts := []service.Option{
-			service.WithEvalSetManager(opts.evalSetManager),
-			service.WithRegistry(opts.registry),
-			service.WithMetricRegistry(opts.metricRegistry),
-		}
-		if opts.callbacks != nil {
-			evaluateOpts = append(evaluateOpts, service.WithCallbacks(opts.callbacks))
-		}
-		if opts.evalCaseParallelism != nil {
-			evaluateOpts = append(evaluateOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))
-		}
-		if opts.evalCaseParallelEvaluationEnabled != nil {
-			evaluateOpts = append(evaluateOpts, service.WithEvalCaseParallelEvaluationEnabled(*opts.evalCaseParallelEvaluationEnabled))
-		}
-		runResult, err := opts.evalService.Evaluate(ctx, evaluateRequest, evaluateOpts...)
+	} else {
+		runCaseResults, err = a.runEvaluationSerially(ctx, evalSetID, opts, evalMetrics)
 		if err != nil {
-			return nil, fmt.Errorf("evaluate: %w", err)
+			return nil, err
 		}
-		if runResult == nil {
-			return nil, errors.New("eval set run result is nil")
-		}
-		for _, caseResult := range runResult.EvalCaseResults {
-			if caseResult == nil {
-				continue
-			}
-			caseResult.RunID = runID
-			allCaseResults = append(allCaseResults, caseResult)
-		}
+	}
+	totalCaseResults := 0
+	for _, caseResults := range runCaseResults {
+		totalCaseResults += len(caseResults)
+	}
+	allCaseResults := make([]*evalresult.EvalCaseResult, 0, totalCaseResults)
+	for _, caseResults := range runCaseResults {
+		allCaseResults = append(allCaseResults, caseResults...)
 	}
 	evalSetResult := &evalresult.EvalSetResult{
 		EvalSetID:       evalSetID,
@@ -359,6 +323,117 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string, op
 	evalSetResult.EvalSetResultID = evalSetResultID
 	evalSetResult.EvalSetResultName = evalSetResultID
 	return evalSetResult, nil
+}
+
+func (a *agentEvaluator) runEvaluationInParallel(
+	ctx context.Context,
+	evalSetID string,
+	opts *options,
+	evalMetrics []*metric.EvalMetric,
+) ([][]*evalresult.EvalCaseResult, error) {
+	runCaseResults := make([][]*evalresult.EvalCaseResult, opts.numRuns)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(opts.numRuns)
+	for runID := 1; runID <= opts.numRuns; runID++ {
+		runID := runID
+		group.Go(func() error {
+			caseResults, err := a.runEvaluationOnce(groupCtx, evalSetID, opts, evalMetrics, runID)
+			if err != nil {
+				return err
+			}
+			runCaseResults[runID-1] = caseResults
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	return runCaseResults, nil
+}
+
+func (a *agentEvaluator) runEvaluationSerially(
+	ctx context.Context,
+	evalSetID string,
+	opts *options,
+	evalMetrics []*metric.EvalMetric,
+) ([][]*evalresult.EvalCaseResult, error) {
+	runCaseResults := make([][]*evalresult.EvalCaseResult, opts.numRuns)
+	for runID := 1; runID <= opts.numRuns; runID++ {
+		caseResults, err := a.runEvaluationOnce(ctx, evalSetID, opts, evalMetrics, runID)
+		if err != nil {
+			return nil, err
+		}
+		runCaseResults[runID-1] = caseResults
+	}
+	return runCaseResults, nil
+}
+
+func (a *agentEvaluator) runEvaluationOnce(
+	ctx context.Context,
+	evalSetID string,
+	opts *options,
+	evalMetrics []*metric.EvalMetric,
+	runID int,
+) ([]*evalresult.EvalCaseResult, error) {
+	inferenceRequest := &service.InferenceRequest{
+		AppName:   a.appName,
+		EvalSetID: evalSetID,
+	}
+	inferenceOpts := []service.Option{
+		service.WithEvalSetManager(opts.evalSetManager),
+		service.WithRunOptions(opts.runOptions...),
+	}
+	if opts.callbacks != nil {
+		inferenceOpts = append(inferenceOpts, service.WithCallbacks(opts.callbacks))
+	}
+	if opts.evalCaseParallelism != nil {
+		inferenceOpts = append(inferenceOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))
+	}
+	if opts.evalCaseParallelInferenceEnabled != nil {
+		inferenceOpts = append(inferenceOpts, service.WithEvalCaseParallelInferenceEnabled(*opts.evalCaseParallelInferenceEnabled))
+	}
+	runInferenceResults, err := opts.evalService.Inference(ctx, inferenceRequest, inferenceOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("run %d inference: %w", runID, err)
+	}
+	evaluateRequest := &service.EvaluateRequest{
+		AppName:          a.appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: runInferenceResults,
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMetrics: evalMetrics,
+		},
+	}
+	evaluateOpts := []service.Option{
+		service.WithEvalSetManager(opts.evalSetManager),
+		service.WithRegistry(opts.registry),
+		service.WithMetricRegistry(opts.metricRegistry),
+	}
+	if opts.callbacks != nil {
+		evaluateOpts = append(evaluateOpts, service.WithCallbacks(opts.callbacks))
+	}
+	if opts.evalCaseParallelism != nil {
+		evaluateOpts = append(evaluateOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))
+	}
+	if opts.evalCaseParallelEvaluationEnabled != nil {
+		evaluateOpts = append(evaluateOpts, service.WithEvalCaseParallelEvaluationEnabled(*opts.evalCaseParallelEvaluationEnabled))
+	}
+	runResult, err := opts.evalService.Evaluate(ctx, evaluateRequest, evaluateOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("run %d evaluate: %w", runID, err)
+	}
+	if runResult == nil {
+		return nil, errors.New("eval set run result is nil")
+	}
+	caseResults := make([]*evalresult.EvalCaseResult, 0, len(runResult.EvalCaseResults))
+	for _, caseResult := range runResult.EvalCaseResults {
+		if caseResult == nil {
+			continue
+		}
+		caseResult.RunID = runID
+		caseResults = append(caseResults, caseResult)
+	}
+	return caseResults, nil
 }
 
 // aggregateCaseRuns aggregates the metric results from multiple runs of a single case.
