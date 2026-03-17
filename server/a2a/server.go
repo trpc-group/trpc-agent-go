@@ -101,7 +101,14 @@ func buildAgentCard(options *options) a2a.AgentCard {
 
 func buildProcessor(agent agent.Agent, sessionService session.Service, options *options) *messageProcessor {
 	agentName := agent.Info().Name
-	runner := runner.NewRunner(agentName, agent, runner.WithSessionService(sessionService))
+	procRunner := options.runner
+	if procRunner == nil {
+		procRunner = runner.NewRunner(
+			agentName,
+			agent,
+			runner.WithSessionService(sessionService),
+		)
+	}
 
 	// Use custom converters if provided, otherwise use defaults
 	a2aToAgentConverter := options.a2aToAgentConverter
@@ -112,13 +119,14 @@ func buildProcessor(agent agent.Agent, sessionService session.Service, options *
 	eventToA2AConverter := options.eventToA2AConverter
 	if eventToA2AConverter == nil {
 		eventToA2AConverter = &defaultEventToA2AMessage{
-			adkCompatibility:   options.adkCompatibility,
-			streamingEventType: options.streamingEventType,
+			adkCompatibility:          options.adkCompatibility,
+			graphEventObjectAllowlist: options.graphEventObjectAllowlist,
+			streamingEventType:        options.streamingEventType,
 		}
 	}
 
 	return &messageProcessor{
-		runner:              runner,
+		runner:              procRunner,
 		a2aToAgentConverter: a2aToAgentConverter,
 		eventToA2AConverter: eventToA2AConverter,
 		errorHandler:        options.errorHandler,
@@ -764,10 +772,8 @@ func (m *messageProcessor) processMessage(
 			if task, ok := convertedResult.(*protocol.Task); ok {
 				// Extract messages from task artifacts.
 				for _, artifact := range task.Artifacts {
-					artifactMsg := protocol.NewMessage(
-						protocol.MessageRoleAgent,
-						artifact.Parts,
-					)
+					artifactMsg := protocol.NewMessage(protocol.MessageRoleAgent, artifact.Parts)
+					artifactMsg.Metadata = artifact.Metadata
 					messages = append(messages, artifactMsg)
 				}
 			}
@@ -827,6 +833,7 @@ func (m *messageProcessor) processMessage(
 	task.Artifacts = []protocol.Artifact{{
 		ArtifactID: lastMsg.MessageID,
 		Parts:      lastMsg.Parts,
+		Metadata:   lastMsg.Metadata,
 	}}
 
 	return &taskmanager.MessageProcessingResult{

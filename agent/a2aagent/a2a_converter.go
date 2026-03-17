@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -79,6 +80,7 @@ func (d *defaultA2AEventConverter) ConvertToEvents(
 				Role:      protocol.MessageRoleAgent,
 				MessageID: v.Artifacts[i].ArtifactID,
 				Parts:     v.Artifacts[i].Parts,
+				Metadata:  v.Artifacts[i].Metadata,
 			}
 			if evt := d.buildRespEvent(false, artifactMsg, agentName, invocation); evt != nil {
 				events = append(events, evt)
@@ -219,18 +221,26 @@ func appendImagePart(parts []protocol.Part, cp model.ContentPart) []protocol.Par
 		return parts
 	}
 	if len(cp.Image.Data) > 0 {
-		return append(parts, protocol.NewFilePartWithBytes(
+		fp := protocol.NewFilePartWithBytes(
 			"image",
 			cp.Image.Format,
 			base64.StdEncoding.EncodeToString(cp.Image.Data),
-		))
+		)
+		fp.Metadata = map[string]any{
+			ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeImage,
+		}
+		return append(parts, &fp)
 	}
 	if cp.Image.URL != "" {
-		return append(parts, protocol.NewFilePartWithURI(
+		fp := protocol.NewFilePartWithURI(
 			"image",
 			cp.Image.Format,
 			cp.Image.URL,
-		))
+		)
+		fp.Metadata = map[string]any{
+			ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeImage,
+		}
+		return append(parts, &fp)
 	}
 	return parts
 }
@@ -239,26 +249,47 @@ func appendAudioPart(parts []protocol.Part, cp model.ContentPart) []protocol.Par
 	if cp.Audio == nil || cp.Audio.Data == nil {
 		return parts
 	}
-	return append(parts, protocol.NewFilePartWithBytes(
+	fp := protocol.NewFilePartWithBytes(
 		"audio",
 		cp.Audio.Format,
 		base64.StdEncoding.EncodeToString(cp.Audio.Data),
-	))
+	)
+	fp.Metadata = map[string]any{
+		ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeAudio,
+	}
+	return append(parts, &fp)
 }
 
 func appendFilePart(parts []protocol.Part, cp model.ContentPart) []protocol.Part {
-	if cp.File == nil || len(cp.File.Data) == 0 {
+	if cp.File == nil {
 		return parts
 	}
 	fileName := cp.File.Name
 	if fileName == "" {
 		fileName = "file"
 	}
-	return append(parts, protocol.NewFilePartWithBytes(
-		fileName,
-		cp.File.MimeType,
-		base64.StdEncoding.EncodeToString(cp.File.Data),
-	))
+	metadata := map[string]any{
+		ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeFile,
+	}
+	if len(cp.File.Data) > 0 {
+		fp := protocol.NewFilePartWithBytes(
+			fileName,
+			cp.File.MimeType,
+			base64.StdEncoding.EncodeToString(cp.File.Data),
+		)
+		fp.Metadata = metadata
+		return append(parts, &fp)
+	}
+	if cp.File.FileID != "" {
+		fp := protocol.NewFilePartWithURI(
+			fileName,
+			cp.File.MimeType,
+			cp.File.FileID,
+		)
+		fp.Metadata = metadata
+		return append(parts, &fp)
+	}
+	return parts
 }
 
 // buildRespEvent converts A2A response to tRPC event (used for both streaming and non-streaming mode)
@@ -304,6 +335,9 @@ type parseResult struct {
 
 	// responseID holds the original LLM Response.ID from A2A message metadata
 	responseID string
+
+	// stateDelta holds structured state updates reconstructed from A2A metadata.
+	stateDelta map[string][]byte
 }
 
 // toolResponseData holds tool response information
@@ -343,6 +377,9 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 		}
 		if responseID, ok := msg.Metadata[ia2a.MessageMetadataResponseIDKey].(string); ok {
 			result.responseID = responseID
+		}
+		if stateDelta, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]; ok {
+			result.stateDelta = ia2a.DecodeStateDeltaMetadata(stateDelta)
 		}
 	}
 
@@ -475,12 +512,19 @@ func processFunctionResponse(d *protocol.DataPart) (content string, id string, n
 		name = toolName
 	}
 
-	// Extract response content - server sends it as raw string
+	// Extract response content. Keep strings as-is, otherwise prefer JSON for
+	// structured values.
 	if response, ok := data[ia2a.ToolCallFieldResponse]; ok {
 		if responseStr, ok := response.(string); ok {
 			content = responseStr
+		} else if jsonBytes, err := json.Marshal(response); err == nil {
+			content = string(jsonBytes)
 		} else {
-			log.Debugf("Tool response is not a string: %T, skip", response)
+			log.Infof(
+				"Tool response JSON marshal failed for type %T, skip: %v",
+				response,
+				err,
+			)
 		}
 	}
 
@@ -543,6 +587,9 @@ func buildEventResponse(
 	if result.tag != "" {
 		opts = append(opts, event.WithTag(result.tag))
 	}
+	if result.stateDelta != nil {
+		opts = append(opts, event.WithStateDelta(result.stateDelta))
+	}
 
 	evt := event.New(invocation.InvocationID, agentName, opts...)
 
@@ -558,8 +605,23 @@ func buildEventResponse(
 	} else {
 		evt.Response = buildNonStreamingResponse(respID, result, role)
 	}
+	markGraphCompletionEvent(evt, result)
 
 	return evt
+}
+
+func markGraphCompletionEvent(evt *event.Event, result *parseResult) {
+	if evt == nil || evt.Response == nil || result == nil {
+		return
+	}
+	if result.objectType != graph.ObjectTypeGraphExecution {
+		return
+	}
+
+	// graph.execution is a terminal subgraph event. Preserve completion
+	// semantics so parent graph agent nodes can reconstruct final state.
+	evt.Response.Done = true
+	evt.Response.IsPartial = false
 }
 
 // buildStreamingResponse creates a response for streaming mode.

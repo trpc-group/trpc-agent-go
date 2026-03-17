@@ -2103,6 +2103,14 @@ func TestBuildProcessor(t *testing.T) {
 				eventToA2AConverter: &mockEventToA2AConverter{},
 			},
 		},
+		{
+			name:    "custom runner",
+			agent:   &mockAgent{name: "test-agent", description: "test description"},
+			session: inmemory.NewSessionService(),
+			options: &options{
+				runner: &mockRunner{},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -2120,6 +2128,10 @@ func TestBuildProcessor(t *testing.T) {
 			}
 			if processor.eventToA2AConverter == nil {
 				t.Errorf("buildProcessor() eventToA2AConverter is nil")
+			}
+			if tt.options.runner != nil &&
+				processor.runner != tt.options.runner {
+				t.Errorf("buildProcessor() should reuse custom runner")
 			}
 		})
 	}
@@ -2786,6 +2798,62 @@ func TestMessageProcessor_ProcessMessage_MultipleEvents(t *testing.T) {
 	// History should contain first 2 messages, artifacts should contain the last message
 	assert.Equal(t, 2, len(resultTask.History))
 	assert.Equal(t, 1, len(resultTask.Artifacts))
+}
+
+func TestMessageProcessor_ProcessMessage_MultipleEvents_PreservesArtifactMetadata(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.Background()
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "multi-event-metadata-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+
+	processor := &messageProcessor{
+		debugLogging: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 2)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "response1"}}},
+					},
+				}
+				ch <- &event.Event{
+					Response: &model.Response{
+						ID:     "resp-final",
+						Object: "graph.execution",
+						Choices: []model.Choice{{
+							Message: model.Message{},
+						}},
+					},
+					StateDelta: map[string][]byte{
+						"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &defaultEventToA2AMessage{},
+		errorHandler:        defaultErrorHandler,
+	}
+
+	result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+	assert.NoError(t, err)
+	resultTask, ok := result.Result.(*protocol.Task)
+	assert.True(t, ok, "Expected *protocol.Task for multiple events, got %T", result.Result)
+	if !assert.Len(t, resultTask.Artifacts, 1) {
+		return
+	}
+	assert.Equal(t, "graph.execution", resultTask.Artifacts[0].Metadata[ia2a.MessageMetadataObjectTypeKey])
+	rawStateDelta, ok := resultTask.Artifacts[0].Metadata[ia2a.MessageMetadataStateDeltaKey]
+	if assert.True(t, ok, "expected state_delta in artifact metadata") {
+		decoded := ia2a.DecodeStateDeltaMetadata(rawStateDelta)
+		assert.Equal(t, []byte(`{"nodeId":"planner","phase":"start"}`), decoded["_node_metadata"])
+	}
 }
 
 // TestMessageProcessor_ProcessMessage_NoPartsCollected tests handling when no parts are collected

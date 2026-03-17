@@ -1113,6 +1113,7 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 		Arguments:   toolCall.Function.Arguments,
 		Result:      toolResult,
 		Error:       toolErr,
+		Meta:        extractMetaFromResult(toolResult),
 	}
 	afterResult, err := callbacks.RunAfterTool(ctx, args)
 	if err != nil {

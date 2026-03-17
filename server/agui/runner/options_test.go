@@ -65,12 +65,14 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.Equal(t, rootCtx, ctx)
 	assert.NotNil(t, span)
 
+	assert.Equal(t, 5*time.Second, opts.PostRunFinalizationTimeout)
 	assert.Equal(t, time.Hour, opts.Timeout)
 	assert.False(t, opts.CancelOnContextDoneEnabled)
 	assert.False(t, opts.GraphNodeLifecycleActivityEnabled)
 	assert.False(t, opts.GraphNodeInterruptActivityEnabled)
 	assert.False(t, opts.GraphNodeInterruptActivityTopLevelOnly)
 	assert.False(t, opts.ReasoningContentEnabled)
+	assert.False(t, opts.ToolResultInputTranslationEnabled)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -128,6 +130,16 @@ func TestWithGraphNodeInterruptActivityTopLevelOnly(t *testing.T) {
 func TestWithReasoningContentEnabled(t *testing.T) {
 	opts := NewOptions(WithReasoningContentEnabled(true))
 	assert.True(t, opts.ReasoningContentEnabled)
+}
+
+func TestWithToolResultInputTranslationEnabled(t *testing.T) {
+	opts := NewOptions(WithToolResultInputTranslationEnabled(true))
+	assert.True(t, opts.ToolResultInputTranslationEnabled)
+}
+
+func TestWithPostRunFinalizationTimeout(t *testing.T) {
+	opts := NewOptions(WithPostRunFinalizationTimeout(2 * time.Second))
+	assert.Equal(t, 2*time.Second, opts.PostRunFinalizationTimeout)
 }
 
 func TestWithTranslateCallbacks(t *testing.T) {

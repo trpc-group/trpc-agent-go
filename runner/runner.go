@@ -334,6 +334,14 @@ func (r *runner) Run(
 	message model.Message,
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
+	if message.Role == "" && model.HasPayload(message) {
+		log.WarnfContext(
+			ctx,
+			"runner.Run received a message with empty role; defaulting to user",
+		)
+		message.Role = model.RoleUser
+	}
+
 	ro := agent.RunOptions{RequestID: uuid.NewString()}
 	for _, opt := range runOpts {
 		opt(&ro)
