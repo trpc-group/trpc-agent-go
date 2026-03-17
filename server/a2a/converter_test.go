@@ -11,6 +11,7 @@ package a2a
 
 import (
 	"context"
+	"encoding/base64"
 	"reflect"
 	"testing"
 
@@ -108,6 +109,183 @@ func TestDefaultA2AMessageToAgentMessage_ConvertToAgentMessage(t *testing.T) {
 							Name:     "test.txt",
 							FileID:   "file://test.txt",
 							MimeType: "text/plain",
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "image file part via metadata (bytes)",
+			message: protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.FilePart{
+						File: &protocol.FileWithBytes{
+							Name:     stringPtr("image"),
+							MimeType: stringPtr("image/png"),
+							Bytes:    base64.StdEncoding.EncodeToString([]byte("raw image bytes")),
+						},
+						Metadata: map[string]any{
+							ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeImage,
+						},
+					},
+				},
+			},
+			expected: &model.Message{
+				Role:    model.RoleUser,
+				Content: "",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							Format: "image/png",
+							Data:   []byte("raw image bytes"),
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "image file part via mimeType prefix (no metadata)",
+			message: protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.FilePart{
+						File: &protocol.FileWithBytes{
+							Name:     stringPtr("photo"),
+							MimeType: stringPtr("image/jpeg"),
+							Bytes:    base64.StdEncoding.EncodeToString([]byte("jpeg bytes")),
+						},
+					},
+				},
+			},
+			expected: &model.Message{
+				Role:    model.RoleUser,
+				Content: "",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							Format: "image/jpeg",
+							Data:   []byte("jpeg bytes"),
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "image file part via legacy name fallback",
+			message: protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.FilePart{
+						File: &protocol.FileWithBytes{
+							Name:     stringPtr("image"),
+							MimeType: stringPtr("png"),
+							Bytes:    base64.StdEncoding.EncodeToString([]byte("img")),
+						},
+					},
+				},
+			},
+			expected: &model.Message{
+				Role:    model.RoleUser,
+				Content: "",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							Format: "png",
+							Data:   []byte("img"),
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "audio file part via metadata",
+			message: protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.FilePart{
+						File: &protocol.FileWithBytes{
+							Name:     stringPtr("audio"),
+							MimeType: stringPtr("mp3"),
+							Bytes:    base64.StdEncoding.EncodeToString([]byte("audio bytes")),
+						},
+						Metadata: map[string]any{
+							ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeAudio,
+						},
+					},
+				},
+			},
+			expected: &model.Message{
+				Role:    model.RoleUser,
+				Content: "",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeAudio,
+						Audio: &model.Audio{
+							Format: "mp3",
+							Data:   []byte("audio bytes"),
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "audio file part via common format value (no metadata)",
+			message: protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.FilePart{
+						File: &protocol.FileWithBytes{
+							Name:     stringPtr("voice-note"),
+							MimeType: stringPtr("mp3"),
+							Bytes:    base64.StdEncoding.EncodeToString([]byte("audio shorthand bytes")),
+						},
+					},
+				},
+			},
+			expected: &model.Message{
+				Role:    model.RoleUser,
+				Content: "",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeAudio,
+						Audio: &model.Audio{
+							Format: "mp3",
+							Data:   []byte("audio shorthand bytes"),
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "image file part with URI",
+			message: protocol.Message{
+				Parts: []protocol.Part{
+					&protocol.FilePart{
+						File: &protocol.FileWithURI{
+							Name:     stringPtr("image"),
+							MimeType: stringPtr("image/png"),
+							URI:      "https://example.com/photo.png",
+						},
+						Metadata: map[string]any{
+							ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeImage,
+						},
+					},
+				},
+			},
+			expected: &model.Message{
+				Role:    model.RoleUser,
+				Content: "",
+				ContentParts: []model.ContentPart{
+					{
+						Type: model.ContentTypeImage,
+						Image: &model.Image{
+							Format: "image/png",
+							URL:    "https://example.com/photo.png",
 						},
 					},
 				},
