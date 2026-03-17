@@ -86,6 +86,12 @@ func TestWithFlushInterval(t *testing.T) {
 	assert.Equal(t, 2*time.Second, ro.FlushInterval)
 }
 
+func TestWithPostRunFinalizationTimeout(t *testing.T) {
+	opts := newOptions(WithPostRunFinalizationTimeout(2 * time.Second))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.Equal(t, 2*time.Second, ro.PostRunFinalizationTimeout)
+}
+
 func TestWithGraphNodeLifecycleActivityEnabled(t *testing.T) {
 	opts := newOptions(WithGraphNodeLifecycleActivityEnabled(true))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)

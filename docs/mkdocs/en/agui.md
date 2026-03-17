@@ -193,6 +193,8 @@ Typical responses:
 - `404 Not Found`: no running run found for that `SessionKey` (already finished
   or wrong identifiers)
 
+After a cancel succeeds, the framework does not simply discard the protocol state that is still being finalized. Instead, it continues to emit any required closing events and tries to persist buffered AG-UI events from the aggregator into `SessionService`. As a result, subsequent `/history` requests see the last valid and consistent snapshot at the moment of cancellation rather than an incomplete intermediate state. For example, partial `reasoning` text that has already been produced is kept as a string, while a `reasoning` segment that never produced any text does not appear in the snapshot. You can adjust how long this post-run finalization window is allowed to take with `agui.WithPostRunFinalizationTimeout(d)`, which defaults to `5s`.
+
 ### Message Snapshot route
 
 Message snapshots restore conversation history when a page is initialised or after a reconnect. The feature is controlled by `agui.WithMessagesSnapshotEnabled(true)` and is disabled by default. The default route is `/history`, can be customised with `WithMessagesSnapshotPath`, and returns the event stream `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED`.
@@ -255,6 +257,23 @@ You can find a complete example at [examples/agui/messagessnapshot](https://gith
 
 The format of AG-UI's MessagesSnapshotEvent can be found at [messages](https://docs.ag-ui.com/concepts/messages).
 
+### Translator interfaces
+
+Before events are sent to the client, AG-UI translates internal framework events into protocol events. The core public extension interfaces are shown below:
+
+```go
+type Translator interface {
+    Translate(ctx context.Context, event *event.Event) ([]aguievents.Event, error)
+}
+
+type PostRunFinalizingTranslator interface {
+    Translator
+    PostRunFinalizationEvents(ctx context.Context) ([]aguievents.Event, error)
+}
+```
+
+`Translator` is responsible for turning internal events into AG-UI events. `PostRunFinalizingTranslator` extends it with the ability to emit any remaining protocol closing events during the finalization phase after a run ends, and to surface finalization errors when needed.
+
 ## Advanced Usage
 
 ### Custom transport
@@ -295,10 +314,15 @@ server, _ := agui.New(runner, agui.WithServiceFactory(NewWSService))
 
 ### Custom translator
 
-`translator.New` converts internal events into the standard AG-UI events. To enrich the stream while keeping the default behaviour, implement `translator.Translator` and use the AG-UI `Custom` event type to carry extra data:
+`translator.New` converts internal events into the standard AG-UI events. To enrich the stream while keeping the default behaviour, implement the `translator.Translator` interface introduced above and use the AG-UI `Custom` event type to carry extra data.
+
+If your custom Translator maintains its own open streams, or simply wraps the default Translator and wants to preserve the built-in finalization behaviour on cancel and normal run completion, you should also implement `translator.PostRunFinalizingTranslator` so the framework can keep handling the closing events that need to be emitted after the run ends:
 
 ```go
 import (
+    "context"
+    "fmt"
+
     aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
     "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/runner"
@@ -312,6 +336,8 @@ type customTranslator struct {
     inner translator.Translator
 }
 
+var _ translator.PostRunFinalizingTranslator = (*customTranslator)(nil)
+
 func (t *customTranslator) Translate(ctx context.Context, evt *event.Event) ([]aguievents.Event, error) {
     out, err := t.inner.Translate(ctx, evt)
     if err != nil {
@@ -321,6 +347,14 @@ func (t *customTranslator) Translate(ctx context.Context, evt *event.Event) ([]a
         out = append(out, aguievents.NewCustomEvent("trace.metadata", aguievents.WithValue(payload)))
     }
     return out, nil
+}
+
+func (t *customTranslator) PostRunFinalizationEvents(ctx context.Context) ([]aguievents.Event, error) {
+    finalizer, ok := t.inner.(translator.PostRunFinalizingTranslator)
+    if !ok {
+        return nil, nil
+    }
+    return finalizer.PostRunFinalizationEvents(ctx)
 }
 
 func buildCustomPayload(evt *event.Event) map[string]any {
@@ -344,6 +378,8 @@ factory := func(ctx context.Context, input *adapter.RunAgentInput, opts ...trans
 runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
+
+`PostRunFinalizationEvents` is invoked during the finalization phase after a run ends. If it returns an error, the framework will try to emit any finalization events that were already returned, and then emit a `RunError` so that problems in the finalization phase are surfaced to the client instead of being silently dropped.
 
 For example, when using React Planner, if you want to apply different custom events to different tags, you can achieve this by implementing a custom Translator, as shown in the image below.
 
@@ -627,13 +663,16 @@ server, err := agui.New(
 
 In streaming response scenarios, a single reply usually consists of multiple incremental text events. Writing all of them directly into the session can put significant pressure on `SessionService`.
 
-To address this, the framework first aggregates events and then writes them into the session. In addition, it performs a periodic flush once per second by default, and each flush writes the current aggregation result into the session.
+To address this, the framework first aggregates events and then writes them into the session. In addition, it performs a periodic flush once per second by default, and each flush writes the current aggregation result into the session. Regardless of whether a run finishes normally or is cancelled, the framework also runs one final end-of-run flush step before exit. That final step emits closing events for any protocol streams that are still open and tries to persist any remaining aggregated data. This is separate from the regular periodic flush.
 
 * `aggregator.WithEnabled(true)` is used to control whether event aggregation is enabled. It is enabled by default. When enabled, it aggregates consecutive `TEXT_MESSAGE_CONTENT` and `REASONING_MESSAGE_CONTENT` events that share the same `messageId`. When disabled, no aggregation is performed on AG-UI events.
 * `aguirunner.WithFlushInterval(time.Second)` is used to control the periodic flush interval of aggregated results. The default is 1 second. Setting it to 0 disables the periodic flush mechanism.
+* `agui.WithPostRunFinalizationTimeout(5*time.Second)` limits how long the end-of-run finalization step is allowed to take. This covers both protocol closing events and persisting any buffered aggregated data. The default is `5s`. Setting it to `0` means no additional timeout is applied.
 
 ```go
 import (
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
@@ -652,6 +691,7 @@ server, err := agui.New(
     agui.WithAppName(appName),
     agui.WithSessionService(sessionService),
     agui.WithFlushInterval(time.Second), // Set the periodic flush interval for aggregation results, default is 1 second.
+    agui.WithPostRunFinalizationTimeout(5*time.Second), // Set the timeout for end-of-run finalization, default is 5 seconds.
     agui.WithAGUIRunnerOptions(
         aguirunner.WithUserIDResolver(userIDResolver),
         aguirunner.WithAggregationOption(aggregator.WithEnabled(true)), // Enable event aggregation, enabled by default.

@@ -12,6 +12,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	corerunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
@@ -223,10 +225,142 @@ func TestAGUIServer_MockModel_CancelStopsRun(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestAGUIServer_MockModel_CancelDuringReasoningKeepsHistoryValid(t *testing.T) {
+	baseSessionService := inmemory.NewSessionService()
+	sessionService := &ctxAwareTrackSessionService{
+		Service:      baseSessionService,
+		TrackService: baseSessionService,
+	}
+	modelInstance := &reasoningWaitModel{reasoningDelta: "thinking"}
+	httpServer := newAGUIHTTPServerWithOptions(
+		t,
+		modelInstance,
+		sessionService,
+		agui.WithReasoningContentEnabled(true),
+	)
+	runPayload := `{"threadId":"thread-1","runId":"run-1","messages":[{"role":"user","content":"think carefully"}]}`
+	runCtx, cancelRun := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancelRun)
+	runRequest, err := http.NewRequestWithContext(runCtx, http.MethodPost, httpServer.URL+"/agui", strings.NewReader(runPayload))
+	require.NoError(t, err)
+	runRequest.Header.Set("Content-Type", "application/json")
+	runResponse, err := httpServer.Client().Do(runRequest)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = runResponse.Body.Close() })
+	started := make(chan struct{})
+	reasoningSeen := make(chan struct{})
+	streamDone := make(chan struct{})
+	streamErr := make(chan error, 1)
+	var startedOnce sync.Once
+	var reasoningOnce sync.Once
+	var runEvents []aguievents.Event
+	go func() {
+		defer close(streamDone)
+		reader := r3sse.NewEventStreamReader(runResponse.Body, 1024*1024)
+		var err error
+		for {
+			raw, readErr := reader.ReadEvent()
+			if readErr != nil {
+				if readErr == io.EOF {
+					break
+				}
+				err = readErr
+				break
+			}
+			data := bytes.TrimSpace(sseData(raw))
+			if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+				continue
+			}
+			evt, evtErr := aguievents.EventFromJSON(data)
+			if evtErr != nil {
+				err = evtErr
+				break
+			}
+			if evtErr := evt.Validate(); evtErr != nil {
+				err = evtErr
+				break
+			}
+			runEvents = append(runEvents, evt)
+			if _, ok := evt.(*aguievents.RunStartedEvent); ok {
+				startedOnce.Do(func() { close(started) })
+			}
+			if _, ok := evt.(*aguievents.ReasoningMessageContentEvent); ok {
+				reasoningOnce.Do(func() { close(reasoningSeen) })
+			}
+		}
+		streamErr <- err
+		close(streamErr)
+	}()
+	select {
+	case <-started:
+	case err := <-streamErr:
+		require.NoError(t, err)
+		require.FailNow(t, "stream closed before RUN_STARTED")
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "timeout waiting for RUN_STARTED")
+	}
+	select {
+	case <-reasoningSeen:
+	case err := <-streamErr:
+		require.NoError(t, err)
+		require.FailNow(t, "stream closed before REASONING_MESSAGE_CONTENT")
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "timeout waiting for REASONING_MESSAGE_CONTENT")
+	}
+	cancelPayload := `{"threadId":"thread-1","runId":"run-1","messages":[{"role":"user","content":""}]}`
+	cancelResponse := postJSON(t, httpServer.Client(), httpServer.URL+"/cancel", cancelPayload, 10*time.Second)
+	require.Equal(t, http.StatusOK, cancelResponse.StatusCode)
+	select {
+	case <-streamDone:
+	case <-time.After(15 * time.Second):
+		require.FailNow(t, "stream did not close after cancel")
+	}
+	err, ok := <-streamErr
+	require.True(t, ok)
+	require.NoError(t, err)
+	require.NoError(t, aguievents.ValidateSequence(runEvents))
+	historyPayload := `{"threadId":"thread-1","runId":"snapshot-1","messages":[{"role":"user","content":""}]}`
+	historyRes := postJSON(t, httpServer.Client(), httpServer.URL+"/history", historyPayload, 30*time.Second)
+	require.Equal(t, http.StatusOK, historyRes.StatusCode)
+	historyEvents := readSSEEvents(t, historyRes.Body)
+	require.Len(t, historyEvents, 3)
+	require.NoError(t, aguievents.ValidateSequence(historyEvents))
+	snapshot, ok := historyEvents[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.NoError(t, snapshot.Validate())
+	var foundUser bool
+	var foundReasoning bool
+	for _, msg := range snapshot.Messages {
+		content, ok := msg.ContentString()
+		if !ok {
+			continue
+		}
+		if msg.Role == "user" && content == "think carefully" {
+			foundUser = true
+		}
+		if msg.Role == "reasoning" && content == "thinking" {
+			foundReasoning = true
+		}
+	}
+	require.True(t, foundUser)
+	require.True(t, foundReasoning)
+}
+
 func newAGUIHTTPServer(t *testing.T, modelInstance model.Model) *httptest.Server {
 	t.Helper()
+	return newAGUIHTTPServerWithOptions(t, modelInstance, nil)
+}
 
-	sessionService := inmemory.NewSessionService()
+func newAGUIHTTPServerWithOptions(
+	t *testing.T,
+	modelInstance model.Model,
+	sessionService session.Service,
+	opts ...agui.Option,
+) *httptest.Server {
+	t.Helper()
+	if sessionService == nil {
+		sessionService = inmemory.NewSessionService()
+	}
 	t.Cleanup(func() { _ = sessionService.Close() })
 
 	ag := llmagent.New(
@@ -236,9 +370,7 @@ func newAGUIHTTPServer(t *testing.T, modelInstance model.Model) *httptest.Server
 
 	run := corerunner.NewRunner(testAppName, ag, corerunner.WithSessionService(sessionService))
 	t.Cleanup(func() { _ = run.Close() })
-
-	serverInstance, err := agui.New(
-		run,
+	options := []agui.Option{
 		agui.WithPath("/agui"),
 		agui.WithCancelEnabled(true),
 		agui.WithCancelPath("/cancel"),
@@ -246,7 +378,9 @@ func newAGUIHTTPServer(t *testing.T, modelInstance model.Model) *httptest.Server
 		agui.WithMessagesSnapshotPath("/history"),
 		agui.WithAppName(testAppName),
 		agui.WithSessionService(sessionService),
-	)
+	}
+	options = append(options, opts...)
+	serverInstance, err := agui.New(run, options...)
 	require.NoError(t, err)
 
 	httpServer := httptest.NewServer(serverInstance.Handler())
@@ -312,4 +446,53 @@ func sseData(event []byte) []byte {
 		out = append(out, data...)
 	}
 	return out
+}
+
+type ctxAwareTrackSessionService struct {
+	session.Service
+	session.TrackService
+}
+
+func (s *ctxAwareTrackSessionService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	event *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.TrackService.AppendTrackEvent(ctx, sess, event, opts...)
+}
+
+type reasoningWaitModel struct {
+	reasoningDelta string
+}
+
+func (m *reasoningWaitModel) GenerateContent(ctx context.Context, request *model.Request) (<-chan *model.Response, error) {
+	if request == nil {
+		return nil, errors.New("mock model: request is nil")
+	}
+	ch := make(chan *model.Response, 1)
+	go func() {
+		defer close(ch)
+		select {
+		case <-ctx.Done():
+			return
+		case ch <- &model.Response{
+			ID:        "reasoning-msg-1",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.Message{Role: model.RoleAssistant, ReasoningContent: m.reasoningDelta},
+			}},
+		}:
+		}
+		<-ctx.Done()
+	}()
+	return ch, nil
+}
+
+func (m *reasoningWaitModel) Info() model.Info {
+	return model.Info{Name: "reasoning-wait-model"}
 }

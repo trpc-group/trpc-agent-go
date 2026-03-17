@@ -51,7 +51,7 @@ func (r *runner) Cancel(ctx context.Context, runAgentInput *adapter.RunAgentInpu
 		r.runningMu.Unlock()
 		return fmt.Errorf("%w: session: %v", ErrRunNotFound, key)
 	}
-	entry.cancel()
+	entry.cancel(errExplicitCancel)
 	r.runningMu.Unlock()
 	return nil
 }

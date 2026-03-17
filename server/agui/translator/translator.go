@@ -32,6 +32,13 @@ type Translator interface {
 	Translate(ctx context.Context, event *agentevent.Event) ([]aguievents.Event, error)
 }
 
+// PostRunFinalizingTranslator extends Translator with post-run finalization events.
+type PostRunFinalizingTranslator interface {
+	Translator
+	// PostRunFinalizationEvents returns AG-UI events needed to finalize open protocol streams after a run ends.
+	PostRunFinalizationEvents(ctx context.Context) ([]aguievents.Event, error)
+}
+
 // New creates a new event translator.
 func New(ctx context.Context, threadID, runID string, opts ...Option) (Translator, error) {
 	options := newOptions(opts...)
@@ -135,19 +142,34 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		events = append(events, toolResultEvents...)
 	}
 	if event.IsRunnerCompletion() {
-		if t.receivingReasoning {
-			if t.reasoningContentEnabled {
-				events = append(events,
-					aguievents.NewReasoningMessageEndEvent(t.lastReasoningMessageID),
-					aguievents.NewReasoningEndEvent(t.lastReasoningMessageID),
-				)
-			}
-			t.receivingReasoning = false
+		finalizationEvents, err := t.PostRunFinalizationEvents(ctx)
+		if err != nil {
+			return nil, err
 		}
-		if t.receivingMessage {
-			events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
-		}
+		events = append(events, finalizationEvents...)
 		events = append(events, aguievents.NewRunFinishedEvent(t.threadID, t.runID))
+	}
+	return events, nil
+}
+
+// PostRunFinalizationEvents closes any active reasoning or text streams after a run ends.
+func (t *translator) PostRunFinalizationEvents(context.Context) ([]aguievents.Event, error) {
+	if t == nil {
+		return nil, nil
+	}
+	var events []aguievents.Event
+	if t.receivingReasoning {
+		if t.reasoningContentEnabled {
+			events = append(events,
+				aguievents.NewReasoningMessageEndEvent(t.lastReasoningMessageID),
+				aguievents.NewReasoningEndEvent(t.lastReasoningMessageID),
+			)
+		}
+		t.receivingReasoning = false
+	}
+	if t.receivingMessage {
+		events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
+		t.receivingMessage = false
 	}
 	return events, nil
 }

@@ -191,6 +191,8 @@ curl -X POST http://localhost:8080/cancel \
 - `200 OK`：取消成功
 - `404 Not Found`：没有找到对应 `SessionKey` 的运行中任务（可能已结束，或标识不匹配）
 
+取消成功后，框架不会直接丢弃正在收尾的协议状态，而是会继续补齐必要的结束事件，并将聚合器中尚未落库的 AG-UI 事件尽量写入 `SessionService`。因此，后续通过 `/history` 读取历史时，拿到的是取消瞬间最后一个合法的一致快照，而不是一段不完整的中间状态。例如，已经产生的部分 `reasoning` 文本会作为字符串保留；如果某段 `reasoning` 尚未形成任何文本内容，则不会出现在快照中。运行结束后的这段收尾时间可通过 `agui.WithPostRunFinalizationTimeout(d)` 调整，默认值为 `5s`。
+
 ### 消息快照路由
 
 消息快照用于在页面初始化或断线重连时恢复历史对话，通过 `agui.WithMessagesSnapshotEnabled(true)` 控制功能是否开启，默认关闭。该路由默认是 `/history`， 可通过 `WithMessagesSnapshotPath` 自定义，负责返回 `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED` 的事件流。
@@ -253,6 +255,25 @@ if err := http.ListenAndServe("127.0.0.1:8080", server.Handler()); err != nil {
 
 AG-UI 的 MessagesSnapshotEvent 事件格式可见 [messages](https://docs.ag-ui.com/concepts/messages)。
 
+### Translator 接口
+
+处理请求时，Translator 接口负责将框架内部事件翻译成 AG-UI 协议事件，再发送给客户端。
+
+接口定义如下：
+
+```go
+type Translator interface {
+    Translate(ctx context.Context, event *event.Event) ([]aguievents.Event, error)
+}
+
+type PostRunFinalizingTranslator interface {
+    Translator
+    PostRunFinalizationEvents(ctx context.Context) ([]aguievents.Event, error)
+}
+```
+
+其中，`Translator` 负责将内部事件翻译为 AG-UI 事件；`PostRunFinalizingTranslator` 则用于在运行结束后的收尾阶段补发仍未关闭的协议事件，并在需要时返回收尾阶段错误。
+
 ## 进阶用法
 
 ### 自定义通信协议
@@ -293,7 +314,9 @@ server, _ := agui.New(runner, agui.WithServiceFactory(NewWSService))
 
 ### 自定义 Translator
 
-默认的 `translator.New` 会把内部事件翻译成协议里定义的标准事件集。若想在保留默认行为的基础上追加自定义信息，可以实现 `translator.Translator` 接口，并借助 AG-UI 的 `Custom` 事件类型携带扩展数据：
+默认的 `translator.New` 会把内部事件翻译成协议里定义的标准事件集。若想在保留默认行为的基础上追加自定义信息，可以实现 `translator.Translator` 接口，并借助 AG-UI 的 `Custom` 事件类型携带扩展数据。
+
+如果自定义 Translator 除了追加自定义事件外，还会维护自己的打开流，或者只是包装默认 Translator 并希望保留取消与运行结束时的自动收尾能力，建议同时实现 `translator.PostRunFinalizingTranslator`，将运行结束后需要补发的收尾事件继续交给框架处理：
 
 ```go
 import (
@@ -310,6 +333,8 @@ type customTranslator struct {
     inner translator.Translator
 }
 
+var _ translator.PostRunFinalizingTranslator = (*customTranslator)(nil)
+
 func (t *customTranslator) Translate(ctx context.Context, evt *event.Event) ([]aguievents.Event, error) {
     out, err := t.inner.Translate(ctx, evt)
     if err != nil {
@@ -319,6 +344,14 @@ func (t *customTranslator) Translate(ctx context.Context, evt *event.Event) ([]a
         out = append(out, aguievents.NewCustomEvent("trace.metadata", aguievents.WithValue(payload)))
     }
     return out, nil
+}
+
+func (t *customTranslator) PostRunFinalizationEvents(ctx context.Context) ([]aguievents.Event, error) {
+    finalizer, ok := t.inner.(translator.PostRunFinalizingTranslator)
+    if !ok {
+        return nil, nil
+    }
+    return finalizer.PostRunFinalizationEvents(ctx)
 }
 
 func buildCustomPayload(evt *event.Event) map[string]any {
@@ -342,6 +375,8 @@ factory := func(ctx context.Context, input *adapter.RunAgentInput, opts ...trans
 runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
+
+`PostRunFinalizationEvents` 会在运行结束后的收尾阶段被调用。如果该方法返回错误，框架会在尽力发送已经返回的收尾事件后，再发送一个 `RunError`，从而将收尾阶段的问题显式暴露给客户端。
 
 例如，在使用 React Planner 时，如果希望为不同标签应用不同的自定义事件，可以通过实现自定义 Translator 来实现，效果如下图所示。
 
@@ -628,10 +663,11 @@ server, err := agui.New(
 
 在流式响应场景下，同一条回复通常会包含多个增量文本事件，如果将它们全部直接写入会话，会给 `SessionService` 带来较大压力。
 
-为了解决上述问题，框架会先对事件进行聚合，再写入会话。此外，默认每秒定时刷新一次，每次刷新将当前的聚合结果写入会话。
+为了解决上述问题，框架会先对事件进行聚合，再写入会话。此外，默认每秒定时刷新一次，每次刷新将当前的聚合结果写入会话。无论 run 是正常结束还是被取消，在退出前框架还会再执行一次运行结束后的收尾流程，用于补发仍然打开的协议流结束事件，并将聚合缓存尽量刷入会话存储。这一阶段与日常的定时刷新是分开的。
 
 - `aggregator.WithEnabled(true)` 用于控制是否开启事件聚合，默认为开启状态。开启后，会将连续且具有相同 `messageId` 的 `TEXT_MESSAGE_CONTENT` 与 `REASONING_MESSAGE_CONTENT` 事件进行聚合；关闭时则不对 AG-UI 事件做聚合。
 - `aguirunner.WithFlushInterval(time.Second)` 用于控制事件聚合结果的定时刷新间隔，默认为 1 秒。设置为 0 时表示不开启定时刷新功能。
+- `agui.WithPostRunFinalizationTimeout(5*time.Second)` 用于限制运行结束后收尾流程的最长执行时间。该阶段同时覆盖协议收尾事件补发与聚合缓存落库，默认值为 `5s`。设置为 `0` 表示不额外设置超时。
 
 ```go
 import (
@@ -646,17 +682,18 @@ runner := runner.NewRunner(agent.Info().Name, agent)
 sessionService := inmemory.NewSessionService()
 
 server, err := agui.New(
-    runner,
-    agui.WithPath("/agui"),
-    agui.WithMessagesSnapshotPath("/history"),
-    agui.WithMessagesSnapshotEnabled(true),
-    agui.WithAppName(appName),
-    agui.WithSessionService(sessionService),
-    agui.WithFlushInterval(time.Second), // 设置事件聚合结果的定时刷新间隔，默认 1 秒
-    agui.WithAGUIRunnerOptions(
-        aguirunner.WithUserIDResolver(userIDResolver),
-        aguirunner.WithAggregationOption(aggregator.WithEnabled(true)), // 开启事件聚合，默认开启
-    ),
+  runner,
+  agui.WithPath("/agui"),
+  agui.WithMessagesSnapshotPath("/history"),
+  agui.WithMessagesSnapshotEnabled(true),
+  agui.WithAppName(appName),
+  agui.WithSessionService(sessionService),
+  agui.WithFlushInterval(time.Second),                // 设置事件聚合结果的定时刷新间隔，默认 1 秒
+  agui.WithPostRunFinalizationTimeout(5*time.Second), // 设置 run 结束后的收尾超时，默认 5 秒
+  agui.WithAGUIRunnerOptions(
+    aguirunner.WithUserIDResolver(userIDResolver),
+    aguirunner.WithAggregationOption(aggregator.WithEnabled(true)), // 开启事件聚合，默认开启
+  ),
 )
 ```
 
