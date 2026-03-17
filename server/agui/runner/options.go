@@ -23,6 +23,7 @@ import (
 )
 
 const (
+	defaultPostRunFinalizationTimeout             = 5 * time.Second
 	defaultTimeout                                = time.Hour
 	defaultGraphNodeLifecycleActivityEnabled      = false
 	defaultGraphNodeInterruptActivityEnabled      = false
@@ -46,6 +47,7 @@ type Options struct {
 	MessagesSnapshotFollowEnabled          bool                  // MessagesSnapshotFollowEnabled enables tailing persisted AG-UI track events after MESSAGES_SNAPSHOT.
 	MessagesSnapshotFollowMaxDuration      time.Duration         // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
 	StartSpan                              StartSpan             // StartSpan starts a span for an AG-UI run.
+	PostRunFinalizationTimeout             time.Duration         // PostRunFinalizationTimeout bounds how long post-run finalization is allowed to take.
 	Timeout                                time.Duration         // Timeout controls how long a run is allowed to execute.
 	CancelOnContextDoneEnabled             bool                  // CancelOnContextDoneEnabled cancels the run when the parent context is done.
 	GraphNodeLifecycleActivityEnabled      bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
@@ -65,6 +67,7 @@ func NewOptions(opt ...Option) *Options {
 		AggregatorFactory:                      aggregator.New,
 		FlushInterval:                          track.DefaultFlushInterval,
 		StartSpan:                              defaultStartSpan,
+		PostRunFinalizationTimeout:             defaultPostRunFinalizationTimeout,
 		Timeout:                                defaultTimeout,
 		GraphNodeLifecycleActivityEnabled:      defaultGraphNodeLifecycleActivityEnabled,
 		GraphNodeInterruptActivityEnabled:      defaultGraphNodeInterruptActivityEnabled,
@@ -201,6 +204,13 @@ func WithStartSpan(start StartSpan) Option {
 func WithTimeout(d time.Duration) Option {
 	return func(o *Options) {
 		o.Timeout = d
+	}
+}
+
+// WithPostRunFinalizationTimeout sets the maximum duration allowed for post-run finalization.
+func WithPostRunFinalizationTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		o.PostRunFinalizationTimeout = d
 	}
 }
 

@@ -12,6 +12,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -227,6 +228,99 @@ func TestMessagesSnapshotAllowsConcurrentWithRunningRun(t *testing.T) {
 	_ = collectEvents(t, runStream)
 }
 
+func TestMessagesSnapshotAfterCancelDuringReasoningKeepsSnapshotValid(t *testing.T) {
+	svc := &testSessionService{}
+	svc.appendTrackFn = func(ctx context.Context, sess *session.Session,
+		evt *session.TrackEvent, opts ...session.Option) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if evt != nil {
+			svc.trackEvents = append(svc.trackEvents, *evt)
+		}
+		return nil
+	}
+	r := New(
+		&reasoningWaitRunner{},
+		WithAppName("demo"),
+		WithSessionService(svc),
+		WithReasoningContentEnabled(true),
+		WithFlushInterval(0),
+	).(*runner)
+
+	runInput := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+
+	runStream, err := r.Run(context.Background(), runInput)
+	require.NoError(t, err)
+	waitForAGUIEventType(t, runStream, (*aguievents.ReasoningMessageContentEvent)(nil))
+
+	err = r.Cancel(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	require.NoError(t, err)
+	waitForAGUIStreamClose(t, runStream)
+
+	snapshotStream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "snapshot",
+	})
+	require.NoError(t, err)
+
+	snapshotEvents := collectAGUIEvents(t, snapshotStream)
+	require.Len(t, snapshotEvents, 3)
+
+	snapshot, ok := snapshotEvents[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.NoError(t, snapshot.Validate())
+}
+
+func TestMessagesSnapshotFollowAfterCancelStopsAtTerminalEvent(t *testing.T) {
+	svc := &testSessionService{}
+	svc.appendTrackFn = func(ctx context.Context, sess *session.Session,
+		evt *session.TrackEvent, opts ...session.Option) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if evt != nil {
+			svc.trackEvents = append(svc.trackEvents, *evt)
+		}
+		return nil
+	}
+	r := New(
+		&reasoningWaitRunner{},
+		WithAppName("demo"),
+		WithSessionService(svc),
+		WithReasoningContentEnabled(true),
+		WithFlushInterval(time.Millisecond),
+		WithMessagesSnapshotFollowEnabled(true),
+		WithMessagesSnapshotFollowMaxDuration(20*time.Millisecond),
+	).(*runner)
+	runInput := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	runStream, err := r.Run(context.Background(), runInput)
+	require.NoError(t, err)
+	waitForAGUIEventType(t, runStream, (*aguievents.ReasoningMessageContentEvent)(nil))
+	err = r.Cancel(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	require.NoError(t, err)
+	waitForAGUIStreamClose(t, runStream)
+	snapshotStream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "snapshot",
+	})
+	require.NoError(t, err)
+	snapshotEvents := collectAGUIEvents(t, snapshotStream)
+	require.Len(t, snapshotEvents, 3)
+	snapshot, ok := snapshotEvents[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.NoError(t, snapshot.Validate())
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), snapshotEvents[2])
+}
+
 func TestMessagesSnapshotEmptyTrack(t *testing.T) {
 	svc := &testSessionService{}
 	tracker, err := track.New(svc)
@@ -422,6 +516,59 @@ func TestMessagesSnapshotFollowUntilTerminalEvent(t *testing.T) {
 	require.IsType(t, (*aguievents.MessagesSnapshotEvent)(nil), collected[1])
 	require.IsType(t, (*aguievents.CustomEvent)(nil), collected[2])
 	finished, ok := collected[3].(*aguievents.RunFinishedEvent)
+	require.True(t, ok)
+	require.Equal(t, "req-run", finished.RunID())
+}
+
+func TestMessagesSnapshotFollowContinuesOpenReasoningFromSnapshot(t *testing.T) {
+	base := time.Now().Add(-time.Second)
+	initial := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newTrackEventAt(t, aguievents.NewReasoningMessageStartEvent("reasoning-msg-1", "assistant"), base),
+		},
+	}
+	follow := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newTrackEventAt(t, aguievents.NewReasoningMessageContentEvent("reasoning-msg-1", "thinking"),
+				base.Add(time.Millisecond)),
+			newTrackEventAt(t, aguievents.NewReasoningMessageEndEvent("reasoning-msg-1"), base.Add(2*time.Millisecond)),
+			newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "real-run"), base.Add(3*time.Millisecond)),
+		},
+	}
+	r := &runner{
+		runner:                            noopBaseRunner{},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		runAgentInputHook:                 NewOptions().RunAgentInputHook,
+		appName:                           "demo",
+		tracker:                           &sequenceTracker{first: initial, second: follow},
+		flushInterval:                     time.Millisecond,
+		timeout:                           100 * time.Millisecond,
+		messagesSnapshotFollowEnabled:     true,
+		messagesSnapshotFollowMaxDuration: 100 * time.Millisecond,
+	}
+
+	stream, err := r.MessagesSnapshot(
+		context.Background(),
+		&adapter.RunAgentInput{ThreadID: "thread", RunID: "req-run"},
+	)
+	require.NoError(t, err)
+
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 5)
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Len(t, snapshot.Messages, 1)
+	assert.Equal(t, "reasoning-msg-1", snapshot.Messages[0].ID)
+	assert.Equal(t, types.RoleReasoning, snapshot.Messages[0].Role)
+	content, ok := snapshot.Messages[0].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "", content)
+	require.IsType(t, (*aguievents.ReasoningMessageContentEvent)(nil), collected[2])
+	require.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), collected[3])
+	finished, ok := collected[4].(*aguievents.RunFinishedEvent)
 	require.True(t, ok)
 	require.Equal(t, "req-run", finished.RunID())
 }
@@ -690,6 +837,65 @@ func (noopBaseRunner) Run(ctx context.Context, userID, sessionID string, message
 
 func (noopBaseRunner) Close() error { return nil }
 
+type reasoningWaitRunner struct{}
+
+func (reasoningWaitRunner) Run(ctx context.Context, userID, sessionID string, message model.Message,
+	runOpts ...agent.RunOption) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		Response: &model.Response{
+			ID:        "reasoning-msg-1",
+			Object:    model.ObjectTypeChatCompletionChunk,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					Role:             model.RoleAssistant,
+					ReasoningContent: "thinking",
+				},
+			}},
+		},
+	}
+	go func() {
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch, nil
+}
+
+func (reasoningWaitRunner) Close() error { return nil }
+
+func waitForAGUIEventType(t *testing.T, ch <-chan aguievents.Event, want any) {
+	t.Helper()
+	wantType := reflect.TypeOf(want)
+	timeout := time.After(time.Second)
+	for {
+		select {
+		case evt, ok := <-ch:
+			require.True(t, ok)
+			if reflect.TypeOf(evt) == wantType {
+				return
+			}
+		case <-timeout:
+			require.FailNow(t, "timeout waiting for AG-UI event")
+		}
+	}
+}
+
+func waitForAGUIStreamClose(t *testing.T, ch <-chan aguievents.Event) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		for range ch {
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for AG-UI stream close")
+	}
+}
+
 type sequenceTracker struct {
 	mu     sync.Mutex
 	calls  int
@@ -759,9 +965,11 @@ func (t *errorAfterFirstTracker) Flush(ctx context.Context, key session.Key) err
 }
 
 type testSessionService struct {
-	trackEvents []session.TrackEvent
-	getErr      error
-	returnNil   bool
+	trackEvents   []session.TrackEvent
+	getErr        error
+	returnNil     bool
+	appendTrackFn func(ctx context.Context, sess *session.Session,
+		evt *session.TrackEvent, opts ...session.Option) error
 }
 
 func (s *testSessionService) CreateSession(ctx context.Context, key session.Key, state session.StateMap,
@@ -833,6 +1041,9 @@ func (s *testSessionService) AppendEvent(ctx context.Context, sess *session.Sess
 
 func (s *testSessionService) AppendTrackEvent(ctx context.Context, sess *session.Session,
 	evt *session.TrackEvent, opts ...session.Option) error {
+	if s.appendTrackFn != nil {
+		return s.appendTrackFn(ctx, sess, evt, opts...)
+	}
 	if evt != nil {
 		s.trackEvents = append(s.trackEvents, *evt)
 	}
