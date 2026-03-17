@@ -24,9 +24,11 @@ This example uses `graph.ExecutionErrorCollector` to do both.
 
 ### 1. Recoverable local node error
 
-The `lookup` node returns a coded error.
+The `lookup` node returns a coded error that implements
+`Recoverable() bool`.
 
-The collector policy marks `LOOKUP_SOFT_TIMEOUT` as recoverable, so the graph:
+The collector's default policy marks `LOOKUP_SOFT_TIMEOUT` as recoverable, so
+the graph:
 
 - records one `recoverable` `graph.ExecutionError`
 - keeps executing
@@ -92,6 +94,8 @@ You should see:
 ## How business code can extend this pattern
 
 - Change recoverability with `graph.WithExecutionErrorPolicy(...)`
+- Use the built-in default policy via `Recoverable() bool` or
+  `graph.MarkRecoverable(err)`
 - Store errors under a domain-specific key with
   `graph.WithExecutionErrorStateKey(...)`
 - Merge child error state into a custom parent mapper with
@@ -105,8 +109,9 @@ You should see:
 - Let business errors implement `ErrorCode()` or `Code()` so the framework can
   populate `Response.Error.Code` and `graph.ExecutionError.Error.Code`
   automatically.
-- Use `WithExecutionErrorPolicy(...)` for recovery policy, not as a second
-  error registry.
+- Use the default recoverable contract first. Only add
+  `WithExecutionErrorPolicy(...)` when you need custom fallback routing or
+  normalization.
 - Persist the final collected records from `runner.completion.StateDelta`.
 
 For a fuller design guide with complete code snippets, see

@@ -21,6 +21,19 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+type recoverableTestError struct {
+	message     string
+	recoverable bool
+}
+
+func (e recoverableTestError) Error() string {
+	return e.message
+}
+
+func (e recoverableTestError) Recoverable() bool {
+	return e.recoverable
+}
+
 func TestExecutionErrorSliceReducer_ClonesInputs(t *testing.T) {
 	existing := []ExecutionError{{
 		Severity: ExecutionErrorSeverityRecoverable,
@@ -107,6 +120,156 @@ func TestExecutionErrorCollector_Recoverable(t *testing.T) {
 	require.Equal(t, "boom", executionErrors[0].Error.Message)
 }
 
+func TestExecutionErrorCollector_DefaultRecoverablePolicy(
+	t *testing.T,
+) {
+	collector := NewExecutionErrorCollector()
+
+	result, err := collector.NodeCallbacks().RunAfterNode(
+		context.Background(),
+		&NodeCallbackContext{NodeID: "step"},
+		State{},
+		nil,
+		recoverableTestError{
+			message:     "recoverable boom",
+			recoverable: true,
+		},
+	)
+	require.NoError(t, err)
+
+	update, ok := result.(State)
+	require.True(t, ok)
+
+	executionErrors, ok := update[StateKeyExecutionErrors].([]ExecutionError)
+	require.True(t, ok)
+	require.Len(t, executionErrors, 1)
+	require.Equal(
+		t,
+		ExecutionErrorSeverityRecoverable,
+		executionErrors[0].Severity,
+	)
+}
+
+func TestExecutionErrorCollector_DefaultRecoverableWrapper(
+	t *testing.T,
+) {
+	collector := NewExecutionErrorCollector()
+
+	result, err := collector.NodeCallbacks().RunAfterNode(
+		context.Background(),
+		&NodeCallbackContext{NodeID: "step"},
+		State{},
+		nil,
+		MarkRecoverable(errors.New("wrapped boom")),
+	)
+	require.NoError(t, err)
+
+	update, ok := result.(State)
+	require.True(t, ok)
+
+	executionErrors, ok := update[StateKeyExecutionErrors].([]ExecutionError)
+	require.True(t, ok)
+	require.Len(t, executionErrors, 1)
+	require.Equal(
+		t,
+		ExecutionErrorSeverityRecoverable,
+		executionErrors[0].Severity,
+	)
+	require.Equal(t, "wrapped boom", executionErrors[0].Error.Message)
+}
+
+func TestWithRecoverableExecutionErrors_ExtendsDefaultPolicy(
+	t *testing.T,
+) {
+	collector := NewExecutionErrorCollector(
+		WithRecoverableExecutionErrors(func(error) bool {
+			return false
+		}),
+	)
+
+	result, err := collector.afterNode(
+		context.Background(),
+		&NodeCallbackContext{NodeID: "step"},
+		State{},
+		nil,
+		recoverableTestError{
+			message:     "recoverable boom",
+			recoverable: true,
+		},
+	)
+	require.NoError(t, err)
+
+	update, ok := result.(State)
+	require.True(t, ok)
+	executionErrors, ok := update[StateKeyExecutionErrors].([]ExecutionError)
+	require.True(t, ok)
+	require.Len(t, executionErrors, 1)
+	require.Equal(
+		t,
+		ExecutionErrorSeverityRecoverable,
+		executionErrors[0].Severity,
+	)
+}
+
+func TestExecutionErrorCollector_RecoveryKeepsOriginalStateResult(
+	t *testing.T,
+) {
+	collector := NewExecutionErrorCollector()
+
+	result, err := collector.afterNode(
+		context.Background(),
+		&NodeCallbackContext{NodeID: "step"},
+		State{},
+		State{"partial": true},
+		recoverableTestError{
+			message:     "recoverable boom",
+			recoverable: true,
+		},
+	)
+	require.NoError(t, err)
+
+	update, ok := result.(State)
+	require.True(t, ok)
+	require.Equal(t, true, update["partial"])
+
+	executionErrors, ok := update[StateKeyExecutionErrors].([]ExecutionError)
+	require.True(t, ok)
+	require.Len(t, executionErrors, 1)
+}
+
+func TestExecutionErrorCollector_RecoveryKeepsOriginalCommandResult(
+	t *testing.T,
+) {
+	collector := NewExecutionErrorCollector()
+
+	result, err := collector.afterNode(
+		context.Background(),
+		&NodeCallbackContext{NodeID: "step"},
+		State{},
+		&Command{
+			GoTo: "next",
+			Update: State{
+				"partial": true,
+			},
+		},
+		recoverableTestError{
+			message:     "recoverable boom",
+			recoverable: true,
+		},
+	)
+	require.NoError(t, err)
+
+	command, ok := result.(*Command)
+	require.True(t, ok)
+	require.Equal(t, "next", command.GoTo)
+	require.Equal(t, true, command.Update["partial"])
+
+	executionErrorsValue := command.Update[StateKeyExecutionErrors]
+	executionErrors, ok := executionErrorsValue.([]ExecutionError)
+	require.True(t, ok)
+	require.Len(t, executionErrors, 1)
+}
+
 func TestExecutionErrorCollector_RecoveryCommandMergesUpdate(t *testing.T) {
 	collector := NewExecutionErrorCollector(
 		WithExecutionErrorPolicy(func(
@@ -141,7 +304,8 @@ func TestExecutionErrorCollector_RecoveryCommandMergesUpdate(t *testing.T) {
 	require.Equal(t, "next", command.GoTo)
 	require.Equal(t, true, command.Update["done"])
 
-	executionErrors, ok := command.Update[StateKeyExecutionErrors].([]ExecutionError)
+	executionErrorsValue := command.Update[StateKeyExecutionErrors]
+	executionErrors, ok := executionErrorsValue.([]ExecutionError)
 	require.True(t, ok)
 	require.Len(t, executionErrors, 1)
 }
@@ -503,6 +667,21 @@ func TestMergeExecutionErrorReplacement(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, true, stateResult["done"])
 	_, ok = stateResult[StateKeyExecutionErrors]
+	require.True(t, ok)
+
+	commandValue, ok := mergeExecutionErrorReplacement(
+		Command{
+			GoTo: "next",
+			Update: State{
+				"done": true,
+			},
+		},
+		update,
+	).(Command)
+	require.True(t, ok)
+	require.Equal(t, "next", commandValue.GoTo)
+	require.Equal(t, true, commandValue.Update["done"])
+	_, ok = commandValue.Update[StateKeyExecutionErrors]
 	require.True(t, ok)
 
 	command, ok := mergeExecutionErrorReplacement(

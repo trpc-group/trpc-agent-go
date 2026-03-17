@@ -12,7 +12,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -45,8 +44,9 @@ const (
 )
 
 type codedError struct {
-	code    string
-	message string
+	code        string
+	message     string
+	recoverable bool
 }
 
 func (e codedError) Error() string {
@@ -55,6 +55,10 @@ func (e codedError) Error() string {
 
 func (e codedError) Code() string {
 	return e.code
+}
+
+func (e codedError) Recoverable() bool {
+	return e.recoverable
 }
 
 func main() {
@@ -101,23 +105,7 @@ func run() error {
 }
 
 func buildRecoverableAgent() (agent.Agent, error) {
-	collector := graph.NewExecutionErrorCollector(
-		graph.WithExecutionErrorPolicy(func(
-			ctx context.Context,
-			callbackCtx *graph.NodeCallbackContext,
-			state graph.State,
-			err error,
-		) graph.ExecutionErrorPolicy {
-			var coded interface{ Code() string }
-			if errors.As(err, &coded) &&
-				coded.Code() == softErrorCode {
-				return graph.ExecutionErrorPolicy{
-					Recover: true,
-				}
-			}
-			return graph.ExecutionErrorPolicy{}
-		}),
-	)
+	collector := graph.NewExecutionErrorCollector()
 
 	schema := graph.MessagesStateSchema()
 	collector.AddField(schema)
@@ -135,8 +123,9 @@ func buildRecoverableAgent() (agent.Agent, error) {
 		state graph.State,
 	) (any, error) {
 		return nil, codedError{
-			code:    softErrorCode,
-			message: "catalog lookup timed out",
+			code:        softErrorCode,
+			message:     "catalog lookup timed out",
+			recoverable: true,
 		}
 	})
 

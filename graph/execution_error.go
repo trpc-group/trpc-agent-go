@@ -12,6 +12,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"time"
 
@@ -66,6 +67,32 @@ type ExecutionErrorPolicy struct {
 	ResponseError *model.ResponseError
 }
 
+// RecoverableExecutionError marks an error as recoverable for the default
+// collector policy.
+type RecoverableExecutionError interface {
+	error
+	Recoverable() bool
+}
+
+type recoverableExecutionError struct {
+	cause error
+}
+
+func (e recoverableExecutionError) Error() string {
+	if e.cause == nil {
+		return ""
+	}
+	return e.cause.Error()
+}
+
+func (e recoverableExecutionError) Unwrap() error {
+	return e.cause
+}
+
+func (e recoverableExecutionError) Recoverable() bool {
+	return true
+}
+
 // ExecutionErrorPolicyFunc decides how a node error should be recorded.
 type ExecutionErrorPolicyFunc func(
 	ctx context.Context,
@@ -73,6 +100,19 @@ type ExecutionErrorPolicyFunc func(
 	state State,
 	err error,
 ) ExecutionErrorPolicy
+
+// DefaultExecutionErrorPolicy is the framework's default recovery policy.
+func DefaultExecutionErrorPolicy(
+	_ context.Context,
+	_ *NodeCallbackContext,
+	_ State,
+	err error,
+) ExecutionErrorPolicy {
+	if IsRecoverableExecutionError(err) {
+		return ExecutionErrorPolicy{Recover: true}
+	}
+	return ExecutionErrorPolicy{}
+}
 
 // ExecutionErrorCollectorOption configures an ExecutionErrorCollector.
 type ExecutionErrorCollectorOption func(*ExecutionErrorCollector)
@@ -91,14 +131,7 @@ func NewExecutionErrorCollector(
 	collector := &ExecutionErrorCollector{
 		stateKey:  StateKeyExecutionErrors,
 		eventType: ExecutionErrorEventType,
-		policy: func(
-			context.Context,
-			*NodeCallbackContext,
-			State,
-			error,
-		) ExecutionErrorPolicy {
-			return ExecutionErrorPolicy{}
-		},
+		policy:    DefaultExecutionErrorPolicy,
 	}
 	for _, opt := range opts {
 		opt(collector)
@@ -140,21 +173,62 @@ func WithExecutionErrorPolicy(
 	}
 }
 
-// WithRecoverableExecutionErrors marks matching errors as recoverable.
+// WithRecoverableExecutionErrors extends the default recovery policy with an
+// additional recoverable-error predicate.
 func WithRecoverableExecutionErrors(
 	shouldRecover func(error) bool,
 ) ExecutionErrorCollectorOption {
-	return WithExecutionErrorPolicy(func(
-		ctx context.Context,
-		callbackCtx *NodeCallbackContext,
-		state State,
-		err error,
-	) ExecutionErrorPolicy {
-		if shouldRecover == nil || !shouldRecover(err) {
-			return ExecutionErrorPolicy{}
+	return func(c *ExecutionErrorCollector) {
+		if shouldRecover == nil {
+			return
 		}
-		return ExecutionErrorPolicy{Recover: true}
-	})
+		basePolicy := c.policy
+		c.policy = func(
+			ctx context.Context,
+			callbackCtx *NodeCallbackContext,
+			state State,
+			err error,
+		) ExecutionErrorPolicy {
+			policy := ExecutionErrorPolicy{}
+			if basePolicy != nil {
+				policy = basePolicy(
+					ctx,
+					callbackCtx,
+					state,
+					err,
+				)
+			}
+			if policy.Recover || !shouldRecover(err) {
+				return policy
+			}
+			policy.Recover = true
+			return policy
+		}
+	}
+}
+
+// MarkRecoverable wraps err so the default collector policy treats it as
+// recoverable.
+func MarkRecoverable(err error) error {
+	if err == nil || IsRecoverableExecutionError(err) {
+		return err
+	}
+	return recoverableExecutionError{cause: err}
+}
+
+// NewRecoverableError returns a recoverable error with the provided message.
+func NewRecoverableError(message string) error {
+	return MarkRecoverable(errors.New(message))
+}
+
+// IsRecoverableExecutionError reports whether err matches the default
+// recoverable-error contract.
+func IsRecoverableExecutionError(err error) bool {
+	var recoverable RecoverableExecutionError
+	if !errors.As(err, &recoverable) {
+		return false
+	}
+	return recoverable.Recoverable()
 }
 
 // StateKey returns the state key used by the collector.
@@ -316,8 +390,12 @@ func (c *ExecutionErrorCollector) afterNode(
 	}
 
 	if policy.Recover {
+		replacement := policy.Replacement
+		if replacement == nil {
+			replacement = result
+		}
 		return mergeExecutionErrorReplacement(
-			policy.Replacement,
+			replacement,
 			update,
 		), nil
 	}
@@ -348,6 +426,9 @@ func mergeExecutionErrorReplacement(
 		return update
 	case State:
 		return mergeStateForExecutionError(value, update)
+	case Command:
+		value.Update = mergeStateForExecutionError(value.Update, update)
+		return value
 	case *Command:
 		if value == nil {
 			return &Command{Update: update}
@@ -356,6 +437,11 @@ func mergeExecutionErrorReplacement(
 		cloned.Update = mergeStateForExecutionError(cloned.Update, update)
 		return &cloned
 	default:
+		log.Warnf(
+			"graph: execution error replacement type %T cannot "+
+				"merge state update",
+			replacement,
+		)
 		return replacement
 	}
 }

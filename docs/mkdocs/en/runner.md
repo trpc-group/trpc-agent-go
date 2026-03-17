@@ -462,6 +462,11 @@ This lets application code keep the same simple rule: read the last event first
 for business-level fatal details, instead of scanning the whole stream to find
 the callback/error event.
 
+If the graph uses `graph.NewExecutionErrorCollector()`, any collected
+`execution_errors` in that `StateDelta` may come from the default recoverable
+contract as well, for example errors that implement `Recoverable() bool` or
+errors wrapped by `graph.MarkRecoverable(err)`.
+
 Example:
 
 ```go

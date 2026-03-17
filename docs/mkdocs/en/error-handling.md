@@ -130,8 +130,10 @@ The recommended pattern is:
 1. Keep stable string error codes in a small domain package.
 2. Return typed business errors from nodes, tools, or agents.
 3. Let the collector record those codes automatically.
-4. Use `WithExecutionErrorPolicy(...)` only for recovery and optional
-   normalization.
+4. Let the default collector policy recover errors whose `Recoverable() bool`
+   method returns `true`.
+5. Use `WithExecutionErrorPolicy(...)` only for custom fallback routing or
+   optional normalization.
 
 Example business error package:
 
@@ -214,16 +216,17 @@ func (e *legacyRPCError) Code() int {
 That error will be stored as a string code such as `"40401"` inside
 `ResponseError.Code`.
 
-Example collector policy that uses the business error catalog:
+Because `ordererrors.Error` implements `Recoverable() bool`, the default
+collector policy already treats `NewInventorySoftTimeout(...)` as recoverable.
+
+Example collector policy that keeps the default judgment and adds a custom
+fallback route:
 
 ```go
 package main
 
 import (
     "context"
-    "errors"
-
-    "example.com/myapp/ordererrors"
 
     "trpc.group/trpc-go/trpc-agent-go/graph"
 )
@@ -236,19 +239,22 @@ func newCollector() *graph.ExecutionErrorCollector {
             state graph.State,
             err error,
         ) graph.ExecutionErrorPolicy {
-            var bizErr *ordererrors.Error
-            if errors.As(err, &bizErr) && bizErr.Recoverable() {
-                return graph.ExecutionErrorPolicy{
-                    Recover: true,
-                    Replacement: &graph.Command{
-                        Update: graph.State{
-                            "inventory_status": "fallback",
-                        },
-                        GoTo: "fallback_lookup",
-                    },
-                }
+            policy := graph.DefaultExecutionErrorPolicy(
+                ctx,
+                cb,
+                state,
+                err,
+            )
+            if !policy.Recover {
+                return policy
             }
-            return graph.ExecutionErrorPolicy{}
+            policy.Replacement = &graph.Command{
+                Update: graph.State{
+                    "inventory_status": "fallback",
+                },
+                GoTo: "fallback_lookup",
+            }
+            return policy
         }),
     )
 }
@@ -327,30 +333,72 @@ This is the simplest framework-level setup. Any node error that reaches
 
 ### 3. Decide which errors are recoverable
 
-By default, every collected error is still fatal.
+`graph.NewExecutionErrorCollector()` now ships with a conservative default
+policy:
 
-If you want some errors to continue execution, provide a policy:
+- errors that implement `Recoverable() bool` and return `true` are recoverable
+- errors wrapped with `graph.MarkRecoverable(err)` or created with
+  `graph.NewRecoverableError(...)` are also recoverable
+
+Example:
 
 ```go
-collector := graph.NewExecutionErrorCollector(
-    graph.WithExecutionErrorPolicy(func(
-        ctx context.Context,
-        cb *graph.NodeCallbackContext,
-        state graph.State,
-        err error,
-    ) graph.ExecutionErrorPolicy {
-        if errors.Is(err, errQuotaSoftLimit) {
-            return graph.ExecutionErrorPolicy{
-                Recover: true,
-            }
-        }
-        return graph.ExecutionErrorPolicy{}
-    }),
+package main
+
+import (
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
 )
+
+type quotaSoftLimitError struct {
+    message string
+}
+
+func (e quotaSoftLimitError) Error() string {
+    return e.message
+}
+
+func (e quotaSoftLimitError) Recoverable() bool {
+    return true
+}
+
+func lookupQuota() error {
+    return quotaSoftLimitError{
+        message: "quota service returned soft limit",
+    }
+}
+
+func lookupCache() error {
+    return graph.NewRecoverableError("cache lookup timed out")
+}
+```
+
+If you want to extend that default rule, use
+`graph.WithRecoverableExecutionErrors(...)`:
+
+```go
+package main
+
+import (
+    "errors"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+var errQuotaSoftLimit = errors.New("quota soft limit")
+
+func newCollector() *graph.ExecutionErrorCollector {
+    return graph.NewExecutionErrorCollector(
+        graph.WithRecoverableExecutionErrors(func(err error) bool {
+            return errors.Is(err, errQuotaSoftLimit)
+        }),
+    )
+}
 ```
 
 When `Recover` is `true`, the collector writes a `recoverable` record into
-state and returns a replacement node result so the graph can continue.
+state and keeps the graph running.
 
 ### 4. Optionally provide a replacement result
 
@@ -362,31 +410,48 @@ Preferred replacement types:
 - `graph.State`
 - `*graph.Command`
 
-The collector merges the `execution_errors` update into those replacement
-results automatically.
+If `Replacement` is `nil`, the collector keeps the original `graph.State` or
+`*graph.Command` result and merges `execution_errors` into it automatically.
+
+If you need a custom replacement and still want the default recoverable
+judgment, start from `graph.DefaultExecutionErrorPolicy(...)`:
 
 ```go
-collector := graph.NewExecutionErrorCollector(
-    graph.WithExecutionErrorPolicy(func(
-        ctx context.Context,
-        cb *graph.NodeCallbackContext,
-        state graph.State,
-        err error,
-    ) graph.ExecutionErrorPolicy {
-        if !errors.Is(err, errRemoteCacheMiss) {
-            return graph.ExecutionErrorPolicy{}
-        }
-        return graph.ExecutionErrorPolicy{
-            Recover: true,
-            Replacement: &graph.Command{
+package main
+
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func newCollector() *graph.ExecutionErrorCollector {
+    return graph.NewExecutionErrorCollector(
+        graph.WithExecutionErrorPolicy(func(
+            ctx context.Context,
+            cb *graph.NodeCallbackContext,
+            state graph.State,
+            err error,
+        ) graph.ExecutionErrorPolicy {
+            policy := graph.DefaultExecutionErrorPolicy(
+                ctx,
+                cb,
+                state,
+                err,
+            )
+            if !policy.Recover {
+                return policy
+            }
+            policy.Replacement = &graph.Command{
                 Update: graph.State{
                     "cache_status": "miss",
                 },
                 GoTo: "fallback_builder",
-            },
-        }
-    }),
-)
+            }
+            return policy
+        }),
+    )
+}
 ```
 
 ### 5. Complete graph setup example
@@ -399,7 +464,6 @@ package main
 
 import (
     "context"
-    "errors"
 
     "trpc.group/trpc-go/trpc-agent-go/agent"
     "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
@@ -439,17 +503,19 @@ func buildAgent() (agent.Agent, error) {
             state graph.State,
             err error,
         ) graph.ExecutionErrorPolicy {
-            var inventoryErr *inventoryError
-            if errors.As(err, &inventoryErr) &&
-                inventoryErr.Recoverable() {
-                return graph.ExecutionErrorPolicy{
-                    Recover: true,
-                    Replacement: graph.State{
-                        "inventory_status": "fallback",
-                    },
-                }
+            policy := graph.DefaultExecutionErrorPolicy(
+                ctx,
+                cb,
+                state,
+                err,
+            )
+            if !policy.Recover {
+                return policy
             }
-            return graph.ExecutionErrorPolicy{}
+            policy.Replacement = graph.State{
+                "inventory_status": "fallback",
+            }
+            return policy
         }),
     )
 

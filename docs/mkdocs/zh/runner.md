@@ -453,6 +453,11 @@ for e := range eventChan {
 
 这样业务代码就可以继续保持同一个规则：优先看最后一条事件里的业务错误详情，而不是为了拿错误信息去遍历整条事件流。
 
+如果 graph 侧用了 `graph.NewExecutionErrorCollector()`，那么这条
+`StateDelta` 里的 `execution_errors` 也可能来自默认 recoverable 约定，
+例如错误实现了 `Recoverable() bool`，或者通过
+`graph.MarkRecoverable(err)` 做了显式标记。
+
 示例：
 
 ```go
