@@ -303,3 +303,87 @@ func TestNewMCPTool_WithOutputSchema(t *testing.T) {
 	require.Equal(t, "Success flag", convertedSchema.Properties["success"].Description)
 	require.ElementsMatch(t, []string{"result", "success"}, convertedSchema.Required)
 }
+
+func TestConvertMCPSchema_RefAndDefs(t *testing.T) {
+	mcpSchema := map[string]any{
+		"type": "object",
+		"$defs": map[string]any{
+			"Address": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"street": map[string]any{"type": "string"},
+					"city":   map[string]any{"type": "string"},
+				},
+				"required": []any{"street", "city"},
+			},
+		},
+		"properties": map[string]any{
+			"home_address": map[string]any{
+				"$ref": "#/$defs/Address",
+			},
+			"work_address": map[string]any{
+				"$ref": "#/$defs/Address",
+			},
+			"name": map[string]any{
+				"type": "string",
+			},
+		},
+		"required": []any{"name"},
+	}
+
+	schema := convertMCPSchemaToSchema(mcpSchema)
+
+	require.Equal(t, "object", schema.Type)
+	require.ElementsMatch(t, []string{"name"}, schema.Required)
+
+	// Verify $defs are preserved.
+	require.NotNil(t, schema.Defs)
+	require.Contains(t, schema.Defs, "Address")
+	addrDef := schema.Defs["Address"]
+	require.Equal(t, "object", addrDef.Type)
+	require.Contains(t, addrDef.Properties, "street")
+	require.Contains(t, addrDef.Properties, "city")
+	require.ElementsMatch(t, []string{"street", "city"}, addrDef.Required)
+
+	// Verify $ref in properties are preserved.
+	require.NotNil(t, schema.Properties["home_address"])
+	require.Equal(t, "#/$defs/Address", schema.Properties["home_address"].Ref)
+	require.NotNil(t, schema.Properties["work_address"])
+	require.Equal(t, "#/$defs/Address", schema.Properties["work_address"].Ref)
+
+	// Verify non-ref property still works.
+	require.Equal(t, "string", schema.Properties["name"].Type)
+}
+
+func TestConvertMCPSchema_TopLevelRef(t *testing.T) {
+	mcpSchema := map[string]any{
+		"$ref": "#/$defs/MyType",
+	}
+
+	schema := convertMCPSchemaToSchema(mcpSchema)
+	require.Equal(t, "#/$defs/MyType", schema.Ref)
+}
+
+func TestConvertDefs_InvalidEntriesIgnored(t *testing.T) {
+	mcpSchema := map[string]any{
+		"type": "object",
+		"$defs": map[string]any{
+			"Address": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"street": map[string]any{"type": "string"},
+					"city":   map[string]any{"type": "string"},
+				},
+				"required": []any{"street", "city"},
+			},
+			"Invalid": "not an object",
+		},
+	}
+
+	schema := convertMCPSchemaToSchema(mcpSchema)
+
+	require.NotNil(t, schema.Defs)
+	require.Contains(t, schema.Defs, "Address")
+	require.NotContains(t, schema.Defs, "Invalid")
+	require.Equal(t, "object", schema.Defs["Address"].Type)
+}
