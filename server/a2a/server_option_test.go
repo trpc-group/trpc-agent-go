@@ -434,6 +434,18 @@ func TestWithOptions(t *testing.T) {
 			},
 		},
 		{
+			name:   "WithGraphEventObjectAllowlist",
+			option: WithGraphEventObjectAllowlist("graph.execution", "graph.node.*"),
+			validate: func(t *testing.T, opts *options) {
+				if len(opts.graphEventObjectAllowlist) != 2 {
+					t.Error(
+						"WithGraphEventObjectAllowlist() should set " +
+							"graphEventObjectAllowlist",
+					)
+				}
+			},
+		},
+		{
 			name: "WithErrorHandler",
 			option: WithErrorHandler(func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
 				return nil, nil
@@ -627,4 +639,26 @@ func TestWithStreamingEventType(t *testing.T) {
 	opts := &options{}
 	WithStreamingEventType(StreamingEventTypeMessage)(opts)
 	assert.Equal(t, StreamingEventTypeMessage, opts.streamingEventType)
+}
+
+func TestWithGraphEventObjectAllowlist_Normalize(t *testing.T) {
+	opts := &options{}
+	WithGraphEventObjectAllowlist(
+		" graph.execution ",
+		"graph.node.*",
+		"graph.node.*",
+		"",
+	)(opts)
+	assert.Equal(
+		t,
+		[]string{"graph.execution", "graph.node.*"},
+		opts.graphEventObjectAllowlist,
+	)
+}
+
+func TestWithGraphEventObjectAllowlist_Empty(t *testing.T) {
+	opts := &options{}
+	WithGraphEventObjectAllowlist()(opts)
+	assert.NotNil(t, opts.graphEventObjectAllowlist)
+	assert.Empty(t, opts.graphEventObjectAllowlist)
 }

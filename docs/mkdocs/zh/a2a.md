@@ -128,6 +128,36 @@ func main() {
 }
 ```
 
+#### Graph 内部事件透传
+
+从默认行为看，A2A Server 会过滤大部分 `graph.*` 运行时内部事件（例如
+`graph.node.start`、`graph.node.complete`、`graph.pregel.*`、`graph.checkpoint.*`），
+避免把执行细节全部暴露给下游。
+
+默认仍会保留终态 `graph.execution`（以及普通消息/错误事件），用于恢复最终状态与
+`state_delta`。
+
+如果你需要做链路调试或节点级 trace，可以扩展 graph 事件白名单：
+
+```go
+server, _ := a2aserver.New(
+	a2aserver.WithHost("localhost:8080"),
+	a2aserver.WithAgent(agent, true),
+	a2aserver.WithGraphEventObjectAllowlist(
+		"graph.execution", // 保留终态事件
+		"graph.node.*",    // 透传节点生命周期事件
+	),
+)
+```
+
+说明：
+
+- 不设置该选项时，默认白名单是 `["graph.execution"]`。
+- 如果显式调用 `WithGraphEventObjectAllowlist()` 且不传参数，
+  那么所有 `graph.*` 事件都会被过滤（包括 `graph.execution`）。
+
+建议仅在调试场景开启，生产环境默认关闭可以减少噪音与带宽开销。
+
 ### 在一个端口上暴露多个 A2A Agent（base path）
 
 有时你希望 **一个服务（一个端口）** 同时对外提供多个 A2A Agent。

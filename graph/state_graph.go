@@ -2839,6 +2839,10 @@ func extractSubgraphFinalState(
 			tmp[k] = v
 			continue
 		}
+		// Some transports normalize JSON string scalars into plain strings,
+		// which means the raw bytes are no longer valid JSON here. Preserve
+		// the raw string instead of silently dropping the key.
+		tmp[k] = string(b)
 		log.DebugfContext(
 			ctx,
 			"subgraph: failed to unmarshal final state key=%s: %v",
