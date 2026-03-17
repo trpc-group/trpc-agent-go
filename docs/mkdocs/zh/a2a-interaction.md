@@ -287,6 +287,7 @@ Server 在每个响应的 Metadata 中携带 `llm_response_id`（来自 LLM API 
 | ------------------ | ----------------- | --------------------------------------------- |
 | HTTP Header      | `X-User-ID`     | 用户标识（主要来源）                        |
 | HTTP Header      | `traceparent`   | W3C Trace Context（OpenTelemetry 自动注入） |
+| Message.Metadata | `interaction_spec_version` | Client 支持的交互规范版本号，用于能力协商 |
 | Message.Metadata | `invocation_id` | Client 端调用 ID，用于追踪关联              |
 | Message.Metadata | `user_id`       | 用户标识（补充）                            |
 
@@ -330,6 +331,7 @@ traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
         { "kind": "text", "text": "北京天气如何？" }
       ],
       "metadata": {
+        "interaction_spec_version": "0.1",
         "invocation_id": "inv-001",
         "user_id": "user_12345"
       }
@@ -436,6 +438,7 @@ Accept: text/event-stream
         { "kind": "text", "text": "北京天气如何？" }
       ],
       "metadata": {
+        "interaction_spec_version": "0.1",
         "invocation_id": "inv-002",
         "user_id": "user_12345"
       }
@@ -534,4 +537,3 @@ data: {"kind":"artifact-update","taskId":"task-003","contextId":"ctx-001","artif
 
 - **`invocation_id`**（请求 Metadata）：标识 Client 端的单次 Agent 调用，Server 端可用于日志关联
 - **`llm_response_id`**（响应 Metadata）：标识 LLM 的原始响应 ID，Client 端用于消息聚合
-
