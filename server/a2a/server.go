@@ -52,8 +52,12 @@ func New(opts ...Option) (*a2a.A2AServer, error) {
 		options.sessionService = inmemory.NewSessionService()
 	}
 
-	if options.agent == nil {
-		return nil, errors.New("agent is required")
+	if options.agent == nil && options.runner == nil {
+		return nil, errors.New("either agent (WithAgent) or runner (WithRunner) is required")
+	}
+
+	if options.agent == nil && options.agentCard == nil {
+		return nil, errors.New("agent card (WithAgentCard) is required when using runner without agent")
 	}
 
 	// Host is only required if we need to build an agent card
@@ -65,9 +69,12 @@ func New(opts ...Option) (*a2a.A2AServer, error) {
 	return buildA2AServer(options)
 }
 
-func buildAgentCard(options *options) a2a.AgentCard {
+func buildAgentCard(options *options) (a2a.AgentCard, error) {
 	if options.agentCard != nil {
-		return *options.agentCard
+		return *options.agentCard, nil
+	}
+	if options.agent == nil {
+		return a2a.AgentCard{}, errors.New("agent is required when agent card is not provided")
 	}
 	agent := options.agent
 	desc := agent.Info().Description
@@ -96,18 +103,51 @@ func buildAgentCard(options *options) a2a.AgentCard {
 		Skills:             skills,
 		DefaultInputModes:  []string{"text"},
 		DefaultOutputModes: []string{"text"},
-	}
+	}, nil
 }
 
-func buildProcessor(agent agent.Agent, sessionService session.Service, options *options) *messageProcessor {
-	agentName := agent.Info().Name
+func resolveRunnerIdentity(options *options, ag agent.Agent) (string, error) {
+	agentName := ""
+	if ag != nil {
+		agentName = ag.Info().Name
+	}
+	if options.agent != nil {
+		agentName = options.agent.Info().Name
+	}
+	if agentName == "" && options.agentCard != nil {
+		agentName = options.agentCard.Name
+	}
+	if agentName == "" {
+		return "", errors.New("agent name is required")
+	}
+
+	return agentName, nil
+}
+
+func buildRuntimeState(metadata map[string]any) map[string]any {
+	runtimeState := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		runtimeState[key] = value
+	}
+	return runtimeState
+}
+
+func buildProcessor(
+	agent agent.Agent,
+	sessionService session.Service,
+	options *options,
+) (*messageProcessor, error) {
+	agentName, err := resolveRunnerIdentity(options, agent)
+	if err != nil {
+		return nil, err
+	}
+
 	procRunner := options.runner
 	if procRunner == nil {
-		procRunner = runner.NewRunner(
-			agentName,
-			agent,
-			runner.WithSessionService(sessionService),
-		)
+		if agent == nil {
+			return nil, errors.New("agent is required when runner is not provided")
+		}
+		procRunner = runner.NewRunner(agentName, agent, runner.WithSessionService(sessionService))
 	}
 
 	// Use custom converters if provided, otherwise use defaults
@@ -134,20 +174,27 @@ func buildProcessor(agent agent.Agent, sessionService session.Service, options *
 		adkCompatibility:    options.adkCompatibility,
 		streamingEventType:  options.streamingEventType,
 		agentName:           agentName,
-	}
+		runOptions:          options.runOptions,
+	}, nil
 }
 
 func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	agent := options.agent
 	sessionService := options.sessionService
 
-	agentCard := buildAgentCard(options)
+	agentCard, err := buildAgentCard(options)
+	if err != nil {
+		return nil, err
+	}
 
 	var processor taskmanager.MessageProcessor
 	if options.processorBuilder != nil {
 		processor = options.processorBuilder(agent, sessionService)
 	} else {
-		processor = buildProcessor(agent, sessionService, options)
+		processor, err = buildProcessor(agent, sessionService, options)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build processor: %w", err)
+		}
 	}
 
 	if options.processorHook != nil {
@@ -156,7 +203,6 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 
 	// Create a task manager that wraps the session service
 	var taskManager taskmanager.TaskManager
-	var err error
 	if options.taskManagerBuilder != nil {
 		taskManager = options.taskManagerBuilder(processor)
 	} else {
@@ -246,6 +292,7 @@ type messageProcessor struct {
 	adkCompatibility    bool
 	streamingEventType  StreamingEventType
 	agentName           string
+	runOptions          []agent.RunOption
 }
 
 func isFinalStreamingEvent(evt *event.Event) bool {
@@ -381,9 +428,21 @@ func (m *messageProcessor) ProcessMessage(
 		)
 	}
 
-	runnerOpts := []agent.RunOption{
-		agent.WithRuntimeState(message.Metadata),
-	}
+	// Apply user-defined runOptions first, then merge A2A metadata into RuntimeState.
+	// This avoids conflicts when user also sets WithRuntimeState in runOptions,
+	// since WithRuntimeState uses overwrite semantics.
+	runnerOpts := make([]agent.RunOption, 0, len(m.runOptions)+1)
+	runnerOpts = append(runnerOpts, m.runOptions...)
+	runnerOpts = append(runnerOpts, func(opts *agent.RunOptions) {
+		a2aState := buildRuntimeState(message.Metadata)
+		if opts.RuntimeState == nil {
+			opts.RuntimeState = a2aState
+			return
+		}
+		for k, v := range a2aState {
+			opts.RuntimeState[k] = v
+		}
+	})
 
 	if options.Streaming {
 		return m.processStreamingMessage(ctx, userID, ctxID, &message, agentMsg, handler, runnerOpts)

@@ -132,6 +132,136 @@ func main() {
 }
 ```
 
+### Advanced Configuration
+
+#### Custom Runner (WithRunner)
+
+By default, A2A Server automatically creates a Runner for you. If you need finer control — such as injecting a MemoryService, customizing SessionService — use `WithRunner`:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	sessionmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
+)
+
+memoryService := inmemory.NewMemoryService()
+sessionService := sessionmemory.NewSessionService()
+
+r := runner.NewRunner(
+	agent.Info().Name,
+	agent,
+	runner.WithSessionService(sessionService),
+	runner.WithMemoryService(memoryService),
+)
+
+server, _ := a2a.New(
+	a2a.WithHost("localhost:8080"),
+	a2a.WithAgent(agent, true),
+	a2a.WithRunner(r),
+)
+```
+
+#### Server-Side Message Processing Hook (WithProcessMessageHook)
+
+`WithProcessMessageHook` allows you to insert custom logic before/after the A2A Server processes messages. It uses a middleware pattern, wrapping the underlying `MessageProcessor`:
+
+```go
+import "trpc.group/trpc-go/trpc-a2a-go/taskmanager"
+
+// Custom hook processor
+type hookProcessor struct {
+	next taskmanager.MessageProcessor
+}
+
+func (h *hookProcessor) ProcessMessage(
+	ctx context.Context,
+	message protocol.Message,
+	options taskmanager.ProcessOptions,
+	handler taskmanager.TaskHandler,
+) (*taskmanager.MessageProcessingResult, error) {
+	// Before processing: read custom metadata injected by the client
+	if traceID, ok := message.Metadata["trace_id"]; ok {
+		fmt.Printf("received trace_id: %v\n", traceID)
+	}
+	// Delegate to the next processor
+	return h.next.ProcessMessage(ctx, message, options, handler)
+}
+
+server, _ := a2a.New(
+	a2a.WithHost("localhost:8080"),
+	a2a.WithAgent(agent, true),
+	a2a.WithProcessMessageHook(
+		func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
+			return &hookProcessor{next: next}
+		},
+	),
+)
+```
+
+**Typical use cases**:
+- Read custom metadata injected by the client via `BuildMessageHook`
+- Add logging, monitoring, or auditing before/after message processing
+- Modify or validate inbound messages
+
+#### Client-Side Message Build Hook (WithBuildMessageHook)
+
+`WithBuildMessageHook` is a Hook on the A2AAgent (client) side that allows injecting custom data before sending messages to a remote A2A Server. It also uses a middleware pattern:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
+
+a2aAgent, _ := a2aagent.New(
+	a2aagent.WithAgentCardURL("http://remote-agent:8888"),
+	a2aagent.WithBuildMessageHook(
+		func(next a2aagent.ConvertToA2AMessageFunc) a2aagent.ConvertToA2AMessageFunc {
+			return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+				// Call the default converter
+				msg, err := next(isStream, agentName, inv)
+				if err != nil {
+					return nil, err
+				}
+				// Inject custom metadata
+				if msg.Metadata == nil {
+					msg.Metadata = make(map[string]any)
+				}
+				msg.Metadata["trace_id"] = "my-trace-123"
+				msg.Metadata["business_tag"] = "order-service"
+				return msg, nil
+			}
+		},
+	),
+)
+```
+
+**BuildMessageHook + ProcessMessageHook interaction**:
+
+```
+┌──────────────────┐                    ┌───────────────────┐
+│    A2AAgent      │   A2A protocol     │    A2A Server     │
+│                  │                    │                   │
+│ BuildMessageHook │── metadata ──────→ │ProcessMessageHook │
+│ (inject data)    │                    │ (read data)       │
+└──────────────────┘                    └───────────────────┘
+```
+
+The client injects custom data (such as trace_id, business tags) into the A2A message's `metadata` field via `BuildMessageHook`, and the server reads and processes this data via `ProcessMessageHook`.
+
+#### Append RunOptions (WithRunOptions)
+
+`WithRunOptions` allows appending additional `RunOption` to every Agent invocation in the A2A Server:
+
+```go
+server, _ := a2a.New(
+	a2a.WithHost("localhost:8080"),
+	a2a.WithAgent(agent, true),
+	a2a.WithRunOptions(
+		agent.WithRequestID("custom-req-id"),
+	),
+)
+```
+
 #### Graph internal event forwarding
 
 By default, A2A Server filters most internal `graph.*` runtime events (for
@@ -638,3 +768,37 @@ This document defines the extension specification of trpc-agent-go on top of the
 ```
 
 Through the combined use of A2A Server and A2AAgent, you can easily build distributed Agent systems.
+
+### A2A Server Configuration Reference
+
+| Option | Description |
+|--------|-------------|
+| `WithAgent(agent, streaming)` | Set the Agent and whether to enable streaming |
+| `WithHost(host)` | Set the service address, supports URLs with path |
+| `WithAgentCard(card)` | Custom AgentCard (overrides auto-generation) |
+| `WithRunner(runner)` | Custom Runner (inject Memory, Session, etc.) |
+| `WithProcessMessageHook(hook)` | Server-side message processing Hook (middleware pattern) |
+| `WithProcessorBuilder(builder)` | Fully custom message processor |
+| `WithTaskManagerBuilder(builder)` | Custom task manager |
+| `WithRunOptions(opts...)` | Append RunOptions to every invocation |
+| `WithStreamingEventType(type)` | Streaming output event type (Artifact/Message) |
+| `WithUserIDHeader(header)` | Custom UserID HTTP Header |
+| `WithADKCompatibility(enabled)` | ADK compatibility mode |
+| `WithErrorHandler(handler)` | Custom error handler |
+| `WithA2AToAgentConverter(conv)` | Custom A2A→Agent message converter |
+| `WithEventToA2AConverter(conv)` | Custom Event→A2A message converter |
+| `WithExtraA2AOptions(opts...)` | Pass-through options for underlying A2A Server |
+| `WithDebugLogging(enabled)` | Enable debug logging |
+
+### A2AAgent Configuration Reference
+
+| Option | Description |
+|--------|-------------|
+| `WithAgentCardURL(url)` | Remote A2A service address |
+| `WithBuildMessageHook(hook)` | Client-side message build Hook (middleware pattern) |
+| `WithTransferStateKey(keys...)` | Specify RuntimeState keys to transfer |
+| `WithEnableStreaming(enabled)` | Explicitly control streaming mode |
+| `WithStreamingChannelBufSize(size)` | Streaming buffer size |
+| `WithUserIDHeader(header)` | Custom UserID HTTP Header |
+| `WithCustomA2AConverter(conv)` | Custom Invocation→A2A message converter |
+| `WithCustomEventConverter(conv)` | Custom A2A Response→Event converter |

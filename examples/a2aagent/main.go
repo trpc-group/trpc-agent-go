@@ -26,11 +26,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
-	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	sessionmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -82,8 +83,8 @@ func startChat(localAgent agent.Agent, a2aAgent *a2aagent.A2AAgent) {
 	fmt.Printf("URL: %s\n", card.URL)
 	fmt.Printf("------------------------\n")
 
-	localSessionService := inmemory.NewSessionService()
-	remoteSessionService := inmemory.NewSessionService()
+	localSessionService := sessionmemory.NewSessionService()
+	remoteSessionService := sessionmemory.NewSessionService()
 
 	remoteRunner := runner.NewRunner("test", a2aAgent, runner.WithSessionService(remoteSessionService))
 	localRunner := runner.NewRunner("test", localAgent, runner.WithSessionService(localSessionService))
@@ -201,8 +202,17 @@ func (h *hookProcessor) ProcessMessage(
 	options taskmanager.ProcessOptions,
 	handler taskmanager.TaskHandler,
 ) (*taskmanager.MessageProcessingResult, error) {
-	fmt.Printf("A2A Server: received message:%+v\n", message.MessageID)
-	fmt.Printf("A2A Server: received state: %+v\n", message.Metadata)
+	fmt.Printf("A2A Server: received message: %+v\n", message.MessageID)
+	fmt.Printf("A2A Server: received metadata: %+v\n", message.Metadata)
+
+	// Print custom data injected by client-side BuildMessageHook
+	if traceID, ok := message.Metadata["trace_id"]; ok {
+		fmt.Printf("A2A Server: [BuildMessageHook] trace_id = %v\n", traceID)
+	}
+	if bizTag, ok := message.Metadata["business_tag"]; ok {
+		fmt.Printf("A2A Server: [BuildMessageHook] business_tag = %v\n", bizTag)
+	}
+
 	return h.next.ProcessMessage(ctx, message, options, handler)
 }
 
@@ -213,6 +223,13 @@ func runA2AServerByAgent(agentName, desc, host string) {
 			function.WithName("getCurrentTime"),
 			function.WithDescription("This is tool that can get current time")),
 	}))
+
+	// Create in-memory memory service for demonstration.
+	memoryService := inmemory.NewMemoryService()
+
+	// Create in-memory session service for the runner.
+	runnerSessionService := sessionmemory.NewSessionService()
+
 	server, err := a2a.New(
 		a2a.WithDebugLogging(false),
 		a2a.WithErrorHandler(func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
@@ -226,6 +243,25 @@ func runA2AServerByAgent(agentName, desc, host string) {
 		}),
 		a2a.WithHost(host),
 		a2a.WithAgent(remoteAgent, *streaming),
+
+		// Example: Use WithRunnerBuilder to customize Runner construction.
+		// This gives full control over runner creation, including:
+		// - Injecting MemoryService for conversation memory
+		// - Customizing SessionService
+		// - Using AgentFactory for hot-reloading
+		a2a.WithRunnerBuilder(func(ctx a2a.RunnerBuildContext) (runner.Runner, error) {
+			fmt.Printf("A2A Server: building runner with agent=%s\n",
+				ctx.Agent.Info().Name)
+			return runner.NewRunner(
+				ctx.Agent.Info().Name,
+				ctx.Agent,
+				runner.WithSessionService(runnerSessionService),
+				runner.WithMemoryService(memoryService),
+			), nil
+		}),
+
+		// Example: Use WithProcessMessageHook to inspect/modify incoming A2A messages.
+		// This can read custom metadata injected by the client's BuildMessageHook.
 		a2a.WithProcessMessageHook(
 			func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
 				return &hookProcessor{next: next}
@@ -267,6 +303,29 @@ func buildA2AAgent(httpURL string) *a2aagent.A2AAgent {
 
 		// optional: specify the state key that transferred to the remote agent by metadata
 		a2aagent.WithTransferStateKey(optionalStateKey),
+
+		// Example: Use WithBuildMessageHook to inject custom metadata into A2A messages.
+		// The hook wraps the default message converter as middleware, allowing you to
+		// modify the message before/after conversion, or completely replace the conversion logic.
+		// The custom metadata will be received by the server's ProcessMessageHook.
+		a2aagent.WithBuildMessageHook(func(next a2aagent.ConvertToA2AMessageFunc) a2aagent.ConvertToA2AMessageFunc {
+			return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+				// Call the default converter (including transferStateKey processing)
+				msg, err := next(isStream, agentName, inv)
+				if err != nil {
+					return nil, err
+				}
+				// Inject custom metadata that will be visible in the server's ProcessMessageHook
+				if msg.Metadata == nil {
+					msg.Metadata = make(map[string]any)
+				}
+				msg.Metadata["trace_id"] = fmt.Sprintf("trace-%d", time.Now().UnixNano())
+				msg.Metadata["business_tag"] = "example-demo"
+				fmt.Printf("A2A Client: [BuildMessageHook] injected trace_id=%s, business_tag=%s\n",
+					msg.Metadata["trace_id"], msg.Metadata["business_tag"])
+				return msg, nil
+			}
+		}),
 	)
 	if err != nil {
 		log.Fatalf("Failed to create a2a agent: %v", err)

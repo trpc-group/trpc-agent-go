@@ -95,6 +95,7 @@ type options struct {
 	processorBuilder          ProcessorBuilder
 	processorHook             ProcessMessageHook
 	taskManagerBuilder        TaskManagerBuilder
+	runOptions                []agent.RunOption
 	a2aToAgentConverter       A2AMessageToAgentMessage
 	eventToA2AConverter       EventToA2AMessage
 	host                      string
@@ -252,6 +253,13 @@ func WithExtraA2AOptions(opts ...a2a.Option) Option {
 func WithTaskManagerBuilder(builder TaskManagerBuilder) Option {
 	return func(opts *options) {
 		opts.taskManagerBuilder = builder
+	}
+}
+
+// WithRunOptions appends additional run options for every agent invocation.
+func WithRunOptions(runOpts ...agent.RunOption) Option {
+	return func(opts *options) {
+		opts.runOptions = append(opts.runOptions, runOpts...)
 	}
 }
 

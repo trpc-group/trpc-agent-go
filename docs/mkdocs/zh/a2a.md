@@ -128,6 +128,136 @@ func main() {
 }
 ```
 
+### 高级配置
+
+#### 自定义 Runner（WithRunner）
+
+默认情况下，A2A Server 会自动为你创建一个 Runner。如果你需要更精细的控制——例如注入 MemoryService、自定义 SessionService——可以使用 `WithRunner`：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	sessionmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
+)
+
+memoryService := inmemory.NewMemoryService()
+sessionService := sessionmemory.NewSessionService()
+
+r := runner.NewRunner(
+	agent.Info().Name,
+	agent,
+	runner.WithSessionService(sessionService),
+	runner.WithMemoryService(memoryService),
+)
+
+server, _ := a2a.New(
+	a2a.WithHost("localhost:8080"),
+	a2a.WithAgent(agent, true),
+	a2a.WithRunner(r),
+)
+```
+
+#### 服务端消息处理 Hook（WithProcessMessageHook）
+
+`WithProcessMessageHook` 允许你在 A2A Server 处理消息之前/之后插入自定义逻辑。它采用中间件模式，包装底层的 `MessageProcessor`：
+
+```go
+import "trpc.group/trpc-go/trpc-a2a-go/taskmanager"
+
+// 自定义 Hook 处理器
+type hookProcessor struct {
+	next taskmanager.MessageProcessor
+}
+
+func (h *hookProcessor) ProcessMessage(
+	ctx context.Context,
+	message protocol.Message,
+	options taskmanager.ProcessOptions,
+	handler taskmanager.TaskHandler,
+) (*taskmanager.MessageProcessingResult, error) {
+	// 在处理之前：读取客户端注入的自定义 metadata
+	if traceID, ok := message.Metadata["trace_id"]; ok {
+		fmt.Printf("received trace_id: %v\n", traceID)
+	}
+	// 委托给下一个处理器
+	return h.next.ProcessMessage(ctx, message, options, handler)
+}
+
+server, _ := a2a.New(
+	a2a.WithHost("localhost:8080"),
+	a2a.WithAgent(agent, true),
+	a2a.WithProcessMessageHook(
+		func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor {
+			return &hookProcessor{next: next}
+		},
+	),
+)
+```
+
+**典型使用场景**：
+- 读取客户端通过 `BuildMessageHook` 注入的自定义 metadata
+- 在消息处理前后添加日志、监控、审计
+- 修改或验证入站消息
+
+#### 客户端消息构建 Hook（WithBuildMessageHook）
+
+`WithBuildMessageHook` 是 A2AAgent（客户端）侧的 Hook，允许在将消息发送到远程 A2A Server 之前注入自定义数据。它同样采用中间件模式：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
+
+a2aAgent, _ := a2aagent.New(
+	a2aagent.WithAgentCardURL("http://remote-agent:8888"),
+	a2aagent.WithBuildMessageHook(
+		func(next a2aagent.ConvertToA2AMessageFunc) a2aagent.ConvertToA2AMessageFunc {
+			return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+				// 调用默认转换器
+				msg, err := next(isStream, agentName, inv)
+				if err != nil {
+					return nil, err
+				}
+				// 注入自定义 metadata
+				if msg.Metadata == nil {
+					msg.Metadata = make(map[string]any)
+				}
+				msg.Metadata["trace_id"] = "my-trace-123"
+				msg.Metadata["business_tag"] = "order-service"
+				return msg, nil
+			}
+		},
+	),
+)
+```
+
+**BuildMessageHook + ProcessMessageHook 联动**：
+
+```
+┌──────────────────┐                    ┌───────────────────┐
+│    A2AAgent      │   A2A protocol     │    A2A Server     │
+│                  │                    │                   │
+│ BuildMessageHook │── metadata ──────→ │ProcessMessageHook │
+│ (inject data)    │                    │ (read data)       │
+└──────────────────┘                    └───────────────────┘
+```
+
+客户端通过 `BuildMessageHook` 将自定义数据（如 trace_id、业务标签）注入到 A2A 消息的 `metadata` 字段中，服务端通过 `ProcessMessageHook` 读取并处理这些数据。
+
+#### 追加 RunOption（WithRunOptions）
+
+`WithRunOptions` 允许为 A2A Server 的每次 Agent 调用追加额外的 `RunOption`：
+
+```go
+server, _ := a2a.New(
+	a2a.WithHost("localhost:8080"),
+	a2a.WithAgent(agent, true),
+	a2a.WithRunOptions(
+		agent.WithRequestID("custom-req-id"),
+	),
+)
+```
+
 #### Graph 内部事件透传
 
 从默认行为看，A2A Server 会过滤大部分 `graph.*` 运行时内部事件（例如
@@ -631,3 +761,37 @@ a2aAgent, _ := a2aagent.New(
 ```
 
 通过 A2A Server 和 A2AAgent 的配合使用，可以比较方便的构建的远程的 Agent 系统。
+
+### A2A Server 完整配置项一览
+
+| 配置项 | 说明 |
+|--------|------|
+| `WithAgent(agent, streaming)` | 设置 Agent 和是否启用流式 |
+| `WithHost(host)` | 设置服务地址，支持带 path 的 URL |
+| `WithAgentCard(card)` | 自定义 AgentCard（覆盖自动生成） |
+| `WithRunner(runner)` | 自定义 Runner（注入 Memory、Session 等） |
+| `WithProcessMessageHook(hook)` | 服务端消息处理 Hook（中间件模式） |
+| `WithProcessorBuilder(builder)` | 完全自定义消息处理器 |
+| `WithTaskManagerBuilder(builder)` | 自定义任务管理器 |
+| `WithRunOptions(opts...)` | 为每次调用追加 RunOption |
+| `WithStreamingEventType(type)` | 流式输出事件类型（Artifact/Message） |
+| `WithUserIDHeader(header)` | 自定义 UserID HTTP Header |
+| `WithADKCompatibility(enabled)` | ADK 兼容模式 |
+| `WithErrorHandler(handler)` | 自定义错误处理 |
+| `WithA2AToAgentConverter(conv)` | 自定义 A2A→Agent 消息转换 |
+| `WithEventToA2AConverter(conv)` | 自定义 Event→A2A 消息转换 |
+| `WithExtraA2AOptions(opts...)` | 透传底层 A2A Server 选项 |
+| `WithDebugLogging(enabled)` | 开启调试日志 |
+
+### A2AAgent 完整配置项一览
+
+| 配置项 | 说明 |
+|--------|------|
+| `WithAgentCardURL(url)` | 远程 A2A 服务地址 |
+| `WithBuildMessageHook(hook)` | 客户端消息构建 Hook（中间件模式） |
+| `WithTransferStateKey(keys...)` | 指定要传递的 RuntimeState 键 |
+| `WithEnableStreaming(enabled)` | 显式控制流式模式 |
+| `WithStreamingChannelBufSize(size)` | 流式缓冲区大小 |
+| `WithUserIDHeader(header)` | 自定义 UserID HTTP Header |
+| `WithCustomA2AConverter(conv)` | 自定义 Invocation→A2A 消息转换 |
+| `WithCustomEventConverter(conv)` | 自定义 A2A Response→Event 转换 |
