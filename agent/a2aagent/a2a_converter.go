@@ -406,7 +406,7 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 	result.taskState = taskStateFromMetadata(msg.Metadata)
 	result.responseError = ia2a.ResponseErrorFromMetadata(
 		msg.Metadata,
-		"",
+		result.textContent,
 		model.ErrorTypeFlowError,
 	)
 	return result

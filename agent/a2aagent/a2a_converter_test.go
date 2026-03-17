@@ -1882,6 +1882,29 @@ func TestParseA2AMessageParts_CodeExecution(t *testing.T) {
 	}
 }
 
+func TestParseA2AMessageParts_ResponseErrorFallsBackToText(t *testing.T) {
+	code := "A2A_500"
+	msg := &protocol.Message{
+		Parts: []protocol.Part{
+			&protocol.TextPart{Text: "task failed from content"},
+		},
+		Metadata: map[string]any{
+			ia2a.MessageMetadataErrorCodeKey: code,
+		},
+	}
+
+	result := parseA2AMessageParts(msg)
+	if result.responseError == nil {
+		t.Fatal("expected responseError, got nil")
+	}
+	if result.responseError.Message != "task failed from content" {
+		t.Fatalf(
+			"expected fallback message from text content, got %q",
+			result.responseError.Message,
+		)
+	}
+}
+
 // TestConvertToEvents_WithHistory tests conversion of Task with history containing code execution
 func TestConvertToEvents_WithHistory(t *testing.T) {
 	converter := &defaultA2AEventConverter{}

@@ -218,8 +218,19 @@ This works for both:
 - normal child completion (`graph.execution`)
 - fatal child fallback state emitted before the child stops
 
-The parent side now receives that child fallback state through
-`SubgraphResult.RawStateDelta`, so the same mapper works for both cases.
+For custom mappers, the child result now keeps those two cases separate:
+
+- `SubgraphResult.FinalState` and `SubgraphResult.RawStateDelta` are only for
+  the normal terminal `graph.execution` snapshot
+- `SubgraphResult.FallbackState` and `SubgraphResult.FallbackStateDelta` are
+  only for fatal child fallback state
+
+If you intentionally want one code path for both, use:
+
+- `SubgraphResult.EffectiveState()`
+- `SubgraphResult.EffectiveStateDelta()`
+
+`ExecutionErrorCollector.SubgraphOutputMapper()` already does this for you.
 
 ## A2A structured errors
 

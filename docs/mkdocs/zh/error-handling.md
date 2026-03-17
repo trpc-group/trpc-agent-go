@@ -214,8 +214,19 @@ sg.AddAgentNode(
 - 子图正常完成，产生 `graph.execution`
 - 子图 fatal 终止，但在终止前先发出了 fallback state
 
-现在父图侧能通过 `SubgraphResult.RawStateDelta` 收到这份 child fallback
-state，所以同一个 mapper 就能同时覆盖这两种情况。
+对自定义 mapper 来说，这两类结果现在会明确分开：
+
+- `SubgraphResult.FinalState` 和 `SubgraphResult.RawStateDelta` 只表示正常
+  结束时的 `graph.execution` 快照
+- `SubgraphResult.FallbackState` 和 `SubgraphResult.FallbackStateDelta`
+  只表示 fatal child 的 fallback state
+
+如果你就是想用一套逻辑同时处理两种情况，可以使用：
+
+- `SubgraphResult.EffectiveState()`
+- `SubgraphResult.EffectiveStateDelta()`
+
+`ExecutionErrorCollector.SubgraphOutputMapper()` 已经内置了这层处理。
 
 ## A2A 结构化错误
 

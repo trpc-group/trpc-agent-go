@@ -2943,6 +2943,79 @@ func TestMessageProcessor_ProcessBatchStreamingEvents_StructuredTaskError(
 	}
 }
 
+func TestProcessAgentStreamingEvents_StopAgentError(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	code := "A2A_499"
+	events := make(chan *event.Event, 1)
+	events <- &event.Event{
+		Response: &model.Response{
+			ID: "resp-1",
+			Error: &model.ResponseError{
+				Type:    agent.ErrorTypeStopAgentError,
+				Message: "task canceled",
+				Code:    &code,
+			},
+		},
+	}
+	close(events)
+
+	subscriber := &mockTaskSubscriber{
+		channel: make(chan protocol.StreamingMessageEvent, 4),
+	}
+	processor := createTestMessageProcessor()
+	processor.structuredTaskErrors = true
+
+	processor.processAgentStreamingEvents(
+		ctx,
+		"task-1",
+		"user",
+		"session",
+		msg,
+		events,
+		subscriber,
+		&mockTaskHandler{},
+	)
+
+	var results []protocol.StreamingMessageResult
+	for {
+		select {
+		case streamEvent, ok := <-subscriber.channel:
+			if !ok {
+				goto done
+			}
+			if streamEvent.Result != nil {
+				results = append(results, streamEvent.Result)
+			}
+		default:
+			goto done
+		}
+	}
+
+done:
+	if !assert.Len(t, results, 2) {
+		return
+	}
+
+	submitted, ok := results[0].(*protocol.TaskStatusUpdateEvent)
+	if !assert.True(t, ok) {
+		return
+	}
+	assert.Equal(t, protocol.TaskStateSubmitted, submitted.Status.State)
+
+	status, ok := results[1].(*protocol.TaskStatusUpdateEvent)
+	if !assert.True(t, ok) {
+		return
+	}
+	assert.Equal(t, protocol.TaskStateCanceled, status.Status.State)
+	assert.Equal(
+		t,
+		code,
+		status.Metadata[ia2a.MessageMetadataErrorCodeKey],
+	)
+}
+
 // TestMessageProcessor_ProcessMessage_NoPartsCollected tests handling when no parts are collected
 func TestMessageProcessor_ProcessMessage_NoPartsCollected(t *testing.T) {
 	ctxID := "ctx"

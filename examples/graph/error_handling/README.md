@@ -61,7 +61,9 @@ graph.WithSubgraphOutputMapper(
 ```
 
 That mapper reads the child fallback state from `SubgraphResult.RawStateDelta`
-and merges the child's collected `execution_errors` into the parent state.
+through the collector helper, which now checks
+`SubgraphResult.FallbackStateDelta` automatically, and merges the child's
+collected `execution_errors` into the parent state.
 
 The parent can then continue, make a business decision, and expose the same
 error collection on its own final `runner.completion`.

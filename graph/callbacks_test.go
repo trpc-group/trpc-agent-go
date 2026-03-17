@@ -242,6 +242,43 @@ func TestNodeCallbacks_RunAfterNode_WithCustomResult(t *testing.T) {
 	// All callbacks should be called, but the final result should be from after2
 }
 
+func TestNodeCallbacks_RunAfterNode_RecoveryClearsNodeError(t *testing.T) {
+	callbacks := NewNodeCallbacks()
+	callbacks.RegisterAfterNode(func(
+		ctx context.Context,
+		callbackCtx *NodeCallbackContext,
+		state State,
+		result any,
+		nodeErr error,
+	) (any, error) {
+		require.Error(t, nodeErr)
+		return State{"recovered": true}, nil
+	})
+	callbacks.RegisterAfterNode(func(
+		ctx context.Context,
+		callbackCtx *NodeCallbackContext,
+		state State,
+		result any,
+		nodeErr error,
+	) (any, error) {
+		require.NoError(t, nodeErr)
+		return result, nil
+	})
+
+	result, err := callbacks.RunAfterNode(
+		context.Background(),
+		&NodeCallbackContext{NodeID: "test-node"},
+		State{},
+		nil,
+		errors.New("boom"),
+	)
+	require.NoError(t, err)
+
+	update, ok := result.(State)
+	require.True(t, ok)
+	require.Equal(t, true, update["recovered"])
+}
+
 func TestNodeCallbacks_RunOnNodeError(t *testing.T) {
 	callbacks := NewNodeCallbacks()
 

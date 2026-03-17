@@ -1760,6 +1760,88 @@ func TestA2AAgentRunStreaming_SkipsSyntheticFinalOnTaskError(
 	require.True(t, events[0].Response.Done)
 }
 
+func TestA2AAgent_sendErrorEvent_UsesRunErrorType(t *testing.T) {
+	a := &A2AAgent{name: "remote-agent"}
+	eventCh := make(chan *event.Event, 1)
+	invocation := &agent.Invocation{InvocationID: "inv-test"}
+
+	a.sendErrorEvent(
+		context.Background(),
+		eventCh,
+		invocation,
+		fmt.Errorf("boom"),
+	)
+
+	evt := <-eventCh
+	require.NotNil(t, evt)
+	require.NotNil(t, evt.Response)
+	require.NotNil(t, evt.Response.Error)
+	require.Equal(t, model.ObjectTypeError, evt.Response.Object)
+	require.Equal(t, model.ErrorTypeRunError, evt.Response.Error.Type)
+	require.Equal(t, "boom", evt.Response.Error.Message)
+}
+
+func TestA2AAgent_aggregateEventContent_IgnoresErrorResponses(t *testing.T) {
+	a := &A2AAgent{name: "remote-agent"}
+	builder := &strings.Builder{}
+
+	responseID, hadErr := a.aggregateEventContent(
+		context.Background(),
+		&agent.Invocation{InvocationID: "inv-test"},
+		make(chan *event.Event, 1),
+		&event.Event{
+			Response: &model.Response{
+				Error: &model.ResponseError{Message: "boom"},
+			},
+		},
+		"resp-1",
+		builder,
+	)
+
+	require.Equal(t, "resp-1", responseID)
+	require.False(t, hadErr)
+	require.Equal(t, "", builder.String())
+}
+
+func TestA2AAgent_aggregateEventContent_HandlerError(t *testing.T) {
+	a := &A2AAgent{
+		name: "remote-agent",
+		streamingRespHandler: func(
+			resp *model.Response,
+		) (string, error) {
+			return "", fmt.Errorf("handler failed")
+		},
+	}
+	eventCh := make(chan *event.Event, 1)
+	builder := &strings.Builder{}
+
+	responseID, hadErr := a.aggregateEventContent(
+		context.Background(),
+		&agent.Invocation{InvocationID: "inv-test"},
+		eventCh,
+		&event.Event{
+			Response: &model.Response{
+				ID: "resp-2",
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "ignored"},
+				}},
+			},
+		},
+		"",
+		builder,
+	)
+
+	require.Equal(t, "resp-2", responseID)
+	require.True(t, hadErr)
+	require.Equal(t, "", builder.String())
+
+	evt := <-eventCh
+	require.NotNil(t, evt)
+	require.NotNil(t, evt.Response)
+	require.NotNil(t, evt.Response.Error)
+	require.Equal(t, model.ErrorTypeRunError, evt.Response.Error.Type)
+}
+
 // TestValidateA2ARequestOptions tests validation logic for A2A request options
 func TestValidateA2ARequestOptions(t *testing.T) {
 	tests := []struct {

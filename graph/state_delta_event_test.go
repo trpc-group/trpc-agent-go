@@ -51,3 +51,43 @@ func TestEmitCustomStateDelta_NoExecutionContextIsNoop(t *testing.T) {
 	)
 	require.NoError(t, err)
 }
+
+func TestEmitCustomStateDelta_EmptyDeltaIsNoop(t *testing.T) {
+	eventCh := make(chan *event.Event, 1)
+	state := State{
+		StateKeyExecContext: &ExecutionContext{
+			InvocationID: "inv",
+			EventChan:    eventCh,
+		},
+	}
+
+	err := EmitCustomStateDelta(context.Background(), state, nil)
+	require.NoError(t, err)
+	require.Len(t, eventCh, 0)
+}
+
+func TestEmitCustomStateDelta_MarshalError(t *testing.T) {
+	err := EmitCustomStateDelta(
+		context.Background(),
+		State{
+			StateKeyExecContext: &ExecutionContext{
+				InvocationID: "inv",
+				EventChan:    make(chan *event.Event, 1),
+			},
+		},
+		State{"bad": func() {}},
+	)
+	require.Error(t, err)
+}
+
+func TestMergeStateDeltaMaps_ClonesBytes(t *testing.T) {
+	src := map[string][]byte{
+		"result": []byte(`{"ok":true}`),
+	}
+
+	merged := mergeStateDeltaMaps(nil, src)
+	require.NotNil(t, merged["result"])
+
+	src["result"][0] = 'x'
+	require.Equal(t, byte('{'), merged["result"][0])
+}

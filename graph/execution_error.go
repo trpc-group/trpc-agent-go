@@ -194,10 +194,18 @@ func (c *ExecutionErrorCollector) SubgraphStateUpdate(
 	result SubgraphResult,
 ) State {
 	executionErrors, err := ExecutionErrorsFromStateDelta(
-		result.RawStateDelta,
+		result.EffectiveStateDelta(),
 		c.stateKey,
 	)
 	if err != nil || len(executionErrors) == 0 {
+		if err != nil {
+			log.Warnf(
+				"graph: failed to decode execution errors from subgraph "+
+					"state key %q: %v",
+				c.stateKey,
+				err,
+			)
+		}
 		return nil
 	}
 	return State{
@@ -223,7 +231,7 @@ func NewExecutionError(
 	record := ExecutionError{
 		Severity:  severity,
 		Timestamp: time.Now(),
-		Error:     cloneExecutionResponseError(respErr),
+		Error:     cloneResponseError(respErr),
 	}
 	if callbackCtx == nil {
 		return record
@@ -300,7 +308,7 @@ func (c *ExecutionErrorCollector) afterNode(
 	}
 	record := NewExecutionError(callbackCtx, nodeErr, severity)
 	if policy.ResponseError != nil {
-		record.Error = cloneExecutionResponseError(policy.ResponseError)
+		record.Error = cloneResponseError(policy.ResponseError)
 	}
 
 	update := State{
@@ -375,14 +383,14 @@ func cloneExecutionErrors(
 	cloned := make([]ExecutionError, len(executionErrors))
 	for i := range executionErrors {
 		cloned[i] = executionErrors[i]
-		cloned[i].Error = cloneExecutionResponseError(
+		cloned[i].Error = cloneResponseError(
 			executionErrors[i].Error,
 		)
 	}
 	return cloned
 }
 
-func cloneExecutionResponseError(
+func cloneResponseError(
 	err *model.ResponseError,
 ) *model.ResponseError {
 	if err == nil {

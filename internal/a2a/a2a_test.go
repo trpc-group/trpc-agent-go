@@ -141,3 +141,14 @@ func TestResponseErrorMetadataHelpers(t *testing.T) {
 		t.Fatalf("Param = %v, want %q", got.Param, param)
 	}
 }
+
+func TestResponseErrorFromMetadata_IgnoresPlainTextFallback(t *testing.T) {
+	got := ResponseErrorFromMetadata(
+		nil,
+		"plain response",
+		model.ErrorTypeFlowError,
+	)
+	if got != nil {
+		t.Fatalf("expected nil response error, got %+v", got)
+	}
+}

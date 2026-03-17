@@ -471,11 +471,13 @@ func TestProcessAgentEventStream_UsesFallbackStateOnFatalError(
 		"",
 	)
 	require.NoError(t, err)
-	require.Len(t, res.rawDelta, 1)
-	require.NotNil(t, res.finalState)
+	require.Nil(t, res.rawDelta)
+	require.Nil(t, res.finalState)
+	require.Len(t, res.fallbackRawDelta, 1)
+	require.NotNil(t, res.fallbackState)
 
 	got, err := ExecutionErrorsFromStateDelta(
-		res.rawDelta,
+		res.fallbackRawDelta,
 		StateKeyExecutionErrors,
 	)
 	require.NoError(t, err)
@@ -484,6 +486,38 @@ func TestProcessAgentEventStream_UsesFallbackStateOnFatalError(
 		t,
 		ExecutionErrorSeverityFatal,
 		got[0].Severity,
+	)
+}
+
+func TestSubgraphResult_EffectiveStatePrefersFinalState(t *testing.T) {
+	result := SubgraphResult{
+		FinalState: State{"final": true},
+		RawStateDelta: map[string][]byte{
+			"final": []byte(`true`),
+		},
+		FallbackState: State{"fallback": true},
+		FallbackStateDelta: map[string][]byte{
+			"fallback": []byte(`true`),
+		},
+	}
+
+	require.Equal(t, true, result.EffectiveState()["final"])
+	require.Equal(t, "true", string(result.EffectiveStateDelta()["final"]))
+}
+
+func TestSubgraphResult_EffectiveStateFallsBack(t *testing.T) {
+	result := SubgraphResult{
+		FallbackState: State{"fallback": true},
+		FallbackStateDelta: map[string][]byte{
+			"fallback": []byte(`true`),
+		},
+	}
+
+	require.Equal(t, true, result.EffectiveState()["fallback"])
+	require.Equal(
+		t,
+		"true",
+		string(result.EffectiveStateDelta()["fallback"]),
 	)
 }
 

@@ -1319,6 +1319,10 @@ Use cases:
   GraphAgent, `SubgraphResult.FinalState` contains the child's final state
   snapshot and can be mapped into parent keys. Runnable example:
   `examples/graph/agent_state_handoff`.
+- **Handle fatal child fallback state separately**: if the child stops before
+  `graph.execution`, read `SubgraphResult.FallbackState` /
+  `SubgraphResult.FallbackStateDelta`, or use
+  `SubgraphResult.EffectiveState()` when you want one code path.
 - **Store the child LLM's final text under your own keys**: `SubgraphResult`
   always includes `LastResponse`, so output mappers work for both GraphAgent and
   non-graph agents.

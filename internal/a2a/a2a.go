@@ -224,10 +224,6 @@ func ResponseErrorFromMetadata(
 		metadata,
 		MessageMetadataErrorMessageKey,
 	)
-	if message == "" {
-		message = fallbackMessage
-	}
-
 	hasStructuredError := objectType == model.ObjectTypeError ||
 		errorType != "" ||
 		message != "" ||
@@ -237,6 +233,9 @@ func ResponseErrorFromMetadata(
 		return nil
 	}
 
+	if message == "" {
+		message = fallbackMessage
+	}
 	if errorType == "" {
 		errorType = fallbackType
 	}

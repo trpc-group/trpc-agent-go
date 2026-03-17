@@ -55,7 +55,8 @@ type BeforeNodeCallback func(
 //
 //   - customResult: if not nil, it replaces the node result. When nodeErr is
 //     non-nil, returning a non-nil customResult with a nil error recovers the
-//     node and allows graph execution to continue.
+//     node and allows graph execution to continue. After a callback recovers
+//     the node, later after-node callbacks receive nodeErr == nil.
 //   - error: if not nil, it replaces the node error and stops graph execution.
 type AfterNodeCallback func(
 	ctx context.Context,
@@ -158,17 +159,25 @@ func (c *NodeCallbacks) RunAfterNode(
 	nodeErr error,
 ) (any, error) {
 	currentResult := result
+	currentErr := nodeErr
 	for _, cb := range c.AfterNode {
 		if cb == nil {
 			// Skip nil callback entries defensively.
 			continue
 		}
-		customResult, err := cb(ctx, callbackCtx, state, currentResult, nodeErr)
+		customResult, err := cb(
+			ctx,
+			callbackCtx,
+			state,
+			currentResult,
+			currentErr,
+		)
 		if err != nil {
 			return nil, err
 		}
 		if customResult != nil {
 			currentResult = customResult
+			currentErr = nil
 		}
 	}
 	return currentResult, nil
