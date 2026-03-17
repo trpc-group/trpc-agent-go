@@ -37,6 +37,15 @@ tRPC-Agent-Go 现在为这三条链路提供了一条统一路径。
 如果你过去的设计是“把节点错误沉淀到 graph state，再在运行结束后统一读取”，那么
 `graph.ExecutionErrorCollector` 就是这个模式的框架标准实现。
 
+## 这页建议怎么读
+
+如果你第一次接触这套设计，建议按下面顺序看：
+
+1. 先看“业务错误码如何管理”。
+2. 再看“推荐的 graph 用法”，理解框架接入方式。
+3. 再看“运行结束后怎么拿错误”，理解 Runner 消费模式。
+4. subgraph 和 A2A 两节按需阅读，只在系统跨这些边界时看。
+
 ## 框架职责和业务职责
 
 框架负责的是传递、归一化、收集这几件机制层的事情。
@@ -68,20 +77,49 @@ tRPC-Agent-Go 现在为这三条链路提供了一条统一路径。
 
 框架确实支持错误码管理，但支持方式是“承载和归一化机制”，而不是“内建一套中心化错误码表”。
 
+一句话结论：
+
+- 框架不接管你的业务错误码目录
+- `model.ResponseError.Code` 的最终形态是 `string`
+- 已有的整型错误码仍然支持，框架会自动转成十进制字符串
+- 对新的业务错误，默认推荐稳定的字符串错误码
+
+### 为什么 `Code` 是 string
+
+`model.ResponseError.Code` 在模型里定义的就是 `*string`。
+
+这是有意为之：
+
+- 事件流和 A2A metadata 用字符串做跨边界传输更稳定
+- 字符串更适合表达带命名空间的业务码，例如
+  `ORDER_INVENTORY_SOFT_TIMEOUT`
+- 跨语言、跨服务协作时，不需要再约定整型区间或枚举归属
+
+如果你们组织里已经有成熟的整型错误码体系，不需要为了接框架强行改掉。框架会在传输边界把它们
+转成字符串。
+
+### 框架识别哪些错误约定
+
 默认情况下，`graph.NewExecutionError(...)` 会调用
 `model.ResponseErrorFromError(err, model.ErrorTypeFlowError)`。
-这个 helper 已经会自动从业务错误里提取结构化字段。它支持这些方法：
 
-- `ErrorType() string`
-- `ErrorCode() string`
-- `Code() string`
-- `Code() int`
-- `Code() int32`
-- `Code() int64`
+Go 不支持方法重载。下面这张表表达的是“框架会识别不同错误类型上可能采用的不同约定”，不是说
+同一个具体类型要同时实现这些同名方法。
+
+| 错误类型可选实现的方法 | 框架行为 |
+| --- | --- |
+| `ErrorType() string` | 填充 `ResponseError.Type` |
+| `ErrorCode() string` | 直接填充 `ResponseError.Code` |
+| `Code() string` | 直接填充 `ResponseError.Code` |
+| `Code() int` | 转成十进制字符串后填充 |
+| `Code() int32` | 转成十进制字符串后填充 |
+| `Code() int64` | 转成十进制字符串后填充 |
+
+### 新业务默认推荐模式
 
 推荐模式是：
 
-1. 业务侧用一个小的领域包定义稳定错误码常量。
+1. 业务侧用一个小的领域包定义稳定的字符串错误码常量。
 2. 节点、工具、Agent 返回带类型的业务错误。
 3. 让 collector 自动把这些错误码记录下来。
 4. `WithExecutionErrorPolicy(...)` 主要用来决定 recover，以及做必要的归一化。
@@ -146,6 +184,25 @@ func NewInventoryUnavailable(itemID string) error {
     }
 }
 ```
+
+如果你们已经有遗留的整型错误码体系，也完全可以兼容：
+
+```go
+type legacyRPCError struct {
+    code    int
+    message string
+}
+
+func (e *legacyRPCError) Error() string {
+    return e.message
+}
+
+func (e *legacyRPCError) Code() int {
+    return e.code
+}
+```
+
+这类错误最终会以类似 `"40401"` 这样的字符串形式写入 `ResponseError.Code`。
 
 示例：collector policy 使用业务错误目录
 

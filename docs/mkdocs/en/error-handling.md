@@ -39,6 +39,16 @@ If your older design stored node errors in graph state and then read them back
 after completion, `graph.ExecutionErrorCollector` is the standard framework
 version of that pattern.
 
+## How to read this page
+
+Use this order if you are new to the design:
+
+1. Read "Managing business error codes" first.
+2. Read "Recommended graph usage" for framework integration.
+3. Read "Reading errors after the run" for the Runner consumption pattern.
+4. Read the subgraph and A2A sections only if your system crosses those
+   boundaries.
+
 ## Framework responsibilities and business responsibilities
 
 The framework owns transport, propagation, and collection mechanics.
@@ -72,21 +82,54 @@ This is the part many teams care about most.
 The framework does support error-code management, but it supports it as a
 transport and normalization mechanism, not as a centralized registry.
 
+Short answer:
+
+- the framework does not own your business error-code catalog
+- `model.ResponseError.Code` is a `string`, so collected and transported codes
+  are represented as strings
+- existing integer-style codes are still supported and converted into decimal
+  strings automatically
+- for new business errors, prefer stable string code constants
+
+### Why `Code` is a string
+
+`model.ResponseError.Code` is defined as `*string`.
+
+That is intentional:
+
+- event streams and A2A metadata are easier to keep stable with string values
+- string codes support namespaced business identifiers such as
+  `ORDER_INVENTORY_SOFT_TIMEOUT`
+- cross-language or cross-service integrations do not need to guess numeric
+  ranges or enum ownership
+
+If your organization already has numeric codes, keep them if they are already
+standardized. The framework will convert them into strings at the transport
+boundary.
+
+### Which error conventions are recognized
+
 By default, `graph.NewExecutionError(...)` uses
 `model.ResponseErrorFromError(err, model.ErrorTypeFlowError)`.
-That helper already extracts structured fields from business errors that
-implement one of these methods:
 
-- `ErrorType() string`
-- `ErrorCode() string`
-- `Code() string`
-- `Code() int`
-- `Code() int32`
-- `Code() int64`
+Go does not support overloaded methods. The list below describes alternative
+conventions across different error types. A single concrete error type would
+normally implement one code convention, not all of them.
+
+| Optional method on your error type | Framework behavior |
+| --- | --- |
+| `ErrorType() string` | fills `ResponseError.Type` |
+| `ErrorCode() string` | fills `ResponseError.Code` directly |
+| `Code() string` | fills `ResponseError.Code` directly |
+| `Code() int` | converts the value to a decimal string |
+| `Code() int32` | converts the value to a decimal string |
+| `Code() int64` | converts the value to a decimal string |
+
+### Recommended default for new business code
 
 The recommended pattern is:
 
-1. Keep stable error codes in a small domain package.
+1. Keep stable string error codes in a small domain package.
 2. Return typed business errors from nodes, tools, or agents.
 3. Let the collector record those codes automatically.
 4. Use `WithExecutionErrorPolicy(...)` only for recovery and optional
@@ -152,6 +195,26 @@ func NewInventoryUnavailable(itemID string) error {
     }
 }
 ```
+
+If you already have a legacy numeric-code system, it still works:
+
+```go
+type legacyRPCError struct {
+    code    int
+    message string
+}
+
+func (e *legacyRPCError) Error() string {
+    return e.message
+}
+
+func (e *legacyRPCError) Code() int {
+    return e.code
+}
+```
+
+That error will be stored as a string code such as `"40401"` inside
+`ResponseError.Code`.
 
 Example collector policy that uses the business error catalog:
 
