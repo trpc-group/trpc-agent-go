@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -126,8 +127,15 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 type defaultEventToA2AMessage struct {
 	// Enable ADK-compatible metadata keys (for example, "adk_type" instead
 	// of "type").
-	adkCompatibility   bool
-	streamingEventType StreamingEventType
+	adkCompatibility          bool
+	graphEventObjectAllowlist []string
+	streamingEventType        StreamingEventType
+}
+
+const graphObjectPrefix = "graph."
+
+var defaultAllowedGraphObjectTypes = []string{
+	graph.ObjectTypeGraphExecution,
 }
 
 // setMetadata writes value under the standard key, and additionally under the
@@ -155,6 +163,83 @@ func (c *defaultEventToA2AMessage) setThoughtMetadata(textPart *protocol.TextPar
 	c.setMetadata(textPart.Metadata, ia2a.TextPartMetadataThoughtKey, true)
 }
 
+func (c *defaultEventToA2AMessage) buildMessageMetadata(evt *event.Event) map[string]any {
+	if evt == nil || evt.Response == nil {
+		return nil
+	}
+
+	metadata := make(map[string]any, 4)
+	if evt.Response.Object != "" {
+		metadata[ia2a.MessageMetadataObjectTypeKey] = evt.Response.Object
+	}
+	if evt.Tag != "" {
+		metadata[ia2a.MessageMetadataTagKey] = evt.Tag
+	}
+	if evt.Response.ID != "" {
+		metadata[ia2a.MessageMetadataResponseIDKey] = evt.Response.ID
+	}
+
+	if stateDelta := ia2a.EncodeStateDeltaMetadata(evt.StateDelta); len(stateDelta) > 0 {
+		metadata[ia2a.MessageMetadataStateDeltaKey] = stateDelta
+	}
+
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
+}
+
+func hasStructuredMetadata(metadata map[string]any) bool {
+	return len(metadata) > 0
+}
+
+// hasContentfulMetadata reports whether metadata contains fields that are
+// meaningful enough to warrant emitting an otherwise-empty A2A message.
+// A message that carries only llm_response_id (and nothing else) is not
+// useful to downstream consumers, so we exclude that key from the check.
+func hasContentfulMetadata(metadata map[string]any) bool {
+	for k := range metadata {
+		if k != ia2a.MessageMetadataResponseIDKey {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesAllowedGraphObjectType(objectType string, allowedObjectTypes []string) bool {
+	for _, allowed := range allowedObjectTypes {
+		if allowed == objectType || allowed == "*" {
+			return true
+		}
+		if strings.HasSuffix(allowed, "*") {
+			prefix := strings.TrimSuffix(allowed, "*")
+			if strings.HasPrefix(objectType, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *defaultEventToA2AMessage) shouldEmitEvent(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil {
+		return true
+	}
+	objectType := evt.Response.Object
+	if objectType == "" {
+		return true
+	}
+	if !strings.HasPrefix(objectType, graphObjectPrefix) {
+		return true
+	}
+
+	allowedObjectTypes := c.graphEventObjectAllowlist
+	if allowedObjectTypes == nil {
+		allowedObjectTypes = defaultAllowedGraphObjectTypes
+	}
+	return matchesAllowedGraphObjectType(objectType, allowedObjectTypes)
+}
+
 // ConvertToA2AMessage converts an Agent event to an A2A protocol message.
 // For non-streaming responses, it returns the full content including
 // tool calls.
@@ -164,6 +249,9 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 	options EventToA2AUnaryOptions,
 ) (protocol.UnaryMessageResult, error) {
 	if event.Response == nil {
+		return nil, nil
+	}
+	if !c.shouldEmitEvent(event) {
 		return nil, nil
 	}
 
@@ -178,6 +266,9 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 
 	// Additional safety check for choices array bounds.
 	if len(event.Response.Choices) == 0 {
+		if result := c.convertMetadataOnlyToA2AMessageResult(event); result != nil {
+			return result, nil
+		}
 		log.DebugfContext(
 			ctx,
 			"no choices in response, event: %v",
@@ -206,7 +297,7 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AMessage(
 	evt *event.Event,
 ) (protocol.UnaryMessageResult, error) {
 	if len(evt.Response.Choices) == 0 {
-		return nil, nil
+		return c.convertMetadataOnlyToA2AMessageResult(evt), nil
 	}
 
 	choice := evt.Response.Choices[0]
@@ -235,11 +326,7 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AMessage(
 	parts := []protocol.Part{&dataPart}
 	msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
 
-	msg.Metadata = map[string]any{
-		ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
-		ia2a.MessageMetadataTagKey:        evt.Tag,
-		ia2a.MessageMetadataResponseIDKey: evt.Response.ID,
-	}
+	msg.Metadata = c.buildMessageMetadata(evt)
 	return &msg, nil
 }
 
@@ -266,13 +353,10 @@ func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
 		parts = append(parts, protocol.NewTextPart(choice.Message.Content))
 	}
 
-	if len(parts) > 0 {
+	metadata := c.buildMessageMetadata(event)
+	if len(parts) > 0 || hasStructuredMetadata(metadata) {
 		msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
-		msg.Metadata = map[string]any{
-			ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
-			ia2a.MessageMetadataTagKey:        event.Tag,
-			ia2a.MessageMetadataResponseIDKey: event.Response.ID,
-		}
+		msg.Metadata = metadata
 		return &msg, nil
 	}
 
@@ -298,6 +382,9 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	if evt.Response == nil {
 		return nil, nil
 	}
+	if !c.shouldEmitEvent(evt) {
+		return nil, nil
+	}
 
 	if evt.Response.Error != nil {
 		return nil, fmt.Errorf(
@@ -310,6 +397,9 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 
 	// Additional safety check for choices array bounds
 	if len(evt.Response.Choices) == 0 {
+		if result, ok := c.convertMetadataOnlyToA2AStreamingMessage(evt, options); ok {
+			return result, nil
+		}
 		log.DebugfContext(
 			ctx,
 			"no choices in response, event: %v",
@@ -330,12 +420,55 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	return c.convertDeltaContentToA2AStreamingMessage(ctx, evt, options)
 }
 
+func (c *defaultEventToA2AMessage) convertMetadataOnlyToA2AMessageResult(
+	evt *event.Event,
+) protocol.UnaryMessageResult {
+	metadata := c.buildMessageMetadata(evt)
+	if !hasContentfulMetadata(metadata) {
+		return nil
+	}
+
+	msg := protocol.NewMessage(protocol.MessageRoleAgent, nil)
+	msg.Metadata = metadata
+	return &msg
+}
+
+func (c *defaultEventToA2AMessage) convertMetadataOnlyToA2AStreamingMessage(
+	evt *event.Event,
+	options EventToA2AStreamingOptions,
+) (protocol.StreamingMessageResult, bool) {
+	metadata := c.buildMessageMetadata(evt)
+	if !hasContentfulMetadata(metadata) {
+		return nil, false
+	}
+	return c.convertPartsToA2AStreamingResultWithMetadata(evt, options, nil, metadata), true
+}
+
 func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResult(
 	evt *event.Event,
 	options EventToA2AStreamingOptions,
 	parts []protocol.Part,
 ) protocol.StreamingMessageResult {
-	if evt == nil || evt.Response == nil || len(parts) == 0 {
+	metadata := c.buildMessageMetadata(evt)
+	if len(parts) == 0 && !hasStructuredMetadata(metadata) {
+		return nil
+	}
+
+	return c.convertPartsToA2AStreamingResultWithMetadata(
+		evt,
+		options,
+		parts,
+		metadata,
+	)
+}
+
+func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResultWithMetadata(
+	evt *event.Event,
+	options EventToA2AStreamingOptions,
+	parts []protocol.Part,
+	metadata map[string]any,
+) protocol.StreamingMessageResult {
+	if evt == nil || evt.Response == nil || (len(parts) == 0 && !hasStructuredMetadata(metadata)) {
 		return nil
 	}
 
@@ -351,11 +484,7 @@ func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResult(
 		if evt.Response.ID != "" {
 			msg.MessageID = evt.Response.ID
 		}
-		msg.Metadata = map[string]any{
-			ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
-			ia2a.MessageMetadataTagKey:        evt.Tag,
-			ia2a.MessageMetadataResponseIDKey: evt.Response.ID,
-		}
+		msg.Metadata = metadata
 		return &msg
 	}
 
@@ -368,11 +497,7 @@ func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResult(
 		},
 		false,
 	)
-	taskArtifact.Metadata = map[string]any{
-		ia2a.MessageMetadataObjectTypeKey: evt.Response.Object,
-		ia2a.MessageMetadataTagKey:        evt.Tag,
-		ia2a.MessageMetadataResponseIDKey: evt.Response.ID,
-	}
+	taskArtifact.Metadata = metadata
 	return &taskArtifact
 }
 
@@ -401,6 +526,10 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 
 	if len(parts) > 0 {
 		return c.convertPartsToA2AStreamingResult(event, options, parts), nil
+	}
+
+	if result, ok := c.convertMetadataOnlyToA2AStreamingMessage(event, options); ok {
+		return result, nil
 	}
 
 	log.DebugfContext(
@@ -503,11 +632,7 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 	}
 
 	msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
-	msg.Metadata = map[string]any{
-		ia2a.MessageMetadataObjectTypeKey: event.Response.Object,
-		ia2a.MessageMetadataTagKey:        event.Tag,
-		ia2a.MessageMetadataResponseIDKey: event.Response.ID,
-	}
+	msg.Metadata = c.buildMessageMetadata(event)
 	return &msg, nil
 }
 
