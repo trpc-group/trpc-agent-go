@@ -786,6 +786,13 @@ func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 		opt(inv)
 	}
 
+	if inv.Message.Role == "" && model.HasPayload(inv.Message) {
+		log.Warnf(
+			"agent.NewInvocation received a message with empty role; defaulting to user",
+		)
+		inv.Message.Role = model.RoleUser
+	}
+
 	if inv.Branch == "" {
 		inv.Branch = inv.AgentName
 	}

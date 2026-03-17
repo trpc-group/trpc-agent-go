@@ -10,7 +10,7 @@ Runner provides the interface to run Agents, responsible for session management 
 - **🔄 Event Handling**: Receive Agent event streams and append non-partial response events to the session.
 - **🆔 ID Generation**: Automatically generate Invocation IDs and event IDs.
 - **📊 Observability Integration**: Integrates telemetry/trace to automatically record spans.
-- **✅ Completion Event**: Generates a runner-completion event after the Agent event stream ends.
+- **✅ Completion Event**: Generates a `runner.completion` event after the Agent event stream ends.
 - **🔌 Plugins**: Register once on a Runner to apply global hooks across agent, tool, and model lifecycles.
 
 ## Architecture
@@ -747,6 +747,17 @@ r := runner.NewRunner("multi-app", multiAgent)
 
 ## 📊 Event Processing
 
+### Completion Semantics
+
+Runner uses a few related but different completion signals:
+
+- `Done=true`: the current event itself is complete. This can appear on final
+  assistant messages, tool responses, graph events, and runner completion
+  events.
+- `runner.completion` / `event.IsRunnerCompletion()`: the entire
+  `Runner.Run()` call has finished. This is the recommended condition for
+  stopping consumption of `eventChan`.
+
 ### Event Types
 
 ```go
@@ -772,8 +783,8 @@ for event := range eventChan {
         }
     }
 
-    // Completion event.
-    if event.Done {
+    // Entire Runner run finished.
+    if event.IsRunnerCompletion() {
         break
     }
 }
@@ -826,7 +837,7 @@ func processEvents(eventChan <-chan *event.Event) error {
             }
         }
 
-        if event.Done {
+        if event.IsRunnerCompletion() {
             fmt.Println() // New line.
             break
         }
@@ -938,7 +949,7 @@ for evt := range eventCh {
         continue
     }
     // ... handle evt ...
-    if evt.IsFinalResponse() {
+    if evt.IsRunnerCompletion() {
         break
     }
     turns++
@@ -1120,7 +1131,7 @@ if err != nil {
 
 for event := range eventChan {
 	// Process events
-	if event.Done {
+	if event.IsRunnerCompletion() {
 		break
 	}
 }
@@ -1150,7 +1161,7 @@ func checkRunner(r runner.Runner, ctx context.Context) error {
         if event.Error != nil {
             return fmt.Errorf("Received error event: %s", event.Error.Message)
         }
-        if event.Done {
+        if event.IsRunnerCompletion() {
             break
         }
     }

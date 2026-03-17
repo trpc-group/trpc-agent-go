@@ -10,7 +10,7 @@ Runner 提供了运行 Agent 的接口，负责会话管理和事件流处理。
 - **🔄 事件处理**：接收 Agent 事件流，将非 partial 响应事件追加到会话中
 - **🆔 ID 生成**：自动生成 Invocation ID 和事件 ID
 - **📊 可观测集成**：集成 telemetry/trace，自动记录 span
-- **✅ 完成事件**：在 Agent 事件流结束后生成 runner-completion 事件
+- **✅ 完成事件**：在 Agent 事件流结束后生成 `runner.completion` 事件
 - **🔌 插件**：在 Runner 上注册一次，全局作用于该 Runner 管理的 Agent、Tool 和模型调用。
 
 ## 架构设计
@@ -495,7 +495,7 @@ func readLastEvent(eventChan <-chan *event.Event) error {
 
 - 分片（`partial`）事件：`IsPartial=true`、`Done=false`，增量文本在
   `choice.Delta.Content`
-- 最终（`final`）事件：`IsPartial=false`、`Done=true`，完整文本在
+- 模型调用的最终事件：`IsPartial=false`、`Done=true`，完整文本在
   `choice.Message.Content`
 
 默认情况下，Graph 的 LLM 节点只输出分片事件，不输出最终 `Done=true` 的 assistant 消息
@@ -725,6 +725,15 @@ r := runner.NewRunner("multi-app", multiAgent)
 
 ## 📊 事件处理
 
+### 结束语义
+
+Runner 相关文档里有两个容易混淆的“结束”概念，这里统一说明：
+
+- `Done=true`：表示**当前这条事件本身已经完整**。它可以出现在 assistant 最终消息、
+  tool response、graph 事件以及 runner completion 事件上。
+- `runner.completion` / `event.IsRunnerCompletion()`：表示**整次 Runner.Run 已经结束**。
+  这是业务代码停止消费 `eventChan` 的唯一推荐判据。
+
 ### 事件类型
 
 ```go
@@ -750,8 +759,8 @@ for event := range eventChan {
         }
     }
 
-    // 完成事件
-    if event.Done {
+    // 整次 Runner 结束
+    if event.IsRunnerCompletion() {
         break
     }
 }
@@ -804,7 +813,7 @@ func processEvents(eventChan <-chan *event.Event) error {
             }
         }
 
-        if event.Done {
+        if event.IsRunnerCompletion() {
             fmt.Println() // 换行
             break
         }
@@ -914,7 +923,7 @@ for evt := range eventCh {
         continue
     }
     // ... 处理事件 ...
-    if evt.IsFinalResponse() {
+    if evt.IsRunnerCompletion() {
         break
     }
     turns++
@@ -1096,7 +1105,7 @@ if err != nil {
 
 for event := range eventChan {
 	// 处理事件
-	if event.Done {
+	if event.IsRunnerCompletion() {
 		break
 	}
 }
@@ -1126,7 +1135,7 @@ func checkRunner(r runner.Runner, ctx context.Context) error {
         if event.Error != nil {
             return fmt.Errorf("收到错误事件: %s", event.Error.Message)
         }
-        if event.Done {
+        if event.IsRunnerCompletion() {
             break
         }
     }

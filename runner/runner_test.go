@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	runnerlog "trpc.group/trpc-go/trpc-agent-go/log"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
@@ -88,6 +89,37 @@ func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-ch
 
 func (m *mockAgent) Tools() []tool.Tool {
 	return []tool.Tool{}
+}
+
+type capturingRoleAgent struct {
+	name         string
+	capturedRole model.Role
+}
+
+func (m *capturingRoleAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Captures invocation role for testing",
+	}
+}
+
+func (m *capturingRoleAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *capturingRoleAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *capturingRoleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	m.capturedRole = invocation.Message.Role
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (m *capturingRoleAgent) Tools() []tool.Tool {
+	return nil
 }
 
 type staticModel struct {
@@ -173,6 +205,28 @@ func TestRunner_SessionIntegration(t *testing.T) {
 	agentEvent := sess.Events[1]
 	assert.Equal(t, "test-agent", agentEvent.Author)
 	assert.Contains(t, agentEvent.Response.Choices[0].Message.Content, "Hello, world!")
+}
+
+func TestRunnerRun_WarnsOnMessageWithEmptyRole(t *testing.T) {
+	original := runnerlog.WarnfContext
+	warnCalls := 0
+	runnerlog.WarnfContext = func(ctx context.Context, format string, args ...any) {
+		warnCalls++
+	}
+	defer func() {
+		runnerlog.WarnfContext = original
+	}()
+
+	ag := &capturingRoleAgent{name: "test-agent"}
+	r := NewRunner("test-app", ag)
+	eventCh, err := r.Run(context.Background(), "user", "session", model.Message{Content: "hello"})
+	require.NoError(t, err)
+
+	for range eventCh {
+	}
+
+	assert.Equal(t, 1, warnCalls)
+	assert.Equal(t, model.RoleUser, ag.capturedRole)
 }
 
 func TestRunner_Run_WithEventFilterKey(t *testing.T) {
