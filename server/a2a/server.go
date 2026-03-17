@@ -118,14 +118,15 @@ func buildProcessor(agent agent.Agent, sessionService session.Service, options *
 	}
 
 	return &messageProcessor{
-		runner:              runner,
-		a2aToAgentConverter: a2aToAgentConverter,
-		eventToA2AConverter: eventToA2AConverter,
-		errorHandler:        options.errorHandler,
-		debugLogging:        options.debugLogging,
-		adkCompatibility:    options.adkCompatibility,
-		streamingEventType:  options.streamingEventType,
-		agentName:           agentName,
+		runner:               runner,
+		a2aToAgentConverter:  a2aToAgentConverter,
+		eventToA2AConverter:  eventToA2AConverter,
+		errorHandler:         options.errorHandler,
+		debugLogging:         options.debugLogging,
+		adkCompatibility:     options.adkCompatibility,
+		streamingEventType:   options.streamingEventType,
+		structuredTaskErrors: options.structuredTaskErrors,
+		agentName:            agentName,
 	}
 }
 
@@ -230,14 +231,15 @@ func extractBasePath(urlStr string) string {
 
 // messageProcessor is the message processor for the a2a server.
 type messageProcessor struct {
-	runner              runner.Runner
-	a2aToAgentConverter A2AMessageToAgentMessage
-	eventToA2AConverter EventToA2AMessage
-	errorHandler        ErrorHandler
-	debugLogging        bool
-	adkCompatibility    bool
-	streamingEventType  StreamingEventType
-	agentName           string
+	runner               runner.Runner
+	a2aToAgentConverter  A2AMessageToAgentMessage
+	eventToA2AConverter  EventToA2AMessage
+	errorHandler         ErrorHandler
+	debugLogging         bool
+	adkCompatibility     bool
+	streamingEventType   StreamingEventType
+	structuredTaskErrors bool
+	agentName            string
 }
 
 func isFinalStreamingEvent(evt *event.Event) bool {
@@ -248,6 +250,79 @@ func isFinalStreamingEvent(evt *event.Event) bool {
 	// The only truly final event is runner.completion
 	// This ensures we don't miss postprocessing events (code execution, etc.)
 	return evt.IsRunnerCompletion()
+}
+
+func isStructuredTaskErrorEvent(
+	evt *event.Event,
+) bool {
+	return evt != nil &&
+		evt.Response != nil &&
+		evt.Response.Error != nil
+}
+
+func taskErrorState(
+	respErr *model.ResponseError,
+) protocol.TaskState {
+	if respErr != nil &&
+		respErr.Type == agent.ErrorTypeStopAgentError {
+		return protocol.TaskStateCanceled
+	}
+	return protocol.TaskStateFailed
+}
+
+func buildTaskErrorMessage(
+	taskID string,
+	ctxID string,
+	agentEvent *event.Event,
+) *protocol.Message {
+	if agentEvent == nil || agentEvent.Response == nil {
+		return nil
+	}
+	respErr := agentEvent.Response.Error
+	if respErr == nil {
+		return nil
+	}
+
+	var parts []protocol.Part
+	if respErr.Message != "" {
+		parts = append(parts, protocol.NewTextPart(respErr.Message))
+	}
+	msg := protocol.NewMessageWithContext(
+		protocol.MessageRoleAgent,
+		parts,
+		&taskID,
+		&ctxID,
+	)
+	msg.Metadata = ia2a.WithResponseErrorMetadata(
+		msg.Metadata,
+		respErr,
+	)
+	msg.Metadata[ia2a.MessageMetadataTaskStateKey] = string(
+		taskErrorState(respErr),
+	)
+	if agentEvent.Response.ID != "" {
+		msg.MessageID = agentEvent.Response.ID
+		msg.Metadata[ia2a.MessageMetadataResponseIDKey] =
+			agentEvent.Response.ID
+	}
+	return &msg
+}
+
+func buildStructuredFailureTask(
+	taskID string,
+	ctxID string,
+	history []protocol.Message,
+	agentEvent *event.Event,
+) *protocol.Task {
+	task := protocol.NewTask(taskID, ctxID)
+	task.History = history
+	task.Status = protocol.TaskStatus{
+		State:     taskErrorState(agentEvent.Response.Error),
+		Message:   buildTaskErrorMessage(taskID, ctxID, agentEvent),
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+	task.Metadata = task.Status.Message.Metadata
+	return task
 }
 
 // handleDefaultError provides a fallback error handling mechanism
@@ -500,8 +575,16 @@ func (m *messageProcessor) processAgentStreamingEvents(
 	}
 
 	// define consume function
+	var terminalTaskError bool
 	consume := func(batch []*event.Event) (bool, error) {
-		return m.processBatchStreamingEvents(ctx, taskID, a2aMsg, batch, subscriber)
+		return m.processBatchStreamingEvents(
+			ctx,
+			taskID,
+			a2aMsg,
+			batch,
+			subscriber,
+			&terminalTaskError,
+		)
 	}
 
 	taskSubmitted := protocol.NewTaskStatusUpdateEvent(
@@ -528,6 +611,9 @@ func (m *messageProcessor) processAgentStreamingEvents(
 	if err := tunnel.Run(ctx); err != nil {
 		log.WarnfContext(ctx, "Event transfer error: %v", err)
 		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+	}
+	if terminalTaskError {
+		return
 	}
 
 	if m.streamingEventType != StreamingEventTypeMessage {
@@ -574,6 +660,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 	a2aMsg *protocol.Message,
 	batch []*event.Event,
 	subscriber taskmanager.TaskSubscriber,
+	terminalTaskError *bool,
 ) (bool, error) {
 	if len(batch) == 0 {
 		log.DebugContext(ctx, "received empty batch, continuing")
@@ -618,6 +705,35 @@ func (m *messageProcessor) processBatchStreamingEvents(
 				agentEvent,
 			)
 			continue
+		}
+
+		if m.structuredTaskErrors &&
+			isStructuredTaskErrorEvent(agentEvent) {
+			task := buildStructuredFailureTask(
+				taskID,
+				*a2aMsg.ContextID,
+				nil,
+				agentEvent,
+			)
+			statusEvent := protocol.NewTaskStatusUpdateEvent(
+				taskID,
+				*a2aMsg.ContextID,
+				task.Status,
+				true,
+			)
+			statusEvent.Metadata = task.Metadata
+			if err := subscriber.Send(protocol.StreamingMessageEvent{
+				Result: &statusEvent,
+			}); err != nil {
+				return false, fmt.Errorf(
+					"failed to send task failure status: %w",
+					err,
+				)
+			}
+			if terminalTaskError != nil {
+				*terminalTaskError = true
+			}
+			return false, nil
 		}
 
 		// Convert event to A2A message for streaming
@@ -731,6 +847,23 @@ func (m *messageProcessor) processMessage(
 				eventCount,
 			)
 			continue
+		}
+
+		if m.structuredTaskErrors &&
+			isStructuredTaskErrorEvent(agentEvent) {
+			taskID := fmt.Sprintf(
+				"task-%s-%d",
+				a2aMsg.MessageID,
+				time.Now().UnixNano(),
+			)
+			return &taskmanager.MessageProcessingResult{
+				Result: buildStructuredFailureTask(
+					taskID,
+					ctxID,
+					messages,
+					agentEvent,
+				),
+			}, nil
 		}
 
 		convertedResult, err := m.eventToA2AConverter.ConvertToA2AMessage(

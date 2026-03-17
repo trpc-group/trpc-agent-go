@@ -432,6 +432,9 @@ for e := range eventChan {
 
 有些运行不会走到最终的 `graph.execution` 完成事件，就已经因为致命错误提前结束。一个很常见的场景是：
 
+如果你想看 graph、Runner、subgraph、A2A 串起来的完整推荐方案，见
+[Error Handling](error-handling.md)。
+
 - 某个节点回调先发出一条自定义 `StateDelta`，里面带了致命错误详情
 - 随后流程直接中止，图本身来不及产出正常的最终快照
 

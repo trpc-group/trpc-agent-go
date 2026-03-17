@@ -422,6 +422,108 @@ func TestProcessAgentEventStream_CapturesLastResponseFromFinalEvent(t *testing.T
 	require.Len(t, parentEventChan, 2)
 }
 
+func TestProcessAgentEventStream_UsesFallbackStateOnFatalError(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	agentEvents := make(chan *event.Event, 2)
+	parentEventChan := make(chan *event.Event, 2)
+
+	executionErrors := []ExecutionError{{
+		Severity: ExecutionErrorSeverityFatal,
+		Error: &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: "child boom",
+		},
+	}}
+	raw, err := json.Marshal(executionErrors)
+	require.NoError(t, err)
+
+	agentEvents <- event.New(
+		"inv",
+		"child-node",
+		event.WithObject(ObjectTypeGraphNodeCustom),
+		event.WithStateDelta(map[string][]byte{
+			StateKeyExecutionErrors: raw,
+		}),
+	)
+	agentEvents <- event.New(
+		"inv",
+		"child-node",
+		event.WithResponse(&model.Response{
+			Object: model.ObjectTypeError,
+			Error: &model.ResponseError{
+				Type:    model.ErrorTypeFlowError,
+				Message: "child boom",
+			},
+		}),
+	)
+	close(agentEvents)
+
+	res, err := processAgentEventStream(
+		ctx,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		"",
+	)
+	require.NoError(t, err)
+	require.Len(t, res.rawDelta, 1)
+	require.NotNil(t, res.finalState)
+
+	got, err := ExecutionErrorsFromStateDelta(
+		res.rawDelta,
+		StateKeyExecutionErrors,
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(
+		t,
+		ExecutionErrorSeverityFatal,
+		got[0].Severity,
+	)
+}
+
+func TestMergeAgentEventCallbacks_AppendsGlobalAndPerNode(t *testing.T) {
+	globalCalled := false
+	perNodeCalled := false
+
+	global := NewNodeCallbacks().RegisterAgentEvent(func(
+		ctx context.Context,
+		callbackCtx *NodeCallbackContext,
+		state State,
+		evt *event.Event,
+	) {
+		globalCalled = true
+	})
+	perNode := NewNodeCallbacks().RegisterAgentEvent(func(
+		ctx context.Context,
+		callbackCtx *NodeCallbackContext,
+		state State,
+		evt *event.Event,
+	) {
+		perNodeCalled = true
+	})
+
+	merged := mergeAgentEventCallbacks(State{
+		StateKeyNodeCallbacks: global,
+	}, perNode)
+	require.NotNil(t, merged)
+	require.Len(t, merged.AgentEvent, 2)
+
+	merged.RunAgentEvent(
+		context.Background(),
+		&NodeCallbackContext{NodeID: "agent-node"},
+		State{},
+		event.New("inv", "agent"),
+	)
+	require.True(t, globalCalled)
+	require.True(t, perNodeCalled)
+}
+
 func TestProcessAgentEventStream_StreamOutputWritesDeltas(t *testing.T) {
 	inv := agent.NewInvocation(agent.WithInvocationID("inv-stream"))
 	ctx := agent.NewInvocationContext(context.Background(), inv)

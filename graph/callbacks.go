@@ -117,6 +117,12 @@ func (c *NodeCallbacks) RegisterOnNodeError(cb OnNodeErrorCallback) *NodeCallbac
 	return c
 }
 
+// RegisterAgentEvent registers an agent event callback.
+func (c *NodeCallbacks) RegisterAgentEvent(cb AgentEventCallback) *NodeCallbacks {
+	c.AgentEvent = append(c.AgentEvent, cb)
+	return c
+}
+
 // RunBeforeNode runs all before node callbacks in order.
 // Returns (customResult, error).
 // If any callback returns a custom result, stop and return.
@@ -182,5 +188,20 @@ func (c *NodeCallbacks) RunOnNodeError(
 			continue
 		}
 		cb(ctx, callbackCtx, state, err)
+	}
+}
+
+// RunAgentEvent runs all agent event callbacks in order.
+func (c *NodeCallbacks) RunAgentEvent(
+	ctx context.Context,
+	callbackCtx *NodeCallbackContext,
+	state State,
+	evt *event.Event,
+) {
+	for _, cb := range c.AgentEvent {
+		if cb == nil {
+			continue
+		}
+		cb(ctx, callbackCtx, state, evt)
 	}
 }

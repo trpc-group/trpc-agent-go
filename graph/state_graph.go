@@ -336,6 +336,7 @@ func WithNodeCallbacks(callbacks *NodeCallbacks) Option {
 			node.callbacks.BeforeNode = append(node.callbacks.BeforeNode, callbacks.BeforeNode...)
 			node.callbacks.AfterNode = append(node.callbacks.AfterNode, callbacks.AfterNode...)
 			node.callbacks.OnNodeError = append(node.callbacks.OnNodeError, callbacks.OnNodeError...)
+			node.callbacks.AgentEvent = append(node.callbacks.AgentEvent, callbacks.AgentEvent...)
 		}
 	}
 }
@@ -2606,10 +2607,11 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 		}
 
 		// Process agent event stream and capture completion state.
+		agentCallbacks := mergeAgentEventCallbacks(state, cfg.callbacks)
 		streamRes, err := processAgentEventStream(
 			ctx,
 			agentEventChan,
-			cfg.callbacks,
+			agentCallbacks,
 			nodeID,
 			state,
 			eventChan,
@@ -2670,8 +2672,10 @@ type agentEventStreamResult struct {
 	lastResponse     string
 	finalState       State
 	rawDelta         map[string][]byte
+	fallbackState    map[string][]byte
 	structuredOutput any
 	interrupt        *InterruptError
+	finalError       *model.ResponseError
 }
 
 type agentDeltaStreamTap struct {
@@ -2751,12 +2755,11 @@ func runAgentEventCallbacks(
 	if nodeCallbacks == nil {
 		return
 	}
-	for _, callback := range nodeCallbacks.AgentEvent {
-		callback(ctx, &NodeCallbackContext{
-			NodeID:   nodeID,
-			NodeName: agentName,
-		}, state, ev)
-	}
+	nodeCallbacks.RunAgentEvent(ctx, &NodeCallbackContext{
+		NodeID:   nodeID,
+		NodeName: agentName,
+		NodeType: NodeTypeAgent,
+	}, state, ev)
 }
 
 func updateAgentStreamResultFromEvent(
@@ -2764,6 +2767,7 @@ func updateAgentStreamResultFromEvent(
 	res *agentEventStreamResult,
 	ev *event.Event,
 ) {
+	captureAgentFallbackState(res, ev)
 	updateAgentLastResponse(res, ev)
 	updateAgentStructuredOutput(res, ev)
 	updateAgentInterrupt(res, ev)
@@ -2831,8 +2835,18 @@ func extractSubgraphFinalState(
 	if ev.Response.Object != ObjectTypeGraphExecution {
 		return nil, nil, false
 	}
+	return decodeSubgraphStateDelta(ctx, ev.StateDelta)
+}
+
+func decodeSubgraphStateDelta(
+	ctx context.Context,
+	stateDelta map[string][]byte,
+) (State, map[string][]byte, bool) {
+	if len(stateDelta) == 0 {
+		return nil, nil, false
+	}
 	tmp := make(State)
-	for k, b := range ev.StateDelta {
+	for k, b := range stateDelta {
 		var v any
 		err := json.Unmarshal(b, &v)
 		if err == nil {
@@ -2846,7 +2860,7 @@ func extractSubgraphFinalState(
 			err,
 		)
 	}
-	return tmp, ev.StateDelta, true
+	return tmp, stateDelta, true
 }
 
 // processAgentEventStream processes the event stream from the target agent.
@@ -2887,7 +2901,135 @@ func processAgentEventStream(
 		updateAgentStreamResultFromEvent(ctx, &res, agentEvent)
 	}
 
+	if len(res.rawDelta) == 0 &&
+		len(res.fallbackState) > 0 &&
+		shouldPropagateAgentFallbackState(res.finalError) {
+		finalState, rawDelta, ok := decodeSubgraphStateDelta(
+			ctx,
+			res.fallbackState,
+		)
+		if ok {
+			res.finalState = finalState
+			res.rawDelta = rawDelta
+		}
+	}
+
 	return res, nil
+}
+
+func mergeAgentEventCallbacks(
+	state State,
+	perNode *NodeCallbacks,
+) *NodeCallbacks {
+	var global *NodeCallbacks
+	if value, ok := state[StateKeyNodeCallbacks].(*NodeCallbacks); ok {
+		global = value
+	}
+	if global == nil && perNode == nil {
+		return nil
+	}
+	merged := NewNodeCallbacks()
+	if global != nil {
+		merged.AgentEvent = append(merged.AgentEvent, global.AgentEvent...)
+	}
+	if perNode != nil {
+		merged.AgentEvent = append(merged.AgentEvent, perNode.AgentEvent...)
+	}
+	if len(merged.AgentEvent) == 0 {
+		return nil
+	}
+	return merged
+}
+
+func captureAgentFallbackState(
+	res *agentEventStreamResult,
+	ev *event.Event,
+) {
+	if res == nil || ev == nil {
+		return
+	}
+	if len(ev.StateDelta) > 0 {
+		res.fallbackState = mergeAgentFallbackStateDelta(
+			res.fallbackState,
+			ev.StateDelta,
+		)
+	}
+	if ev.Response == nil || ev.IsPartial {
+		return
+	}
+	res.finalError = cloneAgentResponseError(ev.Response.Error)
+}
+
+func mergeAgentFallbackStateDelta(
+	dst map[string][]byte,
+	src map[string][]byte,
+) map[string][]byte {
+	if len(src) == 0 {
+		return dst
+	}
+	for key, value := range src {
+		if !shouldPropagateAgentFallbackStateKey(key) {
+			continue
+		}
+		if dst == nil {
+			dst = make(map[string][]byte, len(src))
+		}
+		if value == nil {
+			dst[key] = nil
+			continue
+		}
+		cloned := make([]byte, len(value))
+		copy(cloned, value)
+		dst[key] = cloned
+	}
+	return dst
+}
+
+func shouldPropagateAgentFallbackStateKey(
+	key string,
+) bool {
+	switch key {
+	case MetadataKeyNode,
+		MetadataKeyPregel,
+		MetadataKeyChannel,
+		MetadataKeyState,
+		MetadataKeyCompletion,
+		MetadataKeyTool,
+		MetadataKeyModel,
+		MetadataKeyCheckpoint,
+		MetadataKeyCacheHit,
+		MetadataKeyNodeCustom:
+		return false
+	default:
+		return true
+	}
+}
+
+func shouldPropagateAgentFallbackState(
+	err *model.ResponseError,
+) bool {
+	if err == nil {
+		return false
+	}
+	return err.Type != agent.ErrorTypeStopAgentError
+}
+
+func cloneAgentResponseError(
+	err *model.ResponseError,
+) *model.ResponseError {
+	if err == nil {
+		return nil
+	}
+	cloned := *err
+	if err.Param != nil {
+		param := *err.Param
+		cloned.Param = &param
+	}
+	if err.Code != nil {
+		code := *err.Code
+		cloned.Code = &code
+	}
+	return &cloned
 }
 
 // buildAgentInvocationWithStateScopeAndInputKey builds an invocation for the

@@ -4358,6 +4358,9 @@ Recommendations:
 
 #### Recover from non-fatal node errors
 
+For the recommended standardized pattern that also covers fatal fallback state,
+subgraph propagation, and A2A alignment, see [Error Handling](error-handling.md).
+
 By default, if a node returns a non‑nil `error`, graph execution stops and the
 Executor emits an error event.
 

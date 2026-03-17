@@ -73,6 +73,23 @@ func (d *defaultA2AEventConverter) ConvertToEvents(
 				events = append(events, evt)
 			}
 		}
+		if isTaskFailureState(v.Status.State) {
+			statusMsg := convertTaskStatusToMessage(&protocol.TaskStatusUpdateEvent{
+				TaskID:    v.ID,
+				ContextID: v.ContextID,
+				Metadata:  v.Metadata,
+				Status:    v.Status,
+			})
+			if evt := d.buildRespEvent(
+				false,
+				statusMsg,
+				agentName,
+				invocation,
+			); evt != nil {
+				events = append(events, evt)
+			}
+			break
+		}
 		// Artifacts contain the final response
 		for i := range v.Artifacts {
 			artifactMsg := &protocol.Message{
@@ -124,8 +141,11 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 	case *protocol.Task:
 		responseMsg = convertTaskToMessage(v)
 	case *protocol.TaskStatusUpdateEvent:
-		// Status updates (submitted/completed) are control signals, not user-facing content.
-		return nil, nil
+		if !isTaskFailureState(v.Status.State) {
+			// submitted/completed updates are control signals.
+			return nil, nil
+		}
+		responseMsg = convertTaskStatusToMessage(v)
 	case *protocol.TaskArtifactUpdateEvent:
 		if v.IsFinal() {
 			// Final artifact chunk is either an aggregated result or a termination signal,
@@ -333,6 +353,12 @@ type parseResult struct {
 
 	// responseID holds the original LLM Response.ID from A2A message metadata
 	responseID string
+
+	// taskState holds the remote task lifecycle state when present.
+	taskState protocol.TaskState
+
+	// responseError holds structured error fields reconstructed from metadata.
+	responseError *model.ResponseError
 }
 
 // toolResponseData holds tool response information
@@ -377,6 +403,12 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 
 	result.textContent = textContent.String()
 	result.reasoningContent = reasoningContent.String()
+	result.taskState = taskStateFromMetadata(msg.Metadata)
+	result.responseError = ia2a.ResponseErrorFromMetadata(
+		msg.Metadata,
+		"",
+		model.ErrorTypeFlowError,
+	)
 	return result
 }
 
@@ -604,6 +636,9 @@ func buildEventResponse(
 // - Text content uses Delta for incremental updates
 func buildStreamingResponse(messageID string, result *parseResult, role protocol.MessageRole) *model.Response {
 	now := time.Now()
+	if respErr := taskResponseError(result); respErr != nil {
+		return buildErrorResponse(messageID, respErr, now)
+	}
 
 	// Tool call: use Message (tool calls are complete units, not streamed incrementally)
 	if len(result.toolCalls) > 0 {
@@ -710,6 +745,9 @@ func extractObjectType(result *parseResult) string {
 // In non-streaming mode, all content uses Message (not Delta).
 func buildNonStreamingResponse(messageID string, result *parseResult, role protocol.MessageRole) *model.Response {
 	now := time.Now()
+	if respErr := taskResponseError(result); respErr != nil {
+		return buildErrorResponse(messageID, respErr, now)
+	}
 	var choices []model.Choice
 	// Tool call: assistant requesting tool execution
 	if len(result.toolCalls) > 0 {
@@ -782,6 +820,100 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 	}
 }
 
+func buildErrorResponse(
+	messageID string,
+	respErr *model.ResponseError,
+	now time.Time,
+) *model.Response {
+	return &model.Response{
+		ID:        messageID,
+		Object:    model.ObjectTypeError,
+		Timestamp: now,
+		Created:   now.Unix(),
+		IsPartial: false,
+		Done:      true,
+		Error:     respErr,
+	}
+}
+
+func taskResponseError(
+	result *parseResult,
+) *model.ResponseError {
+	if result == nil {
+		return nil
+	}
+	if result.responseError != nil {
+		return result.responseError
+	}
+	if !isTaskFailureState(result.taskState) {
+		return nil
+	}
+	message := result.textContent
+	if message == "" {
+		message = taskFailureMessage(result.taskState)
+	}
+	return &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: message,
+	}
+}
+
+func taskFailureMessage(
+	state protocol.TaskState,
+) string {
+	switch state {
+	case protocol.TaskStateCanceled:
+		return "remote task canceled"
+	case protocol.TaskStateRejected:
+		return "remote task rejected"
+	default:
+		return "remote task failed"
+	}
+}
+
+func isTaskFailureState(
+	state protocol.TaskState,
+) bool {
+	switch state {
+	case protocol.TaskStateFailed,
+		protocol.TaskStateRejected,
+		protocol.TaskStateCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+func taskStateFromMetadata(
+	metadata map[string]any,
+) protocol.TaskState {
+	if metadata == nil {
+		return ""
+	}
+	raw, ok := metadata[ia2a.MessageMetadataTaskStateKey].(string)
+	if !ok {
+		return ""
+	}
+	return protocol.TaskState(raw)
+}
+
+func cloneTaskMetadata(
+	metadata map[string]any,
+	taskState protocol.TaskState,
+) map[string]any {
+	if len(metadata) == 0 && taskState == "" {
+		return nil
+	}
+	cloned := make(map[string]any, len(metadata)+1)
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	if taskState != "" {
+		cloned[ia2a.MessageMetadataTaskStateKey] = string(taskState)
+	}
+	return cloned
+}
+
 // convertTaskToMessage converts a Task to a Message
 func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 	var (
@@ -801,7 +933,7 @@ func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 		Parts:     parts,
 		TaskID:    &task.ID,
 		ContextID: &task.ContextID,
-		Metadata:  task.Metadata,
+		Metadata:  cloneTaskMetadata(task.Metadata, task.Status.State),
 	}
 }
 
@@ -812,7 +944,7 @@ func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol
 		Kind:      protocol.KindMessage,
 		TaskID:    &event.TaskID,
 		ContextID: &event.ContextID,
-		Metadata:  event.Metadata,
+		Metadata:  cloneTaskMetadata(event.Metadata, event.Status.State),
 	}
 	if event.Status.Message != nil {
 		msg.Parts = event.Status.Message.Parts

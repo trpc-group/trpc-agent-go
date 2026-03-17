@@ -813,6 +813,90 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 	}
 }
 
+func TestDefaultA2AEventConverter_ConvertStreamingToEvents_FailedStatus(
+	t *testing.T,
+) {
+	converter := &defaultA2AEventConverter{}
+	code := "A2A_500"
+	metadata := ia2a.WithResponseErrorMetadata(nil, &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "task failed",
+		Code:    &code,
+	})
+
+	events, err := converter.ConvertStreamingToEvents(
+		protocol.StreamingMessageEvent{
+			Result: &protocol.TaskStatusUpdateEvent{
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Metadata:  metadata,
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateFailed,
+				},
+			},
+		},
+		"test-agent",
+		&agent.Invocation{InvocationID: "inv"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Response == nil || events[0].Response.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if events[0].Response.Error.Code == nil ||
+		*events[0].Response.Error.Code != code {
+		t.Fatalf("code = %v, want %q", events[0].Response.Error.Code, code)
+	}
+	if !events[0].Response.Done {
+		t.Fatal("expected terminal error event")
+	}
+}
+
+func TestDefaultA2AEventConverter_ConvertToEvents_FailedTask(
+	t *testing.T,
+) {
+	converter := &defaultA2AEventConverter{}
+	metadata := ia2a.WithResponseErrorMetadata(nil, &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "task failed",
+	})
+
+	events, err := converter.ConvertToEvents(
+		protocol.MessageResult{
+			Result: &protocol.Task{
+				ID:        "task-1",
+				ContextID: "ctx-1",
+				Metadata:  metadata,
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateFailed,
+				},
+			},
+		},
+		"test-agent",
+		&agent.Invocation{InvocationID: "inv"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Response == nil || events[0].Response.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if events[0].Response.Error.Message != "task failed" {
+		t.Fatalf(
+			"message = %q, want %q",
+			events[0].Response.Error.Message,
+			"task failed",
+		)
+	}
+}
+
 func TestConvertTaskArtifactToMessage(t *testing.T) {
 	type testCase struct {
 		name         string

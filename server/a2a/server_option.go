@@ -83,22 +83,23 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 }
 
 type options struct {
-	sessionService      session.Service
-	agent               agent.Agent
-	enableStreaming     bool
-	streamingEventType  StreamingEventType
-	agentCard           *a2a.AgentCard
-	processorBuilder    ProcessorBuilder
-	processorHook       ProcessMessageHook
-	taskManagerBuilder  TaskManagerBuilder
-	a2aToAgentConverter A2AMessageToAgentMessage
-	eventToA2AConverter EventToA2AMessage
-	host                string
-	extraOptions        []a2a.Option
-	errorHandler        ErrorHandler
-	debugLogging        bool
-	userIDHeader        string
-	adkCompatibility    bool
+	sessionService       session.Service
+	agent                agent.Agent
+	enableStreaming      bool
+	streamingEventType   StreamingEventType
+	agentCard            *a2a.AgentCard
+	processorBuilder     ProcessorBuilder
+	processorHook        ProcessMessageHook
+	taskManagerBuilder   TaskManagerBuilder
+	a2aToAgentConverter  A2AMessageToAgentMessage
+	eventToA2AConverter  EventToA2AMessage
+	host                 string
+	extraOptions         []a2a.Option
+	errorHandler         ErrorHandler
+	debugLogging         bool
+	userIDHeader         string
+	adkCompatibility     bool
+	structuredTaskErrors bool
 }
 
 // Option is a function that configures a Server.
@@ -257,6 +258,14 @@ func WithADKCompatibility(enabled bool) Option {
 func WithStreamingEventType(eventType StreamingEventType) Option {
 	return func(opts *options) {
 		opts.streamingEventType = eventType
+	}
+}
+
+// WithStructuredTaskErrors enables structured propagation of agent
+// Response.Error values through A2A task status metadata.
+func WithStructuredTaskErrors(enable bool) Option {
+	return func(opts *options) {
+		opts.structuredTaskErrors = enable
 	}
 }
 

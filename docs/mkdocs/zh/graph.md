@@ -4305,6 +4305,9 @@ func buildGraph() (*graph.Graph, error) {
 
 #### 将节点错误视为“非致命”并继续执行
 
+如果你想看框架推荐的标准化方案，包括 fatal fallback state、subgraph 回传和
+A2A 对齐，见 [Error Handling](error-handling.md)。
+
 默认情况下，如果某个节点返回了非空 `error`，图会停止执行，Executor 会发出错误事件。
 
 有些业务场景希望把部分错误当作**非致命错误**：

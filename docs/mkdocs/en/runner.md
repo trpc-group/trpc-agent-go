@@ -434,6 +434,9 @@ preserving detailed graph events for advanced use.
 
 #### Fatal Errors Before a Graph Completion Event
 
+For the full framework-level recommendation, including the standard graph
+collector and A2A conventions, see [Error Handling](error-handling.md).
+
 Sometimes a run stops early because of a fatal error before the graph emits its
 final `graph.execution` event. A common example is:
 
