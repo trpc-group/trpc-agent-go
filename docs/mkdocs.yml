@@ -87,7 +87,7 @@ plugins:
                     - Dify Agent: dify.md
                     - Claude Code Agent: claudecode.md
                 - Runner: runner.md
-                - Error Handling: error-handling.md
+                - 错误处理: error-handling.md
                 - Model: model.md
                 - Callbacks: callbacks.md
                 - Plugins: plugin.md
