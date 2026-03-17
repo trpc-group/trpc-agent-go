@@ -10,6 +10,7 @@
 package a2aagent
 
 import (
+	"encoding/json"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -1026,6 +1027,12 @@ func TestProcessFunctionResponse(t *testing.T) {
 		validateFunc func(t *testing.T, content, id, name string)
 	}
 
+	unmarshalableResponse := struct {
+		Ch chan int
+	}{
+		Ch: make(chan int),
+	}
+
 	tests := []testCase{
 		{
 			name: "valid tool response",
@@ -1080,15 +1087,51 @@ func TestProcessFunctionResponse(t *testing.T) {
 			},
 		},
 		{
-			name: "non-string response",
+			name: "numeric response marshals to json",
 			dataPart: &protocol.DataPart{
 				Data: map[string]any{
 					"response": 12345,
 				},
 			},
 			validateFunc: func(t *testing.T, content, id, name string) {
+				if content != "12345" {
+					t.Errorf("expected JSON number content, got %s", content)
+				}
+			},
+		},
+		{
+			name: "object response marshals to json",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"response": map[string]any{
+						"city": "Beijing",
+						"temp": 26,
+					},
+				},
+			},
+			validateFunc: func(t *testing.T, content, id, name string) {
+				var got map[string]any
+				if err := json.Unmarshal([]byte(content), &got); err != nil {
+					t.Fatalf("expected valid JSON object content, got %q: %v", content, err)
+				}
+				if got["city"] != "Beijing" {
+					t.Errorf("expected city Beijing, got %#v", got["city"])
+				}
+				if got["temp"] != float64(26) {
+					t.Errorf("expected temp 26, got %#v", got["temp"])
+				}
+			},
+		},
+		{
+			name: "unmarshalable response is skipped",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"response": unmarshalableResponse,
+				},
+			},
+			validateFunc: func(t *testing.T, content, id, name string) {
 				if content != "" {
-					t.Errorf("expected empty content for non-string response, got %s", content)
+					t.Errorf("expected empty content for unmarshalable response, got %q", content)
 				}
 			},
 		},
