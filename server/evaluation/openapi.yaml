@@ -1,0 +1,521 @@
+openapi: 3.0.3
+info:
+  title: Evaluation Server API
+  version: 1.0.0
+  description: HTTP API for listing evaluation sets, running evaluations, and retrieving evaluation results.
+servers:
+  - url: "{basePath}"
+    variables:
+      basePath:
+        default: /evaluation
+paths:
+  /sets:
+    get:
+      operationId: listSets
+      summary: List evaluation sets
+      responses:
+        "200":
+          description: Evaluation sets were returned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSetsResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+  /sets/{setId}:
+    get:
+      operationId: getSet
+      summary: Get an evaluation set
+      parameters:
+        - $ref: "#/components/parameters/SetID"
+      responses:
+        "200":
+          description: Evaluation set detail was returned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetSetResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+  /runs:
+    post:
+      operationId: createRun
+      summary: Run an evaluation set
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunEvaluationRequest"
+      responses:
+        "201":
+          description: Evaluation run completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateRunResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "408":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+        "504":
+          $ref: "#/components/responses/ErrorResponse"
+  /results:
+    get:
+      operationId: listResults
+      summary: List evaluation results
+      parameters:
+        - $ref: "#/components/parameters/ResultSetID"
+      responses:
+        "200":
+          description: Evaluation results were returned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListResultsResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+  /results/{resultId}:
+    get:
+      operationId: getResult
+      summary: Get an evaluation result
+      parameters:
+        - $ref: "#/components/parameters/ResultID"
+      responses:
+        "200":
+          description: Evaluation result detail was returned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetResultResponse"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+components:
+  parameters:
+    SetID:
+      name: setId
+      in: path
+      required: true
+      schema:
+        type: string
+    ResultSetID:
+      name: setId
+      in: query
+      required: false
+      schema:
+        type: string
+    ResultID:
+      name: resultId
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    ErrorResponse:
+      description: Request failed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      additionalProperties: false
+    RunEvaluationRequest:
+      type: object
+      properties:
+        setId:
+          type: string
+        numRuns:
+          type: integer
+          minimum: 1
+          description: Optional. Uses the evaluator default when omitted.
+      required:
+        - setId
+      additionalProperties: false
+    ListSetsResponse:
+      type: object
+      properties:
+        sets:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalSet"
+      additionalProperties: false
+    GetSetResponse:
+      type: object
+      properties:
+        set:
+          $ref: "#/components/schemas/EvalSet"
+      additionalProperties: false
+    CreateRunResponse:
+      type: object
+      properties:
+        evaluationResult:
+          $ref: "#/components/schemas/EvaluationResult"
+      additionalProperties: false
+    ListResultsResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalSetResult"
+      additionalProperties: false
+    GetResultResponse:
+      type: object
+      properties:
+        result:
+          $ref: "#/components/schemas/EvalSetResult"
+      additionalProperties: false
+    EvaluationResult:
+      type: object
+      properties:
+        appName:
+          type: string
+        evalSetId:
+          type: string
+        overallStatus:
+          $ref: "#/components/schemas/EvalStatus"
+        executionTime:
+          type: integer
+          description: Nanoseconds encoded by Go duration JSON marshaling.
+        evalCases:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvaluationCaseResult"
+        evalSetResult:
+          $ref: "#/components/schemas/EvalSetResult"
+    EvaluationCaseResult:
+      type: object
+      properties:
+        evalId:
+          type: string
+        overallStatus:
+          $ref: "#/components/schemas/EvalStatus"
+        evalCaseResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalCaseResult"
+        metricResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalMetricResult"
+    EvalSet:
+      type: object
+      properties:
+        evalSetId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        evalCases:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalCase"
+        creationTimestamp:
+          $ref: "#/components/schemas/EpochTime"
+    EvalCase:
+      type: object
+      properties:
+        evalId:
+          type: string
+        evalMode:
+          type: string
+        expectedRunnerEnabled:
+          type: boolean
+        contextMessages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        conversation:
+          type: array
+          items:
+            $ref: "#/components/schemas/Invocation"
+        actualConversation:
+          type: array
+          items:
+            $ref: "#/components/schemas/Invocation"
+        sessionInput:
+          $ref: "#/components/schemas/SessionInput"
+        creationTimestamp:
+          $ref: "#/components/schemas/EpochTime"
+    Invocation:
+      type: object
+      properties:
+        invocationId:
+          type: string
+        contextMessages:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        userContent:
+          $ref: "#/components/schemas/Message"
+        finalResponse:
+          $ref: "#/components/schemas/Message"
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tool"
+        intermediateResponses:
+          type: array
+          items:
+            $ref: "#/components/schemas/Message"
+        creationTimestamp:
+          $ref: "#/components/schemas/EpochTime"
+    Message:
+      type: object
+      properties:
+        role:
+          type: string
+          enum:
+            - system
+            - user
+            - assistant
+            - tool
+        content:
+          type: string
+        content_parts:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        tool_id:
+          type: string
+        tool_name:
+          type: string
+        tool_calls:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        reasoning_content:
+          type: string
+      additionalProperties: true
+    Tool:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        arguments:
+          description: Arbitrary JSON value.
+        result:
+          description: Arbitrary JSON value.
+      additionalProperties: false
+    SessionInput:
+      type: object
+      properties:
+        appName:
+          type: string
+        userId:
+          type: string
+        state:
+          type: object
+          additionalProperties: true
+      additionalProperties: false
+    EvalSetResult:
+      type: object
+      properties:
+        evalSetResultId:
+          type: string
+        evalSetResultName:
+          type: string
+        evalSetId:
+          type: string
+        evalCaseResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalCaseResult"
+        summary:
+          $ref: "#/components/schemas/EvalSetResultSummary"
+        creationTimestamp:
+          $ref: "#/components/schemas/EpochTime"
+    EvalSetResultSummary:
+      type: object
+      properties:
+        overallStatus:
+          $ref: "#/components/schemas/EvalStatus"
+        numRuns:
+          type: integer
+        runStatusCounts:
+          $ref: "#/components/schemas/EvalStatusCounts"
+        runSummaries:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalSetRunSummary"
+        evalCaseSummaries:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalCaseResultSummary"
+    EvalSetRunSummary:
+      type: object
+      properties:
+        runId:
+          type: integer
+        overallStatus:
+          $ref: "#/components/schemas/EvalStatus"
+        caseStatusCounts:
+          $ref: "#/components/schemas/EvalStatusCounts"
+        metricSummaries:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalMetricSummary"
+    EvalCaseResultSummary:
+      type: object
+      properties:
+        evalId:
+          type: string
+        overallStatus:
+          $ref: "#/components/schemas/EvalStatus"
+        runStatusCounts:
+          $ref: "#/components/schemas/EvalStatusCounts"
+        metricSummaries:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalMetricSummary"
+        runSummaries:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalCaseRunSummary"
+    EvalCaseRunSummary:
+      type: object
+      properties:
+        runId:
+          type: integer
+        finalEvalStatus:
+          $ref: "#/components/schemas/EvalStatus"
+        errorMessage:
+          type: string
+        metricResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalMetricRunSummary"
+    EvalMetricSummary:
+      type: object
+      properties:
+        metricName:
+          type: string
+        averageScore:
+          type: number
+        evalStatus:
+          $ref: "#/components/schemas/EvalStatus"
+        threshold:
+          type: number
+        statusCounts:
+          $ref: "#/components/schemas/EvalStatusCounts"
+    EvalMetricRunSummary:
+      type: object
+      properties:
+        metricName:
+          type: string
+        score:
+          type: number
+        evalStatus:
+          $ref: "#/components/schemas/EvalStatus"
+        threshold:
+          type: number
+    EvalStatusCounts:
+      type: object
+      properties:
+        passed:
+          type: integer
+        failed:
+          type: integer
+        notEvaluated:
+          type: integer
+    EvalCaseResult:
+      type: object
+      properties:
+        evalSetId:
+          type: string
+        evalId:
+          type: string
+        runId:
+          type: integer
+        finalEvalStatus:
+          $ref: "#/components/schemas/EvalStatus"
+        errorMessage:
+          type: string
+        overallEvalMetricResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalMetricResult"
+        evalMetricResultPerInvocation:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalMetricResultPerInvocation"
+        sessionId:
+          type: string
+        userId:
+          type: string
+    EvalMetricResult:
+      type: object
+      properties:
+        metricName:
+          type: string
+        score:
+          type: number
+        evalStatus:
+          $ref: "#/components/schemas/EvalStatus"
+        threshold:
+          type: number
+        criterion:
+          type: object
+          additionalProperties: true
+        details:
+          $ref: "#/components/schemas/EvalMetricResultDetails"
+    EvalMetricResultPerInvocation:
+      type: object
+      properties:
+        actualInvocation:
+          $ref: "#/components/schemas/Invocation"
+        expectedInvocation:
+          $ref: "#/components/schemas/Invocation"
+        evalMetricResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/EvalMetricResult"
+    EvalMetricResultDetails:
+      type: object
+      properties:
+        reason:
+          type: string
+        score:
+          type: number
+        rubricScores:
+          type: array
+          items:
+            $ref: "#/components/schemas/RubricScore"
+    RubricScore:
+      type: object
+      properties:
+        id:
+          type: string
+        reason:
+          type: string
+        score:
+          type: number
+    EvalStatus:
+      type: string
+      enum:
+        - unknown
+        - passed
+        - failed
+        - not_evaluated
+    EpochTime:
+      type: number
+      format: double
+      description: Unix seconds encoded as a floating-point number.

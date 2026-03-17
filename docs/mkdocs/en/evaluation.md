@@ -3127,6 +3127,67 @@ Metric file example below:
 
 See [examples/evaluation/claudecode](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claudecode) for a runnable example.
 
+### Online Evaluation Service
+
+When evaluation must be invoked remotely by web pages, test platforms, or other backend services, you can place an HTTP API layer on top of `AgentEvaluator`. The framework provides this service wrapper in `server/evaluation`, exposing evaluation set queries, evaluation execution, and evaluation result queries as HTTP endpoints. See [examples/evaluation/server](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/server) for the complete example, and [server/evaluation/openapi.yaml](https://github.com/trpc-group/trpc-agent-go/tree/main/server/evaluation/openapi.yaml) for the API description.
+
+The core integration snippet is shown below:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	evalresultlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	sevaluation "trpc.group/trpc-go/trpc-agent-go/server/evaluation"
+)
+
+agentRunner := runner.NewRunner(appName, agent)
+defer agentRunner.Close()
+evalSetManager := evalsetlocal.New(evalset.WithBaseDir(dataDir))
+metricManager := metriclocal.New(metric.WithBaseDir(dataDir))
+evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(outputDir))
+registry := registry.New()
+agentEvaluator, err := evaluation.New(
+	appName,
+	agentRunner,
+	evaluation.WithEvalSetManager(evalSetManager),
+	evaluation.WithMetricManager(metricManager),
+	evaluation.WithEvalResultManager(evalResultManager),
+	evaluation.WithRegistry(registry),
+)
+if err != nil {
+	log.Fatalf("create agent evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+server, err := sevaluation.New(
+	sevaluation.WithAppName(appName),
+	sevaluation.WithBasePath("/evaluation"),
+	sevaluation.WithAgentEvaluator(agentEvaluator),
+	sevaluation.WithEvalSetManager(evalSetManager),
+	sevaluation.WithEvalResultManager(evalResultManager),
+)
+if err != nil {
+	log.Fatalf("create evaluation server: %v", err)
+}
+if err := http.ListenAndServe(":8080", server.Handler()); err != nil {
+	log.Fatalf("listen and serve: %v", err)
+}
+```
+
+By default, the service exposes three resource groups:
+
+- `sets`: query evaluation sets and individual set details.
+- `runs`: trigger an evaluation execution.
+- `results`: query evaluation results and individual result details.
+
+On success, `POST /evaluation/runs` returns the result of `AgentEvaluator.Evaluate` in the `evaluationResult` field. For frontend integration, platform access, or SDK generation, the OpenAPI description should be treated as the API contract.
+
 ## Best Practices
 
 Integrating evaluation into engineering workflows often delivers more value than expected. It is not about producing a polished report; it is about turning key Agent behaviors into sustainable regression signals.

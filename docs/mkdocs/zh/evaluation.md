@@ -3130,6 +3130,67 @@ Metric 的 `toolTrajectory` 配置示例如下：
 
 完整可运行示例参见 [examples/evaluation/claudecode](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/claudecode)。
 
+### 在线评估服务
+
+当评估能力需要被前端页面、测试平台或其他后端服务远程调用时，可以在 `AgentEvaluator` 之上增加一层 HTTP API 接入。框架在 `server/evaluation` 中提供了这层服务封装，用于对外暴露评估集查询、评估执行与评估结果查询能力。完整示例见 [examples/evaluation/server](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/server)，接口描述见 [server/evaluation/openapi.yaml](https://github.com/trpc-group/trpc-agent-go/tree/main/server/evaluation/openapi.yaml)。
+
+服务接入的核心代码片段如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	evalresultlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	sevaluation "trpc.group/trpc-go/trpc-agent-go/server/evaluation"
+)
+
+agentRunner := runner.NewRunner(appName, agent)
+defer agentRunner.Close()
+evalSetManager := evalsetlocal.New(evalset.WithBaseDir(dataDir))
+metricManager := metriclocal.New(metric.WithBaseDir(dataDir))
+evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(outputDir))
+registry := registry.New()
+agentEvaluator, err := evaluation.New(
+	appName,
+	agentRunner,
+	evaluation.WithEvalSetManager(evalSetManager),
+	evaluation.WithMetricManager(metricManager),
+	evaluation.WithEvalResultManager(evalResultManager),
+	evaluation.WithRegistry(registry),
+)
+if err != nil {
+	log.Fatalf("create agent evaluator: %v", err)
+}
+defer agentEvaluator.Close()
+server, err := sevaluation.New(
+	sevaluation.WithAppName(appName),
+	sevaluation.WithBasePath("/evaluation"),
+	sevaluation.WithAgentEvaluator(agentEvaluator),
+	sevaluation.WithEvalSetManager(evalSetManager),
+	sevaluation.WithEvalResultManager(evalResultManager),
+)
+if err != nil {
+	log.Fatalf("create evaluation server: %v", err)
+}
+if err := http.ListenAndServe(":8080", server.Handler()); err != nil {
+	log.Fatalf("listen and serve: %v", err)
+}
+```
+
+该服务默认提供三类资源：
+
+- `sets`：查询评估集列表与单个评估集详情。
+- `runs`：触发一次评估执行。
+- `results`：查询评估结果列表与单个评估结果详情。
+
+其中，`POST /evaluation/runs` 的成功响应返回 `AgentEvaluator.Evaluate` 的结果，位于 `evaluationResult` 字段中。对于需要页面联调、平台接入或 SDK 生成的场景，建议直接以 OpenAPI 描述作为接口契约。
+
 ## 最佳实践
 
 把评估接入工程化流程，价值往往比想象得更大。它不是为了产出一份漂亮报表，而是为了让 Agent 的关键行为变成可持续的回归信号。
