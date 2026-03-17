@@ -332,17 +332,25 @@ func TestBuildRequestProcessors_PostToolPromptInjection(t *testing.T) {
 		customPrompt  = "[Custom Prompt] Do not mention tools."
 	)
 
-	run := func(t *testing.T, opts *Options) string {
+	findPostToolProcessor := func(
+		t *testing.T,
+		opts *Options,
+	) *processor.PostToolRequestProcessor {
 		t.Helper()
 
 		procs := buildRequestProcessors("tester", opts)
-		var ptp *processor.PostToolRequestProcessor
 		for _, p := range procs {
 			if v, ok := p.(*processor.PostToolRequestProcessor); ok {
-				ptp = v
-				break
+				return v
 			}
 		}
+		return nil
+	}
+
+	run := func(t *testing.T, opts *Options) string {
+		t.Helper()
+
+		ptp := findPostToolProcessor(t, opts)
 		require.NotNil(t, ptp)
 
 		req := &model.Request{
@@ -377,16 +385,14 @@ func TestBuildRequestProcessors_PostToolPromptInjection(t *testing.T) {
 	t.Run("injection disabled", func(t *testing.T) {
 		opts := &Options{}
 		WithEnablePostToolPrompt(false)(opts)
-		got := run(t, opts)
-		require.Equal(t, systemContent, got)
+		require.Nil(t, findPostToolProcessor(t, opts))
 	})
 
 	t.Run("disable overrides custom prompt", func(t *testing.T) {
 		opts := &Options{}
 		WithPostToolPrompt(customPrompt)(opts)
 		WithEnablePostToolPrompt(false)(opts)
-		got := run(t, opts)
-		require.Equal(t, systemContent, got)
+		require.Nil(t, findPostToolProcessor(t, opts))
 	})
 }
 

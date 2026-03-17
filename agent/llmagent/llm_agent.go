@@ -331,16 +331,13 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 }
 
 func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
-	var postToolOpts []processor.PostToolOption
 	if options.postToolPromptEnabled != nil &&
 		!*options.postToolPromptEnabled {
-		// PostToolRequestProcessor treats an empty prompt as "disabled".
-		// Keep the processor registered, but skip prompt injection.
-		postToolOpts = append(
-			postToolOpts,
-			processor.WithPostToolPrompt(""),
-		)
-	} else if options.PostToolPrompt != "" {
+		return requestProcessors
+	}
+
+	var postToolOpts []processor.PostToolOption
+	if options.PostToolPrompt != "" {
 		postToolOpts = append(
 			postToolOpts,
 			processor.WithPostToolPrompt(options.PostToolPrompt),
