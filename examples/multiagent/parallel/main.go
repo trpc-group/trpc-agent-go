@@ -31,6 +31,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+
+	// Import as a side effect to automatically use the langfuse testing helper.
+	_ "trpc.group/trpc-go/trpc-agent-go/testing/telemetry/langfuse"
 )
 
 const (
