@@ -12,6 +12,7 @@ package a2a
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -287,6 +288,11 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 		return c.convertCodeExecutionToA2AMessage(event)
 	}
 
+	// Check if the event carries structured output (e.g., RPC trace, decision details).
+	if hasStructuredOutput(event) {
+		return c.convertStructuredOutputToA2AMessage(event)
+	}
+
 	// Fallback to plain content conversion.
 	return c.convertContentToA2AMessage(ctx, event)
 }
@@ -415,6 +421,11 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 
 	if isCodeExecutionEvent(evt) {
 		return c.convertCodeExecutionToA2AStreamingMessage(evt, options)
+	}
+
+	// Check if the event carries structured output (e.g., RPC trace, decision details).
+	if hasStructuredOutput(evt) {
+		return c.convertStructuredOutputToA2AStreamingMessage(evt, options)
 	}
 
 	return c.convertDeltaContentToA2AStreamingMessage(ctx, evt, options)
@@ -680,6 +691,90 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AStreamingMessage(
 		options,
 		msg.Parts,
 	), nil
+}
+
+// hasStructuredOutput checks if an event carries a non-nil StructuredOutput payload.
+func hasStructuredOutput(evt *event.Event) bool {
+	return evt != nil && evt.StructuredOutput != nil
+}
+
+// toDataPartPayload normalises an arbitrary StructuredOutput value into a
+// type that protocol.NewDataPart accepts (typically map[string]any).
+//
+// Supported input types:
+//   - map[string]any         → used directly
+//   - []byte / json.RawMessage → json.Unmarshal into any
+//   - anything else          → json.Marshal then json.Unmarshal (round-trip)
+//
+// Returns (nil, false) when the conversion fails so the caller can skip the
+// event gracefully without panicking.
+func toDataPartPayload(v any) (any, bool) {
+	switch val := v.(type) {
+	case map[string]any:
+		return val, true
+	case []byte:
+		var out any
+		if err := json.Unmarshal(val, &out); err != nil {
+			return nil, false
+		}
+		return out, true
+	case json.RawMessage:
+		var out any
+		if err := json.Unmarshal(val, &out); err != nil {
+			return nil, false
+		}
+		return out, true
+	default:
+		b, err := json.Marshal(val)
+		if err != nil {
+			return nil, false
+		}
+		var out any
+		if err := json.Unmarshal(b, &out); err != nil {
+			return nil, false
+		}
+		return out, true
+	}
+}
+
+// convertStructuredOutputToA2AMessage converts an event with StructuredOutput
+// into an A2A DataPart message (unary path).
+func (c *defaultEventToA2AMessage) convertStructuredOutputToA2AMessage(
+	evt *event.Event,
+) (protocol.UnaryMessageResult, error) {
+	data, ok := toDataPartPayload(evt.StructuredOutput)
+	if !ok {
+		return nil, nil
+	}
+
+	dataPart := protocol.NewDataPart(data)
+	c.setPartTypeMetadata(&dataPart, ia2a.DataPartMetadataTypeCustomData)
+
+	parts := []protocol.Part{&dataPart}
+	msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
+	msg.Metadata = c.buildMessageMetadata(evt)
+	return &msg, nil
+}
+
+// convertStructuredOutputToA2AStreamingMessage converts an event with
+// StructuredOutput into an A2A streaming result.
+// It reuses the unary converter then wraps via convertPartsToA2AStreamingResult,
+// following the same pattern as convertToolCallToA2AStreamingMessage.
+func (c *defaultEventToA2AMessage) convertStructuredOutputToA2AStreamingMessage(
+	evt *event.Event,
+	options EventToA2AStreamingOptions,
+) (protocol.StreamingMessageResult, error) {
+	unaryResult, err := c.convertStructuredOutputToA2AMessage(evt)
+	if err != nil || unaryResult == nil {
+		return nil, err
+	}
+
+	msg, ok := unaryResult.(*protocol.Message)
+	if !ok || len(msg.Parts) == 0 {
+		return nil, nil
+	}
+
+	return c.convertPartsToA2AStreamingResult(evt, options, msg.Parts), nil
 }
 
 // convertFilePart converts a protocol.FilePart to one or more model.ContentPart values.

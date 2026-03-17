@@ -33,6 +33,11 @@ const (
 	// Used by Google ADK for code execution scenarios.
 	DataPartMetadataTypeCodeExecutionResult = "code_execution_result"
 
+	// DataPartMetadataTypeCustomData is the metadata value for custom structured data DataPart.
+	// Used for events that carry structured output (e.g., RPC trace, decision details)
+	// via Event.StructuredOutput instead of plain text content.
+	DataPartMetadataTypeCustomData = "custom_data"
+
 	// ToolCallFieldID is the data field key for tool call ID.
 	ToolCallFieldID = "id"
 
