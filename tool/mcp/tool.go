@@ -37,6 +37,12 @@ func (r *mcpToolResult) GetMeta() map[string]any {
 	return r.Meta
 }
 
+// GetCallbackResult returns the callback-facing result payload.
+// AfterTool callbacks should continue to receive the raw content slice.
+func (r *mcpToolResult) GetCallbackResult() any {
+	return r.Content
+}
+
 // mcpTool implements the Tool interface for MCP tools.
 type mcpTool struct {
 	mcpToolRef     *mcp.Tool
