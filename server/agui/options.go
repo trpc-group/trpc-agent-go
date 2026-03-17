@@ -163,6 +163,13 @@ func WithReasoningContentEnabled(enabled bool) Option {
 	}
 }
 
+// WithToolResultInputTranslationEnabled controls whether echoed tool-result inputs pass through the AG-UI translator.
+func WithToolResultInputTranslationEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithToolResultInputTranslationEnabled(enabled))
+	}
+}
+
 // WithMessagesSnapshotPath sets the HTTP path for the messages snapshot handler, "/history" in default.
 func WithMessagesSnapshotPath(p string) Option {
 	return func(o *options) {

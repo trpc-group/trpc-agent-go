@@ -116,6 +116,12 @@ func TestWithReasoningContentEnabled(t *testing.T) {
 	assert.True(t, ro.ReasoningContentEnabled)
 }
 
+func TestWithToolResultInputTranslationEnabled(t *testing.T) {
+	opts := newOptions(WithToolResultInputTranslationEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.ToolResultInputTranslationEnabled)
+}
+
 func TestWithMessagesSnapshotFollowEnabled(t *testing.T) {
 	opts := newOptions(WithMessagesSnapshotFollowEnabled(true))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)

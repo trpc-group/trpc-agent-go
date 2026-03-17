@@ -29,6 +29,7 @@ const (
 	defaultGraphNodeInterruptActivityEnabled      = false
 	defaultGraphNodeInterruptActivityTopLevelOnly = false
 	defaultReasoningContentEnabled                = false
+	defaultToolResultInputTranslationEnabled      = false
 )
 
 // Options holds the options for the runner.
@@ -54,6 +55,7 @@ type Options struct {
 	GraphNodeInterruptActivityEnabled      bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
 	GraphNodeInterruptActivityTopLevelOnly bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
 	ReasoningContentEnabled                bool                  // ReasoningContentEnabled controls whether reasoning content events are emitted.
+	ToolResultInputTranslationEnabled      bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
 }
 
 // NewOptions creates a new options instance.
@@ -73,6 +75,7 @@ func NewOptions(opt ...Option) *Options {
 		GraphNodeInterruptActivityEnabled:      defaultGraphNodeInterruptActivityEnabled,
 		GraphNodeInterruptActivityTopLevelOnly: defaultGraphNodeInterruptActivityTopLevelOnly,
 		ReasoningContentEnabled:                defaultReasoningContentEnabled,
+		ToolResultInputTranslationEnabled:      defaultToolResultInputTranslationEnabled,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -246,6 +249,13 @@ func WithGraphNodeInterruptActivityTopLevelOnly(enabled bool) Option {
 func WithReasoningContentEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.ReasoningContentEnabled = enabled
+	}
+}
+
+// WithToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
+func WithToolResultInputTranslationEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.ToolResultInputTranslationEnabled = enabled
 	}
 }
 

@@ -931,53 +931,6 @@ server, err := agui.New(
 
 完整示例可参考 [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph)，前端渲染与审批交互可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
-## 最佳实践
-
-### 生成文档
-
-长篇文档如果直接插入到对话正文，很容易把主对话“刷屏”，用户也难以区分对话内容和文档内容。为了解决这个问题，建议使用“文档面板”来承载长文档。通过 AG-UI 的事件流约定一套“打开文档面板 → 写入文档内容 → 关闭文档面板”的工作流，将长文档从对话中“抽离”出来，避免干扰正常交流，示例方案如下。
-
-1. **后端：定义工具并约束调用顺序**
-
-   为 Agent 提供两个工具：**打开文档面板** 和 **关闭文档面板**，并在 prompt 中约束生成顺序：
-   当进入文档生成流程时，按以下顺序执行：
-
-   1. 先调用“打开文档面板”工具
-   2. 紧接着输出文档内容
-   3. 最后调用“关闭文档面板”工具
-
-   转换为 AG-UI 事件流，大致形态如下：
-
-   ```text
-   打开文档面板工具
-     → ToolCallStart
-     → ToolCallArgs
-     → ToolCallEnd
-     → ToolCallResult
-
-   文档内容
-     → TextMessageStart
-     → TextMessageContent
-     → TextMessageEnd
-
-   关闭文档面板工具
-     → ToolCallStart
-     → ToolCallArgs
-     → ToolCallEnd
-     → ToolCallResult
-   ```
-
-2. **前端：监听工具事件并维护文档面板**
-
-   在前端监听事件流：
-
-   - 当捕捉到 `open_report_document` 工具事件时：创建文档面板，并将其后的文本消息内容写入该文档面板；
-   - 当捕捉到 `close_report_document` 工具事件时：关闭文档面板（或将其标记为生成完成）。
-
-实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
-
-![report](../assets/gif/agui/report.gif)
-
 ### 外部工具
 
 当工具必须在客户端或业务侧执行时，可以采用外部工具模式。后端只生成工具调用并在工具节点触发中断，前端执行工具并回传结果，后端从中断点恢复继续运行。该模式要求工具结果进入 LLM 上下文，并写入会话历史，便于后续通过消息快照回放完整对话。
@@ -987,6 +940,19 @@ server, err := agui.New(
 一次外部工具调用对应两次请求。第一次请求使用 `role=user`，当 LLM 触发工具调用时，事件流会输出 `TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END`，随后在工具节点输出 `ACTIVITY_DELTA graph.node.interrupt` 并结束本次 SSE。前端在事件流中获取 `toolCallId` 与参数，并从中断事件获取 `lineageId`。
 
 第二次请求使用 `role=tool`，把工具执行结果回传给后端。`toolCallId` 必须与第一次请求一致，`content` 为工具输出字符串，同时在 `forwardedProps.lineage_id` 填入第一次中断事件返回的 `lineageId`。服务端会先把该 tool message 翻译为 `TOOL_CALL_RESULT` 并写入会话，再从对应 checkpoint 恢复继续生成最终回复。
+
+如果希望这条 `role=tool` 输入回显经过 Translator，可以开启 `agui.WithToolResultInputTranslationEnabled(true)`；开启后，AG-UI Runner 会先把 tool result 输入规范化为内部事件，再交给 Translator 处理，示例如下。
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithToolResultInputTranslationEnabled(true),
+)
+```
 
 如果第一次请求中 LLM 未触发任何工具调用，则不会出现中断事件，也不需要发起第二次请求。
 
@@ -1049,3 +1015,52 @@ server, err := agui.New(
 ```
 
 完整示例可参考 [examples/agui/server/externaltool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
+
+## 最佳实践
+
+默认优先使用服务端工具执行路径。只有当工具必须在客户端或业务侧执行时，才建议采用“外部工具”模式；这类场景更适合作为进阶用法来设计与评估。
+
+### 生成文档
+
+长篇文档如果直接插入到对话正文，很容易把主对话“刷屏”，用户也难以区分对话内容和文档内容。为了解决这个问题，建议使用“文档面板”来承载长文档。通过 AG-UI 的事件流约定一套“打开文档面板 → 写入文档内容 → 关闭文档面板”的工作流，将长文档从对话中“抽离”出来，避免干扰正常交流，示例方案如下。
+
+1. **后端：定义工具并约束调用顺序**
+
+   为 Agent 提供两个工具：**打开文档面板** 和 **关闭文档面板**，并在 prompt 中约束生成顺序：
+   当进入文档生成流程时，按以下顺序执行：
+
+   1. 先调用“打开文档面板”工具
+   2. 紧接着输出文档内容
+   3. 最后调用“关闭文档面板”工具
+
+   转换为 AG-UI 事件流，大致形态如下：
+
+   ```text
+   打开文档面板工具
+     → ToolCallStart
+     → ToolCallArgs
+     → ToolCallEnd
+     → ToolCallResult
+
+   文档内容
+     → TextMessageStart
+     → TextMessageContent
+     → TextMessageEnd
+
+   关闭文档面板工具
+     → ToolCallStart
+     → ToolCallArgs
+     → ToolCallEnd
+     → ToolCallResult
+   ```
+
+2. **前端：监听工具事件并维护文档面板**
+
+   在前端监听事件流：
+
+   - 当捕捉到 `open_report_document` 工具事件时：创建文档面板，并将其后的文本消息内容写入该文档面板；
+   - 当捕捉到 `close_report_document` 工具事件时：关闭文档面板（或将其标记为生成完成）。
+
+实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
+
+![report](../assets/gif/agui/report.gif)
