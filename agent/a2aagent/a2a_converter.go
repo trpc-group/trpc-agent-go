@@ -219,18 +219,26 @@ func appendImagePart(parts []protocol.Part, cp model.ContentPart) []protocol.Par
 		return parts
 	}
 	if len(cp.Image.Data) > 0 {
-		return append(parts, protocol.NewFilePartWithBytes(
+		fp := protocol.NewFilePartWithBytes(
 			"image",
 			cp.Image.Format,
 			base64.StdEncoding.EncodeToString(cp.Image.Data),
-		))
+		)
+		fp.Metadata = map[string]any{
+			ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeImage,
+		}
+		return append(parts, &fp)
 	}
 	if cp.Image.URL != "" {
-		return append(parts, protocol.NewFilePartWithURI(
+		fp := protocol.NewFilePartWithURI(
 			"image",
 			cp.Image.Format,
 			cp.Image.URL,
-		))
+		)
+		fp.Metadata = map[string]any{
+			ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeImage,
+		}
+		return append(parts, &fp)
 	}
 	return parts
 }
@@ -239,26 +247,47 @@ func appendAudioPart(parts []protocol.Part, cp model.ContentPart) []protocol.Par
 	if cp.Audio == nil || cp.Audio.Data == nil {
 		return parts
 	}
-	return append(parts, protocol.NewFilePartWithBytes(
+	fp := protocol.NewFilePartWithBytes(
 		"audio",
 		cp.Audio.Format,
 		base64.StdEncoding.EncodeToString(cp.Audio.Data),
-	))
+	)
+	fp.Metadata = map[string]any{
+		ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeAudio,
+	}
+	return append(parts, &fp)
 }
 
 func appendFilePart(parts []protocol.Part, cp model.ContentPart) []protocol.Part {
-	if cp.File == nil || len(cp.File.Data) == 0 {
+	if cp.File == nil {
 		return parts
 	}
 	fileName := cp.File.Name
 	if fileName == "" {
 		fileName = "file"
 	}
-	return append(parts, protocol.NewFilePartWithBytes(
-		fileName,
-		cp.File.MimeType,
-		base64.StdEncoding.EncodeToString(cp.File.Data),
-	))
+	metadata := map[string]any{
+		ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeFile,
+	}
+	if len(cp.File.Data) > 0 {
+		fp := protocol.NewFilePartWithBytes(
+			fileName,
+			cp.File.MimeType,
+			base64.StdEncoding.EncodeToString(cp.File.Data),
+		)
+		fp.Metadata = metadata
+		return append(parts, &fp)
+	}
+	if cp.File.FileID != "" {
+		fp := protocol.NewFilePartWithURI(
+			fileName,
+			cp.File.MimeType,
+			cp.File.FileID,
+		)
+		fp.Metadata = metadata
+		return append(parts, &fp)
+	}
+	return parts
 }
 
 // buildRespEvent converts A2A response to tRPC event (used for both streaming and non-streaming mode)
@@ -475,12 +504,19 @@ func processFunctionResponse(d *protocol.DataPart) (content string, id string, n
 		name = toolName
 	}
 
-	// Extract response content - server sends it as raw string
+	// Extract response content. Keep strings as-is, otherwise prefer JSON for
+	// structured values.
 	if response, ok := data[ia2a.ToolCallFieldResponse]; ok {
 		if responseStr, ok := response.(string); ok {
 			content = responseStr
+		} else if jsonBytes, err := json.Marshal(response); err == nil {
+			content = string(jsonBytes)
 		} else {
-			log.Debugf("Tool response is not a string: %T, skip", response)
+			log.Infof(
+				"Tool response JSON marshal failed for type %T, skip: %v",
+				response,
+				err,
+			)
 		}
 	}
 

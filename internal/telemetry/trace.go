@@ -62,17 +62,30 @@ func NewExecuteToolSpanName(toolName string) string {
 	return OperationExecuteTool + " " + toolName
 }
 
+// WorkflowType is the normalized type vocabulary used by workflow spans.
+type WorkflowType string
+
+// Standard workflow type values.
 const (
-	// KeyGenAIWorkflowName is the name of the workflow.
-	KeyGenAIWorkflowName = "gen_ai.workflow.name"
-	// KeyGenAIWorkflowID is the id of the workflow.
-	KeyGenAIWorkflowID = "gen_ai.workflow.id"
+	WorkflowTypeGraph    WorkflowType = "graph"
+	WorkflowTypeFunction WorkflowType = "function"
+	WorkflowTypeLLM      WorkflowType = "llm"
+	WorkflowTypeTool     WorkflowType = "tool"
+	WorkflowTypeAgent    WorkflowType = "agent"
+	WorkflowTypeJoin     WorkflowType = "join"
+	WorkflowTypeRouter   WorkflowType = "router"
 )
+
+// String returns the string representation of the workflow type.
+func (wt WorkflowType) String() string {
+	return string(wt)
+}
 
 // Workflow is the workflow information.
 type Workflow struct {
 	Name     string
 	ID       string
+	Type     WorkflowType
 	Request  any
 	Response any
 	Error    error
@@ -88,9 +101,14 @@ func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	if !span.IsRecording() {
 		return
 	}
-	span.SetAttributes(attribute.String(semconvtrace.KeyGenAIOperationName, OperationWorkflow))
-	span.SetAttributes(attribute.String(KeyGenAIWorkflowName, workflow.Name))
-	span.SetAttributes(attribute.String(KeyGenAIWorkflowID, workflow.ID))
+	span.SetAttributes(
+		attribute.String(semconvtrace.KeyGenAIOperationName, OperationWorkflow),
+		attribute.String(semconvtrace.KeyGenAIWorkflowName, workflow.Name),
+		attribute.String(semconvtrace.KeyGenAIWorkflowID, workflow.ID),
+	)
+	if workflow.Type != "" {
+		span.SetAttributes(attribute.String(semconvtrace.KeyGenAIWorkflowType, workflow.Type.String()))
+	}
 	if workflow.Request != nil {
 		request, err := json.Marshal(workflow.Request)
 		if err != nil {

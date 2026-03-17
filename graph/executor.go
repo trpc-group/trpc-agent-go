@@ -287,6 +287,7 @@ func (e *Executor) Execute(
 				workflow = &itelemetry.Workflow{
 					Name:    workflowName,
 					ID:      invocation.AgentName,
+					Type:    itelemetry.WorkflowTypeGraph,
 					Request: initialState.safeClone(),
 				}
 			}

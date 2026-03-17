@@ -10,6 +10,7 @@
 package a2aagent
 
 import (
+	"encoding/json"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -466,8 +467,20 @@ func TestDefaultEventA2AConverter_ConvertToA2AMessage(t *testing.T) {
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
-				if _, ok := msg.Parts[0].(protocol.FilePart); !ok {
-					t.Error("expected FilePart")
+				filePart, ok := msg.Parts[0].(*protocol.FilePart)
+				if !ok {
+					t.Error("expected *FilePart")
+					return
+				}
+				if got := filePart.Metadata[ia2a.FilePartMetadataContentTypeKey]; got != ia2a.FilePartMetadataContentTypeImage {
+					t.Errorf("expected content_type %q, got %#v", ia2a.FilePartMetadataContentTypeImage, got)
+				}
+				fileBytes, ok := filePart.File.(*protocol.FileWithBytes)
+				if !ok {
+					t.Fatalf("expected *protocol.FileWithBytes, got %T", filePart.File)
+				}
+				if fileBytes.MimeType == nil || *fileBytes.MimeType != "png" {
+					t.Errorf("expected mime type png, got %#v", fileBytes.MimeType)
 				}
 			},
 		},
@@ -496,8 +509,20 @@ func TestDefaultEventA2AConverter_ConvertToA2AMessage(t *testing.T) {
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
-				if _, ok := msg.Parts[0].(protocol.FilePart); !ok {
-					t.Error("expected FilePart")
+				filePart, ok := msg.Parts[0].(*protocol.FilePart)
+				if !ok {
+					t.Error("expected *FilePart")
+					return
+				}
+				if got := filePart.Metadata[ia2a.FilePartMetadataContentTypeKey]; got != ia2a.FilePartMetadataContentTypeImage {
+					t.Errorf("expected content_type %q, got %#v", ia2a.FilePartMetadataContentTypeImage, got)
+				}
+				fileURI, ok := filePart.File.(*protocol.FileWithURI)
+				if !ok {
+					t.Fatalf("expected *protocol.FileWithURI, got %T", filePart.File)
+				}
+				if fileURI.URI != "https://example.com/image.jpg" {
+					t.Errorf("expected URI https://example.com/image.jpg, got %s", fileURI.URI)
 				}
 			},
 		},
@@ -526,8 +551,13 @@ func TestDefaultEventA2AConverter_ConvertToA2AMessage(t *testing.T) {
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
-				if _, ok := msg.Parts[0].(protocol.FilePart); !ok {
-					t.Error("expected FilePart")
+				filePart, ok := msg.Parts[0].(*protocol.FilePart)
+				if !ok {
+					t.Error("expected *FilePart")
+					return
+				}
+				if got := filePart.Metadata[ia2a.FilePartMetadataContentTypeKey]; got != ia2a.FilePartMetadataContentTypeAudio {
+					t.Errorf("expected content_type %q, got %#v", ia2a.FilePartMetadataContentTypeAudio, got)
 				}
 			},
 		},
@@ -557,8 +587,13 @@ func TestDefaultEventA2AConverter_ConvertToA2AMessage(t *testing.T) {
 				if len(msg.Parts) != 1 {
 					t.Errorf("expected 1 part, got %d", len(msg.Parts))
 				}
-				if _, ok := msg.Parts[0].(protocol.FilePart); !ok {
-					t.Error("expected FilePart")
+				filePart, ok := msg.Parts[0].(*protocol.FilePart)
+				if !ok {
+					t.Error("expected *FilePart")
+					return
+				}
+				if got := filePart.Metadata[ia2a.FilePartMetadataContentTypeKey]; got != ia2a.FilePartMetadataContentTypeFile {
+					t.Errorf("expected content_type %q, got %#v", ia2a.FilePartMetadataContentTypeFile, got)
 				}
 			},
 		},
@@ -1026,6 +1061,12 @@ func TestProcessFunctionResponse(t *testing.T) {
 		validateFunc func(t *testing.T, content, id, name string)
 	}
 
+	unmarshalableResponse := struct {
+		Ch chan int
+	}{
+		Ch: make(chan int),
+	}
+
 	tests := []testCase{
 		{
 			name: "valid tool response",
@@ -1080,15 +1121,51 @@ func TestProcessFunctionResponse(t *testing.T) {
 			},
 		},
 		{
-			name: "non-string response",
+			name: "numeric response marshals to json",
 			dataPart: &protocol.DataPart{
 				Data: map[string]any{
 					"response": 12345,
 				},
 			},
 			validateFunc: func(t *testing.T, content, id, name string) {
+				if content != "12345" {
+					t.Errorf("expected JSON number content, got %s", content)
+				}
+			},
+		},
+		{
+			name: "object response marshals to json",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"response": map[string]any{
+						"city": "Beijing",
+						"temp": 26,
+					},
+				},
+			},
+			validateFunc: func(t *testing.T, content, id, name string) {
+				var got map[string]any
+				if err := json.Unmarshal([]byte(content), &got); err != nil {
+					t.Fatalf("expected valid JSON object content, got %q: %v", content, err)
+				}
+				if got["city"] != "Beijing" {
+					t.Errorf("expected city Beijing, got %#v", got["city"])
+				}
+				if got["temp"] != float64(26) {
+					t.Errorf("expected temp 26, got %#v", got["temp"])
+				}
+			},
+		},
+		{
+			name: "unmarshalable response is skipped",
+			dataPart: &protocol.DataPart{
+				Data: map[string]any{
+					"response": unmarshalableResponse,
+				},
+			},
+			validateFunc: func(t *testing.T, content, id, name string) {
 				if content != "" {
-					t.Errorf("expected empty content for non-string response, got %s", content)
+					t.Errorf("expected empty content for unmarshalable response, got %q", content)
 				}
 			},
 		},

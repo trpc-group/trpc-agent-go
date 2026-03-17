@@ -15,6 +15,7 @@ import (
 	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -92,6 +93,72 @@ func (f *fakeService) Close() error {
 
 type countingService struct {
 	closed int32
+}
+
+type blockingRunService struct {
+	release     chan struct{}
+	started     chan struct{}
+	inFlight    int32
+	maxInFlight int32
+}
+
+func newBlockingRunService() *blockingRunService {
+	return &blockingRunService{
+		release: make(chan struct{}),
+		started: make(chan struct{}, 16),
+	}
+}
+
+func (s *blockingRunService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
+	current := atomic.AddInt32(&s.inFlight, 1)
+	updateMaxInt32(&s.maxInFlight, current)
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		atomic.AddInt32(&s.inFlight, -1)
+		return nil, ctx.Err()
+	case <-s.release:
+	}
+	atomic.AddInt32(&s.inFlight, -1)
+	return []*service.InferenceResult{{
+		AppName:    req.AppName,
+		EvalSetID:  req.EvalSetID,
+		EvalCaseID: "case",
+		Status:     status.EvalStatusPassed,
+	}}, nil
+}
+
+func (s *blockingRunService) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt ...service.Option) (*service.EvalSetRunResult, error) {
+	return &service.EvalSetRunResult{
+		AppName:   req.AppName,
+		EvalSetID: req.EvalSetID,
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			makeEvalCaseResult(req.EvalSetID, "case", "metric", 1, 0, status.EvalStatusPassed),
+		},
+	}, nil
+}
+
+func (s *blockingRunService) Close() error {
+	return nil
+}
+
+func updateMaxInt32(target *int32, value int32) {
+	for {
+		current := atomic.LoadInt32(target)
+		if current >= value {
+			return
+		}
+		if atomic.CompareAndSwapInt32(target, current, value) {
+			return
+		}
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func (c *countingService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
@@ -280,15 +347,16 @@ func makeEvalCaseResult(evalSetID, caseID string, metricName string, score float
 
 func defaultTestOptions(ae *agentEvaluator) *options {
 	return &options{
-		evalSetManager:    ae.evalSetManager,
-		evalResultManager: ae.evalResultManager,
-		metricManager:     ae.metricManager,
-		registry:          ae.registry,
-		metricRegistry:    ae.metricRegistry,
-		evalService:       ae.evalService,
-		judgeRunner:       ae.judgeRunner,
-		numRuns:           ae.numRuns,
-		runOptions:        append([]agent.RunOption(nil), ae.runOptions...),
+		evalSetManager:         ae.evalSetManager,
+		evalResultManager:      ae.evalResultManager,
+		metricManager:          ae.metricManager,
+		registry:               ae.registry,
+		metricRegistry:         ae.metricRegistry,
+		evalService:            ae.evalService,
+		judgeRunner:            ae.judgeRunner,
+		numRuns:                ae.numRuns,
+		numRunsParallelEnabled: ae.numRunsParallelEnabled,
+		runOptions:             append([]agent.RunOption(nil), ae.runOptions...),
 	}
 }
 
@@ -684,6 +752,78 @@ func TestAgentEvaluatorEvaluateAppliesPerCallNumRuns(t *testing.T) {
 
 	assert.Len(t, svc.inferenceRequests, 2)
 	assert.Len(t, svc.evaluateRequests, 2)
+}
+
+func TestAgentEvaluatorRunEvaluationExecutesRunsConcurrently(t *testing.T) {
+	ctx := context.Background()
+	svc := newBlockingRunService()
+	ae := &agentEvaluator{
+		appName:                "app",
+		evalService:            svc,
+		metricManager:          &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		evalResultManager:      evalresultinmemory.New(),
+		numRuns:                3,
+		numRunsParallelEnabled: boolPtr(true),
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ae.runEvaluation(ctx, "set", defaultTestOptions(ae))
+		done <- err
+	}()
+	timeout := time.NewTimer(2 * time.Second)
+	defer timeout.Stop()
+	for atomic.LoadInt32(&svc.maxInFlight) < 2 {
+		select {
+		case err := <-done:
+			assert.NoError(t, err)
+			t.Fatal("expected at least two runs to overlap before evaluation completed")
+		case <-svc.started:
+		case <-timeout.C:
+			close(svc.release)
+			err := <-done
+			assert.NoError(t, err)
+			assert.GreaterOrEqual(t, atomic.LoadInt32(&svc.maxInFlight), int32(2))
+			t.Fatal("timed out waiting for concurrent runs")
+		}
+	}
+	close(svc.release)
+	err := <-done
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&svc.maxInFlight), int32(2))
+}
+
+func TestAgentEvaluatorRunEvaluationRequiresParallelEnabled(t *testing.T) {
+	ctx := context.Background()
+	svc := newBlockingRunService()
+	ae := &agentEvaluator{
+		appName:           "app",
+		evalService:       svc,
+		metricManager:     &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		evalResultManager: evalresultinmemory.New(),
+		numRuns:           3,
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ae.runEvaluation(ctx, "set", defaultTestOptions(ae))
+		done <- err
+	}()
+	select {
+	case <-svc.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the first run to start")
+	}
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+		t.Fatal("expected serial execution to block on the first run")
+	case <-svc.started:
+		t.Fatal("expected numRuns to remain serial by default")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(svc.release)
+	err := <-done
+	assert.NoError(t, err)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&svc.maxInFlight))
 }
 
 func TestAgentEvaluatorEvaluateRejectsInvalidPerCallOptions(t *testing.T) {

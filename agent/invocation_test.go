@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -36,9 +37,41 @@ func TestNewInvocation(t *testing.T) {
 	require.Equal(t, "Hello", inv.Message.Content)
 }
 
+func TestNewInvocation_WarnsOnMessageWithEmptyRole(t *testing.T) {
+	original := agentlog.Default
+	logger := &testWarnLogger{}
+	agentlog.Default = logger
+	defer func() {
+		agentlog.Default = original
+	}()
+
+	inv := NewInvocation(
+		WithInvocationMessage(model.Message{Content: "Hello"}),
+	)
+
+	require.NotNil(t, inv)
+	require.Equal(t, 1, logger.warnfCalls)
+	require.Equal(t, model.RoleUser, inv.Message.Role)
+}
+
 type mockAgent struct {
 	name string
 }
+
+type testWarnLogger struct {
+	warnfCalls int
+}
+
+func (l *testWarnLogger) Debug(args ...any)                 {}
+func (l *testWarnLogger) Debugf(format string, args ...any) {}
+func (l *testWarnLogger) Info(args ...any)                  {}
+func (l *testWarnLogger) Infof(format string, args ...any)  {}
+func (l *testWarnLogger) Warn(args ...any)                  {}
+func (l *testWarnLogger) Warnf(format string, args ...any)  { l.warnfCalls++ }
+func (l *testWarnLogger) Error(args ...any)                 {}
+func (l *testWarnLogger) Errorf(format string, args ...any) {}
+func (l *testWarnLogger) Fatal(args ...any)                 {}
+func (l *testWarnLogger) Fatalf(format string, args ...any) {}
 
 func (a *mockAgent) Run(ctx context.Context, invocation *Invocation) (<-chan *event.Event, error) {
 	return nil, nil

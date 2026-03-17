@@ -9,13 +9,15 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../../model/gemini
 	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../../model/ollama
 	trpc.group/trpc-go/trpc-agent-go/model/provider => ../../model/provider
+	trpc.group/trpc-go/trpc-agent-go/server/evaluation => ../../server/evaluation
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql
 )
 
 require (
 	github.com/yanyiwu/gojieba v1.4.7
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
-	trpc.group/trpc-go/trpc-agent-go/evaluation v0.8.0
+	trpc.group/trpc-go/trpc-agent-go/evaluation v1.6.0
+	trpc.group/trpc-go/trpc-agent-go/server/evaluation v1.6.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
 
@@ -27,6 +29,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.19.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
+	github.com/bufbuild/protocompile v0.14.1 // indirect
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect
