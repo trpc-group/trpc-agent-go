@@ -1,0 +1,341 @@
+{
+  "evalSetResultId": "math-eval-app_math-basic_7afd4551-469a-48a6-8243-f80832f55ea7",
+  "evalSetResultName": "math-eval-app_math-basic_7afd4551-469a-48a6-8243-f80832f55ea7",
+  "evalSetId": "math-basic",
+  "evalCaseResults": [
+    {
+      "evalSetId": "math-basic",
+      "evalId": "calc_add",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "bbc753c6-4401-4ebe-a0c0-1b075c0b352e",
+            "userContent": {
+              "role": "user",
+              "content": "calc add 2 3"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "5"
+            },
+            "tools": [
+              {
+                "id": "call_MOyoHE36axcF3XGhKoTgqLHS",
+                "name": "calculator",
+                "arguments": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add"
+                },
+                "result": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add",
+                  "result": 5
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "calc_add-1",
+            "userContent": {
+              "role": "user",
+              "content": "calc add 2 3"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "calc result: 5"
+            },
+            "tools": [
+              {
+                "id": "tool_use_1",
+                "name": "calculator",
+                "arguments": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add"
+                },
+                "result": {
+                  "a": 2,
+                  "b": 3,
+                  "operation": "add",
+                  "result": 5
+                }
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "527d91fa-5963-4e9d-84a8-7a1e463034a8",
+      "userId": "user"
+    },
+    {
+      "evalSetId": "math-basic",
+      "evalId": "calc_multiply",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "matchStrategy": "exact"
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "b04f56a4-34d8-48e3-b266-149b7f431c0b",
+            "userContent": {
+              "role": "user",
+              "content": "calc multiply 6 7"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "42"
+            },
+            "tools": [
+              {
+                "id": "call_XGyiBTyCA4jseHHXpR3TNOYE",
+                "name": "calculator",
+                "arguments": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply"
+                },
+                "result": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply",
+                  "result": 42
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "calc_multiply-1",
+            "userContent": {
+              "role": "user",
+              "content": "calc multiply 6 7"
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "calc result: 42"
+            },
+            "tools": [
+              {
+                "id": "tool_use_2",
+                "name": "calculator",
+                "arguments": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply"
+                },
+                "result": {
+                  "a": 6,
+                  "b": 7,
+                  "operation": "multiply",
+                  "result": 42
+                }
+              }
+            ]
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "matchStrategy": "exact"
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "e4f192f6-c2d8-4c7a-ac51-0e81819ef098",
+      "userId": "user"
+    }
+  ],
+  "summary": {
+    "overallStatus": "passed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "passed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "passed",
+        "caseStatusCounts": {
+          "passed": 2
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 2
+            }
+          }
+        ]
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "calc_add",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "evalId": "calc_multiply",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1773293953.6163874
+}
