@@ -2725,9 +2725,15 @@ agentEvaluator, err := evaluation.New(
 
 通过 `evaluation.WithEvalCaseParallelEvaluationEnabled(true)` 开启并发评估后，评估阶段的 case 级回调也可能并发执行；同样由于 `args.Request` 指向同一份 `*EvaluateRequest`，因此建议只读；如需改写请求，可以在 set 级回调中完成。
 
+通过 `evaluation.WithNumRunsParallelEnabled(true)` 开启 run 级并发后，同一次 `Evaluate` 中不同 run 的 set 级回调也可能并发执行；虽然每个 run 使用的是各自独立的 `Request`，但回调内部如果依赖共享可变状态，仍需要自行保证并发安全。
+
 单个 EvalCase 的推理或评估失败通常不会通过 `error` 向上传递，而是写入 `Result.Status` 与 `Result.ErrorMessage`，因此 `After*CaseArgs.Error` 不用于承载单个用例失败原因，需要判断失败可以查看 `args.Result.Status` 与 `args.Result.ErrorMessage`。
 
-### EvalCase 级别并发推理
+### 并发执行
+
+框架支持从 EvalCase 推理、EvalCase 评估和 NumRuns 三个层面开启并发，以缩短整体评测耗时。不同层面的并发能力彼此独立，可以按需单独开启或组合使用。
+
+#### EvalCase 级别并发推理
 
 当评估集用例较多时，推理阶段往往是主要耗时。框架支持在推理阶段按 EvalCase 并发运行，用于缩短总体耗时。
 
@@ -2748,7 +2754,7 @@ agentEvaluator, err := evaluation.New(
 
 开启并发后，需要保证 Runner、工具实现、外部依赖与回调逻辑可并发调用，避免共享可变状态导致相互干扰。
 
-### EvalCase 级别并发评估
+#### EvalCase 级别并发评估
 
 当评估器耗时较长时，例如 LLM Judge，评估阶段也可能成为瓶颈。框架支持在评估阶段按 EvalCase 并发执行评估器，以缩短总体耗时。
 
@@ -2766,6 +2772,27 @@ agentEvaluator, err := evaluation.New(
 ```
 
 并发评估只影响不同用例之间的评估。单个用例内部仍会按指标顺序逐条执行评估器，且返回的 `EvalCaseResults` 顺序与输入的 `InferenceResults` 一致。
+
+#### NumRuns 级别并发执行
+
+当同一个评估集需要重复运行多次时，总耗时会随着 `numRuns` 增加而增长。框架支持在 run 级别并发执行多个重复运行，用于缩短总体耗时。
+
+在创建 AgentEvaluator 时指定重复运行次数，并显式开启 run 级并发。当前不提供单独的 run 级并发度配置，开启后会按 `numRuns` 个 run 并发执行；如果未开启，即使设置了 `evaluation.WithNumRuns(n)`，也仍按串行方式执行。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/evaluation"
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithNumRuns(4),
+	evaluation.WithNumRunsParallelEnabled(true),
+)
+```
+
+run 级并发以完整运行过程为单位。每个 run 仍会独立完成一次完整的推理与评估流程，最终结果会汇总到同一个 `EvalSetResult` 中；同一 EvalCase 在不同运行中的明细结果会分别写入 `EvalCaseResults`，并通过 `runId` 区分。
+
+开启并发后，需要保证 Runner、工具实现、外部依赖与回调逻辑可并发调用。特别是同一次 `Evaluate` 中不同 run 的 set 级回调可能并发执行，如果依赖共享可变状态，需要自行保证并发安全。
 
 ### 上下文注入
 
