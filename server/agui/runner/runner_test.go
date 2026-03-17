@@ -48,7 +48,7 @@ func TestNew(t *testing.T) {
 	assert.NoError(t, err)
 	assert.IsType(t, expected, trans)
 	assert.NotNil(t, runner.runOptionResolver)
-
+	assert.False(t, runner.toolResultInputTranslationEnabled)
 	userID, err := runner.userIDResolver(context.Background(),
 		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	assert.NoError(t, err)
@@ -746,7 +746,6 @@ func TestRunToolMessageRecordedInTrackAndForwarded(t *testing.T) {
 			},
 		},
 	}
-
 	eventsCh, err := r.Run(context.Background(), input)
 	require.NoError(t, err)
 	evts := collectEvents(t, eventsCh)
@@ -1001,7 +1000,6 @@ func TestRunToolMessageSSEOrderAfterRunStarted(t *testing.T) {
 			},
 		},
 	}
-
 	eventsCh, err := r.Run(context.Background(), input)
 	require.NoError(t, err)
 	evts := collectEvents(t, eventsCh)
@@ -1010,12 +1008,78 @@ func TestRunToolMessageSSEOrderAfterRunStarted(t *testing.T) {
 	assert.IsType(t, (*aguievents.ToolCallResultEvent)(nil), evts[1])
 	assert.IsType(t, (*aguievents.ActivityDeltaEvent)(nil), evts[2])
 	assert.IsType(t, (*aguievents.TextMessageStartEvent)(nil), evts[3])
-
 	resultEvent, ok := evts[1].(*aguievents.ToolCallResultEvent)
 	require.True(t, ok)
 	assert.Equal(t, "tool-msg-1", resultEvent.MessageID)
 	assert.Equal(t, "call-1", resultEvent.ToolCallID)
 	assert.Equal(t, "tool result", resultEvent.Content)
+	require.Len(t, fakeTrans.seen, 1)
+	assert.Equal(t, "assistant", fakeTrans.seen[0].Author)
+	assert.False(t, fakeTrans.seen[0].Response.IsToolResultResponse())
+}
+
+func TestRunToolMessageTranslatedWhenEnabled(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	fakeTrans := &fakeTranslator{
+		events: [][]aguievents.Event{{
+			aguievents.NewCustomEvent("translated-tool-result", aguievents.WithValue("ok")),
+		}},
+	}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(ctx context.Context, input *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		stateResolver:                     defaultStateResolver,
+		runOptionResolver:                 defaultRunOptionResolver,
+		startSpan:                         defaultStartSpan,
+		toolResultInputTranslationEnabled: true,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{
+				ID:         "tool-msg-1",
+				Role:       types.RoleTool,
+				Content:    "tool result",
+				Name:       "calculator",
+				ToolCallID: "call-1",
+			},
+		},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	customEvent, ok := evts[1].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Equal(t, "translated-tool-result", customEvent.Name)
+	require.Len(t, fakeTrans.seen, 1)
+	seen := fakeTrans.seen[0]
+	require.NotNil(t, seen)
+	assert.Equal(t, toolResultInputEventAuthor, seen.Author)
+	assert.Empty(t, seen.Tag)
+	assert.Equal(t, "tool-msg-1", seen.ID)
+	require.NotNil(t, seen.Response)
+	assert.Equal(t, model.ObjectTypeToolResponse, seen.Response.Object)
+	assert.True(t, seen.Response.IsToolResultResponse())
+	require.Len(t, seen.Response.Choices, 1)
+	assert.Equal(t, model.RoleTool, seen.Response.Choices[0].Message.Role)
+	assert.Equal(t, "tool result", seen.Response.Choices[0].Message.Content)
+	assert.Equal(t, "call-1", seen.Response.Choices[0].Message.ToolID)
+	assert.Equal(t, "calculator", seen.Response.Choices[0].Message.ToolName)
 }
 
 func TestRunRunOptionResolverError(t *testing.T) {
@@ -1889,9 +1953,11 @@ func TestRunnerAfterTranslateCallbackOverridesEmission(t *testing.T) {
 type fakeTranslator struct {
 	events [][]aguievents.Event
 	err    error
+	seen   []*agentevent.Event
 }
 
 func (f *fakeTranslator) Translate(ctx context.Context, evt *agentevent.Event) ([]aguievents.Event, error) {
+	f.seen = append(f.seen, evt)
 	if f.err != nil {
 		return nil, f.err
 	}
