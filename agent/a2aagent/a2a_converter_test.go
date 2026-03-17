@@ -11,6 +11,7 @@ package a2aagent
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"

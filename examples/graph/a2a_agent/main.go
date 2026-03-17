@@ -23,6 +23,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -57,9 +58,10 @@ const (
 	parentStateKeyPayload    = "remote_state_payload"
 	parentStateKeyRawDeltaOK = "raw_state_delta_present"
 
-	defaultInput              = "Please explain why state handoff through the remote agent matters."
-	defaultServerStartTimeout = 300 * time.Millisecond
-	defaultRunTimeout         = 90 * time.Second
+	defaultInput       = "Please explain why state handoff through the remote agent matters."
+	defaultRunTimeout  = 90 * time.Second
+	serverPollInterval = 20 * time.Millisecond
+	serverPollTimeout  = 5 * time.Second
 
 	remoteTransportValue = "a2a"
 )
@@ -135,12 +137,11 @@ func run(ctx context.Context) error {
 		}
 	}()
 
-	select {
-	case err := <-serverErr:
-		return fmt.Errorf("start a2a server: %w", err)
-	case <-time.After(defaultServerStartTimeout):
-	case <-ctx.Done():
-		return fmt.Errorf("wait for a2a server: %w", ctx.Err())
+	// Poll the agent-card endpoint until the server is ready, instead of
+	// using a fixed sleep that may be too short on slow machines.
+	agentCardURL := fmt.Sprintf("http://%s/.well-known/agent.json", resolvedHost)
+	if err := waitForServer(ctx, agentCardURL, serverErr); err != nil {
+		return err
 	}
 
 	remoteURL := fmt.Sprintf("http://%s", resolvedHost)
@@ -206,6 +207,37 @@ func run(ctx context.Context) error {
 	fmt.Printf("Raw state delta seen by parent mapper: %v\n", rawDeltaOK)
 	fmt.Printf("Parent graph confirmation:\n%s\n", finalResponseText(completionEvent))
 	return nil
+}
+
+// waitForServer polls the given URL until it returns HTTP 200, the server
+// goroutine reports an error, or the context is cancelled.
+func waitForServer(ctx context.Context, url string, serverErr <-chan error) error {
+	pollCtx, cancel := context.WithTimeout(ctx, serverPollTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(serverPollInterval)
+	defer ticker.Stop()
+
+	httpClient := &http.Client{Timeout: serverPollInterval}
+	for {
+		select {
+		case err := <-serverErr:
+			return fmt.Errorf("start a2a server: %w", err)
+		case <-pollCtx.Done():
+			if ctx.Err() != nil {
+				return fmt.Errorf("wait for a2a server: %w", ctx.Err())
+			}
+			return fmt.Errorf("a2a server did not become ready within %s", serverPollTimeout)
+		case <-ticker.C:
+			resp, err := httpClient.Get(url) //nolint:noctx
+			if err == nil {
+				_ = resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					return nil
+				}
+			}
+		}
+	}
 }
 
 func buildRemoteGraphAgent(modelName, baseURL, apiKey string, modelStreaming bool) (agent.Agent, error) {

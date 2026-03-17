@@ -193,6 +193,19 @@ func hasStructuredMetadata(metadata map[string]any) bool {
 	return len(metadata) > 0
 }
 
+// hasContentfulMetadata reports whether metadata contains fields that are
+// meaningful enough to warrant emitting an otherwise-empty A2A message.
+// A message that carries only llm_response_id (and nothing else) is not
+// useful to downstream consumers, so we exclude that key from the check.
+func hasContentfulMetadata(metadata map[string]any) bool {
+	for k := range metadata {
+		if k != ia2a.MessageMetadataResponseIDKey {
+			return true
+		}
+	}
+	return false
+}
+
 func matchesAllowedGraphObjectType(objectType string, allowedObjectTypes []string) bool {
 	for _, allowed := range allowedObjectTypes {
 		if allowed == objectType || allowed == "*" {
@@ -411,7 +424,7 @@ func (c *defaultEventToA2AMessage) convertMetadataOnlyToA2AMessageResult(
 	evt *event.Event,
 ) protocol.UnaryMessageResult {
 	metadata := c.buildMessageMetadata(evt)
-	if !hasStructuredMetadata(metadata) {
+	if !hasContentfulMetadata(metadata) {
 		return nil
 	}
 
@@ -425,7 +438,7 @@ func (c *defaultEventToA2AMessage) convertMetadataOnlyToA2AStreamingMessage(
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamingMessageResult, bool) {
 	metadata := c.buildMessageMetadata(evt)
-	if !hasStructuredMetadata(metadata) {
+	if !hasContentfulMetadata(metadata) {
 		return nil, false
 	}
 	return c.convertPartsToA2AStreamingResultWithMetadata(evt, options, nil, metadata), true
