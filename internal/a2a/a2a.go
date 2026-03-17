@@ -83,6 +83,10 @@ const (
 	// A2A transport, enabling clients to group incremental chunks from the same LLM call.
 	MessageMetadataResponseIDKey = "llm_response_id"
 
+	// MessageMetadataStateDeltaKey is the metadata key for event state delta in A2A messages.
+	// It carries a decoded form of Event.StateDelta so A2A peers can restore structured state updates.
+	MessageMetadataStateDeltaKey = "state_delta"
+
 	// TextPartMetadataThoughtKey is the metadata key for thought/reasoning content in TextPart.
 	TextPartMetadataThoughtKey = "thought"
 

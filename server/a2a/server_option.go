@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -83,22 +84,23 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 }
 
 type options struct {
-	sessionService      session.Service
-	agent               agent.Agent
-	enableStreaming     bool
-	streamingEventType  StreamingEventType
-	agentCard           *a2a.AgentCard
-	processorBuilder    ProcessorBuilder
-	processorHook       ProcessMessageHook
-	taskManagerBuilder  TaskManagerBuilder
-	a2aToAgentConverter A2AMessageToAgentMessage
-	eventToA2AConverter EventToA2AMessage
-	host                string
-	extraOptions        []a2a.Option
-	errorHandler        ErrorHandler
-	debugLogging        bool
-	userIDHeader        string
-	adkCompatibility    bool
+	sessionService            session.Service
+	agent                     agent.Agent
+	enableStreaming           bool
+	graphEventObjectAllowlist []string
+	streamingEventType        StreamingEventType
+	agentCard                 *a2a.AgentCard
+	processorBuilder          ProcessorBuilder
+	processorHook             ProcessMessageHook
+	taskManagerBuilder        TaskManagerBuilder
+	a2aToAgentConverter       A2AMessageToAgentMessage
+	eventToA2AConverter       EventToA2AMessage
+	host                      string
+	extraOptions              []a2a.Option
+	errorHandler              ErrorHandler
+	debugLogging              bool
+	userIDHeader              string
+	adkCompatibility          bool
 }
 
 // Option is a function that configures a Server.
@@ -134,6 +136,41 @@ func WithAgent(agent agent.Agent, enableStreaming bool) Option {
 		opts.agent = agent
 		opts.enableStreaming = enableStreaming
 	}
+}
+
+// WithGraphEventObjectAllowlist configures which graph object types (evt.Response.Object)
+// are forwarded through A2A.
+//
+// Matching applies only when object type starts with "graph.".
+//   - default (option not set): only graph.execution is forwarded.
+//   - exact rule: "graph.node.start"
+//   - prefix rule: "graph.node.*" (trailing '*' means prefix match)
+//   - wildcard rule: "*" (allow all graph.* object types)
+func WithGraphEventObjectAllowlist(objectTypes ...string) Option {
+	return func(opts *options) {
+		opts.graphEventObjectAllowlist = normalizeGraphObjectTypes(objectTypes)
+	}
+}
+
+func normalizeGraphObjectTypes(objectTypes []string) []string {
+	if len(objectTypes) == 0 {
+		return []string{}
+	}
+
+	normalized := make([]string, 0, len(objectTypes))
+	dedup := make(map[string]struct{}, len(objectTypes))
+	for _, objectType := range objectTypes {
+		objectType = strings.TrimSpace(objectType)
+		if objectType == "" {
+			continue
+		}
+		if _, ok := dedup[objectType]; ok {
+			continue
+		}
+		dedup[objectType] = struct{}{}
+		normalized = append(normalized, objectType)
+	}
+	return normalized
 }
 
 // WithAgentCard sets the agent card to use.

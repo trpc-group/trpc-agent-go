@@ -471,6 +471,22 @@ func TestSubgraph_OutputMapperGetsRawStateDelta(t *testing.T) {
 	require.Equal(t, true, st["raw_has_child_done"])
 }
 
+func TestExtractSubgraphFinalState_FallsBackToRawString(t *testing.T) {
+	ev := NewGraphCompletionEvent(
+		WithCompletionEventInvocationID("inv-final-state"),
+		WithCompletionEventFinalState(State{
+			"json_value": `{"kept":"as-string"}`,
+		}),
+	)
+	ev.StateDelta["plain_text"] = []byte("raw-text")
+
+	state, rawDelta, ok := extractSubgraphFinalState(context.Background(), ev)
+	require.True(t, ok)
+	require.NotNil(t, rawDelta)
+	require.Equal(t, "raw-text", state["plain_text"])
+	require.Equal(t, `{"kept":"as-string"}`, state["json_value"])
+}
+
 type subgraphTestSaver struct {
 	mu     sync.Mutex
 	byKey  map[string]*CheckpointTuple
