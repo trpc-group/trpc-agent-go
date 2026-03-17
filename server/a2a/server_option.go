@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -86,6 +87,7 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 type options struct {
 	sessionService            session.Service
 	agent                     agent.Agent
+	runner                    runner.Runner
 	enableStreaming           bool
 	graphEventObjectAllowlist []string
 	streamingEventType        StreamingEventType
@@ -135,6 +137,13 @@ func WithAgent(agent agent.Agent, enableStreaming bool) Option {
 	return func(opts *options) {
 		opts.agent = agent
 		opts.enableStreaming = enableStreaming
+	}
+}
+
+// WithRunner sets the runner to use.
+func WithRunner(r runner.Runner) Option {
+	return func(opts *options) {
+		opts.runner = r
 	}
 }
 

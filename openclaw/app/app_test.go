@@ -170,6 +170,23 @@ func TestNewRuntime_BuildsGatewayHandler(t *testing.T) {
 	require.Empty(t, rt.Channels)
 }
 
+func TestNewRuntime_A2AConfigErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-a2a",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create a2a failed")
+}
+
 func TestNewRuntime_DebugRecorderEnabled_Smoke(t *testing.T) {
 	t.Parallel()
 
@@ -976,6 +993,43 @@ func TestRun_Smoke(t *testing.T) {
 		"-enable-openclaw-tools",
 	})
 	require.NoError(t, err)
+}
+
+func TestRun_WithA2A_Smoke(t *testing.T) {
+	dir := t.TempDir()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	err := run(ctx, []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", dir,
+		"-skills-root", t.TempDir(),
+		"-a2a",
+		"-a2a-host", "http://127.0.0.1:18080/a2a",
+		"-a2a-user-id-header", "X-Caller-User",
+	})
+	require.NoError(t, err)
+}
+
+func TestRun_A2AConfigErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-a2a",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create a2a failed")
 }
 
 func TestRun_DebugRecorderEnabled_Smoke(t *testing.T) {

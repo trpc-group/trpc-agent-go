@@ -5,6 +5,7 @@
 本目录是一个基于 `trpc-agent-go` 构建的小型可运行二进制文件，实现了类 OpenClaw 架构：
 
 - 一个长期运行的 **gateway** 进程（HTTP 端点）。
+- 一个可选的 **A2A** 接口，可作为子 agent / 沙箱入口。
 - 真正的 IM **通道**：Telegram（长轮询）。
 - 基于 DM（私聊）与群组聊天派生的稳定 **session_id**。
 - 通过 `llmagent` 内置的 skills 工具支持技能。
@@ -234,6 +235,45 @@ go run ./cmd/openclaw -config ./openclaw.yaml
   - `tools.providers` 和 `tools.toolsets` 对本仓库内置的类型开箱即用。
     自定义类型仍需自定义二进制文件。参见 `openclaw/INTEGRATIONS.md` 和
     `openclaw/EXTENDING.md`。
+
+## 将 OpenClaw 暴露为 A2A 子 agent
+
+OpenClaw 可以在 HTTP gateway 旁边原生发布 A2A 接口。
+当你需要把一个带完整 skills / 二进制环境的 OpenClaw 沙箱挂到
+另一个 `trpc-agent-go` 主脑下面时，这就是推荐做法。
+
+YAML：
+
+```yaml
+a2a:
+  enabled: true
+  host: "http://127.0.0.1:8080/a2a"
+  user_id_header: "X-User-ID" # 可选
+  streaming: true
+  advertise_tools: false
+  name: "openclaw-sandbox"
+  description: "Sandbox agent for bundled skills and host binaries."
+```
+
+CLI：
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -a2a \
+  -a2a-host http://127.0.0.1:8080/a2a
+```
+
+说明：
+
+- `a2a.host` 必须带一个非根路径，例如 `/a2a`。
+- A2A 接口和 gateway 复用同一个 OpenClaw runner、session、
+  memory、skills 和 tools。
+- 默认 agent card 只发布一个稳定的 “OpenClaw sandbox” skill，
+  不会把所有 tool 全部展开。只有在调用方确实需要逐 tool 元数据时，
+  才建议开启 `advertise_tools: true`。
+- 可运行示例见
+  [`./examples/a2a_subagent`](./examples/a2a_subagent/)。
 
 ## 自定义 Prompt
 
