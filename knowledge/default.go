@@ -801,7 +801,17 @@ func (dk *BuiltinKnowledge) addDocument(ctx context.Context, doc *document.Docum
 // metadata context (file name, chunk index, header path) to the document content.
 // This enriches the embedding vector with structural information, improving
 // retrieval accuracy without altering the stored content.
+//
+// If the document has a custom EmbeddingText set (e.g., by proto reader),
+// that will be used directly.
 func buildEmbeddingText(doc *document.Document) string {
+	// Use custom embedding text if provided by the reader.
+	// This allows specialized readers (like proto) to provide structured
+	// metadata JSON for embedding instead of raw content.
+	if doc.EmbeddingText != "" {
+		return doc.EmbeddingText
+	}
+
 	if doc.Metadata == nil {
 		return doc.Content
 	}

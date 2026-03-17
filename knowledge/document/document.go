@@ -25,6 +25,12 @@ type Document struct {
 	// Content is the text content of the document.
 	Content string `json:"content"`
 
+	// EmbeddingText is the text used for embedding generation.
+	// If empty, Content will be used for embedding.
+	// This allows readers to provide a specialized representation
+	// (e.g., metadata JSON) for better retrieval accuracy.
+	EmbeddingText string `json:"embedding_text,omitempty"`
+
 	// Metadata contains additional information about the document.
 	Metadata map[string]any `json:"metadata,omitempty"`
 
@@ -46,11 +52,12 @@ func (d *Document) IsEmpty() bool {
 // Clone creates a deep copy of the document.
 func (d *Document) Clone() *Document {
 	clone := &Document{
-		ID:        d.ID,
-		Name:      d.Name,
-		Content:   d.Content,
-		CreatedAt: d.CreatedAt,
-		UpdatedAt: d.UpdatedAt,
+		ID:            d.ID,
+		Name:          d.Name,
+		Content:       d.Content,
+		EmbeddingText: d.EmbeddingText,
+		CreatedAt:     d.CreatedAt,
+		UpdatedAt:     d.UpdatedAt,
 	}
 
 	if d.Metadata != nil {
