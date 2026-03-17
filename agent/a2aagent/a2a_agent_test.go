@@ -22,9 +22,12 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -1140,6 +1143,107 @@ func TestUserIDHeaderInRequest(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTraceHeadersInRequest(t *testing.T) {
+	var receivedHeaders http.Header
+	var headersMu sync.Mutex
+	var serverURL string
+
+	originalPropagator := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTextMapPropagator(originalPropagator)
+	})
+
+	mockServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/.well-known/agent-card.json" {
+				agentCard := server.AgentCard{
+					Name:        "test-agent",
+					Description: "A test agent",
+					URL:         serverURL,
+					Capabilities: server.AgentCapabilities{
+						Streaming: boolPtr(false),
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				require.NoError(t, json.NewEncoder(w).Encode(agentCard))
+				return
+			}
+
+			headersMu.Lock()
+			receivedHeaders = r.Header.Clone()
+			headersMu.Unlock()
+
+			response := protocol.Message{
+				Role: protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					protocol.NewTextPart("test response"),
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			require.NoError(t, json.NewEncoder(w).Encode(response))
+		},
+	))
+	defer mockServer.Close()
+	serverURL = mockServer.URL
+
+	a2aAgent, err := New(WithAgentCardURL(mockServer.URL))
+	require.NoError(t, err)
+
+	traceID := oteltrace.TraceID{
+		0x01, 0x02, 0x03, 0x04,
+		0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0a, 0x0b, 0x0c,
+		0x0d, 0x0e, 0x0f, 0x10,
+	}
+	spanID := oteltrace.SpanID{
+		0x01, 0x02, 0x03, 0x04,
+		0x05, 0x06, 0x07, 0x08,
+	}
+	spanCtx := oteltrace.NewSpanContext(
+		oteltrace.SpanContextConfig{
+			TraceID:    traceID,
+			SpanID:     spanID,
+			TraceFlags: oteltrace.FlagsSampled,
+		},
+	)
+
+	require.Nil(t, extractTraceHeaders(context.Background()))
+
+	ctx := oteltrace.ContextWithSpanContext(
+		context.Background(),
+		spanCtx,
+	)
+	headers := extractTraceHeaders(ctx)
+	expectedTraceparent := "00-" +
+		traceID.String() +
+		"-" +
+		spanID.String() +
+		"-01"
+	require.Equal(
+		t,
+		expectedTraceparent,
+		headers["traceparent"],
+	)
+
+	eventChan, err := a2aAgent.Run(ctx, &agent.Invocation{
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "test message",
+		},
+	})
+	require.NoError(t, err)
+
+	for range eventChan {
+	}
+
+	require.Equal(
+		t,
+		expectedTraceparent,
+		receivedHeaders.Get("Traceparent"),
+	)
 }
 
 func TestA2AAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
