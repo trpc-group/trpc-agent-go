@@ -286,11 +286,6 @@ func TestDefaultErrorHandler(t *testing.T) {
 	}
 }
 
-func TestServerOptions_NewFields(t *testing.T) {
-	opts := &options{}
-	_ = opts // placeholder for future fields
-}
-
 func TestSingleMsgSubscriber(t *testing.T) {
 	testMsg := &protocol.Message{
 		Role:  protocol.MessageRoleAgent,

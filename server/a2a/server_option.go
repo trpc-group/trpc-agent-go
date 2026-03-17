@@ -257,6 +257,9 @@ func WithTaskManagerBuilder(builder TaskManagerBuilder) Option {
 }
 
 // WithRunOptions appends additional run options for every agent invocation.
+// These options are applied before the A2A message metadata is merged into RuntimeState.
+// If both WithRunOptions and A2A message metadata set the same RuntimeState key,
+// the A2A metadata value takes precedence (last-write-wins).
 func WithRunOptions(runOpts ...agent.RunOption) Option {
 	return func(opts *options) {
 		opts.runOptions = append(opts.runOptions, runOpts...)

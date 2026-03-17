@@ -106,22 +106,14 @@ func buildAgentCard(options *options) (a2a.AgentCard, error) {
 	}, nil
 }
 
-func resolveRunnerIdentity(options *options, ag agent.Agent) (string, error) {
-	agentName := ""
-	if ag != nil {
-		agentName = ag.Info().Name
-	}
+func resolveRunnerIdentity(options *options) (string, error) {
 	if options.agent != nil {
-		agentName = options.agent.Info().Name
+		return options.agent.Info().Name, nil
 	}
-	if agentName == "" && options.agentCard != nil {
-		agentName = options.agentCard.Name
+	if options.agentCard != nil && options.agentCard.Name != "" {
+		return options.agentCard.Name, nil
 	}
-	if agentName == "" {
-		return "", errors.New("agent name is required")
-	}
-
-	return agentName, nil
+	return "", errors.New("agent name is required: provide WithAgent or WithAgentCard")
 }
 
 func buildRuntimeState(metadata map[string]any) map[string]any {
@@ -137,7 +129,7 @@ func buildProcessor(
 	sessionService session.Service,
 	options *options,
 ) (*messageProcessor, error) {
-	agentName, err := resolveRunnerIdentity(options, agent)
+	agentName, err := resolveRunnerIdentity(options)
 	if err != nil {
 		return nil, err
 	}

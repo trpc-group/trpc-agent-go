@@ -244,21 +244,18 @@ func runA2AServerByAgent(agentName, desc, host string) {
 		a2a.WithHost(host),
 		a2a.WithAgent(remoteAgent, *streaming),
 
-		// Example: Use WithRunnerBuilder to customize Runner construction.
+		// Example: Use WithRunner to provide a custom Runner.
+		// When both WithAgent and WithRunner are provided, WithRunner takes precedence
+		// for message processing; WithAgent is only used for auto-generating the AgentCard.
 		// This gives full control over runner creation, including:
 		// - Injecting MemoryService for conversation memory
 		// - Customizing SessionService
-		// - Using AgentFactory for hot-reloading
-		a2a.WithRunnerBuilder(func(ctx a2a.RunnerBuildContext) (runner.Runner, error) {
-			fmt.Printf("A2A Server: building runner with agent=%s\n",
-				ctx.Agent.Info().Name)
-			return runner.NewRunner(
-				ctx.Agent.Info().Name,
-				ctx.Agent,
-				runner.WithSessionService(runnerSessionService),
-				runner.WithMemoryService(memoryService),
-			), nil
-		}),
+		a2a.WithRunner(runner.NewRunner(
+			remoteAgent.Info().Name,
+			remoteAgent,
+			runner.WithSessionService(runnerSessionService),
+			runner.WithMemoryService(memoryService),
+		)),
 
 		// Example: Use WithProcessMessageHook to inspect/modify incoming A2A messages.
 		// This can read custom metadata injected by the client's BuildMessageHook.

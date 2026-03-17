@@ -12,6 +12,7 @@ package a2aagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -266,8 +267,11 @@ func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) 
 	}
 
 	message, err := convertFn(isStream, r.name, invocation)
-	if err != nil || message == nil {
-		return nil, fmt.Errorf("A2A message conversion failed, msg:%v, err:%w", message, err)
+	if err != nil {
+		return nil, fmt.Errorf("A2A message conversion failed: %w", err)
+	}
+	if message == nil {
+		return nil, errors.New("A2A message conversion returned nil message")
 	}
 	return message, nil
 }
@@ -283,13 +287,13 @@ func (r *A2AAgent) wrapWithTransferState(next ConvertToA2AMessageFunc) ConvertTo
 		if message == nil {
 			return nil, nil
 		}
+		if invocation.RunOptions.RuntimeState == nil {
+			return message, nil
+		}
 		if message.Metadata == nil {
 			message.Metadata = make(map[string]any)
 		}
 		for _, key := range r.transferStateKey {
-			if invocation.RunOptions.RuntimeState == nil {
-				continue
-			}
 			if value, ok := invocation.RunOptions.RuntimeState[key]; ok {
 				message.Metadata[key] = value
 			}
