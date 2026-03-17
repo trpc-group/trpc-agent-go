@@ -39,6 +39,7 @@ func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 			name: "all fields populated",
 			attrs: invokeAgentAttributes{
 				AgentName: "test-agent",
+				AgentID:   "test-agent",
 				AppName:   "test-app",
 				UserID:    "user-123",
 				System:    "gpt-4",
@@ -53,6 +54,7 @@ func TestInvokeAgentAttributes_toAttributes(t *testing.T) {
 				attribute.String(semconvtrace.KeyTRPCAgentGoAppName, "test-app"),
 				attribute.String(semconvtrace.KeyTRPCAgentGoUserID, "user-123"),
 				attribute.String(semconvtrace.KeyGenAIAgentName, "test-agent"),
+				attribute.String(semconvtrace.KeyGenAIAgentID, "test-agent"),
 				attribute.String(semconvtrace.KeyErrorType, "rate_limit"),
 			},
 		},
@@ -141,6 +143,9 @@ func TestNewInvokeAgentTracker(t *testing.T) {
 	if tracker.attributes.AgentName != "test-agent" {
 		t.Errorf("expected AgentName=test-agent, got %s", tracker.attributes.AgentName)
 	}
+	if tracker.attributes.AgentID != "test-agent" {
+		t.Errorf("expected AgentID=test-agent, got %s", tracker.attributes.AgentID)
+	}
 	if tracker.attributes.System != "gpt-4" {
 		t.Errorf("expected System=gpt-4, got %s", tracker.attributes.System)
 	}
@@ -178,6 +183,9 @@ func TestNewInvokeAgentTracker_NilInvocation(t *testing.T) {
 	}
 	if tracker.attributes.AgentName != "" {
 		t.Error("expected empty AgentName")
+	}
+	if tracker.attributes.AgentID != "" {
+		t.Error("expected empty AgentID")
 	}
 	if tracker.attributes.System != "" {
 		t.Error("expected empty System")
