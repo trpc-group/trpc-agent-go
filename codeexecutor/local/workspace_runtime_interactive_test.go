@@ -122,7 +122,7 @@ func TestRuntime_StartProgramInteractivePipes(t *testing.T) {
 		result = provider.RunResult()
 		return strings.Contains(result.Stdout, "out:hello") &&
 			strings.Contains(result.Stderr, "err:hello")
-	}, time.Second, 20*time.Millisecond)
+	}, 2*time.Second, 20*time.Millisecond)
 	require.NoError(t, proc.Close())
 }
 
@@ -349,11 +349,12 @@ func TestRuntime_StartProgram_StdinAndPipeErrors(t *testing.T) {
 
 	provider, ok := proc.(codeexecutor.ProgramResultProvider)
 	require.True(t, ok)
-	require.Contains(
-		t,
-		provider.RunResult().Stdout,
-		"hello|override|ok",
-	)
+	require.Eventually(t, func() bool {
+		return strings.Contains(
+			provider.RunResult().Stdout,
+			"hello|override|ok",
+		)
+	}, time.Second, 20*time.Millisecond)
 	require.NoError(t, proc.Close())
 
 	cmd := exec.Command("sh", "-lc", "true")

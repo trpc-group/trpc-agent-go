@@ -72,7 +72,7 @@ func TestNewAutoMemoryExtractor_RequiresModel(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestNewAutoMemoryExtractor_DefaultThreshold(t *testing.T) {
+func TestNewAutoMemoryExtractor_NoCheckers(t *testing.T) {
 	t.Parallel()
 
 	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
@@ -84,15 +84,10 @@ func TestNewAutoMemoryExtractor_DefaultThreshold(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ext)
 
+	// Without checkers, ShouldExtract always returns true.
 	ctx := &memextractor.ExtractionContext{
 		Messages: make([]model.Message, 1),
 	}
-	require.False(t, ext.ShouldExtract(ctx))
-
-	ctx.Messages = make(
-		[]model.Message,
-		defaultMemoryAutoMessageThreshold+1,
-	)
 	require.True(t, ext.ShouldExtract(ctx))
 }
 
@@ -121,6 +116,52 @@ func TestNewAutoMemoryExtractor_PolicyAll(t *testing.T) {
 	old := now.Add(-2 * time.Hour)
 	ctx.LastExtractAt = &old
 	require.True(t, ext.ShouldExtract(ctx))
+}
+
+func TestNewAutoMemoryExtractor_PolicyAny(t *testing.T) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	ext, err := newAutoMemoryExtractor(mdl, runOptions{
+		MemoryAutoEnabled:          true,
+		MemoryAutoPolicy:           summaryPolicyAny,
+		MemoryAutoMessageThreshold: 2,
+		MemoryAutoTimeInterval:     time.Hour,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, ext)
+
+	now := time.Now()
+	ctx := &memextractor.ExtractionContext{
+		Messages:      make([]model.Message, 3),
+		LastExtractAt: &now,
+	}
+	// Message threshold is met.
+	require.True(t, ext.ShouldExtract(ctx))
+}
+
+func TestNewAutoMemoryExtractor_InvalidPolicy(t *testing.T) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	// Invalid policy without checkers still returns error.
+	_, err = newAutoMemoryExtractor(mdl, runOptions{
+		MemoryAutoEnabled: true,
+		MemoryAutoPolicy:  "invalid",
+	})
+	require.Error(t, err)
+
+	// Invalid policy with checkers also returns error.
+	_, err = newAutoMemoryExtractor(mdl, runOptions{
+		MemoryAutoEnabled:          true,
+		MemoryAutoPolicy:           "invalid",
+		MemoryAutoMessageThreshold: 1,
+	})
+	require.Error(t, err)
 }
 
 func TestNewSessionService_RedisRequiresConfig(t *testing.T) {
