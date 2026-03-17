@@ -61,8 +61,8 @@ graph.WithSubgraphOutputMapper(
 ```
 
 That mapper reads the child fallback state from `SubgraphResult.RawStateDelta`
-through the collector helper, which now checks
-`SubgraphResult.FallbackStateDelta` automatically, and merges the child's
+through the collector helper, which now reads
+`SubgraphResult.EffectiveStateDelta()` for you, and merges the child's
 collected `execution_errors` into the parent state.
 
 The parent can then continue, make a business decision, and expose the same
@@ -97,3 +97,18 @@ You should see:
 - Merge child error state into a custom parent mapper with
   `collector.SubgraphStateUpdate(result)`
 - Publish extra fatal-path business state with `graph.EmitCustomStateDelta(...)`
+
+## Recommended production pattern
+
+- Keep business error codes in a small domain package instead of scattering
+  raw strings across nodes.
+- Let business errors implement `ErrorCode()` or `Code()` so the framework can
+  populate `Response.Error.Code` and `graph.ExecutionError.Error.Code`
+  automatically.
+- Use `WithExecutionErrorPolicy(...)` for recovery policy, not as a second
+  error registry.
+- Persist the final collected records from `runner.completion.StateDelta`.
+
+For a fuller design guide with complete code snippets, see
+[`docs/mkdocs/en/error-handling.md`](../../../docs/mkdocs/en/error-handling.md)
+and [`docs/mkdocs/en/runner.md`](../../../docs/mkdocs/en/runner.md).

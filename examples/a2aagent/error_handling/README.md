@@ -105,5 +105,18 @@ the terminal task error.
   `a2aagent.A2AEventConverter`
 - If your domain needs extra fields, keep using your own metadata keys in
   addition to the standard error metadata
-- If some remote task states should map differently, wrap the default converter
-  and adjust your policy there
+- If some remote task states should map differently, implement a custom
+  converter and register it with `a2aagent.WithCustomEventConverter(...)`
+
+## Recommended production pattern
+
+- Keep your domain error codes in a business package and emit them through
+  `Response.Error.Code`.
+- Enable `a2aserver.WithStructuredTaskErrors(true)` on servers that should
+  expose those codes across the A2A boundary.
+- Keep client branching logic on `evt.Response.Error` instead of inventing a
+  second task-error abstraction in application code.
+
+For a fuller design guide with complete code snippets, see
+[`docs/mkdocs/en/error-handling.md`](../../../docs/mkdocs/en/error-handling.md)
+and [`docs/mkdocs/en/runner.md`](../../../docs/mkdocs/en/runner.md).

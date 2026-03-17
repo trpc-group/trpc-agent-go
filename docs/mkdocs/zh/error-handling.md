@@ -24,6 +24,173 @@ tRPC-Agent-Go 现在为这三条链路提供了一条统一路径。
 3. 可恢复错误继续执行，但不能丢记录。
 4. 致命错误即使提前终止，也要先把 fallback 业务状态发出去。
 
+## 这套设计覆盖什么问题
+
+这套设计的目标，就是覆盖过去经常逼着业务团队自己维护一套节点错误包的那批核心诉求：
+
+- 收集本地节点错误，包括 recoverable 错误
+- 在运行结束后还能稳定拿到业务错误明细
+- 把子图 / sub-agent 的错误回传到父图
+- 让 Runner 在 `runner.completion` 上暴露 fatal 路径的 fallback state
+- 把 A2A 的结构化 task failure 重新还原成 `Response.Error`
+
+如果你过去的设计是“把节点错误沉淀到 graph state，再在运行结束后统一读取”，那么
+`graph.ExecutionErrorCollector` 就是这个模式的框架标准实现。
+
+## 框架职责和业务职责
+
+框架负责的是传递、归一化、收集这几件机制层的事情。
+
+它统一了：
+
+- transport failure 放在哪里：`Response.Error`
+- 业务可见错误记录放在哪里：graph state
+- fatal fallback state 如何传递到 `runner.completion`
+- child fallback state 如何与正常 child completion 区分
+- A2A 结构化 task failure 如何重新变成 `Response.Error`
+
+业务侧仍然负责业务错误目录和策略。
+
+业务侧需要自己决定：
+
+- 有哪些错误码
+- 哪些错误码算 recoverable
+- recover 之后应该走哪个 fallback 路径
+- 多条错误记录是否需要聚合、去重、分组
+- 错误最终怎么持久化、告警、上报
+
+框架刻意不去定义“全局业务错误码注册表”。框架会很好地承载和传递结构化错误码，但错误码
+命名空间本身应该属于具体业务或领域。
+
+## 业务错误码如何管理
+
+这通常是业务最关心的部分。
+
+框架确实支持错误码管理，但支持方式是“承载和归一化机制”，而不是“内建一套中心化错误码表”。
+
+默认情况下，`graph.NewExecutionError(...)` 会调用
+`model.ResponseErrorFromError(err, model.ErrorTypeFlowError)`。
+这个 helper 已经会自动从业务错误里提取结构化字段。它支持这些方法：
+
+- `ErrorType() string`
+- `ErrorCode() string`
+- `Code() string`
+- `Code() int`
+- `Code() int32`
+- `Code() int64`
+
+推荐模式是：
+
+1. 业务侧用一个小的领域包定义稳定错误码常量。
+2. 节点、工具、Agent 返回带类型的业务错误。
+3. 让 collector 自动把这些错误码记录下来。
+4. `WithExecutionErrorPolicy(...)` 主要用来决定 recover，以及做必要的归一化。
+
+示例：业务错误包
+
+```go
+package ordererrors
+
+import (
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+    CodeInventorySoftTimeout = "ORDER_INVENTORY_SOFT_TIMEOUT"
+    CodeInventoryUnavailable = "ORDER_INVENTORY_UNAVAILABLE"
+)
+
+type Error struct {
+    code        string
+    message     string
+    recoverable bool
+}
+
+func (e *Error) Error() string {
+    return e.message
+}
+
+func (e *Error) ErrorCode() string {
+    return e.code
+}
+
+func (e *Error) ErrorType() string {
+    return model.ErrorTypeFlowError
+}
+
+func (e *Error) Recoverable() bool {
+    return e.recoverable
+}
+
+func NewInventorySoftTimeout(itemID string) error {
+    return &Error{
+        code:        CodeInventorySoftTimeout,
+        message:     fmt.Sprintf(
+            "inventory lookup timed out for %s",
+            itemID,
+        ),
+        recoverable: true,
+    }
+}
+
+func NewInventoryUnavailable(itemID string) error {
+    return &Error{
+        code:        CodeInventoryUnavailable,
+        message:     fmt.Sprintf(
+            "inventory service is unavailable for %s",
+            itemID,
+        ),
+        recoverable: false,
+    }
+}
+```
+
+示例：collector policy 使用业务错误目录
+
+```go
+package main
+
+import (
+    "context"
+    "errors"
+
+    "example.com/myapp/ordererrors"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func newCollector() *graph.ExecutionErrorCollector {
+    return graph.NewExecutionErrorCollector(
+        graph.WithExecutionErrorPolicy(func(
+            ctx context.Context,
+            cb *graph.NodeCallbackContext,
+            state graph.State,
+            err error,
+        ) graph.ExecutionErrorPolicy {
+            var bizErr *ordererrors.Error
+            if errors.As(err, &bizErr) && bizErr.Recoverable() {
+                return graph.ExecutionErrorPolicy{
+                    Recover: true,
+                    Replacement: &graph.Command{
+                        Update: graph.State{
+                            "inventory_status": "fallback",
+                        },
+                        GoTo: "fallback_lookup",
+                    },
+                }
+            }
+            return graph.ExecutionErrorPolicy{}
+        }),
+    )
+}
+```
+
+如果你的内部错误比较杂，或者被第三方库层层包装，可以用
+`ExecutionErrorPolicy.ResponseError` 把它们先归一化成统一的业务错误形态，再存入
+collector。
+
 ## 核心能力
 
 ### `graph.ExecutionError`
@@ -155,6 +322,107 @@ collector := graph.NewExecutionErrorCollector(
 )
 ```
 
+### 5. 完整的 graph 接入示例
+
+如果你希望有一段可以直接照着落地的标准 graph 接入参考，可以从下面这个形态开始：
+
+```go
+package main
+
+import (
+    "context"
+    "errors"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const codeInventorySoftTimeout = "ORDER_INVENTORY_SOFT_TIMEOUT"
+
+type inventoryError struct {
+    code        string
+    message     string
+    recoverable bool
+}
+
+func (e *inventoryError) Error() string {
+    return e.message
+}
+
+func (e *inventoryError) ErrorCode() string {
+    return e.code
+}
+
+func (e *inventoryError) ErrorType() string {
+    return model.ErrorTypeFlowError
+}
+
+func (e *inventoryError) Recoverable() bool {
+    return e.recoverable
+}
+
+func buildAgent() (agent.Agent, error) {
+    collector := graph.NewExecutionErrorCollector(
+        graph.WithExecutionErrorPolicy(func(
+            ctx context.Context,
+            cb *graph.NodeCallbackContext,
+            state graph.State,
+            err error,
+        ) graph.ExecutionErrorPolicy {
+            var inventoryErr *inventoryError
+            if errors.As(err, &inventoryErr) &&
+                inventoryErr.Recoverable() {
+                return graph.ExecutionErrorPolicy{
+                    Recover: true,
+                    Replacement: graph.State{
+                        "inventory_status": "fallback",
+                    },
+                }
+            }
+            return graph.ExecutionErrorPolicy{}
+        }),
+    )
+
+    schema := graph.MessagesStateSchema()
+    collector.AddField(schema)
+
+    sg := graph.NewStateGraph(schema).
+        WithNodeCallbacks(collector.NodeCallbacks())
+
+    sg.AddNode("lookup_inventory", func(
+        ctx context.Context,
+        state graph.State,
+    ) (any, error) {
+        return nil, &inventoryError{
+            code:        codeInventorySoftTimeout,
+            message:     "inventory lookup timed out",
+            recoverable: true,
+        }
+    })
+
+    sg.AddNode("finalize", func(
+        ctx context.Context,
+        state graph.State,
+    ) (any, error) {
+        return graph.State{
+            "done": true,
+        }, nil
+    })
+
+    compiled, err := sg.
+        AddEdge("lookup_inventory", "finalize").
+        SetEntryPoint("lookup_inventory").
+        SetFinishPoint("finalize").
+        Compile()
+    if err != nil {
+        return nil, err
+    }
+    return graphagent.New("inventory-agent", compiled)
+}
+```
+
 ## 运行结束后怎么拿错误
 
 ### 只消费 graph 事件
@@ -179,6 +447,90 @@ errors, err := graph.ExecutionErrorsFromStateDelta(
 - 一直消费到 `runner.completion`
 - 从它的 `StateDelta` 里读取 collector key
 - 真正的 transport failure 仍然看更早那条 fatal 事件的 `Response.Error`
+
+完整的 Runner 侧消费模式：
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+type RunSummary struct {
+    TransportError  *model.ResponseError
+    ExecutionErrors []graph.ExecutionError
+}
+
+func ConsumeUntilCompletion(
+    ctx context.Context,
+    events <-chan *event.Event,
+) (*RunSummary, error) {
+    summary := &RunSummary{}
+
+    for {
+        select {
+        case <-ctx.Done():
+            return nil, ctx.Err()
+        case evt, ok := <-events:
+            if !ok {
+                return summary, nil
+            }
+            if evt.Response != nil && evt.Response.Error != nil {
+                summary.TransportError = evt.Response.Error
+            }
+            if !evt.IsRunnerCompletion() {
+                continue
+            }
+
+            executionErrors, err := graph.ExecutionErrorsFromStateDelta(
+                evt.StateDelta,
+                graph.StateKeyExecutionErrors,
+            )
+            if err != nil {
+                return nil, err
+            }
+            summary.ExecutionErrors = executionErrors
+            return summary, nil
+        }
+    }
+}
+
+func PrintSummary(summary *RunSummary) {
+    if summary.TransportError != nil {
+        fmt.Printf(
+            "transport error: type=%s code=%s message=%s\n",
+            summary.TransportError.Type,
+            ptrValue(summary.TransportError.Code),
+            summary.TransportError.Message,
+        )
+    }
+    for _, record := range summary.ExecutionErrors {
+        if record.Error == nil {
+            continue
+        }
+        fmt.Printf(
+            "execution error: severity=%s node=%s code=%s message=%s\n",
+            record.Severity,
+            record.NodeName,
+            ptrValue(record.Error.Code),
+            record.Error.Message,
+        )
+    }
+}
+
+func ptrValue(value *string) string {
+    if value == nil {
+        return ""
+    }
+    return *value
+}
+```
 
 ## Subgraph / sub-agent
 
@@ -228,6 +580,31 @@ sg.AddAgentNode(
 
 `ExecutionErrorCollector.SubgraphOutputMapper()` 已经内置了这层处理。
 
+如果你除了子错误回传之外，还需要在父图附带额外业务状态，可以围绕
+`collector.SubgraphStateUpdate(result)` 组合自己的 mapper：
+
+```go
+package main
+
+import "trpc.group/trpc-go/trpc-agent-go/graph"
+
+func parentOutputMapper(
+    collector *graph.ExecutionErrorCollector,
+) graph.SubgraphOutputMapper {
+    return func(
+        parent graph.State,
+        result graph.SubgraphResult,
+    ) graph.State {
+        update := collector.SubgraphStateUpdate(result)
+        if update == nil {
+            update = graph.State{}
+        }
+        update["child_status"] = "degraded"
+        return update
+    }
+}
+```
+
 ## A2A 结构化错误
 
 ### Server 侧
@@ -263,27 +640,54 @@ server, err := a2aserver.New(
 在 streaming 模式下，`A2AAgent` 还会避免“先收到终态错误，再补一条正常 final
 assistant message”的歧义行为。
 
-## 哪些仍然属于业务侧
+完整的 server / client 接入方式：
 
-框架统一的是“传递机制”和“收集机制”，不是业务策略本身。
+```go
+package main
 
-### 业务侧仍需自己决定的部分
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
+    a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+)
 
-- 哪些错误算 recoverable
-- recover 之后应该走哪个 fallback 路径
-- state key 用什么名字最合适
-- 如何做错误聚合、去重、分组
-- 第三方 A2A provider 的特殊 task state 怎么解释
+func buildA2AServer(myAgent agent.Agent) error {
+    _, err := a2aserver.New(
+        a2aserver.WithHost("127.0.0.1:18888"),
+        a2aserver.WithAgent(myAgent, true),
+        a2aserver.WithStructuredTaskErrors(true),
+    )
+    return err
+}
 
-### 推荐扩展点
+func buildA2AClient() (agent.Agent, error) {
+    return a2aagent.New(
+        a2aagent.WithAgentCardURL("http://127.0.0.1:18888"),
+        a2aagent.WithEnableStreaming(true),
+    )
+}
+```
 
-- 用 `WithExecutionErrorPolicy(...)` 写恢复策略
-- 组合自定义 parent output mapper 时，直接调用
-  `collector.SubgraphStateUpdate(result)`
-- 如果 fatal 路径上还要发别的业务状态，用
-  `graph.EmitCustomStateDelta(...)`
-- 如果第三方 A2A metadata 约定不一致，用自定义
-  `a2aagent.A2AEventConverter`
+如果你对接的是一个 metadata 约定不同的第三方 A2A provider，业务侧应该在 converter
+层做扩展：
+
+- 保持框架统一错误模型仍然是 `Response.Error`
+- 实现 `a2aagent.A2AEventConverter`
+- 用 `a2aagent.WithCustomEventConverter(...)` 注册
+
+这是 provider 适配最合适的位置。不要在转换之后再额外重新发明第二套错误传输格式。
+
+## 推荐的职责划分
+
+最清晰的生产实践通常是：
+
+- 框架：收集、传递、序列化、暴露结构化错误
+- 业务错误包：定义错误码常量和 typed error
+- graph policy：决定 recoverable 还是 fatal
+- runner 消费侧：从 `runner.completion` 持久化 `ExecutionErrors`
+- transport 消费侧：从 `Response.Error` 处理终态失败
+
+这个划分已经足够替代旧的业务侧 node-error helper，同时又不会越界接管你的领域错误码体系。
 
 ## 示例
 

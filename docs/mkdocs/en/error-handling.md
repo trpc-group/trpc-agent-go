@@ -24,6 +24,179 @@ The framework design follows four rules:
 3. Let recoverable errors continue execution without losing the record.
 4. Let fatal errors still publish fallback business state before the run stops.
 
+## What this design covers
+
+This design is meant to cover the common requirements that used to push
+business teams into maintaining a separate graph error package:
+
+- collect local node errors, including recoverable ones
+- keep business-visible error details after the run ends
+- propagate child subgraph or sub-agent errors back to the parent
+- let Runner expose fatal-path fallback state on `runner.completion`
+- carry structured A2A task failures back into `Response.Error`
+
+If your older design stored node errors in graph state and then read them back
+after completion, `graph.ExecutionErrorCollector` is the standard framework
+version of that pattern.
+
+## Framework responsibilities and business responsibilities
+
+The framework owns transport, propagation, and collection mechanics.
+
+It standardizes:
+
+- where transport failures live: `Response.Error`
+- where business-visible records live: graph state
+- how fatal fallback state reaches `runner.completion`
+- how child fallback state is separated from normal child completion
+- how structured A2A task failures become `Response.Error` again
+
+Business code still owns the business catalog and policy.
+
+Business code decides:
+
+- which error codes exist
+- which codes are recoverable
+- which fallback route should run
+- whether multiple records should be deduplicated or aggregated
+- how errors should be persisted, alerted, or reported
+
+The framework intentionally does not try to own a global business error-code
+registry. It carries structured codes well, but the code namespace itself
+belongs to the application or domain.
+
+## Managing business error codes
+
+This is the part many teams care about most.
+
+The framework does support error-code management, but it supports it as a
+transport and normalization mechanism, not as a centralized registry.
+
+By default, `graph.NewExecutionError(...)` uses
+`model.ResponseErrorFromError(err, model.ErrorTypeFlowError)`.
+That helper already extracts structured fields from business errors that
+implement one of these methods:
+
+- `ErrorType() string`
+- `ErrorCode() string`
+- `Code() string`
+- `Code() int`
+- `Code() int32`
+- `Code() int64`
+
+The recommended pattern is:
+
+1. Keep stable error codes in a small domain package.
+2. Return typed business errors from nodes, tools, or agents.
+3. Let the collector record those codes automatically.
+4. Use `WithExecutionErrorPolicy(...)` only for recovery and optional
+   normalization.
+
+Example business error package:
+
+```go
+package ordererrors
+
+import (
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+    CodeInventorySoftTimeout = "ORDER_INVENTORY_SOFT_TIMEOUT"
+    CodeInventoryUnavailable = "ORDER_INVENTORY_UNAVAILABLE"
+)
+
+type Error struct {
+    code        string
+    message     string
+    recoverable bool
+}
+
+func (e *Error) Error() string {
+    return e.message
+}
+
+func (e *Error) ErrorCode() string {
+    return e.code
+}
+
+func (e *Error) ErrorType() string {
+    return model.ErrorTypeFlowError
+}
+
+func (e *Error) Recoverable() bool {
+    return e.recoverable
+}
+
+func NewInventorySoftTimeout(itemID string) error {
+    return &Error{
+        code:        CodeInventorySoftTimeout,
+        message:     fmt.Sprintf(
+            "inventory lookup timed out for %s",
+            itemID,
+        ),
+        recoverable: true,
+    }
+}
+
+func NewInventoryUnavailable(itemID string) error {
+    return &Error{
+        code:        CodeInventoryUnavailable,
+        message:     fmt.Sprintf(
+            "inventory service is unavailable for %s",
+            itemID,
+        ),
+        recoverable: false,
+    }
+}
+```
+
+Example collector policy that uses the business error catalog:
+
+```go
+package main
+
+import (
+    "context"
+    "errors"
+
+    "example.com/myapp/ordererrors"
+
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+func newCollector() *graph.ExecutionErrorCollector {
+    return graph.NewExecutionErrorCollector(
+        graph.WithExecutionErrorPolicy(func(
+            ctx context.Context,
+            cb *graph.NodeCallbackContext,
+            state graph.State,
+            err error,
+        ) graph.ExecutionErrorPolicy {
+            var bizErr *ordererrors.Error
+            if errors.As(err, &bizErr) && bizErr.Recoverable() {
+                return graph.ExecutionErrorPolicy{
+                    Recover: true,
+                    Replacement: &graph.Command{
+                        Update: graph.State{
+                            "inventory_status": "fallback",
+                        },
+                        GoTo: "fallback_lookup",
+                    },
+                }
+            }
+            return graph.ExecutionErrorPolicy{}
+        }),
+    )
+}
+```
+
+If your internal errors are messy or wrapped by third-party libraries, use
+`ExecutionErrorPolicy.ResponseError` to normalize them into one business-facing
+shape before the record is stored.
+
 ## Core building blocks
 
 ### `graph.ExecutionError`
@@ -155,6 +328,108 @@ collector := graph.NewExecutionErrorCollector(
 )
 ```
 
+### 5. Complete graph setup example
+
+If you want one copy-pasteable reference for a normal graph integration, start
+with this shape:
+
+```go
+package main
+
+import (
+    "context"
+    "errors"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const codeInventorySoftTimeout = "ORDER_INVENTORY_SOFT_TIMEOUT"
+
+type inventoryError struct {
+    code        string
+    message     string
+    recoverable bool
+}
+
+func (e *inventoryError) Error() string {
+    return e.message
+}
+
+func (e *inventoryError) ErrorCode() string {
+    return e.code
+}
+
+func (e *inventoryError) ErrorType() string {
+    return model.ErrorTypeFlowError
+}
+
+func (e *inventoryError) Recoverable() bool {
+    return e.recoverable
+}
+
+func buildAgent() (agent.Agent, error) {
+    collector := graph.NewExecutionErrorCollector(
+        graph.WithExecutionErrorPolicy(func(
+            ctx context.Context,
+            cb *graph.NodeCallbackContext,
+            state graph.State,
+            err error,
+        ) graph.ExecutionErrorPolicy {
+            var inventoryErr *inventoryError
+            if errors.As(err, &inventoryErr) &&
+                inventoryErr.Recoverable() {
+                return graph.ExecutionErrorPolicy{
+                    Recover: true,
+                    Replacement: graph.State{
+                        "inventory_status": "fallback",
+                    },
+                }
+            }
+            return graph.ExecutionErrorPolicy{}
+        }),
+    )
+
+    schema := graph.MessagesStateSchema()
+    collector.AddField(schema)
+
+    sg := graph.NewStateGraph(schema).
+        WithNodeCallbacks(collector.NodeCallbacks())
+
+    sg.AddNode("lookup_inventory", func(
+        ctx context.Context,
+        state graph.State,
+    ) (any, error) {
+        return nil, &inventoryError{
+            code:        codeInventorySoftTimeout,
+            message:     "inventory lookup timed out",
+            recoverable: true,
+        }
+    })
+
+    sg.AddNode("finalize", func(
+        ctx context.Context,
+        state graph.State,
+    ) (any, error) {
+        return graph.State{
+            "done": true,
+        }, nil
+    })
+
+    compiled, err := sg.
+        AddEdge("lookup_inventory", "finalize").
+        SetEntryPoint("lookup_inventory").
+        SetFinishPoint("finalize").
+        Compile()
+    if err != nil {
+        return nil, err
+    }
+    return graphagent.New("inventory-agent", compiled)
+}
+```
+
 ## Reading errors after the run
 
 ### Graph-only consumers
@@ -179,6 +454,90 @@ That means application code can use one simple rule:
 - keep consuming until `runner.completion`
 - read the collector key from its `StateDelta`
 - separately inspect the earlier fatal event for `Response.Error`
+
+Complete Runner-side pattern:
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+type RunSummary struct {
+    TransportError  *model.ResponseError
+    ExecutionErrors []graph.ExecutionError
+}
+
+func ConsumeUntilCompletion(
+    ctx context.Context,
+    events <-chan *event.Event,
+) (*RunSummary, error) {
+    summary := &RunSummary{}
+
+    for {
+        select {
+        case <-ctx.Done():
+            return nil, ctx.Err()
+        case evt, ok := <-events:
+            if !ok {
+                return summary, nil
+            }
+            if evt.Response != nil && evt.Response.Error != nil {
+                summary.TransportError = evt.Response.Error
+            }
+            if !evt.IsRunnerCompletion() {
+                continue
+            }
+
+            executionErrors, err := graph.ExecutionErrorsFromStateDelta(
+                evt.StateDelta,
+                graph.StateKeyExecutionErrors,
+            )
+            if err != nil {
+                return nil, err
+            }
+            summary.ExecutionErrors = executionErrors
+            return summary, nil
+        }
+    }
+}
+
+func PrintSummary(summary *RunSummary) {
+    if summary.TransportError != nil {
+        fmt.Printf(
+            "transport error: type=%s code=%s message=%s\n",
+            summary.TransportError.Type,
+            ptrValue(summary.TransportError.Code),
+            summary.TransportError.Message,
+        )
+    }
+    for _, record := range summary.ExecutionErrors {
+        if record.Error == nil {
+            continue
+        }
+        fmt.Printf(
+            "execution error: severity=%s node=%s code=%s message=%s\n",
+            record.Severity,
+            record.NodeName,
+            ptrValue(record.Error.Code),
+            record.Error.Message,
+        )
+    }
+}
+
+func ptrValue(value *string) string {
+    if value == nil {
+        return ""
+    }
+    return *value
+}
+```
 
 ## Subgraphs and sub-agents
 
@@ -232,6 +591,31 @@ If you intentionally want one code path for both, use:
 
 `ExecutionErrorCollector.SubgraphOutputMapper()` already does this for you.
 
+If you need custom parent-side state in addition to child error propagation,
+compose your own mapper around `collector.SubgraphStateUpdate(result)`:
+
+```go
+package main
+
+import "trpc.group/trpc-go/trpc-agent-go/graph"
+
+func parentOutputMapper(
+    collector *graph.ExecutionErrorCollector,
+) graph.SubgraphOutputMapper {
+    return func(
+        parent graph.State,
+        result graph.SubgraphResult,
+    ) graph.State {
+        update := collector.SubgraphStateUpdate(result)
+        if update == nil {
+            update = graph.State{}
+        }
+        update["child_status"] = "degraded"
+        return update
+    }
+}
+```
+
 ## A2A structured errors
 
 ### Server side
@@ -269,28 +653,56 @@ In streaming mode, `A2AAgent` also stops emitting the synthetic final assistant
 message after a terminal task error. This avoids the ambiguous pattern of
 "error first, then normal final message".
 
-## What business code still owns
+Complete server and client setup:
 
-The framework standardizes transport and collection mechanics. Business code
-still owns policy.
+```go
+package main
 
-### Business-owned pieces
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
+    a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
+)
 
-- Which errors are recoverable
-- Which fallback route should run after a recoverable error
-- Which state key name is appropriate for your domain
-- How to group, deduplicate, or post-process error records
-- How to interpret third-party A2A task states like `input-required`
+func buildA2AServer(myAgent agent.Agent) error {
+    _, err := a2aserver.New(
+        a2aserver.WithHost("127.0.0.1:18888"),
+        a2aserver.WithAgent(myAgent, true),
+        a2aserver.WithStructuredTaskErrors(true),
+    )
+    return err
+}
 
-### Recommended extension points
+func buildA2AClient() (agent.Agent, error) {
+    return a2aagent.New(
+        a2aagent.WithAgentCardURL("http://127.0.0.1:18888"),
+        a2aagent.WithEnableStreaming(true),
+    )
+}
+```
 
-- Use `WithExecutionErrorPolicy(...)` for recovery policy.
-- Use `collector.SubgraphStateUpdate(result)` when composing your own parent
-  output mapper.
-- Use `graph.EmitCustomStateDelta(...)` if you need to publish extra fatal-path
-  business state beyond the standard execution error record.
-- Use a custom `a2aagent.A2AEventConverter` if a third-party A2A provider uses
-  a different metadata convention.
+If you integrate a third-party A2A provider with a different metadata
+convention, business code should extend the framework at the converter layer:
+
+- keep the framework error model as `Response.Error`
+- implement `a2aagent.A2AEventConverter`
+- register it with `a2aagent.WithCustomEventConverter(...)`
+
+That is the correct place for provider-specific adaptation. The business code
+should not re-invent a second error transport format after the conversion step.
+
+## Recommended ownership model
+
+The cleanest production split is:
+
+- framework: collect, propagate, serialize, and expose structured errors
+- business error package: define code constants and typed errors
+- graph policy: decide recoverable versus fatal behavior
+- runner consumer: persist `ExecutionErrors` from `runner.completion`
+- transport consumer: inspect `Response.Error` for terminal failure handling
+
+That split is broad enough to replace an older business-side node-error helper
+without taking ownership of your domain-specific error taxonomy.
 
 ## Example code
 
