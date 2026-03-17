@@ -24,7 +24,7 @@ import (
 // It performs per-filterKey delta summarization; when filterKey=="", it means full-session summary.
 // Strategy: Summary storage version follows session storage version.
 func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
+	if !isummary.HasSummarizer(s.opts.summarizer) {
 		return nil
 	}
 
@@ -40,19 +40,7 @@ func (s *Service) CreateSessionSummary(ctx context.Context, sess *session.Sessio
 		return fmt.Errorf("check session key failed: %w", err)
 	}
 
-	summarizer, err := isummary.ResolveSessionSummarizer(
-		ctx,
-		s.opts.summarizer,
-		s.opts.summarizerResolver,
-		sess,
-		filterKey,
-		force,
-	)
-	if err != nil {
-		return err
-	}
-
-	updated, err := isummary.SummarizeSession(ctx, summarizer, sess, filterKey, force)
+	updated, err := isummary.SummarizeSession(ctx, s.opts.summarizer, sess, filterKey, force)
 	if err != nil || !updated {
 		return err
 	}
@@ -175,7 +163,7 @@ func (s *Service) getSummaryFromZSet(ctx context.Context, key session.Key, filte
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
 func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if !isummary.HasSummarizer(s.opts.summarizer, s.opts.summarizerResolver) {
+	if !isummary.HasSummarizer(s.opts.summarizer) {
 		return nil
 	}
 

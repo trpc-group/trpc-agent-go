@@ -83,8 +83,27 @@ const (
 	// A2A transport, enabling clients to group incremental chunks from the same LLM call.
 	MessageMetadataResponseIDKey = "llm_response_id"
 
+	// MessageMetadataStateDeltaKey is the metadata key for event state delta in A2A messages.
+	// It carries a decoded form of Event.StateDelta so A2A peers can restore structured state updates.
+	MessageMetadataStateDeltaKey = "state_delta"
+
 	// TextPartMetadataThoughtKey is the metadata key for thought/reasoning content in TextPart.
 	TextPartMetadataThoughtKey = "thought"
+
+	// FilePartMetadataContentTypeKey is the metadata key for original content type in FilePart.
+	// The client sets this to preserve the original ContentPart type ("image", "audio", "file")
+	// across A2A transport, since the A2A protocol does not natively distinguish image/audio
+	// from generic files within a FilePart.
+	FilePartMetadataContentTypeKey = "content_type"
+
+	// FilePartMetadataContentTypeImage marks a FilePart as originally ContentTypeImage.
+	FilePartMetadataContentTypeImage = "image"
+
+	// FilePartMetadataContentTypeAudio marks a FilePart as originally ContentTypeAudio.
+	FilePartMetadataContentTypeAudio = "audio"
+
+	// FilePartMetadataContentTypeFile marks a FilePart as originally ContentTypeFile.
+	FilePartMetadataContentTypeFile = "file"
 
 	// ADKMetadataKeyPrefix is the prefix for ADK-compatible metadata keys.
 	// ADK uses "adk_" prefix for metadata keys like "adk_type", "adk_app_name", "adk_user_id", etc.

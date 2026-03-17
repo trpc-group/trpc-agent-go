@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,23 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 )
+
+const (
+	helperPythonPattern = "code_*.py"
+	helperShellPattern  = "code_*.sh"
+)
+
+func requireSingleHelperFile(
+	t *testing.T, dir, pattern string,
+) string {
+	t.Helper()
+
+	matches, err := filepath.Glob(filepath.Join(dir, pattern))
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+
+	return matches[0]
+}
 
 func TestLocalCodeExecutor_ExecuteCode(t *testing.T) {
 	tests := []struct {
@@ -837,11 +855,6 @@ nonexistent-command-that-will-fail
 }
 
 func TestLocalCodeExecutor_IntegrationTest_CleanTempFiles(t *testing.T) {
-	// Create a temporary directory for testing
-	tempDir, err := os.MkdirTemp("", "integration-clean-test-")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
 	input := `Create a temporary file:
 
 ` + "```bash" + `
@@ -856,6 +869,7 @@ cat temp_file.txt
 
 	// Test with CleanTempFiles = false
 	t.Run("with_clean_temp_files_false", func(t *testing.T) {
+		tempDir := t.TempDir()
 		executor := local.New(
 			local.WithWorkDir(tempDir),
 			local.WithCleanTempFiles(false),
@@ -873,7 +887,9 @@ cat temp_file.txt
 		assert.Contains(t, result.String(), "Code execution result:")
 
 		// Code files should still exist
-		codeFiles, err := filepath.Glob(filepath.Join(tempDir, "code_*.sh"))
+		codeFiles, err := filepath.Glob(
+			filepath.Join(tempDir, helperShellPattern),
+		)
 		assert.NoError(t, err)
 		assert.NotEmpty(
 			t,
@@ -884,6 +900,7 @@ cat temp_file.txt
 
 	// Test with CleanTempFiles = true (default)
 	t.Run("with_clean_temp_files_true", func(t *testing.T) {
+		tempDir := t.TempDir()
 		executor := local.New(
 			local.WithWorkDir(tempDir),
 			local.WithCleanTempFiles(true),
@@ -900,17 +917,166 @@ cat temp_file.txt
 		assert.Contains(t, result.Output, "Temporary content")
 		assert.Contains(t, result.String(), "Code execution result:")
 
-		// Code files should be cleaned up. This is timing-dependent,
-		// so the test might not catch it reliably.
-		// The important thing is that execution succeeded
+		codeFiles, err := filepath.Glob(
+			filepath.Join(tempDir, helperShellPattern),
+		)
+		assert.NoError(t, err)
+		assert.Empty(
+			t,
+			codeFiles,
+			"Code files should be cleaned when CleanTempFiles is true",
+		)
 	})
+}
+
+func TestLocalCodeExecutor_CleanTempFiles_KeepProjectCWD(t *testing.T) {
+	if !isExecutableAvailable("bash") {
+		t.Skip("Skipping test because bash is not available")
+	}
+
+	const (
+		mainRelDir = "cmd/hello"
+		mainFile   = "main.go"
+	)
+
+	tempDir := t.TempDir()
+	mainDir := filepath.Join(tempDir, "cmd", "hello")
+	require.NoError(t, os.MkdirAll(mainDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(mainDir, mainFile),
+		[]byte(
+			"package main\n\n"+
+				"import \"fmt\"\n\n"+
+				"func main() {\n"+
+				"\tfmt.Println(\"cleanup works\")\n"+
+				"}\n",
+		),
+		0o644,
+	))
+
+	executor := local.New(
+		local.WithWorkDir(tempDir),
+		local.WithCleanTempFiles(true),
+		local.WithTimeout(20*time.Second),
+	)
+
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "bash",
+			Code: "test -f ./" + mainRelDir + "/" + mainFile +
+				"\npwd",
+		}},
+		ExecutionID: "test-workdir-cleanup-project",
+	}
+
+	result, err := executor.ExecuteCode(context.Background(), input)
+	require.NoError(t, err)
+	require.Contains(t, result.Output, tempDir)
+
+	codeFiles, err := filepath.Glob(
+		filepath.Join(tempDir, helperShellPattern),
+	)
+	require.NoError(t, err)
+	require.Empty(t, codeFiles)
+}
+
+func TestLocalCodeExecutor_CleanTempFiles_PreservesExistingFile(t *testing.T) {
+	if !isExecutableAvailable("bash") {
+		t.Skip("Skipping test because bash is not available")
+	}
+
+	const (
+		existingFile    = "code_0.sh"
+		existingContent = "echo original\n"
+	)
+
+	tempDir := t.TempDir()
+	existingPath := filepath.Join(tempDir, existingFile)
+	require.NoError(t, os.WriteFile(
+		existingPath,
+		[]byte(existingContent),
+		0o755,
+	))
+
+	executor := local.New(
+		local.WithWorkDir(tempDir),
+		local.WithCleanTempFiles(true),
+	)
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "bash",
+			Code:     "echo cleanup works",
+		}},
+		ExecutionID: "clean-temp-files-preserve-existing",
+	}
+
+	result, err := executor.ExecuteCode(context.Background(), input)
+	require.NoError(t, err)
+	require.Contains(t, result.Output, "cleanup works")
+
+	content, err := os.ReadFile(existingPath)
+	require.NoError(t, err)
+	require.Equal(t, existingContent, string(content))
+
+	codeFiles, err := filepath.Glob(
+		filepath.Join(tempDir, helperShellPattern),
+	)
+	require.NoError(t, err)
+	require.Len(t, codeFiles, 1)
+	require.Equal(t, existingPath, codeFiles[0])
+}
+
+func TestLocalCodeExecutor_CleanTempFiles_ReadOnlyWorkDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping permission test on Windows")
+	}
+
+	const (
+		readOnlyDirMode = 0o555
+		writableDirMode = 0o755
+	)
+
+	baseDir := t.TempDir()
+	workDir := filepath.Join(baseDir, "readonly")
+	require.NoError(t, os.MkdirAll(workDir, writableDirMode))
+	require.NoError(t, os.Chmod(workDir, readOnlyDirMode))
+	t.Cleanup(func() {
+		_ = os.Chmod(workDir, writableDirMode)
+	})
+
+	probeFile, err := os.CreateTemp(workDir, "probe_*")
+	if err == nil {
+		probePath := probeFile.Name()
+		require.NoError(t, probeFile.Close())
+		require.NoError(t, os.Remove(probePath))
+		t.Skip("Skipping because the work directory remains writable")
+	}
+
+	executor := local.New(
+		local.WithWorkDir(workDir),
+		local.WithCleanTempFiles(true),
+	)
+	input := codeexecutor.CodeExecutionInput{
+		CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "bash",
+			Code:     "echo should-not-run",
+		}},
+		ExecutionID: "clean-temp-files-readonly",
+	}
+
+	result, execErr := executor.ExecuteCode(context.Background(), input)
+	require.NoError(t, execErr)
+	require.Contains(
+		t,
+		result.Output,
+		"failed to create bash file",
+	)
 }
 
 func TestLocal_PythonNoPrintAddsNewline(t *testing.T) {
 	const (
-		langPy   = "python"
-		execID   = "py-no-print"
-		filename = "code_0.py"
+		langPy = "python"
+		execID = "py-no-print"
 	)
 	tempDir, err := os.MkdirTemp("", "py-no-print-")
 	require.NoError(t, err)
@@ -931,7 +1097,9 @@ func TestLocal_PythonNoPrintAddsNewline(t *testing.T) {
 	require.NoError(t, err)
 
 	// The created python file should end with a newline.
-	p := filepath.Join(tempDir, filename)
+	p := requireSingleHelperFile(
+		t, tempDir, helperPythonPattern,
+	)
 	data, rerr := os.ReadFile(p)
 	require.NoError(t, rerr)
 	require.Greater(t, len(data), 0)
@@ -940,9 +1108,8 @@ func TestLocal_PythonNoPrintAddsNewline(t *testing.T) {
 
 func TestLocal_PythonPrintNoAutoNewline(t *testing.T) {
 	const (
-		langPy   = "python"
-		execID   = "py-print"
-		filename = "code_0.py"
+		langPy = "python"
+		execID = "py-print"
 	)
 	tempDir, err := os.MkdirTemp("", "py-print-")
 	require.NoError(t, err)
@@ -964,7 +1131,9 @@ func TestLocal_PythonPrintNoAutoNewline(t *testing.T) {
 	_, err = e.ExecuteCode(context.Background(), in)
 	require.NoError(t, err)
 
-	p := filepath.Join(tempDir, filename)
+	p := requireSingleHelperFile(
+		t, tempDir, helperPythonPattern,
+	)
 	data, rerr := os.ReadFile(p)
 	require.NoError(t, rerr)
 	// File content should be exactly the source, no auto newline.
@@ -975,7 +1144,6 @@ func TestLocal_BashFileModeExec(t *testing.T) {
 	const (
 		langBash = "bash"
 		execID   = "bash-mode"
-		fname    = "code_0.sh"
 	)
 	tempDir, err := os.MkdirTemp("", "bash-mode-")
 	require.NoError(t, err)
@@ -995,7 +1163,9 @@ func TestLocal_BashFileModeExec(t *testing.T) {
 	_, err = e.ExecuteCode(context.Background(), in)
 	require.NoError(t, err)
 
-	p := filepath.Join(tempDir, fname)
+	p := requireSingleHelperFile(
+		t, tempDir, helperShellPattern,
+	)
 	st, serr := os.Stat(p)
 	require.NoError(t, serr)
 	// Executable bit should be present for bash scripts (0755).

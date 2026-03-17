@@ -141,15 +141,14 @@ func NewService(db *sql.DB, options ...ServiceOpt) (*Service, error) {
 		s.startAsyncPersistWorker()
 	}
 
-	if isummary.HasSummarizer(opts.summarizer, opts.summarizerResolver) && opts.asyncSummaryNum > 0 {
+	if isummary.HasSummarizer(opts.summarizer) && opts.asyncSummaryNum > 0 {
 		s.asyncWorker = isummary.NewAsyncSummaryWorker(
 			isummary.AsyncSummaryConfig{
-				Summarizer:         opts.summarizer,
-				SummarizerResolver: opts.summarizerResolver,
-				AsyncSummaryNum:    opts.asyncSummaryNum,
-				SummaryQueueSize:   opts.summaryQueueSize,
-				SummaryJobTimeout:  opts.summaryJobTimeout,
-				CreateSummaryFunc:  s.CreateSessionSummary,
+				Summarizer:        opts.summarizer,
+				AsyncSummaryNum:   opts.asyncSummaryNum,
+				SummaryQueueSize:  opts.summaryQueueSize,
+				SummaryJobTimeout: opts.summaryJobTimeout,
+				CreateSummaryFunc: s.CreateSessionSummary,
 			},
 		)
 		s.asyncWorker.Start()

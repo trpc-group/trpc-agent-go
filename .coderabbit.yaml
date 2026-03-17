@@ -1,0 +1,159 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: "zh-CN"
+tone_instructions: >-
+  请用简洁、专业的语气进行代码审查。
+  tRPC-Agent-Go 是框架项目，请优先评估变更对存量用户的语义与行为兼容性影响，避免改变默认行为与既有对外契约。
+  重点关注可扩展性、通用性与易用性，并尽量聚焦 CI 难覆盖的设计与行为问题，避免无关的主观风格争论。
+early_access: false
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  poem: false
+  review_status: true
+  review_details: false
+  commit_status: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: false
+  estimate_code_review_effort: true
+  in_progress_fortune: false
+  path_filters:
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.jpeg"
+    - "!**/*.gif"
+    - "!**/*.svg"
+    - "!**/*.ico"
+    - "!**/*.pdf"
+    - "!**/*.zip"
+    - "!**/*.tar"
+    - "!**/*.tgz"
+    - "!**/*.gz"
+    - "!**/*.7z"
+    - "!**/*.exe"
+    - "!**/*.dll"
+    - "!**/*.so"
+    - "!**/*.dylib"
+    - "!**/*.a"
+    - "!**/*.o"
+    - "!**/*.wasm"
+
+  high_level_summary_instructions: >-
+    请输出一份中文高层摘要与一份英文高层摘要。
+    中文摘要直接输出，英文摘要用 Markdown 中可渲染的 HTML details 标签包裹并默认折叠。
+    两份摘要都包含三个部分：改动概览、兼容性与行为风险、建议验证方式。
+    内容要具体可执行，避免空泛赞美，避免无关的代码风格评论。
+    英文摘要请严格使用以下格式包裹：
+    <details>
+    <summary>English</summary>
+    
+    English summary here.
+    
+    </details>
+
+  path_instructions:
+    - path: "**/*.go"
+      instructions: |
+        这是框架代码。审查优先级如下：
+        1. 语义与行为兼容性
+        2. 可扩展性
+        3. 通用性
+        4. 易用性
+        5. 并发安全、资源边界与错误处理
+        6. 代码风格
+
+        请重点检查：
+        - 默认行为是否保持稳定，新增能力是否通过可选配置、Option、接口、回调或插件机制扩展，而不是改变旧路径。
+        - 导出类型、导出函数、导出方法、接口、Option、错误语义、nil/zero-value 语义、JSON/序列化字段、事件顺序、流式输出语义是否发生破坏性变化。
+        - 结构体新增字段通常是兼容的，请不要仅因为新增字段而给出阻断性意见，但需要检查序列化兼容、zero-value 语义与默认行为。
+        - 修改 agent、runner、graph、tool 等执行链路时，是否改变事件流、stateDelta、工具调用顺序、取消传播、重试语义或长耗时工具标记等外部可观察行为。
+        - 抽象是否仍然面向能力而不是面向具体供应商，避免把厂商特性、模型特性或业务假设泄漏到公共层。
+        - 是否引入全局可变状态、隐式单例、无界队列、无限重试、goroutine 泄漏、channel 关闭时序错误或无法及时停止的后台任务。
+        - session、memory、artifact、knowledge、vectorstore 等持久化或协议相关结构的变更是否向后兼容，是否具备迁移和回滚路径。
+        - 错误是否保留根因并可被调用方判别，控制流错误不应被误当作普通失败重试。
+        - 安全边界是否清晰：外部输入、URL、路径、命令参数、模型驱动的工具调用都应被视为不可信。
+        - 新增 API 或配置时，是否保持最小必需配置、合理默认值和一致的命名/参数顺序。
+
+        请避免：
+        - 仅基于个人偏好提出命名、排版、注释风格或“更优雅重构”的建议；
+        - 建议为了内部实现方便而破坏对外契约或默认行为。
+
+        如果判断某个改动属于有意的行为变化，请明确指出：
+        - 旧行为是什么；
+        - 新行为是什么；
+        - 影响哪些用户或扩展点；
+        - 需要哪些测试、示例或文档同步说明。
+
+    - path: "**/*_test.go"
+      instructions: |
+        请重点检查测试是否验证了“对外行为”而不是仅验证实现细节。
+
+        关注点：
+        - 是否覆盖主路径、边界条件、错误路径和回归场景；
+        - 并发相关改动是否覆盖取消、关闭、错误传播、goroutine 回收、channel 顺序与 backpressure；
+        - 流式输出、事件流、stateDelta、工具调用链是否验证了顺序、一致性与结束语义；
+        - 测试是否稳定，避免依赖 time.Sleep、随机性、真实外部服务、本机环境差异；
+        - 是否优先使用 mock、fake、httptest、临时目录等可控替身；
+        - 断言是否足够强，避免“测试通过但行为没真正被验证”。
+
+        不要建议通过削弱断言、删除测试或扩大 mock 范围来掩盖真实问题。
+
+    - path: "test/**"
+      instructions: |
+        请把 test/ 下的代码视为测试基础设施，而不是普通业务代码。
+
+        重点检查：
+        - 测试辅助代码是否小而清晰、职责单一、可复用；
+        - 是否避免依赖真实外部服务和不稳定环境；
+        - 是否避免把复杂逻辑塞进测试夹具，从而掩盖真实行为；
+        - 日志、测试数据和示例配置中是否泄漏敏感信息。
+
+    - path: "examples/**"
+      instructions: |
+        examples 代表推荐用法和用户第一印象，请从“可复制、可理解、可安全运行”角度审查。
+
+        重点检查：
+        - 是否使用公开 API，是否体现当前推荐用法；
+        - 运行步骤、依赖条件、环境变量和副作用是否清楚；
+        - 敏感信息是否通过环境变量传入，示例输出中是否避免泄漏 token、密钥或隐私数据；
+        - 示例是否足够小且聚焦单一能力，不把示例写成隐藏复杂度的“迷你生产系统”；
+        - 当公共 API、默认值或推荐用法变化时，示例是否同步更新。
+
+    - path: "**/*.md"
+      instructions: |
+        文档的目标是准确传达当前公共契约，而不是追求文风。
+
+        重点检查：
+        - 命令、import path、配置项、默认值、返回行为是否与当前代码一致；
+        - README.md 与 README.zh_CN.md 的对外使用方式是否一致，若不一致是否有明确说明；
+        - 当公共 API、默认行为、迁移方式或兼容策略变化时，文档是否同步更新；
+        - 示例代码、配置片段和目录路径是否在当前仓库结构下真实可用。
+  tools:
+    github-checks:
+      enabled: true
+      timeout_ms: 900000
+    golangci-lint:
+      enabled: true
+      config_file: ".golangci.yml"
+    shellcheck:
+      enabled: true
+    markdownlint:
+      enabled: true
+    gitleaks:
+      enabled: true
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+      - "[skip review]"
+
+chat:
+  auto_reply: true
+  art: false

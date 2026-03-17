@@ -41,16 +41,15 @@ type AsyncSummaryWorker struct {
 
 // AsyncSummaryConfig contains configuration for async summary worker.
 type AsyncSummaryConfig struct {
-	Summarizer         summary.SessionSummarizer
-	SummarizerResolver summary.SessionSummarizerResolver
-	AsyncSummaryNum    int
-	SummaryQueueSize   int
-	SummaryJobTimeout  time.Duration
-	CreateSummaryFunc  func(context.Context, *session.Session, string, bool) error
+	Summarizer        summary.SessionSummarizer
+	AsyncSummaryNum   int
+	SummaryQueueSize  int
+	SummaryJobTimeout time.Duration
+	CreateSummaryFunc func(context.Context, *session.Session, string, bool) error
 }
 
 func (c AsyncSummaryConfig) hasSummarizer() bool {
-	return HasSummarizer(c.Summarizer, c.SummarizerResolver)
+	return HasSummarizer(c.Summarizer)
 }
 
 // NewAsyncSummaryWorker creates a new async summary worker.
