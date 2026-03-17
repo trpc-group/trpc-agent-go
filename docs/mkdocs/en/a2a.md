@@ -132,6 +132,39 @@ func main() {
 }
 ```
 
+#### Graph internal event forwarding
+
+By default, A2A Server filters most internal `graph.*` runtime events (for
+example `graph.node.start`, `graph.node.complete`, `graph.pregel.*`, and
+`graph.checkpoint.*`) to avoid exposing low-level execution details to
+downstream consumers.
+
+The terminal `graph.execution` event is still preserved by default (together
+with normal message/error events), so final state reconstruction and
+`state_delta` handoff continue to work.
+
+If you need node-level traces for debugging, extend the graph object allowlist:
+
+```go
+server, _ := a2aserver.New(
+	a2aserver.WithHost("localhost:8080"),
+	a2aserver.WithAgent(agent, true),
+	a2aserver.WithGraphEventObjectAllowlist(
+		"graph.execution", // keep terminal event
+		"graph.node.*",    // include node lifecycle events
+	),
+)
+```
+
+Notes:
+
+- If this option is not set, the default allowlist is `["graph.execution"]`.
+- If you explicitly call `WithGraphEventObjectAllowlist()` with no arguments,
+  all `graph.*` events will be filtered out (including `graph.execution`).
+
+Use this in debug/diagnostic scenarios. Keeping it off by default reduces noise
+and transport overhead in production.
+
 ### Hosting multiple A2A agents on one HTTP port (base paths)
 
 Sometimes you want **one service (one port)** to expose multiple A2A Agents.

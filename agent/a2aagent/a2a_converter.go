@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -96,6 +97,7 @@ func (d *defaultA2AEventConverter) ConvertToEvents(
 				Role:      protocol.MessageRoleAgent,
 				MessageID: v.Artifacts[i].ArtifactID,
 				Parts:     v.Artifacts[i].Parts,
+				Metadata:  v.Artifacts[i].Metadata,
 			}
 			if evt := d.buildRespEvent(false, artifactMsg, agentName, invocation); evt != nil {
 				events = append(events, evt)
@@ -359,6 +361,9 @@ type parseResult struct {
 
 	// responseError holds structured error fields reconstructed from metadata.
 	responseError *model.ResponseError
+
+	// stateDelta holds structured state updates reconstructed from A2A metadata.
+	stateDelta map[string][]byte
 }
 
 // toolResponseData holds tool response information
@@ -398,6 +403,9 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 		}
 		if responseID, ok := msg.Metadata[ia2a.MessageMetadataResponseIDKey].(string); ok {
 			result.responseID = responseID
+		}
+		if stateDelta, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]; ok {
+			result.stateDelta = ia2a.DecodeStateDeltaMetadata(stateDelta)
 		}
 	}
 
@@ -611,6 +619,9 @@ func buildEventResponse(
 	if result.tag != "" {
 		opts = append(opts, event.WithTag(result.tag))
 	}
+	if result.stateDelta != nil {
+		opts = append(opts, event.WithStateDelta(result.stateDelta))
+	}
 
 	evt := event.New(invocation.InvocationID, agentName, opts...)
 
@@ -626,8 +637,23 @@ func buildEventResponse(
 	} else {
 		evt.Response = buildNonStreamingResponse(respID, result, role)
 	}
+	markGraphCompletionEvent(evt, result)
 
 	return evt
+}
+
+func markGraphCompletionEvent(evt *event.Event, result *parseResult) {
+	if evt == nil || evt.Response == nil || result == nil {
+		return
+	}
+	if result.objectType != graph.ObjectTypeGraphExecution {
+		return
+	}
+
+	// graph.execution is a terminal subgraph event. Preserve completion
+	// semantics so parent graph agent nodes can reconstruct final state.
+	evt.Response.Done = true
+	evt.Response.IsPartial = false
 }
 
 // buildStreamingResponse creates a response for streaming mode.

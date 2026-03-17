@@ -44,6 +44,10 @@ var (
 	errExplicitCancel = errors.New("agui: explicit cancel")
 )
 
+const (
+	toolResultInputEventAuthor = "agui.runner"
+)
+
 // Runner executes AG-UI runs and emits AG-UI events.
 type Runner interface {
 	// Run starts processing one AG-UI run request and returns a channel of AG-UI events.
@@ -87,6 +91,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		cancelOnContextDoneEnabled:             opts.CancelOnContextDoneEnabled,
 		messagesSnapshotFollowEnabled:          opts.MessagesSnapshotFollowEnabled,
 		messagesSnapshotFollowMaxDuration:      opts.MessagesSnapshotFollowMaxDuration,
+		toolResultInputTranslationEnabled:      opts.ToolResultInputTranslationEnabled,
 	}
 	return run
 }
@@ -115,6 +120,7 @@ type runner struct {
 	cancelOnContextDoneEnabled             bool
 	messagesSnapshotFollowEnabled          bool
 	messagesSnapshotFollowMaxDuration      time.Duration
+	toolResultInputTranslationEnabled      bool
 }
 
 type sessionContext struct {
@@ -538,8 +544,30 @@ func (r *runner) emitToolResultEvent(ctx context.Context, events chan<- aguieven
 	if messageID == "" {
 		messageID = msg.ToolID
 	}
+	if r.toolResultInputTranslationEnabled {
+		return r.handleAgentEvent(ctx, events, input, newToolResultInputEvent(messageID, msg))
+	}
 	toolResultEvent := aguievents.NewToolCallResultEvent(messageID, msg.ToolID, msg.Content)
 	return r.emitEvent(ctx, events, toolResultEvent, input)
+}
+
+// newToolResultInputEvent normalizes a tool-result input into an internal event for translation.
+func newToolResultInputEvent(messageID string, msg *model.Message) *event.Event {
+	rsp := &model.Response{
+		ID:     messageID,
+		Object: model.ObjectTypeToolResponse,
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:     model.RoleTool,
+				Content:  msg.Content,
+				ToolID:   msg.ToolID,
+				ToolName: msg.ToolName,
+			},
+		}},
+	}
+	evt := event.NewResponseEvent("", toolResultInputEventAuthor, rsp)
+	evt.ID = messageID
+	return evt
 }
 
 func (r *runner) handleAgentEvent(ctx context.Context, events chan<- aguievents.Event, input *runInput, event *event.Event) bool {
