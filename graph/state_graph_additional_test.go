@@ -242,6 +242,28 @@ func graphHasNonEmptyStringAttr(attrs []attribute.KeyValue, key string) bool {
 	return false
 }
 
+func TestWorkflowTypeFromNodeType(t *testing.T) {
+	tests := []struct {
+		name     string
+		nodeType NodeType
+		want     itelemetry.WorkflowType
+	}{
+		{name: "function", nodeType: NodeTypeFunction, want: itelemetry.WorkflowTypeFunction},
+		{name: "llm", nodeType: NodeTypeLLM, want: itelemetry.WorkflowTypeLLM},
+		{name: "tool", nodeType: NodeTypeTool, want: itelemetry.WorkflowTypeTool},
+		{name: "agent", nodeType: NodeTypeAgent, want: itelemetry.WorkflowTypeAgent},
+		{name: "join", nodeType: NodeTypeJoin, want: itelemetry.WorkflowTypeJoin},
+		{name: "router", nodeType: NodeTypeRouter, want: itelemetry.WorkflowTypeRouter},
+		{name: "unknown passthrough", nodeType: NodeType("custom"), want: itelemetry.WorkflowType("custom")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, workflowTypeFromNodeType(tt.nodeType))
+		})
+	}
+}
+
 // collectModelExecutionPhases drains model execution events from the channel.
 func collectModelExecutionPhases(ch <-chan *event.Event) []ModelExecutionPhase {
 	var phases []ModelExecutionPhase
@@ -3043,6 +3065,50 @@ func TestToolsNode_DisableTracingSkipsSpanCreation(t *testing.T) {
 	_, err := node.Function(ctx, state)
 	require.NoError(t, err)
 	require.Empty(t, recorder.Ended())
+}
+
+func TestAddToolsNode_WorkflowSpanIncludesToolType(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	sg := NewStateGraph(MessagesStateSchema())
+	sg.AddToolsNode("tools", map[string]tool.Tool{"echo": &echoTool{name: "echo"}})
+
+	node := sg.graph.nodes["tools"]
+	state := State{
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("hi"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "echo",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		},
+	}
+
+	_, err := node.Function(context.Background(), state)
+	require.NoError(t, err)
+
+	var workflowSpan sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == itelemetry.NewWorkflowSpanName("execute_tools_node") {
+			workflowSpan = span
+			break
+		}
+	}
+	require.NotNil(t, workflowSpan)
+	require.True(
+		t,
+		graphHasAttr(
+			workflowSpan.Attributes(),
+			semconvtrace.KeyGenAIWorkflowType,
+			itelemetry.WorkflowTypeTool.String(),
+		),
+	)
 }
 
 // Verify StateSchema.ApplyUpdate skips unknown internal keys while still

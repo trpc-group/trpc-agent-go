@@ -475,6 +475,25 @@ func startNodeSpanForInvocation(ctx context.Context, invocation *agent.Invocatio
 	return ctx, span, true
 }
 
+func workflowTypeFromNodeType(nodeType NodeType) itelemetry.WorkflowType {
+	switch nodeType {
+	case NodeTypeFunction:
+		return itelemetry.WorkflowTypeFunction
+	case NodeTypeLLM:
+		return itelemetry.WorkflowTypeLLM
+	case NodeTypeTool:
+		return itelemetry.WorkflowTypeTool
+	case NodeTypeAgent:
+		return itelemetry.WorkflowTypeAgent
+	case NodeTypeJoin:
+		return itelemetry.WorkflowTypeJoin
+	case NodeTypeRouter:
+		return itelemetry.WorkflowTypeRouter
+	default:
+		return itelemetry.WorkflowType(nodeType)
+	}
+}
+
 // AddNode adds a node with the given ID and function.
 // The name and description of the node can be set with the options.
 // This automatically sets up Pregel-style channel configuration.
@@ -494,7 +513,12 @@ func (sg *StateGraph) AddNode(id string, function NodeFunc, opts ...Option) *Sta
 		}
 
 		ctx, span := trace.Tracer.Start(ctx, itelemetry.NewWorkflowSpanName(fmt.Sprintf("execute_function_node %s", id)))
-		workflow := &itelemetry.Workflow{Name: fmt.Sprintf("execute_function_node %s", id), ID: id, Request: state.safeClone()}
+		workflow := &itelemetry.Workflow{
+			Name:    fmt.Sprintf("execute_function_node %s", id),
+			ID:      id,
+			Type:    workflowTypeFromNodeType(node.Type),
+			Request: state.safeClone(),
+		}
 		defer func() {
 			itelemetry.TraceWorkflow(span, workflow)
 			span.End()
@@ -576,7 +600,12 @@ func (sg *StateGraph) AddLLMNode(
 		recordWorkflow := startedWorkflowSpan && wfSpan != nil && wfSpan.IsRecording()
 		var workflow *itelemetry.Workflow
 		if recordWorkflow {
-			workflow = &itelemetry.Workflow{Name: workflowName, ID: id, Request: state.safeClone()}
+			workflow = &itelemetry.Workflow{
+				Name:    workflowName,
+				ID:      id,
+				Type:    workflowTypeFromNodeType(node.Type),
+				Request: state.safeClone(),
+			}
 		}
 		defer func() {
 			if recordWorkflow {
@@ -628,9 +657,8 @@ func (sg *StateGraph) AddToolsNode(
 	tools map[string]tool.Tool,
 	opts ...Option,
 ) *StateGraph {
-	toolsNodeFunc := NewToolsNodeFunc(tools, opts...)
-	// Add tool node type option
 	toolOpts := append([]Option{WithNodeType(NodeTypeTool)}, opts...)
+	toolsNodeFunc := NewToolsNodeFunc(tools, toolOpts...)
 	sg.AddNode(id, toolsNodeFunc, toolOpts...)
 	return sg
 }
@@ -2034,7 +2062,12 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 		ctx, span, startedSpan := startNodeSpan(ctx, itelemetry.NewWorkflowSpanName("execute_tools_node"))
 		var workflow *itelemetry.Workflow
 		if startedSpan {
-			workflow = &itelemetry.Workflow{Name: "execute_tools_node", ID: "execute_tools_node", Request: state.safeClone()}
+			workflow = &itelemetry.Workflow{
+				Name:    "execute_tools_node",
+				ID:      "execute_tools_node",
+				Type:    workflowTypeFromNodeType(node.Type),
+				Request: state.safeClone(),
+			}
 			defer func() {
 				itelemetry.TraceWorkflow(span, workflow)
 				span.End()

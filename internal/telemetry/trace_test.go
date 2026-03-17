@@ -133,18 +133,21 @@ func TestNewWorkflowSpanName(t *testing.T) {
 func TestTraceWorkflow(t *testing.T) {
 	t.Run("basic attributes", func(t *testing.T) {
 		span := newRecordingSpan()
-		wf := &Workflow{Name: "myflow", ID: "wf-123"}
+		wf := &Workflow{Name: "myflow", ID: "wf-123", Type: WorkflowTypeGraph}
 
 		TraceWorkflow(span, wf)
 
 		if !hasAttr(span.attrs, semconvtrace.KeyGenAIOperationName, OperationWorkflow) {
 			t.Fatalf("missing operation name attribute")
 		}
-		if !hasAttr(span.attrs, KeyGenAIWorkflowName, "myflow") {
+		if !hasAttr(span.attrs, semconvtrace.KeyGenAIWorkflowName, "myflow") {
 			t.Fatalf("missing workflow name attribute")
 		}
-		if !hasAttr(span.attrs, KeyGenAIWorkflowID, "wf-123") {
+		if !hasAttr(span.attrs, semconvtrace.KeyGenAIWorkflowID, "wf-123") {
 			t.Fatalf("missing workflow id attribute")
+		}
+		if !hasAttr(span.attrs, semconvtrace.KeyGenAIWorkflowType, WorkflowTypeGraph.String()) {
+			t.Fatalf("missing workflow type attribute")
 		}
 	})
 
