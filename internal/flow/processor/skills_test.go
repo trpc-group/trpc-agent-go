@@ -359,6 +359,9 @@ func TestSkillsRequestProcessor_SkillLoadModeOnce_OffloadsLoadedSkills(
 		Session: &session.Session{
 			State: session.StateMap{
 				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["calc"]`,
+				),
 			},
 		},
 	}
@@ -388,6 +391,11 @@ func TestSkillsRequestProcessor_SkillLoadModeOnce_OffloadsLoadedSkills(
 		ev1.StateDelta,
 		skill.LoadedKey("tester", "calc"),
 	)
+	require.Contains(
+		t,
+		ev1.StateDelta,
+		skill.LoadedOrderKey("tester"),
+	)
 
 	ev2 := <-ch
 	require.NotNil(t, ev2)
@@ -410,6 +418,9 @@ func TestSkillsRequestProcessor_SkillLoadModeTurn_ClearsOncePerInvocation(
 			State: session.StateMap{
 				skill.LoadedKey("tester", "calc"): []byte("1"),
 				skill.DocsKey("tester", "calc"):   []byte("*"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["calc"]`,
+				),
 			},
 		},
 	}
@@ -433,10 +444,18 @@ func TestSkillsRequestProcessor_SkillLoadModeTurn_ClearsOncePerInvocation(
 	docsVal, ok := inv.Session.GetState(skill.DocsKey("tester", "calc"))
 	require.True(t, ok)
 	require.Empty(t, docsVal)
+	orderVal, ok := inv.Session.GetState(skill.LoadedOrderKey("tester"))
+	require.True(t, ok)
+	require.Empty(t, orderVal)
 
 	ev1 := <-ch1
 	require.NotNil(t, ev1)
 	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
+	require.Contains(
+		t,
+		ev1.StateDelta,
+		skill.LoadedOrderKey("tester"),
+	)
 
 	ev2 := <-ch1
 	require.NotNil(t, ev2)
@@ -609,6 +628,9 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_EvictsOldest(
 				skill.LoadedKey("tester", "b"): []byte("1"),
 				skill.LoadedKey("tester", "c"): []byte("1"),
 				skill.LoadedKey("tester", "d"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["a","b","c","d"]`,
+				),
 			},
 			Events: []event.Event{
 				toolResponseEvent(
@@ -665,6 +687,11 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_EvictsOldest(
 	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
 	require.Contains(t, ev1.StateDelta, skill.LoadedKey("tester", "a"))
 	require.Contains(t, ev1.StateDelta, skill.DocsKey("tester", "a"))
+	require.Equal(
+		t,
+		`["b","c","d"]`,
+		string(ev1.StateDelta[skill.LoadedOrderKey("tester")]),
+	)
 
 	ev2 := <-ch
 	require.NotNil(t, ev2)
@@ -701,6 +728,9 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_SelectDocsTouchesSkill(
 				skill.LoadedKey("tester", "b"): []byte("1"),
 				skill.LoadedKey("tester", "c"): []byte("1"),
 				skill.LoadedKey("tester", "d"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["b","c","d","a"]`,
+				),
 			},
 			Events: []event.Event{
 				toolResponseEvent(
@@ -750,6 +780,9 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_SelectDocsTouchesSkill(
 	v, ok := inv.Session.GetState(skill.LoadedKey("tester", "b"))
 	require.True(t, ok)
 	require.Empty(t, v)
+	orderVal, ok := inv.Session.GetState(skill.LoadedOrderKey("tester"))
+	require.True(t, ok)
+	require.Equal(t, []byte(`["c","d","a"]`), orderVal)
 }
 
 func TestSkillsRequestProcessor_MaxLoadedSkills_ToolResultMode_EvictsOldest(
@@ -779,6 +812,9 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_ToolResultMode_EvictsOldest(
 				skill.LoadedKey("tester", "b"): []byte("1"),
 				skill.LoadedKey("tester", "c"): []byte("1"),
 				skill.LoadedKey("tester", "d"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["a","b","c","d"]`,
+				),
 			},
 			Events: []event.Event{
 				toolResponseEvent(
@@ -833,10 +869,86 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_ToolResultMode_EvictsOldest(
 	ev1 := <-ch
 	require.NotNil(t, ev1)
 	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
+	require.Equal(
+		t,
+		`["b","c","d"]`,
+		string(ev1.StateDelta[skill.LoadedOrderKey("tester")]),
+	)
 
 	ev2 := <-ch
 	require.NotNil(t, ev2)
 	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev2.Object)
+}
+
+func TestSkillsRequestProcessor_MaxLoadedSkills_UsesStoredOrder(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "alpha", Description: "A"},
+			{Name: "beta", Description: "B"},
+			{Name: "gamma", Description: "C"},
+		},
+		full: map[string]*skill.Skill{
+			"alpha": {
+				Summary: skill.Summary{Name: "alpha"},
+				Body:    "Alpha body",
+			},
+			"beta": {
+				Summary: skill.Summary{Name: "beta"},
+				Body:    "Beta body",
+			},
+			"gamma": {
+				Summary: skill.Summary{Name: "gamma"},
+				Body:    "Gamma body",
+			},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "alpha"): []byte("1"),
+				skill.LoadedKey("tester", "beta"):  []byte("1"),
+				skill.LoadedKey("tester", "gamma"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["alpha","beta","gamma"]`,
+				),
+			},
+		},
+	}
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("base sys"),
+	}}
+	ch := make(chan *event.Event, 3)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+		WithMaxLoadedSkills(2),
+	)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	sys := req.Messages[0].Content
+	require.NotContains(t, sys, "[Loaded] alpha")
+	require.Contains(t, sys, "[Loaded] beta")
+	require.Contains(t, sys, "[Loaded] gamma")
+}
+
+func TestKeepMostRecentSkills_UsesStoredOrder(t *testing.T) {
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedOrderKey("tester"): []byte(
+					`["a","b","c","d"]`,
+				),
+			},
+		},
+	}
+	loaded := []string{"d", "b", "a", "c"}
+	keep := keepMostRecentSkills(inv, loaded, 2)
+	require.Equal(t, []string{"c", "d"}, keep)
 }
 
 func TestKeepMostRecentSkills_FillsAlphabeticallyWhenNoEvents(t *testing.T) {
@@ -848,7 +960,7 @@ func TestKeepMostRecentSkills_FillsAlphabeticallyWhenNoEvents(t *testing.T) {
 	const max = 3
 
 	keep := keepMostRecentSkills(inv, loaded, max)
-	require.Equal(t, []string{"a", "b", "c"}, keep)
+	require.Equal(t, []string{"b", "c", "d"}, keep)
 }
 
 func TestKeepMostRecentSkills_EarlyReturns(t *testing.T) {
@@ -867,24 +979,20 @@ func TestKeepMostRecentSkills_EarlyReturns(t *testing.T) {
 	require.Nil(t, keep)
 }
 
-func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
+func TestAppendSkillsToOrderFromToolResponseEvent_EarlyReturns(t *testing.T) {
 	loadedSet := map[string]struct{}{
 		"a": {},
 	}
-	seen := map[string]struct{}{}
-	const max = 3
 
-	keep := appendSkillsFromToolResponseEvent(
+	order := appendSkillsToOrderFromToolResponseEvent(
 		event.Event{},
 		"",
 		loadedSet,
-		seen,
 		nil,
-		max,
 	)
-	require.Nil(t, keep)
+	require.Nil(t, order)
 
-	keep = appendSkillsFromToolResponseEvent(
+	order = appendSkillsToOrderFromToolResponseEvent(
 		event.Event{
 			Response: &model.Response{
 				Object: "not_tool_response",
@@ -892,13 +1000,11 @@ func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
 		},
 		"",
 		loadedSet,
-		seen,
 		nil,
-		max,
 	)
-	require.Nil(t, keep)
+	require.Nil(t, order)
 
-	keep = appendSkillsFromToolResponseEvent(
+	order = appendSkillsToOrderFromToolResponseEvent(
 		event.Event{
 			Response: &model.Response{
 				Object: model.ObjectTypeToolResponse,
@@ -906,19 +1012,14 @@ func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
 		},
 		"",
 		loadedSet,
-		seen,
 		nil,
-		max,
 	)
-	require.Nil(t, keep)
+	require.Nil(t, order)
 }
 
-func TestAppendSkillsFromToolResp_SkipsInvalidMessages(t *testing.T) {
+func TestAppendSkillsToOrderFromToolResp_SkipsInvalidMessages(t *testing.T) {
 	loadedSet := map[string]struct{}{
 		"a": {},
-		"b": {},
-	}
-	seen := map[string]struct{}{
 		"b": {},
 	}
 
@@ -962,15 +1063,13 @@ func TestAppendSkillsFromToolResp_SkipsInvalidMessages(t *testing.T) {
 		},
 	}
 
-	keep := appendSkillsFromToolResponseEvent(
+	order := appendSkillsToOrderFromToolResponseEvent(
 		ev,
 		"",
 		loadedSet,
-		seen,
-		nil,
-		10,
+		[]string{"b"},
 	)
-	require.Equal(t, []string{"a"}, keep)
+	require.Equal(t, []string{"b", "a"}, order)
 }
 
 func TestSkillNameFromToolResponse_UnknownTool(t *testing.T) {
@@ -1395,6 +1494,9 @@ func TestSkillsToolResultRequestProcessor_SkillLoadModeOnce_Offloads(
 			State: session.StateMap{
 				skill.LoadedKey("tester", "calc"): []byte("1"),
 				skill.DocsKey("tester", "calc"):   []byte("[]"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["calc"]`,
+				),
 			},
 		},
 	}
@@ -1448,6 +1550,9 @@ func TestSkillsToolResultRequestProcessor_SkillLoadModeOnce_Offloads(
 	)
 	require.True(t, ok)
 	require.Empty(t, docsVal)
+	orderVal, ok := inv.Session.GetState(skill.LoadedOrderKey("tester"))
+	require.True(t, ok)
+	require.Empty(t, orderVal)
 
 	ev := <-ch
 	require.NotNil(t, ev)
@@ -1461,6 +1566,11 @@ func TestSkillsToolResultRequestProcessor_SkillLoadModeOnce_Offloads(
 		t,
 		ev.StateDelta,
 		skill.DocsKey("tester", "calc"),
+	)
+	require.Contains(
+		t,
+		ev.StateDelta,
+		skill.LoadedOrderKey("tester"),
 	)
 }
 
@@ -1656,6 +1766,9 @@ func TestSkillsToolResultRequestProcessor_MaybeOffload_NoOpWhenNotOnce(
 		Session: &session.Session{
 			State: session.StateMap{
 				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["calc"]`,
+				),
 			},
 		},
 	}
@@ -1675,6 +1788,9 @@ func TestSkillsToolResultRequestProcessor_MaybeOffload_NoOpWhenNotOnce(
 	v, ok := inv.Session.GetState(skill.LoadedKey("tester", "calc"))
 	require.True(t, ok)
 	require.Equal(t, []byte("1"), v)
+	orderVal, ok := inv.Session.GetState(skill.LoadedOrderKey("tester"))
+	require.True(t, ok)
+	require.Equal(t, []byte(`["calc"]`), orderVal)
 	require.Len(t, ch, 0)
 }
 

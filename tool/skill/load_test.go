@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -39,7 +40,10 @@ func (m *mockRepo) Path(name string) (string, error) { return "", nil }
 func TestLoadTool_Call_ValidatesAndDelta(t *testing.T) {
 	repo := &mockRepo{ok: map[string]bool{"calc": true}}
 	lt := NewLoadTool(repo)
-	inv := &agent.Invocation{AgentName: "tester"}
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session:   &session.Session{State: session.StateMap{}},
+	}
 
 	// include_all_docs path
 	args := loadInput{Skill: "calc", IncludeAllDocs: true}
@@ -51,12 +55,24 @@ func TestLoadTool_Call_ValidatesAndDelta(t *testing.T) {
 	delta := lt.StateDeltaForInvocation(inv, "call-1", b, nil)
 	require.Equal(t, []byte("1"), delta[skill.LoadedKey("tester", "calc")])
 	require.Equal(t, []byte("*"), delta[skill.DocsKey("tester", "calc")])
+	require.Equal(
+		t,
+		`["calc"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
+	inv.Session.State[skill.LoadedOrderKey("tester")] =
+		delta[skill.LoadedOrderKey("tester")]
 
 	// docs array path
 	args = loadInput{Skill: "calc", Docs: []string{"A.md"}}
 	b, _ = json.Marshal(args)
 	delta = lt.StateDeltaForInvocation(inv, "call-2", b, nil)
 	require.NotNil(t, delta[skill.DocsKey("tester", "calc")])
+	require.Equal(
+		t,
+		`["calc"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
 
 	// only loaded, no docs selection
 	args = loadInput{Skill: "calc"}
@@ -65,6 +81,11 @@ func TestLoadTool_Call_ValidatesAndDelta(t *testing.T) {
 	require.Equal(t, []byte("1"), delta[skill.LoadedKey("tester", "calc")])
 	_, ok := delta[skill.DocsKey("tester", "calc")]
 	require.False(t, ok)
+	require.Equal(
+		t,
+		`["calc"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
 }
 
 func TestLoadTool_Call_Errors(t *testing.T) {

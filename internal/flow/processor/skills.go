@@ -127,9 +127,8 @@ func WithSkillExecToolsDisabled() SkillsRequestProcessorOption {
 //
 // When max <= 0, no cap is applied (default behavior).
 //
-// When max > 0, the processor keeps at most max most-recently loaded
-// skills (skill_load / skill_select_docs) and offloads the rest by
-// clearing their state keys.
+// When max > 0, the processor keeps at most max most-recently touched
+// skills and offloads the rest by clearing their state keys.
 func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 	return func(o *skillsRequestProcessorOptions) {
 		o.maxLoadedSkills = max
@@ -306,7 +305,7 @@ func (p *SkillsRequestProcessor) maybeCapLoadedSkills(
 		keepSet[name] = struct{}{}
 	}
 
-	delta := make(map[string][]byte, len(loaded)*2)
+	delta := make(map[string][]byte, len(loaded)*2+1)
 	var kept []string
 	for _, name := range loaded {
 		if _, ok := keepSet[name]; ok {
@@ -321,6 +320,10 @@ func (p *SkillsRequestProcessor) maybeCapLoadedSkills(
 		inv.Session.SetState(docsKey, nil)
 		delta[docsKey] = nil
 	}
+	orderKey := skill.LoadedOrderKey(inv.AgentName)
+	orderValue := skill.MarshalLoadedOrder(keep)
+	inv.Session.SetState(orderKey, orderValue)
+	delta[orderKey] = orderValue
 	if len(delta) > 0 {
 		agent.EmitEvent(ctx, inv, ch, event.New(
 			inv.InvocationID,
@@ -341,21 +344,14 @@ func keepMostRecentSkills(
 		return nil
 	}
 
-	loadedSet := loadedSkillSet(loaded)
-	if len(loadedSet) == 0 {
+	order := loadedSkillOrder(inv, loaded)
+	if len(order) == 0 {
 		return nil
 	}
-
-	keep, seen := mostRecentSkillsFromEvents(
-		inv.Session.GetEvents(),
-		inv.AgentName,
-		loadedSet,
-		max,
-	)
-	if len(keep) >= max {
-		return keep
+	if len(order) <= max {
+		return append([]string(nil), order...)
 	}
-	return fillSkillsAlphabetically(keep, seen, loaded, max)
+	return append([]string(nil), order[len(order)-max:]...)
 }
 
 func loadedSkillSet(loaded []string) map[string]struct{} {
@@ -370,49 +366,107 @@ func loadedSkillSet(loaded []string) map[string]struct{} {
 	return out
 }
 
-func mostRecentSkillsFromEvents(
+func loadedSkillOrder(
+	inv *agent.Invocation,
+	loaded []string,
+) []string {
+	if inv == nil || inv.Session == nil {
+		return nil
+	}
+
+	loadedSet := loadedSkillSet(loaded)
+	if len(loadedSet) == 0 {
+		return nil
+	}
+
+	order := loadedSkillOrderFromState(inv, loadedSet)
+	if len(order) < len(loadedSet) {
+		order = appendSkillsToOrderFromEvents(
+			order,
+			inv.Session.GetEvents(),
+			inv.AgentName,
+			loadedSet,
+		)
+	}
+	if len(order) < len(loadedSet) {
+		order = fillLoadedSkillOrderAlphabetically(
+			order,
+			loadedSet,
+		)
+	}
+	return order
+}
+
+func loadedSkillOrderFromState(
+	inv *agent.Invocation,
+	loadedSet map[string]struct{},
+) []string {
+	if inv == nil || inv.Session == nil {
+		return nil
+	}
+
+	raw, ok := inv.Session.GetState(skill.LoadedOrderKey(inv.AgentName))
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+
+	order := skill.ParseLoadedOrder(raw)
+	if len(order) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(order))
+	seen := make(map[string]struct{}, len(order))
+	for _, name := range order {
+		if _, ok := loadedSet[name]; !ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		out = append(out, name)
+		seen[name] = struct{}{}
+	}
+	return out
+}
+
+func appendSkillsToOrderFromEvents(
+	order []string,
 	events []event.Event,
 	agentName string,
 	loadedSet map[string]struct{},
-	max int,
-) ([]string, map[string]struct{}) {
-	keep := make([]string, 0, max)
-	seen := make(map[string]struct{}, max)
-	for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
-		keep = appendSkillsFromToolResponseEvent(
+) []string {
+	for i := 0; i < len(events); i++ {
+		order = appendSkillsToOrderFromToolResponseEvent(
 			events[i],
 			agentName,
 			loadedSet,
-			seen,
-			keep,
-			max,
+			order,
 		)
 	}
-	return keep, seen
+	return order
 }
 
-func appendSkillsFromToolResponseEvent(
+func appendSkillsToOrderFromToolResponseEvent(
 	ev event.Event,
 	agentName string,
 	loadedSet map[string]struct{},
-	seen map[string]struct{},
-	keep []string,
-	max int,
+	order []string,
 ) []string {
 	if agentName != "" && ev.Author != agentName {
-		return keep
+		return order
 	}
 	if ev.Response == nil {
-		return keep
+		return order
 	}
 	if ev.Object != model.ObjectTypeToolResponse {
-		return keep
+		return order
 	}
 	if len(ev.Choices) == 0 {
-		return keep
+		return order
 	}
 
-	for j := len(ev.Choices) - 1; j >= 0 && len(keep) < max; j-- {
+	for j := 0; j < len(ev.Choices); j++ {
 		msg := ev.Choices[j].Message
 		if msg.Role != model.RoleTool {
 			continue
@@ -428,38 +482,25 @@ func appendSkillsFromToolResponseEvent(
 		if _, ok := loadedSet[name]; !ok {
 			continue
 		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		keep = append(keep, name)
-		seen[name] = struct{}{}
+		order = skill.TouchLoadedOrder(order, name)
 	}
-	return keep
+	return order
 }
 
-func fillSkillsAlphabetically(
-	keep []string,
-	seen map[string]struct{},
-	loaded []string,
-	max int,
+func fillLoadedSkillOrderAlphabetically(
+	order []string,
+	loadedSet map[string]struct{},
 ) []string {
-	sorted := append([]string(nil), loaded...)
-	sort.Strings(sorted)
-	for _, name := range sorted {
-		if len(keep) == max {
-			break
-		}
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
+	seen := loadedSkillSet(order)
+	var sorted []string
+	for name := range loadedSet {
 		if _, ok := seen[name]; ok {
 			continue
 		}
-		keep = append(keep, name)
-		seen[name] = struct{}{}
+		sorted = append(sorted, name)
 	}
-	return keep
+	sort.Strings(sorted)
+	return append(order, sorted...)
 }
 
 func skillNameFromToolResponse(msg model.Message) string {
@@ -513,9 +554,11 @@ func clearSkillState(inv *agent.Invocation) map[string][]byte {
 	delta := make(map[string][]byte)
 	loadedPrefix := skill.LoadedPrefix(inv.AgentName)
 	docsPrefix := skill.DocsPrefix(inv.AgentName)
+	orderKey := skill.LoadedOrderKey(inv.AgentName)
 	for k, v := range state {
 		if !strings.HasPrefix(k, loadedPrefix) &&
-			!strings.HasPrefix(k, docsPrefix) {
+			!strings.HasPrefix(k, docsPrefix) &&
+			k != orderKey {
 			continue
 		}
 		if len(v) == 0 {
@@ -539,7 +582,7 @@ func (p *SkillsRequestProcessor) maybeOffloadLoadedSkills(
 		len(loaded) == 0 {
 		return
 	}
-	delta := make(map[string][]byte, len(loaded)*2)
+	delta := make(map[string][]byte, len(loaded)*2+1)
 	for _, name := range loaded {
 		loadedKey := skill.LoadedKey(inv.AgentName, name)
 		inv.Session.SetState(loadedKey, nil)
@@ -549,6 +592,9 @@ func (p *SkillsRequestProcessor) maybeOffloadLoadedSkills(
 		inv.Session.SetState(docsKey, nil)
 		delta[docsKey] = nil
 	}
+	orderKey := skill.LoadedOrderKey(inv.AgentName)
+	inv.Session.SetState(orderKey, nil)
+	delta[orderKey] = nil
 	agent.EmitEvent(ctx, inv, ch, event.New(
 		inv.InvocationID,
 		inv.AgentName,
