@@ -953,15 +953,17 @@ func TestRunTool_AutoPrependsVenvBinToPATH(t *testing.T) {
 }
 
 func TestVenvRelPaths_FromSkillRoot(t *testing.T) {
-	cwd := path.Join(codeexecutor.DirSkills, testSkillName)
-	venvRel, venvBinRel := venvRelPaths(cwd, testSkillName)
+	skillRoot := path.Join(codeexecutor.DirWork, "custom", testSkillName)
+	cwd := skillRoot
+	venvRel, venvBinRel := venvRelPaths(cwd, skillRoot)
 	require.Equal(t, skillDirVenv, venvRel)
 	require.Equal(t, path.Join(skillDirVenv, "bin"), venvBinRel)
 }
 
 func TestVenvRelPaths_FromChildDir(t *testing.T) {
-	cwd := path.Join(codeexecutor.DirSkills, testSkillName, scriptsDir)
-	venvRel, venvBinRel := venvRelPaths(cwd, testSkillName)
+	skillRoot := path.Join(codeexecutor.DirWork, "custom", testSkillName)
+	cwd := path.Join(skillRoot, scriptsDir)
+	venvRel, venvBinRel := venvRelPaths(cwd, skillRoot)
 	require.Equal(t, path.Join("..", skillDirVenv), venvRel)
 	require.Equal(t, path.Join("..", skillDirVenv, "bin"), venvBinRel)
 }
@@ -2100,38 +2102,42 @@ func TestRunTool_RelativeCWD_TraversalDoesNotEscapeWorkspace(t *testing.T) {
 }
 
 func TestResolveCWD_WorkspaceEnvPathAllowlist(t *testing.T) {
-	base := path.Join(codeexecutor.DirSkills, "x")
+	base := defaultSkillRoot("x")
 	wsEnv := "$" + codeexecutor.WorkspaceEnvDirKey
 
 	// traversal should fallback
-	require.Equal(t, base, resolveCWD(wsEnv+"/../..", "x"))
-	require.Equal(t, base, resolveCWD(wsEnv+"\\..\\..", "x"))
+	require.Equal(t, base, resolveCWD(wsEnv+"/../..", base))
+	require.Equal(t, base, resolveCWD(wsEnv+"\\..\\..", base))
 
 	// allowed roots under workspace
 	workDir := wsEnv + "/" + codeexecutor.DirWork
 	skillDir := wsEnv + "/" + codeexecutor.DirSkills + "/x"
-	require.Equal(t, codeexecutor.DirWork, resolveCWD(workDir, "x"))
-	require.Equal(t, codeexecutor.DirSkills+"/x", resolveCWD(skillDir, "x"))
+	require.Equal(t, codeexecutor.DirWork, resolveCWD(workDir, base))
+	require.Equal(
+		t,
+		codeexecutor.DirSkills+"/x",
+		resolveCWD(skillDir, base),
+	)
 
 	// disallowed root under workspace falls back to base
-	require.Equal(t, base, resolveCWD(wsEnv+"/etc", "x"))
+	require.Equal(t, base, resolveCWD(wsEnv+"/etc", base))
 }
 
 func TestResolveCWD_AbsPathAllowlist(t *testing.T) {
-	base := path.Join(codeexecutor.DirSkills, "x")
+	base := defaultSkillRoot("x")
 
 	require.Equal(
 		t,
 		codeexecutor.DirWork,
-		resolveCWD("/"+codeexecutor.DirWork, "x"),
+		resolveCWD("/"+codeexecutor.DirWork, base),
 	)
-	require.Equal(t, base, resolveCWD("/etc", "x"))
-	require.Equal(t, ".", resolveCWD("/", "x"))
+	require.Equal(t, base, resolveCWD("/etc", base))
+	require.Equal(t, ".", resolveCWD("/", base))
 }
 
 func TestResolveCWD_RelPath_BackslashTraversalDoesNotEscape(t *testing.T) {
-	base := path.Join(codeexecutor.DirSkills, "x")
-	require.Equal(t, base, resolveCWD("..\\..\\..", "x"))
+	base := defaultSkillRoot("x")
+	require.Equal(t, base, resolveCWD("..\\..\\..", base))
 }
 
 // Validate Declaration basics and required fields.
@@ -3841,44 +3847,91 @@ func makeTreeWritable(root string) {
 	})
 }
 
+func TestRunTool_CustomSkillStager_UsesReturnedSkillRoot(t *testing.T) {
+	loc := localexec.NewRuntime(t.TempDir())
+	fs := &countingFS{inner: loc}
+	rr := &recordingRunner{}
+	eng := &countingEngine{m: loc, f: fs, r: rr}
+	exec := &engineExec{eng: eng}
+	base := path.Join(codeexecutor.DirWork, "custom", testSkillName)
+	repo := &pathErrRepo{err: errors.New("Path should not be called")}
+	rt := NewRunTool(
+		repo,
+		exec,
+		WithSkillStager(skillStagerFunc(
+			func(
+				_ context.Context,
+				req SkillStageRequest,
+			) (SkillStageResult, error) {
+				require.Equal(t, testSkillName, req.SkillName)
+				return SkillStageResult{
+					SkillRoot: "/" + base,
+				}, nil
+			},
+		)),
+	)
+
+	args := runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+
+	out := res.(runOutput)
+	require.Equal(t, 0, out.ExitCode)
+	require.Equal(t, base, rr.last.Cwd)
+	require.Contains(
+		t,
+		rr.last.Args[1],
+		"export "+envVirtualEnv+"='.venv'",
+	)
+}
+
 func TestResolveCWD_AbsolutePath(t *testing.T) {
-	base := path.Join(codeexecutor.DirSkills, testSkillName)
+	base := defaultSkillRoot(testSkillName)
 
 	// "/" means workspace root.
-	got := resolveCWD("/", testSkillName)
+	got := resolveCWD("/", base)
 	require.Equal(t, ".", got)
 
 	// Workspace-absolute paths are normalized to workspace-relative.
-	got = resolveCWD("/skills/other", testSkillName)
+	got = resolveCWD("/skills/other", base)
 	require.Equal(t, "skills/other", got)
-	got = resolveCWD("/work", testSkillName)
+	got = resolveCWD("/work", base)
 	require.Equal(t, "work", got)
-	got = resolveCWD("/out/x", testSkillName)
+	got = resolveCWD("/out/x", base)
 	require.Equal(t, "out/x", got)
-	got = resolveCWD("/runs/r1", testSkillName)
+	got = resolveCWD("/runs/r1", base)
 	require.Equal(t, "runs/r1", got)
 
 	// Host-absolute paths are rejected and fall back to skill root.
-	got = resolveCWD("/Users/example", testSkillName)
+	got = resolveCWD("/Users/example", base)
 	require.Equal(t, base, got)
 }
 
 func TestResolveCWD_DefaultAndRelative(t *testing.T) {
-	// Default: when cwd is empty, base is skills/<name>.
-	base := path.Join(codeexecutor.DirSkills, testSkillName)
-	got := resolveCWD("", testSkillName)
+	base := path.Join(codeexecutor.DirWork, "custom", testSkillName)
+	got := resolveCWD("", base)
 	require.Equal(t, base, got)
 
 	// Relative: appended under the skill root.
-	got = resolveCWD("sub/dir", testSkillName)
+	got = resolveCWD("sub/dir", base)
 	require.Equal(t, path.Join(base, "sub/dir"), got)
 }
 
 func TestResolveCWD_WorkspaceEnvPrefixes(t *testing.T) {
-	got := resolveCWD("$WORK_DIR", testSkillName)
+	got := resolveCWD("$WORK_DIR", defaultSkillRoot(testSkillName))
 	require.Equal(t, codeexecutor.DirWork, got)
 
-	got = resolveCWD("${OUTPUT_DIR}/x", testSkillName)
+	got = resolveCWD(
+		"${OUTPUT_DIR}/x",
+		defaultSkillRoot(testSkillName),
+	)
 	require.Equal(t, path.Join(codeexecutor.DirOut, "x"), got)
 }
 
@@ -3987,6 +4040,47 @@ func (e *fakeEngine) Describe() codeexecutor.Capabilities {
 	return codeexecutor.Capabilities{}
 }
 
+type engineExec struct {
+	eng codeexecutor.Engine
+}
+
+func (*engineExec) ExecuteCode(
+	_ context.Context,
+	_ codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (*engineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+func (e *engineExec) Engine() codeexecutor.Engine { return e.eng }
+
+type pathErrRepo struct {
+	err error
+}
+
+func (*pathErrRepo) Summaries() []skill.Summary { return nil }
+
+func (*pathErrRepo) Get(name string) (*skill.Skill, error) {
+	return &skill.Skill{Summary: skill.Summary{Name: name}}, nil
+}
+
+func (r *pathErrRepo) Path(string) (string, error) { return "", r.err }
+
+type skillStagerFunc func(
+	context.Context,
+	SkillStageRequest,
+) (SkillStageResult, error)
+
+func (f skillStagerFunc) StageSkill(
+	ctx context.Context,
+	req SkillStageRequest,
+) (SkillStageResult, error) {
+	return f(ctx, req)
+}
+
 func TestRunTool_runProgram_DefaultTimeout(t *testing.T) {
 	rr := &recordingRunner{}
 	eng := &fakeEngine{r: rr}
@@ -3997,6 +4091,7 @@ func TestRunTool_runProgram_DefaultTimeout(t *testing.T) {
 		context.Background(),
 		eng,
 		ws,
+		defaultSkillRoot(testSkillName),
 		".",
 		runInput{Skill: testSkillName, Command: echoOK},
 	)
@@ -4008,6 +4103,7 @@ func TestRunTool_runProgram_DefaultTimeout(t *testing.T) {
 		context.Background(),
 		eng,
 		ws,
+		defaultSkillRoot(testSkillName),
 		".",
 		runInput{Skill: testSkillName, Command: echoOK, Timeout: 1},
 	)
