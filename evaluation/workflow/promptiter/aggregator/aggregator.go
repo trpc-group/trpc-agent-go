@@ -103,7 +103,7 @@ func (a *aggregator) Aggregate(ctx context.Context, request *Request) (*Result, 
 	}
 	normalizedRequest, err := normalizeRequest(request)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("normalize aggregation request: %w", err)
 	}
 	message, err := a.messageBuilder(ctx, normalizedRequest)
 	if err != nil {
@@ -132,18 +132,18 @@ func (a *aggregator) Aggregate(ctx context.Context, request *Request) (*Result, 
 	}
 	output, err := irunner.CaptureOutput(events)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("capture runner output: %w", err)
 	}
 	gradient, err := idecode.DecodeOutputJSON[promptiter.AggregatedSurfaceGradient](output)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode aggregated gradient: %w", err)
 	}
 	if gradient == nil {
 		return nil, errors.New("aggregated gradient is empty")
 	}
 	gradient, err = sanitizeAggregatedGradient(normalizedRequest, gradient)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sanitize aggregated gradient: %w", err)
 	}
 	return &Result{Gradient: gradient}, nil
 }
@@ -165,7 +165,7 @@ func normalizeRequest(request *Request) (*Request, error) {
 	}
 	gradients, err := normalizeGradients(surfaceID, request.Gradients)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("normalize gradients: %w", err)
 	}
 	if len(gradients) == 0 {
 		return nil, errors.New("gradients are empty")

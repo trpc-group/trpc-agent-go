@@ -96,7 +96,7 @@ func (o *optimizer) Optimize(ctx context.Context, request *Request) (*Result, er
 	}
 	normalizedRequest, err := normalizeRequest(request)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("normalize optimization request: %w", err)
 	}
 	message, err := o.messageBuilder(ctx, normalizedRequest)
 	if err != nil {
@@ -125,18 +125,18 @@ func (o *optimizer) Optimize(ctx context.Context, request *Request) (*Result, er
 	}
 	output, err := irunner.CaptureOutput(events)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("capture runner output: %w", err)
 	}
 	patch, err := idecode.DecodeOutputJSON[promptiter.SurfacePatch](output)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode surface patch: %w", err)
 	}
 	if patch == nil {
 		return nil, errors.New("surface patch is empty")
 	}
 	patch, err = sanitizeSurfacePatch(normalizedRequest, patch)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sanitize surface patch: %w", err)
 	}
 	return &Result{Patch: patch}, nil
 }
@@ -215,113 +215,13 @@ func sanitizeSurfacePatch(request *Request, patch *promptiter.SurfacePatch) (*pr
 	if patch.Reason == "" {
 		return nil, errors.New("patch reason is empty")
 	}
-	value, err := sanitizePatchValue(request.Surface.Type, patch.Value)
+	value, err := isurface.SanitizeValue(request.Surface.Type, patch.Value)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sanitize patch value: %w", err)
 	}
 	return &promptiter.SurfacePatch{
 		SurfaceID: request.Surface.SurfaceID,
 		Value:     value,
 		Reason:    patch.Reason,
 	}, nil
-}
-
-func sanitizePatchValue(
-	surfaceType promptiter.SurfaceType,
-	value promptiter.SurfaceValue,
-) (promptiter.SurfaceValue, error) {
-	switch surfaceType {
-	case promptiter.SurfaceTypeInstruction, promptiter.SurfaceTypeGlobalInstruction:
-		if value.Text == nil {
-			return promptiter.SurfaceValue{}, errors.New("patch text is nil")
-		}
-		if len(value.Message) > 0 {
-			return promptiter.SurfaceValue{}, errors.New("patch messages are not empty")
-		}
-		if value.Model != nil && !isEmptyModel(value.Model) {
-			return promptiter.SurfaceValue{}, errors.New("patch model is not empty")
-		}
-		return promptiter.SurfaceValue{
-			Text: cloneText(value.Text),
-		}, nil
-	case promptiter.SurfaceTypeFewShot:
-		if value.Message == nil {
-			return promptiter.SurfaceValue{}, errors.New("patch messages are nil")
-		}
-		if value.Text != nil && *value.Text != "" {
-			return promptiter.SurfaceValue{}, errors.New("patch text is not empty")
-		}
-		if value.Model != nil && !isEmptyModel(value.Model) {
-			return promptiter.SurfaceValue{}, errors.New("patch model is not empty")
-		}
-		return promptiter.SurfaceValue{
-			Message: cloneExamples(value.Message),
-		}, nil
-	case promptiter.SurfaceTypeModel:
-		if value.Model == nil {
-			return promptiter.SurfaceValue{}, errors.New("patch model is nil")
-		}
-		if value.Model.Provider == "" {
-			return promptiter.SurfaceValue{}, errors.New("patch model provider is empty")
-		}
-		if value.Model.Name == "" {
-			return promptiter.SurfaceValue{}, errors.New("patch model name is empty")
-		}
-		if value.Text != nil && *value.Text != "" {
-			return promptiter.SurfaceValue{}, errors.New("patch text is not empty")
-		}
-		if len(value.Message) > 0 {
-			return promptiter.SurfaceValue{}, errors.New("patch messages are not empty")
-		}
-		return promptiter.SurfaceValue{
-			Model: cloneModel(value.Model),
-		}, nil
-	default:
-		return promptiter.SurfaceValue{}, fmt.Errorf("surface type %q is invalid", surfaceType)
-	}
-}
-
-func cloneText(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
-}
-
-func cloneExamples(examples []promptiter.Messages) []promptiter.Messages {
-	if examples == nil {
-		return nil
-	}
-	cloned := make([]promptiter.Messages, len(examples))
-	for i := range examples {
-		cloned[i] = promptiter.Messages{
-			Messages: cloneMessages(examples[i].Messages),
-		}
-	}
-	return cloned
-}
-
-func cloneMessages(messages []promptiter.Message) []promptiter.Message {
-	if messages == nil {
-		return nil
-	}
-	cloned := make([]promptiter.Message, len(messages))
-	copy(cloned, messages)
-	return cloned
-}
-
-func cloneModel(modelValue *promptiter.Model) *promptiter.Model {
-	if modelValue == nil {
-		return nil
-	}
-	cloned := *modelValue
-	return &cloned
-}
-
-func isEmptyModel(modelValue *promptiter.Model) bool {
-	if modelValue == nil {
-		return true
-	}
-	return modelValue.Provider == "" && modelValue.Name == ""
 }
