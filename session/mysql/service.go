@@ -589,8 +589,6 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		}
 	}
 
-	now := time.Now()
-
 	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
 		sessState, _, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
 		if err != nil {
@@ -599,6 +597,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 			}
 			return fmt.Errorf("mysql session service update session state failed: %w", err)
 		}
+		now := time.Now()
 
 		if sessState.State == nil {
 			sessState.State = make(session.StateMap)

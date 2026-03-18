@@ -242,8 +242,6 @@ func (s *Service) listSessions(
 
 // addEvent adds an event to a session (MySQL syntax).
 func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Event) error {
-	now := time.Now()
-
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event failed: %w", err)
@@ -257,6 +255,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		if err != nil {
 			return err
 		}
+		now := time.Now()
 
 		// Check if session is expired
 		if currentExpiresAt.Valid && currentExpiresAt.Time.Before(now) {
@@ -314,8 +313,6 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 
 // addTrackEvent adds a track event to a session (MySQL syntax).
 func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
-	now := time.Now()
-
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event failed: %w", err)
@@ -329,6 +326,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		if err != nil {
 			return err
 		}
+		now := time.Now()
 
 		// Check if session is expired.
 		if currentExpiresAt.Valid && currentExpiresAt.Time.Before(now) {

@@ -16,7 +16,9 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
+	"sync"
 	"testing"
 	"time"
 
@@ -2835,6 +2837,117 @@ func TestNewService_WithSummarizerStartsAsyncWorker(t *testing.T) {
 	require.NotNil(t, svc)
 	assert.NotNil(t, svc.asyncWorker)
 	assert.NoError(t, svc.Close())
+}
+
+func TestConcurrentSessionStateUpdates_PreserveEventDeltaAndTrack(t *testing.T) {
+	dsn := os.Getenv("TRPC_AGENT_GO_MYSQL_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set TRPC_AGENT_GO_MYSQL_TEST_DSN to run MySQL integration test")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	prefix := fmt.Sprintf("it_%d_", time.Now().UnixNano())
+	svc, err := NewService(
+		WithMySQLClientDSN(dsn),
+		WithTablePrefix(prefix),
+		WithSessionTTL(time.Hour),
+	)
+	require.NoError(t, err)
+
+	rawDB, err := sql.Open("mysql", dsn)
+	require.NoError(t, err)
+	require.NoError(t, rawDB.PingContext(ctx))
+
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+		for _, table := range []string{
+			svc.tableSessionTracks,
+			svc.tableSessionEvents,
+			svc.tableSessionSummaries,
+			svc.tableSessionStates,
+			svc.tableAppStates,
+			svc.tableUserStates,
+		} {
+			_, _ = rawDB.ExecContext(context.Background(), fmt.Sprintf("DROP TABLE IF EXISTS %s", table))
+		}
+		_ = rawDB.Close()
+	})
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: fmt.Sprintf("session-%d", time.Now().UnixNano()),
+	}
+	_, err = svc.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	lockTx, err := rawDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	var lockedState []byte
+	err = lockTx.QueryRowContext(
+		ctx,
+		fmt.Sprintf(`SELECT state FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND deleted_at IS NULL
+		FOR UPDATE`, svc.tableSessionStates),
+		key.AppName, key.UserID, key.SessionID,
+	).Scan(&lockedState)
+	require.NoError(t, err)
+
+	markerKey := "temp:skill:loaded_by_agent:llmagent_xxx/wesee-title-producer"
+	evt := event.New(
+		"inv-1",
+		"author",
+		event.WithStateDelta(map[string][]byte{markerKey: []byte("1")}),
+	)
+	trackEvt := &session.TrackEvent{
+		Track:     "agui",
+		Payload:   json.RawMessage(`{"delta":"hi"}`),
+		Timestamp: time.Now(),
+	}
+
+	started := make(chan struct{}, 2)
+	errCh := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		started <- struct{}{}
+		errCh <- svc.addEvent(ctx, key, evt)
+	}()
+	go func() {
+		defer wg.Done()
+		started <- struct{}{}
+		errCh <- svc.addTrackEvent(ctx, key, trackEvt)
+	}()
+
+	for i := 0; i < 2; i++ {
+		<-started
+	}
+	time.Sleep(150 * time.Millisecond)
+	require.NoError(t, lockTx.Commit())
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Contains(t, sess.State, markerKey)
+	require.Equal(t, []byte("1"), sess.State[markerKey])
+
+	tracks, err := session.TracksFromState(sess.State)
+	require.NoError(t, err)
+	assert.Contains(t, tracks, session.Track("agui"))
+
+	require.Contains(t, sess.Tracks, session.Track("agui"))
+	require.Len(t, sess.Tracks[session.Track("agui")].Events, 1)
 }
 
 // mockDBInit mocks the database initialization process
