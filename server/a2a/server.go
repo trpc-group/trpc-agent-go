@@ -122,7 +122,7 @@ func buildProcessor(agent agent.Agent, sessionService session.Service, options *
 			adkCompatibility:          options.adkCompatibility,
 			graphEventObjectAllowlist: options.graphEventObjectAllowlist,
 			streamingEventType:        options.streamingEventType,
-			eventPartConverter:        options.eventPartConverter,
+			structuredOutputEnabled:   options.structuredOutputEnabled,
 		}
 	}
 

@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"testing"
 
@@ -3419,22 +3418,27 @@ func TestToDataPartPayload(t *testing.T) {
 
 func TestStructuredOutput_UnaryConversion(t *testing.T) {
 	ctx := context.Background()
-	hook := StructuredOutputPartConverter()
 
 	tests := []struct {
 		name            string
 		event           *event.Event
+		enabled         bool
 		expectNil       bool
 		checkDataType   string
 		checkObjectType string
+		// expectPartCount is the expected number of parts in the message.
+		// 0 means "don't check".
+		expectPartCount int
 	}{
 		{
-			name: "StructuredOutput map generates DataPart with custom_data type",
+			name: "Content + StructuredOutput coexist",
 			event: &event.Event{
 				Response: &model.Response{
 					Object: "graph.node.custom",
 					Choices: []model.Choice{{
-						Message: model.Message{},
+						Message: model.Message{
+							Content: "hello world",
+						},
 					}},
 				},
 				StructuredOutput: map[string]any{
@@ -3442,70 +3446,13 @@ func TestStructuredOutput_UnaryConversion(t *testing.T) {
 					"latency":  42.5,
 				},
 			},
+			enabled:         true,
 			expectNil:       false,
-			checkDataType:   ia2a.DataPartMetadataTypeCustomData,
+			expectPartCount: 2, // TextPart + DataPart
 			checkObjectType: "graph.node.custom",
 		},
 		{
-			name: "StructuredOutput []byte valid JSON generates DataPart",
-			event: &event.Event{
-				Response: &model.Response{
-					Object: "graph.node.custom",
-					Choices: []model.Choice{{
-						Message: model.Message{},
-					}},
-				},
-				StructuredOutput: []byte(`{"service":"my-svc","code":200}`),
-			},
-			expectNil:     false,
-			checkDataType: ia2a.DataPartMetadataTypeCustomData,
-		},
-		{
-			name: "StructuredOutput json.RawMessage generates DataPart",
-			event: &event.Event{
-				Response: &model.Response{
-					Object: "graph.node.custom",
-					Choices: []model.Choice{{
-						Message: model.Message{},
-					}},
-				},
-				StructuredOutput: json.RawMessage(`{"raw_key":"raw_val"}`),
-			},
-			expectNil:     false,
-			checkDataType: ia2a.DataPartMetadataTypeCustomData,
-		},
-		{
-			name: "StructuredOutput nil falls through to TextPart fallback",
-			event: &event.Event{
-				Response: &model.Response{
-					Object: "graph.node.custom",
-					Choices: []model.Choice{{
-						Message: model.Message{
-							Content: "fallback text",
-						},
-					}},
-				},
-				StructuredOutput: nil,
-			},
-			expectNil:     false,
-			checkDataType: "", // not a DataPart, should be a TextPart
-		},
-		{
-			name: "StructuredOutput invalid JSON []byte falls through to metadata-only message",
-			event: &event.Event{
-				Response: &model.Response{
-					Object: "graph.node.custom",
-					Choices: []model.Choice{{
-						Message: model.Message{},
-					}},
-				},
-				StructuredOutput: []byte(`not valid json {{{`),
-			},
-			expectNil:     false,
-			checkDataType: "metadata_only", // special sentinel: message has metadata but no content parts
-		},
-		{
-			name: "ToolCall event takes priority over StructuredOutput",
+			name: "ToolCall + StructuredOutput coexist",
 			event: &event.Event{
 				Response: &model.Response{
 					Object: "graph.node.custom",
@@ -3524,10 +3471,110 @@ func TestStructuredOutput_UnaryConversion(t *testing.T) {
 						},
 					}},
 				},
+				StructuredOutput: map[string]any{"extra": "data"},
+			},
+			enabled:         true,
+			expectNil:       false,
+			expectPartCount: 2, // DataPart(function_call) + DataPart(custom_data)
+		},
+		{
+			name: "CodeExecution + StructuredOutput coexist",
+			event: &event.Event{
+				Tag: string(event.CodeExecutionTag),
+				Response: &model.Response{
+					Object: model.ObjectTypePostprocessingCodeExecution,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content: "print('hi')",
+						},
+					}},
+				},
+				StructuredOutput: map[string]any{"exec_id": "e1"},
+			},
+			enabled:         true,
+			expectNil:       false,
+			expectPartCount: 2, // DataPart(executable_code) + DataPart(custom_data)
+		},
+		{
+			name: "StructuredOutput []byte valid JSON",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{},
+					}},
+				},
+				StructuredOutput: []byte(`{"service":"my-svc","code":200}`),
+			},
+			enabled:       true,
+			expectNil:     false,
+			checkDataType: ia2a.DataPartMetadataTypeCustomData,
+		},
+		{
+			name: "StructuredOutput json.RawMessage",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{},
+					}},
+				},
+				StructuredOutput: json.RawMessage(`{"raw_key":"raw_val"}`),
+			},
+			enabled:       true,
+			expectNil:     false,
+			checkDataType: ia2a.DataPartMetadataTypeCustomData,
+		},
+		{
+			name: "StructuredOutput nil — not appended",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content: "fallback text",
+						},
+					}},
+				},
+				StructuredOutput: nil,
+			},
+			enabled:         true,
+			expectNil:       false,
+			expectPartCount: 1, // only TextPart
+		},
+		{
+			name: "StructuredOutput invalid JSON — not appended, no error",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content: "text",
+						},
+					}},
+				},
+				StructuredOutput: []byte(`not valid json {{{`),
+			},
+			enabled:         true,
+			expectNil:       false,
+			expectPartCount: 1, // only TextPart, invalid SO silently skipped
+		},
+		{
+			name: "Disabled — StructuredOutput ignored",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content: "hello",
+						},
+					}},
+				},
 				StructuredOutput: map[string]any{"should": "be ignored"},
 			},
-			expectNil:     false,
-			checkDataType: ia2a.DataPartMetadataTypeFunctionCall, // ToolCall wins
+			enabled:         false,
+			expectNil:       false,
+			expectPartCount: 1, // only TextPart
 		},
 	}
 
@@ -3535,7 +3582,7 @@ func TestStructuredOutput_UnaryConversion(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			converter := &defaultEventToA2AMessage{
 				graphEventObjectAllowlist: []string{"graph.*"},
-				eventPartConverter:        hook,
+				structuredOutputEnabled:   tt.enabled,
 			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "ctx-1"})
 			if err != nil {
@@ -3558,30 +3605,16 @@ func TestStructuredOutput_UnaryConversion(t *testing.T) {
 				t.Fatalf("expected *protocol.Message, got %T", result)
 			}
 
-			if tt.checkDataType == "" {
-				// Expect a TextPart (nil StructuredOutput fallback case)
-				if len(msg.Parts) == 0 {
-					t.Fatal("expected at least one part")
-				}
-				if msg.Parts[0].GetKind() != protocol.KindText {
-					t.Errorf("expected TextPart, got kind %s", msg.Parts[0].GetKind())
-				}
-				return
+			if tt.expectPartCount > 0 && len(msg.Parts) != tt.expectPartCount {
+				t.Errorf("expected %d parts, got %d", tt.expectPartCount, len(msg.Parts))
 			}
 
-			if tt.checkDataType == "metadata_only" {
-				// Hook returned not-handled, fell through to text fallback which
-				// produced a metadata-only message (no content, but object_type set).
-				if msg.Metadata == nil {
-					t.Fatal("expected message metadata for metadata-only message")
+			if tt.checkDataType != "" {
+				dp := extractDataPartFromResult(t, result)
+				gotType := ia2a.GetDataPartType(dp.Metadata)
+				if gotType != tt.checkDataType {
+					t.Errorf("DataPart type = %q, want %q", gotType, tt.checkDataType)
 				}
-				return
-			}
-
-			dp := extractDataPartFromResult(t, result)
-			gotType := ia2a.GetDataPartType(dp.Metadata)
-			if gotType != tt.checkDataType {
-				t.Errorf("DataPart type = %q, want %q", gotType, tt.checkDataType)
 			}
 
 			if tt.checkObjectType != "" {
@@ -3599,25 +3632,28 @@ func TestStructuredOutput_UnaryConversion(t *testing.T) {
 func TestStructuredOutput_StreamingConversion(t *testing.T) {
 	ctx := context.Background()
 	opts := EventToA2AStreamingOptions{TaskID: "task-1", CtxID: "ctx-1"}
-	hook := StructuredOutputPartConverter()
 
 	tests := []struct {
 		name      string
 		event     *event.Event
+		enabled   bool
 		expectNil bool
 	}{
 		{
-			name: "streaming StructuredOutput map generates result",
+			name: "streaming Content + StructuredOutput coexist",
 			event: &event.Event{
 				Response: &model.Response{
 					ID:     "resp-1",
 					Object: "graph.node.custom",
 					Choices: []model.Choice{{
-						Message: model.Message{},
+						Delta: model.Message{
+							Content: "delta text",
+						},
 					}},
 				},
 				StructuredOutput: map[string]any{"stream_key": "stream_val"},
 			},
+			enabled:   true,
 			expectNil: false,
 		},
 		{
@@ -3634,21 +3670,42 @@ func TestStructuredOutput_StreamingConversion(t *testing.T) {
 				},
 				StructuredOutput: nil,
 			},
+			enabled:   true,
 			expectNil: false, // falls through to delta content
 		},
 		{
-			name: "streaming StructuredOutput invalid JSON falls through",
+			name: "streaming StructuredOutput invalid JSON — ignored",
 			event: &event.Event{
 				Response: &model.Response{
 					ID:     "resp-3",
 					Object: "graph.node.custom",
 					Choices: []model.Choice{{
-						Message: model.Message{},
+						Delta: model.Message{
+							Content: "delta",
+						},
 					}},
 				},
 				StructuredOutput: []byte(`{bad json`),
 			},
-			expectNil: false, // hook returns not-handled, falls through to delta/metadata
+			enabled:   true,
+			expectNil: false, // invalid SO ignored, falls through to delta
+		},
+		{
+			name: "streaming disabled — StructuredOutput ignored",
+			event: &event.Event{
+				Response: &model.Response{
+					ID:     "resp-4",
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Content: "delta text",
+						},
+					}},
+				},
+				StructuredOutput: map[string]any{"should": "be ignored"},
+			},
+			enabled:   false,
+			expectNil: false,
 		},
 	}
 
@@ -3656,7 +3713,7 @@ func TestStructuredOutput_StreamingConversion(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			converter := &defaultEventToA2AMessage{
 				graphEventObjectAllowlist: []string{"graph.*"},
-				eventPartConverter:        hook,
+				structuredOutputEnabled:   tt.enabled,
 			}
 			result, err := converter.ConvertStreamingToA2AMessage(ctx, tt.event, opts)
 			if err != nil {
@@ -3678,14 +3735,15 @@ func TestStructuredOutput_StreamingConversion(t *testing.T) {
 func TestStructuredOutput_StreamingMessageType(t *testing.T) {
 	ctx := context.Background()
 	opts := EventToA2AStreamingOptions{TaskID: "task-1", CtxID: "ctx-1"}
-	hook := StructuredOutputPartConverter()
 
 	evt := &event.Event{
 		Response: &model.Response{
 			ID:     "resp-msg",
 			Object: "graph.node.custom",
 			Choices: []model.Choice{{
-				Message: model.Message{},
+				Delta: model.Message{
+					Content: "delta",
+				},
 			}},
 		},
 		StructuredOutput: map[string]any{"key": "val"},
@@ -3695,7 +3753,7 @@ func TestStructuredOutput_StreamingMessageType(t *testing.T) {
 	converter := &defaultEventToA2AMessage{
 		graphEventObjectAllowlist: []string{"graph.*"},
 		streamingEventType:        StreamingEventTypeMessage,
-		eventPartConverter:        hook,
+		structuredOutputEnabled:   true,
 	}
 	result, err := converter.ConvertStreamingToA2AMessage(ctx, evt, opts)
 	if err != nil {
@@ -3709,159 +3767,8 @@ func TestStructuredOutput_StreamingMessageType(t *testing.T) {
 	}
 }
 
-func TestStructuredOutputPartConverter(t *testing.T) {
+func TestStructuredOutput_ADKCompatibility(t *testing.T) {
 	ctx := context.Background()
-	hook := StructuredOutputPartConverter()
-
-	t.Run("nil StructuredOutput returns not handled", func(t *testing.T) {
-		evt := &event.Event{
-			Response: &model.Response{},
-		}
-		parts, handled, err := hook(ctx, evt)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if handled {
-			t.Error("expected handled=false for nil StructuredOutput")
-		}
-		if parts != nil {
-			t.Errorf("expected nil parts, got %v", parts)
-		}
-	})
-
-	t.Run("valid map returns DataPart", func(t *testing.T) {
-		evt := &event.Event{
-			Response:         &model.Response{},
-			StructuredOutput: map[string]any{"key": "val"},
-		}
-		parts, handled, err := hook(ctx, evt)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !handled {
-			t.Error("expected handled=true")
-		}
-		if len(parts) != 1 {
-			t.Fatalf("expected 1 part, got %d", len(parts))
-		}
-		dp, ok := parts[0].(*protocol.DataPart)
-		if !ok {
-			t.Fatalf("expected *protocol.DataPart, got %T", parts[0])
-		}
-		gotType := ia2a.GetDataPartType(dp.Metadata)
-		if gotType != ia2a.DataPartMetadataTypeCustomData {
-			t.Errorf("type = %q, want %q", gotType, ia2a.DataPartMetadataTypeCustomData)
-		}
-	})
-
-	t.Run("invalid JSON returns not handled", func(t *testing.T) {
-		evt := &event.Event{
-			Response:         &model.Response{},
-			StructuredOutput: []byte(`{bad`),
-		}
-		parts, handled, err := hook(ctx, evt)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if handled {
-			t.Error("expected handled=false for invalid JSON")
-		}
-		if parts != nil {
-			t.Errorf("expected nil parts, got %v", parts)
-		}
-	})
-}
-
-func TestEventPartConverter_NoHookIgnoresStructuredOutput(t *testing.T) {
-	ctx := context.Background()
-
-	// Without a hook, StructuredOutput is ignored and we fall through to TextPart.
-	evt := &event.Event{
-		Response: &model.Response{
-			Object: "graph.node.custom",
-			Choices: []model.Choice{{
-				Message: model.Message{
-					Content: "hello",
-				},
-			}},
-		},
-		StructuredOutput: map[string]any{"should": "be ignored"},
-	}
-
-	converter := &defaultEventToA2AMessage{
-		graphEventObjectAllowlist: []string{"graph.*"},
-		// eventPartConverter is nil — no hook registered
-	}
-	result, err := converter.ConvertToA2AMessage(ctx, evt, EventToA2AUnaryOptions{CtxID: "ctx-1"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-
-	msg, ok := result.(*protocol.Message)
-	if !ok {
-		t.Fatalf("expected *protocol.Message, got %T", result)
-	}
-	if len(msg.Parts) == 0 {
-		t.Fatal("expected at least one part")
-	}
-	// Should be a TextPart, not a DataPart
-	if msg.Parts[0].GetKind() != protocol.KindText {
-		t.Errorf("expected TextPart fallback, got kind %s", msg.Parts[0].GetKind())
-	}
-}
-
-func TestEventPartConverter_HookNotHandledFallsThrough(t *testing.T) {
-	ctx := context.Background()
-
-	// Hook returns (nil, false, nil) — should fall through to TextPart.
-	notHandledHook := func(ctx context.Context, evt *event.Event) ([]protocol.Part, bool, error) {
-		return nil, false, nil
-	}
-
-	evt := &event.Event{
-		Response: &model.Response{
-			Object: "graph.node.custom",
-			Choices: []model.Choice{{
-				Message: model.Message{
-					Content: "fallback text",
-				},
-			}},
-		},
-	}
-
-	converter := &defaultEventToA2AMessage{
-		graphEventObjectAllowlist: []string{"graph.*"},
-		eventPartConverter:        notHandledHook,
-	}
-	result, err := converter.ConvertToA2AMessage(ctx, evt, EventToA2AUnaryOptions{CtxID: "ctx-1"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result == nil {
-		t.Fatal("expected non-nil result")
-	}
-
-	msg, ok := result.(*protocol.Message)
-	if !ok {
-		t.Fatalf("expected *protocol.Message, got %T", result)
-	}
-	if len(msg.Parts) == 0 {
-		t.Fatal("expected at least one part")
-	}
-	if msg.Parts[0].GetKind() != protocol.KindText {
-		t.Errorf("expected TextPart fallback, got kind %s", msg.Parts[0].GetKind())
-	}
-}
-
-func TestEventPartConverter_HookReturnsError(t *testing.T) {
-	ctx := context.Background()
-
-	errorHook := func(ctx context.Context, evt *event.Event) ([]protocol.Part, bool, error) {
-		return nil, false, fmt.Errorf("hook error")
-	}
 
 	evt := &event.Event{
 		Response: &model.Response{
@@ -3872,44 +3779,13 @@ func TestEventPartConverter_HookReturnsError(t *testing.T) {
 				},
 			}},
 		},
-	}
-
-	converter := &defaultEventToA2AMessage{
-		graphEventObjectAllowlist: []string{"graph.*"},
-		eventPartConverter:        errorHook,
-	}
-
-	// Unary path
-	_, err := converter.ConvertToA2AMessage(ctx, evt, EventToA2AUnaryOptions{CtxID: "ctx-1"})
-	if err == nil {
-		t.Fatal("expected error from hook, got nil")
-	}
-
-	// Streaming path
-	_, err = converter.ConvertStreamingToA2AMessage(ctx, evt, EventToA2AStreamingOptions{TaskID: "t-1", CtxID: "ctx-1"})
-	if err == nil {
-		t.Fatal("expected error from hook in streaming, got nil")
-	}
-}
-
-func TestEventPartConverter_ADKCompatibility(t *testing.T) {
-	ctx := context.Background()
-	hook := StructuredOutputPartConverter()
-
-	evt := &event.Event{
-		Response: &model.Response{
-			Object: "graph.node.custom",
-			Choices: []model.Choice{{
-				Message: model.Message{},
-			}},
-		},
 		StructuredOutput: map[string]any{"key": "val"},
 	}
 
 	converter := &defaultEventToA2AMessage{
 		graphEventObjectAllowlist: []string{"graph.*"},
 		adkCompatibility:          true,
-		eventPartConverter:        hook,
+		structuredOutputEnabled:   true,
 	}
 	result, err := converter.ConvertToA2AMessage(ctx, evt, EventToA2AUnaryOptions{CtxID: "ctx-1"})
 	if err != nil {
@@ -3919,7 +3795,25 @@ func TestEventPartConverter_ADKCompatibility(t *testing.T) {
 		t.Fatal("expected non-nil result")
 	}
 
-	dp := extractDataPartFromResult(t, result)
+	msg, ok := result.(*protocol.Message)
+	if !ok {
+		t.Fatalf("expected *protocol.Message, got %T", result)
+	}
+
+	// Find the custom_data DataPart (should be the last part)
+	var dp *protocol.DataPart
+	for i := len(msg.Parts) - 1; i >= 0; i-- {
+		if p, ok := msg.Parts[i].(*protocol.DataPart); ok {
+			if ia2a.GetDataPartType(p.Metadata) == ia2a.DataPartMetadataTypeCustomData {
+				dp = p
+				break
+			}
+		}
+	}
+	if dp == nil {
+		t.Fatal("expected a DataPart with custom_data type")
+	}
+
 	// Should have both "type" and "adk_type"
 	if dp.Metadata[ia2a.DataPartMetadataTypeKey] != ia2a.DataPartMetadataTypeCustomData {
 		t.Errorf("missing standard type key")

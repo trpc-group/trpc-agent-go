@@ -97,7 +97,7 @@ type options struct {
 	taskManagerBuilder        TaskManagerBuilder
 	a2aToAgentConverter       A2AMessageToAgentMessage
 	eventToA2AConverter       EventToA2AMessage
-	eventPartConverter        EventPartConverter
+	structuredOutputEnabled   bool
 	host                      string
 	extraOptions              []a2a.Option
 	errorHandler              ErrorHandler
@@ -307,15 +307,13 @@ func WithStreamingEventType(eventType StreamingEventType) Option {
 	}
 }
 
-// WithEventPartConverter registers a hook that converts custom event data into
-// A2A Parts. The hook is invoked after ToolCall / CodeExecution checks but
-// before the text fallback. Use [StructuredOutputPartConverter] for the
-// built-in StructuredOutput→DataPart conversion:
-//
-//	a2a.WithEventPartConverter(a2a.StructuredOutputPartConverter())
-func WithEventPartConverter(converter EventPartConverter) Option {
+// WithStructuredOutputEnabled enables the conversion of Event.StructuredOutput
+// into a DataPart (with metadata type "custom_data") that is appended
+// orthogonally to the A2A message. Without this option, StructuredOutput is
+// silently ignored.
+func WithStructuredOutputEnabled() Option {
 	return func(opts *options) {
-		opts.eventPartConverter = converter
+		opts.structuredOutputEnabled = true
 	}
 }
 

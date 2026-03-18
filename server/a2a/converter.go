@@ -124,15 +124,6 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 	return &msg, nil
 }
 
-// EventPartConverter is a hook that converts custom event data into A2A Parts.
-// It is invoked after ToolCall / CodeExecution checks but before the text fallback.
-//
-// Return semantics:
-//   - (parts, true, nil)  → use the returned parts to build the A2A message
-//   - (nil,   false, nil) → not handled, fall through to the downstream fallback (TextPart)
-//   - (_,     _,     err) → return error
-type EventPartConverter func(ctx context.Context, evt *event.Event) ([]protocol.Part, bool, error)
-
 // defaultEventToA2AMessage is the default implementation of EventToA2AMessageConverter.
 type defaultEventToA2AMessage struct {
 	// Enable ADK-compatible metadata keys (for example, "adk_type" instead
@@ -140,7 +131,10 @@ type defaultEventToA2AMessage struct {
 	adkCompatibility          bool
 	graphEventObjectAllowlist []string
 	streamingEventType        StreamingEventType
-	eventPartConverter        EventPartConverter
+	// structuredOutputEnabled controls whether Event.StructuredOutput is
+	// converted to a DataPart and appended (orthogonally) to the A2A message.
+	// When false, StructuredOutput is silently ignored.
+	structuredOutputEnabled bool
 }
 
 const graphObjectPrefix = "graph."
@@ -288,30 +282,24 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 		return nil, nil
 	}
 
-	// Check if this is a tool call event.
-	if isToolCallEvent(event) {
-		return c.convertToolCallToA2AMessage(event)
+	// Phase 2: Main Part determination (mutually exclusive).
+	var result protocol.UnaryMessageResult
+	var err error
+
+	switch {
+	case isToolCallEvent(event):
+		result, err = c.convertToolCallToA2AMessage(event)
+	case isCodeExecutionEvent(event):
+		result, err = c.convertCodeExecutionToA2AMessage(event)
+	default:
+		result, err = c.convertContentToA2AMessage(ctx, event)
+	}
+	if err != nil {
+		return nil, err
 	}
 
-	// Check if this is a code execution event.
-	if isCodeExecutionEvent(event) {
-		return c.convertCodeExecutionToA2AMessage(event)
-	}
-
-	// Invoke the eventPartConverter hook if registered.
-	if c.eventPartConverter != nil {
-		parts, handled, err := c.eventPartConverter(ctx, event)
-		if err != nil {
-			return nil, err
-		}
-		if handled {
-			c.applyADKMetadataToParts(parts)
-			return c.buildA2AMessageFromParts(event, parts)
-		}
-	}
-
-	// Fallback to plain content conversion.
-	return c.convertContentToA2AMessage(ctx, event)
+	// Phase 3: Orthogonal StructuredOutput append (opt-in).
+	return c.appendStructuredOutput(event, result)
 }
 
 // convertCodeExecutionToA2AMessage converts code execution events to A2A DataPart messages.
@@ -431,28 +419,24 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 		return nil, nil
 	}
 
-	// Check if this is a tool call event
-	if isToolCallEvent(evt) {
-		return c.convertToolCallToA2AStreamingMessage(evt, options)
+	// Phase 2: Main Part determination (mutually exclusive).
+	var result protocol.StreamingMessageResult
+	var err error
+
+	switch {
+	case isToolCallEvent(evt):
+		result, err = c.convertToolCallToA2AStreamingMessage(evt, options)
+	case isCodeExecutionEvent(evt):
+		result, err = c.convertCodeExecutionToA2AStreamingMessage(evt, options)
+	default:
+		result, err = c.convertDeltaContentToA2AStreamingMessage(ctx, evt, options)
+	}
+	if err != nil {
+		return nil, err
 	}
 
-	if isCodeExecutionEvent(evt) {
-		return c.convertCodeExecutionToA2AStreamingMessage(evt, options)
-	}
-
-	// Invoke the eventPartConverter hook if registered.
-	if c.eventPartConverter != nil {
-		parts, handled, err := c.eventPartConverter(ctx, evt)
-		if err != nil {
-			return nil, err
-		}
-		if handled {
-			c.applyADKMetadataToParts(parts)
-			return c.convertPartsToA2AStreamingResult(evt, options, parts), nil
-		}
-	}
-
-	return c.convertDeltaContentToA2AStreamingMessage(ctx, evt, options)
+	// Phase 3: Orthogonal StructuredOutput append (opt-in).
+	return c.appendStructuredOutputStreaming(evt, options, result)
 }
 
 func (c *defaultEventToA2AMessage) convertMetadataOnlyToA2AMessageResult(
@@ -717,28 +701,66 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AStreamingMessage(
 	), nil
 }
 
-// applyADKMetadataToParts iterates over hook-returned parts and, for DataParts
-// that carry a "type" metadata key, adds the corresponding "adk_type" key when
-// ADK compatibility is enabled. This keeps the hook implementation simple: it
-// only needs to set the standard "type" key.
-func (c *defaultEventToA2AMessage) applyADKMetadataToParts(parts []protocol.Part) {
-	if !c.adkCompatibility {
-		return
+// appendStructuredOutput appends a DataPart for Event.StructuredOutput to the
+// already-built unary result. It is a no-op when structuredOutputEnabled is
+// false or StructuredOutput is nil/invalid.
+func (c *defaultEventToA2AMessage) appendStructuredOutput(
+	evt *event.Event, result protocol.UnaryMessageResult,
+) (protocol.UnaryMessageResult, error) {
+	if !c.structuredOutputEnabled || evt.StructuredOutput == nil {
+		return result, nil
 	}
-	for _, part := range parts {
-		dp, ok := part.(*protocol.DataPart)
-		if !ok || dp.Metadata == nil {
-			continue
-		}
-		if typeVal, exists := dp.Metadata[ia2a.DataPartMetadataTypeKey]; exists {
-			dp.Metadata[ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)] = typeVal
-		}
+	data, ok := toDataPartPayload(evt.StructuredOutput)
+	if !ok {
+		return result, nil
+	}
+	dataPart := protocol.NewDataPart(data)
+	c.setPartTypeMetadata(&dataPart, ia2a.DataPartMetadataTypeCustomData)
+
+	// Append to existing Message.
+	if msg, ok := result.(*protocol.Message); ok {
+		msg.Parts = append(msg.Parts, &dataPart)
+		return msg, nil
+	}
+	// result is nil — create a new Message carrying only the DataPart.
+	return c.buildA2AMessageFromParts(evt, []protocol.Part{&dataPart})
+}
+
+// appendStructuredOutputStreaming appends a DataPart for Event.StructuredOutput
+// to the already-built streaming result.
+func (c *defaultEventToA2AMessage) appendStructuredOutputStreaming(
+	evt *event.Event,
+	options EventToA2AStreamingOptions,
+	result protocol.StreamingMessageResult,
+) (protocol.StreamingMessageResult, error) {
+	if !c.structuredOutputEnabled || evt.StructuredOutput == nil {
+		return result, nil
+	}
+	data, ok := toDataPartPayload(evt.StructuredOutput)
+	if !ok {
+		return result, nil
+	}
+	dataPart := protocol.NewDataPart(data)
+	c.setPartTypeMetadata(&dataPart, ia2a.DataPartMetadataTypeCustomData)
+
+	// Try to append to existing streaming result.
+	switch r := result.(type) {
+	case *protocol.Message:
+		r.Parts = append(r.Parts, &dataPart)
+		return r, nil
+	case *protocol.TaskArtifactUpdateEvent:
+		r.Artifact.Parts = append(r.Artifact.Parts, &dataPart)
+		return r, nil
+	default:
+		// result is nil or unrecognised — create new streaming result.
+		return c.convertPartsToA2AStreamingResult(
+			evt, options, []protocol.Part{&dataPart},
+		), nil
 	}
 }
 
 // buildA2AMessageFromParts creates a unary A2A message from the given parts and
-// event metadata. It is shared between the eventPartConverter hook path and
-// internal converters.
+// event metadata.
 func (c *defaultEventToA2AMessage) buildA2AMessageFromParts(
 	evt *event.Event, parts []protocol.Part,
 ) (protocol.UnaryMessageResult, error) {
@@ -748,31 +770,6 @@ func (c *defaultEventToA2AMessage) buildA2AMessageFromParts(
 	msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
 	msg.Metadata = c.buildMessageMetadata(evt)
 	return &msg, nil
-}
-
-// StructuredOutputPartConverter returns an EventPartConverter that converts
-// Event.StructuredOutput into a DataPart with metadata type "custom_data".
-//
-// Usage:
-//
-//	a2a.WithEventPartConverter(a2a.StructuredOutputPartConverter())
-func StructuredOutputPartConverter() EventPartConverter {
-	return func(ctx context.Context, evt *event.Event) ([]protocol.Part, bool, error) {
-		if evt.StructuredOutput == nil {
-			return nil, false, nil
-		}
-		data, ok := toDataPartPayload(evt.StructuredOutput)
-		if !ok {
-			return nil, false, nil
-		}
-		dataPart := protocol.NewDataPart(data)
-		dataPart.Metadata = map[string]any{
-			ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeCustomData,
-		}
-		// ADK compat (adk_type) is applied by the converter after hook return;
-		// the hook does not need to handle it.
-		return []protocol.Part{&dataPart}, true, nil
-	}
 }
 
 // toDataPartPayload normalises an arbitrary StructuredOutput value into a
