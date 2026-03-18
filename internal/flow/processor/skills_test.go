@@ -150,6 +150,28 @@ func TestSkillsRequestProcessor_ToolingGuidance_Disabled(t *testing.T) {
 	require.NotContains(t, sys, skillsToolingGuidanceHeader)
 }
 
+func TestSkillsRequestProcessor_ExecToolsDisabled(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{Session: &session.Session{}}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillExecToolsDisabled(),
+	)
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.NotContains(t, sys, "skill_exec")
+	require.NotContains(t, sys, "skill_write_stdin")
+	require.NotContains(t, sys, "skill_poll_session")
+}
+
 func TestSkillsRequestProcessor_KnowledgeOnlyGuidance(t *testing.T) {
 	repo := &mockRepo{
 		sums: []skill.Summary{{Name: "x", Description: "d"}},
@@ -949,6 +971,35 @@ func TestKeepMostRecentSkills_UsesStoredOrder(t *testing.T) {
 	loaded := []string{"d", "b", "a", "c"}
 	keep := keepMostRecentSkills(inv, loaded, 2)
 	require.Equal(t, []string{"c", "d"}, keep)
+}
+
+func TestLoadedSkillOrder_FallsBackFromInvalidStateToEvents(t *testing.T) {
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedOrderKey("tester"): []byte("{"),
+			},
+			Events: []event.Event{
+				toolResponseEvent(
+					"tester",
+					skillToolLoad,
+					loadedPrefix+" b",
+				),
+				toolResponseEvent(
+					"tester",
+					skillToolLoad,
+					loadedPrefix+" a",
+				),
+			},
+		},
+	}
+
+	order := loadedSkillOrder(
+		inv,
+		[]string{"c", "a", "b"},
+	)
+	require.Equal(t, []string{"b", "a", "c"}, order)
 }
 
 func TestKeepMostRecentSkills_FillsAlphabeticallyWhenNoEvents(t *testing.T) {

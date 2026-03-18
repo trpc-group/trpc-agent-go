@@ -125,6 +125,38 @@ func TestLoadTool_Call_NoRepoSkipsValidation(t *testing.T) {
 	require.Equal(t, "loaded: x", out)
 }
 
+func TestAppendLoadedOrderStateDelta(t *testing.T) {
+	delta := appendLoadedOrderStateDelta(nil, "tester", nil, "calc")
+	require.Equal(
+		t,
+		`["calc"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
+
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedOrderKey("tester"): []byte(`["a","b"]`),
+			},
+		},
+	}
+	delta = appendLoadedOrderStateDelta(
+		inv,
+		"tester",
+		map[string][]byte{},
+		"a",
+	)
+	require.Equal(
+		t,
+		`["b","a"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
+
+	delta = appendLoadedOrderStateDelta(inv, "tester", nil, " ")
+	require.Nil(t, delta)
+}
+
 func TestSkillNameEnum_SortsAndSkipsEmpty(t *testing.T) {
 	repo := &mockRepo{
 		ok: map[string]bool{},
