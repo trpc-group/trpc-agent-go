@@ -1535,18 +1535,26 @@ llmAgent := llmagent.New(
     llmagent.WithTools(memoryService.Tools()),
     // 预加载选项：
     // llmagent.WithPreloadMemory(0),   // 禁用预加载（默认）。
-    // llmagent.WithPreloadMemory(10),  // 加载最近 10 条（推荐用于生产环境）。
+    // llmagent.WithPreloadMemory(10),  // 自适应预加载预算 10。
+    //                                  // 记忆总量 <= 10 时全量注入，
+    //                                  // 否则注入当前问题相关的前 10 条检索结果。
     // llmagent.WithPreloadMemory(-1),  // 加载全部。
     //                                  // ⚠️ 警告：全量加载可能显著增加 token 使用量和 API 成本，
-    //                                  //     特别是对于存储了大量记忆的用户。生产环境建议使用正数限制。
+    //                                  //     特别是对于存储了大量记忆的用户。生产环境建议使用正数预算。
 )
 ```
 
 启用预加载后，记忆会自动注入到系统提示词中，让 Agent 无需显式工具调用就能获得用户上下文。
 
+当 `WithPreloadMemory(N)` 使用正数时，框架会先探测用户当前的 memory 总量。
+如果总量不超过 `N`，则直接全量注入；如果总量超过 `N`，则在框架内部切换为
+基于当前用户问题的 `memory_search` 语义，只注入最相关的前 `N` 条结果。
+如果当前 `query` 为空、检索报错，或检索结果为空，则会回退为直接加载最多
+`N` 条记忆。
+
 **注入机制**：预加载的记忆会**合并**到现有的系统提示词中，而不是作为独立的 system message 插入。这确保了请求中始终只有一个 system message，兼容某些对多个 system message 支持不完善的模型（如 Qwen3.5 系列可能会返回 "System message must be at the beginning" 错误）。
 
-**⚠️ 重要提示**：配置为 `-1` 会加载所有记忆，这可能会显著增加**Token 使用量**和**API 成本**。默认情况下预加载是禁用的（`0`），推荐使用正数限制（如 `10-50`）来平衡性能和成本。
+**⚠️ 重要提示**：配置为 `-1` 会加载所有记忆，这可能会显著增加**Token 使用量**和**API 成本**。默认情况下预加载是禁用的（`0`），推荐使用正数预算（如 `10-50`）来平衡性能和成本。
 
 ### 混合方案
 
@@ -1566,7 +1574,7 @@ llmAgent := llmagent.New(
     "assistant",
     llmagent.WithModel(model),
     llmagent.WithTools(memoryService.Tools()),  // 默认只有 search（load 可选）。
-    llmagent.WithPreloadMemory(10),             // 预加载最近记忆。
+    llmagent.WithPreloadMemory(10),             // 自适应预加载预算。
 )
 ```
 

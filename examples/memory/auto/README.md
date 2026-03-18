@@ -416,7 +416,9 @@ llmAgent := llmagent.New(
     llmagent.WithTools(memoryService.Tools()),
     // Preload options:
     // llmagent.WithPreloadMemory(0),   // Disable preloading (default).
-    // llmagent.WithPreloadMemory(10),  // Load 10 most recent.
+    // llmagent.WithPreloadMemory(10),  // Adaptive preload budget 10.
+    //                                  // Loads all memories when count <= 10,
+    //                                  // otherwise injects top 10 search results.
     // llmagent.WithPreloadMemory(-1),  // Load all.
 )
 ```
@@ -431,9 +433,16 @@ Use `-debug` flag to see preloaded memories in the system prompt.
 | **Control**     | Configured at agent creation       | Agent-driven, on-demand             |
 | **Token Usage** | Always included in context         | Only when agent calls the tool      |
 | **Auto Mode**   | Works with preloading              | Disabled by default, can be enabled |
-| **Use Case**    | Always need full context           | Selective memory access             |
+| **Use Case**    | Framework-managed adaptive context | Selective memory access             |
 
-In auto memory mode, you can use `WithPreloadMemory(-1)` to inject all memories into the system prompt, or enable `memory_load` tool via `WithToolEnabled(memory.LoadToolName, true)` for agent-driven loading.
+In auto memory mode, `WithPreloadMemory(N)` uses framework-managed adaptive
+preloading: small memory sets are injected in full, while larger memory sets
+inject only the top `N` search results for the current user message. If
+query extraction is empty, the search fails, or the search returns no
+matches, it falls back to directly loading up to `N` memories. Use
+`WithPreloadMemory(-1)` to force full preload, or enable `memory_load`
+via `WithToolEnabled(memory.LoadToolName, true)` for agent-driven
+loading.
 
 ## Comparison with Manual Memory
 
