@@ -79,6 +79,8 @@ type options struct {
 	ExtraFields map[string]any
 	// Variant for model-specific behavior.
 	Variant Variant
+	// variantSet tracks whether WithVariant was explicitly provided.
+	variantSet bool
 	// Batch completion window for batch processing.
 	BatchCompletionWindow openai.BatchNewParamsCompletionWindow
 	// Batch metadata for batch processing.
@@ -260,6 +262,7 @@ func WithExtraFields(extraFields map[string]any) Option {
 func WithVariant(variant Variant) Option {
 	return func(opts *options) {
 		opts.Variant = variant
+		opts.variantSet = true
 	}
 }
 
