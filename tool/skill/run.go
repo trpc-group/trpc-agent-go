@@ -609,7 +609,7 @@ func (t *RunTool) prepareWorkspaceForRun(
 				nil, err
 		}
 	}
-	return eng, ws, stageRes.SkillRoot, ctxIO, staged, stageWarn,
+	return eng, ws, stageRes.WorkspaceSkillDir, ctxIO, staged, stageWarn,
 		nil
 }
 

@@ -27,8 +27,8 @@ const (
 // SkillStager materializes a skill into the current workspace.
 //
 // Implementations may copy, mount, preload, or no-op. The returned
-// SkillRoot must be a workspace-relative path that remains within the
-// known workspace roots.
+// WorkspaceSkillDir must be a workspace-relative path that remains
+// within the known workspace roots.
 type SkillStager interface {
 	StageSkill(
 		ctx context.Context,
@@ -47,7 +47,7 @@ type SkillStageRequest struct {
 // SkillStageResult reports where the staged skill lives inside the
 // workspace.
 type SkillStageResult struct {
-	SkillRoot string
+	WorkspaceSkillDir string
 }
 
 // WithSkillStager overrides the strategy used to materialize skills
@@ -96,51 +96,53 @@ func (s *copySkillStager) StageSkill(
 		return SkillStageResult{}, err
 	}
 	return SkillStageResult{
-		SkillRoot: defaultSkillRoot(req.SkillName),
+		WorkspaceSkillDir: defaultWorkspaceSkillDir(req.SkillName),
 	}, nil
 }
 
-func defaultSkillRoot(name string) string {
+func defaultWorkspaceSkillDir(name string) string {
 	return path.Join(codeexecutor.DirSkills, name)
 }
 
 func normalizeSkillStageResult(
 	res SkillStageResult,
 ) (SkillStageResult, error) {
-	root, err := normalizeStagedSkillRoot(res.SkillRoot)
+	dir, err := normalizeWorkspaceSkillDir(res.WorkspaceSkillDir)
 	if err != nil {
 		return SkillStageResult{}, err
 	}
-	res.SkillRoot = root
+	res.WorkspaceSkillDir = dir
 	return res, nil
 }
 
-func normalizeStagedSkillRoot(skillRoot string) (string, error) {
-	root := strings.TrimSpace(skillRoot)
-	root = strings.ReplaceAll(root, "\\", "/")
-	if root == "" {
-		return "", fmt.Errorf("skill root must not be empty")
-	}
-	if strings.HasPrefix(root, "/") {
-		cleaned := path.Clean(root)
-		root = strings.TrimPrefix(cleaned, "/")
-		if cleaned == "/" {
-			root = "."
-		}
-	} else {
-		root = path.Clean(root)
-	}
-	if root == "" {
-		root = "."
-	}
-	if root == "." {
-		return root, nil
-	}
-	if !isAllowedWorkspacePath(root) {
+func normalizeWorkspaceSkillDir(dir string) (string, error) {
+	workspaceDir := strings.TrimSpace(dir)
+	workspaceDir = strings.ReplaceAll(workspaceDir, "\\", "/")
+	if workspaceDir == "" {
 		return "", fmt.Errorf(
-			"skill root %q must stay within the workspace",
-			skillRoot,
+			"workspace skill dir must not be empty",
 		)
 	}
-	return root, nil
+	if strings.HasPrefix(workspaceDir, "/") {
+		cleaned := path.Clean(workspaceDir)
+		workspaceDir = strings.TrimPrefix(cleaned, "/")
+		if cleaned == "/" {
+			workspaceDir = "."
+		}
+	} else {
+		workspaceDir = path.Clean(workspaceDir)
+	}
+	if workspaceDir == "" {
+		workspaceDir = "."
+	}
+	if workspaceDir == "." {
+		return workspaceDir, nil
+	}
+	if !isAllowedWorkspacePath(workspaceDir) {
+		return "", fmt.Errorf(
+			"workspace skill dir %q must stay within the workspace",
+			dir,
+		)
+	}
+	return workspaceDir, nil
 }

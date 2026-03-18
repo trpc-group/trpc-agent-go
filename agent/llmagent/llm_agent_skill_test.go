@@ -280,7 +280,7 @@ func TestLLMAgent_SkillRun_UsesConfiguredStager(t *testing.T) {
 			) (toolskill.SkillStageResult, error) {
 				require.Equal(t, testSkillName, req.SkillName)
 				return toolskill.SkillStageResult{
-					SkillRoot: skillRoot,
+					WorkspaceSkillDir: skillRoot,
 				}, nil
 			},
 		)),

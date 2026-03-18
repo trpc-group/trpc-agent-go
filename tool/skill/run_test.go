@@ -953,7 +953,7 @@ func TestRunTool_AutoPrependsVenvBinToPATH(t *testing.T) {
 	require.Contains(t, out.Stdout, "OK")
 }
 
-func TestVenvRelPaths_FromSkillRoot(t *testing.T) {
+func TestVenvRelPaths_FromWorkspaceSkillDir(t *testing.T) {
 	skillRoot := path.Join(codeexecutor.DirWork, "custom", testSkillName)
 	cwd := skillRoot
 	venvRel, venvBinRel := venvRelPaths(cwd, skillRoot)
@@ -969,7 +969,9 @@ func TestVenvRelPaths_FromChildDir(t *testing.T) {
 	require.Equal(t, path.Join("..", skillDirVenv, "bin"), venvBinRel)
 }
 
-func TestVenvRelPaths_EmptySkillRootDefaultsToWorkspace(t *testing.T) {
+func TestVenvRelPaths_EmptyWorkspaceSkillDirDefaultsToWorkspace(
+	t *testing.T,
+) {
 	venvRel, venvBinRel := venvRelPaths(".", "")
 	require.Equal(t, skillDirVenv, venvRel)
 	require.Equal(t, path.Join(skillDirVenv, "bin"), venvBinRel)
@@ -1996,7 +1998,7 @@ func TestRunTool_FallbackEngine_NoEngineProvider(t *testing.T) {
 
 // Test that when no cwd is provided, the working directory defaults to
 // the staged skill root so relative paths in skill docs work.
-func TestRunTool_DefaultCWD_UsesSkillRoot(t *testing.T) {
+func TestRunTool_DefaultCWD_UsesWorkspaceSkillDir(t *testing.T) {
 	root := t.TempDir()
 	dir := writeSkill(t, root, testSkillName)
 	// Place a file under scripts/ inside the skill.
@@ -2033,7 +2035,9 @@ func TestRunTool_DefaultCWD_UsesSkillRoot(t *testing.T) {
 
 // Test that a relative cwd is resolved under the skill root, not under
 // the workspace root.
-func TestRunTool_RelativeCWD_SubpathUnderSkillRoot(t *testing.T) {
+func TestRunTool_RelativeCWD_SubpathUnderWorkspaceSkillDir(
+	t *testing.T,
+) {
 	root := t.TempDir()
 	dir := writeSkill(t, root, testSkillName)
 	scripts := filepath.Join(dir, scriptsDir)
@@ -2109,7 +2113,7 @@ func TestRunTool_RelativeCWD_TraversalDoesNotEscapeWorkspace(t *testing.T) {
 }
 
 func TestResolveCWD_WorkspaceEnvPathAllowlist(t *testing.T) {
-	base := defaultSkillRoot("x")
+	base := defaultWorkspaceSkillDir("x")
 	wsEnv := "$" + codeexecutor.WorkspaceEnvDirKey
 
 	// traversal should fallback
@@ -2131,7 +2135,7 @@ func TestResolveCWD_WorkspaceEnvPathAllowlist(t *testing.T) {
 }
 
 func TestResolveCWD_AbsPathAllowlist(t *testing.T) {
-	base := defaultSkillRoot("x")
+	base := defaultWorkspaceSkillDir("x")
 
 	require.Equal(
 		t,
@@ -2143,11 +2147,13 @@ func TestResolveCWD_AbsPathAllowlist(t *testing.T) {
 }
 
 func TestResolveCWD_RelPath_BackslashTraversalDoesNotEscape(t *testing.T) {
-	base := defaultSkillRoot("x")
+	base := defaultWorkspaceSkillDir("x")
 	require.Equal(t, base, resolveCWD("..\\..\\..", base))
 }
 
-func TestResolveCWD_EmptySkillRootDefaultsToWorkspaceRoot(t *testing.T) {
+func TestResolveCWD_EmptyWorkspaceSkillDirDefaultsToWorkspaceRoot(
+	t *testing.T,
+) {
 	require.Equal(t, ".", resolveCWD("", ""))
 	require.Equal(t, ".", resolveCWD(scriptsDir, ""))
 }
@@ -3859,7 +3865,9 @@ func makeTreeWritable(root string) {
 	})
 }
 
-func TestRunTool_CustomSkillStager_UsesReturnedSkillRoot(t *testing.T) {
+func TestRunTool_CustomSkillStager_UsesReturnedWorkspaceSkillDir(
+	t *testing.T,
+) {
 	base := path.Join(codeexecutor.DirWork, "custom", testSkillName)
 	args := runInput{
 		Skill:   testSkillName,
@@ -3889,7 +3897,7 @@ func TestRunTool_CustomSkillStager_UsesReturnedSkillRoot(t *testing.T) {
 			) (SkillStageResult, error) {
 				require.Equal(t, testSkillName, req.SkillName)
 				return SkillStageResult{
-					SkillRoot: "/" + base,
+					WorkspaceSkillDir: "/" + base,
 				}, nil
 			},
 		))
@@ -3922,7 +3930,7 @@ func TestRunTool_CustomSkillStager_UsesReturnedSkillRoot(t *testing.T) {
 		require.ErrorIs(t, err, stageErr)
 	})
 
-	t.Run("empty_skill_root", func(t *testing.T) {
+	t.Run("empty_workspace_skill_dir", func(t *testing.T) {
 		rt, _ := newTool(skillStagerFunc(
 			func(
 				context.Context,
@@ -3933,12 +3941,16 @@ func TestRunTool_CustomSkillStager_UsesReturnedSkillRoot(t *testing.T) {
 		))
 
 		_, err := rt.Call(context.Background(), enc)
-		require.ErrorContains(t, err, "skill root must not be empty")
+		require.ErrorContains(
+			t,
+			err,
+			"workspace skill dir must not be empty",
+		)
 	})
 }
 
 func TestResolveCWD_AbsolutePath(t *testing.T) {
-	base := defaultSkillRoot(testSkillName)
+	base := defaultWorkspaceSkillDir(testSkillName)
 
 	// "/" means workspace root.
 	got := resolveCWD("/", base)
@@ -3970,12 +3982,15 @@ func TestResolveCWD_DefaultAndRelative(t *testing.T) {
 }
 
 func TestResolveCWD_WorkspaceEnvPrefixes(t *testing.T) {
-	got := resolveCWD("$WORK_DIR", defaultSkillRoot(testSkillName))
+	got := resolveCWD(
+		"$WORK_DIR",
+		defaultWorkspaceSkillDir(testSkillName),
+	)
 	require.Equal(t, codeexecutor.DirWork, got)
 
 	got = resolveCWD(
 		"${OUTPUT_DIR}/x",
-		defaultSkillRoot(testSkillName),
+		defaultWorkspaceSkillDir(testSkillName),
 	)
 	require.Equal(t, path.Join(codeexecutor.DirOut, "x"), got)
 }
@@ -4136,7 +4151,7 @@ func TestRunTool_runProgram_DefaultTimeout(t *testing.T) {
 		context.Background(),
 		eng,
 		ws,
-		defaultSkillRoot(testSkillName),
+		defaultWorkspaceSkillDir(testSkillName),
 		".",
 		runInput{Skill: testSkillName, Command: echoOK},
 	)
@@ -4148,7 +4163,7 @@ func TestRunTool_runProgram_DefaultTimeout(t *testing.T) {
 		context.Background(),
 		eng,
 		ws,
-		defaultSkillRoot(testSkillName),
+		defaultWorkspaceSkillDir(testSkillName),
 		".",
 		runInput{Skill: testSkillName, Command: echoOK, Timeout: 1},
 	)
@@ -4575,7 +4590,7 @@ func TestNormalizeSkillStageResult(t *testing.T) {
 		{
 			name:    "empty",
 			in:      " ",
-			wantErr: "skill root must not be empty",
+			wantErr: "workspace skill dir must not be empty",
 		},
 		{
 			name:    "escape",
@@ -4587,14 +4602,14 @@ func TestNormalizeSkillStageResult(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			res, err := normalizeSkillStageResult(
-				SkillStageResult{SkillRoot: tt.in},
+				SkillStageResult{WorkspaceSkillDir: tt.in},
 			)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, tt.want, res.SkillRoot)
+			require.Equal(t, tt.want, res.WorkspaceSkillDir)
 		})
 	}
 }
@@ -4614,7 +4629,7 @@ func TestRunTool_stageSkillForRun_ValidatesStager(t *testing.T) {
 		context.Context,
 		SkillStageRequest,
 	) (SkillStageResult, error) {
-		return SkillStageResult{SkillRoot: "/"}, nil
+		return SkillStageResult{WorkspaceSkillDir: "/"}, nil
 	})
 
 	res, err := rt.stageSkillForRun(
@@ -4624,13 +4639,15 @@ func TestRunTool_stageSkillForRun_ValidatesStager(t *testing.T) {
 		testSkillName,
 	)
 	require.NoError(t, err)
-	require.Equal(t, ".", res.SkillRoot)
+	require.Equal(t, ".", res.WorkspaceSkillDir)
 
 	rt.skillStager = skillStagerFunc(func(
 		context.Context,
 		SkillStageRequest,
 	) (SkillStageResult, error) {
-		return SkillStageResult{SkillRoot: "../escape"}, nil
+		return SkillStageResult{
+			WorkspaceSkillDir: "../escape",
+		}, nil
 	})
 
 	_, err = rt.stageSkillForRun(
