@@ -291,19 +291,24 @@ go run main.go -streaming=false
 
 ### Memory Integration Pattern
 
-Both examples follow a two-step memory integration pattern:
+Both examples follow a three-step memory integration pattern:
 
 ```go
-// Step 1: Register memory tools (agentic) or setup extractor (auto)
+// Step 1: Create the memory service.
+// Auto mode must be enabled here with an extractor.
+memoryService := memoryinmemory.NewMemoryService(
+    // memoryinmemory.WithExtractor(memExtractor), // Enable auto mode.
+)
+
+// Step 2: Wire memory into the agent and runner.
 llmAgent := llmagent.New(
     agentName,
     llmagent.WithModel(modelInstance),
-    llmagent.WithTools(memoryService.Tools()), // Agentic mode
-    // OR
-    llmagent.WithPreloadMemory(-1), // Auto mode
+    llmagent.WithTools(memoryService.Tools()), // Optional for agentic or hybrid mode.
+    llmagent.WithPreloadMemory(-1),            // Optional preload enhancement.
 )
 
-// Step 2: Set memory service in runner
+// Step 3: Set memory service in runner.
 runner := runner.NewRunner(
     appName,
     llmAgent,
