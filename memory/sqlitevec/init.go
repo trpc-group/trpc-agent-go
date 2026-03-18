@@ -139,13 +139,6 @@ func (s *Service) recoverSchemaBackup(ctx context.Context) error {
 		return err
 	}
 	if tableExists {
-		missing, _, err := s.schemaMissingColumns(ctx, s.tableName)
-		if err != nil {
-			return err
-		}
-		if len(missing) == 0 {
-			return s.dropTable(ctx, backupTable)
-		}
 		if err := s.dropTable(ctx, s.tableName); err != nil {
 			return fmt.Errorf("drop table %s: %w", s.tableName, err)
 		}

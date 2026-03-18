@@ -907,6 +907,42 @@ func TestNewService_RestoresSchemaBackup(t *testing.T) {
 	)
 }
 
+func TestNewService_RestoresSchemaBackupOverExistingTable(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	vecAuto()
+	createCurrentMemoriesTable(t, db)
+	createSchemaBackupTable(t, db, "memories"+schemaBackupName)
+	insertSchemaBackupRow(t, db, "memories"+schemaBackupName, "m1")
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	entries, err := svc.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "m1", entries[0].ID)
+	require.Equal(t, "alpha", entries[0].Memory.Memory)
+	require.False(
+		t,
+		sqliteTableExists(
+			t,
+			db,
+			"memories"+schemaBackupName,
+		),
+	)
+}
+
 func createLegacyMemoriesTable(t *testing.T, db *sql.DB) {
 	t.Helper()
 
@@ -921,6 +957,28 @@ CREATE VIRTUAL TABLE memories USING vec0(
   deleted_at integer,
   +memory_content text,
   +topics text
+)`)
+	require.NoError(t, err)
+}
+
+func createCurrentMemoriesTable(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	_, err := db.Exec(`
+CREATE VIRTUAL TABLE memories USING vec0(
+  memory_id text primary key,
+  embedding float[2] distance_metric=cosine,
+  app_name text,
+  user_id text,
+  created_at integer,
+  updated_at integer,
+  deleted_at integer,
+  +memory_content text,
+  +topics text,
+  +memory_kind text,
+  +event_time integer,
+  +participants text,
+  +location text
 )`)
 	require.NoError(t, err)
 }
