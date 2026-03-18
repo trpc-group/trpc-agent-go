@@ -138,6 +138,97 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestIsDeepSeekBaseURL(t *testing.T) {
+	const (
+		deepSeekURL        = "https://api.deepseek.com/v1"
+		upperDeepSeekURL   = " HTTPS://API.DEEPSEEK.COM/V1 "
+		invalidDeepSeekURL = "https://api.deepseek.com/%zz"
+		openAIURL          = "https://api.openai.com/v1"
+		emptyURL           = "   "
+	)
+
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "matches deepseek host",
+			rawURL: deepSeekURL,
+			want:   true,
+		},
+		{
+			name:   "matches deepseek host after trim and lowercase",
+			rawURL: upperDeepSeekURL,
+			want:   true,
+		},
+		{
+			name:   "falls back to substring match on parse error",
+			rawURL: invalidDeepSeekURL,
+			want:   true,
+		},
+		{
+			name:   "does not match other hosts",
+			rawURL: openAIURL,
+			want:   false,
+		},
+		{
+			name:   "empty url is not deepseek",
+			rawURL: emptyURL,
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isDeepSeekBaseURL(tt.rawURL))
+		})
+	}
+}
+
+func TestOmittedAttachmentHint(t *testing.T) {
+	tests := []struct {
+		name       string
+		imageCount int
+		audioCount int
+		fileCount  int
+		want       string
+	}{
+		{
+			name: "no attachments",
+			want: "",
+		},
+		{
+			name:       "single audio",
+			audioCount: 1,
+			want: "Omitted non-text attachments for this provider: " +
+				"1 audio clip.",
+		},
+		{
+			name:       "plural attachments",
+			imageCount: 2,
+			audioCount: 2,
+			fileCount:  2,
+			want: "Omitted non-text attachments for this provider: " +
+				"2 images, 2 audio clips, 2 files.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(
+				t,
+				tt.want,
+				omittedAttachmentHint(
+					tt.imageCount,
+					tt.audioCount,
+					tt.fileCount,
+				),
+			)
+		})
+	}
+}
+
 func TestModel_GenContent_NilReq(t *testing.T) {
 	m := New("test-model", WithAPIKey("test-key"))
 
