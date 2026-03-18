@@ -343,7 +343,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.PreloadMemory,
 		flagPreloadMemory,
 		0,
-		"Preload N memories into system prompt (0=off, -1=all)",
+		"Preload memories into system prompt (0=off, -1=all, N>0=adaptive budget)",
 	)
 	fs.StringVar(
 		&opts.AgentInstruction,

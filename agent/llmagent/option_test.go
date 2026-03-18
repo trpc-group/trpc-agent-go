@@ -235,12 +235,12 @@ func TestWithPreloadMemory(t *testing.T) {
 			expectedLimit: -1,
 		},
 		{
-			name:          "load specific number",
+			name:          "use adaptive preload budget",
 			limit:         5,
 			expectedLimit: 5,
 		},
 		{
-			name:          "load large number",
+			name:          "use large adaptive preload budget",
 			limit:         100,
 			expectedLimit: 100,
 		},

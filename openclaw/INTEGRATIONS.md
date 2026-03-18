@@ -807,16 +807,21 @@ threads.
 
 ### Preload memories into the prompt (optional)
 
-If you use a memory backend, you can preload recent memories into the
-system prompt:
+If you use a memory backend, you can preload memories into the system
+prompt:
 
 ```yaml
 agent:
-  preload_memory: 10   # 0=off, -1=all, N>0=most recent N
+  preload_memory: 10   # 0=off, -1=all, N>0=adaptive preload budget
 ```
 
 Recommendation: keep this small (like 10–50) so it stays readable and
 doesn't dominate the prompt.
+With a positive value, OpenClaw preloads all memories when the user has
+at most `N` memories, and otherwise injects the top `N` search results
+for the current user message. If query extraction is empty, the search
+fails, or the search returns no matches, it falls back to directly
+loading up to `N` memories.
 
 ### Cap raw history when you do not use summary (optional)
 

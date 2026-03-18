@@ -206,10 +206,16 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 
 // mockMemoryService implements memory.Service for testing.
 type mockMemoryService struct {
-	memories   []*memory.Entry
-	readErr    error
-	readCalled bool
-	readLimit  int
+	memories      []*memory.Entry
+	readErr       error
+	readCalled    bool
+	readLimit     int
+	readLimits    []int
+	searchResults []*memory.Entry
+	searchErr     error
+	searchCalled  bool
+	searchQuery   string
+	searchOpts    memory.SearchOptions
 }
 
 func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string, _ ...memory.AddOption) error {
@@ -231,14 +237,33 @@ func (m *mockMemoryService) ClearMemories(ctx context.Context, userKey memory.Us
 func (m *mockMemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
 	m.readCalled = true
 	m.readLimit = limit
+	m.readLimits = append(m.readLimits, limit)
 	if m.readErr != nil {
 		return nil, m.readErr
 	}
-	return m.memories, nil
+	memories := m.memories
+	if limit > 0 && len(memories) > limit {
+		memories = memories[:limit]
+	}
+	result := make([]*memory.Entry, len(memories))
+	copy(result, memories)
+	return result, nil
 }
 
-func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, _ ...memory.SearchOption) ([]*memory.Entry, error) {
-	return nil, nil
+func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
+	m.searchCalled = true
+	m.searchQuery = query
+	m.searchOpts = memory.ResolveSearchOptions(query, opts)
+	if m.searchErr != nil {
+		return nil, m.searchErr
+	}
+	results := m.searchResults
+	if limit := m.searchOpts.MaxResults; limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
+	out := make([]*memory.Entry, len(results))
+	copy(out, results)
+	return out, nil
 }
 
 func (m *mockMemoryService) Tools() []tool.Tool {
@@ -251,6 +276,77 @@ func (m *mockMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *sess
 
 func (m *mockMemoryService) Close() error {
 	return nil
+}
+
+func newTestMemoryEntry(id, content string) *memory.Entry {
+	return &memory.Entry{
+		ID:      id,
+		AppName: "app",
+		UserID:  "user",
+		Memory: &memory.Memory{
+			Memory: content,
+		},
+	}
+}
+
+func newTestInvocation(msg model.Message, svc *mockMemoryService) *agent.Invocation {
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{
+			AppName: "app",
+			UserID:  "user",
+		}),
+		agent.WithInvocationMessage(msg),
+	)
+	inv.MemoryService = svc
+	return inv
+}
+
+func TestBuildPreloadSearchQuery(t *testing.T) {
+	textPart := "Part text"
+	tests := []struct {
+		name string
+		msg  model.Message
+		want string
+	}{
+		{
+			name: "content only",
+			msg:  model.NewUserMessage("hello world"),
+			want: "hello world",
+		},
+		{
+			name: "content parts only",
+			msg: model.Message{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &textPart},
+				},
+			},
+			want: "Part text",
+		},
+		{
+			name: "content and text parts",
+			msg: model.Message{
+				Role:    model.RoleUser,
+				Content: "Hello",
+				ContentParts: []model.ContentPart{
+					{Type: model.ContentTypeText, Text: &textPart},
+					{Type: model.ContentTypeImage},
+				},
+			},
+			want: "Hello\nPart text",
+		},
+		{
+			name: "empty payload",
+			msg:  model.Message{Role: model.RoleUser},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, buildPreloadSearchQuery(tt.msg))
+		})
+	}
 }
 
 func TestGetPreloadMemoryMessage(t *testing.T) {
@@ -307,16 +403,11 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 		mockSvc := &mockMemoryService{
 			readErr: assert.AnError,
 		}
-		inv := agent.NewInvocation(
-			agent.WithInvocationSession(&session.Session{
-				AppName: "app",
-				UserID:  "user",
-			}),
-		)
-		inv.MemoryService = mockSvc
+		inv := newTestInvocation(model.NewUserMessage("hello"), mockSvc)
 		msg := p.getPreloadMemoryMessage(context.Background(), inv)
 		assert.Nil(t, msg)
 		assert.True(t, mockSvc.readCalled)
+		assert.Equal(t, []int{0}, mockSvc.readLimits)
 	})
 
 	t.Run("empty memories returns nil", func(t *testing.T) {
@@ -339,19 +430,10 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 		p := NewContentRequestProcessor(WithPreloadMemory(-1))
 		mockSvc := &mockMemoryService{
 			memories: []*memory.Entry{
-				{
-					ID:     "mem-1",
-					Memory: &memory.Memory{Memory: "User likes coffee"},
-				},
+				newTestMemoryEntry("mem-1", "User likes coffee"),
 			},
 		}
-		inv := agent.NewInvocation(
-			agent.WithInvocationSession(&session.Session{
-				AppName: "app",
-				UserID:  "user",
-			}),
-		)
-		inv.MemoryService = mockSvc
+		inv := newTestInvocation(model.NewUserMessage("hello"), mockSvc)
 		msg := p.getPreloadMemoryMessage(context.Background(), inv)
 		assert.NotNil(t, msg)
 		assert.Equal(t, model.RoleSystem, msg.Role)
@@ -363,16 +445,10 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 		p := NewContentRequestProcessor(WithPreloadMemory(0))
 		mockSvc := &mockMemoryService{
 			memories: []*memory.Entry{
-				{ID: "mem-1", Memory: &memory.Memory{Memory: "test"}},
+				newTestMemoryEntry("mem-1", "test"),
 			},
 		}
-		inv := agent.NewInvocation(
-			agent.WithInvocationSession(&session.Session{
-				AppName: "app",
-				UserID:  "user",
-			}),
-		)
-		inv.MemoryService = mockSvc
+		inv := newTestInvocation(model.NewUserMessage("hello"), mockSvc)
 		msg := p.getPreloadMemoryMessage(context.Background(), inv)
 		assert.Nil(t, msg)
 		assert.False(t, mockSvc.readCalled)
@@ -382,57 +458,116 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 		p := NewContentRequestProcessor(WithPreloadMemory(-1))
 		mockSvc := &mockMemoryService{
 			memories: []*memory.Entry{
-				{ID: "mem-1", Memory: &memory.Memory{Memory: "test"}},
+				newTestMemoryEntry("mem-1", "test"),
 			},
 		}
-		inv := agent.NewInvocation(
-			agent.WithInvocationSession(&session.Session{
-				AppName: "app",
-				UserID:  "user",
-			}),
-		)
-		inv.MemoryService = mockSvc
+		inv := newTestInvocation(model.NewUserMessage("hello"), mockSvc)
 		p.getPreloadMemoryMessage(context.Background(), inv)
 		assert.Equal(t, 0, mockSvc.readLimit)
 		assert.True(t, mockSvc.readCalled)
+		assert.False(t, mockSvc.searchCalled)
 	})
 
-	t.Run("positive preload uses limit", func(t *testing.T) {
+	t.Run("positive preload loads all when count fits budget", func(t *testing.T) {
 		p := NewContentRequestProcessor(WithPreloadMemory(5))
 		mockSvc := &mockMemoryService{
 			memories: []*memory.Entry{
-				{ID: "mem-1", Memory: &memory.Memory{Memory: "test"}},
+				newTestMemoryEntry("mem-1", "one"),
+				newTestMemoryEntry("mem-2", "two"),
+				newTestMemoryEntry("mem-3", "three"),
 			},
 		}
-		inv := agent.NewInvocation(
-			agent.WithInvocationSession(&session.Session{
-				AppName: "app",
-				UserID:  "user",
-			}),
-		)
-		inv.MemoryService = mockSvc
-		p.getPreloadMemoryMessage(context.Background(), inv)
-		assert.Equal(t, 5, mockSvc.readLimit)
+		inv := newTestInvocation(model.NewUserMessage("hello"), mockSvc)
+		msg := p.getPreloadMemoryMessage(context.Background(), inv)
+		assert.NotNil(t, msg)
+		assert.Equal(t, []int{6}, mockSvc.readLimits)
 		assert.True(t, mockSvc.readCalled)
+		assert.False(t, mockSvc.searchCalled)
+		assert.Contains(t, msg.Content, "one")
+		assert.Contains(t, msg.Content, "three")
 	})
 
-	t.Run("zero preload disabled", func(t *testing.T) {
-		p := NewContentRequestProcessor(WithPreloadMemory(0))
+	t.Run("positive preload uses search when count exceeds budget", func(t *testing.T) {
+		p := NewContentRequestProcessor(WithPreloadMemory(2))
 		mockSvc := &mockMemoryService{
 			memories: []*memory.Entry{
-				{ID: "mem-1", Memory: &memory.Memory{Memory: "test"}},
+				newTestMemoryEntry("mem-1", "first"),
+				newTestMemoryEntry("mem-2", "second"),
+				newTestMemoryEntry("mem-3", "third"),
+			},
+			searchResults: []*memory.Entry{
+				newTestMemoryEntry("mem-search", "Relevant memory"),
 			},
 		}
-		inv := agent.NewInvocation(
-			agent.WithInvocationSession(&session.Session{
-				AppName: "app",
-				UserID:  "user",
-			}),
-		)
-		inv.MemoryService = mockSvc
+		inv := newTestInvocation(model.NewUserMessage("find relevant"), mockSvc)
 		msg := p.getPreloadMemoryMessage(context.Background(), inv)
-		assert.Nil(t, msg)
-		assert.False(t, mockSvc.readCalled)
+		assert.NotNil(t, msg)
+		assert.Equal(t, []int{3}, mockSvc.readLimits)
+		assert.True(t, mockSvc.searchCalled)
+		assert.Equal(t, "find relevant", mockSvc.searchQuery)
+		assert.Equal(t, 2, mockSvc.searchOpts.MaxResults)
+		assert.True(t, mockSvc.searchOpts.Deduplicate)
+		assert.True(t, mockSvc.searchOpts.HybridSearch)
+		assert.Contains(t, msg.Content, "Relevant memory")
+	})
+
+	t.Run("positive preload falls back to recent load when query is empty", func(t *testing.T) {
+		p := NewContentRequestProcessor(WithPreloadMemory(2))
+		mockSvc := &mockMemoryService{
+			memories: []*memory.Entry{
+				newTestMemoryEntry("mem-1", "first"),
+				newTestMemoryEntry("mem-2", "second"),
+				newTestMemoryEntry("mem-3", "third"),
+			},
+		}
+		inv := newTestInvocation(model.Message{Role: model.RoleUser}, mockSvc)
+		msg := p.getPreloadMemoryMessage(context.Background(), inv)
+		assert.NotNil(t, msg)
+		assert.Equal(t, []int{3, 2}, mockSvc.readLimits)
+		assert.False(t, mockSvc.searchCalled)
+		assert.Contains(t, msg.Content, "first")
+		assert.Contains(t, msg.Content, "second")
+		assert.NotContains(t, msg.Content, "third")
+	})
+
+	t.Run("positive preload falls back to recent load when search fails", func(t *testing.T) {
+		p := NewContentRequestProcessor(WithPreloadMemory(2))
+		mockSvc := &mockMemoryService{
+			memories: []*memory.Entry{
+				newTestMemoryEntry("mem-1", "first"),
+				newTestMemoryEntry("mem-2", "second"),
+				newTestMemoryEntry("mem-3", "third"),
+			},
+			searchErr: assert.AnError,
+		}
+		inv := newTestInvocation(model.NewUserMessage("hello"), mockSvc)
+		msg := p.getPreloadMemoryMessage(context.Background(), inv)
+		assert.NotNil(t, msg)
+		assert.Equal(t, []int{3, 2}, mockSvc.readLimits)
+		assert.True(t, mockSvc.searchCalled)
+		assert.Contains(t, msg.Content, "first")
+		assert.Contains(t, msg.Content, "second")
+		assert.NotContains(t, msg.Content, "third")
+	})
+
+	t.Run("positive preload falls back to recent load when search is empty", func(t *testing.T) {
+		p := NewContentRequestProcessor(WithPreloadMemory(2))
+		mockSvc := &mockMemoryService{
+			memories: []*memory.Entry{
+				newTestMemoryEntry("mem-1", "first"),
+				newTestMemoryEntry("mem-2", "second"),
+				newTestMemoryEntry("mem-3", "third"),
+			},
+			searchResults: []*memory.Entry{},
+		}
+		inv := newTestInvocation(model.NewUserMessage("hello"), mockSvc)
+		msg := p.getPreloadMemoryMessage(context.Background(), inv)
+		assert.NotNil(t, msg)
+		assert.Equal(t, []int{3, 2}, mockSvc.readLimits)
+		assert.True(t, mockSvc.searchCalled)
+		assert.Contains(t, msg.Content, "first")
+		assert.Contains(t, msg.Content, "second")
+		assert.NotContains(t, msg.Content, "third")
 	})
 }
 
@@ -487,6 +622,36 @@ func TestProcessRequest_WithPreloadMemory(t *testing.T) {
 		assert.Contains(t, req.Messages[0].Content, "You are a helpful assistant.")
 		assert.Contains(t, req.Messages[0].Content, "User Memories")
 		assert.Contains(t, req.Messages[0].Content, "User prefers dark mode")
+	})
+
+	t.Run("adaptive preload uses search result in system message", func(t *testing.T) {
+		p := NewContentRequestProcessor(
+			WithPreloadMemory(2),
+			WithAddSessionSummary(true),
+		)
+		mockSvc := &mockMemoryService{
+			memories: []*memory.Entry{
+				newTestMemoryEntry("mem-1", "first"),
+				newTestMemoryEntry("mem-2", "second"),
+				newTestMemoryEntry("mem-3", "third"),
+			},
+			searchResults: []*memory.Entry{
+				newTestMemoryEntry("mem-search", "User prefers dark mode"),
+			},
+		}
+		inv := newTestInvocation(model.NewUserMessage("dark mode"), mockSvc)
+		req := &model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleSystem, Content: "You are a helpful assistant."},
+				{Role: model.RoleUser, Content: "hello"},
+			},
+		}
+		p.ProcessRequest(context.Background(), inv, req, nil)
+		assert.True(t, mockSvc.readCalled)
+		assert.True(t, mockSvc.searchCalled)
+		assert.Equal(t, []int{3}, mockSvc.readLimits)
+		assert.Contains(t, req.Messages[0].Content, "User prefers dark mode")
+		assert.NotContains(t, req.Messages[0].Content, "first")
 	})
 
 	t.Run("preload with no system message prepends memory", func(t *testing.T) {

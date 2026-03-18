@@ -1486,19 +1486,29 @@ llmAgent := llmagent.New(
     llmagent.WithTools(memoryService.Tools()),
     // Preload options:
     // llmagent.WithPreloadMemory(0),   // Disable preloading (default).
-    // llmagent.WithPreloadMemory(10),  // Load 10 most recent.
+    // llmagent.WithPreloadMemory(10),  // Adaptive preload budget 10.
+    //                                  // Loads all memories when count <= 10,
+    //                                  // otherwise injects top 10 search results.
     // llmagent.WithPreloadMemory(-1),  // Load all.
     //                                  // ⚠️ WARNING: Loading all memories may significantly
     //                                  //     increase token usage and API costs, especially
     //                                  //     for users with many stored memories. Consider
-    //                                  //     using a positive limit for production use.
-    // llmagent.WithPreloadMemory(10),  // Load 10 most recent (recommended for production).
+    //                                  //     using a positive budget for production use.
+    // llmagent.WithPreloadMemory(10),  // Recommended production setting.
 )
 ```
 
 When preloading is enabled, memories are automatically injected into the
 system prompt, giving the Agent context about the user without explicit
 tool calls.
+
+When `WithPreloadMemory(N)` uses a positive value, the framework first probes
+how many memories the user has. If the count is at most `N`, it injects all
+memories. If the count is larger than `N`, it switches to query-aware
+`memory_search` behavior internally and injects only the top `N` relevant
+results for the current user message. If query extraction is empty, the
+search fails, or the search returns no matches, it falls back to directly
+loading up to `N` memories.
 
 **Injection Mechanism**: Preloaded memories are **merged** into the existing
 system prompt rather than inserted as a separate system message. This ensures
@@ -1508,7 +1518,7 @@ Qwen3.5 series may return "System message must be at the beginning" error).
 
 **⚠️ Important Note**: Setting the configuration to `-1` loads all memories,
 which may significantly increase **Token Usage** and **API Costs**. By default,
-preloading is disabled (`0`), and we recommend using positive limits (e.g., `10-50`)
+preloading is disabled (`0`), and we recommend using positive budgets (e.g., `10-50`)
 to balance performance and cost.
 
 ### Hybrid Approach
@@ -1529,7 +1539,7 @@ llmAgent := llmagent.New(
     "assistant",
     llmagent.WithModel(model),
     llmagent.WithTools(memoryService.Tools()),  // Search by default; Load is optional.
-    llmagent.WithPreloadMemory(10),             // Preload recent memories.
+    llmagent.WithPreloadMemory(10),             // Adaptive preload budget.
 )
 ```
 
