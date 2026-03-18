@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -826,6 +827,257 @@ CREATE TABLE memories (
 		require.ErrorContains(t, err, "memory_kind")
 		require.ErrorContains(t, err, "participants")
 	})
+}
+
+func TestNewService_MigratesLegacySchema(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	vecAuto()
+	createLegacyMemoriesTable(t, db)
+	insertLegacyMemoryRow(t, db, "memories", "m1")
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	entries, err := svc.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "m1", entries[0].ID)
+	require.Equal(t, "alpha", entries[0].Memory.Memory)
+	require.Equal(t, []string{"pref"}, entries[0].Memory.Topics)
+	require.Equal(t, memory.KindFact, entries[0].Memory.Kind)
+	require.Nil(t, entries[0].Memory.EventTime)
+	require.Empty(t, entries[0].Memory.Participants)
+	require.Empty(t, entries[0].Memory.Location)
+	require.NoError(t, svc.ensureSchemaColumns(context.Background()))
+	require.False(
+		t,
+		sqliteTableExists(
+			t,
+			db,
+			"memories"+schemaBackupName,
+		),
+	)
+}
+
+func TestNewService_RestoresSchemaBackup(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	vecAuto()
+	createSchemaBackupTable(t, db, "memories"+schemaBackupName)
+	insertSchemaBackupRow(t, db, "memories"+schemaBackupName, "m1")
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	entries, err := svc.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "m1", entries[0].ID)
+	require.Equal(t, "alpha", entries[0].Memory.Memory)
+	require.Equal(t, []string{"pref"}, entries[0].Memory.Topics)
+	require.Equal(t, memory.KindFact, entries[0].Memory.Kind)
+	require.False(
+		t,
+		sqliteTableExists(
+			t,
+			db,
+			"memories"+schemaBackupName,
+		),
+	)
+}
+
+func TestNewService_RestoresSchemaBackupOverExistingTable(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	vecAuto()
+	createCurrentMemoriesTable(t, db)
+	createSchemaBackupTable(t, db, "memories"+schemaBackupName)
+	insertSchemaBackupRow(t, db, "memories"+schemaBackupName, "m1")
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	entries, err := svc.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "m1", entries[0].ID)
+	require.Equal(t, "alpha", entries[0].Memory.Memory)
+	require.False(
+		t,
+		sqliteTableExists(
+			t,
+			db,
+			"memories"+schemaBackupName,
+		),
+	)
+}
+
+func createLegacyMemoriesTable(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	_, err := db.Exec(`
+CREATE VIRTUAL TABLE memories USING vec0(
+  memory_id text primary key,
+  embedding float[2] distance_metric=cosine,
+  app_name text,
+  user_id text,
+  created_at integer,
+  updated_at integer,
+  deleted_at integer,
+  +memory_content text,
+  +topics text
+)`)
+	require.NoError(t, err)
+}
+
+func createCurrentMemoriesTable(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	_, err := db.Exec(`
+CREATE VIRTUAL TABLE memories USING vec0(
+  memory_id text primary key,
+  embedding float[2] distance_metric=cosine,
+  app_name text,
+  user_id text,
+  created_at integer,
+  updated_at integer,
+  deleted_at integer,
+  +memory_content text,
+  +topics text,
+  +memory_kind text,
+  +event_time integer,
+  +participants text,
+  +location text
+)`)
+	require.NoError(t, err)
+}
+
+func insertLegacyMemoryRow(
+	t *testing.T,
+	db *sql.DB,
+	tableName string,
+	memoryID string,
+) {
+	t.Helper()
+
+	blob, err := vecSerializeFloat32([]float32{1, 0})
+	require.NoError(t, err)
+
+	query := fmt.Sprintf(
+		`INSERT INTO %s (
+memory_id, embedding, app_name, user_id,
+created_at, updated_at, deleted_at,
+memory_content, topics
+) VALUES (?, vec_f32(?), ?, ?, ?, ?, ?, ?, ?)`,
+		tableName,
+	)
+	_, err = db.Exec(
+		query,
+		memoryID,
+		blob,
+		"app",
+		"u1",
+		int64(1),
+		int64(2),
+		int64(0),
+		"alpha",
+		`["pref"]`,
+	)
+	require.NoError(t, err)
+}
+
+func createSchemaBackupTable(
+	t *testing.T,
+	db *sql.DB,
+	tableName string,
+) {
+	t.Helper()
+
+	_, err := db.Exec(fmt.Sprintf(sqlCreateSchemaBackupTable, tableName))
+	require.NoError(t, err)
+}
+
+func insertSchemaBackupRow(
+	t *testing.T,
+	db *sql.DB,
+	tableName string,
+	memoryID string,
+) {
+	t.Helper()
+
+	blob, err := vecSerializeFloat32([]float32{1, 0})
+	require.NoError(t, err)
+
+	query := fmt.Sprintf(
+		`INSERT INTO %s (
+memory_id, embedding, app_name, user_id,
+created_at, updated_at, deleted_at,
+memory_content, topics, memory_kind,
+event_time, participants, location
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tableName,
+	)
+	_, err = db.Exec(
+		query,
+		memoryID,
+		blob,
+		"app",
+		"u1",
+		int64(1),
+		int64(2),
+		int64(0),
+		"alpha",
+		`["pref"]`,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+}
+
+func sqliteTableExists(t *testing.T, db *sql.DB, tableName string) bool {
+	t.Helper()
+
+	var count int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master
+WHERE type IN ('table', 'view') AND name = ?`,
+		tableName,
+	).Scan(&count)
+	require.NoError(t, err)
+	return count > 0
 }
 
 func TestSearchHelperFunctions(t *testing.T) {
