@@ -1063,6 +1063,47 @@ func cloneStateDeltaBytes(raw []byte) []byte {
 	return copied
 }
 
+func mergeRunnerCompletionStateDeltaIntoLastMessage(
+	messages []protocol.Message,
+	stateDelta map[string][]byte,
+) bool {
+	if len(messages) == 0 || len(stateDelta) == 0 {
+		return false
+	}
+
+	lastMsg := &messages[len(messages)-1]
+	if lastMsg.Metadata == nil {
+		lastMsg.Metadata = make(map[string]any, 1)
+	}
+
+	mergedStateDelta := make(map[string][]byte, len(stateDelta))
+	if existingRaw, ok := lastMsg.Metadata[ia2a.MessageMetadataStateDeltaKey]; ok {
+		existingStateDelta := DecodeStateDeltaMetadata(existingRaw)
+		for key, value := range existingStateDelta {
+			mergedStateDelta[key] = cloneStateDeltaBytes(value)
+		}
+	}
+	for key, value := range stateDelta {
+		mergedStateDelta[key] = cloneStateDeltaBytes(value)
+	}
+
+	encoded := EncodeStateDeltaMetadata(mergedStateDelta)
+	if len(encoded) == 0 {
+		return false
+	}
+	lastMsg.Metadata[ia2a.MessageMetadataStateDeltaKey] = encoded
+	return true
+}
+
+func cloneStateDeltaBytes(raw []byte) []byte {
+	if raw == nil {
+		return nil
+	}
+	copied := make([]byte, len(raw))
+	copy(copied, raw)
+	return copied
+}
+
 // buildSkillsFromTools converts agent tools to AgentSkills
 func buildSkillsFromTools(agent agent.Agent, agentName, agentDesc string) []a2a.AgentSkill {
 	tools := agent.Tools()

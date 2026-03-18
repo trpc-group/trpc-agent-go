@@ -3366,6 +3366,113 @@ func TestMessageProcessor_ProcessMessage_SkipsRunnerCompletion(t *testing.T) {
 		assert.NotNil(t, result)
 		assert.NotNil(t, result.Result)
 	})
+
+	t.Run("runner_completion_with_echoed_choices_is_preserved", func(t *testing.T) {
+		var convertCallCount int
+		processor := &messageProcessor{
+			debugLogging: false,
+			runner: &mockRunner{
+				runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+					ch := make(chan *event.Event, 1)
+					ch <- &event.Event{
+						Response: &model.Response{
+							Object:  model.ObjectTypeRunnerCompletion,
+							Done:    true,
+							Choices: []model.Choice{{Message: model.Message{Content: "graph final answer"}}},
+						},
+					}
+					close(ch)
+					return ch, nil
+				},
+			},
+			a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+			eventToA2AConverter: &mockEventToA2AConverter{
+				convertToA2AMessageFunc: func(ctx context.Context, evt *event.Event, options EventToA2AUnaryOptions) (protocol.UnaryMessageResult, error) {
+					convertCallCount++
+					return &protocol.Message{
+						Role:  protocol.MessageRoleAgent,
+						Parts: []protocol.Part{protocol.NewTextPart(evt.Response.Choices[0].Message.Content)},
+					}, nil
+				},
+			},
+			errorHandler: defaultErrorHandler,
+		}
+
+		result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.NotNil(t, result.Result)
+
+		assert.Equal(t, 1, convertCallCount, "runner.completion with choices must not be skipped")
+
+		resultMsg, ok := result.Result.(*protocol.Message)
+		if assert.True(t, ok, "Expected *protocol.Message, got %T", result.Result) {
+			assert.NotEmpty(t, resultMsg.Parts)
+			assert.Equal(t, "graph final answer", resultMsg.Parts[0].(protocol.TextPart).Text)
+		}
+	})
+
+	t.Run("runner_completion_with_state_delta_only_is_preserved", func(t *testing.T) {
+		var convertCallCount int
+		processor := &messageProcessor{
+			debugLogging: false,
+			runner: &mockRunner{
+				runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+					ch := make(chan *event.Event, 2)
+					ch <- &event.Event{
+						Response: &model.Response{
+							Object:  "chat.completion",
+							Done:    true,
+							Choices: []model.Choice{{Message: model.Message{Content: "answer"}}},
+						},
+					}
+					ch <- &event.Event{
+						Response: &model.Response{
+							Object: model.ObjectTypeRunnerCompletion,
+							Done:   true,
+						},
+						StateDelta: map[string][]byte{
+							"graph_state": []byte(`"completed"`),
+						},
+					}
+					close(ch)
+					return ch, nil
+				},
+			},
+			a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+			eventToA2AConverter: &mockEventToA2AConverter{
+				convertToA2AMessageFunc: func(ctx context.Context, evt *event.Event, options EventToA2AUnaryOptions) (protocol.UnaryMessageResult, error) {
+					convertCallCount++
+					return &protocol.Message{
+						Role:  protocol.MessageRoleAgent,
+						Parts: []protocol.Part{protocol.NewTextPart(evt.Response.Choices[0].Message.Content)},
+					}, nil
+				},
+			},
+			errorHandler: defaultErrorHandler,
+		}
+
+		result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.NotNil(t, result.Result)
+
+		// State-delta-only runner completion should not become a separate
+		// converted message. It should be merged into the latest content message.
+		assert.Equal(t, 1, convertCallCount, "runner.completion state_delta should be merged into the latest message")
+
+		resultMsg, ok := result.Result.(*protocol.Message)
+		if assert.True(t, ok, "Expected *protocol.Message, got %T", result.Result) {
+			assert.NotEmpty(t, resultMsg.Parts)
+			assert.Equal(t, "answer", resultMsg.Parts[0].(protocol.TextPart).Text)
+
+			rawStateDelta, exists := resultMsg.Metadata[ia2a.MessageMetadataStateDeltaKey]
+			if assert.True(t, exists, "expected merged state_delta metadata on final message") {
+				decoded := DecodeStateDeltaMetadata(rawStateDelta)
+				assert.Equal(t, []byte(`"completed"`), decoded["graph_state"])
+			}
+		}
+	})
 }
 
 // TestTraceContextMiddleware_Extract tests that trace context is extracted from HTTP headers
