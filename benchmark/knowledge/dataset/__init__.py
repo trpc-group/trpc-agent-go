@@ -16,6 +16,7 @@ from dataset.base import BaseDataset
 
 AVAILABLE_DATASETS = {
     "huggingface": "HuggingFace documentation QA (m-ric/huggingface_doc)",
+    "huggingface-mc": "HuggingFace documentation multi-context QA (RAGAS-generated)",
     "rgb": "RGB benchmark (chen700564/RGB) - Retrieval-Augmented Generation Benchmark",
     "multihop-rag": "MultiHop-RAG (yixuantt/MultiHop-RAG) - Multi-hop queries across documents",
 }
@@ -40,6 +41,10 @@ def create_dataset(name: str, **kwargs: Any) -> BaseDataset:
     if name == "huggingface":
         from dataset.huggingface.loader import HuggingFaceDocDataset
         return HuggingFaceDocDataset(**kwargs)
+
+    if name == "huggingface-mc":
+        from dataset.huggingface_mc.loader import HuggingFaceMultiContextDataset
+        return HuggingFaceMultiContextDataset(**kwargs)
 
     if name == "rgb":
         from dataset.rgb.loader import RGBDataset

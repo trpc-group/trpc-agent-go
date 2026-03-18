@@ -391,7 +391,7 @@ def main():
     )
     parser.add_argument(
         "--dataset",
-        choices=["huggingface", "rgb", "multihop-rag"],
+        choices=["huggingface", "huggingface-mc", "rgb", "multihop-rag"],
         default="huggingface",
         help="Dataset to use for evaluation (default: huggingface)",
     )
@@ -404,7 +404,7 @@ def main():
     parser.add_argument(
         "--timeout",
         type=int,
-        default=600,
+        default=60000,
         help="Timeout in seconds for evaluation (default: 600)",
     )
     parser.add_argument(

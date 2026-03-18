@@ -308,7 +308,48 @@ The game was played on February 7, 2021, at Raymond James Stadium in Glendale, A
 
 ---
 
-### 2. RGB 数据集
+### 2. HuggingFace Multi-Context 数据集 (49 个多跳问答对)
+
+**测试环境参数：**
+
+- **数据集**: HuggingFace Markdown 文档集 (1915 篇)，使用 RAGAS TestsetGenerator 生成的 49 个多跳 QA 对（MultiHopAbstract + MultiHopSpecific）
+- **Embedding 模型**: `BGE-M3` (1024 维)
+- **Agent 模型**: `DeepSeek-V3.2`
+- **评测模型**: `Qwen3.5-397B-A17B`
+
+> **说明**：与 Section 1 使用相同的文档集，但 QA 对由 RAGAS 自动生成，每个问题需要跨多个文档综合信息才能回答（multi-context / multi-hop），难度显著高于单文档 QA。AutoGen 因模块依赖问题未能完成本轮评测。
+
+#### 回答质量指标 (Answer Quality)
+
+
+| 指标                            | LangChain | LangChain-Chain | tRPC-Agent-Go  | Agno       | CrewAI | 胜者             |
+| --------------------------------- | ----------- | ----------------- | ---------------- | ------------ | -------- | ------------------ |
+| **Faithfulness (忠实度)**       | 0.8578    | 0.7566          | 0.8799         | **0.9071** | 0.8884 | ✅ Agno          |
+| **Answer Relevancy (相关性)**   | **0.7947**| 0.6578          | 0.7728         | 0.7089     | 0.6292 | ✅ LangChain     |
+| **Answer Correctness (正确性)** | 0.5955    | 0.4966          | **0.6098**     | 0.5900     | 0.5883 | ✅ tRPC-Agent-Go |
+| **Answer Similarity (相似度)**  | **0.8788**| 0.8130          | 0.8685         | 0.8658     | 0.8384 | ✅ LangChain     |
+
+#### 上下文质量指标 (Context Quality)
+
+
+| 指标                                 | LangChain | LangChain-Chain | tRPC-Agent-Go  | Agno   | CrewAI     | 胜者             |
+| -------------------------------------- | ----------- | ----------------- | ---------------- | -------- | ------------ | ------------------ |
+| **Context Precision (精确率)**       | 0.2224    | 0.2398          | 0.2130         | 0.2217 | **0.2662** | ✅ CrewAI        |
+| **Context Recall (召回率)**          | 0.5795    | 0.4220          | **0.6535**     | 0.5911 | 0.5744     | ✅ tRPC-Agent-Go |
+| **Context Entity Recall (实体召回)** | 0.4492    | 0.3438          | 0.4669         | 0.4394 | **0.4675** | ✅ CrewAI        |
+
+#### 核心结论
+
+1. **多跳 QA 难度显著高于单文档 QA**：所有框架的 Context Precision 降至 0.21-0.27（Section 1 中为 0.54-0.77），Context Recall 降至 0.42-0.65（Section 1 中为 0.87-0.94），Answer Correctness 降至 0.50-0.61（Section 1 中为 0.67-0.81），反映了跨文档推理的固有难度。
+2. **tRPC-Agent-Go 回答正确性领先**：**Answer Correctness (0.6098)** 排名第一，**Context Recall (0.6535)** 也排名第一，表明在多跳场景下检索到了更全面的证据并给出了更准确的回答。
+3. **Agno 忠实度最高**：**Faithfulness (0.9071)** 排名第一，说明在多跳推理中更好地遵循了检索内容，幻觉最少。
+4. **LangChain 相关性和相似度领先**：**Answer Relevancy (0.7947)** 和 **Answer Similarity (0.8788)** 均排名第一。
+5. **CrewAI 上下文质量突出**：**Context Precision (0.2662)** 和 **Context Entity Recall (0.4675)** 排名第一，检索精度最高。
+6. **LangChain-Chain（单次检索）表现最弱**：作为确定性 Chain 流程（每个查询仅一次检索），在多跳场景下劣势明显——Context Recall 仅 0.4220，Answer Correctness 仅 0.4966，进一步验证了 Agentic 多步检索在多文档信息整合场景下的优势。
+
+---
+
+### 3. RGB 数据集
 
 **测试环境参数：**
 
@@ -317,7 +358,7 @@ The game was played on February 7, 2021, at Raymond James Stadium in Glendale, A
 - **Agent 模型**: `DeepSeek-V3.2`
 - **评测模型**: `Qwen3.5-397B-A17B`
 
-#### 2.1 RGB-en：标准事实性 QA (300 个问答对)
+#### 3.1 RGB-en：标准事实性 QA (300 个问答对)
 
 标准事实性查询，答案来源明确。（RGB 原始测试重点为噪声鲁棒性；在我们的端到端评测中，`negative` 也会与 `positive` 一同灌入知识库，因此该子集仍包含噪声干扰。）
 
@@ -340,7 +381,7 @@ The game was played on February 7, 2021, at Raymond James Stadium in Glendale, A
 | **Context Recall (召回率)**          | 0.9965     | **1.0000**     | 0.9792 | 0.9967 | 0.9933  | ✅ tRPC-Agent-Go |
 | **Context Entity Recall (实体召回)** | **0.6467** | 0.6461         | 0.6416 | 0.6350 | 0.6278  | ✅ LangChain     |
 
-#### 2.2 RGB-en_int：多文档信息整合 (100 个问答对)
+#### 3.2 RGB-en_int：多文档信息整合 (100 个问答对)
 
 测试模型检索并综合分散在多个文档中的信息的能力。这是我们端到端评测中最能保留 RGB 原始挑战的子集。
 
@@ -365,7 +406,7 @@ The game was played on February 7, 2021, at Raymond James Stadium in Glendale, A
 | **Context Recall (召回率)**          | 0.7000                     | 0.8776    | 0.8800        | 0.8083 | **0.9150** | 0.9033     | ✅ CrewAI          |
 | **Context Entity Recall (实体召回)** | 0.4917                     | 0.5790    | 0.5933        | 0.5833 | 0.6167     | **0.6317** | ✅ AutoGen         |
 
-#### 2.3 RGB-en_fact：事实性 QA + 反事实干扰 (100 个问答对)
+#### 3.3 RGB-en_fact：事实性 QA + 反事实干扰 (100 个问答对)
 
 事实性查询，问题特征与 en 子集不同。（RGB 原始测试重点为反事实鲁棒性；在我们的端到端评测中，`positive_wrong` 与 `positive` 会一同灌入知识库，因此该子集仍包含反事实干扰。）
 
@@ -390,7 +431,7 @@ The game was played on February 7, 2021, at Raymond James Stadium in Glendale, A
 
 #### RGB 综合分析
 
-> **说明**：LangChain-Chain 不参与 RGB 综合统计，仅在 en_int 子集中作为单次检索基线使用。详见 2.2 节中 Agentic 与单次检索的对比分析。
+> **说明**：LangChain-Chain 不参与 RGB 综合统计，仅在 en_int 子集中作为单次检索基线使用。详见 3.2 节中 Agentic 与单次检索的对比分析。
 
 **3 个子集简单平均值对比 (en + en_int + en_fact)：**
 
@@ -443,7 +484,7 @@ The game was played on February 7, 2021, at Raymond James Stadium in Glendale, A
 
 ---
 
-### 3. MultiHop-RAG 数据集 (450 个问答对)
+### 4. MultiHop-RAG 数据集 (450 个问答对)
 
 **测试环境参数：**
 
@@ -484,7 +525,7 @@ The game was played on February 7, 2021, at Raymond James Stadium in Glendale, A
 
 ---
 
-### 4. 垂直评测：tRPC-Agent-Go 混合检索权重消融实验
+### 5. 垂直评测：tRPC-Agent-Go 混合检索权重消融实验
 
 为了探究 tRPC-Agent-Go 中 PGVector 混合检索（Hybrid Search：向量相似度 + 文本稀疏检索）的最佳权重配比，我们设计了从纯文本（`v0_t100`）到纯向量（`v100_t0`）的 11 个步长的梯度消融实验。
 
@@ -523,7 +564,7 @@ The game was played on February 7, 2021, at Raymond James Stadium in Glendale, A
 **实践建议**：
 在标准的 RAG 场景（特别是具备高质量大模型和 Embedding 的系统）中，**建议将向量检索（Vector）的权重设为绝对主导（≥0.8）**。v80_t20 到 v100_t0 区间均表现优异，可根据具体场景微调。仅在存在大量极其生僻的专有名词或无语义货号的场景，才需要考虑适度放宽稀疏文本检索的权重。
 
-### 5. 垂直评测：Reciprocal Rank Fusion (RRF) 融合模式
+### 6. 垂直评测：Reciprocal Rank Fusion (RRF) 融合模式
 
 除了加权分数融合（Weighted Score Fusion）之外，PGVector 还支持 **Reciprocal Rank Fusion (RRF)** 作为混合检索的融合策略。RRF 不依赖原始分数的绝对值，而是基于各检索通道返回结果的**排名**进行融合，公式为：
 
