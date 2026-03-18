@@ -63,6 +63,7 @@ const (
 	errCollectFail     = "collect-fail"
 	errPutFail         = "put-fail"
 	errRunFail         = "run-fail"
+	errWorkspaceCreate = "workspace-create-fail"
 	metadataWhitespace = " "
 )
 
@@ -966,6 +967,12 @@ func TestVenvRelPaths_FromChildDir(t *testing.T) {
 	venvRel, venvBinRel := venvRelPaths(cwd, skillRoot)
 	require.Equal(t, path.Join("..", skillDirVenv), venvRel)
 	require.Equal(t, path.Join("..", skillDirVenv, "bin"), venvBinRel)
+}
+
+func TestVenvRelPaths_EmptySkillRootDefaultsToWorkspace(t *testing.T) {
+	venvRel, venvBinRel := venvRelPaths(".", "")
+	require.Equal(t, skillDirVenv, venvRel)
+	require.Equal(t, path.Join(skillDirVenv, "bin"), venvBinRel)
 }
 
 func TestInjectVenvEnv_PrependsPATHAndSetsVirtualEnv(t *testing.T) {
@@ -2138,6 +2145,11 @@ func TestResolveCWD_AbsPathAllowlist(t *testing.T) {
 func TestResolveCWD_RelPath_BackslashTraversalDoesNotEscape(t *testing.T) {
 	base := defaultSkillRoot("x")
 	require.Equal(t, base, resolveCWD("..\\..\\..", base))
+}
+
+func TestResolveCWD_EmptySkillRootDefaultsToWorkspaceRoot(t *testing.T) {
+	require.Equal(t, ".", resolveCWD("", ""))
+	require.Equal(t, ".", resolveCWD(scriptsDir, ""))
 }
 
 // Validate Declaration basics and required fields.
@@ -3848,17 +3860,29 @@ func makeTreeWritable(root string) {
 }
 
 func TestRunTool_CustomSkillStager_UsesReturnedSkillRoot(t *testing.T) {
-	loc := localexec.NewRuntime(t.TempDir())
-	fs := &countingFS{inner: loc}
-	rr := &recordingRunner{}
-	eng := &countingEngine{m: loc, f: fs, r: rr}
-	exec := &engineExec{eng: eng}
 	base := path.Join(codeexecutor.DirWork, "custom", testSkillName)
-	repo := &pathErrRepo{err: errors.New("Path should not be called")}
-	rt := NewRunTool(
-		repo,
-		exec,
-		WithSkillStager(skillStagerFunc(
+	args := runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := jsonMarshal(args)
+	require.NoError(t, err)
+
+	newTool := func(stager SkillStager) (*RunTool, *recordingRunner) {
+		loc := localexec.NewRuntime(t.TempDir())
+		fs := &countingFS{inner: loc}
+		rr := &recordingRunner{}
+		eng := &countingEngine{m: loc, f: fs, r: rr}
+		return NewRunTool(
+			&pathErrRepo{err: errors.New("Path should not be called")},
+			&engineExec{eng: eng},
+			WithSkillStager(stager),
+		), rr
+	}
+
+	t.Run("success", func(t *testing.T) {
+		rt, rr := newTool(skillStagerFunc(
 			func(
 				_ context.Context,
 				req SkillStageRequest,
@@ -3868,28 +3892,49 @@ func TestRunTool_CustomSkillStager_UsesReturnedSkillRoot(t *testing.T) {
 					SkillRoot: "/" + base,
 				}, nil
 			},
-		)),
-	)
+		))
 
-	args := runInput{
-		Skill:   testSkillName,
-		Command: echoOK,
-		Timeout: timeoutSecSmall,
-	}
-	enc, err := jsonMarshal(args)
-	require.NoError(t, err)
+		res, err := rt.Call(context.Background(), enc)
+		require.NoError(t, err)
 
-	res, err := rt.Call(context.Background(), enc)
-	require.NoError(t, err)
+		out := res.(runOutput)
+		require.Equal(t, 0, out.ExitCode)
+		require.Equal(t, base, rr.last.Cwd)
+		require.Contains(
+			t,
+			strings.Join(rr.last.Args, " "),
+			"export "+envVirtualEnv+"='.venv'",
+		)
+	})
 
-	out := res.(runOutput)
-	require.Equal(t, 0, out.ExitCode)
-	require.Equal(t, base, rr.last.Cwd)
-	require.Contains(
-		t,
-		rr.last.Args[1],
-		"export "+envVirtualEnv+"='.venv'",
-	)
+	t.Run("stager_error", func(t *testing.T) {
+		stageErr := errors.New("stage-fail")
+		rt, _ := newTool(skillStagerFunc(
+			func(
+				context.Context,
+				SkillStageRequest,
+			) (SkillStageResult, error) {
+				return SkillStageResult{}, stageErr
+			},
+		))
+
+		_, err := rt.Call(context.Background(), enc)
+		require.ErrorIs(t, err, stageErr)
+	})
+
+	t.Run("empty_skill_root", func(t *testing.T) {
+		rt, _ := newTool(skillStagerFunc(
+			func(
+				context.Context,
+				SkillStageRequest,
+			) (SkillStageResult, error) {
+				return SkillStageResult{}, nil
+			},
+		))
+
+		_, err := rt.Call(context.Background(), enc)
+		require.ErrorContains(t, err, "skill root must not be empty")
+	})
 }
 
 func TestResolveCWD_AbsolutePath(t *testing.T) {
@@ -4301,6 +4346,29 @@ func (*stubFS) CollectOutputs(
 	return codeexecutor.OutputManifest{}, nil
 }
 
+type stubManager struct {
+	ws  codeexecutor.Workspace
+	err error
+}
+
+func (m *stubManager) CreateWorkspace(
+	_ context.Context,
+	_ string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	if m.err != nil {
+		return codeexecutor.Workspace{}, m.err
+	}
+	return m.ws, nil
+}
+
+func (*stubManager) Cleanup(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+) error {
+	return nil
+}
+
 type stubRunner struct {
 	res      codeexecutor.RunResult
 	err      error
@@ -4328,6 +4396,20 @@ func (e *stubEngine) FS() codeexecutor.WorkspaceFS         { return e.f }
 func (e *stubEngine) Runner() codeexecutor.ProgramRunner   { return e.r }
 
 func (*stubEngine) Describe() codeexecutor.Capabilities {
+	return codeexecutor.Capabilities{}
+}
+
+type managedEngine struct {
+	m codeexecutor.WorkspaceManager
+	f codeexecutor.WorkspaceFS
+	r codeexecutor.ProgramRunner
+}
+
+func (e *managedEngine) Manager() codeexecutor.WorkspaceManager { return e.m }
+func (e *managedEngine) FS() codeexecutor.WorkspaceFS           { return e.f }
+func (e *managedEngine) Runner() codeexecutor.ProgramRunner     { return e.r }
+
+func (*managedEngine) Describe() codeexecutor.Capabilities {
 	return codeexecutor.Capabilities{}
 }
 
@@ -4429,4 +4511,148 @@ func TestRunTool_skillLinksPresent_ExitCodes(t *testing.T) {
 	ok, err = rt.skillLinksPresent(ctx, eng, ws, testSkillName)
 	require.Error(t, err)
 	require.False(t, ok)
+}
+
+func TestCopySkillStager_StageSkill_Validation(t *testing.T) {
+	ctx := context.Background()
+	req := SkillStageRequest{SkillName: testSkillName}
+
+	var nilStager *copySkillStager
+	_, err := nilStager.StageSkill(ctx, req)
+	require.ErrorContains(t, err, errSkillStagerNotConfigured)
+
+	stager := &copySkillStager{}
+	_, err = stager.StageSkill(ctx, req)
+	require.ErrorContains(t, err, errSkillStagerNotConfigured)
+
+	stager = &copySkillStager{tool: &RunTool{}}
+	_, err = stager.StageSkill(ctx, req)
+	require.ErrorContains(t, err, errSkillRepoNotConfigured)
+}
+
+func TestCopySkillStager_StageSkill_PropagatesStageError(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	stager := &copySkillStager{tool: &RunTool{}}
+	_, err = stager.StageSkill(context.Background(), SkillStageRequest{
+		SkillName:  testSkillName,
+		Repository: repo,
+	})
+	require.ErrorContains(t, err, "workspace fs is not configured")
+}
+
+func TestNormalizeSkillStageResult(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr string
+	}{
+		{
+			name: "workspace_absolute",
+			in:   "/skills/demo",
+			want: "skills/demo",
+		},
+		{
+			name: "workspace_root",
+			in:   "/",
+			want: ".",
+		},
+		{
+			name: "backslash",
+			in:   "skills\\demo",
+			want: "skills/demo",
+		},
+		{
+			name: "clean_relative",
+			in:   "skills/foo/../demo",
+			want: "skills/demo",
+		},
+		{
+			name:    "empty",
+			in:      " ",
+			wantErr: "skill root must not be empty",
+		},
+		{
+			name:    "escape",
+			in:      "../escape",
+			wantErr: "must stay within the workspace",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := normalizeSkillStageResult(
+				SkillStageResult{SkillRoot: tt.in},
+			)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, res.SkillRoot)
+		})
+	}
+}
+
+func TestRunTool_stageSkillForRun_ValidatesStager(t *testing.T) {
+	rt := &RunTool{}
+
+	_, err := rt.stageSkillForRun(
+		context.Background(),
+		nil,
+		codeexecutor.Workspace{},
+		testSkillName,
+	)
+	require.ErrorContains(t, err, errSkillStagerNotConfigured)
+
+	rt.skillStager = skillStagerFunc(func(
+		context.Context,
+		SkillStageRequest,
+	) (SkillStageResult, error) {
+		return SkillStageResult{SkillRoot: "/"}, nil
+	})
+
+	res, err := rt.stageSkillForRun(
+		context.Background(),
+		nil,
+		codeexecutor.Workspace{},
+		testSkillName,
+	)
+	require.NoError(t, err)
+	require.Equal(t, ".", res.SkillRoot)
+
+	rt.skillStager = skillStagerFunc(func(
+		context.Context,
+		SkillStageRequest,
+	) (SkillStageResult, error) {
+		return SkillStageResult{SkillRoot: "../escape"}, nil
+	})
+
+	_, err = rt.stageSkillForRun(
+		context.Background(),
+		nil,
+		codeexecutor.Workspace{},
+		testSkillName,
+	)
+	require.ErrorContains(t, err, "must stay within the workspace")
+}
+
+func TestRunTool_prepareWorkspaceForRun_CreateWorkspaceError(t *testing.T) {
+	rt := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: &managedEngine{
+			m: &stubManager{err: errors.New(errWorkspaceCreate)},
+		}},
+	)
+
+	_, _, _, _, _, _, err := rt.prepareWorkspaceForRun(
+		context.Background(),
+		runInput{Skill: testSkillName},
+	)
+	require.ErrorContains(t, err, errWorkspaceCreate)
 }

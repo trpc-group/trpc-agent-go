@@ -295,9 +295,10 @@ func TestLLMAgent_SkillRun_UsesConfiguredStager(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, se.ran)
 	require.Equal(t, skillRoot, se.lastSpec.Cwd)
+	argsText := strings.Join(se.lastSpec.Args, " ")
 	require.Contains(
 		t,
-		se.lastSpec.Args[1],
+		argsText,
 		"export VIRTUAL_ENV='.venv'",
 	)
 }
