@@ -37,10 +37,11 @@ func setupMiniredis(t *testing.T) (*miniredis.Miniredis, redis.UniversalClient) 
 
 func defaultConfig() Config {
 	return Config{
-		SessionTTL:        time.Hour,
-		AppStateTTL:       2 * time.Hour,
-		UserStateTTL:      30 * time.Minute,
-		SessionEventLimit: 100,
+		SessionTTL:             time.Hour,
+		AppStateTTL:            2 * time.Hour,
+		UserStateTTL:           30 * time.Minute,
+		SessionEventLimit:      100,
+		EnableUserSessionIndex: true,
 	}
 }
 
@@ -360,6 +361,25 @@ func TestClient_ListSessions(t *testing.T) {
 	userKey := session.UserKey{AppName: "app", UserID: "u1"}
 	for i := 0; i < 3; i++ {
 		key := session.Key{AppName: "app", UserID: "u1", SessionID: fmt.Sprintf("ls%d", i)}
+		_, err := c.CreateSession(ctx, key, session.StateMap{"idx": []byte(fmt.Sprintf("%d", i))})
+		require.NoError(t, err)
+	}
+
+	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+	require.NoError(t, err)
+	assert.Len(t, sessions, 3)
+}
+
+func TestClient_ListSessions_FallbackToScanWhenUserIndexDisabled(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	cfg := defaultConfig()
+	cfg.EnableUserSessionIndex = false
+	c := NewClient(rdb, cfg)
+	ctx := context.Background()
+
+	userKey := session.UserKey{AppName: "app", UserID: "u1"}
+	for i := 0; i < 3; i++ {
+		key := session.Key{AppName: "app", UserID: "u1", SessionID: fmt.Sprintf("scanls%d", i)}
 		_, err := c.CreateSession(ctx, key, session.StateMap{"idx": []byte(fmt.Sprintf("%d", i))})
 		require.NoError(t, err)
 	}
