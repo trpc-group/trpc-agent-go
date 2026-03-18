@@ -692,6 +692,14 @@ missing, but installation is always explicit. The managed Python environment
 is created with access to the current system site-packages, so existing
 packages such as `pandas` remain visible after bootstrap.
 
+Official OpenClaw skill metadata can currently describe package-manager,
+Go, npm, managed-Python, and asset download install actions. Explicit
+`-skill ...` runs only plan the selected skills and no longer pull in the
+default dependency profiles automatically. `bootstrap deps --apply` is
+best-effort: user-space installs and downloads run first, while root-only
+steps are reported as deferred instead of aborting the entire run. Download
+actions store assets under `<state_dir>/tools/<skill>/...`.
+
 ### 5) Send a message
 
 Open a chat with your bot (or add it into a group) and send:

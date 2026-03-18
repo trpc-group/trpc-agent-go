@@ -10,6 +10,8 @@
 package deps
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"os"
 	"path/filepath"
@@ -90,6 +92,133 @@ func TestBuildPlanForSources_SystemPackages(t *testing.T) {
 	)
 }
 
+func TestBuildPlanForSources_UserInstallSteps(t *testing.T) {
+	t.Parallel()
+
+	plan, err := BuildPlanForSources(
+		t.TempDir(),
+		[]string{"test"},
+		[]Source{{
+			Name: "test",
+			Requires: Requirement{
+				Bins: []string{"eightctl", "mcporter", "nano-pdf"},
+			},
+			Install: []InstallAction{
+				{
+					Kind:   InstallKindGo,
+					Module: "github.com/example/eightctl@latest",
+					Bins:   []string{"eightctl"},
+				},
+				{
+					Kind:    InstallKindNode,
+					Package: "mcporter",
+					Bins:    []string{"mcporter"},
+				},
+				{
+					Kind:    InstallKindUV,
+					Package: "nano-pdf",
+					Bins:    []string{"nano-pdf"},
+				},
+			},
+		}},
+	)
+	require.NoError(t, err)
+	require.Len(t, plan.Steps, 4)
+	require.Equal(t, stepKindVenv, plan.Steps[0].Kind)
+	require.Equal(t, stepKindPython, plan.Steps[1].Kind)
+	require.Contains(t, plan.Steps[1].CommandLine, "nano-pdf")
+	require.Equal(t, stepKindCommand, plan.Steps[2].Kind)
+	require.Contains(
+		t,
+		plan.Steps[2].CommandLine,
+		"github.com/example/eightctl@latest",
+	)
+	require.Equal(t, stepKindCommand, plan.Steps[3].Kind)
+	require.Contains(t, plan.Steps[3].CommandLine, "mcporter")
+	require.Empty(t, plan.Unresolved.Bins)
+}
+
+func TestBuildPlanForSources_AnyBinChoosesFirstInstallAction(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	manager := DetectPackageManager()
+	if manager == "" {
+		t.Skip("no supported package manager")
+	}
+
+	primary := InstallAction{
+		Kind: manager,
+		Bins: []string{"preferred"},
+	}
+	fallback := InstallAction{
+		Kind: manager,
+		Bins: []string{"fallback"},
+	}
+	switch manager {
+	case InstallKindBrew:
+		primary.Formula = "preferred-pkg"
+		fallback.Formula = "fallback-pkg"
+	default:
+		primary.Package = "preferred-pkg"
+		fallback.Package = "fallback-pkg"
+	}
+
+	plan, err := BuildPlanForSources(
+		t.TempDir(),
+		[]string{"spotify"},
+		[]Source{{
+			Name: "spotify",
+			Requires: Requirement{
+				AnyBins: []string{"preferred", "fallback"},
+			},
+			Install: []InstallAction{primary, fallback},
+		}},
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, plan.Steps)
+	last := plan.Steps[len(plan.Steps)-1]
+	require.Equal(t, stepKindSystem, last.Kind)
+	require.Contains(t, last.CommandLine, "preferred-pkg")
+	require.NotContains(t, last.CommandLine, "fallback-pkg")
+}
+
+func TestBuildPlanForSources_DownloadActionWithoutBins(t *testing.T) {
+	t.Parallel()
+
+	plan, err := BuildPlanForSources(
+		t.TempDir(),
+		[]string{"tts"},
+		[]Source{{
+			Name: "tts",
+			Requires: Requirement{
+				Env: []string{"SHERPA_ONNX_RUNTIME_DIR"},
+			},
+			Install: []InstallAction{{
+				Kind:      InstallKindDownload,
+				URL:       "https://example.com/runtime.tar.gz",
+				Archive:   "tar.gz",
+				Extract:   true,
+				TargetDir: "runtime",
+			}},
+		}},
+	)
+	require.NoError(t, err)
+	require.Len(t, plan.Steps, 1)
+	require.Equal(t, stepKindDownload, plan.Steps[0].Kind)
+	require.Equal(
+		t,
+		filepath.Join(
+			plan.Toolchain.StateDir,
+			defaultToolsDir,
+			"tts",
+			"runtime",
+		),
+		plan.Steps[0].TargetPath,
+	)
+}
+
 func TestBuildPlan_ResolvesBuiltinProfiles(t *testing.T) {
 	t.Parallel()
 
@@ -139,6 +268,7 @@ func TestApplyPlan_RunsStepsAndCapturesFailures(t *testing.T) {
 	result, err := ApplyPlan(context.Background(), plan)
 	require.NoError(t, err)
 	require.Len(t, result.Steps, 1)
+	require.Equal(t, stepStatusApplied, result.Steps[0].Status)
 	require.Equal(t, 0, result.Steps[0].ExitCode)
 	require.Contains(
 		t,
@@ -167,6 +297,7 @@ func TestApplyPlan_RunsStepsAndCapturesFailures(t *testing.T) {
 	result, err = ApplyPlan(context.Background(), failPlan)
 	require.Error(t, err)
 	require.Len(t, result.Steps, 1)
+	require.Equal(t, stepStatusFailed, result.Steps[0].Status)
 	require.Equal(t, 3, result.Steps[0].ExitCode)
 	require.Equal(t, "fail", result.Steps[0].Output)
 }
@@ -182,8 +313,9 @@ func TestApplyPlan_RejectsUnsupportedExecutable(t *testing.T) {
 		}},
 	})
 	require.Error(t, err)
-	require.Empty(t, result.Steps)
-	require.Contains(t, err.Error(), "invalid")
+	require.Len(t, result.Steps, 1)
+	require.Equal(t, stepStatusFailed, result.Steps[0].Status)
+	require.Contains(t, result.Steps[0].Error, "invalid")
 }
 
 func TestApplyPlan_RejectsRootOnlyStep(t *testing.T) {
@@ -199,9 +331,43 @@ func TestApplyPlan_RejectsRootOnlyStep(t *testing.T) {
 			RequiresRoot: true,
 		}},
 	})
-	require.Error(t, err)
-	require.Empty(t, result.Steps)
-	require.Contains(t, err.Error(), "requires root privileges")
+	require.NoError(t, err)
+	require.Len(t, result.Steps, 1)
+	require.Equal(t, stepStatusDeferred, result.Steps[0].Status)
+	require.Contains(t, result.Steps[0].Error, "requires root privileges")
+}
+
+func TestApplyPlan_DownloadStepExtractsArchive(t *testing.T) {
+	t.Parallel()
+
+	archivePath := filepath.Join(t.TempDir(), "runtime.tar.gz")
+	writeTarGzArchive(
+		t,
+		archivePath,
+		map[string]string{
+			"pkg/bin/tool": "hello",
+		},
+	)
+
+	target := filepath.Join(t.TempDir(), "out")
+	result, err := ApplyPlan(context.Background(), Plan{
+		Steps: []Step{{
+			Label:           "download runtime",
+			Kind:            stepKindDownload,
+			URL:             "file://" + archivePath,
+			TargetPath:      target,
+			Archive:         "tar.gz",
+			Extract:         true,
+			StripComponents: 1,
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Steps, 1)
+	require.Equal(t, stepStatusApplied, result.Steps[0].Status)
+
+	data, err := os.ReadFile(filepath.Join(target, "bin", "tool"))
+	require.NoError(t, err)
+	require.Equal(t, "hello", string(data))
 }
 
 func TestInstallHelpers(t *testing.T) {
@@ -231,6 +397,15 @@ func TestInstallHelpers(t *testing.T) {
 	)
 	require.Equal(
 		t,
+		[]string{"tap/tool"},
+		packagesForAction(InstallAction{
+			Kind:    InstallKindBrew,
+			Formula: "tool",
+			Tap:     "tap",
+		}),
+	)
+	require.Equal(
+		t,
 		[]string{"a", "b"},
 		packagesForAction(InstallAction{
 			Kind:     InstallKindAPT,
@@ -244,6 +419,14 @@ func TestInstallHelpers(t *testing.T) {
 			Package: "fallback",
 		}),
 	)
+	require.Equal(
+		t,
+		[]string{"github.com/example/tool@latest"},
+		packagesForAction(InstallAction{
+			Kind:   InstallKindGo,
+			Module: "github.com/example/tool@latest",
+		}),
+	)
 
 	covered := map[string]struct{}{
 		"one": {},
@@ -252,13 +435,20 @@ func TestInstallHelpers(t *testing.T) {
 	require.False(t, anyCovered([]string{"two"}, covered))
 
 	unresolved := unresolvedMissing(
-		InstallKindAPT,
+		Platform{
+			GOOS:           runtime.GOOS,
+			PackageManager: InstallKindAPT,
+		},
 		[]Source{{
 			Name: "demo",
 			Install: []InstallAction{{
 				Kind:     InstallKindAPT,
 				Packages: []string{"pkg"},
 				Bins:     []string{"one"},
+			}, {
+				Kind:   InstallKindGo,
+				Module: "example.com/two@latest",
+				Bins:   []string{"two"},
 			}},
 		}},
 		Missing{
@@ -266,7 +456,7 @@ func TestInstallHelpers(t *testing.T) {
 			AnyBins: [][]string{{"one", "other"}, {"x", "y"}},
 		},
 	)
-	require.Equal(t, []string{"two"}, unresolved.Bins)
+	require.Empty(t, unresolved.Bins)
 	require.Equal(t, [][]string{{"x", "y"}}, unresolved.AnyBins)
 
 	stateDir := t.TempDir()
@@ -297,6 +487,35 @@ func TestInstallHelpers(t *testing.T) {
 			{Name: "b"},
 		}),
 	)
+}
+
+func writeTarGzArchive(
+	t *testing.T,
+	path string,
+	files map[string]string,
+) {
+	t.Helper()
+
+	file, err := os.Create(path)
+	require.NoError(t, err)
+	defer file.Close()
+
+	gz := gzip.NewWriter(file)
+	defer gz.Close()
+
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+
+	for name, body := range files {
+		hdr := &tar.Header{
+			Name: name,
+			Mode: 0o755,
+			Size: int64(len(body)),
+		}
+		require.NoError(t, tw.WriteHeader(hdr))
+		_, err := tw.Write([]byte(body))
+		require.NoError(t, err)
+	}
 }
 
 func writeTestCommand(

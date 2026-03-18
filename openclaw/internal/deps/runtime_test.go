@@ -208,6 +208,38 @@ func TestInspectSourceAndNormalizeMissing(t *testing.T) {
 	)
 }
 
+func TestInspectSource_FindsManagedBin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("script assertions run on unix-like systems")
+	}
+
+	stateDir := t.TempDir()
+	binDir := ManagedBinDir(stateDir)
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	writeTestCommand(
+		t,
+		binDir,
+		"managed-tool",
+		"printf managed",
+	)
+
+	report, missing, err := inspectSource(
+		DetectToolchain(stateDir),
+		Source{
+			Name: "managed",
+			Requires: Requirement{
+				Bins: []string{"managed-tool"},
+			},
+		},
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, report.Bins, 1)
+	require.True(t, report.Bins[0].Found)
+	require.Contains(t, report.Bins[0].Path, "managed-tool")
+	require.Empty(t, missing.Bins)
+}
+
 func TestCheckPythonPackages_CommandFailure(t *testing.T) {
 	t.Parallel()
 

@@ -45,6 +45,9 @@ func planStepCommand(
 	case stepKindPython, stepKindVenv:
 		spec, err = pythonCommandSpec(step.Command[0])
 		env = mergedPlanEnv(toolchain)
+	case stepKindCommand:
+		spec, err = resolveExecutable(step.Command[0], "")
+		env = mergedPlanEnv(toolchain)
 	default:
 		return nil, fmt.Errorf("unsupported step kind %q", step.Kind)
 	}
@@ -52,7 +55,7 @@ func planStepCommand(
 		return nil, err
 	}
 	cmd = newExecCommand(spec, step.Command[1:]...)
-	cmd.Env = env
+	cmd.Env = mergeStepEnv(env, step.Env)
 	return cmd, nil
 }
 
@@ -176,6 +179,20 @@ func newExecCommand(
 		Path: spec.path,
 		Args: append([]string{spec.path}, args...),
 	}
+}
+
+func mergeStepEnv(
+	base []string,
+	overrides map[string]string,
+) []string {
+	if len(overrides) == 0 {
+		return base
+	}
+	out := append([]string(nil), base...)
+	for key, value := range overrides {
+		out = setPlanEnv(out, key, value)
+	}
+	return out
 }
 
 func commandDir(command string) string {

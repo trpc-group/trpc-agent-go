@@ -72,6 +72,32 @@ func TestPlanStepCommand(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, managerPath, cmd.Path)
 	require.Equal(t, []string{managerPath, "install", "-y"}, cmd.Args)
+
+	commandPath := writeTestCommand(
+		t,
+		t.TempDir(),
+		"custom-tool",
+		"printf command",
+	)
+	cmd, err = planStepCommand(Toolchain{StateDir: stateDir}, Step{
+		Kind:    stepKindCommand,
+		Command: []string{commandPath, "--version"},
+		Env: map[string]string{
+			envGoBin: "/tmp/bin",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, commandPath, cmd.Path)
+	require.Equal(
+		t,
+		[]string{commandPath, "--version"},
+		cmd.Args,
+	)
+	require.Contains(
+		t,
+		strings.Join(cmd.Env, "\n"),
+		envGoBin+"=/tmp/bin",
+	)
 }
 
 func TestCombinedOutputContext(t *testing.T) {
