@@ -27,8 +27,9 @@ const (
 // SkillStager materializes a skill into the current workspace.
 //
 // Implementations may copy, mount, preload, or no-op. The returned
-// WorkspaceSkillDir must be a workspace-relative path that remains
-// within the known workspace roots.
+// WorkspaceSkillDir must be the workspace-relative directory of the
+// specific staged skill and must remain within the known workspace
+// roots.
 type SkillStager interface {
 	StageSkill(
 		ctx context.Context,
@@ -47,13 +48,19 @@ type SkillStageRequest struct {
 // SkillStageResult reports where the staged skill lives inside the
 // workspace.
 type SkillStageResult struct {
+	// WorkspaceSkillDir is the workspace-relative directory of the
+	// staged skill, such as "skills/weather" or
+	// "work/custom/weather". It must point to the specific skill
+	// directory, not just the shared "skills" root, and it must not
+	// be a sandbox absolute path like "/sandbox/workspace/skills".
 	WorkspaceSkillDir string
 }
 
 // WithSkillStager overrides the strategy used to materialize skills
 // into the workspace.
 //
-// When unset, RunTool uses the default copy-based stager.
+// When unset, RunTool uses the default copy-based stager, which stages
+// the skill under "skills/<skill-name>".
 func WithSkillStager(stager SkillStager) func(*RunTool) {
 	return func(t *RunTool) {
 		t.skillStager = stager
