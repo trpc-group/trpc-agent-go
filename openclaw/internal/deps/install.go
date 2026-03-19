@@ -48,6 +48,7 @@ type Step struct {
 	CommandLine     string            `json:"command_line"`
 	RequiresRoot    bool              `json:"requires_root,omitempty"`
 	Env             map[string]string `json:"env,omitempty"`
+	EnsureDirs      []string          `json:"ensure_dirs,omitempty"`
 	URL             string            `json:"url,omitempty"`
 	TargetPath      string            `json:"target_path,omitempty"`
 	Archive         string            `json:"archive,omitempty"`
@@ -401,6 +402,8 @@ func actionNeeded(
 	anyBins [][]string,
 	satisfiedGroups map[string]struct{},
 ) bool {
+	// Actions without declared bins cannot be filtered precisely, so
+	// keep the conservative default and include them in the plan.
 	if len(action.Bins) == 0 {
 		return true
 	}
@@ -736,6 +739,7 @@ func goInstallStep(
 		Kind:        stepKindCommand,
 		Command:     command,
 		CommandLine: shellQuote(command...),
+		EnsureDirs:  []string{binDir},
 		Env: map[string]string{
 			envGoBin: binDir,
 		},
@@ -754,7 +758,7 @@ func npmInstallStep(
 		)
 	}
 
-	prefix := ManagedPythonRoot(toolchain.StateDir)
+	prefix := ManagedToolPrefix(toolchain.StateDir)
 	command := append(
 		[]string{"npm", "install", "-g", "--prefix", prefix},
 		packages...,
@@ -764,6 +768,7 @@ func npmInstallStep(
 		Kind:        stepKindCommand,
 		Command:     command,
 		CommandLine: shellQuote(command...),
+		EnsureDirs:  []string{prefix},
 	}, nil
 }
 
@@ -848,6 +853,15 @@ func ensureStepWorkingDirs(
 ) error {
 	switch step.Kind {
 	case stepKindCommand:
+		dirs := normalizeStrings(step.EnsureDirs)
+		for _, dir := range dirs {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
+		}
+		if len(dirs) > 0 {
+			return nil
+		}
 		if dir := strings.TrimSpace(step.Env[envGoBin]); dir != "" {
 			return os.MkdirAll(dir, 0o755)
 		}

@@ -212,11 +212,51 @@ metadata:
 	require.Empty(t, stderr)
 	require.Contains(t, stdout, "Selected: skillonly")
 	require.Contains(t, stdout, "Plan: nothing to install")
+	require.Contains(t, stdout, "Unresolved:")
+	require.Contains(t, stdout, "definitely_missing_bin")
 	require.NotContains(
 		t,
 		stdout,
 		"definitely-missing-python-package",
 	)
+}
+
+func TestRunBootstrapDeps_ApplyPrintsUnresolved(t *testing.T) {
+	root := t.TempDir()
+	writeDepsSkill(t, root, "skillonly", `---
+name: skillonly
+description: skill-only deps
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "bins": ["definitely_missing_bin"],
+          },
+      },
+  }
+---
+
+# skillonly
+`)
+
+	stdout, stderr := captureInspectOutput(t, func() {
+		require.Equal(t, 0, runBootstrap([]string{
+			bootstrapCmdDeps,
+			"-state-dir",
+			t.TempDir(),
+			"-skills-root",
+			root,
+			"-skill",
+			"skillonly",
+			"-apply",
+		}))
+	})
+
+	require.Empty(t, stderr)
+	require.Contains(t, stdout, "Unresolved:")
+	require.Contains(t, stdout, "definitely_missing_bin")
 }
 
 func TestBuildPlanForSources_OfficialSkillMetadataBuilds(

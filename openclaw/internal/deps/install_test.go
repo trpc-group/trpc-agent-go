@@ -95,29 +95,35 @@ func TestBuildPlanForSources_SystemPackages(t *testing.T) {
 func TestBuildPlanForSources_UserInstallSteps(t *testing.T) {
 	t.Parallel()
 
+	const (
+		goBinName   = "definitely-missing-go-bin"
+		nodeBinName = "definitely-missing-node-bin"
+		uvBinName   = "definitely-missing-uv-bin"
+	)
+
 	plan, err := BuildPlanForSources(
 		t.TempDir(),
 		[]string{"test"},
 		[]Source{{
 			Name: "test",
 			Requires: Requirement{
-				Bins: []string{"eightctl", "mcporter", "nano-pdf"},
+				Bins: []string{goBinName, nodeBinName, uvBinName},
 			},
 			Install: []InstallAction{
 				{
 					Kind:   InstallKindGo,
 					Module: "github.com/example/eightctl@latest",
-					Bins:   []string{"eightctl"},
+					Bins:   []string{goBinName},
 				},
 				{
 					Kind:    InstallKindNode,
 					Package: "mcporter",
-					Bins:    []string{"mcporter"},
+					Bins:    []string{nodeBinName},
 				},
 				{
 					Kind:    InstallKindUV,
 					Package: "nano-pdf",
-					Bins:    []string{"nano-pdf"},
+					Bins:    []string{uvBinName},
 				},
 			},
 		}},
@@ -136,6 +142,108 @@ func TestBuildPlanForSources_UserInstallSteps(t *testing.T) {
 	require.Equal(t, stepKindCommand, plan.Steps[3].Kind)
 	require.Contains(t, plan.Steps[3].CommandLine, "mcporter")
 	require.Empty(t, plan.Unresolved.Bins)
+}
+
+func TestInstallStepHelpers(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	goStep, err := goInstallStep(Toolchain{StateDir: stateDir}, InstallAction{
+		Kind:   InstallKindGo,
+		Module: "example.com/tool@latest",
+	})
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		[]string{ManagedBinDir(stateDir)},
+		goStep.EnsureDirs,
+	)
+	require.Equal(t, ManagedBinDir(stateDir), goStep.Env[envGoBin])
+
+	npmStep, err := npmInstallStep(
+		Toolchain{StateDir: stateDir},
+		InstallAction{
+			Kind:    InstallKindNPM,
+			Package: "pkg",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		[]string{ManagedToolPrefix(stateDir)},
+		npmStep.EnsureDirs,
+	)
+	require.Contains(t, npmStep.Command, ManagedToolPrefix(stateDir))
+}
+
+func TestEnsureStepWorkingDirs_UsesEnsureDirs(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	ensureDir := filepath.Join(root, "npm-prefix")
+	err := ensureStepWorkingDirs(Toolchain{}, Step{
+		Kind:       stepKindCommand,
+		EnsureDirs: []string{"", ensureDir},
+		Env: map[string]string{
+			envGoBin: filepath.Join(root, "ignored"),
+		},
+	})
+	require.NoError(t, err)
+	info, statErr := os.Stat(ensureDir)
+	require.NoError(t, statErr)
+	require.True(t, info.IsDir())
+	_, statErr = os.Stat(filepath.Join(root, "ignored"))
+	require.Error(t, statErr)
+}
+
+func TestActionMatchesPlatform(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, actionMatchesPlatform(InstallAction{}, runtime.GOOS))
+	require.True(t, actionMatchesPlatform(
+		InstallAction{OS: []string{runtime.GOOS}},
+		runtime.GOOS,
+	))
+	require.True(t, actionMatchesPlatform(
+		InstallAction{OS: []string{"win32"}},
+		"windows",
+	))
+	require.False(t, actionMatchesPlatform(
+		InstallAction{OS: []string{"darwin"}},
+		"linux",
+	))
+}
+
+func TestSelectInstallActionsForMissing(t *testing.T) {
+	t.Parallel()
+
+	actions := selectInstallActionsForMissing(
+		Platform{GOOS: "linux", PackageManager: InstallKindAPT},
+		[]Source{{
+			Name: "demo",
+			Install: []InstallAction{
+				{
+					Kind: InstallKindGo,
+					Bins: []string{"go-bin"},
+				},
+				{
+					Kind: InstallKindGo,
+					Bins: []string{"go-bin"},
+					OS:   []string{"darwin"},
+				},
+				{
+					Kind: InstallKindNPM,
+					Bins: []string{"alt-bin"},
+				},
+			},
+		}},
+		Missing{
+			AnyBins: [][]string{{"go-bin", "alt-bin"}},
+		},
+		isCommandInstallKind,
+	)
+	require.Len(t, actions, 1)
+	require.Equal(t, InstallKindGo, actions[0].Action.Kind)
 }
 
 func TestBuildPlanForSources_AnyBinChoosesFirstInstallAction(

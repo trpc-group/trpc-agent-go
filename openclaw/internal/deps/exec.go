@@ -46,8 +46,12 @@ func planStepCommand(
 		spec, err = pythonCommandSpec(step.Command[0])
 		env = mergedPlanEnv(toolchain)
 	case stepKindCommand:
-		spec, err = resolveExecutable(step.Command[0], "")
 		env = mergedPlanEnv(toolchain)
+		spec, err = resolveExecutable(
+			step.Command[0],
+			"",
+			envValue(env, envPath),
+		)
 	default:
 		return nil, fmt.Errorf("unsupported step kind %q", step.Kind)
 	}
@@ -108,20 +112,20 @@ func combinedOutputContext(
 }
 
 func pythonCommandSpec(command string) (executableSpec, error) {
-	return resolveExecutable(command, "")
+	return resolveExecutable(command, "", "")
 }
 
 func systemCommandSpec(manager string) (executableSpec, error) {
 	name := strings.ToLower(commandBase(manager))
 	switch name {
 	case InstallKindAPT:
-		return resolveExecutable(manager, name)
+		return resolveExecutable(manager, name, "")
 	case InstallKindBrew:
-		return resolveExecutable(manager, name)
+		return resolveExecutable(manager, name, "")
 	case InstallKindDNF:
-		return resolveExecutable(manager, name)
+		return resolveExecutable(manager, name, "")
 	case InstallKindYUM:
-		return resolveExecutable(manager, name)
+		return resolveExecutable(manager, name, "")
 	default:
 		return executableSpec{}, fmt.Errorf(
 			"unsupported package manager %q",
@@ -133,6 +137,7 @@ func systemCommandSpec(manager string) (executableSpec, error) {
 func resolveExecutable(
 	command string,
 	fallback string,
+	searchPath string,
 ) (executableSpec, error) {
 	name := strings.TrimSpace(command)
 	if name == "" {
@@ -150,11 +155,39 @@ func resolveExecutable(
 		return validateExecutablePath(path)
 	}
 
-	path, err := exec.LookPath(name)
+	path, err := lookPath(name, searchPath)
 	if err != nil {
 		return executableSpec{}, err
 	}
 	return validateExecutablePath(path)
+}
+
+func lookPath(
+	name string,
+	searchPath string,
+) (string, error) {
+	if strings.TrimSpace(searchPath) == "" {
+		return exec.LookPath(name)
+	}
+	for _, dir := range filepath.SplitList(searchPath) {
+		dir = strings.TrimSpace(dir)
+		if dir == "" {
+			continue
+		}
+		candidate := filepath.Join(dir, name)
+		if runtime.GOOS == "windows" {
+			for _, ext := range []string{"", ".exe", ".cmd", ".bat"} {
+				if _, err := os.Stat(candidate + ext); err == nil {
+					return candidate + ext, nil
+				}
+			}
+			continue
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return exec.LookPath(name)
 }
 
 func validateExecutablePath(path string) (executableSpec, error) {
@@ -193,6 +226,19 @@ func mergeStepEnv(
 		out = setPlanEnv(out, key, value)
 	}
 	return out
+}
+
+func envValue(
+	env []string,
+	key string,
+) string {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimPrefix(item, prefix)
+		}
+	}
+	return ""
 }
 
 func commandDir(command string) string {
