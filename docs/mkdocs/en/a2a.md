@@ -41,6 +41,13 @@ The framework automatically extracts Agent metadata (name, description, tools, e
 - Capability declarations (streaming support)
 - Skill lists (automatically generated based on Agent tools)
 
+It is important to distinguish these two layers:
+
+- The `streaming` flag in `WithAgent(agent, streaming)` is primarily used to declare `AgentCard.Capabilities.Streaming`.
+- It is not the global execution switch for the `runner`, and it does not directly control the internal message processing pipeline.
+- If you use `WithRunner(...) + WithAgentCard(...)`, the streaming capability should be declared directly on the `AgentCard`, for example via `NewAgentCard(..., streaming)`.
+- In `WithRunner(...) + WithAgentCard(...)` mode, `skills` are owned by the caller. `NewAgentCard(...)` only gives you a default structure and default skill; it does not infer the full tool list from a custom `runner`.
+
 ### Message Protocol Conversion
 
 The framework includes a built-in `messageProcessor` that implements bidirectional conversion between A2A protocol messages and Agent message formats, so users don't need to worry about message format conversion details.
@@ -136,7 +143,9 @@ func main() {
 
 #### Custom Runner (WithRunner)
 
-By default, A2A Server automatically creates a Runner for you. If you need finer control — such as injecting a MemoryService, customizing SessionService — use `WithRunner`:
+By default, A2A Server automatically creates a Runner for you. If you need finer control, such as injecting a MemoryService or customizing SessionService, use `WithRunner`.
+
+Note: `WithRunner` is mutually exclusive with `WithAgent`. When you provide `WithRunner`, you must also provide the public agent identity explicitly via `WithAgentCard`:
 
 ```go
 import (
@@ -148,6 +157,7 @@ import (
 
 memoryService := inmemory.NewMemoryService()
 sessionService := sessionmemory.NewSessionService()
+streaming := true
 
 r := runner.NewRunner(
 	agent.Info().Name,
@@ -156,12 +166,68 @@ r := runner.NewRunner(
 	runner.WithMemoryService(memoryService),
 )
 
+card, _ := a2a.NewAgentCard(agent.Info().Name, agent.Info().Description, "localhost:8080", streaming)
+
 server, _ := a2a.New(
-	a2a.WithHost("localhost:8080"),
-	a2a.WithAgent(agent, true),
 	a2a.WithRunner(r),
+	a2a.WithAgentCard(card),
 )
 ```
+
+In this `runner-only` mode, streaming capability is no longer passed through `WithAgent(...)`; it is declared directly by the `AgentCard.Capabilities.Streaming` field provided via `WithAgentCard(...)`.
+
+`examples/a2aagent` also includes an explicit example. Use `-server-mode runner-card` to switch the server construction path to `WithRunner(...) + WithAgentCard(...)`:
+
+```bash
+cd examples/a2aagent
+go run . -server-mode runner-card
+```
+
+If you only need a default-compliant card quickly, prefer `NewAgentCard(...)` instead of manually filling in `Name`, `Description`, `Capabilities`, and the default skill. If your `runner` needs a more accurate `skills` list, populate and maintain it in your own code.
+
+#### Dynamically Updating AgentCard
+
+If you need to update the exposed `AgentCard` at runtime, wire the underlying `a2aprotocolserver.WithAgentCardHandler(...)` through `WithExtraA2AOptions(...)`, and use `NewAgentCardHandler(...)` to serve the current snapshot:
+
+```go
+import (
+	"sync"
+
+	a2aprotocolserver "trpc.group/trpc-go/trpc-a2a-go/server"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
+)
+
+card, _ := a2a.NewAgentCard(agent.Info().Name, agent.Info().Description, "localhost:8080", true)
+var (
+	cardMu      sync.RWMutex
+	currentCard = card
+)
+
+server, _ := a2a.New(
+	a2a.WithRunner(runner.NewRunner(agent.Info().Name, agent)),
+	a2a.WithAgentCard(currentCard),
+	a2a.WithExtraA2AOptions(
+		a2aprotocolserver.WithAgentCardHandler(
+			a2a.NewAgentCardHandler(func() a2aprotocolserver.AgentCard {
+				cardMu.RLock()
+				defer cardMu.RUnlock()
+				return currentCard
+			}),
+		),
+	),
+)
+
+cardMu.Lock()
+updated := currentCard
+updated.Description = "new description"
+currentCard = updated
+cardMu.Unlock()
+```
+
+This only updates the exposed metadata. It does not modify the underlying `runner`, `taskManager`, or message processing pipeline. The caller remains responsible for where `currentCard` is stored and how it is updated.
+
+Treat fields such as `Name` and `URL` as startup-time invariants, because they also participate in identity, routing, or discovery semantics. If those fields must change, rebuilding the server is safer than only updating the card endpoint.
 
 #### Server-Side Message Processing Hook (WithProcessMessageHook)
 
@@ -449,6 +515,16 @@ a2aAgent, err := a2aagent.New(
 	a2aagent.WithEnableStreaming(true),
 )
 ```
+
+Whether the client sends a streaming request follows this priority:
+
+1. Per-call override via `agent.WithStream(...)`
+2. `a2aagent.WithEnableStreaming(...)`
+3. Remote `AgentCard.Capabilities.Streaming`
+4. Default false
+
+In other words, the server-side streaming declaration mainly tells the client whether the remote A2A service supports streaming requests. The client then decides whether to send streaming or non-streaming requests based on that capability.  
+If the client explicitly sets `agent.WithStream(...)` or `a2aagent.WithEnableStreaming(...)`, that explicit choice overrides the `AgentCard` declaration.
 
 ### Complete Example: A2A Server + A2AAgent Combined Usage
 
@@ -773,10 +849,10 @@ Through the combined use of A2A Server and A2AAgent, you can easily build distri
 
 | Option | Description |
 |--------|-------------|
-| `WithAgent(agent, streaming)` | Set the Agent and whether to enable streaming |
+| `WithAgent(agent, streaming)` | Set the Agent and whether to enable streaming; mutually exclusive with `WithRunner` |
 | `WithHost(host)` | Set the service address, supports URLs with path |
 | `WithAgentCard(card)` | Custom AgentCard (overrides auto-generation) |
-| `WithRunner(runner)` | Custom Runner (inject Memory, Session, etc.) |
+| `WithRunner(runner)` | Custom Runner (inject Memory, Session, etc.); requires `WithAgentCard` |
 | `WithProcessMessageHook(hook)` | Server-side message processing Hook (middleware pattern) |
 | `WithProcessorBuilder(builder)` | Fully custom message processor |
 | `WithTaskManagerBuilder(builder)` | Custom task manager |

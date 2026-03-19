@@ -20,7 +20,6 @@ import (
 	protocol "trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
 )
@@ -79,9 +78,11 @@ func newA2ASurface(
 		userIDHeader = defaultA2AUserIDHeader
 	}
 
-	card := buildOpenClawA2ACard(ag, opts, host)
+	card, err := buildOpenClawA2ACard(ag, opts, host)
+	if err != nil {
+		return A2ASurface{}, fmt.Errorf("build a2a agent card failed: %w", err)
+	}
 	srv, err := a2aserver.New(
-		a2aserver.WithAgent(ag, opts.A2AStreaming),
 		a2aserver.WithRunner(procRunner),
 		a2aserver.WithAgentCard(card),
 		a2aserver.WithUserIDHeader(userIDHeader),
@@ -106,7 +107,7 @@ func buildOpenClawA2ACard(
 	ag agent.Agent,
 	opts runOptions,
 	host string,
-) a2a.AgentCard {
+) (a2a.AgentCard, error) {
 	info := ag.Info()
 	name := strings.TrimSpace(opts.A2AName)
 	if name == "" {
@@ -117,28 +118,17 @@ func buildOpenClawA2ACard(
 		desc = info.Description
 	}
 
-	return a2a.AgentCard{
-		Name:        name,
-		Description: desc,
-		URL:         host,
-		Capabilities: a2a.AgentCapabilities{
-			Streaming: boolPtr(opts.A2AStreaming),
-			Extensions: []a2a.AgentExtension{{
-				URI: ia2a.ExtensionTRPCA2AVersion,
-				Params: map[string]any{
-					a2aVersionKey: ia2a.InteractionVersion,
-				},
-			}},
-		},
-		Skills: buildOpenClawA2ASkills(
-			ag,
-			opts.A2AAdvertiseTools,
-			name,
-			desc,
-		),
-		DefaultInputModes:  []string{a2aInputModeText},
-		DefaultOutputModes: []string{a2aOutputModeText},
+	card, err := a2aserver.NewAgentCard(name, desc, host, opts.A2AStreaming)
+	if err != nil {
+		return a2a.AgentCard{}, err
 	}
+	card.Skills = buildOpenClawA2ASkills(
+		ag,
+		opts.A2AAdvertiseTools,
+		name,
+		desc,
+	)
+	return card, nil
 }
 
 func buildOpenClawA2ASkills(
@@ -250,6 +240,3 @@ func a2aStartupLines(surface A2ASurface) []startupLogLine {
 	}
 }
 
-func boolPtr(v bool) *bool {
-	return &v
-}

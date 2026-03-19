@@ -40,6 +40,7 @@ var (
 	modelName  = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-chat"), "Model to use")
 	host       = flag.String("host", "0.0.0.0:8888", "Host to use")
 	streaming  = flag.Bool("streaming", true, "Streaming to use")
+	serverMode = flag.String("server-mode", "agent", "A2A server build mode: agent or runner-card")
 	remoteOnly = flag.Bool("remote-only", false, "Only output remote agent responses")
 )
 
@@ -230,8 +231,7 @@ func runA2AServerByAgent(agentName, desc, host string) {
 
 	// Create in-memory session service for the runner.
 	runnerSessionService := sessionmemory.NewSessionService()
-
-	server, err := a2a.New(
+	commonOpts := []a2a.Option{
 		a2a.WithDebugLogging(false),
 		a2a.WithErrorHandler(func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
 			errMsg := protocol.NewMessage(
@@ -242,22 +242,6 @@ func runA2AServerByAgent(agentName, desc, host string) {
 			)
 			return &errMsg, nil
 		}),
-		a2a.WithHost(host),
-		a2a.WithAgent(remoteAgent, *streaming),
-
-		// Example: Use WithRunner to provide a custom Runner.
-		// When both WithAgent and WithRunner are provided, WithRunner takes precedence
-		// for message processing; WithAgent is only used for auto-generating the AgentCard.
-		// This gives full control over runner creation, including:
-		// - Injecting MemoryService for conversation memory
-		// - Customizing SessionService
-		a2a.WithRunner(runner.NewRunner(
-			remoteAgent.Info().Name,
-			remoteAgent,
-			runner.WithSessionService(runnerSessionService),
-			runner.WithMemoryService(memoryService),
-		)),
-
 		// Example: Use WithProcessMessageHook to inspect/modify incoming A2A messages.
 		// This can read custom metadata injected by the client's BuildMessageHook.
 		a2a.WithProcessMessageHook(
@@ -265,7 +249,37 @@ func runA2AServerByAgent(agentName, desc, host string) {
 				return &hookProcessor{next: next}
 			},
 		),
-	)
+	}
+
+	var serverOpts []a2a.Option
+	switch *serverMode {
+	case "agent":
+		serverOpts = append(serverOpts,
+			a2a.WithHost(host),
+			a2a.WithAgent(remoteAgent, *streaming),
+		)
+	case "runner-card":
+		info := remoteAgent.Info()
+		card, err := a2a.NewAgentCard(info.Name, info.Description, host, *streaming)
+		if err != nil {
+			log.Fatalf("Failed to build agent card: %v", err)
+		}
+		serverOpts = append(serverOpts,
+			a2a.WithAgentCard(card),
+			// In runner-only mode, the public agent identity must be supplied
+			// explicitly via WithAgentCard.
+			a2a.WithRunner(runner.NewRunner(
+				remoteAgent.Info().Name,
+				remoteAgent,
+				runner.WithSessionService(runnerSessionService),
+				runner.WithMemoryService(memoryService),
+			)),
+		)
+	default:
+		log.Fatalf("Unsupported server mode %q, expected agent or runner-card", *serverMode)
+	}
+
+	server, err := a2a.New(append(commonOpts, serverOpts...)...)
 	if err != nil {
 		log.Fatalf("Failed to create a2a server: %v", err)
 	}

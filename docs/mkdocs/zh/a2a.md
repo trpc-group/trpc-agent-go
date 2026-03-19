@@ -41,6 +41,13 @@ func New(opts ...Option) (*a2a.A2AServer, error) {}
 - 能力声明（是否支持流式）
 - 技能列表（基于 Agent 的工具自动生成）
 
+这里要特别区分两层语义：
+
+- `WithAgent(agent, streaming)` 里的 `streaming`，本质上是用来声明生成出来的 `AgentCard.Capabilities.Streaming`。
+- 它不是 `runner` 的执行开关，也不是服务端内部消息处理链路的总开关。
+- 如果你走的是 `WithRunner(...) + WithAgentCard(...)` 模式，那么是否支持流式应该直接写在 `AgentCard` 上，例如通过 `NewAgentCard(..., streaming)` 来设置。
+- `WithRunner(...) + WithAgentCard(...)` 模式下，`skills` 由调用方自己维护；`NewAgentCard(...)` 只帮你生成默认结构和默认 skill，不会自动从自定义 `runner` 里推导完整工具列表。
+
 ### 消息协议转换
 
 框架内置 `messageProcessor` 实现 A2A 协议消息与 Agent 消息格式的双向转换，用户无需关心消息格式转换的细节。
@@ -132,7 +139,9 @@ func main() {
 
 #### 自定义 Runner（WithRunner）
 
-默认情况下，A2A Server 会自动为你创建一个 Runner。如果你需要更精细的控制——例如注入 MemoryService、自定义 SessionService——可以使用 `WithRunner`：
+默认情况下，A2A Server 会自动为你创建一个 Runner。如果你需要更精细的控制，例如注入 MemoryService、自定义 SessionService，可以使用 `WithRunner`。
+
+注意：`WithRunner` 与 `WithAgent` 互斥。使用 `WithRunner` 时，需要显式通过 `WithAgentCard` 提供对外暴露的 Agent 身份：
 
 ```go
 import (
@@ -144,6 +153,7 @@ import (
 
 memoryService := inmemory.NewMemoryService()
 sessionService := sessionmemory.NewSessionService()
+streaming := true
 
 r := runner.NewRunner(
 	agent.Info().Name,
@@ -152,12 +162,68 @@ r := runner.NewRunner(
 	runner.WithMemoryService(memoryService),
 )
 
+card, _ := a2a.NewAgentCard(agent.Info().Name, agent.Info().Description, "localhost:8080", streaming)
+
 server, _ := a2a.New(
-	a2a.WithHost("localhost:8080"),
-	a2a.WithAgent(agent, true),
 	a2a.WithRunner(r),
+	a2a.WithAgentCard(card),
 )
 ```
+
+在这种 `runner-only` 模式下，流式能力不再通过 `WithAgent(...)` 传入，而是直接由 `WithAgentCard(...)` 提供的 `AgentCard.Capabilities.Streaming` 决定。
+
+`examples/a2aagent` 里也提供了显式示例。使用 `-server-mode runner-card` 可以切换到 `WithRunner(...) + WithAgentCard(...)` 的建服方式：
+
+```bash
+cd examples/a2aagent
+go run . -server-mode runner-card
+```
+
+如果你只想快速得到一张符合默认约定的基础卡片，推荐直接使用 `NewAgentCard(...)`，而不是手写 `Name`、`Description`、`Capabilities` 和默认 `Skill`。如果你的 `runner` 需要暴露更准确的 `skills`，请在业务侧自己补齐和维护。
+
+#### 动态更新 AgentCard
+
+如果你希望在运行时热更新对外暴露的 `AgentCard`，可以直接通过 `WithExtraA2AOptions(...)` 接入底层 `a2a.WithAgentCardHandler(...)`，并配合 `NewAgentCardHandler(...)` 输出当前快照：
+
+```go
+import (
+	"sync"
+
+	a2aprotocolserver "trpc.group/trpc-go/trpc-a2a-go/server"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
+)
+
+card, _ := a2a.NewAgentCard(agent.Info().Name, agent.Info().Description, "localhost:8080", true)
+var (
+	cardMu      sync.RWMutex
+	currentCard = card
+)
+
+server, _ := a2a.New(
+	a2a.WithRunner(runner.NewRunner(agent.Info().Name, agent)),
+	a2a.WithAgentCard(currentCard),
+	a2a.WithExtraA2AOptions(
+		a2aprotocolserver.WithAgentCardHandler(
+			a2a.NewAgentCardHandler(func() a2aprotocolserver.AgentCard {
+				cardMu.RLock()
+				defer cardMu.RUnlock()
+				return currentCard
+			}),
+		),
+	),
+)
+
+cardMu.Lock()
+updated := currentCard
+updated.Description = "new description"
+currentCard = updated
+cardMu.Unlock()
+```
+
+这种方式只会更新对外暴露的 metadata，不会影响底层 `runner`、`taskManager` 和消息处理链路。至于 `currentCard` 存在内存、配置中心还是数据库里，由业务自己决定。
+
+同时建议把 `Name`、`URL` 这类启动期就参与路由、身份或发现语义的字段视为不可变字段；如果确实要改，优先重建 server，而不是只热更新 card endpoint。
 
 #### 服务端消息处理 Hook（WithProcessMessageHook）
 
@@ -441,6 +507,16 @@ a2aAgent, err := a2aagent.New(
 	a2aagent.WithEnableStreaming(true),
 )
 ```
+
+客户端是否发起流式请求，遵循下面的优先级：
+
+1. 单次调用显式指定的 `agent.WithStream(...)`
+2. `a2aagent.WithEnableStreaming(...)`
+3. 远端 `AgentCard.Capabilities.Streaming`
+4. 默认关闭
+
+也就是说，服务端这边的 `streaming` 声明主要是告诉客户端“我是否支持流式 A2A 请求”；客户端再基于这份 capability 决定默认发送流式还是非流式请求。  
+如果客户端显式指定了 `agent.WithStream(...)` 或 `a2aagent.WithEnableStreaming(...)`，就会覆盖 `AgentCard` 中的声明。
 
 ### 完整示例：A2A Server + A2AAgent 综合使用
 
@@ -766,10 +842,10 @@ a2aAgent, _ := a2aagent.New(
 
 | 配置项 | 说明 |
 |--------|------|
-| `WithAgent(agent, streaming)` | 设置 Agent 和是否启用流式 |
+| `WithAgent(agent, streaming)` | 设置 Agent 和是否启用流式；与 `WithRunner` 互斥 |
 | `WithHost(host)` | 设置服务地址，支持带 path 的 URL |
 | `WithAgentCard(card)` | 自定义 AgentCard（覆盖自动生成） |
-| `WithRunner(runner)` | 自定义 Runner（注入 Memory、Session 等） |
+| `WithRunner(runner)` | 自定义 Runner（注入 Memory、Session 等）；需配合 `WithAgentCard` 使用 |
 | `WithProcessMessageHook(hook)` | 服务端消息处理 Hook（中间件模式） |
 | `WithProcessorBuilder(builder)` | 完全自定义消息处理器 |
 | `WithTaskManagerBuilder(builder)` | 自定义任务管理器 |

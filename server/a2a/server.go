@@ -453,6 +453,16 @@ func (m *messageProcessor) processStreamingMessage(
 		)
 		return m.handleError(ctx, a2aMsg, true, err)
 	}
+	cleanupTask := func() {
+		if err := handler.CleanTask(&taskID); err != nil {
+			log.WarnfContext(
+				ctx,
+				"failed to clean task %s: %v",
+				taskID,
+				err,
+			)
+		}
+	}
 
 	subscriber, err := handler.SubscribeTask(&taskID)
 	if err != nil {
@@ -462,6 +472,7 @@ func (m *messageProcessor) processStreamingMessage(
 			taskID,
 			err,
 		)
+		cleanupTask()
 		return m.handleError(ctx, a2aMsg, true, err)
 	}
 
@@ -476,6 +487,7 @@ func (m *messageProcessor) processStreamingMessage(
 			err,
 		)
 		subscriber.Close()
+		cleanupTask()
 		return m.handleError(ctx, a2aMsg, true, err)
 	}
 
@@ -530,6 +542,23 @@ func (m *messageProcessor) processAgentStreamingEvents(
 			)
 		}
 	}()
+	abortStreaming := func(err error) bool {
+		if err == nil {
+			return false
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			log.WarnfContext(ctx, "streaming stopped before completion: %v", err)
+			return true
+		}
+		if handleErr := m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err); handleErr != nil {
+			log.ErrorfContext(
+				ctx,
+				"failed to handle streaming error: %v",
+				handleErr,
+			)
+		}
+		return true
+	}
 	produce := func() (*event.Event, bool) {
 		select {
 		case <-ctx.Done():
@@ -563,14 +592,18 @@ func (m *messageProcessor) processAgentStreamingEvents(
 			"failed to send task submitted message: %v",
 			err,
 		)
-		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+		if abortStreaming(err) {
+			return
+		}
 	}
 
 	// run event tunnel
 	tunnel := newEventTunnel(defaultBatchSize, defaultFlushInterval, produce, consume)
 	if err := tunnel.Run(ctx); err != nil {
 		log.WarnfContext(ctx, "Event transfer error: %v", err)
-		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+		if abortStreaming(err) {
+			return
+		}
 	}
 
 	if m.streamingEventType != StreamingEventTypeMessage {
@@ -588,7 +621,9 @@ func (m *messageProcessor) processAgentStreamingEvents(
 				"failed to send final artifact message: %v",
 				err,
 			)
-			m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+			if abortStreaming(err) {
+				return
+			}
 		}
 	}
 
@@ -606,7 +641,9 @@ func (m *messageProcessor) processAgentStreamingEvents(
 			"failed to send task completed message: %v",
 			err,
 		)
-		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+		if abortStreaming(err) {
+			return
+		}
 	}
 }
 

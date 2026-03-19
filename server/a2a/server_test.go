@@ -993,6 +993,7 @@ func TestMessageProcessor_ProcessStreamingMessage_Errors(t *testing.T) {
 
 	t.Run("runner_error", func(t *testing.T) {
 		var closed bool
+		var cleanedTaskID string
 		sub := &mockTaskSubscriber{
 			closeFunc: func() { closed = true },
 		}
@@ -1002,6 +1003,10 @@ func TestMessageProcessor_ProcessStreamingMessage_Errors(t *testing.T) {
 			},
 			subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
 				return sub, nil
+			},
+			cleanTaskFunc: func(taskID *string) error {
+				cleanedTaskID = *taskID
+				return nil
 			},
 		}
 		processor := createTestMessageProcessor()
@@ -1017,6 +1022,7 @@ func TestMessageProcessor_ProcessStreamingMessage_Errors(t *testing.T) {
 		assert.NotNil(t, result)
 		assert.NotNil(t, result.StreamingEvents)
 		assert.True(t, closed)
+		assert.Equal(t, "task-id", cleanedTaskID)
 	})
 
 	t.Run("build_task_error", func(t *testing.T) {
@@ -1034,6 +1040,7 @@ func TestMessageProcessor_ProcessStreamingMessage_Errors(t *testing.T) {
 
 	t.Run("subscribe_error", func(t *testing.T) {
 		processor := createTestMessageProcessor()
+		var cleanedTaskID string
 		handler := &mockTaskHandler{
 			buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
 				return "task", nil
@@ -1041,11 +1048,16 @@ func TestMessageProcessor_ProcessStreamingMessage_Errors(t *testing.T) {
 			subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
 				return nil, fmt.Errorf("subscribe failed")
 			},
+			cleanTaskFunc: func(taskID *string) error {
+				cleanedTaskID = *taskID
+				return nil
+			},
 		}
 		result, err := processor.processStreamingMessage(ctx, "user", "session", msg, &model.Message{}, handler, nil)
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.NotNil(t, result.StreamingEvents)
+		assert.Equal(t, "task", cleanedTaskID)
 	})
 
 	t.Run("success_path", func(t *testing.T) {
@@ -1499,8 +1511,49 @@ func TestProcessAgentStreamingEvents_ConverterError(t *testing.T) {
 		return &res, nil
 	}
 
-	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, &mockTaskSubscriber{}, &mockTaskHandler{})
+	var results []protocol.StreamingMessageResult
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			if evt.Result != nil {
+				results = append(results, evt.Result)
+			}
+			return nil
+		},
+	}
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
 	assert.True(t, handlerCalled)
+	assert.Len(t, results, 2)
+	_, isSubmitted := results[0].(*protocol.TaskStatusUpdateEvent)
+	assert.True(t, isSubmitted)
+	_, isMessage := results[1].(*protocol.Message)
+	assert.True(t, isMessage)
+}
+
+func TestProcessAgentStreamingEvents_ContextCanceledSkipsCompletion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event)
+	close(events)
+
+	proc := createTestMessageProcessor()
+
+	var results []protocol.StreamingMessageResult
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			if evt.Result != nil {
+				results = append(results, evt.Result)
+			}
+			return nil
+		},
+	}
+
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	assert.Len(t, results, 1)
+	status, ok := results[0].(*protocol.TaskStatusUpdateEvent)
+	assert.True(t, ok)
+	assert.Equal(t, protocol.TaskStateSubmitted, status.Status.State)
 }
 
 func TestProcessAgentStreamingEvents_Success(t *testing.T) {
