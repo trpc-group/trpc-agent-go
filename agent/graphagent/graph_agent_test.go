@@ -2345,3 +2345,49 @@ func TestGraphAgent_Run_TraceAfterInvokeAgent(t *testing.T) {
 	require.NotEmpty(t, outputMessages, "expected output messages attribute to be set")
 	require.Contains(t, outputMessages, "graph result")
 }
+
+func TestResolveGraphAgentErrorType(t *testing.T) {
+	testCases := []struct {
+		name               string
+		fullRespEvent      *event.Event
+		operationErrorType string
+		want               string
+	}{
+		{
+			name: "operation error wins over final success",
+			fullRespEvent: event.NewResponseEvent(
+				"inv",
+				"graph-agent",
+				&model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}}},
+			),
+			operationErrorType: model.ErrorTypeFlowError,
+			want:               model.ErrorTypeFlowError,
+		},
+		{
+			name: "final success clears prior response errors",
+			fullRespEvent: event.NewResponseEvent(
+				"inv",
+				"graph-agent",
+				&model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("ok")}}},
+			),
+			want: "",
+		},
+		{
+			name: "final error response is reported when no operation error",
+			fullRespEvent: event.NewErrorEvent(
+				"inv",
+				"graph-agent",
+				agent.ErrorTypeAgentCallbackError,
+				"callback failed",
+			),
+			want: agent.ErrorTypeAgentCallbackError,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveGraphAgentErrorType(tc.fullRespEvent, tc.operationErrorType)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}

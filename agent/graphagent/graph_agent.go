@@ -162,12 +162,12 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
 	tokenUsage := &itelemetry.TokenUsage{}
 	var fullRespEvent *event.Event
-	var responseErrorType string
+	var operationErrorType string
 	defer func() {
 		if tracingEnabled && fullRespEvent != nil {
 			itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 		}
-		tracker.SetResponseErrorType(responseErrorType)
+		tracker.SetResponseErrorType(resolveGraphAgentErrorType(fullRespEvent, operationErrorType))
 		tracker.RecordMetrics()()
 		if tracingEnabled {
 			span.End()
@@ -179,7 +179,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
 		fullRespEvent = evt
-		responseErrorType = itelemetry.ToErrorType(err, model.ErrorTypeFlowError)
+		operationErrorType = itelemetry.ToErrorType(err, model.ErrorTypeFlowError)
 		if tracingEnabled {
 			span.SetStatus(codes.Error, err.Error())
 			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
@@ -194,7 +194,7 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
 		fullRespEvent = evt
-		responseErrorType = itelemetry.ToErrorType(err, model.ErrorTypeFlowError)
+		operationErrorType = itelemetry.ToErrorType(err, model.ErrorTypeFlowError)
 		if tracingEnabled {
 			span.SetStatus(codes.Error, err.Error())
 			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
@@ -206,11 +206,8 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	}
 	for evt := range innerChan {
 		fullRespEvent = recordTraceEvent(tracker, tokenUsage, fullRespEvent, evt)
-		if evt != nil && evt.Error != nil {
-			responseErrorType = evt.Error.Type
-		}
 		if err := event.EmitEvent(ctx, out, evt); err != nil {
-			responseErrorType = itelemetry.ToErrorType(err, model.ErrorTypeFlowError)
+			operationErrorType = itelemetry.ToErrorType(err, model.ErrorTypeFlowError)
 			if tracingEnabled {
 				span.SetStatus(codes.Error, err.Error())
 				span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
@@ -229,6 +226,21 @@ func resolveGraphAgentStream(invocation *agent.Invocation) bool {
 		return *invocation.RunOptions.Stream
 	}
 	return true
+}
+
+// resolveGraphAgentErrorType collapses the final GraphAgent metric error type.
+// Transport or orchestration failures win because they indicate the invocation
+// itself failed even if a response event had already been observed. Otherwise,
+// use the final response event so after-agent callbacks can replace an earlier
+// failure with a successful custom response.
+func resolveGraphAgentErrorType(fullRespEvent *event.Event, operationErrorType string) string {
+	if operationErrorType != "" {
+		return operationErrorType
+	}
+	if fullRespEvent == nil || fullRespEvent.Response == nil || fullRespEvent.Response.Error == nil {
+		return ""
+	}
+	return fullRespEvent.Response.Error.Type
 }
 
 func recordTraceEvent(
