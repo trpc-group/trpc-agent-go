@@ -11,6 +11,7 @@ package aggregator
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -250,6 +251,13 @@ func TestAggregateUsesDefaultUUIDSessionID(t *testing.T) {
 	assert.NoError(t, userParseErr)
 	_, parseErr := uuid.Parse(r.lastSessionID)
 	assert.NoError(t, parseErr)
+	assert.NotNil(t, r.lastRunOpts.StructuredOutput)
+	assert.Equal(t, model.StructuredOutputJSONSchema, r.lastRunOpts.StructuredOutput.Type)
+	assert.Equal(
+		t,
+		reflect.TypeOf((*promptiter.AggregatedSurfaceGradient)(nil)),
+		r.lastRunOpts.StructuredOutputType,
+	)
 }
 
 func TestAggregateFallsBackToFinalContent(t *testing.T) {

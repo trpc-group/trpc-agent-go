@@ -11,6 +11,7 @@ package backwarder
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -192,6 +193,9 @@ func TestBackwardUsesDefaultUUIDSessionID(t *testing.T) {
 	assert.NoError(t, userParseErr)
 	_, sessionParseErr := uuid.Parse(r.lastSessionID)
 	assert.NoError(t, sessionParseErr)
+	assert.NotNil(t, r.lastRunOpts.StructuredOutput)
+	assert.Equal(t, model.StructuredOutputJSONSchema, r.lastRunOpts.StructuredOutput.Type)
+	assert.Equal(t, reflect.TypeOf((*Result)(nil)), r.lastRunOpts.StructuredOutputType)
 }
 
 func TestBackwardFallsBackToFinalContent(t *testing.T) {

@@ -30,6 +30,13 @@ type Option func(*options)
 // newOptions applies all backwarder options and returns a configured options set.
 func newOptions(opt ...Option) *options {
 	opts := &options{
+		runOptions: []agent.RunOption{
+			agent.WithStructuredOutputJSON(
+				new(Result),
+				true,
+				"One PromptIter backward propagation result.",
+			),
+		},
 		messageBuilder:    defaultMessageBuilder(),
 		userIDSupplier:    defaultUserIDSupplier(),
 		sessionIDSupplier: defaultSessionIDSupplier(),

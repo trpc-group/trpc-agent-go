@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 )
 
 // options stores optional optimizer behavior flags.
@@ -30,6 +31,13 @@ type Option func(*options)
 // newOptions applies all optimizer options and returns a finalized option set.
 func newOptions(opt ...Option) *options {
 	opts := &options{
+		runOptions: []agent.RunOption{
+			agent.WithStructuredOutputJSON(
+				new(promptiter.SurfacePatch),
+				true,
+				"One PromptIter surface patch proposal.",
+			),
+		},
 		messageBuilder:    defaultMessageBuilder(),
 		userIDSupplier:    defaultUserIDSupplier(),
 		sessionIDSupplier: defaultSessionIDSupplier(),
