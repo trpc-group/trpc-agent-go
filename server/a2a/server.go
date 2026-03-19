@@ -55,6 +55,9 @@ func New(opts ...Option) (*a2a.A2AServer, error) {
 	if options.agent == nil && options.runner == nil {
 		return nil, errors.New("either agent (WithAgent) or runner (WithRunner) is required")
 	}
+	if options.agent != nil && options.runner != nil {
+		return nil, errors.New("WithAgent and WithRunner cannot be used together; use WithAgentCard with WithRunner")
+	}
 
 	if options.agent == nil && options.agentCard == nil {
 		return nil, errors.New("agent card (WithAgentCard) is required when using runner without agent")
@@ -76,44 +79,13 @@ func buildAgentCard(options *options) (a2a.AgentCard, error) {
 	if options.agent == nil {
 		return a2a.AgentCard{}, errors.New("agent is required when agent card is not provided")
 	}
-	agent := options.agent
-	desc := agent.Info().Description
-	name := agent.Info().Name
-
-	// Normalize the host to ensure it has a proper URL scheme
-	url := ia2a.NormalizeURL(options.host)
-
-	// Build skills from agent tools
-	skills := buildSkillsFromTools(agent, name, desc)
-	return a2a.AgentCard{
-		Name:        name,
-		Description: desc,
-		URL:         url,
-		Capabilities: a2a.AgentCapabilities{
-			Streaming: &options.enableStreaming,
-			Extensions: []a2a.AgentExtension{
-				{
-					URI: ia2a.ExtensionTRPCA2AVersion,
-					Params: map[string]any{
-						"version": ia2a.InteractionVersion,
-					},
-				},
-			},
-		},
-		Skills:             skills,
-		DefaultInputModes:  []string{"text"},
-		DefaultOutputModes: []string{"text"},
-	}, nil
-}
-
-func resolveRunnerIdentity(options *options) (string, error) {
-	if options.agent != nil {
-		return options.agent.Info().Name, nil
+	info := options.agent.Info()
+	card, err := NewAgentCard(info.Name, info.Description, options.host, options.enableStreaming)
+	if err != nil {
+		return a2a.AgentCard{}, err
 	}
-	if options.agentCard != nil && options.agentCard.Name != "" {
-		return options.agentCard.Name, nil
-	}
-	return "", errors.New("agent name is required: provide WithAgent or WithAgentCard")
+	card.Skills = buildSkillsFromTools(options.agent, info.Name, info.Description)
+	return card, nil
 }
 
 func buildRuntimeState(metadata map[string]any) map[string]any {
@@ -127,11 +99,11 @@ func buildRuntimeState(metadata map[string]any) map[string]any {
 func buildProcessor(
 	agent agent.Agent,
 	sessionService session.Service,
+	serverIdentity string,
 	options *options,
 ) (*messageProcessor, error) {
-	agentName, err := resolveRunnerIdentity(options)
-	if err != nil {
-		return nil, err
+	if serverIdentity == "" {
+		return nil, errors.New("agent card name is required")
 	}
 
 	procRunner := options.runner
@@ -139,7 +111,7 @@ func buildProcessor(
 		if agent == nil {
 			return nil, errors.New("agent is required when runner is not provided")
 		}
-		procRunner = runner.NewRunner(agentName, agent, runner.WithSessionService(sessionService))
+		procRunner = runner.NewRunner(serverIdentity, agent, runner.WithSessionService(sessionService))
 	}
 
 	// Use custom converters if provided, otherwise use defaults
@@ -165,7 +137,7 @@ func buildProcessor(
 		debugLogging:        options.debugLogging,
 		adkCompatibility:    options.adkCompatibility,
 		streamingEventType:  options.streamingEventType,
-		agentName:           agentName,
+		agentName:           serverIdentity,
 		runOptions:          options.runOptions,
 	}, nil
 }
@@ -178,12 +150,15 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	if err != nil {
 		return nil, err
 	}
+	if agentCard.Name == "" {
+		return nil, errors.New("agent card name is required")
+	}
 
 	var processor taskmanager.MessageProcessor
 	if options.processorBuilder != nil {
 		processor = options.processorBuilder(agent, sessionService)
 	} else {
-		processor, err = buildProcessor(agent, sessionService, options)
+		processor, err = buildProcessor(agent, sessionService, agentCard.Name, options)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build processor: %w", err)
 		}

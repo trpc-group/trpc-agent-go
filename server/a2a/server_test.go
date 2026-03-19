@@ -1832,6 +1832,20 @@ func TestNew(t *testing.T) {
 			errMsg:  "host is required when agent card is not provided",
 		},
 		{
+			name: "agent and runner cannot be used together",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent", description: "test description"}, true),
+				WithRunner(&mockRunner{}),
+				WithAgentCard(a2a.AgentCard{
+					Name:        "custom-agent",
+					Description: "custom description",
+					URL:         "http://custom.example.com",
+				}),
+			},
+			wantErr: true,
+			errMsg:  "WithAgent and WithRunner cannot be used together; use WithAgentCard with WithRunner",
+		},
+		{
 			name: "with agent card but no host - should succeed",
 			opts: []Option{
 				WithAgent(&mockAgent{name: "test-agent", description: "test description"}, true),
@@ -1839,6 +1853,18 @@ func TestNew(t *testing.T) {
 					Name:        "custom-agent",
 					Description: "custom description",
 					URL:         "http://custom.example.com",
+				}),
+			},
+			wantErr: false,
+		},
+		{
+			name: "runner with agent card but no host - should succeed",
+			opts: []Option{
+				WithRunner(&mockRunner{}),
+				WithAgentCard(a2a.AgentCard{
+					Name:        "runner-agent",
+					Description: "runner description",
+					URL:         "http://runner.example.com",
 				}),
 			},
 			wantErr: false,
@@ -2090,23 +2116,26 @@ func TestBuildAgentCard(t *testing.T) {
 
 func TestBuildProcessor(t *testing.T) {
 	tests := []struct {
-		name    string
-		agent   agent.Agent
-		session session.Service
-		options *options
+		name           string
+		agent          agent.Agent
+		session        session.Service
+		serverIdentity string
+		options        *options
 	}{
 		{
-			name:    "default converters",
-			agent:   &mockAgent{name: "test-agent", description: "test description"},
-			session: inmemory.NewSessionService(),
+			name:           "default converters",
+			agent:          &mockAgent{name: "test-agent", description: "test description"},
+			session:        inmemory.NewSessionService(),
+			serverIdentity: "test-agent",
 			options: &options{
 				agent: &mockAgent{name: "test-agent", description: "test description"},
 			},
 		},
 		{
-			name:    "custom converters",
-			agent:   &mockAgent{name: "test-agent", description: "test description"},
-			session: inmemory.NewSessionService(),
+			name:           "custom converters",
+			agent:          &mockAgent{name: "test-agent", description: "test description"},
+			session:        inmemory.NewSessionService(),
+			serverIdentity: "test-agent",
 			options: &options{
 				agent:               &mockAgent{name: "test-agent", description: "test description"},
 				a2aToAgentConverter: &mockA2AToAgentConverter{},
@@ -2114,11 +2143,10 @@ func TestBuildProcessor(t *testing.T) {
 			},
 		},
 		{
-			name:    "custom runner",
-			agent:   &mockAgent{name: "test-agent", description: "test description"},
-			session: inmemory.NewSessionService(),
+			name:           "custom runner",
+			session:        inmemory.NewSessionService(),
+			serverIdentity: "runner-agent",
 			options: &options{
-				agent:  &mockAgent{name: "test-agent", description: "test description"},
 				runner: &mockRunner{},
 			},
 		},
@@ -2126,7 +2154,7 @@ func TestBuildProcessor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			processor, err := buildProcessor(tt.agent, tt.session, tt.options)
+			processor, err := buildProcessor(tt.agent, tt.session, tt.serverIdentity, tt.options)
 			if err != nil {
 				t.Fatalf("buildProcessor() returned error: %v", err)
 			}
@@ -2143,6 +2171,9 @@ func TestBuildProcessor(t *testing.T) {
 			if processor.eventToA2AConverter == nil {
 				t.Errorf("buildProcessor() eventToA2AConverter is nil")
 			}
+			if processor.agentName != tt.serverIdentity {
+				t.Errorf("buildProcessor() agentName = %q, want %q", processor.agentName, tt.serverIdentity)
+			}
 			if tt.options.runner != nil &&
 				processor.runner != tt.options.runner {
 				t.Errorf("buildProcessor() should reuse custom runner")
@@ -2157,7 +2188,7 @@ func TestBuildProcessor_RunnerWithoutAgent(t *testing.T) {
 		Description: "agent provided via runner only",
 		URL:         "http://localhost:9090",
 	}
-	processor, err := buildProcessor(nil, inmemory.NewSessionService(), &options{
+	processor, err := buildProcessor(nil, inmemory.NewSessionService(), card.Name, &options{
 		runner:    &mockRunner{},
 		agentCard: card,
 	})
@@ -2167,9 +2198,7 @@ func TestBuildProcessor_RunnerWithoutAgent(t *testing.T) {
 }
 
 func TestBuildProcessor_NoAgentNoRunner(t *testing.T) {
-	_, err := buildProcessor(nil, inmemory.NewSessionService(), &options{
-		agentCard: &a2a.AgentCard{Name: "card-only"},
-	})
+	_, err := buildProcessor(nil, inmemory.NewSessionService(), "card-only", &options{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "agent is required when runner is not provided")
 }
@@ -2180,37 +2209,15 @@ func TestBuildAgentCard_ErrorWhenNoAgentAndNoCard(t *testing.T) {
 	assert.Contains(t, err.Error(), "agent is required when agent card is not provided")
 }
 
-func TestResolveRunnerIdentity(t *testing.T) {
-	t.Run("from agent", func(t *testing.T) {
-		name, err := resolveRunnerIdentity(&options{
-			agent: &mockAgent{name: "from-agent"},
-		})
-		assert.NoError(t, err)
-		assert.Equal(t, "from-agent", name)
-	})
-
-	t.Run("from agent card when no agent", func(t *testing.T) {
-		name, err := resolveRunnerIdentity(&options{
-			agentCard: &a2a.AgentCard{Name: "from-card"},
-		})
-		assert.NoError(t, err)
-		assert.Equal(t, "from-card", name)
-	})
-
-	t.Run("agent takes precedence over card", func(t *testing.T) {
-		name, err := resolveRunnerIdentity(&options{
-			agent:     &mockAgent{name: "from-agent"},
-			agentCard: &a2a.AgentCard{Name: "from-card"},
-		})
-		assert.NoError(t, err)
-		assert.Equal(t, "from-agent", name)
-	})
-
-	t.Run("error when neither agent nor card", func(t *testing.T) {
-		_, err := resolveRunnerIdentity(&options{})
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "agent name is required")
-	})
+func TestBuildProcessor_RequiresServerIdentity(t *testing.T) {
+	_, err := buildProcessor(
+		&mockAgent{name: "test-agent", description: "test description"},
+		inmemory.NewSessionService(),
+		"",
+		&options{},
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "agent card name is required")
 }
 
 func TestMessageProcessor_ProcessMessage_RuntimeStateIncludesServerContext(t *testing.T) {
