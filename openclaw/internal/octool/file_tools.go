@@ -296,7 +296,7 @@ func resolveDocumentPath(
 		return "", "", errors.New(errReadPathRequired)
 	}
 
-	resolved, err := resolveInputPath(path)
+	resolved, err := resolveInputPath(path, env)
 	if err != nil {
 		return "", "", err
 	}
@@ -321,7 +321,7 @@ func resolveSpreadsheetPath(
 		return "", "", errors.New(errReadPathRequired)
 	}
 
-	resolved, err := resolveInputPath(path)
+	resolved, err := resolveInputPath(path, env)
 	if err != nil {
 		return "", "", err
 	}
@@ -334,12 +334,18 @@ func resolveSpreadsheetPath(
 	return resolved, kind, nil
 }
 
-func resolveInputPath(rawPath string) (string, error) {
+func resolveInputPath(
+	rawPath string,
+	env map[string]string,
+) (string, error) {
 	path := strings.TrimSpace(rawPath)
 	if path == "" {
 		return "", errors.New(errReadPathRequired)
 	}
 	if resolved, ok := uploads.PathFromHostRef(path); ok {
+		path = resolved
+	}
+	if resolved, ok := resolveUploadContextPath(path, env); ok {
 		path = resolved
 	}
 
@@ -355,6 +361,101 @@ func resolveInputPath(rawPath string) (string, error) {
 		return "", fmt.Errorf("path is a directory: %s", localPath)
 	}
 	return localPath, nil
+}
+
+func resolveUploadContextPath(
+	path string,
+	env map[string]string,
+) (string, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" || filepath.IsAbs(path) || path == "~" ||
+		strings.HasPrefix(path, "~/") {
+		return "", false
+	}
+
+	if matched := matchRecentUploadPath(path, env); matched != "" {
+		return matched, true
+	}
+
+	dir := strings.TrimSpace(env[envSessionUploadsDir])
+	if dir == "" {
+		return "", false
+	}
+	candidate := filepath.Join(dir, path)
+	if info, err := os.Stat(candidate); err == nil &&
+		info != nil && !info.IsDir() {
+		return candidate, true
+	}
+	return "", false
+}
+
+func matchRecentUploadPath(
+	rawPath string,
+	env map[string]string,
+) string {
+	rawPath = strings.TrimSpace(rawPath)
+	if rawPath == "" {
+		return ""
+	}
+
+	var recent []execUploadMeta
+	if raw := strings.TrimSpace(env[envRecentUploadsJSON]); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &recent); err == nil {
+			for _, item := range recent {
+				if uploadMatchesReference(item, rawPath) {
+					return item.Path
+				}
+			}
+		}
+	}
+
+	latest := execUploadMeta{
+		Name:    strings.TrimSpace(env[envLastUploadName]),
+		Path:    strings.TrimSpace(env[envLastUploadPath]),
+		HostRef: strings.TrimSpace(env[envLastUploadHostRef]),
+	}
+	if uploadMatchesReference(latest, rawPath) {
+		return latest.Path
+	}
+	return ""
+}
+
+func uploadMatchesReference(
+	item execUploadMeta,
+	rawPath string,
+) bool {
+	for _, candidate := range uploadReferenceCandidates(item) {
+		if candidate == rawPath {
+			return true
+		}
+	}
+	return false
+}
+
+func uploadReferenceCandidates(item execUploadMeta) []string {
+	var out []string
+	out = appendUniqueTrimmed(out, item.Name)
+	out = appendUniqueTrimmed(out, item.Path)
+	out = appendUniqueTrimmed(out, filepath.Base(item.Path))
+	out = appendUniqueTrimmed(out, item.HostRef)
+	if hostPath, ok := uploads.PathFromHostRef(item.HostRef); ok {
+		out = appendUniqueTrimmed(out, hostPath)
+		out = appendUniqueTrimmed(out, filepath.Base(hostPath))
+	}
+	return out
+}
+
+func appendUniqueTrimmed(values []string, value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func documentKindFromPath(path string) string {

@@ -220,7 +220,7 @@ func TestReadDocumentHelpers(t *testing.T) {
 	)
 	require.ErrorContains(t, err, errDocumentUnsupported)
 
-	_, err = resolveInputPath(dirPath)
+	_, err = resolveInputPath(dirPath, nil)
 	require.ErrorContains(t, err, "directory")
 
 	require.Equal(t, docKindDOCX, documentKindFromPath(docxPath))
@@ -242,6 +242,30 @@ func TestReadDocumentHelpers(t *testing.T) {
 	require.ErrorContains(t, err, "exceeds page count")
 
 	require.Equal(t, "", pdfPageText(nil, 1))
+}
+
+func TestReadDocumentTool_ResolvesRelativeUploadName(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	pdfPath := createSamplePDF(t, []string{"relative upload"})
+	ctx := invocationContextWithUpload(
+		t,
+		pdfPath,
+		"0.pdf",
+		"application/pdf",
+	)
+	tool := newReadDocumentTool()
+
+	out, err := tool.Call(ctx, mustJSON(t, map[string]any{
+		"path": "0.pdf",
+	}))
+	require.NoError(t, err)
+
+	res := out.(readDocumentResult)
+	require.Equal(t, pdfPath, res.Path)
+	require.Contains(t, res.Text, "relative upload")
 }
 
 func TestReadSpreadsheetTool_CSVAndErrors(t *testing.T) {
@@ -278,6 +302,33 @@ func TestReadSpreadsheetTool_CSVAndErrors(t *testing.T) {
 
 	_, err = tool.Call(context.Background(), []byte("{"))
 	require.ErrorContains(t, err, "invalid args")
+}
+
+func TestReadSpreadsheetTool_ResolvesRelativeUploadName(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	xlsxPath := createSampleWorkbook(t)
+	ctx := invocationContextWithUpload(
+		t,
+		xlsxPath,
+		"sheet.xlsx",
+		"application/vnd.openxmlformats-officedocument."+
+			"spreadsheetml.sheet",
+	)
+	tool := newReadSpreadsheetTool()
+
+	out, err := tool.Call(ctx, mustJSON(t, map[string]any{
+		"path": "sheet.xlsx",
+		"row":  2,
+	}))
+	require.NoError(t, err)
+
+	res := out.(readSpreadsheetResult)
+	require.Equal(t, xlsxPath, res.Path)
+	require.Len(t, res.Rows, 1)
+	require.Equal(t, 2, res.Rows[0].Index)
 }
 
 func TestSpreadsheetHelpers(t *testing.T) {

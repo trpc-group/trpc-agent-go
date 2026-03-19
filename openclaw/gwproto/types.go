@@ -82,6 +82,8 @@ const (
 	StreamEventTypeRunProgress StreamEventType = "run.progress"
 	// StreamEventTypeRunCompleted marks successful stream completion.
 	StreamEventTypeRunCompleted StreamEventType = "run.completed"
+	// StreamEventTypeRunCanceled marks a request canceled by the client.
+	StreamEventTypeRunCanceled StreamEventType = "run.canceled"
 	// StreamEventTypeRunError marks a terminal stream error.
 	StreamEventTypeRunError StreamEventType = "run.error"
 
