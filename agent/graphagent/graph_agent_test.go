@@ -2184,69 +2184,97 @@ func TestGraphAgent_RunWithBarrier_EmitEventError(t *testing.T) {
 }
 
 func TestGraphAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
-	originalTracer := trace.Tracer
-	defer func() {
-		trace.Tracer = originalTracer
-	}()
+	boolPtr := func(v bool) *bool {
+		return &v
+	}
 
-	spanRecorder := tracetest.NewSpanRecorder()
-	tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
-	defer func() {
-		_ = tp.Shutdown(context.Background())
-	}()
-	trace.Tracer = tp.Tracer("test")
-
-	schema := graph.NewStateSchema().
-		AddField("output", graph.StateField{
-			Type:    reflect.TypeOf(""),
-			Reducer: graph.DefaultReducer,
-		})
-	g, err := graph.NewStateGraph(schema).
-		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
-			return graph.State{"output": "result"}, nil
-		}).
-		SetEntryPoint("process").
-		SetFinishPoint("process").
-		Compile()
-	require.NoError(t, err)
-
-	ga, err := New("stream-trace-test", g)
-	require.NoError(t, err)
-
-	stream := true
-	invocation := &agent.Invocation{
-		InvocationID: "test-invocation",
-		AgentName:    "stream-trace-test",
-		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
-		RunOptions: agent.RunOptions{
-			Stream: &stream,
+	testCases := []struct {
+		name   string
+		stream *bool
+		want   bool
+	}{
+		{
+			name: "defaults to stream when unset",
+			want: true,
+		},
+		{
+			name:   "honors explicit stream true",
+			stream: boolPtr(true),
+			want:   true,
+		},
+		{
+			name:   "honors explicit stream false",
+			stream: boolPtr(false),
+			want:   false,
 		},
 	}
 
-	events, err := ga.Run(context.Background(), invocation)
-	require.NoError(t, err)
-	for range events {
-	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			originalTracer := trace.Tracer
+			defer func() {
+				trace.Tracer = originalTracer
+			}()
 
-	var agentSpan tracesdk.ReadOnlySpan
-	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName)
-	for _, span := range spanRecorder.Ended() {
-		if span.Name() == expectedSpanName {
-			agentSpan = span
-			break
-		}
-	}
-	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
+			spanRecorder := tracetest.NewSpanRecorder()
+			tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
+			defer func() {
+				_ = tp.Shutdown(context.Background())
+			}()
+			trace.Tracer = tp.Tracer("test")
 
-	found := false
-	for _, attr := range agentSpan.Attributes() {
-		if string(attr.Key) == semconvtrace.KeyGenAIRequestIsStream {
-			found = true
-			require.True(t, attr.Value.AsBool())
-			break
-		}
+			schema := graph.NewStateSchema().
+				AddField("output", graph.StateField{
+					Type:    reflect.TypeOf(""),
+					Reducer: graph.DefaultReducer,
+				})
+			g, err := graph.NewStateGraph(schema).
+				AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+					return graph.State{"output": "result"}, nil
+				}).
+				SetEntryPoint("process").
+				SetFinishPoint("process").
+				Compile()
+			require.NoError(t, err)
+
+			ga, err := New("stream-trace-test", g)
+			require.NoError(t, err)
+
+			invocation := &agent.Invocation{
+				InvocationID: "test-invocation",
+				AgentName:    "stream-trace-test",
+				Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+				RunOptions: agent.RunOptions{
+					Stream: tc.stream,
+				},
+			}
+
+			events, err := ga.Run(context.Background(), invocation)
+			require.NoError(t, err)
+			for range events {
+			}
+
+			var agentSpan tracesdk.ReadOnlySpan
+			expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName)
+			for _, span := range spanRecorder.Ended() {
+				if span.Name() == expectedSpanName {
+					agentSpan = span
+					break
+				}
+			}
+			require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
+
+			found := false
+			for _, attr := range agentSpan.Attributes() {
+				if string(attr.Key) == semconvtrace.KeyGenAIRequestIsStream {
+					found = true
+					require.Equal(t, tc.want, attr.Value.AsBool())
+					break
+				}
+			}
+			require.True(t, found, "expected stream trace attribute to be recorded")
+		})
 	}
-	require.True(t, found, "expected stream trace attribute to be recorded")
 }
 
 func TestGraphAgent_Run_TraceAfterInvokeAgent(t *testing.T) {
