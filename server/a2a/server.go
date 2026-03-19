@@ -263,9 +263,7 @@ func isFinalStreamingEvent(evt *event.Event) bool {
 func isStructuredTaskErrorEvent(
 	evt *event.Event,
 ) bool {
-	return evt != nil &&
-		evt.Response != nil &&
-		evt.Response.Error != nil
+	return evt != nil && evt.IsTerminalError()
 }
 
 func taskErrorState(

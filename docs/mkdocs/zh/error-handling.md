@@ -21,7 +21,8 @@ tRPC-Agent-Go 为这三条链路提供了一条统一路径。
 
 这套方案遵循四条规则：
 
-1. `Response.Error` 继续作为事件流里的失败信号。
+1. `Response.Error` 继续作为事件流里的失败信号，终态判断请用
+   `event.IsTerminalError()`。
 2. 业务可见的错误集合沉淀在 graph state 中。
 3. 可恢复错误继续执行，但不能丢记录。
 4. 致命错误即使提前终止，也要先把 fallback 业务状态发出去。
@@ -55,6 +56,7 @@ tRPC-Agent-Go 为这三条链路提供了一条统一路径。
 框架负责统一：
 
 - transport failure 放在哪里：`Response.Error`
+- transport failure 何时算终态：`event.IsTerminalError()`
 - 业务可见错误记录放在哪里：graph state
 - fatal fallback state 如何传递到 `runner.completion`
 - child fallback state 如何与正常 child completion 区分
@@ -223,12 +225,14 @@ func newCollector() *graph.ExecutionErrorCollector {
             ctx context.Context,
             cb *graph.NodeCallbackContext,
             state graph.State,
+            result any,
             err error,
         ) graph.ExecutionErrorPolicy {
             policy := graph.DefaultExecutionErrorPolicy(
                 ctx,
                 cb,
                 state,
+                result,
                 err,
             )
             if !policy.Recover {
@@ -417,12 +421,14 @@ func newCollector() *graph.ExecutionErrorCollector {
             ctx context.Context,
             cb *graph.NodeCallbackContext,
             state graph.State,
+            result any,
             err error,
         ) graph.ExecutionErrorPolicy {
             policy := graph.DefaultExecutionErrorPolicy(
                 ctx,
                 cb,
                 state,
+                result,
                 err,
             )
             if !policy.Recover {
@@ -486,12 +492,14 @@ func buildAgent() (agent.Agent, error) {
             ctx context.Context,
             cb *graph.NodeCallbackContext,
             state graph.State,
+            result any,
             err error,
         ) graph.ExecutionErrorPolicy {
             policy := graph.DefaultExecutionErrorPolicy(
                 ctx,
                 cb,
                 state,
+                result,
                 err,
             )
             if !policy.Recover {
@@ -559,13 +567,15 @@ errors, err := graph.ExecutionErrorsFromStateDelta(
 ### 消费 Runner 事件
 
 如果 fatal 错误导致 graph 在发出 `graph.execution` 之前就结束，Runner 现在会
-把 fallback 业务状态复制到最后那条 `runner.completion` 上。
+把 fallback 业务状态复制到最后那条 `runner.completion` 上，并把最终的
+`Response.Error` 也挂到这条 completion 上。
 
 因此应用层可以用一个统一规则：
 
 - 一直消费到 `runner.completion`
 - 从它的 `StateDelta` 里读取 collector key
-- 真正的 transport failure 仍然看更早那条 fatal 事件的 `Response.Error`
+- 终态 transport failure 用 `event.IsTerminalError()` 判断，再读
+  `Response.Error`
 
 完整的 Runner 侧消费模式：
 
@@ -600,7 +610,8 @@ func ConsumeUntilCompletion(
             if !ok {
                 return summary, nil
             }
-            if evt.Response != nil && evt.Response.Error != nil {
+            if evt.IsTerminalError() &&
+                evt.Response != nil {
                 summary.TransportError = evt.Response.Error
             }
             if !evt.IsRunnerCompletion() {
@@ -743,6 +754,8 @@ server, err := a2aserver.New(
 - unary 响应会返回 failed `Task`
 - streaming 响应会返回 failed `TaskStatusUpdateEvent`
 - 结构化错误字段会写入 task metadata
+- 只有终态错误会转换成 failed task；`graph.node.error` 这类中间事件仍然按
+  graph 事件继续透传
 
 ### Client 侧
 
@@ -804,7 +817,8 @@ func buildA2AClient() (agent.Agent, error) {
 - 业务错误包：定义错误码常量和 typed error
 - graph policy：决定 recoverable 还是 fatal
 - runner 消费侧：从 `runner.completion` 持久化 `ExecutionErrors`
-- transport 消费侧：从 `Response.Error` 处理终态失败
+- transport 消费侧：用 `event.IsTerminalError()` 和 `Response.Error`
+  处理终态失败
 
 这个划分已经足够替代旧的业务侧 node-error helper，同时又不会越界接管你的领域错误码体系。
 

@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -2860,7 +2861,8 @@ func TestMessageProcessor_ProcessMessage_StructuredTaskError(
 				ch := make(chan *event.Event, 1)
 				ch <- &event.Event{
 					Response: &model.Response{
-						ID: "resp-1",
+						ID:   "resp-1",
+						Done: true,
 						Error: &model.ResponseError{
 							Type:    model.ErrorTypeFlowError,
 							Message: "task failed",
@@ -3013,7 +3015,8 @@ func TestMessageProcessor_ProcessBatchStreamingEvents_StructuredTaskError(
 		msg,
 		[]*event.Event{{
 			Response: &model.Response{
-				ID: "resp-1",
+				ID:   "resp-1",
+				Done: true,
 				Error: &model.ResponseError{
 					Type:    model.ErrorTypeFlowError,
 					Message: "task failed",
@@ -3053,7 +3056,8 @@ func TestProcessAgentStreamingEvents_StopAgentError(t *testing.T) {
 	events := make(chan *event.Event, 1)
 	events <- &event.Event{
 		Response: &model.Response{
-			ID: "resp-1",
+			ID:   "resp-1",
+			Done: true,
 			Error: &model.ResponseError{
 				Type:    agent.ErrorTypeStopAgentError,
 				Message: "task canceled",
@@ -3116,6 +3120,58 @@ done:
 		code,
 		status.Metadata[ia2a.MessageMetadataErrorCodeKey],
 	)
+}
+
+func TestMessageProcessor_ProcessBatchStreamingEvents_GraphNodeErrorNotTerminal(
+	t *testing.T,
+) {
+	processor := &messageProcessor{
+		structuredTaskErrors: true,
+		eventToA2AConverter: &mockEventToA2AConverter{
+			convertStreamingToA2AMessageFunc: func(
+				ctx context.Context,
+				event *event.Event,
+				options EventToA2AStreamingOptions,
+			) (protocol.StreamingMessageResult, error) {
+				return nil, nil
+			},
+		},
+	}
+	ctxID := "ctx"
+	msg := &protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "graph-node-error-test",
+	}
+	subscriber := &mockTaskSubscriber{
+		channel: make(chan protocol.StreamingMessageEvent, 1),
+	}
+	terminalTaskError := false
+
+	cont, err := processor.processBatchStreamingEvents(
+		context.Background(),
+		"task-1",
+		msg,
+		[]*event.Event{{
+			Response: &model.Response{
+				Object: graph.ObjectTypeGraphNodeError,
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "node failed",
+				},
+			},
+		}},
+		subscriber,
+		&terminalTaskError,
+	)
+	assert.NoError(t, err)
+	assert.True(t, cont)
+	assert.False(t, terminalTaskError)
+
+	select {
+	case streamEvent := <-subscriber.channel:
+		t.Fatalf("unexpected streaming result: %#v", streamEvent)
+	default:
+	}
 }
 
 // TestMessageProcessor_ProcessMessage_NoPartsCollected tests handling when no parts are collected

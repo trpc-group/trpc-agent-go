@@ -276,6 +276,7 @@ func TestExecutionErrorCollector_RecoveryCommandMergesUpdate(t *testing.T) {
 			ctx context.Context,
 			callbackCtx *NodeCallbackContext,
 			state State,
+			result any,
 			err error,
 		) ExecutionErrorPolicy {
 			return ExecutionErrorPolicy{
@@ -489,6 +490,7 @@ func TestExecutionErrorCollector_EmptyOptionsKeepDefaults(t *testing.T) {
 		context.Background(),
 		nil,
 		nil,
+		nil,
 		errors.New("boom"),
 	)
 	require.False(t, policy.Recover)
@@ -568,6 +570,7 @@ func TestExecutionErrorCollector_CustomResponseError(t *testing.T) {
 			ctx context.Context,
 			callbackCtx *NodeCallbackContext,
 			state State,
+			result any,
 			err error,
 		) ExecutionErrorPolicy {
 			return ExecutionErrorPolicy{
@@ -605,6 +608,43 @@ func TestExecutionErrorCollector_CustomResponseError(t *testing.T) {
 	)
 	require.NotNil(t, executionErrors[0].Error.Code)
 	require.Equal(t, codeValue, *executionErrors[0].Error.Code)
+}
+
+func TestExecutionErrorCollector_PolicyReceivesResult(
+	t *testing.T,
+) {
+	const stateKey = "partial"
+
+	var seenResult any
+	collector := NewExecutionErrorCollector(
+		WithExecutionErrorPolicy(func(
+			ctx context.Context,
+			callbackCtx *NodeCallbackContext,
+			state State,
+			result any,
+			err error,
+		) ExecutionErrorPolicy {
+			seenResult = result
+			return ExecutionErrorPolicy{
+				Recover: true,
+			}
+		}),
+	)
+
+	original := State{stateKey: true}
+	result, err := collector.afterNode(
+		context.Background(),
+		&NodeCallbackContext{NodeID: "step"},
+		State{},
+		original,
+		errors.New("boom"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, original, seenResult)
+
+	update, ok := result.(State)
+	require.True(t, ok)
+	require.Equal(t, true, update[stateKey])
 }
 
 func TestExecutionErrorCollector_FatalEmitErrorIsIgnored(t *testing.T) {

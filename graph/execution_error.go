@@ -98,6 +98,7 @@ type ExecutionErrorPolicyFunc func(
 	ctx context.Context,
 	callbackCtx *NodeCallbackContext,
 	state State,
+	result any,
 	err error,
 ) ExecutionErrorPolicy
 
@@ -106,6 +107,7 @@ func DefaultExecutionErrorPolicy(
 	_ context.Context,
 	_ *NodeCallbackContext,
 	_ State,
+	_ any,
 	err error,
 ) ExecutionErrorPolicy {
 	if IsRecoverableExecutionError(err) {
@@ -187,6 +189,7 @@ func WithRecoverableExecutionErrors(
 			ctx context.Context,
 			callbackCtx *NodeCallbackContext,
 			state State,
+			result any,
 			err error,
 		) ExecutionErrorPolicy {
 			policy := ExecutionErrorPolicy{}
@@ -195,6 +198,7 @@ func WithRecoverableExecutionErrors(
 					ctx,
 					callbackCtx,
 					state,
+					result,
 					err,
 				)
 			}
@@ -375,7 +379,7 @@ func (c *ExecutionErrorCollector) afterNode(
 		return nil, nil
 	}
 
-	policy := c.policy(ctx, callbackCtx, state, nodeErr)
+	policy := c.policy(ctx, callbackCtx, state, result, nodeErr)
 	severity := ExecutionErrorSeverityFatal
 	if policy.Recover {
 		severity = ExecutionErrorSeverityRecoverable

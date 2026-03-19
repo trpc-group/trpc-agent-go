@@ -80,7 +80,7 @@ go run ./examples/graph/error_handling
 
 For each scenario, the example prints:
 
-- any streamed `Response.Error`
+- any terminal streamed `Response.Error`
 - whether `runner.completion` was received
 - the collected execution errors from `runner.completion.StateDelta`
 - an optional business note written by downstream nodes

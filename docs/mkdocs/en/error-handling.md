@@ -22,7 +22,8 @@ tRPC-Agent-Go provides one standard path for all three.
 
 The framework design follows four rules:
 
-1. Keep `Response.Error` as the transport-level failure signal.
+1. Keep `Response.Error` as the transport-level failure signal, and use
+   `event.IsTerminalError()` to decide whether that failure is terminal.
 2. Keep business-visible error collections in graph state.
 3. Let recoverable errors continue execution without losing the record.
 4. Let fatal errors still publish fallback business state before the run stops.
@@ -59,6 +60,7 @@ The framework owns transport, propagation, and collection mechanics.
 Framework responsibilities:
 
 - where transport failures live: `Response.Error`
+- when a transport failure is terminal: `event.IsTerminalError()`
 - where business-visible records live: graph state
 - how fatal fallback state reaches `runner.completion`
 - how child fallback state is separated from normal child completion
@@ -237,12 +239,14 @@ func newCollector() *graph.ExecutionErrorCollector {
             ctx context.Context,
             cb *graph.NodeCallbackContext,
             state graph.State,
+            result any,
             err error,
         ) graph.ExecutionErrorPolicy {
             policy := graph.DefaultExecutionErrorPolicy(
                 ctx,
                 cb,
                 state,
+                result,
                 err,
             )
             if !policy.Recover {
@@ -431,12 +435,14 @@ func newCollector() *graph.ExecutionErrorCollector {
             ctx context.Context,
             cb *graph.NodeCallbackContext,
             state graph.State,
+            result any,
             err error,
         ) graph.ExecutionErrorPolicy {
             policy := graph.DefaultExecutionErrorPolicy(
                 ctx,
                 cb,
                 state,
+                result,
                 err,
             )
             if !policy.Recover {
@@ -501,12 +507,14 @@ func buildAgent() (agent.Agent, error) {
             ctx context.Context,
             cb *graph.NodeCallbackContext,
             state graph.State,
+            result any,
             err error,
         ) graph.ExecutionErrorPolicy {
             policy := graph.DefaultExecutionErrorPolicy(
                 ctx,
                 cb,
                 state,
+                result,
                 err,
             )
             if !policy.Recover {
@@ -573,14 +581,16 @@ errors, err := graph.ExecutionErrorsFromStateDelta(
 
 ### Runner consumers
 
-If a fatal error stops the graph before `graph.execution`, Runner now copies the
-fallback business state onto the final `runner.completion` event.
+If a fatal error stops the graph before `graph.execution`, Runner now copies
+the fallback business state onto the final `runner.completion` event and also
+attaches the terminal `Response.Error` there.
 
 That means application code can use one simple rule:
 
 - keep consuming until `runner.completion`
 - read the collector key from its `StateDelta`
-- separately inspect the earlier fatal event for `Response.Error`
+- use `event.IsTerminalError()` to find terminal failures, then read
+  `Response.Error`
 
 Complete Runner-side pattern:
 
@@ -615,7 +625,8 @@ func ConsumeUntilCompletion(
             if !ok {
                 return summary, nil
             }
-            if evt.Response != nil && evt.Response.Error != nil {
+            if evt.IsTerminalError() &&
+                evt.Response != nil {
                 summary.TransportError = evt.Response.Error
             }
             if !evt.IsRunnerCompletion() {
@@ -763,6 +774,8 @@ With this option enabled:
 - unary A2A responses return a failed `Task`
 - streaming A2A responses emit a failed `TaskStatusUpdateEvent`
 - structured error fields are preserved in task metadata
+- only terminal errors become failed tasks; intermediate graph events such as
+  `graph.node.error` continue to flow as graph observability events
 
 ### Client side
 
@@ -826,7 +839,8 @@ The cleanest production split is:
 - business error package: define code constants and typed errors
 - graph policy: decide recoverable versus fatal behavior
 - runner consumer: persist `ExecutionErrors` from `runner.completion`
-- transport consumer: inspect `Response.Error` for terminal failure handling
+- transport consumer: use `event.IsTerminalError()` together with
+  `Response.Error` for terminal failure handling
 
 That split is broad enough to replace an older business-side node-error helper
 without taking ownership of your domain-specific error taxonomy.

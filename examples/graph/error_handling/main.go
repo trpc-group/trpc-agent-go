@@ -297,8 +297,8 @@ func runScenario(name string, ag agent.Agent) error {
 	}
 
 	for evt := range eventCh {
-		if evt.Response != nil &&
-			evt.Response.Error != nil {
+		if evt.IsTerminalError() &&
+			evt.Response != nil {
 			fmt.Printf(
 				"stream error: code=%s message=%s\n",
 				ptrValue(evt.Response.Error.Code),
