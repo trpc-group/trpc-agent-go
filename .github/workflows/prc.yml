@@ -263,6 +263,19 @@ jobs:
       - uses: actions/checkout@v3
       - name: Validate Git LFS files are excluded from published modules
         run: bash .github/scripts/check-lfs-excluded.sh
+  check-file-size:
+    name: check file size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Validate changed file sizes
+        env:
+          CHECK_FILE_SIZE_BASE_REF: ${{ github.base_ref }}
+          CHECK_FILE_SIZE_BEFORE_SHA: ${{ github.event.before }}
+          CHECK_FILE_SIZE_LIMIT_BYTES: 1572864
+        run: bash .github/scripts/check-file-size.sh
   check-go-sumdb:
     name: check sum.golang.org checksums
     runs-on: ubuntu-latest
