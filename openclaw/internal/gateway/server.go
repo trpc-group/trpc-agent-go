@@ -74,6 +74,7 @@ const (
 
 	emptyReplyFallbackText = "I didn't produce a visible " +
 		"reply. Please try again."
+	runCanceledMessage = "request canceled"
 )
 
 var errEmptyReplyValue = errors.New(errEmptyReply)
@@ -141,6 +142,8 @@ type Server struct {
 	mentionPatterns []string
 
 	lanes *laneLocker
+
+	canceled *cancelTracker
 
 	handler http.Handler
 
@@ -225,6 +228,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		requireMention:   options.requireMention,
 		mentionPatterns:  options.mentionPatterns,
 		lanes:            newLaneLocker(),
+		canceled:         newCancelTracker(),
 		recorder:         options.recorder,
 		uploads:          options.uploads,
 		audioTranscriber: audioTranscriber,
@@ -618,6 +622,47 @@ func (a *replyAccumulator) consumeDelta(rsp *model.Response) {
 type laneLocker struct {
 	mu    sync.Mutex
 	lanes map[string]*laneEntry
+}
+
+type cancelTracker struct {
+	mu  sync.Mutex
+	ids map[string]struct{}
+}
+
+func newCancelTracker() *cancelTracker {
+	return &cancelTracker{
+		ids: make(map[string]struct{}),
+	}
+}
+
+func (t *cancelTracker) Mark(requestID string) {
+	if t == nil {
+		return
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ids[requestID] = struct{}{}
+}
+
+func (t *cancelTracker) Take(requestID string) bool {
+	if t == nil {
+		return false
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, ok := t.ids[requestID]; !ok {
+		return false
+	}
+	delete(t.ids, requestID)
+	return true
 }
 
 func newLaneLocker() *laneLocker {

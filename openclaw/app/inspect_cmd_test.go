@@ -21,6 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	ocdeps "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
+	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	_ "trpc.group/trpc-go/trpc-agent-go/openclaw/plugins/telegram"
 )
 
@@ -174,6 +175,109 @@ metadata:
 	require.Contains(t, stdout, "definitely-missing-python-package")
 }
 
+func TestRunBootstrapDeps_WithSkillDoesNotAddDefaultProfiles(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	writeDepsSkill(t, root, "skillonly", `---
+name: skillonly
+description: skill-only deps
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "bins": ["definitely_missing_bin"],
+          },
+      },
+  }
+---
+
+# skillonly
+`)
+
+	stdout, stderr := captureInspectOutput(t, func() {
+		require.Equal(t, 0, runBootstrap([]string{
+			bootstrapCmdDeps,
+			"-state-dir",
+			t.TempDir(),
+			"-skills-root",
+			root,
+			"-skill",
+			"skillonly",
+		}))
+	})
+
+	require.Empty(t, stderr)
+	require.Contains(t, stdout, "Selected: skillonly")
+	require.Contains(t, stdout, "Plan: nothing to install")
+	require.Contains(t, stdout, "Unresolved:")
+	require.Contains(t, stdout, "definitely_missing_bin")
+	require.NotContains(
+		t,
+		stdout,
+		"definitely-missing-python-package",
+	)
+}
+
+func TestRunBootstrapDeps_ApplyPrintsUnresolved(t *testing.T) {
+	root := t.TempDir()
+	writeDepsSkill(t, root, "skillonly", `---
+name: skillonly
+description: skill-only deps
+metadata:
+  {
+    "openclaw":
+      {
+        "requires":
+          {
+            "bins": ["definitely_missing_bin"],
+          },
+      },
+  }
+---
+
+# skillonly
+`)
+
+	stdout, stderr := captureInspectOutput(t, func() {
+		require.Equal(t, 0, runBootstrap([]string{
+			bootstrapCmdDeps,
+			"-state-dir",
+			t.TempDir(),
+			"-skills-root",
+			root,
+			"-skill",
+			"skillonly",
+			"-apply",
+		}))
+	})
+
+	require.Empty(t, stderr)
+	require.Contains(t, stdout, "Unresolved:")
+	require.Contains(t, stdout, "definitely_missing_bin")
+}
+
+func TestBuildPlanForSources_OfficialSkillMetadataBuilds(
+	t *testing.T,
+) {
+	root := filepath.Join("..", "skills")
+	repo, err := ocskills.NewRepository([]string{root})
+	require.NoError(t, err)
+
+	sources, err := repo.DependencySources(nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, sources)
+
+	_, err = ocdeps.BuildPlanForSources(
+		t.TempDir(),
+		nil,
+		sources,
+	)
+	require.NoError(t, err)
+}
+
 func TestRunBootstrap_HelpAndUnknownCommand(t *testing.T) {
 	stdout, stderr := captureInspectOutput(t, func() {
 		require.Equal(t, 2, runBootstrap(nil))
@@ -316,10 +420,24 @@ func TestDepsCommandHelpers(t *testing.T) {
 
 	stdout, stderr := captureInspectOutput(t, func() {
 		printApplyResult(ocdeps.ApplyResult{
-			Steps: []ocdeps.StepResult{{
-				Step:     ocdeps.Step{Label: "install"},
-				ExitCode: 0,
-			}},
+			Steps: []ocdeps.StepResult{
+				{
+					Step:     ocdeps.Step{Label: "install"},
+					Status:   "applied",
+					ExitCode: 0,
+				},
+				{
+					Step:   ocdeps.Step{Label: "defer"},
+					Status: "deferred",
+					Error:  "needs sudo",
+				},
+				{
+					Step:     ocdeps.Step{Label: "fail"},
+					Status:   "failed",
+					ExitCode: 3,
+					Error:    "boom",
+				},
+			},
 		})
 		printToolchain(ocdeps.Toolchain{})
 		require.Equal(t, 0, printJSON(map[string]string{"ok": "yes"}))
@@ -332,6 +450,12 @@ func TestDepsCommandHelpers(t *testing.T) {
 
 	require.Contains(t, stdout, "Applied:")
 	require.Contains(t, stdout, "install (exit=0)")
+	require.Contains(t, stdout, "Deferred:")
+	require.Contains(t, stdout, "defer")
+	require.Contains(t, stdout, "needs sudo")
+	require.Contains(t, stdout, "Failed:")
+	require.Contains(t, stdout, "fail (exit=3)")
+	require.Contains(t, stdout, "boom")
 	require.Contains(t, stdout, "Python: not found")
 	require.Contains(t, stdout, "\"ok\": \"yes\"")
 	require.Contains(t, stderr, "unsupported type")

@@ -873,6 +873,41 @@ go run ./cmd/openclaw inspect config-keys -config ./openclaw.yaml
 “Skill 没加载”，而是它依赖的 config、env 或 bin
 还没有满足。
 
+现在 OpenClaw 还补上了一套面向 Skills 和文件工具档位的
+宿主机依赖检查与引导安装流程。也就是说，
+`metadata.openclaw` 不仅能决定一个 Skill 要不要加载，
+还可以描述这台机器应该准备哪些依赖：
+
+```bash
+cd openclaw
+go run ./cmd/openclaw inspect deps -skill nano-pdf
+go run ./cmd/openclaw bootstrap deps -skill nano-pdf -apply
+```
+
+这在排查问题时很重要，因为很多时候真正的问题已经不是
+“为什么 Skill 被跳过了”，而是
+“为了让这个 Skill 能完整跑起来，这台机器到底还缺什么”。
+
+目前，官方 OpenClaw Skill 元数据已经可以描述：
+
+- 包管理器安装
+- Go 模块或二进制安装
+- npm 安装
+- 在 OpenClaw state 目录下创建的托管 Python 环境安装
+- 资源下载
+
+有两个实践细节尤其需要记住：
+
+- `inspect deps` 和 `bootstrap deps` 可以同时基于内置依赖档位、
+  指定 Skill，或者两者的组合来规划。
+- 显式传 `-skill ...` 时，只会规划你点名的 Skill，
+  不会再自动把默认文件工具档位一起带上。
+
+`bootstrap deps --apply` 采用 best-effort 语义：
+优先执行用户态安装和下载；需要 root 权限的系统包步骤不会让整次
+执行直接失败，而是以 deferred 形式报告出来。下载的资源会落到
+`<state_dir>/tools/<skill>/...`。
+
 ## 最佳实践
 
 在实际落地中，下面几条经验通常最关键。

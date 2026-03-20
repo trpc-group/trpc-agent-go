@@ -83,11 +83,17 @@ func (f *fileToolSet) replaceContent(
 	st, err := os.Stat(filePath)
 	if err != nil {
 		rsp.Message = fmt.Sprintf(
-			"Error: cannot access file '%s': %v",
+			"Error: cannot access file '%s': %v. %s",
 			req.FileName,
 			err,
+			f.missingFileHint(),
 		)
-		return rsp, fmt.Errorf("accessing file '%s': %w", req.FileName, err)
+		return rsp, fmt.Errorf(
+			"accessing file '%s' under base directory '%s': %w",
+			req.FileName,
+			f.baseDir,
+			err,
+		)
 	}
 	if st.IsDir() {
 		rsp.Message = fmt.Sprintf(

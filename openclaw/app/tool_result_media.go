@@ -282,16 +282,17 @@ func toolResultPathFromLine(line string) (string, bool) {
 		return "", false
 	}
 
-	for _, prefix := range []string{
-		toolResultMediaLineDir,
-		toolResultMediaLineFile,
-	} {
-		if strings.HasPrefix(trimmed, prefix) {
-			trimmed = strings.TrimSpace(
-				strings.TrimPrefix(trimmed, prefix),
-			)
-			break
-		}
+	switch {
+	case strings.HasPrefix(trimmed, toolResultMediaLineDir):
+		trimmed = strings.TrimSpace(
+			strings.TrimPrefix(trimmed, toolResultMediaLineDir),
+		)
+	case strings.HasPrefix(trimmed, toolResultMediaLineFile):
+		trimmed = strings.TrimSpace(
+			strings.TrimPrefix(trimmed, toolResultMediaLineFile),
+		)
+	default:
+		return "", false
 	}
 
 	return resolveToolResultPath(trimmed)

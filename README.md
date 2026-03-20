@@ -140,7 +140,7 @@ tools := []tool.Tool{
 If you wire Skills through `LLMAgent` with `llmagent.WithCodeExecutor(...)`,
 consider also setting
 `llmagent.WithEnableCodeExecutionResponseProcessor(false)` so Markdown fenced
-code blocks in assistant text do not auto-execute while `skill_run` is
+code blocks embedded in assistant text do not auto-execute while `skill_run` is
 enabled.
 
 </td>
@@ -567,7 +567,7 @@ Example: [examples/skillrun](examples/skillrun)
   skill-focused examples (`examples/skill`, `examples/skillrun`,
   `examples/skilldynamicschema`, and
   `examples/structuredoutputskills`) follow this pattern so fenced code
-  blocks in assistant text do not auto-execute.
+  blocks embedded in assistant text do not auto-execute.
 
 ### 12. Artifacts
 
