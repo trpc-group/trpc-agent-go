@@ -51,13 +51,6 @@ func (s *Service) getSession(
 		}
 		sessState.CreatedAt = createdAt
 		sessState.UpdatedAt = updatedAt
-		log.DebugfContext(
-			ctx,
-			"getSession found session state: app=%s, user=%s, session=%s",
-			key.AppName,
-			key.UserID,
-			key.SessionID,
-		)
 		return nil
 	}, stateQuery, stateArgs...)
 
@@ -249,66 +242,51 @@ func (s *Service) listSessions(
 
 // addEvent adds an event to a session (MySQL syntax).
 func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Event) error {
-	now := time.Now()
-
-	// Get current session state
-	var stateBytes []byte
-	var currentExpiresAt sql.NullTime
-	err := s.mysqlClient.QueryRow(ctx,
-		[]any{&stateBytes, &currentExpiresAt},
-		fmt.Sprintf(`SELECT state, expires_at FROM %s
-		WHERE app_name = ? AND user_id = ? AND session_id = ?
-		AND deleted_at IS NULL`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID)
-
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("session not found")
-	}
-	if err != nil {
-		return fmt.Errorf("get session state failed: %w", err)
-	}
-
-	var sessState SessionState
-	if err := json.Unmarshal(stateBytes, &sessState); err != nil {
-		return fmt.Errorf("unmarshal session state failed: %w", err)
-	}
-
-	// Check if session is expired
-	if currentExpiresAt.Valid && currentExpiresAt.Time.Before(now) {
-		log.InfofContext(
-			ctx,
-			"appending event to expired session (app=%s, user=%s, "+
-				"session=%s), will extend expires_at",
-			key.AppName,
-			key.UserID,
-			key.SessionID,
-		)
-	}
-
-	sessState.UpdatedAt = now
-	if sessState.State == nil {
-		sessState.State = make(session.StateMap)
-	}
-	session.ApplyEventStateDeltaMap(sessState.State, event)
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("marshal session state failed: %w", err)
-	}
-
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event failed: %w", err)
 	}
-
-	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
+	var updatedAt time.Time
+	var updatedStateBytes []byte
 
 	// Use transaction to update session state and insert event
 	err = s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		sessState, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+
+		// Check if session is expired
+		if currentExpiresAt.Valid && currentExpiresAt.Time.Before(now) {
+			log.InfofContext(
+				ctx,
+				"appending event to expired session (app=%s, user=%s, "+
+					"session=%s), will extend expires_at",
+				key.AppName,
+				key.UserID,
+				key.SessionID,
+			)
+		}
+
+		sessState.UpdatedAt = now
+		if sessState.State == nil {
+			sessState.State = make(session.StateMap)
+		}
+		session.ApplyEventStateDeltaMap(sessState.State, event)
+		updatedAt = sessState.UpdatedAt
+
+		updatedStateBytes, err = json.Marshal(sessState)
+		if err != nil {
+			return fmt.Errorf("marshal session state failed: %w", err)
+		}
+		expiresAt := calculateExpiresAt(s.opts.sessionTTL)
+
 		// Update session state
-		_, err := tx.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 			 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-			string(updatedStateBytes), sessState.UpdatedAt, expiresAt,
+			string(updatedStateBytes), updatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -335,68 +313,54 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 
 // addTrackEvent adds a track event to a session (MySQL syntax).
 func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
-	now := time.Now()
-
-	// Get current session state.
-	var stateBytes []byte
-	var currentExpiresAt sql.NullTime
-	err := s.mysqlClient.QueryRow(ctx,
-		[]any{&stateBytes, &currentExpiresAt},
-		fmt.Sprintf(`SELECT state, expires_at FROM %s
-		WHERE app_name = ? AND user_id = ? AND session_id = ?
-		AND deleted_at IS NULL`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID)
-
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("session not found")
-	}
-	if err != nil {
-		return fmt.Errorf("get session state failed: %w", err)
-	}
-
-	var sessState SessionState
-	if err := json.Unmarshal(stateBytes, &sessState); err != nil {
-		return fmt.Errorf("unmarshal session state failed: %w", err)
-	}
-
-	// Check if session is expired.
-	if currentExpiresAt.Valid && currentExpiresAt.Time.Before(now) {
-		log.InfofContext(ctx, "appending track event to expired session (app=%s, user=%s, session=%s), will extend expires_at",
-			key.AppName, key.UserID, key.SessionID)
-	}
-
-	// Update session state.
-	sess := &session.Session{
-		ID:      key.SessionID,
-		AppName: key.AppName,
-		UserID:  key.UserID,
-		State:   sessState.State,
-	}
-	if err := sess.AppendTrackEvent(trackEvent); err != nil {
-		return err
-	}
-	sessState.State = sess.SnapshotState()
-	sessState.UpdatedAt = sess.UpdatedAt
-
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("marshal session state failed: %w", err)
-	}
-
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event failed: %w", err)
 	}
-
-	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
+	var updatedAt time.Time
+	var updatedStateBytes []byte
 
 	// Use transaction to update session state and insert track event.
 	err = s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		sessState, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+
+		// Check if session is expired.
+		if currentExpiresAt.Valid && currentExpiresAt.Time.Before(now) {
+			log.InfofContext(ctx, "appending track event to expired session (app=%s, user=%s, session=%s), will extend expires_at",
+				key.AppName, key.UserID, key.SessionID)
+		}
+
+		if sessState.State == nil {
+			sessState.State = make(session.StateMap)
+		}
+		sess := &session.Session{
+			ID:      key.SessionID,
+			AppName: key.AppName,
+			UserID:  key.UserID,
+			State:   sessState.State,
+		}
+		if err := sess.AppendTrackEvent(trackEvent); err != nil {
+			return err
+		}
+		sessState.State = sess.SnapshotState()
+		sessState.UpdatedAt = now
+		updatedAt = sessState.UpdatedAt
+
+		updatedStateBytes, err = json.Marshal(sessState)
+		if err != nil {
+			return fmt.Errorf("marshal session state failed: %w", err)
+		}
+		expiresAt := calculateExpiresAt(s.opts.sessionTTL)
+
 		// Update session state.
-		_, err := tx.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 			 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-			string(updatedStateBytes), sessState.UpdatedAt, expiresAt,
+			string(updatedStateBytes), updatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -417,6 +381,36 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		return fmt.Errorf("store track event failed: %w", err)
 	}
 	return nil
+}
+
+func loadSessionStateForUpdate(
+	ctx context.Context,
+	tx *sql.Tx,
+	tableSessionStates string,
+	key session.Key,
+) (*SessionState, sql.NullTime, error) {
+	var stateBytes []byte
+	var currentExpiresAt sql.NullTime
+	err := tx.QueryRowContext(
+		ctx,
+		fmt.Sprintf(`SELECT state, expires_at FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND deleted_at IS NULL
+		FOR UPDATE`, tableSessionStates),
+		key.AppName, key.UserID, key.SessionID,
+	).Scan(&stateBytes, &currentExpiresAt)
+	if err == sql.ErrNoRows {
+		return nil, sql.NullTime{}, errSessionNotFound
+	}
+	if err != nil {
+		return nil, sql.NullTime{}, fmt.Errorf("get session state failed: %w", err)
+	}
+
+	var sessState SessionState
+	if err := json.Unmarshal(stateBytes, &sessState); err != nil {
+		return nil, sql.NullTime{}, fmt.Errorf("unmarshal session state failed: %w", err)
+	}
+	return &sessState, currentExpiresAt, nil
 }
 
 // deleteSessionState deletes a session and its related data.
