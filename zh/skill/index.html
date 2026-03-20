@@ -720,6 +720,29 @@
   
   
     <li class="md-nav__item">
+      <a href="../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    错误处理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../model/" class="md-nav__link">
         
   
@@ -1201,10 +1224,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_10" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
         
           
-          <label class="md-nav__link" for="__nav_2_10" id="__nav_2_10_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
             
   
   
@@ -1217,8 +1240,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_10">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11">
             <span class="md-nav__icon md-icon"></span>
             Session
           </label>
@@ -1434,10 +1457,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12" >
         
           
-          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_12" id="__nav_2_12_label" tabindex="0">
             
   
   
@@ -1450,8 +1473,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_11">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12">
             <span class="md-nav__icon md-icon"></span>
             Knowledge
           </label>
@@ -1636,10 +1659,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_8" >
         
           
-          <label class="md-nav__link" for="__nav_2_11_8" id="__nav_2_11_8_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_12_8" id="__nav_2_12_8_label" tabindex="0">
             
   
   
@@ -1652,8 +1675,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_11_8">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_8">
             <span class="md-nav__icon md-icon"></span>
             向量存储
           </label>
@@ -2035,6 +2058,29 @@
   
   <span class="md-ellipsis">
     A2A
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../a2ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2UI
     
   </span>
   
@@ -2486,7 +2532,7 @@
 一股脑塞进提示词，往往会让 prompt token 占用变得非常高，甚至
 直接超过模型上下文窗口。</p>
 <p>想要<strong>可复现、基于真实运行</strong>的 token 对比（渐进披露 vs 全量注入），
-可参考 <code>benchmark/anthropic_skills/README.md</code>，并按其中说明运行
+可参考 <a href="https://github.com/trpc-group/trpc-agent-go-benchmark/blob/main/anthropic_skills/README.md">trpc-agent-go-benchmark/anthropic_skills/README.md</a>，并按其中说明运行
 <code>token-report</code> 套件。</p>
 <h3 id="prompt-cache">Prompt Cache</h3>
 <p>一些模型服务支持 <strong>prompt cache</strong>：如果后续一次模型请求的开头
@@ -2519,7 +2565,7 @@ system message，确保模型仍能看到已加载内容。</p>
 <p>启用方式：<code>llmagent.WithSkillsLoadedContentInToolResults(true)</code>。
 如果你希望在 summary 场景恢复旧的回退行为：
 <code>llmagent.WithSkipSkillsFallbackOnSessionSummary(false)</code>。</p>
-<p>要在真实工具链路中测量提升，参见 <code>benchmark/anthropic_skills</code> 的
+<p>要在真实工具链路中测量提升，参见 <a href="https://github.com/trpc-group/trpc-agent-go-benchmark/tree/main/anthropic_skills">trpc-agent-go-benchmark/anthropic_skills</a> 的
 <code>prompt-cache</code> 套件。</p>
 <p>与 <code>SkillLoadMode</code> 的关系（容易踩坑）：</p>
 <ul>
@@ -2694,8 +2740,10 @@ system message，确保模型仍能看到已加载内容。</p>
   (https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/skills.go)
 - <code>WithSkills</code> 会自动注册内置 skill 工具，无需手动添加。
   - 默认 <code>full</code> 档位：<code>skill_load</code>、<code>skill_select_docs</code>、
-    <code>skill_list_docs</code>、<code>skill_run</code>、<code>skill_exec</code>、
-    <code>skill_write_stdin</code>、<code>skill_poll_session</code>、<code>skill_kill_session</code>。
+    <code>skill_list_docs</code>、<code>skill_run</code>，以及——当执行器支持交互式
+    会话时——<code>skill_exec</code>、<code>skill_write_stdin</code>、<code>skill_poll_session</code>、
+    <code>skill_kill_session</code>。若执行器未实现 <code>InteractiveProgramRunner</code>
+    （且无本地回退），这些会话工具将被省略，相应的提示文案也会被跳过。
   - <code>knowledge_only</code> 档位：只注册 <code>skill_load</code>、
     <code>skill_select_docs</code> 与 <code>skill_list_docs</code>。
   - 执行器是否需要，也取决于档位：
@@ -3971,7 +4019,7 @@ option：</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月10日 08:44:52 UTC">2026-03-10 08:44:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月20日 09:53:34 UTC">2026-03-20 09:53:34</span>
   </span>
 
     

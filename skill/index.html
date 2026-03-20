@@ -720,6 +720,29 @@
   
   
     <li class="md-nav__item">
+      <a href="../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Error Handling
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../model/" class="md-nav__link">
         
   
@@ -1201,10 +1224,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_10" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
         
           
-          <label class="md-nav__link" for="__nav_2_10" id="__nav_2_10_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
             
   
   
@@ -1217,8 +1240,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_10_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_10">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_11">
             <span class="md-nav__icon md-icon"></span>
             Session
           </label>
@@ -1434,10 +1457,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12" >
         
           
-          <label class="md-nav__link" for="__nav_2_11" id="__nav_2_11_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_12" id="__nav_2_12_label" tabindex="0">
             
   
   
@@ -1450,8 +1473,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_11_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_11">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12">
             <span class="md-nav__icon md-icon"></span>
             Knowledge
           </label>
@@ -1636,10 +1659,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_11_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_8" >
         
           
-          <label class="md-nav__link" for="__nav_2_11_8" id="__nav_2_11_8_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_12_8" id="__nav_2_12_8_label" tabindex="0">
             
   
   
@@ -1652,8 +1675,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_11_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_11_8">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_8">
             <span class="md-nav__icon md-icon"></span>
             VectorStore
           </label>
@@ -2035,6 +2058,29 @@
   
   <span class="md-ellipsis">
     A2A
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../a2ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2UI
     
   </span>
   
@@ -2488,7 +2534,7 @@ when actually needed, and runs scripts inside an isolated workspace.</p>
 the prompt up-front, it can dominate your prompt-token budget and even
 exceed the model context window.</p>
 <p>For a reproducible, <strong>runtime</strong> token comparison (progressive disclosure
-vs full injection), see <code>benchmark/anthropic_skills/README.md</code> and run
+vs full injection), see <a href="https://github.com/trpc-group/trpc-agent-go-benchmark/blob/main/anthropic_skills/README.md">trpc-agent-go-benchmark/anthropic_skills/README.md</a> and run
 the <code>token-report</code> suite described there.</p>
 <h3 id="prompt-cache">Prompt Cache</h3>
 <p>Some model providers support <strong>prompt caching</strong>: if a later model request
@@ -2528,7 +2574,7 @@ body/docs.</p>
 To restore the legacy fallback behavior in summary mode:
 <code>llmagent.WithSkipSkillsFallbackOnSessionSummary(false)</code>.</p>
 <p>To measure the impact in a real tool-using flow, run the
-<code>benchmark/anthropic_skills</code> <code>prompt-cache</code> suite.</p>
+<a href="https://github.com/trpc-group/trpc-agent-go-benchmark/tree/main/anthropic_skills">trpc-agent-go-benchmark/anthropic_skills</a> <code>prompt-cache</code> suite.</p>
 <p>How this relates to <code>SkillLoadMode</code> (common pitfall):</p>
 <ul>
 <li>The cache-prefix discussion above mostly applies to multiple model
@@ -2710,8 +2756,12 @@ messages</strong>, which is typically more prompt-cache friendly.</p>
 - <code>WithSkills</code> auto-registers built-in skill tools; no manual wiring is
   required.
   - Default <code>full</code> profile: <code>skill_load</code>, <code>skill_select_docs</code>,
-    <code>skill_list_docs</code>, <code>skill_run</code>, <code>skill_exec</code>,
-    <code>skill_write_stdin</code>, <code>skill_poll_session</code>, <code>skill_kill_session</code>.
+    <code>skill_list_docs</code>, <code>skill_run</code>, and — when the executor supports
+    interactive sessions — <code>skill_exec</code>, <code>skill_write_stdin</code>,
+    <code>skill_poll_session</code>, <code>skill_kill_session</code>.  If the executor does
+    not implement <code>InteractiveProgramRunner</code> (and no local fallback
+    applies), these session tools are omitted and the corresponding
+    prompt guidance is suppressed.
   - <code>knowledge_only</code> profile: only <code>skill_load</code>, <code>skill_select_docs</code>,
     and <code>skill_list_docs</code>.
   - Executor requirement follows the profile:
@@ -3998,7 +4048,7 @@ in tools like <code>read_file</code>.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 10, 2026 08:44:52 UTC">2026-03-10 08:44:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 20, 2026 09:53:34 UTC">2026-03-20 09:53:34</span>
   </span>
 
     
