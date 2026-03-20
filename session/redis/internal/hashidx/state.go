@@ -21,39 +21,87 @@ import (
 
 // UpdateSessionState updates the session-level state directly (HashIdx).
 func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
-	metaJSON, err := c.client.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
-	if err != nil {
-		if err == redis.Nil {
-			return fmt.Errorf("session not found")
+	ttlSeconds := int64(0)
+	if c.cfg.SessionTTL > 0 {
+		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
+	}
+
+	retryDelay := 5 * time.Millisecond
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		return fmt.Errorf("get session meta: %w", err)
+
+		metaJSON, err := c.client.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
+		if err != nil {
+			if err == redis.Nil {
+				return fmt.Errorf("session not found")
+			}
+			return fmt.Errorf("get session meta: %w", err)
+		}
+
+		var meta sessionMeta
+		if err := json.Unmarshal(metaJSON, &meta); err != nil {
+			return fmt.Errorf("unmarshal session meta: %w", err)
+		}
+
+		if meta.State == nil {
+			meta.State = make(session.StateMap)
+		}
+		for k, v := range state {
+			if v == nil {
+				meta.State[k] = nil
+				continue
+			}
+			copiedValue := make([]byte, len(v))
+			copy(copiedValue, v)
+			meta.State[k] = copiedValue
+		}
+		meta.UpdatedAt = time.Now()
+
+		updatedJSON, err := json.Marshal(meta)
+		if err != nil {
+			return fmt.Errorf("marshal session meta: %w", err)
+		}
+
+		result, err := luaUpdateSessionState.Run(
+			ctx,
+			c.client,
+			[]string{c.keys.SessionMetaKey(key)},
+			string(metaJSON),
+			string(updatedJSON),
+			ttlSeconds,
+		).Int()
+		if err != nil {
+			return fmt.Errorf("update session state: %w", err)
+		}
+		switch result {
+		case 1:
+			return nil
+		case 0:
+			return fmt.Errorf("session not found")
+		case 2:
+			timer := time.NewTimer(retryDelay)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return ctx.Err()
+			case <-timer.C:
+			}
+			if retryDelay < 100*time.Millisecond {
+				retryDelay *= 2
+				if retryDelay > 100*time.Millisecond {
+					retryDelay = 100 * time.Millisecond
+				}
+			}
+			continue
+		default:
+			return fmt.Errorf("update session state: unexpected script result %d", result)
+		}
 	}
 
-	var meta sessionMeta
-	if err := json.Unmarshal(metaJSON, &meta); err != nil {
-		return fmt.Errorf("unmarshal session meta: %w", err)
-	}
-
-	if meta.State == nil {
-		meta.State = make(session.StateMap)
-	}
-	for k, v := range state {
-		meta.State[k] = v
-	}
-	meta.UpdatedAt = time.Now()
-
-	updatedJSON, err := json.Marshal(meta)
-	if err != nil {
-		return fmt.Errorf("marshal session meta: %w", err)
-	}
-
-	// Use SetArgs with KeepTTL to preserve the original TTL set by CreateSession/GetSession.
-	if err := c.client.SetArgs(ctx, c.keys.SessionMetaKey(key), updatedJSON, redis.SetArgs{
-		KeepTTL: true,
-	}).Err(); err != nil {
-		return fmt.Errorf("update session state: %w", err)
-	}
-	return nil
 }
 
 // Exists checks if session exists.

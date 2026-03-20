@@ -11,6 +11,33 @@ package hashidx
 
 import "github.com/redis/go-redis/v9"
 
+// luaUpdateSessionState atomically compare-and-swaps session meta.
+// KEYS[1] = sessionMeta key
+// ARGV[1] = expectedMetaJSON, ARGV[2] = updatedMetaJSON, ARGV[3] = TTL (seconds)
+// Returns: 1 on success, 0 if session not found, 2 if current value changed
+var luaUpdateSessionState = redis.NewScript(`
+local sessionMetaKey = KEYS[1]
+local expectedMetaJSON = ARGV[1]
+local updatedMetaJSON = ARGV[2]
+local ttl = tonumber(ARGV[3])
+
+local metaJSON = redis.call('GET', sessionMetaKey)
+if not metaJSON then
+    return 0
+end
+if metaJSON ~= expectedMetaJSON then
+    return 2
+end
+
+if ttl > 0 then
+    redis.call('SET', sessionMetaKey, updatedMetaJSON, 'EX', ttl)
+else
+    redis.call('SET', sessionMetaKey, updatedMetaJSON, 'KEEPTTL')
+end
+
+return 1
+`)
+
 // luaAppendEvent appends an event atomically and applies StateDelta to session state.
 // KEYS[1] = sessionMeta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key
 // ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp, ARGV[4] = TTL (seconds), ARGV[5] = shouldStoreEvent (1 or 0)
