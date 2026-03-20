@@ -408,6 +408,10 @@ func codeownersRef(base pullRequestBase) string {
 	return strings.TrimSpace(base.Ref)
 }
 
+// evaluatePolicy keeps a single external owner approval pool across all changed files.
+// Each changed path contributes its matched CODEOWNERS after removing only the pull request author.
+// A path owned by both the author and other co-owners still requires one of those remaining co-owners.
+// A path stops contributing owners only when the author is its sole owner after normalization.
 func evaluatePolicy(rules []codeOwnerRule, author string, changedPaths, approvers []string) (evaluationResult, error) {
 	authorOwner := ownerTokenFromLogin(author)
 	requiredOwners := map[string]struct{}{}
@@ -418,11 +422,9 @@ func evaluatePolicy(rules []codeOwnerRule, author string, changedPaths, approver
 		if len(owners) == 0 {
 			continue
 		}
-		if containsString(owners, authorOwner) {
-			continue
-		}
 		fileOwners := make([]string, 0, len(owners))
 		for _, owner := range owners {
+			// Remove only the author from the owner set so shared paths still keep their remaining co-owners.
 			if owner == authorOwner {
 				continue
 			}
