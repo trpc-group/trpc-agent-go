@@ -14,9 +14,9 @@ import (
 	"reflect"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -107,11 +107,15 @@ var (
 		// Default to disable memory preloading (use tools instead).
 		// PreloadMemory configuration values:
 		//   - 0 (default): Disable preloading (use tools instead).
-		//   - N > 0: Load the most recent N memories.
+		//   - N > 0: Use adaptive preload with budget N.
+		//     If query extraction is empty, the search fails, or the search
+		//     returns no matches, fall back to loading up to N memories
+		//     directly.
 		//   - -1: Load all memories.
-		//     WARNING: Loading all memories may significantly increase token usage
-		//     and API costs, especially for users with many stored memories.
-		//     Consider using a positive limit (e.g., 10-50) for production use.
+		//     WARNING: Loading all memories may significantly increase token
+		//     usage and API costs, especially for users with many stored
+		//     memories. Consider using a positive budget (e.g., 10-50) for
+		//     production use.
 		PreloadMemory: 0,
 
 		SkillLoadMode: SkillLoadModeTurn,
@@ -328,8 +332,13 @@ type Options struct {
 
 	toolFilter tool.FilterFunc
 
-	// PreloadMemory sets the number of memories to preload into system prompt.
-	// When > 0, the specified number of most recent memories are loaded.
+	// PreloadMemory controls framework-side memory preload.
+	// When > 0, it acts as an adaptive preload budget:
+	//   - If total memories <= N, preload all memories.
+	//   - If total memories > N, preload top-N search results.
+	//   - If query extraction is empty, the search fails, or the search
+	//     returns no matches, fall back to loading up to N memories
+	//     directly.
 	// When 0 (default), no memories are preloaded (use tools instead).
 	// When < 0, all memories are loaded.
 	PreloadMemory int
@@ -463,7 +472,8 @@ func WithCodeExecutor(ce codeexecutor.CodeExecutor) Option {
 }
 
 // WithEnableCodeExecutionResponseProcessor controls whether the agent
-// auto-executes fenced code blocks found in model responses.
+// auto-executes assistant replies that are exactly one runnable fenced
+// code block.
 func WithEnableCodeExecutionResponseProcessor(enable bool) Option {
 	return func(opts *Options) {
 		opts.EnableCodeExecutionResponseProcessor = enable
@@ -945,13 +955,16 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 	}
 }
 
-// WithPreloadMemory sets the number of memories to preload into system prompt.
+// WithPreloadMemory sets the framework-side preload behavior.
 //   - Set to 0 (default) to disable preloading (use tools instead).
-//   - Set to N (N > 0) to load the most recent N memories.
+//   - Set to N (N > 0) to use adaptive preload with budget N.
+//     Small memory sets are preloaded in full. Larger sets use search and
+//     fall back to loading up to N memories directly when search cannot
+//     provide usable results.
 //   - Set to -1 to load all memories.
 //     WARNING: Loading all memories may significantly increase token usage
 //     and API costs, especially for users with many stored memories.
-//     Consider using a positive limit (e.g., 10-50) for production use.
+//     Consider using a positive budget (e.g., 10-50) for production use.
 func WithPreloadMemory(limit int) Option {
 	return func(opts *Options) {
 		opts.PreloadMemory = limit

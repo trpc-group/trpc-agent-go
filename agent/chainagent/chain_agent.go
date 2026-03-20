@@ -85,11 +85,14 @@ func (a *ChainAgent) executeChainRun(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
+	// Setup invocation before tracing so span name and telemetry attributes
+	// share the same invocation agent identity.
+	a.setupInvocation(invocation)
 	stream := iagent.ResolveInvokeAgentStream(invocation, nil)
 	ctx, span, startedSpan := itrace.StartSpan(
 		ctx,
 		invocation,
-		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, a.name),
+		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName),
 	)
 	if startedSpan {
 		itelemetry.TraceBeforeInvokeAgent(
@@ -108,8 +111,7 @@ func (a *ChainAgent) executeChainRun(
 			span.End()
 		}
 	}()
-	// Setup invocation.
-	a.setupInvocation(invocation)
+
 	// Handle before agent callbacks.
 	var shouldReturn bool
 	ctx, shouldReturn = a.handleBeforeAgentCallbacks(ctx, invocation, eventChan)

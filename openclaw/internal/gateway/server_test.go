@@ -2438,7 +2438,7 @@ func TestToolCallProgressSummaries(t *testing.T) {
 	update, ok = progressFromToolCall(model.ToolCall{
 		Function: model.FunctionDefinitionParam{
 			Name:      streamToolExecCommand,
-			Arguments: []byte(`{}`),
+			Arguments: []byte(`{"command":"go test ./..."}`),
 		},
 	})
 	require.True(t, ok)
@@ -2447,7 +2447,25 @@ func TestToolCallProgressSummaries(t *testing.T) {
 		gwproto.StreamProgressStageRunningTool,
 		update.stage,
 	)
-	require.Equal(t, progressSummaryTool, update.summary)
+	require.Equal(t, progressSummaryGoTest, update.summary)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name:      streamToolExecCommand,
+			Arguments: []byte(`{"command":"git status"}`),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryGit, update.summary)
+
+	update, ok = progressFromToolCall(model.ToolCall{
+		Function: model.FunctionDefinitionParam{
+			Name:      streamToolExecCommand,
+			Arguments: []byte(`{"command":"rg TODO ."}`),
+		},
+	})
+	require.True(t, ok)
+	require.Equal(t, progressSummaryInspect, update.summary)
 
 	update, ok = progressFromToolCall(model.ToolCall{
 		Function: model.FunctionDefinitionParam{
@@ -2743,6 +2761,44 @@ func TestServer_StreamMessage_EmptyReplyFallback(t *testing.T) {
 		gwproto.StreamEventTypeRunCompleted,
 		events[3].Type,
 	)
+}
+
+func TestServer_StreamMessage_CanceledRequest(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{})
+	require.NoError(t, err)
+	srv.canceled.Mark("req-1")
+
+	stream, apiErr, status := srv.StreamMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			From:      "u1",
+			Text:      "hello",
+			RequestID: "req-1",
+		},
+	)
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 3)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCanceled,
+		events[2].Type,
+	)
+	require.Empty(t, events[2].Reply)
 }
 
 func TestServer_StreamMessage_DebugRecorderPaths(t *testing.T) {

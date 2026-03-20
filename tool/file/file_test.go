@@ -219,3 +219,34 @@ func TestTools_InvalidBaseDir(t *testing.T) {
 	_, err = NewToolSet(WithBaseDir(file))
 	assert.Error(t, err)
 }
+
+func TestNormalizeInputsAlias_AndHints(t *testing.T) {
+	dir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(dir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	assert.Equal(t, "", (*fileToolSet)(nil).missingFileHint())
+	assert.Equal(t, "", (*fileToolSet)(nil).topLevelEntriesHint())
+	assert.Equal(t, "", fts.normalizeInputsAlias("inputs"))
+	assert.Equal(t, "a.txt", fts.normalizeInputsAlias("inputs/a.txt"))
+	assert.Contains(t, fts.topLevelEntriesHint(), missingFileNoEntriesFallback)
+	assert.Contains(t, fts.missingFileHint(), missingFileRecoveryGuidance)
+}
+
+func TestTopLevelEntriesHint_TruncatesAndMarksDirectories(t *testing.T) {
+	dir := t.TempDir()
+	err := os.Mkdir(filepath.Join(dir, "aaa"), 0o755)
+	assert.NoError(t, err)
+	for i := 0; i < missingFileHintMaxEntries+1; i++ {
+		name := filepath.Join(dir, "file"+string(rune('a'+i)))
+		err := os.WriteFile(name, []byte("x"), 0o644)
+		assert.NoError(t, err)
+	}
+
+	set, err := NewToolSet(WithBaseDir(dir))
+	assert.NoError(t, err)
+	hint := set.(*fileToolSet).topLevelEntriesHint()
+	assert.Contains(t, hint, "aaa"+missingFileDirectorySuffix)
+	assert.Contains(t, hint, "...")
+}

@@ -104,6 +104,7 @@ type options struct {
 	debugLogging              bool
 	userIDHeader              string
 	adkCompatibility          bool
+	structuredTaskErrors      bool
 }
 
 // Option is a function that configures a Server.
@@ -319,6 +320,14 @@ func WithADKCompatibility(enabled bool) Option {
 func WithStreamingEventType(eventType StreamingEventType) Option {
 	return func(opts *options) {
 		opts.streamingEventType = eventType
+	}
+}
+
+// WithStructuredTaskErrors enables structured propagation of agent
+// Response.Error values through A2A task status metadata.
+func WithStructuredTaskErrors(enable bool) Option {
+	return func(opts *options) {
+		opts.structuredTaskErrors = enable
 	}
 }
 

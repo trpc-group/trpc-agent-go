@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +21,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -148,6 +151,306 @@ func (m *staticModel) GenerateContent(
 }
 
 func (m *staticModel) Info() model.Info { return model.Info{Name: m.name} }
+
+type runnerStructuredOutputTypedPayload struct {
+	Answer string `json:"answer"`
+	Score  int    `json:"score"`
+}
+
+type capturedModelRequest struct {
+	messages         []model.Message
+	structuredOutput *model.StructuredOutput
+}
+
+type capturingStructuredOutputModel struct {
+	name    string
+	content string
+
+	mu       sync.Mutex
+	requests []*capturedModelRequest
+}
+
+func (m *capturingStructuredOutputModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	m.requests = append(m.requests, cloneCapturedModelRequest(req))
+	m.mu.Unlock()
+
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		ID:        staticModelResponseIDPrefix + m.name,
+		Done:      true,
+		IsPartial: false,
+		Choices: []model.Choice{{
+			Index:   0,
+			Message: model.NewAssistantMessage(m.content),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *capturingStructuredOutputModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *capturingStructuredOutputModel) LatestRequest() *capturedModelRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.requests) == 0 {
+		return nil
+	}
+	return m.requests[len(m.requests)-1]
+}
+
+func cloneCapturedModelRequest(req *model.Request) *capturedModelRequest {
+	if req == nil {
+		return nil
+	}
+	cloned := &capturedModelRequest{
+		messages: append([]model.Message(nil), req.Messages...),
+	}
+	if req.StructuredOutput != nil {
+		structuredOutput := *req.StructuredOutput
+		if req.StructuredOutput.JSONSchema != nil {
+			jsonSchema := *req.StructuredOutput.JSONSchema
+			structuredOutput.JSONSchema = &jsonSchema
+		}
+		cloned.structuredOutput = &structuredOutput
+	}
+	return cloned
+}
+
+func firstSystemMessageContent(messages []model.Message) string {
+	for _, msg := range messages {
+		if msg.Role == model.RoleSystem {
+			return msg.Content
+		}
+	}
+	return ""
+}
+
+func collectStructuredOutput(events <-chan *event.Event) any {
+	var structured any
+	for evt := range events {
+		if evt != nil && evt.StructuredOutput != nil {
+			structured = evt.StructuredOutput
+		}
+	}
+	return structured
+}
+
+func runRunnerWithTypedStructuredOutput(
+	t *testing.T,
+	ag agent.Agent,
+	description string,
+) *runnerStructuredOutputTypedPayload {
+	t.Helper()
+	r := NewRunner(
+		"typed-structured-output-wrapper-app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-wrapper",
+		"session-wrapper",
+		model.NewUserMessage("hello"),
+		agent.WithStructuredOutputJSON(
+			new(runnerStructuredOutputTypedPayload),
+			true,
+			description,
+		),
+	)
+	require.NoError(t, err)
+	structured := collectStructuredOutput(eventCh)
+	payload, ok := structured.(*runnerStructuredOutputTypedPayload)
+	require.True(t, ok, "expected typed structured output payload")
+	require.Equal(t, "ok", payload.Answer)
+	require.Equal(t, 7, payload.Score)
+	return payload
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSON_InjectsSchemaAndEmitsTypedPayload(t *testing.T) {
+	modelImpl := &capturingStructuredOutputModel{
+		name:    "typed-structured-output-model",
+		content: `{"answer":"ok","score":7}`,
+	}
+	ag := llmagent.New(
+		"typed-structured-output-agent",
+		llmagent.WithModel(modelImpl),
+	)
+	r := NewRunner(
+		"typed-structured-output-app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("hello"),
+		agent.WithStructuredOutputJSON(
+			new(runnerStructuredOutputTypedPayload),
+			true,
+			"Return one typed payload.",
+		),
+	)
+	require.NoError(t, err)
+
+	structured := collectStructuredOutput(eventCh)
+	payload, ok := structured.(*runnerStructuredOutputTypedPayload)
+	require.True(t, ok, "expected typed structured output payload")
+	require.Equal(t, "ok", payload.Answer)
+	require.Equal(t, 7, payload.Score)
+
+	captured := modelImpl.LatestRequest()
+	require.NotNil(t, captured, "expected one model request to be captured")
+	require.NotNil(t, captured.structuredOutput)
+	require.Equal(t, model.StructuredOutputJSONSchema, captured.structuredOutput.Type)
+	require.NotNil(t, captured.structuredOutput.JSONSchema)
+	require.Equal(t, "runnerStructuredOutputTypedPayload", captured.structuredOutput.JSONSchema.Name)
+	require.True(t, captured.structuredOutput.JSONSchema.Strict)
+	require.Equal(t, "Return one typed payload.", captured.structuredOutput.JSONSchema.Description)
+	require.Equal(t, "object", captured.structuredOutput.JSONSchema.Schema["type"])
+	properties, ok := captured.structuredOutput.JSONSchema.Schema["properties"].(map[string]any)
+	require.True(t, ok, "expected generated schema properties")
+	require.Contains(t, properties, "answer")
+	require.Contains(t, properties, "score")
+
+	systemContent := firstSystemMessageContent(captured.messages)
+	require.NotEmpty(t, systemContent, "expected structured output instructions to create one system message")
+	assert.Contains(t, systemContent, "IMPORTANT: Return ONLY a JSON object")
+	assert.Contains(t, systemContent, `"answer"`)
+	assert.Contains(t, systemContent, `"score"`)
+	assert.NotContains(t, systemContent, "You MAY call tools")
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSONSchema_InjectsSchemaAndEmitsUntypedPayload(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"status": map[string]any{"type": "string"},
+			"count":  map[string]any{"type": "integer"},
+		},
+		"additionalProperties": false,
+	}
+	modelImpl := &capturingStructuredOutputModel{
+		name:    "untyped-structured-output-model",
+		content: `{"status":"ok","count":3}`,
+	}
+	ag := llmagent.New(
+		"untyped-structured-output-agent",
+		llmagent.WithModel(modelImpl),
+	)
+	r := NewRunner(
+		"untyped-structured-output-app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-2",
+		"session-2",
+		model.NewUserMessage("hello"),
+		agent.WithStructuredOutputJSONSchema(
+			"runtime_output",
+			schema,
+			true,
+			"Return one payload matching the runtime schema.",
+		),
+	)
+	require.NoError(t, err)
+
+	structured := collectStructuredOutput(eventCh)
+	payload, ok := structured.(map[string]any)
+	require.True(t, ok, "expected untyped structured output payload")
+	require.Equal(t, "ok", payload["status"])
+	require.EqualValues(t, 3, payload["count"])
+
+	captured := modelImpl.LatestRequest()
+	require.NotNil(t, captured, "expected one model request to be captured")
+	require.NotNil(t, captured.structuredOutput)
+	require.Equal(t, model.StructuredOutputJSONSchema, captured.structuredOutput.Type)
+	require.NotNil(t, captured.structuredOutput.JSONSchema)
+	require.Equal(t, "runtime_output", captured.structuredOutput.JSONSchema.Name)
+	require.True(t, captured.structuredOutput.JSONSchema.Strict)
+	require.Equal(
+		t,
+		"Return one payload matching the runtime schema.",
+		captured.structuredOutput.JSONSchema.Description,
+	)
+	require.Equal(t, schema, captured.structuredOutput.JSONSchema.Schema)
+
+	systemContent := firstSystemMessageContent(captured.messages)
+	require.NotEmpty(t, systemContent, "expected structured output instructions to create one system message")
+	assert.Contains(t, systemContent, "IMPORTANT: Return ONLY a JSON object")
+	assert.Contains(t, systemContent, `"status"`)
+	assert.Contains(t, systemContent, `"count"`)
+	assert.NotContains(t, systemContent, "You MAY call tools")
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSON_PassesThroughChainAgent(t *testing.T) {
+	const description = "Return one typed payload through chain."
+	modelImpl := &capturingStructuredOutputModel{
+		name:    "chain-structured-output-model",
+		content: `{"answer":"ok","score":7}`,
+	}
+	leaf := llmagent.New(
+		"chain-leaf-agent",
+		llmagent.WithModel(modelImpl),
+	)
+	ag := chainagent.New(
+		"chain-wrapper-agent",
+		chainagent.WithSubAgents([]agent.Agent{leaf}),
+	)
+
+	runRunnerWithTypedStructuredOutput(t, ag, description)
+
+	captured := modelImpl.LatestRequest()
+	require.NotNil(t, captured, "expected one model request to be captured")
+	require.NotNil(t, captured.structuredOutput)
+	require.NotNil(t, captured.structuredOutput.JSONSchema)
+	require.Equal(t, "runnerStructuredOutputTypedPayload", captured.structuredOutput.JSONSchema.Name)
+	require.Equal(t, description, captured.structuredOutput.JSONSchema.Description)
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSON_PassesThroughGraphAgent(t *testing.T) {
+	const description = "Return one typed payload through graph."
+	modelImpl := &capturingStructuredOutputModel{
+		name:    "graph-structured-output-model",
+		content: `{"answer":"ok","score":7}`,
+	}
+	leaf := llmagent.New(
+		"graph-leaf-agent",
+		llmagent.WithModel(modelImpl),
+	)
+	compiled, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddAgentNode(leaf.Info().Name).
+		SetEntryPoint(leaf.Info().Name).
+		SetFinishPoint(leaf.Info().Name).
+		Compile()
+	require.NoError(t, err)
+	ag, err := graphagent.New(
+		"graph-wrapper-agent",
+		compiled,
+		graphagent.WithSubAgents([]agent.Agent{leaf}),
+	)
+	require.NoError(t, err)
+
+	runRunnerWithTypedStructuredOutput(t, ag, description)
+
+	captured := modelImpl.LatestRequest()
+	require.NotNil(t, captured, "expected one model request to be captured")
+	require.NotNil(t, captured.structuredOutput)
+	require.NotNil(t, captured.structuredOutput.JSONSchema)
+	require.Equal(t, "runnerStructuredOutputTypedPayload", captured.structuredOutput.JSONSchema.Name)
+	require.Equal(t, description, captured.structuredOutput.JSONSchema.Description)
+}
 
 func TestRunner_SessionIntegration(t *testing.T) {
 	// Create an in-memory session service.
@@ -1682,6 +1985,57 @@ func (m *fallbackCompletionAgent) Run(
 	return ch, nil
 }
 
+type fallbackGraphCompletionAgent struct {
+	name       string
+	delta      map[string][]byte
+	errType    string
+	errMessage string
+}
+
+func (m *fallbackGraphCompletionAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *fallbackGraphCompletionAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *fallbackGraphCompletionAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *fallbackGraphCompletionAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *fallbackGraphCompletionAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	if len(m.delta) > 0 {
+		ch <- event.New(
+			inv.InvocationID,
+			m.name,
+			event.WithStateDelta(m.delta),
+		)
+	}
+	if m.errMessage != "" {
+		ch <- graph.NewNodeErrorEvent(
+			graph.WithNodeEventInvocationID(inv.InvocationID),
+			graph.WithNodeEventNodeID("lookup"),
+			graph.WithNodeEventNodeType(graph.NodeTypeFunction),
+			graph.WithNodeEventError(m.errMessage),
+			graph.WithNodeEventResponseError(&model.ResponseError{
+				Type:    m.errType,
+				Message: m.errMessage,
+			}),
+		)
+	}
+	close(ch)
+	return ch, nil
+}
+
 func TestNewRunner_DefaultSessionService(t *testing.T) {
 	// No WithSessionService option -> should default to inmemory session service.
 	r := NewRunner("app", &noOpAgent{name: "a"})
@@ -1807,6 +2161,47 @@ func TestRunner_CompletionIncludesFallbackBusinessState(t *testing.T) {
 		string(completion.StateDelta[stateKey]))
 	require.NotContains(t, completion.StateDelta, graph.MetadataKeyNode)
 	require.NotContains(t, completion.StateDelta, graph.MetadataKeyTool)
+}
+
+func TestRunner_CompletionCarriesGraphTerminalError(t *testing.T) {
+	const (
+		stateKey   = "_node_error_"
+		stateValue = "fatal callback"
+		errType    = model.ErrorTypeFlowError
+		errMessage = "execution failed"
+	)
+
+	svc := sessioninmemory.NewSessionService()
+	ag := &fallbackGraphCompletionAgent{
+		name: "graph-fallback",
+		delta: map[string][]byte{
+			stateKey: []byte(stateValue),
+		},
+		errType:    errType,
+		errMessage: errMessage,
+	}
+	r := NewRunner("app", ag, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage(""),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for e := range ch {
+		if e.IsRunnerCompletion() {
+			completion = e
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.Response)
+	require.NotNil(t, completion.Response.Error)
+	require.Equal(t, errType, completion.Response.Error.Type)
+	require.Equal(t, errMessage, completion.Response.Error.Message)
+	require.Equal(t, stateValue, string(completion.StateDelta[stateKey]))
 }
 
 func TestRunner_CompletionSkipsFallbackAfterRecovery(t *testing.T) {

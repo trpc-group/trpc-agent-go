@@ -203,11 +203,17 @@ func (f *fileToolSet) readFileFromDiskOrCache(
 			}
 		}
 		rsp.Message = fmt.Sprintf(
-			"Error: cannot access file '%s': %v",
+			"Error: cannot access file '%s': %v. %s",
 			req.FileName,
 			err,
+			f.missingFileHint(),
 		)
-		return fmt.Errorf("accessing file '%s': %w", req.FileName, err)
+		return fmt.Errorf(
+			"accessing file '%s' under base directory '%s': %w",
+			req.FileName,
+			f.baseDir,
+			err,
+		)
 	}
 	if stat.IsDir() {
 		rsp.Message = fmt.Sprintf(

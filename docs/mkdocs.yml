@@ -17,6 +17,7 @@ nav:
           - Dify Agent: dify.md
           - Claude Code Agent: claudecode.md
       - Runner: runner.md
+      - Error Handling: error-handling.md
       - Model: model.md
       - Callbacks: callbacks.md
       - Plugins: plugin.md
@@ -57,6 +58,7 @@ nav:
     - Gateway: gateway.md
     - AG-UI: agui.md
     - A2A: a2a.md
+    - A2UI: a2ui.md
     - OpenClaw Runtime: openclaw-runtime.md
   - Observability: observability.md
   - Ecosystem: ecosystem.md
@@ -86,6 +88,7 @@ plugins:
                     - Dify Agent: dify.md
                     - Claude Code Agent: claudecode.md
                 - Runner: runner.md
+                - 错误处理: error-handling.md
                 - Model: model.md
                 - Callbacks: callbacks.md
                 - Plugins: plugin.md
@@ -126,6 +129,7 @@ plugins:
               - Gateway: gateway.md
               - AG-UI: agui.md
               - A2A: a2a.md
+              - A2UI: a2ui.md
               - OpenClaw Runtime: openclaw-runtime.md
             - 可观测: observability.md
             - 生态: ecosystem.md

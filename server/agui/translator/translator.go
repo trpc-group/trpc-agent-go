@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
@@ -23,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -30,6 +32,21 @@ import (
 type Translator interface {
 	// Translate translates a trpc-agent-go event to AG-UI events.
 	Translate(ctx context.Context, event *agentevent.Event) ([]aguievents.Event, error)
+}
+
+// TranslatorFactory is a function that creates a translator for an AG-UI run.
+type Factory func(ctx context.Context, input *adapter.RunAgentInput, opts ...Option) (Translator, error)
+
+// NewFactory creates a default translator factory for AG-UI.
+// The returned factory constructs the default translator with the provided input and options.
+func NewFactory(baseOpts ...Option) Factory {
+	return func(ctx context.Context, input *adapter.RunAgentInput, opts ...Option) (Translator, error) {
+		if input == nil {
+			return nil, errors.New("run agent input is nil")
+		}
+		allOpts := append(slices.Clone(baseOpts), opts...)
+		return New(ctx, input.ThreadID, input.RunID, allOpts...)
+	}
 }
 
 // PostRunFinalizingTranslator extends Translator with post-run finalization events.

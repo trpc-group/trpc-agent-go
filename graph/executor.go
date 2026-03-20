@@ -3192,6 +3192,7 @@ func runAfterNodeCallbacks(
 	}
 
 	currentResult := result
+	currentErr := nodeErr
 	var overridden bool
 	for _, cb := range callbacks.AfterNode {
 		if cb == nil {
@@ -3202,7 +3203,7 @@ func runAfterNodeCallbacks(
 			callbackCtx,
 			state,
 			currentResult,
-			nodeErr,
+			currentErr,
 		)
 		if err != nil {
 			return nil, false, err
@@ -3212,6 +3213,7 @@ func runAfterNodeCallbacks(
 		}
 		overridden = true
 		currentResult = customResult
+		currentErr = nil
 	}
 	return currentResult, overridden, nil
 }
