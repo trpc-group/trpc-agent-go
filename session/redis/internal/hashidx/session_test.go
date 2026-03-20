@@ -107,6 +107,42 @@ func TestClient_CreateSession(t *testing.T) {
 		original["key"][0] = 'X'
 		assert.Equal(t, []byte("original"), sess.State["key"])
 	})
+
+	t.Run("without user session index does not create index entry", func(t *testing.T) {
+		cfg := defaultConfig()
+		cfg.EnableUserSessionIndex = false
+		legacyClient := NewClient(rdb, cfg)
+		key4 := session.Key{AppName: "app", UserID: "u1", SessionID: "s4"}
+
+		_, err := legacyClient.CreateSession(ctx, key4, nil)
+		require.NoError(t, err)
+
+		indexKey := legacyClient.keys.SessionIndexKey(session.UserKey{
+			AppName: key4.AppName,
+			UserID:  key4.UserID,
+		})
+		exists, err := rdb.HExists(ctx, indexKey, key4.SessionID).Result()
+		require.NoError(t, err)
+		assert.False(t, exists)
+	})
+
+	t.Run("with user session index and no ttl still creates index entry", func(t *testing.T) {
+		cfg := defaultConfig()
+		cfg.SessionTTL = 0
+		noTTLClient := NewClient(rdb, cfg)
+		key5 := session.Key{AppName: "app", UserID: "u2", SessionID: "s1"}
+
+		_, err := noTTLClient.CreateSession(ctx, key5, nil)
+		require.NoError(t, err)
+
+		indexKey := noTTLClient.keys.SessionIndexKey(session.UserKey{
+			AppName: key5.AppName,
+			UserID:  key5.UserID,
+		})
+		exists, err := rdb.HExists(ctx, indexKey, key5.SessionID).Result()
+		require.NoError(t, err)
+		assert.True(t, exists)
+	})
 }
 
 func TestClient_GetSession(t *testing.T) {
@@ -249,6 +285,25 @@ func TestClient_DeleteSession(t *testing.T) {
 	exists, err = rdb.HExists(ctx, indexKey, key.SessionID).Result()
 	require.NoError(t, err)
 	assert.False(t, exists)
+}
+
+func TestClient_DeleteSession_FallbackWhenUserIndexDisabled(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	cfg := defaultConfig()
+	cfg.EnableUserSessionIndex = false
+	c := NewClient(rdb, cfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "del-legacy"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent("e1", time.Now())))
+
+	require.NoError(t, c.DeleteSession(ctx, key))
+
+	sess, err := c.GetSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+	assert.Nil(t, sess)
 }
 
 func TestClient_DeleteSession_WithTracks(t *testing.T) {
@@ -425,6 +480,30 @@ func TestClient_ListSessions_CleansStaleUserIndexEntries(t *testing.T) {
 	validExists, err := rdb.HExists(ctx, indexKey, validKey.SessionID).Result()
 	require.NoError(t, err)
 	assert.True(t, validExists)
+}
+
+func TestClient_ListSessions_SkipsInvalidMetaFromUserIndex(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	userKey := session.UserKey{AppName: "app", UserID: "u1"}
+	validKey := session.Key{AppName: "app", UserID: "u1", SessionID: "good1"}
+	_, err := c.CreateSession(ctx, validKey, nil)
+	require.NoError(t, err)
+
+	badKey := session.Key{AppName: "app", UserID: "u1", SessionID: "bad1"}
+	indexKey := c.keys.SessionIndexKey(userKey)
+	badMetaKey := c.keys.SessionMetaKey(badKey)
+	entry, err := json.Marshal(sessionIndexEntry{CreatedAt: time.Now()})
+	require.NoError(t, err)
+	require.NoError(t, rdb.HSet(ctx, indexKey, badKey.SessionID, entry).Err())
+	require.NoError(t, rdb.Set(ctx, badMetaKey, "not-json", 0).Err())
+
+	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, validKey.SessionID, sessions[0].ID)
 }
 
 func TestClient_Exists(t *testing.T) {
