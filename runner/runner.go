@@ -382,6 +382,8 @@ func (r *runner) Run(
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationAgent(ag),
 		agent.WithInvocationRunOptions(ro),
+		agent.WithInvocationStructuredOutput(ro.StructuredOutput),
+		agent.WithInvocationStructuredOutputType(ro.StructuredOutputType),
 		agent.WithInvocationMemoryService(r.memoryService),
 		agent.WithInvocationArtifactService(r.artifactService),
 		agent.WithInvocationEventFilterKey(eventFilterKey),

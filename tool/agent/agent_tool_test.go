@@ -17,11 +17,13 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
@@ -462,6 +464,46 @@ func (m *filterKeyAgent) Tools() []tool.Tool              { return nil }
 func (m *filterKeyAgent) Info() agent.Info                { return agent.Info{Name: m.name, Description: "fk"} }
 func (m *filterKeyAgent) SubAgents() []agent.Agent        { return nil }
 func (m *filterKeyAgent) FindSubAgent(string) agent.Agent { return nil }
+
+type structuredOutputCaptureModel struct {
+	name       string
+	mu         sync.Mutex
+	seen       bool
+	schemaName string
+}
+
+func (m *structuredOutputCaptureModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	if req != nil &&
+		req.StructuredOutput != nil &&
+		req.StructuredOutput.JSONSchema != nil {
+		m.seen = true
+		m.schemaName = req.StructuredOutput.JSONSchema.Name
+	}
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage(`{"status":"ok"}`),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *structuredOutputCaptureModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *structuredOutputCaptureModel) Snapshot() (bool, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.seen, m.schemaName
+}
 
 func TestTool_Call_MirrorsChildEventsToSession(t *testing.T) {
 	sa := &sessionMirrorAgent{name: "session-mirror"}
@@ -1647,6 +1689,40 @@ func TestTool_callWithParentInvocation_NoSessionFallback(t *testing.T) {
 	res, err := at.callWithParentInvocation(context.Background(), parent, model.NewUserMessage("hi"))
 	require.NoError(t, err)
 	require.Equal(t, "Hello from mock agent!", res)
+}
+
+func TestTool_callWithParentInvocation_PreservesRunStructuredOutput(t *testing.T) {
+	modelImpl := &structuredOutputCaptureModel{name: "capture-model"}
+	child := llmagent.New("structured-output-child", llmagent.WithModel(modelImpl))
+	at := NewTool(child)
+	runOpts := agent.RunOptions{}
+	agent.WithStructuredOutputJSONSchema(
+		"tool_output",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"status": map[string]any{"type": "string"},
+			},
+		},
+		true,
+		"Return one object.",
+	)(&runOpts)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(runOpts),
+		agent.WithInvocationStructuredOutput(runOpts.StructuredOutput),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	res, err := at.callWithParentInvocation(
+		context.Background(),
+		parent,
+		model.NewUserMessage("hi"),
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, res)
+	seen, schemaName := modelImpl.Snapshot()
+	require.True(t, seen)
+	require.Equal(t, "tool_output", schemaName)
 }
 
 func TestTool_Call_WithParentInvocation_FlushError(t *testing.T) {

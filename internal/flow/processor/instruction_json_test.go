@@ -159,3 +159,51 @@ func TestInstructionProc_JSONInjection_OutputSchema(t *testing.T) {
 		t.Errorf("expected schema properties to be present in instructions")
 	}
 }
+
+func TestInstructionProc_JSONInjection_UsesInvocationStructuredOutput(t *testing.T) {
+	staticSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"x": map[string]any{"type": "string"},
+		},
+	}
+	runSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"z": map[string]any{"type": "integer"},
+		},
+	}
+
+	p := NewInstructionRequestProcessor(
+		"",
+		"",
+		WithStructuredOutputSchema(staticSchema),
+	)
+
+	req := &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}}
+	inv := &agent.Invocation{
+		AgentName:    "a",
+		InvocationID: "id-3",
+		StructuredOutput: &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name:   "run_output",
+				Schema: runSchema,
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	if len(req.Messages) == 0 || req.Messages[0].Role != model.RoleSystem {
+		t.Fatalf("expected a system message to be created")
+	}
+	content := req.Messages[0].Content
+	if !strings.Contains(content, `"z"`) {
+		t.Errorf("expected invocation schema to be present in instructions")
+	}
+	if strings.Contains(content, `"x"`) {
+		t.Errorf("did not expect static schema to be used when invocation schema is present")
+	}
+}

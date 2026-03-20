@@ -152,9 +152,17 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// Add output response processor if output_key or output_schema is configured or structured output is requested.
-	if options.OutputKey != "" || options.OutputSchema != nil || options.StructuredOutput != nil {
+	if hasStaticOutputResponseProcessor(&options) {
 		orp := processor.NewOutputResponseProcessor(options.OutputKey, options.OutputSchema)
 		responseProcessors = append(responseProcessors, orp)
+	} else {
+		responseProcessors = append(
+			responseProcessors,
+			processor.NewConditionalResponseProcessor(
+				hasInvocationStructuredOutput,
+				processor.NewOutputResponseProcessor("", nil),
+			),
+		)
 	}
 
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(options.EnableParallelTools, options.ToolCallbacks)
@@ -206,10 +214,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 
 	// 3. Instruction processor - adds instruction content and system prompt.
-	if options.Instruction != "" || options.GlobalInstruction != "" ||
-		len(options.ModelInstructions) > 0 ||
-		len(options.ModelGlobalInstructions) > 0 ||
-		(options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil) {
+	if hasStaticInstructionProcessor(options) {
 		instructionOpts := []processor.InstructionRequestProcessorOption{
 			processor.WithOutputSchema(options.OutputSchema),
 		}
@@ -233,6 +238,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			instructionOpts...,
 		)
 		requestProcessors = append(requestProcessors, instructionProcessor)
+	} else {
+		requestProcessors = append(
+			requestProcessors,
+			processor.NewConditionalRequestProcessor(
+				hasInvocationStructuredOutput,
+				processor.NewInstructionRequestProcessor("", ""),
+			),
+		)
 	}
 
 	// 4. Identity processor - sets agent identity.
@@ -328,6 +341,26 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	requestProcessors = appendTimeProcessor(options, requestProcessors)
 
 	return requestProcessors
+}
+
+func hasStaticInstructionProcessor(options *Options) bool {
+	return options.Instruction != "" ||
+		options.GlobalInstruction != "" ||
+		len(options.ModelInstructions) > 0 ||
+		len(options.ModelGlobalInstructions) > 0 ||
+		options.OutputSchema != nil ||
+		(options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil)
+}
+
+func hasStaticOutputResponseProcessor(options *Options) bool {
+	return options.OutputKey != "" || options.OutputSchema != nil || options.StructuredOutput != nil
+}
+
+func hasInvocationStructuredOutput(ctx context.Context, invocation *agent.Invocation) bool {
+	if invocation == nil {
+		return false
+	}
+	return invocation.StructuredOutput != nil || invocation.StructuredOutputType != nil
 }
 
 func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
@@ -762,9 +795,20 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	invocation.Agent = a
 	invocation.AgentName = a.name
 
-	// Propagate structured output configuration into invocation and request path.
-	invocation.StructuredOutputType = a.structuredOutputType
-	invocation.StructuredOutput = a.structuredOutput
+	// Lift run-scoped structured output into the current invocation once.
+	if invocation.StructuredOutput == nil {
+		invocation.StructuredOutput = invocation.RunOptions.StructuredOutput
+	}
+	if invocation.StructuredOutputType == nil {
+		invocation.StructuredOutputType = invocation.RunOptions.StructuredOutputType
+	}
+	// Keep run-scoped values on RunOptions so clone-based handoffs can reuse the same output contract.
+	if invocation.StructuredOutput == nil {
+		invocation.StructuredOutput = a.structuredOutput
+	}
+	if invocation.StructuredOutputType == nil {
+		invocation.StructuredOutputType = a.structuredOutputType
+	}
 
 	// Propagate per-agent safety limits into the invocation. These limits are
 	// evaluated by the Invocation helpers (IncLLMCallCount / IncToolIteration)

@@ -220,18 +220,37 @@ func TestGenerator_IsOmitEmpty(t *testing.T) {
 		tag      string
 		expected bool
 	}{
-		{"", false},
-		{"field_name", false},
-		{"field_name,omitempty", true},
-		{"field_name,omitempty,string", true},
-		{",omitempty", true},
-		{"omitempty", false}, // Only tag name without comma.
+		{tag: "", expected: false},
+		{tag: "field", expected: false},
+		{tag: "field,omitempty", expected: true},
+		{tag: "field,string", expected: false},
+		{tag: "field,string,omitempty", expected: true},
 	}
 
 	for _, tt := range tests {
-		result := isOmitEmpty(tt.tag)
-		if result != tt.expected {
-			t.Errorf("isOmitEmpty(%q) = %v, expected %v", tt.tag, result, tt.expected)
+		if got := isOmitEmpty(tt.tag); got != tt.expected {
+			t.Errorf("isOmitEmpty(%q) = %v, want %v", tt.tag, got, tt.expected)
 		}
+	}
+}
+
+// TestGenerator_IsPointerLike tests isPointerLike function.
+func TestGenerator_IsPointerLike(t *testing.T) {
+	stringType := reflect.TypeOf("")
+	ptrType := reflect.TypeOf((*string)(nil))
+	sliceType := reflect.TypeOf([]string(nil))
+	mapType := reflect.TypeOf(map[string]string(nil))
+
+	if isPointerLike(stringType) {
+		t.Errorf("expected string type to not be pointer-like")
+	}
+	if !isPointerLike(ptrType) {
+		t.Errorf("expected pointer type to be pointer-like")
+	}
+	if !isPointerLike(sliceType) {
+		t.Errorf("expected slice type to be pointer-like")
+	}
+	if !isPointerLike(mapType) {
+		t.Errorf("expected map type to be pointer-like")
 	}
 }
