@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -3339,5 +3340,486 @@ func TestDefaultEventToA2AMessage_StreamingReasoningContent(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// extractDataPartFromResult is a test helper that extracts the first DataPart from a UnaryMessageResult.
+func extractDataPartFromResult(t *testing.T, result protocol.UnaryMessageResult) *protocol.DataPart {
+	t.Helper()
+	msg, ok := result.(*protocol.Message)
+	if !ok {
+		t.Fatalf("expected *protocol.Message, got %T", result)
+	}
+	if len(msg.Parts) == 0 {
+		t.Fatal("expected at least one part")
+	}
+	part := msg.Parts[0]
+	switch p := part.(type) {
+	case *protocol.DataPart:
+		return p
+	case protocol.DataPart:
+		return &p
+	default:
+		t.Fatalf("expected DataPart, got %T", part)
+		return nil
+	}
+}
+
+func TestToDataPartPayload(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  any
+		wantOK bool
+	}{
+		{
+			name:   "map[string]any",
+			input:  map[string]any{"key": "value", "num": float64(42)},
+			wantOK: true,
+		},
+		{
+			name:   "valid JSON []byte",
+			input:  []byte(`{"foo":"bar"}`),
+			wantOK: true,
+		},
+		{
+			name:   "json.RawMessage",
+			input:  json.RawMessage(`{"raw":true}`),
+			wantOK: true,
+		},
+		{
+			name:   "invalid JSON []byte",
+			input:  []byte(`not valid json`),
+			wantOK: false,
+		},
+		{
+			name:   "struct type (round-trip)",
+			input:  struct{ Name string }{"test"},
+			wantOK: true,
+		},
+		{
+			name:   "nil (marshals to JSON null, result is nil)",
+			input:  nil,
+			wantOK: true, // json.Marshal(nil) → "null", which unmarshals to nil
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, ok := toDataPartPayload(tt.input)
+			if ok != tt.wantOK {
+				t.Errorf("toDataPartPayload() ok = %v, want %v", ok, tt.wantOK)
+			}
+			if tt.wantOK && tt.input != nil && result == nil {
+				t.Error("toDataPartPayload() returned nil result with ok=true")
+			}
+		})
+	}
+}
+
+func TestStructuredOutput_UnaryConversion(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name            string
+		event           *event.Event
+		enabled         bool
+		expectNil       bool
+		checkDataType   string
+		checkObjectType string
+		// expectPartCount is the expected number of parts in the message.
+		// 0 means "don't check".
+		expectPartCount int
+	}{
+		{
+			name: "Content + StructuredOutput coexist",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content: "hello world",
+						},
+					}},
+				},
+				StructuredOutput: map[string]any{
+					"trace_id": "abc123",
+					"latency":  42.5,
+				},
+			},
+			enabled:         true,
+			expectNil:       false,
+			expectPartCount: 2, // TextPart + DataPart
+			checkObjectType: "graph.node.custom",
+		},
+		{
+			name: "ToolCall + StructuredOutput coexist",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{
+								{
+									ID:   "call-1",
+									Type: "function",
+									Function: model.FunctionDefinitionParam{
+										Name:      "my_tool",
+										Arguments: []byte(`{"arg":"val"}`),
+									},
+								},
+							},
+						},
+					}},
+				},
+				StructuredOutput: map[string]any{"extra": "data"},
+			},
+			enabled:         true,
+			expectNil:       false,
+			expectPartCount: 2, // DataPart(function_call) + DataPart(custom_data)
+		},
+		{
+			name: "CodeExecution + StructuredOutput coexist",
+			event: &event.Event{
+				Tag: string(event.CodeExecutionTag),
+				Response: &model.Response{
+					Object: model.ObjectTypePostprocessingCodeExecution,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content: "print('hi')",
+						},
+					}},
+				},
+				StructuredOutput: map[string]any{"exec_id": "e1"},
+			},
+			enabled:         true,
+			expectNil:       false,
+			expectPartCount: 2, // DataPart(executable_code) + DataPart(custom_data)
+		},
+		{
+			name: "StructuredOutput []byte valid JSON",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{},
+					}},
+				},
+				StructuredOutput: []byte(`{"service":"my-svc","code":200}`),
+			},
+			enabled:       true,
+			expectNil:     false,
+			checkDataType: ia2a.DataPartMetadataTypeCustomData,
+		},
+		{
+			name: "StructuredOutput json.RawMessage",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{},
+					}},
+				},
+				StructuredOutput: json.RawMessage(`{"raw_key":"raw_val"}`),
+			},
+			enabled:       true,
+			expectNil:     false,
+			checkDataType: ia2a.DataPartMetadataTypeCustomData,
+		},
+		{
+			name: "StructuredOutput nil — not appended",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content: "fallback text",
+						},
+					}},
+				},
+				StructuredOutput: nil,
+			},
+			enabled:         true,
+			expectNil:       false,
+			expectPartCount: 1, // only TextPart
+		},
+		{
+			name: "StructuredOutput invalid JSON — not appended, no error",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content: "text",
+						},
+					}},
+				},
+				StructuredOutput: []byte(`not valid json {{{`),
+			},
+			enabled:         true,
+			expectNil:       false,
+			expectPartCount: 1, // only TextPart, invalid SO silently skipped
+		},
+		{
+			name: "Disabled — StructuredOutput ignored",
+			event: &event.Event{
+				Response: &model.Response{
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content: "hello",
+						},
+					}},
+				},
+				StructuredOutput: map[string]any{"should": "be ignored"},
+			},
+			enabled:         false,
+			expectNil:       false,
+			expectPartCount: 1, // only TextPart
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			converter := &defaultEventToA2AMessage{
+				graphEventObjectAllowlist: []string{"graph.*"},
+				structuredOutputEnabled:   tt.enabled,
+			}
+			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "ctx-1"})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.expectNil {
+				if result != nil {
+					t.Errorf("expected nil result, got %T", result)
+				}
+				return
+			}
+
+			if result == nil {
+				t.Fatal("expected non-nil result")
+			}
+
+			msg, ok := result.(*protocol.Message)
+			if !ok {
+				t.Fatalf("expected *protocol.Message, got %T", result)
+			}
+
+			if tt.expectPartCount > 0 && len(msg.Parts) != tt.expectPartCount {
+				t.Errorf("expected %d parts, got %d", tt.expectPartCount, len(msg.Parts))
+			}
+
+			if tt.checkDataType != "" {
+				dp := extractDataPartFromResult(t, result)
+				gotType := ia2a.GetDataPartType(dp.Metadata)
+				if gotType != tt.checkDataType {
+					t.Errorf("DataPart type = %q, want %q", gotType, tt.checkDataType)
+				}
+			}
+
+			if tt.checkObjectType != "" {
+				if msg.Metadata == nil {
+					t.Fatal("expected message metadata")
+				}
+				if got := msg.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != tt.checkObjectType {
+					t.Errorf("object_type = %v, want %v", got, tt.checkObjectType)
+				}
+			}
+		})
+	}
+}
+
+func TestStructuredOutput_StreamingConversion(t *testing.T) {
+	ctx := context.Background()
+	opts := EventToA2AStreamingOptions{TaskID: "task-1", CtxID: "ctx-1"}
+
+	tests := []struct {
+		name      string
+		event     *event.Event
+		enabled   bool
+		expectNil bool
+	}{
+		{
+			name: "streaming Content + StructuredOutput coexist",
+			event: &event.Event{
+				Response: &model.Response{
+					ID:     "resp-1",
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Content: "delta text",
+						},
+					}},
+				},
+				StructuredOutput: map[string]any{"stream_key": "stream_val"},
+			},
+			enabled:   true,
+			expectNil: false,
+		},
+		{
+			name: "streaming StructuredOutput nil falls through",
+			event: &event.Event{
+				Response: &model.Response{
+					ID:     "resp-2",
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Content: "delta text",
+						},
+					}},
+				},
+				StructuredOutput: nil,
+			},
+			enabled:   true,
+			expectNil: false, // falls through to delta content
+		},
+		{
+			name: "streaming StructuredOutput invalid JSON — ignored",
+			event: &event.Event{
+				Response: &model.Response{
+					ID:     "resp-3",
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Content: "delta",
+						},
+					}},
+				},
+				StructuredOutput: []byte(`{bad json`),
+			},
+			enabled:   true,
+			expectNil: false, // invalid SO ignored, falls through to delta
+		},
+		{
+			name: "streaming disabled — StructuredOutput ignored",
+			event: &event.Event{
+				Response: &model.Response{
+					ID:     "resp-4",
+					Object: "graph.node.custom",
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							Content: "delta text",
+						},
+					}},
+				},
+				StructuredOutput: map[string]any{"should": "be ignored"},
+			},
+			enabled:   false,
+			expectNil: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			converter := &defaultEventToA2AMessage{
+				graphEventObjectAllowlist: []string{"graph.*"},
+				structuredOutputEnabled:   tt.enabled,
+			}
+			result, err := converter.ConvertStreamingToA2AMessage(ctx, tt.event, opts)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.expectNil {
+				if result != nil {
+					t.Errorf("expected nil result, got %T", result)
+				}
+			} else {
+				if result == nil {
+					t.Fatal("expected non-nil result")
+				}
+			}
+		})
+	}
+}
+
+func TestStructuredOutput_StreamingMessageType(t *testing.T) {
+	ctx := context.Background()
+	opts := EventToA2AStreamingOptions{TaskID: "task-1", CtxID: "ctx-1"}
+
+	evt := &event.Event{
+		Response: &model.Response{
+			ID:     "resp-msg",
+			Object: "graph.node.custom",
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					Content: "delta",
+				},
+			}},
+		},
+		StructuredOutput: map[string]any{"key": "val"},
+	}
+
+	// Test with StreamingEventTypeMessage
+	converter := &defaultEventToA2AMessage{
+		graphEventObjectAllowlist: []string{"graph.*"},
+		streamingEventType:        StreamingEventTypeMessage,
+		structuredOutputEnabled:   true,
+	}
+	result, err := converter.ConvertStreamingToA2AMessage(ctx, evt, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if _, ok := result.(*protocol.Message); !ok {
+		t.Errorf("expected *protocol.Message for StreamingEventTypeMessage, got %T", result)
+	}
+}
+
+func TestStructuredOutput_ADKCompatibility(t *testing.T) {
+	ctx := context.Background()
+
+	evt := &event.Event{
+		Response: &model.Response{
+			Object: "graph.node.custom",
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Content: "text",
+				},
+			}},
+		},
+		StructuredOutput: map[string]any{"key": "val"},
+	}
+
+	converter := &defaultEventToA2AMessage{
+		graphEventObjectAllowlist: []string{"graph.*"},
+		adkCompatibility:          true,
+		structuredOutputEnabled:   true,
+	}
+	result, err := converter.ConvertToA2AMessage(ctx, evt, EventToA2AUnaryOptions{CtxID: "ctx-1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	msg, ok := result.(*protocol.Message)
+	if !ok {
+		t.Fatalf("expected *protocol.Message, got %T", result)
+	}
+
+	// Find the custom_data DataPart (should be the last part)
+	var dp *protocol.DataPart
+	for i := len(msg.Parts) - 1; i >= 0; i-- {
+		if p, ok := msg.Parts[i].(*protocol.DataPart); ok {
+			if ia2a.GetDataPartType(p.Metadata) == ia2a.DataPartMetadataTypeCustomData {
+				dp = p
+				break
+			}
+		}
+	}
+	if dp == nil {
+		t.Fatal("expected a DataPart with custom_data type")
+	}
+
+	// Should have both "type" and "adk_type"
+	if dp.Metadata[ia2a.DataPartMetadataTypeKey] != ia2a.DataPartMetadataTypeCustomData {
+		t.Errorf("missing standard type key")
+	}
+	adkKey := ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)
+	if dp.Metadata[adkKey] != ia2a.DataPartMetadataTypeCustomData {
+		t.Errorf("missing ADK type key %q", adkKey)
 	}
 }

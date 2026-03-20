@@ -97,6 +97,7 @@ type options struct {
 	taskManagerBuilder        TaskManagerBuilder
 	a2aToAgentConverter       A2AMessageToAgentMessage
 	eventToA2AConverter       EventToA2AMessage
+	structuredOutputEnabled   bool
 	host                      string
 	extraOptions              []a2a.Option
 	errorHandler              ErrorHandler
@@ -303,6 +304,16 @@ func WithADKCompatibility(enabled bool) Option {
 func WithStreamingEventType(eventType StreamingEventType) Option {
 	return func(opts *options) {
 		opts.streamingEventType = eventType
+	}
+}
+
+// WithStructuredOutputEnabled enables the conversion of Event.StructuredOutput
+// into a DataPart (with metadata type "custom_data") that is appended
+// orthogonally to the A2A message. Without this option, StructuredOutput is
+// silently ignored.
+func WithStructuredOutputEnabled() Option {
+	return func(opts *options) {
+		opts.structuredOutputEnabled = true
 	}
 }
 
