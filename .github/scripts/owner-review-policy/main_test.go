@@ -59,10 +59,24 @@ func TestOwnersForPathUsesLastMatch(t *testing.T) {
 	assert.Equal(t, []string{"@hyprh"}, ownersForPath(rules, "agent/internal/plan.go"))
 }
 
-func TestEvaluatePolicySkipsExternalOwnerRequirementForOwnedPaths(t *testing.T) {
+func TestEvaluatePolicyKeepsCoOwnersWhenAuthorOwnsThePath(t *testing.T) {
 	rules := []codeOwnerRule{
 		{Pattern: "*", Owners: []string{"@sandyskies"}},
 		{Pattern: "/agent/", Owners: []string{"@sandyskies", "@winechord"}},
+	}
+	result, err := evaluatePolicy(rules, "WineChord", []string{"agent/runtime.go"}, []string{"flash-lhr"})
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"@sandyskies"}, result.RequiredOwners)
+	assert.Equal(t, []fileRequirement{
+		{Path: "agent/runtime.go", Owners: []string{"@sandyskies"}},
+	}, result.ExternalFiles)
+	assert.False(t, isSatisfied(result))
+}
+
+func TestEvaluatePolicySkipsExternalOwnerRequirementWhenAuthorIsTheOnlyOwner(t *testing.T) {
+	rules := []codeOwnerRule{
+		{Pattern: "*", Owners: []string{"@sandyskies"}},
+		{Pattern: "/agent/", Owners: []string{"@winechord"}},
 	}
 	result, err := evaluatePolicy(rules, "WineChord", []string{"agent/runtime.go"}, []string{"flash-lhr"})
 	assert.NoError(t, err)
