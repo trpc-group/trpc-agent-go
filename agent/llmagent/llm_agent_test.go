@@ -1070,6 +1070,42 @@ func TestLLMAgent_EnableCodeExecutionResponseProcessor(t *testing.T) {
 		require.Equal(t, 0, exec.CallCount())
 		require.Equal(t, codeBlock, gotContent)
 	})
+
+	t.Run("non_executable_markdown_block", func(t *testing.T) {
+		exec := &countingCodeExecutor{}
+		agt := New(
+			"test",
+			WithModel(&mockModelWithResponse{
+				response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role: model.RoleAssistant,
+							Content: "```markdown\n" +
+								"# hello\n```",
+						},
+					}},
+					Done: true,
+				},
+			}),
+			WithCodeExecutor(exec),
+		)
+
+		events, err := agt.Run(context.Background(), newInvocation())
+		require.NoError(t, err)
+
+		gotContent := ""
+		for ev := range events {
+			if ev == nil || ev.Response == nil {
+				continue
+			}
+			if ev.IsFinalResponse() && len(ev.Choices) > 0 {
+				gotContent = ev.Choices[0].Message.Content
+			}
+		}
+
+		require.Equal(t, 0, exec.CallCount())
+		require.Equal(t, "```markdown\n# hello\n```", gotContent)
+	})
 }
 
 // TestLLMAgent_OptionsWithOutputKey tests WithOutputKey option.

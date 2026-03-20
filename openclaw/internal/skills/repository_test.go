@@ -24,6 +24,54 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 )
 
+var (
+	supportedOpenClawMetaFields = map[string]struct{}{
+		"emoji":      {},
+		"homepage":   {},
+		"install":    {},
+		"os":         {},
+		"primaryEnv": {},
+		"requires":   {},
+		"skillKey":   {},
+	}
+	supportedOpenClawRequireFields = map[string]struct{}{
+		"anyBins": {},
+		"bins":    {},
+		"config":  {},
+		"env":     {},
+		"python":  {},
+	}
+	supportedOpenClawInstallFields = map[string]struct{}{
+		"archive":         {},
+		"bins":            {},
+		"extract":         {},
+		"formula":         {},
+		"id":              {},
+		"kind":            {},
+		"label":           {},
+		"module":          {},
+		"os":              {},
+		"package":         {},
+		"packages":        {},
+		"stripComponents": {},
+		"tap":             {},
+		"targetDir":       {},
+		"url":             {},
+	}
+	supportedOpenClawInstallKinds = map[string]struct{}{
+		deps.InstallKindAPT:      {},
+		deps.InstallKindBrew:     {},
+		deps.InstallKindDNF:      {},
+		deps.InstallKindDownload: {},
+		deps.InstallKindGo:       {},
+		deps.InstallKindNode:     {},
+		deps.InstallKindNPM:      {},
+		deps.InstallKindPIP:      {},
+		deps.InstallKindUV:       {},
+		deps.InstallKindYUM:      {},
+	}
+)
+
 func TestParseFrontMatter_OpenClawMetadata(t *testing.T) {
 	content := `---
 name: coding-agent
@@ -87,10 +135,12 @@ metadata:
         "install":
           [
             {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "poppler",
+              "id": "go",
+              "kind": "go",
+              "module": "example.com/tool@latest",
               "bins": ["pdftotext"],
+              "os": ["linux", "win32"],
+              "targetDir": "runtime",
             },
           ],
       },
@@ -108,8 +158,10 @@ metadata:
 	require.Len(t, meta.Requires.Python, 1)
 	require.Equal(t, "pypdf", meta.Requires.Python[0].Module)
 	require.Len(t, meta.Install, 1)
-	require.Equal(t, "brew", meta.Install[0].Kind)
-	require.Equal(t, "poppler", meta.Install[0].Formula)
+	require.Equal(t, "go", meta.Install[0].Kind)
+	require.Equal(t, "example.com/tool@latest", meta.Install[0].Module)
+	require.Equal(t, []string{"linux", "win32"}, meta.Install[0].OS)
+	require.Equal(t, "runtime", meta.Install[0].TargetDir)
 }
 
 func TestParseFrontMatter_NoFrontMatter(t *testing.T) {
@@ -182,6 +234,75 @@ func TestParseOpenClawMetadata_UnmarshalError(t *testing.T) {
 
 func TestAsString_NonString(t *testing.T) {
 	require.Empty(t, asString(123))
+}
+
+func TestOfficialOpenClawSkillMetadata_IsSupported(t *testing.T) {
+	root := filepath.Join("..", "..", "skills")
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		path := filepath.Join(root, entry.Name(), skillFileName)
+		fm, err := parseFrontMatterFile(path)
+		if errors.Is(err, errNoFrontMatter) {
+			continue
+		}
+		require.NoError(t, err, entry.Name())
+
+		rawMeta, ok := fm.Metadata[openClawMetadataKey]
+		if !ok {
+			continue
+		}
+		meta := normalizeStringAnyMap(rawMeta)
+		require.NotNil(t, meta, entry.Name())
+
+		for field := range meta {
+			_, ok := supportedOpenClawMetaFields[field]
+			require.True(t, ok, "%s meta field %q", entry.Name(), field)
+		}
+
+		requires := normalizeStringAnyMap(meta["requires"])
+		for field := range requires {
+			_, ok := supportedOpenClawRequireFields[field]
+			require.True(
+				t,
+				ok,
+				"%s requires field %q",
+				entry.Name(),
+				field,
+			)
+		}
+
+		rawInstall, _ := meta["install"].([]any)
+		for _, item := range rawInstall {
+			action := normalizeStringAnyMap(item)
+			require.NotNil(t, action, entry.Name())
+			for field := range action {
+				_, ok := supportedOpenClawInstallFields[field]
+				require.True(
+					t,
+					ok,
+					"%s install field %q",
+					entry.Name(),
+					field,
+				)
+			}
+			kind, _ := action["kind"].(string)
+			_, ok := supportedOpenClawInstallKinds[kind]
+			require.True(
+				t,
+				ok,
+				"%s install kind %q",
+				entry.Name(),
+				kind,
+			)
+		}
+	}
 }
 
 func TestRepository_GatesOnBins(t *testing.T) {

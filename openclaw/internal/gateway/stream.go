@@ -12,6 +12,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -25,18 +26,29 @@ import (
 )
 
 const (
-	traceStatusOK      = "ok"
-	traceStatusIgnored = "ignored"
-	traceStatusError   = "error"
+	traceStatusOK       = "ok"
+	traceStatusIgnored  = "ignored"
+	traceStatusError    = "error"
+	traceStatusCanceled = "canceled"
 
 	streamToolExecCommand    = "exec_command"
 	streamToolReadDocument   = "read_document"
 	streamToolReadSheet      = "read_spreadsheet"
+	streamToolReadFile       = "fs_read_file"
+	streamToolSaveFile       = "fs_save_file"
+	streamToolListDir        = "fs_list_dir"
+	streamToolSearch         = "fs_search"
+	streamToolApplyPatch     = "apply_patch"
 	progressSummaryPrepare   = "Preparing request"
 	progressSummaryDoc       = "Reading document"
 	progressSummarySheet     = "Reading spreadsheet"
 	progressSummaryTool      = "Running local tool"
 	progressSummaryAnswering = "Preparing final answer"
+	progressSummaryGoTest    = "Running go test"
+	progressSummaryPytest    = "Running pytest"
+	progressSummaryNPMTest   = "Running npm test"
+	progressSummaryGit       = "Running git command"
+	progressSummaryInspect   = "Inspecting workspace"
 )
 
 type streamOutcome struct {
@@ -349,6 +361,21 @@ func (s *Server) streamLocked(
 	}
 
 	if result.Error != nil {
+		if errors.Is(result.Error, context.Canceled) {
+			requestID := resolvedStreamRequestID(
+				result.RequestID,
+				run.requestID,
+			)
+			_ = sendStreamEvent(ctx, out, gwproto.StreamEvent{
+				Type:      gwproto.StreamEventTypeRunCanceled,
+				SessionID: run.sessionID,
+				RequestID: requestID,
+			})
+			return streamOutcome{
+				status: traceStatusCanceled,
+				errMsg: context.Canceled.Error(),
+			}
+		}
 		apiErr := gwproto.APIError{
 			Type:    errTypeInternal,
 			Message: result.Error.Error(),
@@ -368,14 +395,31 @@ func (s *Server) streamLocked(
 		}
 	}
 
-	reply := strings.TrimSpace(result.Text)
-	if reply == "" {
-		reply = emptyReplyFallbackText
-	}
 	requestID := resolvedStreamRequestID(
 		result.RequestID,
 		run.requestID,
 	)
+	if s.canceled != nil && s.canceled.Take(requestID) {
+		if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+			Type:      gwproto.StreamEventTypeRunCanceled,
+			SessionID: run.sessionID,
+			RequestID: requestID,
+		}) {
+			return streamOutcome{
+				status: traceStatusError,
+				errMsg: contextErrMessage(ctx),
+			}
+		}
+		return streamOutcome{
+			status: traceStatusCanceled,
+			errMsg: runCanceledMessage,
+		}
+	}
+
+	reply := strings.TrimSpace(result.Text)
+	if reply == "" {
+		reply = emptyReplyFallbackText
+	}
 	if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
 		Type:      gwproto.StreamEventTypeMessageCompleted,
 		SessionID: run.sessionID,
@@ -473,7 +517,7 @@ func progressFromToolCall(
 	case streamToolExecCommand:
 		return progressUpdate{
 			stage:   gwproto.StreamProgressStageRunningTool,
-			summary: progressSummaryTool,
+			summary: execCommandProgressSummary(toolCall),
 		}, true
 	default:
 		if name == "" {
@@ -484,6 +528,62 @@ func progressFromToolCall(
 			summary: "Running " + name,
 		}, true
 	}
+}
+
+func execCommandProgressSummary(toolCall model.ToolCall) string {
+	const defaultSummary = progressSummaryTool
+
+	var args struct {
+		Command string `json:"command,omitempty"`
+	}
+	if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+		return defaultSummary
+	}
+
+	command := normalizeExecCommand(args.Command)
+	switch {
+	case command == "":
+		return defaultSummary
+	case strings.HasPrefix(command, "go test"):
+		return progressSummaryGoTest
+	case strings.HasPrefix(command, "pytest"),
+		strings.HasPrefix(command, "python -m pytest"):
+		return progressSummaryPytest
+	case strings.HasPrefix(command, "npm test"),
+		strings.HasPrefix(command, "pnpm test"),
+		strings.HasPrefix(command, "yarn test"),
+		strings.HasPrefix(command, "bun test"):
+		return progressSummaryNPMTest
+	case strings.HasPrefix(command, "git "):
+		return progressSummaryGit
+	case looksLikeWorkspaceInspection(command):
+		return progressSummaryInspect
+	default:
+		return defaultSummary
+	}
+}
+
+func normalizeExecCommand(command string) string {
+	command = strings.ToLower(strings.TrimSpace(command))
+	return strings.Join(strings.Fields(command), " ")
+}
+
+func looksLikeWorkspaceInspection(command string) bool {
+	for _, prefix := range []string{
+		"ls",
+		"find",
+		"rg ",
+		"cat ",
+		"sed ",
+		"head ",
+		"tail ",
+		"pwd",
+	} {
+		if strings.HasPrefix(command, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func readDocumentProgressSummary(toolCall model.ToolCall) string {

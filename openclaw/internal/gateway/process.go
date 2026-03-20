@@ -294,7 +294,11 @@ func (s *Server) CancelRequest(
 		}, http.StatusBadRequest
 	}
 
-	return s.managed.Cancel(rid), nil, http.StatusOK
+	canceled = s.managed.Cancel(rid)
+	if canceled && s.canceled != nil {
+		s.canceled.Mark(rid)
+	}
+	return canceled, nil, http.StatusOK
 }
 
 func (s *Server) ensureTrace(

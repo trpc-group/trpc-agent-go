@@ -11,12 +11,31 @@ package processor
 
 import (
 	"context"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+var nonExecutableCodeLanguages = map[string]struct{}{
+	"":          {},
+	"css":       {},
+	"csv":       {},
+	"html":      {},
+	"json":      {},
+	"markdown":  {},
+	"md":        {},
+	"mermaid":   {},
+	"plain":     {},
+	"plaintext": {},
+	"text":      {},
+	"txt":       {},
+	"xml":       {},
+	"yaml":      {},
+	"yml":       {},
+}
 
 // CodeExecutionResponseProcessor processes code execution responses from the model.
 type CodeExecutionResponseProcessor struct {
@@ -48,11 +67,15 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 		return
 	}
 
-	codeBlocks := codeexecutor.ExtractCodeBlock(rsp.Choices[0].Message.Content, e.CodeBlockDelimiter())
+	content := rsp.Choices[0].Message.Content
+	codeBlocks := autoExecutableCodeBlocks(
+		content,
+		e.CodeBlockDelimiter(),
+	)
 	if len(codeBlocks) == 0 {
 		return
 	}
-	truncatedContent := rsp.Choices[0].Message.Content // todo: truncate the content
+	truncatedContent := content // todo: truncate the content
 
 	//  [Step 2] Executes the code and emit 2 Events for code and execution result.
 	agent.EmitEvent(ctx, invocation, ch, event.New(
@@ -104,4 +127,38 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	))
 	//  [Step 3] Skip processing the original model response to continue code generation loop.
 	rsp.Choices[0].Message.Content = ""
+}
+
+func autoExecutableCodeBlocks(
+	content string,
+	delimiter codeexecutor.CodeBlockDelimiter,
+) []codeexecutor.CodeBlock {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return nil
+	}
+
+	blocks := codeexecutor.ExtractCodeBlock(trimmed, delimiter)
+	if len(blocks) != 1 {
+		return nil
+	}
+
+	block := blocks[0]
+	if !isAutoExecutableCodeLanguage(block.Language) {
+		return nil
+	}
+
+	expected := delimiter.Start + strings.TrimSpace(block.Language) +
+		"\n" + block.Code + delimiter.End
+	if trimmed != expected {
+		return nil
+	}
+
+	return blocks
+}
+
+func isAutoExecutableCodeLanguage(language string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(language))
+	_, blocked := nonExecutableCodeLanguages[normalized]
+	return !blocked
 }

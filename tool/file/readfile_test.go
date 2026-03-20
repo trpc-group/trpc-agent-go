@@ -90,6 +90,42 @@ func TestFileTool_ReadFile_NonExistFile(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestFileTool_ReadFile_NonExistFileIncludesHint(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet, ok := toolSet.(*fileToolSet)
+	assert.True(t, ok)
+
+	assert.NoError(
+		t,
+		os.Mkdir(filepath.Join(tempDir, "nested"), 0o755),
+	)
+	assert.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(tempDir, "README.md"),
+			[]byte("hello"),
+			0o644,
+		),
+	)
+
+	rsp, err := fileToolSet.readFile(
+		context.Background(),
+		&readFileRequest{FileName: "missing.txt"},
+	)
+	assert.Error(t, err)
+	assert.NotNil(t, rsp)
+	assert.Contains(t, rsp.Message, missingFileBaseDirPrefix+tempDir)
+	assert.Contains(t, rsp.Message, "README.md")
+	assert.Contains(
+		t,
+		rsp.Message,
+		"nested"+missingFileDirectorySuffix,
+	)
+	assert.Contains(t, rsp.Message, missingFileRecoveryGuidance)
+}
+
 func TestFileTool_ReadFile_Empty(t *testing.T) {
 	// Create a temporary directory for testing.
 	tempDir := t.TempDir()

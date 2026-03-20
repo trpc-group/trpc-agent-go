@@ -27,12 +27,16 @@ const (
 )
 
 const (
-	InstallKindAPT  = "apt"
-	InstallKindBrew = "brew"
-	InstallKindDNF  = "dnf"
-	InstallKindPIP  = "pip"
-	InstallKindUV   = "uv"
-	InstallKindYUM  = "yum"
+	InstallKindAPT      = "apt"
+	InstallKindBrew     = "brew"
+	InstallKindDownload = "download"
+	InstallKindGo       = "go"
+	InstallKindDNF      = "dnf"
+	InstallKindNode     = "node"
+	InstallKindNPM      = "npm"
+	InstallKindPIP      = "pip"
+	InstallKindUV       = "uv"
+	InstallKindYUM      = "yum"
 )
 
 type PythonPackage struct {
@@ -50,13 +54,21 @@ type Requirement struct {
 }
 
 type InstallAction struct {
-	ID       string   `yaml:"id,omitempty" json:"id,omitempty"`
-	Kind     string   `yaml:"kind,omitempty" json:"kind,omitempty"`
-	Formula  string   `yaml:"formula,omitempty" json:"formula,omitempty"`
-	Package  string   `yaml:"package,omitempty" json:"package,omitempty"`
-	Packages []string `yaml:"packages,omitempty" json:"packages,omitempty"`
-	Bins     []string `yaml:"bins,omitempty" json:"bins,omitempty"`
-	Label    string   `yaml:"label,omitempty" json:"label,omitempty"`
+	ID              string   `yaml:"id,omitempty" json:"id,omitempty"`
+	Kind            string   `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Formula         string   `yaml:"formula,omitempty" json:"formula,omitempty"`
+	Package         string   `yaml:"package,omitempty" json:"package,omitempty"`
+	Packages        []string `yaml:"packages,omitempty" json:"packages,omitempty"`
+	Bins            []string `yaml:"bins,omitempty" json:"bins,omitempty"`
+	Label           string   `yaml:"label,omitempty" json:"label,omitempty"`
+	Tap             string   `yaml:"tap,omitempty" json:"tap,omitempty"`
+	Module          string   `yaml:"module,omitempty" json:"module,omitempty"`
+	URL             string   `yaml:"url,omitempty" json:"url,omitempty"`
+	Archive         string   `yaml:"archive,omitempty" json:"archive,omitempty"`
+	TargetDir       string   `yaml:"targetDir,omitempty" json:"target_dir,omitempty"`
+	OS              []string `yaml:"os,omitempty" json:"os,omitempty"`
+	Extract         bool     `yaml:"extract,omitempty" json:"extract,omitempty"`
+	StripComponents int      `yaml:"stripComponents,omitempty" json:"strip_components,omitempty"`
 }
 
 type Source struct {
@@ -479,22 +491,41 @@ func normalizeInstallActions(
 	seen := map[string]struct{}{}
 	for _, raw := range actions {
 		action := InstallAction{
-			ID:       strings.TrimSpace(raw.ID),
-			Kind:     strings.ToLower(strings.TrimSpace(raw.Kind)),
-			Formula:  strings.TrimSpace(raw.Formula),
-			Package:  strings.TrimSpace(raw.Package),
-			Packages: normalizeStrings(raw.Packages),
-			Bins:     normalizeStrings(raw.Bins),
-			Label:    strings.TrimSpace(raw.Label),
+			ID:              strings.TrimSpace(raw.ID),
+			Kind:            strings.ToLower(strings.TrimSpace(raw.Kind)),
+			Formula:         strings.TrimSpace(raw.Formula),
+			Package:         strings.TrimSpace(raw.Package),
+			Packages:        normalizeStrings(raw.Packages),
+			Bins:            normalizeStrings(raw.Bins),
+			Label:           strings.TrimSpace(raw.Label),
+			Tap:             strings.TrimSpace(raw.Tap),
+			Module:          strings.TrimSpace(raw.Module),
+			URL:             strings.TrimSpace(raw.URL),
+			Archive:         strings.ToLower(strings.TrimSpace(raw.Archive)),
+			TargetDir:       strings.TrimSpace(raw.TargetDir),
+			OS:              normalizeOSList(raw.OS),
+			Extract:         raw.Extract,
+			StripComponents: raw.StripComponents,
 		}
 		if action.Kind == "" {
 			continue
+		}
+		if action.StripComponents < 0 {
+			action.StripComponents = 0
 		}
 		key := strings.Join([]string{
 			action.Kind,
 			action.ID,
 			action.Formula,
 			action.Package,
+			action.Tap,
+			action.Module,
+			action.URL,
+			action.Archive,
+			action.TargetDir,
+			strings.Join(action.OS, ","),
+			fmt.Sprintf("%t", action.Extract),
+			fmt.Sprintf("%d", action.StripComponents),
 			strings.Join(action.Packages, ","),
 		}, "\x00")
 		if _, ok := seen[key]; ok {
@@ -521,6 +552,31 @@ func normalizeStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func normalizeOSList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, raw := range values {
+		value := normalizeOSName(raw)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func normalizeOSName(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "win32" {
+		return "windows"
+	}
+	return value
 }
 
 func MergeSources(sources ...Source) []Source {

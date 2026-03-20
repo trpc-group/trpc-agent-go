@@ -921,6 +921,41 @@ effect, the more common reason is not "the Skill failed to load," but
 "its required config, environment variables, or binaries are not
 available yet."
 
+OpenClaw now also has a host-dependency inspection and bootstrap flow
+for Skills and file-tool profiles. In other words, `metadata.openclaw`
+is not only used to decide whether a Skill should load, but can also
+describe what the host is expected to provide:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw inspect deps -skill nano-pdf
+go run ./cmd/openclaw bootstrap deps -skill nano-pdf -apply
+```
+
+This is useful when the issue is no longer "why was the Skill skipped,"
+but "what exactly do I need to install on this machine so the Skill can
+run end-to-end."
+
+At the moment, official OpenClaw Skill metadata can describe:
+
+- package-manager installs
+- Go module or binary installs
+- npm installs
+- managed-Python installs in the OpenClaw state directory
+- asset downloads
+
+There are two practical details worth remembering:
+
+- `inspect deps` and `bootstrap deps` can work from built-in dependency
+  profiles, specific Skills, or both.
+- An explicit `-skill ...` selection only plans the named Skills. It no
+  longer pulls in the default file-tool profiles automatically.
+
+`bootstrap deps --apply` is best-effort. User-space installs and
+downloads run first, while root-only system-package steps are reported
+as deferred rather than aborting the whole run. Downloaded assets are
+stored under `<state_dir>/tools/<skill>/...`.
+
 ## Best Practices
 
 In real adoption, the following practices are usually the most

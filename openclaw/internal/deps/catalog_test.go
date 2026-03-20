@@ -68,3 +68,25 @@ func TestCatalogHelpers(t *testing.T) {
 	require.Equal(t, "a", merged[0].Name)
 	require.Equal(t, "b", merged[1].Name)
 }
+
+func TestNormalizeInstallActions_NormalizesPlatformFields(t *testing.T) {
+	t.Parallel()
+
+	actions := normalizeInstallActions([]InstallAction{{
+		Kind:            "DOWNLOAD",
+		URL:             " https://example.com/a.zip ",
+		Archive:         "TGZ",
+		TargetDir:       " runtime ",
+		OS:              []string{" Linux ", "win32", "linux", ""},
+		Extract:         true,
+		StripComponents: -2,
+	}})
+	require.Len(t, actions, 1)
+	require.Equal(t, InstallKindDownload, actions[0].Kind)
+	require.Equal(t, "tgz", actions[0].Archive)
+	require.Equal(t, "runtime", actions[0].TargetDir)
+	require.Equal(t, []string{"linux", "windows"}, actions[0].OS)
+	require.True(t, actions[0].Extract)
+	require.Equal(t, 0, actions[0].StripComponents)
+	require.Equal(t, "windows", normalizeOSName("win32"))
+}
