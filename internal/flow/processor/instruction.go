@@ -229,11 +229,11 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(
 	}
 
 	// Automatically inject JSON output instructions.
-	// Precedence: StructuredOutputSchema > OutputSchema.
-	if p.StructuredOutputSchema != nil {
+	// Precedence: invocation.StructuredOutputSchema > StructuredOutputSchema > OutputSchema.
+	if structuredOutputSchema := p.resolveStructuredOutputSchema(invocation); structuredOutputSchema != nil {
 		jsonInstructions := p.generateStructuredOutputJSONInstructions(
 			invocation,
-			p.StructuredOutputSchema,
+			structuredOutputSchema,
 		)
 		processedInstruction = p.combineInstructions(
 			processedInstruction,
@@ -263,6 +263,16 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(
 	}
 
 	return processedInstruction, processedSystemPrompt
+}
+
+func (p *InstructionRequestProcessor) resolveStructuredOutputSchema(invocation *agent.Invocation) map[string]any {
+	if invocation != nil &&
+		invocation.StructuredOutput != nil &&
+		invocation.StructuredOutput.JSONSchema != nil &&
+		invocation.StructuredOutput.JSONSchema.Schema != nil {
+		return invocation.StructuredOutput.JSONSchema.Schema
+	}
+	return p.StructuredOutputSchema
 }
 
 // combineInstructions combines existing instruction with new JSON

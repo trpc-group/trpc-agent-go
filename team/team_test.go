@@ -14,15 +14,19 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -166,6 +170,62 @@ func (t testTool) Declaration() *tool.Declaration {
 
 func (t testTool) Call(_ context.Context, _ []byte) (any, error) {
 	return nil, nil
+}
+
+type teamStructuredOutputPayload struct {
+	Answer string `json:"answer"`
+	Score  int    `json:"score"`
+}
+
+type swarmStructuredOutputModel struct {
+	mu          sync.Mutex
+	seen        bool
+	schemaName  string
+	description string
+}
+
+func (m *swarmStructuredOutputModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	if req != nil &&
+		req.StructuredOutput != nil &&
+		req.StructuredOutput.JSONSchema != nil {
+		m.seen = true
+		m.schemaName = req.StructuredOutput.JSONSchema.Name
+		m.description = req.StructuredOutput.JSONSchema.Description
+	}
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage(`{"answer":"ok","score":7}`),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *swarmStructuredOutputModel) Info() model.Info {
+	return model.Info{Name: "swarm-structured-output-model"}
+}
+
+func (m *swarmStructuredOutputModel) Snapshot() (bool, string, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.seen, m.schemaName, m.description
+}
+
+func collectTeamStructuredOutput(events <-chan *event.Event) any {
+	var structured any
+	for evt := range events {
+		if evt != nil && evt.StructuredOutput != nil {
+			structured = evt.StructuredOutput
+		}
+	}
+	return structured
 }
 
 func TestNew_Validation(t *testing.T) {
@@ -467,6 +527,49 @@ func TestTeam_Run_Coordinator(t *testing.T) {
 	for range ch {
 	}
 	require.True(t, coordinator.ran)
+}
+
+func TestTeam_RunSwarm_PreservesRunStructuredOutput(t *testing.T) {
+	const description = "Return one typed payload through swarm."
+	modelImpl := &swarmStructuredOutputModel{}
+	member := llmagent.New(
+		"swarm-structured-output-member",
+		llmagent.WithModel(modelImpl),
+	)
+	tm, err := NewSwarm(
+		"swarm-structured-output-team",
+		member.Info().Name,
+		[]agent.Agent{member},
+	)
+	require.NoError(t, err)
+	r := runner.NewRunner(
+		"swarm-structured-output-app",
+		tm,
+		runner.WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-structured-output",
+		"session-structured-output",
+		model.NewUserMessage("hello"),
+		agent.WithStructuredOutputJSON(
+			new(teamStructuredOutputPayload),
+			true,
+			description,
+		),
+	)
+	require.NoError(t, err)
+
+	structured := collectTeamStructuredOutput(eventCh)
+	payload, ok := structured.(*teamStructuredOutputPayload)
+	require.True(t, ok, "expected typed structured output payload")
+	require.Equal(t, "ok", payload.Answer)
+	require.Equal(t, 7, payload.Score)
+
+	seen, schemaName, gotDescription := modelImpl.Snapshot()
+	require.True(t, seen, "expected swarm member to receive structured output schema")
+	require.Equal(t, "teamStructuredOutputPayload", schemaName)
+	require.Equal(t, description, gotDescription)
 }
 
 func TestTeam_Run_UnknownMode(t *testing.T) {

@@ -12,6 +12,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -199,6 +200,52 @@ func (t timeoutTransferController) OnTransfer(
 	return t.timeout, nil
 }
 
+type structuredOutputCaptureModel struct {
+	name       string
+	mu         sync.Mutex
+	invoked    bool
+	seen       bool
+	schemaName string
+}
+
+func (m *structuredOutputCaptureModel) Run(
+	_ context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	if inv != nil && inv.StructuredOutput == nil {
+		inv.StructuredOutput = inv.RunOptions.StructuredOutput
+		inv.StructuredOutputType = inv.RunOptions.StructuredOutputType
+	}
+	m.mu.Lock()
+	m.invoked = true
+	if inv != nil &&
+		inv.StructuredOutput != nil &&
+		inv.StructuredOutput.JSONSchema != nil {
+		m.seen = true
+		m.schemaName = inv.StructuredOutput.JSONSchema.Name
+	}
+	m.mu.Unlock()
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (m *structuredOutputCaptureModel) Tools() []tool.Tool { return nil }
+
+func (m *structuredOutputCaptureModel) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *structuredOutputCaptureModel) SubAgents() []agent.Agent { return nil }
+
+func (m *structuredOutputCaptureModel) FindSubAgent(string) agent.Agent { return nil }
+
+func (m *structuredOutputCaptureModel) Snapshot() (bool, bool, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.invoked, m.seen, m.schemaName
+}
+
 func TestTransferResponseProc_ControllerNodeTimeout(t *testing.T) {
 	target := &deadlineAgent{name: "child"}
 	parent := &parentAgent{child: target}
@@ -232,6 +279,78 @@ func TestTransferResponseProc_ControllerNodeTimeout(t *testing.T) {
 	for range out {
 	}
 	require.True(t, target.gotDeadline)
+}
+
+func TestTransferResponseProc_PreservesRunStructuredOutput(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"status": map[string]any{"type": "string"},
+		},
+	}
+	target := &structuredOutputCaptureModel{name: "child"}
+	parent := &parentAgent{child: target}
+	runOpts := agent.RunOptions{}
+	agent.WithStructuredOutputJSONSchema(
+		"run_output",
+		schema,
+		true,
+		"Return one object.",
+	)(&runOpts)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(parent),
+		agent.WithInvocationID("inv-run-structured-output"),
+		agent.WithInvocationRunOptions(runOpts),
+		agent.WithInvocationTransferInfo(&agent.TransferInfo{TargetAgentName: "child"}),
+	)
+	rsp := &model.Response{ID: "r-run-structured-output"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	invoked, seen, schemaName := target.Snapshot()
+	require.True(t, invoked)
+	require.True(t, seen)
+	require.Equal(t, "run_output", schemaName)
+}
+
+func TestTransferResponseProc_DoesNotPropagateInvocationStructuredOutputWithoutRunOption(t *testing.T) {
+	target := &structuredOutputCaptureModel{name: "child"}
+	parent := &parentAgent{child: target}
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(parent),
+		agent.WithInvocationID("inv-static-structured-output"),
+		agent.WithInvocationStructuredOutput(&model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name:   "static_output",
+				Schema: map[string]any{"type": "object"},
+			},
+		}),
+		agent.WithInvocationTransferInfo(&agent.TransferInfo{TargetAgentName: "child"}),
+	)
+	rsp := &model.Response{ID: "r-static-structured-output"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(
+		context.Background(),
+		inv,
+		&model.Request{},
+		rsp,
+		out,
+	)
+	close(out)
+	for range out {
+	}
+	invoked, seen, _ := target.Snapshot()
+	require.True(t, invoked)
+	require.False(t, seen)
 }
 
 func TestTransferResponseProc_SetsTransferTags(t *testing.T) {
