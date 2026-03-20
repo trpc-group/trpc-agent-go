@@ -23,7 +23,14 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+const downloadHTTPTimeout = 30 * time.Minute
+
+var downloadHTTPClient = &http.Client{
+	Timeout: downloadHTTPTimeout,
+}
 
 func downloadInstallStep(
 	toolchain Toolchain,
@@ -87,16 +94,34 @@ func executeDownloadStep(
 	if err := os.MkdirAll(filepath.Dir(step.TargetPath), 0o755); err != nil {
 		return "", err
 	}
-	file, err := os.Create(step.TargetPath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	if _, err := io.Copy(file, reader); err != nil {
+	if err := writeDownloadFile(step.TargetPath, reader); err != nil {
 		return "", err
 	}
 	return "downloaded to " + step.TargetPath, nil
+}
+
+func writeDownloadFile(
+	targetPath string,
+	reader io.Reader,
+) error {
+	file, err := os.Create(targetPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+
+	if _, err := io.Copy(file, reader); err != nil {
+		_ = file.Close()
+		_ = os.Remove(targetPath)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(targetPath)
+		return err
+	}
+	return nil
 }
 
 func downloadTargetPath(
@@ -208,7 +233,7 @@ func openDownloadReader(
 		if err != nil {
 			return nil, nil, err
 		}
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := downloadHTTPClient.Do(req)
 		if err != nil {
 			return nil, nil, err
 		}

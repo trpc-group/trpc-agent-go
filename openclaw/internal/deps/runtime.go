@@ -185,8 +185,15 @@ func ManagedPythonRoot(stateDir string) string {
 	return filepath.Join(root, defaultPythonEnvDir)
 }
 
+// ManagedToolPrefix returns the shared install prefix used for managed
+// tool binaries. Python, npm, and other managed CLIs intentionally
+// share this prefix so one PATH entry can expose all managed tools.
+func ManagedToolPrefix(stateDir string) string {
+	return ManagedPythonRoot(stateDir)
+}
+
 func ManagedBinDir(stateDir string) string {
-	root := ManagedPythonRoot(stateDir)
+	root := ManagedToolPrefix(stateDir)
 	if root == "" {
 		return ""
 	}
