@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -163,6 +164,46 @@ func TestRecorder_ErrorAfterFinalResponse_PersistsRunError(t *testing.T) {
 	require.NotNil(t, c.Conversation[0].FinalResponse)
 	assert.Contains(t, c.Conversation[0].FinalResponse.Content, "[RUN_ERROR]")
 	assert.NotEqual(t, "ok", c.Conversation[0].FinalResponse.Content)
+}
+
+func TestRecorder_GraphNodeErrorAfterFinalResponse_DoesNotPersistRunError(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	manager := inmemory.New()
+	rec, err := New(manager)
+	require.NoError(t, err)
+	inv := newTestInvocation(
+		"app-1",
+		"u-1",
+		"s-1",
+		"r-1",
+		model.NewUserMessage("hi"),
+	)
+	_, err = rec.onEvent(ctx, inv, newFinalResponseEvent(inv, "ok"))
+	require.NoError(t, err)
+
+	nodeErrEvent := graph.NewNodeErrorEvent(
+		graph.WithNodeEventInvocationID("inv-1"),
+		graph.WithNodeEventNodeID("lookup"),
+		graph.WithNodeEventNodeType(graph.NodeTypeFunction),
+		graph.WithNodeEventError("boom"),
+	)
+	agent.InjectIntoEvent(inv, nodeErrEvent)
+	_, err = rec.onEvent(ctx, inv, nodeErrEvent)
+	require.NoError(t, err)
+
+	_, err = rec.onEvent(ctx, inv, newRunnerCompletionEvent(inv))
+	require.NoError(t, err)
+	require.NoError(t, rec.Close(ctx))
+
+	c, err := manager.GetCase(ctx, "app-1", "s-1", "s-1")
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	require.Len(t, c.Conversation, 1)
+	require.NotNil(t, c.Conversation[0])
+	require.NotNil(t, c.Conversation[0].FinalResponse)
+	assert.Equal(t, "ok", c.Conversation[0].FinalResponse.Content)
 }
 
 func TestRecorder_CustomIDResolvers(t *testing.T) {
