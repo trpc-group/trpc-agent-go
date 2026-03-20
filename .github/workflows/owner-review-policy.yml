@@ -1,7 +1,5 @@
 name: Owner Review Policy
 on:
-  pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review, edited]
   pull_request_review:
     types: [submitted, dismissed]
 permissions:
@@ -10,7 +8,14 @@ permissions:
 jobs:
   owner-review-policy:
     name: owner-review-policy
-    if: ${{ github.event.pull_request.state == 'open' }}
+    if: >-
+      ${{
+        github.event.pull_request.state == 'open' &&
+        (
+          github.event.action == 'dismissed' ||
+          github.event.review.state == 'approved'
+        )
+      }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
