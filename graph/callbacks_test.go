@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
 func TestNodeCallbacks_BasicFunctionality(t *testing.T) {
@@ -26,6 +27,7 @@ func TestNodeCallbacks_BasicFunctionality(t *testing.T) {
 	assert.Empty(t, callbacks.BeforeNode)
 	assert.Empty(t, callbacks.AfterNode)
 	assert.Empty(t, callbacks.OnNodeError)
+	assert.Empty(t, callbacks.AgentEvent)
 }
 
 func TestNodeCallbacks_RegisterCallbacks(t *testing.T) {
@@ -41,14 +43,18 @@ func TestNodeCallbacks_RegisterCallbacks(t *testing.T) {
 
 	errorCallback := func(ctx context.Context, callbackCtx *NodeCallbackContext, state State, err error) {
 	}
+	agentEventCallback := func(ctx context.Context, callbackCtx *NodeCallbackContext, state State, evt *event.Event) {
+	}
 
 	callbacks.RegisterBeforeNode(beforeCallback).
 		RegisterAfterNode(afterCallback).
-		RegisterOnNodeError(errorCallback)
+		RegisterOnNodeError(errorCallback).
+		RegisterAgentEvent(agentEventCallback)
 
 	assert.Len(t, callbacks.BeforeNode, 1)
 	assert.Len(t, callbacks.AfterNode, 1)
 	assert.Len(t, callbacks.OnNodeError, 1)
+	assert.Len(t, callbacks.AgentEvent, 1)
 }
 
 func TestNodeCallbacks_RunBeforeNode(t *testing.T) {
@@ -236,6 +242,43 @@ func TestNodeCallbacks_RunAfterNode_WithCustomResult(t *testing.T) {
 	// All callbacks should be called, but the final result should be from after2
 }
 
+func TestNodeCallbacks_RunAfterNode_RecoveryClearsNodeError(t *testing.T) {
+	callbacks := NewNodeCallbacks()
+	callbacks.RegisterAfterNode(func(
+		ctx context.Context,
+		callbackCtx *NodeCallbackContext,
+		state State,
+		result any,
+		nodeErr error,
+	) (any, error) {
+		require.Error(t, nodeErr)
+		return State{"recovered": true}, nil
+	})
+	callbacks.RegisterAfterNode(func(
+		ctx context.Context,
+		callbackCtx *NodeCallbackContext,
+		state State,
+		result any,
+		nodeErr error,
+	) (any, error) {
+		require.NoError(t, nodeErr)
+		return result, nil
+	})
+
+	result, err := callbacks.RunAfterNode(
+		context.Background(),
+		&NodeCallbackContext{NodeID: "test-node"},
+		State{},
+		nil,
+		errors.New("boom"),
+	)
+	require.NoError(t, err)
+
+	update, ok := result.(State)
+	require.True(t, ok)
+	require.Equal(t, true, update["recovered"])
+}
+
 func TestNodeCallbacks_RunOnNodeError(t *testing.T) {
 	callbacks := NewNodeCallbacks()
 
@@ -267,6 +310,40 @@ func TestNodeCallbacks_RunOnNodeError(t *testing.T) {
 	assert.Equal(t, expectedOrder, executionOrder)
 }
 
+func TestNodeCallbacks_RunAgentEvent(t *testing.T) {
+	callbacks := NewNodeCallbacks()
+
+	var executionOrder []string
+	expectedEvent := event.New("inv", "agent")
+
+	callbacks.RegisterAgentEvent(func(
+		ctx context.Context,
+		callbackCtx *NodeCallbackContext,
+		state State,
+		evt *event.Event,
+	) {
+		executionOrder = append(executionOrder, "agent1")
+		assert.Equal(t, expectedEvent, evt)
+	}).
+		RegisterAgentEvent(func(
+			ctx context.Context,
+			callbackCtx *NodeCallbackContext,
+			state State,
+			evt *event.Event,
+		) {
+			executionOrder = append(executionOrder, "agent2")
+			assert.Equal(t, expectedEvent, evt)
+		})
+
+	callbacks.RunAgentEvent(
+		context.Background(),
+		&NodeCallbackContext{NodeID: "agent-node"},
+		State{"key": "value"},
+		expectedEvent,
+	)
+	assert.Equal(t, []string{"agent1", "agent2"}, executionOrder)
+}
+
 // Defensive behavior: nil callbacks should be skipped without panic.
 func TestNodeCallbacks_SkipNilEntries(t *testing.T) {
 	c := NewNodeCallbacks()
@@ -274,6 +351,7 @@ func TestNodeCallbacks_SkipNilEntries(t *testing.T) {
 	c.BeforeNode = append(c.BeforeNode, nil)
 	c.AfterNode = append(c.AfterNode, nil)
 	c.OnNodeError = append(c.OnNodeError, nil)
+	c.AgentEvent = append(c.AgentEvent, nil)
 
 	ctx := context.Background()
 	cbCtx := &NodeCallbackContext{NodeID: "n"}
@@ -291,6 +369,7 @@ func TestNodeCallbacks_SkipNilEntries(t *testing.T) {
 
 	// Expect no panic for error callbacks.
 	c.RunOnNodeError(ctx, cbCtx, st, errors.New("boom"))
+	c.RunAgentEvent(ctx, cbCtx, st, event.New("inv", "agent"))
 }
 
 func TestNodeCallbackContext_Complete(t *testing.T) {

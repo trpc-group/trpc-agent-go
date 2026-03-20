@@ -255,7 +255,7 @@ func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
 		return nil, nil
 	}
 
-	if event.Response.Error != nil {
+	if event.IsTerminalError() {
 		return nil, fmt.Errorf(
 			"A2A server received error event from agent, "+
 				"event ID: %s, error: %v",
@@ -386,7 +386,7 @@ func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 		return nil, nil
 	}
 
-	if evt.Response.Error != nil {
+	if evt.IsTerminalError() {
 		return nil, fmt.Errorf(
 			"A2A server received error event from agent, "+
 				"event ID: %s, error: %v",

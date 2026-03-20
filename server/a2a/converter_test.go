@@ -16,8 +16,10 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -398,6 +400,7 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 			event: &event.Event{
 				ID: "error-event-123",
 				Response: &model.Response{
+					Done: true,
 					Error: &model.ResponseError{
 						Message: "Something went wrong",
 					},
@@ -620,6 +623,7 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			event: &event.Event{
 				ID: "error-event-456",
 				Response: &model.Response{
+					Done: true,
 					Error: &model.ResponseError{
 						Message: "Streaming error",
 					},
@@ -749,6 +753,39 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDefaultEventToA2AMessage_ConvertStreamingNodeError(
+	t *testing.T,
+) {
+	converter := &defaultEventToA2AMessage{
+		graphEventObjectAllowlist: []string{"graph.*"},
+	}
+	evt := graph.NewNodeErrorEvent(
+		graph.WithNodeEventInvocationID("inv"),
+		graph.WithNodeEventNodeID("lookup"),
+		graph.WithNodeEventNodeType(graph.NodeTypeFunction),
+		graph.WithNodeEventError("boom"),
+	)
+
+	result, err := converter.ConvertStreamingToA2AMessage(
+		context.Background(),
+		evt,
+		EventToA2AStreamingOptions{
+			CtxID:  "ctx",
+			TaskID: "task",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	update, ok := result.(*protocol.TaskArtifactUpdateEvent)
+	require.True(t, ok)
+	require.Equal(
+		t,
+		graph.ObjectTypeGraphNodeError,
+		update.Metadata[ia2a.MessageMetadataObjectTypeKey],
+	)
 }
 
 func TestDefaultEventToA2AMessage_GraphEventFilter(t *testing.T) {

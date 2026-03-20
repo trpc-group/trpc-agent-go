@@ -366,6 +366,23 @@ func TestIsError(t *testing.T) {
 	}}).IsError())
 }
 
+func TestIsTerminalError(t *testing.T) {
+	var nilEvt *Event
+	require.False(t, nilEvt.IsTerminalError())
+	require.False(t, (&Event{}).IsTerminalError())
+	require.False(t, (&Event{Response: &model.Response{
+		Error: &model.ResponseError{Message: "boom"},
+	}}).IsTerminalError())
+	require.True(t, (&Event{Response: &model.Response{
+		Object: model.ObjectTypeError,
+		Error:  &model.ResponseError{Message: "boom"},
+	}}).IsTerminalError())
+	require.True(t, (&Event{Response: &model.Response{
+		Done:  true,
+		Error: &model.ResponseError{Message: "boom"},
+	}}).IsTerminalError())
+}
+
 func TestEmitEvent_WrapperAndNilChannel(t *testing.T) {
 	// Wrapper uses EmitWithoutTimeout, ensure success path works
 	ch := make(chan *Event, 1)

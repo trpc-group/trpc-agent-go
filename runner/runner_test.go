@@ -1682,6 +1682,57 @@ func (m *fallbackCompletionAgent) Run(
 	return ch, nil
 }
 
+type fallbackGraphCompletionAgent struct {
+	name       string
+	delta      map[string][]byte
+	errType    string
+	errMessage string
+}
+
+func (m *fallbackGraphCompletionAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *fallbackGraphCompletionAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *fallbackGraphCompletionAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *fallbackGraphCompletionAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *fallbackGraphCompletionAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	if len(m.delta) > 0 {
+		ch <- event.New(
+			inv.InvocationID,
+			m.name,
+			event.WithStateDelta(m.delta),
+		)
+	}
+	if m.errMessage != "" {
+		ch <- graph.NewNodeErrorEvent(
+			graph.WithNodeEventInvocationID(inv.InvocationID),
+			graph.WithNodeEventNodeID("lookup"),
+			graph.WithNodeEventNodeType(graph.NodeTypeFunction),
+			graph.WithNodeEventError(m.errMessage),
+			graph.WithNodeEventResponseError(&model.ResponseError{
+				Type:    m.errType,
+				Message: m.errMessage,
+			}),
+		)
+	}
+	close(ch)
+	return ch, nil
+}
+
 func TestNewRunner_DefaultSessionService(t *testing.T) {
 	// No WithSessionService option -> should default to inmemory session service.
 	r := NewRunner("app", &noOpAgent{name: "a"})
@@ -1807,6 +1858,47 @@ func TestRunner_CompletionIncludesFallbackBusinessState(t *testing.T) {
 		string(completion.StateDelta[stateKey]))
 	require.NotContains(t, completion.StateDelta, graph.MetadataKeyNode)
 	require.NotContains(t, completion.StateDelta, graph.MetadataKeyTool)
+}
+
+func TestRunner_CompletionCarriesGraphTerminalError(t *testing.T) {
+	const (
+		stateKey   = "_node_error_"
+		stateValue = "fatal callback"
+		errType    = model.ErrorTypeFlowError
+		errMessage = "execution failed"
+	)
+
+	svc := sessioninmemory.NewSessionService()
+	ag := &fallbackGraphCompletionAgent{
+		name: "graph-fallback",
+		delta: map[string][]byte{
+			stateKey: []byte(stateValue),
+		},
+		errType:    errType,
+		errMessage: errMessage,
+	}
+	r := NewRunner("app", ag, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage(""),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for e := range ch {
+		if e.IsRunnerCompletion() {
+			completion = e
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.Response)
+	require.NotNil(t, completion.Response.Error)
+	require.Equal(t, errType, completion.Response.Error.Type)
+	require.Equal(t, errMessage, completion.Response.Error.Message)
+	require.Equal(t, stateValue, string(completion.StateDelta[stateKey]))
 }
 
 func TestRunner_CompletionSkipsFallbackAfterRecovery(t *testing.T) {

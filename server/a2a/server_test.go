@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -1086,7 +1087,14 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 	t.Run("empty_batch", func(t *testing.T) {
 		proc := createTestMessageProcessor()
 		sub := &mockTaskSubscriber{}
-		cont, err := proc.processBatchStreamingEvents(ctx, taskID, msg, []*event.Event{}, sub)
+		cont, err := proc.processBatchStreamingEvents(
+			ctx,
+			taskID,
+			msg,
+			[]*event.Event{},
+			sub,
+			nil,
+		)
 		assert.NoError(t, err)
 		assert.True(t, cont)
 	})
@@ -1095,7 +1103,14 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 		proc := createTestMessageProcessor()
 		sub := &mockTaskSubscriber{}
 		batch := []*event.Event{{}, nil}
-		cont, err := proc.processBatchStreamingEvents(ctx, taskID, msg, batch, sub)
+		cont, err := proc.processBatchStreamingEvents(
+			ctx,
+			taskID,
+			msg,
+			batch,
+			sub,
+			nil,
+		)
 		assert.NoError(t, err)
 		assert.True(t, cont)
 	})
@@ -1105,7 +1120,14 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 		proc.eventToA2AConverter = streamingErrorConverter{}
 		sub := &mockTaskSubscriber{}
 		evt := &event.Event{Response: &model.Response{}}
-		_, err := proc.processBatchStreamingEvents(ctx, taskID, msg, []*event.Event{evt}, sub)
+		_, err := proc.processBatchStreamingEvents(
+			ctx,
+			taskID,
+			msg,
+			[]*event.Event{evt},
+			sub,
+			nil,
+		)
 		assert.Error(t, err)
 	})
 
@@ -1121,7 +1143,14 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 				{Delta: model.Message{Content: "chunk"}},
 			},
 		}}
-		_, err := proc.processBatchStreamingEvents(ctx, taskID, msg, []*event.Event{evt}, sendErrSub)
+		_, err := proc.processBatchStreamingEvents(
+			ctx,
+			taskID,
+			msg,
+			[]*event.Event{evt},
+			sendErrSub,
+			nil,
+		)
 		assert.Error(t, err)
 	})
 
@@ -1135,7 +1164,14 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 				Done:   true,
 			},
 		}
-		cont, err := proc.processBatchStreamingEvents(ctx, taskID, msg, []*event.Event{final}, sub)
+		cont, err := proc.processBatchStreamingEvents(
+			ctx,
+			taskID,
+			msg,
+			[]*event.Event{final},
+			sub,
+			nil,
+		)
 		assert.NoError(t, err)
 		assert.False(t, cont)
 	})
@@ -2800,7 +2836,75 @@ func TestMessageProcessor_ProcessMessage_MultipleEvents(t *testing.T) {
 	assert.Equal(t, 1, len(resultTask.Artifacts))
 }
 
-func TestMessageProcessor_ProcessMessage_MultipleEvents_PreservesArtifactMetadata(t *testing.T) {
+func TestMessageProcessor_ProcessMessage_StructuredTaskError(
+	t *testing.T,
+) {
+	ctxID := "ctx"
+	code := "A2A_500"
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "structured-error-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("hi")},
+	}
+
+	processor := &messageProcessor{
+		structuredTaskErrors: true,
+		runner: &mockRunner{
+			runFunc: func(
+				ctx context.Context,
+				userID string,
+				sessionID string,
+				message model.Message,
+				opts ...agent.RunOption,
+			) (<-chan *event.Event, error) {
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						ID:   "resp-1",
+						Done: true,
+						Error: &model.ResponseError{
+							Type:    model.ErrorTypeFlowError,
+							Message: "task failed",
+							Code:    &code,
+						},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &mockEventToA2AConverter{},
+		errorHandler:        defaultErrorHandler,
+	}
+
+	result, err := processor.processMessage(
+		context.Background(),
+		"user",
+		ctxID,
+		&msg,
+		&model.Message{Content: "input"},
+		nil,
+	)
+	assert.NoError(t, err)
+	if !assert.NotNil(t, result) {
+		return
+	}
+
+	task, ok := result.Result.(*protocol.Task)
+	if !assert.True(t, ok) {
+		return
+	}
+	assert.Equal(t, protocol.TaskStateFailed, task.Status.State)
+	assert.NotNil(t, task.Metadata)
+	assert.Equal(t, code, task.Metadata[ia2a.MessageMetadataErrorCodeKey])
+	assert.NotNil(t, task.Status.Message)
+}
+
+func TestMessageProcessor_ProcessMessage_MultipleEvents_PreservesArtifactMetadata(
+	t *testing.T,
+) {
 	ctxID := "ctx"
 	ctx := context.Background()
 	msg := protocol.Message{
@@ -2813,11 +2917,21 @@ func TestMessageProcessor_ProcessMessage_MultipleEvents_PreservesArtifactMetadat
 	processor := &messageProcessor{
 		debugLogging: false,
 		runner: &mockRunner{
-			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+			runFunc: func(
+				ctx context.Context,
+				userID string,
+				sessionID string,
+				message model.Message,
+				opts ...agent.RunOption,
+			) (<-chan *event.Event, error) {
 				ch := make(chan *event.Event, 2)
 				ch <- &event.Event{
 					Response: &model.Response{
-						Choices: []model.Choice{{Message: model.Message{Content: "response1"}}},
+						Choices: []model.Choice{{
+							Message: model.Message{
+								Content: "response1",
+							},
+						}},
 					},
 				}
 				ch <- &event.Event{
@@ -2829,7 +2943,9 @@ func TestMessageProcessor_ProcessMessage_MultipleEvents_PreservesArtifactMetadat
 						}},
 					},
 					StateDelta: map[string][]byte{
-						"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+						"_node_metadata": []byte(
+							`{"nodeId":"planner","phase":"start"}`,
+						),
 					},
 				}
 				close(ch)
@@ -2841,18 +2957,220 @@ func TestMessageProcessor_ProcessMessage_MultipleEvents_PreservesArtifactMetadat
 		errorHandler:        defaultErrorHandler,
 	}
 
-	result, err := processor.processMessage(ctx, "user", "session", &msg, &model.Message{Content: "input"}, nil)
+	result, err := processor.processMessage(
+		ctx,
+		"user",
+		"session",
+		&msg,
+		&model.Message{Content: "input"},
+		nil,
+	)
 	assert.NoError(t, err)
 	resultTask, ok := result.Result.(*protocol.Task)
-	assert.True(t, ok, "Expected *protocol.Task for multiple events, got %T", result.Result)
+	assert.True(
+		t,
+		ok,
+		"Expected *protocol.Task for multiple events, got %T",
+		result.Result,
+	)
 	if !assert.Len(t, resultTask.Artifacts, 1) {
 		return
 	}
-	assert.Equal(t, "graph.execution", resultTask.Artifacts[0].Metadata[ia2a.MessageMetadataObjectTypeKey])
+	assert.Equal(
+		t,
+		"graph.execution",
+		resultTask.Artifacts[0].Metadata[ia2a.MessageMetadataObjectTypeKey],
+	)
 	rawStateDelta, ok := resultTask.Artifacts[0].Metadata[ia2a.MessageMetadataStateDeltaKey]
 	if assert.True(t, ok, "expected state_delta in artifact metadata") {
 		decoded := ia2a.DecodeStateDeltaMetadata(rawStateDelta)
-		assert.Equal(t, []byte(`{"nodeId":"planner","phase":"start"}`), decoded["_node_metadata"])
+		assert.Equal(
+			t,
+			[]byte(`{"nodeId":"planner","phase":"start"}`),
+			decoded["_node_metadata"],
+		)
+	}
+}
+
+func TestMessageProcessor_ProcessBatchStreamingEvents_StructuredTaskError(
+	t *testing.T,
+) {
+	code := "A2A_500"
+	processor := &messageProcessor{
+		structuredTaskErrors: true,
+	}
+	ctxID := "ctx"
+	msg := &protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "streaming-error-test",
+	}
+	subscriber := &mockTaskSubscriber{
+		channel: make(chan protocol.StreamingMessageEvent, 1),
+	}
+	terminalTaskError := false
+
+	cont, err := processor.processBatchStreamingEvents(
+		context.Background(),
+		"task-1",
+		msg,
+		[]*event.Event{{
+			Response: &model.Response{
+				ID:   "resp-1",
+				Done: true,
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "task failed",
+					Code:    &code,
+				},
+			},
+		}},
+		subscriber,
+		&terminalTaskError,
+	)
+	assert.NoError(t, err)
+	assert.False(t, cont)
+	assert.True(t, terminalTaskError)
+
+	select {
+	case streamEvent := <-subscriber.channel:
+		status, ok := streamEvent.Result.(*protocol.TaskStatusUpdateEvent)
+		if !assert.True(t, ok) {
+			return
+		}
+		assert.Equal(t, protocol.TaskStateFailed, status.Status.State)
+		assert.Equal(
+			t,
+			code,
+			status.Metadata[ia2a.MessageMetadataErrorCodeKey],
+		)
+	default:
+		t.Fatal("expected task failure status event")
+	}
+}
+
+func TestProcessAgentStreamingEvents_StopAgentError(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	code := "A2A_499"
+	events := make(chan *event.Event, 1)
+	events <- &event.Event{
+		Response: &model.Response{
+			ID:   "resp-1",
+			Done: true,
+			Error: &model.ResponseError{
+				Type:    agent.ErrorTypeStopAgentError,
+				Message: "task canceled",
+				Code:    &code,
+			},
+		},
+	}
+	close(events)
+
+	subscriber := &mockTaskSubscriber{
+		channel: make(chan protocol.StreamingMessageEvent, 4),
+	}
+	processor := createTestMessageProcessor()
+	processor.structuredTaskErrors = true
+
+	processor.processAgentStreamingEvents(
+		ctx,
+		"task-1",
+		"user",
+		"session",
+		msg,
+		events,
+		subscriber,
+		&mockTaskHandler{},
+	)
+
+	var results []protocol.StreamingMessageResult
+	for {
+		select {
+		case streamEvent, ok := <-subscriber.channel:
+			if !ok {
+				goto done
+			}
+			if streamEvent.Result != nil {
+				results = append(results, streamEvent.Result)
+			}
+		default:
+			goto done
+		}
+	}
+
+done:
+	if !assert.Len(t, results, 2) {
+		return
+	}
+
+	submitted, ok := results[0].(*protocol.TaskStatusUpdateEvent)
+	if !assert.True(t, ok) {
+		return
+	}
+	assert.Equal(t, protocol.TaskStateSubmitted, submitted.Status.State)
+
+	status, ok := results[1].(*protocol.TaskStatusUpdateEvent)
+	if !assert.True(t, ok) {
+		return
+	}
+	assert.Equal(t, protocol.TaskStateCanceled, status.Status.State)
+	assert.Equal(
+		t,
+		code,
+		status.Metadata[ia2a.MessageMetadataErrorCodeKey],
+	)
+}
+
+func TestMessageProcessor_ProcessBatchStreamingEvents_GraphNodeErrorNotTerminal(
+	t *testing.T,
+) {
+	processor := &messageProcessor{
+		structuredTaskErrors: true,
+		eventToA2AConverter: &mockEventToA2AConverter{
+			convertStreamingToA2AMessageFunc: func(
+				ctx context.Context,
+				event *event.Event,
+				options EventToA2AStreamingOptions,
+			) (protocol.StreamingMessageResult, error) {
+				return nil, nil
+			},
+		},
+	}
+	ctxID := "ctx"
+	msg := &protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "graph-node-error-test",
+	}
+	subscriber := &mockTaskSubscriber{
+		channel: make(chan protocol.StreamingMessageEvent, 1),
+	}
+	terminalTaskError := false
+
+	cont, err := processor.processBatchStreamingEvents(
+		context.Background(),
+		"task-1",
+		msg,
+		[]*event.Event{{
+			Response: &model.Response{
+				Object: graph.ObjectTypeGraphNodeError,
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "node failed",
+				},
+			},
+		}},
+		subscriber,
+		&terminalTaskError,
+	)
+	assert.NoError(t, err)
+	assert.True(t, cont)
+	assert.False(t, terminalTaskError)
+
+	select {
+	case streamEvent := <-subscriber.channel:
+		t.Fatalf("unexpected streaming result: %#v", streamEvent)
+	default:
 	}
 }
 

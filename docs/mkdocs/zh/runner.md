@@ -432,6 +432,9 @@ for e := range eventChan {
 
 有些运行不会走到最终的 `graph.execution` 完成事件，就已经因为致命错误提前结束。一个很常见的场景是：
 
+如果你想看 graph、Runner、subgraph、A2A 串起来的完整推荐方案，见
+[Error Handling](error-handling.md)。
+
 - 某个节点回调先发出一条自定义 `StateDelta`，里面带了致命错误详情
 - 随后流程直接中止，图本身来不及产出正常的最终快照
 
@@ -450,33 +453,107 @@ for e := range eventChan {
 
 这样业务代码就可以继续保持同一个规则：优先看最后一条事件里的业务错误详情，而不是为了拿错误信息去遍历整条事件流。
 
+如果 graph 侧用了 `graph.NewExecutionErrorCollector()`，那么这条
+`StateDelta` 里的 `execution_errors` 也可能来自默认 recoverable 约定，
+例如错误实现了 `Recoverable() bool`，或者通过
+`graph.MarkRecoverable(err)` 做了显式标记。
+
 示例：
 
 ```go
+package main
+
 import (
+    "context"
     "encoding/json"
     "fmt"
 
     "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const stateKeyNodeFatal = "node_fatal_error"
 
-func readLastEvent(eventChan <-chan *event.Event) error {
-    for e := range eventChan {
-        if !e.IsRunnerCompletion() {
+type RunSummary struct {
+    TransportError  *model.ResponseError
+    FatalDetail     map[string]any
+    ExecutionErrors []graph.ExecutionError
+}
+
+func ConsumeRun(
+    ctx context.Context,
+    eventChan <-chan *event.Event,
+) (*RunSummary, error) {
+    summary := &RunSummary{}
+
+    for {
+        select {
+        case <-ctx.Done():
+            return nil, ctx.Err()
+        case evt, ok := <-eventChan:
+            if !ok {
+                return summary, nil
+            }
+            if evt.Response != nil && evt.Response.Error != nil {
+                summary.TransportError = evt.Response.Error
+            }
+            if !evt.IsRunnerCompletion() {
+                continue
+            }
+
+            if b, ok := evt.StateDelta[stateKeyNodeFatal]; ok {
+                var detail map[string]any
+                if err := json.Unmarshal(b, &detail); err != nil {
+                    return nil, err
+                }
+                summary.FatalDetail = detail
+            }
+
+            executionErrors, err := graph.ExecutionErrorsFromStateDelta(
+                evt.StateDelta,
+                graph.StateKeyExecutionErrors,
+            )
+            if err != nil {
+                return nil, err
+            }
+            summary.ExecutionErrors = executionErrors
+            return summary, nil
+        }
+    }
+}
+
+func PrintSummary(summary *RunSummary) {
+    if summary.TransportError != nil {
+        fmt.Printf(
+            "transport error: type=%s code=%s message=%s\n",
+            summary.TransportError.Type,
+            ptrValue(summary.TransportError.Code),
+            summary.TransportError.Message,
+        )
+    }
+    if summary.FatalDetail != nil {
+        fmt.Printf("fatal detail: %+v\n", summary.FatalDetail)
+    }
+    for _, record := range summary.ExecutionErrors {
+        if record.Error == nil {
             continue
         }
-
-        if b, ok := e.StateDelta[stateKeyNodeFatal]; ok {
-            var detail map[string]any
-            if err := json.Unmarshal(b, &detail); err == nil {
-                fmt.Printf("fatal detail: %+v\n", detail)
-            }
-        }
-        return nil
+        fmt.Printf(
+            "execution error: severity=%s node=%s code=%s message=%s\n",
+            record.Severity,
+            record.NodeName,
+            ptrValue(record.Error.Code),
+            record.Error.Message,
+        )
     }
-    return nil
+}
+
+func ptrValue(value *string) string {
+    if value == nil {
+        return ""
+    }
+    return *value
 }
 ```
 

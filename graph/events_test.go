@@ -105,7 +105,7 @@ func TestNewNodeEvents(t *testing.T) {
 		WithNodeEventEndTime(end),
 		WithNodeEventError("boom"),
 	)
-	require.Equal(t, model.ObjectTypeError, e3.Object)
+	require.Equal(t, ObjectTypeGraphNodeError, e3.Object)
 	var meta3 NodeExecutionMetadata
 	require.NoError(t, json.Unmarshal(e3.StateDelta[MetadataKeyNode], &meta3))
 	require.Equal(t, ExecutionPhaseError, meta3.Phase)
@@ -137,7 +137,7 @@ func TestNewNodeErrorEvent_WithResponseError(t *testing.T) {
 		WithNodeEventError(errMsg),
 		WithNodeEventResponseError(&model.ResponseError{Code: &codeVal}),
 	)
-	require.Equal(t, model.ObjectTypeError, e.Object)
+	require.Equal(t, ObjectTypeGraphNodeError, e.Object)
 	require.NotNil(t, e.Response)
 	require.NotNil(t, e.Response.Error)
 	require.Equal(t, model.ErrorTypeFlowError, e.Response.Error.Type)

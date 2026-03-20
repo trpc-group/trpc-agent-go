@@ -858,6 +858,159 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 	}
 }
 
+func TestDefaultA2AEventConverter_ConvertStreamingToEvents_FailedStatus(
+	t *testing.T,
+) {
+	converter := &defaultA2AEventConverter{}
+	code := "A2A_500"
+	metadata := ia2a.WithResponseErrorMetadata(nil, &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "task failed",
+		Code:    &code,
+	})
+
+	events, err := converter.ConvertStreamingToEvents(
+		protocol.StreamingMessageEvent{
+			Result: &protocol.TaskStatusUpdateEvent{
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Metadata:  metadata,
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateFailed,
+				},
+			},
+		},
+		"test-agent",
+		&agent.Invocation{InvocationID: "inv"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Response == nil || events[0].Response.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if events[0].Response.Error.Code == nil ||
+		*events[0].Response.Error.Code != code {
+		t.Fatalf("code = %v, want %q", events[0].Response.Error.Code, code)
+	}
+	if !events[0].Response.Done {
+		t.Fatal("expected terminal error event")
+	}
+}
+
+func TestDefaultA2AEventConverter_ConvertToEvents_FailedTask(
+	t *testing.T,
+) {
+	converter := &defaultA2AEventConverter{}
+	metadata := ia2a.WithResponseErrorMetadata(nil, &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "task failed",
+	})
+
+	events, err := converter.ConvertToEvents(
+		protocol.MessageResult{
+			Result: &protocol.Task{
+				ID:        "task-1",
+				ContextID: "ctx-1",
+				Metadata:  metadata,
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateFailed,
+				},
+			},
+		},
+		"test-agent",
+		&agent.Invocation{InvocationID: "inv"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Response == nil || events[0].Response.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if events[0].Response.Error.Message != "task failed" {
+		t.Fatalf(
+			"message = %q, want %q",
+			events[0].Response.Error.Message,
+			"task failed",
+		)
+	}
+}
+
+func TestTaskResponseError_EdgeCases(t *testing.T) {
+	if taskResponseError(nil) != nil {
+		t.Fatal("expected nil response error for nil result")
+	}
+
+	if taskResponseError(&parseResult{
+		taskState: protocol.TaskStateSubmitted,
+	}) != nil {
+		t.Fatal("expected nil response error for non-failure state")
+	}
+
+	passthrough := &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "structured",
+	}
+	if got := taskResponseError(&parseResult{
+		taskState:     protocol.TaskStateFailed,
+		responseError: passthrough,
+		textContent:   "ignored",
+	}); got != passthrough {
+		t.Fatal("expected structured response error to be reused")
+	}
+}
+
+func TestTaskResponseError_FallbackMessages(t *testing.T) {
+	tests := []struct {
+		name  string
+		state protocol.TaskState
+		want  string
+	}{
+		{
+			name:  "failed",
+			state: protocol.TaskStateFailed,
+			want:  "remote task failed",
+		},
+		{
+			name:  "rejected",
+			state: protocol.TaskStateRejected,
+			want:  "remote task rejected",
+		},
+		{
+			name:  "canceled",
+			state: protocol.TaskStateCanceled,
+			want:  "remote task canceled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			respErr := taskResponseError(&parseResult{
+				taskState: tt.state,
+			})
+			if respErr == nil {
+				t.Fatal("expected response error, got nil")
+			}
+			if respErr.Type != model.ErrorTypeFlowError {
+				t.Fatalf("unexpected error type: %s", respErr.Type)
+			}
+			if respErr.Message != tt.want {
+				t.Fatalf(
+					"message = %q, want %q",
+					respErr.Message,
+					tt.want,
+				)
+			}
+		})
+	}
+}
+
 func TestConvertTaskArtifactToMessage(t *testing.T) {
 	type testCase struct {
 		name         string
@@ -1840,6 +1993,29 @@ func TestParseA2AMessageParts_CodeExecution(t *testing.T) {
 			result := parseA2AMessageParts(tt.msg)
 			tt.validateFunc(t, result)
 		})
+	}
+}
+
+func TestParseA2AMessageParts_ResponseErrorFallsBackToText(t *testing.T) {
+	code := "A2A_500"
+	msg := &protocol.Message{
+		Parts: []protocol.Part{
+			&protocol.TextPart{Text: "task failed from content"},
+		},
+		Metadata: map[string]any{
+			ia2a.MessageMetadataErrorCodeKey: code,
+		},
+	}
+
+	result := parseA2AMessageParts(msg)
+	if result.responseError == nil {
+		t.Fatal("expected responseError, got nil")
+	}
+	if result.responseError.Message != "task failed from content" {
+		t.Fatalf(
+			"expected fallback message from text content, got %q",
+			result.responseError.Message,
+		)
 	}
 }
 
@@ -2847,6 +3023,38 @@ func TestAppendFilePart_EmptyData(t *testing.T) {
 	})
 	if len(parts) != 0 {
 		t.Fatalf("expected empty parts for File with empty Data, got %d", len(parts))
+	}
+}
+
+func TestAppendFilePart_WithFileIDAndDefaultName(t *testing.T) {
+	parts := appendFilePart(nil, model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			FileID:   "file-id",
+			MimeType: "text/plain",
+		},
+	})
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(parts))
+	}
+
+	filePart, ok := parts[0].(*protocol.FilePart)
+	if !ok {
+		t.Fatalf("expected *protocol.FilePart, got %T", parts[0])
+	}
+
+	fileWithURI, ok := filePart.File.(*protocol.FileWithURI)
+	if !ok {
+		t.Fatalf(
+			"expected *protocol.FileWithURI, got %T",
+			filePart.File,
+		)
+	}
+	if fileWithURI.Name == nil || *fileWithURI.Name != "file" {
+		t.Fatalf("unexpected file name: %+v", fileWithURI.Name)
+	}
+	if fileWithURI.URI != "file-id" {
+		t.Fatalf("unexpected file URI: %s", fileWithURI.URI)
 	}
 }
 

@@ -261,13 +261,23 @@ func (e *Event) IsRunnerCompletion() bool {
 	return e.Done && e.Object == model.ObjectTypeRunnerCompletion
 }
 
-// IsError reports whether this event should be treated as a terminal error event.
-// Events with ObjectTypeError or Response.Error are considered terminal failures.
+// IsError reports whether this event carries any error signal.
+// It is broader than IsTerminalError and also matches non-terminal graph
+// observability events such as graph.node.error.
 func (e *Event) IsError() bool {
 	if e == nil || e.Response == nil {
 		return false
 	}
 	return e.Object == model.ObjectTypeError || e.Error != nil
+}
+
+// IsTerminalError reports whether this event represents a terminal failure for
+// the overall run.
+func (e *Event) IsTerminalError() bool {
+	if e == nil || e.Response == nil || e.Response.Error == nil {
+		return false
+	}
+	return e.Object == model.ObjectTypeError || e.Done
 }
 
 // EmitEvent sends an event to the channel without timeout.

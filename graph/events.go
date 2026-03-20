@@ -1214,9 +1214,7 @@ func NewNodeErrorEvent(opts ...NodeEventOption) *event.Event {
 		if respErr.Type == "" {
 			respErr.Type = model.ErrorTypeFlowError
 		}
-		graphEvent.Response.Object = model.ObjectTypeError
 		graphEvent.Response.Error = respErr
-		graphEvent.Object = graphEvent.Response.Object
 	}
 	return graphEvent
 }
