@@ -142,6 +142,43 @@ func TestClient_GetSession(t *testing.T) {
 	})
 }
 
+func TestClient_GetSession_BackfillsLegacyUserIndex(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	cfg := defaultConfig()
+	c := NewClient(rdb, cfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "legacy1"}
+	userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+
+	legacyClient := NewClient(rdb, Config{
+		SessionTTL:             cfg.SessionTTL,
+		AppStateTTL:            cfg.AppStateTTL,
+		UserStateTTL:           cfg.UserStateTTL,
+		SessionEventLimit:      cfg.SessionEventLimit,
+		EnableUserSessionIndex: false,
+	})
+	_, err := legacyClient.CreateSession(ctx, key, session.StateMap{"legacy": []byte("ok")})
+	require.NoError(t, err)
+
+	indexKey := c.keys.SessionIndexKey(userKey)
+	exists, err := rdb.HExists(ctx, indexKey, key.SessionID).Result()
+	require.NoError(t, err)
+	assert.False(t, exists)
+
+	sess, err := c.GetSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, []byte("ok"), sess.State["legacy"])
+
+	exists, err = rdb.HExists(ctx, indexKey, key.SessionID).Result()
+	require.NoError(t, err)
+	assert.True(t, exists)
+
+	ttl := mr.TTL(indexKey)
+	assert.Greater(t, ttl, time.Duration(0))
+	assert.LessOrEqual(t, ttl, cfg.SessionTTL)
+}
+
 func TestClient_AppendEvent(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())
@@ -235,11 +272,20 @@ func TestClient_DeleteSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.AppendEvent(ctx, key, makeTestEvent("e1", time.Now())))
 
+	indexKey := c.keys.SessionIndexKey(session.UserKey{AppName: key.AppName, UserID: key.UserID})
+	exists, err := rdb.HExists(ctx, indexKey, key.SessionID).Result()
+	require.NoError(t, err)
+	assert.True(t, exists)
+
 	require.NoError(t, c.DeleteSession(ctx, key))
 
 	sess, err := c.GetSession(ctx, key, 0, time.Time{})
 	require.NoError(t, err)
 	assert.Nil(t, sess)
+
+	exists, err = rdb.HExists(ctx, indexKey, key.SessionID).Result()
+	require.NoError(t, err)
+	assert.False(t, exists)
 }
 
 func TestClient_DeleteSession_WithTracks(t *testing.T) {
@@ -387,6 +433,35 @@ func TestClient_ListSessions_FallbackToScanWhenUserIndexDisabled(t *testing.T) {
 	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
 	require.NoError(t, err)
 	assert.Len(t, sessions, 3)
+}
+
+func TestClient_ListSessions_CleansStaleUserIndexEntries(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+
+	userKey := session.UserKey{AppName: "app", UserID: "u1"}
+	validKey := session.Key{AppName: "app", UserID: "u1", SessionID: "live1"}
+	_, err := c.CreateSession(ctx, validKey, nil)
+	require.NoError(t, err)
+
+	indexKey := c.keys.SessionIndexKey(userKey)
+	staleEntry, err := json.Marshal(sessionIndexEntry{CreatedAt: time.Now()})
+	require.NoError(t, err)
+	require.NoError(t, rdb.HSet(ctx, indexKey, "ghost", staleEntry).Err())
+
+	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, validKey.SessionID, sessions[0].ID)
+
+	staleExists, err := rdb.HExists(ctx, indexKey, "ghost").Result()
+	require.NoError(t, err)
+	assert.False(t, staleExists)
+
+	validExists, err := rdb.HExists(ctx, indexKey, validKey.SessionID).Result()
+	require.NoError(t, err)
+	assert.True(t, validExists)
 }
 
 func TestClient_Exists(t *testing.T) {
