@@ -230,6 +230,9 @@ if err := http.ListenAndServe(":8888", mux); err != nil {
 - **状态传递**: 支持将本地状态传递给远程 Agent
 - **错误处理**: 完善的错误处理和重试机制
 
+如果你想看 A2A server 和 `A2AAgent` 之间推荐的结构化 task error 约定，见
+[Error Handling](error-handling.md)。
+
 ### 使用场景
 
 1. **分布式 Agent 系统**: 在微服务架构中调用其他服务的 Agent

@@ -237,6 +237,9 @@ Corresponding to A2A Server, tRPC-Agent-Go also provides `A2AAgent` for calling 
 - **State Transfer**: Support transferring local state to remote Agents
 - **Error Handling**: Comprehensive error handling and retry mechanisms
 
+For the recommended structured task-error convention between A2A server and
+`A2AAgent`, see [Error Handling](error-handling.md).
+
 ### Use Cases
 
 1. **Distributed Agent Systems**: Call Agents from other services in microservice architectures

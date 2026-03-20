@@ -519,6 +519,21 @@ func TestWithOptions(t *testing.T) {
 			},
 		},
 		{
+			name:   "WithStructuredTaskErrors",
+			option: WithStructuredTaskErrors(true),
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
+				if !opts.structuredTaskErrors {
+					t.Error(
+						"WithStructuredTaskErrors() should enable structuredTaskErrors",
+					)
+				}
+			},
+		},
+		{
 			name:   "WithExtraA2AOptions",
 			option: WithExtraA2AOptions(),
 			validate: func(

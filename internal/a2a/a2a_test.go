@@ -11,6 +11,8 @@ package a2a
 
 import (
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestGetADKMetadataKey(t *testing.T) {
@@ -105,5 +107,48 @@ func TestGetDataPartType(t *testing.T) {
 				t.Errorf("GetDataPartType() = %q, want %q", result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestResponseErrorMetadataHelpers(t *testing.T) {
+	code := "A2A_42"
+	param := "task_id"
+	metadata := WithResponseErrorMetadata(nil, &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "task failed",
+		Code:    &code,
+		Param:   &param,
+	})
+
+	got := ResponseErrorFromMetadata(
+		metadata,
+		"",
+		model.ErrorTypeFlowError,
+	)
+	if got == nil {
+		t.Fatal("ResponseErrorFromMetadata() returned nil")
+	}
+	if got.Type != model.ErrorTypeFlowError {
+		t.Fatalf("Type = %q, want %q", got.Type, model.ErrorTypeFlowError)
+	}
+	if got.Message != "task failed" {
+		t.Fatalf("Message = %q, want %q", got.Message, "task failed")
+	}
+	if got.Code == nil || *got.Code != code {
+		t.Fatalf("Code = %v, want %q", got.Code, code)
+	}
+	if got.Param == nil || *got.Param != param {
+		t.Fatalf("Param = %v, want %q", got.Param, param)
+	}
+}
+
+func TestResponseErrorFromMetadata_IgnoresPlainTextFallback(t *testing.T) {
+	got := ResponseErrorFromMetadata(
+		nil,
+		"plain response",
+		model.ErrorTypeFlowError,
+	)
+	if got != nil {
+		t.Fatalf("expected nil response error, got %+v", got)
 	}
 }
