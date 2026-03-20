@@ -69,31 +69,6 @@ func (c *Client) removeSessionFromUserIndex(ctx context.Context, dataKeys []stri
 	return nil
 }
 
-// backfillUserSessionIndex ensures a legacy session (created before the index existed)
-// is registered in the index Hash. Uses HSetNX so it only writes when the field
-// is absent. Best-effort: errors are silently ignored to avoid impacting the read path.
-func (c *Client) backfillUserSessionIndex(ctx context.Context, key session.Key, metaJSON []byte) {
-	var meta sessionMeta
-	if err := json.Unmarshal(metaJSON, &meta); err != nil {
-		return
-	}
-
-	userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
-	indexKey := c.keys.SessionIndexKey(userKey)
-
-	entry, err := json.Marshal(sessionIndexEntry{CreatedAt: meta.CreatedAt})
-	if err != nil {
-		return
-	}
-
-	pipe := c.client.Pipeline()
-	pipe.HSetNX(ctx, indexKey, key.SessionID, string(entry))
-	if c.cfg.SessionTTL > 0 {
-		pipe.Expire(ctx, indexKey, c.cfg.SessionTTL)
-	}
-	_, _ = pipe.Exec(ctx)
-}
-
 const userSessionHScanBatchSize = 100
 
 // listSessionIDsFromUserIndex returns all session IDs stored in the per-user

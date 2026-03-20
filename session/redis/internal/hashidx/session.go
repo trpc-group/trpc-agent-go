@@ -30,8 +30,8 @@ type Config struct {
 	// KeyPrefix is the optional prefix for all HashIdx keys.
 	KeyPrefix string
 	// EnableUserSessionIndex enables the per-user session index Hash.
-	// When true, CreateSession writes an index entry, GetSession backfills legacy sessions,
-	// and ListSessions uses HSCAN on the user session index.
+	// When true, CreateSession writes an index entry and ListSessions uses HSCAN
+	// on the user session index.
 	// When false (default), no index is maintained and ListSessions falls back to SCAN.
 	EnableUserSessionIndex bool
 }
@@ -121,10 +121,6 @@ func (c *Client) CreateSession(
 // - Track events loaded
 // - Summaries loaded
 // - TTL refreshed for app state, user state, and summary
-//
-// For backward compatibility with sessions created before the session index was introduced,
-// GetSession performs a best-effort backfill: if the session ID is not yet in the index Hash,
-// it is registered via HSetNX (fire-and-forget, does not block the read path).
 func (c *Client) GetSession(
 	ctx context.Context,
 	key session.Key,
@@ -137,10 +133,6 @@ func (c *Client) GetSession(
 			return nil, nil // Not found
 		}
 		return nil, fmt.Errorf("get session meta: %w", err)
-	}
-
-	if c.cfg.EnableUserSessionIndex {
-		c.backfillUserSessionIndex(ctx, key, metaJSON)
 	}
 
 	return c.loadSessionComplete(ctx, key, metaJSON, limit, afterTime)

@@ -142,43 +142,6 @@ func TestClient_GetSession(t *testing.T) {
 	})
 }
 
-func TestClient_GetSession_BackfillsLegacyUserIndex(t *testing.T) {
-	mr, rdb := setupMiniredis(t)
-	cfg := defaultConfig()
-	c := NewClient(rdb, cfg)
-	ctx := context.Background()
-	key := session.Key{AppName: "app", UserID: "u1", SessionID: "legacy1"}
-	userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
-
-	legacyClient := NewClient(rdb, Config{
-		SessionTTL:             cfg.SessionTTL,
-		AppStateTTL:            cfg.AppStateTTL,
-		UserStateTTL:           cfg.UserStateTTL,
-		SessionEventLimit:      cfg.SessionEventLimit,
-		EnableUserSessionIndex: false,
-	})
-	_, err := legacyClient.CreateSession(ctx, key, session.StateMap{"legacy": []byte("ok")})
-	require.NoError(t, err)
-
-	indexKey := c.keys.SessionIndexKey(userKey)
-	exists, err := rdb.HExists(ctx, indexKey, key.SessionID).Result()
-	require.NoError(t, err)
-	assert.False(t, exists)
-
-	sess, err := c.GetSession(ctx, key, 0, time.Time{})
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, []byte("ok"), sess.State["legacy"])
-
-	exists, err = rdb.HExists(ctx, indexKey, key.SessionID).Result()
-	require.NoError(t, err)
-	assert.True(t, exists)
-
-	ttl := mr.TTL(indexKey)
-	assert.Greater(t, ttl, time.Duration(0))
-	assert.LessOrEqual(t, ttl, cfg.SessionTTL)
-}
-
 func TestClient_AppendEvent(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())

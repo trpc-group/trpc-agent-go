@@ -36,7 +36,6 @@ redis.call('HSET', indexKey, sessionID, indexEntry)
 
 if ttl > 0 then
     redis.call('EXPIRE', metaKey, ttl)
-    redis.call('EXPIRE', indexKey, ttl)
 end
 
 return 1

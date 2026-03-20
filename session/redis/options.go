@@ -274,7 +274,6 @@ func WithEnableTracing(enable bool) ServiceOpt {
 // WithEnableUserSessionIndex enables the per-user session index Hash for HashIdx storage.
 // When enabled:
 //   - CreateSession atomically writes both meta key and index entry
-//   - GetSession backfills legacy sessions into the index (best-effort)
 //   - DeleteSession removes the index entry
 //   - ListSessions uses HSCAN on the index instead of global SCAN
 //
