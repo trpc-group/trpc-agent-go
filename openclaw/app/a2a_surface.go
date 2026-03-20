@@ -239,4 +239,3 @@ func a2aStartupLines(surface A2ASurface) []startupLogLine {
 		{text: fmt.Sprintf("A2A URL: %s", surface.URL)},
 	}
 }
-
