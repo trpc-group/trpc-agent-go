@@ -33,6 +33,8 @@ import (
 var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
 
+var errSessionNotFound = errors.New("session not found")
+
 // SessionState is the state of a session.
 type SessionState struct {
 	ID        string           `json:"id"`
@@ -587,56 +589,49 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		}
 	}
 
-	// Get current session state
-	var currentStateBytes []byte
-	err := s.mysqlClient.QueryRow(ctx,
-		[]any{&currentStateBytes},
-		fmt.Sprintf("SELECT state FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL", s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("mysql session service update session state failed: session not found")
+	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+		sessState, _, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		if err != nil {
+			if errors.Is(err, errSessionNotFound) {
+				return fmt.Errorf("mysql session service update session state failed: session not found")
+			}
+			return fmt.Errorf("mysql session service update session state failed: %w", err)
 		}
-		return fmt.Errorf("mysql session service update session state failed: %w", err)
-	}
+		now := time.Now()
 
-	var sessState SessionState
-	if len(currentStateBytes) > 0 {
-		if err := json.Unmarshal(currentStateBytes, &sessState); err != nil {
-			return fmt.Errorf("mysql session service update session state failed: unmarshal state: %w", err)
+		if sessState.State == nil {
+			sessState.State = make(session.StateMap)
 		}
-	}
-	if sessState.State == nil {
-		sessState.State = make(session.StateMap)
-	}
-	for k, v := range state {
-		if v == nil {
-			sessState.State[k] = nil
-			continue
+		for k, v := range state {
+			if v == nil {
+				sessState.State[k] = nil
+				continue
+			}
+			copiedValue := make([]byte, len(v))
+			copy(copiedValue, v)
+			sessState.State[k] = copiedValue
 		}
-		copiedValue := make([]byte, len(v))
-		copy(copiedValue, v)
-		sessState.State[k] = copiedValue
-	}
-	now := time.Now()
-	sessState.UpdatedAt = now
+		sessState.UpdatedAt = now
 
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("mysql session service update session state failed: marshal state: %w", err)
-	}
+		updatedStateBytes, err := json.Marshal(sessState)
+		if err != nil {
+			return fmt.Errorf("mysql session service update session state failed: marshal state: %w", err)
+		}
 
-	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
-
-	_, err = s.mysqlClient.Exec(ctx,
-		fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
+		expiresAt := calculateExpiresAt(s.opts.sessionTTL)
+		_, err = tx.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 		 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-		string(updatedStateBytes), now, expiresAt,
-		key.AppName, key.UserID, key.SessionID)
+			string(updatedStateBytes), now, expiresAt,
+			key.AppName, key.UserID, key.SessionID)
+		if err != nil {
+			return fmt.Errorf("mysql session service update session state failed: %w", err)
+		}
 
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("mysql session service update session state failed: %w", err)
+		return err
 	}
 
 	return nil

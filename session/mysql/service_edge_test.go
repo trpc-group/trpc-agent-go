@@ -230,9 +230,9 @@ func TestAddEvent(t *testing.T) {
 
 		evt := event.New("inv-1", "test-author")
 
-		mock.ExpectQuery("SELECT state, expires_at FROM session_states").
-			WithArgs(key.AppName, key.UserID, key.SessionID).
+		expectLoadSessionStateForUpdate(mock, key).
 			WillReturnError(fmt.Errorf("database error"))
+		mock.ExpectRollback()
 
 		err = s.addEvent(context.Background(), key, evt)
 		assert.Error(t, err)
@@ -257,9 +257,9 @@ func TestAddEvent(t *testing.T) {
 		rows := sqlmock.NewRows([]string{"state", "expires_at"}).
 			AddRow([]byte("invalid-json"), sql.NullTime{Valid: false})
 
-		mock.ExpectQuery("SELECT state, expires_at FROM session_states").
-			WithArgs(key.AppName, key.UserID, key.SessionID).
+		expectLoadSessionStateForUpdate(mock, key).
 			WillReturnRows(rows)
+		mock.ExpectRollback()
 
 		err = s.addEvent(context.Background(), key, evt)
 		assert.Error(t, err)
@@ -1209,10 +1209,12 @@ func TestAddEvent_Error(t *testing.T) {
 
 	stateBytes, _ := json.Marshal(SessionState{ID: "sess", State: make(session.StateMap)})
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT state, expires_at FROM session_states")).
+	expectLoadSessionStateForUpdate(mock, session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess",
+	}).
 		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).AddRow(stateBytes, nil))
-
-	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states")).
 		WillReturnError(assert.AnError)
 	mock.ExpectRollback()
