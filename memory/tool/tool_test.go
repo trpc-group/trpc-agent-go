@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // mockMemoryService is a mock implementation of memory.Service for testing.
@@ -756,6 +757,132 @@ func TestMemoryTool_Declaration_AllTools(t *testing.T) {
 			assert.NotNil(t, decl.InputSchema, "Expected non-nil input schema for %s", tt.name)
 		})
 	}
+}
+
+func TestMemoryTool_SearchDeclaration_EncouragesDirectLookup(t *testing.T) {
+	tool := NewSearchTool()
+	decl := tool.Declaration()
+	require.NotNil(t, decl)
+	require.NotNil(t, decl.InputSchema)
+	require.NotNil(t, decl.InputSchema.Properties)
+
+	assert.Contains(t, decl.Description, memoryToolScopeNote)
+	assert.Contains(t, decl.Description, memoryReadDirectUseNote)
+
+	querySchema := decl.InputSchema.Properties["query"]
+	require.NotNil(t, querySchema)
+	assert.Equal(t, searchMemoryQueryDescription, querySchema.Description)
+}
+
+func TestMemoryTool_LoadDeclaration_EncouragesDirectLookup(t *testing.T) {
+	tool := NewLoadTool()
+	decl := tool.Declaration()
+	require.NotNil(t, decl)
+	require.NotNil(t, decl.InputSchema)
+	require.NotNil(t, decl.InputSchema.Properties)
+
+	assert.Contains(t, decl.Description, memoryToolScopeNote)
+	assert.Contains(t, decl.Description, memoryReadDirectUseNote)
+
+	limitSchema := decl.InputSchema.Properties["limit"]
+	require.NotNil(t, limitSchema)
+	assert.Equal(t, loadLimitDescription, limitSchema.Description)
+}
+
+func TestMemoryTool_WriteDeclarations_ContainUsageGuidance(t *testing.T) {
+	tests := []struct {
+		name               string
+		tool               tool.CallableTool
+		expectedDescSubstr []string
+		fieldName          string
+		fieldDescription   string
+	}{
+		{
+			name: "add",
+			tool: NewAddTool(),
+			expectedDescSubstr: []string{
+				memoryToolScopeNote,
+				memoryWriteDirectUseNote,
+				memoryCaptureGuidance,
+			},
+			fieldName:        "memory",
+			fieldDescription: addMemoryDescription,
+		},
+		{
+			name: "update",
+			tool: NewUpdateTool(),
+			expectedDescSubstr: []string{
+				memoryToolScopeNote,
+				memoryWriteDirectUseNote,
+			},
+			fieldName:        "memory_id",
+			fieldDescription: updateMemoryIDDescription,
+		},
+		{
+			name: "delete",
+			tool: NewDeleteTool(),
+			expectedDescSubstr: []string{
+				memoryToolScopeNote,
+				memoryWriteDirectUseNote,
+				memoryDestructiveGuidance,
+			},
+			fieldName:        "memory_id",
+			fieldDescription: deleteMemoryIDDescription,
+		},
+		{
+			name: "clear",
+			tool: NewClearTool(),
+			expectedDescSubstr: []string{
+				memoryToolScopeNote,
+				memoryDestructiveGuidance,
+			},
+			fieldName:        "reason",
+			fieldDescription: clearReasonDescription,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decl := tt.tool.Declaration()
+			require.NotNil(t, decl)
+			require.NotNil(t, decl.InputSchema)
+			require.NotNil(t, decl.InputSchema.Properties)
+
+			for _, expected := range tt.expectedDescSubstr {
+				assert.Contains(t, decl.Description, expected)
+			}
+
+			fieldSchema := decl.InputSchema.Properties[tt.fieldName]
+			require.NotNil(t, fieldSchema)
+			assert.Equal(t, tt.fieldDescription, fieldSchema.Description)
+		})
+	}
+}
+
+func TestMemoryRequestTypes_PreserveSchemaMetadataForExternalTools(t *testing.T) {
+	passThrough := func(_ context.Context, req *SearchMemoryRequest) (*SearchMemoryResponse, error) {
+		return &SearchMemoryResponse{Query: req.Query}, nil
+	}
+
+	tool := function.NewFunctionTool(
+		passThrough,
+		function.WithName("external_memory_search"),
+		function.WithDescription("test"),
+	)
+
+	decl := tool.Declaration()
+	require.NotNil(t, decl)
+	require.NotNil(t, decl.InputSchema)
+	require.NotNil(t, decl.InputSchema.Properties)
+
+	querySchema := decl.InputSchema.Properties["query"]
+	require.NotNil(t, querySchema)
+	assert.Equal(t, "The search query to find relevant memories", querySchema.Description)
+
+	kindSchema := decl.InputSchema.Properties["kind"]
+	require.NotNil(t, kindSchema)
+	assert.Equal(t, "Filter by memory kind: 'fact' or 'episode'. Empty means all.", kindSchema.Description)
+	assert.Equal(t, []any{"fact", "episode"}, kindSchema.Enum)
 }
 
 func TestGetMemoryServiceFromContext(t *testing.T) {
