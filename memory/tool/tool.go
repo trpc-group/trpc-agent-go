@@ -23,6 +23,31 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
+const (
+	memoryToolScopeNote       = "All memory tools operate only on memories already scoped to the current app and current user."
+	memoryReadDirectUseNote   = "If the current request depends on remembered context call the tool directly instead of adding an extra permission round trip."
+	memoryWriteDirectUseNote  = "If the user is clearly asking to remember correct or forget something carry out the memory operation directly."
+	memoryCaptureGuidance     = "Store concise factual memories that help future conversations feel contextual and avoid asking the same question again. Avoid guesses duplicates trivial one off details and sensitive data unless it is needed for the task."
+	memoryDestructiveGuidance = "This operation is destructive. Only use it when the user explicitly asks to remove saved memory or reset it."
+
+	addMemoryDescription         = "Durable memory statement to store for the current user. Write it as a concise third person fact or episode that will help future conversations."
+	topicsDescription            = "Optional topics for categorizing the memory."
+	memoryKindDescription        = "Memory type. Use 'fact' for stable profile or preference information and 'episode' for a specific event."
+	eventTimeDescription         = "When the event happened in ISO 8601 format. Use an absolute date or timestamp. Required when the memory kind is episode."
+	participantsDescription      = "People involved in the event."
+	locationDescription          = "Where the event happened."
+	updateMemoryIDDescription    = "ID of the stored memory to update. Use memory_search or memory_load first if you need to find the right ID."
+	updateMemoryDescription      = "Rewritten memory content that corrects refines or supersedes the stored memory."
+	deleteMemoryIDDescription    = "ID of the stored memory to delete. Use memory_search or memory_load first if you need to find the right ID."
+	clearReasonDescription       = "Optional short reason for clearing all saved memory."
+	searchMemoryQueryDescription = "Search query for remembered profile preferences history or prior conversation context. Use short keyword style queries and call the tool directly when the current request depends on stored memory."
+	searchMemoryKindDescription  = "Optional memory kind preference. Use 'fact' for stable profile style memories and 'episode' for dated events. Leave empty when unsure."
+	timeAfterDescription         = "Optional lower bound for episode event_time in ISO 8601 date format."
+	timeBeforeDescription        = "Optional upper bound for episode event_time in ISO 8601 date format."
+	orderByEventTimeDescription  = "When true order results by event time instead of relevance. Useful for sequence or timeline questions."
+	loadLimitDescription         = "Maximum number of recent memories to load. Defaults to 10."
+)
+
 // Memory function implementations using function.NewFunctionTool.
 
 // NewAddTool creates a function tool for adding memories.
@@ -71,8 +96,11 @@ func NewAddTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		addFunc,
 		function.WithName(memory.AddToolName),
-		function.WithDescription("Add a new memory about the user. Use this tool to store "+
-			"important information about the user's preferences, background, or past interactions."),
+		function.WithDescription("Add a new durable memory about the user. "+
+			memoryToolScopeNote+" "+
+			memoryWriteDirectUseNote+" "+
+			memoryCaptureGuidance),
+		function.WithInputSchema(addMemoryInputSchema()),
 	)
 }
 
@@ -129,8 +157,11 @@ func NewUpdateTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		updateFunc,
 		function.WithName(memory.UpdateToolName),
-		function.WithDescription("Update an existing memory. Use this tool to modify stored "+
-			"information about the user."),
+		function.WithDescription("Update an existing memory about the user. "+
+			memoryToolScopeNote+" "+
+			memoryWriteDirectUseNote+" "+
+			"Prefer updating an existing memory over adding a near duplicate when new information corrects or refines what is already stored."),
+		function.WithInputSchema(updateMemoryInputSchema()),
 	)
 }
 
@@ -169,8 +200,12 @@ func NewDeleteTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		deleteFunc,
 		function.WithName(memory.DeleteToolName),
-		function.WithDescription("Delete a specific memory. Use this tool to remove outdated "+
-			"or incorrect information about the user."),
+		function.WithDescription("Delete a specific memory about the user. "+
+			memoryToolScopeNote+" "+
+			memoryWriteDirectUseNote+" "+
+			memoryDestructiveGuidance+" "+
+			"Use it for memories that are wrong obsolete or explicitly withdrawn. Prefer update when the memory should remain but needs correction."),
+		function.WithInputSchema(deleteMemoryInputSchema()),
 	)
 }
 
@@ -203,8 +238,11 @@ func NewClearTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		clearFunc,
 		function.WithName(memory.ClearToolName),
-		function.WithDescription("Clear all memories for the user. Use this tool to reset the "+
-			"user's memory completely."),
+		function.WithDescription("Clear all memories for the user. "+
+			memoryToolScopeNote+" "+
+			memoryDestructiveGuidance+" "+
+			"Use it only when the user explicitly asks to forget everything or reset saved context."),
+		function.WithInputSchema(clearMemoryInputSchema()),
 	)
 }
 
@@ -257,6 +295,8 @@ func NewSearchTool() tool.CallableTool {
 		searchFunc,
 		function.WithName(memory.SearchToolName),
 		function.WithDescription("Search for relevant memories about the user. "+
+			memoryToolScopeNote+" "+
+			memoryReadDirectUseNote+" "+
 			"Returns memories ranked by semantic similarity, each with: id, memory text, topics, kind (fact/episode), "+
 			"event_time, participants, location, and similarity score (0-1, higher = more relevant). "+
 			"IMPORTANT: Check the 'participants' field to verify the memory is about the correct person before using it as evidence. "+
@@ -266,6 +306,7 @@ func NewSearchTool() tool.CallableTool {
 			"use time_after/time_before filters and consider setting order_by_event_time=true. "+
 			"The 'kind' filter is optional and acts as a preference with automatic fallback; "+
 			"omit it when uncertain whether the answer is stored as a fact or episode."),
+		function.WithInputSchema(searchMemoryInputSchema()),
 	)
 }
 
@@ -313,10 +354,119 @@ func NewLoadTool() tool.CallableTool {
 		loadFunc,
 		function.WithName(memory.LoadToolName),
 		function.WithDescription("Load the most recent memories about the user. "+
+			memoryToolScopeNote+" "+
+			memoryReadDirectUseNote+" "+
 			"Returns memories ordered by last update time. Each memory includes: id, text, topics, "+
 			"kind (fact/episode), event_time, participants, and location. "+
 			"Use this to get a broad overview of what is known about the user."),
+		function.WithInputSchema(loadMemoryInputSchema()),
 	)
+}
+
+func addMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"memory":      stringSchema(addMemoryDescription),
+		"topics":      stringArraySchema(topicsDescription),
+		"memory_kind": stringEnumSchema(memoryKindDescription, "fact", "episode"),
+		"event_time":  stringSchema(eventTimeDescription),
+		"participants": stringArraySchema(
+			participantsDescription,
+		),
+		"location": stringSchema(locationDescription),
+	}, "memory")
+}
+
+func updateMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"memory_id":   stringSchema(updateMemoryIDDescription),
+		"memory":      stringSchema(updateMemoryDescription),
+		"topics":      stringArraySchema(topicsDescription),
+		"memory_kind": stringEnumSchema(memoryKindDescription, "fact", "episode"),
+		"event_time":  stringSchema(eventTimeDescription),
+		"participants": stringArraySchema(
+			participantsDescription,
+		),
+		"location": stringSchema(locationDescription),
+	}, "memory_id", "memory")
+}
+
+func deleteMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"memory_id": stringSchema(deleteMemoryIDDescription),
+	}, "memory_id")
+}
+
+func clearMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"reason": stringSchema(clearReasonDescription),
+	})
+}
+
+func searchMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"query":               stringSchema(searchMemoryQueryDescription),
+		"kind":                stringEnumSchema(searchMemoryKindDescription, "fact", "episode"),
+		"time_after":          stringSchema(timeAfterDescription),
+		"time_before":         stringSchema(timeBeforeDescription),
+		"order_by_event_time": boolSchema(orderByEventTimeDescription),
+	}, "query")
+}
+
+func loadMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"limit": integerSchema(loadLimitDescription),
+	})
+}
+
+func objectSchema(properties map[string]*tool.Schema, required ...string) *tool.Schema {
+	return &tool.Schema{
+		Type:       "object",
+		Properties: properties,
+		Required:   required,
+	}
+}
+
+func stringSchema(description string) *tool.Schema {
+	return &tool.Schema{
+		Type:        "string",
+		Description: description,
+	}
+}
+
+func integerSchema(description string) *tool.Schema {
+	return &tool.Schema{
+		Type:        "integer",
+		Description: description,
+	}
+}
+
+func boolSchema(description string) *tool.Schema {
+	return &tool.Schema{
+		Type:        "boolean",
+		Description: description,
+	}
+}
+
+func stringArraySchema(description string) *tool.Schema {
+	return &tool.Schema{
+		Type:        "array",
+		Description: description,
+		Items: &tool.Schema{
+			Type: "string",
+		},
+	}
+}
+
+func stringEnumSchema(description string, values ...string) *tool.Schema {
+	enum := make([]any, 0, len(values))
+	for _, value := range values {
+		enum = append(enum, value)
+	}
+	return &tool.Schema{
+		Type:        "string",
+		Description: description,
+		Enum:        enum,
+	}
 }
 
 // GetMemoryServiceFromContext extracts MemoryService from the invocation context.
