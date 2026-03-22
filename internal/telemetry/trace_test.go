@@ -401,6 +401,26 @@ func TestTraceBeforeInvokeAgent_WithSpanAttributes(t *testing.T) {
 	require.True(t, hasAttr(span.attrs, "custom.attr", "v1"), "custom span attribute should be applied")
 }
 
+func TestTraceBeforeInvokeAgent_WithTraceStartedCallback(t *testing.T) {
+	var got trace.SpanContext
+	inv := &agent.Invocation{
+		AgentName:    "alpha",
+		InvocationID: "inv-span-callback",
+		RunOptions: agent.RunOptions{
+			TraceStartedCallbacks: []agent.TraceStartedCallback{
+				func(spanContext trace.SpanContext) {
+					got = spanContext
+				},
+			},
+		},
+	}
+	span := newRecordingSpan()
+
+	TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+
+	require.Equal(t, span.SpanContext(), got)
+}
+
 func TestNewChatSpanName(t *testing.T) {
 	tests := []struct {
 		name         string

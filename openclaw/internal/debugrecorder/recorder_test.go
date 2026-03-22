@@ -581,4 +581,15 @@ func TestRecorder_Start_WritesSessionIndex(t *testing.T) {
 		filepath.Join(filepath.Dir(refPath), ref.TraceDir),
 	)
 	require.Equal(t, trace.Dir(), target)
+
+	require.NoError(t, trace.SetTraceID("trace-123"))
+
+	raw, err = os.ReadFile(refPath)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &ref))
+	require.Equal(t, "trace-123", ref.TraceID)
+
+	metaRaw, err := os.ReadFile(filepath.Join(trace.Dir(), metaFileName))
+	require.NoError(t, err)
+	require.Contains(t, string(metaRaw), "\"trace_id\": \"trace-123\"")
 }

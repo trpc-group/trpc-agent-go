@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonschema"
@@ -188,6 +189,9 @@ func NewWaitNoticeTimeoutError(message string) *WaitNoticeTimeoutError {
 
 // RunOption is a function that configures a RunOptions.
 type RunOption func(*RunOptions)
+
+// TraceStartedCallback receives the root span context for a run.
+type TraceStartedCallback func(oteltrace.SpanContext)
 
 // WithRuntimeState sets the runtime state for the RunOptions.
 func WithRuntimeState(state map[string]any) RunOption {
@@ -403,6 +407,21 @@ func WithSpanAttributes(attrs ...attribute.KeyValue) RunOption {
 			return
 		}
 		opts.SpanAttributes = append([]attribute.KeyValue(nil), attrs...)
+	}
+}
+
+// WithTraceStartedCallback registers a callback for the run root span.
+func WithTraceStartedCallback(
+	callback TraceStartedCallback,
+) RunOption {
+	return func(opts *RunOptions) {
+		if callback == nil {
+			return
+		}
+		opts.TraceStartedCallbacks = append(
+			opts.TraceStartedCallbacks,
+			callback,
+		)
 	}
 }
 
@@ -742,6 +761,9 @@ type RunOptions struct {
 
 	// SpanAttributes carries custom span attributes for this run.
 	SpanAttributes []attribute.KeyValue
+
+	// TraceStartedCallbacks run when the root span starts for this run.
+	TraceStartedCallbacks []TraceStartedCallback
 
 	// A2ARequestOptions contains A2A client request options that will be passed to
 	// A2A agent's SendMessage and StreamMessage calls. This allows callers to pass

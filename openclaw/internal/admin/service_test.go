@@ -63,6 +63,7 @@ func writeDebugTraceFixture(
 	sessionID string,
 	requestID string,
 	startedAt time.Time,
+	traceID string,
 ) string {
 	t.Helper()
 
@@ -74,7 +75,10 @@ func writeDebugTraceFixture(
 	require.NoError(t, os.MkdirAll(traceDir, 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(traceDir, debugMetaFileName),
-		[]byte(`{"request_id":"`+requestID+`"}`+"\n"),
+		[]byte(
+			`{"request_id":"`+requestID+`","trace_id":"`+
+				traceID+`"}`+"\n",
+		),
 		0o600,
 	))
 	require.NoError(t, os.WriteFile(
@@ -101,7 +105,8 @@ func writeDebugTraceFixture(
 	ref := `{"trace_dir":"` + filepath.ToSlash(rel) + `",` +
 		`"started_at":"` + startedAt.Format(time.RFC3339Nano) + `",` +
 		`"channel":"telegram","request_id":"` + requestID + `",` +
-		`"message_id":"msg-` + requestID + `"}`
+		`"message_id":"msg-` + requestID + `","trace_id":"` +
+		traceID + `"}`
 	require.NoError(t, os.WriteFile(
 		filepath.Join(indexDir, debugMetaTraceRefName),
 		[]byte(ref),
@@ -315,6 +320,7 @@ func TestServiceDebugEndpoints(t *testing.T) {
 		"telegram:dm:1",
 		"req-1",
 		now,
+		"trace-1",
 	)
 	writeDebugTraceFixture(
 		t,
@@ -322,6 +328,7 @@ func TestServiceDebugEndpoints(t *testing.T) {
 		"telegram:dm:2",
 		"req-2",
 		now.Add(-time.Minute),
+		"trace-2",
 	)
 
 	svc := New(
@@ -338,6 +345,13 @@ func TestServiceDebugEndpoints(t *testing.T) {
 			SessionBackend: "sqlite",
 			MemoryBackend:  "inmemory",
 			DebugDir:       debugRoot,
+			Langfuse: LangfuseStatus{
+				Enabled:   true,
+				Ready:     true,
+				UIBaseURL: "http://127.0.0.1:3000",
+				TraceURLTemplate: "http://127.0.0.1:3000/project/" +
+					"local-dev/traces/{{trace_id}}",
+			},
 		},
 		WithClock(func() time.Time { return now }),
 	)
@@ -349,6 +363,18 @@ func TestServiceDebugEndpoints(t *testing.T) {
 	require.Equal(t, 2, snap.Debug.TraceCount)
 	require.Len(t, snap.Debug.Sessions, 2)
 	require.Len(t, snap.Debug.RecentTraces, 2)
+	require.True(t, snap.Langfuse.Enabled)
+	require.True(t, snap.Langfuse.Ready)
+	require.Equal(
+		t,
+		"trace-1",
+		snap.Debug.RecentTraces[0].TraceID,
+	)
+	require.Equal(
+		t,
+		"http://127.0.0.1:3000/project/local-dev/traces/trace-1",
+		snap.Debug.RecentTraces[0].LangfuseURL,
+	)
 
 	sessionsRR := httptest.NewRecorder()
 	sessionsReq := httptest.NewRequest(
@@ -359,6 +385,7 @@ func TestServiceDebugEndpoints(t *testing.T) {
 	handler.ServeHTTP(sessionsRR, sessionsReq)
 	require.Equal(t, http.StatusOK, sessionsRR.Code)
 	require.Contains(t, sessionsRR.Body.String(), "telegram:dm:1")
+	require.Contains(t, sessionsRR.Body.String(), "trace-1")
 
 	traceQuery := routeDebugTracesJSON + "?" +
 		querySessionID + "=" +
@@ -368,6 +395,12 @@ func TestServiceDebugEndpoints(t *testing.T) {
 	handler.ServeHTTP(tracesRR, tracesReq)
 	require.Equal(t, http.StatusOK, tracesRR.Code)
 	require.Contains(t, tracesRR.Body.String(), "req-1")
+	require.Contains(t, tracesRR.Body.String(), "trace-1")
+	require.Contains(
+		t,
+		tracesRR.Body.String(),
+		"http://127.0.0.1:3000/project/local-dev/traces/trace-1",
+	)
 	require.NotContains(t, tracesRR.Body.String(), "req-2")
 
 	metaURL := snap.Debug.RecentTraces[0].MetaURL
@@ -878,6 +911,7 @@ func TestDebugStatusForSession_SkipsBadTraceRefs(t *testing.T) {
 		"telegram:dm:1",
 		"req-1",
 		now,
+		"trace-1",
 	)
 	writeDebugTraceFixture(
 		t,
@@ -885,6 +919,7 @@ func TestDebugStatusForSession_SkipsBadTraceRefs(t *testing.T) {
 		"telegram:dm:2",
 		"req-2",
 		now.Add(-time.Minute),
+		"trace-2",
 	)
 
 	badRefDir := filepath.Join(
