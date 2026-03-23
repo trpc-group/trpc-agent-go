@@ -1964,6 +1964,35 @@ func TestNew(t *testing.T) {
 			wantErr: true,
 			errMsg:  "either agent (WithAgent) or runner (WithRunner) is required",
 		},
+		{
+			name: "runner without agent card",
+			opts: []Option{
+				WithRunner(&mockRunner{}),
+			},
+			wantErr: true,
+			errMsg:  "agent card (WithAgentCard) is required when using runner without agent",
+		},
+		{
+			name: "buildAgentCard error - empty agent name",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "", description: "test"}, true),
+				WithHost("localhost:8080"),
+			},
+			wantErr: true,
+		},
+		{
+			name: "explicit agent card with empty name",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test", description: "desc"}, true),
+				WithAgentCard(a2a.AgentCard{
+					Name:        "",
+					Description: "desc",
+					URL:         "http://localhost:8080",
+				}),
+			},
+			wantErr: true,
+			errMsg:  "agent card name is required",
+		},
 	}
 
 	for _, tt := range tests {
@@ -3693,4 +3722,350 @@ func TestTraceContextMiddleware_NoTraceparent(t *testing.T) {
 	// Verify the context does not contain valid trace info
 	spanContext := trace.SpanContextFromContext(receivedCtx)
 	assert.False(t, spanContext.IsValid(), "Expected invalid span context when no traceparent")
+}
+
+func TestBuildA2AServer_BuildProcessorErrorWrapping(t *testing.T) {
+	opts := &options{
+		sessionService: &mockSessionService{},
+		errorHandler:   defaultErrorHandler,
+		agentCard: &a2a.AgentCard{
+			Name: "valid",
+			URL:  "http://localhost:8080",
+		},
+	}
+	_, err := buildA2AServer(opts)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to build processor:")
+}
+
+func TestProcessStreamingMessage_CleanupTask_OnSubscribeError(t *testing.T) {
+	t.Run("cleanup succeeds", func(t *testing.T) {
+		ctx := context.Background()
+		ctxID := "ctx"
+		msg := &protocol.Message{ContextID: &ctxID}
+
+		var cleanedTaskID string
+		handler := &mockTaskHandler{
+			buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+				return "task-cleanup", nil
+			},
+			subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
+				return nil, fmt.Errorf("subscribe failed")
+			},
+			cleanTaskFunc: func(taskID *string) error {
+				cleanedTaskID = *taskID
+				return nil
+			},
+		}
+
+		proc := createTestMessageProcessor()
+		result, err := proc.processStreamingMessage(ctx, "user", "session", msg, &model.Message{Content: "hi"}, handler, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, "task-cleanup", cleanedTaskID)
+	})
+
+	t.Run("cleanup itself fails should not panic", func(t *testing.T) {
+		ctx := context.Background()
+		ctxID := "ctx"
+		msg := &protocol.Message{ContextID: &ctxID}
+
+		var cleanCalled bool
+		handler := &mockTaskHandler{
+			buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+				return "task-clean-fail", nil
+			},
+			subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
+				return nil, fmt.Errorf("subscribe failed")
+			},
+			cleanTaskFunc: func(taskID *string) error {
+				cleanCalled = true
+				return fmt.Errorf("clean error")
+			},
+		}
+
+		proc := createTestMessageProcessor()
+		assert.NotPanics(t, func() {
+			_, _ = proc.processStreamingMessage(ctx, "user", "session", msg, &model.Message{Content: "hi"}, handler, nil)
+		})
+		assert.True(t, cleanCalled)
+	})
+}
+
+func TestProcessStreamingMessage_CleanupTask_OnRunnerError(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	var cleanedTaskID string
+	var subscriberClosed bool
+	sub := &mockTaskSubscriber{
+		closeFunc: func() { subscriberClosed = true },
+	}
+	handler := &mockTaskHandler{
+		buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+			return "task-runner-err", nil
+		},
+		subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
+			return sub, nil
+		},
+		cleanTaskFunc: func(taskID *string) error {
+			cleanedTaskID = *taskID
+			return nil
+		},
+	}
+
+	proc := createTestMessageProcessor()
+	proc.runner = &mockRunner{
+		runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+			return nil, errors.New("runner boom")
+		},
+	}
+
+	result, err := proc.processStreamingMessage(ctx, "user", "session", msg, &model.Message{Content: "hi"}, handler, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "task-runner-err", cleanedTaskID)
+	assert.True(t, subscriberClosed)
+}
+
+func TestAbortStreaming_ContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	events := make(chan *event.Event, 1)
+	events <- &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{Delta: model.Message{Content: "chunk"}}},
+		},
+	}
+	close(events)
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 1 {
+				// After sending the submitted event, cancel context so tunnel returns Canceled
+				cancel()
+				return nil
+			}
+			// Subsequent sends fail with context.Canceled
+			return context.Canceled
+		},
+	}
+
+	proc := createTestMessageProcessor()
+	assert.NotPanics(t, func() {
+		proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	})
+}
+
+func TestAbortStreaming_DeadlineExceeded(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	events := make(chan *event.Event)
+	close(events)
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 1 {
+				return nil // submitted event succeeds
+			}
+			return context.DeadlineExceeded
+		},
+	}
+
+	proc := createTestMessageProcessor()
+	assert.NotPanics(t, func() {
+		proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	})
+}
+
+func TestAbortStreaming_OtherError_HandleStreamingErrorFails(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	events := make(chan *event.Event)
+	close(events)
+
+	proc := createTestMessageProcessor()
+	proc.errorHandler = func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+		return nil, fmt.Errorf("handler also failed")
+	}
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 1 {
+				return nil // submitted succeeds
+			}
+			return fmt.Errorf("send error")
+		},
+	}
+
+	assert.NotPanics(t, func() {
+		proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	}, "handleStreamingProcessingError failure in abortStreaming should not panic")
+}
+
+func TestAbortStreaming_FinalArtifactSendFail_Aborts(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	events := make(chan *event.Event)
+	close(events) // no agent events
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 1 {
+				return nil // submitted succeeds
+			}
+			if sendCount == 2 {
+				// final artifact send fails
+				return fmt.Errorf("artifact send fail")
+			}
+			return nil
+		},
+	}
+
+	var handlerCalled bool
+	proc := createTestMessageProcessor()
+	proc.errorHandler = func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+		handlerCalled = true
+		res := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("err")})
+		return &res, nil
+	}
+
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	assert.True(t, handlerCalled, "error handler should fire for final artifact send failure")
+	// Should abort before sending completed
+	assert.Equal(t, 3, sendCount, "should be: submitted + artifact fail + error msg")
+}
+
+func TestAbortStreaming_CompletedSendFail_Aborts(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	events := make(chan *event.Event)
+	close(events)
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 3 {
+				// completed send fails
+				return fmt.Errorf("completed send fail")
+			}
+			return nil
+		},
+	}
+
+	var handlerCalled bool
+	proc := createTestMessageProcessor()
+	proc.errorHandler = func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+		handlerCalled = true
+		res := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("err")})
+		return &res, nil
+	}
+
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	assert.True(t, handlerCalled, "error handler should fire for completed send failure")
+}
+
+func TestBuildRuntimeState(t *testing.T) {
+	t.Run("empty metadata", func(t *testing.T) {
+		result := buildRuntimeState(map[string]any{})
+		assert.NotNil(t, result)
+		assert.Empty(t, result)
+	})
+
+	t.Run("copies all entries", func(t *testing.T) {
+		metadata := map[string]any{
+			"key1": "value1",
+			"key2": 42,
+			"key3": true,
+		}
+		result := buildRuntimeState(metadata)
+		assert.Equal(t, metadata, result)
+	})
+
+	t.Run("shallow copy - modifications don't affect original", func(t *testing.T) {
+		metadata := map[string]any{
+			"key1": "value1",
+		}
+		result := buildRuntimeState(metadata)
+		result["key2"] = "new"
+		assert.NotContains(t, metadata, "key2", "original should not be affected")
+	})
+
+	t.Run("nil metadata produces empty map", func(t *testing.T) {
+		result := buildRuntimeState(nil)
+		assert.NotNil(t, result)
+		assert.Empty(t, result)
+	})
+}
+
+func TestProcessAgentStreamingEvents_CleanupTaskInDefer(t *testing.T) {
+	t.Run("cleanup called on normal completion", func(t *testing.T) {
+		ctx := context.Background()
+		ctxID := "ctx"
+		msg := &protocol.Message{ContextID: &ctxID}
+
+		events := make(chan *event.Event)
+		close(events)
+
+		var cleanedTaskID string
+		handler := &mockTaskHandler{
+			cleanTaskFunc: func(taskID *string) error {
+				cleanedTaskID = *taskID
+				return nil
+			},
+		}
+
+		sub := &mockTaskSubscriber{
+			sendFunc: func(evt protocol.StreamingMessageEvent) error { return nil },
+		}
+
+		proc := createTestMessageProcessor()
+		proc.processAgentStreamingEvents(ctx, "my-task", "user1", "session1", msg, events, sub, handler)
+		assert.Equal(t, "my-task", cleanedTaskID)
+	})
+
+	t.Run("cleanup error should not panic", func(t *testing.T) {
+		ctx := context.Background()
+		ctxID := "ctx"
+		msg := &protocol.Message{ContextID: &ctxID}
+
+		events := make(chan *event.Event)
+		close(events)
+
+		handler := &mockTaskHandler{
+			cleanTaskFunc: func(taskID *string) error {
+				return fmt.Errorf("defer clean error")
+			},
+		}
+
+		sub := &mockTaskSubscriber{
+			sendFunc: func(evt protocol.StreamingMessageEvent) error { return nil },
+		}
+
+		proc := createTestMessageProcessor()
+		assert.NotPanics(t, func() {
+			proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, handler)
+		})
+	})
 }
