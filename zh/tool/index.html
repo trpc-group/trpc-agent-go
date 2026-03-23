@@ -1115,6 +1115,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#toolset_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      ToolSet 生命周期与所有权
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_12" class="md-nav__link">
     <span class="md-ellipsis">
       传输方式配置
@@ -1391,7 +1400,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#toolset_1" class="md-nav__link">
+  <a href="#toolset_2" class="md-nav__link">
     <span class="md-ellipsis">
       运行时 ToolSet 动态管理
     </span>
@@ -2649,6 +2658,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#toolset_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      ToolSet 生命周期与所有权
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_12" class="md-nav__link">
     <span class="md-ellipsis">
       传输方式配置
@@ -2925,7 +2943,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#toolset_1" class="md-nav__link">
+  <a href="#toolset_2" class="md-nav__link">
     <span class="md-ellipsis">
       运行时 ToolSet 动态管理
     </span>
@@ -3468,6 +3486,30 @@
 </span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
 </span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolSets</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolSet</span><span class="p">{</span><span class="nx">mcpToolSet</span><span class="p">}))</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="toolset_1">ToolSet 生命周期与所有权</h3>
+<p><code>ToolSet</code> 接口里显式提供了 <code>Close()</code>，这意味着它持有的连接、会话和缓存
+等资源需要由<strong>创建它的一方</strong>负责释放。</p>
+<p>几个容易混淆的边界：</p>
+<ul>
+<li><code>llmagent.WithToolSets(...)</code> 只是把 <code>ToolSet</code> 挂到 Agent 上使用，
+  <strong>不会</strong>转移其所有权。</li>
+<li><code>LLMAgent</code> 的 <code>AddToolSet(...)</code>、<code>RemoveToolSet(...)</code>、
+  <code>SetToolSets(...)</code> 只会更新 Agent 当前暴露的工具集合，
+  <strong>不会</strong>自动调用旧 <code>ToolSet</code> 的 <code>Close()</code>。</li>
+<li><code>runner.NewRunner(...)</code> 和 <code>runner.NewRunnerWithAgentFactory(...)</code>
+  也不会因为 Agent 使用了某个 <code>ToolSet</code>，就在 <code>Runner.Close()</code> 时
+  自动回收它。</li>
+</ul>
+<p>推荐的使用方式：</p>
+<ul>
+<li><strong>长生命周期 ToolSet</strong>：在应用启动时创建并可选执行 <code>Init(ctx)</code>，
+  多次请求复用；应用退出时统一 <code>Close()</code>。</li>
+<li><strong>按请求创建的 ToolSet</strong>：只在当前 run 内使用；当前 run 结束后由
+  调用方显式清理。</li>
+</ul>
+<p>如果你只是希望 ToolSet 在每次执行时重新获取<strong>最新工具列表</strong>，优先使用
+<code>llmagent.WithRefreshToolSetsOnRun(true)</code>。这会在每次 run 前重新调用
+<code>ToolSet.Tools(ctx)</code>，但<strong>不会</strong>为你重建或关闭 <code>ToolSet</code> 实例本身。</p>
 <h3 id="_12">传输方式配置</h3>
 <p>MCP ToolSet 通过 <code>Transport</code> 字段支持三种传输方式：</p>
 <h4 id="1-stdio">1. STDIO 传输</h4>
@@ -3623,6 +3665,16 @@
 <code>context.Context</code> 在初始化或工具发现阶段做更细粒度的控制，同时又不希望
 在每次执行时刷新工具列表，可以参考 <code>examples/mcptool/http_headers</code>
 示例，手动调用 <code>toolSet.Tools(ctx)</code>，然后配合 <code>WithTools</code> 使用。</p>
+<p>常见误区：</p>
+<ul>
+<li><code>WithRefreshToolSetsOnRun(true)</code> 刷新的是<strong>工具列表</strong>，不是 <code>ToolSet</code>
+  实例本身；它不会自动新建、替换或关闭 <code>ToolSet</code>。</li>
+<li><code>tools/call</code> 会使用本次 run 的上下文，但如果你在执行期外直接调用
+  <code>agent.Tools()</code>，ToolSet 看到的是 <code>context.Background()</code>。</li>
+<li>如果你需要让 <code>initialize/tools/list</code> 也严格使用某个自定义上下文
+  （例如每次请求不同的认证头、追踪字段），更稳妥的做法通常是手动
+  <code>toolSet.Tools(ctx)</code>，再通过 <code>WithTools(...)</code> 注入。</li>
+</ul>
 <h2 id="agent-agenttool">Agent 工具 (AgentTool)</h2>
 <p>AgentTool 允许把一个现有的 Agent 以工具的形式暴露给上层 Agent 使用。相比普通函数工具，AgentTool 的优势在于：</p>
 <ul>
@@ -4465,7 +4517,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
 </span><span id="__span-31-10"><a id="__codelineno-31-10" name="__codelineno-31-10"></a>Tool<span class="w"> </span><span class="m">3</span>:<span class="w"> </span>get_time<span class="w">                  </span><span class="o">[====]</span><span class="w"> </span>50ms
 </span><span id="__span-31-11"><a id="__codelineno-31-11" name="__codelineno-31-11"></a>总时间:<span class="w"> </span>~150ms（依次执行）
 </span></code></pre></div></td></tr></table></div>
-<h3 id="toolset_1">运行时 ToolSet 动态管理</h3>
+<h3 id="toolset_2">运行时 ToolSet 动态管理</h3>
 <p><code>WithToolSets</code> 是一种<strong>静态配置方式</strong>：在创建 Agent 时一次性注入 ToolSet。很多实际场景下，你希望在<strong>运行时动态增删 ToolSet</strong>，而不必重建 Agent。</p>
 <p>LLMAgent 提供了三个与 ToolSet 相关的运行时方法：</p>
 <ul>
@@ -4478,6 +4530,13 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
 <li>聚合后的工具列表（显式 <code>WithTools</code> 工具 + ToolSet 工具 + 知识检索工具 + Skills 工具）</li>
 <li>“用户工具”跟踪信息（用于前文介绍的智能过滤机制）</li>
 </ul>
+<p>需要特别注意：</p>
+<ul>
+<li><code>AddToolSet</code> 替换同名 ToolSet 时，<strong>不会</strong>自动 <code>Close()</code> 被替换掉的旧实例。</li>
+<li><code>RemoveToolSet</code> 删除 ToolSet 时，<strong>不会</strong>自动 <code>Close()</code> 被移除的实例。</li>
+<li><code>SetToolSets</code> 整体替换时，<strong>不会</strong>自动 <code>Close()</code> 旧切片里的实例。</li>
+</ul>
+<p>如果这些 ToolSet 是由你创建的，你仍然需要在合适的时机显式回收它们。</p>
 <p><strong>典型使用方式：</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-32-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-32-2"> 2</a></span>
@@ -4756,7 +4815,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年2月26日 14:01:52 UTC">2026-02-26 14:01:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月23日 03:55:06 UTC">2026-03-23 03:55:06</span>
   </span>
 
     

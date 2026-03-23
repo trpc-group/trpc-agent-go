@@ -877,6 +877,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#agent-factory" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent Factory 中的资源边界
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2604,6 +2613,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#agent-factory" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent Factory 中的资源边界
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3346,6 +3364,26 @@ Runner 会在每次请求里复用同一个 Agent 实例。</p>
 <li>每次调用 <code>Runner.Run(...)</code>，Factory 会被调用一次。</li>
 <li><code>agent.WithAgent(...)</code> 依然优先生效（测试时很方便）。</li>
 </ul>
+<h4 id="agent-factory">Agent Factory 中的资源边界</h4>
+<p><code>AgentFactory</code> 适合按请求拼装 Agent 配置，但它<strong>不会改变资源所有权</strong>。</p>
+<ul>
+<li><code>Runner</code> 只负责调用 factory 获取一个 <code>agent.Agent</code>。</li>
+<li><code>Runner.Close()</code> 只会关闭 Runner 自己创建或持有的资源；它<strong>不会</strong>
+  自动关闭 factory 内部新建的 <code>tool.ToolSet</code>、临时 MCP 连接、沙箱会话
+  等请求级资源。</li>
+<li>原因是 <code>agent.Agent</code> 接口本身没有 <code>Close()</code>，因此 Runner 无法统一接管
+  这类资源的释放。</li>
+</ul>
+<p>实践建议：</p>
+<ul>
+<li>如果某个 <code>ToolSet</code> 或外部连接适合跨请求复用，优先在 factory 外创建一次，
+  然后在 factory 中复用；应用退出时再统一 <code>Close()</code>。</li>
+<li>如果资源必须按请求创建，调用方需要在本次 run 结束后自行清理。
+  常见做法是包装一个带清理逻辑的 Agent，或者在 Agent 的
+  after callback 中执行清理。</li>
+</ul>
+<p>这类边界在使用 MCP ToolSet 时尤其常见，详细说明可继续参考
+<code>tool</code> 文档中的 ToolSet 生命周期章节。</p>
 <h3 id="_9">🔌 插件</h3>
 <p>Runner 插件是一类全局、Runner 作用域的 Hook（钩子）。只需要在创建 Runner 时
 注册一次，后续该 Runner 执行的所有 Agent、Tool 和模型调用都会自动生效。</p>
@@ -4737,7 +4775,7 @@ runner 的消费循环也会正常结束，避免写端阻塞。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月20日 07:02:22 UTC">2026-03-20 07:02:22</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月23日 03:55:06 UTC">2026-03-23 03:55:06</span>
   </span>
 
     

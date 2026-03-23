@@ -1115,6 +1115,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#toolset-lifecycle-and-ownership" class="md-nav__link">
+    <span class="md-ellipsis">
+      ToolSet Lifecycle and Ownership
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#transport-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       Transport Configuration
@@ -2649,6 +2658,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#toolset-lifecycle-and-ownership" class="md-nav__link">
+    <span class="md-ellipsis">
+      ToolSet Lifecycle and Ownership
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#transport-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       Transport Configuration
@@ -3470,6 +3488,34 @@
 </span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">model</span><span class="p">),</span>
 </span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolSets</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolSet</span><span class="p">{</span><span class="nx">mcpToolSet</span><span class="p">}))</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="toolset-lifecycle-and-ownership">ToolSet Lifecycle and Ownership</h3>
+<p>The <code>ToolSet</code> interface explicitly includes <code>Close()</code>. That means the
+party that creates a ToolSet is also responsible for releasing the
+connections, sessions, caches, and other resources it owns.</p>
+<p>Important ownership boundaries:</p>
+<ul>
+<li><code>llmagent.WithToolSets(...)</code> only attaches a <code>ToolSet</code> to an Agent for
+  use. It does <strong>not</strong> transfer ownership.</li>
+<li><code>LLMAgent.AddToolSet(...)</code>, <code>LLMAgent.RemoveToolSet(...)</code>, and
+  <code>LLMAgent.SetToolSets(...)</code> only change which tools the Agent exposes.
+  They do <strong>not</strong> automatically call <code>Close()</code> on replaced or removed
+  ToolSets.</li>
+<li><code>runner.NewRunner(...)</code> and <code>runner.NewRunnerWithAgentFactory(...)</code>
+  likewise do not automatically reclaim a ToolSet just because an Agent
+  uses it.</li>
+</ul>
+<p>Recommended patterns:</p>
+<ul>
+<li><strong>Long-lived ToolSet</strong>: create it at startup, optionally call
+  <code>Init(ctx)</code>, reuse it across many runs, and close it during
+  application shutdown.</li>
+<li><strong>Per-request ToolSet</strong>: create it only for the current run, then
+  clean it up explicitly when that run finishes.</li>
+</ul>
+<p>If your goal is only to let a ToolSet fetch the <strong>latest</strong> tool list on
+each run, prefer <code>llmagent.WithRefreshToolSetsOnRun(true)</code>. That refreshes
+<code>ToolSet.Tools(ctx)</code> per run, but it does <strong>not</strong> recreate or close the
+ToolSet instance itself.</p>
 <h3 id="transport-configuration">Transport Configuration</h3>
 <p>MCP ToolSet supports three transports via the <code>Transport</code> field:</p>
 <h4 id="1-stdio-transport">1. STDIO Transport</h4>
@@ -3609,6 +3655,19 @@ ToolSets to honor a specific context for initialization or tool
 discovery without refreshing the tool list on every run, keep using the
 pattern shown in the <code>examples/mcptool/http_headers</code> example, where you
 manually call <code>toolSet.Tools(ctx)</code> and pass the tools via <code>WithTools</code>.</p>
+<p>Common pitfalls:</p>
+<ul>
+<li><code>WithRefreshToolSetsOnRun(true)</code> refreshes the <strong>tool list</strong>, not the
+  ToolSet instance itself. It does not automatically create, replace, or
+  close ToolSets for you.</li>
+<li><code>tools/call</code> uses the current run context, but if you call
+  <code>agent.Tools()</code> outside a run, the ToolSet will see
+  <code>context.Background()</code>.</li>
+<li>If <code>initialize/tools/list</code> must strictly use a custom context
+  (for example, per-request auth headers or tracing values), the safer
+  pattern is usually to call <code>toolSet.Tools(ctx)</code> yourself and inject the
+  resulting tools via <code>WithTools(...)</code>.</li>
+</ul>
 <h2 id="agent-tool-agenttool">Agent Tool (AgentTool)</h2>
 <p>AgentTool lets you expose an existing Agent as a tool to be used by a parent Agent. Compared with a plain function tool, AgentTool provides:</p>
 <ul>
@@ -4491,6 +4550,15 @@ execute tools instead. You can interrupt tool execution with
 <li>Aggregated tools (direct tools + ToolSets + knowledge tools + skill tools)</li>
 <li>User tool tracking (used by the smart filtering logic above)</li>
 </ul>
+<p>One important lifecycle detail:</p>
+<ul>
+<li><code>AddToolSet</code> does <strong>not</strong> automatically close a replaced ToolSet.</li>
+<li><code>RemoveToolSet</code> does <strong>not</strong> automatically close a removed ToolSet.</li>
+<li><code>SetToolSets</code> does <strong>not</strong> automatically close ToolSets from the
+  previous slice.</li>
+</ul>
+<p>If you created those ToolSet instances, you still need to close them
+explicitly at the right time.</p>
 <p><strong>Typical usage pattern:</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-32-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-32-2"> 2</a></span>
@@ -4769,7 +4837,7 @@ execute tools instead. You can interrupt tool execution with
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="February 26, 2026 14:01:52 UTC">2026-02-26 14:01:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 23, 2026 03:55:06 UTC">2026-03-23 03:55:06</span>
   </span>
 
     

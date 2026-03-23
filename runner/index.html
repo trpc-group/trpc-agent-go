@@ -877,6 +877,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#resource-ownership-inside-agent-factories" class="md-nav__link">
+    <span class="md-ellipsis">
+      Resource Ownership Inside Agent Factories
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2604,6 +2613,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#resource-ownership-inside-agent-factories" class="md-nav__link">
+    <span class="md-ellipsis">
+      Resource Ownership Inside Agent Factories
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3348,6 +3366,31 @@ model, sandbox instance, tools), you can build a fresh agent for every run.</p>
 <li>The factory is called once per <code>Runner.Run(...)</code>.</li>
 <li><code>agent.WithAgent(...)</code> still overrides everything (useful for tests).</li>
 </ul>
+<h4 id="resource-ownership-inside-agent-factories">Resource Ownership Inside Agent Factories</h4>
+<p><code>AgentFactory</code> is ideal for request-scoped Agent construction, but it
+<strong>does not transfer ownership of resources</strong> created inside the factory.</p>
+<ul>
+<li>The <code>Runner</code> only asks the factory for an <code>agent.Agent</code>.</li>
+<li><code>Runner.Close()</code> only closes resources created or owned by the Runner
+  itself; it does <strong>not</strong> automatically close request-scoped
+  <code>tool.ToolSet</code> instances, temporary MCP connections, sandbox sessions,
+  or similar resources created inside the factory.</li>
+<li>The reason is structural: the <code>agent.Agent</code> interface does not expose a
+  <code>Close()</code> method, so the Runner has no generic way to reclaim those
+  resources.</li>
+</ul>
+<p>Recommended patterns:</p>
+<ul>
+<li>If a <code>ToolSet</code> or external connection can be reused across requests,
+  create it once outside the factory, reuse it inside the factory, and
+  close it during application shutdown.</li>
+<li>If a resource must be created per request, the caller should clean it
+  up explicitly after that run finishes. Common patterns are wrapping the
+  Agent with cleanup logic, or running cleanup from an after-agent
+  callback.</li>
+</ul>
+<p>This boundary is especially important when using MCP ToolSets. See the
+ToolSet lifecycle notes in the <code>tool</code> documentation for more details.</p>
 <h3 id="plugins">🔌 Plugins</h3>
 <p>Runner plugins are global, runner-scoped hooks. Register plugins once and they
 will apply automatically to all agents, tools, and model calls executed by that
@@ -4756,7 +4799,7 @@ hard cutoffs.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 20, 2026 07:02:22 UTC">2026-03-20 07:02:22</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 23, 2026 03:55:06 UTC">2026-03-23 03:55:06</span>
   </span>
 
     
