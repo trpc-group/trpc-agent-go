@@ -134,6 +134,13 @@ func TestExport_NilAgent_ReturnsError(t *testing.T) {
 	assert.ErrorIs(t, err, errNilAgent)
 }
 
+func TestExport_TypedNilAgent_ReturnsError(t *testing.T) {
+	var typedNil *testAgent
+	_, err := Export(context.Background(), typedNil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errNilAgent)
+}
+
 func TestExport_CustomExporter_UsesExporter(t *testing.T) {
 	raw := &Snapshot{
 		EntryNodeID: "root",
@@ -167,7 +174,6 @@ func TestExport_NormalizesAndSortsSnapshot(t *testing.T) {
 		snapshot: &Snapshot{
 			EntryNodeID: "root",
 			Nodes: []Node{
-				{NodeID: "b", Kind: NodeKindFunction, Name: "b"},
 				{NodeID: "root", Kind: NodeKindAgent, Name: "root"},
 				{NodeID: "b", Kind: NodeKindFunction, Name: "b"},
 				{NodeID: "a", Kind: NodeKindFunction, Name: "a"},
@@ -224,6 +230,21 @@ func TestExport_NormalizesAndSortsSnapshot(t *testing.T) {
 	}, snapshot.Surfaces[1].Value.Skills)
 	assert.Equal(t, "root#tool", snapshot.Surfaces[2].SurfaceID)
 	assert.Equal(t, []ToolRef{{ID: "a"}, {ID: "b"}}, snapshot.Surfaces[2].Value.Tools)
+}
+
+func TestExport_RejectsDuplicateNodeID(t *testing.T) {
+	_, err := Export(context.Background(), &customExporterAgent{
+		testAgent: &testAgent{name: "root"},
+		snapshot: &Snapshot{
+			EntryNodeID: "root",
+			Nodes: []Node{
+				{NodeID: "root", Kind: NodeKindAgent, Name: "root"},
+				{NodeID: "root", Kind: NodeKindFunction, Name: "duplicate"},
+			},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate node id")
 }
 
 func TestExport_RejectsMissingEntryNode(t *testing.T) {
@@ -315,6 +336,71 @@ func TestExport_RejectsInvalidSurfaceUnionValue(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid surface")
+}
+
+func TestExport_ClonesToolSchemas(t *testing.T) {
+	inputSchema := &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"name": {Type: "string"},
+		},
+		AdditionalProperties: &tool.Schema{Type: "string"},
+		Default: map[string]any{
+			"enabled": true,
+		},
+		Defs: map[string]*tool.Schema{
+			"shared": {Type: "number"},
+		},
+	}
+	outputSchema := &tool.Schema{
+		Type:  "array",
+		Items: &tool.Schema{Type: "string"},
+	}
+	raw := &Snapshot{
+		EntryNodeID: "root",
+		Nodes: []Node{
+			{NodeID: "root", Kind: NodeKindAgent, Name: "root"},
+		},
+		Surfaces: []Surface{
+			{
+				NodeID: "root",
+				Type:   SurfaceTypeTool,
+				Value: SurfaceValue{
+					Tools: []ToolRef{
+						{
+							ID:           "echo",
+							InputSchema:  inputSchema,
+							OutputSchema: outputSchema,
+						},
+					},
+				},
+			},
+		},
+	}
+	snapshot, err := Export(context.Background(), &customExporterAgent{
+		testAgent: &testAgent{name: "root"},
+		snapshot:  raw,
+	})
+	require.NoError(t, err)
+	exported := snapshot.Surfaces[0].Value.Tools[0]
+	require.NotSame(t, inputSchema, exported.InputSchema)
+	require.NotSame(t, outputSchema, exported.OutputSchema)
+	require.NotNil(t, exported.InputSchema.Properties["name"])
+	require.NotNil(t, exported.OutputSchema.Items)
+	inputSchema.Properties["name"].Type = "integer"
+	assert.Equal(t, "string", exported.InputSchema.Properties["name"].Type)
+	rawAdditional := inputSchema.AdditionalProperties.(*tool.Schema)
+	exportedAdditional := exported.InputSchema.AdditionalProperties.(*tool.Schema)
+	rawAdditional.Type = "boolean"
+	assert.Equal(t, "string", exportedAdditional.Type)
+	rawDefault := inputSchema.Default.(map[string]any)
+	exportedDefault := exported.InputSchema.Default.(map[string]any)
+	rawDefault["enabled"] = false
+	assert.Equal(t, true, exportedDefault["enabled"])
+	exported.InputSchema.Defs["shared"].Type = "string"
+	assert.Equal(t, "number", inputSchema.Defs["shared"].Type)
+	outputSchema.Items.Type = "number"
+	assert.Equal(t, "string", exported.OutputSchema.Items.Type)
 }
 
 func TestExport_ValueAgentsDoNotTriggerFalseRecursionFallback(t *testing.T) {

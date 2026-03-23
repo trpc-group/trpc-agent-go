@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var errNilAgent = errors.New("agent is nil")
@@ -30,7 +31,7 @@ type exportState struct {
 
 // Export exports a normalized static structure snapshot for the given agent.
 func Export(ctx context.Context, a agent.Agent) (*Snapshot, error) {
-	if a == nil {
+	if isNilAgent(a) {
 		return nil, errNilAgent
 	}
 	state := &exportState{}
@@ -42,6 +43,9 @@ func exportWithState(
 	a agent.Agent,
 	state *exportState,
 ) (*Snapshot, error) {
+	if isNilAgent(a) {
+		return nil, errNilAgent
+	}
 	if state.containsRecursiveAgentInstance(a) {
 		return normalizeSnapshot(opaqueLeafSnapshot(a))
 	}
@@ -79,7 +83,7 @@ func normalizeSnapshot(raw *Snapshot) (*Snapshot, error) {
 			return nil, errors.New("node id is empty")
 		}
 		if _, exists := nodeByID[node.NodeID]; exists {
-			continue
+			return nil, fmt.Errorf("duplicate node id %q", node.NodeID)
 		}
 		nodeByID[node.NodeID] = node
 	}
@@ -178,7 +182,7 @@ func cloneSnapshot(raw *Snapshot) *Snapshot {
 func cloneSurfaceValue(value SurfaceValue) SurfaceValue {
 	cloned := SurfaceValue{
 		FewShot: cloneFewShot(value.FewShot),
-		Tools:   append([]ToolRef(nil), value.Tools...),
+		Tools:   cloneToolRefs(value.Tools),
 		Skills:  append([]SkillRef(nil), value.Skills...),
 	}
 	if value.Text != nil {
@@ -190,6 +194,83 @@ func cloneSurfaceValue(value SurfaceValue) SurfaceValue {
 		cloned.Model = &modelRef
 	}
 	return cloned
+}
+
+func cloneToolRefs(refs []ToolRef) []ToolRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]ToolRef, len(refs))
+	for i, ref := range refs {
+		out[i] = ToolRef{
+			ID:           ref.ID,
+			Description:  ref.Description,
+			InputSchema:  cloneToolSchema(ref.InputSchema),
+			OutputSchema: cloneToolSchema(ref.OutputSchema),
+		}
+	}
+	return out
+}
+
+func cloneToolSchema(schema *tool.Schema) *tool.Schema {
+	if schema == nil {
+		return nil
+	}
+	return &tool.Schema{
+		Type:                 schema.Type,
+		Description:          schema.Description,
+		Required:             append([]string(nil), schema.Required...),
+		Properties:           cloneSchemaMap(schema.Properties),
+		Items:                cloneToolSchema(schema.Items),
+		AdditionalProperties: cloneSchemaValue(schema.AdditionalProperties),
+		Default:              cloneSchemaValue(schema.Default),
+		Enum:                 cloneSchemaValues(schema.Enum),
+		Ref:                  schema.Ref,
+		Defs:                 cloneSchemaMap(schema.Defs),
+	}
+}
+
+func cloneSchemaMap(in map[string]*tool.Schema) map[string]*tool.Schema {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]*tool.Schema, len(in))
+	for key, value := range in {
+		out[key] = cloneToolSchema(value)
+	}
+	return out
+}
+
+func cloneSchemaValues(in []any) []any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]any, len(in))
+	for i, value := range in {
+		out[i] = cloneSchemaValue(value)
+	}
+	return out
+}
+
+func cloneSchemaValue(value any) any {
+	switch current := value.(type) {
+	case nil:
+		return nil
+	case *tool.Schema:
+		return cloneToolSchema(current)
+	case map[string]any:
+		out := make(map[string]any, len(current))
+		for key, item := range current {
+			out[key] = cloneSchemaValue(item)
+		}
+		return out
+	case []any:
+		return cloneSchemaValues(current)
+	case []byte:
+		return append([]byte(nil), current...)
+	default:
+		return current
+	}
 }
 
 func cloneFewShot(value []FewShotExample) []FewShotExample {
@@ -345,4 +426,17 @@ func samePointerAgentInstance(left agent.Agent, right agent.Agent) bool {
 		return false
 	}
 	return leftValue.Pointer() == rightValue.Pointer()
+}
+
+func isNilAgent(a agent.Agent) bool {
+	if a == nil {
+		return true
+	}
+	value := reflect.ValueOf(a)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
