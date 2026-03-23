@@ -115,6 +115,71 @@ func writeDebugTraceFixture(
 	return traceDir
 }
 
+func TestNormalizeLangfuseStatus_TrimsValues(t *testing.T) {
+	t.Parallel()
+
+	got := normalizeLangfuseStatus(LangfuseStatus{
+		Error:            " boom ",
+		UIBaseURL:        " http://127.0.0.1:3000/ ",
+		TraceURLTemplate: " http://127.0.0.1:3000/traces/{{trace_id}} ",
+	})
+
+	require.Equal(t, "boom", got.Error)
+	require.Equal(t, "http://127.0.0.1:3000", got.UIBaseURL)
+	require.Equal(
+		t,
+		"http://127.0.0.1:3000/traces/{{trace_id}}",
+		got.TraceURLTemplate,
+	)
+}
+
+func TestService_LangfuseTraceURL_Guards(t *testing.T) {
+	t.Parallel()
+
+	var nilSvc *Service
+	require.Empty(t, nilSvc.langfuseTraceURL("trace-1"))
+
+	svc := New(Config{
+		Langfuse: LangfuseStatus{
+			Enabled:          true,
+			Ready:            true,
+			TraceURLTemplate: "http://127.0.0.1:3000/traces/{{trace_id}}",
+		},
+	})
+	require.Equal(
+		t,
+		"http://127.0.0.1:3000/traces/trace-1",
+		svc.langfuseTraceURL(" trace-1 "),
+	)
+
+	svc = New(Config{
+		Langfuse: LangfuseStatus{
+			Enabled:          false,
+			Ready:            true,
+			TraceURLTemplate: "http://127.0.0.1:3000/traces/{{trace_id}}",
+		},
+	})
+	require.Empty(t, svc.langfuseTraceURL("trace-1"))
+
+	svc = New(Config{
+		Langfuse: LangfuseStatus{
+			Enabled:          true,
+			Ready:            false,
+			TraceURLTemplate: "http://127.0.0.1:3000/traces/{{trace_id}}",
+		},
+	})
+	require.Empty(t, svc.langfuseTraceURL("trace-1"))
+
+	svc = New(Config{
+		Langfuse: LangfuseStatus{
+			Enabled:          true,
+			Ready:            true,
+			TraceURLTemplate: "http://127.0.0.1:3000/traces/static",
+		},
+	})
+	require.Empty(t, svc.langfuseTraceURL("trace-1"))
+}
+
 func TestServiceHandlerRendersOverview(t *testing.T) {
 	t.Parallel()
 

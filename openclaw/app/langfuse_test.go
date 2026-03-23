@@ -111,6 +111,89 @@ func TestMaybeEnableLangfuse_SuccessBuildsResolver(t *testing.T) {
 	require.NotNil(t, rt.shutdown)
 }
 
+func TestMaybeEnableLangfuse_DisabledReturnsStatusOnly(t *testing.T) {
+	t.Parallel()
+
+	rt, err := maybeEnableLangfuse(context.Background(), runOptions{
+		LangfuseEnabled: false,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, rt)
+	require.False(t, rt.adminStatus.Enabled)
+	require.False(t, rt.adminStatus.Ready)
+	require.Nil(t, rt.runOptionResolver)
+	require.Nil(t, rt.shutdown)
+}
+
+func TestResolvedLangfuseUIBaseURL(t *testing.T) {
+	t.Run("uses configured base url", func(t *testing.T) {
+		t.Setenv(langfuseHostEnv, "")
+
+		got := resolvedLangfuseUIBaseURL(runOptions{
+			LangfuseUIBaseURL: " http://127.0.0.1:3000/ ",
+		})
+		require.Equal(t, "http://127.0.0.1:3000", got)
+	})
+
+	t.Run("defaults to https", func(t *testing.T) {
+		t.Setenv(langfuseHostEnv, "langfuse.example.com")
+		t.Setenv(langfuseInsecureEnv, "")
+
+		got := resolvedLangfuseUIBaseURL(runOptions{})
+		require.Equal(t, "https://langfuse.example.com", got)
+	})
+
+	t.Run("keeps explicit scheme", func(t *testing.T) {
+		t.Setenv(langfuseHostEnv, "https://langfuse.example.com/")
+
+		got := resolvedLangfuseUIBaseURL(runOptions{})
+		require.Equal(t, "https://langfuse.example.com", got)
+	})
+
+	t.Run("empty without host", func(t *testing.T) {
+		t.Setenv(langfuseHostEnv, "")
+
+		got := resolvedLangfuseUIBaseURL(runOptions{})
+		require.Empty(t, got)
+	})
+}
+
+func TestResolvedLangfuseTraceURLTemplate(t *testing.T) {
+	t.Run("uses configured template", func(t *testing.T) {
+		got := resolvedLangfuseTraceURLTemplate(
+			runOptions{
+				LangfuseTraceURLTemplate: " http://ui/traces/{{trace_id}} ",
+			},
+			"http://ignored",
+		)
+		require.Equal(t, "http://ui/traces/{{trace_id}}", got)
+	})
+
+	t.Run("builds from ui base url and project", func(t *testing.T) {
+		t.Setenv(langfuseInitProjectEnv, "local-dev")
+
+		got := resolvedLangfuseTraceURLTemplate(
+			runOptions{},
+			"http://127.0.0.1:3000",
+		)
+		require.Equal(
+			t,
+			"http://127.0.0.1:3000/project/local-dev/traces/{{trace_id}}",
+			got,
+		)
+	})
+
+	t.Run("empty without project", func(t *testing.T) {
+		t.Setenv(langfuseInitProjectEnv, "")
+
+		got := resolvedLangfuseTraceURLTemplate(
+			runOptions{},
+			"http://127.0.0.1:3000",
+		)
+		require.Empty(t, got)
+	})
+}
+
 func TestBuildLangfuseRunOptionResolver_SetsTraceID(t *testing.T) {
 	rec, err := debugrecorder.New(t.TempDir(), "")
 	require.NoError(t, err)
@@ -231,4 +314,107 @@ func TestBuildLangfuseRunOptionResolver_SetsTraceID(t *testing.T) {
 		traceID.String(),
 		ref["trace_id"],
 	)
+}
+
+func TestBuildLangfuseRunOptionResolver_WithoutTraceSkipsCallback(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	resolver := buildLangfuseRunOptionResolver(runOptions{
+		AppName: "openclaw",
+	})
+
+	ctx, runOpts := resolver(context.Background(), gateway.RunOptionInput{
+		Inbound: gateway.InboundMessage{
+			Channel: "wecom",
+		},
+		UserID:    "u1",
+		SessionID: "s1",
+		RequestID: "req-1",
+	})
+
+	require.NotNil(t, ctx)
+
+	opts := &agent.RunOptions{}
+	for _, opt := range runOpts {
+		opt(opts)
+	}
+	require.Len(t, opts.SpanAttributes, 1)
+	require.Empty(t, opts.TraceStartedCallbacks)
+}
+
+func TestBuildLangfuseRunOptionResolver_InvalidSpanContext(
+	t *testing.T,
+) {
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		Channel:   "wecom",
+		SessionID: "s1",
+		RequestID: "req-1",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, trace.Close(debugrecorder.TraceEnd{
+			Status: "ok",
+		}))
+	})
+
+	resolver := buildLangfuseRunOptionResolver(runOptions{
+		AppName: "openclaw",
+	})
+	_, runOpts := resolver(context.Background(), gateway.RunOptionInput{
+		Inbound: gateway.InboundMessage{
+			Channel: "wecom",
+		},
+		SessionID: "s1",
+		RequestID: "req-1",
+		Trace:     trace,
+	})
+
+	opts := &agent.RunOptions{}
+	for _, opt := range runOpts {
+		opt(opts)
+	}
+	require.Len(t, opts.TraceStartedCallbacks, 1)
+
+	opts.TraceStartedCallbacks[0](oteltrace.SpanContext{})
+
+	metaRaw, err := os.ReadFile(filepath.Join(trace.Dir(), "meta.json"))
+	require.NoError(t, err)
+	require.NotContains(t, string(metaRaw), "\"trace_id\"")
+}
+
+func TestBuildLangfuseTraceName_Fallbacks(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"wecom req-1",
+		buildLangfuseTraceName(gateway.RunOptionInput{
+			Inbound:   gateway.InboundMessage{Channel: "wecom"},
+			RequestID: "req-1",
+		}),
+	)
+	require.Equal(
+		t,
+		"wecom request",
+		buildLangfuseTraceName(gateway.RunOptionInput{
+			Inbound: gateway.InboundMessage{Channel: "wecom"},
+		}),
+	)
+}
+
+func TestSetLangfuseBaggageMember_IgnoresEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	bag, err := baggage.New()
+	require.NoError(t, err)
+	bag = setLangfuseBaggageMember(bag, "", "value")
+	require.Empty(t, bag.Members())
+
+	bag = setLangfuseBaggageMember(bag, "langfuse.user.id", "")
+	require.Empty(t, bag.Members())
 }

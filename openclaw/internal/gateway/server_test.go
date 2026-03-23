@@ -1219,6 +1219,44 @@ func TestServer_ProcessMessage_RunOptionResolver(t *testing.T) {
 	require.Equal(t, 1, runner.calls)
 }
 
+func TestServer_ProcessMessage_RunOptionResolver_NoExtraOptions(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	type ctxKey string
+
+	const resolverKey ctxKey = "resolver"
+
+	runner := &resolvingRunner{}
+	srv, err := New(
+		runner,
+		WithRunOptionResolver(func(
+			ctx context.Context,
+			_ RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			return context.WithValue(ctx, resolverKey, "ok"), nil
+		}),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			Channel: "telegram",
+			From:    "u1",
+			Text:    "hello",
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "req-1", rsp.RequestID)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, "ok", runner.ctx.Value(resolverKey))
+	require.Empty(t, runner.opts.Instruction)
+}
+
 func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {
 	t.Parallel()
 

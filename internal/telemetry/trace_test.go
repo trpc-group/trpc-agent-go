@@ -421,6 +421,23 @@ func TestTraceBeforeInvokeAgent_WithTraceStartedCallback(t *testing.T) {
 	require.Equal(t, span.SpanContext(), got)
 }
 
+func TestTraceBeforeInvokeAgent_IgnoresNilTraceStartedCallback(t *testing.T) {
+	inv := &agent.Invocation{
+		AgentName:    "alpha",
+		InvocationID: "inv-span-callback-nil",
+		RunOptions: agent.RunOptions{
+			TraceStartedCallbacks: []agent.TraceStartedCallback{
+				nil,
+			},
+		},
+	}
+	span := newRecordingSpan()
+
+	require.NotPanics(t, func() {
+		TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+	})
+}
+
 func TestNewChatSpanName(t *testing.T) {
 	tests := []struct {
 		name         string
