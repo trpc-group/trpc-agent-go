@@ -203,6 +203,28 @@ _ = err
 - 每次调用 `Runner.Run(...)`，Factory 会被调用一次。
 - `agent.WithAgent(...)` 依然优先生效（测试时很方便）。
 
+#### Agent Factory 中的资源边界
+
+`AgentFactory` 适合按请求拼装 Agent 配置，但它**不会改变资源所有权**。
+
+- `Runner` 只负责调用 factory 获取一个 `agent.Agent`。
+- `Runner.Close()` 只会关闭 Runner 自己创建或持有的资源；它**不会**
+  自动关闭 factory 内部新建的 `tool.ToolSet`、临时 MCP 连接、沙箱会话
+  等请求级资源。
+- 原因是 `agent.Agent` 接口本身没有 `Close()`，因此 Runner 无法统一接管
+  这类资源的释放。
+
+实践建议：
+
+- 如果某个 `ToolSet` 或外部连接适合跨请求复用，优先在 factory 外创建一次，
+  然后在 factory 中复用；应用退出时再统一 `Close()`。
+- 如果资源必须按请求创建，调用方需要在本次 run 结束后自行清理。
+  常见做法是包装一个带清理逻辑的 Agent，或者在 Agent 的
+  after callback 中执行清理。
+
+这类边界在使用 MCP ToolSet 时尤其常见，详细说明可继续参考
+`tool` 文档中的 ToolSet 生命周期章节。
+
 ### 🔌 插件
 
 Runner 插件是一类全局、Runner 作用域的 Hook（钩子）。只需要在创建 Runner 时
