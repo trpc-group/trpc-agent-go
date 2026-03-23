@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -220,25 +221,25 @@ func TestNewA2ASurface_AdvertisesTools(t *testing.T) {
 	require.Equal(t, "forecast_tool", card.Skills[2].Name)
 }
 
-func TestBuildOpenClawA2ASkills_SkipsNilToolsAndDecls(t *testing.T) {
+func TestNewAgentCard_WithCardTools_SkipsNilToolsAndDecls(t *testing.T) {
 	t.Parallel()
 
-	ag := &stubA2AAgent{
-		tools: []tool.Tool{
-			nil,
-			stubNilDeclTool{},
-			stubTool{name: "weather_tool"},
-		},
+	tools := []tool.Tool{
+		nil,
+		stubNilDeclTool{},
+		stubTool{name: "weather_tool"},
 	}
-	skills := buildOpenClawA2ASkills(
-		ag,
-		true,
+	card, err := a2aserver.NewAgentCard(
 		"openclaw-sandbox",
 		"sandbox agent",
+		"localhost:8080",
+		false,
+		a2aserver.WithCardTools(tools...),
 	)
-	require.Len(t, skills, 2)
-	require.Equal(t, "openclaw-sandbox", skills[0].Name)
-	require.Equal(t, "weather_tool", skills[1].Name)
+	require.NoError(t, err)
+	require.Len(t, card.Skills, 2)
+	require.Equal(t, "openclaw-sandbox", card.Skills[0].Name)
+	require.Equal(t, "weather_tool", card.Skills[1].Name)
 }
 
 func TestExtractA2ABasePath_Validation(t *testing.T) {

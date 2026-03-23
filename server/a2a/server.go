@@ -80,12 +80,13 @@ func buildAgentCard(options *options) (a2a.AgentCard, error) {
 		return a2a.AgentCard{}, errors.New("agent is required when agent card is not provided")
 	}
 	info := options.agent.Info()
-	card, err := NewAgentCard(info.Name, info.Description, options.host, options.enableStreaming)
-	if err != nil {
-		return a2a.AgentCard{}, err
-	}
-	card.Skills = buildSkillsFromTools(options.agent, info.Name, info.Description)
-	return card, nil
+	return NewAgentCard(
+		info.Name,
+		info.Description,
+		options.host,
+		options.enableStreaming,
+		WithCardTools(options.agent.Tools()...),
+	)
 }
 
 // buildRuntimeState makes a shallow copy of message metadata for RuntimeState.
@@ -1047,51 +1048,6 @@ func (m *messageProcessor) processMessage(
 	return &taskmanager.MessageProcessingResult{
 		Result: task,
 	}, nil
-}
-
-// buildSkillsFromTools converts agent tools to AgentSkills
-func buildSkillsFromTools(agent agent.Agent, agentName, agentDesc string) []a2a.AgentSkill {
-	tools := agent.Tools()
-	if len(tools) == 0 {
-		// If no tools, create a default skill
-		return []a2a.AgentSkill{
-			{
-				Name:        agentName,
-				Description: &agentDesc,
-				InputModes:  []string{"text"},
-				OutputModes: []string{"text"},
-				Tags:        []string{"default"},
-			},
-		}
-	}
-
-	skills := make([]a2a.AgentSkill, 0, len(tools)+1)
-
-	// Add default agent skill
-	skills = append(skills, a2a.AgentSkill{
-		Name:        agentName,
-		Description: &agentDesc,
-		InputModes:  []string{"text"},
-		OutputModes: []string{"text"},
-		Tags:        []string{"default"},
-	})
-
-	// Add tool-based skills
-	for _, tool := range tools {
-		decl := tool.Declaration()
-		if decl != nil {
-			skill := a2a.AgentSkill{
-				Name:        decl.Name,
-				Description: &decl.Description,
-				InputModes:  []string{"text"},
-				OutputModes: []string{"text"},
-				Tags:        []string{"tool"},
-			}
-			skills = append(skills, skill)
-		}
-	}
-
-	return skills
 }
 
 // addTaskMetadata adds ADK-compatible metadata to task status update events.

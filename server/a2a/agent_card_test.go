@@ -17,7 +17,24 @@ import (
 
 	a2aprotocolserver "trpc.group/trpc-go/trpc-a2a-go/server"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+// mockCardTool is a minimal tool.Tool implementation for testing NewAgentCard.
+type mockCardTool struct {
+	name string
+	desc string
+}
+
+func (m *mockCardTool) Declaration() *tool.Declaration {
+	if m.name == "" {
+		return nil
+	}
+	return &tool.Declaration{
+		Name:        m.name,
+		Description: m.desc,
+	}
+}
 
 func TestNewAgentCard(t *testing.T) {
 	card, err := NewAgentCard("tool-agent", "agent with tools", "localhost:9090", false)
@@ -67,6 +84,93 @@ func TestNewAgentCard_Errors(t *testing.T) {
 	_, err = NewAgentCard("test-agent", "desc", "", true)
 	if err == nil || err.Error() != "host is required" {
 		t.Fatalf("NewAgentCard(empty host) error = %v, want host is required", err)
+	}
+}
+
+func TestNewAgentCard_WithCardTools(t *testing.T) {
+	tools := []tool.Tool{
+		&mockCardTool{name: "calculator", desc: "performs math operations"},
+		&mockCardTool{name: "weather", desc: "fetches weather data"},
+	}
+
+	card, err := NewAgentCard(
+		"smart-agent", "an agent with tools",
+		"localhost:8080", true,
+		WithCardTools(tools...),
+	)
+	if err != nil {
+		t.Fatalf("NewAgentCard(WithCardTools) returned error: %v", err)
+	}
+
+	// Should have 3 skills: 1 default + 2 tools
+	if len(card.Skills) != 3 {
+		t.Fatalf("expected 3 skills, got %d: %+v", len(card.Skills), card.Skills)
+	}
+
+	// First skill is the default agent skill
+	if card.Skills[0].Name != "smart-agent" {
+		t.Errorf("first skill name = %q, want %q", card.Skills[0].Name, "smart-agent")
+	}
+	if card.Skills[0].Tags[0] != "default" {
+		t.Errorf("first skill tag = %q, want %q", card.Skills[0].Tags[0], "default")
+	}
+
+	// Second skill is calculator tool
+	if card.Skills[1].Name != "calculator" {
+		t.Errorf("second skill name = %q, want %q", card.Skills[1].Name, "calculator")
+	}
+	if *card.Skills[1].Description != "performs math operations" {
+		t.Errorf("second skill desc = %q, want %q", *card.Skills[1].Description, "performs math operations")
+	}
+	if card.Skills[1].Tags[0] != "tool" {
+		t.Errorf("second skill tag = %q, want %q", card.Skills[1].Tags[0], "tool")
+	}
+
+	// Third skill is weather tool
+	if card.Skills[2].Name != "weather" {
+		t.Errorf("third skill name = %q, want %q", card.Skills[2].Name, "weather")
+	}
+}
+
+func TestNewAgentCard_WithCardTools_NilAndEmptyDecl(t *testing.T) {
+	tools := []tool.Tool{
+		nil,                                    // nil tool, should be skipped
+		&mockCardTool{name: "", desc: ""},      // nil Declaration, should be skipped
+		&mockCardTool{name: "valid", desc: "a valid tool"},
+	}
+
+	card, err := NewAgentCard(
+		"agent", "desc", "localhost:8080", false,
+		WithCardTools(tools...),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have 2 skills: 1 default + 1 valid tool
+	if len(card.Skills) != 2 {
+		t.Fatalf("expected 2 skills, got %d: %+v", len(card.Skills), card.Skills)
+	}
+	if card.Skills[1].Name != "valid" {
+		t.Errorf("skill name = %q, want %q", card.Skills[1].Name, "valid")
+	}
+}
+
+func TestNewAgentCard_WithCardTools_EmptySlice(t *testing.T) {
+	card, err := NewAgentCard(
+		"agent", "desc", "localhost:8080", false,
+		WithCardTools(), // empty tools
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have only 1 default skill
+	if len(card.Skills) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(card.Skills))
+	}
+	if card.Skills[0].Tags[0] != "default" {
+		t.Errorf("skill tag = %q, want %q", card.Skills[0].Tags[0], "default")
 	}
 }
 

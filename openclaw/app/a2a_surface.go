@@ -27,12 +27,6 @@ import (
 const (
 	defaultA2AUserIDHeader = "X-User-ID"
 
-	a2aInputModeText  = "text"
-	a2aOutputModeText = "text"
-
-	a2aSkillTagDefault = "default"
-	a2aSkillTagTool    = "tool"
-
 	a2aVersionKey = "version"
 )
 
@@ -118,56 +112,11 @@ func buildOpenClawA2ACard(
 		desc = info.Description
 	}
 
-	card, err := a2aserver.NewAgentCard(name, desc, host, opts.A2AStreaming)
-	if err != nil {
-		return a2a.AgentCard{}, err
+	var cardOpts []a2aserver.AgentCardOption
+	if opts.A2AAdvertiseTools && ag != nil {
+		cardOpts = append(cardOpts, a2aserver.WithCardTools(ag.Tools()...))
 	}
-	card.Skills = buildOpenClawA2ASkills(
-		ag,
-		opts.A2AAdvertiseTools,
-		name,
-		desc,
-	)
-	return card, nil
-}
-
-func buildOpenClawA2ASkills(
-	ag agent.Agent,
-	advertiseTools bool,
-	name string,
-	desc string,
-) []a2a.AgentSkill {
-	descCopy := desc
-	skills := []a2a.AgentSkill{{
-		Name:        name,
-		Description: &descCopy,
-		InputModes:  []string{a2aInputModeText},
-		OutputModes: []string{a2aOutputModeText},
-		Tags:        []string{a2aSkillTagDefault},
-	}}
-	if !advertiseTools || ag == nil {
-		return skills
-	}
-
-	for _, tool := range ag.Tools() {
-		if tool == nil {
-			continue
-		}
-		decl := tool.Declaration()
-		if decl == nil {
-			continue
-		}
-		toolDesc := decl.Description
-		skills = append(skills, a2a.AgentSkill{
-			Name:        decl.Name,
-			Description: &toolDesc,
-			InputModes:  []string{a2aInputModeText},
-			OutputModes: []string{a2aOutputModeText},
-			Tags:        []string{a2aSkillTagTool},
-		})
-	}
-
-	return skills
+	return a2aserver.NewAgentCard(name, desc, host, opts.A2AStreaming, cardOpts...)
 }
 
 func extractA2ABasePath(host string) (string, error) {

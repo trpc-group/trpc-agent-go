@@ -2571,17 +2571,17 @@ func TestMessageProcessor_AddTaskMetadataUsesAppName(t *testing.T) {
 	assert.Equal(t, "session-1", evt.Metadata[ia2a.GetADKMetadataKey("session_id")])
 }
 
-func TestBuildSkillsFromTools(t *testing.T) {
+func TestBuildSkillsFromCardTools(t *testing.T) {
 	tests := []struct {
 		name      string
-		agent     agent.Agent
+		tools     []tool.Tool
 		agentName string
 		agentDesc string
 		expected  []a2a.AgentSkill
 	}{
 		{
 			name:      "no tools",
-			agent:     &mockAgent{tools: []tool.Tool{}},
+			tools:     []tool.Tool{},
 			agentName: "test-agent",
 			agentDesc: "test description",
 			expected: []a2a.AgentSkill{
@@ -2596,11 +2596,9 @@ func TestBuildSkillsFromTools(t *testing.T) {
 		},
 		{
 			name: "with tools",
-			agent: &mockAgent{
-				tools: []tool.Tool{
-					&mockTool{name: "calculator", description: "math tool"},
-					&mockTool{name: "weather", description: "weather tool"},
-				},
+			tools: []tool.Tool{
+				&mockTool{name: "calculator", description: "math tool"},
+				&mockTool{name: "weather", description: "weather tool"},
 			},
 			agentName: "tool-agent",
 			agentDesc: "agent with tools",
@@ -2632,9 +2630,9 @@ func TestBuildSkillsFromTools(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildSkillsFromTools(tt.agent, tt.agentName, tt.agentDesc)
+			result := buildSkillsFromCardTools(tt.tools, tt.agentName, tt.agentDesc)
 			if !compareSkills(result, tt.expected) {
-				t.Errorf("buildSkillsFromTools() = %+v, want %+v", result, tt.expected)
+				t.Errorf("buildSkillsFromCardTools() = %+v, want %+v", result, tt.expected)
 			}
 		})
 	}
