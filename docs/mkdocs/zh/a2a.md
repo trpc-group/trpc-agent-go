@@ -139,7 +139,7 @@ func main() {
 
 #### 自定义 Runner（WithRunner）
 
-默认情况下，A2A Server 会自动为你创建一个 Runner。如果你需要更精细的控制，例如注入 MemoryService、自定义 SessionService，可以使用 `WithRunner`。
+默认情况下，A2A Server 会自动为你创建一个 Runner。如果你需要更精细地控制，例如注入 MemoryService、自定义 SessionService，可以使用 `WithRunner`。
 
 注意：`WithRunner` 与 `WithAgent` 互斥。使用 `WithRunner` 时，需要显式通过 `WithAgentCard` 提供对外暴露的 Agent 身份：
 
@@ -755,7 +755,7 @@ server, _ := a2a.New(
 server, _ := a2a.New(
 	a2a.WithHost("localhost:8888"),
 	a2a.WithAgent(agent, true),
-	a2a.WithADKCompatibility(true), // 默认关闭
+	a2a.WithADKCompatibility(true), // 默认开启
 )
 ```
 
@@ -841,17 +841,19 @@ a2aAgent, _ := a2aagent.New(
 
 通过 A2A Server 和 A2AAgent 的配合使用，可以比较方便的构建的远程的 Agent 系统。
 
-### A2A Server 完整配置项一览
+### A2A Server 常用配置项一览
 
 | 配置项 | 说明 |
 |--------|------|
-| `WithAgent(agent, streaming)` | 设置 Agent 和是否启用流式；与 `WithRunner` 互斥 |
+| `WithAgent(agent, streaming)` | 设置 Agent，并声明生成的 AgentCard 是否支持流式；与 `WithRunner` 互斥 |
 | `WithHost(host)` | 设置服务地址，支持带 path 的 URL |
 | `WithAgentCard(card)` | 自定义 AgentCard（覆盖自动生成） |
 | `WithRunner(runner)` | 自定义 Runner（注入 Memory、Session 等）；需配合 `WithAgentCard` 使用 |
+| `WithSessionService(service)` | 为默认 Runner 设置 SessionService |
 | `WithProcessMessageHook(hook)` | 服务端消息处理 Hook（中间件模式） |
 | `WithProcessorBuilder(builder)` | 完全自定义消息处理器 |
 | `WithTaskManagerBuilder(builder)` | 自定义任务管理器 |
+| `WithGraphEventObjectAllowlist(types...)` | 限制 Event 转换器允许输出的 graph object 类型 |
 | `WithRunOptions(opts...)` | 为每次调用追加 RunOption |
 | `WithStreamingEventType(type)` | 流式输出事件类型（Artifact/Message） |
 | `WithUserIDHeader(header)` | 自定义 UserID HTTP Header |

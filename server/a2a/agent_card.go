@@ -96,9 +96,13 @@ func writeAgentCard(
 		return
 	}
 
+	payload, err := json.Marshal(getter())
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Content-Type", agentCardContentType)
-	if err := json.NewEncoder(w).Encode(getter()); err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-	}
+	_, _ = w.Write(append(payload, '\n'))
 }

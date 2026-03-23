@@ -94,6 +94,26 @@ func TestNewA2ASurface_HostWithoutPathFails(t *testing.T) {
 	require.ErrorContains(t, err, "non-root path")
 }
 
+func TestNewA2ASurface_InvalidAgentCardMetadata(t *testing.T) {
+	t.Parallel()
+
+	_, err := newA2ASurface(
+		&stubA2AAgent{
+			info: agent.Info{
+				Name:        "",
+				Description: "weather agent",
+			},
+		},
+		&stubRunner{},
+		runOptions{
+			A2AEnabled: true,
+			A2AHost:    "http://127.0.0.1:8080/a2a",
+		},
+	)
+	require.ErrorContains(t, err, "build a2a agent card failed")
+	require.ErrorContains(t, err, "agent name is required")
+}
+
 func TestNewA2ASurface_NormalizesFieldsAndDefaults(t *testing.T) {
 	t.Parallel()
 

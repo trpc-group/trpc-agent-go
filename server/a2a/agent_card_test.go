@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	a2aprotocolserver "trpc.group/trpc-go/trpc-a2a-go/server"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 )
 
 func TestNewAgentCard(t *testing.T) {
@@ -30,6 +31,14 @@ func TestNewAgentCard(t *testing.T) {
 		URL:         "http://localhost:9090",
 		Capabilities: a2aprotocolserver.AgentCapabilities{
 			Streaming: boolPtr(false),
+			Extensions: []a2aprotocolserver.AgentExtension{
+				{
+					URI: ia2a.ExtensionTRPCA2AVersion,
+					Params: map[string]any{
+						"version": ia2a.InteractionVersion,
+					},
+				},
+			},
 		},
 		Skills: []a2aprotocolserver.AgentSkill{
 			{
@@ -103,6 +112,66 @@ func TestNewAgentCardHandler_NilGetter(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	NewAgentCardHandler(nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("ServeHTTP() status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestNewAgentCardHandler_OptionsRequest(t *testing.T) {
+	req := httptest.NewRequest(http.MethodOptions, "/.well-known/agent-card.json", nil)
+	rec := httptest.NewRecorder()
+
+	NewAgentCardHandler(func() a2aprotocolserver.AgentCard {
+		return a2aprotocolserver.AgentCard{}
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ServeHTTP() status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want *", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != http.MethodGet {
+		t.Fatalf("Access-Control-Allow-Methods = %q, want %q", got, http.MethodGet)
+	}
+}
+
+func TestNewAgentCardHandler_MethodNotAllowed(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/.well-known/agent-card.json", nil)
+	rec := httptest.NewRecorder()
+
+	NewAgentCardHandler(func() a2aprotocolserver.AgentCard {
+		return a2aprotocolserver.AgentCard{}
+	}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("ServeHTTP() status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+	if got := rec.Header().Get("Allow"); got != http.MethodGet {
+		t.Fatalf("Allow = %q, want %q", got, http.MethodGet)
+	}
+}
+
+func TestNewAgentCardHandler_MarshalError(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/agent-card.json", nil)
+	rec := httptest.NewRecorder()
+
+	NewAgentCardHandler(func() a2aprotocolserver.AgentCard {
+		return a2aprotocolserver.AgentCard{
+			Name: "bad-card",
+			Capabilities: a2aprotocolserver.AgentCapabilities{
+				Extensions: []a2aprotocolserver.AgentExtension{
+					{
+						URI: "test://bad",
+						Params: map[string]any{
+							"bad": make(chan int),
+						},
+					},
+				},
+			},
+		}
+	}).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("ServeHTTP() status = %d, want %d", rec.Code, http.StatusInternalServerError)

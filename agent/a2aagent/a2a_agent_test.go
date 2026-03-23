@@ -1548,6 +1548,17 @@ func TestOptionFunctions(t *testing.T) {
 			t.Error("streaming should be disabled")
 		}
 	})
+
+	t.Run("WithBuildMessageHook", func(t *testing.T) {
+		testHook := func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+			return next
+		}
+		agent := &A2AAgent{}
+		WithBuildMessageHook(testHook)(agent)
+		if agent.buildMessageHook == nil {
+			t.Fatal("build message hook not set")
+		}
+	})
 }
 
 // TestShouldUseStreaming_WithExplicitOption tests the explicit streaming option

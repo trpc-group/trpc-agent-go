@@ -2012,7 +2012,8 @@ func TestBuildAgentCard(t *testing.T) {
 				Description: "test description",
 				URL:         "http://localhost:8080",
 				Capabilities: a2a.AgentCapabilities{
-					Streaming: boolPtr(true),
+					Streaming:  boolPtr(true),
+					Extensions: defaultAgentCardExtensions(),
 				},
 				Skills: []a2a.AgentSkill{
 					{
@@ -2043,7 +2044,8 @@ func TestBuildAgentCard(t *testing.T) {
 				Description: "test description",
 				URL:         "http://example.com:8080",
 				Capabilities: a2a.AgentCapabilities{
-					Streaming: boolPtr(true),
+					Streaming:  boolPtr(true),
+					Extensions: defaultAgentCardExtensions(),
 				},
 				Skills: []a2a.AgentSkill{
 					{
@@ -2074,7 +2076,8 @@ func TestBuildAgentCard(t *testing.T) {
 				Description: "test description",
 				URL:         "https://secure.example.com",
 				Capabilities: a2a.AgentCapabilities{
-					Streaming: boolPtr(true),
+					Streaming:  boolPtr(true),
+					Extensions: defaultAgentCardExtensions(),
 				},
 				Skills: []a2a.AgentSkill{
 					{
@@ -2105,7 +2108,8 @@ func TestBuildAgentCard(t *testing.T) {
 				Description: "agent with custom scheme",
 				URL:         "custom://service.namespace",
 				Capabilities: a2a.AgentCapabilities{
-					Streaming: boolPtr(true),
+					Streaming:  boolPtr(true),
+					Extensions: defaultAgentCardExtensions(),
 				},
 				Skills: []a2a.AgentSkill{
 					{
@@ -2139,7 +2143,8 @@ func TestBuildAgentCard(t *testing.T) {
 				Description: "agent with tools",
 				URL:         "http://localhost:9090",
 				Capabilities: a2a.AgentCapabilities{
-					Streaming: boolPtr(false),
+					Streaming:  boolPtr(false),
+					Extensions: defaultAgentCardExtensions(),
 				},
 				Skills: []a2a.AgentSkill{
 					{
@@ -2743,9 +2748,44 @@ func compareAgentCards(a, b a2a.AgentCard) bool {
 	} else if a.Capabilities.Streaming != b.Capabilities.Streaming {
 		return false
 	}
+	if !compareExtensions(a.Capabilities.Extensions, b.Capabilities.Extensions) {
+		return false
+	}
 	return compareSkills(a.Skills, b.Skills) &&
 		compareStringSlices(a.DefaultInputModes, b.DefaultInputModes) &&
 		compareStringSlices(a.DefaultOutputModes, b.DefaultOutputModes)
+}
+
+func defaultAgentCardExtensions() []a2a.AgentExtension {
+	return []a2a.AgentExtension{
+		{
+			URI: ia2a.ExtensionTRPCA2AVersion,
+			Params: map[string]any{
+				"version": ia2a.InteractionVersion,
+			},
+		},
+	}
+}
+
+func compareExtensions(a, b []a2a.AgentExtension) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, extA := range a {
+		extB := b[i]
+		if extA.URI != extB.URI {
+			return false
+		}
+		if len(extA.Params) != len(extB.Params) {
+			return false
+		}
+		for k, v := range extA.Params {
+			if extB.Params[k] != v {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func compareSkills(a, b []a2a.AgentSkill) bool {

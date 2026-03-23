@@ -322,7 +322,7 @@ func buildA2AAgent(httpURL string) *a2aagent.A2AAgent {
 		// The custom metadata will be received by the server's ProcessMessageHook.
 		a2aagent.WithBuildMessageHook(func(next a2aagent.ConvertToA2AMessageFunc) a2aagent.ConvertToA2AMessageFunc {
 			return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
-				// Call the default converter (including transferStateKey processing)
+				// Call the default converter. transferState keys are injected by the outer wrapper.
 				msg, err := next(isStream, agentName, inv)
 				if err != nil {
 					return nil, err

@@ -88,6 +88,7 @@ func buildAgentCard(options *options) (a2a.AgentCard, error) {
 	return card, nil
 }
 
+// buildRuntimeState makes a shallow copy of message metadata for RuntimeState.
 func buildRuntimeState(metadata map[string]any) map[string]any {
 	runtimeState := make(map[string]any, len(metadata))
 	for key, value := range metadata {
@@ -619,7 +620,11 @@ func (m *messageProcessor) processAgentStreamingEvents(
 		if err == nil {
 			return false
 		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.Canceled) {
+			log.DebugfContext(ctx, "streaming stopped before completion: %v", err)
+			return true
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
 			log.WarnfContext(ctx, "streaming stopped before completion: %v", err)
 			return true
 		}

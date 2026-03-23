@@ -763,7 +763,7 @@ If you need to interoperate with Google ADK (Agent Development Kit) Python clien
 server, _ := a2a.New(
 	a2a.WithHost("localhost:8888"),
 	a2a.WithAgent(agent, true),
-	a2a.WithADKCompatibility(true), // Disabled by default
+	a2a.WithADKCompatibility(true), // Enabled by default
 )
 ```
 
@@ -852,13 +852,15 @@ Through the combined use of A2A Server and A2AAgent, you can easily build distri
 
 | Option | Description |
 |--------|-------------|
-| `WithAgent(agent, streaming)` | Set the Agent and whether to enable streaming; mutually exclusive with `WithRunner` |
+| `WithAgent(agent, streaming)` | Set the Agent and declare whether the generated AgentCard supports streaming; mutually exclusive with `WithRunner` |
 | `WithHost(host)` | Set the service address, supports URLs with path |
 | `WithAgentCard(card)` | Custom AgentCard (overrides auto-generation) |
 | `WithRunner(runner)` | Custom Runner (inject Memory, Session, etc.); requires `WithAgentCard` |
+| `WithSessionService(service)` | Set the session service used by the default Runner |
 | `WithProcessMessageHook(hook)` | Server-side message processing Hook (middleware pattern) |
 | `WithProcessorBuilder(builder)` | Fully custom message processor |
 | `WithTaskManagerBuilder(builder)` | Custom task manager |
+| `WithGraphEventObjectAllowlist(types...)` | Limit graph object types emitted by Event converters |
 | `WithRunOptions(opts...)` | Append RunOptions to every invocation |
 | `WithStreamingEventType(type)` | Streaming output event type (Artifact/Message) |
 | `WithUserIDHeader(header)` | Custom UserID HTTP Header |
