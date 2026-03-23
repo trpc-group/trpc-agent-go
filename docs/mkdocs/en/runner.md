@@ -204,6 +204,33 @@ Notes:
 - The factory is called once per `Runner.Run(...)`.
 - `agent.WithAgent(...)` still overrides everything (useful for tests).
 
+#### Resource Ownership Inside Agent Factories
+
+`AgentFactory` is ideal for request-scoped Agent construction, but it
+**does not transfer ownership of resources** created inside the factory.
+
+- The `Runner` only asks the factory for an `agent.Agent`.
+- `Runner.Close()` only closes resources created or owned by the Runner
+  itself; it does **not** automatically close request-scoped
+  `tool.ToolSet` instances, temporary MCP connections, sandbox sessions,
+  or similar resources created inside the factory.
+- The reason is structural: the `agent.Agent` interface does not expose a
+  `Close()` method, so the Runner has no generic way to reclaim those
+  resources.
+
+Recommended patterns:
+
+- If a `ToolSet` or external connection can be reused across requests,
+  create it once outside the factory, reuse it inside the factory, and
+  close it during application shutdown.
+- If a resource must be created per request, the caller should clean it
+  up explicitly after that run finishes. Common patterns are wrapping the
+  Agent with cleanup logic, or running cleanup from an after-agent
+  callback.
+
+This boundary is especially important when using MCP ToolSets. See the
+ToolSet lifecycle notes in the `tool` documentation for more details.
+
 ### 🔌 Plugins
 
 Runner plugins are global, runner-scoped hooks. Register plugins once and they
