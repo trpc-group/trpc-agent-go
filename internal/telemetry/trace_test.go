@@ -401,6 +401,60 @@ func TestTraceBeforeInvokeAgent_WithSpanAttributes(t *testing.T) {
 	require.True(t, hasAttr(span.attrs, "custom.attr", "v1"), "custom span attribute should be applied")
 }
 
+func TestTraceBeforeInvokeAgent_WithTraceStartedCallback(t *testing.T) {
+	var got trace.SpanContext
+	inv := &agent.Invocation{
+		AgentName:    "alpha",
+		InvocationID: "inv-span-callback",
+		RunOptions: agent.RunOptions{
+			TraceStartedCallbacks: []agent.TraceStartedCallback{
+				func(spanContext trace.SpanContext) {
+					got = spanContext
+				},
+			},
+		},
+	}
+	span := newRecordingSpan()
+
+	TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+
+	require.Equal(t, span.SpanContext(), got)
+}
+
+func TestTraceBeforeInvokeAgent_IgnoresNilTraceStartedCallback(t *testing.T) {
+	inv := &agent.Invocation{
+		AgentName:    "alpha",
+		InvocationID: "inv-span-callback-nil",
+		RunOptions: agent.RunOptions{
+			TraceStartedCallbacks: []agent.TraceStartedCallback{
+				nil,
+			},
+		},
+	}
+	span := newRecordingSpan()
+
+	require.NotPanics(t, func() {
+		TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+	})
+}
+
+func TestTraceBeforeInvokeAgent_SkipsChildTraceStartedCallback(
+	t *testing.T,
+) {
+	root := agent.NewInvocation()
+	root.RunOptions.TraceStartedCallbacks = []agent.TraceStartedCallback{
+		func(trace.SpanContext) {
+			t.Fatal("child invocation should not trigger root callback")
+		},
+	}
+	child := root.Clone()
+	span := newRecordingSpan()
+
+	require.NotPanics(t, func() {
+		TraceBeforeInvokeAgent(span, child, "desc", "inst", nil)
+	})
+}
+
 func TestNewChatSpanName(t *testing.T) {
 	tests := []struct {
 		name         string

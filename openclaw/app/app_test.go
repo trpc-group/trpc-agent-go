@@ -50,6 +50,7 @@ import (
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+	langfuseobs "trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 )
 
 type captureRequestModel struct {
@@ -2115,6 +2116,32 @@ func TestRuntime_Close_ReturnsRunnerCloseError(t *testing.T) {
 	require.True(t, runnerClosed)
 }
 
+func TestRuntime_Close_JoinsTelemetryShutdownError(t *testing.T) {
+	t.Parallel()
+
+	runnerErr := errors.New("runner close boom")
+	telemetryErr := errors.New("telemetry shutdown boom")
+	runnerClosed := false
+	telemetryClosed := false
+
+	rt := &Runtime{
+		runner: &stubRunner{
+			closeErr: runnerErr,
+			closed:   &runnerClosed,
+		},
+		telemetryShutdown: func(context.Context) error {
+			telemetryClosed = true
+			return telemetryErr
+		},
+	}
+
+	err := rt.Close()
+	require.ErrorIs(t, err, runnerErr)
+	require.ErrorIs(t, err, telemetryErr)
+	require.True(t, runnerClosed)
+	require.True(t, telemetryClosed)
+}
+
 func TestRuntime_Close_NilIsNoop(t *testing.T) {
 	t.Parallel()
 
@@ -2127,6 +2154,254 @@ func TestRuntime_Close_NilRunnerIsNoop(t *testing.T) {
 
 	rt := &Runtime{}
 	require.NoError(t, rt.Close())
+}
+
+func TestShutdownTelemetryWithContext_NilContextUsesBackground(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	called := false
+	err := shutdownTelemetryWithContext(
+		nil,
+		func(ctx context.Context) error {
+			called = true
+			require.NotNil(t, ctx)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, called)
+}
+
+func TestNewRuntime_LangfuseRequiredErrorExitCode(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		return nil, errors.New("langfuse boom")
+	}
+
+	cfgPath := writeTempConfig(t, `
+observability:
+  langfuse:
+    enabled: true
+    required: true
+`)
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.Nil(t, rt)
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "langfuse config failed")
+}
+
+func TestNewRuntime_WithLangfuse_Smoke(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+
+	startCalls := 0
+	shutdownCalls := 0
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		startCalls++
+		return func(context.Context) error {
+			shutdownCalls++
+			return nil
+		}, nil
+	}
+
+	cfgPath := writeTempConfig(t, `
+observability:
+  langfuse:
+    enabled: true
+`)
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, rt)
+	require.NotNil(t, rt.telemetryShutdown)
+	require.Equal(t, 1, startCalls)
+	require.NoError(t, rt.Close())
+	require.Equal(t, 1, shutdownCalls)
+}
+
+func TestNewRuntime_ClosesLangfuseOnLaterError(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+
+	shutdownCalls := 0
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		return func(context.Context) error {
+			shutdownCalls++
+			return nil
+		}, nil
+	}
+
+	cfgPath := writeTempConfig(t, `
+channels:
+  - type: missing_channel
+observability:
+  langfuse:
+    enabled: true
+`)
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.Nil(t, rt)
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create channels failed")
+	require.Equal(t, 1, shutdownCalls)
+}
+
+func TestRun_LangfuseRequiredErrorExitCode(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		return nil, errors.New("langfuse boom")
+	}
+
+	cfgPath := writeTempConfig(t, `
+observability:
+  langfuse:
+    enabled: true
+    required: true
+`)
+
+	err := run(context.Background(), []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "langfuse config failed")
+}
+
+func TestRun_WithLangfuse_Smoke(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+
+	startCalls := 0
+	shutdownCalls := 0
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		startCalls++
+		return func(context.Context) error {
+			shutdownCalls++
+			return nil
+		}, nil
+	}
+
+	cfgPath := writeTempConfig(t, `
+observability:
+  langfuse:
+    enabled: true
+`)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	err := run(ctx, []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, startCalls)
+	require.Equal(t, 1, shutdownCalls)
+}
+
+func TestRun_ClosesLangfuseOnLaterError(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+
+	shutdownCalls := 0
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		return func(context.Context) error {
+			shutdownCalls++
+			return nil
+		}, nil
+	}
+
+	cfgPath := writeTempConfig(t, `
+channels:
+  - type: missing_channel
+observability:
+  langfuse:
+    enabled: true
+`)
+
+	err := run(context.Background(), []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create channels failed")
+	require.Equal(t, 1, shutdownCalls)
 }
 
 func TestInProcGatewayClient_SendMessage_OK(t *testing.T) {

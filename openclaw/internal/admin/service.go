@@ -96,6 +96,7 @@ type Config struct {
 	AdminAddr     string
 	AdminURL      string
 	AdminAutoPort bool
+	Langfuse      LangfuseStatus
 
 	StateDir string
 	DebugDir string
@@ -170,11 +171,12 @@ type snapshot struct {
 	SessionBackend string `json:"session_backend,omitempty"`
 	MemoryBackend  string `json:"memory_backend,omitempty"`
 
-	GatewayAddr   string `json:"gateway_addr,omitempty"`
-	GatewayURL    string `json:"gateway_url,omitempty"`
-	AdminAddr     string `json:"admin_addr,omitempty"`
-	AdminURL      string `json:"admin_url,omitempty"`
-	AdminAutoPort bool   `json:"admin_auto_port"`
+	GatewayAddr   string         `json:"gateway_addr,omitempty"`
+	GatewayURL    string         `json:"gateway_url,omitempty"`
+	AdminAddr     string         `json:"admin_addr,omitempty"`
+	AdminURL      string         `json:"admin_url,omitempty"`
+	AdminAutoPort bool           `json:"admin_auto_port"`
+	Langfuse      LangfuseStatus `json:"langfuse"`
 
 	StateDir string `json:"state_dir,omitempty"`
 	DebugDir string `json:"debug_dir,omitempty"`
@@ -244,6 +246,7 @@ func (s *Service) Snapshot() snapshot {
 		AdminAddr:      strings.TrimSpace(s.cfg.AdminAddr),
 		AdminURL:       strings.TrimSpace(s.cfg.AdminURL),
 		AdminAutoPort:  s.cfg.AdminAutoPort,
+		Langfuse:       normalizeLangfuseStatus(s.cfg.Langfuse),
 		StateDir:       strings.TrimSpace(s.cfg.StateDir),
 		DebugDir:       strings.TrimSpace(s.cfg.DebugDir),
 		Routes:         s.cfg.GatewayRoutes,
@@ -996,6 +999,14 @@ const adminPageHTML = `<!doctype html>
         <span class="stat-label">Recent Traces</span>
         <span class="stat-value">{{.Snapshot.Debug.TraceCount}}</span>
       </article>
+      <article class="card">
+        <span class="stat-label">Langfuse</span>
+        <span class="stat-value">
+          {{if .Snapshot.Langfuse.Ready}}ready
+          {{else if .Snapshot.Langfuse.Enabled}}error
+          {{else}}off{{end}}
+        </span>
+      </article>
     </section>
 
     <section class="panels">
@@ -1101,7 +1112,8 @@ const adminPageHTML = `<!doctype html>
         <p class="subtle">
           Session-indexed trace browsing for recent gateway activity. This is
           especially useful when a Telegram or cron flow behaves strangely and
-          you want the exact recorded request and event stream.
+          you want the exact recorded request and event stream before jumping
+          into a full trace backend.
         </p>
         <dl class="meta">
           <dt>Indexed Dir</dt>
@@ -1116,6 +1128,44 @@ const adminPageHTML = `<!doctype html>
               <span class="subtle">{{.Snapshot.Debug.Error}}</span>
             {{else if .Snapshot.Debug.Enabled}}
               ready
+            {{else}}
+              idle
+            {{end}}
+          </dd>
+        </dl>
+      </article>
+
+      <article class="card">
+        <h2>Langfuse</h2>
+        <p class="subtle">
+          OpenTelemetry spans are pushed to Langfuse when the exporter starts
+          successfully. The admin surface keeps local request indexes and uses
+          trace links only as a drill-down path.
+        </p>
+        <dl class="meta">
+          <dt>Enabled</dt>
+          <dd>{{.Snapshot.Langfuse.Enabled}}</dd>
+          <dt>Ready</dt>
+          <dd>{{.Snapshot.Langfuse.Ready}}</dd>
+          <dt>UI</dt>
+          <dd>
+            {{if .Snapshot.Langfuse.UIBaseURL}}
+              <a href="{{.Snapshot.Langfuse.UIBaseURL}}" target="_blank"
+                rel="noopener noreferrer">{{.Snapshot.Langfuse.UIBaseURL}}</a>
+            {{else}}-{{end}}
+          </dd>
+          <dt>Trace Links</dt>
+          <dd>
+            {{if .Snapshot.Langfuse.TraceURLTemplate}}configured{{else}}-{{end}}
+          </dd>
+          <dt>Status</dt>
+          <dd>
+            {{if .Snapshot.Langfuse.Error}}
+              <span class="subtle">{{.Snapshot.Langfuse.Error}}</span>
+            {{else if .Snapshot.Langfuse.Ready}}
+              ready
+            {{else if .Snapshot.Langfuse.Enabled}}
+              starting
             {{else}}
               idle
             {{end}}
@@ -1434,8 +1484,13 @@ const adminPageHTML = `<!doctype html>
               {{formatTime .LastTraceAt}}<br>
               {{if .Channel}}{{.Channel}}{{end}}
               {{if .RequestID}}<br><span class="subtle">{{.RequestID}}</span>{{end}}
+              {{if .TraceID}}<br><span class="subtle">trace {{.TraceID}}</span>{{end}}
             </td>
             <td>
+              {{if .LangfuseURL}}
+              <a href="{{.LangfuseURL}}" target="_blank"
+                rel="noopener noreferrer">langfuse</a> ·
+              {{end}}
               {{if .MetaURL}}<a href="{{.MetaURL}}" target="_blank">meta</a>{{end}}
               {{if .EventsURL}} · <a href="{{.EventsURL}}" target="_blank">events</a>{{end}}
               {{if .ResultURL}} · <a href="{{.ResultURL}}" target="_blank">result</a>{{end}}
@@ -1470,8 +1525,13 @@ const adminPageHTML = `<!doctype html>
               {{if .Channel}}{{.Channel}}{{else}}-{{end}}
               {{if .RequestID}}<br><span class="subtle">{{.RequestID}}</span>{{end}}
               {{if .MessageID}}<br><span class="subtle">msg {{.MessageID}}</span>{{end}}
+              {{if .TraceID}}<br><span class="subtle">trace {{.TraceID}}</span>{{end}}
             </td>
             <td>
+              {{if .LangfuseURL}}
+              <a href="{{.LangfuseURL}}" target="_blank"
+                rel="noopener noreferrer">langfuse</a> ·
+              {{end}}
               {{if .MetaURL}}<a href="{{.MetaURL}}" target="_blank">meta</a>{{end}}
               {{if .EventsURL}} · <a href="{{.EventsURL}}" target="_blank">events</a>{{end}}
               {{if .ResultURL}} · <a href="{{.ResultURL}}" target="_blank">result</a>{{end}}
