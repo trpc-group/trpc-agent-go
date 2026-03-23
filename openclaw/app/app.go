@@ -31,6 +31,8 @@ import (
 	"syscall"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -618,6 +620,7 @@ func NewRuntime(
 			SkillsToolResults:  opts.SkillsToolResults,
 			SkillsSkipFallback: opts.SkillsSkipFallback,
 			SkillsToolingGuide: opts.SkillsToolingGuide,
+			KnowledgesConfig:   opts.KnowledgesConfig,
 			StateDir:           resolvedStateDir,
 
 			EnableLocalExec:     opts.EnableLocalExec,
@@ -1010,6 +1013,7 @@ func run(ctx context.Context, args []string) error {
 			SkillsToolResults:  opts.SkillsToolResults,
 			SkillsSkipFallback: opts.SkillsSkipFallback,
 			SkillsToolingGuide: opts.SkillsToolingGuide,
+			KnowledgesConfig:   opts.KnowledgesConfig,
 			StateDir:           resolvedStateDir,
 
 			EnableLocalExec:     opts.EnableLocalExec,
@@ -1712,6 +1716,10 @@ func newAgent(
 			instruction + "\n\n" + openClawToolingGuidance,
 		)
 	}
+	knowledgeTools, err := buildKnowledgeTools(cfg.KnowledgesConfig)
+	if err != nil {
+		return nil, err
+	}
 
 	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
@@ -1721,6 +1729,9 @@ func newAgent(
 		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
 		llmagent.WithPreloadMemory(cfg.PreloadMemory),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
+	}
+	if knowledgeTools != nil && knowledgeTools.defaultKnowledge != nil {
+		opts = append(opts, llmagent.WithKnowledge(knowledgeTools.defaultKnowledge))
 	}
 
 	cwd, _ := os.Getwd()
@@ -1765,6 +1776,9 @@ func newAgent(
 	}
 
 	tools := append([]tool.Tool(nil), extraTools...)
+	if knowledgeTools != nil && len(knowledgeTools.tools) > 0 {
+		tools = append(tools, knowledgeTools.tools...)
+	}
 	tools = append(tools, ocskills.NewListTool(repo))
 	if len(cfg.ToolProviders) > 0 {
 		extra, err := toolsFromProviders(
@@ -1971,6 +1985,7 @@ type agentConfig struct {
 	SkillsToolResults  bool
 	SkillsSkipFallback bool
 	SkillsToolingGuide *string
+	KnowledgesConfig   map[string]*yaml.Node
 
 	StateDir string
 

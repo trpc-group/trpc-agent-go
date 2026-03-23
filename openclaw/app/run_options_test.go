@@ -783,6 +783,62 @@ skills:
 	require.Equal(t, "b,c", opts.SkillsAllowBundled)
 }
 
+func TestParseRunOptions_KnowledgesEntriesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  entries:
+    - name: "docs"
+      embedder:
+        type: "openai"
+        model: "text-embedding-3-small"
+      vector_store:
+        type: "inmemory"
+        max_results: 5
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Len(t, opts.KnowledgesConfig, 1)
+	require.Contains(t, opts.KnowledgesConfig, "docs")
+	require.NotNil(t, opts.KnowledgesConfig["docs"])
+}
+
+func TestParseRunOptions_KnowledgesEntriesRequireName(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  entries:
+    - vector_store:
+        type: "inmemory"
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "knowledges.entries[0].name is empty")
+}
+
+func TestParseRunOptions_KnowledgesEntriesRejectDuplicateNames(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  entries:
+    - name: "docs"
+      vector_store:
+        type: "inmemory"
+    - name: "docs"
+      vector_store:
+        type: "inmemory"
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate knowledge name: docs")
+}
+
 func TestParseRunOptions_DebugRecorder_ConfigApplied(t *testing.T) {
 	t.Parallel()
 
