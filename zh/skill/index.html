@@ -2863,6 +2863,8 @@ https://github.com/anthropics/skills</p>
 - 写入会话临时键（按 agent 隔离，生命周期由 <code>SkillLoadMode</code> 控制）：
   - <code>temp:skill:loaded_by_agent:&lt;agent&gt;/&lt;name&gt;</code> = "1"
   - <code>temp:skill:docs_by_agent:&lt;agent&gt;/&lt;name&gt;</code> = "*" 或 JSON 字符串数组
+  - <code>temp:skill:loaded_order_by_agent:&lt;agent&gt;</code> = JSON 字符串数组，
+    按“最早触达 -&gt; 最新触达”的顺序保存 skill 名
   - 旧版 key（<code>temp:skill:loaded:&lt;name&gt;</code>、<code>temp:skill:docs:&lt;name&gt;</code>）仍被支持，
     并在读到时自动迁移。
 - 多代理提示：transfer 调用子代理时通常共享同一个 Session。key 按 agent
@@ -3019,7 +3021,8 @@ state 即可：</p>
 <ul>
 <li>默认 <code>SkillLoadModeTurn</code> 会在<strong>下一轮</strong> <code>Runner.Run</code> 开始前清空这些
   该 agent 的 <code>temp:skill:loaded_by_agent:*</code> /
-  <code>temp:skill:docs_by_agent:*</code> state key，所以“已加载列表”通常只在当前这轮
+  <code>temp:skill:docs_by_agent:*</code> /
+  <code>temp:skill:loaded_order_by_agent:*</code> state key，所以“已加载列表”通常只在当前这轮
   tool loop 里非空。</li>
 <li><code>SkillLoadModeSession</code> 会跨轮保留这些 key，所以“已加载列表”会一直
   非空，直到你手动清空（或会话过期）。</li>
@@ -3030,9 +3033,10 @@ option：</p>
 <ul>
 <li><code>llmagent.WithMaxLoadedSkills(N)</code></li>
 </ul>
-<p>它会在<strong>每次模型请求前</strong>检查当前 loaded skills，并根据 session 中最近
-的 <code>skill_load</code> / <code>skill_select_docs</code> tool result，清空更老的
-<code>temp:skill:*</code> state key，从而把 loaded skills 数量控制在 N 以内。</p>
+<p>它会在<strong>每次模型请求前</strong>检查当前 loaded skills，并清空更老的
+<code>temp:skill:*</code> state key。最近 skill 的触达顺序会写入 session state，
+并由 <code>skill_load</code> / <code>skill_select_docs</code> 自动更新，因此不会依赖字母序兜底
+或 tool result history 是否还完整保留。</p>
 <p>示例：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1">1</a></span>
 <span class="normal"><a href="#__codelineno-9-2">2</a></span>
@@ -3640,6 +3644,8 @@ option：</p>
 <p>行为：
 - 更新当前 agent 的 doc 选择 state key：
   - <code>temp:skill:docs_by_agent:&lt;agent&gt;/&lt;name&gt;</code>：<code>*</code> 表示全选；数组表示显式列表
+  - 同时刷新 <code>temp:skill:loaded_order_by_agent:&lt;agent&gt;</code>，因此
+    <code>WithMaxLoadedSkills(N)</code> 会把文档选择也视作一次“最近触达”
   - 旧版 key <code>temp:skill:docs:&lt;name&gt;</code> 仍被支持，并在读到时自动迁移</p>
 <h3 id="skill_list_docs"><code>skill_list_docs</code></h3>
 <p>声明： <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/list_docs.go">tool/skill/list_docs.go</a></p>
@@ -4019,7 +4025,7 @@ option：</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月20日 09:53:34 UTC">2026-03-20 09:53:34</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月23日 01:41:17 UTC">2026-03-23 01:41:17</span>
   </span>
 
     
