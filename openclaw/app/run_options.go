@@ -112,6 +112,12 @@ type runOptions struct {
 	AdminAddr     string
 	AdminAutoPort bool
 
+	LangfuseEnabled                      bool
+	LangfuseRequired                     bool
+	LangfuseUIBaseURL                    string
+	LangfuseTraceURLTemplate             string
+	LangfuseObservationLeafValueMaxBytes *int
+
 	A2AEnabled        bool
 	A2AHost           string
 	A2AUserIDHeader   string
@@ -836,15 +842,16 @@ type fileConfig struct {
 
 	DebugRecorder *debugRecorderConfig `yaml:"debug_recorder,omitempty"`
 
-	HTTP     *httpConfig      `yaml:"http,omitempty"`
-	Admin    *adminConfig     `yaml:"admin,omitempty"`
-	A2A      *a2aConfig       `yaml:"a2a,omitempty"`
-	Agent    *agentRunConfig  `yaml:"agent,omitempty"`
-	Model    *modelConfig     `yaml:"model,omitempty"`
-	Gateway  *gatewayConfig   `yaml:"gateway,omitempty"`
-	Channels []filePluginSpec `yaml:"channels,omitempty"`
-	Skills   *skillsConfig    `yaml:"skills,omitempty"`
-	Tools    *toolsConfig     `yaml:"tools,omitempty"`
+	HTTP          *httpConfig          `yaml:"http,omitempty"`
+	Admin         *adminConfig         `yaml:"admin,omitempty"`
+	Observability *observabilityConfig `yaml:"observability,omitempty"`
+	A2A           *a2aConfig           `yaml:"a2a,omitempty"`
+	Agent         *agentRunConfig      `yaml:"agent,omitempty"`
+	Model         *modelConfig         `yaml:"model,omitempty"`
+	Gateway       *gatewayConfig       `yaml:"gateway,omitempty"`
+	Channels      []filePluginSpec     `yaml:"channels,omitempty"`
+	Skills        *skillsConfig        `yaml:"skills,omitempty"`
+	Tools         *toolsConfig         `yaml:"tools,omitempty"`
 
 	Session *sessionConfig `yaml:"session,omitempty"`
 	Memory  *memoryConfig  `yaml:"memory,omitempty"`
@@ -858,6 +865,18 @@ type adminConfig struct {
 	Enabled  *bool   `yaml:"enabled,omitempty"`
 	Addr     *string `yaml:"addr,omitempty"`
 	AutoPort *bool   `yaml:"auto_port,omitempty"`
+}
+
+type observabilityConfig struct {
+	Langfuse *langfuseConfig `yaml:"langfuse,omitempty"`
+}
+
+type langfuseConfig struct {
+	Enabled                      *bool   `yaml:"enabled,omitempty"`
+	Required                     *bool   `yaml:"required,omitempty"`
+	UIBaseURL                    *string `yaml:"ui_base_url,omitempty"`
+	TraceURLTemplate             *string `yaml:"trace_url_template,omitempty"`
+	ObservationLeafValueMaxBytes *int    `yaml:"observation_leaf_value_max_bytes,omitempty"`
 }
 
 type a2aConfig struct {
@@ -1165,6 +1184,13 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, flagAdminAutoPort) {
 			opts.AdminAutoPort = *cfg.Admin.AutoPort
 		}
+	}
+	if cfg.Observability != nil &&
+		cfg.Observability.Langfuse != nil {
+		applyLangfuseConfig(
+			cfg.Observability.Langfuse,
+			opts,
+		)
 	}
 	if cfg.A2A != nil {
 		if cfg.A2A.Enabled != nil &&
@@ -1519,6 +1545,34 @@ func (cfg *fileConfig) apply(
 	return nil
 }
 
+func applyLangfuseConfig(
+	cfg *langfuseConfig,
+	opts *runOptions,
+) {
+	if cfg == nil || opts == nil {
+		return
+	}
+
+	if cfg.Enabled != nil {
+		opts.LangfuseEnabled = *cfg.Enabled
+	}
+	if cfg.Required != nil {
+		opts.LangfuseRequired = *cfg.Required
+	}
+	if cfg.UIBaseURL != nil {
+		opts.LangfuseUIBaseURL = strings.TrimSpace(*cfg.UIBaseURL)
+	}
+	if cfg.TraceURLTemplate != nil {
+		opts.LangfuseTraceURLTemplate = strings.TrimSpace(
+			*cfg.TraceURLTemplate,
+		)
+	}
+	if cfg.ObservationLeafValueMaxBytes != nil {
+		value := *cfg.ObservationLeafValueMaxBytes
+		opts.LangfuseObservationLeafValueMaxBytes = &value
+	}
+}
+
 func applyRalphLoopConfig(
 	cfg *ralphLoopConfig,
 	opts *runOptions,
@@ -1739,6 +1793,13 @@ func finalizeRunOptions(opts *runOptions) error {
 	if opts.AdminEnabled && opts.AdminAddr == "" {
 		opts.AdminAddr = defaultAdminAddr
 	}
+	opts.LangfuseUIBaseURL = strings.TrimRight(
+		strings.TrimSpace(opts.LangfuseUIBaseURL),
+		"/",
+	)
+	opts.LangfuseTraceURLTemplate = strings.TrimSpace(
+		opts.LangfuseTraceURLTemplate,
+	)
 	normalizeA2AOptions(opts)
 	return nil
 }

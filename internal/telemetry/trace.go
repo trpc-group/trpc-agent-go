@@ -259,6 +259,16 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 		if len(invoke.RunOptions.SpanAttributes) > 0 {
 			span.SetAttributes(invoke.RunOptions.SpanAttributes...)
 		}
+		if invoke.GetParentInvocation() == nil &&
+			len(invoke.RunOptions.TraceStartedCallbacks) > 0 {
+			spanContext := span.SpanContext()
+			for _, callback := range invoke.RunOptions.TraceStartedCallbacks {
+				if callback == nil {
+					continue
+				}
+				callback(spanContext)
+			}
+		}
 		if bts, err := json.Marshal([]model.Message{invoke.Message}); err == nil {
 			span.SetAttributes(
 				attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
