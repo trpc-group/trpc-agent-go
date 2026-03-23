@@ -91,7 +91,7 @@ func normalizeSnapshot(raw *Snapshot) (*Snapshot, error) {
 		return nil, fmt.Errorf("entry node %q does not exist", snapshot.EntryNodeID)
 	}
 	edges := make([]Edge, 0, len(snapshot.Edges))
-	seenEdges := make(map[string]struct{}, len(snapshot.Edges))
+	seenEdges := make(map[edgeKey]struct{}, len(snapshot.Edges))
 	for _, edge := range snapshot.Edges {
 		if _, exists := nodeByID[edge.FromNodeID]; !exists {
 			return nil, fmt.Errorf("edge from node %q does not exist", edge.FromNodeID)
@@ -99,7 +99,7 @@ func normalizeSnapshot(raw *Snapshot) (*Snapshot, error) {
 		if _, exists := nodeByID[edge.ToNodeID]; !exists {
 			return nil, fmt.Errorf("edge to node %q does not exist", edge.ToNodeID)
 		}
-		key := edge.FromNodeID + "->" + edge.ToNodeID
+		key := edgeKey{from: edge.FromNodeID, to: edge.ToNodeID}
 		if _, exists := seenEdges[key]; exists {
 			continue
 		}
@@ -155,6 +155,11 @@ func normalizeSnapshot(raw *Snapshot) (*Snapshot, error) {
 	sum := sha256.Sum256(hashInput)
 	snapshot.StructureID = "struct_" + hex.EncodeToString(sum[:])
 	return snapshot, nil
+}
+
+type edgeKey struct {
+	from string
+	to   string
 }
 
 func cloneSnapshot(raw *Snapshot) *Snapshot {

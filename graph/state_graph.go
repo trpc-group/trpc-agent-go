@@ -596,7 +596,7 @@ func (sg *StateGraph) AddLLMNode(
 	runner := &llmRunner{
 		llmModel:             llmModel,
 		instruction:          instruction,
-		tools:                cloneToolsMap(tools),
+		tools:                tools,
 		refreshToolSetsOnRun: node.refreshToolSetsOnRun,
 		nodeID:               id,
 		generationConfig:     model.GenerationConfig{Stream: true},
@@ -691,9 +691,13 @@ func (sg *StateGraph) AddToolsNode(
 	toolOpts := append([]Option{WithNodeType(NodeTypeTool)}, opts...)
 	resolvedTools := cloneToolsMap(tools)
 	toolsNodeFunc, baseTools := newToolsNodeRuntime(resolvedTools, toolOpts...)
+	existingNode, existedBefore := sg.graph.Node(id)
 	sg.AddNode(id, toolsNodeFunc, toolOpts...)
 	node, ok := sg.graph.Node(id)
 	if !ok || node == nil {
+		return sg
+	}
+	if existedBefore && node == existingNode {
 		return sg
 	}
 	node.baseTools = baseTools

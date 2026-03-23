@@ -247,6 +247,32 @@ func TestExport_RejectsDuplicateNodeID(t *testing.T) {
 	assert.Contains(t, err.Error(), "duplicate node id")
 }
 
+func TestExport_NormalizesEdgesWithoutStringKeyCollisions(t *testing.T) {
+	snapshot, err := Export(context.Background(), &customExporterAgent{
+		testAgent: &testAgent{name: "root"},
+		snapshot: &Snapshot{
+			EntryNodeID: "root",
+			Nodes: []Node{
+				{NodeID: "root", Kind: NodeKindAgent, Name: "root"},
+				{NodeID: "a", Kind: NodeKindFunction, Name: "a"},
+				{NodeID: "b->c", Kind: NodeKindFunction, Name: "b->c"},
+				{NodeID: "a->b", Kind: NodeKindFunction, Name: "a->b"},
+				{NodeID: "c", Kind: NodeKindFunction, Name: "c"},
+			},
+			Edges: []Edge{
+				{FromNodeID: "a", ToNodeID: "b->c"},
+				{FromNodeID: "a->b", ToNodeID: "c"},
+				{FromNodeID: "a", ToNodeID: "b->c"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []Edge{
+		{FromNodeID: "a", ToNodeID: "b->c"},
+		{FromNodeID: "a->b", ToNodeID: "c"},
+	}, snapshot.Edges)
+}
+
 func TestExport_RejectsMissingEntryNode(t *testing.T) {
 	_, err := Export(context.Background(), &customExporterAgent{
 		testAgent: &testAgent{name: "root"},
