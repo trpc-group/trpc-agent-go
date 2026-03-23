@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -1255,6 +1256,71 @@ func TestServer_ProcessMessage_RunOptionResolver_NoExtraOptions(
 	defer runner.mu.Unlock()
 	require.Equal(t, "ok", runner.ctx.Value(resolverKey))
 	require.Empty(t, runner.opts.Instruction)
+}
+
+func TestServer_ProcessMessage_RunOptionResolver_Composes(t *testing.T) {
+	t.Parallel()
+
+	type ctxKey string
+
+	const (
+		firstKey  ctxKey = "first"
+		secondKey ctxKey = "second"
+		firstTag         = "langfuse"
+		secondTag        = "audit"
+	)
+
+	runner := &resolvingRunner{}
+	srv, err := New(
+		runner,
+		WithRunOptionResolver(func(
+			ctx context.Context,
+			_ RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			return context.WithValue(
+					ctx,
+					firstKey,
+					firstTag,
+				), []agent.RunOption{
+					agent.WithTraceStartedCallback(
+						func(oteltrace.SpanContext) {},
+					),
+				}
+		}),
+		WithRunOptionResolver(func(
+			ctx context.Context,
+			_ RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			require.Equal(t, firstTag, ctx.Value(firstKey))
+			return context.WithValue(
+					ctx,
+					secondKey,
+					secondTag,
+				), []agent.RunOption{
+					agent.WithTraceStartedCallback(
+						func(oteltrace.SpanContext) {},
+					),
+				}
+		}),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			Channel: "telegram",
+			From:    "u1",
+			Text:    "hello",
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "req-1", rsp.RequestID)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, firstTag, runner.ctx.Value(firstKey))
+	require.Equal(t, secondTag, runner.ctx.Value(secondKey))
+	require.Len(t, runner.opts.TraceStartedCallbacks, 2)
 }
 
 func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {

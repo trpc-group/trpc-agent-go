@@ -256,14 +256,16 @@ func TestBuildLangfuseRunOptionResolver_SetsTraceID(t *testing.T) {
 	for _, opt := range runOpts {
 		opt(opts)
 	}
-	require.Len(t, opts.SpanAttributes, 1)
-	require.Equal(
-		t,
-		langfuseTraceNameKey,
-		string(opts.SpanAttributes[0].Key),
-	)
-	require.Equal(t, "wecom msg-1", opts.SpanAttributes[0].Value.AsString())
-	require.Len(t, opts.TraceStartedCallbacks, 1)
+	foundTraceName := false
+	for _, attr := range opts.SpanAttributes {
+		if string(attr.Key) != langfuseTraceNameKey {
+			continue
+		}
+		require.Equal(t, "wecom msg-1", attr.Value.AsString())
+		foundTraceName = true
+	}
+	require.True(t, foundTraceName)
+	require.NotEmpty(t, opts.TraceStartedCallbacks)
 
 	traceID, err := oteltrace.TraceIDFromHex(
 		"0123456789abcdef0123456789abcdef",
@@ -271,13 +273,15 @@ func TestBuildLangfuseRunOptionResolver_SetsTraceID(t *testing.T) {
 	require.NoError(t, err)
 	spanID, err := oteltrace.SpanIDFromHex("0123456789abcdef")
 	require.NoError(t, err)
-	opts.TraceStartedCallbacks[0](oteltrace.NewSpanContext(
-		oteltrace.SpanContextConfig{
-			TraceID:    traceID,
-			SpanID:     spanID,
-			TraceFlags: oteltrace.FlagsSampled,
-		},
-	))
+	for _, callback := range opts.TraceStartedCallbacks {
+		callback(oteltrace.NewSpanContext(
+			oteltrace.SpanContextConfig{
+				TraceID:    traceID,
+				SpanID:     spanID,
+				TraceFlags: oteltrace.FlagsSampled,
+			},
+		))
+	}
 
 	metaPath := filepath.Join(trace.Dir(), "meta.json")
 	metaRaw, err := os.ReadFile(metaPath)

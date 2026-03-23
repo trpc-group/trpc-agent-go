@@ -296,7 +296,29 @@ func WithDebugRecorder(rec *debugrecorder.Recorder) Option {
 // WithRunOptionResolver decorates one gateway run before runner.Run.
 func WithRunOptionResolver(resolver RunOptionResolver) Option {
 	return func(o *options) {
-		o.runOptionResolver = resolver
+		if resolver == nil {
+			o.runOptionResolver = nil
+			return
+		}
+		prev := o.runOptionResolver
+		if prev == nil {
+			o.runOptionResolver = resolver
+			return
+		}
+		o.runOptionResolver = func(
+			ctx context.Context,
+			input RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			prevCtx, prevOpts := prev(ctx, input)
+			if prevCtx == nil {
+				prevCtx = ctx
+			}
+			nextCtx, nextOpts := resolver(prevCtx, input)
+			if nextCtx == nil {
+				nextCtx = prevCtx
+			}
+			return nextCtx, append(prevOpts, nextOpts...)
+		}
 	}
 }
 
