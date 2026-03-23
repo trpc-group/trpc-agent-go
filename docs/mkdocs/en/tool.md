@@ -288,6 +288,37 @@ agent := llmagent.New("mcp-assistant",
     llmagent.WithToolSets([]tool.ToolSet{mcpToolSet}))
 ```
 
+### ToolSet Lifecycle and Ownership
+
+The `ToolSet` interface explicitly includes `Close()`. That means the
+party that creates a ToolSet is also responsible for releasing the
+connections, sessions, caches, and other resources it owns.
+
+Important ownership boundaries:
+
+- `llmagent.WithToolSets(...)` only attaches a `ToolSet` to an Agent for
+  use. It does **not** transfer ownership.
+- `LLMAgent.AddToolSet(...)`, `LLMAgent.RemoveToolSet(...)`, and
+  `LLMAgent.SetToolSets(...)` only change which tools the Agent exposes.
+  They do **not** automatically call `Close()` on replaced or removed
+  ToolSets.
+- `runner.NewRunner(...)` and `runner.NewRunnerWithAgentFactory(...)`
+  likewise do not automatically reclaim a ToolSet just because an Agent
+  uses it.
+
+Recommended patterns:
+
+- **Long-lived ToolSet**: create it at startup, optionally call
+  `Init(ctx)`, reuse it across many runs, and close it during
+  application shutdown.
+- **Per-request ToolSet**: create it only for the current run, then
+  clean it up explicitly when that run finishes.
+
+If your goal is only to let a ToolSet fetch the **latest** tool list on
+each run, prefer `llmagent.WithRefreshToolSetsOnRun(true)`. That refreshes
+`ToolSet.Tools(ctx)` per run, but it does **not** recreate or close the
+ToolSet instance itself.
+
 ### Transport Configuration
 
 MCP ToolSet supports three transports via the `Transport` field:
@@ -404,6 +435,19 @@ ToolSets to honor a specific context for initialization or tool
 discovery without refreshing the tool list on every run, keep using the
 pattern shown in the `examples/mcptool/http_headers` example, where you
 manually call `toolSet.Tools(ctx)` and pass the tools via `WithTools`.
+
+Common pitfalls:
+
+- `WithRefreshToolSetsOnRun(true)` refreshes the **tool list**, not the
+  ToolSet instance itself. It does not automatically create, replace, or
+  close ToolSets for you.
+- `tools/call` uses the current run context, but if you call
+  `agent.Tools()` outside a run, the ToolSet will see
+  `context.Background()`.
+- If `initialize/tools/list` must strictly use a custom context
+  (for example, per-request auth headers or tracing values), the safer
+  pattern is usually to call `toolSet.Tools(ctx)` yourself and inject the
+  resulting tools via `WithTools(...)`.
 
 ## Agent Tool (AgentTool)
 
@@ -1006,6 +1050,16 @@ These methods are concurrency‑safe and automatically recompute:
 
 - Aggregated tools (direct tools + ToolSets + knowledge tools + skill tools)
 - User tool tracking (used by the smart filtering logic above)
+
+One important lifecycle detail:
+
+- `AddToolSet` does **not** automatically close a replaced ToolSet.
+- `RemoveToolSet` does **not** automatically close a removed ToolSet.
+- `SetToolSets` does **not** automatically close ToolSets from the
+  previous slice.
+
+If you created those ToolSet instances, you still need to close them
+explicitly at the right time.
 
 **Typical usage pattern:**
 
