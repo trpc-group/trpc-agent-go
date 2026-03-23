@@ -365,27 +365,51 @@ func escapeNodeIDSegment(name string) string {
 func validateSurfaceValue(surfaceType SurfaceType, value SurfaceValue) error {
 	switch surfaceType {
 	case SurfaceTypeInstruction, SurfaceTypeGlobalInstruction:
-		if len(value.FewShot) > 0 || value.Model != nil || len(value.Tools) > 0 || len(value.Skills) > 0 {
-			return errors.New("text surface must not carry other value branches")
-		}
+		return validateTextSurfaceValue(value)
 	case SurfaceTypeFewShot:
-		if value.Text != nil || value.Model != nil || len(value.Tools) > 0 || len(value.Skills) > 0 {
-			return errors.New("few-shot surface must not carry other value branches")
-		}
+		return validateFewShotSurfaceValue(value)
 	case SurfaceTypeModel:
-		if value.Text != nil || len(value.FewShot) > 0 || len(value.Tools) > 0 || len(value.Skills) > 0 {
-			return errors.New("model surface must not carry other value branches")
-		}
+		return validateModelSurfaceValue(value)
 	case SurfaceTypeTool:
-		if value.Text != nil || len(value.FewShot) > 0 || value.Model != nil || len(value.Skills) > 0 {
-			return errors.New("tool surface must not carry other value branches")
-		}
+		return validateToolSurfaceValue(value)
 	case SurfaceTypeSkill:
-		if value.Text != nil || len(value.FewShot) > 0 || value.Model != nil || len(value.Tools) > 0 {
-			return errors.New("skill surface must not carry other value branches")
-		}
+		return validateSkillSurfaceValue(value)
 	default:
 		return fmt.Errorf("unknown surface type %q", surfaceType)
+	}
+}
+
+func validateTextSurfaceValue(value SurfaceValue) error {
+	if len(value.FewShot) > 0 || value.Model != nil || len(value.Tools) > 0 || len(value.Skills) > 0 {
+		return errors.New("text surface must not carry other value branches")
+	}
+	return nil
+}
+
+func validateFewShotSurfaceValue(value SurfaceValue) error {
+	if value.Text != nil || value.Model != nil || len(value.Tools) > 0 || len(value.Skills) > 0 {
+		return errors.New("few-shot surface must not carry other value branches")
+	}
+	return nil
+}
+
+func validateModelSurfaceValue(value SurfaceValue) error {
+	if value.Text != nil || len(value.FewShot) > 0 || len(value.Tools) > 0 || len(value.Skills) > 0 {
+		return errors.New("model surface must not carry other value branches")
+	}
+	return nil
+}
+
+func validateToolSurfaceValue(value SurfaceValue) error {
+	if value.Text != nil || len(value.FewShot) > 0 || value.Model != nil || len(value.Skills) > 0 {
+		return errors.New("tool surface must not carry other value branches")
+	}
+	return nil
+}
+
+func validateSkillSurfaceValue(value SurfaceValue) error {
+	if value.Text != nil || len(value.FewShot) > 0 || value.Model != nil || len(value.Tools) > 0 {
+		return errors.New("skill surface must not carry other value branches")
 	}
 	return nil
 }
