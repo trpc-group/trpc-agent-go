@@ -402,12 +402,18 @@ func isDocFile(name string) bool {
 const (
 	StateKeyLoadedPrefix = "temp:skill:loaded:"
 	StateKeyDocsPrefix   = "temp:skill:docs:"
+	// StateKeyLoadedOrderPrefix stores the per-agent skill touch order
+	// used by max-loaded-skills eviction.
+	StateKeyLoadedOrderPrefix = "temp:skill:loaded_order:"
 	// StateKeyLoadedByAgentPrefix scopes skill-loaded markers by agent name.
 	// This prevents a sub-agent's skill_load from leaking into a parent agent's
 	// prompt in multi-agent runs that share a Session.
 	StateKeyLoadedByAgentPrefix = "temp:skill:loaded_by_agent:"
 	// StateKeyDocsByAgentPrefix scopes doc selections by agent name.
 	StateKeyDocsByAgentPrefix = "temp:skill:docs_by_agent:"
+	// StateKeyLoadedOrderByAgentPrefix scopes the skill touch order by agent
+	// name so each agent keeps its own recent-skill window.
+	StateKeyLoadedOrderByAgentPrefix = "temp:skill:loaded_order_by_agent:"
 	// StateKeyArtifacts stores per-tool-call artifact refs for replay. The value
 	// is a JSON object like:
 	// {"tool_call_id":"...","artifacts":[{"name":"...","version":3,

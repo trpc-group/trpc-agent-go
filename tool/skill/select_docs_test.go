@@ -55,7 +55,10 @@ func TestSelectDocsTool_ReplaceAndAll(t *testing.T) {
 	repo, err := skill.NewFSRepository(root)
 	require.NoError(t, err)
 	sd := NewSelectDocsTool(repo)
-	inv := &agent.Invocation{AgentName: "tester"}
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session:   &session.Session{State: session.StateMap{}},
+	}
 
 	// replace with specific doc
 	out, err := sd.Call(context.Background(), []byte(
@@ -74,6 +77,13 @@ func TestSelectDocsTool_ReplaceAndAll(t *testing.T) {
 	require.NotNil(t, delta)
 	require.Contains(t,
 		string(delta[skill.DocsKey("tester", demoSkill)]), usageDoc)
+	require.Equal(
+		t,
+		`["demo"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
+	inv.Session.State[skill.LoadedOrderKey("tester")] =
+		delta[skill.LoadedOrderKey("tester")]
 
 	// include all
 	out, err = sd.Call(context.Background(), []byte(
@@ -84,6 +94,11 @@ func TestSelectDocsTool_ReplaceAndAll(t *testing.T) {
 	delta = sd.StateDeltaForInvocation(inv, "call-2", nil, b)
 	require.Equal(t, []byte("*"),
 		delta[skill.DocsKey("tester", demoSkill)])
+	require.Equal(
+		t,
+		`["demo"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
 }
 
 func TestSelectDocsTool_AddAndClear(t *testing.T) {
@@ -128,6 +143,11 @@ func TestSelectDocsTool_AddAndClear(t *testing.T) {
 	delta := sd.StateDeltaForInvocation(inv, "call-3", nil, b)
 	require.Equal(t, "[]",
 		string(delta[skill.DocsKey("tester", demoSkill)]))
+	require.Equal(
+		t,
+		`["demo"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
 }
 
 // stubRepo returns error for any Get. Others are unused in tests.
