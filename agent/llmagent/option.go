@@ -543,7 +543,8 @@ func WithSkillLoadMode(mode string) Option {
 // WithMaxLoadedSkills caps how many skills remain "loaded" in session
 // state at the same time.
 //
-// When max <= 0, no cap is applied (default behavior).
+// When max <= 0, no cap is applied (default behavior). Recent skill
+// touches are tracked by skill_load / skill_select_docs state updates.
 func WithMaxLoadedSkills(max int) Option {
 	return func(opts *Options) {
 		opts.MaxLoadedSkills = max

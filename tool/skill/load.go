@@ -105,7 +105,8 @@ func (t *LoadTool) Call(ctx context.Context, args []byte) (any, error) {
 
 // StateDelta builds delta keys to mark loaded skill and doc selection.
 func (t *LoadTool) StateDelta(_ string, args []byte, _ []byte) map[string][]byte {
-	return t.stateDelta("", args)
+	delta, _ := t.stateDelta("", args)
+	return delta
 }
 
 // StateDeltaForInvocation writes agent-scoped state for the invocation.
@@ -122,20 +123,26 @@ func (t *LoadTool) StateDeltaForInvocation(
 	if inv != nil {
 		agentName = inv.AgentName
 	}
-	return t.stateDelta(agentName, args)
+	delta, skillName := t.stateDelta(agentName, args)
+	return appendLoadedOrderStateDelta(
+		inv,
+		agentName,
+		delta,
+		skillName,
+	)
 }
 
 func (t *LoadTool) stateDelta(
 	agentName string,
 	args []byte,
-) map[string][]byte {
+) (map[string][]byte, string) {
 	var in loadInput
 	if err := json.Unmarshal(args, &in); err != nil {
 		log.Warnf("skill_load state parse failed: %v", err)
-		return nil
+		return nil, ""
 	}
 	if in.Skill == "" {
-		return nil
+		return nil, ""
 	}
 	delta := make(map[string][]byte)
 	// Mark as loaded.
@@ -152,7 +159,7 @@ func (t *LoadTool) stateDelta(
 			delta[dk] = b
 		}
 	}
-	return delta
+	return delta, in.Skill
 }
 
 var _ tool.Tool = (*LoadTool)(nil)

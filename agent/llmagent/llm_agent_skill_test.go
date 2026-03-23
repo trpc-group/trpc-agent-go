@@ -559,15 +559,19 @@ func TestLLMAgent_WithMaxLoadedSkills_WiresProcessor(t *testing.T) {
 			[]byte("1"),
 		)
 	}
+	sess.SetState(
+		skill.LoadedOrderKey("tester"),
+		[]byte(`["a","b","c","d"]`),
+	)
 
 	req := &model.Request{Messages: nil}
 	srp.ProcessRequest(context.Background(), inv, req, nil)
 
-	v, ok := sess.GetState(skill.LoadedKey("tester", "d"))
+	v, ok := sess.GetState(skill.LoadedKey("tester", "a"))
 	require.True(t, ok)
 	require.Empty(t, v)
 
-	for _, name := range []string{"a", "b", "c"} {
+	for _, name := range []string{"b", "c", "d"} {
 		v, ok = sess.GetState(skill.LoadedKey("tester", name))
 		require.True(t, ok)
 		require.Equal(t, []byte("1"), v)
