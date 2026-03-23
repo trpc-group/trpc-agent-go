@@ -2247,6 +2247,47 @@ observability:
 	require.Equal(t, 1, shutdownCalls)
 }
 
+func TestNewRuntime_ClosesLangfuseOnLaterError(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+
+	shutdownCalls := 0
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		return func(context.Context) error {
+			shutdownCalls++
+			return nil
+		}, nil
+	}
+
+	cfgPath := writeTempConfig(t, `
+channels:
+  - type: missing_channel
+observability:
+  langfuse:
+    enabled: true
+`)
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.Nil(t, rt)
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create channels failed")
+	require.Equal(t, 1, shutdownCalls)
+}
+
 func TestRun_LangfuseRequiredErrorExitCode(t *testing.T) {
 	restore := langfuseStart
 	t.Cleanup(func() {
@@ -2319,6 +2360,47 @@ observability:
 	})
 	require.NoError(t, err)
 	require.Equal(t, 1, startCalls)
+	require.Equal(t, 1, shutdownCalls)
+}
+
+func TestRun_ClosesLangfuseOnLaterError(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+
+	shutdownCalls := 0
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		return func(context.Context) error {
+			shutdownCalls++
+			return nil
+		}, nil
+	}
+
+	cfgPath := writeTempConfig(t, `
+channels:
+  - type: missing_channel
+observability:
+  langfuse:
+    enabled: true
+`)
+
+	err := run(context.Background(), []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create channels failed")
 	require.Equal(t, 1, shutdownCalls)
 }
 

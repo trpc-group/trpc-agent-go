@@ -897,9 +897,19 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 	langfuseStatus := admin.LangfuseStatus{}
+	var langfuseShutdown func(context.Context) error
 	if langfuseRT != nil {
 		langfuseStatus = langfuseRT.adminStatus
+		langfuseShutdown = langfuseRT.shutdown
 	}
+	defer func() {
+		if langfuseShutdown == nil {
+			return
+		}
+		if err := shutdownTelemetry(langfuseShutdown); err != nil {
+			log.Warnf("shutdown langfuse failed: %v", err)
+		}
+	}()
 
 	needsModel := agentType == agentTypeLLM ||
 		opts.SessionSummaryEnabled ||
@@ -1285,16 +1295,13 @@ func run(ctx context.Context, args []string) error {
 		_ = cronRunner.Close()
 	}
 	_ = r.Close()
-	var langfuseShutdown func(context.Context) error
-	if langfuseRT != nil {
-		langfuseShutdown = langfuseRT.shutdown
-	}
 	if err := shutdownTelemetryWithContext(
 		shutdownCtx,
 		langfuseShutdown,
 	); err != nil {
 		log.Warnf("shutdown langfuse failed: %v", err)
 	}
+	langfuseShutdown = nil
 
 	for received < workerCount {
 		select {

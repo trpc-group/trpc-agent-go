@@ -165,7 +165,7 @@ func buildLangfuseRunOptionResolver(
 		ctx = withLangfuseBaggage(ctx, appName, input)
 
 		runOpts := make([]agent.RunOption, 0, 2)
-		traceName := buildLangfuseTraceName(input)
+		traceName := buildLangfuseTraceName(appName, input)
 		if traceName != "" {
 			runOpts = append(
 				runOpts,
@@ -267,9 +267,13 @@ func setLangfuseBaggageMember(
 }
 
 func buildLangfuseTraceName(
+	fallbackAppName string,
 	input gateway.RunOptionInput,
 ) string {
 	channel := strings.TrimSpace(input.Inbound.Channel)
+	if channel == "" {
+		channel = strings.TrimSpace(fallbackAppName)
+	}
 	if channel == "" {
 		channel = appName
 	}

@@ -658,22 +658,20 @@ func (t *Trace) SetTraceID(traceID string) error {
 	}
 
 	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	if t.traceID == traceID {
-		t.mu.Unlock()
 		return nil
 	}
-	t.traceID = traceID
-	metaPath := t.metaPath
-	traceRef := t.traceRef
-	t.mu.Unlock()
 
-	if err := writeTraceIDJSON(metaPath, traceID); err != nil {
+	if err := writeTraceIDJSON(t.metaPath, traceID); err != nil {
 		return err
 	}
-	if traceRef == "" {
-		return nil
+	if err := writeTraceIDJSON(t.traceRef, traceID); err != nil {
+		return err
 	}
-	return writeTraceIDJSON(traceRef, traceID)
+	t.traceID = traceID
+	return nil
 }
 
 type traceKey struct{}

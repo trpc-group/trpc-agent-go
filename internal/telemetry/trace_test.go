@@ -438,6 +438,23 @@ func TestTraceBeforeInvokeAgent_IgnoresNilTraceStartedCallback(t *testing.T) {
 	})
 }
 
+func TestTraceBeforeInvokeAgent_SkipsChildTraceStartedCallback(
+	t *testing.T,
+) {
+	root := agent.NewInvocation()
+	root.RunOptions.TraceStartedCallbacks = []agent.TraceStartedCallback{
+		func(trace.SpanContext) {
+			t.Fatal("child invocation should not trigger root callback")
+		},
+	}
+	child := root.Clone()
+	span := newRecordingSpan()
+
+	require.NotPanics(t, func() {
+		TraceBeforeInvokeAgent(span, child, "desc", "inst", nil)
+	})
+}
+
 func TestNewChatSpanName(t *testing.T) {
 	tests := []struct {
 		name         string

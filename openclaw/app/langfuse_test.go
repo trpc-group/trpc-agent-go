@@ -393,7 +393,7 @@ func TestBuildLangfuseTraceName_Fallbacks(t *testing.T) {
 	require.Equal(
 		t,
 		"wecom req-1",
-		buildLangfuseTraceName(gateway.RunOptionInput{
+		buildLangfuseTraceName("", gateway.RunOptionInput{
 			Inbound:   gateway.InboundMessage{Channel: "wecom"},
 			RequestID: "req-1",
 		}),
@@ -401,9 +401,14 @@ func TestBuildLangfuseTraceName_Fallbacks(t *testing.T) {
 	require.Equal(
 		t,
 		"wecom request",
-		buildLangfuseTraceName(gateway.RunOptionInput{
+		buildLangfuseTraceName("", gateway.RunOptionInput{
 			Inbound: gateway.InboundMessage{Channel: "wecom"},
 		}),
+	)
+	require.Equal(
+		t,
+		"custom-app request",
+		buildLangfuseTraceName("custom-app", gateway.RunOptionInput{}),
 	)
 }
 
