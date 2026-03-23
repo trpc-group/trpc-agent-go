@@ -611,7 +611,7 @@ func buildSkillRunTool(options *Options) *toolskill.RunTool {
 		exec = defaultCodeExecutor()
 	}
 
-	runOpts := make([]func(*toolskill.RunTool), 0, 4)
+	runOpts := make([]func(*toolskill.RunTool), 0, 5)
 	if len(options.skillRunAllowedCommands) > 0 {
 		runOpts = append(
 			runOpts,
@@ -635,6 +635,12 @@ func buildSkillRunTool(options *Options) *toolskill.RunTool {
 		runOpts = append(
 			runOpts,
 			toolskill.WithRequireSkillLoaded(true),
+		)
+	}
+	if options.skillRunStager != nil {
+		runOpts = append(
+			runOpts,
+			toolskill.WithSkillStager(options.skillRunStager),
 		)
 	}
 
