@@ -47,6 +47,8 @@ type RunTool struct {
 	exec codeexecutor.CodeExecutor
 	reg  *codeexecutor.WorkspaceRegistry
 
+	skillStager SkillStager
+
 	allowedCmds map[string]struct{}
 	deniedCmds  map[string]struct{}
 
@@ -83,6 +85,9 @@ func NewRunTool(
 		if opt != nil {
 			opt(rt)
 		}
+	}
+	if rt.skillStager == nil {
+		rt.skillStager = newCopySkillStager(rt)
 	}
 	rt.loadAllowedCommandsFromEnv()
 	rt.loadDeniedCommandsFromEnv()
@@ -433,15 +438,16 @@ func (t *RunTool) Call(
 		ctx,
 		in,
 	)
-	eng, ws, ctxIO, staged, stageWarn, err := t.prepareWorkspaceForRun(
-		ctx,
-		in,
-	)
+	eng, ws, skillRoot, ctxIO, staged, stageWarn, err := t.
+		prepareWorkspaceForRun(
+			ctx,
+			in,
+		)
 	if err != nil {
 		return nil, err
 	}
-	cwd := resolveCWD(in.Cwd, in.Skill)
-	rr, err := t.runProgram(ctxIO, eng, ws, cwd, in)
+	cwd := resolveCWD(in.Cwd, skillRoot)
+	rr, err := t.runProgram(ctxIO, eng, ws, skillRoot, cwd, in)
 	if err != nil {
 		return nil, err
 	}
@@ -580,31 +586,54 @@ func (t *RunTool) prepareWorkspaceForRun(
 ) (
 	codeexecutor.Engine,
 	codeexecutor.Workspace,
+	string,
 	context.Context,
 	[]stagedInput,
 	[]string,
 	error,
 ) {
-	root, err := t.repo.Path(in.Skill)
-	if err != nil {
-		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
-	}
 	eng := t.ensureEngine()
 	ws, err := t.createWorkspace(ctx, eng, in.Skill)
 	if err != nil {
-		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
 	}
-	if err := t.stageSkill(ctx, eng, ws, root, in.Skill); err != nil {
-		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+	stageRes, err := t.stageSkillForRun(ctx, eng, ws, in.Skill)
+	if err != nil {
+		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
 	}
 	staged, stageWarn := t.stageUserFileInputs(ctx, eng, ws)
 	ctxIO := withArtifactContext(ctx)
 	if len(in.Inputs) > 0 {
 		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
-			return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+			return nil, codeexecutor.Workspace{}, "", nil, nil,
+				nil, err
 		}
 	}
-	return eng, ws, ctxIO, staged, stageWarn, nil
+	return eng, ws, stageRes.WorkspaceSkillDir, ctxIO, staged, stageWarn,
+		nil
+}
+
+func (t *RunTool) stageSkillForRun(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	name string,
+) (SkillStageResult, error) {
+	if t.skillStager == nil {
+		return SkillStageResult{}, fmt.Errorf(
+			errSkillStagerNotConfigured,
+		)
+	}
+	res, err := t.skillStager.StageSkill(ctx, SkillStageRequest{
+		SkillName:  name,
+		Repository: t.repo,
+		Engine:     eng,
+		Workspace:  ws,
+	})
+	if err != nil {
+		return SkillStageResult{}, err
+	}
+	return normalizeSkillStageResult(res)
 }
 
 func (t *RunTool) buildRunOutput(
@@ -1511,7 +1540,10 @@ func resolveCWD(cwd string, name string) string {
 	// skill root. "$WORK_DIR" style paths resolve to workspace-relative
 	// roots. Absolute paths are treated as workspace-absolute and must
 	// start with known workspace dirs like "/skills" or "/work".
-	base := path.Join(codeexecutor.DirSkills, name)
+	base := strings.TrimSpace(name)
+	if base == "" {
+		base = "."
+	}
 	s := strings.TrimSpace(cwd)
 	s = strings.ReplaceAll(s, "\\", "/")
 	if s == "" {
@@ -1557,10 +1589,18 @@ func (t *RunTool) runProgram(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
+	skillRoot string,
 	cwd string,
 	in runInput,
 ) (codeexecutor.RunResult, error) {
-	spec, err := t.buildRunProgramSpec(ctx, eng, ws, cwd, in)
+	spec, err := t.buildRunProgramSpec(
+		ctx,
+		eng,
+		ws,
+		skillRoot,
+		cwd,
+		in,
+	)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
@@ -1571,6 +1611,7 @@ func (t *RunTool) buildRunProgramSpec(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
+	skillRoot string,
 	cwd string,
 	in runInput,
 ) (codeexecutor.RunProgramSpec, error) {
@@ -1587,7 +1628,7 @@ func (t *RunTool) buildRunProgramSpec(
 		return codeexecutor.RunProgramSpec{}, err
 	}
 
-	venvRel, venvBinRel := venvRelPaths(cwd, in.Skill)
+	venvRel, venvBinRel := venvRelPaths(cwd, skillRoot)
 
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
 		injectVenvEnv(env, venvRel, venvBinRel)
@@ -1629,12 +1670,15 @@ func (t *RunTool) buildRunProgramSpec(
 	}, nil
 }
 
-func venvRelPaths(cwd string, skillName string) (string, string) {
+func venvRelPaths(cwd string, skillRoot string) (string, string) {
 	base := path.Clean(strings.TrimSpace(cwd))
 	if base == "" {
 		base = "."
 	}
-	skillRoot := path.Join(codeexecutor.DirSkills, skillName)
+	skillRoot = path.Clean(strings.TrimSpace(skillRoot))
+	if skillRoot == "" {
+		skillRoot = "."
+	}
 	venv := path.Join(skillRoot, skillDirVenv)
 	venvBin := path.Join(venv, "bin")
 
