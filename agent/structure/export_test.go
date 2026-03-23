@@ -364,6 +364,43 @@ func TestExport_RejectsInvalidSurfaceUnionValue(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid surface")
 }
 
+func TestValidateSurfaceValue_CoversAdditionalBranches(t *testing.T) {
+	fewShot := []FewShotExample{
+		{
+			Messages: []FewShotMessage{
+				{Role: "user", Content: "hello"},
+			},
+		},
+	}
+	require.NoError(t, validateSurfaceValue(SurfaceTypeFewShot, SurfaceValue{FewShot: fewShot}))
+	require.Error(t, validateSurfaceValue(SurfaceTypeFewShot, SurfaceValue{
+		Text:    stringPtr("invalid"),
+		FewShot: fewShot,
+	}))
+	require.NoError(t, validateSurfaceValue(SurfaceTypeModel, SurfaceValue{
+		Model: &ModelRef{Name: "gpt"},
+	}))
+	require.Error(t, validateSurfaceValue(SurfaceTypeModel, SurfaceValue{
+		Model: &ModelRef{Name: "gpt"},
+		Tools: []ToolRef{{ID: "echo"}},
+	}))
+	require.NoError(t, validateSurfaceValue(SurfaceTypeTool, SurfaceValue{
+		Tools: []ToolRef{{ID: "echo"}},
+	}))
+	require.Error(t, validateSurfaceValue(SurfaceTypeTool, SurfaceValue{
+		Tools:  []ToolRef{{ID: "echo"}},
+		Skills: []SkillRef{{ID: "writer"}},
+	}))
+	require.NoError(t, validateSurfaceValue(SurfaceTypeSkill, SurfaceValue{
+		Skills: []SkillRef{{ID: "writer"}},
+	}))
+	require.Error(t, validateSurfaceValue(SurfaceTypeSkill, SurfaceValue{
+		Skills: []SkillRef{{ID: "writer"}},
+		Tools:  []ToolRef{{ID: "echo"}},
+	}))
+	require.Error(t, validateSurfaceValue(SurfaceType("unknown"), SurfaceValue{}))
+}
+
 func TestExport_ClonesToolSchemas(t *testing.T) {
 	inputSchema := &tool.Schema{
 		Type: "object",
@@ -427,6 +464,110 @@ func TestExport_ClonesToolSchemas(t *testing.T) {
 	assert.Equal(t, "number", inputSchema.Defs["shared"].Type)
 	outputSchema.Items.Type = "number"
 	assert.Equal(t, "string", exported.OutputSchema.Items.Type)
+}
+
+func TestCloneHelpers_CloneFewShotAndSchemaValues(t *testing.T) {
+	originalFewShot := []FewShotExample{
+		{
+			Messages: []FewShotMessage{
+				{Role: "user", Content: "hello"},
+				{Role: "assistant", Content: "world"},
+			},
+		},
+	}
+	clonedFewShot := cloneFewShot(originalFewShot)
+	require.Len(t, clonedFewShot, 1)
+	originalFewShot[0].Messages[0].Content = "changed"
+	assert.Equal(t, "hello", clonedFewShot[0].Messages[0].Content)
+	schemaValues := []any{
+		[]byte("abc"),
+		[]any{"nested"},
+		map[string]any{"enabled": true},
+	}
+	clonedValues := cloneSchemaValues(schemaValues)
+	require.Len(t, clonedValues, 3)
+	schemaValues[0].([]byte)[0] = 'z'
+	schemaValues[1].([]any)[0] = "updated"
+	schemaValues[2].(map[string]any)["enabled"] = false
+	assert.Equal(t, []byte("abc"), clonedValues[0].([]byte))
+	assert.Equal(t, "nested", clonedValues[1].([]any)[0])
+	assert.Equal(t, true, clonedValues[2].(map[string]any)["enabled"])
+}
+
+func TestEscapeNodeIDSegment_EscapesReservedCharacters(t *testing.T) {
+	assert.Equal(t, "_", escapeNodeIDSegment(""))
+	assert.Equal(t, "a~1b~0c", escapeNodeIDSegment("a/b~c"))
+}
+
+func TestExport_RejectsNilSnapshot(t *testing.T) {
+	_, err := Export(context.Background(), &customExporterAgent{
+		testAgent: &testAgent{name: "root"},
+		snapshot:  nil,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil snapshot")
+}
+
+type recursiveExporterAgent struct {
+	*testAgent
+	child agent.Agent
+}
+
+func (a *recursiveExporterAgent) Export(
+	ctx context.Context,
+	exportChild ChildExporter,
+) (*Snapshot, error) {
+	snapshot := &Snapshot{
+		EntryNodeID: a.name,
+		Nodes: []Node{
+			{NodeID: a.name, Kind: NodeKindAgent, Name: a.name},
+		},
+	}
+	if a.child == nil {
+		return snapshot, nil
+	}
+	childSnapshot, err := exportChild(ctx, a.child)
+	if err != nil {
+		return nil, err
+	}
+	rebased, err := rebaseSnapshotForTest(childSnapshot, joinNodeIDForTest(a.name, a.child.Info().Name))
+	if err != nil {
+		return nil, err
+	}
+	snapshot.Nodes = append(snapshot.Nodes, rebased.Nodes...)
+	snapshot.Edges = append(snapshot.Edges, Edge{
+		FromNodeID: a.name,
+		ToNodeID:   rebased.EntryNodeID,
+	})
+	return snapshot, nil
+}
+
+func TestExport_RecursivePointerChildFallsBackToOpaqueLeaf(t *testing.T) {
+	root := &recursiveExporterAgent{testAgent: &testAgent{name: "root"}}
+	root.child = root
+	snapshot, err := Export(context.Background(), root)
+	require.NoError(t, err)
+	assert.Contains(t, snapshot.Nodes, Node{
+		NodeID: "root/root",
+		Kind:   NodeKindAgent,
+		Name:   "root",
+	})
+	assert.Contains(t, snapshot.Edges, Edge{
+		FromNodeID: "root",
+		ToNodeID:   "root/root",
+	})
+}
+
+func TestPointerIdentityHelpers_CoverFalseBranches(t *testing.T) {
+	var nilAgent *testAgent
+	assert.False(t, samePointerAgentInstance(valueExporterAgent{name: "a"}, valueExporterAgent{name: "a"}))
+	assert.False(t, samePointerAgentInstance(&testAgent{name: "a"}, &customExporterAgent{
+		testAgent: &testAgent{name: "a"},
+	}))
+	assert.False(t, samePointerAgentInstance(nilAgent, &testAgent{name: "a"}))
+	state := &exportState{}
+	state.pop()
+	assert.False(t, state.containsRecursiveAgentInstance(&testAgent{name: "a"}))
 }
 
 func TestExport_ValueAgentsDoNotTriggerFalseRecursionFallback(t *testing.T) {
