@@ -140,6 +140,37 @@ a2a:
 	require.Equal(t, "flag-description", opts.A2ADescription)
 }
 
+func TestParseRunOptions_LangfuseConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+observability:
+  langfuse:
+    enabled: true
+    required: true
+    ui_base_url: " http://127.0.0.1:3000/ "
+    trace_url_template: " http://127.0.0.1:3000/project/local-dev/traces/{{trace_id}} "
+    observation_leaf_value_max_bytes: 4096
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.True(t, opts.LangfuseEnabled)
+	require.True(t, opts.LangfuseRequired)
+	require.Equal(t, "http://127.0.0.1:3000", opts.LangfuseUIBaseURL)
+	require.Equal(
+		t,
+		"http://127.0.0.1:3000/project/local-dev/traces/{{trace_id}}",
+		opts.LangfuseTraceURLTemplate,
+	)
+	require.NotNil(t, opts.LangfuseObservationLeafValueMaxBytes)
+	require.Equal(
+		t,
+		4096,
+		*opts.LangfuseObservationLeafValueMaxBytes,
+	)
+}
+
 func TestParseRunOptions_UsesDefaultConfigPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -273,6 +274,24 @@ func TestWithSpanAttributes(t *testing.T) {
 
 	WithSpanAttributes()(opts)
 	assert.Nil(t, opts.SpanAttributes)
+}
+
+func TestWithTraceStartedCallback(t *testing.T) {
+	opts := &RunOptions{}
+	var called bool
+
+	WithTraceStartedCallback(func(oteltrace.SpanContext) {
+		called = true
+	})(opts)
+	require.Len(t, opts.TraceStartedCallbacks, 1)
+
+	opts.TraceStartedCallbacks[0](oteltrace.NewSpanContext(
+		oteltrace.SpanContextConfig{},
+	))
+	require.True(t, called)
+
+	WithTraceStartedCallback(nil)(opts)
+	require.Len(t, opts.TraceStartedCallbacks, 1)
 }
 
 func TestWithInvocationTransferInfo(t *testing.T) {

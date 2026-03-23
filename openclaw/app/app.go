@@ -432,12 +432,13 @@ type Runtime struct {
 	Admin    AdminSurface
 	Channels []channel.Channel
 
-	runner     runner.Runner
-	cronRunner closeFunc
-	sessionSvc closeFunc
-	memorySvc  closeFunc
-	cronSvc    closeFunc
-	toolSets   []tool.ToolSet
+	runner            runner.Runner
+	cronRunner        closeFunc
+	sessionSvc        closeFunc
+	memorySvc         closeFunc
+	cronSvc           closeFunc
+	toolSets          []tool.ToolSet
+	telemetryShutdown func(context.Context) error
 }
 
 // Gateway provides the HTTP handler and routes served by OpenClaw.
@@ -507,6 +508,18 @@ func NewRuntime(
 			Code: 1,
 			Err:  fmt.Errorf("debug recorder config failed: %w", err),
 		}
+	}
+	langfuseRT, err := maybeEnableLangfuse(ctx, opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("langfuse config failed: %w", err),
+		}
+	}
+	langfuseStatus := admin.LangfuseStatus{}
+	if langfuseRT != nil {
+		langfuseStatus = langfuseRT.adminStatus
+		rt.telemetryShutdown = langfuseRT.shutdown
 	}
 
 	needsModel := agentType == agentTypeLLM ||
@@ -679,6 +692,14 @@ func NewRuntime(
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
+	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
+		gwOpts = append(
+			gwOpts,
+			gateway.WithRunOptionResolver(
+				langfuseRT.runOptionResolver,
+			),
+		)
+	}
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return nil, &exitError{
@@ -774,6 +795,7 @@ func NewRuntime(
 			opts,
 			agentType,
 			instanceID,
+			langfuseStatus,
 			resolvedStateDir,
 			debugDir,
 			startedAt,
@@ -805,6 +827,7 @@ func (r *Runtime) Close() error {
 		return nil
 	}
 
+	var errs []error
 	if r.cronSvc != nil {
 		_ = r.cronSvc.Close()
 	}
@@ -815,10 +838,15 @@ func (r *Runtime) Close() error {
 	closeMemoryService(r.memorySvc)
 	closeSessionService(r.sessionSvc)
 
-	if r.runner == nil {
-		return nil
+	if r.runner != nil {
+		if err := r.runner.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return r.runner.Close()
+	if err := shutdownTelemetry(r.telemetryShutdown); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 func run(ctx context.Context, args []string) error {
@@ -861,6 +889,27 @@ func run(ctx context.Context, args []string) error {
 			Err:  fmt.Errorf("debug recorder config failed: %w", err),
 		}
 	}
+	langfuseRT, err := maybeEnableLangfuse(ctx, opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("langfuse config failed: %w", err),
+		}
+	}
+	langfuseStatus := admin.LangfuseStatus{}
+	var langfuseShutdown func(context.Context) error
+	if langfuseRT != nil {
+		langfuseStatus = langfuseRT.adminStatus
+		langfuseShutdown = langfuseRT.shutdown
+	}
+	defer func() {
+		if langfuseShutdown == nil {
+			return
+		}
+		if err := shutdownTelemetry(langfuseShutdown); err != nil {
+			log.Warnf("shutdown langfuse failed: %v", err)
+		}
+	}()
 
 	needsModel := agentType == agentTypeLLM ||
 		opts.SessionSummaryEnabled ||
@@ -1031,6 +1080,14 @@ func run(ctx context.Context, args []string) error {
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
+	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
+		gwOpts = append(
+			gwOpts,
+			gateway.WithRunOptionResolver(
+				langfuseRT.runOptionResolver,
+			),
+		)
+	}
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return &exitError{
@@ -1152,6 +1209,7 @@ func run(ctx context.Context, args []string) error {
 			opts,
 			agentType,
 			instanceID,
+			langfuseStatus,
 			resolvedStateDir,
 			debugDir,
 			startedAt,
@@ -1237,6 +1295,13 @@ func run(ctx context.Context, args []string) error {
 		_ = cronRunner.Close()
 	}
 	_ = r.Close()
+	if err := shutdownTelemetryWithContext(
+		shutdownCtx,
+		langfuseShutdown,
+	); err != nil {
+		log.Warnf("shutdown langfuse failed: %v", err)
+	}
+	langfuseShutdown = nil
 
 	for received < workerCount {
 		select {
@@ -1284,6 +1349,33 @@ func closeToolSets(sets []tool.ToolSet) {
 			log.Warnf("close toolset %q failed: %v", ts.Name(), err)
 		}
 	}
+}
+
+func shutdownTelemetry(
+	shutdown func(context.Context) error,
+) error {
+	if shutdown == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second,
+	)
+	defer cancel()
+	return shutdownTelemetryWithContext(ctx, shutdown)
+}
+
+func shutdownTelemetryWithContext(
+	ctx context.Context,
+	shutdown func(context.Context) error,
+) error {
+	if shutdown == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return shutdown(ctx)
 }
 
 func newCronRunner(

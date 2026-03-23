@@ -581,4 +581,89 @@ func TestRecorder_Start_WritesSessionIndex(t *testing.T) {
 		filepath.Join(filepath.Dir(refPath), ref.TraceDir),
 	)
 	require.Equal(t, trace.Dir(), target)
+
+	require.NoError(t, trace.SetTraceID("trace-123"))
+
+	raw, err = os.ReadFile(refPath)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &ref))
+	require.Equal(t, "trace-123", ref.TraceID)
+
+	metaRaw, err := os.ReadFile(filepath.Join(trace.Dir(), metaFileName))
+	require.NoError(t, err)
+	require.Contains(t, string(metaRaw), "\"trace_id\": \"trace-123\"")
+}
+
+func TestTrace_SetTraceID_WithoutSessionIndex(t *testing.T) {
+	t.Parallel()
+
+	rec := &Recorder{
+		dir:  t.TempDir(),
+		mode: modeSafe,
+		now:  func() time.Time { return time.Now().UTC() },
+	}
+	trace, err := rec.Start(TraceStart{
+		Channel: "telegram",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
+	})
+
+	require.Empty(t, trace.traceRef)
+	require.NoError(t, trace.SetTraceID("trace-456"))
+	require.NoError(t, trace.SetTraceID("trace-456"))
+	require.NoError(t, trace.SetTraceID(""))
+
+	metaRaw, err := os.ReadFile(filepath.Join(trace.Dir(), metaFileName))
+	require.NoError(t, err)
+	require.Contains(t, string(metaRaw), "\"trace_id\": \"trace-456\"")
+}
+
+func TestTrace_SetTraceID_RetriesAfterTraceRefWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	rec, err := New(t.TempDir(), modeSafe)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(TraceStart{
+		Channel:   "telegram",
+		SessionID: "telegram:dm:7602183958",
+		RequestID: "telegram:7602183958:137",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
+	})
+
+	require.NoError(t, os.WriteFile(trace.traceRef, []byte("{"), 0o600))
+
+	err = trace.SetTraceID("trace-789")
+	require.Error(t, err)
+	require.Empty(t, trace.traceID)
+
+	metaRaw, err := os.ReadFile(filepath.Join(trace.Dir(), metaFileName))
+	require.NoError(t, err)
+	require.Contains(t, string(metaRaw), "\"trace_id\": \"trace-789\"")
+
+	require.NoError(t, os.WriteFile(
+		trace.traceRef,
+		[]byte("{}"),
+		0o600,
+	))
+	require.NoError(t, trace.SetTraceID("trace-789"))
+	require.Equal(t, "trace-789", trace.traceID)
+}
+
+func TestWriteTraceIDJSON_GuardsAndErrors(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, writeTraceIDJSON("", "trace-1"))
+	require.NoError(t, writeTraceIDJSON("ignored", ""))
+
+	path := filepath.Join(t.TempDir(), "meta.json")
+	require.NoError(t, os.WriteFile(path, []byte("{"), 0o600))
+	err := writeTraceIDJSON(path, "trace-1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unmarshal json")
 }

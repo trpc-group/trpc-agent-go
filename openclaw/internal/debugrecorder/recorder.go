@@ -131,6 +131,7 @@ type TraceStart struct {
 	Thread    string `json:"thread,omitempty"`
 	MessageID string `json:"message_id,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
+	TraceID   string `json:"trace_id,omitempty"`
 	Source    string `json:"source,omitempty"`
 }
 
@@ -145,6 +146,9 @@ type Trace struct {
 	mode Mode
 
 	startedAt time.Time
+	metaPath  string
+	traceRef  string
+	traceID   string
 
 	mu     sync.Mutex
 	events *os.File
@@ -164,7 +168,8 @@ func (r *Recorder) Start(start TraceStart) (*Trace, error) {
 	if err := os.MkdirAll(root, defaultTraceDirPerm); err != nil {
 		return nil, fmt.Errorf("debug recorder: mkdir trace: %w", err)
 	}
-	if err := r.writeSessionIndex(root, now, start); err != nil {
+	traceRef, err := r.writeSessionIndex(root, now, start)
+	if err != nil {
 		return nil, err
 	}
 
@@ -172,11 +177,13 @@ func (r *Recorder) Start(start TraceStart) (*Trace, error) {
 		StartedAt time.Time  `json:"started_at"`
 		Mode      Mode       `json:"mode"`
 		Start     TraceStart `json:"start"`
+		TraceID   string     `json:"trace_id,omitempty"`
 		Version   string     `json:"version"`
 	}{
 		StartedAt: now,
 		Mode:      r.mode,
 		Start:     start,
+		TraceID:   strings.TrimSpace(start.TraceID),
 		Version:   "v1",
 	}
 	metaPath := filepath.Join(root, metaFileName)
@@ -197,6 +204,9 @@ func (r *Recorder) Start(start TraceStart) (*Trace, error) {
 		root:      root,
 		mode:      r.mode,
 		startedAt: now,
+		metaPath:  metaPath,
+		traceRef:  traceRef,
+		traceID:   strings.TrimSpace(start.TraceID),
 		events:    events,
 	}
 	_ = t.Record(KindTraceStart, start)
@@ -246,26 +256,33 @@ type traceRef struct {
 	SessionID string    `json:"session_id,omitempty"`
 	RequestID string    `json:"request_id,omitempty"`
 	MessageID string    `json:"message_id,omitempty"`
+	TraceID   string    `json:"trace_id,omitempty"`
 }
 
 func (r *Recorder) writeSessionIndex(
 	root string,
 	now time.Time,
 	start TraceStart,
-) error {
+) (string, error) {
 	indexRoot, err := r.newSessionIndexDir(now, start)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if indexRoot == "" {
-		return nil
+		return "", nil
 	}
 	if err := os.MkdirAll(indexRoot, defaultTraceDirPerm); err != nil {
-		return fmt.Errorf("debug recorder: mkdir session index: %w", err)
+		return "", fmt.Errorf(
+			"debug recorder: mkdir session index: %w",
+			err,
+		)
 	}
 	rel, err := filepath.Rel(indexRoot, root)
 	if err != nil {
-		return fmt.Errorf("debug recorder: session index rel: %w", err)
+		return "", fmt.Errorf(
+			"debug recorder: session index rel: %w",
+			err,
+		)
 	}
 	ref := traceRef{
 		TraceDir:  rel,
@@ -274,8 +291,13 @@ func (r *Recorder) writeSessionIndex(
 		SessionID: strings.TrimSpace(start.SessionID),
 		RequestID: strings.TrimSpace(start.RequestID),
 		MessageID: strings.TrimSpace(start.MessageID),
+		TraceID:   strings.TrimSpace(start.TraceID),
 	}
-	return writeJSONFile(filepath.Join(indexRoot, traceRefName), ref)
+	refPath := filepath.Join(indexRoot, traceRefName)
+	if err := writeJSONFile(refPath, ref); err != nil {
+		return "", err
+	}
+	return refPath, nil
 }
 
 func (r *Recorder) newSessionIndexDir(
@@ -625,6 +647,33 @@ func (t *Trace) Close(end TraceEnd) error {
 	return err
 }
 
+func (t *Trace) SetTraceID(traceID string) error {
+	if t == nil {
+		return nil
+	}
+
+	traceID = strings.TrimSpace(traceID)
+	if traceID == "" {
+		return nil
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.traceID == traceID {
+		return nil
+	}
+
+	if err := writeTraceIDJSON(t.metaPath, traceID); err != nil {
+		return err
+	}
+	if err := writeTraceIDJSON(t.traceRef, traceID); err != nil {
+		return err
+	}
+	t.traceID = traceID
+	return nil
+}
+
 type traceKey struct{}
 type recorderKey struct{}
 
@@ -677,6 +726,26 @@ func writeJSONFile(path string, v any) error {
 		return fmt.Errorf("debug recorder: write file: %w", err)
 	}
 	return nil
+}
+
+func writeTraceIDJSON(path string, traceID string) error {
+	path = strings.TrimSpace(path)
+	traceID = strings.TrimSpace(traceID)
+	if path == "" || traceID == "" {
+		return nil
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("debug recorder: read file: %w", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return fmt.Errorf("debug recorder: unmarshal json: %w", err)
+	}
+	payload["trace_id"] = traceID
+	return writeJSONFile(path, payload)
 }
 
 func safeComponent(raw string) string {

@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -184,6 +185,58 @@ func (r *runOptionsRunner) Options() agent.RunOptions {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.opts
+}
+
+type resolvingRunner struct {
+	mu    sync.Mutex
+	ctx   context.Context
+	opts  agent.RunOptions
+	msg   model.Message
+	user  string
+	sess  string
+	calls int
+}
+
+func (r *resolvingRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	msg model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	cfg := agent.RunOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	r.ctx = ctx
+	r.opts = cfg
+	r.msg = msg
+	r.user = userID
+	r.sess = sessionID
+	r.calls++
+
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("ok")},
+			},
+			Done: true,
+		},
+		RequestID: "req-1",
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (r *resolvingRunner) Close() error {
+	return nil
 }
 
 func strPtr(s string) *string {
@@ -1106,6 +1159,168 @@ func TestServer_ProcessMessage_IncludesRecentUploadContext(t *testing.T) {
 		opts.InjectedContextMessages[0].Content,
 		"OPENCLAW_RECENT_UPLOADS_JSON",
 	)
+}
+
+func TestServer_ProcessMessage_RunOptionResolver(t *testing.T) {
+	t.Parallel()
+
+	type ctxKey string
+
+	const (
+		resolverKey ctxKey = "resolver"
+		resolverTag        = "langfuse"
+	)
+
+	runner := &resolvingRunner{}
+	srv, err := New(
+		runner,
+		WithRunOptionResolver(func(
+			ctx context.Context,
+			input RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			require.Equal(t, "telegram", input.Inbound.Channel)
+			require.Equal(t, "u1", input.Inbound.From)
+			require.Equal(t, "msg-1", input.Inbound.MessageID)
+			require.Equal(t, "u1", input.UserID)
+			require.Equal(t, "telegram:dm:u1", input.SessionID)
+			require.Equal(t, "req-in", input.RequestID)
+			require.Equal(t, "hello", input.Message.Content)
+			return context.WithValue(
+					ctx,
+					resolverKey,
+					resolverTag,
+				), []agent.RunOption{
+					agent.WithInstruction("resolver"),
+				}
+		}),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			Channel:   "telegram",
+			From:      "u1",
+			MessageID: "msg-1",
+			RequestID: "req-in",
+			Text:      "hello",
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "req-1", rsp.RequestID)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, resolverTag, runner.ctx.Value(resolverKey))
+	require.Equal(t, "resolver", runner.opts.Instruction)
+	require.Equal(t, "req-in", runner.opts.RequestID)
+	require.Equal(t, "u1", runner.user)
+	require.Equal(t, "telegram:dm:u1", runner.sess)
+	require.Equal(t, "hello", runner.msg.Content)
+	require.Equal(t, 1, runner.calls)
+}
+
+func TestServer_ProcessMessage_RunOptionResolver_NoExtraOptions(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	type ctxKey string
+
+	const resolverKey ctxKey = "resolver"
+
+	runner := &resolvingRunner{}
+	srv, err := New(
+		runner,
+		WithRunOptionResolver(func(
+			ctx context.Context,
+			_ RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			return context.WithValue(ctx, resolverKey, "ok"), nil
+		}),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			Channel: "telegram",
+			From:    "u1",
+			Text:    "hello",
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "req-1", rsp.RequestID)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, "ok", runner.ctx.Value(resolverKey))
+	require.Empty(t, runner.opts.Instruction)
+}
+
+func TestServer_ProcessMessage_RunOptionResolver_Composes(t *testing.T) {
+	t.Parallel()
+
+	type ctxKey string
+
+	const (
+		firstKey  ctxKey = "first"
+		secondKey ctxKey = "second"
+		firstTag         = "langfuse"
+		secondTag        = "audit"
+	)
+
+	runner := &resolvingRunner{}
+	srv, err := New(
+		runner,
+		WithRunOptionResolver(func(
+			ctx context.Context,
+			_ RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			return context.WithValue(
+					ctx,
+					firstKey,
+					firstTag,
+				), []agent.RunOption{
+					agent.WithTraceStartedCallback(
+						func(oteltrace.SpanContext) {},
+					),
+				}
+		}),
+		WithRunOptionResolver(func(
+			ctx context.Context,
+			_ RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			require.Equal(t, firstTag, ctx.Value(firstKey))
+			return context.WithValue(
+					ctx,
+					secondKey,
+					secondTag,
+				), []agent.RunOption{
+					agent.WithTraceStartedCallback(
+						func(oteltrace.SpanContext) {},
+					),
+				}
+		}),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			Channel: "telegram",
+			From:    "u1",
+			Text:    "hello",
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "req-1", rsp.RequestID)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, firstTag, runner.ctx.Value(firstKey))
+	require.Equal(t, secondTag, runner.ctx.Value(secondKey))
+	require.Len(t, runner.opts.TraceStartedCallbacks, 2)
 }
 
 func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {

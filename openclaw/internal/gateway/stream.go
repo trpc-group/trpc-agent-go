@@ -269,12 +269,13 @@ func (s *Server) streamLocked(
 		}
 	}
 
+	ctx, runOpts := s.resolveRunOptions(ctx, run)
 	events, err := s.runner.Run(
 		ctx,
 		run.userID,
 		run.sessionID,
 		run.userMsg,
-		s.runOptions(run.userID, run.sessionID, run.requestID)...,
+		runOpts...,
 	)
 	if err != nil {
 		apiErr := gwproto.APIError{

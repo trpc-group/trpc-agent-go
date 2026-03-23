@@ -36,22 +36,26 @@ type debugSessionView struct {
 	LastTraceAt time.Time `json:"last_trace_at,omitempty"`
 	Channel     string    `json:"channel,omitempty"`
 	RequestID   string    `json:"request_id,omitempty"`
+	TraceID     string    `json:"trace_id,omitempty"`
 	TracePath   string    `json:"trace_path,omitempty"`
+	LangfuseURL string    `json:"langfuse_url,omitempty"`
 	MetaURL     string    `json:"meta_url,omitempty"`
 	EventsURL   string    `json:"events_url,omitempty"`
 	ResultURL   string    `json:"result_url,omitempty"`
 }
 
 type debugTraceView struct {
-	SessionID string    `json:"session_id,omitempty"`
-	StartedAt time.Time `json:"started_at,omitempty"`
-	Channel   string    `json:"channel,omitempty"`
-	RequestID string    `json:"request_id,omitempty"`
-	MessageID string    `json:"message_id,omitempty"`
-	TracePath string    `json:"trace_path,omitempty"`
-	MetaURL   string    `json:"meta_url,omitempty"`
-	EventsURL string    `json:"events_url,omitempty"`
-	ResultURL string    `json:"result_url,omitempty"`
+	SessionID   string    `json:"session_id,omitempty"`
+	StartedAt   time.Time `json:"started_at,omitempty"`
+	Channel     string    `json:"channel,omitempty"`
+	RequestID   string    `json:"request_id,omitempty"`
+	MessageID   string    `json:"message_id,omitempty"`
+	TraceID     string    `json:"trace_id,omitempty"`
+	TracePath   string    `json:"trace_path,omitempty"`
+	LangfuseURL string    `json:"langfuse_url,omitempty"`
+	MetaURL     string    `json:"meta_url,omitempty"`
+	EventsURL   string    `json:"events_url,omitempty"`
+	ResultURL   string    `json:"result_url,omitempty"`
 }
 
 type debugTraceRef struct {
@@ -60,6 +64,7 @@ type debugTraceRef struct {
 	Channel   string    `json:"channel,omitempty"`
 	RequestID string    `json:"request_id,omitempty"`
 	MessageID string    `json:"message_id,omitempty"`
+	TraceID   string    `json:"trace_id,omitempty"`
 }
 
 func (s *Service) debugStatus() debugStatus {
@@ -110,7 +115,9 @@ func (s *Service) buildDebugStatus(sessionFilter string) debugStatus {
 			entry.LastTraceAt = trace.StartedAt
 			entry.Channel = trace.Channel
 			entry.RequestID = trace.RequestID
+			entry.TraceID = trace.TraceID
 			entry.TracePath = trace.TracePath
+			entry.LangfuseURL = trace.LangfuseURL
 			entry.MetaURL = trace.MetaURL
 			entry.EventsURL = trace.EventsURL
 			entry.ResultURL = trace.ResultURL
@@ -241,8 +248,10 @@ func (s *Service) readDebugTrace(
 		Channel:   strings.TrimSpace(ref.Channel),
 		RequestID: strings.TrimSpace(ref.RequestID),
 		MessageID: strings.TrimSpace(ref.MessageID),
+		TraceID:   strings.TrimSpace(ref.TraceID),
 		TracePath: traceRel,
 	}
+	out.LangfuseURL = s.langfuseTraceURL(out.TraceID)
 	if fileExists(filepath.Join(traceAbs, debugMetaFileName)) {
 		out.MetaURL = s.debugFileURL(traceRel, debugMetaFileName)
 	}
