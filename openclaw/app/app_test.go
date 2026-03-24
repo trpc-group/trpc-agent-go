@@ -45,6 +45,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
@@ -139,6 +140,20 @@ func joinSystemMessages(req *model.Request) string {
 	return strings.Join(parts, "\n\n")
 }
 
+func findToolDeclaration(
+	tools []tool.Tool,
+	name string,
+) *tool.Declaration {
+	for _, item := range tools {
+		decl := item.Declaration()
+		if decl == nil || decl.Name != name {
+			continue
+		}
+		return decl
+	}
+	return nil
+}
+
 func TestRun_ParseErrorExitCode(t *testing.T) {
 	t.Parallel()
 
@@ -169,6 +184,144 @@ func TestNewRuntime_BuildsGatewayHandler(t *testing.T) {
 	require.NotEmpty(t, rt.Gateway.StatusPath)
 	require.NotEmpty(t, rt.Gateway.CancelPath)
 	require.Empty(t, rt.Channels)
+}
+
+func TestNewRuntime_MemoryBackendFile_DisablesStructuredMemory(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-memory-backend", memoryBackendFile,
+		"-memory-auto",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+	require.Nil(t, rt.memorySvc)
+	require.Nil(t, memoryServiceTools(nil))
+}
+
+func TestFileMemoryStoreForBackend_FileOnly(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	require.Same(
+		t,
+		store,
+		fileMemoryStoreForBackend(memoryBackendFile, store),
+	)
+	require.Nil(
+		t,
+		fileMemoryStoreForBackend(memoryBackendInMemory, store),
+	)
+	require.Nil(
+		t,
+		fileMemoryStoreForBackend(memoryBackendSQLite, store),
+	)
+}
+
+func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	decl := findToolDeclaration(bundle.tools, "exec_command")
+	require.NotNil(t, decl)
+	require.NotContains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
+}
+
+func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store)
+	decl := findToolDeclaration(bundle.tools, "exec_command")
+	require.NotNil(t, decl)
+	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
+}
+
+func TestNewRuntimeStores_CreatesAllStores(t *testing.T) {
+	t.Parallel()
+
+	stores, err := newRuntimeStores(t.TempDir())
+	require.NoError(t, err)
+	require.NotNil(t, stores.uploads)
+	require.NotNil(t, stores.personas)
+	require.NotNil(t, stores.memoryFiles)
+}
+
+func TestNewRuntimeStores_EmptyStateDirReturnsError(t *testing.T) {
+	t.Parallel()
+
+	_, err := newRuntimeStores(" ")
+	require.Error(t, err)
+}
+
+func TestNewRuntime_RuntimeStoresErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	stateFile := filepath.Join(t.TempDir(), "state-file")
+	require.NoError(t, os.WriteFile(stateFile, []byte("x"), 0o600))
+
+	_, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", stateFile,
+		"-skills-root", t.TempDir(),
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create runtime stores failed")
+}
+
+func TestRun_HTTPListenErrorPath_WithFileMemoryBackend(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+
+	err := run(ctx, []string{
+		"-http-addr", "127.0.0.1:-1",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-memory-backend", memoryBackendFile,
+		"-enable-openclaw-tools",
+	})
+	require.NoError(t, err)
+}
+
+func TestRun_RuntimeStoresErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	stateFile := filepath.Join(t.TempDir(), "state-file")
+	require.NoError(t, os.WriteFile(stateFile, []byte("x"), 0o600))
+
+	err := run(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", stateFile,
+		"-skills-root", t.TempDir(),
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create runtime stores failed")
 }
 
 func TestNewRuntime_A2AConfigErrorExitCode(t *testing.T) {
@@ -2646,6 +2799,29 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	memoryRoot, err := memoryfile.DefaultRoot(debugDir)
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(memoryRoot)
+	require.NoError(t, err)
+	memoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		appName,
+		userID,
+	)
+	require.NoError(t, err)
+	otherUserMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		appName,
+		"u2",
+	)
+	require.NoError(t, err)
+	otherAppMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		"other-app",
+		userID,
+	)
+	require.NoError(t, err)
+
 	srv, err := gateway.New(&inProcGWTestRunner{})
 	require.NoError(t, err)
 
@@ -2658,6 +2834,7 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 		uploadStore,
 	)
 	c.SetPersonaStore(personaStore)
+	c.SetMemoryFileStore(memoryStore)
 
 	require.NoError(t, c.ForgetUser(ctx, channelName, userID))
 
@@ -2692,6 +2869,15 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, persona.PresetDefault, currentPreset.ID)
+
+	_, err = os.Stat(memoryPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	_, err = os.Stat(otherUserMemoryPath)
+	require.NoError(t, err)
+
+	_, err = os.Stat(otherAppMemoryPath)
+	require.NoError(t, err)
 }
 
 func TestInProcGatewayClient_ForgetUser_ClearsCronJobsOnlyOnce(
@@ -2801,6 +2987,37 @@ func TestInProcGatewayClient_ForgetUser_ValidationErrors(t *testing.T) {
 
 	c4 := newInProcGatewayClient(srv, appName, nil, nil, debugFile)
 	require.NoError(t, c4.ForgetUser(ctx, "telegram", "u1"))
+}
+
+func TestInProcGatewayClient_SetMemoryFileStore_NilReceiverIsNoop(t *testing.T) {
+	t.Parallel()
+
+	var client *inProcGatewayClient
+	client.SetMemoryFileStore(nil)
+}
+
+func TestInProcGatewayClient_ForgetUser_DeleteMemoryFilesError(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+	_, err = store.EnsureMemory(context.Background(), appName, "u1")
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	c.SetMemoryFileStore(store)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = c.ForgetUser(ctx, "telegram", "u1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "forget: delete user memory files")
 }
 
 func TestInProcGatewayClient_ScheduledJobs(t *testing.T) {

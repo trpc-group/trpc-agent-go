@@ -185,6 +185,37 @@ func TestNewMemoryService_RedisRequiresConfig(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewMemoryService_FileDisablesStructuredMemory(t *testing.T) {
+	t.Parallel()
+
+	svc, err := newMemoryService(nil, runOptions{
+		MemoryBackend:     memoryBackendFile,
+		MemoryAutoEnabled: true,
+	})
+	require.NoError(t, err)
+	require.Nil(t, svc)
+}
+
+func TestNewDisabledMemoryBackend_ReturnsNilService(t *testing.T) {
+	t.Parallel()
+
+	svc, err := newDisabledMemoryBackend(
+		registry.MemoryDeps{},
+		registry.MemoryBackendSpec{},
+	)
+	require.NoError(t, err)
+	require.Nil(t, svc)
+}
+
+func TestNewMemoryService_OffIsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	_, err := newMemoryService(nil, runOptions{
+		MemoryBackend: "off",
+	})
+	require.ErrorContains(t, err, "unsupported memory backend: off")
+}
+
 func TestNewBackends_Redis(t *testing.T) {
 	mr, err := miniredis.Run()
 	require.NoError(t, err)

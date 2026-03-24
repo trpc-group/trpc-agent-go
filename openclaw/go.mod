@@ -2,51 +2,31 @@ module trpc.group/trpc-go/trpc-agent-go/openclaw
 
 go 1.24.1
 
-replace trpc.group/trpc-go/trpc-agent-go => ../
-
-replace trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf => ../knowledge/document/reader/pdf
-
-replace trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch => ../tool/arxivsearch
-
-replace trpc.group/trpc-go/trpc-agent-go/tool/email => ../tool/email
-
-replace trpc.group/trpc-go/trpc-agent-go/tool/google => ../tool/google
-
-replace trpc.group/trpc-go/trpc-agent-go/tool/openapi => ../tool/openapi
-
-replace trpc.group/trpc-go/trpc-agent-go/tool/webfetch/httpfetch => ../tool/webfetch/httpfetch
-
-replace trpc.group/trpc-go/trpc-agent-go/tool/wikipedia => ../tool/wikipedia
-
-replace trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../memory/mysql
-
-replace trpc.group/trpc-go/trpc-agent-go/memory/pgvector => ../memory/pgvector
-
-replace trpc.group/trpc-go/trpc-agent-go/memory/postgres => ../memory/postgres
-
-replace trpc.group/trpc-go/trpc-agent-go/memory/redis => ../memory/redis
-
-replace trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../memory/sqlite
-
-replace trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec => ../memory/sqlitevec
-
-replace trpc.group/trpc-go/trpc-agent-go/session/clickhouse => ../session/clickhouse
-
-replace trpc.group/trpc-go/trpc-agent-go/session/mysql => ../session/mysql
-
-replace trpc.group/trpc-go/trpc-agent-go/session/postgres => ../session/postgres
-
-replace trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis
-
-replace trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../session/sqlite
-
-replace trpc.group/trpc-go/trpc-agent-go/storage/clickhouse => ../storage/clickhouse
-
-replace trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../storage/mysql
-
-replace trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../storage/postgres
-
-replace trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
+replace (
+	trpc.group/trpc-go/trpc-agent-go => ../
+	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf => ../knowledge/document/reader/pdf
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../memory/mysql
+	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => ../memory/pgvector
+	trpc.group/trpc-go/trpc-agent-go/memory/postgres => ../memory/postgres
+	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../memory/redis
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../memory/sqlite
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec => ../memory/sqlitevec
+	trpc.group/trpc-go/trpc-agent-go/session/clickhouse => ../session/clickhouse
+	trpc.group/trpc-go/trpc-agent-go/session/mysql => ../session/mysql
+	trpc.group/trpc-go/trpc-agent-go/session/postgres => ../session/postgres
+	trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../session/sqlite
+	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse => ../storage/clickhouse
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../storage/mysql
+	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../storage/postgres
+	trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
+	trpc.group/trpc-go/trpc-agent-go/tool/arxivsearch => ../tool/arxivsearch
+	trpc.group/trpc-go/trpc-agent-go/tool/email => ../tool/email
+	trpc.group/trpc-go/trpc-agent-go/tool/google => ../tool/google
+	trpc.group/trpc-go/trpc-agent-go/tool/openapi => ../tool/openapi
+	trpc.group/trpc-go/trpc-agent-go/tool/webfetch/httpfetch => ../tool/webfetch/httpfetch
+	trpc.group/trpc-go/trpc-agent-go/tool/wikipedia => ../tool/wikipedia
+)
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.26.0

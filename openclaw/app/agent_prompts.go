@@ -25,6 +25,17 @@ type resolvedAgentPrompts struct {
 }
 
 func resolveAgentPrompts(opts runOptions) (resolvedAgentPrompts, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return resolvedAgentPrompts{}, err
+	}
+	return resolveAgentPromptsForDir(opts, cwd)
+}
+
+func resolveAgentPromptsForDir(
+	opts runOptions,
+	cwd string,
+) (resolvedAgentPrompts, error) {
 	instruction, err := buildAgentPrompt(
 		opts.AgentInstruction,
 		splitCSV(opts.AgentInstructionFiles),
@@ -32,6 +43,13 @@ func resolveAgentPrompts(opts runOptions) (resolvedAgentPrompts, error) {
 	)
 	if err != nil {
 		return resolvedAgentPrompts{}, err
+	}
+	projectDocs, err := resolveProjectDocs(cwd)
+	if err != nil {
+		return resolvedAgentPrompts{}, err
+	}
+	if strings.TrimSpace(projectDocs) != "" {
+		instruction = joinPromptParts(projectDocs, instruction)
 	}
 	if strings.TrimSpace(instruction) == "" {
 		instruction = defaultAgentInstruction
@@ -50,6 +68,18 @@ func resolveAgentPrompts(opts runOptions) (resolvedAgentPrompts, error) {
 		Instruction:  instruction,
 		SystemPrompt: systemPrompt,
 	}, nil
+}
+
+func joinPromptParts(parts ...string) string {
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return strings.Join(out, "\n\n")
 }
 
 func buildAgentPrompt(inline string, files []string, dir string) (string, error) {
@@ -82,7 +112,7 @@ func buildAgentPrompt(inline string, files []string, dir string) (string, error)
 		parts = append(parts, dirParts...)
 	}
 
-	return strings.Join(parts, "\n\n"), nil
+	return joinPromptParts(parts...), nil
 }
 
 func readAgentPromptFile(path string) (string, error) {

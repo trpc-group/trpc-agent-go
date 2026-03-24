@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -520,12 +521,187 @@ func TestServerInjectedContextMessages_IncludePersonaAndUploads(t *testing.T) {
 		uploads:      uploadStore,
 		personaStore: personaStore,
 	}
-	msgs := srv.injectedContextMessages("u1", sessionID)
+	msgs := srv.injectedContextMessages(context.Background(), "u1", sessionID)
 	require.Len(t, msgs, 2)
 	require.Contains(t, msgs[0].Content, personaContextHeader)
 	require.Contains(t, msgs[0].Content, persona.PresetGirlfriend)
 	require.Contains(t, msgs[1].Content, recentUploadContextHeader)
 	require.Contains(t, msgs[1].Content, "clip.mp4 [video]")
+}
+
+func TestServerInjectedContextMessages_IncludeMemoryFiles(t *testing.T) {
+	t.Parallel()
+
+	const appName = "demo-app"
+
+	stateDir := t.TempDir()
+	uploadStore, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	personaPath, err := persona.DefaultStorePath(stateDir)
+	require.NoError(t, err)
+	personaStore, err := persona.NewStore(personaPath)
+	require.NoError(t, err)
+
+	memoryRoot, err := memoryfile.DefaultRoot(stateDir)
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(memoryRoot)
+	require.NoError(t, err)
+
+	sessionID := "telegram:dm:u1:rotated"
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: sessionID,
+	}
+	_, err = uploadStore.Save(
+		context.Background(),
+		scope,
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	_, err = personaStore.Set(
+		context.Background(),
+		persona.DMScopeKey("telegram", "u1"),
+		persona.PresetGirlfriend,
+	)
+	require.NoError(t, err)
+
+	path, err := memoryStore.EnsureMemory(
+		context.Background(),
+		appName,
+		"u1",
+	)
+	require.NoError(t, err)
+	require.NoError(
+		t,
+		os.WriteFile(
+			path,
+			[]byte("## Preferences\n\n- Keep replies concise."),
+			0o600,
+		),
+	)
+	otherPath, err := memoryStore.EnsureMemory(
+		context.Background(),
+		"other-app",
+		"u1",
+	)
+	require.NoError(t, err)
+	require.NoError(
+		t,
+		os.WriteFile(
+			otherPath,
+			[]byte("## Preferences\n\n- Use another app memory."),
+			0o600,
+		),
+	)
+
+	srv := &Server{
+		appName:         appName,
+		uploads:         uploadStore,
+		personaStore:    personaStore,
+		memoryFileStore: memoryStore,
+	}
+	msgs := srv.injectedContextMessages(context.Background(), "u1", sessionID)
+	require.Len(t, msgs, 3)
+	require.Contains(t, msgs[0].Content, personaContextHeader)
+	require.Contains(t, msgs[1].Content, "user-owned file MEMORY.md")
+	require.Contains(t, msgs[1].Content, "not hidden internal state")
+	require.Contains(t, msgs[1].Content, "Keep replies concise")
+	require.NotContains(t, msgs[1].Content, "Use another app memory")
+	require.Contains(t, msgs[2].Content, recentUploadContextHeader)
+}
+
+func TestServerInjectedContextMessages_CanceledContextSkipsMemoryFiles(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	srv := &Server{
+		appName:         "demo-app",
+		memoryFileStore: memoryStore,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	msgs := srv.injectedContextMessages(ctx, "u1", "telegram:dm:u1")
+	require.Empty(t, msgs)
+}
+
+func TestServerInjectedContextMessages_EmptyAppNameSkipsMemoryFiles(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	srv := &Server{
+		appName:         " ",
+		memoryFileStore: memoryStore,
+	}
+
+	msgs := srv.injectedContextMessages(
+		context.Background(),
+		"u1",
+		"telegram:dm:u1",
+	)
+	require.Empty(t, msgs)
+}
+
+func TestServerInjectedContextMessages_EmptyUserIDSkipsMemoryFiles(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	srv := &Server{
+		appName:         "demo-app",
+		memoryFileStore: memoryStore,
+	}
+
+	msgs := srv.injectedContextMessages(
+		context.Background(),
+		" ",
+		"telegram:dm:u1",
+	)
+	require.Empty(t, msgs)
+}
+
+func TestServerInjectedContextMessages_EmptyMemoryFileSkipsMessage(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	path, err := memoryStore.EnsureMemory(
+		context.Background(),
+		"demo-app",
+		"u1",
+	)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte(" \n "), 0o600))
+
+	srv := &Server{
+		appName:         "demo-app",
+		memoryFileStore: memoryStore,
+	}
+
+	msgs := srv.injectedContextMessages(
+		context.Background(),
+		"u1",
+		"telegram:dm:u1",
+	)
+	require.Empty(t, msgs)
 }
 
 func TestDefaultSessionID_MissingFromForDM(t *testing.T) {
@@ -3434,16 +3610,21 @@ func TestNewOptions_ExplicitStreamAndStores(t *testing.T) {
 	t.Parallel()
 
 	store := &persona.Store{}
+	memoryStore := &memoryfile.Store{}
 	transcriber := &stubAudioTranscriber{}
 
 	o := newOptions(
+		WithAppName(" demo-app "),
 		WithMessagesStreamPath(" /custom/stream "),
 		WithPersonaStore(store),
+		WithMemoryFileStore(memoryStore),
 		WithAudioTranscriber(transcriber),
 	)
 
+	require.Equal(t, "demo-app", o.appName)
 	require.Equal(t, " /custom/stream ", o.streamPath)
 	require.Same(t, store, o.personaStore)
+	require.Same(t, memoryStore, o.memoryFileStore)
 	require.Same(t, transcriber, o.audioTranscriber)
 }
 

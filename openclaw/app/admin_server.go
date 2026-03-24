@@ -129,7 +129,7 @@ func buildAdminConfig(
 		ModelMode:      strings.TrimSpace(opts.ModelMode),
 		ModelName:      adminModelName(opts, agentType),
 		SessionBackend: strings.TrimSpace(opts.SessionBackend),
-		MemoryBackend:  strings.TrimSpace(opts.MemoryBackend),
+		MemoryBackend:  resolveMemoryBackendType(opts.MemoryBackend),
 		GatewayAddr:    opts.HTTPAddr,
 		GatewayURL:     listenURL(opts.HTTPAddr),
 		AdminAddr:      strings.TrimSpace(adminAddr),

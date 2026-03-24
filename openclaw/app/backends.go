@@ -128,14 +128,14 @@ func newMemoryService(
 	mdl model.Model,
 	opts runOptions,
 ) (memory.Service, error) {
+	backend := resolveMemoryBackendType(opts.MemoryBackend)
+	if backend == memoryBackendFile {
+		return nil, nil
+	}
+
 	ext, err := newAutoMemoryExtractor(mdl, opts)
 	if err != nil {
 		return nil, err
-	}
-
-	backend := strings.ToLower(strings.TrimSpace(opts.MemoryBackend))
-	if backend == "" {
-		backend = memoryBackendInMemory
 	}
 
 	f, ok := registry.LookupMemoryBackend(backend)
@@ -164,6 +164,25 @@ func newMemoryService(
 			),
 		},
 	)
+}
+
+func resolveMemoryBackendType(raw string) string {
+	backend := strings.ToLower(strings.TrimSpace(raw))
+	switch backend {
+	case "":
+		return memoryBackendInMemory
+	case memoryBackendFile:
+		return memoryBackendFile
+	default:
+		return backend
+	}
+}
+
+func newDisabledMemoryBackend(
+	_ registry.MemoryDeps,
+	_ registry.MemoryBackendSpec,
+) (memory.Service, error) {
+	return nil, nil
 }
 
 func newInMemoryMemoryBackend(
