@@ -21,7 +21,7 @@ import (
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
-	vectores "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
+	vectors "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch"
 	inmemoryvs "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	vectorpg "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -355,28 +355,28 @@ func buildElasticsearchKnowledgeVectorStore(
 		return nil, fmt.Errorf("elasticsearch requires vector_store.addresses")
 	}
 
-	opts := []vectores.Option{vectores.WithAddresses(cfg.Addresses)}
+	opts := []vectors.Option{vectors.WithAddresses(cfg.Addresses)}
 	if v := strings.TrimSpace(cfg.Username); v != "" {
-		opts = append(opts, vectores.WithUsername(v))
+		opts = append(opts, vectors.WithUsername(v))
 	}
 	if v := strings.TrimSpace(cfg.Password); v != "" {
-		opts = append(opts, vectores.WithPassword(v))
+		opts = append(opts, vectors.WithPassword(v))
 	}
 	if v := strings.TrimSpace(cfg.APIKey); v != "" {
-		opts = append(opts, vectores.WithAPIKey(v))
+		opts = append(opts, vectors.WithAPIKey(v))
 	}
 	if v := strings.TrimSpace(cfg.IndexName); v != "" {
-		opts = append(opts, vectores.WithIndexName(v))
+		opts = append(opts, vectors.WithIndexName(v))
 	}
 	if cfg.VectorDimension != nil && *cfg.VectorDimension > 0 {
-		opts = append(opts, vectores.WithVectorDimension(*cfg.VectorDimension))
+		opts = append(opts, vectors.WithVectorDimension(*cfg.VectorDimension))
 	} else if dims := knowledgeEmbedderDimensions(ctx.embedder); dims > 0 {
-		opts = append(opts, vectores.WithVectorDimension(dims))
+		opts = append(opts, vectors.WithVectorDimension(dims))
 	}
 	if cfg.MaxResults != nil && *cfg.MaxResults > 0 {
-		opts = append(opts, vectores.WithMaxResults(*cfg.MaxResults))
+		opts = append(opts, vectors.WithMaxResults(*cfg.MaxResults))
 	}
-	return vectores.New(opts...)
+	return vectors.New(opts...)
 }
 
 func knowledgeEmbedderDimensions(e embedder.Embedder) int {
