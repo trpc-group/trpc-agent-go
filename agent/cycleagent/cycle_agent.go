@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -172,7 +173,9 @@ func (a *CycleAgent) runSubAgent(
 	subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
 	// Reset invocation information in context
-	subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)
+	subAgentCtx := graph.WithGraphCompletionCapture(
+		agent.NewInvocationContext(ctx, subInvocation),
+	)
 
 	// Run the sub-agent.
 	subEventChan, err := agent.RunWithPlugins(
@@ -192,19 +195,48 @@ func (a *CycleAgent) runSubAgent(
 	}
 
 	// Forward events from the sub-agent and check for escalation.
+	visibleCtx := graph.WithoutGraphCompletionCapture(ctx)
+	var emittedAssistantResponseIDs map[string]struct{}
 	for subEvent := range subEventChan {
 		if subEvent != nil && subEvent.Response != nil && !subEvent.Response.IsPartial {
 			*fullRespEvent = subEvent
 		}
-		if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
-			return true
+		escalationEvent := subEvent
+		if graph.ShouldSuppressGraphCompletionEvent(visibleCtx, invocation, subEvent) {
+			if visibleEvent, callbackFullRespEvent, ok := graph.VisibleGraphCompletionEventsForForwardingWithAuthor(
+				subEvent,
+				emittedAssistantResponseIDs,
+				subInvocation.AgentName,
+			); ok {
+				escalationEvent = visibleEvent
+				if err := event.EmitEvent(ctx, eventChan, visibleEvent); err != nil {
+					return true
+				}
+				if callbackFullRespEvent != nil &&
+					callbackFullRespEvent.Response != nil &&
+					!callbackFullRespEvent.Response.IsPartial {
+					*fullRespEvent = callbackFullRespEvent
+				}
+				emittedAssistantResponseIDs = graph.RecordAssistantResponseID(
+					emittedAssistantResponseIDs,
+					visibleEvent,
+				)
+			}
+		} else {
+			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
+				return true
+			}
+			emittedAssistantResponseIDs = graph.RecordAssistantResponseID(
+				emittedAssistantResponseIDs,
+				subEvent,
+			)
 		}
-		if subEvent != nil && subEvent.Error != nil {
+		if escalationEvent != nil && escalationEvent.Error != nil {
 			return true
 		}
 
 		// Check if this event indicates escalation.
-		if a.shouldEscalate(subEvent) {
+		if a.shouldEscalate(escalationEvent) {
 			return true // Indicates escalation
 		}
 	}
@@ -282,7 +314,7 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 // Run implements the agent.Agent interface.
 // It executes sub-agents in a loop until escalation or max iterations.
 func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	eventChan := make(chan *event.Event, a.channelBufferSize)
+	eventChan := make(chan *event.Event, a.eventChannelBufferSize(invocation))
 
 	// Setup invocation.
 	a.setupInvocation(invocation)
@@ -321,6 +353,13 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 	}(runCtx)
 
 	return eventChan, nil
+}
+
+func (a *CycleAgent) eventChannelBufferSize(invocation *agent.Invocation) int {
+	if size := agent.GetEventChannelBufferSize(invocation); size > 0 {
+		return size
+	}
+	return a.channelBufferSize
 }
 
 // Tools implements the agent.Agent interface.

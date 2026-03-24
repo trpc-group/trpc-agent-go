@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
@@ -69,7 +70,7 @@ func (a *ChainAgent) createSubAgentInvocation(
 // Run implements the agent.Agent interface.
 // It executes sub-agents in sequence, passing events through as they are generated.
 func (a *ChainAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
-	eventChan := make(chan *event.Event, a.channelBufferSize)
+	eventChan := make(chan *event.Event, a.eventChannelBufferSize(invocation))
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(eventChan)
@@ -77,6 +78,13 @@ func (a *ChainAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <
 	}(runCtx)
 
 	return eventChan, nil
+}
+
+func (a *ChainAgent) eventChannelBufferSize(invocation *agent.Invocation) int {
+	if size := agent.GetEventChannelBufferSize(invocation); size > 0 {
+		return size
+	}
+	return a.channelBufferSize
 }
 
 // executeChainRun handles the main execution logic for chain agent.
@@ -191,12 +199,15 @@ func (a *ChainAgent) executeSubAgents(
 ) (*event.Event, *itelemetry.TokenUsage) {
 	tokenUsage := &itelemetry.TokenUsage{}
 	var fullRespEvent *event.Event
+	visibleCtx := graph.WithoutGraphCompletionCapture(ctx)
 	for _, subAgent := range a.subAgents {
 		// Create clean invocation for sub-agent - no shared state mutation.
 		subInvocation := a.createSubAgentInvocation(subAgent, invocation)
 
 		// Reset invocation information in context
-		subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)
+		subAgentCtx := graph.WithGraphCompletionCapture(
+			agent.NewInvocationContext(ctx, subInvocation),
+		)
 
 		// Run the sub-agent.
 		subEventChan, err := agent.RunWithPlugins(
@@ -217,6 +228,7 @@ func (a *ChainAgent) executeSubAgents(
 		}
 
 		// Forward all events from the sub-agent.
+		var emittedAssistantResponseIDs map[string]struct{}
 		for subEvent := range subEventChan {
 			if subEvent != nil && subEvent.Response != nil {
 				tracker.TrackResponse(subEvent.Response)
@@ -229,9 +241,34 @@ func (a *ChainAgent) executeSubAgents(
 					fullRespEvent = subEvent
 				}
 			}
+			if graph.ShouldSuppressGraphCompletionEvent(visibleCtx, invocation, subEvent) {
+				if visibleEvent, callbackFullRespEvent, ok := graph.VisibleGraphCompletionEventsForForwardingWithAuthor(
+					subEvent,
+					emittedAssistantResponseIDs,
+					subInvocation.AgentName,
+				); ok {
+					if err := event.EmitEvent(ctx, eventChan, visibleEvent); err != nil {
+						return nil, tokenUsage
+					}
+					if callbackFullRespEvent != nil &&
+						callbackFullRespEvent.Response != nil &&
+						!callbackFullRespEvent.Response.IsPartial {
+						fullRespEvent = callbackFullRespEvent
+					}
+					emittedAssistantResponseIDs = graph.RecordAssistantResponseID(
+						emittedAssistantResponseIDs,
+						visibleEvent,
+					)
+				}
+				continue
+			}
 			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
 				return nil, tokenUsage
 			}
+			emittedAssistantResponseIDs = graph.RecordAssistantResponseID(
+				emittedAssistantResponseIDs,
+				subEvent,
+			)
 			if subEvent != nil && subEvent.Error != nil {
 				return subEvent, tokenUsage
 			}
