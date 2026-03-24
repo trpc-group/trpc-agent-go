@@ -42,6 +42,10 @@ func init() {
 	))
 
 	must(registry.RegisterMemoryBackend(
+		memoryBackendFile,
+		newDisabledMemoryBackend,
+	))
+	must(registry.RegisterMemoryBackend(
 		memoryBackendInMemory,
 		newInMemoryMemoryBackend,
 	))

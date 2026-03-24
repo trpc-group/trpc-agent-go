@@ -10,25 +10,29 @@
 package gateway
 
 import (
+	"context"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 )
 
 const personaContextHeader = "Active preset persona for this chat:"
 
 func (s *Server) injectedContextMessages(
+	ctx context.Context,
 	userID string,
 	sessionID string,
 ) []model.Message {
-	out := make([]model.Message, 0, 2)
+	out := make([]model.Message, 0, 4)
 	if msg := s.personaContextMessage(
 		userID,
 		sessionID,
 	); msg != nil {
 		out = append(out, *msg)
 	}
+	out = append(out, s.memoryFileContextMessages(ctx, userID)...)
 	out = append(out, s.uploadContextMessages(userID, sessionID)...)
 	return out
 }
@@ -70,4 +74,38 @@ func buildPersonaContextText(preset persona.Preset) string {
 		preset.Prompt,
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (s *Server) memoryFileContextMessages(
+	ctx context.Context,
+	userID string,
+) []model.Message {
+	if s == nil || s.memoryFileStore == nil {
+		return nil
+	}
+
+	appName := strings.TrimSpace(s.appName)
+	if appName == "" {
+		return nil
+	}
+	path, err := s.memoryFileStore.EnsureMemory(
+		ctx,
+		appName,
+		userID,
+	)
+	if err != nil {
+		return nil
+	}
+	text, err := s.memoryFileStore.ReadFile(
+		path,
+		memoryfile.ReadLimit,
+	)
+	if err != nil {
+		return nil
+	}
+	content := memoryfile.BuildContextText(text)
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	return []model.Message{model.NewSystemMessage(content)}
 }

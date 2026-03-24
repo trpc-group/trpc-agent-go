@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	sessionpkg "trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -85,6 +86,85 @@ func TestExecTool_UsesManagerBaseEnv(t *testing.T) {
 	res := out.(execResult)
 	require.Equal(t, "exited", res.Status)
 	require.Contains(t, strings.TrimSpace(res.Output), "ok")
+}
+
+func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	stateDir := t.TempDir()
+	root, err := memoryfile.DefaultRoot(stateDir)
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	mgr := NewManager()
+	execTool := NewExecCommandToolWithMemoryFileStore(
+		mgr,
+		nil,
+		store,
+	).(tool.CallableTool)
+
+	sessionID := "telegram:dm:u1:s1"
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("app", "u1", sessionID),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf %s \"$OPENCLAW_MEMORY_FILE\"",
+		"yieldMs": 0,
+	})
+	out, err := execTool.Call(ctx, args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+
+	path, err := store.MemoryPath("app", "u1")
+	require.NoError(t, err)
+	require.Contains(t, res.Output, path)
+	require.FileExists(t, path)
+}
+
+func TestMemoryFileEnvFromContext_EmptyScopeReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("", "u1", "telegram:dm:u1:s1"),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	require.Nil(t, memoryFileEnvFromContext(ctx, store))
+}
+
+func TestMemoryFileEnvFromContext_EnsureMemoryErrorReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	rootFile := filepath.Join(t.TempDir(), "memory-root")
+	require.NoError(t, os.WriteFile(rootFile, []byte("x"), 0o600))
+
+	root, err := memoryfile.NewStore(rootFile)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("app", "u1", "telegram:dm:u1:s1"),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	require.Nil(t, memoryFileEnvFromContext(ctx, root))
 }
 
 func TestAnnotateExecResult_ParsesMediaMarkers(t *testing.T) {
@@ -466,6 +546,31 @@ func TestTools_Declaration(t *testing.T) {
 	require.Equal(t, toolExecCommand, execTool.Declaration().Name)
 	require.Equal(t, toolWriteStdin, writeTool.Declaration().Name)
 	require.Equal(t, toolKillSession, killTool.Declaration().Name)
+}
+
+func TestExecToolDeclaration_HidesMemoryFileGuidanceWithoutStore(t *testing.T) {
+	t.Parallel()
+
+	decl := newExecCommandTool(NewManager()).Declaration()
+	require.NotNil(t, decl)
+	require.NotContains(t, decl.Description, envMemoryFile)
+}
+
+func TestExecToolDeclaration_ExposesMemoryFileGuidanceWithStore(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	decl := NewExecCommandToolWithMemoryFileStore(
+		NewManager(),
+		nil,
+		store,
+	).Declaration()
+	require.NotNil(t, decl)
+	require.Contains(t, decl.Description, envMemoryFile)
 }
 
 func TestManager_ListIncludesExitedSession(t *testing.T) {
