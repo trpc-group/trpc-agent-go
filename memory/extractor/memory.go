@@ -222,7 +222,7 @@ func (e *memoryExtractor) Metadata() map[string]any {
 }
 
 // extractionUserSuffix is appended as a trailing user message
-// when the conversation ends with an assistant message. Some
+// when the final message role is neither user nor tool. Some
 // model providers (e.g. Anthropic/Claude) reject requests
 // whose last message has role=assistant.
 const extractionUserSuffix = "Extract and manage memories " +
@@ -249,8 +249,13 @@ func (e *memoryExtractor) buildMessages(
 	// Ensure the sequence ends with a user message. Some
 	// providers reject requests that end with an assistant
 	// message (treated as unsupported prefill).
+	// Skip appending when the trailing assistant message
+	// carries tool_calls, because inserting a plain user
+	// message between a tool-call request and its results
+	// would violate the tool-result ordering constraint.
 	if last := result[len(result)-1]; last.Role != model.RoleUser &&
-		last.Role != model.RoleTool {
+		last.Role != model.RoleTool &&
+		len(last.ToolCalls) == 0 {
 		result = append(result,
 			model.NewUserMessage(extractionUserSuffix))
 	}

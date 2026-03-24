@@ -1008,6 +1008,38 @@ func TestBuildMessages_TrailingAssistantSuffix(t *testing.T) {
 			result[len(result)-1].Role)
 	})
 
+	t.Run("assistant with tool_calls no suffix",
+		func(t *testing.T) {
+			// When the trailing assistant message carries
+			// tool_calls, appending a user message would
+			// break the tool-call → tool-result ordering.
+			msgs := []model.Message{
+				model.NewUserMessage("check weather"),
+				{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						Type: "function",
+						ID:   "call_1",
+						Function: model.FunctionDefinitionParam{
+							Name: "get_weather",
+							Arguments: []byte(
+								`{"city":"Beijing"}`),
+						},
+					}},
+				},
+			}
+			result := ext.buildMessages(
+				context.Background(), msgs, nil,
+			)
+			// system + user + assistant(tool_calls).
+			// No trailing user message appended.
+			require.Len(t, result, 3)
+			assert.Equal(t, model.RoleAssistant,
+				result[len(result)-1].Role)
+			assert.NotEmpty(t,
+				result[len(result)-1].ToolCalls)
+		})
+
 	t.Run("extract with trailing assistant", func(t *testing.T) {
 		// Verify the full Extract path sends a request
 		// whose last message is user.
