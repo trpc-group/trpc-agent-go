@@ -221,13 +221,20 @@ func (e *memoryExtractor) Metadata() map[string]any {
 	}
 }
 
+// extractionUserSuffix is appended as a trailing user message
+// when the conversation ends with an assistant message. Some
+// model providers (e.g. Anthropic/Claude) reject requests
+// whose last message has role=assistant.
+const extractionUserSuffix = "Extract and manage memories " +
+	"from the conversation above."
+
 // buildMessages builds messages for auto memory extraction.
 func (e *memoryExtractor) buildMessages(
 	ctx context.Context,
 	messages []model.Message,
 	existing []*memory.Entry,
 ) []model.Message {
-	result := make([]model.Message, 0, len(messages)+1)
+	result := make([]model.Message, 0, len(messages)+2)
 
 	refDate := referenceDate(ctx)
 
@@ -238,6 +245,15 @@ func (e *memoryExtractor) buildMessages(
 
 	// Add conversation messages.
 	result = append(result, messages...)
+
+	// Ensure the sequence ends with a user message. Some
+	// providers reject requests that end with an assistant
+	// message (treated as unsupported prefill).
+	if last := result[len(result)-1]; last.Role != model.RoleUser &&
+		last.Role != model.RoleTool {
+		result = append(result,
+			model.NewUserMessage(extractionUserSuffix))
+	}
 
 	return result
 }
