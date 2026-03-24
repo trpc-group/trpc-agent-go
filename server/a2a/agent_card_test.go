@@ -134,8 +134,8 @@ func TestNewAgentCard_WithCardTools(t *testing.T) {
 
 func TestNewAgentCard_WithCardTools_NilAndEmptyDecl(t *testing.T) {
 	tools := []tool.Tool{
-		nil,                                    // nil tool, should be skipped
-		&mockCardTool{name: "", desc: ""},      // nil Declaration, should be skipped
+		nil,                               // nil tool, should be skipped
+		&mockCardTool{name: "", desc: ""}, // nil Declaration, should be skipped
 		&mockCardTool{name: "valid", desc: "a valid tool"},
 	}
 
