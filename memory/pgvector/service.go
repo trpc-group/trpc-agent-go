@@ -16,7 +16,6 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -620,10 +619,24 @@ func (s *Service) SearchMemories(
 		}
 		results = filtered
 	}
+	if len(results) > 1 {
+		if opts.Kind != "" && opts.KindFallback {
+			imemory.SortSearchResultsWithKindPriority(
+				results,
+				opts.Kind,
+				opts.OrderByEventTime,
+			)
+		} else {
+			imemory.SortSearchResults(results, opts.OrderByEventTime)
+		}
+	}
 
 	// Content-based deduplication of near-identical memories.
 	if opts.Deduplicate && len(results) > 1 {
 		results = deduplicateResults(results)
+	}
+	if maxResults > 0 && len(results) > maxResults {
+		results = results[:maxResults]
 	}
 
 	return results, nil
@@ -673,10 +686,9 @@ func (s *Service) executeVectorSearch(
 		argIdx++
 	}
 
+	searchQuery.WriteString(" ORDER BY embedding <=> $1")
 	if opts.OrderByEventTime {
-		searchQuery.WriteString(" ORDER BY event_time ASC NULLS LAST, embedding <=> $1")
-	} else {
-		searchQuery.WriteString(" ORDER BY embedding <=> $1")
+		searchQuery.WriteString(", event_time ASC NULLS LAST")
 	}
 	fmt.Fprintf(&searchQuery, " LIMIT %d", maxResults)
 
@@ -699,7 +711,7 @@ func (s *Service) executeVectorSearch(
 }
 
 // defaultRRFK is the standard Reciprocal Rank Fusion constant.
-const defaultRRFK = 60
+const defaultRRFK = imemory.DefaultHybridRRFK
 
 // executeKeywordSearch runs a full-text search using PostgreSQL
 // tsvector/tsquery alongside the vector search results.
@@ -778,57 +790,17 @@ func (s *Service) executeKeywordSearch(
 // Reciprocal Rank Fusion (RRF). Each result gets score = 1/(k+rank)
 // from each search method. Combined scores determine final ranking.
 func mergeHybridResults(
-	vectorResults, keywordResults []*memory.Entry,
+	vectorResults []*memory.Entry,
+	keywordResults []*memory.Entry,
 	k int,
 	maxResults int,
 ) []*memory.Entry {
-	if k <= 0 {
-		k = defaultRRFK
-	}
-
-	type rrfEntry struct {
-		entry *memory.Entry
-		score float64
-	}
-
-	scores := make(map[string]*rrfEntry, len(vectorResults)+len(keywordResults))
-
-	for rank, entry := range vectorResults {
-		scores[entry.ID] = &rrfEntry{
-			entry: entry,
-			score: 1.0 / float64(k+rank+1),
-		}
-	}
-
-	for rank, entry := range keywordResults {
-		rrfScore := 1.0 / float64(k+rank+1)
-		if existing, ok := scores[entry.ID]; ok {
-			existing.score += rrfScore
-		} else {
-			scores[entry.ID] = &rrfEntry{
-				entry: entry,
-				score: rrfScore,
-			}
-		}
-	}
-
-	merged := make([]*rrfEntry, 0, len(scores))
-	for _, e := range scores {
-		merged = append(merged, e)
-	}
-	sort.Slice(merged, func(i, j int) bool {
-		return merged[i].score > merged[j].score
-	})
-
-	results := make([]*memory.Entry, 0, min(len(merged), maxResults))
-	for i, e := range merged {
-		if i >= maxResults {
-			break
-		}
-		e.entry.Score = e.score
-		results = append(results, e.entry)
-	}
-	return results
+	return imemory.MergeHybridResults(
+		vectorResults,
+		keywordResults,
+		k,
+		maxResults,
+	)
 }
 
 // mergeSearchResults merges kind-filtered results with fallback results.

@@ -1233,11 +1233,12 @@ Memory: "User likes programming"
 Search: "coding" ❌ No match (semantically similar but different words)
 ```
 
-**Chinese tokenization**: uses bigrams
+**Chinese tokenization**: prefers `gse` word segmentation with
+low-weight CJK character trigram fallback
 
 ```go
 Memory: "用户喜欢编程"
-Search: "编程" ✅ Match ("编程" in bigrams)
+Search: "编程" ✅ Match (word-level hit)
 Search: "写代码" ❌ No match (different words)
 ```
 
@@ -1246,6 +1247,8 @@ Search: "写代码" ❌ No match (different words)
 - These backends perform filtering and sorting in **application layer** (\[O(n)\] complexity)
 - Performance affected by data volume
 - Not semantic similarity search
+- Ranking uses **BM25-style lexical scoring + query coverage + ordered
+  phrase bonus**, not vector semantics
 
 **Recommendations**:
 

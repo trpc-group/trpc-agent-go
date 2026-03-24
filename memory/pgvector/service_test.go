@@ -2415,6 +2415,36 @@ func TestExecuteKeywordSearch(t *testing.T) {
 	})
 }
 
+func TestExecuteVectorSearch_OrderByEventTimeUsesSimilarityFirst(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery("ORDER BY embedding <=> \\$1, event_time ASC NULLS LAST").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
+				"created_at", "updated_at", "similarity"},
+		).AddRow(
+			"mem-1", "test-app", "u1", "Alice hiked in Kyoto", pq.Array([]string{"travel"}),
+			"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.93,
+		))
+
+	results, err := svc.executeVectorSearch(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "u1"},
+		memory.SearchOptions{OrderByEventTime: true},
+		pg.NewVector([]float32{0.1, 0.2}),
+		5,
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestMergeHybridResults(t *testing.T) {
 	entry := func(id string) *memory.Entry {
 		return &memory.Entry{
@@ -2508,6 +2538,89 @@ func TestService_SearchMemories_ThresholdAndDeduplicate(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, "mem-1", results[0].ID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_SearchMemories_OrderByEventTimeKeepsHigherSimilarityFirst(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	later := now.Add(24 * time.Hour)
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
+				"created_at", "updated_at", "similarity"},
+		).
+			AddRow("mem-low", "test-app", "u1", "Older but weaker", pq.Array([]string{"travel"}),
+				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.60).
+			AddRow("mem-high", "test-app", "u1", "Later and stronger", pq.Array([]string{"travel"}),
+				"episode", later, pq.Array([]string{"Alice"}), "Kyoto", later, later, 0.95))
+
+	results, err := svc.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "u1"},
+		"Kyoto",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:            "Kyoto",
+			OrderByEventTime: true,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "mem-high", results[0].ID)
+	assert.Equal(t, "mem-low", results[1].ID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_SearchMemories_KindFallbackKeepsRequestedKindFirst(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	rows := func() *sqlmock.Rows {
+		return sqlmock.NewRows(
+			[]string{"memory_id", "app_name", "user_id", "memory_content", "topics",
+				"memory_kind", "event_time", "participants", "location",
+				"created_at", "updated_at", "similarity"},
+		)
+	}
+
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+		WillReturnRows(rows().AddRow(
+			"mem-1", "test-app", "u1", "Episode primary", pq.Array([]string{"travel"}),
+			"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.60,
+		))
+	mock.ExpectQuery("SELECT memory_id, app_name, user_id, memory_content, topics").
+		WillReturnRows(rows().
+			AddRow("mem-2", "test-app", "u1", "Episode fallback", pq.Array([]string{"travel"}),
+				"episode", now, pq.Array([]string{"Alice"}), "Kyoto", now, now, 0.70).
+			AddRow("mem-3", "test-app", "u1", "Fact fallback", pq.Array([]string{"profile"}),
+				"fact", nil, pq.Array([]string{}), nil, now, now, 0.95))
+
+	results, err := svc.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "u1"},
+		"Kyoto",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:        "Kyoto",
+			Kind:         memory.KindEpisode,
+			KindFallback: true,
+			MaxResults:   4,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+	assert.Equal(t, "mem-2", results[0].ID)
+	assert.Equal(t, "mem-1", results[1].ID)
+	assert.Equal(t, "mem-3", results[2].ID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

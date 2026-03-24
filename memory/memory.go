@@ -275,11 +275,10 @@ type SearchOptions struct {
 	// Results below this threshold are filtered out. 0 means use service default.
 	SimilarityThreshold float64
 
-	// OrderByEventTime orders results by event_time (ascending) instead
-	// of the default embedding similarity order. Only affects episodes
-	// that have event_time set; entries without event_time are appended
-	// after time-ordered entries. This is useful for temporal sequence
-	// questions ("what happened first/next/after X?").
+	// OrderByEventTime applies event_time (ascending) as a tie-breaker
+	// after relevance ranking. Entries without event_time are appended
+	// after time-ordered entries when scores are equal. This is useful
+	// for temporal sequence questions ("what happened first/next/after X?").
 	OrderByEventTime bool
 
 	// KindFallback enables automatic fallback when Kind is set but
@@ -296,7 +295,7 @@ type SearchOptions struct {
 	Deduplicate bool
 
 	// HybridSearch enables hybrid search mode that combines vector similarity
-	// with keyword-based full-text search. When true, both search methods are
+	// with keyword-based lexical search. When true, both search methods are
 	// executed and results are merged using Reciprocal Rank Fusion (RRF).
 	// This improves recall for queries containing specific entity names,
 	// book titles, or other exact-match terms that vector embeddings may
