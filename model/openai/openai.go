@@ -387,12 +387,15 @@ func (m *Model) GenerateContent(
 	if err != nil {
 		return nil, err
 	}
+	// Execute callback synchronously before starting the goroutine
+	// to avoid a race where the runner and HTTP handler finish
+	// (closing the SSE writer) while the callback is still running.
+	if m.chatRequestCallback != nil {
+		m.chatRequestCallback(ctx, chatRequest)
+	}
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
-		if m.chatRequestCallback != nil {
-			m.chatRequestCallback(ctx, chatRequest)
-		}
 		if request.Stream {
 			m.handleStreamingResponse(ctx, *chatRequest, responseChan, opts...)
 		} else {

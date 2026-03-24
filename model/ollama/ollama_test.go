@@ -1034,3 +1034,110 @@ func Test_WithKeepAlive(t *testing.T) {
 	assert.NotNil(t, m.keepAlive)
 	assert.Equal(t, duration, m.keepAlive.Duration)
 }
+
+// TestChatRequestCallbackSynchronous verifies that
+// chatRequestCallback is invoked synchronously inside
+// GenerateContent, before the response goroutine starts.
+func TestChatRequestCallbackSynchronous(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non_streaming", stream: false},
+		{name: "streaming", stream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type",
+						"application/json")
+					if r.URL.Path == "/api/show" {
+						json.NewEncoder(w).Encode(
+							map[string]any{
+								"model_info": map[string]any{
+									"llama.context_length": 4096,
+								},
+							})
+						return
+					}
+					if tt.stream {
+						flusher, ok :=
+							w.(http.Flusher)
+						if !ok {
+							http.Error(w,
+								"no flusher",
+								http.StatusInternalServerError)
+							return
+						}
+						chunks := []map[string]any{
+							{
+								"model":      "m",
+								"created_at": "2024-01-01T00:00:00Z",
+								"message": map[string]any{
+									"role":    "assistant",
+									"content": "hi",
+								},
+								"done":              true,
+								"prompt_eval_count": 1,
+								"eval_count":        1,
+							},
+						}
+						for _, c := range chunks {
+							json.NewEncoder(w).Encode(c)
+							flusher.Flush()
+						}
+						return
+					}
+					json.NewEncoder(w).Encode(
+						map[string]any{
+							"model":             "m",
+							"created_at":        "2024-01-01T00:00:00Z",
+							"message":           map[string]any{"role": "assistant", "content": "hi"},
+							"done":              true,
+							"prompt_eval_count": 1,
+							"eval_count":        1,
+						})
+				}))
+			defer srv.Close()
+
+			var callCount int64
+			m := New("test-model",
+				WithHost(srv.URL),
+				WithChatRequestCallback(
+					func(_ context.Context,
+						_ *api.ChatRequest,
+					) {
+						callCount++
+					}),
+			)
+
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					Stream: tt.stream,
+				},
+			}
+
+			ch, err := m.GenerateContent(
+				context.Background(), req)
+			require.NoError(t, err)
+
+			// Callback must have fired synchronously
+			// before GenerateContent returned.
+			assert.Equal(t, int64(1), callCount,
+				"callback must execute exactly once "+
+					"before GenerateContent returns")
+
+			// Drain the channel to avoid goroutine leak.
+			for range ch {
+			}
+
+			// Confirm no extra invocations after drain.
+			assert.Equal(t, int64(1), callCount,
+				"callback must not be called more than once")
+		})
+	}
+}
