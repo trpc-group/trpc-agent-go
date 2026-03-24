@@ -59,15 +59,43 @@ func TestKeyBuilder_SessionMetaPattern(t *testing.T) {
 		},
 		{
 			name:     "with prefix",
-			prefix:   "staging",
+			prefix:   "prod",
 			userKey:  session.UserKey{AppName: "myapp", UserID: "u1"},
-			expected: "staging:hashidx:meta:myapp:{u1}:*",
+			expected: "prod:hashidx:meta:myapp:{u1}:*",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			kb := newKeyBuilder(tt.prefix)
 			assert.Equal(t, tt.expected, kb.SessionMetaPattern(tt.userKey))
+		})
+	}
+}
+
+func TestKeyBuilder_SessionIndexKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		prefix   string
+		userKey  session.UserKey
+		expected string
+	}{
+		{
+			name:     "no prefix",
+			prefix:   "",
+			userKey:  session.UserKey{AppName: "myapp", UserID: "u1"},
+			expected: "hashidx:sessidx:myapp:{u1}",
+		},
+		{
+			name:     "with prefix",
+			prefix:   "staging",
+			userKey:  session.UserKey{AppName: "myapp", UserID: "u1"},
+			expected: "staging:hashidx:sessidx:myapp:{u1}",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kb := newKeyBuilder(tt.prefix)
+			assert.Equal(t, tt.expected, kb.SessionIndexKey(tt.userKey))
 		})
 	}
 }
@@ -161,6 +189,8 @@ func TestExportedKeyHelpers(t *testing.T) {
 
 	assert.Equal(t, "hashidx:meta:app:{u}:s", GetSessionMetaKey("", key))
 	assert.Equal(t, "pfx:hashidx:meta:app:{u}:s", GetSessionMetaKey("pfx", key))
+	assert.Equal(t, "hashidx:meta:app:{u}:*", GetSessionMetaPattern("", session.UserKey{AppName: "app", UserID: "u"}))
+	assert.Equal(t, "pfx:hashidx:meta:app:{u}:*", GetSessionMetaPattern("pfx", session.UserKey{AppName: "app", UserID: "u"}))
 
 	assert.Equal(t, "hashidx:evtdata:app:{u}:s", GetEventDataKey("", key))
 	assert.Equal(t, "hashidx:evtidx:time:app:{u}:s", GetEventTimeIndexKey("", key))
@@ -169,4 +199,8 @@ func TestExportedKeyHelpers(t *testing.T) {
 	assert.Equal(t, "hashidx:trkidx:time:app:{u}:s:t", GetTrackTimeIndexKey("", key, "t"))
 
 	assert.Equal(t, "hashidx:userstate:app:{u}", GetUserStateKey("", "app", "u"))
+
+	userKey := session.UserKey{AppName: "app", UserID: "u"}
+	assert.Equal(t, "hashidx:sessidx:app:{u}", GetSessionIndexKey("", userKey))
+	assert.Equal(t, "pfx:hashidx:sessidx:app:{u}", GetSessionIndexKey("pfx", userKey))
 }

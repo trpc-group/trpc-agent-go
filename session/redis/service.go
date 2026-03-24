@@ -143,11 +143,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	// Initialize HashIdx config
 	hashidxCfg := hashidx.Config{
-		SessionTTL:        sessionTTL,
-		AppStateTTL:       appStateTTL,
-		UserStateTTL:      userStateTTL,
-		SessionEventLimit: opts.sessionEventLimit,
-		KeyPrefix:         opts.keyPrefix,
+		SessionTTL:             sessionTTL,
+		AppStateTTL:            appStateTTL,
+		UserStateTTL:           userStateTTL,
+		SessionEventLimit:      opts.sessionEventLimit,
+		KeyPrefix:              opts.keyPrefix,
+		EnableUserSessionIndex: opts.enableUserSessionIndex,
 	}
 
 	s := &Service{
@@ -437,7 +438,7 @@ func (s *Service) ListSessions(
 
 	hashidxSessions, err := s.hashidxClient.ListSessions(ctx, userKey, eventLimit, opt.EventTime)
 	if err != nil {
-		return nil, fmt.Errorf("scan sessions (hashidx): %w", err)
+		return nil, fmt.Errorf("list sessions (hashidx): %w", err)
 	}
 
 	// List zset (if zset awareness is enabled: transition or legacy)

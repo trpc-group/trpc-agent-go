@@ -281,6 +281,7 @@ func TestService_WithTTL(t *testing.T) {
 
 	service, err := NewService(
 		WithRedisClientURL(redisURL),
+		WithEnableUserSessionIndex(true),
 		WithSessionTTL(time.Hour),
 		WithAppStateTTL(2*time.Hour),
 		WithUserStateTTL(30*time.Minute),
@@ -355,6 +356,7 @@ func TestService_ListSessions_WithTTL(t *testing.T) {
 
 	service, err := NewService(
 		WithRedisClientURL(redisURL),
+		WithEnableUserSessionIndex(true),
 		WithSessionTTL(time.Hour),
 		WithAppStateTTL(2*time.Hour),
 		WithUserStateTTL(30*time.Minute),

@@ -449,7 +449,7 @@ func TestGetSession_EventFiltering_Integration(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()
 
-	service, err := NewService(WithRedisClientURL(redisURL))
+	service, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true))
 	require.NoError(t, err)
 	defer service.Close()
 

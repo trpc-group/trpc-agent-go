@@ -11,14 +11,40 @@ package hashidx
 
 import "github.com/redis/go-redis/v9"
 
+// luaCreateSession atomically creates a session meta key (via SET NX) and registers
+// the session ID in the session index Hash.
+// KEYS[1] = sessionMeta key, KEYS[2] = session index Hash key
+// ARGV[1] = metaJSON, ARGV[2] = sessionID, ARGV[3] = TTL (seconds, 0 = no TTL)
+// ARGV[4] = index entry JSON (structured value for the index Hash field)
+// Returns: 1 on success, 0 if session already exists
+var luaCreateSession = redis.NewScript(`
+local metaKey = KEYS[1]
+local indexKey = KEYS[2]
+local metaJSON = ARGV[1]
+local sessionID = ARGV[2]
+local ttl = tonumber(ARGV[3])
+local indexEntry = ARGV[4]
+
+-- SET NX: only create if not exists
+local ok = redis.call('SET', metaKey, metaJSON, 'NX')
+if not ok then
+    return 0
+end
+
+-- Register session ID in the index Hash with structured metadata
+redis.call('HSET', indexKey, sessionID, indexEntry)
+
+if ttl > 0 then
+    redis.call('EXPIRE', metaKey, ttl)
+end
+
+return 1
+`)
+
 // luaAppendEvent appends an event atomically and applies StateDelta to session state.
 // KEYS[1] = sessionMeta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key
 // ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp, ARGV[4] = TTL (seconds), ARGV[5] = shouldStoreEvent (1 or 0)
 // Returns: 1 on success, 0 if session not found
-//
-// Note on TTL: AppendEvent refreshes TTL on all related keys (sessionMeta, evtdata, evtidx:time)
-// to keep expiry consistent, matching the behavior of SQL-based backends that update expires_at
-// on every event append.
 var luaAppendEvent = redis.NewScript(`
 local sessionMetaKey = KEYS[1]
 local evtDataKey = KEYS[2]
@@ -37,7 +63,6 @@ if not metaJSON then
 end
 
 -- 2. Store event data only if shouldStoreEvent is true
--- This matches zset behavior: only store events with Response != nil && !IsPartial && IsValidContent()
 if shouldStoreEvent then
     redis.call('HSET', evtDataKey, eventID, eventJSON)
     redis.call('ZADD', evtTimeKey, timestamp, eventID)
@@ -57,8 +82,7 @@ if stateDelta and next(stateDelta) ~= nil then
     redis.call('SET', sessionMetaKey, cjson.encode(meta), 'KEEPTTL')
 end
 
--- 4. Refresh TTL on all related keys to prevent sessionMeta from expiring
--- while events remain alive. This is the write-path TTL refresh.
+-- 4. Refresh TTL on event data keys
 if ttl > 0 then
     redis.call('EXPIRE', sessionMetaKey, ttl)
     redis.call('EXPIRE', evtDataKey, ttl)
@@ -259,12 +283,38 @@ for i = #result, 1, -1 do table.insert(reversed, result[i]) end
 return reversed
 `)
 
-// luaDeleteSession deletes all session data including any track keys.
+// luaDeleteSessionLegacy deletes all session data keys without index awareness.
 // KEYS[1..N] = all keys to delete (meta, evtdata, evtidx:time, summary, track keys...)
-var luaDeleteSession = redis.NewScript(`
+var luaDeleteSessionLegacy = redis.NewScript(`
 if #KEYS > 0 then
     redis.call('DEL', unpack(KEYS))
 end
+return 1
+`)
+
+// luaDeleteSession deletes all session data including any track keys,
+// and removes the session from the session index Hash.
+// KEYS[1..N-1] = keys to delete (meta, evtdata, evtidx:time, summary, track keys...)
+// KEYS[N] = session index Hash key
+// ARGV[1] = sessionID (field to remove from index Hash)
+var luaDeleteSession = redis.NewScript(`
+local indexKey = KEYS[#KEYS]
+local sessionID = ARGV[1]
+
+-- Delete all data keys (everything except the last key which is the index)
+if #KEYS > 1 then
+    local dataKeys = {}
+    for i = 1, #KEYS - 1 do
+        table.insert(dataKeys, KEYS[i])
+    end
+    redis.call('DEL', unpack(dataKeys))
+end
+
+-- Remove session from the index Hash
+if sessionID and sessionID ~= '' then
+    redis.call('HDEL', indexKey, sessionID)
+end
+
 return 1
 `)
 
@@ -311,7 +361,7 @@ end
 meta.state['tracks'] = tracksVal
 redis.call('SET', metaKey, cjson.encode(meta), 'KEEPTTL')
 
--- Set TTL for track keys (they may be newly created and need an initial TTL)
+-- Refresh TTL for track data keys
 if ttl > 0 then
     redis.call('EXPIRE', dataKey, ttl)
     redis.call('EXPIRE', idxKey, ttl)
