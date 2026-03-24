@@ -5216,11 +5216,12 @@ backend, it requires an <strong>embedder</strong> to generate embeddings.</p>
 </span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6"></a><span class="nx">Memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;User likes programming&quot;</span>
 </span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7"></a><span class="nx">Search</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;coding&quot;</span><span class="w"> </span><span class="err">❌</span><span class="w"> </span><span class="nx">No</span><span class="w"> </span><span class="nx">match</span><span class="w"> </span><span class="p">(</span><span class="nx">semantically</span><span class="w"> </span><span class="nx">similar</span><span class="w"> </span><span class="nx">but</span><span class="w"> </span><span class="nx">different</span><span class="w"> </span><span class="nx">words</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>Chinese tokenization</strong>: uses bigrams</p>
+<p><strong>Chinese tokenization</strong>: prefers <code>gse</code> word segmentation with
+low-weight CJK character trigram fallback</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-33-1">1</a></span>
 <span class="normal"><a href="#__codelineno-33-2">2</a></span>
 <span class="normal"><a href="#__codelineno-33-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1"></a><span class="nx">Memory</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;用户喜欢编程&quot;</span>
-</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2"></a><span class="nx">Search</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;编程&quot;</span><span class="w"> </span><span class="err">✅</span><span class="w"> </span><span class="nx">Match</span><span class="w"> </span><span class="p">(</span><span class="s">&quot;编程&quot;</span><span class="w"> </span><span class="nx">in</span><span class="w"> </span><span class="nx">bigrams</span><span class="p">)</span>
+</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2"></a><span class="nx">Search</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;编程&quot;</span><span class="w"> </span><span class="err">✅</span><span class="w"> </span><span class="nx">Match</span><span class="w"> </span><span class="p">(</span><span class="nx">word</span><span class="o">-</span><span class="nx">level</span><span class="w"> </span><span class="nx">hit</span><span class="p">)</span>
 </span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3"></a><span class="nx">Search</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;写代码&quot;</span><span class="w"> </span><span class="err">❌</span><span class="w"> </span><span class="nx">No</span><span class="w"> </span><span class="nx">match</span><span class="w"> </span><span class="p">(</span><span class="nx">different</span><span class="w"> </span><span class="nx">words</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Limitations</strong> (non-pgvector backends):</p>
@@ -5228,6 +5229,8 @@ backend, it requires an <strong>embedder</strong> to generate embeddings.</p>
 <li>These backends perform filtering and sorting in <strong>application layer</strong> ([O(n)] complexity)</li>
 <li>Performance affected by data volume</li>
 <li>Not semantic similarity search</li>
+<li>Ranking uses <strong>BM25-style lexical scoring + query coverage + ordered
+  phrase bonus</strong>, not vector semantics</li>
 </ul>
 <p><strong>Recommendations</strong>:</p>
 <ul>
@@ -5756,7 +5759,7 @@ to balance performance and cost.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 18, 2026 08:17:02 UTC">2026-03-18 08:17:02</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 24, 2026 03:00:38 UTC">2026-03-24 03:00:38</span>
   </span>
 
     
