@@ -80,6 +80,8 @@ func NewMemoryService(options ...ServiceOpt) *MemoryService {
 		opts.extractor,
 		opts.toolCreators,
 		opts.enabledTools,
+		opts.toolExposed,
+		opts.toolHidden,
 		svc.cachedTools,
 	)
 
@@ -334,9 +336,10 @@ func (s *MemoryService) SearchMemories(ctx context.Context, userKey memory.UserK
 }
 
 // Tools returns the list of available memory tools.
-// In auto memory mode (extractor is set), only front-end tools are returned.
-// By default, only Search is enabled; Load can be enabled explicitly.
-// In agentic mode, all enabled tools are returned.
+// In auto memory mode (extractor is set), memory_search is exposed by default,
+// memory_load is exposed once enabled, and other enabled tools remain hidden
+// unless explicitly exposed.
+// Without an extractor, enabled tools are exposed directly.
 // The tools list is pre-computed at service creation time.
 func (s *MemoryService) Tools() []tool.Tool {
 	return slices.Clone(s.precomputedTools)
