@@ -296,6 +296,8 @@ func (s *Server) streamLocked(
 
 	result := newReplyAccumulator()
 	sentText := false
+	pendingThought := false
+	lastThoughtCompleted := ""
 	for evt := range events {
 		if trace != nil && evt != nil {
 			_ = trace.Record(debugrecorder.KindRunnerEvent, evt)
@@ -356,9 +358,15 @@ func (s *Server) streamLocked(
 					errMsg: contextErrMessage(ctx),
 				}
 			}
+			pendingThought = true
 		}
 		thoughtReply := streamThoughtCompleted(evt)
-		if thoughtReply != "" {
+		if shouldSendThoughtCompleted(
+			evt,
+			thoughtReply,
+			pendingThought,
+			lastThoughtCompleted,
+		) {
 			if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
 				Type:      gwproto.StreamEventTypeThoughtCompleted,
 				SessionID: run.sessionID,
@@ -373,6 +381,8 @@ func (s *Server) streamLocked(
 					errMsg: contextErrMessage(ctx),
 				}
 			}
+			lastThoughtCompleted = thoughtReply
+			pendingThought = false
 		}
 		delta := streamDeltaText(evt, sentText)
 		if delta == "" {
@@ -775,10 +785,34 @@ func streamThoughtCompleted(evt *event.Event) string {
 	if evt == nil || evt.Response == nil {
 		return ""
 	}
-	if evt.Object != model.ObjectTypeChatCompletion {
+	if evt.Object == model.ObjectTypeChatCompletion {
+		return fullThoughtFromResponse(evt.Response)
+	}
+	if !evt.IsRunnerCompletion() {
 		return ""
 	}
 	return fullThoughtFromResponse(evt.Response)
+}
+
+func shouldSendThoughtCompleted(
+	evt *event.Event,
+	thoughtReply string,
+	pendingThought bool,
+	lastThoughtCompleted string,
+) bool {
+	if evt == nil || thoughtReply == "" {
+		return false
+	}
+	if evt.Object == model.ObjectTypeChatCompletion {
+		return true
+	}
+	if !evt.IsRunnerCompletion() {
+		return false
+	}
+	if pendingThought {
+		return true
+	}
+	return thoughtReply != lastThoughtCompleted
 }
 
 func fullTextFromResponse(rsp *model.Response) string {
