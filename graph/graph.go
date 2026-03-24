@@ -13,12 +13,14 @@ package graph
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -115,6 +117,13 @@ type Node struct {
 	// userInputKey is the state key used as one-shot input for LLM and
 	// Agent nodes. When empty, StateKeyUserInput is used.
 	userInputKey string
+
+	// instruction stores the static instruction for LLM nodes.
+	instruction string
+	// llmModel stores the static model for LLM nodes.
+	llmModel model.Model
+	// baseTools stores the static tools configured directly on the node.
+	baseTools map[string]tool.Tool
 
 	toolSets             []tool.ToolSet
 	refreshToolSetsOnRun bool
@@ -251,6 +260,20 @@ func (g *Graph) Node(id string) (*Node, bool) {
 	return node, exists
 }
 
+// Nodes returns all nodes in the graph sorted by node ID.
+func (g *Graph) Nodes() []*Node {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	nodes := make([]*Node, 0, len(g.nodes))
+	for _, node := range g.nodes {
+		nodes = append(nodes, node)
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].ID < nodes[j].ID
+	})
+	return nodes
+}
+
 // Edges returns all outgoing edges from a node.
 func (g *Graph) Edges(nodeID string) []*Edge {
 	g.mu.RLock()
@@ -271,6 +294,75 @@ func (g *Graph) EntryPoint() string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.entryPoint
+}
+
+// Instruction returns the static instruction for an LLM node.
+func (n *Node) Instruction() string {
+	return n.instruction
+}
+
+// Model returns the static model for an LLM node.
+func (n *Node) Model() model.Model {
+	return n.llmModel
+}
+
+// HasTools reports whether the node has statically configured tools.
+func (n *Node) HasTools() bool {
+	return len(n.baseTools) > 0 || len(n.toolSets) > 0
+}
+
+// EndTargets returns the concrete end targets declared on the node.
+func (n *Node) EndTargets() []string {
+	if len(n.ends) == 0 {
+		return nil
+	}
+	targets := make([]string, 0, len(n.ends))
+	seen := make(map[string]struct{}, len(n.ends))
+	for _, target := range n.ends {
+		if target == "" || target == End {
+			continue
+		}
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	return targets
+}
+
+// Tools returns the static visible tools of the node.
+func (n *Node) Tools(ctx context.Context) []tool.Tool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	toolsByName := make(map[string]tool.Tool, len(n.baseTools))
+	for name, currentTool := range n.baseTools {
+		if currentTool == nil || currentTool.Declaration() == nil {
+			continue
+		}
+		toolsByName[name] = currentTool
+	}
+	if n.refreshToolSetsOnRun {
+		for _, toolSet := range n.toolSets {
+			namedToolSet := itool.NewNamedToolSet(toolSet)
+			for _, currentTool := range namedToolSet.Tools(ctx) {
+				if currentTool == nil || currentTool.Declaration() == nil {
+					continue
+				}
+				toolsByName[currentTool.Declaration().Name] = currentTool
+			}
+		}
+	}
+	tools := make([]tool.Tool, 0, len(toolsByName))
+	for _, currentTool := range toolsByName {
+		tools = append(tools, currentTool)
+	}
+	sort.Slice(tools, func(i, j int) bool {
+		return tools[i].Declaration().Name < tools[j].Declaration().Name
+	})
+	return tools
 }
 
 // Schema returns the state schema.

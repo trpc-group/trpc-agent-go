@@ -590,6 +590,9 @@ func (sg *StateGraph) AddLLMNode(
 	for _, opt := range opts {
 		opt(node)
 	}
+	node.instruction = instruction
+	node.llmModel = llmModel
+	node.baseTools = cloneToolsMap(tools)
 	runner := &llmRunner{
 		llmModel:             llmModel,
 		instruction:          instruction,
@@ -605,6 +608,7 @@ func (sg *StateGraph) AddLLMNode(
 			runner.toolSets = append(runner.toolSets, node.toolSets...)
 		} else {
 			runner.tools = mergeToolsWithToolSets(context.Background(), runner.tools, node.toolSets)
+			node.baseTools = cloneToolsMap(runner.tools)
 		}
 	}
 	if node.llmGenerationConfig != nil {
@@ -685,8 +689,18 @@ func (sg *StateGraph) AddToolsNode(
 	opts ...Option,
 ) *StateGraph {
 	toolOpts := append([]Option{WithNodeType(NodeTypeTool)}, opts...)
-	toolsNodeFunc := NewToolsNodeFunc(tools, toolOpts...)
+	resolvedTools := cloneToolsMap(tools)
+	toolsNodeFunc, baseTools := newToolsNodeRuntime(resolvedTools, toolOpts...)
+	existingNode, existedBefore := sg.graph.Node(id)
 	sg.AddNode(id, toolsNodeFunc, toolOpts...)
+	node, ok := sg.graph.Node(id)
+	if !ok || node == nil {
+		return sg
+	}
+	if existedBefore && node == existingNode {
+		return sg
+	}
+	node.baseTools = baseTools
 	return sg
 }
 
@@ -1103,6 +1117,17 @@ func mergeToolsWithToolSets(
 		}
 	}
 	return out
+}
+
+func cloneToolsMap(tools map[string]tool.Tool) map[string]tool.Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	cloned := make(map[string]tool.Tool, len(tools))
+	for name, currentTool := range tools {
+		cloned[name] = currentTool
+	}
+	return cloned
 }
 
 // WithLLMToolSets sets the tool sets for the LLM node function.
@@ -2062,6 +2087,14 @@ func runModel(
 // NewToolsNodeFunc creates a NodeFunc that uses the tools package directly.
 // This implements tools node functionality using the tools package interface.
 func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
+	nodeFunc, _ := newToolsNodeRuntime(tools, opts...)
+	return nodeFunc
+}
+
+func newToolsNodeRuntime(
+	tools map[string]tool.Tool,
+	opts ...Option,
+) (NodeFunc, map[string]tool.Tool) {
 	node := &Node{}
 	for _, opt := range opts {
 		opt(node)
@@ -2179,7 +2212,7 @@ func NewToolsNodeFunc(tools map[string]tool.Tool, opts ...Option) NodeFunc {
 			workflow.Response = upd
 		}
 		return upd, nil
-	}
+	}, cloneToolsMap(staticTools)
 }
 
 // copyRuntimeStateFiltered creates a shallow copy of the parent state excluding
