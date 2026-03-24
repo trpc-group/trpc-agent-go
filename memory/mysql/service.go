@@ -344,9 +344,8 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 }
 
 // SearchMemories searches memories for a user.
-// Results are ranked by relevance score (fraction of query tokens
-// matched) and only the top entries above the minimum threshold are
-// returned.
+// Results are ranked by a normalized BM25-style keyword score and only
+// the top entries above the minimum threshold are returned.
 func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey,
 	query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {

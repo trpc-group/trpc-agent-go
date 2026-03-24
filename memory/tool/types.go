@@ -92,7 +92,7 @@ type SearchMemoryRequest struct {
 	Kind             string `json:"kind,omitempty" jsonschema:"enum=fact,enum=episode" description:"Filter by memory kind: 'fact' or 'episode'. Empty means all."`
 	TimeAfter        string `json:"time_after,omitempty" description:"Filter episodes with event_time on or after this date (ISO 8601: YYYY-MM-DD)"`
 	TimeBefore       string `json:"time_before,omitempty" description:"Filter episodes with event_time on or before this date (ISO 8601: YYYY-MM-DD)"`
-	OrderByEventTime bool   `json:"order_by_event_time,omitempty" description:"When true order results by event_time ascending instead of relevance. Useful for temporal sequence questions (what happened first/next/after)."`
+	OrderByEventTime bool   `json:"order_by_event_time,omitempty" description:"When true, use event_time ascending as a tie-breaker after relevance ranking. Useful for temporal sequence questions (what happened first/next/after)."`
 }
 
 // SearchMemoryResponse represents the response from memory_search tool.
