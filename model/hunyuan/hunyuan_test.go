@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/hunyuan/internal/hunyuan"
@@ -1268,5 +1269,120 @@ func TestTokenTailoringCounterError(t *testing.T) {
 
 	if len(responses) != 1 {
 		t.Fatalf("Expected 1 response, got %d", len(responses))
+	}
+}
+
+// TestChatRequestCallbackSynchronous verifies that
+// chatRequestCallback is invoked synchronously inside
+// GenerateContent, before the response goroutine starts.
+func TestChatRequestCallbackSynchronous(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non_streaming", stream: false},
+		{name: "streaming", stream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if tt.stream {
+						w.Header().Set("Content-Type",
+							"text/event-stream")
+						w.WriteHeader(http.StatusOK)
+						flusher, ok := w.(http.Flusher)
+						if !ok {
+							http.Error(w,
+								"no flusher",
+								http.StatusInternalServerError)
+							return
+						}
+						chunk := hunyuan.ChatCompletionResponse{
+							Id:      "s1",
+							Created: 1,
+							Choices: []*hunyuan.ChatCompletionResponseChoice{{
+								Index: 0,
+								Delta: &hunyuan.ChatCompletionResponseDelta{
+									Role:    "assistant",
+									Content: "hi",
+								},
+								FinishReason: "stop",
+							}},
+						}
+						data, _ := json.Marshal(chunk)
+						fmt.Fprintf(w,
+							"data: %s\n\n", data)
+						flusher.Flush()
+						fmt.Fprint(w, "data: [DONE]\n\n")
+						flusher.Flush()
+						return
+					}
+					w.Header().Set("Content-Type",
+						"application/json")
+					resp := struct {
+						Response hunyuan.ChatCompletionResponse `json:"Response"`
+					}{
+						Response: hunyuan.ChatCompletionResponse{
+							Id:      "n1",
+							Created: 1,
+							Choices: []*hunyuan.ChatCompletionResponseChoice{{
+								Index:        0,
+								FinishReason: "stop",
+								Message: &hunyuan.ChatCompletionMessageParam{
+									Role:    "assistant",
+									Content: "hi",
+								},
+							}},
+							Usage: hunyuan.ChatCompletionResponseUsage{
+								TotalTokens: 1,
+							},
+						},
+					}
+					json.NewEncoder(w).Encode(resp)
+				}))
+			defer srv.Close()
+
+			var callCount int64
+			m := New("hunyuan-lite",
+				WithSecretId("id"),
+				WithSecretKey("key"),
+				WithBaseUrl(srv.URL),
+				WithHost("test"),
+				WithChatRequestCallback(
+					func(_ context.Context,
+						_ *hunyuan.ChatCompletionNewParams,
+					) {
+						callCount++
+					}),
+			)
+
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					Stream: tt.stream,
+				},
+			}
+
+			ch, err := m.GenerateContent(
+				context.Background(), req)
+			require.NoError(t, err)
+
+			// Callback must have fired synchronously
+			// before GenerateContent returned.
+			assert.Equal(t, int64(1), callCount,
+				"callback must execute exactly once "+
+					"before GenerateContent returns")
+
+			// Drain the channel to avoid goroutine leak.
+			for range ch {
+			}
+
+			// Confirm no extra invocations after drain.
+			assert.Equal(t, int64(1), callCount,
+				"callback must not be called more than once")
+		})
 	}
 }
