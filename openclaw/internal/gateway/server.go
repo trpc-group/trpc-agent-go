@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -135,6 +136,7 @@ type Server struct {
 	runner  runner.Runner
 	managed runner.ManagedRunner
 
+	appName       string
 	sessionIDFunc SessionIDFunc
 
 	allowUsers        map[string]struct{}
@@ -152,6 +154,7 @@ type Server struct {
 	uploads          *uploads.Store
 	audioTranscriber audioTranscriber
 	personaStore     *persona.Store
+	memoryFileStore  *memoryfile.Store
 }
 
 // New creates a gateway server with the provided runner.
@@ -224,6 +227,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		partFetcher:       fetcher,
 		runner:            r,
 		managed:           managed,
+		appName:           strings.TrimSpace(options.appName),
 		sessionIDFunc:     sessionIDFunc,
 		allowUsers:        options.allowUsers,
 		requireMention:    options.requireMention,
@@ -235,6 +239,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		uploads:           options.uploads,
 		audioTranscriber:  audioTranscriber,
 		personaStore:      options.personaStore,
+		memoryFileStore:   options.memoryFileStore,
 	}
 
 	mux := http.NewServeMux()
@@ -529,6 +534,7 @@ func (s *Server) resolveRunOptions(
 	run preparedMessageRun,
 ) (context.Context, []agent.RunOption) {
 	runOpts := s.runOptions(
+		ctx,
 		run.userID,
 		run.sessionID,
 		run.requestID,
@@ -559,6 +565,7 @@ func (s *Server) resolveRunOptions(
 }
 
 func (s *Server) runOptions(
+	ctx context.Context,
 	userID string,
 	sessionID string,
 	requestID string,
@@ -568,6 +575,7 @@ func (s *Server) runOptions(
 		runOpts = append(runOpts, agent.WithRequestID(requestID))
 	}
 	if messages := s.injectedContextMessages(
+		ctx,
 		userID,
 		sessionID,
 	); len(messages) > 0 {
