@@ -23,10 +23,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -37,6 +39,373 @@ import (
 type mockAgent struct {
 	name        string
 	description string
+}
+
+type fixedResponseModel struct {
+	response string
+}
+
+type visibleCompletionThenAfterAgent struct {
+	name string
+}
+
+type assistantThenVisibleCompletionAgent struct {
+	name string
+}
+
+type assistantThenVisibleStateOnlyCompletionAgent struct {
+	name string
+}
+
+type assistantThenVisibleStateOnlyCompletionWithoutResponseIDAgent struct {
+	name string
+}
+
+type visibleCompletionThenErrorAgent struct {
+	name string
+}
+
+func newGraphAgentWithAfterCallback(
+	t *testing.T,
+	state graph.State,
+	customResponse *model.Response,
+) *graphagent.GraphAgent {
+	t.Helper()
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, input graph.State) (any, error) {
+		return state, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return &agent.AfterAgentResult{
+			CustomResponse: customResponse,
+		}, nil
+	})
+	ga, err := graphagent.New("graph-child-callback", compiled, graphagent.WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+	return ga
+}
+
+func newGraphAgentWithAfterCallbackError(
+	t *testing.T,
+	state graph.State,
+	err error,
+) *graphagent.GraphAgent {
+	t.Helper()
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, input graph.State) (any, error) {
+		return state, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return nil, err
+	})
+	ga, runErr := graphagent.New("graph-child-callback-error", compiled, graphagent.WithAgentCallbacks(callbacks))
+	require.NoError(t, runErr)
+	return ga
+}
+
+func (m *fixedResponseModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	go func() {
+		defer close(ch)
+		ch <- &model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage(m.response),
+			}},
+			Done: true,
+		}
+	}()
+	return ch, nil
+}
+
+func (m *fixedResponseModel) Info() model.Info {
+	return model.Info{Name: "fixed-response-model"}
+}
+
+func (a *visibleCompletionThenAfterAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		invocationID := "visible-completion-agent"
+		author := a.name
+		if invocation != nil {
+			invocationID = invocation.InvocationID
+			if invocation.AgentName != "" {
+				author = invocation.AgentName
+			}
+		}
+		rawCompletion := graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID(invocationID),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse: "child-final",
+			}),
+		)
+		visibleCompletion, ok := graph.VisibleGraphCompletionEvent(rawCompletion)
+		if !ok {
+			return
+		}
+		ch <- visibleCompletion
+		ch <- event.NewResponseEvent(invocationID, author, &model.Response{
+			Object: "after.custom",
+			Done:   true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("after callback"),
+			}},
+		})
+	}()
+	return ch, nil
+}
+
+func (a *assistantThenVisibleCompletionAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		invocationID := "assistant-then-visible-completion-agent"
+		author := a.name
+		if invocation != nil {
+			invocationID = invocation.InvocationID
+			if invocation.AgentName != "" {
+				author = invocation.AgentName
+			}
+		}
+		assistantEvent := event.NewResponseEvent(invocationID, author, &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("draft"),
+			}},
+		})
+		rawCompletion := graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID(invocationID),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse: "child-final",
+			}),
+		)
+		visibleCompletion, ok := graph.VisibleGraphCompletionEvent(rawCompletion)
+		if !ok {
+			return
+		}
+		_ = agent.EmitEvent(ctx, invocation, ch, assistantEvent)
+		_ = agent.EmitEvent(ctx, invocation, ch, visibleCompletion)
+	}()
+	return ch, nil
+}
+
+func (a *assistantThenVisibleStateOnlyCompletionAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		invocationID := "assistant-then-visible-completion-agent"
+		author := a.name
+		if invocation != nil {
+			invocationID = invocation.InvocationID
+			if invocation.AgentName != "" {
+				author = invocation.AgentName
+			}
+		}
+		assistantEvent := event.NewResponseEvent(invocationID, author, &model.Response{
+			ID:     "resp-1",
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("wrapped-final"),
+			}},
+		})
+		rawCompletion := graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID(invocationID),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponseID: "resp-1",
+				graphStateKey:                "child-state",
+			}),
+		)
+		visibleCompletion, ok := graph.VisibleGraphCompletionEvent(rawCompletion)
+		if !ok {
+			return
+		}
+		_ = agent.EmitEvent(ctx, invocation, ch, assistantEvent)
+		_ = agent.EmitEvent(ctx, invocation, ch, visibleCompletion)
+	}()
+	return ch, nil
+}
+
+func (a *assistantThenVisibleStateOnlyCompletionWithoutResponseIDAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		invocationID := "assistant-then-visible-completion-without-response-id-agent"
+		author := a.name
+		if invocation != nil {
+			invocationID = invocation.InvocationID
+			if invocation.AgentName != "" {
+				author = invocation.AgentName
+			}
+		}
+		assistantEvent := event.NewResponseEvent(invocationID, author, &model.Response{
+			ID:     "resp-1",
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("wrapped-final"),
+			}},
+		})
+		rawCompletion := graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID(invocationID),
+			graph.WithCompletionEventFinalState(graph.State{
+				graphStateKey: "child-state",
+			}),
+		)
+		visibleCompletion, ok := graph.VisibleGraphCompletionEvent(rawCompletion)
+		if !ok {
+			return
+		}
+		_ = agent.EmitEvent(ctx, invocation, ch, assistantEvent)
+		_ = agent.EmitEvent(ctx, invocation, ch, visibleCompletion)
+	}()
+	return ch, nil
+}
+
+func (a *visibleCompletionThenErrorAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		invocationID := "visible-completion-then-error-agent"
+		author := a.name
+		if invocation != nil {
+			invocationID = invocation.InvocationID
+			if invocation.AgentName != "" {
+				author = invocation.AgentName
+			}
+		}
+		rawCompletion := graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID(invocationID),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse: "child-final",
+			}),
+		)
+		visibleCompletion, ok := graph.VisibleGraphCompletionEvent(rawCompletion)
+		if !ok {
+			return
+		}
+		_ = agent.EmitEvent(ctx, invocation, ch, visibleCompletion)
+		_ = agent.EmitEvent(
+			ctx,
+			invocation,
+			ch,
+			event.NewErrorEvent(
+				invocationID,
+				author,
+				"after_callback_error",
+				"after callback failed",
+			),
+		)
+	}()
+	return ch, nil
+}
+
+func (a *visibleCompletionThenAfterAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (a *visibleCompletionThenAfterAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *visibleCompletionThenAfterAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (a *visibleCompletionThenAfterAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
+func (a *assistantThenVisibleCompletionAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (a *assistantThenVisibleCompletionAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *assistantThenVisibleCompletionAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (a *assistantThenVisibleCompletionAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
+func (a *assistantThenVisibleStateOnlyCompletionAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (a *assistantThenVisibleStateOnlyCompletionAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *assistantThenVisibleStateOnlyCompletionAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (a *assistantThenVisibleStateOnlyCompletionAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
+func (a *assistantThenVisibleStateOnlyCompletionWithoutResponseIDAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (a *assistantThenVisibleStateOnlyCompletionWithoutResponseIDAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *assistantThenVisibleStateOnlyCompletionWithoutResponseIDAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (a *assistantThenVisibleStateOnlyCompletionWithoutResponseIDAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
+func (a *visibleCompletionThenErrorAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (a *visibleCompletionThenErrorAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *visibleCompletionThenErrorAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (a *visibleCompletionThenErrorAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
 }
 
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
@@ -203,6 +572,220 @@ func TestTool_Call(t *testing.T) {
 	}
 }
 
+func TestTool_Call_DisableGraphCompletionEvent_KeepsFinalText(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{graph.StateKeyLastResponse: "child-final"}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	ga, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	at := NewTool(ga, WithHistoryScope(HistoryScopeParentBranch))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, "child-final", resultText)
+}
+
+func TestTool_Call_DisableGraphCompletionEvent_DedupsCapturedGraphCompletionAfterFinalModelResponse(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddLLMNode("llm", &fixedResponseModel{response: "child-final"}, "", nil)
+	compiled := sg.SetEntryPoint("llm").SetFinishPoint("llm").MustCompile()
+	ga, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	at := NewTool(ga, WithHistoryScope(HistoryScopeParentBranch))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+			agent.WithGraphEmitFinalModelResponses(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, "child-final", resultText)
+}
+
+func TestTool_Call_DisableGraphCompletionEvent_PrefersAfterCallbackCustomResponse(t *testing.T) {
+	ga := newGraphAgentWithAfterCallback(
+		t,
+		graph.State{graph.StateKeyLastResponse: "child-final"},
+		&model.Response{
+			Object: "after.custom",
+			Done:   true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("after callback"),
+			}},
+		},
+	)
+	at := NewTool(ga, WithHistoryScope(HistoryScopeParentBranch))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, "after callback", resultText)
+}
+
+func TestTool_Call_DisableGraphCompletionEvent_PreservesFinalTextInSharedSession(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{graph.StateKeyLastResponse: "child-final"}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	ga, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	at := NewTool(ga, WithHistoryScope(HistoryScopeParentBranch))
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, "child-final", resultText)
+	require.True(t, sessionHasAssistantContent(sess, "child-final"))
+}
+
+func TestTool_Call_DisableGraphCompletionEvent_PreservesConsecutiveVisibleCompletionStatesInSharedSession(
+	t *testing.T,
+) {
+	at := NewTool(
+		&doubleVisibleCompletionAgent{name: "double-visible-agent"},
+		WithHistoryScope(HistoryScopeParentBranch),
+	)
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, "second-final", resultText)
+	firstValue, ok := sess.GetState("first_key")
+	require.True(t, ok)
+	require.Equal(t, []byte(`"first-value"`), firstValue)
+	secondValue, ok := sess.GetState("second_key")
+	require.True(t, ok)
+	require.Equal(t, []byte(`"second-value"`), secondValue)
+}
+
+func TestTool_Call_DisableGraphCompletionEvent_SharedSessionPrefersAfterCallbackCustomResponse(t *testing.T) {
+	ga := newGraphAgentWithAfterCallback(
+		t,
+		graph.State{
+			graph.StateKeyLastResponse: "child-final",
+		},
+		&model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("after callback"),
+			}},
+		},
+	)
+	at := NewTool(ga, WithHistoryScope(HistoryScopeParentBranch))
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, "after callback", resultText)
+	require.True(t, sessionHasAssistantContent(sess, "after callback"))
+	require.False(t, sessionHasAssistantContent(sess, "child-final"))
+	stateValue, ok := sess.GetState(graph.StateKeyLastResponse)
+	require.True(t, ok)
+	require.Equal(t, []byte(`"child-final"`), stateValue)
+}
+
+func TestTool_Call_DisableGraphCompletionEvent_FlushesVisibleCompletionBeforeBarrierNotification(t *testing.T) {
+	at := NewTool(
+		&visibleCompletionBarrierAgent{name: "visible-barrier-agent"},
+		WithHistoryScope(HistoryScopeParentBranch),
+	)
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, "child-final", resultText)
+	require.True(t, sessionHasAssistantContent(sess, "child-final"))
+}
+
+func TestTool_Call_DisableGraphExecutorEvents_SuppressesBarrierEvents(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{graph.StateKeyLastResponse: "child-final"}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	ga, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	at := NewTool(ga, WithHistoryScope(HistoryScopeParentBranch))
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphExecutorEvents(true),
+		)),
+	)
+	barrier.Enable(parent)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, "child-final", resultText)
+}
+
+func TestTool_Call_VisibleCompletionSnapshot_PreservesLegacyConcatenation(t *testing.T) {
+	at := NewTool(&assistantThenVisibleCompletionAgent{name: "visible-agent"})
+	result, err := at.Call(context.Background(), []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, "draftchild-finalchild-final", resultText)
+}
+
 func TestTool_DefaultSkipSummarization(t *testing.T) {
 	mockAgent := &mockAgent{
 		name:        "test-agent",
@@ -309,6 +892,15 @@ const (
 )
 
 type graphCompletionMockAgent struct {
+	name      string
+	stateOnly bool
+}
+
+type visibleCompletionBarrierAgent struct {
+	name string
+}
+
+type doubleVisibleCompletionAgent struct {
 	name string
 }
 
@@ -326,13 +918,15 @@ func (m *graphCompletionMockAgent) Run(
 			&model.Response{
 				Object: graph.ObjectTypeGraphExecution,
 				Done:   true,
-				Choices: []model.Choice{{
-					Message: model.NewAssistantMessage(
-						graphCompletionMsg,
-					),
-				}},
 			},
 		)
+		if !m.stateOnly {
+			evt.Response.Choices = []model.Choice{{
+				Message: model.NewAssistantMessage(
+					graphCompletionMsg,
+				),
+			}}
+		}
 		evt.StateDelta = map[string][]byte{
 			graphStateKey: []byte(graphStateValue),
 		}
@@ -349,6 +943,104 @@ func (m *graphCompletionMockAgent) SubAgents() []agent.Agent {
 	return nil
 }
 func (m *graphCompletionMockAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+func (m *visibleCompletionBarrierAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 3)
+	go func() {
+		defer close(ch)
+		rawCompletion := graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID(inv.InvocationID),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse: "child-final",
+			}),
+		)
+		visibleCompletion, ok := graph.VisibleGraphCompletionEvent(rawCompletion)
+		if !ok {
+			return
+		}
+		_ = agent.EmitEvent(ctx, inv, ch, visibleCompletion)
+		barrier := event.New(inv.InvocationID, m.name)
+		barrier.RequiresCompletion = true
+		completionID := agent.GetAppendEventNoticeKey(barrier.ID)
+		_ = inv.AddNoticeChannel(ctx, completionID)
+		_ = agent.EmitEvent(ctx, inv, ch, barrier)
+		if err := inv.AddNoticeChannelAndWait(ctx, completionID, 500*time.Millisecond); err != nil {
+			errEvt := event.NewErrorEvent(inv.InvocationID, m.name, model.ErrorTypeFlowError, err.Error())
+			_ = agent.EmitEvent(ctx, inv, ch, errEvt)
+			return
+		}
+		if !sessionHasAssistantContent(inv.Session, "child-final") {
+			errEvt := event.NewErrorEvent(
+				inv.InvocationID,
+				m.name,
+				model.ErrorTypeFlowError,
+				"visible completion not mirrored before barrier completion",
+			)
+			_ = agent.EmitEvent(ctx, inv, ch, errEvt)
+		}
+	}()
+	return ch, nil
+}
+
+func (m *visibleCompletionBarrierAgent) Tools() []tool.Tool { return nil }
+func (m *visibleCompletionBarrierAgent) Info() agent.Info {
+	return agent.Info{Name: m.name, Description: "visible completion barrier"}
+}
+func (m *visibleCompletionBarrierAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (m *visibleCompletionBarrierAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+func (m *doubleVisibleCompletionAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	go func() {
+		defer close(ch)
+		firstRaw := graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID(inv.InvocationID),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse: "first-final",
+				"first_key":                "first-value",
+			}),
+		)
+		firstVisible, ok := graph.VisibleGraphCompletionEvent(firstRaw)
+		if !ok {
+			return
+		}
+		_ = agent.EmitEvent(ctx, inv, ch, firstVisible)
+		secondRaw := graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID(inv.InvocationID),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse: "second-final",
+				"second_key":               "second-value",
+			}),
+		)
+		secondVisible, ok := graph.VisibleGraphCompletionEvent(secondRaw)
+		if !ok {
+			return
+		}
+		_ = agent.EmitEvent(ctx, inv, ch, secondVisible)
+	}()
+	return ch, nil
+}
+
+func (m *doubleVisibleCompletionAgent) Tools() []tool.Tool { return nil }
+func (m *doubleVisibleCompletionAgent) Info() agent.Info {
+	return agent.Info{Name: m.name, Description: "double visible completion"}
+}
+func (m *doubleVisibleCompletionAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (m *doubleVisibleCompletionAgent) FindSubAgent(string) agent.Agent {
 	return nil
 }
 
@@ -446,6 +1138,61 @@ func sessionHasToolResult(
 		}
 	}
 	return false
+}
+
+func sessionHasAssistantContent(sess *session.Session, content string) bool {
+	return countSessionAssistantContent(sess, content) > 0
+}
+
+func countSessionAssistantContent(sess *session.Session, content string) int {
+	if sess == nil {
+		return 0
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	var count int
+	for i := range sess.Events {
+		evt := sess.Events[i]
+		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			if choice.Message.Role == model.RoleAssistant &&
+				choice.Message.Content == content {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+type finalChunkView struct {
+	Result     any
+	StateDelta map[string][]byte
+}
+
+func requireFinalChunkView(t *testing.T, content any) finalChunkView {
+	t.Helper()
+
+	switch v := content.(type) {
+	case tool.FinalResultChunk:
+		return finalChunkView{Result: v.Result}
+	case *tool.FinalResultChunk:
+		if v == nil {
+			require.FailNow(t, "unexpected nil final result chunk")
+		}
+		return finalChunkView{Result: v.Result}
+	case tool.FinalResultStateChunk:
+		return finalChunkView{Result: v.Result, StateDelta: v.StateDelta}
+	case *tool.FinalResultStateChunk:
+		if v == nil {
+			require.FailNow(t, "unexpected nil final result state chunk")
+		}
+		return finalChunkView{Result: v.Result, StateDelta: v.StateDelta}
+	default:
+		require.FailNowf(t, "unexpected final result chunk type", "%T", content)
+		return finalChunkView{}
+	}
 }
 
 type filterKeyAgent struct {
@@ -659,6 +1406,21 @@ func TestTool_shouldMirrorEventToSession_Cases(t *testing.T) {
 		})
 		require.False(t, shouldMirrorEventToSession(evt))
 	})
+}
+
+func TestTool_visibleCompletionSessionEvent_RestoresAgentAuthor(t *testing.T) {
+	rawCompletion := graph.NewGraphCompletionEvent(
+		graph.WithCompletionEventInvocationID("inv"),
+		graph.WithCompletionEventFinalState(graph.State{
+			graph.StateKeyLastResponse: "answer",
+		}),
+	)
+
+	visible := visibleCompletionSessionEvent(rawCompletion, "child-agent")
+
+	require.NotNil(t, visible)
+	require.Equal(t, "child-agent", visible.Author)
+	require.Equal(t, model.ObjectTypeChatCompletion, visible.Object)
 }
 
 func TestTool_sessionHasEventID_Cases(t *testing.T) {
@@ -1143,7 +1905,7 @@ func TestTool_StreamableCall_DefersCompletionToRunner(t *testing.T) {
 	)
 
 	reader, err := at.StreamableCall(
-		ctxWithToolCallID,
+		tool.WithFinalResultChunks(ctxWithToolCallID),
 		[]byte(`{"request":"payload"}`),
 	)
 	require.NoError(t, err)
@@ -1185,6 +1947,243 @@ func TestTool_StreamableCall_DefersCompletionToRunner(t *testing.T) {
 	}
 	require.Contains(t, contents, "done")
 	require.Len(t, parent.Session.Events, 0)
+}
+
+func TestTool_StreamableCall_DefersCompletion_FlushesVisibleCompletionBeforeBarrierNotification(
+	t *testing.T,
+) {
+	const toolCallID = "call-1"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	appender.Attach(parent, func(_ context.Context, evt *event.Event) error {
+		if evt == nil {
+			return nil
+		}
+		parent.Session.UpdateUserSession(evt)
+		return nil
+	})
+	at := NewTool(
+		&visibleCompletionBarrierAgent{name: "visible-barrier-agent"},
+		WithStreamInner(true),
+	)
+	toolCtx := agent.NewInvocationContext(ctx, parent)
+	ctxWithToolCallID := context.WithValue(
+		toolCtx,
+		tool.ContextKeyToolCallID{},
+		toolCallID,
+	)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctxWithToolCallID),
+		[]byte(`{"request":"payload"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+	first, err := reader.Recv()
+	require.NoError(t, err)
+	barrierEvt, ok := first.Content.(*event.Event)
+	require.True(t, ok)
+	require.True(t, barrierEvt.RequiresCompletion)
+	require.True(t, sessionHasAssistantContent(sess, "child-final"))
+	completionID := agent.GetAppendEventNoticeKey(barrierEvt.ID)
+	require.NoError(t, parent.NotifyCompletion(ctx, completionID))
+	var sawFinalChunk bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if evt, ok := chunk.Content.(*event.Event); ok {
+			require.False(t, evt.IsError())
+			continue
+		}
+		finalChunk := requireFinalChunkView(t, chunk.Content)
+		sawFinalChunk = true
+		require.Equal(t, "child-final", finalChunk.Result)
+	}
+	require.True(t, sawFinalChunk)
+}
+
+func TestTool_StreamableCall_DefersCompletion_PersistsStateOnlyCompletionToSharedSession(
+	t *testing.T,
+) {
+	const toolCallID = "call-1"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	appender.Attach(parent, func(_ context.Context, evt *event.Event) error {
+		if evt == nil {
+			return nil
+		}
+		parent.Session.UpdateUserSession(evt)
+		return nil
+	})
+	at := NewTool(
+		&graphCompletionMockAgent{name: graphCompletionAgent, stateOnly: true},
+		WithStreamInner(true),
+		WithHistoryScope(HistoryScopeParentBranch),
+	)
+	toolCtx := agent.NewInvocationContext(ctx, parent)
+	ctxWithToolCallID := context.WithValue(
+		toolCtx,
+		tool.ContextKeyToolCallID{},
+		toolCallID,
+	)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctxWithToolCallID),
+		[]byte(`{"request":"payload"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+	var sawFinalChunk bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if _, ok := chunk.Content.(*event.Event); ok {
+			continue
+		}
+		finalChunk := requireFinalChunkView(t, chunk.Content)
+		sawFinalChunk = true
+		require.Equal(t, []byte(graphStateValue), finalChunk.StateDelta[graphStateKey])
+	}
+	require.True(t, sawFinalChunk)
+	stateValue, ok := sess.GetState(graphStateKey)
+	require.True(t, ok)
+	require.Equal(t, []byte(graphStateValue), stateValue)
+	require.False(t, sessionHasAssistantContent(sess, graphCompletionMsg))
+}
+
+func TestTool_StreamableCall_DefersCompletion_PreservesConsecutiveVisibleCompletionStatesInSharedSession(
+	t *testing.T,
+) {
+	const toolCallID = "call-1"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	appender.Attach(parent, func(_ context.Context, evt *event.Event) error {
+		if evt == nil {
+			return nil
+		}
+		parent.Session.UpdateUserSession(evt)
+		return nil
+	})
+	at := NewTool(
+		&doubleVisibleCompletionAgent{name: "double-visible-agent"},
+		WithStreamInner(true),
+	)
+	toolCtx := agent.NewInvocationContext(ctx, parent)
+	ctxWithToolCallID := context.WithValue(
+		toolCtx,
+		tool.ContextKeyToolCallID{},
+		toolCallID,
+	)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctxWithToolCallID),
+		[]byte(`{"request":"payload"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+	for {
+		_, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+	}
+	firstValue, ok := sess.GetState("first_key")
+	require.True(t, ok)
+	require.Equal(t, []byte(`"first-value"`), firstValue)
+	secondValue, ok := sess.GetState("second_key")
+	require.True(t, ok)
+	require.Equal(t, []byte(`"second-value"`), secondValue)
+}
+
+func TestTool_StreamableCall_DefersCompletion_SuppressesBarrierEventsWhenDisableGraphExecutorEvents(
+	t *testing.T,
+) {
+	const toolCallID = "call-1"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{graph.StateKeyLastResponse: "child-final"}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	ga, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+			agent.WithDisableGraphExecutorEvents(true),
+		)),
+	)
+	barrier.Enable(parent)
+	appender.Attach(parent, func(_ context.Context, evt *event.Event) error {
+		if evt == nil {
+			return nil
+		}
+		parent.Session.UpdateUserSession(evt)
+		return nil
+	})
+	at := NewTool(ga, WithStreamInner(true))
+	toolCtx := agent.NewInvocationContext(ctx, parent)
+	ctxWithToolCallID := context.WithValue(
+		toolCtx,
+		tool.ContextKeyToolCallID{},
+		toolCallID,
+	)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctxWithToolCallID),
+		[]byte(`{"request":"payload"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+	var sawBarrier bool
+	var sawFinalChunk bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if evt, ok := chunk.Content.(*event.Event); ok {
+			if evt.Object == graph.ObjectTypeGraphBarrier ||
+				evt.Object == graph.ObjectTypeGraphNodeBarrier {
+				sawBarrier = true
+			}
+			continue
+		}
+		finalChunk := requireFinalChunkView(t, chunk.Content)
+		sawFinalChunk = true
+		require.Equal(t, "child-final", finalChunk.Result)
+	}
+	require.False(t, sawBarrier)
+	require.True(t, sawFinalChunk)
+	require.True(t, sessionHasAssistantContent(sess, "child-final"))
 }
 
 type toolCallIDDroppingContext struct {
@@ -1396,6 +2395,543 @@ func TestTool_HistoryScope_Isolated_Streamable_NoParentPrefix(t *testing.T) {
 	}
 }
 
+func TestTool_StreamableCall_DisableGraphCompletionEvent_WithFinalResultChunks_KeepsFinalResult(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{graph.StateKeyLastResponse: "child-final"}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	ga, err := graphagent.New("graph-child-stream", compiled)
+	require.NoError(t, err)
+	at := NewTool(ga, WithStreamInner(true), WithHistoryScope(HistoryScopeParentBranch))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctx),
+		[]byte(`{"request":"ignored"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+	var finalResult any
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if evt, ok := chunk.Content.(*event.Event); ok {
+			require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+			continue
+		}
+		finalChunk := requireFinalChunkView(t, chunk.Content)
+		finalResult = finalChunk.Result
+		require.Equal(t, []byte(`"child-final"`), finalChunk.StateDelta[graph.StateKeyLastResponse])
+	}
+	require.Equal(t, "child-final", finalResult)
+}
+
+func TestTool_StreamableCall_DisableGraphCompletionEvent_DefaultsToVisibleCompletionEvents(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{graph.StateKeyLastResponse: "child-final"}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	ga, err := graphagent.New("graph-child-stream", compiled)
+	require.NoError(t, err)
+	at := NewTool(ga, WithStreamInner(true), WithHistoryScope(HistoryScopeParentBranch))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+	var sawVisibleCompletion bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		evt, ok := chunk.Content.(*event.Event)
+		require.True(t, ok)
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+		if graph.IsVisibleGraphCompletionEvent(evt) {
+			sawVisibleCompletion = true
+			require.Equal(t, []byte(`"child-final"`), evt.StateDelta[graph.StateKeyLastResponse])
+			require.Len(t, evt.Response.Choices, 1)
+			require.Equal(t, "child-final", evt.Response.Choices[0].Message.Content)
+		}
+	}
+	require.True(t, sawVisibleCompletion)
+}
+
+func TestTool_StreamableCall_DisableGraphCompletionEvent_PreservesFinalTextInSharedSession(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{graph.StateKeyLastResponse: "child-final"}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	ga, err := graphagent.New("graph-child-stream", compiled)
+	require.NoError(t, err)
+	at := NewTool(ga, WithStreamInner(true), WithHistoryScope(HistoryScopeParentBranch))
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+	for {
+		_, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+	}
+	require.True(t, sessionHasAssistantContent(sess, "child-final"))
+	require.Equal(t, 1, countSessionAssistantContent(sess, "child-final"))
+}
+
+func TestTool_StreamableCall_FallbackRunnerPreservesDisableGraphCompletionEvent(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{graph.StateKeyLastResponse: "child-final"}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	ga, err := graphagent.New("graph-child-fallback", compiled)
+	require.NoError(t, err)
+	at := NewTool(ga, WithStreamInner(true))
+	parent := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctx),
+		[]byte(`{"request":"ignored"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+	var contents []string
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if evt, ok := chunk.Content.(*event.Event); ok {
+			require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+			if content, ok := assistantMessageContent(evt); ok && content != "" {
+				contents = append(contents, content)
+			}
+			continue
+		}
+	}
+	require.Contains(t, contents, "child-final")
+}
+
+func TestTool_FallbackRunnerRunOptions_PreserveOnlyCompatibilityControls(t *testing.T) {
+	at := NewTool(&mockAgent{name: "child"}, WithStreamInner(true))
+	parent := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithStreamMode(agent.StreamModeUpdates),
+			agent.WithGraphEmitFinalModelResponses(true),
+			agent.WithDisableGraphCompletionEvent(true),
+			agent.WithDisableGraphExecutorEvents(true),
+			agent.WithEventChannelBufferSize(7),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	runOptions := agent.NewRunOptions(at.fallbackRunnerRunOptions(ctx)...)
+	child := agent.NewInvocation(agent.WithInvocationRunOptions(runOptions))
+
+	require.False(t, runOptions.StreamModeEnabled)
+	require.False(t, runOptions.GraphEmitFinalModelResponses)
+	require.True(t, agent.IsGraphCompletionEventDisabled(child))
+	require.True(t, agent.IsGraphExecutorEventsDisabled(child))
+	require.Equal(t, 7, agent.GetEventChannelBufferSize(child))
+}
+
+func TestTool_StreamableCall_DisableGraphCompletionEvent_PreservesPriorAssistantResultForVisibleStateOnlyCompletion(
+	t *testing.T,
+) {
+	at := NewTool(
+		&assistantThenVisibleStateOnlyCompletionAgent{name: "assistant-visible-agent"},
+		WithStreamInner(true),
+		WithHistoryScope(HistoryScopeParentBranch),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctx),
+		[]byte(`{"request":"ignored"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	var assistantEvents int
+	var finalChunk finalChunkView
+	var sawFinalChunk bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if evt, ok := chunk.Content.(*event.Event); ok {
+			if content, ok := assistantMessageContent(evt); ok {
+				require.Equal(t, "wrapped-final", content)
+				assistantEvents++
+			}
+			continue
+		}
+		finalChunk = requireFinalChunkView(t, chunk.Content)
+		sawFinalChunk = true
+	}
+
+	require.Equal(t, 1, assistantEvents)
+	require.True(t, sawFinalChunk)
+	require.Equal(t, "wrapped-final", finalChunk.Result)
+	require.Equal(t, []byte(`"resp-1"`), finalChunk.StateDelta[graph.StateKeyLastResponseID])
+	require.Equal(t, []byte(`"child-state"`), finalChunk.StateDelta[graphStateKey])
+}
+
+func TestTool_StreamableCall_DisableGraphCompletionEvent_PreservesPriorAssistantResultForVisibleStateOnlyCompletionWithoutResponseID(
+	t *testing.T,
+) {
+	at := NewTool(
+		&assistantThenVisibleStateOnlyCompletionWithoutResponseIDAgent{
+			name: "assistant-visible-agent",
+		},
+		WithStreamInner(true),
+		WithHistoryScope(HistoryScopeParentBranch),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctx),
+		[]byte(`{"request":"ignored"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	var finalChunk finalChunkView
+	var sawFinalChunk bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if _, ok := chunk.Content.(*event.Event); ok {
+			continue
+		}
+		finalChunk = requireFinalChunkView(t, chunk.Content)
+		sawFinalChunk = true
+	}
+
+	require.True(t, sawFinalChunk)
+	require.Equal(t, "wrapped-final", finalChunk.Result)
+	require.Equal(t, []byte(`"child-state"`), finalChunk.StateDelta[graphStateKey])
+}
+
+func TestTool_StreamableCall_DisableGraphCompletionEvent_SuppressesStateOnlyCompletion(t *testing.T) {
+	at := NewTool(
+		&graphCompletionMockAgent{name: graphCompletionAgent, stateOnly: true},
+		WithStreamInner(true),
+		WithHistoryScope(HistoryScopeParentBranch),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctx),
+		[]byte(`{"request":"ignored"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+	eventChunks := 0
+	resultChunks := 0
+	var finalChunk finalChunkView
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if evt, ok := chunk.Content.(*event.Event); ok {
+			eventChunks++
+			require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+			continue
+		}
+		finalChunk = requireFinalChunkView(t, chunk.Content)
+		resultChunks++
+	}
+	require.Zero(t, eventChunks)
+	require.Equal(t, 1, resultChunks)
+	require.Nil(t, finalChunk.Result)
+	require.Equal(t, []byte(graphStateValue), finalChunk.StateDelta[graphStateKey])
+}
+
+func TestTool_StreamableCall_DisableGraphCompletionEvent_PrefersAfterCallbackCustomResponse(t *testing.T) {
+	ga := newGraphAgentWithAfterCallback(
+		t,
+		graph.State{graph.StateKeyLastResponse: "child-final"},
+		&model.Response{
+			Object: "after.custom",
+			Done:   true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("after callback"),
+			}},
+		},
+	)
+	at := NewTool(ga, WithStreamInner(true), WithHistoryScope(HistoryScopeParentBranch))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctx),
+		[]byte(`{"request":"ignored"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+	var sawAfterCallback bool
+	var finalChunk finalChunkView
+	var sawFinalChunk bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if evt, ok := chunk.Content.(*event.Event); ok {
+			require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+			if evt.Object == "after.custom" {
+				sawAfterCallback = true
+				require.Len(t, evt.Response.Choices, 1)
+				require.Equal(t, "after callback", evt.Response.Choices[0].Message.Content)
+			}
+			continue
+		}
+		finalChunk = requireFinalChunkView(t, chunk.Content)
+		sawFinalChunk = true
+	}
+	require.True(t, sawAfterCallback)
+	require.True(t, sawFinalChunk)
+	require.Equal(t, "after callback", finalChunk.Result)
+	require.Equal(t, []byte(`"child-final"`), finalChunk.StateDelta[graph.StateKeyLastResponse])
+}
+
+func TestTool_StreamableCall_DisableGraphCompletionEvent_PrefersAfterCallbackCustomResponseForStateOnlyCompletion(t *testing.T) {
+	ga := newGraphAgentWithAfterCallback(
+		t,
+		graph.State{graphStateKey: "child-state"},
+		&model.Response{
+			Object: "after.custom",
+			Done:   true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("after callback"),
+			}},
+		},
+	)
+	at := NewTool(ga, WithStreamInner(true), WithHistoryScope(HistoryScopeParentBranch))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctx),
+		[]byte(`{"request":"ignored"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+	var finalChunk finalChunkView
+	var sawFinalChunk bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if _, ok := chunk.Content.(*event.Event); ok {
+			continue
+		}
+		finalChunk = requireFinalChunkView(t, chunk.Content)
+		sawFinalChunk = true
+	}
+	require.True(t, sawFinalChunk)
+	require.Equal(t, "after callback", finalChunk.Result)
+	require.Equal(t, []byte(`"child-state"`), finalChunk.StateDelta[graphStateKey])
+}
+
+func TestTool_StreamableCall_DisableGraphCompletionEvent_PrefersAfterCallbackCustomResponseForVisibleCompletionSnapshot(t *testing.T) {
+	at := NewTool(
+		&visibleCompletionThenAfterAgent{name: "visible-completion-agent"},
+		WithStreamInner(true),
+		WithHistoryScope(HistoryScopeParentBranch),
+	)
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(
+		tool.WithFinalResultChunks(ctx),
+		[]byte(`{"request":"ignored"}`),
+	)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	var sawAfterCallback bool
+	var finalChunk finalChunkView
+	var sawFinalChunk bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if evt, ok := chunk.Content.(*event.Event); ok {
+			require.False(t, graph.IsVisibleGraphCompletionEvent(evt))
+			if evt.Object == "after.custom" {
+				sawAfterCallback = true
+			}
+			continue
+		}
+		finalChunk = requireFinalChunkView(t, chunk.Content)
+		sawFinalChunk = true
+	}
+
+	require.True(t, sawAfterCallback)
+	require.True(t, sawFinalChunk)
+	require.Equal(t, "after callback", finalChunk.Result)
+	require.Equal(t, []byte(`"child-final"`), finalChunk.StateDelta[graph.StateKeyLastResponse])
+	require.True(t, sessionHasAssistantContent(sess, "after callback"))
+	require.False(t, sessionHasAssistantContent(sess, "child-final"))
+	stateValue, ok := sess.GetState(graph.StateKeyLastResponse)
+	require.True(t, ok)
+	require.Equal(t, []byte(`"child-final"`), stateValue)
+}
+
+func TestTool_StreamableCall_DisableGraphCompletionEvent_SuppressesVisibleCompletionBeforeError(
+	t *testing.T,
+) {
+	at := NewTool(
+		&visibleCompletionThenErrorAgent{name: "visible-completion-then-error-agent"},
+		WithStreamInner(true),
+		WithHistoryScope(HistoryScopeParentBranch),
+	)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+
+	var sawError bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if evt, ok := chunk.Content.(*event.Event); ok {
+			require.False(t, graph.IsVisibleGraphCompletionEvent(evt))
+			if evt.Object == model.ObjectTypeError {
+				sawError = true
+			}
+			continue
+		}
+		require.Failf(t, "unexpected final result chunk", "%#v", chunk.Content)
+	}
+
+	require.True(t, sawError)
+}
+
+func TestTool_StreamableCall_DisableGraphCompletionEvent_DropsPendingFinalResultAfterCallbackError(t *testing.T) {
+	ga := newGraphAgentWithAfterCallbackError(
+		t,
+		graph.State{
+			graph.StateKeyLastResponse: "child-final",
+			graphStateKey:              "child-state",
+		},
+		errors.New("after callback failed"),
+	)
+	at := NewTool(ga, WithStreamInner(true), WithHistoryScope(HistoryScopeParentBranch))
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+	var sawError bool
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		if evt, ok := chunk.Content.(*event.Event); ok {
+			if evt.Object == model.ObjectTypeError &&
+				evt.Error != nil &&
+				evt.Error.Message == "after callback failed" {
+				sawError = true
+			}
+			continue
+		}
+		t.Fatalf("unexpected final result chunk after callback error: %#v", chunk.Content)
+	}
+	require.True(t, sawError)
+	require.False(t, sessionHasAssistantContent(sess, "child-final"))
+}
+
 func TestTool_StreamInner_FlagFalse(t *testing.T) {
 	a := &mockAgent{name: "agent-x", description: "d"}
 	at := NewTool(a, WithStreamInner(false))
@@ -1423,20 +2959,54 @@ func TestTool_Call_RunError(t *testing.T) {
 	}
 }
 
-func TestTool_StreamableCall_RunErrorEmitsChunk(t *testing.T) {
+func TestTool_StreamableCall_RunErrorReturnsStreamError(t *testing.T) {
 	at := NewTool(&errorMockAgent{name: "err-agent"}, WithStreamInner(true))
 	r, err := at.StreamableCall(context.Background(), []byte(`{}`))
-	if err != nil {
-		t.Fatalf("unexpected StreamableCall error: %v", err)
-	}
+	require.NoError(t, err)
 	defer r.Close()
-	ch, err := r.Recv()
-	if err != nil {
-		t.Fatalf("unexpected stream read error: %v", err)
-	}
-	if s, ok := ch.Content.(string); !ok || !strings.Contains(s, "agent tool run error") {
-		t.Fatalf("expected error chunk, got: %#v", ch.Content)
-	}
+	chunk, err := r.Recv()
+	require.NoError(t, err)
+	require.Equal(t, "agent tool run error: boom", chunk.Content)
+	_, err = r.Recv()
+	require.Equal(t, io.EOF, err)
+}
+
+func TestTool_StreamableCall_RunErrorWithToolCallIDReturnsPlainTextByDefault(t *testing.T) {
+	at := NewTool(&errorMockAgent{name: "err-agent"}, WithStreamInner(true))
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		"call-1",
+	)
+	r, err := at.StreamableCall(ctx, []byte(`{}`))
+	require.NoError(t, err)
+	defer r.Close()
+	chunk, err := r.Recv()
+	require.NoError(t, err)
+	require.Equal(t, "agent tool run error: boom", chunk.Content)
+	_, err = r.Recv()
+	require.Equal(t, io.EOF, err)
+}
+
+func TestTool_StreamableCall_RunErrorWithStructuredStreamErrorsReturnsErrorEvent(t *testing.T) {
+	at := NewTool(&errorMockAgent{name: "err-agent"}, WithStreamInner(true))
+	ctx := context.WithValue(
+		tool.WithStructuredStreamErrors(context.Background()),
+		tool.ContextKeyToolCallID{},
+		"call-1",
+	)
+	r, err := at.StreamableCall(ctx, []byte(`{}`))
+	require.NoError(t, err)
+	defer r.Close()
+	chunk, err := r.Recv()
+	require.NoError(t, err)
+	ev, ok := chunk.Content.(*event.Event)
+	require.True(t, ok)
+	require.Equal(t, model.ObjectTypeError, ev.Object)
+	require.NotNil(t, ev.Error)
+	require.Contains(t, ev.Error.Message, "agent tool run error")
+	_, err = r.Recv()
+	require.Equal(t, io.EOF, err)
 }
 
 // agentWithSchemaMock returns input/output schema maps in Info()
@@ -1497,6 +3067,16 @@ func TestTool_SkipSummarization(t *testing.T) {
 	if at3.SkipSummarization() {
 		t.Errorf("Expected SkipSummarization to be false")
 	}
+}
+
+func TestTool_StructuredStreamErrors(t *testing.T) {
+	a := &mockAgent{name: "test", description: "test"}
+	at1 := NewTool(a)
+	require.False(t, at1.StructuredStreamErrors())
+	require.False(t, at1.TRPCAgentGoStructuredStreamErrorsOptIn())
+	at2 := NewTool(a, WithStructuredStreamErrors(true))
+	require.True(t, at2.StructuredStreamErrors())
+	require.True(t, at2.TRPCAgentGoStructuredStreamErrorsOptIn())
 }
 
 // eventErrorMockAgent returns an event with error
@@ -1561,26 +3141,34 @@ func TestTool_StreamableCall_WithParentInvocation_RunError(t *testing.T) {
 	ctx := agent.NewInvocationContext(context.Background(), parent)
 
 	r, err := at.StreamableCall(ctx, []byte(`{}`))
-	if err != nil {
-		t.Fatalf("unexpected StreamableCall error: %v", err)
-	}
+	require.NoError(t, err)
 	defer r.Close()
+	chunk, err := r.Recv()
+	require.NoError(t, err)
+	require.Equal(t, "agent tool run error: boom", chunk.Content)
+	_, err = r.Recv()
+	require.Equal(t, io.EOF, err)
+}
 
-	// First chunk might be the tool input event, second should be error
-	var foundError bool
-	for i := 0; i < 2; i++ {
-		ch, err := r.Recv()
-		if err != nil {
-			break
-		}
-		if s, ok := ch.Content.(string); ok && strings.Contains(s, "agent tool run error") {
-			foundError = true
-			break
-		}
-	}
-	if !foundError {
-		t.Fatalf("expected to find error chunk in stream")
-	}
+func TestTool_StreamableCall_WithParentInvocation_FlushError(t *testing.T) {
+	at := NewTool(&mockAgent{name: "test-agent", description: "desc"}, WithStreamInner(true))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent"),
+	)
+	flush.Attach(context.Background(), parent, make(chan *flush.FlushRequest))
+	baseCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx := agent.NewInvocationContext(baseCtx, parent)
+
+	r, err := at.StreamableCall(ctx, []byte(`{}`))
+	require.NoError(t, err)
+	defer r.Close()
+	chunk, err := r.Recv()
+	require.NoError(t, err)
+	require.Contains(t, chunk.Content, "flush parent invocation session")
+	_, err = r.Recv()
+	require.Equal(t, io.EOF, err)
 }
 
 func TestTool_StreamableCall_EmptyMessage(t *testing.T) {

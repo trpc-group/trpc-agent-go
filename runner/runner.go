@@ -456,6 +456,7 @@ func (r *runner) Run(
 	// by embedding it into the context. This is necessary for tools like
 	// transfer_to_agent that rely on agent.InvocationFromContext(ctx).
 	execCtx = agent.NewInvocationContext(execCtx, invocation)
+	execCtx = graph.WithGraphCompletionCapture(execCtx)
 
 	// Create flush channel and attach flusher before agent.Run to ensure cloned invocations inherit it.
 	flushChan := make(chan *flush.FlushRequest)
@@ -669,18 +670,26 @@ func (r *runner) getOrCreateSession(
 
 // eventLoopContext bundles all channels and state required by the event loop.
 type eventLoopContext struct {
-	sess               *session.Session
-	invocation         *agent.Invocation
-	agentEventCh       <-chan *event.Event
-	flushChan          chan *flush.FlushRequest
-	processedEventCh   chan *event.Event
-	runHandle          *runHandle
-	finalStateDelta    map[string][]byte
-	finalChoices       []model.Choice
-	fallbackStateDelta map[string][]byte
-	finalError         *model.ResponseError
-	sawTerminalError   bool
-	streamFilter       graph.StreamModeFilter
+	sess                                       *session.Session
+	invocation                                 *agent.Invocation
+	agentEventCh                               <-chan *event.Event
+	flushChan                                  chan *flush.FlushRequest
+	processedEventCh                           chan *event.Event
+	runHandle                                  *runHandle
+	finalStateDelta                            map[string][]byte
+	finalChoices                               []model.Choice
+	fallbackChoices                            []model.Choice
+	fallbackResponseID                         string
+	fallbackStateDelta                         map[string][]byte
+	finalError                                 *model.ResponseError
+	graphCompletionSeen                        bool
+	filteredPersistedAssistantResponseIDs      map[string]struct{}
+	filteredPersistedAssistantChoiceSignatures map[string]struct{}
+	emittedAssistantChoiceSignatures           map[string]struct{}
+	visibleCompletionResponseIDs               map[string]struct{}
+	visibleCompletionChoiceSignatures          map[string]struct{}
+	sawTerminalError                           bool
+	streamFilter                               graph.StreamModeFilter
 	// emittedAssistantResponseIDs tracks response IDs that already produced a
 	// non-partial assistant message event during this run.
 	//
@@ -773,17 +782,36 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	}
 
 	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
-
-	r.recordEmittedAssistantResponseID(loop, agentEvent)
-
-	// Append qualifying events to session and trigger summarization.
-	r.handleEventPersistence(ctx, loop.invocation, loop.sess, agentEvent)
+	if agentEvent == nil {
+		return nil
+	}
 
 	// Capture graph-level completion snapshot for final event.
-	if isGraphCompletionEvent(agentEvent) {
+	if isGraphCompletionSnapshotEvent(agentEvent) {
+		loop.graphCompletionSeen = true
 		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
 	}
 	r.captureCompletionFallback(loop, agentEvent)
+	if shouldSuppressGraphCompletionEvent(loop, agentEvent) {
+		return nil
+	}
+	if shouldSuppressGraphExecutorBarrierEvent(loop, agentEvent) {
+		if agentEvent.RequiresCompletion {
+			completionID := agent.GetAppendEventNoticeKey(agentEvent.ID)
+			loop.invocation.NotifyCompletion(ctx, completionID)
+		}
+		return nil
+	}
+	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
+
+	// Append qualifying events to session and trigger summarization.
+	persisted := r.handleEventPersistence(ctx, loop.invocation, loop.sess, agentEvent)
+	r.recordFilteredPersistedAssistantEvent(
+		loop,
+		agentEvent,
+		shouldForwardEvent,
+		persisted,
+	)
 
 	// Notify completion if required.
 	if agentEvent.RequiresCompletion {
@@ -792,9 +820,12 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	}
 
 	r.recordRunEvent(loop)
-	if !loop.streamFilter.Allows(agentEvent) {
+	if !shouldForwardEvent {
 		return nil
 	}
+
+	r.recordEmittedAssistantResponseID(loop, agentEvent)
+	r.recordVisibleCompletionEmission(loop, agentEvent)
 
 	// Emit event to output channel.
 	if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
@@ -802,6 +833,71 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	}
 
 	return nil
+}
+
+func (r *runner) recordFilteredPersistedAssistantEvent(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+	shouldForwardEvent bool,
+	persisted bool,
+) {
+	if loop == nil || agentEvent == nil || shouldForwardEvent || !persisted {
+		return
+	}
+	if isGraphCompletionEvent(agentEvent) {
+		return
+	}
+	if !eventHasAssistantMessageContent(agentEvent) {
+		return
+	}
+	if agentEvent.Response == nil {
+		return
+	}
+	if loop.filteredPersistedAssistantResponseIDs == nil {
+		loop.filteredPersistedAssistantResponseIDs = make(map[string]struct{})
+	}
+	if agentEvent.Response.ID != "" {
+		loop.filteredPersistedAssistantResponseIDs[agentEvent.Response.ID] = struct{}{}
+	}
+	if graph.IsVisibleGraphCompletionEvent(agentEvent) {
+		if responseID := finalResponseIDFromStateDelta(agentEvent.StateDelta); responseID != "" {
+			loop.filteredPersistedAssistantResponseIDs[responseID] = struct{}{}
+		}
+	}
+	signature := assistantChoiceSignature(agentEvent.Response.Choices)
+	if signature == "" {
+		return
+	}
+	if loop.filteredPersistedAssistantChoiceSignatures == nil {
+		loop.filteredPersistedAssistantChoiceSignatures = make(map[string]struct{})
+	}
+	loop.filteredPersistedAssistantChoiceSignatures[signature] = struct{}{}
+}
+
+func (r *runner) recordVisibleCompletionEmission(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) {
+	if loop == nil ||
+		agentEvent == nil ||
+		!graph.IsVisibleGraphCompletionEvent(agentEvent) ||
+		!eventHasAssistantMessageContent(agentEvent) {
+		return
+	}
+	if responseID := finalResponseIDFromStateDelta(agentEvent.StateDelta); responseID != "" {
+		if loop.visibleCompletionResponseIDs == nil {
+			loop.visibleCompletionResponseIDs = make(map[string]struct{})
+		}
+		loop.visibleCompletionResponseIDs[responseID] = struct{}{}
+	}
+	signature := assistantChoiceSignature(agentEvent.Response.Choices)
+	if signature == "" {
+		return
+	}
+	if loop.visibleCompletionChoiceSignatures == nil {
+		loop.visibleCompletionChoiceSignatures = make(map[string]struct{})
+	}
+	loop.visibleCompletionChoiceSignatures[signature] = struct{}{}
 }
 
 func (r *runner) recordRunEvent(loop *eventLoopContext) {
@@ -863,7 +959,7 @@ func (r *runner) recordEmittedAssistantResponseID(
 	loop *eventLoopContext,
 	e *event.Event,
 ) {
-	if loop == nil || e == nil || e.Response == nil {
+	if loop == nil {
 		return
 	}
 	if loop.invocation == nil {
@@ -875,26 +971,36 @@ func (r *runner) recordEmittedAssistantResponseID(
 	if isGraphCompletionEvent(e) {
 		return
 	}
-	if e.IsPartial || !e.IsValidContent() {
+	if !eventHasAssistantMessageContent(e) {
 		return
 	}
-	if e.Response.ID == "" {
-		return
-	}
-	for _, choice := range e.Response.Choices {
-		msg := choice.Message
-		if msg.Role != model.RoleAssistant {
-			continue
-		}
-		if msg.Content == "" {
-			continue
-		}
+	if e.Response.ID != "" {
 		if loop.emittedAssistantResponseIDs == nil {
 			loop.emittedAssistantResponseIDs = make(map[string]struct{})
 		}
 		loop.emittedAssistantResponseIDs[e.Response.ID] = struct{}{}
+	}
+	signature := assistantChoiceSignature(e.Response.Choices)
+	if signature == "" {
 		return
 	}
+	if loop.emittedAssistantChoiceSignatures == nil {
+		loop.emittedAssistantChoiceSignatures = make(map[string]struct{})
+	}
+	loop.emittedAssistantChoiceSignatures[signature] = struct{}{}
+}
+
+func eventHasAssistantMessageContent(e *event.Event) bool {
+	if e == nil || e.Response == nil || e.IsPartial || !e.IsValidContent() {
+		return false
+	}
+	for _, choice := range e.Response.Choices {
+		msg := choice.Message
+		if msg.Role == model.RoleAssistant && msg.Content != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // safeEmitRunnerCompletion guards emitRunnerCompletion against panics from session services.
@@ -935,13 +1041,13 @@ func (r *runner) handleEventPersistence(
 	invocation *agent.Invocation,
 	sess *session.Session,
 	agentEvent *event.Event,
-) {
+) bool {
 	// Ensure error events have content so they are valid for persistence.
 	ensureErrorEventContent(agentEvent)
 
 	// Append event to session if it's complete (not partial).
 	if !r.shouldPersistEvent(agentEvent) {
-		return
+		return false
 	}
 
 	persistEvent := agentEvent
@@ -958,7 +1064,7 @@ func (r *runner) handleEventPersistence(
 		persistEvent,
 	); err != nil {
 		log.Errorf("Failed to append event to session: %v", err)
-		return
+		return false
 	}
 
 	// Skip user messages, tool call events, and invalid content.
@@ -966,7 +1072,7 @@ func (r *runner) handleEventPersistence(
 	if agentEvent.IsUserMessage() ||
 		agentEvent.IsToolCallResponse() ||
 		!agentEvent.IsValidContent() {
-		return
+		return true
 	}
 
 	// Trigger summary check after tool results to handle long tool call
@@ -976,7 +1082,7 @@ func (r *runner) handleEventPersistence(
 	// Skip if the event explicitly opts out of summarization.
 	if agentEvent.Actions != nil &&
 		agentEvent.Actions.SkipSummarization {
-		return
+		return true
 	}
 
 	// When sync intra-run summary is active for this
@@ -988,7 +1094,7 @@ func (r *runner) handleEventPersistence(
 	if syncSummaryIntraRun, ok := agent.GetStateValue[bool](
 		invocation, agent.SyncSummaryIntraRunStateKey,
 	); ok && syncSummaryIntraRun && agentEvent.IsToolResultResponse() {
-		return
+		return true
 	}
 
 	// Use EnqueueSummaryJob for true asynchronous processing.
@@ -1003,6 +1109,7 @@ func (r *runner) handleEventPersistence(
 
 	// Note: Auto memory extraction is triggered once at runner completion,
 	// not here, to avoid redundant extraction calls.
+	return true
 }
 
 // shouldPersistEvent determines if an event should be persisted to the session.
@@ -1019,6 +1126,38 @@ func isGraphCompletionEvent(agentEvent *event.Event) bool {
 	}
 	return agentEvent.Done &&
 		agentEvent.Object == graph.ObjectTypeGraphExecution
+}
+
+func isGraphCompletionSnapshotEvent(agentEvent *event.Event) bool {
+	return isGraphCompletionEvent(agentEvent) ||
+		graph.IsVisibleGraphCompletionEvent(agentEvent)
+}
+
+func shouldSuppressGraphCompletionEvent(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) bool {
+	if loop == nil || loop.invocation == nil {
+		return false
+	}
+	if !agent.IsGraphCompletionEventDisabled(loop.invocation) {
+		return false
+	}
+	return isGraphCompletionEvent(agentEvent)
+}
+
+func shouldSuppressGraphExecutorBarrierEvent(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) bool {
+	if loop == nil || loop.invocation == nil || agentEvent == nil {
+		return false
+	}
+	if !agent.IsGraphExecutorEventsDisabled(loop.invocation) {
+		return false
+	}
+	return agentEvent.Object == graph.ObjectTypeGraphNodeBarrier ||
+		agentEvent.Object == graph.ObjectTypeGraphBarrier
 }
 
 // captureGraphCompletion captures the final state delta and choices from a
@@ -1042,7 +1181,8 @@ func (r *runner) captureCompletionFallback(
 	if loop == nil || agentEvent == nil {
 		return
 	}
-	if len(agentEvent.StateDelta) > 0 {
+	graphCompletionEvent := isGraphCompletionSnapshotEvent(agentEvent)
+	if !graphCompletionEvent && len(agentEvent.StateDelta) > 0 {
 		loop.fallbackStateDelta = mergeCompletionFallbackStateDelta(
 			loop.fallbackStateDelta,
 			agentEvent.StateDelta,
@@ -1050,6 +1190,17 @@ func (r *runner) captureCompletionFallback(
 	}
 	if agentEvent.Response == nil || agentEvent.IsPartial {
 		return
+	}
+	// A later visible terminal response supersedes any earlier hidden graph completion snapshot.
+	if loop.graphCompletionSeen && !graphCompletionEvent {
+		loop.finalStateDelta = nil
+		loop.finalChoices = nil
+	}
+	if !graphCompletionEvent &&
+		len(agentEvent.Response.Choices) > 0 &&
+		eventHasAssistantMessageContent(agentEvent) {
+		loop.fallbackChoices = cloneChoices(agentEvent.Response.Choices)
+		loop.fallbackResponseID = agentEvent.Response.ID
 	}
 	// The last non-partial response wins so the completion event reflects
 	// the terminal outcome seen by the runner.
@@ -1182,20 +1333,40 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	if len(finalStateDelta) == 0 && propagateFallbackState {
 		finalStateDelta = loop.fallbackStateDelta
 	}
+	finalChoices := r.completionChoicesForRunner(loop, finalStateDelta)
 
 	// Propagate graph-level completion data if available.
 	if len(finalStateDelta) > 0 {
-		echoFinalChoices := r.shouldEchoFinalChoicesInCompletion(loop)
+		echoFinalChoices := r.shouldEchoFinalChoicesInCompletion(
+			loop,
+			finalChoices,
+			finalStateDelta,
+		)
 		r.propagateGraphCompletion(
 			runnerCompletionEvent,
 			finalStateDelta,
-			loop.finalChoices,
+			finalChoices,
 			echoFinalChoices,
 		)
 	}
 
 	// Append runner completion event to session.
-	if err := r.sessionService.AppendEvent(ctx, loop.sess, runnerCompletionEvent); err != nil {
+	persistRunnerCompletionEvent := runnerCompletionEvent
+	if shouldClearRunnerCompletionChoicesInSession(
+		loop,
+		finalChoices,
+		finalStateDelta,
+	) {
+		persistRunnerCompletionEvent = runnerCompletionEvent.Clone()
+		if persistRunnerCompletionEvent.Response != nil {
+			persistRunnerCompletionEvent.Response.Choices = nil
+		}
+	}
+	if err := r.sessionService.AppendEvent(
+		ctx,
+		loop.sess,
+		persistRunnerCompletionEvent,
+	); err != nil {
 		log.Errorf("Failed to append runner completion event to session: %v", err)
 	}
 
@@ -1238,6 +1409,65 @@ func (r *runner) propagateGraphCompletion(
 	}
 }
 
+func shouldClearRunnerCompletionChoicesInSession(
+	loop *eventLoopContext,
+	finalChoices []model.Choice,
+	finalStateDelta map[string][]byte,
+) bool {
+	if loop == nil ||
+		loop.invocation == nil ||
+		!agent.IsGraphCompletionEventDisabled(loop.invocation) {
+		return false
+	}
+	finalResponseID := finalResponseIDFromStateDelta(finalStateDelta)
+	if finalResponseID != "" {
+		if _, ok := loop.filteredPersistedAssistantResponseIDs[finalResponseID]; ok {
+			return true
+		}
+		_, ok := loop.emittedAssistantResponseIDs[finalResponseID]
+		return ok
+	}
+	signature := assistantChoiceSignature(finalChoices)
+	if signature == "" {
+		return false
+	}
+	if _, ok := loop.filteredPersistedAssistantChoiceSignatures[signature]; ok {
+		return true
+	}
+	_, ok := loop.emittedAssistantChoiceSignatures[signature]
+	return ok
+}
+
+func (r *runner) completionChoicesForRunner(
+	loop *eventLoopContext,
+	finalStateDelta map[string][]byte,
+) []model.Choice {
+	if loop == nil {
+		return nil
+	}
+	if len(loop.finalChoices) > 0 {
+		return loop.finalChoices
+	}
+	finalResponseID := finalResponseIDFromStateDelta(finalStateDelta)
+	if finalResponseID != "" {
+		if finalResponseID == loop.fallbackResponseID {
+			return loop.fallbackChoices
+		}
+		return nil
+	}
+	if len(loop.fallbackChoices) == 0 {
+		return nil
+	}
+	finalResponseText := finalResponseTextFromStateDelta(finalStateDelta)
+	if finalResponseText == "" {
+		return nil
+	}
+	if assistantChoicePrimaryContent(loop.fallbackChoices) != finalResponseText {
+		return nil
+	}
+	return loop.fallbackChoices
+}
+
 // shouldEchoFinalChoicesInCompletion decides whether Runner should copy the
 // graph's final assistant message into the runner-completion event.
 //
@@ -1251,11 +1481,18 @@ func (r *runner) propagateGraphCompletion(
 // (ID) to a response ID that was already emitted, avoiding duplicates.
 func (r *runner) shouldEchoFinalChoicesInCompletion(
 	loop *eventLoopContext,
+	finalChoices []model.Choice,
+	finalStateDelta map[string][]byte,
 ) bool {
 	if loop == nil {
 		return true
 	}
-	if len(loop.finalChoices) == 0 {
+	if len(finalChoices) == 0 {
+		return false
+	}
+	if loop.invocation != nil &&
+		agent.IsGraphCompletionEventDisabled(loop.invocation) &&
+		visibleCompletionAlreadyEmitted(loop, finalChoices, finalStateDelta) {
 		return false
 	}
 	if loop.invocation == nil {
@@ -1266,13 +1503,80 @@ func (r *runner) shouldEchoFinalChoicesInCompletion(
 		return true
 	}
 
-	finalResponseID := finalResponseIDFromStateDelta(loop.finalStateDelta)
-	if finalResponseID == "" {
+	finalResponseID := finalResponseIDFromStateDelta(finalStateDelta)
+	if finalResponseID != "" {
+		_, alreadyEmitted := loop.emittedAssistantResponseIDs[finalResponseID]
+		return !alreadyEmitted
+	}
+	if !agent.IsGraphCompletionEventDisabled(loop.invocation) {
 		return true
 	}
-
-	_, alreadyEmitted := loop.emittedAssistantResponseIDs[finalResponseID]
+	signature := assistantChoiceSignature(finalChoices)
+	if signature == "" {
+		return true
+	}
+	_, alreadyEmitted := loop.emittedAssistantChoiceSignatures[signature]
 	return !alreadyEmitted
+}
+
+func visibleCompletionAlreadyEmitted(
+	loop *eventLoopContext,
+	finalChoices []model.Choice,
+	finalStateDelta map[string][]byte,
+) bool {
+	if loop == nil {
+		return false
+	}
+	finalResponseID := finalResponseIDFromStateDelta(finalStateDelta)
+	if finalResponseID != "" {
+		_, alreadyVisible := loop.visibleCompletionResponseIDs[finalResponseID]
+		return alreadyVisible
+	}
+	signature := assistantChoiceSignature(finalChoices)
+	if signature == "" {
+		return false
+	}
+	_, alreadyVisible := loop.visibleCompletionChoiceSignatures[signature]
+	return alreadyVisible
+}
+
+func cloneChoices(choices []model.Choice) []model.Choice {
+	if len(choices) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(choices)
+	var cloned []model.Choice
+	_ = json.Unmarshal(b, &cloned)
+	return cloned
+}
+
+func assistantChoiceSignature(choices []model.Choice) string {
+	if len(choices) == 0 {
+		return ""
+	}
+	type signatureChoice struct {
+		Role    model.Role `json:"role"`
+		Content string     `json:"content"`
+	}
+	var signatureChoices []signatureChoice
+	for _, choice := range choices {
+		if choice.Message.Role != model.RoleAssistant ||
+			choice.Message.Content == "" {
+			continue
+		}
+		signatureChoices = append(signatureChoices, signatureChoice{
+			Role:    choice.Message.Role,
+			Content: choice.Message.Content,
+		})
+	}
+	if len(signatureChoices) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(signatureChoices)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func finalResponseIDFromStateDelta(finalStateDelta map[string][]byte) string {
@@ -1288,6 +1592,32 @@ func finalResponseIDFromStateDelta(finalStateDelta map[string][]byte) string {
 		return ""
 	}
 	return responseID
+}
+
+func finalResponseTextFromStateDelta(finalStateDelta map[string][]byte) string {
+	if finalStateDelta == nil {
+		return ""
+	}
+	raw, ok := finalStateDelta[graph.StateKeyLastResponse]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	var responseText string
+	if err := json.Unmarshal(raw, &responseText); err != nil {
+		return ""
+	}
+	return responseText
+}
+
+func assistantChoicePrimaryContent(choices []model.Choice) string {
+	for _, choice := range choices {
+		if choice.Message.Role != model.RoleAssistant ||
+			choice.Message.Content == "" {
+			continue
+		}
+		return choice.Message.Content
+	}
+	return ""
 }
 
 // shouldAppendUserMessage checks if the incoming user message should be

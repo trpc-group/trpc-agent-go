@@ -3200,3 +3200,132 @@ func TestBuildAgentInvocationWithStateAndScope_NoParentKey(t *testing.T) {
 	// FilterKey is now stable without UUID: just "scope"
 	require.Equal(t, "scope", key)
 }
+
+func TestTerminalAgentErrorHelpers(t *testing.T) {
+	pregelErr := &event.Event{
+		Response: &model.Response{
+			Object: ObjectTypeGraphPregelStep,
+			Error:  &model.ResponseError{Message: "boom"},
+		},
+		StateDelta: map[string][]byte{
+			MetadataKeyPregel: []byte(`{`),
+		},
+	}
+	require.True(t, isTerminalAgentErrorEvent(pregelErr))
+	pregelErr.StateDelta[MetadataKeyPregel] = []byte(`{"stepNumber":-1}`)
+	require.True(t, isTerminalAgentErrorEvent(pregelErr))
+	pregelErr.StateDelta[MetadataKeyPregel] = []byte(`{"stepNumber":1}`)
+	require.False(t, isTerminalAgentErrorEvent(pregelErr))
+	rootErr := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeError,
+			Error:  &model.ResponseError{Message: "root"},
+		},
+	}
+	require.True(t, isTerminalAgentErrorEvent(rootErr))
+	nodeErr := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeError,
+			Error:  &model.ResponseError{Message: "node"},
+		},
+		StateDelta: map[string][]byte{
+			MetadataKeyNode: []byte(`"child"`),
+		},
+	}
+	require.False(t, isTerminalAgentErrorEvent(nodeErr))
+}
+
+func TestAgentTerminalErrorLifecycleHelpers(t *testing.T) {
+	stopEvent := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeError,
+			Error: &model.ResponseError{
+				Message: "stop",
+				Type:    agent.ErrorTypeStopAgentError,
+			},
+		},
+		InvocationID: "inv-stop",
+		FilterKey:    "root/child",
+	}
+	res := &agentEventStreamResult{}
+	updateAgentTerminalError(res, stopEvent)
+	stopErr, ok := agent.AsStopError(res.terminalErr)
+	require.True(t, ok)
+	require.Equal(t, "stop", stopErr.Message)
+	require.Equal(t, agentTerminalErrorMeta{
+		InvocationID: "inv-stop",
+		FilterKey:    "root/child",
+	}, res.terminalErrMeta)
+	clearAgentTerminalErrorOnContinuedOutput(res, &event.Event{
+		InvocationID: "other",
+		FilterKey:    "root/child",
+		Response:     &model.Response{Done: true},
+	})
+	require.Error(t, res.terminalErr)
+	clearAgentTerminalErrorOnContinuedOutput(res, &event.Event{
+		InvocationID: "inv-stop",
+		FilterKey:    "root/child",
+		Response:     &model.Response{Done: true},
+	})
+	require.NoError(t, res.terminalErr)
+	require.Equal(t, agentTerminalErrorMeta{}, res.terminalErrMeta)
+	res = &agentEventStreamResult{}
+	updateAgentTerminalError(res, &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeError,
+			Error:  &model.ResponseError{Message: "boom"},
+		},
+		FilterKey: "root/child",
+	})
+	require.EqualError(t, res.terminalErr, "boom")
+	clearAgentTerminalErrorOnContinuedOutput(res, &event.Event{
+		FilterKey: "root/child",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: "assistant delta"},
+			}},
+		},
+	})
+	require.NoError(t, res.terminalErr)
+	require.Equal(t, agentTerminalErrorMeta{}, res.terminalErrMeta)
+}
+
+func TestIsAgentRecoveryEvent(t *testing.T) {
+	require.True(t, isAgentRecoveryEvent(&event.Event{
+		Response: &model.Response{Done: true},
+	}))
+	require.True(t, isAgentRecoveryEvent(NewGraphCompletionEvent()))
+	require.True(t, isAgentRecoveryEvent(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+		},
+		StateDelta: map[string][]byte{
+			MetadataKeyCompletion: []byte(`{}`),
+		},
+	}))
+	require.False(t, isAgentRecoveryEvent(&event.Event{
+		Response: &model.Response{
+			Error: &model.ResponseError{Message: "boom"},
+		},
+	}))
+	require.True(t, isAgentRecoveryEvent(&event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: "delta"},
+			}},
+		},
+	}))
+	require.True(t, isAgentRecoveryEvent(&event.Event{
+		Response:         &model.Response{},
+		StructuredOutput: map[string]any{"ok": true},
+	}))
+	require.True(t, isAgentRecoveryEvent(&event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("answer"),
+			}},
+		},
+	}))
+}

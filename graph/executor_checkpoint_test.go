@@ -116,6 +116,33 @@ func TestExecutor_CheckpointLifecycleEvents_EmittedWhenEnabled(
 	require.Greater(t, counts[ObjectTypeGraphCheckpointCommitted], 0)
 }
 
+func TestExecutor_CheckpointLifecycleEvents_SuppressedWhenExecutorEventsDisabled(
+	t *testing.T,
+) {
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("a",
+			func(ctx context.Context, state State) (any, error) {
+				return nil, nil
+			},
+		).
+		SetEntryPoint("a").
+		SetFinishPoint("a").
+		Compile()
+	require.NoError(t, err)
+	saver := newMockSaver()
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+	inv := &agent.Invocation{InvocationID: "inv-suppressed"}
+	agent.WithStreamMode(agent.StreamModeCheckpoints)(&inv.RunOptions)
+	agent.WithDisableGraphExecutorEvents(true)(&inv.RunOptions)
+	ch, err := exec.Execute(context.Background(), State{}, inv)
+	require.NoError(t, err)
+	counts := collectObjectCounts(ch)
+	require.Zero(t, counts[ObjectTypeGraphCheckpointCreated])
+	require.Zero(t, counts[ObjectTypeGraphCheckpointCommitted])
+	require.Zero(t, counts[ObjectTypeGraphCheckpointInterrupt])
+}
+
 type failingPutFullSaver struct {
 	*mockSaver
 }
