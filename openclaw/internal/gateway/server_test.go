@@ -520,12 +520,32 @@ func TestServerInjectedContextMessages_IncludePersonaAndUploads(t *testing.T) {
 		uploads:      uploadStore,
 		personaStore: personaStore,
 	}
-	msgs := srv.injectedContextMessages("u1", sessionID)
+	msgs := srv.injectedContextMessages("u1", sessionID, "")
 	require.Len(t, msgs, 2)
 	require.Contains(t, msgs[0].Content, personaContextHeader)
 	require.Contains(t, msgs[0].Content, persona.PresetGirlfriend)
 	require.Contains(t, msgs[1].Content, recentUploadContextHeader)
 	require.Contains(t, msgs[1].Content, "clip.mp4 [video]")
+}
+
+func TestServerInjectedContextMessages_IncludeRequestSystemPrompt(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	srv := &Server{}
+	msgs := srv.injectedContextMessages(
+		"u1",
+		"telegram:dm:u1",
+		"Follow the channel runtime guidance.",
+	)
+	require.Len(t, msgs, 1)
+	require.Equal(t, model.RoleSystem, msgs[0].Role)
+	require.Equal(
+		t,
+		"Follow the channel runtime guidance.",
+		msgs[0].Content,
+	)
 }
 
 func TestDefaultSessionID_MissingFromForDM(t *testing.T) {
@@ -1158,6 +1178,35 @@ func TestServer_ProcessMessage_IncludesRecentUploadContext(t *testing.T) {
 		t,
 		opts.InjectedContextMessages[0].Content,
 		"OPENCLAW_RECENT_UPLOADS_JSON",
+	)
+}
+
+func TestServer_ProcessMessage_KeepsUserTextSeparateFromRequestSystemPrompt(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	runner := &resolvingRunner{}
+	srv, err := New(runner)
+	require.NoError(t, err)
+
+	req := gwproto.MessageRequest{
+		Channel:             "telegram",
+		From:                "u1",
+		SessionID:           "telegram:dm:u1",
+		Text:                "hello",
+		RequestSystemPrompt: "Use the active persona for tone.",
+	}
+
+	rsp, status := srv.ProcessMessage(context.Background(), req)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "ok", rsp.Reply)
+	require.Equal(t, "hello", runner.msg.Content)
+	require.Len(t, runner.opts.InjectedContextMessages, 1)
+	require.Equal(
+		t,
+		"Use the active persona for tone.",
+		runner.opts.InjectedContextMessages[0].Content,
 	)
 }
 

@@ -21,8 +21,12 @@ const personaContextHeader = "Active preset persona for this chat:"
 func (s *Server) injectedContextMessages(
 	userID string,
 	sessionID string,
+	requestSystemPrompt string,
 ) []model.Message {
-	out := make([]model.Message, 0, 2)
+	out := make([]model.Message, 0, 3)
+	if msg := requestSystemPromptMessage(requestSystemPrompt); msg != nil {
+		out = append(out, *msg)
+	}
 	if msg := s.personaContextMessage(
 		userID,
 		sessionID,
@@ -31,6 +35,15 @@ func (s *Server) injectedContextMessages(
 	}
 	out = append(out, s.uploadContextMessages(userID, sessionID)...)
 	return out
+}
+
+func requestSystemPromptMessage(prompt string) *model.Message {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil
+	}
+	msg := model.NewSystemMessage(prompt)
+	return &msg
 }
 
 func (s *Server) personaContextMessage(

@@ -532,6 +532,7 @@ func (s *Server) resolveRunOptions(
 		run.userID,
 		run.sessionID,
 		run.requestID,
+		run.requestSystemPrompt,
 	)
 	if s == nil || s.runOptionResolver == nil {
 		return ctx, runOpts
@@ -562,6 +563,7 @@ func (s *Server) runOptions(
 	userID string,
 	sessionID string,
 	requestID string,
+	requestSystemPrompt string,
 ) []agent.RunOption {
 	runOpts := make([]agent.RunOption, 0, 1)
 	if requestID != "" {
@@ -570,6 +572,7 @@ func (s *Server) runOptions(
 	if messages := s.injectedContextMessages(
 		userID,
 		sessionID,
+		requestSystemPrompt,
 	); len(messages) > 0 {
 		runOpts = append(
 			runOpts,

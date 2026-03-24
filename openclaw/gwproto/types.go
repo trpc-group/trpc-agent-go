@@ -28,6 +28,8 @@ type MessageRequest struct {
 
 	ContentParts []ContentPart `json:"content_parts,omitempty"`
 
+	RequestSystemPrompt string `json:"request_system_prompt,omitempty"`
+
 	UserID    string `json:"user_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
