@@ -1166,3 +1166,28 @@ Caveats
   write `temp:*` via `invocation.Session.SetState` (e.g., via a callback)
   when you need session-scoped temporary values.
 - Placeholders are resolved at request time; changing the stored value updates behavior on the next model request without recreating the agent.
+
+## Static Structure Export
+
+The framework provides static structure export for agents. This is useful for structure inspection, visualization, configuration tools, and diagnostics that need a stable snapshot of nodes, edges, and editable surfaces.
+
+Use `agent/structure` to export a normalized snapshot:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+
+snapshot, err := structure.Export(ctx, llmAgent)
+if err != nil {
+    log.Fatalf("Failed to export structure: %v", err)
+}
+
+fmt.Println(snapshot.StructureID)
+fmt.Println(snapshot.EntryNodeID)
+fmt.Println(len(snapshot.Nodes), len(snapshot.Edges), len(snapshot.Surfaces))
+```
+
+The exported snapshot contains:
+
+- `Nodes`: stable static nodes in the current agent structure
+- `Edges`: static possible connections between nodes
+- `Surfaces`: stable editable baselines such as `instruction`, `model`, `tool`, and `skill`

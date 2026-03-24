@@ -1135,3 +1135,28 @@ llm := llmagent.New(
 - 内存版 `UpdateUserState` 出于安全设计禁止写 `temp:*`；需要会话内
   临时值时，通过 `invocation.Session.SetState` 写入（例如通过回调）。
 - 占位符是在“请求时”解析；只要你换了存储的值，下一次模型请求就会用新值，无需重建 Agent。
+
+## 静态结构导出
+
+框架提供了 Agent 的静态结构导出能力，可用于结构检查、可视化、配置工具和结构诊断等需要稳定节点图与 surface 基线的场景。
+
+可以通过 `agent/structure` 导出规范化快照：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+
+snapshot, err := structure.Export(ctx, llmAgent)
+if err != nil {
+    log.Fatalf("导出结构失败: %v", err)
+}
+
+fmt.Println(snapshot.StructureID)
+fmt.Println(snapshot.EntryNodeID)
+fmt.Println(len(snapshot.Nodes), len(snapshot.Edges), len(snapshot.Surfaces))
+```
+
+导出的快照包含：
+
+- `Nodes`：当前 Agent 结构中的稳定静态节点
+- `Edges`：节点之间静态上可能出现的连接
+- `Surfaces`：稳定可编辑的基线面，例如 `instruction`、`model`、`tool`、`skill`

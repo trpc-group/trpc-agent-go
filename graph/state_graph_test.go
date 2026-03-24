@@ -3031,6 +3031,28 @@ func TestAddLLMNode_RefreshToolSetsOnRun(t *testing.T) {
 	require.Equal(t, 2, ts.calls)
 }
 
+func TestAddLLMNode_UsesUpdatedToolsMapAtRunTime(t *testing.T) {
+	schema := MessagesStateSchema()
+	rm := &recordingModel{}
+	sg := NewStateGraph(schema)
+	tools := map[string]tool.Tool{
+		"base": &simpleTool{name: "base"},
+	}
+	sg.AddLLMNode("llm", rm, "inst", tools)
+	n := sg.graph.nodes["llm"]
+	require.NotNil(t, n)
+	require.Contains(t, n.baseTools, "base")
+	require.NotContains(t, n.baseTools, "late")
+	tools["late"] = &simpleTool{name: "late"}
+	_, err := n.Function(context.Background(), State{StateKeyUserInput: "hi"})
+	require.NoError(t, err)
+	require.NotNil(t, rm.lastTools)
+	require.Contains(t, rm.lastTools, "base")
+	require.Contains(t, rm.lastTools, "late")
+	require.Contains(t, n.baseTools, "base")
+	require.NotContains(t, n.baseTools, "late")
+}
+
 func TestAddLLMNode_PlaceholderInvocationState(t *testing.T) {
 	const (
 		nodeID        = "llm"
@@ -3373,6 +3395,41 @@ func TestNewToolsNodeFunc_RefreshToolSetsOnRun(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, 2, ts.calls)
+}
+
+func TestAddToolsNode_DoesNotReplayOptionsExtraTimes(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	calls := 0
+	sg.AddToolsNode(
+		"tools",
+		nil,
+		func(node *Node) {
+			calls++
+			node.refreshToolSetsOnRun = false
+		},
+	)
+	require.Equal(t, 2, calls)
+}
+
+func TestAddToolsNode_DuplicateIDDoesNotOverwriteExistingBaseTools(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	firstTools := map[string]tool.Tool{
+		"first": &simpleTool{name: "first"},
+	}
+	secondTools := map[string]tool.Tool{
+		"second": &simpleTool{name: "second"},
+	}
+	sg.AddToolsNode("tools", firstTools)
+	firstNode := sg.graph.nodes["tools"]
+	require.NotNil(t, firstNode)
+	require.Contains(t, firstNode.baseTools, "first")
+	require.NotContains(t, firstNode.baseTools, "second")
+	sg.AddToolsNode("tools", secondTools)
+	require.Error(t, sg.buildErr())
+	secondNode := sg.graph.nodes["tools"]
+	require.Same(t, firstNode, secondNode)
+	require.Contains(t, secondNode.baseTools, "first")
+	require.NotContains(t, secondNode.baseTools, "second")
 }
 
 func TestStateGraph_StaticInterruptNodes_SetFlags(t *testing.T) {
