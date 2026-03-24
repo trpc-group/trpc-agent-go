@@ -936,6 +936,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#static-structure-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      Static Structure Export
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2640,6 +2649,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#static-structure-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      Static Structure Export
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4321,6 +4339,35 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
   when you need session-scoped temporary values.</li>
 <li>Placeholders are resolved at request time; changing the stored value updates behavior on the next model request without recreating the agent.</li>
 </ul>
+<h2 id="static-structure-export">Static Structure Export</h2>
+<p>The framework provides static structure export for agents. This is useful for structure inspection, visualization, configuration tools, and diagnostics that need a stable snapshot of nodes, edges, and editable surfaces.</p>
+<p>Use <code>agent/structure</code> to export a normalized snapshot:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-35-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-35-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-35-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-35-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-35-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-35-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-35-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-35-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-35-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-35-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/structure&quot;</span>
+</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2"></a>
+</span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3"></a><span class="nx">snapshot</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">structure</span><span class="p">.</span><span class="nx">Export</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">llmAgent</span><span class="p">)</span>
+</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to export structure: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-35-6"><a id="__codelineno-35-6" name="__codelineno-35-6"></a><span class="p">}</span>
+</span><span id="__span-35-7"><a id="__codelineno-35-7" name="__codelineno-35-7"></a>
+</span><span id="__span-35-8"><a id="__codelineno-35-8" name="__codelineno-35-8"></a><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">snapshot</span><span class="p">.</span><span class="nx">StructureID</span><span class="p">)</span>
+</span><span id="__span-35-9"><a id="__codelineno-35-9" name="__codelineno-35-9"></a><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">snapshot</span><span class="p">.</span><span class="nx">EntryNodeID</span><span class="p">)</span>
+</span><span id="__span-35-10"><a id="__codelineno-35-10" name="__codelineno-35-10"></a><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="nx">snapshot</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">),</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">snapshot</span><span class="p">.</span><span class="nx">Edges</span><span class="p">),</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">snapshot</span><span class="p">.</span><span class="nx">Surfaces</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The exported snapshot contains:</p>
+<ul>
+<li><code>Nodes</code>: stable static nodes in the current agent structure</li>
+<li><code>Edges</code>: static possible connections between nodes</li>
+<li><code>Surfaces</code>: stable editable baselines such as <code>instruction</code>, <code>model</code>, <code>tool</code>, and <code>skill</code></li>
+</ul>
 
 
 
@@ -4343,7 +4390,7 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 5, 2026 08:17:49 UTC">2026-03-05 08:17:49</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 24, 2026 02:10:54 UTC">2026-03-24 02:10:54</span>
   </span>
 
     
