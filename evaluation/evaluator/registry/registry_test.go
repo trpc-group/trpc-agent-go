@@ -54,6 +54,7 @@ func TestRegistryDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, defaultEval)
 	assert.Equal(t, defaultName, defaultEval.Name())
+	assert.Contains(t, reg.List(), "llm_rubric_critic")
 }
 
 func TestRegistryRegisterAndGet(t *testing.T) {
