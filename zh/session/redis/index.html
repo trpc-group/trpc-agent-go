@@ -1143,6 +1143,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#session" class="md-nav__link">
+    <span class="md-ellipsis">
+      用户级 Session 索引
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#compatmode" class="md-nav__link">
     <span class="md-ellipsis">
       存储兼容模式（CompatMode）
@@ -2113,6 +2122,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#session" class="md-nav__link">
+    <span class="md-ellipsis">
+      用户级 Session 索引
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#compatmode" class="md-nav__link">
     <span class="md-ellipsis">
       存储兼容模式（CompatMode）
@@ -2312,6 +2330,12 @@
 <td><code>CompatMode</code></td>
 <td><code>CompatModeLegacy</code></td>
 <td>存储兼容模式。可选值：<code>CompatModeNone</code>、<code>CompatModeLegacy</code>、<code>CompatModeTransition</code>。详见<a href="#存储兼容模式compatmode">存储兼容模式</a></td>
+</tr>
+<tr>
+<td><code>WithEnableUserSessionIndex(enable bool)</code></td>
+<td><code>bool</code></td>
+<td><code>false</code></td>
+<td>启用 HashIdx 的用户级 Session 索引。详见<a href="#用户级-session-索引">用户级 Session 索引</a></td>
 </tr>
 </tbody>
 </table>
@@ -2569,6 +2593,10 @@ eventChan, err := r.Run(ctx, userID, sessionID, message)
 </ul>
 <p>!!! warning "注意"
     异步持久化模式下，如果服务进程异常退出，channel 中尚未消费的事件可能会丢失。请根据业务对数据一致性的要求评估是否启用。</p>
+<h2 id="session">用户级 Session 索引</h2>
+<p><code>WithEnableUserSessionIndex(true)</code> 是一个只对 HashIdx 存储生效的可选能力。它会维护一个按用户维度组织的索引，用来建立 <code>userID -&gt; 该用户创建的 sessionID</code> 之间的关联映射。</p>
+<p>这个索引当前的主要目的是避免 <code>ListSessions</code> 里现有的 SCAN 操作。</p>
+<p>该选项更适合新写入的 HashIdx 数据。如果在一个已经存在历史 HashIdx session 的环境里直接开启它，这些旧 session 不会自动出现在 index 中，除非额外做迁移或重建索引。</p>
 <h2 id="compatmode">存储兼容模式（CompatMode）</h2>
 <p>新版本 Redis Session 使用了全新的存储引擎（HashIdx），按用户维度散列到不同的 Redis Cluster slot，消除了旧版本所有数据集中在同一 slot 的热点问题。如果你有旧版本的数据需要迁移，可以通过 <code>WithCompatMode</code> 配置兼容模式实现平滑过渡。</p>
 <p>!!! tip "大多数情况下无需关注兼容模式"
@@ -2726,7 +2754,7 @@ eventChan, err := r.Run(ctx, userID, sessionID, message)
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月12日 08:49:53 UTC">2026-03-12 08:49:53</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月24日 02:59:53 UTC">2026-03-24 02:59:53</span>
   </span>
 
     

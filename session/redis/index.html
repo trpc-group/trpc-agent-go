@@ -1143,6 +1143,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#user-session-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      User Session Index
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#storage-compatibility-mode-compatmode" class="md-nav__link">
     <span class="md-ellipsis">
       Storage Compatibility Mode (CompatMode)
@@ -2113,6 +2122,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#user-session-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      User Session Index
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#storage-compatibility-mode-compatmode" class="md-nav__link">
     <span class="md-ellipsis">
       Storage Compatibility Mode (CompatMode)
@@ -2312,6 +2330,12 @@
 <td><code>CompatMode</code></td>
 <td><code>CompatModeLegacy</code></td>
 <td>Storage compatibility mode. Options: <code>CompatModeNone</code>, <code>CompatModeLegacy</code>, <code>CompatModeTransition</code>. See <a href="#storage-compatibility-mode-compatmode">Storage Compatibility Mode (CompatMode)</a></td>
+</tr>
+<tr>
+<td><code>WithEnableUserSessionIndex(enable bool)</code></td>
+<td><code>bool</code></td>
+<td><code>false</code></td>
+<td>Enable the per-user session index for HashIdx. See <a href="#user-session-index">User Session Index</a></td>
 </tr>
 </tbody>
 </table>
@@ -2569,6 +2593,10 @@ eventChan, err := r.Run(ctx, userID, sessionID, message)
 </ul>
 <p>!!! warning "Caution"
     In async persistence mode, events still in the channel may be lost if the process crashes unexpectedly. Evaluate whether to enable this based on your data consistency requirements.</p>
+<h2 id="user-session-index">User Session Index</h2>
+<p><code>WithEnableUserSessionIndex(true)</code> is an optional capability for HashIdx storage only. It maintains a user-scoped index that maps <code>userID</code> to the session IDs created by that user.</p>
+<p>The main purpose of this index is to avoid the SCAN operation currently used by <code>ListSessions</code>.</p>
+<p>This option is intended for fresh HashIdx writes. If you enable it on an environment that already contains historical HashIdx sessions created before the index was introduced, those older sessions will not automatically appear in the index unless you migrate or rebuild the index separately.</p>
 <h2 id="storage-compatibility-mode-compatmode">Storage Compatibility Mode (CompatMode)</h2>
 <p>The new version of Redis Session uses a new storage engine (HashIdx) that distributes data across different Redis Cluster slots by user, eliminating the hotspot issue where all data was concentrated in a single slot in the old version. If you have legacy data to migrate, use <code>WithCompatMode</code> to configure compatibility mode for a smooth transition.</p>
 <p>!!! tip "In most cases, you don't need to worry about compatibility mode"
@@ -2726,7 +2754,7 @@ eventChan, err := r.Run(ctx, userID, sessionID, message)
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 12, 2026 08:49:53 UTC">2026-03-12 08:49:53</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 24, 2026 02:59:53 UTC">2026-03-24 02:59:53</span>
   </span>
 
     
