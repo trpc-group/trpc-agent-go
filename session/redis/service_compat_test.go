@@ -97,6 +97,7 @@ func seedHashidxSession(
 
 	svcL, err := NewService(
 		WithRedisClientURL(redisURL),
+		WithEnableUserSessionIndex(true),
 		WithCompatMode(CompatModeLegacy),
 	)
 	require.NoError(t, err)
@@ -153,7 +154,7 @@ func TestMixedNodes_TransitionCreates_LegacyReads(t *testing.T) {
 	ctx := context.Background()
 
 	// Transition node creates a session with events + track + user state
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 	defer svcT.Close()
 
@@ -176,7 +177,7 @@ func TestMixedNodes_TransitionCreates_LegacyReads(t *testing.T) {
 		session.StateMap{"uk": []byte("transition-val")}))
 
 	// Legacy node reads the zset session
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -242,7 +243,7 @@ func TestMixedNodes_TransitionCreates_LegacyAppendsTrack(t *testing.T) {
 	key := session.Key{AppName: "app1", UserID: "user1", SessionID: "track-compat-sid"}
 
 	// Transition node creates session with an initial track event
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 
 	sess, err := svcT.CreateSession(ctx, key, nil)
@@ -260,7 +261,7 @@ func TestMixedNodes_TransitionCreates_LegacyAppendsTrack(t *testing.T) {
 	svcT.Close()
 
 	// Legacy node reads and appends another track event to the same track
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -304,7 +305,7 @@ func TestMixedNodes_LegacyCreates_NoneReads(t *testing.T) {
 	keyHashidx := seedHashidxSession(t, ctx, redisURL, "app1", "user1", "new-hashidx-sid", 2, "new-track", "new summary")
 
 	// Legacy node should see both
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	sessions, err := svcL.ListSessions(ctx, session.UserKey{AppName: "app1", UserID: "user1"})
 	require.NoError(t, err)
@@ -312,7 +313,7 @@ func TestMixedNodes_LegacyCreates_NoneReads(t *testing.T) {
 	svcL.Close()
 
 	// None node should only see hashidx session
-	svcN, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	svcN, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeNone))
 	require.NoError(t, err)
 	defer svcN.Close()
 
@@ -350,7 +351,7 @@ func TestOldData_ZsetSession_LegacyReadsSummary(t *testing.T) {
 
 	key := seedZsetSession(t, ctx, redisURL, "app1", "user1", "sum-sid", 2, "", "zset-summary-text")
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -378,7 +379,7 @@ func TestOldData_ZsetSession_LegacyReadsTrack(t *testing.T) {
 
 	key := seedZsetSession(t, ctx, redisURL, "app1", "user1", "trk-sid", 2, "v1-track", "")
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -407,7 +408,7 @@ func TestOldData_ZsetUserState_LegacyFallback(t *testing.T) {
 	zsetUserKey := zset.GetUserStateKey(session.Key{AppName: "app1", UserID: "user1"})
 	require.NoError(t, client.HSet(ctx, zsetUserKey, "old_key", "old_val").Err())
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -433,7 +434,7 @@ func TestOldData_ZsetUserState_TransitionDualWrite(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 	defer svcT.Close()
 
@@ -462,13 +463,13 @@ func TestOldData_ZsetAppState_SharedKey(t *testing.T) {
 	ctx := context.Background()
 
 	// Write via Transition
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 	require.NoError(t, svcT.UpdateAppState(ctx, "app1", session.StateMap{"ak": []byte("av")}))
 	svcT.Close()
 
 	// Read via Legacy
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	states, err := svcL.ListAppStates(ctx, "app1")
 	require.NoError(t, err)
@@ -476,7 +477,7 @@ func TestOldData_ZsetAppState_SharedKey(t *testing.T) {
 	svcL.Close()
 
 	// Read via None
-	svcN, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	svcN, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeNone))
 	require.NoError(t, err)
 	defer svcN.Close()
 	states, err = svcN.ListAppStates(ctx, "app1")
@@ -500,7 +501,7 @@ func TestOldData_UpdateSessionState_RoutesToCorrectStorage(t *testing.T) {
 	// Create a hashidx session
 	keyHashidx := seedHashidxSession(t, ctx, redisURL, "app1", "user1", "hashidx-state-sid", 1, "", "")
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -544,7 +545,7 @@ func TestOldData_TrimConversations_RoutesToCorrectStorage(t *testing.T) {
 
 	// Create a zset session with events that have RequestIDs
 	keyZset := session.Key{AppName: "app1", UserID: "user1", SessionID: "zset-trim-sid"}
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 	sessZ, err := svcT.CreateSession(ctx, keyZset, nil)
 	require.NoError(t, err)
@@ -553,7 +554,7 @@ func TestOldData_TrimConversations_RoutesToCorrectStorage(t *testing.T) {
 	}
 	svcT.Close()
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -589,7 +590,7 @@ func TestOldData_DeleteSession_LegacyCleansUpBothStorages(t *testing.T) {
 
 	key := seedZsetSession(t, ctx, redisURL, "app1", "user1", "del-sid", 2, "del-track", "del-summary")
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -636,14 +637,14 @@ func TestOldData_DeleteUserState_LegacyDeletesBoth(t *testing.T) {
 	ctx := context.Background()
 
 	// Write to both storages via Transition mode
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 	require.NoError(t, svcT.UpdateUserState(ctx,
 		session.UserKey{AppName: "app1", UserID: "user1"},
 		session.StateMap{"uk": []byte("uv")}))
 	svcT.Close()
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -675,7 +676,7 @@ func TestOldData_Summary_TransitionWritesZset(t *testing.T) {
 
 	key := session.Key{AppName: "app1", UserID: "user1", SessionID: "sum-trans-sid"}
 
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 	defer svcT.Close()
 
@@ -721,7 +722,7 @@ func TestOldData_Summary_HashidxWriteReadable(t *testing.T) {
 
 	key := seedHashidxSession(t, ctx, redisURL, "app1", "user1", "sum-hashidx-sid", 2, "", "hashidx summary text")
 
-	svcN, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	svcN, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeNone))
 	require.NoError(t, err)
 	defer svcN.Close()
 
@@ -745,7 +746,7 @@ func TestOldData_Summary_ZsetFallbackViaLegacy(t *testing.T) {
 
 	key := seedZsetSession(t, ctx, redisURL, "app1", "user1", "sum-fb-sid", 2, "", "v1 summary")
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -777,7 +778,7 @@ func TestMigration_FullPath_TransitionLegacyNone(t *testing.T) {
 	userKey := session.UserKey{AppName: appName, UserID: userID}
 
 	// Phase 1: Transition mode - simulate old nodes
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 
 	keyOld := session.Key{AppName: appName, UserID: userID, SessionID: "phase1-sid"}
@@ -807,7 +808,7 @@ func TestMigration_FullPath_TransitionLegacyNone(t *testing.T) {
 	svcT.Close()
 
 	// Phase 2: Legacy mode - mixed environment
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 
 	// Old session readable with all data
@@ -855,7 +856,7 @@ func TestMigration_FullPath_TransitionLegacyNone(t *testing.T) {
 	svcL.Close()
 
 	// Phase 3: None mode - migration complete
-	svcN, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	svcN, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeNone))
 	require.NoError(t, err)
 	defer svcN.Close()
 
@@ -905,14 +906,14 @@ func TestCreateSession_ExistingZset_LegacyReturnsExisting(t *testing.T) {
 	key := session.Key{AppName: "app1", UserID: "user1", SessionID: "dup-sid"}
 
 	// Create in Transition mode (zset)
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 	_, err = svcT.CreateSession(ctx, key, session.StateMap{"from": []byte("zset")})
 	require.NoError(t, err)
 	svcT.Close()
 
 	// Try to create same session in Legacy mode
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -933,14 +934,14 @@ func TestCreateSession_ExistingHashidx_TransitionReturnsExisting(t *testing.T) {
 	key := session.Key{AppName: "app1", UserID: "user1", SessionID: "dup-sid"}
 
 	// Create in Legacy mode (hashidx)
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	_, err = svcL.CreateSession(ctx, key, session.StateMap{"from": []byte("hashidx")})
 	require.NoError(t, err)
 	svcL.Close()
 
 	// Try to create same session in Transition mode
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 	defer svcT.Close()
 
@@ -965,7 +966,7 @@ func TestNoneMode_NoZsetInteraction(t *testing.T) {
 	zsetUserKey := zset.GetUserStateKey(session.Key{AppName: "app1", UserID: "user1"})
 	require.NoError(t, client.HSet(ctx, zsetUserKey, "zkey", "zval").Err())
 
-	svcN, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	svcN, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeNone))
 	require.NoError(t, err)
 	defer svcN.Close()
 
@@ -1020,7 +1021,7 @@ func TestAppendEvent_VersionTagRouting_ZsetSession(t *testing.T) {
 
 	key := seedZsetSession(t, ctx, redisURL, "app1", "user1", "ver-tag-sid", 1, "", "")
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -1056,7 +1057,7 @@ func TestAppendEvent_VersionTagRouting_HashidxSession(t *testing.T) {
 
 	key := seedHashidxSession(t, ctx, redisURL, "app1", "user1", "ver-tag-h-sid", 1, "", "")
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -1089,7 +1090,7 @@ func TestDeleteSession_GetSessionReturnsNil(t *testing.T) {
 	keyZset := seedZsetSession(t, ctx, redisURL, "app1", "user1", "del-get-z", 2, "trk", "sum")
 	keyHashidx := seedHashidxSession(t, ctx, redisURL, "app1", "user1", "del-get-h", 2, "trk", "sum")
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -1139,7 +1140,7 @@ func TestUserState_HashidxWriteMasksZsetFallback(t *testing.T) {
 	zsetUserKey := zset.GetUserStateKey(session.Key{AppName: "app1", UserID: "user1"})
 	require.NoError(t, client.HSet(ctx, zsetUserKey, "old_key", "old_val").Err())
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -1175,7 +1176,7 @@ func TestMigration_GetSessionSummaryText_AcrossModes(t *testing.T) {
 	keyHashidx := seedHashidxSession(t, ctx, redisURL, "app1", "user1", "sumtext-h", 2, "", "hashidx summary text")
 
 	// Legacy mode: both summaries readable via GetSessionSummaryText
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 
 	sessZ, err := svcL.GetSession(ctx, keyZset)
@@ -1194,7 +1195,7 @@ func TestMigration_GetSessionSummaryText_AcrossModes(t *testing.T) {
 	svcL.Close()
 
 	// None mode: only hashidx summary readable
-	svcN, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	svcN, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeNone))
 	require.NoError(t, err)
 	defer svcN.Close()
 
@@ -1238,7 +1239,7 @@ func TestPreSeeded_ZsetData_LegacyFullWorkflow(t *testing.T) {
 	require.NoError(t, client.HSet(ctx, fmt.Sprintf("appstate:{%s}", appName), "legacy_ak", "legacy_av").Err())
 
 	// Legacy mode: full workflow on pre-seeded data
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -1343,11 +1344,11 @@ func TestPreSeeded_ZsetData_TransitionAndLegacyMixedRun(t *testing.T) {
 	require.NoError(t, client.HSet(ctx, zsetUserKey, "shared_uk", "zset_val").Err())
 
 	// Both services running simultaneously
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 	defer svcT.Close()
 
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 	defer svcL.Close()
 
@@ -1439,7 +1440,7 @@ func TestPreSeeded_ZsetData_FullMigrationWithOldData(t *testing.T) {
 	require.NoError(t, client.HSet(ctx, fmt.Sprintf("appstate:{%s}", appName), "version", "1.0").Err())
 
 	// Phase 1: Transition mode reads old data, creates new session in zset
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 
 	sessV1, err := svcT.GetSession(ctx, keyV1)
@@ -1458,7 +1459,7 @@ func TestPreSeeded_ZsetData_FullMigrationWithOldData(t *testing.T) {
 	svcT.Close()
 
 	// Phase 2: Legacy mode reads both, creates new in hashidx
-	svcL, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeLegacy))
+	svcL, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeLegacy))
 	require.NoError(t, err)
 
 	// Old v1 session readable
@@ -1497,7 +1498,7 @@ func TestPreSeeded_ZsetData_FullMigrationWithOldData(t *testing.T) {
 	svcL.Close()
 
 	// Phase 3: None mode
-	svcN, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	svcN, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeNone))
 	require.NoError(t, err)
 	defer svcN.Close()
 

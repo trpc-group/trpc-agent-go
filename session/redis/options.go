@@ -84,8 +84,9 @@ type ServiceOpts struct {
 	// compatMode controls zset/hashidx compatibility behavior.
 	// See CompatMode constants for details.
 	// Default: CompatModeLegacy (safe for most scenarios).
-	compatMode    CompatMode
-	enableTracing bool
+	compatMode             CompatMode
+	enableTracing          bool
+	enableUserSessionIndex bool
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -267,5 +268,21 @@ func WithKeyPrefix(prefix string) ServiceOpt {
 func WithEnableTracing(enable bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.enableTracing = enable
+	}
+}
+
+// WithEnableUserSessionIndex enables the per-user session index Hash for HashIdx storage.
+// When enabled:
+//   - CreateSession atomically writes both meta key and index entry
+//   - DeleteSession removes the index entry
+//   - ListSessions uses HSCAN on the index instead of global SCAN
+//
+// When disabled (default):
+//   - No index is written or maintained
+//   - ListSessions falls back to SCAN on session meta keys
+//   - No additional Redis overhead
+func WithEnableUserSessionIndex(enable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.enableUserSessionIndex = enable
 	}
 }

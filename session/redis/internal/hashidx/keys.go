@@ -48,10 +48,19 @@ func (b *keyBuilder) SessionMetaKey(key session.Key) string {
 	return fmt.Sprintf("%s:meta:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID)
 }
 
-// SessionMetaPattern returns the scan pattern for ListSessions.
+// SessionMetaPattern returns the SCAN pattern for listing all session meta keys
+// for one user when user session index is disabled.
 // Format: [userPrefix:]hashidx:meta:appName:{userID}:*
 func (b *keyBuilder) SessionMetaPattern(userKey session.UserKey) string {
 	return fmt.Sprintf("%s:meta:%s:%s:*", b.fullPrefix(), userKey.AppName, b.hashTag(userKey.UserID))
+}
+
+// SessionIndexKey returns the Hash key that indexes all session IDs for a user.
+// Format: [userPrefix:]hashidx:sessidx:appName:{userID}
+// This Hash stores sessionID as field and structured JSON metadata as value.
+// ListSessions reads this index via HSCAN for Redis Cluster compatibility.
+func (b *keyBuilder) SessionIndexKey(userKey session.UserKey) string {
+	return fmt.Sprintf("%s:sessidx:%s:%s", b.fullPrefix(), userKey.AppName, b.hashTag(userKey.UserID))
 }
 
 // EventDataKey returns the key for event data hash.
@@ -131,6 +140,11 @@ func GetSessionMetaKey(userPrefix string, key session.Key) string {
 	return newKeyBuilder(userPrefix).SessionMetaKey(key)
 }
 
+// GetSessionMetaPattern returns the SCAN pattern for HashIdx session meta keys (for testing).
+func GetSessionMetaPattern(userPrefix string, userKey session.UserKey) string {
+	return newKeyBuilder(userPrefix).SessionMetaPattern(userKey)
+}
+
 // GetEventDataKey returns the Redis key for HashIdx event data (for testing).
 func GetEventDataKey(userPrefix string, key session.Key) string {
 	return newKeyBuilder(userPrefix).EventDataKey(key)
@@ -154,4 +168,9 @@ func GetTrackTimeIndexKey(userPrefix string, key session.Key, track session.Trac
 // GetUserStateKey returns the Redis key for HashIdx user state (for testing).
 func GetUserStateKey(userPrefix string, appName, userID string) string {
 	return newKeyBuilder(userPrefix).UserStateKey(appName, userID)
+}
+
+// GetSessionIndexKey returns the Redis key for HashIdx session index (for testing).
+func GetSessionIndexKey(userPrefix string, userKey session.UserKey) string {
+	return newKeyBuilder(userPrefix).SessionIndexKey(userKey)
 }
