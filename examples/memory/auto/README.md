@@ -1,6 +1,6 @@
 # 🧠 Auto Memory Chat
 
-This example demonstrates automatic memory extraction using the `Runner` orchestration component. Unlike the manual memory tools approach, auto memory extracts user information from conversations automatically in the background without explicit tool calls.
+This example demonstrates automatic memory extraction using the `Runner` orchestration component. Unlike the manual memory tools approach, auto memory extracts user information from conversations automatically in the background, while still allowing selected tools to be exposed when needed.
 
 ## What is Auto Memory?
 
@@ -12,7 +12,7 @@ Auto memory mode uses an LLM-based extractor to analyze conversations and automa
 | ------------------- | ----------------------------------- | --------------------------------------- |
 | **Memory Creation** | Agent explicitly calls `memory_add` | System extracts automatically           |
 | **User Experience** | Visible tool calls in conversation  | Transparent, no tool call interruptions |
-| **Available Tools** | 6 tools (4 default, 2 configurable) | Only `memory_search`                    |
+| **Available Tools** | 6 tools (4 default, 2 configurable) | Default `memory_search`; configurable `memory_load`; enabled write tools can be exposed |
 | **Processing**      | Synchronous during response         | Asynchronous after response             |
 | **Control**         | Agent decides what to remember      | Extractor analyzes and decides          |
 
@@ -20,7 +20,7 @@ Auto memory mode uses an LLM-based extractor to analyze conversations and automa
 
 - **🔄 Automatic Extraction**: LLM-based extractor analyzes conversations and creates memories
 - **🌊 Background Processing**: Memory extraction happens asynchronously after responses
-- **🔍 Search Only**: Agent can search memories but cannot manually add/update/delete
+- **🔍 Configurable Agent Tools**: `memory_search` is exposed by default; `memory_load` and selected enabled write tools can be exposed when needed
 - **💾 Transparent UX**: Users don't see memory tool calls, natural conversation flow
 - **⚡ Async Workers**: Configurable worker pool for memory extraction jobs
 
@@ -46,7 +46,7 @@ extractorModel := openai.New("deepseek-chat")
 memExtractor := extractor.NewExtractor(extractorModel)
 
 // Create memory service with auto extraction enabled.
-// When extractor is set, only search and clear tools are exposed.
+// When extractor is set, memory_search is exposed by default.
 memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithExtractor(memExtractor),
     // Optional: configure async worker settings.
@@ -56,11 +56,11 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 
 // Create LLM agent with memory tools.
-// Only search and clear tools are available since extractor is set.
+// memory_search is available by default; enable load or expose write tools when needed.
 llmAgent := llmagent.New(
     "auto-memory-assistant",
     llmagent.WithModel(chatModel),
-    llmagent.WithTools(memoryService.Tools()), // memory_search and memory_clear.
+    llmagent.WithTools(memoryService.Tools()), // memory_search by default.
 )
 
 // Create runner with memory service.
@@ -137,7 +137,10 @@ type ExtractionContext struct {
 
 ### Tool Availability
 
-In auto memory mode, `WithToolEnabled` controls all 6 tools, but they serve different purposes:
+In auto memory mode, `WithToolEnabled` controls whether tools are available.
+`memory_search` is exposed through `Tools()` by default, `memory_load` is
+exposed once enabled, and `WithAutoMemoryExposedTools` selectively exposes
+enabled write tools for hybrid usage.
 
 **Front-end Tools** (exposed via `Tools()` for agent to call):
 
@@ -146,7 +149,7 @@ In auto memory mode, `WithToolEnabled` controls all 6 tools, but they serve diff
 | `memory_search` | ✅ On   | Search memories by query      |
 | `memory_load`   | ❌ Off  | Load all or recent N memories |
 
-**Back-end Tools** (used by extractor in background, not exposed to agent):
+**Back-end Tools** (used by extractor in background by default):
 
 | Tool            | Default | Description                            |
 | --------------- | ------- | -------------------------------------- |
@@ -162,6 +165,8 @@ memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithExtractor(memExtractor),
     // Front-end: enable memory_load for agent to call.
     memoryinmemory.WithToolEnabled(memory.LoadToolName, true),
+    // Hybrid: expose memory_add so the agent can save explicit long-term hints immediately.
+    memoryinmemory.WithAutoMemoryExposedTools(memory.AddToolName),
     // Back-end: disable memory_delete so extractor cannot delete.
     memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
     // Back-end: enable memory_clear for extractor (use with caution).
@@ -169,18 +174,19 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 ```
 
-**Note**: `WithToolEnabled` can be called before or after `WithExtractor` - the order does not matter.
+**Note**: `WithToolEnabled` and `WithAutoMemoryExposedTools` can be called before or after
+`WithExtractor` - the order does not matter.
 
 ### Comparison: Agentic Mode vs Auto Mode
 
 | Tool            | Agentic Mode (no extractor)             | Auto Mode (with extractor)                 |
 | --------------- | --------------------------------------- | ------------------------------------------ |
-| `memory_add`    | ✅ Agent calls via `Tools()`            | ✅ Extractor uses in background            |
-| `memory_update` | ✅ Agent calls via `Tools()`            | ✅ Extractor uses in background            |
+| `memory_add`    | ✅ Agent calls via `Tools()`            | ⚙️ Agent calls via `Tools()` if exposed; extractor uses in background |
+| `memory_update` | ✅ Agent calls via `Tools()`            | ⚙️ Agent calls via `Tools()` if exposed; extractor uses in background |
 | `memory_search` | ✅ Agent calls via `Tools()`            | ✅ Agent calls via `Tools()`               |
 | `memory_load`   | ✅ Agent calls via `Tools()`            | ⚙️ Agent calls via `Tools()` if enabled    |
-| `memory_delete` | ⚙️ Agent calls via `Tools()` if enabled | ✅ Extractor uses in background            |
-| `memory_clear`  | ⚙️ Agent calls via `Tools()` if enabled | ⚙️ Extractor uses in background if enabled |
+| `memory_delete` | ⚙️ Agent calls via `Tools()` if enabled | ⚙️ Agent calls via `Tools()` if exposed; extractor uses in background |
+| `memory_clear`  | ⚙️ Agent calls via `Tools()` if enabled | ⚙️ Agent calls via `Tools()` if exposed; extractor uses in background if enabled |
 
 ## Prerequisites
 

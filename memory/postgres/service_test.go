@@ -215,6 +215,8 @@ func TestServiceOpts_WithCustomTool(t *testing.T) {
 	assert.NotNil(t, opts.toolCreators[toolName])
 	_, hasAdd := opts.enabledTools[toolName]
 	assert.True(t, hasAdd, "Expected tool to be enabled")
+	_, explicitlySet := opts.userExplicitlySet[toolName]
+	assert.True(t, explicitlySet, "Expected tool to be marked explicit")
 
 	// Test with nil creator (should do nothing).
 	WithCustomTool(memory.SearchToolName, nil)(&opts)
@@ -225,9 +227,7 @@ func TestServiceOpts_WithCustomTool(t *testing.T) {
 }
 
 func TestServiceOpts_WithToolEnabled(t *testing.T) {
-	opts := ServiceOpts{
-		enabledTools: make(map[string]struct{}),
-	}
+	opts := ServiceOpts{}
 
 	toolName := memory.SearchToolName
 
@@ -235,12 +235,38 @@ func TestServiceOpts_WithToolEnabled(t *testing.T) {
 
 	_, hasSearch := opts.enabledTools[toolName]
 	assert.True(t, hasSearch, "Expected tool to be enabled")
+	_, explicitlySet := opts.userExplicitlySet[toolName]
+	assert.True(t, explicitlySet, "Expected tool to be marked as explicitly set")
 
 	// Test disabling.
 	WithToolEnabled(toolName, false)(&opts)
 
 	_, hasSearch = opts.enabledTools[toolName]
 	assert.False(t, hasSearch, "Expected tool to be disabled")
+	_, explicitlySet = opts.userExplicitlySet[toolName]
+	assert.True(t, explicitlySet, "Expected explicit setting to be preserved")
+}
+
+func TestServiceOpts_WithAutoMemoryExposedTools(t *testing.T) {
+	opts := ServiceOpts{}
+
+	WithAutoMemoryExposedTools(memory.AddToolName)(&opts)
+
+	_, exposed := opts.toolExposed[memory.AddToolName]
+	_, hidden := opts.toolHidden[memory.AddToolName]
+	assert.True(t, exposed, "Expected tool to be explicitly exposed")
+	assert.False(t, hidden, "Expected tool not to be explicitly hidden")
+
+	WithToolExposed(memory.AddToolName, false)(&opts)
+
+	_, exposed = opts.toolExposed[memory.AddToolName]
+	_, hidden = opts.toolHidden[memory.AddToolName]
+	assert.False(t, exposed, "Expected tool exposure to be cleared")
+	assert.True(t, hidden, "Expected tool to be explicitly hidden")
+
+	WithAutoMemoryExposedTools("invalid_tool")(&opts)
+	_, exposed = opts.toolExposed["invalid_tool"]
+	assert.False(t, exposed, "Expected invalid tool not to be tracked")
 }
 
 func TestServiceOpts_InvalidToolName(t *testing.T) {
@@ -3350,6 +3376,8 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 		s.opts.extractor,
 		s.opts.toolCreators,
 		s.opts.enabledTools,
+		s.opts.toolExposed,
+		s.opts.toolHidden,
 		s.cachedTools,
 	)
 
@@ -3369,6 +3397,8 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 		s.opts.extractor,
 		s.opts.toolCreators,
 		s.opts.enabledTools,
+		s.opts.toolExposed,
+		s.opts.toolHidden,
 		s.cachedTools,
 	)
 
@@ -3382,4 +3412,23 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 	assert.True(t, toolNames[memory.LoadToolName], "Load tool should be returned when enabled")
 	assert.False(t, toolNames[memory.AddToolName], "Add tool should not be exposed via Tools()")
 	assert.False(t, toolNames[memory.ClearToolName], "Clear tool should not be exposed via Tools()")
+
+	// Expose Add explicitly for hybrid mode.
+	s.opts.toolExposed = map[string]struct{}{memory.AddToolName: {}}
+	s.precomputedTools = imemory.BuildToolsList(
+		s.opts.extractor,
+		s.opts.toolCreators,
+		s.opts.enabledTools,
+		s.opts.toolExposed,
+		s.opts.toolHidden,
+		s.cachedTools,
+	)
+
+	tools = s.Tools()
+	toolNames = make(map[string]bool)
+	for _, tool := range tools {
+		toolNames[tool.Declaration().Name] = true
+	}
+	assert.Len(t, tools, 3, "Auto mode should return Search, Load, and Add when Add is explicitly exposed")
+	assert.True(t, toolNames[memory.AddToolName], "Add tool should be exposed when explicitly requested")
 }
