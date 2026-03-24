@@ -76,6 +76,10 @@ const (
 	StreamEventTypeRunIgnored StreamEventType = "run.ignored"
 	// StreamEventTypeMessageDelta carries an incremental text delta.
 	StreamEventTypeMessageDelta StreamEventType = "message.delta"
+	// StreamEventTypeThoughtDelta carries an incremental thought delta.
+	StreamEventTypeThoughtDelta StreamEventType = "thought.delta"
+	// StreamEventTypeThoughtCompleted carries the final thought text.
+	StreamEventTypeThoughtCompleted StreamEventType = "thought.completed"
 	// StreamEventTypeMessageCompleted carries the final reply text.
 	StreamEventTypeMessageCompleted StreamEventType = "message.completed"
 	// StreamEventTypeRunProgress carries a high-level run status update.

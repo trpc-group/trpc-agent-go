@@ -2424,6 +2424,110 @@ func TestServer_StreamMessage_RunError(t *testing.T) {
 	require.Equal(t, "boom", events[2].Error.Message)
 }
 
+func TestServer_StreamMessage_ThoughtEvents(t *testing.T) {
+	t.Parallel()
+
+	srv, err := New(&staticRunner{
+		events: []*event.Event{
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							ReasoningContent: "plan ",
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletionChunk,
+					Choices: []model.Choice{{
+						Delta: model.Message{
+							ReasoningContent: "first",
+						},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Content:          "done",
+							ReasoningContent: "plan first",
+						},
+					}},
+					Done: true,
+				},
+				RequestID: "req-1",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		testTimeout,
+	)
+	defer cancel()
+
+	stream, apiErr, status := srv.StreamMessage(ctx, gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.Nil(t, apiErr)
+	require.Equal(t, http.StatusOK, status)
+
+	events := collectGatewayStreamEvents(t, stream)
+	require.Len(t, events, 8)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunStarted,
+		events[0].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunProgress,
+		events[1].Type,
+	)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeThoughtDelta,
+		events[2].Type,
+	)
+	require.Equal(t, "plan ", events[2].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeThoughtDelta,
+		events[3].Type,
+	)
+	require.Equal(t, "first", events[3].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeThoughtCompleted,
+		events[4].Type,
+	)
+	require.Equal(t, "plan first", events[4].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageDelta,
+		events[5].Type,
+	)
+	require.Equal(t, "done", events[5].Delta)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeMessageCompleted,
+		events[6].Type,
+	)
+	require.Equal(t, "done", events[6].Reply)
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeRunCompleted,
+		events[7].Type,
+	)
+}
+
 func TestServer_StreamMessage_EarlyResponses(t *testing.T) {
 	t.Parallel()
 

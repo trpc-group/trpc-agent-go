@@ -340,6 +340,40 @@ func (s *Server) streamLocked(
 		}
 
 		result.Consume(evt)
+		thoughtDelta := streamThoughtDelta(evt)
+		if thoughtDelta != "" {
+			if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+				Type:      gwproto.StreamEventTypeThoughtDelta,
+				SessionID: run.sessionID,
+				RequestID: resolvedStreamRequestID(
+					result.RequestID,
+					run.requestID,
+				),
+				Delta: thoughtDelta,
+			}) {
+				return streamOutcome{
+					status: traceStatusError,
+					errMsg: contextErrMessage(ctx),
+				}
+			}
+		}
+		thoughtReply := streamThoughtCompleted(evt)
+		if thoughtReply != "" {
+			if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+				Type:      gwproto.StreamEventTypeThoughtCompleted,
+				SessionID: run.sessionID,
+				RequestID: resolvedStreamRequestID(
+					result.RequestID,
+					run.requestID,
+				),
+				Reply: thoughtReply,
+			}) {
+				return streamOutcome{
+					status: traceStatusError,
+					errMsg: contextErrMessage(ctx),
+				}
+			}
+		}
 		delta := streamDeltaText(evt, sentText)
 		if delta == "" {
 			continue
@@ -727,11 +761,38 @@ func streamDeltaText(
 	}
 }
 
+func streamThoughtDelta(evt *event.Event) string {
+	if evt == nil || evt.Response == nil {
+		return ""
+	}
+	if evt.Object != model.ObjectTypeChatCompletionChunk {
+		return ""
+	}
+	return deltaThoughtFromResponse(evt.Response)
+}
+
+func streamThoughtCompleted(evt *event.Event) string {
+	if evt == nil || evt.Response == nil {
+		return ""
+	}
+	if evt.Object != model.ObjectTypeChatCompletion {
+		return ""
+	}
+	return fullThoughtFromResponse(evt.Response)
+}
+
 func fullTextFromResponse(rsp *model.Response) string {
 	if rsp == nil || len(rsp.Choices) == 0 {
 		return ""
 	}
 	return rsp.Choices[0].Message.Content
+}
+
+func fullThoughtFromResponse(rsp *model.Response) string {
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return ""
+	}
+	return rsp.Choices[0].Message.ReasoningContent
 }
 
 func deltaTextFromResponse(rsp *model.Response) string {
@@ -744,6 +805,20 @@ func deltaTextFromResponse(rsp *model.Response) string {
 			continue
 		}
 		builder.WriteString(choice.Delta.Content)
+	}
+	return builder.String()
+}
+
+func deltaThoughtFromResponse(rsp *model.Response) string {
+	if rsp == nil {
+		return ""
+	}
+	var builder strings.Builder
+	for _, choice := range rsp.Choices {
+		if choice.Delta.ReasoningContent == "" {
+			continue
+		}
+		builder.WriteString(choice.Delta.ReasoningContent)
 	}
 	return builder.String()
 }
