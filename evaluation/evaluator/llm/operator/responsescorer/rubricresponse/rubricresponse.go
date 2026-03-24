@@ -44,7 +44,10 @@ func New() responsescorer.ResponseScorer {
 
 // ScoreBasedOnResponse scores rubric responses.
 func (e *rubricResponseScorer) ScoreBasedOnResponse(ctx context.Context, response *model.Response,
-	_ *metric.EvalMetric) (*evaluator.ScoreResult, error) {
+	evalMetric *metric.EvalMetric) (*evaluator.ScoreResult, error) {
+	if response == nil {
+		return nil, fmt.Errorf("response is nil")
+	}
 	if len(response.Choices) == 0 {
 		return nil, fmt.Errorf("no choices in response")
 	}
@@ -52,6 +55,11 @@ func (e *rubricResponseScorer) ScoreBasedOnResponse(ctx context.Context, respons
 	matches := rubricBlockRegex.FindAllStringSubmatch(content, -1)
 	if len(matches) == 0 {
 		return nil, fmt.Errorf("no rubric blocks found in response")
+	}
+	expectedRubrics := configuredRubricCount(evalMetric)
+	if expectedRubrics > 0 && len(matches) != expectedRubrics {
+		return nil, fmt.Errorf("parsed rubric blocks count %d does not match configured rubric count %d",
+			len(matches), expectedRubrics)
 	}
 	averageScore := 0.0
 	reasons := make([]string, 0, len(matches))
@@ -78,4 +86,18 @@ func (e *rubricResponseScorer) ScoreBasedOnResponse(ctx context.Context, respons
 	result.Score = averageScore
 	result.Reason = strings.Join(reasons, "\n")
 	return result, nil
+}
+
+func configuredRubricCount(evalMetric *metric.EvalMetric) int {
+	if evalMetric == nil || evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
+		return 0
+	}
+	count := 0
+	for _, rubric := range evalMetric.Criterion.LLMJudge.Rubrics {
+		if rubric == nil || rubric.Content == nil {
+			continue
+		}
+		count++
+	}
+	return count
 }

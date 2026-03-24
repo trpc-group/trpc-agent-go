@@ -836,6 +836,7 @@ type Criterion struct {
 - `tool_trajectory_avg_score`: tool trajectory consistency evaluator, requires expected output.
 - `final_response_avg_score`: final response evaluator, does not require LLM, requires expected output.
 - `llm_final_response`: LLM final response evaluator, requires expected output.
+- `llm_rubric_critic`: LLM rubric critic evaluator, requires expected output plus LLMJudge rubrics.
 - `llm_rubric_response`: LLM rubric response evaluator, requires EvalSet to provide session input and LLMJudge plus rubrics.
 - `llm_rubric_knowledge_recall`: LLM rubric knowledge recall evaluator, requires EvalSet to provide session input and LLMJudge plus rubrics.
 
@@ -1754,6 +1755,7 @@ To allow different metrics to reuse the same orchestration while swapping indivi
 The framework includes the following LLM Judge evaluators:
 
 - `llm_final_response` focuses on consistency between the final answer and reference answer, typically requiring `finalResponse` on the expected side.
+- `llm_rubric_critic` focuses on a failure-oriented rubric review against the reference answer, requiring `finalResponse` on the expected side plus `criterion.llmJudge.rubrics`.
 - `llm_rubric_response` focuses on whether the final answer satisfies evaluation rubrics, requires `criterion.llmJudge.rubrics`, and aggregates scores by rubric pass status.
 - `llm_rubric_knowledge_recall` focuses on whether tool retrieval results support rubrics, typically requiring knowledge retrieval tool calls in the actual trace and extracting retrieval content as judge input.
 
@@ -1804,6 +1806,7 @@ type MessagesConstructor interface {
 The framework includes multiple `MessagesConstructor` implementations for different built-in evaluators. Default selection is as follows:
 
 - `messagesconstructor/finalresponse` for `llm_final_response`, organizing user input, actual final response, and expected final response as judge input.
+- `messagesconstructor/rubriccritic` for `llm_rubric_critic`, organizing user input, actual final response, expected final response, and `rubrics` as judge input, with stricter failure-oriented instructions.
 - `messagesconstructor/rubricresponse` for `llm_rubric_response`, organizing user input, actual final response, and `rubrics` as judge input.
 - `messagesconstructor/rubricknowledgerecall` for `llm_rubric_knowledge_recall`, extracting knowledge retrieval tool outputs from actual traces as judge evidence, and combining with user input and `rubrics` as judge input.
 
@@ -1831,7 +1834,7 @@ type ResponseScorer interface {
 The framework includes multiple `ResponseScorer` implementations. Default selection is as follows:
 
 - `responsescorer/finalresponse` for `llm_final_response`, parsing `valid` or `invalid` from judge output and mapping to 1 or 0, while preserving `reasoning` as `reason`.
-- `responsescorer/rubricresponse` for `llm_rubric_response` and `llm_rubric_knowledge_recall`, parsing verdict `yes` or `no` for each rubric, mapping each to 1 or 0, averaging as the turn score, and outputting `rubricScores`.
+- `responsescorer/rubricresponse` for `llm_rubric_critic`, `llm_rubric_response`, and `llm_rubric_knowledge_recall`, parsing verdict `yes` or `no` for each rubric, mapping each to 1 or 0, averaging as the turn score, and outputting `rubricScores`.
 
 ##### Samples Aggregator Operator
 
@@ -1969,6 +1972,59 @@ Example metric configuration for LLM final response:
 
 See [examples/evaluation/llm/finalresponse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/finalresponse) for the full example.
 
+##### LLM Rubric Critic Evaluator
+
+The LLM rubric critic evaluator has the metric name `llm_rubric_critic` and is an LLM Judge evaluator. It combines the strengths of reference-based checking and rubric-based decomposition: it compares the agent final answer against the reference final answer, but still scores per rubric item. This makes it suitable for scenarios where you want the judge to behave like a strict reviewer, explicitly look for defects, and fail on ambiguity, incompleteness, or unsupported claims.
+
+The evaluator constructs judge input from user input, actual final response, expected final response, and `criterion.llmJudge.rubrics`. The default prompt instructs the judge to adopt a skeptical, failure-oriented stance, treat the reference answer as authoritative, and return `no` whenever fulfillment is missing, partial, ambiguous, or unverifiable. The judge returns `yes` or `no` for each rubric. A single sample score is the average across rubrics, and with multiple samples the evaluator uses majority vote before comparing with `threshold`.
+
+Use `llm_rubric_critic` when plain `llm_final_response` is too coarse-grained, but `llm_rubric_response` is too permissive because it does not compare against a reference answer. Rubrics should remain atomic and directly checkable. Because this evaluator depends on a reference answer, it usually requires `finalResponse` on the expected side. For security, avoid writing `judgeModel.apiKey` and `judgeModel.baseURL` in plain text, and use environment variables instead.
+
+Example metric configuration for LLM rubric critic:
+
+```json
+[
+  {
+    "metricName": "llm_rubric_critic",
+    "threshold": 1.0,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "deepseek-chat",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        },
+        "rubrics": [
+          {
+            "id": "1",
+            "description": "The final answer includes the correct result from the reference answer.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "Check whether the final answer states the same core result as the reference answer, with no material mismatch in value, unit, entity, or conclusion."
+            }
+          },
+          {
+            "id": "2",
+            "description": "The final answer does not omit a required constraint or caveat present in the reference answer.",
+            "type": "FINAL_RESPONSE_COMPLETENESS",
+            "content": {
+              "text": "Check whether the final answer preserves the key constraint, caveat, or scope limitation required by the reference answer. If a required limitation is missing or weakened, fail this item."
+            }
+          }
+        ]
+      }
+    }
+  }
+]
+```
+
 ##### LLM Rubric Response Evaluator
 
 The LLM rubric response evaluator has the metric name `llm_rubric_response` and is an LLM Judge evaluator. It uses [LLMCriterion](#llmcriterion) to configure the judge model and splits a metric into multiple independent rubrics via `rubrics`. It focuses on whether the final answer satisfies each rubric, suitable for automated evaluation of correctness, relevance, compliance, and other goals that are hard to cover with deterministic rules.
@@ -2078,6 +2134,7 @@ Registry manages evaluator registrations. Evaluation uses `metricName` to fetch 
 - `tool_trajectory_avg_score`: tool trajectory consistency evaluator, requires expected output.
 - `final_response_avg_score`: final response evaluator, does not require LLM, requires expected output.
 - `llm_final_response`: LLM final response evaluator, requires expected output.
+- `llm_rubric_critic`: LLM rubric critic evaluator, requires expected output and LLMJudge with rubrics.
 - `llm_rubric_response`: LLM rubric response evaluator, requires EvalSet to provide session input and LLMJudge with rubrics.
 - `llm_rubric_knowledge_recall`: LLM rubric knowledge recall evaluator, requires EvalSet to provide session input and LLMJudge with rubrics.
 
@@ -2597,7 +2654,7 @@ Enable it by setting `evalMode` to `trace` in EvalCase. In trace mode, `actualCo
 
 In Trace mode, the inference phase does not run Runner and instead writes `actualConversation` into `InferenceResult.Inferences` as actual traces. `conversation` provides expected traces. If `conversation` is omitted, the evaluation phase builds placeholder expecteds that keep only per-turn `userContent`, to avoid treating trace outputs as reference answers in comparisons.
 
-When only actual traces are provided, it is suitable for metrics that depend only on actual traces, such as `llm_rubric_response` and `llm_rubric_knowledge_recall`. If you need metrics that compare reference tool traces or reference final responses, you can additionally configure expected traces.
+When only actual traces are provided, it is suitable for metrics that depend only on actual traces, such as `llm_rubric_response` and `llm_rubric_knowledge_recall`. If you need metrics that compare reference tool traces or reference final responses, such as `llm_final_response` or `llm_rubric_critic`, you can additionally configure expected traces.
 
 See [examples/evaluation/trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace) for the full example.
 

@@ -17,6 +17,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -94,4 +97,38 @@ Verdict: yes
 		ids = append(ids, strings.TrimSpace(s.ID))
 	}
 	assert.Equal(t, []string{"1", "2", "3"}, ids)
+}
+
+func TestScoreBasedOnResponseRequiresMatchingRubricCount(t *testing.T) {
+	scorer := New()
+	response := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{Content: `
+ID: 1
+Rubric: alpha
+Evidence: e1
+Reason: r1
+Verdict: yes
+`},
+		}},
+	}
+	evalMetric := &metric.EvalMetric{
+		Criterion: &criterion.Criterion{
+			LLMJudge: &llm.LLMCriterion{
+				Rubrics: []*llm.Rubric{
+					{
+						ID:      "1",
+						Content: &llm.RubricContent{Text: "alpha"},
+					},
+					{
+						ID:      "2",
+						Content: &llm.RubricContent{Text: "beta"},
+					},
+				},
+			},
+		},
+	}
+	_, err := scorer.ScoreBasedOnResponse(context.Background(), response, evalMetric)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match configured rubric count")
 }
