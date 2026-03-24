@@ -96,6 +96,24 @@ func TestNew(t *testing.T) {
 			},
 		},
 		{
+			name:      "infer deepseek reasoner from model name",
+			modelName: "deepseek-reasoner",
+			opts:      nil,
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultDeepSeekBaseURL),
+				WithVariant(VariantDeepSeek),
+			},
+		},
+		{
+			name:      "does not infer deepseek from third party deepseek model name",
+			modelName: "deepseek-v3.2",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
 			name:      "infer deepseek from base url",
 			modelName: "custom-model",
 			opts: []Option{
@@ -134,6 +152,85 @@ func TestNew(t *testing.T) {
 			assert.Equal(t, o.APIKey, m.apiKey, "expected api key %s, got %s", o.APIKey, m.apiKey)
 			assert.Equal(t, o.BaseURL, m.baseURL, "expected base url %s, got %s", o.BaseURL, m.baseURL)
 			assert.Equal(t, o.Variant, m.variant, "expected variant %s, got %s", o.Variant, m.variant)
+		})
+	}
+}
+
+func TestIsDeepSeekModelName(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelName string
+		want      bool
+	}{
+		{
+			name:      "matches chat model",
+			modelName: "deepseek-chat",
+			want:      true,
+		},
+		{
+			name:      "matches reasoner model",
+			modelName: "deepseek-reasoner",
+			want:      true,
+		},
+		{
+			name:      "matches after trim and lowercase",
+			modelName: " DEEPSEEK-CHAT ",
+			want:      true,
+		},
+		{
+			name:      "does not match third party deepseek model name",
+			modelName: "deepseek-v3.2",
+			want:      false,
+		},
+		{
+			name:      "does not match other providers",
+			modelName: "gpt-4o-mini",
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isDeepSeekModelName(tt.modelName))
+		})
+	}
+}
+
+func TestInferVariant(t *testing.T) {
+	tests := []struct {
+		name    string
+		model   string
+		baseURL string
+		variant Variant
+	}{
+		{
+			name:    "deepseek family model with custom base url stays openai",
+			model:   "deepseek-v3.2",
+			baseURL: "https://api.custom.com/v1",
+			variant: VariantOpenAI,
+		},
+		{
+			name:    "deepseek family model without base url stays openai",
+			model:   "deepseek-v3.2",
+			variant: VariantOpenAI,
+		},
+		{
+			name:    "deepseek official model with custom base url still infers deepseek",
+			model:   "deepseek-chat",
+			baseURL: "https://api.custom.com/v1",
+			variant: VariantDeepSeek,
+		},
+		{
+			name:    "deepseek official host infers deepseek",
+			model:   "custom-model",
+			baseURL: "https://api.deepseek.com/v1",
+			variant: VariantDeepSeek,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.variant, inferVariant(tt.model, tt.baseURL))
 		})
 	}
 }
