@@ -3313,7 +3313,7 @@
 <tr>
 <td><strong>可用工具</strong></td>
 <td>全部 6 个工具</td>
-<td>搜索工具（search），可选加载工具（load）</td>
+<td>默认暴露 <code>memory_search</code>；<code>memory_load</code> 可配置；已启用写工具可显式暴露</td>
 </tr>
 <tr>
 <td><strong>处理方式</strong></td>
@@ -3708,7 +3708,7 @@
 <tr>
 <td><strong>可用工具</strong></td>
 <td>add/update/delete/clear/search/load</td>
-<td>search/load</td>
+<td>默认 search；load 可配置；已启用写工具可显式暴露</td>
 </tr>
 <tr>
 <td><strong>记忆创建</strong></td>
@@ -4119,14 +4119,14 @@
 <td><code>memory_add</code></td>
 <td>添加新记忆</td>
 <td>✅ 默认启用</td>
-<td>❌ 不可用</td>
+<td>⚙️ 默认隐藏</td>
 <td>创建新记忆条目</td>
 </tr>
 <tr>
 <td><code>memory_update</code></td>
 <td>更新记忆</td>
 <td>✅ 默认启用</td>
-<td>❌ 不可用</td>
+<td>⚙️ 默认隐藏</td>
 <td>修改现有记忆</td>
 </tr>
 <tr>
@@ -4147,15 +4147,15 @@
 <td><code>memory_delete</code></td>
 <td>删除记忆</td>
 <td>⚙️ 可配置</td>
-<td>❌ 不可用</td>
+<td>⚙️ 默认隐藏</td>
 <td>删除单条记忆</td>
 </tr>
 <tr>
 <td><code>memory_clear</code></td>
 <td>清空记忆</td>
 <td>⚙️ 可配置</td>
-<td>❌ 不可用</td>
-<td>删除所有记忆（Auto 模式不暴露）</td>
+<td>⚙️ 默认禁用</td>
+<td>删除所有记忆</td>
 </tr>
 </tbody>
 </table>
@@ -4166,20 +4166,18 @@
 <li>默认禁用工具：<code>memory_delete</code>、<code>memory_clear</code></li>
 </ul>
 </li>
-<li><strong>自动提取模式</strong>：LLM 提取器自动管理写入操作，默认只暴露搜索工具，加载工具可选开启<ul>
-<li>默认启用工具：<code>memory_search</code></li>
-<li>默认禁用工具：<code>memory_load</code></li>
-<li>不暴露工具：<code>memory_add</code>、<code>memory_update</code>、<code>memory_delete</code>、<code>memory_clear</code></li>
+<li><strong>自动提取模式</strong>：LLM 提取器在后台管理写入操作，默认只暴露搜索工具；可启用 <code>memory_load</code>，也可通过 <code>WithAutoMemoryExposedTools()</code> 选择性暴露已启用的写工具<ul>
+<li>默认启用工具：<code>memory_add</code>、<code>memory_update</code>、<code>memory_delete</code>、<code>memory_search</code></li>
+<li>默认禁用工具：<code>memory_load</code>、<code>memory_clear</code></li>
+<li>默认不暴露工具：<code>memory_add</code>、<code>memory_update</code>、<code>memory_delete</code></li>
 </ul>
 </li>
 <li><strong>默认启用</strong>：创建服务时自动可用，无需额外配置</li>
-<li><strong>可配置</strong>：可以通过 <code>WithToolEnabled()</code> 启用或禁用</li>
-<li><strong>不可用</strong>：该模式下无法使用此工具</li>
+<li><strong>可配置</strong>：可以通过 <code>WithToolEnabled()</code> 启用或禁用；在 Auto 模式下，可通过 <code>WithAutoMemoryExposedTools()</code> 控制哪些已启用写工具对 Agent 暴露</li>
 </ul>
 <h4 id="_20">启用/禁用工具</h4>
-<p>提示：在 Auto 模式下，<code>WithToolEnabled()</code> 只会影响 <code>memory_search</code> 和 <code>memory_load</code>
-是否通过 <code>Tools()</code> 暴露；<code>memory_add</code>、<code>memory_update</code>、<code>memory_delete</code>、<code>memory_clear</code>
-不会暴露给 Agent。</p>
+<p>提示：<code>WithToolEnabled()</code> 控制记忆操作是否可用，<code>WithAutoMemoryExposedTools()</code> 控制
+Auto 模式下哪些已启用工具会通过 <code>Tools()</code> 暴露给 Agent。写工具默认隐藏，只有显式暴露后 Agent 才能主动调用。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
@@ -4195,7 +4193,13 @@
 <span class="normal"><a href="#__codelineno-10-13">13</a></span>
 <span class="normal"><a href="#__codelineno-10-14">14</a></span>
 <span class="normal"><a href="#__codelineno-10-15">15</a></span>
-<span class="normal"><a href="#__codelineno-10-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="c1">// 场景 1：用户可管理（允许删除单条记忆）</span>
+<span class="normal"><a href="#__codelineno-10-16">16</a></span>
+<span class="normal"><a href="#__codelineno-10-17">17</a></span>
+<span class="normal"><a href="#__codelineno-10-18">18</a></span>
+<span class="normal"><a href="#__codelineno-10-19">19</a></span>
+<span class="normal"><a href="#__codelineno-10-20">20</a></span>
+<span class="normal"><a href="#__codelineno-10-21">21</a></span>
+<span class="normal"><a href="#__codelineno-10-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="c1">// 场景 1：用户可管理（允许删除单条记忆）</span>
 </span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="nx">memoryService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">NewMemoryService</span><span class="p">(</span>
 </span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">DeleteToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
 </span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="p">)</span>
@@ -4211,6 +4215,12 @@
 </span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">AddToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
 </span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">UpdateToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
 </span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="p">)</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a><span class="c1">// 场景 4：Auto + 主动写记忆混合模式</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="nx">memoryService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">NewMemoryService</span><span class="p">(</span>
+</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithExtractor</span><span class="p">(</span><span class="nx">memExtractor</span><span class="p">),</span>
+</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithAutoMemoryExposedTools</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">AddToolName</span><span class="p">),</span>
+</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="id_1">覆盖语义（ID 与重复）</h3>
 <ul>
@@ -4218,9 +4228,8 @@
 <li>如需“允许重复/只返回已存在/忽略重复”等策略，可通过自定义工具或扩展服务策略配置实现。</li>
 </ul>
 <h3 id="_21">自定义工具实现</h3>
-<p>提示：在 Auto 模式下，<code>Tools()</code> 只会暴露 <code>memory_search</code> 和 <code>memory_load</code>。
-如果你需要对用户暴露 <code>memory_clear</code> 等工具，请使用工具驱动模式，或在业务侧直接调用
-<code>ClearMemories()</code>。</p>
+<p>提示：在 Auto 模式下，<code>Tools()</code> 默认暴露 <code>memory_search</code>；<code>memory_load</code> 在启用后可暴露，
+其他已启用工具需配合 <code>WithAutoMemoryExposedTools()</code> 显式暴露。像 <code>memory_clear</code> 这类危险操作通常更适合由业务侧直接控制。</p>
 <p>你可以用自定义实现覆盖默认工具。参考 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/memory/tool/tool.go">memory/tool/tool.go</a> 了解如何实现自定义工具：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
@@ -5699,7 +5708,10 @@
 </span></code></pre></div></td></tr></table></div>
 <p><strong>注意</strong>：<code>Messages</code> 包含自上次成功提取以来累积的所有消息。当检查器返回 <code>false</code> 时，消息会被累积，并在下次提取时一并处理。这确保了使用轮数或时间检查器时不会丢失对话上下文。</p>
 <h3 id="_39">工具控制</h3>
-<p>在自动提取模式下，<code>WithToolEnabled</code> 可以控制所有 6 个工具的开关，但它们的作用不同：</p>
+<p>在自动提取模式下，<code>WithToolEnabled</code> 控制工具是否可用。<code>memory_search</code>
+默认会通过 <code>Tools()</code> 暴露给 Agent，启用 <code>memory_load</code> 后也会暴露；
+<code>WithAutoMemoryExposedTools</code> 则用于选择性暴露已启用的写工具，支持
+Hybrid 用法。</p>
 <p><strong>前端工具</strong>（通过 <code>Tools()</code> 暴露给 Agent 调用）：</p>
 <table>
 <thead>
@@ -5722,7 +5734,7 @@
 </tr>
 </tbody>
 </table>
-<p><strong>后端工具</strong>（提取器在后台使用，不暴露给 Agent）：</p>
+<p><strong>后端工具</strong>（默认由提取器在后台使用）：</p>
 <table>
 <thead>
 <tr>
@@ -5755,25 +5767,30 @@
 </tbody>
 </table>
 <p><strong>配置示例</strong>：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-43-1">1</a></span>
-<span class="normal"><a href="#__codelineno-43-2">2</a></span>
-<span class="normal"><a href="#__codelineno-43-3">3</a></span>
-<span class="normal"><a href="#__codelineno-43-4">4</a></span>
-<span class="normal"><a href="#__codelineno-43-5">5</a></span>
-<span class="normal"><a href="#__codelineno-43-6">6</a></span>
-<span class="normal"><a href="#__codelineno-43-7">7</a></span>
-<span class="normal"><a href="#__codelineno-43-8">8</a></span>
-<span class="normal"><a href="#__codelineno-43-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1"></a><span class="nx">memoryService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">NewMemoryService</span><span class="p">(</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-43-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-43-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-43-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-43-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-43-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-43-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-43-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-43-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-43-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-43-10">10</a></span>
+<span class="normal"><a href="#__codelineno-43-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1"></a><span class="nx">memoryService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">NewMemoryService</span><span class="p">(</span>
 </span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithExtractor</span><span class="p">(</span><span class="nx">memExtractor</span><span class="p">),</span>
 </span><span id="__span-43-3"><a id="__codelineno-43-3" name="__codelineno-43-3"></a><span class="w">    </span><span class="c1">// 前端：启用 memory_load 供 Agent 调用。</span>
 </span><span id="__span-43-4"><a id="__codelineno-43-4" name="__codelineno-43-4"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">LoadToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-43-5"><a id="__codelineno-43-5" name="__codelineno-43-5"></a><span class="w">    </span><span class="c1">// 后端：禁用 memory_delete，提取器将无法删除记忆。</span>
-</span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">DeleteToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
-</span><span id="__span-43-7"><a id="__codelineno-43-7" name="__codelineno-43-7"></a><span class="w">    </span><span class="c1">// 后端：启用 memory_clear 供提取器使用（谨慎使用）。</span>
-</span><span id="__span-43-8"><a id="__codelineno-43-8" name="__codelineno-43-8"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">ClearToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-43-9"><a id="__codelineno-43-9" name="__codelineno-43-9"></a><span class="p">)</span>
+</span><span id="__span-43-5"><a id="__codelineno-43-5" name="__codelineno-43-5"></a><span class="w">    </span><span class="c1">// Hybrid：暴露 memory_add，便于 Agent 立即持久化明确提示的长期信息。</span>
+</span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithAutoMemoryExposedTools</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">AddToolName</span><span class="p">),</span>
+</span><span id="__span-43-7"><a id="__codelineno-43-7" name="__codelineno-43-7"></a><span class="w">    </span><span class="c1">// 后端：禁用 memory_delete，提取器将无法删除记忆。</span>
+</span><span id="__span-43-8"><a id="__codelineno-43-8" name="__codelineno-43-8"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">DeleteToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">),</span>
+</span><span id="__span-43-9"><a id="__codelineno-43-9" name="__codelineno-43-9"></a><span class="w">    </span><span class="c1">// 后端：启用 memory_clear 供提取器使用（谨慎使用）。</span>
+</span><span id="__span-43-10"><a id="__codelineno-43-10" name="__codelineno-43-10"></a><span class="w">    </span><span class="nx">memoryinmemory</span><span class="p">.</span><span class="nx">WithToolEnabled</span><span class="p">(</span><span class="nx">memory</span><span class="p">.</span><span class="nx">ClearToolName</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-43-11"><a id="__codelineno-43-11" name="__codelineno-43-11"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>注意</strong>：<code>WithToolEnabled</code> 可以在 <code>WithExtractor</code> 之前或之后调用，顺序不影响结果。</p>
+<p><strong>注意</strong>：<code>WithToolEnabled</code> 和 <code>WithAutoMemoryExposedTools</code> 都可以在
+<code>WithExtractor</code> 之前或之后调用，顺序不影响结果。</p>
 <h3 id="_40">两种模式对比</h3>
 <table>
 <thead>
@@ -5787,12 +5804,12 @@
 <tr>
 <td><code>memory_add</code></td>
 <td>✅ Agent 通过 <code>Tools()</code> 调用</td>
-<td>✅ 提取器在后台使用</td>
+<td>⚙️ 暴露后 Agent 可通过 <code>Tools()</code> 调用；提取器也会在后台使用</td>
 </tr>
 <tr>
 <td><code>memory_update</code></td>
 <td>✅ Agent 通过 <code>Tools()</code> 调用</td>
-<td>✅ 提取器在后台使用</td>
+<td>⚙️ 暴露后 Agent 可通过 <code>Tools()</code> 调用；提取器也会在后台使用</td>
 </tr>
 <tr>
 <td><code>memory_search</code></td>
@@ -5807,12 +5824,12 @@
 <tr>
 <td><code>memory_delete</code></td>
 <td>⚙️ 启用后 Agent 通过 <code>Tools()</code> 调用</td>
-<td>✅ 提取器在后台使用</td>
+<td>⚙️ 暴露后 Agent 可通过 <code>Tools()</code> 调用；提取器也会在后台使用</td>
 </tr>
 <tr>
 <td><code>memory_clear</code></td>
 <td>⚙️ 启用后 Agent 通过 <code>Tools()</code> 调用</td>
-<td>⚙️ 启用后提取器在后台使用</td>
+<td>⚙️ 暴露后 Agent 可通过 <code>Tools()</code> 调用；启用后提取器也会在后台使用</td>
 </tr>
 </tbody>
 </table>
@@ -5910,7 +5927,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月24日 03:00:38 UTC">2026-03-24 03:00:38</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月24日 06:34:03 UTC">2026-03-24 06:34:03</span>
   </span>
 
     
