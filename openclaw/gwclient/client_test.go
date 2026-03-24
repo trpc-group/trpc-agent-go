@@ -454,6 +454,29 @@ func TestParseSSEStream_ThoughtEvent(t *testing.T) {
 	require.Equal(t, "plan", evt.Delta)
 }
 
+func TestParseSSEStream_PublicEvent(t *testing.T) {
+	t.Parallel()
+
+	out := make(chan StreamEvent, 1)
+	err := parseSSEStream(
+		context.Background(),
+		strings.NewReader(
+			"event: public.completed\n"+
+				"data: {\"reply\":\"let me check\"}\n\n",
+		),
+		out,
+	)
+	require.NoError(t, err)
+
+	evt := <-out
+	require.Equal(
+		t,
+		gwproto.StreamEventTypePublicCompleted,
+		evt.Type,
+	)
+	require.Equal(t, "let me check", evt.Reply)
+}
+
 type streamContentTypeHandler struct {
 	contentType string
 	body        string

@@ -620,6 +620,11 @@ func (a *replyAccumulator) consumeFull(rsp *model.Response) {
 	if rsp == nil {
 		return
 	}
+	if responseHasPublicContent(rsp) {
+		a.builder.Reset()
+		a.Text = ""
+		return
+	}
 	if len(rsp.Choices) == 0 {
 		return
 	}
@@ -633,6 +638,11 @@ func (a *replyAccumulator) consumeFull(rsp *model.Response) {
 
 func (a *replyAccumulator) consumeDelta(rsp *model.Response) {
 	if rsp == nil {
+		return
+	}
+	if responseHasPublicContent(rsp) {
+		a.builder.Reset()
+		a.Text = ""
 		return
 	}
 	if a.seenFull {

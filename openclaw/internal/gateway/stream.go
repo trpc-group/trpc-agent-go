@@ -296,6 +296,7 @@ func (s *Server) streamLocked(
 
 	result := newReplyAccumulator()
 	sentText := false
+	lastPublicCompleted := ""
 	pendingThought := false
 	lastThoughtCompleted := ""
 	for evt := range events {
@@ -342,6 +343,45 @@ func (s *Server) streamLocked(
 		}
 
 		result.Consume(evt)
+		publicDelta := streamPublicDelta(evt)
+		if publicDelta != "" {
+			if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+				Type:      gwproto.StreamEventTypePublicDelta,
+				SessionID: run.sessionID,
+				RequestID: resolvedStreamRequestID(
+					result.RequestID,
+					run.requestID,
+				),
+				Delta: publicDelta,
+			}) {
+				return streamOutcome{
+					status: traceStatusError,
+					errMsg: contextErrMessage(ctx),
+				}
+			}
+		}
+		publicReply := streamPublicCompleted(evt)
+		if shouldSendPublicCompleted(
+			evt,
+			publicReply,
+			lastPublicCompleted,
+		) {
+			if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
+				Type:      gwproto.StreamEventTypePublicCompleted,
+				SessionID: run.sessionID,
+				RequestID: resolvedStreamRequestID(
+					result.RequestID,
+					run.requestID,
+				),
+				Reply: publicReply,
+			}) {
+				return streamOutcome{
+					status: traceStatusError,
+					errMsg: contextErrMessage(ctx),
+				}
+			}
+			lastPublicCompleted = publicReply
+		}
 		thoughtDelta := streamThoughtDelta(evt)
 		if thoughtDelta != "" {
 			if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
@@ -771,6 +811,40 @@ func streamDeltaText(
 	}
 }
 
+func streamPublicDelta(evt *event.Event) string {
+	if evt == nil || evt.Response == nil {
+		return ""
+	}
+	if evt.Object != model.ObjectTypeChatCompletionChunk {
+		return ""
+	}
+	return deltaPublicFromResponse(evt.Response)
+}
+
+func streamPublicCompleted(evt *event.Event) string {
+	if evt == nil || evt.Response == nil {
+		return ""
+	}
+	if evt.Object != model.ObjectTypeChatCompletion {
+		return ""
+	}
+	return fullPublicFromResponse(evt.Response)
+}
+
+func shouldSendPublicCompleted(
+	evt *event.Event,
+	publicReply string,
+	lastPublicCompleted string,
+) bool {
+	if evt == nil || publicReply == "" {
+		return false
+	}
+	if evt.Object != model.ObjectTypeChatCompletion {
+		return false
+	}
+	return publicReply != lastPublicCompleted
+}
+
 func streamThoughtDelta(evt *event.Event) string {
 	if evt == nil || evt.Response == nil {
 		return ""
@@ -816,6 +890,19 @@ func shouldSendThoughtCompleted(
 }
 
 func fullTextFromResponse(rsp *model.Response) string {
+	if responseHasPublicContent(rsp) {
+		return ""
+	}
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return ""
+	}
+	return rsp.Choices[0].Message.Content
+}
+
+func fullPublicFromResponse(rsp *model.Response) string {
+	if !responseHasPublicContent(rsp) {
+		return ""
+	}
 	if rsp == nil || len(rsp.Choices) == 0 {
 		return ""
 	}
@@ -830,6 +917,9 @@ func fullThoughtFromResponse(rsp *model.Response) string {
 }
 
 func deltaTextFromResponse(rsp *model.Response) string {
+	if responseHasPublicContent(rsp) {
+		return ""
+	}
 	if rsp == nil {
 		return ""
 	}
@@ -841,6 +931,29 @@ func deltaTextFromResponse(rsp *model.Response) string {
 		builder.WriteString(choice.Delta.Content)
 	}
 	return builder.String()
+}
+
+func deltaPublicFromResponse(rsp *model.Response) string {
+	if !responseHasPublicContent(rsp) {
+		return ""
+	}
+	if rsp == nil {
+		return ""
+	}
+	var builder strings.Builder
+	for _, choice := range rsp.Choices {
+		if choice.Delta.Content == "" {
+			continue
+		}
+		builder.WriteString(choice.Delta.Content)
+	}
+	if builder.Len() != 0 {
+		return builder.String()
+	}
+	if len(rsp.Choices) == 0 {
+		return ""
+	}
+	return rsp.Choices[0].Message.Content
 }
 
 func deltaThoughtFromResponse(rsp *model.Response) string {
@@ -855,4 +968,19 @@ func deltaThoughtFromResponse(rsp *model.Response) string {
 		builder.WriteString(choice.Delta.ReasoningContent)
 	}
 	return builder.String()
+}
+
+func responseHasPublicContent(rsp *model.Response) bool {
+	if rsp == nil || !rsp.IsToolCallResponse() || len(rsp.Choices) == 0 {
+		return false
+	}
+	for _, choice := range rsp.Choices {
+		if strings.TrimSpace(choice.Message.Content) != "" {
+			return true
+		}
+		if strings.TrimSpace(choice.Delta.Content) != "" {
+			return true
+		}
+	}
+	return false
 }
