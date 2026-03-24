@@ -267,9 +267,24 @@ func (e *Executor) Execute(
 		return nil, errors.New("invocation is nil")
 	}
 	agent.GetOrCreateStreamHub(invocation)
+
+	eventChanSize := e.channelBufferSize
+	if size := agent.GetEventChannelBufferSize(invocation); size > 0 {
+		eventChanSize = size
+	}
 	startTime := time.Now()
-	// Create event channel.
-	eventChan := make(chan *event.Event, e.channelBufferSize)
+	// Create the internal event channel used by graph execution.
+	eventChan := make(chan *event.Event, eventChanSize)
+	outputChan := (<-chan *event.Event)(eventChan)
+	hideGraphCompletion := agent.IsGraphCompletionEventDisabled(invocation) &&
+		!shouldCaptureGraphCompletion(ctx)
+	hideBarrierEvents := shouldHideExecutorBarrierEvents(invocation)
+	if hideGraphCompletion || hideBarrierEvents {
+		filteredChan := make(chan *event.Event, eventChanSize)
+		outputChan = filteredChan
+		forwardCtx := agent.CloneContext(ctx)
+		go e.forwardExecutionEvents(forwardCtx, invocation, eventChan, filteredChan)
+	}
 	// Start execution in a goroutine.
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
@@ -305,17 +320,7 @@ func (e *Executor) Execute(
 				if workflow != nil {
 					workflow.Error = panicErr
 				}
-				agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
-					WithPregelEventInvocationID(invocation.InvocationID),
-					WithPregelEventStepNumber(-1),
-					WithPregelEventError(panicErr.Error()),
-					WithPregelEventResponseError(
-						model.ResponseErrorFromError(
-							panicErr,
-							model.ErrorTypeFlowError,
-						),
-					),
-				))
+				emitTerminalGraphErrorEvent(ctx, invocation, eventChan, panicErr)
 			}
 			agent.GetOrCreateStreamHub(invocation).CloseAll(ctx.Err())
 			close(eventChan)
@@ -337,20 +342,84 @@ func (e *Executor) Execute(
 				workflow.Error = err
 			}
 			// Emit error event for other errors.
-			agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
-				WithPregelEventInvocationID(invocation.InvocationID),
-				WithPregelEventStepNumber(-1),
-				WithPregelEventError(err.Error()),
-				WithPregelEventResponseError(
-					model.ResponseErrorFromError(
-						err,
-						model.ErrorTypeFlowError,
-					),
-				),
-			))
+			emitTerminalGraphErrorEvent(ctx, invocation, eventChan, err)
 		}
 	}(runCtx)
-	return eventChan, nil
+	return outputChan, nil
+}
+
+func (e *Executor) forwardExecutionEvents(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	src <-chan *event.Event,
+	dst chan<- *event.Event,
+) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	defer close(dst)
+	hideGraphCompletion := agent.IsGraphCompletionEventDisabled(invocation) &&
+		!shouldCaptureGraphCompletion(ctx)
+	hideBarrierEvents := shouldHideExecutorBarrierEvents(invocation)
+	for evt := range src {
+		if hideGraphCompletion && isGraphCompletionEvent(evt) {
+			continue
+		}
+		if hideBarrierEvents && isGraphNodeBarrierEvent(evt) {
+			if err := notifySuppressedBarrierCompletion(
+				ctx,
+				invocation,
+				evt,
+			); err != nil {
+				log.WarnfContext(
+					ctx,
+					"Failed to complete hidden executor barrier event: %v",
+					err,
+				)
+				return
+			}
+			continue
+		}
+		if ctx.Err() == nil {
+			if err := event.EmitEvent(ctx, dst, evt); err == nil {
+				continue
+			} else if ctx.Err() == nil {
+				log.WarnfContext(ctx, "Failed to forward executor event: %v", err)
+				return
+			}
+		}
+		select {
+		case dst <- evt:
+		default:
+			log.WarnfContext(
+				context.Background(),
+				"Drop forwarded executor event after cancellation because output channel is full: object=%s",
+				evt.Object,
+			)
+		}
+	}
+}
+
+func shouldHideExecutorBarrierEvents(invocation *agent.Invocation) bool {
+	return invocation != nil &&
+		barrier.Enabled(invocation) &&
+		agent.IsGraphExecutorEventsDisabled(invocation)
+}
+
+func isGraphNodeBarrierEvent(evt *event.Event) bool {
+	return evt != nil && evt.Object == ObjectTypeGraphNodeBarrier
+}
+
+func notifySuppressedBarrierCompletion(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	evt *event.Event,
+) error {
+	if invocation == nil || evt == nil || !evt.RequiresCompletion {
+		return nil
+	}
+	completionID := agent.GetAppendEventNoticeKey(evt.ID)
+	return invocation.NotifyCompletion(ctx, completionID)
 }
 
 // executeGraph executes the graph using Pregel-style BSP execution.
@@ -450,7 +519,9 @@ func (e *Executor) executeGraph(
 		return err
 	}
 
-	agent.EmitEvent(ctx, invocation, eventChan, e.buildCompletionEvent(execCtx, startTime, stepsExecuted))
+	if err := agent.EmitEvent(ctx, invocation, eventChan, e.buildCompletionEvent(execCtx, startTime, stepsExecuted)); err != nil {
+		log.WarnfContext(ctx, "Failed to emit graph completion event: %v", err)
+	}
 	return nil
 }
 
@@ -1665,6 +1736,9 @@ func shouldEmitCheckpointLifecycleEvents(
 		return false
 	}
 	ro := invocation.RunOptions
+	if agent.IsGraphExecutorEventsDisabled(invocation) {
+		return false
+	}
 	if !ro.StreamModeEnabled {
 		return false
 	}
@@ -1677,6 +1751,58 @@ func shouldEmitCheckpointLifecycleEvents(
 		}
 	}
 	return false
+}
+
+func shouldEmitPregelStepEvents(invocation *agent.Invocation) bool {
+	return invocation == nil || !agent.IsGraphExecutorEventsDisabled(invocation)
+}
+
+func emitTerminalGraphErrorEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	err error,
+) {
+	if err == nil || eventChan == nil {
+		return
+	}
+	if shouldEmitPregelStepEvents(invocation) {
+		invocationID := ""
+		if invocation != nil {
+			invocationID = invocation.InvocationID
+		}
+		agent.EmitEvent(ctx, invocation, eventChan, NewPregelErrorEvent(
+			WithPregelEventInvocationID(invocationID),
+			WithPregelEventStepNumber(-1),
+			WithPregelEventError(err.Error()),
+			WithPregelEventResponseError(
+				model.ResponseErrorFromError(
+					err,
+					model.ErrorTypeFlowError,
+				),
+			),
+		))
+		return
+	}
+	invocationID := ""
+	author := AuthorGraphExecutor
+	if invocation != nil {
+		invocationID = invocation.InvocationID
+		if invocation.AgentName != "" {
+			author = invocation.AgentName
+		}
+	}
+	agent.EmitEvent(
+		ctx,
+		invocation,
+		eventChan,
+		event.NewErrorEvent(
+			invocationID,
+			author,
+			model.ErrorTypeFlowError,
+			err.Error(),
+		),
+	)
 }
 
 // applyPendingWrites replays pending writes into channels to rebuild frontier.
@@ -1761,14 +1887,15 @@ func (e *Executor) planStep(ctx context.Context, invocation *agent.Invocation,
 	execCtx *ExecutionContext, step int) ([]*Task, error) {
 	var tasks []*Task
 
-	// Emit planning step event.
-	planEvent := NewPregelStepEvent(
-		WithPregelEventInvocationID(execCtx.InvocationID),
-		WithPregelEventStepNumber(step),
-		WithPregelEventPhase(PregelPhasePlanning),
-		WithPregelEventTaskCount(0),
-	)
-	agent.EmitEvent(ctx, invocation, execCtx.EventChan, planEvent)
+	if execCtx.EventChan != nil && shouldEmitPregelStepEvents(invocation) {
+		planEvent := NewPregelStepEvent(
+			WithPregelEventInvocationID(execCtx.InvocationID),
+			WithPregelEventStepNumber(step),
+			WithPregelEventPhase(PregelPhasePlanning),
+			WithPregelEventTaskCount(0),
+		)
+		agent.EmitEvent(ctx, invocation, execCtx.EventChan, planEvent)
+	}
 
 	// Check if we have nodes to execute from a resumed checkpoint stored in state
 	// This needs to be checked regardless of step number when resuming
@@ -2291,6 +2418,12 @@ func (e *Executor) taskInvocationContext(
 // emitExecutionStepEvent emits the execution step event.
 func (e *Executor) emitExecutionStepEvent(ctx context.Context, invocation *agent.Invocation,
 	execCtx *ExecutionContext, tasks []*Task, step int) {
+	if !shouldEmitPregelStepEvents(invocation) {
+		return
+	}
+	if execCtx == nil || execCtx.EventChan == nil {
+		return
+	}
 	activeNodes := make([]string, len(tasks))
 	for i, task := range tasks {
 		activeNodes[i] = task.NodeID
@@ -3262,6 +3395,9 @@ func (e *Executor) emitNodeStartEvent(
 	startTime time.Time,
 	extra ...NodeEventOption,
 ) {
+	if invocation != nil && agent.IsGraphExecutorEventsDisabled(invocation) {
+		return
+	}
 	if execCtx.EventChan == nil {
 		return
 	}
@@ -3380,6 +3516,9 @@ func (e *Executor) emitNodeErrorEvent(
 	err error,
 	extra ...NodeEventOption,
 ) {
+	if invocation != nil && agent.IsGraphExecutorEventsDisabled(invocation) {
+		return
+	}
 	if execCtx.EventChan == nil {
 		return
 	}
@@ -3751,6 +3890,9 @@ func (e *Executor) emitChannelUpdateEvent(
 	channelType channel.Behavior,
 	triggeredNodes []string,
 ) {
+	if invocation != nil && agent.IsGraphExecutorEventsDisabled(invocation) {
+		return
+	}
 	if execCtx.EventChan == nil {
 		return
 	}
@@ -3776,6 +3918,9 @@ func (e *Executor) emitNodeCompleteEvent(
 	startTime time.Time,
 	cacheHit bool,
 ) {
+	if invocation != nil && agent.IsGraphExecutorEventsDisabled(invocation) {
+		return
+	}
 	if execCtx.EventChan == nil {
 		return
 	}
@@ -3830,6 +3975,12 @@ func (e *Executor) updateChannels(ctx context.Context, invocation *agent.Invocat
 
 // emitUpdateStepEvent emits the update step event.
 func (e *Executor) emitUpdateStepEvent(ctx context.Context, invocation *agent.Invocation, execCtx *ExecutionContext, step int) {
+	if !shouldEmitPregelStepEvents(invocation) {
+		return
+	}
+	if execCtx == nil || execCtx.EventChan == nil {
+		return
+	}
 	updatedChannels := e.getUpdatedChannels(execCtx)
 	updateEvent := NewPregelStepEvent(
 		WithPregelEventInvocationID(execCtx.InvocationID),
@@ -3843,6 +3994,9 @@ func (e *Executor) emitUpdateStepEvent(ctx context.Context, invocation *agent.In
 
 // emitStateUpdateEvent emits the state update event.
 func (e *Executor) emitStateUpdateEvent(ctx context.Context, invocation *agent.Invocation, execCtx *ExecutionContext) {
+	if invocation != nil && agent.IsGraphExecutorEventsDisabled(invocation) {
+		return
+	}
 	if execCtx.EventChan == nil {
 		return
 	}
@@ -4148,8 +4302,9 @@ func (e *Executor) handleInterrupt(
 		WithPregelEventLineageID(GetLineageID(checkpointConfig)),
 		WithPregelEventCheckpointID(GetCheckpointID(checkpointConfig)),
 	)
-
-	agent.EmitEvent(eventCtx, invocation, execCtx.EventChan, interruptEvent)
+	if shouldEmitPregelStepEvents(invocation) {
+		agent.EmitEvent(eventCtx, invocation, execCtx.EventChan, interruptEvent)
+	}
 
 	// Return the interrupt error to propagate it to the caller.
 	return interrupt
