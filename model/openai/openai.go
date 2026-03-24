@@ -45,10 +45,11 @@ const (
 	// defaultBatchEndpoint is the default batch endpoint.
 	defaultBatchEndpoint = openai.BatchNewParamsEndpointV1ChatCompletions
 	//nolint:gosec
-	deepSeekAPIKeyName     string = "DEEPSEEK_API_KEY"
-	defaultDeepSeekBaseURL string = "https://api.deepseek.com"
-	deepSeekHostFragment   string = "deepseek.com"
-	deepSeekModelPrefix    string = "deepseek"
+	deepSeekAPIKeyName        string = "DEEPSEEK_API_KEY"
+	defaultDeepSeekBaseURL    string = "https://api.deepseek.com"
+	deepSeekHostFragment      string = "deepseek.com"
+	deepSeekChatModelName     string = "deepseek-chat"
+	deepSeekReasonerModelName string = "deepseek-reasoner"
 
 	//nolint:gosec
 	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
@@ -337,7 +338,12 @@ func inferVariant(name string, baseURL string) Variant {
 
 func isDeepSeekModelName(name string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(name))
-	return strings.HasPrefix(normalized, deepSeekModelPrefix)
+	switch normalized {
+	case deepSeekChatModelName, deepSeekReasonerModelName:
+		return true
+	default:
+		return false
+	}
 }
 
 func isDeepSeekBaseURL(raw string) bool {
