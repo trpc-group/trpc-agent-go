@@ -2203,3 +2203,104 @@ func TestModel_ContextCancellation_Streaming(t *testing.T) {
 		drainWithTimeout(t, respChan)
 	})
 }
+
+// TestChatRequestCallbackSynchronous verifies that
+// chatRequestCallback is invoked synchronously inside
+// GenerateContent, before the response goroutine starts.
+func TestChatRequestCallbackSynchronous(t *testing.T) {
+	subText := "text"
+	now := time.Now()
+	resp := &genai.GenerateContentResponse{
+		ResponseID:   "1",
+		CreateTime:   now,
+		ModelVersion: "v1",
+		Candidates: []*genai.Candidate{{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{Text: "hi"}},
+			},
+			FinishReason: genai.FinishReason("stop"),
+		}},
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			TotalTokenCount: 1,
+		},
+	}
+
+	tests := []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non_streaming", stream: false},
+		{name: "streaming", stream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockClient := NewMockClient(ctrl)
+			mockModels := NewMockModels(ctrl)
+			mockClient.EXPECT().Models().
+				Return(mockModels).AnyTimes()
+
+			if tt.stream {
+				mockModels.EXPECT().
+					GenerateContentStream(
+						gomock.Any(), gomock.Any(),
+						gomock.Any(), gomock.Any()).
+					Return(seqFromSlice(
+						[]*genai.GenerateContentResponse{
+							resp,
+						})).AnyTimes()
+			} else {
+				mockModels.EXPECT().
+					GenerateContent(
+						gomock.Any(), gomock.Any(),
+						gomock.Any(), gomock.Any()).
+					Return(resp, nil).AnyTimes()
+			}
+
+			var callCount int64
+			m := &Model{
+				client: mockClient,
+				chatRequestCallback: func(
+					_ context.Context,
+					_ []*genai.Content,
+				) {
+					callCount++
+				},
+			}
+
+			req := &model.Request{
+				Messages: []model.Message{{
+					Role:    model.RoleUser,
+					Content: "hi",
+					ContentParts: []model.ContentPart{{
+						Type: model.ContentTypeText,
+						Text: &subText,
+					}},
+				}},
+				GenerationConfig: model.GenerationConfig{
+					Stream: tt.stream,
+				},
+			}
+
+			ch, err := m.GenerateContent(
+				context.Background(), req)
+			require.NoError(t, err)
+
+			// Callback must have fired synchronously
+			// before GenerateContent returned.
+			assert.Equal(t, int64(1), callCount,
+				"callback must execute exactly once "+
+					"before GenerateContent returns")
+
+			// Drain the channel to avoid goroutine leak.
+			for range ch {
+			}
+
+			// Confirm no extra invocations after drain.
+			assert.Equal(t, int64(1), callCount,
+				"callback must not be called more than once")
+		})
+	}
+}

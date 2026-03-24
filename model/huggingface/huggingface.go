@@ -125,6 +125,13 @@ func (m *Model) GenerateContent(ctx context.Context, request *model.Request) (<-
 		return nil, fmt.Errorf("failed to convert request: %w", err)
 	}
 
+	// Execute callback synchronously before starting the goroutine
+	// to avoid a race where the runner and HTTP handler finish
+	// (closing the SSE writer) while the callback is still running.
+	if m.chatRequestCallback != nil {
+		m.chatRequestCallback(ctx, hfRequest)
+	}
+
 	// Create response channel.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 
@@ -153,11 +160,6 @@ func (m *Model) handleNonStreamingRequest(
 	responseChan chan<- *model.Response,
 ) {
 	defer close(responseChan)
-
-	// Call request callback if provided.
-	if m.chatRequestCallback != nil {
-		m.chatRequestCallback(ctx, hfRequest)
-	}
 
 	// Make HTTP request.
 	hfResponse, err := m.makeRequest(ctx, hfRequest)
@@ -195,11 +197,6 @@ func (m *Model) handleStreamingRequest(
 			m.chatStreamCompleteCallback(ctx, hfRequest, streamErr)
 		}
 	}()
-
-	// Call request callback if provided.
-	if m.chatRequestCallback != nil {
-		m.chatRequestCallback(ctx, hfRequest)
-	}
 
 	// Make streaming HTTP request.
 	hfRequest.Stream = true

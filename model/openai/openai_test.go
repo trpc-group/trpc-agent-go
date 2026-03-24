@@ -7012,3 +7012,90 @@ func TestAppendUserContentParts_SkipsInternalFiles(t *testing.T) {
 	require.Nil(t, fields)
 	require.Empty(t, dst)
 }
+
+// TestChatRequestCallbackSynchronous verifies that
+// chatRequestCallback is invoked synchronously inside
+// GenerateContent, before the response goroutine starts.
+func TestChatRequestCallbackSynchronous(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non_streaming", stream: false},
+		{name: "streaming", stream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(
+						r.URL.Path, "/chat/completions",
+					) {
+						http.Error(w, "not found",
+							http.StatusNotFound)
+						return
+					}
+					if tt.stream {
+						w.Header().Set("Content-Type",
+							"text/event-stream")
+						fmt.Fprint(w, "data: {\"id\":\"s\","+
+							"\"object\":\"chat.completion.chunk\","+
+							"\"created\":1,\"model\":\"m\","+
+							"\"choices\":[{\"index\":0,"+
+							"\"delta\":{\"content\":\"hi\"},"+
+							"\"finish_reason\":\"stop\"}]}\n\n")
+						fmt.Fprint(w, "data: [DONE]\n\n")
+						return
+					}
+					w.Header().Set("Content-Type",
+						"application/json")
+					fmt.Fprint(w, `{"id":"n","object":`+
+						`"chat.completion","created":1,`+
+						`"model":"m","choices":[{"index":0,`+
+						`"message":{"role":"assistant",`+
+						`"content":"hi"},`+
+						`"finish_reason":"stop"}]}`)
+				}))
+			defer server.Close()
+
+			var callCount int64
+			m := New("test-model",
+				WithBaseURL(server.URL),
+				WithAPIKey("key"),
+				WithChatRequestCallback(
+					func(_ context.Context,
+						_ *openai.ChatCompletionNewParams,
+					) {
+						callCount++
+					}),
+			)
+
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					Stream: tt.stream,
+				},
+			}
+
+			ch, err := m.GenerateContent(
+				context.Background(), req)
+			require.NoError(t, err)
+
+			// Callback must have fired synchronously
+			// before GenerateContent returned.
+			assert.Equal(t, int64(1), callCount,
+				"callback must execute exactly once "+
+					"before GenerateContent returns")
+
+			// Drain the channel to avoid goroutine leak.
+			for range ch {
+			}
+
+			// Confirm no extra invocations after drain.
+			assert.Equal(t, int64(1), callCount,
+				"callback must not be called more than once")
+		})
+	}
+}

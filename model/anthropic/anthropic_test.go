@@ -1931,3 +1931,158 @@ func TestIntegration_AutoOptimalCacheStrategy(t *testing.T) {
 	}
 	assert.True(t, foundCacheControl, "expected cache control to be automatically applied to assistant message")
 }
+
+// TestChatRequestCallbackSynchronous verifies that
+// chatRequestCallback is invoked synchronously inside
+// GenerateContent, before the response goroutine starts.
+func TestChatRequestCallbackSynchronous(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non_streaming", stream: false},
+		{name: "streaming", stream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orig := model.DefaultNewHTTPClient
+			t.Cleanup(func() {
+				model.DefaultNewHTTPClient = orig
+			})
+			if tt.stream {
+				sse := strings.Join([]string{
+					"event: message_start",
+					`data: {"type":"message_start",` +
+						`"message":{"id":"m1",` +
+						`"type":"message",` +
+						`"role":"assistant",` +
+						`"model":"claude","content":[]}}`,
+					"",
+					"event: content_block_start",
+					`data: {"type":` +
+						`"content_block_start",` +
+						`"index":0,"content_block":` +
+						`{"type":"text","text":""}}`,
+					"",
+					"event: content_block_delta",
+					`data: {"type":` +
+						`"content_block_delta",` +
+						`"index":0,"delta":` +
+						`{"type":"text_delta",` +
+						`"text":"hi"}}`,
+					"",
+					"event: content_block_stop",
+					`data: {"type":` +
+						`"content_block_stop","index":0}`,
+					"",
+					"event: message_delta",
+					`data: {"type":"message_delta",` +
+						`"delta":{"stop_reason":` +
+						`"end_turn","stop_sequence":""},` +
+						`"usage":{` +
+						`"cache_creation_input_tokens":0,` +
+						`"cache_read_input_tokens":0,` +
+						`"input_tokens":0,` +
+						`"output_tokens":0,` +
+						`"server_tool_use":` +
+						`{"web_search_requests":0}}}`,
+					"",
+					"event: message_stop",
+					`data: {"type":"message_stop"}`,
+					"",
+				}, "\n")
+				model.DefaultNewHTTPClient = func(
+					_ ...HTTPClientOption,
+				) model.HTTPClient {
+					return &http.Client{
+						Transport: rtFunc(
+							func(_ *http.Request,
+							) (*http.Response, error) {
+								h := make(http.Header)
+								h.Set("Content-Type",
+									"text/event-stream")
+								return &http.Response{
+									StatusCode: 200,
+									Header:     h,
+									Body: io.NopCloser(
+										strings.NewReader(sse)),
+								}, nil
+							}),
+					}
+				}
+			} else {
+				body := `{"id":"m1","model":"claude",` +
+					`"role":"assistant",` +
+					`"stop_reason":"end_turn",` +
+					`"stop_sequence":"",` +
+					`"type":"message",` +
+					`"usage":{` +
+					`"cache_creation_input_tokens":0,` +
+					`"cache_read_input_tokens":0,` +
+					`"input_tokens":1,` +
+					`"output_tokens":1,` +
+					`"server_tool_use":` +
+					`{"web_search_requests":0}},` +
+					`"content":[{"type":"text",` +
+					`"text":"hi"}]}`
+				model.DefaultNewHTTPClient = func(
+					_ ...HTTPClientOption,
+				) model.HTTPClient {
+					return &http.Client{
+						Transport: rtFunc(
+							func(_ *http.Request,
+							) (*http.Response, error) {
+								h := make(http.Header)
+								h.Set("Content-Type",
+									"application/json")
+								return &http.Response{
+									StatusCode: 200,
+									Header:     h,
+									Body: io.NopCloser(
+										strings.NewReader(body)),
+								}, nil
+							}),
+					}
+				}
+			}
+
+			var callCount int64
+			m := New("claude-test",
+				WithHTTPClientOptions(),
+				WithChatRequestCallback(
+					func(_ context.Context,
+						_ *anthropic.MessageNewParams,
+					) {
+						callCount++
+					}),
+			)
+
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					Stream: tt.stream,
+				},
+			}
+
+			ch, err := m.GenerateContent(
+				context.Background(), req)
+			require.NoError(t, err)
+
+			// Callback must have fired synchronously
+			// before GenerateContent returned.
+			assert.Equal(t, int64(1), callCount,
+				"callback must execute exactly once "+
+					"before GenerateContent returns")
+
+			// Drain the channel to avoid goroutine leak.
+			for range ch {
+			}
+
+			// Confirm no extra invocations after drain.
+			assert.Equal(t, int64(1), callCount,
+				"callback must not be called more than once")
+		})
+	}
+}
