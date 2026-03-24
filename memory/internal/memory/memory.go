@@ -226,7 +226,7 @@ func IsValidToolName(toolName string) bool {
 // autoModeDefaultEnabledTools defines default enabled tools for auto memory mode.
 // When extractor is configured, these defaults are applied to enabledTools.
 // In auto mode:
-//   - Add/Delete/Update: run in background by extractor, not exposed to agent.
+//   - Add/Delete/Update: run in background by extractor by default.
 //   - Search/Load: can be exposed to agent via Tools().
 //   - Clear: dangerous operation, disabled by default.
 var autoModeDefaultEnabledTools = map[string]bool{
@@ -249,7 +249,7 @@ var autoModeDefaultEnabledTools = map[string]bool{
 //     by user.
 func ApplyAutoModeDefaults(
 	enabledTools map[string]struct{},
-	userExplicitlySet map[string]bool,
+	userExplicitlySet map[string]struct{},
 ) {
 	if enabledTools == nil {
 		return
@@ -257,7 +257,7 @@ func ApplyAutoModeDefaults(
 	// Apply auto mode defaults only for tools not explicitly set
 	// by user.
 	for toolName, defaultEnabled := range autoModeDefaultEnabledTools {
-		if userExplicitlySet[toolName] {
+		if _, ok := userExplicitlySet[toolName]; ok {
 			// User explicitly set this tool, don't override.
 			continue
 		}
@@ -275,17 +275,21 @@ func ApplyAutoModeDefaults(
 //   - ext: the memory extractor (nil for agentic mode).
 //   - toolCreators: map of tool name to creator function.
 //   - enabledTools: set of enabled tool names.
+//   - exposedTools: explicit agent-facing exposure overrides for Tools().
+//   - hiddenTools: explicit agent-facing hide overrides for Tools().
 //   - cachedTools: map to cache created tools (will be modified).
 func BuildToolsList(
 	ext extractor.MemoryExtractor,
 	toolCreators map[string]memory.ToolCreator,
 	enabledTools map[string]struct{},
+	exposedTools map[string]struct{},
+	hiddenTools map[string]struct{},
 	cachedTools map[string]tool.Tool,
 ) []tool.Tool {
 	// Collect tool names and sort for stable order.
 	names := make([]string, 0, len(toolCreators))
 	for name := range toolCreators {
-		if !shouldIncludeTool(name, ext, enabledTools) {
+		if !shouldIncludeTool(name, ext, enabledTools, exposedTools, hiddenTools) {
 			continue
 		}
 		names = append(names, name)
@@ -307,38 +311,66 @@ func shouldIncludeTool(
 	name string,
 	ext extractor.MemoryExtractor,
 	enabledTools map[string]struct{},
+	exposedTools map[string]struct{},
+	hiddenTools map[string]struct{},
 ) bool {
 	// In auto memory mode, handle auto memory tools with special logic.
 	if ext != nil {
-		return shouldIncludeAutoMemoryTool(name, enabledTools)
+		return shouldIncludeAutoMemoryTool(name, enabledTools, exposedTools, hiddenTools)
 	}
 
-	// In agentic mode, respect enabledTools setting.
-	_, ok := enabledTools[name]
-	return ok
+	return shouldIncludeAgenticTool(name, enabledTools, exposedTools, hiddenTools)
 }
 
-// autoModeExposedTools defines which tools can be exposed to agent in auto mode.
-// Only Search and Load are front-end tools; others run in background.
+// shouldIncludeAgenticTool checks whether a tool should be exposed to the
+// agent in agentic mode.
+func shouldIncludeAgenticTool(
+	name string,
+	enabledTools map[string]struct{},
+	exposedTools map[string]struct{},
+	hiddenTools map[string]struct{},
+) bool {
+	_, ok := enabledTools[name]
+	if !ok {
+		return false
+	}
+	if _, ok := hiddenTools[name]; ok {
+		return false
+	}
+	if _, ok := exposedTools[name]; ok {
+		return true
+	}
+	return true
+}
+
+// autoModeExposedTools defines the default auto-mode tools exposed to the
+// agent. Other tools still run in background and can be selectively exposed
+// via per-tool overrides.
 var autoModeExposedTools = map[string]struct{}{
 	memory.SearchToolName: {},
 	memory.LoadToolName:   {},
 }
 
 // shouldIncludeAutoMemoryTool checks if an auto memory tool should be
-// included. In auto mode, only Search and Load tools can be exposed to
-// agent. Other tools (Add/Update/Delete/Clear) run in background and
-// are never exposed.
+// included. In auto mode, Search and Load are exposed by default while other
+// enabled tools require an explicit exposure override.
 func shouldIncludeAutoMemoryTool(
 	name string,
 	enabledTools map[string]struct{},
+	exposedTools map[string]struct{},
+	hiddenTools map[string]struct{},
 ) bool {
-	// Only Search and Load tools can be exposed to agent in auto mode.
-	if _, exposed := autoModeExposedTools[name]; !exposed {
+	// The tool must be enabled before it can be exposed.
+	if _, ok := enabledTools[name]; !ok {
 		return false
 	}
-	// Check if the tool is enabled.
-	_, ok := enabledTools[name]
+	if _, ok := hiddenTools[name]; ok {
+		return false
+	}
+	if _, ok := exposedTools[name]; ok {
+		return true
+	}
+	_, ok := autoModeExposedTools[name]
 	return ok
 }
 

@@ -1518,6 +1518,8 @@ func TestServiceOpts_Coverage(t *testing.T) {
 	require.True(t, ok)
 	_, ok = opts.enabledTools[memory.ClearToolName]
 	require.True(t, ok)
+	_, ok = opts.userExplicitlySet[memory.ClearToolName]
+	require.True(t, ok)
 
 	WithCustomTool("bad_tool", func() tool.Tool { return nil })(&opts)
 	WithCustomTool(memory.ClearToolName, nil)(&opts)
@@ -1526,14 +1528,31 @@ func TestServiceOpts_Coverage(t *testing.T) {
 	WithToolEnabled(memory.LoadToolName, true)(&opts2)
 	_, ok = opts2.enabledTools[memory.LoadToolName]
 	require.True(t, ok)
-	require.True(t, opts2.userExplicitlySet[memory.LoadToolName])
+	_, ok = opts2.userExplicitlySet[memory.LoadToolName]
+	require.True(t, ok)
 
 	WithToolEnabled(memory.LoadToolName, false)(&opts2)
 	_, ok = opts2.enabledTools[memory.LoadToolName]
 	require.False(t, ok)
-	require.True(t, opts2.userExplicitlySet[memory.LoadToolName])
+	_, ok = opts2.userExplicitlySet[memory.LoadToolName]
+	require.True(t, ok)
 
 	WithToolEnabled("bad_tool", true)(&opts2)
+	WithAutoMemoryExposedTools(memory.AddToolName)(&opts2)
+	_, ok = opts2.toolExposed[memory.AddToolName]
+	require.True(t, ok)
+	_, ok = opts2.toolHidden[memory.AddToolName]
+	require.False(t, ok)
+
+	WithToolExposed(memory.AddToolName, false)(&opts2)
+	_, ok = opts2.toolExposed[memory.AddToolName]
+	require.False(t, ok)
+	_, ok = opts2.toolHidden[memory.AddToolName]
+	require.True(t, ok)
+
+	WithAutoMemoryExposedTools("bad_tool")(&opts2)
+	_, ok = opts2.toolExposed["bad_tool"]
+	require.False(t, ok)
 }
 
 func TestNewService_SkipDBInit(t *testing.T) {
