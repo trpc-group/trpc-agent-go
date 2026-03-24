@@ -810,6 +810,167 @@ func TestWithTransferStateKey(t *testing.T) {
 	})
 }
 
+func TestWithBuildMessageHook(t *testing.T) {
+	t.Run("hook modifies message after conversion", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					msg, err := next(isStream, agentName, inv)
+					if err != nil {
+						return nil, err
+					}
+					if msg.Metadata == nil {
+						msg.Metadata = make(map[string]any)
+					}
+					msg.Metadata["injected_key"] = "injected_value"
+					return msg, nil
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+		require.Equal(t, "injected_value", msg.Metadata["injected_key"])
+	})
+
+	t.Run("hook combined with transferStateKey", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"state_key"},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					msg, err := next(isStream, agentName, inv)
+					if err != nil {
+						return nil, err
+					}
+					if msg.Metadata == nil {
+						msg.Metadata = make(map[string]any)
+					}
+					msg.Metadata["hook_key"] = "hook_value"
+					return msg, nil
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"state_key": "state_value",
+				},
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+		require.Equal(t, "state_value", msg.Metadata["state_key"])
+		require.Equal(t, "hook_value", msg.Metadata["hook_key"])
+	})
+
+	t.Run("hook can skip calling next", func(t *testing.T) {
+		customMsg := protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]protocol.Part{protocol.NewTextPart("custom")},
+		)
+
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					return &customMsg, nil
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+		require.Equal(t, protocol.MessageRoleUser, msg.Role)
+	})
+
+	t.Run("hook returning error propagates", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					return nil, fmt.Errorf("hook error")
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.Error(t, err)
+		require.Nil(t, msg)
+		require.Contains(t, err.Error(), "hook error")
+	})
+
+	t.Run("short-circuit hook does not skip transferStateKey", func(t *testing.T) {
+		customMsg := protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]protocol.Part{protocol.NewTextPart("custom")},
+		)
+
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"state_key"},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					return &customMsg, nil
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"state_key": "state_value",
+				},
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+		require.Equal(t, "state_value", msg.Metadata["state_key"])
+	})
+}
+
 func TestWithStreamingRespHandler(t *testing.T) {
 	t.Run("streaming response handler is set correctly", func(t *testing.T) {
 		agent := &A2AAgent{}
@@ -1385,6 +1546,17 @@ func TestOptionFunctions(t *testing.T) {
 		WithEnableStreaming(false)(agent2)
 		if agent2.enableStreaming == nil || *agent2.enableStreaming {
 			t.Error("streaming should be disabled")
+		}
+	})
+
+	t.Run("WithBuildMessageHook", func(t *testing.T) {
+		testHook := func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+			return next
+		}
+		agent := &A2AAgent{}
+		WithBuildMessageHook(testHook)(agent)
+		if agent.buildMessageHook == nil {
+			t.Fatal("build message hook not set")
 		}
 	})
 }

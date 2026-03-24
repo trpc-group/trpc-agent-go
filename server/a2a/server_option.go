@@ -95,6 +95,7 @@ type options struct {
 	processorBuilder          ProcessorBuilder
 	processorHook             ProcessMessageHook
 	taskManagerBuilder        TaskManagerBuilder
+	runOptions                []agent.RunOption
 	a2aToAgentConverter       A2AMessageToAgentMessage
 	eventToA2AConverter       EventToA2AMessage
 	host                      string
@@ -134,6 +135,7 @@ func WithSessionService(service session.Service) Option {
 }
 
 // WithAgent sets the agent to use.
+// It is mutually exclusive with WithRunner.
 func WithAgent(agent agent.Agent, enableStreaming bool) Option {
 	return func(opts *options) {
 		opts.agent = agent
@@ -142,6 +144,7 @@ func WithAgent(agent agent.Agent, enableStreaming bool) Option {
 }
 
 // WithRunner sets the runner to use.
+// It is mutually exclusive with WithAgent and requires WithAgentCard.
 func WithRunner(r runner.Runner) Option {
 	return func(opts *options) {
 		opts.runner = r
@@ -184,6 +187,7 @@ func normalizeGraphObjectTypes(objectTypes []string) []string {
 }
 
 // WithAgentCard sets the agent card to use.
+// Use BuildBasicAgentCard to derive a basic card from an agent when needed.
 func WithAgentCard(agentCard a2a.AgentCard) Option {
 	return func(opts *options) {
 		opts.agentCard = &agentCard
@@ -242,7 +246,9 @@ func WithUserIDHeader(header string) Option {
 	}
 }
 
-// WithExtraA2AOptions sets the extra options to use.
+// WithExtraA2AOptions passes extra options to the underlying A2A server.
+// For example, it can be combined with a2a.WithAgentCardHandler and
+// NewAgentCardHandler(...) to serve a dynamically updated AgentCard.
 func WithExtraA2AOptions(opts ...a2a.Option) Option {
 	return func(options *options) {
 		options.extraOptions = append(options.extraOptions, opts...)
@@ -253,6 +259,16 @@ func WithExtraA2AOptions(opts ...a2a.Option) Option {
 func WithTaskManagerBuilder(builder TaskManagerBuilder) Option {
 	return func(opts *options) {
 		opts.taskManagerBuilder = builder
+	}
+}
+
+// WithRunOptions appends additional run options for every agent invocation.
+// These options are applied before the A2A message metadata is merged into RuntimeState.
+// If both WithRunOptions and A2A message metadata set the same RuntimeState key,
+// the A2A metadata value takes precedence (last-write-wins).
+func WithRunOptions(runOpts ...agent.RunOption) Option {
+	return func(opts *options) {
+		opts.runOptions = append(opts.runOptions, runOpts...)
 	}
 }
 

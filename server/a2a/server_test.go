@@ -42,6 +42,7 @@ type mockAgent struct {
 	description string
 	tools       []tool.Tool
 	subAgents   []agent.Agent
+	runFunc     func(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error)
 }
 
 func (m *mockAgent) Info() agent.Info {
@@ -56,6 +57,9 @@ func (m *mockAgent) Tools() []tool.Tool {
 }
 
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	if m.runFunc != nil {
+		return m.runFunc(ctx, invocation)
+	}
 	ch := make(chan *event.Event, 1)
 	ch <- &event.Event{
 		Response: &model.Response{
@@ -990,6 +994,7 @@ func TestMessageProcessor_ProcessStreamingMessage_Errors(t *testing.T) {
 
 	t.Run("runner_error", func(t *testing.T) {
 		var closed bool
+		var cleanedTaskID string
 		sub := &mockTaskSubscriber{
 			closeFunc: func() { closed = true },
 		}
@@ -999,6 +1004,10 @@ func TestMessageProcessor_ProcessStreamingMessage_Errors(t *testing.T) {
 			},
 			subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
 				return sub, nil
+			},
+			cleanTaskFunc: func(taskID *string) error {
+				cleanedTaskID = *taskID
+				return nil
 			},
 		}
 		processor := createTestMessageProcessor()
@@ -1014,6 +1023,7 @@ func TestMessageProcessor_ProcessStreamingMessage_Errors(t *testing.T) {
 		assert.NotNil(t, result)
 		assert.NotNil(t, result.StreamingEvents)
 		assert.True(t, closed)
+		assert.Equal(t, "task-id", cleanedTaskID)
 	})
 
 	t.Run("build_task_error", func(t *testing.T) {
@@ -1031,6 +1041,7 @@ func TestMessageProcessor_ProcessStreamingMessage_Errors(t *testing.T) {
 
 	t.Run("subscribe_error", func(t *testing.T) {
 		processor := createTestMessageProcessor()
+		var cleanedTaskID string
 		handler := &mockTaskHandler{
 			buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
 				return "task", nil
@@ -1038,11 +1049,16 @@ func TestMessageProcessor_ProcessStreamingMessage_Errors(t *testing.T) {
 			subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
 				return nil, fmt.Errorf("subscribe failed")
 			},
+			cleanTaskFunc: func(taskID *string) error {
+				cleanedTaskID = *taskID
+				return nil
+			},
 		}
 		result, err := processor.processStreamingMessage(ctx, "user", "session", msg, &model.Message{}, handler, nil)
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.NotNil(t, result.StreamingEvents)
+		assert.Equal(t, "task", cleanedTaskID)
 	})
 
 	t.Run("success_path", func(t *testing.T) {
@@ -1531,8 +1547,49 @@ func TestProcessAgentStreamingEvents_ConverterError(t *testing.T) {
 		return &res, nil
 	}
 
-	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, &mockTaskSubscriber{}, &mockTaskHandler{})
+	var results []protocol.StreamingMessageResult
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			if evt.Result != nil {
+				results = append(results, evt.Result)
+			}
+			return nil
+		},
+	}
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
 	assert.True(t, handlerCalled)
+	assert.Len(t, results, 2)
+	_, isSubmitted := results[0].(*protocol.TaskStatusUpdateEvent)
+	assert.True(t, isSubmitted)
+	_, isMessage := results[1].(*protocol.Message)
+	assert.True(t, isMessage)
+}
+
+func TestProcessAgentStreamingEvents_ContextCanceledSkipsCompletion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event)
+	close(events)
+
+	proc := createTestMessageProcessor()
+
+	var results []protocol.StreamingMessageResult
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			if evt.Result != nil {
+				results = append(results, evt.Result)
+			}
+			return nil
+		},
+	}
+
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	assert.Len(t, results, 1)
+	status, ok := results[0].(*protocol.TaskStatusUpdateEvent)
+	assert.True(t, ok)
+	assert.Equal(t, protocol.TaskStateSubmitted, status.Status.State)
 }
 
 func TestProcessAgentStreamingEvents_Success(t *testing.T) {
@@ -1852,7 +1909,7 @@ func TestNew(t *testing.T) {
 				WithHost("localhost:9090"),
 			},
 			wantErr: true,
-			errMsg:  "agent is required",
+			errMsg:  "either agent (WithAgent) or runner (WithRunner) is required",
 		},
 		{
 			name: "missing host without agent card",
@@ -1862,6 +1919,20 @@ func TestNew(t *testing.T) {
 			},
 			wantErr: true,
 			errMsg:  "host is required when agent card is not provided",
+		},
+		{
+			name: "agent and runner cannot be used together",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test-agent", description: "test description"}, true),
+				WithRunner(&mockRunner{}),
+				WithAgentCard(a2a.AgentCard{
+					Name:        "custom-agent",
+					Description: "custom description",
+					URL:         "http://custom.example.com",
+				}),
+			},
+			wantErr: true,
+			errMsg:  "WithAgent and WithRunner cannot be used together; use WithAgentCard with WithRunner",
 		},
 		{
 			name: "with agent card but no host - should succeed",
@@ -1876,10 +1947,51 @@ func TestNew(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "runner with agent card but no host - should succeed",
+			opts: []Option{
+				WithRunner(&mockRunner{}),
+				WithAgentCard(a2a.AgentCard{
+					Name:        "runner-agent",
+					Description: "runner description",
+					URL:         "http://runner.example.com",
+				}),
+			},
+			wantErr: false,
+		},
+		{
 			name:    "no options",
 			opts:    []Option{},
 			wantErr: true,
-			errMsg:  "agent is required",
+			errMsg:  "either agent (WithAgent) or runner (WithRunner) is required",
+		},
+		{
+			name: "runner without agent card",
+			opts: []Option{
+				WithRunner(&mockRunner{}),
+			},
+			wantErr: true,
+			errMsg:  "agent card (WithAgentCard) is required when using runner without agent",
+		},
+		{
+			name: "buildAgentCard error - empty agent name",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "", description: "test"}, true),
+				WithHost("localhost:8080"),
+			},
+			wantErr: true,
+		},
+		{
+			name: "explicit agent card with empty name",
+			opts: []Option{
+				WithAgent(&mockAgent{name: "test", description: "desc"}, true),
+				WithAgentCard(a2a.AgentCard{
+					Name:        "",
+					Description: "desc",
+					URL:         "http://localhost:8080",
+				}),
+			},
+			wantErr: true,
+			errMsg:  "agent card name is required",
 		},
 	}
 
@@ -1929,7 +2041,8 @@ func TestBuildAgentCard(t *testing.T) {
 				Description: "test description",
 				URL:         "http://localhost:8080",
 				Capabilities: a2a.AgentCapabilities{
-					Streaming: boolPtr(true),
+					Streaming:  boolPtr(true),
+					Extensions: defaultAgentCardExtensions(),
 				},
 				Skills: []a2a.AgentSkill{
 					{
@@ -1960,7 +2073,8 @@ func TestBuildAgentCard(t *testing.T) {
 				Description: "test description",
 				URL:         "http://example.com:8080",
 				Capabilities: a2a.AgentCapabilities{
-					Streaming: boolPtr(true),
+					Streaming:  boolPtr(true),
+					Extensions: defaultAgentCardExtensions(),
 				},
 				Skills: []a2a.AgentSkill{
 					{
@@ -1991,7 +2105,8 @@ func TestBuildAgentCard(t *testing.T) {
 				Description: "test description",
 				URL:         "https://secure.example.com",
 				Capabilities: a2a.AgentCapabilities{
-					Streaming: boolPtr(true),
+					Streaming:  boolPtr(true),
+					Extensions: defaultAgentCardExtensions(),
 				},
 				Skills: []a2a.AgentSkill{
 					{
@@ -2022,7 +2137,8 @@ func TestBuildAgentCard(t *testing.T) {
 				Description: "agent with custom scheme",
 				URL:         "custom://service.namespace",
 				Capabilities: a2a.AgentCapabilities{
-					Streaming: boolPtr(true),
+					Streaming:  boolPtr(true),
+					Extensions: defaultAgentCardExtensions(),
 				},
 				Skills: []a2a.AgentSkill{
 					{
@@ -2056,7 +2172,8 @@ func TestBuildAgentCard(t *testing.T) {
 				Description: "agent with tools",
 				URL:         "http://localhost:9090",
 				Capabilities: a2a.AgentCapabilities{
-					Streaming: boolPtr(false),
+					Streaming:  boolPtr(false),
+					Extensions: defaultAgentCardExtensions(),
 				},
 				Skills: []a2a.AgentSkill{
 					{
@@ -2109,7 +2226,10 @@ func TestBuildAgentCard(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildAgentCard(tt.options)
+			result, err := buildAgentCard(tt.options)
+			if err != nil {
+				t.Fatalf("buildAgentCard() returned error: %v", err)
+			}
 			if !compareAgentCards(result, tt.expected) {
 				t.Errorf("buildAgentCard() = %+v, want %+v", result, tt.expected)
 			}
@@ -2119,30 +2239,36 @@ func TestBuildAgentCard(t *testing.T) {
 
 func TestBuildProcessor(t *testing.T) {
 	tests := []struct {
-		name    string
-		agent   agent.Agent
-		session session.Service
-		options *options
+		name           string
+		agent          agent.Agent
+		session        session.Service
+		serverIdentity string
+		options        *options
 	}{
 		{
-			name:    "default converters",
-			agent:   &mockAgent{name: "test-agent", description: "test description"},
-			session: inmemory.NewSessionService(),
-			options: &options{},
+			name:           "default converters",
+			agent:          &mockAgent{name: "test-agent", description: "test description"},
+			session:        inmemory.NewSessionService(),
+			serverIdentity: "test-agent",
+			options: &options{
+				agent: &mockAgent{name: "test-agent", description: "test description"},
+			},
 		},
 		{
-			name:    "custom converters",
-			agent:   &mockAgent{name: "test-agent", description: "test description"},
-			session: inmemory.NewSessionService(),
+			name:           "custom converters",
+			agent:          &mockAgent{name: "test-agent", description: "test description"},
+			session:        inmemory.NewSessionService(),
+			serverIdentity: "test-agent",
 			options: &options{
+				agent:               &mockAgent{name: "test-agent", description: "test description"},
 				a2aToAgentConverter: &mockA2AToAgentConverter{},
 				eventToA2AConverter: &mockEventToA2AConverter{},
 			},
 		},
 		{
-			name:    "custom runner",
-			agent:   &mockAgent{name: "test-agent", description: "test description"},
-			session: inmemory.NewSessionService(),
+			name:           "custom runner",
+			session:        inmemory.NewSessionService(),
+			serverIdentity: "runner-agent",
 			options: &options{
 				runner: &mockRunner{},
 			},
@@ -2151,7 +2277,10 @@ func TestBuildProcessor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			processor := buildProcessor(tt.agent, tt.session, tt.options)
+			processor, err := buildProcessor(tt.agent, tt.session, tt.serverIdentity, tt.options)
+			if err != nil {
+				t.Fatalf("buildProcessor() returned error: %v", err)
+			}
 			if processor == nil {
 				t.Errorf("buildProcessor() returned nil")
 				return
@@ -2165,6 +2294,9 @@ func TestBuildProcessor(t *testing.T) {
 			if processor.eventToA2AConverter == nil {
 				t.Errorf("buildProcessor() eventToA2AConverter is nil")
 			}
+			if processor.agentName != tt.serverIdentity {
+				t.Errorf("buildProcessor() agentName = %q, want %q", processor.agentName, tt.serverIdentity)
+			}
 			if tt.options.runner != nil &&
 				processor.runner != tt.options.runner {
 				t.Errorf("buildProcessor() should reuse custom runner")
@@ -2173,17 +2305,283 @@ func TestBuildProcessor(t *testing.T) {
 	}
 }
 
-func TestBuildSkillsFromTools(t *testing.T) {
+func TestBuildProcessor_RunnerWithoutAgent(t *testing.T) {
+	card := &a2a.AgentCard{
+		Name:        "runner-only-agent",
+		Description: "agent provided via runner only",
+		URL:         "http://localhost:9090",
+	}
+	processor, err := buildProcessor(nil, inmemory.NewSessionService(), card.Name, &options{
+		runner:    &mockRunner{},
+		agentCard: card,
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, processor)
+	assert.Equal(t, "runner-only-agent", processor.agentName)
+}
+
+func TestBuildProcessor_NoAgentNoRunner(t *testing.T) {
+	_, err := buildProcessor(nil, inmemory.NewSessionService(), "card-only", &options{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "agent is required when runner is not provided")
+}
+
+func TestBuildAgentCard_ErrorWhenNoAgentAndNoCard(t *testing.T) {
+	_, err := buildAgentCard(&options{})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "agent is required when agent card is not provided")
+}
+
+func TestBuildProcessor_RequiresServerIdentity(t *testing.T) {
+	_, err := buildProcessor(
+		&mockAgent{name: "test-agent", description: "test description"},
+		inmemory.NewSessionService(),
+		"",
+		&options{},
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "agent card name is required")
+}
+
+func TestMessageProcessor_ProcessMessage_RuntimeStateIncludesServerContext(t *testing.T) {
+	ctxID := "runtime-session-1"
+	var capturedState map[string]any
+
+	proc := &messageProcessor{
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ro := agent.RunOptions{}
+				for _, opt := range opts {
+					opt(&ro)
+				}
+				capturedState = ro.RuntimeState
+
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &defaultEventToA2AMessage{},
+		errorHandler:        defaultErrorHandler,
+		agentName:           "test-agent",
+	}
+
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: "actual-user"})
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "runtime-msg",
+		Role:      protocol.MessageRoleUser,
+		Metadata: map[string]any{
+			"client_key": "client-value",
+		},
+		Parts: []protocol.Part{protocol.NewTextPart("hello")},
+	}
+
+	result, err := proc.ProcessMessage(ctx, msg, taskmanager.ProcessOptions{Streaming: false}, &mockTaskHandler{})
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "client-value", capturedState["client_key"])
+}
+
+func TestMessageProcessor_ProcessMessage_AppendsRunOptions(t *testing.T) {
+	ctxID := "runtime-session-2"
+	var (
+		capturedState     map[string]any
+		capturedRequestID string
+	)
+
+	proc := &messageProcessor{
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ro := agent.RunOptions{}
+				for _, opt := range opts {
+					opt(&ro)
+				}
+				capturedState = ro.RuntimeState
+				capturedRequestID = ro.RequestID
+
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &defaultEventToA2AMessage{},
+		errorHandler:        defaultErrorHandler,
+		agentName:           "test-agent",
+		runOptions:          []agent.RunOption{agent.WithRequestID("req-from-options")},
+	}
+
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: "actual-user"})
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "runtime-msg-builder",
+		Role:      protocol.MessageRoleUser,
+		Metadata:  map[string]any{"client_key": "client-value"},
+		Parts:     []protocol.Part{protocol.NewTextPart("hello")},
+	}
+
+	result, err := proc.ProcessMessage(ctx, msg, taskmanager.ProcessOptions{Streaming: false}, &mockTaskHandler{})
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "req-from-options", capturedRequestID)
+	assert.Equal(t, "client-value", capturedState["client_key"])
+}
+
+func TestMessageProcessor_ProcessMessage_RuntimeStateMergesWithRunOptions(t *testing.T) {
+	ctxID := "merge-session"
+	var capturedState map[string]any
+
+	proc := &messageProcessor{
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ro := agent.RunOptions{}
+				for _, opt := range opts {
+					opt(&ro)
+				}
+				capturedState = ro.RuntimeState
+
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &defaultEventToA2AMessage{},
+		errorHandler:        defaultErrorHandler,
+		agentName:           "test-agent",
+		// User also sets RuntimeState via WithRunOptions — should be merged, not overwritten
+		runOptions: []agent.RunOption{
+			agent.WithRuntimeState(map[string]any{
+				"user_custom_key": "user-value",
+				"client_key":      "will-be-overwritten-by-metadata",
+			}),
+		},
+	}
+
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: "actual-user"})
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "merge-msg",
+		Role:      protocol.MessageRoleUser,
+		Metadata: map[string]any{
+			"client_key": "from-metadata",
+		},
+		Parts: []protocol.Part{protocol.NewTextPart("hello")},
+	}
+
+	result, err := proc.ProcessMessage(ctx, msg, taskmanager.ProcessOptions{Streaming: false}, &mockTaskHandler{})
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	// User's custom key should be preserved
+	assert.Equal(t, "user-value", capturedState["user_custom_key"])
+	// A2A metadata takes precedence on conflicting keys
+	assert.Equal(t, "from-metadata", capturedState["client_key"])
+}
+
+func TestWithRunOptions(t *testing.T) {
+	opts := &options{}
+
+	WithRunOptions(agent.WithRequestID("req"))(opts)
+
+	assert.Len(t, opts.runOptions, 1)
+}
+
+func TestMessageProcessor_ProcessMessage_SharedRuntimeStateNotMutated(t *testing.T) {
+	ctxID := "shared-state-session"
+
+	originalState := map[string]any{
+		"shared_key": "original-value",
+	}
+
+	proc := &messageProcessor{
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				ro := agent.RunOptions{}
+				for _, opt := range opts {
+					opt(&ro)
+				}
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+		a2aToAgentConverter: &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter: &defaultEventToA2AMessage{},
+		errorHandler:        defaultErrorHandler,
+		agentName:           "test-agent",
+		runOptions: []agent.RunOption{
+			agent.WithRuntimeState(originalState),
+		},
+	}
+
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: "user"})
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "shared-msg",
+		Role:      protocol.MessageRoleUser,
+		Metadata:  map[string]any{"request_key": "request-value"},
+		Parts:     []protocol.Part{protocol.NewTextPart("hello")},
+	}
+
+	_, err := proc.ProcessMessage(ctx, msg, taskmanager.ProcessOptions{Streaming: false}, &mockTaskHandler{})
+	assert.NoError(t, err)
+
+	// The original shared map must not be mutated by the merge logic.
+	assert.Equal(t, map[string]any{"shared_key": "original-value"}, originalState)
+}
+
+func TestMessageProcessor_AddTaskMetadataUsesAppName(t *testing.T) {
+	proc := &messageProcessor{
+		adkCompatibility: true,
+		agentName:        "agent-name",
+	}
+	evt := protocol.NewTaskStatusUpdateEvent(
+		"task-id",
+		"ctx-id",
+		protocol.TaskStatus{State: protocol.TaskStateSubmitted},
+		false,
+	)
+
+	proc.addTaskMetadata(&evt, "user-1", "session-1")
+
+	assert.Equal(t, "agent-name", evt.Metadata[ia2a.GetADKMetadataKey("app_name")])
+	assert.Equal(t, "user-1", evt.Metadata[ia2a.GetADKMetadataKey("user_id")])
+	assert.Equal(t, "session-1", evt.Metadata[ia2a.GetADKMetadataKey("session_id")])
+}
+
+func TestBuildSkillsFromCardTools(t *testing.T) {
 	tests := []struct {
 		name      string
-		agent     agent.Agent
+		tools     []tool.Tool
 		agentName string
 		agentDesc string
 		expected  []a2a.AgentSkill
 	}{
 		{
 			name:      "no tools",
-			agent:     &mockAgent{tools: []tool.Tool{}},
+			tools:     []tool.Tool{},
 			agentName: "test-agent",
 			agentDesc: "test description",
 			expected: []a2a.AgentSkill{
@@ -2198,11 +2596,9 @@ func TestBuildSkillsFromTools(t *testing.T) {
 		},
 		{
 			name: "with tools",
-			agent: &mockAgent{
-				tools: []tool.Tool{
-					&mockTool{name: "calculator", description: "math tool"},
-					&mockTool{name: "weather", description: "weather tool"},
-				},
+			tools: []tool.Tool{
+				&mockTool{name: "calculator", description: "math tool"},
+				&mockTool{name: "weather", description: "weather tool"},
 			},
 			agentName: "tool-agent",
 			agentDesc: "agent with tools",
@@ -2234,9 +2630,9 @@ func TestBuildSkillsFromTools(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := buildSkillsFromTools(tt.agent, tt.agentName, tt.agentDesc)
+			result := buildSkillsFromCardTools(tt.tools, tt.agentName, tt.agentDesc)
 			if !compareSkills(result, tt.expected) {
-				t.Errorf("buildSkillsFromTools() = %+v, want %+v", result, tt.expected)
+				t.Errorf("buildSkillsFromCardTools() = %+v, want %+v", result, tt.expected)
 			}
 		})
 	}
@@ -2379,9 +2775,44 @@ func compareAgentCards(a, b a2a.AgentCard) bool {
 	} else if a.Capabilities.Streaming != b.Capabilities.Streaming {
 		return false
 	}
+	if !compareExtensions(a.Capabilities.Extensions, b.Capabilities.Extensions) {
+		return false
+	}
 	return compareSkills(a.Skills, b.Skills) &&
 		compareStringSlices(a.DefaultInputModes, b.DefaultInputModes) &&
 		compareStringSlices(a.DefaultOutputModes, b.DefaultOutputModes)
+}
+
+func defaultAgentCardExtensions() []a2a.AgentExtension {
+	return []a2a.AgentExtension{
+		{
+			URI: ia2a.ExtensionTRPCA2AVersion,
+			Params: map[string]any{
+				"version": ia2a.InteractionVersion,
+			},
+		},
+	}
+}
+
+func compareExtensions(a, b []a2a.AgentExtension) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, extA := range a {
+		extB := b[i]
+		if extA.URI != extB.URI {
+			return false
+		}
+		if len(extA.Params) != len(extB.Params) {
+			return false
+		}
+		for k, v := range extA.Params {
+			if extB.Params[k] != v {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func compareSkills(a, b []a2a.AgentSkill) bool {
@@ -3289,4 +3720,350 @@ func TestTraceContextMiddleware_NoTraceparent(t *testing.T) {
 	// Verify the context does not contain valid trace info
 	spanContext := trace.SpanContextFromContext(receivedCtx)
 	assert.False(t, spanContext.IsValid(), "Expected invalid span context when no traceparent")
+}
+
+func TestBuildA2AServer_BuildProcessorErrorWrapping(t *testing.T) {
+	opts := &options{
+		sessionService: &mockSessionService{},
+		errorHandler:   defaultErrorHandler,
+		agentCard: &a2a.AgentCard{
+			Name: "valid",
+			URL:  "http://localhost:8080",
+		},
+	}
+	_, err := buildA2AServer(opts)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to build processor:")
+}
+
+func TestProcessStreamingMessage_CleanupTask_OnSubscribeError(t *testing.T) {
+	t.Run("cleanup succeeds", func(t *testing.T) {
+		ctx := context.Background()
+		ctxID := "ctx"
+		msg := &protocol.Message{ContextID: &ctxID}
+
+		var cleanedTaskID string
+		handler := &mockTaskHandler{
+			buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+				return "task-cleanup", nil
+			},
+			subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
+				return nil, fmt.Errorf("subscribe failed")
+			},
+			cleanTaskFunc: func(taskID *string) error {
+				cleanedTaskID = *taskID
+				return nil
+			},
+		}
+
+		proc := createTestMessageProcessor()
+		result, err := proc.processStreamingMessage(ctx, "user", "session", msg, &model.Message{Content: "hi"}, handler, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, "task-cleanup", cleanedTaskID)
+	})
+
+	t.Run("cleanup itself fails should not panic", func(t *testing.T) {
+		ctx := context.Background()
+		ctxID := "ctx"
+		msg := &protocol.Message{ContextID: &ctxID}
+
+		var cleanCalled bool
+		handler := &mockTaskHandler{
+			buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+				return "task-clean-fail", nil
+			},
+			subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
+				return nil, fmt.Errorf("subscribe failed")
+			},
+			cleanTaskFunc: func(taskID *string) error {
+				cleanCalled = true
+				return fmt.Errorf("clean error")
+			},
+		}
+
+		proc := createTestMessageProcessor()
+		assert.NotPanics(t, func() {
+			_, _ = proc.processStreamingMessage(ctx, "user", "session", msg, &model.Message{Content: "hi"}, handler, nil)
+		})
+		assert.True(t, cleanCalled)
+	})
+}
+
+func TestProcessStreamingMessage_CleanupTask_OnRunnerError(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	var cleanedTaskID string
+	var subscriberClosed bool
+	sub := &mockTaskSubscriber{
+		closeFunc: func() { subscriberClosed = true },
+	}
+	handler := &mockTaskHandler{
+		buildTaskFunc: func(specificTaskID *string, contextID *string) (string, error) {
+			return "task-runner-err", nil
+		},
+		subscribeTaskFunc: func(taskID *string) (taskmanager.TaskSubscriber, error) {
+			return sub, nil
+		},
+		cleanTaskFunc: func(taskID *string) error {
+			cleanedTaskID = *taskID
+			return nil
+		},
+	}
+
+	proc := createTestMessageProcessor()
+	proc.runner = &mockRunner{
+		runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+			return nil, errors.New("runner boom")
+		},
+	}
+
+	result, err := proc.processStreamingMessage(ctx, "user", "session", msg, &model.Message{Content: "hi"}, handler, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "task-runner-err", cleanedTaskID)
+	assert.True(t, subscriberClosed)
+}
+
+func TestAbortStreaming_ContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	events := make(chan *event.Event, 1)
+	events <- &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{Delta: model.Message{Content: "chunk"}}},
+		},
+	}
+	close(events)
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 1 {
+				// After sending the submitted event, cancel context so tunnel returns Canceled
+				cancel()
+				return nil
+			}
+			// Subsequent sends fail with context.Canceled
+			return context.Canceled
+		},
+	}
+
+	proc := createTestMessageProcessor()
+	assert.NotPanics(t, func() {
+		proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	})
+}
+
+func TestAbortStreaming_DeadlineExceeded(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	events := make(chan *event.Event)
+	close(events)
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 1 {
+				return nil // submitted event succeeds
+			}
+			return context.DeadlineExceeded
+		},
+	}
+
+	proc := createTestMessageProcessor()
+	assert.NotPanics(t, func() {
+		proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	})
+}
+
+func TestAbortStreaming_OtherError_HandleStreamingErrorFails(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	events := make(chan *event.Event)
+	close(events)
+
+	proc := createTestMessageProcessor()
+	proc.errorHandler = func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+		return nil, fmt.Errorf("handler also failed")
+	}
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 1 {
+				return nil // submitted succeeds
+			}
+			return fmt.Errorf("send error")
+		},
+	}
+
+	assert.NotPanics(t, func() {
+		proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	}, "handleStreamingProcessingError failure in abortStreaming should not panic")
+}
+
+func TestAbortStreaming_FinalArtifactSendFail_Aborts(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	events := make(chan *event.Event)
+	close(events) // no agent events
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 1 {
+				return nil // submitted succeeds
+			}
+			if sendCount == 2 {
+				// final artifact send fails
+				return fmt.Errorf("artifact send fail")
+			}
+			return nil
+		},
+	}
+
+	var handlerCalled bool
+	proc := createTestMessageProcessor()
+	proc.errorHandler = func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+		handlerCalled = true
+		res := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("err")})
+		return &res, nil
+	}
+
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	assert.True(t, handlerCalled, "error handler should fire for final artifact send failure")
+	// Should abort before sending completed
+	assert.Equal(t, 3, sendCount, "should be: submitted + artifact fail + error msg")
+}
+
+func TestAbortStreaming_CompletedSendFail_Aborts(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+
+	events := make(chan *event.Event)
+	close(events)
+
+	sendCount := 0
+	sub := &mockTaskSubscriber{
+		sendFunc: func(evt protocol.StreamingMessageEvent) error {
+			sendCount++
+			if sendCount == 3 {
+				// completed send fails
+				return fmt.Errorf("completed send fail")
+			}
+			return nil
+		},
+	}
+
+	var handlerCalled bool
+	proc := createTestMessageProcessor()
+	proc.errorHandler = func(ctx context.Context, msg *protocol.Message, err error) (*protocol.Message, error) {
+		handlerCalled = true
+		res := protocol.NewMessage(protocol.MessageRoleAgent, []protocol.Part{protocol.NewTextPart("err")})
+		return &res, nil
+	}
+
+	proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, &mockTaskHandler{})
+	assert.True(t, handlerCalled, "error handler should fire for completed send failure")
+}
+
+func TestBuildRuntimeState(t *testing.T) {
+	t.Run("empty metadata", func(t *testing.T) {
+		result := buildRuntimeState(map[string]any{})
+		assert.NotNil(t, result)
+		assert.Empty(t, result)
+	})
+
+	t.Run("copies all entries", func(t *testing.T) {
+		metadata := map[string]any{
+			"key1": "value1",
+			"key2": 42,
+			"key3": true,
+		}
+		result := buildRuntimeState(metadata)
+		assert.Equal(t, metadata, result)
+	})
+
+	t.Run("shallow copy - modifications don't affect original", func(t *testing.T) {
+		metadata := map[string]any{
+			"key1": "value1",
+		}
+		result := buildRuntimeState(metadata)
+		result["key2"] = "new"
+		assert.NotContains(t, metadata, "key2", "original should not be affected")
+	})
+
+	t.Run("nil metadata produces empty map", func(t *testing.T) {
+		result := buildRuntimeState(nil)
+		assert.NotNil(t, result)
+		assert.Empty(t, result)
+	})
+}
+
+func TestProcessAgentStreamingEvents_CleanupTaskInDefer(t *testing.T) {
+	t.Run("cleanup called on normal completion", func(t *testing.T) {
+		ctx := context.Background()
+		ctxID := "ctx"
+		msg := &protocol.Message{ContextID: &ctxID}
+
+		events := make(chan *event.Event)
+		close(events)
+
+		var cleanedTaskID string
+		handler := &mockTaskHandler{
+			cleanTaskFunc: func(taskID *string) error {
+				cleanedTaskID = *taskID
+				return nil
+			},
+		}
+
+		sub := &mockTaskSubscriber{
+			sendFunc: func(evt protocol.StreamingMessageEvent) error { return nil },
+		}
+
+		proc := createTestMessageProcessor()
+		proc.processAgentStreamingEvents(ctx, "my-task", "user1", "session1", msg, events, sub, handler)
+		assert.Equal(t, "my-task", cleanedTaskID)
+	})
+
+	t.Run("cleanup error should not panic", func(t *testing.T) {
+		ctx := context.Background()
+		ctxID := "ctx"
+		msg := &protocol.Message{ContextID: &ctxID}
+
+		events := make(chan *event.Event)
+		close(events)
+
+		handler := &mockTaskHandler{
+			cleanTaskFunc: func(taskID *string) error {
+				return fmt.Errorf("defer clean error")
+			},
+		}
+
+		sub := &mockTaskSubscriber{
+			sendFunc: func(evt protocol.StreamingMessageEvent) error { return nil },
+		}
+
+		proc := createTestMessageProcessor()
+		assert.NotPanics(t, func() {
+			proc.processAgentStreamingEvents(ctx, "task", "user1", "session1", msg, events, sub, handler)
+		})
+	})
 }
