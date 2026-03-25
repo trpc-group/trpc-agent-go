@@ -1604,6 +1604,7 @@ The framework currently supports the following Variants:
 - DeepSeek platform adaptation
 - Default BaseURL：`https://api.deepseek.com`
 - API Key environment variable name：`DEEPSEEK_API_KEY`
+- DeepSeek-specific behavior is enabled when you explicitly set `WithVariant(openai.VariantDeepSeek)` or use the official DeepSeek API BaseURL
 - Other behaviors are consistent with standard OpenAI
 
 **4. VariantQwen（Qwen）**

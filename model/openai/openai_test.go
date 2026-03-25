@@ -86,24 +86,20 @@ func TestNew(t *testing.T) {
 			},
 		},
 		{
-			name:      "infer deepseek from model name",
+			name:      "does not infer deepseek from official model name",
 			modelName: "deepseek-chat",
-			opts:      nil,
-			expectOpts: []Option{
+			opts: []Option{
 				WithAPIKey(testKey),
-				WithBaseURL(defaultDeepSeekBaseURL),
-				WithVariant(VariantDeepSeek),
 			},
+			expectOpts: nil,
 		},
 		{
-			name:      "infer deepseek reasoner from model name",
+			name:      "does not infer deepseek from reasoner model name",
 			modelName: "deepseek-reasoner",
-			opts:      nil,
-			expectOpts: []Option{
+			opts: []Option{
 				WithAPIKey(testKey),
-				WithBaseURL(defaultDeepSeekBaseURL),
-				WithVariant(VariantDeepSeek),
 			},
+			expectOpts: nil,
 		},
 		{
 			name:      "does not infer deepseek from third party deepseek model name",
@@ -114,7 +110,7 @@ func TestNew(t *testing.T) {
 			expectOpts: nil,
 		},
 		{
-			name:      "infer deepseek from base url",
+			name:      "infers deepseek from official deepseek base url",
 			modelName: "custom-model",
 			opts: []Option{
 				WithBaseURL("https://api.deepseek.com/v1"),
@@ -126,12 +122,41 @@ func TestNew(t *testing.T) {
 			},
 		},
 		{
-			name:      "explicit variant beats deepseek inference",
+			name:      "explicit variant sets deepseek on official model name",
 			modelName: "deepseek-chat",
 			opts: []Option{
-				WithVariant(VariantOpenAI),
+				WithVariant(VariantDeepSeek),
 			},
-			expectOpts: nil,
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultDeepSeekBaseURL),
+			},
+		},
+		{
+			name:      "explicit deepseek variant preserves custom proxy base url",
+			modelName: "deepseek-chat",
+			opts: []Option{
+				WithVariant(VariantDeepSeek),
+				WithBaseURL("https://proxy.example.com/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+		},
+		{
+			name:      "custom proxy base url before explicit deepseek variant is preserved",
+			modelName: "deepseek-chat",
+			opts: []Option{
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
 		},
 	}
 
@@ -156,122 +181,35 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestIsDeepSeekModelName(t *testing.T) {
-	tests := []struct {
-		name      string
-		modelName string
-		want      bool
-	}{
-		{
-			name:      "matches chat model",
-			modelName: "deepseek-chat",
-			want:      true,
-		},
-		{
-			name:      "matches reasoner model",
-			modelName: "deepseek-reasoner",
-			want:      true,
-		},
-		{
-			name:      "matches after trim and lowercase",
-			modelName: " DEEPSEEK-CHAT ",
-			want:      true,
-		},
-		{
-			name:      "does not match third party deepseek model name",
-			modelName: "deepseek-v3.2",
-			want:      false,
-		},
-		{
-			name:      "does not match other providers",
-			modelName: "gpt-4o-mini",
-			want:      false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isDeepSeekModelName(tt.modelName))
-		})
-	}
-}
-
-func TestInferVariant(t *testing.T) {
-	tests := []struct {
-		name    string
-		model   string
-		baseURL string
-		variant Variant
-	}{
-		{
-			name:    "deepseek family model with custom base url stays openai",
-			model:   "deepseek-v3.2",
-			baseURL: "https://api.custom.com/v1",
-			variant: VariantOpenAI,
-		},
-		{
-			name:    "deepseek family model without base url stays openai",
-			model:   "deepseek-v3.2",
-			variant: VariantOpenAI,
-		},
-		{
-			name:    "deepseek official model with custom base url still infers deepseek",
-			model:   "deepseek-chat",
-			baseURL: "https://api.custom.com/v1",
-			variant: VariantDeepSeek,
-		},
-		{
-			name:    "deepseek official host infers deepseek",
-			model:   "custom-model",
-			baseURL: "https://api.deepseek.com/v1",
-			variant: VariantDeepSeek,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.variant, inferVariant(tt.model, tt.baseURL))
-		})
-	}
-}
-
 func TestIsDeepSeekBaseURL(t *testing.T) {
-	const (
-		deepSeekURL        = "https://api.deepseek.com/v1"
-		upperDeepSeekURL   = " HTTPS://API.DEEPSEEK.COM/V1 "
-		invalidDeepSeekURL = "https://api.deepseek.com/%zz"
-		openAIURL          = "https://api.openai.com/v1"
-		emptyURL           = "   "
-	)
-
 	tests := []struct {
 		name   string
 		rawURL string
 		want   bool
 	}{
 		{
-			name:   "matches deepseek host",
-			rawURL: deepSeekURL,
+			name:   "matches official api host",
+			rawURL: "https://api.deepseek.com/v1",
 			want:   true,
 		},
 		{
-			name:   "matches deepseek host after trim and lowercase",
-			rawURL: upperDeepSeekURL,
+			name:   "matches official api host after trim and lowercase",
+			rawURL: " HTTPS://API.DEEPSEEK.COM/V1 ",
 			want:   true,
 		},
 		{
-			name:   "falls back to substring match on parse error",
-			rawURL: invalidDeepSeekURL,
-			want:   true,
-		},
-		{
-			name:   "does not match other hosts",
-			rawURL: openAIURL,
+			name:   "does not match non api deepseek host",
+			rawURL: "https://deepseek.com/v1",
 			want:   false,
 		},
 		{
-			name:   "empty url is not deepseek",
-			rawURL: emptyURL,
+			name:   "does not match custom proxy host",
+			rawURL: "https://deepseek-proxy.internal/v1",
+			want:   false,
+		},
+		{
+			name:   "parse error does not fall back to substring match",
+			rawURL: "https://api.deepseek.com/%zz",
 			want:   false,
 		},
 	}
@@ -4106,7 +4044,7 @@ func TestConvertUserMessageContent_HunyuanVariant(t *testing.T) {
 }
 
 func TestConvertUserMessageContent_DeepSeekVariant(t *testing.T) {
-	m := New("deepseek-chat")
+	m := New("deepseek-chat", WithVariant(VariantDeepSeek))
 
 	t.Run("omits non-text content parts", func(t *testing.T) {
 		message := model.Message{
@@ -5266,7 +5204,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 		},
 		{
 			name:  "deepseek thinking",
-			model: New("deepseek-chat"),
+			model: New("deepseek-chat", WithVariant(VariantDeepSeek)),
 			args: args{
 				request: &model.Request{
 					Messages: []model.Message{},
@@ -5277,7 +5215,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 				},
 			},
 			want1: []openaiopt.RequestOption{
-				openaiopt.WithJSONSet(model.ThinkingEnabledKey, true),
+				openaiopt.WithJSONSet("thinking", map[string]string{"type": "enabled"}),
 			},
 		},
 		{
