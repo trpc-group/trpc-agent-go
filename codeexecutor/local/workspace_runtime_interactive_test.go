@@ -247,6 +247,21 @@ func TestInteractiveSession_IDLogOffsetsAndMarkDone(t *testing.T) {
 	require.False(t, result.TimedOut)
 }
 
+func TestInteractiveSession_StateTransitions(t *testing.T) {
+	sess := newInteractiveSession("state-1", "echo hi", 2)
+
+	state := sess.State()
+	require.Equal(t, codeexecutor.ProgramStatusRunning, state.Status)
+	require.Nil(t, state.ExitCode)
+
+	sess.markDone(9, time.Second, false)
+
+	state = sess.State()
+	require.Equal(t, codeexecutor.ProgramStatusExited, state.Status)
+	require.NotNil(t, state.ExitCode)
+	require.Equal(t, 9, *state.ExitCode)
+}
+
 func TestInteractiveSession_KillRunningProcess(t *testing.T) {
 	rt := NewRuntime(t.TempDir())
 	ws := codeexecutor.Workspace{

@@ -40,6 +40,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
+	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 // localruntimeFallback returns a simple local workspace executor used when
@@ -306,7 +307,29 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		requestProcessors = append(requestProcessors, skillsProcessor)
 	}
 
-	// 6. Content processor - appends conversation/context history.
+	// 6. Workspace exec processor - injects executor/workspace guidance
+	// whenever workspace_exec is registered, even without a skills repo.
+	if executorSupportsWorkspaceExec(options) {
+		var workspaceOpts []processor.WorkspaceExecRequestProcessorOption
+		if executorSupportsWorkspaceExecSessions(options) {
+			workspaceOpts = append(
+				workspaceOpts,
+				processor.WithWorkspaceExecSessionsEnabled(),
+			)
+		}
+		if options.skillsRepository != nil {
+			workspaceOpts = append(
+				workspaceOpts,
+				processor.WithWorkspaceExecSkillsRepo(),
+			)
+		}
+		requestProcessors = append(
+			requestProcessors,
+			processor.NewWorkspaceExecRequestProcessor(workspaceOpts...),
+		)
+	}
+
+	// 7. Content processor - appends conversation/context history.
 	contentOpts := []processor.ContentOption{
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
@@ -327,14 +350,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
-	// 7. Post-tool processor - injects dynamic prompt after tool results.
+	// 8. Post-tool processor - injects dynamic prompt after tool results.
 	requestProcessors = appendPostToolProcessor(options, requestProcessors)
 
-	// 8. Skills tool result processor - materializes loaded skill content
+	// 9. Skills tool result processor - materializes loaded skill content
 	// into tool result messages.
 	requestProcessors = appendSkillsToolResultProcessor(options, requestProcessors)
 
-	// 9. Time processor - adds current time information if enabled.
+	// 10. Time processor - adds current time information if enabled.
 	// Moved after content processor to avoid invalidating system message cache.
 	// Time information changes frequently, so placing it last allows previous
 	// stable content (instructions, identity, skills, history) to be cached.
@@ -476,7 +499,22 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 		allTools, userToolNames, options,
 	)
 	allTools = appendKnowledgeTools(allTools, options)
-	allTools = appendSkillTools(allTools, options)
+	var runTool *toolskill.RunTool
+	var workspaceRegistry *codeexecutor.WorkspaceRegistry
+	if options.skillsRepository != nil {
+		if options.codeExecutor != nil {
+			workspaceRegistry = buildWorkspaceRegistry()
+		}
+		runTool = buildSkillRunTool(options, workspaceRegistry)
+	} else if executorSupportsWorkspaceExec(options) {
+		workspaceRegistry = buildWorkspaceRegistry()
+	}
+	allTools = appendWorkspaceExecTool(
+		allTools,
+		options,
+		workspaceRegistry,
+	)
+	allTools = appendSkillTools(allTools, options, runTool)
 	return allTools, userToolNames
 }
 
@@ -541,6 +579,7 @@ func appendKnowledgeTools(
 func appendSkillTools(
 	allTools []tool.Tool,
 	options *Options,
+	runTool *toolskill.RunTool,
 ) []tool.Tool {
 	if options.skillsRepository == nil {
 		return allTools
@@ -569,7 +608,12 @@ func appendSkillTools(
 		return allTools
 	}
 
-	runTool := buildSkillRunTool(options)
+	if runTool == nil {
+		runTool = buildSkillRunTool(
+			options,
+			buildWorkspaceRegistry(),
+		)
+	}
 	if skillFlags.Run {
 		allTools = append(allTools, runTool)
 	}
@@ -605,7 +649,41 @@ func appendSkillTools(
 	return allTools
 }
 
-func buildSkillRunTool(options *Options) *toolskill.RunTool {
+func appendWorkspaceExecTool(
+	allTools []tool.Tool,
+	options *Options,
+	reg *codeexecutor.WorkspaceRegistry,
+) []tool.Tool {
+	if !executorSupportsWorkspaceExec(options) {
+		return allTools
+	}
+	execTool := toolworkspaceexec.NewExecTool(
+		options.codeExecutor,
+		toolworkspaceexec.WithWorkspaceRegistry(reg),
+	)
+	allTools = append(
+		allTools,
+		execTool,
+		toolworkspaceexec.NewPublishArtifactTool(execTool),
+	)
+	if executorSupportsWorkspaceExecSessions(options) {
+		allTools = append(
+			allTools,
+			toolworkspaceexec.NewWriteStdinTool(execTool),
+			toolworkspaceexec.NewKillSessionTool(execTool),
+		)
+	}
+	return allTools
+}
+
+func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
+	return codeexecutor.NewWorkspaceRegistry()
+}
+
+func buildSkillRunTool(
+	options *Options,
+	reg *codeexecutor.WorkspaceRegistry,
+) *toolskill.RunTool {
 	exec := options.codeExecutor
 	if exec == nil {
 		exec = defaultCodeExecutor()
@@ -643,6 +721,9 @@ func buildSkillRunTool(options *Options) *toolskill.RunTool {
 			toolskill.WithSkillStager(options.skillRunStager),
 		)
 	}
+	if reg != nil {
+		runOpts = append(runOpts, toolskill.WithWorkspaceRegistry(reg))
+	}
 
 	return toolskill.NewRunTool(
 		options.skillsRepository,
@@ -674,6 +755,41 @@ func executorSupportsInteractive(options *Options) bool {
 	}
 	_, interactive := eng.Runner().(codeexecutor.InteractiveProgramRunner)
 	return interactive
+}
+
+// executorSupportsWorkspaceExec reports whether the agent has an
+// explicit executor that exposes a live workspace engine suitable for
+// generic workspace-side command execution. Unlike skill_run, this does
+// not fall back to the local engine because that would silently move
+// commands onto the agent host instead of the configured executor.
+func executorSupportsWorkspaceExec(options *Options) bool {
+	if options == nil || options.codeExecutor == nil {
+		return false
+	}
+	ep, ok := options.codeExecutor.(codeexecutor.EngineProvider)
+	if !ok || ep == nil {
+		return false
+	}
+	eng := ep.Engine()
+	if eng == nil {
+		return false
+	}
+	return eng.Manager() != nil && eng.FS() != nil && eng.Runner() != nil
+}
+
+// executorSupportsWorkspaceExecSessions reports whether workspace_exec can
+// expose interactive session helpers such as workspace_write_stdin.
+func executorSupportsWorkspaceExecSessions(options *Options) bool {
+	if !executorSupportsWorkspaceExec(options) {
+		return false
+	}
+	ep := options.codeExecutor.(codeexecutor.EngineProvider)
+	eng := ep.Engine()
+	if eng == nil || eng.Runner() == nil {
+		return false
+	}
+	_, ok := eng.Runner().(codeexecutor.InteractiveProgramRunner)
+	return ok
 }
 
 // Run implements the agent.Agent interface.

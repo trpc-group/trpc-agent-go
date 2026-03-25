@@ -32,7 +32,9 @@ import (
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillstage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspacesession"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -46,6 +48,8 @@ type RunTool struct {
 	repo skill.Repository
 	exec codeexecutor.CodeExecutor
 	reg  *codeexecutor.WorkspaceRegistry
+	wsr  *workspacesession.Resolver
+	sst  *skillstage.Stager
 
 	skillStager SkillStager
 
@@ -79,7 +83,7 @@ func NewRunTool(
 	rt := &RunTool{
 		repo: repo,
 		exec: exec,
-		reg:  codeexecutor.NewWorkspaceRegistry(),
+		sst:  skillstage.New(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -89,6 +93,10 @@ func NewRunTool(
 	if rt.skillStager == nil {
 		rt.skillStager = newCopySkillStager(rt)
 	}
+	if rt.reg == nil {
+		rt.reg = codeexecutor.NewWorkspaceRegistry()
+	}
+	rt.wsr = workspacesession.NewResolver(exec, rt.reg)
 	rt.loadAllowedCommandsFromEnv()
 	rt.loadDeniedCommandsFromEnv()
 	return rt
@@ -178,6 +186,16 @@ func WithForceSaveArtifacts(enable bool) func(*RunTool) {
 func WithRequireSkillLoaded(enable bool) func(*RunTool) {
 	return func(t *RunTool) {
 		t.requireSkillLoaded = enable
+	}
+}
+
+// WithWorkspaceRegistry reuses a caller-provided workspace registry so
+// skill_run can share the same invocation workspace with other tools.
+func WithWorkspaceRegistry(
+	reg *codeexecutor.WorkspaceRegistry,
+) func(*RunTool) {
+	return func(t *RunTool) {
+		t.reg = reg
 	}
 }
 
@@ -1128,37 +1146,27 @@ func normalizeInputTo(to string) string {
 
 // ensureEngine gets engine from executor or builds a local one.
 func (t *RunTool) ensureEngine() codeexecutor.Engine {
-	if ep, ok := t.exec.(codeexecutor.EngineProvider); ok && ep != nil {
-		if e := ep.Engine(); e != nil {
-			return e
-		}
+	if t.wsr == nil {
+		log.Warnf(
+			"skill_run: falling back to local engine; " +
+				"workspace resolver is not configured",
+		)
+		rt := localexec.NewRuntime("")
+		return codeexecutor.NewEngine(rt, rt, rt)
 	}
-	log.Warnf(
-		"skill_run: falling back to local engine; " +
-			"no EngineProvider on executor",
-	)
-	rt := localexec.NewRuntime("")
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return t.wsr.EnsureEngine()
 }
 
 func (t *RunTool) createWorkspace(
 	ctx context.Context, eng codeexecutor.Engine, name string,
 ) (codeexecutor.Workspace, error) {
-	// Acquire a session-scoped workspace using a persistent registry.
-	reg := t.reg
-	if reg == nil {
-		reg = codeexecutor.NewWorkspaceRegistry()
-		t.reg = reg
-	}
-	// Prefer session ID from invocation context; otherwise fallback
-	// to skill name.
-	sid := name
-	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-		if inv.Session != nil && inv.Session.ID != "" {
-			sid = inv.Session.ID
+	if t.reg == nil || t.wsr == nil {
+		if t.reg == nil {
+			t.reg = codeexecutor.NewWorkspaceRegistry()
 		}
+		t.wsr = workspacesession.NewResolver(t.exec, t.reg)
 	}
-	return reg.Acquire(ctx, eng.Manager(), sid)
+	return t.wsr.CreateWorkspace(ctx, eng, name)
 }
 
 func (t *RunTool) stageSkill(
@@ -1168,59 +1176,10 @@ func (t *RunTool) stageSkill(
 	root string,
 	name string,
 ) error {
-	// Compute digest of the skill directory on host.
-	dg, err := codeexecutor.DirDigest(root)
-	if err != nil {
-		return err
+	if t.sst == nil {
+		t.sst = skillstage.New()
 	}
-	md, err := t.loadWorkspaceMetadata(ctx, eng, ws)
-	if err != nil {
-		return err
-	}
-	// Stage into /skills/<name> inside workspace.
-	dest := path.Join(codeexecutor.DirSkills, name)
-	// If metadata has same digest, skip staging.
-	if s, ok := md.Skills[name]; ok &&
-		s.Digest == dg && s.Mounted {
-		ok, err := t.skillLinksPresent(ctx, eng, ws, name)
-		if err != nil {
-			return err
-		}
-		if ok {
-			return nil
-		}
-	}
-	if err := t.removeWorkspacePath(ctx, eng, ws, dest); err != nil {
-		return err
-	}
-	// Stage as a regular directory first (no read-only mount). We will
-	// add convenience links and then make files read-only except those
-	// links. This enables relative paths like "scripts/..." and
-	// "out/..." to work from the skill root.
-	if err := eng.FS().StageDirectory(
-		ctx, ws, root, dest,
-		codeexecutor.StageOptions{ReadOnly: false, AllowMount: false},
-	); err != nil {
-		return err
-	}
-
-	// Link workspace-level dirs under the skill root: out, work, inputs.
-	if err := t.linkWorkspaceDirs(ctx, eng, ws, name); err != nil {
-		return err
-	}
-	// Make everything under skill root read-only while keeping symlinks
-	// untouched so writes land in workspace-level targets.
-	if err := t.readOnlyExceptSymlinks(ctx, eng, ws, dest); err != nil {
-		return err
-	}
-	md.Skills[name] = codeexecutor.SkillMeta{
-		Name:     name,
-		RelPath:  dest,
-		Digest:   dg,
-		Mounted:  true,
-		StagedAt: time.Now(),
-	}
-	return t.saveWorkspaceMetadata(ctx, eng, ws, md)
+	return t.sst.StageSkill(ctx, eng, ws, root, name)
 }
 
 func (t *RunTool) loadWorkspaceMetadata(
@@ -1228,40 +1187,10 @@ func (t *RunTool) loadWorkspaceMetadata(
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 ) (codeexecutor.WorkspaceMetadata, error) {
-	now := time.Now()
-	md := codeexecutor.WorkspaceMetadata{
-		Version:    1,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		LastAccess: now,
-		Skills:     map[string]codeexecutor.SkillMeta{},
+	if t.sst == nil {
+		t.sst = skillstage.New()
 	}
-	if eng == nil || eng.FS() == nil {
-		return md, fmt.Errorf("workspace fs is not configured")
-	}
-	files, err := eng.FS().Collect(
-		ctx, ws, []string{codeexecutor.MetaFileName},
-	)
-	if err != nil {
-		return md, err
-	}
-	if len(files) == 0 || strings.TrimSpace(files[0].Content) == "" {
-		return md, nil
-	}
-	if err := json.Unmarshal([]byte(files[0].Content), &md); err != nil {
-		return codeexecutor.WorkspaceMetadata{}, err
-	}
-	if md.Version == 0 {
-		md.Version = 1
-	}
-	if md.CreatedAt.IsZero() {
-		md.CreatedAt = now
-	}
-	md.LastAccess = now
-	if md.Skills == nil {
-		md.Skills = map[string]codeexecutor.SkillMeta{}
-	}
-	return md, nil
+	return t.sst.LoadWorkspaceMetadata(ctx, eng, ws)
 }
 
 func (t *RunTool) saveWorkspaceMetadata(
@@ -1270,50 +1199,10 @@ func (t *RunTool) saveWorkspaceMetadata(
 	ws codeexecutor.Workspace,
 	md codeexecutor.WorkspaceMetadata,
 ) error {
-	if eng == nil || eng.FS() == nil {
-		return fmt.Errorf("workspace fs is not configured")
+	if t.sst == nil {
+		t.sst = skillstage.New()
 	}
-	if eng.Runner() == nil {
-		return fmt.Errorf("workspace runner is not configured")
-	}
-	if md.Version == 0 {
-		md.Version = 1
-	}
-	now := time.Now()
-	if md.CreatedAt.IsZero() {
-		md.CreatedAt = now
-	}
-	md.UpdatedAt = now
-	md.LastAccess = now
-	if md.Skills == nil {
-		md.Skills = map[string]codeexecutor.SkillMeta{}
-	}
-	buf, err := json.MarshalIndent(md, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := eng.FS().PutFiles(ctx, ws, []codeexecutor.PutFile{{
-		Path:    workspaceMetadataTmpFile,
-		Content: buf,
-		Mode:    workspaceMetadataFileMode,
-	}}); err != nil {
-		return err
-	}
-	var sb strings.Builder
-	sb.WriteString("set -e; mv -f ")
-	sb.WriteString(shellQuote(workspaceMetadataTmpFile))
-	sb.WriteString(" ")
-	sb.WriteString(shellQuote(codeexecutor.MetaFileName))
-	_, err = eng.Runner().RunProgram(
-		ctx, ws, codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", sb.String()},
-			Env:     map[string]string{},
-			Cwd:     ".",
-			Timeout: 5 * time.Second,
-		},
-	)
-	return err
+	return t.sst.SaveWorkspaceMetadata(ctx, eng, ws, md)
 }
 
 func (t *RunTool) skillLinksPresent(
@@ -1322,82 +1211,10 @@ func (t *RunTool) skillLinksPresent(
 	ws codeexecutor.Workspace,
 	name string,
 ) (bool, error) {
-	skillName := strings.TrimSpace(name)
-	if skillName == "" {
-		return false, nil
+	if t.sst == nil {
+		t.sst = skillstage.New()
 	}
-	if eng == nil || eng.Runner() == nil {
-		return false, fmt.Errorf("workspace runner is not configured")
-	}
-	base := path.Join(codeexecutor.DirSkills, skillName)
-	var sb strings.Builder
-	sb.WriteString("test -L ")
-	sb.WriteString(shellQuote(path.Join(base, codeexecutor.DirOut)))
-	sb.WriteString(" && test -L ")
-	sb.WriteString(shellQuote(path.Join(base, codeexecutor.DirWork)))
-	sb.WriteString(" && test -L ")
-	sb.WriteString(shellQuote(path.Join(base, skillDirInputs)))
-	rr, err := eng.Runner().RunProgram(
-		ctx, ws, codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", sb.String()},
-			Env:     map[string]string{},
-			Cwd:     ".",
-			Timeout: 5 * time.Second,
-		},
-	)
-	if err != nil {
-		return false, err
-	}
-	if rr.ExitCode == 0 {
-		return true, nil
-	}
-	return false, nil
-}
-
-// linkWorkspaceDirs creates convenience symlinks under the staged
-// skill root so commands that write to "out/" (relative to the skill
-// CWD) resolve to the workspace output directory. It also links work
-// and inputs for consistency.
-func (t *RunTool) linkWorkspaceDirs(
-	ctx context.Context, eng codeexecutor.Engine,
-	ws codeexecutor.Workspace, name string,
-) error {
-	skillRoot := path.Join(codeexecutor.DirSkills, name)
-	// Relative links from skills/<name> to workspace dirs.
-	toOut := path.Join("..", "..", codeexecutor.DirOut)
-	toWork := path.Join("..", "..", codeexecutor.DirWork)
-	toInputs := path.Join(
-		"..", "..", codeexecutor.DirWork, skillDirInputs,
-	)
-	var sb strings.Builder
-	sb.WriteString("set -e; cd ")
-	sb.WriteString(shellQuote(skillRoot))
-	sb.WriteString("; rm -rf out work ")
-	sb.WriteString(skillDirInputs)
-	sb.WriteString(" ")
-	sb.WriteString(shellQuote(skillDirVenv))
-	sb.WriteString("; mkdir -p ")
-	sb.WriteString(shellQuote(toInputs))
-	sb.WriteString(" ")
-	sb.WriteString(shellQuote(skillDirVenv))
-	sb.WriteString("; ln -sfn ")
-	sb.WriteString(shellQuote(toOut))
-	sb.WriteString(" out; ln -sfn ")
-	sb.WriteString(shellQuote(toWork))
-	sb.WriteString(" work; ln -sfn ")
-	sb.WriteString(shellQuote(toInputs))
-	sb.WriteString(" inputs")
-	_, err := eng.Runner().RunProgram(
-		ctx, ws, codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", sb.String()},
-			Env:     map[string]string{},
-			Cwd:     ".",
-			Timeout: 5 * time.Second,
-		},
-	)
-	return err
+	return t.sst.SkillLinksPresent(ctx, eng, ws, name)
 }
 
 func (t *RunTool) removeWorkspacePath(
@@ -1406,60 +1223,10 @@ func (t *RunTool) removeWorkspacePath(
 	ws codeexecutor.Workspace,
 	rel string,
 ) error {
-	target := strings.TrimSpace(rel)
-	if target == "" {
-		return nil
+	if t.sst == nil {
+		t.sst = skillstage.New()
 	}
-	if eng == nil || eng.Runner() == nil {
-		return fmt.Errorf("workspace runner is not configured")
-	}
-	var sb strings.Builder
-	sb.WriteString("set -e; if [ -e ")
-	sb.WriteString(shellQuote(target))
-	sb.WriteString(" ]; then find ")
-	sb.WriteString(shellQuote(target))
-	sb.WriteString(" -type l -prune -o -exec chmod u+w {} +; fi")
-	sb.WriteString("; rm -rf ")
-	sb.WriteString(shellQuote(target))
-	_, err := eng.Runner().RunProgram(
-		ctx,
-		ws,
-		codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", sb.String()},
-			Env:     map[string]string{},
-			Cwd:     ".",
-			Timeout: 5 * time.Second,
-		},
-	)
-	return err
-}
-
-// readOnlyExceptSymlinks removes write bits on all regular files and
-// directories under the staged skill root while skipping symlinks to
-// avoid changing workspace-level targets like out/.
-func (t *RunTool) readOnlyExceptSymlinks(
-	ctx context.Context, eng codeexecutor.Engine,
-	ws codeexecutor.Workspace, dest string,
-) error {
-	venv := path.Join(dest, skillDirVenv)
-	var sb strings.Builder
-	// Use find to skip symlinks and chmod others.
-	sb.WriteString("set -e; find ")
-	sb.WriteString(shellQuote(dest))
-	sb.WriteString(" -path ")
-	sb.WriteString(shellQuote(venv))
-	sb.WriteString(" -prune -o -type l -prune -o -exec chmod a-w {} +")
-	_, err := eng.Runner().RunProgram(
-		ctx, ws, codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", sb.String()},
-			Env:     map[string]string{},
-			Cwd:     ".",
-			Timeout: 5 * time.Second,
-		},
-	)
-	return err
+	return t.sst.RemoveWorkspacePath(ctx, eng, ws, rel)
 }
 
 // shellQuote wraps a string for safe single-quoted usage in a
