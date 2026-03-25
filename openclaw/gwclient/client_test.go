@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -428,6 +429,52 @@ func TestClient_StreamMessage_StatusError(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unauthorized")
+}
+
+func TestParseSSEStream_ThoughtEvent(t *testing.T) {
+	t.Parallel()
+
+	out := make(chan StreamEvent, 1)
+	err := parseSSEStream(
+		context.Background(),
+		strings.NewReader(
+			"event: thought.delta\n"+
+				"data: {\"delta\":\"plan\"}\n\n",
+		),
+		out,
+	)
+	require.NoError(t, err)
+
+	evt := <-out
+	require.Equal(
+		t,
+		gwproto.StreamEventTypeThoughtDelta,
+		evt.Type,
+	)
+	require.Equal(t, "plan", evt.Delta)
+}
+
+func TestParseSSEStream_PublicEvent(t *testing.T) {
+	t.Parallel()
+
+	out := make(chan StreamEvent, 1)
+	err := parseSSEStream(
+		context.Background(),
+		strings.NewReader(
+			"event: public.completed\n"+
+				"data: {\"reply\":\"let me check\"}\n\n",
+		),
+		out,
+	)
+	require.NoError(t, err)
+
+	evt := <-out
+	require.Equal(
+		t,
+		gwproto.StreamEventTypePublicCompleted,
+		evt.Type,
+	)
+	require.Equal(t, "let me check", evt.Reply)
 }
 
 type streamContentTypeHandler struct {

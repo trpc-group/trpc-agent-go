@@ -24,11 +24,12 @@ import (
 )
 
 type preparedMessageRun struct {
-	userID    string
-	sessionID string
-	requestID string
-	inbound   InboundMessage
-	userMsg   model.Message
+	userID              string
+	sessionID           string
+	requestID           string
+	requestSystemPrompt string
+	inbound             InboundMessage
+	userMsg             model.Message
 }
 
 // ProcessMessage processes a gateway message request without an HTTP hop.
@@ -251,11 +252,12 @@ func (s *Server) prepareMessageRun(
 	}
 
 	return preparedMessageRun{
-		userID:    userID,
-		sessionID: sessionID,
-		requestID: strings.TrimSpace(req.RequestID),
-		inbound:   msg,
-		userMsg:   userMsg,
+		userID:              userID,
+		sessionID:           sessionID,
+		requestID:           strings.TrimSpace(req.RequestID),
+		requestSystemPrompt: strings.TrimSpace(req.RequestSystemPrompt),
+		inbound:             msg,
+		userMsg:             userMsg,
 	}, nil, http.StatusOK
 }
 
