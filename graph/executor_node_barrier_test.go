@@ -252,7 +252,7 @@ func TestRunBeforeCallbacks_BarrierWaitErrorPropagates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 
-	handled, err := exec.runBeforeCallbacks(ctx, inv, callbacks, nil, State{}, execCtx, &Task{NodeID: "N"}, NodeTypeFunction, time.Now(), 1)
+	handled, err := exec.runBeforeCallbacks(ctx, inv, callbacks, nil, State{}, execCtx, &Task{NodeID: "N"}, NodeTypeFunction, time.Now(), 1, "")
 	require.True(t, handled)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "node barrier")

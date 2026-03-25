@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
+	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -58,13 +59,14 @@ func New(name string, opts ...Option) *ChainAgent {
 func (a *ChainAgent) createSubAgentInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
+	nodeID string,
+	entryPredecessors []string,
 ) *agent.Invocation {
-	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := baseInvocation.Clone(
+	return baseInvocation.Clone(
 		agent.WithInvocationAgent(subAgent),
+		agent.WithInvocationTraceNodeID(nodeID),
+		agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors),
 	)
-
-	return subInvocation
 }
 
 // Run implements the agent.Agent interface.
@@ -199,10 +201,17 @@ func (a *ChainAgent) executeSubAgents(
 ) (*event.Event, *itelemetry.TokenUsage) {
 	tokenUsage := &itelemetry.TokenUsage{}
 	var fullRespEvent *event.Event
+	pathAllocator := istructure.NewPathAllocator(agent.InvocationTraceNodeID(invocation))
+	predecessors := agent.NextExecutionTracePredecessors(invocation)
 	visibleCtx := graph.WithoutGraphCompletionCapture(ctx)
 	for _, subAgent := range a.subAgents {
 		// Create clean invocation for sub-agent - no shared state mutation.
-		subInvocation := a.createSubAgentInvocation(subAgent, invocation)
+		subInvocation := a.createSubAgentInvocation(
+			subAgent,
+			invocation,
+			pathAllocator.Next(subAgent.Info().Name),
+			predecessors,
+		)
 
 		// Reset invocation information in context
 		subAgentCtx := graph.WithGraphCompletionCapture(
@@ -285,6 +294,7 @@ func (a *ChainAgent) executeSubAgents(
 			agent.EmitEvent(ctx, invocation, eventChan, e)
 			return e, tokenUsage
 		}
+		predecessors = agent.NextExecutionTracePredecessors(subInvocation)
 	}
 	return fullRespEvent, tokenUsage
 }

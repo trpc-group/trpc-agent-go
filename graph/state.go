@@ -61,6 +61,8 @@ const (
 	StateKeyParentAgent = "parent_agent"
 )
 
+const currentTraceStepIDStateKey = "__current_trace_step_id__"
+
 // State represents the state that flows through the graph.
 // This is the shared data structure that flows between nodes.
 type State map[string]any

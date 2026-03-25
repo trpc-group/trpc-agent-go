@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -1349,6 +1350,10 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			echoFinalChoices,
 		)
 	}
+	runnerCompletionEvent.ExecutionTrace = agent.BuildExecutionTrace(
+		loop.invocation,
+		resolveExecutionTraceStatus(loop, ctx.Err()),
+	)
 
 	// Append runner completion event to session.
 	persistRunnerCompletionEvent := runnerCompletionEvent
@@ -1375,6 +1380,20 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 
 	// Enqueue auto memory extraction job if memory service is configured.
 	r.enqueueAutoMemoryJob(ctx, loop.sess)
+}
+
+func resolveExecutionTraceStatus(loop *eventLoopContext, ctxErr error) trace.TraceStatus {
+	if loop != nil && loop.finalError != nil {
+		if loop.finalError.Type == agent.ErrorTypeStopAgentError {
+			return trace.TraceStatusCompleted
+		}
+		return trace.TraceStatusFailed
+	}
+	_, isWaitNoticeTimeout := agent.AsWaitNoticeTimeoutError(ctxErr)
+	if ctxErr != nil && !isWaitNoticeTimeout {
+		return trace.TraceStatusIncomplete
+	}
+	return trace.TraceStatusCompleted
 }
 
 // propagateGraphCompletion propagates graph-level completion data (state delta

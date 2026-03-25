@@ -728,7 +728,7 @@ func TestCycleAgent_CreateSubAgentInvoke(t *testing.T) {
 	base := agent.NewInvocation(agent.WithInvocationAgent(parent))
 	child := &noopAgent{name: "child"}
 
-	inv := parent.createSubAgentInvocation(child, base)
+	inv := parent.createSubAgentInvocation(child, base, "", nil)
 
 	require.Equal(t, "child", inv.AgentName)
 	// Branch should stay unchanged when base.Branch non-empty.

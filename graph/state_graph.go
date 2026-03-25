@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
+	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
@@ -3373,14 +3374,25 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		} else {
 			filterKey = parentKey + agent.EventFilterKeyDelimiter + base
 		}
-		inv := parentInvocation.Clone(
+		invocationOpts := []agent.InvocationOptions{
 			agent.WithInvocationAgent(targetAgent),
 			agent.WithInvocationMessage(
 				model.NewUserMessage(userInput),
 			),
 			agent.WithInvocationRunOptions(runOptions),
 			agent.WithInvocationEventFilterKey(filterKey),
-		)
+		}
+		if traceNodeID := buildAgentNodeTraceNodeID(parentInvocation, nodeID); traceNodeID != "" {
+			invocationOpts = append(invocationOpts, agent.WithInvocationTraceNodeID(traceNodeID))
+		}
+		entryPredecessors := currentTraceStepPredecessors(parentState)
+		if len(entryPredecessors) == 0 {
+			entryPredecessors = agent.NextExecutionTracePredecessors(parentInvocation)
+		}
+		if len(entryPredecessors) > 0 {
+			invocationOpts = append(invocationOpts, agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors))
+		}
+		inv := parentInvocation.Clone(invocationOpts...)
 		return inv
 	}
 	// Create standalone invocation.
@@ -3393,6 +3405,16 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		agent.WithInvocationEventFilterKey(targetAgent.Info().Name),
 	)
 	return inv
+}
+
+func currentTraceStepPredecessors(state State) []string {
+	if state == nil {
+		return nil
+	}
+	if stepID, ok := GetStateValue[string](state, currentTraceStepIDStateKey); ok && stepID != "" {
+		return []string{stepID}
+	}
+	return nil
 }
 
 func buildAgentInvocationWithStateAndScope(
@@ -3412,6 +3434,13 @@ func buildAgentInvocationWithStateAndScope(
 		scope,
 		StateKeyUserInput,
 	)
+}
+
+func buildAgentNodeTraceNodeID(parentInvocation *agent.Invocation, nodeID string) string {
+	if parentInvocation == nil || nodeID == "" {
+		return ""
+	}
+	return istructure.JoinNodeID(agent.InvocationTraceNodeID(parentInvocation), nodeID)
 }
 
 const (

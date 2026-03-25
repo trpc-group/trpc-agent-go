@@ -2132,6 +2132,7 @@ func TestExecutor_HandleCommandRouting_SetsStepMark(t *testing.T) {
 		nil,
 		ec,
 		taskID,
+		"",
 		targetNode,
 		step,
 	)
@@ -2183,6 +2184,7 @@ func TestExecutor_ProcessConditionalResult_SetsStepMark(t *testing.T) {
 		condEdge,
 		resultKey,
 		step,
+		fmt.Sprintf("%s-%d", fromNode, step),
 	)
 	require.NoError(t, err)
 
@@ -2745,6 +2747,8 @@ func TestExecutor_GetNextNodes_And_BuildTaskStateCopy_And_MergeNodeCallbacks(t *
 	st := exec.buildTaskStateCopy(ec, tsk)
 	require.Equal(t, 1, st["a"])
 	require.Equal(t, 2, st["b"])
+	exec.updateStateFromResult(ec, State{"current_trace_step_id": "business"})
+	require.Equal(t, "business", ec.State["current_trace_step_id"])
 
 	// mergeNodeCallbacks combine global and per-node via getMergedCallbacks
 	gcb := &NodeCallbacks{}
@@ -2761,6 +2765,32 @@ func TestExecutor_GetNextNodes_And_BuildTaskStateCopy_And_MergeNodeCallbacks(t *
 	merged := exec.getMergedCallbacks(st2, "nodeX")
 	require.Equal(t, 1, len(merged.BeforeNode))
 	require.Equal(t, 1, len(merged.AfterNode))
+}
+
+func TestExecutor_NewNodeExecutionContext_PreservesBusinessCurrentTraceStepID(t *testing.T) {
+	g := New(NewStateSchema())
+	node := &Node{ID: "nodeX", Name: "nodeX"}
+	require.NoError(t, g.addNode(node))
+	exec := &Executor{graph: g}
+	ec := exec.buildExecutionContext(nil, "inv", State{}, false, nil)
+	task := &Task{
+		NodeID: "nodeX",
+		TaskID: "nodeX-1",
+		Input:  State{"current_trace_step_id": "business"},
+	}
+	disabledInv := &agent.Invocation{InvocationID: "inv-disabled", AgentName: "graph"}
+	nodeCtx := exec.initializeNodeContext(context.Background(), disabledInv, ec, task, 1)
+	require.Equal(t, "business", nodeCtx.stateCopy["current_trace_step_id"])
+	_, ok := nodeCtx.stateCopy[currentTraceStepIDStateKey]
+	require.False(t, ok)
+	enabledInv := &agent.Invocation{
+		InvocationID: "inv-enabled",
+		AgentName:    "graph",
+		RunOptions:   agent.RunOptions{ExecutionTraceEnabled: true},
+	}
+	nodeCtx = exec.initializeNodeContext(context.Background(), enabledInv, ec, task, 1)
+	require.Equal(t, "business", nodeCtx.stateCopy["current_trace_step_id"])
+	require.Equal(t, nodeCtx.traceStepID, nodeCtx.stateCopy[currentTraceStepIDStateKey])
 }
 
 // Ensure buildExecutionContext seeds per-run channel versions from the last checkpoint.

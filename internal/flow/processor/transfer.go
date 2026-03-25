@@ -12,10 +12,12 @@ package processor
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -23,6 +25,7 @@ import (
 const (
 	swarmTeamNameKey          = "swarm_team_name"
 	swarmActiveAgentKeyPrefix = "swarm_active_agent:"
+	swarmTraceNodeIDKey       = "__swarm_trace_node_id__"
 )
 
 // TransferResponseProcessor handles agent transfer operations after LLM responses.
@@ -153,6 +156,12 @@ func (p *TransferResponseProcessor) ProcessResponse(
 	// after transfer, not the target agent's invocation.
 	targetInvocation := invocation.Clone(
 		agent.WithInvocationAgent(targetAgent),
+		agent.WithInvocationTraceNodeID(
+			transferTargetTraceNodeID(invocation, targetAgent),
+		),
+		agent.WithInvocationEntryPredecessorStepIDs(
+			agent.NextExecutionTracePredecessors(invocation),
+		),
 	)
 
 	// Set the message for the target agent.
@@ -265,6 +274,35 @@ func (p *TransferResponseProcessor) saveActiveAgent(
 	// Save the target agent name for cross-request transfer.
 	// Next user message will start from this agent.
 	targetEvent.StateDelta[swarmActiveAgentKey(teamName)] = []byte(targetAgent.Info().Name)
+}
+
+func transferTargetTraceNodeID(invocation *agent.Invocation, targetAgent agent.Agent) string {
+	if invocation == nil || targetAgent == nil {
+		return ""
+	}
+	if invocation.Session != nil {
+		if traceRootBytes, ok := invocation.Session.GetState(swarmTraceNodeIDKey); ok && len(traceRootBytes) > 0 {
+			return istructure.JoinNodeID(string(traceRootBytes), targetAgent.Info().Name)
+		}
+		if teamNameBytes, ok := invocation.Session.GetState(swarmTeamNameKey); ok && len(teamNameBytes) > 0 {
+			if mountedRoot := parentTraceNodeID(agent.InvocationTraceNodeID(invocation)); mountedRoot != "" {
+				return istructure.JoinNodeID(mountedRoot, targetAgent.Info().Name)
+			}
+			return istructure.JoinNodeID(istructure.JoinNodeID("", string(teamNameBytes)), targetAgent.Info().Name)
+		}
+	}
+	return istructure.JoinNodeID(agent.InvocationTraceNodeID(invocation), targetAgent.Info().Name)
+}
+
+func parentTraceNodeID(nodeID string) string {
+	if nodeID == "" {
+		return ""
+	}
+	lastSlash := strings.LastIndex(nodeID, "/")
+	if lastSlash <= 0 {
+		return ""
+	}
+	return nodeID[:lastSlash]
 }
 
 func swarmActiveAgentKey(teamName string) string {

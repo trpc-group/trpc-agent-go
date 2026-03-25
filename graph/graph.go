@@ -474,39 +474,42 @@ type ExecutionContext struct {
 	Graph        *Graph
 	EventChan    chan<- *event.Event
 	InvocationID string
-
 	// Invocation is the per-run invocation context. Nodes may use it to
 	// read invocation-scoped state (for example, {invocation:*} placeholders).
 	Invocation *agent.Invocation
-
 	// channels holds the per-execution Pregel channels. These are constructed
 	// from the Graph's static channel definitions when the execution starts
 	// and are never shared across concurrent runs.
 	channels *channel.Manager
-
 	// stateMutex protects State reads/writes.
 	stateMutex sync.RWMutex
 	State      State
-
 	// pendingMu protects pendingWrites operations.
 	pendingMu     sync.Mutex
 	pendingWrites []PendingWrite
 	resumed       bool
 	seq           atomic.Int64 // Atomic sequence counter for deterministic replay
-
 	// tasksMutex protects pendingTasks queue operations.
 	tasksMutex   sync.Mutex
 	pendingTasks []*Task
-
 	// versionsSeen tracks which channel versions each node has seen.
 	// Map from nodeID -> channelName -> version number.
 	versionsSeen   map[string]map[string]int64
 	versionsSeenMu sync.RWMutex
-
 	// lastCheckpoint holds the most recent checkpoint used for planning
 	// when resuming. Keeping this per-execution avoids cross-run sharing
 	// when a single Executor is reused concurrently.
 	lastCheckpoint *Checkpoint
+	// traceMu protects execution trace planning and task-to-step bookkeeping.
+	traceMu sync.Mutex
+	// traceChannelSources tracks the source step ids currently attached to a channel.
+	traceChannelSources map[string][]string
+	// traceChannelSourceSteps tracks the step number for last-value/ephemeral provenance.
+	traceChannelSourceSteps map[string]int
+	// traceBarrierChannelSources tracks the latest source step id for each barrier sender.
+	traceBarrierChannelSources map[string]map[string]string
+	// traceStepIDByTaskID tracks the real trace step created for each task.
+	traceStepIDByTaskID map[string]string
 }
 
 // Command represents a command that combines state updates with routing.

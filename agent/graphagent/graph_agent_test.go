@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,11 +29,13 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
@@ -2875,6 +2878,232 @@ func TestGraphAgent_Run_TraceAfterInvokeAgent(t *testing.T) {
 	require.Contains(t, outputMessages, "graph result")
 }
 
+func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
+	schema := graph.NewStateSchema().
+		AddField("route_count", graph.StateField{
+			Type:    reflect.TypeOf(0),
+			Reducer: graph.DefaultReducer,
+			Default: func() any { return 0 },
+		}).
+		AddField("visited", graph.StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: graph.StringSliceReducer,
+			Default: func() any { return []string{} },
+		})
+	builder := graph.NewStateGraph(schema)
+	builder.AddNode("start", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"start"}}, nil
+	})
+	builder.AddNode("prepare", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"prepare"}}, nil
+	})
+	builder.AddNode("route", func(_ context.Context, state graph.State) (any, error) {
+		count, _ := state["route_count"].(int)
+		return graph.State{
+			"route_count": count + 1,
+			"visited":     []string{"route"},
+		}, nil
+	})
+	builder.AddNode("tools", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"tools"}}, nil
+	})
+	builder.AddNode("branch_a", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"branch_a"}}, nil
+	})
+	builder.AddNode("branch_b", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"branch_b"}}, nil
+	})
+	builder.AddNode("branch_never", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"branch_never"}}, nil
+	})
+	builder.AddNode("join", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"join"}}, nil
+	})
+	builder.AddNode("done", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"done"}}, nil
+	})
+	builder.SetEntryPoint("start")
+	builder.AddEdge("start", "route")
+	builder.AddEdge("start", "prepare")
+	builder.AddConditionalEdges("route", func(_ context.Context, state graph.State) (string, error) {
+		count, _ := state["route_count"].(int)
+		if count == 1 {
+			return "tools", nil
+		}
+		return "branch_a", nil
+	}, map[string]string{
+		"tools":    "tools",
+		"branch_a": "branch_a",
+	})
+	builder.AddEdge("tools", "route")
+	builder.AddEdge("prepare", "branch_b")
+	builder.AddJoinEdge([]string{"branch_a", "branch_b"}, "join")
+	builder.AddConditionalEdges("join", func(context.Context, graph.State) (string, error) {
+		return "done", nil
+	}, map[string]string{
+		"done":         "done",
+		"branch_never": "branch_never",
+	})
+	builder.SetFinishPoint("done")
+	compiled := builder.MustCompile()
+	ag, err := New("assistant", compiled, WithMaxConcurrency(1))
+	require.NoError(t, err)
+	r := runner.NewRunner("app", ag, runner.WithSessionService(inmemory.NewSessionService()))
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("hello graph trace"),
+		agent.WithExecutionTraceEnabled(true),
+	)
+	require.NoError(t, err)
+	var completion *event.Event
+	for evt := range eventCh {
+		if evt != nil && evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.ExecutionTrace)
+	executionTrace := completion.ExecutionTrace
+	require.Equal(t, atrace.Trace{
+		RootAgentName:    "assistant",
+		RootInvocationID: "root-invocation",
+		SessionID:        "session-1",
+		StartedAt:        graphAgentTraceAssertionStartTime,
+		EndedAt:          graphAgentTraceAssertionEndTime,
+		Status:           atrace.TraceStatusCompleted,
+		Steps: []atrace.Step{
+			{
+				StepID:             "assistant/branch_a#1",
+				InvocationID:       "root-invocation",
+				ParentInvocationID: "",
+				AgentName:          "assistant",
+				Branch:             "assistant/branch_a",
+				NodeID:             "assistant/branch_a",
+				StartedAt:          graphAgentTraceAssertionStartTime,
+				EndedAt:            graphAgentTraceAssertionEndTime,
+				PredecessorStepIDs: []string{"assistant/route#2"},
+				Input:              &atrace.Snapshot{Text: "{\"checkpoint_ns\":\"assistant\",\"messages\":[{\"role\":\"user\",\"content\":\"hello graph trace\"}],\"route_count\":2,\"user_input\":\"hello graph trace\",\"visited\":[\"start\",\"prepare\",\"route\",\"branch_b\",\"tools\",\"route\"]}"},
+				Output:             &atrace.Snapshot{Text: "{\"visited\":[\"branch_a\"]}"},
+				Error:              "",
+			},
+			{
+				StepID:             "assistant/branch_b#1",
+				InvocationID:       "root-invocation",
+				ParentInvocationID: "",
+				AgentName:          "assistant",
+				Branch:             "assistant/branch_b",
+				NodeID:             "assistant/branch_b",
+				StartedAt:          graphAgentTraceAssertionStartTime,
+				EndedAt:            graphAgentTraceAssertionEndTime,
+				PredecessorStepIDs: []string{"assistant/prepare#1"},
+				Input:              &atrace.Snapshot{Text: "{\"checkpoint_ns\":\"assistant\",\"messages\":[{\"role\":\"user\",\"content\":\"hello graph trace\"}],\"route_count\":1,\"user_input\":\"hello graph trace\",\"visited\":[\"start\",\"prepare\",\"route\"]}"},
+				Output:             &atrace.Snapshot{Text: "{\"visited\":[\"branch_b\"]}"},
+				Error:              "",
+			},
+			{
+				StepID:             "assistant/done#1",
+				InvocationID:       "root-invocation",
+				ParentInvocationID: "",
+				AgentName:          "assistant",
+				Branch:             "assistant/done",
+				NodeID:             "assistant/done",
+				StartedAt:          graphAgentTraceAssertionStartTime,
+				EndedAt:            graphAgentTraceAssertionEndTime,
+				PredecessorStepIDs: []string{"assistant/join#1"},
+				Input:              &atrace.Snapshot{Text: "{\"checkpoint_ns\":\"assistant\",\"messages\":[{\"role\":\"user\",\"content\":\"hello graph trace\"}],\"route_count\":2,\"user_input\":\"hello graph trace\",\"visited\":[\"start\",\"prepare\",\"route\",\"branch_b\",\"tools\",\"route\",\"branch_a\",\"join\"]}"},
+				Output:             &atrace.Snapshot{Text: "{\"visited\":[\"done\"]}"},
+				Error:              "",
+			},
+			{
+				StepID:             "assistant/join#1",
+				InvocationID:       "root-invocation",
+				ParentInvocationID: "",
+				AgentName:          "assistant",
+				Branch:             "assistant/join",
+				NodeID:             "assistant/join",
+				StartedAt:          graphAgentTraceAssertionStartTime,
+				EndedAt:            graphAgentTraceAssertionEndTime,
+				PredecessorStepIDs: []string{"assistant/branch_a#1", "assistant/branch_b#1"},
+				Input:              &atrace.Snapshot{Text: "{\"checkpoint_ns\":\"assistant\",\"messages\":[{\"role\":\"user\",\"content\":\"hello graph trace\"}],\"route_count\":2,\"user_input\":\"hello graph trace\",\"visited\":[\"start\",\"prepare\",\"route\",\"branch_b\",\"tools\",\"route\",\"branch_a\"]}"},
+				Output:             &atrace.Snapshot{Text: "{\"visited\":[\"join\"]}"},
+				Error:              "",
+			},
+			{
+				StepID:             "assistant/prepare#1",
+				InvocationID:       "root-invocation",
+				ParentInvocationID: "",
+				AgentName:          "assistant",
+				Branch:             "assistant/prepare",
+				NodeID:             "assistant/prepare",
+				StartedAt:          graphAgentTraceAssertionStartTime,
+				EndedAt:            graphAgentTraceAssertionEndTime,
+				PredecessorStepIDs: []string{"assistant/start#1"},
+				Input:              &atrace.Snapshot{Text: "{\"checkpoint_ns\":\"assistant\",\"messages\":[{\"role\":\"user\",\"content\":\"hello graph trace\"}],\"route_count\":0,\"user_input\":\"hello graph trace\",\"visited\":[\"start\"]}"},
+				Output:             &atrace.Snapshot{Text: "{\"visited\":[\"prepare\"]}"},
+				Error:              "",
+			},
+			{
+				StepID:             "assistant/route#1",
+				InvocationID:       "root-invocation",
+				ParentInvocationID: "",
+				AgentName:          "assistant",
+				Branch:             "assistant/route",
+				NodeID:             "assistant/route",
+				StartedAt:          graphAgentTraceAssertionStartTime,
+				EndedAt:            graphAgentTraceAssertionEndTime,
+				PredecessorStepIDs: []string{"assistant/start#1"},
+				Input:              &atrace.Snapshot{Text: "{\"checkpoint_ns\":\"assistant\",\"messages\":[{\"role\":\"user\",\"content\":\"hello graph trace\"}],\"route_count\":0,\"user_input\":\"hello graph trace\",\"visited\":[\"start\"]}"},
+				Output:             &atrace.Snapshot{Text: "{\"route_count\":1,\"visited\":[\"route\"]}"},
+				Error:              "",
+			},
+			{
+				StepID:             "assistant/route#2",
+				InvocationID:       "root-invocation",
+				ParentInvocationID: "",
+				AgentName:          "assistant",
+				Branch:             "assistant/route",
+				NodeID:             "assistant/route",
+				StartedAt:          graphAgentTraceAssertionStartTime,
+				EndedAt:            graphAgentTraceAssertionEndTime,
+				PredecessorStepIDs: []string{"assistant/tools#1"},
+				Input:              &atrace.Snapshot{Text: "{\"checkpoint_ns\":\"assistant\",\"messages\":[{\"role\":\"user\",\"content\":\"hello graph trace\"}],\"route_count\":1,\"user_input\":\"hello graph trace\",\"visited\":[\"start\",\"prepare\",\"route\",\"branch_b\",\"tools\"]}"},
+				Output:             &atrace.Snapshot{Text: "{\"route_count\":2,\"visited\":[\"route\"]}"},
+				Error:              "",
+			},
+			{
+				StepID:             "assistant/start#1",
+				InvocationID:       "root-invocation",
+				ParentInvocationID: "",
+				AgentName:          "assistant",
+				Branch:             "assistant/start",
+				NodeID:             "assistant/start",
+				StartedAt:          graphAgentTraceAssertionStartTime,
+				EndedAt:            graphAgentTraceAssertionEndTime,
+				PredecessorStepIDs: []string{},
+				Input:              &atrace.Snapshot{Text: "{\"checkpoint_ns\":\"assistant\",\"messages\":[{\"role\":\"user\",\"content\":\"hello graph trace\"}],\"route_count\":0,\"user_input\":\"hello graph trace\",\"visited\":[]}"},
+				Output:             &atrace.Snapshot{Text: "{\"visited\":[\"start\"]}"},
+				Error:              "",
+			},
+			{
+				StepID:             "assistant/tools#1",
+				InvocationID:       "root-invocation",
+				ParentInvocationID: "",
+				AgentName:          "assistant",
+				Branch:             "assistant/tools",
+				NodeID:             "assistant/tools",
+				StartedAt:          graphAgentTraceAssertionStartTime,
+				EndedAt:            graphAgentTraceAssertionEndTime,
+				PredecessorStepIDs: []string{"assistant/route#1"},
+				Input:              &atrace.Snapshot{Text: "{\"checkpoint_ns\":\"assistant\",\"messages\":[{\"role\":\"user\",\"content\":\"hello graph trace\"}],\"route_count\":1,\"user_input\":\"hello graph trace\",\"visited\":[\"start\",\"prepare\",\"route\"]}"},
+				Output:             &atrace.Snapshot{Text: "{\"visited\":[\"tools\"]}"},
+				Error:              "",
+			},
+		},
+	}, normalizeGraphAgentTraceForAssertion(executionTrace))
+}
+
 func TestResolveGraphAgentErrorType(t *testing.T) {
 	testCases := []struct {
 		name               string
@@ -2920,3 +3149,62 @@ func TestResolveGraphAgentErrorType(t *testing.T) {
 		})
 	}
 }
+
+func normalizeGraphAgentTraceForAssertion(executionTrace *atrace.Trace) atrace.Trace {
+	if executionTrace == nil {
+		return atrace.Trace{}
+	}
+	normalized := atrace.Trace{
+		RootAgentName:    executionTrace.RootAgentName,
+		RootInvocationID: "root-invocation",
+		SessionID:        executionTrace.SessionID,
+		StartedAt:        graphAgentTraceAssertionStartTime,
+		EndedAt:          graphAgentTraceAssertionEndTime,
+		Status:           executionTrace.Status,
+		Steps:            make([]atrace.Step, 0, len(executionTrace.Steps)),
+	}
+	stepLabels := make(map[string]string, len(executionTrace.Steps))
+	nodeCounts := make(map[string]int)
+	for _, step := range executionTrace.Steps {
+		nodeCounts[step.NodeID]++
+		stepLabels[step.StepID] = fmt.Sprintf("%s#%d", step.NodeID, nodeCounts[step.NodeID])
+	}
+	for _, step := range executionTrace.Steps {
+		predecessors := make([]string, 0, len(step.PredecessorStepIDs))
+		for _, predecessorStepID := range step.PredecessorStepIDs {
+			predecessors = append(predecessors, stepLabels[predecessorStepID])
+		}
+		sort.Strings(predecessors)
+		var input *atrace.Snapshot
+		if step.Input != nil {
+			input = &atrace.Snapshot{Text: step.Input.Text}
+		}
+		var output *atrace.Snapshot
+		if step.Output != nil {
+			output = &atrace.Snapshot{Text: step.Output.Text}
+		}
+		normalized.Steps = append(normalized.Steps, atrace.Step{
+			StepID:             stepLabels[step.StepID],
+			InvocationID:       "root-invocation",
+			ParentInvocationID: "",
+			AgentName:          step.AgentName,
+			Branch:             step.Branch,
+			NodeID:             step.NodeID,
+			StartedAt:          graphAgentTraceAssertionStartTime,
+			EndedAt:            graphAgentTraceAssertionEndTime,
+			PredecessorStepIDs: predecessors,
+			Input:              input,
+			Output:             output,
+			Error:              step.Error,
+		})
+	}
+	sort.Slice(normalized.Steps, func(i, j int) bool {
+		return normalized.Steps[i].StepID < normalized.Steps[j].StepID
+	})
+	return normalized
+}
+
+var (
+	graphAgentTraceAssertionStartTime = time.Unix(1, 0).UTC()
+	graphAgentTraceAssertionEndTime   = time.Unix(2, 0).UTC()
+)

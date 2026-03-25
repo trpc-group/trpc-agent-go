@@ -318,6 +318,107 @@ func TestExecutor_NodeStartEvent_UsesCustomUserInputKey(t *testing.T) {
 	require.Equal(t, testCustomInput, got)
 }
 
+func TestExecutor_EnqueueCommands_AssignsUniqueTaskIDsForSameTarget(t *testing.T) {
+	exec := &Executor{
+		graph: &Graph{
+			nodes: map[string]*Node{
+				"worker": {ID: "worker"},
+			},
+		},
+	}
+	execCtx := &ExecutionContext{State: State{}}
+	sourceTask := &Task{NodeID: "source", TaskID: "source-0", TaskPath: []string{"source"}}
+	exec.enqueueCommands(execCtx, sourceTask, []*Command{
+		{GoTo: "worker"},
+		{GoTo: "worker"},
+	}, 0, []string{"s1"})
+	require.Len(t, execCtx.pendingTasks, 2)
+	assert.NotEqual(t, execCtx.pendingTasks[0].TaskID, execCtx.pendingTasks[1].TaskID)
+	assert.Equal(t, "worker-1-source-0-0", execCtx.pendingTasks[0].TaskID)
+	assert.Equal(t, "worker-1-source-0-1", execCtx.pendingTasks[1].TaskID)
+	assert.Equal(t, []string{"s1"}, execCtx.pendingTasks[0].PredecessorStepIDs)
+	assert.Equal(t, []string{"s1"}, execCtx.pendingTasks[1].PredecessorStepIDs)
+}
+
+func TestExecutor_EnqueueCommands_AssignsUniqueTaskIDsAcrossStepsForSameTarget(t *testing.T) {
+	exec := &Executor{
+		graph: &Graph{
+			nodes: map[string]*Node{
+				"worker": {ID: "worker"},
+			},
+		},
+	}
+	execCtx := &ExecutionContext{State: State{}}
+	sourceTask := &Task{NodeID: "source", TaskID: "source-0", TaskPath: []string{"source"}}
+	exec.enqueueCommands(execCtx, sourceTask, []*Command{{GoTo: "worker"}}, 0, []string{"s1"})
+	exec.enqueueCommands(execCtx, sourceTask, []*Command{{GoTo: "worker"}}, 1, []string{"s2"})
+	require.Len(t, execCtx.pendingTasks, 2)
+	assert.Equal(t, "worker-1-source-0-0", execCtx.pendingTasks[0].TaskID)
+	assert.Equal(t, "worker-2-source-0-0", execCtx.pendingTasks[1].TaskID)
+	assert.NotEqual(t, execCtx.pendingTasks[0].TaskID, execCtx.pendingTasks[1].TaskID)
+}
+
+func TestExecutor_EnqueueCommands_AssignsUniqueTaskIDsAcrossSourceTasks(t *testing.T) {
+	exec := &Executor{
+		graph: &Graph{
+			nodes: map[string]*Node{
+				"worker": {ID: "worker"},
+			},
+		},
+	}
+	execCtx := &ExecutionContext{State: State{}}
+	firstSourceTask := &Task{NodeID: "source", TaskID: "source-a", TaskPath: []string{"source"}}
+	secondSourceTask := &Task{NodeID: "source", TaskID: "source-b", TaskPath: []string{"source"}}
+	exec.enqueueCommands(execCtx, firstSourceTask, []*Command{{GoTo: "worker"}}, 0, []string{"s1"})
+	exec.enqueueCommands(execCtx, secondSourceTask, []*Command{{GoTo: "worker"}}, 0, []string{"s2"})
+	require.Len(t, execCtx.pendingTasks, 2)
+	assert.Equal(t, "worker-1-source-a-0", execCtx.pendingTasks[0].TaskID)
+	assert.Equal(t, "worker-1-source-b-0", execCtx.pendingTasks[1].TaskID)
+	assert.NotEqual(t, execCtx.pendingTasks[0].TaskID, execCtx.pendingTasks[1].TaskID)
+}
+
+func TestExecutor_RecordTraceChannelSource_RespectsChannelBehavior(t *testing.T) {
+	exec := &Executor{}
+	channelManager := ichannel.NewChannelManager()
+	channelManager.AddChannel("last", ichannel.BehaviorLastValue)
+	channelManager.AddChannel("topic", ichannel.BehaviorTopic)
+	channelManager.AddChannel("barrier", ichannel.BehaviorBarrier)
+	execCtx := &ExecutionContext{
+		channels:                   channelManager,
+		traceChannelSources:        make(map[string][]string),
+		traceChannelSourceSteps:    make(map[string]int),
+		traceBarrierChannelSources: make(map[string]map[string]string),
+	}
+	exec.recordTraceChannelSource(execCtx, "last", "", "s1", 1)
+	exec.recordTraceChannelSource(execCtx, "last", "", "s2", 1)
+	exec.recordTraceChannelSource(execCtx, "last", "", "s3", 2)
+	exec.recordTraceChannelSource(execCtx, "topic", "", "s1", 1)
+	exec.recordTraceChannelSource(execCtx, "topic", "", "s2", 2)
+	exec.recordTraceChannelSource(execCtx, "barrier", "left", "s1", 1)
+	exec.recordTraceChannelSource(execCtx, "barrier", "left", "s2", 2)
+	exec.recordTraceChannelSource(execCtx, "barrier", "right", "s3", 2)
+	assert.Equal(t, []string{"s3"}, execCtx.traceChannelSources["last"])
+	assert.Equal(t, []string{"s1", "s2"}, execCtx.traceChannelSources["topic"])
+	assert.Equal(t, map[string]string{"left": "s2", "right": "s3"}, execCtx.traceBarrierChannelSources["barrier"])
+	assert.ElementsMatch(t, []string{"s2", "s3"}, exec.tracePredecessorsForChannels(execCtx, []string{"barrier"}))
+}
+
+func TestExecutor_RecordTraceChannelSource_LastValueKeepsSameStepFanIn(t *testing.T) {
+	exec := &Executor{}
+	channelManager := ichannel.NewChannelManager()
+	channelManager.AddChannel("last", ichannel.BehaviorLastValue)
+	execCtx := &ExecutionContext{
+		channels:                channelManager,
+		traceChannelSources:     make(map[string][]string),
+		traceChannelSourceSteps: make(map[string]int),
+	}
+	exec.recordTraceChannelSource(execCtx, "last", "", "s1", 1)
+	exec.recordTraceChannelSource(execCtx, "last", "", "s2", 1)
+	require.Equal(t, []string{"s1", "s2"}, exec.tracePredecessorsForChannels(execCtx, []string{"last"}))
+	exec.recordTraceChannelSource(execCtx, "last", "", "s3", 2)
+	require.Equal(t, []string{"s3"}, exec.tracePredecessorsForChannels(execCtx, []string{"last"}))
+}
+
 func TestExecutor_DisableGraphExecutorEvents_SuppressesEventHelpers(t *testing.T) {
 	exec := &Executor{}
 	eventCh := make(chan *event.Event, 8)
@@ -3173,7 +3274,7 @@ func TestProcessConditionalEdgesConcurrency(t *testing.T) {
 
 	// Repeatedly process conditional edges; should not panic.
 	for i := 0; i < 200; i++ {
-		require.NoError(t, exec.processConditionalEdges(context.Background(), nil, execCtx, "start", i), "conditional processing failed.")
+		require.NoError(t, exec.processConditionalEdges(context.Background(), nil, execCtx, &Task{NodeID: "start", TaskID: fmt.Sprintf("start-%d", i)}, i), "conditional processing failed.")
 	}
 	close(stopCh)
 }
@@ -3206,7 +3307,7 @@ func TestProcessConditionalEdges_DedupMulti(t *testing.T) {
 	)
 
 	// Process and verify only one update per target channel.
-	require.NoError(t, exec.processConditionalEdges(context.Background(), nil, execCtx, "start", 0))
+	require.NoError(t, exec.processConditionalEdges(context.Background(), nil, execCtx, &Task{NodeID: "start", TaskID: "start-0"}, 0))
 	// The dynamic branch channels should exist only on the per-execution
 	// channel manager and each receive a single update.
 	chB, okB := execCtx.channels.GetChannel(ChannelBranchPrefix + "B")
@@ -3254,7 +3355,7 @@ func TestProcessConditionalEdges_Multi_Error(t *testing.T) {
 	}
 
 	err = exec.processConditionalEdges(
-		context.Background(), nil, execCtx, nodeStart, 0,
+		context.Background(), nil, execCtx, &Task{NodeID: nodeStart, TaskID: nodeStart + "-0"}, 0,
 	)
 	require.Error(t, err)
 	// Wrapped error should include the node id and original message.
@@ -3297,7 +3398,7 @@ func TestProcessConditionalEdges_Condition_Error(t *testing.T) {
 	}
 
 	err = exec.processConditionalEdges(
-		context.Background(), nil, execCtx, nodeStart, 0,
+		context.Background(), nil, execCtx, &Task{NodeID: nodeStart, TaskID: nodeStart + "-0"}, 0,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), msgPrefix+nodeStart)
@@ -3343,7 +3444,7 @@ func TestProcessConditionalEdges_Multi_SkipEmpty(t *testing.T) {
 	)
 
 	require.NoError(t, exec.processConditionalEdges(
-		context.Background(), nil, execCtx, nodeStart, 0,
+		context.Background(), nil, execCtx, &Task{NodeID: nodeStart, TaskID: nodeStart + "-0"}, 0,
 	))
 
 	// Expect channels only for B and C, one update each.
@@ -4150,6 +4251,13 @@ func TestExecutor_taskInvocationContext_CoversBranches(t *testing.T) {
 		parentBranch+agent.BranchDelimiter+nodeID,
 		gotInv.Branch,
 	)
+
+	inv = &agent.Invocation{InvocationID: invocationID, AgentName: "graph", RunOptions: agent.RunOptions{ExecutionTraceEnabled: true}}
+	require.Equal(t, "graph", agent.InvocationTraceNodeID(inv))
+	gotInv, gotCtx = exec.taskInvocationContext(ctx, inv, task)
+	require.NotNil(t, gotInv)
+	require.NotNil(t, gotCtx)
+	require.Equal(t, "graph", agent.InvocationTraceNodeID(gotInv))
 }
 
 func TestExecutor_executeStepTask_RecoversFromPanic(t *testing.T) {

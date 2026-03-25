@@ -93,6 +93,7 @@ func isUnsafeStateKey(key string) bool {
 		StateKeyModelCallbacks,
 		StateKeyAgentCallbacks,
 		StateKeyCurrentNodeID,
+		currentTraceStepIDStateKey,
 		StateKeySession,
 		StateKeyGraphInterruptInputs:
 		return true
