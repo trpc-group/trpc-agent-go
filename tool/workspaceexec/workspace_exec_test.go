@@ -78,6 +78,19 @@ func TestExecTool_Declaration_DescribesGeneralShellUsage(t *testing.T) {
 	require.Contains(t, decl.Description, "current executor environment allows them")
 }
 
+func TestExecTool_Declaration_NonInteractiveOmitsSessionFields(t *testing.T) {
+	tl := NewExecTool(&nonInteractiveExec{})
+
+	decl := tl.Declaration()
+	require.NotNil(t, decl)
+	require.NotContains(t, decl.Description, "workspace_write_stdin")
+	require.NotContains(t, decl.Description, "background=true")
+	_, hasBackground := decl.InputSchema.Properties["background"]
+	require.False(t, hasBackground)
+	_, hasYield := decl.InputSchema.Properties["yield_time_ms"]
+	require.False(t, hasYield)
+}
+
 func TestExecTool_UsesExistingStagedSkillFromCWD(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -266,6 +279,124 @@ func TestExecTool_BackgroundAndWriteStdin(t *testing.T) {
 	require.Contains(t, out.Output, "out:hello")
 }
 
+func TestExecTool_ParseExecInput_Validation(t *testing.T) {
+	_, err := parseExecInput([]byte(`{`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid args")
+
+	_, err = parseExecInput([]byte(`{"command":"   "}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "command is required")
+}
+
+func TestExecTool_NormalizeCWD(t *testing.T) {
+	cwd, err := normalizeCWD("")
+	require.NoError(t, err)
+	require.Equal(t, ".", cwd)
+
+	cwd, err = normalizeCWD("/")
+	require.NoError(t, err)
+	require.Equal(t, ".", cwd)
+
+	cwd, err = normalizeCWD("/out/demo")
+	require.NoError(t, err)
+	require.Equal(t, "out/demo", cwd)
+
+	cwd, err = normalizeCWD("${OUTPUT_DIR}/demo")
+	require.NoError(t, err)
+	require.Equal(t, "out/demo", cwd)
+
+	cwd, err = normalizeCWD("skills/demo")
+	require.NoError(t, err)
+	require.Equal(t, "skills/demo", cwd)
+
+	_, err = normalizeCWD("out/*.zip")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "glob patterns")
+
+	_, err = normalizeCWD("../secret")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stay within the workspace")
+
+	_, err = normalizeCWD("tmp/demo")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "supported workspace roots")
+}
+
+func TestExecTool_HelperFunctions(t *testing.T) {
+	require.Equal(t, 5*time.Second, execTimeout(5))
+	require.Equal(t, defaultWorkspaceExecTimeout, execTimeout(0))
+
+	require.Equal(t, 0*time.Millisecond, execYield(true, nil))
+	require.Equal(t, 120*time.Millisecond, execYield(true, intPtr(120)))
+	require.Equal(
+		t,
+		programsession.YieldDuration(0, programsession.DefaultExecYieldMS),
+		execYield(false, nil),
+	)
+	require.Equal(
+		t,
+		programsession.YieldDuration(75, programsession.DefaultExecYieldMS),
+		execYield(false, intPtr(75)),
+	)
+
+	require.Equal(
+		t,
+		time.Duration(defaultWorkspaceWriteYield)*time.Millisecond,
+		writeYield(nil),
+	)
+	require.Equal(t, 0*time.Millisecond, writeYield(intPtr(0)))
+	require.Equal(t, 25*time.Millisecond, writeYield(intPtr(25)))
+
+	require.Equal(t, "stderr", combineOutput("", "stderr"))
+	require.Equal(t, "stdout", combineOutput("stdout", ""))
+	require.Equal(t, "stdoutstderr", combineOutput("stdout", "stderr"))
+
+	require.Nil(t, firstIntPtr(nil, nil))
+	require.Equal(t, 7, *firstIntPtr(nil, intPtr(7)))
+	require.Equal(t, 0, firstIntValue(nil, nil))
+	require.Equal(t, 8, firstIntValue(nil, intPtr(8)))
+	require.False(t, firstBoolValue(nil, nil))
+	require.True(t, firstBoolValue(nil, boolPtr(true)))
+	require.Equal(t, "", firstNonEmpty("", "   "))
+	require.Equal(t, "abc", firstNonEmpty("", " abc "))
+
+	require.True(t, hasEnvPrefix("$WORK_DIR/demo", codeexecutor.EnvWorkDir))
+	require.True(t, hasEnvPrefix("${OUTPUT_DIR}/demo", codeexecutor.EnvOutputDir))
+	require.False(t, hasEnvPrefix("$OUTPUT_DIR_demo", codeexecutor.EnvOutputDir))
+
+	require.True(t, isWorkspaceEnvPath("$WORK_DIR/demo"))
+	require.True(t, isWorkspaceEnvPath("${SKILLS_DIR}/demo"))
+	require.False(t, isWorkspaceEnvPath("/tmp/demo"))
+
+	require.True(t, isAllowedWorkspacePath("skills/demo"))
+	require.True(t, isAllowedWorkspacePath("work/demo"))
+	require.True(t, isAllowedWorkspacePath("out/demo"))
+	require.True(t, isAllowedWorkspacePath("runs/demo"))
+	require.False(t, isAllowedWorkspacePath("tmp/demo"))
+}
+
+func TestExecTool_LiveEngine_Errors(t *testing.T) {
+	var nilTool *ExecTool
+	_, err := nilTool.liveEngine()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires an executor")
+
+	_, err = (&ExecTool{exec: &noEngineExec{}}).liveEngine()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "EngineProvider")
+
+	_, err = (&ExecTool{exec: &badEngineExec{}}).liveEngine()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "live workspace support")
+}
+
+func TestExecTool_Call_NotConfigured(t *testing.T) {
+	_, err := (&ExecTool{}).Call(context.Background(), []byte(`{"command":"echo hi"}`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "workspace_exec is not configured")
+}
+
 func TestExecTool_WriteStdin_AliasFieldsAndSubmit(t *testing.T) {
 	exec := localexec.New()
 	execTool := NewExecTool(exec)
@@ -404,6 +535,110 @@ func TestExecTool_KillSession_AliasSessionID(t *testing.T) {
 	out := res.(killOutput)
 	require.True(t, out.OK)
 	require.Equal(t, started.SessionID, out.SessionID)
+}
+
+func TestExecTool_WriteStdin_ValidationErrors(t *testing.T) {
+	t.Run("tool not configured", func(t *testing.T) {
+		_, err := (&WriteStdinTool{}).Call(context.Background(), []byte(`{}`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "workspace_write_stdin is not configured")
+	})
+
+	t.Run("invalid args", func(t *testing.T) {
+		_, err := NewWriteStdinTool(NewExecTool(localexec.New())).Call(context.Background(), []byte(`{`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid args")
+	})
+
+	t.Run("missing session id", func(t *testing.T) {
+		_, err := NewWriteStdinTool(NewExecTool(localexec.New())).Call(context.Background(), []byte(`{}`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "session_id is required")
+	})
+
+	t.Run("unknown session", func(t *testing.T) {
+		enc, err := json.Marshal(writeInput{SessionID: "missing"})
+		require.NoError(t, err)
+		_, err = NewWriteStdinTool(NewExecTool(localexec.New())).Call(context.Background(), enc)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unknown session_id")
+	})
+
+	t.Run("write failure", func(t *testing.T) {
+		execTool := &ExecTool{
+			sessions: map[string]*execSession{},
+			ttl:      programsession.DefaultSessionTTL,
+			clock:    time.Now,
+		}
+		execTool.putSession("sess-write-fail", &execSession{
+			proc: writeFailProgramSession{
+				poll: codeexecutor.ProgramPoll{Status: codeexecutor.ProgramStatusRunning},
+				err:  errors.New("write failed"),
+			},
+		})
+		writeTool := NewWriteStdinTool(execTool)
+		enc, err := json.Marshal(writeInput{SessionID: "sess-write-fail", Chars: "hi"})
+		require.NoError(t, err)
+
+		_, err = writeTool.Call(context.Background(), enc)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "write failed")
+	})
+}
+
+func TestExecTool_KillSession_ValidationAndExitedStatus(t *testing.T) {
+	t.Run("tool not configured", func(t *testing.T) {
+		_, err := (&KillSessionTool{}).Call(context.Background(), []byte(`{}`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "workspace_kill_session is not configured")
+	})
+
+	t.Run("invalid args", func(t *testing.T) {
+		_, err := NewKillSessionTool(NewExecTool(localexec.New())).Call(context.Background(), []byte(`{`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid args")
+	})
+
+	t.Run("missing session id", func(t *testing.T) {
+		_, err := NewKillSessionTool(NewExecTool(localexec.New())).Call(context.Background(), []byte(`{}`))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "session_id is required")
+	})
+
+	t.Run("unknown session", func(t *testing.T) {
+		enc, err := json.Marshal(killInput{SessionID: "missing"})
+		require.NoError(t, err)
+		_, err = NewKillSessionTool(NewExecTool(localexec.New())).Call(context.Background(), enc)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unknown session_id")
+	})
+
+	t.Run("already exited", func(t *testing.T) {
+		execTool := &ExecTool{
+			sessions: map[string]*execSession{},
+			ttl:      programsession.DefaultSessionTTL,
+			clock:    time.Now,
+		}
+		execTool.putSession("sess-exited", &execSession{
+			proc: failingProgramSession{
+				poll: codeexecutor.ProgramPoll{
+					Status:   codeexecutor.ProgramStatusExited,
+					ExitCode: intPtr(0),
+				},
+			},
+		})
+		killTool := NewKillSessionTool(execTool)
+		enc, err := json.Marshal(killInput{SessionID: "sess-exited"})
+		require.NoError(t, err)
+
+		res, err := killTool.Call(context.Background(), enc)
+		require.NoError(t, err)
+		out := res.(killOutput)
+		require.True(t, out.OK)
+		require.Equal(t, "exited", out.Status)
+		_, err = execTool.getSession("sess-exited")
+		require.Error(t, err)
+	})
 }
 
 func TestExecTool_KillSession_KillFailurePreservesSession(t *testing.T) {
@@ -569,6 +804,23 @@ func (p failingProgramSession) Write(string, bool) error { return nil }
 func (p failingProgramSession) Kill(time.Duration) error { return p.err }
 func (p failingProgramSession) Close() error             { return p.closeErr }
 
+type writeFailProgramSession struct {
+	poll codeexecutor.ProgramPoll
+	err  error
+}
+
+func (p writeFailProgramSession) ID() string                           { return "write-fail" }
+func (p writeFailProgramSession) Poll(_ *int) codeexecutor.ProgramPoll { return p.poll }
+func (p writeFailProgramSession) State() codeexecutor.ProgramState {
+	return codeexecutor.ProgramState{Status: p.poll.Status}
+}
+func (p writeFailProgramSession) Log(_, _ *int) codeexecutor.ProgramLog {
+	return codeexecutor.ProgramLog{}
+}
+func (p writeFailProgramSession) Write(string, bool) error { return p.err }
+func (p writeFailProgramSession) Kill(time.Duration) error { return nil }
+func (p writeFailProgramSession) Close() error             { return nil }
+
 type nonInteractiveExec struct{}
 
 func (e *nonInteractiveExec) ExecuteCode(
@@ -580,6 +832,36 @@ func (e *nonInteractiveExec) ExecuteCode(
 
 func (e *nonInteractiveExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+type noEngineExec struct{}
+
+func (e *noEngineExec) ExecuteCode(
+	context.Context,
+	codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (e *noEngineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+type badEngineExec struct{}
+
+func (e *badEngineExec) ExecuteCode(
+	context.Context,
+	codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (e *badEngineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+func (e *badEngineExec) Engine() codeexecutor.Engine {
+	return codeexecutor.NewEngine(nil, nil, nil)
 }
 
 func (e *nonInteractiveExec) Engine() codeexecutor.Engine {

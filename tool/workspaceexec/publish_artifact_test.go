@@ -206,6 +206,24 @@ func TestPublishArtifactTool_NormalizesPathVariants(t *testing.T) {
 	require.Equal(t, "out/site.zip", rel)
 }
 
+func TestPublishArtifactTool_NormalizePathValidation(t *testing.T) {
+	_, err := normalizeArtifactPath("")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "path is required")
+
+	_, err = normalizeArtifactPath("/")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "inside the workspace")
+
+	_, err = normalizeArtifactPath("../site.zip")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stay within the workspace")
+
+	_, err = normalizeArtifactPath("tmp/site.zip")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "supported publish roots")
+}
+
 func TestPublishArtifactTool_RejectsMissingFile(t *testing.T) {
 	exec := localexec.New()
 	reg := codeexecutor.NewWorkspaceRegistry()
@@ -304,6 +322,45 @@ func TestPublishArtifactTool_StateDeltaFallbacks(t *testing.T) {
 	artifacts := parsed["artifacts"].([]any)
 	artifactMap := artifacts[0].(map[string]any)
 	require.Equal(t, "artifact://out/site.zip@3", artifactMap["ref"])
+
+	require.Nil(t, tl.StateDelta("call-3", nil, []byte(`{"saved_as":"","version":1}`)))
+	require.Nil(t, tl.StateDelta("call-4", nil, []byte(`{"saved_as":"out/site.zip","version":-1}`)))
+}
+
+func TestPublishArtifactTool_ArtifactContextHelpers(t *testing.T) {
+	require.Equal(t, publishReasonNoInvocation, artifactPublishSkipReason(context.Background()))
+
+	noSvc := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{
+			ID:      "sess",
+			AppName: "app",
+			UserID:  "user",
+		}),
+	))
+	require.Equal(t, publishReasonNoService, artifactPublishSkipReason(noSvc))
+
+	noSession := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+	))
+	require.Equal(t, publishReasonNoSession, artifactPublishSkipReason(noSession))
+
+	incompleteSession := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationArtifactService(inmemory.NewService()),
+		agent.WithInvocationSession(&session.Session{ID: "sess"}),
+	))
+	require.Equal(t, publishReasonNoSessionIDs, artifactPublishSkipReason(incompleteSession))
+
+	ctx := publishArtifactContext()
+	require.Equal(t, "", artifactPublishSkipReason(ctx))
+
+	ctx = withArtifactContext(ctx)
+	_, ok := codeexecutor.ArtifactServiceFromContext(ctx)
+	require.True(t, ok)
+	_, err := codeexecutor.SaveArtifactHelper(ctx, "out/site.zip", []byte("payload"), "text/plain")
+	require.NoError(t, err)
 }
 
 func publishArtifactContext() context.Context {
