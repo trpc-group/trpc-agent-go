@@ -39,6 +39,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -669,6 +670,7 @@ func NewRuntime(
 
 	runnerOpts := []runner.Option{
 		runner.WithSessionService(sessionSvc),
+		runner.WithPlugins(conversation.Plugin{}),
 	}
 	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
@@ -713,6 +715,19 @@ func NewRuntime(
 			),
 		)
 	}
+	gwOpts = append(
+		gwOpts,
+		gateway.WithRunOptionResolver(
+			buildConversationRunOptionResolver(
+				opts.AppName,
+				sessionSvc,
+				conversation.HistoryOptions{
+					AddSessionSummary: opts.AddSessionSummary,
+					MaxHistoryRuns:    opts.MaxHistoryRuns,
+				},
+			),
+		),
+	)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return nil, &exitError{
@@ -1059,6 +1074,7 @@ func run(ctx context.Context, args []string) error {
 
 	runnerOpts := []runner.Option{
 		runner.WithSessionService(sessionSvc),
+		runner.WithPlugins(conversation.Plugin{}),
 	}
 	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
@@ -1101,6 +1117,19 @@ func run(ctx context.Context, args []string) error {
 			),
 		)
 	}
+	gwOpts = append(
+		gwOpts,
+		gateway.WithRunOptionResolver(
+			buildConversationRunOptionResolver(
+				opts.AppName,
+				sessionSvc,
+				conversation.HistoryOptions{
+					AddSessionSummary: opts.AddSessionSummary,
+					MaxHistoryRuns:    opts.MaxHistoryRuns,
+				},
+			),
+		),
+	)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return &exitError{
