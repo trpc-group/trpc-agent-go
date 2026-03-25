@@ -331,7 +331,8 @@ Real discovery/install demo (real model + real web/GitHub):
 It starts with a built-in `skill-find` skill, searches the public web for
 candidate skills, installs a public skill from GitHub into a user-private
 directory, refreshes the repository, and uses the new skill in the same
-conversation.
+conversation. Local execution stays disabled by default and is only
+enabled when you opt in.
 
 SkillLoadMode demo (no API key required):
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)

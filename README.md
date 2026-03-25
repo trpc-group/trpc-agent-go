@@ -582,6 +582,8 @@ Examples: [examples/skillrun](examples/skillrun),
   the model uses a built-in `skill-find` skill to search the public web,
   install a public GitHub skill into a user-private directory, refresh
   the repository, and use the new skill in the same conversation.
+  Local execution stays off by default and can be enabled explicitly
+  when you want to run an installed skill.
 
 ### 12. Artifacts
 

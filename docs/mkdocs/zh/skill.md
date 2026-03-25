@@ -312,7 +312,8 @@ GAIA 基准示例（技能 + 文件工具）：
 这个示例从内置的 `skill-find` skill 出发，先到公网搜索候选
 skills，再把 GitHub 上的公开 skill 安装到用户私有目录中，调用
 `repo.Refresh()` 让仓库立即重新发现，然后在同一个会话里继续使用
-新 skill。
+新 skill。默认不会执行下载下来的代码，只有显式开启后才允许
+`skill_run`。
 
 SkillLoadMode 演示（无需 API key）：
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)

@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -114,6 +115,9 @@ func TestGitHubInstallerInstall(t *testing.T) {
 	if !resp.Refreshed {
 		t.Fatal("expected repo refresh to happen")
 	}
+	if !containsString(resp.InstalledFiles, "scripts/hello.sh") {
+		t.Fatalf("installed files = %v", resp.InstalledFiles)
+	}
 
 	sk, err := repo.Get("hello")
 	if err != nil {
@@ -167,6 +171,22 @@ func TestGitHubInstallerInstall_FallbackToArchive(t *testing.T) {
 	if got, want := resp.SkillName, "hello"; got != want {
 		t.Fatalf("skill name = %q, want %q", got, want)
 	}
+	if !resp.Refreshed {
+		t.Fatal("expected repo refresh to happen")
+	}
+	if !containsString(resp.InstalledFiles, "scripts/hello.sh") {
+		t.Fatalf("installed files = %v", resp.InstalledFiles)
+	}
+
+	sk, err := repo.Get("hello")
+	if err != nil {
+		t.Fatalf("repo.Get() error = %v", err)
+	}
+	if got, want := sk.Summary.Description,
+		"Archive install."; got != want {
+		t.Fatalf("description = %q, want %q", got, want)
+	}
+
 	scriptPath := filepath.Join(resp.InstallDir, "scripts", "hello.sh")
 	info, err := os.Stat(scriptPath)
 	if err != nil {
@@ -174,6 +194,48 @@ func TestGitHubInstallerInstall_FallbackToArchive(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != executableFileMode {
 		t.Fatalf("mode = %v, want %v", got, executableFileMode)
+	}
+}
+
+func TestExtractArchiveFile_RespectsRemainingBytes(t *testing.T) {
+	var buf bytes.Buffer
+	writer := zip.NewWriter(&buf)
+
+	file, err := writer.Create("repo-main/skills/hello/notes.txt")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := file.Write([]byte("123456")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reader, err := zip.NewReader(
+		bytes.NewReader(buf.Bytes()),
+		int64(buf.Len()),
+	)
+	if err != nil {
+		t.Fatalf("NewReader() error = %v", err)
+	}
+
+	stats := &installStats{
+		totalBytes: maxInstallBytes - 5,
+	}
+	destDir := t.TempDir()
+	err = extractArchiveFile(
+		reader.File[0],
+		destDir,
+		"notes.txt",
+		stats,
+	)
+	if err == nil {
+		t.Fatal("expected total size limit error")
+	}
+	want := "skill exceeds total size limit"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %q, want substring %q", err, want)
 	}
 }
 
@@ -318,4 +380,13 @@ func buildGitHubArchive(t *testing.T) []byte {
 		t.Fatalf("Close() error = %v", err)
 	}
 	return buf.Bytes()
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

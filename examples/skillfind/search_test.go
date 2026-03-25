@@ -9,7 +9,10 @@
 
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseDDGHTML(t *testing.T) {
 	html := "<a class=\"result__a\" href=\"" +
@@ -67,5 +70,60 @@ func TestParseDDGHTML_IgnoresDuckDuckGoInternalLinks(t *testing.T) {
 		"SKILL.md"
 	if got := results[0].URL; got != want {
 		t.Fatalf("url = %q, want %q", got, want)
+	}
+}
+
+func TestSanitizeSearchLimit(t *testing.T) {
+	testCases := []struct {
+		name  string
+		input int
+		want  int
+	}{
+		{
+			name:  "default for zero",
+			input: 0,
+			want:  defaultMaxResults,
+		},
+		{
+			name:  "default for negative",
+			input: -1,
+			want:  defaultMaxResults,
+		},
+		{
+			name:  "keep small positive",
+			input: 3,
+			want:  3,
+		},
+		{
+			name:  "clamp large value",
+			input: maxSearchResults + 7,
+			want:  maxSearchResults,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizeSearchLimit(tc.input); got != tc.want {
+				t.Fatalf("sanitizeSearchLimit() = %d, want %d",
+					got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseDDGHTML_ClampsLargeLimit(t *testing.T) {
+	var builder strings.Builder
+	for i := 0; i < maxSearchResults+5; i++ {
+		builder.WriteString(`<a class="result__a" href="https://github.com/`)
+		builder.WriteString("owner/repo/blob/main/skills/hello")
+		builder.WriteString(`">hello</a>`)
+		builder.WriteString(
+			`<a class="result__snippet">simple skill</a>`,
+		)
+	}
+
+	results := parseDDGHTML(builder.String(), maxSearchResults+5)
+	if got, want := len(results), maxSearchResults; got != want {
+		t.Fatalf("len(results) = %d, want %d", got, want)
 	}
 }

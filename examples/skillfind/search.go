@@ -32,6 +32,7 @@ const (
 	ddgHTTPTimeout     = 30 * time.Second
 
 	defaultMaxResults = 5
+	maxSearchResults  = 20
 
 	httpPrefix  = "http://"
 	httpsPrefix = "https://"
@@ -90,10 +91,7 @@ func webSearch(
 		return webSearchResponse{Error: "query is required"}, nil
 	}
 
-	limit := req.Limit
-	if limit <= 0 {
-		limit = defaultMaxResults
-	}
+	limit := sanitizeSearchLimit(req.Limit)
 
 	formData := url.Values{}
 	formData.Set(ddgFormQueryKey, query)
@@ -147,6 +145,8 @@ func webSearch(
 }
 
 func parseDDGHTML(html string, limit int) []webSearchResult {
+	limit = sanitizeSearchLimit(limit)
+
 	linkRe := regexp.MustCompile(ddgLinkPattern)
 	linkMatches := linkRe.FindAllStringSubmatch(html, -1)
 
@@ -180,6 +180,16 @@ func parseDDGHTML(html string, limit int) []webSearchResult {
 		})
 	}
 	return results
+}
+
+func sanitizeSearchLimit(limit int) int {
+	if limit <= 0 {
+		return defaultMaxResults
+	}
+	if limit > maxSearchResults {
+		return maxSearchResults
+	}
+	return limit
 }
 
 func normalizeSearchURL(raw string) string {

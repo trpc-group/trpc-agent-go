@@ -72,14 +72,15 @@ type gitHubInstallRequest struct {
 }
 
 type gitHubInstallResponse struct {
-	SkillName   string `json:"skill_name"`
-	InstallDir  string `json:"install_dir"`
-	SourceURL   string `json:"source_url"`
-	FileCount   int    `json:"file_count"`
-	TotalBytes  int64  `json:"total_bytes"`
-	Refreshed   bool   `json:"refreshed"`
-	Description string `json:"description,omitempty"`
-	Message     string `json:"message"`
+	SkillName      string   `json:"skill_name"`
+	InstallDir     string   `json:"install_dir"`
+	SourceURL      string   `json:"source_url"`
+	FileCount      int      `json:"file_count"`
+	InstalledFiles []string `json:"installed_files,omitempty"`
+	TotalBytes     int64    `json:"total_bytes"`
+	Refreshed      bool     `json:"refreshed"`
+	Description    string   `json:"description,omitempty"`
+	Message        string   `json:"message"`
 }
 
 type gitHubInstaller struct {
@@ -107,6 +108,7 @@ type gitHubContentItem struct {
 
 type installStats struct {
 	fileCount  int
+	files      []string
 	totalBytes int64
 }
 
@@ -206,13 +208,14 @@ func (i *gitHubInstaller) install(
 	}
 
 	return gitHubInstallResponse{
-		SkillName:   skillName,
-		InstallDir:  finalDir,
-		SourceURL:   strings.TrimSpace(req.URL),
-		FileCount:   stats.fileCount,
-		TotalBytes:  stats.totalBytes,
-		Refreshed:   refreshed,
-		Description: desc,
+		SkillName:      skillName,
+		InstallDir:     finalDir,
+		SourceURL:      strings.TrimSpace(req.URL),
+		FileCount:      stats.fileCount,
+		InstalledFiles: stats.files,
+		TotalBytes:     stats.totalBytes,
+		Refreshed:      refreshed,
+		Description:    desc,
 		Message: fmt.Sprintf(
 			"installed %q from GitHub; call skill_load with "+
 				"skill=%q next",
@@ -731,8 +734,7 @@ func (i *gitHubInstaller) downloadFile(
 		)
 	}
 
-	stats.fileCount++
-	stats.totalBytes += written
+	recordInstalledFile(stats, relPath, written)
 	if err := applyInstalledFileMode(destPath, relPath, 0); err != nil {
 		return err
 	}
@@ -763,6 +765,13 @@ func extractArchiveFile(
 			maxSingleFileBytes,
 		)
 	}
+	remainingBytes := maxInstallBytes - stats.totalBytes
+	if remainingBytes <= 0 {
+		return fmt.Errorf(
+			"skill exceeds total size limit of %d bytes",
+			maxInstallBytes,
+		)
+	}
 
 	destPath := filepath.Join(destDir, filepath.FromSlash(relPath))
 	if err := ensurePathInside(destDir, destPath); err != nil {
@@ -788,9 +797,21 @@ func extractArchiveFile(
 	}
 	defer out.Close()
 
-	written, err := io.Copy(out, reader)
+	copyLimit := int64(maxSingleFileBytes)
+	if remainingBytes < copyLimit {
+		copyLimit = remainingBytes
+	}
+	limitedReader := io.LimitReader(reader, copyLimit+1)
+	written, err := io.Copy(out, limitedReader)
 	if err != nil {
 		return fmt.Errorf("extract file: %w", err)
+	}
+	if written > maxSingleFileBytes {
+		return fmt.Errorf(
+			"file %q exceeds size limit of %d bytes",
+			relPath,
+			maxSingleFileBytes,
+		)
 	}
 	if stats.totalBytes+written > maxInstallBytes {
 		return fmt.Errorf(
@@ -799,8 +820,7 @@ func extractArchiveFile(
 		)
 	}
 
-	stats.fileCount++
-	stats.totalBytes += written
+	recordInstalledFile(stats, relPath, written)
 	if err := applyInstalledFileMode(
 		destPath,
 		relPath,
@@ -820,6 +840,16 @@ func ensurePathInside(root string, target string) error {
 		return nil
 	}
 	return fmt.Errorf("path %q escapes install root", target)
+}
+
+func recordInstalledFile(
+	stats *installStats,
+	relPath string,
+	written int64,
+) {
+	stats.fileCount++
+	stats.totalBytes += written
+	stats.files = append(stats.files, filepath.ToSlash(relPath))
 }
 
 func applyInstalledFileMode(

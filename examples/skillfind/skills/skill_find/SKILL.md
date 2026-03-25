@@ -1,6 +1,6 @@
 ---
 name: skill-find
-description: Find a public Agent Skill on GitHub, install it, and use it.
+description: Find a public Agent Skill on GitHub, install it, and load it.
 ---
 
 Overview
@@ -20,12 +20,18 @@ Workflow
 3. Call `skill_install_github` with that GitHub URL.
 
 4. Read the tool result carefully.
-   It returns the exact `skill_name` that was installed.
+   It returns the exact `skill_name` that was installed and may also
+   include `installed_files`.
 
 5. Immediately call `skill_load` with the returned `skill_name`.
 
-6. If the user asked for a runnable demo, follow the installed skill
-   docs and use `skill_run`.
+6. Only if local execution is explicitly enabled for this demo and the
+   user asked for a runnable demo, follow the installed skill docs and
+   use `skill_run`.
+
+7. If the docs are brief, use `installed_files` to avoid guessing.
+   Prefer obvious entrypoint files such as `run.sh` or scripts under
+   `scripts/`.
 
 Rules
 
@@ -33,5 +39,6 @@ Rules
 - Prefer GitHub results that point directly to a skill, not a repo home
   page.
 - Tell the user which skill you installed and where it came from.
+- Never run downloaded code automatically.
 - If installation fails, explain the failure briefly and try another
   candidate.

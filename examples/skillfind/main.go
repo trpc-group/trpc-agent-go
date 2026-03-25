@@ -37,7 +37,8 @@ const (
 	skillFindAppName   = "skillfind-example"
 	skillFindAgentName = "skillfind-agent"
 
-	defaultUserID = "demo-user"
+	defaultModelNameValue = "gpt-5.2"
+	defaultUserID         = "demo-user"
 
 	exitCommand  = "exit"
 	newCommand   = "/new"
@@ -45,17 +46,25 @@ const (
 	resetCommand = "/reset-skills"
 )
 
-const agentInstruction = `
+const agentInstructionBase = `
 You are a skill-enabled assistant.
 
 If the user asks to find, install, or try a public Agent Skill, load the
 local skill named "skill-find" first.
 
 After skill_install_github succeeds, use the returned skill_name with
-skill_load. If the installed skill documents a safe demo command, follow
-the docs and use skill_run.
+skill_load.
 
 Explain briefly which public skill you installed and what happened.`
+
+const agentInstructionRunDisabled = `
+Local execution is disabled for this demo. Do not call skill_run. Search,
+install, and load skills only.`
+
+const agentInstructionRunEnabled = `
+Local execution is enabled for this demo. Do not call skill_run unless
+the user explicitly asks to run the installed skill. Never execute
+downloaded code automatically.`
 
 type skillFindChat struct {
 	modelName       string
@@ -64,6 +73,7 @@ type skillFindChat struct {
 	userID          string
 	sessionID       string
 	oneShotPrompt   string
+	allowSkillRun   bool
 	resetUserSkills bool
 
 	repo   *skill.FSRepository
@@ -80,6 +90,7 @@ func main() {
 		userID:          flags.userID,
 		sessionID:       newSessionID(),
 		oneShotPrompt:   flags.oneShotPrompt,
+		allowSkillRun:   flags.allowSkillRun,
 		resetUserSkills: flags.resetUserSkills,
 	}
 
@@ -94,6 +105,7 @@ type cliFlags struct {
 	userSkillsDir   string
 	userID          string
 	oneShotPrompt   string
+	allowSkillRun   bool
 	resetUserSkills bool
 }
 
@@ -127,6 +139,11 @@ func parseFlags() cliFlags {
 		"",
 		"Optional one-shot prompt to run and exit",
 	)
+	allowSkillRun := flag.Bool(
+		"allow-skill-run",
+		false,
+		"Allow the demo to execute installed skill commands locally",
+	)
 	resetUserSkills := flag.Bool(
 		"reset-user-skills",
 		false,
@@ -140,6 +157,7 @@ func parseFlags() cliFlags {
 		userSkillsDir:   strings.TrimSpace(*userSkillsDir),
 		userID:          strings.TrimSpace(*userID),
 		oneShotPrompt:   strings.TrimSpace(*oneShotPrompt),
+		allowSkillRun:   *allowSkillRun,
 		resetUserSkills: *resetUserSkills,
 	}
 	if flags.userID == "" {
@@ -156,7 +174,7 @@ func defaultModelName() string {
 	if envModel := strings.TrimSpace(os.Getenv("MODEL_NAME")); envModel != "" {
 		return envModel
 	}
-	return "gpt-5.2"
+	return defaultModelNameValue
 }
 
 func defaultCommonSkillsDir() string {
@@ -223,22 +241,34 @@ func (c *skillFindChat) setup(_ context.Context) error {
 		newWebSearchTool(),
 		newGitHubInstallTool(c.userSkillsDir, repo),
 	}
-	agentInstance := llmagent.New(
-		skillFindAgentName,
+	opts := []llmagent.Option{
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription(
 			"Finds and installs public Agent Skills from GitHub.",
 		),
-		llmagent.WithInstruction(agentInstruction),
+		llmagent.WithInstruction(
+			buildAgentInstruction(c.allowSkillRun),
+		),
 		llmagent.WithSkills(repo),
 		llmagent.WithTools(tools),
-		llmagent.WithCodeExecutor(localexec.New()),
-		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithSkillsLoadedContentInToolResults(true),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
 			Stream:    true,
 			MaxTokens: intPtr(2400),
 		}),
+	}
+	profile := skillToolProfile(c.allowSkillRun)
+	opts = append(opts, llmagent.WithSkillToolProfile(profile))
+	if c.allowSkillRun {
+		opts = append(
+			opts,
+			llmagent.WithCodeExecutor(localexec.New()),
+			llmagent.WithEnableCodeExecutionResponseProcessor(false),
+		)
+	}
+	agentInstance := llmagent.New(
+		skillFindAgentName,
+		opts...,
 	)
 	c.runner = runner.NewRunner(skillFindAppName, agentInstance)
 	return nil
@@ -252,15 +282,18 @@ func (c *skillFindChat) printBanner() {
 	fmt.Printf("Common skills: %s\n", c.commonSkillsDir)
 	fmt.Printf("User skills: %s\n", c.userSkillsDir)
 	fmt.Println("Built-in demo skill: skill-find")
+	if c.allowSkillRun {
+		fmt.Println("Local skill execution: enabled")
+		fmt.Println("Execution still requires an explicit user request.")
+	} else {
+		fmt.Println("Local skill execution: disabled by default")
+		fmt.Println("Use -allow-skill-run to opt in to skill_run.")
+	}
 	fmt.Println()
 	fmt.Println("Try:")
-	fmt.Println(
-		`  Use the skill-find skill to find the public hello skill `,
-	)
-	fmt.Println(
-		`  from the OpenClaw skill pack on GitHub, install it, `,
-	)
-	fmt.Println(`  load it, and run it.`)
+	for _, line := range promptLines(c.allowSkillRun) {
+		fmt.Printf("  %s\n", line)
+	}
 	fmt.Println()
 	fmt.Printf("Commands: %s, %s, %s, %s\n",
 		newCommand,
@@ -299,7 +332,10 @@ func (c *skillFindChat) startInteractiveChat(
 			if err := c.resetUserSkillRoot(); err != nil {
 				return err
 			}
-			fmt.Println("User skill directory reset.")
+			fmt.Printf(
+				"User skill directory reset. New session: %s\n",
+				c.sessionID,
+			)
 			continue
 		}
 
@@ -429,9 +465,41 @@ func (c *skillFindChat) resetUserSkillRoot() error {
 	if err := c.repo.Refresh(); err != nil {
 		return fmt.Errorf("refresh skill repo: %w", err)
 	}
+	c.sessionID = newSessionID()
 	return nil
 }
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func buildAgentInstruction(allowSkillRun bool) string {
+	if allowSkillRun {
+		return agentInstructionBase + agentInstructionRunEnabled
+	}
+	return agentInstructionBase + agentInstructionRunDisabled
+}
+
+func skillToolProfile(
+	allowSkillRun bool,
+) llmagent.SkillToolProfile {
+	if allowSkillRun {
+		return llmagent.SkillToolProfileFull
+	}
+	return llmagent.SkillToolProfileKnowledgeOnly
+}
+
+func promptLines(allowSkillRun bool) []string {
+	if allowSkillRun {
+		return []string{
+			"Use the skill-find skill to find the public hello skill",
+			"from the OpenClaw skill pack on GitHub, install it,",
+			"load it, and run it.",
+		}
+	}
+	return []string{
+		"Use the skill-find skill to find the public hello skill",
+		"from the OpenClaw skill pack on GitHub, install it,",
+		"and load it.",
+	}
 }
