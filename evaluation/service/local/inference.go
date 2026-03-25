@@ -314,7 +314,7 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 	if len(seedMessages) > 0 {
 		mergedRunOptions = append(mergedRunOptions, agent.WithInjectedContextMessages(seedMessages))
 	}
-	inferences, err := inference.Inference(
+	inferenceResult, err := inference.Inference(
 		ctx,
 		s.runner,
 		evalCase.Conversation,
@@ -322,12 +322,16 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 		sessionID,
 		mergedRunOptions,
 	)
+	if inferenceResult != nil {
+		result.ExecutionTraces = inferenceResult.ExecutionTraces
+		inferences := inferenceResult.Invocations
+		attachContextMessages(inferences, evalCase.ContextMessages)
+		result.Inferences = inferences
+	}
 	if err != nil {
 		err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): %w", evalCase.EvalID, sessionID, err)
 		return newFailedInferenceResult(result, err)
 	}
-	attachContextMessages(inferences, evalCase.ContextMessages)
-	result.Inferences = inferences
 	result.Status = status.EvalStatusPassed
 	return result
 }

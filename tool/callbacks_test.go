@@ -762,6 +762,40 @@ func TestRunAfterTool_NormalizesResultOnlyForCallbackInvocation(t *testing.T) {
 	require.Nil(t, result.CustomResult)
 }
 
+func TestRunAfterTool_PreservesSkipSummarizationAcrossCallbacks(t *testing.T) {
+	callbacks := tool.NewCallbacks(tool.WithContinueOnResponse(true))
+	marker := map[string]string{"result": "callback"}
+	secondCalled := false
+
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: marker}, nil
+	})
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		secondCalled = true
+		return &tool.AfterToolResult{SkipSummarization: true}, nil
+	})
+
+	result, err := callbacks.RunAfterTool(context.Background(),
+		&tool.AfterToolArgs{
+			ToolName:    "test-tool",
+			Declaration: &tool.Declaration{Name: "test-tool"},
+			Arguments:   []byte("{}"),
+			Result:      map[string]any{"ok": true},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, secondCalled)
+	require.NotNil(t, result)
+	require.True(t, result.SkipSummarization)
+	require.Equal(t, marker, result.CustomResult)
+}
+
 func TestRunAfterTool_NoCallbacksPreservesOriginalResultShape(t *testing.T) {
 	callbacks := tool.NewCallbacks()
 

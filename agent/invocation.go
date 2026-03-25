@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonschema"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -120,6 +121,12 @@ type Invocation struct {
 
 	// parent is the parent invocation, if any
 	parent *Invocation
+	// traceCapture stores the shared execution trace capture for one root run.
+	traceCapture *tracecapture.Capture
+	// entryPredecessorStepIDs stores the predecessor step ids passed to this invocation entry.
+	entryPredecessorStepIDs []string
+	// traceNodeID stores the mounted static root node id for this invocation.
+	traceNodeID string
 
 	// state stores invocation-scoped state data (lazy initialized).
 	// Can be used by callbacks, middleware, or any invocation-scoped logic.
@@ -822,6 +829,9 @@ type RunOptions struct {
 	// DisablePartialEventTimestamps disables generating timestamps for partial response events.
 	DisablePartialEventTimestamps bool
 
+	// ExecutionTraceEnabled enables in-process execution trace recording for this run.
+	ExecutionTraceEnabled bool
+
 	// RequestID is the request id of the request.
 	RequestID string
 
@@ -995,6 +1005,7 @@ func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 	if inv.eventFilterKey == "" && inv.AgentName != "" {
 		inv.eventFilterKey = inv.AgentName
 	}
+	inv.initializeExecutionTrace()
 
 	return inv
 }
@@ -1017,6 +1028,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,
 		parent:          inv,
+		traceCapture:    inv.traceCapture,
 		state:           inv.cloneState(),
 	}
 
@@ -1036,6 +1048,13 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 
 	if newInv.eventFilterKey == "" && newInv.AgentName != "" {
 		newInv.eventFilterKey = newInv.AgentName
+	}
+	if newInv.traceCapture == nil {
+		newInv.initializeExecutionTrace()
+	}
+	if newInv.traceCapture != nil {
+		newInv.traceCapture.RegisterInvocation(inv.InvocationID, newInv.InvocationID)
+		newInv.ensureTraceCaptureMetadata()
 	}
 
 	return newInv
