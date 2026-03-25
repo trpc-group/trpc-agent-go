@@ -491,13 +491,19 @@ for event := range eventChan {
         }
     }
 
-    // Check if completed (note: should not break on tool call completion)
+    // Check whether the current response is complete.
     if event.IsFinalResponse() {
         fmt.Println()
         break
     }
 }
 ```
+
+This example uses `event.IsFinalResponse()` because it only cares about when
+the current reply has been fully printed. If you need to wait until the whole
+`Runner.Run` is truly over, such as when `tool.response` may be followed by
+extra processing or when using GraphAgent, use
+`event.IsRunnerCompletion()` as the loop exit condition instead.
 
 The complete code for this example can be found at [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
 
