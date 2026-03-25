@@ -56,6 +56,14 @@ func WithInsecure() Option {
 	}
 }
 
+// WithSecure configures the exporter to use secure connections.
+// This can be used to override insecure environment-derived defaults.
+func WithSecure() Option {
+	return func(cfg *config) {
+		cfg.insecure = false
+	}
+}
+
 // WithObservationLeafValueMaxBytes configures the max byte length for each leaf
 // value in Langfuse observation JSON payloads (and plain string observation values).
 //
@@ -76,6 +84,7 @@ type config struct {
 	host                         string
 	insecure                     bool
 	maxObservationLeafValueBytes *int
+	spanProcessorMode            SpanProcessorMode
 }
 
 // newConfigFromEnv creates a Langfuse config from environment variables.
@@ -94,6 +103,7 @@ func newConfigFromEnv() *config {
 		host:                         getEnv("LANGFUSE_HOST", ""),
 		insecure:                     getEnv("LANGFUSE_INSECURE", "") == "true",
 		maxObservationLeafValueBytes: leafBytes,
+		spanProcessorMode:            SpanProcessorModeBatch,
 	}
 }
 
