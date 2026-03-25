@@ -158,6 +158,9 @@ func (e *memoryExtractor) Extract(
 		if len(rsp.Choices) == 0 {
 			continue
 		}
+		// Choices are alternative candidates rather than cumulative
+		// tool-call batches, so only the selected primary choice
+		// should be converted into operations.
 		for _, call := range rsp.Choices[0].Message.ToolCalls {
 			op := e.parseToolCall(ctx, call)
 			if op != nil {

@@ -24,8 +24,8 @@ var backgroundToolCreators = map[string]func() tool.CallableTool{
 }
 
 // filterTools returns a new tool map containing only tools that are
-// enabled by the given set. A nil or empty set means all tools are
-// enabled.
+// enabled by the given set. A nil set keeps all tools enabled, while
+// a non-nil empty set disables all tools.
 func filterTools(
 	all map[string]tool.Tool,
 	enabled map[string]struct{},

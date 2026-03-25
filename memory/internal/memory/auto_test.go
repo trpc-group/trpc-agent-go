@@ -40,8 +40,9 @@ func appendSessionMessage(sess *session.Session, ts time.Time, msg model.Message
 
 // mockExtractor is a mock implementation of extractor.MemoryExtractor.
 type mockExtractor struct {
-	ops []*extractor.Operation
-	err error
+	ops             []*extractor.Operation
+	err             error
+	captureExisting func([]*memory.Entry)
 }
 
 func (m *mockExtractor) Extract(
@@ -51,6 +52,9 @@ func (m *mockExtractor) Extract(
 ) ([]*extractor.Operation, error) {
 	if m.err != nil {
 		return nil, m.err
+	}
+	if m.captureExisting != nil {
+		m.captureExisting(existing)
 	}
 	return m.ops, nil
 }
@@ -534,7 +538,7 @@ func TestAutoMemoryWorker_CreateAutoMemory_ExtractError(t *testing.T) {
 	assert.Contains(t, err.Error(), "extract failed")
 }
 
-func TestAutoMemoryWorker_CreateAutoMemory_ReadError(t *testing.T) {
+func TestAutoMemoryWorker_CreateAutoMemory_ExistingMemoryLookupError(t *testing.T) {
 	ext := &mockExtractor{
 		ops: []*extractor.Operation{
 			{
@@ -544,6 +548,7 @@ func TestAutoMemoryWorker_CreateAutoMemory_ReadError(t *testing.T) {
 		},
 	}
 	op := newMockOperator()
+	op.searchErr = errors.New("search error")
 	op.readErr = errors.New("read error")
 	config := AutoMemoryConfig{
 		Extractor: ext,
@@ -551,7 +556,7 @@ func TestAutoMemoryWorker_CreateAutoMemory_ReadError(t *testing.T) {
 
 	worker := NewAutoMemoryWorker(config, op)
 
-	// Should still succeed even if read fails.
+	// Extraction should fail closed when existing memories cannot be loaded.
 	err := worker.createAutoMemory(context.Background(), memory.UserKey{
 		AppName: "test-app",
 		UserID:  "user-1",
@@ -559,8 +564,9 @@ func TestAutoMemoryWorker_CreateAutoMemory_ReadError(t *testing.T) {
 		model.NewUserMessage("hello"),
 	})
 
-	assert.NoError(t, err)
-	assert.Equal(t, 1, op.addCalls)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "prepare existing memories failed")
+	assert.Equal(t, 0, op.addCalls)
 }
 
 func TestAutoMemoryWorker_ExecuteOperation_Add(t *testing.T) {
@@ -1551,10 +1557,10 @@ func TestAutoMemoryWorker_IsToolEnabled(t *testing.T) {
 			expected:     true,
 		},
 		{
-			name:         "empty map allows all",
+			name:         "empty map disables all",
 			enabledTools: map[string]struct{}{},
 			toolName:     memory.AddToolName,
-			expected:     true,
+			expected:     false,
 		},
 		{
 			name: "tool present in allow-list",
@@ -1727,6 +1733,21 @@ func TestBuildSearchQuery(t *testing.T) {
 		q := buildSearchQuery(msgs)
 		assert.Equal(t, "hello", q)
 	})
+
+	t.Run("includes text content parts", func(t *testing.T) {
+		text := "hello from parts"
+		msgs := []model.Message{
+			{
+				Role: model.RoleUser,
+				ContentParts: []model.ContentPart{{
+					Type: model.ContentTypeText,
+					Text: &text,
+				}},
+			},
+		}
+		q := buildSearchQuery(msgs)
+		assert.Equal(t, "hello from parts", q)
+	})
 }
 
 func TestSearchRelevantMemories(t *testing.T) {
@@ -1748,10 +1769,36 @@ func TestSearchRelevantMemories(t *testing.T) {
 		assert.Nil(t, entries)
 	})
 
-	t.Run("search error propagated", func(t *testing.T) {
+	t.Run("search error falls back to recent reads", func(t *testing.T) {
 		ext := &mockExtractor{}
 		op := newMockOperator()
 		op.searchErr = errors.New("search failed")
+		op.memories["m1"] = &memory.Entry{
+			ID:      "m1",
+			AppName: "app",
+			UserID:  "user",
+			Memory:  &memory.Memory{Memory: "fallback"},
+		}
+		worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
+
+		msgs := []model.Message{
+			model.NewUserMessage("hello"),
+		}
+		entries, err := worker.searchRelevantMemories(
+			context.Background(),
+			memory.UserKey{AppName: "app", UserID: "user"},
+			msgs,
+		)
+		assert.NoError(t, err)
+		assert.Len(t, entries, 1)
+		assert.Equal(t, "fallback", entries[0].Memory.Memory)
+	})
+
+	t.Run("search and fallback read errors return error", func(t *testing.T) {
+		ext := &mockExtractor{}
+		op := newMockOperator()
+		op.searchErr = errors.New("search failed")
+		op.readErr = errors.New("read failed")
 		worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
 
 		msgs := []model.Message{
@@ -1790,14 +1837,24 @@ func TestSearchRelevantMemories(t *testing.T) {
 	})
 }
 
-func TestCreateAutoMemory_SearchError_StillExtracts(t *testing.T) {
+func TestCreateAutoMemory_SearchError_FallsBackToRead(t *testing.T) {
+	var capturedExisting []*memory.Entry
 	ext := &mockExtractor{
 		ops: []*extractor.Operation{
 			{Type: extractor.OperationAdd, Memory: "New memory."},
 		},
+		captureExisting: func(existing []*memory.Entry) {
+			capturedExisting = existing
+		},
 	}
 	op := newMockOperator()
 	op.searchErr = errors.New("search failed")
+	op.memories["m1"] = &memory.Entry{
+		ID:      "m1",
+		AppName: "app",
+		UserID:  "user",
+		Memory:  &memory.Memory{Memory: "fallback"},
+	}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
 
 	err := worker.createAutoMemory(
@@ -1806,7 +1863,8 @@ func TestCreateAutoMemory_SearchError_StillExtracts(t *testing.T) {
 		[]model.Message{model.NewUserMessage("hello")},
 	)
 
-	// Should still succeed; search error is logged but extraction proceeds.
 	assert.NoError(t, err)
 	assert.Equal(t, 1, op.addCalls)
+	require.Len(t, capturedExisting, 1)
+	assert.Equal(t, "fallback", capturedExisting[0].Memory.Memory)
 }
