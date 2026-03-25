@@ -235,12 +235,13 @@ func (a *ralphLoopAgent) runLoop(
 	defer close(out)
 
 	max := a.cfg.MaxIterations
+	entryPredecessors := agent.NextExecutionTracePredecessors(base)
 	for iter := 1; iter <= max; iter++ {
 		if err := agent.CheckContextCancelled(ctx); err != nil {
 			return
 		}
 
-		innerInv := a.newInnerInvocation(base)
+		innerInv := a.newInnerInvocation(base, entryPredecessors)
 		innerCtx := agent.NewInvocationContext(ctx, innerInv)
 		events, err := agent.RunWithPlugins(innerCtx, innerInv, a.inner)
 		if err != nil {
@@ -249,6 +250,7 @@ func (a *ralphLoopAgent) runLoop(
 		}
 
 		lastFull := a.forwardEvents(ctx, events, out)
+		entryPredecessors = agent.NextExecutionTracePredecessors(innerInv)
 		done, feedback, verifyErr := a.verifyIteration(
 			ctx,
 			base,
@@ -280,14 +282,22 @@ func (a *ralphLoopAgent) runLoop(
 
 func (a *ralphLoopAgent) newInnerInvocation(
 	base *agent.Invocation,
+	entryPredecessors []string,
 ) *agent.Invocation {
 	if base == nil {
 		return nil
 	}
-	return base.Clone(
+	invocationOpts := []agent.InvocationOptions{
 		agent.WithInvocationAgent(a.inner),
 		agent.WithInvocationBranch(base.Branch),
-	)
+	}
+	if traceNodeID := agent.InvocationTraceNodeID(base); traceNodeID != "" {
+		invocationOpts = append(invocationOpts, agent.WithInvocationTraceNodeID(traceNodeID))
+	}
+	if len(entryPredecessors) > 0 {
+		invocationOpts = append(invocationOpts, agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors))
+	}
+	return base.Clone(invocationOpts...)
 }
 
 func (a *ralphLoopAgent) forwardEvents(

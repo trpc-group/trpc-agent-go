@@ -12,6 +12,7 @@ package llmflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
@@ -20,8 +21,8 @@ import (
 
 	"github.com/google/uuid"
 	oteltrace "go.opentelemetry.io/otel/trace"
-
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
@@ -225,6 +226,28 @@ func flowAgentName(invocation *agent.Invocation) string {
 	return invocation.AgentName
 }
 
+func traceSnapshotFromMessages(messages []model.Message) *atrace.Snapshot {
+	if len(messages) == 0 {
+		return nil
+	}
+	bytes, err := json.Marshal(messages)
+	if err != nil {
+		return nil
+	}
+	return &atrace.Snapshot{Text: string(bytes)}
+}
+
+func traceSnapshotFromEvent(evt *event.Event) *atrace.Snapshot {
+	if evt == nil || evt.Response == nil {
+		return nil
+	}
+	bytes, err := json.Marshal(evt.Response)
+	if err != nil {
+		return nil
+	}
+	return &atrace.Snapshot{Text: string(bytes)}
+}
+
 // maybeResumePendingToolCalls inspects the latest session events and, when
 // RunOptions.Resume is enabled, executes any pending tool calls before the
 // next LLM request. A pending tool call is defined as the latest persisted
@@ -326,18 +349,21 @@ func (f *Flow) runOneStep(
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
 	var lastEvent *event.Event
-
 	// Initialize empty LLM request.
 	llmRequest := &model.Request{
 		Tools: make(map[string]tool.Tool), // Initialize tools map
 	}
-
 	// 1. Preprocess (prepare request).
 	f.preprocess(ctx, invocation, llmRequest, eventChan)
-
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
+	stepID := agent.StartExecutionTraceStep(
+		invocation,
+		agent.InvocationTraceNodeID(invocation),
+		traceSnapshotFromMessages(llmRequest.Messages),
+		nil,
+	)
 	var span oteltrace.Span
 	var modelName string
 	if invocation.Model != nil {
@@ -350,10 +376,13 @@ func (f *Flow) runOneStep(
 	// 2. Call LLM (get response sequence).
 	ctx, responseSeq, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
+		agent.FinishExecutionTraceStep(invocation, stepID, nil, err)
 		return nil, err
 	}
 	// 3. Process streaming responses.
-	return f.processStreamingResponses(ctx, invocation, llmRequest, responseSeq, eventChan, span, startedSpan)
+	lastEvent, err = f.processStreamingResponses(ctx, invocation, llmRequest, responseSeq, eventChan, span, startedSpan)
+	agent.FinishExecutionTraceStep(invocation, stepID, traceSnapshotFromEvent(lastEvent), err)
+	return lastEvent, err
 }
 
 // processStreamingResponses handles the streaming response processing logic.

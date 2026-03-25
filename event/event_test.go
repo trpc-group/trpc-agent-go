@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -176,6 +177,23 @@ func TestEvent_Marshal_And_Unmarshal(t *testing.T) {
 	require.Empty(t, nullEvt)
 }
 
+func TestEvent_MarshalOmitsExecutionTrace(t *testing.T) {
+	evt := New("inv-1", "author", WithResponse(&model.Response{Done: true}))
+	evt.ExecutionTrace = &trace.Trace{
+		RootAgentName:    "assistant",
+		RootInvocationID: "inv-1",
+	}
+	data, err := json.Marshal(evt)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "ExecutionTrace")
+	require.NotContains(t, string(data), "rootAgentName")
+}
+
+func TestRedactedEventForLogging_NilAndSnapshotBranches(t *testing.T) {
+	require.Equal(t, Event{}, redactedEventForLogging(nil))
+	require.Nil(t, cloneExecutionTraceSnapshot(nil))
+}
+
 func TestEmitEventWithTimeout(t *testing.T) {
 	type args struct {
 		ctx     context.Context
@@ -294,6 +312,27 @@ func TestEmitEventWithTimeout_TraceEnabled_BlockingSend(t *testing.T) {
 	ch2 := make(chan *Event)
 	go func() { <-ch2 }()
 	require.NoError(t, EmitEventWithTimeout(ctx, ch2, evt, time.Second))
+}
+
+func TestSnapshotEvent_RedactsExecutionTrace(t *testing.T) {
+	log.SetTraceEnabled(true)
+	t.Cleanup(func() { log.SetTraceEnabled(false) })
+
+	evt := New("invocationID", "author")
+	evt.ExecutionTrace = &trace.Trace{
+		RootAgentName: "assistant",
+		Steps: []trace.Step{
+			{
+				Input:  &trace.Snapshot{Text: "secret input"},
+				Output: &trace.Snapshot{Text: "secret output"},
+			},
+		},
+	}
+	snapshot := snapshotEvent(evt)
+	require.NotEmpty(t, snapshot)
+	require.NotContains(t, snapshot, "secret input")
+	require.NotContains(t, snapshot, "secret output")
+	require.Contains(t, snapshot, "ExecutionTrace:<nil>")
 }
 
 func TestTryEmitReadyEvent(t *testing.T) {

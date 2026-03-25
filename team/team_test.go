@@ -160,6 +160,35 @@ func (t *testSwarmMember) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+type testNonComparableSwarmMember struct {
+	name string
+	tags []string
+}
+
+func (t testNonComparableSwarmMember) SetSubAgents([]agent.Agent) {}
+
+func (t testNonComparableSwarmMember) Run(
+	_ context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		ch <- event.New(inv.InvocationID, t.name)
+	}()
+	return ch, nil
+}
+
+func (t testNonComparableSwarmMember) Tools() []tool.Tool { return nil }
+
+func (t testNonComparableSwarmMember) Info() agent.Info {
+	return agent.Info{Name: t.name}
+}
+
+func (t testNonComparableSwarmMember) SubAgents() []agent.Agent { return nil }
+
+func (t testNonComparableSwarmMember) FindSubAgent(string) agent.Agent { return nil }
+
 type testTool struct {
 	name string
 }
@@ -524,8 +553,13 @@ func TestTeam_Run_Coordinator(t *testing.T) {
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 	ch, err := tm.Run(ctx, inv)
 	require.NoError(t, err)
-	for range ch {
+	events := make([]*event.Event, 0)
+	for evt := range ch {
+		events = append(events, evt)
 	}
+	require.Len(t, events, 1)
+	require.Equal(t, inv.InvocationID, events[0].InvocationID)
+	require.Empty(t, events[0].ParentInvocationID)
 	require.True(t, coordinator.ran)
 }
 
@@ -737,6 +771,64 @@ func TestTeam_RunSwarm_CrossRequestTransfer_UsesActiveAgent(t *testing.T) {
 	require.Equal(t, []byte(testTeamName), teamNameBytes)
 }
 
+func TestTeam_RunSwarm_CrossRequestTransfer_StoresMountedTraceRoot(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+		WithCrossRequestTransfer(true),
+	)
+	require.NoError(t, err)
+	sess := session.NewSession(testAppName, testUserID, testSessionID)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+		agent.WithInvocationTraceNodeID("workflow/swarm"),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	ch, err := tm.Run(ctx, inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+	traceNodeIDBytes, ok := sess.GetState(swarmTraceNodeIDKey)
+	require.True(t, ok)
+	require.Equal(t, []byte("workflow/swarm"), traceNodeIDBytes)
+}
+
+func TestTeam_RunSwarm_CrossRequestTransfer_DoesNotOverwriteBusinessTraceKeyWhenTraceDisabled(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+		WithCrossRequestTransfer(true),
+	)
+	require.NoError(t, err)
+	sess := session.NewSession(testAppName, testUserID, testSessionID)
+	sess.SetState("swarm_trace_node_id", []byte("business"))
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	ch, err := tm.Run(ctx, inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+	traceNodeIDBytes, ok := sess.GetState(swarmTraceNodeIDKey)
+	require.False(t, ok)
+	require.Nil(t, traceNodeIDBytes)
+	legacyTraceNodeIDBytes, ok := sess.GetState("swarm_trace_node_id")
+	require.True(t, ok)
+	require.Equal(t, []byte("business"), legacyTraceNodeIDBytes)
+}
+
 func TestTeam_RunSwarm_CrossRequestTransfer_MissingActiveAgentFallsBackToEntry(t *testing.T) {
 	a := &testSwarmMember{name: testMemberNameOne}
 	b := &testSwarmMember{name: testMemberNameTwo}
@@ -780,6 +872,37 @@ func TestTeam_RunSwarm_EntryMissing(t *testing.T) {
 	)
 	_, err := tm.runSwarm(context.Background(), inv)
 	require.Error(t, err)
+}
+
+func TestTeam_RunSwarm_DoesNotCompareNonComparableAgentValues(t *testing.T) {
+	entry := testNonComparableSwarmMember{
+		name: testMemberNameOne,
+		tags: []string{"entry"},
+	}
+	other := testNonComparableSwarmMember{
+		name: testMemberNameTwo,
+		tags: []string{"other"},
+	}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{entry, other},
+	)
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	ch, err := tm.runSwarm(context.Background(), inv)
+	require.NoError(t, err)
+	var authors []string
+	for evt := range ch {
+		if evt != nil {
+			authors = append(authors, evt.Author)
+		}
+	}
+	require.Equal(t, []string{testEntryName}, authors)
 }
 
 func TestTeam_getActiveAgent_NilInvocationOrSession(t *testing.T) {

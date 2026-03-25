@@ -858,17 +858,23 @@ func (s *SessionService) Close() error {
 // updateStoredSession updates the stored session with the given event.
 func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Event) {
 	if e.Response != nil && !e.IsPartial && e.IsValidContent() {
+		storedEvent := cloneStoredEvent(e)
 		sess.EventMu.Lock()
-		sess.Events = append(sess.Events, *e)
+		sess.Events = append(sess.Events, storedEvent)
 		if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
 			sess.ApplyEventFiltering(session.WithEventNum(s.opts.sessionEventLimit))
 		}
 		sess.EventMu.Unlock()
 	}
-
 	sess.UpdatedAt = time.Now()
 	// Merge event state delta to session state.
 	sess.ApplyEventStateDelta(e)
+}
+
+func cloneStoredEvent(e *event.Event) event.Event {
+	storedEvent := *e
+	storedEvent.ExecutionTrace = nil
+	return storedEvent
 }
 
 // mergeState merges app-level and user-level state into the session state.

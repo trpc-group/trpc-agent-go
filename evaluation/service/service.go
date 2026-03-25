@@ -13,6 +13,7 @@ package service
 import (
 	"context"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
@@ -62,6 +63,8 @@ type InferenceResult struct {
 	Status status.EvalStatus `json:"status,omitempty"`
 	// ErrorMessage contains the error message if inference failed.
 	ErrorMessage string `json:"errorMessage,omitempty"`
+	// ExecutionTraces contains the per-run execution traces collected during inference.
+	ExecutionTraces []*trace.Trace `json:"-"`
 }
 
 // EvaluateRequest represents a request for running the evaluation on the inference results.

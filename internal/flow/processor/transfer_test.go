@@ -35,6 +35,7 @@ type mockAgent struct {
 	name             string
 	emit             bool
 	gotEndInvocation bool
+	gotTraceNodeID   string
 }
 
 func (m *mockAgent) Info() agent.Info                { return agent.Info{Name: m.name} }
@@ -47,6 +48,7 @@ func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 		defer close(ch)
 		// Record whether the invocation was incorrectly marked as ended.
 		m.gotEndInvocation = inv.EndInvocation
+		m.gotTraceNodeID = agent.InvocationTraceNodeID(inv)
 		if m.emit {
 			ch <- event.New(inv.InvocationID, m.name)
 		}
@@ -158,6 +160,86 @@ func TestTransferResponseProc_ControllerRejects(t *testing.T) {
 	require.Len(t, evts, 1)
 	require.NotNil(t, evts[0].Error)
 	require.Nil(t, inv.TransferInfo)
+}
+
+func TestTransferResponseProc_UsesSwarmRootTraceNodeIDForSiblingTransfer(t *testing.T) {
+	target := &mockAgent{name: "beta", emit: true}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "alpha",
+		InvocationID: "inv-swarm",
+		Session: &session.Session{
+			State: session.StateMap{
+				swarmTeamNameKey: []byte("swarm"),
+			},
+		},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "beta", Message: "hi"},
+	}
+	agent.WithInvocationTraceNodeID("swarm/alpha")(inv)
+	rsp := &model.Response{ID: "r-swarm"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, "swarm/beta", target.gotTraceNodeID)
+}
+
+func TestTransferResponseProc_UsesMountedSwarmTraceRootForSiblingTransfer(t *testing.T) {
+	target := &mockAgent{name: "beta", emit: true}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "alpha",
+		InvocationID: "inv-nested-swarm",
+		Session: &session.Session{
+			State: session.StateMap{
+				swarmTeamNameKey:    []byte("swarm"),
+				swarmTraceNodeIDKey: []byte("workflow/swarm"),
+			},
+		},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "beta", Message: "hi"},
+	}
+	agent.WithInvocationTraceNodeID("workflow/swarm/alpha")(inv)
+	rsp := &model.Response{ID: "r-nested-swarm"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, "workflow/swarm/beta", target.gotTraceNodeID)
+}
+
+func TestTransferResponseProc_FallsBackToMountedSwarmTraceRootWhenSessionLacksStoredTraceRoot(t *testing.T) {
+	target := &mockAgent{name: "beta", emit: true}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "alpha",
+		InvocationID: "inv-old-nested-swarm",
+		Session: &session.Session{
+			State: session.StateMap{
+				swarmTeamNameKey: []byte("swarm"),
+			},
+		},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "beta", Message: "hi"},
+	}
+	agent.WithInvocationTraceNodeID("workflow/swarm/alpha")(inv)
+	rsp := &model.Response{ID: "r-old-nested-swarm"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, "workflow/swarm/beta", target.gotTraceNodeID)
+}
+
+func TestTransferTargetTraceNodeID_NilAndParentFallbackBranches(t *testing.T) {
+	require.Empty(t, transferTargetTraceNodeID(nil, &mockAgent{name: "beta"}))
+	require.Empty(t, transferTargetTraceNodeID(&agent.Invocation{}, nil))
+	require.Empty(t, parentTraceNodeID(""))
+	require.Empty(t, parentTraceNodeID("swarm"))
 }
 
 type deadlineAgent struct {
