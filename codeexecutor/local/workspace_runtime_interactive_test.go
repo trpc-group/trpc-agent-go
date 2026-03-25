@@ -192,9 +192,6 @@ func TestInteractiveHelpers_FormatEnvAndExitCode(t *testing.T) {
 	require.Equal(t, 9, interactiveExitCode(err))
 	require.Equal(t, -1, interactiveExitCode(os.ErrInvalid))
 
-	done := make(chan struct{})
-	close(done)
-	waitInteractiveIODone(done, time.Millisecond)
 
 	rt := NewRuntime(t.TempDir())
 	ws := codeexecutor.Workspace{
@@ -374,7 +371,7 @@ func TestRuntime_StartProgram_StdinAndPipeErrors(t *testing.T) {
 
 	cmd := exec.Command("sh", "-lc", "true")
 	cmd.Stdout = os.Stdout
-	stdin, stdout, stderr, err := startPipes(cmd)
+	stdin, stdout, stderr, _, err := startPipes(cmd)
 	require.Error(t, err)
 	require.Nil(t, stdin)
 	require.Nil(t, stdout)
@@ -382,14 +379,12 @@ func TestRuntime_StartProgram_StdinAndPipeErrors(t *testing.T) {
 
 	cmd = exec.Command("sh", "-lc", "true")
 	cmd.Stderr = os.Stderr
-	stdin, stdout, stderr, err = startPipes(cmd)
+	stdin, stdout, stderr, _, err = startPipes(cmd)
 	require.Error(t, err)
 	require.Nil(t, stdin)
 	require.Nil(t, stdout)
 	require.Nil(t, stderr)
 
-	done := make(chan struct{})
-	waitInteractiveIODone(done, 10*time.Millisecond)
 }
 
 func TestRuntime_StartProgram_MkdirError(t *testing.T) {
