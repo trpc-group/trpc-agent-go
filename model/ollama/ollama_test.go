@@ -12,6 +12,7 @@ package ollama
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -515,6 +516,7 @@ func Test_HandleNonStreamingResponse(t *testing.T) {
 	}
 
 	assert.NotNil(t, got)
+	assert.NotEmpty(t, got.ID)
 	assert.True(t, got.Done)
 	assert.Nil(t, got.Error)
 	assert.Equal(t, "Hello!", got.Choices[0].Message.Content)
@@ -613,7 +615,13 @@ func Test_HandleStreamingResponse(t *testing.T) {
 
 	var partials int
 	var final *model.Response
+	var responseID string
 	for resp := range ch {
+		assert.NotEmpty(t, resp.ID)
+		if responseID == "" {
+			responseID = resp.ID
+		}
+		assert.Equal(t, responseID, resp.ID)
 		if resp.Done {
 			final = resp
 			time.Sleep(time.Second)
@@ -626,6 +634,7 @@ func Test_HandleStreamingResponse(t *testing.T) {
 
 	assert.Equal(t, partials, 2)
 	assert.NotNil(t, final)
+	assert.NotEmpty(t, responseID)
 	assert.True(t, final.Done)
 	assert.True(t, chunkCalled)
 	assert.True(t, streamCompleteCalled)
@@ -656,8 +665,25 @@ func Test_HandleErrorResponse(t *testing.T) {
 	}
 
 	assert.NotNil(t, got)
+	assert.NotEmpty(t, got.ID)
 	assert.NotNil(t, got.Error)
 	assert.True(t, got.Done)
+}
+
+func Test_sendErrorResponse_PreservesResponseID(t *testing.T) {
+	m := New("llama3.2:latest")
+	ch := make(chan *model.Response, 1)
+	m.sendErrorResponse(context.Background(), ch, "ollama-response-error", model.ErrorTypeStreamError, errors.New("boom"))
+	select {
+	case got := <-ch:
+		require.NotNil(t, got)
+		assert.Equal(t, "ollama-response-error", got.ID)
+		assert.NotNil(t, got.Error)
+		assert.Equal(t, model.ErrorTypeStreamError, got.Error.Type)
+		assert.True(t, got.Done)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for error response")
+	}
 }
 
 // Test_buildChatRequest tests chat request building.
@@ -871,6 +897,7 @@ func TestWithEnableTokenTailoring_Disabled(t *testing.T) {
 
 // Test_convertChatResponse tests chat response conversion.
 func Test_convertChatResponse(t *testing.T) {
+	const responseID = "ollama-response-1"
 	resp := api.ChatResponse{
 		Model:     "llama3.2:latest",
 		CreatedAt: time.Now(),
@@ -885,8 +912,9 @@ func Test_convertChatResponse(t *testing.T) {
 		},
 	}
 
-	result, err := convertChatResponse(resp)
+	result, err := convertChatResponse(resp, responseID)
 	require.NoError(t, err)
+	assert.Equal(t, responseID, result.ID)
 	assert.True(t, result.Done)
 	assert.Equal(t, "Hello", result.Choices[0].Message.Content)
 	assert.Equal(t, 10, result.Usage.PromptTokens)
@@ -896,6 +924,7 @@ func Test_convertChatResponse(t *testing.T) {
 
 // Test_convertChatResponse_WithToolCalls tests response with tool calls.
 func Test_convertChatResponse_WithToolCalls(t *testing.T) {
+	const responseID = "ollama-response-2"
 	resp := api.ChatResponse{
 		Model:     "llama3.2:latest",
 		CreatedAt: time.Now(),
@@ -923,8 +952,9 @@ func Test_convertChatResponse_WithToolCalls(t *testing.T) {
 		},
 	}
 
-	result, err := convertChatResponse(resp)
+	result, err := convertChatResponse(resp, responseID)
 	require.NoError(t, err)
+	assert.Equal(t, responseID, result.ID)
 	assert.True(t, result.Done)
 	assert.Equal(t, 1, len(result.Choices[0].Message.ToolCalls))
 	assert.Equal(t, "call1", result.Choices[0].Message.ToolCalls[0].ID)

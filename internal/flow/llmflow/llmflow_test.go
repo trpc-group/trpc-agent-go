@@ -2042,6 +2042,139 @@ func TestFlow_GenerateContentSeq_UsesIterModel(t *testing.T) {
 	require.Equal(t, "iter", responses[0].ID)
 }
 
+func TestFlow_GenerateContentSeq_AssignsGeneratedIDForStreamingResponses(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(&mockModel{
+		responses: []*model.Response{
+			{Object: model.ObjectTypeChatCompletionChunk, IsPartial: true},
+			{Object: model.ObjectTypeChatCompletion, Done: true},
+		},
+	}))
+	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{})
+	require.NoError(t, err)
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+	require.Len(t, responses, 2)
+	require.NotEmpty(t, responses[0].ID)
+	require.Equal(t, responses[0].ID, responses[1].ID)
+}
+
+func TestFlow_GenerateContentSeq_PreservesActiveResponseIDWhenLaterChunksMissIt(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(&mockModel{
+		responses: []*model.Response{
+			{ID: "resp-1", Object: model.ObjectTypeChatCompletionChunk, IsPartial: true},
+			{Object: model.ObjectTypeChatCompletion, Done: true},
+		},
+	}))
+	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{})
+	require.NoError(t, err)
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+	require.Len(t, responses, 2)
+	require.Equal(t, "resp-1", responses[0].ID)
+	require.Equal(t, "resp-1", responses[1].ID)
+}
+
+func TestFlow_GenerateContentSeq_KeepsGeneratedIDWhenRealIDArrivesLate(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(&mockModel{
+		responses: []*model.Response{
+			{Object: model.ObjectTypeChatCompletionChunk, IsPartial: true},
+			{ID: "real-1", Object: model.ObjectTypeChatCompletion, Done: true},
+		},
+	}))
+	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{})
+	require.NoError(t, err)
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+	require.Len(t, responses, 2)
+	require.NotEmpty(t, responses[0].ID)
+	require.Equal(t, responses[0].ID, responses[1].ID)
+	require.NotEqual(t, "real-1", responses[0].ID)
+	require.NotEqual(t, "real-1", responses[1].ID)
+}
+
+func TestFlow_GenerateContentSeq_ResetsGeneratedIDAfterFinalResponse(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(agent.WithInvocationModel(&mockModel{
+		responses: []*model.Response{
+			{Object: model.ObjectTypeChatCompletion, Done: true},
+			{Object: model.ObjectTypeChatCompletion, Done: true},
+		},
+	}))
+	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{})
+	require.NoError(t, err)
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+	require.Len(t, responses, 2)
+	require.NotEmpty(t, responses[0].ID)
+	require.NotEmpty(t, responses[1].ID)
+	require.NotEqual(t, responses[0].ID, responses[1].ID)
+}
+
+func TestFlow_GenerateContentSeq_IterModelAssignsGeneratedIDForStreamingResponses(t *testing.T) {
+	f := New(nil, nil, Options{})
+	iterModel := &mockIterModel{
+		IterSeq: func(yield func(*model.Response) bool) {
+			yield(&model.Response{Object: model.ObjectTypeChatCompletionChunk, IsPartial: true})
+			yield(&model.Response{Object: model.ObjectTypeChatCompletion, Done: true})
+		},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationModel(iterModel))
+	seq, err := f.generateContentSeq(context.Background(), inv, &model.Request{})
+	require.NoError(t, err)
+	require.True(t, iterModel.GenerateContentIterCalled)
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+	require.Len(t, responses, 2)
+	require.NotEmpty(t, responses[0].ID)
+	require.Equal(t, responses[0].ID, responses[1].ID)
+}
+
+func TestNormalizeResponseIDs_NilSequence(t *testing.T) {
+	require.Nil(t, normalizeResponseIDs(nil))
+}
+
+func TestNormalizeResponseIDs_PassesThroughNilResponse(t *testing.T) {
+	seq := normalizeResponseIDs(func(yield func(*model.Response) bool) {
+		yield(nil)
+		yield(&model.Response{Object: model.ObjectTypeChatCompletion, Done: true, IsPartial: true})
+		yield(&model.Response{Object: model.ObjectTypeChatCompletion, Done: true})
+	})
+	require.NotNil(t, seq)
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+	require.Len(t, responses, 3)
+	require.Nil(t, responses[0])
+	require.NotEmpty(t, responses[1].ID)
+	require.Equal(t, responses[1].ID, responses[2].ID)
+}
+
+func TestNormalizeResponseID_PreservesResponseWhenCurrentIDIsNil(t *testing.T) {
+	resp := &model.Response{ID: "resp-1"}
+	require.Same(t, resp, normalizeResponseID(resp, nil))
+	require.Nil(t, normalizeResponseID(nil, new(string)))
+}
+
 func TestFlow_GenerateContentSeq_IterModelError(t *testing.T) {
 	f := New(nil, nil, Options{})
 	iterModel := &mockIterModel{
