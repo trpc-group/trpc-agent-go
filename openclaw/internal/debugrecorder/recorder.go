@@ -424,6 +424,8 @@ type RequestSummary struct {
 	MessageID string `json:"message_id,omitempty"`
 	Text      string `json:"text,omitempty"`
 
+	RequestSystemPrompt string `json:"request_system_prompt,omitempty"`
+
 	UserID    string `json:"user_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
@@ -474,6 +476,9 @@ func SummarizeRequest(
 		Thread:    strings.TrimSpace(req.Thread),
 		MessageID: strings.TrimSpace(req.MessageID),
 		Text:      strings.TrimSpace(req.Text),
+		RequestSystemPrompt: strings.TrimSpace(
+			req.RequestSystemPrompt,
+		),
 		UserID:    strings.TrimSpace(req.UserID),
 		SessionID: strings.TrimSpace(req.SessionID),
 		RequestID: strings.TrimSpace(req.RequestID),
