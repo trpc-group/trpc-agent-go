@@ -272,7 +272,9 @@ import (
 
 func main() {
     // Create model.
-    modelInstance := openai.New("deepseek-chat")
+    modelInstance := openai.New("deepseek-chat",
+        openai.WithVariant(openai.VariantDeepSeek),
+    )
 
     // Create tool.
     calculatorTool := function.NewFunctionTool(

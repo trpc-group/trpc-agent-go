@@ -104,8 +104,14 @@ func (a *chatApp) setup(_ context.Context) error {
 	// Prepare model map with pre-registered models.
 	// Pre-registration is required for name-based model switching.
 	models := map[string]model.Model{
-		"deepseek-chat":     openai.New("deepseek-chat"),
-		"deepseek-reasoner": openai.New("deepseek-reasoner"),
+		"deepseek-chat": openai.New(
+			"deepseek-chat",
+			openai.WithVariant(openai.VariantDeepSeek),
+		),
+		"deepseek-reasoner": openai.New(
+			"deepseek-reasoner",
+			openai.WithVariant(openai.VariantDeepSeek),
+		),
 	}
 
 	// Get the default model instance.
