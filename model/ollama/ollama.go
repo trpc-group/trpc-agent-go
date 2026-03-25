@@ -24,8 +24,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/ollama/ollama/api"
-
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -177,13 +177,14 @@ func (m *Model) GenerateContent(
 	}
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
+	responseID := newResponseID()
 	go func() {
 		defer close(responseChan)
 		if request.Stream {
-			m.handleStreamingResponse(ctx, *chatRequest, responseChan)
+			m.handleStreamingResponse(ctx, *chatRequest, responseID, responseChan)
 			return
 		}
-		m.handleNonStreamingResponse(ctx, *chatRequest, responseChan)
+		m.handleNonStreamingResponse(ctx, *chatRequest, responseID, responseChan)
 	}()
 	return responseChan, nil
 }
@@ -294,6 +295,7 @@ func (m *Model) buildChatRequest(request *model.Request) (*api.ChatRequest, erro
 func (m *Model) handleNonStreamingResponse(
 	ctx context.Context,
 	chatRequest api.ChatRequest,
+	responseID string,
 	responseChan chan<- *model.Response,
 ) {
 	// Issue non-streaming request.
@@ -303,7 +305,7 @@ func (m *Model) handleNonStreamingResponse(
 		return nil
 	})
 	if err != nil {
-		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
+		m.sendErrorResponse(ctx, responseChan, responseID, model.ErrorTypeAPIError, err)
 		return
 	}
 
@@ -311,9 +313,9 @@ func (m *Model) handleNonStreamingResponse(
 		m.chatResponseCallback(ctx, &chatRequest, &chatResponse)
 	}
 
-	response, err := convertChatResponse(chatResponse)
+	response, err := convertChatResponse(chatResponse, responseID)
 	if err != nil {
-		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
+		m.sendErrorResponse(ctx, responseChan, responseID, model.ErrorTypeAPIError, err)
 		return
 	}
 
@@ -328,6 +330,7 @@ func (m *Model) handleNonStreamingResponse(
 func (m *Model) handleStreamingResponse(
 	ctx context.Context,
 	chatRequest api.ChatRequest,
+	responseID string,
 	responseChan chan<- *model.Response,
 ) {
 	var streamErr error
@@ -337,7 +340,7 @@ func (m *Model) handleStreamingResponse(
 			m.chatChunkCallback(ctx, &chatRequest, &chunk)
 		}
 
-		response, err := convertChatResponse(chunk)
+		response, err := convertChatResponse(chunk, responseID)
 		if err != nil {
 			return err
 		}
@@ -354,7 +357,7 @@ func (m *Model) handleStreamingResponse(
 
 	if err != nil {
 		streamErr = err
-		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, err)
+		m.sendErrorResponse(ctx, responseChan, responseID, model.ErrorTypeStreamError, err)
 	}
 
 	// Call the stream complete callback.
@@ -364,8 +367,15 @@ func (m *Model) handleStreamingResponse(
 }
 
 // sendErrorResponse sends an error response through the channel.
-func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *model.Response, errType string, err error) {
+func (m *Model) sendErrorResponse(
+	ctx context.Context,
+	responseChan chan<- *model.Response,
+	responseID string,
+	errType string,
+	err error,
+) {
 	errorResponse := &model.Response{
+		ID: responseID,
 		Error: &model.ResponseError{
 			Message: err.Error(),
 			Type:    errType,
@@ -377,6 +387,10 @@ func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *mode
 	case responseChan <- errorResponse:
 	case <-ctx.Done():
 	}
+}
+
+func newResponseID() string {
+	return "ollama-" + uuid.NewString()
 }
 
 // getContextWindow retrieves the context window size for the model.
@@ -463,7 +477,7 @@ func convertMessages(messages []model.Message) ([]api.Message, error) {
 	return result, nil
 }
 
-func convertChatResponse(resp api.ChatResponse) (*model.Response, error) {
+func convertChatResponse(resp api.ChatResponse, responseID string) (*model.Response, error) {
 	var toolCalls []model.ToolCall
 	for _, toolCall := range resp.Message.ToolCalls {
 		args, err := json.Marshal(toolCall.Function.Arguments)
@@ -509,6 +523,7 @@ func convertChatResponse(resp api.ChatResponse) (*model.Response, error) {
 	}
 	now := time.Now()
 	msg := &model.Response{
+		ID:        responseID,
 		Object:    obj,
 		Created:   now.Unix(),
 		Timestamp: now,
