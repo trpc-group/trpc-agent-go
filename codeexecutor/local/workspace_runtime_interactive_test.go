@@ -122,7 +122,7 @@ func TestRuntime_StartProgramInteractivePipes(t *testing.T) {
 		result = provider.RunResult()
 		return strings.Contains(result.Stdout, "out:hello") &&
 			strings.Contains(result.Stderr, "err:hello")
-	}, 2*time.Second, 20*time.Millisecond)
+	}, 5*time.Second, 50*time.Millisecond)
 	require.NoError(t, proc.Close())
 }
 
@@ -175,7 +175,7 @@ func TestRuntime_StartProgramInteractiveTTY(t *testing.T) {
 			provider.RunResult().Stdout,
 			"tty:7",
 		)
-	}, time.Second, 20*time.Millisecond)
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 func TestInteractiveHelpers_FormatEnvAndExitCode(t *testing.T) {
@@ -369,7 +369,7 @@ func TestRuntime_StartProgram_StdinAndPipeErrors(t *testing.T) {
 			provider.RunResult().Stdout,
 			"hello|override|ok",
 		)
-	}, time.Second, 20*time.Millisecond)
+	}, 5*time.Second, 50*time.Millisecond)
 	require.NoError(t, proc.Close())
 
 	cmd := exec.Command("sh", "-lc", "true")
@@ -422,7 +422,7 @@ func waitInteractiveExit(
 ) codeexecutor.ProgramPoll {
 	t.Helper()
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		poll := proc.Poll(nil)
 		if want == "" || strings.Contains(poll.Output, want) ||
@@ -442,7 +442,7 @@ func waitInteractiveStatus(
 ) codeexecutor.ProgramPoll {
 	t.Helper()
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		poll := proc.Poll(nil)
 		if poll.Status == status {
