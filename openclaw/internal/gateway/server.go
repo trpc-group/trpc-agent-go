@@ -538,6 +538,7 @@ func (s *Server) resolveRunOptions(
 		run.userID,
 		run.sessionID,
 		run.requestID,
+		run.requestSystemPrompt,
 	)
 	if s == nil || s.runOptionResolver == nil {
 		return ctx, runOpts
@@ -569,6 +570,7 @@ func (s *Server) runOptions(
 	userID string,
 	sessionID string,
 	requestID string,
+	requestSystemPrompt string,
 ) []agent.RunOption {
 	runOpts := make([]agent.RunOption, 0, 1)
 	if requestID != "" {
@@ -578,6 +580,7 @@ func (s *Server) runOptions(
 		ctx,
 		userID,
 		sessionID,
+		requestSystemPrompt,
 	); len(messages) > 0 {
 		runOpts = append(
 			runOpts,
@@ -628,6 +631,11 @@ func (a *replyAccumulator) consumeFull(rsp *model.Response) {
 	if rsp == nil {
 		return
 	}
+	if responseHasPublicContent(rsp) {
+		a.builder.Reset()
+		a.Text = ""
+		return
+	}
 	if len(rsp.Choices) == 0 {
 		return
 	}
@@ -641,6 +649,11 @@ func (a *replyAccumulator) consumeFull(rsp *model.Response) {
 
 func (a *replyAccumulator) consumeDelta(rsp *model.Response) {
 	if rsp == nil {
+		return
+	}
+	if responseHasPublicContent(rsp) {
+		a.builder.Reset()
+		a.Text = ""
 		return
 	}
 	if a.seenFull {
