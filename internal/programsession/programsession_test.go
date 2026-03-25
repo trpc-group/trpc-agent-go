@@ -164,3 +164,52 @@ func TestYieldDurationAndPollLineLimit(t *testing.T) {
 	require.NotNil(t, limit)
 	require.Equal(t, 7, *limit)
 }
+
+type fakeStateProgramSession struct {
+	fakeProgramSession
+	state codeexecutor.ProgramState
+}
+
+func (f *fakeStateProgramSession) State() codeexecutor.ProgramState {
+	return f.state
+}
+
+func TestState(t *testing.T) {
+	t.Run("unsupported", func(t *testing.T) {
+		state, ok := State(&fakeProgramSession{})
+		require.False(t, ok)
+		require.Equal(t, codeexecutor.ProgramState{}, state)
+	})
+
+	t.Run("provider", func(t *testing.T) {
+		exitCode := 7
+		want := codeexecutor.ProgramState{
+			Status:   codeexecutor.ProgramStatusExited,
+			ExitCode: &exitCode,
+		}
+		state, ok := State(&fakeStateProgramSession{state: want})
+		require.True(t, ok)
+		require.Equal(t, want.Status, state.Status)
+		require.NotNil(t, state.ExitCode)
+		require.Equal(t, exitCode, *state.ExitCode)
+	})
+}
+
+func TestWaitForProgramOutput_ReturnsOnYieldDeadlineWithoutOutput(t *testing.T) {
+	proc := &fakeProgramSession{
+		polls: []codeexecutor.ProgramPoll{
+			{
+				Status:     codeexecutor.ProgramStatusRunning,
+				Output:     "",
+				Offset:     5,
+				NextOffset: 5,
+			},
+		},
+	}
+
+	poll := WaitForProgramOutput(proc, 10*time.Millisecond, nil)
+	require.Equal(t, codeexecutor.ProgramStatusRunning, poll.Status)
+	require.Empty(t, poll.Output)
+	require.Equal(t, 5, poll.Offset)
+	require.Equal(t, 5, poll.NextOffset)
+}

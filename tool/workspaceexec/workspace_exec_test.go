@@ -266,6 +266,48 @@ func TestExecTool_BackgroundAndWriteStdin(t *testing.T) {
 	require.Contains(t, out.Output, "out:hello")
 }
 
+func TestExecTool_WriteStdin_AliasFieldsAndSubmit(t *testing.T) {
+	exec := localexec.New()
+	execTool := NewExecTool(exec)
+	writeTool := NewWriteStdinTool(execTool)
+
+	startArgs := execInput{
+		Command:    "printf 'ready\\n'; read v; echo out:$v",
+		Background: true,
+		YieldMs:    intPtr(50),
+		TimeoutSec: intPtr(timeoutSecSmall),
+	}
+	startEnc, err := json.Marshal(startArgs)
+	require.NoError(t, err)
+
+	startRes, err := execTool.Call(context.Background(), startEnc)
+	require.NoError(t, err)
+	started := startRes.(execOutput)
+	require.Equal(t, codeexecutor.ProgramStatusRunning, started.Status)
+	require.NotEmpty(t, started.SessionID)
+
+	writeEnc, err := json.Marshal(writeInput{
+		SessionIDOld: started.SessionID,
+		Chars:        "hello",
+		Submit:       boolPtr(true),
+		YieldMs:      intPtr(100),
+	})
+	require.NoError(t, err)
+
+	var out execOutput
+	require.Eventually(t, func() bool {
+		res, err := writeTool.Call(context.Background(), writeEnc)
+		if err != nil {
+			return false
+		}
+		out = res.(execOutput)
+		return out.Status == codeexecutor.ProgramStatusExited
+	}, 3*time.Second, 20*time.Millisecond)
+	require.NotNil(t, out.ExitCode)
+	require.Equal(t, 0, *out.ExitCode)
+	require.Contains(t, out.Output, "out:hello")
+}
+
 func TestExecTool_NonInteractiveExecutorIgnoresYieldTimeMS(t *testing.T) {
 	exec := &nonInteractiveExec{}
 	tl := NewExecTool(exec)
@@ -286,6 +328,24 @@ func TestExecTool_NonInteractiveExecutorIgnoresYieldTimeMS(t *testing.T) {
 	require.NotNil(t, out.ExitCode)
 	require.Equal(t, 0, *out.ExitCode)
 	require.Equal(t, "hello", out.Output)
+}
+
+func TestExecTool_NonInteractiveExecutorRejectsInteractiveFlags(t *testing.T) {
+	exec := &nonInteractiveExec{}
+	tl := NewExecTool(exec)
+
+	for _, args := range []execInput{
+		{Command: "echo hello", Background: true, Timeout: timeoutSecSmall},
+		{Command: "echo hello", TTY: boolPtr(true), Timeout: timeoutSecSmall},
+		{Command: "echo hello", PTY: boolPtr(true), Timeout: timeoutSecSmall},
+	} {
+		enc, err := json.Marshal(args)
+		require.NoError(t, err)
+
+		_, err = tl.Call(context.Background(), enc)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "interactive sessions are not supported")
+	}
 }
 
 func TestExecTool_KillSession(t *testing.T) {
@@ -317,6 +377,33 @@ func TestExecTool_KillSession(t *testing.T) {
 	require.True(t, out.OK)
 	require.Equal(t, started.SessionID, out.SessionID)
 	require.Equal(t, "killed", out.Status)
+}
+
+func TestExecTool_KillSession_AliasSessionID(t *testing.T) {
+	exec := localexec.New()
+	execTool := NewExecTool(exec)
+	killTool := NewKillSessionTool(execTool)
+
+	startEnc, err := json.Marshal(execInput{
+		Command:    "sleep 30",
+		Background: true,
+		Timeout:    timeoutSecSmall,
+	})
+	require.NoError(t, err)
+
+	startRes, err := execTool.Call(context.Background(), startEnc)
+	require.NoError(t, err)
+	started := startRes.(execOutput)
+	require.Equal(t, codeexecutor.ProgramStatusRunning, started.Status)
+
+	killEnc, err := json.Marshal(killInput{SessionIDOld: started.SessionID})
+	require.NoError(t, err)
+	res, err := killTool.Call(context.Background(), killEnc)
+	require.NoError(t, err)
+
+	out := res.(killOutput)
+	require.True(t, out.OK)
+	require.Equal(t, started.SessionID, out.SessionID)
 }
 
 func TestExecTool_KillSession_KillFailurePreservesSession(t *testing.T) {

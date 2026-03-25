@@ -12,6 +12,7 @@ package workspaceexec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -155,4 +156,212 @@ func TestPublishArtifactTool_StateDelta(t *testing.T) {
 	require.Equal(t, "out/site.zip", artifactMap["name"])
 	require.Equal(t, float64(2), artifactMap["version"])
 	require.Equal(t, "artifact://out/site.zip@2", artifactMap["ref"])
+}
+
+func TestPublishArtifactTool_Declaration(t *testing.T) {
+	tl := NewPublishArtifactTool(NewExecTool(localexec.New()))
+
+	decl := tl.Declaration()
+	require.NotNil(t, decl)
+	require.Equal(t, "workspace_publish_artifact", decl.Name)
+	require.Contains(t, decl.Description, "final deliverables")
+	require.Contains(t, decl.Description, "work/, out/, or runs/")
+}
+
+func TestPublishArtifactTool_RequiresInvocationContext(t *testing.T) {
+	tl := NewPublishArtifactTool(NewExecTool(localexec.New()))
+	enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+	require.NoError(t, err)
+
+	_, err = tl.Call(context.Background(), enc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), publishReasonNoInvocation)
+}
+
+func TestPublishArtifactTool_RequiresCompleteSessionIDs(t *testing.T) {
+	exec := localexec.New()
+	tl := NewPublishArtifactTool(NewExecTool(exec))
+	svc := inmemory.NewService()
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{ID: "sess-only"}),
+		agent.WithInvocationArtifactService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+	require.NoError(t, err)
+
+	_, err = tl.Call(ctx, enc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), publishReasonNoSessionIDs)
+}
+
+func TestPublishArtifactTool_NormalizesPathVariants(t *testing.T) {
+	rel, err := normalizeArtifactPath("/out/site.zip")
+	require.NoError(t, err)
+	require.Equal(t, "out/site.zip", rel)
+
+	rel, err = normalizeArtifactPath("${OUTPUT_DIR}/site.zip")
+	require.NoError(t, err)
+	require.Equal(t, "out/site.zip", rel)
+}
+
+func TestPublishArtifactTool_RejectsMissingFile(t *testing.T) {
+	exec := localexec.New()
+	reg := codeexecutor.NewWorkspaceRegistry()
+	execTool := NewExecTool(exec, WithWorkspaceRegistry(reg))
+	tl := NewPublishArtifactTool(execTool)
+	svc := inmemory.NewService()
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{
+			ID:      "sess-publish-missing",
+			AppName: "app",
+			UserID:  "user",
+		}),
+		agent.WithInvocationArtifactService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	eng := execTool.resolver.EnsureEngine()
+	_, err := execTool.resolver.CreateWorkspace(ctx, eng, "workspace")
+	require.NoError(t, err)
+
+	enc, err := json.Marshal(publishArtifactInput{Path: "out/missing.zip"})
+	require.NoError(t, err)
+
+	_, err = tl.Call(ctx, enc)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "workspace artifact file not found")
+}
+
+func TestPublishArtifactTool_ManifestFailures(t *testing.T) {
+	t.Run("multiple matches", func(t *testing.T) {
+		tl := NewPublishArtifactTool(newStubExecTool(
+			stubOutputFS{manifest: codeexecutor.OutputManifest{
+				Files: []codeexecutor.FileRef{
+					{Name: "out/a.zip"},
+					{Name: "out/b.zip"},
+				},
+			}},
+		))
+		ctx := publishArtifactContext()
+		enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+		require.NoError(t, err)
+
+		_, err = tl.Call(ctx, enc)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "matched 2 files")
+	})
+
+	t.Run("save omitted", func(t *testing.T) {
+		tl := NewPublishArtifactTool(newStubExecTool(
+			stubOutputFS{manifest: codeexecutor.OutputManifest{
+				Files: []codeexecutor.FileRef{{Name: "out/site.zip"}},
+			}},
+		))
+		ctx := publishArtifactContext()
+		enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+		require.NoError(t, err)
+
+		_, err = tl.Call(ctx, enc)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "was not persisted")
+	})
+
+	t.Run("collect outputs error", func(t *testing.T) {
+		tl := NewPublishArtifactTool(newStubExecTool(
+			stubOutputFS{err: errors.New("boom")},
+		))
+		ctx := publishArtifactContext()
+		enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+		require.NoError(t, err)
+
+		_, err = tl.Call(ctx, enc)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "boom")
+	})
+}
+
+func TestPublishArtifactTool_StateDeltaFallbacks(t *testing.T) {
+	tl := NewPublishArtifactTool(NewExecTool(localexec.New()))
+
+	require.Nil(t, tl.StateDelta("", nil, []byte(`{}`)))
+	require.Nil(t, tl.StateDelta("call-1", nil, []byte(`not-json`)))
+
+	resultJSON := []byte(`{
+		"path":"out/site.zip",
+		"saved_as":"out/site.zip",
+		"version":3,
+		"size_bytes":17139
+	}`)
+	delta := tl.StateDelta("call-2", nil, resultJSON)
+	payload, ok := delta[skill.StateKeyArtifacts]
+	require.True(t, ok)
+
+	var parsed map[string]any
+	require.NoError(t, json.Unmarshal(payload, &parsed))
+	artifacts := parsed["artifacts"].([]any)
+	artifactMap := artifacts[0].(map[string]any)
+	require.Equal(t, "artifact://out/site.zip@3", artifactMap["ref"])
+}
+
+func publishArtifactContext() context.Context {
+	svc := inmemory.NewService()
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{
+			ID:      "sess-publish-stub",
+			AppName: "app",
+			UserID:  "user",
+		}),
+		agent.WithInvocationArtifactService(svc),
+	)
+	return agent.NewInvocationContext(context.Background(), inv)
+}
+
+func newStubExecTool(fs codeexecutor.WorkspaceFS) *ExecTool {
+	exec := &stubEngineExec{
+		eng: codeexecutor.NewEngine(&nonInteractiveMgr{}, fs, &nonInteractiveRunner{}),
+	}
+	return NewExecTool(exec)
+}
+
+type stubEngineExec struct {
+	eng codeexecutor.Engine
+}
+
+func (s *stubEngineExec) ExecuteCode(context.Context, codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (s *stubEngineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+func (s *stubEngineExec) Engine() codeexecutor.Engine { return s.eng }
+
+type stubOutputFS struct {
+	manifest codeexecutor.OutputManifest
+	err      error
+}
+
+func (f stubOutputFS) PutFiles(context.Context, codeexecutor.Workspace, []codeexecutor.PutFile) error {
+	return nil
+}
+
+func (f stubOutputFS) StageDirectory(context.Context, codeexecutor.Workspace, string, string, codeexecutor.StageOptions) error {
+	return nil
+}
+
+func (f stubOutputFS) Collect(context.Context, codeexecutor.Workspace, []string) ([]codeexecutor.File, error) {
+	return nil, nil
+}
+
+func (f stubOutputFS) StageInputs(context.Context, codeexecutor.Workspace, []codeexecutor.InputSpec) error {
+	return nil
+}
+
+func (f stubOutputFS) CollectOutputs(context.Context, codeexecutor.Workspace, codeexecutor.OutputSpec) (codeexecutor.OutputManifest, error) {
+	return f.manifest, f.err
 }
