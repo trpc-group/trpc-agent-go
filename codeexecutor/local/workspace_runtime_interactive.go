@@ -238,6 +238,21 @@ func (s *interactiveSession) Close() error {
 	return err
 }
 
+func (s *interactiveSession) State() codeexecutor.ProgramState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := codeexecutor.ProgramState{
+		Status: codeexecutor.ProgramStatusRunning,
+	}
+	if s.finished.IsZero() {
+		return state
+	}
+	state.Status = codeexecutor.ProgramStatusExited
+	code := s.exitCode
+	state.ExitCode = &code
+	return state
+}
+
 func (s *interactiveSession) RunResult() codeexecutor.RunResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()

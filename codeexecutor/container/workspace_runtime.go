@@ -882,13 +882,25 @@ func (r *workspaceRuntime) CollectOutputs(
 			data = data[:maxFileBytes]
 			mf.LimitsHit = true
 		}
+		if int64(len(data)) > left {
+			data = data[:left]
+			mf.LimitsHit = true
+		}
+		truncated := sizeBytes > int64(len(data))
+		if truncated && spec.Save {
+			rel := strings.TrimPrefix(line, ws.Path+"/")
+			return codeexecutor.OutputManifest{}, fmt.Errorf(
+				"cannot save truncated output file: %s",
+				rel,
+			)
+		}
 		left -= int64(len(data))
 		rel := strings.TrimPrefix(line, ws.Path+"/")
 		ref := codeexecutor.FileRef{
 			Name:      rel,
 			MIMEType:  mime,
 			SizeBytes: sizeBytes,
-			Truncated: sizeBytes > int64(len(data)),
+			Truncated: truncated,
 		}
 		if spec.Inline {
 			ref.Content = string(data)
