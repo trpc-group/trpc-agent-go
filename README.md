@@ -137,6 +137,11 @@ tools := []tool.Tool{
 `.tar.gz` archive). The payload is downloaded and cached locally (set
 `SKILLS_CACHE_DIR` to override the cache location).
 
+`NewFSRepository` also accepts multiple roots, which is useful for
+combining shared skills with user-private skills. In a long-lived
+process, call `repo.Refresh()` after installing, deleting, or renaming a
+skill so the next turn sees the updated skill set.
+
 If you wire Skills through `LLMAgent` with `llmagent.WithCodeExecutor(...)`,
 consider also setting
 `llmagent.WithEnableCodeExecutionResponseProcessor(false)` so Markdown fenced
@@ -546,7 +551,8 @@ Example: [examples/evaluation](examples/evaluation)
 
 ### 11. Agent Skills
 
-Example: [examples/skillrun](examples/skillrun)
+Examples: [examples/skillrun](examples/skillrun),
+[examples/skillfind](examples/skillfind)
 
 - Skills are folders with a `SKILL.md` spec + optional docs/scripts.
 - Built-in tools: `skill_load`, `skill_list_docs`, `skill_select_docs`,
@@ -559,6 +565,10 @@ Example: [examples/skillrun](examples/skillrun)
   without inlining full scripts into the prompt. They are registered
   only when the code executor exposes `InteractiveProgramRunner`
   (or falls back to a local engine that does).
+- `skill.NewFSRepository(...)` can scan multiple roots, such as a shared
+  skills directory plus a user-private directory. Use
+  `(*skill.FSRepository).Refresh()` after skill installation or removal
+  in long-lived processes.
 - Prefer using `skill_run` only for commands required by the selected skill
   docs, not for generic shell exploration.
 - When `LLMAgent` uses `WithCodeExecutor(...)` only to support `skill_run`,
@@ -568,6 +578,12 @@ Example: [examples/skillrun](examples/skillrun)
   `examples/skilldynamicschema`, and
   `examples/structuredoutputskills`) follow this pattern so fenced code
   blocks embedded in assistant text do not auto-execute.
+- `examples/skillfind` demonstrates a real end-to-end discovery flow:
+  the model uses a built-in `skill-find` skill to search the public web,
+  install a public GitHub skill into a user-private directory, refresh
+  the repository, and use the new skill in the same conversation.
+  Local execution stays off by default and can be enabled explicitly
+  when you want to run an installed skill.
 
 ### 12. Artifacts
 
