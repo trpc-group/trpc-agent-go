@@ -228,6 +228,20 @@ agent := llmagent.New(
 )
 ```
 
+`NewFSRepository` 也可以同时扫描多个根目录，常见做法是把通用
+skills 目录和用户私有 skills 目录一起传入：
+
+```go
+repo, _ := skill.NewFSRepository(
+    "./skills/common",
+    "./skills/users/alice",
+)
+```
+
+如果你的进程在启动后还会安装、删除或重命名 skill，请在文件系统
+变更完成后调用一次 `repo.Refresh()`，让下一轮请求看到最新技能
+集合。`Refresh()` 适用于仓库结构变化，不建议每次请求前都调用。
+
 仅知识注入模式：
 
 ```go
@@ -291,6 +305,15 @@ GAIA 基准示例（技能 + 文件工具）：
 
 该示例包含数据集下载脚本，以及 `whisper`（音频）/`ocr`（图片）等
 技能的 Python 依赖准备说明。
+
+真实技能发现/安装示例（真实模型 + 真实公网/GitHub）：
+[examples/skillfind/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillfind/README.md)
+
+这个示例从内置的 `skill-find` skill 出发，先到公网搜索候选
+skills，再把 GitHub 上的公开 skill 安装到用户私有目录中，调用
+`repo.Refresh()` 让仓库立即重新发现，然后在同一个会话里继续使用
+新 skill。默认不会执行下载下来的代码，只有显式开启后才允许
+`skill_run`。
 
 SkillLoadMode 演示（无需 API key）：
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
@@ -1212,5 +1235,7 @@ agent := llmagent.New(
 - 本仓库：
   - 交互示例： [examples/skillrun/main.go]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
+  - 真实技能发现/安装示例： [examples/skillfind/README.md]
+    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillfind/README.md)
   - 示例技能： [examples/skillrun/skills/python_math/SKILL.md]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)

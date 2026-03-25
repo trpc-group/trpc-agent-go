@@ -245,6 +245,21 @@ agent := llmagent.New(
 )
 ```
 
+`NewFSRepository` can scan multiple roots. A common pattern is one
+shared skills directory plus one user-private skills directory:
+
+```go
+repo, _ := skill.NewFSRepository(
+    "./skills/common",
+    "./skills/users/alice",
+)
+```
+
+If a long-lived process installs, deletes, or renames skills after
+startup, call `repo.Refresh()` after the filesystem update is committed.
+`Refresh()` is meant for repository structure changes, not for every
+request.
+
 Knowledge-only mode:
 
 ```go
@@ -309,6 +324,15 @@ GAIA benchmark demo (skills + file tools):
 
 It includes a dataset downloader script and notes on Python dependencies
 for skills like `whisper` (audio) and `ocr` (images).
+
+Real discovery/install demo (real model + real web/GitHub):
+[examples/skillfind/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillfind/README.md)
+
+It starts with a built-in `skill-find` skill, searches the public web for
+candidate skills, installs a public skill from GitHub into a user-private
+directory, refreshes the repository, and uses the new skill in the same
+conversation. Local execution stays disabled by default and is only
+enabled when you opt in.
 
 SkillLoadMode demo (no API key required):
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
@@ -1250,5 +1274,7 @@ Common spans:
 - This repo:
   - Interactive demo: [examples/skillrun/main.go]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
+  - Real discovery/install demo: [examples/skillfind/README.md]
+    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillfind/README.md)
   - Sample skill: [examples/skillrun/skills/python_math/SKILL.md]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)
