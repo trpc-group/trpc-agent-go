@@ -549,6 +549,7 @@ child := agenttool.NewTool(
 - Completion signaling: Tool response events are marked `RequiresCompletion=true`; Runner sends completion automatically
 - De-duplication: When inner deltas are forwarded, avoid printing the aggregated final `tool.response` text again by default
 - Model compatibility: Some providers require a tool message after tool_calls; AgentTool automatically supplies the aggregated content
+- `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
 
 ## Tool Integration and Usage
 

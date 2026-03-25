@@ -118,6 +118,8 @@ type AfterToolResult struct {
 	Context context.Context
 	// CustomResult if not nil, will replace the original result.
 	CustomResult any
+	// SkipSummarization requests ending the turn after the tool response.
+	SkipSummarization bool
 }
 
 // AfterToolCallbackStructured is called after a tool is executed.
@@ -125,6 +127,8 @@ type AfterToolResult struct {
 // - result: contains optional custom result and context for subsequent operations.
 //   - CustomResult: if not nil, this result will be used instead of the actual tool result.
 //   - Context: if not nil, will be used by the framework for subsequent operations.
+//   - SkipSummarization: if true, the framework will skip the extra
+//     post-tool LLM summarization step.
 //
 // - error: if not nil, this error will be returned.
 type AfterToolCallbackStructured = func(
@@ -456,6 +460,18 @@ func (c *Callbacks) processAfterToolResult(
 	}
 	if result.Context != nil {
 		*ctx = result.Context
+	}
+	if *lastResult != nil {
+		merged := *result
+		if merged.Context == nil {
+			merged.Context = (*lastResult).Context
+		}
+		if merged.CustomResult == nil {
+			merged.CustomResult = (*lastResult).CustomResult
+		}
+		merged.SkipSummarization = merged.SkipSummarization ||
+			(*lastResult).SkipSummarization
+		result = &merged
 	}
 	if result.CustomResult != nil {
 		*lastResult = result

@@ -136,9 +136,11 @@ func (c *agentToolChat) setup(_ context.Context) error {
 	)
 
 	// Create agent tool that wraps the math specialist agent.
+	// SkipSummarization surfaces the child tool result directly.
+	// The run still finishes on runner.completion.
 	agentTool := agenttool.NewTool(
 		mathAgent,
-		agenttool.WithSkipSummarization(true),  // Skip summarization to get raw response
+		agenttool.WithSkipSummarization(true),
 		agenttool.WithStreamInner(c.showInner), // Stream inner agent deltas when requested
 	)
 

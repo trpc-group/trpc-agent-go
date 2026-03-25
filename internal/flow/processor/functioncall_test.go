@@ -269,7 +269,9 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 		},
 	}
 
-	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	_, choices, _, _, _, err := p.executeToolCall(
+		ctx, inv, pc, tools, 0, nil,
+	)
 	require.NoError(t, err)
 	require.NotNil(t, choices)
 	require.NotEmpty(t, choices)
@@ -352,7 +354,9 @@ func TestExecuteToolCall(t *testing.T) {
 		},
 	}
 
-	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	_, choices, _, _, _, err := p.executeToolCall(
+		ctx, inv, pc, tools, 0, nil,
+	)
 	res, _ := json.Marshal("Tokyo'weather is good")
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
@@ -382,7 +386,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultSkipsNullToolMessage(t *t
 		},
 	}
 	eventCh := make(chan *event.Event, 4)
-	_, choices, _, _, err := p.executeToolCall(
+	_, choices, _, _, _, err := p.executeToolCall(
 		ctx,
 		inv,
 		tc,
@@ -441,7 +445,9 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Nil_NoOverride(t *testing.T)
 		},
 	}
 
-	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	_, choices, _, _, _, err := p.executeToolCall(
+		ctx, inv, pc, tools, 0, nil,
+	)
 	require.NoError(t, err)
 	require.True(t, called, "ToolResultMessages callback should be invoked")
 	require.Len(t, choices, 1)
@@ -485,7 +491,9 @@ func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithSingleMessage(t 
 		},
 	}
 
-	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	_, choices, _, _, _, err := p.executeToolCall(
+		ctx, inv, pc, tools, 0, nil,
+	)
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
 
@@ -533,7 +541,9 @@ func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithMultipleMessages
 		},
 	}
 
-	_, choices, _, _, err := p.executeToolCall(ctx, inv, pc, tools, 0, nil)
+	_, choices, _, _, _, err := p.executeToolCall(
+		ctx, inv, pc, tools, 0, nil,
+	)
 	require.NoError(t, err)
 	require.Len(t, choices, 2)
 
@@ -573,7 +583,9 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Error(t *testing.T) {
 		},
 	}
 
-	_, choices, _, shouldIgnore, err := p.executeToolCall(ctx, inv, tc, tools, 0, nil)
+	_, choices, _, shouldIgnore, _, err := p.executeToolCall(
+		ctx, inv, tc, tools, 0, nil,
+	)
 	require.Error(t, err)
 	require.True(t, shouldIgnore)
 	require.Nil(t, choices)
@@ -618,7 +630,7 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Panic(t *testing.T) {
 	var err error
 	var shouldIgnore bool
 	require.NotPanics(t, func() {
-		_, _, _, shouldIgnore, err = p.executeToolCall(
+		_, _, _, shouldIgnore, _, err = p.executeToolCall(
 			ctx,
 			inv,
 			tc,
@@ -663,7 +675,9 @@ func TestExecuteToolCall_ToolResultMessagesCallback_UnsupportedReturnType(t *tes
 		},
 	}
 
-	_, choices, _, shouldIgnore, err := p.executeToolCall(ctx, inv, tc, tools, 0, nil)
+	_, choices, _, shouldIgnore, _, err := p.executeToolCall(
+		ctx, inv, tc, tools, 0, nil,
+	)
 	require.NoError(t, err)
 	require.True(t, shouldIgnore)
 	require.Len(t, choices, 1)
@@ -2110,7 +2124,9 @@ func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 		},
 	}
 
-	_, choices, _, shouldIgnoreError, err := p.executeToolCall(ctx, inv, pc2, tools, 0, nil)
+	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+		ctx, inv, pc2, tools, 0, nil,
+	)
 	require.True(t, shouldIgnoreError)
 	require.Contains(t, err.Error(), ErrorToolNotFound)
 	require.Nil(t, choices)
@@ -2344,7 +2360,7 @@ func TestExecuteToolCall_MarshalError_IsIgnorable(t *testing.T) {
 	tools := map[string]tool.Tool{
 		"bad": &badResultTool{dec: &tool.Declaration{Name: "bad"}},
 	}
-	_, choices, _, ignorable, err := p.executeToolCall(
+	_, choices, _, ignorable, _, err := p.executeToolCall(
 		ctx, inv, pc, tools, 0, nil,
 	)
 	require.Error(t, err)
@@ -2712,7 +2728,7 @@ func TestExecuteToolCall_MarshalErrorIgnored(t *testing.T) {
 			Arguments: []byte(`{}`),
 		},
 	}
-	_, choices, _, ign, err := p.executeToolCall(
+	_, choices, _, ign, _, err := p.executeToolCall(
 		ctx, inv, tc, tools, 0, nil,
 	)
 	require.True(t, ign)
@@ -2835,6 +2851,248 @@ func TestHandleFunctionCalls_SkipSummarization_Parallel_PropagatesFlag(t *testin
 	require.True(t, evt.Actions.SkipSummarization)
 	// Parallel path returns early from handleFunctionCalls (via executeToolCallsInParallel),
 	// so EndInvocation is not toggled here. We only verify flag propagation.
+}
+
+func TestProcessResponse_AfterToolCallbackSkipSummarizationEndsInvocation(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		out, ok := args.Result.(map[string]any)
+		require.True(t, ok)
+		return &tool.AfterToolResult{
+			SkipSummarization: out["final"] == true,
+		}, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return map[string]any{"final": true}, nil
+		},
+	}
+	tools := map[string]tool.Tool{"t": tl}
+	inv := &agent.Invocation{InvocationID: "inv-cb", AgentName: "agent"}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{{
+			ID: "c1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "t",
+				Arguments: []byte("{}"),
+			},
+		}}},
+	}}}
+
+	ch := make(chan *event.Event, 4)
+	defer close(ch)
+	p.ProcessResponse(context.Background(), inv, req, rsp, ch)
+
+	var got *event.Event
+	for e := range ch {
+		got = e
+		break
+	}
+	require.NotNil(t, got)
+	require.NotNil(t, got.Response)
+	require.NotNil(t, got.Actions)
+	require.True(t, got.Actions.SkipSummarization)
+	require.False(t, got.Response.Done)
+	require.False(t, got.IsFinalResponse())
+	require.True(t, inv.EndInvocation)
+}
+
+func TestProcessResponse_AfterToolCallbackSkipSummarization_LongRunningNilResult(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		require.Nil(t, args.Result)
+		return &tool.AfterToolResult{SkipSummarization: true}, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	tl := &skipSummCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		result:      nil,
+		longRun:     true,
+	}
+	tools := map[string]tool.Tool{"t": tl}
+	inv := &agent.Invocation{InvocationID: "inv-nil", AgentName: "agent"}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{Model: "m", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: []model.ToolCall{{
+			ID: "c1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "t",
+				Arguments: []byte("{}"),
+			},
+		}}},
+	}}}
+
+	ch := make(chan *event.Event, 4)
+	defer close(ch)
+	p.ProcessResponse(context.Background(), inv, req, rsp, ch)
+
+	var got *event.Event
+	for e := range ch {
+		got = e
+		break
+	}
+	require.NotNil(t, got)
+	require.NotNil(t, got.Response)
+	require.NotNil(t, got.Actions)
+	require.True(t, got.Actions.SkipSummarization)
+	require.Len(t, got.Response.Choices, 1)
+	require.Equal(t, 0, got.Response.Choices[0].Index)
+	require.Equal(t, "c1", got.Response.Choices[0].Message.ToolID)
+	require.Equal(t, "t", got.Response.Choices[0].Message.ToolName)
+	require.Empty(t, got.Response.Choices[0].Message.Content)
+	require.False(t, got.Response.Done)
+	require.False(t, got.IsFinalResponse())
+	require.True(t, inv.EndInvocation)
+}
+
+func TestHandleFunctionCalls_AfterToolCallbackSkipSummarizationParallelError(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		if args.Error == nil {
+			return nil, nil
+		}
+		return &tool.AfterToolResult{SkipSummarization: true}, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(true, callbacks)
+	tErr := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "te"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, fmt.Errorf("boom")
+		},
+	}
+	tOther := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "to"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	tools := map[string]tool.Tool{"te": tErr, "to": tOther}
+	inv := &agent.Invocation{InvocationID: "inv-perr", AgentName: "agent"}
+	toolCalls := []model.ToolCall{
+		{
+			ID: "c1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "te",
+				Arguments: []byte("{}"),
+			},
+		},
+		{
+			ID: "c2",
+			Function: model.FunctionDefinitionParam{
+				Name:      "to",
+				Arguments: []byte("{}"),
+			},
+		},
+	}
+	rsp := &model.Response{
+		Model:   "m",
+		Choices: []model.Choice{{Message: model.Message{ToolCalls: toolCalls}}},
+	}
+
+	evt, err := p.handleFunctionCalls(context.Background(), inv, rsp, tools, nil)
+	require.NoError(t, err)
+	require.NotNil(t, evt)
+	require.NotNil(t, evt.Response)
+	require.NotNil(t, evt.Actions)
+	require.True(t, evt.Actions.SkipSummarization)
+	require.False(t, evt.Response.Done)
+	require.False(t, evt.IsFinalResponse())
+}
+
+func TestHandleFunctionCalls_AfterToolCallbackSkipSummarizationParallelLongRunningNilResult(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		if args.Result != nil {
+			return nil, nil
+		}
+		return &tool.AfterToolResult{SkipSummarization: true}, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(true, callbacks)
+	tNil := &skipSummCallableTool{
+		declaration: &tool.Declaration{Name: "tn"},
+		result:      nil,
+		longRun:     true,
+	}
+	tOther := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "to"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	tools := map[string]tool.Tool{"to": tOther, "tn": tNil}
+	inv := &agent.Invocation{InvocationID: "inv-par-nil", AgentName: "agent"}
+	toolCalls := []model.ToolCall{
+		{
+			ID: "c1",
+			Function: model.FunctionDefinitionParam{
+				Name:      "to",
+				Arguments: []byte("{}"),
+			},
+		},
+		{
+			ID: "c2",
+			Function: model.FunctionDefinitionParam{
+				Name:      "tn",
+				Arguments: []byte("{}"),
+			},
+		},
+	}
+	rsp := &model.Response{
+		Model:   "m",
+		Choices: []model.Choice{{Message: model.Message{ToolCalls: toolCalls}}},
+	}
+
+	evt, err := p.handleFunctionCalls(context.Background(), inv, rsp, tools, nil)
+	require.NoError(t, err)
+	require.NotNil(t, evt)
+	require.NotNil(t, evt.Response)
+	require.NotNil(t, evt.Actions)
+	require.True(t, evt.Actions.SkipSummarization)
+	require.Len(t, evt.Response.Choices, 2)
+	require.False(t, evt.Response.Done)
+	require.False(t, evt.IsFinalResponse())
+
+	indices := map[string]int{}
+	var nilChoice *model.Choice
+	for i := range evt.Response.Choices {
+		choice := &evt.Response.Choices[i]
+		indices[choice.Message.ToolID] = choice.Index
+		if choice.Message.ToolID == "c2" {
+			nilChoice = choice
+		}
+	}
+	require.Equal(t, 0, indices["c1"])
+	require.Equal(t, 1, indices["c2"])
+	require.NotNil(t, nilChoice)
+	require.Equal(t, "tn", nilChoice.Message.ToolName)
+	require.Empty(t, nilChoice.Message.Content)
 }
 
 // stream tool forwarding a single final assistant message (no deltas).
@@ -4381,7 +4639,13 @@ func TestExecuteToolWithCallbacks_BeforeCustomResult(t *testing.T) {
 	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
-	_, res, _, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	_, res, _, _, _, err := p.executeToolWithCallbacks(
+		ctx,
+		inv,
+		model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}},
+		tl,
+		nil,
+	)
 	require.NoError(t, err)
 	b, _ := json.Marshal(map[string]any{"v": 1})
 	require.JSONEq(t, string(b), string(mustJSON(res)))
@@ -4447,7 +4711,7 @@ func TestExecuteToolWithCallbacks_PluginBeforeToolShortCircuit(t *testing.T) {
 		Function: model.FunctionDefinitionParam{Name: "t"},
 	}
 
-	_, res, _, _, err := proc.executeToolWithCallbacks(
+	_, res, _, _, _, err := proc.executeToolWithCallbacks(
 		context.Background(),
 		inv,
 		toolCall,
@@ -4506,7 +4770,7 @@ func TestExecuteToolWithCallbacks_PluginAfterToolOverrides(t *testing.T) {
 		Function: model.FunctionDefinitionParam{Name: "t"},
 	}
 
-	_, res, _, _, err := proc.executeToolWithCallbacks(
+	_, res, _, _, _, err := proc.executeToolWithCallbacks(
 		context.Background(),
 		inv,
 		toolCall,
@@ -4549,7 +4813,7 @@ func TestExecuteToolWithCallbacks_AfterToolReceivesNormalizedResultAndMeta(t *te
 		},
 	}
 
-	_, res, _, _, err := proc.executeToolWithCallbacks(
+	_, res, _, _, _, err := proc.executeToolWithCallbacks(
 		context.Background(),
 		nil,
 		model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}},
@@ -4561,6 +4825,41 @@ func TestExecuteToolWithCallbacks_AfterToolReceivesNormalizedResultAndMeta(t *te
 	require.Equal(t, expectedResult, gotResult)
 	require.Equal(t, expectedMeta, gotMeta)
 	require.Same(t, rawResult, res)
+}
+
+func TestExecuteToolWithCallbacks_AfterToolCanRequestSkipSummarization(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		out, ok := args.Result.(map[string]any)
+		require.True(t, ok)
+		return &tool.AfterToolResult{
+			SkipSummarization: out["final"] == true,
+		}, nil
+	})
+
+	proc := NewFunctionCallResponseProcessor(false, callbacks)
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return map[string]any{"final": true}, nil
+		},
+	}
+
+	_, res, _, _, skipSummarization, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		nil,
+		model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}},
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"final": true}, res)
+	require.True(t, skipSummarization)
 }
 
 func TestExecuteToolWithCallbacks_PluginAfterToolReceivesNormalizedResultAndMeta(t *testing.T) {
@@ -4601,7 +4900,7 @@ func TestExecuteToolWithCallbacks_PluginAfterToolReceivesNormalizedResultAndMeta
 		},
 	}
 
-	_, res, _, _, err := proc.executeToolWithCallbacks(
+	_, res, _, _, _, err := proc.executeToolWithCallbacks(
 		context.Background(),
 		inv,
 		model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}},
@@ -4613,6 +4912,47 @@ func TestExecuteToolWithCallbacks_PluginAfterToolReceivesNormalizedResultAndMeta
 	require.Equal(t, expectedResult, gotResult)
 	require.Equal(t, expectedMeta, gotMeta)
 	require.Same(t, rawResult, res)
+}
+
+func TestExecuteToolWithCallbacks_PluginAfterToolCanRequestSkipSummarization(
+	t *testing.T,
+) {
+	p := &hookPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterTool(func(
+				ctx context.Context,
+				args *tool.AfterToolArgs,
+			) (*tool.AfterToolResult, error) {
+				out, ok := args.Result.(map[string]any)
+				require.True(t, ok)
+				return &tool.AfterToolResult{
+					SkipSummarization: out["final"] == true,
+				}, nil
+			})
+		},
+	}
+
+	pm := plugin.MustNewManager(p)
+	proc := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{Plugins: pm}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return map[string]any{"final": true}, nil
+		},
+	}
+
+	_, res, _, _, skipSummarization, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}},
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"final": true}, res)
+	require.True(t, skipSummarization)
 }
 
 func TestExecuteToolWithCallbacks_PluginBeforeToolError(t *testing.T) {
@@ -4657,7 +4997,7 @@ func TestExecuteToolWithCallbacks_PluginBeforeToolError(t *testing.T) {
 		Function: model.FunctionDefinitionParam{Name: "t"},
 	}
 
-	_, _, _, _, err := proc.executeToolWithCallbacks(
+	_, _, _, _, _, err := proc.executeToolWithCallbacks(
 		context.Background(),
 		inv,
 		toolCall,
@@ -4726,7 +5066,7 @@ func TestExecuteToolWithCallbacks_PluginBeforeToolArgsModified(
 		},
 	}
 
-	_, _, gotArgs, _, err := proc.executeToolWithCallbacks(
+	_, _, gotArgs, _, _, err := proc.executeToolWithCallbacks(
 		context.Background(),
 		inv,
 		toolCall,
@@ -4760,7 +5100,13 @@ func TestExecuteToolWithCallbacks_RepairsToolCallArgumentsWhenEnabled(t *testing
 		},
 	}
 
-	_, res, _, _, err := proc.executeToolWithCallbacks(context.Background(), inv, toolCall, tl, nil)
+	_, res, _, _, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
 	require.NoError(t, err)
 	require.Equal(t, "ok", res)
 	require.Equal(t, "{\"a\":2}", toolArgs)
@@ -4793,7 +5139,7 @@ func TestExecuteToolWithCallbacks_PluginAfterToolError(t *testing.T) {
 		Function: model.FunctionDefinitionParam{Name: "t"},
 	}
 
-	_, _, _, _, err := proc.executeToolWithCallbacks(
+	_, _, _, _, _, err := proc.executeToolWithCallbacks(
 		context.Background(),
 		inv,
 		toolCall,
@@ -4850,7 +5196,7 @@ func TestExecuteToolWithCallbacks_PluginAfterToolOverridePreservesErr(
 		Function: model.FunctionDefinitionParam{Name: "t"},
 	}
 
-	_, res, _, _, err := proc.executeToolWithCallbacks(
+	_, res, _, _, _, err := proc.executeToolWithCallbacks(
 		context.Background(),
 		inv,
 		toolCall,
@@ -4873,7 +5219,13 @@ func TestExecuteToolWithCallbacks_BeforeError(t *testing.T) {
 	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
-	_, _, _, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	_, _, _, _, _, err := p.executeToolWithCallbacks(
+		ctx,
+		inv,
+		model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}},
+		tl,
+		nil,
+	)
 	require.Error(t, err)
 }
 
@@ -4888,7 +5240,13 @@ func TestExecuteToolWithCallbacks_AfterOverrideAndError(t *testing.T) {
 	inv := &agent.Invocation{}
 	tl := &mockCallableTool{declaration: &tool.Declaration{Name: "t"},
 		callFn: func(_ context.Context, _ []byte) (any, error) { return "x", nil }}
-	_, res, _, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	_, res, _, _, _, err := p.executeToolWithCallbacks(
+		ctx,
+		inv,
+		model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}},
+		tl,
+		nil,
+	)
 	require.NoError(t, err)
 	b, _ := json.Marshal(map[string]any{"ok": true})
 	require.JSONEq(t, string(b), string(mustJSON(res)))
@@ -4901,7 +5259,13 @@ func TestExecuteToolWithCallbacks_AfterOverrideAndError(t *testing.T) {
 	})
 	inv2 := &agent.Invocation{}
 	p.toolCallbacks = cb
-	_, _, _, _, err = p.executeToolWithCallbacks(ctx, inv2, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, tl, nil)
+	_, _, _, _, _, err = p.executeToolWithCallbacks(
+		ctx,
+		inv2,
+		model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}},
+		tl,
+		nil,
+	)
 	require.Error(t, err)
 }
 
@@ -5000,7 +5364,13 @@ func TestExecuteToolWithCallbacks_AgentToolRunErrorAfterBeforeToolContextReplace
 	tc := model.ToolCall{ID: "call-1", Function: model.FunctionDefinitionParam{Name: "agent-tool"}}
 	st := agenttool.NewTool(&runErrorSubAgent{name: "err-agent"}, agenttool.WithStreamInner(true))
 	ch := make(chan *event.Event, 1)
-	_, res, _, _, err := f.executeToolWithCallbacks(ctx, inv, tc, st, ch)
+	_, res, _, _, _, err := f.executeToolWithCallbacks(
+		ctx,
+		inv,
+		tc,
+		st,
+		ch,
+	)
 	require.NoError(t, err)
 	require.Equal(t, "agent tool run error: boom", res)
 	ev := <-ch
@@ -5084,7 +5454,13 @@ func TestExecuteToolWithCallbacks_BeforeToolContextReplacementDoesNotReinjectToo
 			return map[string]any{"ok": true}, nil
 		},
 	}
-	_, res, _, _, err := f.executeToolWithCallbacks(context.Background(), inv, tc, tl, nil)
+	_, res, _, _, _, err := f.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		tc,
+		tl,
+		nil,
+	)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	require.False(t, sawToolCallID)
@@ -5108,7 +5484,13 @@ func TestExecuteTool_NamedTool(t *testing.T) {
 	require.Len(t, namedTools, 1)
 	nameTool := namedTools[0]
 	require.IsType(t, &itool.NamedTool{}, nameTool)
-	_, res, _, _, err := p.executeToolWithCallbacks(ctx, inv, model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}}, nameTool, nil)
+	_, res, _, _, _, err := p.executeToolWithCallbacks(
+		ctx,
+		inv,
+		model.ToolCall{Function: model.FunctionDefinitionParam{Name: "t"}},
+		nameTool,
+		nil,
+	)
 	require.NoError(t, err)
 	b, _ := json.Marshal(map[string]any{"k": "v"})
 	require.JSONEq(t, string(b), string(mustJSON(res)))
@@ -5146,7 +5528,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultAfterToolContextReplaceme
 		},
 	}
 	eventCh := make(chan *event.Event, 4)
-	_, choices, _, _, err := p.executeToolCall(
+	_, choices, _, _, _, err := p.executeToolCall(
 		ctx,
 		inv,
 		tc,
@@ -5214,7 +5596,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultStillRunsToolResultMessag
 		},
 	}
 	eventCh := make(chan *event.Event, 4)
-	_, choices, _, _, err := p.executeToolCall(
+	_, choices, _, _, _, err := p.executeToolCall(
 		ctx,
 		inv,
 		tc,
@@ -5262,7 +5644,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultCallbackError(t *testing.
 		},
 	}
 	eventCh := make(chan *event.Event, 4)
-	_, choices, _, _, err := p.executeToolCall(
+	_, choices, _, _, _, err := p.executeToolCall(
 		ctx,
 		inv,
 		tc,
@@ -5304,7 +5686,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultCallbackFallsBackToDefaul
 		},
 	}
 	eventCh := make(chan *event.Event, 4)
-	_, choices, _, _, err := p.executeToolCall(
+	_, choices, _, _, _, err := p.executeToolCall(
 		ctx,
 		inv,
 		tc,
@@ -5393,7 +5775,8 @@ func TestShouldRequestStructuredStreamErrors_NilAndNamedTool(t *testing.T) {
 }
 
 func TestHasSyntheticStateOnlyToolChoice_NilContext(t *testing.T) {
-	require.False(t, hasSyntheticStateOnlyToolChoice(nil))
+	var ctx context.Context
+	require.False(t, hasSyntheticStateOnlyToolChoice(ctx))
 }
 
 func TestHandleFunctionCalls_PreservesCallbackDefaultStateOnlyToolChoiceAlongsideOtherToolResults(t *testing.T) {

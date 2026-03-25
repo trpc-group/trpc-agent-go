@@ -183,6 +183,7 @@ type AfterToolArgs struct {
 type AfterToolResult struct {
     Context      context.Context  // Optional context for subsequent operations
     CustomResult any              // If non-nil, replaces the original result
+    SkipSummarization bool        // If true, end the turn after tool.response
 }
 ```
 
@@ -201,6 +202,10 @@ Key points:
 - Arguments can be modified directly via `args.Arguments`.
 - If BeforeToolCallbackStructured returns a non-nil custom result, the tool is skipped and that result is used directly.
 - `ToolCallID` is available in `BeforeToolArgs` and `AfterToolArgs`.
+- `AfterToolResult.SkipSummarization` lets a callback end the turn after
+  `tool.response` when the tool result should be surfaced directly.
+- `SkipSummarization` only skips the extra summarization LLM call. The true
+  end-of-run marker is still `runner.completion` / `event.IsRunnerCompletion()`.
 
 ### Callback Execution Control
 
@@ -267,6 +272,27 @@ toolCallbacks := tool.NewCallbacks().
     return nil, nil
   })
 ```
+
+Dynamic skip-summarization example:
+
+```go
+toolCallbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+  if args.Error != nil {
+    return nil, nil
+  }
+  out, ok := args.Result.(map[string]any)
+  if ok && out["action"] != nil {
+    return &tool.AfterToolResult{
+      SkipSummarization: true,
+    }, nil
+  }
+  return nil, nil
+})
+```
+
+This ends the turn after the tool response. It does not turn `tool.response`
+into a final assistant message, so consumers that need the real terminal
+signal should keep reading until `runner.completion`.
 
 **Usage**: After creating callbacks, pass them to the LLM Agent when creating it using the `llmagent.WithToolCallbacks()` option:
 

@@ -465,13 +465,18 @@ for event := range eventChan {
         }
     }
 
-    // 检查是否完成（注意：工具调用完成时不应该 break）
+    // 检查当前这条响应是否已完整结束
     if event.IsFinalResponse() {
         fmt.Println()
         break
     }
 }
 ```
+
+上面的示例使用 `event.IsFinalResponse()`，是因为它只关心“当前这条回复何时
+完整输出完”。如果你需要等待整次 `Runner.Run` 真正结束，例如
+`tool.response` 后可能还有后续处理，或在 GraphAgent 中还要等待图上其他节点
+完成，请改用 `event.IsRunnerCompletion()` 作为退出条件。
 
 该示例的完整代码可见 [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
 
