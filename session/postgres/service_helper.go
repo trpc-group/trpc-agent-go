@@ -233,75 +233,55 @@ func (s *Service) listSessions(
 }
 
 func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Event) error {
-	now := time.Now()
-
-	// Get current session state (always filter deleted records, but allow expired sessions).
-	var sessState *SessionState
-	var currentExpiresAt *time.Time
-	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
-		if rows.Next() {
-			var stateBytes []byte
-			if err := rows.Scan(&stateBytes, &currentExpiresAt); err != nil {
-				return err
-			}
-			sessState = &SessionState{}
-			if err := json.Unmarshal(stateBytes, sessState); err != nil {
-				return fmt.Errorf("unmarshal session state failed: %w", err)
-			}
-		}
-		return nil
-	}, fmt.Sprintf(`SELECT state, expires_at FROM %s
-		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
-		AND deleted_at IS NULL`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID)
-
-	if err != nil {
-		return fmt.Errorf("get session state failed: %w", err)
-	}
-	if sessState == nil {
-		return fmt.Errorf("session not found")
-	}
-
-	// Check if session is expired, log info if so.
-	if currentExpiresAt != nil && currentExpiresAt.Before(now) {
-		log.InfofContext(
-			ctx,
-			"appending event to expired session (app=%s, user=%s, "+
-				"session=%s), will extend expires_at",
-			key.AppName,
-			key.UserID,
-			key.SessionID,
-		)
-	}
-
-	sessState.UpdatedAt = now
-	if sessState.State == nil {
-		sessState.State = make(session.StateMap)
-	}
-	session.ApplyEventStateDeltaMap(sessState.State, event)
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("marshal session state failed: %w", err)
-	}
-
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event failed: %w", err)
 	}
-
-	var expiresAt *time.Time
-	if s.opts.sessionTTL > 0 {
-		t := now.Add(s.opts.sessionTTL)
-		expiresAt = &t
-	}
+	var updatedAt time.Time
+	var updatedStateBytes []byte
 
 	// Use transaction to update session state and insert event.
 	err = s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+		sessState, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		if err != nil {
+			return err
+		}
+
+		now := time.Now()
+		if currentExpiresAt != nil && currentExpiresAt.Before(now) {
+			log.InfofContext(
+				ctx,
+				"appending event to expired session (app=%s, user=%s, "+
+					"session=%s), will extend expires_at",
+				key.AppName,
+				key.UserID,
+				key.SessionID,
+			)
+		}
+
+		sessState.UpdatedAt = now
+		if sessState.State == nil {
+			sessState.State = make(session.StateMap)
+		}
+		session.ApplyEventStateDeltaMap(sessState.State, event)
+		updatedAt = now
+
+		updatedStateBytes, err = json.Marshal(sessState)
+		if err != nil {
+			return fmt.Errorf("marshal session state failed: %w", err)
+		}
+
+		var expiresAt *time.Time
+		if s.opts.sessionTTL > 0 {
+			t := now.Add(s.opts.sessionTTL)
+			expiresAt = &t
+		}
+
 		// Update session state
-		_, err := tx.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
 			 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
-			updatedStateBytes, sessState.UpdatedAt, expiresAt,
+			updatedStateBytes, updatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -327,82 +307,64 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 }
 
 func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
-	now := time.Now()
-
-	// Get current session state (always filter deleted records, but allow expired sessions).
-	var sessState *SessionState
-	var currentExpiresAt *time.Time
-	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
-		if rows.Next() {
-			var stateBytes []byte
-			if err := rows.Scan(&stateBytes, &currentExpiresAt); err != nil {
-				return err
-			}
-			sessState = &SessionState{}
-			if err := json.Unmarshal(stateBytes, sessState); err != nil {
-				return fmt.Errorf("unmarshal session state failed: %w", err)
-			}
-		}
-		return nil
-	}, fmt.Sprintf(`SELECT state, expires_at FROM %s
-		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
-		AND deleted_at IS NULL`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID)
-
-	if err != nil {
-		return fmt.Errorf("get session state failed: %w", err)
-	}
-	if sessState == nil {
-		return fmt.Errorf("session not found")
-	}
-
-	// Check if session is expired, log info if so.
-	if currentExpiresAt != nil && currentExpiresAt.Before(now) {
-		log.InfofContext(
-			ctx,
-			"appending track event to expired session (app=%s, "+
-				"user=%s, session=%s), will extend expires_at",
-			key.AppName,
-			key.UserID,
-			key.SessionID,
-		)
-	}
-
-	sess := &session.Session{
-		ID:      key.SessionID,
-		AppName: key.AppName,
-		UserID:  key.UserID,
-		State:   sessState.State,
-	}
-	if err := sess.AppendTrackEvent(trackEvent); err != nil {
-		return err
-	}
-	sessState.State = sess.SnapshotState()
-	sessState.UpdatedAt = sess.UpdatedAt
-
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("marshal session state failed: %w", err)
-	}
-
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event failed: %w", err)
 	}
-
-	var expiresAt *time.Time
-	if s.opts.sessionTTL > 0 {
-		t := now.Add(s.opts.sessionTTL)
-		expiresAt = &t
-	}
+	var updatedAt time.Time
+	var updatedStateBytes []byte
 
 	// Use transaction to update session state and insert track event.
 	err = s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+		sessState, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		if err != nil {
+			return err
+		}
+
+		now := time.Now()
+		if currentExpiresAt != nil && currentExpiresAt.Before(now) {
+			log.InfofContext(
+				ctx,
+				"appending track event to expired session (app=%s, "+
+					"user=%s, session=%s), will extend expires_at",
+				key.AppName,
+				key.UserID,
+				key.SessionID,
+			)
+		}
+
+		if sessState.State == nil {
+			sessState.State = make(session.StateMap)
+		}
+		sess := &session.Session{
+			ID:      key.SessionID,
+			AppName: key.AppName,
+			UserID:  key.UserID,
+			State:   sessState.State,
+		}
+		if err := sess.AppendTrackEvent(trackEvent); err != nil {
+			return err
+		}
+		sessState.State = sess.SnapshotState()
+		sessState.UpdatedAt = now
+		updatedAt = now
+
+		updatedStateBytes, err = json.Marshal(sessState)
+		if err != nil {
+			return fmt.Errorf("marshal session state failed: %w", err)
+		}
+
+		var expiresAt *time.Time
+		if s.opts.sessionTTL > 0 {
+			t := now.Add(s.opts.sessionTTL)
+			expiresAt = &t
+		}
+
 		// Update session state.
-		_, err := tx.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
 			 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
-			updatedStateBytes, sessState.UpdatedAt, expiresAt,
+			updatedStateBytes, updatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -423,6 +385,38 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		return fmt.Errorf("store track event failed: %w", err)
 	}
 	return nil
+}
+
+func loadSessionStateForUpdate(
+	ctx context.Context,
+	tx *sql.Tx,
+	tableSessionStates string,
+	key session.Key,
+) (*SessionState, *time.Time, error) {
+	var stateBytes []byte
+	var currentExpiresAt *time.Time
+	err := tx.QueryRowContext(
+		ctx,
+		fmt.Sprintf(`SELECT state, expires_at FROM %s
+		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
+		AND deleted_at IS NULL
+		FOR UPDATE`, tableSessionStates),
+		key.AppName, key.UserID, key.SessionID,
+	).Scan(&stateBytes, &currentExpiresAt)
+	if err == sql.ErrNoRows {
+		return nil, nil, errSessionNotFound
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("get session state failed: %w", err)
+	}
+
+	var sessState SessionState
+	if len(stateBytes) > 0 {
+		if err := json.Unmarshal(stateBytes, &sessState); err != nil {
+			return nil, nil, fmt.Errorf("unmarshal session state failed: %w", err)
+		}
+	}
+	return &sessState, currentExpiresAt, nil
 }
 
 func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error {

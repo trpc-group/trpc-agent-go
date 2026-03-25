@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -31,6 +32,8 @@ import (
 
 var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
+
+var errSessionNotFound = errors.New("session not found")
 
 // SessionState is the state of a session.
 type SessionState struct {
@@ -547,66 +550,54 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		}
 	}
 
-	// Get current session state
-	var currentStateBytes []byte
-	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
-		if rows.Next() {
-			return rows.Scan(&currentStateBytes)
+	err := s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+		sessState, _, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		if err != nil {
+			if errors.Is(err, errSessionNotFound) {
+				return fmt.Errorf("postgres session service update session state failed: session not found")
+			}
+			return fmt.Errorf("postgres session service update session state failed: %w", err)
 		}
-		return sql.ErrNoRows
-	}, fmt.Sprintf(`SELECT state FROM %s
-		WHERE app_name = $1 AND user_id = $2 AND session_id = $3 AND deleted_at IS NULL`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID)
 
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("postgres session service update session state failed: session not found")
-	}
-	if err != nil {
-		return fmt.Errorf("postgres session service update session state failed: get session state: %w", err)
-	}
-
-	var sessState SessionState
-	if len(currentStateBytes) > 0 {
-		if err := json.Unmarshal(currentStateBytes, &sessState); err != nil {
-			return fmt.Errorf("postgres session service update session state failed: unmarshal state: %w", err)
+		now := time.Now()
+		if sessState.State == nil {
+			sessState.State = make(session.StateMap)
 		}
-	}
-	now := time.Now()
-	if sessState.State == nil {
-		sessState.State = make(session.StateMap)
-	}
-	for k, v := range state {
-		if v == nil {
-			sessState.State[k] = nil
-			continue
+		for k, v := range state {
+			if v == nil {
+				sessState.State[k] = nil
+				continue
+			}
+			copiedValue := make([]byte, len(v))
+			copy(copiedValue, v)
+			sessState.State[k] = copiedValue
 		}
-		copiedValue := make([]byte, len(v))
-		copy(copiedValue, v)
-		sessState.State[k] = copiedValue
-	}
-	sessState.UpdatedAt = now
+		sessState.UpdatedAt = now
 
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("postgres session service update session state failed: marshal state: %w", err)
-	}
+		updatedStateBytes, err := json.Marshal(sessState)
+		if err != nil {
+			return fmt.Errorf("postgres session service update session state failed: marshal state: %w", err)
+		}
 
-	var expiresAt *time.Time
-	if s.opts.sessionTTL > 0 {
-		t := now.Add(s.opts.sessionTTL)
-		expiresAt = &t
-	}
+		var expiresAt *time.Time
+		if s.opts.sessionTTL > 0 {
+			t := now.Add(s.opts.sessionTTL)
+			expiresAt = &t
+		}
 
-	_, err = s.pgClient.ExecContext(ctx,
-		fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
+		_, err = tx.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
 		 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
-		updatedStateBytes, now, expiresAt,
-		key.AppName, key.UserID, key.SessionID)
-
+			updatedStateBytes, now, expiresAt,
+			key.AppName, key.UserID, key.SessionID)
+		if err != nil {
+			return fmt.Errorf("postgres session service update session state failed: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return fmt.Errorf("postgres session service update session state failed: %w", err)
+		return err
 	}
-
 	return nil
 }
 

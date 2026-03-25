@@ -385,6 +385,30 @@ func TestUpdateSessionState(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, sess.State["nilkey"])
 	})
+
+	t.Run("preserves tracks after append", func(t *testing.T) {
+		key2 := session.Key{AppName: "app", UserID: "u1", SessionID: "s-tracks"}
+		_, err := c.CreateSession(ctx, key2, nil)
+		require.NoError(t, err)
+
+		require.NoError(t, c.AppendTrackEvent(ctx, key2, &session.TrackEvent{
+			Track:     "alpha",
+			Payload:   json.RawMessage(`"payload"`),
+			Timestamp: time.Now(),
+		}))
+		require.NoError(t, c.UpdateSessionState(ctx, key2, session.StateMap{
+			"marker": []byte("1"),
+		}))
+
+		sess, err := c.GetSession(ctx, key2, 0, time.Time{})
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Equal(t, []byte("1"), sess.State["marker"])
+
+		tracks, err := session.TracksFromState(sess.State)
+		require.NoError(t, err)
+		assert.Contains(t, tracks, session.Track("alpha"))
+	})
 }
 
 // =============================================================================
