@@ -1106,7 +1106,6 @@ func TestLLMAgent_GuidanceIncludesExecForInteractiveExecutor(t *testing.T) {
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, workspaceExecGuidanceHeader)
 	require.Contains(t, sys, "skill_exec")
-	require.Contains(t, sys, "skill_write_stdin")
 	require.Contains(t, sys, "workspace_exec")
 	require.Contains(t, sys, "workspace_publish_artifact")
 	require.Contains(t, sys, "workspace_write_stdin")

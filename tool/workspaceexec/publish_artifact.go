@@ -61,6 +61,7 @@ func NewPublishArtifactTool(exec *ExecTool) *PublishArtifactTool {
 	return &PublishArtifactTool{exec: exec}
 }
 
+// Declaration returns the schema for workspace_publish_artifact.
 func (t *PublishArtifactTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "workspace_publish_artifact",
@@ -94,6 +95,7 @@ func (t *PublishArtifactTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Call persists an existing workspace file through the artifact service.
 func (t *PublishArtifactTool) Call(
 	ctx context.Context,
 	input []byte,

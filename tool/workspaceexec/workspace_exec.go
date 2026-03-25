@@ -157,6 +157,7 @@ func WithWorkspaceRegistry(
 	}
 }
 
+// Declaration returns the schema for workspace_exec.
 func (t *ExecTool) Declaration() *tool.Declaration {
 	desc := "Execute a shell command inside the current " +
 		"executor workspace. This is a general command runner " +
@@ -239,6 +240,7 @@ func (t *ExecTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Declaration returns the schema for workspace_write_stdin.
 func (t *WriteStdinTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: "workspace_write_stdin",
@@ -269,6 +271,7 @@ func (t *WriteStdinTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Declaration returns the schema for workspace_kill_session.
 func (t *KillSessionTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name:        "workspace_kill_session",
@@ -293,6 +296,7 @@ func (t *KillSessionTool) Declaration() *tool.Declaration {
 	}
 }
 
+// Call executes workspace_exec once or starts a resumable session.
 func (t *ExecTool) Call(ctx context.Context, args []byte) (any, error) {
 	if t == nil || t.resolver == nil {
 		return nil, errors.New("workspace_exec is not configured")
@@ -447,6 +451,7 @@ func initialPoll(
 	)
 }
 
+// Call writes stdin to an interactive workspace_exec session or polls it.
 func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 	if t == nil || t.exec == nil {
 		return nil, errors.New("workspace_write_stdin is not configured")
@@ -486,6 +491,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 	return out, nil
 }
 
+// Call terminates a running workspace_exec session.
 func (t *KillSessionTool) Call(_ context.Context, args []byte) (any, error) {
 	if t == nil || t.exec == nil {
 		return nil, errors.New("workspace_kill_session is not configured")
