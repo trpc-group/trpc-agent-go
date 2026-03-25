@@ -20,28 +20,14 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
-func TestStart_Internal_WithNoopProvider_BatchProcessor(t *testing.T) {
+func TestStart_Internal_WithNoopProvider(t *testing.T) {
 	ctx := context.Background()
 	old := atrace.TracerProvider
 	defer func() { atrace.TracerProvider = old }()
 
 	atrace.TracerProvider = noop.NewTracerProvider()
 
-	clean, err := start(ctx, SpanProcessorModeBatch, otlptracehttp.WithEndpoint("localhost:4318"), otlptracehttp.WithInsecure())
-	if err != nil {
-		t.Fatalf("start() error = %v", err)
-	}
-	_ = clean(ctx)
-}
-
-func TestStart_Internal_WithNoopProvider_SimpleProcessor(t *testing.T) {
-	ctx := context.Background()
-	old := atrace.TracerProvider
-	defer func() { atrace.TracerProvider = old }()
-
-	atrace.TracerProvider = noop.NewTracerProvider()
-
-	clean, err := start(ctx, SpanProcessorModeSimple, otlptracehttp.WithEndpoint("localhost:4318"), otlptracehttp.WithInsecure())
+	clean, err := start(ctx, otlptracehttp.WithEndpoint("localhost:4318"), otlptracehttp.WithInsecure())
 	if err != nil {
 		t.Fatalf("start() error = %v", err)
 	}
@@ -53,19 +39,13 @@ func TestStart_Internal_WithExistingSDKProvider(t *testing.T) {
 	old := atrace.TracerProvider
 	defer func() { atrace.TracerProvider = old }()
 
-	// Use a real sdk tracer provider to hit the branch that registers processor.
+	// Use a real sdk tracer provider to hit the branch that registers processor
 	atrace.TracerProvider = sdktrace.NewTracerProvider()
 
-	clean, err := start(ctx, SpanProcessorModeBatch, otlptracehttp.WithEndpoint("localhost:4318"), otlptracehttp.WithInsecure())
+	clean, err := start(ctx, otlptracehttp.WithEndpoint("localhost:4318"), otlptracehttp.WithInsecure())
 	if err != nil {
 		t.Fatalf("start() error = %v", err)
 	}
+	// Cleanup
 	_ = clean(ctx)
-}
-
-func TestStart_Internal_InvalidProcessorMode(t *testing.T) {
-	_, err := start(context.Background(), SpanProcessorMode("invalid"), otlptracehttp.WithEndpoint("localhost:4318"), otlptracehttp.WithInsecure())
-	if err == nil {
-		t.Fatal("start() error = nil, want invalid processor mode error")
-	}
 }
