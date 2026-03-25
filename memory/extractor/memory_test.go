@@ -413,6 +413,47 @@ func TestExtractor_Extract_MultipleOperations(t *testing.T) {
 	assert.Equal(t, OperationUpdate, ops[1].Type)
 }
 
+func TestExtractor_Extract_UsesOnlyFirstChoiceToolCalls(t *testing.T) {
+	addArgs, _ := json.Marshal(map[string]any{
+		"memory": "User likes coffee.",
+	})
+	deleteArgs, _ := json.Marshal(map[string]any{
+		"memory_id": "mem-1",
+	})
+	m := &mockModel{
+		name: "test-model",
+		responses: []*model.Response{
+			{
+				Choices: []model.Choice{
+					{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{
+								makeToolCall(memory.AddToolName, addArgs),
+							},
+						},
+					},
+					{
+						Message: model.Message{
+							ToolCalls: []model.ToolCall{
+								makeToolCall(memory.DeleteToolName, deleteArgs),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	e := NewExtractor(m)
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Remember coffee and forget mem-1."),
+	}, nil)
+
+	require.NoError(t, err)
+	require.Len(t, ops, 1)
+	assert.Equal(t, OperationAdd, ops[0].Type)
+}
+
 func TestExtractor_Extract_EmptyChoices(t *testing.T) {
 	m := &mockModel{
 		name: "test-model",
