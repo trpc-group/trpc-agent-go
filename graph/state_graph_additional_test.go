@@ -3201,6 +3201,64 @@ func TestBuildAgentInvocationWithStateAndScope_NoParentKey(t *testing.T) {
 	require.Equal(t, "scope", key)
 }
 
+func TestBuildAgentInvocationWithStateAndScope_PropagatesExecutionTraceMetadata(t *testing.T) {
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&stubAgent{name: "parent"}),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+	rootStepID := agent.StartExecutionTraceStep(
+		parent,
+		agent.InvocationTraceNodeID(parent),
+		nil,
+		nil,
+	)
+	agent.FinishExecutionTraceStep(parent, rootStepID, nil, nil)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	target := &stubAgent{name: "child"}
+	inv := buildAgentInvocationWithStateAndScope(
+		ctx,
+		State{},
+		State{},
+		target,
+		"delegate",
+		"",
+	)
+	require.Equal(t, "parent/delegate", agent.InvocationTraceNodeID(inv))
+	require.Equal(t, []string{rootStepID}, agent.NextExecutionTracePredecessors(inv))
+}
+
+func TestBuildAgentInvocationWithStateAndScope_PrefersCurrentTraceStepPredecessor(t *testing.T) {
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&stubAgent{name: "parent"}),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+	firstStepID := agent.StartExecutionTraceStep(
+		parent,
+		agent.InvocationTraceNodeID(parent),
+		nil,
+		nil,
+	)
+	agent.FinishExecutionTraceStep(parent, firstStepID, nil, nil)
+	secondStepID := agent.StartExecutionTraceStep(
+		parent,
+		agent.InvocationTraceNodeID(parent),
+		nil,
+		nil,
+	)
+	agent.FinishExecutionTraceStep(parent, secondStepID, nil, nil)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	target := &stubAgent{name: "child"}
+	inv := buildAgentInvocationWithStateAndScope(
+		ctx,
+		State{currentTraceStepIDStateKey: firstStepID},
+		State{},
+		target,
+		"delegate",
+		"",
+	)
+	require.Equal(t, []string{firstStepID}, agent.NextExecutionTracePredecessors(inv))
+}
+
 func TestTerminalAgentErrorHelpers(t *testing.T) {
 	pregelErr := &event.Event{
 		Response: &model.Response{

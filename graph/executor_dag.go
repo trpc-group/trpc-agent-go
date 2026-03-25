@@ -142,18 +142,18 @@ func (l *dagLoop) seed() error {
 	if entryPoint == "" {
 		return errors.New("no entry point defined")
 	}
-
+	predecessors := agent.NextExecutionTracePredecessors(l.invocation)
 	nextNodes := l.consumeNextNodesFromState()
 	if len(nextNodes) > 0 {
 		for _, nodeID := range nextNodes {
-			l.queue(l.executor.createDagTask(l.execCtx, nodeID))
+			l.queue(l.executor.createDagTask(l.execCtx, nodeID, predecessors))
 		}
 		return nil
 	}
 	if l.execCtx != nil && l.execCtx.resumed {
 		return nil
 	}
-	l.queue(l.executor.createDagTask(l.execCtx, entryPoint))
+	l.queue(l.executor.createDagTask(l.execCtx, entryPoint, predecessors))
 	return nil
 }
 
@@ -654,6 +654,7 @@ func (l *dagLoop) maybeCreateFinalCheckpoint() {
 func (e *Executor) createDagTask(
 	execCtx *ExecutionContext,
 	nodeID string,
+	predecessors []string,
 ) *Task {
 	if nodeID == "" || nodeID == End {
 		return nil
@@ -672,11 +673,12 @@ func (e *Executor) createDagTask(
 		execCtx.stateMutex.Unlock()
 	}
 	return &Task{
-		NodeID:   nodeID,
-		Input:    input,
-		Writes:   node.writers,
-		Triggers: node.triggers,
-		TaskPath: []string{nodeID},
+		NodeID:             nodeID,
+		Input:              input,
+		Writes:             node.writers,
+		Triggers:           node.triggers,
+		TaskPath:           []string{nodeID},
+		PredecessorStepIDs: append([]string(nil), predecessors...),
 	}
 }
 
@@ -684,16 +686,15 @@ func (e *Executor) planDagTasks(execCtx *ExecutionContext) []*Task {
 	if execCtx == nil || execCtx.channels == nil {
 		return nil
 	}
-
 	var tasks []*Task
-
+	consumedChannels := make([]string, 0)
+	nodeTriggers := make(map[string][]string)
 	execCtx.tasksMutex.Lock()
 	if len(execCtx.pendingTasks) > 0 {
 		tasks = append(tasks, execCtx.pendingTasks...)
 		execCtx.pendingTasks = nil
 	}
 	execCtx.tasksMutex.Unlock()
-
 	triggerToNodes := e.graph.getTriggerToNodes()
 	for channelName, nodeIDs := range triggerToNodes {
 		ch, ok := execCtx.channels.GetChannel(channelName)
@@ -703,15 +704,28 @@ func (e *Executor) planDagTasks(execCtx *ExecutionContext) []*Task {
 		if !ch.ConsumeIfAvailable() {
 			continue
 		}
+		consumedChannels = append(consumedChannels, channelName)
 		for _, nodeID := range nodeIDs {
-			task := e.createDagTask(execCtx, nodeID)
-			if task == nil {
-				continue
-			}
-			tasks = append(tasks, task)
+			nodeTriggers[nodeID] = append(nodeTriggers[nodeID], channelName)
 		}
 	}
-
+	nodeIDs := make([]string, 0, len(nodeTriggers))
+	for nodeID := range nodeTriggers {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	sort.Strings(nodeIDs)
+	for _, nodeID := range nodeIDs {
+		task := e.createDagTask(
+			execCtx,
+			nodeID,
+			e.tracePredecessorsForChannels(execCtx, nodeTriggers[nodeID]),
+		)
+		if task == nil {
+			continue
+		}
+		tasks = append(tasks, task)
+	}
+	e.clearTraceChannelSources(execCtx, consumedChannels)
 	return tasks
 }
 

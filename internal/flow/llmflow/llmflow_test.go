@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
@@ -273,6 +274,77 @@ func TestRunOneStep_DisableTracingSkipsSpanCreation(t *testing.T) {
 	_, err := f.runOneStep(context.Background(), inv, eventChan)
 	require.NoError(t, err)
 	require.Empty(t, recorder.Ended())
+}
+
+func TestRunOneStep_RecordsExecutionTraceStepOnSuccess(t *testing.T) {
+	f := New(
+		[]flow.RequestProcessor{
+			&seedMessagesRequestProcessor{
+				messages: []model.Message{model.NewUserMessage("trace me")},
+			},
+		},
+		nil,
+		Options{},
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationModel(&mockModel{
+			responses: []*model.Response{
+				{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("ok")},
+					},
+				},
+			},
+		}),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+	eventChan := make(chan *event.Event, 8)
+	lastEvent, err := f.runOneStep(context.Background(), inv, eventChan)
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	step := executionTrace.Steps[0]
+	require.Equal(t, inv.InvocationID, step.InvocationID)
+	require.Equal(t, "a", step.NodeID)
+	require.NotNil(t, step.Input)
+	require.NotNil(t, step.Output)
+	require.Contains(t, step.Input.Text, "trace me")
+	require.Contains(t, step.Output.Text, "ok")
+	require.Empty(t, step.PredecessorStepIDs)
+	require.Empty(t, step.Error)
+}
+
+func TestRunOneStep_RecordsExecutionTraceStepErrorWhenModelFails(t *testing.T) {
+	f := New(
+		[]flow.RequestProcessor{
+			&seedMessagesRequestProcessor{
+				messages: []model.Message{model.NewUserMessage("trace failure")},
+			},
+		},
+		nil,
+		Options{},
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationModel(&mockModel{ShouldError: true}),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+	)
+	eventChan := make(chan *event.Event, 8)
+	lastEvent, err := f.runOneStep(context.Background(), inv, eventChan)
+	require.Error(t, err)
+	require.Nil(t, lastEvent)
+	executionTrace := agent.BuildExecutionTrace(inv, atrace.TraceStatusFailed)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	step := executionTrace.Steps[0]
+	require.NotNil(t, step.Input)
+	require.Contains(t, step.Input.Text, "trace failure")
+	require.Nil(t, step.Output)
+	require.Contains(t, step.Error, "mock model error")
 }
 
 func TestProcessStreamingResponses_UsesInvocationFromContextForResponseOptions(t *testing.T) {

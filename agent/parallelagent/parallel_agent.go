@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -64,6 +65,8 @@ func New(name string, opts ...Option) *ParallelAgent {
 func (a *ParallelAgent) createBranchInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
+	nodeID string,
+	entryPredecessors []string,
 ) *agent.Invocation {
 	// Create unique invocation ID for this branch.
 	eventFilterKey := baseInvocation.GetEventFilterKey()
@@ -73,12 +76,12 @@ func (a *ParallelAgent) createBranchInvocation(
 		eventFilterKey += agent.EventFilterKeyDelimiter + subAgent.Info().Name
 	}
 
-	branchInvocation := baseInvocation.Clone(
+	return baseInvocation.Clone(
 		agent.WithInvocationAgent(subAgent),
 		agent.WithInvocationEventFilterKey(eventFilterKey),
+		agent.WithInvocationTraceNodeID(nodeID),
+		agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors),
 	)
-
-	return branchInvocation
 }
 
 // setupInvocation prepares the invocation for execution.
@@ -138,11 +141,14 @@ func (a *ParallelAgent) startSubAgents(
 	// Start all sub-agents in parallel.
 	var wg sync.WaitGroup
 	eventStreams := make([]subAgentEventStream, len(a.subAgents))
+	pathAllocator := istructure.NewPathAllocator(agent.InvocationTraceNodeID(invocation))
+	entryPredecessors := agent.NextExecutionTracePredecessors(invocation)
 
 	for i, subAgent := range a.subAgents {
+		childNodeID := pathAllocator.Next(subAgent.Info().Name)
 		wg.Add(1)
 		runCtx := agent.CloneContext(ctx)
-		go func(ctx context.Context, idx int, sa agent.Agent) {
+		go func(ctx context.Context, idx int, sa agent.Agent, nodeID string) {
 			defer wg.Done()
 			// Recover from panics in sub-agent execution to prevent
 			// the whole service from crashing.
@@ -163,7 +169,7 @@ func (a *ParallelAgent) startSubAgents(
 			}()
 
 			// Create branch invocation for this sub-agent.
-			branchInvocation := a.createBranchInvocation(sa, invocation)
+			branchInvocation := a.createBranchInvocation(sa, invocation, nodeID, entryPredecessors)
 
 			// Reset invocation information in context
 			branchAgentCtx := graph.WithGraphCompletionCapture(
@@ -191,7 +197,7 @@ func (a *ParallelAgent) startSubAgents(
 				author: branchInvocation.AgentName,
 				ch:     subEventChan,
 			}
-		}(runCtx, i, subAgent)
+		}(runCtx, i, subAgent, childNodeID)
 	}
 
 	// Wait for all sub-agents to start.

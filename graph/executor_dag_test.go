@@ -264,6 +264,42 @@ func TestNewDagLoop_ValidatesInputs(t *testing.T) {
 	require.ErrorContains(t, err, "no entry point defined")
 }
 
+func TestNewDagLoop_SeedsEntryTaskWithInvocationPredecessors(t *testing.T) {
+	g := compileSimpleDagGraph(t)
+	exec, err := NewExecutor(g, WithExecutionEngine(ExecutionEngineDAG))
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+		agent.WithInvocationEntryPredecessorStepIDs([]string{"root-step"}),
+	)
+	execCtx := &ExecutionContext{channels: exec.buildChannelManager()}
+	loop, err := newDagLoop(exec, context.Background(), inv, execCtx, nil, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, loop.ready, 1)
+	require.Equal(t, dagNodeEntry, loop.ready[0].NodeID)
+	require.Equal(t, []string{"root-step"}, loop.ready[0].PredecessorStepIDs)
+}
+
+func TestNewDagLoop_SeedsNextNodesWithInvocationPredecessors(t *testing.T) {
+	g := compileSimpleDagGraph(t)
+	exec, err := NewExecutor(g, WithExecutionEngine(ExecutionEngineDAG))
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+		agent.WithInvocationEntryPredecessorStepIDs([]string{"resume-step"}),
+	)
+	execCtx := &ExecutionContext{
+		channels: exec.buildChannelManager(),
+		State:    State{StateKeyNextNodes: []string{dagNodeEntry}},
+	}
+	loop, err := newDagLoop(exec, context.Background(), inv, execCtx, nil, 0, nil)
+	require.NoError(t, err)
+	require.Len(t, loop.ready, 1)
+	require.Equal(t, dagNodeEntry, loop.ready[0].NodeID)
+	require.Equal(t, []string{"resume-step"}, loop.ready[0].PredecessorStepIDs)
+	require.NotContains(t, execCtx.State, StateKeyNextNodes)
+}
+
 func TestExecutor_DagEngine_DrainsOnTaskError(t *testing.T) {
 	const errMessage = "dag node error"
 
@@ -698,10 +734,10 @@ func TestExecutor_createDagTask_ReturnsNilForInvalidNode(t *testing.T) {
 	exec, err := NewExecutor(g)
 	require.NoError(t, err)
 
-	require.Nil(t, exec.createDagTask(nil, ""))
-	require.Nil(t, exec.createDagTask(nil, End))
-	require.Nil(t, exec.createDagTask(nil, "missing"))
-	require.NotNil(t, exec.createDagTask(nil, dagNodeEntry))
+	require.Nil(t, exec.createDagTask(nil, "", nil))
+	require.Nil(t, exec.createDagTask(nil, End, nil))
+	require.Nil(t, exec.createDagTask(nil, "missing", nil))
+	require.NotNil(t, exec.createDagTask(nil, dagNodeEntry, nil))
 }
 
 func TestExecutor_planDagTasks_ReturnsNilWhenContextMissing(t *testing.T) {
@@ -763,9 +799,139 @@ func TestExecutor_planDagTasks_ConsumesTriggers(t *testing.T) {
 	tasks := exec.planDagTasks(execCtx)
 	require.Len(t, tasks, 1)
 	require.Equal(t, dagNodeSlow, tasks[0].NodeID)
+	require.Empty(t, tasks[0].PredecessorStepIDs)
 
 	tasks = exec.planDagTasks(execCtx)
 	require.Empty(t, tasks)
+}
+
+func TestExecutor_planDagTasks_PopulatesTracePredecessors(t *testing.T) {
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+	sg.AddNode(
+		dagNodeEntry,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.AddNode(
+		dagNodeSlow,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.SetEntryPoint(dagNodeEntry)
+	sg.AddEdge(dagNodeEntry, dagNodeSlow)
+	g, err := sg.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g, WithExecutionEngine(ExecutionEngineDAG))
+	require.NoError(t, err)
+	execCtx := &ExecutionContext{
+		channels:            exec.buildChannelManager(),
+		traceChannelSources: make(map[string][]string),
+	}
+	channelName := ChannelBranchPrefix + dagNodeSlow
+	ch, ok := execCtx.channels.GetChannel(channelName)
+	require.True(t, ok)
+	require.NotNil(t, ch)
+	require.True(t, ch.Update([]any{"update"}, 0))
+	exec.recordTraceChannelSource(execCtx, channelName, "", "s1", 0)
+	tasks := exec.planDagTasks(execCtx)
+	require.Len(t, tasks, 1)
+	require.Equal(t, []string{"s1"}, tasks[0].PredecessorStepIDs)
+}
+
+func TestExecutor_planDagTasks_AggregatesTriggeredChannelsByNode(t *testing.T) {
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+	sg.AddNode(
+		dagNodeEntry,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.AddNode(
+		dagNodeSlow,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.SetEntryPoint(dagNodeEntry)
+	g, err := sg.Compile()
+	require.NoError(t, err)
+	node, ok := g.Node(dagNodeSlow)
+	require.True(t, ok)
+	require.NotNil(t, node)
+	g.addNodeTrigger("left", dagNodeSlow)
+	g.addNodeTrigger("right", dagNodeSlow)
+	g.addNodeTriggerChannel(dagNodeSlow, "left")
+	g.addNodeTriggerChannel(dagNodeSlow, "right")
+	exec, err := NewExecutor(g, WithExecutionEngine(ExecutionEngineDAG))
+	require.NoError(t, err)
+	channelManager := ichannel.NewChannelManager()
+	channelManager.AddChannel("left", ichannel.BehaviorTopic)
+	channelManager.AddChannel("right", ichannel.BehaviorTopic)
+	execCtx := &ExecutionContext{
+		channels:            channelManager,
+		traceChannelSources: make(map[string][]string),
+	}
+	left, ok := channelManager.GetChannel("left")
+	require.True(t, ok)
+	require.NotNil(t, left)
+	right, ok := channelManager.GetChannel("right")
+	require.True(t, ok)
+	require.NotNil(t, right)
+	require.True(t, left.Update([]any{"left"}, 0))
+	require.True(t, right.Update([]any{"right"}, 0))
+	exec.recordTraceChannelSource(execCtx, "left", "", "s1", 0)
+	exec.recordTraceChannelSource(execCtx, "right", "", "s2", 0)
+	tasks := exec.planDagTasks(execCtx)
+	require.Len(t, tasks, 1)
+	require.Equal(t, dagNodeSlow, tasks[0].NodeID)
+	require.ElementsMatch(t, []string{"s1", "s2"}, tasks[0].PredecessorStepIDs)
+}
+
+func TestExecutor_planDagTasks_ClearsConsumedTraceSources(t *testing.T) {
+	schema := NewStateSchema()
+	sg := NewStateGraph(schema)
+	sg.AddNode(
+		dagNodeEntry,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.AddNode(
+		dagNodeSlow,
+		func(context.Context, State) (any, error) {
+			return nil, nil
+		},
+	)
+	sg.SetEntryPoint(dagNodeEntry)
+	sg.AddEdge(dagNodeEntry, dagNodeSlow)
+	g, err := sg.Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(g, WithExecutionEngine(ExecutionEngineDAG))
+	require.NoError(t, err)
+	execCtx := &ExecutionContext{
+		channels:                exec.buildChannelManager(),
+		traceChannelSources:     make(map[string][]string),
+		traceChannelSourceSteps: make(map[string]int),
+	}
+	channelName := ChannelBranchPrefix + dagNodeSlow
+	ch, ok := execCtx.channels.GetChannel(channelName)
+	require.True(t, ok)
+	require.NotNil(t, ch)
+	require.True(t, ch.Update([]any{"first"}, 0))
+	exec.recordTraceChannelSource(execCtx, channelName, "", "s1", 0)
+	tasks := exec.planDagTasks(execCtx)
+	require.Len(t, tasks, 1)
+	require.Equal(t, []string{"s1"}, tasks[0].PredecessorStepIDs)
+	require.Empty(t, execCtx.traceChannelSources[channelName])
+	require.True(t, ch.Update([]any{"second"}, 1))
+	exec.recordTraceChannelSource(execCtx, channelName, "", "s2", 1)
+	tasks = exec.planDagTasks(execCtx)
+	require.Len(t, tasks, 1)
+	require.Equal(t, []string{"s2"}, tasks[0].PredecessorStepIDs)
 }
 
 func TestExecutor_planDagTasks_SkipsMissingChannels(t *testing.T) {
