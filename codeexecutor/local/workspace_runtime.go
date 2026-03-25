@@ -735,9 +735,15 @@ func (r *Runtime) CollectOutputs(
 			if err != nil {
 				return codeexecutor.OutputManifest{}, err
 			}
-			// Mark limits hit when a file reached per-file cap.
-			if int64(len(data)) >= maxFileBytes {
+			truncated := st.Size() > int64(len(data))
+			if truncated {
 				out.LimitsHit = true
+				if spec.Save {
+					return codeexecutor.OutputManifest{}, fmt.Errorf(
+						"cannot save truncated output file: %s",
+						name,
+					)
+				}
 			}
 			leftTotal -= int64(len(data))
 			count++
@@ -745,7 +751,7 @@ func (r *Runtime) CollectOutputs(
 				Name:      name,
 				MIMEType:  mime,
 				SizeBytes: st.Size(),
-				Truncated: st.Size() > int64(len(data)),
+				Truncated: truncated,
 			}
 			if spec.Inline {
 				ref.Content = string(data)
