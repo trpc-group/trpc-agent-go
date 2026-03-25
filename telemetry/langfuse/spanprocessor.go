@@ -11,7 +11,6 @@ package langfuse
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -19,30 +18,23 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-func newSpanProcessor(e sdktrace.SpanExporter, mode SpanProcessorMode) (sdktrace.SpanProcessor, error) {
-	var next sdktrace.SpanProcessor
-	switch normalizeSpanProcessorMode(mode) {
-	case SpanProcessorModeBatch:
-		next = sdktrace.NewBatchSpanProcessor(e)
-	case SpanProcessorModeSimple:
-		next = sdktrace.NewSimpleSpanProcessor(e)
-	default:
-		return nil, fmt.Errorf("langfuse: unsupported span processor mode %q", mode)
+func newSpanProcessor(e sdktrace.SpanExporter) sdktrace.SpanProcessor {
+	return &baggageBatchSpanProcessor{
+		next: sdktrace.NewBatchSpanProcessor(e),
 	}
-	return &baggageSpanProcessor{next: next}, nil
 }
 
-// baggageSpanProcessor wraps a span processor and copies baggage members
+// baggageBatchSpanProcessor wraps a BatchSpanProcessor and copies baggage members
 // from the span's parent context onto the span as attributes at start time.
 //
 // This mirrors the behavior of go.opentelemetry.io/contrib/processors/baggagecopy.
-type baggageSpanProcessor struct {
+type baggageBatchSpanProcessor struct {
 	next sdktrace.SpanProcessor
 }
 
-var _ sdktrace.SpanProcessor = (*baggageSpanProcessor)(nil)
+var _ sdktrace.SpanProcessor = (*baggageBatchSpanProcessor)(nil)
 
-func (p *baggageSpanProcessor) OnStart(ctx context.Context, span sdktrace.ReadWriteSpan) {
+func (p *baggageBatchSpanProcessor) OnStart(ctx context.Context, span sdktrace.ReadWriteSpan) {
 	for _, member := range baggage.FromContext(ctx).Members() {
 		if defaultLangfuseTraceAttributeFilter(member) {
 			span.SetAttributes(attribute.String(member.Key(), member.Value()))
@@ -79,20 +71,20 @@ func defaultLangfuseTraceAttributeFilter(member baggage.Member) bool {
 	}
 }
 
-func (p *baggageSpanProcessor) OnEnd(span sdktrace.ReadOnlySpan) {
+func (p *baggageBatchSpanProcessor) OnEnd(span sdktrace.ReadOnlySpan) {
 	if p.next != nil {
 		p.next.OnEnd(span)
 	}
 }
 
-func (p *baggageSpanProcessor) Shutdown(ctx context.Context) error {
+func (p *baggageBatchSpanProcessor) Shutdown(ctx context.Context) error {
 	if p.next == nil {
 		return nil
 	}
 	return p.next.Shutdown(ctx)
 }
 
-func (p *baggageSpanProcessor) ForceFlush(ctx context.Context) error {
+func (p *baggageBatchSpanProcessor) ForceFlush(ctx context.Context) error {
 	if p.next == nil {
 		return nil
 	}
