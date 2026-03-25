@@ -945,6 +945,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      执行图导出
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2658,6 +2667,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      执行图导出
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -4319,6 +4337,67 @@
 <li><code>Edges</code>：节点之间静态上可能出现的连接</li>
 <li><code>Surfaces</code>：稳定可编辑的基线面，例如 <code>instruction</code>、<code>model</code>、<code>tool</code>、<code>skill</code></li>
 </ul>
+<p>完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/structure_export">examples/graph/structure_export</a>。</p>
+<h2 id="_18">执行图导出</h2>
+<p>框架可以为单次 <code>runner.Run</code> 调用导出执行图，用来观察这次运行里哪些节点真的执行了、各个步骤之间如何依赖，以及每个步骤看到的输入和输出快照。</p>
+<p>需要在运行时显式开启：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-36-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-36-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-36-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-36-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-36-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-36-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-36-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-36-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-36-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-36-10">10</a></span>
+<span class="normal"><a href="#__codelineno-36-11">11</a></span>
+<span class="normal"><a href="#__codelineno-36-12">12</a></span>
+<span class="normal"><a href="#__codelineno-36-13">13</a></span>
+<span class="normal"><a href="#__codelineno-36-14">14</a></span>
+<span class="normal"><a href="#__codelineno-36-15">15</a></span>
+<span class="normal"><a href="#__codelineno-36-16">16</a></span>
+<span class="normal"><a href="#__codelineno-36-17">17</a></span>
+<span class="normal"><a href="#__codelineno-36-18">18</a></span>
+<span class="normal"><a href="#__codelineno-36-19">19</a></span>
+<span class="normal"><a href="#__codelineno-36-20">20</a></span>
+<span class="normal"><a href="#__codelineno-36-21">21</a></span>
+<span class="normal"><a href="#__codelineno-36-22">22</a></span>
+<span class="normal"><a href="#__codelineno-36-23">23</a></span>
+<span class="normal"><a href="#__codelineno-36-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
+</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-36-5"><a id="__codelineno-36-5" name="__codelineno-36-5"></a><span class="p">)</span>
+</span><span id="__span-36-6"><a id="__codelineno-36-6" name="__codelineno-36-6"></a>
+</span><span id="__span-36-7"><a id="__codelineno-36-7" name="__codelineno-36-7"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;demo-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">ag</span><span class="p">)</span>
+</span><span id="__span-36-8"><a id="__codelineno-36-8" name="__codelineno-36-8"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-36-9"><a id="__codelineno-36-9" name="__codelineno-36-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-36-10"><a id="__codelineno-36-10" name="__codelineno-36-10"></a><span class="w">    </span><span class="s">&quot;user-1&quot;</span><span class="p">,</span>
+</span><span id="__span-36-11"><a id="__codelineno-36-11" name="__codelineno-36-11"></a><span class="w">    </span><span class="s">&quot;session-1&quot;</span><span class="p">,</span>
+</span><span id="__span-36-12"><a id="__codelineno-36-12" name="__codelineno-36-12"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;hello&quot;</span><span class="p">),</span>
+</span><span id="__span-36-13"><a id="__codelineno-36-13" name="__codelineno-36-13"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithExecutionTraceEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-36-14"><a id="__codelineno-36-14" name="__codelineno-36-14"></a><span class="p">)</span>
+</span><span id="__span-36-15"><a id="__codelineno-36-15" name="__codelineno-36-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-16"><a id="__codelineno-36-16" name="__codelineno-36-16"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;运行失败: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-36-17"><a id="__codelineno-36-17" name="__codelineno-36-17"></a><span class="p">}</span>
+</span><span id="__span-36-18"><a id="__codelineno-36-18" name="__codelineno-36-18"></a><span class="k">for</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-19"><a id="__codelineno-36-19" name="__codelineno-36-19"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">IsRunnerCompletion</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-20"><a id="__codelineno-36-20" name="__codelineno-36-20"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">RootAgentName</span><span class="p">)</span>
+</span><span id="__span-36-21"><a id="__codelineno-36-21" name="__codelineno-36-21"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">Status</span><span class="p">)</span>
+</span><span id="__span-36-22"><a id="__codelineno-36-22" name="__codelineno-36-22"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">Steps</span><span class="p">))</span>
+</span><span id="__span-36-23"><a id="__codelineno-36-23" name="__codelineno-36-23"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-36-24"><a id="__codelineno-36-24" name="__codelineno-36-24"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>执行图挂在 runner completion event 上，属于进程内工件，默认不会参与序列化。</p>
+<p>每个步骤都会带上这些稳定字段：</p>
+<ul>
+<li><code>NodeID</code>：本次执行对应的静态节点路径</li>
+<li><code>PredecessorStepIDs</code>：这次运行里该步骤的直接前驱步骤</li>
+<li><code>Input</code> 和 <code>Output</code>：步骤输入输出的稳定文本快照</li>
+<li><code>Error</code>：步骤失败时记录的终态错误</li>
+</ul>
+<p>完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/execution_trace">examples/graph/execution_trace</a>。</p>
 
 
 
@@ -4341,7 +4420,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月24日 02:10:54 UTC">2026-03-24 02:10:54</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月25日 06:14:33 UTC">2026-03-25 06:14:33</span>
   </span>
 
     
