@@ -381,6 +381,31 @@ func TestFSRepository_DuplicateSkill_PrefersFirst(t *testing.T) {
 	require.Contains(t, sk.Body, "from root1")
 }
 
+func TestFSRepository_Refresh(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "alpha")
+
+	repo, err := NewFSRepository(root)
+	require.NoError(t, err)
+	require.Len(t, repo.Summaries(), 1)
+
+	writeSkill(t, root, "beta")
+	require.Len(t, repo.Summaries(), 1)
+
+	require.NoError(t, repo.Refresh())
+	require.Len(t, repo.Summaries(), 2)
+
+	_, err = repo.Get("beta")
+	require.NoError(t, err)
+
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "beta")))
+	require.NoError(t, repo.Refresh())
+
+	require.Len(t, repo.Summaries(), 1)
+	_, err = repo.Get("beta")
+	require.Error(t, err)
+}
+
 func TestSplitFrontMatter_NoClosing(t *testing.T) {
 	txt := "---\nname: z\n"
 	m, body := splitFrontMatter(txt)
