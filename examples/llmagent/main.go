@@ -25,7 +25,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	_ "trpc.group/trpc-go/trpc-agent-go/testing/telemetry/langfuse"
 )
 
 var (
