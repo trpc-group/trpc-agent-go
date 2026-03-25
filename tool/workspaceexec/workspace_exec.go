@@ -160,13 +160,13 @@ func WithWorkspaceRegistry(
 // Declaration returns the schema for workspace_exec.
 func (t *ExecTool) Declaration() *tool.Declaration {
 	desc := "Execute a shell command inside the current " +
-		"executor workspace. This is a general command runner " +
-		"for shared executor-side work such as ls, cat, find, " +
-		"rg, git status, simple validation commands, or other " +
-		"shell commands like curl when the current executor " +
-		"environment allows them. It does not require a skill " +
-		"name and runs in the shared executor workspace, not on " +
-		"the agent host."
+		"executor workspace. This is the default general shell " +
+		"runner for shared executor-side work that does not " +
+		"depend on a specific skill, including file operations, " +
+		"repo inspection, validation commands, and " +
+		"environment-dependent network commands such as curl or " +
+		"git. It does not require a skill name and runs in the " +
+		"shared executor workspace, not on the agent host."
 	outputDesc := "Result of workspace_exec. The output field is aggregated terminal text and does not guarantee preservation of the original stdout/stderr interleaving."
 	props := map[string]*tool.Schema{
 		"command": {
