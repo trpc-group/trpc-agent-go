@@ -1,8 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/examples/promptcache/openai
 
-go 1.23.0
-
-toolchain go1.24.11
+go 1.24.6
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../../
 

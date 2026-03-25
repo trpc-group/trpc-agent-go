@@ -2,23 +2,17 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "${script_dir}/../.." && pwd)"
-cd "${repo_root}"
+source "${script_dir}/examples-modules.sh"
+cd "${EXAMPLES_REPO_ROOT}"
 
 echo "::group::Checking examples go.mod, go.sum and build"
-
-cd examples
-
-# Find all go.mod files in examples directory
 go_mod_files=()
-while IFS= read -r -d '' mod_file; do
-    go_mod_files+=("$mod_file")
-done < <(find . -name "go.mod" -print0 | sort -z)
-
-if [ "${#go_mod_files[@]}" -eq 0 ]; then
-    echo "No go.mod files found in examples directory"
-    exit 1
-fi
+select_examples_modules_for_current_shard go_mod_files
+echo "Shard: $(examples_shard_label)"
+echo "Selected modules: ${#go_mod_files[@]}"
+for mod_file in "${go_mod_files[@]}"; do
+    echo "  - $(examples_module_path "${mod_file}")"
+done
 
 has_mod_issues=false
 has_build_issues=false
@@ -28,27 +22,17 @@ build_issue_modules=()
 internal_import_modules=()
 
 for mod_file in "${go_mod_files[@]}"; do
-    mod_dir="$(dirname "$mod_file")"
-    rel_path="${mod_dir#./}"
-    if [ "$rel_path" = "." ]; then
-        rel_path=""
-    fi
-    module_path="examples/${rel_path:-root}"
-
-    if head -n 5 "${mod_file}" | grep -q "DO NOT USE!"; then
-        echo "::warning::Skipping ${module_path}: marked as DO NOT USE."
-        continue
-    fi
-
-    echo "::group::Checking ${rel_path:-examples}"
-
-    cd "$repo_root/examples/$rel_path"
-
-    # Check for internal package imports.
+    mod_dir="$(dirname "${mod_file}")"
+    rel_path="$(examples_module_rel_path "${mod_file}")"
+    module_key="${rel_path:-root}"
+    module_path="$(examples_module_path "${mod_file}")"
+    group_name="$(examples_module_group_name "${mod_file}")"
+    echo "::group::Checking ${group_name}"
+    cd "${mod_dir}"
     if grep -r --include="*.go" \
         "trpc.group/trpc-go/trpc-agent-go/internal" . >/dev/null 2>&1; then
         has_internal_imports=true
-        internal_import_modules+=("$module_path")
+        internal_import_modules+=("${module_path}")
         echo "::error::${module_path} contains imports of internal packages. Examples must not use internal packages."
         grep -rn --include="*.go" \
             "trpc.group/trpc-go/trpc-agent-go/internal" . || true
@@ -56,7 +40,6 @@ for mod_file in "${go_mod_files[@]}"; do
         continue
     fi
 
-    # Store original content
     original_go_mod="$(cat go.mod)"
     original_go_sum=""
     has_go_sum=false
@@ -65,10 +48,8 @@ for mod_file in "${go_mod_files[@]}"; do
         has_go_sum=true
     fi
 
-    # Run go mod tidy
     go mod tidy
 
-    # Check if files changed
     mod_changed=false
     sum_changed=false
 
@@ -81,7 +62,6 @@ for mod_file in "${go_mod_files[@]}"; do
             sum_changed=true
         fi
     else
-        # Check if go.sum was created
         if [ -f "go.sum" ]; then
             sum_changed=true
         fi
@@ -89,29 +69,24 @@ for mod_file in "${go_mod_files[@]}"; do
 
     if [ "$mod_changed" = true ] || [ "$sum_changed" = true ]; then
         has_mod_issues=true
-        mod_issue_modules+=("$module_path")
+        mod_issue_modules+=("${module_path}")
         if [ "$mod_changed" = true ]; then
-            echo "::error::examples/${rel_path:-root}/go.mod is not up-to-date. Run 'go mod tidy' in examples/${rel_path:-root} directory."
+            echo "::error::${module_path}/go.mod is not up-to-date. Run 'go mod tidy' in ${module_path} directory."
         fi
         if [ "$sum_changed" = true ]; then
-            echo "::error::examples/${rel_path:-root}/go.sum is not up-to-date. Run 'go mod tidy' in examples/${rel_path:-root} directory."
+            echo "::error::${module_path}/go.sum is not up-to-date. Run 'go mod tidy' in ${module_path} directory."
         fi
-        # Skip build check if go.mod is not up-to-date
         echo "::endgroup::"
         continue
     else
-        echo "examples/${rel_path:-root}/go.mod and go.sum are up-to-date"
+        echo "${module_path}/go.mod and go.sum are up-to-date"
     fi
 
-    # Check if the module can build successfully
     echo "Building ${module_path}..."
-
-    # Try standard build first
     if go build ./... 2>/dev/null; then
         echo "${module_path} builds successfully"
     else
-        # If standard build fails, try building to a temporary directory
-        temp_dir="/tmp/go-build-check-${rel_path:-root}-$$"
+        temp_dir="/tmp/go-build-check-${module_key}-$$"
         mkdir -p "$temp_dir"
 
         if go build -o "$temp_dir/" ./... 2>/dev/null; then
@@ -119,7 +94,7 @@ for mod_file in "${go_mod_files[@]}"; do
             rm -rf "$temp_dir"
         else
             has_build_issues=true
-            build_issue_modules+=("$module_path")
+            build_issue_modules+=("${module_path}")
             echo "::error::${module_path} failed to build. Please check dependencies and imports."
             rm -rf "$temp_dir" 2>/dev/null || true
         fi
@@ -128,7 +103,7 @@ for mod_file in "${go_mod_files[@]}"; do
     echo "::endgroup::"
 done
 
-cd "$repo_root"
+cd "${EXAMPLES_REPO_ROOT}"
 
 if [ "${#internal_import_modules[@]}" -gt 0 ] || \
    [ "${#mod_issue_modules[@]}" -gt 0 ] || \
@@ -149,7 +124,6 @@ if [ "${#internal_import_modules[@]}" -gt 0 ] || \
     echo "::endgroup::"
 fi
 
-# Report issues with specific error messages
 if [ "$has_internal_imports" = true ]; then
     echo "::error::Some examples modules contain internal package imports. Examples must not use internal packages."
     echo "::endgroup::"
