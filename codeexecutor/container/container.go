@@ -52,6 +52,7 @@ type CodeExecutor struct {
 	ws              *workspaceRuntime    // workspace runtime
 	// autoInputs controls mapping of inputs-host into workspace.
 	autoInputs bool
+	sandbox    *codeexecutor.SandboxCoordinator
 }
 
 // New creates a new CodeExecutor instance
@@ -172,6 +173,16 @@ func WithBindMount(src, dest, mode string) Option {
 func WithAutoInputs(enable bool) Option {
 	return func(c *CodeExecutor) {
 		c.autoInputs = enable
+	}
+}
+
+// WithSandboxCoordinator installs a sandbox coordinator that wraps
+// non-interactive workspace RunProgram execution.
+func WithSandboxCoordinator(
+	coordinator *codeexecutor.SandboxCoordinator,
+) Option {
+	return func(c *CodeExecutor) {
+		c.sandbox = coordinator
 	}
 }
 

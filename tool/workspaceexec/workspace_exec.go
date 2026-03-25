@@ -391,6 +391,10 @@ func runOneShot(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (execOutput, error) {
+	ctx = codeexecutor.WithExecutionIntent(
+		ctx,
+		codeexecutor.ExecutionIntentWorkspaceExec,
+	)
 	rr, err := eng.Runner().RunProgram(ctx, ws, spec)
 	if err != nil {
 		return execOutput{}, err
@@ -408,6 +412,10 @@ func (t *ExecTool) startInteractive(
 	ctx context.Context,
 	req execRequest,
 ) (execOutput, error) {
+	ctx = codeexecutor.WithExecutionIntent(
+		ctx,
+		codeexecutor.ExecutionIntentWorkspaceExec,
+	)
 	runner, ok := req.eng.Runner().(codeexecutor.InteractiveProgramRunner)
 	if !ok {
 		return execOutput{}, errors.New(

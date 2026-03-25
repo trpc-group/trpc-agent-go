@@ -355,6 +355,26 @@ func (r *Runtime) StartProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.InteractiveProgramSpec,
 ) (codeexecutor.ProgramSession, error) {
+	intent, _ := codeexecutor.ExecutionIntentFromContext(ctx)
+	return r.sandboxCoordinator().StartProgram(
+		ctx,
+		codeexecutor.SandboxStartProgramRequest{
+			Intent:    intent,
+			Workspace: ws,
+			Spec:      spec,
+			Metadata: map[string]string{
+				"backend":      "local_process",
+				"session_mode": "interactive",
+			},
+		},
+	)
+}
+
+func (r *Runtime) startProgramDirect(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.InteractiveProgramSpec,
+) (codeexecutor.ProgramSession, error) {
 	cwd := filepath.Join(ws.Path, filepath.Clean(spec.Cwd))
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		return nil, err

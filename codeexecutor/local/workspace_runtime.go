@@ -48,6 +48,7 @@ type Runtime struct {
 	InputsHostBase      string
 	AutoInputs          bool
 	Mode                WorkspaceMode
+	sandbox             *codeexecutor.SandboxCoordinator
 }
 
 // WorkspaceMode controls how the local runtime chooses workspace roots.
@@ -97,6 +98,14 @@ func WithInputsHostBase(host string) RuntimeOption {
 // workspace.
 func WithAutoInputs(enable bool) RuntimeOption {
 	return func(r *Runtime) { r.AutoInputs = enable }
+}
+
+// WithRuntimeSandboxCoordinator installs a sandbox coordinator that wraps
+// non-interactive RunProgram execution for this runtime.
+func WithRuntimeSandboxCoordinator(
+	coordinator *codeexecutor.SandboxCoordinator,
+) RuntimeOption {
+	return func(r *Runtime) { r.sandbox = coordinator }
 }
 
 // NewRuntimeWithOptions creates a Runtime with optional settings.
@@ -320,6 +329,26 @@ func (r *Runtime) StageDirectory(
 
 // RunProgram runs a command inside the workspace.
 func (r *Runtime) RunProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	intent, _ := codeexecutor.ExecutionIntentFromContext(ctx)
+	return r.sandboxCoordinator().RunProgram(ctx, codeexecutor.SandboxRunRequest{
+		Intent:    intent,
+		Workspace: ws,
+		Spec:      spec,
+		Metadata: map[string]string{
+			"backend": "local_process",
+		},
+	})
+}
+
+func (r *Runtime) sandboxCoordinator() *codeexecutor.SandboxCoordinator {
+	return r.sandbox.WithBackends(NewSandboxBackend(r))
+}
+
+func (r *Runtime) runProgramDirect(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,

@@ -59,8 +59,9 @@ const (
 
 // workspaceRuntime provides workspace execution on Docker.
 type workspaceRuntime struct {
-	ce  *CodeExecutor
-	cfg runtimeConfig
+	ce      *CodeExecutor
+	cfg     runtimeConfig
+	sandbox *codeexecutor.SandboxCoordinator
 }
 
 type runtimeConfig struct {
@@ -92,7 +93,16 @@ func newWorkspaceRuntime(c *CodeExecutor) (*workspaceRuntime, error) {
 		)
 		cfg.autoMapInputs = c.autoInputs
 	}
-	return &workspaceRuntime{ce: c, cfg: cfg}, nil
+	return &workspaceRuntime{
+		ce:  c,
+		cfg: cfg,
+		sandbox: func() *codeexecutor.SandboxCoordinator {
+			if c == nil {
+				return nil
+			}
+			return c.sandbox
+		}(),
+	}, nil
 }
 
 // findBindSource returns the host path whose bind dest equals dest.
@@ -380,6 +390,29 @@ func (r *workspaceRuntime) StageDirectory(
 
 // RunProgram runs a command in the workspace with timeout.
 func (r *workspaceRuntime) RunProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	intent, _ := codeexecutor.ExecutionIntentFromContext(ctx)
+	return r.sandboxCoordinator().RunProgram(ctx, codeexecutor.SandboxRunRequest{
+		Intent:    intent,
+		Workspace: ws,
+		Spec:      spec,
+		Metadata: map[string]string{
+			"backend": "container_runtime",
+		},
+	})
+}
+
+func (r *workspaceRuntime) sandboxCoordinator() *codeexecutor.SandboxCoordinator {
+	return r.sandbox.WithBackends(newSandboxBackendFromRuntime(
+		r,
+		r.ce != nil && r.ce.hostConfig.NetworkMode == "none",
+	))
+}
+
+func (r *workspaceRuntime) runProgramDirect(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,

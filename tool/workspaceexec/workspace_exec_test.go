@@ -944,6 +944,93 @@ func (r *nonInteractiveRunner) RunProgram(
 	}, nil
 }
 
+type intentAwareRunner struct {
+	intent codeexecutor.ExecutionIntent
+}
+
+func (r *intentAwareRunner) RunProgram(
+	ctx context.Context,
+	_ codeexecutor.Workspace,
+	_ codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	r.intent, _ = codeexecutor.ExecutionIntentFromContext(ctx)
+	return codeexecutor.RunResult{
+		Stdout:   "hello",
+		ExitCode: 0,
+	}, nil
+}
+
+type intentAwareInteractiveRunner struct {
+	intent codeexecutor.ExecutionIntent
+}
+
+func (r *intentAwareInteractiveRunner) RunProgram(
+	context.Context,
+	codeexecutor.Workspace,
+	codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{}, nil
+}
+
+func (r *intentAwareInteractiveRunner) StartProgram(
+	ctx context.Context,
+	_ codeexecutor.Workspace,
+	_ codeexecutor.InteractiveProgramSpec,
+) (codeexecutor.ProgramSession, error) {
+	r.intent, _ = codeexecutor.ExecutionIntentFromContext(ctx)
+	return failingProgramSession{
+		poll: codeexecutor.ProgramPoll{
+			Status: codeexecutor.ProgramStatusRunning,
+		},
+	}, nil
+}
+
+func TestRunOneShot_SetsWorkspaceExecIntent(t *testing.T) {
+	t.Parallel()
+
+	runner := &intentAwareRunner{}
+	eng := codeexecutor.NewEngine(
+		&nonInteractiveMgr{},
+		&nonInteractiveFS{},
+		runner,
+	)
+
+	_, err := runOneShot(
+		context.Background(),
+		eng,
+		codeexecutor.Workspace{ID: "ws", Path: "/tmp/ws"},
+		codeexecutor.RunProgramSpec{Cmd: "echo"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, codeexecutor.ExecutionIntentWorkspaceExec, runner.intent)
+}
+
+func TestStartInteractive_SetsWorkspaceExecIntent(t *testing.T) {
+	t.Parallel()
+
+	runner := &intentAwareInteractiveRunner{}
+	tl := &ExecTool{sessions: map[string]*execSession{}}
+
+	out, err := tl.startInteractive(
+		context.Background(),
+		execRequest{
+			background: true,
+			eng: codeexecutor.NewEngine(
+				&nonInteractiveMgr{},
+				&nonInteractiveFS{},
+				runner,
+			),
+			ws: codeexecutor.Workspace{ID: "ws", Path: "/tmp/ws"},
+			spec: codeexecutor.RunProgramSpec{
+				Cmd: "sh",
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, codeexecutor.ExecutionIntentWorkspaceExec, runner.intent)
+	require.Equal(t, codeexecutor.ProgramStatusRunning, out.Status)
+}
+
 func boolPtr(v bool) *bool { return &v }
 
 func intPtr(v int) *int { return &v }

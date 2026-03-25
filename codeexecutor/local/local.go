@@ -35,6 +35,7 @@ type CodeExecutor struct {
 	inputsHostBase     string
 	autoInputs         bool
 	workspaceMode      WorkspaceMode
+	sandbox            *codeexecutor.SandboxCoordinator
 }
 
 // CodeExecutorOption configures a local CodeExecutor.
@@ -74,6 +75,14 @@ func WithWorkspaceAutoInputs(enable bool) CodeExecutorOption {
 // run. WorkspaceModeTrustedLocal reuses WorkDir as the workspace root.
 func WithWorkspaceMode(mode WorkspaceMode) CodeExecutorOption {
 	return func(l *CodeExecutor) { l.workspaceMode = mode }
+}
+
+// WithSandboxCoordinator installs a sandbox coordinator that wraps
+// non-interactive workspace RunProgram execution.
+func WithSandboxCoordinator(
+	coordinator *codeexecutor.SandboxCoordinator,
+) CodeExecutorOption {
+	return func(l *CodeExecutor) { l.sandbox = coordinator }
 }
 
 // WithCodeBlockDelimiter sets the code block delimiter.
@@ -308,6 +317,9 @@ func (e *CodeExecutor) ensureWS() *Runtime {
 		}
 		opts = append(opts, WithRuntimeWorkspaceMode(e.workspaceMode))
 		opts = append(opts, WithAutoInputs(e.autoInputs))
+		if e.sandbox != nil {
+			opts = append(opts, WithRuntimeSandboxCoordinator(e.sandbox))
+		}
 		workRoot := strings.TrimSpace(e.WorkDir)
 		if workRoot != "" && !filepath.IsAbs(workRoot) {
 			if abs, err := filepath.Abs(workRoot); err == nil {
