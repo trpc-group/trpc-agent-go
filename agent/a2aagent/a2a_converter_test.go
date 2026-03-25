@@ -10,12 +10,14 @@
 package a2aagent
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -120,6 +122,12 @@ func TestDefaultA2AEventConverter_ConvertToEvent(t *testing.T) {
 						{
 							ArtifactID: "artifact-1",
 							Parts:      []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "Task content"}},
+							Metadata: map[string]any{
+								ia2a.MessageMetadataObjectTypeKey: "graph.node.start",
+								ia2a.MessageMetadataStateDeltaKey: ia2a.EncodeStateDeltaMetadata(map[string][]byte{
+									"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+								}),
+							},
 						},
 					},
 				},
@@ -147,6 +155,43 @@ func TestDefaultA2AEventConverter_ConvertToEvent(t *testing.T) {
 				}
 				if event.Response.ID != "artifact-1" {
 					t.Errorf("expected response ID 'artifact-1', got %s", event.Response.ID)
+				}
+				if event.Response.Object != "graph.node.start" {
+					t.Errorf("expected response object graph.node.start, got %s", event.Response.Object)
+				}
+				if event.StateDelta == nil {
+					t.Fatal("expected state delta restored from artifact metadata")
+				}
+				assertStateDeltaBytesEqual(t, map[string][]byte{
+					"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+				}, event.StateDelta)
+			},
+		},
+		{
+			name: "task result without artifact metadata keeps default object",
+			result: protocol.MessageResult{
+				Result: &protocol.Task{
+					ID:        "task-1",
+					ContextID: "ctx-1",
+					Artifacts: []protocol.Artifact{
+						{
+							ArtifactID: "artifact-1",
+							Parts:      []protocol.Part{&protocol.TextPart{Kind: protocol.KindText, Text: "Task content"}},
+						},
+					},
+				},
+			},
+			agentName: "test-agent",
+			invocation: &agent.Invocation{
+				InvocationID: "test-id",
+			},
+			setupFunc: func(tc *testCase) {},
+			validateFunc: func(t *testing.T, event *event.Event, err error) {
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+				if event == nil {
+					t.Fatal("expected event, got nil")
 				}
 				if event.Response.Object != model.ObjectTypeChatCompletion {
 					t.Errorf("expected response object %s, got %s", model.ObjectTypeChatCompletion, event.Response.Object)
@@ -809,6 +854,159 @@ func TestConvertTaskStatusToMessage(t *testing.T) {
 			tc.setupFunc(&tc)
 			msg := convertTaskStatusToMessage(tc.event)
 			tc.validateFunc(t, msg)
+		})
+	}
+}
+
+func TestDefaultA2AEventConverter_ConvertStreamingToEvents_FailedStatus(
+	t *testing.T,
+) {
+	converter := &defaultA2AEventConverter{}
+	code := "A2A_500"
+	metadata := ia2a.WithResponseErrorMetadata(nil, &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "task failed",
+		Code:    &code,
+	})
+
+	events, err := converter.ConvertStreamingToEvents(
+		protocol.StreamingMessageEvent{
+			Result: &protocol.TaskStatusUpdateEvent{
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Metadata:  metadata,
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateFailed,
+				},
+			},
+		},
+		"test-agent",
+		&agent.Invocation{InvocationID: "inv"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Response == nil || events[0].Response.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if events[0].Response.Error.Code == nil ||
+		*events[0].Response.Error.Code != code {
+		t.Fatalf("code = %v, want %q", events[0].Response.Error.Code, code)
+	}
+	if !events[0].Response.Done {
+		t.Fatal("expected terminal error event")
+	}
+}
+
+func TestDefaultA2AEventConverter_ConvertToEvents_FailedTask(
+	t *testing.T,
+) {
+	converter := &defaultA2AEventConverter{}
+	metadata := ia2a.WithResponseErrorMetadata(nil, &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "task failed",
+	})
+
+	events, err := converter.ConvertToEvents(
+		protocol.MessageResult{
+			Result: &protocol.Task{
+				ID:        "task-1",
+				ContextID: "ctx-1",
+				Metadata:  metadata,
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateFailed,
+				},
+			},
+		},
+		"test-agent",
+		&agent.Invocation{InvocationID: "inv"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Response == nil || events[0].Response.Error == nil {
+		t.Fatal("expected Response.Error to be populated")
+	}
+	if events[0].Response.Error.Message != "task failed" {
+		t.Fatalf(
+			"message = %q, want %q",
+			events[0].Response.Error.Message,
+			"task failed",
+		)
+	}
+}
+
+func TestTaskResponseError_EdgeCases(t *testing.T) {
+	if taskResponseError(nil) != nil {
+		t.Fatal("expected nil response error for nil result")
+	}
+
+	if taskResponseError(&parseResult{
+		taskState: protocol.TaskStateSubmitted,
+	}) != nil {
+		t.Fatal("expected nil response error for non-failure state")
+	}
+
+	passthrough := &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "structured",
+	}
+	if got := taskResponseError(&parseResult{
+		taskState:     protocol.TaskStateFailed,
+		responseError: passthrough,
+		textContent:   "ignored",
+	}); got != passthrough {
+		t.Fatal("expected structured response error to be reused")
+	}
+}
+
+func TestTaskResponseError_FallbackMessages(t *testing.T) {
+	tests := []struct {
+		name  string
+		state protocol.TaskState
+		want  string
+	}{
+		{
+			name:  "failed",
+			state: protocol.TaskStateFailed,
+			want:  "remote task failed",
+		},
+		{
+			name:  "rejected",
+			state: protocol.TaskStateRejected,
+			want:  "remote task rejected",
+		},
+		{
+			name:  "canceled",
+			state: protocol.TaskStateCanceled,
+			want:  "remote task canceled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			respErr := taskResponseError(&parseResult{
+				taskState: tt.state,
+			})
+			if respErr == nil {
+				t.Fatal("expected response error, got nil")
+			}
+			if respErr.Type != model.ErrorTypeFlowError {
+				t.Fatalf("unexpected error type: %s", respErr.Type)
+			}
+			if respErr.Message != tt.want {
+				t.Fatalf(
+					"message = %q, want %q",
+					respErr.Message,
+					tt.want,
+				)
+			}
 		})
 	}
 }
@@ -1798,6 +1996,29 @@ func TestParseA2AMessageParts_CodeExecution(t *testing.T) {
 	}
 }
 
+func TestParseA2AMessageParts_ResponseErrorFallsBackToText(t *testing.T) {
+	code := "A2A_500"
+	msg := &protocol.Message{
+		Parts: []protocol.Part{
+			&protocol.TextPart{Text: "task failed from content"},
+		},
+		Metadata: map[string]any{
+			ia2a.MessageMetadataErrorCodeKey: code,
+		},
+	}
+
+	result := parseA2AMessageParts(msg)
+	if result.responseError == nil {
+		t.Fatal("expected responseError, got nil")
+	}
+	if result.responseError.Message != "task failed from content" {
+		t.Fatalf(
+			"expected fallback message from text content, got %q",
+			result.responseError.Message,
+		)
+	}
+}
+
 // TestConvertToEvents_WithHistory tests conversion of Task with history containing code execution
 func TestConvertToEvents_WithHistory(t *testing.T) {
 	converter := &defaultA2AEventConverter{}
@@ -1993,6 +2214,163 @@ func TestParseA2AMessageParts_Tag(t *testing.T) {
 			result := parseA2AMessageParts(tt.msg)
 			tt.validateFunc(t, result)
 		})
+	}
+}
+
+func TestParseA2AMessageParts_StateDeltaMetadata(t *testing.T) {
+	originalStateDelta := map[string][]byte{
+		"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+		"json_string":    []byte(`"hello"`),
+		"plain_text":     []byte("raw-text"),
+		"empty_value":    []byte{},
+		"deleted":        nil,
+	}
+	msg := &protocol.Message{
+		Parts: nil,
+		Metadata: map[string]any{
+			"object_type":                     "graph.node.start",
+			ia2a.MessageMetadataStateDeltaKey: ia2a.EncodeStateDeltaMetadata(originalStateDelta),
+		},
+	}
+
+	result := parseA2AMessageParts(msg)
+	if result.objectType != "graph.node.start" {
+		t.Fatalf("expected objectType graph.node.start, got %s", result.objectType)
+	}
+	if result.stateDelta == nil {
+		t.Fatal("expected stateDelta to be restored from metadata")
+	}
+	assertStateDeltaBytesEqual(t, originalStateDelta, result.stateDelta)
+}
+
+func assertStateDeltaBytesEqual(t *testing.T, want, got map[string][]byte) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("expected %d state_delta entries, got %d", len(want), len(got))
+	}
+	for key, wantValue := range want {
+		gotValue, ok := got[key]
+		if !ok {
+			t.Fatalf("missing state_delta key %q", key)
+		}
+		if wantValue == nil {
+			if gotValue != nil {
+				t.Fatalf("expected nil state_delta for key %q, got %v", key, gotValue)
+			}
+			continue
+		}
+		if gotValue == nil {
+			t.Fatalf("expected non-nil state_delta for key %q", key)
+		}
+		if !bytes.Equal(wantValue, gotValue) {
+			t.Fatalf("unexpected state_delta value for key %q: got %q want %q", key, gotValue, wantValue)
+		}
+	}
+}
+
+func TestConvertToEvents_StateDeltaMetadata(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{InvocationID: "inv-state-delta"}
+	originalStateDelta := map[string][]byte{
+		"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+		"json_string":    []byte(`"hello"`),
+		"deleted":        nil,
+	}
+
+	events, err := converter.ConvertToEvents(protocol.MessageResult{
+		Result: &protocol.Message{
+			Kind:      protocol.KindMessage,
+			MessageID: "msg-state-delta",
+			Role:      protocol.MessageRoleAgent,
+			Metadata: map[string]any{
+				"object_type":                     "graph.node.start",
+				ia2a.MessageMetadataStateDeltaKey: ia2a.EncodeStateDeltaMetadata(originalStateDelta),
+			},
+		},
+	}, "test-agent", invocation)
+	if err != nil {
+		t.Fatalf("ConvertToEvents() error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Object != "graph.node.start" {
+		t.Fatalf("expected object graph.node.start, got %s", events[0].Object)
+	}
+	if events[0].StateDelta == nil {
+		t.Fatal("expected StateDelta on converted event")
+	}
+	assertStateDeltaBytesEqual(t, originalStateDelta, events[0].StateDelta)
+}
+
+func TestConvertToEvents_GraphExecutionMarksDone(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{InvocationID: "inv-graph-exec"}
+
+	events, err := converter.ConvertToEvents(protocol.MessageResult{
+		Result: &protocol.Message{
+			Kind:      protocol.KindMessage,
+			MessageID: "msg-graph-exec",
+			Role:      protocol.MessageRoleAgent,
+			Metadata: map[string]any{
+				ia2a.MessageMetadataObjectTypeKey: graph.ObjectTypeGraphExecution,
+				ia2a.MessageMetadataStateDeltaKey: ia2a.EncodeStateDeltaMetadata(map[string][]byte{
+					"child_done": []byte("true"),
+				}),
+			},
+		},
+	}, "test-agent", invocation)
+	if err != nil {
+		t.Fatalf("ConvertToEvents() error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if !events[0].Done {
+		t.Fatal("expected graph.execution event to be marked done")
+	}
+	if events[0].IsPartial {
+		t.Fatal("expected graph.execution event to be non-partial")
+	}
+	if events[0].Object != graph.ObjectTypeGraphExecution {
+		t.Fatalf("expected object %q, got %q", graph.ObjectTypeGraphExecution, events[0].Object)
+	}
+}
+
+func TestConvertStreamingToEvents_GraphExecutionMarksDone(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{InvocationID: "inv-graph-exec-stream"}
+
+	events, err := converter.ConvertStreamingToEvents(protocol.StreamingMessageEvent{
+		Result: &protocol.TaskArtifactUpdateEvent{
+			TaskID:    "task-graph-exec",
+			ContextID: "ctx-graph-exec",
+			Artifact: protocol.Artifact{
+				ArtifactID: "artifact-graph-exec",
+			},
+			Metadata: map[string]any{
+				ia2a.MessageMetadataObjectTypeKey: graph.ObjectTypeGraphExecution,
+				ia2a.MessageMetadataStateDeltaKey: ia2a.EncodeStateDeltaMetadata(map[string][]byte{
+					"child_done": []byte("true"),
+				}),
+			},
+		},
+	}, "test-agent", invocation)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToEvents() error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if !events[0].Done {
+		t.Fatal("expected streaming graph.execution event to be marked done")
+	}
+	if events[0].IsPartial {
+		t.Fatal("expected streaming graph.execution event to be non-partial")
+	}
+	if events[0].Object != graph.ObjectTypeGraphExecution {
+		t.Fatalf("expected object %q, got %q", graph.ObjectTypeGraphExecution, events[0].Object)
 	}
 }
 
@@ -2645,6 +3023,38 @@ func TestAppendFilePart_EmptyData(t *testing.T) {
 	})
 	if len(parts) != 0 {
 		t.Fatalf("expected empty parts for File with empty Data, got %d", len(parts))
+	}
+}
+
+func TestAppendFilePart_WithFileIDAndDefaultName(t *testing.T) {
+	parts := appendFilePart(nil, model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			FileID:   "file-id",
+			MimeType: "text/plain",
+		},
+	})
+	if len(parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(parts))
+	}
+
+	filePart, ok := parts[0].(*protocol.FilePart)
+	if !ok {
+		t.Fatalf("expected *protocol.FilePart, got %T", parts[0])
+	}
+
+	fileWithURI, ok := filePart.File.(*protocol.FileWithURI)
+	if !ok {
+		t.Fatalf(
+			"expected *protocol.FileWithURI, got %T",
+			filePart.File,
+		)
+	}
+	if fileWithURI.Name == nil || *fileWithURI.Name != "file" {
+		t.Fatalf("unexpected file name: %+v", fileWithURI.Name)
+	}
+	if fileWithURI.URI != "file-id" {
+		t.Fatalf("unexpected file URI: %s", fileWithURI.URI)
 	}
 }
 

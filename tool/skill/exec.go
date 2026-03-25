@@ -354,7 +354,7 @@ func (t *ExecTool) StreamableCall(
 	runIn, saveRequested, outputsSaveSkipReason := t.run.
 		applyArtifactSaveOverrides(ctx, in.runInput)
 	in.runInput = runIn
-	eng, ws, ctxIO, staged, stageWarn, err := t.run.
+	eng, ws, skillRoot, ctxIO, staged, stageWarn, err := t.run.
 		prepareWorkspaceForRun(ctx, in.runInput)
 	if err != nil {
 		return nil, err
@@ -365,11 +365,12 @@ func (t *ExecTool) StreamableCall(
 			"skill_exec is not supported by the current executor",
 		)
 	}
-	cwd := resolveCWD(in.Cwd, in.Skill)
+	cwd := resolveCWD(in.Cwd, skillRoot)
 	spec, err := t.run.buildRunProgramSpec(
 		ctxIO,
 		eng,
 		ws,
+		skillRoot,
 		cwd,
 		in.runInput,
 	)

@@ -10,13 +10,16 @@
 package a2a
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -397,6 +400,7 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 			event: &event.Event{
 				ID: "error-event-123",
 				Response: &model.Response{
+					Done: true,
 					Error: &model.ResponseError{
 						Message: "Something went wrong",
 					},
@@ -533,6 +537,25 @@ func TestDefaultEventToA2AMessage_ConvertToA2AMessage(t *testing.T) {
 			wantErr:  false,
 		},
 		{
+			name: "graph internal event with state delta is filtered by default",
+			event: &event.Event{
+				ID:     "evt-graph-1",
+				Author: "graph.node:planner",
+				Response: &model.Response{
+					ID:     "resp-graph-1",
+					Object: "graph.node.start",
+					Choices: []model.Choice{{
+						Message: model.Message{},
+					}},
+				},
+				StateDelta: map[string][]byte{
+					"_node_metadata": []byte(`{"nodeId":"planner","phase":"start","modelName":"gpt-4o"}`),
+				},
+			},
+			expected: nil,
+			wantErr:  false,
+		},
+		{
 			name:     "nil response",
 			event:    &event.Event{Response: nil},
 			expected: nil,
@@ -600,6 +623,7 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			event: &event.Event{
 				ID: "error-event-456",
 				Response: &model.Response{
+					Done: true,
 					Error: &model.ResponseError{
 						Message: "Streaming error",
 					},
@@ -691,6 +715,25 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 			expected: nil,
 			wantErr:  false,
 		},
+		{
+			name: "streaming graph internal event with state delta is filtered by default",
+			event: &event.Event{
+				ID:     "evt-graph-1",
+				Author: "graph.node:planner",
+				Response: &model.Response{
+					ID:     "resp-graph-1",
+					Object: "graph.node.start",
+					Choices: []model.Choice{{
+						Delta: model.Message{},
+					}},
+				},
+				StateDelta: map[string][]byte{
+					"_node_metadata": []byte(`{"nodeId":"planner","phase":"start","modelName":"gpt-4o"}`),
+				},
+			},
+			expected: nil,
+			wantErr:  false,
+		},
 	}
 
 	converter := &defaultEventToA2AMessage{}
@@ -709,6 +752,304 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage(t *testing.T) {
 				t.Errorf("ConvertStreamingToA2AMessage() = %+v, want %+v", result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestDefaultEventToA2AMessage_ConvertStreamingNodeError(
+	t *testing.T,
+) {
+	converter := &defaultEventToA2AMessage{
+		graphEventObjectAllowlist: []string{"graph.*"},
+	}
+	evt := graph.NewNodeErrorEvent(
+		graph.WithNodeEventInvocationID("inv"),
+		graph.WithNodeEventNodeID("lookup"),
+		graph.WithNodeEventNodeType(graph.NodeTypeFunction),
+		graph.WithNodeEventError("boom"),
+	)
+
+	result, err := converter.ConvertStreamingToA2AMessage(
+		context.Background(),
+		evt,
+		EventToA2AStreamingOptions{
+			CtxID:  "ctx",
+			TaskID: "task",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	update, ok := result.(*protocol.TaskArtifactUpdateEvent)
+	require.True(t, ok)
+	require.Equal(
+		t,
+		graph.ObjectTypeGraphNodeError,
+		update.Metadata[ia2a.MessageMetadataObjectTypeKey],
+	)
+}
+
+func TestDefaultEventToA2AMessage_GraphEventFilter(t *testing.T) {
+	internalEvt := &event.Event{
+		ID: "evt-internal",
+		Response: &model.Response{
+			ID:     "resp-internal",
+			Object: "graph.node.start",
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
+		},
+	}
+	pregelEvt := &event.Event{
+		ID: "evt-pregel",
+		Response: &model.Response{
+			ID:     "resp-pregel",
+			Object: "graph.pregel.step",
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
+		},
+	}
+	terminalEvt := &event.Event{
+		ID: "evt-terminal",
+		Response: &model.Response{
+			ID:     "resp-terminal",
+			Object: "graph.execution",
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
+		},
+	}
+
+	t.Run("default filters internal graph events", func(t *testing.T) {
+		converter := &defaultEventToA2AMessage{}
+
+		unaryInternal, err := converter.ConvertToA2AMessage(context.Background(), internalEvt, EventToA2AUnaryOptions{})
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage(internal) error: %v", err)
+		}
+		if unaryInternal != nil {
+			t.Fatalf("expected nil unary result for internal graph event, got %T", unaryInternal)
+		}
+
+		streamingInternal, err := converter.ConvertStreamingToA2AMessage(
+			context.Background(),
+			internalEvt,
+			EventToA2AStreamingOptions{CtxID: "ctx-1", TaskID: "task-1"},
+		)
+		if err != nil {
+			t.Fatalf("ConvertStreamingToA2AMessage(internal) error: %v", err)
+		}
+		if streamingInternal != nil {
+			t.Fatalf("expected nil streaming result for internal graph event, got %T", streamingInternal)
+		}
+
+		unaryPregel, err := converter.ConvertToA2AMessage(
+			context.Background(),
+			pregelEvt,
+			EventToA2AUnaryOptions{},
+		)
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage(pregel) error: %v", err)
+		}
+		if unaryPregel != nil {
+			t.Fatalf("expected nil unary result for graph.pregel.* event, got %T", unaryPregel)
+		}
+
+		unaryTerminal, err := converter.ConvertToA2AMessage(context.Background(), terminalEvt, EventToA2AUnaryOptions{})
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage(terminal) error: %v", err)
+		}
+		if unaryTerminal == nil {
+			t.Fatal("expected non-nil unary result for graph.execution")
+		}
+		msg, ok := unaryTerminal.(*protocol.Message)
+		if !ok {
+			t.Fatalf("expected *protocol.Message, got %T", unaryTerminal)
+		}
+		if got := msg.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != "graph.execution" {
+			t.Fatalf("expected object_type graph.execution, got %v", got)
+		}
+	})
+
+	t.Run("allowlist enables internal graph events", func(t *testing.T) {
+		converter := &defaultEventToA2AMessage{graphEventObjectAllowlist: []string{"graph.*"}}
+
+		unaryInternal, err := converter.ConvertToA2AMessage(context.Background(), internalEvt, EventToA2AUnaryOptions{})
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage(internal) error: %v", err)
+		}
+		if unaryInternal == nil {
+			t.Fatal("expected non-nil unary result for internal graph event when allowlist matches")
+		}
+
+		streamingInternal, err := converter.ConvertStreamingToA2AMessage(
+			context.Background(),
+			internalEvt,
+			EventToA2AStreamingOptions{CtxID: "ctx-1", TaskID: "task-1"},
+		)
+		if err != nil {
+			t.Fatalf("ConvertStreamingToA2AMessage(internal) error: %v", err)
+		}
+		if streamingInternal == nil {
+			t.Fatal("expected non-nil streaming result for internal graph event when allowlist matches")
+		}
+	})
+}
+
+func TestDefaultEventToA2AMessage_StateDeltaMetadata(t *testing.T) {
+	converter := &defaultEventToA2AMessage{graphEventObjectAllowlist: []string{"graph.*"}}
+	originalStateDelta := map[string][]byte{
+		"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+		"json_string":    []byte(`"hello"`),
+		"plain_text":     []byte("raw-text"),
+		"empty_value":    []byte{},
+		"deleted":        nil,
+	}
+	evt := &event.Event{
+		ID:     "evt-graph-meta",
+		Author: "graph.node:planner",
+		Response: &model.Response{
+			ID:     "resp-graph-meta",
+			Object: "graph.node.start",
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
+		},
+		StateDelta: originalStateDelta,
+	}
+
+	unaryResult, err := converter.ConvertToA2AMessage(context.Background(), evt, EventToA2AUnaryOptions{})
+	if err != nil {
+		t.Fatalf("ConvertToA2AMessage() error: %v", err)
+	}
+	msg, ok := unaryResult.(*protocol.Message)
+	if !ok {
+		t.Fatalf("expected *protocol.Message, got %T", unaryResult)
+	}
+	if len(msg.Parts) != 0 {
+		t.Fatalf("expected no parts, got %d", len(msg.Parts))
+	}
+	if got := msg.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != "graph.node.start" {
+		t.Fatalf("expected object_type graph.node.start, got %v", got)
+	}
+	rawStateDelta, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]
+	if !ok {
+		t.Fatal("expected state_delta in unary metadata")
+	}
+	assertStateDeltaRoundTrip(t, originalStateDelta, rawStateDelta)
+
+	streamingResult, err := converter.ConvertStreamingToA2AMessage(
+		context.Background(),
+		evt,
+		EventToA2AStreamingOptions{CtxID: "ctx-1", TaskID: "task-1"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToA2AMessage() error: %v", err)
+	}
+	taskEvent, ok := streamingResult.(*protocol.TaskArtifactUpdateEvent)
+	if !ok {
+		t.Fatalf("expected *protocol.TaskArtifactUpdateEvent, got %T", streamingResult)
+	}
+	if len(taskEvent.Artifact.Parts) != 0 {
+		t.Fatalf("expected no parts in artifact, got %d", len(taskEvent.Artifact.Parts))
+	}
+	rawStateDelta, ok = taskEvent.Metadata[ia2a.MessageMetadataStateDeltaKey]
+	if !ok {
+		t.Fatal("expected state_delta in streaming metadata")
+	}
+	assertStateDeltaRoundTrip(t, originalStateDelta, rawStateDelta)
+}
+
+func TestDefaultEventToA2AMessage_MetadataOnlyWithoutStateDelta(t *testing.T) {
+	converter := &defaultEventToA2AMessage{graphEventObjectAllowlist: []string{"graph.*"}}
+	evt := &event.Event{
+		ID:     "evt-meta-only",
+		Author: "graph.node:planner",
+		Tag:    "planner;trace",
+		Response: &model.Response{
+			ID:     "resp-meta-only",
+			Object: "graph.node.start",
+			Choices: []model.Choice{{
+				Message: model.Message{},
+			}},
+		},
+	}
+
+	unaryResult, err := converter.ConvertToA2AMessage(context.Background(), evt, EventToA2AUnaryOptions{})
+	if err != nil {
+		t.Fatalf("ConvertToA2AMessage() error: %v", err)
+	}
+	msg, ok := unaryResult.(*protocol.Message)
+	if !ok {
+		t.Fatalf("expected *protocol.Message, got %T", unaryResult)
+	}
+	if len(msg.Parts) != 0 {
+		t.Fatalf("expected no parts, got %d", len(msg.Parts))
+	}
+	if got := msg.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != "graph.node.start" {
+		t.Fatalf("expected object_type graph.node.start, got %v", got)
+	}
+	if got := msg.Metadata[ia2a.MessageMetadataTagKey]; got != "planner;trace" {
+		t.Fatalf("expected tag planner;trace, got %v", got)
+	}
+	if got := msg.Metadata[ia2a.MessageMetadataResponseIDKey]; got != "resp-meta-only" {
+		t.Fatalf("expected response id resp-meta-only, got %v", got)
+	}
+	if _, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]; ok {
+		t.Fatal("did not expect state_delta in metadata")
+	}
+
+	streamingResult, err := converter.ConvertStreamingToA2AMessage(
+		context.Background(),
+		evt,
+		EventToA2AStreamingOptions{CtxID: "ctx-1", TaskID: "task-1"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToA2AMessage() error: %v", err)
+	}
+	taskEvent, ok := streamingResult.(*protocol.TaskArtifactUpdateEvent)
+	if !ok {
+		t.Fatalf("expected *protocol.TaskArtifactUpdateEvent, got %T", streamingResult)
+	}
+	if len(taskEvent.Artifact.Parts) != 0 {
+		t.Fatalf("expected no parts in artifact, got %d", len(taskEvent.Artifact.Parts))
+	}
+	if got := taskEvent.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != "graph.node.start" {
+		t.Fatalf("expected object_type graph.node.start, got %v", got)
+	}
+	if got := taskEvent.Metadata[ia2a.MessageMetadataTagKey]; got != "planner;trace" {
+		t.Fatalf("expected tag planner;trace, got %v", got)
+	}
+	if got := taskEvent.Metadata[ia2a.MessageMetadataResponseIDKey]; got != "resp-meta-only" {
+		t.Fatalf("expected response id resp-meta-only, got %v", got)
+	}
+}
+
+func assertStateDeltaRoundTrip(t *testing.T, want map[string][]byte, raw any) {
+	t.Helper()
+
+	got := ia2a.DecodeStateDeltaMetadata(raw)
+	if len(got) != len(want) {
+		t.Fatalf("expected %d state_delta entries, got %d", len(want), len(got))
+	}
+
+	for key, wantValue := range want {
+		gotValue, ok := got[key]
+		if !ok {
+			t.Fatalf("missing state_delta key %q", key)
+		}
+		if wantValue == nil {
+			if gotValue != nil {
+				t.Fatalf("expected nil state_delta for key %q, got %v", key, gotValue)
+			}
+			continue
+		}
+		if gotValue == nil {
+			t.Fatalf("expected non-nil state_delta for key %q", key)
+		}
+		if !bytes.Equal(wantValue, gotValue) {
+			t.Fatalf("unexpected state_delta value for key %q: got %q want %q", key, gotValue, wantValue)
+		}
 	}
 }
 
@@ -746,8 +1087,6 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage_MessageType(
 				)
 				msg.MessageID = "resp-123"
 				msg.Metadata = map[string]any{
-					ia2a.MessageMetadataObjectTypeKey: "",
-					ia2a.MessageMetadataTagKey:        "",
 					ia2a.MessageMetadataResponseIDKey: "resp-123",
 				}
 				return &msg
@@ -800,8 +1139,6 @@ func TestDefaultEventToA2AMessage_ConvertStreamingToA2AMessage_MessageType(
 				)
 				msg.MessageID = "resp-stc1"
 				msg.Metadata = map[string]any{
-					ia2a.MessageMetadataObjectTypeKey: "",
-					ia2a.MessageMetadataTagKey:        "",
 					ia2a.MessageMetadataResponseIDKey: "resp-stc1",
 				}
 				return &msg
@@ -1749,7 +2086,10 @@ func TestDefaultEventToA2AMessage_CodeExecution(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			converter := &defaultEventToA2AMessage{adkCompatibility: tt.adkCompatibility}
+			converter := &defaultEventToA2AMessage{
+				adkCompatibility:          tt.adkCompatibility,
+				graphEventObjectAllowlist: []string{"graph.*"},
+			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {
 				t.Errorf("ConvertToA2AMessage() unexpected error: %v", err)
@@ -2178,9 +2518,8 @@ func TestMessageMetadataTag(t *testing.T) {
 					t.Error("expected metadata")
 					return
 				}
-				// Empty tag should still be present in metadata
-				if msg.Metadata["tag"] != "" {
-					t.Errorf("expected empty tag, got %v", msg.Metadata["tag"])
+				if _, ok := msg.Metadata["tag"]; ok {
+					t.Errorf("expected empty tag to be omitted, got %v", msg.Metadata["tag"])
 				}
 			},
 		},
@@ -2190,7 +2529,10 @@ func TestMessageMetadataTag(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			converter := &defaultEventToA2AMessage{adkCompatibility: tt.adkCompatibility}
+			converter := &defaultEventToA2AMessage{
+				adkCompatibility:          tt.adkCompatibility,
+				graphEventObjectAllowlist: []string{"graph.*"},
+			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {
 				t.Errorf("ConvertToA2AMessage() unexpected error: %v", err)
@@ -2294,7 +2636,10 @@ func TestConvertCodeExecutionToA2AMessage_TagDistinction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			converter := &defaultEventToA2AMessage{adkCompatibility: tt.adkCompatibility}
+			converter := &defaultEventToA2AMessage{
+				adkCompatibility:          tt.adkCompatibility,
+				graphEventObjectAllowlist: []string{"graph.*"},
+			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {
 				t.Errorf("ConvertToA2AMessage() unexpected error: %v", err)
@@ -2469,13 +2814,50 @@ func TestDefaultEventToA2AMessage_ADKCompatibility(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:             "ADK compatibility enabled - state delta metadata event",
+			adkCompatibility: true,
+			event: &event.Event{
+				ID:     "evt-graph-adk",
+				Author: "graph.node:planner",
+				Response: &model.Response{
+					ID:     "resp-graph-adk",
+					Object: "graph.node.start",
+					Choices: []model.Choice{{
+						Message: model.Message{},
+					}},
+				},
+				StateDelta: map[string][]byte{
+					"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
+				},
+			},
+			checkMetadata: func(t *testing.T, result protocol.UnaryMessageResult) {
+				msg, ok := result.(*protocol.Message)
+				if !ok {
+					t.Errorf("Expected Message type, got %T", result)
+					return
+				}
+				if len(msg.Parts) != 0 {
+					t.Fatalf("Expected no parts, got %d", len(msg.Parts))
+				}
+				if _, hasStateDelta := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]; !hasStateDelta {
+					t.Fatal("Expected state_delta in message metadata")
+				}
+				if got := msg.Metadata[ia2a.MessageMetadataObjectTypeKey]; got != "graph.node.start" {
+					t.Errorf("Expected object_type 'graph.node.start', got %v", got)
+				}
+			},
+		},
 	}
 
 	ctx := context.Background()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			converter := &defaultEventToA2AMessage{adkCompatibility: tt.adkCompatibility}
+			converter := &defaultEventToA2AMessage{
+				adkCompatibility:          tt.adkCompatibility,
+				graphEventObjectAllowlist: []string{"graph.*"},
+			}
 			result, err := converter.ConvertToA2AMessage(ctx, tt.event, EventToA2AUnaryOptions{CtxID: "test-ctx"})
 			if err != nil {
 				t.Errorf("ConvertToA2AMessage() unexpected error: %v", err)

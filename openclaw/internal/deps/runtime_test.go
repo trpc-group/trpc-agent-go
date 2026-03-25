@@ -208,6 +208,38 @@ func TestInspectSourceAndNormalizeMissing(t *testing.T) {
 	)
 }
 
+func TestInspectSource_FindsManagedBin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("script assertions run on unix-like systems")
+	}
+
+	stateDir := t.TempDir()
+	binDir := ManagedBinDir(stateDir)
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	writeTestCommand(
+		t,
+		binDir,
+		"managed-tool",
+		"printf managed",
+	)
+
+	report, missing, err := inspectSource(
+		DetectToolchain(stateDir),
+		Source{
+			Name: "managed",
+			Requires: Requirement{
+				Bins: []string{"managed-tool"},
+			},
+		},
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, report.Bins, 1)
+	require.True(t, report.Bins[0].Found)
+	require.Contains(t, report.Bins[0].Path, "managed-tool")
+	require.Empty(t, missing.Bins)
+}
+
 func TestCheckPythonPackages_CommandFailure(t *testing.T) {
 	t.Parallel()
 
@@ -250,6 +282,46 @@ func TestResolveExecutable_RejectsNonExecutablePath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "python3")
 	require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
 
-	_, err := resolveExecutable(path, "")
+	_, err := resolveExecutable(path, "", "")
 	require.Error(t, err)
+}
+
+func TestManagedToolPrefixAndCandidates(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	require.Equal(
+		t,
+		ManagedPythonRoot(stateDir),
+		ManagedToolPrefix(stateDir),
+	)
+	require.Nil(t, managedBinCandidates(""))
+	if runtime.GOOS == "windows" {
+		require.Equal(
+			t,
+			[]string{"tool", "tool.exe", "tool.cmd", "tool.bat"},
+			managedBinCandidates("tool"),
+		)
+		return
+	}
+	require.Equal(t, []string{"tool"}, managedBinCandidates("tool"))
+}
+
+func TestLookPath_UsesSearchPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell assertions run on unix-like systems")
+	}
+
+	toolDir := t.TempDir()
+	toolPath := writeTestCommand(
+		t,
+		toolDir,
+		"search-tool",
+		"printf ok",
+	)
+	t.Setenv("PATH", t.TempDir())
+
+	path, err := lookPath("search-tool", toolDir)
+	require.NoError(t, err)
+	require.Equal(t, toolPath, path)
 }

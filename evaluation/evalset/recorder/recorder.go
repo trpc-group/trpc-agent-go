@@ -109,7 +109,7 @@ func (r *Recorder) onEvent(
 		return nil, nil
 	}
 	isCompletion := e.IsRunnerCompletion()
-	isError := e.IsError()
+	isError := e.IsTerminalError()
 	var acc *accumulator
 	if isCompletion {
 		v, ok := r.accumulators.Load(requestID)

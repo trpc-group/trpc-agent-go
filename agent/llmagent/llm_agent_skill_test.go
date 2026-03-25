@@ -12,6 +12,7 @@ package llmagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
 
 const (
@@ -130,7 +132,10 @@ func TestLLMAgent_SkillRunToolExecutes(t *testing.T) {
 
 // stubExec implements CodeExecutor and exposes an Engine
 // whose runner marks ran=true on use.
-type stubExec struct{ ran bool }
+type stubExec struct {
+	ran      bool
+	lastSpec codeexecutor.RunProgramSpec
+}
 
 func (s *stubExec) ExecuteCode(
 	ctx context.Context,
@@ -204,11 +209,42 @@ func (r *stubRunner) RunProgram(
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
 	r.s.ran = true
+	r.s.lastSpec = spec
 	return codeexecutor.RunResult{
 		Stdout:   "ok",
 		ExitCode: 0,
 		Duration: time.Millisecond,
 	}, nil
+}
+
+type pathErrRepo struct {
+	err error
+}
+
+func (*pathErrRepo) Summaries() []skill.Summary {
+	return []skill.Summary{{Name: testSkillName}}
+}
+
+func (*pathErrRepo) Get(name string) (*skill.Skill, error) {
+	return &skill.Skill{
+		Summary: skill.Summary{Name: name},
+	}, nil
+}
+
+func (r *pathErrRepo) Path(string) (string, error) {
+	return "", r.err
+}
+
+type skillStageFunc func(
+	context.Context,
+	toolskill.SkillStageRequest,
+) (toolskill.SkillStageResult, error)
+
+func (f skillStageFunc) StageSkill(
+	ctx context.Context,
+	req toolskill.SkillStageRequest,
+) (toolskill.SkillStageResult, error) {
+	return f(ctx, req)
 }
 
 func TestLLMAgent_SkillRun_UsesInjectedExecutor(t *testing.T) {
@@ -225,6 +261,46 @@ func TestLLMAgent_SkillRun_UsesInjectedExecutor(t *testing.T) {
 	_, err = tl.(tool.CallableTool).Call(context.Background(), b)
 	require.NoError(t, err)
 	require.True(t, se.ran)
+}
+
+func TestLLMAgent_SkillRun_UsesConfiguredStager(t *testing.T) {
+	repo := &pathErrRepo{err: errors.New("Path should not be called")}
+	se := &stubExec{}
+	skillRoot := filepath.ToSlash(
+		filepath.Join(codeexecutor.DirWork, "custom", testSkillName),
+	)
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithCodeExecutor(se),
+		WithSkillRunStager(skillStageFunc(
+			func(
+				_ context.Context,
+				req toolskill.SkillStageRequest,
+			) (toolskill.SkillStageResult, error) {
+				require.Equal(t, testSkillName, req.SkillName)
+				return toolskill.SkillStageResult{
+					WorkspaceSkillDir: skillRoot,
+				}, nil
+			},
+		)),
+	)
+	tl := findTool(a.Tools(), "skill_run")
+	require.NotNil(t, tl)
+	args := map[string]any{"skill": testSkillName, "command": "echo ok"}
+	b, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	_, err = tl.(tool.CallableTool).Call(context.Background(), b)
+	require.NoError(t, err)
+	require.True(t, se.ran)
+	require.Equal(t, skillRoot, se.lastSpec.Cwd)
+	argsText := strings.Join(se.lastSpec.Args, " ")
+	require.Contains(
+		t,
+		argsText,
+		"export VIRTUAL_ENV='.venv'",
+	)
 }
 
 func TestLLMAgent_SkillRun_AllowedCommands_Enforced(t *testing.T) {
@@ -559,15 +635,19 @@ func TestLLMAgent_WithMaxLoadedSkills_WiresProcessor(t *testing.T) {
 			[]byte("1"),
 		)
 	}
+	sess.SetState(
+		skill.LoadedOrderKey("tester"),
+		[]byte(`["a","b","c","d"]`),
+	)
 
 	req := &model.Request{Messages: nil}
 	srp.ProcessRequest(context.Background(), inv, req, nil)
 
-	v, ok := sess.GetState(skill.LoadedKey("tester", "d"))
+	v, ok := sess.GetState(skill.LoadedKey("tester", "a"))
 	require.True(t, ok)
 	require.Empty(t, v)
 
-	for _, name := range []string{"a", "b", "c"} {
+	for _, name := range []string{"b", "c", "d"} {
 		v, ok = sess.GetState(skill.LoadedKey("tester", name))
 		require.True(t, ok)
 		require.Equal(t, []byte("1"), v)

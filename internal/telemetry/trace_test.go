@@ -126,6 +126,15 @@ func hasAttr(attrs []attribute.KeyValue, key string, want any) bool {
 	return false
 }
 
+func hasAttrKey(attrs []attribute.KeyValue, key string) bool {
+	for _, kv := range attrs {
+		if string(kv.Key) == key {
+			return true
+		}
+	}
+	return false
+}
+
 func TestNewWorkflowSpanName(t *testing.T) {
 	require.Equal(t, "workflow myflow", NewWorkflowSpanName("myflow"))
 }
@@ -271,6 +280,9 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 	if !hasAttr(s.attrs, semconvtrace.KeyGenAIAgentName, "alpha") {
 		t.Fatalf("missing agent name")
 	}
+	if !hasAttr(s.attrs, semconvtrace.KeyGenAIAgentID, "alpha") {
+		t.Fatalf("missing agent id")
+	}
 	if !hasAttr(s.attrs, semconvtrace.KeyGenAIRequestIsStream, true) {
 		t.Fatalf("missing request stream attribute")
 	}
@@ -387,6 +399,60 @@ func TestTraceBeforeInvokeAgent_WithSpanAttributes(t *testing.T) {
 	span := newRecordingSpan()
 	TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
 	require.True(t, hasAttr(span.attrs, "custom.attr", "v1"), "custom span attribute should be applied")
+}
+
+func TestTraceBeforeInvokeAgent_WithTraceStartedCallback(t *testing.T) {
+	var got trace.SpanContext
+	inv := &agent.Invocation{
+		AgentName:    "alpha",
+		InvocationID: "inv-span-callback",
+		RunOptions: agent.RunOptions{
+			TraceStartedCallbacks: []agent.TraceStartedCallback{
+				func(spanContext trace.SpanContext) {
+					got = spanContext
+				},
+			},
+		},
+	}
+	span := newRecordingSpan()
+
+	TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+
+	require.Equal(t, span.SpanContext(), got)
+}
+
+func TestTraceBeforeInvokeAgent_IgnoresNilTraceStartedCallback(t *testing.T) {
+	inv := &agent.Invocation{
+		AgentName:    "alpha",
+		InvocationID: "inv-span-callback-nil",
+		RunOptions: agent.RunOptions{
+			TraceStartedCallbacks: []agent.TraceStartedCallback{
+				nil,
+			},
+		},
+	}
+	span := newRecordingSpan()
+
+	require.NotPanics(t, func() {
+		TraceBeforeInvokeAgent(span, inv, "desc", "inst", nil)
+	})
+}
+
+func TestTraceBeforeInvokeAgent_SkipsChildTraceStartedCallback(
+	t *testing.T,
+) {
+	root := agent.NewInvocation()
+	root.RunOptions.TraceStartedCallbacks = []agent.TraceStartedCallback{
+		func(trace.SpanContext) {
+			t.Fatal("child invocation should not trigger root callback")
+		},
+	}
+	child := root.Clone()
+	span := newRecordingSpan()
+
+	require.NotPanics(t, func() {
+		TraceBeforeInvokeAgent(span, child, "desc", "inst", nil)
+	})
 }
 
 func TestNewChatSpanName(t *testing.T) {
@@ -584,9 +650,24 @@ func TestTraceBeforeInvokeAgent_NilPaths(t *testing.T) {
 			TraceBeforeInvokeAgent(span, tt.invoke, "desc", "instructions", tt.genConfig)
 
 			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "test-agent"))
+			require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentID, "test-agent"))
 			require.True(t, hasAttr(span.attrs, semconvtrace.KeyInvocationID, "inv1"))
 		})
 	}
+}
+
+func TestTraceBeforeInvokeAgent_UsesInvocationAgentNameOnly(t *testing.T) {
+	span := newRecordingSpan()
+	inv := &agent.Invocation{
+		InvocationID: "inv-fallback",
+		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+	}
+
+	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
+
+	require.False(t, hasAttrKey(span.attrs, semconvtrace.KeyGenAIAgentName))
+	require.False(t, hasAttrKey(span.attrs, semconvtrace.KeyGenAIAgentID))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyInvocationID, "inv-fallback"))
 }
 
 func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
@@ -1011,6 +1092,7 @@ func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
 	TraceBeforeInvokeAgent(span, inv, "desc", "instructions", nil)
 
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "test-agent"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentID, "test-agent"))
 }
 
 func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {

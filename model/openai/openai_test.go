@@ -85,6 +85,54 @@ func TestNew(t *testing.T) {
 				WithBaseURL(defaultDeepSeekBaseURL),
 			},
 		},
+		{
+			name:      "infer deepseek from model name",
+			modelName: "deepseek-chat",
+			opts:      nil,
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultDeepSeekBaseURL),
+				WithVariant(VariantDeepSeek),
+			},
+		},
+		{
+			name:      "infer deepseek reasoner from model name",
+			modelName: "deepseek-reasoner",
+			opts:      nil,
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultDeepSeekBaseURL),
+				WithVariant(VariantDeepSeek),
+			},
+		},
+		{
+			name:      "does not infer deepseek from third party deepseek model name",
+			modelName: "deepseek-v3.2",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "infer deepseek from base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.deepseek.com/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.deepseek.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+		},
+		{
+			name:      "explicit variant beats deepseek inference",
+			modelName: "deepseek-chat",
+			opts: []Option{
+				WithVariant(VariantOpenAI),
+			},
+			expectOpts: nil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -92,7 +140,7 @@ func TestNew(t *testing.T) {
 			m := New(tt.modelName, tt.opts...)
 			require.NotNil(t, m, "expected model to be created, got nil")
 
-			o := options{}
+			o := defaultOptions
 			for _, opt := range tt.opts {
 				opt(&o)
 			}
@@ -103,6 +151,177 @@ func TestNew(t *testing.T) {
 			assert.Equal(t, tt.modelName, m.name, "expected model name %s, got %s", tt.modelName, m.name)
 			assert.Equal(t, o.APIKey, m.apiKey, "expected api key %s, got %s", o.APIKey, m.apiKey)
 			assert.Equal(t, o.BaseURL, m.baseURL, "expected base url %s, got %s", o.BaseURL, m.baseURL)
+			assert.Equal(t, o.Variant, m.variant, "expected variant %s, got %s", o.Variant, m.variant)
+		})
+	}
+}
+
+func TestIsDeepSeekModelName(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelName string
+		want      bool
+	}{
+		{
+			name:      "matches chat model",
+			modelName: "deepseek-chat",
+			want:      true,
+		},
+		{
+			name:      "matches reasoner model",
+			modelName: "deepseek-reasoner",
+			want:      true,
+		},
+		{
+			name:      "matches after trim and lowercase",
+			modelName: " DEEPSEEK-CHAT ",
+			want:      true,
+		},
+		{
+			name:      "does not match third party deepseek model name",
+			modelName: "deepseek-v3.2",
+			want:      false,
+		},
+		{
+			name:      "does not match other providers",
+			modelName: "gpt-4o-mini",
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isDeepSeekModelName(tt.modelName))
+		})
+	}
+}
+
+func TestInferVariant(t *testing.T) {
+	tests := []struct {
+		name    string
+		model   string
+		baseURL string
+		variant Variant
+	}{
+		{
+			name:    "deepseek family model with custom base url stays openai",
+			model:   "deepseek-v3.2",
+			baseURL: "https://api.custom.com/v1",
+			variant: VariantOpenAI,
+		},
+		{
+			name:    "deepseek family model without base url stays openai",
+			model:   "deepseek-v3.2",
+			variant: VariantOpenAI,
+		},
+		{
+			name:    "deepseek official model with custom base url still infers deepseek",
+			model:   "deepseek-chat",
+			baseURL: "https://api.custom.com/v1",
+			variant: VariantDeepSeek,
+		},
+		{
+			name:    "deepseek official host infers deepseek",
+			model:   "custom-model",
+			baseURL: "https://api.deepseek.com/v1",
+			variant: VariantDeepSeek,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.variant, inferVariant(tt.model, tt.baseURL))
+		})
+	}
+}
+
+func TestIsDeepSeekBaseURL(t *testing.T) {
+	const (
+		deepSeekURL        = "https://api.deepseek.com/v1"
+		upperDeepSeekURL   = " HTTPS://API.DEEPSEEK.COM/V1 "
+		invalidDeepSeekURL = "https://api.deepseek.com/%zz"
+		openAIURL          = "https://api.openai.com/v1"
+		emptyURL           = "   "
+	)
+
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "matches deepseek host",
+			rawURL: deepSeekURL,
+			want:   true,
+		},
+		{
+			name:   "matches deepseek host after trim and lowercase",
+			rawURL: upperDeepSeekURL,
+			want:   true,
+		},
+		{
+			name:   "falls back to substring match on parse error",
+			rawURL: invalidDeepSeekURL,
+			want:   true,
+		},
+		{
+			name:   "does not match other hosts",
+			rawURL: openAIURL,
+			want:   false,
+		},
+		{
+			name:   "empty url is not deepseek",
+			rawURL: emptyURL,
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isDeepSeekBaseURL(tt.rawURL))
+		})
+	}
+}
+
+func TestOmittedAttachmentHint(t *testing.T) {
+	tests := []struct {
+		name       string
+		imageCount int
+		audioCount int
+		fileCount  int
+		want       string
+	}{
+		{
+			name: "no attachments",
+			want: "",
+		},
+		{
+			name:       "single audio",
+			audioCount: 1,
+			want: "Omitted non-text attachments for this provider: " +
+				"1 audio clip.",
+		},
+		{
+			name:       "plural attachments",
+			imageCount: 2,
+			audioCount: 2,
+			fileCount:  2,
+			want: "Omitted non-text attachments for this provider: " +
+				"2 images, 2 audio clips, 2 files.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(
+				t,
+				tt.want,
+				omittedAttachmentHint(
+					tt.imageCount,
+					tt.audioCount,
+					tt.fileCount,
+				),
+			)
 		})
 	}
 }
@@ -3103,6 +3322,7 @@ func TestWithVariant(t *testing.T) {
 		WithVariant(VariantOpenAI)(opts)
 
 		assert.Equal(t, VariantOpenAI, opts.Variant, "expected variant to be VariantOpenAI")
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
 	})
 
 	t.Run("hunyuan variant", func(t *testing.T) {
@@ -3110,6 +3330,7 @@ func TestWithVariant(t *testing.T) {
 		WithVariant(VariantHunyuan)(opts)
 
 		assert.Equal(t, VariantHunyuan, opts.Variant, "expected variant to be VariantHunyuan")
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
 	})
 
 	t.Run("variant in model creation", func(t *testing.T) {
@@ -3881,6 +4102,71 @@ func TestConvertUserMessageContent_HunyuanVariant(t *testing.T) {
 		assert.Len(t, fileIDs, 2, "expected 2 file IDs")
 		assert.Contains(t, fileIDs, "file-1", "expected file-1")
 		assert.Contains(t, fileIDs, "file-2", "expected file-2")
+	})
+}
+
+func TestConvertUserMessageContent_DeepSeekVariant(t *testing.T) {
+	m := New("deepseek-chat")
+
+	t.Run("omits non-text content parts", func(t *testing.T) {
+		message := model.Message{
+			Role:    model.RoleUser,
+			Content: "Please inspect this",
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeImage,
+					Image: &model.Image{
+						URL: "https://example.com/image.png",
+					},
+				},
+				{
+					Type: model.ContentTypeFile,
+					File: &model.File{
+						FileID: "file-123",
+					},
+				},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		require.Len(t, content.OfArrayOfContentParts, 2,
+			"expected main text and omission hint")
+		require.NotNil(t, content.OfArrayOfContentParts[0].OfText,
+			"expected first part to be text")
+		require.NotNil(t, content.OfArrayOfContentParts[1].OfText,
+			"expected omission hint to be text")
+		assert.Equal(t, "Please inspect this",
+			content.OfArrayOfContentParts[0].OfText.Text)
+		assert.Contains(t,
+			content.OfArrayOfContentParts[1].OfText.Text,
+			"1 image, 1 file")
+	})
+
+	t.Run("image only becomes text hint", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeImage,
+					Image: &model.Image{
+						URL: "https://example.com/image.png",
+					},
+				},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		assert.False(t, content.OfString.Valid(),
+			"expected non-string content")
+		require.Len(t, content.OfArrayOfContentParts, 1,
+			"expected one omission hint")
+		require.NotNil(t, content.OfArrayOfContentParts[0].OfText,
+			"expected omission hint to be text")
+		assert.Contains(t,
+			content.OfArrayOfContentParts[0].OfText.Text,
+			"1 image")
 	})
 }
 
@@ -6822,4 +7108,91 @@ func TestAppendUserContentParts_SkipsInternalFiles(t *testing.T) {
 	})
 	require.Nil(t, fields)
 	require.Empty(t, dst)
+}
+
+// TestChatRequestCallbackSynchronous verifies that
+// chatRequestCallback is invoked synchronously inside
+// GenerateContent, before the response goroutine starts.
+func TestChatRequestCallbackSynchronous(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non_streaming", stream: false},
+		{name: "streaming", stream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(
+						r.URL.Path, "/chat/completions",
+					) {
+						http.Error(w, "not found",
+							http.StatusNotFound)
+						return
+					}
+					if tt.stream {
+						w.Header().Set("Content-Type",
+							"text/event-stream")
+						fmt.Fprint(w, "data: {\"id\":\"s\","+
+							"\"object\":\"chat.completion.chunk\","+
+							"\"created\":1,\"model\":\"m\","+
+							"\"choices\":[{\"index\":0,"+
+							"\"delta\":{\"content\":\"hi\"},"+
+							"\"finish_reason\":\"stop\"}]}\n\n")
+						fmt.Fprint(w, "data: [DONE]\n\n")
+						return
+					}
+					w.Header().Set("Content-Type",
+						"application/json")
+					fmt.Fprint(w, `{"id":"n","object":`+
+						`"chat.completion","created":1,`+
+						`"model":"m","choices":[{"index":0,`+
+						`"message":{"role":"assistant",`+
+						`"content":"hi"},`+
+						`"finish_reason":"stop"}]}`)
+				}))
+			defer server.Close()
+
+			var callCount int64
+			m := New("test-model",
+				WithBaseURL(server.URL),
+				WithAPIKey("key"),
+				WithChatRequestCallback(
+					func(_ context.Context,
+						_ *openai.ChatCompletionNewParams,
+					) {
+						callCount++
+					}),
+			)
+
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					Stream: tt.stream,
+				},
+			}
+
+			ch, err := m.GenerateContent(
+				context.Background(), req)
+			require.NoError(t, err)
+
+			// Callback must have fired synchronously
+			// before GenerateContent returned.
+			assert.Equal(t, int64(1), callCount,
+				"callback must execute exactly once "+
+					"before GenerateContent returns")
+
+			// Drain the channel to avoid goroutine leak.
+			for range ch {
+			}
+
+			// Confirm no extra invocations after drain.
+			assert.Equal(t, int64(1), callCount,
+				"callback must not be called more than once")
+		})
+	}
 }

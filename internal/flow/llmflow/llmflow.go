@@ -18,6 +18,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -36,7 +37,8 @@ import (
 
 const (
 	// Timeout for event completion signaling.
-	eventCompletionTimeout = 5 * time.Second
+	eventCompletionTimeout    = 5 * time.Second
+	generatedResponseIDPrefix = "llmflow-response-"
 
 	errMsgNoModelResponse = "no response received from model"
 
@@ -992,7 +994,7 @@ func (f *Flow) generateContentSeq(
 		if seq == nil {
 			return nil, errors.New(errMsgNoModelResponse)
 		}
-		return seq, nil
+		return normalizeResponseIDs(seq), nil
 	}
 
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
@@ -1006,13 +1008,53 @@ func (f *Flow) generateContentSeq(
 		return nil, err
 	}
 
-	return func(yield func(*model.Response) bool) {
+	return normalizeResponseIDs(func(yield func(*model.Response) bool) {
 		for resp := range responseChan {
 			if !yield(resp) {
 				return
 			}
 		}
-	}, nil
+	}), nil
+}
+
+func normalizeResponseIDs(seq model.Seq[*model.Response]) model.Seq[*model.Response] {
+	if seq == nil {
+		return nil
+	}
+	return func(yield func(*model.Response) bool) {
+		currentID := ""
+		seq(func(resp *model.Response) bool {
+			normalized := normalizeResponseID(resp, &currentID)
+			keepGoing := yield(normalized)
+			if normalized != nil && normalized.Done && !normalized.IsPartial {
+				currentID = ""
+			}
+			return keepGoing
+		})
+	}
+}
+
+func normalizeResponseID(resp *model.Response, currentID *string) *model.Response {
+	if resp == nil {
+		return nil
+	}
+	if currentID == nil {
+		return resp
+	}
+	// Preserve one stable ID for the entire active response stream.
+	if *currentID == "" {
+		if resp.ID != "" {
+			*currentID = resp.ID
+		} else {
+			*currentID = generatedResponseIDPrefix + uuid.NewString()
+		}
+	}
+	if resp.ID == *currentID {
+		return resp
+	}
+	cloned := resp.Clone()
+	cloned.ID = *currentID
+	return cloned
 }
 
 // postprocess handles post-LLM call processing using response processors.

@@ -45,11 +45,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
+	langfuseobs "trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 )
 
 type captureRequestModel struct {
@@ -138,6 +140,20 @@ func joinSystemMessages(req *model.Request) string {
 	return strings.Join(parts, "\n\n")
 }
 
+func findToolDeclaration(
+	tools []tool.Tool,
+	name string,
+) *tool.Declaration {
+	for _, item := range tools {
+		decl := item.Declaration()
+		if decl == nil || decl.Name != name {
+			continue
+		}
+		return decl
+	}
+	return nil
+}
+
 func TestRun_ParseErrorExitCode(t *testing.T) {
 	t.Parallel()
 
@@ -168,6 +184,161 @@ func TestNewRuntime_BuildsGatewayHandler(t *testing.T) {
 	require.NotEmpty(t, rt.Gateway.StatusPath)
 	require.NotEmpty(t, rt.Gateway.CancelPath)
 	require.Empty(t, rt.Channels)
+}
+
+func TestNewRuntime_MemoryBackendFile_DisablesStructuredMemory(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-memory-backend", memoryBackendFile,
+		"-memory-auto",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+	require.Nil(t, rt.memorySvc)
+	require.Nil(t, memoryServiceTools(nil))
+}
+
+func TestFileMemoryStoreForBackend_FileOnly(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	require.Same(
+		t,
+		store,
+		fileMemoryStoreForBackend(memoryBackendFile, store),
+	)
+	require.Nil(
+		t,
+		fileMemoryStoreForBackend(memoryBackendInMemory, store),
+	)
+	require.Nil(
+		t,
+		fileMemoryStoreForBackend(memoryBackendSQLite, store),
+	)
+}
+
+func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	decl := findToolDeclaration(bundle.tools, "exec_command")
+	require.NotNil(t, decl)
+	require.NotContains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
+}
+
+func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store)
+	decl := findToolDeclaration(bundle.tools, "exec_command")
+	require.NotNil(t, decl)
+	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
+}
+
+func TestNewRuntimeStores_CreatesAllStores(t *testing.T) {
+	t.Parallel()
+
+	stores, err := newRuntimeStores(t.TempDir())
+	require.NoError(t, err)
+	require.NotNil(t, stores.uploads)
+	require.NotNil(t, stores.personas)
+	require.NotNil(t, stores.memoryFiles)
+}
+
+func TestNewRuntimeStores_EmptyStateDirReturnsError(t *testing.T) {
+	t.Parallel()
+
+	_, err := newRuntimeStores(" ")
+	require.Error(t, err)
+}
+
+func TestNewRuntime_RuntimeStoresErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	stateFile := filepath.Join(t.TempDir(), "state-file")
+	require.NoError(t, os.WriteFile(stateFile, []byte("x"), 0o600))
+
+	_, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", stateFile,
+		"-skills-root", t.TempDir(),
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create runtime stores failed")
+}
+
+func TestRun_HTTPListenErrorPath_WithFileMemoryBackend(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+
+	err := run(ctx, []string{
+		"-http-addr", "127.0.0.1:-1",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-memory-backend", memoryBackendFile,
+		"-enable-openclaw-tools",
+	})
+	require.NoError(t, err)
+}
+
+func TestRun_RuntimeStoresErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	stateFile := filepath.Join(t.TempDir(), "state-file")
+	require.NoError(t, os.WriteFile(stateFile, []byte("x"), 0o600))
+
+	err := run(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", stateFile,
+		"-skills-root", t.TempDir(),
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create runtime stores failed")
+}
+
+func TestNewRuntime_A2AConfigErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-a2a",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create a2a failed")
 }
 
 func TestNewRuntime_DebugRecorderEnabled_Smoke(t *testing.T) {
@@ -976,6 +1147,43 @@ func TestRun_Smoke(t *testing.T) {
 		"-enable-openclaw-tools",
 	})
 	require.NoError(t, err)
+}
+
+func TestRun_WithA2A_Smoke(t *testing.T) {
+	dir := t.TempDir()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	err := run(ctx, []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", dir,
+		"-skills-root", t.TempDir(),
+		"-a2a",
+		"-a2a-host", "http://127.0.0.1:18080/a2a",
+		"-a2a-user-id-header", "X-Caller-User",
+	})
+	require.NoError(t, err)
+}
+
+func TestRun_A2AConfigErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	err := run(context.Background(), []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-a2a",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create a2a failed")
 }
 
 func TestRun_DebugRecorderEnabled_Smoke(t *testing.T) {
@@ -2061,6 +2269,32 @@ func TestRuntime_Close_ReturnsRunnerCloseError(t *testing.T) {
 	require.True(t, runnerClosed)
 }
 
+func TestRuntime_Close_JoinsTelemetryShutdownError(t *testing.T) {
+	t.Parallel()
+
+	runnerErr := errors.New("runner close boom")
+	telemetryErr := errors.New("telemetry shutdown boom")
+	runnerClosed := false
+	telemetryClosed := false
+
+	rt := &Runtime{
+		runner: &stubRunner{
+			closeErr: runnerErr,
+			closed:   &runnerClosed,
+		},
+		telemetryShutdown: func(context.Context) error {
+			telemetryClosed = true
+			return telemetryErr
+		},
+	}
+
+	err := rt.Close()
+	require.ErrorIs(t, err, runnerErr)
+	require.ErrorIs(t, err, telemetryErr)
+	require.True(t, runnerClosed)
+	require.True(t, telemetryClosed)
+}
+
 func TestRuntime_Close_NilIsNoop(t *testing.T) {
 	t.Parallel()
 
@@ -2073,6 +2307,254 @@ func TestRuntime_Close_NilRunnerIsNoop(t *testing.T) {
 
 	rt := &Runtime{}
 	require.NoError(t, rt.Close())
+}
+
+func TestShutdownTelemetryWithContext_NilContextUsesBackground(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	called := false
+	err := shutdownTelemetryWithContext(
+		nil,
+		func(ctx context.Context) error {
+			called = true
+			require.NotNil(t, ctx)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, called)
+}
+
+func TestNewRuntime_LangfuseRequiredErrorExitCode(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		return nil, errors.New("langfuse boom")
+	}
+
+	cfgPath := writeTempConfig(t, `
+observability:
+  langfuse:
+    enabled: true
+    required: true
+`)
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.Nil(t, rt)
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "langfuse config failed")
+}
+
+func TestNewRuntime_WithLangfuse_Smoke(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+
+	startCalls := 0
+	shutdownCalls := 0
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		startCalls++
+		return func(context.Context) error {
+			shutdownCalls++
+			return nil
+		}, nil
+	}
+
+	cfgPath := writeTempConfig(t, `
+observability:
+  langfuse:
+    enabled: true
+`)
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, rt)
+	require.NotNil(t, rt.telemetryShutdown)
+	require.Equal(t, 1, startCalls)
+	require.NoError(t, rt.Close())
+	require.Equal(t, 1, shutdownCalls)
+}
+
+func TestNewRuntime_ClosesLangfuseOnLaterError(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+
+	shutdownCalls := 0
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		return func(context.Context) error {
+			shutdownCalls++
+			return nil
+		}, nil
+	}
+
+	cfgPath := writeTempConfig(t, `
+channels:
+  - type: missing_channel
+observability:
+  langfuse:
+    enabled: true
+`)
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.Nil(t, rt)
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create channels failed")
+	require.Equal(t, 1, shutdownCalls)
+}
+
+func TestRun_LangfuseRequiredErrorExitCode(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		return nil, errors.New("langfuse boom")
+	}
+
+	cfgPath := writeTempConfig(t, `
+observability:
+  langfuse:
+    enabled: true
+    required: true
+`)
+
+	err := run(context.Background(), []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "langfuse config failed")
+}
+
+func TestRun_WithLangfuse_Smoke(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+
+	startCalls := 0
+	shutdownCalls := 0
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		startCalls++
+		return func(context.Context) error {
+			shutdownCalls++
+			return nil
+		}, nil
+	}
+
+	cfgPath := writeTempConfig(t, `
+observability:
+  langfuse:
+    enabled: true
+`)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	err := run(ctx, []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, startCalls)
+	require.Equal(t, 1, shutdownCalls)
+}
+
+func TestRun_ClosesLangfuseOnLaterError(t *testing.T) {
+	restore := langfuseStart
+	t.Cleanup(func() {
+		langfuseStart = restore
+	})
+
+	shutdownCalls := 0
+	langfuseStart = func(
+		context.Context,
+		...langfuseobs.Option,
+	) (func(context.Context) error, error) {
+		return func(context.Context) error {
+			shutdownCalls++
+			return nil
+		}, nil
+	}
+
+	cfgPath := writeTempConfig(t, `
+channels:
+  - type: missing_channel
+observability:
+  langfuse:
+    enabled: true
+`)
+
+	err := run(context.Background(), []string{
+		"-http-addr", "127.0.0.1:0",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-config", cfgPath,
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create channels failed")
+	require.Equal(t, 1, shutdownCalls)
 }
 
 func TestInProcGatewayClient_SendMessage_OK(t *testing.T) {
@@ -2317,6 +2799,29 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	memoryRoot, err := memoryfile.DefaultRoot(debugDir)
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(memoryRoot)
+	require.NoError(t, err)
+	memoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		appName,
+		userID,
+	)
+	require.NoError(t, err)
+	otherUserMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		appName,
+		"u2",
+	)
+	require.NoError(t, err)
+	otherAppMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		"other-app",
+		userID,
+	)
+	require.NoError(t, err)
+
 	srv, err := gateway.New(&inProcGWTestRunner{})
 	require.NoError(t, err)
 
@@ -2329,6 +2834,7 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 		uploadStore,
 	)
 	c.SetPersonaStore(personaStore)
+	c.SetMemoryFileStore(memoryStore)
 
 	require.NoError(t, c.ForgetUser(ctx, channelName, userID))
 
@@ -2363,6 +2869,15 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, persona.PresetDefault, currentPreset.ID)
+
+	_, err = os.Stat(memoryPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	_, err = os.Stat(otherUserMemoryPath)
+	require.NoError(t, err)
+
+	_, err = os.Stat(otherAppMemoryPath)
+	require.NoError(t, err)
 }
 
 func TestInProcGatewayClient_ForgetUser_ClearsCronJobsOnlyOnce(
@@ -2472,6 +2987,37 @@ func TestInProcGatewayClient_ForgetUser_ValidationErrors(t *testing.T) {
 
 	c4 := newInProcGatewayClient(srv, appName, nil, nil, debugFile)
 	require.NoError(t, c4.ForgetUser(ctx, "telegram", "u1"))
+}
+
+func TestInProcGatewayClient_SetMemoryFileStore_NilReceiverIsNoop(t *testing.T) {
+	t.Parallel()
+
+	var client *inProcGatewayClient
+	client.SetMemoryFileStore(nil)
+}
+
+func TestInProcGatewayClient_ForgetUser_DeleteMemoryFilesError(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+	_, err = store.EnsureMemory(context.Background(), appName, "u1")
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	c.SetMemoryFileStore(store)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = c.ForgetUser(ctx, "telegram", "u1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "forget: delete user memory files")
 }
 
 func TestInProcGatewayClient_ScheduledJobs(t *testing.T) {

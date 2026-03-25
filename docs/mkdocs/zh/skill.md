@@ -50,7 +50,7 @@ Agent Skills 把可复用的任务封装为“技能目录”，用 `SKILL.md`
 直接超过模型上下文窗口。
 
 想要**可复现、基于真实运行**的 token 对比（渐进披露 vs 全量注入），
-可参考 `benchmark/anthropic_skills/README.md`，并按其中说明运行
+可参考 [trpc-agent-go-benchmark/anthropic_skills/README.md](https://github.com/trpc-group/trpc-agent-go-benchmark/blob/main/anthropic_skills/README.md)，并按其中说明运行
 `token-report` 套件。
 
 ### Prompt Cache
@@ -85,7 +85,7 @@ Session summary 提醒：如果你启用了会话摘要注入
 如果你希望在 summary 场景恢复旧的回退行为：
 `llmagent.WithSkipSkillsFallbackOnSessionSummary(false)`。
 
-要在真实工具链路中测量提升，参见 `benchmark/anthropic_skills` 的
+要在真实工具链路中测量提升，参见 [trpc-agent-go-benchmark/anthropic_skills](https://github.com/trpc-group/trpc-agent-go-benchmark/tree/main/anthropic_skills) 的
 `prompt-cache` 套件。
 
 与 `SkillLoadMode` 的关系（容易踩坑）：
@@ -374,6 +374,8 @@ https://github.com/anthropics/skills
 - 写入会话临时键（按 agent 隔离，生命周期由 `SkillLoadMode` 控制）：
   - `temp:skill:loaded_by_agent:<agent>/<name>` = "1"
   - `temp:skill:docs_by_agent:<agent>/<name>` = "*" 或 JSON 字符串数组
+  - `temp:skill:loaded_order_by_agent:<agent>` = JSON 字符串数组，
+    按“最早触达 -> 最新触达”的顺序保存 skill 名
   - 旧版 key（`temp:skill:loaded:<name>`、`temp:skill:docs:<name>`）仍被支持，
     并在读到时自动迁移。
 - 多代理提示：transfer 调用子代理时通常共享同一个 Session。key 按 agent
@@ -474,7 +476,8 @@ _ = agt
 
 - 默认 `SkillLoadModeTurn` 会在**下一轮** `Runner.Run` 开始前清空这些
   该 agent 的 `temp:skill:loaded_by_agent:*` /
-  `temp:skill:docs_by_agent:*` state key，所以“已加载列表”通常只在当前这轮
+  `temp:skill:docs_by_agent:*` /
+  `temp:skill:loaded_order_by_agent:*` state key，所以“已加载列表”通常只在当前这轮
   tool loop 里非空。
 - `SkillLoadModeSession` 会跨轮保留这些 key，所以“已加载列表”会一直
   非空，直到你手动清空（或会话过期）。
@@ -486,9 +489,10 @@ option：
 
 - `llmagent.WithMaxLoadedSkills(N)`
 
-它会在**每次模型请求前**检查当前 loaded skills，并根据 session 中最近
-的 `skill_load` / `skill_select_docs` tool result，清空更老的
-`temp:skill:*` state key，从而把 loaded skills 数量控制在 N 以内。
+它会在**每次模型请求前**检查当前 loaded skills，并清空更老的
+`temp:skill:*` state key。最近 skill 的触达顺序会写入 session state，
+并由 `skill_load` / `skill_select_docs` 自动更新，因此不会依赖字母序兜底
+或 tool result history 是否还完整保留。
 
 示例：
 
@@ -861,6 +865,8 @@ agent := llmagent.New(
 行为：
 - 更新当前 agent 的 doc 选择 state key：
   - `temp:skill:docs_by_agent:<agent>/<name>`：`*` 表示全选；数组表示显式列表
+  - 同时刷新 `temp:skill:loaded_order_by_agent:<agent>`，因此
+    `WithMaxLoadedSkills(N)` 会把文档选择也视作一次“最近触达”
   - 旧版 key `temp:skill:docs:<name>` 仍被支持，并在读到时自动迁移
 
 ### `skill_list_docs`

@@ -27,9 +27,21 @@ import (
 )
 
 // mockTool implements tool.CallableTool for testing.
-type mockTool struct{ name string }
+type mockTool struct {
+	name         string
+	description  string
+	inputSchema  *tool.Schema
+	outputSchema *tool.Schema
+}
 
-func (m *mockTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: m.name} }
+func (m *mockTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:         m.name,
+		Description:  m.description,
+		InputSchema:  m.inputSchema,
+		OutputSchema: m.outputSchema,
+	}
+}
 func (m *mockTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	return "ok", nil
 }

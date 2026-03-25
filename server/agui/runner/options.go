@@ -29,6 +29,7 @@ const (
 	defaultGraphNodeInterruptActivityEnabled      = false
 	defaultGraphNodeInterruptActivityTopLevelOnly = false
 	defaultReasoningContentEnabled                = false
+	defaultToolResultInputTranslationEnabled      = false
 )
 
 // Options holds the options for the runner.
@@ -54,6 +55,7 @@ type Options struct {
 	GraphNodeInterruptActivityEnabled      bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
 	GraphNodeInterruptActivityTopLevelOnly bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
 	ReasoningContentEnabled                bool                  // ReasoningContentEnabled controls whether reasoning content events are emitted.
+	ToolResultInputTranslationEnabled      bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
 }
 
 // NewOptions creates a new options instance.
@@ -73,6 +75,7 @@ func NewOptions(opt ...Option) *Options {
 		GraphNodeInterruptActivityEnabled:      defaultGraphNodeInterruptActivityEnabled,
 		GraphNodeInterruptActivityTopLevelOnly: defaultGraphNodeInterruptActivityTopLevelOnly,
 		ReasoningContentEnabled:                defaultReasoningContentEnabled,
+		ToolResultInputTranslationEnabled:      defaultToolResultInputTranslationEnabled,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -93,9 +96,7 @@ func WithUserIDResolver(u UserIDResolver) Option {
 	}
 }
 
-// TranslatorFactory is a function that creates a translator for an AG-UI run.
-type TranslatorFactory func(ctx context.Context, input *adapter.RunAgentInput,
-	opts ...translator.Option) (translator.Translator, error)
+type TranslatorFactory = translator.Factory
 
 // WithTranslatorFactory sets the translator factory.
 func WithTranslatorFactory(factory TranslatorFactory) Option {
@@ -249,6 +250,13 @@ func WithReasoningContentEnabled(enabled bool) Option {
 	}
 }
 
+// WithToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
+func WithToolResultInputTranslationEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.ToolResultInputTranslationEnabled = enabled
+	}
+}
+
 // defaultUserIDResolver is the default user ID resolver.
 func defaultUserIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
 	return "user", nil
@@ -256,7 +264,8 @@ func defaultUserIDResolver(ctx context.Context, input *adapter.RunAgentInput) (s
 
 func defaultTranslatorFactory(ctx context.Context, input *adapter.RunAgentInput,
 	opts ...translator.Option) (translator.Translator, error) {
-	return translator.New(ctx, input.ThreadID, input.RunID, opts...)
+	factory := translator.NewFactory()
+	return factory(ctx, input, opts...)
 }
 
 // defaultRunAgentInputHook returns the input unchanged.

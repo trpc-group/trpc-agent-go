@@ -1,5 +1,0 @@
-autogen-agentchat>=0.4.0
-autogen-ext[openai,chromadb]>=0.4.0
-openai>=1.30.0
-chromadb>=0.5.0
-sentence-transformers>=2.2.0

@@ -29,12 +29,12 @@ type Result struct {
 
 // AddMemoryRequest represents the input for the add memory tool.
 type AddMemoryRequest struct {
-	Memory       string   `json:"memory" jsonschema:"description=The memory content to store. Should be a brief. third-person statement that captures key information about the user"`
-	Topics       []string `json:"topics,omitempty" jsonschema:"description=Optional topics for categorizing the memory"`
-	MemoryKind   string   `json:"memory_kind,omitempty" jsonschema:"description=Memory type: 'fact' for stable personal attributes or 'episode' for specific events. Defaults to 'fact',enum=fact,enum=episode"`
-	EventTime    string   `json:"event_time,omitempty" jsonschema:"description=When the event occurred (ISO 8601: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS). Required for episodes. Must be an absolute date - never use relative time words."`
-	Participants []string `json:"participants,omitempty" jsonschema:"description=People involved in the event. Used for episodes."`
-	Location     string   `json:"location,omitempty" jsonschema:"description=Where the event took place. Used for episodes."`
+	Memory       string   `json:"memory" description:"The memory content to store. Should be a brief third-person statement that captures key information about the user"`
+	Topics       []string `json:"topics,omitempty" description:"Optional topics for categorizing the memory"`
+	MemoryKind   string   `json:"memory_kind,omitempty" jsonschema:"enum=fact,enum=episode" description:"Memory type: 'fact' for stable personal attributes or 'episode' for specific events. Defaults to 'fact'"`
+	EventTime    string   `json:"event_time,omitempty" description:"When the event occurred (ISO 8601: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS). Required for episodes. Must be an absolute date - never use relative time words."`
+	Participants []string `json:"participants,omitempty" description:"People involved in the event. Used for episodes."`
+	Location     string   `json:"location,omitempty" description:"Where the event took place. Used for episodes."`
 }
 
 // AddMemoryResponse represents the response from memory_add tool.
@@ -46,13 +46,13 @@ type AddMemoryResponse struct {
 
 // UpdateMemoryRequest represents the input for the update memory tool.
 type UpdateMemoryRequest struct {
-	MemoryID     string   `json:"memory_id" jsonschema:"description=The ID of the memory to update"`
-	Memory       string   `json:"memory" jsonschema:"description=The updated memory content"`
-	Topics       []string `json:"topics,omitempty" jsonschema:"description=Optional topics for categorizing the memory"`
-	MemoryKind   string   `json:"memory_kind,omitempty" jsonschema:"description=Memory type: 'fact' or 'episode',enum=fact,enum=episode"`
-	EventTime    string   `json:"event_time,omitempty" jsonschema:"description=When the event occurred (ISO 8601). Required for episodes."`
-	Participants []string `json:"participants,omitempty" jsonschema:"description=People involved in the event."`
-	Location     string   `json:"location,omitempty" jsonschema:"description=Where the event took place."`
+	MemoryID     string   `json:"memory_id" description:"The ID of the memory to update"`
+	Memory       string   `json:"memory" description:"The updated memory content"`
+	Topics       []string `json:"topics,omitempty" description:"Optional topics for categorizing the memory"`
+	MemoryKind   string   `json:"memory_kind,omitempty" jsonschema:"enum=fact,enum=episode" description:"Memory type: 'fact' or 'episode'"`
+	EventTime    string   `json:"event_time,omitempty" description:"When the event occurred (ISO 8601). Required for episodes."`
+	Participants []string `json:"participants,omitempty" description:"People involved in the event."`
+	Location     string   `json:"location,omitempty" description:"Where the event took place."`
 }
 
 // UpdateMemoryResponse represents the response from memory_update tool.
@@ -65,7 +65,7 @@ type UpdateMemoryResponse struct {
 
 // DeleteMemoryRequest represents the input for the delete memory tool.
 type DeleteMemoryRequest struct {
-	MemoryID string `json:"memory_id" jsonschema:"description=The ID of the memory to delete"`
+	MemoryID string `json:"memory_id" description:"The ID of the memory to delete"`
 }
 
 // DeleteMemoryResponse represents the response from memory_delete tool.
@@ -78,7 +78,7 @@ type DeleteMemoryResponse struct {
 // Having at least one optional field ensures the generated JSON Schema includes
 // a non-empty properties object for compatibility with strict validators.
 type ClearMemoryRequest struct {
-	Reason string `json:"reason,omitempty" jsonschema:"description=Optional reason for clearing all memories"`
+	Reason string `json:"reason,omitempty" description:"Optional reason for clearing all memories"`
 }
 
 // ClearMemoryResponse represents the response from memory_clear tool.
@@ -88,11 +88,11 @@ type ClearMemoryResponse struct {
 
 // SearchMemoryRequest represents the input for the search memory tool.
 type SearchMemoryRequest struct {
-	Query            string `json:"query" jsonschema:"description=The search query to find relevant memories"`
-	Kind             string `json:"kind,omitempty" jsonschema:"description=Filter by memory kind: 'fact' or 'episode'. Empty means all.,enum=fact,enum=episode"`
-	TimeAfter        string `json:"time_after,omitempty" jsonschema:"description=Filter episodes with event_time on or after this date (ISO 8601: YYYY-MM-DD)"`
-	TimeBefore       string `json:"time_before,omitempty" jsonschema:"description=Filter episodes with event_time on or before this date (ISO 8601: YYYY-MM-DD)"`
-	OrderByEventTime bool   `json:"order_by_event_time,omitempty" jsonschema:"description=When true, order results by event_time ascending instead of relevance. Useful for temporal sequence questions (what happened first/next/after)."`
+	Query            string `json:"query" description:"The search query to find relevant memories"`
+	Kind             string `json:"kind,omitempty" jsonschema:"enum=fact,enum=episode" description:"Filter by memory kind: 'fact' or 'episode'. Empty means all."`
+	TimeAfter        string `json:"time_after,omitempty" description:"Filter episodes with event_time on or after this date (ISO 8601: YYYY-MM-DD)"`
+	TimeBefore       string `json:"time_before,omitempty" description:"Filter episodes with event_time on or before this date (ISO 8601: YYYY-MM-DD)"`
+	OrderByEventTime bool   `json:"order_by_event_time,omitempty" description:"When true, use event_time ascending as a tie-breaker after relevance ranking. Useful for temporal sequence questions (what happened first/next/after)."`
 }
 
 // SearchMemoryResponse represents the response from memory_search tool.
@@ -104,7 +104,7 @@ type SearchMemoryResponse struct {
 
 // LoadMemoryRequest represents the input for the load memory tool.
 type LoadMemoryRequest struct {
-	Limit int `json:"limit,omitempty" jsonschema:"description=Maximum number of memories to load (default: 10)"`
+	Limit int `json:"limit,omitempty" description:"Maximum number of memories to load (default: 10)"`
 }
 
 // LoadMemoryResponse represents the response from memory_load tool.

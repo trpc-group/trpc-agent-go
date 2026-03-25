@@ -535,7 +535,7 @@ func (p *SkillsToolResultRequestProcessor) maybeOffloadLoadedSkills(
 		len(loaded) == 0 {
 		return
 	}
-	delta := make(map[string][]byte, len(loaded)*2)
+	delta := make(map[string][]byte, len(loaded)*2+1)
 	for _, name := range loaded {
 		loadedKey := skill.LoadedKey(inv.AgentName, name)
 		inv.Session.SetState(loadedKey, nil)
@@ -545,6 +545,9 @@ func (p *SkillsToolResultRequestProcessor) maybeOffloadLoadedSkills(
 		inv.Session.SetState(docsKey, nil)
 		delta[docsKey] = nil
 	}
+	orderKey := skill.LoadedOrderKey(inv.AgentName)
+	inv.Session.SetState(orderKey, nil)
+	delta[orderKey] = nil
 	agent.EmitEvent(ctx, inv, ch, event.New(
 		inv.InvocationID,
 		inv.AgentName,

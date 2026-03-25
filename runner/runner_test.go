@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +21,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/cycleagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/parallelagent"
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -127,6 +132,11 @@ type staticModel struct {
 	content string
 }
 
+type emptyIDModel struct {
+	name    string
+	content string
+}
+
 const staticModelResponseIDPrefix = "static-model-response-"
 
 func (m *staticModel) GenerateContent(
@@ -148,6 +158,326 @@ func (m *staticModel) GenerateContent(
 }
 
 func (m *staticModel) Info() model.Info { return model.Info{Name: m.name} }
+
+func (m *emptyIDModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		ID:        "",
+		Done:      true,
+		IsPartial: false,
+		Choices: []model.Choice{{
+			Index:   0,
+			Message: model.NewAssistantMessage(m.content),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *emptyIDModel) Info() model.Info { return model.Info{Name: m.name} }
+
+type runnerStructuredOutputTypedPayload struct {
+	Answer string `json:"answer"`
+	Score  int    `json:"score"`
+}
+
+type capturedModelRequest struct {
+	messages         []model.Message
+	structuredOutput *model.StructuredOutput
+}
+
+type capturingStructuredOutputModel struct {
+	name    string
+	content string
+
+	mu       sync.Mutex
+	requests []*capturedModelRequest
+}
+
+func (m *capturingStructuredOutputModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	m.requests = append(m.requests, cloneCapturedModelRequest(req))
+	m.mu.Unlock()
+
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		ID:        staticModelResponseIDPrefix + m.name,
+		Done:      true,
+		IsPartial: false,
+		Choices: []model.Choice{{
+			Index:   0,
+			Message: model.NewAssistantMessage(m.content),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *capturingStructuredOutputModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *capturingStructuredOutputModel) LatestRequest() *capturedModelRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.requests) == 0 {
+		return nil
+	}
+	return m.requests[len(m.requests)-1]
+}
+
+func cloneCapturedModelRequest(req *model.Request) *capturedModelRequest {
+	if req == nil {
+		return nil
+	}
+	cloned := &capturedModelRequest{
+		messages: append([]model.Message(nil), req.Messages...),
+	}
+	if req.StructuredOutput != nil {
+		structuredOutput := *req.StructuredOutput
+		if req.StructuredOutput.JSONSchema != nil {
+			jsonSchema := *req.StructuredOutput.JSONSchema
+			structuredOutput.JSONSchema = &jsonSchema
+		}
+		cloned.structuredOutput = &structuredOutput
+	}
+	return cloned
+}
+
+func firstSystemMessageContent(messages []model.Message) string {
+	for _, msg := range messages {
+		if msg.Role == model.RoleSystem {
+			return msg.Content
+		}
+	}
+	return ""
+}
+
+func collectStructuredOutput(events <-chan *event.Event) any {
+	var structured any
+	for evt := range events {
+		if evt != nil && evt.StructuredOutput != nil {
+			structured = evt.StructuredOutput
+		}
+	}
+	return structured
+}
+
+func runRunnerWithTypedStructuredOutput(
+	t *testing.T,
+	ag agent.Agent,
+	description string,
+) *runnerStructuredOutputTypedPayload {
+	t.Helper()
+	r := NewRunner(
+		"typed-structured-output-wrapper-app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-wrapper",
+		"session-wrapper",
+		model.NewUserMessage("hello"),
+		agent.WithStructuredOutputJSON(
+			new(runnerStructuredOutputTypedPayload),
+			true,
+			description,
+		),
+	)
+	require.NoError(t, err)
+	structured := collectStructuredOutput(eventCh)
+	payload, ok := structured.(*runnerStructuredOutputTypedPayload)
+	require.True(t, ok, "expected typed structured output payload")
+	require.Equal(t, "ok", payload.Answer)
+	require.Equal(t, 7, payload.Score)
+	return payload
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSON_InjectsSchemaAndEmitsTypedPayload(t *testing.T) {
+	modelImpl := &capturingStructuredOutputModel{
+		name:    "typed-structured-output-model",
+		content: `{"answer":"ok","score":7}`,
+	}
+	ag := llmagent.New(
+		"typed-structured-output-agent",
+		llmagent.WithModel(modelImpl),
+	)
+	r := NewRunner(
+		"typed-structured-output-app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("hello"),
+		agent.WithStructuredOutputJSON(
+			new(runnerStructuredOutputTypedPayload),
+			true,
+			"Return one typed payload.",
+		),
+	)
+	require.NoError(t, err)
+
+	structured := collectStructuredOutput(eventCh)
+	payload, ok := structured.(*runnerStructuredOutputTypedPayload)
+	require.True(t, ok, "expected typed structured output payload")
+	require.Equal(t, "ok", payload.Answer)
+	require.Equal(t, 7, payload.Score)
+
+	captured := modelImpl.LatestRequest()
+	require.NotNil(t, captured, "expected one model request to be captured")
+	require.NotNil(t, captured.structuredOutput)
+	require.Equal(t, model.StructuredOutputJSONSchema, captured.structuredOutput.Type)
+	require.NotNil(t, captured.structuredOutput.JSONSchema)
+	require.Equal(t, "runnerStructuredOutputTypedPayload", captured.structuredOutput.JSONSchema.Name)
+	require.True(t, captured.structuredOutput.JSONSchema.Strict)
+	require.Equal(t, "Return one typed payload.", captured.structuredOutput.JSONSchema.Description)
+	require.Equal(t, "object", captured.structuredOutput.JSONSchema.Schema["type"])
+	properties, ok := captured.structuredOutput.JSONSchema.Schema["properties"].(map[string]any)
+	require.True(t, ok, "expected generated schema properties")
+	require.Contains(t, properties, "answer")
+	require.Contains(t, properties, "score")
+
+	systemContent := firstSystemMessageContent(captured.messages)
+	require.NotEmpty(t, systemContent, "expected structured output instructions to create one system message")
+	assert.Contains(t, systemContent, "IMPORTANT: Return ONLY a JSON object")
+	assert.Contains(t, systemContent, `"answer"`)
+	assert.Contains(t, systemContent, `"score"`)
+	assert.NotContains(t, systemContent, "You MAY call tools")
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSONSchema_InjectsSchemaAndEmitsUntypedPayload(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"status": map[string]any{"type": "string"},
+			"count":  map[string]any{"type": "integer"},
+		},
+		"additionalProperties": false,
+	}
+	modelImpl := &capturingStructuredOutputModel{
+		name:    "untyped-structured-output-model",
+		content: `{"status":"ok","count":3}`,
+	}
+	ag := llmagent.New(
+		"untyped-structured-output-agent",
+		llmagent.WithModel(modelImpl),
+	)
+	r := NewRunner(
+		"untyped-structured-output-app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-2",
+		"session-2",
+		model.NewUserMessage("hello"),
+		agent.WithStructuredOutputJSONSchema(
+			"runtime_output",
+			schema,
+			true,
+			"Return one payload matching the runtime schema.",
+		),
+	)
+	require.NoError(t, err)
+
+	structured := collectStructuredOutput(eventCh)
+	payload, ok := structured.(map[string]any)
+	require.True(t, ok, "expected untyped structured output payload")
+	require.Equal(t, "ok", payload["status"])
+	require.EqualValues(t, 3, payload["count"])
+
+	captured := modelImpl.LatestRequest()
+	require.NotNil(t, captured, "expected one model request to be captured")
+	require.NotNil(t, captured.structuredOutput)
+	require.Equal(t, model.StructuredOutputJSONSchema, captured.structuredOutput.Type)
+	require.NotNil(t, captured.structuredOutput.JSONSchema)
+	require.Equal(t, "runtime_output", captured.structuredOutput.JSONSchema.Name)
+	require.True(t, captured.structuredOutput.JSONSchema.Strict)
+	require.Equal(
+		t,
+		"Return one payload matching the runtime schema.",
+		captured.structuredOutput.JSONSchema.Description,
+	)
+	require.Equal(t, schema, captured.structuredOutput.JSONSchema.Schema)
+
+	systemContent := firstSystemMessageContent(captured.messages)
+	require.NotEmpty(t, systemContent, "expected structured output instructions to create one system message")
+	assert.Contains(t, systemContent, "IMPORTANT: Return ONLY a JSON object")
+	assert.Contains(t, systemContent, `"status"`)
+	assert.Contains(t, systemContent, `"count"`)
+	assert.NotContains(t, systemContent, "You MAY call tools")
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSON_PassesThroughChainAgent(t *testing.T) {
+	const description = "Return one typed payload through chain."
+	modelImpl := &capturingStructuredOutputModel{
+		name:    "chain-structured-output-model",
+		content: `{"answer":"ok","score":7}`,
+	}
+	leaf := llmagent.New(
+		"chain-leaf-agent",
+		llmagent.WithModel(modelImpl),
+	)
+	ag := chainagent.New(
+		"chain-wrapper-agent",
+		chainagent.WithSubAgents([]agent.Agent{leaf}),
+	)
+
+	runRunnerWithTypedStructuredOutput(t, ag, description)
+
+	captured := modelImpl.LatestRequest()
+	require.NotNil(t, captured, "expected one model request to be captured")
+	require.NotNil(t, captured.structuredOutput)
+	require.NotNil(t, captured.structuredOutput.JSONSchema)
+	require.Equal(t, "runnerStructuredOutputTypedPayload", captured.structuredOutput.JSONSchema.Name)
+	require.Equal(t, description, captured.structuredOutput.JSONSchema.Description)
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSON_PassesThroughGraphAgent(t *testing.T) {
+	const description = "Return one typed payload through graph."
+	modelImpl := &capturingStructuredOutputModel{
+		name:    "graph-structured-output-model",
+		content: `{"answer":"ok","score":7}`,
+	}
+	leaf := llmagent.New(
+		"graph-leaf-agent",
+		llmagent.WithModel(modelImpl),
+	)
+	compiled, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddAgentNode(leaf.Info().Name).
+		SetEntryPoint(leaf.Info().Name).
+		SetFinishPoint(leaf.Info().Name).
+		Compile()
+	require.NoError(t, err)
+	ag, err := graphagent.New(
+		"graph-wrapper-agent",
+		compiled,
+		graphagent.WithSubAgents([]agent.Agent{leaf}),
+	)
+	require.NoError(t, err)
+
+	runRunnerWithTypedStructuredOutput(t, ag, description)
+
+	captured := modelImpl.LatestRequest()
+	require.NotNil(t, captured, "expected one model request to be captured")
+	require.NotNil(t, captured.structuredOutput)
+	require.NotNil(t, captured.structuredOutput.JSONSchema)
+	require.Equal(t, "runnerStructuredOutputTypedPayload", captured.structuredOutput.JSONSchema.Name)
+	require.Equal(t, description, captured.structuredOutput.JSONSchema.Description)
+}
 
 func TestRunner_SessionIntegration(t *testing.T) {
 	// Create an in-memory session service.
@@ -1101,6 +1431,668 @@ func TestRunner_GraphCompletionPropagation(t *testing.T) {
 		"Final message content should match")
 }
 
+func TestRunner_DisableGraphCompletionEvent_KeepsRunnerCompletion(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{
+			graph.StateKeyLastResponse: "hidden graph completion",
+		}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+
+	ga, err := graphagent.New("ga", compiled)
+	require.NoError(t, err)
+
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", ga, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+		agent.WithDisableGraphCompletionEvent(true),
+	)
+	require.NoError(t, err)
+
+	var events []*event.Event
+	for evt := range ch {
+		events = append(events, evt)
+	}
+	require.NotEmpty(t, events)
+
+	var completion *event.Event
+	for _, evt := range events {
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+		if evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.StateDelta)
+	require.Equal(t, `"hidden graph completion"`, string(completion.StateDelta[graph.StateKeyLastResponse]))
+	require.Len(t, completion.Response.Choices, 1)
+	require.Equal(t, "hidden graph completion", completion.Response.Choices[0].Message.Content)
+	sess, err := svc.GetSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+	})
+	require.NoError(t, err)
+	for _, evt := range sess.Events {
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+	}
+}
+
+func TestRunner_DisableGraphCompletionEvent_KeepsRunnerCompletionWithGraphAgentCallbacks(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{
+			graph.StateKeyLastResponse: "hidden graph completion",
+		}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return nil, nil
+	})
+	ga, err := graphagent.New("ga", compiled, graphagent.WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", ga, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+		agent.WithDisableGraphCompletionEvent(true),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for evt := range ch {
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+		if evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.StateDelta)
+	require.Equal(t, `"hidden graph completion"`, string(completion.StateDelta[graph.StateKeyLastResponse]))
+	require.Len(t, completion.Response.Choices, 1)
+	require.Equal(t, "hidden graph completion", completion.Response.Choices[0].Message.Content)
+}
+
+func TestRunner_DisableGraphCompletionEvent_DropsCapturedGraphCompletionAfterCustomCallback(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{
+			graph.StateKeyLastResponse: "hidden graph completion",
+		}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return &agent.AfterAgentResult{
+			CustomResponse: &model.Response{
+				Object: "after.custom",
+				Done:   true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "after callback",
+					},
+				}},
+			},
+		}, nil
+	})
+	ga, err := graphagent.New("ga", compiled, graphagent.WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", ga, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+		agent.WithDisableGraphCompletionEvent(true),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	var sawAfterCustom bool
+	for evt := range ch {
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+		if evt.Object == "after.custom" {
+			sawAfterCustom = true
+		}
+		if evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+
+	require.True(t, sawAfterCustom)
+	require.NotNil(t, completion)
+	require.Empty(t, completion.StateDelta)
+	require.Empty(t, completion.Response.Choices)
+}
+
+func TestRunner_DisableGraphCompletionEvent_DropsCapturedGraphCompletionAfterCallbackError(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{
+			graph.StateKeyLastResponse: "hidden graph completion",
+		}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return nil, errors.New("after callback failed")
+	})
+	ga, err := graphagent.New("ga", compiled, graphagent.WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", ga, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+		agent.WithDisableGraphCompletionEvent(true),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	var sawCallbackError bool
+	for evt := range ch {
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+		if evt.Object == model.ObjectTypeError &&
+			evt.Error != nil &&
+			evt.Error.Message == "after callback failed" {
+			sawCallbackError = true
+		}
+		if evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+
+	require.True(t, sawCallbackError)
+	require.NotNil(t, completion)
+	require.Empty(t, completion.StateDelta)
+	require.Empty(t, completion.Response.Choices)
+}
+
+func TestRunner_DisableGraphCompletionEvent_KeepsRunnerCompletionWithWrappedGraphAgent(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(child agent.Agent) agent.Agent
+	}{
+		{
+			name: "chain",
+			build: func(child agent.Agent) agent.Agent {
+				return chainagent.New("chain", chainagent.WithSubAgents([]agent.Agent{child}))
+			},
+		},
+		{
+			name: "cycle",
+			build: func(child agent.Agent) agent.Agent {
+				return cycleagent.New(
+					"cycle",
+					cycleagent.WithSubAgents([]agent.Agent{child}),
+					cycleagent.WithMaxIterations(1),
+				)
+			},
+		},
+		{
+			name: "parallel",
+			build: func(child agent.Agent) agent.Agent {
+				return parallelagent.New("parallel", parallelagent.WithSubAgents([]agent.Agent{child}))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			child := newWrappedGraphChildAgent(t)
+			svc := sessioninmemory.NewSessionService()
+			r := NewRunner("app", tt.build(child), WithSessionService(svc))
+			ch, err := r.Run(
+				context.Background(),
+				"u",
+				tt.name,
+				model.NewUserMessage("hi"),
+				agent.WithDisableGraphCompletionEvent(true),
+			)
+			require.NoError(t, err)
+
+			var completion *event.Event
+			var visibleResponses int
+			for evt := range ch {
+				require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+				if evt.Response != nil &&
+					len(evt.Response.Choices) > 0 &&
+					evt.Response.Choices[0].Message.Content == "child-final" {
+					visibleResponses++
+				}
+				if evt.IsRunnerCompletion() {
+					completion = evt
+				}
+			}
+
+			require.Equal(t, 1, visibleResponses)
+			require.NotNil(t, completion)
+			require.NotNil(t, completion.StateDelta)
+			require.Equal(t, `"child-final"`, string(completion.StateDelta[graph.StateKeyLastResponse]))
+			require.Equal(t, `"child-state"`, string(completion.StateDelta["child_state"]))
+			require.Empty(t, completion.Response.Choices)
+			sess, err := svc.GetSession(context.Background(), session.Key{
+				AppName:   "app",
+				UserID:    "u",
+				SessionID: tt.name,
+			})
+			require.NoError(t, err)
+			require.Len(t, sess.Events, 2)
+			require.Equal(t, "child-final", sess.Events[1].Choices[0].Message.Content)
+		})
+	}
+}
+
+func TestWrappedAgents_DisableGraphCompletionEvent_AfterCallbackSeesVisibleCompletion(
+	t *testing.T,
+) {
+	tests := []struct {
+		name  string
+		build func(child agent.Agent, callbacks *agent.Callbacks) agent.Agent
+	}{
+		{
+			name: "chain",
+			build: func(child agent.Agent, callbacks *agent.Callbacks) agent.Agent {
+				return chainagent.New(
+					"chain",
+					chainagent.WithSubAgents([]agent.Agent{child}),
+					chainagent.WithAgentCallbacks(callbacks),
+				)
+			},
+		},
+		{
+			name: "cycle",
+			build: func(child agent.Agent, callbacks *agent.Callbacks) agent.Agent {
+				return cycleagent.New(
+					"cycle",
+					cycleagent.WithSubAgents([]agent.Agent{child}),
+					cycleagent.WithMaxIterations(1),
+					cycleagent.WithAgentCallbacks(callbacks),
+				)
+			},
+		},
+		{
+			name: "parallel",
+			build: func(child agent.Agent, callbacks *agent.Callbacks) agent.Agent {
+				return parallelagent.New(
+					"parallel",
+					parallelagent.WithSubAgents([]agent.Agent{child}),
+					parallelagent.WithAgentCallbacks(callbacks),
+				)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			callbacks := agent.NewCallbacks()
+			callbacks.RegisterAfterAgent(func(
+				ctx context.Context,
+				args *agent.AfterAgentArgs,
+			) (*agent.AfterAgentResult, error) {
+				if args.FullResponseEvent != nil &&
+					graph.IsVisibleGraphCompletionEvent(args.FullResponseEvent) {
+					return &agent.AfterAgentResult{
+						CustomResponse: &model.Response{
+							Object: "after.custom",
+							Done:   true,
+							Choices: []model.Choice{{
+								Message: model.NewAssistantMessage("after callback"),
+							}},
+						},
+					}, nil
+				}
+				return nil, nil
+			})
+			child := newWrappedGraphChildAgent(t)
+			ag := tt.build(child, callbacks)
+			inv := agent.NewInvocation(
+				agent.WithInvocationMessage(model.NewUserMessage("hi")),
+				agent.WithInvocationRunOptions(agent.NewRunOptions(
+					agent.WithDisableGraphCompletionEvent(true),
+				)),
+			)
+			ch, err := ag.Run(context.Background(), inv)
+			require.NoError(t, err)
+
+			var sawAfterCustom bool
+			for evt := range ch {
+				if evt.Object == "after.custom" {
+					sawAfterCustom = true
+				}
+			}
+
+			require.True(t, sawAfterCustom)
+		})
+	}
+}
+
+func TestWrappedAgents_DisableGraphCompletionEvent_GraphEmitFinalModelResponses_AfterCallbackSeesFinalText(
+	t *testing.T,
+) {
+	tests := []struct {
+		name  string
+		build func(child agent.Agent, callbacks *agent.Callbacks) agent.Agent
+	}{
+		{
+			name: "chain",
+			build: func(child agent.Agent, callbacks *agent.Callbacks) agent.Agent {
+				return chainagent.New(
+					"chain",
+					chainagent.WithSubAgents([]agent.Agent{child}),
+					chainagent.WithAgentCallbacks(callbacks),
+				)
+			},
+		},
+		{
+			name: "cycle",
+			build: func(child agent.Agent, callbacks *agent.Callbacks) agent.Agent {
+				return cycleagent.New(
+					"cycle",
+					cycleagent.WithSubAgents([]agent.Agent{child}),
+					cycleagent.WithMaxIterations(1),
+					cycleagent.WithAgentCallbacks(callbacks),
+				)
+			},
+		},
+		{
+			name: "parallel",
+			build: func(child agent.Agent, callbacks *agent.Callbacks) agent.Agent {
+				return parallelagent.New(
+					"parallel",
+					parallelagent.WithSubAgents([]agent.Agent{child}),
+					parallelagent.WithAgentCallbacks(callbacks),
+				)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			callbacks := agent.NewCallbacks()
+			var fullRespEvent *event.Event
+			callbacks.RegisterAfterAgent(func(
+				ctx context.Context,
+				args *agent.AfterAgentArgs,
+			) (*agent.AfterAgentResult, error) {
+				fullRespEvent = args.FullResponseEvent
+				return nil, nil
+			})
+			child := newWrappedGraphLLMChildAgent(t)
+			ag := tt.build(child, callbacks)
+			inv := agent.NewInvocation(
+				agent.WithInvocationMessage(model.NewUserMessage("hi")),
+				agent.WithInvocationRunOptions(agent.NewRunOptions(
+					agent.WithDisableGraphCompletionEvent(true),
+					agent.WithGraphEmitFinalModelResponses(true),
+				)),
+			)
+			ch, err := ag.Run(context.Background(), inv)
+			require.NoError(t, err)
+			for range ch {
+			}
+
+			require.NotNil(t, fullRespEvent)
+			require.True(t, graph.IsVisibleGraphCompletionEvent(fullRespEvent))
+			require.Len(t, fullRespEvent.Response.Choices, 1)
+			require.Equal(t, "wrapped-final", fullRespEvent.Response.Choices[0].Message.Content)
+		})
+	}
+}
+
+func TestRunner_DisableGraphCompletionEvent_StreamModeUpdates_KeepsFinalTextInRunnerCompletion(t *testing.T) {
+	child := newWrappedGraphChildAgent(t)
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner(
+		"app",
+		chainagent.New("chain", chainagent.WithSubAgents([]agent.Agent{child})),
+		WithSessionService(svc),
+	)
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"updates-mode",
+		model.NewUserMessage("hi"),
+		agent.WithDisableGraphCompletionEvent(true),
+		agent.WithStreamMode(agent.StreamModeUpdates),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for evt := range ch {
+		require.NotEqual(t, model.ObjectTypeChatCompletion, evt.Object)
+		if evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.StateDelta)
+	require.Equal(t, `"child-final"`, string(completion.StateDelta[graph.StateKeyLastResponse]))
+	require.Len(t, completion.Response.Choices, 1)
+	require.Equal(t, "child-final", completion.Response.Choices[0].Message.Content)
+	assertSessionKeepsSingleFinalAssistantEvent(
+		t,
+		svc,
+		"updates-mode",
+		"child-final",
+	)
+}
+
+func TestRunner_DisableGraphCompletionEvent_StreamModeUpdates_WrappedGraphLLM_KeepsSingleFinalAssistantEvent(
+	t *testing.T,
+) {
+	child := newWrappedGraphLLMChildAgent(t)
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner(
+		"app",
+		chainagent.New("chain", chainagent.WithSubAgents([]agent.Agent{child})),
+		WithSessionService(svc),
+	)
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"updates-mode-wrapped-llm",
+		model.NewUserMessage("hi"),
+		agent.WithDisableGraphCompletionEvent(true),
+		agent.WithStreamMode(agent.StreamModeUpdates),
+	)
+	require.NoError(t, err)
+	var completion *event.Event
+	for evt := range ch {
+		require.NotEqual(t, model.ObjectTypeChatCompletion, evt.Object)
+		if evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.StateDelta)
+	require.Equal(t, `"wrapped-final"`, string(completion.StateDelta[graph.StateKeyLastResponse]))
+	require.Len(t, completion.Response.Choices, 1)
+	require.Equal(t, "wrapped-final", completion.Response.Choices[0].Message.Content)
+	assertSessionKeepsSingleFinalAssistantEvent(
+		t,
+		svc,
+		"updates-mode-wrapped-llm",
+		"wrapped-final",
+	)
+}
+
+func TestRunner_DisableGraphCompletionEvent_StreamModeUpdates_WithFinalModelResponses_KeepsFinalTextInRunnerCompletion(t *testing.T) {
+	child := newWrappedGraphLLMChildAgent(t)
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner(
+		"app",
+		chainagent.New("chain", chainagent.WithSubAgents([]agent.Agent{child})),
+		WithSessionService(svc),
+	)
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"updates-mode-final-model",
+		model.NewUserMessage("hi"),
+		agent.WithDisableGraphCompletionEvent(true),
+		agent.WithGraphEmitFinalModelResponses(true),
+		agent.WithStreamMode(agent.StreamModeUpdates),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for evt := range ch {
+		require.NotEqual(t, model.ObjectTypeChatCompletion, evt.Object)
+		if evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.StateDelta)
+	require.Equal(t, `"wrapped-final"`, string(completion.StateDelta[graph.StateKeyLastResponse]))
+	require.Len(t, completion.Response.Choices, 1)
+	require.Equal(t, "wrapped-final", completion.Response.Choices[0].Message.Content)
+	assertSessionKeepsSingleFinalAssistantEvent(
+		t,
+		svc,
+		"updates-mode-final-model",
+		"wrapped-final",
+	)
+}
+
+func newWrappedGraphChildAgent(t *testing.T) agent.Agent {
+	t.Helper()
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{
+			graph.StateKeyLastResponse: "child-final",
+			"child_state":              "child-state",
+		}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	child, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	return child
+}
+
+func newWrappedGraphLLMChildAgent(t *testing.T) agent.Agent {
+	t.Helper()
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddLLMNode(
+		"n1",
+		&staticModel{name: "m1", content: "wrapped-final"},
+		"i1",
+		nil,
+	)
+	compiled := sg.SetEntryPoint("n1").SetFinishPoint("n1").MustCompile()
+	child, err := graphagent.New("graph-child-llm", compiled)
+	require.NoError(t, err)
+	return child
+}
+
+func newWrappedGraphLLMEmptyIDChildAgent(t *testing.T) agent.Agent {
+	t.Helper()
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddLLMNode(
+		"n1",
+		&emptyIDModel{name: "m-empty-id", content: "empty-id-final"},
+		"i1",
+		nil,
+	)
+	compiled := sg.SetEntryPoint("n1").SetFinishPoint("n1").MustCompile()
+	child, err := graphagent.New("graph-child-llm-empty-id", compiled)
+	require.NoError(t, err)
+	return child
+}
+
+func assertSessionKeepsSingleFinalAssistantEvent(
+	t *testing.T,
+	svc *sessioninmemory.SessionService,
+	sessionID string,
+	finalText string,
+) {
+	t.Helper()
+	sess, err := svc.GetSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: sessionID,
+	})
+	require.NoError(t, err)
+
+	var assistantTextCount int
+	for _, evt := range sess.Events {
+		if evt.IsRunnerCompletion() {
+			require.Empty(t, evt.Response.Choices)
+		}
+		if evt.Response == nil || len(evt.Response.Choices) == 0 {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			if choice.Message.Content == finalText {
+				assistantTextCount++
+			}
+		}
+	}
+
+	require.Equal(t, 1, assistantTextCount)
+}
+
+func assertSessionPreservesRunnerCompletionText(
+	t *testing.T,
+	svc *sessioninmemory.SessionService,
+	sessionID string,
+	finalText string,
+) {
+	t.Helper()
+	sess, err := svc.GetSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: sessionID,
+	})
+	require.NoError(t, err)
+	var assistantTextCount int
+	var sawRunnerCompletionText bool
+	for _, evt := range sess.Events {
+		if evt.Response == nil || len(evt.Response.Choices) == 0 {
+			continue
+		}
+		if evt.IsRunnerCompletion() &&
+			evt.Response.Choices[0].Message.Content == finalText {
+			sawRunnerCompletionText = true
+		}
+		for _, choice := range evt.Response.Choices {
+			if choice.Message.Content == finalText {
+				assistantTextCount++
+			}
+		}
+	}
+	require.True(t, sawRunnerCompletionText)
+	require.Equal(t, 2, assistantTextCount)
+}
+
 func TestRunner_GraphCompletion_DedupFinalChoices(t *testing.T) {
 	const (
 		appName       = "test-app"
@@ -1141,6 +2133,205 @@ func TestRunner_GraphCompletion_DedupFinalChoices(t *testing.T) {
 	require.Equal(t, stateDeltaVal,
 		string(completion.StateDelta[stateDeltaKey]))
 	require.Empty(t, completion.Response.Choices)
+}
+
+func TestRunner_GraphCompletion_DifferentResponseIDDoesNotDedupBySignature(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &mismatchedIDGraphCompletionAgent{
+		name:          "mismatch-agent",
+		assistantText: "answer",
+	}
+	r := NewRunner("app", ag, WithSessionService(sessionService))
+	ch, err := r.Run(
+		context.Background(),
+		"user",
+		"session-mismatch-id",
+		model.NewUserMessage(""),
+		agent.WithGraphEmitFinalModelResponses(true),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for e := range ch {
+		if e.Object == model.ObjectTypeRunnerCompletion {
+			completion = e
+		}
+	}
+
+	require.NotNil(t, completion)
+	require.Len(t, completion.Response.Choices, 1)
+	require.Equal(t, "answer", completion.Response.Choices[0].Message.Content)
+}
+
+func TestRunner_DisableGraphCompletionEvent_KeepsTopLevelFinalChoicesAfterChildVisibleCompletion(
+	t *testing.T,
+) {
+	const sessionID = "session-child-visible-top-final"
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &childVisibleThenTopGraphCompletionAgent{name: "root-agent"}
+	r := NewRunner("app", ag, WithSessionService(sessionService))
+	ch, err := r.Run(
+		context.Background(),
+		"user",
+		sessionID,
+		model.NewUserMessage(""),
+		agent.WithDisableGraphCompletionEvent(true),
+	)
+	require.NoError(t, err)
+
+	var childVisibleCount int
+	var completion *event.Event
+	for e := range ch {
+		if graph.IsVisibleGraphCompletionEvent(e) &&
+			e.Response != nil &&
+			len(e.Response.Choices) > 0 &&
+			e.Response.Choices[0].Message.Content == "child:hello" {
+			childVisibleCount++
+		}
+		if e.Object == model.ObjectTypeRunnerCompletion {
+			completion = e
+		}
+	}
+	require.Equal(t, 1, childVisibleCount)
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.StateDelta)
+	require.Equal(
+		t,
+		`"top:child:hello"`,
+		string(completion.StateDelta[graph.StateKeyLastResponse]),
+	)
+	require.Len(t, completion.Response.Choices, 1)
+	require.Equal(
+		t,
+		"top:child:hello",
+		completion.Response.Choices[0].Message.Content,
+	)
+}
+
+func TestRunner_StreamModeUpdates_WithFinalModelResponses_EmptyResponseIDPreservesRunnerCompletionText(
+	t *testing.T,
+) {
+	child := newWrappedGraphLLMEmptyIDChildAgent(t)
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", child, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"updates-mode-empty-id",
+		model.NewUserMessage("hi"),
+		agent.WithGraphEmitFinalModelResponses(true),
+		agent.WithStreamMode(agent.StreamModeUpdates),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for evt := range ch {
+		require.NotEqual(t, model.ObjectTypeChatCompletion, evt.Object)
+		if evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+
+	require.NotNil(t, completion)
+	require.Len(t, completion.Response.Choices, 1)
+	require.Equal(t, "empty-id-final", completion.Response.Choices[0].Message.Content)
+	assertSessionPreservesRunnerCompletionText(
+		t,
+		svc,
+		"updates-mode-empty-id",
+		"empty-id-final",
+	)
+}
+
+func TestRunner_GraphEmitFinalModelResponses_EmptyResponseIDPreservesRunnerCompletionText(
+	t *testing.T,
+) {
+	child := newWrappedGraphLLMEmptyIDChildAgent(t)
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", child, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"messages-mode-empty-id",
+		model.NewUserMessage("hi"),
+		agent.WithGraphEmitFinalModelResponses(true),
+	)
+	require.NoError(t, err)
+
+	var chatCompletionCount int
+	var completion *event.Event
+	for evt := range ch {
+		if evt.Response != nil &&
+			len(evt.Response.Choices) > 0 &&
+			len(evt.StateDelta) == 0 &&
+			evt.Response.Choices[0].Message.Content == "empty-id-final" {
+			chatCompletionCount++
+		}
+		if evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+
+	require.Equal(t, 1, chatCompletionCount)
+	require.NotNil(t, completion)
+	require.Len(t, completion.Response.Choices, 1)
+	require.Equal(t, "empty-id-final", completion.Response.Choices[0].Message.Content)
+	assertSessionPreservesRunnerCompletionText(
+		t,
+		svc,
+		"messages-mode-empty-id",
+		"empty-id-final",
+	)
+}
+
+func TestRunner_StreamModeMessages_GraphCompletionPersistsFinalTextInSession(t *testing.T) {
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &graphCompletionMockAgent{name: "graph-completion-agent"}
+	r := NewRunner("app", ag, WithSessionService(sessionService))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"messages-mode-graph-completion",
+		model.NewUserMessage("hi"),
+		agent.WithStreamMode(agent.StreamModeMessages),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for evt := range ch {
+		require.NotEqual(t, graph.ObjectTypeGraphExecution, evt.Object)
+		if evt.IsRunnerCompletion() {
+			completion = evt
+		}
+	}
+
+	require.NotNil(t, completion)
+	require.Len(t, completion.Response.Choices, 1)
+	require.Equal(
+		t,
+		"Graph execution completed",
+		completion.Response.Choices[0].Message.Content,
+	)
+	sess, err := sessionService.GetSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "messages-mode-graph-completion",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	var assistantTextCount int
+	for _, evt := range sess.Events {
+		if evt.Response == nil || len(evt.Response.Choices) == 0 {
+			continue
+		}
+		for _, choice := range evt.Response.Choices {
+			if choice.Message.Content == "Graph execution completed" {
+				assistantTextCount++
+			}
+		}
+	}
+	require.Equal(t, 1, assistantTextCount)
 }
 
 func TestRunner_StreamMode_FiltersEvents(t *testing.T) {
@@ -1411,6 +2602,15 @@ type dedupGraphCompletionAgent struct {
 	stateVal      string
 }
 
+type mismatchedIDGraphCompletionAgent struct {
+	name          string
+	assistantText string
+}
+
+type childVisibleThenTopGraphCompletionAgent struct {
+	name string
+}
+
 func (m *dedupGraphCompletionAgent) Info() agent.Info {
 	return agent.Info{
 		Name:        m.name,
@@ -1480,6 +2680,113 @@ func (m *dedupGraphCompletionAgent) Run(
 
 	eventCh <- assistantEvent
 	eventCh <- graphCompletionEvent
+	close(eventCh)
+	return eventCh, nil
+}
+
+func (m *mismatchedIDGraphCompletionAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for final response mismatch dedup testing",
+	}
+}
+
+func (m *mismatchedIDGraphCompletionAgent) SubAgents() []agent.Agent { return nil }
+
+func (m *mismatchedIDGraphCompletionAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *mismatchedIDGraphCompletionAgent) Tools() []tool.Tool { return nil }
+
+func (m *childVisibleThenTopGraphCompletionAgent) Info() agent.Info {
+	return agent.Info{
+		Name:        m.name,
+		Description: "Mock agent for child visible completion followed by top graph completion",
+	}
+}
+
+func (m *childVisibleThenTopGraphCompletionAgent) SubAgents() []agent.Agent { return nil }
+
+func (m *childVisibleThenTopGraphCompletionAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *childVisibleThenTopGraphCompletionAgent) Tools() []tool.Tool { return nil }
+
+func (m *mismatchedIDGraphCompletionAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	eventCh := make(chan *event.Event, 2)
+	assistantEvent := &event.Event{
+		Response: &model.Response{
+			ID:     "resp-1",
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(m.assistantText),
+			}},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "assistant-event-id",
+		Timestamp:    time.Now(),
+	}
+	graphCompletionEvent := &event.Event{
+		Response: &model.Response{
+			ID:     "graph-event-id",
+			Object: graph.ObjectTypeGraphExecution,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage(m.assistantText),
+			}},
+		},
+		StateDelta: map[string][]byte{
+			graph.StateKeyLastResponseID: []byte(`"resp-2"`),
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "graph-event-id",
+		Timestamp:    time.Now(),
+	}
+	eventCh <- assistantEvent
+	eventCh <- graphCompletionEvent
+	close(eventCh)
+	return eventCh, nil
+}
+
+func (m *childVisibleThenTopGraphCompletionAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	eventCh := make(chan *event.Event, 2)
+	childRaw := graph.NewGraphCompletionEvent(
+		graph.WithCompletionEventInvocationID(invocation.InvocationID),
+		graph.WithCompletionEventFinalState(graph.State{
+			graph.StateKeyLastResponse:   "child:hello",
+			graph.StateKeyLastResponseID: "child-visible",
+		}),
+	)
+	childVisible, ok := graph.VisibleGraphCompletionEventForAuthor(
+		childRaw,
+		"graph-child",
+	)
+	if !ok {
+		close(eventCh)
+		return eventCh, nil
+	}
+	topRaw := graph.NewGraphCompletionEvent(
+		graph.WithCompletionEventInvocationID(invocation.InvocationID),
+		graph.WithCompletionEventFinalState(graph.State{
+			graph.StateKeyLastResponse:   "top:child:hello",
+			graph.StateKeyLastResponseID: "top-final",
+		}),
+	)
+	eventCh <- childVisible
+	eventCh <- topRaw
 	close(eventCh)
 	return eventCh, nil
 }
@@ -1682,6 +2989,57 @@ func (m *fallbackCompletionAgent) Run(
 	return ch, nil
 }
 
+type fallbackGraphCompletionAgent struct {
+	name       string
+	delta      map[string][]byte
+	errType    string
+	errMessage string
+}
+
+func (m *fallbackGraphCompletionAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *fallbackGraphCompletionAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *fallbackGraphCompletionAgent) FindSubAgent(name string) agent.Agent {
+	return nil
+}
+
+func (m *fallbackGraphCompletionAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *fallbackGraphCompletionAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 2)
+	if len(m.delta) > 0 {
+		ch <- event.New(
+			inv.InvocationID,
+			m.name,
+			event.WithStateDelta(m.delta),
+		)
+	}
+	if m.errMessage != "" {
+		ch <- graph.NewNodeErrorEvent(
+			graph.WithNodeEventInvocationID(inv.InvocationID),
+			graph.WithNodeEventNodeID("lookup"),
+			graph.WithNodeEventNodeType(graph.NodeTypeFunction),
+			graph.WithNodeEventError(m.errMessage),
+			graph.WithNodeEventResponseError(&model.ResponseError{
+				Type:    m.errType,
+				Message: m.errMessage,
+			}),
+		)
+	}
+	close(ch)
+	return ch, nil
+}
+
 func TestNewRunner_DefaultSessionService(t *testing.T) {
 	// No WithSessionService option -> should default to inmemory session service.
 	r := NewRunner("app", &noOpAgent{name: "a"})
@@ -1807,6 +3165,47 @@ func TestRunner_CompletionIncludesFallbackBusinessState(t *testing.T) {
 		string(completion.StateDelta[stateKey]))
 	require.NotContains(t, completion.StateDelta, graph.MetadataKeyNode)
 	require.NotContains(t, completion.StateDelta, graph.MetadataKeyTool)
+}
+
+func TestRunner_CompletionCarriesGraphTerminalError(t *testing.T) {
+	const (
+		stateKey   = "_node_error_"
+		stateValue = "fatal callback"
+		errType    = model.ErrorTypeFlowError
+		errMessage = "execution failed"
+	)
+
+	svc := sessioninmemory.NewSessionService()
+	ag := &fallbackGraphCompletionAgent{
+		name: "graph-fallback",
+		delta: map[string][]byte{
+			stateKey: []byte(stateValue),
+		},
+		errType:    errType,
+		errMessage: errMessage,
+	}
+	r := NewRunner("app", ag, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage(""),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for e := range ch {
+		if e.IsRunnerCompletion() {
+			completion = e
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.Response)
+	require.NotNil(t, completion.Response.Error)
+	require.Equal(t, errType, completion.Response.Error.Type)
+	require.Equal(t, errMessage, completion.Response.Error.Message)
+	require.Equal(t, stateValue, string(completion.StateDelta[stateKey]))
 }
 
 func TestRunner_CompletionSkipsFallbackAfterRecovery(t *testing.T) {
@@ -2030,6 +3429,79 @@ func TestRunner_GraphAgent_LegacyRunnerCompletionIncludesFinalResponse(t *testin
 		sess.Events[1].Choices[0].Message.Content)
 }
 
+func TestRunner_DisableGraphExecutorEvents_HidesBarrierEvents(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddLLMNode(
+		"n1",
+		&staticModel{name: "m1", content: "hidden barrier"},
+		"i1",
+		nil,
+	)
+	compiled := sg.SetEntryPoint("n1").SetFinishPoint("n1").MustCompile()
+	ga, err := graphagent.New("ga", compiled)
+	require.NoError(t, err)
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", ga, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+		agent.WithDisableGraphExecutorEvents(true),
+	)
+	require.NoError(t, err)
+	var last *event.Event
+	for evt := range ch {
+		require.NotEqual(t, graph.ObjectTypeGraphNodeBarrier, evt.Object)
+		require.NotEqual(t, graph.ObjectTypeGraphBarrier, evt.Object)
+		last = evt
+	}
+	require.NotNil(t, last)
+	require.True(t, last.IsRunnerCompletion())
+	require.Len(t, last.Response.Choices, 1)
+	require.Equal(t, "hidden barrier", last.Response.Choices[0].Message.Content)
+}
+
+func TestRunner_DisableGraphExecutorEvents_PreservesGraphFailure(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddNode("boom", func(context.Context, graph.State) (any, error) {
+		return nil, errors.New("boom")
+	})
+	compiled := sg.SetEntryPoint("boom").SetFinishPoint("boom").MustCompile()
+	ga, err := graphagent.New("ga", compiled)
+	require.NoError(t, err)
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", ga, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+		agent.WithDisableGraphExecutorEvents(true),
+	)
+	require.NoError(t, err)
+	var last *event.Event
+	var sawErrorEvent bool
+	for evt := range ch {
+		require.NotEqual(t, graph.ObjectTypeGraphPregelStep, evt.Object)
+		if evt.Object == model.ObjectTypeError &&
+			evt.Response != nil &&
+			evt.Response.Error != nil {
+			sawErrorEvent = true
+			require.Contains(t, evt.Response.Error.Message, "boom")
+		}
+		last = evt
+	}
+	require.True(t, sawErrorEvent)
+	require.NotNil(t, last)
+	require.True(t, last.IsRunnerCompletion())
+	require.NotNil(t, last.Response)
+	require.Nil(t, last.Response.Error)
+	require.Len(t, last.Response.Choices, 0)
+}
+
 func TestRunner_GraphAgentPersistsLLMDoneResponses(t *testing.T) {
 	schema := graph.MessagesStateSchema()
 	sg := graph.NewStateGraph(schema)
@@ -2091,6 +3563,211 @@ func TestRunner_GraphAgentPersistsLLMDoneResponses(t *testing.T) {
 		sess.Events[2].Choices[0].Message.Content)
 }
 
+func TestRunner_GraphAgentPersistsLLMDoneResponsesWithCallbacksAndHiddenCompletion(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddLLMNode(
+		"n1",
+		&staticModel{name: "m1", content: "first"},
+		"i1",
+		nil,
+	)
+	sg.AddLLMNode(
+		"n2",
+		&staticModel{name: "m2", content: "second"},
+		"i2",
+		nil,
+	)
+	sg.AddEdge("n1", "n2")
+	compiled := sg.SetEntryPoint("n1").SetFinishPoint("n2").MustCompile()
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return nil, nil
+	})
+	ga, err := graphagent.New("ga", compiled, graphagent.WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner("app", ga, WithSessionService(svc))
+
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hi"),
+		agent.WithGraphEmitFinalModelResponses(true),
+		agent.WithDisableGraphCompletionEvent(true),
+	)
+	require.NoError(t, err)
+
+	var completion *event.Event
+	for e := range ch {
+		require.False(t, e.Done && e.Object == graph.ObjectTypeGraphExecution)
+		if e.Object == model.ObjectTypeRunnerCompletion {
+			completion = e
+		}
+	}
+	require.NotNil(t, completion)
+	require.NotNil(t, completion.StateDelta)
+	require.Equal(t, `"second"`, string(completion.StateDelta[graph.StateKeyLastResponse]))
+	require.Empty(t, completion.Response.Choices)
+
+	sess, err := svc.GetSession(context.Background(), session.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+	})
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 3)
+	require.True(t, sess.Events[0].IsUserMessage())
+	require.Equal(t, "first", sess.Events[1].Choices[0].Message.Content)
+	require.Equal(t, "second", sess.Events[2].Choices[0].Message.Content)
+}
+
+func TestRunner_WrappedGraphAgentFinalModelResponses_NoDuplicateFinalText(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(child agent.Agent) agent.Agent
+	}{
+		{
+			name: "chain",
+			build: func(child agent.Agent) agent.Agent {
+				return chainagent.New("chain", chainagent.WithSubAgents([]agent.Agent{child}))
+			},
+		},
+		{
+			name: "cycle",
+			build: func(child agent.Agent) agent.Agent {
+				return cycleagent.New(
+					"cycle",
+					cycleagent.WithSubAgents([]agent.Agent{child}),
+					cycleagent.WithMaxIterations(1),
+				)
+			},
+		},
+		{
+			name: "parallel",
+			build: func(child agent.Agent) agent.Agent {
+				return parallelagent.New("parallel", parallelagent.WithSubAgents([]agent.Agent{child}))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			child := newWrappedGraphLLMChildAgent(t)
+			svc := sessioninmemory.NewSessionService()
+			r := NewRunner("app", tt.build(child), WithSessionService(svc))
+			ch, err := r.Run(
+				context.Background(),
+				"u",
+				tt.name+"-llm",
+				model.NewUserMessage("hi"),
+				agent.WithDisableGraphCompletionEvent(true),
+				agent.WithGraphEmitFinalModelResponses(true),
+			)
+			require.NoError(t, err)
+
+			var completion *event.Event
+			var finalTextEvents int
+			for evt := range ch {
+				require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+				if evt.Response != nil &&
+					len(evt.Response.Choices) > 0 &&
+					evt.Response.Choices[0].Message.Content == "wrapped-final" {
+					finalTextEvents++
+				}
+				if evt.IsRunnerCompletion() {
+					completion = evt
+				}
+			}
+
+			require.Equal(t, 1, finalTextEvents)
+			require.NotNil(t, completion)
+			require.NotNil(t, completion.StateDelta)
+			require.Equal(t, `"wrapped-final"`, string(completion.StateDelta[graph.StateKeyLastResponse]))
+			require.Empty(t, completion.Response.Choices)
+
+			sess, err := svc.GetSession(context.Background(), session.Key{
+				AppName:   "app",
+				UserID:    "u",
+				SessionID: tt.name + "-llm",
+			})
+			require.NoError(t, err)
+			require.Len(t, sess.Events, 2)
+			require.Equal(t, "wrapped-final", sess.Events[1].Choices[0].Message.Content)
+		})
+	}
+}
+
+func TestRunner_WrappedGraphAgentFinalModelResponses_EmptyResponseID_StreamModeUpdates_KeepsFinalText(
+	t *testing.T,
+) {
+	tests := []struct {
+		name  string
+		build func(child agent.Agent) agent.Agent
+	}{
+		{
+			name: "chain",
+			build: func(child agent.Agent) agent.Agent {
+				return chainagent.New("chain", chainagent.WithSubAgents([]agent.Agent{child}))
+			},
+		},
+		{
+			name: "cycle",
+			build: func(child agent.Agent) agent.Agent {
+				return cycleagent.New(
+					"cycle",
+					cycleagent.WithSubAgents([]agent.Agent{child}),
+					cycleagent.WithMaxIterations(1),
+				)
+			},
+		},
+		{
+			name: "parallel",
+			build: func(child agent.Agent) agent.Agent {
+				return parallelagent.New("parallel", parallelagent.WithSubAgents([]agent.Agent{child}))
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			child := newWrappedGraphLLMEmptyIDChildAgent(t)
+			svc := sessioninmemory.NewSessionService()
+			r := NewRunner("app", tt.build(child), WithSessionService(svc))
+			ch, err := r.Run(
+				context.Background(),
+				"u",
+				tt.name+"-llm-empty-id-updates",
+				model.NewUserMessage("hi"),
+				agent.WithDisableGraphCompletionEvent(true),
+				agent.WithGraphEmitFinalModelResponses(true),
+				agent.WithStreamMode(agent.StreamModeUpdates),
+			)
+			require.NoError(t, err)
+
+			var completion *event.Event
+			for evt := range ch {
+				require.NotEqual(t, model.ObjectTypeChatCompletion, evt.Object)
+				if evt.IsRunnerCompletion() {
+					completion = evt
+				}
+			}
+
+			require.NotNil(t, completion)
+			require.NotNil(t, completion.StateDelta)
+			require.Equal(t, `"empty-id-final"`, string(completion.StateDelta[graph.StateKeyLastResponse]))
+			require.Len(t, completion.Response.Choices, 1)
+			require.Equal(t, "empty-id-final", completion.Response.Choices[0].Message.Content)
+			assertSessionKeepsSingleFinalAssistantEvent(
+				t,
+				svc,
+				tt.name+"-llm-empty-id-updates",
+				"empty-id-final",
+			)
+		})
+	}
+}
+
 func TestPropagateGraphCompletion_NilStateValue(t *testing.T) {
 	// Call propagateGraphCompletion directly to cover the nil-value copy branch.
 	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
@@ -2113,12 +3790,12 @@ func TestShouldEchoFinalChoicesInCompletion_Cases(t *testing.T) {
 	rr := NewRunner(appName, &noOpAgent{name: agentName}).(*runner)
 
 	t.Run("nil loop", func(t *testing.T) {
-		require.True(t, rr.shouldEchoFinalChoicesInCompletion(nil))
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(nil, nil, nil))
 	})
 
 	t.Run("no final choices", func(t *testing.T) {
 		loop := &eventLoopContext{finalChoices: nil}
-		require.False(t, rr.shouldEchoFinalChoicesInCompletion(loop))
+		require.False(t, rr.shouldEchoFinalChoicesInCompletion(loop, nil, nil))
 	})
 
 	t.Run("legacy always includes", func(t *testing.T) {
@@ -2138,7 +3815,11 @@ func TestShouldEchoFinalChoicesInCompletion_Cases(t *testing.T) {
 				responseID: {},
 			},
 		}
-		require.True(t, rr.shouldEchoFinalChoicesInCompletion(loop))
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(
+			loop,
+			loop.finalChoices,
+			loop.finalStateDelta,
+		))
 	})
 
 	t.Run("new mode missing final id includes", func(t *testing.T) {
@@ -2152,7 +3833,11 @@ func TestShouldEchoFinalChoicesInCompletion_Cases(t *testing.T) {
 				Message: model.NewAssistantMessage(content),
 			}},
 		}
-		require.True(t, rr.shouldEchoFinalChoicesInCompletion(loop))
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(
+			loop,
+			loop.finalChoices,
+			loop.finalStateDelta,
+		))
 	})
 
 	t.Run("new mode duplicate id excluded", func(t *testing.T) {
@@ -2172,7 +3857,11 @@ func TestShouldEchoFinalChoicesInCompletion_Cases(t *testing.T) {
 				responseID: {},
 			},
 		}
-		require.False(t, rr.shouldEchoFinalChoicesInCompletion(loop))
+		require.False(t, rr.shouldEchoFinalChoicesInCompletion(
+			loop,
+			loop.finalChoices,
+			loop.finalStateDelta,
+		))
 	})
 
 	t.Run("new mode id not seen includes", func(t *testing.T) {
@@ -2189,8 +3878,108 @@ func TestShouldEchoFinalChoicesInCompletion_Cases(t *testing.T) {
 				graph.StateKeyLastResponseID: []byte(responseIDJSON),
 			},
 		}
-		require.True(t, rr.shouldEchoFinalChoicesInCompletion(loop))
+		require.True(t, rr.shouldEchoFinalChoicesInCompletion(
+			loop,
+			loop.finalChoices,
+			loop.finalStateDelta,
+		))
 	})
+}
+
+func TestShouldClearRunnerCompletionChoicesInSession_DoesNotDedupMismatchedResponseID(
+	t *testing.T,
+) {
+	loop := &eventLoopContext{
+		filteredPersistedAssistantChoiceSignatures: map[string]struct{}{
+			assistantChoiceSignature([]model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("wrapped-final"),
+			}}): {},
+		},
+	}
+	finalChoices := []model.Choice{{
+		Index:   0,
+		Message: model.NewAssistantMessage("wrapped-final"),
+	}}
+	finalStateDelta := map[string][]byte{
+		graph.StateKeyLastResponseID: []byte(`"response-from-state"`),
+	}
+	require.False(t, shouldClearRunnerCompletionChoicesInSession(
+		loop,
+		finalChoices,
+		finalStateDelta,
+	))
+}
+
+func TestShouldClearRunnerCompletionChoicesInSession_FallsBackToChoiceSignatureWhenResponseIDMissing(
+	t *testing.T,
+) {
+	loop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithDisableGraphCompletionEvent(true),
+			)),
+		),
+		filteredPersistedAssistantChoiceSignatures: map[string]struct{}{
+			assistantChoiceSignature([]model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("wrapped-final"),
+			}}): {},
+		},
+	}
+	finalChoices := []model.Choice{{
+		Index:   0,
+		Message: model.NewAssistantMessage("wrapped-final"),
+	}}
+	require.True(t, shouldClearRunnerCompletionChoicesInSession(
+		loop,
+		finalChoices,
+		nil,
+	))
+}
+
+func TestShouldClearRunnerCompletionChoicesInSession_PreservesLegacyChoicesWithoutHiddenCompletion(
+	t *testing.T,
+) {
+	loop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithGraphEmitFinalModelResponses(true),
+			)),
+		),
+		filteredPersistedAssistantChoiceSignatures: map[string]struct{}{
+			assistantChoiceSignature([]model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("wrapped-final"),
+			}}): {},
+		},
+	}
+	finalChoices := []model.Choice{{
+		Index:   0,
+		Message: model.NewAssistantMessage("wrapped-final"),
+	}}
+	require.False(t, shouldClearRunnerCompletionChoicesInSession(
+		loop,
+		finalChoices,
+		nil,
+	))
+}
+
+func TestAssistantChoiceSignature_UsesAllAssistantChoices(t *testing.T) {
+	require.Equal(
+		t,
+		`[{"role":"assistant","content":"wrapped-final"},{"role":"assistant","content":"alt"}]`,
+		assistantChoiceSignature([]model.Choice{
+			{
+				Index:   0,
+				Message: model.NewAssistantMessage("wrapped-final"),
+			},
+			{
+				Index:   1,
+				Message: model.NewAssistantMessage("alt"),
+			},
+		}),
+	)
 }
 
 func TestRecordEmittedAssistantResponseID_Cases(t *testing.T) {

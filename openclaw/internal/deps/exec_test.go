@@ -72,6 +72,32 @@ func TestPlanStepCommand(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, managerPath, cmd.Path)
 	require.Equal(t, []string{managerPath, "install", "-y"}, cmd.Args)
+
+	commandPath := writeTestCommand(
+		t,
+		t.TempDir(),
+		"custom-tool",
+		"printf command",
+	)
+	cmd, err = planStepCommand(Toolchain{StateDir: stateDir}, Step{
+		Kind:    stepKindCommand,
+		Command: []string{commandPath, "--version"},
+		Env: map[string]string{
+			envGoBin: "/tmp/bin",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, commandPath, cmd.Path)
+	require.Equal(
+		t,
+		[]string{commandPath, "--version"},
+		cmd.Args,
+	)
+	require.Contains(
+		t,
+		strings.Join(cmd.Env, "\n"),
+		envGoBin+"=/tmp/bin",
+	)
 }
 
 func TestCombinedOutputContext(t *testing.T) {
@@ -159,7 +185,7 @@ func TestSystemCommandSpec(t *testing.T) {
 }
 
 func TestResolveExecutable(t *testing.T) {
-	_, err := resolveExecutable("", "")
+	_, err := resolveExecutable("", "", "")
 	require.ErrorContains(t, err, "empty executable name")
 
 	if runtime.GOOS == "windows" {
@@ -172,12 +198,12 @@ func TestResolveExecutable(t *testing.T) {
 		"python3.12",
 		"printf explicit",
 	)
-	spec, err := resolveExecutable(explicitPath, "")
+	spec, err := resolveExecutable(explicitPath, "", "")
 	require.NoError(t, err)
 	require.Equal(t, explicitPath, spec.path)
 
 	dir := t.TempDir()
-	_, err = resolveExecutable(dir, "")
+	_, err = resolveExecutable(dir, "", "")
 	require.ErrorContains(t, err, "is a directory")
 
 	toolDir := t.TempDir()
@@ -188,9 +214,45 @@ func TestResolveExecutable(t *testing.T) {
 		"printf lookup",
 	)
 	t.Setenv("PATH", toolDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	spec, err = resolveExecutable("", "python-custom")
+	spec, err = resolveExecutable("", "python-custom", "")
 	require.NoError(t, err)
 	require.Equal(t, toolPath, spec.path)
+}
+
+func TestPlanStepCommand_UsesManagedPathForCommandStep(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell assertions run on unix-like systems")
+	}
+
+	stateDir := t.TempDir()
+	binDir := ManagedBinDir(stateDir)
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+
+	managedPath := writeTestCommand(
+		t,
+		binDir,
+		"managed-tool",
+		"printf managed",
+	)
+	hostPath := writeTestCommand(
+		t,
+		t.TempDir(),
+		"managed-tool",
+		"printf host",
+	)
+	t.Setenv("PATH", filepath.Dir(hostPath))
+
+	cmd, err := planStepCommand(Toolchain{StateDir: stateDir}, Step{
+		Kind:    stepKindCommand,
+		Command: []string{"managed-tool", "--version"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, managedPath, cmd.Path)
+	require.Equal(
+		t,
+		[]string{managedPath, "--version"},
+		cmd.Args,
+	)
 }
 
 func TestCommandPathHelpers(t *testing.T) {

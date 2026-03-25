@@ -204,6 +204,33 @@ Notes:
 - The factory is called once per `Runner.Run(...)`.
 - `agent.WithAgent(...)` still overrides everything (useful for tests).
 
+#### Resource Ownership Inside Agent Factories
+
+`AgentFactory` is ideal for request-scoped Agent construction, but it
+**does not transfer ownership of resources** created inside the factory.
+
+- The `Runner` only asks the factory for an `agent.Agent`.
+- `Runner.Close()` only closes resources created or owned by the Runner
+  itself; it does **not** automatically close request-scoped
+  `tool.ToolSet` instances, temporary MCP connections, sandbox sessions,
+  or similar resources created inside the factory.
+- The reason is structural: the `agent.Agent` interface does not expose a
+  `Close()` method, so the Runner has no generic way to reclaim those
+  resources.
+
+Recommended patterns:
+
+- If a `ToolSet` or external connection can be reused across requests,
+  create it once outside the factory, reuse it inside the factory, and
+  close it during application shutdown.
+- If a resource must be created per request, the caller should clean it
+  up explicitly after that run finishes. Common patterns are wrapping the
+  Agent with cleanup logic, or running cleanup from an after-agent
+  callback.
+
+This boundary is especially important when using MCP ToolSets. See the
+ToolSet lifecycle notes in the `tool` documentation for more details.
+
 ### 🔌 Plugins
 
 Runner plugins are global, runner-scoped hooks. Register plugins once and they
@@ -434,6 +461,9 @@ preserving detailed graph events for advanced use.
 
 #### Fatal Errors Before a Graph Completion Event
 
+For the full framework-level recommendation, including the standard graph
+collector and A2A conventions, see [Error Handling](error-handling.md).
+
 Sometimes a run stops early because of a fatal error before the graph emits its
 final `graph.execution` event. A common example is:
 
@@ -459,33 +489,107 @@ This lets application code keep the same simple rule: read the last event first
 for business-level fatal details, instead of scanning the whole stream to find
 the callback/error event.
 
+If the graph uses `graph.NewExecutionErrorCollector()`, any collected
+`execution_errors` in that `StateDelta` may come from the default recoverable
+contract as well, for example errors that implement `Recoverable() bool` or
+errors wrapped by `graph.MarkRecoverable(err)`.
+
 Example:
 
 ```go
+package main
+
 import (
+    "context"
     "encoding/json"
     "fmt"
 
     "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const stateKeyNodeFatal = "node_fatal_error"
 
-func readLastEvent(eventChan <-chan *event.Event) error {
-    for e := range eventChan {
-        if !e.IsRunnerCompletion() {
+type RunSummary struct {
+    TransportError  *model.ResponseError
+    FatalDetail     map[string]any
+    ExecutionErrors []graph.ExecutionError
+}
+
+func ConsumeRun(
+    ctx context.Context,
+    eventChan <-chan *event.Event,
+) (*RunSummary, error) {
+    summary := &RunSummary{}
+
+    for {
+        select {
+        case <-ctx.Done():
+            return nil, ctx.Err()
+        case evt, ok := <-eventChan:
+            if !ok {
+                return summary, nil
+            }
+            if evt.Response != nil && evt.Response.Error != nil {
+                summary.TransportError = evt.Response.Error
+            }
+            if !evt.IsRunnerCompletion() {
+                continue
+            }
+
+            if b, ok := evt.StateDelta[stateKeyNodeFatal]; ok {
+                var detail map[string]any
+                if err := json.Unmarshal(b, &detail); err != nil {
+                    return nil, err
+                }
+                summary.FatalDetail = detail
+            }
+
+            executionErrors, err := graph.ExecutionErrorsFromStateDelta(
+                evt.StateDelta,
+                graph.StateKeyExecutionErrors,
+            )
+            if err != nil {
+                return nil, err
+            }
+            summary.ExecutionErrors = executionErrors
+            return summary, nil
+        }
+    }
+}
+
+func PrintSummary(summary *RunSummary) {
+    if summary.TransportError != nil {
+        fmt.Printf(
+            "transport error: type=%s code=%s message=%s\n",
+            summary.TransportError.Type,
+            ptrValue(summary.TransportError.Code),
+            summary.TransportError.Message,
+        )
+    }
+    if summary.FatalDetail != nil {
+        fmt.Printf("fatal detail: %+v\n", summary.FatalDetail)
+    }
+    for _, record := range summary.ExecutionErrors {
+        if record.Error == nil {
             continue
         }
-
-        if b, ok := e.StateDelta[stateKeyNodeFatal]; ok {
-            var detail map[string]any
-            if err := json.Unmarshal(b, &detail); err == nil {
-                fmt.Printf("fatal detail: %+v\n", detail)
-            }
-        }
-        return nil
+        fmt.Printf(
+            "execution error: severity=%s node=%s code=%s message=%s\n",
+            record.Severity,
+            record.NodeName,
+            ptrValue(record.Error.Code),
+            record.Error.Message,
+        )
     }
-    return nil
+}
+
+func ptrValue(value *string) string {
+    if value == nil {
+        return ""
+    }
+    return *value
 }
 ```
 

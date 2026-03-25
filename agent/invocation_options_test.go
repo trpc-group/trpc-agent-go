@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -275,6 +276,24 @@ func TestWithSpanAttributes(t *testing.T) {
 	assert.Nil(t, opts.SpanAttributes)
 }
 
+func TestWithTraceStartedCallback(t *testing.T) {
+	opts := &RunOptions{}
+	var called bool
+
+	WithTraceStartedCallback(func(oteltrace.SpanContext) {
+		called = true
+	})(opts)
+	require.Len(t, opts.TraceStartedCallbacks, 1)
+
+	opts.TraceStartedCallbacks[0](oteltrace.NewSpanContext(
+		oteltrace.SpanContextConfig{},
+	))
+	require.True(t, called)
+
+	WithTraceStartedCallback(nil)(opts)
+	require.Len(t, opts.TraceStartedCallbacks, 1)
+}
+
 func TestWithInvocationTransferInfo(t *testing.T) {
 	transferInfo := &TransferInfo{
 		TargetAgentName: "target-agent",
@@ -454,6 +473,83 @@ func (m *mockArtifactService) DeleteArtifact(ctx context.Context, info artifact.
 
 func (m *mockArtifactService) ListVersions(ctx context.Context, info artifact.SessionInfo, filename string) ([]int, error) {
 	return nil, nil
+}
+
+func TestGraphRunOptionSetters(t *testing.T) {
+	opts := &RunOptions{}
+
+	WithDisableGraphCompletionEvent(true)(opts)
+	require.Nil(t, opts.CustomAgentConfigs)
+	invocation := NewInvocation(WithInvocationRunOptions(*opts))
+	require.True(t, IsGraphCompletionEventDisabled(invocation))
+	require.Nil(t, invocation.RunOptions.CustomAgentConfigs)
+
+	WithDisableGraphExecutorEvents(true)(opts)
+	require.Nil(t, opts.CustomAgentConfigs)
+	invocation = NewInvocation(WithInvocationRunOptions(*opts))
+	require.True(t, IsGraphExecutorEventsDisabled(invocation))
+	require.Nil(t, invocation.RunOptions.CustomAgentConfigs)
+
+	WithEventChannelBufferSize(256)(opts)
+	require.Nil(t, opts.CustomAgentConfigs)
+	invocation = NewInvocation(WithInvocationRunOptions(*opts))
+	require.Equal(t, 256, GetEventChannelBufferSize(invocation))
+	require.Nil(t, invocation.RunOptions.CustomAgentConfigs)
+
+	WithPropagateChildAgentErrors(true)(opts)
+	require.Nil(t, opts.CustomAgentConfigs)
+	invocation = NewInvocation(WithInvocationRunOptions(*opts))
+	require.True(t, ShouldPropagateChildAgentErrors(invocation))
+	require.Nil(t, invocation.RunOptions.CustomAgentConfigs)
+
+	WithCustomAgentConfigs(nil)(opts)
+	invocation = NewInvocation(WithInvocationRunOptions(*opts))
+	require.True(t, IsGraphCompletionEventDisabled(invocation))
+	require.True(t, IsGraphExecutorEventsDisabled(invocation))
+	require.Equal(t, 256, GetEventChannelBufferSize(invocation))
+	require.True(t, ShouldPropagateChildAgentErrors(invocation))
+	require.Nil(t, invocation.RunOptions.CustomAgentConfigs)
+}
+
+func TestGraphRunControlHelpers_DefaultsAndNilSafety(t *testing.T) {
+	opts := NewRunOptions(
+		nil,
+		WithDisableGraphCompletionEvent(true),
+		nil,
+		WithDisableGraphExecutorEvents(true),
+		WithEventChannelBufferSize(64),
+		WithPropagateChildAgentErrors(true),
+	)
+	invocation := NewInvocation(WithInvocationRunOptions(opts))
+	require.True(t, IsGraphCompletionEventDisabled(invocation))
+	require.True(t, IsGraphExecutorEventsDisabled(invocation))
+	require.Equal(t, 64, GetEventChannelBufferSize(invocation))
+	require.True(t, ShouldPropagateChildAgentErrors(invocation))
+	require.False(t, IsGraphCompletionEventDisabled(nil))
+	require.False(t, IsGraphExecutorEventsDisabled(nil))
+	require.Zero(t, GetEventChannelBufferSize(nil))
+	require.False(t, ShouldPropagateChildAgentErrors(nil))
+	require.Equal(t, runControlConfig{}, getRunControlConfig(nil))
+	setRunControlConfig(nil, runControlConfig{
+		DisableGraphCompletionEvent: true,
+		DisableGraphExecutorEvents:  true,
+		EventChannelBufferSize:      128,
+		PropagateChildAgentErrors:   true,
+	})
+	runOpts := &RunOptions{}
+	require.Equal(t, runControlConfig{}, getRunControlConfig(runOpts))
+	setRunControlConfig(runOpts, runControlConfig{
+		DisableGraphCompletionEvent: true,
+		DisableGraphExecutorEvents:  true,
+		EventChannelBufferSize:      128,
+		PropagateChildAgentErrors:   true,
+	})
+	require.Equal(t, runControlConfig{
+		DisableGraphCompletionEvent: true,
+		DisableGraphExecutorEvents:  true,
+		EventChannelBufferSize:      128,
+		PropagateChildAgentErrors:   true,
+	}, getRunControlConfig(runOpts))
 }
 
 func TestWithDisableTracing(t *testing.T) {

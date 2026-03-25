@@ -10,6 +10,8 @@
 // Package a2a provides shared constants and utilities for A2A protocol handling.
 package a2a
 
+import "trpc.group/trpc-go/trpc-agent-go/model"
+
 const (
 	// DataPartMetadataTypeKey is the metadata key for DataPart type.
 	// Maps to A2A_DATA_PART_METADATA_TYPE_KEY in Python trpc-agent.
@@ -83,6 +85,30 @@ const (
 	// A2A transport, enabling clients to group incremental chunks from the same LLM call.
 	MessageMetadataResponseIDKey = "llm_response_id"
 
+	// MessageMetadataErrorTypeKey stores ResponseError.Type across A2A
+	// transport.
+	MessageMetadataErrorTypeKey = "error_type"
+
+	// MessageMetadataErrorCodeKey stores ResponseError.Code across A2A
+	// transport.
+	MessageMetadataErrorCodeKey = "error_code"
+
+	// MessageMetadataErrorParamKey stores ResponseError.Param across A2A
+	// transport.
+	MessageMetadataErrorParamKey = "error_param"
+
+	// MessageMetadataErrorMessageKey stores the primary error message across
+	// A2A transport.
+	MessageMetadataErrorMessageKey = "error_message"
+
+	// MessageMetadataTaskStateKey stores the remote task lifecycle state on
+	// converted messages.
+	MessageMetadataTaskStateKey = "task_state"
+
+	// MessageMetadataStateDeltaKey is the metadata key for event state delta in A2A messages.
+	// It carries a decoded form of Event.StateDelta so A2A peers can restore structured state updates.
+	MessageMetadataStateDeltaKey = "state_delta"
+
 	// TextPartMetadataThoughtKey is the metadata key for thought/reasoning content in TextPart.
 	TextPartMetadataThoughtKey = "thought"
 
@@ -150,4 +176,102 @@ func GetDataPartType(metadata map[string]any) string {
 	}
 
 	return ""
+}
+
+// WithResponseErrorMetadata writes structured ResponseError fields to A2A
+// message metadata.
+func WithResponseErrorMetadata(
+	metadata map[string]any,
+	err *model.ResponseError,
+) map[string]any {
+	if err == nil {
+		return metadata
+	}
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
+	metadata[MessageMetadataObjectTypeKey] = model.ObjectTypeError
+	if err.Type != "" {
+		metadata[MessageMetadataErrorTypeKey] = err.Type
+	}
+	if err.Message != "" {
+		metadata[MessageMetadataErrorMessageKey] = err.Message
+	}
+	if err.Code != nil && *err.Code != "" {
+		metadata[MessageMetadataErrorCodeKey] = *err.Code
+	}
+	if err.Param != nil && *err.Param != "" {
+		metadata[MessageMetadataErrorParamKey] = *err.Param
+	}
+	return metadata
+}
+
+// ResponseErrorFromMetadata reconstructs a ResponseError from A2A metadata.
+func ResponseErrorFromMetadata(
+	metadata map[string]any,
+	fallbackMessage string,
+	fallbackType string,
+) *model.ResponseError {
+	if metadata == nil && fallbackMessage == "" {
+		return nil
+	}
+
+	objectType := metadataStringValue(
+		metadata,
+		MessageMetadataObjectTypeKey,
+	)
+	errorType := metadataStringValue(
+		metadata,
+		MessageMetadataErrorTypeKey,
+	)
+	message := metadataStringValue(
+		metadata,
+		MessageMetadataErrorMessageKey,
+	)
+	hasStructuredError := objectType == model.ObjectTypeError ||
+		errorType != "" ||
+		message != "" ||
+		metadataStringValue(metadata, MessageMetadataErrorCodeKey) != "" ||
+		metadataStringValue(metadata, MessageMetadataErrorParamKey) != ""
+	if !hasStructuredError {
+		return nil
+	}
+
+	if message == "" {
+		message = fallbackMessage
+	}
+	if errorType == "" {
+		errorType = fallbackType
+	}
+	respErr := &model.ResponseError{
+		Type:    errorType,
+		Message: message,
+	}
+	if code := metadataStringValue(
+		metadata,
+		MessageMetadataErrorCodeKey,
+	); code != "" {
+		respErr.Code = &code
+	}
+	if param := metadataStringValue(
+		metadata,
+		MessageMetadataErrorParamKey,
+	); param != "" {
+		respErr.Param = &param
+	}
+	return respErr
+}
+
+func metadataStringValue(
+	metadata map[string]any,
+	key string,
+) string {
+	if metadata == nil {
+		return ""
+	}
+	value, ok := metadata[key].(string)
+	if !ok {
+		return ""
+	}
+	return value
 }

@@ -92,6 +92,21 @@ func TestStateKeys_ScopedAndLegacy(t *testing.T) {
 	require.Equal(t, StateKeyLoadedPrefix, LoadedPrefix(" "))
 	require.Equal(t, StateKeyDocsPrefix, DocsPrefix(""))
 	require.Equal(t, StateKeyDocsPrefix, DocsPrefix(" "))
+	require.Equal(
+		t,
+		StateKeyLoadedOrderPrefix,
+		LoadedOrderKey(""),
+	)
+	require.Equal(
+		t,
+		StateKeyLoadedOrderPrefix,
+		LoadedOrderKey(" "),
+	)
+	require.Equal(
+		t,
+		StateKeyLoadedOrderByAgentPrefix+agentName,
+		LoadedOrderKey(paddedAgent),
+	)
 
 	loadedKey := LoadedKey(childAgent, skillName)
 	parentPrefix := LoadedPrefix(parentAgent)
@@ -99,6 +114,29 @@ func TestStateKeys_ScopedAndLegacy(t *testing.T) {
 
 	childPrefix := LoadedPrefix(childAgent)
 	require.True(t, strings.HasPrefix(loadedKey, childPrefix))
+
+	childOrderKey := LoadedOrderKey(childAgent)
+	require.Equal(
+		t,
+		StateKeyLoadedOrderByAgentPrefix+url.PathEscape(childAgent),
+		childOrderKey,
+	)
+}
+
+func TestLoadedOrderHelpers(t *testing.T) {
+	order := ParseLoadedOrder([]byte(`["a"," b ","a","","c"]`))
+	require.Equal(t, []string{"a", "b", "c"}, order)
+
+	order = TouchLoadedOrder(order, "b", "d", " ", "c")
+	require.Equal(t, []string{"a", "b", "d", "c"}, order)
+
+	require.Nil(t, ParseLoadedOrder([]byte("{")))
+	require.Nil(t, MarshalLoadedOrder(nil))
+	require.Equal(
+		t,
+		`["a","b","d","c"]`,
+		string(MarshalLoadedOrder(order)),
+	)
 }
 
 func TestFSRepository_Path(t *testing.T) {

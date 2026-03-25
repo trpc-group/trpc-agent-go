@@ -55,7 +55,8 @@ type BeforeNodeCallback func(
 //
 //   - customResult: if not nil, it replaces the node result. When nodeErr is
 //     non-nil, returning a non-nil customResult with a nil error recovers the
-//     node and allows graph execution to continue.
+//     node and allows graph execution to continue. After a callback recovers
+//     the node, later after-node callbacks receive nodeErr == nil.
 //   - error: if not nil, it replaces the node error and stops graph execution.
 type AfterNodeCallback func(
 	ctx context.Context,
@@ -117,6 +118,12 @@ func (c *NodeCallbacks) RegisterOnNodeError(cb OnNodeErrorCallback) *NodeCallbac
 	return c
 }
 
+// RegisterAgentEvent registers an agent event callback.
+func (c *NodeCallbacks) RegisterAgentEvent(cb AgentEventCallback) *NodeCallbacks {
+	c.AgentEvent = append(c.AgentEvent, cb)
+	return c
+}
+
 // RunBeforeNode runs all before node callbacks in order.
 // Returns (customResult, error).
 // If any callback returns a custom result, stop and return.
@@ -152,17 +159,25 @@ func (c *NodeCallbacks) RunAfterNode(
 	nodeErr error,
 ) (any, error) {
 	currentResult := result
+	currentErr := nodeErr
 	for _, cb := range c.AfterNode {
 		if cb == nil {
 			// Skip nil callback entries defensively.
 			continue
 		}
-		customResult, err := cb(ctx, callbackCtx, state, currentResult, nodeErr)
+		customResult, err := cb(
+			ctx,
+			callbackCtx,
+			state,
+			currentResult,
+			currentErr,
+		)
 		if err != nil {
 			return nil, err
 		}
 		if customResult != nil {
 			currentResult = customResult
+			currentErr = nil
 		}
 	}
 	return currentResult, nil
@@ -182,5 +197,20 @@ func (c *NodeCallbacks) RunOnNodeError(
 			continue
 		}
 		cb(ctx, callbackCtx, state, err)
+	}
+}
+
+// RunAgentEvent runs all agent event callbacks in order.
+func (c *NodeCallbacks) RunAgentEvent(
+	ctx context.Context,
+	callbackCtx *NodeCallbackContext,
+	state State,
+	evt *event.Event,
+) {
+	for _, cb := range c.AgentEvent {
+		if cb == nil {
+			continue
+		}
+		cb(ctx, callbackCtx, state, evt)
 	}
 }

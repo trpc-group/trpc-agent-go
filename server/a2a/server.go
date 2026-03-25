@@ -52,8 +52,15 @@ func New(opts ...Option) (*a2a.A2AServer, error) {
 		options.sessionService = inmemory.NewSessionService()
 	}
 
-	if options.agent == nil {
-		return nil, errors.New("agent is required")
+	if options.agent == nil && options.runner == nil {
+		return nil, errors.New("either agent (WithAgent) or runner (WithRunner) is required")
+	}
+	if options.agent != nil && options.runner != nil {
+		return nil, errors.New("WithAgent and WithRunner cannot be used together; use WithAgentCard with WithRunner")
+	}
+
+	if options.agent == nil && options.agentCard == nil {
+		return nil, errors.New("agent card (WithAgentCard) is required when using runner without agent")
 	}
 
 	// Host is only required if we need to build an agent card
@@ -65,43 +72,49 @@ func New(opts ...Option) (*a2a.A2AServer, error) {
 	return buildA2AServer(options)
 }
 
-func buildAgentCard(options *options) a2a.AgentCard {
+func buildAgentCard(options *options) (a2a.AgentCard, error) {
 	if options.agentCard != nil {
-		return *options.agentCard
+		return *options.agentCard, nil
 	}
-	agent := options.agent
-	desc := agent.Info().Description
-	name := agent.Info().Name
-
-	// Normalize the host to ensure it has a proper URL scheme
-	url := ia2a.NormalizeURL(options.host)
-
-	// Build skills from agent tools
-	skills := buildSkillsFromTools(agent, name, desc)
-	return a2a.AgentCard{
-		Name:        name,
-		Description: desc,
-		URL:         url,
-		Capabilities: a2a.AgentCapabilities{
-			Streaming: &options.enableStreaming,
-			Extensions: []a2a.AgentExtension{
-				{
-					URI: ia2a.ExtensionTRPCA2AVersion,
-					Params: map[string]any{
-						"version": ia2a.InteractionVersion,
-					},
-				},
-			},
-		},
-		Skills:             skills,
-		DefaultInputModes:  []string{"text"},
-		DefaultOutputModes: []string{"text"},
+	if options.agent == nil {
+		return a2a.AgentCard{}, errors.New("agent is required when agent card is not provided")
 	}
+	info := options.agent.Info()
+	return NewAgentCard(
+		info.Name,
+		info.Description,
+		options.host,
+		options.enableStreaming,
+		WithCardTools(options.agent.Tools()...),
+	)
 }
 
-func buildProcessor(agent agent.Agent, sessionService session.Service, options *options) *messageProcessor {
-	agentName := agent.Info().Name
-	runner := runner.NewRunner(agentName, agent, runner.WithSessionService(sessionService))
+// buildRuntimeState makes a shallow copy of message metadata for RuntimeState.
+func buildRuntimeState(metadata map[string]any) map[string]any {
+	runtimeState := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		runtimeState[key] = value
+	}
+	return runtimeState
+}
+
+func buildProcessor(
+	agent agent.Agent,
+	sessionService session.Service,
+	serverIdentity string,
+	options *options,
+) (*messageProcessor, error) {
+	if serverIdentity == "" {
+		return nil, errors.New("agent card name is required")
+	}
+
+	procRunner := options.runner
+	if procRunner == nil {
+		if agent == nil {
+			return nil, errors.New("agent is required when runner is not provided")
+		}
+		procRunner = runner.NewRunner(serverIdentity, agent, runner.WithSessionService(sessionService))
+	}
 
 	// Use custom converters if provided, otherwise use defaults
 	a2aToAgentConverter := options.a2aToAgentConverter
@@ -112,34 +125,46 @@ func buildProcessor(agent agent.Agent, sessionService session.Service, options *
 	eventToA2AConverter := options.eventToA2AConverter
 	if eventToA2AConverter == nil {
 		eventToA2AConverter = &defaultEventToA2AMessage{
-			adkCompatibility:   options.adkCompatibility,
-			streamingEventType: options.streamingEventType,
+			adkCompatibility:          options.adkCompatibility,
+			graphEventObjectAllowlist: options.graphEventObjectAllowlist,
+			streamingEventType:        options.streamingEventType,
 		}
 	}
 
 	return &messageProcessor{
-		runner:              runner,
-		a2aToAgentConverter: a2aToAgentConverter,
-		eventToA2AConverter: eventToA2AConverter,
-		errorHandler:        options.errorHandler,
-		debugLogging:        options.debugLogging,
-		adkCompatibility:    options.adkCompatibility,
-		streamingEventType:  options.streamingEventType,
-		agentName:           agentName,
-	}
+		runner:               procRunner,
+		a2aToAgentConverter:  a2aToAgentConverter,
+		eventToA2AConverter:  eventToA2AConverter,
+		errorHandler:         options.errorHandler,
+		debugLogging:         options.debugLogging,
+		adkCompatibility:     options.adkCompatibility,
+		streamingEventType:   options.streamingEventType,
+		structuredTaskErrors: options.structuredTaskErrors,
+		agentName:            serverIdentity,
+		runOptions:           options.runOptions,
+	}, nil
 }
 
 func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	agent := options.agent
 	sessionService := options.sessionService
 
-	agentCard := buildAgentCard(options)
+	agentCard, err := buildAgentCard(options)
+	if err != nil {
+		return nil, err
+	}
+	if agentCard.Name == "" {
+		return nil, errors.New("agent card name is required")
+	}
 
 	var processor taskmanager.MessageProcessor
 	if options.processorBuilder != nil {
 		processor = options.processorBuilder(agent, sessionService)
 	} else {
-		processor = buildProcessor(agent, sessionService, options)
+		processor, err = buildProcessor(agent, sessionService, agentCard.Name, options)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build processor: %w", err)
+		}
 	}
 
 	if options.processorHook != nil {
@@ -148,7 +173,6 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 
 	// Create a task manager that wraps the session service
 	var taskManager taskmanager.TaskManager
-	var err error
 	if options.taskManagerBuilder != nil {
 		taskManager = options.taskManagerBuilder(processor)
 	} else {
@@ -230,14 +254,16 @@ func extractBasePath(urlStr string) string {
 
 // messageProcessor is the message processor for the a2a server.
 type messageProcessor struct {
-	runner              runner.Runner
-	a2aToAgentConverter A2AMessageToAgentMessage
-	eventToA2AConverter EventToA2AMessage
-	errorHandler        ErrorHandler
-	debugLogging        bool
-	adkCompatibility    bool
-	streamingEventType  StreamingEventType
-	agentName           string
+	runner               runner.Runner
+	a2aToAgentConverter  A2AMessageToAgentMessage
+	eventToA2AConverter  EventToA2AMessage
+	errorHandler         ErrorHandler
+	debugLogging         bool
+	adkCompatibility     bool
+	streamingEventType   StreamingEventType
+	structuredTaskErrors bool
+	agentName            string
+	runOptions           []agent.RunOption
 }
 
 func isFinalStreamingEvent(evt *event.Event) bool {
@@ -248,6 +274,77 @@ func isFinalStreamingEvent(evt *event.Event) bool {
 	// The only truly final event is runner.completion
 	// This ensures we don't miss postprocessing events (code execution, etc.)
 	return evt.IsRunnerCompletion()
+}
+
+func isStructuredTaskErrorEvent(
+	evt *event.Event,
+) bool {
+	return evt != nil && evt.IsTerminalError()
+}
+
+func taskErrorState(
+	respErr *model.ResponseError,
+) protocol.TaskState {
+	if respErr != nil &&
+		respErr.Type == agent.ErrorTypeStopAgentError {
+		return protocol.TaskStateCanceled
+	}
+	return protocol.TaskStateFailed
+}
+
+func buildTaskErrorMessage(
+	taskID string,
+	ctxID string,
+	agentEvent *event.Event,
+) *protocol.Message {
+	if agentEvent == nil || agentEvent.Response == nil {
+		return nil
+	}
+	respErr := agentEvent.Response.Error
+	if respErr == nil {
+		return nil
+	}
+
+	var parts []protocol.Part
+	if respErr.Message != "" {
+		parts = append(parts, protocol.NewTextPart(respErr.Message))
+	}
+	msg := protocol.NewMessageWithContext(
+		protocol.MessageRoleAgent,
+		parts,
+		&taskID,
+		&ctxID,
+	)
+	msg.Metadata = ia2a.WithResponseErrorMetadata(
+		msg.Metadata,
+		respErr,
+	)
+	msg.Metadata[ia2a.MessageMetadataTaskStateKey] = string(
+		taskErrorState(respErr),
+	)
+	if agentEvent.Response.ID != "" {
+		msg.MessageID = agentEvent.Response.ID
+		msg.Metadata[ia2a.MessageMetadataResponseIDKey] =
+			agentEvent.Response.ID
+	}
+	return &msg
+}
+
+func buildStructuredFailureTask(
+	taskID string,
+	ctxID string,
+	history []protocol.Message,
+	agentEvent *event.Event,
+) *protocol.Task {
+	task := protocol.NewTask(taskID, ctxID)
+	task.History = history
+	task.Status = protocol.TaskStatus{
+		State:     taskErrorState(agentEvent.Response.Error),
+		Message:   buildTaskErrorMessage(taskID, ctxID, agentEvent),
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+	task.Metadata = task.Status.Message.Metadata
+	return task
 }
 
 // handleDefaultError provides a fallback error handling mechanism
@@ -373,9 +470,30 @@ func (m *messageProcessor) ProcessMessage(
 		)
 	}
 
-	runnerOpts := []agent.RunOption{
-		agent.WithRuntimeState(message.Metadata),
-	}
+	// Apply user-defined runOptions first, then merge A2A metadata into RuntimeState.
+	// This avoids conflicts when user also sets WithRuntimeState in runOptions,
+	// since WithRuntimeState uses overwrite semantics.
+	runnerOpts := make([]agent.RunOption, 0, len(m.runOptions)+1)
+	runnerOpts = append(runnerOpts, m.runOptions...)
+	runnerOpts = append(runnerOpts, func(opts *agent.RunOptions) {
+		if len(message.Metadata) == 0 {
+			return
+		}
+		a2aState := buildRuntimeState(message.Metadata)
+		if opts.RuntimeState == nil {
+			opts.RuntimeState = a2aState
+			return
+		}
+		// Copy existing state to avoid mutating the shared map from WithRunOptions.
+		merged := make(map[string]any, len(opts.RuntimeState)+len(a2aState))
+		for k, v := range opts.RuntimeState {
+			merged[k] = v
+		}
+		for k, v := range a2aState {
+			merged[k] = v
+		}
+		opts.RuntimeState = merged
+	})
 
 	if options.Streaming {
 		return m.processStreamingMessage(ctx, userID, ctxID, &message, agentMsg, handler, runnerOpts)
@@ -410,6 +528,16 @@ func (m *messageProcessor) processStreamingMessage(
 		)
 		return m.handleError(ctx, a2aMsg, true, err)
 	}
+	cleanupTask := func() {
+		if err := handler.CleanTask(&taskID); err != nil {
+			log.WarnfContext(
+				ctx,
+				"failed to clean task %s: %v",
+				taskID,
+				err,
+			)
+		}
+	}
 
 	subscriber, err := handler.SubscribeTask(&taskID)
 	if err != nil {
@@ -419,6 +547,7 @@ func (m *messageProcessor) processStreamingMessage(
 			taskID,
 			err,
 		)
+		cleanupTask()
 		return m.handleError(ctx, a2aMsg, true, err)
 	}
 
@@ -433,6 +562,7 @@ func (m *messageProcessor) processStreamingMessage(
 			err,
 		)
 		subscriber.Close()
+		cleanupTask()
 		return m.handleError(ctx, a2aMsg, true, err)
 	}
 
@@ -487,6 +617,27 @@ func (m *messageProcessor) processAgentStreamingEvents(
 			)
 		}
 	}()
+	abortStreaming := func(err error) bool {
+		if err == nil {
+			return false
+		}
+		if errors.Is(err, context.Canceled) {
+			log.DebugfContext(ctx, "streaming stopped before completion: %v", err)
+			return true
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.WarnfContext(ctx, "streaming stopped before completion: %v", err)
+			return true
+		}
+		if handleErr := m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err); handleErr != nil {
+			log.ErrorfContext(
+				ctx,
+				"failed to handle streaming error: %v",
+				handleErr,
+			)
+		}
+		return true
+	}
 	produce := func() (*event.Event, bool) {
 		select {
 		case <-ctx.Done():
@@ -500,8 +651,16 @@ func (m *messageProcessor) processAgentStreamingEvents(
 	}
 
 	// define consume function
+	var terminalTaskError bool
 	consume := func(batch []*event.Event) (bool, error) {
-		return m.processBatchStreamingEvents(ctx, taskID, a2aMsg, batch, subscriber)
+		return m.processBatchStreamingEvents(
+			ctx,
+			taskID,
+			a2aMsg,
+			batch,
+			subscriber,
+			&terminalTaskError,
+		)
 	}
 
 	taskSubmitted := protocol.NewTaskStatusUpdateEvent(
@@ -520,14 +679,21 @@ func (m *messageProcessor) processAgentStreamingEvents(
 			"failed to send task submitted message: %v",
 			err,
 		)
-		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+		if abortStreaming(err) {
+			return
+		}
 	}
 
 	// run event tunnel
 	tunnel := newEventTunnel(defaultBatchSize, defaultFlushInterval, produce, consume)
 	if err := tunnel.Run(ctx); err != nil {
 		log.WarnfContext(ctx, "Event transfer error: %v", err)
-		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+		if abortStreaming(err) {
+			return
+		}
+	}
+	if terminalTaskError {
+		return
 	}
 
 	if m.streamingEventType != StreamingEventTypeMessage {
@@ -545,7 +711,9 @@ func (m *messageProcessor) processAgentStreamingEvents(
 				"failed to send final artifact message: %v",
 				err,
 			)
-			m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+			if abortStreaming(err) {
+				return
+			}
 		}
 	}
 
@@ -563,7 +731,9 @@ func (m *messageProcessor) processAgentStreamingEvents(
 			"failed to send task completed message: %v",
 			err,
 		)
-		m.handleStreamingProcessingError(ctx, a2aMsg, subscriber, err)
+		if abortStreaming(err) {
+			return
+		}
 	}
 }
 
@@ -574,6 +744,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 	a2aMsg *protocol.Message,
 	batch []*event.Event,
 	subscriber taskmanager.TaskSubscriber,
+	terminalTaskError *bool,
 ) (bool, error) {
 	if len(batch) == 0 {
 		log.DebugContext(ctx, "received empty batch, continuing")
@@ -618,6 +789,35 @@ func (m *messageProcessor) processBatchStreamingEvents(
 				agentEvent,
 			)
 			continue
+		}
+
+		if m.structuredTaskErrors &&
+			isStructuredTaskErrorEvent(agentEvent) {
+			task := buildStructuredFailureTask(
+				taskID,
+				*a2aMsg.ContextID,
+				nil,
+				agentEvent,
+			)
+			statusEvent := protocol.NewTaskStatusUpdateEvent(
+				taskID,
+				*a2aMsg.ContextID,
+				task.Status,
+				true,
+			)
+			statusEvent.Metadata = task.Metadata
+			if err := subscriber.Send(protocol.StreamingMessageEvent{
+				Result: &statusEvent,
+			}); err != nil {
+				return false, fmt.Errorf(
+					"failed to send task failure status: %w",
+					err,
+				)
+			}
+			if terminalTaskError != nil {
+				*terminalTaskError = true
+			}
+			return false, nil
 		}
 
 		// Convert event to A2A message for streaming
@@ -733,6 +933,23 @@ func (m *messageProcessor) processMessage(
 			continue
 		}
 
+		if m.structuredTaskErrors &&
+			isStructuredTaskErrorEvent(agentEvent) {
+			taskID := fmt.Sprintf(
+				"task-%s-%d",
+				a2aMsg.MessageID,
+				time.Now().UnixNano(),
+			)
+			return &taskmanager.MessageProcessingResult{
+				Result: buildStructuredFailureTask(
+					taskID,
+					ctxID,
+					messages,
+					agentEvent,
+				),
+			}, nil
+		}
+
 		convertedResult, err := m.eventToA2AConverter.ConvertToA2AMessage(
 			ctx, agentEvent, EventToA2AUnaryOptions{CtxID: *a2aMsg.ContextID},
 		)
@@ -764,10 +981,8 @@ func (m *messageProcessor) processMessage(
 			if task, ok := convertedResult.(*protocol.Task); ok {
 				// Extract messages from task artifacts.
 				for _, artifact := range task.Artifacts {
-					artifactMsg := protocol.NewMessage(
-						protocol.MessageRoleAgent,
-						artifact.Parts,
-					)
+					artifactMsg := protocol.NewMessage(protocol.MessageRoleAgent, artifact.Parts)
+					artifactMsg.Metadata = artifact.Metadata
 					messages = append(messages, artifactMsg)
 				}
 			}
@@ -827,56 +1042,12 @@ func (m *messageProcessor) processMessage(
 	task.Artifacts = []protocol.Artifact{{
 		ArtifactID: lastMsg.MessageID,
 		Parts:      lastMsg.Parts,
+		Metadata:   lastMsg.Metadata,
 	}}
 
 	return &taskmanager.MessageProcessingResult{
 		Result: task,
 	}, nil
-}
-
-// buildSkillsFromTools converts agent tools to AgentSkills
-func buildSkillsFromTools(agent agent.Agent, agentName, agentDesc string) []a2a.AgentSkill {
-	tools := agent.Tools()
-	if len(tools) == 0 {
-		// If no tools, create a default skill
-		return []a2a.AgentSkill{
-			{
-				Name:        agentName,
-				Description: &agentDesc,
-				InputModes:  []string{"text"},
-				OutputModes: []string{"text"},
-				Tags:        []string{"default"},
-			},
-		}
-	}
-
-	skills := make([]a2a.AgentSkill, 0, len(tools)+1)
-
-	// Add default agent skill
-	skills = append(skills, a2a.AgentSkill{
-		Name:        agentName,
-		Description: &agentDesc,
-		InputModes:  []string{"text"},
-		OutputModes: []string{"text"},
-		Tags:        []string{"default"},
-	})
-
-	// Add tool-based skills
-	for _, tool := range tools {
-		decl := tool.Declaration()
-		if decl != nil {
-			skill := a2a.AgentSkill{
-				Name:        decl.Name,
-				Description: &decl.Description,
-				InputModes:  []string{"text"},
-				OutputModes: []string{"text"},
-				Tags:        []string{"tool"},
-			}
-			skills = append(skills, skill)
-		}
-	}
-
-	return skills
 }
 
 // addTaskMetadata adds ADK-compatible metadata to task status update events.

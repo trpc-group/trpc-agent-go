@@ -79,6 +79,8 @@ type options struct {
 	ExtraFields map[string]any
 	// Variant for model-specific behavior.
 	Variant Variant
+	// variantSet tracks whether WithVariant was explicitly provided.
+	variantSet bool
 	// Batch completion window for batch processing.
 	BatchCompletionWindow openai.BatchNewParamsCompletionWindow
 	// Batch metadata for batch processing.
@@ -161,7 +163,10 @@ func WithChannelBufferSize(size int) Option {
 	}
 }
 
-// WithChatRequestCallback sets the function to be called before sending a chat request.
+// WithChatRequestCallback sets the function to be called before sending a
+// chat request. The callback runs synchronously in GenerateContent before
+// the response goroutine starts. Start your own goroutine in the callback
+// if asynchronous behavior is needed.
 func WithChatRequestCallback(fn ChatRequestCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatRequestCallback = fn
@@ -260,6 +265,7 @@ func WithExtraFields(extraFields map[string]any) Option {
 func WithVariant(variant Variant) Option {
 	return func(opts *options) {
 		opts.Variant = variant
+		opts.variantSet = true
 	}
 }
 
