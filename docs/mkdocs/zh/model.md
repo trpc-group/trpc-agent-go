@@ -1592,6 +1592,7 @@ Variant 机制是 Model 模块的重要优化，用于处理不同 OpenAI 兼容
 - DeepSeek 平台适配
 - 默认 BaseURL：`https://api.deepseek.com`
 - API Key 环境变量名：`DEEPSEEK_API_KEY`
+- 显式设置 `WithVariant(openai.VariantDeepSeek)`，或使用官方 DeepSeek API BaseURL 时，才会启用 DeepSeek 特有行为
 - 其他行为与标准 OpenAI 一致
 
 **4. VariantQwen（千问）**

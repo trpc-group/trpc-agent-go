@@ -45,11 +45,9 @@ const (
 	// defaultBatchEndpoint is the default batch endpoint.
 	defaultBatchEndpoint = openai.BatchNewParamsEndpointV1ChatCompletions
 	//nolint:gosec
-	deepSeekAPIKeyName        string = "DEEPSEEK_API_KEY"
-	defaultDeepSeekBaseURL    string = "https://api.deepseek.com"
-	deepSeekHostFragment      string = "deepseek.com"
-	deepSeekChatModelName     string = "deepseek-chat"
-	deepSeekReasonerModelName string = "deepseek-reasoner"
+	deepSeekAPIKeyName     string = "DEEPSEEK_API_KEY"
+	defaultDeepSeekBaseURL string = "https://api.deepseek.com"
+	deepSeekAPIHost        string = "api.deepseek.com"
 
 	//nolint:gosec
 	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
@@ -259,7 +257,7 @@ func New(name string, opts ...Option) *Model {
 		opt(&o)
 	}
 	if !o.variantSet {
-		o.Variant = inferVariant(name, o.BaseURL)
+		o.Variant = inferVariant(o.BaseURL)
 	}
 
 	cfg, cfgOK := variantConfigs[o.Variant]
@@ -329,21 +327,11 @@ func New(name string, opts ...Option) *Model {
 	}
 }
 
-func inferVariant(name string, baseURL string) Variant {
-	if isDeepSeekModelName(name) || isDeepSeekBaseURL(baseURL) {
+func inferVariant(baseURL string) Variant {
+	if isDeepSeekBaseURL(baseURL) {
 		return VariantDeepSeek
 	}
 	return VariantOpenAI
-}
-
-func isDeepSeekModelName(name string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(name))
-	switch normalized {
-	case deepSeekChatModelName, deepSeekReasonerModelName:
-		return true
-	default:
-		return false
-	}
 }
 
 func isDeepSeekBaseURL(raw string) bool {
@@ -353,10 +341,9 @@ func isDeepSeekBaseURL(raw string) bool {
 	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		return strings.Contains(strings.ToLower(trimmed), deepSeekHostFragment)
+		return false
 	}
-	host := strings.ToLower(parsed.Hostname())
-	return strings.Contains(host, deepSeekHostFragment)
+	return strings.EqualFold(parsed.Hostname(), deepSeekAPIHost)
 }
 
 // Info implements the model.Model interface.
