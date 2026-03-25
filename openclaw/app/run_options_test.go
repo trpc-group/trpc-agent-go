@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
@@ -839,6 +840,53 @@ knowledges:
 	require.Contains(t, err.Error(), "duplicate knowledge name: docs")
 }
 
+func TestConvertKnowledgeConfigs_SkipsEntriesWithoutComponents(t *testing.T) {
+	t.Parallel()
+
+	configs, err := convertKnowledgeConfigs([]knowledgeEntryConfig{
+		{Name: "empty"},
+		{
+			Name: "docs",
+			VectorStore: &rawYAMLNode{Node: yamlNode(t, `
+type: inmemory
+max_results: 5
+`)},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, configs, 1)
+	require.NotContains(t, configs, "empty")
+	require.Contains(t, configs, "docs")
+}
+
+func TestConvertKnowledgeConfigs_ClonesNestedNodes(t *testing.T) {
+	t.Parallel()
+
+	embedderNode := yamlNode(t, `
+type: openai
+model: text-embedding-3-small
+`)
+	vectorStoreNode := yamlNode(t, `
+type: inmemory
+max_results: 5
+`)
+
+	configs, err := convertKnowledgeConfigs([]knowledgeEntryConfig{{
+		Name:        "docs",
+		Embedder:    &rawYAMLNode{Node: embedderNode},
+		VectorStore: &rawYAMLNode{Node: vectorStoreNode},
+	}})
+	require.NoError(t, err)
+
+	mappingValue(embedderNode, "model").Value = "mutated-model"
+	mappingValue(vectorStoreNode, "max_results").Value = "99"
+
+	gotEmbedder := mappingValue(configs["docs"], "embedder")
+	gotVectorStore := mappingValue(configs["docs"], "vector_store")
+	require.Equal(t, "text-embedding-3-small", mappingValue(gotEmbedder, "model").Value)
+	require.Equal(t, "5", mappingValue(gotVectorStore, "max_results").Value)
+}
+
 func TestParseRunOptions_DebugRecorder_ConfigApplied(t *testing.T) {
 	t.Parallel()
 
@@ -936,4 +984,19 @@ func writeTempConfig(t *testing.T, body string) string {
 	path := filepath.Join(dir, "openclaw.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	return path
+}
+
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil {
+		return nil
+	}
+	if node != nil && node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		node = node.Content[0]
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }

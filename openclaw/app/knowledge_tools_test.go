@@ -158,6 +158,19 @@ func TestBuildKnowledgeBase_NilNodeReturnsNil(t *testing.T) {
 	require.Nil(t, kb)
 }
 
+func TestBuildKnowledgeBase_DecodeStrictFailure(t *testing.T) {
+	t.Parallel()
+
+	_, err := buildKnowledgeBase(yamlNode(t, `
+unexpected: true
+vector_store:
+  type: inmemory
+`))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decode failed")
+	require.Contains(t, err.Error(), "field unexpected not found")
+}
+
 func TestBuildKnowledgeEmbedder_UnsupportedTypeFails(t *testing.T) {
 	t.Parallel()
 
@@ -303,4 +316,49 @@ vector_store:
 
 	req := runAgentAndCapture(t, agt, mdl, nil)
 	require.Contains(t, req.Tools, "knowledge_search")
+}
+
+func TestNewAgent_MultipleKnowledgeConfigsRegisterNamedTools(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: t.TempDir(),
+		StateDir:   t.TempDir(),
+		KnowledgesConfig: map[string]*yaml.Node{
+			"docs": yamlNode(t, `
+vector_store:
+  type: inmemory
+`),
+			"faq": yamlNode(t, `
+vector_store:
+  type: inmemory
+`),
+		},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(t, agt, mdl, nil)
+	require.Contains(t, req.Tools, "docs_knowledge_search")
+	require.Contains(t, req.Tools, "faq_knowledge_search")
+}
+
+func TestNewAgent_InvalidKnowledgeConfigReturnsError(t *testing.T) {
+	t.Parallel()
+
+	_, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: t.TempDir(),
+		StateDir:   t.TempDir(),
+		KnowledgesConfig: map[string]*yaml.Node{
+			"docs": yamlNode(t, `
+unexpected: true
+vector_store:
+  type: inmemory
+`),
+		},
+	}, nil, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `knowledge "docs" config invalid`)
 }
