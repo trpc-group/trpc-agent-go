@@ -84,6 +84,23 @@ a2a:
 	require.Equal(t, "sandbox subagent", opts.A2ADescription)
 }
 
+func TestParseRunOptions_MemoryBackendFileFromConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(
+		t,
+		"memory:\n"+
+			"  backend: file\n"+
+			"  auto:\n"+
+			"    enabled: true\n",
+	)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, memoryBackendFile, opts.MemoryBackend)
+	require.True(t, opts.MemoryAutoEnabled)
+}
+
 func TestParseRunOptions_A2AFlags(t *testing.T) {
 	t.Parallel()
 

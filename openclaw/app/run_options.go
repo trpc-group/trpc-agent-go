@@ -42,6 +42,7 @@ const (
 	sessionBackendPostgres   = "postgres"
 	sessionBackendClickHouse = "clickhouse"
 
+	memoryBackendFile      = "file"
 	memoryBackendInMemory  = "inmemory"
 	memoryBackendRedis     = "redis"
 	memoryBackendSQLite    = "sqlite"
@@ -614,7 +615,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.MemoryBackend,
 		"memory-backend",
 		memoryBackendInMemory,
-		"Memory backend: inmemory|redis|sqlite|"+
+		"Memory backend: file|inmemory|redis|sqlite|"+
 			"sqlitevec(requires openclaw_sqlitevec build tag)|"+
 			"mysql|postgres|pgvector",
 	)
@@ -1789,6 +1790,7 @@ func finalizeRunOptions(opts *runOptions) error {
 		return err
 	}
 	opts.SkillsLoadMode = mode
+	opts.MemoryBackend = resolveMemoryBackendType(opts.MemoryBackend)
 	opts.AdminAddr = strings.TrimSpace(opts.AdminAddr)
 	if opts.AdminEnabled && opts.AdminAddr == "" {
 		opts.AdminAddr = defaultAdminAddr
