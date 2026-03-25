@@ -22,18 +22,6 @@ func TestWithInsecure(t *testing.T) {
 	assert.True(t, cfg.insecure)
 }
 
-func TestWithSecure(t *testing.T) {
-	cfg := &config{insecure: true}
-	WithSecure()(cfg)
-	assert.False(t, cfg.insecure)
-}
-
-func TestWithSpanProcessorMode(t *testing.T) {
-	cfg := &config{}
-	WithSpanProcessorMode(SpanProcessorModeSimple)(cfg)
-	assert.Equal(t, SpanProcessorModeSimple, cfg.spanProcessorMode)
-}
-
 func TestWithObservationLeafValueMaxBytes_SetsPointer(t *testing.T) {
 	cfg := &config{}
 	WithObservationLeafValueMaxBytes(123)(cfg)
@@ -64,20 +52,18 @@ func TestNewConfigFromEnv(t *testing.T) {
 				"LANGFUSE_HOST":       "https://test.langfuse.com",
 			},
 			expected: &config{
-				secretKey:         "test-secret",
-				publicKey:         "test-public",
-				host:              "https://test.langfuse.com",
-				spanProcessorMode: SpanProcessorModeBatch,
+				secretKey: "test-secret",
+				publicKey: "test-public",
+				host:      "https://test.langfuse.com",
 			},
 		},
 		{
 			name:    "without environment variables (defaults)",
 			envVars: map[string]string{},
 			expected: &config{
-				secretKey:         "",
-				publicKey:         "",
-				host:              "",
-				spanProcessorMode: SpanProcessorModeBatch,
+				secretKey: "",
+				publicKey: "",
+				host:      "",
 			},
 		},
 		{
@@ -86,10 +72,9 @@ func TestNewConfigFromEnv(t *testing.T) {
 				"LANGFUSE_SECRET_KEY": "custom-secret",
 			},
 			expected: &config{
-				secretKey:         "custom-secret",
-				publicKey:         "",
-				host:              "",
-				spanProcessorMode: SpanProcessorModeBatch,
+				secretKey: "custom-secret",
+				publicKey: "",
+				host:      "",
 			},
 		},
 	}
@@ -231,10 +216,4 @@ func TestGetEnv(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
-}
-
-func TestValidateSpanProcessorMode(t *testing.T) {
-	assert.NoError(t, validateSpanProcessorMode(SpanProcessorModeBatch))
-	assert.NoError(t, validateSpanProcessorMode(SpanProcessorModeSimple))
-	assert.Error(t, validateSpanProcessorMode(SpanProcessorMode("unknown")))
 }

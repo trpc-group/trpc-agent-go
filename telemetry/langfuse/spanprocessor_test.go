@@ -21,7 +21,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// dummyExporter implements sdktrace.SpanExporter for testing.
+// dummyExporter implements sdktrace.SpanExporter for testing
 type dummyExporter struct{}
 
 func (d *dummyExporter) ExportSpans(_ context.Context, _ []sdktrace.ReadOnlySpan) error { return nil }
@@ -51,8 +51,7 @@ func (e *recordingExporter) snapshot() []sdktrace.ReadOnlySpan {
 
 func TestNewSpanProcessor(t *testing.T) {
 	exp := &dummyExporter{}
-	sp, err := newSpanProcessor(exp, SpanProcessorModeBatch)
-	require.NoError(t, err)
+	sp := newSpanProcessor(exp)
 	if sp == nil {
 		t.Fatalf("newSpanProcessor returned nil")
 	}
@@ -69,8 +68,7 @@ func TestNewSpanProcessor_CopiesBaggageToSpanAttributes(t *testing.T) {
 	ctx = baggage.ContextWithBaggage(ctx, b)
 
 	exp := &recordingExporter{}
-	sp, err := newSpanProcessor(exp, SpanProcessorModeBatch)
-	require.NoError(t, err)
+	sp := newSpanProcessor(exp)
 
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
 	defer func() { _ = tp.Shutdown(context.Background()) }()
@@ -98,8 +96,7 @@ func TestNewSpanProcessor_DefaultFilter_IgnoresNonLangfuseKeys(t *testing.T) {
 	ctx = baggage.ContextWithBaggage(ctx, b)
 
 	exp := &recordingExporter{}
-	sp, err := newSpanProcessor(exp, SpanProcessorModeBatch)
-	require.NoError(t, err)
+	sp := newSpanProcessor(exp)
 
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
 	defer func() { _ = tp.Shutdown(context.Background()) }()
@@ -117,8 +114,8 @@ func TestNewSpanProcessor_DefaultFilter_IgnoresNonLangfuseKeys(t *testing.T) {
 	assert.NotContains(t, spans[0].Attributes(), unwanted)
 }
 
-func TestBaggageSpanProcessor_NilNext_Noops(t *testing.T) {
-	p := &baggageSpanProcessor{next: nil}
+func TestBaggageBatchSpanProcessor_NilNext_Noops(t *testing.T) {
+	p := &baggageBatchSpanProcessor{next: nil}
 	ctx := context.Background()
 
 	require.NoError(t, p.Shutdown(ctx))
