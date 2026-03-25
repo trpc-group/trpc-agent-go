@@ -12,6 +12,7 @@ package langfuse
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	baselangfuse "trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
@@ -132,6 +133,71 @@ backend: langfuse
 	assert.True(t, enabled)
 }
 
+func TestLoadConfigFromFile_ReturnsReadError(t *testing.T) {
+	_, err := loadConfigFromFile(filepath.Join(t.TempDir(), "missing.yaml"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read config")
+}
+
+func TestLoadConfigFromFile_ReturnsDecodeError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "langfuse.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("enabled: ["), 0o644))
+
+	_, err := loadConfigFromFile(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode config")
+}
+
+func TestBuildStartOptions_AppliesAllConfiguredFields(t *testing.T) {
+	insecure := true
+	maxBytes := 256
+
+	opts, err := buildStartOptions(langfuseConfig{
+		PublicKey:                    "pk",
+		SecretKey:                    "sk",
+		Host:                         "localhost:3000",
+		Insecure:                     &insecure,
+		ObservationLeafValueMaxBytes: &maxBytes,
+		Processor:                    "batch",
+	})
+	require.NoError(t, err)
+	require.Len(t, opts, 6)
+
+	cfg := applyBaseLangfuseOptions(t, opts)
+	assert.Equal(t, "pk", cfg.FieldByName("publicKey").String())
+	assert.Equal(t, "sk", cfg.FieldByName("secretKey").String())
+	assert.Equal(t, "localhost:3000", cfg.FieldByName("host").String())
+	assert.True(t, cfg.FieldByName("insecure").Bool())
+	assert.Equal(t, string(baselangfuse.SpanProcessorModeBatch), cfg.FieldByName("spanProcessorMode").String())
+
+	maxField := cfg.FieldByName("maxObservationLeafValueBytes")
+	if assert.False(t, maxField.IsNil()) {
+		assert.EqualValues(t, maxBytes, maxField.Elem().Int())
+	}
+}
+
+func TestBuildStartOptions_UsesSecureModeWhenConfigured(t *testing.T) {
+	insecure := false
+
+	opts, err := buildStartOptions(langfuseConfig{
+		Insecure:  &insecure,
+		Processor: "simple",
+	})
+	require.NoError(t, err)
+	require.Len(t, opts, 2)
+
+	cfg := applyBaseLangfuseOptions(t, opts)
+	assert.False(t, cfg.FieldByName("insecure").Bool())
+	assert.Equal(t, string(baselangfuse.SpanProcessorModeSimple), cfg.FieldByName("spanProcessorMode").String())
+	assert.True(t, cfg.FieldByName("maxObservationLeafValueBytes").IsNil())
+}
+
+func TestBuildStartOptions_ReturnsErrorForInvalidProcessor(t *testing.T) {
+	_, err := buildStartOptions(langfuseConfig{Processor: "invalid"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported processor")
+}
+
 func TestResolveProcessorMode(t *testing.T) {
 	mode, err := resolveProcessorMode("")
 	require.NoError(t, err)
@@ -143,4 +209,23 @@ func TestResolveProcessorMode(t *testing.T) {
 
 	_, err = resolveProcessorMode("unknown")
 	require.Error(t, err)
+}
+
+func TestGetBoolEnv_ReturnsErrorForInvalidValue(t *testing.T) {
+	t.Setenv(envTelemetryEnabled, "definitely-not-bool")
+
+	_, err := getBoolEnv(envTelemetryEnabled)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), envTelemetryEnabled)
+}
+
+func applyBaseLangfuseOptions(t *testing.T, opts []baselangfuse.Option) reflect.Value {
+	t.Helper()
+	require.NotEmpty(t, opts)
+
+	cfgPtr := reflect.New(reflect.TypeOf(opts[0]).In(0).Elem())
+	for _, opt := range opts {
+		reflect.ValueOf(opt).Call([]reflect.Value{cfgPtr})
+	}
+	return cfgPtr.Elem()
 }
