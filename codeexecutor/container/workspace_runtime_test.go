@@ -1631,8 +1631,8 @@ func TestCollectOutputs_SaveInlineLimits(t *testing.T) {
 	mf, err := rt.CollectOutputs(ctx, ws, codeexecutor.OutputSpec{
 		Globs:         []string{"out/*.txt"},
 		MaxFiles:      1,
-		MaxFileBytes:  4,
-		MaxTotalBytes: 8,
+		MaxFileBytes:  16,
+		MaxTotalBytes: 32,
 		Inline:        true,
 		Save:          true,
 		NameTemplate:  "prefix-",
@@ -1644,8 +1644,79 @@ func TestCollectOutputs_SaveInlineLimits(t *testing.T) {
 	require.Equal(t, "prefix-out/a.txt", mf.Files[0].SavedAs)
 	require.NotZero(t, mf.Files[0].Version)
 	require.NotEmpty(t, mf.Files[0].MIMEType)
-	require.Equal(t, 4, len(mf.Files[0].Content))
+	require.Equal(t, 10, len(mf.Files[0].Content))
 	require.Equal(t, 1, calls)
+}
+
+func TestCollectOutputs_SaveTruncatedFileErrors(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf,
+				"/ws/out/a.txt\n", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.Header().Set(
+				"X-Docker-Container-Path-Stat",
+				b64PathStat+b64PathStat2+b64PathStat3,
+			)
+			var buf bytes.Buffer
+			tw := tar.NewWriter(&buf)
+			payload := strings.Repeat("Z", 10)
+			_ = tw.WriteHeader(&tar.Header{
+				Name: "file",
+				Mode: 0o644,
+				Size: int64(len(payload)),
+			})
+			_, _ = tw.Write([]byte(payload))
+			_ = tw.Close()
+			_, _ = w.Write(buf.Bytes())
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	svc := &artMem{}
+	ctx := codeexecutor.WithArtifactService(
+		context.Background(), svc,
+	)
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+	ws := codeexecutor.Workspace{ID: "wCO", Path: "/ws"}
+	_, err := rt.CollectOutputs(ctx, ws, codeexecutor.OutputSpec{
+		Globs:         []string{"out/*.txt"},
+		MaxFiles:      1,
+		MaxFileBytes:  4,
+		MaxTotalBytes: 8,
+		Inline:        true,
+		Save:          true,
+		NameTemplate:  "prefix-",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot save truncated output file")
 }
 
 func TestWorkspaceRuntime_StageDirectory_FallbackTarCopy_ReadOnly(t *testing.T) {

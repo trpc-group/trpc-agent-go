@@ -48,6 +48,10 @@ type ProgramLog struct {
 }
 
 // ProgramSession exposes a running interactive program session.
+//
+// Implementations are expected to be safe for concurrent use by tool-layer
+// callers. In particular, Poll, Log, Write, Kill, Close, and any optional
+// state/result helpers may be invoked concurrently for the same session.
 type ProgramSession interface {
 	ID() string
 	Poll(limit *int) ProgramPoll
@@ -55,6 +59,19 @@ type ProgramSession interface {
 	Write(data string, newline bool) error
 	Kill(grace time.Duration) error
 	Close() error
+}
+
+// ProgramState captures non-streaming session status without advancing any
+// incremental output cursor.
+type ProgramState struct {
+	Status   string
+	ExitCode *int
+}
+
+// ProgramStateProvider optionally exposes non-destructive session state for
+// lifecycle management and cleanup.
+type ProgramStateProvider interface {
+	State() ProgramState
 }
 
 // ProgramResultProvider optionally exposes a final RunResult for

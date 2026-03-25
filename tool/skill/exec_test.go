@@ -306,6 +306,23 @@ func (s *stubProgramSession) Poll(limit *int) codeexecutor.ProgramPoll {
 	return poll
 }
 
+func (s *stubProgramSession) State() codeexecutor.ProgramState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.polls) == 0 {
+		return codeexecutor.ProgramState{
+			Status: codeexecutor.ProgramStatusExited,
+		}
+	}
+	poll := s.polls[0]
+	state := codeexecutor.ProgramState{Status: poll.Status}
+	if poll.ExitCode != nil {
+		code := *poll.ExitCode
+		state.ExitCode = &code
+	}
+	return state
+}
+
 func (s *stubProgramSession) Log(
 	offset *int,
 	limit *int,
@@ -506,6 +523,7 @@ func TestExecTool_SessionHelpers(t *testing.T) {
 	expired := &execSession{
 		proc:        &stubProgramSession{id: "expired"},
 		finalized:   true,
+		exitedAt:    now.Add(-2 * time.Minute),
 		finalizedAt: now.Add(-2 * time.Minute),
 	}
 	fresh := &execSession{
@@ -528,6 +546,31 @@ func TestExecTool_SessionHelpers(t *testing.T) {
 
 	_, err = execTool.removeSession("fresh")
 	require.Error(t, err)
+}
+
+func TestExecTool_SessionHelpers_ReapExitedSessionAfterTTL(t *testing.T) {
+	execTool := NewExecTool(NewRunTool(nil, nil))
+	now := time.Date(2026, 3, 6, 18, 0, 0, 0, time.UTC)
+	execTool.clock = func() time.Time { return now }
+	execTool.ttl = time.Minute
+
+	exited := &execSession{
+		proc: &stubProgramSession{
+			id: "exited",
+			polls: []codeexecutor.ProgramPoll{{
+				Status: codeexecutor.ProgramStatusExited,
+			}},
+		},
+	}
+	execTool.putSession("exited", exited)
+
+	_, err := execTool.getSession("exited")
+	require.NoError(t, err)
+
+	now = now.Add(2 * time.Minute)
+	_, err = execTool.getSession("exited")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unknown session_id")
 }
 
 func TestExecTool_WaitForProgramOutputAndSessionRunResult(t *testing.T) {
