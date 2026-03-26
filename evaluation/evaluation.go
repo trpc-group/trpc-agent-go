@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -65,6 +66,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		metricRegistry:                    opts.metricRegistry,
 		evalService:                       opts.evalService,
 		callbacks:                         opts.callbacks,
+		expectedRunner:                    opts.expectedRunner,
 		numRuns:                           opts.numRuns,
 		numRunsParallelEnabled:            opts.numRunsParallelEnabled,
 		runDetailsEnabled:                 opts.runDetailsEnabled,
@@ -72,6 +74,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		evalCaseParallelism:               opts.evalCaseParallelism,
 		evalCaseParallelInferenceEnabled:  opts.evalCaseParallelInferenceEnabled,
 		evalCaseParallelEvaluationEnabled: opts.evalCaseParallelEvaluationEnabled,
+		userSimulator:                     opts.userSimulator,
 	}
 	if a.evalService == nil {
 		serviceOpts := []service.Option{
@@ -95,6 +98,9 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		if opts.evalCaseParallelEvaluationEnabled != nil {
 			serviceOpts = append(serviceOpts, service.WithEvalCaseParallelEvaluationEnabled(*opts.evalCaseParallelEvaluationEnabled))
 		}
+		if opts.userSimulator != nil {
+			serviceOpts = append(serviceOpts, service.WithUserSimulator(opts.userSimulator))
+		}
 		evalService, err := local.New(a.runner, serviceOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("create eval service: %w", err)
@@ -116,6 +122,7 @@ type agentEvaluator struct {
 	metricRegistry                    metricregistry.Registry
 	evalService                       service.Service
 	callbacks                         *service.Callbacks
+	expectedRunner                    runner.Runner
 	numRuns                           int
 	numRunsParallelEnabled            *bool
 	runDetailsEnabled                 bool
@@ -123,6 +130,7 @@ type agentEvaluator struct {
 	evalCaseParallelism               *int
 	evalCaseParallelInferenceEnabled  *bool
 	evalCaseParallelEvaluationEnabled *bool
+	userSimulator                     usersimulation.Simulator
 }
 
 // EvaluationResult contains the aggregated outcome of running an evaluation across multiple runs.
@@ -205,6 +213,7 @@ func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 		metricRegistry:                    a.metricRegistry,
 		evalService:                       a.evalService,
 		callbacks:                         a.callbacks,
+		expectedRunner:                    a.expectedRunner,
 		numRuns:                           a.numRuns,
 		numRunsParallelEnabled:            a.numRunsParallelEnabled,
 		runDetailsEnabled:                 a.runDetailsEnabled,
@@ -212,6 +221,7 @@ func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 		evalCaseParallelism:               a.evalCaseParallelism,
 		evalCaseParallelInferenceEnabled:  a.evalCaseParallelInferenceEnabled,
 		evalCaseParallelEvaluationEnabled: a.evalCaseParallelEvaluationEnabled,
+		userSimulator:                     a.userSimulator,
 	}
 	for _, o := range opt {
 		o(callOpts)
@@ -420,6 +430,12 @@ func (a *agentEvaluator) runEvaluationOnce(
 	if opts.callbacks != nil {
 		inferenceOpts = append(inferenceOpts, service.WithCallbacks(opts.callbacks))
 	}
+	if opts.userSimulator != nil {
+		inferenceOpts = append(inferenceOpts, service.WithUserSimulator(opts.userSimulator))
+	}
+	if opts.expectedRunner != nil {
+		inferenceOpts = append(inferenceOpts, service.WithExpectedRunner(opts.expectedRunner))
+	}
 	if opts.evalCaseParallelism != nil {
 		inferenceOpts = append(inferenceOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))
 	}
@@ -448,6 +464,12 @@ func (a *agentEvaluator) runEvaluationOnce(
 	}
 	if opts.callbacks != nil {
 		evaluateOpts = append(evaluateOpts, service.WithCallbacks(opts.callbacks))
+	}
+	if opts.expectedRunner != nil {
+		evaluateOpts = append(evaluateOpts, service.WithExpectedRunner(opts.expectedRunner))
+	}
+	if len(opts.runOptions) != 0 {
+		evaluateOpts = append(evaluateOpts, service.WithRunOptions(opts.runOptions...))
 	}
 	if opts.evalCaseParallelism != nil {
 		evaluateOpts = append(evaluateOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))

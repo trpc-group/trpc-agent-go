@@ -36,6 +36,8 @@ type EvalCase struct {
 	ContextMessages []*model.Message `json:"contextMessages,omitempty"`
 	// Conversation contains the sequence of invocations.
 	Conversation []*Invocation `json:"conversation,omitempty"`
+	// ConversationScenario describes a simulated multi-turn conversation plan.
+	ConversationScenario *ConversationScenario `json:"conversationScenario,omitempty"`
 	// ActualConversation contains the actual invocations aligned by turn for evaluation.
 	ActualConversation []*Invocation `json:"actualConversation,omitempty"`
 	// SessionInput contains initialization data for the session.
@@ -43,6 +45,30 @@ type EvalCase struct {
 	// CreationTimestamp when this eval case was created.
 	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp,omitempty"`
 }
+
+// ConversationScenario describes how a simulated user should drive a conversation.
+type ConversationScenario struct {
+	// Driver selects which runner drives the simulated conversation transcript.
+	Driver ConversationScenarioDriver `json:"driver,omitempty"`
+	// StartingPrompt is an optional fixed first user input for better determinism.
+	StartingPrompt string `json:"startingPrompt,omitempty"`
+	// ConversationPlan describes the simulated user's objective and stopping condition.
+	ConversationPlan string `json:"conversationPlan,omitempty"`
+	// StopSignal ends the simulated conversation when emitted by the simulator.
+	StopSignal string `json:"stopSignal,omitempty"`
+	// MaxAllowedInvocations limits target agent turns. Zero means unlimited.
+	MaxAllowedInvocations *int `json:"maxAllowedInvocations,omitempty"`
+}
+
+// ConversationScenarioDriver selects which runner drives a simulated conversation transcript.
+type ConversationScenarioDriver string
+
+const (
+	// ConversationScenarioDriverActual uses the actual runner to drive the simulated conversation transcript.
+	ConversationScenarioDriverActual ConversationScenarioDriver = "actual"
+	// ConversationScenarioDriverExpected uses the expected runner to drive the simulated conversation transcript.
+	ConversationScenarioDriverExpected ConversationScenarioDriver = "expected"
+)
 
 // Invocation represents a single invocation in a conversation.
 type Invocation struct {

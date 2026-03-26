@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -70,6 +71,88 @@ func Inference(
 		Invocations:     responseInvocations,
 		ExecutionTraces: executionTraces,
 	}, nil
+}
+
+// InferenceWithConversationScenario executes the agent against a simulated multi-turn conversation.
+func InferenceWithConversationScenario(
+	ctx context.Context,
+	r runner.Runner,
+	simulator usersimulation.Simulator,
+	evalCaseID string,
+	scenario *evalset.ConversationScenario,
+	initialSession *evalset.SessionInput,
+	sessionID string,
+	runOptions []agent.RunOption,
+) (result *Result, err error) {
+	if r == nil {
+		return nil, errors.New("runner is nil")
+	}
+	if simulator == nil {
+		return nil, errors.New("user simulator is nil")
+	}
+	if scenario == nil {
+		return nil, errors.New("conversation scenario is nil")
+	}
+	if initialSession == nil {
+		return nil, errors.New("session input is nil")
+	}
+	conversation, err := simulator.Start(ctx, &usersimulation.StartRequest{
+		EvalCaseID:     evalCaseID,
+		Scenario:       scenario,
+		InitialSession: initialSession,
+		SessionID:      sessionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("start user simulator: %w", err)
+	}
+	if conversation == nil {
+		return nil, errors.New("user simulator conversation is nil")
+	}
+	defer func() {
+		closeErr := conversation.Close()
+		if closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close user simulator conversation: %w", closeErr))
+		}
+	}()
+	result = &Result{
+		Invocations:     make([]*evalset.Invocation, 0),
+		ExecutionTraces: make([]*trace.Trace, 0),
+	}
+	var lastTargetResponse *model.Message
+	for {
+		decision, nextErr := conversation.Next(ctx, &usersimulation.TurnRequest{LastTargetResponse: lastTargetResponse})
+		if nextErr != nil {
+			return nil, fmt.Errorf("simulate next turn: %w", nextErr)
+		}
+		if decision == nil {
+			return nil, errors.New("simulate next turn: decision is nil")
+		}
+		if decision.Stop {
+			return result, nil
+		}
+		if decision.Message == nil {
+			return nil, errors.New("simulate next turn: message is nil")
+		}
+		userMessage := *decision.Message
+		if userMessage.Role == "" {
+			userMessage.Role = model.RoleUser
+		}
+		if userMessage.Role != model.RoleUser {
+			return nil, fmt.Errorf("simulate next turn: invalid message role %q", userMessage.Role)
+		}
+		responseInvocation, executionTrace, nextErr := inferenceInvocation(ctx, r, sessionID, initialSession, &evalset.Invocation{
+			UserContent: &userMessage,
+		}, runOptions)
+		if nextErr != nil {
+			return nil, nextErr
+		}
+		if responseInvocation.FinalResponse == nil {
+			return nil, errors.New("target final response is nil")
+		}
+		result.Invocations = append(result.Invocations, responseInvocation)
+		result.ExecutionTraces = append(result.ExecutionTraces, executionTrace)
+		lastTargetResponse = responseInvocation.FinalResponse
+	}
 }
 
 // inferenceInvocation executes the agent for a single invocation.

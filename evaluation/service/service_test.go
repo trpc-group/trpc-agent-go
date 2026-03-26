@@ -41,14 +41,15 @@ func TestInferenceRequestJSONRoundTrip(t *testing.T) {
 
 func TestInferenceResultJSONRoundTrip(t *testing.T) {
 	result := &InferenceResult{
-		AppName:      "demo-app",
-		EvalSetID:    "math-basic",
-		EvalCaseID:   "case-1",
-		Inferences:   []*evalset.Invocation{{InvocationID: "inv-1"}},
-		SessionID:    "session-123",
-		UserID:       "user-123",
-		Status:       status.EvalStatusPassed,
-		ErrorMessage: "",
+		AppName:            "demo-app",
+		EvalSetID:          "math-basic",
+		EvalCaseID:         "case-1",
+		Inferences:         []*evalset.Invocation{{InvocationID: "inv-1"}},
+		ExpectedInferences: []*evalset.Invocation{{InvocationID: "expected-1"}},
+		SessionID:          "session-123",
+		UserID:             "user-123",
+		Status:             status.EvalStatusPassed,
+		ErrorMessage:       "",
 	}
 
 	data, err := json.Marshal(result)
@@ -67,6 +68,10 @@ func TestInferenceResultJSONRoundTrip(t *testing.T) {
 	assert.Len(t, decoded.Inferences, 1)
 	if len(decoded.Inferences) == 1 {
 		assert.Equal(t, "inv-1", decoded.Inferences[0].InvocationID)
+	}
+	assert.Len(t, decoded.ExpectedInferences, 1)
+	if len(decoded.ExpectedInferences) == 1 {
+		assert.Equal(t, "expected-1", decoded.ExpectedInferences[0].InvocationID)
 	}
 }
 

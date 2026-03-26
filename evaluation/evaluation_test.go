@@ -517,6 +517,47 @@ func TestAgentEvaluatorEvaluateDoesNotOverrideServiceCallOptionsByDefault(t *tes
 	assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelEvaluationEnabled)
 }
 
+func TestAgentEvaluatorEvaluatePassesExpectedRunnerToInferenceAndEvaluate(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	probeSvc := &optionProbeService{}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(registry.New()),
+		WithEvaluationService(probeSvc),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+
+	expected := stubRunner{}
+	_, err = ae.Evaluate(ctx, evalSetID, WithExpectedRunner(expected))
+	assert.NoError(t, err)
+
+	assert.NotNil(t, probeSvc.lastInferenceOptions)
+	if assert.NotNil(t, probeSvc.lastInferenceOptions) {
+		assert.Equal(t, expected, probeSvc.lastInferenceOptions.ExpectedRunner)
+	}
+	assert.NotNil(t, probeSvc.lastEvaluateOptions)
+	if assert.NotNil(t, probeSvc.lastEvaluateOptions) {
+		assert.Equal(t, expected, probeSvc.lastEvaluateOptions.ExpectedRunner)
+	}
+}
+
 func TestAgentEvaluatorClose_CollectsErrors(t *testing.T) {
 	ev, err := New(
 		"app",

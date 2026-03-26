@@ -1,0 +1,28 @@
+[
+  {
+    "metricName": "llm_rubric_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "rubrics": [
+          {
+            "id": "1",
+            "description": "The response moves the travel-planning task forward.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "Evaluate whether the assistant reply meaningfully advances the current travel-planning task. Good responses either ask for the most relevant missing details or provide a concrete recommendation when enough information is already available."
+            }
+          },
+          {
+            "id": "2",
+            "description": "The response stays relevant to the user's latest message.",
+            "type": "CONTEXT_RELEVANCE",
+            "content": {
+              "text": "Evaluate whether the reply directly addresses the user's latest message and stays focused on the business-trip planning context without adding unrelated information."
+            }
+          }
+        ]
+      }
+    }
+  }
+]
