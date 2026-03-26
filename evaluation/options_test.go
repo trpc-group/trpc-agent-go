@@ -21,6 +21,7 @@ import (
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 )
 
 type stubService struct{}
@@ -34,6 +35,22 @@ func (stubService) Evaluate(ctx context.Context, req *service.EvaluateRequest, o
 }
 
 func (stubService) Close() error {
+	return nil
+}
+
+type stubSimulator struct{}
+
+func (stubSimulator) Start(ctx context.Context, req *usersimulation.StartRequest) (usersimulation.Conversation, error) {
+	return stubConversation{}, nil
+}
+
+type stubConversation struct{}
+
+func (stubConversation) Next(ctx context.Context, req *usersimulation.TurnRequest) (*usersimulation.Decision, error) {
+	return &usersimulation.Decision{Stop: true}, nil
+}
+
+func (stubConversation) Close() error {
 	return nil
 }
 
@@ -94,6 +111,12 @@ func TestWithEvaluationService(t *testing.T) {
 	opts := newOptions(WithEvaluationService(custom))
 
 	assert.Equal(t, custom, opts.evalService)
+}
+
+func TestWithUserSimulator(t *testing.T) {
+	custom := stubSimulator{}
+	opts := newOptions(WithUserSimulator(custom))
+	assert.Equal(t, custom, opts.userSimulator)
 }
 
 func TestWithCallbacks(t *testing.T) {

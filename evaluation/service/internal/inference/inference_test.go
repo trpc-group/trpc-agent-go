@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -60,6 +62,121 @@ func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, m
 
 func (f fakeRunner) Close() error {
 	return nil
+}
+
+type scenarioRunCall struct {
+	userID                  string
+	sessionID               string
+	message                 model.Message
+	injectedContextMessages []model.Message
+}
+
+type scenarioRunner struct {
+	responses       []string
+	executionTraces []*trace.Trace
+	runErr          error
+	suppressFinal   bool
+	calls           []scenarioRunCall
+}
+
+func (s *scenarioRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
+	if s.runErr != nil {
+		return nil, s.runErr
+	}
+	var opts agent.RunOptions
+	for _, opt := range runOpts {
+		opt(&opts)
+	}
+	s.calls = append(s.calls, scenarioRunCall{
+		userID:                  userID,
+		sessionID:               sessionID,
+		message:                 message,
+		injectedContextMessages: opts.InjectedContextMessages,
+	})
+	eventCount := 0
+	if !s.suppressFinal {
+		eventCount++
+	}
+	if len(s.executionTraces) != 0 {
+		eventCount++
+	}
+	ch := make(chan *event.Event, eventCount)
+	if !s.suppressFinal {
+		content := ""
+		if len(s.responses) != 0 {
+			content = s.responses[0]
+			s.responses = s.responses[1:]
+		}
+		ch <- &event.Event{
+			InvocationID: fmt.Sprintf("generated-%d", len(s.calls)),
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{
+					{
+						Message: model.Message{Role: model.RoleAssistant, Content: content},
+					},
+				},
+			},
+		}
+	}
+	if len(s.executionTraces) != 0 {
+		executionTrace := s.executionTraces[0]
+		s.executionTraces = s.executionTraces[1:]
+		ch <- &event.Event{
+			InvocationID:   fmt.Sprintf("generated-%d", len(s.calls)),
+			ExecutionTrace: executionTrace,
+			Response: &model.Response{
+				Object: model.ObjectTypeRunnerCompletion,
+				Done:   true,
+			},
+		}
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (s *scenarioRunner) Close() error {
+	return nil
+}
+
+type stubScenarioConversation struct {
+	decisions []*usersimulation.Decision
+	requests  []*usersimulation.TurnRequest
+	nextErr   error
+	closeErr  error
+	closed    bool
+}
+
+func (s *stubScenarioConversation) Next(ctx context.Context, req *usersimulation.TurnRequest) (*usersimulation.Decision, error) {
+	s.requests = append(s.requests, req)
+	if s.nextErr != nil {
+		return nil, s.nextErr
+	}
+	if len(s.decisions) == 0 {
+		return &usersimulation.Decision{Stop: true}, nil
+	}
+	decision := s.decisions[0]
+	s.decisions = s.decisions[1:]
+	return decision, nil
+}
+
+func (s *stubScenarioConversation) Close() error {
+	s.closed = true
+	return s.closeErr
+}
+
+type stubScenarioSimulator struct {
+	startReq     *usersimulation.StartRequest
+	startErr     error
+	conversation usersimulation.Conversation
+}
+
+func (s *stubScenarioSimulator) Start(ctx context.Context, req *usersimulation.StartRequest) (usersimulation.Conversation, error) {
+	s.startReq = req
+	if s.startErr != nil {
+		return nil, s.startErr
+	}
+	return s.conversation, nil
 }
 
 func TestInferenceSuccess(t *testing.T) {
@@ -604,6 +721,107 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 	assert.Error(t, err)
 	// This ensures the parent function validates the session input.
 	_, err = Inference(ctx, &fakeRunner{}, []*evalset.Invocation{}, nil, "session", nil)
+	assert.Error(t, err)
+}
+
+func TestInferenceWithConversationScenarioSuccess(t *testing.T) {
+	systemMessage := model.NewSystemMessage("You are a helper.")
+	initialSession := &evalset.SessionInput{UserID: "target-user", State: map[string]any{"region": "cn"}}
+	trace1 := &trace.Trace{RootInvocationID: "generated-1"}
+	trace2 := &trace.Trace{RootInvocationID: "generated-2"}
+	conv := &stubScenarioConversation{
+		decisions: []*usersimulation.Decision{
+			{Message: &model.Message{Role: model.RoleUser, Content: "First user turn."}},
+			{Message: &model.Message{Content: "Second user turn."}},
+			{Stop: true},
+		},
+	}
+	simulator := &stubScenarioSimulator{conversation: conv}
+	runner := &scenarioRunner{
+		responses:       []string{"Assistant reply 1.", "Assistant reply 2."},
+		executionTraces: []*trace.Trace{trace1, trace2},
+	}
+	result, err := InferenceWithConversationScenario(
+		context.Background(),
+		runner,
+		simulator,
+		"case-1",
+		&evalset.ConversationScenario{ConversationPlan: "Finish the booking."},
+		initialSession,
+		"session-1",
+		[]agent.RunOption{agent.WithInjectedContextMessages([]model.Message{systemMessage})},
+	)
+	assert.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Len(t, result.Invocations, 2)
+	require.Len(t, result.ExecutionTraces, 2)
+	assert.Same(t, trace1, result.ExecutionTraces[0])
+	assert.Same(t, trace2, result.ExecutionTraces[1])
+	if assert.Len(t, runner.calls, 2) {
+		assert.Equal(t, "target-user", runner.calls[0].userID)
+		assert.Equal(t, "session-1", runner.calls[0].sessionID)
+		assert.Equal(t, "First user turn.", runner.calls[0].message.Content)
+		assert.Len(t, runner.calls[0].injectedContextMessages, 1)
+		assert.Equal(t, "Second user turn.", runner.calls[1].message.Content)
+	}
+	if assert.NotNil(t, simulator.startReq) {
+		assert.Equal(t, "case-1", simulator.startReq.EvalCaseID)
+		assert.Equal(t, "session-1", simulator.startReq.SessionID)
+		assert.Equal(t, initialSession, simulator.startReq.InitialSession)
+	}
+	assert.True(t, conv.closed)
+	if assert.Len(t, conv.requests, 3) {
+		assert.Nil(t, conv.requests[0].LastTargetResponse)
+		if assert.NotNil(t, conv.requests[1].LastTargetResponse) {
+			assert.Equal(t, "Assistant reply 1.", conv.requests[1].LastTargetResponse.Content)
+		}
+		if assert.NotNil(t, conv.requests[2].LastTargetResponse) {
+			assert.Equal(t, "Assistant reply 2.", conv.requests[2].LastTargetResponse.Content)
+		}
+	}
+	if assert.NotNil(t, result.Invocations[0].UserContent) {
+		assert.Equal(t, "First user turn.", result.Invocations[0].UserContent.Content)
+	}
+	if assert.NotNil(t, result.Invocations[1].UserContent) {
+		assert.Equal(t, "Second user turn.", result.Invocations[1].UserContent.Content)
+	}
+	if assert.NotNil(t, result.Invocations[0].FinalResponse) {
+		assert.Equal(t, "Assistant reply 1.", result.Invocations[0].FinalResponse.Content)
+	}
+	if assert.NotNil(t, result.Invocations[1].FinalResponse) {
+		assert.Equal(t, "Assistant reply 2.", result.Invocations[1].FinalResponse.Content)
+	}
+}
+
+func TestInferenceWithConversationScenarioValidation(t *testing.T) {
+	initialSession := &evalset.SessionInput{UserID: "target-user"}
+	scenario := &evalset.ConversationScenario{ConversationPlan: "Continue until done."}
+	systemMessage := model.NewSystemMessage("system")
+	_, err := InferenceWithConversationScenario(context.Background(), nil, &stubScenarioSimulator{}, "case", scenario, initialSession, "session", nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "runner is nil")
+	_, err = InferenceWithConversationScenario(context.Background(), &scenarioRunner{}, nil, "case", scenario, initialSession, "session", nil)
+	assert.Error(t, err)
+	_, err = InferenceWithConversationScenario(context.Background(), &scenarioRunner{}, &stubScenarioSimulator{}, "case", nil, initialSession, "session", nil)
+	assert.Error(t, err)
+	_, err = InferenceWithConversationScenario(context.Background(), &scenarioRunner{}, &stubScenarioSimulator{}, "case", scenario, nil, "session", nil)
+	assert.Error(t, err)
+	_, err = InferenceWithConversationScenario(context.Background(), &scenarioRunner{}, &stubScenarioSimulator{conversation: &stubScenarioConversation{decisions: []*usersimulation.Decision{nil}}}, "case", scenario, initialSession, "session", nil)
+	assert.Error(t, err)
+	_, err = InferenceWithConversationScenario(context.Background(), &scenarioRunner{}, &stubScenarioSimulator{conversation: &stubScenarioConversation{decisions: []*usersimulation.Decision{{Message: nil}}}}, "case", scenario, initialSession, "session", nil)
+	assert.Error(t, err)
+	_, err = InferenceWithConversationScenario(context.Background(), &scenarioRunner{}, &stubScenarioSimulator{conversation: &stubScenarioConversation{decisions: []*usersimulation.Decision{{Message: &model.Message{Role: model.RoleAssistant, Content: "bad"}}}}}, "case", scenario, initialSession, "session", nil)
+	assert.Error(t, err)
+	_, err = InferenceWithConversationScenario(
+		context.Background(),
+		&scenarioRunner{suppressFinal: true},
+		&stubScenarioSimulator{conversation: &stubScenarioConversation{decisions: []*usersimulation.Decision{{Message: &model.Message{Content: "hello"}}}}},
+		"case",
+		scenario,
+		initialSession,
+		"session",
+		[]agent.RunOption{agent.WithInjectedContextMessages([]model.Message{systemMessage})},
+	)
 	assert.Error(t, err)
 }
 

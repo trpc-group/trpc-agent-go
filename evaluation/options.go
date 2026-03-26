@@ -22,6 +22,7 @@ import (
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -37,6 +38,7 @@ type options struct {
 	metricRegistry                    metricregistry.Registry
 	evalService                       service.Service
 	expectedRunner                    runner.Runner
+	userSimulator                     usersimulation.Simulator
 	callbacks                         *service.Callbacks
 	judgeRunner                       runner.Runner
 	numRuns                           int
@@ -109,6 +111,13 @@ func WithMetricRegistry(r metricregistry.Registry) Option {
 func WithEvaluationService(s service.Service) Option {
 	return func(o *options) {
 		o.evalService = s
+	}
+}
+
+// WithUserSimulator sets the simulator used for conversation scenarios.
+func WithUserSimulator(sim usersimulation.Simulator) Option {
+	return func(o *options) {
+		o.userSimulator = sim
 	}
 }
 

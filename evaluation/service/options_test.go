@@ -21,6 +21,7 @@ import (
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -35,6 +36,22 @@ func (stubRunner) Close() error {
 	return nil
 }
 
+type stubSimulator struct{}
+
+func (stubSimulator) Start(ctx context.Context, req *usersimulation.StartRequest) (usersimulation.Conversation, error) {
+	return stubConversation{}, nil
+}
+
+type stubConversation struct{}
+
+func (stubConversation) Next(ctx context.Context, req *usersimulation.TurnRequest) (*usersimulation.Decision, error) {
+	return &usersimulation.Decision{Stop: true}, nil
+}
+
+func (stubConversation) Close() error {
+	return nil
+}
+
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := NewOptions()
 	assert.NotNil(t, opts.EvalSetManager)
@@ -43,6 +60,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.MetricRegistry)
 	assert.NotNil(t, opts.SessionIDSupplier)
 	assert.Nil(t, opts.ExpectedRunner)
+	assert.Nil(t, opts.UserSimulator)
 	assert.Nil(t, opts.Callbacks)
 	assert.Equal(t, runtime.GOMAXPROCS(0), opts.EvalCaseParallelism)
 	assert.False(t, opts.EvalCaseParallelInferenceEnabled)
@@ -84,6 +102,12 @@ func TestWithSessionIDSupplier(t *testing.T) {
 	opts := NewOptions(WithSessionIDSupplier(supplier))
 	assert.Equal(t, "session-custom", opts.SessionIDSupplier(context.Background()))
 	assert.True(t, called)
+}
+
+func TestWithUserSimulator(t *testing.T) {
+	custom := stubSimulator{}
+	opts := NewOptions(WithUserSimulator(custom))
+	assert.Equal(t, custom, opts.UserSimulator)
 }
 
 func TestWithCallbacks(t *testing.T) {
