@@ -65,7 +65,7 @@ func (q *Queue) Drain() []model.Message {
 	return drained
 }
 
-// Close rejects future enqueues and clears any remaining messages.
+// Close rejects future enqueues.
 func (q *Queue) Close() {
 	if q == nil {
 		return
@@ -74,7 +74,6 @@ func (q *Queue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.closed = true
-	q.messages = nil
 }
 
 // Attach binds a queue to the invocation.
@@ -106,8 +105,8 @@ func Drain(inv *agent.Invocation) []model.Message {
 	return queue.Drain()
 }
 
-// Clear closes the queue and removes it from the invocation.
-func Clear(inv *agent.Invocation) {
+// Close rejects future enqueues for the invocation queue.
+func Close(inv *agent.Invocation) {
 	if inv == nil {
 		return
 	}
@@ -118,5 +117,13 @@ func Clear(inv *agent.Invocation) {
 	if ok && queue != nil {
 		queue.Close()
 	}
+}
+
+// Clear closes the queue and removes it from the invocation.
+func Clear(inv *agent.Invocation) {
+	if inv == nil {
+		return
+	}
+	Close(inv)
 	inv.DeleteState(StateKeyQueuedUserMessages)
 }

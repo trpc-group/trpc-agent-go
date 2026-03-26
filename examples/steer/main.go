@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -59,6 +60,7 @@ var (
 
 const (
 	fallbackModelName = "gpt-4.1-mini"
+	openAIAPIKeyEnv   = "OPENAI_API_KEY"
 
 	appName   = "steer-demo"
 	agentName = "steer-agent"
@@ -116,8 +118,8 @@ func main() {
 }
 
 func (d *steerDemo) run(ctx context.Context) error {
-	if os.Getenv("OPENAI_API_KEY") == "" {
-		return fmt.Errorf("OPENAI_API_KEY is not set")
+	if os.Getenv(openAIAPIKeyEnv) == "" {
+		return errors.New(openAIAPIKeyEnv + " is not set")
 	}
 
 	modelInstance := openai.New(d.modelName)
@@ -230,7 +232,7 @@ func (d *steerDemo) printRun(eventChan <-chan *event.Event) error {
 			continue
 		}
 		if evt.Error != nil {
-			return fmt.Errorf(evt.Error.Message)
+			return fmt.Errorf("%s", evt.Error.Message)
 		}
 
 		if evt.IsRunnerCompletion() {

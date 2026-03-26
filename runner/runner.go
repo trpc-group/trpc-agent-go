@@ -42,6 +42,9 @@ import (
 // Author types for events.
 const (
 	authorUser = "user"
+
+	errMsgEmptyRequestID = "runner: empty request id"
+	errMsgNilCancelFunc  = "runner: nil cancel function"
 )
 
 var (
@@ -580,7 +583,7 @@ func (r *runner) EnqueueUserMessage(
 	message model.Message,
 ) error {
 	if requestID == "" {
-		return fmt.Errorf("runner: empty request id")
+		return fmt.Errorf(errMsgEmptyRequestID)
 	}
 
 	message, err := normalizeQueuedUserMessage(message)
@@ -637,10 +640,10 @@ func (r *runner) registerRun(
 	queue *steer.Queue,
 ) (*runHandle, error) {
 	if requestID == "" {
-		return nil, fmt.Errorf("runner: empty request id")
+		return nil, fmt.Errorf(errMsgEmptyRequestID)
 	}
 	if cancel == nil {
-		return nil, fmt.Errorf("runner: nil cancel function")
+		return nil, fmt.Errorf(errMsgNilCancelFunc)
 	}
 
 	r.runsMu.Lock()
@@ -811,6 +814,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 			log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
 		}
 		// Agent event stream completed.
+		steer.Close(loop.invocation)
 		r.safeEmitRunnerCompletion(ctx, loop)
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)

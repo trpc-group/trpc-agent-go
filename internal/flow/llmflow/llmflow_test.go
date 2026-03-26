@@ -311,6 +311,45 @@ func TestFlowEventWaitTimeout(t *testing.T) {
 	require.LessOrEqual(t, timeout, 25*time.Millisecond)
 }
 
+func TestRun_ClosesQueuedUserMessagesAfterTerminalStep(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-close-steer"),
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationModel(&mockModel{
+			responses: []*model.Response{
+				{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("done")},
+					},
+				},
+			},
+		}),
+	)
+
+	queue := steer.NewQueue()
+	steer.Attach(inv, queue)
+
+	eventChan, err := f.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	for evt := range eventChan {
+		if evt == nil || !evt.RequiresCompletion {
+			continue
+		}
+		require.NoError(
+			t,
+			inv.NotifyCompletion(
+				context.Background(),
+				agent.GetAppendEventNoticeKey(evt.ID),
+			),
+		)
+	}
+
+	require.False(t, queue.Enqueue(model.NewUserMessage("late")))
+}
+
 // TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled verifies tool call arguments are repaired when enabled.
 func TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled(t *testing.T) {
 	f := New(nil, nil, Options{})

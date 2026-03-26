@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	runnerlog "trpc.group/trpc-go/trpc-agent-go/log"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -576,6 +577,29 @@ func TestRunner_EnqueueUserMessage_ConsumesAtSafeBoundary(
 		secondRequest.messages[toolResultIdx].Content,
 		"tool result for alpha",
 	)
+}
+
+func TestRunner_EnqueueUserMessage_ClosingRunReturnsNotFound(
+	t *testing.T,
+) {
+	rr := &runner{}
+	queue := steer.NewQueue()
+
+	_, err := rr.registerRun(
+		"req-closing",
+		RunStatus{},
+		func() {},
+		queue,
+	)
+	require.NoError(t, err)
+
+	queue.Close()
+
+	err = rr.EnqueueUserMessage(
+		"req-closing",
+		model.NewUserMessage("hello"),
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
 }
 
 func runRunnerWithTypedStructuredOutput(

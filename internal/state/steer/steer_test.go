@@ -56,6 +56,23 @@ func TestAttachDrainAndClear(t *testing.T) {
 	require.Nil(t, Drain(invocation))
 }
 
+func TestClose_RejectsFutureEnqueueAndPreservesQueuedMessages(t *testing.T) {
+	invocation := agent.NewInvocation()
+	queue := NewQueue()
+
+	Attach(invocation, queue)
+	require.True(t, queue.Enqueue(model.NewUserMessage("hello")))
+
+	Close(invocation)
+
+	require.True(t, IsAttached(invocation))
+	require.False(t, queue.Enqueue(model.NewUserMessage("later")))
+
+	drained := Drain(invocation)
+	require.Len(t, drained, 1)
+	require.Equal(t, "hello", drained[0].Content)
+}
+
 func TestNilSafety(t *testing.T) {
 	var (
 		invocation *agent.Invocation
