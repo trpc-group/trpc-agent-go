@@ -260,6 +260,11 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 	return processor
 }
 
+type contentRequestRuntimeState struct {
+	skipHistory          bool
+	preassembledMessages []model.Message
+}
+
 // ProcessRequest implements the flow.RequestProcessor interface.
 // It handles adding messages from the session events to the request.
 func (p *ContentRequestProcessor) ProcessRequest(
@@ -275,112 +280,31 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		)
 		return
 	}
-
 	if invocation == nil {
 		return
 	}
-	invocation.DeleteState(contentHasCompactedToolResultsStateKey)
 
-	// Honor per-invocation include_contents flag from runtime state when
-	// present. This allows callers (including GraphAgent subgraphs) to
-	// disable seeding session history for specific runs without changing
-	// the processor configuration.
-	includeMode := ""
-	subgraphMessageSource := ""
-	subgraphMessageSourceExplicit := false
-	if invocation.RunOptions.RuntimeState != nil {
-		if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents]; ok {
-			if s, ok2 := v.(string); ok2 {
-				includeMode = strings.ToLower(s)
-			}
-		}
-		if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeySubgraphMessageSource]; ok {
-			if s, ok2 := v.(string); ok2 {
-				subgraphMessageSource = strings.ToLower(s)
-			}
-		}
-		if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeySubgraphMessageSourceExplicit]; ok {
-			if b, ok2 := v.(bool); ok2 {
-				subgraphMessageSourceExplicit = b
-			}
-		}
-	}
-	skipHistory := includeMode == "none"
+	invocation.DeleteState(contentHasCompactedToolResultsStateKey)
+	state := p.getContentRequestRuntimeState(invocation)
+	allowInvocationMessage := len(state.preassembledMessages) == 0
 
 	p.injectInjectedContextMessages(invocation, req)
-	preassembledMessages := p.getPreassembledGraphMessages(
+	req.Messages = append(req.Messages, state.preassembledMessages...)
+
+	needToAddInvocationMessage := p.appendSessionRequestMessages(
+		ctx,
 		invocation,
-		subgraphMessageSource,
-		subgraphMessageSourceExplicit,
+		req,
+		state.skipHistory,
+		allowInvocationMessage,
 	)
-	if len(preassembledMessages) > 0 {
-		req.Messages = append(req.Messages, preassembledMessages...)
-	}
-
-	// Append per-filter messages from session events when allowed.
-	needToAddInvocationMessage := true
-	if invocation.Session != nil {
-		var messages []model.Message
-		var summaryUpdatedAt time.Time
-		var summaryMsg *model.Message
-		// Skip session summary when include_contents=none, but still get current
-		// invocation's events (tool calls/results) to maintain ReAct loop context.
-		if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
-			// Fetch session summary early so we can insert it after other
-			// semi-stable system blocks (for example, preloaded memories).
-			summaryMsg, summaryUpdatedAt = p.getSessionSummaryMessage(invocation)
-		}
-
-		// Preload memories into system prompt if configured.
-		// PreloadMemory: 0 = disabled, -1 = all, N > 0 = adaptive preload budget.
-		if p.PreloadMemory != 0 && invocation.MemoryService != nil {
-			if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
-				p.injectSystemContextMessage(req, *memMsg)
-			}
-		}
-
-		if summaryMsg != nil {
-			invocation.SetState(contentHasSessionSummaryStateKey, true)
-			p.injectSystemContextMessage(req, *summaryMsg)
-		}
-
-		if skipHistory {
-			// When include_contents=none, only get events from current invocation
-			// to preserve tool call history within the current ReAct loop.
-			// This fixes the infinite loop issue where the agent doesn't see its
-			// own tool calls when running as an isolated subgraph.
-			messages = p.getCurrentInvocationMessagesWithOptions(
-				invocation,
-				len(preassembledMessages) == 0,
-			)
-		} else {
-			messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
-			if p.hasCompactedCurrentInvocationToolResults(
-				invocation,
-				summaryUpdatedAt,
-			) {
-				invocation.SetState(
-					contentHasCompactedToolResultsStateKey,
-					true,
-				)
-			}
-		}
-		req.Messages = append(req.Messages, messages...)
-		needToAddInvocationMessage = len(messages) == 0
-	}
-
-	if model.HasPayload(invocation.Message) &&
-		needToAddInvocationMessage &&
-		len(preassembledMessages) == 0 {
-		msg := annotateUserMessageWithAttachedFiles(invocation.Message)
-		req.Messages = append(req.Messages, msg)
-		log.DebugfContext(
-			ctx,
-			"Content request processor: added invocation message with "+
-				"role %s (no session or empty session)",
-			invocation.Message.Role,
-		)
-	}
+	p.appendInvocationMessageIfNeeded(
+		ctx,
+		invocation,
+		req,
+		needToAddInvocationMessage,
+		allowInvocationMessage,
+	)
 
 	// Send a preprocessing event.
 	agent.EmitEvent(ctx, invocation, ch, event.New(
@@ -388,6 +312,174 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingContent),
 	))
+}
+
+func (p *ContentRequestProcessor) getContentRequestRuntimeState(
+	invocation *agent.Invocation,
+) contentRequestRuntimeState {
+	runtimeState := invocation.RunOptions.RuntimeState
+	includeMode := runtimeStateString(runtimeState, graph.CfgKeyIncludeContents)
+	subgraphMessageSource := runtimeStateString(
+		runtimeState,
+		graph.CfgKeySubgraphMessageSource,
+	)
+	subgraphMessageSourceExplicit := runtimeStateBool(
+		runtimeState,
+		graph.CfgKeySubgraphMessageSourceExplicit,
+	)
+	return contentRequestRuntimeState{
+		skipHistory: includeMode == "none",
+		preassembledMessages: p.getPreassembledGraphMessages(
+			invocation,
+			subgraphMessageSource,
+			subgraphMessageSourceExplicit,
+		),
+	}
+}
+
+func runtimeStateString(runtimeState map[string]any, key string) string {
+	if runtimeState == nil {
+		return ""
+	}
+	v, ok := runtimeState[key]
+	if !ok {
+		return ""
+	}
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(s)
+}
+
+func runtimeStateBool(runtimeState map[string]any, key string) bool {
+	if runtimeState == nil {
+		return false
+	}
+	v, ok := runtimeState[key]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false
+	}
+	return b
+}
+
+func (p *ContentRequestProcessor) appendSessionRequestMessages(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	skipHistory bool,
+	allowInvocationMessage bool,
+) bool {
+	if invocation.Session == nil {
+		return true
+	}
+
+	summaryMsg, summaryUpdatedAt := p.getActiveSessionSummary(invocation, skipHistory)
+	p.injectPreloadMemoryMessage(ctx, invocation, req)
+	p.injectSessionSummaryMessage(invocation, req, summaryMsg)
+
+	messages := p.getSessionRequestMessages(
+		invocation,
+		skipHistory,
+		summaryUpdatedAt,
+		allowInvocationMessage,
+	)
+	req.Messages = append(req.Messages, messages...)
+	return len(messages) == 0
+}
+
+func (p *ContentRequestProcessor) getActiveSessionSummary(
+	invocation *agent.Invocation,
+	skipHistory bool,
+) (*model.Message, time.Time) {
+	if skipHistory || !p.AddSessionSummary ||
+		p.TimelineFilterMode != TimelineFilterAll {
+		return nil, time.Time{}
+	}
+	return p.getSessionSummaryMessage(invocation)
+}
+
+func (p *ContentRequestProcessor) injectPreloadMemoryMessage(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) {
+	if p.PreloadMemory == 0 || invocation.MemoryService == nil {
+		return
+	}
+	if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
+		p.injectSystemContextMessage(req, *memMsg)
+	}
+}
+
+func (p *ContentRequestProcessor) injectSessionSummaryMessage(
+	invocation *agent.Invocation,
+	req *model.Request,
+	summaryMsg *model.Message,
+) {
+	if summaryMsg == nil {
+		return
+	}
+	invocation.SetState(contentHasSessionSummaryStateKey, true)
+	p.injectSystemContextMessage(req, *summaryMsg)
+}
+
+func (p *ContentRequestProcessor) getSessionRequestMessages(
+	invocation *agent.Invocation,
+	skipHistory bool,
+	summaryUpdatedAt time.Time,
+	allowInvocationMessage bool,
+) []model.Message {
+	if skipHistory {
+		// When include_contents=none, only get events from current invocation
+		// to preserve tool call history within the current ReAct loop.
+		// This fixes the infinite loop issue where the agent doesn't see its
+		// own tool calls when running as an isolated subgraph.
+		return p.getCurrentInvocationMessagesWithOptions(
+			invocation,
+			allowInvocationMessage,
+		)
+	}
+
+	messages := p.getIncrementMessages(invocation, summaryUpdatedAt)
+	p.markCompactedCurrentInvocationToolResults(invocation, summaryUpdatedAt)
+	return messages
+}
+
+func (p *ContentRequestProcessor) markCompactedCurrentInvocationToolResults(
+	invocation *agent.Invocation,
+	summaryUpdatedAt time.Time,
+) {
+	if !p.hasCompactedCurrentInvocationToolResults(invocation, summaryUpdatedAt) {
+		return
+	}
+	invocation.SetState(contentHasCompactedToolResultsStateKey, true)
+}
+
+func (p *ContentRequestProcessor) appendInvocationMessageIfNeeded(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	needToAddInvocationMessage bool,
+	allowInvocationMessage bool,
+) {
+	if !allowInvocationMessage ||
+		!needToAddInvocationMessage ||
+		!model.HasPayload(invocation.Message) {
+		return
+	}
+	msg := annotateUserMessageWithAttachedFiles(invocation.Message)
+	req.Messages = append(req.Messages, msg)
+	log.DebugfContext(
+		ctx,
+		"Content request processor: added invocation message with "+
+			"role %s (no session or empty session)",
+		invocation.Message.Role,
+	)
 }
 
 // injectSystemContextMessage injects summary or memory context into request.
