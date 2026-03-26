@@ -315,6 +315,53 @@ _ = ok
 managed.Cancel(requestID)
 ```
 
+#### 在同一轮 run 中排队插入新的用户消息
+
+有些场景下，你并不想启动第二轮 run，而是希望继续使用当前的
+`requestID`，等到一个安全边界后，再把新的 `role=user` 消息插入到同一轮
+run 里。
+
+可以使用 `runner.EnqueueUserMessage(...)`：
+
+```go
+requestID := "req-123"
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Draft a launch note."),
+    agent.WithRequestID(requestID),
+)
+if err != nil {
+    panic(err)
+}
+
+go func() {
+    time.Sleep(time.Second)
+    err := runner.EnqueueUserMessage(
+        r,
+        requestID,
+        model.NewUserMessage("Also make the tone warmer."),
+    )
+    if err != nil {
+        log.Printf("enqueue steer failed: %v", err)
+    }
+}()
+
+_ = eventChan
+```
+
+它的行为是：
+
+- 这**不会**启动第二轮 run
+- 新消息会先进入队列，不会立刻写 Session
+- Flow 只会在下一个安全边界把它追加进去
+- 这个安全边界会保持 `tool_call -> tool_response` 结构不被破坏
+- 如果 run 已经结束，enqueue 会返回错误
+
+可运行示例：`examples/steer/`
+
 #### DetachedCancel（忽略父 ctx cancel）
 
 在 Go 里，`context.Context`（通常命名为 `ctx`）同时承载“取消信号”和“截止时间”。

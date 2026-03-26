@@ -322,6 +322,53 @@ _ = ok
 managed.Cancel(requestID)
 ```
 
+#### Queue a New User Message into the Same Run
+
+Sometimes you do not want to start a second run. You want to keep the current
+`requestID`, wait for a safe boundary, and then insert a new `role=user`
+message into the same run.
+
+Use `runner.EnqueueUserMessage(...)`:
+
+```go
+requestID := "req-123"
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Draft a launch note."),
+    agent.WithRequestID(requestID),
+)
+if err != nil {
+    panic(err)
+}
+
+go func() {
+    time.Sleep(time.Second)
+    err := runner.EnqueueUserMessage(
+        r,
+        requestID,
+        model.NewUserMessage("Also make the tone warmer."),
+    )
+    if err != nil {
+        log.Printf("enqueue steer failed: %v", err)
+    }
+}()
+
+_ = eventChan
+```
+
+Behavior:
+
+- This does **not** start a second run
+- The message is queued first, not written to session immediately
+- The flow appends it only at the next safe boundary
+- The safe boundary preserves the `tool_call -> tool_response` structure
+- If the run has already finished, enqueue returns an error
+
+Runnable example: `examples/steer/`
+
 #### Detached Cancellation (background execution)
 
 In Go, `context.Context` (often named `ctx`) carries both cancellation and a
