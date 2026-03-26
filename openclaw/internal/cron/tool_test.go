@@ -112,6 +112,87 @@ func TestToolAddSupportsExecutionPolicyAndHeadless(t *testing.T) {
 	require.Empty(t, job.Delivery.Target)
 }
 
+func TestToolAddNormalizesExplicitWeComTarget(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "stdin:session",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"action":        "add",
+		"message":       "share good news",
+		"schedule_kind": "every",
+		"every":         "10s",
+		"channel":       "wecom",
+		"target":        "wecom:thread:wecom:chat:chat-1",
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	require.Equal(t, outbound.DeliveryTarget{
+		Channel: "wecom",
+		Target:  "group:chat-1",
+	}, job.Delivery)
+}
+
+func TestToolAddRejectsInvalidExplicitWeComTarget(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "stdin:session",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"action":        "add",
+		"message":       "share good news",
+		"schedule_kind": "every",
+		"every":         "10s",
+		"channel":       "wecom",
+		"target":        "wecom:thread:unknown",
+	})
+	require.NoError(t, err)
+
+	_, err = tool.Call(ctx, args)
+	require.ErrorContains(
+		t,
+		err,
+		"outbound: invalid target for wecom",
+	)
+}
+
 func TestToolAddFailsWithoutResolvableDeliveryTarget(t *testing.T) {
 	t.Parallel()
 
