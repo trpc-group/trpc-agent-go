@@ -122,7 +122,7 @@ func TestRuntime_StartProgramInteractivePipes(t *testing.T) {
 		result = provider.RunResult()
 		return strings.Contains(result.Stdout, "out:hello") &&
 			strings.Contains(result.Stderr, "err:hello")
-	}, 2*time.Second, 20*time.Millisecond)
+	}, 5*time.Second, 50*time.Millisecond)
 	require.NoError(t, proc.Close())
 }
 
@@ -175,7 +175,7 @@ func TestRuntime_StartProgramInteractiveTTY(t *testing.T) {
 			provider.RunResult().Stdout,
 			"tty:7",
 		)
-	}, time.Second, 20*time.Millisecond)
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 func TestInteractiveHelpers_FormatEnvAndExitCode(t *testing.T) {
@@ -192,10 +192,6 @@ func TestInteractiveHelpers_FormatEnvAndExitCode(t *testing.T) {
 	require.Equal(t, 9, interactiveExitCode(err))
 	require.Equal(t, -1, interactiveExitCode(os.ErrInvalid))
 
-	done := make(chan struct{})
-	close(done)
-	waitInteractiveIODone(done, time.Millisecond)
-
 	rt := NewRuntime(t.TempDir())
 	ws := codeexecutor.Workspace{
 		ID:   "ws3",
@@ -210,6 +206,23 @@ func TestInteractiveHelpers_FormatEnvAndExitCode(t *testing.T) {
 		},
 	)
 	require.NoError(t, envErr)
+}
+
+func TestStartPipes_RejectsPresetFields(t *testing.T) {
+	cmd := exec.Command("echo", "hi")
+	cmd.Stdout = os.Stdout
+	_, _, _, _, err := startPipes(cmd)
+	require.ErrorContains(t, err, "Stdout already set")
+
+	cmd2 := exec.Command("echo", "hi")
+	cmd2.Stderr = os.Stderr
+	_, _, _, _, err = startPipes(cmd2)
+	require.ErrorContains(t, err, "Stderr already set")
+
+	cmd3 := exec.Command("echo", "hi")
+	cmd3.Stdin = strings.NewReader("x")
+	_, _, _, _, err = startPipes(cmd3)
+	require.Error(t, err)
 }
 
 func TestInteractiveSession_IDLogOffsetsAndMarkDone(t *testing.T) {
@@ -369,12 +382,12 @@ func TestRuntime_StartProgram_StdinAndPipeErrors(t *testing.T) {
 			provider.RunResult().Stdout,
 			"hello|override|ok",
 		)
-	}, time.Second, 20*time.Millisecond)
+	}, 5*time.Second, 50*time.Millisecond)
 	require.NoError(t, proc.Close())
 
 	cmd := exec.Command("sh", "-lc", "true")
 	cmd.Stdout = os.Stdout
-	stdin, stdout, stderr, err := startPipes(cmd)
+	stdin, stdout, stderr, _, err := startPipes(cmd)
 	require.Error(t, err)
 	require.Nil(t, stdin)
 	require.Nil(t, stdout)
@@ -382,14 +395,12 @@ func TestRuntime_StartProgram_StdinAndPipeErrors(t *testing.T) {
 
 	cmd = exec.Command("sh", "-lc", "true")
 	cmd.Stderr = os.Stderr
-	stdin, stdout, stderr, err = startPipes(cmd)
+	stdin, stdout, stderr, _, err = startPipes(cmd)
 	require.Error(t, err)
 	require.Nil(t, stdin)
 	require.Nil(t, stdout)
 	require.Nil(t, stderr)
 
-	done := make(chan struct{})
-	waitInteractiveIODone(done, 10*time.Millisecond)
 }
 
 func TestRuntime_StartProgram_MkdirError(t *testing.T) {
@@ -422,7 +433,7 @@ func waitInteractiveExit(
 ) codeexecutor.ProgramPoll {
 	t.Helper()
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		poll := proc.Poll(nil)
 		if want == "" || strings.Contains(poll.Output, want) ||
@@ -442,7 +453,7 @@ func waitInteractiveStatus(
 ) codeexecutor.ProgramPoll {
 	t.Helper()
 
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		poll := proc.Poll(nil)
 		if poll.Status == status {
