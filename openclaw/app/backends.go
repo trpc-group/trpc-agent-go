@@ -20,6 +20,7 @@ import (
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	sessionredis "trpc.group/trpc-go/trpc-agent-go/session/redis"
@@ -292,6 +293,12 @@ func newSessionSummarizer(
 
 	options := make([]summary.Option, 0, 3)
 	options = append(options, summary.WithName(appName))
+	options = append(
+		options,
+		summary.WithPreSummaryHook(
+			conversation.PreSummaryHook,
+		),
+	)
 	if opts.SessionSummaryMaxWords > 0 {
 		options = append(
 			options,

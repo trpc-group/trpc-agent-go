@@ -95,6 +95,10 @@ type Event struct {
 	// StateDelta contains state changes to be applied to the session.
 	StateDelta map[string][]byte `json:"stateDelta,omitempty"`
 
+	// Extensions stores optional event metadata in a namespaced,
+	// versioned JSON format.
+	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
+
 	// StructuredOutput carries a typed, in-memory structured output payload.
 	// This is not serialized and is meant for immediate consumer access.
 	StructuredOutput any `json:"-"`
@@ -162,12 +166,27 @@ func (e *Event) Clone() *Event {
 			copy(clone.StateDelta[k], v)
 		}
 	}
+	if e.Extensions != nil {
+		clone.Extensions = make(map[string]json.RawMessage)
+		for k, v := range e.Extensions {
+			clone.Extensions[k] = cloneRawMessage(v)
+		}
+	}
 	if e.Actions != nil {
 		clone.Actions = &EventActions{
 			SkipSummarization: e.Actions.SkipSummarization,
 		}
 	}
 	return &clone
+}
+
+func cloneRawMessage(raw json.RawMessage) json.RawMessage {
+	if raw == nil {
+		return nil
+	}
+	cloned := make([]byte, len(raw))
+	copy(cloned, raw)
+	return json.RawMessage(cloned)
 }
 
 func cloneExecutionTrace(executionTrace *trace.Trace) *trace.Trace {
@@ -184,7 +203,10 @@ func cloneExecutionTrace(executionTrace *trace.Trace) *trace.Trace {
 		Steps:            make([]trace.Step, 0, len(executionTrace.Steps)),
 	}
 	for _, step := range executionTrace.Steps {
-		clonedTrace.Steps = append(clonedTrace.Steps, cloneExecutionTraceStep(step))
+		clonedTrace.Steps = append(
+			clonedTrace.Steps,
+			cloneExecutionTraceStep(step),
+		)
 	}
 	return clonedTrace
 }
@@ -199,10 +221,13 @@ func cloneExecutionTraceStep(step trace.Step) trace.Step {
 		NodeID:             step.NodeID,
 		StartedAt:          step.StartedAt,
 		EndedAt:            step.EndedAt,
-		PredecessorStepIDs: append([]string(nil), step.PredecessorStepIDs...),
-		Input:              cloneExecutionTraceSnapshot(step.Input),
-		Output:             cloneExecutionTraceSnapshot(step.Output),
-		Error:              step.Error,
+		PredecessorStepIDs: append(
+			[]string(nil),
+			step.PredecessorStepIDs...,
+		),
+		Input:  cloneExecutionTraceSnapshot(step.Input),
+		Output: cloneExecutionTraceSnapshot(step.Output),
+		Error:  step.Error,
 	}
 }
 

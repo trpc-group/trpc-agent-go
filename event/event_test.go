@@ -87,6 +87,9 @@ func TestEvent_WithOptions_And_Clone(t *testing.T) {
 		WithResponse(resp),
 		WithObject("obj-x"),
 		WithStateDelta(sd),
+		WithExtension("conversation", map[string]string{
+			"actor": "alice",
+		}),
 		WithStructuredOutputPayload(map[string]any{"x": 1}),
 		WithSkipSummarization(),
 	)
@@ -97,6 +100,7 @@ func TestEvent_WithOptions_And_Clone(t *testing.T) {
 	require.True(t, sevt.Actions.SkipSummarization)
 	require.NotNil(t, sevt.StructuredOutput)
 	require.NotNil(t, sevt.StateDelta)
+	require.NotNil(t, sevt.Extensions)
 	require.Equal(t, "v", string(sevt.StateDelta["k"]))
 
 	// LongRunningToolIDs prepared for clone coverage
@@ -117,6 +121,58 @@ func TestEvent_WithOptions_And_Clone(t *testing.T) {
 	if _, ok := clone.LongRunningToolIDs["id2"]; ok {
 		t.Fatalf("clone should not contain id2")
 	}
+	got, ok, err := GetExtension[map[string]string](
+		clone,
+		"conversation",
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "alice", got["actor"])
+}
+
+func TestEvent_SetAndGetExtension(t *testing.T) {
+	evt := New("inv-1", "author")
+	err := SetExtension(evt, "ext", map[string]string{
+		"speaker": "bob",
+	})
+	require.NoError(t, err)
+
+	got, ok, err := GetExtension[map[string]string](evt, "ext")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "bob", got["speaker"])
+}
+
+func TestEvent_ExtensionHelpers_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(
+		t,
+		SetExtension(nil, "ext", map[string]string{"speaker": "bob"}),
+	)
+
+	evt := New("inv-1", "author")
+	require.NoError(
+		t,
+		SetExtension(evt, "", map[string]string{"speaker": "bob"}),
+	)
+	require.Nil(t, evt.Extensions)
+
+	WithExtension("bad", func() {})(evt)
+	_, ok, err := GetExtension[map[string]string](evt, "bad")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	_, ok, err = GetExtension[map[string]string](evt, "")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	evt.Extensions = map[string]json.RawMessage{
+		"bad": json.RawMessage("{"),
+	}
+	_, ok, err = GetExtension[map[string]string](evt, "bad")
+	require.Error(t, err)
+	require.False(t, ok)
 }
 
 func TestEvent_Filter(t *testing.T) {

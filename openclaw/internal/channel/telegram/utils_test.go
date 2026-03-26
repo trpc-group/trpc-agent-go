@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/croncmd"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 )
@@ -269,6 +270,148 @@ func TestParseCommand(t *testing.T) {
 	)
 	require.Equal(t, commandPersona, call.Name)
 	require.Equal(t, "girlfriend", call.Args)
+}
+
+func TestCurrentChatTargetAndRunCountFormatting(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "123", currentChatTarget(123, 0))
+	require.Equal(
+		t,
+		"123"+threadTopicSep+"7",
+		currentChatTarget(123, 7),
+	)
+
+	require.Equal(
+		t,
+		"runs 2/5",
+		formatScheduledJobRunCount(
+			gwclient.ScheduledJobSummary{
+				RunCount: 2,
+				MaxRuns:  5,
+			},
+		),
+	)
+	require.Equal(
+		t,
+		"runs 2",
+		formatScheduledJobRunCount(
+			gwclient.ScheduledJobSummary{
+				RunCount: 2,
+			},
+		),
+	)
+	require.Empty(
+		t,
+		formatScheduledJobRunCount(gwclient.ScheduledJobSummary{}),
+	)
+}
+
+func TestReplySelectedJobAndMutationHelpers(t *testing.T) {
+	t.Parallel()
+
+	bot := &stubBot{}
+	ch := &Channel{bot: bot}
+	ctx := context.Background()
+	jobs := []gwclient.ScheduledJobSummary{{
+		ID:      "job-1",
+		Name:    "daily",
+		Enabled: true,
+	}}
+
+	require.NoError(
+		t,
+		ch.replySelectedJob(ctx, 1, 0, 2, jobs, "missing"),
+	)
+	require.NoError(
+		t,
+		ch.replySelectedJob(ctx, 1, 0, 2, jobs, "job-1"),
+	)
+
+	manager := &stubGatewayWithJobs{
+		stubGateway: &stubGateway{},
+		jobs:        append([]gwclient.ScheduledJobSummary(nil), jobs...),
+	}
+	require.NoError(
+		t,
+		ch.setSelectedJobEnabled(
+			ctx,
+			1,
+			0,
+			2,
+			manager,
+			"user-1",
+			"123",
+			jobs,
+			croncmd.ActionStop,
+			"job-1",
+			false,
+		),
+	)
+	require.NotNil(t, manager.lastEnabled)
+	require.False(t, *manager.lastEnabled)
+
+	manager.updateErr = errors.New("boom")
+	require.NoError(
+		t,
+		ch.setSelectedJobEnabled(
+			ctx,
+			1,
+			0,
+			2,
+			manager,
+			"user-1",
+			"123",
+			jobs,
+			croncmd.ActionResume,
+			"job-1",
+			true,
+		),
+	)
+
+	manager.removeSuccess = true
+	manager.removeErr = nil
+	require.NoError(
+		t,
+		ch.removeSelectedJob(
+			ctx,
+			1,
+			0,
+			2,
+			manager,
+			"user-1",
+			"123",
+			jobs,
+			"job-1",
+		),
+	)
+
+	manager.removeErr = errors.New("boom")
+	require.NoError(
+		t,
+		ch.removeSelectedJob(
+			ctx,
+			1,
+			0,
+			2,
+			manager,
+			"user-1",
+			"123",
+			jobs,
+			"job-1",
+		),
+	)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 6)
+	require.Contains(t, bot.sent[0].Text, "cron list")
+	require.Contains(t, bot.sent[0].Text, "cron status")
+	require.Contains(t, bot.sent[1].Text, "daily")
+	require.Contains(t, bot.sent[2].Text, "Stopped")
+	require.Contains(t, bot.sent[3].Text, jobsUpdateFailedMessage)
+	require.Contains(t, bot.sent[4].Text, "Removed")
+	require.Contains(t, bot.sent[5].Text, jobsRemoveFailedMessage)
+	bot.mu.Unlock()
 }
 
 func TestResolveStateDir_Default(t *testing.T) {

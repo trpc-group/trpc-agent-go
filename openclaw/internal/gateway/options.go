@@ -12,6 +12,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -28,12 +29,13 @@ type SessionIDFunc func(InboundMessage) (string, error)
 
 // RunOptionInput describes one gateway run before invoking the runner.
 type RunOptionInput struct {
-	Inbound   InboundMessage
-	UserID    string
-	SessionID string
-	RequestID string
-	Message   model.Message
-	Trace     *debugrecorder.Trace
+	Inbound    InboundMessage
+	UserID     string
+	SessionID  string
+	RequestID  string
+	Message    model.Message
+	Trace      *debugrecorder.Trace
+	Extensions map[string]json.RawMessage
 }
 
 // RunOptionResolver decorates context and options for one gateway run.

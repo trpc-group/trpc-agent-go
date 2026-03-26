@@ -33,12 +33,17 @@ type stubGatewayWithForget struct {
 type stubGatewayWithJobs struct {
 	*stubGateway
 
-	jobs       []gwclient.ScheduledJobSummary
-	jobsErr    error
-	clearCnt   int
-	clearErr   error
-	lastUser   string
-	lastTarget string
+	jobs          []gwclient.ScheduledJobSummary
+	jobsErr       error
+	clearCnt      int
+	clearErr      error
+	updateErr     error
+	removeErr     error
+	lastEnabled   *bool
+	lastJobID     string
+	lastUser      string
+	lastTarget    string
+	removeSuccess bool
 }
 
 type stubGatewayWithPersona struct {
@@ -96,6 +101,51 @@ func (g *stubGatewayWithJobs) ClearScheduledJobs(
 		return 0, g.clearErr
 	}
 	return g.clearCnt, nil
+}
+
+func (g *stubGatewayWithJobs) SetScheduledJobEnabled(
+	_ context.Context,
+	_ string,
+	userID string,
+	target string,
+	jobID string,
+	enabled bool,
+) (gwclient.ScheduledJobSummary, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.lastUser = userID
+	g.lastTarget = target
+	g.lastJobID = jobID
+	g.lastEnabled = &enabled
+	if g.updateErr != nil {
+		return gwclient.ScheduledJobSummary{}, g.updateErr
+	}
+	for i := range g.jobs {
+		if g.jobs[i].ID != jobID {
+			continue
+		}
+		g.jobs[i].Enabled = enabled
+		return g.jobs[i], nil
+	}
+	return gwclient.ScheduledJobSummary{}, errors.New("missing job")
+}
+
+func (g *stubGatewayWithJobs) RemoveScheduledJob(
+	_ context.Context,
+	_ string,
+	userID string,
+	target string,
+	jobID string,
+) (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.lastUser = userID
+	g.lastTarget = target
+	g.lastJobID = jobID
+	if g.removeErr != nil {
+		return false, g.removeErr
+	}
+	return g.removeSuccess, nil
 }
 
 func (g *stubGatewayWithPersona) ListPresetPersonas() []persona.Preset {
@@ -475,6 +525,238 @@ func TestChannel_HandleMessage_CommandJobsClear(t *testing.T) {
 		"Cleared 3 scheduled job(s) for this chat.",
 		bot.sent[0].Text,
 	)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandCronStatus(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 6, 16, 45, 0, 0, time.UTC)
+	gw := &stubGatewayWithJobs{
+		stubGateway: &stubGateway{},
+		jobs: []gwclient.ScheduledJobSummary{
+			{
+				ID:         "job-1",
+				Name:       "cpu report",
+				Schedule:   "every 1m",
+				NextRunAt:  &now,
+				LastStatus: "running",
+				LastOutput: "cpu 42%",
+			},
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 5,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/cron status 1",
+	})
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Contains(t, bot.sent[0].Text, jobsStatusHeader)
+	require.Contains(t, bot.sent[0].Text, "cpu report")
+	require.Contains(t, bot.sent[0].Text, "cpu 42%")
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandCronStop(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGatewayWithJobs{
+		stubGateway: &stubGateway{},
+		jobs: []gwclient.ScheduledJobSummary{
+			{
+				ID:      "job-1",
+				Name:    "cpu report",
+				Enabled: true,
+			},
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 5,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/cron stop 1",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Equal(t, "job-1", gw.lastJobID)
+	require.NotNil(t, gw.lastEnabled)
+	require.False(t, *gw.lastEnabled)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(t, "Stopped scheduled job cpu report.", bot.sent[0].Text)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandCronResume(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGatewayWithJobs{
+		stubGateway: &stubGateway{},
+		jobs: []gwclient.ScheduledJobSummary{
+			{
+				ID:      "job-1",
+				Name:    "cpu report",
+				Enabled: false,
+			},
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 5,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/cron resume 1",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Equal(t, "job-1", gw.lastJobID)
+	require.NotNil(t, gw.lastEnabled)
+	require.True(t, *gw.lastEnabled)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(
+		t,
+		"Resumed scheduled job cpu report.",
+		bot.sent[0].Text,
+	)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandCronRemove(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGatewayWithJobs{
+		stubGateway:   &stubGateway{},
+		removeSuccess: true,
+		jobs: []gwclient.ScheduledJobSummary{
+			{
+				ID:   "job-1",
+				Name: "cpu report",
+			},
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 5,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/cron remove 1",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Equal(t, "job-1", gw.lastJobID)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(
+		t,
+		"Removed scheduled job cpu report.",
+		bot.sent[0].Text,
+	)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandCronHelpAndUsage(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGatewayWithJobs{stubGateway: &stubGateway{}}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 5,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/cron help",
+	})
+	require.NoError(t, err)
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 6,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/cron bad-action",
+	})
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 2)
+	require.Contains(t, bot.sent[0].Text, "Usage:")
+	require.Contains(t, bot.sent[0].Text, "cron resume")
+	require.Contains(t, bot.sent[1].Text, "Usage:")
+	require.Contains(t, bot.sent[1].Text, "cron remove")
 	bot.mu.Unlock()
 }
 

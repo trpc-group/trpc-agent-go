@@ -63,6 +63,88 @@ func TestToolAddSupportsAliasesAndCurrentChat(t *testing.T) {
 	require.Equal(t, "12345", job.Delivery.Target)
 }
 
+func TestToolAddSupportsExecutionPolicyAndHeadless(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "wecom:chat:group-1",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"action":         "add",
+		"message":        "share golang tips",
+		"schedule_kind":  "every",
+		"every":          "1m",
+		"max_runs":       5,
+		"ends_at":        "2026-03-25T20:30:00Z",
+		"overlap_policy": OverlapPolicyReplace,
+		"headless":       true,
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	require.Equal(t, 5, job.Policy.MaxRuns)
+	require.NotNil(t, job.Policy.EndsAt)
+	require.Equal(
+		t,
+		OverlapPolicyReplace,
+		job.Policy.OverlapPolicy,
+	)
+	require.Empty(t, job.Delivery.Channel)
+	require.Empty(t, job.Delivery.Target)
+}
+
+func TestToolAddFailsWithoutResolvableDeliveryTarget(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "stdin:session",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	_, err = tool.Call(
+		ctx,
+		[]byte(`{
+			"action":"add",
+			"message":"report status",
+			"schedule_kind":"every",
+			"every":"1m"
+		}`),
+	)
+	require.ErrorContains(t, err, errDeliveryTargetUnavailable)
+}
+
 func TestToolAddSupportsRunAtAlias(t *testing.T) {
 	t.Parallel()
 
@@ -462,6 +544,79 @@ func TestTool_StatusUpdateRunAndHelpers(t *testing.T) {
 	)
 }
 
+func TestTool_UpdateAndRemoveSuccessPaths(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	job, err := svc.Add(&Job{
+		Name:    "mine",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "mine",
+		UserID:  "user-1",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "12345",
+		},
+	})
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"action":         "update",
+		"job_id":         job.ID,
+		"enabled":        false,
+		"timeout_sec":    9,
+		"channel":        "telegram",
+		"target":         "12345",
+		"max_runs":       3,
+		"overlap_policy": OverlapPolicyReplace,
+		"schedule_kind":  "every",
+		"every":          "5m",
+	})
+	require.NoError(t, err)
+
+	out, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+	updated := out.(*Job)
+	require.False(t, updated.Enabled)
+	require.Equal(t, 9, updated.TimeoutSec)
+	require.Equal(t, 3, updated.Policy.MaxRuns)
+	require.Equal(
+		t,
+		OverlapPolicyReplace,
+		updated.Policy.OverlapPolicy,
+	)
+	require.Equal(t, "5m", updated.Schedule.Every)
+
+	out, err = tool.Call(ctx, []byte(
+		`{"action":"remove","job_id":"`+job.ID+`"}`,
+	))
+	require.NoError(t, err)
+	payload := out.(map[string]any)
+	require.Equal(t, true, payload["ok"])
+	require.Equal(t, job.ID, payload["job_id"])
+}
+
 func TestTool_ContextAndDeliveryErrors(t *testing.T) {
 	t.Parallel()
 
@@ -480,7 +635,15 @@ func TestTool_ContextAndDeliveryErrors(t *testing.T) {
 	_, err = currentUserID(context.Background())
 	require.Error(t, err)
 
-	delivery, err := optionalDelivery(context.Background(), "", "")
+	_, err = resolveDelivery(context.Background(), "", "", false)
+	require.ErrorContains(t, err, errDeliveryTargetUnavailable)
+
+	delivery, err := resolveDelivery(
+		context.Background(),
+		"",
+		"",
+		true,
+	)
 	require.NoError(t, err)
 	require.Equal(t, outbound.DeliveryTarget{}, delivery)
 
@@ -497,10 +660,62 @@ func TestTool_ContextAndDeliveryErrors(t *testing.T) {
 	require.Equal(t, "x", firstString("", " x "))
 }
 
+func TestTool_ErrorsAndHelperBranches(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	_, err = tool.Call(ctx, []byte("{"))
+	require.ErrorContains(t, err, "invalid args")
+
+	_, err = tool.Call(ctx, []byte(`{"action":"unknown"}`))
+	require.ErrorContains(t, err, "unsupported cron action")
+
+	_, err = tool.Call(
+		ctx,
+		[]byte(`{
+			"action":"add",
+			"message":"report",
+			"every":"1m",
+			"headless":true,
+			"target":"12345"
+		}`),
+	)
+	require.ErrorContains(t, err, errHeadlessWithTarget)
+
+	_, err = parseOptionalRFC3339("bad")
+	require.ErrorContains(t, err, "invalid ends_at")
+
+	require.True(t, boolValue(boolPointer(true)))
+	require.False(t, boolValue(nil))
+	require.True(t, hasPolicyInput(toolInput{OverlapOld: "replace"}))
+	require.Equal(t, "", firstString("", " "))
+}
+
 func intPointer(v int) *int {
 	return &v
 }
 
 func int64Pointer(v int64) *int64 {
+	return &v
+}
+
+func boolPointer(v bool) *bool {
 	return &v
 }

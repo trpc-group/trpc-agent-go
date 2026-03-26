@@ -11,6 +11,7 @@
 package event
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,6 +29,9 @@ func TestEvent_Clone_DeepCopy(t *testing.T) {
 		Author:             "tester",
 		LongRunningToolIDs: map[string]struct{}{"a": {}, "b": {}},
 		StateDelta:         map[string][]byte{"k": []byte("v")},
+		Extensions: map[string]json.RawMessage{
+			"ext": json.RawMessage(`{"name":"value"}`),
+		},
 	}
 
 	c := e.Clone()
@@ -39,6 +43,21 @@ func TestEvent_Clone_DeepCopy(t *testing.T) {
 	_, ok := e.LongRunningToolIDs["c"]
 	require.False(t, ok)
 	require.NotEqual(t, string(e.StateDelta["k"]), string(c.StateDelta["k"]))
+	c.Extensions["ext"] = json.RawMessage(`{"name":"changed"}`)
+	require.NotEqual(
+		t,
+		string(e.Extensions["ext"]),
+		string(c.Extensions["ext"]),
+	)
+
+	clonedRaw := c.Extensions["ext"]
+	clonedRaw[0] = 'x'
+	c.Extensions["ext"] = clonedRaw
+	require.NotEqual(
+		t,
+		e.Extensions["ext"][0],
+		c.Extensions["ext"][0],
+	)
 }
 
 func TestEvent_Clone_LegacyVersionMigratesFilterKey(t *testing.T) {
