@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"text/template"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +33,12 @@ import (
 const (
 	runContextPrompt = "You are running an OpenClaw scheduled job. " +
 		"The schedule and delivery are already handled. " +
+		"Respect the provided scheduled run context, " +
+		"including the current run index and whether this " +
+		"is the final run. When the task mentions per-run " +
+		"counters, remaining runs, or final-run-only wording, " +
+		"resolve them from that context instead of treating " +
+		"them as fixed literal text. " +
 		"Execute the task once now. Use exec_command for host " +
 		"commands. Adapt commands to the current OS when " +
 		"needed instead of blindly following old shell " +
@@ -45,8 +52,13 @@ const (
 	scheduledRunMessagePrefix = "Execute the following existing " +
 		"scheduled job once now. Ignore any wording about " +
 		"future scheduling or sending to the current chat, " +
-		"because scheduling and delivery are already handled.\n\n" +
-		"Task:\n"
+		"because scheduling and delivery are already handled.\n\n"
+
+	scheduledRunContextPrefix = "Scheduled run context:\n"
+
+	scheduledRunTaskPrefix = "\nTask:\n"
+
+	scheduledRunTemplateMarker = "{{"
 )
 
 // Service runs and persists scheduled jobs.
@@ -71,6 +83,7 @@ type Service struct {
 }
 
 type jobRun struct {
+	token            string
 	cancel           context.CancelFunc
 	suppressDelivery bool
 	startedAt        time.Time
@@ -81,6 +94,7 @@ type jobRun struct {
 type queuedRun struct {
 	job         *Job
 	runCtx      context.Context
+	runToken    string
 	scheduledAt time.Time
 }
 
@@ -383,7 +397,7 @@ func (s *Service) RunNow(jobID string) (*Job, error) {
 		return nil, fmt.Errorf("cron: job id is required")
 	}
 
-	job, runCtx, err := s.markRunning(
+	job, runCtx, runToken, err := s.markRunning(
 		id,
 		context.Background(),
 	)
@@ -393,7 +407,13 @@ func (s *Service) RunNow(jobID string) (*Job, error) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		s.executeJob(runCtx, job, false, time.Time{})
+		s.executeJob(
+			runCtx,
+			job,
+			runToken,
+			false,
+			time.Time{},
+		)
 	}()
 	return job.clone(), nil
 }
@@ -415,35 +435,50 @@ func (s *Service) loop(ctx context.Context) {
 func (s *Service) triggerDue(ctx context.Context) {
 	now := s.clock()
 	runs := make([]queuedRun, 0)
+	needsPersist := false
 
 	s.mu.Lock()
 	for _, job := range s.jobs {
-		if job == nil || !job.Enabled || job.NextRunAt == nil {
+		if job == nil || !job.Enabled {
+			continue
+		}
+		if retireJobLocked(job, now) {
+			needsPersist = true
+			continue
+		}
+		if job.NextRunAt == nil || job.NextRunAt.After(now) {
 			continue
 		}
 		if _, busy := s.running[job.ID]; busy {
-			continue
-		}
-		if job.NextRunAt.After(now) {
-			continue
+			switch effectiveOverlapPolicy(job.Policy) {
+			case OverlapPolicyReplace:
+				s.cancelRunLocked(job.ID)
+			default:
+				continue
+			}
 		}
 		runCtx, cancel := s.newRunContext(ctx)
+		runToken := uuid.NewString()
 		s.running[job.ID] = &jobRun{
+			token:     runToken,
 			cancel:    cancel,
 			startedAt: now,
 		}
+		job.Stats.RunCount++
 		job.LastStatus = StatusRunning
 		job.LastError = ""
 		job.UpdatedAt = now
 		runs = append(runs, queuedRun{
 			job:         job.clone(),
 			runCtx:      runCtx,
+			runToken:    runToken,
 			scheduledAt: scheduledRunBase(job, now),
 		})
+		needsPersist = true
 	}
 	s.mu.Unlock()
 
-	if len(runs) == 0 {
+	if len(runs) == 0 && !needsPersist {
 		return
 	}
 	if err := s.persist(); err != nil {
@@ -458,6 +493,7 @@ func (s *Service) triggerDue(ctx context.Context) {
 			s.executeJob(
 				run.runCtx,
 				run.job,
+				run.runToken,
 				true,
 				run.scheduledAt,
 			)
@@ -468,6 +504,7 @@ func (s *Service) triggerDue(ctx context.Context) {
 func (s *Service) executeJob(
 	ctx context.Context,
 	job *Job,
+	runToken string,
 	reschedule bool,
 	scheduledAt time.Time,
 ) {
@@ -497,12 +534,12 @@ func (s *Service) executeJob(
 	)
 
 	sessionID := freshRunSessionID(job.ID, now)
-	s.setRunMetadata(job.ID, sessionID, requestID)
+	s.setRunMetadata(job.ID, runToken, sessionID, requestID)
 	events, err := s.runner.Run(
 		runCtx,
 		job.UserID,
 		sessionID,
-		model.NewUserMessage(buildScheduledRunMessage(job.Message)),
+		model.NewUserMessage(buildScheduledRunMessage(job)),
 		runOpts...,
 	)
 
@@ -519,7 +556,7 @@ func (s *Service) executeJob(
 	deliveryErr := error(nil)
 	output := sanitizeStoredOutput(result.text)
 	if err == nil &&
-		s.deliveryAllowed(job.ID) &&
+		s.deliveryAllowed(job.ID, runToken) &&
 		job.Delivery.Channel != "" &&
 		job.Delivery.Target != "" &&
 		strings.TrimSpace(result.text) != "" {
@@ -536,6 +573,7 @@ func (s *Service) executeJob(
 
 	s.finishRun(
 		job.ID,
+		runToken,
 		scheduledAt,
 		now,
 		output,
@@ -547,6 +585,7 @@ func (s *Service) executeJob(
 
 func (s *Service) finishRun(
 	jobID string,
+	runToken string,
 	scheduledAt time.Time,
 	now time.Time,
 	output string,
@@ -562,6 +601,12 @@ func (s *Service) finishRun(
 		return
 	}
 
+	current := s.running[jobID]
+	if current == nil || current.token != runToken {
+		s.mu.Unlock()
+		return
+	}
+
 	delete(s.running, jobID)
 	job.LastRunAt = &now
 	job.LastOutput = output
@@ -569,12 +614,15 @@ func (s *Service) finishRun(
 
 	switch {
 	case runErr != nil:
+		job.Stats.FailureCount++
 		job.LastStatus = StatusFailed
 		job.LastError = runErr.Error()
 	case deliveryErr != nil:
+		job.Stats.DeliveryFailureCount++
 		job.LastStatus = StatusDeliveryFailed
 		job.LastError = deliveryErr.Error()
 	default:
+		job.Stats.SuccessCount++
 		job.LastStatus = StatusSucceeded
 		job.LastError = ""
 	}
@@ -588,11 +636,10 @@ func (s *Service) finishRun(
 			job.LastStatus = StatusFailed
 			job.LastError = err.Error()
 		} else {
-			job.NextRunAt = next
-			if next == nil {
-				job.Enabled = false
-			}
+			applyNextRunPolicy(job, next, now)
 		}
+	} else {
+		applyNextRunPolicy(job, cloneTimePtr(job.NextRunAt), now)
 	}
 	s.mu.Unlock()
 
@@ -604,23 +651,37 @@ func (s *Service) finishRun(
 func (s *Service) markRunning(
 	jobID string,
 	parent context.Context,
-) (*Job, context.Context, error) {
+) (*Job, context.Context, string, error) {
 	s.mu.Lock()
 	job := s.jobs[jobID]
 	if job == nil {
 		s.mu.Unlock()
-		return nil, nil, fmt.Errorf("cron: unknown job: %s", jobID)
+		return nil, nil, "", fmt.Errorf(
+			"cron: unknown job: %s",
+			jobID,
+		)
 	}
 	if _, busy := s.running[jobID]; busy {
 		s.mu.Unlock()
-		return nil, nil, fmt.Errorf("cron: job is already running")
+		return nil, nil, "", fmt.Errorf(
+			"cron: job is already running",
+		)
+	}
+	if retireJobLocked(job, s.clock()) {
+		s.mu.Unlock()
+		return nil, nil, "", fmt.Errorf(
+			"cron: job is no longer schedulable",
+		)
 	}
 	runCtx, cancel := s.newRunContext(parent)
 	now := s.clock()
+	runToken := uuid.NewString()
 	s.running[jobID] = &jobRun{
+		token:     runToken,
 		cancel:    cancel,
 		startedAt: now,
 	}
+	job.Stats.RunCount++
 	job.LastStatus = StatusRunning
 	job.LastError = ""
 	job.UpdatedAt = now
@@ -635,11 +696,14 @@ func (s *Service) markRunning(
 			current.LastStatus = StatusIdle
 			current.LastError = ""
 			current.UpdatedAt = now
+			if current.Stats.RunCount > 0 {
+				current.Stats.RunCount--
+			}
 		}
 		s.mu.Unlock()
-		return nil, nil, err
+		return nil, nil, "", err
 	}
-	return clone, runCtx, nil
+	return clone, runCtx, runToken, nil
 }
 
 func (s *Service) newRunContext(
@@ -653,6 +717,7 @@ func (s *Service) newRunContext(
 
 func (s *Service) setRunMetadata(
 	jobID string,
+	runToken string,
 	sessionID string,
 	requestID string,
 ) {
@@ -660,19 +725,19 @@ func (s *Service) setRunMetadata(
 	defer s.mu.Unlock()
 
 	run := s.running[jobID]
-	if run == nil {
+	if run == nil || run.token != runToken {
 		return
 	}
 	run.sessionID = sessionID
 	run.requestID = requestID
 }
 
-func (s *Service) deliveryAllowed(jobID string) bool {
+func (s *Service) deliveryAllowed(jobID string, runToken string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	run := s.running[jobID]
-	if run == nil {
+	if run == nil || run.token != runToken {
 		return false
 	}
 	return !run.suppressDelivery
@@ -760,11 +825,18 @@ func normalizeLoadedJob(job *Job, now time.Time) (*Job, error) {
 			if err != nil {
 				return nil, err
 			}
-			next.NextRunAt = runAt
+			applyNextRunPolicy(next, runAt, now)
+		} else {
+			applyNextRunPolicy(
+				next,
+				cloneTimePtr(next.NextRunAt),
+				now,
+			)
 		}
 	} else {
 		next.NextRunAt = nil
 	}
+	retireJobLocked(next, now)
 	return next, nil
 }
 
@@ -791,11 +863,11 @@ func normalizeCommon(
 	if err != nil {
 		return nil, err
 	}
-	if job.Enabled {
-		job.NextRunAt = next
-	} else {
+	if !job.Enabled {
 		job.NextRunAt = nil
+		return job, nil
 	}
+	applyNextRunPolicy(job, next, now)
 	return job, nil
 }
 
@@ -814,12 +886,29 @@ func normalizeFields(
 		Channel: strings.TrimSpace(job.Delivery.Channel),
 		Target:  strings.TrimSpace(job.Delivery.Target),
 	}
+	if job.Policy.EndsAt != nil && job.Policy.EndsAt.IsZero() {
+		job.Policy.EndsAt = nil
+	}
+	overlap, err := normalizeOverlapPolicy(job.Policy.OverlapPolicy)
+	if err != nil {
+		return err
+	}
+	job.Policy.OverlapPolicy = overlap
 
 	if job.Message == "" {
 		return fmt.Errorf("cron: message is required")
 	}
 	if job.UserID == "" {
 		return fmt.Errorf("cron: user id is required")
+	}
+	if job.Policy.MaxRuns < 0 {
+		return fmt.Errorf("cron: max_runs must be non-negative")
+	}
+	if job.Stats.RunCount < 0 ||
+		job.Stats.SuccessCount < 0 ||
+		job.Stats.FailureCount < 0 ||
+		job.Stats.DeliveryFailureCount < 0 {
+		return fmt.Errorf("cron: execution stats must be non-negative")
 	}
 	if job.CreatedAt.IsZero() {
 		job.CreatedAt = now
@@ -835,6 +924,71 @@ func normalizeFields(
 	}
 	job.UpdatedAt = now
 	return nil
+}
+
+func effectiveOverlapPolicy(policy ExecutionPolicy) string {
+	value, err := normalizeOverlapPolicy(policy.OverlapPolicy)
+	if err != nil {
+		return OverlapPolicySkip
+	}
+	return value
+}
+
+func retireJobLocked(job *Job, now time.Time) bool {
+	if job == nil || !job.Enabled {
+		return false
+	}
+	if executionLimitReached(job) || executionWindowClosed(job, now) {
+		job.Enabled = false
+		job.NextRunAt = nil
+		job.UpdatedAt = now
+		return true
+	}
+	return false
+}
+
+func executionLimitReached(job *Job) bool {
+	if job == nil {
+		return false
+	}
+	return job.Policy.MaxRuns > 0 &&
+		job.Stats.RunCount >= job.Policy.MaxRuns
+}
+
+func executionWindowClosed(job *Job, now time.Time) bool {
+	if job == nil || job.Policy.EndsAt == nil {
+		return false
+	}
+	return !job.Policy.EndsAt.After(now)
+}
+
+func nextRunAllowed(job *Job, next *time.Time, now time.Time) bool {
+	if executionLimitReached(job) || executionWindowClosed(job, now) {
+		return false
+	}
+	if next == nil || job == nil || job.Policy.EndsAt == nil {
+		return true
+	}
+	return next.Before(*job.Policy.EndsAt)
+}
+
+func applyNextRunPolicy(
+	job *Job,
+	next *time.Time,
+	now time.Time,
+) {
+	if job == nil {
+		return
+	}
+	if !nextRunAllowed(job, next, now) {
+		job.Enabled = false
+		job.NextRunAt = nil
+		return
+	}
+	job.NextRunAt = next
+	if next == nil {
+		job.Enabled = false
+	}
 }
 
 func mapJobs(items map[string]*Job) []*Job {
@@ -896,15 +1050,79 @@ func scheduledRunBase(job *Job, fallback time.Time) time.Time {
 func scheduledRunRuntimeState(job *Job) map[string]any {
 	runtimeState := outbound.RuntimeStateForTarget(job.Delivery)
 	if runtimeState == nil {
-		runtimeState = make(map[string]any, 2)
+		runtimeState = make(map[string]any, 7)
 	}
+	runContext := scheduledRunContext(job)
 	runtimeState[runtimeStateScheduledRun] = true
 	runtimeState[runtimeStateJobID] = strings.TrimSpace(job.ID)
+	runtimeState[runtimeStateRunIndex] = runContext.RunIndex
+	runtimeState[runtimeStateHasMaxRuns] = runContext.HasMaxRuns
+	runtimeState[runtimeStateMaxRuns] = runContext.MaxRuns
+	runtimeState[runtimeStateRemaining] = runContext.RemainingRuns
+	runtimeState[runtimeStateIsFinalRun] = runContext.IsFinalRun
 	return runtimeState
 }
 
-func buildScheduledRunMessage(task string) string {
-	return scheduledRunMessagePrefix + strings.TrimSpace(task)
+func buildScheduledRunMessage(job *Job) string {
+	runContext := scheduledRunContext(job)
+	task := ""
+	if job != nil {
+		task = strings.TrimSpace(job.Message)
+	}
+	renderedTask := renderScheduledRunTask(task, runContext)
+
+	var builder strings.Builder
+	builder.WriteString(scheduledRunMessagePrefix)
+	builder.WriteString(scheduledRunContextPrefix)
+	fmt.Fprintf(&builder, "- run_index: %d\n", runContext.RunIndex)
+	fmt.Fprintf(
+		&builder,
+		"- has_max_runs: %t\n",
+		runContext.HasMaxRuns,
+	)
+	fmt.Fprintf(&builder, "- max_runs: %d\n", runContext.MaxRuns)
+	fmt.Fprintf(
+		&builder,
+		"- remaining_runs: %d\n",
+		runContext.RemainingRuns,
+	)
+	fmt.Fprintf(
+		&builder,
+		"- is_final_run: %t\n",
+		runContext.IsFinalRun,
+	)
+	builder.WriteString(scheduledRunTaskPrefix)
+	builder.WriteString(renderedTask)
+	return builder.String()
+}
+
+func renderScheduledRunTask(
+	task string,
+	runContext cronRunTemplateData,
+) string {
+	trimmedTask := strings.TrimSpace(task)
+	if trimmedTask == "" {
+		return ""
+	}
+	if !strings.Contains(trimmedTask, scheduledRunTemplateMarker) {
+		return trimmedTask
+	}
+
+	tmpl, err := template.New("cron_task").
+		Option("missingkey=error").
+		Parse(trimmedTask)
+	if err != nil {
+		log.Warnf("cron: parse task template failed: %v", err)
+		return trimmedTask
+	}
+
+	data := scheduledRunTemplateData{Cron: runContext}
+	var builder strings.Builder
+	if err := tmpl.Execute(&builder, data); err != nil {
+		log.Warnf("cron: execute task template failed: %v", err)
+		return trimmedTask
+	}
+	return strings.TrimSpace(builder.String())
 }
 
 type cronReplyAccumulator struct {

@@ -11,6 +11,8 @@
 // Package gwproto defines the JSON payloads used by the OpenClaw gateway.
 package gwproto
 
+import "encoding/json"
+
 // MessageRequest matches the gateway /messages JSON payload.
 //
 // The request supports both:
@@ -33,6 +35,8 @@ type MessageRequest struct {
 	UserID    string `json:"user_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
+
+	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
 }
 
 // APIError matches gateway error payloads.

@@ -39,12 +39,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationtool"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
@@ -85,6 +87,11 @@ const (
 		"DOCX, text, CSV, and spreadsheet uploads already in the " +
 		"chat. Only fall back to " +
 		"exec_command when those tools cannot satisfy the task. " +
+		"For questions about the active chat history, recent " +
+		"turns, or who said something in the current session, use " +
+		"conversation_history before searching long-term memory. " +
+		"Only use long-term memory tools for facts that are not " +
+		"available in the current session. " +
 		"Do not call exec_command just to print OPENCLAW_* upload " +
 		"vars or inspect recent upload metadata when a matching " +
 		"chat file is already available. For general local shell " +
@@ -669,6 +676,7 @@ func NewRuntime(
 
 	runnerOpts := []runner.Option{
 		runner.WithSessionService(sessionSvc),
+		runner.WithPlugins(conversation.Plugin{}),
 	}
 	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
@@ -713,6 +721,22 @@ func NewRuntime(
 			),
 		)
 	}
+	gwOpts = append(
+		gwOpts,
+		gateway.WithRunOptionResolver(
+			buildDeliveryRunOptionResolver(),
+		),
+		gateway.WithRunOptionResolver(
+			buildConversationRunOptionResolver(
+				opts.AppName,
+				sessionSvc,
+				conversation.HistoryOptions{
+					AddSessionSummary: opts.AddSessionSummary,
+					MaxHistoryRuns:    opts.MaxHistoryRuns,
+				},
+			),
+		),
+	)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return nil, &exitError{
@@ -1059,6 +1083,7 @@ func run(ctx context.Context, args []string) error {
 
 	runnerOpts := []runner.Option{
 		runner.WithSessionService(sessionSvc),
+		runner.WithPlugins(conversation.Plugin{}),
 	}
 	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
@@ -1101,6 +1126,22 @@ func run(ctx context.Context, args []string) error {
 			),
 		)
 	}
+	gwOpts = append(
+		gwOpts,
+		gateway.WithRunOptionResolver(
+			buildDeliveryRunOptionResolver(),
+		),
+		gateway.WithRunOptionResolver(
+			buildConversationRunOptionResolver(
+				opts.AppName,
+				sessionSvc,
+				conversation.HistoryOptions{
+					AddSessionSummary: opts.AddSessionSummary,
+					MaxHistoryRuns:    opts.MaxHistoryRuns,
+				},
+			),
+		),
+	)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return &exitError{
@@ -2093,6 +2134,9 @@ func buildOpenClawTools(
 
 	mgr := octool.NewManager(
 		octool.WithBaseEnv(deps.ToolEnv(stateDir)),
+		octool.WithCommandPolicy(
+			octool.NewChatCommandSafetyPolicy(),
+		),
 	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
@@ -2114,6 +2158,7 @@ func buildOpenClawTools(
 		)
 	}
 	tools := []tool.Tool{
+		conversationtool.NewTool(),
 		octool.NewReadDocumentTool(uploadStore),
 		octool.NewReadSpreadsheetTool(uploadStore),
 		execTool,

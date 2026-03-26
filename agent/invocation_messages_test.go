@@ -49,6 +49,32 @@ func TestWithRuntimeState(t *testing.T) {
 	require.Equal(t, true, ro.RuntimeState["config"])
 }
 
+func TestMergeRuntimeState(t *testing.T) {
+	state := map[string]any{
+		"user_id": "12345",
+		"room_id": 678,
+	}
+
+	other := map[string]any{
+		"room_id":  999,
+		"config":   true,
+		"roomName": "demo",
+	}
+
+	var ro RunOptions
+	WithRuntimeState(state)(&ro)
+	MergeRuntimeState(other)(&ro)
+
+	require.NotNil(t, ro.RuntimeState)
+	require.Equal(t, "12345", ro.RuntimeState["user_id"])
+	require.Equal(t, 999, ro.RuntimeState["room_id"])
+	require.Equal(t, true, ro.RuntimeState["config"])
+	require.Equal(t, "demo", ro.RuntimeState["roomName"])
+	require.Equal(t, 999, other["room_id"])
+	require.Equal(t, true, other["config"])
+	require.Equal(t, "demo", other["roomName"])
+}
+
 func TestWithKnowledgeFilter(t *testing.T) {
 	filter := map[string]any{
 		"category": "tech",

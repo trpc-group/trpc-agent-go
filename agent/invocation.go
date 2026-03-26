@@ -225,6 +225,26 @@ func WithRuntimeState(state map[string]any) RunOption {
 	}
 }
 
+// MergeRuntimeState merges runtime state into existing RunOptions state.
+//
+// When a key already exists, the new value replaces the old one.
+func MergeRuntimeState(state map[string]any) RunOption {
+	return func(opts *RunOptions) {
+		if len(state) == 0 {
+			return
+		}
+		if opts.RuntimeState == nil {
+			opts.RuntimeState = make(
+				map[string]any,
+				len(state),
+			)
+		}
+		for key, value := range state {
+			opts.RuntimeState[key] = value
+		}
+	}
+}
+
 // WithAgent sets the agent instance for this run only.
 func WithAgent(a Agent) RunOption {
 	return func(opts *RunOptions) {

@@ -26,6 +26,7 @@ const (
 	commandReset     = "reset"
 	commandNew       = "new"
 	commandForget    = "forget"
+	commandCron      = "cron"
 	commandJobs      = "jobs"
 	commandJobsClear = "jobs_clear"
 	commandPersona   = "persona"
@@ -38,6 +39,7 @@ const (
 	commandResetDesc     = "Start a new DM session"
 	commandNewDesc       = "Alias of /reset"
 	commandForgetDesc    = "Delete your saved data (DM only)"
+	commandCronDesc      = "Manage scheduled jobs for this chat"
 	commandJobsDesc      = "List scheduled jobs for this chat"
 	commandJobsClearDesc = "Remove scheduled jobs for this chat"
 	commandPersonaDesc   = "Show or set the active persona preset"
@@ -50,8 +52,7 @@ const helpMessage = "Commands:\n" +
 	"/reset  " + commandResetDesc + "\n" +
 	"/new    " + commandNewDesc + "\n" +
 	"/forget " + commandForgetDesc + "\n" +
-	"/jobs   " + commandJobsDesc + "\n" +
-	"/jobs_clear " + commandJobsClearDesc + "\n" +
+	"/cron   " + commandCronDesc + "\n" +
 	"/persona " + commandPersonaDesc + "\n" +
 	"/personas " + commandPersonasDesc
 
@@ -78,12 +79,8 @@ func defaultBotCommands() []tgapi.BotCommand {
 			Description: commandForgetDesc,
 		},
 		{
-			Command:     commandJobs,
-			Description: commandJobsDesc,
-		},
-		{
-			Command:     commandJobsClear,
-			Description: commandJobsClearDesc,
+			Command:     commandCron,
+			Description: commandCronDesc,
 		},
 		{
 			Command:     commandPersona,

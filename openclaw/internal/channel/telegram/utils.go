@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/croncmd"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
@@ -280,13 +281,27 @@ const (
 	forgetUnsupportedMessage = "Forget is not supported."
 
 	jobsUnsupportedMessage = "Scheduled job management is not supported."
-	jobsListFailedMessage  = "Failed to list scheduled jobs."
-	jobsClearFailedMessage = "Failed to clear scheduled jobs."
-	jobsEmptyMessage       = "No scheduled jobs for this chat."
-	jobsClearNoopMessage   = "No scheduled jobs to clear for this chat."
-	jobsMessageHeader      = "Scheduled jobs for this chat:"
-	jobsClearOKFmt         = "Cleared %d scheduled job(s) for this chat."
-	jobTimeLayout          = "2006-01-02 15:04:05 MST"
+	jobsUsageMessage       = "Usage:\n" +
+		"/cron list\n" +
+		"/cron status <index|id>\n" +
+		"/cron stop <index|id>\n" +
+		"/cron resume <index|id>\n" +
+		"/cron remove <index|id>\n" +
+		"/cron clear"
+	jobsListFailedMessage   = "Failed to list scheduled jobs."
+	jobsClearFailedMessage  = "Failed to clear scheduled jobs."
+	jobsUpdateFailedMessage = "Failed to update the scheduled job."
+	jobsRemoveFailedMessage = "Failed to remove the scheduled job."
+	jobsEmptyMessage        = "No scheduled jobs for this chat."
+	jobsClearNoopMessage    = "No scheduled jobs to clear for this chat."
+	jobsMessageHeader       = "Scheduled jobs for this chat:"
+	jobsClearOKFmt          = "Cleared %d scheduled job(s) for this chat."
+	jobsStopOKFmt           = "Stopped scheduled job %s."
+	jobsResumeOKFmt         = "Resumed scheduled job %s."
+	jobsRemoveOKFmt         = "Removed scheduled job %s."
+	jobsStatusHeader        = "Scheduled job details:"
+	jobsSelectorHint        = "Use the list index or a unique job id prefix."
+	jobTimeLayout           = "2006-01-02 15:04:05 MST"
 
 	personaUnsupportedMessage = "Preset personas are not supported."
 	personaListFailedMessage  = "Failed to load persona presets."
@@ -376,6 +391,21 @@ type scheduledJobManager interface {
 		userID string,
 		target string,
 	) (int, error)
+	SetScheduledJobEnabled(
+		ctx context.Context,
+		channel string,
+		userID string,
+		target string,
+		jobID string,
+		enabled bool,
+	) (gwclient.ScheduledJobSummary, error)
+	RemoveScheduledJob(
+		ctx context.Context,
+		channel string,
+		userID string,
+		target string,
+		jobID string,
+	) (bool, error)
 }
 
 type personaManager interface {
@@ -494,12 +524,13 @@ func (c *Channel) handleForgetCommand(
 	return nil
 }
 
-func (c *Channel) handleJobsCommand(
+func (c *Channel) handleCronCommand(
 	ctx context.Context,
 	chatID int64,
 	messageThreadID int,
 	replyTo int,
 	userID string,
+	args string,
 ) error {
 	manager, ok := c.gw.(scheduledJobManager)
 	if !ok {
@@ -513,11 +544,60 @@ func (c *Channel) handleJobsCommand(
 		return nil
 	}
 
+	cmd, err := croncmd.Parse(args)
+	if err != nil {
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobsUsageMessage,
+		)
+		return nil
+	}
+
+	target := currentChatTarget(chatID, messageThreadID)
+	switch cmd.Action {
+	case croncmd.ActionHelp:
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobsUsageMessage,
+		)
+		return nil
+	case croncmd.ActionClear:
+		removed, err := manager.ClearScheduledJobs(
+			ctx,
+			channelID,
+			userID,
+			target,
+		)
+		if err != nil {
+			log.WarnfContext(ctx, "telegram: clear jobs: %v", err)
+			c.reply(
+				ctx,
+				chatID,
+				messageThreadID,
+				replyTo,
+				jobsClearFailedMessage,
+			)
+			return nil
+		}
+		text := jobsClearNoopMessage
+		if removed > 0 {
+			text = fmt.Sprintf(jobsClearOKFmt, removed)
+		}
+		c.reply(ctx, chatID, messageThreadID, replyTo, text)
+		return nil
+	}
+
 	jobs, err := manager.ListScheduledJobs(
 		ctx,
 		channelID,
 		userID,
-		currentChatTarget(chatID, messageThreadID),
+		target,
 	)
 	if err != nil {
 		log.WarnfContext(ctx, "telegram: list jobs: %v", err)
@@ -531,14 +611,79 @@ func (c *Channel) handleJobsCommand(
 		return nil
 	}
 
-	c.reply(
+	switch cmd.Action {
+	case croncmd.ActionList:
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			formatScheduledJobsMessage(jobs),
+		)
+		return nil
+	case croncmd.ActionStatus:
+		return c.replySelectedJob(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobs,
+			cmd.Selector,
+		)
+	case croncmd.ActionStop, croncmd.ActionResume:
+		enabled := cmd.Action == croncmd.ActionResume
+		return c.setSelectedJobEnabled(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			manager,
+			userID,
+			target,
+			jobs,
+			cmd.Action,
+			cmd.Selector,
+			enabled,
+		)
+	case croncmd.ActionRemove:
+		return c.removeSelectedJob(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			manager,
+			userID,
+			target,
+			jobs,
+			cmd.Selector,
+		)
+	default:
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobsUsageMessage,
+		)
+		return nil
+	}
+}
+
+func (c *Channel) handleJobsCommand(
+	ctx context.Context,
+	chatID int64,
+	messageThreadID int,
+	replyTo int,
+	userID string,
+) error {
+	return c.handleCronCommand(
 		ctx,
 		chatID,
 		messageThreadID,
 		replyTo,
-		formatScheduledJobsMessage(jobs),
+		userID,
+		croncmd.ActionList,
 	)
-	return nil
 }
 
 func (c *Channel) handleJobsClearCommand(
@@ -548,41 +693,176 @@ func (c *Channel) handleJobsClearCommand(
 	replyTo int,
 	userID string,
 ) error {
-	manager, ok := c.gw.(scheduledJobManager)
-	if !ok {
+	return c.handleCronCommand(
+		ctx,
+		chatID,
+		messageThreadID,
+		replyTo,
+		userID,
+		croncmd.ActionClear,
+	)
+}
+
+func (c *Channel) replySelectedJob(
+	ctx context.Context,
+	chatID int64,
+	messageThreadID int,
+	replyTo int,
+	jobs []gwclient.ScheduledJobSummary,
+	selector string,
+) error {
+	job, err := croncmd.ResolveSelector(jobs, selector)
+	if err != nil {
 		c.reply(
 			ctx,
 			chatID,
 			messageThreadID,
 			replyTo,
-			jobsUnsupportedMessage,
+			jobsUsageMessage,
+		)
+		return nil
+	}
+	c.reply(
+		ctx,
+		chatID,
+		messageThreadID,
+		replyTo,
+		formatScheduledJobDetails(job),
+	)
+	return nil
+}
+
+func (c *Channel) setSelectedJobEnabled(
+	ctx context.Context,
+	chatID int64,
+	messageThreadID int,
+	replyTo int,
+	manager scheduledJobManager,
+	userID string,
+	target string,
+	jobs []gwclient.ScheduledJobSummary,
+	action string,
+	selector string,
+	enabled bool,
+) error {
+	job, err := croncmd.ResolveSelector(jobs, selector)
+	if err != nil {
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobsUsageMessage,
 		)
 		return nil
 	}
 
-	removed, err := manager.ClearScheduledJobs(
+	updated, err := manager.SetScheduledJobEnabled(
 		ctx,
 		channelID,
 		userID,
-		currentChatTarget(chatID, messageThreadID),
+		target,
+		job.ID,
+		enabled,
 	)
 	if err != nil {
-		log.WarnfContext(ctx, "telegram: clear jobs: %v", err)
+		log.WarnfContext(
+			ctx,
+			"telegram: update job %s: %v",
+			job.ID,
+			err,
+		)
 		c.reply(
 			ctx,
 			chatID,
 			messageThreadID,
 			replyTo,
-			jobsClearFailedMessage,
+			jobsUpdateFailedMessage,
 		)
 		return nil
 	}
 
-	text := jobsClearNoopMessage
-	if removed > 0 {
-		text = fmt.Sprintf(jobsClearOKFmt, removed)
+	text := fmt.Sprintf(
+		jobsStopOKFmt,
+		scheduledJobDisplayName(updated),
+	)
+	if action == croncmd.ActionResume {
+		text = fmt.Sprintf(
+			jobsResumeOKFmt,
+			scheduledJobDisplayName(updated),
+		)
 	}
 	c.reply(ctx, chatID, messageThreadID, replyTo, text)
+	return nil
+}
+
+func (c *Channel) removeSelectedJob(
+	ctx context.Context,
+	chatID int64,
+	messageThreadID int,
+	replyTo int,
+	manager scheduledJobManager,
+	userID string,
+	target string,
+	jobs []gwclient.ScheduledJobSummary,
+	selector string,
+) error {
+	job, err := croncmd.ResolveSelector(jobs, selector)
+	if err != nil {
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobsUsageMessage,
+		)
+		return nil
+	}
+
+	removed, err := manager.RemoveScheduledJob(
+		ctx,
+		channelID,
+		userID,
+		target,
+		job.ID,
+	)
+	if err != nil {
+		log.WarnfContext(
+			ctx,
+			"telegram: remove job %s: %v",
+			job.ID,
+			err,
+		)
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobsRemoveFailedMessage,
+		)
+		return nil
+	}
+	if !removed {
+		c.reply(
+			ctx,
+			chatID,
+			messageThreadID,
+			replyTo,
+			jobsUsageMessage,
+		)
+		return nil
+	}
+
+	c.reply(
+		ctx,
+		chatID,
+		messageThreadID,
+		replyTo,
+		fmt.Sprintf(
+			jobsRemoveOKFmt,
+			scheduledJobDisplayName(job),
+		),
+	)
 	return nil
 }
 
@@ -857,20 +1137,60 @@ func formatScheduledJobsMessage(
 	return b.String()
 }
 
+func formatScheduledJobDetails(
+	job gwclient.ScheduledJobSummary,
+) string {
+	lines := []string{
+		jobsStatusHeader,
+		"Name: " + scheduledJobDisplayName(job),
+		"ID: " + strings.TrimSpace(job.ID),
+		"Schedule: " + strings.TrimSpace(job.Schedule),
+		"Enabled: " + formatJobEnabled(job.Enabled),
+		"Last status: " + valueOrDash(job.LastStatus),
+		"Runs: " + valueOrDash(formatScheduledJobRunCount(job)),
+		"Overlap: " + valueOrDash(
+			formatScheduledJobOverlap(job.OverlapPolicy),
+		),
+	}
+	if job.EndsAt != nil && !job.EndsAt.IsZero() {
+		lines = append(
+			lines,
+			"Ends at: "+
+				job.EndsAt.Local().Format(jobTimeLayout),
+		)
+	}
+	if job.NextRunAt != nil && !job.NextRunAt.IsZero() {
+		lines = append(
+			lines,
+			"Next run: "+
+				job.NextRunAt.Local().Format(jobTimeLayout),
+		)
+	}
+	if text := strings.TrimSpace(job.LastError); text != "" {
+		lines = append(lines, "Last error: "+text)
+	}
+	if text := strings.TrimSpace(job.LastOutput); text != "" {
+		lines = append(
+			lines,
+			"Last output: "+trimJobText(text),
+		)
+	}
+	lines = append(lines, jobsSelectorHint)
+	return strings.Join(lines, "\n")
+}
+
 func formatScheduledJobLine(job gwclient.ScheduledJobSummary) string {
-	id := strings.TrimSpace(job.ID)
-	if id == "" {
+	jobID := strings.TrimSpace(job.ID)
+	if jobID == "" {
 		return ""
 	}
 
-	name := strings.TrimSpace(job.Name)
-	if name == "" {
-		name = id
-	}
-
-	parts := []string{name}
+	parts := []string{scheduledJobDisplayName(job)}
 	if schedule := strings.TrimSpace(job.Schedule); schedule != "" {
 		parts = append(parts, schedule)
+	}
+	if runCount := formatScheduledJobRunCount(job); runCount != "" {
+		parts = append(parts, runCount)
 	}
 	if job.NextRunAt != nil && !job.NextRunAt.IsZero() {
 		parts = append(
@@ -881,8 +1201,64 @@ func formatScheduledJobLine(job gwclient.ScheduledJobSummary) string {
 	if status := strings.TrimSpace(job.LastStatus); status != "" {
 		parts = append(parts, status)
 	}
-	parts = append(parts, "id "+id)
+	parts = append(parts, "id "+croncmd.ShortID(jobID))
 	return "- " + strings.Join(parts, " | ")
+}
+
+func scheduledJobDisplayName(job gwclient.ScheduledJobSummary) string {
+	name := strings.TrimSpace(job.Name)
+	if name != "" {
+		return name
+	}
+	return strings.TrimSpace(job.ID)
+}
+
+func formatJobEnabled(enabled bool) string {
+	if enabled {
+		return "yes"
+	}
+	return "no"
+}
+
+func valueOrDash(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return "-"
+	}
+	return trimmed
+}
+
+func formatScheduledJobRunCount(job gwclient.ScheduledJobSummary) string {
+	switch {
+	case job.MaxRuns > 0:
+		return fmt.Sprintf(
+			"runs %d/%d",
+			job.RunCount,
+			job.MaxRuns,
+		)
+	case job.RunCount > 0:
+		return fmt.Sprintf("runs %d", job.RunCount)
+	default:
+		return ""
+	}
+}
+
+func formatScheduledJobOverlap(policy string) string {
+	trimmed := strings.TrimSpace(policy)
+	if trimmed == "" {
+		return ""
+	}
+	return trimmed
+}
+
+func trimJobText(text string) string {
+	const maxRunes = 120
+
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "..."
 }
 
 func firstCommandArg(args string) string {

@@ -733,6 +733,15 @@ func (c *Channel) handleMessage(
 				laneKey,
 				fromID,
 			)
+		case commandCron:
+			return c.handleCronCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				fromID,
+				cmd.Args,
+			)
 		case commandJobs:
 			return c.handleJobsCommand(
 				ctx,

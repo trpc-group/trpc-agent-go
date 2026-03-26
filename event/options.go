@@ -11,6 +11,8 @@
 package event
 
 import (
+	"encoding/json"
+
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -72,4 +74,44 @@ func WithTag(tag string) Option {
 		}
 		e.Tag += TagDelimiter + tag
 	}
+}
+
+// WithExtension stores one serialized extension on the event.
+func WithExtension(key string, value any) Option {
+	return func(e *Event) {
+		_ = SetExtension(e, key, value)
+	}
+}
+
+// SetExtension stores one serialized extension on the event.
+func SetExtension(e *Event, key string, value any) error {
+	if e == nil || key == "" {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if e.Extensions == nil {
+		e.Extensions = make(map[string]json.RawMessage)
+	}
+	e.Extensions[key] = cloneRawMessage(raw)
+	return nil
+}
+
+// GetExtension decodes one typed extension from the event.
+func GetExtension[T any](e *Event, key string) (T, bool, error) {
+	var zero T
+	if e == nil || key == "" || e.Extensions == nil {
+		return zero, false, nil
+	}
+	raw, ok := e.Extensions[key]
+	if !ok || len(raw) == 0 {
+		return zero, false, nil
+	}
+	var out T
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return zero, false, err
+	}
+	return out, true, nil
 }
