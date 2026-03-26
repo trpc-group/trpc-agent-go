@@ -301,8 +301,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 
 	// Append per-filter messages from session events when allowed.
-	needToAddInvocationMessage := true
-	needToAddInvocationMessage = p.appendSessionMessages(
+	needToAddInvocationMessage := p.appendSessionMessages(
 		ctx,
 		invocation,
 		req,
