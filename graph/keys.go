@@ -22,6 +22,14 @@ const (
 	// Accepted values: "none", "filtered", "all". See
 	// internal/flow/processor.ContentRequestProcessor.IncludeContents.
 	CfgKeyIncludeContents = "include_contents"
+	// CfgKeySubgraphMessageSource controls how an AgentNode child invocation
+	// should assemble messages. It is populated by graph AgentNode wiring and
+	// consumed by child request processors such as LLMAgent's content processor.
+	CfgKeySubgraphMessageSource = "subgraph_message_source"
+	// CfgKeySubgraphMessageSourceExplicit marks whether the configured
+	// subgraph message source came from an explicit node option instead of
+	// being inferred by Auto resolution.
+	CfgKeySubgraphMessageSourceExplicit = "subgraph_message_source_explicit"
 )
 
 // State map keys (stored into execution state)
