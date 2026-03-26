@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -284,6 +285,117 @@ func TestSubgraph_OutputMapper_HandoffToNextNode(t *testing.T) {
 	require.NotNil(t, done.Response)
 	require.Len(t, done.Choices, 1)
 	require.Equal(t, expected, done.Choices[0].Message.Content)
+}
+
+func TestBuildChildStateForAgentNode_MessageSourceAutoUsesGraphSnapshot(
+	t *testing.T,
+) {
+	parent := State{
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("u"),
+			model.NewAssistantMessage("a"),
+		},
+	}
+
+	childState, source := buildChildStateForAgentNode(
+		parent,
+		"agentNode",
+		&messageEchoAgent{name: "child"},
+		agentNodeConfigFromOptions(),
+	)
+
+	require.Equal(t, SubgraphMessageSourceGraphSnapshot, source)
+	require.Equal(t, includeContentsNone, childState[CfgKeyIncludeContents])
+	require.Equal(
+		t,
+		string(SubgraphMessageSourceGraphSnapshot),
+		childState[CfgKeySubgraphMessageSource],
+	)
+	require.Equal(t, false, childState[CfgKeySubgraphMessageSourceExplicit])
+}
+
+func TestBuildChildStateForAgentNode_MessageSourceExplicitNone(
+	t *testing.T,
+) {
+	parent := State{
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("u"),
+		},
+	}
+
+	childState, source := buildChildStateForAgentNode(
+		parent,
+		"agentNode",
+		&messageEchoAgent{name: "child"},
+		agentNodeConfigFromOptions(
+			WithSubgraphMessageSource(SubgraphMessageSourceNone),
+		),
+	)
+
+	require.Equal(t, SubgraphMessageSourceNone, source)
+	require.Equal(t, includeContentsNone, childState[CfgKeyIncludeContents])
+	require.Equal(t, string(SubgraphMessageSourceNone), childState[CfgKeySubgraphMessageSource])
+	require.Equal(t, false, childState[CfgKeySubgraphMessageSourceExplicit])
+}
+
+func TestBuildChildStateForAgentNode_MessageSourceExplicitGraphSnapshot(
+	t *testing.T,
+) {
+	parent := State{
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("u"),
+		},
+	}
+
+	childState, source := buildChildStateForAgentNode(
+		parent,
+		"agentNode",
+		&messageEchoAgent{name: "child"},
+		agentNodeConfigFromOptions(
+			WithSubgraphMessageSource(SubgraphMessageSourceGraphSnapshot),
+		),
+	)
+
+	require.Equal(t, SubgraphMessageSourceGraphSnapshot, source)
+	require.Equal(t, includeContentsNone, childState[CfgKeyIncludeContents])
+	require.Equal(
+		t,
+		string(SubgraphMessageSourceGraphSnapshot),
+		childState[CfgKeySubgraphMessageSource],
+	)
+	require.Equal(t, true, childState[CfgKeySubgraphMessageSourceExplicit])
+}
+
+func TestBuildAgentInvocationWithStateScopeAndInputKey_GraphSnapshotSuppressesCurrentInput(
+	t *testing.T,
+) {
+	ctx := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
+		agent.WithInvocationAgent(&messageEchoAgent{name: "parent"}),
+	))
+
+	parentState := State{
+		StateKeyUserInput: "current-input",
+	}
+	runtime := State{
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("history-user"),
+			model.NewAssistantMessage("history-assistant"),
+		},
+	}
+
+	inv := buildAgentInvocationWithStateScopeAndInputKey(
+		ctx,
+		parentState,
+		runtime,
+		&messageEchoAgent{name: "child"},
+		"agentNode",
+		"",
+		StateKeyUserInput,
+		SubgraphMessageSourceGraphSnapshot,
+	)
+
+	require.NotNil(t, inv)
+	require.Empty(t, inv.Message.Content)
 }
 
 func TestSubgraph_DisableGraphCompletionEvent_DoesNotDropOutput(t *testing.T) {
