@@ -44,6 +44,8 @@ type options struct {
 	evalCaseParallelism               *int
 	evalCaseParallelInferenceEnabled  *bool
 	evalCaseParallelEvaluationEnabled *bool
+	runDetailsEnabled                 bool
+	runDetailsCollector               *runDetailsCollector
 	runOptions                        []agent.RunOption
 }
 
@@ -163,6 +165,13 @@ func WithEvalCaseParallelInferenceEnabled(enabled bool) Option {
 func WithEvalCaseParallelEvaluationEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.evalCaseParallelEvaluationEnabled = &enabled
+	}
+}
+
+// WithRunDetailsEnabled enables or disables per-run inference details in evaluation results.
+func WithRunDetailsEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.runDetailsEnabled = enabled
 	}
 }
 
