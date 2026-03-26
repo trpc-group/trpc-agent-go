@@ -51,6 +51,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.Nil(t, opts.evalCaseParallelism)
 	assert.Nil(t, opts.evalCaseParallelInferenceEnabled)
 	assert.Nil(t, opts.evalCaseParallelEvaluationEnabled)
+	assert.False(t, opts.runDetailsEnabled)
 }
 
 func TestWithEvalSetManager(t *testing.T) {
@@ -153,6 +154,11 @@ func TestWithEvalCaseParallelEvaluationEnabled(t *testing.T) {
 		return
 	}
 	assert.True(t, *opts.evalCaseParallelEvaluationEnabled)
+}
+
+func TestWithRunDetailsEnabled(t *testing.T) {
+	opts := newOptions(WithRunDetailsEnabled(true))
+	assert.True(t, opts.runDetailsEnabled)
 }
 
 func TestOptionsValidateRejectsNilOptions(t *testing.T) {

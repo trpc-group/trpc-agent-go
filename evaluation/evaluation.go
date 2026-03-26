@@ -14,11 +14,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
@@ -64,6 +67,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		callbacks:                         opts.callbacks,
 		numRuns:                           opts.numRuns,
 		numRunsParallelEnabled:            opts.numRunsParallelEnabled,
+		runDetailsEnabled:                 opts.runDetailsEnabled,
 		runOptions:                        opts.runOptions,
 		evalCaseParallelism:               opts.evalCaseParallelism,
 		evalCaseParallelInferenceEnabled:  opts.evalCaseParallelInferenceEnabled,
@@ -114,6 +118,7 @@ type agentEvaluator struct {
 	callbacks                         *service.Callbacks
 	numRuns                           int
 	numRunsParallelEnabled            *bool
+	runDetailsEnabled                 bool
 	runOptions                        []agent.RunOption
 	evalCaseParallelism               *int
 	evalCaseParallelInferenceEnabled  *bool
@@ -132,10 +137,32 @@ type EvaluationResult struct {
 
 // EvaluationCaseResult aggregates the outcome of a single eval case across multiple runs.
 type EvaluationCaseResult struct {
-	EvalCaseID      string                         `json:"evalId"`          // EvalCaseID identifies the evaluation case.
-	OverallStatus   status.EvalStatus              `json:"overallStatus"`   // OverallStatus summarizes the overall status of case across runs.
-	EvalCaseResults []*evalresult.EvalCaseResult   `json:"evalCaseResults"` // EvalCaseResults stores the per-run results for this case.
-	MetricResults   []*evalresult.EvalMetricResult `json:"metricResults"`   // MetricResults lists aggregated metric outcomes across runs.
+	EvalCaseID      string                         `json:"evalId"`               // EvalCaseID identifies the evaluation case.
+	OverallStatus   status.EvalStatus              `json:"overallStatus"`        // OverallStatus summarizes the overall status of case across runs.
+	EvalCaseResults []*evalresult.EvalCaseResult   `json:"evalCaseResults"`      // EvalCaseResults stores the per-run results for this case.
+	MetricResults   []*evalresult.EvalMetricResult `json:"metricResults"`        // MetricResults lists aggregated metric outcomes across runs.
+	RunDetails      []*EvaluationCaseRunDetails    `json:"runDetails,omitempty"` // RunDetails stores optional per-run inference details for this case.
+}
+
+// EvaluationCaseRunDetails contains caller-facing details for a single run of an eval case.
+type EvaluationCaseRunDetails struct {
+	RunID     int                         `json:"runId,omitempty"`     // RunID identifies the evaluation run.
+	Inference *EvaluationInferenceDetails `json:"inference,omitempty"` // Inference stores the inference details captured during this run.
+}
+
+// EvaluationInferenceDetails contains caller-facing inference details for a single eval case run.
+type EvaluationInferenceDetails struct {
+	SessionID       string                `json:"sessionId,omitempty"`       // SessionID identifies the inference session used for this run.
+	UserID          string                `json:"userId,omitempty"`          // UserID identifies the user used for this run.
+	Status          status.EvalStatus     `json:"status,omitempty"`          // Status records the inference status for this run.
+	ErrorMessage    string                `json:"errorMessage,omitempty"`    // ErrorMessage records the inference failure message when present.
+	Inferences      []*evalset.Invocation `json:"inferences,omitempty"`      // Inferences stores the invocation outputs captured during this run.
+	ExecutionTraces []*trace.Trace        `json:"executionTraces,omitempty"` // ExecutionTraces stores the execution traces captured during this run.
+}
+
+type runDetailsCollector struct {
+	mu       sync.Mutex
+	byCaseID map[string]map[int]*EvaluationCaseRunDetails
 }
 
 // Evaluate evaluates agent against the specified eval set across multiple runs.
@@ -180,6 +207,7 @@ func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 		callbacks:                         a.callbacks,
 		numRuns:                           a.numRuns,
 		numRunsParallelEnabled:            a.numRunsParallelEnabled,
+		runDetailsEnabled:                 a.runDetailsEnabled,
 		runOptions:                        append([]agent.RunOption(nil), a.runOptions...),
 		evalCaseParallelism:               a.evalCaseParallelism,
 		evalCaseParallelInferenceEnabled:  a.evalCaseParallelInferenceEnabled,
@@ -237,6 +265,9 @@ func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID strin
 	// case results. So EvalCaseResults need to be grouped by case ID.
 	// caseResultsByID is a map from case ID to a list of eval case results.
 	caseResultsByID := make(map[string][]*evalresult.EvalCaseResult)
+	if opts.runDetailsEnabled {
+		opts.runDetailsCollector = newRunDetailsCollector()
+	}
 	// Run evaluation on the specified eval set across multiple inference runs.
 	evalSetResult, err := a.runEvaluation(ctx, evalSetID, opts)
 	if err != nil {
@@ -252,6 +283,9 @@ func (a *agentEvaluator) collectCaseResults(ctx context.Context, evalSetID strin
 		evalCaseResult, err := aggregateCaseRuns(caseID, runs)
 		if err != nil {
 			return nil, nil, fmt.Errorf("aggregate case runs: %w", err)
+		}
+		if opts.runDetailsEnabled {
+			evalCaseResult.RunDetails = collectRunDetails(runs, opts.runDetailsCollector.caseRunDetails(caseID))
 		}
 		evalCaseResults = append(evalCaseResults, evalCaseResult)
 	}
@@ -396,6 +430,9 @@ func (a *agentEvaluator) runEvaluationOnce(
 	if err != nil {
 		return nil, fmt.Errorf("run %d inference: %w", runID, err)
 	}
+	if opts.runDetailsCollector != nil {
+		opts.runDetailsCollector.add(runID, runInferenceResults)
+	}
 	evaluateRequest := &service.EvaluateRequest{
 		AppName:          a.appName,
 		EvalSetID:        evalSetID,
@@ -496,6 +533,82 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 		EvalCaseResults: runs,
 		MetricResults:   metricResults,
 	}, nil
+}
+
+func collectRunDetails(runs []*evalresult.EvalCaseResult, runDetailsByID map[int]*EvaluationCaseRunDetails) []*EvaluationCaseRunDetails {
+	if len(runDetailsByID) == 0 {
+		return nil
+	}
+	runDetails := make([]*EvaluationCaseRunDetails, 0, len(runs))
+	for _, run := range runs {
+		if run == nil {
+			continue
+		}
+		runDetail, ok := runDetailsByID[run.RunID]
+		if !ok {
+			continue
+		}
+		runDetails = append(runDetails, runDetail)
+	}
+	if len(runDetails) == 0 {
+		return nil
+	}
+	return runDetails
+}
+
+func newEvaluationInferenceDetails(inferenceResult *service.InferenceResult) *EvaluationInferenceDetails {
+	if inferenceResult == nil {
+		return nil
+	}
+	return &EvaluationInferenceDetails{
+		SessionID:       inferenceResult.SessionID,
+		UserID:          inferenceResult.UserID,
+		Status:          inferenceResult.Status,
+		ErrorMessage:    inferenceResult.ErrorMessage,
+		Inferences:      append([]*evalset.Invocation(nil), inferenceResult.Inferences...),
+		ExecutionTraces: append([]*trace.Trace(nil), inferenceResult.ExecutionTraces...),
+	}
+}
+
+func newRunDetailsCollector() *runDetailsCollector {
+	return &runDetailsCollector{
+		byCaseID: make(map[string]map[int]*EvaluationCaseRunDetails),
+	}
+}
+
+func (c *runDetailsCollector) add(runID int, inferenceResults []*service.InferenceResult) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, inferenceResult := range inferenceResults {
+		if inferenceResult == nil || inferenceResult.EvalCaseID == "" {
+			continue
+		}
+		if _, ok := c.byCaseID[inferenceResult.EvalCaseID]; !ok {
+			c.byCaseID[inferenceResult.EvalCaseID] = make(map[int]*EvaluationCaseRunDetails)
+		}
+		c.byCaseID[inferenceResult.EvalCaseID][runID] = &EvaluationCaseRunDetails{
+			RunID:     runID,
+			Inference: newEvaluationInferenceDetails(inferenceResult),
+		}
+	}
+}
+
+func (c *runDetailsCollector) caseRunDetails(caseID string) map[int]*EvaluationCaseRunDetails {
+	if c == nil || caseID == "" {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	runDetailsByID, ok := c.byCaseID[caseID]
+	if !ok {
+		return nil
+	}
+	result := make(map[int]*EvaluationCaseRunDetails, len(runDetailsByID))
+	maps.Copy(result, runDetailsByID)
+	return result
 }
 
 // summarizeOverallStatus summarizes the aggregate status across all cases in the evaluation.
