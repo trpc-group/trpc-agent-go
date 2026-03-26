@@ -72,6 +72,12 @@ func (b *keyBuilder) SummaryKey(key session.Key) string {
 	return fmt.Sprintf("%s:sesssum:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID)
 }
 
+// RunActiveKey returns the key for distributed active-run coordination.
+// Format: [userPrefix:]hashidx:run:active:appName:{userID}:sessionID
+func (b *keyBuilder) RunActiveKey(key session.Key) string {
+	return fmt.Sprintf("%s:run:active:%s:%s:%s", b.fullPrefix(), key.AppName, b.hashTag(key.UserID), key.SessionID)
+}
+
 // TrackDataKey returns the key for track event data (Hash: field=eventID, value=TrackEvent JSON).
 // Format: [userPrefix:]hashidx:trkdata:appName:{userID}:sessionID:trackName
 func (b *keyBuilder) TrackDataKey(key session.Key, track session.Track) string {

@@ -268,6 +268,180 @@ end
 return 1
 `)
 
+// luaRunBegin tries to acquire the active run lease, optionally requesting
+// cancellation of the current owner first.
+// KEYS[1] = run active key
+// ARGV[1] = now (unix ms)
+// ARGV[2] = lease ttl (ms)
+// ARGV[3] = request id
+// ARGV[4] = invocation id
+// ARGV[5] = agent name
+// ARGV[6] = node id
+// ARGV[7] = lease token
+// ARGV[8] = policy
+// ARGV[9] = cancel reason
+// ARGV[10] = cancel grace (ms)
+var luaRunBegin = redis.NewScript(`
+local activeKey = KEYS[1]
+local nowMs = tonumber(ARGV[1])
+local ttlMs = tonumber(ARGV[2])
+local requestID = ARGV[3]
+local invocationID = ARGV[4]
+local agentName = ARGV[5]
+local nodeID = ARGV[6]
+local leaseToken = ARGV[7]
+local policy = ARGV[8]
+local cancelReason = ARGV[9]
+local cancelGrace = tonumber(ARGV[10])
+
+local active = redis.call('HGETALL', activeKey)
+if #active == 0 then
+    redis.call('HSET', activeKey,
+        'request_id', requestID,
+        'invocation_id', invocationID,
+        'agent_name', agentName,
+        'node_id', nodeID,
+        'lease_token', leaseToken,
+        'state', 'running',
+        'cancel_requested', '0',
+        'cancel_reason', '',
+        'cancel_seq', '0',
+        'cancel_grace_ms', tostring(cancelGrace),
+        'lease_expire_at_unix_ms', tostring(nowMs + ttlMs))
+    redis.call('PEXPIRE', activeKey, ttlMs * 2)
+    return {'running'}
+end
+
+local current = {}
+for i = 1, #active, 2 do
+    current[active[i]] = active[i + 1]
+end
+local expireAt = tonumber(current['lease_expire_at_unix_ms'] or '0')
+if expireAt <= nowMs then
+    redis.call('DEL', activeKey)
+    redis.call('HSET', activeKey,
+        'request_id', requestID,
+        'invocation_id', invocationID,
+        'agent_name', agentName,
+        'node_id', nodeID,
+        'lease_token', leaseToken,
+        'state', 'running',
+        'cancel_requested', '0',
+        'cancel_reason', '',
+        'cancel_seq', '0',
+        'cancel_grace_ms', tostring(cancelGrace),
+        'lease_expire_at_unix_ms', tostring(nowMs + ttlMs))
+    redis.call('PEXPIRE', activeKey, ttlMs * 2)
+    return {'running'}
+end
+
+if policy == 'reject_if_busy' then
+    return {'busy'}
+end
+
+if policy == 'cancel_previous' and current['cancel_requested'] ~= '1' then
+    local nextSeq = tostring(tonumber(current['cancel_seq'] or '0') + 1)
+    redis.call('HSET', activeKey,
+        'cancel_requested', '1',
+        'cancel_reason', cancelReason,
+        'cancel_seq', nextSeq,
+        'cancel_grace_ms', tostring(cancelGrace))
+end
+
+return {'wait'}
+`)
+
+// luaRunRenew refreshes the lease for the active run owner and returns the
+// latest cancellation state.
+// KEYS[1] = run active key
+// ARGV[1] = now (unix ms)
+// ARGV[2] = lease ttl (ms)
+// ARGV[3] = request id
+// ARGV[4] = lease token
+var luaRunRenew = redis.NewScript(`
+local activeKey = KEYS[1]
+local nowMs = tonumber(ARGV[1])
+local ttlMs = tonumber(ARGV[2])
+local requestID = ARGV[3]
+local leaseToken = ARGV[4]
+
+local active = redis.call('HGETALL', activeKey)
+if #active == 0 then
+    return {'missing'}
+end
+
+local current = {}
+for i = 1, #active, 2 do
+    current[active[i]] = active[i + 1]
+end
+local expireAt = tonumber(current['lease_expire_at_unix_ms'] or '0')
+if expireAt <= nowMs then
+    redis.call('DEL', activeKey)
+    return {'missing'}
+end
+if current['request_id'] ~= requestID or current['lease_token'] ~= leaseToken then
+    return {'lost'}
+end
+
+redis.call('HSET', activeKey, 'lease_expire_at_unix_ms', tostring(nowMs + ttlMs))
+redis.call('PEXPIRE', activeKey, ttlMs * 2)
+return {
+    'ok',
+    current['cancel_requested'] or '0',
+    current['cancel_reason'] or '',
+    current['cancel_seq'] or '0',
+    current['cancel_grace_ms'] or '0'
+}
+`)
+
+// luaRunFinish releases the active run lease if the caller still owns it.
+// KEYS[1] = run active key
+// ARGV[1] = request id
+// ARGV[2] = lease token
+var luaRunFinish = redis.NewScript(`
+local activeKey = KEYS[1]
+local requestID = ARGV[1]
+local leaseToken = ARGV[2]
+
+local currentReq = redis.call('HGET', activeKey, 'request_id')
+local currentToken = redis.call('HGET', activeKey, 'lease_token')
+if not currentReq or not currentToken then
+    return 0
+end
+if currentReq ~= requestID or currentToken ~= leaseToken then
+    return -1
+end
+redis.call('DEL', activeKey)
+return 1
+`)
+
+// luaRunCancel marks the current active run as cancel requested.
+// KEYS[1] = run active key
+// ARGV[1] = request id (optional)
+// ARGV[2] = reason
+// ARGV[3] = cancel grace (ms)
+var luaRunCancel = redis.NewScript(`
+local activeKey = KEYS[1]
+local requestID = ARGV[1]
+local reason = ARGV[2]
+local grace = tonumber(ARGV[3])
+
+local currentReq = redis.call('HGET', activeKey, 'request_id')
+if not currentReq then
+    return 0
+end
+if requestID ~= '' and currentReq ~= requestID then
+    return 0
+end
+local nextSeq = tonumber(redis.call('HGET', activeKey, 'cancel_seq') or '0') + 1
+redis.call('HSET', activeKey,
+    'cancel_requested', '1',
+    'cancel_reason', reason,
+    'cancel_seq', tostring(nextSeq),
+    'cancel_grace_ms', tostring(grace))
+return 1
+`)
+
 // luaAppendTrackEvent atomically generates an ID, stores a track event, updates the time index,
 // and registers the track name in session meta's state.tracks.
 // The sequence counter is stored as a reserved field "_seq" inside the data Hash,

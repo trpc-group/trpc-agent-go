@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/runcontrol"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
@@ -48,6 +49,14 @@ type Option func(*Options)
 func WithSessionService(service session.Service) Option {
 	return func(opts *Options) {
 		opts.sessionService = service
+	}
+}
+
+// WithSessionConcurrencyPolicy configures distributed active-run coordination
+// when the injected session backend implements the internal runcontrol service.
+func WithSessionConcurrencyPolicy(policy SessionConcurrencyPolicy) Option {
+	return func(opts *Options) {
+		opts.sessionRunPolicy = policy
 	}
 }
 
@@ -155,6 +164,7 @@ type runner struct {
 	artifactService  artifact.Service
 	pluginManager    agent.PluginManager
 	ralphLoop        *RalphLoopConfig
+	sessionRunPolicy SessionConcurrencyPolicy
 
 	// Resource management fields.
 	ownedSessionService bool      // Indicates if sessionService was created by this runner.
@@ -165,7 +175,10 @@ type runner struct {
 }
 
 type runHandle struct {
-	cancel context.CancelFunc
+	cancel        context.CancelFunc
+	lease         *runcontrol.Lease
+	cancelOnce    sync.Once
+	lastCancelSeq int64
 
 	mu     sync.RWMutex
 	status RunStatus
@@ -173,13 +186,14 @@ type runHandle struct {
 
 // Options is the options for the Runner.
 type Options struct {
-	sessionService  session.Service
-	memoryService   memory.Service
-	artifactService artifact.Service
-	agents          map[string]agent.Agent
-	agentFactories  map[string]AgentFactory
-	plugins         []plugin.Plugin
-	ralphLoop       *RalphLoopConfig
+	sessionService   session.Service
+	memoryService    memory.Service
+	artifactService  artifact.Service
+	agents           map[string]agent.Agent
+	agentFactories   map[string]AgentFactory
+	plugins          []plugin.Plugin
+	ralphLoop        *RalphLoopConfig
+	sessionRunPolicy SessionConcurrencyPolicy
 }
 
 // newOptions creates a new Options.
@@ -228,6 +242,7 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		artifactService:     options.artifactService,
 		pluginManager:       pm,
 		ralphLoop:           options.ralphLoop,
+		sessionRunPolicy:    options.sessionRunPolicy,
 		ownedSessionService: ownedSessionService,
 	}
 }
@@ -278,6 +293,7 @@ func NewRunnerWithAgentFactory(
 		artifactService:     options.artifactService,
 		pluginManager:       pm,
 		ralphLoop:           options.ralphLoop,
+		sessionRunPolicy:    options.sessionRunPolicy,
 		ownedSessionService: ownedSessionService,
 	}
 }
@@ -359,16 +375,29 @@ func (r *runner) Run(
 		SessionID: sessionID,
 	}
 
-	sess, err := r.getOrCreateSession(execCtx, sessionKey)
+	ag, err := r.selectAgent(execCtx, ro)
+	if err != nil {
+		execCancel()
+		return nil, fmt.Errorf("select agent: %w", err)
+	}
+
+	invocationID := managedInvocationID()
+	lease, err := r.beginManagedRun(
+		execCtx,
+		sessionKey,
+		ro.RequestID,
+		invocationID,
+		ag.Info().Name,
+	)
 	if err != nil {
 		execCancel()
 		return nil, err
 	}
 
-	ag, err := r.selectAgent(execCtx, ro)
+	sess, err := r.getOrCreateSession(execCtx, sessionKey)
 	if err != nil {
 		execCancel()
-		return nil, fmt.Errorf("select agent: %w", err)
+		return nil, err
 	}
 
 	eventFilterKey := r.appName
@@ -377,6 +406,7 @@ func (r *runner) Run(
 	}
 
 	invocation := agent.NewInvocation(
+		agent.WithInvocationID(invocationID),
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationSessionService(r.sessionService),
 		agent.WithInvocationMessage(message),
@@ -405,6 +435,8 @@ func (r *runner) Run(
 		execCancel()
 		return nil, err
 	}
+	handle.lease = lease
+	r.startManagedRunLoops(execCtx, handle)
 
 	// If caller provided a history via RunOptions and the session is empty,
 	// persist that history into the session exactly once, so subsequent turns
@@ -429,6 +461,10 @@ func (r *runner) Run(
 				seedEvt,
 			)
 			if appendErr != nil {
+				r.finishManagedRun(execCtx, handle, runcontrol.FinishRequest{
+					Status:       runcontrol.StateFailed,
+					ErrorMessage: appendErr.Error(),
+				})
 				r.unregisterRun(ro.RequestID)
 				execCancel()
 				return nil, appendErr
@@ -446,6 +482,10 @@ func (r *runner) Run(
 		agent.InjectIntoEvent(invocation, evt)
 		evt = r.applyEventPlugins(execCtx, invocation, evt)
 		if err := r.sessionService.AppendEvent(execCtx, sess, evt); err != nil {
+			r.finishManagedRun(execCtx, handle, runcontrol.FinishRequest{
+				Status:       runcontrol.StateFailed,
+				ErrorMessage: err.Error(),
+			})
 			r.unregisterRun(ro.RequestID)
 			execCancel()
 			return nil, err
@@ -487,6 +527,10 @@ func (r *runner) Run(
 			log.Errorf("failed to append agent run error event: %v", appendErr)
 		}
 
+		r.finishManagedRun(execCtx, handle, runcontrol.FinishRequest{
+			Status:       runcontrol.StateFailed,
+			ErrorMessage: err.Error(),
+		})
 		r.unregisterRun(ro.RequestID)
 		execCancel()
 		invocation.CleanupNotice(execCtx)
@@ -724,6 +768,17 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		}
 		// Agent event stream completed.
 		r.safeEmitRunnerCompletion(ctx, loop)
+		finishReq := runcontrol.FinishRequest{Status: runcontrol.StateCompleted}
+		if ctx.Err() != nil {
+			finishReq.Status = runcontrol.StateCanceled
+			finishReq.ErrorMessage = ctx.Err().Error()
+		} else if loop.finalError != nil || loop.sawTerminalError {
+			finishReq.Status = runcontrol.StateFailed
+			if loop.finalError != nil {
+				finishReq.ErrorMessage = loop.finalError.Message
+			}
+		}
+		r.finishManagedRun(ctx, loop.runHandle, finishReq)
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		appender.Clear(loop.invocation)

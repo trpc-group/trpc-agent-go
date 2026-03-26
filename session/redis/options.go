@@ -25,6 +25,7 @@ const (
 	defaultAsyncSummaryNum   = 3
 	defaultSummaryQueueSize  = 100
 	defaultSummaryJobTimeout = 60 * time.Second
+	defaultRunLeaseTTL       = 15 * time.Second
 )
 
 // CompatMode defines the zset/hashidx compatibility mode for the redis session service.
@@ -84,8 +85,10 @@ type ServiceOpts struct {
 	// compatMode controls zset/hashidx compatibility behavior.
 	// See CompatMode constants for details.
 	// Default: CompatModeLegacy (safe for most scenarios).
-	compatMode    CompatMode
-	enableTracing bool
+	compatMode       CompatMode
+	enableTracing    bool
+	enableRunControl bool
+	runLeaseTTL      time.Duration
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -103,6 +106,7 @@ var (
 		summaryQueueSize:   defaultSummaryQueueSize,
 		summaryJobTimeout:  defaultSummaryJobTimeout,
 		compatMode:         CompatModeLegacy,
+		runLeaseTTL:        defaultRunLeaseTTL,
 	}
 )
 
@@ -260,6 +264,23 @@ func WithCompatMode(mode CompatMode) ServiceOpt {
 func WithKeyPrefix(prefix string) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.keyPrefix = prefix
+	}
+}
+
+// WithRunControlEnabled enables distributed active-run coordination APIs for
+// the redis session service.
+func WithRunControlEnabled(enable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.enableRunControl = enable
+	}
+}
+
+// WithRunLeaseTTL sets the TTL for the active run lease.
+func WithRunLeaseTTL(ttl time.Duration) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if ttl > 0 {
+			opts.runLeaseTTL = ttl
+		}
 	}
 }
 

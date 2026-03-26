@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/runcontrol"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -35,6 +36,7 @@ import (
 var (
 	_ session.Service      = (*Service)(nil)
 	_ session.TrackService = (*Service)(nil)
+	_ runcontrol.Service   = (*Service)(nil)
 )
 
 // Service is the redis session service.
