@@ -506,7 +506,7 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 
 ![evaluation](../assets/img/evaluation/evaluation.png)
 
-- **评估集 EvalSet** 用于描述评估覆盖的场景，提供评估集输入，每个用例按轮组织 Invocation，包含用户输入，以及用于对比的预期 `tools` 轨迹或 `finalResponse`。预期轨迹既可以静态写在 EvalSet 中，也可以在评估阶段通过 ExpectedRunner 动态生成。
+- **评估集 EvalSet** 用于描述评估覆盖的场景，提供评估集输入，每个用例按轮组织 Invocation，包含用户输入，以及用于对比的预期 `tools` 轨迹或 `finalResponse`。预期轨迹既可以静态写在 EvalSet 中，也可以在标准评测流程的推理阶段通过 ExpectedRunner 预生成。
 - **评估指标 Metric** 用于定义评估指标配置，包含 `metricName`、`criterion`、`threshold`。`metricName` 用来选择评估器实现，`criterion` 用来描述评估准则，`threshold` 用来定义阈值。
 - **评估器 Evaluator** 读取实际轨迹与预期轨迹，按 `criterion` 计算 `score`，再与 `threshold` 对比得到通过或失败。
 - **评估器注册中心 Registry** 维护 `metricName` 与 Evaluator 的映射关系，内置评估器和自定义评估器都通过它接入。
@@ -525,11 +525,11 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 
 ### 评估集 EvalSet
 
-EvalSet 用于描述评估覆盖的场景集合，提供评估集输入。每个场景对应一个评估用例 EvalCase，EvalCase 再按轮组织 Invocation。默认模式会按 `conversation` 驱动 Runner 推理产出实际轨迹，预期轨迹默认来自 `conversation`；当用例开启 `expectedRunnerEnabled` 时，预期轨迹会在评估阶段通过 ExpectedRunner 动态生成。Trace 模式会跳过推理并使用 `actualConversation` 作为实际轨迹。评估运行时，Service 会将实际轨迹与预期轨迹交给 Evaluator 对比打分。
+EvalSet 用于描述评估覆盖的场景集合，提供评估集输入。每个场景对应一个评估用例 EvalCase，EvalCase 再按轮组织 Invocation。默认模式支持两种推理输入：静态 `conversation` 与动态 `conversationScenario`。使用 `conversation` 时，框架会按轮读取 `userContent` 驱动 Runner 推理；使用 `conversationScenario` 时，框架会通过 UserSimulator 动态生成下一轮用户输入并采集实际轨迹。预期轨迹默认来自 `conversation`；使用 `conversationScenario` 且未开启 `expectedRunnerEnabled` 时，评估阶段会根据实际轨迹构造仅保留 `userContent` 的占位 expecteds；当用例开启 `expectedRunnerEnabled` 时，框架会在推理阶段通过 ExpectedRunner 预生成 expecteds，并在评估阶段直接复用。Trace 模式会跳过推理并使用 `actualConversation` 作为实际轨迹。评估运行时，Service 会将实际轨迹与预期轨迹交给 Evaluator 对比打分。
 
 #### 结构定义
 
-EvalSet 是评估用例的集合，每个用例用 EvalCase 表达。用例内部的 Conversation 按轮组织 Invocation，用于描述用户输入与预期输出；Trace 模式下 ActualConversation 用于描述实际输出轨迹，结构定义如下。
+EvalSet 是评估用例的集合，每个用例用 EvalCase 表达。默认模式下，可以使用 Conversation 描述静态多轮输入，也可以使用 ConversationScenario 描述动态用户模拟；Trace 模式下 ActualConversation 用于描述实际输出轨迹，结构定义如下。
 
 ```go
 import (
@@ -548,19 +548,30 @@ type EvalSet struct {
 
 // EvalCase 表示单个评估用例
 type EvalCase struct {
-	EvalID                string               // EvalID 是用例标识
-	EvalMode              EvalMode             // EvalMode 是用例模式，可选为空或 trace
-	ExpectedRunnerEnabled bool                 // ExpectedRunnerEnabled 表示是否在评估阶段通过 ExpectedRunner 动态生成预期输出，可选
-	ContextMessages       []*model.Message     // ContextMessages 是上下文消息，可选
-	Conversation          []*Invocation        // Conversation 是预期多轮交互序列，默认模式必填，Trace 模式可选
-	ActualConversation    []*Invocation        // ActualConversation 是 Trace 模式下的实际输出轨迹，Trace 模式必填
-	SessionInput          *SessionInput        // SessionInput 是会话初始化信息，必填
-	CreationTimestamp     *epochtime.EpochTime // CreationTimestamp 是创建时间戳，可选
+	EvalID                string                // EvalID 是用例标识
+	EvalMode              EvalMode              // EvalMode 是用例模式，可选为空或 trace
+	ExpectedRunnerEnabled bool                  // ExpectedRunnerEnabled 表示是否通过 ExpectedRunner 预生成预期输出，可选
+	ContextMessages       []*model.Message      // ContextMessages 是上下文消息，可选
+	Conversation          []*Invocation         // Conversation 是静态多轮交互序列，默认模式下与 ConversationScenario 二选一
+	ConversationScenario  *ConversationScenario // ConversationScenario 是动态用户模拟场景，默认模式下与 Conversation 二选一
+	ActualConversation    []*Invocation         // ActualConversation 是 Trace 模式下的实际输出轨迹，可选
+	SessionInput          *SessionInput         // SessionInput 是会话初始化信息，必填
+	CreationTimestamp     *epochtime.EpochTime  // CreationTimestamp 是创建时间戳，可选
+}
+
+// ConversationScenario 表示动态用户模拟场景
+type ConversationScenario struct {
+	Driver                ConversationScenarioDriver // Driver 指定由 actual 或 expected runner 驱动对话轨迹，可选，默认 actual
+	StartingPrompt        string // StartingPrompt 是固定首轮输入，可选
+	ConversationPlan      string // ConversationPlan 是用户目标与结束条件描述，必填
+	StopSignal            string // StopSignal 是模拟用户输出该内容时结束对话的标记，可选
+	MaxAllowedInvocations *int   // MaxAllowedInvocations 是最大允许轮数，0 表示不限制，可选
 }
 
 // Invocation 表示对话中的一轮交互
 type Invocation struct {
 	InvocationID          string               // InvocationID 是本轮标识，可选
+	ContextMessages       []*model.Message     // ContextMessages 是本轮上下文消息，可选
 	UserContent           *model.Message       // UserContent 是本轮用户输入，必填
 	FinalResponse         *model.Message       // FinalResponse 是最终响应，可选
 	Tools                 []*Tool              // Tools 是工具轨迹，可选
@@ -586,15 +597,15 @@ type SessionInput struct {
 
 EvalSet 由 `evalSetId` 标识，包含多个 EvalCase，每个用例用 `evalId` 标识。
 
-默认模式推理阶段按 `conversation` 的轮次读取 `userContent` 作为输入，`sessionInput.userId` 用于创建会话，必要时通过 `sessionInput.state` 注入初始状态，`contextMessages` 会在每次推理前注入额外上下文。Trace 模式下不会推理，而是直接使用 `actualConversation` 作为实际轨迹。
+默认模式推理阶段有两种组织方式。配置 `conversation` 时，框架会按轮读取 `userContent` 作为输入；配置 `conversationScenario` 时，框架会先创建被测 Agent 的会话，再通过 UserSimulator 根据场景动态生成每一轮用户输入。两种方式都使用 `sessionInput.userId` 创建会话，必要时通过 `sessionInput.state` 注入初始状态，`contextMessages` 会在每次推理前注入额外上下文。Trace 模式下不会推理，而是直接使用 `actualConversation` 作为实际轨迹。
 
 EvalSet 中的 `tools` 与 `finalResponse` 用于描述工具轨迹与最终响应，是否需要填写取决于所选评估指标。
 
 Trace 模式下可以通过 `actualConversation` 显式配置实际输出轨迹。
 
-当 Trace 模式同时配置了 `conversation` 与 `actualConversation` 时，需要按轮次对齐，且 `actualConversation` 每轮应包含 `userContent`。当仅配置 `actualConversation` 且未配置 `conversation` 时，表示不提供静态预期输出；如果用例开启了 `expectedRunnerEnabled` 并注入 ExpectedRunner，则预期输出会在评估阶段动态生成。
+当 Trace 模式同时配置了 `conversation` 与 `actualConversation` 时，需要按轮次对齐，且 `actualConversation` 每轮应包含 `userContent`。当仅配置 `actualConversation` 且未配置 `conversation` 时，表示不提供静态预期输出；如果用例开启了 `expectedRunnerEnabled` 并注入 ExpectedRunner，则标准评测流程会在推理阶段预生成预期输出。
 
-`evalMode` 为空表示默认模式，此时会实时推理并采集工具轨迹与最终响应。`evalMode` 为 `trace` 时跳过推理，使用 `actualConversation` 作为实际轨迹参与评估；`conversation` 可选用于提供预期输出。
+`evalMode` 为空表示默认模式，此时必须二选一配置 `conversation` 或 `conversationScenario`。`evalMode` 为 `trace` 时跳过推理，使用 `actualConversation` 作为实际轨迹参与评估；`conversation` 可选用于提供预期输出，`conversationScenario` 不支持在 Trace 模式下使用。
 
 #### EvalSet Manager
 
@@ -2464,6 +2475,7 @@ type InferenceResult struct {
 	EvalCaseID   string                // EvalCaseID 是用例标识
 	EvalMode     evalset.EvalMode      // EvalMode 是评估模式
 	Inferences   []*evalset.Invocation // Inferences 是推理阶段采集到的实际轨迹
+	ExpectedInferences []*evalset.Invocation // ExpectedInferences 是开启时在推理阶段预生成的预期轨迹
 	SessionID    string                // SessionID 是推理阶段会话标识
 	UserID       string                // UserID 是推理阶段用户标识
 	Status       status.EvalStatus     // Status 是推理状态
@@ -2497,19 +2509,19 @@ type EvalSetRunResult struct {
 
 推理阶段由 `Inference` 方法负责，读取 EvalSet 并按 `EvalCaseIDs` 过滤用例，然后为每个用例生成一个独立的 `SessionID` 并执行推理。
 
-当 `evalMode` 为空值时，推理阶段会按 `conversation` 的轮次依次调用 Runner，并把每轮采集到的实际 Invocation 写入 `Inferences`。
+当 `evalMode` 为空值时，推理阶段会根据用例配置选择输入来源：若配置了 `conversationScenario`，则由 UserSimulation 动态生成每轮用户输入；否则按 `conversation` 的轮次依次调用 Runner，并把每轮采集到的实际 Invocation 写入 `Inferences`。
 
-当 `evalMode` 为 `trace` 时，推理阶段不会运行 Runner，而是直接将 `actualConversation` 作为实际轨迹返回。
+当 `evalMode` 为 `trace` 时，推理阶段不会运行 Runner；若配置了 `actualConversation`，则直接将其作为实际轨迹返回，否则会将 `conversation` 视为实际轨迹返回。
 
 Local 实现支持 EvalCase 级并发推理。开启后会并行运行多个用例，单个用例内部仍按轮次顺序执行。
 
 #### 评估阶段
 
-评估阶段由 `Evaluate` 方法负责，以 `InferenceResult` 为输入，加载对应的 EvalCase，构造 actuals 与 expecteds 两组 Invocation 列表。expecteds 默认来自 EvalSet 的 `conversation`，当 EvalCase 开启 `expectedRunnerEnabled` 时 expecteds 会通过 ExpectedRunner 动态生成。然后按 `EvaluateConfig.EvalMetrics` 逐条执行评估器。
+评估阶段由 `Evaluate` 方法负责，以 `InferenceResult` 为输入，加载对应的 EvalCase，构造 actuals 与 expecteds 两组 Invocation 列表。默认情况下，expecteds 来自 EvalSet 的 `conversation`；若用例使用 `conversationScenario` 且未开启 `expectedRunnerEnabled`，则会基于实际轨迹构造仅保留 `userContent` 的占位 expecteds；当 EvalCase 开启 `expectedRunnerEnabled` 时，评估阶段直接复用推理阶段已经生成好的 `ExpectedInferences`。然后按 `EvaluateConfig.EvalMetrics` 逐条执行评估器。
 
 Local 实现会通过 Registry 按 `MetricName` 获取 Evaluator，并调用 `Evaluator.Evaluate` 完成打分。该调用以 EvalCase 为粒度，actuals 与 expecteds 均来自同一个用例，并按轮次对齐。
 
-当 `evalMode` 为 `trace` 时，推理阶段跳过 Runner，实际轨迹 actuals 来自 `actualConversation`；预期轨迹默认由 `conversation` 提供，或在开启 `expectedRunnerEnabled` 时由 ExpectedRunner 动态生成。
+当 `evalMode` 为 `trace` 时，推理阶段跳过 Runner；若配置了 `actualConversation`，则实际轨迹 actuals 来自 `actualConversation`，而 `conversation` 继续表示预期轨迹。若未配置 `actualConversation`，则 `conversation` 会被视为实际轨迹，评估阶段再基于该轨迹构造仅保留 `userContent` 的占位 expecteds；开启 `expectedRunnerEnabled` 时，评估阶段则直接复用推理阶段已经生成好的 `ExpectedInferences`。
 
 评估完成后会生成 `EvalSetRunResult` 并返回给 AgentEvaluator。
 
@@ -2665,9 +2677,9 @@ Trace 模式用于评估既有轨迹，可以将一次真实运行采集到的 I
 
 ### ExpectedRunner 动态预期输出
 
-有些评估任务里，希望使用动态的预期输出，而非静态内容。例如，参考答案需要由一套参考 Runner 基于输入样本实时生成。此时可以为 EvalCase 开启 `expectedRunnerEnabled`，并在创建 AgentEvaluator 时注入 ExpectedRunner，由评估阶段按轮生成 expecteds。
+有些评估任务里，希望使用动态的预期输出，而非静态内容。例如，参考答案需要由一套参考 Runner 基于输入样本实时生成。此时可以为 EvalCase 开启 `expectedRunnerEnabled`，并在创建 AgentEvaluator 时注入 ExpectedRunner，由推理阶段预生成 expecteds。
 
-当 `expectedRunnerEnabled=true` 时，评估阶段会使用 ExpectedRunner 对同一组 `userContent` 按轮推理生成 expecteds。默认模式下 `userContent` 来自 `conversation`，Trace 模式下 `userContent` 来自 `actualConversation`。生成出的 expecteds 会与 actuals 按轮对齐后交给 Evaluator。此时 EvalSet 中的预期输出字段可以省略，只需保留每轮 `userContent`。
+当 `expectedRunnerEnabled=true` 时，标准评测流程会在推理阶段使用 ExpectedRunner 对同一组 `userContent` 按轮推理生成 expecteds，并将结果写入 `InferenceResult.ExpectedInferences`。默认模式下如果使用静态 `conversation`，`userContent` 直接来自该对话；如果使用 `conversationScenario`，则取决于 `driver`：当 `driver=expected` 时，由 ExpectedRunner 先驱动整段 transcript，再由 target runner 回放这组生成出的 `userContent`；否则 `userContent` 来自 `conversationScenario` 生成出的实际轨迹。Trace 模式下 `userContent` 来自 `actualConversation`，若未配置则回退为 `conversation`。评估阶段会直接复用这组 expecteds 与 actuals 按轮对齐后交给 Evaluator。此时 EvalSet 中的预期输出字段可以省略，只需保留每轮 `userContent`。
 
 配置文件示例如下：
 
@@ -2707,6 +2719,118 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithExpectedRunner(expectedRunner),
 )
 ```
+
+### UserSimulation 动态用户模拟
+
+有些评估任务只有一个起始问题和一组对话目标，而没有完整的静态多轮 `conversation`。例如，希望评估 Agent 在“先澄清需求，再完成任务，最后确认结果”这类长流程中的表现。此时可以在 EvalCase 中配置 `conversationScenario`，并在创建 AgentEvaluator 时注入 UserSimulator，让框架在推理阶段动态生成下一轮用户输入。
+
+`conversationScenario` 只支持默认模式，且与 `conversation` 互斥。`driver` 可选，默认值为 `actual`，表示由被测 Runner 的回复驱动后续用户输入；设置为 `expected` 时，表示由 ExpectedRunner 先驱动整条用户输入轨迹，再让被测 Runner 回放同一组 `userContent`，因此需要同时注入 `ExpectedRunner`。`startingPrompt` 可选，用于固定首轮输入以提升复现性；`conversationPlan` 必填，用于描述用户目标、约束和结束条件；`stopSignal` 与 `maxAllowedInvocations` 用于控制对话停止，默认实现要求两者至少保留一个终止条件。
+
+`conversationScenario` 本身支持以下字段：
+
+- `driver`：指定由哪一侧 Runner 驱动整条用户输入轨迹，可选值为 `actual` 与 `expected`，默认 `actual`。
+- `startingPrompt`：固定首轮用户输入，可选；不配置时由 UserSimulator 基于 `conversationPlan` 生成第一轮输入。
+- `conversationPlan`：描述模拟用户目标、约束和结束条件，必填。
+- `stopSignal`：模拟用户输出该内容时结束对话的标记，可选。
+- `maxAllowedInvocations`：限制被测 Agent 的最大轮数，可选；`0` 表示不限制。
+
+默认 `UserSimulator` 通过 `usersimulation.New(simRunner, opt...)` 支持以下 option：
+
+- `usersimulation.WithStopSignal(...)`：覆盖 `conversationScenario.stopSignal`。
+- `usersimulation.WithMaxAllowedInvocations(...)`：覆盖 `conversationScenario.maxAllowedInvocations`。
+- `usersimulation.WithUserIDSupplier(...)`：自定义模拟器内部 user ID 生成逻辑，默认使用 UUID。
+- `usersimulation.WithSessionIDSupplier(...)`：自定义模拟器内部 session ID 生成逻辑，默认使用 UUID。
+- `usersimulation.WithSystemPromptBuilder(...)`：自定义默认模拟器发给 `simRunner` 的初始 system prompt。
+
+接入 UserSimulation 能力时，通常还会用到以下框架级 option：
+
+- `evaluation.WithUserSimulator(...)`：必填，用于注入 UserSimulator。
+- `evaluation.WithExpectedRunner(...)`：当 `driver=expected` 或 `expectedRunnerEnabled=true` 时需要注入。
+
+完整示例参见 [examples/evaluation/usersimulation](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/usersimulation)。如果希望同时查看 `UserSimulation` 与 `ExpectedRunner` 的组合用法，可参考 [examples/evaluation/usersimulation_expectedrunner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/usersimulation_expectedrunner)，该示例当前演示的是 `conversationScenario.driver=expected`，由 ExpectedRunner 先驱动整条用户输入轨迹，再由被测 Runner 回放。
+
+配置文件示例如下：
+
+```json
+{
+  "evalId": "travel-plan",
+  "conversationScenario": {
+    "startingPrompt": "帮我规划下周去北京出差的行程。",
+    "conversationPlan": "先说明出差时间和预算，再补充酒店与航班偏好。等机票、酒店和提醒事项都确认后，只输出 </finished>。",
+    "stopSignal": "</finished>",
+    "maxAllowedInvocations": 12
+  },
+  "sessionInput": {
+    "appName": "travel-eval-app",
+    "userId": "demo-user",
+    "state": {
+      "today": "2026-03-24"
+    }
+  }
+}
+```
+
+代码示例如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+actualRunner := runner.NewRunner(appName, candidateAgent)
+simRunner := runner.NewRunner(appName, simulatorAgent)
+userSimulator, err := usersimulation.New(simRunner)
+if err != nil {
+	panic(err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	actualRunner,
+	evaluation.WithUserSimulator(userSimulator),
+)
+if err != nil {
+	panic(err)
+}
+defer agentEvaluator.Close()
+```
+
+对上面的 `conversationScenario`，一次可能的对话展开如下：
+
+```text
+User:
+帮我规划下周去北京出差的行程。
+
+Assistant:
+可以，先确认几个关键信息：你从哪个城市出发？下周具体哪天去、待几天？预算大概多少？更倾向飞机还是高铁？
+
+Simulated user:
+我从上海出发，下周二去、周四回，预算适中，倾向上午出发的航班，酒店希望住在国贸附近。
+
+Assistant:
+明白了。我可以先给你一版省心方案：周二上午从上海飞北京，酒店优先看国贸附近的商务型酒店。你这边对酒店价格区间还有要求吗？
+
+Simulated user:
+每晚大概 800 到 1000 元就可以，再帮我补一点出行提醒。
+
+Assistant:
+可以，我会推荐国贸附近 800 到 1000 元区间的商务酒店，并补充机场出发时间、北京早晚高峰和返程预留时间等提醒。
+
+Simulated user:
+</finished>
+```
+
+这里的关键点是：
+
+- 首轮用户输入可以直接来自 `startingPrompt`。
+- 后续每一轮用户输入由 UserSimulator 根据 `conversationPlan` 和驱动 Runner 的最新回复动态生成，所以实际措辞不一定完全相同。
+- 当模拟用户输出 `</finished>` 时，对话结束。
+
+默认实现会把驱动 Runner 最新一轮 `finalResponse` 作为下一次模拟输入传给 `simRunner`，并将 `simRunner` 的最终回复视为“下一句用户输入”。当 `driver=actual` 时，驱动 Runner 是被测 Runner；当 `driver=expected` 时，驱动 Runner 是 ExpectedRunner。如果未配置 `startingPrompt`，默认实现会基于 `conversationPlan` 生成第一轮用户输入。未开启 `expectedRunnerEnabled` 时，评估阶段仍会根据实际轨迹构造仅保留 `userContent` 的占位 expecteds，因此更适合依赖实际轨迹或 LLM Judge 的指标。
+
+`conversationScenario` 可以与 `expectedRunnerEnabled` 搭配使用。`driver=actual` 时，ExpectedRunner 会在推理阶段复用 actual 侧已经生成好的 `userContent` 序列产出 expecteds；`driver=expected` 时，ExpectedRunner 先驱动生成整条用户输入轨迹，再由被测 Runner 回放，同样在推理阶段完成 expected 轨迹生成。评估阶段只复用预先生成的 `ExpectedInferences`，不再动态重跑。`conversationScenario` 仍然不支持 Trace 模式。
 
 ### Callback 回调
 

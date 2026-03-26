@@ -55,6 +55,8 @@ type InferenceResult struct {
 	EvalMode evalset.EvalMode `json:"evalMode,omitempty"`
 	// Inferences are the inference results.
 	Inferences []*evalset.Invocation `json:"inferences,omitempty"`
+	// ExpectedInferences are precomputed expected invocations captured during inference when available.
+	ExpectedInferences []*evalset.Invocation `json:"expectedInferences,omitempty"`
 	// SessionID is the ID of the inference session.
 	SessionID string `json:"sessionId,omitempty"`
 	// UserID is the user id used during inferencing stage of the eval.

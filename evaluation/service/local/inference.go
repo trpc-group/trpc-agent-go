@@ -270,37 +270,30 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 		return newFailedInferenceResult(result, err)
 	}
 	if evalCase.EvalMode == evalset.EvalModeTrace {
-		if len(evalCase.ActualConversation) != 0 {
-			if len(evalCase.Conversation) != 0 && len(evalCase.ActualConversation) != len(evalCase.Conversation) {
-				err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): actual conversation length %d does not match conversation length %d",
-					evalCase.EvalID, sessionID, len(evalCase.ActualConversation), len(evalCase.Conversation))
-				return newFailedInferenceResult(result, err)
-			}
-			for i, invocation := range evalCase.ActualConversation {
-				if invocation == nil {
-					err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): actual invocation is nil at index %d",
-						evalCase.EvalID, sessionID, i)
-					return newFailedInferenceResult(result, err)
-				}
-				if invocation.UserContent == nil {
-					err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): actual invocation user content is nil at index %d",
-						evalCase.EvalID, sessionID, i)
-					return newFailedInferenceResult(result, err)
-				}
-			}
-			result.Inferences = evalCase.ActualConversation
-			result.Status = status.EvalStatusPassed
-			return result
+		inferenceResult, expectedInferences, traceErr := s.inferTraceConversation(ctx, evalCase, sessionID, opts)
+		if inferenceResult != nil {
+			attachContextMessages(inferenceResult.Invocations, evalCase.ContextMessages)
+			result.Inferences = inferenceResult.Invocations
+			result.ExecutionTraces = inferenceResult.ExecutionTraces
 		}
-		if len(evalCase.Conversation) == 0 {
-			err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): invocations are empty", evalCase.EvalID, sessionID)
+		attachContextMessages(expectedInferences, evalCase.ContextMessages)
+		result.ExpectedInferences = expectedInferences
+		err = traceErr
+		if err != nil {
+			err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): %w", evalCase.EvalID, sessionID, err)
 			return newFailedInferenceResult(result, err)
 		}
-		result.Inferences = evalCase.Conversation
 		result.Status = status.EvalStatusPassed
 		return result
 	}
-	if len(evalCase.Conversation) == 0 {
+	hasConversation := len(evalCase.Conversation) != 0
+	hasScenario := evalCase.ConversationScenario != nil
+	if hasConversation && hasScenario {
+		err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): conversation and conversationScenario cannot both be configured",
+			evalCase.EvalID, sessionID)
+		return newFailedInferenceResult(result, err)
+	}
+	if !hasConversation && !hasScenario {
 		err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): invocations are empty", evalCase.EvalID, sessionID)
 		return newFailedInferenceResult(result, err)
 	}
@@ -314,26 +307,224 @@ func (s *local) inferenceEvalCase(ctx context.Context, req *service.InferenceReq
 	if len(seedMessages) > 0 {
 		mergedRunOptions = append(mergedRunOptions, agent.WithInjectedContextMessages(seedMessages))
 	}
-	inferenceResult, err := inference.Inference(
+	inferenceResult, expectedInferences, err := s.inferCaseConversations(
 		ctx,
-		s.runner,
-		evalCase.Conversation,
-		evalCase.SessionInput,
+		evalCase,
 		sessionID,
 		mergedRunOptions,
+		opts,
 	)
 	if inferenceResult != nil {
 		result.ExecutionTraces = inferenceResult.ExecutionTraces
-		inferences := inferenceResult.Invocations
-		attachContextMessages(inferences, evalCase.ContextMessages)
-		result.Inferences = inferences
+		attachContextMessages(inferenceResult.Invocations, evalCase.ContextMessages)
+		result.Inferences = inferenceResult.Invocations
 	}
+	attachContextMessages(expectedInferences, evalCase.ContextMessages)
+	result.ExpectedInferences = expectedInferences
 	if err != nil {
 		err = fmt.Errorf("inference eval case (evalCaseID=%s, sessionID=%s): %w", evalCase.EvalID, sessionID, err)
 		return newFailedInferenceResult(result, err)
 	}
 	result.Status = status.EvalStatusPassed
 	return result
+}
+
+func (s *local) inferCaseConversations(
+	ctx context.Context,
+	evalCase *evalset.EvalCase,
+	sessionID string,
+	runOptions []agent.RunOption,
+	opts *service.Options,
+) (*inference.Result, []*evalset.Invocation, error) {
+	var (
+		inferenceResult    *inference.Result
+		expectedInferences []*evalset.Invocation
+		err                error
+	)
+	if evalCase.ConversationScenario != nil {
+		inferenceResult, expectedInferences, err = s.inferScenarioConversation(
+			ctx,
+			evalCase,
+			sessionID,
+			runOptions,
+			opts,
+		)
+	} else {
+		inferenceResult, expectedInferences, err = s.inferStaticConversation(
+			ctx,
+			evalCase,
+			sessionID,
+			runOptions,
+			opts,
+		)
+	}
+	if err != nil {
+		return inferenceResult, expectedInferences, err
+	}
+	return inferenceResult, expectedInferences, nil
+}
+
+func (s *local) inferTraceConversation(
+	ctx context.Context,
+	evalCase *evalset.EvalCase,
+	sessionID string,
+	opts *service.Options,
+) (*inference.Result, []*evalset.Invocation, error) {
+	if evalCase.ConversationScenario != nil {
+		return nil, nil, errors.New("conversationScenario is not supported in trace mode")
+	}
+	var inferences []*evalset.Invocation
+	if len(evalCase.ActualConversation) != 0 {
+		if len(evalCase.Conversation) != 0 && len(evalCase.ActualConversation) != len(evalCase.Conversation) {
+			return nil, nil, fmt.Errorf("actual conversation length %d does not match conversation length %d",
+				len(evalCase.ActualConversation), len(evalCase.Conversation))
+		}
+		for i, invocation := range evalCase.ActualConversation {
+			if invocation == nil {
+				return nil, nil, fmt.Errorf("actual invocation is nil at index %d", i)
+			}
+			if invocation.UserContent == nil {
+				return nil, nil, fmt.Errorf("actual invocation user content is nil at index %d", i)
+			}
+		}
+		inferences = evalCase.ActualConversation
+	} else {
+		if len(evalCase.Conversation) == 0 {
+			return nil, nil, errors.New("invocations are empty")
+		}
+		inferences = evalCase.Conversation
+	}
+	if !evalCase.ExpectedRunnerEnabled {
+		return &inference.Result{Invocations: inferences}, nil, nil
+	}
+	expectedInferences, err := s.inferExpectedInferences(
+		ctx,
+		evalCase,
+		userInputOnlyInvocationsForEval(inferences),
+		expectedRunnerSessionID(sessionID),
+		opts,
+	)
+	if err != nil {
+		return &inference.Result{Invocations: inferences}, nil, err
+	}
+	return &inference.Result{Invocations: inferences}, expectedInferences, nil
+}
+
+func (s *local) inferStaticConversation(
+	ctx context.Context,
+	evalCase *evalset.EvalCase,
+	sessionID string,
+	runOptions []agent.RunOption,
+	opts *service.Options,
+) (*inference.Result, []*evalset.Invocation, error) {
+	inferenceResult, err := inference.Inference(
+		ctx,
+		s.runner,
+		evalCase.Conversation,
+		evalCase.SessionInput,
+		sessionID,
+		runOptions,
+	)
+	if err != nil {
+		return inferenceResult, nil, err
+	}
+	if !evalCase.ExpectedRunnerEnabled {
+		return inferenceResult, nil, nil
+	}
+	expectedInferences, err := s.inferExpectedInferences(
+		ctx,
+		evalCase,
+		userInputOnlyInvocationsForEval(inferenceResult.Invocations),
+		expectedRunnerSessionID(sessionID),
+		opts,
+	)
+	if err != nil {
+		return inferenceResult, nil, err
+	}
+	return inferenceResult, expectedInferences, nil
+}
+
+func (s *local) inferScenarioConversation(
+	ctx context.Context,
+	evalCase *evalset.EvalCase,
+	sessionID string,
+	runOptions []agent.RunOption,
+	opts *service.Options,
+) (*inference.Result, []*evalset.Invocation, error) {
+	if opts.UserSimulator == nil {
+		return nil, nil, errors.New("user simulator is nil")
+	}
+	switch evalCase.ConversationScenario.Driver {
+	case "", evalset.ConversationScenarioDriverActual:
+		inferenceResult, err := inference.InferenceWithConversationScenario(
+			ctx,
+			s.runner,
+			opts.UserSimulator,
+			evalCase.EvalID,
+			evalCase.ConversationScenario,
+			evalCase.SessionInput,
+			sessionID,
+			runOptions,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !evalCase.ExpectedRunnerEnabled {
+			return inferenceResult, nil, nil
+		}
+		expectedInferences, err := s.inferExpectedInferences(
+			ctx,
+			evalCase,
+			userInputOnlyInvocationsForEval(inferenceResult.Invocations),
+			expectedRunnerSessionID(sessionID),
+			opts,
+		)
+		if err != nil {
+			return inferenceResult, nil, err
+		}
+		return inferenceResult, expectedInferences, nil
+	case evalset.ConversationScenarioDriverExpected:
+		if opts.ExpectedRunner == nil {
+			return nil, nil, errors.New("expected runner is nil")
+		}
+		expectedInferenceResult, err := inference.InferenceWithConversationScenario(
+			ctx,
+			opts.ExpectedRunner,
+			opts.UserSimulator,
+			evalCase.EvalID,
+			evalCase.ConversationScenario,
+			evalCase.SessionInput,
+			expectedRunnerSessionID(sessionID),
+			runOptions,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		inferenceResult, err := inference.Inference(
+			ctx,
+			s.runner,
+			userInputOnlyInvocationsForEval(expectedInferenceResult.Invocations),
+			evalCase.SessionInput,
+			sessionID,
+			runOptions,
+		)
+		if err != nil {
+			if !evalCase.ExpectedRunnerEnabled {
+				return inferenceResult, nil, err
+			}
+			return inferenceResult, expectedInferenceResult.Invocations, err
+		}
+		if !evalCase.ExpectedRunnerEnabled {
+			return inferenceResult, nil, nil
+		}
+		return inferenceResult, expectedInferenceResult.Invocations, nil
+	default:
+		return nil, nil, fmt.Errorf("invalid conversationScenario driver %q", evalCase.ConversationScenario.Driver)
+	}
+}
+
+func expectedRunnerSessionID(sessionID string) string {
+	return sessionID + "-expected"
 }
 
 func seedMessagesFromPointers(messages []*model.Message) ([]model.Message, error) {
