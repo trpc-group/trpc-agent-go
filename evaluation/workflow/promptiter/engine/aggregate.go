@@ -11,6 +11,9 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sort"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
@@ -22,13 +25,53 @@ type AggregationResult struct {
 	Surfaces []promptiter.AggregatedSurfaceGradient
 }
 
-// aggregate requests per-surface aggregation and normalizes gradient inputs.
-func (e *engine) aggregate(ctx context.Context) error {
-	req := &aggregator.Request{}
-	rsp, err := e.aggregator.Aggregate(ctx, req)
-	if err != nil {
-		return err
+func (e *engine) aggregate(
+	ctx context.Context,
+	structure *structureState,
+	backward *BackwardResult,
+) (*AggregationResult, error) {
+	if e.aggregator == nil {
+		return nil, errors.New("aggregator is nil")
 	}
-	_ = rsp
-	return nil
+	if structure == nil {
+		return nil, errors.New("structure state is nil")
+	}
+	grouped := make(map[string][]promptiter.SurfaceGradient)
+	if backward != nil {
+		for _, caseResult := range backward.Cases {
+			for _, stepGradient := range caseResult.StepGradients {
+				for _, gradient := range stepGradient.Gradients {
+					grouped[gradient.SurfaceID] = append(grouped[gradient.SurfaceID], gradient)
+				}
+			}
+		}
+	}
+	surfaceIDs := make([]string, 0, len(grouped))
+	for surfaceID := range grouped {
+		surfaceIDs = append(surfaceIDs, surfaceID)
+	}
+	sort.Strings(surfaceIDs)
+	result := &AggregationResult{
+		Surfaces: make([]promptiter.AggregatedSurfaceGradient, 0, len(surfaceIDs)),
+	}
+	for _, surfaceID := range surfaceIDs {
+		surface, ok := structure.surfaceIndex[surfaceID]
+		if !ok {
+			return nil, fmt.Errorf("aggregated surface id %q is unknown", surfaceID)
+		}
+		response, err := e.aggregator.Aggregate(ctx, &aggregator.Request{
+			SurfaceID: surfaceID,
+			NodeID:    surface.NodeID,
+			Type:      surface.Type,
+			Gradients: grouped[surfaceID],
+		})
+		if err != nil {
+			return nil, fmt.Errorf("aggregate surface %q: %w", surfaceID, err)
+		}
+		if response == nil || response.Gradient == nil {
+			return nil, fmt.Errorf("aggregate surface %q returned empty result", surfaceID)
+		}
+		result.Surfaces = append(result.Surfaces, *response.Gradient)
+	}
+	return result, nil
 }

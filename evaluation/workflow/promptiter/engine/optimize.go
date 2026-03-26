@@ -11,17 +11,60 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sort"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
 )
 
-// optimize calls optimizer components to create patch candidates for this round.
-func (e *engine) optimize(ctx context.Context) error {
-	req := &optimizer.Request{}
-	rsp, err := e.optimizer.Optimize(ctx, req)
-	if err != nil {
-		return err
+func (e *engine) optimize(
+	ctx context.Context,
+	structure *structureState,
+	profile *promptiter.Profile,
+	aggregation *AggregationResult,
+) (*promptiter.PatchSet, error) {
+	if e.optimizer == nil {
+		return nil, errors.New("optimizer is nil")
 	}
-	_ = rsp
-	return nil
+	if structure == nil {
+		return nil, errors.New("structure state is nil")
+	}
+	if aggregation == nil || len(aggregation.Surfaces) == 0 {
+		return &promptiter.PatchSet{Patches: []promptiter.SurfacePatch{}}, nil
+	}
+	overrideIndex := buildOverrideIndex(profile)
+	patches := make([]promptiter.SurfacePatch, 0, len(aggregation.Surfaces))
+	for _, aggregatedSurface := range aggregation.Surfaces {
+		surface, err := resolveProfileSurface(structure, overrideIndex, aggregatedSurface.SurfaceID)
+		if err != nil {
+			return nil, err
+		}
+		response, err := e.optimizer.Optimize(ctx, &optimizer.Request{
+			Surface:  &surface,
+			Gradient: cloneAggregatedGradient(aggregatedSurface),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("optimize surface %q: %w", aggregatedSurface.SurfaceID, err)
+		}
+		if response == nil || response.Patch == nil {
+			return nil, fmt.Errorf("optimize surface %q returned empty result", aggregatedSurface.SurfaceID)
+		}
+		patches = append(patches, *response.Patch)
+	}
+	sort.SliceStable(patches, func(i, j int) bool {
+		return patches[i].SurfaceID < patches[j].SurfaceID
+	})
+	return &promptiter.PatchSet{Patches: patches}, nil
+}
+
+func cloneAggregatedGradient(gradient promptiter.AggregatedSurfaceGradient) *promptiter.AggregatedSurfaceGradient {
+	cloned := &promptiter.AggregatedSurfaceGradient{
+		SurfaceID: gradient.SurfaceID,
+		NodeID:    gradient.NodeID,
+		Type:      gradient.Type,
+		Gradients: append([]promptiter.SurfaceGradient(nil), gradient.Gradients...),
+	}
+	return cloned
 }
