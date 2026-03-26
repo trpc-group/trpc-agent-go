@@ -45,6 +45,72 @@ func TestResolveTarget_DMSessionWithSuffix(t *testing.T) {
 	}, target)
 }
 
+func TestResolveTarget_WeComSessionTarget(t *testing.T) {
+	t.Parallel()
+
+	target, err := ResolveTarget(
+		context.Background(),
+		DeliveryTarget{
+			Target: "wecom:thread:wecom:chat:chat-1",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, DeliveryTarget{
+		Channel: "wecom",
+		Target:  "group:chat-1",
+	}, target)
+}
+
+func TestResolveTarget_WeComScopedGroupSession(t *testing.T) {
+	t.Parallel()
+
+	target, err := ResolveTarget(
+		context.Background(),
+		DeliveryTarget{
+			Target: "wecom:chat:chat-1:user:user-1",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, DeliveryTarget{
+		Channel: "wecom",
+		Target:  "group:chat-1",
+	}, target)
+}
+
+func TestResolveTarget_ExplicitWeComTarget(t *testing.T) {
+	t.Parallel()
+
+	target, err := ResolveTarget(
+		context.Background(),
+		DeliveryTarget{
+			Channel: "wecom",
+			Target:  "wecom:thread:wecom:dm:user-1",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, DeliveryTarget{
+		Channel: "wecom",
+		Target:  "single:user-1",
+	}, target)
+}
+
+func TestResolveTarget_RejectsInvalidWeComTarget(t *testing.T) {
+	t.Parallel()
+
+	_, err := ResolveTarget(
+		context.Background(),
+		DeliveryTarget{
+			Channel: "wecom",
+			Target:  "wecom:thread:unknown",
+		},
+	)
+	require.ErrorContains(
+		t,
+		err,
+		"outbound: invalid target for wecom",
+	)
+}
+
 func TestResolveTarget_RuntimeStateFallback(t *testing.T) {
 	ctx := invocationCtx(
 		t,
@@ -73,6 +139,23 @@ func TestResolveTarget_SessionFallback(t *testing.T) {
 	require.Equal(t, DeliveryTarget{
 		Channel: "telegram",
 		Target:  "999:topic:7",
+	}, target)
+}
+
+func TestResolveTarget_WeComSessionFallback(t *testing.T) {
+	t.Parallel()
+
+	ctx := invocationCtx(
+		t,
+		"wecom:chat:chat-1:user:user-1",
+		agent.RunOptions{},
+	)
+
+	target, err := ResolveTarget(ctx, DeliveryTarget{})
+	require.NoError(t, err)
+	require.Equal(t, DeliveryTarget{
+		Channel: "wecom",
+		Target:  "group:chat-1",
 	}, target)
 }
 
