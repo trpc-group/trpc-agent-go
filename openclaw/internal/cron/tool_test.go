@@ -63,6 +63,88 @@ func TestToolAddSupportsAliasesAndCurrentChat(t *testing.T) {
 	require.Equal(t, "12345", job.Delivery.Target)
 }
 
+func TestToolAddSupportsExecutionPolicyAndHeadless(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "wecom:chat:group-1",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"action":         "add",
+		"message":        "share golang tips",
+		"schedule_kind":  "every",
+		"every":          "1m",
+		"max_runs":       5,
+		"ends_at":        "2026-03-25T20:30:00Z",
+		"overlap_policy": OverlapPolicyReplace,
+		"headless":       true,
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	require.Equal(t, 5, job.Policy.MaxRuns)
+	require.NotNil(t, job.Policy.EndsAt)
+	require.Equal(
+		t,
+		OverlapPolicyReplace,
+		job.Policy.OverlapPolicy,
+	)
+	require.Empty(t, job.Delivery.Channel)
+	require.Empty(t, job.Delivery.Target)
+}
+
+func TestToolAddFailsWithoutResolvableDeliveryTarget(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "stdin:session",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	_, err = tool.Call(
+		ctx,
+		[]byte(`{
+			"action":"add",
+			"message":"report status",
+			"schedule_kind":"every",
+			"every":"1m"
+		}`),
+	)
+	require.ErrorContains(t, err, errDeliveryTargetUnavailable)
+}
+
 func TestToolAddSupportsRunAtAlias(t *testing.T) {
 	t.Parallel()
 
@@ -480,7 +562,15 @@ func TestTool_ContextAndDeliveryErrors(t *testing.T) {
 	_, err = currentUserID(context.Background())
 	require.Error(t, err)
 
-	delivery, err := optionalDelivery(context.Background(), "", "")
+	_, err = resolveDelivery(context.Background(), "", "", false)
+	require.ErrorContains(t, err, errDeliveryTargetUnavailable)
+
+	delivery, err := resolveDelivery(
+		context.Background(),
+		"",
+		"",
+		true,
+	)
 	require.NoError(t, err)
 	require.Equal(t, outbound.DeliveryTarget{}, delivery)
 

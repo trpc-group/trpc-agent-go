@@ -75,7 +75,7 @@ func buildConversationRunOptionResolver(
 		if len(runtimeState) > 0 {
 			runOpts = append(
 				runOpts,
-				agent.WithRuntimeState(runtimeState),
+				agent.MergeRuntimeState(runtimeState),
 			)
 		}
 		return ctx, runOpts

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
@@ -31,6 +32,21 @@ const (
 	actionDelete = "delete"
 	actionRun    = "run"
 	actionClear  = "clear"
+)
+
+const (
+	errJobIDRequired      = "job_id is required"
+	errHeadlessWithTarget = "cron: headless jobs cannot set " +
+		"channel or target"
+	errDeliveryTargetUnavailable = "cron: current chat delivery " +
+		"target is unavailable; pass channel/target explicitly " +
+		"or set headless=true"
+	cronTemplateHint = "For per-run counters or final-run text, " +
+		"use Go text/template placeholders in message, " +
+		"such as {{.Cron.RunIndex}}, {{.Cron.MaxRuns}}, " +
+		"{{.Cron.RemainingRuns}}, and " +
+		"{{if .Cron.IsFinalRun}}...{{end}}. Do not hardcode " +
+		"counters like 1/5 into a repeating task."
 )
 
 // Tool exposes the scheduler to the model.
@@ -59,8 +75,12 @@ func (t *Tool) Declaration() *tool.Declaration {
 			"becomes a future agent turn. If channel/target are " +
 			"omitted when adding a job from chat, the final " +
 			"result is delivered back to the current chat when " +
-			"possible. Listing and mutating jobs is scoped to " +
-			"the current user.",
+			"possible. Use max_runs for bounded repeats, " +
+			"ends_at for a stop time, and overlap_policy to " +
+			"control what happens when one run is still busy. " +
+			cronTemplateHint + " " +
+			"Listing and mutating jobs is scoped to the " +
+			"current user.",
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"action"},
@@ -87,7 +107,10 @@ func (t *Tool) Declaration() *tool.Declaration {
 				"message": {
 					Type: "string",
 					Description: "Agent task prompt for the " +
-						"scheduled run.",
+						"scheduled run. Supports Go " +
+						"text/template placeholders from " +
+						".Cron, including RunIndex, MaxRuns, " +
+						"RemainingRuns, and IsFinalRun.",
 				},
 				"prompt": {
 					Type:        "string",
@@ -154,6 +177,35 @@ func (t *Tool) Declaration() *tool.Declaration {
 					Description: "Optional IANA timezone for " +
 						"cron schedules.",
 				},
+				"max_runs": {
+					Type: "number",
+					Description: "Optional maximum number of " +
+						"executions before the job disables " +
+						"itself. 0 means unlimited.",
+				},
+				"maxRuns": {
+					Type:        "number",
+					Description: "Alias for max_runs.",
+				},
+				"ends_at": {
+					Type: "string",
+					Description: "Optional RFC3339 stop time. " +
+						"No run is scheduled at or after " +
+						"this time.",
+				},
+				"endsAt": {
+					Type:        "string",
+					Description: "Alias for ends_at.",
+				},
+				"overlap_policy": {
+					Type: "string",
+					Description: "Optional overlap handling: " +
+						"skip or replace.",
+				},
+				"overlapPolicy": {
+					Type:        "string",
+					Description: "Alias for overlap_policy.",
+				},
 				"timeout_sec": {
 					Type: "number",
 					Description: "Optional maximum runtime " +
@@ -174,6 +226,11 @@ func (t *Tool) Declaration() *tool.Declaration {
 					Description: "Optional delivery target. " +
 						"Defaults to current chat target " +
 						"when resolvable.",
+				},
+				"headless": {
+					Type: "boolean",
+					Description: "When true, create or update " +
+						"a job without any delivery target.",
 				},
 			},
 		},
@@ -201,10 +258,17 @@ type toolInput struct {
 	CronExpr     string `json:"cron_expr,omitempty"`
 	CronExprOld  string `json:"cronExpr,omitempty"`
 	Timezone     string `json:"timezone,omitempty"`
+	MaxRuns      *int   `json:"max_runs,omitempty"`
+	MaxRunsOld   *int   `json:"maxRuns,omitempty"`
+	EndsAt       string `json:"ends_at,omitempty"`
+	EndsAtOld    string `json:"endsAt,omitempty"`
+	Overlap      string `json:"overlap_policy,omitempty"`
+	OverlapOld   string `json:"overlapPolicy,omitempty"`
 	TimeoutSec   *int   `json:"timeout_sec,omitempty"`
 	TimeoutOld   *int   `json:"timeoutSec,omitempty"`
 	Channel      string `json:"channel,omitempty"`
 	Target       string `json:"target,omitempty"`
+	Headless     *bool  `json:"headless,omitempty"`
 }
 
 func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
@@ -271,19 +335,29 @@ func (t *Tool) add(
 	if err != nil {
 		return nil, err
 	}
+	policy, err := policyFromInputWithError(in)
+	if err != nil {
+		return nil, err
+	}
 
 	job := &Job{
 		Name:       in.Name,
 		Message:    resolveMessage(in),
 		Enabled:    true,
 		Schedule:   scheduleFromInput(in),
+		Policy:     policy,
 		UserID:     userID,
 		TimeoutSec: firstIntValue(in.TimeoutSec, in.TimeoutOld),
 	}
 	if in.Enabled != nil {
 		job.Enabled = *in.Enabled
 	}
-	delivery, err := optionalDelivery(ctx, in.Channel, in.Target)
+	delivery, err := resolveDelivery(
+		ctx,
+		in.Channel,
+		in.Target,
+		boolValue(in.Headless),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +376,7 @@ func (t *Tool) update(
 ) (any, error) {
 	jobID := resolveJobID(in)
 	if jobID == "" {
-		return nil, fmt.Errorf("job_id is required")
+		return nil, fmt.Errorf(errJobIDRequired)
 	}
 	if _, err := currentOwnedJob(ctx, t.svc, jobID); err != nil {
 		return nil, err
@@ -323,15 +397,23 @@ func (t *Tool) update(
 		schedule := scheduleFromInput(in)
 		patch.Schedule = &schedule
 	}
+	if hasPolicyInput(in) {
+		policy, err := policyFromInputWithError(in)
+		if err != nil {
+			return nil, err
+		}
+		patch.Policy = &policy
+	}
 	if in.TimeoutSec != nil || in.TimeoutOld != nil {
 		value := firstIntValue(in.TimeoutSec, in.TimeoutOld)
 		patch.TimeoutSec = &value
 	}
-	if in.Channel != "" || in.Target != "" {
-		delivery, err := optionalDelivery(
+	if in.Channel != "" || in.Target != "" || in.Headless != nil {
+		delivery, err := resolveDelivery(
 			ctx,
 			in.Channel,
 			in.Target,
+			boolValue(in.Headless),
 		)
 		if err != nil {
 			return nil, err
@@ -355,7 +437,7 @@ func (t *Tool) remove(
 ) (any, error) {
 	jobID := resolveJobID(in)
 	if jobID == "" {
-		return nil, fmt.Errorf("job_id is required")
+		return nil, fmt.Errorf(errJobIDRequired)
 	}
 	if _, err := currentOwnedJob(ctx, t.svc, jobID); err != nil {
 		return nil, err
@@ -392,7 +474,7 @@ func (t *Tool) runNow(
 ) (any, error) {
 	jobID := resolveJobID(in)
 	if jobID == "" {
-		return nil, fmt.Errorf("job_id is required")
+		return nil, fmt.Errorf(errJobIDRequired)
 	}
 	if _, err := currentOwnedJob(ctx, t.svc, jobID); err != nil {
 		return nil, err
@@ -423,6 +505,27 @@ func scheduleFromInput(in toolInput) Schedule {
 		CronExpr: cronExpr,
 		Timezone: strings.TrimSpace(in.Timezone),
 	}
+}
+
+func policyFromInputWithError(
+	in toolInput,
+) (ExecutionPolicy, error) {
+	endsAt, err := parseOptionalRFC3339(resolveEndsAt(in))
+	if err != nil {
+		return ExecutionPolicy{}, err
+	}
+	policy := ExecutionPolicy{
+		MaxRuns: firstIntValue(in.MaxRuns, in.MaxRunsOld),
+		EndsAt:  endsAt,
+	}
+	overlap, err := normalizeOverlapPolicy(
+		firstString(in.Overlap, in.OverlapOld),
+	)
+	if err != nil {
+		return ExecutionPolicy{}, err
+	}
+	policy.OverlapPolicy = overlap
+	return policy, nil
 }
 
 func resolveScheduleKind(
@@ -458,6 +561,10 @@ func resolveAt(in toolInput) string {
 
 func resolveEvery(in toolInput) string {
 	return firstString(in.Every, in.Interval, in.Duration)
+}
+
+func resolveEndsAt(in toolInput) string {
+	return firstString(in.EndsAt, in.EndsAtOld)
 }
 
 func resolveJobID(in toolInput) string {
@@ -499,24 +606,34 @@ func currentOwnedJob(
 	return job, nil
 }
 
-func optionalDelivery(
+func resolveDelivery(
 	ctx context.Context,
 	channelID string,
 	target string,
+	headless bool,
 ) (outbound.DeliveryTarget, error) {
+	if headless {
+		if strings.TrimSpace(channelID) != "" ||
+			strings.TrimSpace(target) != "" {
+			return outbound.DeliveryTarget{},
+				fmt.Errorf(errHeadlessWithTarget)
+		}
+		return outbound.DeliveryTarget{}, nil
+	}
 	explicit := outbound.DeliveryTarget{
 		Channel: channelID,
 		Target:  target,
 	}
-	if strings.TrimSpace(channelID) == "" &&
-		strings.TrimSpace(target) == "" {
-		resolved, err := outbound.ResolveTarget(ctx, explicit)
-		if err != nil {
-			return outbound.DeliveryTarget{}, nil
+	resolved, err := outbound.ResolveTarget(ctx, explicit)
+	if err != nil {
+		if strings.TrimSpace(channelID) == "" &&
+			strings.TrimSpace(target) == "" {
+			return outbound.DeliveryTarget{},
+				fmt.Errorf(errDeliveryTargetUnavailable)
 		}
-		return resolved, nil
+		return outbound.DeliveryTarget{}, err
 	}
-	return outbound.ResolveTarget(ctx, explicit)
+	return resolved, nil
 }
 
 func optionalScopeDelivery(
@@ -559,6 +676,15 @@ func hasScheduleInput(in toolInput) bool {
 		strings.TrimSpace(in.Timezone) != ""
 }
 
+func hasPolicyInput(in toolInput) bool {
+	return in.MaxRuns != nil ||
+		in.MaxRunsOld != nil ||
+		strings.TrimSpace(in.EndsAt) != "" ||
+		strings.TrimSpace(in.EndsAtOld) != "" ||
+		strings.TrimSpace(in.Overlap) != "" ||
+		strings.TrimSpace(in.OverlapOld) != ""
+}
+
 func firstIntValue(values ...*int) int {
 	for _, value := range values {
 		if value != nil {
@@ -584,6 +710,22 @@ func firstString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func boolValue(value *bool) bool {
+	return value != nil && *value
+}
+
+func parseOptionalRFC3339(raw string) (*time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil, fmt.Errorf("cron: invalid ends_at: %w", err)
+	}
+	return &parsed, nil
 }
 
 var _ tool.CallableTool = (*Tool)(nil)

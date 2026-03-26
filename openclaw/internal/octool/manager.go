@@ -40,6 +40,7 @@ type Manager struct {
 	maxLines int
 	jobTTL   time.Duration
 	baseEnv  map[string]string
+	policy   CommandPolicy
 
 	clock func() time.Time
 }
@@ -68,6 +69,12 @@ func WithBaseEnv(env map[string]string) Option {
 			return
 		}
 		m.baseEnv = copyEnvMap(env)
+	}
+}
+
+func WithCommandPolicy(policy CommandPolicy) Option {
+	return func(m *Manager) {
+		m.policy = policy
 	}
 }
 
@@ -115,6 +122,11 @@ func (m *Manager) Exec(
 	}
 	if params.Command == "" {
 		return execResult{}, errors.New("command is required")
+	}
+	if m.policy != nil {
+		if err := m.policy(ctx, newCommandRequest(params)); err != nil {
+			return execResult{}, err
+		}
 	}
 
 	m.cleanupExpired()

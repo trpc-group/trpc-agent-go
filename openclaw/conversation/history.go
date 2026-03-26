@@ -25,6 +25,22 @@ type HistoryOptions struct {
 	MaxHistoryRuns    int
 }
 
+// TurnOptions controls speaker-aware turn projection.
+type TurnOptions struct {
+	Limit         int
+	IncludeSystem bool
+}
+
+// Turn is one speaker-aware conversation turn.
+type Turn struct {
+	Role      string    `json:"role,omitempty"`
+	Speaker   string    `json:"speaker,omitempty"`
+	ActorID   string    `json:"actor_id,omitempty"`
+	QuoteText string    `json:"quote_text,omitempty"`
+	Text      string    `json:"text,omitempty"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
+}
+
 // BuildInjectedContextMessages projects visible conversation history from
 // persisted session events.
 func BuildInjectedContextMessages(
@@ -59,6 +75,41 @@ func BuildInjectedContextMessages(
 	return out
 }
 
+// BuildTurns projects visible conversation turns from persisted session
+// events.
+func BuildTurns(
+	sess *session.Session,
+	opts TurnOptions,
+) []Turn {
+	if sess == nil {
+		return nil
+	}
+	turns := buildTurns(sess.Events, opts)
+	if opts.Limit > 0 && len(turns) > opts.Limit {
+		turns = turns[len(turns)-opts.Limit:]
+	}
+	return turns
+}
+
+// FormatTurns renders projected turns as plain text.
+func FormatTurns(turns []Turn) string {
+	lines := make([]string, 0, len(turns))
+	for i := range turns {
+		line := formatTurn(turns[i])
+		if line == "" {
+			continue
+		}
+		lines = append(
+			lines,
+			fmt.Sprintf("%d. %s", len(lines)+1, line),
+		)
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
 // BuildSummaryText renders conversation events as plain text for summary.
 func BuildSummaryText(events []event.Event) string {
 	lines := buildSummaryLines(events)
@@ -80,6 +131,20 @@ func buildVisibleHistory(
 		}
 		msgs := visibleMessagesFromEvent(evt)
 		out = append(out, msgs...)
+	}
+	return out
+}
+
+func buildTurns(
+	events []event.Event,
+	opts TurnOptions,
+) []Turn {
+	out := make([]Turn, 0, len(events))
+	for i := range events {
+		out = append(
+			out,
+			turnsFromEvent(events[i], opts.IncludeSystem)...,
+		)
 	}
 	return out
 }
@@ -110,6 +175,27 @@ func includeEvent(evt event.Event, since time.Time) bool {
 		return false
 	}
 	return true
+}
+
+func turnsFromEvent(
+	evt event.Event,
+	includeSystem bool,
+) []Turn {
+	if evt.Response == nil || evt.IsPartial ||
+		len(evt.Response.Choices) == 0 {
+		return nil
+	}
+	switch evt.Author {
+	case authorUser:
+		return userTurnsFromEvent(evt)
+	case authorSystem:
+		if !includeSystem {
+			return nil
+		}
+		return systemTurnsFromEvent(evt)
+	default:
+		return assistantTurnsFromEvent(evt)
+	}
 }
 
 func visibleMessagesFromEvent(evt event.Event) []model.Message {
@@ -164,6 +250,60 @@ func visibleSystemMessages(evt event.Event) []model.Message {
 			continue
 		}
 		out = append(out, model.NewSystemMessage(text))
+	}
+	return out
+}
+
+func userTurnsFromEvent(evt event.Event) []Turn {
+	annotation, _, _ := AnnotationFromEvent(evt)
+	out := make([]Turn, 0, len(evt.Response.Choices))
+	for _, choice := range evt.Response.Choices {
+		text := messageText(choice.Message)
+		if text == "" {
+			continue
+		}
+		out = append(out, Turn{
+			Role:      string(model.RoleUser),
+			Speaker:   speakerLabel(annotation),
+			ActorID:   strings.TrimSpace(annotation.ActorID),
+			QuoteText: strings.TrimSpace(annotation.QuoteText),
+			Text:      text,
+			Timestamp: evt.Timestamp,
+		})
+	}
+	return out
+}
+
+func assistantTurnsFromEvent(evt event.Event) []Turn {
+	out := make([]Turn, 0, len(evt.Response.Choices))
+	for _, choice := range evt.Response.Choices {
+		text := renderAssistantMessage(choice.Message)
+		if text == "" {
+			continue
+		}
+		out = append(out, Turn{
+			Role:      string(model.RoleAssistant),
+			Speaker:   summarySpeakerAssistant,
+			Text:      text,
+			Timestamp: evt.Timestamp,
+		})
+	}
+	return out
+}
+
+func systemTurnsFromEvent(evt event.Event) []Turn {
+	out := make([]Turn, 0, len(evt.Response.Choices))
+	for _, choice := range evt.Response.Choices {
+		text := strings.TrimSpace(choice.Message.Content)
+		if text == "" {
+			continue
+		}
+		out = append(out, Turn{
+			Role:      string(model.RoleSystem),
+			Speaker:   summarySpeakerSystem,
+			Text:      text,
+			Timestamp: evt.Timestamp,
+		})
 	}
 	return out
 }
@@ -326,6 +466,27 @@ func speakerLabel(annotation Annotation) string {
 		return actorID
 	}
 	return authorUser
+}
+
+func formatTurn(turn Turn) string {
+	text := strings.TrimSpace(turn.Text)
+	if text == "" {
+		return ""
+	}
+	speaker := strings.TrimSpace(turn.Speaker)
+	if speaker == "" {
+		speaker = turn.Role
+	}
+	quote := strings.TrimSpace(turn.QuoteText)
+	if quote != "" {
+		return fmt.Sprintf(
+			"%s (replying to: %s): %s",
+			speaker,
+			quote,
+			text,
+		)
+	}
+	return fmt.Sprintf("%s: %s", speaker, text)
 }
 
 func formatSummary(summaryText string) string {

@@ -123,6 +123,64 @@ func TestBuildSummaryText(t *testing.T) {
 	require.Contains(t, got, "Assistant: here is the update")
 }
 
+func TestBuildTurns(t *testing.T) {
+	base := time.Now()
+	sess := &session.Session{
+		Events: []event.Event{
+			systemEvent("previous summary"),
+			userEventWithQuote(
+				"u1",
+				"Alice",
+				"what changed",
+				"the earlier topic",
+				base,
+			),
+			assistantEvent("here is the update", base.Add(time.Second)),
+		},
+	}
+
+	got := BuildTurns(sess, TurnOptions{
+		Limit:         10,
+		IncludeSystem: false,
+	})
+	require.Len(t, got, 2)
+	require.Equal(t, string(model.RoleUser), got[0].Role)
+	require.Equal(t, "Alice", got[0].Speaker)
+	require.Equal(t, "u1", got[0].ActorID)
+	require.Equal(t, "the earlier topic", got[0].QuoteText)
+	require.Equal(t, "what changed", got[0].Text)
+	require.Equal(t, string(model.RoleAssistant), got[1].Role)
+	require.Equal(t, summarySpeakerAssistant, got[1].Speaker)
+	require.Equal(t, "here is the update", got[1].Text)
+}
+
+func TestFormatTurns(t *testing.T) {
+	text := FormatTurns([]Turn{
+		{
+			Role:      string(model.RoleUser),
+			Speaker:   "Alice",
+			QuoteText: "earlier",
+			Text:      "what changed",
+		},
+		{
+			Role:    string(model.RoleAssistant),
+			Speaker: summarySpeakerAssistant,
+			Text:    "here is the update",
+		},
+	})
+
+	require.Contains(
+		t,
+		text,
+		"1. Alice (replying to: earlier): what changed",
+	)
+	require.Contains(
+		t,
+		text,
+		"2. Assistant: here is the update",
+	)
+}
+
 func TestPreSummaryHookUsesConversationProjection(t *testing.T) {
 	events := []event.Event{
 		userEvent("u1", "Alice", "hello", time.Now()),
