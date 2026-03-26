@@ -3217,6 +3217,64 @@ func TestInProcGatewayClient_ManageScheduledJob(t *testing.T) {
 	require.Nil(t, cronSvc.Get(job.ID))
 }
 
+func TestInProcGatewayClient_ScheduledJobScopeErrors(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 6, 16, 0, 0, 0, time.UTC)
+	cronSvc, err := cron.NewService(
+		t.TempDir(),
+		&inProcGWTestRunner{},
+		nil,
+		cron.WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, cronSvc.Close())
+	})
+
+	_, err = cronSvc.Add(&cron.Job{
+		Name:    "cpu report",
+		Enabled: true,
+		Schedule: cron.Schedule{
+			Kind:  cron.ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect cpu",
+		UserID:  "u1",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	c.SetCronService(cronSvc)
+
+	_, err = c.SetScheduledJobEnabled(
+		context.Background(),
+		"telegram",
+		"u1",
+		"999",
+		"",
+		false,
+	)
+	require.ErrorContains(t, err, errUnknownJob)
+
+	removed, err := c.RemoveScheduledJob(
+		context.Background(),
+		"telegram",
+		"u1",
+		"999",
+		"job-1",
+	)
+	require.ErrorContains(t, err, errUnknownJob)
+	require.False(t, removed)
+}
+
 func TestInProcGatewayClient_PresetPersona(t *testing.T) {
 	t.Parallel()
 

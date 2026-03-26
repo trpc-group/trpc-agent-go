@@ -544,6 +544,79 @@ func TestTool_StatusUpdateRunAndHelpers(t *testing.T) {
 	)
 }
 
+func TestTool_UpdateAndRemoveSuccessPaths(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	job, err := svc.Add(&Job{
+		Name:    "mine",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "mine",
+		UserID:  "user-1",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "12345",
+		},
+	})
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	args, err := json.Marshal(map[string]any{
+		"action":         "update",
+		"job_id":         job.ID,
+		"enabled":        false,
+		"timeout_sec":    9,
+		"channel":        "telegram",
+		"target":         "12345",
+		"max_runs":       3,
+		"overlap_policy": OverlapPolicyReplace,
+		"schedule_kind":  "every",
+		"every":          "5m",
+	})
+	require.NoError(t, err)
+
+	out, err := tool.Call(ctx, args)
+	require.NoError(t, err)
+	updated := out.(*Job)
+	require.False(t, updated.Enabled)
+	require.Equal(t, 9, updated.TimeoutSec)
+	require.Equal(t, 3, updated.Policy.MaxRuns)
+	require.Equal(
+		t,
+		OverlapPolicyReplace,
+		updated.Policy.OverlapPolicy,
+	)
+	require.Equal(t, "5m", updated.Schedule.Every)
+
+	out, err = tool.Call(ctx, []byte(
+		`{"action":"remove","job_id":"`+job.ID+`"}`,
+	))
+	require.NoError(t, err)
+	payload := out.(map[string]any)
+	require.Equal(t, true, payload["ok"])
+	require.Equal(t, job.ID, payload["job_id"])
+}
+
 func TestTool_ContextAndDeliveryErrors(t *testing.T) {
 	t.Parallel()
 

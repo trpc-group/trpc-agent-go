@@ -440,6 +440,42 @@ func TestPluginPersistsRuntimeAnnotation(t *testing.T) {
 	require.Equal(t, "earlier", annotation.QuoteText)
 }
 
+func TestPluginSkipsUnsupportedEvents(t *testing.T) {
+	t.Parallel()
+
+	mgr, err := plugin.NewManager(Plugin{})
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	assistant := event.NewResponseEvent(
+		"inv",
+		authorAssistant,
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("hi"),
+			}},
+		},
+	)
+	out, err := mgr.OnEvent(context.Background(), inv, assistant)
+	require.NoError(t, err)
+	require.Same(t, assistant, out)
+
+	user := event.NewResponseEvent(
+		"inv",
+		authorUser,
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("hello"),
+			}},
+		},
+	)
+	out, err = mgr.OnEvent(context.Background(), nil, user)
+	require.NoError(t, err)
+	require.Same(t, user, out)
+}
+
 func TestPreSummaryHook_NoProjectionLeavesText(t *testing.T) {
 	t.Parallel()
 
