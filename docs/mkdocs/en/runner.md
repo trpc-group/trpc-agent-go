@@ -325,8 +325,8 @@ managed.Cancel(requestID)
 #### Queue a New User Message into the Same Run
 
 Sometimes you do not want to start a second run. You want to keep the current
-`requestID`, wait for a safe boundary, and then insert a new `role=user`
-message into the same run.
+`requestID`, queue a new `role=user` message, and insert it only after the
+current assistant round is finished.
 
 Use `runner.EnqueueUserMessage(...)`:
 
@@ -359,13 +359,61 @@ go func() {
 _ = eventChan
 ```
 
-Behavior:
+Think of one assistant output as one round:
+
+- If the assistant only replies with text, the round ends at that reply
+- If the assistant emits `tool_call`s, the round ends only after that whole
+  tool batch finishes
+
+The queued user message can only be inserted between rounds. It is never
+inserted in the middle of a round.
+
+The simplest valid shape is:
+
+```text
+user(Q1)
+assistant(tool_call A)
+tool(result A)
+user(Q2, queued steer)
+assistant(...)
+```
+
+If one assistant message emits multiple tool calls, the framework still waits
+for the whole round:
+
+```text
+user(Q1)
+assistant(tool_calls A, B)
+tool(result A)
+tool(result B)
+user(Q2, queued steer)
+assistant(...)
+```
+
+It will not insert like this:
+
+```text
+user(Q1)
+assistant(tool_calls A, B)
+tool(result A)
+user(Q2, queued steer)
+tool(result B)
+```
+
+because that would break the `tool_call -> tool_response` structure of the
+same assistant round.
+
+So the behavior is:
 
 - This does **not** start a second run
 - The message is queued first, not written to session immediately
-- The flow appends it only at the next safe boundary
-- The safe boundary preserves the `tool_call -> tool_response` structure
+- It is appended only after the previous assistant round and its tool work are
+  fully finished
+- This keeps the `tool_call -> tool_response` structure intact
 - If the run has already finished, enqueue returns an error
+
+If you want the implementation-level mapping, this happens after one
+`runOneStep()` finishes and before the next `runOneStep()` starts.
 
 Runnable example: `examples/steer/`
 

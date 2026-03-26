@@ -1,16 +1,40 @@
-# Safe-Boundary User Steer Example
+# User Steer Example
 
 This example demonstrates how to insert a new `role=user` message into the
 same run while the agent is still working.
 
-It uses the new `runner.EnqueueUserMessage(...)` API:
+It uses the `runner.EnqueueUserMessage(...)` API.
 
-- The run keeps the same `requestID`
-- The session is not written immediately
-- The message is queued first
-- `llmflow` appends it only at the next safe boundary
-- The tool call structure stays valid:
-  `assistant(tool_call) -> tool(tool_response) -> user(queued steer)`
+The easiest mental model is:
+
+- One assistant message is one round
+- If that assistant message starts tool calls, the round is not done until
+  all tool results for that message are finished
+- The queued user message is inserted only between two rounds
+
+In message form, the valid shape is:
+
+```text
+user(Q1)
+assistant(tool_call)
+tool(tool_response)
+user(Q2, queued steer)
+assistant(...)
+```
+
+If one assistant message emits multiple tool calls, the framework still waits
+for the whole round:
+
+```text
+user(Q1)
+assistant(tool_calls A, B)
+tool(result A)
+tool(result B)
+user(Q2, queued steer)
+assistant(...)
+```
+
+It does not insert in the middle of that tool round.
 
 ## Why this example exists
 
@@ -22,8 +46,9 @@ The common real-world case is:
 4. You want the same run to continue with that new instruction
 
 Starting a second concurrent run for the same session can create ordering and
-state problems. This example shows the cleaner approach: queue the new user
-message into the current run.
+state problems. This example shows the simpler approach: queue the new user
+message into the current run and let the framework insert it at the next round
+boundary.
 
 ## What the demo does
 
@@ -76,7 +101,7 @@ You should see output similar to:
 The important detail is the order:
 
 - The extra user message is queued while the tool is still running
-- The queued message is persisted only after the tool result is complete
+- The queued message is persisted only after that assistant round is complete
 - The final assistant answer uses the queued instruction
 
 ## Production Note
