@@ -859,6 +859,14 @@ max_results: 5
 	require.Contains(t, configs, "docs")
 }
 
+func TestConvertKnowledgeConfigs_EmptyEntriesReturnNil(t *testing.T) {
+	t.Parallel()
+
+	configs, err := convertKnowledgeConfigs(nil)
+	require.NoError(t, err)
+	require.Nil(t, configs)
+}
+
 func TestConvertKnowledgeConfigs_ClonesNestedNodes(t *testing.T) {
 	t.Parallel()
 
@@ -885,6 +893,12 @@ max_results: 5
 	gotVectorStore := mappingValue(configs["docs"], "vector_store")
 	require.Equal(t, "text-embedding-3-small", mappingValue(gotEmbedder, "model").Value)
 	require.Equal(t, "5", mappingValue(gotVectorStore, "max_results").Value)
+}
+
+func TestCloneYAMLNode_NilReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, cloneYAMLNode(nil))
 }
 
 func TestParseRunOptions_DebugRecorder_ConfigApplied(t *testing.T) {
