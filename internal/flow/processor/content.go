@@ -15,6 +15,7 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -285,16 +286,36 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	// disable seeding session history for specific runs without changing
 	// the processor configuration.
 	includeMode := ""
+	subgraphMessageSource := ""
+	subgraphMessageSourceExplicit := false
 	if invocation.RunOptions.RuntimeState != nil {
 		if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents]; ok {
 			if s, ok2 := v.(string); ok2 {
 				includeMode = strings.ToLower(s)
 			}
 		}
+		if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeySubgraphMessageSource]; ok {
+			if s, ok2 := v.(string); ok2 {
+				subgraphMessageSource = strings.ToLower(s)
+			}
+		}
+		if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeySubgraphMessageSourceExplicit]; ok {
+			if b, ok2 := v.(bool); ok2 {
+				subgraphMessageSourceExplicit = b
+			}
+		}
 	}
 	skipHistory := includeMode == "none"
 
 	p.injectInjectedContextMessages(invocation, req)
+	preassembledMessages := p.getPreassembledGraphMessages(
+		invocation,
+		subgraphMessageSource,
+		subgraphMessageSourceExplicit,
+	)
+	if len(preassembledMessages) > 0 {
+		req.Messages = append(req.Messages, preassembledMessages...)
+	}
 
 	// Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := true
@@ -328,7 +349,10 @@ func (p *ContentRequestProcessor) ProcessRequest(
 			// to preserve tool call history within the current ReAct loop.
 			// This fixes the infinite loop issue where the agent doesn't see its
 			// own tool calls when running as an isolated subgraph.
-			messages = p.getCurrentInvocationMessages(invocation)
+			messages = p.getCurrentInvocationMessagesWithOptions(
+				invocation,
+				len(preassembledMessages) == 0,
+			)
 		} else {
 			messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
 			if p.hasCompactedCurrentInvocationToolResults(
@@ -345,7 +369,9 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		needToAddInvocationMessage = len(messages) == 0
 	}
 
-	if model.HasPayload(invocation.Message) && needToAddInvocationMessage {
+	if model.HasPayload(invocation.Message) &&
+		needToAddInvocationMessage &&
+		len(preassembledMessages) == 0 {
 		msg := annotateUserMessageWithAttachedFiles(invocation.Message)
 		req.Messages = append(req.Messages, msg)
 		log.DebugfContext(
@@ -397,6 +423,39 @@ func (p *ContentRequestProcessor) injectInjectedContextMessages(invocation *agen
 		return
 	}
 	req.Messages = append(req.Messages, messages...)
+}
+
+func (p *ContentRequestProcessor) getPreassembledGraphMessages(
+	invocation *agent.Invocation,
+	source string,
+	explicit bool,
+) []model.Message {
+	if invocation == nil ||
+		source != string(graph.SubgraphMessageSourceGraphSnapshot) {
+		return nil
+	}
+	if invocation.RunOptions.RuntimeState == nil {
+		return nil
+	}
+	raw, ok := invocation.RunOptions.RuntimeState[graph.StateKeyMessages]
+	if !ok || raw == nil {
+		return nil
+	}
+	if msgs, ok := raw.([]model.Message); ok {
+		return append([]model.Message(nil), msgs...)
+	}
+	if explicit {
+		return nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var msgs []model.Message
+	if err := json.Unmarshal(b, &msgs); err != nil {
+		return nil
+	}
+	return msgs
 }
 
 // getSessionSummaryMessage returns the current-branch session summary as a
@@ -906,6 +965,13 @@ func isEmptyAssistantMessage(msg model.Message) bool {
 // This is used when include_contents=none to preserve tool call history within
 // the current ReAct loop while isolating from parent/other branch history.
 func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invocation) []model.Message {
+	return p.getCurrentInvocationMessagesWithOptions(inv, true)
+}
+
+func (p *ContentRequestProcessor) getCurrentInvocationMessagesWithOptions(
+	inv *agent.Invocation,
+	includeInvocationMessage bool,
+) []model.Message {
 	if inv.Session == nil {
 		return nil
 	}
@@ -939,7 +1005,9 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 			break
 		}
 	}
-	if !hasInvocationMessage && model.HasPayload(inv.Message) {
+	if includeInvocationMessage &&
+		!hasInvocationMessage &&
+		model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
@@ -1098,7 +1166,10 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 // isEventEligibleForInclusion checks basic event validity before expensive
 // filtering logic runs.
 func isEventEligibleForInclusion(evt event.Event) bool {
-	return evt.Response != nil && !evt.IsPartial && evt.IsValidContent()
+	return evt.Response != nil &&
+		!evt.IsPartial &&
+		evt.IsValidContent() &&
+		!evt.IsRunnerCompletion()
 }
 
 // isStrictInvocationMessage checks whether the event exactly matches the
