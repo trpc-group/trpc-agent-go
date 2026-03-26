@@ -192,7 +192,6 @@ func TestInteractiveHelpers_FormatEnvAndExitCode(t *testing.T) {
 	require.Equal(t, 9, interactiveExitCode(err))
 	require.Equal(t, -1, interactiveExitCode(os.ErrInvalid))
 
-
 	rt := NewRuntime(t.TempDir())
 	ws := codeexecutor.Workspace{
 		ID:   "ws3",
@@ -207,6 +206,23 @@ func TestInteractiveHelpers_FormatEnvAndExitCode(t *testing.T) {
 		},
 	)
 	require.NoError(t, envErr)
+}
+
+func TestStartPipes_RejectsPresetFields(t *testing.T) {
+	cmd := exec.Command("echo", "hi")
+	cmd.Stdout = os.Stdout
+	_, _, _, _, err := startPipes(cmd)
+	require.ErrorContains(t, err, "Stdout already set")
+
+	cmd2 := exec.Command("echo", "hi")
+	cmd2.Stderr = os.Stderr
+	_, _, _, _, err = startPipes(cmd2)
+	require.ErrorContains(t, err, "Stderr already set")
+
+	cmd3 := exec.Command("echo", "hi")
+	cmd3.Stdin = strings.NewReader("x")
+	_, _, _, _, err = startPipes(cmd3)
+	require.Error(t, err)
 }
 
 func TestInteractiveSession_IDLogOffsetsAndMarkDone(t *testing.T) {
