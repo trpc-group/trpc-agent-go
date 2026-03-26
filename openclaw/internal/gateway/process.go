@@ -12,6 +12,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -30,6 +31,7 @@ type preparedMessageRun struct {
 	requestSystemPrompt string
 	inbound             InboundMessage
 	userMsg             model.Message
+	extensions          map[string]json.RawMessage
 }
 
 // ProcessMessage processes a gateway message request without an HTTP hop.
@@ -258,7 +260,27 @@ func (s *Server) prepareMessageRun(
 		requestSystemPrompt: strings.TrimSpace(req.RequestSystemPrompt),
 		inbound:             msg,
 		userMsg:             userMsg,
+		extensions:          cloneExtensions(req.Extensions),
 	}, nil, http.StatusOK
+}
+
+func cloneExtensions(
+	src map[string]json.RawMessage,
+) map[string]json.RawMessage {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]json.RawMessage, len(src))
+	for key, raw := range src {
+		if raw == nil {
+			out[key] = nil
+			continue
+		}
+		cloned := make([]byte, len(raw))
+		copy(cloned, raw)
+		out[key] = json.RawMessage(cloned)
+	}
+	return out
 }
 
 // CancelRequest cancels an in-flight run by request ID.

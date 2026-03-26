@@ -1429,6 +1429,11 @@ func TestServer_ProcessMessage_RunOptionResolver(t *testing.T) {
 			require.Equal(t, "telegram:dm:u1", input.SessionID)
 			require.Equal(t, "req-in", input.RequestID)
 			require.Equal(t, "hello", input.Message.Content)
+			require.Equal(
+				t,
+				json.RawMessage(`{"actor_id":"u1"}`),
+				input.Extensions["ext"],
+			)
 			return context.WithValue(
 					ctx,
 					resolverKey,
@@ -1448,6 +1453,9 @@ func TestServer_ProcessMessage_RunOptionResolver(t *testing.T) {
 			MessageID: "msg-1",
 			RequestID: "req-in",
 			Text:      "hello",
+			Extensions: map[string]json.RawMessage{
+				"ext": json.RawMessage(`{"actor_id":"u1"}`),
+			},
 		},
 	)
 	require.Equal(t, http.StatusOK, status)

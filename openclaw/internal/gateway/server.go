@@ -553,6 +553,9 @@ func (s *Server) resolveRunOptions(
 			RequestID: run.requestID,
 			Message:   run.userMsg,
 			Trace:     debugrecorder.TraceFromContext(ctx),
+			Extensions: cloneExtensions(
+				run.extensions,
+			),
 		},
 	)
 	if resolvedCtx != nil {

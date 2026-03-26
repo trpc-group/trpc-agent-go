@@ -88,6 +88,50 @@ func TestExecTool_UsesManagerBaseEnv(t *testing.T) {
 	require.Contains(t, strings.TrimSpace(res.Output), "ok")
 }
 
+func TestExecTool_BlocksSensitiveEnvReads(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithCommandPolicy(NewChatCommandSafetyPolicy()),
+	)
+	tool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command": "echo $OPENAI_API_KEY",
+		"yieldMs": 0,
+	})
+	_, err := tool.Call(context.Background(), args)
+	require.ErrorContains(
+		t,
+		err,
+		"reading or printing sensitive credentials",
+	)
+}
+
+func TestExecTool_BlocksShellProfileAccess(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithCommandPolicy(NewChatCommandSafetyPolicy()),
+	)
+	tool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command": "cat ~/.bashrc",
+		"yieldMs": 0,
+	})
+	_, err := tool.Call(context.Background(), args)
+	require.ErrorContains(
+		t,
+		err,
+		"shell or credential files is not allowed",
+	)
+}
+
 func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")

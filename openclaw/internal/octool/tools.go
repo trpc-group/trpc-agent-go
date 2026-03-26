@@ -192,6 +192,8 @@ func execToolDescription(hasMemoryFile bool) string {
 	parts := []string{
 		"Execute a host shell command. Use this for general local shell work.",
 		"Interactive commands can continue with write_stdin.",
+		"Credential exfiltration and direct reads or writes of shell and " +
+			"credential files may be blocked by policy.",
 		"When a chat upload is available, OPENCLAW_LAST_UPLOAD_PATH, " +
 			"OPENCLAW_LAST_UPLOAD_HOST_REF, OPENCLAW_LAST_UPLOAD_NAME, " +
 			"OPENCLAW_LAST_UPLOAD_MIME, kind-specific " +
