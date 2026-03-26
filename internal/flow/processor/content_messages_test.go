@@ -367,9 +367,9 @@ func TestProcessRequest_GraphSnapshotExplicitRequiresTypedMessages(t *testing.T)
 		Message:      model.NewUserMessage("current should not be appended"),
 		RunOptions: agent.RunOptions{
 			RuntimeState: map[string]any{
-				graph.CfgKeyIncludeContents:                "none",
-				graph.CfgKeySubgraphMessageSource:          string(graph.SubgraphMessageSourceGraphSnapshot),
-				graph.CfgKeySubgraphMessageSourceExplicit:  true,
+				graph.CfgKeyIncludeContents:               "none",
+				graph.CfgKeySubgraphMessageSource:         string(graph.SubgraphMessageSourceGraphSnapshot),
+				graph.CfgKeySubgraphMessageSourceExplicit: true,
 				graph.StateKeyMessages: []map[string]any{
 					{"role": string(model.RoleUser), "content": "graph user"},
 					{"role": string(model.RoleAssistant), "content": "graph assistant"},
