@@ -63,6 +63,56 @@ func TestToolCallWithoutInvocation(t *testing.T) {
 	require.ErrorIs(t, err, errToolNotInInvocation)
 }
 
+func TestToolCall_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	tool := NewTool()
+
+	_, err := tool.Call(context.Background(), []byte("{"))
+	require.ErrorContains(t, err, "invalid args")
+
+	require.Equal(t, defaultTurnLimit, normalizeLimit(nil))
+	require.Equal(t, defaultTurnLimit, normalizeLimit(intPointer(0)))
+	require.Equal(t, maxTurnLimit, normalizeLimit(intPointer(maxTurnLimit+1)))
+}
+
+func TestToolCall_IncludeSystemAndLimit(t *testing.T) {
+	t.Parallel()
+
+	historyTool := NewTool()
+	sess := session.NewSession("app", "scope", "session-2")
+	sess.Events = []event.Event{
+		{
+			Author: "system",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.NewSystemMessage("summary"),
+				}},
+			},
+		},
+		userEvent(t, "u1", "Alice", "hello", "", time.Now()),
+		assistantEvent("hi", time.Now().Add(time.Second)),
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	out, err := historyTool.Call(
+		ctx,
+		[]byte(`{"limit":1,"include_system":true}`),
+	)
+	require.NoError(t, err)
+
+	result := out.(map[string]any)
+	require.Equal(t, 1, result["turn_count"])
+	require.Equal(t, "1. Assistant: hi", result["transcript"])
+}
+
+func intPointer(v int) *int {
+	return &v
+}
+
 func userEvent(
 	t *testing.T,
 	actorID string,

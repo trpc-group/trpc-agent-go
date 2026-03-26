@@ -903,6 +903,49 @@ func TestServiceReplaceOverlapPolicy(t *testing.T) {
 	require.Equal(t, StatusSucceeded, got.LastStatus)
 }
 
+func TestServiceRunNow_DeliveryFailureWithoutRouter(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{reply: "done"}
+	svc, err := NewService(t.TempDir(), runner, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitFor(t, func() bool {
+		got := svc.Get(job.ID)
+		return got != nil &&
+			got.LastStatus == StatusDeliveryFailed
+	})
+
+	got := svc.Get(job.ID)
+	require.NotNil(t, got)
+	require.Equal(t, 1, got.Stats.RunCount)
+	require.Equal(t, 1, got.Stats.DeliveryFailureCount)
+	require.Equal(t, StatusDeliveryFailed, got.LastStatus)
+	require.Contains(t, got.LastError, "nil outbound router")
+}
+
 func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -1027,6 +1070,51 @@ func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 		Kind:     ScheduleKindCron,
 		CronExpr: "0 * * * *",
 	}))
+	require.Equal(
+		t,
+		"report {{.Cron.Missing}}",
+		renderScheduledRunTask(
+			"report {{.Cron.Missing}}",
+			cronRunTemplateData{},
+		),
+	)
+	require.Equal(
+		t,
+		"report {{",
+		renderScheduledRunTask(
+			"report {{",
+			cronRunTemplateData{},
+		),
+	)
+
+	job := &Job{
+		Policy: ExecutionPolicy{
+			MaxRuns: 1,
+			EndsAt:  cloneTimePtr(&now),
+		},
+		Stats: ExecutionStats{
+			RunCount: 1,
+		},
+	}
+	require.True(t, executionLimitReached(job))
+	require.True(t, executionWindowClosed(job, now))
+	require.False(
+		t,
+		nextRunAllowed(
+			job,
+			cloneTimePtr(&now),
+			now,
+		),
+	)
+
+	applyNextRunPolicy(nil, nil, now)
+	applyNextRunPolicy(&Job{}, nil, now)
+
+	require.Equal(
+		t,
+		"",
+		sanitizeStoredOutput(" \n\t "),
+	)
 }
 
 func waitFor(t *testing.T, fn func() bool) {

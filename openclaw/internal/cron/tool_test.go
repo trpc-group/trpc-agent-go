@@ -587,10 +587,62 @@ func TestTool_ContextAndDeliveryErrors(t *testing.T) {
 	require.Equal(t, "x", firstString("", " x "))
 }
 
+func TestTool_ErrorsAndHelperBranches(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "telegram:dm:12345",
+				UserID: "user-1",
+			},
+		},
+	)
+
+	_, err = tool.Call(ctx, []byte("{"))
+	require.ErrorContains(t, err, "invalid args")
+
+	_, err = tool.Call(ctx, []byte(`{"action":"unknown"}`))
+	require.ErrorContains(t, err, "unsupported cron action")
+
+	_, err = tool.Call(
+		ctx,
+		[]byte(`{
+			"action":"add",
+			"message":"report",
+			"every":"1m",
+			"headless":true,
+			"target":"12345"
+		}`),
+	)
+	require.ErrorContains(t, err, errHeadlessWithTarget)
+
+	_, err = parseOptionalRFC3339("bad")
+	require.ErrorContains(t, err, "invalid ends_at")
+
+	require.True(t, boolValue(boolPointer(true)))
+	require.False(t, boolValue(nil))
+	require.True(t, hasPolicyInput(toolInput{OverlapOld: "replace"}))
+	require.Equal(t, "", firstString("", " "))
+}
+
 func intPointer(v int) *int {
 	return &v
 }
 
 func int64Pointer(v int64) *int64 {
+	return &v
+}
+
+func boolPointer(v bool) *bool {
 	return &v
 }

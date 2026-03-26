@@ -620,6 +620,56 @@ func TestChannel_HandleMessage_CommandCronStop(t *testing.T) {
 	bot.mu.Unlock()
 }
 
+func TestChannel_HandleMessage_CommandCronResume(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGatewayWithJobs{
+		stubGateway: &stubGateway{},
+		jobs: []gwclient.ScheduledJobSummary{
+			{
+				ID:      "job-1",
+				Name:    "cpu report",
+				Enabled: false,
+			},
+		},
+	}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 5,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/cron resume 1",
+	})
+	require.NoError(t, err)
+
+	gw.mu.Lock()
+	require.Equal(t, "job-1", gw.lastJobID)
+	require.NotNil(t, gw.lastEnabled)
+	require.True(t, *gw.lastEnabled)
+	gw.mu.Unlock()
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 1)
+	require.Equal(
+		t,
+		"Resumed scheduled job cpu report.",
+		bot.sent[0].Text,
+	)
+	bot.mu.Unlock()
+}
+
 func TestChannel_HandleMessage_CommandCronRemove(t *testing.T) {
 	t.Parallel()
 
@@ -665,6 +715,48 @@ func TestChannel_HandleMessage_CommandCronRemove(t *testing.T) {
 		"Removed scheduled job cpu report.",
 		bot.sent[0].Text,
 	)
+	bot.mu.Unlock()
+}
+
+func TestChannel_HandleMessage_CommandCronHelpAndUsage(t *testing.T) {
+	t.Parallel()
+
+	gw := &stubGatewayWithJobs{stubGateway: &stubGateway{}}
+	dir := t.TempDir()
+	ch, err := New(
+		testToken,
+		BotInfo{Username: "bot"},
+		gw,
+		WithStateDir(dir),
+		WithDMPolicy(dmPolicyOpen),
+	)
+	require.NoError(t, err)
+
+	bot := &stubBot{}
+	ch.bot = bot
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 5,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/cron help",
+	})
+	require.NoError(t, err)
+
+	err = ch.handleMessage(context.Background(), tgapi.Message{
+		MessageID: 6,
+		From:      &tgapi.User{ID: 2},
+		Chat:      &tgapi.Chat{ID: 1, Type: chatTypePrivate},
+		Text:      "/cron bad-action",
+	})
+	require.NoError(t, err)
+
+	bot.mu.Lock()
+	require.Len(t, bot.sent, 2)
+	require.Contains(t, bot.sent[0].Text, "Usage:")
+	require.Contains(t, bot.sent[0].Text, "cron resume")
+	require.Contains(t, bot.sent[1].Text, "Usage:")
+	require.Contains(t, bot.sent[1].Text, "cron remove")
 	bot.mu.Unlock()
 }
 

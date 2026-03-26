@@ -77,9 +77,33 @@ func TestResolveSelectorRejectsAmbiguousPrefix(t *testing.T) {
 	require.ErrorIs(t, err, ErrSelectorMany)
 }
 
+func TestResolveSelectorRejectsAmbiguousName(t *testing.T) {
+	t.Parallel()
+
+	jobs := []gwclient.ScheduledJobSummary{
+		{ID: "a1", Name: "cpu"},
+		{ID: "b2", Name: "CPU"},
+	}
+
+	_, err := ResolveSelector(jobs, "cpu")
+	require.ErrorIs(t, err, ErrSelectorMany)
+}
+
+func TestNeedsSelector(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, NeedsSelector(ActionStatus))
+	require.True(t, NeedsSelector(ActionStop))
+	require.True(t, NeedsSelector(ActionResume))
+	require.True(t, NeedsSelector(ActionRemove))
+	require.False(t, NeedsSelector(ActionList))
+	require.False(t, NeedsSelector(ActionClear))
+}
+
 func TestShortID(t *testing.T) {
 	t.Parallel()
 
 	require.Equal(t, "12345678", ShortID("12345678-rest"))
 	require.Equal(t, "short", ShortID("short"))
+	require.Equal(t, "", ShortID(" "))
 }

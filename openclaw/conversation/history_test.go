@@ -10,12 +10,16 @@
 package conversation
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	summarypkg "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
@@ -55,6 +59,48 @@ func TestSetEventAnnotationRoundTrip(t *testing.T) {
 	require.Equal(t, "u2", annotation.ActorID)
 	require.Equal(t, "Bob", annotation.ActorLabel)
 	require.Equal(t, "earlier", annotation.QuoteText)
+}
+
+func TestAnnotationHelpers_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	base := map[string]json.RawMessage{
+		"keep": json.RawMessage(`"value"`),
+	}
+	got, err := MergeRequestExtension(base, Annotation{})
+	require.NoError(t, err)
+	require.Equal(t, base, got)
+
+	require.Nil(t, RuntimeState(Annotation{}))
+
+	_, ok := AnnotationFromRuntimeState(nil)
+	require.False(t, ok)
+
+	_, ok = AnnotationFromRuntimeState(
+		map[string]any{RuntimeStateKey: "bad"},
+	)
+	require.False(t, ok)
+
+	_, ok = AnnotationFromRuntimeState(
+		map[string]any{RuntimeStateKey: Annotation{}},
+	)
+	require.False(t, ok)
+
+	_, ok, err = AnnotationFromRequestExtensions(
+		map[string]json.RawMessage{
+			ExtensionKey: json.RawMessage("{"),
+		},
+	)
+	require.Error(t, err)
+	require.False(t, ok)
+
+	evt := event.New("inv", authorUser)
+	evt.Extensions = map[string]json.RawMessage{
+		ExtensionKey: json.RawMessage("{"),
+	}
+	_, ok, err = AnnotationFromEvent(*evt)
+	require.Error(t, err)
+	require.False(t, ok)
 }
 
 func TestBuildInjectedContextMessages(t *testing.T) {
@@ -98,6 +144,158 @@ func TestBuildInjectedContextMessages(t *testing.T) {
 	require.Contains(t, got[1].Content, "Message: latest question")
 	require.Equal(t, model.RoleAssistant, got[2].Role)
 	require.Equal(t, "latest answer", got[2].Content)
+}
+
+func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, BuildInjectedContextMessages(nil, HistoryOptions{}))
+	require.Nil(t, BuildTurns(nil, TurnOptions{}))
+	require.Empty(t, BuildSummaryText(nil))
+
+	msg := model.Message{
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeText,
+				Text: stringPointer("first"),
+			},
+			{
+				Type: model.ContentTypeText,
+				Text: stringPointer("second"),
+			},
+		},
+	}
+	require.Equal(t, "first\nsecond", messageText(msg))
+
+	fileName := "report.pdf"
+	require.Equal(
+		t,
+		"sent 1 attachment",
+		messageText(model.Message{
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeFile,
+				File: &model.File{Name: fileName},
+			}},
+		}),
+	)
+	require.Equal(
+		t,
+		"sent 2 attachments",
+		messageText(model.Message{
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeFile,
+					File: &model.File{Name: "a.txt"},
+				},
+				{
+					Type: model.ContentTypeFile,
+					File: &model.File{Name: "b.txt"},
+				},
+			},
+		}),
+	)
+	require.Empty(
+		t,
+		renderAssistantMessage(model.Message{
+			ToolID: "tool-1",
+		}),
+	)
+
+	require.Equal(t, authorUser, speakerLabel(Annotation{}))
+	require.Equal(
+		t,
+		"u-1",
+		speakerLabel(Annotation{ActorID: "u-1"}),
+	)
+	require.Equal(
+		t,
+		"Bob",
+		speakerLabel(Annotation{
+			ActorID:    "u-1",
+			ActorLabel: "Bob",
+		}),
+	)
+
+	require.Equal(
+		t,
+		"user: hello",
+		formatTurn(Turn{
+			Role: string(model.RoleUser),
+			Text: "hello",
+		}),
+	)
+	require.Empty(t, formatTurn(Turn{}))
+
+	invalidUser := event.NewResponseEvent(
+		"inv",
+		authorUser,
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("hello"),
+			}},
+		},
+	)
+	invalidUser.Extensions = map[string]json.RawMessage{
+		ExtensionKey: json.RawMessage("{"),
+	}
+	require.Nil(t, visibleUserMessages(*invalidUser))
+
+	assistantToolOnly := event.Event{
+		Author: authorAssistant,
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{ID: "call-1"}},
+				},
+			}},
+		},
+	}
+	require.Empty(t, visibleAssistantMessages(assistantToolOnly))
+
+	require.Empty(
+		t,
+		visibleSystemMessages(systemEvent("   ")),
+	)
+	require.Nil(
+		t,
+		turnsFromEvent(event.Event{}, true),
+	)
+	require.Nil(
+		t,
+		buildSummaryLines([]event.Event{
+			assistantEvent("hi", time.Now()),
+			systemEvent("sum"),
+		}),
+	)
+
+	base := time.Now()
+	require.False(
+		t,
+		includeEvent(event.Event{
+			Response: &model.Response{
+				IsPartial: true,
+				Choices:   []model.Choice{{}},
+			},
+		}, time.Time{}),
+	)
+	require.False(
+		t,
+		includeEvent(assistantEvent("old", base), base),
+	)
+
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: {
+				Summary:   "summary",
+				UpdatedAt: base,
+			},
+		},
+	}
+	text, updatedAt, ok := sessionSummary(sess)
+	require.True(t, ok)
+	require.Equal(t, "summary", text)
+	require.Equal(t, base, updatedAt)
 }
 
 func TestBuildSummaryText(t *testing.T) {
@@ -194,6 +392,58 @@ func TestPreSummaryHookUsesConversationProjection(t *testing.T) {
 	require.NoError(t, PreSummaryHook(ctx))
 	require.Contains(t, ctx.Text, "Alice: hello")
 	require.Contains(t, ctx.Text, "Assistant: hi")
+}
+
+func TestPluginPersistsRuntimeAnnotation(t *testing.T) {
+	t.Parallel()
+
+	mgr, err := plugin.NewManager(Plugin{})
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	inv.RunOptions.RuntimeState = RuntimeState(Annotation{
+		ActorID:    "u-1",
+		ActorLabel: "Alice",
+		QuoteText:  "earlier",
+	})
+	evt := event.NewResponseEvent(
+		"inv",
+		authorUser,
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("hello"),
+			}},
+		},
+	)
+	out, err := mgr.OnEvent(context.Background(), inv, evt)
+	require.NoError(t, err)
+
+	annotation, ok, err := AnnotationFromEvent(*out)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "Alice", annotation.ActorLabel)
+	require.Equal(t, "earlier", annotation.QuoteText)
+}
+
+func TestPreSummaryHook_NoProjectionLeavesText(t *testing.T) {
+	t.Parallel()
+
+	ctx := &summarypkg.PreSummaryHookContext{
+		Events: []event.Event{
+			assistantEvent("hi", time.Now()),
+		},
+		Text: "fallback",
+	}
+	require.NoError(t, PreSummaryHook(ctx))
+	require.Equal(t, "fallback", ctx.Text)
+
+	require.NoError(t, PreSummaryHook(nil))
+}
+
+func stringPointer(v string) *string {
+	return &v
 }
 
 func userEvent(
