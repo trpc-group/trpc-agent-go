@@ -25,7 +25,28 @@ type StopDecision struct {
 	Reason string
 }
 
-// stop evaluates current progress against stop policy and returns the decision.
-func (e *engine) stop() error {
-	return nil
+func (e *engine) stop(
+	round int,
+	maxRounds int,
+	policy StopPolicy,
+	roundsWithoutAcceptance int,
+	effectiveScore float64,
+) *StopDecision {
+	decision := &StopDecision{}
+	switch {
+	case round >= maxRounds:
+		decision.ShouldStop = true
+		decision.Reason = "max rounds reached"
+	case policy.MaxRoundsWithoutAcceptance > 0 &&
+		roundsWithoutAcceptance >= policy.MaxRoundsWithoutAcceptance:
+		decision.ShouldStop = true
+		decision.Reason = "max rounds without acceptance reached"
+	case policy.TargetScore != nil && effectiveScore >= *policy.TargetScore:
+		decision.ShouldStop = true
+		decision.Reason = "target score reached"
+	default:
+		decision.ShouldStop = false
+		decision.Reason = "continue optimization"
+	}
+	return decision
 }

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	idecode "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/decode"
 	iloss "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/loss"
@@ -38,7 +39,7 @@ type Request struct {
 	// NodeID binds the request to the surface owner in the snapshot.
 	NodeID string
 	// Type ensures aggregator logic uses correct semantics per surface type.
-	Type promptiter.SurfaceType
+	Type astructure.SurfaceType
 	// Gradients contains gradients from all samples contributing to this surface.
 	Gradients []promptiter.SurfaceGradient
 }

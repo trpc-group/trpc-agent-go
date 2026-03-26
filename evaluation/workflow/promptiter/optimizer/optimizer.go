@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	idecode "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/decode"
 	irunner "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/runner"
@@ -31,7 +32,7 @@ type Optimizer interface {
 // Request carries gradient and baseline surface context for optimization.
 type Request struct {
 	// Surface is the source surface baseline that may be changed.
-	Surface *promptiter.Surface
+	Surface *astructure.Surface
 	// Gradient is the merged signal that drives optimization decisions.
 	Gradient *promptiter.AggregatedSurfaceGradient
 }

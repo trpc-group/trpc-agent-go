@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -474,25 +476,25 @@ func TestBackwardRejectsInvalidRequests(t *testing.T) {
 			request: &Request{
 				EvalSetID:  "set_a",
 				EvalCaseID: "case_1",
-				Node: &promptiter.StructureNode{
+				Node: &astructure.Node{
 					NodeID: "node_1",
 				},
 				StepID: "step_1",
-				Input:  &promptiter.TraceInput{Text: "input"},
-				Surfaces: []promptiter.Surface{
+				Input:  &atrace.Snapshot{Text: "input"},
+				Surfaces: []astructure.Surface{
 					{
 						SurfaceID: "surf_1",
 						NodeID:    "node_1",
-						Type:      promptiter.SurfaceTypeInstruction,
-						Value: promptiter.SurfaceValue{
+						Type:      astructure.SurfaceTypeInstruction,
+						Value: astructure.SurfaceValue{
 							Text: &validText,
 						},
 					},
 					{
 						SurfaceID: "surf_1",
 						NodeID:    "node_1",
-						Type:      promptiter.SurfaceTypeInstruction,
-						Value: promptiter.SurfaceValue{
+						Type:      astructure.SurfaceTypeInstruction,
+						Value: astructure.SurfaceValue{
 							Text: &validText,
 						},
 					},
@@ -562,24 +564,24 @@ func newInstructionRequest() *Request {
 	return &Request{
 		EvalSetID:  "set_a",
 		EvalCaseID: "case_1",
-		Node: &promptiter.StructureNode{
+		Node: &astructure.Node{
 			NodeID: "node_1",
 			Kind:   "llm",
 			Name:   "responder",
 		},
 		StepID: "step_1",
-		Input: &promptiter.TraceInput{
+		Input: &atrace.Snapshot{
 			Text: "input text",
 		},
-		Output: &promptiter.TraceOutput{
+		Output: &atrace.Snapshot{
 			Text: "output text",
 		},
-		Surfaces: []promptiter.Surface{
+		Surfaces: []astructure.Surface{
 			{
 				SurfaceID: "surf_1",
 				NodeID:    "node_1",
-				Type:      promptiter.SurfaceTypeInstruction,
-				Value: promptiter.SurfaceValue{
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
 					Text: &currentText,
 				},
 			},
@@ -588,7 +590,7 @@ func newInstructionRequest() *Request {
 			{
 				StepID: "pred_1",
 				NodeID: "node_pred",
-				Output: &promptiter.TraceOutput{
+				Output: &atrace.Snapshot{
 					Text: "predecessor output",
 				},
 			},

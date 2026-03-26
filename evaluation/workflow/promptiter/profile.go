@@ -9,6 +9,8 @@
 // Package promptiter defines shared domain models used by the PromptIter workflow.
 package promptiter
 
+import astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+
 // Profile represents a candidate set of overrides applied on top of a baseline snapshot.
 type Profile struct {
 	// StructureID binds all overrides to one exported structure version.
@@ -22,5 +24,5 @@ type SurfaceOverride struct {
 	// SurfaceID targets the surface to replace during execution.
 	SurfaceID string
 	// Value provides the candidate replacement content for the surface.
-	Value SurfaceValue
+	Value astructure.SurfaceValue
 }

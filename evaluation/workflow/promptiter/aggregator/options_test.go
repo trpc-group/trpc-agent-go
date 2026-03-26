@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -26,7 +27,7 @@ func TestDefaultMessageBuilder(t *testing.T) {
 	msg, err := builder(context.Background(), &Request{
 		SurfaceID: "surf_1",
 		NodeID:    "node_1",
-		Type:      promptiter.SurfaceTypeInstruction,
+		Type:      astructure.SurfaceTypeInstruction,
 		Gradients: []promptiter.SurfaceGradient{
 			{
 				EvalSetID:  "set_a",
@@ -63,7 +64,7 @@ func TestDefaultMessageBuilder(t *testing.T) {
 	assert.Equal(t, &Request{
 		SurfaceID: "surf_1",
 		NodeID:    "node_1",
-		Type:      promptiter.SurfaceTypeInstruction,
+		Type:      astructure.SurfaceTypeInstruction,
 		Gradients: []promptiter.SurfaceGradient{
 			{
 				EvalSetID:  "set_a",

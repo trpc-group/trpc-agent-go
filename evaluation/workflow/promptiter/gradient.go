@@ -9,6 +9,8 @@
 // Package promptiter defines shared domain models used by the PromptIter workflow.
 package promptiter
 
+import astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+
 // SurfaceGradient carries one sample-local gradient attribution to one surface.
 type SurfaceGradient struct {
 	// EvalSetID records which evaluation set generated this gradient.
@@ -42,7 +44,7 @@ type AggregatedSurfaceGradient struct {
 	// NodeID is the node owning this surface in the static structure.
 	NodeID string
 	// Type is the surface type used during aggregation and optimization.
-	Type SurfaceType
+	Type astructure.SurfaceType
 	// Gradients stores normalized gradients merged across cases.
 	Gradients []SurfaceGradient
 }

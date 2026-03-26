@@ -9,6 +9,8 @@
 // Package promptiter defines shared domain models used by the PromptIter workflow.
 package promptiter
 
+import astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+
 // PatchSet contains all surface patches proposed by one optimization round.
 type PatchSet struct {
 	// Patches stores per-surface patch proposals before acceptance.
@@ -20,7 +22,7 @@ type SurfacePatch struct {
 	// SurfaceID identifies which surface this patch will modify.
 	SurfaceID string
 	// Value is the replacement value emitted by optimizer.
-	Value SurfaceValue
+	Value astructure.SurfaceValue
 	// Reason records why this patch is proposed.
 	Reason string
 }

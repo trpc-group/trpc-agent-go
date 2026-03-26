@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -25,18 +26,18 @@ func TestDefaultMessageBuilder(t *testing.T) {
 	currentText := "current instruction"
 
 	msg, err := builder(context.Background(), &Request{
-		Surface: &promptiter.Surface{
+		Surface: &astructure.Surface{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
-			Value: promptiter.SurfaceValue{
+			Type:      astructure.SurfaceTypeInstruction,
+			Value: astructure.SurfaceValue{
 				Text: &currentText,
 			},
 		},
 		Gradient: &promptiter.AggregatedSurfaceGradient{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
+			Type:      astructure.SurfaceTypeInstruction,
 			Gradients: []promptiter.SurfaceGradient{
 				{
 					EvalSetID:  "set_a",
@@ -68,18 +69,18 @@ func TestDefaultMessageBuilder(t *testing.T) {
 	err = json.Unmarshal([]byte(payloadContent), &payload)
 	assert.NoError(t, err)
 	assert.Equal(t, &Request{
-		Surface: &promptiter.Surface{
+		Surface: &astructure.Surface{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
-			Value: promptiter.SurfaceValue{
+			Type:      astructure.SurfaceTypeInstruction,
+			Value: astructure.SurfaceValue{
 				Text: &currentText,
 			},
 		},
 		Gradient: &promptiter.AggregatedSurfaceGradient{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
+			Type:      astructure.SurfaceTypeInstruction,
 			Gradients: []promptiter.SurfaceGradient{
 				{
 					EvalSetID:  "set_a",

@@ -11,7 +11,11 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
@@ -23,7 +27,7 @@ import (
 // Engine orchestrates a complete PromptIter lifecycle across evaluation, optimization, acceptance, and stop decisions.
 type Engine interface {
 	// Describe returns the current structure snapshot used to build traces and profiles.
-	Describe(ctx context.Context) (*promptiter.StructureSnapshot, error)
+	Describe(ctx context.Context) (*astructure.Snapshot, error)
 	// Run executes multi-round optimization using training and validation feedback loops.
 	Run(ctx context.Context, request *RunRequest) (*RunResult, error)
 }
@@ -53,7 +57,7 @@ type RunRequest struct {
 // RunResult stores the end state and historical trace of a multi-round run.
 type RunResult struct {
 	// Structure is the snapshot used for all rounds in this request.
-	Structure *promptiter.StructureSnapshot
+	Structure *astructure.Snapshot
 	// AcceptedProfile is the profile that passed acceptance and can be published.
 	AcceptedProfile *promptiter.Profile
 	// Rounds stores intermediate results of every optimization round.
@@ -88,9 +92,9 @@ type RoundResult struct {
 
 // engine is the default Engine implementation.
 type engine struct {
-	// runner executes workflow-level actions triggered by the engine.
-	runner runner.Runner
-	// agentEvaluator evaluates prompt output quality and returns metric scores.
+	// targetAgent exports the current PromptIter structure for the optimization target.
+	targetAgent agent.Agent
+	// agentEvaluator executes train and validation evaluations through the shared evaluation framework.
 	agentEvaluator evaluation.AgentEvaluator
 	// backwarder computes sample-level gradient packets from terminal losses.
 	backwarder backwarder.Backwarder
@@ -102,48 +106,236 @@ type engine struct {
 
 // New creates an Engine implementation with injected collaborators.
 func New(ctx context.Context,
-	runner runner.Runner,
+	targetAgent agent.Agent,
 	agentEvaluator evaluation.AgentEvaluator,
 	backwarder backwarder.Backwarder,
 	aggregator aggregator.Aggregator,
-	optimizer optimizer.Optimizer,
-	opt ...option) (Engine, error) {
+	optimizer optimizer.Optimizer) (Engine, error) {
+	switch {
+	case targetAgent == nil:
+		return nil, errors.New("target agent is nil")
+	case agentEvaluator == nil:
+		return nil, errors.New("agent evaluator is nil")
+	case backwarder == nil:
+		return nil, errors.New("backwarder is nil")
+	case aggregator == nil:
+		return nil, errors.New("aggregator is nil")
+	case optimizer == nil:
+		return nil, errors.New("optimizer is nil")
+	}
 	return &engine{
-		runner:         runner,
-		agentEvaluator: agentEvaluator,
+		targetAgent:    targetAgent,
 		backwarder:     backwarder,
 		aggregator:     aggregator,
 		optimizer:      optimizer,
+		agentEvaluator: agentEvaluator,
 	}, nil
 }
 
 // Describe returns the structure snapshot used for the current optimization session.
-func (e *engine) Describe(ctx context.Context) (*promptiter.StructureSnapshot, error) {
-	return nil, nil
+func (e *engine) Describe(ctx context.Context) (*astructure.Snapshot, error) {
+	snapshot, err := e.describeStructure(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return snapshot, nil
 }
 
 // Run executes all optimization stages in sequence for each configured round.
 func (e *engine) Run(ctx context.Context, request *RunRequest) (*RunResult, error) {
-	if err := e.evaluate(ctx); err != nil {
+	if err := e.validateRunRequest(request); err != nil {
 		return nil, err
 	}
-	if err := e.loss(); err != nil {
-		return nil, err
+	snapshot, err := e.describeStructure(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("describe structure: %w", err)
 	}
-	if err := e.backward(ctx); err != nil {
-		return nil, err
+	structure, err := newStructureState(snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("create structure state: %w", err)
 	}
-	if err := e.aggregate(ctx); err != nil {
-		return nil, err
+	initialProfile, err := normalizeProfile(structure, request.InitialProfile)
+	if err != nil {
+		return nil, fmt.Errorf("normalize initial profile: %w", err)
 	}
-	if err := e.optimize(ctx); err != nil {
-		return nil, err
+	evaluationOptions := request.EvaluationOptions
+	acceptedProfile := initialProfile
+	acceptedValidationScore := 0.0
+	baselineValidation, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
+		request.ValidationEvalSetIDs,
+		acceptedProfile,
+		request.Teacher,
+		request.Judge,
+		evaluationOptions,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("evaluate accepted baseline profile: %w", err)
 	}
-	if err := e.accept(); err != nil {
-		return nil, err
+	acceptedValidationScore, err = evaluationScore(baselineValidation)
+	if err != nil {
+		return nil, fmt.Errorf("compute accepted baseline score: %w", err)
 	}
-	if err := e.stop(); err != nil {
-		return nil, err
+	result := &RunResult{
+		Structure:       structure.snapshot,
+		AcceptedProfile: cloneProfile(acceptedProfile),
+		Rounds:          make([]RoundResult, 0, request.MaxRounds),
 	}
-	return &RunResult{}, nil
+	roundsWithoutAcceptance := 0
+	for roundNumber := 1; roundNumber <= request.MaxRounds; roundNumber++ {
+		roundResult, effectiveScore, err := e.executeRound(
+			ctx,
+			request,
+			structure,
+			evaluationOptions,
+			acceptedProfile,
+			acceptedValidationScore,
+			roundNumber,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if roundResult.Acceptance.Accepted {
+			acceptedProfile = roundResult.OutputProfile
+			acceptedValidationScore = effectiveScore
+			roundsWithoutAcceptance = 0
+		} else {
+			roundsWithoutAcceptance++
+		}
+		roundResult.Stop = e.stop(
+			roundNumber,
+			request.MaxRounds,
+			request.StopPolicy,
+			roundsWithoutAcceptance,
+			effectiveScore,
+		)
+		result.Rounds = append(result.Rounds, *roundResult)
+		result.AcceptedProfile = cloneProfile(acceptedProfile)
+		if roundResult.Stop.ShouldStop {
+			break
+		}
+	}
+	return result, nil
+}
+
+func (e *engine) validateRunRequest(request *RunRequest) error {
+	switch {
+	case request == nil:
+		return errors.New("run request is nil")
+	case len(request.TrainEvalSetIDs) == 0:
+		return errors.New("train evaluation set ids are empty")
+	case len(request.ValidationEvalSetIDs) == 0:
+		return errors.New("validation evaluation set ids are empty")
+	case request.MaxRounds <= 0:
+		return errors.New("max rounds must be greater than 0")
+	case e.targetAgent == nil:
+		return errors.New("target agent is nil")
+	case e.agentEvaluator == nil:
+		return errors.New("agent evaluator is nil")
+	default:
+		return nil
+	}
+}
+
+func (e *engine) describeStructure(ctx context.Context) (*astructure.Snapshot, error) {
+	if e.targetAgent == nil {
+		return nil, errors.New("target agent is nil")
+	}
+	snapshot, err := astructure.Export(ctx, e.targetAgent)
+	if err != nil {
+		return nil, fmt.Errorf("export target agent structure: %w", err)
+	}
+	return snapshot, nil
+}
+
+func (e *engine) executeRound(
+	ctx context.Context,
+	request *RunRequest,
+	structure *structureState,
+	evaluationOptions EvaluationOptions,
+	acceptedProfile *promptiter.Profile,
+	acceptedValidationScore float64,
+	roundNumber int,
+) (*RoundResult, float64, error) {
+	roundResult := &RoundResult{
+		Round:        roundNumber,
+		InputProfile: cloneProfile(acceptedProfile),
+	}
+	trainResult, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
+		request.TrainEvalSetIDs,
+		acceptedProfile,
+		request.Teacher,
+		request.Judge,
+		evaluationOptions,
+	))
+	if err != nil {
+		return nil, 0, fmt.Errorf("evaluate train round %d: %w", roundNumber, err)
+	}
+	roundResult.Train = trainResult
+	losses, err := e.loss(trainResult)
+	if err != nil {
+		return nil, 0, fmt.Errorf("extract train losses round %d: %w", roundNumber, err)
+	}
+	roundResult.Losses = losses
+	backwardResult, err := e.backward(ctx, structure, acceptedProfile, trainResult, losses)
+	if err != nil {
+		return nil, 0, fmt.Errorf("backward round %d: %w", roundNumber, err)
+	}
+	roundResult.Backward = backwardResult
+	aggregationResult, err := e.aggregate(ctx, structure, backwardResult)
+	if err != nil {
+		return nil, 0, fmt.Errorf("aggregate round %d: %w", roundNumber, err)
+	}
+	roundResult.Aggregation = aggregationResult
+	patchSet, err := e.optimize(ctx, structure, acceptedProfile, aggregationResult)
+	if err != nil {
+		return nil, 0, fmt.Errorf("optimize round %d: %w", roundNumber, err)
+	}
+	roundResult.Patches = patchSet
+	outputProfile, err := applyPatchSet(structure, acceptedProfile, patchSet)
+	if err != nil {
+		return nil, 0, fmt.Errorf("apply patches round %d: %w", roundNumber, err)
+	}
+	roundResult.OutputProfile = outputProfile
+	validationResult, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
+		request.ValidationEvalSetIDs,
+		outputProfile,
+		request.Teacher,
+		request.Judge,
+		evaluationOptions,
+	))
+	if err != nil {
+		return nil, 0, fmt.Errorf("evaluate validation round %d: %w", roundNumber, err)
+	}
+	roundResult.Validation = validationResult
+	baselineScore := acceptedValidationScore
+	candidateScore, err := evaluationScore(validationResult)
+	if err != nil {
+		return nil, 0, fmt.Errorf("compute validation score round %d: %w", roundNumber, err)
+	}
+	acceptanceDecision := e.accept(request.AcceptancePolicy, baselineScore, candidateScore)
+	roundResult.Acceptance = acceptanceDecision
+	effectiveScore := baselineScore
+	if acceptanceDecision.Accepted {
+		effectiveScore = candidateScore
+	}
+	return roundResult, effectiveScore, nil
+}
+
+func (e *engine) newEvaluationRequest(
+	evalSetIDs []string,
+	profile *promptiter.Profile,
+	teacher runner.Runner,
+	judge runner.Runner,
+	options EvaluationOptions,
+) *EvaluationRequest {
+	return &EvaluationRequest{
+		EvalSetIDs: append(
+			[]string(nil),
+			evalSetIDs...,
+		),
+		Profile: cloneProfile(profile),
+		Teacher: teacher,
+		Judge:   judge,
+		Options: options,
+	}
 }

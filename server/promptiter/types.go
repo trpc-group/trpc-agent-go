@@ -14,7 +14,7 @@
 package promptiter
 
 import (
-	wpromptiter "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	engine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
@@ -33,7 +33,7 @@ type RunResponse struct {
 // GetStructureResponse returns a structure snapshot for an optimization target.
 type GetStructureResponse struct {
 	// Structure is the target structure snapshot shared with clients.
-	Structure *wpromptiter.StructureSnapshot `json:"structure"`
+	Structure *astructure.Snapshot `json:"structure"`
 }
 
 // TraceReporterConfig controls optional trace reporting to server endpoints.

@@ -1,0 +1,815 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package engine
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+const testSurfaceID = "node_1#instruction"
+
+type fakeBackwarder struct {
+	requests []*backwarder.Request
+	fn       func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error)
+}
+
+func (f *fakeBackwarder) Backward(
+	ctx context.Context,
+	request *backwarder.Request,
+) (*backwarder.Result, error) {
+	f.requests = append(f.requests, request)
+	if f.fn == nil {
+		return &backwarder.Result{}, nil
+	}
+	return f.fn(ctx, request)
+}
+
+type fakeAggregator struct {
+	requests []*aggregator.Request
+	fn       func(ctx context.Context, request *aggregator.Request) (*aggregator.Result, error)
+}
+
+func (f *fakeAggregator) Aggregate(
+	ctx context.Context,
+	request *aggregator.Request,
+) (*aggregator.Result, error) {
+	f.requests = append(f.requests, request)
+	if f.fn == nil {
+		return &aggregator.Result{}, nil
+	}
+	return f.fn(ctx, request)
+}
+
+type fakeOptimizer struct {
+	requests []*optimizer.Request
+	fn       func(ctx context.Context, request *optimizer.Request) (*optimizer.Result, error)
+}
+
+func (f *fakeOptimizer) Optimize(
+	ctx context.Context,
+	request *optimizer.Request,
+) (*optimizer.Result, error) {
+	f.requests = append(f.requests, request)
+	if f.fn == nil {
+		return &optimizer.Result{}, nil
+	}
+	return f.fn(ctx, request)
+}
+
+type stubRunner struct{}
+
+func (stubRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	message model.Message,
+	runOpts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	_ = ctx
+	_ = userID
+	_ = sessionID
+	_ = message
+	_ = runOpts
+	return nil, nil
+}
+
+func (stubRunner) Close() error {
+	return nil
+}
+
+type scriptedEvalOutcome struct {
+	score             float64
+	metricStatus      status.EvalStatus
+	reason            string
+	stepID            string
+	severity          promptiter.LossSeverity
+	appliedSurfaceIDs []string
+	missingTrace      bool
+}
+
+type scriptedEvalService struct {
+	profiles         []string
+	runOptions       []agent.RunOptions
+	profileByEvalSet map[string]string
+	outcomeByEvalSet map[string]scriptedEvalOutcome
+	script           func(evalSetID string, profileValue string) scriptedEvalOutcome
+}
+
+func newScriptedEvalService(
+	script func(evalSetID string, profileValue string) scriptedEvalOutcome,
+) *scriptedEvalService {
+	return &scriptedEvalService{
+		profileByEvalSet: make(map[string]string),
+		outcomeByEvalSet: make(map[string]scriptedEvalOutcome),
+		script:           script,
+	}
+}
+
+func (s *scriptedEvalService) Inference(
+	ctx context.Context,
+	req *service.InferenceRequest,
+	opt ...service.Option,
+) ([]*service.InferenceResult, error) {
+	callOptions := service.NewOptions(opt...)
+	runOptions := agent.NewRunOptions(callOptions.RunOptions...)
+	profileValue := runOptions.Instruction
+	if profileValue == "" {
+		profileValue = "base prompt"
+	}
+	outcome := s.script(req.EvalSetID, profileValue)
+	s.profiles = append(s.profiles, profileValue)
+	s.runOptions = append(s.runOptions, runOptions)
+	s.profileByEvalSet[req.EvalSetID] = profileValue
+	s.outcomeByEvalSet[req.EvalSetID] = outcome
+	result := &service.InferenceResult{
+		AppName:    req.AppName,
+		EvalSetID:  req.EvalSetID,
+		EvalCaseID: "case_1",
+		SessionID:  "session_1",
+		UserID:     "user_1",
+		Status:     status.EvalStatusPassed,
+		Inferences: []*evalset.Invocation{
+			{
+				InvocationID: "invocation_1",
+			},
+		},
+		ExecutionTraces: []*atrace.Trace{
+			buildScriptedExecutionTrace(outcome),
+		},
+	}
+	if err := runAfterInferenceCaseCallbacks(ctx, callOptions.Callbacks, req, result); err != nil {
+		return nil, err
+	}
+	return []*service.InferenceResult{result}, nil
+}
+
+func (s *scriptedEvalService) Evaluate(
+	ctx context.Context,
+	req *service.EvaluateRequest,
+	opt ...service.Option,
+) (*service.EvalSetRunResult, error) {
+	_ = ctx
+	_ = opt
+	outcome, ok := s.outcomeByEvalSet[req.EvalSetID]
+	if !ok {
+		return nil, errors.New("missing scripted outcome")
+	}
+	threshold := 0.5
+	if outcome.metricStatus == status.EvalStatusFailed {
+		threshold = 1.0
+	}
+	return &service.EvalSetRunResult{
+		AppName:   req.AppName,
+		EvalSetID: req.EvalSetID,
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				EvalSetID:       req.EvalSetID,
+				EvalID:          "case_1",
+				FinalEvalStatus: outcome.metricStatus,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "quality",
+						Score:      outcome.score,
+						EvalStatus: outcome.metricStatus,
+						Threshold:  threshold,
+						Details: &evalresult.EvalMetricResultDetails{
+							Reason:   outcome.reason,
+							Score:    outcome.score,
+							StepID:   outcome.stepID,
+							Severity: string(outcome.severity),
+						},
+					},
+				},
+				SessionID: "session_1",
+				UserID:    "user_1",
+			},
+		},
+	}, nil
+}
+
+func (s *scriptedEvalService) Close() error {
+	return nil
+}
+
+func runAfterInferenceCaseCallbacks(
+	ctx context.Context,
+	callbacks *service.Callbacks,
+	req *service.InferenceRequest,
+	result *service.InferenceResult,
+) error {
+	if callbacks == nil {
+		return nil
+	}
+	for _, callback := range callbacks.AfterInferenceCase {
+		_, err := callback.Callback(ctx, &service.AfterInferenceCaseArgs{
+			Request: req,
+			Result:  result,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func buildScriptedExecutionTrace(outcome scriptedEvalOutcome) *atrace.Trace {
+	if outcome.missingTrace {
+		return nil
+	}
+	return &atrace.Trace{
+		RootAgentName:    "target",
+		RootInvocationID: "invocation_1",
+		SessionID:        "session_1",
+		Status:           atrace.TraceStatusCompleted,
+		Steps: []atrace.Step{
+			{
+				StepID:            "step_1",
+				NodeID:            "node_1",
+				AppliedSurfaceIDs: append([]string(nil), outcome.appliedSurfaceIDs...),
+				Input:             &atrace.Snapshot{Text: "input"},
+				Output:            &atrace.Snapshot{Text: "output"},
+			},
+		},
+	}
+}
+
+func newTestAgentEvaluator(t *testing.T, evalService service.Service) evaluation.AgentEvaluator {
+	t.Helper()
+	manager := evalsetinmemory.New()
+	seedTestEvalSet(t, manager, "train")
+	seedTestEvalSet(t, manager, "validation")
+	agentEvaluator, err := evaluation.New(
+		"promptiter-test",
+		stubRunner{},
+		evaluation.WithEvaluationService(evalService),
+		evaluation.WithEvalSetManager(manager),
+	)
+	assert.NoError(t, err)
+	return agentEvaluator
+}
+
+func seedTestEvalSet(t *testing.T, manager evalset.Manager, evalSetID string) {
+	t.Helper()
+	_, err := manager.Create(context.Background(), "promptiter-test", evalSetID)
+	assert.NoError(t, err)
+	err = manager.AddCase(context.Background(), "promptiter-test", evalSetID, &evalset.EvalCase{
+		EvalID: "case_1",
+	})
+	assert.NoError(t, err)
+}
+
+type fakeStructureAgent struct {
+	snapshot  *astructure.Snapshot
+	exportErr error
+}
+
+func (f *fakeStructureAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	_ = ctx
+	_ = invocation
+	return nil, errors.New("should not call agent run")
+}
+
+func (f *fakeStructureAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (f *fakeStructureAgent) Info() agent.Info {
+	return agent.Info{Name: "target"}
+}
+
+func (f *fakeStructureAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (f *fakeStructureAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
+func (f *fakeStructureAgent) Export(
+	ctx context.Context,
+	exportChild astructure.ChildExporter,
+) (*astructure.Snapshot, error) {
+	_ = ctx
+	_ = exportChild
+	if f.exportErr != nil {
+		return nil, f.exportErr
+	}
+	return f.snapshot, nil
+}
+
+func TestDescribeUsesStructureSnapshot(t *testing.T) {
+	structure := testStructureSnapshot(t)
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
+		&fakeBackwarder{},
+		&fakeAggregator{},
+		&fakeOptimizer{},
+	)
+	assert.NoError(t, err)
+	result, err := engineInstance.Describe(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, structure, result)
+}
+
+func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
+	backward := &fakeBackwarder{
+		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
+			_ = ctx
+			currentText := ""
+			if len(request.Surfaces) > 0 && request.Surfaces[0].Value.Text != nil {
+				currentText = *request.Surfaces[0].Value.Text
+			}
+			gradientText := "improve prompt"
+			if currentText == "accepted prompt" {
+				gradientText = "overfit prompt"
+			}
+			return &backwarder.Result{
+				Gradients: []promptiter.SurfaceGradient{
+					{
+						EvalSetID:  request.EvalSetID,
+						EvalCaseID: request.EvalCaseID,
+						StepID:     request.StepID,
+						SurfaceID:  testSurfaceID,
+						Severity:   promptiter.LossSeverityP1,
+						Gradient:   gradientText,
+					},
+				},
+			}, nil
+		},
+	}
+	aggregatorInstance := &fakeAggregator{
+		fn: func(ctx context.Context, request *aggregator.Request) (*aggregator.Result, error) {
+			_ = ctx
+			return &aggregator.Result{
+				Gradient: &promptiter.AggregatedSurfaceGradient{
+					SurfaceID: request.SurfaceID,
+					NodeID:    request.NodeID,
+					Type:      request.Type,
+					Gradients: append([]promptiter.SurfaceGradient(nil), request.Gradients...),
+				},
+			}, nil
+		},
+	}
+	optimizerInstance := &fakeOptimizer{
+		fn: func(ctx context.Context, request *optimizer.Request) (*optimizer.Result, error) {
+			_ = ctx
+			nextText := "accepted prompt"
+			if request.Gradient.Gradients[0].Gradient == "overfit prompt" {
+				nextText = "rejected prompt"
+			}
+			return &optimizer.Result{
+				Patch: &promptiter.SurfacePatch{
+					SurfaceID: request.Surface.SurfaceID,
+					Value: astructure.SurfaceValue{
+						Text: stringPtr(nextText),
+					},
+					Reason: "update prompt",
+				},
+			}, nil
+		},
+	}
+	evalService := newScriptedEvalService(scriptedOutcome)
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		newTestAgentEvaluator(t, evalService),
+		backward,
+		aggregatorInstance,
+		optimizerInstance,
+	)
+	assert.NoError(t, err)
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		InitialProfile:       nil,
+		AcceptancePolicy: AcceptancePolicy{
+			MinScoreGain: 0.1,
+		},
+		StopPolicy: StopPolicy{
+			MaxRoundsWithoutAcceptance: 1,
+		},
+		MaxRounds: 5,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, []string{
+		"base prompt",
+		"base prompt",
+		"accepted prompt",
+		"accepted prompt",
+		"rejected prompt",
+	}, evalService.profiles)
+	assert.Len(t, result.Rounds, 2)
+	assert.Equal(t, "accepted prompt", profileText(result.AcceptedProfile))
+	assert.True(t, result.Rounds[0].Acceptance.Accepted)
+	assert.False(t, result.Rounds[1].Acceptance.Accepted)
+	assert.Equal(t, "max rounds without acceptance reached", result.Rounds[1].Stop.Reason)
+	assert.Len(t, backward.requests, 2)
+	assert.Equal(t, "base prompt", *backward.requests[0].Surfaces[0].Value.Text)
+	assert.Equal(t, "accepted prompt", *backward.requests[1].Surfaces[0].Value.Text)
+}
+
+func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
+	backward := &fakeBackwarder{
+		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
+			_ = ctx
+			return &backwarder.Result{
+				Gradients: []promptiter.SurfaceGradient{
+					{
+						EvalSetID:  request.EvalSetID,
+						EvalCaseID: request.EvalCaseID,
+						StepID:     request.StepID,
+						SurfaceID:  testSurfaceID,
+						Severity:   promptiter.LossSeverityP1,
+						Gradient:   "improve prompt",
+					},
+				},
+			}, nil
+		},
+	}
+	aggregatorInstance := &fakeAggregator{
+		fn: func(ctx context.Context, request *aggregator.Request) (*aggregator.Result, error) {
+			_ = ctx
+			return &aggregator.Result{
+				Gradient: &promptiter.AggregatedSurfaceGradient{
+					SurfaceID: request.SurfaceID,
+					NodeID:    request.NodeID,
+					Type:      request.Type,
+					Gradients: append([]promptiter.SurfaceGradient(nil), request.Gradients...),
+				},
+			}, nil
+		},
+	}
+	optimizerInstance := &fakeOptimizer{
+		fn: func(ctx context.Context, request *optimizer.Request) (*optimizer.Result, error) {
+			_ = ctx
+			return &optimizer.Result{
+				Patch: &promptiter.SurfacePatch{
+					SurfaceID: request.Surface.SurfaceID,
+					Value: astructure.SurfaceValue{
+						Text: stringPtr("accepted prompt"),
+					},
+					Reason: "update prompt",
+				},
+			}, nil
+		},
+	}
+	evalService := newScriptedEvalService(scriptedOutcome)
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		newTestAgentEvaluator(t, evalService),
+		backward,
+		aggregatorInstance,
+		optimizerInstance,
+	)
+	assert.NoError(t, err)
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		AcceptancePolicy: AcceptancePolicy{
+			MinScoreGain: 0.1,
+		},
+		MaxRounds: 1,
+	})
+	assert.NoError(t, err)
+	assert.Len(t, result.Rounds, 1)
+	assert.Len(t, evalService.runOptions, 3)
+	assert.Empty(t, evalService.runOptions[0].Instruction)
+	assert.Empty(t, evalService.runOptions[1].Instruction)
+	assert.Equal(t, "accepted prompt", evalService.runOptions[2].Instruction)
+	assert.True(t, evalService.runOptions[0].ExecutionTraceEnabled)
+	assert.True(t, evalService.runOptions[1].ExecutionTraceEnabled)
+	assert.True(t, evalService.runOptions[2].ExecutionTraceEnabled)
+	assert.Equal(t, "accepted prompt", profileText(result.Rounds[0].OutputProfile))
+	assert.Equal(t, "accepted prompt", profileText(result.AcceptedProfile))
+}
+
+func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T) {
+	structure, err := newStructureState(testStructureSnapshot(t))
+	assert.NoError(t, err)
+	evalCase := &evaluation.EvaluationCaseResult{
+		EvalCaseID: "case_1",
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				RunID: 1,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "quality",
+						Score:      0.9,
+						EvalStatus: status.EvalStatusPassed,
+					},
+				},
+			},
+			{
+				RunID: 2,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "quality",
+						Score:      0.1,
+						EvalStatus: status.EvalStatusPassed,
+					},
+				},
+			},
+		},
+		RunDetails: []*evaluation.EvaluationCaseRunDetails{
+			{
+				RunID: 1,
+				Inference: &evaluation.EvaluationInferenceDetails{
+					SessionID: "session_first",
+					Inferences: []*evalset.Invocation{
+						{
+							InvocationID: "invocation_first",
+						},
+					},
+					ExecutionTraces: []*atrace.Trace{
+						{
+							RootInvocationID: "invocation_first",
+							SessionID:        "session_first",
+							Status:           atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{
+									StepID:            "step_1",
+									NodeID:            "node_1",
+									AppliedSurfaceIDs: []string{testSurfaceID},
+									Output:            &atrace.Snapshot{Text: "first output"},
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				RunID: 2,
+				Inference: &evaluation.EvaluationInferenceDetails{
+					SessionID: "session_second",
+					Inferences: []*evalset.Invocation{
+						{
+							InvocationID: "invocation_second",
+						},
+					},
+					ExecutionTraces: []*atrace.Trace{
+						{
+							RootInvocationID: "invocation_second",
+							SessionID:        "session_second",
+							Status:           atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{
+									StepID:            "step_1",
+									NodeID:            "node_1",
+									AppliedSurfaceIDs: []string{testSurfaceID},
+									Output:            &atrace.Snapshot{Text: "second output"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	result, err := adaptEvaluationCaseResult(structure, "validation", evalCase)
+	assert.NoError(t, err)
+	assert.Equal(t, "validation", result.EvalSetID)
+	assert.Equal(t, "case_1", result.EvalCaseID)
+	assert.Equal(t, "session_first", result.SessionID)
+	assert.Equal(t, "invocation_first", result.InvocationID)
+	assert.Equal(t, "first output", result.Output.Text)
+	assert.Len(t, result.Metrics, 1)
+	assert.Equal(t, 0.9, result.Metrics[0].Score)
+}
+
+func TestRunRejectsEmptyValidationEvalSetIDs(t *testing.T) {
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
+		&fakeBackwarder{},
+		&fakeAggregator{},
+		&fakeOptimizer{},
+	)
+	assert.NoError(t, err)
+	_, err = engineInstance.Run(context.Background(), &RunRequest{
+		TrainEvalSetIDs: []string{"train"},
+		MaxRounds:       1,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "validation evaluation set ids are empty")
+}
+
+func TestRunRejectsInvalidInitialProfile(t *testing.T) {
+	backward := &fakeBackwarder{}
+	aggregatorInstance := &fakeAggregator{}
+	optimizerInstance := &fakeOptimizer{}
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
+		backward,
+		aggregatorInstance,
+		optimizerInstance,
+	)
+	assert.NoError(t, err)
+	_, err = engineInstance.Run(context.Background(), &RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		InitialProfile: &promptiter.Profile{
+			Overrides: []promptiter.SurfaceOverride{
+				{
+					SurfaceID: "unknown",
+					Value: astructure.SurfaceValue{
+						Text: stringPtr("bad"),
+					},
+				},
+			},
+		},
+		MaxRounds: 1,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown")
+}
+
+func TestNewRejectsMissingAgentEvaluator(t *testing.T) {
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		nil,
+		&fakeBackwarder{},
+		&fakeAggregator{},
+		&fakeOptimizer{},
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "agent evaluator is nil")
+	assert.Nil(t, engineInstance)
+}
+
+func TestNewRejectsMissingTargetAgent(t *testing.T) {
+	engineInstance, err := New(
+		context.Background(),
+		nil,
+		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
+		&fakeBackwarder{},
+		&fakeAggregator{},
+		&fakeOptimizer{},
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "target agent is nil")
+	assert.Nil(t, engineInstance)
+}
+
+func TestRunRejectsStructureExportFailure(t *testing.T) {
+	engineInstance, err := New(
+		context.Background(),
+		&fakeStructureAgent{exportErr: errors.New("boom")},
+		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
+		&fakeBackwarder{},
+		&fakeAggregator{},
+		&fakeOptimizer{},
+	)
+	assert.NoError(t, err)
+	_, err = engineInstance.Run(context.Background(), &RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		MaxRounds:            1,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "describe structure")
+	assert.Contains(t, err.Error(), "boom")
+}
+
+func TestRunRejectsMetricWithoutStepID(t *testing.T) {
+	evalService := newScriptedEvalService(func(evalSetID string, profileValue string) scriptedEvalOutcome {
+		outcome := scriptedOutcome(evalSetID, profileValue)
+		if evalSetID == "train" {
+			outcome.stepID = ""
+		}
+		return outcome
+	})
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		newTestAgentEvaluator(t, evalService),
+		&fakeBackwarder{},
+		&fakeAggregator{},
+		&fakeOptimizer{},
+	)
+	assert.NoError(t, err)
+	_, err = engineInstance.Run(context.Background(), &RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		MaxRounds:            1,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "missing step id")
+}
+
+func scriptedOutcome(evalSetID string, profileValue string) scriptedEvalOutcome {
+	switch evalSetID {
+	case "train":
+		outcome := scriptedEvalOutcome{
+			score:             0.4,
+			metricStatus:      status.EvalStatusFailed,
+			reason:            "needs improvement",
+			stepID:            "step_1",
+			severity:          promptiter.LossSeverityP1,
+			appliedSurfaceIDs: []string{testSurfaceID},
+		}
+		if profileValue == "accepted prompt" {
+			outcome.score = 0.7
+			outcome.reason = "still overfitting"
+		}
+		return outcome
+	case "validation":
+		score := 0.5
+		if profileValue == "accepted prompt" {
+			score = 0.8
+		}
+		if profileValue == "rejected prompt" {
+			score = 0.79
+		}
+		return scriptedEvalOutcome{
+			score:             score,
+			metricStatus:      status.EvalStatusPassed,
+			appliedSurfaceIDs: []string{testSurfaceID},
+		}
+	default:
+		return scriptedEvalOutcome{
+			score:             0,
+			metricStatus:      status.EvalStatusPassed,
+			appliedSurfaceIDs: []string{testSurfaceID},
+		}
+	}
+}
+
+func testStructureSnapshot(t *testing.T) *astructure.Snapshot {
+	t.Helper()
+	snapshot, err := astructure.Export(context.Background(), testTargetAgent())
+	assert.NoError(t, err)
+	return snapshot
+}
+
+func testTargetAgent() agent.Agent {
+	return &fakeStructureAgent{
+		snapshot: &astructure.Snapshot{
+			EntryNodeID: "node_1",
+			Nodes: []astructure.Node{
+				{
+					NodeID: "node_1",
+					Kind:   astructure.NodeKindLLM,
+					Name:   "writer",
+				},
+			},
+			Surfaces: []astructure.Surface{
+				{
+					NodeID: "node_1",
+					Type:   astructure.SurfaceTypeInstruction,
+					Value: astructure.SurfaceValue{
+						Text: stringPtr("base prompt"),
+					},
+				},
+			},
+		},
+	}
+}
+
+func profileText(profile *promptiter.Profile) string {
+	if profile == nil || len(profile.Overrides) == 0 || profile.Overrides[0].Value.Text == nil {
+		return "base prompt"
+	}
+	return *profile.Overrides[0].Value.Text
+}
+
+func stringPtr(value string) *string {
+	return &value
+}

@@ -25,7 +25,20 @@ type AcceptanceDecision struct {
 	Reason string
 }
 
-// accept runs acceptance check using validation result and configured policy.
-func (e *engine) accept() error {
-	return nil
+func (e *engine) accept(
+	policy AcceptancePolicy,
+	baselineScore float64,
+	candidateScore float64,
+) *AcceptanceDecision {
+	scoreDelta := candidateScore - baselineScore
+	decision := &AcceptanceDecision{
+		Accepted:   scoreDelta >= policy.MinScoreGain,
+		ScoreDelta: scoreDelta,
+	}
+	if decision.Accepted {
+		decision.Reason = "candidate score gain satisfies acceptance policy"
+		return decision
+	}
+	decision.Reason = "candidate score gain does not satisfy acceptance policy"
+	return decision
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -88,7 +89,7 @@ func TestAggregateUsesRunnerStructuredOutput(t *testing.T) {
 				event.WithStructuredOutputPayload(&promptiter.AggregatedSurfaceGradient{
 					SurfaceID: "surf_1",
 					NodeID:    "node_1",
-					Type:      promptiter.SurfaceTypeInstruction,
+					Type:      astructure.SurfaceTypeInstruction,
 					Gradients: []promptiter.SurfaceGradient{
 						{
 							EvalSetID:  "set_b",
@@ -137,7 +138,7 @@ func TestAggregateUsesRunnerStructuredOutput(t *testing.T) {
 	rsp, err := ag.Aggregate(context.Background(), &Request{
 		SurfaceID: "surf_1",
 		NodeID:    "node_1",
-		Type:      promptiter.SurfaceTypeInstruction,
+		Type:      astructure.SurfaceTypeInstruction,
 		Gradients: []promptiter.SurfaceGradient{
 			{
 				EvalSetID:  "set_b",
@@ -166,7 +167,7 @@ func TestAggregateUsesRunnerStructuredOutput(t *testing.T) {
 	assert.Equal(t, &Request{
 		SurfaceID: "surf_1",
 		NodeID:    "node_1",
-		Type:      promptiter.SurfaceTypeInstruction,
+		Type:      astructure.SurfaceTypeInstruction,
 		Gradients: []promptiter.SurfaceGradient{
 			{
 				EvalSetID:  "set_a",
@@ -190,7 +191,7 @@ func TestAggregateUsesRunnerStructuredOutput(t *testing.T) {
 		Gradient: &promptiter.AggregatedSurfaceGradient{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
+			Type:      astructure.SurfaceTypeInstruction,
 			Gradients: []promptiter.SurfaceGradient{
 				{
 					EvalSetID:  "set_a",
@@ -235,7 +236,7 @@ func TestAggregateUsesDefaultUUIDSessionID(t *testing.T) {
 	rsp, err := ag.Aggregate(context.Background(), &Request{
 		SurfaceID: "surf_1",
 		NodeID:    "node_1",
-		Type:      promptiter.SurfaceTypeInstruction,
+		Type:      astructure.SurfaceTypeInstruction,
 		Gradients: []promptiter.SurfaceGradient{
 			{
 				SurfaceID: "surf_1",
@@ -284,7 +285,7 @@ func TestAggregateFallsBackToFinalContent(t *testing.T) {
 	rsp, err := ag.Aggregate(context.Background(), &Request{
 		SurfaceID: "surf_1",
 		NodeID:    "node_1",
-		Type:      promptiter.SurfaceTypeInstruction,
+		Type:      astructure.SurfaceTypeInstruction,
 		Gradients: []promptiter.SurfaceGradient{
 			{
 				EvalSetID:  "set_a",
@@ -332,7 +333,7 @@ func TestAggregateRejectsBareGradientArrayOutput(t *testing.T) {
 		rsp, err := ag.Aggregate(context.Background(), &Request{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
+			Type:      astructure.SurfaceTypeInstruction,
 			Gradients: []promptiter.SurfaceGradient{
 				{
 					SurfaceID: "surf_1",
@@ -371,7 +372,7 @@ func TestAggregateRejectsBareGradientArrayOutput(t *testing.T) {
 		rsp, err := ag.Aggregate(context.Background(), &Request{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
+			Type:      astructure.SurfaceTypeInstruction,
 			Gradients: []promptiter.SurfaceGradient{
 				{
 					SurfaceID: "surf_1",
@@ -407,7 +408,7 @@ func TestAggregateRejectsBareGradientArrayOutput(t *testing.T) {
 		rsp, err := ag.Aggregate(context.Background(), &Request{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
+			Type:      astructure.SurfaceTypeInstruction,
 			Gradients: []promptiter.SurfaceGradient{
 				{
 					SurfaceID: "surf_1",
@@ -430,7 +431,7 @@ func TestAggregateReturnsRunnerErrors(t *testing.T) {
 		rsp, err := ag.Aggregate(context.Background(), &Request{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
+			Type:      astructure.SurfaceTypeInstruction,
 			Gradients: []promptiter.SurfaceGradient{
 				{
 					SurfaceID: "surf_1",
@@ -455,7 +456,7 @@ func TestAggregateReturnsRunnerErrors(t *testing.T) {
 		rsp, err := ag.Aggregate(context.Background(), &Request{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
+			Type:      astructure.SurfaceTypeInstruction,
 			Gradients: []promptiter.SurfaceGradient{
 				{
 					SurfaceID: "surf_1",
@@ -485,7 +486,7 @@ func TestAggregateRejectsNilMessage(t *testing.T) {
 	rsp, err := ag.Aggregate(context.Background(), &Request{
 		SurfaceID: "surf_1",
 		NodeID:    "node_1",
-		Type:      promptiter.SurfaceTypeInstruction,
+		Type:      astructure.SurfaceTypeInstruction,
 		Gradients: []promptiter.SurfaceGradient{
 			{
 				SurfaceID: "surf_1",
@@ -515,7 +516,7 @@ func TestAggregateRejectsInvalidRequests(t *testing.T) {
 			name: "empty surface id",
 			request: &Request{
 				NodeID: "node_1",
-				Type:   promptiter.SurfaceTypeInstruction,
+				Type:   astructure.SurfaceTypeInstruction,
 				Gradients: []promptiter.SurfaceGradient{
 					{
 						SurfaceID: "surf_1",
@@ -529,7 +530,7 @@ func TestAggregateRejectsInvalidRequests(t *testing.T) {
 			name: "empty node id",
 			request: &Request{
 				SurfaceID: "surf_1",
-				Type:      promptiter.SurfaceTypeInstruction,
+				Type:      astructure.SurfaceTypeInstruction,
 				Gradients: []promptiter.SurfaceGradient{
 					{
 						SurfaceID: "surf_1",
@@ -544,7 +545,7 @@ func TestAggregateRejectsInvalidRequests(t *testing.T) {
 			request: &Request{
 				SurfaceID: " surf_1 ",
 				NodeID:    "node_1",
-				Type:      promptiter.SurfaceTypeInstruction,
+				Type:      astructure.SurfaceTypeInstruction,
 				Gradients: []promptiter.SurfaceGradient{
 					{
 						SurfaceID: "surf_1",
@@ -559,7 +560,7 @@ func TestAggregateRejectsInvalidRequests(t *testing.T) {
 			request: &Request{
 				SurfaceID: "surf_1",
 				NodeID:    "node_1",
-				Type:      promptiter.SurfaceType("unknown"),
+				Type:      astructure.SurfaceType("unknown"),
 				Gradients: []promptiter.SurfaceGradient{
 					{
 						SurfaceID: "surf_1",
@@ -574,7 +575,7 @@ func TestAggregateRejectsInvalidRequests(t *testing.T) {
 			request: &Request{
 				SurfaceID: "surf_1",
 				NodeID:    "node_1",
-				Type:      promptiter.SurfaceTypeInstruction,
+				Type:      astructure.SurfaceTypeInstruction,
 				Gradients: []promptiter.SurfaceGradient{
 					{
 						SurfaceID: "surf_1",
@@ -589,7 +590,7 @@ func TestAggregateRejectsInvalidRequests(t *testing.T) {
 			request: &Request{
 				SurfaceID: "surf_1",
 				NodeID:    "node_1",
-				Type:      promptiter.SurfaceTypeInstruction,
+				Type:      astructure.SurfaceTypeInstruction,
 				Gradients: []promptiter.SurfaceGradient{
 					{
 						SurfaceID: "surf_2",

@@ -16,6 +16,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -27,24 +29,24 @@ func TestDefaultMessageBuilder(t *testing.T) {
 	msg, err := builder(context.Background(), &Request{
 		EvalSetID:  "set_a",
 		EvalCaseID: "case_1",
-		Node: &promptiter.StructureNode{
+		Node: &astructure.Node{
 			NodeID: "node_1",
 			Kind:   "llm",
 			Name:   "responder",
 		},
 		StepID: "step_1",
-		Input: &promptiter.TraceInput{
+		Input: &atrace.Snapshot{
 			Text: "input text",
 		},
-		Output: &promptiter.TraceOutput{
+		Output: &atrace.Snapshot{
 			Text: "output text",
 		},
-		Surfaces: []promptiter.Surface{
+		Surfaces: []astructure.Surface{
 			{
 				SurfaceID: "surf_1",
 				NodeID:    "node_1",
-				Type:      promptiter.SurfaceTypeInstruction,
-				Value: promptiter.SurfaceValue{
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
 					Text: &currentText,
 				},
 			},
@@ -53,7 +55,7 @@ func TestDefaultMessageBuilder(t *testing.T) {
 			{
 				StepID: "pred_1",
 				NodeID: "node_pred",
-				Output: &promptiter.TraceOutput{
+				Output: &atrace.Snapshot{
 					Text: "predecessor output",
 				},
 			},
@@ -87,24 +89,24 @@ func TestDefaultMessageBuilder(t *testing.T) {
 	assert.Equal(t, &Request{
 		EvalSetID:  "set_a",
 		EvalCaseID: "case_1",
-		Node: &promptiter.StructureNode{
+		Node: &astructure.Node{
 			NodeID: "node_1",
 			Kind:   "llm",
 			Name:   "responder",
 		},
 		StepID: "step_1",
-		Input: &promptiter.TraceInput{
+		Input: &atrace.Snapshot{
 			Text: "input text",
 		},
-		Output: &promptiter.TraceOutput{
+		Output: &atrace.Snapshot{
 			Text: "output text",
 		},
-		Surfaces: []promptiter.Surface{
+		Surfaces: []astructure.Surface{
 			{
 				SurfaceID: "surf_1",
 				NodeID:    "node_1",
-				Type:      promptiter.SurfaceTypeInstruction,
-				Value: promptiter.SurfaceValue{
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
 					Text: &currentText,
 				},
 			},
@@ -113,7 +115,7 @@ func TestDefaultMessageBuilder(t *testing.T) {
 			{
 				StepID: "pred_1",
 				NodeID: "node_pred",
-				Output: &promptiter.TraceOutput{
+				Output: &atrace.Snapshot{
 					Text: "predecessor output",
 				},
 			},

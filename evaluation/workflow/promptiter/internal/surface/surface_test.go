@@ -12,57 +12,56 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 )
 
 func TestIsSupportedType(t *testing.T) {
-	assert.True(t, IsSupportedType(promptiter.SurfaceTypeInstruction))
-	assert.True(t, IsSupportedType(promptiter.SurfaceTypeGlobalInstruction))
-	assert.True(t, IsSupportedType(promptiter.SurfaceTypeFewShot))
-	assert.True(t, IsSupportedType(promptiter.SurfaceTypeModel))
-	assert.False(t, IsSupportedType(promptiter.SurfaceType("unknown")))
+	assert.True(t, IsSupportedType(astructure.SurfaceTypeInstruction))
+	assert.True(t, IsSupportedType(astructure.SurfaceTypeGlobalInstruction))
+	assert.True(t, IsSupportedType(astructure.SurfaceTypeFewShot))
+	assert.True(t, IsSupportedType(astructure.SurfaceTypeModel))
+	assert.False(t, IsSupportedType(astructure.SurfaceType("unknown")))
 }
 
 func TestValidateValue(t *testing.T) {
 	text := "instruction"
 
 	assert.NoError(t, ValidateValue(
-		promptiter.SurfaceTypeInstruction,
-		promptiter.SurfaceValue{Text: &text},
+		astructure.SurfaceTypeInstruction,
+		astructure.SurfaceValue{Text: &text},
 	))
 	assert.NoError(t, ValidateValue(
-		promptiter.SurfaceTypeFewShot,
-		promptiter.SurfaceValue{Message: []promptiter.Messages{}},
+		astructure.SurfaceTypeFewShot,
+		astructure.SurfaceValue{FewShot: []astructure.FewShotExample{}},
 	))
 	assert.NoError(t, ValidateValue(
-		promptiter.SurfaceTypeModel,
-		promptiter.SurfaceValue{Model: &promptiter.Model{Provider: "p", Name: "m"}},
+		astructure.SurfaceTypeModel,
+		astructure.SurfaceValue{Model: &astructure.ModelRef{Name: "m"}},
 	))
 
 	assert.Error(t, ValidateValue(
-		promptiter.SurfaceTypeInstruction,
-		promptiter.SurfaceValue{},
+		astructure.SurfaceTypeInstruction,
+		astructure.SurfaceValue{},
 	))
 	assert.Error(t, ValidateValue(
-		promptiter.SurfaceTypeFewShot,
-		promptiter.SurfaceValue{Text: &text},
+		astructure.SurfaceTypeFewShot,
+		astructure.SurfaceValue{Text: &text},
 	))
 	assert.Error(t, ValidateValue(
-		promptiter.SurfaceTypeModel,
-		promptiter.SurfaceValue{Model: &promptiter.Model{}},
+		astructure.SurfaceTypeModel,
+		astructure.SurfaceValue{Model: &astructure.ModelRef{}},
 	))
 }
 
 func TestBuildIndex(t *testing.T) {
 	text := "instruction"
 
-	index, err := BuildIndex([]promptiter.Surface{
+	index, err := BuildIndex([]astructure.Surface{
 		{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
-			Value: promptiter.SurfaceValue{
+			Type:      astructure.SurfaceTypeInstruction,
+			Value: astructure.SurfaceValue{
 				Text: &text,
 			},
 		},
@@ -76,20 +75,20 @@ func TestBuildIndex(t *testing.T) {
 func TestBuildIndexRejectsInvalidSurface(t *testing.T) {
 	text := "instruction"
 
-	_, err := BuildIndex([]promptiter.Surface{
+	_, err := BuildIndex([]astructure.Surface{
 		{
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
-			Type:      promptiter.SurfaceTypeInstruction,
-			Value: promptiter.SurfaceValue{
+			Type:      astructure.SurfaceTypeInstruction,
+			Value: astructure.SurfaceValue{
 				Text: &text,
 			},
 		},
 		{
 			SurfaceID: "surf_1",
 			NodeID:    "node_2",
-			Type:      promptiter.SurfaceTypeInstruction,
-			Value: promptiter.SurfaceValue{
+			Type:      astructure.SurfaceTypeInstruction,
+			Value: astructure.SurfaceValue{
 				Text: &text,
 			},
 		},
@@ -103,10 +102,10 @@ func TestSanitizeValue(t *testing.T) {
 	emptyText := ""
 
 	sanitizedInstruction, err := SanitizeValue(
-		promptiter.SurfaceTypeInstruction,
-		promptiter.SurfaceValue{
+		astructure.SurfaceTypeInstruction,
+		astructure.SurfaceValue{
 			Text:  &text,
-			Model: &promptiter.Model{},
+			Model: &astructure.ModelRef{},
 		},
 	)
 	assert.NoError(t, err)
@@ -114,48 +113,48 @@ func TestSanitizeValue(t *testing.T) {
 	assert.Nil(t, sanitizedInstruction.Model)
 
 	sanitizedFewShot, err := SanitizeValue(
-		promptiter.SurfaceTypeFewShot,
-		promptiter.SurfaceValue{
+		astructure.SurfaceTypeFewShot,
+		astructure.SurfaceValue{
 			Text:    &emptyText,
-			Message: []promptiter.Messages{},
-			Model:   &promptiter.Model{},
+			FewShot: []astructure.FewShotExample{},
+			Model:   &astructure.ModelRef{},
 		},
 	)
 	assert.NoError(t, err)
 	assert.Nil(t, sanitizedFewShot.Text)
 	assert.Nil(t, sanitizedFewShot.Model)
-	assert.NotNil(t, sanitizedFewShot.Message)
+	assert.NotNil(t, sanitizedFewShot.FewShot)
 
 	sanitizedModel, err := SanitizeValue(
-		promptiter.SurfaceTypeModel,
-		promptiter.SurfaceValue{
+		astructure.SurfaceTypeModel,
+		astructure.SurfaceValue{
 			Text:  &emptyText,
-			Model: &promptiter.Model{Provider: "p", Name: "m"},
+			Model: &astructure.ModelRef{Name: "m"},
 		},
 	)
 	assert.NoError(t, err)
 	assert.Nil(t, sanitizedModel.Text)
-	assert.Equal(t, &promptiter.Model{Provider: "p", Name: "m"}, sanitizedModel.Model)
+	assert.Equal(t, &astructure.ModelRef{Name: "m"}, sanitizedModel.Model)
 }
 
 func TestSanitizeValueRejectsInvalidInput(t *testing.T) {
 	text := "instruction"
 
 	_, err := SanitizeValue(
-		promptiter.SurfaceTypeInstruction,
-		promptiter.SurfaceValue{},
+		astructure.SurfaceTypeInstruction,
+		astructure.SurfaceValue{},
 	)
 	assert.Error(t, err)
 
 	_, err = SanitizeValue(
-		promptiter.SurfaceTypeFewShot,
-		promptiter.SurfaceValue{Text: &text},
+		astructure.SurfaceTypeFewShot,
+		astructure.SurfaceValue{Text: &text},
 	)
 	assert.Error(t, err)
 
 	_, err = SanitizeValue(
-		promptiter.SurfaceTypeModel,
-		promptiter.SurfaceValue{Model: &promptiter.Model{}},
+		astructure.SurfaceTypeModel,
+		astructure.SurfaceValue{Model: &astructure.ModelRef{}},
 	)
 	assert.Error(t, err)
 }

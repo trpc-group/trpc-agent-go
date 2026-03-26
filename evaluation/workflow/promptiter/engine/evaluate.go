@@ -11,8 +11,19 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
 // EvaluationOptions configures how many traces and parallel branches run in evaluation.
@@ -27,6 +38,20 @@ type EvaluationOptions struct {
 	EvalCaseParallelEvaluationEnabled bool
 }
 
+// EvaluationRequest describes one evaluation execution requested by the engine.
+type EvaluationRequest struct {
+	// EvalSetIDs identifies the evaluation sets to execute.
+	EvalSetIDs []string
+	// Profile is the normalized candidate profile being evaluated.
+	Profile *promptiter.Profile
+	// Teacher is the optional runner used by the evaluation runtime.
+	Teacher runner.Runner
+	// Judge is the optional runner used by the evaluation runtime.
+	Judge runner.Runner
+	// Options controls evaluation parallelism and repeat count.
+	Options EvaluationOptions
+}
+
 // MetricResult stores one metric measurement from a single trace step.
 type MetricResult struct {
 	// MetricName identifies the metric that produced this value.
@@ -34,7 +59,9 @@ type MetricResult struct {
 	// Score is the numeric result of metric evaluation.
 	Score float64
 	// Status describes pass/fail or custom metric state.
-	Status string
+	Status status.EvalStatus
+	// Severity describes the terminal loss priority emitted by the runtime.
+	Severity promptiter.LossSeverity
 	// Reason stores optional explanation when score quality is degraded.
 	Reason string
 	// StepID links this metric to the originating trace step.
@@ -51,10 +78,10 @@ type CaseResult struct {
 	SessionID string
 	// InvocationID identifies the runner invocation for trace correlation.
 	InvocationID string
-	// Output is the final textual output returned by the model run.
-	Output *promptiter.TraceOutput
+	// Output is the final textual output snapshot returned by the model run.
+	Output *atrace.Snapshot
 	// Trace records the node-level execution path used to produce the output.
-	Trace *promptiter.Trace
+	Trace *atrace.Trace
 	// Metrics stores all metric outputs for this case.
 	Metrics []MetricResult
 }
@@ -75,7 +102,324 @@ type EvaluationResult struct {
 	EvalSets []EvalSetResult
 }
 
-// evaluate runs teacher execution and judge scoring for one round.
-func (e *engine) evaluate(ctx context.Context) error {
+func (e *engine) evaluate(
+	ctx context.Context,
+	structure *structureState,
+	request *EvaluationRequest,
+) (*EvaluationResult, error) {
+	if request == nil {
+		return nil, errors.New("evaluation request is nil")
+	}
+	if structure == nil {
+		return nil, errors.New("structure state is nil")
+	}
+	if len(request.EvalSetIDs) == 0 {
+		return nil, errors.New("evaluation set ids are empty")
+	}
+	if e.agentEvaluator == nil {
+		return nil, errors.New("agent evaluator is nil")
+	}
+	if slices.Contains(request.EvalSetIDs, "") {
+		return nil, errors.New("evaluation set id is empty")
+	}
+	results := make([]EvalSetResult, 0, len(request.EvalSetIDs))
+	for _, evalSetID := range request.EvalSetIDs {
+		options, err := buildEvaluationCallOptions(structure, request)
+		if err != nil {
+			return nil, err
+		}
+		genericResult, err := e.agentEvaluator.Evaluate(ctx, evalSetID, options...)
+		if err != nil {
+			return nil, err
+		}
+		evalSetResult, err := adaptEvaluationSetResult(structure, evalSetID, genericResult)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, *evalSetResult)
+	}
+	return &EvaluationResult{EvalSets: results}, nil
+}
+
+func evaluationScore(result *EvaluationResult) (float64, error) {
+	if result == nil {
+		return 0, errors.New("evaluation result is nil")
+	}
+	if len(result.EvalSets) == 0 {
+		return 0, errors.New("evaluation result has no eval sets")
+	}
+	totalScore := 0.0
+	for _, evalSet := range result.EvalSets {
+		totalScore += evalSet.OverallScore
+	}
+	return totalScore / float64(len(result.EvalSets)), nil
+}
+
+func buildEvaluationCallOptions(
+	structure *structureState,
+	request *EvaluationRequest,
+) ([]evaluation.Option, error) {
+	if request == nil {
+		return nil, errors.New("evaluation request is nil")
+	}
+	runOptions, err := compileProfileRunOptions(structure, request.Profile)
+	if err != nil {
+		return nil, err
+	}
+	options := make([]evaluation.Option, 0, 7)
+	options = append(options, evaluation.WithRunDetailsEnabled(true))
+	options = append(options, evaluation.WithRunOptions(runOptions...))
+	if request.Teacher != nil {
+		options = append(options, evaluation.WithExpectedRunner(request.Teacher))
+	}
+	if request.Judge != nil {
+		options = append(options, evaluation.WithJudgeRunner(request.Judge))
+	}
+	if request.Options.NumRuns > 0 {
+		options = append(options, evaluation.WithNumRuns(request.Options.NumRuns))
+	}
+	if request.Options.EvalCaseParallelism > 0 {
+		options = append(options, evaluation.WithEvalCaseParallelism(request.Options.EvalCaseParallelism))
+	}
+	if request.Options.EvalCaseParallelInferenceEnabled {
+		options = append(options, evaluation.WithEvalCaseParallelInferenceEnabled(true))
+	}
+	if request.Options.EvalCaseParallelEvaluationEnabled {
+		options = append(options, evaluation.WithEvalCaseParallelEvaluationEnabled(true))
+	}
+	return options, nil
+
+
+func adaptEvaluationSetResult(
+	structure *structureState,
+	evalSetID string,
+	result *evaluation.EvaluationResult,
+) (*EvalSetResult, error) {
+	if structure == nil {
+		return nil, errors.New("structure state is nil")
+	}
+	if result == nil {
+		return nil, errors.New("evaluation result is nil")
+	}
+	if result.EvalSetID == "" {
+		return nil, errors.New("evaluation result eval set id is empty")
+	}
+	if result.EvalSetID != evalSetID {
+		return nil, fmt.Errorf(
+			"evaluation result eval set id %q does not match request %q",
+			result.EvalSetID,
+			evalSetID,
+		)
+	}
+	score, err := calculateEvaluationScore(result)
+	if err != nil {
+		return nil, err
+	}
+	cases := make([]CaseResult, 0, len(result.EvalCases))
+	for _, evalCase := range result.EvalCases {
+		if evalCase == nil {
+			continue
+		}
+		converted, err := adaptEvaluationCaseResult(structure, evalSetID, evalCase)
+		if err != nil {
+			return nil, err
+		}
+		cases = append(cases, *converted)
+	}
+	return &EvalSetResult{
+		EvalSetID:    evalSetID,
+		OverallScore: score,
+		Cases:        cases,
+	}, nil
+}
+
+func calculateEvaluationScore(result *evaluation.EvaluationResult) (float64, error) {
+	if result == nil {
+		return 0, errors.New("evaluation result is nil")
+	}
+	totalScore := 0.0
+	totalMetrics := 0
+	for _, evalCase := range result.EvalCases {
+		if evalCase == nil {
+			continue
+		}
+		for _, metric := range evalCase.MetricResults {
+			if metric == nil || metric.EvalStatus == status.EvalStatusNotEvaluated {
+				continue
+			}
+			totalScore += metric.Score
+			totalMetrics++
+		}
+	}
+	if totalMetrics == 0 {
+		return 0, errors.New("evaluation result has no metric scores")
+	}
+	return totalScore / float64(totalMetrics), nil
+}
+
+func adaptEvaluationCaseResult(
+	structure *structureState,
+	evalSetID string,
+	evalCase *evaluation.EvaluationCaseResult,
+) (*CaseResult, error) {
+	if evalCase == nil {
+		return nil, errors.New("evaluation case result is nil")
+	}
+	if evalCase.EvalCaseID == "" {
+		return nil, errors.New("evaluation case id is empty")
+	}
+	if len(evalCase.EvalCaseResults) == 0 {
+		return nil, fmt.Errorf(
+			"evaluation case %q has no run results",
+			evalCase.EvalCaseID,
+		)
+	}
+	runResult := evalCase.EvalCaseResults[0]
+	if runResult == nil {
+		return nil, fmt.Errorf("evaluation case %q run result is nil", evalCase.EvalCaseID)
+	}
+	if len(evalCase.RunDetails) == 0 {
+		return nil, fmt.Errorf(
+			"evaluation case %q has no run details",
+			evalCase.EvalCaseID,
+		)
+	}
+	runDetail := evalCase.RunDetails[0]
+	if runDetail == nil {
+		return nil, fmt.Errorf("evaluation case %q run detail is nil", evalCase.EvalCaseID)
+	}
+	if runDetail.RunID != runResult.RunID {
+		return nil, fmt.Errorf(
+			"evaluation case %q run detail id %d does not match run result id %d",
+			evalCase.EvalCaseID,
+			runDetail.RunID,
+			runResult.RunID,
+		)
+	}
+	trace, output, invocationID, sessionID, err := extractInferenceTraceDetails(structure, evalCase.EvalCaseID, runDetail.Inference)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"extract inference trace details for eval case %q: %w",
+			evalCase.EvalCaseID,
+			err,
+		)
+	}
+	metrics, err := adaptMetricResults(runResult.OverallEvalMetricResults)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"adapt metric results for eval case %q: %w",
+			evalCase.EvalCaseID,
+			err,
+		)
+	}
+	return &CaseResult{
+		EvalSetID:    evalSetID,
+		EvalCaseID:   evalCase.EvalCaseID,
+		SessionID:    sessionID,
+		InvocationID: invocationID,
+		Output:       output,
+		Trace:        trace,
+		Metrics:      metrics,
+	}, nil
+}
+
+func extractInferenceTraceDetails(
+	structure *structureState,
+	evalCaseID string,
+	result *evaluation.EvaluationInferenceDetails,
+) (*atrace.Trace, *atrace.Snapshot, string, string, error) {
+	if structure == nil {
+		return nil, nil, "", "", errors.New("structure state is nil")
+	}
+	if result == nil {
+		return nil, nil, "", "", errors.New("inference result is nil")
+	}
+	if len(result.ExecutionTraces) != 1 {
+		return nil, nil, "", "", fmt.Errorf(
+			"inference result for eval case %q must contain exactly one execution trace",
+			evalCaseID,
+		)
+	}
+	executionTrace := result.ExecutionTraces[0]
+	if err := validateTraceAgainstStructure(structure, executionTrace); err != nil {
+		return nil, nil, "", "", err
+	}
+	invocationID := executionTrace.RootInvocationID
+	if invocationID == "" && len(result.Inferences) == 1 && result.Inferences[0] != nil {
+		invocationID = result.Inferences[0].InvocationID
+	}
+	sessionID := executionTrace.SessionID
+	if sessionID == "" {
+		sessionID = result.SessionID
+	}
+	return executionTrace, traceFinalOutput(executionTrace), invocationID, sessionID, nil
+}
+
+func validateTraceAgainstStructure(
+	structure *structureState,
+	trace *atrace.Trace,
+) error {
+	if structure == nil {
+		return errors.New("structure state is nil")
+	}
+	if trace == nil {
+		return errors.New("execution trace is nil")
+	}
+	for _, step := range trace.Steps {
+		if step.StepID == "" {
+			return errors.New("execution trace step id is empty")
+		}
+		for _, surfaceID := range step.AppliedSurfaceIDs {
+			if surfaceID == "" {
+				return fmt.Errorf("execution trace step %q applied surface id is empty", step.StepID)
+			}
+			if _, ok := structure.surfaceIndex[surfaceID]; !ok {
+				return fmt.Errorf(
+					"execution trace step %q references unknown surface id %q",
+					step.StepID,
+					surfaceID,
+				)
+			}
+		}
+	}
 	return nil
+}
+
+func traceFinalOutput(trace *atrace.Trace) *atrace.Snapshot {
+	if trace == nil || len(trace.Steps) == 0 {
+		return nil
+	}
+	return trace.Steps[len(trace.Steps)-1].Output
+}
+
+func adaptMetricResults(results []*evalresult.EvalMetricResult) ([]MetricResult, error) {
+	metrics := make([]MetricResult, 0, len(results))
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+		metric := MetricResult{
+			MetricName: result.MetricName,
+			Score:      result.Score,
+			Status:     result.EvalStatus,
+		}
+		if result.Details != nil {
+			metric.Reason = result.Details.Reason
+			metric.StepID = strings.TrimSpace(result.Details.StepID)
+			metric.Severity = promptiter.LossSeverity(strings.TrimSpace(result.Details.Severity))
+		}
+		if metric.Status == status.EvalStatusFailed {
+			if metric.StepID == "" {
+				return nil, fmt.Errorf("metric %q is missing step id", metric.MetricName)
+			}
+			if !isKnownLossSeverity(metric.Severity) {
+				return nil, fmt.Errorf("metric %q is missing valid severity", metric.MetricName)
+			}
+			if strings.TrimSpace(metric.Reason) == "" {
+				return nil, fmt.Errorf("metric %q is missing loss reason", metric.MetricName)
+			}
+		}
+		metrics = append(metrics, metric)
+	}
+	return metrics, nil
 }

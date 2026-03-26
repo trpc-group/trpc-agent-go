@@ -13,16 +13,16 @@ import (
 	"errors"
 	"fmt"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 )
 
 // IsSupportedType reports whether the surface type is supported by PromptIter.
-func IsSupportedType(surfaceType promptiter.SurfaceType) bool {
+func IsSupportedType(surfaceType astructure.SurfaceType) bool {
 	switch surfaceType {
-	case promptiter.SurfaceTypeInstruction,
-		promptiter.SurfaceTypeGlobalInstruction,
-		promptiter.SurfaceTypeFewShot,
-		promptiter.SurfaceTypeModel:
+	case astructure.SurfaceTypeInstruction,
+		astructure.SurfaceTypeGlobalInstruction,
+		astructure.SurfaceTypeFewShot,
+		astructure.SurfaceTypeModel:
 		return true
 	default:
 		return false
@@ -30,21 +30,21 @@ func IsSupportedType(surfaceType promptiter.SurfaceType) bool {
 }
 
 // ValidateValue validates that one surface value matches the target surface type.
-func ValidateValue(surfaceType promptiter.SurfaceType, value promptiter.SurfaceValue) error {
+func ValidateValue(surfaceType astructure.SurfaceType, value astructure.SurfaceValue) error {
 	switch surfaceType {
-	case promptiter.SurfaceTypeInstruction, promptiter.SurfaceTypeGlobalInstruction:
+	case astructure.SurfaceTypeInstruction, astructure.SurfaceTypeGlobalInstruction:
 		if value.Text == nil {
 			return errors.New("text is nil")
 		}
-		if len(value.Message) > 0 {
+		if len(value.FewShot) > 0 {
 			return errors.New("messages are not empty")
 		}
 		if value.Model != nil {
 			return errors.New("model is not nil")
 		}
 		return nil
-	case promptiter.SurfaceTypeFewShot:
-		if value.Message == nil {
+	case astructure.SurfaceTypeFewShot:
+		if value.FewShot == nil {
 			return errors.New("messages are nil")
 		}
 		if value.Text != nil {
@@ -54,12 +54,9 @@ func ValidateValue(surfaceType promptiter.SurfaceType, value promptiter.SurfaceV
 			return errors.New("model is not nil")
 		}
 		return nil
-	case promptiter.SurfaceTypeModel:
+	case astructure.SurfaceTypeModel:
 		if value.Model == nil {
 			return errors.New("model is nil")
-		}
-		if value.Model.Provider == "" {
-			return errors.New("model provider is empty")
 		}
 		if value.Model.Name == "" {
 			return errors.New("model name is empty")
@@ -67,7 +64,7 @@ func ValidateValue(surfaceType promptiter.SurfaceType, value promptiter.SurfaceV
 		if value.Text != nil {
 			return errors.New("text is not nil")
 		}
-		if len(value.Message) > 0 {
+		if len(value.FewShot) > 0 {
 			return errors.New("messages are not empty")
 		}
 		return nil
@@ -77,8 +74,8 @@ func ValidateValue(surfaceType promptiter.SurfaceType, value promptiter.SurfaceV
 }
 
 // BuildIndex validates surfaces and indexes them by surface ID.
-func BuildIndex(surfaces []promptiter.Surface) (map[string]promptiter.Surface, error) {
-	index := make(map[string]promptiter.Surface, len(surfaces))
+func BuildIndex(surfaces []astructure.Surface) (map[string]astructure.Surface, error) {
+	index := make(map[string]astructure.Surface, len(surfaces))
 	for _, item := range surfaces {
 		if item.SurfaceID == "" {
 			return nil, errors.New("surface id is empty")
@@ -102,60 +99,66 @@ func BuildIndex(surfaces []promptiter.Surface) (map[string]promptiter.Surface, e
 
 // SanitizeValue validates one surface value and removes empty noise fields.
 func SanitizeValue(
-	surfaceType promptiter.SurfaceType,
-	value promptiter.SurfaceValue,
-) (promptiter.SurfaceValue, error) {
+	surfaceType astructure.SurfaceType,
+	value astructure.SurfaceValue,
+) (astructure.SurfaceValue, error) {
 	switch surfaceType {
-	case promptiter.SurfaceTypeInstruction, promptiter.SurfaceTypeGlobalInstruction:
+	case astructure.SurfaceTypeInstruction, astructure.SurfaceTypeGlobalInstruction:
 		if value.Text == nil {
-			return promptiter.SurfaceValue{}, errors.New("text is nil")
+			return astructure.SurfaceValue{}, errors.New("text is nil")
 		}
-		if len(value.Message) > 0 {
-			return promptiter.SurfaceValue{}, errors.New("messages are not empty")
+		if len(value.FewShot) > 0 {
+			return astructure.SurfaceValue{}, errors.New("messages are not empty")
 		}
 		if value.Model != nil && !isEmptyModel(value.Model) {
-			return promptiter.SurfaceValue{}, errors.New("model is not empty")
+			return astructure.SurfaceValue{}, errors.New("model is not empty")
 		}
-		sanitized := promptiter.SurfaceValue{
+		sanitized := astructure.SurfaceValue{
 			Text: cloneText(value.Text),
 		}
 		return sanitized, nil
-	case promptiter.SurfaceTypeFewShot:
-		if value.Message == nil {
-			return promptiter.SurfaceValue{}, errors.New("messages are nil")
+	case astructure.SurfaceTypeFewShot:
+		if value.FewShot == nil {
+			return astructure.SurfaceValue{}, errors.New("messages are nil")
 		}
 		if value.Text != nil && *value.Text != "" {
-			return promptiter.SurfaceValue{}, errors.New("text is not empty")
+			return astructure.SurfaceValue{}, errors.New("text is not empty")
 		}
 		if value.Model != nil && !isEmptyModel(value.Model) {
-			return promptiter.SurfaceValue{}, errors.New("model is not empty")
+			return astructure.SurfaceValue{}, errors.New("model is not empty")
 		}
-		sanitized := promptiter.SurfaceValue{
-			Message: cloneExamples(value.Message),
+		sanitized := astructure.SurfaceValue{
+			FewShot: cloneExamples(value.FewShot),
 		}
 		return sanitized, nil
-	case promptiter.SurfaceTypeModel:
+	case astructure.SurfaceTypeModel:
 		if value.Model == nil {
-			return promptiter.SurfaceValue{}, errors.New("model is nil")
-		}
-		if value.Model.Provider == "" {
-			return promptiter.SurfaceValue{}, errors.New("model provider is empty")
+			return astructure.SurfaceValue{}, errors.New("model is nil")
 		}
 		if value.Model.Name == "" {
-			return promptiter.SurfaceValue{}, errors.New("model name is empty")
+			return astructure.SurfaceValue{}, errors.New("model name is empty")
 		}
 		if value.Text != nil && *value.Text != "" {
-			return promptiter.SurfaceValue{}, errors.New("text is not empty")
+			return astructure.SurfaceValue{}, errors.New("text is not empty")
 		}
-		if len(value.Message) > 0 {
-			return promptiter.SurfaceValue{}, errors.New("messages are not empty")
+		if len(value.FewShot) > 0 {
+			return astructure.SurfaceValue{}, errors.New("messages are not empty")
 		}
-		sanitized := promptiter.SurfaceValue{
+		sanitized := astructure.SurfaceValue{
 			Model: cloneModel(value.Model),
 		}
 		return sanitized, nil
 	default:
-		return promptiter.SurfaceValue{}, fmt.Errorf("surface type %q is invalid", surfaceType)
+		return astructure.SurfaceValue{}, fmt.Errorf("surface type %q is invalid", surfaceType)
+	}
+}
+
+// CloneValue deep-copies one supported PromptIter surface value.
+func CloneValue(value astructure.SurfaceValue) astructure.SurfaceValue {
+	return astructure.SurfaceValue{
+		Text:    cloneText(value.Text),
+		FewShot: cloneExamples(value.FewShot),
+		Model:   cloneModel(value.Model),
 	}
 }
 
@@ -167,29 +170,29 @@ func cloneText(value *string) *string {
 	return &cloned
 }
 
-func cloneExamples(examples []promptiter.Messages) []promptiter.Messages {
+func cloneExamples(examples []astructure.FewShotExample) []astructure.FewShotExample {
 	if examples == nil {
 		return nil
 	}
-	cloned := make([]promptiter.Messages, len(examples))
+	cloned := make([]astructure.FewShotExample, len(examples))
 	for i := range examples {
-		cloned[i] = promptiter.Messages{
+		cloned[i] = astructure.FewShotExample{
 			Messages: cloneMessages(examples[i].Messages),
 		}
 	}
 	return cloned
 }
 
-func cloneMessages(messages []promptiter.Message) []promptiter.Message {
+func cloneMessages(messages []astructure.FewShotMessage) []astructure.FewShotMessage {
 	if messages == nil {
 		return nil
 	}
-	cloned := make([]promptiter.Message, len(messages))
+	cloned := make([]astructure.FewShotMessage, len(messages))
 	copy(cloned, messages)
 	return cloned
 }
 
-func cloneModel(modelValue *promptiter.Model) *promptiter.Model {
+func cloneModel(modelValue *astructure.ModelRef) *astructure.ModelRef {
 	if modelValue == nil {
 		return nil
 	}
@@ -197,9 +200,9 @@ func cloneModel(modelValue *promptiter.Model) *promptiter.Model {
 	return &cloned
 }
 
-func isEmptyModel(modelValue *promptiter.Model) bool {
+func isEmptyModel(modelValue *astructure.ModelRef) bool {
 	if modelValue == nil {
 		return true
 	}
-	return modelValue.Provider == "" && modelValue.Name == ""
+	return modelValue.Name == ""
 }

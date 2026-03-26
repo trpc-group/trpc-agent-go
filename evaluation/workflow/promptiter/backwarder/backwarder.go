@@ -15,6 +15,8 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	idecode "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/decode"
 	irunner "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/runner"
@@ -35,17 +37,17 @@ type Request struct {
 	// EvalCaseID identifies the evaluation case for trace correlation.
 	EvalCaseID string
 	// Node is the static node that produced this step.
-	Node *promptiter.StructureNode
+	Node *astructure.Node
 	// StepID is the local step identifier in the trace.
 	StepID string
-	// Input is the concrete input captured for this step.
-	Input *promptiter.TraceInput
-	// Output is the concrete output captured for this step.
-	Output *promptiter.TraceOutput
+	// Input is the concrete input snapshot captured for this step.
+	Input *atrace.Snapshot
+	// Output is the concrete output snapshot captured for this step.
+	Output *atrace.Snapshot
 	// Error records runtime failure details when the step did not complete.
 	Error string
 	// Surfaces are all surfaces whose values affected this step.
-	Surfaces []promptiter.Surface
+	Surfaces []astructure.Surface
 	// Predecessors stores direct predecessor execution steps.
 	Predecessors []Predecessor
 	// Incoming carries raw gradients that need to be processed at this step.
@@ -58,8 +60,8 @@ type Predecessor struct {
 	StepID string
 	// NodeID identifies the predecessor node id.
 	NodeID string
-	// Output stores the predecessor output used by this step.
-	Output *promptiter.TraceOutput
+	// Output stores the predecessor output snapshot used by this step.
+	Output *atrace.Snapshot
 	// Error records predecessor execution error for debugging.
 	Error string
 }
@@ -289,7 +291,7 @@ func sanitizeBackwardResult(request *Request, result *Result) (*Result, error) {
 
 func sanitizeSurfaceGradient(
 	request *Request,
-	surfaceIndex map[string]promptiter.Surface,
+	surfaceIndex map[string]astructure.Surface,
 	gradient promptiter.SurfaceGradient,
 ) (promptiter.SurfaceGradient, bool, error) {
 	if gradient.Gradient == "" {
@@ -384,7 +386,7 @@ func buildPredecessorIndex(predecessors []Predecessor) (map[string]Predecessor, 
 }
 
 func sanitizeGradientSurfaceID(
-	surfaceIndex map[string]promptiter.Surface,
+	surfaceIndex map[string]astructure.Surface,
 	surfaceID string,
 ) (string, error) {
 	switch {
