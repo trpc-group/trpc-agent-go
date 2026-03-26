@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -19,6 +20,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/delivery"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 )
+
+const deliveryExtensionKey = "openclaw:delivery_target:v1"
 
 func TestBuildDeliveryRunOptionResolver(t *testing.T) {
 	t.Parallel()
@@ -56,6 +59,22 @@ func TestBuildDeliveryRunOptionResolverSkipsEmptyInput(t *testing.T) {
 	_, runOpts := buildDeliveryRunOptionResolver()(
 		context.Background(),
 		gateway.RunOptionInput{},
+	)
+	require.Nil(t, runOpts)
+}
+
+func TestBuildDeliveryRunOptionResolverSkipsMalformedExtension(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	_, runOpts := buildDeliveryRunOptionResolver()(
+		context.Background(),
+		gateway.RunOptionInput{
+			Extensions: map[string]json.RawMessage{
+				deliveryExtensionKey: json.RawMessage("{"),
+			},
+		},
 	)
 	require.Nil(t, runOpts)
 }

@@ -70,6 +70,9 @@ func TestMergeRuntimeState(t *testing.T) {
 	require.Equal(t, 999, ro.RuntimeState["room_id"])
 	require.Equal(t, true, ro.RuntimeState["config"])
 	require.Equal(t, "demo", ro.RuntimeState["roomName"])
+	require.Equal(t, 999, other["room_id"])
+	require.Equal(t, true, other["config"])
+	require.Equal(t, "demo", other["roomName"])
 }
 
 func TestWithKnowledgeFilter(t *testing.T) {

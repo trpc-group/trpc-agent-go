@@ -49,6 +49,15 @@ func TestEvent_Clone_DeepCopy(t *testing.T) {
 		string(e.Extensions["ext"]),
 		string(c.Extensions["ext"]),
 	)
+
+	clonedRaw := c.Extensions["ext"]
+	clonedRaw[0] = 'x'
+	c.Extensions["ext"] = clonedRaw
+	require.NotEqual(
+		t,
+		e.Extensions["ext"][0],
+		c.Extensions["ext"][0],
+	)
 }
 
 func TestEvent_Clone_LegacyVersionMigratesFilterKey(t *testing.T) {

@@ -143,6 +143,38 @@ func TestEvent_SetAndGetExtension(t *testing.T) {
 	require.Equal(t, "bob", got["speaker"])
 }
 
+func TestEvent_ExtensionHelpers_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(
+		t,
+		SetExtension(nil, "ext", map[string]string{"speaker": "bob"}),
+	)
+
+	evt := New("inv-1", "author")
+	require.NoError(
+		t,
+		SetExtension(evt, "", map[string]string{"speaker": "bob"}),
+	)
+	require.Nil(t, evt.Extensions)
+
+	WithExtension("bad", func() {})(evt)
+	_, ok, err := GetExtension[map[string]string](evt, "bad")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	_, ok, err = GetExtension[map[string]string](evt, "")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	evt.Extensions = map[string]json.RawMessage{
+		"bad": json.RawMessage("{"),
+	}
+	_, ok, err = GetExtension[map[string]string](evt, "bad")
+	require.Error(t, err)
+	require.False(t, ok)
+}
+
 func TestEvent_Filter(t *testing.T) {
 	evt1 := New("inv-1", "author",
 		WithBranch("b1"),

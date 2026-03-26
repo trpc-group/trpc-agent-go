@@ -946,6 +946,112 @@ func TestServiceRunNow_DeliveryFailureWithoutRouter(t *testing.T) {
 	require.Contains(t, got.LastError, "nil outbound router")
 }
 
+func TestService_RunStateHelpers(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 26, 10, 0, 0, 0, time.UTC)
+	svc := &Service{
+		clock:   func() time.Time { return now },
+		jobs:    make(map[string]*Job),
+		running: make(map[string]*jobRun),
+	}
+
+	_, _, _, err := svc.markRunning("missing", context.Background())
+	require.ErrorContains(t, err, "unknown job")
+
+	job := &Job{
+		ID:      "job-1",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+	}
+	svc.jobs[job.ID] = job
+	svc.running[job.ID] = &jobRun{}
+	_, _, _, err = svc.markRunning(job.ID, context.Background())
+	require.ErrorContains(t, err, "already running")
+
+	svc.running = make(map[string]*jobRun)
+	job.Policy.MaxRuns = 1
+	job.Stats.RunCount = 1
+	_, _, _, err = svc.markRunning(job.ID, context.Background())
+	require.ErrorContains(t, err, "no longer schedulable")
+	require.False(t, job.Enabled)
+
+	job.Enabled = true
+	job.Stats.RunCount = 0
+	job.Policy.MaxRuns = 0
+	clone, runCtx, token, err := svc.markRunning(job.ID, nil)
+	require.NoError(t, err)
+	require.Equal(t, job.ID, clone.ID)
+	require.NotNil(t, runCtx)
+	require.NotEmpty(t, token)
+	require.Equal(t, StatusRunning, job.LastStatus)
+	require.Equal(t, 1, job.Stats.RunCount)
+	require.True(t, svc.deliveryAllowed(job.ID, token))
+
+	svc.mu.Lock()
+	svc.suppressRunLocked(job.ID)
+	svc.mu.Unlock()
+	require.False(t, svc.deliveryAllowed(job.ID, token))
+
+	svc.mu.Lock()
+	svc.removeJobLocked(job.ID, false)
+	require.Nil(t, svc.jobs[job.ID])
+	require.NotNil(t, svc.running[job.ID])
+	svc.removeJobLocked(job.ID, true)
+	svc.mu.Unlock()
+	require.ErrorIs(t, runCtx.Err(), context.Canceled)
+}
+
+func TestService_RetireAndRunPolicyHelpers(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 26, 10, 0, 0, 0, time.UTC)
+	future := now.Add(time.Hour)
+
+	require.False(t, retireJobLocked(nil, now))
+	require.False(t, retireJobLocked(&Job{Enabled: false}, now))
+
+	job := &Job{
+		Enabled: true,
+		Policy: ExecutionPolicy{
+			MaxRuns: 2,
+			EndsAt:  &future,
+		},
+		Stats: ExecutionStats{
+			RunCount: 2,
+		},
+	}
+	require.True(t, executionLimitReached(job))
+	require.True(t, retireJobLocked(job, now))
+	require.False(t, job.Enabled)
+	require.Nil(t, job.NextRunAt)
+
+	next := now.Add(30 * time.Minute)
+	job = &Job{
+		Enabled: true,
+		Policy: ExecutionPolicy{
+			EndsAt: &future,
+		},
+	}
+	require.False(t, executionWindowClosed(job, now))
+	require.True(t, nextRunAllowed(job, &next, now))
+	applyNextRunPolicy(job, &next, now)
+	require.NotNil(t, job.NextRunAt)
+	require.Equal(t, next, *job.NextRunAt)
+
+	job.Policy.EndsAt = timePointer(now)
+	require.False(t, nextRunAllowed(job, &next, now))
+	applyNextRunPolicy(job, &next, now)
+	require.False(t, job.Enabled)
+	require.Nil(t, job.NextRunAt)
+
+	require.Equal(t, now, scheduledRunBase(nil, now))
+	require.NotNil(t, scheduledRunRuntimeState(&Job{}))
+}
+
 func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -1128,4 +1234,8 @@ func waitFor(t *testing.T, fn func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("condition was not met")
+}
+
+func timePointer(ts time.Time) *time.Time {
+	return &ts
 }

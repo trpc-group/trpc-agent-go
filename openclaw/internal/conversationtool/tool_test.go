@@ -28,19 +28,28 @@ func TestToolCall(t *testing.T) {
 	sess.Events = []event.Event{
 		userEvent(t, "u1", "Alice", "hello", "", time.Now()),
 		assistantEvent("hi", time.Now().Add(time.Second)),
+		userEvent(
+			t,
+			"u2",
+			"Bob",
+			"what did we decide?",
+			"hello",
+			time.Now().Add(2*time.Second),
+		),
+		assistantEvent("ship it", time.Now().Add(3*time.Second)),
 	}
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	out, err := tool.Call(ctx, []byte(`{"limit":2}`))
+	out, err := tool.Call(ctx, []byte(`{"limit":4}`))
 	require.NoError(t, err)
 
 	result := out.(map[string]any)
 	require.Equal(t, "session-1", result["session_id"])
 	require.Equal(t, "scope", result["session_user"])
-	require.Equal(t, 2, result["turn_count"])
+	require.Equal(t, 4, result["turn_count"])
 	require.Contains(
 		t,
 		result["transcript"],
@@ -49,11 +58,19 @@ func TestToolCall(t *testing.T) {
 	require.Contains(
 		t,
 		result["transcript"],
-		"Assistant: hi",
+		"Bob (replying to: hello): what did we decide?",
+	)
+	require.Contains(
+		t,
+		result["transcript"],
+		"Assistant: ship it",
 	)
 	turns := result["turns"].([]conversation.Turn)
-	require.Len(t, turns, 2)
+	require.Len(t, turns, 4)
 	require.Equal(t, "Alice", turns[0].Speaker)
+	require.Equal(t, "Assistant", turns[1].Speaker)
+	require.Equal(t, "Bob", turns[2].Speaker)
+	require.Equal(t, "Assistant", turns[3].Speaker)
 }
 
 func TestToolCallWithoutInvocation(t *testing.T) {
@@ -107,6 +124,17 @@ func TestToolCall_IncludeSystemAndLimit(t *testing.T) {
 	result := out.(map[string]any)
 	require.Equal(t, 1, result["turn_count"])
 	require.Equal(t, "1. Assistant: hi", result["transcript"])
+}
+
+func TestToolDeclaration(t *testing.T) {
+	t.Parallel()
+
+	decl := NewTool().Declaration()
+	require.Equal(t, toolConversationHistory, decl.Name)
+	require.Contains(t, decl.Description, "speaker attribution")
+	require.Equal(t, "object", decl.InputSchema.Type)
+	require.Contains(t, decl.InputSchema.Properties, "limit")
+	require.Contains(t, decl.InputSchema.Properties, "include_system")
 }
 
 func intPointer(v int) *int {

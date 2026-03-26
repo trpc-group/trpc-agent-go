@@ -200,6 +200,18 @@ func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
 			ToolID: "tool-1",
 		}),
 	)
+	require.Equal(
+		t,
+		"Speaker: Alice\nQuoted message: earlier\nMessage: hello",
+		renderUserMessage(
+			model.NewUserMessage("hello"),
+			Annotation{
+				ActorID:    "u1",
+				ActorLabel: "Alice",
+				QuoteText:  "earlier",
+			},
+		),
+	)
 
 	require.Equal(t, authorUser, speakerLabel(Annotation{}))
 	require.Equal(
@@ -392,6 +404,7 @@ func TestPreSummaryHookUsesConversationProjection(t *testing.T) {
 	require.NoError(t, PreSummaryHook(ctx))
 	require.Contains(t, ctx.Text, "Alice: hello")
 	require.Contains(t, ctx.Text, "Assistant: hi")
+	require.NotContains(t, ctx.Text, "fallback")
 }
 
 func TestPluginPersistsRuntimeAnnotation(t *testing.T) {
@@ -440,6 +453,55 @@ func TestPreSummaryHook_NoProjectionLeavesText(t *testing.T) {
 	require.Equal(t, "fallback", ctx.Text)
 
 	require.NoError(t, PreSummaryHook(nil))
+}
+
+func TestHistoryHelpers_SystemTurnsAndSummary(t *testing.T) {
+	t.Parallel()
+
+	sysEvt := systemEvent("carry forward")
+	turns := systemTurnsFromEvent(sysEvt)
+	require.Len(t, turns, 1)
+	require.Equal(t, string(model.RoleSystem), turns[0].Role)
+	require.Equal(t, summarySpeakerSystem, turns[0].Speaker)
+	require.Equal(t, "carry forward", turns[0].Text)
+
+	lines, ok := summaryLinesFromEvent(sysEvt)
+	require.False(t, ok)
+	require.Equal(
+		t,
+		[]string{summarySpeakerSystem + ": carry forward"},
+		lines,
+	)
+
+	msg := model.Message{
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeText,
+				Text: stringPointer("hello"),
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{Name: "a.txt"},
+			},
+		},
+	}
+	require.Equal(t, "hello", messageText(msg))
+
+	text, ts, ok := sessionSummary(&session.Session{})
+	require.False(t, ok)
+	require.Empty(t, text)
+	require.True(t, ts.IsZero())
+
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: {
+				Summary: "  kept  ",
+			},
+		},
+	}
+	text, _, ok = sessionSummary(sess)
+	require.True(t, ok)
+	require.Equal(t, "kept", text)
 }
 
 func stringPointer(v string) *string {
