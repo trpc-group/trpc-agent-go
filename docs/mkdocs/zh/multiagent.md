@@ -601,6 +601,48 @@ func refreshSubAgents(ctx context.Context, ag agent.Agent) error {
 - 结果：$7,969.24（利息约$2,969.24）
 ```
 
+### 动态 Agent 创建 (Dynamic Agent Creation)
+
+Agent 可以在运行时自主创建和管理子 Agent，无需开发者预先配置。
+
+**为什么需要这个能力？** LLM 的注意力是有限资源——上下文窗口越大，对关键信息的注意力越稀释。当主 Agent 意识到某个子任务会产生大量中间推理（工具调用、试错、重试），它可以将任务委派给一个独立上下文的子 Agent。子 Agent 内部可能消耗数万 token 的推理过程，但父 Agent 只看到最终结果（几百 token）——相当于在父子之间建立了一道**上下文压缩边界**，让主 Agent 始终保持专注。
+
+通过 `WithTemporarySubtasks()` 启用。
+
+#### 启用
+
+```go
+llmAgent := llmagent.New("my-agent",
+    llmagent.WithModel(model),
+    llmagent.WithTools(userTools),
+    llmagent.WithTemporarySubtasks(),  // 启用 subtask 工具（临时子任务）
+)
+```
+
+#### Subtask 工具
+
+主 Agent 调用 `subtask` 工具在隔离的上下文作用域中执行子任务。子 Agent 继承父的模型和用户工具（框架工具如 `subtask`、`transfer_to_agent` 被自动剥离以防止递归），但拥有独立的上下文窗口——中间推理和工具调用不会污染父 Agent 的上下文。
+
+```text
+subtask({
+  request: "分析这段代码的安全漏洞",
+  instruction: "你是安全审计专家",    // 可选：覆盖 system prompt
+  tools: ["read_file", "search"],     // 可选：工具子集
+  inherit_context: true               // 可选：是否继承父上下文
+})
+```
+
+- `inherit_context: false`（默认）：子 Agent 从干净上下文开始
+- `inherit_context: true`：子 Agent 能看到父的对话历史（通过 filter key 前缀匹配）
+
+#### 示例
+
+```bash
+cd examples/dynamicagent
+export OPENAI_API_KEY="your-key"
+go run . -model=gpt-4o-mini
+```
+
 ## 环境变量配置
 
 所有多 Agent 示例都需要以下环境变量：

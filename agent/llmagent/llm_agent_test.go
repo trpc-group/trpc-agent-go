@@ -1328,6 +1328,30 @@ func TestLLMAgent_OptionsWithEndInvocationAfterTransfer(t *testing.T) {
 	require.False(t, opts.EndInvocationAfterTransfer)
 }
 
+// TestLLMAgent_OptionsWithTemporarySubtasks tests WithTemporarySubtasks option.
+func TestLLMAgent_OptionsWithTemporarySubtasks(t *testing.T) {
+	opts := &Options{}
+	WithTemporarySubtasks()(opts)
+	require.True(t, opts.TemporarySubtasks)
+}
+
+// TestLLMAgent_WithTemporarySubtasksRegistersSubtaskTool verifies the subtask tool is
+// registered when WithTemporarySubtasks is enabled.
+func TestLLMAgent_WithTemporarySubtasksRegistersSubtaskTool(t *testing.T) {
+	agt := New("test-agent",
+		WithModel(newDummyModel()),
+		WithTemporarySubtasks(),
+	)
+	found := false
+	for _, toolItem := range agt.Tools() {
+		if toolItem.Declaration().Name == "subtask" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "expected subtask tool to be registered")
+}
+
 // TestLLMAgent_SetInstruction tests SetInstruction method.
 func TestLLMAgent_SetInstruction(t *testing.T) {
 	agt := New("test", WithInstruction("initial instruction"))
@@ -2146,4 +2170,21 @@ func TestLLMAgent_MessageFilterMode(t *testing.T) {
 
 	require.Equal(t, options.messageTimelineFilterMode, "request")
 	require.Equal(t, options.messageBranchFilterMode, "exact")
+}
+
+func TestLLMAgent_GetAllToolsRegistersSubtaskTool(t *testing.T) {
+	agt := New("test",
+		WithModel(newDummyModel()),
+		WithTemporarySubtasks(),
+	)
+
+	ctx := context.Background()
+	tools := agt.getAllToolsLockedWithContext(ctx)
+
+	names := make(map[string]bool)
+	for _, tl := range tools {
+		names[tl.Declaration().Name] = true
+	}
+
+	require.True(t, names["subtask"], "should register subtask tool")
 }

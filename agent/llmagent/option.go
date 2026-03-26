@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
+	toolspawn "trpc.group/trpc-go/trpc-agent-go/tool/spawn"
 )
 
 const (
@@ -266,6 +267,11 @@ type Options struct {
 	//   - Configured with empty string: use built-in default message.
 	//   - Configured with non-empty: use the provided message.
 	DefaultTransferMessage *string
+
+	// TemporarySubtasks, when true, registers the built-in `subtask`
+	// tool (ephemeral call-return delegation).
+	TemporarySubtasks  bool
+	subtaskToolOptions []toolspawn.SubtaskOption
 
 	// RefreshToolSetsOnRun controls whether tools from ToolSets are
 	// refreshed from the underlying ToolSet on each run.
@@ -721,6 +727,21 @@ func WithAddNameToInstruction(addNameToInstruction bool) Option {
 func WithEnableParallelTools(enable bool) Option {
 	return func(opts *Options) {
 		opts.EnableParallelTools = enable
+	}
+}
+
+// WithTemporarySubtasks gives the agent the built-in `subtask` tool for
+// ephemeral call-return delegation: run a sub-task in an isolated context,
+// result returns to the parent agent.
+//
+// Examples:
+//
+//	llmagent.WithTemporarySubtasks()                              // defaults
+//	llmagent.WithTemporarySubtasks(spawn.WithSubtaskName("sub"))   // custom name
+func WithTemporarySubtasks(opts ...toolspawn.SubtaskOption) Option {
+	return func(o *Options) {
+		o.TemporarySubtasks = true
+		o.subtaskToolOptions = opts
 	}
 }
 
