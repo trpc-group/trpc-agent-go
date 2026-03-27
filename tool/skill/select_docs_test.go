@@ -363,24 +363,44 @@ func TestSelectDocsTool_ContextAwareRepoHonorsFilter(t *testing.T) {
 				ctx,
 				"user_id",
 			)
-			return userID == "user-a" && summary.Name == demoSkill
+			if userID == "user-a" {
+				return summary.Name == demoSkill
+			}
+			return summary.Name == otherSkill
 		},
 	)
 	sd := NewSelectDocsTool(repo)
-	ctx := agent.NewInvocationContext(
+	ctxA := agent.NewInvocationContext(
 		context.Background(),
 		agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
 			RuntimeState: map[string]any{"user_id": "user-a"},
 		})),
 	)
 
-	_, err = sd.Call(ctx, []byte(
+	_, err = sd.Call(ctxA, []byte(
 		`{"skill":"`+demoSkill+`","docs":["`+usageDoc+`"]}`,
 	))
 	require.NoError(t, err)
 
-	_, err = sd.Call(ctx, []byte(
+	_, err = sd.Call(ctxA, []byte(
 		`{"skill":"`+otherSkill+`","docs":["`+usageDoc+`"]}`,
 	))
 	require.ErrorContains(t, err, "unknown skill: "+otherSkill)
+
+	ctxB := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-b"},
+		})),
+	)
+
+	_, err = sd.Call(ctxB, []byte(
+		`{"skill":"`+otherSkill+`","docs":["`+usageDoc+`"]}`,
+	))
+	require.NoError(t, err)
+
+	_, err = sd.Call(ctxB, []byte(
+		`{"skill":"`+demoSkill+`","docs":["`+usageDoc+`"]}`,
+	))
+	require.ErrorContains(t, err, "unknown skill: "+demoSkill)
 }

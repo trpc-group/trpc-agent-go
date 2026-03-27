@@ -1418,6 +1418,61 @@ func TestSkillsToolResultRequestProcessor_FallbackSkipsHiddenSkills(
 	}
 }
 
+func TestSkillsToolResultRequestProcessor_FallbackSystemMessageIncludesSelectedDocs(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {
+				Summary: skill.Summary{Name: "calc"},
+				Docs: []skill.Doc{{
+					Path:    "USAGE.md",
+					Content: "use me",
+				}},
+			},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.DocsKey("tester", "calc"):   []byte(`["USAGE.md"]`),
+			},
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	var found bool
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(m.Content, skillsLoadedContextHeader) {
+			found = true
+			require.Contains(t, m.Content, "Docs loaded: USAGE.md")
+			require.Contains(t, m.Content, "[Doc] USAGE.md")
+			require.Contains(t, m.Content, "use me")
+		}
+	}
+	require.True(t, found)
+}
+
 func TestSkillsToolResultRequestProcessor_SessionSummary_DisablesFallbackWithoutCompactionSignal(
 	t *testing.T,
 ) {
