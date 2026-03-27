@@ -31,10 +31,7 @@ type Plugin struct {
 }
 
 // New creates a new approval plugin.
-func New(reviewer review.Reviewer, options ...Option) (*Plugin, error) {
-	if reviewer == nil {
-		return nil, fmt.Errorf("newing approval plugin: reviewer is nil")
-	}
+func New(options ...Option) (*Plugin, error) {
 	opts := newOptions(options...)
 	if err := validateToolPolicy(opts.defaultToolPolicy); err != nil {
 		return nil, fmt.Errorf("newing approval plugin: default tool policy: %w", err)
@@ -47,9 +44,12 @@ func New(reviewer review.Reviewer, options ...Option) (*Plugin, error) {
 			return nil, fmt.Errorf("newing approval plugin: tool %q policy: %w", toolName, err)
 		}
 	}
+	if requiresReviewer(opts) && opts.reviewer == nil {
+		return nil, fmt.Errorf("newing approval plugin: reviewer is nil")
+	}
 	return &Plugin{
 		name:              opts.name,
-		reviewer:          reviewer,
+		reviewer:          opts.reviewer,
 		defaultToolPolicy: opts.defaultToolPolicy,
 		toolPolicies:      opts.toolPolicies,
 		tokenCounter:      model.NewSimpleTokenCounter(),
@@ -152,4 +152,16 @@ func (p *Plugin) resolveToolPolicy(toolName string) ToolPolicy {
 		return policy
 	}
 	return p.defaultToolPolicy
+}
+
+func requiresReviewer(opts *options) bool {
+	if opts.defaultToolPolicy == ToolPolicyRequireApproval {
+		return true
+	}
+	for _, policy := range opts.toolPolicies {
+		if policy == ToolPolicyRequireApproval {
+			return true
+		}
+	}
+	return false
 }

@@ -15,7 +15,7 @@ This example shows how to wire the top-level `guardrail` plugin with the built-i
 
 ## Prerequisites
 
-- Go 1.24 or later
+- Go 1.21 or later
 - A valid OpenAI-compatible API key
 
 ## Environment Variables
