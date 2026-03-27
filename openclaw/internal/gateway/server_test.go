@@ -41,8 +41,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
+const testTimeout = 2 * time.Second
+
 const (
-	testTimeout   = 2 * time.Second
 	testShortWait = 100 * time.Millisecond
 
 	debugEventsFile     = "events.jsonl"
@@ -1459,10 +1460,8 @@ func TestServer_ProcessMessage_RunOptionResolver(t *testing.T) {
 
 	type ctxKey string
 
-	const (
-		resolverKey ctxKey = "resolver"
-		resolverTag        = "langfuse"
-	)
+	const resolverKey ctxKey = "resolver"
+	const resolverTag = "langfuse"
 
 	runner := &resolvingRunner{}
 	srv, err := New(
@@ -2400,7 +2399,7 @@ func TestServer_ProcessMessage_NilServer(t *testing.T) {
 	t.Parallel()
 
 	var srv *Server
-	rsp, status := srv.ProcessMessage(nil, gwproto.MessageRequest{})
+	rsp, status := srv.ProcessMessage(context.TODO(), gwproto.MessageRequest{})
 	require.Equal(t, http.StatusInternalServerError, status)
 	require.NotNil(t, rsp.Error)
 	require.Equal(t, errTypeInternal, rsp.Error.Type)
@@ -2479,7 +2478,7 @@ func TestServer_CancelRequest_NilContext(t *testing.T) {
 	srv, err := New(r)
 	require.NoError(t, err)
 
-	canceled, apiErr, status := srv.CancelRequest(nil, "req-1")
+	canceled, apiErr, status := srv.CancelRequest(context.TODO(), "req-1")
 	require.True(t, canceled)
 	require.Nil(t, apiErr)
 	require.Equal(t, http.StatusOK, status)
@@ -3564,7 +3563,7 @@ func TestServer_StreamMessage_EarlyResponses(t *testing.T) {
 
 	var nilSrv *Server
 	stream, apiErr, status := nilSrv.StreamMessage(
-		nil,
+		context.TODO(),
 		gwproto.MessageRequest{},
 	)
 	require.Nil(t, stream)
@@ -3904,7 +3903,7 @@ func TestSendProgressUpdateAndHelpers(t *testing.T) {
 		),
 	)
 	require.Len(t, collected, 2)
-	require.Equal(t, "stream canceled", contextErrMessage(nil))
+	require.Equal(t, "stream canceled", contextErrMessage(context.Background()))
 	require.Equal(
 		t,
 		context.Canceled.Error(),
