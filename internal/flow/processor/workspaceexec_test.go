@@ -18,7 +18,22 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
+
+type workspaceExecStubRepo struct{}
+
+func (workspaceExecStubRepo) Summaries() []skill.Summary {
+	return nil
+}
+
+func (workspaceExecStubRepo) Get(string) (*skill.Skill, error) {
+	return nil, nil
+}
+
+func (workspaceExecStubRepo) Path(string) (string, error) {
+	return "", nil
+}
 
 func TestWorkspaceExecRequestProcessor_ProcessRequest_NoSkillsRepo(
 	t *testing.T,
@@ -96,4 +111,51 @@ func TestWorkspaceExecRequestProcessor_NoDuplicateGuidance(t *testing.T) {
 
 	require.Len(t, req.Messages, 1)
 	require.Equal(t, 1, strings.Count(req.Messages[0].Content, workspaceExecGuidanceHeader))
+}
+
+func TestWorkspaceExecRequestProcessor_ProcessRequest_UsesSkillsRepoResolver(
+	t *testing.T,
+) {
+	p := NewWorkspaceExecRequestProcessor(
+		WithWorkspaceExecSkillsRepositoryResolver(
+			func(*agent.Invocation) skill.Repository {
+				return workspaceExecStubRepo{}
+			},
+		),
+	)
+	req := &model.Request{}
+
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{AgentName: "tester"},
+		req,
+		nil,
+	)
+
+	require.NotEmpty(t, req.Messages)
+	require.Contains(t, req.Messages[0].Content, "Paths under skills/")
+}
+
+func TestWorkspaceExecRequestProcessor_ProcessRequest_ResolverCanDisableSkillsGuidance(
+	t *testing.T,
+) {
+	p := NewWorkspaceExecRequestProcessor(
+		WithWorkspaceExecSkillsRepo(),
+		WithWorkspaceExecSkillsRepositoryResolver(
+			func(*agent.Invocation) skill.Repository {
+				return nil
+			},
+		),
+	)
+	req := &model.Request{}
+
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{AgentName: "tester"},
+		req,
+		nil,
+	)
+
+	require.NotEmpty(t, req.Messages)
+	require.NotContains(t, req.Messages[0].Content, "Paths under skills/")
 }

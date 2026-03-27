@@ -1525,6 +1525,7 @@ func TestSkillsToolResultRequestProcessor_BuildToolResultContent_Base(
 	out, ok := p.buildToolResultContent(
 		context.Background(),
 		nil,
+		repo,
 		"calc",
 		"ok",
 	)
@@ -1786,10 +1787,135 @@ func TestSkillsToolResultRequestProcessor_GetDocsSelection_InvalidJSON(
 		},
 	}
 	p := NewSkillsToolResultRequestProcessor(repo)
-	require.Empty(t, p.getDocsSelection(inv, "calc"))
+	require.Empty(t, p.getDocsSelection(inv, repo, "calc"))
 
 	inv.Session.SetState(skill.DocsKey("tester", "missing"), []byte("*"))
-	require.Empty(t, p.getDocsSelection(inv, "missing"))
+	require.Empty(t, p.getDocsSelection(inv, repo, "missing"))
+}
+
+func TestSkillsToolResultRequestProcessor_RepositoryResolver_MaterializesToolResult(
+	t *testing.T,
+) {
+	dynamicRepo := &mockRepo{
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "Dynamic body"},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+	args, err := json.Marshal(skillNameInput{Skill: "calc"})
+	require.NoError(t, err)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "tc1",
+					Function: model.FunctionDefinitionParam{
+						Name:      skillToolLoad,
+						Arguments: args,
+					},
+				}},
+			},
+			{
+				Role:     model.RoleTool,
+				ToolName: skillToolLoad,
+				ToolID:   "tc1",
+				Content:  loadedPrefix + " calc",
+			},
+		},
+	}
+	p := NewSkillsToolResultRequestProcessor(
+		nil,
+		WithSkillsToolResultRepositoryResolver(
+			func(*agent.Invocation) skill.Repository {
+				return dynamicRepo
+			},
+		),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.Contains(t, req.Messages[2].Content, "[Loaded] calc")
+	require.Contains(t, req.Messages[2].Content, "Dynamic body")
+}
+
+func TestSkillsToolResultRequestProcessor_RepositoryResolver_CanDisableStaticRepository(
+	t *testing.T,
+) {
+	staticRepo := &mockRepo{
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "Static body"},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+	args, err := json.Marshal(skillNameInput{Skill: "calc"})
+	require.NoError(t, err)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "tc1",
+					Function: model.FunctionDefinitionParam{
+						Name:      skillToolLoad,
+						Arguments: args,
+					},
+				}},
+			},
+			{
+				Role:     model.RoleTool,
+				ToolName: skillToolLoad,
+				ToolID:   "tc1",
+				Content:  loadedPrefix + " calc",
+			},
+		},
+	}
+	p := NewSkillsToolResultRequestProcessor(
+		staticRepo,
+		WithSkillsToolResultRepositoryResolver(
+			func(*agent.Invocation) skill.Repository {
+				return nil
+			},
+		),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.Equal(t, loadedPrefix+" calc", req.Messages[2].Content)
+	require.Equal(t, -1, findLoadedContextMessageIndex(req.Messages))
+}
+
+func TestSkillsToolResultRequestProcessor_RepositoryResolver_DoesNotPanicOnNilInvocation(
+	t *testing.T,
+) {
+	p := NewSkillsToolResultRequestProcessor(
+		nil,
+		WithSkillsToolResultRepositoryResolver(
+			func(inv *agent.Invocation) skill.Repository {
+				require.Nil(t, inv)
+				return nil
+			},
+		),
+	)
+	require.NotPanics(t, func() {
+		p.ProcessRequest(context.Background(), nil, &model.Request{}, nil)
+	})
 }
 
 func TestBuildDocsText_SkipsEmptyAndUnwanted(t *testing.T) {

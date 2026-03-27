@@ -36,6 +36,7 @@ import (
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
@@ -215,39 +216,29 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 
 	// 3. Instruction processor - adds instruction content and system prompt.
-	if hasStaticInstructionProcessor(options) {
-		instructionOpts := []processor.InstructionRequestProcessorOption{
-			processor.WithOutputSchema(options.OutputSchema),
-		}
-		// Fallback injection for structured output when the provider doesn't enforce JSON Schema natively.
-		if options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil {
-			instructionOpts = append(instructionOpts,
-				processor.WithStructuredOutputSchema(options.StructuredOutput.JSONSchema.Schema),
-			)
-		}
+	instructionOpts := []processor.InstructionRequestProcessorOption{
+		processor.WithOutputSchema(options.OutputSchema),
+	}
+	// Fallback injection for structured output when the provider doesn't enforce JSON Schema natively.
+	if options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil {
 		instructionOpts = append(instructionOpts,
-			processor.WithInstructionResolver(
-				a.instructionForInvocation,
-			),
-			processor.WithSystemPromptResolver(
-				a.systemPromptForInvocation,
-			),
-		)
-		instructionProcessor := processor.NewInstructionRequestProcessor(
-			"", // static value unused when resolver is present
-			"", // static value unused when resolver is present
-			instructionOpts...,
-		)
-		requestProcessors = append(requestProcessors, instructionProcessor)
-	} else {
-		requestProcessors = append(
-			requestProcessors,
-			processor.NewConditionalRequestProcessor(
-				hasInvocationStructuredOutput,
-				processor.NewInstructionRequestProcessor("", ""),
-			),
+			processor.WithStructuredOutputSchema(options.StructuredOutput.JSONSchema.Schema),
 		)
 	}
+	instructionOpts = append(instructionOpts,
+		processor.WithInstructionResolver(
+			a.instructionForInvocation,
+		),
+		processor.WithSystemPromptResolver(
+			a.systemPromptForInvocation,
+		),
+	)
+	instructionProcessor := processor.NewInstructionRequestProcessor(
+		"", // static value unused when resolver is present
+		"", // static value unused when resolver is present
+		instructionOpts...,
+	)
+	requestProcessors = append(requestProcessors, instructionProcessor)
 
 	// 4. Identity processor - sets agent identity.
 	if a.name != "" || options.Description != "" {
@@ -263,49 +254,50 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	// when a skills repository is configured. This ensures the model
 	// sees available skills (names/descriptions) and any loaded
 	// SKILL.md/doc texts before deciding on tool calls.
-	if options.skillsRepository != nil {
-		var skillsOpts []processor.SkillsRequestProcessorOption
-		if options.skillsToolingGuidance != nil {
-			skillsOpts = append(
-				skillsOpts,
-				processor.WithSkillsToolingGuidance(
-					*options.skillsToolingGuidance,
-				),
-			)
-		}
+	var skillsOpts []processor.SkillsRequestProcessorOption
+	if options.skillsToolingGuidance != nil {
 		skillsOpts = append(
 			skillsOpts,
-			processor.WithSkillLoadMode(options.SkillLoadMode),
-			processor.WithSkillToolProfile(
-				skillprofile.Normalize(options.skillToolProfile),
+			processor.WithSkillsToolingGuidance(
+				*options.skillsToolingGuidance,
 			),
 		)
-		if options.MaxLoadedSkills > 0 {
-			skillsOpts = append(
-				skillsOpts,
-				processor.WithMaxLoadedSkills(
-					options.MaxLoadedSkills,
-				),
-			)
-		}
-		if options.SkillsLoadedContentInToolResults {
-			skillsOpts = append(
-				skillsOpts,
-				processor.WithSkillsLoadedContentInToolResults(true),
-			)
-		}
-		if !executorSupportsInteractive(options) {
-			skillsOpts = append(
-				skillsOpts,
-				processor.WithSkillExecToolsDisabled(),
-			)
-		}
-		skillsProcessor := processor.NewSkillsRequestProcessor(
-			options.skillsRepository,
-			skillsOpts...,
-		)
-		requestProcessors = append(requestProcessors, skillsProcessor)
 	}
+	skillsOpts = append(
+		skillsOpts,
+		processor.WithSkillsRepositoryResolver(
+			a.skillRepositoryForInvocation,
+		),
+		processor.WithSkillLoadMode(options.SkillLoadMode),
+		processor.WithSkillToolProfile(
+			skillprofile.Normalize(options.skillToolProfile),
+		),
+	)
+	if options.MaxLoadedSkills > 0 {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithMaxLoadedSkills(
+				options.MaxLoadedSkills,
+			),
+		)
+	}
+	if options.SkillsLoadedContentInToolResults {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillsLoadedContentInToolResults(true),
+		)
+	}
+	if !executorSupportsInteractive(options) {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillExecToolsDisabled(),
+		)
+	}
+	skillsProcessor := processor.NewSkillsRequestProcessor(
+		options.skillsRepository,
+		skillsOpts...,
+	)
+	requestProcessors = append(requestProcessors, skillsProcessor)
 
 	// 6. Workspace exec processor - injects executor/workspace guidance
 	// whenever workspace_exec is registered, even without a skills repo.
@@ -317,12 +309,12 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 				processor.WithWorkspaceExecSessionsEnabled(),
 			)
 		}
-		if options.skillsRepository != nil {
-			workspaceOpts = append(
-				workspaceOpts,
-				processor.WithWorkspaceExecSkillsRepo(),
-			)
-		}
+		workspaceOpts = append(
+			workspaceOpts,
+			processor.WithWorkspaceExecSkillsRepositoryResolver(
+				a.skillRepositoryForInvocation,
+			),
+		)
 		requestProcessors = append(
 			requestProcessors,
 			processor.NewWorkspaceExecRequestProcessor(workspaceOpts...),
@@ -338,6 +330,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
 		processor.WithPreloadMemory(options.PreloadMemory),
+		processor.WithFewShotResolver(a.fewShotForInvocation),
 	}
 	if options.ReasoningContentMode != "" {
 		contentOpts = append(contentOpts,
@@ -355,7 +348,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 
 	// 9. Skills tool result processor - materializes loaded skill content
 	// into tool result messages.
-	requestProcessors = appendSkillsToolResultProcessor(options, requestProcessors)
+	requestProcessors = appendSkillsToolResultProcessor(a, options, requestProcessors)
 
 	// 10. Time processor - adds current time information if enabled.
 	// Moved after content processor to avoid invalidating system message cache.
@@ -364,15 +357,6 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	requestProcessors = appendTimeProcessor(options, requestProcessors)
 
 	return requestProcessors
-}
-
-func hasStaticInstructionProcessor(options *Options) bool {
-	return options.Instruction != "" ||
-		options.GlobalInstruction != "" ||
-		len(options.ModelInstructions) > 0 ||
-		len(options.ModelGlobalInstructions) > 0 ||
-		options.OutputSchema != nil ||
-		(options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil)
 }
 
 func hasStaticOutputResponseProcessor(options *Options) bool {
@@ -403,14 +387,16 @@ func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestP
 	return append(requestProcessors, postToolProcessor)
 }
 
-func appendSkillsToolResultProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
-	if options.skillsRepository == nil ||
-		!options.SkillsLoadedContentInToolResults {
+func appendSkillsToolResultProcessor(a *LLMAgent, options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+	if !options.SkillsLoadedContentInToolResults {
 		return requestProcessors
 	}
 	skillsToolResultProcessor :=
 		processor.NewSkillsToolResultRequestProcessor(
 			options.skillsRepository,
+			processor.WithSkillsToolResultRepositoryResolver(
+				a.skillRepositoryForInvocation,
+			),
 			processor.WithSkillsToolResultLoadMode(
 				options.SkillLoadMode,
 			),
@@ -439,9 +425,12 @@ func appendTimeProcessor(options *Options, requestProcessors []flow.RequestProce
 // this legacy function; use New() which wires the real agent for runtime getters.
 func buildRequestProcessors(name string, options *Options) []flow.RequestProcessor { // nolint:deadcode
 	dummy := &LLMAgent{
-		name:         name,
-		instruction:  options.Instruction,
-		systemPrompt: options.GlobalInstruction,
+		name:                    name,
+		instruction:             options.Instruction,
+		systemPrompt:            options.GlobalInstruction,
+		modelInstructions:       cloneStringMap(options.ModelInstructions),
+		modelGlobalInstructions: cloneStringMap(options.ModelGlobalInstructions),
+		option:                  *options,
 	}
 	return buildRequestProcessorsWithAgent(dummy, options)
 }
@@ -581,7 +570,23 @@ func appendSkillTools(
 	options *Options,
 	runTool *toolskill.RunTool,
 ) []tool.Tool {
-	if options.skillsRepository == nil {
+	return appendSkillToolsWithRepo(
+		allTools,
+		options,
+		options.skillsRepository,
+		nil,
+		runTool,
+	)
+}
+
+func appendSkillToolsWithRepo(
+	allTools []tool.Tool,
+	options *Options,
+	repo skill.Repository,
+	reg *codeexecutor.WorkspaceRegistry,
+	runTool *toolskill.RunTool,
+) []tool.Tool {
+	if repo == nil {
 		return allTools
 	}
 
@@ -589,19 +594,19 @@ func appendSkillTools(
 	if skillFlags.Load {
 		allTools = append(
 			allTools,
-			toolskill.NewLoadTool(options.skillsRepository),
+			toolskill.NewLoadTool(repo),
 		)
 	}
 	if skillFlags.SelectDocs {
 		allTools = append(
 			allTools,
-			toolskill.NewSelectDocsTool(options.skillsRepository),
+			toolskill.NewSelectDocsTool(repo),
 		)
 	}
 	if skillFlags.ListDocs {
 		allTools = append(
 			allTools,
-			toolskill.NewListDocsTool(options.skillsRepository),
+			toolskill.NewListDocsTool(repo),
 		)
 	}
 	if !skillFlags.RequiresExecutionTools() {
@@ -609,10 +614,7 @@ func appendSkillTools(
 	}
 
 	if runTool == nil {
-		runTool = buildSkillRunTool(
-			options,
-			buildWorkspaceRegistry(),
-		)
+		runTool = buildSkillRunToolWithRepo(options, repo, reg)
 	}
 	if skillFlags.Run {
 		allTools = append(allTools, runTool)
@@ -684,6 +686,18 @@ func buildSkillRunTool(
 	options *Options,
 	reg *codeexecutor.WorkspaceRegistry,
 ) *toolskill.RunTool {
+	return buildSkillRunToolWithRepo(
+		options,
+		options.skillsRepository,
+		reg,
+	)
+}
+
+func buildSkillRunToolWithRepo(
+	options *Options,
+	repo skill.Repository,
+	reg *codeexecutor.WorkspaceRegistry,
+) *toolskill.RunTool {
 	exec := options.codeExecutor
 	if exec == nil {
 		exec = defaultCodeExecutor()
@@ -726,7 +740,7 @@ func buildSkillRunTool(
 	}
 
 	return toolskill.NewRunTool(
-		options.skillsRepository,
+		repo,
 		exec,
 		runOpts...,
 	)
@@ -892,10 +906,16 @@ func (e *haveCustomResponseError) Error() string {
 
 // setupInvocation sets up the invocation
 func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
+	// Set agent identity before resolving node-scoped surfaces.
+	invocation.Agent = a
+	invocation.AgentName = a.name
+
 	// Set model: prioritize RunOptions.Model, then RunOptions.ModelName, then agent's default model.
 	a.mu.RLock()
-	// Check if a per-request model is specified.
-	if invocation.RunOptions.Model != nil {
+	if patchedModel, ok := a.modelSurfaceForInvocation(invocation); ok {
+		invocation.Model = patchedModel
+	} else if invocation.RunOptions.Model != nil {
+		// Check if a per-request model is specified.
 		// Use the model directly from RunOptions.
 		invocation.Model = invocation.RunOptions.Model
 	} else if invocation.RunOptions.ModelName != "" {
@@ -912,10 +932,6 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 		invocation.Model = a.model
 	}
 	a.mu.RUnlock()
-
-	// Set agent and agent name
-	invocation.Agent = a
-	invocation.AgentName = a.name
 
 	// Lift run-scoped structured output into the current invocation once.
 	if invocation.StructuredOutput == nil {
@@ -1399,6 +1415,14 @@ func (a *LLMAgent) getSystemPrompt() string {
 }
 
 func (a *LLMAgent) instructionForInvocation(inv *agent.Invocation) string {
+	if patch, ok := a.rootSurfacePatch(inv); ok {
+		if instruction, ok := patch.Instruction(); ok {
+			return instruction
+		}
+	}
+	if inv != nil && inv.RunOptions.Instruction != "" {
+		return inv.RunOptions.Instruction
+	}
 	modelName := ""
 	if inv != nil && inv.Model != nil {
 		modelName = inv.Model.Info().Name
@@ -1416,6 +1440,14 @@ func (a *LLMAgent) instructionForInvocation(inv *agent.Invocation) string {
 }
 
 func (a *LLMAgent) systemPromptForInvocation(inv *agent.Invocation) string {
+	if patch, ok := a.rootSurfacePatch(inv); ok {
+		if prompt, ok := patch.GlobalInstruction(); ok {
+			return prompt
+		}
+	}
+	if inv != nil && inv.RunOptions.GlobalInstruction != "" {
+		return inv.RunOptions.GlobalInstruction
+	}
 	modelName := ""
 	if inv != nil && inv.Model != nil {
 		modelName = inv.Model.Info().Name

@@ -1168,6 +1168,160 @@ fmt.Println(len(snapshot.Nodes), len(snapshot.Edges), len(snapshot.Surfaces))
 
 完整示例见 [examples/graph/structure_export](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/structure_export)。
 
+## 按 `nodeID` 覆盖运行时 surface
+
+除了 `agent.WithInstruction(...)`、`agent.WithGlobalInstruction(...)` 这种“整次
+`runner.Run(...)` 调用级”的覆盖方式之外，框架还支持在一次运行中按稳定
+`nodeID` 精确覆盖指定节点的运行时 surface。
+
+这个能力适合这些场景：
+
+- 只想临时改某个 graph 节点的指令，不影响整棵 Agent。
+- 同一次 `runner.Run(...)` 里，同时给多个节点设置不同的 instruction、few-shot 或 tools。
+- 在 `chain`、`parallel`、`cycle`、`graph`、`team`、`swarm` 等嵌套结构中，精确命中某个子节点。
+
+入口 API：
+
+```go
+var patch agent.SurfacePatch
+patch.SetInstruction("Answer in one short paragraph.")
+patch.SetFewShot([][]model.Message{
+    {
+        model.NewUserMessage("Summarize this report."),
+        model.NewAssistantMessage("Provide a short executive summary first."),
+    },
+})
+
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Please analyze the latest findings."),
+    agent.WithSurfacePatchForNode(nodeID, patch),
+)
+```
+
+### 使用步骤
+
+推荐按下面的顺序使用：
+
+1. 先通过 `structure.Export(...)` 导出静态结构快照。
+2. 从 `snapshot.EntryNodeID` 或 `snapshot.Nodes` 中找到目标节点的稳定 `nodeID`。
+3. 构造 `agent.SurfacePatch`，只设置这次运行需要覆盖的 surface。
+4. 在 `runner.Run(...)` 中传入一个或多个 `agent.WithSurfacePatchForNode(...)`。
+
+示例：
+
+```go
+snapshot, err := structure.Export(ctx, workflowAgent)
+if err != nil {
+    return err
+}
+
+var plannerNodeID string
+for _, node := range snapshot.Nodes {
+    if node.Name == "planner" {
+        plannerNodeID = node.NodeID
+        break
+    }
+}
+if plannerNodeID == "" {
+    return errors.New("planner node not found")
+}
+
+var patch agent.SurfacePatch
+patch.SetInstruction("Plan in at most three steps.")
+
+_, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Arrange a trip to Hangzhou next Friday."),
+    agent.WithSurfacePatchForNode(plannerNodeID, patch),
+)
+```
+
+注意事项：
+
+- 调用方应优先使用 `structure.Export(...)` 导出的 `nodeID`，不要依赖手写路径。
+- 这个能力只对当前这一次 `runner.Run(...)` 生效，不会修改 Agent 的静态定义。
+- `agent.WithInstruction(...)` / `agent.WithGlobalInstruction(...)` 仍然保留，适合“整次运行统一覆盖根 Agent 提示词”的场景；需要按节点精确控制时，再使用 `WithSurfacePatchForNode(...)`。
+
+### 可覆盖的 surface
+
+`SurfacePatch` 目前提供这些 setter：
+
+- `SetInstruction(string)`：覆盖该节点本次运行的 instruction。
+- `SetGlobalInstruction(string)`：覆盖该节点本次运行的 global instruction。
+- `SetFewShot([][]model.Message)`：覆盖该节点本次运行的 few-shot 示例。
+- `SetModel(model.Model)`：覆盖该节点本次运行使用的模型实例。
+- `SetTools([]tool.Tool)`：覆盖该节点本次运行的工具 surface。它表达的是“替换本次运行可见的工具集合”，不是只改工具描述文本。
+- `SetSkillRepository(skill.Repository)`：覆盖该节点本次运行的 skill repository；传 `nil` 可显式禁用该节点的 skill surface。
+
+不是每种节点都支持全部 surface，常见情况如下：
+
+- 根 `LLMAgent`：支持 `instruction`、`global_instruction`、`few_shot`、`model`、`tool`、`skill`。
+- graph 的 LLM 节点：支持 `instruction`、`few_shot`、`model`、`tool`。
+- graph 的 Tools 节点：支持 `tool`。
+- graph 子 Agent、`chain`、`parallel`、`cycle`、`team`、`swarm` 中的子节点：是否可覆盖，取决于命中的那个具体子节点本身支持哪些 surface。
+
+### 在同一次运行中覆盖多个节点
+
+如果要在同一次 `runner.Run(...)` 里同时覆盖多个节点，直接重复传多个
+`agent.WithSurfacePatchForNode(...)` 即可，不需要额外的批量 API。
+
+```go
+snapshot, err := structure.Export(ctx, workflowAgent)
+if err != nil {
+    return err
+}
+
+nodeIDs := make(map[string]string)
+for _, node := range snapshot.Nodes {
+    nodeIDs[node.Name] = node.NodeID
+}
+
+var plannerPatch agent.SurfacePatch
+plannerPatch.SetInstruction("Produce no more than three candidate plans.")
+
+var reviewerPatch agent.SurfacePatch
+reviewerPatch.SetInstruction("Reject any plan that lacks cost analysis.")
+
+var toolsPatch agent.SurfacePatch
+toolsPatch.SetTools([]tool.Tool{searchTool, priceTool})
+
+_, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Plan a team offsite in Suzhou next month."),
+    agent.WithSurfacePatchForNode(nodeIDs["planner"], plannerPatch),
+    agent.WithSurfacePatchForNode(nodeIDs["reviewer"], reviewerPatch),
+    agent.WithSurfacePatchForNode(nodeIDs["search_tools"], toolsPatch),
+)
+```
+
+对同一 `nodeID` 多次传 `WithSurfacePatchForNode(...)` 时，框架会按 surface 类型合并：
+
+- 不同 surface 类型彼此合并。
+- 同一种 surface 类型后传入的值覆盖先传入的值。
+
+### 组合结构与嵌套结构
+
+这套能力不只适用于单个 `LLMAgent`。在这些结构里也建议使用同样的方法：
+
+- `graph`：可覆盖图中的 LLM 节点、Tools 节点，以及图中挂载的子 Agent 根节点。
+- `chain`、`parallel`、`cycle`：可覆盖任意导出出来的子节点。
+- `team` / `swarm`：可覆盖 `coordinator`、成员节点，以及 transfer 后到达的成员节点。
+
+在这些场景里，最稳妥的做法仍然是：
+
+- 先 `structure.Export(...)`
+- 再使用导出的 `nodeID`
+- 最后在 `runner.Run(...)` 中传入 patch
+
+这样用户只需要记住一套规则：`nodeID` 由结构导出提供，运行时 patch 由 `WithSurfacePatchForNode(...)` 提供。
+
 ## 执行图导出
 
 框架可以为单次 `runner.Run` 调用导出执行图，用来观察这次运行里哪些节点真的执行了、各个步骤之间如何依赖，以及每个步骤看到的输入和输出快照。

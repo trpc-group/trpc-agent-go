@@ -13,6 +13,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +30,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/parallelagent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -36,6 +42,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -4841,4 +4848,1250 @@ func TestRunEventLoop_HandleFlushRequestError(t *testing.T) {
 	loop.flushChan <- &flush.FlushRequest{ACK: make(chan struct{})}
 
 	<-done
+}
+
+const runnerSurfaceSkillsOverviewHeader = "Available skills:"
+
+type surfaceCapturedRequest struct {
+	messages  []model.Message
+	toolNames []string
+}
+
+type scriptedSurfaceModel struct {
+	name      string
+	responses []model.Message
+	mu        sync.Mutex
+	requests  []*surfaceCapturedRequest
+}
+
+func (m *scriptedSurfaceModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	callIndex := len(m.requests)
+	m.requests = append(m.requests, cloneSurfaceCapturedRequest(req))
+	response := model.NewAssistantMessage("")
+	if len(m.responses) > 0 {
+		if callIndex < len(m.responses) {
+			response = cloneSurfaceMessage(m.responses[callIndex])
+		} else {
+			response = cloneSurfaceMessage(m.responses[len(m.responses)-1])
+		}
+	}
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		ID:        fmt.Sprintf("%s%s-%d", staticModelResponseIDPrefix, m.name, callIndex),
+		Done:      true,
+		IsPartial: false,
+		Choices: []model.Choice{{
+			Index:   0,
+			Message: response,
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *scriptedSurfaceModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *scriptedSurfaceModel) RequestCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.requests)
+}
+
+func (m *scriptedSurfaceModel) LatestRequest() *surfaceCapturedRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.requests) == 0 {
+		return nil
+	}
+	return cloneSurfaceCapturedRequestValue(m.requests[len(m.requests)-1])
+}
+
+func (m *scriptedSurfaceModel) Requests() []*surfaceCapturedRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]*surfaceCapturedRequest, 0, len(m.requests))
+	for _, req := range m.requests {
+		out = append(out, cloneSurfaceCapturedRequestValue(req))
+	}
+	return out
+}
+
+type callCountingTool struct {
+	name   string
+	result string
+	mu     sync.Mutex
+	calls  int
+}
+
+func (t *callCountingTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        t.name,
+		Description: "Call counting tool.",
+		InputSchema: &tool.Schema{
+			Type: "object",
+		},
+		OutputSchema: &tool.Schema{
+			Type: "string",
+		},
+	}
+}
+
+func (t *callCountingTool) Call(_ context.Context, _ []byte) (any, error) {
+	t.mu.Lock()
+	t.calls++
+	t.mu.Unlock()
+	return t.result, nil
+}
+
+func (t *callCountingTool) Calls() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.calls
+}
+
+func TestRunner_Run_WithSurfacePatchForNode_AppliesAllRootLLMSurfaces(
+	t *testing.T,
+) {
+	staticModel := &scriptedSurfaceModel{
+		name:      "root-static",
+		responses: []model.Message{model.NewAssistantMessage("static root")},
+	}
+	patchedModel := &scriptedSurfaceModel{
+		name:      "root-patched",
+		responses: []model.Message{model.NewAssistantMessage("patched root")},
+	}
+	ag := llmagent.New(
+		"assistant",
+		llmagent.WithModel(staticModel),
+		llmagent.WithInstruction("static instruction"),
+		llmagent.WithGlobalInstruction("static global"),
+		llmagent.WithTools([]tool.Tool{
+			&callCountingTool{name: "old_tool", result: "old"},
+		}),
+	)
+	snapshot := mustExportSnapshot(t, ag)
+	repo := createRunnerTestSkillRepository(t)
+	var patch agent.SurfacePatch
+	patch.SetInstruction("patched instruction")
+	patch.SetGlobalInstruction("patched global")
+	patch.SetFewShot([][]model.Message{{
+		model.NewUserMessage("few-shot user"),
+		model.NewAssistantMessage("few-shot assistant"),
+	}})
+	patch.SetModel(patchedModel)
+	patch.SetTools([]tool.Tool{
+		&callCountingTool{name: "new_tool", result: "new"},
+	})
+	patch.SetSkillRepository(repo)
+	r := NewRunner(
+		"app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-root",
+		"session-root",
+		model.NewUserMessage("actual user"),
+		agent.WithSurfacePatchForNode(snapshot.EntryNodeID, patch),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.Response)
+	require.Zero(t, staticModel.RequestCount())
+	require.Equal(t, 1, patchedModel.RequestCount())
+	request := patchedModel.LatestRequest()
+	require.NotNil(t, request)
+	require.GreaterOrEqual(t, len(request.messages), 4)
+	system := firstSystemMessageContent(request.messages)
+	require.Contains(t, system, "patched instruction")
+	require.Contains(t, system, "patched global")
+	require.Contains(t, system, runnerSurfaceSkillsOverviewHeader)
+	require.Contains(t, system, "echoer")
+	require.NotContains(t, system, "static instruction")
+	require.NotContains(t, system, "static global")
+	require.Equal(t, "few-shot user", request.messages[1].Content)
+	require.Equal(t, "few-shot assistant", request.messages[2].Content)
+	require.Equal(t, "actual user", request.messages[3].Content)
+	require.Contains(t, request.toolNames, "new_tool")
+	require.Contains(t, request.toolNames, "skill_load")
+	require.NotContains(t, request.toolNames, "old_tool")
+}
+
+func TestRunner_Run_WithSurfacePatchForNode_AppliesDeepNestedWorkflowPatches(
+	t *testing.T,
+) {
+	startModel := &scriptedSurfaceModel{
+		name:      "workflow-start",
+		responses: []model.Message{model.NewAssistantMessage("start")},
+	}
+	plannerStatic := &scriptedSurfaceModel{
+		name:      "workflow-planner-static",
+		responses: []model.Message{model.NewAssistantMessage("planner static")},
+	}
+	plannerPatched := &scriptedSurfaceModel{
+		name:      "workflow-planner-patched",
+		responses: []model.Message{model.NewAssistantMessage("planner patched")},
+	}
+	workerStatic := &scriptedSurfaceModel{
+		name:      "workflow-worker-static",
+		responses: []model.Message{model.NewAssistantMessage("worker static")},
+	}
+	workerPatched := &scriptedSurfaceModel{
+		name: "workflow-worker-patched",
+		responses: []model.Message{
+			model.NewAssistantMessage("worker patched first"),
+			model.NewAssistantMessage("worker patched second"),
+		},
+	}
+	endModel := &scriptedSurfaceModel{
+		name:      "workflow-end",
+		responses: []model.Message{model.NewAssistantMessage("workflow end")},
+	}
+	worker := llmagent.New(
+		"worker",
+		llmagent.WithModel(workerStatic),
+		llmagent.WithInstruction("worker static instruction"),
+	)
+	cycle := cycleagent.New(
+		"cycle",
+		cycleagent.WithMaxIterations(2),
+		cycleagent.WithSubAgents([]agent.Agent{worker}),
+	)
+	planner := llmagent.New(
+		"planner",
+		llmagent.WithModel(plannerStatic),
+		llmagent.WithInstruction("planner static instruction"),
+	)
+	fanout := parallelagent.New(
+		"fanout",
+		parallelagent.WithSubAgents([]agent.Agent{planner, cycle}),
+	)
+	workflow := chainagent.New(
+		"workflow",
+		chainagent.WithSubAgents([]agent.Agent{
+			llmagent.New(
+				"start",
+				llmagent.WithModel(startModel),
+				llmagent.WithInstruction("start static instruction"),
+			),
+			fanout,
+			llmagent.New("end", llmagent.WithModel(endModel)),
+		}),
+	)
+	snapshot := mustExportSnapshot(t, workflow)
+	startNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"start",
+		structure.NodeKindLLM,
+	)
+	plannerNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"planner",
+		structure.NodeKindLLM,
+	)
+	workerNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"worker",
+		structure.NodeKindLLM,
+	)
+	var startPatch agent.SurfacePatch
+	startPatch.SetInstruction("start patched instruction")
+	var plannerPatch agent.SurfacePatch
+	plannerPatch.SetInstruction("planner patched instruction")
+	plannerPatch.SetModel(plannerPatched)
+	var workerPatch agent.SurfacePatch
+	workerPatch.SetInstruction("worker patched instruction")
+	workerPatch.SetModel(workerPatched)
+	r := NewRunner(
+		"app",
+		workflow,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-workflow",
+		"session-workflow",
+		model.NewUserMessage("run workflow"),
+		agent.WithExecutionTraceEnabled(true),
+		agent.WithSurfacePatchForNode(startNodeID, startPatch),
+		agent.WithSurfacePatchForNode(plannerNodeID, plannerPatch),
+		agent.WithSurfacePatchForNode(workerNodeID, workerPatch),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.Response)
+	require.Equal(t, 1, startModel.RequestCount())
+	require.Contains(
+		t,
+		firstSystemMessageContent(startModel.LatestRequest().messages),
+		"start patched instruction",
+	)
+	require.Zero(t, plannerStatic.RequestCount())
+	require.Equal(t, 1, plannerPatched.RequestCount())
+	require.Contains(
+		t,
+		firstSystemMessageContent(plannerPatched.LatestRequest().messages),
+		"planner patched instruction",
+	)
+	require.Zero(t, workerStatic.RequestCount())
+	require.Equal(t, 2, workerPatched.RequestCount())
+	for _, request := range workerPatched.Requests() {
+		require.Contains(
+			t,
+			firstSystemMessageContent(request.messages),
+			"worker patched instruction",
+		)
+	}
+	require.NotNil(t, completion.ExecutionTrace)
+	traceCounts := countTraceStepsByNodeID(completion.ExecutionTrace.Steps)
+	require.Equal(t, 1, traceCounts[startNodeID])
+	require.Equal(t, 1, traceCounts[plannerNodeID])
+	require.Equal(t, 2, traceCounts[workerNodeID])
+}
+
+func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectChainChildPatch(
+	t *testing.T,
+) {
+	plannerStaticRepo := createNamedRunnerTestSkillRepository(
+		t,
+		"planner-static-skill",
+	)
+	plannerPatchedRepo := createNamedRunnerTestSkillRepository(
+		t,
+		"planner-patched-skill",
+	)
+	plannerStatic := &scriptedSurfaceModel{
+		name:      "chain-planner-static",
+		responses: []model.Message{model.NewAssistantMessage("planner static")},
+	}
+	plannerPatched := &scriptedSurfaceModel{
+		name:      "chain-planner-patched",
+		responses: []model.Message{model.NewAssistantMessage("planner patched")},
+	}
+	writerStatic := &scriptedSurfaceModel{
+		name:      "chain-writer-static",
+		responses: []model.Message{model.NewAssistantMessage("writer static")},
+	}
+	workflow := chainagent.New(
+		"workflow",
+		chainagent.WithSubAgents([]agent.Agent{
+			llmagent.New(
+				"planner",
+				llmagent.WithModel(plannerStatic),
+				llmagent.WithInstruction("planner static instruction"),
+				llmagent.WithGlobalInstruction("planner static global"),
+				llmagent.WithTools([]tool.Tool{
+					&callCountingTool{
+						name:   "planner_old_tool",
+						result: "planner old",
+					},
+				}),
+				llmagent.WithSkills(plannerStaticRepo),
+			),
+			llmagent.New(
+				"writer",
+				llmagent.WithModel(writerStatic),
+				llmagent.WithInstruction("writer static instruction"),
+				llmagent.WithGlobalInstruction("writer static global"),
+				llmagent.WithTools([]tool.Tool{
+					&callCountingTool{
+						name:   "writer_old_tool",
+						result: "writer old",
+					},
+				}),
+			),
+		}),
+	)
+	snapshot := mustExportSnapshot(t, workflow)
+	plannerNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"planner",
+		structure.NodeKindLLM,
+	)
+	writerNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"writer",
+		structure.NodeKindLLM,
+	)
+	var plannerPatch agent.SurfacePatch
+	plannerPatch.SetInstruction("planner patched instruction")
+	plannerPatch.SetGlobalInstruction("planner patched global")
+	plannerPatch.SetFewShot([][]model.Message{{
+		model.NewUserMessage("planner few-shot user"),
+		model.NewAssistantMessage("planner few-shot assistant"),
+	}})
+	plannerPatch.SetModel(plannerPatched)
+	plannerPatch.SetTools([]tool.Tool{
+		&callCountingTool{
+			name:   "planner_new_tool",
+			result: "planner new",
+		},
+	})
+	plannerPatch.SetSkillRepository(plannerPatchedRepo)
+	r := NewRunner(
+		"app",
+		workflow,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-chain",
+		"session-chain",
+		model.NewUserMessage("run chain"),
+		agent.WithExecutionTraceEnabled(true),
+		agent.WithSurfacePatchForNode(plannerNodeID, plannerPatch),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.Response)
+	require.Zero(t, plannerStatic.RequestCount())
+	require.Equal(t, 1, plannerPatched.RequestCount())
+	plannerRequest := plannerPatched.LatestRequest()
+	require.NotNil(t, plannerRequest)
+	require.GreaterOrEqual(t, len(plannerRequest.messages), 4)
+	plannerSystem := firstSystemMessageContent(plannerRequest.messages)
+	require.Contains(
+		t,
+		plannerSystem,
+		"planner patched instruction",
+	)
+	require.Contains(t, plannerSystem, "planner patched global")
+	require.Contains(t, plannerSystem, runnerSurfaceSkillsOverviewHeader)
+	require.Contains(t, plannerSystem, "planner-patched-skill")
+	require.NotContains(t, plannerSystem, "planner static instruction")
+	require.NotContains(t, plannerSystem, "planner static global")
+	require.NotContains(t, plannerSystem, "planner-static-skill")
+	require.Equal(t, "planner few-shot user", plannerRequest.messages[1].Content)
+	require.Equal(
+		t,
+		"planner few-shot assistant",
+		plannerRequest.messages[2].Content,
+	)
+	require.Equal(t, "run chain", plannerRequest.messages[3].Content)
+	require.Contains(t, plannerRequest.toolNames, "planner_new_tool")
+	require.Contains(t, plannerRequest.toolNames, "skill_load")
+	require.NotContains(t, plannerRequest.toolNames, "planner_old_tool")
+	require.Equal(t, 1, writerStatic.RequestCount())
+	writerRequest := writerStatic.LatestRequest()
+	require.NotNil(t, writerRequest)
+	writerSystem := firstSystemMessageContent(writerRequest.messages)
+	require.Contains(
+		t,
+		writerSystem,
+		"writer static instruction",
+	)
+	require.Contains(t, writerSystem, "writer static global")
+	require.NotContains(t, writerSystem, "planner patched instruction")
+	require.NotContains(t, writerSystem, "planner patched global")
+	require.NotContains(t, writerSystem, runnerSurfaceSkillsOverviewHeader)
+	require.Contains(t, writerRequest.toolNames, "writer_old_tool")
+	require.NotContains(t, writerRequest.toolNames, "planner_new_tool")
+	require.NotContains(t, writerRequest.toolNames, "skill_load")
+	require.NotNil(t, completion.ExecutionTrace)
+	traceCounts := countTraceStepsByNodeID(completion.ExecutionTrace.Steps)
+	require.Equal(t, 1, traceCounts[plannerNodeID])
+	require.Equal(t, 1, traceCounts[writerNodeID])
+}
+
+func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectParallelBranchPatches(
+	t *testing.T,
+) {
+	researcherStaticRepo := createNamedRunnerTestSkillRepository(
+		t,
+		"researcher-static-skill",
+	)
+	researcherPatchedRepo := createNamedRunnerTestSkillRepository(
+		t,
+		"researcher-patched-skill",
+	)
+	reviewerStaticRepo := createNamedRunnerTestSkillRepository(
+		t,
+		"reviewer-static-skill",
+	)
+	researcherStatic := &scriptedSurfaceModel{
+		name:      "parallel-researcher-static",
+		responses: []model.Message{model.NewAssistantMessage("researcher static")},
+	}
+	researcherPatched := &scriptedSurfaceModel{
+		name:      "parallel-researcher-patched",
+		responses: []model.Message{model.NewAssistantMessage("researcher patched")},
+	}
+	reviewerStatic := &scriptedSurfaceModel{
+		name:      "parallel-reviewer-static",
+		responses: []model.Message{model.NewAssistantMessage("reviewer static")},
+	}
+	reviewerPatched := &scriptedSurfaceModel{
+		name:      "parallel-reviewer-patched",
+		responses: []model.Message{model.NewAssistantMessage("reviewer patched")},
+	}
+	fanout := parallelagent.New(
+		"fanout",
+		parallelagent.WithSubAgents([]agent.Agent{
+			llmagent.New(
+				"researcher",
+				llmagent.WithModel(researcherStatic),
+				llmagent.WithInstruction("researcher static instruction"),
+				llmagent.WithGlobalInstruction("researcher static global"),
+				llmagent.WithTools([]tool.Tool{
+					&callCountingTool{
+						name:   "researcher_old_tool",
+						result: "researcher old",
+					},
+				}),
+				llmagent.WithSkills(researcherStaticRepo),
+			),
+			llmagent.New(
+				"reviewer",
+				llmagent.WithModel(reviewerStatic),
+				llmagent.WithInstruction("reviewer static instruction"),
+				llmagent.WithGlobalInstruction("reviewer static global"),
+				llmagent.WithTools([]tool.Tool{
+					&callCountingTool{
+						name:   "reviewer_old_tool",
+						result: "reviewer old",
+					},
+				}),
+				llmagent.WithSkills(reviewerStaticRepo),
+			),
+		}),
+	)
+	snapshot := mustExportSnapshot(t, fanout)
+	researcherNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"researcher",
+		structure.NodeKindLLM,
+	)
+	reviewerNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"reviewer",
+		structure.NodeKindLLM,
+	)
+	var researcherPatch agent.SurfacePatch
+	researcherPatch.SetInstruction("researcher patched instruction")
+	researcherPatch.SetGlobalInstruction("researcher patched global")
+	researcherPatch.SetFewShot([][]model.Message{{
+		model.NewUserMessage("researcher few-shot user"),
+		model.NewAssistantMessage("researcher few-shot assistant"),
+	}})
+	researcherPatch.SetModel(researcherPatched)
+	researcherPatch.SetTools([]tool.Tool{
+		&callCountingTool{
+			name:   "researcher_new_tool",
+			result: "researcher new",
+		},
+	})
+	researcherPatch.SetSkillRepository(researcherPatchedRepo)
+	var reviewerPatch agent.SurfacePatch
+	reviewerPatch.SetInstruction("reviewer patched instruction")
+	reviewerPatch.SetGlobalInstruction("reviewer patched global")
+	reviewerPatch.SetFewShot([][]model.Message{{
+		model.NewUserMessage("reviewer few-shot user"),
+		model.NewAssistantMessage("reviewer few-shot assistant"),
+	}})
+	reviewerPatch.SetModel(reviewerPatched)
+	reviewerPatch.SetTools([]tool.Tool{
+		&callCountingTool{
+			name:   "reviewer_new_tool",
+			result: "reviewer new",
+		},
+	})
+	reviewerPatch.SetSkillRepository(nil)
+	r := NewRunner(
+		"app",
+		fanout,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-parallel",
+		"session-parallel",
+		model.NewUserMessage("run parallel"),
+		agent.WithExecutionTraceEnabled(true),
+		agent.WithSurfacePatchForNode(researcherNodeID, researcherPatch),
+		agent.WithSurfacePatchForNode(reviewerNodeID, reviewerPatch),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.Response)
+	require.Zero(t, researcherStatic.RequestCount())
+	require.Zero(t, reviewerStatic.RequestCount())
+	require.Equal(t, 1, researcherPatched.RequestCount())
+	require.Equal(t, 1, reviewerPatched.RequestCount())
+	researcherRequest := researcherPatched.LatestRequest()
+	require.NotNil(t, researcherRequest)
+	researcherSystem := firstSystemMessageContent(researcherRequest.messages)
+	require.Contains(
+		t,
+		researcherSystem,
+		"researcher patched instruction",
+	)
+	require.Contains(t, researcherSystem, "researcher patched global")
+	require.Contains(t, researcherSystem, runnerSurfaceSkillsOverviewHeader)
+	require.Contains(t, researcherSystem, "researcher-patched-skill")
+	require.NotContains(t, researcherSystem, "researcher static instruction")
+	require.NotContains(t, researcherSystem, "researcher static global")
+	require.NotContains(t, researcherSystem, "reviewer patched instruction")
+	require.NotContains(t, researcherSystem, "reviewer patched global")
+	require.Equal(t, "researcher few-shot user", researcherRequest.messages[1].Content)
+	require.Equal(
+		t,
+		"researcher few-shot assistant",
+		researcherRequest.messages[2].Content,
+	)
+	require.Equal(t, "run parallel", researcherRequest.messages[3].Content)
+	require.Contains(t, researcherRequest.toolNames, "researcher_new_tool")
+	require.Contains(t, researcherRequest.toolNames, "skill_load")
+	require.NotContains(t, researcherRequest.toolNames, "researcher_old_tool")
+	require.NotContains(t, researcherRequest.toolNames, "reviewer_new_tool")
+	reviewerRequest := reviewerPatched.LatestRequest()
+	require.NotNil(t, reviewerRequest)
+	reviewerSystem := firstSystemMessageContent(reviewerRequest.messages)
+	require.Contains(
+		t,
+		reviewerSystem,
+		"reviewer patched instruction",
+	)
+	require.Contains(t, reviewerSystem, "reviewer patched global")
+	require.NotContains(t, reviewerSystem, "reviewer static instruction")
+	require.NotContains(t, reviewerSystem, "reviewer static global")
+	require.NotContains(t, reviewerSystem, "reviewer-static-skill")
+	require.NotContains(t, reviewerSystem, runnerSurfaceSkillsOverviewHeader)
+	require.NotContains(t, reviewerSystem, "researcher patched instruction")
+	require.NotContains(t, reviewerSystem, "researcher patched global")
+	require.Equal(t, "reviewer few-shot user", reviewerRequest.messages[1].Content)
+	require.Equal(
+		t,
+		"reviewer few-shot assistant",
+		reviewerRequest.messages[2].Content,
+	)
+	require.Equal(t, "run parallel", reviewerRequest.messages[3].Content)
+	require.Contains(t, reviewerRequest.toolNames, "reviewer_new_tool")
+	require.NotContains(t, reviewerRequest.toolNames, "reviewer_old_tool")
+	require.NotContains(t, reviewerRequest.toolNames, "researcher_new_tool")
+	require.NotContains(t, reviewerRequest.toolNames, "skill_load")
+	require.NotNil(t, completion.ExecutionTrace)
+	traceCounts := countTraceStepsByNodeID(completion.ExecutionTrace.Steps)
+	require.Equal(t, 1, traceCounts[researcherNodeID])
+	require.Equal(t, 1, traceCounts[reviewerNodeID])
+}
+
+func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectCycleChildPatch(
+	t *testing.T,
+) {
+	workerStaticRepo := createNamedRunnerTestSkillRepository(
+		t,
+		"cycle-static-skill",
+	)
+	workerPatchedRepo := createNamedRunnerTestSkillRepository(
+		t,
+		"cycle-patched-skill",
+	)
+	workerStatic := &scriptedSurfaceModel{
+		name:      "cycle-worker-static",
+		responses: []model.Message{model.NewAssistantMessage("worker static")},
+	}
+	workerPatched := &scriptedSurfaceModel{
+		name: "cycle-worker-patched",
+		responses: []model.Message{
+			model.NewAssistantMessage("worker patched first"),
+			model.NewAssistantMessage("worker patched second"),
+		},
+	}
+	loop := cycleagent.New(
+		"loop",
+		cycleagent.WithMaxIterations(2),
+		cycleagent.WithSubAgents([]agent.Agent{
+			llmagent.New(
+				"worker",
+				llmagent.WithModel(workerStatic),
+				llmagent.WithInstruction("worker static instruction"),
+				llmagent.WithGlobalInstruction("worker static global"),
+				llmagent.WithTools([]tool.Tool{
+					&callCountingTool{
+						name:   "cycle_old_tool",
+						result: "cycle old",
+					},
+				}),
+				llmagent.WithSkills(workerStaticRepo),
+			),
+		}),
+	)
+	snapshot := mustExportSnapshot(t, loop)
+	workerNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"worker",
+		structure.NodeKindLLM,
+	)
+	var workerPatch agent.SurfacePatch
+	workerPatch.SetInstruction("worker patched instruction")
+	workerPatch.SetGlobalInstruction("worker patched global")
+	workerPatch.SetFewShot([][]model.Message{{
+		model.NewUserMessage("cycle few-shot user"),
+		model.NewAssistantMessage("cycle few-shot assistant"),
+	}})
+	workerPatch.SetModel(workerPatched)
+	workerPatch.SetTools([]tool.Tool{
+		&callCountingTool{
+			name:   "cycle_new_tool",
+			result: "cycle new",
+		},
+	})
+	workerPatch.SetSkillRepository(workerPatchedRepo)
+	r := NewRunner(
+		"app",
+		loop,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-cycle",
+		"session-cycle",
+		model.NewUserMessage("run cycle"),
+		agent.WithExecutionTraceEnabled(true),
+		agent.WithSurfacePatchForNode(workerNodeID, workerPatch),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.Response)
+	require.Zero(t, workerStatic.RequestCount())
+	require.Equal(t, 2, workerPatched.RequestCount())
+	for _, request := range workerPatched.Requests() {
+		system := firstSystemMessageContent(request.messages)
+		require.Contains(
+			t,
+			system,
+			"worker patched instruction",
+		)
+		require.Contains(t, system, "worker patched global")
+		require.Contains(t, system, runnerSurfaceSkillsOverviewHeader)
+		require.Contains(t, system, "cycle-patched-skill")
+		require.NotContains(t, system, "worker static instruction")
+		require.NotContains(t, system, "worker static global")
+		require.NotContains(t, system, "cycle-static-skill")
+		contents := surfaceMessageContents(request.messages)
+		require.Contains(t, contents, "cycle few-shot user")
+		require.Contains(t, contents, "cycle few-shot assistant")
+		require.Equal(t, 1, countStringValues(contents, "cycle few-shot user"))
+		require.Equal(
+			t,
+			1,
+			countStringValues(contents, "cycle few-shot assistant"),
+		)
+		require.Contains(t, request.toolNames, "cycle_new_tool")
+		require.Contains(t, request.toolNames, "skill_load")
+		require.NotContains(t, request.toolNames, "cycle_old_tool")
+	}
+	require.NotNil(t, completion.ExecutionTrace)
+	traceCounts := countTraceStepsByNodeID(completion.ExecutionTrace.Steps)
+	require.Equal(t, 2, traceCounts[workerNodeID])
+}
+
+func TestRunner_Run_WithSurfacePatchForNode_IgnoresUnknownDirectShapeNodeID(
+	t *testing.T,
+) {
+	t.Run("chain", func(t *testing.T) {
+		staticModel := &scriptedSurfaceModel{
+			name:      "chain-fallback-static",
+			responses: []model.Message{model.NewAssistantMessage("chain fallback")},
+		}
+		patchedModel := &scriptedSurfaceModel{
+			name:      "chain-fallback-patched",
+			responses: []model.Message{model.NewAssistantMessage("should not run")},
+		}
+		workflow := chainagent.New(
+			"workflow",
+			chainagent.WithSubAgents([]agent.Agent{
+				llmagent.New(
+					"planner",
+					llmagent.WithModel(staticModel),
+					llmagent.WithInstruction("chain fallback static instruction"),
+				),
+			}),
+		)
+		var patch agent.SurfacePatch
+		patch.SetInstruction("chain fallback patched instruction")
+		patch.SetModel(patchedModel)
+		r := NewRunner(
+			"app",
+			workflow,
+			WithSessionService(sessioninmemory.NewSessionService()),
+		)
+		eventCh, err := r.Run(
+			context.Background(),
+			"user-chain-fallback",
+			"session-chain-fallback",
+			model.NewUserMessage("chain fallback"),
+			agent.WithSurfacePatchForNode("workflow/missing", patch),
+		)
+		require.NoError(t, err)
+		completion := collectRunnerCompletionEvent(t, eventCh)
+		require.NotNil(t, completion.Response)
+		require.Equal(t, 1, staticModel.RequestCount())
+		require.Zero(t, patchedModel.RequestCount())
+		require.Contains(
+			t,
+			firstSystemMessageContent(staticModel.LatestRequest().messages),
+			"chain fallback static instruction",
+		)
+	})
+	t.Run("parallel", func(t *testing.T) {
+		leftStatic := &scriptedSurfaceModel{
+			name:      "parallel-fallback-left-static",
+			responses: []model.Message{model.NewAssistantMessage("left fallback")},
+		}
+		rightStatic := &scriptedSurfaceModel{
+			name:      "parallel-fallback-right-static",
+			responses: []model.Message{model.NewAssistantMessage("right fallback")},
+		}
+		patchedModel := &scriptedSurfaceModel{
+			name:      "parallel-fallback-patched",
+			responses: []model.Message{model.NewAssistantMessage("should not run")},
+		}
+		fanout := parallelagent.New(
+			"fanout",
+			parallelagent.WithSubAgents([]agent.Agent{
+				llmagent.New(
+					"left",
+					llmagent.WithModel(leftStatic),
+					llmagent.WithInstruction("left static instruction"),
+				),
+				llmagent.New(
+					"right",
+					llmagent.WithModel(rightStatic),
+					llmagent.WithInstruction("right static instruction"),
+				),
+			}),
+		)
+		var patch agent.SurfacePatch
+		patch.SetInstruction("parallel fallback patched instruction")
+		patch.SetModel(patchedModel)
+		r := NewRunner(
+			"app",
+			fanout,
+			WithSessionService(sessioninmemory.NewSessionService()),
+		)
+		eventCh, err := r.Run(
+			context.Background(),
+			"user-parallel-fallback",
+			"session-parallel-fallback",
+			model.NewUserMessage("parallel fallback"),
+			agent.WithSurfacePatchForNode("fanout/missing", patch),
+		)
+		require.NoError(t, err)
+		completion := collectRunnerCompletionEvent(t, eventCh)
+		require.NotNil(t, completion.Response)
+		require.Equal(t, 1, leftStatic.RequestCount())
+		require.Equal(t, 1, rightStatic.RequestCount())
+		require.Zero(t, patchedModel.RequestCount())
+		require.Contains(
+			t,
+			firstSystemMessageContent(leftStatic.LatestRequest().messages),
+			"left static instruction",
+		)
+		require.Contains(
+			t,
+			firstSystemMessageContent(rightStatic.LatestRequest().messages),
+			"right static instruction",
+		)
+	})
+	t.Run("cycle", func(t *testing.T) {
+		staticModel := &scriptedSurfaceModel{
+			name:      "cycle-fallback-static",
+			responses: []model.Message{model.NewAssistantMessage("cycle fallback")},
+		}
+		patchedModel := &scriptedSurfaceModel{
+			name:      "cycle-fallback-patched",
+			responses: []model.Message{model.NewAssistantMessage("should not run")},
+		}
+		loop := cycleagent.New(
+			"loop",
+			cycleagent.WithMaxIterations(2),
+			cycleagent.WithSubAgents([]agent.Agent{
+				llmagent.New(
+					"worker",
+					llmagent.WithModel(staticModel),
+					llmagent.WithInstruction("cycle fallback static instruction"),
+				),
+			}),
+		)
+		var patch agent.SurfacePatch
+		patch.SetInstruction("cycle fallback patched instruction")
+		patch.SetModel(patchedModel)
+		r := NewRunner(
+			"app",
+			loop,
+			WithSessionService(sessioninmemory.NewSessionService()),
+		)
+		eventCh, err := r.Run(
+			context.Background(),
+			"user-cycle-fallback",
+			"session-cycle-fallback",
+			model.NewUserMessage("cycle fallback"),
+			agent.WithSurfacePatchForNode("loop/missing", patch),
+		)
+		require.NoError(t, err)
+		completion := collectRunnerCompletionEvent(t, eventCh)
+		require.NotNil(t, completion.Response)
+		require.Equal(t, 2, staticModel.RequestCount())
+		require.Zero(t, patchedModel.RequestCount())
+		for _, request := range staticModel.Requests() {
+			require.Contains(
+				t,
+				firstSystemMessageContent(request.messages),
+				"cycle fallback static instruction",
+			)
+		}
+	})
+}
+
+func TestRunner_Run_WithSurfacePatchForNode_AppliesComplexGraphPatches(
+	t *testing.T,
+) {
+	oldTool := &callCountingTool{name: "old_graph_tool", result: "old graph tool"}
+	patchedTool := &callCountingTool{name: "patched_graph_tool", result: "patched graph tool"}
+	staticGraphModel := &scriptedSurfaceModel{
+		name:      "graph-static",
+		responses: []model.Message{model.NewAssistantMessage("graph static")},
+	}
+	patchedGraphModel := &scriptedSurfaceModel{
+		name: "graph-patched",
+		responses: []model.Message{
+			toolCallAssistantMessage("patched_graph_tool", `{}`),
+			model.NewAssistantMessage("branch-a"),
+		},
+	}
+	schema := graph.MessagesStateSchema().
+		AddField("visited", graph.StateField{
+			Type:    reflect.TypeOf([]string{}),
+			Reducer: graph.StringSliceReducer,
+			Default: func() any { return []string{} },
+		})
+	builder := graph.NewStateGraph(schema)
+	builder.AddNode("start", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"start"}}, nil
+	})
+	builder.AddNode("prepare", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"prepare"}}, nil
+	})
+	builder.AddLLMNode(
+		"llm",
+		staticGraphModel,
+		"graph static instruction",
+		map[string]tool.Tool{"old_graph_tool": oldTool},
+	)
+	builder.AddToolsNode("tools", map[string]tool.Tool{
+		"old_graph_tool": oldTool,
+	})
+	builder.AddNode("branch_a", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"branch_a"}}, nil
+	})
+	builder.AddNode("branch_b", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"branch_b"}}, nil
+	})
+	builder.AddNode("join", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"join"}}, nil
+	})
+	builder.AddNode("done", func(context.Context, graph.State) (any, error) {
+		return graph.State{"visited": []string{"done"}}, nil
+	})
+	builder.SetEntryPoint("start")
+	builder.AddEdge("start", "llm")
+	builder.AddEdge("start", "prepare")
+	builder.AddToolsConditionalEdges("llm", "tools", "branch_a")
+	builder.AddEdge("tools", "llm")
+	builder.AddEdge("prepare", "branch_b")
+	builder.AddJoinEdge([]string{"branch_a", "branch_b"}, "join")
+	builder.AddConditionalEdges("join", func(context.Context, graph.State) (string, error) {
+		return "done", nil
+	}, map[string]string{"done": "done"})
+	builder.SetFinishPoint("done")
+	compiled := builder.MustCompile()
+	ag, err := graphagent.New(
+		"assistant",
+		compiled,
+		graphagent.WithMaxConcurrency(1),
+	)
+	require.NoError(t, err)
+	snapshot := mustExportSnapshot(t, ag)
+	llmNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"llm",
+		structure.NodeKindLLM,
+	)
+	toolsNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"tools",
+		structure.NodeKindTool,
+	)
+	var llmPatch agent.SurfacePatch
+	llmPatch.SetInstruction("graph patched instruction")
+	llmPatch.SetFewShot([][]model.Message{{
+		model.NewUserMessage("graph few-shot user"),
+		model.NewAssistantMessage("graph few-shot assistant"),
+	}})
+	llmPatch.SetModel(patchedGraphModel)
+	llmPatch.SetTools([]tool.Tool{patchedTool})
+	var toolsPatch agent.SurfacePatch
+	toolsPatch.SetTools([]tool.Tool{patchedTool})
+	r := NewRunner(
+		"app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-graph",
+		"session-graph",
+		model.NewUserMessage("graph input"),
+		agent.WithExecutionTraceEnabled(true),
+		agent.WithSurfacePatchForNode(llmNodeID, llmPatch),
+		agent.WithSurfacePatchForNode(toolsNodeID, toolsPatch),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.Zero(t, staticGraphModel.RequestCount())
+	require.Equal(t, 2, patchedGraphModel.RequestCount())
+	firstRequest := patchedGraphModel.Requests()[0]
+	require.GreaterOrEqual(t, len(firstRequest.messages), 4)
+	require.Contains(
+		t,
+		firstSystemMessageContent(firstRequest.messages),
+		"graph patched instruction",
+	)
+	require.Equal(t, "graph few-shot user", firstRequest.messages[1].Content)
+	require.Equal(t, "graph few-shot assistant", firstRequest.messages[2].Content)
+	require.Contains(t, firstRequest.toolNames, "patched_graph_tool")
+	require.NotContains(t, firstRequest.toolNames, "old_graph_tool")
+	require.Equal(t, 1, patchedTool.Calls())
+	require.Zero(t, oldTool.Calls())
+	require.NotNil(t, completion.ExecutionTrace)
+	traceCounts := countTraceStepsByNodeID(completion.ExecutionTrace.Steps)
+	require.Equal(t, 2, traceCounts[llmNodeID])
+	require.Equal(t, 1, traceCounts[toolsNodeID])
+	require.Equal(t, 1, traceCounts["assistant/start"])
+	require.Equal(t, 1, traceCounts["assistant/prepare"])
+	require.Equal(t, 1, traceCounts["assistant/branch_a"])
+	require.Equal(t, 1, traceCounts["assistant/branch_b"])
+	require.Equal(t, 1, traceCounts["assistant/join"])
+	require.Equal(t, 1, traceCounts["assistant/done"])
+}
+
+func TestRunner_Run_WithSurfacePatchForNode_AppliesGraphChildAgentPatch(
+	t *testing.T,
+) {
+	childStatic := &scriptedSurfaceModel{
+		name:      "graph-child-static",
+		responses: []model.Message{model.NewAssistantMessage("child static")},
+	}
+	childPatched := &scriptedSurfaceModel{
+		name:      "graph-child-patched",
+		responses: []model.Message{model.NewAssistantMessage("child patched")},
+	}
+	child := llmagent.New(
+		"researcher",
+		llmagent.WithModel(childStatic),
+		llmagent.WithInstruction("child static instruction"),
+	)
+	builder := graph.NewStateGraph(graph.MessagesStateSchema())
+	builder.AddAgentNode("researcher")
+	builder.SetEntryPoint("researcher")
+	builder.SetFinishPoint("researcher")
+	compiled := builder.MustCompile()
+	parent, err := graphagent.New(
+		"assistant",
+		compiled,
+		graphagent.WithSubAgents([]agent.Agent{child}),
+	)
+	require.NoError(t, err)
+	snapshot := mustExportSnapshot(t, parent)
+	childNodeID := requireNodeIDByNameAndKind(
+		t,
+		snapshot,
+		"researcher",
+		structure.NodeKindLLM,
+	)
+	var patch agent.SurfacePatch
+	patch.SetInstruction("child patched instruction")
+	patch.SetModel(childPatched)
+	r := NewRunner(
+		"app",
+		parent,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-graph-child",
+		"session-graph-child",
+		model.NewUserMessage("graph child input"),
+		agent.WithSurfacePatchForNode(childNodeID, patch),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.Response)
+	require.Zero(t, childStatic.RequestCount())
+	require.Equal(t, 1, childPatched.RequestCount())
+	require.Contains(
+		t,
+		firstSystemMessageContent(childPatched.LatestRequest().messages),
+		"child patched instruction",
+	)
+}
+
+func cloneSurfaceCapturedRequest(req *model.Request) *surfaceCapturedRequest {
+	if req == nil {
+		return nil
+	}
+	return &surfaceCapturedRequest{
+		messages:  append([]model.Message(nil), req.Messages...),
+		toolNames: surfaceToolNames(req.Tools),
+	}
+}
+
+func cloneSurfaceCapturedRequestValue(
+	req *surfaceCapturedRequest,
+) *surfaceCapturedRequest {
+	if req == nil {
+		return nil
+	}
+	return &surfaceCapturedRequest{
+		messages:  append([]model.Message(nil), req.messages...),
+		toolNames: append([]string(nil), req.toolNames...),
+	}
+}
+
+func cloneSurfaceMessage(message model.Message) model.Message {
+	cloned := message
+	if len(message.ToolCalls) > 0 {
+		cloned.ToolCalls = append([]model.ToolCall(nil), message.ToolCalls...)
+	}
+	if len(message.ContentParts) > 0 {
+		cloned.ContentParts = append([]model.ContentPart(nil), message.ContentParts...)
+	}
+	return cloned
+}
+
+func surfaceToolNames(tools map[string]tool.Tool) []string {
+	if len(tools) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func toolCallAssistantMessage(name string, args string) model.Message {
+	return model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			Type: "function",
+			ID:   name + "-call",
+			Function: model.FunctionDefinitionParam{
+				Name:      name,
+				Arguments: []byte(args),
+			},
+		}},
+	}
+}
+
+func mustExportSnapshot(t *testing.T, ag agent.Agent) *structure.Snapshot {
+	t.Helper()
+	snapshot, err := structure.Export(context.Background(), ag)
+	require.NoError(t, err)
+	return snapshot
+}
+
+func requireNodeIDByNameAndKind(
+	t *testing.T,
+	snapshot *structure.Snapshot,
+	name string,
+	kind structure.NodeKind,
+) string {
+	t.Helper()
+	var matches []string
+	for _, node := range snapshot.Nodes {
+		if node.Name == name && node.Kind == kind {
+			matches = append(matches, node.NodeID)
+		}
+	}
+	require.Len(t, matches, 1)
+	return matches[0]
+}
+
+func countTraceStepsByNodeID(steps []atrace.Step) map[string]int {
+	counts := make(map[string]int, len(steps))
+	for _, step := range steps {
+		counts[step.NodeID]++
+	}
+	return counts
+}
+
+func surfaceMessageContents(messages []model.Message) []string {
+	contents := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message.Content != "" {
+			contents = append(contents, message.Content)
+		}
+	}
+	return contents
+}
+
+func countStringValues(values []string, target string) int {
+	count := 0
+	for _, value := range values {
+		if value == target {
+			count++
+		}
+	}
+	return count
+}
+
+func createRunnerTestSkillRepository(t *testing.T) skill.Repository {
+	return createNamedRunnerTestSkillRepository(t, "echoer")
+}
+
+func createNamedRunnerTestSkillRepository(
+	t *testing.T,
+	name string,
+) skill.Repository {
+	t.Helper()
+	root := t.TempDir()
+	skillDir := filepath.Join(root, name)
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(skillDir, "SKILL.md"),
+			[]byte(
+				fmt.Sprintf(
+					"---\nname: %s\ndescription: runner test skill\n---\nbody\n",
+					name,
+				),
+			),
+			0o644,
+		),
+	)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	return repo
 }

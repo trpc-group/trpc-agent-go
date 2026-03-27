@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	iflow "trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -121,6 +122,7 @@ type ContentRequestProcessor struct {
 	// SummaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	SummaryFormatter func(summary string) string
+	fewShotResolver  func(*agent.Invocation) [][]model.Message
 }
 
 type contentRequestRuntimeConfig struct {
@@ -225,6 +227,15 @@ func WithSummaryFormatter(formatter func(summary string) string) ContentOption {
 	}
 }
 
+// WithFewShotResolver sets an invocation-aware few-shot resolver.
+func WithFewShotResolver(
+	resolver func(*agent.Invocation) [][]model.Message,
+) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.fewShotResolver = resolver
+	}
+}
+
 const (
 	mergedUserSeparator = "\n\n"
 	contextPrefix       = "For context:"
@@ -291,6 +302,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	skipHistory := cfg.includeMode == "none"
 
 	p.injectInjectedContextMessages(invocation, req)
+	p.injectFewShotMessages(invocation, req)
 	preassembledMessages := p.getPreassembledGraphMessages(
 		invocation,
 		cfg.subgraphMessageSource,
@@ -299,7 +311,6 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	if len(preassembledMessages) > 0 {
 		req.Messages = append(req.Messages, preassembledMessages...)
 	}
-
 	// Append per-filter messages from session events when allowed.
 	needToAddInvocationMessage := p.appendSessionMessages(
 		ctx,
@@ -328,6 +339,23 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingContent),
 	))
+}
+
+func (p *ContentRequestProcessor) injectFewShotMessages(
+	invocation *agent.Invocation,
+	req *model.Request,
+) {
+	if p == nil || req == nil || p.fewShotResolver == nil {
+		return
+	}
+	examples := p.fewShotResolver(invocation)
+	if len(examples) == 0 {
+		return
+	}
+	req.Messages = iflow.InsertFewShotMessages(
+		req.Messages,
+		examples,
+	)
 }
 
 func (p *ContentRequestProcessor) runtimeConfigFromInvocation(

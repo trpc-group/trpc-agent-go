@@ -162,6 +162,11 @@ func (p *TransferResponseProcessor) ProcessResponse(
 		agent.WithInvocationEntryPredecessorStepIDs(
 			agent.NextExecutionTracePredecessors(invocation),
 		),
+		func(inv *agent.Invocation) {
+			if surfaceRootNodeID := transferTargetSurfaceRootNodeID(invocation, targetAgent); surfaceRootNodeID != "" {
+				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
+			}
+		},
 	)
 
 	// Set the message for the target agent.
@@ -292,6 +297,16 @@ func transferTargetTraceNodeID(invocation *agent.Invocation, targetAgent agent.A
 		}
 	}
 	return istructure.JoinNodeID(agent.InvocationTraceNodeID(invocation), targetAgent.Info().Name)
+}
+
+func transferTargetSurfaceRootNodeID(invocation *agent.Invocation, targetAgent agent.Agent) string {
+	if invocation == nil || targetAgent == nil {
+		return ""
+	}
+	if mountedRoot := parentTraceNodeID(agent.InvocationSurfaceRootNodeID(invocation)); mountedRoot != "" {
+		return istructure.JoinNodeID(mountedRoot, targetAgent.Info().Name)
+	}
+	return transferTargetTraceNodeID(invocation, targetAgent)
 }
 
 func parentTraceNodeID(nodeID string) string {

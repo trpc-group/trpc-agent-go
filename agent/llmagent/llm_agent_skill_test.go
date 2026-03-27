@@ -208,6 +208,29 @@ func TestLLMAgent_SkillRunUsesDefaultExecutorWhenNoExplicitExecutor(t *testing.T
 	require.False(t, execField.IsNil())
 }
 
+func TestLLMAgent_SkillExecSharesRunToolInstance(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithCodeExecutor(&interactiveStubExec{}),
+	)
+	runTool, ok := findTool(a.Tools(), "skill_run").(*toolskill.RunTool)
+	require.True(t, ok)
+	execTool, ok := findTool(a.Tools(), "skill_exec").(*toolskill.ExecTool)
+	require.True(t, ok)
+
+	execVal := reflect.ValueOf(execTool).Elem()
+	runField := reflect.NewAt(
+		execVal.FieldByName("run").Type(),
+		unsafe.Pointer(execVal.FieldByName("run").UnsafeAddr()),
+	).Elem()
+	require.Same(t, runTool, runField.Interface())
+}
+
 func TestLLMAgent_SkillKnowledgeOnlyToolsRegistered(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)

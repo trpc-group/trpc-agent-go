@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/teamtrace"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -816,12 +817,14 @@ func TestTool_WithSkipSummarization(t *testing.T) {
 type streamingMockAgent struct {
 	name string
 	// capture the event filter key seen by Run for assertion.
-	seenFilterKey string
+	seenFilterKey         string
+	seenSurfaceRootNodeID string
 }
 
 func (m *streamingMockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *event.Event, error) {
 	// record the filter key used so tests can assert it equals agent name.
 	m.seenFilterKey = inv.GetEventFilterKey()
+	m.seenSurfaceRootNodeID = agent.InvocationSurfaceRootNodeID(inv)
 	ch := make(chan *event.Event, 3)
 	go func() {
 		defer close(ch)
@@ -1839,6 +1842,33 @@ func TestTool_StreamableCall_FlushesParentSession(t *testing.T) {
 	default:
 		t.Fatalf("expected flush request to be handled")
 	}
+}
+
+func TestTool_StreamableCall_PropagatesSurfaceRootNodeID(t *testing.T) {
+	sa := &streamingMockAgent{name: "stream-agent"}
+	at := NewTool(sa, WithStreamInner(true))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			CustomAgentConfigs: teamtrace.WithMemberTraceRoot(
+				nil,
+				"workflow/team",
+			),
+		}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	reader, err := at.StreamableCall(ctx, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+	for {
+		_, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+	}
+	require.Equal(t, "workflow/team/stream-agent", sa.seenSurfaceRootNodeID)
 }
 
 func TestTool_StreamableCall_NotifiesCompletion(t *testing.T) {
