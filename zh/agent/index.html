@@ -946,7 +946,58 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#nodeid-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      按 nodeID 覆盖运行时 surface
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="按 nodeID 覆盖运行时 surface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      使用步骤
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      可覆盖的 surface
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      在同一次运行中覆盖多个节点
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      组合结构与嵌套结构
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_21" class="md-nav__link">
     <span class="md-ellipsis">
       执行图导出
     </span>
@@ -2668,7 +2719,58 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#nodeid-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      按 nodeID 覆盖运行时 surface
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="按 nodeID 覆盖运行时 surface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      使用步骤
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      可覆盖的 surface
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      在同一次运行中覆盖多个节点
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      组合结构与嵌套结构
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_21" class="md-nav__link">
     <span class="md-ellipsis">
       执行图导出
     </span>
@@ -4342,9 +4444,17 @@
 <li><code>Surfaces</code>：稳定可编辑的基线面，例如 <code>instruction</code>、<code>model</code>、<code>tool</code>、<code>skill</code></li>
 </ul>
 <p>完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/structure_export">examples/graph/structure_export</a>。</p>
-<h2 id="_18">执行图导出</h2>
-<p>框架可以为单次 <code>runner.Run</code> 调用导出执行图，用来观察这次运行里哪些节点真的执行了、各个步骤之间如何依赖，以及每个步骤看到的输入和输出快照。</p>
-<p>需要在运行时显式开启：</p>
+<h2 id="nodeid-surface">按 <code>nodeID</code> 覆盖运行时 surface</h2>
+<p>除了 <code>agent.WithInstruction(...)</code>、<code>agent.WithGlobalInstruction(...)</code> 这种“整次
+<code>runner.Run(...)</code> 调用级”的覆盖方式之外，框架还支持在一次运行中按稳定
+<code>nodeID</code> 精确覆盖指定节点的运行时 surface。</p>
+<p>这个能力适合这些场景：</p>
+<ul>
+<li>只想临时改某个 graph 节点的指令，不影响整棵 Agent。</li>
+<li>同一次 <code>runner.Run(...)</code> 里，同时给多个节点设置不同的 instruction、few-shot 或 tools。</li>
+<li>在 <code>chain</code>、<code>parallel</code>、<code>cycle</code>、<code>graph</code>、<code>team</code>、<code>swarm</code> 等嵌套结构中，精确命中某个子节点。</li>
+</ul>
+<p>入口 API：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-36-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-36-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-36-3"> 3</a></span>
@@ -4360,38 +4470,235 @@
 <span class="normal"><a href="#__codelineno-36-13">13</a></span>
 <span class="normal"><a href="#__codelineno-36-14">14</a></span>
 <span class="normal"><a href="#__codelineno-36-15">15</a></span>
-<span class="normal"><a href="#__codelineno-36-16">16</a></span>
-<span class="normal"><a href="#__codelineno-36-17">17</a></span>
-<span class="normal"><a href="#__codelineno-36-18">18</a></span>
-<span class="normal"><a href="#__codelineno-36-19">19</a></span>
-<span class="normal"><a href="#__codelineno-36-20">20</a></span>
-<span class="normal"><a href="#__codelineno-36-21">21</a></span>
-<span class="normal"><a href="#__codelineno-36-22">22</a></span>
-<span class="normal"><a href="#__codelineno-36-23">23</a></span>
-<span class="normal"><a href="#__codelineno-36-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-36-5"><a id="__codelineno-36-5" name="__codelineno-36-5"></a><span class="p">)</span>
-</span><span id="__span-36-6"><a id="__codelineno-36-6" name="__codelineno-36-6"></a>
-</span><span id="__span-36-7"><a id="__codelineno-36-7" name="__codelineno-36-7"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;demo-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">ag</span><span class="p">)</span>
-</span><span id="__span-36-8"><a id="__codelineno-36-8" name="__codelineno-36-8"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
-</span><span id="__span-36-9"><a id="__codelineno-36-9" name="__codelineno-36-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-36-10"><a id="__codelineno-36-10" name="__codelineno-36-10"></a><span class="w">    </span><span class="s">&quot;user-1&quot;</span><span class="p">,</span>
-</span><span id="__span-36-11"><a id="__codelineno-36-11" name="__codelineno-36-11"></a><span class="w">    </span><span class="s">&quot;session-1&quot;</span><span class="p">,</span>
-</span><span id="__span-36-12"><a id="__codelineno-36-12" name="__codelineno-36-12"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;hello&quot;</span><span class="p">),</span>
-</span><span id="__span-36-13"><a id="__codelineno-36-13" name="__codelineno-36-13"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithExecutionTraceEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-36-14"><a id="__codelineno-36-14" name="__codelineno-36-14"></a><span class="p">)</span>
-</span><span id="__span-36-15"><a id="__codelineno-36-15" name="__codelineno-36-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-36-16"><a id="__codelineno-36-16" name="__codelineno-36-16"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;运行失败: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-36-17"><a id="__codelineno-36-17" name="__codelineno-36-17"></a><span class="p">}</span>
-</span><span id="__span-36-18"><a id="__codelineno-36-18" name="__codelineno-36-18"></a><span class="k">for</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-36-19"><a id="__codelineno-36-19" name="__codelineno-36-19"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">IsRunnerCompletion</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-36-20"><a id="__codelineno-36-20" name="__codelineno-36-20"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">RootAgentName</span><span class="p">)</span>
-</span><span id="__span-36-21"><a id="__codelineno-36-21" name="__codelineno-36-21"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">Status</span><span class="p">)</span>
-</span><span id="__span-36-22"><a id="__codelineno-36-22" name="__codelineno-36-22"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">Steps</span><span class="p">))</span>
-</span><span id="__span-36-23"><a id="__codelineno-36-23" name="__codelineno-36-23"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-36-24"><a id="__codelineno-36-24" name="__codelineno-36-24"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-36-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1"></a><span class="kd">var</span><span class="w"> </span><span class="nx">patch</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SurfacePatch</span>
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2"></a><span class="nx">patch</span><span class="p">.</span><span class="nx">SetInstruction</span><span class="p">(</span><span class="s">&quot;Answer in one short paragraph.&quot;</span><span class="p">)</span>
+</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3"></a><span class="nx">patch</span><span class="p">.</span><span class="nx">SetFewShot</span><span class="p">([][]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
+</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-36-5"><a id="__codelineno-36-5" name="__codelineno-36-5"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Summarize this report.&quot;</span><span class="p">),</span>
+</span><span id="__span-36-6"><a id="__codelineno-36-6" name="__codelineno-36-6"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewAssistantMessage</span><span class="p">(</span><span class="s">&quot;Provide a short executive summary first.&quot;</span><span class="p">),</span>
+</span><span id="__span-36-7"><a id="__codelineno-36-7" name="__codelineno-36-7"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-36-8"><a id="__codelineno-36-8" name="__codelineno-36-8"></a><span class="p">})</span>
+</span><span id="__span-36-9"><a id="__codelineno-36-9" name="__codelineno-36-9"></a>
+</span><span id="__span-36-10"><a id="__codelineno-36-10" name="__codelineno-36-10"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-36-11"><a id="__codelineno-36-11" name="__codelineno-36-11"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-36-12"><a id="__codelineno-36-12" name="__codelineno-36-12"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-36-13"><a id="__codelineno-36-13" name="__codelineno-36-13"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-36-14"><a id="__codelineno-36-14" name="__codelineno-36-14"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Please analyze the latest findings.&quot;</span><span class="p">),</span>
+</span><span id="__span-36-15"><a id="__codelineno-36-15" name="__codelineno-36-15"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSurfacePatchForNode</span><span class="p">(</span><span class="nx">nodeID</span><span class="p">,</span><span class="w"> </span><span class="nx">patch</span><span class="p">),</span>
+</span><span id="__span-36-16"><a id="__codelineno-36-16" name="__codelineno-36-16"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="_18">使用步骤</h3>
+<p>推荐按下面的顺序使用：</p>
+<ol>
+<li>先通过 <code>structure.Export(...)</code> 导出静态结构快照。</li>
+<li>从 <code>snapshot.EntryNodeID</code> 或 <code>snapshot.Nodes</code> 中找到目标节点的稳定 <code>nodeID</code>。</li>
+<li>构造 <code>agent.SurfacePatch</code>，只设置这次运行需要覆盖的 surface。</li>
+<li>在 <code>runner.Run(...)</code> 中传入一个或多个 <code>agent.WithSurfacePatchForNode(...)</code>。</li>
+</ol>
+<p>示例：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-37-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-37-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-37-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-37-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-37-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-37-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-37-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-37-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-37-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-37-10">10</a></span>
+<span class="normal"><a href="#__codelineno-37-11">11</a></span>
+<span class="normal"><a href="#__codelineno-37-12">12</a></span>
+<span class="normal"><a href="#__codelineno-37-13">13</a></span>
+<span class="normal"><a href="#__codelineno-37-14">14</a></span>
+<span class="normal"><a href="#__codelineno-37-15">15</a></span>
+<span class="normal"><a href="#__codelineno-37-16">16</a></span>
+<span class="normal"><a href="#__codelineno-37-17">17</a></span>
+<span class="normal"><a href="#__codelineno-37-18">18</a></span>
+<span class="normal"><a href="#__codelineno-37-19">19</a></span>
+<span class="normal"><a href="#__codelineno-37-20">20</a></span>
+<span class="normal"><a href="#__codelineno-37-21">21</a></span>
+<span class="normal"><a href="#__codelineno-37-22">22</a></span>
+<span class="normal"><a href="#__codelineno-37-23">23</a></span>
+<span class="normal"><a href="#__codelineno-37-24">24</a></span>
+<span class="normal"><a href="#__codelineno-37-25">25</a></span>
+<span class="normal"><a href="#__codelineno-37-26">26</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1"></a><span class="nx">snapshot</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">structure</span><span class="p">.</span><span class="nx">Export</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">workflowAgent</span><span class="p">)</span>
+</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-37-4"><a id="__codelineno-37-4" name="__codelineno-37-4"></a><span class="p">}</span>
+</span><span id="__span-37-5"><a id="__codelineno-37-5" name="__codelineno-37-5"></a>
+</span><span id="__span-37-6"><a id="__codelineno-37-6" name="__codelineno-37-6"></a><span class="kd">var</span><span class="w"> </span><span class="nx">plannerNodeID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-37-7"><a id="__codelineno-37-7" name="__codelineno-37-7"></a><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">node</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">snapshot</span><span class="p">.</span><span class="nx">Nodes</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-37-8"><a id="__codelineno-37-8" name="__codelineno-37-8"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">node</span><span class="p">.</span><span class="nx">Name</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;planner&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-37-9"><a id="__codelineno-37-9" name="__codelineno-37-9"></a><span class="w">        </span><span class="nx">plannerNodeID</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">node</span><span class="p">.</span><span class="nx">NodeID</span>
+</span><span id="__span-37-10"><a id="__codelineno-37-10" name="__codelineno-37-10"></a><span class="w">        </span><span class="k">break</span>
+</span><span id="__span-37-11"><a id="__codelineno-37-11" name="__codelineno-37-11"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-37-12"><a id="__codelineno-37-12" name="__codelineno-37-12"></a><span class="p">}</span>
+</span><span id="__span-37-13"><a id="__codelineno-37-13" name="__codelineno-37-13"></a><span class="k">if</span><span class="w"> </span><span class="nx">plannerNodeID</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-37-14"><a id="__codelineno-37-14" name="__codelineno-37-14"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;planner node not found&quot;</span><span class="p">)</span>
+</span><span id="__span-37-15"><a id="__codelineno-37-15" name="__codelineno-37-15"></a><span class="p">}</span>
+</span><span id="__span-37-16"><a id="__codelineno-37-16" name="__codelineno-37-16"></a>
+</span><span id="__span-37-17"><a id="__codelineno-37-17" name="__codelineno-37-17"></a><span class="kd">var</span><span class="w"> </span><span class="nx">patch</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SurfacePatch</span>
+</span><span id="__span-37-18"><a id="__codelineno-37-18" name="__codelineno-37-18"></a><span class="nx">patch</span><span class="p">.</span><span class="nx">SetInstruction</span><span class="p">(</span><span class="s">&quot;Plan in at most three steps.&quot;</span><span class="p">)</span>
+</span><span id="__span-37-19"><a id="__codelineno-37-19" name="__codelineno-37-19"></a>
+</span><span id="__span-37-20"><a id="__codelineno-37-20" name="__codelineno-37-20"></a><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-37-21"><a id="__codelineno-37-21" name="__codelineno-37-21"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-37-22"><a id="__codelineno-37-22" name="__codelineno-37-22"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-37-23"><a id="__codelineno-37-23" name="__codelineno-37-23"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-37-24"><a id="__codelineno-37-24" name="__codelineno-37-24"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Arrange a trip to Hangzhou next Friday.&quot;</span><span class="p">),</span>
+</span><span id="__span-37-25"><a id="__codelineno-37-25" name="__codelineno-37-25"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSurfacePatchForNode</span><span class="p">(</span><span class="nx">plannerNodeID</span><span class="p">,</span><span class="w"> </span><span class="nx">patch</span><span class="p">),</span>
+</span><span id="__span-37-26"><a id="__codelineno-37-26" name="__codelineno-37-26"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>注意事项：</p>
+<ul>
+<li>调用方应优先使用 <code>structure.Export(...)</code> 导出的 <code>nodeID</code>，不要依赖手写路径。</li>
+<li>这个能力只对当前这一次 <code>runner.Run(...)</code> 生效，不会修改 Agent 的静态定义。</li>
+<li><code>agent.WithInstruction(...)</code> / <code>agent.WithGlobalInstruction(...)</code> 仍然保留，适合“整次运行统一覆盖根 Agent 提示词”的场景；需要按节点精确控制时，再使用 <code>WithSurfacePatchForNode(...)</code>。</li>
+</ul>
+<h3 id="surface">可覆盖的 surface</h3>
+<p><code>SurfacePatch</code> 目前提供这些 setter：</p>
+<ul>
+<li><code>SetInstruction(string)</code>：覆盖该节点本次运行的 instruction。</li>
+<li><code>SetGlobalInstruction(string)</code>：覆盖该节点本次运行的 global instruction。</li>
+<li><code>SetFewShot([][]model.Message)</code>：覆盖该节点本次运行的 few-shot 示例。</li>
+<li><code>SetModel(model.Model)</code>：覆盖该节点本次运行使用的模型实例。</li>
+<li><code>SetTools([]tool.Tool)</code>：覆盖该节点本次运行的工具 surface。它表达的是“替换本次运行可见的工具集合”，不是只改工具描述文本。</li>
+<li><code>SetSkillRepository(skill.Repository)</code>：覆盖该节点本次运行的 skill repository；传 <code>nil</code> 可显式禁用该节点的 skill surface。</li>
+</ul>
+<p>不是每种节点都支持全部 surface，常见情况如下：</p>
+<ul>
+<li>根 <code>LLMAgent</code>：支持 <code>instruction</code>、<code>global_instruction</code>、<code>few_shot</code>、<code>model</code>、<code>tool</code>、<code>skill</code>。</li>
+<li>graph 的 LLM 节点：支持 <code>instruction</code>、<code>few_shot</code>、<code>model</code>、<code>tool</code>。</li>
+<li>graph 的 Tools 节点：支持 <code>tool</code>。</li>
+<li>graph 子 Agent、<code>chain</code>、<code>parallel</code>、<code>cycle</code>、<code>team</code>、<code>swarm</code> 中的子节点：是否可覆盖，取决于命中的那个具体子节点本身支持哪些 surface。</li>
+</ul>
+<h3 id="_19">在同一次运行中覆盖多个节点</h3>
+<p>如果要在同一次 <code>runner.Run(...)</code> 里同时覆盖多个节点，直接重复传多个
+<code>agent.WithSurfacePatchForNode(...)</code> 即可，不需要额外的批量 API。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-38-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-38-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-38-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-38-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-38-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-38-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-38-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-38-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-38-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-38-10">10</a></span>
+<span class="normal"><a href="#__codelineno-38-11">11</a></span>
+<span class="normal"><a href="#__codelineno-38-12">12</a></span>
+<span class="normal"><a href="#__codelineno-38-13">13</a></span>
+<span class="normal"><a href="#__codelineno-38-14">14</a></span>
+<span class="normal"><a href="#__codelineno-38-15">15</a></span>
+<span class="normal"><a href="#__codelineno-38-16">16</a></span>
+<span class="normal"><a href="#__codelineno-38-17">17</a></span>
+<span class="normal"><a href="#__codelineno-38-18">18</a></span>
+<span class="normal"><a href="#__codelineno-38-19">19</a></span>
+<span class="normal"><a href="#__codelineno-38-20">20</a></span>
+<span class="normal"><a href="#__codelineno-38-21">21</a></span>
+<span class="normal"><a href="#__codelineno-38-22">22</a></span>
+<span class="normal"><a href="#__codelineno-38-23">23</a></span>
+<span class="normal"><a href="#__codelineno-38-24">24</a></span>
+<span class="normal"><a href="#__codelineno-38-25">25</a></span>
+<span class="normal"><a href="#__codelineno-38-26">26</a></span>
+<span class="normal"><a href="#__codelineno-38-27">27</a></span>
+<span class="normal"><a href="#__codelineno-38-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1"></a><span class="nx">snapshot</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">structure</span><span class="p">.</span><span class="nx">Export</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">workflowAgent</span><span class="p">)</span>
+</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4"></a><span class="p">}</span>
+</span><span id="__span-38-5"><a id="__codelineno-38-5" name="__codelineno-38-5"></a>
+</span><span id="__span-38-6"><a id="__codelineno-38-6" name="__codelineno-38-6"></a><span class="nx">nodeIDs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">make</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-38-7"><a id="__codelineno-38-7" name="__codelineno-38-7"></a><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">node</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">snapshot</span><span class="p">.</span><span class="nx">Nodes</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-38-8"><a id="__codelineno-38-8" name="__codelineno-38-8"></a><span class="w">    </span><span class="nx">nodeIDs</span><span class="p">[</span><span class="nx">node</span><span class="p">.</span><span class="nx">Name</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">node</span><span class="p">.</span><span class="nx">NodeID</span>
+</span><span id="__span-38-9"><a id="__codelineno-38-9" name="__codelineno-38-9"></a><span class="p">}</span>
+</span><span id="__span-38-10"><a id="__codelineno-38-10" name="__codelineno-38-10"></a>
+</span><span id="__span-38-11"><a id="__codelineno-38-11" name="__codelineno-38-11"></a><span class="kd">var</span><span class="w"> </span><span class="nx">plannerPatch</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SurfacePatch</span>
+</span><span id="__span-38-12"><a id="__codelineno-38-12" name="__codelineno-38-12"></a><span class="nx">plannerPatch</span><span class="p">.</span><span class="nx">SetInstruction</span><span class="p">(</span><span class="s">&quot;Produce no more than three candidate plans.&quot;</span><span class="p">)</span>
+</span><span id="__span-38-13"><a id="__codelineno-38-13" name="__codelineno-38-13"></a>
+</span><span id="__span-38-14"><a id="__codelineno-38-14" name="__codelineno-38-14"></a><span class="kd">var</span><span class="w"> </span><span class="nx">reviewerPatch</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SurfacePatch</span>
+</span><span id="__span-38-15"><a id="__codelineno-38-15" name="__codelineno-38-15"></a><span class="nx">reviewerPatch</span><span class="p">.</span><span class="nx">SetInstruction</span><span class="p">(</span><span class="s">&quot;Reject any plan that lacks cost analysis.&quot;</span><span class="p">)</span>
+</span><span id="__span-38-16"><a id="__codelineno-38-16" name="__codelineno-38-16"></a>
+</span><span id="__span-38-17"><a id="__codelineno-38-17" name="__codelineno-38-17"></a><span class="kd">var</span><span class="w"> </span><span class="nx">toolsPatch</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SurfacePatch</span>
+</span><span id="__span-38-18"><a id="__codelineno-38-18" name="__codelineno-38-18"></a><span class="nx">toolsPatch</span><span class="p">.</span><span class="nx">SetTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">,</span><span class="w"> </span><span class="nx">priceTool</span><span class="p">})</span>
+</span><span id="__span-38-19"><a id="__codelineno-38-19" name="__codelineno-38-19"></a>
+</span><span id="__span-38-20"><a id="__codelineno-38-20" name="__codelineno-38-20"></a><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-38-21"><a id="__codelineno-38-21" name="__codelineno-38-21"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-38-22"><a id="__codelineno-38-22" name="__codelineno-38-22"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-38-23"><a id="__codelineno-38-23" name="__codelineno-38-23"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-38-24"><a id="__codelineno-38-24" name="__codelineno-38-24"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Plan a team offsite in Suzhou next month.&quot;</span><span class="p">),</span>
+</span><span id="__span-38-25"><a id="__codelineno-38-25" name="__codelineno-38-25"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSurfacePatchForNode</span><span class="p">(</span><span class="nx">nodeIDs</span><span class="p">[</span><span class="s">&quot;planner&quot;</span><span class="p">],</span><span class="w"> </span><span class="nx">plannerPatch</span><span class="p">),</span>
+</span><span id="__span-38-26"><a id="__codelineno-38-26" name="__codelineno-38-26"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSurfacePatchForNode</span><span class="p">(</span><span class="nx">nodeIDs</span><span class="p">[</span><span class="s">&quot;reviewer&quot;</span><span class="p">],</span><span class="w"> </span><span class="nx">reviewerPatch</span><span class="p">),</span>
+</span><span id="__span-38-27"><a id="__codelineno-38-27" name="__codelineno-38-27"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSurfacePatchForNode</span><span class="p">(</span><span class="nx">nodeIDs</span><span class="p">[</span><span class="s">&quot;search_tools&quot;</span><span class="p">],</span><span class="w"> </span><span class="nx">toolsPatch</span><span class="p">),</span>
+</span><span id="__span-38-28"><a id="__codelineno-38-28" name="__codelineno-38-28"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>对同一 <code>nodeID</code> 多次传 <code>WithSurfacePatchForNode(...)</code> 时，框架会按 surface 类型合并：</p>
+<ul>
+<li>不同 surface 类型彼此合并。</li>
+<li>同一种 surface 类型后传入的值覆盖先传入的值。</li>
+</ul>
+<h3 id="_20">组合结构与嵌套结构</h3>
+<p>这套能力不只适用于单个 <code>LLMAgent</code>。在这些结构里也建议使用同样的方法：</p>
+<ul>
+<li><code>graph</code>：可覆盖图中的 LLM 节点、Tools 节点，以及图中挂载的子 Agent 根节点。</li>
+<li><code>chain</code>、<code>parallel</code>、<code>cycle</code>：可覆盖任意导出出来的子节点。</li>
+<li><code>team</code> / <code>swarm</code>：可覆盖 <code>coordinator</code>、成员节点，以及 transfer 后到达的成员节点。</li>
+</ul>
+<p>在这些场景里，最稳妥的做法仍然是：</p>
+<ul>
+<li>先 <code>structure.Export(...)</code></li>
+<li>再使用导出的 <code>nodeID</code></li>
+<li>最后在 <code>runner.Run(...)</code> 中传入 patch</li>
+</ul>
+<p>这样用户只需要记住一套规则：<code>nodeID</code> 由结构导出提供，运行时 patch 由 <code>WithSurfacePatchForNode(...)</code> 提供。</p>
+<h2 id="_21">执行图导出</h2>
+<p>框架可以为单次 <code>runner.Run</code> 调用导出执行图，用来观察这次运行里哪些节点真的执行了、各个步骤之间如何依赖，以及每个步骤看到的输入和输出快照。</p>
+<p>需要在运行时显式开启：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-39-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-39-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-39-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-39-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-39-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-39-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-39-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-39-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-39-10">10</a></span>
+<span class="normal"><a href="#__codelineno-39-11">11</a></span>
+<span class="normal"><a href="#__codelineno-39-12">12</a></span>
+<span class="normal"><a href="#__codelineno-39-13">13</a></span>
+<span class="normal"><a href="#__codelineno-39-14">14</a></span>
+<span class="normal"><a href="#__codelineno-39-15">15</a></span>
+<span class="normal"><a href="#__codelineno-39-16">16</a></span>
+<span class="normal"><a href="#__codelineno-39-17">17</a></span>
+<span class="normal"><a href="#__codelineno-39-18">18</a></span>
+<span class="normal"><a href="#__codelineno-39-19">19</a></span>
+<span class="normal"><a href="#__codelineno-39-20">20</a></span>
+<span class="normal"><a href="#__codelineno-39-21">21</a></span>
+<span class="normal"><a href="#__codelineno-39-22">22</a></span>
+<span class="normal"><a href="#__codelineno-39-23">23</a></span>
+<span class="normal"><a href="#__codelineno-39-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
+</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5"></a><span class="p">)</span>
+</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6"></a>
+</span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;demo-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">ag</span><span class="p">)</span>
+</span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-39-10"><a id="__codelineno-39-10" name="__codelineno-39-10"></a><span class="w">    </span><span class="s">&quot;user-1&quot;</span><span class="p">,</span>
+</span><span id="__span-39-11"><a id="__codelineno-39-11" name="__codelineno-39-11"></a><span class="w">    </span><span class="s">&quot;session-1&quot;</span><span class="p">,</span>
+</span><span id="__span-39-12"><a id="__codelineno-39-12" name="__codelineno-39-12"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;hello&quot;</span><span class="p">),</span>
+</span><span id="__span-39-13"><a id="__codelineno-39-13" name="__codelineno-39-13"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithExecutionTraceEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-39-14"><a id="__codelineno-39-14" name="__codelineno-39-14"></a><span class="p">)</span>
+</span><span id="__span-39-15"><a id="__codelineno-39-15" name="__codelineno-39-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-16"><a id="__codelineno-39-16" name="__codelineno-39-16"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;运行失败: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-39-17"><a id="__codelineno-39-17" name="__codelineno-39-17"></a><span class="p">}</span>
+</span><span id="__span-39-18"><a id="__codelineno-39-18" name="__codelineno-39-18"></a><span class="k">for</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-19"><a id="__codelineno-39-19" name="__codelineno-39-19"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">IsRunnerCompletion</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-20"><a id="__codelineno-39-20" name="__codelineno-39-20"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">RootAgentName</span><span class="p">)</span>
+</span><span id="__span-39-21"><a id="__codelineno-39-21" name="__codelineno-39-21"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">Status</span><span class="p">)</span>
+</span><span id="__span-39-22"><a id="__codelineno-39-22" name="__codelineno-39-22"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">Steps</span><span class="p">))</span>
+</span><span id="__span-39-23"><a id="__codelineno-39-23" name="__codelineno-39-23"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-39-24"><a id="__codelineno-39-24" name="__codelineno-39-24"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>执行图挂在 runner completion event 上，属于进程内工件，默认不会参与序列化。</p>
 <p>每个步骤都会带上这些稳定字段：</p>
@@ -4424,7 +4731,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月25日 06:27:48 UTC">2026-03-25 06:27:48</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月27日 09:09:04 UTC">2026-03-27 09:09:04</span>
   </span>
 
     

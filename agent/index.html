@@ -946,6 +946,57 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#override-runtime-surfaces-by-nodeid" class="md-nav__link">
+    <span class="md-ellipsis">
+      Override Runtime Surfaces by nodeID
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Override Runtime Surfaces by nodeID">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommended-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommended Workflow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#patchable-surfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      Patchable Surfaces
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#override-multiple-nodes-in-one-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      Override Multiple Nodes in One Run
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#composite-and-nested-structures" class="md-nav__link">
+    <span class="md-ellipsis">
+      Composite and Nested Structures
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#execution-trace" class="md-nav__link">
     <span class="md-ellipsis">
       Execution Trace
@@ -2664,6 +2715,57 @@
       Static Structure Export
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#override-runtime-surfaces-by-nodeid" class="md-nav__link">
+    <span class="md-ellipsis">
+      Override Runtime Surfaces by nodeID
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Override Runtime Surfaces by nodeID">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommended-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommended Workflow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#patchable-surfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      Patchable Surfaces
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#override-multiple-nodes-in-one-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      Override Multiple Nodes in One Run
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#composite-and-nested-structures" class="md-nav__link">
+    <span class="md-ellipsis">
+      Composite and Nested Structures
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -4392,9 +4494,18 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
 <li><code>Surfaces</code>: stable editable baselines such as <code>instruction</code>, <code>model</code>, <code>tool</code>, and <code>skill</code></li>
 </ul>
 <p>For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/structure_export">examples/graph/structure_export</a>.</p>
-<h2 id="execution-trace">Execution Trace</h2>
-<p>The framework can export an execution trace for a single <code>runner.Run</code> call. This is useful for understanding which nodes actually ran, how steps depend on each other, and what each step saw as input and output.</p>
-<p>Enable it explicitly when you start a run:</p>
+<h2 id="override-runtime-surfaces-by-nodeid">Override Runtime Surfaces by <code>nodeID</code></h2>
+<p>In addition to run-scoped overrides such as <code>agent.WithInstruction(...)</code> and
+<code>agent.WithGlobalInstruction(...)</code>, the framework also supports overriding
+runtime surfaces for a specific node by stable <code>nodeID</code> within a single
+<code>runner.Run(...)</code> call.</p>
+<p>This is useful when you want to:</p>
+<ul>
+<li>Temporarily change the instruction of one graph node without affecting the entire agent.</li>
+<li>Apply different instructions, few-shot examples, or tools to multiple nodes in the same <code>runner.Run(...)</code>.</li>
+<li>Precisely target nested nodes inside <code>chain</code>, <code>parallel</code>, <code>cycle</code>, <code>graph</code>, <code>team</code>, and <code>swarm</code> structures.</li>
+</ul>
+<p>Entry API:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-36-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-36-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-36-3"> 3</a></span>
@@ -4410,38 +4521,236 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
 <span class="normal"><a href="#__codelineno-36-13">13</a></span>
 <span class="normal"><a href="#__codelineno-36-14">14</a></span>
 <span class="normal"><a href="#__codelineno-36-15">15</a></span>
-<span class="normal"><a href="#__codelineno-36-16">16</a></span>
-<span class="normal"><a href="#__codelineno-36-17">17</a></span>
-<span class="normal"><a href="#__codelineno-36-18">18</a></span>
-<span class="normal"><a href="#__codelineno-36-19">19</a></span>
-<span class="normal"><a href="#__codelineno-36-20">20</a></span>
-<span class="normal"><a href="#__codelineno-36-21">21</a></span>
-<span class="normal"><a href="#__codelineno-36-22">22</a></span>
-<span class="normal"><a href="#__codelineno-36-23">23</a></span>
-<span class="normal"><a href="#__codelineno-36-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
-</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-36-5"><a id="__codelineno-36-5" name="__codelineno-36-5"></a><span class="p">)</span>
-</span><span id="__span-36-6"><a id="__codelineno-36-6" name="__codelineno-36-6"></a>
-</span><span id="__span-36-7"><a id="__codelineno-36-7" name="__codelineno-36-7"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;demo-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">ag</span><span class="p">)</span>
-</span><span id="__span-36-8"><a id="__codelineno-36-8" name="__codelineno-36-8"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
-</span><span id="__span-36-9"><a id="__codelineno-36-9" name="__codelineno-36-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-36-10"><a id="__codelineno-36-10" name="__codelineno-36-10"></a><span class="w">    </span><span class="s">&quot;user-1&quot;</span><span class="p">,</span>
-</span><span id="__span-36-11"><a id="__codelineno-36-11" name="__codelineno-36-11"></a><span class="w">    </span><span class="s">&quot;session-1&quot;</span><span class="p">,</span>
-</span><span id="__span-36-12"><a id="__codelineno-36-12" name="__codelineno-36-12"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;hello&quot;</span><span class="p">),</span>
-</span><span id="__span-36-13"><a id="__codelineno-36-13" name="__codelineno-36-13"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithExecutionTraceEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-36-14"><a id="__codelineno-36-14" name="__codelineno-36-14"></a><span class="p">)</span>
-</span><span id="__span-36-15"><a id="__codelineno-36-15" name="__codelineno-36-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-36-16"><a id="__codelineno-36-16" name="__codelineno-36-16"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Run failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-36-17"><a id="__codelineno-36-17" name="__codelineno-36-17"></a><span class="p">}</span>
-</span><span id="__span-36-18"><a id="__codelineno-36-18" name="__codelineno-36-18"></a><span class="k">for</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-36-19"><a id="__codelineno-36-19" name="__codelineno-36-19"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">IsRunnerCompletion</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-36-20"><a id="__codelineno-36-20" name="__codelineno-36-20"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">RootAgentName</span><span class="p">)</span>
-</span><span id="__span-36-21"><a id="__codelineno-36-21" name="__codelineno-36-21"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">Status</span><span class="p">)</span>
-</span><span id="__span-36-22"><a id="__codelineno-36-22" name="__codelineno-36-22"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">Steps</span><span class="p">))</span>
-</span><span id="__span-36-23"><a id="__codelineno-36-23" name="__codelineno-36-23"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-36-24"><a id="__codelineno-36-24" name="__codelineno-36-24"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-36-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1"></a><span class="kd">var</span><span class="w"> </span><span class="nx">patch</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SurfacePatch</span>
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2"></a><span class="nx">patch</span><span class="p">.</span><span class="nx">SetInstruction</span><span class="p">(</span><span class="s">&quot;Answer in one short paragraph.&quot;</span><span class="p">)</span>
+</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3"></a><span class="nx">patch</span><span class="p">.</span><span class="nx">SetFewShot</span><span class="p">([][]</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
+</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-36-5"><a id="__codelineno-36-5" name="__codelineno-36-5"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Summarize this report.&quot;</span><span class="p">),</span>
+</span><span id="__span-36-6"><a id="__codelineno-36-6" name="__codelineno-36-6"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewAssistantMessage</span><span class="p">(</span><span class="s">&quot;Provide a short executive summary first.&quot;</span><span class="p">),</span>
+</span><span id="__span-36-7"><a id="__codelineno-36-7" name="__codelineno-36-7"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-36-8"><a id="__codelineno-36-8" name="__codelineno-36-8"></a><span class="p">})</span>
+</span><span id="__span-36-9"><a id="__codelineno-36-9" name="__codelineno-36-9"></a>
+</span><span id="__span-36-10"><a id="__codelineno-36-10" name="__codelineno-36-10"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-36-11"><a id="__codelineno-36-11" name="__codelineno-36-11"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-36-12"><a id="__codelineno-36-12" name="__codelineno-36-12"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-36-13"><a id="__codelineno-36-13" name="__codelineno-36-13"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-36-14"><a id="__codelineno-36-14" name="__codelineno-36-14"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Please analyze the latest findings.&quot;</span><span class="p">),</span>
+</span><span id="__span-36-15"><a id="__codelineno-36-15" name="__codelineno-36-15"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSurfacePatchForNode</span><span class="p">(</span><span class="nx">nodeID</span><span class="p">,</span><span class="w"> </span><span class="nx">patch</span><span class="p">),</span>
+</span><span id="__span-36-16"><a id="__codelineno-36-16" name="__codelineno-36-16"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="recommended-workflow">Recommended Workflow</h3>
+<p>Use the feature in this order:</p>
+<ol>
+<li>Export a static structure snapshot with <code>structure.Export(...)</code>.</li>
+<li>Find the stable target <code>nodeID</code> from <code>snapshot.EntryNodeID</code> or <code>snapshot.Nodes</code>.</li>
+<li>Build an <code>agent.SurfacePatch</code> and set only the surfaces you want to override for this run.</li>
+<li>Pass one or more <code>agent.WithSurfacePatchForNode(...)</code> options to <code>runner.Run(...)</code>.</li>
+</ol>
+<p>Example:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-37-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-37-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-37-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-37-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-37-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-37-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-37-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-37-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-37-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-37-10">10</a></span>
+<span class="normal"><a href="#__codelineno-37-11">11</a></span>
+<span class="normal"><a href="#__codelineno-37-12">12</a></span>
+<span class="normal"><a href="#__codelineno-37-13">13</a></span>
+<span class="normal"><a href="#__codelineno-37-14">14</a></span>
+<span class="normal"><a href="#__codelineno-37-15">15</a></span>
+<span class="normal"><a href="#__codelineno-37-16">16</a></span>
+<span class="normal"><a href="#__codelineno-37-17">17</a></span>
+<span class="normal"><a href="#__codelineno-37-18">18</a></span>
+<span class="normal"><a href="#__codelineno-37-19">19</a></span>
+<span class="normal"><a href="#__codelineno-37-20">20</a></span>
+<span class="normal"><a href="#__codelineno-37-21">21</a></span>
+<span class="normal"><a href="#__codelineno-37-22">22</a></span>
+<span class="normal"><a href="#__codelineno-37-23">23</a></span>
+<span class="normal"><a href="#__codelineno-37-24">24</a></span>
+<span class="normal"><a href="#__codelineno-37-25">25</a></span>
+<span class="normal"><a href="#__codelineno-37-26">26</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1"></a><span class="nx">snapshot</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">structure</span><span class="p">.</span><span class="nx">Export</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">workflowAgent</span><span class="p">)</span>
+</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-37-4"><a id="__codelineno-37-4" name="__codelineno-37-4"></a><span class="p">}</span>
+</span><span id="__span-37-5"><a id="__codelineno-37-5" name="__codelineno-37-5"></a>
+</span><span id="__span-37-6"><a id="__codelineno-37-6" name="__codelineno-37-6"></a><span class="kd">var</span><span class="w"> </span><span class="nx">plannerNodeID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-37-7"><a id="__codelineno-37-7" name="__codelineno-37-7"></a><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">node</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">snapshot</span><span class="p">.</span><span class="nx">Nodes</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-37-8"><a id="__codelineno-37-8" name="__codelineno-37-8"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">node</span><span class="p">.</span><span class="nx">Name</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;planner&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-37-9"><a id="__codelineno-37-9" name="__codelineno-37-9"></a><span class="w">        </span><span class="nx">plannerNodeID</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">node</span><span class="p">.</span><span class="nx">NodeID</span>
+</span><span id="__span-37-10"><a id="__codelineno-37-10" name="__codelineno-37-10"></a><span class="w">        </span><span class="k">break</span>
+</span><span id="__span-37-11"><a id="__codelineno-37-11" name="__codelineno-37-11"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-37-12"><a id="__codelineno-37-12" name="__codelineno-37-12"></a><span class="p">}</span>
+</span><span id="__span-37-13"><a id="__codelineno-37-13" name="__codelineno-37-13"></a><span class="k">if</span><span class="w"> </span><span class="nx">plannerNodeID</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-37-14"><a id="__codelineno-37-14" name="__codelineno-37-14"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;planner node not found&quot;</span><span class="p">)</span>
+</span><span id="__span-37-15"><a id="__codelineno-37-15" name="__codelineno-37-15"></a><span class="p">}</span>
+</span><span id="__span-37-16"><a id="__codelineno-37-16" name="__codelineno-37-16"></a>
+</span><span id="__span-37-17"><a id="__codelineno-37-17" name="__codelineno-37-17"></a><span class="kd">var</span><span class="w"> </span><span class="nx">patch</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SurfacePatch</span>
+</span><span id="__span-37-18"><a id="__codelineno-37-18" name="__codelineno-37-18"></a><span class="nx">patch</span><span class="p">.</span><span class="nx">SetInstruction</span><span class="p">(</span><span class="s">&quot;Plan in at most three steps.&quot;</span><span class="p">)</span>
+</span><span id="__span-37-19"><a id="__codelineno-37-19" name="__codelineno-37-19"></a>
+</span><span id="__span-37-20"><a id="__codelineno-37-20" name="__codelineno-37-20"></a><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-37-21"><a id="__codelineno-37-21" name="__codelineno-37-21"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-37-22"><a id="__codelineno-37-22" name="__codelineno-37-22"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-37-23"><a id="__codelineno-37-23" name="__codelineno-37-23"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-37-24"><a id="__codelineno-37-24" name="__codelineno-37-24"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Arrange a trip to Hangzhou next Friday.&quot;</span><span class="p">),</span>
+</span><span id="__span-37-25"><a id="__codelineno-37-25" name="__codelineno-37-25"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSurfacePatchForNode</span><span class="p">(</span><span class="nx">plannerNodeID</span><span class="p">,</span><span class="w"> </span><span class="nx">patch</span><span class="p">),</span>
+</span><span id="__span-37-26"><a id="__codelineno-37-26" name="__codelineno-37-26"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Notes:</p>
+<ul>
+<li>Prefer <code>nodeID</code> values exported by <code>structure.Export(...)</code> instead of handwritten paths.</li>
+<li>The override only applies to the current <code>runner.Run(...)</code> call and does not mutate the static agent definition.</li>
+<li><code>agent.WithInstruction(...)</code> and <code>agent.WithGlobalInstruction(...)</code> still work and are appropriate when you want one run-scoped override for the root agent. Use <code>WithSurfacePatchForNode(...)</code> when you need per-node control.</li>
+</ul>
+<h3 id="patchable-surfaces">Patchable Surfaces</h3>
+<p><code>SurfacePatch</code> currently provides these setters:</p>
+<ul>
+<li><code>SetInstruction(string)</code>: overrides the node instruction for this run.</li>
+<li><code>SetGlobalInstruction(string)</code>: overrides the node global instruction for this run.</li>
+<li><code>SetFewShot([][]model.Message)</code>: overrides the node few-shot examples for this run.</li>
+<li><code>SetModel(model.Model)</code>: overrides the model instance used by the node for this run.</li>
+<li><code>SetTools([]tool.Tool)</code>: overrides the node tool surface for this run. This means replacing the tool set visible at runtime, not merely changing tool descriptions.</li>
+<li><code>SetSkillRepository(skill.Repository)</code>: overrides the node skill repository for this run. Passing <code>nil</code> explicitly disables the node skill surface.</li>
+</ul>
+<p>Not every node supports every surface. Common cases are:</p>
+<ul>
+<li>Root <code>LLMAgent</code>: supports <code>instruction</code>, <code>global_instruction</code>, <code>few_shot</code>, <code>model</code>, <code>tool</code>, and <code>skill</code>.</li>
+<li>Graph LLM node: supports <code>instruction</code>, <code>few_shot</code>, <code>model</code>, and <code>tool</code>.</li>
+<li>Graph Tools node: supports <code>tool</code>.</li>
+<li>Child nodes inside graph sub-agents, <code>chain</code>, <code>parallel</code>, <code>cycle</code>, <code>team</code>, and <code>swarm</code>: support depends on the actual target node you patch.</li>
+</ul>
+<h3 id="override-multiple-nodes-in-one-run">Override Multiple Nodes in One Run</h3>
+<p>To patch multiple nodes in the same <code>runner.Run(...)</code>, pass multiple
+<code>agent.WithSurfacePatchForNode(...)</code> options. There is no separate batch API.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-38-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-38-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-38-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-38-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-38-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-38-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-38-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-38-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-38-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-38-10">10</a></span>
+<span class="normal"><a href="#__codelineno-38-11">11</a></span>
+<span class="normal"><a href="#__codelineno-38-12">12</a></span>
+<span class="normal"><a href="#__codelineno-38-13">13</a></span>
+<span class="normal"><a href="#__codelineno-38-14">14</a></span>
+<span class="normal"><a href="#__codelineno-38-15">15</a></span>
+<span class="normal"><a href="#__codelineno-38-16">16</a></span>
+<span class="normal"><a href="#__codelineno-38-17">17</a></span>
+<span class="normal"><a href="#__codelineno-38-18">18</a></span>
+<span class="normal"><a href="#__codelineno-38-19">19</a></span>
+<span class="normal"><a href="#__codelineno-38-20">20</a></span>
+<span class="normal"><a href="#__codelineno-38-21">21</a></span>
+<span class="normal"><a href="#__codelineno-38-22">22</a></span>
+<span class="normal"><a href="#__codelineno-38-23">23</a></span>
+<span class="normal"><a href="#__codelineno-38-24">24</a></span>
+<span class="normal"><a href="#__codelineno-38-25">25</a></span>
+<span class="normal"><a href="#__codelineno-38-26">26</a></span>
+<span class="normal"><a href="#__codelineno-38-27">27</a></span>
+<span class="normal"><a href="#__codelineno-38-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1"></a><span class="nx">snapshot</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">structure</span><span class="p">.</span><span class="nx">Export</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">workflowAgent</span><span class="p">)</span>
+</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4"></a><span class="p">}</span>
+</span><span id="__span-38-5"><a id="__codelineno-38-5" name="__codelineno-38-5"></a>
+</span><span id="__span-38-6"><a id="__codelineno-38-6" name="__codelineno-38-6"></a><span class="nx">nodeIDs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">make</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-38-7"><a id="__codelineno-38-7" name="__codelineno-38-7"></a><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">node</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">snapshot</span><span class="p">.</span><span class="nx">Nodes</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-38-8"><a id="__codelineno-38-8" name="__codelineno-38-8"></a><span class="w">    </span><span class="nx">nodeIDs</span><span class="p">[</span><span class="nx">node</span><span class="p">.</span><span class="nx">Name</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">node</span><span class="p">.</span><span class="nx">NodeID</span>
+</span><span id="__span-38-9"><a id="__codelineno-38-9" name="__codelineno-38-9"></a><span class="p">}</span>
+</span><span id="__span-38-10"><a id="__codelineno-38-10" name="__codelineno-38-10"></a>
+</span><span id="__span-38-11"><a id="__codelineno-38-11" name="__codelineno-38-11"></a><span class="kd">var</span><span class="w"> </span><span class="nx">plannerPatch</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SurfacePatch</span>
+</span><span id="__span-38-12"><a id="__codelineno-38-12" name="__codelineno-38-12"></a><span class="nx">plannerPatch</span><span class="p">.</span><span class="nx">SetInstruction</span><span class="p">(</span><span class="s">&quot;Produce no more than three candidate plans.&quot;</span><span class="p">)</span>
+</span><span id="__span-38-13"><a id="__codelineno-38-13" name="__codelineno-38-13"></a>
+</span><span id="__span-38-14"><a id="__codelineno-38-14" name="__codelineno-38-14"></a><span class="kd">var</span><span class="w"> </span><span class="nx">reviewerPatch</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SurfacePatch</span>
+</span><span id="__span-38-15"><a id="__codelineno-38-15" name="__codelineno-38-15"></a><span class="nx">reviewerPatch</span><span class="p">.</span><span class="nx">SetInstruction</span><span class="p">(</span><span class="s">&quot;Reject any plan that lacks cost analysis.&quot;</span><span class="p">)</span>
+</span><span id="__span-38-16"><a id="__codelineno-38-16" name="__codelineno-38-16"></a>
+</span><span id="__span-38-17"><a id="__codelineno-38-17" name="__codelineno-38-17"></a><span class="kd">var</span><span class="w"> </span><span class="nx">toolsPatch</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">SurfacePatch</span>
+</span><span id="__span-38-18"><a id="__codelineno-38-18" name="__codelineno-38-18"></a><span class="nx">toolsPatch</span><span class="p">.</span><span class="nx">SetTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">,</span><span class="w"> </span><span class="nx">priceTool</span><span class="p">})</span>
+</span><span id="__span-38-19"><a id="__codelineno-38-19" name="__codelineno-38-19"></a>
+</span><span id="__span-38-20"><a id="__codelineno-38-20" name="__codelineno-38-20"></a><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-38-21"><a id="__codelineno-38-21" name="__codelineno-38-21"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-38-22"><a id="__codelineno-38-22" name="__codelineno-38-22"></a><span class="w">    </span><span class="nx">userID</span><span class="p">,</span>
+</span><span id="__span-38-23"><a id="__codelineno-38-23" name="__codelineno-38-23"></a><span class="w">    </span><span class="nx">sessionID</span><span class="p">,</span>
+</span><span id="__span-38-24"><a id="__codelineno-38-24" name="__codelineno-38-24"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Plan a team offsite in Suzhou next month.&quot;</span><span class="p">),</span>
+</span><span id="__span-38-25"><a id="__codelineno-38-25" name="__codelineno-38-25"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSurfacePatchForNode</span><span class="p">(</span><span class="nx">nodeIDs</span><span class="p">[</span><span class="s">&quot;planner&quot;</span><span class="p">],</span><span class="w"> </span><span class="nx">plannerPatch</span><span class="p">),</span>
+</span><span id="__span-38-26"><a id="__codelineno-38-26" name="__codelineno-38-26"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSurfacePatchForNode</span><span class="p">(</span><span class="nx">nodeIDs</span><span class="p">[</span><span class="s">&quot;reviewer&quot;</span><span class="p">],</span><span class="w"> </span><span class="nx">reviewerPatch</span><span class="p">),</span>
+</span><span id="__span-38-27"><a id="__codelineno-38-27" name="__codelineno-38-27"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSurfacePatchForNode</span><span class="p">(</span><span class="nx">nodeIDs</span><span class="p">[</span><span class="s">&quot;search_tools&quot;</span><span class="p">],</span><span class="w"> </span><span class="nx">toolsPatch</span><span class="p">),</span>
+</span><span id="__span-38-28"><a id="__codelineno-38-28" name="__codelineno-38-28"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>When <code>WithSurfacePatchForNode(...)</code> is passed multiple times for the same
+<code>nodeID</code>, the framework merges by surface type:</p>
+<ul>
+<li>Different surface types are combined.</li>
+<li>For the same surface type, the later option overrides the earlier one.</li>
+</ul>
+<h3 id="composite-and-nested-structures">Composite and Nested Structures</h3>
+<p>The same pattern applies beyond a single <code>LLMAgent</code>:</p>
+<ul>
+<li><code>graph</code>: patch graph LLM nodes, Tools nodes, and the root nodes of child agents mounted inside the graph.</li>
+<li><code>chain</code>, <code>parallel</code>, <code>cycle</code>: patch any exported child node.</li>
+<li><code>team</code> and <code>swarm</code>: patch the <code>coordinator</code>, member nodes, and members reached after transfer.</li>
+</ul>
+<p>The most robust workflow is still:</p>
+<ul>
+<li>export with <code>structure.Export(...)</code></li>
+<li>select the exported <code>nodeID</code></li>
+<li>pass the patch through <code>WithSurfacePatchForNode(...)</code></li>
+</ul>
+<p>This keeps one rule easy to remember: <code>nodeID</code> comes from structure export, and the runtime patch is supplied through <code>WithSurfacePatchForNode(...)</code>.</p>
+<h2 id="execution-trace">Execution Trace</h2>
+<p>The framework can export an execution trace for a single <code>runner.Run</code> call. This is useful for understanding which nodes actually ran, how steps depend on each other, and what each step saw as input and output.</p>
+<p>Enable it explicitly when you start a run:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-39-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-39-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-39-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-39-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-39-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-39-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-39-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-39-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-39-10">10</a></span>
+<span class="normal"><a href="#__codelineno-39-11">11</a></span>
+<span class="normal"><a href="#__codelineno-39-12">12</a></span>
+<span class="normal"><a href="#__codelineno-39-13">13</a></span>
+<span class="normal"><a href="#__codelineno-39-14">14</a></span>
+<span class="normal"><a href="#__codelineno-39-15">15</a></span>
+<span class="normal"><a href="#__codelineno-39-16">16</a></span>
+<span class="normal"><a href="#__codelineno-39-17">17</a></span>
+<span class="normal"><a href="#__codelineno-39-18">18</a></span>
+<span class="normal"><a href="#__codelineno-39-19">19</a></span>
+<span class="normal"><a href="#__codelineno-39-20">20</a></span>
+<span class="normal"><a href="#__codelineno-39-21">21</a></span>
+<span class="normal"><a href="#__codelineno-39-22">22</a></span>
+<span class="normal"><a href="#__codelineno-39-23">23</a></span>
+<span class="normal"><a href="#__codelineno-39-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
+</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5"></a><span class="p">)</span>
+</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6"></a>
+</span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;demo-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">ag</span><span class="p">)</span>
+</span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-39-10"><a id="__codelineno-39-10" name="__codelineno-39-10"></a><span class="w">    </span><span class="s">&quot;user-1&quot;</span><span class="p">,</span>
+</span><span id="__span-39-11"><a id="__codelineno-39-11" name="__codelineno-39-11"></a><span class="w">    </span><span class="s">&quot;session-1&quot;</span><span class="p">,</span>
+</span><span id="__span-39-12"><a id="__codelineno-39-12" name="__codelineno-39-12"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;hello&quot;</span><span class="p">),</span>
+</span><span id="__span-39-13"><a id="__codelineno-39-13" name="__codelineno-39-13"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithExecutionTraceEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-39-14"><a id="__codelineno-39-14" name="__codelineno-39-14"></a><span class="p">)</span>
+</span><span id="__span-39-15"><a id="__codelineno-39-15" name="__codelineno-39-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-16"><a id="__codelineno-39-16" name="__codelineno-39-16"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Run failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-39-17"><a id="__codelineno-39-17" name="__codelineno-39-17"></a><span class="p">}</span>
+</span><span id="__span-39-18"><a id="__codelineno-39-18" name="__codelineno-39-18"></a><span class="k">for</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">events</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-19"><a id="__codelineno-39-19" name="__codelineno-39-19"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">evt</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">IsRunnerCompletion</span><span class="p">()</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-20"><a id="__codelineno-39-20" name="__codelineno-39-20"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">RootAgentName</span><span class="p">)</span>
+</span><span id="__span-39-21"><a id="__codelineno-39-21" name="__codelineno-39-21"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">Status</span><span class="p">)</span>
+</span><span id="__span-39-22"><a id="__codelineno-39-22" name="__codelineno-39-22"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Println</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="nx">evt</span><span class="p">.</span><span class="nx">ExecutionTrace</span><span class="p">.</span><span class="nx">Steps</span><span class="p">))</span>
+</span><span id="__span-39-23"><a id="__codelineno-39-23" name="__codelineno-39-23"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-39-24"><a id="__codelineno-39-24" name="__codelineno-39-24"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Execution traces are attached to the runner completion event as an in-memory artifact. They are not serialized by default.</p>
 <p>Each recorded step carries stable fields such as:</p>
@@ -4474,7 +4783,7 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 25, 2026 06:27:48 UTC">2026-03-25 06:27:48</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 27, 2026 09:09:04 UTC">2026-03-27 09:09:04</span>
   </span>
 
     
