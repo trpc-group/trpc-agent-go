@@ -108,6 +108,66 @@ CLI 参数始终会覆盖配置文件中的值。
 配置文件支持 `${NAME}` 形式的环境变量占位符。
 缺少的环境变量会导致 OpenClaw 立即报错退出。
 
+### 原生 Browser Use
+
+OpenClaw 现在支持原生 `browser` tool provider，用来做真实浏览器
+自动化。
+
+适合这些场景：
+
+- JS 很重的页面
+- tab 管理和页面跳转
+- 截图或页面快照
+- 点击、输入、选择、弹窗处理
+
+这个 provider 对模型暴露的是一个统一的 `browser` 工具，底层仍然
+复用 Playwright MCP，因此截图图片仍然会被转发回模型。
+
+默认情况下，browser 导航会拦截：
+
+- `localhost` 这类 loopback host
+- 私有网段 IP
+- `file://` URL
+
+如果需要放开或细化，可以使用这些配置项：
+`allowed_domains`、`blocked_domains`、`allow_loopback`、
+`allow_private_networks`、`allow_file_urls`。
+
+示例配置：
+
+```yaml
+tools:
+  providers:
+    - type: "browser"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        allowed_domains: ["example.com"]
+        profiles:
+          - name: "openclaw"
+            transport: "stdio"
+            command: "npx"
+            args:
+              - "--yes"
+              - "@playwright/mcp@latest"
+              - "--headless"
+              - "--isolated"
+              - "--caps"
+              - "vision,pdf"
+            timeout: "5m"
+```
+
+可运行示例：
+[examples/browser_use/README.md](./examples/browser_use/README.md)
+
+browser-server 示例：
+[examples/browser_server_use/README.md](./examples/browser_server_use/README.md)
+
+完整的 browser runtime 脚手架还在这里：
+
+- [`./browser-server/`](./browser-server/)
+- [`./browser-extension/`](./browser-extension/)
+
 ### 调试记录器（可选）
 
 在调试多步流程（尤其是 Telegram "处理中..." 消息）时，
@@ -170,7 +230,10 @@ admin:
 
 agent:
   # 简短指令文本（可选）。
-  instruction: "You are a helpful assistant. Reply in a friendly tone."
+  instruction: |
+    You are a helpful assistant. Reply in a friendly tone.
+    Use browser for JS-heavy sites, page interactions, snapshots,
+    screenshots, downloads, uploads, and current-tab relay workflows.
   # 可选：加载并合并多个 markdown 文件到 system prompt 中。
   # 文件按字母顺序读取。
   # system_prompt_dir: "./prompts/system"
@@ -192,6 +255,19 @@ tools:
   # 启用后，当模型在一个步骤中返回多个 tool call 时，
   # OpenClaw 会并发执行它们。
   enable_parallel_tools: true
+  providers:
+    - type: "browser"
+      name: "browser-runtime"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        server_url: "http://127.0.0.1:19790"
+        sandbox_server_url: "http://127.0.0.1:20790"
+        profiles:
+          - name: "openclaw"
+            description: "Managed Playwright profile from browser-server."
+          - name: "chrome"
+            description: "Current Chromium tab attached through relay."
 
 channels:
   - type: "telegram"
@@ -223,6 +299,16 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 - 时长字段使用 Go 风格的字符串，如 `60s`、`10m`、`1h`。
 - 对于密钥（模型 key、Telegram token），请勿将其纳入版本控制。
   建议尽可能使用环境变量。
+- 示例 Telegram 配置已经把原生 `browser` 工具接到了本地默认
+  browser-server 地址。当 `server_url` 指向
+  `http://127.0.0.1:19790` 时，`go run ./cmd/openclaw` 会先探活该地址，
+  如果未启动则自动拉起 `openclaw/browser-server`。前提是当前仓库里的
+  `openclaw/browser-server` 依赖已经安装好（`npm install` 和
+  `npx playwright install chromium`），并且托管进程日志会写到
+  `<state_dir>/debug/services/`，同时显示在 admin 的 Browser 卡片里。
+  如果自动拉起找不到本地 browser-server 目录，可以设置
+  `OPENCLAW_BROWSER_SERVER_DIR`，或者手动启动该服务。
+  参见 `openclaw/examples/browser_server_use/`。
 - `./openclaw.yaml` 中的示例配置可直接用于
   `go run ./cmd/openclaw -config ./openclaw.yaml`。
 - `./openclaw.stdin.yaml` 中的示例配置可直接用于

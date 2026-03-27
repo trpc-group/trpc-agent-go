@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "OpenClaw Browser Relay",
+  "version": "0.1.0",
+  "description": "Attach the current Chrome tab to the local OpenClaw browser server.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs",
+    "windows"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "OpenClaw Browser Relay"
+  }
+}

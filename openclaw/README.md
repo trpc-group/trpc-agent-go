@@ -116,6 +116,67 @@ CLI flags always override config file values.
 The config file supports environment variable placeholders in the form `${NAME}`.
 Missing environment variables cause OpenClaw to fail fast with a config error.
 
+### Native Browser Use
+
+OpenClaw now supports a native `browser` tool provider for real browser
+automation.
+
+Use it when the task needs:
+
+- JS-heavy pages
+- tabs and page navigation
+- screenshots or page snapshots
+- clicking, typing, selecting, or dialog handling
+
+The provider exposes one `browser` tool and uses Playwright MCP under
+the hood. That keeps the model-facing interface stable while preserving
+image forwarding for screenshots.
+
+By default, browser navigation blocks:
+
+- loopback hosts such as `localhost`
+- private-network IPs
+- `file://` URLs
+
+You can relax or refine that policy with:
+`allowed_domains`, `blocked_domains`, `allow_loopback`,
+`allow_private_networks`, and `allow_file_urls`.
+
+Example config:
+
+```yaml
+tools:
+  providers:
+    - type: "browser"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        allowed_domains: ["example.com"]
+        profiles:
+          - name: "openclaw"
+            transport: "stdio"
+            command: "npx"
+            args:
+              - "--yes"
+              - "@playwright/mcp@latest"
+              - "--headless"
+              - "--isolated"
+              - "--caps"
+              - "vision,pdf"
+            timeout: "5m"
+```
+
+Runnable example:
+[examples/browser_use/README.md](./examples/browser_use/README.md)
+
+Browser-server example:
+[examples/browser_server_use/README.md](./examples/browser_server_use/README.md)
+
+The full browser plane scaffolding also lives in:
+
+- [`./browser-server/`](./browser-server/)
+- [`./browser-extension/`](./browser-extension/)
+
 ### Debug recorder (optional)
 
 When debugging multi-step flows (especially Telegram "Processing..." messages),
@@ -178,7 +239,10 @@ admin:
 
 agent:
   # Short instruction text (optional).
-  instruction: "You are a helpful assistant. Reply in a friendly tone."
+  instruction: |
+    You are a helpful assistant. Reply in a friendly tone.
+    Use browser for JS-heavy sites, page interactions, snapshots,
+    screenshots, downloads, uploads, and current-tab relay workflows.
   # Optional: load and merge multiple markdown files into the system prompt.
   # Files are read in alphabetical order.
   # system_prompt_dir: "./prompts/system"
@@ -201,6 +265,19 @@ tools:
   # When enabled and the model returns multiple tool calls in one step,
   # OpenClaw executes them concurrently.
   enable_parallel_tools: true
+  providers:
+    - type: "browser"
+      name: "browser-runtime"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        server_url: "http://127.0.0.1:19790"
+        sandbox_server_url: "http://127.0.0.1:20790"
+        profiles:
+          - name: "openclaw"
+            description: "Managed Playwright profile from browser-server."
+          - name: "chrome"
+            description: "Current Chromium tab attached through relay."
 
 channels:
   - type: "telegram"
@@ -232,6 +309,16 @@ Notes:
 - Duration fields use Go-style strings like `60s`, `10m`, `1h`.
 - For secrets (model keys, Telegram tokens), keep them out of version control.
   Prefer environment variables when available.
+- The sample Telegram config enables the native `browser` tool against the
+  local browser-server defaults. When `server_url` points at
+  `http://127.0.0.1:19790`, `go run ./cmd/openclaw` now probes that address
+  and auto-starts `openclaw/browser-server` if it is not already running.
+  The checkout must already have `openclaw/browser-server` dependencies
+  installed (`npm install` and `npx playwright install chromium`), and the
+  managed process logs are written under `<state_dir>/debug/services/` and
+  surfaced in the admin Browser card. If auto-start cannot find the local
+  browser-server checkout, set `OPENCLAW_BROWSER_SERVER_DIR` or start the
+  server manually. See `openclaw/examples/browser_server_use/`.
 - The sample config in `./openclaw.yaml` is ready to use with
   `go run ./cmd/openclaw -config ./openclaw.yaml`.
 - The sample config in `./openclaw.stdin.yaml` is ready to use with

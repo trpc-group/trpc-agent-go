@@ -3,16 +3,11 @@ app_name: "openclaw"
 http:
   addr: ":8080"
 
-admin:
-  enabled: true
-  addr: "127.0.0.1:19789"
-  auto_port: true
-
 agent:
   instruction: |
-    You are a helpful assistant. Reply in a friendly tone.
-    Use browser for JS-heavy sites, page interactions, snapshots,
-    screenshots, downloads, uploads, and current-tab relay workflows.
+    You are a helpful assistant.
+    Use browser for JS-heavy sites, page interactions, screenshots,
+    and current-tab relay workflows.
 
 model:
   mode: "openai"
@@ -20,7 +15,6 @@ model:
   openai_variant: "auto"
 
 tools:
-  enable_parallel_tools: true
   providers:
     - type: "browser"
       name: "browser-runtime"
@@ -34,20 +28,6 @@ tools:
             description: "Managed Playwright profile from browser-server."
           - name: "chrome"
             description: "Current Chromium tab attached through relay."
-
-channels:
-  - type: "telegram"
-    config:
-      token: "${TELEGRAM_BOT_TOKEN}"
-      streaming: "progress"
-      http_timeout: "60s"
-
-session:
-  backend: "inmemory"
-  summary:
-    enabled: false
-
-memory:
-  backend: "inmemory"
-  auto:
-    enabled: false
+        nodes:
+          - id: "edge"
+            server_url: "http://127.0.0.1:29790"
