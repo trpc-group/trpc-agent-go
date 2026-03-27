@@ -272,7 +272,9 @@ agt := llmagent.New(
     }),
 )
 
-ch, _ := runner.Run(
+r := runner.NewRunner("skills-app", agt)
+
+ch, _ := r.Run(
     ctx,
     userID,
     sessionID,

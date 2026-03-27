@@ -152,3 +152,62 @@ func TestContextRepositoryHelpers_FallbackToPlainRepository(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "/skills/alpha", path)
 }
+
+func TestNewFilteredRepository_NilFilterKeepsPlainRepoNonContextAware(t *testing.T) {
+	base := &visibilityTestRepo{
+		summaries: []Summary{{Name: "alpha", Description: "A"}},
+		skills: map[string]*Skill{
+			"alpha": {Summary: Summary{Name: "alpha"}, Body: "alpha body"},
+		},
+		paths: map[string]string{"alpha": "/skills/alpha"},
+	}
+
+	repo := NewFilteredRepository(base, nil)
+	require.False(t, IsContextAwareRepository(repo))
+	require.Equal(
+		t,
+		[]string{"alpha"},
+		visibleSkillNames(SummariesForContext(context.Background(), repo)),
+	)
+}
+
+func TestNewFilteredRepository_NilFilterPreservesContextAwareBase(t *testing.T) {
+	base := NewFilteredRepository(
+		&visibilityTestRepo{
+			summaries: []Summary{{Name: "alpha", Description: "A"}},
+			skills: map[string]*Skill{
+				"alpha": {Summary: Summary{Name: "alpha"}, Body: "alpha body"},
+			},
+			paths: map[string]string{"alpha": "/skills/alpha"},
+		},
+		func(context.Context, Summary) bool { return true },
+	)
+
+	repo := NewFilteredRepository(base, nil)
+	require.True(t, IsContextAwareRepository(repo))
+}
+
+func TestFilteredRepository_DelegatesPlainRepositoryMethods(t *testing.T) {
+	base := &visibilityTestRepo{
+		summaries: []Summary{{Name: "alpha", Description: "A"}},
+		skills: map[string]*Skill{
+			"alpha": {Summary: Summary{Name: "alpha"}, Body: "alpha body"},
+		},
+		paths: map[string]string{"alpha": "/skills/alpha"},
+	}
+
+	repo := NewFilteredRepository(base, func(context.Context, Summary) bool { return true })
+	require.Equal(t, []string{"alpha"}, visibleSkillNames(repo.Summaries()))
+
+	sk, err := repo.Get("alpha")
+	require.NoError(t, err)
+	require.Equal(t, "alpha body", sk.Body)
+
+	path, err := repo.Path("alpha")
+	require.NoError(t, err)
+	require.Equal(t, "/skills/alpha", path)
+}
+
+func TestNewFilteredRepository_NilBaseReturnsNil(t *testing.T) {
+	require.Nil(t, NewFilteredRepository(nil, func(context.Context, Summary) bool { return true }))
+}

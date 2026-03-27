@@ -237,3 +237,16 @@ func TestSkillNameEnum_ContextAwareRepoReturnsNil(t *testing.T) {
 	)
 	require.Nil(t, skillNameEnum(repo))
 }
+
+func TestSkillNameEnum_NilFilterWrapperKeepsPlainRepoEnum(t *testing.T) {
+	repo := skill.NewFilteredRepository(
+		&mockRepo{
+			ok: map[string]bool{"alpha": true},
+			sums: []skill.Summary{
+				{Name: "alpha"},
+			},
+		},
+		nil,
+	)
+	require.Equal(t, []any{"alpha"}, skillNameEnum(repo))
+}

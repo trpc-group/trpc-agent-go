@@ -59,6 +59,9 @@ func IsContextAwareRepository(repo Repository) bool {
 	if repo == nil {
 		return false
 	}
+	if fr, ok := repo.(*filteredRepository); ok && fr.filter == nil {
+		return IsContextAwareRepository(fr.base)
+	}
 	_, ok := repo.(ContextRepository)
 	return ok
 }
