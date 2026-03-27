@@ -115,6 +115,13 @@ func TestLLMAgent_SubAgentsEmpty(t *testing.T) {
 	require.Nil(t, subAgents)
 }
 
+func TestLLMAgent_PreferPreparedGraphMessages(t *testing.T) {
+	agt := New("test-agent")
+	preferred, ok := any(agt).(agent.PreparedGraphMessagePreference)
+	require.True(t, ok)
+	require.True(t, preferred.PreferPreparedGraphMessages())
+}
+
 // TestLLMAgent_SetSubAgents verifies that SetSubAgents replaces the
 // sub-agent list and updates FindSubAgent results.
 func TestLLMAgent_SetSubAgents(t *testing.T) {

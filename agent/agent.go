@@ -82,6 +82,20 @@ type Agent interface {
 	FindSubAgent(name string) Agent
 }
 
+// PreparedGraphMessagePreference is implemented by agents that want AgentNode
+// Auto mode to prefer graph-prepared StateKeyMessages snapshots over the
+// child's own session/history-based message assembly.
+//
+// This lets default AgentNode semantics distinguish between children whose old
+// behavior was buggy (for example duplicate or role-polluted replay) and
+// children that should keep their legacy self-history continuity unless the
+// caller explicitly opts into graph-owned snapshots.
+type PreparedGraphMessagePreference interface {
+	// PreferPreparedGraphMessages reports whether Auto mode should treat a
+	// graph-prepared message snapshot as the default source for this child.
+	PreferPreparedGraphMessages() bool
+}
+
 // SubAgentSetter is implemented by agents that support updating
 // their sub-agent list at runtime.
 //

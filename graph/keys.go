@@ -30,6 +30,10 @@ const (
 	// subgraph message source came from an explicit node option instead of
 	// being inferred by Auto resolution.
 	CfgKeySubgraphMessageSourceExplicit = "subgraph_message_source_explicit"
+	// CfgKeyGraphMessagesPrepared marks that graph.StateKeyMessages was
+	// preassembled by graph orchestration and is therefore safe for Auto
+	// message-source resolution to treat as a graph-owned snapshot.
+	CfgKeyGraphMessagesPrepared = "graph_messages_prepared"
 )
 
 // State map keys (stored into execution state)
@@ -103,7 +107,8 @@ func isUnsafeStateKey(key string) bool {
 		StateKeyCurrentNodeID,
 		currentTraceStepIDStateKey,
 		StateKeySession,
-		StateKeyGraphInterruptInputs:
+		StateKeyGraphInterruptInputs,
+		CfgKeyGraphMessagesPrepared:
 		return true
 	default:
 		return false

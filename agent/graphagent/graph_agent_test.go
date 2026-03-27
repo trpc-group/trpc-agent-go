@@ -1215,6 +1215,7 @@ func TestGraphAgent_CreateInitialStateWithSessionSummary(t *testing.T) {
 	require.Contains(t, messages[0].Content, "branch summary content")
 	require.Equal(t, model.RoleUser, messages[1].Role)
 	require.Equal(t, "hello", messages[1].Content)
+	require.Equal(t, true, state[graph.CfgKeyGraphMessagesPrepared])
 }
 
 func TestGraphAgent_CreateInitialStateWithSessionSummary_Disabled(t *testing.T) {
@@ -1260,6 +1261,7 @@ func TestGraphAgent_CreateInitialStateWithSessionSummary_Disabled(t *testing.T) 
 	require.Len(t, messages, 1)
 	require.Equal(t, model.RoleUser, messages[0].Role)
 	require.Equal(t, "hello", messages[0].Content)
+	require.Equal(t, true, state[graph.CfgKeyGraphMessagesPrepared])
 }
 
 func TestGraphAgent_CreateInitialStateWithSessionSummary_FromService(t *testing.T) {
@@ -1320,6 +1322,7 @@ func TestGraphAgent_CreateInitialStateWithSessionSummary_FromService(t *testing.
 	require.Equal(t, model.RoleSystem, messages[0].Role)
 	require.Contains(t, messages[0].Content, "auto summary from service")
 	// Summary already covers prior history, so the latest run may start with summary only.
+	require.Equal(t, true, state[graph.CfgKeyGraphMessagesPrepared])
 }
 
 // TestGraphAgent_CreateInitialStateWithResume tests checkpoint resume behavior.
@@ -1436,6 +1439,104 @@ func TestGraphAgent_CreateInitialStateWithToolMessageDoesNotSetUserInput(t *test
 	require.Equal(t, model.RoleTool, messages[len(messages)-1].Role)
 	require.Equal(t, "call-1", messages[len(messages)-1].ToolID)
 	require.Equal(t, "result", messages[len(messages)-1].Content)
+	require.Equal(t, true, state[graph.CfgKeyGraphMessagesPrepared])
+}
+
+func TestGraphAgent_CreateInitialState_ReplaysRunnerCompletionEchoIntoPreparedMessages(
+	t *testing.T,
+) {
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+
+	sess := &session.Session{
+		ID: "sid",
+		Events: []event.Event{
+			*event.NewResponseEvent("inv-1", "user", &model.Response{
+				Choices: []model.Choice{{Index: 0, Message: model.NewUserMessage("hello")}},
+			}),
+			{
+				Branch: "test-agent/child",
+				Author: "app",
+				Response: &model.Response{
+					Done:   true,
+					Object: model.ObjectTypeRunnerCompletion,
+					Choices: []model.Choice{{
+						Index:   0,
+						Message: model.NewAssistantMessage("child reply"),
+					}},
+				},
+			},
+		},
+	}
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-2"),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("next")),
+	)
+	graphAgent.setupInvocation(invocation)
+	invocation.Branch = "test-agent/child"
+
+	state := graphAgent.createInitialState(context.Background(), invocation)
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.Equal(t, []model.Message{
+		model.NewUserMessage("hello"),
+		model.NewAssistantMessage("child reply"),
+		model.NewUserMessage("next"),
+	}, messages)
+	require.Equal(t, true, state[graph.CfgKeyGraphMessagesPrepared])
+}
+
+func TestGraphAgent_CreateInitialStateWithoutSessionHistory_DoesNotMarkPreparedMessages(
+	t *testing.T,
+) {
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		}).
+		AddField(graph.StateKeyUserInput, graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-no-history"),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(context.Background(), invocation)
+	_, ok := state[graph.CfgKeyGraphMessagesPrepared]
+	require.False(t, ok)
 }
 
 // mockCheckpointSaver is a mock implementation of graph.CheckpointSaver.

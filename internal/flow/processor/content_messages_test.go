@@ -93,6 +93,44 @@ func TestProcessRequest_IgnoresRunnerCompletionEchoInHistory(t *testing.T) {
 	require.True(t, model.MessagesEqual(model.NewUserMessage("what history do you see?"), req.Messages[2]))
 }
 
+func TestProcessRequest_IncludeRunnerCompletionEchoInHistory_WhenEnabled(t *testing.T) {
+	sess := &session.Session{}
+	sess.Events = append(sess.Events,
+		newSessionEvent("user", model.NewUserMessage("hello")),
+		event.Event{
+			Branch: "parent/child",
+			Author: "app",
+			Response: &model.Response{
+				Done:   true,
+				Object: model.ObjectTypeRunnerCompletion,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("child reply"),
+				}},
+			},
+		},
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-runner-completion-opt-in",
+		AgentName:    "test-agent",
+		Branch:       "parent/child",
+		Session:      sess,
+		Message:      model.NewUserMessage("what history do you see?"),
+	}
+
+	req := &model.Request{}
+	NewContentRequestProcessor(
+		WithPreserveSameBranch(true),
+		WithIncludeRunnerCompletionInHistory(true),
+	).ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 3)
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hello"), req.Messages[0]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("child reply"), req.Messages[1]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("what history do you see?"), req.Messages[2]))
+}
+
 func TestProcessRequest_FiltersEmptyAssistantMessages(t *testing.T) {
 	sess := &session.Session{}
 	sess.Events = append(sess.Events,

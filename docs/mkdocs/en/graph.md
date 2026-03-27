@@ -1327,16 +1327,20 @@ Use cases:
   always includes `LastResponse`, so output mappers work for both GraphAgent and
   non-graph agents.
 
-Important note for `AddAgentNode(...)` backed by an `LLMAgent`:
+Important note for `AddAgentNode(...)`:
 
 - Treat `WithSubgraphInputMapper` as a way to pass **structured runtime state**,
   not as a way to manually splice prompt history.
-- If the child runtime state already contains `graph.StateKeyMessages`, the
-  framework may treat that value as a graph-owned message snapshot for the
-  child. In that case, the child `LLMAgent` will use that snapshot instead of
-  assembling history again from the session.
-- Do **not** forward `graph.StateKeyMessages` through `WithSubgraphInputMapper`
-  unless you intentionally want the graph to own the child's message view.
+- In `Auto` mode, the framework only switches to graph-owned message snapshots
+  when the state carries a graph-prepared snapshot marker together with
+  `graph.StateKeyMessages`, and the child agent opts into graph-prepared
+  messages as its default ownership model. Currently this is intended for
+  plain `LLMAgent` children; wrapped or graph-backed children keep their legacy
+  self-history default unless you opt in explicitly.
+- Simply forwarding `graph.StateKeyMessages` through `WithSubgraphInputMapper`
+  no longer changes the default child message ownership by itself.
+- If you intentionally want the graph to own the child's message view, set
+  `graph.WithSubgraphMessageSource(graph.SubgraphMessageSourceGraphSnapshot)`.
 - If you need to control this explicitly, use
   `graph.WithSubgraphMessageSource(...)`.
 

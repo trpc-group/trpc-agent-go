@@ -121,6 +121,11 @@ type ContentRequestProcessor struct {
 	// SummaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	SummaryFormatter func(summary string) string
+	// IncludeRunnerCompletionInHistory allows history replay to include
+	// runner.completion events when they carry the only visible final assistant
+	// text for graph-style agents. Disabled by default because generic history
+	// replay should treat runner completion as an execution envelope.
+	IncludeRunnerCompletionInHistory bool
 }
 
 type contentRequestRuntimeConfig struct {
@@ -222,6 +227,15 @@ func WithPreloadMemory(limit int) ContentOption {
 func WithSummaryFormatter(formatter func(summary string) string) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.SummaryFormatter = formatter
+	}
+}
+
+// WithIncludeRunnerCompletionInHistory allows history replay to include
+// runner-completion events. Use this only on graph seeding paths that need to
+// preserve legacy graph self-history continuity.
+func WithIncludeRunnerCompletionInHistory(include bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.IncludeRunnerCompletionInHistory = include
 	}
 }
 
@@ -552,6 +566,55 @@ func (p *ContentRequestProcessor) aggregatePrefixSummaries(
 	return strings.Join(parts, "\n\n"), latestTime
 }
 
+func (p *ContentRequestProcessor) filterRedundantRunnerCompletionEvents(
+	events []event.Event,
+) []event.Event {
+	if len(events) == 0 {
+		return events
+	}
+	seenAssistantSignatures := make(map[string]struct{})
+	filtered := make([]event.Event, 0, len(events))
+	for _, evt := range events {
+		signature := assistantEventSignature(evt)
+		if evt.IsRunnerCompletion() && signature != "" {
+			if _, ok := seenAssistantSignatures[signature]; ok {
+				continue
+			}
+		}
+		filtered = append(filtered, evt)
+		if signature != "" && !evt.IsRunnerCompletion() {
+			seenAssistantSignatures[signature] = struct{}{}
+		}
+	}
+	return filtered
+}
+
+func assistantEventSignature(evt event.Event) string {
+	if len(evt.Choices) == 0 {
+		return ""
+	}
+	type signatureChoice struct {
+		Role    model.Role `json:"role"`
+		Content string     `json:"content"`
+	}
+	var signatureChoices []signatureChoice
+	for _, choice := range evt.Choices {
+		if choice.Message.Role != model.RoleAssistant ||
+			choice.Message.Content == "" {
+			continue
+		}
+		signatureChoices = append(signatureChoices, signatureChoice{
+			Role:    choice.Message.Role,
+			Content: choice.Message.Content,
+		})
+	}
+	if len(signatureChoices) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(signatureChoices)
+	return string(b)
+}
+
 // formatSummary applies custom formatter if available, otherwise uses default.
 func (p *ContentRequestProcessor) formatSummary(summary string) string {
 	if p.SummaryFormatter != nil {
@@ -607,6 +670,9 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 	// insert invocation message
 	if !includedInvocationMessage && model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
+	}
+	if p.IncludeRunnerCompletionInHistory {
+		events = p.filterRedundantRunnerCompletionEvents(events)
 	}
 
 	resultEvents := p.rearrangeLatestFuncResp(events)
@@ -668,7 +734,7 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 	if evt.Timestamp.After(since) {
 		return event.Event{}, false
 	}
-	if !isEventEligibleForInclusion(evt) {
+	if !p.isEventEligibleForInclusion(evt) {
 		return event.Event{}, false
 	}
 	if !p.passTimelineFilter(evt, inv) || !p.passBranchFilter(evt, filter) {
@@ -1154,7 +1220,7 @@ func (p *ContentRequestProcessor) mergeUserMessages(
 func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent.Invocation, filter string,
 	isZeroTime bool, since time.Time) (bool, bool) {
 	// Fast reject malformed, partial, or empty-content events.
-	if !isEventEligibleForInclusion(evt) {
+	if !p.isEventEligibleForInclusion(evt) {
 		return false, false
 	}
 	// Exact invocation message match keeps existing semantics.
@@ -1184,11 +1250,11 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 
 // isEventEligibleForInclusion checks basic event validity before expensive
 // filtering logic runs.
-func isEventEligibleForInclusion(evt event.Event) bool {
+func (p *ContentRequestProcessor) isEventEligibleForInclusion(evt event.Event) bool {
 	return evt.Response != nil &&
 		!evt.IsPartial &&
 		evt.IsValidContent() &&
-		!evt.IsRunnerCompletion()
+		(p.IncludeRunnerCompletionInHistory || !evt.IsRunnerCompletion())
 }
 
 // isStrictInvocationMessage checks whether the event exactly matches the
@@ -1240,7 +1306,7 @@ func (p *ContentRequestProcessor) hasCompactedCurrentInvocationToolResults(
 		if evt.Timestamp.After(since) {
 			continue
 		}
-		if !isEventEligibleForInclusion(evt) ||
+		if !p.isEventEligibleForInclusion(evt) ||
 			len(evt.Choices) == 0 ||
 			evt.Choices[0].Message.Role != model.RoleTool {
 			continue

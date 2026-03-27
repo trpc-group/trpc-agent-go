@@ -2253,7 +2253,9 @@ func newToolsNodeRuntime(
 // Important: This is a shallow copy (only key bindings are copied); complex
 // values (map/slice) remain shared references. Avoid concurrent mutation of the
 // same complex object from parent/child. If isolation is required, deep copy in
-// SubgraphInputMapper.
+// SubgraphInputMapper. Graph-prepared message snapshot markers are preserved so
+// AgentNode Auto message-source resolution can distinguish framework-owned
+// snapshots from arbitrary user-provided messages.
 func copyRuntimeStateFiltered(parent State) State {
 	if parent == nil {
 		return State{}
@@ -2264,6 +2266,9 @@ func copyRuntimeStateFiltered(parent State) State {
 			continue
 		}
 		out[k] = v
+	}
+	if prepared, ok := parent[CfgKeyGraphMessagesPrepared].(bool); ok && prepared {
+		out[CfgKeyGraphMessagesPrepared] = true
 	}
 	return out
 }
@@ -2483,11 +2488,13 @@ func applyIsolatedMessages(child State, isolated bool) {
 
 func resolveSubgraphMessageSource(
 	child State,
+	targetAgent agent.Agent,
 	source SubgraphMessageSource,
 ) SubgraphMessageSource {
 	switch source {
 	case "", SubgraphMessageSourceAuto:
-		if hasGraphSnapshotMessages(child) {
+		if hasPreparedGraphSnapshotMessages(child) &&
+			prefersPreparedGraphMessages(targetAgent) {
 			return SubgraphMessageSourceGraphSnapshot
 		}
 		return SubgraphMessageSourceLLMAgentDefault
@@ -2497,7 +2504,8 @@ func resolveSubgraphMessageSource(
 		SubgraphMessageSourceLastResponse:
 		return source
 	default:
-		if hasGraphSnapshotMessages(child) {
+		if hasPreparedGraphSnapshotMessages(child) &&
+			prefersPreparedGraphMessages(targetAgent) {
 			return SubgraphMessageSourceGraphSnapshot
 		}
 		return SubgraphMessageSourceLLMAgentDefault
@@ -2507,6 +2515,16 @@ func resolveSubgraphMessageSource(
 func hasGraphSnapshotMessages(state State) bool {
 	msgs, ok := state[StateKeyMessages].([]model.Message)
 	return ok && len(msgs) > 0
+}
+
+func hasPreparedGraphSnapshotMessages(state State) bool {
+	prepared, _ := state[CfgKeyGraphMessagesPrepared].(bool)
+	return prepared && hasGraphSnapshotMessages(state)
+}
+
+func prefersPreparedGraphMessages(target agent.Agent) bool {
+	preferred, ok := target.(agent.PreparedGraphMessagePreference)
+	return ok && preferred.PreferPreparedGraphMessages()
 }
 
 func applySubgraphMessageSource(
@@ -2601,7 +2619,7 @@ func buildChildStateForAgentNode(
 	}
 	applyIsolatedMessages(childState, cfg.isolated)
 	applySubgraphResumeForAgentNode(parent, childState, nodeID)
-	source := resolveSubgraphMessageSource(childState, cfg.messageSource)
+	source := resolveSubgraphMessageSource(childState, targetAgent, cfg.messageSource)
 	applySubgraphMessageSource(
 		childState,
 		source,

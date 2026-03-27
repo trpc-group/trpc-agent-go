@@ -114,6 +114,12 @@ func (a *messageEchoAgent) Run(
 	return ch, nil
 }
 
+type preferredSnapshotMessageEchoAgent struct{ messageEchoAgent }
+
+func (a *preferredSnapshotMessageEchoAgent) PreferPreparedGraphMessages() bool {
+	return true
+}
+
 type stateValueAgent struct{ name string }
 
 func (a *stateValueAgent) Info() agent.Info {
@@ -291,6 +297,34 @@ func TestBuildChildStateForAgentNode_MessageSourceAutoUsesGraphSnapshot(
 	t *testing.T,
 ) {
 	parent := State{
+		CfgKeyGraphMessagesPrepared: true,
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("u"),
+			model.NewAssistantMessage("a"),
+		},
+	}
+
+	childState, source := buildChildStateForAgentNode(
+		parent,
+		"agentNode",
+		&preferredSnapshotMessageEchoAgent{messageEchoAgent{name: "child"}},
+		agentNodeConfigFromOptions(),
+	)
+
+	require.Equal(t, SubgraphMessageSourceGraphSnapshot, source)
+	require.Equal(t, includeContentsNone, childState[CfgKeyIncludeContents])
+	require.Equal(
+		t,
+		string(SubgraphMessageSourceGraphSnapshot),
+		childState[CfgKeySubgraphMessageSource],
+	)
+	require.Equal(t, false, childState[CfgKeySubgraphMessageSourceExplicit])
+}
+
+func TestBuildChildStateForAgentNode_MessageSourceAutoDoesNotInferFromMessagesOnly(
+	t *testing.T,
+) {
+	parent := State{
 		StateKeyMessages: []model.Message{
 			model.NewUserMessage("u"),
 			model.NewAssistantMessage("a"),
@@ -304,11 +338,39 @@ func TestBuildChildStateForAgentNode_MessageSourceAutoUsesGraphSnapshot(
 		agentNodeConfigFromOptions(),
 	)
 
-	require.Equal(t, SubgraphMessageSourceGraphSnapshot, source)
-	require.Equal(t, includeContentsNone, childState[CfgKeyIncludeContents])
+	require.Equal(t, SubgraphMessageSourceLLMAgentDefault, source)
+	require.NotContains(t, childState, CfgKeyIncludeContents)
 	require.Equal(
 		t,
-		string(SubgraphMessageSourceGraphSnapshot),
+		string(SubgraphMessageSourceLLMAgentDefault),
+		childState[CfgKeySubgraphMessageSource],
+	)
+	require.Equal(t, false, childState[CfgKeySubgraphMessageSourceExplicit])
+}
+
+func TestBuildChildStateForAgentNode_MessageSourceAutoDoesNotUseGraphSnapshotForLegacyChild(
+	t *testing.T,
+) {
+	parent := State{
+		CfgKeyGraphMessagesPrepared: true,
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("u"),
+			model.NewAssistantMessage("a"),
+		},
+	}
+
+	childState, source := buildChildStateForAgentNode(
+		parent,
+		"agentNode",
+		&messageEchoAgent{name: "child"},
+		agentNodeConfigFromOptions(),
+	)
+
+	require.Equal(t, SubgraphMessageSourceLLMAgentDefault, source)
+	require.NotContains(t, childState, CfgKeyIncludeContents)
+	require.Equal(
+		t,
+		string(SubgraphMessageSourceLLMAgentDefault),
 		childState[CfgKeySubgraphMessageSource],
 	)
 	require.Equal(t, false, childState[CfgKeySubgraphMessageSourceExplicit])

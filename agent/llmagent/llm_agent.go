@@ -1131,6 +1131,13 @@ func (a *LLMAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+// PreferPreparedGraphMessages implements agent.PreparedGraphMessagePreference.
+// LLMAgent opts into graph-prepared snapshots in Auto mode so AgentNode can
+// avoid replaying duplicate or role-rewritten session history for child LLMs.
+func (a *LLMAgent) PreferPreparedGraphMessages() bool {
+	return true
+}
+
 // UserTools returns the list of tools that were explicitly registered
 // by the user via WithTools and WithToolSets options.
 //

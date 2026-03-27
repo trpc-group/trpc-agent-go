@@ -413,6 +413,7 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 			processor.WithPreserveSameBranch(true),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
 			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
+			processor.WithIncludeRunnerCompletionInHistory(true),
 		}
 		if ga.options.ReasoningContentMode != "" {
 			contentOpts = append(contentOpts,
@@ -427,6 +428,9 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		p.ProcessRequest(ctx, invocation, req, nil)
 		if len(req.Messages) > 0 {
 			initialState[graph.StateKeyMessages] = req.Messages
+			initialState[graph.CfgKeyGraphMessagesPrepared] = true
+		} else {
+			delete(initialState, graph.CfgKeyGraphMessagesPrepared)
 		}
 	}
 
