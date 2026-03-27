@@ -57,6 +57,10 @@ const (
 	// streamHubStateKey is the invocation state key used by the graph to
 	// share ephemeral streams across node invocations within the same run.
 	streamHubStateKey = "__graph_stream_hub__"
+	// surfaceRootNodeIDStateKey stores one invocation's mounted surface root node id.
+	surfaceRootNodeIDStateKey = "__trpc_agent_internal_surface_root_node_id_state__"
+	// teamMemberTraceRootStateKey stores one invocation's mounted team member trace root.
+	teamMemberTraceRootStateKey = "__trpc_agent_internal_team_member_trace_root_state__"
 
 	// SyncSummaryIntraRunStateKey is set on the invocation by the
 	// flow when sync intra-run summary is active.
@@ -1080,6 +1084,89 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	return newInv
 }
 
+// View returns an isolated invocation view that preserves identity.
+func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
+	if inv == nil {
+		return nil
+	}
+	view := &Invocation{
+		Agent:                inv.Agent,
+		AgentName:            inv.AgentName,
+		InvocationID:         inv.InvocationID,
+		Branch:               inv.Branch,
+		EndInvocation:        inv.EndInvocation,
+		Session:              inv.Session,
+		SessionService:       inv.SessionService,
+		Model:                inv.Model,
+		Message:              inv.Message,
+		RunOptions:           inv.RunOptions,
+		TransferInfo:         inv.TransferInfo,
+		Plugins:              inv.Plugins,
+		StructuredOutput:     inv.StructuredOutput,
+		StructuredOutputType: inv.StructuredOutputType,
+		MemoryService:        inv.MemoryService,
+		ArtifactService:      inv.ArtifactService,
+		noticeChannels:       inv.noticeChannels,
+		noticeMu:             inv.noticeMu,
+		eventFilterKey:       inv.eventFilterKey,
+		parent:               inv.parent,
+		traceCapture:         inv.traceCapture,
+		entryPredecessorStepIDs: cloneStringSlice(
+			inv.entryPredecessorStepIDs,
+		),
+		traceNodeID:        inv.traceNodeID,
+		state:              inv.cloneState(),
+		MaxLLMCalls:        inv.MaxLLMCalls,
+		MaxToolIterations:  inv.MaxToolIterations,
+		timingInfo:         inv.timingInfo,
+		llmCallCount:       inv.llmCallCount,
+		toolIterationCount: inv.toolIterationCount,
+	}
+	for _, opt := range invocationOpts {
+		opt(view)
+	}
+	return view
+}
+
+// SyncView copies execution-visible state from a view while preserving RunOptions.
+func (inv *Invocation) SyncView(view *Invocation) {
+	if inv == nil || view == nil || inv == view {
+		return
+	}
+	inv.Agent = view.Agent
+	inv.AgentName = view.AgentName
+	inv.InvocationID = view.InvocationID
+	inv.Branch = view.Branch
+	inv.EndInvocation = view.EndInvocation
+	inv.Session = view.Session
+	inv.SessionService = view.SessionService
+	inv.Model = view.Model
+	inv.Message = view.Message
+	inv.TransferInfo = view.TransferInfo
+	inv.Plugins = view.Plugins
+	inv.StructuredOutput = view.StructuredOutput
+	inv.StructuredOutputType = view.StructuredOutputType
+	inv.MemoryService = view.MemoryService
+	inv.ArtifactService = view.ArtifactService
+	inv.noticeChannels = view.noticeChannels
+	inv.noticeMu = view.noticeMu
+	inv.eventFilterKey = view.eventFilterKey
+	inv.parent = view.parent
+	inv.traceCapture = view.traceCapture
+	inv.entryPredecessorStepIDs = cloneStringSlice(
+		view.entryPredecessorStepIDs,
+	)
+	inv.traceNodeID = view.traceNodeID
+	inv.MaxLLMCalls = view.MaxLLMCalls
+	inv.MaxToolIterations = view.MaxToolIterations
+	inv.timingInfo = view.timingInfo
+	inv.llmCallCount = view.llmCallCount
+	inv.toolIterationCount = view.toolIterationCount
+	inv.stateMu.Lock()
+	inv.state = view.cloneState()
+	inv.stateMu.Unlock()
+}
+
 func (inv *Invocation) cloneState() map[string]any {
 	if inv == nil || inv.state == nil {
 		return nil
@@ -1098,6 +1185,12 @@ func (inv *Invocation) cloneState() map[string]any {
 	}
 	if hub, ok := inv.state[streamHubStateKey]; ok {
 		copied[streamHubStateKey] = hub
+	}
+	if nodeID, ok := inv.state[surfaceRootNodeIDStateKey]; ok {
+		copied[surfaceRootNodeIDStateKey] = nodeID
+	}
+	if rootNodeID, ok := inv.state[teamMemberTraceRootStateKey]; ok {
+		copied[teamMemberTraceRootStateKey] = rootNodeID
 	}
 	return copied
 }

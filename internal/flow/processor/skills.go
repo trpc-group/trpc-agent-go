@@ -53,6 +53,7 @@ type skillsRequestProcessorOptions struct {
 	maxLoadedSkills   int
 	toolProfile       string
 	execToolsDisabled bool
+	repoResolver      func(*agent.Invocation) skill.Repository
 }
 
 // SkillsRequestProcessorOption configures SkillsRequestProcessor.
@@ -122,6 +123,15 @@ func WithSkillExecToolsDisabled() SkillsRequestProcessorOption {
 	}
 }
 
+// WithSkillsRepositoryResolver sets an invocation-aware repository resolver.
+func WithSkillsRepositoryResolver(
+	resolver func(*agent.Invocation) skill.Repository,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.repoResolver = resolver
+	}
+}
+
 // WithMaxLoadedSkills caps how many skills remain "loaded" in session
 // state.
 //
@@ -148,6 +158,7 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
 	repo              skill.Repository
+	repoResolver      func(*agent.Invocation) skill.Repository
 	toolingGuidance   *string
 	loadMode          string
 	toolResultMode    bool
@@ -174,6 +185,7 @@ func NewSkillsRequestProcessor(
 	}
 	return &SkillsRequestProcessor{
 		repo:              repo,
+		repoResolver:      options.repoResolver,
 		toolingGuidance:   options.toolingGuidance,
 		loadMode:          normalizeSkillLoadMode(options.loadMode),
 		toolResultMode:    options.toolResultMode,
@@ -202,7 +214,8 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	ctx context.Context, inv *agent.Invocation, req *model.Request,
 	ch chan<- *event.Event,
 ) {
-	if req == nil || inv == nil || inv.Session == nil || p.repo == nil {
+	repo := p.repositoryForInvocation(inv)
+	if req == nil || inv == nil || inv.Session == nil || repo == nil {
 		return
 	}
 
@@ -212,7 +225,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 
 	// 1) Always inject overview (names + descriptions) into system
 	//    message. Merge into existing system message if present.
-	p.injectOverview(req)
+	p.injectOverview(req, repo)
 
 	loaded := p.getLoadedSkills(inv)
 	loaded = p.maybeCapLoadedSkills(ctx, inv, loaded, ch)
@@ -232,7 +245,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 
 	var lb strings.Builder
 	for _, name := range loaded {
-		sk, err := p.repo.Get(name)
+		sk, err := repo.Get(name)
 		if err != nil || sk == nil {
 			log.WarnfContext(
 				ctx,
@@ -277,6 +290,15 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 		inv.InvocationID, inv.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingInstruction),
 	))
+}
+
+func (p *SkillsRequestProcessor) repositoryForInvocation(
+	inv *agent.Invocation,
+) skill.Repository {
+	if p.repoResolver != nil {
+		return p.repoResolver(inv)
+	}
+	return p.repo
 }
 
 func (p *SkillsRequestProcessor) maybeCapLoadedSkills(
@@ -603,8 +625,11 @@ func (p *SkillsRequestProcessor) maybeOffloadLoadedSkills(
 	))
 }
 
-func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
-	sums := p.repo.Summaries()
+func (p *SkillsRequestProcessor) injectOverview(
+	req *model.Request,
+	repo skill.Repository,
+) {
+	sums := repo.Summaries()
 	if len(sums) == 0 {
 		return
 	}
@@ -848,8 +873,13 @@ func (p *SkillsRequestProcessor) getLoadedSkills(
 }
 
 func (p *SkillsRequestProcessor) getDocsSelection(
-	inv *agent.Invocation, name string,
+	inv *agent.Invocation,
+	name string,
 ) []string {
+	repo := p.repositoryForInvocation(inv)
+	if repo == nil {
+		return nil
+	}
 	key := skill.DocsKey(inv.AgentName, name)
 	v, ok := inv.Session.GetState(key)
 	if !ok || len(v) == 0 {
@@ -857,7 +887,7 @@ func (p *SkillsRequestProcessor) getDocsSelection(
 	}
 	if string(v) == "*" {
 		// Select all doc files present.
-		sk, err := p.repo.Get(name)
+		sk, err := repo.Get(name)
 		if err != nil || sk == nil {
 			return nil
 		}
