@@ -136,6 +136,14 @@ func runBootstrapDeps(args []string) int {
 
 	result, err := ocdeps.ApplyPlan(context.Background(), plan)
 	printApplyResult(result)
+	if len(plan.Unresolved.Bins) > 0 ||
+		len(plan.Unresolved.AnyBins) > 0 {
+		fmt.Fprintf(
+			os.Stdout,
+			"Unresolved: %s\n",
+			formatMissing(plan.Unresolved),
+		)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -228,9 +236,12 @@ func resolveDepsSources(
 	profileNames := splitCSV(opts.Profiles)
 	skillNames := splitCSV(opts.Skills)
 
-	profileSources, err := ocdeps.SourcesForProfiles(profileNames)
-	if err != nil {
-		return "", nil, nil, err
+	profileSources := []ocdeps.Source{}
+	if len(profileNames) > 0 {
+		profileSources, err = ocdeps.SourcesForProfiles(profileNames)
+		if err != nil {
+			return "", nil, nil, err
+		}
 	}
 	skillSources, err := resolveSkillDependencySources(stateDir, opts)
 	if err != nil {
@@ -412,14 +423,45 @@ func printApplyResult(result ocdeps.ApplyResult) {
 	if len(result.Steps) == 0 {
 		return
 	}
-	fmt.Fprintln(os.Stdout, "Applied:")
-	for _, step := range result.Steps {
-		fmt.Fprintf(
-			os.Stdout,
-			"- %s (exit=%d)\n",
-			step.Step.Label,
-			step.ExitCode,
-		)
+	printApplySteps("Applied", result.Steps, ocdepsStepStatusApplied)
+	printApplySteps("Deferred", result.Steps, ocdepsStepStatusDeferred)
+	printApplySteps("Failed", result.Steps, ocdepsStepStatusFailed)
+}
+
+const (
+	ocdepsStepStatusApplied  = "applied"
+	ocdepsStepStatusDeferred = "deferred"
+	ocdepsStepStatusFailed   = "failed"
+)
+
+func printApplySteps(
+	label string,
+	steps []ocdeps.StepResult,
+	status string,
+) {
+	filtered := make([]ocdeps.StepResult, 0, len(steps))
+	for _, step := range steps {
+		if step.Status == status {
+			filtered = append(filtered, step)
+		}
+	}
+	if len(filtered) == 0 {
+		return
+	}
+
+	fmt.Fprintf(os.Stdout, "%s:\n", label)
+	for _, step := range filtered {
+		line := fmt.Sprintf("- %s", step.Step.Label)
+		switch status {
+		case ocdepsStepStatusApplied:
+			line += fmt.Sprintf(" (exit=%d)", step.ExitCode)
+		case ocdepsStepStatusFailed:
+			line += fmt.Sprintf(" (exit=%d)", step.ExitCode)
+		}
+		fmt.Fprintln(os.Stdout, line)
+		if strings.TrimSpace(step.Error) != "" {
+			fmt.Fprintf(os.Stdout, "  %s\n", step.Error)
+		}
 	}
 }
 

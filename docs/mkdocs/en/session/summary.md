@@ -46,9 +46,14 @@ Integrate the summarizer into a session service:
 
 ```go
 import (
+    "context"
     "time"
+    "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/session/mysql"
+    "trpc.group/trpc-go/trpc-agent-go/session/postgres"
     "trpc.group/trpc-go/trpc-agent-go/session/redis"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 // Memory storage (dev/test)
@@ -141,6 +146,37 @@ type SessionSummarizer interface {
 }
 ```
 
+## Context-Aware Summary Checks
+
+The released `SessionSummarizer` interface stays unchanged.
+
+When summary gating depends on request context, use `ContextChecker` with the
+context-aware check options:
+
+```go
+type asyncSummaryKey struct{}
+
+eventThreshold := summary.CheckEventThreshold(20)
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithChecksAnyContext(
+        func(ctx context.Context, sess *session.Session) bool {
+            if eventThreshold(sess) {
+                return true
+            }
+            async, _ := ctx.Value(asyncSummaryKey{}).(bool)
+            return async
+        },
+    ),
+)
+```
+
+The framework does not reserve any context keys for summary triggering. If your
+application needs to distinguish different summary entry points, annotate the
+context before calling the session APIs and read the value inside your
+`ContextChecker`.
+
 ## Summarizer Options
 
 ### Trigger Conditions
@@ -157,8 +193,13 @@ type SessionSummarizer interface {
 | --- | --- |
 | `WithChecksAll(checks ...Checker)` | All conditions must be met (AND logic), use `Check*` functions |
 | `WithChecksAny(checks ...Checker)` | Any condition triggers (OR logic), use `Check*` functions |
+| `WithChecksAllContext(checks ...ContextChecker)` | All request-scoped conditions must be met (AND logic) |
+| `WithChecksAnyContext(checks ...ContextChecker)` | Any request-scoped condition triggers (OR logic) |
 
-**Note**: Use `Check*` functions (e.g., `CheckEventThreshold`) inside `WithChecksAll` and `WithChecksAny`, not `With*` functions.
+`ContextChecker` receives `(ctx context.Context, sess *session.Session)`.
+
+**Note**: Use `Check*` functions (for example `CheckEventThreshold`) inside
+`WithChecksAll` and `WithChecksAny`, not `With*` functions.
 
 ```go
 // AND logic: all conditions must be met

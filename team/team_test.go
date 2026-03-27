@@ -14,15 +14,19 @@ import (
 	"context"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -156,6 +160,35 @@ func (t *testSwarmMember) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+type testNonComparableSwarmMember struct {
+	name string
+	tags []string
+}
+
+func (t testNonComparableSwarmMember) SetSubAgents([]agent.Agent) {}
+
+func (t testNonComparableSwarmMember) Run(
+	_ context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		ch <- event.New(inv.InvocationID, t.name)
+	}()
+	return ch, nil
+}
+
+func (t testNonComparableSwarmMember) Tools() []tool.Tool { return nil }
+
+func (t testNonComparableSwarmMember) Info() agent.Info {
+	return agent.Info{Name: t.name}
+}
+
+func (t testNonComparableSwarmMember) SubAgents() []agent.Agent { return nil }
+
+func (t testNonComparableSwarmMember) FindSubAgent(string) agent.Agent { return nil }
+
 type testTool struct {
 	name string
 }
@@ -166,6 +199,62 @@ func (t testTool) Declaration() *tool.Declaration {
 
 func (t testTool) Call(_ context.Context, _ []byte) (any, error) {
 	return nil, nil
+}
+
+type teamStructuredOutputPayload struct {
+	Answer string `json:"answer"`
+	Score  int    `json:"score"`
+}
+
+type swarmStructuredOutputModel struct {
+	mu          sync.Mutex
+	seen        bool
+	schemaName  string
+	description string
+}
+
+func (m *swarmStructuredOutputModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	if req != nil &&
+		req.StructuredOutput != nil &&
+		req.StructuredOutput.JSONSchema != nil {
+		m.seen = true
+		m.schemaName = req.StructuredOutput.JSONSchema.Name
+		m.description = req.StructuredOutput.JSONSchema.Description
+	}
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage(`{"answer":"ok","score":7}`),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *swarmStructuredOutputModel) Info() model.Info {
+	return model.Info{Name: "swarm-structured-output-model"}
+}
+
+func (m *swarmStructuredOutputModel) Snapshot() (bool, string, string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.seen, m.schemaName, m.description
+}
+
+func collectTeamStructuredOutput(events <-chan *event.Event) any {
+	var structured any
+	for evt := range events {
+		if evt != nil && evt.StructuredOutput != nil {
+			structured = evt.StructuredOutput
+		}
+	}
+	return structured
 }
 
 func TestNew_Validation(t *testing.T) {
@@ -464,9 +553,57 @@ func TestTeam_Run_Coordinator(t *testing.T) {
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 	ch, err := tm.Run(ctx, inv)
 	require.NoError(t, err)
-	for range ch {
+	events := make([]*event.Event, 0)
+	for evt := range ch {
+		events = append(events, evt)
 	}
+	require.Len(t, events, 1)
+	require.Equal(t, inv.InvocationID, events[0].InvocationID)
+	require.Empty(t, events[0].ParentInvocationID)
 	require.True(t, coordinator.ran)
+}
+
+func TestTeam_RunSwarm_PreservesRunStructuredOutput(t *testing.T) {
+	const description = "Return one typed payload through swarm."
+	modelImpl := &swarmStructuredOutputModel{}
+	member := llmagent.New(
+		"swarm-structured-output-member",
+		llmagent.WithModel(modelImpl),
+	)
+	tm, err := NewSwarm(
+		"swarm-structured-output-team",
+		member.Info().Name,
+		[]agent.Agent{member},
+	)
+	require.NoError(t, err)
+	r := runner.NewRunner(
+		"swarm-structured-output-app",
+		tm,
+		runner.WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-structured-output",
+		"session-structured-output",
+		model.NewUserMessage("hello"),
+		agent.WithStructuredOutputJSON(
+			new(teamStructuredOutputPayload),
+			true,
+			description,
+		),
+	)
+	require.NoError(t, err)
+
+	structured := collectTeamStructuredOutput(eventCh)
+	payload, ok := structured.(*teamStructuredOutputPayload)
+	require.True(t, ok, "expected typed structured output payload")
+	require.Equal(t, "ok", payload.Answer)
+	require.Equal(t, 7, payload.Score)
+
+	seen, schemaName, gotDescription := modelImpl.Snapshot()
+	require.True(t, seen, "expected swarm member to receive structured output schema")
+	require.Equal(t, "teamStructuredOutputPayload", schemaName)
+	require.Equal(t, description, gotDescription)
 }
 
 func TestTeam_Run_UnknownMode(t *testing.T) {
@@ -634,6 +771,64 @@ func TestTeam_RunSwarm_CrossRequestTransfer_UsesActiveAgent(t *testing.T) {
 	require.Equal(t, []byte(testTeamName), teamNameBytes)
 }
 
+func TestTeam_RunSwarm_CrossRequestTransfer_StoresMountedTraceRoot(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+		WithCrossRequestTransfer(true),
+	)
+	require.NoError(t, err)
+	sess := session.NewSession(testAppName, testUserID, testSessionID)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+		agent.WithInvocationTraceNodeID("workflow/swarm"),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	ch, err := tm.Run(ctx, inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+	traceNodeIDBytes, ok := sess.GetState(swarmTraceNodeIDKey)
+	require.True(t, ok)
+	require.Equal(t, []byte("workflow/swarm"), traceNodeIDBytes)
+}
+
+func TestTeam_RunSwarm_CrossRequestTransfer_DoesNotOverwriteBusinessTraceKeyWhenTraceDisabled(t *testing.T) {
+	a := &testSwarmMember{name: testMemberNameOne}
+	b := &testSwarmMember{name: testMemberNameTwo}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{a, b},
+		WithCrossRequestTransfer(true),
+	)
+	require.NoError(t, err)
+	sess := session.NewSession(testAppName, testUserID, testSessionID)
+	sess.SetState("swarm_trace_node_id", []byte("business"))
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	ch, err := tm.Run(ctx, inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+	traceNodeIDBytes, ok := sess.GetState(swarmTraceNodeIDKey)
+	require.False(t, ok)
+	require.Nil(t, traceNodeIDBytes)
+	legacyTraceNodeIDBytes, ok := sess.GetState("swarm_trace_node_id")
+	require.True(t, ok)
+	require.Equal(t, []byte("business"), legacyTraceNodeIDBytes)
+}
+
 func TestTeam_RunSwarm_CrossRequestTransfer_MissingActiveAgentFallsBackToEntry(t *testing.T) {
 	a := &testSwarmMember{name: testMemberNameOne}
 	b := &testSwarmMember{name: testMemberNameTwo}
@@ -677,6 +872,37 @@ func TestTeam_RunSwarm_EntryMissing(t *testing.T) {
 	)
 	_, err := tm.runSwarm(context.Background(), inv)
 	require.Error(t, err)
+}
+
+func TestTeam_RunSwarm_DoesNotCompareNonComparableAgentValues(t *testing.T) {
+	entry := testNonComparableSwarmMember{
+		name: testMemberNameOne,
+		tags: []string{"entry"},
+	}
+	other := testNonComparableSwarmMember{
+		name: testMemberNameTwo,
+		tags: []string{"other"},
+	}
+	tm, err := NewSwarm(
+		testTeamName,
+		testEntryName,
+		[]agent.Agent{entry, other},
+	)
+	require.NoError(t, err)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(tm),
+		agent.WithInvocationRunOptions(agent.RunOptions{ExecutionTraceEnabled: true}),
+		agent.WithInvocationMessage(model.NewUserMessage(testUserMessage)),
+	)
+	ch, err := tm.runSwarm(context.Background(), inv)
+	require.NoError(t, err)
+	var authors []string
+	for evt := range ch {
+		if evt != nil {
+			authors = append(authors, evt.Author)
+		}
+	}
+	require.Equal(t, []string{testEntryName}, authors)
 }
 
 func TestTeam_getActiveAgent_NilInvocationOrSession(t *testing.T) {

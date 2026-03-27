@@ -254,3 +254,43 @@ func TestFileTool_ReplaceContent_NotExist(t *testing.T) {
 	_, err = fileToolSet.replaceContent(context.Background(), req)
 	assert.Error(t, err)
 }
+
+func TestFileTool_ReplaceContent_NotExistIncludesHint(t *testing.T) {
+	tempDir := t.TempDir()
+	toolSet, err := NewToolSet(WithBaseDir(tempDir))
+	assert.NoError(t, err)
+	fileToolSet, ok := toolSet.(*fileToolSet)
+	assert.True(t, ok)
+
+	assert.NoError(
+		t,
+		os.Mkdir(filepath.Join(tempDir, "pkg"), 0o755),
+	)
+	assert.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(tempDir, "go.mod"),
+			[]byte("module example.com/test"),
+			0o644,
+		),
+	)
+
+	rsp, err := fileToolSet.replaceContent(
+		context.Background(),
+		&replaceContentRequest{
+			FileName:  "missing.go",
+			OldString: "a",
+			NewString: "b",
+		},
+	)
+	assert.Error(t, err)
+	assert.NotNil(t, rsp)
+	assert.Contains(t, rsp.Message, missingFileBaseDirPrefix+tempDir)
+	assert.Contains(t, rsp.Message, "go.mod")
+	assert.Contains(
+		t,
+		rsp.Message,
+		"pkg"+missingFileDirectorySuffix,
+	)
+	assert.Contains(t, rsp.Message, missingFileRecoveryGuidance)
+}

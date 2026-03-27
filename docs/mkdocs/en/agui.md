@@ -193,6 +193,8 @@ Typical responses:
 - `404 Not Found`: no running run found for that `SessionKey` (already finished
   or wrong identifiers)
 
+After a cancel succeeds, the framework does not simply discard the protocol state that is still being finalized. Instead, it continues to emit any required closing events and tries to persist buffered AG-UI events from the aggregator into `SessionService`. As a result, subsequent `/history` requests see the last valid and consistent snapshot at the moment of cancellation rather than an incomplete intermediate state. For example, partial `reasoning` text that has already been produced is kept as a string, while a `reasoning` segment that never produced any text does not appear in the snapshot. You can adjust how long this post-run finalization window is allowed to take with `agui.WithPostRunFinalizationTimeout(d)`, which defaults to `5s`.
+
 ### Message Snapshot route
 
 Message snapshots restore conversation history when a page is initialised or after a reconnect. The feature is controlled by `agui.WithMessagesSnapshotEnabled(true)` and is disabled by default. The default route is `/history`, can be customised with `WithMessagesSnapshotPath`, and returns the event stream `RUN_STARTED → MESSAGES_SNAPSHOT → RUN_FINISHED`.
@@ -255,6 +257,23 @@ You can find a complete example at [examples/agui/messagessnapshot](https://gith
 
 The format of AG-UI's MessagesSnapshotEvent can be found at [messages](https://docs.ag-ui.com/concepts/messages).
 
+### Translator interfaces
+
+Before events are sent to the client, AG-UI translates internal framework events into protocol events. The core public extension interfaces are shown below:
+
+```go
+type Translator interface {
+    Translate(ctx context.Context, event *event.Event) ([]aguievents.Event, error)
+}
+
+type PostRunFinalizingTranslator interface {
+    Translator
+    PostRunFinalizationEvents(ctx context.Context) ([]aguievents.Event, error)
+}
+```
+
+`Translator` is responsible for turning internal events into AG-UI events. `PostRunFinalizingTranslator` extends it with the ability to emit any remaining protocol closing events during the finalization phase after a run ends, and to surface finalization errors when needed.
+
 ## Advanced Usage
 
 ### Custom transport
@@ -295,10 +314,15 @@ server, _ := agui.New(runner, agui.WithServiceFactory(NewWSService))
 
 ### Custom translator
 
-`translator.New` converts internal events into the standard AG-UI events. To enrich the stream while keeping the default behaviour, implement `translator.Translator` and use the AG-UI `Custom` event type to carry extra data:
+`translator.New` converts internal events into the standard AG-UI events. To enrich the stream while keeping the default behaviour, implement the `translator.Translator` interface introduced above and use the AG-UI `Custom` event type to carry extra data.
+
+If your custom Translator maintains its own open streams, or simply wraps the default Translator and wants to preserve the built-in finalization behaviour on cancel and normal run completion, you should also implement `translator.PostRunFinalizingTranslator` so the framework can keep handling the closing events that need to be emitted after the run ends:
 
 ```go
 import (
+    "context"
+    "fmt"
+
     aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
     "trpc.group/trpc-go/trpc-agent-go/event"
     "trpc.group/trpc-go/trpc-agent-go/runner"
@@ -312,6 +336,8 @@ type customTranslator struct {
     inner translator.Translator
 }
 
+var _ translator.PostRunFinalizingTranslator = (*customTranslator)(nil)
+
 func (t *customTranslator) Translate(ctx context.Context, evt *event.Event) ([]aguievents.Event, error) {
     out, err := t.inner.Translate(ctx, evt)
     if err != nil {
@@ -321,6 +347,14 @@ func (t *customTranslator) Translate(ctx context.Context, evt *event.Event) ([]a
         out = append(out, aguievents.NewCustomEvent("trace.metadata", aguievents.WithValue(payload)))
     }
     return out, nil
+}
+
+func (t *customTranslator) PostRunFinalizationEvents(ctx context.Context) ([]aguievents.Event, error) {
+    finalizer, ok := t.inner.(translator.PostRunFinalizingTranslator)
+    if !ok {
+        return nil, nil
+    }
+    return finalizer.PostRunFinalizationEvents(ctx)
 }
 
 func buildCustomPayload(evt *event.Event) map[string]any {
@@ -344,6 +378,8 @@ factory := func(ctx context.Context, input *adapter.RunAgentInput, opts ...trans
 runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithTranslatorFactory(factory)))
 ```
+
+`PostRunFinalizationEvents` is invoked during the finalization phase after a run ends. If it returns an error, the framework will try to emit any finalization events that were already returned, and then emit a `RunError` so that problems in the finalization phase are surfaced to the client instead of being silently dropped.
 
 For example, when using React Planner, if you want to apply different custom events to different tags, you can achieve this by implementing a custom Translator, as shown in the image below.
 
@@ -627,13 +663,16 @@ server, err := agui.New(
 
 In streaming response scenarios, a single reply usually consists of multiple incremental text events. Writing all of them directly into the session can put significant pressure on `SessionService`.
 
-To address this, the framework first aggregates events and then writes them into the session. In addition, it performs a periodic flush once per second by default, and each flush writes the current aggregation result into the session.
+To address this, the framework first aggregates events and then writes them into the session. In addition, it performs a periodic flush once per second by default, and each flush writes the current aggregation result into the session. Regardless of whether a run finishes normally or is cancelled, the framework also runs one final end-of-run flush step before exit. That final step emits closing events for any protocol streams that are still open and tries to persist any remaining aggregated data. This is separate from the regular periodic flush.
 
 * `aggregator.WithEnabled(true)` is used to control whether event aggregation is enabled. It is enabled by default. When enabled, it aggregates consecutive `TEXT_MESSAGE_CONTENT` and `REASONING_MESSAGE_CONTENT` events that share the same `messageId`. When disabled, no aggregation is performed on AG-UI events.
 * `aguirunner.WithFlushInterval(time.Second)` is used to control the periodic flush interval of aggregated results. The default is 1 second. Setting it to 0 disables the periodic flush mechanism.
+* `agui.WithPostRunFinalizationTimeout(5*time.Second)` limits how long the end-of-run finalization step is allowed to take. This covers both protocol closing events and persisting any buffered aggregated data. The default is `5s`. Setting it to `0` means no additional timeout is applied.
 
 ```go
 import (
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
@@ -652,6 +691,7 @@ server, err := agui.New(
     agui.WithAppName(appName),
     agui.WithSessionService(sessionService),
     agui.WithFlushInterval(time.Second), // Set the periodic flush interval for aggregation results, default is 1 second.
+    agui.WithPostRunFinalizationTimeout(5*time.Second), // Set the timeout for end-of-run finalization, default is 5 seconds.
     agui.WithAGUIRunnerOptions(
         aguirunner.WithUserIDResolver(userIDResolver),
         aguirunner.WithAggregationOption(aggregator.WithEnabled(true)), // Enable event aggregation, enabled by default.
@@ -883,54 +923,6 @@ When a run starts with resume input, the AG-UI server emits an extra `ACTIVITY_D
 
 For a complete example, see [examples/agui/server/graph](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph). For a client implementation, see [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 
-## Best Practices
-
-### Generating Documents
-
-If a long-form document is inserted directly into the main conversation, it can easily “flood” the dialogue, making it hard for users to distinguish between conversation content and document content. To solve this, it’s recommended to use a **document panel** to carry long documents. By defining a workflow in the AG-UI event stream — “open document panel → write document content → close document panel” — you can pull long documents out of the main conversation and avoid disturbing normal interactions. A sample approach is as follows.
-
-1. **Backend: Define tools and constrain call order**
-
-   Provide the Agent with two tools: **open document panel** and **close document panel**, and constrain the generation order in the prompt:
-   when entering the document generation flow, execute in the following order:
-
-   1. Call the “open document panel” tool first
-   2. Then output the document content
-   3. Finally call the “close document panel” tool
-
-   Converted into an AG-UI event stream, it looks roughly like this:
-
-   ```text
-   Open document panel tool
-     → ToolCallStart
-     → ToolCallArgs
-     → ToolCallEnd
-     → ToolCallResult
-
-   Document content
-     → TextMessageStart
-     → TextMessageContent
-     → TextMessageEnd
-
-   Close document panel tool
-     → ToolCallStart
-     → ToolCallArgs
-     → ToolCallEnd
-     → ToolCallResult
-   ```
-
-2. **Frontend: Listen for tool events and manage the document panel**
-
-   On the frontend, listen to the event stream:
-
-   * When an `open_report_document` tool event is captured: create a document panel and write all subsequent text message content into that panel.
-   * When a `close_report_document` tool event is captured: close the document panel (or mark it as completed).
-
-The effect is shown below. For a full example, refer to
-[examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report). The corresponding client implementation lives in [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
-
-![report](../assets/gif/agui/report.gif)
-
 ### External Tools
 
 When a tool must be executed on the client side or within business services, you can use the external tool pattern. The backend only generates the tool call and interrupts execution at the tool node. The frontend runs the tool and sends the result back. The backend then resumes from the interrupt point and continues the run. This pattern requires the tool result to be included in the LLM context and persisted to session history so that a Message Snapshot can replay a complete conversation later.
@@ -940,6 +932,17 @@ It is recommended to enable `agui.WithGraphNodeInterruptActivityEnabled(true)` o
 A single external tool invocation corresponds to two requests. The first request uses `role=user`. When the LLM triggers a tool call, the event stream emits `TOOL_CALL_START`, `TOOL_CALL_ARGS`, and `TOOL_CALL_END`, then emits `ACTIVITY_DELTA graph.node.interrupt` at the tool node and closes the SSE stream. The client reads `toolCallId` and the tool arguments from the tool call events, and reads `lineageId` from the interrupt event.
 
 The second request uses `role=tool` to send the tool result back to the server. The `toolCallId` must match the first request, `content` is the tool output string, and `forwardedProps.lineage_id` must be set to the `lineageId` returned by the interrupt event. The server first translates this tool message into a `TOOL_CALL_RESULT` event and persists it to the session, then resumes from the corresponding checkpoint and continues generating the final answer.
+
+If you want this echoed `role=tool` input to pass through the Translator, enable `agui.WithToolResultInputTranslationEnabled(true)`. When enabled, the AG-UI Runner first normalizes the tool-result input into an internal event and then sends it through the Translator, as shown below.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
+server, err := agui.New(
+    runner,
+    agui.WithToolResultInputTranslationEnabled(true),
+)
+```
 
 If the LLM does not trigger any tool call in the first request, no interrupt event will be emitted and a second request is not required.
 
@@ -1002,3 +1005,53 @@ Second request role=tool
 ```
 
 For a complete example, see [examples/agui/server/externaltool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool). For a frontend implementation, see [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
+
+## Best Practices
+
+Prefer the server-side tool execution path by default. Only adopt the external tool pattern when a tool must run on the client side or within business services; that scenario is better treated as advanced usage than as a default recommendation.
+
+### Generating Documents
+
+If a long-form document is inserted directly into the main conversation, it can easily “flood” the dialogue, making it hard for users to distinguish between conversation content and document content. To solve this, it’s recommended to use a **document panel** to carry long documents. By defining a workflow in the AG-UI event stream — “open document panel → write document content → close document panel” — you can pull long documents out of the main conversation and avoid disturbing normal interactions. A sample approach is as follows.
+
+1. **Backend: Define tools and constrain call order**
+
+   Provide the Agent with two tools: **open document panel** and **close document panel**, and constrain the generation order in the prompt:
+   when entering the document generation flow, execute in the following order:
+
+   1. Call the “open document panel” tool first
+   2. Then output the document content
+   3. Finally call the “close document panel” tool
+
+   Converted into an AG-UI event stream, it looks roughly like this:
+
+   ```text
+   Open document panel tool
+     → ToolCallStart
+     → ToolCallArgs
+     → ToolCallEnd
+     → ToolCallResult
+
+   Document content
+     → TextMessageStart
+     → TextMessageContent
+     → TextMessageEnd
+
+   Close document panel tool
+     → ToolCallStart
+     → ToolCallArgs
+     → ToolCallEnd
+     → ToolCallResult
+   ```
+
+2. **Frontend: Listen for tool events and manage the document panel**
+
+   On the frontend, listen to the event stream:
+
+   * When an `open_report_document` tool event is captured: create a document panel and write all subsequent text message content into that panel.
+   * When a `close_report_document` tool event is captured: close the document panel (or mark it as completed).
+
+The effect is shown below. For a full example, refer to
+[examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report). The corresponding client implementation lives in [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
+
+![report](../assets/gif/agui/report.gif)

@@ -1,0 +1,36 @@
+[
+  {
+    "metricName": "llm_rubric_critic",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "rubrics": [
+          {
+            "id": "1",
+            "description": "The response asks only the most relevant missing business-trip details before finalizing.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "If essential trip details are still missing, check whether the actual response asks only the most relevant remaining details or proposes a reasonable business-friendly assumption. Do not fail for wording or formatting differences alone."
+            }
+          },
+          {
+            "id": "2",
+            "description": "The response provides a practical Beijing business-trip recommendation once enough information is available.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "When the user has already provided enough context, check whether the actual response materially matches the reference answer's transport recommendation, hotel-area recommendation, and travel-reminder intent. Accept semantically equivalent wording and nearby reasonable time windows."
+            }
+          },
+          {
+            "id": "3",
+            "description": "The response stays aligned with the reference answer's business-friendly assumptions and does not omit material guidance.",
+            "type": "FINAL_RESPONSE_COMPLETENESS",
+            "content": {
+              "text": "Check whether the actual response remains materially aligned with the reference answer's business-friendly assumptions and guidance. Do not fail for different example hotel names, broader but still reasonable airport or time recommendations, or different presentation. Fail only if the actual response omits or contradicts important operational guidance from the reference answer."
+            }
+          }
+        ]
+      }
+    }
+  }
+]

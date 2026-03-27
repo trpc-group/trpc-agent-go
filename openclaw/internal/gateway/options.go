@@ -11,16 +11,38 @@
 package gateway
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
 // SessionIDFunc builds a session ID for the inbound message.
 type SessionIDFunc func(InboundMessage) (string, error)
+
+// RunOptionInput describes one gateway run before invoking the runner.
+type RunOptionInput struct {
+	Inbound    InboundMessage
+	UserID     string
+	SessionID  string
+	RequestID  string
+	Message    model.Message
+	Trace      *debugrecorder.Trace
+	Extensions map[string]json.RawMessage
+}
+
+// RunOptionResolver decorates context and options for one gateway run.
+type RunOptionResolver func(
+	ctx context.Context,
+	input RunOptionInput,
+) (context.Context, []agent.RunOption)
 
 type options struct {
 	basePath      string
@@ -38,6 +60,7 @@ type options struct {
 	allowPrivatePartURLs bool
 	allowedPartPatterns  []string
 	audioTranscriber     audioTranscriber
+	appName              string
 
 	sessionIDFunc SessionIDFunc
 
@@ -45,10 +68,13 @@ type options struct {
 	requireMention  bool
 	mentionPatterns []string
 
+	runOptionResolver RunOptionResolver
+
 	recorder *debugrecorder.Recorder
 	uploads  *uploads.Store
 
-	personaStore *persona.Store
+	personaStore    *persona.Store
+	memoryFileStore *memoryfile.Store
 }
 
 // Option is a function that configures a gateway server.
@@ -209,6 +235,21 @@ func WithPersonaStore(store *persona.Store) Option {
 	}
 }
 
+// WithMemoryFileStore sets the file-based memory store used for per-run
+// context injection.
+func WithMemoryFileStore(store *memoryfile.Store) Option {
+	return func(o *options) {
+		o.memoryFileStore = store
+	}
+}
+
+// WithAppName sets the app name used by file-based memory injection.
+func WithAppName(appName string) Option {
+	return func(o *options) {
+		o.appName = strings.TrimSpace(appName)
+	}
+}
+
 // WithSessionIDFunc sets a custom session ID function.
 func WithSessionIDFunc(fn SessionIDFunc) Option {
 	return func(o *options) {
@@ -269,6 +310,35 @@ func WithMentionPatterns(patterns ...string) Option {
 func WithDebugRecorder(rec *debugrecorder.Recorder) Option {
 	return func(o *options) {
 		o.recorder = rec
+	}
+}
+
+// WithRunOptionResolver decorates one gateway run before runner.Run.
+func WithRunOptionResolver(resolver RunOptionResolver) Option {
+	return func(o *options) {
+		if resolver == nil {
+			o.runOptionResolver = nil
+			return
+		}
+		prev := o.runOptionResolver
+		if prev == nil {
+			o.runOptionResolver = resolver
+			return
+		}
+		o.runOptionResolver = func(
+			ctx context.Context,
+			input RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			prevCtx, prevOpts := prev(ctx, input)
+			if prevCtx == nil {
+				prevCtx = ctx
+			}
+			nextCtx, nextOpts := resolver(prevCtx, input)
+			if nextCtx == nil {
+				nextCtx = prevCtx
+			}
+			return nextCtx, append(prevOpts, nextOpts...)
+		}
 	}
 }
 

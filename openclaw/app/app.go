@@ -24,6 +24,7 @@ import (
 	"hash/crc32"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -39,6 +40,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -46,10 +48,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
 	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationtool"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
@@ -85,6 +89,11 @@ const (
 		"DOCX, text, CSV, and spreadsheet uploads already in the " +
 		"chat. Only fall back to " +
 		"exec_command when those tools cannot satisfy the task. " +
+		"For questions about the active chat history, recent " +
+		"turns, or who said something in the current session, use " +
+		"conversation_history before searching long-term memory. " +
+		"Only use long-term memory tools for facts that are not " +
+		"available in the current session. " +
 		"Do not call exec_command just to print OPENCLAW_* upload " +
 		"vars or inspect recent upload metadata when a matching " +
 		"chat file is already available. For general local shell " +
@@ -97,6 +106,7 @@ const (
 		"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_HOST_REF, " +
 		"OPENCLAW_LAST_UPLOAD_NAME, " +
 		"OPENCLAW_LAST_UPLOAD_MIME, and " +
+		"OPENCLAW_MEMORY_FILE, " +
 		"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing " +
 		"attachment paths. When a user follows " +
 		"up about 'the PDF/audio/video I just sent', assume they " +
@@ -163,7 +173,19 @@ const (
 		"OPENCLAW_SESSION_UPLOADS_DIR. Prefer writing derived " +
 		"files under " +
 		"OPENCLAW_SESSION_UPLOADS_DIR when you will send them " +
-		"back to the user. Prefer already installed local tools " +
+		"back to the user. OPENCLAW_MEMORY_FILE is a " +
+		"user-owned file, not hidden internal state. If the " +
+		"user asks what you remember or asks to inspect that " +
+		"file, read it and quote or summarize the relevant " +
+		"lines. If the user explicitly says 'remember this' " +
+		"or asks you to remember a durable fact, preference, " +
+		"or workflow rule, update OPENCLAW_MEMORY_FILE with a " +
+		"short bullet in the same turn. Use " +
+		"OPENCLAW_MEMORY_FILE only for stable cross-session " +
+		"facts, preferences, or working style. Do not store " +
+		"secrets or large transcripts in that file. " +
+		"If a memory file does not exist yet, you may create it " +
+		"at that exact path. Prefer already installed local tools " +
 		"for OCR, PDF, audio, image, and video work before " +
 		"trying package installs or long downloads. " +
 		"When creating a cron job from chat, omit channel and " +
@@ -191,9 +213,9 @@ const (
 
 	defaultOpenAIVariant = openAIVariantAuto
 
-	deepSeekModelHint = "deepseek"
-	qwenModelHint     = "qwen"
-	hunyuanModelHint  = "hunyuan"
+	deepSeekAPIHost = "api.deepseek.com"
+	qwenAPIHost     = "dashscope.aliyuncs.com"
+	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
 
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
 	openAIModelEnvName   = "OPENAI_MODEL"
@@ -321,7 +343,7 @@ func runtimeStartupLines(
 		{text: fmt.Sprintf(
 			"Storage: session=%s memory=%s",
 			strings.TrimSpace(opts.SessionBackend),
-			strings.TrimSpace(opts.MemoryBackend),
+			resolveMemoryBackendType(opts.MemoryBackend),
 		)},
 	}
 }
@@ -437,15 +459,17 @@ func adminStartupLines(
 // default OpenClaw runner + channel wiring.
 type Runtime struct {
 	Gateway  Gateway
+	A2A      A2ASurface
 	Admin    AdminSurface
 	Channels []channel.Channel
 
-	runner     runner.Runner
-	cronRunner closeFunc
-	sessionSvc closeFunc
-	memorySvc  closeFunc
-	cronSvc    closeFunc
-	toolSets   []tool.ToolSet
+	runner            runner.Runner
+	cronRunner        closeFunc
+	sessionSvc        closeFunc
+	memorySvc         closeFunc
+	cronSvc           closeFunc
+	toolSets          []tool.ToolSet
+	telemetryShutdown func(context.Context) error
 }
 
 // Gateway provides the HTTP handler and routes served by OpenClaw.
@@ -516,9 +540,17 @@ func NewRuntime(
 			Err:  fmt.Errorf("debug recorder config failed: %w", err),
 		}
 	}
-	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
-	if debugRec != nil {
-		debugDir = debugRec.Dir()
+	langfuseRT, err := maybeEnableLangfuse(ctx, opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("langfuse config failed: %w", err),
+		}
+	}
+	langfuseStatus := admin.LangfuseStatus{}
+	if langfuseRT != nil {
+		langfuseStatus = langfuseRT.adminStatus
+		rt.telemetryShutdown = langfuseRT.shutdown
 	}
 
 	needsModel := agentType == agentTypeLLM ||
@@ -562,6 +594,14 @@ func NewRuntime(
 	}
 	rt.memorySvc = memSvc
 
+	stores, err := newRuntimeStores(resolvedStateDir)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create runtime stores failed: %w", err),
+		}
+	}
+
 	prompts, err := resolveAgentPrompts(opts)
 	if err != nil {
 		return nil, &exitError{
@@ -570,11 +610,17 @@ func NewRuntime(
 		}
 	}
 
+	fileMemoryStore := fileMemoryStoreForBackend(
+		opts.MemoryBackend,
+		stores.memoryFiles,
+	)
 	openClawTools := buildOpenClawTools(
 		opts.EnableOpenClawTools,
 		resolvedStateDir,
+		stores.uploads,
+		fileMemoryStore,
 	)
-	extraTools := append([]tool.Tool(nil), memSvc.Tools()...)
+	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
 
 	var (
@@ -640,8 +686,9 @@ func NewRuntime(
 
 	runnerOpts := []runner.Option{
 		runner.WithSessionService(sessionSvc),
-		runner.WithMemoryService(memSvc),
+		runner.WithPlugins(conversation.Plugin{}),
 	}
+	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
 	if err != nil {
 		return nil, &exitError{
@@ -659,38 +706,47 @@ func NewRuntime(
 	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 	rt.runner = r
 
-	uploadStore, err := uploads.NewStore(resolvedStateDir)
-	if err != nil {
-		return nil, &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create upload store failed: %w", err),
-		}
-	}
-	personaPath, err := persona.DefaultStorePath(resolvedStateDir)
-	if err != nil {
-		return nil, &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create persona store path failed: %w", err),
-		}
-	}
-	personaStore, err := persona.NewStore(personaPath)
-	if err != nil {
-		return nil, &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create persona store failed: %w", err),
-		}
-	}
-
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
 	)
-	gwOpts = append(gwOpts, gateway.WithUploadStore(uploadStore))
-	gwOpts = append(gwOpts, gateway.WithPersonaStore(personaStore))
+	gwOpts = append(gwOpts, gateway.WithAppName(opts.AppName))
+	gwOpts = append(gwOpts, gateway.WithUploadStore(stores.uploads))
+	gwOpts = append(gwOpts, gateway.WithPersonaStore(stores.personas))
+	if fileMemoryStore != nil {
+		gwOpts = append(
+			gwOpts,
+			gateway.WithMemoryFileStore(fileMemoryStore),
+		)
+	}
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
+	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
+		gwOpts = append(
+			gwOpts,
+			gateway.WithRunOptionResolver(
+				langfuseRT.runOptionResolver,
+			),
+		)
+	}
+	gwOpts = append(
+		gwOpts,
+		gateway.WithRunOptionResolver(
+			buildDeliveryRunOptionResolver(),
+		),
+		gateway.WithRunOptionResolver(
+			buildConversationRunOptionResolver(
+				opts.AppName,
+				sessionSvc,
+				conversation.HistoryOptions{
+					AddSessionSummary: opts.AddSessionSummary,
+					MaxHistoryRuns:    opts.MaxHistoryRuns,
+				},
+			),
+		),
+	)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return nil, &exitError{
@@ -705,16 +761,28 @@ func NewRuntime(
 		StatusPath:   gwSrv.StatusPath(),
 		CancelPath:   gwSrv.CancelPath(),
 	}
+	rt.A2A, err = newA2ASurface(ag, r, opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create a2a failed: %w", err),
+		}
+	}
 
+	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
+	if debugRec != nil {
+		debugDir = debugRec.Dir()
+	}
 	gw := newInProcGatewayClient(
 		gwSrv,
 		opts.AppName,
 		sessionSvc,
 		memSvc,
 		debugDir,
-		uploadStore,
+		stores.uploads,
 	)
-	gw.SetPersonaStore(personaStore)
+	gw.SetPersonaStore(stores.personas)
+	gw.SetMemoryFileStore(fileMemoryStore)
 
 	if len(opts.Channels) > 0 {
 		extra, err := channelsFromRegistry(
@@ -775,6 +843,7 @@ func NewRuntime(
 			opts,
 			agentType,
 			instanceID,
+			langfuseStatus,
 			resolvedStateDir,
 			debugDir,
 			startedAt,
@@ -807,6 +876,7 @@ func (r *Runtime) Close() error {
 		return nil
 	}
 
+	var errs []error
 	if r.cronSvc != nil {
 		_ = r.cronSvc.Close()
 	}
@@ -817,10 +887,15 @@ func (r *Runtime) Close() error {
 	closeMemoryService(r.memorySvc)
 	closeSessionService(r.sessionSvc)
 
-	if r.runner == nil {
-		return nil
+	if r.runner != nil {
+		if err := r.runner.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return r.runner.Close()
+	if err := shutdownTelemetry(r.telemetryShutdown); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 func run(ctx context.Context, args []string) error {
@@ -876,6 +951,27 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		log.Warnf("browser server auto-start failed: %v", err)
 	}
+	langfuseRT, err := maybeEnableLangfuse(ctx, opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("langfuse config failed: %w", err),
+		}
+	}
+	langfuseStatus := admin.LangfuseStatus{}
+	var langfuseShutdown func(context.Context) error
+	if langfuseRT != nil {
+		langfuseStatus = langfuseRT.adminStatus
+		langfuseShutdown = langfuseRT.shutdown
+	}
+	defer func() {
+		if langfuseShutdown == nil {
+			return
+		}
+		if err := shutdownTelemetry(langfuseShutdown); err != nil {
+			log.Warnf("shutdown langfuse failed: %v", err)
+		}
+	}()
 
 	needsModel := agentType == agentTypeLLM ||
 		opts.SessionSummaryEnabled ||
@@ -918,6 +1014,14 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer closeMemoryService(memSvc)
 
+	stores, err := newRuntimeStores(resolvedStateDir)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create runtime stores failed: %w", err),
+		}
+	}
+
 	prompts, err := resolveAgentPrompts(opts)
 	if err != nil {
 		return &exitError{
@@ -926,11 +1030,17 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
+	fileMemoryStore := fileMemoryStoreForBackend(
+		opts.MemoryBackend,
+		stores.memoryFiles,
+	)
 	openClawTools := buildOpenClawTools(
 		opts.EnableOpenClawTools,
 		resolvedStateDir,
+		stores.uploads,
+		fileMemoryStore,
 	)
-	extraTools := append([]tool.Tool(nil), memSvc.Tools()...)
+	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
 
 	var (
@@ -997,8 +1107,9 @@ func run(ctx context.Context, args []string) error {
 
 	runnerOpts := []runner.Option{
 		runner.WithSessionService(sessionSvc),
-		runner.WithMemoryService(memSvc),
+		runner.WithPlugins(conversation.Plugin{}),
 	}
+	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
 	if err != nil {
 		return &exitError{
@@ -1014,38 +1125,47 @@ func run(ctx context.Context, args []string) error {
 	}
 	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 
-	uploadStore, err := uploads.NewStore(resolvedStateDir)
-	if err != nil {
-		return &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create upload store failed: %w", err),
-		}
-	}
-	personaPath, err := persona.DefaultStorePath(resolvedStateDir)
-	if err != nil {
-		return &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create persona store path failed: %w", err),
-		}
-	}
-	personaStore, err := persona.NewStore(personaPath)
-	if err != nil {
-		return &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create persona store failed: %w", err),
-		}
-	}
-
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
 	)
-	gwOpts = append(gwOpts, gateway.WithUploadStore(uploadStore))
-	gwOpts = append(gwOpts, gateway.WithPersonaStore(personaStore))
+	gwOpts = append(gwOpts, gateway.WithAppName(opts.AppName))
+	gwOpts = append(gwOpts, gateway.WithUploadStore(stores.uploads))
+	gwOpts = append(gwOpts, gateway.WithPersonaStore(stores.personas))
+	if fileMemoryStore != nil {
+		gwOpts = append(
+			gwOpts,
+			gateway.WithMemoryFileStore(fileMemoryStore),
+		)
+	}
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
+	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
+		gwOpts = append(
+			gwOpts,
+			gateway.WithRunOptionResolver(
+				langfuseRT.runOptionResolver,
+			),
+		)
+	}
+	gwOpts = append(
+		gwOpts,
+		gateway.WithRunOptionResolver(
+			buildDeliveryRunOptionResolver(),
+		),
+		gateway.WithRunOptionResolver(
+			buildConversationRunOptionResolver(
+				opts.AppName,
+				sessionSvc,
+				conversation.HistoryOptions{
+					AddSessionSummary: opts.AddSessionSummary,
+					MaxHistoryRuns:    opts.MaxHistoryRuns,
+				},
+			),
+		),
+	)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return &exitError{
@@ -1060,16 +1180,36 @@ func run(ctx context.Context, args []string) error {
 		sessionSvc,
 		memSvc,
 		debugDir,
-		uploadStore,
+		stores.uploads,
 	)
-	gw.SetPersonaStore(personaStore)
+	gw.SetPersonaStore(stores.personas)
+	gw.SetMemoryFileStore(fileMemoryStore)
+
+	a2aSurface, err := newA2ASurface(ag, r, opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create a2a failed: %w", err),
+		}
+	}
+
+	httpHandler, err := buildRuntimeHTTPHandler(
+		gwSrv.Handler(),
+		a2aSurface,
+	)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("build runtime handler failed: %w", err),
+		}
+	}
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 
 	httpSrv := &http.Server{
 		Addr:              opts.HTTPAddr,
-		Handler:           gwSrv.Handler(),
+		Handler:           httpHandler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	var (
@@ -1144,6 +1284,7 @@ func run(ctx context.Context, args []string) error {
 			opts,
 			agentType,
 			instanceID,
+			langfuseStatus,
 			resolvedStateDir,
 			debugDir,
 			startedAt,
@@ -1180,6 +1321,7 @@ func run(ctx context.Context, args []string) error {
 	))
 	logStartupLines(browserServerSup.startupLines())
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
+	logStartupLines(a2aStartupLines(a2aSurface))
 	logStartupLines(toolDepsStartupLines(openClawTools.deps))
 	go func() {
 		//nolint:gosec
@@ -1235,6 +1377,13 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 	_ = r.Close()
+	if err := shutdownTelemetryWithContext(
+		shutdownCtx,
+		langfuseShutdown,
+	); err != nil {
+		log.Warnf("shutdown langfuse failed: %v", err)
+	}
+	langfuseShutdown = nil
 
 	for received < workerCount {
 		select {
@@ -1273,6 +1422,33 @@ func closeMemoryService(svc closeFunc) {
 	}
 }
 
+func memoryServiceTools(svc memory.Service) []tool.Tool {
+	if svc == nil {
+		return nil
+	}
+	return append([]tool.Tool(nil), svc.Tools()...)
+}
+
+func fileMemoryStoreForBackend(
+	backend string,
+	store *memoryfile.Store,
+) *memoryfile.Store {
+	if resolveMemoryBackendType(backend) != memoryBackendFile {
+		return nil
+	}
+	return store
+}
+
+func appendMemoryServiceRunnerOption(
+	opts []runner.Option,
+	svc memory.Service,
+) []runner.Option {
+	if svc == nil {
+		return opts
+	}
+	return append(opts, runner.WithMemoryService(svc))
+}
+
 func closeToolSets(sets []tool.ToolSet) {
 	for _, ts := range sets {
 		if ts == nil {
@@ -1282,6 +1458,33 @@ func closeToolSets(sets []tool.ToolSet) {
 			log.Warnf("close toolset %q failed: %v", ts.Name(), err)
 		}
 	}
+}
+
+func shutdownTelemetry(
+	shutdown func(context.Context) error,
+) error {
+	if shutdown == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second,
+	)
+	defer cancel()
+	return shutdownTelemetryWithContext(ctx, shutdown)
+}
+
+func shutdownTelemetryWithContext(
+	ctx context.Context,
+	shutdown func(context.Context) error,
+) error {
+	if shutdown == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return shutdown(ctx)
 }
 
 func newCronRunner(
@@ -1294,8 +1497,8 @@ func newCronRunner(
 		runner.WithSessionService(
 			sessioninmemory.NewSessionService(),
 		),
-		runner.WithMemoryService(memSvc),
 	}
+	opts = appendMemoryServiceRunnerOption(opts, memSvc)
 	if rlCfg != nil {
 		opts = append(opts, runner.WithRalphLoop(*rlCfg))
 	}
@@ -1917,9 +2120,57 @@ type openClawToolsBundle struct {
 	deps     *deps.Report
 }
 
+type runtimeStores struct {
+	uploads     *uploads.Store
+	personas    *persona.Store
+	memoryFiles *memoryfile.Store
+}
+
+func newRuntimeStores(stateDir string) (runtimeStores, error) {
+	uploadStore, err := uploads.NewStore(stateDir)
+	if err != nil {
+		return runtimeStores{}, fmt.Errorf("create upload store: %w", err)
+	}
+
+	personaPath, err := persona.DefaultStorePath(stateDir)
+	if err != nil {
+		return runtimeStores{}, fmt.Errorf(
+			"create persona store path: %w",
+			err,
+		)
+	}
+	personaStore, err := persona.NewStore(personaPath)
+	if err != nil {
+		return runtimeStores{}, fmt.Errorf("create persona store: %w", err)
+	}
+
+	memoryRoot, err := memoryfile.DefaultRoot(stateDir)
+	if err != nil {
+		return runtimeStores{}, fmt.Errorf(
+			"create memory root: %w",
+			err,
+		)
+	}
+	memoryStore, err := memoryfile.NewStore(memoryRoot)
+	if err != nil {
+		return runtimeStores{}, fmt.Errorf(
+			"create memory store: %w",
+			err,
+		)
+	}
+
+	return runtimeStores{
+		uploads:     uploadStore,
+		personas:    personaStore,
+		memoryFiles: memoryStore,
+	}, nil
+}
+
 func buildOpenClawTools(
 	enabled bool,
 	stateDir string,
+	uploadStore *uploads.Store,
+	memoryFileStore *memoryfile.Store,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
@@ -1927,13 +2178,12 @@ func buildOpenClawTools(
 
 	mgr := octool.NewManager(
 		octool.WithBaseEnv(deps.ToolEnv(stateDir)),
+		octool.WithCommandPolicy(
+			octool.NewChatCommandSafetyPolicy(),
+		),
 	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
-	var uploadStore *uploads.Store
-	if store, err := uploads.NewStore(stateDir); err == nil {
-		uploadStore = store
-	}
 	var depsReport *deps.Report
 	if sources, err := deps.SourcesForProfiles(deps.DefaultProfiles()); err ==
 		nil {
@@ -1943,10 +2193,19 @@ func buildOpenClawTools(
 		}
 	}
 
+	execTool := octool.NewExecCommandTool(mgr, uploadStore)
+	if memoryFileStore != nil {
+		execTool = octool.NewExecCommandToolWithMemoryFileStore(
+			mgr,
+			uploadStore,
+			memoryFileStore,
+		)
+	}
 	tools := []tool.Tool{
+		conversationtool.NewTool(),
 		octool.NewReadDocumentTool(uploadStore),
 		octool.NewReadSpreadsheetTool(uploadStore),
-		octool.NewExecCommandTool(mgr, uploadStore),
+		execTool,
 		octool.NewWriteStdinTool(mgr),
 		octool.NewKillSessionTool(mgr),
 		outbound.NewTool(router),
@@ -2096,7 +2355,8 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		return nil, errors.New("openai model name is empty")
 	}
 
-	variant, err := parseOpenAIVariant(spec.OpenAIVariant, name)
+	baseURL := strings.TrimSpace(spec.BaseURL)
+	variant, err := parseOpenAIVariant(spec.OpenAIVariant, baseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -2105,7 +2365,6 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
 	}
-	baseURL := strings.TrimSpace(spec.BaseURL)
 	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))
 	}
@@ -2140,11 +2399,11 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 
 func parseOpenAIVariant(
 	raw string,
-	modelName string,
+	baseURL string,
 ) (openai.Variant, error) {
 	v := strings.ToLower(strings.TrimSpace(raw))
 	if v == "" || v == openAIVariantAuto {
-		return inferOpenAIVariant(modelName), nil
+		return inferOpenAIVariant(baseURL), nil
 	}
 
 	variant := openai.Variant(v)
@@ -2159,18 +2418,37 @@ func parseOpenAIVariant(
 	}
 }
 
-func inferOpenAIVariant(modelName string) openai.Variant {
-	name := strings.ToLower(strings.TrimSpace(modelName))
+func inferOpenAIVariant(baseURL string) openai.Variant {
+	host, ok := openAIBaseURLHost(baseURL)
+	if !ok {
+		return openai.VariantOpenAI
+	}
 	switch {
-	case strings.Contains(name, deepSeekModelHint):
+	case strings.EqualFold(host, deepSeekAPIHost):
 		return openai.VariantDeepSeek
-	case strings.Contains(name, qwenModelHint):
+	case strings.EqualFold(host, qwenAPIHost):
 		return openai.VariantQwen
-	case strings.Contains(name, hunyuanModelHint):
+	case strings.EqualFold(host, hunyuanAPIHost):
 		return openai.VariantHunyuan
 	default:
 		return openai.VariantOpenAI
 	}
+}
+
+func openAIBaseURLHost(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", false
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return "", false
+	}
+	return host, true
 }
 
 func splitCSV(input string) []string {

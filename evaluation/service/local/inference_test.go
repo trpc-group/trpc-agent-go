@@ -19,12 +19,14 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -208,6 +210,68 @@ func TestLocalInferenceAfterInferenceCaseCallbackDoesNotReceivePerCaseError(t *t
 	assert.Equal(t, status.EvalStatusFailed, results[0].Status)
 }
 
+func TestLocalInference_FailedCasePreservesExecutionTraceArtifacts(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	evalCase := makeEvalCase(appName, "case-1", "prompt")
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	executionTrace := &trace.Trace{RootAgentName: "assistant", RootInvocationID: "inv-1"}
+	runnerStub := &fakeRunner{events: []*event.Event{
+		{
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{
+					{Message: model.Message{Role: model.RoleAssistant, Content: "answer"}},
+				},
+			},
+		},
+		{
+			Response: &model.Response{
+				Error: &model.ResponseError{Message: "boom", Type: model.ErrorTypeAPIError},
+			},
+		},
+		{
+			InvocationID:   "generated-inv",
+			ExecutionTrace: executionTrace,
+			Response: &model.Response{
+				Object: model.ObjectTypeRunnerCompletion,
+				Done:   true,
+			},
+		},
+	}}
+	svc, err := New(
+		runnerStub,
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+	results, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	if len(results) != 1 {
+		return
+	}
+	assert.Equal(t, status.EvalStatusFailed, results[0].Status)
+	assert.Len(t, results[0].ExecutionTraces, 1)
+	if len(results[0].ExecutionTraces) != 1 {
+		return
+	}
+	assert.Same(t, executionTrace, results[0].ExecutionTraces[0])
+	assert.Nil(t, results[0].Inferences)
+}
+
 func TestLocalInferenceBeforeInferenceSetCanFilterEvalCaseIDs(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"
@@ -275,7 +339,6 @@ func TestLocalInferenceBeforeInferenceSetContextUpdatesSessionIDSupplier(t *test
 	assert.NoError(t, err)
 
 	evalCase := makeEvalCase(appName, "case-1", "prompt")
-	evalCase.EvalMode = evalset.EvalModeTrace
 	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
 
 	callbacks := &service.Callbacks{}
@@ -490,6 +553,44 @@ func TestLocalInferenceAfterInferenceCaseErrorMarksCaseFailed(t *testing.T) {
 	assert.Nil(t, results[0].Inferences)
 	assert.Contains(t, results[0].ErrorMessage, "after inference case failed")
 	assert.Contains(t, results[0].ErrorMessage, "run after inference case callbacks")
+}
+
+func TestLocalInferenceAfterInferenceCaseDoesNotReceiveInferenceError(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	evalCase := makeEvalCase(appName, "case-1", "prompt")
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	var gotErr error
+	callbacks := &service.Callbacks{}
+	callbacks.Register("observe", &service.Callback{
+		AfterInferenceCase: func(ctx context.Context, args *service.AfterInferenceCaseArgs) (*service.AfterInferenceCaseResult, error) {
+			gotErr = args.Error
+			return nil, nil
+		},
+	})
+	svc, err := New(
+		&fakeRunner{err: errors.New("boom")},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalResultManager(evalresultinmemory.New()),
+		service.WithRegistry(registry.New()),
+		service.WithCallbacks(callbacks),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+	results, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.NoError(t, gotErr)
 }
 
 func TestLocalInferenceBeforeInferenceSetErrorReturnsError(t *testing.T) {
@@ -789,4 +890,320 @@ func TestLocalInferenceRejectsNilContextMessage(t *testing.T) {
 	}
 	assert.Equal(t, status.EvalStatusFailed, result.Status)
 	assert.Contains(t, result.ErrorMessage, "context message is nil at index 0")
+}
+
+type scenarioTestConversation struct {
+	decisions []*usersimulation.Decision
+	requests  []*usersimulation.TurnRequest
+	closed    bool
+}
+
+func (s *scenarioTestConversation) Next(ctx context.Context, req *usersimulation.TurnRequest) (*usersimulation.Decision, error) {
+	s.requests = append(s.requests, req)
+	if len(s.decisions) == 0 {
+		return &usersimulation.Decision{Stop: true}, nil
+	}
+	decision := s.decisions[0]
+	s.decisions = s.decisions[1:]
+	return decision, nil
+}
+
+func (s *scenarioTestConversation) Close() error {
+	s.closed = true
+	return nil
+}
+
+type scenarioTestSimulator struct {
+	startReq     *usersimulation.StartRequest
+	conversation usersimulation.Conversation
+}
+
+func (s *scenarioTestSimulator) Start(ctx context.Context, req *usersimulation.StartRequest) (usersimulation.Conversation, error) {
+	s.startReq = req
+	return s.conversation, nil
+}
+
+func makeScenarioEvalCase(appName, caseID string) *evalset.EvalCase {
+	return &evalset.EvalCase{
+		EvalID: caseID,
+		ConversationScenario: &evalset.ConversationScenario{
+			ConversationPlan: "Ask clarifying questions until the goal is done.",
+			StopSignal:       "</finished>",
+		},
+		SessionInput: &evalset.SessionInput{
+			AppName: appName,
+			UserID:  "demo-user",
+			State:   map[string]any{"locale": "zh-CN"},
+		},
+	}
+}
+
+func TestInferenceEvalCaseConversationScenarioRequiresUserSimulator(t *testing.T) {
+	svc := &local{
+		runner:            &fakeRunner{},
+		sessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+	}
+	result := svc.inferenceEvalCase(
+		context.Background(),
+		&service.InferenceRequest{AppName: "app", EvalSetID: "set"},
+		makeScenarioEvalCase("app", "case-1"),
+		&service.Options{SessionIDSupplier: func(ctx context.Context) string { return "session-scenario" }},
+	)
+	assert.Equal(t, status.EvalStatusFailed, result.Status)
+	assert.Contains(t, result.ErrorMessage, "user simulator is nil")
+}
+
+func TestInferenceEvalCaseConversationScenarioRejectsMixedInputs(t *testing.T) {
+	sim := &scenarioTestSimulator{conversation: &scenarioTestConversation{}}
+	svc := &local{
+		runner:            &fakeRunner{},
+		sessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+		userSimulator:     sim,
+	}
+	evalCase := makeScenarioEvalCase("app", "case-1")
+	evalCase.Conversation = []*evalset.Invocation{makeInvocation("inv-1", "prompt")}
+	result := svc.inferenceEvalCase(
+		context.Background(),
+		&service.InferenceRequest{AppName: "app", EvalSetID: "set"},
+		evalCase,
+		&service.Options{
+			SessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+			UserSimulator:     sim,
+		},
+	)
+	assert.Equal(t, status.EvalStatusFailed, result.Status)
+	assert.Contains(t, result.ErrorMessage, "cannot both be configured")
+}
+
+func TestInferenceEvalCaseConversationScenarioRejectsTraceMode(t *testing.T) {
+	sim := &scenarioTestSimulator{conversation: &scenarioTestConversation{}}
+	svc := &local{
+		runner:            &fakeRunner{},
+		sessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+		userSimulator:     sim,
+	}
+	evalCase := makeScenarioEvalCase("app", "case-1")
+	evalCase.EvalMode = evalset.EvalModeTrace
+	result := svc.inferenceEvalCase(
+		context.Background(),
+		&service.InferenceRequest{AppName: "app", EvalSetID: "set"},
+		evalCase,
+		&service.Options{
+			SessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+			UserSimulator:     sim,
+		},
+	)
+	assert.Equal(t, status.EvalStatusFailed, result.Status)
+	assert.Contains(t, result.ErrorMessage, "conversationScenario is not supported in trace mode")
+}
+
+func TestInferenceEvalCaseConversationScenarioSuccess(t *testing.T) {
+	executionTrace := &trace.Trace{RootAgentName: "assistant", RootInvocationID: "generated-inv"}
+	conversation := &scenarioTestConversation{
+		decisions: []*usersimulation.Decision{
+			{Message: &model.Message{Role: model.RoleUser, Content: "Please book tomorrow morning."}},
+			{Stop: true},
+		},
+	}
+	simulator := &scenarioTestSimulator{conversation: conversation}
+	svc := &local{
+		runner: &fakeRunner{events: []*event.Event{
+			makeFinalEvent("Booked."),
+			{
+				InvocationID:   "generated-invocation",
+				ExecutionTrace: executionTrace,
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Done:   true,
+				},
+			},
+		}},
+		sessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+		userSimulator:     simulator,
+	}
+	result := svc.inferenceEvalCase(
+		context.Background(),
+		&service.InferenceRequest{AppName: "app", EvalSetID: "set"},
+		makeScenarioEvalCase("app", "case-1"),
+		&service.Options{
+			SessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+			UserSimulator:     simulator,
+		},
+	)
+	assert.Equal(t, status.EvalStatusPassed, result.Status)
+	assert.Len(t, result.Inferences, 1)
+	if assert.Len(t, result.ExecutionTraces, 1) {
+		assert.Same(t, executionTrace, result.ExecutionTraces[0])
+	}
+	assert.True(t, conversation.closed)
+	if assert.NotNil(t, simulator.startReq) {
+		assert.Equal(t, "case-1", simulator.startReq.EvalCaseID)
+		assert.Equal(t, "session-scenario", simulator.startReq.SessionID)
+	}
+	if assert.Len(t, result.Inferences, 1) {
+		if assert.NotNil(t, result.Inferences[0].UserContent) {
+			assert.Equal(t, "Please book tomorrow morning.", result.Inferences[0].UserContent.Content)
+		}
+		if assert.NotNil(t, result.Inferences[0].FinalResponse) {
+			assert.Equal(t, "Booked.", result.Inferences[0].FinalResponse.Content)
+		}
+	}
+}
+
+func TestInferenceEvalCaseConversationScenarioExpectedDriverRequiresExpectedRunner(t *testing.T) {
+	sim := &scenarioTestSimulator{conversation: &scenarioTestConversation{}}
+	svc := &local{
+		runner:            &fakeRunner{},
+		sessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+		userSimulator:     sim,
+	}
+	evalCase := makeScenarioEvalCase("app", "case-1")
+	evalCase.ConversationScenario.Driver = evalset.ConversationScenarioDriverExpected
+	result := svc.inferenceEvalCase(
+		context.Background(),
+		&service.InferenceRequest{AppName: "app", EvalSetID: "set"},
+		evalCase,
+		&service.Options{
+			SessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+			UserSimulator:     sim,
+		},
+	)
+	assert.Equal(t, status.EvalStatusFailed, result.Status)
+	assert.Contains(t, result.ErrorMessage, "expected runner is nil")
+}
+
+func TestInferenceEvalCaseConversationScenarioExpectedDriverUsesExpectedRunner(t *testing.T) {
+	conversation := &scenarioTestConversation{
+		decisions: []*usersimulation.Decision{
+			{Message: &model.Message{Role: model.RoleUser, Content: "Please book tomorrow morning."}},
+			{Message: &model.Message{Role: model.RoleUser, Content: "I prefer a window seat."}},
+			{Stop: true},
+		},
+	}
+	simulator := &scenarioTestSimulator{conversation: conversation}
+	actualRunner := &fakeRunner{events: []*event.Event{makeFinalEvent("actual")}}
+	expectedRunner := &fakeRunner{events: []*event.Event{makeFinalEvent("expected")}}
+	svc := &local{
+		runner:            actualRunner,
+		expectedRunner:    expectedRunner,
+		sessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+		userSimulator:     simulator,
+	}
+	evalCase := makeScenarioEvalCase("app", "case-1")
+	evalCase.ConversationScenario.Driver = evalset.ConversationScenarioDriverExpected
+	evalCase.ExpectedRunnerEnabled = true
+	result := svc.inferenceEvalCase(
+		context.Background(),
+		&service.InferenceRequest{AppName: "app", EvalSetID: "set"},
+		evalCase,
+		&service.Options{
+			SessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+			ExpectedRunner:    expectedRunner,
+			UserSimulator:     simulator,
+		},
+	)
+	assert.Equal(t, status.EvalStatusPassed, result.Status)
+	assert.Len(t, result.Inferences, 2)
+	assert.Len(t, result.ExpectedInferences, 2)
+	assert.True(t, conversation.closed)
+	if assert.Len(t, conversation.requests, 3) {
+		assert.Nil(t, conversation.requests[0].LastTargetResponse)
+		if assert.NotNil(t, conversation.requests[1].LastTargetResponse) {
+			assert.Equal(t, "expected", conversation.requests[1].LastTargetResponse.Content)
+		}
+		if assert.NotNil(t, conversation.requests[2].LastTargetResponse) {
+			assert.Equal(t, "expected", conversation.requests[2].LastTargetResponse.Content)
+		}
+	}
+	if assert.Len(t, result.Inferences, 2) {
+		assert.Equal(t, "Please book tomorrow morning.", result.Inferences[0].UserContent.Content)
+		assert.Equal(t, "I prefer a window seat.", result.Inferences[1].UserContent.Content)
+		assert.Equal(t, "actual", result.Inferences[0].FinalResponse.Content)
+		assert.Equal(t, "actual", result.Inferences[1].FinalResponse.Content)
+	}
+	if assert.Len(t, result.ExpectedInferences, 2) {
+		assert.Equal(t, "expected", result.ExpectedInferences[0].FinalResponse.Content)
+		assert.Equal(t, "expected", result.ExpectedInferences[1].FinalResponse.Content)
+	}
+	expectedRunner.mu.Lock()
+	expectedSessionIDs := append([]string(nil), expectedRunner.sessionIDs...)
+	expectedRunner.mu.Unlock()
+	assert.Equal(t, []string{"session-scenario-expected", "session-scenario-expected"}, expectedSessionIDs)
+	actualRunner.mu.Lock()
+	actualSessionIDs := append([]string(nil), actualRunner.sessionIDs...)
+	actualRunner.mu.Unlock()
+	assert.Equal(t, []string{"session-scenario", "session-scenario"}, actualSessionIDs)
+}
+
+func TestInferenceEvalCaseConversationScenarioExpectedDriverWithoutExpectedRunnerEnabledDoesNotExposeExpecteds(t *testing.T) {
+	conversation := &scenarioTestConversation{
+		decisions: []*usersimulation.Decision{
+			{Message: &model.Message{Role: model.RoleUser, Content: "Please book tomorrow morning."}},
+			{Message: &model.Message{Role: model.RoleUser, Content: "I prefer a window seat."}},
+			{Stop: true},
+		},
+	}
+	simulator := &scenarioTestSimulator{conversation: conversation}
+	actualRunner := &fakeRunner{events: []*event.Event{makeFinalEvent("actual")}}
+	expectedRunner := &fakeRunner{events: []*event.Event{makeFinalEvent("expected")}}
+	svc := &local{
+		runner:            actualRunner,
+		expectedRunner:    expectedRunner,
+		sessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+		userSimulator:     simulator,
+	}
+	evalCase := makeScenarioEvalCase("app", "case-1")
+	evalCase.ConversationScenario.Driver = evalset.ConversationScenarioDriverExpected
+	evalCase.ExpectedRunnerEnabled = false
+	result := svc.inferenceEvalCase(
+		context.Background(),
+		&service.InferenceRequest{AppName: "app", EvalSetID: "set"},
+		evalCase,
+		&service.Options{
+			SessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+			ExpectedRunner:    expectedRunner,
+			UserSimulator:     simulator,
+		},
+	)
+	assert.Equal(t, status.EvalStatusPassed, result.Status)
+	assert.Len(t, result.Inferences, 2)
+	assert.Nil(t, result.ExpectedInferences)
+	expectedRunner.mu.Lock()
+	expectedCalls := len(expectedRunner.calls)
+	expectedRunner.mu.Unlock()
+	assert.Equal(t, 2, expectedCalls)
+}
+
+func TestInferenceEvalCaseConversationScenarioExpectedDriverFailureWithoutExpectedRunnerEnabledDoesNotExposeExpecteds(t *testing.T) {
+	conversation := &scenarioTestConversation{
+		decisions: []*usersimulation.Decision{
+			{Message: &model.Message{Role: model.RoleUser, Content: "Please book tomorrow morning."}},
+			{Stop: true},
+		},
+	}
+	simulator := &scenarioTestSimulator{conversation: conversation}
+	actualRunner := &fakeRunner{err: errors.New("actual failed")}
+	expectedRunner := &fakeRunner{events: []*event.Event{makeFinalEvent("expected")}}
+	svc := &local{
+		runner:            actualRunner,
+		expectedRunner:    expectedRunner,
+		sessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+		userSimulator:     simulator,
+	}
+	evalCase := makeScenarioEvalCase("app", "case-1")
+	evalCase.ConversationScenario.Driver = evalset.ConversationScenarioDriverExpected
+	evalCase.ExpectedRunnerEnabled = false
+	result := svc.inferenceEvalCase(
+		context.Background(),
+		&service.InferenceRequest{AppName: "app", EvalSetID: "set"},
+		evalCase,
+		&service.Options{
+			SessionIDSupplier: func(ctx context.Context) string { return "session-scenario" },
+			ExpectedRunner:    expectedRunner,
+			UserSimulator:     simulator,
+		},
+	)
+	assert.Equal(t, status.EvalStatusFailed, result.Status)
+	assert.Contains(t, result.ErrorMessage, "actual failed")
+	assert.Nil(t, result.ExpectedInferences)
 }

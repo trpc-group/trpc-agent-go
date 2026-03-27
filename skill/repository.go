@@ -22,10 +22,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+
+	"gopkg.in/yaml.v3"
 )
 
 // skillFile is the canonical skill definition filename.
@@ -66,9 +70,16 @@ type Repository interface {
 	Path(name string) (string, error)
 }
 
+// RefreshableRepository can rescan its backing skill sources.
+type RefreshableRepository interface {
+	Repository
+	Refresh() error
+}
+
 // FSRepository implements Repository backed by filesystem roots.
 type FSRepository struct {
 	roots []string
+	mu    sync.RWMutex
 	// name -> directory path that contains SKILL.md
 	index map[string]string
 }
@@ -85,26 +96,44 @@ func NewFSRepository(roots ...string) (*FSRepository, error) {
 			resolved = append(resolved, p)
 		}
 	}
-	r := &FSRepository{roots: resolved, index: map[string]string{}}
-	if err := r.scan(); err != nil {
+	index, err := scanRoots(resolved)
+	if err != nil {
 		return nil, err
 	}
-	return r, nil
+	return &FSRepository{
+		roots: resolved,
+		index: index,
+	}, nil
+}
+
+// Refresh rescans the configured roots and replaces the skill index.
+func (r *FSRepository) Refresh() error {
+	index, err := scanRoots(r.roots)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.index = index
+	r.mu.Unlock()
+	return nil
 }
 
 // Path returns the directory path that contains the given skill.
 // It allows staging the whole skill folder for execution.
 func (r *FSRepository) Path(name string) (string, error) {
+	r.mu.RLock()
 	dir, ok := r.index[name]
+	r.mu.RUnlock()
 	if !ok {
 		return "", fmt.Errorf("skill %q not found", name)
 	}
 	return dir, nil
 }
 
-func (r *FSRepository) scan() error {
+func scanRoots(roots []string) (map[string]string, error) {
+	index := map[string]string{}
 	seen := map[string]struct{}{}
-	for _, root := range r.roots {
+	for _, root := range roots {
 		if root == "" {
 			continue
 		}
@@ -142,19 +171,26 @@ func (r *FSRepository) scan() error {
 				return nil
 			}
 			// Record first occurrence; later ones ignored.
-			if _, ok := r.index[name]; !ok {
-				r.index[name] = p
+			if _, ok := index[name]; !ok {
+				index[name] = p
 			}
 			return nil
 		})
 	}
-	return nil
+	return index, nil
 }
 
 // Summaries implements Repository.
 func (r *FSRepository) Summaries() []Summary {
-	out := make([]Summary, 0, len(r.index))
+	r.mu.RLock()
+	index := make(map[string]string, len(r.index))
 	for name, dir := range r.index {
+		index[name] = dir
+	}
+	r.mu.RUnlock()
+
+	out := make([]Summary, 0, len(index))
+	for name, dir := range index {
 		sf := filepath.Join(dir, skillFile)
 		s, err := parseSummary(sf)
 		if err != nil {
@@ -173,7 +209,9 @@ func (r *FSRepository) Summaries() []Summary {
 
 // Get implements Repository.
 func (r *FSRepository) Get(name string) (*Skill, error) {
+	r.mu.RLock()
 	dir, ok := r.index[name]
+	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("skill %q not found", name)
 	}
@@ -252,8 +290,9 @@ func parseFull(path string) (Summary, string, error) {
 }
 
 // readFrontMatter reads YAML front matter block into a simple map.
-func readFrontMatter(r *bufio.Reader) (map[string]string, string,
-	error) {
+// It uses gopkg.in/yaml.v3 to correctly handle multi-line block scalars
+// (e.g. "description: |-\n  text") that the previous hand-rolled parser missed.
+func readFrontMatter(r *bufio.Reader) (map[string]string, string, error) {
 	line, err := r.ReadString('\n')
 	if err != nil {
 		return nil, "", err
@@ -261,7 +300,6 @@ func readFrontMatter(r *bufio.Reader) (map[string]string, string,
 	if strings.TrimSpace(line) != "---" {
 		return nil, "", errors.New("no front matter")
 	}
-	m := map[string]string{}
 	var b strings.Builder
 	for {
 		l, err2 := r.ReadString('\n')
@@ -273,23 +311,14 @@ func readFrontMatter(r *bufio.Reader) (map[string]string, string,
 		}
 		b.WriteString(l)
 	}
-	for _, l := range strings.Split(b.String(), "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "#") {
-			continue
-		}
-		// crude YAML: key: value
-		if i := strings.Index(l, ":"); i >= 0 {
-			k := strings.TrimSpace(l[:i])
-			v := strings.TrimSpace(l[i+1:])
-			m[k] = strings.Trim(v, " \"'")
-		}
-	}
+	m := parseFrontMatterYAML(b.String())
 	rest, _ := ioReadAll(r)
 	return m, rest, nil
 }
 
-// splitFrontMatter splits text into map and body.
+// splitFrontMatter splits text into a front-matter map and the Markdown body.
+// It uses gopkg.in/yaml.v3 to correctly handle multi-line block scalars
+// (e.g. "description: |-\n  text") that the previous hand-rolled parser missed.
 func splitFrontMatter(text string) (map[string]string, string) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	if !strings.HasPrefix(text, "---\n") {
@@ -297,24 +326,88 @@ func splitFrontMatter(text string) (map[string]string, string) {
 	}
 	idx := strings.Index(text[4:], "\n---\n")
 	if idx < 0 {
-		// No closing; treat whole as body.
+		// No closing delimiter; treat whole as body.
 		return map[string]string{}, text
 	}
 	fm := text[4 : 4+idx]
 	body := text[4+idx+5:]
+	return parseFrontMatterYAML(fm), body
+}
+
+// isBlockScalarIndicator reports whether val (the text after "key: ") is a
+// YAML block scalar indicator, meaning the value spans multiple indented lines.
+func isBlockScalarIndicator(val string) bool {
+	if val == "" {
+		return false
+	}
+	switch val[0] {
+	case '|', '>':
+		return true
+	}
+	return false
+}
+
+// parseFrontMatterYAML parses a YAML front-matter block into a flat
+// map[string]string using a hybrid strategy:
+//
+//   - Plain single-line values ("key: some value #with hash") are extracted
+//     with a simple line-split so that unquoted '#' characters are not
+//     misinterpreted as YAML comments.
+//   - Block scalar values ("key: |-\n  line1\n  line2") are collected into a
+//     minimal YAML snippet and parsed with gopkg.in/yaml.v3, which correctly
+//     handles all block-scalar chomping indicators (|, |-,|+, >, >-, >+).
+func parseFrontMatterYAML(src string) map[string]string {
 	m := map[string]string{}
-	for _, l := range strings.Split(fm, "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "#") {
+	lines := strings.Split(src, "\n")
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+		// Skip blank lines at the top level.
+		if strings.TrimSpace(line) == "" {
+			i++
 			continue
 		}
-		if i := strings.Index(l, ":"); i >= 0 {
-			k := strings.TrimSpace(l[:i])
-			v := strings.TrimSpace(l[i+1:])
-			m[k] = strings.Trim(v, " \"'")
+		// Expect "key: value" or "key:".
+		colonIdx := strings.Index(line, ":")
+		if colonIdx < 0 {
+			i++
+			continue
+		}
+		key := strings.TrimSpace(line[:colonIdx])
+		val := strings.TrimSpace(line[colonIdx+1:])
+
+		if isBlockScalarIndicator(val) {
+			// Collect the indicator line plus all indented continuation lines
+			// into a mini YAML document and let yaml.v3 parse it properly.
+			var b strings.Builder
+			b.WriteString(line)
+			b.WriteByte('\n')
+			i++
+			for i < len(lines) {
+				next := lines[i]
+				// Continuation lines are indented (start with space/tab) or blank.
+				if next == "" || next[0] == ' ' || next[0] == '\t' {
+					b.WriteString(next)
+					b.WriteByte('\n')
+					i++
+				} else {
+					break
+				}
+			}
+			var raw map[string]any
+			if err := yaml.Unmarshal([]byte(b.String()), &raw); err != nil {
+				log.Printf("skill: front matter YAML parse error for key %q: %v", key, err)
+			} else if s, ok := raw[key].(string); ok {
+				m[key] = strings.TrimRight(s, "\n")
+			}
+		} else {
+			// Plain single-line value: use the raw text as-is so that '#' and
+			// other special characters are preserved without YAML interpretation.
+			m[key] = val
+			i++
 		}
 	}
-	return m, body
+	return m
 }
 
 func ioReadAll(r *bufio.Reader) (string, error) {
@@ -344,12 +437,18 @@ func isDocFile(name string) bool {
 const (
 	StateKeyLoadedPrefix = "temp:skill:loaded:"
 	StateKeyDocsPrefix   = "temp:skill:docs:"
+	// StateKeyLoadedOrderPrefix stores the per-agent skill touch order
+	// used by max-loaded-skills eviction.
+	StateKeyLoadedOrderPrefix = "temp:skill:loaded_order:"
 	// StateKeyLoadedByAgentPrefix scopes skill-loaded markers by agent name.
 	// This prevents a sub-agent's skill_load from leaking into a parent agent's
 	// prompt in multi-agent runs that share a Session.
 	StateKeyLoadedByAgentPrefix = "temp:skill:loaded_by_agent:"
 	// StateKeyDocsByAgentPrefix scopes doc selections by agent name.
 	StateKeyDocsByAgentPrefix = "temp:skill:docs_by_agent:"
+	// StateKeyLoadedOrderByAgentPrefix scopes the skill touch order by agent
+	// name so each agent keeps its own recent-skill window.
+	StateKeyLoadedOrderByAgentPrefix = "temp:skill:loaded_order_by_agent:"
 	// StateKeyArtifacts stores per-tool-call artifact refs for replay. The value
 	// is a JSON object like:
 	// {"tool_call_id":"...","artifacts":[{"name":"...","version":3,

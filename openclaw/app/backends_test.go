@@ -72,7 +72,7 @@ func TestNewAutoMemoryExtractor_RequiresModel(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestNewAutoMemoryExtractor_DefaultThreshold(t *testing.T) {
+func TestNewAutoMemoryExtractor_NoCheckers(t *testing.T) {
 	t.Parallel()
 
 	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
@@ -84,15 +84,10 @@ func TestNewAutoMemoryExtractor_DefaultThreshold(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ext)
 
+	// Without checkers, ShouldExtract always returns true.
 	ctx := &memextractor.ExtractionContext{
 		Messages: make([]model.Message, 1),
 	}
-	require.False(t, ext.ShouldExtract(ctx))
-
-	ctx.Messages = make(
-		[]model.Message,
-		defaultMemoryAutoMessageThreshold+1,
-	)
 	require.True(t, ext.ShouldExtract(ctx))
 }
 
@@ -123,6 +118,52 @@ func TestNewAutoMemoryExtractor_PolicyAll(t *testing.T) {
 	require.True(t, ext.ShouldExtract(ctx))
 }
 
+func TestNewAutoMemoryExtractor_PolicyAny(t *testing.T) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	ext, err := newAutoMemoryExtractor(mdl, runOptions{
+		MemoryAutoEnabled:          true,
+		MemoryAutoPolicy:           summaryPolicyAny,
+		MemoryAutoMessageThreshold: 2,
+		MemoryAutoTimeInterval:     time.Hour,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, ext)
+
+	now := time.Now()
+	ctx := &memextractor.ExtractionContext{
+		Messages:      make([]model.Message, 3),
+		LastExtractAt: &now,
+	}
+	// Message threshold is met.
+	require.True(t, ext.ShouldExtract(ctx))
+}
+
+func TestNewAutoMemoryExtractor_InvalidPolicy(t *testing.T) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+	require.NoError(t, err)
+
+	// Invalid policy without checkers still returns error.
+	_, err = newAutoMemoryExtractor(mdl, runOptions{
+		MemoryAutoEnabled: true,
+		MemoryAutoPolicy:  "invalid",
+	})
+	require.Error(t, err)
+
+	// Invalid policy with checkers also returns error.
+	_, err = newAutoMemoryExtractor(mdl, runOptions{
+		MemoryAutoEnabled:          true,
+		MemoryAutoPolicy:           "invalid",
+		MemoryAutoMessageThreshold: 1,
+	})
+	require.Error(t, err)
+}
+
 func TestNewSessionService_RedisRequiresConfig(t *testing.T) {
 	t.Parallel()
 
@@ -142,6 +183,37 @@ func TestNewMemoryService_RedisRequiresConfig(t *testing.T) {
 		MemoryBackend: memoryBackendRedis,
 	})
 	require.Error(t, err)
+}
+
+func TestNewMemoryService_FileDisablesStructuredMemory(t *testing.T) {
+	t.Parallel()
+
+	svc, err := newMemoryService(nil, runOptions{
+		MemoryBackend:     memoryBackendFile,
+		MemoryAutoEnabled: true,
+	})
+	require.NoError(t, err)
+	require.Nil(t, svc)
+}
+
+func TestNewDisabledMemoryBackend_ReturnsNilService(t *testing.T) {
+	t.Parallel()
+
+	svc, err := newDisabledMemoryBackend(
+		registry.MemoryDeps{},
+		registry.MemoryBackendSpec{},
+	)
+	require.NoError(t, err)
+	require.Nil(t, svc)
+}
+
+func TestNewMemoryService_OffIsUnsupported(t *testing.T) {
+	t.Parallel()
+
+	_, err := newMemoryService(nil, runOptions{
+		MemoryBackend: "off",
+	})
+	require.ErrorContains(t, err, "unsupported memory backend: off")
 }
 
 func TestNewBackends_Redis(t *testing.T) {

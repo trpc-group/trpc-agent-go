@@ -5,6 +5,7 @@
 本目录是一个基于 `trpc-agent-go` 构建的小型可运行二进制文件，实现了类 OpenClaw 架构：
 
 - 一个长期运行的 **gateway** 进程（HTTP 端点）。
+- 一个可选的 **A2A** 接口，可作为子 agent / 沙箱入口。
 - 真正的 IM **通道**：Telegram（长轮询）。
 - 基于 DM（私聊）与群组聊天派生的稳定 **session_id**。
 - 通过 `llmagent` 内置的 skills 工具支持技能。
@@ -321,6 +322,45 @@ go run ./cmd/openclaw -config ./openclaw.yaml
     自定义类型仍需自定义二进制文件。参见 `openclaw/INTEGRATIONS.md` 和
     `openclaw/EXTENDING.md`。
 
+## 将 OpenClaw 暴露为 A2A 子 agent
+
+OpenClaw 可以在 HTTP gateway 旁边原生发布 A2A 接口。
+当你需要把一个带完整 skills / 二进制环境的 OpenClaw 沙箱挂到
+另一个 `trpc-agent-go` 主脑下面时，这就是推荐做法。
+
+YAML：
+
+```yaml
+a2a:
+  enabled: true
+  host: "http://127.0.0.1:8080/a2a"
+  user_id_header: "X-User-ID" # 可选
+  streaming: true
+  advertise_tools: false
+  name: "openclaw-sandbox"
+  description: "Sandbox agent for bundled skills and host binaries."
+```
+
+CLI：
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -a2a \
+  -a2a-host http://127.0.0.1:8080/a2a
+```
+
+说明：
+
+- `a2a.host` 必须带一个非根路径，例如 `/a2a`。
+- A2A 接口和 gateway 复用同一个 OpenClaw runner、session、
+  memory、skills 和 tools。
+- 默认 agent card 只发布一个稳定的 “OpenClaw sandbox” skill，
+  不会把所有 tool 全部展开。只有在调用方确实需要逐 tool 元数据时，
+  才建议开启 `advertise_tools: true`。
+- 可运行示例见
+  [`./examples/a2a_subagent`](./examples/a2a_subagent/)。
+
 ## 自定义 Prompt
 
 OpenClaw 支持通过以下方式自定义主 agent 的 prompt：
@@ -542,10 +582,12 @@ go run ./cmd/openclaw \
 
 ### DeepSeek（OpenAI 兼容）
 
-如果使用 DeepSeek，请设置 `DEEPSEEK_API_KEY`：
+如果你直连 DeepSeek，请同时设置 `DEEPSEEK_API_KEY` 和官方
+DeepSeek base URL：
 
 ```bash
 export DEEPSEEK_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 
 cd openclaw
 go run ./cmd/openclaw \
@@ -567,8 +609,11 @@ go run ./cmd/openclaw \
   -http-addr :8080
 ```
 
-默认情况下，`-openai-variant` 为 `auto`，会从 `-model` 推断。
-你可以显式覆盖：
+默认情况下，`-openai-variant` 为 `auto`，会根据已配置的
+base URL host 自动推断（`OPENAI_BASE_URL`、`-openai-base-url`
+或 `model.base_url`）。对于自定义代理或其他兼容端点，请显式设置
+`-openai-variant`。
+你也可以显式覆盖：
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
@@ -1014,7 +1059,7 @@ OpenClaw 会将加载的技能正文/文档中的 `{baseDir}` 替换为本地技
 cd openclaw
 go run ./cmd/openclaw \
   -mode openai \
-  -model deepseek-chat \
+  -model gpt-5 \
   -skills-extra-dirs "/path/to/openclaw/skills"
 ```
 
@@ -1208,7 +1253,7 @@ OpenClaw 为默认 LLM agent 暴露了一个面向代码 agent 的宿主机 tool
 ```bash
 go run ./cmd/openclaw \
   -mode openai \
-  -model deepseek-chat \
+  -model gpt-5 \
   -config ./openclaw.yaml \
   -enable-openclaw-tools=false
 ```

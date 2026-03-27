@@ -20,6 +20,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -46,6 +47,7 @@ const (
 	//nolint:gosec
 	deepSeekAPIKeyName     string = "DEEPSEEK_API_KEY"
 	defaultDeepSeekBaseURL string = "https://api.deepseek.com"
+	deepSeekAPIHost        string = "api.deepseek.com"
 
 	//nolint:gosec
 	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
@@ -100,6 +102,8 @@ type variantConfig struct {
 	fileUploadRequestConvertor fileUploadRequestConvertor
 	// Whether to skip file type in content parts for this variant.
 	skipFileTypeInContent bool
+	// Whether user message content must be reduced to text only.
+	textOnlyMessageContent bool
 
 	// Default base URL for this variant.
 	defaultBaseURL string
@@ -140,6 +144,7 @@ var variantConfigs = map[Variant]variantConfig{
 		filePurpose:               openai.FilePurposeUserData,
 		fileDeletionMethod:        http.MethodDelete,
 		skipFileTypeInContent:     false,
+		textOnlyMessageContent:    true,
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		apiKeyName:                deepSeekAPIKeyName,
 		defaultBaseURL:            defaultDeepSeekBaseURL,
@@ -251,6 +256,9 @@ func New(name string, opts ...Option) *Model {
 	for _, opt := range opts {
 		opt(&o)
 	}
+	if !o.variantSet {
+		o.Variant = inferVariant(o.BaseURL)
+	}
 
 	cfg, cfgOK := variantConfigs[o.Variant]
 	if !o.optimizeForCacheSet {
@@ -319,6 +327,25 @@ func New(name string, opts ...Option) *Model {
 	}
 }
 
+func inferVariant(baseURL string) Variant {
+	if isDeepSeekBaseURL(baseURL) {
+		return VariantDeepSeek
+	}
+	return VariantOpenAI
+}
+
+func isDeepSeekBaseURL(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), deepSeekAPIHost)
+}
+
 // Info implements the model.Model interface.
 func (m *Model) Info() model.Info {
 	return model.Info{
@@ -353,12 +380,15 @@ func (m *Model) GenerateContent(
 	if err != nil {
 		return nil, err
 	}
+	// Execute callback synchronously before starting the goroutine
+	// to avoid a race where the runner and HTTP handler finish
+	// (closing the SSE writer) while the callback is still running.
+	if m.chatRequestCallback != nil {
+		m.chatRequestCallback(ctx, chatRequest)
+	}
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
-		if m.chatRequestCallback != nil {
-			m.chatRequestCallback(ctx, chatRequest)
-		}
 		if request.Stream {
 			m.handleStreamingResponse(ctx, *chatRequest, responseChan, opts...)
 		} else {
@@ -674,6 +704,9 @@ func (m *Model) convertUserMessageContent(
 	if fileHint != "" {
 		contentParts = append(contentParts, userTextPart(fileHint))
 	}
+	if omittedHint := m.omittedContentHint(msg.ContentParts); omittedHint != "" {
+		contentParts = append(contentParts, userTextPart(omittedHint))
+	}
 	extraFields := m.appendUserContentParts(&contentParts, msg.ContentParts)
 
 	if strings.TrimSpace(msg.Content) == "" &&
@@ -756,6 +789,10 @@ func (m *Model) appendUserContentParts(
 ) map[string]any {
 	var extraFields map[string]any
 	for _, part := range parts {
+		if m.variantConfig.textOnlyMessageContent &&
+			part.Type != model.ContentTypeText {
+			continue
+		}
 		if part.Type == model.ContentTypeFile &&
 			m.omitFileContentParts {
 			continue
@@ -777,6 +814,63 @@ func (m *Model) appendUserContentParts(
 		*dst = append(*dst, *contentPart)
 	}
 	return extraFields
+}
+
+func (m *Model) omittedContentHint(parts []model.ContentPart) string {
+	if !m.variantConfig.textOnlyMessageContent {
+		return ""
+	}
+
+	var imageCount, audioCount, fileCount int
+	for _, part := range parts {
+		switch part.Type {
+		case model.ContentTypeImage:
+			imageCount++
+		case model.ContentTypeAudio:
+			audioCount++
+		case model.ContentTypeFile:
+			fileCount++
+		}
+	}
+	return omittedAttachmentHint(imageCount, audioCount, fileCount)
+}
+
+func omittedAttachmentHint(
+	imageCount int,
+	audioCount int,
+	fileCount int,
+) string {
+	const (
+		omittedHintPrefix  = "Omitted non-text attachments for this provider: "
+		omittedHintSuffix  = "."
+		omittedImageSingle = "1 image"
+		omittedImagePlural = "%d images"
+		omittedAudioSingle = "1 audio clip"
+		omittedAudioPlural = "%d audio clips"
+		omittedFileSingle  = "1 file"
+		omittedFilePlural  = "%d files"
+	)
+
+	parts := make([]string, 0, 3)
+	if imageCount == 1 {
+		parts = append(parts, omittedImageSingle)
+	} else if imageCount > 1 {
+		parts = append(parts, fmt.Sprintf(omittedImagePlural, imageCount))
+	}
+	if audioCount == 1 {
+		parts = append(parts, omittedAudioSingle)
+	} else if audioCount > 1 {
+		parts = append(parts, fmt.Sprintf(omittedAudioPlural, audioCount))
+	}
+	if fileCount == 1 {
+		parts = append(parts, omittedFileSingle)
+	} else if fileCount > 1 {
+		parts = append(parts, fmt.Sprintf(omittedFilePlural, fileCount))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return omittedHintPrefix + strings.Join(parts, ", ") + omittedHintSuffix
 }
 
 func appendFileID(

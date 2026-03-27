@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -85,6 +86,40 @@ func (e *errorEmbedder) GetEmbeddingWithUsage(
 
 func (e *errorEmbedder) GetDimensions() int {
 	return e.dimension
+}
+
+type mapEmbedder struct {
+	dimension  int
+	embeddings map[string][]float64
+}
+
+func (m *mapEmbedder) GetEmbedding(
+	ctx context.Context,
+	text string,
+) ([]float64, error) {
+	_ = ctx
+	if embedding, ok := m.embeddings[text]; ok {
+		out := make([]float64, len(embedding))
+		copy(out, embedding)
+		return out, nil
+	}
+	out := make([]float64, m.dimension)
+	if m.dimension > 0 {
+		out[0] = 1
+	}
+	return out, nil
+}
+
+func (m *mapEmbedder) GetEmbeddingWithUsage(
+	ctx context.Context,
+	text string,
+) ([]float64, map[string]any, error) {
+	emb, err := m.GetEmbedding(ctx, text)
+	return emb, nil, err
+}
+
+func (m *mapEmbedder) GetDimensions() int {
+	return m.dimension
 }
 
 func openTempSQLiteDB(t *testing.T) (*sql.DB, func()) {
@@ -450,6 +485,180 @@ func TestService_Search_EmptyQuery(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Empty(t, results)
+}
+
+func TestService_SearchMemories_HybridSearchUsesRRF(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mapEmbedder{
+			dimension: 2,
+			embeddings: map[string][]float64{
+				"alpha":           {1, 0},
+				"vector favorite": {1, 0},
+				"alpha lexical":   {0.6, 0.8},
+			},
+		}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(ctx, userKey, "vector favorite", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha lexical", nil))
+
+	results, err := svc.SearchMemories(
+		ctx,
+		userKey,
+		"alpha",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:        "alpha",
+			HybridSearch: true,
+			MaxResults:   2,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	require.Equal(t, "alpha lexical", results[0].Memory.Memory)
+	require.Equal(t, "vector favorite", results[1].Memory.Memory)
+	require.Greater(t, results[0].Score, results[1].Score)
+}
+
+func TestService_SearchMemories_OrderByEventTimeKeepsHigherSimilarityFirst(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mapEmbedder{
+			dimension: 2,
+			embeddings: map[string][]float64{
+				"alpha":       {1, 0},
+				"alpha high":  {1, 0},
+				"alpha lower": {0.6, 0.8},
+			},
+		}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	day1 := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	day2 := day1.Add(24 * time.Hour)
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha lower",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind:      memory.KindEpisode,
+			EventTime: &day1,
+		}),
+	))
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha high",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind:      memory.KindEpisode,
+			EventTime: &day2,
+		}),
+	))
+
+	results, err := svc.SearchMemories(
+		ctx,
+		userKey,
+		"alpha",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:            "alpha",
+			OrderByEventTime: true,
+			MaxResults:       10,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	require.Equal(t, "alpha high", results[0].Memory.Memory)
+	require.Equal(t, "alpha lower", results[1].Memory.Memory)
+	require.Greater(t, results[0].Score, results[1].Score)
+}
+
+func TestService_SearchMemories_KindFallbackKeepsRequestedKindFirst(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mapEmbedder{
+			dimension: 2,
+			embeddings: map[string][]float64{
+				"alpha":            {1, 0},
+				"episode primary":  {0.6, 0.8},
+				"episode fallback": {0.7, 0.7},
+				"fact fallback":    {1, 0},
+			},
+		}),
+		WithIndexDimension(2),
+		WithMaxResults(10),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"episode primary",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind: memory.KindEpisode,
+		}),
+	))
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"episode fallback",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind: memory.KindEpisode,
+		}),
+	))
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"fact fallback",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind: memory.KindFact,
+		}),
+	))
+
+	results, err := svc.SearchMemories(
+		ctx,
+		userKey,
+		"alpha",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:        "alpha",
+			Kind:         memory.KindEpisode,
+			KindFallback: true,
+			MaxResults:   10,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+	require.Equal(t, memory.KindEpisode, results[0].Memory.Kind)
+	require.Equal(t, "episode fallback", results[0].Memory.Memory)
+	require.Equal(t, memory.KindEpisode, results[1].Memory.Kind)
+	require.Equal(t, "episode primary", results[1].Memory.Memory)
+	require.Equal(t, memory.KindFact, results[2].Memory.Kind)
+	require.Equal(t, "fact fallback", results[2].Memory.Memory)
 }
 
 func TestService_Search_SoftDeleteFiltered(t *testing.T) {
@@ -828,6 +1037,257 @@ CREATE TABLE memories (
 	})
 }
 
+func TestNewService_MigratesLegacySchema(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	vecAuto()
+	createLegacyMemoriesTable(t, db)
+	insertLegacyMemoryRow(t, db, "memories", "m1")
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	entries, err := svc.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "m1", entries[0].ID)
+	require.Equal(t, "alpha", entries[0].Memory.Memory)
+	require.Equal(t, []string{"pref"}, entries[0].Memory.Topics)
+	require.Equal(t, memory.KindFact, entries[0].Memory.Kind)
+	require.Nil(t, entries[0].Memory.EventTime)
+	require.Empty(t, entries[0].Memory.Participants)
+	require.Empty(t, entries[0].Memory.Location)
+	require.NoError(t, svc.ensureSchemaColumns(context.Background()))
+	require.False(
+		t,
+		sqliteTableExists(
+			t,
+			db,
+			"memories"+schemaBackupName,
+		),
+	)
+}
+
+func TestNewService_RestoresSchemaBackup(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	vecAuto()
+	createSchemaBackupTable(t, db, "memories"+schemaBackupName)
+	insertSchemaBackupRow(t, db, "memories"+schemaBackupName, "m1")
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	entries, err := svc.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "m1", entries[0].ID)
+	require.Equal(t, "alpha", entries[0].Memory.Memory)
+	require.Equal(t, []string{"pref"}, entries[0].Memory.Topics)
+	require.Equal(t, memory.KindFact, entries[0].Memory.Kind)
+	require.False(
+		t,
+		sqliteTableExists(
+			t,
+			db,
+			"memories"+schemaBackupName,
+		),
+	)
+}
+
+func TestNewService_RestoresSchemaBackupOverExistingTable(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	vecAuto()
+	createCurrentMemoriesTable(t, db)
+	createSchemaBackupTable(t, db, "memories"+schemaBackupName)
+	insertSchemaBackupRow(t, db, "memories"+schemaBackupName, "m1")
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	entries, err := svc.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "m1", entries[0].ID)
+	require.Equal(t, "alpha", entries[0].Memory.Memory)
+	require.False(
+		t,
+		sqliteTableExists(
+			t,
+			db,
+			"memories"+schemaBackupName,
+		),
+	)
+}
+
+func createLegacyMemoriesTable(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	_, err := db.Exec(`
+CREATE VIRTUAL TABLE memories USING vec0(
+  memory_id text primary key,
+  embedding float[2] distance_metric=cosine,
+  app_name text,
+  user_id text,
+  created_at integer,
+  updated_at integer,
+  deleted_at integer,
+  +memory_content text,
+  +topics text
+)`)
+	require.NoError(t, err)
+}
+
+func createCurrentMemoriesTable(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	_, err := db.Exec(`
+CREATE VIRTUAL TABLE memories USING vec0(
+  memory_id text primary key,
+  embedding float[2] distance_metric=cosine,
+  app_name text,
+  user_id text,
+  created_at integer,
+  updated_at integer,
+  deleted_at integer,
+  +memory_content text,
+  +topics text,
+  +memory_kind text,
+  +event_time integer,
+  +participants text,
+  +location text
+)`)
+	require.NoError(t, err)
+}
+
+func insertLegacyMemoryRow(
+	t *testing.T,
+	db *sql.DB,
+	tableName string,
+	memoryID string,
+) {
+	t.Helper()
+
+	blob, err := vecSerializeFloat32([]float32{1, 0})
+	require.NoError(t, err)
+
+	query := fmt.Sprintf(
+		`INSERT INTO %s (
+memory_id, embedding, app_name, user_id,
+created_at, updated_at, deleted_at,
+memory_content, topics
+) VALUES (?, vec_f32(?), ?, ?, ?, ?, ?, ?, ?)`,
+		tableName,
+	)
+	_, err = db.Exec(
+		query,
+		memoryID,
+		blob,
+		"app",
+		"u1",
+		int64(1),
+		int64(2),
+		int64(0),
+		"alpha",
+		`["pref"]`,
+	)
+	require.NoError(t, err)
+}
+
+func createSchemaBackupTable(
+	t *testing.T,
+	db *sql.DB,
+	tableName string,
+) {
+	t.Helper()
+
+	_, err := db.Exec(fmt.Sprintf(sqlCreateSchemaBackupTable, tableName))
+	require.NoError(t, err)
+}
+
+func insertSchemaBackupRow(
+	t *testing.T,
+	db *sql.DB,
+	tableName string,
+	memoryID string,
+) {
+	t.Helper()
+
+	blob, err := vecSerializeFloat32([]float32{1, 0})
+	require.NoError(t, err)
+
+	query := fmt.Sprintf(
+		`INSERT INTO %s (
+memory_id, embedding, app_name, user_id,
+created_at, updated_at, deleted_at,
+memory_content, topics, memory_kind,
+event_time, participants, location
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tableName,
+	)
+	_, err = db.Exec(
+		query,
+		memoryID,
+		blob,
+		"app",
+		"u1",
+		int64(1),
+		int64(2),
+		int64(0),
+		"alpha",
+		`["pref"]`,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+}
+
+func sqliteTableExists(t *testing.T, db *sql.DB, tableName string) bool {
+	t.Helper()
+
+	var count int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master
+WHERE type IN ('table', 'view') AND name = ?`,
+		tableName,
+	).Scan(&count)
+	require.NoError(t, err)
+	return count > 0
+}
+
 func TestSearchHelperFunctions(t *testing.T) {
 	day1 := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
 	day2 := time.Date(2024, 5, 2, 0, 0, 0, 0, time.UTC)
@@ -1058,6 +1518,8 @@ func TestServiceOpts_Coverage(t *testing.T) {
 	require.True(t, ok)
 	_, ok = opts.enabledTools[memory.ClearToolName]
 	require.True(t, ok)
+	_, ok = opts.userExplicitlySet[memory.ClearToolName]
+	require.True(t, ok)
 
 	WithCustomTool("bad_tool", func() tool.Tool { return nil })(&opts)
 	WithCustomTool(memory.ClearToolName, nil)(&opts)
@@ -1066,14 +1528,31 @@ func TestServiceOpts_Coverage(t *testing.T) {
 	WithToolEnabled(memory.LoadToolName, true)(&opts2)
 	_, ok = opts2.enabledTools[memory.LoadToolName]
 	require.True(t, ok)
-	require.True(t, opts2.userExplicitlySet[memory.LoadToolName])
+	_, ok = opts2.userExplicitlySet[memory.LoadToolName]
+	require.True(t, ok)
 
 	WithToolEnabled(memory.LoadToolName, false)(&opts2)
 	_, ok = opts2.enabledTools[memory.LoadToolName]
 	require.False(t, ok)
-	require.True(t, opts2.userExplicitlySet[memory.LoadToolName])
+	_, ok = opts2.userExplicitlySet[memory.LoadToolName]
+	require.True(t, ok)
 
 	WithToolEnabled("bad_tool", true)(&opts2)
+	WithAutoMemoryExposedTools(memory.AddToolName)(&opts2)
+	_, ok = opts2.toolExposed[memory.AddToolName]
+	require.True(t, ok)
+	_, ok = opts2.toolHidden[memory.AddToolName]
+	require.False(t, ok)
+
+	WithToolExposed(memory.AddToolName, false)(&opts2)
+	_, ok = opts2.toolExposed[memory.AddToolName]
+	require.False(t, ok)
+	_, ok = opts2.toolHidden[memory.AddToolName]
+	require.True(t, ok)
+
+	WithAutoMemoryExposedTools("bad_tool")(&opts2)
+	_, ok = opts2.toolExposed["bad_tool"]
+	require.False(t, ok)
 }
 
 func TestNewService_SkipDBInit(t *testing.T) {

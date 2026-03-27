@@ -34,7 +34,7 @@ Auto Mode is available when an Extractor is configured and is recommended as the
 | **How it works**    | Agent decides when to call memory tools        | System extracts memories automatically from conversations |
 | **User experience** | Visible - user sees tool calls                 | Transparent - memories created silently in background     |
 | **Control**         | Agent has full control over what to remember   | Extractor decides based on conversation analysis          |
-| **Available tools** | All 6 tools                                    | Search tool (search), optional load tool (load)           |
+| **Available tools** | All 6 tools                                    | `memory_search` by default; configurable `memory_load`; enabled write tools can be exposed |
 | **Processing**      | Synchronous - during response generation       | Asynchronous - background workers after response          |
 | **Best for**        | Precise control, user-driven memory management | Natural conversations, hands-off memory building          |
 
@@ -284,7 +284,7 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 | **Step 1**          | `NewMemoryService()`                | `NewMemoryService(WithExtractor(ext))` |
 | **Step 2**          | `WithTools(memoryService.Tools())`  | `WithTools(memoryService.Tools())`     |
 | **Step 3**          | `WithMemoryService(memoryService)`  | `WithMemoryService(memoryService)`     |
-| **Available tools** | add/update/delete/clear/search/load | search /load                           |
+| **Available tools** | add/update/delete/clear/search/load | search by default; load configurable; enabled write tools can be exposed |
 | **Memory creation** | Agent actively calls tools          | Background auto extraction             |
 
 ## Core Concepts
@@ -410,31 +410,31 @@ The memory service provides 6 tools. Common tools are enabled by default, while 
 
 | Tool            | Function       | Agentic Mode    | Auto Extraction Mode | Description                                    |
 | --------------- | -------------- | --------------- | -------------------- | ---------------------------------------------- |
-| `memory_add`    | Add new memory | ✅ Default      | ❌ Unavailable       | Create new memory entry                        |
-| `memory_update` | Update memory  | ✅ Default      | ❌ Unavailable       | Modify existing memory                         |
+| `memory_add`    | Add new memory | ✅ Default      | ⚙️ Hidden by default | Create new memory entry                        |
+| `memory_update` | Update memory  | ✅ Default      | ⚙️ Hidden by default | Modify existing memory                         |
 | `memory_search` | Search memory  | ✅ Default      | ✅ Default           | Find by keywords                               |
 | `memory_load`   | Load memories  | ✅ Default      | ⚙️ Configurable      | Load recent memories                           |
-| `memory_delete` | Delete memory  | ⚙️ Configurable | ❌ Unavailable       | Delete single memory                           |
-| `memory_clear`  | Clear memories | ⚙️ Configurable | ❌ Unavailable       | Delete all memories (not exposed in Auto mode) |
+| `memory_delete` | Delete memory  | ⚙️ Configurable | ⚙️ Hidden by default | Delete single memory                           |
+| `memory_clear`  | Clear memories | ⚙️ Configurable | ⚙️ Disabled by default | Delete all memories                          |
 
 **Notes**:
 
 - **Agentic Mode**: Agent actively calls tools to manage memory, all tools are configurable
   - Default enabled tools: `memory_add`, `memory_update`, `memory_search`, `memory_load`
   - Default disabled tools: `memory_delete`, `memory_clear`
-- **Auto Mode**: LLM extractor handles write operations in background. Tools() exposes Search by default; Load can be enabled.
-  - Default enabled tools: `memory_search`
-  - Default disabled tools: `memory_load`
-  - Not exposed tools: `memory_add`, `memory_update`, `memory_delete`, `memory_clear`
+- **Auto Mode**: LLM extractor handles write operations in background. Tools() exposes Search by default; Load can be enabled; `WithAutoMemoryExposedTools()` can selectively expose enabled write tools for hybrid usage.
+  - Default enabled tools: `memory_add`, `memory_update`, `memory_delete`, `memory_search`
+  - Default disabled tools: `memory_load`, `memory_clear`
+  - Hidden by default: `memory_add`, `memory_update`, `memory_delete`
 - **Default**: Available immediately when service is created, no extra configuration needed
-- **Configurable**: Can be enabled/disabled via `WithToolEnabled()`
-- **Unavailable**: Tool cannot be used in this mode
+- **Configurable**: Can be enabled/disabled via `WithToolEnabled()`; in Auto mode, enabled write tools can be exposed via `WithAutoMemoryExposedTools()`
 
 #### Enable/Disable Tools
 
-Note: In Auto mode, `WithToolEnabled()` only affects whether `memory_search` and
-`memory_load` are exposed via `Tools()`. `memory_add`, `memory_update`,
-`memory_delete`, and `memory_clear` are not exposed to the Agent.
+Note: `WithToolEnabled()` controls whether a memory operation is available at
+all. `WithAutoMemoryExposedTools()` controls which enabled tools are returned
+from `Tools()` for the Agent to call in Auto mode. Write tools remain hidden by
+default unless you expose them explicitly.
 
 ```go
 // Scenario 1: User manageable (allow single deletion)
@@ -453,6 +453,12 @@ memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithToolEnabled(memory.AddToolName, false),
     memoryinmemory.WithToolEnabled(memory.UpdateToolName, false),
 )
+
+// Scenario 4: Hybrid auto memory + explicit agent writes
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(memExtractor),
+    memoryinmemory.WithAutoMemoryExposedTools(memory.AddToolName),
+)
 ```
 
 ### Overwrite Semantics (IDs and duplicates)
@@ -465,9 +471,10 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ### Custom Tool Implementation
 
-Note: In Auto mode, `Tools()` only exposes `memory_search` and `memory_load`.
-If you need to expose tools like `memory_clear`, use Agentic mode or call
-`ClearMemories()` from your application code.
+Note: In Auto mode, `Tools()` exposes `memory_search` by default, `memory_load`
+when enabled, and any additional enabled tools you explicitly expose with
+`WithAutoMemoryExposedTools()`. Dangerous operations like `memory_clear` should usually
+stay application-controlled.
 
 You can override default tools with custom implementations. See
 `memory/tool/tool.go` for reference on how to implement custom tools.
@@ -1233,11 +1240,12 @@ Memory: "User likes programming"
 Search: "coding" ❌ No match (semantically similar but different words)
 ```
 
-**Chinese tokenization**: uses bigrams
+**Chinese tokenization**: prefers `gse` word segmentation with
+low-weight CJK character trigram fallback
 
 ```go
 Memory: "用户喜欢编程"
-Search: "编程" ✅ Match ("编程" in bigrams)
+Search: "编程" ✅ Match (word-level hit)
 Search: "写代码" ❌ No match (different words)
 ```
 
@@ -1246,6 +1254,8 @@ Search: "写代码" ❌ No match (different words)
 - These backends perform filtering and sorting in **application layer** (\[O(n)\] complexity)
 - Performance affected by data volume
 - Not semantic similarity search
+- Ranking uses **BM25-style lexical scoring + query coverage + ordered
+  phrase bonus**, not vector semantics
 
 **Recommendations**:
 
@@ -1430,7 +1440,10 @@ type ExtractionContext struct {
 
 ### Tool Control
 
-In auto extraction mode, `WithToolEnabled` controls all 6 tools, but they serve different purposes:
+In auto extraction mode, `WithToolEnabled` controls whether each tool is
+available. `memory_search` is exposed through `Tools()` by default,
+`memory_load` is exposed once enabled, and `WithAutoMemoryExposedTools`
+selectively exposes enabled write tools for hybrid usage.
 
 **Front-end Tools** (exposed via `Tools()` for agent to call):
 
@@ -1439,7 +1452,7 @@ In auto extraction mode, `WithToolEnabled` controls all 6 tools, but they serve 
 | `memory_search` | ✅ On   | Search memories by query      |
 | `memory_load`   | ❌ Off  | Load all or recent N memories |
 
-**Back-end Tools** (used by extractor in background, not exposed to agent):
+**Back-end Tools** (used by extractor in background by default):
 
 | Tool            | Default | Description                            |
 | --------------- | ------- | -------------------------------------- |
@@ -1455,6 +1468,8 @@ memoryService := memoryinmemory.NewMemoryService(
     memoryinmemory.WithExtractor(memExtractor),
     // Front-end: enable memory_load for agent to call.
     memoryinmemory.WithToolEnabled(memory.LoadToolName, true),
+    // Hybrid: expose memory_add so the agent can store critical facts immediately.
+    memoryinmemory.WithAutoMemoryExposedTools(memory.AddToolName),
     // Back-end: disable memory_delete so extractor cannot delete.
     memoryinmemory.WithToolEnabled(memory.DeleteToolName, false),
     // Back-end: enable memory_clear for extractor (use with caution).
@@ -1462,18 +1477,19 @@ memoryService := memoryinmemory.NewMemoryService(
 )
 ```
 
-**Note**: `WithToolEnabled` can be called before or after `WithExtractor` - the order does not matter.
+**Note**: `WithToolEnabled` and `WithAutoMemoryExposedTools` can be called before or after
+`WithExtractor` - the order does not matter.
 
 ### Comparison: Agentic Mode vs Auto Mode
 
 | Tool            | Agentic Mode (no extractor)             | Auto Mode (with extractor)                 |
 | --------------- | --------------------------------------- | ------------------------------------------ |
-| `memory_add`    | ✅ Agent calls via `Tools()`            | ✅ Extractor uses in background            |
-| `memory_update` | ✅ Agent calls via `Tools()`            | ✅ Extractor uses in background            |
+| `memory_add`    | ✅ Agent calls via `Tools()`            | ⚙️ Agent calls via `Tools()` if exposed; extractor uses in background |
+| `memory_update` | ✅ Agent calls via `Tools()`            | ⚙️ Agent calls via `Tools()` if exposed; extractor uses in background |
 | `memory_search` | ✅ Agent calls via `Tools()`            | ✅ Agent calls via `Tools()`               |
 | `memory_load`   | ✅ Agent calls via `Tools()`            | ⚙️ Agent calls via `Tools()` if enabled    |
-| `memory_delete` | ⚙️ Agent calls via `Tools()` if enabled | ✅ Extractor uses in background            |
-| `memory_clear`  | ⚙️ Agent calls via `Tools()` if enabled | ⚙️ Extractor uses in background if enabled |
+| `memory_delete` | ⚙️ Agent calls via `Tools()` if enabled | ⚙️ Agent calls via `Tools()` if exposed; extractor uses in background |
+| `memory_clear`  | ⚙️ Agent calls via `Tools()` if enabled | ⚙️ Agent calls via `Tools()` if exposed; extractor uses in background if enabled |
 
 ### Memory Preloading
 
@@ -1486,19 +1502,29 @@ llmAgent := llmagent.New(
     llmagent.WithTools(memoryService.Tools()),
     // Preload options:
     // llmagent.WithPreloadMemory(0),   // Disable preloading (default).
-    // llmagent.WithPreloadMemory(10),  // Load 10 most recent.
+    // llmagent.WithPreloadMemory(10),  // Adaptive preload budget 10.
+    //                                  // Loads all memories when count <= 10,
+    //                                  // otherwise injects top 10 search results.
     // llmagent.WithPreloadMemory(-1),  // Load all.
     //                                  // ⚠️ WARNING: Loading all memories may significantly
     //                                  //     increase token usage and API costs, especially
     //                                  //     for users with many stored memories. Consider
-    //                                  //     using a positive limit for production use.
-    // llmagent.WithPreloadMemory(10),  // Load 10 most recent (recommended for production).
+    //                                  //     using a positive budget for production use.
+    // llmagent.WithPreloadMemory(10),  // Recommended production setting.
 )
 ```
 
 When preloading is enabled, memories are automatically injected into the
 system prompt, giving the Agent context about the user without explicit
 tool calls.
+
+When `WithPreloadMemory(N)` uses a positive value, the framework first probes
+how many memories the user has. If the count is at most `N`, it injects all
+memories. If the count is larger than `N`, it switches to query-aware
+`memory_search` behavior internally and injects only the top `N` relevant
+results for the current user message. If query extraction is empty, the
+search fails, or the search returns no matches, it falls back to directly
+loading up to `N` memories.
 
 **Injection Mechanism**: Preloaded memories are **merged** into the existing
 system prompt rather than inserted as a separate system message. This ensures
@@ -1508,7 +1534,7 @@ Qwen3.5 series may return "System message must be at the beginning" error).
 
 **⚠️ Important Note**: Setting the configuration to `-1` loads all memories,
 which may significantly increase **Token Usage** and **API Costs**. By default,
-preloading is disabled (`0`), and we recommend using positive limits (e.g., `10-50`)
+preloading is disabled (`0`), and we recommend using positive budgets (e.g., `10-50`)
 to balance performance and cost.
 
 ### Hybrid Approach
@@ -1529,7 +1555,7 @@ llmAgent := llmagent.New(
     "assistant",
     llmagent.WithModel(model),
     llmagent.WithTools(memoryService.Tools()),  // Search by default; Load is optional.
-    llmagent.WithPreloadMemory(10),             // Preload recent memories.
+    llmagent.WithPreloadMemory(10),             // Adaptive preload budget.
 )
 ```
 

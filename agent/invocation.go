@@ -19,8 +19,11 @@ import (
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonschema"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -118,6 +121,12 @@ type Invocation struct {
 
 	// parent is the parent invocation, if any
 	parent *Invocation
+	// traceCapture stores the shared execution trace capture for one root run.
+	traceCapture *tracecapture.Capture
+	// entryPredecessorStepIDs stores the predecessor step ids passed to this invocation entry.
+	entryPredecessorStepIDs []string
+	// traceNodeID stores the mounted static root node id for this invocation.
+	traceNodeID string
 
 	// state stores invocation-scoped state data (lazy initialized).
 	// Can be used by callbacks, middleware, or any invocation-scoped logic.
@@ -188,10 +197,51 @@ func NewWaitNoticeTimeoutError(message string) *WaitNoticeTimeoutError {
 // RunOption is a function that configures a RunOptions.
 type RunOption func(*RunOptions)
 
+type runControlConfig struct {
+	DisableGraphCompletionEvent bool
+	DisableGraphExecutorEvents  bool
+	EventChannelBufferSize      int
+	PropagateChildAgentErrors   bool
+}
+
+// NewRunOptions builds a RunOptions value from RunOption functions.
+func NewRunOptions(opts ...RunOption) RunOptions {
+	var runOpts RunOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&runOpts)
+		}
+	}
+	return runOpts
+}
+
+// TraceStartedCallback receives the root span context for a run.
+type TraceStartedCallback func(oteltrace.SpanContext)
+
 // WithRuntimeState sets the runtime state for the RunOptions.
 func WithRuntimeState(state map[string]any) RunOption {
 	return func(opts *RunOptions) {
 		opts.RuntimeState = state
+	}
+}
+
+// MergeRuntimeState merges runtime state into existing RunOptions state.
+//
+// When a key already exists, the new value replaces the old one.
+func MergeRuntimeState(state map[string]any) RunOption {
+	return func(opts *RunOptions) {
+		if len(state) == 0 {
+			return
+		}
+		if opts.RuntimeState == nil {
+			opts.RuntimeState = make(
+				map[string]any,
+				len(state),
+			)
+		}
+		for key, value := range state {
+			opts.RuntimeState[key] = value
+		}
 	}
 }
 
@@ -318,6 +368,58 @@ func WithStreamMode(modes ...StreamMode) RunOption {
 	}
 }
 
+// WithDisableGraphCompletionEvent disables emitting the final graph completion event.
+func WithDisableGraphCompletionEvent(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		cfg := getRunControlConfig(opts)
+		cfg.DisableGraphCompletionEvent = disable
+		setRunControlConfig(opts, cfg)
+	}
+}
+
+// WithDisableGraphExecutorEvents disables emitting graph executor lifecycle events.
+func WithDisableGraphExecutorEvents(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		cfg := getRunControlConfig(opts)
+		cfg.DisableGraphExecutorEvents = disable
+		setRunControlConfig(opts, cfg)
+	}
+}
+
+// WithEventChannelBufferSize overrides the event channel buffer size for this run
+// on supported flow and agent implementations.
+//
+// When size <= 0, supported implementations use their configured default.
+func WithEventChannelBufferSize(size int) RunOption {
+	return func(opts *RunOptions) {
+		cfg := getRunControlConfig(opts)
+		cfg.EventChannelBufferSize = size
+		setRunControlConfig(opts, cfg)
+	}
+}
+
+// WithPropagateChildAgentErrors enables strict propagation for terminal child
+// agent errors observed through agent-node event streams.
+//
+// When disabled (default), agent nodes preserve the legacy compatibility
+// behavior: child error events remain observable in the stream but do not
+// automatically fail the parent graph.
+func WithPropagateChildAgentErrors(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		cfg := getRunControlConfig(opts)
+		cfg.PropagateChildAgentErrors = enabled
+		setRunControlConfig(opts, cfg)
+	}
+}
+
+// WithDisableTracing requests supported agent and flow execution paths to skip
+// creating OpenTelemetry spans for this run.
+func WithDisableTracing(disable bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.DisableTracing = disable
+	}
+}
+
 // WithDisableResponseUsageTracking disables attaching usage and timing info to streaming responses.
 func WithDisableResponseUsageTracking(disable bool) RunOption {
 	return func(opts *RunOptions) {
@@ -397,6 +499,21 @@ func WithSpanAttributes(attrs ...attribute.KeyValue) RunOption {
 	}
 }
 
+// WithTraceStartedCallback registers a callback for the run root span.
+func WithTraceStartedCallback(
+	callback TraceStartedCallback,
+) RunOption {
+	return func(opts *RunOptions) {
+		if callback == nil {
+			return
+		}
+		opts.TraceStartedCallbacks = append(
+			opts.TraceStartedCallbacks,
+			callback,
+		)
+	}
+}
+
 // WithModel sets the model for this specific run.
 // This allows temporarily switching the model for a single request without
 // affecting other requests or the agent's default model configuration.
@@ -452,6 +569,60 @@ func WithInstruction(instruction string) RunOption {
 func WithGlobalInstruction(instruction string) RunOption {
 	return func(opts *RunOptions) {
 		opts.GlobalInstruction = instruction
+	}
+}
+
+// WithStructuredOutputJSONSchema sets a JSON schema structured output for this run.
+func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict bool, description string) RunOption {
+	return func(opts *RunOptions) {
+		if schema == nil {
+			return
+		}
+		if name == "" {
+			name = "output"
+		}
+		opts.StructuredOutput = &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name:        name,
+				Schema:      schema,
+				Strict:      strict,
+				Description: description,
+			},
+		}
+	}
+}
+
+// WithStructuredOutputJSON sets a JSON schema structured output for this run.
+// The schema is constructed automatically from the provided example type.
+func WithStructuredOutputJSON(examplePtr any, strict bool, description string) RunOption {
+	return func(opts *RunOptions) {
+		// Infer reflect.Type from examplePtr.
+		var t reflect.Type
+		if examplePtr == nil {
+			return
+		}
+		if rt := reflect.TypeOf(examplePtr); rt.Kind() == reflect.Pointer {
+			t = rt
+		} else {
+			t = reflect.PointerTo(rt)
+		}
+		gen := jsonschema.New()
+		schema := gen.Generate(t.Elem())
+		name := t.Elem().Name()
+		if name == "" {
+			name = "output"
+		}
+		opts.StructuredOutput = &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name:        name,
+				Schema:      schema,
+				Strict:      strict,
+				Description: description,
+			},
+		}
+		opts.StructuredOutputType = t
 	}
 }
 
@@ -583,6 +754,20 @@ func WithCustomAgentConfigs(configs map[string]any) RunOption {
 	}
 }
 
+func getRunControlConfig(opts *RunOptions) runControlConfig {
+	if opts == nil {
+		return runControlConfig{}
+	}
+	return opts.runControlConfig
+}
+
+func setRunControlConfig(opts *RunOptions, cfg runControlConfig) {
+	if opts == nil {
+		return
+	}
+	opts.runControlConfig = cfg
+}
+
 // RunOptions is the options for the Run method.
 type RunOptions struct {
 	// RuntimeState contains key-value pairs that will be merged into the initial state
@@ -648,6 +833,10 @@ type RunOptions struct {
 	// filtering and preserve the existing behavior.
 	StreamModes []StreamMode
 
+	// DisableTracing requests supported agent and flow execution paths to skip
+	// creating OpenTelemetry spans for this run.
+	DisableTracing bool
+
 	// DisableResponseUsageTracking disables attaching usage and timing info to streaming responses.
 	DisableResponseUsageTracking bool
 
@@ -659,6 +848,9 @@ type RunOptions struct {
 
 	// DisablePartialEventTimestamps disables generating timestamps for partial response events.
 	DisablePartialEventTimestamps bool
+
+	// ExecutionTraceEnabled enables in-process execution trace recording for this run.
+	ExecutionTraceEnabled bool
 
 	// RequestID is the request id of the request.
 	RequestID string
@@ -675,6 +867,9 @@ type RunOptions struct {
 
 	// SpanAttributes carries custom span attributes for this run.
 	SpanAttributes []attribute.KeyValue
+
+	// TraceStartedCallbacks run when the root span starts for this run.
+	TraceStartedCallbacks []TraceStartedCallback
 
 	// A2ARequestOptions contains A2A client request options that will be passed to
 	// A2A agent's SendMessage and StreamMessage calls. This allows callers to pass
@@ -722,6 +917,12 @@ type RunOptions struct {
 	// this request only.
 	GlobalInstruction string
 
+	// StructuredOutput defines how the model should produce structured output for this run.
+	StructuredOutput *model.StructuredOutput
+
+	// StructuredOutputType is the Go type to unmarshal the final JSON into for this run.
+	StructuredOutputType reflect.Type
+
 	// ToolFilter is a custom function to filter tools for this run.
 	// If set, only tools for which the filter returns true will be available to the model.
 	// If nil, all registered tools will be available (default behavior).
@@ -760,6 +961,42 @@ type RunOptions struct {
 	// ToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
 	// When nil, JSON repair is disabled by default.
 	ToolCallArgumentsJSONRepairEnabled *bool
+
+	// runControlConfig stores internal event and buffering controls.
+	runControlConfig runControlConfig
+}
+
+// IsGraphCompletionEventDisabled reports whether this invocation hides terminal graph completion events.
+func IsGraphCompletionEventDisabled(inv *Invocation) bool {
+	if inv == nil {
+		return false
+	}
+	return getRunControlConfig(&inv.RunOptions).DisableGraphCompletionEvent
+}
+
+// IsGraphExecutorEventsDisabled reports whether this invocation hides graph executor lifecycle events.
+func IsGraphExecutorEventsDisabled(inv *Invocation) bool {
+	if inv == nil {
+		return false
+	}
+	return getRunControlConfig(&inv.RunOptions).DisableGraphExecutorEvents
+}
+
+// GetEventChannelBufferSize returns the invocation-specific event channel buffer size override.
+func GetEventChannelBufferSize(inv *Invocation) int {
+	if inv == nil {
+		return 0
+	}
+	return getRunControlConfig(&inv.RunOptions).EventChannelBufferSize
+}
+
+// ShouldPropagateChildAgentErrors reports whether terminal child agent errors
+// should fail the parent graph by default.
+func ShouldPropagateChildAgentErrors(inv *Invocation) bool {
+	if inv == nil {
+		return false
+	}
+	return getRunControlConfig(&inv.RunOptions).PropagateChildAgentErrors
 }
 
 // NewInvocation create a new invocation
@@ -774,6 +1011,13 @@ func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 		opt(inv)
 	}
 
+	if inv.Message.Role == "" && model.HasPayload(inv.Message) {
+		log.Warnf(
+			"agent.NewInvocation received a message with empty role; defaulting to user",
+		)
+		inv.Message.Role = model.RoleUser
+	}
+
 	if inv.Branch == "" {
 		inv.Branch = inv.AgentName
 	}
@@ -781,6 +1025,7 @@ func NewInvocation(invocationOpts ...InvocationOptions) *Invocation {
 	if inv.eventFilterKey == "" && inv.AgentName != "" {
 		inv.eventFilterKey = inv.AgentName
 	}
+	inv.initializeExecutionTrace()
 
 	return inv
 }
@@ -803,6 +1048,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,
 		parent:          inv,
+		traceCapture:    inv.traceCapture,
 		state:           inv.cloneState(),
 	}
 
@@ -822,6 +1068,13 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 
 	if newInv.eventFilterKey == "" && newInv.AgentName != "" {
 		newInv.eventFilterKey = newInv.AgentName
+	}
+	if newInv.traceCapture == nil {
+		newInv.initializeExecutionTrace()
+	}
+	if newInv.traceCapture != nil {
+		newInv.traceCapture.RegisterInvocation(inv.InvocationID, newInv.InvocationID)
+		newInv.ensureTraceCaptureMetadata()
 	}
 
 	return newInv

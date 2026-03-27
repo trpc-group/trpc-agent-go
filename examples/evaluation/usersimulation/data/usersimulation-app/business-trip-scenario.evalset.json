@@ -1,0 +1,23 @@
+{
+  "evalSetId": "business-trip-scenario",
+  "name": "business-trip-scenario",
+  "evalCases": [
+    {
+      "evalId": "beijing_business_trip",
+      "conversationScenario": {
+        "driver": "actual",
+        "startingPrompt": "Please help me plan my business trip to Beijing next week.",
+        "conversationPlan": "You are a user preparing for a business trip from Shanghai to Beijing next week. Explain early in the conversation that the trip is from Tuesday to Thursday, the budget is moderate, you prefer staying near Guomao, and you would rather take a morning flight. If the assistant asks follow-up questions, provide those details gradually. After the flight plan, hotel area, and travel reminders are all confirmed, output only </finished>.",
+        "stopSignal": "</finished>",
+        "maxAllowedInvocations": 8
+      },
+      "sessionInput": {
+        "appName": "usersimulation-app",
+        "userId": "demo-user",
+        "state": {
+          "today": "2026-03-24"
+        }
+      }
+    }
+  ]
+}

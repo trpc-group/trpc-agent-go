@@ -15,6 +15,7 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -107,14 +108,25 @@ type ContentRequestProcessor struct {
 	// conversations. Default is ReasoningContentModeDiscardPreviousTurns, which is
 	// recommended for DeepSeek thinking mode.
 	ReasoningContentMode string
-	// PreloadMemory sets the number of memories to preload into system prompt.
-	// When > 0, the specified number of most recent memories are loaded.
+	// PreloadMemory controls framework-side memory preload.
+	// When > 0, it acts as an adaptive preload budget:
+	//   - If total memories <= N, preload all memories.
+	//   - If total memories > N, preload top-N search results.
+	//   - If query extraction is empty, the search fails, or the search
+	//     returns no matches, fall back to loading up to N memories
+	//     directly.
 	// When 0, no memories are preloaded (use tools instead).
 	// When < 0 (default), all memories are loaded.
 	PreloadMemory int
 	// SummaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	SummaryFormatter func(summary string) string
+}
+
+type contentRequestRuntimeConfig struct {
+	includeMode                   string
+	subgraphMessageSource         string
+	subgraphMessageSourceExplicit bool
 }
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
@@ -190,13 +202,16 @@ func WithReasoningContentMode(mode string) ContentOption {
 	}
 }
 
-// WithPreloadMemory sets the number of memories to preload into system prompt.
+// WithPreloadMemory sets the framework-side memory preload behavior.
 //   - Set to 0 (default) to disable preloading (use tools instead).
-//   - Set to N (N > 0) to load the most recent N memories.
+//   - Set to N (N > 0) to use adaptive preload with budget N.
+//     Small memory sets are preloaded in full. Larger sets use search and
+//     fall back to loading up to N memories directly when search cannot
+//     provide usable results.
 //   - Set to -1 to load all memories.
 //     WARNING: Loading all memories may significantly increase token usage
 //     and API costs, especially for users with many stored memories.
-//     Consider using a positive limit (e.g., 10-50) for production use.
+//     Consider using a positive budget (e.g., 10-50) for production use.
 func WithPreloadMemory(limit int) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.PreloadMemory = limit
@@ -272,72 +287,31 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	}
 	invocation.DeleteState(contentHasCompactedToolResultsStateKey)
 
-	// Honor per-invocation include_contents flag from runtime state when
-	// present. This allows callers (including GraphAgent subgraphs) to
-	// disable seeding session history for specific runs without changing
-	// the processor configuration.
-	includeMode := ""
-	if invocation.RunOptions.RuntimeState != nil {
-		if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents]; ok {
-			if s, ok2 := v.(string); ok2 {
-				includeMode = strings.ToLower(s)
-			}
-		}
-	}
-	skipHistory := includeMode == "none"
+	cfg := p.runtimeConfigFromInvocation(invocation)
+	skipHistory := cfg.includeMode == "none"
 
 	p.injectInjectedContextMessages(invocation, req)
-
-	// Append per-filter messages from session events when allowed.
-	needToAddInvocationMessage := true
-	if invocation.Session != nil {
-		var messages []model.Message
-		var summaryUpdatedAt time.Time
-		var summaryMsg *model.Message
-		// Skip session summary when include_contents=none, but still get current
-		// invocation's events (tool calls/results) to maintain ReAct loop context.
-		if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
-			// Fetch session summary early so we can insert it after other
-			// semi-stable system blocks (for example, preloaded memories).
-			summaryMsg, summaryUpdatedAt = p.getSessionSummaryMessage(invocation)
-		}
-
-		// Preload memories into system prompt if configured.
-		// PreloadMemory: 0 = disabled, -1 = all, N > 0 = most recent N.
-		if p.PreloadMemory != 0 && invocation.MemoryService != nil {
-			if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
-				p.injectSystemContextMessage(req, *memMsg)
-			}
-		}
-
-		if summaryMsg != nil {
-			invocation.SetState(contentHasSessionSummaryStateKey, true)
-			p.injectSystemContextMessage(req, *summaryMsg)
-		}
-
-		if skipHistory {
-			// When include_contents=none, only get events from current invocation
-			// to preserve tool call history within the current ReAct loop.
-			// This fixes the infinite loop issue where the agent doesn't see its
-			// own tool calls when running as an isolated subgraph.
-			messages = p.getCurrentInvocationMessages(invocation)
-		} else {
-			messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
-			if p.hasCompactedCurrentInvocationToolResults(
-				invocation,
-				summaryUpdatedAt,
-			) {
-				invocation.SetState(
-					contentHasCompactedToolResultsStateKey,
-					true,
-				)
-			}
-		}
-		req.Messages = append(req.Messages, messages...)
-		needToAddInvocationMessage = len(messages) == 0
+	preassembledMessages := p.getPreassembledGraphMessages(
+		invocation,
+		cfg.subgraphMessageSource,
+		cfg.subgraphMessageSourceExplicit,
+	)
+	if len(preassembledMessages) > 0 {
+		req.Messages = append(req.Messages, preassembledMessages...)
 	}
 
-	if model.HasPayload(invocation.Message) && needToAddInvocationMessage {
+	// Append per-filter messages from session events when allowed.
+	needToAddInvocationMessage := p.appendSessionMessages(
+		ctx,
+		invocation,
+		req,
+		skipHistory,
+		len(preassembledMessages) == 0,
+	)
+
+	if model.HasPayload(invocation.Message) &&
+		needToAddInvocationMessage &&
+		len(preassembledMessages) == 0 {
 		msg := annotateUserMessageWithAttachedFiles(invocation.Message)
 		req.Messages = append(req.Messages, msg)
 		log.DebugfContext(
@@ -354,6 +328,85 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		invocation.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingContent),
 	))
+}
+
+func (p *ContentRequestProcessor) runtimeConfigFromInvocation(
+	invocation *agent.Invocation,
+) contentRequestRuntimeConfig {
+	cfg := contentRequestRuntimeConfig{}
+	if invocation == nil || invocation.RunOptions.RuntimeState == nil {
+		return cfg
+	}
+	if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeyIncludeContents]; ok {
+		if s, ok2 := v.(string); ok2 {
+			cfg.includeMode = strings.ToLower(s)
+		}
+	}
+	if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeySubgraphMessageSource]; ok {
+		if s, ok2 := v.(string); ok2 {
+			cfg.subgraphMessageSource = strings.ToLower(s)
+		}
+	}
+	if v, ok := invocation.RunOptions.RuntimeState[graph.CfgKeySubgraphMessageSourceExplicit]; ok {
+		if b, ok2 := v.(bool); ok2 {
+			cfg.subgraphMessageSourceExplicit = b
+		}
+	}
+	return cfg
+}
+
+func (p *ContentRequestProcessor) appendSessionMessages(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	skipHistory bool,
+	includeInvocationMessage bool,
+) bool {
+	if invocation.Session == nil {
+		return true
+	}
+
+	var messages []model.Message
+	var summaryUpdatedAt time.Time
+	var summaryMsg *model.Message
+	// Skip session summary when include_contents=none, but still get current
+	// invocation's events (tool calls/results) to maintain ReAct loop context.
+	if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
+		// Fetch session summary early so we can insert it after other
+		// semi-stable system blocks (for example, preloaded memories).
+		summaryMsg, summaryUpdatedAt = p.getSessionSummaryMessage(invocation)
+	}
+
+	// Preload memories into system prompt if configured.
+	// PreloadMemory: 0 = disabled, -1 = all, N > 0 = adaptive preload budget.
+	if p.PreloadMemory != 0 && invocation.MemoryService != nil {
+		if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
+			p.injectSystemContextMessage(req, *memMsg)
+		}
+	}
+
+	if summaryMsg != nil {
+		invocation.SetState(contentHasSessionSummaryStateKey, true)
+		p.injectSystemContextMessage(req, *summaryMsg)
+	}
+
+	if skipHistory {
+		// When include_contents=none, only get events from current invocation
+		// to preserve tool call history within the current ReAct loop.
+		// This fixes the infinite loop issue where the agent doesn't see its
+		// own tool calls when running as an isolated subgraph.
+		messages = p.getCurrentInvocationMessagesWithOptions(
+			invocation,
+			includeInvocationMessage,
+		)
+	} else {
+		messages = p.getIncrementMessages(invocation, summaryUpdatedAt)
+		if p.hasCompactedCurrentInvocationToolResults(invocation, summaryUpdatedAt) {
+			invocation.SetState(contentHasCompactedToolResultsStateKey, true)
+		}
+	}
+	req.Messages = append(req.Messages, messages...)
+	return len(messages) == 0
 }
 
 // injectSystemContextMessage injects summary or memory context into request.
@@ -389,6 +442,39 @@ func (p *ContentRequestProcessor) injectInjectedContextMessages(invocation *agen
 		return
 	}
 	req.Messages = append(req.Messages, messages...)
+}
+
+func (p *ContentRequestProcessor) getPreassembledGraphMessages(
+	invocation *agent.Invocation,
+	source string,
+	explicit bool,
+) []model.Message {
+	if invocation == nil ||
+		source != string(graph.SubgraphMessageSourceGraphSnapshot) {
+		return nil
+	}
+	if invocation.RunOptions.RuntimeState == nil {
+		return nil
+	}
+	raw, ok := invocation.RunOptions.RuntimeState[graph.StateKeyMessages]
+	if !ok || raw == nil {
+		return nil
+	}
+	if msgs, ok := raw.([]model.Message); ok {
+		return append([]model.Message(nil), msgs...)
+	}
+	if explicit {
+		return nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	var msgs []model.Message
+	if err := json.Unmarshal(b, &msgs); err != nil {
+		return nil
+	}
+	return msgs
 }
 
 // getSessionSummaryMessage returns the current-branch session summary as a
@@ -898,6 +984,13 @@ func isEmptyAssistantMessage(msg model.Message) bool {
 // This is used when include_contents=none to preserve tool call history within
 // the current ReAct loop while isolating from parent/other branch history.
 func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invocation) []model.Message {
+	return p.getCurrentInvocationMessagesWithOptions(inv, true)
+}
+
+func (p *ContentRequestProcessor) getCurrentInvocationMessagesWithOptions(
+	inv *agent.Invocation,
+	includeInvocationMessage bool,
+) []model.Message {
 	if inv.Session == nil {
 		return nil
 	}
@@ -931,7 +1024,9 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 			break
 		}
 	}
-	if !hasInvocationMessage && model.HasPayload(inv.Message) {
+	if includeInvocationMessage &&
+		!hasInvocationMessage &&
+		model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
@@ -1090,7 +1185,10 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 // isEventEligibleForInclusion checks basic event validity before expensive
 // filtering logic runs.
 func isEventEligibleForInclusion(evt event.Event) bool {
-	return evt.Response != nil && !evt.IsPartial && evt.IsValidContent()
+	return evt.Response != nil &&
+		!evt.IsPartial &&
+		evt.IsValidContent() &&
+		!evt.IsRunnerCompletion()
 }
 
 // isStrictInvocationMessage checks whether the event exactly matches the
@@ -1512,20 +1610,82 @@ func (p *ContentRequestProcessor) getPreloadMemoryMessage(
 	if userKey.AppName == "" || userKey.UserID == "" {
 		return nil
 	}
-	// Handle PreloadMemory: 0 = disabled, -1 = all, N > 0 = most recent N.
+	// Handle PreloadMemory: 0 = disabled, -1 = all, N > 0 = adaptive budget.
 	if p.PreloadMemory == 0 {
-		// PreloadMemory = 0 means disabled, return nil.
 		return nil
 	}
-	// PreloadMemory = -1 means all memories, use 0 for ReadMemories (no limit).
-	// PreloadMemory = N > 0 means most recent N memories.
-	// Here we use max to handle the case when PreloadMemory is negative.
-	limit := max(p.PreloadMemory, 0)
+	if p.PreloadMemory < 0 {
+		return p.loadPreloadMemoryMessage(ctx, inv, userKey, 0)
+	}
+	return p.getAdaptivePreloadMemoryMessage(ctx, inv, userKey, p.PreloadMemory)
+}
+
+// getAdaptivePreloadMemoryMessage preloads all memories for small memory sets
+// and falls back to query-aware search for larger sets.
+func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
+	ctx context.Context,
+	inv *agent.Invocation,
+	userKey memory.UserKey,
+	budget int,
+) *model.Message {
+	const preloadProbeExtra = 1
+	probeLimit := budget + preloadProbeExtra
+	probeEntries, err := inv.MemoryService.ReadMemories(ctx, userKey, probeLimit)
+	if err != nil {
+		log.WarnfContext(ctx, "Failed to probe memories for preload: %v", err)
+		return nil
+	}
+	if len(probeEntries) == 0 {
+		return nil
+	}
+	if len(probeEntries) <= budget {
+		return newPreloadMemoryMessage(probeEntries)
+	}
+
+	query := buildPreloadSearchQuery(inv.Message)
+	if query == "" {
+		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
+	}
+
+	searchOpts := memory.SearchOptions{
+		Query:        query,
+		MaxResults:   budget,
+		Deduplicate:  true,
+		HybridSearch: true,
+	}
+	memories, err := inv.MemoryService.SearchMemories(
+		ctx,
+		userKey,
+		query,
+		memory.WithSearchOptions(searchOpts),
+	)
+	if err != nil {
+		log.WarnfContext(ctx, "Failed to search memories for preload: %v", err)
+		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
+	}
+	if len(memories) == 0 {
+		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
+	}
+	return newPreloadMemoryMessage(memories)
+}
+
+// loadPreloadMemoryMessage loads memories directly and formats them as a
+// system message.
+func (p *ContentRequestProcessor) loadPreloadMemoryMessage(
+	ctx context.Context,
+	inv *agent.Invocation,
+	userKey memory.UserKey,
+	limit int,
+) *model.Message {
 	memories, err := inv.MemoryService.ReadMemories(ctx, userKey, limit)
 	if err != nil {
 		log.WarnfContext(ctx, "Failed to preload memories: %v", err)
 		return nil
 	}
+	return newPreloadMemoryMessage(memories)
+}
+
+func newPreloadMemoryMessage(memories []*memory.Entry) *model.Message {
 	if len(memories) == 0 {
 		return nil
 	}
@@ -1533,6 +1693,26 @@ func (p *ContentRequestProcessor) getPreloadMemoryMessage(
 		Role:    model.RoleSystem,
 		Content: formatMemoryContent(memories),
 	}
+}
+
+// buildPreloadSearchQuery extracts the current user text used for adaptive
+// preload search.
+func buildPreloadSearchQuery(msg model.Message) string {
+	parts := make([]string, 0, 1+len(msg.ContentParts))
+	if text := strings.TrimSpace(msg.Content); text != "" {
+		parts = append(parts, text)
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText || part.Text == nil {
+			continue
+		}
+		text := strings.TrimSpace(*part.Text)
+		if text == "" {
+			continue
+		}
+		parts = append(parts, text)
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 // formatMemoryContent formats memories for system prompt injection.

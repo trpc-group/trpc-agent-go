@@ -52,6 +52,15 @@ func newTranslatorImplForTest(t *testing.T, opts ...Option) *translator {
 	return impl
 }
 
+func TestNewReturnsPostRunFinalizingTranslator(t *testing.T) {
+	tr := newTranslatorForTest(t)
+	if tr == nil {
+		return
+	}
+	_, ok := tr.(PostRunFinalizingTranslator)
+	assert.True(t, ok)
+}
+
 type mockModelWithResponses struct {
 	mu        sync.Mutex
 	responses []*model.Response

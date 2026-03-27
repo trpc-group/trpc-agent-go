@@ -88,6 +88,7 @@ nodes:
 		},
 		agentTypeLLM,
 		"instance-1",
+		admin.LangfuseStatus{},
 		"/tmp/state",
 		"/tmp/debug",
 		time.Unix(0, 0),

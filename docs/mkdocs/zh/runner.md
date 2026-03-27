@@ -10,7 +10,7 @@ Runner 提供了运行 Agent 的接口，负责会话管理和事件流处理。
 - **🔄 事件处理**：接收 Agent 事件流，将非 partial 响应事件追加到会话中
 - **🆔 ID 生成**：自动生成 Invocation ID 和事件 ID
 - **📊 可观测集成**：集成 telemetry/trace，自动记录 span
-- **✅ 完成事件**：在 Agent 事件流结束后生成 runner-completion 事件
+- **✅ 完成事件**：在 Agent 事件流结束后生成 `runner.completion` 事件
 - **🔌 插件**：在 Runner 上注册一次，全局作用于该 Runner 管理的 Agent、Tool 和模型调用。
 
 ## 架构设计
@@ -202,6 +202,28 @@ _ = err
 
 - 每次调用 `Runner.Run(...)`，Factory 会被调用一次。
 - `agent.WithAgent(...)` 依然优先生效（测试时很方便）。
+
+#### Agent Factory 中的资源边界
+
+`AgentFactory` 适合按请求拼装 Agent 配置，但它**不会改变资源所有权**。
+
+- `Runner` 只负责调用 factory 获取一个 `agent.Agent`。
+- `Runner.Close()` 只会关闭 Runner 自己创建或持有的资源；它**不会**
+  自动关闭 factory 内部新建的 `tool.ToolSet`、临时 MCP 连接、沙箱会话
+  等请求级资源。
+- 原因是 `agent.Agent` 接口本身没有 `Close()`，因此 Runner 无法统一接管
+  这类资源的释放。
+
+实践建议：
+
+- 如果某个 `ToolSet` 或外部连接适合跨请求复用，优先在 factory 外创建一次，
+  然后在 factory 中复用；应用退出时再统一 `Close()`。
+- 如果资源必须按请求创建，调用方需要在本次 run 结束后自行清理。
+  常见做法是包装一个带清理逻辑的 Agent，或者在 Agent 的
+  after callback 中执行清理。
+
+这类边界在使用 MCP ToolSet 时尤其常见，详细说明可继续参考
+`tool` 文档中的 ToolSet 生命周期章节。
 
 ### 🔌 插件
 
@@ -432,6 +454,9 @@ for e := range eventChan {
 
 有些运行不会走到最终的 `graph.execution` 完成事件，就已经因为致命错误提前结束。一个很常见的场景是：
 
+如果你想看 graph、Runner、subgraph、A2A 串起来的完整推荐方案，见
+[Error Handling](error-handling.md)。
+
 - 某个节点回调先发出一条自定义 `StateDelta`，里面带了致命错误详情
 - 随后流程直接中止，图本身来不及产出正常的最终快照
 
@@ -450,33 +475,107 @@ for e := range eventChan {
 
 这样业务代码就可以继续保持同一个规则：优先看最后一条事件里的业务错误详情，而不是为了拿错误信息去遍历整条事件流。
 
+如果 graph 侧用了 `graph.NewExecutionErrorCollector()`，那么这条
+`StateDelta` 里的 `execution_errors` 也可能来自默认 recoverable 约定，
+例如错误实现了 `Recoverable() bool`，或者通过
+`graph.MarkRecoverable(err)` 做了显式标记。
+
 示例：
 
 ```go
+package main
+
 import (
+    "context"
     "encoding/json"
     "fmt"
 
     "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const stateKeyNodeFatal = "node_fatal_error"
 
-func readLastEvent(eventChan <-chan *event.Event) error {
-    for e := range eventChan {
-        if !e.IsRunnerCompletion() {
+type RunSummary struct {
+    TransportError  *model.ResponseError
+    FatalDetail     map[string]any
+    ExecutionErrors []graph.ExecutionError
+}
+
+func ConsumeRun(
+    ctx context.Context,
+    eventChan <-chan *event.Event,
+) (*RunSummary, error) {
+    summary := &RunSummary{}
+
+    for {
+        select {
+        case <-ctx.Done():
+            return nil, ctx.Err()
+        case evt, ok := <-eventChan:
+            if !ok {
+                return summary, nil
+            }
+            if evt.Response != nil && evt.Response.Error != nil {
+                summary.TransportError = evt.Response.Error
+            }
+            if !evt.IsRunnerCompletion() {
+                continue
+            }
+
+            if b, ok := evt.StateDelta[stateKeyNodeFatal]; ok {
+                var detail map[string]any
+                if err := json.Unmarshal(b, &detail); err != nil {
+                    return nil, err
+                }
+                summary.FatalDetail = detail
+            }
+
+            executionErrors, err := graph.ExecutionErrorsFromStateDelta(
+                evt.StateDelta,
+                graph.StateKeyExecutionErrors,
+            )
+            if err != nil {
+                return nil, err
+            }
+            summary.ExecutionErrors = executionErrors
+            return summary, nil
+        }
+    }
+}
+
+func PrintSummary(summary *RunSummary) {
+    if summary.TransportError != nil {
+        fmt.Printf(
+            "transport error: type=%s code=%s message=%s\n",
+            summary.TransportError.Type,
+            ptrValue(summary.TransportError.Code),
+            summary.TransportError.Message,
+        )
+    }
+    if summary.FatalDetail != nil {
+        fmt.Printf("fatal detail: %+v\n", summary.FatalDetail)
+    }
+    for _, record := range summary.ExecutionErrors {
+        if record.Error == nil {
             continue
         }
-
-        if b, ok := e.StateDelta[stateKeyNodeFatal]; ok {
-            var detail map[string]any
-            if err := json.Unmarshal(b, &detail); err == nil {
-                fmt.Printf("fatal detail: %+v\n", detail)
-            }
-        }
-        return nil
+        fmt.Printf(
+            "execution error: severity=%s node=%s code=%s message=%s\n",
+            record.Severity,
+            record.NodeName,
+            ptrValue(record.Error.Code),
+            record.Error.Message,
+        )
     }
-    return nil
+}
+
+func ptrValue(value *string) string {
+    if value == nil {
+        return ""
+    }
+    return *value
 }
 ```
 
@@ -495,7 +594,7 @@ func readLastEvent(eventChan <-chan *event.Event) error {
 
 - 分片（`partial`）事件：`IsPartial=true`、`Done=false`，增量文本在
   `choice.Delta.Content`
-- 最终（`final`）事件：`IsPartial=false`、`Done=true`，完整文本在
+- 模型调用的最终事件：`IsPartial=false`、`Done=true`，完整文本在
   `choice.Message.Content`
 
 默认情况下，Graph 的 LLM 节点只输出分片事件，不输出最终 `Done=true` 的 assistant 消息
@@ -725,6 +824,15 @@ r := runner.NewRunner("multi-app", multiAgent)
 
 ## 📊 事件处理
 
+### 结束语义
+
+Runner 相关文档里有两个容易混淆的“结束”概念，这里统一说明：
+
+- `Done=true`：表示**当前这条事件本身已经完整**。它可以出现在 assistant 最终消息、
+  tool response、graph 事件以及 runner completion 事件上。
+- `runner.completion` / `event.IsRunnerCompletion()`：表示**整次 Runner.Run 已经结束**。
+  这是业务代码停止消费 `eventChan` 的唯一推荐判据。
+
 ### 事件类型
 
 ```go
@@ -750,8 +858,8 @@ for event := range eventChan {
         }
     }
 
-    // 完成事件
-    if event.Done {
+    // 整次 Runner 结束
+    if event.IsRunnerCompletion() {
         break
     }
 }
@@ -804,7 +912,7 @@ func processEvents(eventChan <-chan *event.Event) error {
             }
         }
 
-        if event.Done {
+        if event.IsRunnerCompletion() {
             fmt.Println() // 换行
             break
         }
@@ -914,7 +1022,7 @@ for evt := range eventCh {
         continue
     }
     // ... 处理事件 ...
-    if evt.IsFinalResponse() {
+    if evt.IsRunnerCompletion() {
         break
     }
     turns++
@@ -1096,7 +1204,7 @@ if err != nil {
 
 for event := range eventChan {
 	// 处理事件
-	if event.Done {
+	if event.IsRunnerCompletion() {
 		break
 	}
 }
@@ -1126,7 +1234,7 @@ func checkRunner(r runner.Runner, ctx context.Context) error {
         if event.Error != nil {
             return fmt.Errorf("收到错误事件: %s", event.Error.Message)
         }
-        if event.Done {
+        if event.IsRunnerCompletion() {
             break
         }
     }

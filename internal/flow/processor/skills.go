@@ -127,9 +127,8 @@ func WithSkillExecToolsDisabled() SkillsRequestProcessorOption {
 //
 // When max <= 0, no cap is applied (default behavior).
 //
-// When max > 0, the processor keeps at most max most-recently loaded
-// skills (skill_load / skill_select_docs) and offloads the rest by
-// clearing their state keys.
+// When max > 0, the processor keeps at most max most-recently touched
+// skills and offloads the rest by clearing their state keys.
 func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 	return func(o *skillsRequestProcessorOptions) {
 		o.maxLoadedSkills = max
@@ -306,7 +305,7 @@ func (p *SkillsRequestProcessor) maybeCapLoadedSkills(
 		keepSet[name] = struct{}{}
 	}
 
-	delta := make(map[string][]byte, len(loaded)*2)
+	delta := make(map[string][]byte, len(loaded)*2+1)
 	var kept []string
 	for _, name := range loaded {
 		if _, ok := keepSet[name]; ok {
@@ -321,6 +320,10 @@ func (p *SkillsRequestProcessor) maybeCapLoadedSkills(
 		inv.Session.SetState(docsKey, nil)
 		delta[docsKey] = nil
 	}
+	orderKey := skill.LoadedOrderKey(inv.AgentName)
+	orderValue := skill.MarshalLoadedOrder(keep)
+	inv.Session.SetState(orderKey, orderValue)
+	delta[orderKey] = orderValue
 	if len(delta) > 0 {
 		agent.EmitEvent(ctx, inv, ch, event.New(
 			inv.InvocationID,
@@ -341,21 +344,14 @@ func keepMostRecentSkills(
 		return nil
 	}
 
-	loadedSet := loadedSkillSet(loaded)
-	if len(loadedSet) == 0 {
+	order := loadedSkillOrder(inv, loaded)
+	if len(order) == 0 {
 		return nil
 	}
-
-	keep, seen := mostRecentSkillsFromEvents(
-		inv.Session.GetEvents(),
-		inv.AgentName,
-		loadedSet,
-		max,
-	)
-	if len(keep) >= max {
-		return keep
+	if len(order) <= max {
+		return append([]string(nil), order...)
 	}
-	return fillSkillsAlphabetically(keep, seen, loaded, max)
+	return append([]string(nil), order[len(order)-max:]...)
 }
 
 func loadedSkillSet(loaded []string) map[string]struct{} {
@@ -370,49 +366,107 @@ func loadedSkillSet(loaded []string) map[string]struct{} {
 	return out
 }
 
-func mostRecentSkillsFromEvents(
+func loadedSkillOrder(
+	inv *agent.Invocation,
+	loaded []string,
+) []string {
+	if inv == nil || inv.Session == nil {
+		return nil
+	}
+
+	loadedSet := loadedSkillSet(loaded)
+	if len(loadedSet) == 0 {
+		return nil
+	}
+
+	order := loadedSkillOrderFromState(inv, loadedSet)
+	if len(order) < len(loadedSet) {
+		order = appendSkillsToOrderFromEvents(
+			order,
+			inv.Session.GetEvents(),
+			inv.AgentName,
+			loadedSet,
+		)
+	}
+	if len(order) < len(loadedSet) {
+		order = fillLoadedSkillOrderAlphabetically(
+			order,
+			loadedSet,
+		)
+	}
+	return order
+}
+
+func loadedSkillOrderFromState(
+	inv *agent.Invocation,
+	loadedSet map[string]struct{},
+) []string {
+	if inv == nil || inv.Session == nil {
+		return nil
+	}
+
+	raw, ok := inv.Session.GetState(skill.LoadedOrderKey(inv.AgentName))
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+
+	order := skill.ParseLoadedOrder(raw)
+	if len(order) == 0 {
+		return nil
+	}
+
+	out := make([]string, 0, len(order))
+	seen := make(map[string]struct{}, len(order))
+	for _, name := range order {
+		if _, ok := loadedSet[name]; !ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		out = append(out, name)
+		seen[name] = struct{}{}
+	}
+	return out
+}
+
+func appendSkillsToOrderFromEvents(
+	order []string,
 	events []event.Event,
 	agentName string,
 	loadedSet map[string]struct{},
-	max int,
-) ([]string, map[string]struct{}) {
-	keep := make([]string, 0, max)
-	seen := make(map[string]struct{}, max)
-	for i := len(events) - 1; i >= 0 && len(keep) < max; i-- {
-		keep = appendSkillsFromToolResponseEvent(
+) []string {
+	for i := 0; i < len(events); i++ {
+		order = appendSkillsToOrderFromToolResponseEvent(
 			events[i],
 			agentName,
 			loadedSet,
-			seen,
-			keep,
-			max,
+			order,
 		)
 	}
-	return keep, seen
+	return order
 }
 
-func appendSkillsFromToolResponseEvent(
+func appendSkillsToOrderFromToolResponseEvent(
 	ev event.Event,
 	agentName string,
 	loadedSet map[string]struct{},
-	seen map[string]struct{},
-	keep []string,
-	max int,
+	order []string,
 ) []string {
 	if agentName != "" && ev.Author != agentName {
-		return keep
+		return order
 	}
 	if ev.Response == nil {
-		return keep
+		return order
 	}
 	if ev.Object != model.ObjectTypeToolResponse {
-		return keep
+		return order
 	}
 	if len(ev.Choices) == 0 {
-		return keep
+		return order
 	}
 
-	for j := len(ev.Choices) - 1; j >= 0 && len(keep) < max; j-- {
+	for j := 0; j < len(ev.Choices); j++ {
 		msg := ev.Choices[j].Message
 		if msg.Role != model.RoleTool {
 			continue
@@ -428,38 +482,25 @@ func appendSkillsFromToolResponseEvent(
 		if _, ok := loadedSet[name]; !ok {
 			continue
 		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		keep = append(keep, name)
-		seen[name] = struct{}{}
+		order = skill.TouchLoadedOrder(order, name)
 	}
-	return keep
+	return order
 }
 
-func fillSkillsAlphabetically(
-	keep []string,
-	seen map[string]struct{},
-	loaded []string,
-	max int,
+func fillLoadedSkillOrderAlphabetically(
+	order []string,
+	loadedSet map[string]struct{},
 ) []string {
-	sorted := append([]string(nil), loaded...)
-	sort.Strings(sorted)
-	for _, name := range sorted {
-		if len(keep) == max {
-			break
-		}
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
+	seen := loadedSkillSet(order)
+	var sorted []string
+	for name := range loadedSet {
 		if _, ok := seen[name]; ok {
 			continue
 		}
-		keep = append(keep, name)
-		seen[name] = struct{}{}
+		sorted = append(sorted, name)
 	}
-	return keep
+	sort.Strings(sorted)
+	return append(order, sorted...)
 }
 
 func skillNameFromToolResponse(msg model.Message) string {
@@ -513,9 +554,11 @@ func clearSkillState(inv *agent.Invocation) map[string][]byte {
 	delta := make(map[string][]byte)
 	loadedPrefix := skill.LoadedPrefix(inv.AgentName)
 	docsPrefix := skill.DocsPrefix(inv.AgentName)
+	orderKey := skill.LoadedOrderKey(inv.AgentName)
 	for k, v := range state {
 		if !strings.HasPrefix(k, loadedPrefix) &&
-			!strings.HasPrefix(k, docsPrefix) {
+			!strings.HasPrefix(k, docsPrefix) &&
+			k != orderKey {
 			continue
 		}
 		if len(v) == 0 {
@@ -539,7 +582,7 @@ func (p *SkillsRequestProcessor) maybeOffloadLoadedSkills(
 		len(loaded) == 0 {
 		return
 	}
-	delta := make(map[string][]byte, len(loaded)*2)
+	delta := make(map[string][]byte, len(loaded)*2+1)
 	for _, name := range loaded {
 		loadedKey := skill.LoadedKey(inv.AgentName, name)
 		inv.Session.SetState(loadedKey, nil)
@@ -549,6 +592,9 @@ func (p *SkillsRequestProcessor) maybeOffloadLoadedSkills(
 		inv.Session.SetState(docsKey, nil)
 		delta[docsKey] = nil
 	}
+	orderKey := skill.LoadedOrderKey(inv.AgentName)
+	inv.Session.SetState(orderKey, nil)
+	delta[orderKey] = nil
 	agent.EmitEvent(ctx, inv, ch, event.New(
 		inv.InvocationID,
 		inv.AgentName,
@@ -597,7 +643,8 @@ func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
 func (p *SkillsRequestProcessor) toolingGuidanceText() string {
 	if p.toolingGuidance == nil {
 		return defaultToolingAndWorkspaceGuidance(
-			p.toolProfile, p.execToolsDisabled,
+			p.toolProfile,
+			p.execToolsDisabled,
 		)
 	}
 	return normalizeGuidance(*p.toolingGuidance)
@@ -627,12 +674,15 @@ func (p *SkillsRequestProcessor) capabilityGuidanceText() string {
 }
 
 func defaultToolingAndWorkspaceGuidance(
-	profile string, execToolsDisabled bool,
+	profile string,
+	execToolsDisabled bool,
 ) string {
 	if skillprofile.IsKnowledgeOnly(profile) {
 		return defaultKnowledgeOnlyGuidance()
 	}
-	return defaultFullToolingAndWorkspaceGuidance(execToolsDisabled)
+	return defaultFullToolingAndWorkspaceGuidance(
+		execToolsDisabled,
+	)
 }
 
 func defaultKnowledgeOnlyGuidance() string {
@@ -654,7 +704,9 @@ func defaultKnowledgeOnlyGuidance() string {
 	return b.String()
 }
 
-func defaultFullToolingAndWorkspaceGuidance(execToolsDisabled bool) string {
+func defaultFullToolingAndWorkspaceGuidance(
+	execToolsDisabled bool,
+) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(skillsToolingGuidanceHeader)
@@ -719,82 +771,47 @@ func defaultFullToolingAndWorkspaceGuidance(execToolsDisabled bool) string {
 	b.WriteString("- Treat loaded skill docs as guidance, not perfect ")
 	b.WriteString("truth; when runtime help or stderr disagrees, trust ")
 	b.WriteString("observed runtime behavior.\n")
-	b.WriteString("- Prefer commands or scripts bundled inside the ")
-	b.WriteString("skill workspace when they exist; they are more ")
-	b.WriteString("stable than ad hoc shell built around external ")
-	b.WriteString("CLIs.\n")
-	b.WriteString("- Progressive disclosure: call skill_load with only ")
-	b.WriteString("skill first.\n")
+	b.WriteString("- Loading a skill gives you instructions and bundled ")
+	b.WriteString("resources; it does not execute the skill by itself.\n")
+	b.WriteString("- The skill summaries above are routing summaries only; ")
+	b.WriteString("they do not replace SKILL.md or other loaded docs.\n")
+	b.WriteString("- If the loaded content already provides enough ")
+	b.WriteString("guidance to answer or produce the requested result, ")
+	b.WriteString("respond directly.\n")
+	b.WriteString("- If you decide to use a skill, load SKILL.md before ")
+	if execToolsDisabled {
+		b.WriteString("the first skill_run for that skill, then load only ")
+		b.WriteString("the docs you still need.\n")
+	} else {
+		b.WriteString("the first skill_run or skill_exec for that skill, ")
+		b.WriteString("then load only the docs you still need.\n")
+	}
+	b.WriteString("- Do not infer commands, script entrypoints, or ")
+	b.WriteString("resource layouts from the short summary alone.\n")
 	b.WriteString("- For docs, prefer skill_list_docs + ")
 	b.WriteString("skill_select_docs to load only what you need.\n")
 	b.WriteString("- Avoid include_all_docs unless you need every doc ")
 	b.WriteString("or the user asks.\n")
-	b.WriteString("- Use skill_run primarily for commands required by ")
-	b.WriteString("the skill docs or bundled scripts, plus the minimal ")
-	b.WriteString("read-only probe commands needed to verify external ")
-	b.WriteString("CLI behavior.\n")
+	b.WriteString("- Use execution tools only when running a command ")
+	b.WriteString("will reveal or produce information or files you ")
+	b.WriteString("still need.\n")
 	if !execToolsDisabled {
-		b.WriteString("- Use skill_exec when a command may stay running, ")
-		b.WriteString("prompt for input, or require incremental stdin/TTY ")
-		b.WriteString("interaction. Then use skill_write_stdin or ")
-		b.WriteString("skill_poll_session until it exits, and ")
-		b.WriteString("skill_kill_session to stop it if needed.\n")
-		b.WriteString("- For CLIs that launch $EDITOR, prefer editor_text ")
-		b.WriteString("on skill_run or skill_exec instead of trying to ")
-		b.WriteString("drive a full-screen editor through stdin.\n")
+		b.WriteString("- Use skill_exec only when a command needs ")
+		b.WriteString("incremental stdin or TTY-style interaction; ")
+		b.WriteString("otherwise prefer one-shot execution.\n")
 	} else {
-		b.WriteString("- For CLIs that launch $EDITOR, prefer editor_text ")
-		b.WriteString("on skill_run instead of trying to drive a ")
-		b.WriteString("full-screen editor through stdin.\n")
+		b.WriteString("- Do not assume interactive execution is available ")
+		b.WriteString("when only one-shot execution tools are present.\n")
 	}
-	b.WriteString("- Safe probe commands include patterns such as ")
-	b.WriteString("`--help`, `-h`, `--version`, or `<subcommand> ")
-	b.WriteString("--help` when exact syntax is uncertain or a command ")
-	b.WriteString("fails.\n")
-	b.WriteString("- Keep probes targeted and bounded; avoid broad ")
-	b.WriteString("shell exploration when a small help query can ")
-	b.WriteString("verify the contract.\n")
-	b.WriteString("- Do not invent subcommands, flags, or positional ")
-	b.WriteString("arguments that do not appear in the loaded skill ")
-	b.WriteString("docs, bundled scripts, observed help text, or a ")
-	b.WriteString("prior successful command.\n")
 	b.WriteString("- skill_run is a command runner inside the skill ")
 	b.WriteString("workspace, not a magic capability. It does not ")
 	b.WriteString("automatically add the skill directory to PATH or ")
 	b.WriteString("install dependencies; invoke scripts via an explicit ")
 	b.WriteString("interpreter and path (e.g., python3 scripts/foo.py).\n")
-	b.WriteString("- Read the skill_run tool description each time: if ")
-	b.WriteString("it mentions allowed_commands/denied_commands (or ")
-	b.WriteString("previews Allowed commands), then shell syntax is ")
-	b.WriteString("disabled and the command must be a single executable ")
-	b.WriteString("+ args only (no pipes/redirects/chaining, no bash ")
-	b.WriteString("-c). Use env/cwd fields and split multi-step ")
-	b.WriteString("workflows into multiple skill_run calls.\n")
-	b.WriteString("- Before executing, avoid guessing command names, ")
-	b.WriteString("script paths, or dependencies. If the exact ")
-	b.WriteString("executable/path is not explicitly given by the ")
-	b.WriteString("loaded SKILL.md/docs, first do a small, targeted ")
-	b.WriteString("check to confirm it exists (e.g., list the relevant ")
-	b.WriteString("directory, check file existence, or verify the ")
-	b.WriteString("executable is on PATH). Under command restrictions, ")
-	b.WriteString("use only allowed commands for these checks.\n")
-	b.WriteString("- When skill_run fails, do not stop early. If the ")
-	b.WriteString("tool returns an error (no structured result), read ")
-	b.WriteString("it and adjust (often restriction violation or ")
-	b.WriteString("missing skill_load). If it returns a structured ")
-	b.WriteString("result, treat non-zero exit_code or timed_out as ")
-	b.WriteString("failure; inspect stderr/warnings, verify assumptions ")
-	b.WriteString("(files, PATH, deps), consult SKILL.md/docs, and ")
-	b.WriteString("retry with an adjusted command. Avoid repeating the ")
-	b.WriteString("exact same failing command; after a couple attempts, ")
-	b.WriteString("explain what you checked and ask for missing ")
-	b.WriteString("information.\n")
-	b.WriteString("- When the body and needed docs are present, call ")
-	b.WriteString("skill_run to execute or validate those commands.\n")
-	b.WriteString("- If a CLI appears interactive-only and you cannot ")
-	b.WriteString("confirm a non-interactive path, do not claim ")
-	b.WriteString("success; explain the limitation and give the best ")
-	b.WriteString("fallback.\n")
+	b.WriteString("- When you execute, follow the tool description, ")
+	b.WriteString("loaded skill docs, bundled scripts, and observed ")
+	b.WriteString("runtime behavior rather than inventing shell syntax ")
+	b.WriteString("or command arguments.\n")
 	return b.String()
 }
 

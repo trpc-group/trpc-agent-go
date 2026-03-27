@@ -235,6 +235,15 @@ func TestTracefContext(t *testing.T) {
 		"TracefContext args should match expected")
 }
 
+func TestIsTraceEnabled(t *testing.T) {
+	log.SetTraceEnabled(false)
+	t.Cleanup(func() { log.SetTraceEnabled(false) })
+	assert.False(t, log.IsTraceEnabled())
+
+	log.SetTraceEnabled(true)
+	assert.True(t, log.IsTraceEnabled())
+}
+
 func TestTracefContext_Disabled(t *testing.T) {
 	ctx := context.Background()
 	stub := &traceLogger{}

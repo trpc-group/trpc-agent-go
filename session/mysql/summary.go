@@ -27,7 +27,7 @@ func (s *Service) CreateSessionSummary(
 	filterKey string,
 	force bool,
 ) error {
-	if s.opts.summarizer == nil {
+	if !isummary.HasSummarizer(s.opts.summarizer) {
 		return nil
 	}
 
@@ -73,7 +73,7 @@ func (s *Service) CreateSessionSummary(
 				deleted_at = NULL`,
 			s.tableSessionSummaries,
 		),
-		key.AppName, key.UserID, key.SessionID, filterKey, summaryBytes, sum.UpdatedAt, nil)
+		key.AppName, key.UserID, key.SessionID, filterKey, string(summaryBytes), sum.UpdatedAt, nil)
 	if err != nil {
 		return fmt.Errorf("upsert summary failed: %w", err)
 	}
@@ -83,7 +83,7 @@ func (s *Service) CreateSessionSummary(
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
 func (s *Service) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
-	if s.opts.summarizer == nil {
+	if !isummary.HasSummarizer(s.opts.summarizer) {
 		return nil
 	}
 

@@ -22,15 +22,19 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -387,9 +391,8 @@ func TestWrapEventChannelWithTelemetry_AccumulatesTokenUsage(t *testing.T) {
 	tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
 	ctx, span := tp.Tracer("test").Start(context.Background(), "wrap")
 	sdkSpan := span
-
 	originalChan := make(chan *event.Event, 2)
-	wrappedChan := (&A2AAgent{}).wrapEventChannelWithTelemetry(ctx, &agent.Invocation{}, originalChan, sdkSpan, &itelemetry.InvokeAgentTracker{})
+	wrappedChan := (&A2AAgent{}).wrapEventChannelWithTelemetry(ctx, &agent.Invocation{}, originalChan, sdkSpan, &itelemetry.InvokeAgentTracker{}, true)
 
 	partialEvent := &event.Event{
 		Response: &model.Response{
@@ -437,6 +440,21 @@ func TestWrapEventChannelWithTelemetry_AccumulatesTokenUsage(t *testing.T) {
 	if !hasAttr(attrs, attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, finalEvent.Response.Usage.CompletionTokens)) {
 		t.Fatalf("expected output token usage to be recorded, attrs=%v", attrs)
 	}
+}
+
+func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	recorder := tracetest.NewSpanRecorder()
+	provider := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(recorder))
+	originalProvider := teletrace.TracerProvider
+	originalTracer := teletrace.Tracer
+	teletrace.TracerProvider = provider
+	teletrace.Tracer = provider.Tracer("a2a-agent-disable-tracing-test")
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		teletrace.TracerProvider = originalProvider
+		teletrace.Tracer = originalTracer
+	})
+	return recorder
 }
 
 func TestA2AAgent_shouldUseStreaming(t *testing.T) {
@@ -701,6 +719,19 @@ func TestA2AAgent_Run_ErrorCases(t *testing.T) {
 	}
 }
 
+func TestA2AAgent_Run_DisableTracingSkipsSpanCreation(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	a2aAgent := &A2AAgent{name: "test-agent"}
+	invocation := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			DisableTracing: true,
+		},
+	}
+	_, err := a2aAgent.Run(context.Background(), invocation)
+	require.Error(t, err)
+	require.Empty(t, recorder.Ended())
+}
+
 func TestWithTransferStateKey(t *testing.T) {
 	t.Run("transfer state keys are set correctly", func(t *testing.T) {
 		agent := &A2AAgent{}
@@ -776,6 +807,167 @@ func TestWithTransferStateKey(t *testing.T) {
 		if _, exists := msg.Metadata["other_key"]; exists {
 			t.Error("other_key should not be transferred")
 		}
+	})
+}
+
+func TestWithBuildMessageHook(t *testing.T) {
+	t.Run("hook modifies message after conversion", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					msg, err := next(isStream, agentName, inv)
+					if err != nil {
+						return nil, err
+					}
+					if msg.Metadata == nil {
+						msg.Metadata = make(map[string]any)
+					}
+					msg.Metadata["injected_key"] = "injected_value"
+					return msg, nil
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+		require.Equal(t, "injected_value", msg.Metadata["injected_key"])
+	})
+
+	t.Run("hook combined with transferStateKey", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"state_key"},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					msg, err := next(isStream, agentName, inv)
+					if err != nil {
+						return nil, err
+					}
+					if msg.Metadata == nil {
+						msg.Metadata = make(map[string]any)
+					}
+					msg.Metadata["hook_key"] = "hook_value"
+					return msg, nil
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"state_key": "state_value",
+				},
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+		require.Equal(t, "state_value", msg.Metadata["state_key"])
+		require.Equal(t, "hook_value", msg.Metadata["hook_key"])
+	})
+
+	t.Run("hook can skip calling next", func(t *testing.T) {
+		customMsg := protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]protocol.Part{protocol.NewTextPart("custom")},
+		)
+
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					return &customMsg, nil
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+		require.Equal(t, protocol.MessageRoleUser, msg.Role)
+	})
+
+	t.Run("hook returning error propagates", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					return nil, fmt.Errorf("hook error")
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.Error(t, err)
+		require.Nil(t, msg)
+		require.Contains(t, err.Error(), "hook error")
+	})
+
+	t.Run("short-circuit hook does not skip transferStateKey", func(t *testing.T) {
+		customMsg := protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]protocol.Part{protocol.NewTextPart("custom")},
+		)
+
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"state_key"},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					return &customMsg, nil
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"state_key": "state_value",
+				},
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+		require.Equal(t, "state_value", msg.Metadata["state_key"])
 	})
 }
 
@@ -1114,6 +1306,107 @@ func TestUserIDHeaderInRequest(t *testing.T) {
 	}
 }
 
+func TestTraceHeadersInRequest(t *testing.T) {
+	var receivedHeaders http.Header
+	var headersMu sync.Mutex
+	var serverURL string
+
+	originalPropagator := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		otel.SetTextMapPropagator(originalPropagator)
+	})
+
+	mockServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/.well-known/agent-card.json" {
+				agentCard := server.AgentCard{
+					Name:        "test-agent",
+					Description: "A test agent",
+					URL:         serverURL,
+					Capabilities: server.AgentCapabilities{
+						Streaming: boolPtr(false),
+					},
+				}
+				w.Header().Set("Content-Type", "application/json")
+				require.NoError(t, json.NewEncoder(w).Encode(agentCard))
+				return
+			}
+
+			headersMu.Lock()
+			receivedHeaders = r.Header.Clone()
+			headersMu.Unlock()
+
+			response := protocol.Message{
+				Role: protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					protocol.NewTextPart("test response"),
+				},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			require.NoError(t, json.NewEncoder(w).Encode(response))
+		},
+	))
+	defer mockServer.Close()
+	serverURL = mockServer.URL
+
+	a2aAgent, err := New(WithAgentCardURL(mockServer.URL))
+	require.NoError(t, err)
+
+	traceID := oteltrace.TraceID{
+		0x01, 0x02, 0x03, 0x04,
+		0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0a, 0x0b, 0x0c,
+		0x0d, 0x0e, 0x0f, 0x10,
+	}
+	spanID := oteltrace.SpanID{
+		0x01, 0x02, 0x03, 0x04,
+		0x05, 0x06, 0x07, 0x08,
+	}
+	spanCtx := oteltrace.NewSpanContext(
+		oteltrace.SpanContextConfig{
+			TraceID:    traceID,
+			SpanID:     spanID,
+			TraceFlags: oteltrace.FlagsSampled,
+		},
+	)
+
+	require.Nil(t, extractTraceHeaders(context.Background()))
+
+	ctx := oteltrace.ContextWithSpanContext(
+		context.Background(),
+		spanCtx,
+	)
+	headers := extractTraceHeaders(ctx)
+	expectedTraceparent := "00-" +
+		traceID.String() +
+		"-" +
+		spanID.String() +
+		"-01"
+	require.Equal(
+		t,
+		expectedTraceparent,
+		headers["traceparent"],
+	)
+
+	eventChan, err := a2aAgent.Run(ctx, &agent.Invocation{
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "test message",
+		},
+	})
+	require.NoError(t, err)
+
+	for range eventChan {
+	}
+
+	require.Equal(
+		t,
+		expectedTraceparent,
+		receivedHeaders.Get("Traceparent"),
+	)
+}
+
 func TestA2AAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 	originalTracer := teletrace.Tracer
 	defer func() {
@@ -1155,6 +1448,8 @@ func TestA2AAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 		}
 	}
 	require.True(t, found, "expected stream trace attribute to be recorded")
+	require.True(t, hasAttr(spans[0].Attributes(), attribute.String(semconvtrace.KeyGenAIAgentName, "remote-agent")))
+	require.True(t, hasAttr(spans[0].Attributes(), attribute.String(semconvtrace.KeyGenAIAgentID, "remote-agent")))
 }
 
 // Helper function to create bool pointer
@@ -1251,6 +1546,17 @@ func TestOptionFunctions(t *testing.T) {
 		WithEnableStreaming(false)(agent2)
 		if agent2.enableStreaming == nil || *agent2.enableStreaming {
 			t.Error("streaming should be disabled")
+		}
+	})
+
+	t.Run("WithBuildMessageHook", func(t *testing.T) {
+		testHook := func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+			return next
+		}
+		agent := &A2AAgent{}
+		WithBuildMessageHook(testHook)(agent)
+		if agent.buildMessageHook == nil {
+			t.Fatal("build message hook not set")
 		}
 	})
 }
@@ -1675,6 +1981,143 @@ func TestA2AAgentRunStreamingPreservesResponseID(t *testing.T) {
 			t.Fatalf("expected aggregated content 'partial response', got %q", finalResponse.Choices[0].Message.Content)
 		}
 	})
+}
+
+func TestA2AAgentRunStreaming_SkipsSyntheticFinalOnTaskError(
+	t *testing.T,
+) {
+	code := "A2A_500"
+	metadata := ia2a.WithResponseErrorMetadata(nil, &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: "task failed",
+		Code:    &code,
+	})
+	sseBody := mustBuildSSEBody(t, []sseEvent{
+		{
+			eventType: protocol.EventStatusUpdate,
+			payload: protocol.TaskStatusUpdateEvent{
+				Kind:      protocol.KindTaskStatusUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Metadata:  metadata,
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateFailed,
+				},
+			},
+		},
+	})
+
+	testClient := newTestStreamClient(t, sseBody)
+	a := &A2AAgent{
+		name:                "test-agent",
+		agentCard:           &server.AgentCard{URL: "http://stream.test/"},
+		eventConverter:      &defaultA2AEventConverter{},
+		a2aMessageConverter: stubInvocationConverter{},
+		streamingBufSize:    4,
+		a2aClient:           testClient,
+	}
+	invocation := &agent.Invocation{
+		InvocationID: "inv-test",
+		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	eventCh, err := a.runStreaming(ctx, invocation)
+	require.NoError(t, err)
+
+	var events []*event.Event
+	for evt := range eventCh {
+		events = append(events, evt)
+	}
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].Response)
+	require.NotNil(t, events[0].Response.Error)
+	require.Equal(t, model.ObjectTypeError, events[0].Response.Object)
+	require.True(t, events[0].Response.Done)
+}
+
+func TestA2AAgent_sendErrorEvent_UsesRunErrorType(t *testing.T) {
+	a := &A2AAgent{name: "remote-agent"}
+	eventCh := make(chan *event.Event, 1)
+	invocation := &agent.Invocation{InvocationID: "inv-test"}
+
+	a.sendErrorEvent(
+		context.Background(),
+		eventCh,
+		invocation,
+		fmt.Errorf("boom"),
+	)
+
+	evt := <-eventCh
+	require.NotNil(t, evt)
+	require.NotNil(t, evt.Response)
+	require.NotNil(t, evt.Response.Error)
+	require.Equal(t, model.ObjectTypeError, evt.Response.Object)
+	require.Equal(t, model.ErrorTypeRunError, evt.Response.Error.Type)
+	require.Equal(t, "boom", evt.Response.Error.Message)
+}
+
+func TestA2AAgent_aggregateEventContent_IgnoresErrorResponses(t *testing.T) {
+	a := &A2AAgent{name: "remote-agent"}
+	builder := &strings.Builder{}
+
+	responseID, hadErr := a.aggregateEventContent(
+		context.Background(),
+		&agent.Invocation{InvocationID: "inv-test"},
+		make(chan *event.Event, 1),
+		&event.Event{
+			Response: &model.Response{
+				Error: &model.ResponseError{Message: "boom"},
+			},
+		},
+		"resp-1",
+		builder,
+	)
+
+	require.Equal(t, "resp-1", responseID)
+	require.False(t, hadErr)
+	require.Equal(t, "", builder.String())
+}
+
+func TestA2AAgent_aggregateEventContent_HandlerError(t *testing.T) {
+	a := &A2AAgent{
+		name: "remote-agent",
+		streamingRespHandler: func(
+			resp *model.Response,
+		) (string, error) {
+			return "", fmt.Errorf("handler failed")
+		},
+	}
+	eventCh := make(chan *event.Event, 1)
+	builder := &strings.Builder{}
+
+	responseID, hadErr := a.aggregateEventContent(
+		context.Background(),
+		&agent.Invocation{InvocationID: "inv-test"},
+		eventCh,
+		&event.Event{
+			Response: &model.Response{
+				ID: "resp-2",
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "ignored"},
+				}},
+			},
+		},
+		"",
+		builder,
+	)
+
+	require.Equal(t, "resp-2", responseID)
+	require.True(t, hadErr)
+	require.Equal(t, "", builder.String())
+
+	evt := <-eventCh
+	require.NotNil(t, evt)
+	require.NotNil(t, evt.Response)
+	require.NotNil(t, evt.Response.Error)
+	require.Equal(t, model.ErrorTypeRunError, evt.Response.Error.Type)
 }
 
 // TestValidateA2ARequestOptions tests validation logic for A2A request options

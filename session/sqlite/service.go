@@ -141,7 +141,7 @@ func NewService(db *sql.DB, options ...ServiceOpt) (*Service, error) {
 		s.startAsyncPersistWorker()
 	}
 
-	if opts.summarizer != nil && opts.asyncSummaryNum > 0 {
+	if isummary.HasSummarizer(opts.summarizer) && opts.asyncSummaryNum > 0 {
 		s.asyncWorker = isummary.NewAsyncSummaryWorker(
 			isummary.AsyncSummaryConfig{
 				Summarizer:        opts.summarizer,

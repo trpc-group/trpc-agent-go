@@ -20,6 +20,7 @@ import (
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	sessionredis "trpc.group/trpc-go/trpc-agent-go/session/redis"
@@ -128,14 +129,14 @@ func newMemoryService(
 	mdl model.Model,
 	opts runOptions,
 ) (memory.Service, error) {
+	backend := resolveMemoryBackendType(opts.MemoryBackend)
+	if backend == memoryBackendFile {
+		return nil, nil
+	}
+
 	ext, err := newAutoMemoryExtractor(mdl, opts)
 	if err != nil {
 		return nil, err
-	}
-
-	backend := strings.ToLower(strings.TrimSpace(opts.MemoryBackend))
-	if backend == "" {
-		backend = memoryBackendInMemory
 	}
 
 	f, ok := registry.LookupMemoryBackend(backend)
@@ -164,6 +165,25 @@ func newMemoryService(
 			),
 		},
 	)
+}
+
+func resolveMemoryBackendType(raw string) string {
+	backend := strings.ToLower(strings.TrimSpace(raw))
+	switch backend {
+	case "":
+		return memoryBackendInMemory
+	case memoryBackendFile:
+		return memoryBackendFile
+	default:
+		return backend
+	}
+}
+
+func newDisabledMemoryBackend(
+	_ registry.MemoryDeps,
+	_ registry.MemoryBackendSpec,
+) (memory.Service, error) {
+	return nil, nil
 }
 
 func newInMemoryMemoryBackend(
@@ -273,6 +293,12 @@ func newSessionSummarizer(
 
 	options := make([]summary.Option, 0, 3)
 	options = append(options, summary.WithName(appName))
+	options = append(
+		options,
+		summary.WithPreSummaryHook(
+			conversation.PreSummaryHook,
+		),
+	)
 	if opts.SessionSummaryMaxWords > 0 {
 		options = append(
 			options,
@@ -320,7 +346,7 @@ func newAutoMemoryExtractor(
 		return nil, errors.New("memory auto requires a model")
 	}
 
-	checks := make([]memextractor.Checker, 0, 2)
+	var checks []memextractor.Checker
 	if opts.MemoryAutoMessageThreshold > 0 {
 		checks = append(
 			checks,
@@ -335,14 +361,9 @@ func newAutoMemoryExtractor(
 			memextractor.CheckTimeInterval(opts.MemoryAutoTimeInterval),
 		)
 	}
-	if len(checks) == 0 {
-		checks = append(
-			checks,
-			memextractor.CheckMessageThreshold(
-				defaultMemoryAutoMessageThreshold,
-			),
-		)
-	}
+	// When no checkers are configured, ShouldExtract always returns
+	// true so extraction runs on every turn. We still validate
+	// MemoryAutoPolicy to catch misconfigurations early.
 
 	policy, err := parseSummaryPolicy(opts.MemoryAutoPolicy)
 	if err != nil {
@@ -350,18 +371,23 @@ func newAutoMemoryExtractor(
 	}
 
 	extOpts := make([]memextractor.Option, 0, 2)
-	switch policy {
-	case summaryPolicyAny:
-		extOpts = append(
-			extOpts,
-			memextractor.WithCheckersAny(checks...),
-		)
-	case summaryPolicyAll:
-		for _, check := range checks {
-			extOpts = append(extOpts, memextractor.WithChecker(check))
+	if len(checks) > 0 {
+		switch policy {
+		case summaryPolicyAny:
+			extOpts = append(
+				extOpts,
+				memextractor.WithCheckersAny(checks...),
+			)
+		case summaryPolicyAll:
+			for _, check := range checks {
+				extOpts = append(
+					extOpts,
+					memextractor.WithChecker(check),
+				)
+			}
+		default:
+			return nil, fmt.Errorf("unsupported memory auto policy: %s", policy)
 		}
-	default:
-		return nil, fmt.Errorf("unsupported memory auto policy: %s", policy)
 	}
 
 	return memextractor.NewExtractor(mdl, extOpts...), nil

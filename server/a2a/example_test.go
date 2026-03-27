@@ -288,7 +288,10 @@ func testAgentCard(t *testing.T, agent agent.Agent, expectedName, expectedDesc, 
 		errorHandler:    defaultErrorHandler,
 	}
 
-	card := buildAgentCard(options)
+	card, err := buildAgentCard(options)
+	if err != nil {
+		t.Fatalf("buildAgentCard() returned error: %v", err)
+	}
 
 	if card.Name != expectedName {
 		t.Errorf("Expected agent name %s, got %s", expectedName, card.Name)

@@ -52,7 +52,7 @@ the prompt up-front, it can dominate your prompt-token budget and even
 exceed the model context window.
 
 For a reproducible, **runtime** token comparison (progressive disclosure
-vs full injection), see `benchmark/anthropic_skills/README.md` and run
+vs full injection), see [trpc-agent-go-benchmark/anthropic_skills/README.md](https://github.com/trpc-group/trpc-agent-go-benchmark/blob/main/anthropic_skills/README.md) and run
 the `token-report` suite described there.
 
 ### Prompt Cache
@@ -94,7 +94,7 @@ To restore the legacy fallback behavior in summary mode:
 `llmagent.WithSkipSkillsFallbackOnSessionSummary(false)`.
 
 To measure the impact in a real tool-using flow, run the
-`benchmark/anthropic_skills` `prompt-cache` suite.
+[trpc-agent-go-benchmark/anthropic_skills](https://github.com/trpc-group/trpc-agent-go-benchmark/tree/main/anthropic_skills) `prompt-cache` suite.
 
 How this relates to `SkillLoadMode` (common pitfall):
 
@@ -245,6 +245,21 @@ agent := llmagent.New(
 )
 ```
 
+`NewFSRepository` can scan multiple roots. A common pattern is one
+shared skills directory plus one user-private skills directory:
+
+```go
+repo, _ := skill.NewFSRepository(
+    "./skills/common",
+    "./skills/users/alice",
+)
+```
+
+If a long-lived process installs, deletes, or renames skills after
+startup, call `repo.Refresh()` after the filesystem update is committed.
+`Refresh()` is meant for repository structure changes, not for every
+request.
+
 Knowledge-only mode:
 
 ```go
@@ -309,6 +324,15 @@ GAIA benchmark demo (skills + file tools):
 
 It includes a dataset downloader script and notes on Python dependencies
 for skills like `whisper` (audio) and `ocr` (images).
+
+Real discovery/install demo (real model + real web/GitHub):
+[examples/skillfind/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillfind/README.md)
+
+It starts with a built-in `skill-find` skill, searches the public web for
+candidate skills, installs a public skill from GitHub into a user-private
+directory, refreshes the repository, and uses the new skill in the same
+conversation. Local execution stays disabled by default and is only
+enabled when you opt in.
 
 SkillLoadMode demo (no API key required):
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
@@ -388,6 +412,8 @@ Behavior:
 - Writes session-scoped `temp:*` keys:
   - `temp:skill:loaded_by_agent:<agent>/<name>` = "1"
   - `temp:skill:docs_by_agent:<agent>/<name>` = "*" or JSON array
+  - `temp:skill:loaded_order_by_agent:<agent>` = JSON array of touched
+    skill names, from oldest to newest
   - Legacy keys (`temp:skill:loaded:<name>`, `temp:skill:docs:<name>`) are
     still supported and migrated when seen.
 - Multi-agent note: sub-agents typically share the same Session. With
@@ -493,7 +519,8 @@ Notes:
 
 - `SkillLoadModeTurn` (default) clears the agent-scoped `temp:skill:*`
   keys (for example, `temp:skill:loaded_by_agent:*` /
-  `temp:skill:docs_by_agent:*`) at the start of the **next**
+  `temp:skill:docs_by_agent:*` /
+  `temp:skill:loaded_order_by_agent:*`) at the start of the **next**
   `Runner.Run` call, so the loaded list is usually non-empty only within
   the current turn/tool loop.
 - `SkillLoadModeSession` keeps them across turns, so the loaded list can
@@ -507,8 +534,9 @@ the built-in option:
 - `llmagent.WithMaxLoadedSkills(N)`
 
 This enforces the cap **before every model request** by clearing older
-`temp:skill:*` state keys, based on recent `skill_load` /
-`skill_select_docs` tool responses in the session.
+`temp:skill:*` state keys. Recent skill touches are tracked in session
+state and updated by `skill_load` / `skill_select_docs`, so the cap does
+not depend on alphabetical fallback or surviving tool-result history.
 
 Example:
 
@@ -890,6 +918,8 @@ Behavior:
 - Updates doc selection state for the current agent:
   - `temp:skill:docs_by_agent:<agent>/<name>` = `*` for include all
   - `temp:skill:docs_by_agent:<agent>/<name>` = JSON array for explicit list
+  - Also refreshes `temp:skill:loaded_order_by_agent:<agent>` so
+    `WithMaxLoadedSkills(N)` treats doc selection as a recent touch
   - Legacy key `temp:skill:docs:<name>` is still supported and migrated.
 
 ### `skill_list_docs`
@@ -1244,5 +1274,7 @@ Common spans:
 - This repo:
   - Interactive demo: [examples/skillrun/main.go]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
+  - Real discovery/install demo: [examples/skillfind/README.md]
+    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillfind/README.md)
   - Sample skill: [examples/skillrun/skills/python_math/SKILL.md]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)

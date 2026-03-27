@@ -18,6 +18,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
@@ -68,6 +69,8 @@ const (
 	// This is used to identify if a session belongs to a Swarm team.
 	SwarmTeamNameKey = "swarm_team_name"
 )
+
+const swarmTraceNodeIDKey = "__swarm_trace_node_id__"
 
 var (
 	errEmptyTeamName  = errors.New("team name is empty")
@@ -206,6 +209,12 @@ func (t *Team) runSwarm(
 	// Only do this if cross-request transfer is enabled.
 	if t.crossRequestTransfer && invocation.Session != nil {
 		invocation.Session.SetState(SwarmTeamNameKey, []byte(t.name))
+		if invocation.RunOptions.ExecutionTraceEnabled {
+			traceNodeID := agent.InvocationTraceNodeID(invocation)
+			if traceNodeID != "" {
+				invocation.Session.SetState(swarmTraceNodeIDKey, []byte(traceNodeID))
+			}
+		}
 	}
 
 	var startAgent agent.Agent
@@ -227,9 +236,25 @@ func (t *Team) runSwarm(
 	}
 
 	ensureSwarmRuntime(invocation, t.swarm)
-
+	memberPathAllocator := istructure.NewPathAllocator(agent.InvocationTraceNodeID(invocation))
+	var memberNodeID string
+	startAgentName := startAgent.Info().Name
+	t.mu.RLock()
+	for _, member := range t.members {
+		nextNodeID := memberPathAllocator.Next(member.Info().Name)
+		if member != nil && member.Info().Name == startAgentName {
+			memberNodeID = nextNodeID
+			break
+		}
+	}
+	t.mu.RUnlock()
+	if memberNodeID == "" {
+		memberNodeID = istructure.JoinNodeID(agent.InvocationTraceNodeID(invocation), startAgent.Info().Name)
+	}
 	child := invocation.Clone(
 		agent.WithInvocationAgent(startAgent),
+		agent.WithInvocationTraceNodeID(memberNodeID),
+		agent.WithInvocationEntryPredecessorStepIDs(agent.NextExecutionTracePredecessors(invocation)),
 	)
 	childCtx := agent.NewInvocationContext(ctx, child)
 

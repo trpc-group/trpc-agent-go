@@ -11,12 +11,14 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -36,9 +38,41 @@ func TestNewInvocation(t *testing.T) {
 	require.Equal(t, "Hello", inv.Message.Content)
 }
 
+func TestNewInvocation_WarnsOnMessageWithEmptyRole(t *testing.T) {
+	original := agentlog.Default
+	logger := &testWarnLogger{}
+	agentlog.Default = logger
+	defer func() {
+		agentlog.Default = original
+	}()
+
+	inv := NewInvocation(
+		WithInvocationMessage(model.Message{Content: "Hello"}),
+	)
+
+	require.NotNil(t, inv)
+	require.Equal(t, 1, logger.warnfCalls)
+	require.Equal(t, model.RoleUser, inv.Message.Role)
+}
+
 type mockAgent struct {
 	name string
 }
+
+type testWarnLogger struct {
+	warnfCalls int
+}
+
+func (l *testWarnLogger) Debug(args ...any)                 {}
+func (l *testWarnLogger) Debugf(format string, args ...any) {}
+func (l *testWarnLogger) Info(args ...any)                  {}
+func (l *testWarnLogger) Infof(format string, args ...any)  {}
+func (l *testWarnLogger) Warn(args ...any)                  {}
+func (l *testWarnLogger) Warnf(format string, args ...any)  { l.warnfCalls++ }
+func (l *testWarnLogger) Error(args ...any)                 {}
+func (l *testWarnLogger) Errorf(format string, args ...any) {}
+func (l *testWarnLogger) Fatal(args ...any)                 {}
+func (l *testWarnLogger) Fatalf(format string, args ...any) {}
 
 func (a *mockAgent) Run(ctx context.Context, invocation *Invocation) (<-chan *event.Event, error) {
 	return nil, nil
@@ -694,6 +728,38 @@ func TestWithGlobalInstruction(t *testing.T) {
 	require.Equal(t, testRunGlobalInstruction, opts.GlobalInstruction)
 }
 
+func TestWithStructuredOutputJSON(t *testing.T) {
+	type MyStruct struct {
+		Field string `json:"field"`
+	}
+
+	opts := &RunOptions{}
+	WithStructuredOutputJSON(new(MyStruct), true, "test description")(opts)
+
+	require.NotNil(t, opts.StructuredOutput)
+	require.Equal(t, model.StructuredOutputJSONSchema, opts.StructuredOutput.Type)
+	require.NotNil(t, opts.StructuredOutput.JSONSchema)
+	require.Equal(t, "MyStruct", opts.StructuredOutput.JSONSchema.Name)
+	require.True(t, opts.StructuredOutput.JSONSchema.Strict)
+	require.Equal(t, "test description", opts.StructuredOutput.JSONSchema.Description)
+	require.Equal(t, reflect.TypeOf((*MyStruct)(nil)), opts.StructuredOutputType)
+}
+
+func TestWithStructuredOutputJSONSchema(t *testing.T) {
+	schema := map[string]any{"type": "object"}
+
+	opts := &RunOptions{}
+	WithStructuredOutputJSONSchema("", schema, true, "test description")(opts)
+
+	require.NotNil(t, opts.StructuredOutput)
+	require.Equal(t, model.StructuredOutputJSONSchema, opts.StructuredOutput.Type)
+	require.NotNil(t, opts.StructuredOutput.JSONSchema)
+	require.Equal(t, "output", opts.StructuredOutput.JSONSchema.Name)
+	require.True(t, opts.StructuredOutput.JSONSchema.Strict)
+	require.Equal(t, "test description", opts.StructuredOutput.JSONSchema.Description)
+	require.Nil(t, opts.StructuredOutputType)
+}
+
 func TestWithModel_Integration(t *testing.T) {
 	mockModel := &mockModel{name: "custom-model"}
 
@@ -741,6 +807,36 @@ func TestWithGlobalInstruction_Integration(t *testing.T) {
 		testRunGlobalInstruction,
 		inv.RunOptions.GlobalInstruction,
 	)
+}
+
+func TestInvocationClonePreservesRunStructuredOutputButDropsInvocationStructuredOutput(t *testing.T) {
+	type MyStruct struct {
+		Field string `json:"field"`
+	}
+
+	structuredOutput := &model.StructuredOutput{
+		Type: model.StructuredOutputJSONSchema,
+		JSONSchema: &model.JSONSchemaConfig{
+			Name:   "MyStruct",
+			Schema: map[string]any{"type": "object"},
+		},
+	}
+	inv := &Invocation{
+		RunOptions: RunOptions{
+			StructuredOutput:     structuredOutput,
+			StructuredOutputType: reflect.TypeOf((*MyStruct)(nil)),
+		},
+		StructuredOutput:     structuredOutput,
+		StructuredOutputType: reflect.TypeOf((*MyStruct)(nil)),
+	}
+
+	cloned := inv.Clone()
+
+	require.NotNil(t, cloned)
+	require.Equal(t, structuredOutput, cloned.RunOptions.StructuredOutput)
+	require.Equal(t, reflect.TypeOf((*MyStruct)(nil)), cloned.RunOptions.StructuredOutputType)
+	require.Nil(t, cloned.StructuredOutput)
+	require.Nil(t, cloned.StructuredOutputType)
 }
 
 func TestInvocation_IncLLMCallCount_NoLimitOrNil(t *testing.T) {

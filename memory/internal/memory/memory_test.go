@@ -808,6 +808,23 @@ func TestBuildSearchTokens_Duplicates(t *testing.T) {
 	})
 }
 
+func TestBuildWeightedQueryTokens_AddsCJKTrigramFallback(t *testing.T) {
+	tokens := buildWeightedQueryTokens("甲乙丙丁")
+	weights := make(map[string]float64, len(tokens))
+	hasFallback := false
+	for _, token := range tokens {
+		weights[token.text] = token.weight
+		if token.weight < queryTokenWeight {
+			hasFallback = true
+		}
+	}
+
+	assert.Contains(t, weights, "甲乙丙")
+	assert.Contains(t, weights, "乙丙丁")
+	assert.True(t, hasFallback)
+	assert.Equal(t, cjkTrigramTokenWeight, weights["甲乙丙"])
+}
+
 func TestMatchMemoryEntry_EmptyTokensWithTopics(t *testing.T) {
 	entry := &memory.Entry{
 		Memory: &memory.Memory{
@@ -864,7 +881,7 @@ func TestBuildSearchTokens_MixedContent(t *testing.T) {
 	// Test with mixed CJK and English
 	result := BuildSearchTokens("hello世界test")
 	assert.NotNil(t, result)
-	// Should have both English words and CJK bigrams
+	// Should have both English words and CJK lexical tokens.
 	assert.NotEmpty(t, result)
 }
 
@@ -1042,14 +1059,14 @@ func TestGenerateMemoryID(t *testing.T) {
 
 func TestApplyAutoModeDefaults(t *testing.T) {
 	t.Run("nil enabledTools", func(t *testing.T) {
-		userExplicitlySet := make(map[string]bool)
+		userExplicitlySet := make(map[string]struct{})
 		ApplyAutoModeDefaults(nil, userExplicitlySet)
 		// Should not panic
 	})
 
 	t.Run("empty maps", func(t *testing.T) {
 		enabledTools := make(map[string]struct{})
-		userExplicitlySet := make(map[string]bool)
+		userExplicitlySet := make(map[string]struct{})
 
 		ApplyAutoModeDefaults(enabledTools, userExplicitlySet)
 
@@ -1071,9 +1088,9 @@ func TestApplyAutoModeDefaults(t *testing.T) {
 			memory.SearchToolName: {},
 			memory.LoadToolName:   {},
 		}
-		userExplicitlySet := map[string]bool{
-			memory.SearchToolName: true,
-			memory.LoadToolName:   true,
+		userExplicitlySet := map[string]struct{}{
+			memory.SearchToolName: {},
+			memory.LoadToolName:   {},
 		}
 
 		ApplyAutoModeDefaults(enabledTools, userExplicitlySet)
@@ -1109,7 +1126,7 @@ func TestBuildToolsList(t *testing.T) {
 		}
 		cachedTools := make(map[string]tool.Tool)
 
-		tools := BuildToolsList(nil, toolCreators, enabledTools, cachedTools)
+		tools := BuildToolsList(nil, toolCreators, enabledTools, nil, nil, cachedTools)
 
 		// Should only include enabled tools in agentic mode.
 		assert.Len(t, tools, 1)
@@ -1129,11 +1146,29 @@ func TestBuildToolsList(t *testing.T) {
 			return &mockTool{name: memory.LoadToolName}
 		}
 
-		tools := BuildToolsList(ext, toolCreators, enabledTools, cachedTools)
+		tools := BuildToolsList(ext, toolCreators, enabledTools, nil, nil, cachedTools)
 
 		// In auto mode, only Search should be exposed.
 		assert.Len(t, tools, 1)
 		assert.Equal(t, memory.SearchToolName, tools[0].(*mockTool).name)
+	})
+
+	t.Run("auto mode explicit write exposure", func(t *testing.T) {
+		ext := &mockExtractorForMemoryTest{}
+		enabledTools := map[string]struct{}{
+			memory.AddToolName:    {},
+			memory.SearchToolName: {},
+		}
+		toolExposed := map[string]struct{}{
+			memory.AddToolName: {},
+		}
+		cachedTools := make(map[string]tool.Tool)
+
+		tools := BuildToolsList(ext, toolCreators, enabledTools, toolExposed, nil, cachedTools)
+
+		assert.Len(t, tools, 2)
+		assert.Equal(t, memory.AddToolName, tools[0].(*mockTool).name)
+		assert.Equal(t, memory.SearchToolName, tools[1].(*mockTool).name)
 	})
 
 	t.Run("caching", func(t *testing.T) {
@@ -1143,11 +1178,11 @@ func TestBuildToolsList(t *testing.T) {
 		}
 
 		// First call.
-		tools1 := BuildToolsList(nil, toolCreators, enabledTools, cachedTools)
+		tools1 := BuildToolsList(nil, toolCreators, enabledTools, nil, nil, cachedTools)
 		assert.Len(t, tools1, 1)
 
 		// Second call should reuse cached tool.
-		tools2 := BuildToolsList(nil, toolCreators, enabledTools, cachedTools)
+		tools2 := BuildToolsList(nil, toolCreators, enabledTools, nil, nil, cachedTools)
 		assert.Len(t, tools2, 1)
 		assert.Same(t, tools1[0], tools2[0])
 	})
@@ -1163,7 +1198,7 @@ func TestBuildToolsList(t *testing.T) {
 		}
 		cachedTools := make(map[string]tool.Tool)
 
-		tools := BuildToolsList(nil, toolCreators, enabledTools, cachedTools)
+		tools := BuildToolsList(nil, toolCreators, enabledTools, nil, nil, cachedTools)
 
 		// Should be sorted alphabetically
 		assert.Len(t, tools, 2)
@@ -1209,8 +1244,14 @@ func TestShouldIncludeTool(t *testing.T) {
 			memory.AddToolName: {},
 		}
 
-		assert.True(t, shouldIncludeTool(memory.AddToolName, nil, enabledTools))
-		assert.False(t, shouldIncludeTool(memory.SearchToolName, nil, enabledTools))
+		assert.True(t, shouldIncludeTool(memory.AddToolName, nil, enabledTools, nil, nil))
+		assert.True(t, shouldIncludeTool(memory.AddToolName, nil, enabledTools, map[string]struct{}{
+			memory.AddToolName: {},
+		}, nil))
+		assert.False(t, shouldIncludeTool(memory.SearchToolName, nil, enabledTools, nil, nil))
+		assert.False(t, shouldIncludeTool(memory.AddToolName, nil, enabledTools, nil, map[string]struct{}{
+			memory.AddToolName: {},
+		}))
 	})
 
 	t.Run("auto mode", func(t *testing.T) {
@@ -1221,38 +1262,40 @@ func TestShouldIncludeTool(t *testing.T) {
 		}
 
 		// Search should be included (exposed in auto mode).
-		assert.True(t, shouldIncludeTool(memory.SearchToolName, ext, enabledTools))
+		assert.True(t, shouldIncludeTool(memory.SearchToolName, ext, enabledTools, nil, nil))
 		// Add should not be included (not exposed in auto mode).
-		assert.False(t, shouldIncludeTool(memory.AddToolName, ext, enabledTools))
+		assert.False(t, shouldIncludeTool(memory.AddToolName, ext, enabledTools, nil, nil))
+		// Explicit exposure should allow Add in auto mode.
+		assert.True(t, shouldIncludeTool(memory.AddToolName, ext, enabledTools, map[string]struct{}{
+			memory.AddToolName: {},
+		}, nil))
+		// Explicit hidden override should suppress default Search exposure.
+		assert.False(t, shouldIncludeTool(memory.SearchToolName, ext, enabledTools, nil, map[string]struct{}{
+			memory.SearchToolName: {},
+		}))
 	})
 }
 
-func TestScoreMemoryEntry_FallbackTopicMatch(t *testing.T) {
-	// When tokens are empty (e.g. single char query), fallback to substring
-	// matching. This test covers the topic match branch in fallback.
+func TestScoreMemoryEntry_PunctuationOnlyQueryDoesNotMatchTopic(t *testing.T) {
 	entry := &memory.Entry{
 		Memory: &memory.Memory{
 			Memory: "Some unrelated content",
 			Topics: []string{"special!topic"},
 		},
 	}
-
-	// "!" produces no tokens, so fallback is used.
-	// "special!" should match the topic via substring.
 	score := ScoreMemoryEntry(entry, "!")
-	assert.Equal(t, 0.5, score)
+	assert.Zero(t, score)
 }
 
-func TestScoreMemoryEntry_FallbackContentMatch(t *testing.T) {
+func TestScoreMemoryEntry_PunctuationOnlyQueryDoesNotMatchContent(t *testing.T) {
 	entry := &memory.Entry{
 		Memory: &memory.Memory{
 			Memory: "Test! content",
 			Topics: []string{"other"},
 		},
 	}
-	// "!" produces no tokens, fallback matches content substring.
 	score := ScoreMemoryEntry(entry, "!")
-	assert.Equal(t, 0.5, score)
+	assert.Zero(t, score)
 }
 
 func TestScoreMemoryEntry_FallbackNoMatch(t *testing.T) {
@@ -1276,7 +1319,8 @@ func TestScoreMemoryEntry_PartialTokenMatch(t *testing.T) {
 	}
 	// "coffee tea" -> tokens ["coffee", "tea"], only "coffee" matches.
 	score := ScoreMemoryEntry(entry, "coffee tea")
-	assert.Equal(t, 0.5, score)
+	assert.Greater(t, score, 0.34)
+	assert.Less(t, score, 0.45)
 }
 
 func TestScoreMemoryEntry_TopicOnlyMatch(t *testing.T) {
@@ -1289,7 +1333,30 @@ func TestScoreMemoryEntry_TopicOnlyMatch(t *testing.T) {
 	// "preferences xyz" -> tokens ["preferences", "xyz"],
 	// only "preferences" matches (in topics).
 	score := ScoreMemoryEntry(entry, "preferences xyz")
-	assert.Equal(t, 0.5, score)
+	assert.Greater(t, score, 0.3)
+	assert.Less(t, score, 0.4)
+}
+
+func TestScoreMemoryEntry_DoesNotMatchEnglishSubstrings(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "We concatenate strings for logging",
+		},
+	}
+
+	score := ScoreMemoryEntry(entry, "cat")
+	assert.Zero(t, score)
+}
+
+func TestScoreMemoryEntry_MatchesRawSpecialIdentifier(t *testing.T) {
+	entry := &memory.Entry{
+		Memory: &memory.Memory{
+			Memory: "We migrated the parser to C++ last week",
+		},
+	}
+
+	score := ScoreMemoryEntry(entry, "C++")
+	assert.Equal(t, exactPhraseFallbackScore, score)
 }
 
 func TestSearchMemoryEntries_RanksByScoreThenRecency(t *testing.T) {
@@ -1331,8 +1398,57 @@ func TestSearchMemoryEntries_RanksByScoreThenRecency(t *testing.T) {
 	})
 	require.Len(t, results, 3)
 	assert.Equal(t, "best-older", results[0].ID)
-	assert.Equal(t, "partial-topic-newest", results[1].ID)
-	assert.Equal(t, "partial-newer", results[2].ID)
+	assert.Equal(t, "partial-newer", results[1].ID)
+	assert.Equal(t, "partial-topic-newest", results[2].ID)
+}
+
+func TestSearchEntries_OrderByEventTimeKeepsHigherScoreFirst(t *testing.T) {
+	base := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	early := base.Add(24 * time.Hour)
+	late := base.Add(72 * time.Hour)
+
+	entries := []*memory.Entry{
+		newSearchTestEntry("earlier-weaker", "coffee", nil, base, base),
+		newSearchTestEntry(
+			"later-stronger",
+			"coffee tea",
+			nil,
+			base.Add(time.Minute),
+			base.Add(time.Minute),
+		),
+	}
+	entries[0].Memory.Kind = memory.KindEpisode
+	entries[0].Memory.EventTime = &early
+	entries[1].Memory.Kind = memory.KindEpisode
+	entries[1].Memory.EventTime = &late
+
+	results := SearchEntries(entries, memory.SearchOptions{
+		Query:            "coffee tea",
+		OrderByEventTime: true,
+		MaxResults:       10,
+	}, 0.3, 10)
+
+	require.Len(t, results, 2)
+	assert.Equal(t, "later-stronger", results[0].ID)
+	assert.Equal(t, "earlier-weaker", results[1].ID)
+}
+
+func TestSearchEntries_PrefersRarerPartialMatches(t *testing.T) {
+	now := time.Now().UTC()
+	entries := []*memory.Entry{
+		newSearchTestEntry("generic-1", "Caroline likes coffee", nil, now, now),
+		newSearchTestEntry("generic-2", "Caroline likes hiking", nil, now, now),
+		newSearchTestEntry("generic-3", "Caroline likes reading", nil, now, now),
+		newSearchTestEntry("rare", "Career planning includes counseling", nil, now, now),
+	}
+
+	results := SearchMemoryEntries(entries, "Caroline career", SearchOptions{
+		MinScore:   0.3,
+		MaxResults: 10,
+	})
+
+	require.Len(t, results, 4)
+	assert.Equal(t, "rare", results[0].ID)
 }
 
 func TestSearchMemoryEntries_LimitsAndBreaksTiesByID(t *testing.T) {
@@ -1440,6 +1556,125 @@ func TestSearchEntries_KindFallbackMergesResults(t *testing.T) {
 	assert.Equal(t, "fact-1", results[3].ID)
 }
 
+func TestSortSearchResults_AppliesAllTieBreakers(t *testing.T) {
+	base := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	sameUpdated := base.Add(10 * time.Minute)
+	sameCreated := base.Add(5 * time.Minute)
+	earlierEvent := base.Add(24 * time.Hour)
+	laterEvent := base.Add(48 * time.Hour)
+
+	makeEntry := func(
+		id string,
+		score float64,
+		eventTime *time.Time,
+		createdAt time.Time,
+		updatedAt time.Time,
+	) *memory.Entry {
+		entry := newSearchTestEntry(
+			id,
+			id,
+			nil,
+			createdAt,
+			updatedAt,
+		)
+		entry.Score = score
+		entry.Memory.EventTime = eventTime
+		return entry
+	}
+
+	results := []*memory.Entry{
+		nil,
+		makeEntry("id-b", 0.30, nil, sameCreated, sameUpdated),
+		makeEntry("created-older", 0.40, nil, base, sameUpdated),
+		makeEntry("updated-older", 0.50, nil, base, base),
+		makeEntry("event-late", 0.90, &laterEvent, base, base),
+		makeEntry("updated-newer", 0.50, nil, base, base.Add(time.Minute)),
+		makeEntry("event-early", 0.90, &earlierEvent, base, base),
+		makeEntry("created-newer", 0.40, nil, sameCreated, sameUpdated),
+		makeEntry("id-a", 0.30, nil, sameCreated, sameUpdated),
+	}
+
+	SortSearchResults(results, true)
+
+	require.Len(t, results, 9)
+	assert.Equal(t, "event-early", results[0].ID)
+	assert.Equal(t, "event-late", results[1].ID)
+	assert.Equal(t, "updated-newer", results[2].ID)
+	assert.Equal(t, "updated-older", results[3].ID)
+	assert.Equal(t, "created-newer", results[4].ID)
+	assert.Equal(t, "created-older", results[5].ID)
+	assert.Equal(t, "id-a", results[6].ID)
+	assert.Equal(t, "id-b", results[7].ID)
+	assert.Nil(t, results[8])
+}
+
+func TestSortSearchResultsWithKindPriority_PrefersRequestedKind(t *testing.T) {
+	base := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	makeEntry := func(
+		id string,
+		kind memory.Kind,
+		score float64,
+		updatedAt time.Time,
+	) *memory.Entry {
+		entry := newSearchTestEntry(id, id, nil, base, updatedAt)
+		entry.Memory.Kind = kind
+		entry.Score = score
+		return entry
+	}
+
+	results := []*memory.Entry{
+		makeEntry("fact-high", memory.KindFact, 0.95, base),
+		makeEntry("episode-mid", memory.KindEpisode, 0.70, base),
+		makeEntry("episode-high", memory.KindEpisode, 0.90, base.Add(time.Minute)),
+	}
+
+	SortSearchResultsWithKindPriority(results, memory.KindEpisode, false)
+
+	require.Len(t, results, 3)
+	assert.Equal(t, "episode-high", results[0].ID)
+	assert.Equal(t, "episode-mid", results[1].ID)
+	assert.Equal(t, "fact-high", results[2].ID)
+}
+
+func TestMergeHybridResults_UsesDefaultKAndSkipsInvalidEntries(t *testing.T) {
+	base := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	primary := []*memory.Entry{
+		nil,
+		newSearchTestEntry("mem-1", "vector", nil, base, base),
+		{ID: "", Memory: &memory.Memory{Memory: "invalid"}},
+		newSearchTestEntry(
+			"mem-2",
+			"vector-only",
+			nil,
+			base.Add(time.Minute),
+			base.Add(time.Minute),
+		),
+	}
+	secondary := []*memory.Entry{
+		newSearchTestEntry(
+			"mem-3",
+			"keyword-only",
+			nil,
+			base.Add(2*time.Minute),
+			base.Add(2*time.Minute),
+		),
+		newSearchTestEntry(
+			"mem-1",
+			"hybrid",
+			nil,
+			base.Add(3*time.Minute),
+			base.Add(3*time.Minute),
+		),
+	}
+
+	results := MergeHybridResults(primary, secondary, 0, 2)
+
+	require.Len(t, results, 2)
+	assert.Equal(t, "mem-1", results[0].ID)
+	assert.Equal(t, "mem-3", results[1].ID)
+	assert.Greater(t, results[0].Score, results[1].Score)
+}
+
 func TestIsPunctToken(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1467,18 +1702,23 @@ func TestShouldIncludeAutoMemoryTool(t *testing.T) {
 		name         string
 		toolName     string
 		enabledTools map[string]struct{}
+		exposedTools map[string]struct{}
+		hiddenTools  map[string]struct{}
 		expected     bool
 	}{
-		{"search enabled", memory.SearchToolName, map[string]struct{}{memory.SearchToolName: {}}, true},
-		{"search disabled", memory.SearchToolName, map[string]struct{}{}, false},
-		{"load enabled", memory.LoadToolName, map[string]struct{}{memory.LoadToolName: {}}, true},
-		{"load disabled", memory.LoadToolName, map[string]struct{}{}, false},
-		{"non-exposed tool", memory.AddToolName, map[string]struct{}{memory.AddToolName: {}}, false},
+		{"search enabled", memory.SearchToolName, map[string]struct{}{memory.SearchToolName: {}}, nil, nil, true},
+		{"search hidden override", memory.SearchToolName, map[string]struct{}{memory.SearchToolName: {}}, nil, map[string]struct{}{memory.SearchToolName: {}}, false},
+		{"search disabled", memory.SearchToolName, map[string]struct{}{}, nil, nil, false},
+		{"load enabled", memory.LoadToolName, map[string]struct{}{memory.LoadToolName: {}}, nil, nil, true},
+		{"load disabled", memory.LoadToolName, map[string]struct{}{}, nil, nil, false},
+		{"non-exposed tool", memory.AddToolName, map[string]struct{}{memory.AddToolName: {}}, nil, nil, false},
+		{"explicitly exposed tool", memory.AddToolName, map[string]struct{}{memory.AddToolName: {}}, map[string]struct{}{memory.AddToolName: {}}, nil, true},
+		{"explicit exposure still needs enabled tool", memory.AddToolName, map[string]struct{}{}, map[string]struct{}{memory.AddToolName: {}}, nil, false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := shouldIncludeAutoMemoryTool(tt.toolName, tt.enabledTools)
+			result := shouldIncludeAutoMemoryTool(tt.toolName, tt.enabledTools, tt.exposedTools, tt.hiddenTools)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1512,16 +1752,13 @@ func TestBuildSearchTokens_SegmenterError(t *testing.T) {
 		segErr = errors.New("mock error")
 	})
 
-	// CJK query triggers getSegmenter, which returns error
-	// -> nil result.
 	result := BuildSearchTokens("中文测试")
-	assert.Nil(t, result)
+	assert.Equal(t, []string{"中文测试"}, result)
 }
 
 func TestBuildSearchTokens_CJKAllStopwords(t *testing.T) {
-	// CJK input where all tokens are stopwords -> toks is empty -> returns nil.
 	result := BuildSearchTokens("的了是在")
-	assert.Nil(t, result)
+	assert.Empty(t, result)
 }
 
 func newSearchTestEntry(

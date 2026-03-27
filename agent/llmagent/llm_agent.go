@@ -32,14 +32,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
+	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 // localruntimeFallback returns a simple local workspace executor used when
@@ -152,9 +153,17 @@ func New(name string, opts ...Option) *LLMAgent {
 	}
 
 	// Add output response processor if output_key or output_schema is configured or structured output is requested.
-	if options.OutputKey != "" || options.OutputSchema != nil || options.StructuredOutput != nil {
+	if hasStaticOutputResponseProcessor(&options) {
 		orp := processor.NewOutputResponseProcessor(options.OutputKey, options.OutputSchema)
 		responseProcessors = append(responseProcessors, orp)
+	} else {
+		responseProcessors = append(
+			responseProcessors,
+			processor.NewConditionalResponseProcessor(
+				hasInvocationStructuredOutput,
+				processor.NewOutputResponseProcessor("", nil),
+			),
+		)
 	}
 
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(options.EnableParallelTools, options.ToolCallbacks)
@@ -206,10 +215,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	}
 
 	// 3. Instruction processor - adds instruction content and system prompt.
-	if options.Instruction != "" || options.GlobalInstruction != "" ||
-		len(options.ModelInstructions) > 0 ||
-		len(options.ModelGlobalInstructions) > 0 ||
-		(options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil) {
+	if hasStaticInstructionProcessor(options) {
 		instructionOpts := []processor.InstructionRequestProcessorOption{
 			processor.WithOutputSchema(options.OutputSchema),
 		}
@@ -233,6 +239,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			instructionOpts...,
 		)
 		requestProcessors = append(requestProcessors, instructionProcessor)
+	} else {
+		requestProcessors = append(
+			requestProcessors,
+			processor.NewConditionalRequestProcessor(
+				hasInvocationStructuredOutput,
+				processor.NewInstructionRequestProcessor("", ""),
+			),
+		)
 	}
 
 	// 4. Identity processor - sets agent identity.
@@ -293,7 +307,29 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		requestProcessors = append(requestProcessors, skillsProcessor)
 	}
 
-	// 6. Content processor - appends conversation/context history.
+	// 6. Workspace exec processor - injects executor/workspace guidance
+	// whenever workspace_exec is registered, even without a skills repo.
+	if executorSupportsWorkspaceExec(options) {
+		var workspaceOpts []processor.WorkspaceExecRequestProcessorOption
+		if executorSupportsWorkspaceExecSessions(options) {
+			workspaceOpts = append(
+				workspaceOpts,
+				processor.WithWorkspaceExecSessionsEnabled(),
+			)
+		}
+		if options.skillsRepository != nil {
+			workspaceOpts = append(
+				workspaceOpts,
+				processor.WithWorkspaceExecSkillsRepo(),
+			)
+		}
+		requestProcessors = append(
+			requestProcessors,
+			processor.NewWorkspaceExecRequestProcessor(workspaceOpts...),
+		)
+	}
+
+	// 7. Content processor - appends conversation/context history.
 	contentOpts := []processor.ContentOption{
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
@@ -314,14 +350,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	contentProcessor := processor.NewContentRequestProcessor(contentOpts...)
 	requestProcessors = append(requestProcessors, contentProcessor)
 
-	// 7. Post-tool processor - injects dynamic prompt after tool results.
+	// 8. Post-tool processor - injects dynamic prompt after tool results.
 	requestProcessors = appendPostToolProcessor(options, requestProcessors)
 
-	// 8. Skills tool result processor - materializes loaded skill content
+	// 9. Skills tool result processor - materializes loaded skill content
 	// into tool result messages.
 	requestProcessors = appendSkillsToolResultProcessor(options, requestProcessors)
 
-	// 9. Time processor - adds current time information if enabled.
+	// 10. Time processor - adds current time information if enabled.
 	// Moved after content processor to avoid invalidating system message cache.
 	// Time information changes frequently, so placing it last allows previous
 	// stable content (instructions, identity, skills, history) to be cached.
@@ -330,17 +366,34 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	return requestProcessors
 }
 
+func hasStaticInstructionProcessor(options *Options) bool {
+	return options.Instruction != "" ||
+		options.GlobalInstruction != "" ||
+		len(options.ModelInstructions) > 0 ||
+		len(options.ModelGlobalInstructions) > 0 ||
+		options.OutputSchema != nil ||
+		(options.StructuredOutput != nil && options.StructuredOutput.JSONSchema != nil)
+}
+
+func hasStaticOutputResponseProcessor(options *Options) bool {
+	return options.OutputKey != "" || options.OutputSchema != nil || options.StructuredOutput != nil
+}
+
+func hasInvocationStructuredOutput(ctx context.Context, invocation *agent.Invocation) bool {
+	if invocation == nil {
+		return false
+	}
+	return invocation.StructuredOutput != nil || invocation.StructuredOutputType != nil
+}
+
 func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
-	var postToolOpts []processor.PostToolOption
 	if options.postToolPromptEnabled != nil &&
 		!*options.postToolPromptEnabled {
-		// PostToolRequestProcessor treats an empty prompt as "disabled".
-		// Keep the processor registered, but skip prompt injection.
-		postToolOpts = append(
-			postToolOpts,
-			processor.WithPostToolPrompt(""),
-		)
-	} else if options.PostToolPrompt != "" {
+		return requestProcessors
+	}
+
+	var postToolOpts []processor.PostToolOption
+	if options.PostToolPrompt != "" {
 		postToolOpts = append(
 			postToolOpts,
 			processor.WithPostToolPrompt(options.PostToolPrompt),
@@ -446,7 +499,22 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 		allTools, userToolNames, options,
 	)
 	allTools = appendKnowledgeTools(allTools, options)
-	allTools = appendSkillTools(allTools, options)
+	var runTool *toolskill.RunTool
+	var workspaceRegistry *codeexecutor.WorkspaceRegistry
+	if options.skillsRepository != nil {
+		if options.codeExecutor != nil {
+			workspaceRegistry = buildWorkspaceRegistry()
+		}
+		runTool = buildSkillRunTool(options, workspaceRegistry)
+	} else if executorSupportsWorkspaceExec(options) {
+		workspaceRegistry = buildWorkspaceRegistry()
+	}
+	allTools = appendWorkspaceExecTool(
+		allTools,
+		options,
+		workspaceRegistry,
+	)
+	allTools = appendSkillTools(allTools, options, runTool)
 	return allTools, userToolNames
 }
 
@@ -511,6 +579,7 @@ func appendKnowledgeTools(
 func appendSkillTools(
 	allTools []tool.Tool,
 	options *Options,
+	runTool *toolskill.RunTool,
 ) []tool.Tool {
 	if options.skillsRepository == nil {
 		return allTools
@@ -539,7 +608,12 @@ func appendSkillTools(
 		return allTools
 	}
 
-	runTool := buildSkillRunTool(options)
+	if runTool == nil {
+		runTool = buildSkillRunTool(
+			options,
+			buildWorkspaceRegistry(),
+		)
+	}
 	if skillFlags.Run {
 		allTools = append(allTools, runTool)
 	}
@@ -575,13 +649,47 @@ func appendSkillTools(
 	return allTools
 }
 
-func buildSkillRunTool(options *Options) *toolskill.RunTool {
+func appendWorkspaceExecTool(
+	allTools []tool.Tool,
+	options *Options,
+	reg *codeexecutor.WorkspaceRegistry,
+) []tool.Tool {
+	if !executorSupportsWorkspaceExec(options) {
+		return allTools
+	}
+	execTool := toolworkspaceexec.NewExecTool(
+		options.codeExecutor,
+		toolworkspaceexec.WithWorkspaceRegistry(reg),
+	)
+	allTools = append(
+		allTools,
+		execTool,
+		toolworkspaceexec.NewPublishArtifactTool(execTool),
+	)
+	if executorSupportsWorkspaceExecSessions(options) {
+		allTools = append(
+			allTools,
+			toolworkspaceexec.NewWriteStdinTool(execTool),
+			toolworkspaceexec.NewKillSessionTool(execTool),
+		)
+	}
+	return allTools
+}
+
+func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
+	return codeexecutor.NewWorkspaceRegistry()
+}
+
+func buildSkillRunTool(
+	options *Options,
+	reg *codeexecutor.WorkspaceRegistry,
+) *toolskill.RunTool {
 	exec := options.codeExecutor
 	if exec == nil {
 		exec = defaultCodeExecutor()
 	}
 
-	runOpts := make([]func(*toolskill.RunTool), 0, 4)
+	runOpts := make([]func(*toolskill.RunTool), 0, 5)
 	if len(options.skillRunAllowedCommands) > 0 {
 		runOpts = append(
 			runOpts,
@@ -606,6 +714,15 @@ func buildSkillRunTool(options *Options) *toolskill.RunTool {
 			runOpts,
 			toolskill.WithRequireSkillLoaded(true),
 		)
+	}
+	if options.skillRunStager != nil {
+		runOpts = append(
+			runOpts,
+			toolskill.WithSkillStager(options.skillRunStager),
+		)
+	}
+	if reg != nil {
+		runOpts = append(runOpts, toolskill.WithWorkspaceRegistry(reg))
 	}
 
 	return toolskill.NewRunTool(
@@ -640,54 +757,92 @@ func executorSupportsInteractive(options *Options) bool {
 	return interactive
 }
 
+// executorSupportsWorkspaceExec reports whether the agent has an
+// explicit executor that exposes a live workspace engine suitable for
+// generic workspace-side command execution. Unlike skill_run, this does
+// not fall back to the local engine because that would silently move
+// commands onto the agent host instead of the configured executor.
+func executorSupportsWorkspaceExec(options *Options) bool {
+	if options == nil || options.codeExecutor == nil {
+		return false
+	}
+	ep, ok := options.codeExecutor.(codeexecutor.EngineProvider)
+	if !ok || ep == nil {
+		return false
+	}
+	eng := ep.Engine()
+	if eng == nil {
+		return false
+	}
+	return eng.Manager() != nil && eng.FS() != nil && eng.Runner() != nil
+}
+
+// executorSupportsWorkspaceExecSessions reports whether workspace_exec can
+// expose interactive session helpers such as workspace_write_stdin.
+func executorSupportsWorkspaceExecSessions(options *Options) bool {
+	if !executorSupportsWorkspaceExec(options) {
+		return false
+	}
+	ep := options.codeExecutor.(codeexecutor.EngineProvider)
+	eng := ep.Engine()
+	if eng == nil || eng.Runner() == nil {
+		return false
+	}
+	_, ok := eng.Runner().(codeexecutor.InteractiveProgramRunner)
+	return ok
+}
+
 // Run implements the agent.Agent interface.
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
-
-	ctx, span := trace.Tracer.Start(
+	ctx, span, startedSpan := itrace.StartSpan(
 		ctx,
+		invocation,
 		fmt.Sprintf(
 			"%s %s",
 			itelemetry.OperationInvokeAgent,
-			a.name,
+			invocation.AgentName,
 		),
 	)
 	effectiveGenConfig := a.genConfig
 	effectiveGenConfig.Stream = iagent.ResolveInvokeAgentStream(invocation, &effectiveGenConfig)
-
 	promptText := a.systemPromptForInvocation(invocation) +
 		a.instructionForInvocation(invocation)
-	itelemetry.TraceBeforeInvokeAgent(
-		span,
-		invocation,
-		a.description,
-		promptText,
-		&effectiveGenConfig,
-	)
+	if startedSpan {
+		itelemetry.TraceBeforeInvokeAgent(
+			span,
+			invocation,
+			a.description,
+			promptText,
+			&effectiveGenConfig,
+		)
+	}
 	tracker := itelemetry.NewInvokeAgentTracker(
 		ctx,
 		invocation,
 		effectiveGenConfig.Stream,
 		&err,
 	)
-
 	ctx, flowEventChan, err := a.executeAgentFlow(ctx, invocation)
 	if err != nil {
 		// Check if this is a custom response error (early return)
 		var customErr *haveCustomResponseError
 		if errors.As(err, &customErr) {
-			span.End()
+			if startedSpan {
+				span.End()
+			}
 			return customErr.EventChan, nil
 		}
 		// Handle actual errors
-		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
-		span.End()
+		if startedSpan {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
+			span.End()
+		}
 		return nil, err
 	}
-
-	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker), nil
+	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker, startedSpan), nil
 }
 
 // executeAgentFlow executes the agent flow with before agent callbacks.
@@ -762,9 +917,20 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	invocation.Agent = a
 	invocation.AgentName = a.name
 
-	// Propagate structured output configuration into invocation and request path.
-	invocation.StructuredOutputType = a.structuredOutputType
-	invocation.StructuredOutput = a.structuredOutput
+	// Lift run-scoped structured output into the current invocation once.
+	if invocation.StructuredOutput == nil {
+		invocation.StructuredOutput = invocation.RunOptions.StructuredOutput
+	}
+	if invocation.StructuredOutputType == nil {
+		invocation.StructuredOutputType = invocation.RunOptions.StructuredOutputType
+	}
+	// Keep run-scoped values on RunOptions so clone-based handoffs can reuse the same output contract.
+	if invocation.StructuredOutput == nil {
+		invocation.StructuredOutput = a.structuredOutput
+	}
+	if invocation.StructuredOutputType == nil {
+		invocation.StructuredOutputType = a.structuredOutputType
+	}
 
 	// Propagate per-agent safety limits into the invocation. These limits are
 	// evaluated by the Invocation helpers (IncLLMCallCount / IncToolIteration)
@@ -781,25 +947,26 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 	originalChan <-chan *event.Event,
 	span sdktrace.Span,
 	tracker *itelemetry.InvokeAgentTracker,
+	startedSpan bool,
 ) <-chan *event.Event {
 	// Create a new channel with the same capacity as the original channel
 	wrappedChan := make(chan *event.Event, cap(originalChan))
-
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
 		var responseErrorType string
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
-			if fullRespEvent != nil {
+			if startedSpan && fullRespEvent != nil {
 				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 			}
 			tracker.SetResponseErrorType(responseErrorType)
 			tracker.RecordMetrics()()
-			span.End()
+			if startedSpan {
+				span.End()
+			}
 			close(wrappedChan)
 		}()
-
 		// Forward all events from the original channel
 		for evt := range originalChan {
 			if evt != nil && evt.Response != nil {
@@ -812,13 +979,11 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 					}
 					fullRespEvent = evt
 				}
-
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
 		}
-
 		// Collect error from the final response event.
 		var agentErr error
 		if fullRespEvent != nil && fullRespEvent.Response != nil && fullRespEvent.Response.Error != nil {

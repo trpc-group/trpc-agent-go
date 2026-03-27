@@ -12,11 +12,14 @@ package llmagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 
@@ -27,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
 
 const (
@@ -35,6 +39,7 @@ const (
 	skillsOverviewHeader        = "Available skills:"
 	skillsCapabilityHeader      = "Skill tool availability:"
 	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
+	workspaceExecGuidanceHeader = "Executor workspace guidance:"
 )
 
 // createTestSkill makes a minimal skill folder with SKILL.md.
@@ -60,6 +65,21 @@ func findTool(ts []tool.Tool, name string) tool.Tool {
 	return nil
 }
 
+func findSystemMessageContaining(req *model.Request, needle string) string {
+	if req == nil {
+		return ""
+	}
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, needle) {
+			return msg.Content
+		}
+	}
+	return ""
+}
+
 func TestLLMAgent_SkillRunToolRegistered(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
@@ -78,6 +98,114 @@ func TestLLMAgent_SkillRunToolRegistered(t *testing.T) {
 	require.True(t, names["skill_write_stdin"])
 	require.True(t, names["skill_poll_session"])
 	require.True(t, names["skill_kill_session"])
+	require.False(t, names["workspace_exec"])
+}
+
+func TestLLMAgent_WorkspaceExecRegisteredForExplicitExecutor(t *testing.T) {
+	a := New("tester", WithCodeExecutor(&stubExec{}))
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+
+	require.True(t, names["workspace_exec"])
+	require.True(t, names["workspace_publish_artifact"])
+	require.False(t, names["workspace_write_stdin"])
+	require.False(t, names["workspace_kill_session"])
+}
+
+func TestLLMAgent_WorkspaceExecSessionToolsRegisteredForInteractiveExecutor(
+	t *testing.T,
+) {
+	a := New("tester", WithCodeExecutor(&interactiveStubExec{}))
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+
+	require.True(t, names["workspace_exec"])
+	require.True(t, names["workspace_publish_artifact"])
+	require.True(t, names["workspace_write_stdin"])
+	require.True(t, names["workspace_kill_session"])
+}
+
+func TestLLMAgent_WorkspaceExecDeclarationOmitsSessionFieldsForNonInteractiveExecutor(
+	t *testing.T,
+) {
+	a := New("tester", WithCodeExecutor(&stubExec{}))
+	tl := findTool(a.Tools(), "workspace_exec")
+	require.NotNil(t, tl)
+
+	decl := tl.Declaration()
+	require.NotNil(t, decl)
+	require.NotContains(t, decl.Description, "background=true or tty=true")
+	require.NotContains(t, decl.OutputSchema.Description, "workspace_write_stdin")
+	require.NotContains(t, decl.OutputSchema.Description, "status is running")
+	require.NotContains(t, decl.InputSchema.Properties, "background")
+	require.NotContains(t, decl.InputSchema.Properties, "tty")
+	require.NotContains(t, decl.InputSchema.Properties, "pty")
+	require.NotContains(t, decl.InputSchema.Properties, "yield_time_ms")
+	require.NotContains(t, decl.InputSchema.Properties, "yieldMs")
+}
+
+func TestLLMAgent_WorkspaceExecDeclarationIncludesSessionFieldsForInteractiveExecutor(
+	t *testing.T,
+) {
+	a := New("tester", WithCodeExecutor(&interactiveStubExec{}))
+	tl := findTool(a.Tools(), "workspace_exec")
+	require.NotNil(t, tl)
+
+	decl := tl.Declaration()
+	require.NotNil(t, decl)
+	require.Contains(t, decl.Description, "background=true or tty=true")
+	require.Contains(t, decl.OutputSchema.Description, "workspace_write_stdin")
+	require.Contains(t, decl.OutputSchema.Description, "status is running")
+	require.Contains(t, decl.InputSchema.Properties, "background")
+	require.Contains(t, decl.InputSchema.Properties, "tty")
+	require.Contains(t, decl.InputSchema.Properties, "pty")
+	require.Contains(t, decl.InputSchema.Properties, "yield_time_ms")
+	require.Contains(t, decl.InputSchema.Properties, "yieldMs")
+}
+
+func TestLLMAgent_WorkspaceExecOmittedWithoutExplicitExecutor(t *testing.T) {
+	a := New("tester")
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+
+	require.False(t, names["workspace_exec"])
+	require.False(t, names["workspace_publish_artifact"])
+}
+
+func TestLLMAgent_SkillRunUsesDefaultExecutorWhenNoExplicitExecutor(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New("tester", WithSkills(repo))
+	tl := findTool(a.Tools(), "skill_run")
+	require.NotNil(t, tl)
+
+	runToolVal := reflect.ValueOf(tl).Elem()
+	wsrField := reflect.NewAt(
+		runToolVal.FieldByName("wsr").Type(),
+		unsafe.Pointer(runToolVal.FieldByName("wsr").UnsafeAddr()),
+	).Elem()
+	require.False(t, wsrField.IsNil())
+
+	resolverVal := wsrField.Elem()
+	execField := reflect.NewAt(
+		resolverVal.FieldByName("exec").Type(),
+		unsafe.Pointer(resolverVal.FieldByName("exec").UnsafeAddr()),
+	).Elem()
+	require.False(t, execField.IsNil())
 }
 
 func TestLLMAgent_SkillKnowledgeOnlyToolsRegistered(t *testing.T) {
@@ -130,7 +258,10 @@ func TestLLMAgent_SkillRunToolExecutes(t *testing.T) {
 
 // stubExec implements CodeExecutor and exposes an Engine
 // whose runner marks ran=true on use.
-type stubExec struct{ ran bool }
+type stubExec struct {
+	ran      bool
+	lastSpec codeexecutor.RunProgramSpec
+}
 
 func (s *stubExec) ExecuteCode(
 	ctx context.Context,
@@ -204,11 +335,42 @@ func (r *stubRunner) RunProgram(
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
 	r.s.ran = true
+	r.s.lastSpec = spec
 	return codeexecutor.RunResult{
 		Stdout:   "ok",
 		ExitCode: 0,
 		Duration: time.Millisecond,
 	}, nil
+}
+
+type pathErrRepo struct {
+	err error
+}
+
+func (*pathErrRepo) Summaries() []skill.Summary {
+	return []skill.Summary{{Name: testSkillName}}
+}
+
+func (*pathErrRepo) Get(name string) (*skill.Skill, error) {
+	return &skill.Skill{
+		Summary: skill.Summary{Name: name},
+	}, nil
+}
+
+func (r *pathErrRepo) Path(string) (string, error) {
+	return "", r.err
+}
+
+type skillStageFunc func(
+	context.Context,
+	toolskill.SkillStageRequest,
+) (toolskill.SkillStageResult, error)
+
+func (f skillStageFunc) StageSkill(
+	ctx context.Context,
+	req toolskill.SkillStageRequest,
+) (toolskill.SkillStageResult, error) {
+	return f(ctx, req)
 }
 
 func TestLLMAgent_SkillRun_UsesInjectedExecutor(t *testing.T) {
@@ -225,6 +387,46 @@ func TestLLMAgent_SkillRun_UsesInjectedExecutor(t *testing.T) {
 	_, err = tl.(tool.CallableTool).Call(context.Background(), b)
 	require.NoError(t, err)
 	require.True(t, se.ran)
+}
+
+func TestLLMAgent_SkillRun_UsesConfiguredStager(t *testing.T) {
+	repo := &pathErrRepo{err: errors.New("Path should not be called")}
+	se := &stubExec{}
+	skillRoot := filepath.ToSlash(
+		filepath.Join(codeexecutor.DirWork, "custom", testSkillName),
+	)
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithCodeExecutor(se),
+		WithSkillRunStager(skillStageFunc(
+			func(
+				_ context.Context,
+				req toolskill.SkillStageRequest,
+			) (toolskill.SkillStageResult, error) {
+				require.Equal(t, testSkillName, req.SkillName)
+				return toolskill.SkillStageResult{
+					WorkspaceSkillDir: skillRoot,
+				}, nil
+			},
+		)),
+	)
+	tl := findTool(a.Tools(), "skill_run")
+	require.NotNil(t, tl)
+	args := map[string]any{"skill": testSkillName, "command": "echo ok"}
+	b, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	_, err = tl.(tool.CallableTool).Call(context.Background(), b)
+	require.NoError(t, err)
+	require.True(t, se.ran)
+	require.Equal(t, skillRoot, se.lastSpec.Cwd)
+	argsText := strings.Join(se.lastSpec.Args, " ")
+	require.Contains(
+		t,
+		argsText,
+		"export VIRTUAL_ENV='.venv'",
+	)
 }
 
 func TestLLMAgent_SkillRun_AllowedCommands_Enforced(t *testing.T) {
@@ -559,15 +761,19 @@ func TestLLMAgent_WithMaxLoadedSkills_WiresProcessor(t *testing.T) {
 			[]byte("1"),
 		)
 	}
+	sess.SetState(
+		skill.LoadedOrderKey("tester"),
+		[]byte(`["a","b","c","d"]`),
+	)
 
 	req := &model.Request{Messages: nil}
 	srp.ProcessRequest(context.Background(), inv, req, nil)
 
-	v, ok := sess.GetState(skill.LoadedKey("tester", "d"))
+	v, ok := sess.GetState(skill.LoadedKey("tester", "a"))
 	require.True(t, ok)
 	require.Empty(t, v)
 
-	for _, name := range []string{"a", "b", "c"} {
+	for _, name := range []string{"b", "c", "d"} {
 		v, ok = sess.GetState(skill.LoadedKey("tester", name))
 		require.True(t, ok)
 		require.Equal(t, []byte("1"), v)
@@ -761,6 +967,81 @@ func TestExecutorSupportsInteractive(t *testing.T) {
 	}
 }
 
+func TestExecutorSupportsWorkspaceExec(t *testing.T) {
+	tests := []struct {
+		name     string
+		executor codeexecutor.CodeExecutor
+		want     bool
+	}{
+		{
+			name:     "nil executor does not auto-enable workspace_exec",
+			executor: nil,
+			want:     false,
+		},
+		{
+			name:     "no EngineProvider",
+			executor: &bareExec{},
+			want:     false,
+		},
+		{
+			name:     "nil engine",
+			executor: &nilEngineExec{},
+			want:     false,
+		},
+		{
+			name:     "engine provider with workspace engine",
+			executor: &stubExec{},
+			want:     true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &Options{codeExecutor: tt.executor}
+			require.Equal(t, tt.want, executorSupportsWorkspaceExec(opts))
+		})
+	}
+}
+
+func TestExecutorSupportsWorkspaceExecSessions(t *testing.T) {
+	tests := []struct {
+		name     string
+		executor codeexecutor.CodeExecutor
+		want     bool
+	}{
+		{
+			name:     "nil executor",
+			executor: nil,
+			want:     false,
+		},
+		{
+			name:     "no EngineProvider",
+			executor: &bareExec{},
+			want:     false,
+		},
+		{
+			name:     "nil engine",
+			executor: &nilEngineExec{},
+			want:     false,
+		},
+		{
+			name:     "non-interactive workspace exec",
+			executor: &stubExec{},
+			want:     false,
+		},
+		{
+			name:     "interactive workspace exec",
+			executor: &interactiveStubExec{},
+			want:     true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := &Options{codeExecutor: tt.executor}
+			require.Equal(t, tt.want, executorSupportsWorkspaceExecSessions(opts))
+		})
+	}
+}
+
 func TestLLMAgent_GuidanceOmitsExecForNonInteractiveExecutor(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
@@ -782,23 +1063,21 @@ func TestLLMAgent_GuidanceOmitsExecForNonInteractiveExecutor(t *testing.T) {
 		p.ProcessRequest(context.Background(), inv, req, nil)
 	}
 
-	var sys string
-	for _, msg := range req.Messages {
-		if msg.Role != model.RoleSystem {
-			continue
-		}
-		if strings.Contains(msg.Content, skillsOverviewHeader) {
-			sys = msg.Content
-			break
-		}
-	}
+	sys := findSystemMessageContaining(req, skillsOverviewHeader)
 	require.NotEmpty(t, sys)
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.Contains(t, sys, workspaceExecGuidanceHeader)
 	require.NotContains(t, sys, "skill_exec",
 		"guidance should not mention skill_exec when executor is non-interactive")
 	require.NotContains(t, sys, "skill_write_stdin")
 	require.NotContains(t, sys, "skill_poll_session")
 	require.NotContains(t, sys, "skill_kill_session")
+	require.Contains(t, sys, "workspace_exec",
+		"workspace_exec guidance should still be present when executor supports workspace execution")
+	require.Contains(t, sys, "workspace_publish_artifact")
+	require.NotContains(t, sys, "workspace_write_stdin",
+		"workspace_exec session guidance should be omitted when executor is non-interactive")
+	require.NotContains(t, sys, "workspace_kill_session")
 }
 
 func TestLLMAgent_GuidanceIncludesExecForInteractiveExecutor(t *testing.T) {
@@ -822,18 +1101,41 @@ func TestLLMAgent_GuidanceIncludesExecForInteractiveExecutor(t *testing.T) {
 		p.ProcessRequest(context.Background(), inv, req, nil)
 	}
 
-	var sys string
-	for _, msg := range req.Messages {
-		if msg.Role != model.RoleSystem {
-			continue
-		}
-		if strings.Contains(msg.Content, skillsOverviewHeader) {
-			sys = msg.Content
-			break
-		}
-	}
+	sys := findSystemMessageContaining(req, skillsOverviewHeader)
 	require.NotEmpty(t, sys)
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.Contains(t, sys, workspaceExecGuidanceHeader)
 	require.Contains(t, sys, "skill_exec")
-	require.Contains(t, sys, "skill_write_stdin")
+	require.Contains(t, sys, "workspace_exec")
+	require.Contains(t, sys, "workspace_publish_artifact")
+	require.Contains(t, sys, "workspace_write_stdin")
+	require.Contains(t, sys, "workspace_kill_session")
+}
+
+func TestLLMAgent_WorkspaceExecGuidanceWithoutSkillsRepo(t *testing.T) {
+	opts := &Options{}
+	WithCodeExecutor(&stubExec{})(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	sys := findSystemMessageContaining(req, workspaceExecGuidanceHeader)
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, "default general shell runner")
+	require.Contains(t, sys, "workspace is its scope, not its capability limit")
+	require.Contains(t, sys, "Prefer work/, out/, and runs/")
+	require.Contains(t, sys, "verify first before claiming the limitation")
+	require.Contains(t, sys, "workspace_publish_artifact")
+	require.NotContains(t, sys, "skills/")
+	require.NotContains(t, sys, "workspace_write_stdin")
+	require.NotContains(t, sys, skillsOverviewHeader)
 }

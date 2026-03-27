@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -155,6 +156,47 @@ func (a *stateValueAgent) Run(
 	return ch, nil
 }
 
+type completionOptionalAgent struct{ name string }
+
+func (a *completionOptionalAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *completionOptionalAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (a *completionOptionalAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (a *completionOptionalAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
+func (a *completionOptionalAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		if inv == nil ||
+			!agent.IsGraphCompletionEventDisabled(inv) ||
+			ShouldCaptureGraphCompletion(ctx) {
+			ch <- NewGraphCompletionEvent(
+				WithCompletionEventInvocationID(inv.InvocationID),
+				WithCompletionEventFinalState(State{
+					testChildValueKey:    testChildValuePrefix,
+					StateKeyLastResponse: testChildValuePrefix,
+				}),
+			)
+		}
+		close(ch)
+	}()
+	return ch, nil
+}
+
 const (
 	testEmptyString        = ""
 	testChildAgentName     = "child_handoff"
@@ -243,6 +285,243 @@ func TestSubgraph_OutputMapper_HandoffToNextNode(t *testing.T) {
 	require.NotNil(t, done.Response)
 	require.Len(t, done.Choices, 1)
 	require.Equal(t, expected, done.Choices[0].Message.Content)
+}
+
+func TestBuildChildStateForAgentNode_MessageSourceAutoUsesGraphSnapshot(
+	t *testing.T,
+) {
+	parent := State{
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("u"),
+			model.NewAssistantMessage("a"),
+		},
+	}
+
+	childState, source := buildChildStateForAgentNode(
+		parent,
+		"agentNode",
+		&messageEchoAgent{name: "child"},
+		agentNodeConfigFromOptions(),
+	)
+
+	require.Equal(t, SubgraphMessageSourceGraphSnapshot, source)
+	require.Equal(t, includeContentsNone, childState[CfgKeyIncludeContents])
+	require.Equal(
+		t,
+		string(SubgraphMessageSourceGraphSnapshot),
+		childState[CfgKeySubgraphMessageSource],
+	)
+	require.Equal(t, false, childState[CfgKeySubgraphMessageSourceExplicit])
+}
+
+func TestBuildChildStateForAgentNode_MessageSourceExplicitNone(
+	t *testing.T,
+) {
+	parent := State{
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("u"),
+		},
+	}
+
+	childState, source := buildChildStateForAgentNode(
+		parent,
+		"agentNode",
+		&messageEchoAgent{name: "child"},
+		agentNodeConfigFromOptions(
+			WithSubgraphMessageSource(SubgraphMessageSourceNone),
+		),
+	)
+
+	require.Equal(t, SubgraphMessageSourceNone, source)
+	require.Equal(t, includeContentsNone, childState[CfgKeyIncludeContents])
+	require.Equal(t, string(SubgraphMessageSourceNone), childState[CfgKeySubgraphMessageSource])
+	require.Equal(t, false, childState[CfgKeySubgraphMessageSourceExplicit])
+}
+
+func TestBuildChildStateForAgentNode_MessageSourceExplicitGraphSnapshot(
+	t *testing.T,
+) {
+	parent := State{
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("u"),
+		},
+	}
+
+	childState, source := buildChildStateForAgentNode(
+		parent,
+		"agentNode",
+		&messageEchoAgent{name: "child"},
+		agentNodeConfigFromOptions(
+			WithSubgraphMessageSource(SubgraphMessageSourceGraphSnapshot),
+		),
+	)
+
+	require.Equal(t, SubgraphMessageSourceGraphSnapshot, source)
+	require.Equal(t, includeContentsNone, childState[CfgKeyIncludeContents])
+	require.Equal(
+		t,
+		string(SubgraphMessageSourceGraphSnapshot),
+		childState[CfgKeySubgraphMessageSource],
+	)
+	require.Equal(t, true, childState[CfgKeySubgraphMessageSourceExplicit])
+}
+
+func TestBuildAgentInvocationWithStateScopeAndInputKey_GraphSnapshotSuppressesCurrentInput(
+	t *testing.T,
+) {
+	ctx := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
+		agent.WithInvocationAgent(&messageEchoAgent{name: "parent"}),
+	))
+
+	parentState := State{
+		StateKeyUserInput: "current-input",
+	}
+	runtime := State{
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("history-user"),
+			model.NewAssistantMessage("history-assistant"),
+		},
+	}
+
+	inv := buildAgentInvocationWithStateScopeAndInputKey(
+		ctx,
+		parentState,
+		runtime,
+		&messageEchoAgent{name: "child"},
+		"agentNode",
+		"",
+		StateKeyUserInput,
+		SubgraphMessageSourceGraphSnapshot,
+	)
+
+	require.NotNil(t, inv)
+	require.Empty(t, inv.Message.Content)
+}
+
+func TestSubgraph_DisableGraphCompletionEvent_DoesNotDropOutput(t *testing.T) {
+	parent := &parentWithSubAgent{a: &completionOptionalAgent{name: testChildAgentName}}
+	exec := &ExecutionContext{InvocationID: "inv-preserve", EventChan: make(chan *event.Event, 4)}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: "agentNode",
+		StateKeyParentAgent:   parent,
+		StateKeyUserInput:     testUserInput,
+	}
+	fn := NewAgentNodeFunc(
+		testChildAgentName,
+		WithSubgraphOutputMapper(func(_ State, r SubgraphResult) State {
+			value, ok := GetStateValue[string](r.FinalState, testChildValueKey)
+			if !ok {
+				return nil
+			}
+			return State{testValueFromChildKey: value}
+		}),
+	)
+	parentInvocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	out, err := fn(agent.NewInvocationContext(context.Background(), parentInvocation), state)
+	require.NoError(t, err)
+	mapped, ok := out.(State)
+	require.True(t, ok)
+	value, ok := GetStateValue[string](mapped, testValueFromChildKey)
+	require.True(t, ok)
+	require.Equal(t, testChildValuePrefix, value)
+}
+
+func TestSubgraph_DisableGraphCompletionEvent_HidesChildCompletionFromParentStream(t *testing.T) {
+	parent := &parentWithSubAgent{a: &completionOptionalAgent{name: testChildAgentName}}
+	parentEvents := make(chan *event.Event, 8)
+	exec := &ExecutionContext{InvocationID: "inv-hidden", EventChan: parentEvents}
+	state := State{
+		StateKeyExecContext:   exec,
+		StateKeyCurrentNodeID: "agentNode",
+		StateKeyParentAgent:   parent,
+		StateKeyUserInput:     testUserInput,
+	}
+	fn := NewAgentNodeFunc(
+		testChildAgentName,
+		WithSubgraphOutputMapper(func(_ State, r SubgraphResult) State {
+			value, ok := GetStateValue[string](r.FinalState, testChildValueKey)
+			if !ok {
+				return nil
+			}
+			return State{testValueFromChildKey: value}
+		}),
+	)
+	parentInvocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+
+	_, err := fn(agent.NewInvocationContext(context.Background(), parentInvocation), state)
+	require.NoError(t, err)
+
+	for len(parentEvents) > 0 {
+		evt := <-parentEvents
+		require.False(t, isGraphCompletionEvent(evt))
+	}
+}
+
+func TestSubgraph_DisableGraphExecutorEvents_SuppressesAgentLifecycleEvents(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		parent := &parentWithSubAgent{a: &stateValueAgent{name: testChildAgentName}}
+		parentEvents := make(chan *event.Event, 8)
+		exec := &ExecutionContext{InvocationID: "inv-agent-success", EventChan: parentEvents}
+		state := State{
+			StateKeyExecContext:   exec,
+			StateKeyCurrentNodeID: "agentNode",
+			StateKeyParentAgent:   parent,
+			StateKeyUserInput:     testUserInput,
+		}
+		fn := NewAgentNodeFunc(testChildAgentName)
+		parentInvocation := agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithDisableGraphExecutorEvents(true),
+			)),
+		)
+
+		_, err := fn(agent.NewInvocationContext(context.Background(), parentInvocation), state)
+		require.NoError(t, err)
+
+		for len(parentEvents) > 0 {
+			evt := <-parentEvents
+			require.NotEqual(t, ObjectTypeGraphNodeStart, evt.Object)
+			require.NotEqual(t, ObjectTypeGraphNodeComplete, evt.Object)
+			require.NotEqual(t, ObjectTypeGraphNodeError, evt.Object)
+		}
+	})
+
+	t.Run("error", func(t *testing.T) {
+		parent := &parentWithSubAgent{a: &errAgent{name: testChildAgentName}}
+		parentEvents := make(chan *event.Event, 8)
+		exec := &ExecutionContext{InvocationID: "inv-agent-error", EventChan: parentEvents}
+		state := State{
+			StateKeyExecContext:   exec,
+			StateKeyCurrentNodeID: "agentNode",
+			StateKeyParentAgent:   parent,
+			StateKeyUserInput:     testUserInput,
+		}
+		fn := NewAgentNodeFunc(testChildAgentName)
+		parentInvocation := agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithDisableGraphExecutorEvents(true),
+			)),
+		)
+
+		_, err := fn(agent.NewInvocationContext(context.Background(), parentInvocation), state)
+		require.Error(t, err)
+
+		for len(parentEvents) > 0 {
+			evt := <-parentEvents
+			require.NotEqual(t, ObjectTypeGraphNodeStart, evt.Object)
+			require.NotEqual(t, ObjectTypeGraphNodeComplete, evt.Object)
+			require.NotEqual(t, ObjectTypeGraphNodeError, evt.Object)
+		}
+	})
 }
 
 // TestSubgraph_InputFromLastResponse_MapsUserInput verifies that enabling
@@ -469,6 +748,22 @@ func TestSubgraph_OutputMapperGetsRawStateDelta(t *testing.T) {
 	require.NoError(t, err)
 	st, _ := out.(State)
 	require.Equal(t, true, st["raw_has_child_done"])
+}
+
+func TestExtractSubgraphFinalState_FallsBackToRawString(t *testing.T) {
+	ev := NewGraphCompletionEvent(
+		WithCompletionEventInvocationID("inv-final-state"),
+		WithCompletionEventFinalState(State{
+			"json_value": `{"kept":"as-string"}`,
+		}),
+	)
+	ev.StateDelta["plain_text"] = []byte("raw-text")
+
+	state, rawDelta, ok := extractSubgraphFinalState(context.Background(), ev)
+	require.True(t, ok)
+	require.NotNil(t, rawDelta)
+	require.Equal(t, "raw-text", state["plain_text"])
+	require.Equal(t, `{"kept":"as-string"}`, state["json_value"])
 }
 
 type subgraphTestSaver struct {

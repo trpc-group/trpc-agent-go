@@ -491,13 +491,19 @@ for event := range eventChan {
         }
     }
 
-    // Check if completed (note: should not break on tool call completion)
+    // Check whether the current response is complete.
     if event.IsFinalResponse() {
         fmt.Println()
         break
     }
 }
 ```
+
+This example uses `event.IsFinalResponse()` because it only cares about when
+the current reply has been fully printed. If you need to wait until the whole
+`Runner.Run` is truly over, such as when `tool.response` may be followed by
+extra processing or when using GraphAgent, use
+`event.IsRunnerCompletion()` as the loop exit condition instead.
 
 The complete code for this example can be found at [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
 
@@ -1166,3 +1172,74 @@ Caveats
   write `temp:*` via `invocation.Session.SetState` (e.g., via a callback)
   when you need session-scoped temporary values.
 - Placeholders are resolved at request time; changing the stored value updates behavior on the next model request without recreating the agent.
+
+## Static Structure Export
+
+The framework provides static structure export for agents. This is useful for structure inspection, visualization, configuration tools, and diagnostics that need a stable snapshot of nodes, edges, and editable surfaces.
+
+Use `agent/structure` to export a normalized snapshot:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+
+snapshot, err := structure.Export(ctx, llmAgent)
+if err != nil {
+    log.Fatalf("Failed to export structure: %v", err)
+}
+
+fmt.Println(snapshot.StructureID)
+fmt.Println(snapshot.EntryNodeID)
+fmt.Println(len(snapshot.Nodes), len(snapshot.Edges), len(snapshot.Surfaces))
+```
+
+The exported snapshot contains:
+
+- `Nodes`: stable static nodes in the current agent structure
+- `Edges`: static possible connections between nodes
+- `Surfaces`: stable editable baselines such as `instruction`, `model`, `tool`, and `skill`
+
+For a complete example, see [examples/graph/structure_export](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/structure_export).
+
+## Execution Trace
+
+The framework can export an execution trace for a single `runner.Run` call. This is useful for understanding which nodes actually ran, how steps depend on each other, and what each step saw as input and output.
+
+Enable it explicitly when you start a run:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+r := runner.NewRunner("demo-app", ag)
+events, err := r.Run(
+    ctx,
+    "user-1",
+    "session-1",
+    model.NewUserMessage("hello"),
+    agent.WithExecutionTraceEnabled(true),
+)
+if err != nil {
+    log.Fatalf("Run failed: %v", err)
+}
+for evt := range events {
+    if evt != nil && evt.IsRunnerCompletion() && evt.ExecutionTrace != nil {
+        fmt.Println(evt.ExecutionTrace.RootAgentName)
+        fmt.Println(evt.ExecutionTrace.Status)
+        fmt.Println(len(evt.ExecutionTrace.Steps))
+    }
+}
+```
+
+Execution traces are attached to the runner completion event as an in-memory artifact. They are not serialized by default.
+
+Each recorded step carries stable fields such as:
+
+- `NodeID`: the static node path for the executed node
+- `PredecessorStepIDs`: the direct step dependencies in this run
+- `Input` and `Output`: stable text snapshots captured for the step
+- `Error`: the terminal step error, when the step fails
+
+For a complete example, see [examples/graph/execution_trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/execution_trace).

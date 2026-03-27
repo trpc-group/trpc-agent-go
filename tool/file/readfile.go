@@ -28,9 +28,9 @@ import (
 
 // readFileRequest represents the input for the read file operation.
 type readFileRequest struct {
-	FileName  string `json:"file_name" jsonschema:"description=Relative path"`
-	StartLine *int   `json:"start_line,omitempty" jsonschema:"description=Start"`
-	NumLines  *int   `json:"num_lines,omitempty" jsonschema:"description=Max"`
+	FileName  string `json:"file_name" jsonschema:"description=Relative file path under base_directory or workspace:// or artifact:// file ref to read"`
+	StartLine *int   `json:"start_line,omitempty" jsonschema:"description=Optional 1-based start line to begin reading from"`
+	NumLines  *int   `json:"num_lines,omitempty" jsonschema:"description=Optional maximum number of lines to return"`
 }
 
 // readFileResponse represents the output from the read file operation.
@@ -203,11 +203,17 @@ func (f *fileToolSet) readFileFromDiskOrCache(
 			}
 		}
 		rsp.Message = fmt.Sprintf(
-			"Error: cannot access file '%s': %v",
+			"Error: cannot access file '%s': %v. %s",
 			req.FileName,
 			err,
+			f.missingFileHint(),
 		)
-		return fmt.Errorf("accessing file '%s': %w", req.FileName, err)
+		return fmt.Errorf(
+			"accessing file '%s' under base directory '%s': %w",
+			req.FileName,
+			f.baseDir,
+			err,
+		)
 	}
 	if stat.IsDir() {
 		rsp.Message = fmt.Sprintf(

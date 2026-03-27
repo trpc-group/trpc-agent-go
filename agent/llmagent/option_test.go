@@ -10,10 +10,22 @@
 package llmagent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
+
+type stubSkillStager struct{}
+
+func (stubSkillStager) StageSkill(
+	_ context.Context,
+	_ toolskill.SkillStageRequest,
+) (toolskill.SkillStageResult, error) {
+	return toolskill.SkillStageResult{}, nil
+}
 
 func TestWithChannelBufferSize(t *testing.T) {
 	tests := []struct {
@@ -235,12 +247,12 @@ func TestWithPreloadMemory(t *testing.T) {
 			expectedLimit: -1,
 		},
 		{
-			name:          "load specific number",
+			name:          "use adaptive preload budget",
 			limit:         5,
 			expectedLimit: 5,
 		},
 		{
-			name:          "load large number",
+			name:          "use large adaptive preload budget",
 			limit:         100,
 			expectedLimit: 100,
 		},
@@ -290,6 +302,13 @@ func TestWithSkillRunRequireSkillLoaded(t *testing.T) {
 
 	WithSkillRunRequireSkillLoaded(false)(opts)
 	require.False(t, opts.skillRunRequireSkillLoaded)
+}
+
+func TestWithSkillRunStager(t *testing.T) {
+	opts := &Options{}
+	stager := stubSkillStager{}
+	WithSkillRunStager(stager)(opts)
+	require.Equal(t, stager, opts.skillRunStager)
 }
 
 func TestWithSkillToolProfile(t *testing.T) {

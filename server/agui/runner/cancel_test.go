@@ -23,6 +23,7 @@ import (
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 )
 
 type waitCancelRunner struct {
@@ -62,6 +63,30 @@ func (b *blockingRunRunner) Run(ctx context.Context, userID, sessionID string, _
 }
 
 func (b *blockingRunRunner) Close() error { return nil }
+
+type finalizingTranslator struct {
+	finalizationEvents []aguievents.Event
+	finalizationErr    error
+	finalizationCtxErr error
+	finalizationTimed  bool
+	waitForContextDone bool
+}
+
+func (f *finalizingTranslator) Translate(context.Context, *agentevent.Event) ([]aguievents.Event, error) {
+	return nil, nil
+}
+
+func (f *finalizingTranslator) PostRunFinalizationEvents(ctx context.Context) ([]aguievents.Event, error) {
+	if f.waitForContextDone {
+		<-ctx.Done()
+	}
+	f.finalizationCtxErr = ctx.Err()
+	_, f.finalizationTimed = ctx.Deadline()
+	if f.waitForContextDone {
+		return nil, ctx.Err()
+	}
+	return f.finalizationEvents, f.finalizationErr
+}
 
 func TestCancelCancelsRunningRun(t *testing.T) {
 	ctxCh := make(chan context.Context, 1)
@@ -142,6 +167,231 @@ func TestCancelIgnoresRunID(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond)
 
 	collectEvents(t, events)
+}
+
+func TestCancelClosesReasoningStream(t *testing.T) {
+	r := New(
+		&reasoningWaitRunner{},
+		WithReasoningContentEnabled(true),
+	).(*runner)
+
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+
+	events, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	waitForAGUIEventType(t, events, (*aguievents.ReasoningMessageContentEvent)(nil))
+
+	err = r.Cancel(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	assert.NoError(t, err)
+
+	var remaining []aguievents.Event
+	for evt := range events {
+		remaining = append(remaining, evt)
+	}
+
+	assert.Len(t, remaining, 3)
+	assert.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), remaining[0])
+	assert.IsType(t, (*aguievents.ReasoningEndEvent)(nil), remaining[1])
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), remaining[2])
+}
+
+func TestCancelEmitsRunErrorWhenPostRunFinalizationFails(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	underlying := &waitCancelRunner{ctxCh: ctxCh}
+	finalizer := &finalizingTranslator{
+		finalizationEvents: []aguievents.Event{aguievents.NewTextMessageEndEvent("msg-1")},
+		finalizationErr:    errors.New("boom"),
+	}
+	r := New(
+		underlying,
+		WithPostRunFinalizationTimeout(2*time.Second),
+		WithTranslatorFactory(func(context.Context, *adapter.RunAgentInput, ...translator.Option) (translator.Translator, error) {
+			return finalizer, nil
+		}),
+	).(*runner)
+
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+
+	events, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+
+	select {
+	case evt := <-events:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(3 * time.Second):
+		assert.FailNow(t, "timeout waiting for RUN_STARTED")
+	}
+
+	runCtx := <-ctxCh
+	assert.NotNil(t, runCtx)
+
+	err = r.Cancel(context.Background(), input)
+	assert.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		select {
+		case <-runCtx.Done():
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 10*time.Millisecond)
+
+	var remaining []aguievents.Event
+	for evt := range events {
+		remaining = append(remaining, evt)
+	}
+
+	assert.Len(t, remaining, 2)
+	assert.IsType(t, (*aguievents.TextMessageEndEvent)(nil), remaining[0])
+	runErr, ok := remaining[1].(*aguievents.RunErrorEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "post-run finalization: boom", runErr.Message)
+	assert.NoError(t, finalizer.finalizationCtxErr)
+	assert.True(t, finalizer.finalizationTimed)
+}
+
+func TestCancelEmitsTerminalRunErrorWhenPostRunFinalizationTimesOut(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	underlying := &waitCancelRunner{ctxCh: ctxCh}
+	finalizer := &finalizingTranslator{waitForContextDone: true}
+	r := New(
+		underlying,
+		WithPostRunFinalizationTimeout(20*time.Millisecond),
+		WithTranslatorFactory(func(context.Context, *adapter.RunAgentInput, ...translator.Option) (translator.Translator, error) {
+			return finalizer, nil
+		}),
+	).(*runner)
+
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+
+	events, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+
+	select {
+	case evt := <-events:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(3 * time.Second):
+		assert.FailNow(t, "timeout waiting for RUN_STARTED")
+	}
+
+	runCtx := <-ctxCh
+	assert.NotNil(t, runCtx)
+
+	err = r.Cancel(context.Background(), input)
+	assert.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		select {
+		case <-runCtx.Done():
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 10*time.Millisecond)
+
+	var remaining []aguievents.Event
+	for evt := range events {
+		remaining = append(remaining, evt)
+	}
+
+	assert.Len(t, remaining, 1)
+	runErr, ok := remaining[0].(*aguievents.RunErrorEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "post-run finalization: context deadline exceeded", runErr.Message)
+	assert.ErrorIs(t, finalizer.finalizationCtxErr, context.DeadlineExceeded)
+	assert.True(t, finalizer.finalizationTimed)
+}
+
+func TestCancelEmitsSingleTerminalEventAfterTranslateCallbackError(t *testing.T) {
+	callbacks := translator.NewCallbacks().
+		RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
+			if _, ok := evt.(*aguievents.ReasoningMessageEndEvent); ok {
+				return nil, errors.New("after translate fail")
+			}
+			return evt, nil
+		})
+	r := New(
+		&reasoningWaitRunner{},
+		WithReasoningContentEnabled(true),
+		WithTranslateCallbacks(callbacks),
+	).(*runner)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	events, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	waitForAGUIEventType(t, events, (*aguievents.ReasoningMessageContentEvent)(nil))
+	err = r.Cancel(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	assert.NoError(t, err)
+	remaining := collectEvents(t, events)
+	terminalCount := 0
+	for _, evt := range remaining {
+		terminal, _ := terminalRunSignal(evt)
+		if terminal {
+			terminalCount++
+		}
+	}
+	assert.Equal(t, 1, terminalCount)
+	assert.True(t, hasRunErrorEvent(remaining))
+	assert.False(t, hasRunFinishedEvent(remaining))
+}
+
+func TestCancelEmitsSingleTerminalEventWhenFinalizerReturnsMultipleTerminalEvents(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	underlying := &waitCancelRunner{ctxCh: ctxCh}
+	finalizer := &finalizingTranslator{
+		finalizationEvents: []aguievents.Event{
+			aguievents.NewRunErrorEvent("boom", aguievents.WithRunID("run")),
+			aguievents.NewRunFinishedEvent("thread", "run"),
+		},
+	}
+	r := New(
+		underlying,
+		WithTranslatorFactory(func(context.Context, *adapter.RunAgentInput, ...translator.Option) (translator.Translator, error) {
+			return finalizer, nil
+		}),
+	).(*runner)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	events, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	select {
+	case evt := <-events:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(3 * time.Second):
+		assert.FailNow(t, "timeout waiting for RUN_STARTED")
+	}
+	err = r.Cancel(context.Background(), input)
+	assert.NoError(t, err)
+	remaining := collectEvents(t, events)
+	terminalCount := 0
+	for _, evt := range remaining {
+		terminal, _ := terminalRunSignal(evt)
+		if terminal {
+			terminalCount++
+		}
+	}
+	assert.Equal(t, 1, terminalCount)
+	assert.True(t, hasRunErrorEvent(remaining))
+	assert.False(t, hasRunFinishedEvent(remaining))
 }
 
 func TestCancelDoesNotReleaseSessionUntilRunExits(t *testing.T) {

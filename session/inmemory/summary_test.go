@@ -841,6 +841,67 @@ func (c *ctxCaptureSummarizer) SetPrompt(prompt string)  {}
 func (c *ctxCaptureSummarizer) SetModel(m model.Model)   {}
 func (c *ctxCaptureSummarizer) Metadata() map[string]any { return map[string]any{} }
 
+type contextAwareSummarizer struct {
+	capturedVal any
+	sess        *session.Session
+	done        chan struct{}
+}
+
+func (c *contextAwareSummarizer) ShouldSummarize(*session.Session) bool { return false }
+func (c *contextAwareSummarizer) ShouldSummarizeWithContext(
+	ctx context.Context,
+	sess *session.Session,
+) bool {
+	c.capturedVal = ctx.Value(traceIDKey)
+	c.sess = sess
+	return true
+}
+func (c *contextAwareSummarizer) Summarize(context.Context, *session.Session) (string, error) {
+	if c.done != nil {
+		close(c.done)
+	}
+	return "provider-summary", nil
+}
+func (c *contextAwareSummarizer) SetPrompt(string)     {}
+func (c *contextAwareSummarizer) SetModel(model.Model) {}
+func (c *contextAwareSummarizer) Metadata() map[string]any {
+	return map[string]any{}
+}
+
+func TestMemoryService_CreateSessionSummary_ContextAwareGateReceivesContext(t *testing.T) {
+	resolved := &contextAwareSummarizer{}
+
+	s := NewSessionService(WithSummarizer(resolved))
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-provider-sync"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	e := event.New("inv", "user")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role:    model.RoleUser,
+		Content: "hello",
+	}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	err = s.CreateSessionSummary(
+		context.WithValue(context.Background(), traceIDKey, "trace-sync"),
+		sess,
+		"",
+		false,
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, "trace-sync", resolved.capturedVal)
+	require.NotNil(t, resolved.sess)
+	assert.Len(t, resolved.sess.Events, 1)
+
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.True(t, ok)
+	assert.Equal(t, "provider-summary", text)
+}
+
 func TestMemoryService_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 	captureSummarizer := &ctxCaptureSummarizer{done: make(chan struct{})}
 	s := NewSessionService(
@@ -878,4 +939,45 @@ func TestMemoryService_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 
 	// Verify the context value was preserved in async worker.
 	assert.Equal(t, "trace-12345", captureSummarizer.capturedVal)
+}
+
+func TestMemoryService_EnqueueSummaryJob_ContextAwareGateReceivesContext(t *testing.T) {
+	resolved := &contextAwareSummarizer{done: make(chan struct{})}
+
+	s := NewSessionService(
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(10),
+		WithSummarizer(resolved),
+	)
+	defer s.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sid-provider-ctx"}
+	sess, err := s.CreateSession(context.Background(), key, session.StateMap{})
+	require.NoError(t, err)
+
+	e := event.New("inv", "user")
+	e.Timestamp = time.Now()
+	e.Response = &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role:    model.RoleUser,
+		Content: "hello",
+	}}}}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	err = s.EnqueueSummaryJob(
+		context.WithValue(context.Background(), traceIDKey, "trace-provider"),
+		sess,
+		"",
+		false,
+	)
+	require.NoError(t, err)
+
+	select {
+	case <-resolved.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for context decider summarizer to be called")
+	}
+
+	assert.Equal(t, "trace-provider", resolved.capturedVal)
+	require.NotNil(t, resolved.sess)
+	assert.Len(t, resolved.sess.Events, 1)
 }

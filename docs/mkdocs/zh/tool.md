@@ -287,6 +287,33 @@ agent := llmagent.New("mcp-assistant",
     llmagent.WithToolSets([]tool.ToolSet{mcpToolSet}))
 ```
 
+### ToolSet 生命周期与所有权
+
+`ToolSet` 接口里显式提供了 `Close()`，这意味着它持有的连接、会话和缓存
+等资源需要由**创建它的一方**负责释放。
+
+几个容易混淆的边界：
+
+- `llmagent.WithToolSets(...)` 只是把 `ToolSet` 挂到 Agent 上使用，
+  **不会**转移其所有权。
+- `LLMAgent` 的 `AddToolSet(...)`、`RemoveToolSet(...)`、
+  `SetToolSets(...)` 只会更新 Agent 当前暴露的工具集合，
+  **不会**自动调用旧 `ToolSet` 的 `Close()`。
+- `runner.NewRunner(...)` 和 `runner.NewRunnerWithAgentFactory(...)`
+  也不会因为 Agent 使用了某个 `ToolSet`，就在 `Runner.Close()` 时
+  自动回收它。
+
+推荐的使用方式：
+
+- **长生命周期 ToolSet**：在应用启动时创建并可选执行 `Init(ctx)`，
+  多次请求复用；应用退出时统一 `Close()`。
+- **按请求创建的 ToolSet**：只在当前 run 内使用；当前 run 结束后由
+  调用方显式清理。
+
+如果你只是希望 ToolSet 在每次执行时重新获取**最新工具列表**，优先使用
+`llmagent.WithRefreshToolSetsOnRun(true)`。这会在每次 run 前重新调用
+`ToolSet.Tools(ctx)`，但**不会**为你重建或关闭 `ToolSet` 实例本身。
+
 ### 传输方式配置
 
 MCP ToolSet 通过 `Transport` 字段支持三种传输方式：
@@ -411,6 +438,16 @@ agent := llmagent.New(
 在每次执行时刷新工具列表，可以参考 `examples/mcptool/http_headers`
 示例，手动调用 `toolSet.Tools(ctx)`，然后配合 `WithTools` 使用。
 
+常见误区：
+
+- `WithRefreshToolSetsOnRun(true)` 刷新的是**工具列表**，不是 `ToolSet`
+  实例本身；它不会自动新建、替换或关闭 `ToolSet`。
+- `tools/call` 会使用本次 run 的上下文，但如果你在执行期外直接调用
+  `agent.Tools()`，ToolSet 看到的是 `context.Background()`。
+- 如果你需要让 `initialize/tools/list` 也严格使用某个自定义上下文
+  （例如每次请求不同的认证头、追踪字段），更稳妥的做法通常是手动
+  `toolSet.Tools(ctx)`，再通过 `WithTools(...)` 注入。
+
 ## Agent 工具 (AgentTool)
 
 AgentTool 允许把一个现有的 Agent 以工具的形式暴露给上层 Agent 使用。相比普通函数工具，AgentTool 的优势在于：
@@ -509,6 +546,7 @@ child := agenttool.NewTool(
 - 事件完成信号：工具响应事件会被标记 `RequiresCompletion=true`，Runner 会自动发送完成信号，无需手工处理
 - 内容去重：如果已转发子 Agent 的增量内容，默认不要再把最终 `tool.response` 的聚合内容打印出来
 - 模型兼容性：一些模型要求工具调用后必须跟随工具消息，AgentTool 已自动填充聚合后的工具内容满足此要求
+- `WithSkipSummarization(true)` 只会跳过额外的外层总结型 LLM 调用，不会把 `tool.response` 变成 assistant final response；如果你需要真正的终止信号，仍应持续消费到 `runner.completion`
 
 ## 工具集成与使用
 
@@ -997,6 +1035,14 @@ LLMAgent 提供了三个与 ToolSet 相关的运行时方法：
 
 - 聚合后的工具列表（显式 `WithTools` 工具 + ToolSet 工具 + 知识检索工具 + Skills 工具）
 - “用户工具”跟踪信息（用于前文介绍的智能过滤机制）
+
+需要特别注意：
+
+- `AddToolSet` 替换同名 ToolSet 时，**不会**自动 `Close()` 被替换掉的旧实例。
+- `RemoveToolSet` 删除 ToolSet 时，**不会**自动 `Close()` 被移除的实例。
+- `SetToolSets` 整体替换时，**不会**自动 `Close()` 旧切片里的实例。
+
+如果这些 ToolSet 是由你创建的，你仍然需要在合适的时机显式回收它们。
 
 **典型使用方式：**
 

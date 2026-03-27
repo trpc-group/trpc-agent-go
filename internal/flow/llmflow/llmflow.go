@@ -12,31 +12,34 @@ package llmflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
 	oteltrace "go.opentelemetry.io/otel/trace"
-
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
+	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 const (
 	// Timeout for event completion signaling.
-	eventCompletionTimeout = 5 * time.Second
+	eventCompletionTimeout    = 5 * time.Second
+	generatedResponseIDPrefix = "llmflow-response-"
 
 	errMsgNoModelResponse = "no response received from model"
 
@@ -223,6 +226,28 @@ func flowAgentName(invocation *agent.Invocation) string {
 	return invocation.AgentName
 }
 
+func traceSnapshotFromMessages(messages []model.Message) *atrace.Snapshot {
+	if len(messages) == 0 {
+		return nil
+	}
+	bytes, err := json.Marshal(messages)
+	if err != nil {
+		return nil
+	}
+	return &atrace.Snapshot{Text: string(bytes)}
+}
+
+func traceSnapshotFromEvent(evt *event.Event) *atrace.Snapshot {
+	if evt == nil || evt.Response == nil {
+		return nil
+	}
+	bytes, err := json.Marshal(evt.Response)
+	if err != nil {
+		return nil
+	}
+	return &atrace.Snapshot{Text: string(bytes)}
+}
+
 // maybeResumePendingToolCalls inspects the latest session events and, when
 // RunOptions.Resume is enabled, executes any pending tool calls before the
 // next LLM request. A pending tool call is defined as the latest persisted
@@ -324,34 +349,40 @@ func (f *Flow) runOneStep(
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
 	var lastEvent *event.Event
-
 	// Initialize empty LLM request.
 	llmRequest := &model.Request{
 		Tools: make(map[string]tool.Tool), // Initialize tools map
 	}
-
 	// 1. Preprocess (prepare request).
 	f.preprocess(ctx, invocation, llmRequest, eventChan)
-
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
+	stepID := agent.StartExecutionTraceStep(
+		invocation,
+		agent.InvocationTraceNodeID(invocation),
+		traceSnapshotFromMessages(llmRequest.Messages),
+		nil,
+	)
 	var span oteltrace.Span
 	var modelName string
 	if invocation.Model != nil {
 		modelName = invocation.Model.Info().Name
 	}
-	_, span = trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
-	defer span.End()
-
+	_, span, startedSpan := itrace.StartSpan(ctx, invocation, itelemetry.NewChatSpanName(modelName))
+	if startedSpan {
+		defer span.End()
+	}
 	// 2. Call LLM (get response sequence).
 	ctx, responseSeq, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
+		agent.FinishExecutionTraceStep(invocation, stepID, nil, err)
 		return nil, err
 	}
-
 	// 3. Process streaming responses.
-	return f.processStreamingResponses(ctx, invocation, llmRequest, responseSeq, eventChan, span)
+	lastEvent, err = f.processStreamingResponses(ctx, invocation, llmRequest, responseSeq, eventChan, span, startedSpan)
+	agent.FinishExecutionTraceStep(invocation, stepID, traceSnapshotFromEvent(lastEvent), err)
+	return lastEvent, err
 }
 
 // processStreamingResponses handles the streaming response processing logic.
@@ -367,6 +398,7 @@ func (f *Flow) processStreamingResponses(
 	responseSeq model.Seq[*model.Response],
 	eventChan chan<- *event.Event,
 	span oteltrace.Span,
+	startedSpan bool,
 ) (lastEvent *event.Event, err error) {
 	currentInvocation := invocationFromContextOrDefault(ctx, invocation)
 	metricsInvocation := invocation
@@ -469,13 +501,15 @@ func (f *Flow) processStreamingResponses(
 		if tracker != nil {
 			ttfb = tracker.FirstTokenTimeDuration()
 		}
-		itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
-			Invocation:       eventInvocation,
-			Request:          llmRequest,
-			Response:         response,
-			EventID:          llmResponseEvent.ID,
-			TimeToFirstToken: ttfb,
-		})
+		if startedSpan {
+			itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+				Invocation:       eventInvocation,
+				Request:          llmRequest,
+				Response:         response,
+				EventID:          llmResponseEvent.ID,
+				TimeToFirstToken: ttfb,
+			})
+		}
 		return true
 	})
 	if err != nil {
@@ -873,33 +907,60 @@ func (f *Flow) runBeforeModelCallbacks(
 	llmRequest *model.Request,
 ) (context.Context, *model.Response, error) {
 	var pluginCallbacks *model.Callbacks
-	if invocation.Plugins != nil {
+	if invocation != nil && invocation.Plugins != nil {
 		pluginCallbacks = invocation.Plugins.ModelCallbacks()
 	}
-	ctx, resp, err := runBeforeModelCallbacksWith(ctx, llmRequest, pluginCallbacks)
+	callbacksAttached := pluginCallbacks != nil || f.modelCallbacks != nil
+	if !callbacksAttached {
+		return ctx, nil, nil
+	}
+	callbackCtx := withInvocationContextIfMissing(ctx, invocation)
+	ctx, resp, err := runBeforeModelCallbacksWith(callbackCtx, invocation, llmRequest, pluginCallbacks)
 	if err != nil {
 		log.ErrorfContext(ctx, "Before model plugin failed for agent %s: %v", invocation.AgentName, err)
 		return ctx, nil, err
 	}
 	if resp != nil {
-		return ctx, resp, nil
+		return withInvocationContextIfMissing(ctx, invocation), resp, nil
 	}
-	newCtx, resp, err := runBeforeModelCallbacksWith(ctx, llmRequest, f.modelCallbacks)
+	ctx = withInvocationContextIfMissing(ctx, invocation)
+	newCtx, resp, err := runBeforeModelCallbacksWith(ctx, invocation, llmRequest, f.modelCallbacks)
 	if err != nil {
 		log.ErrorfContext(newCtx, "Before model callback failed for agent %s: %v", invocation.AgentName, err)
 	}
-	return newCtx, resp, err
+	return withInvocationContextIfMissing(newCtx, invocation), resp, err
+}
+
+func withInvocationContextIfMissing(ctx context.Context, invocation *agent.Invocation) context.Context {
+	if invocation == nil {
+		return ctx
+	}
+	existingInvocation, ok := agent.InvocationFromContext(ctx)
+	if ok && existingInvocation != nil {
+		return ctx
+	}
+	return agent.NewInvocationContext(ctx, invocation)
+}
+
+func invocationFromContextOrFallback(ctx context.Context, fallback *agent.Invocation) *agent.Invocation {
+	existingInvocation, ok := agent.InvocationFromContext(ctx)
+	if ok && existingInvocation != nil {
+		return existingInvocation
+	}
+	return fallback
 }
 
 func runBeforeModelCallbacksWith(
 	ctx context.Context,
+	invocation *agent.Invocation,
 	llmRequest *model.Request,
 	callbacks *model.Callbacks,
 ) (context.Context, *model.Response, error) {
 	if callbacks == nil {
 		return ctx, nil, nil
 	}
-	result, err := callbacks.RunBeforeModel(ctx, &model.BeforeModelArgs{Request: llmRequest})
+	result, err := wrapBeforeModelCallbacksWithInvocation(callbacks, invocation).
+		RunBeforeModel(ctx, &model.BeforeModelArgs{Request: llmRequest})
 	if err != nil {
 		return ctx, nil, err
 	}
@@ -910,6 +971,37 @@ func runBeforeModelCallbacksWith(
 		return ctx, result.CustomResponse, nil
 	}
 	return ctx, nil, nil
+}
+
+func wrapBeforeModelCallbacksWithInvocation(
+	callbacks *model.Callbacks,
+	invocation *agent.Invocation,
+) *model.Callbacks {
+	if callbacks == nil || invocation == nil || len(callbacks.BeforeModel) == 0 {
+		return callbacks
+	}
+	wrapped := *callbacks
+	wrapped.BeforeModel = make([]model.BeforeModelCallbackStructured, len(callbacks.BeforeModel))
+	for i, cb := range callbacks.BeforeModel {
+		callback := cb
+		wrapped.BeforeModel[i] = func(
+			ctx context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			ctx = withInvocationContextIfMissing(ctx, invocation)
+			result, err := callback(ctx, args)
+			if result != nil && result.Context != nil {
+				clonedResult := *result
+				clonedResult.Context = withInvocationContextIfMissing(
+					result.Context,
+					invocationFromContextOrFallback(ctx, invocation),
+				)
+				return &clonedResult, err
+			}
+			return result, err
+		}
+	}
+	return &wrapped
 }
 
 func (f *Flow) generateContentSeq(
@@ -931,7 +1023,7 @@ func (f *Flow) generateContentSeq(
 		if seq == nil {
 			return nil, errors.New(errMsgNoModelResponse)
 		}
-		return seq, nil
+		return normalizeResponseIDs(seq), nil
 	}
 
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
@@ -945,13 +1037,53 @@ func (f *Flow) generateContentSeq(
 		return nil, err
 	}
 
-	return func(yield func(*model.Response) bool) {
+	return normalizeResponseIDs(func(yield func(*model.Response) bool) {
 		for resp := range responseChan {
 			if !yield(resp) {
 				return
 			}
 		}
-	}, nil
+	}), nil
+}
+
+func normalizeResponseIDs(seq model.Seq[*model.Response]) model.Seq[*model.Response] {
+	if seq == nil {
+		return nil
+	}
+	return func(yield func(*model.Response) bool) {
+		currentID := ""
+		seq(func(resp *model.Response) bool {
+			normalized := normalizeResponseID(resp, &currentID)
+			keepGoing := yield(normalized)
+			if normalized != nil && normalized.Done && !normalized.IsPartial {
+				currentID = ""
+			}
+			return keepGoing
+		})
+	}
+}
+
+func normalizeResponseID(resp *model.Response, currentID *string) *model.Response {
+	if resp == nil {
+		return nil
+	}
+	if currentID == nil {
+		return resp
+	}
+	// Preserve one stable ID for the entire active response stream.
+	if *currentID == "" {
+		if resp.ID != "" {
+			*currentID = resp.ID
+		} else {
+			*currentID = generatedResponseIDPrefix + uuid.NewString()
+		}
+	}
+	if resp.ID == *currentID {
+		return resp
+	}
+	cloned := resp.Clone()
+	cloned.ID = *currentID
+	return cloned
 }
 
 // postprocess handles post-LLM call processing using response processors.

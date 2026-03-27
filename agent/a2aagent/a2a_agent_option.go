@@ -13,13 +13,26 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-a2a-go/client"
+	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-a2a-go/server"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // StreamingRespHandler handles the streaming response content
 // return the content will be added to the final aggregated content
 type StreamingRespHandler func(resp *model.Response) (string, error)
+
+// ConvertToA2AMessageFunc is the function signature for converting an invocation to an A2A protocol message.
+type ConvertToA2AMessageFunc func(isStream bool, agentName string, invocation *agent.Invocation) (*protocol.Message, error)
+
+// BuildMessageHook wraps the A2A message conversion with additional functionality.
+// The hook receives the next converter function and returns a new converter function.
+// Users can modify the invocation before calling next, modify the message after calling next,
+// or completely replace the conversion logic by not calling next.
+//
+// This follows the same middleware pattern as server-side ProcessMessageHook.
+type BuildMessageHook func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc
 
 // Option configures the A2AAgent
 type Option func(*A2AAgent)
@@ -95,6 +108,32 @@ func WithStreamingRespHandler(handler StreamingRespHandler) Option {
 func WithTransferStateKey(key ...string) Option {
 	return func(a *A2AAgent) {
 		a.transferStateKey = append(a.transferStateKey, key...)
+	}
+}
+
+// WithBuildMessageHook sets a hook to customize the A2A message conversion.
+// The hook wraps the default converter (including transferStateKey processing) as a middleware,
+// following the same pattern as server-side WithProcessMessageHook.
+//
+// Example - modify message after conversion:
+//
+//	a2aagent.WithBuildMessageHook(func(next a2aagent.ConvertToA2AMessageFunc) a2aagent.ConvertToA2AMessageFunc {
+//	    return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+//	        msg, err := next(isStream, agentName, inv)
+//	        if err != nil {
+//	            return nil, err
+//	        }
+//	        // inject custom metadata
+//	        if msg.Metadata == nil {
+//	            msg.Metadata = make(map[string]any)
+//	        }
+//	        msg.Metadata["custom_key"] = "custom_value"
+//	        return msg, nil
+//	    }
+//	})
+func WithBuildMessageHook(hook BuildMessageHook) Option {
+	return func(a *A2AAgent) {
+		a.buildMessageHook = hook
 	}
 }
 

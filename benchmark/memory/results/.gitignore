@@ -1,6 +1,0 @@
-# Ignore result data and logs (large, machine-generated).
-*.json
-*.log
-*.pdf
-tmp/
-tools/

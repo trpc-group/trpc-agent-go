@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -332,17 +333,25 @@ func TestBuildRequestProcessors_PostToolPromptInjection(t *testing.T) {
 		customPrompt  = "[Custom Prompt] Do not mention tools."
 	)
 
-	run := func(t *testing.T, opts *Options) string {
+	findPostToolProcessor := func(
+		t *testing.T,
+		opts *Options,
+	) *processor.PostToolRequestProcessor {
 		t.Helper()
 
 		procs := buildRequestProcessors("tester", opts)
-		var ptp *processor.PostToolRequestProcessor
 		for _, p := range procs {
 			if v, ok := p.(*processor.PostToolRequestProcessor); ok {
-				ptp = v
-				break
+				return v
 			}
 		}
+		return nil
+	}
+
+	run := func(t *testing.T, opts *Options) string {
+		t.Helper()
+
+		ptp := findPostToolProcessor(t, opts)
 		require.NotNil(t, ptp)
 
 		req := &model.Request{
@@ -377,16 +386,14 @@ func TestBuildRequestProcessors_PostToolPromptInjection(t *testing.T) {
 	t.Run("injection disabled", func(t *testing.T) {
 		opts := &Options{}
 		WithEnablePostToolPrompt(false)(opts)
-		got := run(t, opts)
-		require.Equal(t, systemContent, got)
+		require.Nil(t, findPostToolProcessor(t, opts))
 	})
 
 	t.Run("disable overrides custom prompt", func(t *testing.T) {
 		opts := &Options{}
 		WithPostToolPrompt(customPrompt)(opts)
 		WithEnablePostToolPrompt(false)(opts)
-		got := run(t, opts)
-		require.Equal(t, systemContent, got)
+		require.Nil(t, findPostToolProcessor(t, opts))
 	})
 }
 
@@ -857,6 +864,43 @@ func TestLLMAgent_New_WithStructuredOutputJSONSchema_AllowsTools(t *testing.T) {
 	})
 }
 
+func TestLLMAgent_OutputSchemaOnly_InjectsJSONInstructions(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"status": map[string]any{"type": "string"},
+		},
+	}
+	agt := New(
+		"test-agent",
+		WithOutputSchema(schema),
+	)
+
+	reqProcs := buildRequestProcessorsWithAgent(agt, &agt.option)
+	var instrProc *processor.InstructionRequestProcessor
+	for _, rp := range reqProcs {
+		if p, ok := rp.(*processor.InstructionRequestProcessor); ok {
+			instrProc = p
+			break
+		}
+	}
+	require.NotNil(t, instrProc)
+
+	inv := &agent.Invocation{InvocationID: testModelPromptInvocationID}
+	agt.setupInvocation(inv)
+
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+	}
+	eventCh := make(chan *event.Event, 10)
+	instrProc.ProcessRequest(context.Background(), inv, req, eventCh)
+
+	require.NotEmpty(t, req.Messages)
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.Contains(t, req.Messages[0].Content, "IMPORTANT: Return ONLY a JSON object")
+	require.Contains(t, req.Messages[0].Content, `"status"`)
+}
+
 // TestLLMAgent_InvocationContextAccess verifies that LLMAgent can access invocation
 // from context when called through runner (after removing duplicate injection).
 func TestLLMAgent_InvocationContextAccess(t *testing.T) {
@@ -1064,6 +1108,42 @@ func TestLLMAgent_EnableCodeExecutionResponseProcessor(t *testing.T) {
 		require.Equal(t, 0, exec.CallCount())
 		require.Equal(t, codeBlock, gotContent)
 	})
+
+	t.Run("non_executable_markdown_block", func(t *testing.T) {
+		exec := &countingCodeExecutor{}
+		agt := New(
+			"test",
+			WithModel(&mockModelWithResponse{
+				response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role: model.RoleAssistant,
+							Content: "```markdown\n" +
+								"# hello\n```",
+						},
+					}},
+					Done: true,
+				},
+			}),
+			WithCodeExecutor(exec),
+		)
+
+		events, err := agt.Run(context.Background(), newInvocation())
+		require.NoError(t, err)
+
+		gotContent := ""
+		for ev := range events {
+			if ev == nil || ev.Response == nil {
+				continue
+			}
+			if ev.IsFinalResponse() && len(ev.Choices) > 0 {
+				gotContent = ev.Choices[0].Message.Content
+			}
+		}
+
+		require.Equal(t, 0, exec.CallCount())
+		require.Equal(t, "```markdown\n# hello\n```", gotContent)
+	})
 }
 
 // TestLLMAgent_OptionsWithOutputKey tests WithOutputKey option.
@@ -1121,6 +1201,73 @@ func TestLLMAgent_OptionsWithStructuredOutputJSONSchema(t *testing.T) {
 	require.Equal(t, "output", opts.StructuredOutput.JSONSchema.Name)
 	require.True(t, opts.StructuredOutput.JSONSchema.Strict)
 	require.Equal(t, "test description", opts.StructuredOutput.JSONSchema.Description)
+}
+
+func TestLLMAgent_SetupInvocation_UsesRunStructuredOutputOverride(t *testing.T) {
+	type agentOutput struct {
+		AgentField string `json:"agent_field"`
+	}
+	type runOutput struct {
+		RunField string `json:"run_field"`
+	}
+
+	agt := New(
+		"test-agent",
+		WithStructuredOutputJSON(new(agentOutput), true, "agent description"),
+	)
+	inv := &agent.Invocation{}
+	agent.WithStructuredOutputJSON(new(runOutput), true, "run description")(&inv.RunOptions)
+
+	agt.setupInvocation(inv)
+
+	require.NotNil(t, inv.StructuredOutput)
+	require.NotNil(t, inv.StructuredOutput.JSONSchema)
+	require.Equal(t, "runOutput", inv.StructuredOutput.JSONSchema.Name)
+	require.Equal(t, "run description", inv.StructuredOutput.JSONSchema.Description)
+	require.Equal(t, reflect.TypeOf((*runOutput)(nil)), inv.StructuredOutputType)
+	require.NotNil(t, inv.RunOptions.StructuredOutput)
+	require.NotNil(t, inv.RunOptions.StructuredOutput.JSONSchema)
+	require.Equal(t, "runOutput", inv.RunOptions.StructuredOutput.JSONSchema.Name)
+	require.Equal(t, reflect.TypeOf((*runOutput)(nil)), inv.RunOptions.StructuredOutputType)
+}
+
+func TestLLMAgent_Run_UsesRunStructuredOutputWithoutStaticOutputProcessor(t *testing.T) {
+	type runOutput struct {
+		RunField string `json:"run_field"`
+	}
+
+	agt := New(
+		"test-agent",
+		WithModel(&mockModelWithResponse{
+			response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(`{"run_field":"ok"}`),
+				}},
+				Done: true,
+			},
+		}),
+	)
+	inv := &agent.Invocation{
+		Message:      model.NewUserMessage("hi"),
+		InvocationID: "test-invocation",
+		Session:      &session.Session{ID: "test-session"},
+	}
+	agent.WithStructuredOutputJSON(new(runOutput), true, "run description")(&inv.RunOptions)
+
+	eventCh, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	var structured any
+	for evt := range eventCh {
+		if evt != nil && evt.StructuredOutput != nil {
+			structured = evt.StructuredOutput
+		}
+	}
+
+	require.NotNil(t, structured)
+	result, ok := structured.(*runOutput)
+	require.True(t, ok)
+	require.Equal(t, "ok", result.RunField)
 }
 
 // TestLLMAgent_OptionsWithAddCurrentTime tests WithAddCurrentTime option.

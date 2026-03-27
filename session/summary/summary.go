@@ -45,6 +45,18 @@ type SessionSummarizer interface {
 	Metadata() map[string]any
 }
 
+// ContextAwareSummarizer is an optional extension interface for
+// SessionSummarizer implementations that need request-scoped context during
+// the summary decision phase.
+type ContextAwareSummarizer interface {
+	// SessionSummarizer is the base interface that all summarizers must implement.
+	SessionSummarizer
+
+	// ShouldSummarizeWithContext checks if the session should be summarized
+	// using the current request context.
+	ShouldSummarizeWithContext(context.Context, *session.Session) bool
+}
+
 // SessionSummary represents a summary of a session's conversation history.
 type SessionSummary struct {
 	// ID is the ID of the session.

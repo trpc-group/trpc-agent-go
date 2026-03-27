@@ -22,6 +22,7 @@ import (
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -37,12 +38,16 @@ type options struct {
 	metricRegistry                    metricregistry.Registry
 	evalService                       service.Service
 	expectedRunner                    runner.Runner
+	userSimulator                     usersimulation.Simulator
 	callbacks                         *service.Callbacks
 	judgeRunner                       runner.Runner
 	numRuns                           int
+	numRunsParallelEnabled            *bool
 	evalCaseParallelism               *int
 	evalCaseParallelInferenceEnabled  *bool
 	evalCaseParallelEvaluationEnabled *bool
+	runDetailsEnabled                 bool
+	runDetailsCollector               *runDetailsCollector
 	runOptions                        []agent.RunOption
 }
 
@@ -109,6 +114,13 @@ func WithEvaluationService(s service.Service) Option {
 	}
 }
 
+// WithUserSimulator sets the simulator used for conversation scenarios.
+func WithUserSimulator(sim usersimulation.Simulator) Option {
+	return func(o *options) {
+		o.userSimulator = sim
+	}
+}
+
 // WithCallbacks sets evaluation callbacks for evaluation service.
 func WithCallbacks(c *service.Callbacks) Option {
 	return func(o *options) {
@@ -137,6 +149,13 @@ func WithNumRuns(numRuns int) Option {
 	}
 }
 
+// WithNumRunsParallelEnabled enables or disables parallel execution across evaluation runs.
+func WithNumRunsParallelEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.numRunsParallelEnabled = &enabled
+	}
+}
+
 // WithEvalCaseParallelism sets the maximum number of eval cases processed in parallel.
 func WithEvalCaseParallelism(parallelism int) Option {
 	return func(o *options) {
@@ -155,6 +174,13 @@ func WithEvalCaseParallelInferenceEnabled(enabled bool) Option {
 func WithEvalCaseParallelEvaluationEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.evalCaseParallelEvaluationEnabled = &enabled
+	}
+}
+
+// WithRunDetailsEnabled enables or disables per-run inference details in evaluation results.
+func WithRunDetailsEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.runDetailsEnabled = enabled
 	}
 }
 

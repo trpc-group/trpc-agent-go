@@ -63,6 +63,9 @@ go build -o a2a-demo .
 
 # Run with custom model and port
 ./a2a-demo -model gpt-4o-mini -host 0.0.0.0:9999
+
+# Run server using WithRunner + WithAgentCard
+./a2a-demo -server-mode runner-card
 ```
 
 ## Environment Setup
@@ -150,9 +153,24 @@ Because he didn't get arrays! (a raise) 😄
    // Start A2A server
    server, err := a2a.New(
        a2a.WithHost(*host),
-       a2a.WithAgent(remoteAgent),
+       a2a.WithAgent(remoteAgent, *streaming),
    )
    server.Start(*host)
+   ```
+
+   Or use the `runner-card` mode to build the server with `WithRunner(...)` and `WithAgentCard(...)`:
+
+   ```go
+   card, _ := a2a.NewAgentCard(
+       remoteAgent.Info().Name,
+       remoteAgent.Info().Description,
+       *host,
+       *streaming,
+   )
+   server, err := a2a.New(
+       a2a.WithAgentCard(card),
+       a2a.WithRunner(runner.NewRunner(remoteAgent.Info().Name, remoteAgent)),
+   )
    ```
 
 2. **Client Setup** (`startChat`)
@@ -184,6 +202,7 @@ Because he didn't get arrays! (a raise) 😄
 - `-model`: Model name (default: "deepseek-chat")
 - `-host`: Server host and port (default: "0.0.0.0:8888")
 - `-streaming`: Enable streaming mode (default: true)
+- `-server-mode`: Server build mode, `agent` or `runner-card` (default: "agent")
 - `-remote-only`: Only output remote agent responses (default: false)
 
 ### A2A Agent Options
@@ -196,6 +215,7 @@ Because he didn't get arrays! (a raise) 😄
 ### A2A Server Options
 - `WithHost()`: Server host and port binding
 - `WithAgent()`: The agent to expose and streaming mode
+- `WithRunner() + WithAgentCard()`: Build the server from a custom runner plus explicit public agent metadata
 - `WithUserIDHeader()`: Custom HTTP header name for reading UserID from client (default: "X-User-ID")
 - `WithDebugLogging()`: Enable debug logging
 - `WithErrorHandler()`: Custom error handler

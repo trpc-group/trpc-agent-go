@@ -1319,9 +1319,26 @@ Use cases:
   GraphAgent, `SubgraphResult.FinalState` contains the child's final state
   snapshot and can be mapped into parent keys. Runnable example:
   `examples/graph/agent_state_handoff`.
+- **Handle fatal child fallback state separately**: if the child stops before
+  `graph.execution`, read `SubgraphResult.FallbackState` /
+  `SubgraphResult.FallbackStateDelta`, or use
+  `SubgraphResult.EffectiveState()` when you want one code path.
 - **Store the child LLM's final text under your own keys**: `SubgraphResult`
   always includes `LastResponse`, so output mappers work for both GraphAgent and
   non-graph agents.
+
+Important note for `AddAgentNode(...)` backed by an `LLMAgent`:
+
+- Treat `WithSubgraphInputMapper` as a way to pass **structured runtime state**,
+  not as a way to manually splice prompt history.
+- If the child runtime state already contains `graph.StateKeyMessages`, the
+  framework may treat that value as a graph-owned message snapshot for the
+  child. In that case, the child `LLMAgent` will use that snapshot instead of
+  assembling history again from the session.
+- Do **not** forward `graph.StateKeyMessages` through `WithSubgraphInputMapper`
+  unless you intentionally want the graph to own the child's message view.
+- If you need to control this explicitly, use
+  `graph.WithSubgraphMessageSource(...)`.
 
 #### Agent nodes: isolation vs multi‑turn tool calls
 
@@ -4357,6 +4374,9 @@ Recommendations:
 - For textual intermediate outputs, prefer existing model streaming events (`choice.Delta.Content`).
 
 #### Recover from non-fatal node errors
+
+For the recommended standardized pattern that also covers fatal fallback state,
+subgraph propagation, and A2A alignment, see [Error Handling](error-handling.md).
 
 By default, if a node returns a non‑nil `error`, graph execution stops and the
 Executor emits an error event.

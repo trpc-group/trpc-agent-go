@@ -465,13 +465,18 @@ for event := range eventChan {
         }
     }
 
-    // 检查是否完成（注意：工具调用完成时不应该 break）
+    // 检查当前这条响应是否已完整结束
     if event.IsFinalResponse() {
         fmt.Println()
         break
     }
 }
 ```
+
+上面的示例使用 `event.IsFinalResponse()`，是因为它只关心“当前这条回复何时
+完整输出完”。如果你需要等待整次 `Runner.Run` 真正结束，例如
+`tool.response` 后可能还有后续处理，或在 GraphAgent 中还要等待图上其他节点
+完成，请改用 `event.IsRunnerCompletion()` 作为退出条件。
 
 该示例的完整代码可见 [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
 
@@ -1135,3 +1140,74 @@ llm := llmagent.New(
 - 内存版 `UpdateUserState` 出于安全设计禁止写 `temp:*`；需要会话内
   临时值时，通过 `invocation.Session.SetState` 写入（例如通过回调）。
 - 占位符是在“请求时”解析；只要你换了存储的值，下一次模型请求就会用新值，无需重建 Agent。
+
+## 静态结构导出
+
+框架提供了 Agent 的静态结构导出能力，可用于结构检查、可视化、配置工具和结构诊断等需要稳定节点图与 surface 基线的场景。
+
+可以通过 `agent/structure` 导出规范化快照：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+
+snapshot, err := structure.Export(ctx, llmAgent)
+if err != nil {
+    log.Fatalf("导出结构失败: %v", err)
+}
+
+fmt.Println(snapshot.StructureID)
+fmt.Println(snapshot.EntryNodeID)
+fmt.Println(len(snapshot.Nodes), len(snapshot.Edges), len(snapshot.Surfaces))
+```
+
+导出的快照包含：
+
+- `Nodes`：当前 Agent 结构中的稳定静态节点
+- `Edges`：节点之间静态上可能出现的连接
+- `Surfaces`：稳定可编辑的基线面，例如 `instruction`、`model`、`tool`、`skill`
+
+完整示例见 [examples/graph/structure_export](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/structure_export)。
+
+## 执行图导出
+
+框架可以为单次 `runner.Run` 调用导出执行图，用来观察这次运行里哪些节点真的执行了、各个步骤之间如何依赖，以及每个步骤看到的输入和输出快照。
+
+需要在运行时显式开启：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+r := runner.NewRunner("demo-app", ag)
+events, err := r.Run(
+    ctx,
+    "user-1",
+    "session-1",
+    model.NewUserMessage("hello"),
+    agent.WithExecutionTraceEnabled(true),
+)
+if err != nil {
+    log.Fatalf("运行失败: %v", err)
+}
+for evt := range events {
+    if evt != nil && evt.IsRunnerCompletion() && evt.ExecutionTrace != nil {
+        fmt.Println(evt.ExecutionTrace.RootAgentName)
+        fmt.Println(evt.ExecutionTrace.Status)
+        fmt.Println(len(evt.ExecutionTrace.Steps))
+    }
+}
+```
+
+执行图挂在 runner completion event 上，属于进程内工件，默认不会参与序列化。
+
+每个步骤都会带上这些稳定字段：
+
+- `NodeID`：本次执行对应的静态节点路径
+- `PredecessorStepIDs`：这次运行里该步骤的直接前驱步骤
+- `Input` 和 `Output`：步骤输入输出的稳定文本快照
+- `Error`：步骤失败时记录的终态错误
+
+完整示例见 [examples/graph/execution_trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/execution_trace)。
