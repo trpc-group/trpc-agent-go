@@ -617,6 +617,12 @@ func (s *Store) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateBy
 		return 0, fmt.Errorf("sqlitevec update by filter: %w", err)
 	}
 
+	for field := range config.Updates {
+		if err := validateUpdateField(field); err != nil {
+			return 0, err
+		}
+	}
+
 	// Collect matching IDs.
 	ids, err := s.collectFilteredIDsFromCondition(ctx, config.DocumentIDs, config.FilterCondition)
 	if err != nil {
@@ -678,6 +684,32 @@ func (s *Store) UpdateByFilter(ctx context.Context, opts ...vectorstore.UpdateBy
 	}
 
 	return count, nil
+}
+
+func validateUpdateField(field string) error {
+	forbiddenFields := map[string]bool{
+		"id":         true,
+		"created_at": true,
+		"updated_at": true,
+	}
+
+	if forbiddenFields[field] {
+		return fmt.Errorf("field %q cannot be updated", field)
+	}
+
+	switch field {
+	case "name", "content", "embedding_text", "embedding":
+		return nil
+	}
+
+	if strings.HasPrefix(field, source.MetadataFieldPrefix) {
+		if strings.TrimPrefix(field, source.MetadataFieldPrefix) == "" {
+			return fmt.Errorf("invalid metadata field: %q", field)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("field %q cannot be updated", field)
 }
 
 // ---------- Count ----------
