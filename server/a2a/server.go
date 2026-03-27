@@ -901,38 +901,6 @@ func (m *messageProcessor) processMessage(
 
 	for agentEvent := range agentMsgChan {
 		eventCount++
-
-		// Check context cancellation
-		select {
-		case <-ctx.Done():
-			log.WarnfContext(
-				ctx,
-				"context cancelled after processing %d events",
-				eventCount,
-			)
-			return m.handleError(ctx, a2aMsg, false, ctx.Err())
-		default:
-		}
-
-		if m.debugLogging {
-			agentEventJson, _ := json.Marshal(agentEvent)
-			log.DebugfContext(
-				ctx,
-				"get agent event: req msg id: %s, event: %s",
-				a2aMsg.MessageID,
-				string(agentEventJson),
-			)
-		}
-
-		if agentEvent == nil || agentEvent.Response == nil {
-			log.WarnfContext(
-				ctx,
-				"received nil event or response at position %d, skipping",
-				eventCount,
-			)
-			continue
-		}
-
 		if m.structuredTaskErrors &&
 			isStructuredTaskErrorEvent(agentEvent) {
 			taskID := fmt.Sprintf(
@@ -949,43 +917,14 @@ func (m *messageProcessor) processMessage(
 				),
 			}, nil
 		}
-
-		convertedResult, err := m.eventToA2AConverter.ConvertToA2AMessage(
-			ctx, agentEvent, EventToA2AUnaryOptions{CtxID: *a2aMsg.ContextID},
-		)
-		if err != nil {
-			log.ErrorfContext(
-				ctx,
-				"failed to convert event %d to A2A message: %v",
-				eventCount,
-				err,
-			)
+		if err := m.processUnaryEvent(
+			ctx,
+			a2aMsg,
+			agentEvent,
+			eventCount,
+			&messages,
+		); err != nil {
 			return m.handleError(ctx, a2aMsg, false, err)
-		}
-
-		if m.debugLogging {
-			convertedMsgJson, _ := json.Marshal(convertedResult)
-			log.DebugfContext(
-				ctx,
-				"converted agent event to A2A message: req msg id: %s, "+
-					"event: %s",
-				a2aMsg.MessageID,
-				string(convertedMsgJson),
-			)
-		}
-
-		if convertedResult != nil {
-			if msg, ok := convertedResult.(*protocol.Message); ok {
-				messages = append(messages, *msg)
-			}
-			if task, ok := convertedResult.(*protocol.Task); ok {
-				// Extract messages from task artifacts.
-				for _, artifact := range task.Artifacts {
-					artifactMsg := protocol.NewMessage(protocol.MessageRoleAgent, artifact.Parts)
-					artifactMsg.Metadata = artifact.Metadata
-					messages = append(messages, artifactMsg)
-				}
-			}
 		}
 	}
 
@@ -1015,16 +954,133 @@ func (m *messageProcessor) processMessage(
 		)
 	}
 
-	// If only one message, return it directly
-	// If multiple messages, return a Task with history
+	return buildMessageProcessingResult(a2aMsg, ctxID, messages), nil
+}
+
+func (m *messageProcessor) processUnaryEvent(
+	ctx context.Context,
+	a2aMsg *protocol.Message,
+	agentEvent *event.Event,
+	eventCount int,
+	messages *[]protocol.Message,
+) error {
+	select {
+	case <-ctx.Done():
+		log.WarnfContext(
+			ctx,
+			"context cancelled after processing %d events",
+			eventCount,
+		)
+		return ctx.Err()
+	default:
+	}
+
+	if m.debugLogging {
+		agentEventJSON, _ := json.Marshal(agentEvent)
+		log.DebugfContext(
+			ctx,
+			"get agent event: req msg id: %s, event: %s",
+			a2aMsg.MessageID,
+			string(agentEventJSON),
+		)
+	}
+
+	if agentEvent == nil || agentEvent.Response == nil {
+		log.WarnfContext(
+			ctx,
+			"received nil event or response at position %d, skipping",
+			eventCount,
+		)
+		return nil
+	}
+
+	if shouldSkipRunnerCompletionEvent(agentEvent, *messages) {
+		return nil
+	}
+
+	convertedResult, err := m.eventToA2AConverter.ConvertToA2AMessage(
+		ctx,
+		agentEvent,
+		EventToA2AUnaryOptions{CtxID: *a2aMsg.ContextID},
+	)
+	if err != nil {
+		log.ErrorfContext(
+			ctx,
+			"failed to convert event %d to A2A message: %v",
+			eventCount,
+			err,
+		)
+		return err
+	}
+
+	if m.debugLogging {
+		convertedMsgJSON, _ := json.Marshal(convertedResult)
+		log.DebugfContext(
+			ctx,
+			"converted agent event to A2A message: req msg id: %s, "+
+				"event: %s",
+			a2aMsg.MessageID,
+			string(convertedMsgJSON),
+		)
+	}
+
+	appendConvertedUnaryResult(messages, convertedResult)
+	return nil
+}
+
+func shouldSkipRunnerCompletionEvent(
+	agentEvent *event.Event,
+	messages []protocol.Message,
+) bool {
+	if !agentEvent.IsRunnerCompletion() || agentEvent.Response.IsValidContent() {
+		return false
+	}
+	if len(agentEvent.StateDelta) == 0 {
+		return true
+	}
+	// Keep runner-completion state delta, but merge it into the latest
+	// converted message to avoid turning metadata-only completion into
+	// the final artifact message.
+	return mergeRunnerCompletionStateDeltaIntoLastMessage(
+		messages,
+		agentEvent.StateDelta,
+	)
+}
+
+func appendConvertedUnaryResult(
+	messages *[]protocol.Message,
+	convertedResult any,
+) {
+	if convertedResult == nil {
+		return
+	}
+	if msg, ok := convertedResult.(*protocol.Message); ok {
+		*messages = append(*messages, *msg)
+	}
+	if task, ok := convertedResult.(*protocol.Task); ok {
+		// Extract messages from task artifacts.
+		for _, artifact := range task.Artifacts {
+			artifactMsg := protocol.NewMessage(protocol.MessageRoleAgent, artifact.Parts)
+			artifactMsg.Metadata = artifact.Metadata
+			*messages = append(*messages, artifactMsg)
+		}
+	}
+}
+
+func buildMessageProcessingResult(
+	a2aMsg *protocol.Message,
+	ctxID string,
+	messages []protocol.Message,
+) *taskmanager.MessageProcessingResult {
+	// If only one message, return it directly.
 	if len(messages) == 1 {
 		return &taskmanager.MessageProcessingResult{
 			Result: &messages[0],
-		}, nil
+		}
 	}
 
-	// Multiple messages: return Task with history containing intermediate messages
-	// and final message in artifacts
+	// Multiple messages: return a Task with history containing
+	// intermediate messages and the final message in artifacts.
 	taskID := fmt.Sprintf("task-%s-%d", a2aMsg.MessageID, time.Now().UnixNano())
 	task := protocol.NewTask(taskID, ctxID)
 	task.Status = protocol.TaskStatus{
@@ -1032,12 +1088,7 @@ func (m *messageProcessor) processMessage(
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
 
-	// Put all messages except the last one in history
-	if len(messages) > 1 {
-		task.History = messages[:len(messages)-1]
-	}
-
-	// Put the last message in artifacts
+	task.History = messages[:len(messages)-1]
 	lastMsg := messages[len(messages)-1]
 	task.Artifacts = []protocol.Artifact{{
 		ArtifactID: lastMsg.MessageID,
@@ -1045,9 +1096,48 @@ func (m *messageProcessor) processMessage(
 		Metadata:   lastMsg.Metadata,
 	}}
 
-	return &taskmanager.MessageProcessingResult{
-		Result: task,
-	}, nil
+	return &taskmanager.MessageProcessingResult{Result: task}
+}
+
+func mergeRunnerCompletionStateDeltaIntoLastMessage(
+	messages []protocol.Message,
+	stateDelta map[string][]byte,
+) bool {
+	if len(messages) == 0 || len(stateDelta) == 0 {
+		return false
+	}
+
+	lastMsg := &messages[len(messages)-1]
+	if lastMsg.Metadata == nil {
+		lastMsg.Metadata = make(map[string]any, 1)
+	}
+
+	mergedStateDelta := make(map[string][]byte, len(stateDelta))
+	if existingRaw, ok := lastMsg.Metadata[ia2a.MessageMetadataStateDeltaKey]; ok {
+		existingStateDelta := DecodeStateDeltaMetadata(existingRaw)
+		for key, value := range existingStateDelta {
+			mergedStateDelta[key] = cloneStateDeltaBytes(value)
+		}
+	}
+	for key, value := range stateDelta {
+		mergedStateDelta[key] = cloneStateDeltaBytes(value)
+	}
+
+	encoded := EncodeStateDeltaMetadata(mergedStateDelta)
+	if len(encoded) == 0 {
+		return false
+	}
+	lastMsg.Metadata[ia2a.MessageMetadataStateDeltaKey] = encoded
+	return true
+}
+
+func cloneStateDeltaBytes(raw []byte) []byte {
+	if raw == nil {
+		return nil
+	}
+	copied := make([]byte, len(raw))
+	copy(copied, raw)
+	return copied
 }
 
 // addTaskMetadata adds ADK-compatible metadata to task status update events.
