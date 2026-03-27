@@ -7,7 +7,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package skill
+package skill_test
 
 import (
 	"context"
@@ -17,22 +17,23 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	rootskill "trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 type visibilityTestRepo struct {
-	summaries []Summary
-	skills    map[string]*Skill
+	summaries []rootskill.Summary
+	skills    map[string]*rootskill.Skill
 	paths     map[string]string
 	env       map[string]map[string]string
 }
 
-func (r *visibilityTestRepo) Summaries() []Summary {
-	out := make([]Summary, len(r.summaries))
+func (r *visibilityTestRepo) Summaries() []rootskill.Summary {
+	out := make([]rootskill.Summary, len(r.summaries))
 	copy(out, r.summaries)
 	return out
 }
 
-func (r *visibilityTestRepo) Get(name string) (*Skill, error) {
+func (r *visibilityTestRepo) Get(name string) (*rootskill.Skill, error) {
 	if sk, ok := r.skills[name]; ok {
 		return sk, nil
 	}
@@ -63,7 +64,7 @@ func testRuntimeStateContext(userID string) context.Context {
 	return agent.NewInvocationContext(context.Background(), inv)
 }
 
-func visibleSkillNames(summaries []Summary) []string {
+func visibleSkillNames(summaries []rootskill.Summary) []string {
 	out := make([]string, 0, len(summaries))
 	for _, summary := range summaries {
 		out = append(out, summary.Name)
@@ -73,13 +74,13 @@ func visibleSkillNames(summaries []Summary) []string {
 
 func TestFilteredRepository_FiltersByContext(t *testing.T) {
 	base := &visibilityTestRepo{
-		summaries: []Summary{
+		summaries: []rootskill.Summary{
 			{Name: "alpha", Description: "A"},
 			{Name: "beta", Description: "B"},
 		},
-		skills: map[string]*Skill{
-			"alpha": {Summary: Summary{Name: "alpha"}, Body: "alpha body"},
-			"beta":  {Summary: Summary{Name: "beta"}, Body: "beta body"},
+		skills: map[string]*rootskill.Skill{
+			"alpha": {Summary: rootskill.Summary{Name: "alpha"}, Body: "alpha body"},
+			"beta":  {Summary: rootskill.Summary{Name: "beta"}, Body: "beta body"},
 		},
 		paths: map[string]string{
 			"alpha": "/skills/alpha",
@@ -90,7 +91,7 @@ func TestFilteredRepository_FiltersByContext(t *testing.T) {
 			"beta":  {"BETA": "1"},
 		},
 	}
-	repo := NewFilteredRepository(base, func(ctx context.Context, summary Summary) bool {
+	repo := rootskill.NewFilteredRepository(base, func(ctx context.Context, summary rootskill.Summary) bool {
 		userID, _ := agent.GetRuntimeStateValueFromContext[string](ctx, "user_id")
 		if userID == "user-a" {
 			return summary.Name == "alpha"
@@ -101,21 +102,21 @@ func TestFilteredRepository_FiltersByContext(t *testing.T) {
 	ctxA := testRuntimeStateContext("user-a")
 	ctxB := testRuntimeStateContext("user-b")
 
-	require.True(t, IsContextAwareRepository(repo))
-	require.Equal(t, []string{"alpha"}, visibleSkillNames(SummariesForContext(ctxA, repo)))
-	require.Equal(t, []string{"beta"}, visibleSkillNames(SummariesForContext(ctxB, repo)))
+	require.True(t, rootskill.IsContextAwareRepository(repo))
+	require.Equal(t, []string{"alpha"}, visibleSkillNames(rootskill.SummariesForContext(ctxA, repo)))
+	require.Equal(t, []string{"beta"}, visibleSkillNames(rootskill.SummariesForContext(ctxB, repo)))
 
-	sk, err := GetForContext(ctxA, repo, "alpha")
+	sk, err := rootskill.GetForContext(ctxA, repo, "alpha")
 	require.NoError(t, err)
 	require.Equal(t, "alpha body", sk.Body)
 
-	path, err := PathForContext(ctxB, repo, "beta")
+	path, err := rootskill.PathForContext(ctxB, repo, "beta")
 	require.NoError(t, err)
 	require.Equal(t, "/skills/beta", path)
 
-	_, err = GetForContext(ctxA, repo, "beta")
+	_, err = rootskill.GetForContext(ctxA, repo, "beta")
 	require.EqualError(t, err, `skill "beta" not found`)
-	_, err = PathForContext(ctxA, repo, "beta")
+	_, err = rootskill.PathForContext(ctxA, repo, "beta")
 	require.EqualError(t, err, `skill "beta" not found`)
 
 	envRepo, ok := any(repo).(interface {
@@ -132,71 +133,71 @@ func TestFilteredRepository_FiltersByContext(t *testing.T) {
 
 func TestContextRepositoryHelpers_FallbackToPlainRepository(t *testing.T) {
 	base := &visibilityTestRepo{
-		summaries: []Summary{{Name: "alpha", Description: "A"}},
-		skills: map[string]*Skill{
-			"alpha": {Summary: Summary{Name: "alpha"}, Body: "alpha body"},
+		summaries: []rootskill.Summary{{Name: "alpha", Description: "A"}},
+		skills: map[string]*rootskill.Skill{
+			"alpha": {Summary: rootskill.Summary{Name: "alpha"}, Body: "alpha body"},
 		},
 		paths: map[string]string{"alpha": "/skills/alpha"},
 	}
 
 	ctx := context.Background()
 
-	require.False(t, IsContextAwareRepository(base))
-	require.Equal(t, []string{"alpha"}, visibleSkillNames(SummariesForContext(ctx, base)))
+	require.False(t, rootskill.IsContextAwareRepository(base))
+	require.Equal(t, []string{"alpha"}, visibleSkillNames(rootskill.SummariesForContext(ctx, base)))
 
-	sk, err := GetForContext(ctx, base, "alpha")
+	sk, err := rootskill.GetForContext(ctx, base, "alpha")
 	require.NoError(t, err)
 	require.Equal(t, "alpha body", sk.Body)
 
-	path, err := PathForContext(ctx, base, "alpha")
+	path, err := rootskill.PathForContext(ctx, base, "alpha")
 	require.NoError(t, err)
 	require.Equal(t, "/skills/alpha", path)
 }
 
 func TestNewFilteredRepository_NilFilterKeepsPlainRepoNonContextAware(t *testing.T) {
 	base := &visibilityTestRepo{
-		summaries: []Summary{{Name: "alpha", Description: "A"}},
-		skills: map[string]*Skill{
-			"alpha": {Summary: Summary{Name: "alpha"}, Body: "alpha body"},
+		summaries: []rootskill.Summary{{Name: "alpha", Description: "A"}},
+		skills: map[string]*rootskill.Skill{
+			"alpha": {Summary: rootskill.Summary{Name: "alpha"}, Body: "alpha body"},
 		},
 		paths: map[string]string{"alpha": "/skills/alpha"},
 	}
 
-	repo := NewFilteredRepository(base, nil)
-	require.False(t, IsContextAwareRepository(repo))
+	repo := rootskill.NewFilteredRepository(base, nil)
+	require.False(t, rootskill.IsContextAwareRepository(repo))
 	require.Equal(
 		t,
 		[]string{"alpha"},
-		visibleSkillNames(SummariesForContext(context.Background(), repo)),
+		visibleSkillNames(rootskill.SummariesForContext(context.Background(), repo)),
 	)
 }
 
 func TestNewFilteredRepository_NilFilterPreservesContextAwareBase(t *testing.T) {
-	base := NewFilteredRepository(
+	base := rootskill.NewFilteredRepository(
 		&visibilityTestRepo{
-			summaries: []Summary{{Name: "alpha", Description: "A"}},
-			skills: map[string]*Skill{
-				"alpha": {Summary: Summary{Name: "alpha"}, Body: "alpha body"},
+			summaries: []rootskill.Summary{{Name: "alpha", Description: "A"}},
+			skills: map[string]*rootskill.Skill{
+				"alpha": {Summary: rootskill.Summary{Name: "alpha"}, Body: "alpha body"},
 			},
 			paths: map[string]string{"alpha": "/skills/alpha"},
 		},
-		func(context.Context, Summary) bool { return true },
+		func(context.Context, rootskill.Summary) bool { return true },
 	)
 
-	repo := NewFilteredRepository(base, nil)
-	require.True(t, IsContextAwareRepository(repo))
+	repo := rootskill.NewFilteredRepository(base, nil)
+	require.True(t, rootskill.IsContextAwareRepository(repo))
 }
 
 func TestFilteredRepository_DelegatesPlainRepositoryMethods(t *testing.T) {
 	base := &visibilityTestRepo{
-		summaries: []Summary{{Name: "alpha", Description: "A"}},
-		skills: map[string]*Skill{
-			"alpha": {Summary: Summary{Name: "alpha"}, Body: "alpha body"},
+		summaries: []rootskill.Summary{{Name: "alpha", Description: "A"}},
+		skills: map[string]*rootskill.Skill{
+			"alpha": {Summary: rootskill.Summary{Name: "alpha"}, Body: "alpha body"},
 		},
 		paths: map[string]string{"alpha": "/skills/alpha"},
 	}
 
-	repo := NewFilteredRepository(base, func(context.Context, Summary) bool { return true })
+	repo := rootskill.NewFilteredRepository(base, func(context.Context, rootskill.Summary) bool { return true })
 	require.Equal(t, []string{"alpha"}, visibleSkillNames(repo.Summaries()))
 
 	sk, err := repo.Get("alpha")
@@ -209,5 +210,5 @@ func TestFilteredRepository_DelegatesPlainRepositoryMethods(t *testing.T) {
 }
 
 func TestNewFilteredRepository_NilBaseReturnsNil(t *testing.T) {
-	require.Nil(t, NewFilteredRepository(nil, func(context.Context, Summary) bool { return true }))
+	require.Nil(t, rootskill.NewFilteredRepository(nil, func(context.Context, rootskill.Summary) bool { return true }))
 }

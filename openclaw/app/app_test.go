@@ -1075,6 +1075,114 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 	)
 }
 
+func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, []tool.Tool{
+		stubTool{name: "browser"},
+	}, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.Contains(
+		t,
+		sys,
+		"For real browser automation, use browser.",
+	)
+}
+
+func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	typeName := strings.ReplaceAll(
+		t.Name(),
+		"/",
+		"_",
+	)
+	require.NoError(t, registry.RegisterToolProvider(
+		typeName,
+		func(
+			_ registry.ToolProviderDeps,
+			spec registry.PluginSpec,
+		) ([]tool.Tool, error) {
+			return []tool.Tool{stubTool{name: "browser"}}, nil
+		},
+	))
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("{}"), &node))
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+		ToolProviders: []pluginSpec{{
+			Type:   typeName,
+			Config: &node,
+		}},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.Contains(
+		t,
+		sys,
+		"For real browser automation, use browser.",
+	)
+}
+
+func TestNewAgent_ToolProviderErrorIsReturned(t *testing.T) {
+	t.Parallel()
+
+	typeName := strings.ReplaceAll(t.Name(), "/", "_")
+	require.NoError(t, registry.RegisterToolProvider(
+		typeName,
+		func(
+			_ registry.ToolProviderDeps,
+			spec registry.PluginSpec,
+		) ([]tool.Tool, error) {
+			return nil, errors.New("tool provider boom")
+		},
+	))
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("{}"), &node))
+
+	_, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: createAppTestSkill(t),
+		StateDir:   t.TempDir(),
+		ToolProviders: []pluginSpec{{
+			Type:   typeName,
+			Config: &node,
+		}},
+	}, nil, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tool provider boom")
+}
+
 func TestNewAgent_SkillsLoadModeTurnClearsLoadedState(t *testing.T) {
 	t.Parallel()
 
@@ -1642,19 +1750,19 @@ func TestConfigFingerprint_Deterministic(t *testing.T) {
 }
 
 func TestParseOpenAIVariant_Explicit(t *testing.T) {
-	v, err := parseOpenAIVariant(string(openai.VariantOpenAI), "gpt-5")
+	v, err := parseOpenAIVariant(string(openai.VariantOpenAI), "")
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantOpenAI, v)
 }
 
 func TestParseOpenAIVariant_Auto(t *testing.T) {
-	v, err := parseOpenAIVariant(openAIVariantAuto, "deepseek-chat")
+	v, err := parseOpenAIVariant(openAIVariantAuto, "https://api.deepseek.com/v1")
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantDeepSeek, v)
 }
 
 func TestParseOpenAIVariant_Unknown(t *testing.T) {
-	_, err := parseOpenAIVariant("nope", "gpt-5")
+	_, err := parseOpenAIVariant("nope", "")
 	require.Error(t, err)
 }
 
@@ -1662,15 +1770,29 @@ func TestInferOpenAIVariant(t *testing.T) {
 	require.Equal(
 		t,
 		openai.VariantDeepSeek,
-		inferOpenAIVariant("deepseek-r1"),
+		inferOpenAIVariant("https://api.deepseek.com/v1"),
 	)
-	require.Equal(t, openai.VariantQwen, inferOpenAIVariant("qwen2.5"))
+	require.Equal(
+		t,
+		openai.VariantQwen,
+		inferOpenAIVariant("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+	)
 	require.Equal(
 		t,
 		openai.VariantHunyuan,
-		inferOpenAIVariant("hunyuan-t1"),
+		inferOpenAIVariant("https://api.hunyuan.cloud.tencent.com/v1"),
 	)
-	require.Equal(t, openai.VariantOpenAI, inferOpenAIVariant("gpt-5"))
+	require.Equal(
+		t,
+		openai.VariantOpenAI,
+		inferOpenAIVariant("https://deepseek.com/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantOpenAI,
+		inferOpenAIVariant("https://proxy.example.com/v1"),
+	)
+	require.Equal(t, openai.VariantOpenAI, inferOpenAIVariant("deepseek-chat"))
 }
 
 func TestNewModel_Mock(t *testing.T) {
@@ -2130,6 +2252,25 @@ func (t stubTool) Declaration() *tool.Declaration {
 		Name:        t.name,
 		Description: "stub tool",
 	}
+}
+
+type nilDeclTool struct{}
+
+func (t nilDeclTool) Declaration() *tool.Declaration {
+	return nil
+}
+
+func TestHasToolNamed(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, hasToolNamed([]tool.Tool{
+		nilDeclTool{},
+		stubTool{name: "browser"},
+	}, "browser"))
+	require.False(t, hasToolNamed([]tool.Tool{
+		nilDeclTool{},
+		stubTool{name: "exec_command"},
+	}, "browser"))
 }
 
 func TestToolsFromProviders(t *testing.T) {

@@ -8,7 +8,11 @@
 
 package guardrail
 
-import "trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/approval"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/approval"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/promptinjection"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/unsafeintent"
+)
 
 const defaultPluginName = "guardrail"
 
@@ -16,8 +20,10 @@ const defaultPluginName = "guardrail"
 type Option func(*options)
 
 type options struct {
-	name     string
-	approval *approval.Plugin
+	name            string
+	approval        *approval.Plugin
+	promptInjection *promptinjection.Plugin
+	unsafeIntent    *unsafeintent.Plugin
 }
 
 func newOptions(opts ...Option) *options {
@@ -43,5 +49,19 @@ func WithName(name string) Option {
 func WithApproval(approvalPlugin *approval.Plugin) Option {
 	return func(opts *options) {
 		opts.approval = approvalPlugin
+	}
+}
+
+// WithPromptInjection attaches the prompt injection capability.
+func WithPromptInjection(promptInjectionPlugin *promptinjection.Plugin) Option {
+	return func(opts *options) {
+		opts.promptInjection = promptInjectionPlugin
+	}
+}
+
+// WithUnsafeIntent attaches the unsafe intent capability.
+func WithUnsafeIntent(unsafeIntentPlugin *unsafeintent.Plugin) Option {
+	return func(opts *options) {
+		opts.unsafeIntent = unsafeIntentPlugin
 	}
 }

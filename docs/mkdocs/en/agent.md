@@ -1200,6 +1200,162 @@ The exported snapshot contains:
 
 For a complete example, see [examples/graph/structure_export](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/structure_export).
 
+## Override Runtime Surfaces by `nodeID`
+
+In addition to run-scoped overrides such as `agent.WithInstruction(...)` and
+`agent.WithGlobalInstruction(...)`, the framework also supports overriding
+runtime surfaces for a specific node by stable `nodeID` within a single
+`runner.Run(...)` call.
+
+This is useful when you want to:
+
+- Temporarily change the instruction of one graph node without affecting the entire agent.
+- Apply different instructions, few-shot examples, or tools to multiple nodes in the same `runner.Run(...)`.
+- Precisely target nested nodes inside `chain`, `parallel`, `cycle`, `graph`, `team`, and `swarm` structures.
+
+Entry API:
+
+```go
+var patch agent.SurfacePatch
+patch.SetInstruction("Answer in one short paragraph.")
+patch.SetFewShot([][]model.Message{
+    {
+        model.NewUserMessage("Summarize this report."),
+        model.NewAssistantMessage("Provide a short executive summary first."),
+    },
+})
+
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Please analyze the latest findings."),
+    agent.WithSurfacePatchForNode(nodeID, patch),
+)
+```
+
+### Recommended Workflow
+
+Use the feature in this order:
+
+1. Export a static structure snapshot with `structure.Export(...)`.
+2. Find the stable target `nodeID` from `snapshot.EntryNodeID` or `snapshot.Nodes`.
+3. Build an `agent.SurfacePatch` and set only the surfaces you want to override for this run.
+4. Pass one or more `agent.WithSurfacePatchForNode(...)` options to `runner.Run(...)`.
+
+Example:
+
+```go
+snapshot, err := structure.Export(ctx, workflowAgent)
+if err != nil {
+    return err
+}
+
+var plannerNodeID string
+for _, node := range snapshot.Nodes {
+    if node.Name == "planner" {
+        plannerNodeID = node.NodeID
+        break
+    }
+}
+if plannerNodeID == "" {
+    return errors.New("planner node not found")
+}
+
+var patch agent.SurfacePatch
+patch.SetInstruction("Plan in at most three steps.")
+
+_, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Arrange a trip to Hangzhou next Friday."),
+    agent.WithSurfacePatchForNode(plannerNodeID, patch),
+)
+```
+
+Notes:
+
+- Prefer `nodeID` values exported by `structure.Export(...)` instead of handwritten paths.
+- The override only applies to the current `runner.Run(...)` call and does not mutate the static agent definition.
+- `agent.WithInstruction(...)` and `agent.WithGlobalInstruction(...)` still work and are appropriate when you want one run-scoped override for the root agent. Use `WithSurfacePatchForNode(...)` when you need per-node control.
+
+### Patchable Surfaces
+
+`SurfacePatch` currently provides these setters:
+
+- `SetInstruction(string)`: overrides the node instruction for this run.
+- `SetGlobalInstruction(string)`: overrides the node global instruction for this run.
+- `SetFewShot([][]model.Message)`: overrides the node few-shot examples for this run.
+- `SetModel(model.Model)`: overrides the model instance used by the node for this run.
+- `SetTools([]tool.Tool)`: overrides the node tool surface for this run. This means replacing the tool set visible at runtime, not merely changing tool descriptions.
+- `SetSkillRepository(skill.Repository)`: overrides the node skill repository for this run. Passing `nil` explicitly disables the node skill surface.
+
+Not every node supports every surface. Common cases are:
+
+- Root `LLMAgent`: supports `instruction`, `global_instruction`, `few_shot`, `model`, `tool`, and `skill`.
+- Graph LLM node: supports `instruction`, `few_shot`, `model`, and `tool`.
+- Graph Tools node: supports `tool`.
+- Child nodes inside graph sub-agents, `chain`, `parallel`, `cycle`, `team`, and `swarm`: support depends on the actual target node you patch.
+
+### Override Multiple Nodes in One Run
+
+To patch multiple nodes in the same `runner.Run(...)`, pass multiple
+`agent.WithSurfacePatchForNode(...)` options. There is no separate batch API.
+
+```go
+snapshot, err := structure.Export(ctx, workflowAgent)
+if err != nil {
+    return err
+}
+
+nodeIDs := make(map[string]string)
+for _, node := range snapshot.Nodes {
+    nodeIDs[node.Name] = node.NodeID
+}
+
+var plannerPatch agent.SurfacePatch
+plannerPatch.SetInstruction("Produce no more than three candidate plans.")
+
+var reviewerPatch agent.SurfacePatch
+reviewerPatch.SetInstruction("Reject any plan that lacks cost analysis.")
+
+var toolsPatch agent.SurfacePatch
+toolsPatch.SetTools([]tool.Tool{searchTool, priceTool})
+
+_, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Plan a team offsite in Suzhou next month."),
+    agent.WithSurfacePatchForNode(nodeIDs["planner"], plannerPatch),
+    agent.WithSurfacePatchForNode(nodeIDs["reviewer"], reviewerPatch),
+    agent.WithSurfacePatchForNode(nodeIDs["search_tools"], toolsPatch),
+)
+```
+
+When `WithSurfacePatchForNode(...)` is passed multiple times for the same
+`nodeID`, the framework merges by surface type:
+
+- Different surface types are combined.
+- For the same surface type, the later option overrides the earlier one.
+
+### Composite and Nested Structures
+
+The same pattern applies beyond a single `LLMAgent`:
+
+- `graph`: patch graph LLM nodes, Tools nodes, and the root nodes of child agents mounted inside the graph.
+- `chain`, `parallel`, `cycle`: patch any exported child node.
+- `team` and `swarm`: patch the `coordinator`, member nodes, and members reached after transfer.
+
+The most robust workflow is still:
+
+- export with `structure.Export(...)`
+- select the exported `nodeID`
+- pass the patch through `WithSurfacePatchForNode(...)`
+
+This keeps one rule easy to remember: `nodeID` comes from structure export, and the runtime patch is supplied through `WithSurfacePatchForNode(...)`.
+
 ## Execution Trace
 
 The framework can export an execution trace for a single `runner.Run` call. This is useful for understanding which nodes actually ran, how steps depend on each other, and what each step saw as input and output.

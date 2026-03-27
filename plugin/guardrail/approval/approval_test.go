@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	approvalreview "trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/approval/review"
+	guardtranscript "trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/internal/transcript"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -34,35 +35,57 @@ func (s *stubReviewer) Review(ctx context.Context, req *approvalreview.Request) 
 	return s.reviewFn(ctx, req)
 }
 
-func TestNew_NilReviewer(t *testing.T) {
-	_, err := New(nil)
+func TestNew_RequiresReviewerWhenDefaultPolicyRequiresApproval(t *testing.T) {
+	_, err := New()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "reviewer is nil")
+}
+
+func TestNew_AllowsNilReviewerWhenNoRequireApprovalPathExists(t *testing.T) {
+	p, err := New(
+		WithDefaultToolPolicy(ToolPolicyDenied),
+		WithToolPolicy("search", ToolPolicySkipApproval),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	require.Nil(t, p.reviewer)
+}
+
+func TestNew_RequiresReviewerWhenExplicitToolPolicyRequiresApproval(t *testing.T) {
+	_, err := New(
+		WithDefaultToolPolicy(ToolPolicyDenied),
+		WithToolPolicy("shell", ToolPolicyRequireApproval),
+	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "reviewer is nil")
 }
 
 func TestNew_InvalidToolPolicy(t *testing.T) {
-	_, err := New(&stubReviewer{}, WithDefaultToolPolicy(ToolPolicy("bad")))
+	_, err := New(WithReviewer(&stubReviewer{}), WithDefaultToolPolicy(ToolPolicy("bad")))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid tool policy")
 }
 
 func TestNew_EmptyToolPolicyName(t *testing.T) {
-	_, err := New(&stubReviewer{}, WithToolPolicy("", ToolPolicyDenied))
+	_, err := New(WithReviewer(&stubReviewer{}), WithToolPolicy("", ToolPolicyDenied))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "tool policy name is empty")
 }
 
 func TestNew_WithName(t *testing.T) {
-	p, err := New(&stubReviewer{}, WithName("tool-approval"))
+	p, err := New(WithReviewer(&stubReviewer{}), WithName("tool-approval"))
 	require.NoError(t, err)
 	require.Equal(t, "tool-approval", p.Name())
 }
 
 func TestOptionSettersUpdateOptions(t *testing.T) {
 	opts := newOptions()
+	reviewer := &stubReviewer{}
 	WithName("tool-approval")(opts)
+	WithReviewer(reviewer)(opts)
 	WithDefaultToolPolicy(ToolPolicyDenied)(opts)
 	require.Equal(t, "tool-approval", opts.name)
+	require.Equal(t, reviewer, opts.reviewer)
 	require.Equal(t, ToolPolicyDenied, opts.defaultToolPolicy)
 }
 
@@ -71,7 +94,7 @@ func TestRegister_IgnoresNilReceiverAndNilRegistry(t *testing.T) {
 	require.NotPanics(t, func() {
 		nilPlugin.Register(nil)
 	})
-	p, err := New(&stubReviewer{})
+	p, err := New(WithReviewer(&stubReviewer{}))
 	require.NoError(t, err)
 	require.NotPanics(t, func() {
 		p.Register(nil)
@@ -87,12 +110,12 @@ func TestWithToolPolicy_InitializesMap(t *testing.T) {
 func TestBeforeTool_DeniedPolicyShortCircuits(t *testing.T) {
 	reviewerCalled := false
 	p, err := New(
-		&stubReviewer{
+		WithReviewer(&stubReviewer{
 			reviewFn: func(ctx context.Context, req *approvalreview.Request) (*approvalreview.Decision, error) {
 				reviewerCalled = true
 				return nil, nil
 			},
-		},
+		}),
 		WithToolPolicy("shell", ToolPolicyDenied),
 	)
 	require.NoError(t, err)
@@ -109,15 +132,8 @@ func TestBeforeTool_DeniedPolicyShortCircuits(t *testing.T) {
 }
 
 func TestBeforeTool_SkipApprovalBypassesReviewer(t *testing.T) {
-	reviewerCalled := false
 	p, err := New(
-		&stubReviewer{
-			reviewFn: func(ctx context.Context, req *approvalreview.Request) (*approvalreview.Decision, error) {
-				reviewerCalled = true
-				return &approvalreview.Decision{Approved: true}, nil
-			},
-		},
-		WithToolPolicy("search", ToolPolicySkipApproval),
+		WithDefaultToolPolicy(ToolPolicySkipApproval),
 	)
 	require.NoError(t, err)
 	callbacks := registeredToolCallbacks(t, p)
@@ -128,11 +144,10 @@ func TestBeforeTool_SkipApprovalBypassesReviewer(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Nil(t, result)
-	require.False(t, reviewerCalled)
 }
 
 func TestBeforeTool_NilArgsReturnsNil(t *testing.T) {
-	p, err := New(&stubReviewer{})
+	p, err := New(WithReviewer(&stubReviewer{}))
 	require.NoError(t, err)
 	result, runErr := p.beforeTool()(context.Background(), nil)
 	require.NoError(t, runErr)
@@ -141,12 +156,12 @@ func TestBeforeTool_NilArgsReturnsNil(t *testing.T) {
 
 func TestBeforeTool_RequireApprovalBuildsRequestFromSession(t *testing.T) {
 	var captured *approvalreview.Request
-	p, err := New(&stubReviewer{
+	p, err := New(WithReviewer(&stubReviewer{
 		reviewFn: func(ctx context.Context, req *approvalreview.Request) (*approvalreview.Decision, error) {
 			captured = req
 			return &approvalreview.Decision{Approved: true, RiskScore: 12, RiskLevel: "low", Reason: "Allowed."}, nil
 		},
-	})
+	}))
 	require.NoError(t, err)
 	callbacks := registeredToolCallbacks(t, p)
 	invocation := invocationWithEvents(
@@ -219,7 +234,7 @@ func TestBeforeTool_ReviewerApprovedLogsInfo(t *testing.T) {
 	defer func() {
 		approvallog.InfofContext = original
 	}()
-	p, err := New(&stubReviewer{
+	p, err := New(WithReviewer(&stubReviewer{
 		reviewFn: func(ctx context.Context, req *approvalreview.Request) (*approvalreview.Decision, error) {
 			return &approvalreview.Decision{
 				Approved:  true,
@@ -228,7 +243,7 @@ func TestBeforeTool_ReviewerApprovedLogsInfo(t *testing.T) {
 				Reason:    "The action is scoped and user-authorized.",
 			}, nil
 		},
-	})
+	}))
 	require.NoError(t, err)
 	callbacks := registeredToolCallbacks(t, p)
 	result, runErr := callbacks.RunBeforeTool(context.Background(), &tool.BeforeToolArgs{
@@ -254,11 +269,11 @@ func TestBeforeTool_ReviewerErrorFailsClosed(t *testing.T) {
 	defer func() {
 		approvallog.ErrorfContext = original
 	}()
-	p, err := New(&stubReviewer{
+	p, err := New(WithReviewer(&stubReviewer{
 		reviewFn: func(ctx context.Context, req *approvalreview.Request) (*approvalreview.Decision, error) {
 			return nil, fmt.Errorf("review backend unavailable")
 		},
-	})
+	}))
 	require.NoError(t, err)
 	callbacks := registeredToolCallbacks(t, p)
 	result, err := callbacks.RunBeforeTool(context.Background(), &tool.BeforeToolArgs{
@@ -277,11 +292,11 @@ func TestBeforeTool_ReviewerErrorFailsClosed(t *testing.T) {
 }
 
 func TestBeforeTool_NilDecisionFailsClosed(t *testing.T) {
-	p, err := New(&stubReviewer{
+	p, err := New(WithReviewer(&stubReviewer{
 		reviewFn: func(ctx context.Context, req *approvalreview.Request) (*approvalreview.Decision, error) {
 			return nil, nil
 		},
-	})
+	}))
 	require.NoError(t, err)
 	callbacks := registeredToolCallbacks(t, p)
 	result, runErr := callbacks.RunBeforeTool(context.Background(), &tool.BeforeToolArgs{
@@ -295,14 +310,14 @@ func TestBeforeTool_NilDecisionFailsClosed(t *testing.T) {
 }
 
 func TestBeforeTool_EmptyDecisionFieldsDoNotFail(t *testing.T) {
-	p, err := New(&stubReviewer{
+	p, err := New(WithReviewer(&stubReviewer{
 		reviewFn: func(ctx context.Context, req *approvalreview.Request) (*approvalreview.Decision, error) {
 			return &approvalreview.Decision{
 				Approved:  false,
 				RiskScore: 92,
 			}, nil
 		},
-	})
+	}))
 	require.NoError(t, err)
 	callbacks := registeredToolCallbacks(t, p)
 	result, runErr := callbacks.RunBeforeTool(context.Background(), &tool.BeforeToolArgs{
@@ -324,7 +339,7 @@ func TestBeforeTool_ReviewerDeniedLogsWarning(t *testing.T) {
 	defer func() {
 		approvallog.WarnContext = original
 	}()
-	p, err := New(&stubReviewer{
+	p, err := New(WithReviewer(&stubReviewer{
 		reviewFn: func(ctx context.Context, req *approvalreview.Request) (*approvalreview.Decision, error) {
 			return &approvalreview.Decision{
 				Approved:  false,
@@ -333,7 +348,7 @@ func TestBeforeTool_ReviewerDeniedLogsWarning(t *testing.T) {
 				Reason:    "The command is destructive and exceeds safe automatic approval.",
 			}, nil
 		},
-	})
+	}))
 	require.NoError(t, err)
 	callbacks := registeredToolCallbacks(t, p)
 	result, runErr := callbacks.RunBeforeTool(context.Background(), &tool.BeforeToolArgs{
@@ -374,11 +389,11 @@ func TestBeforeTool_UnsupportedPolicyReturnsFailureMessage(t *testing.T) {
 }
 
 func TestBuildTranscript_UserOverflowReturnsOmissionOnly(t *testing.T) {
-	p, err := New(&stubReviewer{
+	p, err := New(WithReviewer(&stubReviewer{
 		reviewFn: func(ctx context.Context, req *approvalreview.Request) (*approvalreview.Decision, error) {
 			return &approvalreview.Decision{Approved: true}, nil
 		},
-	})
+	}))
 	require.NoError(t, err)
 	events := make([]event.Event, 0, 25)
 	for i := 0; i < 25; i++ {
@@ -386,7 +401,7 @@ func TestBuildTranscript_UserOverflowReturnsOmissionOnly(t *testing.T) {
 			"inv-1",
 			"author",
 			"app",
-			model.Message{Role: model.RoleUser, Content: stringsRepeat("user ", defaultMessageEntryCap)},
+			model.Message{Role: model.RoleUser, Content: stringsRepeat("user ", guardtranscript.DefaultMessageEntryCap)},
 		))
 	}
 	events = append(events, responseEvent(
@@ -402,11 +417,11 @@ func TestBuildTranscript_UserOverflowReturnsOmissionOnly(t *testing.T) {
 	transcript := p.buildTranscript(context.Background(), invocation)
 	require.Len(t, transcript, 1)
 	assert.Equal(t, model.RoleAssistant, transcript[0].Role)
-	assert.Equal(t, omissionNote, transcript[0].Content)
+	assert.Equal(t, guardtranscript.DefaultOmissionNote, transcript[0].Content)
 }
 
 func TestBuildRequest_WithoutInvocationReturnsActionOnly(t *testing.T) {
-	p, err := New(&stubReviewer{})
+	p, err := New(WithDefaultToolPolicy(ToolPolicyDenied))
 	require.NoError(t, err)
 	req, buildErr := p.buildRequest(context.Background(), &tool.BeforeToolArgs{
 		ToolName:    "shell",
@@ -435,9 +450,9 @@ func (errorTokenCounter) CountTokensRange(
 	return 0, errors.New("count tokens failed")
 }
 
-func TestCountTokens_ReturnsZeroOnCounterError(t *testing.T) {
+func TestCountTranscriptTokens_ReturnsOmissionSentinelOnCounterError(t *testing.T) {
 	p := &Plugin{tokenCounter: errorTokenCounter{}}
-	require.Equal(t, defaultMessageTranscriptBudget+1, p.countTokens(context.Background(), approvalreview.TranscriptEntry{
+	require.Equal(t, guardtranscript.DefaultMessageTranscriptBudget+1, p.countTranscriptTokens(context.Background(), guardtranscript.Entry{
 		Role:    model.RoleUser,
 		Content: "hello",
 	}))
@@ -462,7 +477,7 @@ func TestBuildTranscript_TokenCounterErrorFailsClosed(t *testing.T) {
 	transcript := p.buildTranscript(context.Background(), invocation)
 	require.Len(t, transcript, 1)
 	require.Equal(t, model.RoleAssistant, transcript[0].Role)
-	require.Equal(t, omissionNote, transcript[0].Content)
+	require.Equal(t, guardtranscript.DefaultOmissionNote, transcript[0].Content)
 }
 
 func registeredToolCallbacks(t *testing.T, p *Plugin) *tool.Callbacks {

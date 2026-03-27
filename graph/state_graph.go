@@ -415,28 +415,6 @@ type SubgraphInputMapper func(parent State) State
 // this reads clearer and is equivalent to applying an empty update.
 type SubgraphOutputMapper func(parent State, result SubgraphResult) State
 
-// SubgraphMessageSource controls who assembles an AgentNode child invocation's
-// message history.
-type SubgraphMessageSource string
-
-const (
-	// SubgraphMessageSourceAuto lets the graph choose a default strategy.
-	SubgraphMessageSourceAuto SubgraphMessageSource = "auto"
-	// SubgraphMessageSourceGraphSnapshot uses StateKeyMessages already present
-	// in the child runtime state as the conversation snapshot for the child.
-	SubgraphMessageSourceGraphSnapshot SubgraphMessageSource = "graph_snapshot"
-	// SubgraphMessageSourceLLMAgentDefault leaves history assembly to the child
-	// LLMAgent's default session/history logic.
-	SubgraphMessageSourceLLMAgentDefault SubgraphMessageSource = "llmagent_default"
-	// SubgraphMessageSourceNone suppresses session-history seeding and relies on
-	// only the child invocation's current-turn input.
-	SubgraphMessageSourceNone SubgraphMessageSource = "none"
-	// SubgraphMessageSourceLastResponse suppresses session-history seeding and
-	// maps the parent's last_response to the child invocation's current-turn
-	// user input.
-	SubgraphMessageSourceLastResponse SubgraphMessageSource = "last_response"
-)
-
 // WithSubgraphInputMapper sets a mapper used to build the child runtime state.
 func WithSubgraphInputMapper(f SubgraphInputMapper) Option {
 	return func(node *Node) {
@@ -448,14 +426,6 @@ func WithSubgraphInputMapper(f SubgraphInputMapper) Option {
 func WithSubgraphOutputMapper(f SubgraphOutputMapper) Option {
 	return func(node *Node) {
 		node.agentOutputMapper = f
-	}
-}
-
-// WithSubgraphMessageSource sets how an AgentNode child invocation should
-// assemble messages.
-func WithSubgraphMessageSource(source SubgraphMessageSource) Option {
-	return func(node *Node) {
-		node.agentMessageSource = source
 	}
 }
 
@@ -1292,6 +1262,7 @@ func (r *llmRunner) executeOneShotStage(
 ) (any, error) {
 	instr := r.processInstruction(state)
 	used := ensureSystemHead(oneShotMsgs, instr)
+	used = r.insertFewShot(state, used)
 	result, err := r.executeModel(ctx, state, used, span, instr)
 	if err != nil {
 		return nil, err
@@ -1333,6 +1304,7 @@ func (r *llmRunner) executeUserInputStage(
 	}
 	instr := r.processInstruction(state)
 	used := ensureSystemHead(history, instr)
+	used = r.insertFewShot(state, used)
 	var ops []MessageOp
 	if len(used) > 0 && used[len(used)-1].Role == model.RoleUser {
 		if used[len(used)-1].Content != userInput {
@@ -1374,6 +1346,7 @@ func (r *llmRunner) executeHistoryStage(ctx context.Context, state State, span o
 	}
 	instr := r.processInstruction(state)
 	used := ensureSystemHead(history, instr)
+	used = r.insertFewShot(state, used)
 	result, err := r.executeModel(ctx, state, used, span, instr)
 	if err != nil {
 		return nil, err
@@ -1437,6 +1410,13 @@ func (r *llmRunner) executeModel(
 	if v, ok := state[StateKeyCurrentNodeID].(string); ok && v != "" {
 		nodeID = v
 	}
+	invocation := invocationFromContextOrDefault(ctx, nil)
+	effectiveModel := graphPatchedModel(invocation, nodeID, r.llmModel)
+	if patch, ok := graphSurfacePatch(invocation, nodeID); ok {
+		if patchedTools, ok := patch.Tools(); ok {
+			tools = toolSliceToMap(patchedTools)
+		}
+	}
 	request := &model.Request{
 		Messages:         messages,
 		Tools:            tools,
@@ -1444,7 +1424,6 @@ func (r *llmRunner) executeModel(
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
 	request.Messages = toolcall.SanitizeMessagesWithTools(request.Messages, request.Tools)
-	invocation := invocationFromContextOrDefault(ctx, nil)
 	applyInvocationRequestOverrides(request, invocation, nodeID)
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
@@ -1470,7 +1449,7 @@ func (r *llmRunner) executeModel(
 	ctx, invocation, result, err := executeModelAndProcessResponsesWithContext(ctx, modelExecutionConfig{
 		Invocation:     invocation,
 		ModelCallbacks: modelCallbacks,
-		LLMModel:       r.llmModel,
+		LLMModel:       effectiveModel,
 		Request:        request,
 		EventChan:      eventChan,
 		InvocationID:   invocationID,
@@ -1498,7 +1477,7 @@ func (r *llmRunner) executeModel(
 			// so events accurately reflect both instruction and user input.
 			modelInput = extractModelInput(state, instructionUsed, r.userInputKey)
 			startTime = time.Now()
-			modelName = getModelName(r.llmModel)
+			modelName = getModelName(effectiveModel)
 			emitModelStartEvent(
 				modelCtx,
 				modelEventBaseInvocation,
@@ -1552,16 +1531,17 @@ func (r *llmRunner) executeModel(
 // stored on the current invocation.
 func (r *llmRunner) processInstruction(state State) string {
 	instr := r.instruction
+	if invocation := graphInvocationFromState(state); invocation != nil {
+		if patch, ok := graphSurfacePatch(invocation, r.currentNodeID(state)); ok {
+			if patchedInstruction, ok := patch.Instruction(); ok {
+				instr = patchedInstruction
+			}
+		}
+	}
 	if instr == "" {
 		return instr
 	}
-
-	var invocation *agent.Invocation
-	if execVal, ok := state[StateKeyExecContext]; ok {
-		if execCtx, ok := execVal.(*ExecutionContext); ok && execCtx != nil {
-			invocation = execCtx.Invocation
-		}
-	}
+	invocation := graphInvocationFromState(state)
 
 	var sess *session.Session
 	if sessVal, ok := state[StateKeySession]; ok {
@@ -2176,15 +2156,7 @@ func newToolsNodeRuntime(
 
 		// Extract execution context for event emission.
 		invocationID, _, _, _, eventChan := extractExecutionContext(state)
-
-		effectiveTools := staticTools
-		if node.refreshToolSetsOnRun && len(node.toolSets) > 0 {
-			effectiveTools = mergeToolsWithToolSets(
-				ctx,
-				baseTools,
-				node.toolSets,
-			)
-		}
+		effectiveTools := resolveToolsNodeRuntimeTools(ctx, state, node, baseTools, staticTools)
 
 		// Determine which callbacks to use: node-configured takes precedence over state.
 		toolCallbacks := configuredCallbacks
@@ -2244,6 +2216,37 @@ func newToolsNodeRuntime(
 		}
 		return upd, nil
 	}, cloneToolsMap(staticTools)
+}
+
+func resolveToolsNodeRuntimeTools(
+	ctx context.Context,
+	state State,
+	node *Node,
+	baseTools map[string]tool.Tool,
+	staticTools map[string]tool.Tool,
+) map[string]tool.Tool {
+	effectiveTools := staticTools
+	if node.refreshToolSetsOnRun && len(node.toolSets) > 0 {
+		effectiveTools = mergeToolsWithToolSets(
+			ctx,
+			baseTools,
+			node.toolSets,
+		)
+	}
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok {
+		return effectiveTools
+	}
+	localNodeID := node.ID
+	if currentNodeID, ok := GetStateValue[string](state, StateKeyCurrentNodeID); ok && currentNodeID != "" {
+		localNodeID = currentNodeID
+	}
+	if patch, ok := graphSurfacePatch(invocation, localNodeID); ok {
+		if patchedTools, ok := patch.Tools(); ok {
+			return toolSliceToMap(patchedTools)
+		}
+	}
+	return effectiveTools
 }
 
 // copyRuntimeStateFiltered creates a shallow copy of the parent state excluding
@@ -2412,7 +2415,6 @@ type agentNodeConfig struct {
 	outputMapper        SubgraphOutputMapper
 	isolated            bool
 	scope               string
-	messageSource       SubgraphMessageSource
 	inputFromLast       bool
 	llmGenerationConfig *model.GenerationConfig
 	userInputKey        string
@@ -2430,7 +2432,6 @@ func agentNodeConfigFromOptions(opts ...Option) agentNodeConfig {
 		outputMapper:        dummyNode.agentOutputMapper,
 		isolated:            dummyNode.agentIsolatedMessages,
 		scope:               dummyNode.agentEventScope,
-		messageSource:       dummyNode.agentMessageSource,
 		inputFromLast:       dummyNode.agentInputFromLastResponse,
 		llmGenerationConfig: dummyNode.llmGenerationConfig,
 		userInputKey:        dummyNode.userInputKey,
@@ -2479,52 +2480,6 @@ func applyIsolatedMessages(child State, isolated bool) {
 		return
 	}
 	child[CfgKeyIncludeContents] = includeContentsNone
-}
-
-func resolveSubgraphMessageSource(
-	child State,
-	source SubgraphMessageSource,
-) SubgraphMessageSource {
-	switch source {
-	case "", SubgraphMessageSourceAuto:
-		if hasGraphSnapshotMessages(child) {
-			return SubgraphMessageSourceGraphSnapshot
-		}
-		return SubgraphMessageSourceLLMAgentDefault
-	case SubgraphMessageSourceGraphSnapshot,
-		SubgraphMessageSourceLLMAgentDefault,
-		SubgraphMessageSourceNone,
-		SubgraphMessageSourceLastResponse:
-		return source
-	default:
-		if hasGraphSnapshotMessages(child) {
-			return SubgraphMessageSourceGraphSnapshot
-		}
-		return SubgraphMessageSourceLLMAgentDefault
-	}
-}
-
-func hasGraphSnapshotMessages(state State) bool {
-	msgs, ok := state[StateKeyMessages].([]model.Message)
-	return ok && len(msgs) > 0
-}
-
-func applySubgraphMessageSource(
-	child State,
-	source SubgraphMessageSource,
-	explicit bool,
-) {
-	if child == nil {
-		return
-	}
-	switch source {
-	case SubgraphMessageSourceGraphSnapshot,
-		SubgraphMessageSourceNone,
-		SubgraphMessageSourceLastResponse:
-		child[CfgKeyIncludeContents] = includeContentsNone
-	}
-	child[CfgKeySubgraphMessageSource] = string(source)
-	child[CfgKeySubgraphMessageSourceExplicit] = explicit
 }
 
 func applyCheckpointResumeFields(child State, info subgraphInterruptInfo) {
@@ -2593,7 +2548,7 @@ func buildChildStateForAgentNode(
 	nodeID string,
 	targetAgent agent.Agent,
 	cfg agentNodeConfig,
-) (State, SubgraphMessageSource) {
+) State {
 	childState := initialChildStateForAgentNode(parent, cfg.inputMapper)
 	delete(childState, StateKeySubgraphInterrupt)
 	if cfg.inputMapper == nil {
@@ -2601,13 +2556,7 @@ func buildChildStateForAgentNode(
 	}
 	applyIsolatedMessages(childState, cfg.isolated)
 	applySubgraphResumeForAgentNode(parent, childState, nodeID)
-	source := resolveSubgraphMessageSource(childState, cfg.messageSource)
-	applySubgraphMessageSource(
-		childState,
-		source,
-		cfg.messageSource == SubgraphMessageSourceGraphSnapshot,
-	)
-	return childState, source
+	return childState
 }
 
 func mapParentInputFromLastResponse(
@@ -2716,12 +2665,12 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			return nil, err
 		}
 
-		childState, messageSource := buildChildStateForAgentNode(state, nodeID, targetAgent, cfg)
+		childState := buildChildStateForAgentNode(state, nodeID, targetAgent, cfg)
 
 		// Optionally map parent's last_response to user_input for this agent node.
 		parentForInput := mapParentInputFromLastResponse(
 			state,
-			cfg.inputFromLast || messageSource == SubgraphMessageSourceLastResponse,
+			cfg.inputFromLast,
 			cfg.userInputKey,
 		)
 
@@ -2734,7 +2683,6 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 			nodeID,
 			cfg.scope,
 			cfg.userInputKey,
-			messageSource,
 		)
 
 		// Emit agent execution start event.
@@ -3418,19 +3366,15 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 	nodeID string,
 	scope string,
 	userInputKey string,
-	messageSource SubgraphMessageSource,
 ) *agent.Invocation {
 	// Extract user input from parent state.
 	var userInput string
 	if userInputKey == "" {
 		userInputKey = StateKeyUserInput
 	}
-	if !(messageSource == SubgraphMessageSourceGraphSnapshot &&
-		hasGraphSnapshotMessages(runtime)) {
-		if input, exists := parentState[userInputKey]; exists {
-			if inputStr, ok := input.(string); ok {
-				userInput = inputStr
-			}
+	if input, exists := parentState[userInputKey]; exists {
+		if inputStr, ok := input.(string); ok {
+			userInput = inputStr
 		}
 	}
 	// Extract session from parent state.
@@ -3453,7 +3397,6 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 			runOptions.CustomAgentConfigs,
 			nodeID,
 		)
-
 		base := util.If(scope != "", scope, targetAgent.Info().Name)
 		parentKey := parentInvocation.GetEventFilterKey()
 		// Build a stable FilterKey without UUID to ensure multi-turn conversations
@@ -3473,6 +3416,11 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		}
 		if traceNodeID := buildAgentNodeTraceNodeID(parentInvocation, nodeID); traceNodeID != "" {
 			invocationOpts = append(invocationOpts, agent.WithInvocationTraceNodeID(traceNodeID))
+		}
+		if surfaceRootNodeID := buildAgentNodeSurfaceRoot(parentInvocation, nodeID, targetAgent); surfaceRootNodeID != "" {
+			invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
+				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
+			})
 		}
 		entryPredecessors := currentTraceStepPredecessors(parentState)
 		if len(entryPredecessors) == 0 {
@@ -3522,15 +3470,38 @@ func buildAgentInvocationWithStateAndScope(
 		nodeID,
 		scope,
 		StateKeyUserInput,
-		SubgraphMessageSourceLLMAgentDefault,
 	)
 }
 
-func buildAgentNodeTraceNodeID(parentInvocation *agent.Invocation, nodeID string) string {
+func buildAgentNodeTraceNodeID(
+	parentInvocation *agent.Invocation,
+	nodeID string,
+) string {
 	if parentInvocation == nil || nodeID == "" {
 		return ""
 	}
-	return istructure.JoinNodeID(agent.InvocationTraceNodeID(parentInvocation), nodeID)
+	return istructure.JoinNodeID(
+		agent.InvocationTraceNodeID(parentInvocation),
+		nodeID,
+	)
+}
+
+func buildAgentNodeSurfaceRoot(
+	parentInvocation *agent.Invocation,
+	nodeID string,
+	targetAgent agent.Agent,
+) string {
+	if parentInvocation == nil {
+		return ""
+	}
+	baseNodeID := agent.InvocationSurfaceRootNodeID(parentInvocation)
+	if nodeID != "" {
+		baseNodeID = istructure.JoinNodeID(baseNodeID, nodeID)
+	}
+	if targetAgent == nil || targetAgent.Info().Name == "" {
+		return baseNodeID
+	}
+	return istructure.JoinNodeID(baseNodeID, targetAgent.Info().Name)
 }
 
 const (

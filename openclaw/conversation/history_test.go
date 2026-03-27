@@ -29,6 +29,7 @@ func TestMergeRequestExtensionRoundTrip(t *testing.T) {
 		HistoryMode: HistoryModeShared,
 		ActorID:     "u1",
 		ActorLabel:  "Alice",
+		ActorLabels: map[string]string{"u2": "Bob"},
 		QuoteText:   "hello",
 	})
 	require.NoError(t, err)
@@ -41,6 +42,11 @@ func TestMergeRequestExtensionRoundTrip(t *testing.T) {
 	require.Equal(t, HistoryModeShared, annotation.HistoryMode)
 	require.Equal(t, "u1", annotation.ActorID)
 	require.Equal(t, "Alice", annotation.ActorLabel)
+	require.Equal(
+		t,
+		map[string]string{"u2": "Bob"},
+		annotation.ActorLabels,
+	)
 	require.Equal(t, "hello", annotation.QuoteText)
 }
 
@@ -84,6 +90,22 @@ func TestAnnotationHelpers_EdgeCases(t *testing.T) {
 	_, ok = AnnotationFromRuntimeState(
 		map[string]any{RuntimeStateKey: Annotation{}},
 	)
+	require.False(t, ok)
+
+	runtimeOnly := Annotation{
+		ActorLabels: map[string]string{"u1": "Alice"},
+	}
+	state := RuntimeState(runtimeOnly)
+	require.NotNil(t, state)
+	annotation, ok := AnnotationFromRuntimeState(state)
+	require.True(t, ok)
+	require.Equal(t, runtimeOnly.ActorLabels, annotation.ActorLabels)
+
+	evtOnlyLabels := event.New("inv", authorUser)
+	err = SetEventAnnotation(evtOnlyLabels, runtimeOnly)
+	require.NoError(t, err)
+	_, ok, err = AnnotationFromEvent(*evtOnlyLabels)
+	require.NoError(t, err)
 	require.False(t, ok)
 
 	_, ok, err = AnnotationFromRequestExtensions(
@@ -135,12 +157,15 @@ func TestBuildInjectedContextMessages(t *testing.T) {
 	got := BuildInjectedContextMessages(sess, HistoryOptions{
 		AddSessionSummary: true,
 		MaxHistoryRuns:    10,
+		LabelOverrides: map[string]string{
+			"u2": "Robert",
+		},
 	})
 	require.Len(t, got, 3)
 	require.Equal(t, model.RoleSystem, got[0].Role)
 	require.Contains(t, got[0].Content, "older history")
 	require.Equal(t, model.RoleUser, got[1].Role)
-	require.Contains(t, got[1].Content, "Speaker: Bob")
+	require.Contains(t, got[1].Content, "Speaker: Robert")
 	require.Contains(t, got[1].Content, "Message: latest question")
 	require.Equal(t, model.RoleAssistant, got[2].Role)
 	require.Equal(t, "latest answer", got[2].Content)
@@ -210,14 +235,15 @@ func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
 				ActorLabel: "Alice",
 				QuoteText:  "earlier",
 			},
+			nil,
 		),
 	)
 
-	require.Equal(t, authorUser, speakerLabel(Annotation{}))
+	require.Equal(t, authorUser, speakerLabel(Annotation{}, nil))
 	require.Equal(
 		t,
 		"u-1",
-		speakerLabel(Annotation{ActorID: "u-1"}),
+		speakerLabel(Annotation{ActorID: "u-1"}, nil),
 	)
 	require.Equal(
 		t,
@@ -225,7 +251,18 @@ func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
 		speakerLabel(Annotation{
 			ActorID:    "u-1",
 			ActorLabel: "Bob",
-		}),
+		}, nil),
+	)
+	require.Equal(
+		t,
+		"Robert",
+		speakerLabel(
+			Annotation{
+				ActorID:    "u-1",
+				ActorLabel: "Bob",
+			},
+			map[string]string{"u-1": "Robert"},
+		),
 	)
 
 	require.Equal(
@@ -250,7 +287,7 @@ func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
 	invalidUser.Extensions = map[string]json.RawMessage{
 		ExtensionKey: json.RawMessage("{"),
 	}
-	require.Nil(t, visibleUserMessages(*invalidUser))
+	require.Nil(t, visibleUserMessages(*invalidUser, nil))
 
 	assistantToolOnly := event.Event{
 		Author: authorAssistant,
@@ -271,7 +308,7 @@ func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
 	)
 	require.Nil(
 		t,
-		turnsFromEvent(event.Event{}, true),
+		turnsFromEvent(event.Event{}, true, nil),
 	)
 	require.Nil(
 		t,
@@ -352,10 +389,13 @@ func TestBuildTurns(t *testing.T) {
 	got := BuildTurns(sess, TurnOptions{
 		Limit:         10,
 		IncludeSystem: false,
+		LabelOverrides: map[string]string{
+			"u1": "alice.dev",
+		},
 	})
 	require.Len(t, got, 2)
 	require.Equal(t, string(model.RoleUser), got[0].Role)
-	require.Equal(t, "Alice", got[0].Speaker)
+	require.Equal(t, "alice.dev", got[0].Speaker)
 	require.Equal(t, "u1", got[0].ActorID)
 	require.Equal(t, "the earlier topic", got[0].QuoteText)
 	require.Equal(t, "what changed", got[0].Text)
@@ -501,7 +541,7 @@ func TestHistoryHelpers_SystemTurnsAndSummary(t *testing.T) {
 	require.Equal(t, summarySpeakerSystem, turns[0].Speaker)
 	require.Equal(t, "carry forward", turns[0].Text)
 
-	lines, ok := summaryLinesFromEvent(sysEvt)
+	lines, ok := summaryLinesFromEvent(sysEvt, nil)
 	require.False(t, ok)
 	require.Equal(
 		t,

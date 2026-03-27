@@ -11,27 +11,30 @@ package guardrail
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/approval"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/promptinjection"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/unsafeintent"
 )
 
 // Plugin is the top-level guardrail plugin facade.
 type Plugin struct {
-	name     string
-	approval *approval.Plugin
+	name            string
+	approval        *approval.Plugin
+	promptInjection *promptinjection.Plugin
+	unsafeIntent    *unsafeintent.Plugin
 }
 
 // New creates a new guardrail plugin.
 func New(options ...Option) (*Plugin, error) {
 	opts := newOptions(options...)
-	if opts.approval == nil {
-		return nil, fmt.Errorf("newing guardrail plugin: no guardrail capability configured")
-	}
 	return &Plugin{
-		name:     opts.name,
-		approval: opts.approval,
+		name:            opts.name,
+		approval:        opts.approval,
+		promptInjection: opts.promptInjection,
+		unsafeIntent:    opts.unsafeIntent,
 	}, nil
 }
 
@@ -45,6 +48,12 @@ func (p *Plugin) Register(r *plugin.Registry) {
 	if p == nil || r == nil {
 		return
 	}
+	if p.unsafeIntent != nil {
+		p.unsafeIntent.Register(r)
+	}
+	if p.promptInjection != nil {
+		p.promptInjection.Register(r)
+	}
 	if p.approval != nil {
 		p.approval.Register(r)
 	}
@@ -52,12 +61,24 @@ func (p *Plugin) Register(r *plugin.Registry) {
 
 // Close implements plugin.Closer when sub-capabilities need cleanup.
 func (p *Plugin) Close(ctx context.Context) error {
-	if p.approval == nil {
-		return nil
+	var closeErr error
+	if p.promptInjection != nil {
+		closer, ok := any(p.promptInjection).(plugin.Closer)
+		if ok {
+			closeErr = errors.Join(closeErr, closer.Close(ctx))
+		}
 	}
-	closer, ok := any(p.approval).(plugin.Closer)
-	if !ok {
-		return nil
+	if p.unsafeIntent != nil {
+		closer, ok := any(p.unsafeIntent).(plugin.Closer)
+		if ok {
+			closeErr = errors.Join(closeErr, closer.Close(ctx))
+		}
 	}
-	return closer.Close(ctx)
+	if p.approval != nil {
+		closer, ok := any(p.approval).(plugin.Closer)
+		if ok {
+			closeErr = errors.Join(closeErr, closer.Close(ctx))
+		}
+	}
+	return closeErr
 }

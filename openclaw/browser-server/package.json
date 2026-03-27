@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/browser-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "openclaw-browser-server": "./bin/openclaw-browser-server.js"
+  },
+  "scripts": {
+    "start": "node ./bin/openclaw-browser-server.js",
+    "test": "node --test ./src/*.test.js ./scripts/*.test.js",
+    "smoke:host": "node ./scripts/smoke-host.js",
+    "smoke:host:headed": "node ./scripts/smoke-host.js --headed",
+    "smoke:relay": "node ./scripts/smoke-relay.js",
+    "smoke:relay:headed": "node ./scripts/smoke-relay.js --headed"
+  },
+  "dependencies": {
+    "playwright": "^1.54.0",
+    "ws": "^8.18.0"
+  }
+}

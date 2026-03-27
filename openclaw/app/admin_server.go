@@ -22,8 +22,10 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
+	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
 const adminAutoPortSearchSpan = 32
@@ -115,6 +117,7 @@ func buildAdminConfig(
 	routes admin.Routes,
 	cronSvc *cron.Service,
 	execMgr *octool.Manager,
+	browserManaged admin.BrowserManagedStatusProvider,
 	adminAddr string,
 	adminURL string,
 ) admin.Config {
@@ -140,8 +143,94 @@ func buildAdminConfig(
 		DebugDir:       debugDir,
 		Channels:       channelIDs(channels),
 		GatewayRoutes:  routes,
-		Cron:           cronSvc,
-		Exec:           execMgr,
+		Browser: buildBrowserAdminConfig(
+			opts.ToolProviders,
+			browserManaged,
+		),
+		Cron: cronSvc,
+		Exec: execMgr,
+	}
+}
+
+func buildBrowserAdminConfig(
+	specs []pluginSpec,
+	managed admin.BrowserManagedStatusProvider,
+) admin.BrowserConfig {
+	providers := make([]admin.BrowserProvider, 0, len(specs))
+	for i := range specs {
+		spec := specs[i]
+		if strings.TrimSpace(spec.Type) != toolProviderBrowser {
+			continue
+		}
+
+		var cfg ocbrowser.Config
+		if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
+			continue
+		}
+
+		provider := admin.BrowserProvider{
+			Name:             strings.TrimSpace(spec.Name),
+			DefaultProfile:   strings.TrimSpace(cfg.DefaultProfile),
+			HostServerURL:    strings.TrimSpace(cfg.ServerURL),
+			SandboxServerURL: strings.TrimSpace(cfg.SandboxServerURL),
+		}
+		if cfg.EvaluateEnabled != nil {
+			provider.EvaluateEnabled = *cfg.EvaluateEnabled
+		}
+		if cfg.AllowLoopback != nil {
+			provider.AllowLoopback = *cfg.AllowLoopback
+		}
+		if cfg.AllowPrivateNet != nil {
+			provider.AllowPrivateNet = *cfg.AllowPrivateNet
+		}
+		if cfg.AllowFileURLs != nil {
+			provider.AllowFileURLs = *cfg.AllowFileURLs
+		}
+
+		if len(cfg.Profiles) > 0 {
+			provider.Profiles = make(
+				[]admin.BrowserProfile,
+				0,
+				len(cfg.Profiles),
+			)
+		}
+		for j := range cfg.Profiles {
+			profile := cfg.Profiles[j]
+			provider.Profiles = append(
+				provider.Profiles,
+				admin.BrowserProfile{
+					Name: strings.TrimSpace(profile.Name),
+					Description: strings.TrimSpace(
+						profile.Description,
+					),
+					Transport: strings.TrimSpace(profile.Transport),
+					ServerURL: strings.TrimSpace(profile.ServerURL),
+					BrowserServerURL: strings.TrimSpace(
+						profile.BrowserServerURL,
+					),
+				},
+			)
+		}
+
+		if len(cfg.Nodes) > 0 {
+			provider.Nodes = make(
+				[]admin.BrowserNode,
+				0,
+				len(cfg.Nodes),
+			)
+		}
+		for j := range cfg.Nodes {
+			node := cfg.Nodes[j]
+			provider.Nodes = append(provider.Nodes, admin.BrowserNode{
+				ID:        strings.TrimSpace(node.ID),
+				ServerURL: strings.TrimSpace(node.ServerURL),
+			})
+		}
+		providers = append(providers, provider)
+	}
+	return admin.BrowserConfig{
+		Providers: providers,
+		Managed:   managed,
 	}
 }
 

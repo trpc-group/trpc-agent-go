@@ -88,11 +88,13 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 
 	limit := normalizeLimit(in.Limit)
+	labelOverrides := conversationLabelOverrides(inv)
 	turns := conversation.BuildTurns(
 		inv.Session,
 		conversation.TurnOptions{
-			Limit:         limit,
-			IncludeSystem: in.IncludeSystem,
+			Limit:          limit,
+			IncludeSystem:  in.IncludeSystem,
+			LabelOverrides: labelOverrides,
 		},
 	)
 	transcript := conversation.FormatTurns(turns)
@@ -104,6 +106,21 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 		"transcript":   transcript,
 		"turns":        turns,
 	}, nil
+}
+
+func conversationLabelOverrides(
+	inv *agent.Invocation,
+) map[string]string {
+	if inv == nil {
+		return nil
+	}
+	annotation, ok := conversation.AnnotationFromRuntimeState(
+		inv.RunOptions.RuntimeState,
+	)
+	if !ok {
+		return nil
+	}
+	return annotation.ActorLabels
 }
 
 func normalizeLimit(raw *int) int {

@@ -24,6 +24,7 @@ import (
 	"hash/crc32"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -46,6 +47,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
+	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationtool"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
@@ -196,6 +198,14 @@ const (
 		"recurring work. " +
 		"Use skill_run only for skill workspace workflows."
 
+	browserToolingGuidance = "For real browser automation, use " +
+		"browser. Prefer browser snapshot plus act for page " +
+		"interaction, use browser screenshot when visual " +
+		"verification matters, and keep using the same targetId " +
+		"after tabs or snapshot calls. When the user mentions " +
+		"their current browser tab, relay, or extension attach " +
+		"flow, use profile=\"chrome\" when that profile exists."
+
 	agentTypeLLM        = "llm"
 	agentTypeClaudeCode = "claude-code"
 
@@ -203,9 +213,9 @@ const (
 
 	defaultOpenAIVariant = openAIVariantAuto
 
-	deepSeekModelHint = "deepseek"
-	qwenModelHint     = "qwen"
-	hunyuanModelHint  = "hunyuan"
+	deepSeekAPIHost = "api.deepseek.com"
+	qwenAPIHost     = "dashscope.aliyuncs.com"
+	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
 
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
 	openAIModelEnvName   = "OPENAI_MODEL"
@@ -846,6 +856,7 @@ func NewRuntime(
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			nil,
 			opts.AdminAddr,
 			adminURL,
 		))
@@ -926,6 +937,19 @@ func run(ctx context.Context, args []string) error {
 			Code: 1,
 			Err:  fmt.Errorf("debug recorder config failed: %w", err),
 		}
+	}
+	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
+	if debugRec != nil {
+		debugDir = debugRec.Dir()
+	}
+
+	browserServerSup, err := maybeStartBrowserServerSupervisor(
+		ctx,
+		opts.ToolProviders,
+		debugDir,
+	)
+	if err != nil {
+		log.Warnf("browser server auto-start failed: %v", err)
 	}
 	langfuseRT, err := maybeEnableLangfuse(ctx, opts)
 	if err != nil {
@@ -1150,10 +1174,6 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
-	if debugRec != nil {
-		debugDir = debugRec.Dir()
-	}
 	gw := newInProcGatewayClient(
 		gwSrv,
 		opts.AppName,
@@ -1277,6 +1297,7 @@ func run(ctx context.Context, args []string) error {
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			browserServerSup,
 			adminBinding.addr,
 			adminBinding.url,
 		))
@@ -1298,6 +1319,7 @@ func run(ctx context.Context, args []string) error {
 		channels,
 		needsModel,
 	))
+	logStartupLines(browserServerSup.startupLines())
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
 	logStartupLines(a2aStartupLines(a2aSurface))
 	logStartupLines(toolDepsStartupLines(openClawTools.deps))
@@ -1348,6 +1370,11 @@ func run(ctx context.Context, args []string) error {
 	}
 	if cronRunner != nil {
 		_ = cronRunner.Close()
+	}
+	if browserServerSup != nil {
+		if err := browserServerSup.Close(); err != nil {
+			log.Warnf("close browser server failed: %v", err)
+		}
 	}
 	_ = r.Close()
 	if err := shutdownTelemetryWithContext(
@@ -1795,16 +1822,6 @@ func newAgent(
 		)
 	}
 
-	opts := []llmagent.Option{
-		llmagent.WithModel(mdl),
-		llmagent.WithInstruction(instruction),
-		llmagent.WithGlobalInstruction(strings.TrimSpace(cfg.SystemPrompt)),
-		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
-		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
-		llmagent.WithPreloadMemory(cfg.PreloadMemory),
-		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
-	}
-
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
 	bundledRoot := resolveBundledSkillsRoot(cwd, cfg.StateDir)
@@ -1820,6 +1837,35 @@ func newAgent(
 		return nil, err
 	}
 
+	tools := append([]tool.Tool(nil), extraTools...)
+	tools = append(tools, ocskills.NewListTool(repo))
+	if len(cfg.ToolProviders) > 0 {
+		extra, err := toolsFromProviders(
+			mdl,
+			cfg.AppName,
+			cfg.StateDir,
+			cfg.ToolProviders,
+		)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, extra...)
+	}
+	if hasToolNamed(tools, ocbrowser.ToolName) {
+		instruction = strings.TrimSpace(
+			instruction + "\n\n" + browserToolingGuidance,
+		)
+	}
+
+	opts := []llmagent.Option{
+		llmagent.WithModel(mdl),
+		llmagent.WithInstruction(instruction),
+		llmagent.WithGlobalInstruction(strings.TrimSpace(cfg.SystemPrompt)),
+		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
+		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
+		llmagent.WithPreloadMemory(cfg.PreloadMemory),
+		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
+	}
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
 		opts,
@@ -1845,21 +1891,6 @@ func newAgent(
 			),
 		)
 	}
-
-	tools := append([]tool.Tool(nil), extraTools...)
-	tools = append(tools, ocskills.NewListTool(repo))
-	if len(cfg.ToolProviders) > 0 {
-		extra, err := toolsFromProviders(
-			mdl,
-			cfg.AppName,
-			cfg.StateDir,
-			cfg.ToolProviders,
-		)
-		if err != nil {
-			return nil, err
-		}
-		tools = append(tools, extra...)
-	}
 	if len(tools) > 0 {
 		opts = append(opts, llmagent.WithTools(tools))
 	}
@@ -1879,6 +1910,19 @@ func newAgent(
 	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
 
 	return llmagent.New(defaultAgentName, opts...), nil
+}
+
+func hasToolNamed(tools []tool.Tool, name string) bool {
+	for i := range tools {
+		decl := tools[i].Declaration()
+		if decl == nil {
+			continue
+		}
+		if decl.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func toolsFromProviders(
@@ -2311,7 +2355,8 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		return nil, errors.New("openai model name is empty")
 	}
 
-	variant, err := parseOpenAIVariant(spec.OpenAIVariant, name)
+	baseURL := strings.TrimSpace(spec.BaseURL)
+	variant, err := parseOpenAIVariant(spec.OpenAIVariant, baseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -2320,7 +2365,6 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
 	}
-	baseURL := strings.TrimSpace(spec.BaseURL)
 	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))
 	}
@@ -2355,11 +2399,11 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 
 func parseOpenAIVariant(
 	raw string,
-	modelName string,
+	baseURL string,
 ) (openai.Variant, error) {
 	v := strings.ToLower(strings.TrimSpace(raw))
 	if v == "" || v == openAIVariantAuto {
-		return inferOpenAIVariant(modelName), nil
+		return inferOpenAIVariant(baseURL), nil
 	}
 
 	variant := openai.Variant(v)
@@ -2374,18 +2418,37 @@ func parseOpenAIVariant(
 	}
 }
 
-func inferOpenAIVariant(modelName string) openai.Variant {
-	name := strings.ToLower(strings.TrimSpace(modelName))
+func inferOpenAIVariant(baseURL string) openai.Variant {
+	host, ok := openAIBaseURLHost(baseURL)
+	if !ok {
+		return openai.VariantOpenAI
+	}
 	switch {
-	case strings.Contains(name, deepSeekModelHint):
+	case strings.EqualFold(host, deepSeekAPIHost):
 		return openai.VariantDeepSeek
-	case strings.Contains(name, qwenModelHint):
+	case strings.EqualFold(host, qwenAPIHost):
 		return openai.VariantQwen
-	case strings.Contains(name, hunyuanModelHint):
+	case strings.EqualFold(host, hunyuanAPIHost):
 		return openai.VariantHunyuan
 	default:
 		return openai.VariantOpenAI
 	}
+}
+
+func openAIBaseURLHost(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", false
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return "", false
+	}
+	return host, true
 }
 
 func splitCSV(input string) []string {

@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>OpenClaw Relay</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 12px;
+        min-width: 320px;
+      }
+      input, button {
+        width: 100%;
+        box-sizing: border-box;
+        margin-top: 8px;
+      }
+      #status {
+        margin-top: 12px;
+        white-space: pre-wrap;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <label for="server-url">Browser server URL</label>
+    <input id="server-url" />
+    <button id="save">Save and Connect</button>
+    <button id="attach">Attach Current Tab</button>
+    <button id="detach">Detach Current Tab</button>
+    <div id="status"></div>
+    <script type="module" src="popup.js"></script>
+  </body>
+  </html>

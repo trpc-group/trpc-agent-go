@@ -102,7 +102,7 @@ func (a *demoApp) setup() error {
 	}
 	mainAgentInstance := newMainAgent(modelInstance, a.streaming, a.toolSet)
 	approvalPlugin, err := approval.New(
-		reviewerInstance,
+		approval.WithReviewer(reviewerInstance),
 		approval.WithToolPolicy(toolWriteStdin, approval.ToolPolicySkipApproval),
 		approval.WithToolPolicy(toolKillSession, approval.ToolPolicyDenied),
 	)
