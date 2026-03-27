@@ -25,7 +25,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus v0.8.1-0.20251222024650-ea147adf3d21
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/sqlitevec v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/sqlitevec v0.0.0-20260327150826-d407bd208503
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.2.0
 )
 

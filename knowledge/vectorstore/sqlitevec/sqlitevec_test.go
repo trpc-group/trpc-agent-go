@@ -504,8 +504,8 @@ func TestGetMetadata_UsesMetadataTableValues(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, store.Add(ctx, &document.Document{
-		ID:      "a",
-		Content: "c",
+		ID:       "a",
+		Content:  "c",
 		Metadata: map[string]any{"lang": "go"},
 	}, testEmbedding(1)))
 

@@ -97,13 +97,13 @@ ORDER BY key ASC, value_ordinal ASC`, s.opts.metadataTableName)
 	}
 	defer rows.Close()
 
-		type entry struct {
-			ordinal int
-			value   any
-		}
+	type entry struct {
+		ordinal int
+		value   any
+	}
 
-		grouped := make(map[string][]entry)
-		arrayKeys := make(map[string]bool)
+	grouped := make(map[string][]entry)
+	arrayKeys := make(map[string]bool)
 	for rows.Next() {
 		var (
 			key     string

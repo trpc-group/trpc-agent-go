@@ -451,3 +451,79 @@ func TestBuildScoredDocumentAndLoadStoredMetadataEmpty(t *testing.T) {
 	assert.Equal(t, 0.5, scored.Score)
 	assert.Nil(t, scored.Document.Metadata)
 }
+
+func TestClassifyMetadataScalar_CoversScalarTypes(t *testing.T) {
+	int64One := int64(1)
+
+	testCases := []struct {
+		name       string
+		value      any
+		wantType   string
+		wantText   string
+		wantNum    float64
+		wantNumSet bool
+		wantBool   int64
+		wantBoolOk bool
+		wantJSON   string
+	}{
+		{name: "nil", value: nil, wantType: metadataValueTypeJSON, wantJSON: "null"},
+		{name: "string", value: "sqlite", wantType: metadataValueTypeText, wantText: "sqlite", wantJSON: `"sqlite"`},
+		{name: "bool false", value: false, wantType: metadataValueTypeBool, wantBool: 0, wantBoolOk: true, wantJSON: "false"},
+		{name: "int8", value: int8(8), wantType: metadataValueTypeNum, wantNum: 8, wantNumSet: true, wantJSON: "8"},
+		{name: "int16", value: int16(16), wantType: metadataValueTypeNum, wantNum: 16, wantNumSet: true, wantJSON: "16"},
+		{name: "int32", value: int32(32), wantType: metadataValueTypeNum, wantNum: 32, wantNumSet: true, wantJSON: "32"},
+		{name: "int64", value: int64(64), wantType: metadataValueTypeNum, wantNum: 64, wantNumSet: true, wantJSON: "64"},
+		{name: "uint", value: uint(7), wantType: metadataValueTypeNum, wantNum: 7, wantNumSet: true, wantJSON: "7"},
+		{name: "uint8", value: uint8(8), wantType: metadataValueTypeNum, wantNum: 8, wantNumSet: true, wantJSON: "8"},
+		{name: "uint16", value: uint16(16), wantType: metadataValueTypeNum, wantNum: 16, wantNumSet: true, wantJSON: "16"},
+		{name: "uint32", value: uint32(32), wantType: metadataValueTypeNum, wantNum: 32, wantNumSet: true, wantJSON: "32"},
+		{name: "uint64", value: uint64(64), wantType: metadataValueTypeNum, wantNum: 64, wantNumSet: true, wantJSON: "64"},
+		{name: "float32", value: float32(3.5), wantType: metadataValueTypeNum, wantNum: 3.5, wantNumSet: true, wantJSON: "3.5"},
+		{name: "float64", value: 7.25, wantType: metadataValueTypeNum, wantNum: 7.25, wantNumSet: true, wantJSON: "7.25"},
+		{name: "bad json number", value: json.Number("NaN"), wantType: metadataValueTypeNum, wantJSON: ""},
+		{name: "complex", value: map[string]any{"x": int64One}, wantType: metadataValueTypeJSON, wantJSON: `{"x":1}`},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			row := classifyMetadataScalar("doc-1", "key", 0, tc.value)
+			assert.Equal(t, tc.wantType, row.valueType)
+			assert.Equal(t, tc.wantJSON, row.valueJSON.String)
+			assert.True(t, row.valueJSON.Valid)
+
+			if tc.wantText != "" {
+				assert.Equal(t, tc.wantText, row.valueText.String)
+				assert.True(t, row.valueText.Valid)
+			}
+			if tc.wantNumSet {
+				assert.InDelta(t, tc.wantNum, row.valueNum.Float64, 0.0001)
+				assert.True(t, row.valueNum.Valid)
+			}
+			if tc.wantBoolOk {
+				assert.Equal(t, tc.wantBool, row.valueBool.Int64)
+				assert.True(t, row.valueBool.Valid)
+			}
+		})
+	}
+
+	rows := classifyMetadataValues("doc-1", "arr", [2]int{1, 2})
+	require.Len(t, rows, 2)
+	assert.Equal(t, 0, rows[0].ordinal)
+	assert.Equal(t, 1, rows[1].ordinal)
+}
+
+func TestInitDB_ErrorPathsForInvalidTableNames(t *testing.T) {
+	ctx := context.Background()
+
+	store := newTestStore(t)
+	store.opts.tableName = "bad-table"
+	err := store.initDB(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create vec0 table")
+
+	store2 := newTestStore(t)
+	store2.opts.metadataTableName = "bad-meta"
+	err = store2.initDB(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create metadata table")
+}
