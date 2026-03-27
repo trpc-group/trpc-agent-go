@@ -310,7 +310,8 @@ func (e *memoryExtractor) buildSystemPrompt(
 // one-line descriptions shown in the system prompt.
 var toolActionDescriptions = map[string]string{
 	memory.AddToolName: "Add a new memory " +
-		"(only if genuinely new information).",
+		"(only if genuinely new information that is not already captured " +
+		"by an existing memory, even with different wording).",
 	memory.UpdateToolName: "Update an existing memory " +
 		"with new or corrected information. " +
 		"Prefer updating over adding a near-duplicate.",
@@ -481,22 +482,38 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
    b. **Facts** (memory_kind="fact"): Stable attributes, preferences,
       relationships, background, skills, opinions.
       Example: "User is a software engineer at Google."
-3. Check existing memories. Only use memory_update when the SAME fact has
-   genuinely changed (e.g., user moved to a new city). Do NOT merge new
-   information into existing memories — create a new memory instead.
+3. Check existing memories BEFORE deciding to add anything. If an existing
+   memory already captures the same fact, preference, relationship, or event,
+   do NOT call memory_add again. Rewording, repeated mentions, extra
+   adjectives, tense changes, topic synonyms, or slightly different phrasing
+   do NOT make it new. If the stored memory is wrong, outdated, or genuinely
+   superseded but should still exist as the current memory, use memory_update
+   instead. If the memory should be removed entirely, use memory_delete. If
+   the conversation only repeats what is already stored, emit no tool call
+   for that item.
 4. Call multiple tools in parallel to handle all necessary changes at once.
 </instructions>
 
 <guidelines>
 - **COMPLETENESS**: Extract every distinct fact, event, preference, and
-  relationship mentioned in the conversation. When in doubt, create a
-  memory rather than skip it. Missing information is worse than having
-  a slightly redundant memory. Go through the conversation turn by turn
-  and ensure NOTHING is missed from any turn.
+  relationship mentioned in the conversation. When deciding whether
+  something is worth remembering, err on the side of keeping it. But when
+  deciding whether to add a NEW memory versus reusing an existing one, err
+  on the side of NOT adding a duplicate. Go through the conversation turn
+  by turn and ensure NOTHING is missed from any turn.
 - **ATOMICITY**: Keep each memory focused on a SINGLE piece of information.
   For example, if a user says "I went to Paris with Alice and we ate at
   Le Cinq, then visited the Louvre", create SEPARATE memories for:
   the dinner at Le Cinq, the Louvre visit, and that Alice traveled with User.
+- **DEDUPLICATION**: Before every memory_add, compare the candidate against
+  the existing memories list. Do not add duplicates caused only by paraphrasing,
+  wording changes, tense changes, repeated mentions, topic renaming, or
+  different surface forms of the same date. The same stable fact expressed
+  differently is still the same memory. The same event on the same date is
+  usually the same memory. Matching participants or location alone are only
+  supporting signals and do NOT mean two different-day episodes are the same
+  memory. When it is a duplicate, emit no tool call. When it corrects or
+  replaces an existing memory, use memory_update.
 - **NO SUBJECT PREFIX**: Create memories as brief, concise statements that
   directly describe attributes or facts WITHOUT a subject prefix. Omit
   "User", "The user", or any equivalent pronoun/noun at the start, because
@@ -550,9 +567,9 @@ Today's date is {current_date}. You MUST use this date to resolve ALL relative t
   the existing memory. But if the conversation reveals a NEW fact, even
   on a related topic, create a NEW memory — do not merge into existing ones.
 - Use delete when the user explicitly asks to forget something, or when
-  an existing memory is clearly outdated or contradicted by newer
-  information in the conversation (e.g., the user changed jobs, moved
-  to a new city, or reversed a preference).
+  a memory should be removed entirely rather than corrected or replaced
+  (for example, a mistaken extraction, a withdrawn fact, or stale detail
+  the assistant should no longer retain).
 - Only use clear when the user explicitly asks to forget everything.
 - Write memory content and topics in the same language as the user's input.
 - Do not create memories for transient requests ("What time is it?") or
