@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -336,4 +337,45 @@ func TestClient_UpdateSessionState_PreservesTracksAfterAppend(t *testing.T) {
 	tracks, err := session.TracksFromState(sess.State)
 	require.NoError(t, err)
 	assert.Contains(t, tracks, session.Track("alpha"))
+}
+
+func TestClient_UpdateSessionState_UnexpectedScriptResult(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "uss-script-result"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	originalScript := luaUpdateSessionState
+	luaUpdateSessionState = redis.NewScript(`return 2`)
+	t.Cleanup(func() {
+		luaUpdateSessionState = originalScript
+	})
+
+	err = c.UpdateSessionState(ctx, key, session.StateMap{"k": []byte("v")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unexpected script result 2")
+}
+
+func TestClient_UpdateSessionState_ScriptError(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "uss-script-error"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	originalScript := luaUpdateSessionState
+	luaUpdateSessionState = redis.NewScript(`return redis.error_reply('boom')`)
+	t.Cleanup(func() {
+		luaUpdateSessionState = originalScript
+	})
+
+	err = c.UpdateSessionState(ctx, key, session.StateMap{"k": []byte("v")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update session state")
+	assert.Contains(t, err.Error(), "boom")
 }

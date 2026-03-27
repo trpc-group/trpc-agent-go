@@ -195,9 +195,6 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, event *event.
 		key,
 		func(sessState *SessionState) error {
 			sessState.UpdatedAt = time.Now()
-			if sessState.State == nil {
-				sessState.State = make(session.StateMap)
-			}
 			session.ApplyEventStateDeltaMap(sessState.State, event)
 			return nil
 		},
@@ -308,9 +305,6 @@ func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state 
 		ctx,
 		key,
 		func(sessState *SessionState) error {
-			if sessState.State == nil {
-				sessState.State = make(session.StateMap)
-			}
 			for k, v := range state {
 				if v == nil {
 					sessState.State[k] = nil

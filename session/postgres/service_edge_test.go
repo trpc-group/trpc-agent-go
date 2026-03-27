@@ -11,6 +11,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -300,6 +301,69 @@ func TestAddEvent_MarshalEventError(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestAddEvent_SessionNotFound(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "nonexistent",
+	}
+
+	evt := event.New("inv-1", "author")
+
+	expectLoadSessionStateForUpdate(mock, key).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+
+	err := s.addEvent(context.Background(), key, evt)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "session not found")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddEvent_InitializesNilState(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	stateBytes, err := json.Marshal(&SessionState{ID: key.SessionID, State: nil})
+	require.NoError(t, err)
+	expectLoadSessionStateForUpdate(mock, key).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).AddRow(stateBytes, nil))
+
+	evt := event.New("evt-1", "author")
+	evt.StateDelta = session.StateMap{
+		"marker": []byte("1"),
+	}
+
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(
+			&sessionStateJSONMatcher{
+				t:             t,
+				expectedID:    key.SessionID,
+				expectedState: session.StateMap{"marker": []byte("1")},
+			},
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			key.AppName,
+			key.UserID,
+			key.SessionID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	err = s.addEvent(context.Background(), key, evt)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestAddTrackEvent_UnmarshalStateError(t *testing.T) {
 	s, mock, db := setupMockService(t, nil)
 	defer db.Close()
@@ -397,6 +461,62 @@ func TestAddTrackEvent_TransactionInsertError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "store track event failed")
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddTrackEvent_InitializesNilState(t *testing.T) {
+	s, mock, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	stateBytes, err := json.Marshal(&SessionState{ID: key.SessionID, State: nil})
+	require.NoError(t, err)
+	expectLoadSessionStateForUpdate(mock, key).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).AddRow(stateBytes, nil))
+	mock.ExpectExec("UPDATE session_states SET state").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			"test-app", "test-user", "test-session").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO session_track_events").
+		WithArgs("test-app", "test-user", "test-session", "timeline",
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	trackEvt := &session.TrackEvent{
+		Track:     session.Track("timeline"),
+		Payload:   json.RawMessage([]byte("{\"foo\":\"bar\"}")),
+		Timestamp: time.Now(),
+	}
+
+	err = s.addTrackEvent(context.Background(), key, trackEvt)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAddTrackEvent_MarshalTrackEventError(t *testing.T) {
+	s, _, db := setupMockService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "test-session",
+	}
+
+	trackEvt := &session.TrackEvent{
+		Track:     session.Track("timeline"),
+		Payload:   json.RawMessage(`{"broken"`),
+		Timestamp: time.Now(),
+	}
+
+	err := s.addTrackEvent(context.Background(), key, trackEvt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "marshal track event failed")
 }
 
 // TestGetSession tests various GetSession error scenarios
