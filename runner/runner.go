@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
@@ -1379,7 +1380,11 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 	agent.EmitEvent(ctx, loop.invocation, loop.processedEventCh, runnerCompletionEvent)
 
 	// Enqueue auto memory extraction job if memory service is configured.
-	r.enqueueAutoMemoryJob(ctx, loop.sess)
+	r.enqueueAutoMemoryJob(
+		ctx,
+		loop.sess,
+		loop.invocation.RunOptions.RuntimeState,
+	)
 }
 
 func resolveExecutionTraceStatus(loop *eventLoopContext, ctxErr error) trace.TraceStatus {
@@ -1719,11 +1724,17 @@ func RunWithMessages(
 
 // enqueueAutoMemoryJob triggers auto memory extraction if memory service is
 // configured.
-func (r *runner) enqueueAutoMemoryJob(ctx context.Context, sess *session.Session) {
+func (r *runner) enqueueAutoMemoryJob(
+	ctx context.Context,
+	sess *session.Session,
+	runtimeState map[string]any,
+) {
 	if r.memoryService == nil || sess == nil {
 		return
 	}
-	if err := r.memoryService.EnqueueAutoMemoryJob(ctx, sess); err != nil {
+	jobSession := imemory.CloneSessionWithRuntimeState(sess, runtimeState)
+	jobCtx := imemory.ContextWithAutoMemoryCursorSession(ctx, sess)
+	if err := r.memoryService.EnqueueAutoMemoryJob(jobCtx, jobSession); err != nil {
 		log.DebugfContext(ctx, "Auto memory extraction skipped or failed: %v", err)
 		return
 	}
