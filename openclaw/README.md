@@ -515,10 +515,12 @@ You can override the OpenAI-compatible base URL with:
 
 ### DeepSeek (OpenAI-compatible)
 
-If you use DeepSeek, set `DEEPSEEK_API_KEY`:
+If you use DeepSeek directly, set `DEEPSEEK_API_KEY` together with the official
+DeepSeek base URL:
 
 ```bash
 export DEEPSEEK_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 
 cd openclaw
 go run ./cmd/openclaw \
@@ -540,7 +542,10 @@ go run ./cmd/openclaw \
   -http-addr :8080
 ```
 
-By default, `-openai-variant` is `auto` and is inferred from `-model`.
+By default, `-openai-variant` is `auto` and is inferred from the configured
+base URL host (`OPENAI_BASE_URL`, `-openai-base-url`, or `model.base_url`). For
+custom proxies or other compatible endpoints, set `-openai-variant`
+explicitly.
 You can override it explicitly:
 
 ```bash
@@ -1068,7 +1073,7 @@ If you already have an OpenClaw skills directory, you can reuse it:
 cd openclaw
 go run ./cmd/openclaw \
   -mode openai \
-  -model deepseek-chat \
+  -model gpt-5 \
   -skills-extra-dirs "/path/to/openclaw/skills"
 ```
 
@@ -1303,7 +1308,7 @@ To disable these tools explicitly:
 ```bash
 go run ./cmd/openclaw \
   -mode openai \
-  -model deepseek-chat \
+  -model gpt-5 \
   -config ./openclaw.yaml \
   -enable-openclaw-tools=false
 ```

@@ -496,10 +496,12 @@ go run ./cmd/openclaw \
 
 ### DeepSeek（OpenAI 兼容）
 
-如果使用 DeepSeek，请设置 `DEEPSEEK_API_KEY`：
+如果你直连 DeepSeek，请同时设置 `DEEPSEEK_API_KEY` 和官方
+DeepSeek base URL：
 
 ```bash
 export DEEPSEEK_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 
 cd openclaw
 go run ./cmd/openclaw \
@@ -521,8 +523,11 @@ go run ./cmd/openclaw \
   -http-addr :8080
 ```
 
-默认情况下，`-openai-variant` 为 `auto`，会从 `-model` 推断。
-你可以显式覆盖：
+默认情况下，`-openai-variant` 为 `auto`，会根据已配置的
+base URL host 自动推断（`OPENAI_BASE_URL`、`-openai-base-url`
+或 `model.base_url`）。对于自定义代理或其他兼容端点，请显式设置
+`-openai-variant`。
+你也可以显式覆盖：
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
@@ -968,7 +973,7 @@ OpenClaw 会将加载的技能正文/文档中的 `{baseDir}` 替换为本地技
 cd openclaw
 go run ./cmd/openclaw \
   -mode openai \
-  -model deepseek-chat \
+  -model gpt-5 \
   -skills-extra-dirs "/path/to/openclaw/skills"
 ```
 
@@ -1162,7 +1167,7 @@ OpenClaw 为默认 LLM agent 暴露了一个面向代码 agent 的宿主机 tool
 ```bash
 go run ./cmd/openclaw \
   -mode openai \
-  -model deepseek-chat \
+  -model gpt-5 \
   -config ./openclaw.yaml \
   -enable-openclaw-tools=false
 ```

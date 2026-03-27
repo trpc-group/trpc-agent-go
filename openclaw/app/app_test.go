@@ -1642,19 +1642,19 @@ func TestConfigFingerprint_Deterministic(t *testing.T) {
 }
 
 func TestParseOpenAIVariant_Explicit(t *testing.T) {
-	v, err := parseOpenAIVariant(string(openai.VariantOpenAI), "gpt-5")
+	v, err := parseOpenAIVariant(string(openai.VariantOpenAI), "")
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantOpenAI, v)
 }
 
 func TestParseOpenAIVariant_Auto(t *testing.T) {
-	v, err := parseOpenAIVariant(openAIVariantAuto, "deepseek-chat")
+	v, err := parseOpenAIVariant(openAIVariantAuto, "https://api.deepseek.com/v1")
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantDeepSeek, v)
 }
 
 func TestParseOpenAIVariant_Unknown(t *testing.T) {
-	_, err := parseOpenAIVariant("nope", "gpt-5")
+	_, err := parseOpenAIVariant("nope", "")
 	require.Error(t, err)
 }
 
@@ -1662,15 +1662,29 @@ func TestInferOpenAIVariant(t *testing.T) {
 	require.Equal(
 		t,
 		openai.VariantDeepSeek,
-		inferOpenAIVariant("deepseek-r1"),
+		inferOpenAIVariant("https://api.deepseek.com/v1"),
 	)
-	require.Equal(t, openai.VariantQwen, inferOpenAIVariant("qwen2.5"))
+	require.Equal(
+		t,
+		openai.VariantQwen,
+		inferOpenAIVariant("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+	)
 	require.Equal(
 		t,
 		openai.VariantHunyuan,
-		inferOpenAIVariant("hunyuan-t1"),
+		inferOpenAIVariant("https://api.hunyuan.cloud.tencent.com/v1"),
 	)
-	require.Equal(t, openai.VariantOpenAI, inferOpenAIVariant("gpt-5"))
+	require.Equal(
+		t,
+		openai.VariantOpenAI,
+		inferOpenAIVariant("https://deepseek.com/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantOpenAI,
+		inferOpenAIVariant("https://proxy.example.com/v1"),
+	)
+	require.Equal(t, openai.VariantOpenAI, inferOpenAIVariant("deepseek-chat"))
 }
 
 func TestNewModel_Mock(t *testing.T) {

@@ -24,6 +24,7 @@ import (
 	"hash/crc32"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -203,9 +204,9 @@ const (
 
 	defaultOpenAIVariant = openAIVariantAuto
 
-	deepSeekModelHint = "deepseek"
-	qwenModelHint     = "qwen"
-	hunyuanModelHint  = "hunyuan"
+	deepSeekAPIHost = "api.deepseek.com"
+	qwenAPIHost     = "dashscope.aliyuncs.com"
+	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
 
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
 	openAIModelEnvName   = "OPENAI_MODEL"
@@ -2311,7 +2312,8 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		return nil, errors.New("openai model name is empty")
 	}
 
-	variant, err := parseOpenAIVariant(spec.OpenAIVariant, name)
+	baseURL := strings.TrimSpace(spec.BaseURL)
+	variant, err := parseOpenAIVariant(spec.OpenAIVariant, baseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -2320,7 +2322,6 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
 	}
-	baseURL := strings.TrimSpace(spec.BaseURL)
 	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))
 	}
@@ -2355,11 +2356,11 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 
 func parseOpenAIVariant(
 	raw string,
-	modelName string,
+	baseURL string,
 ) (openai.Variant, error) {
 	v := strings.ToLower(strings.TrimSpace(raw))
 	if v == "" || v == openAIVariantAuto {
-		return inferOpenAIVariant(modelName), nil
+		return inferOpenAIVariant(baseURL), nil
 	}
 
 	variant := openai.Variant(v)
@@ -2374,18 +2375,37 @@ func parseOpenAIVariant(
 	}
 }
 
-func inferOpenAIVariant(modelName string) openai.Variant {
-	name := strings.ToLower(strings.TrimSpace(modelName))
+func inferOpenAIVariant(baseURL string) openai.Variant {
+	host, ok := openAIBaseURLHost(baseURL)
+	if !ok {
+		return openai.VariantOpenAI
+	}
 	switch {
-	case strings.Contains(name, deepSeekModelHint):
+	case strings.EqualFold(host, deepSeekAPIHost):
 		return openai.VariantDeepSeek
-	case strings.Contains(name, qwenModelHint):
+	case strings.EqualFold(host, qwenAPIHost):
 		return openai.VariantQwen
-	case strings.Contains(name, hunyuanModelHint):
+	case strings.EqualFold(host, hunyuanAPIHost):
 		return openai.VariantHunyuan
 	default:
 		return openai.VariantOpenAI
 	}
+}
+
+func openAIBaseURLHost(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", false
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return "", false
+	}
+	return host, true
 }
 
 func splitCSV(input string) []string {
