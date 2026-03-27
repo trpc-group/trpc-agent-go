@@ -36,6 +36,7 @@ type mockAgent struct {
 	emit             bool
 	gotEndInvocation bool
 	gotTraceNodeID   string
+	gotSurfaceRoot   string
 }
 
 func (m *mockAgent) Info() agent.Info                { return agent.Info{Name: m.name} }
@@ -49,6 +50,7 @@ func (m *mockAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan *eve
 		// Record whether the invocation was incorrectly marked as ended.
 		m.gotEndInvocation = inv.EndInvocation
 		m.gotTraceNodeID = agent.InvocationTraceNodeID(inv)
+		m.gotSurfaceRoot = agent.InvocationSurfaceRootNodeID(inv)
 		if m.emit {
 			ch <- event.New(inv.InvocationID, m.name)
 		}
@@ -211,6 +213,33 @@ func TestTransferResponseProc_UsesMountedSwarmTraceRootForSiblingTransfer(t *tes
 	require.Equal(t, "workflow/swarm/beta", target.gotTraceNodeID)
 }
 
+func TestTransferResponseProc_ReplacesMountedSurfaceRootForSiblingTransfer(t *testing.T) {
+	target := &mockAgent{name: "beta", emit: true}
+	parent := &parentAgent{child: target}
+	inv := &agent.Invocation{
+		Agent:        parent,
+		AgentName:    "alpha",
+		InvocationID: "inv-surface-swarm",
+		Session: &session.Session{
+			State: session.StateMap{
+				swarmTeamNameKey:    []byte("swarm"),
+				swarmTraceNodeIDKey: []byte("workflow/swarm"),
+			},
+		},
+		TransferInfo: &agent.TransferInfo{TargetAgentName: "beta", Message: "hi"},
+	}
+	agent.WithInvocationTraceNodeID("workflow/swarm/alpha")(inv)
+	agent.SetInvocationSurfaceRootNodeID(inv, "workflow/team/alpha")
+	rsp := &model.Response{ID: "r-surface-swarm"}
+	out := make(chan *event.Event, 10)
+	NewTransferResponseProcessor(true).ProcessResponse(context.Background(), inv, &model.Request{}, rsp, out)
+	close(out)
+	for range out {
+	}
+	require.Equal(t, "workflow/swarm/beta", target.gotTraceNodeID)
+	require.Equal(t, "workflow/team/beta", target.gotSurfaceRoot)
+}
+
 func TestTransferResponseProc_FallsBackToMountedSwarmTraceRootWhenSessionLacksStoredTraceRoot(t *testing.T) {
 	target := &mockAgent{name: "beta", emit: true}
 	parent := &parentAgent{child: target}
@@ -238,6 +267,8 @@ func TestTransferResponseProc_FallsBackToMountedSwarmTraceRootWhenSessionLacksSt
 func TestTransferTargetTraceNodeID_NilAndParentFallbackBranches(t *testing.T) {
 	require.Empty(t, transferTargetTraceNodeID(nil, &mockAgent{name: "beta"}))
 	require.Empty(t, transferTargetTraceNodeID(&agent.Invocation{}, nil))
+	require.Empty(t, transferTargetSurfaceRootNodeID(nil, &mockAgent{name: "beta"}))
+	require.Empty(t, transferTargetSurfaceRootNodeID(&agent.Invocation{}, nil))
 	require.Empty(t, parentTraceNodeID(""))
 	require.Empty(t, parentTraceNodeID("swarm"))
 }

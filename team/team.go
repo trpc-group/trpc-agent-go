@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
+	"trpc.group/trpc-go/trpc-agent-go/internal/teamtrace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
@@ -198,21 +199,56 @@ func (t *Team) runCoordinator(
 	if t.coordinator == nil {
 		return nil, errors.New("coordinator is nil")
 	}
-	return t.coordinator.Run(ctx, invocation)
+	rootNodeID := teamtrace.RootNodeID(invocation, t.name)
+	teamtrace.SetMemberTraceRootForInvocation(invocation, rootNodeID)
+	agent.SetInvocationSurfaceRootNodeID(
+		invocation,
+		teamtrace.CoordinatorNodeID(rootNodeID),
+	)
+	coordinatorEventCh, err := t.coordinator.Run(ctx, invocation)
+	if err != nil {
+		agent.ClearInvocationSurfaceRootNodeID(invocation)
+		teamtrace.ClearMemberTraceRootForInvocation(invocation)
+		return nil, err
+	}
+	return wrapCoordinatorInvocationState(
+		invocation,
+		coordinatorEventCh,
+	), nil
+}
+
+func wrapCoordinatorInvocationState(
+	invocation *agent.Invocation,
+	src <-chan *event.Event,
+) <-chan *event.Event {
+	if invocation == nil || src == nil {
+		return src
+	}
+	out := make(chan *event.Event)
+	go func() {
+		defer close(out)
+		defer teamtrace.ClearMemberTraceRootForInvocation(invocation)
+		defer agent.ClearInvocationSurfaceRootNodeID(invocation)
+		for evt := range src {
+			out <- evt
+		}
+	}()
+	return out
 }
 
 func (t *Team) runSwarm(
 	ctx context.Context,
 	invocation *agent.Invocation,
 ) (<-chan *event.Event, error) {
+	traceRootNodeID := teamtrace.TraceRootNodeID(invocation, t.name)
+	surfaceRootNodeID := teamtrace.RootNodeID(invocation, t.name)
 	// Mark this session as belonging to a Swarm team for transfer processor to detect.
 	// Only do this if cross-request transfer is enabled.
 	if t.crossRequestTransfer && invocation.Session != nil {
 		invocation.Session.SetState(SwarmTeamNameKey, []byte(t.name))
 		if invocation.RunOptions.ExecutionTraceEnabled {
-			traceNodeID := agent.InvocationTraceNodeID(invocation)
-			if traceNodeID != "" {
-				invocation.Session.SetState(swarmTraceNodeIDKey, []byte(traceNodeID))
+			if traceRootNodeID != "" {
+				invocation.Session.SetState(swarmTraceNodeIDKey, []byte(traceRootNodeID))
 			}
 		}
 	}
@@ -236,7 +272,7 @@ func (t *Team) runSwarm(
 	}
 
 	ensureSwarmRuntime(invocation, t.swarm)
-	memberPathAllocator := istructure.NewPathAllocator(agent.InvocationTraceNodeID(invocation))
+	memberPathAllocator := istructure.NewPathAllocator(traceRootNodeID)
 	var memberNodeID string
 	startAgentName := startAgent.Info().Name
 	t.mu.RLock()
@@ -249,12 +285,19 @@ func (t *Team) runSwarm(
 	}
 	t.mu.RUnlock()
 	if memberNodeID == "" {
-		memberNodeID = istructure.JoinNodeID(agent.InvocationTraceNodeID(invocation), startAgent.Info().Name)
+		memberNodeID = teamtrace.MemberNodeID(traceRootNodeID, startAgent.Info().Name)
 	}
+	memberSurfaceRootNodeID := teamtrace.MemberNodeID(
+		surfaceRootNodeID,
+		startAgent.Info().Name,
+	)
 	child := invocation.Clone(
 		agent.WithInvocationAgent(startAgent),
 		agent.WithInvocationTraceNodeID(memberNodeID),
 		agent.WithInvocationEntryPredecessorStepIDs(agent.NextExecutionTracePredecessors(invocation)),
+		func(inv *agent.Invocation) {
+			agent.SetInvocationSurfaceRootNodeID(inv, memberSurfaceRootNodeID)
+		},
 	)
 	childCtx := agent.NewInvocationContext(ctx, child)
 

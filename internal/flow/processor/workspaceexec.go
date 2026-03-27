@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 const (
@@ -25,6 +26,7 @@ const (
 type workspaceExecRequestProcessorOptions struct {
 	sessionTools  bool
 	hasSkillsRepo bool
+	repoResolver  func(*agent.Invocation) skill.Repository
 }
 
 // WorkspaceExecRequestProcessorOption configures
@@ -47,11 +49,21 @@ func WithWorkspaceExecSkillsRepo() WorkspaceExecRequestProcessorOption {
 	}
 }
 
+// WithWorkspaceExecSkillsRepositoryResolver sets an invocation-aware skills repository resolver.
+func WithWorkspaceExecSkillsRepositoryResolver(
+	resolver func(*agent.Invocation) skill.Repository,
+) WorkspaceExecRequestProcessorOption {
+	return func(o *workspaceExecRequestProcessorOptions) {
+		o.repoResolver = resolver
+	}
+}
+
 // WorkspaceExecRequestProcessor injects system guidance for executor-side
 // workspace_exec tools independently of skills repo wiring.
 type WorkspaceExecRequestProcessor struct {
-	sessionTools  bool
-	hasSkillsRepo bool
+	sessionTools     bool
+	staticSkillsRepo bool
+	repoResolver     func(*agent.Invocation) skill.Repository
 }
 
 // NewWorkspaceExecRequestProcessor creates a new
@@ -67,8 +79,9 @@ func NewWorkspaceExecRequestProcessor(
 		opt(&options)
 	}
 	return &WorkspaceExecRequestProcessor{
-		sessionTools:  options.sessionTools,
-		hasSkillsRepo: options.hasSkillsRepo,
+		sessionTools:     options.sessionTools,
+		staticSkillsRepo: options.hasSkillsRepo,
+		repoResolver:     options.repoResolver,
 	}
 }
 
@@ -83,7 +96,7 @@ func (p *WorkspaceExecRequestProcessor) ProcessRequest(
 		return
 	}
 
-	guidance := p.guidanceText()
+	guidance := p.guidanceText(inv)
 	if guidance == "" {
 		return
 	}
@@ -114,7 +127,9 @@ func (p *WorkspaceExecRequestProcessor) ProcessRequest(
 	))
 }
 
-func (p *WorkspaceExecRequestProcessor) guidanceText() string {
+func (p *WorkspaceExecRequestProcessor) guidanceText(
+	inv *agent.Invocation,
+) string {
 	var b strings.Builder
 	b.WriteString(workspaceExecGuidanceHeader)
 	b.WriteString("\n")
@@ -149,7 +164,7 @@ func (p *WorkspaceExecRequestProcessor) guidanceText() string {
 	b.WriteString("configured, treat that as an environment limitation ")
 	b.WriteString("for this invocation and do not keep retrying the ")
 	b.WriteString("same publish attempt unchanged.\n")
-	if p.hasSkillsRepo {
+	if p.hasSkillsRepo(inv) {
 		b.WriteString("- Paths under skills/ are only useful when some ")
 		b.WriteString("other tool has already placed content there. ")
 		b.WriteString("workspace_exec does not stage skills ")
@@ -168,4 +183,13 @@ func (p *WorkspaceExecRequestProcessor) guidanceText() string {
 		b.WriteString("session.\n")
 	}
 	return b.String()
+}
+
+func (p *WorkspaceExecRequestProcessor) hasSkillsRepo(
+	inv *agent.Invocation,
+) bool {
+	if p.repoResolver != nil {
+		return p.repoResolver(inv) != nil
+	}
+	return p.staticSkillsRepo
 }

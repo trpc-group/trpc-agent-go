@@ -422,6 +422,29 @@ single `invocation.Message` if the session has no events). `RunWithMessages`
 still sets `invocation.Message` to the latest user turn so graph/flow agents
 that inspect it continue to work.
 
+### Override Runtime Surfaces for a Specific Node by `nodeID`
+
+If you need to change one specific node in a `runner.Run(...)` call instead of
+changing the entire agent, pass `agent.WithSurfacePatchForNode(nodeID, patch)`.
+
+```go
+var patch agent.SurfacePatch
+patch.SetInstruction("Answer in one short paragraph.")
+
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Summarize this report."),
+    agent.WithSurfacePatchForNode(nodeID, patch),
+)
+```
+
+Prefer obtaining a stable `nodeID` from `structure.Export(...)` and then pass
+it to `WithSurfacePatchForNode(...)`. If you need to patch multiple nodes in
+the same run, pass multiple `WithSurfacePatchForNode(...)` options. For full
+details and more examples, see [Agent: Override Runtime Surfaces by `nodeID`](./agent.md#override-runtime-surfaces-by-nodeid).
+
 ### ✅ Detecting End-of-Run and Reading Final Output (Graph-friendly)
 
 When driving a GraphAgent workflow, the LLM’s “final response” is not the end of

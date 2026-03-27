@@ -779,6 +779,15 @@ type ToolFilterProvider interface {
 	FilterTools(ctx context.Context) []tool.Tool
 }
 
+// InvocationToolSurfaceProvider is an optional interface that exposes
+// invocation-scoped tools and user-tool classification.
+type InvocationToolSurfaceProvider interface {
+	InvocationToolSurface(
+		ctx context.Context,
+		invocation *agent.Invocation,
+	) ([]tool.Tool, map[string]bool)
+}
+
 // getFilteredTools returns the list of tools for this invocation after applying the filter.
 //
 // User tools (can be filtered):
@@ -802,9 +811,16 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 		return cached
 	}
 
-	// Get all tools from the agent.
 	var allTools []tool.Tool
-	if provider, ok := invocation.Agent.(ToolFilterProvider); ok {
+	var userToolNames map[string]bool
+	hasUserToolTracking := false
+	if provider, ok := invocation.Agent.(InvocationToolSurfaceProvider); ok {
+		allTools, userToolNames = provider.InvocationToolSurface(
+			ctx,
+			invocation,
+		)
+		hasUserToolTracking = userToolNames != nil
+	} else if provider, ok := invocation.Agent.(ToolFilterProvider); ok {
 		allTools = provider.FilterTools(ctx)
 	} else {
 		allTools = invocation.Agent.Tools()
@@ -819,15 +835,15 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 	// Get user tools (if the agent supports it).
 	// User tools are those explicitly registered via WithTools and WithToolSets.
 	// Framework tools (Knowledge, SubAgents) are never filtered.
-	var userToolNames map[string]bool
-	hasUserToolTracking := false
-	if provider, ok := invocation.Agent.(UserToolsProvider); ok {
-		userTools := provider.UserTools()
-		hasUserToolTracking = true
-		// Build a map for fast lookup.
-		userToolNames = make(map[string]bool, len(userTools))
-		for _, t := range userTools {
-			userToolNames[t.Declaration().Name] = true
+	if !hasUserToolTracking {
+		if provider, ok := invocation.Agent.(UserToolsProvider); ok {
+			userTools := provider.UserTools()
+			hasUserToolTracking = true
+			// Build a map for fast lookup.
+			userToolNames = make(map[string]bool, len(userTools))
+			for _, t := range userTools {
+				userToolNames[t.Declaration().Name] = true
+			}
 		}
 	}
 

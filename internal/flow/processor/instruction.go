@@ -184,6 +184,9 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 		ctx,
 		invocation,
 	)
+	if processedInstruction == "" && processedSystemPrompt == "" {
+		return
+	}
 
 	// Update the request messages with processed instructions.
 	p.updateRequestMessages(req, processedInstruction, processedSystemPrompt)
@@ -218,14 +221,17 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(
 		processedSystemPrompt = p.SystemPrompt
 	}
 
-	if invocation != nil {
-		if invocation.RunOptions.Instruction != "" {
-			processedInstruction = invocation.RunOptions.Instruction
-		}
-		if invocation.RunOptions.GlobalInstruction != "" {
-			processedSystemPrompt =
-				invocation.RunOptions.GlobalInstruction
-		}
+	if invocation != nil &&
+		p.InstructionResolver == nil &&
+		p.InstructionGetter == nil &&
+		invocation.RunOptions.Instruction != "" {
+		processedInstruction = invocation.RunOptions.Instruction
+	}
+	if invocation != nil &&
+		p.SystemPromptResolver == nil &&
+		p.SystemPromptGetter == nil &&
+		invocation.RunOptions.GlobalInstruction != "" {
+		processedSystemPrompt = invocation.RunOptions.GlobalInstruction
 	}
 
 	// Automatically inject JSON output instructions.

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
+	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -172,4 +173,50 @@ func TestExecutionTraceHelpers_RecordStepErrorAndUtilityBranches(t *testing.T) {
 	assert.Nil(t, cloneStringSlice(nil))
 	assert.Equal(t, "_", escapeTraceLocalName(""))
 	assert.Equal(t, "team~1worker~0", escapeTraceLocalName("team/worker~"))
+}
+
+func TestInvocationSurfaceRootNodeID_LifecycleAndFallback(t *testing.T) {
+	var nilInv *Invocation
+	SetInvocationSurfaceRootNodeID(nilInv, "workflow/team/coordinator")
+	ClearInvocationSurfaceRootNodeID(nilInv)
+	require.Empty(t, InvocationSurfaceRootNodeID(nilInv))
+
+	inv := NewInvocation(
+		WithInvocationTraceNodeID("trace/team"),
+		WithInvocationRunOptions(RunOptions{
+			CustomAgentConfigs: surfacepatch.WithRootNodeID(
+				nil,
+				"workflow/team",
+			),
+		}),
+	)
+	require.Equal(t, "workflow/team", InvocationSurfaceRootNodeID(inv))
+
+	SetInvocationSurfaceRootNodeID(inv, "workflow/team/coordinator")
+	require.Equal(t, "workflow/team/coordinator", InvocationSurfaceRootNodeID(inv))
+
+	SetInvocationSurfaceRootNodeID(inv, "")
+	require.Equal(t, "workflow/team/coordinator", InvocationSurfaceRootNodeID(inv))
+
+	ClearInvocationSurfaceRootNodeID(inv)
+	require.Equal(t, "workflow/team", InvocationSurfaceRootNodeID(inv))
+}
+
+func TestInvocationTeamMemberTraceRoot_LifecycleAndNilGuards(t *testing.T) {
+	var nilInv *Invocation
+	SetInvocationTeamMemberTraceRoot(nilInv, "workflow/team")
+	ClearInvocationTeamMemberTraceRoot(nilInv)
+	require.Empty(t, InvocationTeamMemberTraceRoot(nilInv))
+
+	inv := NewInvocation()
+	require.Empty(t, InvocationTeamMemberTraceRoot(inv))
+
+	SetInvocationTeamMemberTraceRoot(inv, "workflow/team")
+	require.Equal(t, "workflow/team", InvocationTeamMemberTraceRoot(inv))
+
+	SetInvocationTeamMemberTraceRoot(inv, "")
+	require.Equal(t, "workflow/team", InvocationTeamMemberTraceRoot(inv))
+
+	ClearInvocationTeamMemberTraceRoot(inv)
+	require.Empty(t, InvocationTeamMemberTraceRoot(inv))
 }

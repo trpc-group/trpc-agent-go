@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/teamtrace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -210,12 +211,7 @@ func (at *Tool) callWithParentInvocation(
 	}
 	// Build child filter key based on history scope.
 	childKey := at.buildChildFilterKey(parentInv)
-	// Clone parent invocation with child-specific settings.
-	subInv := parentInv.Clone(
-		agent.WithInvocationAgent(at.agent),
-		agent.WithInvocationMessage(message),
-		agent.WithInvocationEventFilterKey(childKey),
-	)
+	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey)...)
 
 	// Run the agent and collect response.
 	subCtx := agent.NewInvocationContext(ctx, subInv)
@@ -224,6 +220,43 @@ func (at *Tool) callWithParentInvocation(
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
 	return at.collectResponse(subInv, at.wrapWithCallSemantics(subCtx, subInv, evCh))
+}
+
+func (at *Tool) surfaceRootNodeIDForParentInvocation(
+	parentInv *agent.Invocation,
+) string {
+	if parentInv == nil || at.agent == nil {
+		return ""
+	}
+	rootNodeID := teamtrace.MemberTraceRootForInvocation(parentInv)
+	if rootNodeID == "" {
+		return ""
+	}
+	return teamtrace.MemberNodeID(rootNodeID, at.agent.Info().Name)
+}
+
+func (at *Tool) childInvocationOptions(
+	parentInv *agent.Invocation,
+	message model.Message,
+	childKey string,
+) []agent.InvocationOptions {
+	invocationOpts := []agent.InvocationOptions{
+		agent.WithInvocationAgent(at.agent),
+		agent.WithInvocationMessage(message),
+		agent.WithInvocationEventFilterKey(childKey),
+	}
+	if parentInv == nil {
+		return invocationOpts
+	}
+	if surfaceRootNodeID := at.surfaceRootNodeIDForParentInvocation(parentInv); surfaceRootNodeID != "" {
+		invocationOpts = append(
+			invocationOpts,
+			func(inv *agent.Invocation) {
+				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
+			},
+		)
+	}
+	return invocationOpts
 }
 
 // wrapWithCompletion consumes events, notifies completion when required, and forwards to a new channel.
@@ -774,14 +807,7 @@ func (at *Tool) streamFromParentInvocation(
 		return
 	}
 	childKey := at.buildChildFilterKey(parentInv)
-	subInv := parentInv.Clone(
-		agent.WithInvocationAgent(at.agent),
-		agent.WithInvocationMessage(message),
-		// Reset event filter key to the sub-agent name so that content
-		// processors fetch session messages belonging to the sub-agent,
-		// not the parent agent. Use unique FilterKey to prevent cross-invocation event pollution.
-		agent.WithInvocationEventFilterKey(childKey),
-	)
+	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey)...)
 	subCtx := agent.NewInvocationContext(ctx, subInv)
 	evCh, err := agent.RunWithPlugins(subCtx, subInv, at.agent)
 	if err != nil {

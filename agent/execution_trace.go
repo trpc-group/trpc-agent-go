@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
+	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 )
 
@@ -49,6 +50,61 @@ func InvocationTraceNodeID(inv *Invocation) string {
 	}
 	inv.ensureTraceNodeID()
 	return inv.traceNodeID
+}
+
+// SetInvocationSurfaceRootNodeID stores one invocation's mounted surface root node id.
+func SetInvocationSurfaceRootNodeID(inv *Invocation, nodeID string) {
+	if inv == nil || nodeID == "" {
+		return
+	}
+	inv.SetState(surfaceRootNodeIDStateKey, nodeID)
+}
+
+// ClearInvocationSurfaceRootNodeID removes one invocation's mounted surface root node id.
+func ClearInvocationSurfaceRootNodeID(inv *Invocation) {
+	if inv == nil {
+		return
+	}
+	inv.DeleteState(surfaceRootNodeIDStateKey)
+}
+
+// InvocationSurfaceRootNodeID returns the effective surface root node id for one invocation.
+func InvocationSurfaceRootNodeID(inv *Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	if nodeID, ok := GetStateValue[string](inv, surfaceRootNodeIDStateKey); ok && nodeID != "" {
+		return nodeID
+	}
+	return surfacepatch.RootNodeID(
+		inv.RunOptions.CustomAgentConfigs,
+		InvocationTraceNodeID(inv),
+	)
+}
+
+// SetInvocationTeamMemberTraceRoot stores one invocation's mounted team member trace root.
+func SetInvocationTeamMemberTraceRoot(inv *Invocation, rootNodeID string) {
+	if inv == nil || rootNodeID == "" {
+		return
+	}
+	inv.SetState(teamMemberTraceRootStateKey, rootNodeID)
+}
+
+// ClearInvocationTeamMemberTraceRoot removes one invocation's mounted team member trace root.
+func ClearInvocationTeamMemberTraceRoot(inv *Invocation) {
+	if inv == nil {
+		return
+	}
+	inv.DeleteState(teamMemberTraceRootStateKey)
+}
+
+// InvocationTeamMemberTraceRoot returns one invocation's mounted team member trace root when present.
+func InvocationTeamMemberTraceRoot(inv *Invocation) string {
+	if inv == nil {
+		return ""
+	}
+	rootNodeID, _ := GetStateValue[string](inv, teamMemberTraceRootStateKey)
+	return rootNodeID
 }
 
 // StartExecutionTraceStep records a newly started real step.
