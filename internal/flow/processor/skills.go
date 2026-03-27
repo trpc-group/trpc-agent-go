@@ -212,7 +212,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 
 	// 1) Always inject overview (names + descriptions) into system
 	//    message. Merge into existing system message if present.
-	p.injectOverview(req)
+	p.injectOverview(ctx, req)
 
 	loaded := p.getLoadedSkills(inv)
 	loaded = p.maybeCapLoadedSkills(ctx, inv, loaded, ch)
@@ -232,7 +232,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 
 	var lb strings.Builder
 	for _, name := range loaded {
-		sk, err := p.repo.Get(name)
+		sk, err := skill.GetForContext(ctx, p.repo, name)
 		if err != nil || sk == nil {
 			log.WarnfContext(
 				ctx,
@@ -250,7 +250,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 			lb.WriteString("\n")
 		}
 		// Docs
-		sel := p.getDocsSelection(inv, name)
+		sel := p.getDocsSelection(ctx, inv, name)
 		// Summary line to make selected docs explicit.
 		lb.WriteString("Docs loaded: ")
 		if len(sel) == 0 {
@@ -603,8 +603,11 @@ func (p *SkillsRequestProcessor) maybeOffloadLoadedSkills(
 	))
 }
 
-func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
-	sums := p.repo.Summaries()
+func (p *SkillsRequestProcessor) injectOverview(
+	ctx context.Context,
+	req *model.Request,
+) {
+	sums := skill.SummariesForContext(ctx, p.repo)
 	if len(sums) == 0 {
 		return
 	}
@@ -848,7 +851,9 @@ func (p *SkillsRequestProcessor) getLoadedSkills(
 }
 
 func (p *SkillsRequestProcessor) getDocsSelection(
-	inv *agent.Invocation, name string,
+	ctx context.Context,
+	inv *agent.Invocation,
+	name string,
 ) []string {
 	key := skill.DocsKey(inv.AgentName, name)
 	v, ok := inv.Session.GetState(key)
@@ -857,7 +862,7 @@ func (p *SkillsRequestProcessor) getDocsSelection(
 	}
 	if string(v) == "*" {
 		// Select all doc files present.
-		sk, err := p.repo.Get(name)
+		sk, err := skill.GetForContext(ctx, p.repo, name)
 		if err != nil || sk == nil {
 			return nil
 		}

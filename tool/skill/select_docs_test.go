@@ -350,3 +350,37 @@ func TestSelectDocsTool_AddWithIncludeAll(t *testing.T) {
 	_, ok := m["selected_docs"]
 	require.False(t, ok)
 }
+
+func TestSelectDocsTool_ContextAwareRepoHonorsFilter(t *testing.T) {
+	root1 := createDocsTestSkill(t, demoSkill)
+	root2 := createDocsTestSkill(t, otherSkill)
+	base, err := skill.NewFSRepository(root1, root2)
+	require.NoError(t, err)
+	repo := skill.NewFilteredRepository(
+		base,
+		func(ctx context.Context, summary skill.Summary) bool {
+			userID, _ := agent.GetRuntimeStateValueFromContext[string](
+				ctx,
+				"user_id",
+			)
+			return userID == "user-a" && summary.Name == demoSkill
+		},
+	)
+	sd := NewSelectDocsTool(repo)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+		})),
+	)
+
+	_, err = sd.Call(ctx, []byte(
+		`{"skill":"`+demoSkill+`","docs":["`+usageDoc+`"]}`,
+	))
+	require.NoError(t, err)
+
+	_, err = sd.Call(ctx, []byte(
+		`{"skill":"`+otherSkill+`","docs":["`+usageDoc+`"]}`,
+	))
+	require.ErrorContains(t, err, "unknown skill: "+otherSkill)
+}

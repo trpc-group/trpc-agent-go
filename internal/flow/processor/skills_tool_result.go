@@ -302,7 +302,7 @@ func (p *SkillsToolResultRequestProcessor) buildToolResultContent(
 	skillName string,
 	toolOutput string,
 ) (string, bool) {
-	sk, err := p.repo.Get(skillName)
+	sk, err := skill.GetForContext(ctx, p.repo, skillName)
 	if err != nil || sk == nil {
 		log.WarnfContext(
 			ctx,
@@ -331,7 +331,7 @@ func (p *SkillsToolResultRequestProcessor) buildToolResultContent(
 		b.WriteString("\n")
 	}
 
-	sel := p.getDocsSelection(inv, skillName)
+	sel := p.getDocsSelection(ctx, inv, skillName)
 	b.WriteString("Docs loaded: ")
 	if len(sel) == 0 {
 		b.WriteString("none\n")
@@ -349,6 +349,7 @@ func (p *SkillsToolResultRequestProcessor) buildToolResultContent(
 }
 
 func (p *SkillsToolResultRequestProcessor) getDocsSelection(
+	ctx context.Context,
 	inv *agent.Invocation,
 	name string,
 ) []string {
@@ -361,7 +362,7 @@ func (p *SkillsToolResultRequestProcessor) getDocsSelection(
 		return nil
 	}
 	if string(v) == "*" {
-		sk, err := p.repo.Get(name)
+		sk, err := skill.GetForContext(ctx, p.repo, name)
 		if err != nil || sk == nil {
 			return nil
 		}
@@ -423,8 +424,9 @@ func (p *SkillsToolResultRequestProcessor) buildFallbackSystemContent(
 	var b strings.Builder
 	b.WriteString(skillsLoadedContextHeader)
 	b.WriteString("\n")
+	var appended bool
 	for _, name := range missing {
-		sk, err := p.repo.Get(name)
+		sk, err := skill.GetForContext(ctx, p.repo, name)
 		if err != nil || sk == nil {
 			log.WarnfContext(
 				ctx,
@@ -434,14 +436,16 @@ func (p *SkillsToolResultRequestProcessor) buildFallbackSystemContent(
 			)
 			continue
 		}
+		appended = true
 		if strings.TrimSpace(sk.Body) != "" {
 			b.WriteString("\n[Loaded] ")
 			b.WriteString(name)
 			b.WriteString("\n\n")
 			b.WriteString(sk.Body)
 			b.WriteString("\n")
+			appended = true
 		}
-		sel := p.getDocsSelection(inv, name)
+		sel := p.getDocsSelection(ctx, inv, name)
 		b.WriteString("Docs loaded: ")
 		if len(sel) == 0 {
 			b.WriteString("none\n")
@@ -452,8 +456,12 @@ func (p *SkillsToolResultRequestProcessor) buildFallbackSystemContent(
 		if len(sel) > 0 {
 			if docText := buildDocsText(sk, sel); docText != "" {
 				b.WriteString(docText)
+				appended = true
 			}
 		}
+	}
+	if !appended {
+		return ""
 	}
 	return strings.TrimSpace(b.String())
 }

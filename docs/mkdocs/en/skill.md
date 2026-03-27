@@ -255,6 +255,32 @@ repo, _ := skill.NewFSRepository(
 )
 ```
 
+If one long-lived agent serves many requests against a shared
+repository view, add a per-run visibility filter. The filter can read
+any business signal available in `ctx` / runtime state (for example
+`user_id`, `tenant_id`, role, or other request-scoped flags) and hides
+non-matching skills from the overview, tool declarations, and runtime
+checks. `user_id` below is only one example:
+
+```go
+agt := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillFilter(func(ctx context.Context, s skill.Summary) bool {
+        userID, _ := agent.GetRuntimeStateValueFromContext[string](ctx, "user_id")
+        return allow(userID, s.Name)
+    }),
+)
+
+ch, _ := runner.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("..."),
+    agent.WithRuntimeState(map[string]any{"user_id": userID}),
+)
+```
+
 If a long-lived process installs, deletes, or renames skills after
 startup, call `repo.Refresh()` after the filesystem update is committed.
 `Refresh()` is meant for repository structure changes, not for every

@@ -36,6 +36,7 @@ import (
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
@@ -85,6 +86,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	prepareSkillsRepository(&options)
 
 	// Validate output_schema configuration before registering tools.
 	if options.OutputSchema != nil {
@@ -438,12 +440,25 @@ func appendTimeProcessor(options *Options, requestProcessors []flow.RequestProce
 // buildRequestProcessorsWithAgent. Dynamic updates are not supported when using
 // this legacy function; use New() which wires the real agent for runtime getters.
 func buildRequestProcessors(name string, options *Options) []flow.RequestProcessor { // nolint:deadcode
+	prepareSkillsRepository(options)
 	dummy := &LLMAgent{
 		name:         name,
 		instruction:  options.Instruction,
 		systemPrompt: options.GlobalInstruction,
 	}
 	return buildRequestProcessorsWithAgent(dummy, options)
+}
+
+func prepareSkillsRepository(options *Options) {
+	if options == nil ||
+		options.skillsRepository == nil ||
+		options.skillFilter == nil {
+		return
+	}
+	options.skillsRepository = skill.NewFilteredRepository(
+		options.skillsRepository,
+		options.skillFilter,
+	)
 }
 
 // initializeModels initializes the models map and determines the initial
