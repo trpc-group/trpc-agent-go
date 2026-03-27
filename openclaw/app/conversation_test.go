@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/delivery"
@@ -107,6 +108,9 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 		includeContentsNone,
 		cfg.RuntimeState[graph.CfgKeyIncludeContents],
 	)
+	userID, ok := imemory.ResolveUserID(nil, cfg.RuntimeState)
+	require.True(t, ok)
+	require.Equal(t, "user1", userID)
 }
 
 func TestBuildConversationRunOptionResolverSharedHistory(
@@ -209,6 +213,9 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 		includeContentsNone,
 		cfg.RuntimeState[graph.CfgKeyIncludeContents],
 	)
+	userID, ok := imemory.ResolveUserID(nil, cfg.RuntimeState)
+	require.True(t, ok)
+	require.Equal(t, "u-1", userID)
 }
 
 func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
@@ -270,8 +277,51 @@ func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
 			},
 			cfg.RuntimeState[conversation.RuntimeStateKey],
 		)
+		userID, ok := imemory.ResolveUserID(nil, cfg.RuntimeState)
+		require.True(t, ok)
+		require.Equal(t, "u-1", userID)
 		require.Nil(t, cfg.InjectedContextMessages)
-		_, ok := cfg.RuntimeState[graph.CfgKeyIncludeContents]
+		_, ok = cfg.RuntimeState[graph.CfgKeyIncludeContents]
 		require.False(t, ok)
+	})
+
+	t.Run("shared mode without actor keeps conversation runtime state only", func(t *testing.T) {
+		t.Parallel()
+
+		extensions, err := conversation.MergeRequestExtension(
+			nil,
+			conversation.Annotation{
+				HistoryMode: conversation.HistoryModeShared,
+			},
+		)
+		require.NoError(t, err)
+
+		_, runOpts := buildConversationRunOptionResolver(
+			"demo-app",
+			nil,
+			conversation.HistoryOptions{},
+		)(
+			context.Background(),
+			gateway.RunOptionInput{Extensions: extensions},
+		)
+		require.Len(t, runOpts, 1)
+
+		cfg := agent.RunOptions{}
+		runOpts[0](&cfg)
+		require.Equal(
+			t,
+			conversation.Annotation{
+				HistoryMode: conversation.HistoryModeShared,
+			},
+			cfg.RuntimeState[conversation.RuntimeStateKey],
+		)
+		require.Equal(
+			t,
+			includeContentsNone,
+			cfg.RuntimeState[graph.CfgKeyIncludeContents],
+		)
+		_, ok := imemory.ResolveUserID(nil, cfg.RuntimeState)
+		require.False(t, ok)
+		require.Nil(t, cfg.InjectedContextMessages)
 	})
 }
