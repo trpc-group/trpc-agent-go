@@ -6,7 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package main demonstrates the guardrail tool approval capability with the hostexec tool set.
+// Package main demonstrates the guardrail unsafe intent capability with a separate reviewer runner.
 package main
 
 import (
@@ -24,30 +24,24 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail"
-	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/approval"
-	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/approval/review"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/unsafeintent"
+	unsafereview "trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/unsafeintent/review"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
-	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
 )
 
 const (
-	appName         = "guardrail-approval-demo"
-	mainAgentName   = "hostexec-assistant"
-	reviewerAgent   = "guardrail-approval-reviewer"
-	reviewerRunner  = "guardrail-approval-reviewer-runner"
-	cmdExit         = "/exit"
-	cmdHelp         = "/help"
-	toolExecCommand = "hostexec_exec_command"
-	toolWriteStdin  = "hostexec_write_stdin"
-	toolKillSession = "hostexec_kill_session"
+	appName        = "guardrail-unsafeintent-demo"
+	mainAgentName  = "unsafeintent-assistant"
+	reviewerAgent  = "guardrail-unsafeintent-reviewer"
+	reviewerRunner = "guardrail-unsafeintent-reviewer-runner"
+	cmdExit        = "/exit"
+	cmdHelp        = "/help"
 )
 
 var (
 	modelName = flag.String("model", "gpt-5.4", "Name of the model to use")
 	streaming = flag.Bool("streaming", false, "Enable streaming responses")
-	baseDir   = flag.String("base-dir", ".", "Base directory for host commands")
 )
 
 func main() {
@@ -55,18 +49,15 @@ func main() {
 	app := &demoApp{
 		modelName: *modelName,
 		streaming: *streaming,
-		baseDir:   *baseDir,
 	}
 	if err := app.run(context.Background()); err != nil {
-		log.Fatalf("guardrail approval demo failed: %v", err)
+		log.Fatalf("guardrail unsafe intent demo failed: %v", err)
 	}
 }
 
 type demoApp struct {
 	modelName      string
 	streaming      bool
-	baseDir        string
-	toolSet        tool.ToolSet
 	mainRunner     runner.Runner
 	reviewerRunner runner.Runner
 	userID         string
@@ -79,7 +70,6 @@ func (a *demoApp) run(ctx context.Context) error {
 	}
 	defer a.mainRunner.Close()
 	defer a.reviewerRunner.Close()
-	defer a.toolSet.Close()
 	return a.loop(ctx)
 }
 
@@ -90,43 +80,34 @@ func (a *demoApp) setup() error {
 		reviewerRunner,
 		reviewerAgentInstance,
 	)
-	reviewerInstance, err := review.New(a.reviewerRunner, review.WithRiskThreshold(80))
+	reviewerInstance, err := unsafereview.New(a.reviewerRunner)
 	if err != nil {
 		a.reviewerRunner.Close()
 		return fmt.Errorf("create reviewer: %w", err)
 	}
-	a.toolSet, err = hostexec.NewToolSet(hostexec.WithBaseDir(a.baseDir))
-	if err != nil {
-		a.reviewerRunner.Close()
-		return fmt.Errorf("create hostexec tool set: %w", err)
-	}
-	mainAgentInstance := newMainAgent(modelInstance, a.streaming, a.toolSet)
-	approvalPlugin, err := approval.New(
-		approval.WithReviewer(reviewerInstance),
-		approval.WithToolPolicy(toolWriteStdin, approval.ToolPolicySkipApproval),
-		approval.WithToolPolicy(toolKillSession, approval.ToolPolicyDenied),
+	unsafeIntentPlugin, err := unsafeintent.New(
+		unsafeintent.WithReviewer(reviewerInstance),
 	)
 	if err != nil {
-		a.toolSet.Close()
 		a.reviewerRunner.Close()
-		return fmt.Errorf("create approval guardrail: %w", err)
+		return fmt.Errorf("create unsafe intent guardrail: %w", err)
 	}
 	guardrailPlugin, err := guardrail.New(
-		guardrail.WithApproval(approvalPlugin),
+		guardrail.WithUnsafeIntent(unsafeIntentPlugin),
 	)
 	if err != nil {
-		a.toolSet.Close()
 		a.reviewerRunner.Close()
 		return fmt.Errorf("create guardrail plugin: %w", err)
 	}
+	mainAgentInstance := newMainAgent(modelInstance, a.streaming)
 	a.mainRunner = runner.NewRunner(
 		appName,
 		mainAgentInstance,
 		runner.WithSessionService(sessioninmemory.NewSessionService()),
 		runner.WithPlugins(guardrailPlugin),
 	)
-	a.userID = "guardrail-approval-demo-user"
-	a.sessionID = fmt.Sprintf("guardrail-approval-demo-session-%d", time.Now().Unix())
+	a.userID = "guardrail-unsafeintent-demo-user"
+	a.sessionID = fmt.Sprintf("guardrail-unsafeintent-demo-session-%d", time.Now().Unix())
 	a.printBanner()
 	return nil
 }

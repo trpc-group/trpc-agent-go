@@ -8,22 +8,16 @@
 
 package approval
 
-const (
-	defaultPluginName              = "approval"
-	defaultMessageTranscriptBudget = 10000
-	defaultToolTranscriptBudget    = 10000
-	defaultMessageEntryCap         = 2000
-	defaultToolEntryCap            = 1000
-	defaultRecentNonUserEntryLimit = 40
-	omissionNote                   = "[Earlier context omitted.]"
-	truncatedSuffix                = " [truncated]"
-)
+import "trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/approval/review"
+
+const defaultPluginName = "approval"
 
 // Option configures the approval plugin.
 type Option func(*options)
 
 type options struct {
 	name              string
+	reviewer          review.Reviewer
 	defaultToolPolicy ToolPolicy
 	toolPolicies      map[string]ToolPolicy
 }
@@ -46,6 +40,13 @@ func newOptions(opts ...Option) *options {
 func WithName(name string) Option {
 	return func(opts *options) {
 		opts.name = name
+	}
+}
+
+// WithReviewer sets the reviewer used for approval-required tool calls.
+func WithReviewer(reviewer review.Reviewer) Option {
+	return func(opts *options) {
+		opts.reviewer = reviewer
 	}
 }
 
