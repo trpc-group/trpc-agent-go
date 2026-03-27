@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
@@ -731,9 +732,11 @@ func memoryFileEnvFromContext(
 		return nil
 	}
 
-	appName := strings.TrimSpace(inv.Session.AppName)
-	userID := strings.TrimSpace(inv.Session.UserID)
-	if appName == "" || userID == "" {
+	appName, userID, ok := imemory.ResolveUserKey(
+		inv.Session,
+		inv.RunOptions.RuntimeState,
+	)
+	if !ok {
 		return nil
 	}
 
