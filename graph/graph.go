@@ -187,7 +187,6 @@ type Node struct {
 	agentOutputMapper     SubgraphOutputMapper
 	agentIsolatedMessages bool
 	agentEventScope       string
-	agentMessageSource    SubgraphMessageSource
 	// agentInputFromLastResponse indicates whether the agent node should
 	// construct the child invocation's user input from the parent's
 	// StateKeyLastResponse. When true, the framework will map
