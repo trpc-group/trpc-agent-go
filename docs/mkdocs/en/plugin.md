@@ -451,9 +451,34 @@ should apply to all agents managed by a Runner.
 
 `guardrail.New(...)` from `plugin/guardrail` is the top-level plugin that wires one or more guardrail capabilities into the runner.
 
+The current built-in capabilities are:
+
+| Capability | Hook | Decision Object | Reviewer Required |
+| --- | --- | --- | --- |
+| `approval` | `BeforeTool` | The current tool action | Only when a tool path can reach `ToolPolicyRequireApproval` |
+| `promptinjection` | `BeforeModel` | The latest `role=user` input | Yes |
+| `unsafeintent` | `BeforeModel` | The latest `role=user` input | Yes |
+
+A typical top-level composition looks like this:
+
+```go
+guardrailPlugin, err := guardrail.New(
+	guardrail.WithApproval(approvalPlugin),
+	guardrail.WithPromptInjection(promptInjectionPlugin),
+	guardrail.WithUnsafeIntent(unsafeIntentPlugin),
+)
+if err != nil {
+	return err
+}
+```
+
+You can attach any subset of capabilities. `guardrail.New(...)` also allows an
+empty plugin, so applications can construct the top-level plugin first and add
+capabilities later.
+
 #### Approval
 
-`approval.New(reviewer, opts...)` from `plugin/guardrail/approval` builds the built-in tool approval capability. This capability intercepts
+`approval.New(opts...)` from `plugin/guardrail/approval` builds the built-in tool approval capability. This capability intercepts
 `BeforeTool` and decides whether a tool call should:
 
 - run immediately
@@ -482,7 +507,7 @@ if err != nil {
 }
 
 approvalPlugin, err := approval.New(
-	reviewerInstance,
+	approval.WithReviewer(reviewerInstance),
 	approval.WithToolPolicy(
 		"hostexec_write_stdin",
 		approval.ToolPolicySkipApproval,
@@ -518,6 +543,9 @@ This configuration means:
 - `hostexec_write_stdin` uses `ToolPolicySkipApproval` and bypasses reviewer
   approval.
 - `hostexec_kill_session` uses `ToolPolicyDenied` and is blocked immediately.
+
+If no tool path can reach `ToolPolicyRequireApproval`, you can omit
+`approval.WithReviewer(...)` and use only static policies.
 
 The three policy paths behave as follows:
 
@@ -585,9 +613,149 @@ paths:
 See the full example at
 [examples/guardrail/approval](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/guardrail/approval).
 
+#### Prompt Injection
+
+`promptinjection.New(opts...)` from `plugin/guardrail/promptinjection` builds
+the built-in prompt injection capability. This capability intercepts
+`BeforeModel` and reviews only the latest `role=user` input before it reaches
+the main model.
+
+The built-in capability works as follows:
+
+- The reviewer is mandatory and is injected with
+  `promptinjection.WithReviewer(...)`.
+- The decision object is the latest user input only.
+- Prior `assistant` and `tool` messages may be included as supporting
+  transcript, but they are not treated as independent block targets.
+- If the reviewer explicitly blocks the request, the plugin returns a fixed
+  deny response to the main flow.
+- If the reviewer fails or returns an invalid decision, the plugin behaves
+  fail-closed and returns a generic block response.
+
+A typical setup looks like this:
+
+```go
+modelInstance := openai.New("gpt-5.4")
+
+reviewerRunner := runner.NewRunner(
+	"guardrail-promptinjection-reviewer-runner",
+	llmagent.New(
+		"guardrail-promptinjection-reviewer",
+		llmagent.WithModel(modelInstance),
+	),
+)
+
+reviewerInstance, err := promptreview.New(reviewerRunner)
+if err != nil {
+	return err
+}
+
+promptInjectionPlugin, err := promptinjection.New(
+	promptinjection.WithReviewer(reviewerInstance),
+)
+if err != nil {
+	return err
+}
+
+guardrailPlugin, err := guardrail.New(
+	guardrail.WithPromptInjection(promptInjectionPlugin),
+)
+if err != nil {
+	return err
+}
+```
+
+The built-in reviewer currently returns one of these categories when blocked:
+
+- `system_override`
+- `policy_bypass`
+- `prompt_exfiltration`
+- `role_hijack`
+- `tool_misuse_induction`
+
+For a complete runnable example, see
+[examples/guardrail/promptinjection](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/guardrail/promptinjection).
+The example includes verified scenarios for:
+
+- A normal request that passes through
+- A direct prompt injection attempt that is blocked
+- A quoted/translated injection string that is allowed
+
+#### Unsafe Intent
+
+`unsafeintent.New(opts...)` from `plugin/guardrail/unsafeintent` builds the
+built-in unsafe intent capability. This capability intercepts `BeforeModel` and
+reviews only the latest `role=user` input for clearly unsafe or disallowed
+intent.
+
+The built-in capability works as follows:
+
+- The reviewer is mandatory and is injected with
+  `unsafeintent.WithReviewer(...)`.
+- The decision object is the latest user input only.
+- Prior `assistant` and `tool` messages may be included as supporting
+  transcript, but they are not treated as independent block targets.
+- If the reviewer explicitly blocks the request, the plugin returns a fixed
+  deny response to the main flow.
+- If the reviewer fails or returns an invalid decision, the plugin behaves
+  fail-closed and returns a generic block response.
+
+A typical setup looks like this:
+
+```go
+modelInstance := openai.New("gpt-5.4")
+
+reviewerRunner := runner.NewRunner(
+	"guardrail-unsafeintent-reviewer-runner",
+	llmagent.New(
+		"guardrail-unsafeintent-reviewer",
+		llmagent.WithModel(modelInstance),
+	),
+)
+
+reviewerInstance, err := unsafereview.New(reviewerRunner)
+if err != nil {
+	return err
+}
+
+unsafeIntentPlugin, err := unsafeintent.New(
+	unsafeintent.WithReviewer(reviewerInstance),
+)
+if err != nil {
+	return err
+}
+
+guardrailPlugin, err := guardrail.New(
+	guardrail.WithUnsafeIntent(unsafeIntentPlugin),
+)
+if err != nil {
+	return err
+}
+```
+
+The built-in reviewer currently returns one of these categories when blocked:
+
+- `cyber_abuse`
+- `credential_theft`
+- `fraud_deception`
+- `privacy_abuse`
+- `physical_harm`
+- `self_harm`
+- `sexual_abuse`
+- `other_unsafe_intent`
+
+For a complete runnable example, see
+[examples/guardrail/unsafeintent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/guardrail/unsafeintent).
+The example includes verified scenarios for:
+
+- A normal request that passes through
+- A clearly unsafe request that is blocked
+- A defensive analysis request that is allowed
+
 The repository currently includes Logging, GlobalInstruction, and Guardrail as
-built-in plugins. Tool Approval is currently the built-in capability under the
-Guardrail plugin. Additional plugins can be implemented as custom plugins.
+built-in plugins. Tool Approval, Prompt Injection, and Unsafe Intent are
+currently built-in capabilities under the Guardrail plugin. Additional plugins
+can be implemented as custom plugins.
 
 ## Writing Your Own Plugin
 

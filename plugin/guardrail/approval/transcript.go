@@ -13,30 +13,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/approval/review"
+	guardtranscript "trpc.group/trpc-go/trpc-agent-go/plugin/guardrail/internal/transcript"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-type transcriptCategory int
-
-const (
-	transcriptCategoryMessage transcriptCategory = iota
-	transcriptCategoryTool
-)
-
 type transcriptRecord struct {
-	index     int
-	entry     review.TranscriptEntry
-	category  transcriptCategory
-	tokens    int
-	truncated bool
+	index    int
+	entry    guardtranscript.Entry
+	category guardtranscript.Category
 }
 
 func (p *Plugin) buildRequest(ctx context.Context, args *tool.BeforeToolArgs) (*review.Request, error) {
@@ -60,18 +50,26 @@ func (p *Plugin) buildTranscript(ctx context.Context, invocation *agent.Invocati
 	if len(rawEntries) == 0 {
 		return nil
 	}
-	records := p.applyEntryCaps(ctx, rawEntries)
-	entries, omitted := p.selectTranscriptEntries(records)
-	if omitted {
-		entries = append([]review.TranscriptEntry{{
-			Role:    model.RoleAssistant,
-			Content: omissionNote,
-		}}, entries...)
+	records := make([]guardtranscript.Record, 0, len(rawEntries))
+	for _, record := range rawEntries {
+		records = append(records, guardtranscript.Record{
+			Index:    record.index,
+			Entry:    record.entry,
+			Category: record.category,
+		})
 	}
+	entries := guardtranscript.Build(ctx, records, p.countTranscriptTokens, guardtranscript.DefaultOptions())
 	if len(entries) == 0 {
 		return nil
 	}
-	return entries
+	transcript := make([]review.TranscriptEntry, 0, len(entries))
+	for _, entry := range entries {
+		transcript = append(transcript, review.TranscriptEntry{
+			Role:    entry.Role,
+			Content: entry.Content,
+		})
+	}
+	return transcript
 }
 
 func (p *Plugin) collectTranscriptEntries(invocation *agent.Invocation) []transcriptRecord {
@@ -104,95 +102,13 @@ func (p *Plugin) collectTranscriptEntries(invocation *agent.Invocation) []transc
 	return entries
 }
 
-func (p *Plugin) applyEntryCaps(ctx context.Context, raw []transcriptRecord) []transcriptRecord {
-	records := make([]transcriptRecord, 0, len(raw))
-	for _, record := range raw {
-		capLimit := defaultMessageEntryCap
-		if record.category == transcriptCategoryTool {
-			capLimit = defaultToolEntryCap
-		}
-		content, truncated := truncateContent(record.entry.Content, capLimit)
-		record.entry.Content = content
-		record.truncated = truncated
-		record.tokens = p.countTokens(ctx, record.entry)
-		records = append(records, record)
-	}
-	return records
-}
-
-func (p *Plugin) selectTranscriptEntries(records []transcriptRecord) ([]review.TranscriptEntry, bool) {
-	if len(records) == 0 {
-		return nil, false
-	}
-	userRecords := make([]transcriptRecord, 0)
-	nonUserRecords := make([]transcriptRecord, 0)
-	omitted := false
-	userTokenCount := 0
-	for _, record := range records {
-		if record.truncated {
-			omitted = true
-		}
-		if record.entry.Role == model.RoleUser {
-			userRecords = append(userRecords, record)
-			userTokenCount += record.tokens
-			continue
-		}
-		nonUserRecords = append(nonUserRecords, record)
-	}
-	if userTokenCount > defaultMessageTranscriptBudget {
-		return nil, true
-	}
-	remainingMessageBudget := defaultMessageTranscriptBudget - userTokenCount
-	remainingToolBudget := defaultToolTranscriptBudget
-	selected := make([]transcriptRecord, 0, len(userRecords)+len(nonUserRecords))
-	selected = append(selected, userRecords...)
-	selectedNonUser := make([]transcriptRecord, 0)
-	keptRecentCount := 0
-	for i := len(nonUserRecords) - 1; i >= 0; i-- {
-		if keptRecentCount >= defaultRecentNonUserEntryLimit {
-			omitted = true
-			break
-		}
-		record := nonUserRecords[i]
-		switch record.category {
-		case transcriptCategoryTool:
-			if record.tokens > remainingToolBudget {
-				omitted = true
-				continue
-			}
-			remainingToolBudget -= record.tokens
-		default:
-			if record.tokens > remainingMessageBudget {
-				omitted = true
-				continue
-			}
-			remainingMessageBudget -= record.tokens
-		}
-		selectedNonUser = append(selectedNonUser, record)
-		keptRecentCount++
-	}
-	if len(selectedNonUser) != len(nonUserRecords) {
-		omitted = true
-	}
-	reverseTranscriptRecords(selectedNonUser)
-	selected = append(selected, selectedNonUser...)
-	sort.Slice(selected, func(i, j int) bool {
-		return selected[i].index < selected[j].index
-	})
-	entries := make([]review.TranscriptEntry, 0, len(selected))
-	for _, record := range selected {
-		entries = append(entries, record.entry)
-	}
-	return entries, omitted
-}
-
-func (p *Plugin) countTokens(ctx context.Context, entry review.TranscriptEntry) int {
+func (p *Plugin) countTranscriptTokens(ctx context.Context, entry guardtranscript.Entry) int {
 	tokens, err := p.tokenCounter.CountTokens(ctx, model.Message{
 		Role:    entry.Role,
 		Content: entry.Content,
 	})
 	if err != nil || tokens < 0 {
-		return defaultMessageTranscriptBudget + 1
+		return guardtranscript.DefaultMessageTranscriptBudget + 1
 	}
 	return tokens
 }
@@ -205,25 +121,25 @@ func declarationDescription(declaration *tool.Declaration) string {
 }
 
 func messageToTranscriptEntries(msg model.Message) []struct {
-	entry    review.TranscriptEntry
-	category transcriptCategory
+	entry    guardtranscript.Entry
+	category guardtranscript.Category
 } {
 	entries := make([]struct {
-		entry    review.TranscriptEntry
-		category transcriptCategory
+		entry    guardtranscript.Entry
+		category guardtranscript.Category
 	}, 0)
 	if content := transcriptContent(msg); content != "" {
 		switch msg.Role {
 		case model.RoleUser, model.RoleAssistant, model.RoleTool:
-			category := transcriptCategoryMessage
+			category := guardtranscript.CategoryMessage
 			if msg.Role == model.RoleTool {
-				category = transcriptCategoryTool
+				category = guardtranscript.CategoryTool
 			}
 			entries = append(entries, struct {
-				entry    review.TranscriptEntry
-				category transcriptCategory
+				entry    guardtranscript.Entry
+				category guardtranscript.Category
 			}{
-				entry: review.TranscriptEntry{
+				entry: guardtranscript.Entry{
 					Role:    msg.Role,
 					Content: content,
 				},
@@ -240,14 +156,14 @@ func messageToTranscriptEntries(msg model.Message) []struct {
 			continue
 		}
 		entries = append(entries, struct {
-			entry    review.TranscriptEntry
-			category transcriptCategory
+			entry    guardtranscript.Entry
+			category guardtranscript.Category
 		}{
-			entry: review.TranscriptEntry{
+			entry: guardtranscript.Entry{
 				Role:    model.RoleAssistant,
 				Content: summary,
 			},
-			category: transcriptCategoryMessage,
+			category: guardtranscript.CategoryMessage,
 		})
 	}
 	return entries
@@ -295,25 +211,6 @@ func toolCallSummary(toolCall model.ToolCall) string {
 		args = "{}"
 	}
 	return fmt.Sprintf("tool %s call: %s", toolName, args)
-}
-
-func truncateContent(content string, maxRunes int) (string, bool) {
-	if maxRunes <= 0 || utf8.RuneCountInString(content) <= maxRunes {
-		return content, false
-	}
-	suffixRunes := utf8.RuneCountInString(truncatedSuffix)
-	limit := maxRunes - suffixRunes
-	if limit < 0 {
-		limit = 0
-	}
-	runes := []rune(content)
-	return string(runes[:limit]) + truncatedSuffix, true
-}
-
-func reverseTranscriptRecords(records []transcriptRecord) {
-	for left, right := 0, len(records)-1; left < right; left, right = left+1, right-1 {
-		records[left], records[right] = records[right], records[left]
-	}
 }
 
 func cloneJSON(input []byte) json.RawMessage {
