@@ -1327,19 +1327,6 @@ Use cases:
   always includes `LastResponse`, so output mappers work for both GraphAgent and
   non-graph agents.
 
-Important note for `AddAgentNode(...)` backed by an `LLMAgent`:
-
-- Treat `WithSubgraphInputMapper` as a way to pass **structured runtime state**,
-  not as a way to manually splice prompt history.
-- If the child runtime state already contains `graph.StateKeyMessages`, the
-  framework may treat that value as a graph-owned message snapshot for the
-  child. In that case, the child `LLMAgent` will use that snapshot instead of
-  assembling history again from the session.
-- Do **not** forward `graph.StateKeyMessages` through `WithSubgraphInputMapper`
-  unless you intentionally want the graph to own the child's message view.
-- If you need to control this explicitly, use
-  `graph.WithSubgraphMessageSource(...)`.
-
 #### Agent nodes: isolation vs multi‑turn tool calls
 
 Tool calling is usually multi‑turn within a single run: the model returns a
