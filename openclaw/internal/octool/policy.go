@@ -24,6 +24,8 @@ const (
 		"credentials is not allowed in chat"
 	reasonSensitivePath = "reading or modifying shell or " +
 		"credential files is not allowed in chat"
+
+	sensitivePathBoundaryChars = " \t\r\n\"'`=:/\\|&;()[]{}<>"
 )
 
 var (
@@ -31,6 +33,26 @@ var (
 		`(?i)\b[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|` +
 			`ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\b`,
 	)
+
+	sensitiveEnvRuntimeReadPatterns = []*regexp.Regexp{
+		regexp.MustCompile(
+			`(?i)\bos\.environ\.get\s*\(\s*["']([a-z0-9_]+)["']`,
+		),
+		regexp.MustCompile(
+			`(?i)\bos\.environ\s*\[\s*["']([a-z0-9_]+)["']`,
+		),
+		regexp.MustCompile(
+			`(?i)\b(?:os\.)?getenv\s*\(\s*["']([a-z0-9_]+)["']`,
+		),
+		regexp.MustCompile(
+			`(?i)\b(?:os\.)?lookupenv\s*\(\s*["']([a-z0-9_]+)["']`,
+		),
+		regexp.MustCompile(`(?i)\bprocess\.env\.([a-z0-9_]+)\b`),
+		regexp.MustCompile(
+			`(?i)\bprocess\.env\s*\[\s*["']([a-z0-9_]+)["']`,
+		),
+		regexp.MustCompile(`(?i)\benv\s*\[\s*["']([a-z0-9_]+)["']`),
+	}
 
 	sensitivePathFragments = []string{
 		".aws/config",
@@ -115,6 +137,17 @@ func newCommandRequest(params execParams) CommandRequest {
 }
 
 func blocksSensitiveEnv(command string) bool {
+	for _, pattern := range sensitiveEnvRuntimeReadPatterns {
+		matches := pattern.FindAllStringSubmatch(command, -1)
+		for _, match := range matches {
+			if len(match) < 2 {
+				continue
+			}
+			if sensitiveEnvNamePattern.MatchString(match[1]) {
+				return true
+			}
+		}
+	}
 	if !sensitiveEnvNamePattern.MatchString(command) {
 		return false
 	}
@@ -128,9 +161,57 @@ func blocksSensitiveEnv(command string) bool {
 
 func blocksSensitivePath(command string) bool {
 	for _, fragment := range sensitivePathFragments {
-		if strings.Contains(command, fragment) {
+		if containsSensitivePathFragment(command, fragment) {
 			return true
 		}
 	}
 	return false
+}
+
+func containsSensitivePathFragment(command, fragment string) bool {
+	if fragment == "" {
+		return false
+	}
+	offset := 0
+	for offset < len(command) {
+		idx := strings.Index(command[offset:], fragment)
+		if idx < 0 {
+			return false
+		}
+		idx += offset
+		if hasSensitivePathBoundaryBefore(command, idx) &&
+			hasSensitivePathBoundaryAfter(command, idx+len(fragment), fragment) {
+			return true
+		}
+		offset = idx + 1
+	}
+	return false
+}
+
+func hasSensitivePathBoundaryBefore(command string, idx int) bool {
+	if idx <= 0 {
+		return true
+	}
+	return isSensitivePathBoundary(command[idx-1])
+}
+
+func hasSensitivePathBoundaryAfter(
+	command string,
+	idx int,
+	fragment string,
+) bool {
+	if strings.HasSuffix(fragment, "/") {
+		return true
+	}
+	if idx >= len(command) {
+		return true
+	}
+	if fragment == ".env" && command[idx] == '.' {
+		return true
+	}
+	return isSensitivePathBoundary(command[idx])
+}
+
+func isSensitivePathBoundary(ch byte) bool {
+	return strings.ContainsRune(sensitivePathBoundaryChars, rune(ch))
 }

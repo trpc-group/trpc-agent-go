@@ -802,7 +802,10 @@ func TestTools_NilManagers(t *testing.T) {
 func TestManager_ExecErrors(t *testing.T) {
 	mgr := NewManager()
 
-	_, err := mgr.Exec(nil, execParams{Command: "echo hi"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := mgr.Exec(ctx, execParams{Command: "echo hi"})
 	require.Error(t, err)
 
 	_, err = mgr.Exec(context.Background(), execParams{})
