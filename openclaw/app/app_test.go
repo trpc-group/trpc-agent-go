@@ -1075,6 +1075,114 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 	)
 }
 
+func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, []tool.Tool{
+		stubTool{name: "browser"},
+	}, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.Contains(
+		t,
+		sys,
+		"For real browser automation, use browser.",
+	)
+}
+
+func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	typeName := strings.ReplaceAll(
+		t.Name(),
+		"/",
+		"_",
+	)
+	require.NoError(t, registry.RegisterToolProvider(
+		typeName,
+		func(
+			_ registry.ToolProviderDeps,
+			spec registry.PluginSpec,
+		) ([]tool.Tool, error) {
+			return []tool.Tool{stubTool{name: "browser"}}, nil
+		},
+	))
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("{}"), &node))
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+		ToolProviders: []pluginSpec{{
+			Type:   typeName,
+			Config: &node,
+		}},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.Contains(
+		t,
+		sys,
+		"For real browser automation, use browser.",
+	)
+}
+
+func TestNewAgent_ToolProviderErrorIsReturned(t *testing.T) {
+	t.Parallel()
+
+	typeName := strings.ReplaceAll(t.Name(), "/", "_")
+	require.NoError(t, registry.RegisterToolProvider(
+		typeName,
+		func(
+			_ registry.ToolProviderDeps,
+			spec registry.PluginSpec,
+		) ([]tool.Tool, error) {
+			return nil, errors.New("tool provider boom")
+		},
+	))
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("{}"), &node))
+
+	_, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: createAppTestSkill(t),
+		StateDir:   t.TempDir(),
+		ToolProviders: []pluginSpec{{
+			Type:   typeName,
+			Config: &node,
+		}},
+	}, nil, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tool provider boom")
+}
+
 func TestNewAgent_SkillsLoadModeTurnClearsLoadedState(t *testing.T) {
 	t.Parallel()
 
@@ -2144,6 +2252,25 @@ func (t stubTool) Declaration() *tool.Declaration {
 		Name:        t.name,
 		Description: "stub tool",
 	}
+}
+
+type nilDeclTool struct{}
+
+func (t nilDeclTool) Declaration() *tool.Declaration {
+	return nil
+}
+
+func TestHasToolNamed(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, hasToolNamed([]tool.Tool{
+		nilDeclTool{},
+		stubTool{name: "browser"},
+	}, "browser"))
+	require.False(t, hasToolNamed([]tool.Tool{
+		nilDeclTool{},
+		stubTool{name: "exec_command"},
+	}, "browser"))
 }
 
 func TestToolsFromProviders(t *testing.T) {
