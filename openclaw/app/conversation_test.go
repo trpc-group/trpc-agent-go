@@ -37,6 +37,9 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 			HistoryMode: conversation.HistoryModeShared,
 			ActorID:     "user1",
 			ActorLabel:  "Alice",
+			ActorLabels: map[string]string{
+				"user1": "alice.dev",
+			},
 		},
 	)
 	require.NoError(t, err)
@@ -93,6 +96,9 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 			HistoryMode: conversation.HistoryModeShared,
 			ActorID:     "user1",
 			ActorLabel:  "Alice",
+			ActorLabels: map[string]string{
+				"user1": "alice.dev",
+			},
 		},
 		cfg.RuntimeState[conversation.RuntimeStateKey],
 	)
@@ -136,6 +142,9 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 		conversation.Annotation{
 			ActorID:    "u-1",
 			ActorLabel: "Alice",
+			ActorLabels: map[string]string{
+				"u-1": "alice.dev",
+			},
 		},
 	))
 	require.NoError(
@@ -164,6 +173,9 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 			HistoryMode: conversation.HistoryModeShared,
 			ActorID:     "u-1",
 			ActorLabel:  "Alice",
+			ActorLabels: map[string]string{
+				"u-1": "alice.dev",
+			},
 		},
 	)
 	require.NoError(t, err)
@@ -187,7 +199,11 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 	}
 
 	require.Len(t, cfg.InjectedContextMessages, 2)
-	require.Contains(t, cfg.InjectedContextMessages[0].Content, "Speaker: Alice")
+	require.Contains(
+		t,
+		cfg.InjectedContextMessages[0].Content,
+		"Speaker: alice.dev",
+	)
 	require.Equal(
 		t,
 		includeContentsNone,
@@ -224,6 +240,9 @@ func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
 			conversation.Annotation{
 				ActorID:    "u-1",
 				ActorLabel: "Alice",
+				ActorLabels: map[string]string{
+					"u-1": "alice.dev",
+				},
 			},
 		)
 		require.NoError(t, err)
@@ -245,6 +264,9 @@ func TestBuildConversationRunOptionResolver_EdgeCases(t *testing.T) {
 			conversation.Annotation{
 				ActorID:    "u-1",
 				ActorLabel: "Alice",
+				ActorLabels: map[string]string{
+					"u-1": "alice.dev",
+				},
 			},
 			cfg.RuntimeState[conversation.RuntimeStateKey],
 		)

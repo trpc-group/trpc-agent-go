@@ -56,10 +56,12 @@ func buildConversationRunOptionResolver(
 					},
 				)
 				if err == nil && sess != nil {
+					opts := historyOpts
+					opts.LabelOverrides = annotation.ActorLabels
 					history := conversation.
 						BuildInjectedContextMessages(
 							sess,
-							historyOpts,
+							opts,
 						)
 					if len(history) > 0 {
 						runOpts = append(

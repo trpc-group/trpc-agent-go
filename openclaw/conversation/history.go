@@ -23,12 +23,14 @@ import (
 type HistoryOptions struct {
 	AddSessionSummary bool
 	MaxHistoryRuns    int
+	LabelOverrides    map[string]string
 }
 
 // TurnOptions controls speaker-aware turn projection.
 type TurnOptions struct {
-	Limit         int
-	IncludeSystem bool
+	Limit          int
+	IncludeSystem  bool
+	LabelOverrides map[string]string
 }
 
 // Turn is one speaker-aware conversation turn.
@@ -64,7 +66,11 @@ func BuildInjectedContextMessages(
 		}
 	}
 
-	history := buildVisibleHistory(sess.Events, since)
+	history := buildVisibleHistory(
+		sess.Events,
+		since,
+		normalizeActorLabels(opts.LabelOverrides),
+	)
 	if opts.MaxHistoryRuns > 0 && len(history) > opts.MaxHistoryRuns {
 		history = history[len(history)-opts.MaxHistoryRuns:]
 	}
@@ -84,6 +90,9 @@ func BuildTurns(
 	if sess == nil {
 		return nil
 	}
+	opts.LabelOverrides = normalizeActorLabels(
+		opts.LabelOverrides,
+	)
 	turns := buildTurns(sess.Events, opts)
 	if opts.Limit > 0 && len(turns) > opts.Limit {
 		turns = turns[len(turns)-opts.Limit:]
@@ -122,6 +131,7 @@ func BuildSummaryText(events []event.Event) string {
 func buildVisibleHistory(
 	events []event.Event,
 	since time.Time,
+	labelOverrides map[string]string,
 ) []model.Message {
 	out := make([]model.Message, 0, len(events))
 	for i := range events {
@@ -129,7 +139,10 @@ func buildVisibleHistory(
 		if !includeEvent(evt, since) {
 			continue
 		}
-		msgs := visibleMessagesFromEvent(evt)
+		msgs := visibleMessagesFromEvent(
+			evt,
+			labelOverrides,
+		)
 		out = append(out, msgs...)
 	}
 	return out
@@ -143,7 +156,11 @@ func buildTurns(
 	for i := range events {
 		out = append(
 			out,
-			turnsFromEvent(events[i], opts.IncludeSystem)...,
+			turnsFromEvent(
+				events[i],
+				opts.IncludeSystem,
+				opts.LabelOverrides,
+			)...,
 		)
 	}
 	return out
@@ -154,7 +171,10 @@ func buildSummaryLines(events []event.Event) []string {
 	var hasAnnotatedUser bool
 	for i := range events {
 		evt := events[i]
-		rendered, annotated := summaryLinesFromEvent(evt)
+		rendered, annotated := summaryLinesFromEvent(
+			evt,
+			nil,
+		)
 		if annotated {
 			hasAnnotatedUser = true
 		}
@@ -180,6 +200,7 @@ func includeEvent(evt event.Event, since time.Time) bool {
 func turnsFromEvent(
 	evt event.Event,
 	includeSystem bool,
+	labelOverrides map[string]string,
 ) []Turn {
 	if evt.Response == nil || evt.IsPartial ||
 		len(evt.Response.Choices) == 0 {
@@ -187,7 +208,7 @@ func turnsFromEvent(
 	}
 	switch evt.Author {
 	case authorUser:
-		return userTurnsFromEvent(evt)
+		return userTurnsFromEvent(evt, labelOverrides)
 	case authorSystem:
 		if !includeSystem {
 			return nil
@@ -198,9 +219,12 @@ func turnsFromEvent(
 	}
 }
 
-func visibleMessagesFromEvent(evt event.Event) []model.Message {
+func visibleMessagesFromEvent(
+	evt event.Event,
+	labelOverrides map[string]string,
+) []model.Message {
 	if evt.Author == authorUser {
-		msgs := visibleUserMessages(evt)
+		msgs := visibleUserMessages(evt, labelOverrides)
 		if len(msgs) > 0 {
 			return msgs
 		}
@@ -211,14 +235,21 @@ func visibleMessagesFromEvent(evt event.Event) []model.Message {
 	return visibleAssistantMessages(evt)
 }
 
-func visibleUserMessages(evt event.Event) []model.Message {
+func visibleUserMessages(
+	evt event.Event,
+	labelOverrides map[string]string,
+) []model.Message {
 	annotation, _, err := AnnotationFromEvent(evt)
 	if err != nil {
 		return nil
 	}
 	out := make([]model.Message, 0, len(evt.Response.Choices))
 	for _, choice := range evt.Response.Choices {
-		text := renderUserMessage(choice.Message, annotation)
+		text := renderUserMessage(
+			choice.Message,
+			annotation,
+			labelOverrides,
+		)
 		if text == "" {
 			continue
 		}
@@ -254,7 +285,10 @@ func visibleSystemMessages(evt event.Event) []model.Message {
 	return out
 }
 
-func userTurnsFromEvent(evt event.Event) []Turn {
+func userTurnsFromEvent(
+	evt event.Event,
+	labelOverrides map[string]string,
+) []Turn {
 	annotation, _, _ := AnnotationFromEvent(evt)
 	out := make([]Turn, 0, len(evt.Response.Choices))
 	for _, choice := range evt.Response.Choices {
@@ -264,7 +298,7 @@ func userTurnsFromEvent(evt event.Event) []Turn {
 		}
 		out = append(out, Turn{
 			Role:      string(model.RoleUser),
-			Speaker:   speakerLabel(annotation),
+			Speaker:   speakerLabel(annotation, labelOverrides),
 			ActorID:   strings.TrimSpace(annotation.ActorID),
 			QuoteText: strings.TrimSpace(annotation.QuoteText),
 			Text:      text,
@@ -308,7 +342,10 @@ func systemTurnsFromEvent(evt event.Event) []Turn {
 	return out
 }
 
-func summaryLinesFromEvent(evt event.Event) ([]string, bool) {
+func summaryLinesFromEvent(
+	evt event.Event,
+	labelOverrides map[string]string,
+) ([]string, bool) {
 	switch evt.Author {
 	case authorUser:
 		annotation, ok, err := AnnotationFromEvent(evt)
@@ -321,7 +358,10 @@ func summaryLinesFromEvent(evt event.Event) ([]string, bool) {
 			if text == "" {
 				continue
 			}
-			speaker := speakerLabel(annotation)
+			speaker := speakerLabel(
+				annotation,
+				labelOverrides,
+			)
 			if quote := strings.TrimSpace(annotation.QuoteText); quote != "" {
 				lines = append(
 					lines,
@@ -380,13 +420,17 @@ func summaryLinesFromEvent(evt event.Event) ([]string, bool) {
 func renderUserMessage(
 	msg model.Message,
 	annotation Annotation,
+	labelOverrides map[string]string,
 ) string {
 	text := messageText(msg)
 	if text == "" {
 		return ""
 	}
 	lines := []string{
-		contextSpeakerPrefix + ": " + speakerLabel(annotation),
+		contextSpeakerPrefix + ": " + speakerLabel(
+			annotation,
+			labelOverrides,
+		),
 	}
 	if quote := strings.TrimSpace(annotation.QuoteText); quote != "" {
 		lines = append(
@@ -458,7 +502,17 @@ func sessionSummary(
 	return text, sum.UpdatedAt, true
 }
 
-func speakerLabel(annotation Annotation) string {
+func speakerLabel(
+	annotation Annotation,
+	labelOverrides map[string]string,
+) string {
+	if actorID := strings.TrimSpace(annotation.ActorID); actorID != "" {
+		if label := strings.TrimSpace(
+			labelOverrides[actorID],
+		); label != "" {
+			return label
+		}
+	}
 	if label := strings.TrimSpace(annotation.ActorLabel); label != "" {
 		return label
 	}

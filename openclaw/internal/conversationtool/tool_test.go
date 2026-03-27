@@ -41,6 +41,14 @@ func TestToolCall(t *testing.T) {
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 	)
+	inv.RunOptions.RuntimeState = conversation.RuntimeState(
+		conversation.Annotation{
+			ActorLabels: map[string]string{
+				"u1": "alice.dev",
+				"u2": "bob.dev",
+			},
+		},
+	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
 	out, err := tool.Call(ctx, []byte(`{"limit":4}`))
@@ -53,12 +61,13 @@ func TestToolCall(t *testing.T) {
 	require.Contains(
 		t,
 		result["transcript"],
-		"Alice: hello",
+		"alice.dev: hello",
 	)
 	require.Contains(
 		t,
 		result["transcript"],
-		"Bob (replying to: hello): what did we decide?",
+		"bob.dev (replying to: hello): what did we "+
+			"decide?",
 	)
 	require.Contains(
 		t,
@@ -67,9 +76,9 @@ func TestToolCall(t *testing.T) {
 	)
 	turns := result["turns"].([]conversation.Turn)
 	require.Len(t, turns, 4)
-	require.Equal(t, "Alice", turns[0].Speaker)
+	require.Equal(t, "alice.dev", turns[0].Speaker)
 	require.Equal(t, "Assistant", turns[1].Speaker)
-	require.Equal(t, "Bob", turns[2].Speaker)
+	require.Equal(t, "bob.dev", turns[2].Speaker)
 	require.Equal(t, "Assistant", turns[3].Speaker)
 }
 
