@@ -30,10 +30,12 @@ import (
 	httpfetch "trpc.group/trpc-go/trpc-agent-go/tool/webfetch/httpfetch"
 	"trpc.group/trpc-go/trpc-agent-go/tool/wikipedia"
 
+	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
 const (
+	toolProviderBrowser    = "browser"
 	toolProviderDuckDuckGo = "duckduckgo"
 	toolProviderWebFetch   = "webfetch_http"
 
@@ -56,6 +58,10 @@ const (
 )
 
 func init() {
+	must(registry.RegisterToolProvider(
+		toolProviderBrowser,
+		newBrowserTools,
+	))
 	must(registry.RegisterToolProvider(
 		toolProviderDuckDuckGo,
 		newDuckDuckGoTools,
@@ -99,6 +105,22 @@ type httpToolConfig struct {
 	BaseURL   string        `yaml:"base_url,omitempty"`
 	UserAgent string        `yaml:"user_agent,omitempty"`
 	Timeout   time.Duration `yaml:"timeout,omitempty"`
+}
+
+func newBrowserTools(
+	_ registry.ToolProviderDeps,
+	spec registry.PluginSpec,
+) ([]tool.Tool, error) {
+	var cfg ocbrowser.Config
+	if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
+		return nil, err
+	}
+
+	browserTool, err := ocbrowser.NewTool(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return []tool.Tool{browserTool}, nil
 }
 
 func newDuckDuckGoTools(

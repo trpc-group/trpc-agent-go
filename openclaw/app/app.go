@@ -47,6 +47,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
+	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationtool"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
@@ -196,6 +197,14 @@ const (
 		"commands are truly required. Use cron for future or " +
 		"recurring work. " +
 		"Use skill_run only for skill workspace workflows."
+
+	browserToolingGuidance = "For real browser automation, use " +
+		"browser. Prefer browser snapshot plus act for page " +
+		"interaction, use browser screenshot when visual " +
+		"verification matters, and keep using the same targetId " +
+		"after tabs or snapshot calls. When the user mentions " +
+		"their current browser tab, relay, or extension attach " +
+		"flow, use profile=\"chrome\" when that profile exists."
 
 	agentTypeLLM        = "llm"
 	agentTypeClaudeCode = "claude-code"
@@ -847,6 +856,7 @@ func NewRuntime(
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			nil,
 			opts.AdminAddr,
 			adminURL,
 		))
@@ -927,6 +937,19 @@ func run(ctx context.Context, args []string) error {
 			Code: 1,
 			Err:  fmt.Errorf("debug recorder config failed: %w", err),
 		}
+	}
+	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
+	if debugRec != nil {
+		debugDir = debugRec.Dir()
+	}
+
+	browserServerSup, err := maybeStartBrowserServerSupervisor(
+		ctx,
+		opts.ToolProviders,
+		debugDir,
+	)
+	if err != nil {
+		log.Warnf("browser server auto-start failed: %v", err)
 	}
 	langfuseRT, err := maybeEnableLangfuse(ctx, opts)
 	if err != nil {
@@ -1151,10 +1174,6 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
-	if debugRec != nil {
-		debugDir = debugRec.Dir()
-	}
 	gw := newInProcGatewayClient(
 		gwSrv,
 		opts.AppName,
@@ -1278,6 +1297,7 @@ func run(ctx context.Context, args []string) error {
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			browserServerSup,
 			adminBinding.addr,
 			adminBinding.url,
 		))
@@ -1299,6 +1319,7 @@ func run(ctx context.Context, args []string) error {
 		channels,
 		needsModel,
 	))
+	logStartupLines(browserServerSup.startupLines())
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
 	logStartupLines(a2aStartupLines(a2aSurface))
 	logStartupLines(toolDepsStartupLines(openClawTools.deps))
@@ -1349,6 +1370,11 @@ func run(ctx context.Context, args []string) error {
 	}
 	if cronRunner != nil {
 		_ = cronRunner.Close()
+	}
+	if browserServerSup != nil {
+		if err := browserServerSup.Close(); err != nil {
+			log.Warnf("close browser server failed: %v", err)
+		}
 	}
 	_ = r.Close()
 	if err := shutdownTelemetryWithContext(
@@ -1796,16 +1822,6 @@ func newAgent(
 		)
 	}
 
-	opts := []llmagent.Option{
-		llmagent.WithModel(mdl),
-		llmagent.WithInstruction(instruction),
-		llmagent.WithGlobalInstruction(strings.TrimSpace(cfg.SystemPrompt)),
-		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
-		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
-		llmagent.WithPreloadMemory(cfg.PreloadMemory),
-		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
-	}
-
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
 	bundledRoot := resolveBundledSkillsRoot(cwd, cfg.StateDir)
@@ -1821,6 +1837,35 @@ func newAgent(
 		return nil, err
 	}
 
+	tools := append([]tool.Tool(nil), extraTools...)
+	tools = append(tools, ocskills.NewListTool(repo))
+	if len(cfg.ToolProviders) > 0 {
+		extra, err := toolsFromProviders(
+			mdl,
+			cfg.AppName,
+			cfg.StateDir,
+			cfg.ToolProviders,
+		)
+		if err != nil {
+			return nil, err
+		}
+		tools = append(tools, extra...)
+	}
+	if hasToolNamed(tools, ocbrowser.ToolName) {
+		instruction = strings.TrimSpace(
+			instruction + "\n\n" + browserToolingGuidance,
+		)
+	}
+
+	opts := []llmagent.Option{
+		llmagent.WithModel(mdl),
+		llmagent.WithInstruction(instruction),
+		llmagent.WithGlobalInstruction(strings.TrimSpace(cfg.SystemPrompt)),
+		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
+		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
+		llmagent.WithPreloadMemory(cfg.PreloadMemory),
+		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
+	}
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
 		opts,
@@ -1846,21 +1891,6 @@ func newAgent(
 			),
 		)
 	}
-
-	tools := append([]tool.Tool(nil), extraTools...)
-	tools = append(tools, ocskills.NewListTool(repo))
-	if len(cfg.ToolProviders) > 0 {
-		extra, err := toolsFromProviders(
-			mdl,
-			cfg.AppName,
-			cfg.StateDir,
-			cfg.ToolProviders,
-		)
-		if err != nil {
-			return nil, err
-		}
-		tools = append(tools, extra...)
-	}
 	if len(tools) > 0 {
 		opts = append(opts, llmagent.WithTools(tools))
 	}
@@ -1880,6 +1910,19 @@ func newAgent(
 	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
 
 	return llmagent.New(defaultAgentName, opts...), nil
+}
+
+func hasToolNamed(tools []tool.Tool, name string) bool {
+	for i := range tools {
+		decl := tools[i].Declaration()
+		if decl == nil {
+			continue
+		}
+		if decl.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func toolsFromProviders(

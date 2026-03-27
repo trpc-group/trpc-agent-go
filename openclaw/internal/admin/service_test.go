@@ -34,6 +34,14 @@ type stubRunner struct {
 	reply string
 }
 
+type stubBMP struct {
+	status BrowserManagedService
+}
+
+func (p stubBMP) BrowserManagedStatus() BrowserManagedService {
+	return p.status
+}
+
 func (r *stubRunner) Run(
 	ctx context.Context,
 	userID string,
@@ -292,6 +300,169 @@ func TestServiceJobEndpoints(t *testing.T) {
 	require.Nil(t, cronSvc.Get(job.ID))
 }
 
+func TestBrowserEndpointSummary(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		view browserEndpointView
+		want string
+	}{
+		{
+			name: "empty",
+			want: "-",
+		},
+		{
+			name: "down with error",
+			view: browserEndpointView{
+				URL:   "http://127.0.0.1:19790",
+				Error: "connection refused",
+			},
+			want: "down: connection refused",
+		},
+		{
+			name: "down",
+			view: browserEndpointView{
+				URL: "http://127.0.0.1:19790",
+			},
+			want: "down",
+		},
+		{
+			name: "reachable without profiles",
+			view: browserEndpointView{
+				URL:       "http://127.0.0.1:19790",
+				Reachable: true,
+			},
+			want: "reachable",
+		},
+		{
+			name: "reachable with profiles",
+			view: browserEndpointView{
+				URL:       "http://127.0.0.1:19790",
+				Reachable: true,
+				Profiles: []browserRemoteProbe{
+					{Name: "chrome", State: "ready"},
+					{Name: "", State: "busy"},
+					{Name: "edge"},
+					{},
+				},
+			},
+			want: "chrome=ready, busy, edge",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.want, browserEndpointSummary(tc.view))
+		})
+	}
+}
+
+func TestServiceProbeBrowserEndpoint_CachesAndHandlesErrors(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	t.Run("caches reachable result", func(t *testing.T) {
+		requestCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter,
+			r *http.Request,
+		) {
+			requestCount++
+			require.Equal(t, "/profiles", r.URL.Path)
+			writeJSON(w, http.StatusOK, map[string]any{
+				"profiles": []map[string]any{{
+					"name": "chrome",
+				}, {
+					"name": "alpha",
+				}},
+			})
+		}))
+		t.Cleanup(server.Close)
+
+		svc := New(Config{})
+		cache := make(map[string]browserEndpointView)
+
+		view := svc.probeBrowserEndpoint(server.URL, cache)
+		require.True(t, view.Reachable)
+		require.Len(t, view.Profiles, 2)
+		require.Equal(t, "alpha", view.Profiles[0].Name)
+		require.Equal(t, "chrome", view.Profiles[1].Name)
+
+		cached := svc.probeBrowserEndpoint(server.URL, cache)
+		require.Equal(t, view, cached)
+		require.Equal(t, 1, requestCount)
+	})
+
+	t.Run("bad status", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter,
+			r *http.Request,
+		) {
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+		}))
+		t.Cleanup(server.Close)
+
+		view := New(Config{}).probeBrowserEndpoint(
+			server.URL,
+			make(map[string]browserEndpointView),
+		)
+		require.False(t, view.Reachable)
+		require.Contains(t, view.Error, "unexpected status")
+	})
+
+	t.Run("bad json", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(
+			w http.ResponseWriter,
+			r *http.Request,
+		) {
+			_, _ = w.Write([]byte("{"))
+		}))
+		t.Cleanup(server.Close)
+
+		view := New(Config{}).probeBrowserEndpoint(
+			server.URL,
+			make(map[string]browserEndpointView),
+		)
+		require.False(t, view.Reachable)
+		require.Contains(t, view.Error, "decode profiles")
+	})
+}
+
+func TestResolveDebugRootFile_ErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	serviceDir := filepath.Join(root, "services")
+	require.NoError(t, os.MkdirAll(serviceDir, 0o755))
+
+	logPath := filepath.Join(serviceDir, "browser-server.log")
+	require.NoError(t, os.WriteFile(logPath, []byte("ready\n"), 0o600))
+
+	got, err := resolveDebugRootFile(root, "services/browser-server.log")
+	require.NoError(t, err)
+	require.Equal(t, logPath, got)
+
+	_, err = resolveDebugRootFile(root, ".")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "required")
+
+	_, err = resolveDebugRootFile(root, "/tmp/browser-server.log")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid debug path")
+
+	_, err = resolveDebugRootFile(root, "services/missing.log")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found")
+
+	_, err = resolveDebugRootFile(root, "services")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "directory")
+}
+
 func TestServiceSnapshotIncludesCronSummary(t *testing.T) {
 	t.Parallel()
 
@@ -328,6 +499,122 @@ func TestServiceSnapshotIncludesCronSummary(t *testing.T) {
 	require.Equal(t, 1, snap.Cron.JobCount)
 	require.Len(t, snap.Cron.Jobs, 1)
 	require.Equal(t, "every 5m", snap.Cron.Jobs[0].Schedule)
+}
+
+func TestServiceSnapshotIncludesBrowserSummary(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Unix(1700000000, 0)
+
+	svc := New(Config{
+		Browser: BrowserConfig{
+			Managed: stubBMP{
+				status: BrowserManagedService{
+					Enabled:         true,
+					Managed:         true,
+					State:           "running",
+					URL:             "http://127.0.0.1:19790",
+					PID:             4321,
+					LogPath:         "/tmp/debug/services/browser-server.log",
+					LogRelativePath: "services/browser-server.log",
+					StartedAt:       &startedAt,
+					RecentLogs: []string{
+						"OpenClaw browser server listening",
+					},
+				},
+			},
+			Providers: []BrowserProvider{{
+				Name:             "primary",
+				DefaultProfile:   "openclaw",
+				HostServerURL:    "http://127.0.0.1:19790",
+				SandboxServerURL: "http://127.0.0.1:20790",
+				AllowLoopback:    true,
+				Profiles: []BrowserProfile{{
+					Name:      "openclaw",
+					Transport: "stdio",
+				}, {
+					Name:             "chrome",
+					BrowserServerURL: "http://127.0.0.1:19790",
+				}},
+				Nodes: []BrowserNode{{
+					ID:        "edge",
+					ServerURL: "http://node.example:7777",
+				}},
+			}},
+		},
+	})
+
+	snap := svc.Snapshot()
+	require.True(t, snap.Browser.Enabled)
+	require.Equal(t, 1, snap.Browser.ProviderCount)
+	require.Equal(t, 2, snap.Browser.ProfileCount)
+	require.Equal(t, 1, snap.Browser.NodeCount)
+	require.Len(t, snap.Browser.Providers, 1)
+	require.Equal(t, "primary", snap.Browser.Providers[0].Name)
+	require.Equal(
+		t,
+		"http://127.0.0.1:19790",
+		snap.Browser.Providers[0].HostServerURL,
+	)
+	require.True(t, snap.Browser.Managed.Enabled)
+	require.True(t, snap.Browser.Managed.Managed)
+	require.Equal(t, "running", snap.Browser.Managed.State)
+	require.Equal(
+		t,
+		"/debug/file?path=services%2Fbrowser-server.log",
+		snap.Browser.Managed.LogURL,
+	)
+	require.Len(t, snap.Browser.Managed.RecentLogs, 1)
+}
+
+func TestServiceSnapshotProbesBrowserEndpoints(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.Equal(t, "/profiles", r.URL.Path)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"profiles": []map[string]any{{
+				"name":   "openclaw",
+				"state":  "ready",
+				"driver": "playwright",
+				"tabs":   1,
+			}},
+		})
+	}))
+	t.Cleanup(server.Close)
+
+	svc := New(
+		Config{
+			Browser: BrowserConfig{
+				Providers: []BrowserProvider{{
+					Name:           "primary",
+					DefaultProfile: "openclaw",
+					HostServerURL:  server.URL,
+					Nodes: []BrowserNode{{
+						ID:        "edge",
+						ServerURL: server.URL,
+					}},
+				}},
+			},
+		},
+		WithBrowserHTTPClient(server.Client()),
+	)
+
+	snap := svc.Snapshot()
+	require.True(t, snap.Browser.Enabled)
+	require.Len(t, snap.Browser.Providers, 1)
+	require.True(t, snap.Browser.Providers[0].Host.Reachable)
+	require.Len(t, snap.Browser.Providers[0].Host.Profiles, 1)
+	require.Equal(
+		t,
+		"openclaw",
+		snap.Browser.Providers[0].Host.Profiles[0].Name,
+	)
+	require.Len(t, snap.Browser.Providers[0].Nodes, 1)
+	require.True(t, snap.Browser.Providers[0].Nodes[0].Status.Reachable)
 }
 
 func TestServiceSnapshotIncludesUploadSourceCounts(t *testing.T) {
@@ -867,11 +1154,19 @@ func TestReadDebugTrace_RejectsEscapeAndBadJSON(t *testing.T) {
 	svc := New(Config{DebugDir: root})
 
 	require.NoError(t, os.WriteFile(refPath, []byte("{"), 0o600))
-	_, ok, err := svc.readDebugTrace(root, filepath.Join(root, debugBySessionDir), refPath, "")
+	_, ok, err := svc.readDebugTrace(
+		root,
+		filepath.Join(root, debugBySessionDir),
+		refPath,
+		"",
+	)
 	require.Error(t, err)
 	require.False(t, ok)
 
-	ref := `{"trace_dir":"../../../../escape","started_at":"2026-03-07T00:00:00Z"}`
+	ref := `{
+  "trace_dir":"../../../../escape",
+  "started_at":"2026-03-07T00:00:00Z"
+}`
 	require.NoError(t, os.WriteFile(refPath, []byte(ref), 0o600))
 	_, ok, err = svc.readDebugTrace(
 		root,
@@ -1224,17 +1519,37 @@ func TestServiceResolveDebugFileAndMethodChecks(t *testing.T) {
 	require.NoError(t, os.WriteFile(metaPath, []byte("{}"), 0o600))
 
 	svc := New(Config{DebugDir: debugDir})
-	got, err := svc.resolveDebugFile("20260307/trace", debugMetaFileName)
+	got, err := svc.resolveDebugFile(
+		"20260307/trace",
+		debugMetaFileName,
+		"",
+	)
 	require.NoError(t, err)
 	require.Equal(t, metaPath, got)
 
-	_, err = svc.resolveDebugFile("", debugMetaFileName)
+	serviceLog := filepath.Join(debugDir, "services", "browser-server.log")
+	require.NoError(
+		t,
+		os.MkdirAll(filepath.Dir(serviceLog), 0o755),
+	)
+	require.NoError(
+		t,
+		os.WriteFile(serviceLog, []byte("ready\n"), 0o600),
+	)
+
+	got, err = svc.resolveDebugFile("", "", "services/browser-server.log")
+	require.NoError(t, err)
+	require.Equal(t, serviceLog, got)
+
+	_, err = svc.resolveDebugFile("", debugMetaFileName, "")
 	require.Error(t, err)
-	_, err = svc.resolveDebugFile("20260307/trace", "notes.txt")
+	_, err = svc.resolveDebugFile("20260307/trace", "notes.txt", "")
 	require.Error(t, err)
-	_, err = svc.resolveDebugFile("../escape", debugMetaFileName)
+	_, err = svc.resolveDebugFile("../escape", debugMetaFileName, "")
 	require.Error(t, err)
-	_, err = svc.resolveDebugFile("20260307/missing", debugMetaFileName)
+	_, err = svc.resolveDebugFile("20260307/missing", debugMetaFileName, "")
+	require.Error(t, err)
+	_, err = svc.resolveDebugFile("", "", "../escape")
 	require.Error(t, err)
 
 	handler := svc.Handler()

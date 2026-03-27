@@ -1,0 +1,38 @@
+app_name: "openclaw"
+
+http:
+  addr: ":8080"
+
+agent:
+  instruction: |
+    You are a helpful assistant.
+    Use the native browser tool for tabs, JS-heavy pages,
+    snapshots, screenshots, and page interactions.
+
+model:
+  mode: "openai"
+  name: "gpt-5"
+  openai_variant: "auto"
+
+tools:
+  providers:
+    - type: "browser"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        profiles:
+          - name: "openclaw"
+            description: "Isolated Playwright browser session."
+            transport: "stdio"
+            command: "npx"
+            args:
+              - "--yes"
+              - "@playwright/mcp@latest"
+              - "--headless"
+              - "--isolated"
+              - "--caps"
+              - "vision,pdf"
+            timeout: "5m"
+            reconnect:
+              enabled: true
+              max_attempts: 3
