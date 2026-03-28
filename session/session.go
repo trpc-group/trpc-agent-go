@@ -69,6 +69,13 @@ type Session struct {
 	// Users should not access or modify this field directly.
 	ServiceMeta map[string]string `json:"-"`
 
+	// maskedEventIDs tracks events that have been soft-hidden from LLM context.
+	// Masked events remain in the Events slice for audit/debug purposes but
+	// are excluded from GetVisibleEvents(). This implements the Pensieve
+	// paradigm: the model can prune processed information from its visible
+	// context while retaining notes and summaries.
+	maskedEventIDs map[string]bool `json:"-"`
+
 	stateMu sync.RWMutex `json:"-"` // stateMu is the read-write mutex for State.
 }
 
@@ -368,6 +375,87 @@ func (sess *Session) GetEventCount() int {
 	defer sess.EventMu.RUnlock()
 
 	return len(sess.Events)
+}
+
+// MaskEvents soft-hides the specified event IDs from LLM-visible context.
+// Only IDs that exist in sess.Events are masked; non-existent IDs are ignored.
+// Returns the number of events actually masked (excluding already-masked ones).
+func (sess *Session) MaskEvents(ids []string) int {
+	sess.EventMu.Lock()
+	defer sess.EventMu.Unlock()
+
+	if sess.maskedEventIDs == nil {
+		sess.maskedEventIDs = make(map[string]bool)
+	}
+
+	// Build a set of valid event IDs for O(1) lookup.
+	validIDs := make(map[string]struct{}, len(sess.Events))
+	for i := range sess.Events {
+		validIDs[sess.Events[i].ID] = struct{}{}
+	}
+
+	masked := 0
+	for _, id := range ids {
+		if _, exists := validIDs[id]; !exists {
+			continue // Skip IDs not present in Events.
+		}
+		if !sess.maskedEventIDs[id] {
+			sess.maskedEventIDs[id] = true
+			masked++
+		}
+	}
+	return masked
+}
+
+// UnmaskEvents restores previously masked event IDs to LLM-visible context.
+// Returns the number of events actually unmasked.
+func (sess *Session) UnmaskEvents(ids []string) int {
+	sess.EventMu.Lock()
+	defer sess.EventMu.Unlock()
+
+	if sess.maskedEventIDs == nil {
+		return 0
+	}
+
+	unmasked := 0
+	for _, id := range ids {
+		if sess.maskedEventIDs[id] {
+			delete(sess.maskedEventIDs, id)
+			unmasked++
+		}
+	}
+	return unmasked
+}
+
+// IsEventMasked returns whether the given event ID is currently masked.
+func (sess *Session) IsEventMasked(id string) bool {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	return sess.maskedEventIDs[id]
+}
+
+// GetVisibleEvents returns events that are not masked.
+// This is the primary method for building LLM context — it returns
+// all events except those the model has explicitly pruned via MaskEvents.
+func (sess *Session) GetVisibleEvents() []event.Event {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	if len(sess.maskedEventIDs) == 0 {
+		// Fast path: no masked events, return a copy of all events.
+		eventsCopy := make([]event.Event, len(sess.Events))
+		copy(eventsCopy, sess.Events)
+		return eventsCopy
+	}
+
+	visible := make([]event.Event, 0, len(sess.Events))
+	for i := range sess.Events {
+		if !sess.maskedEventIDs[sess.Events[i].ID] {
+			visible = append(visible, sess.Events[i])
+		}
+	}
+	return visible
 }
 
 // AppendTrackEvent appends a track event to the session.
