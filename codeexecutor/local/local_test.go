@@ -1171,15 +1171,12 @@ func TestLocalCodeExecutor_CleanTempFiles_ReadOnlyWorkDir(t *testing.T) {
 	}
 
 	result, execErr := executor.ExecuteCode(context.Background(), input)
-	if execErr != nil {
-		require.Contains(t, execErr.Error(), "failed to create script temp directory")
-	} else {
-		require.Contains(
-			t,
-			result.Output,
-			"failed to create bash file",
-		)
-	}
+	require.NoError(t, execErr)
+	require.Contains(
+		t,
+		result.Output,
+		"failed to create bash file",
+	)
 }
 
 func TestLocal_PythonNoPrintAddsNewline(t *testing.T) {

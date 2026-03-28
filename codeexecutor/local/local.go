@@ -142,13 +142,14 @@ func (e *CodeExecutor) ExecuteCode(
 			// concurrent calls from overwriting each other's code_0.sh.
 			tmpDir, err := os.MkdirTemp(cmdDir, ".exec_")
 			if err != nil {
-				return codeexecutor.CodeExecutionResult{}, fmt.Errorf(
-					"failed to create script temp directory: %w", err,
-				)
+				// Fall back to writing scripts directly into WorkDir.
+				// Per-block errors will surface via result.Output.
+				scriptDir = cmdDir
+			} else {
+				scriptDir = tmpDir
+				// Clean up the temp script directory after execution.
+				defer os.RemoveAll(scriptDir)
 			}
-			scriptDir = tmpDir
-			// Clean up the temp script directory after execution.
-			defer os.RemoveAll(scriptDir)
 		} else {
 			// When CleanTempFiles is false, write scripts directly into
 			// WorkDir so they can be inspected after execution.
