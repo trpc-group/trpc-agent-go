@@ -458,6 +458,14 @@ func (sess *Session) GetVisibleEvents() []event.Event {
 	return visible
 }
 
+// MaskedEventCount returns the number of currently masked events.
+func (sess *Session) MaskedEventCount() int {
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	return len(sess.maskedEventIDs)
+}
+
 // AppendTrackEvent appends a track event to the session.
 func (sess *Session) AppendTrackEvent(event *TrackEvent, opts ...Option) error {
 	if sess == nil {
