@@ -81,3 +81,42 @@ func CalculateMaxInputTokensWithParams(
 	ratioLimit := int(float64(contextWindow) * maxInputTokensRatio)
 	return max(min(calculatedMax, ratioLimit), inputTokensFloor)
 }
+
+// DefaultOutputTokensFloor is the minimum number of output tokens to ensure
+// the model can produce a meaningful response.
+const DefaultOutputTokensFloor = 256
+
+// CalculateMaxOutputTokens computes the remaining output token budget after
+// input tokens are consumed, capped by the model's known max output limit.
+// It uses default budget parameters. Returns 0 if the model has no known
+// output limit (caller should not set max_tokens in that case).
+//
+// This is an opt-in helper; callers decide whether to apply the result.
+//
+// Formula:
+//
+//	remaining = contextWindow - usedTokens - protocolOverhead - safetyMargin
+//	result    = max(min(remaining, modelMaxOutput), outputTokensFloor)
+func CalculateMaxOutputTokens(contextWindow, usedTokens, modelMaxOutput int) int {
+	return CalculateMaxOutputTokensWithParams(
+		contextWindow, usedTokens, modelMaxOutput,
+		DefaultProtocolOverheadTokens, DefaultSafetyMarginRatio,
+		DefaultOutputTokensFloor,
+	)
+}
+
+// CalculateMaxOutputTokensWithParams computes the remaining output token budget
+// with custom parameters. Returns 0 if modelMaxOutput is 0.
+func CalculateMaxOutputTokensWithParams(
+	contextWindow, usedTokens, modelMaxOutput int,
+	protocolOverheadTokens int,
+	safetyMarginRatio float64,
+	outputTokensFloor int,
+) int {
+	if modelMaxOutput <= 0 {
+		return 0
+	}
+	safetyMargin := int(float64(contextWindow) * safetyMarginRatio)
+	remaining := contextWindow - usedTokens - protocolOverheadTokens - safetyMargin
+	return max(min(remaining, modelMaxOutput), outputTokensFloor)
+}
