@@ -613,30 +613,16 @@ func GetAllModelContextWindows() map[string]int {
 
 // ModelMaxOutputTokens maps model names to their maximum output (completion) token limits.
 // These are the provider-documented caps on response length, distinct from context window size.
+// Where all variants share the same value, only the base name is listed — the prefix
+// heuristic in ResolveMaxOutputTokens handles matching (e.g. "gpt-5.2" matches "gpt-5.2-mini").
 var ModelMaxOutputTokens = map[string]int{
-	// OpenAI GPT-5.2
-	"gpt-5.2":           65536,
-	"gpt-5.2-instant":   65536,
-	"gpt-5.2-codex-max": 65536,
-	"gpt-5.2-mini":      65536,
-	"gpt-5.2-nano":      65536,
+	// OpenAI GPT-5.x family: all variants share 128K max output.
+	"gpt-5":   128000,
+	"gpt-5.1": 128000,
+	"gpt-5.2": 128000,
 
-	// OpenAI GPT-5.1
-	"gpt-5.1":           65536,
-	"gpt-5.1-instant":   65536,
-	"gpt-5.1-codex-max": 65536,
-	"gpt-5.1-mini":      65536,
-	"gpt-5.1-nano":      65536,
-
-	// OpenAI GPT-5
-	"gpt-5":      65536,
-	"gpt-5-mini": 65536,
-	"gpt-5-nano": 65536,
-
-	// OpenAI GPT-4.1
-	"gpt-4.1":      32768,
-	"gpt-4.1-mini": 32768,
-	"gpt-4.1-nano": 32768,
+	// OpenAI GPT-4.1: all variants share 32K max output.
+	"gpt-4.1": 32768,
 
 	// OpenAI GPT-4.5
 	"gpt-4.5-preview": 16384,
@@ -681,7 +667,7 @@ var ModelMaxOutputTokens = map[string]int{
 
 	// DeepSeek
 	"deepseek-chat":     8192,
-	"deepseek-reasoner": 16384,
+	"deepseek-reasoner": 65536,
 }
 
 // ResolveMaxOutputTokens returns the max output tokens for a given model name.
