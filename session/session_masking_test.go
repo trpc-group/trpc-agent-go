@@ -198,6 +198,24 @@ func TestGetEvents_IncludesMaskedEvents(t *testing.T) {
 	assert.Len(t, visible, 3, "GetVisibleEvents excludes masked events")
 }
 
+func TestClone_PreservesMaskedEvents(t *testing.T) {
+	sess := newTestSession(5)
+	sess.MaskEvents([]string{"evt-1", "evt-3"})
+
+	cloned := sess.Clone()
+
+	// Cloned session should have the same mask state.
+	assert.True(t, cloned.IsEventMasked("evt-1"))
+	assert.True(t, cloned.IsEventMasked("evt-3"))
+	assert.False(t, cloned.IsEventMasked("evt-0"))
+	assert.Len(t, cloned.GetVisibleEvents(), 3)
+
+	// Mutating clone's mask should not affect original.
+	cloned.UnmaskEvents([]string{"evt-1"})
+	assert.True(t, sess.IsEventMasked("evt-1"), "original should be unaffected by clone mutation")
+	assert.False(t, cloned.IsEventMasked("evt-1"), "clone should be unmasked")
+}
+
 func TestMaskEvents_ConcurrentSafety(t *testing.T) {
 	sess := newTestSession(100)
 

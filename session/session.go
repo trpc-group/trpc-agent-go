@@ -94,6 +94,14 @@ func (sess *Session) Clone() *Session {
 	}
 	// Copy events.
 	copy(copiedSess.Events, sess.Events)
+
+	// Copy masked event IDs.
+	if len(sess.maskedEventIDs) > 0 {
+		copiedSess.maskedEventIDs = make(map[string]bool, len(sess.maskedEventIDs))
+		for id := range sess.maskedEventIDs {
+			copiedSess.maskedEventIDs[id] = true
+		}
+	}
 	sess.EventMu.RUnlock()
 
 	// Copy track events.
