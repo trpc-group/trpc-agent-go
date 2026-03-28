@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1024,6 +1025,111 @@ func TestLocalCodeExecutor_CleanTempFiles_PreservesExistingFile(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, codeFiles, 1)
 	require.Equal(t, existingPath, codeFiles[0])
+}
+
+// TestLocalCodeExecutor_ConcurrentExecution_WorkDir verifies that concurrent
+// ExecuteCode calls sharing the same WorkDir produce correct, non-interleaved
+// output. This is the primary test for the script isolation fix.
+func TestLocalCodeExecutor_ConcurrentExecution_WorkDir(t *testing.T) {
+	if !isExecutableAvailable("bash") {
+		t.Skip("Skipping test because bash is not available")
+	}
+
+	const goroutines = 10 // number of concurrent calls
+
+	tempDir := t.TempDir()
+	executor := local.New(
+		local.WithWorkDir(tempDir),
+		local.WithCleanTempFiles(true),
+		local.WithTimeout(10*time.Second),
+	)
+
+	// Each goroutine echoes its own unique ID and sleeps briefly to increase
+	// the chance of interleaving if isolation is broken.
+	var wg sync.WaitGroup
+	results := make([]codeexecutor.CodeExecutionResult, goroutines)
+	errs := make([]error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			id := fmt.Sprintf("goroutine-%d", idx)
+			input := codeexecutor.CodeExecutionInput{
+				CodeBlocks: []codeexecutor.CodeBlock{{
+					Language: "bash",
+					Code:     fmt.Sprintf("echo %s", id),
+				}},
+				ExecutionID: id,
+			}
+			results[idx], errs[idx] = executor.ExecuteCode(
+				context.Background(), input,
+			)
+		}(i)
+	}
+	wg.Wait()
+
+	// Every goroutine should succeed and produce its own unique output.
+	for i := 0; i < goroutines; i++ {
+		require.NoError(t, errs[i], "goroutine %d failed", i)
+		expected := fmt.Sprintf("goroutine-%d", i)
+		require.Contains(t, results[i].Output, expected,
+			"goroutine %d: output should contain its unique ID", i)
+		// Ensure no other goroutine's output leaked into this result.
+		for j := 0; j < goroutines; j++ {
+			if j == i {
+				continue
+			}
+			other := fmt.Sprintf("goroutine-%d", j)
+			assert.NotContains(t, results[i].Output, other,
+				"goroutine %d output should not contain goroutine %d output", i, j)
+		}
+	}
+}
+
+// TestLocalCodeExecutor_ConcurrentExecution_NoWorkDir verifies that concurrent
+// ExecuteCode calls without WorkDir (temp directory mode) also work correctly.
+func TestLocalCodeExecutor_ConcurrentExecution_NoWorkDir(t *testing.T) {
+	if !isExecutableAvailable("bash") {
+		t.Skip("Skipping test because bash is not available")
+	}
+
+	const goroutines = 10
+
+	executor := local.New(
+		local.WithCleanTempFiles(true),
+		local.WithTimeout(10*time.Second),
+	)
+
+	var wg sync.WaitGroup
+	results := make([]codeexecutor.CodeExecutionResult, goroutines)
+	errs := make([]error, goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			id := fmt.Sprintf("noworkdir-%d", idx)
+			input := codeexecutor.CodeExecutionInput{
+				CodeBlocks: []codeexecutor.CodeBlock{{
+					Language: "bash",
+					Code:     fmt.Sprintf("echo %s", id),
+				}},
+				ExecutionID: id,
+			}
+			results[idx], errs[idx] = executor.ExecuteCode(
+				context.Background(), input,
+			)
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 0; i < goroutines; i++ {
+		require.NoError(t, errs[i], "goroutine %d failed", i)
+		expected := fmt.Sprintf("noworkdir-%d", i)
+		require.Contains(t, results[i].Output, expected,
+			"goroutine %d: output should contain its unique ID", i)
+	}
 }
 
 func TestLocalCodeExecutor_CleanTempFiles_ReadOnlyWorkDir(t *testing.T) {
