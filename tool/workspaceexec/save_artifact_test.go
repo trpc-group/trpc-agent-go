@@ -29,11 +29,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
-func TestPublishArtifactTool_PublishesExistingFile(t *testing.T) {
+func TestSaveArtifactTool_PublishesExistingFile(t *testing.T) {
 	exec := localexec.New()
 	reg := codeexecutor.NewWorkspaceRegistry()
 	execTool := NewExecTool(exec, WithWorkspaceRegistry(reg))
-	tl := NewPublishArtifactTool(execTool)
+	tl := NewSaveArtifactTool(execTool)
 	svc := inmemory.NewService()
 	inv := agent.NewInvocation(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
@@ -57,12 +57,12 @@ func TestPublishArtifactTool_PublishesExistingFile(t *testing.T) {
 	data := []byte("zip-payload")
 	require.NoError(t, os.WriteFile(path, data, 0o644))
 
-	enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+	enc, err := json.Marshal(saveArtifactInput{Path: "out/site.zip"})
 	require.NoError(t, err)
 
 	res, err := tl.Call(ctx, enc)
 	require.NoError(t, err)
-	out := res.(publishArtifactOutput)
+	out := res.(saveArtifactOutput)
 	require.Equal(t, "out/site.zip", out.Path)
 	require.Equal(t, "out/site.zip", out.SavedAs)
 	require.Equal(t, 0, out.Version)
@@ -79,9 +79,9 @@ func TestPublishArtifactTool_PublishesExistingFile(t *testing.T) {
 	require.Equal(t, data, art.Data)
 }
 
-func TestPublishArtifactTool_RequiresArtifactService(t *testing.T) {
+func TestSaveArtifactTool_RequiresArtifactService(t *testing.T) {
 	exec := localexec.New()
-	tl := NewPublishArtifactTool(NewExecTool(exec))
+	tl := NewSaveArtifactTool(NewExecTool(exec))
 	inv := agent.NewInvocation(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
 		agent.WithInvocationSession(&session.Session{
@@ -92,7 +92,7 @@ func TestPublishArtifactTool_RequiresArtifactService(t *testing.T) {
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+	enc, err := json.Marshal(saveArtifactInput{Path: "out/site.zip"})
 	require.NoError(t, err)
 
 	_, err = tl.Call(ctx, enc)
@@ -100,9 +100,9 @@ func TestPublishArtifactTool_RequiresArtifactService(t *testing.T) {
 	require.Contains(t, err.Error(), "artifact service is not configured")
 }
 
-func TestPublishArtifactTool_RejectsGlobPath(t *testing.T) {
-	tl := NewPublishArtifactTool(NewExecTool(localexec.New()))
-	enc, err := json.Marshal(publishArtifactInput{Path: "out/*.zip"})
+func TestSaveArtifactTool_RejectsGlobPath(t *testing.T) {
+	tl := NewSaveArtifactTool(NewExecTool(localexec.New()))
+	enc, err := json.Marshal(saveArtifactInput{Path: "out/*.zip"})
 	require.NoError(t, err)
 
 	_, err = tl.Call(context.Background(), enc)
@@ -110,10 +110,10 @@ func TestPublishArtifactTool_RejectsGlobPath(t *testing.T) {
 	require.Contains(t, err.Error(), "must not contain glob patterns")
 }
 
-func TestPublishArtifactTool_RejectsSkillsPath(t *testing.T) {
-	tl := NewPublishArtifactTool(NewExecTool(localexec.New()))
+func TestSaveArtifactTool_RejectsSkillsPath(t *testing.T) {
+	tl := NewSaveArtifactTool(NewExecTool(localexec.New()))
 	enc, err := json.Marshal(
-		publishArtifactInput{Path: "skills/demo/out/site.zip"},
+		saveArtifactInput{Path: "skills/demo/out/site.zip"},
 	)
 	require.NoError(t, err)
 
@@ -122,12 +122,12 @@ func TestPublishArtifactTool_RejectsSkillsPath(t *testing.T) {
 	require.Contains(
 		t,
 		err.Error(),
-		"path must stay under supported publish roots such as work/, out/, or runs/",
+		"path must stay under supported artifact roots such as work/, out/, or runs/",
 	)
 }
 
-func TestPublishArtifactTool_StateDelta(t *testing.T) {
-	tl := NewPublishArtifactTool(NewExecTool(localexec.New()))
+func TestSaveArtifactTool_StateDelta(t *testing.T) {
+	tl := NewSaveArtifactTool(NewExecTool(localexec.New()))
 	resultJSON := []byte(`{
 		"path":"out/site.zip",
 		"saved_as":"out/site.zip",
@@ -158,29 +158,29 @@ func TestPublishArtifactTool_StateDelta(t *testing.T) {
 	require.Equal(t, "artifact://out/site.zip@2", artifactMap["ref"])
 }
 
-func TestPublishArtifactTool_Declaration(t *testing.T) {
-	tl := NewPublishArtifactTool(NewExecTool(localexec.New()))
+func TestSaveArtifactTool_Declaration(t *testing.T) {
+	tl := NewSaveArtifactTool(NewExecTool(localexec.New()))
 
 	decl := tl.Declaration()
 	require.NotNil(t, decl)
-	require.Equal(t, "workspace_publish_artifact", decl.Name)
-	require.Contains(t, decl.Description, "final deliverables")
+	require.Equal(t, "workspace_save_artifact", decl.Name)
+	require.Contains(t, decl.Description, "stable artifact reference")
 	require.Contains(t, decl.Description, "work/, out/, or runs/")
 }
 
-func TestPublishArtifactTool_RequiresInvocationContext(t *testing.T) {
-	tl := NewPublishArtifactTool(NewExecTool(localexec.New()))
-	enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+func TestSaveArtifactTool_RequiresInvocationContext(t *testing.T) {
+	tl := NewSaveArtifactTool(NewExecTool(localexec.New()))
+	enc, err := json.Marshal(saveArtifactInput{Path: "out/site.zip"})
 	require.NoError(t, err)
 
 	_, err = tl.Call(context.Background(), enc)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), publishReasonNoInvocation)
+	require.Contains(t, err.Error(), saveReasonNoInvocation)
 }
 
-func TestPublishArtifactTool_RequiresCompleteSessionIDs(t *testing.T) {
+func TestSaveArtifactTool_RequiresCompleteSessionIDs(t *testing.T) {
 	exec := localexec.New()
-	tl := NewPublishArtifactTool(NewExecTool(exec))
+	tl := NewSaveArtifactTool(NewExecTool(exec))
 	svc := inmemory.NewService()
 	inv := agent.NewInvocation(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
@@ -188,15 +188,15 @@ func TestPublishArtifactTool_RequiresCompleteSessionIDs(t *testing.T) {
 		agent.WithInvocationArtifactService(svc),
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
-	enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+	enc, err := json.Marshal(saveArtifactInput{Path: "out/site.zip"})
 	require.NoError(t, err)
 
 	_, err = tl.Call(ctx, enc)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), publishReasonNoSessionIDs)
+	require.Contains(t, err.Error(), saveReasonNoSessionIDs)
 }
 
-func TestPublishArtifactTool_NormalizesPathVariants(t *testing.T) {
+func TestSaveArtifactTool_NormalizesPathVariants(t *testing.T) {
 	rel, err := normalizeArtifactPath("/out/site.zip")
 	require.NoError(t, err)
 	require.Equal(t, "out/site.zip", rel)
@@ -206,7 +206,7 @@ func TestPublishArtifactTool_NormalizesPathVariants(t *testing.T) {
 	require.Equal(t, "out/site.zip", rel)
 }
 
-func TestPublishArtifactTool_NormalizePathValidation(t *testing.T) {
+func TestSaveArtifactTool_NormalizePathValidation(t *testing.T) {
 	_, err := normalizeArtifactPath("")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "path is required")
@@ -221,14 +221,14 @@ func TestPublishArtifactTool_NormalizePathValidation(t *testing.T) {
 
 	_, err = normalizeArtifactPath("tmp/site.zip")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "supported publish roots")
+	require.Contains(t, err.Error(), "supported artifact roots")
 }
 
-func TestPublishArtifactTool_RejectsMissingFile(t *testing.T) {
+func TestSaveArtifactTool_RejectsMissingFile(t *testing.T) {
 	exec := localexec.New()
 	reg := codeexecutor.NewWorkspaceRegistry()
 	execTool := NewExecTool(exec, WithWorkspaceRegistry(reg))
-	tl := NewPublishArtifactTool(execTool)
+	tl := NewSaveArtifactTool(execTool)
 	svc := inmemory.NewService()
 	inv := agent.NewInvocation(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
@@ -245,7 +245,7 @@ func TestPublishArtifactTool_RejectsMissingFile(t *testing.T) {
 	_, err := execTool.resolver.CreateWorkspace(ctx, eng, "workspace")
 	require.NoError(t, err)
 
-	enc, err := json.Marshal(publishArtifactInput{Path: "out/missing.zip"})
+	enc, err := json.Marshal(saveArtifactInput{Path: "out/missing.zip"})
 	require.NoError(t, err)
 
 	_, err = tl.Call(ctx, enc)
@@ -253,9 +253,9 @@ func TestPublishArtifactTool_RejectsMissingFile(t *testing.T) {
 	require.Contains(t, err.Error(), "workspace artifact file not found")
 }
 
-func TestPublishArtifactTool_ManifestFailures(t *testing.T) {
+func TestSaveArtifactTool_ManifestFailures(t *testing.T) {
 	t.Run("multiple matches", func(t *testing.T) {
-		tl := NewPublishArtifactTool(newStubExecTool(
+		tl := NewSaveArtifactTool(newStubExecTool(
 			stubOutputFS{manifest: codeexecutor.OutputManifest{
 				Files: []codeexecutor.FileRef{
 					{Name: "out/a.zip"},
@@ -263,8 +263,8 @@ func TestPublishArtifactTool_ManifestFailures(t *testing.T) {
 				},
 			}},
 		))
-		ctx := publishArtifactContext()
-		enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+		ctx := saveArtifactContext()
+		enc, err := json.Marshal(saveArtifactInput{Path: "out/site.zip"})
 		require.NoError(t, err)
 
 		_, err = tl.Call(ctx, enc)
@@ -273,13 +273,13 @@ func TestPublishArtifactTool_ManifestFailures(t *testing.T) {
 	})
 
 	t.Run("save omitted", func(t *testing.T) {
-		tl := NewPublishArtifactTool(newStubExecTool(
+		tl := NewSaveArtifactTool(newStubExecTool(
 			stubOutputFS{manifest: codeexecutor.OutputManifest{
 				Files: []codeexecutor.FileRef{{Name: "out/site.zip"}},
 			}},
 		))
-		ctx := publishArtifactContext()
-		enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+		ctx := saveArtifactContext()
+		enc, err := json.Marshal(saveArtifactInput{Path: "out/site.zip"})
 		require.NoError(t, err)
 
 		_, err = tl.Call(ctx, enc)
@@ -288,11 +288,11 @@ func TestPublishArtifactTool_ManifestFailures(t *testing.T) {
 	})
 
 	t.Run("collect outputs error", func(t *testing.T) {
-		tl := NewPublishArtifactTool(newStubExecTool(
+		tl := NewSaveArtifactTool(newStubExecTool(
 			stubOutputFS{err: errors.New("boom")},
 		))
-		ctx := publishArtifactContext()
-		enc, err := json.Marshal(publishArtifactInput{Path: "out/site.zip"})
+		ctx := saveArtifactContext()
+		enc, err := json.Marshal(saveArtifactInput{Path: "out/site.zip"})
 		require.NoError(t, err)
 
 		_, err = tl.Call(ctx, enc)
@@ -301,8 +301,8 @@ func TestPublishArtifactTool_ManifestFailures(t *testing.T) {
 	})
 }
 
-func TestPublishArtifactTool_StateDeltaFallbacks(t *testing.T) {
-	tl := NewPublishArtifactTool(NewExecTool(localexec.New()))
+func TestSaveArtifactTool_StateDeltaFallbacks(t *testing.T) {
+	tl := NewSaveArtifactTool(NewExecTool(localexec.New()))
 
 	require.Nil(t, tl.StateDelta("", nil, []byte(`{}`)))
 	require.Nil(t, tl.StateDelta("call-1", nil, []byte(`not-json`)))
@@ -327,8 +327,8 @@ func TestPublishArtifactTool_StateDeltaFallbacks(t *testing.T) {
 	require.Nil(t, tl.StateDelta("call-4", nil, []byte(`{"saved_as":"out/site.zip","version":-1}`)))
 }
 
-func TestPublishArtifactTool_ArtifactContextHelpers(t *testing.T) {
-	require.Equal(t, publishReasonNoInvocation, artifactPublishSkipReason(context.Background()))
+func TestSaveArtifactTool_ArtifactContextHelpers(t *testing.T) {
+	require.Equal(t, saveReasonNoInvocation, artifactSaveSkipReason(context.Background()))
 
 	noSvc := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
@@ -338,32 +338,35 @@ func TestPublishArtifactTool_ArtifactContextHelpers(t *testing.T) {
 			UserID:  "user",
 		}),
 	))
-	require.Equal(t, publishReasonNoService, artifactPublishSkipReason(noSvc))
+	require.Equal(t, saveReasonNoService, artifactSaveSkipReason(noSvc))
 
 	noSession := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
 		agent.WithInvocationArtifactService(inmemory.NewService()),
 	))
-	require.Equal(t, publishReasonNoSession, artifactPublishSkipReason(noSession))
+	require.Equal(t, saveReasonNoSession, artifactSaveSkipReason(noSession))
 
 	incompleteSession := agent.NewInvocationContext(context.Background(), agent.NewInvocation(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
 		agent.WithInvocationArtifactService(inmemory.NewService()),
 		agent.WithInvocationSession(&session.Session{ID: "sess"}),
 	))
-	require.Equal(t, publishReasonNoSessionIDs, artifactPublishSkipReason(incompleteSession))
+	require.Equal(t, saveReasonNoSessionIDs, artifactSaveSkipReason(incompleteSession))
 
-	ctx := publishArtifactContext()
-	require.Equal(t, "", artifactPublishSkipReason(ctx))
+	ctx := saveArtifactContext()
+	require.Equal(t, "", artifactSaveSkipReason(ctx))
+	inv, ok := agent.InvocationFromContext(ctx)
+	require.True(t, ok)
+	require.True(t, SupportsArtifactSave(inv))
 
 	ctx = withArtifactContext(ctx)
-	_, ok := codeexecutor.ArtifactServiceFromContext(ctx)
+	_, ok = codeexecutor.ArtifactServiceFromContext(ctx)
 	require.True(t, ok)
 	_, err := codeexecutor.SaveArtifactHelper(ctx, "out/site.zip", []byte("payload"), "text/plain")
 	require.NoError(t, err)
 }
 
-func publishArtifactContext() context.Context {
+func saveArtifactContext() context.Context {
 	svc := inmemory.NewService()
 	inv := agent.NewInvocation(
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),

@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
+	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 const (
@@ -152,18 +153,12 @@ func (p *WorkspaceExecRequestProcessor) guidanceText(
 	b.WriteString("This applies to checks such as command ")
 	b.WriteString("availability, file presence, or access to a known ")
 	b.WriteString("URL.\n")
-	b.WriteString("- Use workspace_publish_artifact only when an ")
-	b.WriteString("already existing file in work/, out/, or runs/ is a ")
-	b.WriteString("final deliverable and you need a stable artifact ")
-	b.WriteString("reference. If the user needs to download, open, or ")
-	b.WriteString("preview a generated file through the UI, try ")
-	b.WriteString("workspace_publish_artifact. Intermediate files ")
-	b.WriteString("usually stay in the workspace.\n")
-	b.WriteString("- If workspace_publish_artifact clearly fails ")
-	b.WriteString("because artifact service or session info is not ")
-	b.WriteString("configured, treat that as an environment limitation ")
-	b.WriteString("for this invocation and do not keep retrying the ")
-	b.WriteString("same publish attempt unchanged.\n")
+	if toolworkspaceexec.SupportsArtifactSave(inv) {
+		b.WriteString("- Use workspace_save_artifact only when you ")
+		b.WriteString("need a stable artifact reference for an already ")
+		b.WriteString("existing file in work/, out/, or runs/. ")
+		b.WriteString("Intermediate files usually stay in the workspace.\n")
+	}
 	if p.hasSkillsRepo(inv) {
 		b.WriteString("- Paths under skills/ are only useful when some ")
 		b.WriteString("other tool has already placed content there. ")
