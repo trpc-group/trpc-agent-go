@@ -238,6 +238,33 @@ repo, _ := skill.NewFSRepository(
 )
 ```
 
+如果是一个常驻 Agent 服务复用同一个 skills 仓库来处理多种请求，
+可以再加一层按请求生效的可见性过滤。过滤函数可以从 `ctx` /
+运行时状态里读取任意业务信号（例如 `user_id`、`tenant_id`、角色、
+实验开关等），并把不匹配的 skill 从概览、工具声明和运行时校验里
+一起隐藏。下面用 `user_id` 只是举例：
+
+```go
+agt := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillFilter(func(ctx context.Context, s skill.Summary) bool {
+        userID, _ := agent.GetRuntimeStateValueFromContext[string](ctx, "user_id")
+        return allow(userID, s.Name)
+    }),
+)
+
+r := runner.NewRunner("skills-app", agt)
+
+ch, _ := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("..."),
+    agent.WithRuntimeState(map[string]any{"user_id": userID}),
+)
+```
+
 如果你的进程在启动后还会安装、删除或重命名 skill，请在文件系统
 变更完成后调用一次 `repo.Refresh()`，让下一轮请求看到最新技能
 集合。`Refresh()` 适用于仓库结构变化，不建议每次请求前都调用。

@@ -18,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -117,4 +118,38 @@ func TestListDocsTool_UnknownSkill(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown skill: ")
 	require.Contains(t, err.Error(), otherSkill)
+}
+
+func TestListDocsTool_ContextAwareRepoHonorsFilter(t *testing.T) {
+	root1 := createListTestSkill(t, demoSkill)
+	root2 := createListTestSkill(t, otherSkill)
+	base, err := skill.NewFSRepository(root1, root2)
+	require.NoError(t, err)
+	repo := skill.NewFilteredRepository(
+		base,
+		func(ctx context.Context, summary skill.Summary) bool {
+			userID, _ := agent.GetRuntimeStateValueFromContext[string](
+				ctx,
+				"user_id",
+			)
+			return userID == "user-a" && summary.Name == demoSkill
+		},
+	)
+	lt := NewListDocsTool(repo)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+		})),
+	)
+
+	out, err := lt.Call(ctx, []byte(`{"skill":"`+demoSkill+`"}`))
+	require.NoError(t, err)
+	b, _ := json.Marshal(out)
+	var arr []string
+	require.NoError(t, json.Unmarshal(b, &arr))
+	require.NotEmpty(t, arr)
+
+	_, err = lt.Call(ctx, []byte(`{"skill":"`+otherSkill+`"}`))
+	require.ErrorContains(t, err, "unknown skill: "+otherSkill)
 }
