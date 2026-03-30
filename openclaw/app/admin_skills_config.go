@@ -12,6 +12,7 @@ package app
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,21 +96,22 @@ func (p *adminSkillsProvider) SetSkillEnabled(
 		return fmt.Errorf("skill config key is required")
 	}
 
-	path := p.SkillsConfigPath()
+	path := ""
+	value := enabled
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	path = strings.TrimSpace(p.configPath)
 	if path == "" {
 		return fmt.Errorf("skill toggles require a config-backed runtime")
 	}
-
 	if err := setSkillEnabledInConfig(path, key, enabled); err != nil {
 		return err
 	}
-
-	value := enabled
-	p.mu.Lock()
 	repo := p.repo
-	defer p.mu.Unlock()
 	if repo != nil {
-		return repo.SetSkillEnabled(key, enabled)
+		if err := repo.SetSkillEnabled(key, enabled); err != nil {
+			return err
+		}
 	}
 	if p.skillConfigs == nil {
 		p.skillConfigs = map[string]ocskills.SkillConfig{}
@@ -227,12 +229,16 @@ func decodeConfigDocument(data []byte) (yaml.Node, error) {
 	}
 
 	var extra any
-	if err := dec.Decode(&extra); err == nil && extra != nil {
-		return yaml.Node{}, fmt.Errorf(
-			"multiple YAML documents are not supported",
-		)
+	err := dec.Decode(&extra)
+	if err == io.EOF {
+		return doc, nil
 	}
-	return doc, nil
+	if err != nil {
+		return yaml.Node{}, err
+	}
+	return yaml.Node{}, fmt.Errorf(
+		"multiple YAML documents are not supported",
+	)
 }
 
 func ensureDocumentMapping(doc *yaml.Node) (*yaml.Node, error) {

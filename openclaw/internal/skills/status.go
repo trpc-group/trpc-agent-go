@@ -82,7 +82,7 @@ func (r *Repository) Status() StatusReport {
 		return StatusReport{}
 	}
 
-	sums := r.base.Summaries()
+	sums := append([]skill.Summary(nil), r.base.Summaries()...)
 	sort.Slice(sums, func(i, j int) bool {
 		return strings.TrimSpace(sums[i].Name) < strings.TrimSpace(sums[j].Name)
 	})

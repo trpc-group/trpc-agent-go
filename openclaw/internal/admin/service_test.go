@@ -11,6 +11,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -287,6 +288,7 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 	require.Contains(t, body, "/skills")
 	require.Contains(t, body, "127.0.0.1:8080")
 	require.Contains(t, body, "telegram")
+	require.Equal(t, 1, strings.Count(body, "</main>"))
 }
 
 func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
@@ -327,6 +329,25 @@ func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
 	require.Contains(t, body, "/skills")
 	require.Contains(t, body, "/tmp/openclaw.yaml")
 	require.Contains(t, body, "OPENAI_API_KEY")
+}
+
+func TestServiceSkillsStatusErrorRetainsRecoveryFields(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Skills: &stubSkillsProvider{
+			configPath:  "/tmp/openclaw.yaml",
+			refreshable: true,
+			err:         errors.New("skills status boom"),
+		},
+	})
+
+	status := svc.skillsStatus()
+	require.True(t, status.Enabled)
+	require.True(t, status.Writable)
+	require.True(t, status.Refreshable)
+	require.Equal(t, "/tmp/openclaw.yaml", status.ConfigPath)
+	require.Equal(t, "skills status boom", status.Error)
 }
 
 func TestServiceSkillsJSONEndpoint(t *testing.T) {

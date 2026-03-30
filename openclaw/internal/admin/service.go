@@ -530,21 +530,21 @@ func (s *Service) skillsStatus() skillsStatus {
 		return skillsStatus{}
 	}
 
-	report, err := s.cfg.Skills.SkillsStatus()
-	if err != nil {
-		return skillsStatus{
-			Enabled: true,
-			Error:   strings.TrimSpace(err.Error()),
-		}
-	}
-
+	configPath := strings.TrimSpace(s.cfg.Skills.SkillsConfigPath())
 	out := skillsStatus{
 		Enabled:     true,
-		Writable:    strings.TrimSpace(s.cfg.Skills.SkillsConfigPath()) != "",
+		Writable:    configPath != "",
 		Refreshable: s.cfg.Skills.SkillsRefreshable(),
-		ConfigPath:  strings.TrimSpace(s.cfg.Skills.SkillsConfigPath()),
-		TotalCount:  len(report.Skills),
+		ConfigPath:  configPath,
 	}
+
+	report, err := s.cfg.Skills.SkillsStatus()
+	if err != nil {
+		out.Error = strings.TrimSpace(err.Error())
+		return out
+	}
+
+	out.TotalCount = len(report.Skills)
 
 	bundledSkills := make([]skillView, 0, len(report.Skills))
 	otherSkills := make([]skillView, 0, len(report.Skills))
@@ -3628,7 +3628,6 @@ const adminPageHTML = `<!doctype html>
       {{end}}
     </section>
     {{end}}
-  </main>
   <script>
     (function () {
       const root = document.querySelector("[data-skills-root]");

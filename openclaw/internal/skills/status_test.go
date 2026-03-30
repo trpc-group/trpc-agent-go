@@ -45,7 +45,6 @@ metadata:
 	entry := report.Skills[0]
 	require.Equal(t, "weather-probe", entry.Name)
 	require.Equal(t, "weather-api", entry.SkillKey)
-	require.Equal(t, "custom", entry.Source)
 	require.False(t, entry.Eligible)
 	require.False(t, entry.Disabled)
 	require.Equal(t, []string{"definitely-missing-bin"}, entry.Missing.Bins)

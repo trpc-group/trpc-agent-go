@@ -65,6 +65,22 @@ skills:
 	require.True(t, *cfg.Skills.Entries["weather-api"].Enabled)
 }
 
+func TestDecodeConfigDocument_RejectsMultipleDocuments(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeConfigDocument([]byte("app_name: demo\n---\nextra: true\n"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "multiple YAML documents")
+}
+
+func TestDecodeConfigDocument_RejectsMalformedTrailingDocument(t *testing.T) {
+	t.Parallel()
+
+	_, err := decodeConfigDocument([]byte("app_name: demo\n---\n: bad\n"))
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "multiple YAML documents")
+}
+
 func TestAdminSkillsProviderSetSkillEnabled_UpdatesMemory(t *testing.T) {
 	t.Parallel()
 

@@ -214,12 +214,12 @@ func (r *Repository) SkillRunEnv(
 	_ context.Context,
 	skillName string,
 ) (map[string]string, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	if r == nil || r.base == nil {
 		return nil, nil
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	name := strings.TrimSpace(skillName)
 	if name == "" {
 		return nil, nil
@@ -263,12 +263,11 @@ func (r *Repository) SkillRunEnv(
 func (r *Repository) DependencySources(
 	names []string,
 ) ([]deps.Source, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
 	if r == nil || r.base == nil {
 		return nil, nil
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
 	selected := normalizeSkillNames(names)
 	summaries := r.base.Summaries()
