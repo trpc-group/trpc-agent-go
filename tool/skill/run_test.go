@@ -4618,6 +4618,38 @@ func TestCopySkillStager_StageSkill_PropagatesStageError(t *testing.T) {
 	require.ErrorContains(t, err, "workspace fs is not configured")
 }
 
+func TestCopySkillStager_StageSkill_ContextAwareRepoRejectsHiddenSkill(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	writeSkill(t, root, "other")
+
+	base, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	repo := skill.NewFilteredRepository(
+		base,
+		func(ctx context.Context, summary skill.Summary) bool {
+			userID, _ := agent.GetRuntimeStateValueFromContext[string](
+				ctx,
+				"user_id",
+			)
+			return userID == "user-a" && summary.Name == testSkillName
+		},
+	)
+
+	stager := &copySkillStager{tool: &RunTool{}}
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+		})),
+	)
+	_, err = stager.StageSkill(ctx, SkillStageRequest{
+		SkillName:  "other",
+		Repository: repo,
+	})
+	require.EqualError(t, err, `skill "other" not found`)
+}
+
 func TestNormalizeSkillStageResult(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
 
@@ -203,6 +204,15 @@ func TestWithSkillsLoadedContentInToolResults(t *testing.T) {
 
 	b := New("test-agent", WithSkillsLoadedContentInToolResults(true))
 	require.True(t, b.option.SkillsLoadedContentInToolResults)
+}
+
+func TestWithSkillFilter(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.skillFilter)
+
+	filter := func(context.Context, skill.Summary) bool { return true }
+	b := New("test-agent", WithSkillFilter(filter))
+	require.NotNil(t, b.option.skillFilter)
 }
 
 func TestWithSkipSkillsFallbackOnSessionSummary(t *testing.T) {
