@@ -116,23 +116,45 @@ func (e *CodeExecutor) ExecuteCode(
 ) (codeexecutor.CodeExecutionResult, error) {
 	var output strings.Builder
 
-	// Determine working directory
-	var workDir string
+	// Determine working directory for the command CWD and a separate
+	// script directory for writing intermediate script files.
+	// When WorkDir is set, we create a unique temp subdirectory inside it
+	// for script files to avoid collisions from concurrent ExecuteCode calls
+	// (e.g. multiple calls all writing to code_0.sh).
+	var cmdDir string    // CWD for the executed command
+	var scriptDir string // directory where script files are written
 	var shouldCleanup bool
 
 	if e.WorkDir != "" {
-		workDir = e.WorkDir
-		if !filepath.IsAbs(workDir) {
-			if abs, err := filepath.Abs(workDir); err == nil {
-				workDir = abs
+		cmdDir = e.WorkDir
+		if !filepath.IsAbs(cmdDir) {
+			if abs, err := filepath.Abs(cmdDir); err == nil {
+				cmdDir = abs
 			}
 		}
-		if err := os.MkdirAll(workDir, 0o755); err != nil {
+		if err := os.MkdirAll(cmdDir, 0o755); err != nil {
 			return codeexecutor.CodeExecutionResult{}, fmt.Errorf(
 				"failed to create work directory: %w", err,
 			)
 		}
-		shouldCleanup = false
+		if e.CleanTempFiles {
+			// Create a unique temp subdirectory for script files to prevent
+			// concurrent calls from overwriting each other's code_0.sh.
+			tmpDir, err := os.MkdirTemp(cmdDir, ".exec_")
+			if err != nil {
+				// Fall back to writing scripts directly into WorkDir.
+				// Per-block errors will surface via result.Output.
+				scriptDir = cmdDir
+			} else {
+				scriptDir = tmpDir
+				// Clean up the temp script directory after execution.
+				defer os.RemoveAll(scriptDir)
+			}
+		} else {
+			// When CleanTempFiles is false, write scripts directly into
+			// WorkDir so they can be inspected after execution.
+			scriptDir = cmdDir
+		}
 	} else {
 		tempDir, err := os.MkdirTemp("", "codeexec_"+input.ExecutionID)
 		if err != nil {
@@ -140,21 +162,17 @@ func (e *CodeExecutor) ExecuteCode(
 				"failed to create temp directory: %w", err,
 			)
 		}
-		workDir = tempDir
+		cmdDir = tempDir
+		scriptDir = tempDir
 		shouldCleanup = e.CleanTempFiles
 	}
 
 	if shouldCleanup {
-		defer os.RemoveAll(workDir)
+		defer os.RemoveAll(cmdDir)
 	}
 
 	for i, block := range input.CodeBlocks {
-		blockOutput, err := e.executeCodeBlock(
-			ctx,
-			workDir,
-			block,
-			e.WorkDir != "" && e.CleanTempFiles,
-		)
+		blockOutput, err := e.executeCodeBlock(ctx, cmdDir, scriptDir, block)
 		if err != nil {
 			output.WriteString(fmt.Sprintf(
 				"Error executing code block %d: %v\n", i, err,
@@ -173,19 +191,15 @@ func (e *CodeExecutor) ExecuteCode(
 }
 
 func (e *CodeExecutor) executeCodeBlock(
-	ctx context.Context, workDir string,
+	ctx context.Context, cmdDir, scriptDir string,
 	block codeexecutor.CodeBlock,
-	cleanupSource bool,
 ) (string, error) {
-	filePath, err := e.prepareCodeFile(workDir, block)
+	filePath, err := e.prepareCodeFile(scriptDir, block)
 	if err != nil {
 		return "", err
 	}
-	if cleanupSource {
-		defer removeHelperFile(filePath)
-	}
 	cmdArgs := e.buildCommandArgs(block.Language, filePath)
-	return e.executeCommand(ctx, workDir, cmdArgs)
+	return e.executeCommand(ctx, cmdDir, cmdArgs)
 }
 
 // prepareCodeFile writes code to a temporary helper file.
