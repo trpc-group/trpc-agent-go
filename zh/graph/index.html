@@ -5176,6 +5176,11 @@ Runner 运行时开启 <code>agent.WithGraphEmitFinalModelResponses(true)</code>
 Model，LLM）消息（例如用于用户界面（User Interface，UI）的流式展示），可以使用
 <code>agent.WithStreamMode(...)</code> 作为统一开关（见下文“事件监控”）。当选择
 <code>agent.StreamModeMessages</code> 时，Runner 会为本次运行自动开启 Graph 的最终响应事件输出。</p>
+<p>如果你的图里有多个 LLM 节点或子 Agent 节点，而对调用方可见的消息流只应该保留
+terminal 节点的消息，可以在本次运行开启
+<code>agent.WithGraphTerminalMessagesOnly(true)</code>。该选项关闭时保持默认行为完全兼容；开启后
+会保留并行分支上的所有 terminal 节点消息，不会影响图内部的 state 传递、tracing 或
+token 统计。可参考 <code>examples/graph/terminal_messages_only</code>。</p>
 <p>小贴士：解析 JSON/结构化文本（流式）</p>
 <ul>
 <li>流式分片（<code>choice.Delta.Content</code>）是增量输出，在模型调用结束前不保证能组成合法
@@ -10715,7 +10720,7 @@ A2A 对齐，见 <a href="../error-handling/">Error Handling</a>。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月27日 09:25:21 UTC">2026-03-27 09:25:21</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月30日 09:14:47 UTC">2026-03-30 09:14:47</span>
   </span>
 
     
