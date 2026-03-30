@@ -2984,7 +2984,7 @@ const adminPageHTML = `<!doctype html>
         {{end}}
       </div>
       {{end}}
-      {{else}}
+      {{else if not .Snapshot.Skills.Error}}
       <p class="empty">No skills discovered.</p>
       {{end}}
     </section>

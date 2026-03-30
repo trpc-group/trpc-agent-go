@@ -49,6 +49,7 @@ type stubSkillsProvider struct {
 	refreshErr    error
 	lastConfigKey string
 	lastEnabled   bool
+	setCount      int
 	setErr        error
 }
 
@@ -89,6 +90,7 @@ func (p *stubSkillsProvider) SetSkillEnabled(
 	if p == nil {
 		return nil
 	}
+	p.setCount++
 	p.lastConfigKey = configKey
 	p.lastEnabled = enabled
 	return p.setErr
@@ -417,6 +419,27 @@ func TestServiceSkillsStatusErrorRetainsRecoveryFields(t *testing.T) {
 	require.Equal(t, "skills status boom", status.Error)
 }
 
+func TestServiceHandlerSuppressesSkillsEmptyStateOnError(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Skills: &stubSkillsProvider{
+			configPath:  "/tmp/openclaw.yaml",
+			refreshable: true,
+			err:         errors.New("skills status boom"),
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeSkillsPage, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "skills status boom")
+	require.NotContains(t, body, "No skills discovered.")
+}
+
 func TestServiceSkillsJSONEndpoint(t *testing.T) {
 	t.Parallel()
 
@@ -529,9 +552,8 @@ func TestServiceRefreshSkillsEndpoint(t *testing.T) {
 func TestServiceRefreshSkillsEndpointRequiresLiveRepo(t *testing.T) {
 	t.Parallel()
 
-	svc := New(Config{
-		Skills: &stubSkillsProvider{},
-	})
+	provider := &stubSkillsProvider{}
+	svc := New(Config{Skills: provider})
 
 	req := httptest.NewRequest(
 		http.MethodPost,
@@ -549,6 +571,8 @@ func TestServiceRefreshSkillsEndpointRequiresLiveRepo(t *testing.T) {
 	loc, err := url.Parse(rr.Header().Get("Location"))
 	require.NoError(t, err)
 	require.Equal(t, routeSkillsPage, loc.Path)
+	require.Equal(t, "skills-admin", loc.Fragment)
+	require.Zero(t, provider.refreshCount)
 	require.Equal(
 		t,
 		"live skills repository is not available",
@@ -692,9 +716,8 @@ func TestSkillInstallViewsFromStatus_TrimsValues(t *testing.T) {
 func TestServiceToggleSkillEndpointRequiresConfigPath(t *testing.T) {
 	t.Parallel()
 
-	svc := New(Config{
-		Skills: &stubSkillsProvider{},
-	})
+	provider := &stubSkillsProvider{}
+	svc := New(Config{Skills: provider})
 
 	req := httptest.NewRequest(
 		http.MethodPost,
@@ -709,6 +732,7 @@ func TestServiceToggleSkillEndpointRequiresConfigPath(t *testing.T) {
 	svc.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Zero(t, provider.setCount)
 	loc, err := url.Parse(rr.Header().Get("Location"))
 	require.NoError(t, err)
 	require.Equal(

@@ -11,6 +11,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -173,7 +174,13 @@ func setSkillEnabledInConfig(
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read config: %w", err)
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read config: %w", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("mkdir config dir: %w", err)
+		}
+		data = nil
 	}
 
 	doc, err := decodeConfigDocument(data)
