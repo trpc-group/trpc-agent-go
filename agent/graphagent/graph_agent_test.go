@@ -1262,6 +1262,92 @@ func TestGraphAgent_CreateInitialStateWithSessionSummary_Disabled(t *testing.T) 
 	require.Equal(t, "hello", messages[0].Content)
 }
 
+func TestGraphAgent_CreateInitialStateWithEventMessageProjector(
+	t *testing.T,
+) {
+	const (
+		agentName    = "test-agent"
+		requestID    = "req-1"
+		invocationID = "inv-1"
+	)
+
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(
+			ctx context.Context,
+			state graph.State,
+		) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	projector := func(
+		_ *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		if msg.Role != model.RoleUser {
+			return msg
+		}
+		msg.Content = "Projected: " + msg.Content
+		return msg
+	}
+
+	graphAgent, err := New(
+		agentName,
+		g,
+		WithEventMessageProjector(projector),
+	)
+	require.NoError(t, err)
+
+	userEvt := event.NewResponseEvent(
+		invocationID,
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("hello"),
+			}},
+		},
+	)
+	userEvt.RequestID = requestID
+	userEvt.FilterKey = agentName
+
+	sess := &session.Session{
+		ID:     "test-session",
+		Events: []event.Event{*userEvt},
+	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(
+			model.NewUserMessage("hello"),
+		),
+		agent.WithInvocationEventFilterKey(agentName),
+	)
+	invocation.InvocationID = invocationID
+	invocation.RunOptions.RequestID = requestID
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(
+		context.Background(),
+		invocation,
+	)
+	messages, ok := graph.GetStateValue[[]model.Message](
+		state,
+		graph.StateKeyMessages,
+	)
+	require.True(t, ok)
+	require.Len(t, messages, 1)
+	require.Equal(t, "Projected: hello", messages[0].Content)
+}
+
 func TestGraphAgent_CreateInitialStateWithSessionSummary_FromService(t *testing.T) {
 	const agentName = "test-agent"
 	ctx := context.Background()

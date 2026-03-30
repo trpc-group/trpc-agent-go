@@ -171,6 +171,219 @@ func TestBuildInjectedContextMessages(t *testing.T) {
 	require.Equal(t, "latest answer", got[2].Content)
 }
 
+func TestProjectEventMessage(t *testing.T) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeText,
+					Text: stringPointer("hello"),
+				},
+				{
+					Type: model.ContentTypeFile,
+					File: &model.File{Name: "a.txt"},
+				},
+			},
+		}),
+	)
+	inv.RunOptions.RuntimeState = RuntimeState(Annotation{
+		ActorID:    "u1",
+		ActorLabel: "Alice",
+		QuoteText:  "earlier",
+	})
+
+	got := ProjectEventMessage(
+		inv,
+		event.Event{},
+		inv.Message,
+	)
+	require.Equal(
+		t,
+		"Speaker: Alice\nQuoted message: earlier\nMessage: hello",
+		got.Content,
+	)
+	require.Len(t, got.ContentParts, 1)
+	require.Equal(
+		t,
+		model.ContentTypeFile,
+		got.ContentParts[0].Type,
+	)
+}
+
+func TestProjectEventMessage_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	assistant := model.NewAssistantMessage("hi")
+	require.Equal(
+		t,
+		assistant,
+		ProjectEventMessage(nil, event.Event{}, assistant),
+	)
+
+	plainUser := model.NewUserMessage("hello")
+	require.Equal(
+		t,
+		plainUser,
+		ProjectEventMessage(nil, event.Event{}, plainUser),
+	)
+
+	emptyInv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.Message{
+			Role: model.RoleUser,
+		}),
+	)
+	emptyInv.RunOptions.RuntimeState = RuntimeState(Annotation{
+		ActorID:    "u1",
+		ActorLabel: "Alice",
+	})
+	require.Equal(
+		t,
+		emptyInv.Message,
+		ProjectEventMessage(emptyInv, event.Event{}, emptyInv.Message),
+	)
+
+	overrideInv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	overrideInv.RunOptions.RuntimeState = RuntimeState(Annotation{
+		ActorLabels: map[string]string{
+			"u1": "Resolved Alice",
+		},
+	})
+	got := ProjectEventMessage(
+		overrideInv,
+		userEventWithQuote(
+			"u1",
+			"Alice",
+			"ignored history body",
+			"earlier",
+			time.Now(),
+		),
+		overrideInv.Message,
+	)
+	require.Equal(
+		t,
+		"Speaker: Resolved Alice\nQuoted message: earlier\n"+
+			"Message: hello",
+		got.Content,
+	)
+}
+
+func TestProjectionHelpers(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, runtimeState(nil))
+
+	require.False(t, hasProjectionMetadata(Annotation{}))
+	require.True(
+		t,
+		hasProjectionMetadata(Annotation{ActorLabel: "Alice"}),
+	)
+
+	require.True(t, isSyntheticProjectionEvent(event.Event{}))
+	require.False(
+		t,
+		isSyntheticProjectionEvent(event.Event{RequestID: "req-1"}),
+	)
+
+	require.Nil(t, nonTextContentParts(nil))
+	require.Nil(
+		t,
+		nonTextContentParts([]model.ContentPart{{
+			Type: model.ContentTypeText,
+			Text: stringPointer("hello"),
+		}}),
+	)
+
+	kept := nonTextContentParts([]model.ContentPart{
+		{
+			Type: model.ContentTypeText,
+			Text: stringPointer("hello"),
+		},
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{Name: "a.txt"},
+		},
+	})
+	require.Len(t, kept, 1)
+	require.Equal(t, model.ContentTypeFile, kept[0].Type)
+
+	require.Empty(
+		t,
+		projectedUserContentText(model.Message{}, Annotation{}, nil),
+	)
+	require.Equal(
+		t,
+		"Speaker: user\nMessage: hello",
+		projectedUserContentText(
+			model.NewUserMessage("hello"),
+			Annotation{},
+			nil,
+		),
+	)
+}
+
+func TestProjectionMetadata(t *testing.T) {
+	t.Parallel()
+
+	invalid := event.Event{
+		Extensions: map[string]json.RawMessage{
+			ExtensionKey: json.RawMessage("{"),
+		},
+	}
+	_, _, ok := projectionMetadata(nil, invalid)
+	require.False(t, ok)
+
+	_, _, ok = projectionMetadata(
+		nil,
+		event.Event{Author: authorUser},
+	)
+	require.False(t, ok)
+
+	plainInv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	_, _, ok = projectionMetadata(plainInv, event.Event{})
+	require.False(t, ok)
+
+	runtimeInv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	runtimeInv.RunOptions.RuntimeState = RuntimeState(Annotation{
+		ActorID:    "u1",
+		ActorLabel: "Alice",
+	})
+	annotation, labels, ok := projectionMetadata(
+		runtimeInv,
+		event.Event{},
+	)
+	require.True(t, ok)
+	require.Equal(t, "u1", annotation.ActorID)
+	require.Equal(t, "Alice", annotation.ActorLabel)
+	require.Nil(t, labels)
+
+	persistedInv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	persistedInv.RunOptions.RuntimeState = RuntimeState(Annotation{
+		ActorLabels: map[string]string{
+			"u2": "Resolved Bob",
+		},
+	})
+	annotation, labels, ok = projectionMetadata(
+		persistedInv,
+		userEvent("u2", "Bob", "hello", time.Now()),
+	)
+	require.True(t, ok)
+	require.Equal(t, "u2", annotation.ActorID)
+	require.Equal(
+		t,
+		map[string]string{"u2": "Resolved Bob"},
+		labels,
+	)
+}
+
 func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
 	t.Parallel()
 

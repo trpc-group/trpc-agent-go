@@ -331,6 +331,11 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
 		processor.WithPreloadMemory(options.PreloadMemory),
+		processor.WithEventMessageProjector(
+			processor.EventMessageProjector(
+				options.EventMessageProjector,
+			),
+		),
 		processor.WithFewShotResolver(a.fewShotForInvocation),
 	}
 	if options.ReasoningContentMode != "" {

@@ -122,12 +122,23 @@ type ContentRequestProcessor struct {
 	// SummaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	SummaryFormatter func(summary string) string
-	fewShotResolver  func(*agent.Invocation) [][]model.Message
+	// EventMessageProjector rewrites one event-derived message before it
+	// is appended to the model request.
+	EventMessageProjector EventMessageProjector
+	fewShotResolver       func(*agent.Invocation) [][]model.Message
 }
 
 type contentRequestRuntimeConfig struct {
 	includeMode string
 }
+
+// EventMessageProjector projects one event-derived message into the
+// model-facing request view.
+type EventMessageProjector func(
+	inv *agent.Invocation,
+	evt event.Event,
+	msg model.Message,
+) model.Message
 
 // ContentOption is a functional option for configuring the ContentRequestProcessor.
 type ContentOption func(*ContentRequestProcessor)
@@ -225,6 +236,16 @@ func WithSummaryFormatter(formatter func(summary string) string) ContentOption {
 	}
 }
 
+// WithEventMessageProjector sets a projector that rewrites one
+// event-derived message before it is appended to the request.
+func WithEventMessageProjector(
+	projector EventMessageProjector,
+) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.EventMessageProjector = projector
+	}
+}
+
 // WithFewShotResolver sets an invocation-aware few-shot resolver.
 func WithFewShotResolver(
 	resolver func(*agent.Invocation) [][]model.Message,
@@ -311,7 +332,12 @@ func (p *ContentRequestProcessor) ProcessRequest(
 	)
 
 	if model.HasPayload(invocation.Message) && needToAddInvocationMessage {
-		msg := annotateUserMessageWithAttachedFiles(invocation.Message)
+		msg := p.projectEventMessage(
+			invocation,
+			event.Event{},
+			invocation.Message,
+		)
+		msg = annotateUserMessageWithAttachedFiles(msg)
 		req.Messages = append(req.Messages, msg)
 		log.DebugfContext(
 			ctx,
@@ -600,6 +626,7 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 				msg := choice.Message
 				// Apply reasoning content stripping based on mode.
 				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				msg = p.projectEventMessage(inv, evt, msg)
 				if isEmptyAssistantMessage(msg) {
 					continue
 				}
@@ -942,6 +969,17 @@ func (p *ContentRequestProcessor) processReasoningContent(
 	return msg
 }
 
+func (p *ContentRequestProcessor) projectEventMessage(
+	inv *agent.Invocation,
+	evt event.Event,
+	msg model.Message,
+) model.Message {
+	if p == nil || p.EventMessageProjector == nil {
+		return msg
+	}
+	return p.EventMessageProjector(inv, evt, msg)
+}
+
 func isEmptyAssistantMessage(msg model.Message) bool {
 	if msg.Role != model.RoleAssistant {
 		return false
@@ -1011,6 +1049,7 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 			for _, choice := range ev.Choices {
 				msg := choice.Message
 				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+				msg = p.projectEventMessage(inv, evt, msg)
 				if isEmptyAssistantMessage(msg) {
 					continue
 				}

@@ -291,6 +291,31 @@ func TestContentRequestProcessor_WithAddSessionSummary_Option(t *testing.T) {
 	assert.True(t, p.AddSessionSummary)
 }
 
+func TestContentRequestProcessor_WithEventMessageProjector_Option(
+	t *testing.T,
+) {
+	projector := func(
+		_ *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		msg.Content = "projected"
+		return msg
+	}
+
+	p := NewContentRequestProcessor(
+		WithEventMessageProjector(projector),
+	)
+	assert.NotNil(t, p.EventMessageProjector)
+
+	msg := p.EventMessageProjector(
+		nil,
+		event.Event{},
+		model.NewUserMessage("hello"),
+	)
+	assert.Equal(t, "projected", msg.Content)
+}
+
 func TestContentRequestProcessor_InjectSystemContextMessage(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -700,6 +725,128 @@ func TestContentRequestProcessor_getFilterIncrementalMessagesWithTime(t *testing
 			}
 		})
 	}
+}
+
+func TestContentRequestProcessor_getIncrementMessages_ProjectsEvents(
+	t *testing.T,
+) {
+	projector := func(
+		_ *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		if msg.Role != model.RoleUser {
+			return msg
+		}
+		msg.Content = "Projected: " + msg.Content
+		return msg
+	}
+
+	p := NewContentRequestProcessor(
+		WithEventMessageProjector(projector),
+	)
+	sess := &session.Session{
+		Events: []event.Event{
+			createTestEvent(
+				"user",
+				"hello",
+				time.Now(),
+			),
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-filter"),
+	)
+
+	messages := p.getIncrementMessages(inv, time.Time{})
+	assert.Len(t, messages, 1)
+	assert.Equal(t, "Projected: hello", messages[0].Content)
+}
+
+func TestContentRequestProcessor_getCurrentInvocationMessages_ProjectsOnce(
+	t *testing.T,
+) {
+	const (
+		requestID    = "req-1"
+		invocationID = "inv-1"
+	)
+
+	projector := func(
+		_ *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		if msg.Role != model.RoleUser {
+			return msg
+		}
+		msg.Content = "Projected: " + msg.Content
+		return msg
+	}
+
+	evt := event.NewResponseEvent(
+		invocationID,
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("hello"),
+			}},
+		},
+	)
+	evt.RequestID = requestID
+	evt.FilterKey = "test-filter"
+
+	sess := &session.Session{
+		Events: []event.Event{*evt},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(
+			model.NewUserMessage("hello"),
+		),
+		agent.WithInvocationEventFilterKey("test-filter"),
+	)
+	inv.InvocationID = invocationID
+	inv.RunOptions.RequestID = requestID
+
+	p := NewContentRequestProcessor(
+		WithEventMessageProjector(projector),
+	)
+	messages := p.getCurrentInvocationMessages(inv)
+
+	assert.Len(t, messages, 1)
+	assert.Equal(t, "Projected: hello", messages[0].Content)
+}
+
+func TestContentRequestProcessor_ProcessRequest_ProjectsInvocationMessage(
+	t *testing.T,
+) {
+	projector := func(
+		inv *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		if inv == nil || msg.Role != model.RoleUser {
+			return msg
+		}
+		msg.Content = "Projected: " + msg.Content
+		return msg
+	}
+
+	p := NewContentRequestProcessor(
+		WithEventMessageProjector(projector),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(
+			model.NewUserMessage("hello"),
+		),
+	)
+	req := &model.Request{}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	assert.Len(t, req.Messages, 1)
+	assert.Equal(t, "Projected: hello", req.Messages[0].Content)
 }
 
 func TestContentRequestProcessor_ConcurrentSummariesAccess(t *testing.T) {
