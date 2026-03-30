@@ -171,19 +171,25 @@ func (f *terminalMessageFilter) matchAgentScopePrefix(
 	if filterKey == "" {
 		return "", false
 	}
-	longest := ""
+	var (
+		matchedPrefix string
+		matchCount    int
+	)
 	for prefix := range f.agentScopePrefixes {
 		if !matchesFilterPrefix(filterKey, prefix) {
 			continue
 		}
-		if len(prefix) > len(longest) {
-			longest = prefix
+		matchCount++
+		if len(prefix) > len(matchedPrefix) {
+			matchedPrefix = prefix
 		}
 	}
-	if longest == "" {
+	// Overlapping scopes such as "a" and "a/b" are ambiguous for an event
+	// keyed as "a/b/...". Filter only when the scope owner is unique.
+	if matchCount != 1 {
 		return "", false
 	}
-	return longest, true
+	return matchedPrefix, true
 }
 
 func terminalAgentScopePrefix(rootFilterKey string, node *graph.Node) string {

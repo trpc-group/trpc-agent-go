@@ -2563,16 +2563,28 @@ func TestNewTerminalMessageFilter(t *testing.T) {
 func TestTerminalMessageFilterMatchAgentScopePrefix(t *testing.T) {
 	filter := terminalMessageFilter{
 		agentScopePrefixes: map[string]struct{}{
+			"root/child": {},
+			"root/final": {},
+		},
+	}
+
+	prefix, ok := filter.matchAgentScopePrefix(
+		"root/final/leaf",
+	)
+	require.True(t, ok)
+	require.Equal(t, "root/final", prefix)
+
+	overlappingFilter := terminalMessageFilter{
+		agentScopePrefixes: map[string]struct{}{
 			"root/child":       {},
 			"root/child/grand": {},
 		},
 	}
 
-	prefix, ok := filter.matchAgentScopePrefix(
+	_, ok = overlappingFilter.matchAgentScopePrefix(
 		"root/child/grand/leaf",
 	)
-	require.True(t, ok)
-	require.Equal(t, "root/child/grand", prefix)
+	require.False(t, ok)
 
 	_, ok = filter.matchAgentScopePrefix("")
 	require.False(t, ok)
@@ -2651,6 +2663,26 @@ func TestTerminalMessageFilterAllows(t *testing.T) {
 		},
 	}
 	require.True(t, filter.Allows(unknownAuthorEvent))
+
+	ambiguousScopeFilter := terminalMessageFilter{
+		enabled: true,
+		agentScopePrefixes: map[string]struct{}{
+			"root/child":       {},
+			"root/child/grand": {},
+		},
+		terminalScopePrefixes: map[string]struct{}{
+			"root/child/grand": {},
+		},
+	}
+	ambiguousScopeEvent := &event.Event{
+		FilterKey: "root/child/grand/leaf",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("answer"),
+			}},
+		},
+	}
+	require.True(t, ambiguousScopeFilter.Allows(ambiguousScopeEvent))
 
 	rawCompletion := event.New(
 		"invocation-id",
