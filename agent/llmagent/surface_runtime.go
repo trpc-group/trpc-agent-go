@@ -96,6 +96,7 @@ func (a *LLMAgent) InvocationToolSurface(
 	)
 
 	allTools := append([]tool.Tool(nil), userTools...)
+	allTools = appendFrameworkTools(allTools, &options)
 	allTools = appendKnowledgeTools(allTools, &options)
 
 	effectiveSkills := a.skillRepositoryForInvocation(inv)

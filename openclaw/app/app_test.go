@@ -1355,6 +1355,7 @@ func TestRun_WithTelegram_BaseURLOverride(t *testing.T) {
 	// only *after* the handshake succeeds so that the test is reliable on
 	// slow CI runners.
 	gotMe := make(chan struct{}, 1)
+	gotUpdates := make(chan struct{}, 1)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
@@ -1373,6 +1374,10 @@ func TestRun_WithTelegram_BaseURLOverride(t *testing.T) {
 		case "/bot" + token + "/getUpdates":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"ok":true,"result":[]}`)
+			select {
+			case gotUpdates <- struct{}{}:
+			default:
+			}
 		default:
 			http.NotFound(w, r)
 		}
@@ -1398,12 +1403,14 @@ func TestRun_WithTelegram_BaseURLOverride(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	// Cancel as soon as getMe succeeds, or bail after a generous timeout.
+	// Cancel as soon as polling starts, or bail after a generous timeout.
 	go func() {
 		select {
 		case <-gotMe:
-			// Give the server loop a moment to finish set-up.
-			time.Sleep(50 * time.Millisecond)
+			select {
+			case <-gotUpdates:
+			case <-time.After(5 * time.Second):
+			}
 		case <-time.After(5 * time.Second):
 		}
 		cancel()
@@ -1569,6 +1576,16 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
 				RefreshToolSetsOnRun: true,
+			},
+			wantErr: true,
+		},
+		{
+			name:      "knowledges.entries",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				KnowledgesConfig: map[string]*yaml.Node{
+					"docs": yamlNode(t, `vector_store: {type: inmemory}`),
+				},
 			},
 			wantErr: true,
 		},

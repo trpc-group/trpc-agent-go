@@ -58,6 +58,24 @@ func TestExtractKnowledgeRecallIgnoresNonKnowledgeTools(t *testing.T) {
 	require.Empty(t, result)
 }
 
+func TestExtractKnowledgeRecall_AcceptsNamedKnowledgeTools(t *testing.T) {
+	tools := []*evalset.Tool{
+		{
+			ID:   "1",
+			Name: "docs_knowledge_search",
+			Result: map[string]any{
+				"documents": []*tool.DocumentResult{
+					{Text: "named knowledge doc", Score: 0.8},
+				},
+			},
+		},
+	}
+
+	result, err := ExtractKnowledgeRecall(tools)
+	require.NoError(t, err)
+	require.Contains(t, result, "named knowledge doc")
+}
+
 func TestExtractKnowledgeRecallReturnsErrorOnBadPayload(t *testing.T) {
 	tools := []*evalset.Tool{
 		{

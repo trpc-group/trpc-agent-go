@@ -501,6 +501,7 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 	allTools, userToolNames = appendStaticToolSetTools(
 		allTools, userToolNames, options,
 	)
+	allTools = appendFrameworkTools(allTools, options)
 	allTools = appendKnowledgeTools(allTools, options)
 	var runTool *toolskill.RunTool
 	var workspaceRegistry *codeexecutor.WorkspaceRegistry
@@ -519,6 +520,16 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 	)
 	allTools = appendSkillTools(allTools, options, runTool)
 	return allTools, userToolNames
+}
+
+func appendFrameworkTools(
+	allTools []tool.Tool,
+	options *Options,
+) []tool.Tool {
+	if options == nil || len(options.FrameworkTools) == 0 {
+		return allTools
+	}
+	return append(allTools, options.FrameworkTools...)
 }
 
 func collectUserToolNames(tools []tool.Tool) map[string]bool {

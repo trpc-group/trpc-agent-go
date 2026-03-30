@@ -835,6 +835,9 @@ knowledges:
 
 	_, err := parseRunOptions([]string{"-config", cfgPath})
 	require.Error(t, err)
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
 	require.Contains(t, err.Error(), "knowledges.entries[0].name is empty")
 }
 
@@ -854,13 +857,16 @@ knowledges:
 
 	_, err := parseRunOptions([]string{"-config", cfgPath})
 	require.Error(t, err)
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
 	require.Contains(t, err.Error(), "duplicate knowledge name: docs")
 }
 
-func TestConvertKnowledgeConfigs_SkipsEntriesWithoutComponents(t *testing.T) {
+func TestConvertKnowledgeConfigs_RejectsEntriesWithoutComponents(t *testing.T) {
 	t.Parallel()
 
-	configs, err := convertKnowledgeConfigs([]knowledgeEntryConfig{
+	_, err := convertKnowledgeConfigs([]knowledgeEntryConfig{
 		{Name: "empty"},
 		{
 			Name: "docs",
@@ -870,10 +876,29 @@ max_results: 5
 `)},
 		},
 	})
-	require.NoError(t, err)
-	require.Len(t, configs, 1)
-	require.NotContains(t, configs, "empty")
-	require.Contains(t, configs, "docs")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `knowledges.entries[0] "empty" has no embedder/vector_store config`)
+}
+
+func TestConvertKnowledgeConfigs_RejectsToolNameCollision(t *testing.T) {
+	t.Parallel()
+
+	_, err := convertKnowledgeConfigs([]knowledgeEntryConfig{
+		{
+			Name: "Docs KB",
+			VectorStore: &rawYAMLNode{Node: yamlNode(t, `
+type: inmemory
+`)},
+		},
+		{
+			Name: "Docs-KB",
+			VectorStore: &rawYAMLNode{Node: yamlNode(t, `
+type: inmemory
+`)},
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `knowledge tool name collision: "Docs KB" and "Docs-KB" map to "docs_kb_knowledge_search"`)
 }
 
 func TestConvertKnowledgeConfigs_EmptyEntriesReturnNil(t *testing.T) {

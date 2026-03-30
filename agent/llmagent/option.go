@@ -164,6 +164,9 @@ type Options struct {
 	EnableCodeExecutionResponseProcessor bool
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
+	// FrameworkTools is the list of framework-managed tools that should
+	// always stay visible and never be treated as user tools.
+	FrameworkTools []tool.Tool
 	// ToolSets is the list of tool sets available to the agent.
 	ToolSets []tool.ToolSet
 	// Planner is the planner to use for planning instructions.
@@ -490,6 +493,14 @@ func WithEnableCodeExecutionResponseProcessor(enable bool) Option {
 func WithTools(tools []tool.Tool) Option {
 	return func(opts *Options) {
 		opts.Tools = tools
+	}
+}
+
+// WithFrameworkTools sets framework-managed tools that are not tracked
+// as user tools and are not affected by user tool filters.
+func WithFrameworkTools(tools []tool.Tool) Option {
+	return func(opts *Options) {
+		opts.FrameworkTools = tools
 	}
 }
 

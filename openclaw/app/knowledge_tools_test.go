@@ -75,6 +75,23 @@ vector_store:
 	require.Equal(t, "faq_knowledge_search", bundle.tools[1].Declaration().Name)
 }
 
+func TestBuildKnowledgeTools_RejectsToolNameCollision(t *testing.T) {
+	t.Parallel()
+
+	_, err := buildKnowledgeTools(map[string]*yaml.Node{
+		"Docs KB": yamlNode(t, `
+vector_store:
+  type: inmemory
+`),
+		"Docs-KB": yamlNode(t, `
+vector_store:
+  type: inmemory
+`),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `knowledge tool name collision: "Docs KB" and "Docs-KB" map to "docs_kb_knowledge_search"`)
+}
+
 func TestBuildKnowledgeTools_InvalidConfigFails(t *testing.T) {
 	t.Parallel()
 
@@ -573,6 +590,7 @@ vector_store:
 
 	req := runAgentAndCapture(t, agt, mdl, nil)
 	require.Contains(t, req.Tools, "knowledge_search")
+	require.NotContains(t, req.Tools, "docs_knowledge_search")
 }
 
 func TestNewAgent_MultipleKnowledgeConfigsRegisterNamedTools(t *testing.T) {
@@ -599,6 +617,7 @@ vector_store:
 	req := runAgentAndCapture(t, agt, mdl, nil)
 	require.Contains(t, req.Tools, "docs_knowledge_search")
 	require.Contains(t, req.Tools, "faq_knowledge_search")
+	require.NotContains(t, req.Tools, "knowledge_search")
 }
 
 func TestNewAgent_InvalidKnowledgeConfigReturnsError(t *testing.T) {

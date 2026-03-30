@@ -1722,6 +1722,7 @@ func convertKnowledgeConfigs(
 	}
 
 	out := make(map[string]*yaml.Node, len(entries))
+	toolNames := make(map[string]string, len(entries))
 	for i := range entries {
 		entry := entries[i]
 		name := strings.TrimSpace(entry.Name)
@@ -1731,6 +1732,16 @@ func convertKnowledgeConfigs(
 		if _, exists := out[name]; exists {
 			return nil, fmt.Errorf("duplicate knowledge name: %s", name)
 		}
+		toolName := knowledgeToolName(name)
+		if existingName, exists := toolNames[toolName]; exists {
+			return nil, fmt.Errorf(
+				"knowledge tool name collision: %q and %q map to %q",
+				existingName,
+				name,
+				toolName,
+			)
+		}
+		toolNames[toolName] = name
 
 		node := &yaml.Node{
 			Kind: yaml.MappingNode,
@@ -1759,7 +1770,11 @@ func convertKnowledgeConfigs(
 			)
 		}
 		if len(node.Content) == 0 {
-			continue
+			return nil, fmt.Errorf(
+				"knowledges.entries[%d] %q has no embedder/vector_store config",
+				i,
+				name,
+			)
 		}
 		out[name] = node
 	}

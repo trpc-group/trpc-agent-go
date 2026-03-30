@@ -593,6 +593,9 @@ func TestLLMAgent_FilterTools_RespectsUserFilterOnly(t *testing.T) {
 	userTool2 := dummyTool{
 		decl: &tool.Declaration{Name: testUserToolNameTwo},
 	}
+	frameworkTool := dummyTool{
+		decl: &tool.Declaration{Name: "docs_knowledge_search"},
+	}
 	kb := &minimalKnowledge{}
 	subAgent := New(testSubAgentName)
 
@@ -604,6 +607,7 @@ func TestLLMAgent_FilterTools_RespectsUserFilterOnly(t *testing.T) {
 	agent := New(
 		testFilterAgentName,
 		WithTools([]tool.Tool{userTool1, userTool2}),
+		WithFrameworkTools([]tool.Tool{frameworkTool}),
 		WithKnowledge(kb),
 		WithSubAgents([]agent.Agent{subAgent}),
 		WithToolFilter(filterFunc),
@@ -613,12 +617,15 @@ func TestLLMAgent_FilterTools_RespectsUserFilterOnly(t *testing.T) {
 
 	seenUser := map[string]bool{}
 	seenKnowledge := false
+	seenNamedKnowledge := false
 	seenTransfer := false
 	for _, tl := range filtered {
 		name := tl.Declaration().Name
 		switch name {
 		case testUserToolNameOne, testUserToolNameTwo:
 			seenUser[name] = true
+		case "docs_knowledge_search":
+			seenNamedKnowledge = true
 		case testKnowledgeToolName:
 			seenKnowledge = true
 		case testTransferToolName:
@@ -637,6 +644,10 @@ func TestLLMAgent_FilterTools_RespectsUserFilterOnly(t *testing.T) {
 	if !seenKnowledge {
 		t.Fatalf("framework knowledge tool %q must always pass filter",
 			testKnowledgeToolName)
+	}
+	if !seenNamedKnowledge {
+		t.Fatalf("framework knowledge tool %q must always pass filter",
+			"docs_knowledge_search")
 	}
 	if !seenTransfer {
 		t.Fatalf("framework transfer tool %q must always pass filter",

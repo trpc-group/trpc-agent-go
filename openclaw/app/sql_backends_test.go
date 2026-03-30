@@ -31,7 +31,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
-var postgresBuilderTestMu sync.Mutex
+var (
+	mysqlBuilderTestMu      sync.Mutex
+	postgresBuilderTestMu   sync.Mutex
+	clickhouseBuilderTestMu sync.Mutex
+)
 
 func TestNewMySQLSessionBackend_MissingConfigFails(t *testing.T) {
 	t.Parallel()
@@ -459,6 +463,7 @@ func yamlNode(t *testing.T, raw string) *yaml.Node {
 func stubMySQLBuilder(t *testing.T) (storagemysql.Client, func()) {
 	t.Helper()
 
+	mysqlBuilderTestMu.Lock()
 	original := storagemysql.GetClientBuilder()
 	storagemysql.SetClientBuilder(func(
 		_ ...storagemysql.ClientBuilderOpt,
@@ -467,6 +472,7 @@ func stubMySQLBuilder(t *testing.T) (storagemysql.Client, func()) {
 	})
 	return stubMySQLClient{}, func() {
 		storagemysql.SetClientBuilder(original)
+		mysqlBuilderTestMu.Unlock()
 	}
 }
 
@@ -492,6 +498,7 @@ func stubClickHouseBuilder(
 ) (storageclickhouse.Client, func()) {
 	t.Helper()
 
+	clickhouseBuilderTestMu.Lock()
 	original := storageclickhouse.GetClientBuilder()
 	storageclickhouse.SetClientBuilder(func(
 		_ ...storageclickhouse.ClientBuilderOpt,
@@ -500,6 +507,7 @@ func stubClickHouseBuilder(
 	})
 	return stubClickHouseClient{}, func() {
 		storageclickhouse.SetClientBuilder(original)
+		clickhouseBuilderTestMu.Unlock()
 	}
 }
 

@@ -54,8 +54,9 @@ func buildKnowledgeTools(
 	if len(configs) == 0 {
 		return nil, nil
 	}
+	normalizedConfigs := normalizeKnowledgeConfigs(configs)
 
-	knowledges, err := buildKnowledgeBases(configs)
+	knowledges, err := buildKnowledgeBases(normalizedConfigs)
 	if err != nil {
 		return nil, err
 	}
@@ -71,19 +72,35 @@ func buildKnowledgeTools(
 	}
 
 	tools := make([]tool.Tool, 0, len(names))
+	seenToolNames := make(map[string]string, len(names))
 	for _, name := range names {
-		tools = append(tools, knowledgetool.NewAgenticFilterSearchTool(
-			knowledges[name],
-			nil,
-			knowledgetool.WithToolName(
-				knowledgeToolName(name),
-			),
+		toolName := knowledgeToolName(name)
+		if existingName, ok := seenToolNames[toolName]; ok {
+			return nil, fmt.Errorf(
+				"knowledge tool name collision: %q and %q map to %q",
+				existingName,
+				name,
+				toolName,
+			)
+		}
+		seenToolNames[toolName] = name
+
+		toolOpts := []knowledgetool.Option{
+			knowledgetool.WithToolName(toolName),
 			knowledgetool.WithToolDescription(
 				fmt.Sprintf(
 					"Search for relevant information in the %q knowledge base.",
 					name,
 				),
 			),
+		}
+		if maxResults, ok := knowledgeToolMaxResults(normalizedConfigs[name]); ok {
+			toolOpts = append(toolOpts, knowledgetool.WithMaxResults(maxResults))
+		}
+		tools = append(tools, knowledgetool.NewAgenticFilterSearchTool(
+			knowledges[name],
+			nil,
+			toolOpts...,
 		))
 	}
 
@@ -97,8 +114,15 @@ func buildKnowledgeBases(
 		return nil, nil
 	}
 
+	rawNames := make([]string, 0, len(configs))
+	for rawName := range configs {
+		rawNames = append(rawNames, rawName)
+	}
+	sort.Strings(rawNames)
+
 	out := make(map[string]knowledge.Knowledge, len(configs))
-	for rawName, node := range configs {
+	for _, rawName := range rawNames {
+		node := configs[rawName]
 		name := strings.TrimSpace(rawName)
 		if name == "" || node == nil {
 			continue
@@ -119,6 +143,59 @@ func buildKnowledgeBases(
 		return nil, nil
 	}
 	return out, nil
+}
+
+func normalizeKnowledgeConfigs(configs map[string]*yaml.Node) map[string]*yaml.Node {
+	if len(configs) == 0 {
+		return nil
+	}
+	out := make(map[string]*yaml.Node, len(configs))
+	for rawName, node := range configs {
+		name := strings.TrimSpace(rawName)
+		if name == "" || node == nil {
+			continue
+		}
+		out[name] = node
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func knowledgeToolMaxResults(knowledgeNode *yaml.Node) (int, bool) {
+	vectorStoreNode := yamlMappingLookup(knowledgeNode, "vector_store")
+	if vectorStoreNode == nil {
+		return 0, false
+	}
+	maxResultsNode := yamlMappingLookup(vectorStoreNode, "max_results")
+	if maxResultsNode == nil {
+		return 0, false
+	}
+	var maxResults int
+	if err := maxResultsNode.Decode(&maxResults); err != nil || maxResults <= 0 {
+		return 0, false
+	}
+	return maxResults, true
+}
+
+func yamlMappingLookup(node *yaml.Node, key string) *yaml.Node {
+	if node == nil {
+		return nil
+	}
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		node = node.Content[0]
+	}
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		k := node.Content[i]
+		if k != nil && k.Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func buildKnowledgeBase(

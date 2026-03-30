@@ -1681,6 +1681,11 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support refresh-toolsets-on-run",
 		)
 	}
+	if len(opts.KnowledgesConfig) > 0 {
+		return errors.New(
+			"claude-code agent does not support knowledges.entries",
+		)
+	}
 	return nil
 }
 
@@ -1845,8 +1850,9 @@ func newAgent(
 	}
 
 	tools := append([]tool.Tool(nil), extraTools...)
+	frameworkTools := make([]tool.Tool, 0)
 	if knowledgeTools != nil && len(knowledgeTools.tools) > 0 {
-		tools = append(tools, knowledgeTools.tools...)
+		frameworkTools = append(frameworkTools, knowledgeTools.tools...)
 	}
 	tools = append(tools, ocskills.NewListTool(repo))
 	if len(cfg.ToolProviders) > 0 {
@@ -1903,6 +1909,9 @@ func newAgent(
 	}
 	if knowledgeTools != nil && knowledgeTools.defaultKnowledge != nil {
 		opts = append(opts, llmagent.WithKnowledge(knowledgeTools.defaultKnowledge))
+	}
+	if len(frameworkTools) > 0 {
+		opts = append(opts, llmagent.WithFrameworkTools(frameworkTools))
 	}
 	if len(tools) > 0 {
 		opts = append(opts, llmagent.WithTools(tools))

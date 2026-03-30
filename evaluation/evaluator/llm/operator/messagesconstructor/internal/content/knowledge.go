@@ -17,11 +17,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 )
 
-var knowledgeTools = map[string]struct{}{
-	"knowledge_search":                     {},
-	"knowledge_search_with_agentic_filter": {},
-}
-
 // ExtractKnowledgeRecall builds a human-readable summary of knowledge tool responses.
 func ExtractKnowledgeRecall(tools []*evalset.Tool) (string, error) {
 	if len(tools) == 0 {
@@ -32,7 +27,7 @@ func ExtractKnowledgeRecall(tools []*evalset.Tool) (string, error) {
 		if tool == nil {
 			continue
 		}
-		if _, ok := knowledgeTools[tool.Name]; !ok {
+		if !isKnowledgeToolName(tool.Name) {
 			continue
 		}
 		kResp, err := parseKnowledgeSearchResponse(tool)
@@ -50,6 +45,14 @@ func ExtractKnowledgeRecall(tools []*evalset.Tool) (string, error) {
 		builder.WriteString("\n")
 	}
 	return builder.String(), nil
+}
+
+func isKnowledgeToolName(name string) bool {
+	switch name {
+	case "knowledge_search", "knowledge_search_with_agentic_filter":
+		return true
+	}
+	return strings.HasSuffix(name, "_knowledge_search")
 }
 
 // parseKnowledgeSearchResponse converts a function response payload into a typed knowledge search response.
