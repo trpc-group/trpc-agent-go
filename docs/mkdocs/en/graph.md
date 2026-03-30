@@ -750,6 +750,13 @@ Model (LLM) messages, you can enable `agent.WithStreamMode(...)` (see
 "Event Monitoring"). When `agent.StreamModeMessages` is selected, graph LLM
 nodes enable final model responses automatically for that run.
 
+If your graph contains multiple LLM nodes or sub-agent nodes, and the
+caller-visible stream should keep only terminal graph messages, enable
+`agent.WithGraphTerminalMessagesOnly(true)` on the run. This keeps default
+behavior fully backward compatible when disabled, preserves all terminal nodes
+in parallel fan-out graphs, and does not change internal graph state handoff or
+tracing. See `examples/graph/terminal_messages_only`.
+
 Tip: parsing JSON / structured output from streaming
 
 - Streaming chunks (`choice.Delta.Content`) are incremental and are not
