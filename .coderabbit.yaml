@@ -1,10 +1,11 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 
-language: "zh-CN"
+language: "en-US"
 tone_instructions: >-
-  请用简洁、专业的语气进行代码审查。
-  tRPC-Agent-Go 是框架项目，请优先评估变更对存量用户的语义与行为兼容性影响，避免改变默认行为与既有对外契约。
-  重点关注可扩展性、通用性与易用性，并尽量聚焦 CI 难覆盖的设计与行为问题，避免无关的主观风格争论。
+  Concise professional reviews. Bilingual output: EN first, ZH collapsed.
+  Framework repo: prioritize semantic/behavioral compat, stable
+  defaults/contracts, extensibility, generality, usability, and CI-hard
+  design/behavior issues; avoid style debates.
 early_access: false
 
 reviews:
@@ -42,96 +43,102 @@ reviews:
     - "!**/*.o"
     - "!**/*.wasm"
 
-  high_level_summary_instructions: >-
-    请输出一份中文高层摘要与一份英文高层摘要。
-    中文摘要直接输出，英文摘要用 Markdown 中可渲染的 HTML details 标签包裹并默认折叠。
-    两份摘要都包含三个部分：改动概览、兼容性与行为风险、建议验证方式。
-    内容要具体可执行，避免空泛赞美，避免无关的代码风格评论。
-    英文摘要请严格使用以下格式包裹：
+  high_level_summary_instructions: |-
+    Please output a bilingual high-level summary.
+    Show the English summary first.
+    Wrap the Chinese translation in a Markdown-compatible HTML details block collapsed by default.
+    Both versions must cover: change overview, compatibility and behavioral risks, and recommended validation steps.
+    Be specific and actionable. Avoid generic praise and irrelevant style commentary.
+    The Chinese section must use this exact wrapper:
     <details>
-    <summary>English</summary>
+    <summary>中文</summary>
     
-    English summary here.
+    Chinese summary here.
     
     </details>
 
   path_instructions:
     - path: "**/*.go"
       instructions: |
-        这是框架代码。审查优先级如下：
-        1. 语义与行为兼容性
-        2. 可扩展性
-        3. 通用性
-        4. 易用性
-        5. 并发安全、资源边界与错误处理
-        6. 代码风格
+        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
+        This is framework code. Review priorities:
+        1. Semantic and behavioral compatibility
+        2. Extensibility
+        3. Generality
+        4. Ease of use
+        5. Concurrency safety, resource boundaries, and error handling
+        6. Code style
 
-        请重点检查：
-        - 默认行为是否保持稳定，新增能力是否通过可选配置、Option、接口、回调或插件机制扩展，而不是改变旧路径。
-        - 导出类型、导出函数、导出方法、接口、Option、错误语义、nil/zero-value 语义、JSON/序列化字段、事件顺序、流式输出语义是否发生破坏性变化。
-        - 结构体新增字段通常是兼容的，请不要仅因为新增字段而给出阻断性意见，但需要检查序列化兼容、zero-value 语义与默认行为。
-        - 修改 agent、runner、graph、tool 等执行链路时，是否改变事件流、stateDelta、工具调用顺序、取消传播、重试语义或长耗时工具标记等外部可观察行为。
-        - 抽象是否仍然面向能力而不是面向具体供应商，避免把厂商特性、模型特性或业务假设泄漏到公共层。
-        - 是否引入全局可变状态、隐式单例、无界队列、无限重试、goroutine 泄漏、channel 关闭时序错误或无法及时停止的后台任务。
-        - session、memory、artifact、knowledge、vectorstore 等持久化或协议相关结构的变更是否向后兼容，是否具备迁移和回滚路径。
-        - 错误是否保留根因并可被调用方判别，控制流错误不应被误当作普通失败重试。
-        - 安全边界是否清晰：外部输入、URL、路径、命令参数、模型驱动的工具调用都应被视为不可信。
-        - 新增 API 或配置时，是否保持最小必需配置、合理默认值和一致的命名/参数顺序。
+        Focus on:
+        - Whether default behavior remains stable and new capability is introduced through optional config, options, interfaces, callbacks, or plugins rather than by changing existing paths.
+        - Whether exported types, exported functions, exported methods, interfaces, options, error semantics, nil or zero-value semantics, JSON or serialization fields, event ordering, or streaming semantics introduce breaking changes.
+        - Adding struct fields is usually compatible. Do not raise blocking comments for that alone, but do check serialization compatibility, zero-value semantics, and default behavior.
+        - When agent, runner, graph, tool, or similar execution paths change, whether event flow, stateDelta, tool invocation order, cancellation propagation, retry semantics, or long-running tool markers change in externally observable ways.
+        - Whether abstractions remain capability-oriented rather than vendor-oriented, and avoid leaking provider-specific, model-specific, or business-specific assumptions into public layers.
+        - Whether the change introduces global mutable state, implicit singletons, unbounded queues, infinite retries, goroutine leaks, incorrect channel-closing order, or background tasks that cannot stop promptly.
+        - Whether persistence- or protocol-related structures such as session, memory, artifact, knowledge, and vectorstore remain backward compatible and have migration and rollback paths.
+        - Whether errors preserve root causes and remain distinguishable to callers. Control-flow errors should not be retried as ordinary failures.
+        - Whether security boundaries stay clear: treat external input, URLs, paths, command arguments, and model-driven tool invocations as untrusted.
+        - Whether new APIs or configuration keep the minimum required setup, sensible defaults, and consistent naming and parameter ordering.
 
-        请避免：
-        - 仅基于个人偏好提出命名、排版、注释风格或“更优雅重构”的建议；
-        - 建议为了内部实现方便而破坏对外契约或默认行为。
+        Avoid:
+        - Suggestions about naming, formatting, comment style, or "more elegant refactors" based only on personal preference.
+        - Suggestions that break public contracts or default behavior merely for implementation convenience.
 
-        如果判断某个改动属于有意的行为变化，请明确指出：
-        - 旧行为是什么；
-        - 新行为是什么；
-        - 影响哪些用户或扩展点；
-        - 需要哪些测试、示例或文档同步说明。
+        If you believe a change is an intentional behavioral change, explicitly state:
+        - what the old behavior was;
+        - what the new behavior is;
+        - which users or extension points are affected;
+        - which tests, examples, or documentation should be updated accordingly.
 
     - path: "**/*_test.go"
       instructions: |
-        请重点检查测试是否验证了“对外行为”而不是仅验证实现细节。
+        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
+        Prioritize whether tests validate external behavior rather than implementation details.
 
-        关注点：
-        - 是否覆盖主路径、边界条件、错误路径和回归场景；
-        - 并发相关改动是否覆盖取消、关闭、错误传播、goroutine 回收、channel 顺序与 backpressure；
-        - 流式输出、事件流、stateDelta、工具调用链是否验证了顺序、一致性与结束语义；
-        - 测试是否稳定，避免依赖 time.Sleep、随机性、真实外部服务、本机环境差异；
-        - 是否优先使用 mock、fake、httptest、临时目录等可控替身；
-        - 断言是否足够强，避免“测试通过但行为没真正被验证”。
+        Focus on:
+        - Whether the main path, boundary conditions, error paths, and regression scenarios are covered.
+        - Whether concurrency-related changes cover cancellation, shutdown, error propagation, goroutine cleanup, channel ordering, and backpressure.
+        - Whether streaming output, event flow, stateDelta, and tool invocation chains verify order, consistency, and termination semantics.
+        - Whether tests are stable and avoid time.Sleep, randomness, real external services, or machine-specific environment differences.
+        - Whether mocks, fakes, httptest, temporary directories, or other controllable substitutes are preferred.
+        - Whether assertions are strong enough to ensure the intended behavior is actually verified.
 
-        不要建议通过削弱断言、删除测试或扩大 mock 范围来掩盖真实问题。
+        Do not suggest weakening assertions, deleting tests, or widening mocks merely to hide real problems.
 
     - path: "test/**"
       instructions: |
-        请把 test/ 下的代码视为测试基础设施，而不是普通业务代码。
+        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
+        Treat code under test/ as test infrastructure rather than ordinary business code.
 
-        重点检查：
-        - 测试辅助代码是否小而清晰、职责单一、可复用；
-        - 是否避免依赖真实外部服务和不稳定环境；
-        - 是否避免把复杂逻辑塞进测试夹具，从而掩盖真实行为；
-        - 日志、测试数据和示例配置中是否泄漏敏感信息。
+        Focus on:
+        - Whether test helper code is small, clear, single-purpose, and reusable.
+        - Whether it avoids relying on real external services and unstable environments.
+        - Whether it avoids hiding real behavior by pushing too much logic into fixtures.
+        - Whether logs, test data, and example configuration leak sensitive information.
 
     - path: "examples/**"
       instructions: |
-        examples 代表推荐用法和用户第一印象，请从“可复制、可理解、可安全运行”角度审查。
+        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
+        Examples represent the recommended usage and the user's first impression. Review them for reproducibility, clarity, and safe execution.
 
-        重点检查：
-        - 是否使用公开 API，是否体现当前推荐用法；
-        - 运行步骤、依赖条件、环境变量和副作用是否清楚；
-        - 敏感信息是否通过环境变量传入，示例输出中是否避免泄漏 token、密钥或隐私数据；
-        - 示例是否足够小且聚焦单一能力，不把示例写成隐藏复杂度的“迷你生产系统”；
-        - 当公共 API、默认值或推荐用法变化时，示例是否同步更新。
+        Focus on:
+        - Whether they use public APIs and reflect the current recommended usage.
+        - Whether runtime steps, dependencies, environment variables, and side effects are clear.
+        - Whether sensitive information is passed through environment variables and whether example output avoids leaking tokens, secrets, or private data.
+        - Whether each example is small enough and focused on one capability instead of becoming a hidden "mini production system."
+        - Whether examples are updated when public APIs, defaults, or recommended usage change.
 
     - path: "**/*.md"
       instructions: |
-        文档的目标是准确传达当前公共契约，而不是追求文风。
+        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
+        The goal of documentation is to accurately communicate the current public contract, not to optimize for writing style.
 
-        重点检查：
-        - 命令、import path、配置项、默认值、返回行为是否与当前代码一致；
-        - README.md 与 README.zh_CN.md 的对外使用方式是否一致，若不一致是否有明确说明；
-        - 当公共 API、默认行为、迁移方式或兼容策略变化时，文档是否同步更新；
-        - 示例代码、配置片段和目录路径是否在当前仓库结构下真实可用。
+        Focus on:
+        - Whether commands, import paths, configuration keys, defaults, and return behavior match the current code.
+        - Whether README.md and README.zh_CN.md describe external usage consistently, or clearly explain any intentional differences.
+        - Whether documentation is updated when public APIs, default behavior, migration paths, or compatibility strategy change.
+        - Whether example code, configuration snippets, and directory paths are actually usable in the current repository layout.
   tools:
     github-checks:
       enabled: true
