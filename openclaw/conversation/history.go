@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -245,7 +246,7 @@ func visibleUserMessages(
 	}
 	out := make([]model.Message, 0, len(evt.Response.Choices))
 	for _, choice := range evt.Response.Choices {
-		text := renderUserMessage(
+		text := projectedUserContentText(
 			choice.Message,
 			annotation,
 			labelOverrides,
@@ -256,6 +257,38 @@ func visibleUserMessages(
 		out = append(out, model.NewUserMessage(text))
 	}
 	return out
+}
+
+// ProjectEventMessage projects one event-derived user message into the
+// model-facing request view while keeping persisted session events
+// structured.
+func ProjectEventMessage(
+	inv *agent.Invocation,
+	evt event.Event,
+	msg model.Message,
+) model.Message {
+	if msg.Role != model.RoleUser && msg.Role != "" {
+		return msg
+	}
+
+	annotation, labelOverrides, ok := projectionMetadata(inv, evt)
+	if !ok {
+		return msg
+	}
+
+	text := projectedUserContentText(
+		msg,
+		annotation,
+		labelOverrides,
+	)
+	if text == "" {
+		return msg
+	}
+
+	projected := msg
+	projected.Content = text
+	projected.ContentParts = nonTextContentParts(msg.ContentParts)
+	return projected
 }
 
 func visibleAssistantMessages(evt event.Event) []model.Message {
@@ -422,6 +455,18 @@ func renderUserMessage(
 	annotation Annotation,
 	labelOverrides map[string]string,
 ) string {
+	return projectedUserContentText(
+		msg,
+		annotation,
+		labelOverrides,
+	)
+}
+
+func projectedUserContentText(
+	msg model.Message,
+	annotation Annotation,
+	labelOverrides map[string]string,
+) string {
 	text := messageText(msg)
 	if text == "" {
 		return ""
@@ -443,6 +488,76 @@ func renderUserMessage(
 		contextMessagePrefix+": "+text,
 	)
 	return strings.Join(lines, "\n")
+}
+
+func projectionMetadata(
+	inv *agent.Invocation,
+	evt event.Event,
+) (Annotation, map[string]string, bool) {
+	runtimeAnnotation, runtimeOK := AnnotationFromRuntimeState(
+		runtimeState(inv),
+	)
+	annotation, ok, err := AnnotationFromEvent(evt)
+	if err != nil {
+		return Annotation{}, nil, false
+	}
+	if ok {
+		return annotation, runtimeAnnotation.ActorLabels, true
+	}
+	if !isSyntheticProjectionEvent(evt) {
+		return Annotation{}, nil, false
+	}
+	if runtimeOK && hasProjectionMetadata(runtimeAnnotation) {
+		return runtimeAnnotation, runtimeAnnotation.ActorLabels, true
+	}
+	return Annotation{}, nil, false
+}
+
+func runtimeState(inv *agent.Invocation) map[string]any {
+	if inv == nil {
+		return nil
+	}
+	return inv.RunOptions.RuntimeState
+}
+
+func hasProjectionMetadata(annotation Annotation) bool {
+	return strings.TrimSpace(annotation.ActorID) != "" ||
+		strings.TrimSpace(annotation.ActorLabel) != "" ||
+		strings.TrimSpace(annotation.QuoteText) != ""
+}
+
+// isSyntheticProjectionEvent matches the zero-value event.Event{} used by
+// ContentRequestProcessor when projecting the current invocation message.
+// If event.Event grows new non-zero-default fields, or callers populate any
+// field on this synthetic event, update this heuristic accordingly.
+func isSyntheticProjectionEvent(evt event.Event) bool {
+	return evt.Author == "" &&
+		evt.Response == nil &&
+		evt.RequestID == "" &&
+		evt.InvocationID == "" &&
+		evt.FilterKey == "" &&
+		evt.Branch == "" &&
+		len(evt.Extensions) == 0 &&
+		evt.Timestamp.IsZero()
+}
+
+func nonTextContentParts(
+	parts []model.ContentPart,
+) []model.ContentPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]model.ContentPart, 0, len(parts))
+	for _, part := range parts {
+		if part.Type == model.ContentTypeText {
+			continue
+		}
+		out = append(out, part)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func renderAssistantMessage(msg model.Message) string {

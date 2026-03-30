@@ -12,8 +12,10 @@ package graphagent
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const (
@@ -65,6 +67,14 @@ const (
 	IsolatedInvocation
 )
 
+// EventMessageProjector projects one event-derived message into the
+// model-facing request view.
+type EventMessageProjector func(
+	inv *agent.Invocation,
+	evt event.Event,
+	msg model.Message,
+) model.Message
+
 // Option is a function that configures a GraphAgent.
 type Option func(*Options)
 
@@ -107,6 +117,9 @@ type Options struct {
 	// conversations. This is useful for models like DeepSeek that output reasoning_content
 	// in thinking mode.
 	ReasoningContentMode string
+	// EventMessageProjector rewrites one event-derived message before it
+	// is appended to the model request.
+	EventMessageProjector EventMessageProjector
 
 	// ExecutorOptions allows passing additional executor options directly.
 	// These options are applied after the mapped options (ChannelBufferSize,
@@ -255,6 +268,16 @@ func WithReasoningContentMode(mode string) Option {
 func WithSummaryFormatter(formatter func(summary string) string) Option {
 	return func(opts *Options) {
 		opts.summaryFormatter = formatter
+	}
+}
+
+// WithEventMessageProjector rewrites one event-derived message before
+// it is appended to the model request.
+func WithEventMessageProjector(
+	projector EventMessageProjector,
+) Option {
+	return func(opts *Options) {
+		opts.EventMessageProjector = projector
 	}
 }
 
