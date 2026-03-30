@@ -116,6 +116,54 @@ func (m *Model) Info() model.Info {
 	}
 }
 
+func (m *Model) runChatRequestCallback(
+	ctx context.Context,
+	chatRequest *anthropic.MessageNewParams,
+) {
+	if m.chatRequestCallback == nil {
+		return
+	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat request callback")
+	m.chatRequestCallback(ctx, chatRequest)
+}
+
+func (m *Model) runChatResponseCallback(
+	ctx context.Context,
+	chatRequest *anthropic.MessageNewParams,
+	chatResponse *anthropic.Message,
+) {
+	if m.chatResponseCallback == nil {
+		return
+	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat response callback")
+	m.chatResponseCallback(ctx, chatRequest, chatResponse)
+}
+
+func (m *Model) runChatChunkCallback(
+	ctx context.Context,
+	chatRequest *anthropic.MessageNewParams,
+	chatChunk *anthropic.MessageStreamEventUnion,
+) {
+	if m.chatChunkCallback == nil {
+		return
+	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat chunk callback")
+	m.chatChunkCallback(ctx, chatRequest, chatChunk)
+}
+
+func (m *Model) runChatStreamCompleteCallback(
+	ctx context.Context,
+	chatRequest *anthropic.MessageNewParams,
+	chatResponse *anthropic.Message,
+	streamErr error,
+) {
+	if m.chatStreamCompleteCallback == nil {
+		return
+	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat stream complete callback")
+	m.chatStreamCompleteCallback(ctx, chatRequest, chatResponse, streamErr)
+}
+
 // GenerateContent generates content from the model.
 func (m *Model) GenerateContent(
 	ctx context.Context,
@@ -135,9 +183,7 @@ func (m *Model) GenerateContent(
 	// Execute callback synchronously before starting the goroutine
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
-	if m.chatRequestCallback != nil {
-		m.chatRequestCallback(ctx, chatRequest)
-	}
+	m.runChatRequestCallback(ctx, chatRequest)
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
@@ -395,9 +441,7 @@ func (m *Model) handleNonStreamingResponse(
 		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
 		return
 	}
-	if m.chatResponseCallback != nil {
-		m.chatResponseCallback(ctx, &chatRequest, message)
-	}
+	m.runChatResponseCallback(ctx, &chatRequest, message)
 	// Build final response payload.
 	now := time.Now()
 	response := &model.Response{
@@ -452,21 +496,25 @@ func (m *Model) handleStreamingResponse(
 	defer stream.Close()
 	// Accumulator to build final response.
 	acc := anthropic.Message{}
+	var (
+		finalResponse *model.Response
+		streamErr     error
+	)
+
+loop:
 	for stream.Next() {
 		chunk := stream.Current()
 		// Accumulate into accumulator.
 		if err := acc.Accumulate(chunk); err != nil {
-			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, err)
-			return
+			streamErr = err
+			break
 		}
-		if m.chatChunkCallback != nil {
-			m.chatChunkCallback(ctx, &chatRequest, &chunk)
-		}
+		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
 		// Build partial response.
 		response, err := buildStreamingPartialResponse(acc, chunk)
 		if err != nil {
-			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, err)
-			return
+			streamErr = err
+			break
 		}
 		if response == nil {
 			continue
@@ -475,27 +523,29 @@ func (m *Model) handleStreamingResponse(
 		select {
 		case responseChan <- response:
 		case <-ctx.Done():
-			return
+			streamErr = ctx.Err()
+			break loop
 		}
 	}
+	if streamErr == nil {
+		streamErr = stream.Err()
+	}
+	if streamErr == nil {
+		finalResponse = buildStreamingFinalResponse(acc)
+	}
+	var callbackAcc *anthropic.Message
+	if streamErr == nil {
+		callbackAcc = &acc
+	}
+	m.runChatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, streamErr)
 	// Propagate stream error.
-	if err := stream.Err(); err != nil {
-		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, err)
+	if streamErr != nil {
+		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 		return
 	}
-	// Emit final response built from the accumulator.
-	finalResponse := buildStreamingFinalResponse(acc)
 	select {
 	case responseChan <- finalResponse:
 	case <-ctx.Done():
-	}
-	// Call the stream complete callback after final response is sent.
-	if m.chatStreamCompleteCallback != nil {
-		var callbackAcc *anthropic.Message
-		if stream.Err() == nil {
-			callbackAcc = &acc
-		}
-		m.chatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, stream.Err())
 	}
 }
 
