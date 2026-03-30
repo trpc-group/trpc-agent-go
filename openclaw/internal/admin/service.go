@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,7 +29,13 @@ import (
 )
 
 const (
-	routeIndex = "/"
+	routeIndex      = "/"
+	routeOverview   = "/overview"
+	routeSkillsPage = "/skills"
+	routeAutomation = "/automation"
+	routeSessions   = "/sessions"
+	routeDebug      = "/debug"
+	routeBrowser    = "/browser"
 
 	routeStatusJSON        = "/api/status"
 	routeSkillsJSON        = "/api/skills/status"
@@ -63,6 +70,7 @@ const (
 	formSkillName  = "skill_name"
 	formEnabled    = "enabled"
 	formReturnTo   = "return_to"
+	formReturnPath = "return_path"
 
 	refreshSeconds = 15
 
@@ -77,6 +85,17 @@ const (
 	browserProbeTimeout = 1500 * time.Millisecond
 
 	formatTimeLayout = "2006-01-02 15:04:05 MST"
+)
+
+type adminView string
+
+const (
+	viewOverview   adminView = "overview"
+	viewSkills     adminView = "skills"
+	viewAutomation adminView = "automation"
+	viewSessions   adminView = "sessions"
+	viewDebug      adminView = "debug"
+	viewBrowser    adminView = "browser"
 )
 
 type Routes struct {
@@ -222,7 +241,13 @@ func New(cfg Config, opts ...Option) *Service {
 
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc(routeIndex, s.handleIndex)
+	mux.HandleFunc(routeIndex, s.handleOverview)
+	mux.HandleFunc(routeOverview, s.handleOverview)
+	mux.HandleFunc(routeSkillsPage, s.handleSkillsPage)
+	mux.HandleFunc(routeAutomation, s.handleAutomationPage)
+	mux.HandleFunc(routeSessions, s.handleSessionsPage)
+	mux.HandleFunc(routeDebug, s.handleDebugPage)
+	mux.HandleFunc(routeBrowser, s.handleBrowserPage)
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
 	mux.HandleFunc(routeSkillsRefresh, s.handleRefreshSkills)
@@ -259,6 +284,7 @@ type snapshot struct {
 	MemoryBackend  string `json:"memory_backend,omitempty"`
 
 	GatewayAddr   string         `json:"gateway_addr,omitempty"`
+	GatewayLabel  string         `json:"gateway_label,omitempty"`
 	GatewayURL    string         `json:"gateway_url,omitempty"`
 	AdminAddr     string         `json:"admin_addr,omitempty"`
 	AdminURL      string         `json:"admin_url,omitempty"`
@@ -422,6 +448,21 @@ type pageData struct {
 	Notice         string
 	Error          string
 	RefreshSeconds int
+	View           adminView
+	PageTitle      string
+	PageSummary    string
+	NavSections    []adminNavSection
+}
+
+type adminNavSection struct {
+	Label string
+	Items []adminNavItem
+}
+
+type adminNavItem struct {
+	Label  string
+	Path   string
+	Active bool
 }
 
 func (s *Service) Snapshot() snapshot {
@@ -441,6 +482,7 @@ func (s *Service) Snapshot() snapshot {
 		SessionBackend: strings.TrimSpace(s.cfg.SessionBackend),
 		MemoryBackend:  strings.TrimSpace(s.cfg.MemoryBackend),
 		GatewayAddr:    strings.TrimSpace(s.cfg.GatewayAddr),
+		GatewayLabel:   compactPortLabel(s.cfg.GatewayAddr),
 		GatewayURL:     strings.TrimSpace(s.cfg.GatewayURL),
 		AdminAddr:      strings.TrimSpace(s.cfg.AdminAddr),
 		AdminURL:       strings.TrimSpace(s.cfg.AdminURL),
@@ -757,9 +799,52 @@ func (s *Service) probeBrowserEndpoint(
 	return view
 }
 
-func (s *Service) handleIndex(
+func (s *Service) handleOverview(
 	w http.ResponseWriter,
 	r *http.Request,
+) {
+	s.renderPage(w, r, viewOverview)
+}
+
+func (s *Service) handleSkillsPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewSkills)
+}
+
+func (s *Service) handleAutomationPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewAutomation)
+}
+
+func (s *Service) handleSessionsPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewSessions)
+}
+
+func (s *Service) handleDebugPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewDebug)
+}
+
+func (s *Service) handleBrowserPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewBrowser)
+}
+
+func (s *Service) renderPage(
+	w http.ResponseWriter,
+	r *http.Request,
+	view adminView,
 ) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -771,6 +856,10 @@ func (s *Service) handleIndex(
 		Notice:         strings.TrimSpace(r.URL.Query().Get(queryNotice)),
 		Error:          strings.TrimSpace(r.URL.Query().Get(queryError)),
 		RefreshSeconds: refreshSeconds,
+		View:           view,
+		PageTitle:      pageTitle(view),
+		PageSummary:    pageSummary(view),
+		NavSections:    adminNavSections(view),
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -780,6 +869,68 @@ func (s *Service) handleIndex(
 			fmt.Sprintf("render admin page: %v", err),
 			http.StatusInternalServerError,
 		)
+	}
+}
+
+func adminNavSections(active adminView) []adminNavSection {
+	sections := []adminNavSection{
+		{
+			Label: "Control",
+			Items: []adminNavItem{
+				{Label: "Overview", Path: routeOverview},
+				{Label: "Skills", Path: routeSkillsPage},
+				{Label: "Automation", Path: routeAutomation},
+				{Label: "Sessions", Path: routeSessions},
+			},
+		},
+		{
+			Label: "Diagnostics",
+			Items: []adminNavItem{
+				{Label: "Debug", Path: routeDebug},
+				{Label: "Browser", Path: routeBrowser},
+			},
+		},
+	}
+	for i := range sections {
+		for j := range sections[i].Items {
+			sections[i].Items[j].Active =
+				navViewForPath(sections[i].Items[j].Path) == active
+		}
+	}
+	return sections
+}
+
+func pageTitle(view adminView) string {
+	switch view {
+	case viewSkills:
+		return "Skills"
+	case viewAutomation:
+		return "Automation"
+	case viewSessions:
+		return "Sessions"
+	case viewDebug:
+		return "Debug"
+	case viewBrowser:
+		return "Browser"
+	default:
+		return "Overview"
+	}
+}
+
+func pageSummary(view adminView) string {
+	switch view {
+	case viewSkills:
+		return "Discover installed skills, refresh folders from disk, and manage config-backed enablement."
+	case viewAutomation:
+		return "Inspect scheduled jobs, trigger one-off runs, and clear automation state."
+	case viewSessions:
+		return "Review exec sessions, upload sessions, and recently persisted files."
+	case viewDebug:
+		return "Browse debug session indexes, recent traces, and Langfuse readiness."
+	case viewBrowser:
+		return "Inspect browser providers, managed browser-server state, nodes, and profiles."
+	default:
+		return "Runtime summary, gateway surfaces, and entry points into the rest of the admin."
 	}
 }
 
@@ -894,7 +1045,7 @@ func (s *Service) redirectWithMessageAt(
 	fragment string,
 ) {
 	target := &url.URL{
-		Path:     routeIndex,
+		Path:     redirectPathFromRequest(r),
 		Fragment: strings.TrimSpace(fragment),
 	}
 	values := url.Values{}
@@ -906,6 +1057,54 @@ func (s *Service) redirectWithMessageAt(
 		target.String(),
 		http.StatusSeeOther,
 	)
+}
+
+func redirectPathFromRequest(r *http.Request) string {
+	if r == nil {
+		return routeIndex
+	}
+	if path := navPath(strings.TrimSpace(r.FormValue(formReturnPath))); path != "" {
+		return path
+	}
+	return routeIndex
+}
+
+func navPath(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case routeIndex, routeOverview:
+		return routeOverview
+	case routeSkillsPage:
+		return routeSkillsPage
+	case routeAutomation:
+		return routeAutomation
+	case routeSessions:
+		return routeSessions
+	case routeDebug:
+		return routeDebug
+	case routeBrowser:
+		return routeBrowser
+	default:
+		return ""
+	}
+}
+
+func navViewForPath(path string) adminView {
+	switch strings.TrimSpace(path) {
+	case routeIndex, routeOverview:
+		return viewOverview
+	case routeSkillsPage:
+		return viewSkills
+	case routeAutomation:
+		return viewAutomation
+	case routeSessions:
+		return viewSessions
+	case routeDebug:
+		return viewDebug
+	case routeBrowser:
+		return viewBrowser
+	default:
+		return viewOverview
+	}
 }
 
 func (s *Service) handleJobsJSON(
@@ -1375,6 +1574,18 @@ func formatUptime(startedAt time.Time, now time.Time) string {
 	return now.Sub(startedAt).Round(time.Second).String()
 }
 
+func compactPortLabel(addr string) string {
+	trimmed := strings.TrimSpace(addr)
+	if trimmed == "" {
+		return ""
+	}
+	_, port, err := net.SplitHostPort(trimmed)
+	if err == nil && strings.TrimSpace(port) != "" {
+		return ":" + strings.TrimSpace(port)
+	}
+	return trimmed
+}
+
 func browserEndpointSummary(view browserEndpointView) string {
 	if strings.TrimSpace(view.URL) == "" {
 		return "-"
@@ -1533,16 +1744,118 @@ const adminPageHTML = `<!doctype html>
     * { box-sizing: border-box; }
     body {
       margin: 0;
+      min-height: 100vh;
       font-family: "Iowan Old Style", "Palatino Linotype", serif;
       color: var(--ink);
       background:
         radial-gradient(circle at top left, #fff8ef, transparent 38%),
         linear-gradient(180deg, #efe7dc 0%, var(--bg) 100%);
     }
+    .app-shell {
+      display: grid;
+      grid-template-columns: 272px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      padding: 24px 18px 22px;
+      border-right: 1px solid rgba(215, 207, 194, 0.92);
+      background: rgba(255, 250, 244, 0.78);
+      backdrop-filter: blur(16px);
+    }
+    .sidebar-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    .sidebar-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--accent);
+      color: white;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      box-shadow: var(--shadow);
+    }
+    .sidebar-eyebrow {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+    .sidebar-title {
+      margin-top: 2px;
+      font-size: 26px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .sidebar-subtle {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 14px;
+    }
     main {
-      max-width: 1180px;
-      margin: 0 auto;
-      padding: 32px 20px 40px;
+      margin: 0;
+      width: 100%;
+      padding: 32px 28px 40px;
+    }
+    .page-wrap {
+      max-width: 1440px;
+    }
+    .sidebar-nav {
+      display: grid;
+      gap: 22px;
+    }
+    .sidebar-section-title {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+    .sidebar-links {
+      display: grid;
+      gap: 8px;
+    }
+    .sidebar-link {
+      display: flex;
+      align-items: center;
+      min-height: 42px;
+      padding: 10px 14px;
+      border-radius: 14px;
+      border: 1px solid transparent;
+      color: var(--ink);
+      text-decoration: none;
+      font-weight: 700;
+      transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+    }
+    .sidebar-link:hover {
+      background: rgba(255, 253, 248, 0.88);
+      border-color: rgba(215, 207, 194, 0.88);
+    }
+    .sidebar-link.active {
+      background: rgba(15, 111, 97, 0.1);
+      border-color: rgba(15, 111, 97, 0.24);
+      color: var(--accent);
+      box-shadow: var(--shadow);
+    }
+    .page-header {
+      margin-bottom: 18px;
+    }
+    .page-kicker {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
     }
     h1, h2 { margin: 0 0 14px; }
     h1 { font-size: 36px; }
@@ -1711,9 +2024,6 @@ const adminPageHTML = `<!doctype html>
       font-weight: 700;
       white-space: nowrap;
     }
-    .skills-config-note {
-      margin-top: 12px;
-    }
     .skills-header {
       display: flex;
       flex-wrap: wrap;
@@ -1729,32 +2039,48 @@ const adminPageHTML = `<!doctype html>
       color: var(--muted);
       max-width: 700px;
     }
-    .skills-meta-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 14px;
-      align-items: center;
+    .skills-ops-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+      margin-top: 16px;
     }
-    .skills-meta-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      min-height: 34px;
-      padding: 6px 11px;
-      border-radius: 999px;
+    .skills-op-card {
       border: 1px solid var(--line);
-      background: rgba(15, 111, 97, 0.04);
+      border-radius: 16px;
+      padding: 14px 16px;
+      background: rgba(255, 253, 248, 0.72);
+    }
+    .skills-op-label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .skills-op-value {
+      margin-top: 8px;
+      font-weight: 700;
+      line-height: 1.45;
+    }
+    .skills-op-value code {
+      background: rgba(15, 111, 97, 0.08);
+    }
+    .skills-op-note {
+      margin-top: 8px;
       color: var(--muted);
       font-size: 14px;
     }
-    .skills-meta-pill code {
-      background: rgba(15, 111, 97, 0.08);
+    .skills-op-actions {
+      margin-top: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
     }
-    .skills-meta-action {
+    .skills-op-actions form {
       margin: 0;
     }
-    .skills-meta-action button {
+    .skills-op-actions button {
       padding: 7px 12px;
       font-size: 14px;
     }
@@ -1881,14 +2207,45 @@ const adminPageHTML = `<!doctype html>
       overflow: visible;
     }
     .skill-reason {
-      margin-top: 6px;
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
       color: var(--muted);
       font-size: 14px;
+      min-width: 0;
+    }
+    .skill-reason-label {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(95, 87, 77, 0.18);
+      background: rgba(95, 87, 77, 0.06);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .skill-reason-label.needs-setup {
+      color: #9b5f12;
+      border-color: rgba(194, 122, 32, 0.25);
+      background: rgba(194, 122, 32, 0.08);
+    }
+    .skill-reason-label.disabled {
+      color: #655b50;
+      border-color: rgba(95, 87, 77, 0.22);
+      background: rgba(95, 87, 77, 0.1);
+    }
+    .skill-reason-text {
+      min-width: 0;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .skill-card[open] .skill-reason {
+    .skill-card[open] .skill-reason-text {
       white-space: normal;
     }
     .skill-toggle-group {
@@ -1966,6 +2323,18 @@ const adminPageHTML = `<!doctype html>
       padding-left: 18px;
     }
     @media (max-width: 760px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid rgba(215, 207, 194, 0.92);
+      }
+      main {
+        padding: 24px 16px 32px;
+      }
       h1 { font-size: 30px; }
       .meta { grid-template-columns: 1fr; }
       .skills-controls {
@@ -1999,17 +2368,44 @@ const adminPageHTML = `<!doctype html>
   </style>
 </head>
 <body>
-  <main>
-    <h1>OpenClaw Admin</h1>
-    <p class="subtle">
-      Local control surface for the gateway runtime. This page is generic on
-      purpose: it starts with system overview and scheduled job operations,
-      and can grow into a wider management plane without going back through
-      Telegram commands.
-    </p>
-    {{if .Notice}}<div class="notice ok">{{.Notice}}</div>{{end}}
-    {{if .Error}}<div class="notice err">{{.Error}}</div>{{end}}
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-mark">OC</div>
+        <div>
+          <div class="sidebar-eyebrow">control</div>
+          <div class="sidebar-title">OpenClaw</div>
+          {{if .Snapshot.AppName}}
+          <div class="sidebar-subtle">{{.Snapshot.AppName}}</div>
+          {{end}}
+        </div>
+      </div>
+      <nav class="sidebar-nav" aria-label="Admin sections">
+        {{range .NavSections}}
+        <section>
+          <div class="sidebar-section-title">{{.Label}}</div>
+          <div class="sidebar-links">
+            {{range .Items}}
+            <a class="sidebar-link{{if .Active}} active{{end}}" href="{{.Path}}">
+              {{.Label}}
+            </a>
+            {{end}}
+          </div>
+        </section>
+        {{end}}
+      </nav>
+    </aside>
+    <main>
+      <div class="page-wrap">
+        <header class="page-header">
+          <p class="page-kicker">OpenClaw Admin</p>
+          <h1>{{.PageTitle}}</h1>
+          <p class="subtle">{{.PageSummary}}</p>
+        </header>
+        {{if .Notice}}<div class="notice ok">{{.Notice}}</div>{{end}}
+        {{if .Error}}<div class="notice err">{{.Error}}</div>{{end}}
 
+    {{if eq .View "overview"}}
     <section class="stats">
       <article class="card">
         <span class="stat-label">Instance</span>
@@ -2017,7 +2413,7 @@ const adminPageHTML = `<!doctype html>
       </article>
       <article class="card">
         <span class="stat-label">Gateway</span>
-        <span class="stat-value">{{.Snapshot.GatewayAddr}}</span>
+        <span class="stat-value">{{if .Snapshot.GatewayLabel}}{{.Snapshot.GatewayLabel}}{{else}}{{.Snapshot.GatewayAddr}}{{end}}</span>
       </article>
       <article class="card">
         <span class="stat-label">Jobs</span>
@@ -2172,6 +2568,7 @@ const adminPageHTML = `<!doctype html>
         </p>
         <div class="actions">
           <form method="post" action="/api/cron/jobs/clear">
+            <input type="hidden" name="return_path" value="/overview">
             <button
               class="warn"
               type="submit"
@@ -2208,25 +2605,46 @@ const adminPageHTML = `<!doctype html>
           <dd><a href="/api/skills/status">/api/skills/status</a></dd>
         </dl>
         <p class="subtle" style="margin-top: 12px;">
-          Jump to <a href="#skills-admin">Skills Inventory</a>.
+          Open <a href="/skills">Skills Inventory</a>.
         </p>
       </article>
 
       <article class="card">
-        <h2>Debug Index</h2>
+        <h2>Sessions</h2>
         <p class="subtle">
-          Session-indexed trace browsing for recent gateway activity. This is
-          especially useful when a Telegram or cron flow behaves strangely and
-          you want the exact recorded request and event stream before jumping
-          into a full trace backend.
+          Exec sessions and persisted uploads live on their own page so the
+          overview stays scannable.
         </p>
         <dl class="meta">
-          <dt>Indexed Dir</dt>
-          <dd><code>{{.Snapshot.Debug.BySessionDir}}</code></dd>
-          <dt>Session Count</dt>
+          <dt>Exec Sessions</dt>
+          <dd>{{.Snapshot.Exec.SessionCount}}</dd>
+          <dt>Running Exec</dt>
+          <dd>{{.Snapshot.Exec.RunningCount}}</dd>
+          <dt>Uploads</dt>
+          <dd>{{.Snapshot.Uploads.FileCount}}</dd>
+          <dt>Upload Sessions</dt>
+          <dd>{{len .Snapshot.Uploads.Sessions}}</dd>
+          <dt>Open</dt>
+          <dd><a href="/sessions">Sessions</a></dd>
+        </dl>
+      </article>
+
+      <article class="card">
+        <h2>Debug</h2>
+        <p class="subtle">
+          Trace browsing and Langfuse drill-down live on a separate page.
+        </p>
+        <dl class="meta">
+          <dt>Debug Sessions</dt>
           <dd>{{.Snapshot.Debug.SessionCount}}</dd>
-          <dt>Trace Count</dt>
+          <dt>Recent Traces</dt>
           <dd>{{.Snapshot.Debug.TraceCount}}</dd>
+          <dt>Langfuse</dt>
+          <dd>
+            {{if .Snapshot.Langfuse.Ready}}ready
+            {{else if .Snapshot.Langfuse.Enabled}}starting
+            {{else}}off{{end}}
+          </dd>
           <dt>Status</dt>
           <dd>
             {{if .Snapshot.Debug.Error}}
@@ -2237,124 +2655,18 @@ const adminPageHTML = `<!doctype html>
               idle
             {{end}}
           </dd>
+          <dt>Open</dt>
+          <dd><a href="/debug">Debug</a></dd>
         </dl>
       </article>
 
       <article class="card">
-        <h2>Langfuse</h2>
+        <h2>Browser</h2>
         <p class="subtle">
-          OpenTelemetry spans are pushed to Langfuse when the exporter starts
-          successfully. The admin surface keeps local request indexes and uses
-          trace links only as a drill-down path.
+          Browser providers, managed browser-server state, and profile details
+          are grouped on their own page.
         </p>
         <dl class="meta">
-          <dt>Enabled</dt>
-          <dd>{{.Snapshot.Langfuse.Enabled}}</dd>
-          <dt>Ready</dt>
-          <dd>{{.Snapshot.Langfuse.Ready}}</dd>
-          <dt>UI</dt>
-          <dd>
-            {{if .Snapshot.Langfuse.UIBaseURL}}
-              <a href="{{.Snapshot.Langfuse.UIBaseURL}}" target="_blank"
-                rel="noopener noreferrer">{{.Snapshot.Langfuse.UIBaseURL}}</a>
-            {{else}}-{{end}}
-          </dd>
-          <dt>Trace Links</dt>
-          <dd>
-            {{if .Snapshot.Langfuse.TraceURLTemplate}}configured{{else}}-{{end}}
-          </dd>
-          <dt>Status</dt>
-          <dd>
-            {{if .Snapshot.Langfuse.Error}}
-              <span class="subtle">{{.Snapshot.Langfuse.Error}}</span>
-            {{else if .Snapshot.Langfuse.Ready}}
-              ready
-            {{else if .Snapshot.Langfuse.Enabled}}
-              starting
-            {{else}}
-              idle
-            {{end}}
-          </dd>
-        </dl>
-      </article>
-
-      <article class="card">
-        <h2>Exec Surface</h2>
-        <p class="subtle">
-          Live view of host <code>exec_command</code> sessions. This makes it
-          easier to understand long-running interactive jobs without digging
-          through runner logs first.
-        </p>
-        <dl class="meta">
-          <dt>Enabled</dt>
-          <dd>{{.Snapshot.Exec.Enabled}}</dd>
-          <dt>Sessions</dt>
-          <dd>{{.Snapshot.Exec.SessionCount}}</dd>
-          <dt>Running</dt>
-          <dd>{{.Snapshot.Exec.RunningCount}}</dd>
-          <dt>JSON</dt>
-          <dd><a href="/api/exec/sessions">/api/exec/sessions</a></dd>
-        </dl>
-      </article>
-
-      <article class="card">
-        <h2>Uploads</h2>
-        <p class="subtle">
-          Recent persisted chat uploads. This helps debug multi-turn file,
-          PDF, audio, and video workflows without exposing host paths in
-          the user conversation.
-        </p>
-        <dl class="meta">
-          <dt>Enabled</dt>
-          <dd>{{.Snapshot.Uploads.Enabled}}</dd>
-          <dt>Root</dt>
-          <dd><code>{{.Snapshot.Uploads.Root}}</code></dd>
-          <dt>Files</dt>
-          <dd>{{.Snapshot.Uploads.FileCount}}</dd>
-          <dt>Total Bytes</dt>
-          <dd>{{.Snapshot.Uploads.TotalBytes}}</dd>
-          <dt>By Kind</dt>
-          <dd>
-            {{if .Snapshot.Uploads.KindCounts}}
-              {{range $i, $item := .Snapshot.Uploads.KindCounts}}
-                {{if $i}}, {{end}}{{$item.Kind}} {{$item.Count}}
-              {{end}}
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>By Source</dt>
-          <dd>
-            {{if .Snapshot.Uploads.SourceCounts}}
-              {{range $i, $item := .Snapshot.Uploads.SourceCounts}}
-                {{if $i}}, {{end}}{{$item.Source}} {{$item.Count}}
-              {{end}}
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>Status</dt>
-          <dd>
-            {{if .Snapshot.Uploads.Error}}
-              <span class="subtle">{{.Snapshot.Uploads.Error}}</span>
-            {{else if .Snapshot.Uploads.Enabled}}
-              ready
-            {{else}}
-              idle
-            {{end}}
-          </dd>
-        </dl>
-      </article>
-
-      <article class="card">
-        <h2>Browser Surface</h2>
-        <p class="subtle">
-          Native browser tool wiring, including host browser-server routing,
-          sandbox targets, node targets, and profile inventory.
-        </p>
-        <dl class="meta">
-          <dt>Enabled</dt>
-          <dd>{{.Snapshot.Browser.Enabled}}</dd>
           <dt>Providers</dt>
           <dd>{{.Snapshot.Browser.ProviderCount}}</dd>
           <dt>Profiles</dt>
@@ -2375,163 +2687,14 @@ const adminPageHTML = `<!doctype html>
               idle
             {{end}}
           </dd>
+          <dt>Open</dt>
+          <dd><a href="/browser">Browser</a></dd>
         </dl>
-        {{if .Snapshot.Browser.Managed.Enabled}}
-        <h3 style="margin: 16px 0 8px;">Local browser-server</h3>
-        <dl class="meta">
-          <dt>Managed</dt>
-          <dd>{{.Snapshot.Browser.Managed.Managed}}</dd>
-          <dt>URL</dt>
-          <dd>
-            {{if .Snapshot.Browser.Managed.URL}}
-              <code>{{.Snapshot.Browser.Managed.URL}}</code>
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>PID</dt>
-          <dd>
-            {{if .Snapshot.Browser.Managed.PID}}
-              {{.Snapshot.Browser.Managed.PID}}
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>Work Dir</dt>
-          <dd>
-            {{if .Snapshot.Browser.Managed.WorkDir}}
-              <code>{{.Snapshot.Browser.Managed.WorkDir}}</code>
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>Command</dt>
-          <dd>
-            {{if .Snapshot.Browser.Managed.Command}}
-              <code>{{.Snapshot.Browser.Managed.Command}}</code>
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>Log</dt>
-          <dd>
-            {{if .Snapshot.Browser.Managed.LogURL}}
-              <a
-                href="{{.Snapshot.Browser.Managed.LogURL}}"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                open log
-              </a>
-              <br><code>{{.Snapshot.Browser.Managed.LogPath}}</code>
-            {{else if .Snapshot.Browser.Managed.LogPath}}
-              <code>{{.Snapshot.Browser.Managed.LogPath}}</code>
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>Started</dt>
-          <dd>{{formatTime .Snapshot.Browser.Managed.StartedAt}}</dd>
-          <dt>Stopped</dt>
-          <dd>{{formatTime .Snapshot.Browser.Managed.StoppedAt}}</dd>
-          <dt>Exit</dt>
-          <dd>
-            {{if .Snapshot.Browser.Managed.ExitCode}}
-              {{.Snapshot.Browser.Managed.ExitCode}}
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>Error</dt>
-          <dd>
-            {{if .Snapshot.Browser.Managed.LastError}}
-              {{.Snapshot.Browser.Managed.LastError}}
-            {{else}}
-              -
-            {{end}}
-          </dd>
-        </dl>
-        {{if .Snapshot.Browser.Managed.RecentLogs}}
-        <pre
-          style="margin-top: 12px; white-space: pre-wrap;"
-        >{{range .Snapshot.Browser.Managed.RecentLogs}}
-{{.}}
-{{end}}</pre>
-        {{end}}
-        {{end}}
-        {{if .Snapshot.Browser.Providers}}
-        <table>
-          <thead>
-            <tr>
-              <th>Provider</th>
-              <th>Default</th>
-              <th>Host</th>
-              <th>Sandbox</th>
-              <th>Guards</th>
-              <th>Profiles</th>
-              <th>Nodes</th>
-            </tr>
-          </thead>
-          <tbody>
-            {{range .Snapshot.Browser.Providers}}
-            <tr>
-              <td>{{if .Name}}{{.Name}}{{else}}browser{{end}}</td>
-              <td>
-                {{if .DefaultProfile}}
-                  {{.DefaultProfile}}
-                {{else}}
-                  -
-                {{end}}
-              </td>
-              <td>
-                {{if .Host.URL}}
-                  <code>{{.Host.URL}}</code><br>
-                  <span class="subtle">{{browserEndpointSummary .Host}}</span>
-                {{else}}-{{end}}
-              </td>
-              <td>
-                {{if .Sandbox.URL}}
-                  <code>{{.Sandbox.URL}}</code><br>
-                  <span class="subtle">
-                    {{browserEndpointSummary .Sandbox}}
-                  </span>
-                {{else}}-{{end}}
-              </td>
-              <td>
-                loopback={{.AllowLoopback}},
-                private={{.AllowPrivateNet}},
-                file={{.AllowFileURLs}}
-              </td>
-              <td>
-                {{if .Profiles}}
-                  {{range $i, $profile := .Profiles}}
-                    {{if $i}}, {{end}}{{$profile.Name}}
-                  {{end}}
-                {{else}}-{{end}}
-              </td>
-              <td>
-                {{if .Nodes}}
-                  {{range $i, $node := .Nodes}}
-                    {{if $i}}<br>{{end}}{{$node.ID}}
-                    {{if $node.Status.URL}}
-                      <br>
-                      <span class="subtle">
-                        {{browserEndpointSummary $node.Status}}
-                      </span>
-                    {{end}}
-                  {{end}}
-                {{else}}-{{end}}
-              </td>
-            </tr>
-            {{end}}
-          </tbody>
-        </table>
-        {{else}}
-        <p class="empty">Browser tool is not configured for this runtime.</p>
-        {{end}}
       </article>
     </section>
+    {{end}}
 
+    {{if eq .View "skills"}}
     <section class="card" style="margin-top: 24px;" id="skills-admin" data-skills-root>
       <div class="skills-header">
         <div class="skills-header-copy">
@@ -2542,50 +2705,47 @@ const adminPageHTML = `<!doctype html>
           </p>
         </div>
       </div>
-      <div class="skills-meta-row">
-        {{if .Snapshot.Skills.Writable}}
-        <span class="skills-meta-pill">
-          Config <code>{{.Snapshot.Skills.ConfigPath}}</code>
-        </span>
-        {{else}}
-        <span class="skills-meta-pill">
-          Read-only runtime view
-        </span>
-        {{end}}
-        <span class="skills-meta-pill">
-          {{if .Snapshot.Skills.Refreshable}}
-            Changes apply on the next turn
-          {{else if .Snapshot.Skills.Writable}}
-            Restart OpenClaw after saving
-          {{else}}
-            Enable and disable unavailable here
-          {{end}}
-        </span>
-        {{if and .Snapshot.Skills.Refreshable (not .Snapshot.Skills.Writable)}}
-        <span class="skills-meta-pill">
-          Refresh discovers added or removed skill folders
-        </span>
-        {{end}}
+      <div class="skills-ops-grid">
+        <div class="skills-op-card">
+          <div class="skills-op-label">
+            {{if .Snapshot.Skills.Writable}}Config-backed changes{{else}}Runtime state{{end}}
+          </div>
+          <div class="skills-op-value">
+            {{if .Snapshot.Skills.Writable}}
+              Writes to <code>{{.Snapshot.Skills.ConfigPath}}</code>
+            {{else}}
+              Read-only runtime view
+            {{end}}
+          </div>
+          <div class="skills-op-note">
+            {{if .Snapshot.Skills.Refreshable}}
+              Enabled changes apply on the next turn.
+            {{else if .Snapshot.Skills.Writable}}
+              Enabled changes are saved, but runtime updates still require a restart.
+            {{else}}
+              Enable and disable controls are unavailable for this runtime.
+            {{end}}
+          </div>
+        </div>
         {{if .Snapshot.Skills.Refreshable}}
-        <form method="post" action="/api/skills/refresh" class="skills-meta-action">
-          <input type="hidden" name="return_to" value="skills-admin">
-          <button class="secondary" type="submit">Refresh from disk</button>
-        </form>
+        <div class="skills-op-card">
+          <div class="skills-op-label">Refresh from disk</div>
+          <div class="skills-op-value">
+            Rescan skill folders and update this inventory.
+          </div>
+          <div class="skills-op-note">
+            Use this after adding or removing skill folders on disk.
+          </div>
+          <div class="skills-op-actions">
+            <form method="post" action="/api/skills/refresh">
+              <input type="hidden" name="return_to" value="skills-admin">
+              <input type="hidden" name="return_path" value="/skills">
+              <button class="secondary" type="submit">Refresh inventory</button>
+            </form>
+          </div>
+        </div>
         {{end}}
       </div>
-      {{if and .Snapshot.Skills.Writable .Snapshot.Skills.Refreshable}}
-      <p class="subtle skills-config-note">
-        Enabled updates config. Refresh scans skill folders on disk.
-      </p>
-      {{else if .Snapshot.Skills.Writable}}
-      <p class="subtle skills-config-note">
-        Enabled updates config, but runtime changes still require a restart.
-      </p>
-      {{else if .Snapshot.Skills.Refreshable}}
-      <p class="subtle skills-config-note">
-        Refresh scans skill folders on disk.
-      </p>
-      {{end}}
       {{if .Snapshot.Skills.Error}}
       <div class="notice err" style="margin-top: 12px;">
         {{.Snapshot.Skills.Error}}
@@ -2641,7 +2801,6 @@ const adminPageHTML = `<!doctype html>
                   </div>
                 </div>
                 <div class="skill-badges inline">
-                  {{if eq .Status "needs-setup"}}<span class="skill-badge status needs-setup">Setup Required</span>{{end}}
                   {{if .Bundled}}<span class="skill-badge">bundled</span>{{end}}
                   {{if .BlockedByAllowlist}}<span class="skill-badge">allowlist</span>{{end}}
                   {{if .Always}}<span class="skill-badge">always</span>{{end}}
@@ -2649,7 +2808,12 @@ const adminPageHTML = `<!doctype html>
                 </div>
                 <div class="skill-description">{{.Description}}</div>
                 {{if .Reason}}
-                <div class="skill-reason">Reason: {{.Reason}}</div>
+                <div class="skill-reason">
+                  <span class="skill-reason-label {{.Status}}">
+                    {{if eq .Status "needs-setup"}}Setup Required{{else if eq .Status "disabled"}}Disabled{{else}}Reason{{end}}
+                  </span>
+                  <span class="skill-reason-text">{{.Reason}}</span>
+                </div>
                 {{end}}
               </div>
               <div class="skill-summary-side">
@@ -2666,6 +2830,7 @@ const adminPageHTML = `<!doctype html>
                     <input type="hidden" name="skill_name" value="{{.Name}}">
                     <input type="hidden" name="enabled" value="{{if .Disabled}}true{{else}}false{{end}}">
                     <input type="hidden" name="return_to" value="skill-card-{{.ConfigKey}}">
+                    <input type="hidden" name="return_path" value="/skills">
                     <button
                       class="skill-inline-toggle {{if not .Disabled}}enabled{{end}}"
                       type="submit"
@@ -2823,7 +2988,34 @@ const adminPageHTML = `<!doctype html>
       <p class="empty">No skills discovered.</p>
       {{end}}
     </section>
+    {{end}}
 
+    {{if eq .View "automation"}}
+    <section class="panels">
+      <article class="card">
+        <h2>Automation</h2>
+        {{if .Snapshot.Cron.Enabled}}
+        <p class="subtle">
+          Persisted jobs continue after gateway restarts. Use this page for
+          scheduling, one-off runs, and cleanup.
+        </p>
+        <div class="actions">
+          <form method="post" action="/api/cron/jobs/clear">
+            <input type="hidden" name="return_path" value="/automation">
+            <button
+              class="warn"
+              type="submit"
+              onclick="return confirm('Clear all scheduled jobs?');"
+            >
+              Clear All Jobs
+            </button>
+          </form>
+        </div>
+        {{else}}
+        <p class="empty">Scheduled jobs are not enabled for this runtime.</p>
+        {{end}}
+      </article>
+    </section>
     <section class="card" style="margin-top: 24px;">
       <h2>Scheduled Jobs</h2>
       {{if .Snapshot.Cron.Jobs}}
@@ -2873,10 +3065,12 @@ const adminPageHTML = `<!doctype html>
               <div class="actions">
                 <form method="post" action="/api/cron/jobs/run">
                   <input type="hidden" name="job_id" value="{{.ID}}">
+                  <input type="hidden" name="return_path" value="/automation">
                   <button type="submit">Run Now</button>
                 </form>
                 <form method="post" action="/api/cron/jobs/remove">
                   <input type="hidden" name="job_id" value="{{.ID}}">
+                  <input type="hidden" name="return_path" value="/automation">
                   <button
                     class="secondary"
                     type="submit"
@@ -2895,7 +3089,37 @@ const adminPageHTML = `<!doctype html>
       <p class="empty">No scheduled jobs.</p>
       {{end}}
     </section>
+    {{end}}
 
+    {{if eq .View "sessions"}}
+    <section class="panels">
+      <article class="card">
+        <h2>Exec Surface</h2>
+        <dl class="meta">
+          <dt>Enabled</dt>
+          <dd>{{.Snapshot.Exec.Enabled}}</dd>
+          <dt>Sessions</dt>
+          <dd>{{.Snapshot.Exec.SessionCount}}</dd>
+          <dt>Running</dt>
+          <dd>{{.Snapshot.Exec.RunningCount}}</dd>
+          <dt>JSON</dt>
+          <dd><a href="/api/exec/sessions">/api/exec/sessions</a></dd>
+        </dl>
+      </article>
+      <article class="card">
+        <h2>Uploads</h2>
+        <dl class="meta">
+          <dt>Enabled</dt>
+          <dd>{{.Snapshot.Uploads.Enabled}}</dd>
+          <dt>Root</dt>
+          <dd><code>{{.Snapshot.Uploads.Root}}</code></dd>
+          <dt>Files</dt>
+          <dd>{{.Snapshot.Uploads.FileCount}}</dd>
+          <dt>Total Bytes</dt>
+          <dd>{{.Snapshot.Uploads.TotalBytes}}</dd>
+        </dl>
+      </article>
+    </section>
     <section class="card" style="margin-top: 24px;">
       <h2>Exec Sessions</h2>
       {{if .Snapshot.Exec.Sessions}}
@@ -3055,7 +3279,53 @@ const adminPageHTML = `<!doctype html>
       <p class="empty">No uploads indexed yet.</p>
       {{end}}
     </section>
+    {{end}}
 
+    {{if eq .View "debug"}}
+    <section class="panels">
+      <article class="card">
+        <h2>Debug Index</h2>
+        <dl class="meta">
+          <dt>Indexed Dir</dt>
+          <dd><code>{{.Snapshot.Debug.BySessionDir}}</code></dd>
+          <dt>Session Count</dt>
+          <dd>{{.Snapshot.Debug.SessionCount}}</dd>
+          <dt>Trace Count</dt>
+          <dd>{{.Snapshot.Debug.TraceCount}}</dd>
+          <dt>Status</dt>
+          <dd>
+            {{if .Snapshot.Debug.Error}}
+              <span class="subtle">{{.Snapshot.Debug.Error}}</span>
+            {{else if .Snapshot.Debug.Enabled}}
+              ready
+            {{else}}
+              idle
+            {{end}}
+          </dd>
+        </dl>
+      </article>
+      <article class="card">
+        <h2>Langfuse</h2>
+        <dl class="meta">
+          <dt>Enabled</dt>
+          <dd>{{.Snapshot.Langfuse.Enabled}}</dd>
+          <dt>Ready</dt>
+          <dd>{{.Snapshot.Langfuse.Ready}}</dd>
+          <dt>Status</dt>
+          <dd>
+            {{if .Snapshot.Langfuse.Error}}
+              <span class="subtle">{{.Snapshot.Langfuse.Error}}</span>
+            {{else if .Snapshot.Langfuse.Ready}}
+              ready
+            {{else if .Snapshot.Langfuse.Enabled}}
+              starting
+            {{else}}
+              idle
+            {{end}}
+          </dd>
+        </dl>
+      </article>
+    </section>
     <section class="card" style="margin-top: 24px;">
       <h2>Debug Sessions</h2>
       {{if .Snapshot.Debug.Sessions}}
@@ -3170,6 +3440,194 @@ const adminPageHTML = `<!doctype html>
       <p class="empty">No recent traces.</p>
       {{end}}
     </section>
+    {{end}}
+
+    {{if eq .View "browser"}}
+    <section class="card" style="margin-top: 24px;">
+      <h2>Browser Surface</h2>
+      <p class="subtle">
+        Native browser tool wiring, including host browser-server routing,
+        sandbox targets, node targets, and profile inventory.
+      </p>
+      <dl class="meta">
+        <dt>Enabled</dt>
+        <dd>{{.Snapshot.Browser.Enabled}}</dd>
+        <dt>Providers</dt>
+        <dd>{{.Snapshot.Browser.ProviderCount}}</dd>
+        <dt>Profiles</dt>
+        <dd>{{.Snapshot.Browser.ProfileCount}}</dd>
+        <dt>Nodes</dt>
+        <dd>{{.Snapshot.Browser.NodeCount}}</dd>
+        <dt>Status</dt>
+        <dd>
+          {{if .Snapshot.Browser.Managed.Enabled}}
+            {{if .Snapshot.Browser.Managed.State}}
+              {{.Snapshot.Browser.Managed.State}}
+            {{else}}
+              configured
+            {{end}}
+          {{else if .Snapshot.Browser.Enabled}}
+            ready
+          {{else}}
+            idle
+          {{end}}
+        </dd>
+      </dl>
+      {{if .Snapshot.Browser.Managed.Enabled}}
+      <h3 style="margin: 16px 0 8px;">Local browser-server</h3>
+      <dl class="meta">
+        <dt>Managed</dt>
+        <dd>{{.Snapshot.Browser.Managed.Managed}}</dd>
+        <dt>URL</dt>
+        <dd>
+          {{if .Snapshot.Browser.Managed.URL}}
+            <code>{{.Snapshot.Browser.Managed.URL}}</code>
+          {{else}}
+            -
+          {{end}}
+        </dd>
+        <dt>PID</dt>
+        <dd>
+          {{if .Snapshot.Browser.Managed.PID}}
+            {{.Snapshot.Browser.Managed.PID}}
+          {{else}}
+            -
+          {{end}}
+        </dd>
+        <dt>Work Dir</dt>
+        <dd>
+          {{if .Snapshot.Browser.Managed.WorkDir}}
+            <code>{{.Snapshot.Browser.Managed.WorkDir}}</code>
+          {{else}}
+            -
+          {{end}}
+        </dd>
+        <dt>Command</dt>
+        <dd>
+          {{if .Snapshot.Browser.Managed.Command}}
+            <code>{{.Snapshot.Browser.Managed.Command}}</code>
+          {{else}}
+            -
+          {{end}}
+        </dd>
+        <dt>Log</dt>
+        <dd>
+          {{if .Snapshot.Browser.Managed.LogURL}}
+            <a
+              href="{{.Snapshot.Browser.Managed.LogURL}}"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              open log
+            </a>
+            <br><code>{{.Snapshot.Browser.Managed.LogPath}}</code>
+          {{else if .Snapshot.Browser.Managed.LogPath}}
+            <code>{{.Snapshot.Browser.Managed.LogPath}}</code>
+          {{else}}
+            -
+          {{end}}
+        </dd>
+        <dt>Started</dt>
+        <dd>{{formatTime .Snapshot.Browser.Managed.StartedAt}}</dd>
+        <dt>Stopped</dt>
+        <dd>{{formatTime .Snapshot.Browser.Managed.StoppedAt}}</dd>
+        <dt>Exit</dt>
+        <dd>
+          {{if .Snapshot.Browser.Managed.ExitCode}}
+            {{.Snapshot.Browser.Managed.ExitCode}}
+          {{else}}
+            -
+          {{end}}
+        </dd>
+        <dt>Error</dt>
+        <dd>
+          {{if .Snapshot.Browser.Managed.LastError}}
+            {{.Snapshot.Browser.Managed.LastError}}
+          {{else}}
+            -
+          {{end}}
+        </dd>
+      </dl>
+      {{if .Snapshot.Browser.Managed.RecentLogs}}
+      <pre
+        style="margin-top: 12px; white-space: pre-wrap;"
+      >{{range .Snapshot.Browser.Managed.RecentLogs}}
+{{.}}
+{{end}}</pre>
+      {{end}}
+      {{end}}
+      {{if .Snapshot.Browser.Providers}}
+      <table>
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Default</th>
+            <th>Host</th>
+            <th>Sandbox</th>
+            <th>Guards</th>
+            <th>Profiles</th>
+            <th>Nodes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Snapshot.Browser.Providers}}
+          <tr>
+            <td>{{if .Name}}{{.Name}}{{else}}browser{{end}}</td>
+            <td>
+              {{if .DefaultProfile}}
+                {{.DefaultProfile}}
+              {{else}}
+                -
+              {{end}}
+            </td>
+            <td>
+              {{if .Host.URL}}
+                <code>{{.Host.URL}}</code><br>
+                <span class="subtle">{{browserEndpointSummary .Host}}</span>
+              {{else}}-{{end}}
+            </td>
+            <td>
+              {{if .Sandbox.URL}}
+                <code>{{.Sandbox.URL}}</code><br>
+                <span class="subtle">
+                  {{browserEndpointSummary .Sandbox}}
+                </span>
+              {{else}}-{{end}}
+            </td>
+            <td>
+              loopback={{.AllowLoopback}},
+              private={{.AllowPrivateNet}},
+              file={{.AllowFileURLs}}
+            </td>
+            <td>
+              {{if .Profiles}}
+                {{range $i, $profile := .Profiles}}
+                  {{if $i}}, {{end}}{{$profile.Name}}
+                {{end}}
+              {{else}}-{{end}}
+            </td>
+            <td>
+              {{if .Nodes}}
+                {{range $i, $node := .Nodes}}
+                  {{if $i}}<br>{{end}}{{$node.ID}}
+                  {{if $node.Status.URL}}
+                    <br>
+                    <span class="subtle">
+                      {{browserEndpointSummary $node.Status}}
+                    </span>
+                  {{end}}
+                {{end}}
+              {{else}}-{{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="empty">Browser tool is not configured for this runtime.</p>
+      {{end}}
+    </section>
+    {{end}}
   </main>
   <script>
     (function () {
@@ -3336,5 +3794,8 @@ const adminPageHTML = `<!doctype html>
       restoreScrollPosition();
     })();
   </script>
+      </div>
+    </main>
+  </div>
 </body>
 </html>`

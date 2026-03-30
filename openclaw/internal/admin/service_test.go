@@ -284,7 +284,7 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
 	require.Contains(t, body, "OpenClaw Admin")
-	require.Contains(t, body, "cpu report")
+	require.Contains(t, body, "/skills")
 	require.Contains(t, body, "127.0.0.1:8080")
 	require.Contains(t, body, "telegram")
 }
@@ -313,7 +313,7 @@ func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodGet, routeIndex, nil)
+	req := httptest.NewRequest(http.MethodGet, routeSkillsPage, nil)
 	rr := httptest.NewRecorder()
 	svc.Handler().ServeHTTP(rr, req)
 
@@ -321,9 +321,10 @@ func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
 	body := rr.Body.String()
 	require.Contains(t, body, "Skills Inventory")
 	require.Contains(t, body, "weather-probe")
-	require.Contains(t, body, "/api/skills/status")
 	require.Contains(t, body, "/api/skills/refresh")
 	require.Contains(t, body, "/api/skills/toggle")
+	require.Contains(t, body, "/overview")
+	require.Contains(t, body, "/skills")
 	require.Contains(t, body, "/tmp/openclaw.yaml")
 	require.Contains(t, body, "OPENAI_API_KEY")
 }
@@ -367,7 +368,7 @@ func TestServiceToggleSkillEndpoint(t *testing.T) {
 		http.MethodPost,
 		routeSkillToggle,
 		strings.NewReader(
-			"skill_key=weather-api&skill_name=weather-probe&enabled=false&return_to=skill-card-weather-api",
+			"skill_key=weather-api&skill_name=weather-probe&enabled=false&return_to=skill-card-weather-api&return_path=%2Fskills",
 		),
 	)
 	req.Header.Set(
@@ -383,6 +384,7 @@ func TestServiceToggleSkillEndpoint(t *testing.T) {
 
 	loc, err := url.Parse(rr.Header().Get("Location"))
 	require.NoError(t, err)
+	require.Equal(t, routeSkillsPage, loc.Path)
 	require.Equal(t, "skill-card-weather-api", loc.Fragment)
 	require.Contains(
 		t,
@@ -400,7 +402,7 @@ func TestServiceRefreshSkillsEndpoint(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		routeSkillsRefresh,
-		strings.NewReader("return_to=skills-admin"),
+		strings.NewReader("return_to=skills-admin&return_path=%2Fskills"),
 	)
 	req.Header.Set(
 		"Content-Type",
@@ -414,6 +416,7 @@ func TestServiceRefreshSkillsEndpoint(t *testing.T) {
 
 	loc, err := url.Parse(rr.Header().Get("Location"))
 	require.NoError(t, err)
+	require.Equal(t, routeSkillsPage, loc.Path)
 	require.Equal(t, "skills-admin", loc.Fragment)
 	require.Contains(
 		t,
@@ -432,7 +435,7 @@ func TestServiceRefreshSkillsEndpointRequiresLiveRepo(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		routeSkillsRefresh,
-		strings.NewReader("return_to=skills-admin"),
+		strings.NewReader("return_to=skills-admin&return_path=%2Fskills"),
 	)
 	req.Header.Set(
 		"Content-Type",
@@ -444,6 +447,7 @@ func TestServiceRefreshSkillsEndpointRequiresLiveRepo(t *testing.T) {
 	require.Equal(t, http.StatusSeeOther, rr.Code)
 	loc, err := url.Parse(rr.Header().Get("Location"))
 	require.NoError(t, err)
+	require.Equal(t, routeSkillsPage, loc.Path)
 	require.Equal(
 		t,
 		"live skills repository is not available",
@@ -1460,7 +1464,7 @@ func TestHandleIndex_RendersUploadPreviews(t *testing.T) {
 		AdminURL:   "http://127.0.0.1:19789",
 	})
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, routeIndex, nil)
+	req := httptest.NewRequest(http.MethodGet, routeSessions, nil)
 
 	svc.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
