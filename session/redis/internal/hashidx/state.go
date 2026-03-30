@@ -21,37 +21,49 @@ import (
 
 // UpdateSessionState updates the session-level state directly (HashIdx).
 func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
-	metaJSON, err := c.client.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
-	if err != nil {
-		if err == redis.Nil {
-			return fmt.Errorf("session not found")
-		}
-		return fmt.Errorf("get session meta: %w", err)
+	ttlSeconds := int64(0)
+	if c.cfg.SessionTTL > 0 {
+		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
 	}
 
-	var meta sessionMeta
-	if err := json.Unmarshal(metaJSON, &meta); err != nil {
-		return fmt.Errorf("unmarshal session meta: %w", err)
-	}
-
-	if meta.State == nil {
-		meta.State = make(session.StateMap)
-	}
+	statePatch := make(session.StateMap, len(state))
+	nilKeys := make([]string, 0)
 	for k, v := range state {
-		meta.State[k] = v
+		if v == nil {
+			nilKeys = append(nilKeys, k)
+			continue
+		}
+		copiedValue := make([]byte, len(v))
+		copy(copiedValue, v)
+		statePatch[k] = copiedValue
 	}
-	meta.UpdatedAt = time.Now()
 
-	updatedJSON, err := json.Marshal(meta)
+	statePatchJSON, err := json.Marshal(statePatch)
 	if err != nil {
-		return fmt.Errorf("marshal session meta: %w", err)
+		return fmt.Errorf("marshal session state patch: %w", err)
+	}
+	nilKeysJSON, err := json.Marshal(nilKeys)
+	if err != nil {
+		return fmt.Errorf("marshal session state nil keys: %w", err)
 	}
 
-	// Use SetArgs with KeepTTL to preserve the original TTL set by CreateSession/GetSession.
-	if err := c.client.SetArgs(ctx, c.keys.SessionMetaKey(key), updatedJSON, redis.SetArgs{
-		KeepTTL: true,
-	}).Err(); err != nil {
+	result, err := luaUpdateSessionState.Run(
+		ctx,
+		c.client,
+		[]string{c.keys.SessionMetaKey(key)},
+		string(statePatchJSON),
+		string(nilKeysJSON),
+		time.Now().UTC().Format(time.RFC3339Nano),
+		ttlSeconds,
+	).Int()
+	if err != nil {
 		return fmt.Errorf("update session state: %w", err)
+	}
+	if result == 0 {
+		return fmt.Errorf("session not found")
+	}
+	if result != 1 {
+		return fmt.Errorf("update session state: unexpected script result %d", result)
 	}
 	return nil
 }

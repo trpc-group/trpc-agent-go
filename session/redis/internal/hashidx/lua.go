@@ -41,6 +41,57 @@ end
 return 1
 `)
 
+// luaUpdateSessionState atomically merges a session state patch into session meta.
+// KEYS[1] = sessionMeta key
+// ARGV[1] = statePatchJSON, ARGV[2] = nilKeysJSON, ARGV[3] = updatedAt RFC3339 string, ARGV[4] = TTL (seconds)
+// Returns: 1 on success, 0 if session not found
+var luaUpdateSessionState = redis.NewScript(`
+local sessionMetaKey = KEYS[1]
+local statePatchJSON = ARGV[1]
+local nilKeysJSON = ARGV[2]
+local updatedAt = ARGV[3]
+local ttl = tonumber(ARGV[4])
+-- Use a simple placeholder string, then replace its quoted JSON form with null after encoding.
+local nilSentinel = "__TRPC_AGENT_GO_NULL__"
+
+local metaJSON = redis.call('GET', sessionMetaKey)
+if not metaJSON then
+    return 0
+end
+
+local meta = cjson.decode(metaJSON)
+if not meta or type(meta) ~= 'table' then
+    return redis.error_reply('unmarshal session meta')
+end
+if not meta.state or type(meta.state) ~= 'table' then
+    meta.state = {}
+end
+local statePatch = cjson.decode(statePatchJSON)
+if statePatch and type(statePatch) == 'table' then
+    for k, v in pairs(statePatch) do
+        meta.state[k] = v
+    end
+end
+local nilKeys = cjson.decode(nilKeysJSON)
+if nilKeys and type(nilKeys) == 'table' then
+    for _, k in ipairs(nilKeys) do
+        meta.state[k] = nilSentinel
+    end
+end
+meta.updatedAt = updatedAt
+
+local encodedMeta = cjson.encode(meta)
+encodedMeta = string.gsub(encodedMeta, '"' .. nilSentinel .. '"', 'null')
+
+if ttl > 0 then
+    redis.call('SET', sessionMetaKey, encodedMeta, 'EX', ttl)
+else
+    redis.call('SET', sessionMetaKey, encodedMeta, 'KEEPTTL')
+end
+
+return 1
+`)
+
 // luaAppendEvent appends an event atomically and applies StateDelta to session state.
 // KEYS[1] = sessionMeta key, KEYS[2] = evtdata key, KEYS[3] = evtidx:time key
 // ARGV[1] = eventID, ARGV[2] = eventJSON, ARGV[3] = timestamp, ARGV[4] = TTL (seconds), ARGV[5] = shouldStoreEvent (1 or 0)

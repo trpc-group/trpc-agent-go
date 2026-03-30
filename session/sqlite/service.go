@@ -45,6 +45,8 @@ type Service struct {
 	opts ServiceOpts
 	db   *sql.DB
 
+	stateWriteMu sync.Mutex
+
 	eventPairChans  []chan *sessionEventPair
 	trackEventChans []chan *trackEventPair
 	persistWg       sync.WaitGroup
