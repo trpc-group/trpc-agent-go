@@ -2724,6 +2724,11 @@ func TestInProcGatewayClient_SendMessage_OK(t *testing.T) {
 	srv, err := gateway.New(&inProcGWTestRunner{
 		reply:     testReply,
 		requestID: testRequestID,
+		usage: &model.Usage{
+			PromptTokens:     12000,
+			CompletionTokens: 345,
+			TotalTokens:      12345,
+		},
 	})
 	require.NoError(t, err)
 
@@ -2738,6 +2743,8 @@ func TestInProcGatewayClient_SendMessage_OK(t *testing.T) {
 	require.Equal(t, testReply, rsp.Reply)
 	require.Equal(t, testRequestID, rsp.RequestID)
 	require.NotEmpty(t, rsp.SessionID)
+	require.NotNil(t, rsp.Usage)
+	require.Equal(t, 12345, rsp.Usage.TotalTokens)
 }
 
 func TestInProcGatewayClient_SendMessage_StatusError(t *testing.T) {
@@ -3731,6 +3738,7 @@ func (s *stubRunner) Close() error {
 type inProcGWTestRunner struct {
 	reply     string
 	requestID string
+	usage     *model.Usage
 }
 
 func (r *inProcGWTestRunner) Run(
@@ -3756,7 +3764,8 @@ func (r *inProcGWTestRunner) Run(
 			Choices: []model.Choice{
 				{Message: model.NewAssistantMessage(reply)},
 			},
-			Done: true,
+			Usage: r.usage,
+			Done:  true,
 		},
 		RequestID: requestID,
 	}

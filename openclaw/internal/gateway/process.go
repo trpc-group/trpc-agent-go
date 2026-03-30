@@ -108,7 +108,7 @@ func (s *Server) ProcessMessage(
 		return rsp, status
 	}
 
-	reply, resolvedRequestID, err := s.run(ctx, prepared)
+	reply, resolvedRequestID, usage, err := s.run(ctx, prepared)
 	if err != nil {
 		if errors.Is(err, errEmptyReplyValue) {
 			reply = emptyReplyFallbackText
@@ -116,6 +116,7 @@ func (s *Server) ProcessMessage(
 				SessionID: prepared.sessionID,
 				RequestID: resolvedRequestID,
 				Reply:     reply,
+				Usage:     usage,
 			}
 			status = http.StatusOK
 			if trace != nil {
@@ -155,6 +156,7 @@ func (s *Server) ProcessMessage(
 		SessionID: prepared.sessionID,
 		RequestID: resolvedRequestID,
 		Reply:     reply,
+		Usage:     usage,
 	}
 	status = http.StatusOK
 

@@ -119,6 +119,7 @@ func (c *inProcGatewayClient) SendMessage(
 		SessionID:  rsp.SessionID,
 		RequestID:  rsp.RequestID,
 		Reply:      rsp.Reply,
+		Usage:      rsp.Usage,
 		Ignored:    rsp.Ignored,
 		Error:      rsp.Error,
 		StatusCode: status,
