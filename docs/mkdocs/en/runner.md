@@ -782,6 +782,46 @@ Runner completion event’s `StateDelta` (for example,
 `graph.StateKeyLastResponse`). Treat `Response.Choices` on the completion event
 as optional when this option is enabled.
 
+#### Option: Keep Only Terminal Graph Message Events
+
+When a graph contains multiple Large Language Model (LLM) nodes or sub-agent
+nodes, the caller-visible message stream may include intermediate drafts from
+earlier nodes. To preserve full backward compatibility, that behavior remains
+the default.
+
+If you want the caller-visible stream to keep only terminal graph message
+events, enable:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithGraphTerminalMessagesOnly(true),
+)
+```
+
+Behavior summary:
+
+- Default (`false`): unchanged. Intermediate graph node message events are
+  still forwarded.
+- Enabled (`true`): caller-visible message events are limited to terminal LLM
+  nodes and terminal sub-agent nodes.
+- Parallel terminal nodes are all preserved. The option does not collapse a
+  fan-out graph into a single winner.
+- Internal graph execution is unchanged. State handoff, history aggregation,
+  tracing, and token accounting still use the full raw graph event stream.
+
+This option is especially useful when your product experience should stream
+only the last user-facing graph step, while keeping intermediate graph
+messages internal.
+
+For graph LLM nodes, pair this option with
+`agent.WithGraphEmitFinalModelResponses(true)` when you also want terminal
+`Done=true` assistant message events to be forwarded. See
+`examples/graph/terminal_messages_only`.
+
 #### 🎛️ Option: StreamMode
 
 Runner can filter the event stream before it reaches your application code.

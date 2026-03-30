@@ -755,6 +755,39 @@ eventChan, err := r.Run(
 唯一来源（例如 `graph.StateKeyLastResponse`）。当开启该选项时，请把“完成事件”里的
 `Response.Choices` 当作可选字段，不要作为唯一依赖。
 
+#### 开关：只保留 terminal Graph 消息事件
+
+当一个图里有多个 LLM 节点或多个子 Agent 节点时，业务侧拿到的消息流里可能会出现前面
+节点的中间草稿。为了保持 100% 向后兼容，这仍然是默认行为。
+
+如果你希望“对调用方可见”的消息流只保留 terminal 节点的消息事件，可以开启：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithGraphTerminalMessagesOnly(true),
+)
+```
+
+行为总结：
+
+- 默认值（`false`）：完全不变，仍然会转发中间图节点的消息事件。
+- 开启后（`true`）：对调用方可见的消息事件会被限制为 terminal LLM 节点和 terminal
+  子 Agent 节点。
+- 如果图的最后一步是并行的，所有 terminal 节点都会保留，不会强行只留最快或最后一条。
+- 图内部执行不会变。state 传递、历史聚合、tracing、token 统计仍然基于完整原始事件流。
+
+这个开关适合“产品只想流式展示最后一个用户可见步骤”的场景，同时又不影响图内部多个
+节点之间的协作。
+
+如果你的图里用到真实的 LLM 节点，并且你还希望看到 terminal 节点的最终
+`Done=true` assistant 消息事件，请配合
+`agent.WithGraphEmitFinalModelResponses(true)` 使用。可参考
+`examples/graph/terminal_messages_only`。
+
 #### 🎛️ 开关：StreamMode
 
 Runner 支持在事件到达业务代码之前先做一次过滤：你可以用一个 RunOption 来选择
