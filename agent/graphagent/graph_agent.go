@@ -158,12 +158,18 @@ func (ga *GraphAgent) runWithoutBarrier(ctx context.Context, invocation *agent.I
 		return
 	}
 	defer close(out)
+	terminalMessageFilter := newTerminalMessageFilter(invocation, ga.graph)
 	_, _ = ga.forwardWrappedEvents(
 		ctx,
 		invocation,
 		innerChan,
-		out,
 		suppressHiddenCompletion,
+		func(evt *event.Event) error {
+			if !terminalMessageFilter.Allows(evt) {
+				return nil
+			}
+			return event.EmitEvent(ctx, out, evt)
+		},
 	)
 }
 
@@ -240,8 +246,12 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 		}
 		return
 	}
+	terminalMessageFilter := newTerminalMessageFilter(invocation, ga.graph)
 	for evt := range innerChan {
 		fullRespEvent = recordTraceEvent(tracker, tokenUsage, fullRespEvent, evt)
+		if !terminalMessageFilter.Allows(evt) {
+			continue
+		}
 		if err := event.EmitEvent(ctx, out, evt); err != nil {
 			operationErrorType = itelemetry.ToErrorType(err, model.ErrorTypeFlowError)
 			if tracingEnabled {
@@ -577,8 +587,10 @@ func (ga *GraphAgent) wrapEventChannel(
 			ctx,
 			invocation,
 			originalChan,
-			wrappedChan,
 			suppressHiddenCompletion,
+			func(evt *event.Event) error {
+				return event.EmitEvent(ctx, wrappedChan, evt)
+			},
 		)
 		if !ok {
 			return
@@ -637,15 +649,11 @@ func (ga *GraphAgent) forwardWrappedEvents(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	originalChan <-chan *event.Event,
-	wrappedChan chan<- *event.Event,
 	suppressHiddenCompletion bool,
+	emit func(*event.Event) error,
 ) (*event.Event, bool) {
 	var fullRespEvent *event.Event
 	var emittedAssistantResponseIDs map[string]struct{}
-	terminalMessageFilter := newTerminalMessageFilter(
-		invocation,
-		ga.graph,
-	)
 	visibleCtx := graph.WithoutGraphCompletionCapture(ctx)
 	for evt := range originalChan {
 		outEvt := evt
@@ -678,10 +686,7 @@ func (ga *GraphAgent) forwardWrappedEvents(
 				outEvt = visibleEvent
 			}
 		}
-		if !terminalMessageFilter.Allows(outEvt) {
-			continue
-		}
-		if err := event.EmitEvent(ctx, wrappedChan, outEvt); err != nil {
+		if err := emit(outEvt); err != nil {
 			return nil, false
 		}
 		emittedAssistantResponseIDs = graph.RecordAssistantResponseID(

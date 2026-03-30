@@ -61,6 +61,12 @@ type streamingGraphAgentModel struct {
 	final  string
 }
 
+type usageGraphAgentModel struct {
+	name    string
+	content string
+	usage   model.Usage
+}
+
 func (m *staticGraphAgentModel) GenerateContent(
 	_ context.Context,
 	_ *model.Request,
@@ -129,6 +135,28 @@ func (m *streamingGraphAgentModel) GenerateContent(
 }
 
 func (m *streamingGraphAgentModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *usageGraphAgentModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		ID:   "graphagent-response-" + m.name,
+		Done: true,
+		Choices: []model.Choice{{
+			Index:   0,
+			Message: model.NewAssistantMessage(m.content),
+		}},
+		Usage: &m.usage,
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *usageGraphAgentModel) Info() model.Info {
 	return model.Info{Name: m.name}
 }
 
@@ -2361,10 +2389,11 @@ func TestTerminalAgentScopePrefix(t *testing.T) {
 
 func TestIsTerminalMessageNode(t *testing.T) {
 	const (
-		firstNodeID  = "first"
-		finalNodeID  = "final"
-		routerNodeID = "router"
-		nextNodeID   = "next"
+		firstNodeID        = "first"
+		finalNodeID        = "final"
+		routerNodeID       = "router"
+		nextNodeID         = "next"
+		directRouterNodeID = "direct_router"
 	)
 
 	require.False(t, isTerminalMessageNode(nil, nil))
@@ -2422,6 +2451,38 @@ func TestIsTerminalMessageNode(t *testing.T) {
 	conditionalNode, ok := conditionalGraph.Node(routerNodeID)
 	require.True(t, ok)
 	require.False(t, isTerminalMessageNode(conditionalGraph, conditionalNode))
+
+	directConditionalGraph, err := graph.NewStateGraph(
+		graph.MessagesStateSchema(),
+	).
+		AddAgentNode(directRouterNodeID).
+		AddNode(
+			nextNodeID,
+			func(ctx context.Context, state graph.State) (any, error) {
+				return graph.State{}, nil
+			},
+		).
+		AddConditionalEdges(
+			directRouterNodeID,
+			func(ctx context.Context, state graph.State) (string, error) {
+				return nextNodeID, nil
+			},
+			nil,
+		).
+		SetEntryPoint(directRouterNodeID).
+		Compile()
+	require.NoError(t, err)
+	directConditionalNode, ok := directConditionalGraph.Node(
+		directRouterNodeID,
+	)
+	require.True(t, ok)
+	require.False(
+		t,
+		isTerminalMessageNode(
+			directConditionalGraph,
+			directConditionalNode,
+		),
+	)
 }
 
 func TestNewTerminalMessageFilter(t *testing.T) {
@@ -2562,6 +2623,7 @@ func TestTerminalMessageFilterAllows(t *testing.T) {
 	nonTerminalLLMEvent := &event.Event{
 		Author: "draft_llm",
 		Response: &model.Response{
+			ID: "draft-response",
 			Choices: []model.Choice{{
 				Message: model.NewAssistantMessage("draft"),
 			}},
@@ -2572,6 +2634,7 @@ func TestTerminalMessageFilterAllows(t *testing.T) {
 	terminalLLMEvent := &event.Event{
 		Author: "final_llm",
 		Response: &model.Response{
+			ID: "final-response",
 			Choices: []model.Choice{{
 				Message: model.NewAssistantMessage("answer"),
 			}},
@@ -2601,6 +2664,24 @@ func TestTerminalMessageFilterAllows(t *testing.T) {
 	visibleCompletion, ok := graph.VisibleGraphCompletionEvent(rawCompletion)
 	require.True(t, ok)
 	require.True(t, shouldFilterTerminalMessageEvent(visibleCompletion))
+
+	nonTerminalCompletion := visibleCompletion.Clone()
+	nonTerminalCompletion.StateDelta[graph.StateKeyLastResponseID] = []byte(
+		`"draft-response"`,
+	)
+	require.False(t, filter.Allows(nonTerminalCompletion))
+
+	terminalCompletion := visibleCompletion.Clone()
+	terminalCompletion.StateDelta[graph.StateKeyLastResponseID] = []byte(
+		`"final-response"`,
+	)
+	require.True(t, filter.Allows(terminalCompletion))
+
+	unknownCompletion := visibleCompletion.Clone()
+	unknownCompletion.StateDelta[graph.StateKeyLastResponseID] = []byte(
+		`"unknown-response"`,
+	)
+	require.True(t, filter.Allows(unknownCompletion))
 }
 
 func TestGraphAgent_DisableGraphCompletionEvent_WithAfterCallbackCustomResponse(t *testing.T) {
@@ -3325,6 +3406,86 @@ func TestGraphAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
 	}
 }
 
+func TestGraphAgent_GraphTerminalMessagesOnly_TracksHiddenNodeUsage(
+	t *testing.T,
+) {
+	originalTracer := trace.Tracer
+	defer func() {
+		trace.Tracer = originalTracer
+	}()
+
+	spanRecorder := tracetest.NewSpanRecorder()
+	tp := tracesdk.NewTracerProvider(
+		tracesdk.WithSpanProcessor(spanRecorder),
+	)
+	defer func() {
+		_ = tp.Shutdown(context.Background())
+	}()
+	trace.Tracer = tp.Tracer("graph-terminal-usage-test")
+
+	firstUsage := model.Usage{
+		PromptTokens:     2,
+		CompletionTokens: 3,
+		TotalTokens:      5,
+	}
+	finalUsage := model.Usage{
+		PromptTokens:     5,
+		CompletionTokens: 7,
+		TotalTokens:      12,
+	}
+	ga := newSerialUsageTerminalMessageGraphAgent(
+		t,
+		firstUsage,
+		finalUsage,
+	)
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("test")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithGraphEmitFinalModelResponses(true),
+			agent.WithGraphTerminalMessagesOnly(true),
+		)),
+	)
+
+	events, err := ga.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	expectedSpanName := fmt.Sprintf(
+		"%s %s",
+		itelemetry.OperationInvokeAgent,
+		ga.Info().Name,
+	)
+	var agentSpan tracesdk.ReadOnlySpan
+	for _, span := range spanRecorder.Ended() {
+		if span.Name() == expectedSpanName {
+			agentSpan = span
+			break
+		}
+	}
+	require.NotNil(t, agentSpan)
+	require.True(
+		t,
+		hasInt64Attr(
+			agentSpan.Attributes(),
+			semconvtrace.KeyGenAIUsageInputTokens,
+			int64(firstUsage.PromptTokens+finalUsage.PromptTokens),
+		),
+	)
+	require.True(
+		t,
+		hasInt64Attr(
+			agentSpan.Attributes(),
+			semconvtrace.KeyGenAIUsageOutputTokens,
+			int64(
+				firstUsage.CompletionTokens+
+					finalUsage.CompletionTokens,
+			),
+		),
+	)
+}
+
 func TestGraphAgent_Run_TraceAfterInvokeAgent(t *testing.T) {
 	originalTracer := trace.Tracer
 	defer func() {
@@ -3694,6 +3855,35 @@ func newStreamingChildGraphAgent(
 	return ga
 }
 
+func newUsageChildGraphAgent(
+	t *testing.T,
+	name string,
+	final string,
+	usage model.Usage,
+) *GraphAgent {
+	t.Helper()
+
+	g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddLLMNode(
+			"child_llm",
+			&usageGraphAgentModel{
+				name:    name,
+				content: final,
+				usage:   usage,
+			},
+			"i1",
+			nil,
+		).
+		SetEntryPoint("child_llm").
+		SetFinishPoint("child_llm").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New(name, g)
+	require.NoError(t, err)
+	return ga
+}
+
 func newSerialTerminalMessageGraphAgent(
 	t *testing.T,
 	firstScope string,
@@ -3733,6 +3923,47 @@ func newSerialTerminalMessageGraphAgent(
 	return ga
 }
 
+func newSerialUsageTerminalMessageGraphAgent(
+	t *testing.T,
+	firstUsage model.Usage,
+	finalUsage model.Usage,
+) *GraphAgent {
+	t.Helper()
+
+	firstAgent := newUsageChildGraphAgent(
+		t,
+		"first_usage",
+		"draft",
+		firstUsage,
+	)
+	finalAgent := newUsageChildGraphAgent(
+		t,
+		"final_usage",
+		"answer",
+		finalUsage,
+	)
+
+	parentGraph, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddAgentNode("first_usage").
+		AddAgentNode(
+			"final_usage",
+			graph.WithSubgraphInputFromLastResponse(),
+		).
+		AddEdge("first_usage", "final_usage").
+		SetEntryPoint("first_usage").
+		SetFinishPoint("final_usage").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New(
+		"serial-terminal-usage-filter",
+		parentGraph,
+		WithSubAgents([]agent.Agent{firstAgent, finalAgent}),
+	)
+	require.NoError(t, err)
+	return ga
+}
+
 func scopePrefix(root string, scope string) string {
 	if root == "" {
 		return scope
@@ -3751,6 +3982,20 @@ func hasFilterPrefix(filterKey string, prefix string) bool {
 		filterKey,
 		prefix+agent.EventFilterKeyDelimiter,
 	)
+}
+
+func hasInt64Attr(
+	attrs []attribute.KeyValue,
+	key string,
+	want int64,
+) bool {
+	for _, attr := range attrs {
+		if string(attr.Key) != key {
+			continue
+		}
+		return attr.Value.AsInt64() == want
+	}
+	return false
 }
 
 func normalizeGraphAgentTraceForAssertion(executionTrace *atrace.Trace) atrace.Trace {

@@ -10,6 +10,7 @@
 package graphagent
 
 import (
+	"encoding/json"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -18,29 +19,33 @@ import (
 )
 
 type terminalMessageFilter struct {
-	enabled               bool
-	llmNodeAuthors        map[string]struct{}
-	terminalLLMAuthors    map[string]struct{}
-	agentScopePrefixes    map[string]struct{}
-	terminalScopePrefixes map[string]struct{}
+	enabled                bool
+	llmNodeAuthors         map[string]struct{}
+	terminalLLMAuthors     map[string]struct{}
+	agentScopePrefixes     map[string]struct{}
+	terminalScopePrefixes  map[string]struct{}
+	terminalResponseIDs    map[string]struct{}
+	nonTerminalResponseIDs map[string]struct{}
 }
 
 func newTerminalMessageFilter(
 	invocation *agent.Invocation,
 	g *graph.Graph,
-) terminalMessageFilter {
+) *terminalMessageFilter {
 	if invocation == nil ||
 		!invocation.RunOptions.GraphTerminalMessagesOnly ||
 		g == nil {
-		return terminalMessageFilter{}
+		return &terminalMessageFilter{}
 	}
 
-	filter := terminalMessageFilter{
-		enabled:               true,
-		llmNodeAuthors:        make(map[string]struct{}),
-		terminalLLMAuthors:    make(map[string]struct{}),
-		agentScopePrefixes:    make(map[string]struct{}),
-		terminalScopePrefixes: make(map[string]struct{}),
+	filter := &terminalMessageFilter{
+		enabled:                true,
+		llmNodeAuthors:         make(map[string]struct{}),
+		terminalLLMAuthors:     make(map[string]struct{}),
+		agentScopePrefixes:     make(map[string]struct{}),
+		terminalScopePrefixes:  make(map[string]struct{}),
+		terminalResponseIDs:    make(map[string]struct{}),
+		nonTerminalResponseIDs: make(map[string]struct{}),
 	}
 	rootFilterKey := terminalMessageRootFilterKey(invocation)
 	for _, node := range g.Nodes() {
@@ -79,9 +84,16 @@ func terminalMessageRootFilterKey(
 	return invocation.AgentName
 }
 
-func (f terminalMessageFilter) Allows(evt *event.Event) bool {
+func (f *terminalMessageFilter) Allows(evt *event.Event) bool {
+	if f == nil {
+		return true
+	}
+	f.observe(evt)
 	if !f.enabled || !shouldFilterTerminalMessageEvent(evt) {
 		return true
+	}
+	if graph.IsVisibleGraphCompletionEvent(evt) {
+		return f.allowsVisibleGraphCompletion(evt)
 	}
 
 	if prefix, ok := f.matchAgentScopePrefix(evt.FilterKey); ok {
@@ -96,7 +108,64 @@ func (f terminalMessageFilter) Allows(evt *event.Event) bool {
 	return ok
 }
 
-func (f terminalMessageFilter) matchAgentScopePrefix(
+func (f *terminalMessageFilter) observe(evt *event.Event) {
+	if !f.enabled || evt == nil || evt.Response == nil {
+		return
+	}
+	responseID := evt.Response.ID
+	if responseID == "" {
+		return
+	}
+	if prefix, ok := f.matchAgentScopePrefix(evt.FilterKey); ok {
+		_, terminal := f.terminalScopePrefixes[prefix]
+		f.recordResponseID(responseID, terminal)
+		return
+	}
+	if _, ok := f.llmNodeAuthors[evt.Author]; !ok {
+		return
+	}
+	_, terminal := f.terminalLLMAuthors[evt.Author]
+	f.recordResponseID(responseID, terminal)
+}
+
+func (f *terminalMessageFilter) recordResponseID(
+	responseID string,
+	terminal bool,
+) {
+	if responseID == "" {
+		return
+	}
+	if f.terminalResponseIDs == nil {
+		f.terminalResponseIDs = make(map[string]struct{})
+	}
+	if f.nonTerminalResponseIDs == nil {
+		f.nonTerminalResponseIDs = make(map[string]struct{})
+	}
+	if terminal {
+		f.terminalResponseIDs[responseID] = struct{}{}
+		delete(f.nonTerminalResponseIDs, responseID)
+		return
+	}
+	if _, ok := f.terminalResponseIDs[responseID]; ok {
+		return
+	}
+	f.nonTerminalResponseIDs[responseID] = struct{}{}
+}
+
+func (f *terminalMessageFilter) allowsVisibleGraphCompletion(
+	evt *event.Event,
+) bool {
+	responseID := completionResponseIDFromStateDelta(evt)
+	if responseID == "" {
+		return true
+	}
+	if _, ok := f.nonTerminalResponseIDs[responseID]; ok {
+		return false
+	}
+	return true
+}
+
+func (f *terminalMessageFilter) matchAgentScopePrefix(
 	filterKey string,
 ) (string, bool) {
 	if filterKey == "" {
@@ -155,6 +224,11 @@ func isTerminalMessageNode(g *graph.Graph, node *graph.Node) bool {
 	}
 	if conditionalEdge, ok := g.ConditionalEdge(node.ID); ok &&
 		conditionalEdge != nil {
+		// Without an explicit PathMap, runtime may still fall back to a
+		// concrete node ID, so we cannot prove the node is terminal.
+		if len(conditionalEdge.PathMap) == 0 {
+			return false
+		}
 		for _, target := range conditionalEdge.PathMap {
 			if target == "" || target == graph.End {
 				continue
@@ -173,6 +247,21 @@ func shouldFilterTerminalMessageEvent(evt *event.Event) bool {
 		return true
 	}
 	return evt.IsPartial || len(evt.Response.Choices) > 0
+}
+
+func completionResponseIDFromStateDelta(evt *event.Event) string {
+	if evt == nil || evt.StateDelta == nil {
+		return ""
+	}
+	raw, ok := evt.StateDelta[graph.StateKeyLastResponseID]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	var responseID string
+	if err := json.Unmarshal(raw, &responseID); err != nil {
+		return ""
+	}
+	return responseID
 }
 
 func matchesFilterPrefix(filterKey string, prefix string) bool {
