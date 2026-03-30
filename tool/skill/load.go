@@ -96,7 +96,7 @@ func (t *LoadTool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 	if t.repo != nil {
 		// validate existence
-		if _, err := t.repo.Get(in.Skill); err != nil {
+		if _, err := skill.GetForContext(ctx, t.repo, in.Skill); err != nil {
 			return nil, fmt.Errorf("unknown skill: %s", in.Skill)
 		}
 	}

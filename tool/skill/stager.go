@@ -89,7 +89,7 @@ func (s *copySkillStager) StageSkill(
 			errSkillRepoNotConfigured,
 		)
 	}
-	root, err := req.Repository.Path(req.SkillName)
+	root, err := rootskill.PathForContext(ctx, req.Repository, req.SkillName)
 	if err != nil {
 		return SkillStageResult{}, err
 	}

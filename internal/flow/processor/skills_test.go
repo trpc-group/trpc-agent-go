@@ -111,6 +111,74 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev.Object)
 }
 
+func TestSkillsRequestProcessor_ProcessRequest_ContextAwareRepoFiltersVisibleSkills(
+	t *testing.T,
+) {
+	base := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "alpha", Description: "A"},
+			{Name: "beta", Description: "B"},
+		},
+		full: map[string]*skill.Skill{
+			"alpha": {
+				Summary: skill.Summary{Name: "alpha"},
+				Body:    "alpha body",
+			},
+			"beta": {
+				Summary: skill.Summary{Name: "beta"},
+				Body:    "beta body",
+			},
+		},
+	}
+	repo := skill.NewFilteredRepository(
+		base,
+		func(ctx context.Context, summary skill.Summary) bool {
+			userID, _ := agent.GetRuntimeStateValueFromContext[string](
+				ctx,
+				"user_id",
+			)
+			if userID == "user-a" {
+				return summary.Name == "alpha"
+			}
+			return summary.Name == "beta"
+		},
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		RunOptions: agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+		},
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "alpha"): []byte("1"),
+				skill.LoadedKey("tester", "beta"):  []byte("1"),
+			},
+		},
+	}
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("base sys"),
+		},
+	}
+
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	p.ProcessRequest(ctx, inv, req, nil)
+
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, "- alpha: A")
+	require.NotContains(t, sys, "- beta: B")
+	require.Contains(t, sys, "[Loaded] alpha")
+	require.Contains(t, sys, "alpha body")
+	require.NotContains(t, sys, "[Loaded] beta")
+	require.NotContains(t, sys, "beta body")
+}
+
 func TestSkillsRequestProcessor_NoDuplicateOverview(t *testing.T) {
 	repo := &mockRepo{
 		sums: []skill.Summary{{Name: "x", Description: "d"}},
@@ -1294,6 +1362,117 @@ func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
 	}
 }
 
+func TestSkillsToolResultRequestProcessor_FallbackSkipsHiddenSkills(
+	t *testing.T,
+) {
+	base := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "alpha", Description: "A"},
+			{Name: "beta", Description: "B"},
+		},
+		full: map[string]*skill.Skill{
+			"alpha": {Summary: skill.Summary{Name: "alpha"}, Body: "alpha body"},
+			"beta":  {Summary: skill.Summary{Name: "beta"}, Body: "beta body"},
+		},
+	}
+	repo := skill.NewFilteredRepository(
+		base,
+		func(ctx context.Context, summary skill.Summary) bool {
+			userID, _ := agent.GetRuntimeStateValueFromContext[string](
+				ctx,
+				"user_id",
+			)
+			return userID == "user-a" && summary.Name == "alpha"
+		},
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		RunOptions: agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+		},
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "beta"): []byte("1"),
+			},
+		},
+	}
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(repo)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	p.ProcessRequest(ctx, inv, req, nil)
+
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		require.NotContains(t, m.Content, skillsLoadedContextHeader)
+		require.NotContains(t, m.Content, "beta body")
+	}
+}
+
+func TestSkillsToolResultRequestProcessor_FallbackSystemMessageIncludesSelectedDocs(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {
+				Summary: skill.Summary{Name: "calc"},
+				Docs: []skill.Doc{{
+					Path:    "USAGE.md",
+					Content: "use me",
+				}},
+			},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.DocsKey("tester", "calc"):   []byte(`["USAGE.md"]`),
+			},
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	var found bool
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(m.Content, skillsLoadedContextHeader) {
+			found = true
+			require.Contains(t, m.Content, "Docs loaded: USAGE.md")
+			require.Contains(t, m.Content, "[Doc] USAGE.md")
+			require.Contains(t, m.Content, "use me")
+		}
+	}
+	require.True(t, found)
+}
+
 func TestSkillsToolResultRequestProcessor_SessionSummary_DisablesFallbackWithoutCompactionSignal(
 	t *testing.T,
 ) {
@@ -1787,10 +1966,10 @@ func TestSkillsToolResultRequestProcessor_GetDocsSelection_InvalidJSON(
 		},
 	}
 	p := NewSkillsToolResultRequestProcessor(repo)
-	require.Empty(t, p.getDocsSelection(inv, repo, "calc"))
+	require.Empty(t, p.getDocsSelection(context.Background(), inv, repo, "calc"))
 
 	inv.Session.SetState(skill.DocsKey("tester", "missing"), []byte("*"))
-	require.Empty(t, p.getDocsSelection(inv, repo, "missing"))
+	require.Empty(t, p.getDocsSelection(context.Background(), inv, repo, "missing"))
 }
 
 func TestSkillsToolResultRequestProcessor_RepositoryResolver_MaterializesToolResult(

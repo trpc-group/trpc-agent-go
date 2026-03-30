@@ -44,12 +44,20 @@ const (
 
 // createTestSkill makes a minimal skill folder with SKILL.md.
 func createTestSkill(t *testing.T) string {
+	return createNamedTestSkill(t, testSkillName, "simple echo skill")
+}
+
+func createNamedTestSkill(
+	t *testing.T,
+	name string,
+	description string,
+) string {
 	t.Helper()
 	dir := t.TempDir()
-	sdir := filepath.Join(dir, testSkillName)
+	sdir := filepath.Join(dir, name)
 	require.NoError(t, os.MkdirAll(sdir, 0o755))
-	data := "---\nname: echoer\n" +
-		"description: simple echo skill\n---\nbody\n"
+	data := "---\nname: " + name + "\n" +
+		"description: " + description + "\n---\nbody\n"
 	err := os.WriteFile(filepath.Join(sdir, "SKILL.md"), []byte(data), 0o644)
 	require.NoError(t, err)
 	return dir
@@ -717,6 +725,64 @@ func TestLLMAgent_WithSkills_InsertsOverview(t *testing.T) {
 	require.NotEmpty(t, sys)
 	require.Contains(t, sys, "Available skills:")
 	require.Contains(t, sys, "echoer")
+}
+
+func TestLLMAgent_WithSkillFilter_FiltersPromptAndDeclaration(t *testing.T) {
+	root1 := createNamedTestSkill(t, "alpha", "alpha skill")
+	root2 := createNamedTestSkill(t, "beta", "beta skill")
+	repo, err := skill.NewFSRepository(root1, root2)
+	require.NoError(t, err)
+
+	filter := func(ctx context.Context, summary skill.Summary) bool {
+		userID, _ := agent.GetRuntimeStateValueFromContext[string](
+			ctx,
+			"user_id",
+		)
+		return userID == "user-a" && summary.Name == "alpha"
+	}
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillFilter(filter)(opts)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+		}),
+	)
+
+	req := &model.Request{}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	for _, p := range buildRequestProcessors("tester", opts) {
+		p.ProcessRequest(ctx, inv, req, nil)
+	}
+
+	sys := findSystemMessageContaining(req, skillsOverviewHeader)
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, "alpha")
+	require.NotContains(t, sys, "beta")
+
+	agt := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillFilter(filter),
+	)
+	tl := findTool(agt.Tools(), "skill_load")
+	require.NotNil(t, tl)
+	decl := tl.Declaration()
+	require.NotNil(t, decl)
+	require.Contains(t, decl.InputSchema.Properties, "skill")
+	require.Nil(t, decl.InputSchema.Properties["skill"].Enum)
+}
+
+func TestLLMAgent_WithSkillFilter_WiresOption(t *testing.T) {
+	opts := &Options{}
+	WithSkillFilter(func(context.Context, skill.Summary) bool {
+		return true
+	})(opts)
+
+	require.NotNil(t, opts.skillFilter)
 }
 
 func TestLLMAgent_WithSkillsLoadedContentInToolResults_WiresProcessor(

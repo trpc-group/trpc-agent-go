@@ -188,3 +188,65 @@ func TestSkillNameEnum_AllEmptyNamesReturnsNil(t *testing.T) {
 	}
 	require.Nil(t, skillNameEnum(repo))
 }
+
+func TestLoadTool_Call_ContextAwareRepoHonorsFilter(t *testing.T) {
+	base := &mockRepo{
+		ok: map[string]bool{
+			"alpha": true,
+			"beta":  true,
+		},
+		sums: []skill.Summary{
+			{Name: "alpha"},
+			{Name: "beta"},
+		},
+	}
+	repo := skill.NewFilteredRepository(
+		base,
+		func(ctx context.Context, summary skill.Summary) bool {
+			userID, _ := agent.GetRuntimeStateValueFromContext[string](
+				ctx,
+				"user_id",
+			)
+			return userID == "user-a" && summary.Name == "alpha"
+		},
+	)
+	lt := NewLoadTool(repo)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+		})),
+	)
+
+	_, err := lt.Call(ctx, []byte(`{"skill":"alpha"}`))
+	require.NoError(t, err)
+
+	_, err = lt.Call(ctx, []byte(`{"skill":"beta"}`))
+	require.ErrorContains(t, err, "unknown skill: beta")
+}
+
+func TestSkillNameEnum_ContextAwareRepoReturnsNil(t *testing.T) {
+	repo := skill.NewFilteredRepository(
+		&mockRepo{
+			ok: map[string]bool{"alpha": true},
+			sums: []skill.Summary{
+				{Name: "alpha"},
+			},
+		},
+		func(context.Context, skill.Summary) bool { return true },
+	)
+	require.Nil(t, skillNameEnum(repo))
+}
+
+func TestSkillNameEnum_NilFilterWrapperKeepsPlainRepoEnum(t *testing.T) {
+	repo := skill.NewFilteredRepository(
+		&mockRepo{
+			ok: map[string]bool{"alpha": true},
+			sums: []skill.Summary{
+				{Name: "alpha"},
+			},
+		},
+		nil,
+	)
+	require.Equal(t, []any{"alpha"}, skillNameEnum(repo))
+}

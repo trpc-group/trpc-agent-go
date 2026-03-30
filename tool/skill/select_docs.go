@@ -104,7 +104,7 @@ func (t *SelectDocsTool) Declaration() *tool.Declaration {
 func (t *SelectDocsTool) Call(
 	ctx context.Context, args []byte,
 ) (any, error) {
-	in, err := t.parseSelectArgs(args)
+	in, err := t.parseSelectArgs(ctx, args)
 	if err != nil {
 		return nil, err
 	}
@@ -191,6 +191,7 @@ var _ tool.CallableTool = (*SelectDocsTool)(nil)
 
 // parseSelectArgs validates and normalizes the input.
 func (t *SelectDocsTool) parseSelectArgs(
+	ctx context.Context,
 	args []byte,
 ) (selectDocsInput, error) {
 	var in selectDocsInput
@@ -203,7 +204,7 @@ func (t *SelectDocsTool) parseSelectArgs(
 		return selectDocsInput{}, fmt.Errorf("skill is required")
 	}
 	if t.repo != nil {
-		if _, err := t.repo.Get(in.Skill); err != nil {
+		if _, err := skill.GetForContext(ctx, t.repo, in.Skill); err != nil {
 			return selectDocsInput{}, fmt.Errorf(
 				"unknown skill: %s", in.Skill,
 			)

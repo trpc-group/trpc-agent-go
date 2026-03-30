@@ -30,7 +30,7 @@ func skillNameSchema(repo skills.Repository, desc string) *tool.Schema {
 }
 
 func skillNameEnum(repo skills.Repository) []any {
-	if repo == nil {
+	if repo == nil || skills.IsContextAwareRepository(repo) {
 		return nil
 	}
 	sums := repo.Summaries()
