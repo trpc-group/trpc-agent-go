@@ -41,9 +41,9 @@ With this option enabled:
 - streaming requests emit a failed `TaskStatusUpdateEvent`
 - outer task or status-event metadata keeps `error_type`, `error_code`,
   `error_message`, and `task_state`
+- `status.message.metadata` mirrors the same structured fields for A2A
+  interaction spec `0.1` compatibility
 - `status.message.parts` keeps the display text
-- `status.message.metadata` is intentionally left empty so structured fields are
-  not duplicated again
 
 ## Client-side setup
 
@@ -74,6 +74,7 @@ Think of the remote failure payload as two channels:
 
 - machine channel: outer `Task.Metadata` or
   `TaskStatusUpdateEvent.Metadata`
+- compatibility mirror: `status.message.metadata`
 - display channel: `status.message.parts`
 
 For a streaming failure, the payload is shaped like this:
@@ -91,6 +92,13 @@ For a streaming failure, the payload is shaped like this:
   "status": {
     "state": "failed",
     "message": {
+      "metadata": {
+        "object_type": "error",
+        "error_type": "flow_error",
+        "error_code": "REMOTE_VALIDATION_FAILED",
+        "error_message": "validation failed",
+        "task_state": "failed"
+      },
       "parts": [
         {
           "kind": "text",
@@ -105,7 +113,9 @@ For a streaming failure, the payload is shaped like this:
 The recommended business-side rule is therefore:
 
 - use `status.state` or reconstructed `evt.Response.Error` for branching
-- read structured fields from outer metadata
+- read structured fields from outer metadata first
+- treat `status.message.metadata` as a compatibility mirror for legacy
+  consumers
 - treat `status.message.parts` as text for logs, UI, or operator display
 
 ## Run the example

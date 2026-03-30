@@ -263,7 +263,8 @@ sequenceDiagram
 - `TaskStatusUpdateEvent` (submitted/completed): task lifecycle signals, no
   user content
 - `TaskStatusUpdateEvent` (failed/rejected/canceled) with structured error
-  metadata: terminal failure. Read outer metadata for machine branching and use
+  metadata: terminal failure. Read outer metadata first for machine branching,
+  treat `status.message.metadata` as the `0.1` compatibility mirror, and use
   `status.message.parts` only for display text.
 - `TaskArtifactUpdateEvent` with `lastChunk=true`: Stream end signal or aggregated result
 

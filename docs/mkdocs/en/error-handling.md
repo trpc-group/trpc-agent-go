@@ -779,12 +779,12 @@ With this option enabled:
 
 The payload is intentionally split into two layers:
 
-- outer `Task.Metadata` or `TaskStatusUpdateEvent.Metadata`: machine-readable
-  error fields such as `error_type`, `error_code`, `error_message`,
-  `task_state`, and `llm_response_id`
+- outer `Task.Metadata` or `TaskStatusUpdateEvent.Metadata`: the preferred
+  machine-readable error fields such as `error_type`, `error_code`,
+  `error_message`, `task_state`, and `llm_response_id`
+- `Status.Message.Metadata`: the same machine-readable fields mirrored for A2A
+  interaction spec `0.1` compatibility
 - `Status.Message.Parts`: user-facing text to display directly
-- `Status.Message.Metadata`: left empty for structured task failures so the
-  same machine-readable fields are not mirrored a second time
 
 For example, a streaming terminal failure is shaped like this:
 
@@ -804,6 +804,14 @@ For example, a streaming terminal failure is shaped like this:
     "message": {
       "messageId": "resp-1",
       "role": "agent",
+      "metadata": {
+        "object_type": "error",
+        "error_type": "flow_error",
+        "error_code": "REMOTE_VALIDATION_FAILED",
+        "error_message": "validation failed",
+        "task_state": "failed",
+        "llm_response_id": "resp-1"
+      },
       "parts": [
         {
           "kind": "text",
@@ -818,7 +826,9 @@ For example, a streaming terminal failure is shaped like this:
 That leads to a simple business-side rule:
 
 - branch on `status.state`
-- read structured fields from outer metadata
+- read structured fields from outer metadata first
+- accept `status.message.metadata` as a compatibility mirror for legacy
+  consumers
 - treat `status.message.parts` as display text, not as the primary source for
   machine branching
 
@@ -840,7 +850,8 @@ message after a terminal task error. This avoids the ambiguous pattern of
 
 In other words, the default client path already follows the same rule:
 
-- outer metadata is used to rebuild `Response.Error`
+- outer metadata is the preferred source to rebuild `Response.Error`
+- `status.message.metadata` remains a compatibility mirror for `0.1`
 - `status.message.parts` is only a human-readable fallback channel
 - business code should keep branching on `evt.Response.Error`, not on parsed
   text content

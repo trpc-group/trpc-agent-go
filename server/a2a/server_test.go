@@ -3355,7 +3355,7 @@ func TestBuildTaskErrorMessage(t *testing.T) {
 	)
 
 	t.Run("nil event returns nil", func(t *testing.T) {
-		assert.Nil(t, buildTaskErrorMessage(taskID, ctxID, nil))
+		assert.Nil(t, buildTaskErrorMessage(taskID, ctxID, nil, nil))
 	})
 
 	t.Run("missing response returns nil", func(t *testing.T) {
@@ -3365,6 +3365,7 @@ func TestBuildTaskErrorMessage(t *testing.T) {
 				taskID,
 				ctxID,
 				&event.Event{},
+				nil,
 			),
 		)
 	})
@@ -3376,12 +3377,13 @@ func TestBuildTaskErrorMessage(t *testing.T) {
 			&event.Event{
 				Response: &model.Response{},
 			},
+			nil,
 		))
 	})
 
-	t.Run("response id and text are preserved without metadata", func(t *testing.T) {
+	t.Run("response id and text keep mirrored metadata", func(t *testing.T) {
 		const responseID = "resp-2"
-		msg := buildTaskErrorMessage(taskID, ctxID, &event.Event{
+		agentEvent := &event.Event{
 			Response: &model.Response{
 				ID: responseID,
 				Error: &model.ResponseError{
@@ -3389,11 +3391,29 @@ func TestBuildTaskErrorMessage(t *testing.T) {
 					Message: "task failed",
 				},
 			},
-		})
+		}
+		metadata := buildTaskErrorMetadata(agentEvent)
+		msg := buildTaskErrorMessage(
+			taskID,
+			ctxID,
+			agentEvent,
+			metadata,
+		)
 
 		if assert.NotNil(t, msg) {
 			assert.Equal(t, responseID, msg.MessageID)
-			assert.Nil(t, msg.Metadata)
+			if assert.NotNil(t, msg.Metadata) {
+				assert.Equal(
+					t,
+					metadata[ia2a.MessageMetadataErrorTypeKey],
+					msg.Metadata[ia2a.MessageMetadataErrorTypeKey],
+				)
+				assert.Equal(
+					t,
+					metadata[ia2a.MessageMetadataTaskStateKey],
+					msg.Metadata[ia2a.MessageMetadataTaskStateKey],
+				)
+			}
 			if assert.Len(t, msg.Parts, 1) {
 				var text string
 				switch part := msg.Parts[0].(type) {
@@ -3406,21 +3426,31 @@ func TestBuildTaskErrorMessage(t *testing.T) {
 					assert.Equal(t, "task failed", text)
 				}
 			}
+
+			metadata[ia2a.MessageMetadataErrorCodeKey] = "mutated"
+			_, ok := msg.Metadata[ia2a.MessageMetadataErrorCodeKey]
+			assert.False(t, ok)
 		}
 	})
 
 	t.Run("empty error message keeps empty parts", func(t *testing.T) {
-		msg := buildTaskErrorMessage(taskID, ctxID, &event.Event{
+		agentEvent := &event.Event{
 			Response: &model.Response{
 				Error: &model.ResponseError{
 					Type: model.ErrorTypeFlowError,
 				},
 			},
-		})
+		}
+		msg := buildTaskErrorMessage(
+			taskID,
+			ctxID,
+			agentEvent,
+			buildTaskErrorMetadata(agentEvent),
+		)
 
 		if assert.NotNil(t, msg) {
 			assert.NotEmpty(t, msg.MessageID)
-			assert.Nil(t, msg.Metadata)
+			assert.NotNil(t, msg.Metadata)
 			assert.Len(t, msg.Parts, 0)
 		}
 	})
@@ -3490,7 +3520,14 @@ func TestMessageProcessor_ProcessMessage_StructuredTaskError(
 	assert.NotNil(t, task.Metadata)
 	assert.Equal(t, code, task.Metadata[ia2a.MessageMetadataErrorCodeKey])
 	assert.NotNil(t, task.Status.Message)
-	assert.Nil(t, task.Status.Message.Metadata)
+	assert.Equal(
+		t,
+		task.Metadata[ia2a.MessageMetadataErrorCodeKey],
+		task.Status.Message.Metadata[ia2a.MessageMetadataErrorCodeKey],
+	)
+	task.Metadata["new_key"] = "task-only"
+	_, ok = task.Status.Message.Metadata["new_key"]
+	assert.False(t, ok)
 	assert.Len(t, task.Status.Message.Parts, 1)
 }
 
@@ -3636,7 +3673,13 @@ func TestMessageProcessor_ProcessBatchStreamingEvents_StructuredTaskError(
 			status.Metadata[ia2a.MessageMetadataErrorCodeKey],
 		)
 		if assert.NotNil(t, status.Status.Message) {
-			assert.Nil(t, status.Status.Message.Metadata)
+			messageMetadata := status.Status.Message.Metadata
+			messageCode := messageMetadata[ia2a.MessageMetadataErrorCodeKey]
+			assert.Equal(
+				t,
+				status.Metadata[ia2a.MessageMetadataErrorCodeKey],
+				messageCode,
+			)
 			assert.Len(t, status.Status.Message.Parts, 1)
 		}
 	default:
@@ -3717,7 +3760,13 @@ done:
 		status.Metadata[ia2a.MessageMetadataErrorCodeKey],
 	)
 	if assert.NotNil(t, status.Status.Message) {
-		assert.Nil(t, status.Status.Message.Metadata)
+		messageMetadata := status.Status.Message.Metadata
+		messageCode := messageMetadata[ia2a.MessageMetadataErrorCodeKey]
+		assert.Equal(
+			t,
+			status.Metadata[ia2a.MessageMetadataErrorCodeKey],
+			messageCode,
+		)
 		assert.Len(t, status.Status.Message.Parts, 1)
 	}
 }

@@ -98,6 +98,17 @@ func buildRuntimeState(metadata map[string]any) map[string]any {
 	return runtimeState
 }
 
+func cloneMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 func buildProcessor(
 	agent agent.Agent,
 	sessionService session.Service,
@@ -318,6 +329,7 @@ func buildTaskErrorMessage(
 	taskID string,
 	ctxID string,
 	agentEvent *event.Event,
+	metadata map[string]any,
 ) *protocol.Message {
 	if agentEvent == nil || agentEvent.Response == nil {
 		return nil
@@ -337,6 +349,7 @@ func buildTaskErrorMessage(
 		&taskID,
 		&ctxID,
 	)
+	msg.Metadata = cloneMetadata(metadata)
 	if agentEvent.Response.ID != "" {
 		msg.MessageID = agentEvent.Response.ID
 	}
@@ -349,8 +362,13 @@ func buildStructuredFailureTask(
 	history []protocol.Message,
 	agentEvent *event.Event,
 ) *protocol.Task {
-	statusMsg := buildTaskErrorMessage(taskID, ctxID, agentEvent)
 	taskMetadata := buildTaskErrorMetadata(agentEvent)
+	statusMsg := buildTaskErrorMessage(
+		taskID,
+		ctxID,
+		agentEvent,
+		taskMetadata,
+	)
 	task := protocol.NewTask(taskID, ctxID)
 	task.History = history
 	task.Status = protocol.TaskStatus{
