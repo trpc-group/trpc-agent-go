@@ -14,6 +14,7 @@ package zset
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -39,6 +40,8 @@ type Client struct {
 	client redis.UniversalClient
 	cfg    Config
 }
+
+var errSessionStateNotFound = errors.New("session not found")
 
 // NewClient creates a new ZSet client.
 func NewClient(client redis.UniversalClient, cfg Config) *Client {
@@ -182,51 +185,32 @@ func (c *Client) ExistsPipelined(ctx context.Context, pipe redis.Pipeliner, key 
 
 // AppendEvent persists an event to ZSet storage.
 func (c *Client) AppendEvent(ctx context.Context, key session.Key, event *event.Event) error {
-	stateBytes, err := c.client.HGet(ctx, c.sessionStateKey(key), key.SessionID).Bytes()
-	if err != nil {
-		return fmt.Errorf("get session state (zset) failed: %w", err)
-	}
-	sessState := &SessionState{}
-	if err := json.Unmarshal(stateBytes, sessState); err != nil {
-		return fmt.Errorf("unmarshal session state failed: %w", err)
-	}
-
-	sessState.UpdatedAt = time.Now()
-	if sessState.State == nil {
-		sessState.State = make(session.StateMap)
-	}
-	session.ApplyEventStateDeltaMap(sessState.State, event)
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("marshal session state failed: %w", err)
-	}
-
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event failed: %w", err)
 	}
 
-	txPipe := c.client.TxPipeline()
-
-	txPipe.HSet(ctx, c.sessionStateKey(key), key.SessionID, string(updatedStateBytes))
-	if c.cfg.SessionTTL > 0 {
-		txPipe.Expire(ctx, c.sessionStateKey(key), c.cfg.SessionTTL)
-	}
-
-	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
-		txPipe.ZAdd(ctx, c.eventKey(key), redis.Z{
-			Score:  float64(event.Timestamp.UnixNano()),
-			Member: eventBytes,
-		})
-		if c.cfg.SessionTTL > 0 {
-			txPipe.Expire(ctx, c.eventKey(key), c.cfg.SessionTTL)
-		}
-	}
-
-	if _, err := txPipe.Exec(ctx); err != nil {
-		return fmt.Errorf("store event (zset) failed: %w", err)
-	}
-	return nil
+	return c.updateSessionStateCAS(
+		ctx,
+		key,
+		func(sessState *SessionState) error {
+			sessState.UpdatedAt = time.Now()
+			session.ApplyEventStateDeltaMap(sessState.State, event)
+			return nil
+		},
+		func(pipe redis.Pipeliner) {
+			if event.Response == nil || event.IsPartial || !event.IsValidContent() {
+				return
+			}
+			pipe.ZAdd(ctx, c.eventKey(key), redis.Z{
+				Score:  float64(event.Timestamp.UnixNano()),
+				Member: eventBytes,
+			})
+			if c.cfg.SessionTTL > 0 {
+				pipe.Expire(ctx, c.eventKey(key), c.cfg.SessionTTL)
+			}
+		},
+	)
 }
 
 // ListSessions lists sessions in ZSet.
@@ -317,47 +301,24 @@ func (c *Client) ListSessions(
 
 // UpdateSessionState updates session state in ZSet.
 func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
-	stateBytes, err := c.client.HGet(ctx, c.sessionStateKey(key), key.SessionID).Bytes()
-	if err == redis.Nil {
-		return fmt.Errorf("session not found")
-	}
-	if err != nil {
-		return fmt.Errorf("get session state: %w", err)
-	}
-
-	sessState := &SessionState{}
-	if err := json.Unmarshal(stateBytes, sessState); err != nil {
-		return fmt.Errorf("unmarshal state: %w", err)
-	}
-
-	if sessState.State == nil {
-		sessState.State = make(session.StateMap)
-	}
-	for k, v := range state {
-		if v == nil {
-			sessState.State[k] = nil
-			continue
-		}
-		copiedValue := make([]byte, len(v))
-		copy(copiedValue, v)
-		sessState.State[k] = copiedValue
-	}
-	sessState.UpdatedAt = time.Now()
-
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("marshal state: %w", err)
-	}
-
-	pipe := c.client.TxPipeline()
-	pipe.HSet(ctx, c.sessionStateKey(key), key.SessionID, string(updatedStateBytes))
-	if c.cfg.SessionTTL > 0 {
-		pipe.Expire(ctx, c.sessionStateKey(key), c.cfg.SessionTTL)
-	}
-	if _, err := pipe.Exec(ctx); err != nil {
-		return fmt.Errorf("update session state failed: %w", err)
-	}
-	return nil
+	return c.updateSessionStateCAS(
+		ctx,
+		key,
+		func(sessState *SessionState) error {
+			for k, v := range state {
+				if v == nil {
+					sessState.State[k] = nil
+					continue
+				}
+				copiedValue := make([]byte, len(v))
+				copy(copiedValue, v)
+				sessState.State[k] = copiedValue
+			}
+			sessState.UpdatedAt = time.Now()
+			return nil
+		},
+		nil,
+	)
 }
 
 // DeleteSession deletes a session in ZSet.
@@ -383,54 +344,117 @@ func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 
 // AppendTrackEvent persists a track event to ZSet storage.
 func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
-	stateBytes, err := c.client.HGet(ctx, c.sessionStateKey(key), key.SessionID).Bytes()
-	if err != nil {
-		return fmt.Errorf("get session state failed: %w", err)
-	}
-	sessState := &SessionState{}
-	if err := json.Unmarshal(stateBytes, sessState); err != nil {
-		return fmt.Errorf("unmarshal session state failed: %w", err)
-	}
-
-	sess := &session.Session{
-		ID:      key.SessionID,
-		AppName: key.AppName,
-		UserID:  key.UserID,
-		State:   sessState.State,
-	}
-	if err := sess.AppendTrackEvent(trackEvent); err != nil {
-		return err
-	}
-	sessState.State = sess.SnapshotState()
-	sessState.UpdatedAt = sess.UpdatedAt
-
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("marshal session state failed: %w", err)
-	}
-
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event failed: %w", err)
 	}
 
-	txPipe := c.client.TxPipeline()
-	txPipe.HSet(ctx, c.sessionStateKey(key), key.SessionID, string(updatedStateBytes))
-	if c.cfg.SessionTTL > 0 {
-		txPipe.Expire(ctx, c.sessionStateKey(key), c.cfg.SessionTTL)
+	return c.updateSessionStateCAS(
+		ctx,
+		key,
+		func(sessState *SessionState) error {
+			sess := &session.Session{
+				ID:      key.SessionID,
+				AppName: key.AppName,
+				UserID:  key.UserID,
+				State:   sessState.State,
+			}
+			if err := sess.AppendTrackEvent(trackEvent); err != nil {
+				return err
+			}
+			sessState.State = sess.SnapshotState()
+			sessState.UpdatedAt = sess.UpdatedAt
+			return nil
+		},
+		func(pipe redis.Pipeliner) {
+			trackKey := c.trackKey(key, trackEvent.Track)
+			pipe.ZAdd(ctx, trackKey, redis.Z{
+				Score:  float64(trackEvent.Timestamp.UnixNano()),
+				Member: eventBytes,
+			})
+			if c.cfg.SessionTTL > 0 {
+				pipe.Expire(ctx, trackKey, c.cfg.SessionTTL)
+			}
+		},
+	)
+}
+
+func (c *Client) updateSessionStateCAS(
+	ctx context.Context,
+	key session.Key,
+	mutate func(sessState *SessionState) error,
+	extra func(pipe redis.Pipeliner),
+) error {
+	sessKey := c.sessionStateKey(key)
+	retryDelay := 5 * time.Millisecond
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		err := c.client.Watch(ctx, func(tx *redis.Tx) error {
+			stateBytes, err := tx.HGet(ctx, sessKey, key.SessionID).Bytes()
+			if err == redis.Nil {
+				return errSessionStateNotFound
+			}
+			if err != nil {
+				return fmt.Errorf("get session state failed: %w", err)
+			}
+
+			sessState := &SessionState{}
+			if err := json.Unmarshal(stateBytes, sessState); err != nil {
+				return fmt.Errorf("unmarshal session state failed: %w", err)
+			}
+			if sessState.State == nil {
+				sessState.State = make(session.StateMap)
+			}
+			if err := mutate(sessState); err != nil {
+				return err
+			}
+
+			updatedStateBytes, err := json.Marshal(sessState)
+			if err != nil {
+				return fmt.Errorf("marshal session state failed: %w", err)
+			}
+
+			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.HSet(ctx, sessKey, key.SessionID, string(updatedStateBytes))
+				if c.cfg.SessionTTL > 0 {
+					pipe.Expire(ctx, sessKey, c.cfg.SessionTTL)
+				}
+				if extra != nil {
+					extra(pipe)
+				}
+				return nil
+			})
+			return err
+		}, sessKey)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, errSessionStateNotFound) {
+			return fmt.Errorf("session not found")
+		}
+		if err == redis.TxFailedErr {
+			timer := time.NewTimer(retryDelay)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return ctx.Err()
+			case <-timer.C:
+			}
+			if retryDelay < 100*time.Millisecond {
+				retryDelay *= 2
+				if retryDelay > 100*time.Millisecond {
+					retryDelay = 100 * time.Millisecond
+				}
+			}
+			continue
+		}
+		return err
 	}
-	trackKey := c.trackKey(key, trackEvent.Track)
-	txPipe.ZAdd(ctx, trackKey, redis.Z{
-		Score:  float64(trackEvent.Timestamp.UnixNano()),
-		Member: eventBytes,
-	})
-	if c.cfg.SessionTTL > 0 {
-		txPipe.Expire(ctx, trackKey, c.cfg.SessionTTL)
-	}
-	if _, err := txPipe.Exec(ctx); err != nil {
-		return fmt.Errorf("store track event failed: %w", err)
-	}
-	return nil
 }
 
 // Internal methods

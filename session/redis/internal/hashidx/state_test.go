@@ -11,9 +11,11 @@ package hashidx
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -271,4 +273,109 @@ func TestClient_UpdateSessionState_NilState(t *testing.T) {
 	sess, err := c.GetSession(ctx, key, 0, time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, []byte("newval"), sess.State["newkey"])
+}
+
+func TestLuaUpdateSessionState_MergesIntoCurrentMeta(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, Config{SessionTTL: time.Hour})
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "uss-merge"}
+
+	_, err := c.CreateSession(ctx, key, session.StateMap{"existing": []byte("v1")})
+	require.NoError(t, err)
+
+	currentJSON, err := rdb.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
+	require.NoError(t, err)
+
+	var concurrentMeta sessionMeta
+	require.NoError(t, json.Unmarshal(currentJSON, &concurrentMeta))
+	concurrentMeta.State["other"] = []byte("v2")
+	concurrentJSON, err := json.Marshal(concurrentMeta)
+	require.NoError(t, err)
+	require.NoError(t, rdb.Set(ctx, c.keys.SessionMetaKey(key), concurrentJSON, time.Hour).Err())
+
+	require.NoError(t, c.UpdateSessionState(ctx, key, session.StateMap{
+		"new": []byte("v3"),
+	}))
+
+	currentJSON, err = rdb.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
+	require.NoError(t, err)
+
+	var mergedMeta sessionMeta
+	require.NoError(t, json.Unmarshal(currentJSON, &mergedMeta))
+	assert.Equal(t, []byte("v1"), mergedMeta.State["existing"])
+	assert.Equal(t, []byte("v2"), mergedMeta.State["other"])
+	assert.Equal(t, []byte("v3"), mergedMeta.State["new"])
+}
+
+func TestClient_UpdateSessionState_PreservesTracksAfterAppend(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "uss-track"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	tracksJSON, err := json.Marshal([]string{"alpha"})
+	require.NoError(t, err)
+	require.NoError(t, c.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}, tracksJSON))
+
+	require.NoError(t, c.UpdateSessionState(ctx, key, session.StateMap{
+		"marker": []byte("1"),
+	}))
+
+	sess, err := c.GetSession(ctx, key, 0, time.Time{})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, []byte("1"), sess.State["marker"])
+
+	tracks, err := session.TracksFromState(sess.State)
+	require.NoError(t, err)
+	assert.Contains(t, tracks, session.Track("alpha"))
+}
+
+func TestClient_UpdateSessionState_UnexpectedScriptResult(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "uss-script-result"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	originalScript := luaUpdateSessionState
+	luaUpdateSessionState = redis.NewScript(`return 2`)
+	t.Cleanup(func() {
+		luaUpdateSessionState = originalScript
+	})
+
+	err = c.UpdateSessionState(ctx, key, session.StateMap{"k": []byte("v")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unexpected script result 2")
+}
+
+func TestClient_UpdateSessionState_ScriptError(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "uss-script-error"}
+
+	_, err := c.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+
+	originalScript := luaUpdateSessionState
+	luaUpdateSessionState = redis.NewScript(`return redis.error_reply('boom')`)
+	t.Cleanup(func() {
+		luaUpdateSessionState = originalScript
+	})
+
+	err = c.UpdateSessionState(ctx, key, session.StateMap{"k": []byte("v")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "update session state")
+	assert.Contains(t, err.Error(), "boom")
 }
