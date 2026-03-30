@@ -2242,6 +2242,44 @@ func TestGraphAgent_GraphTerminalMessagesOnly_HidesIntermediateAgentNodes(
 	require.True(t, sawFinalChunk)
 }
 
+func TestGraphAgent_GraphTerminalMessagesOnly_HidesIntermediateAgentNodes_NoBarrier(
+	t *testing.T,
+) {
+	ga := newSerialTerminalMessageGraphAgent(t, "", "")
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("test")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableTracing(true),
+			agent.WithGraphEmitFinalModelResponses(true),
+			agent.WithGraphTerminalMessagesOnly(true),
+		)),
+	)
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	var sawFirstChunk bool
+	var sawFinalChunk bool
+	firstPrefix := scopePrefix(ga.Info().Name, "first")
+	finalPrefix := scopePrefix(ga.Info().Name, "final")
+	for evt := range events {
+		if !evt.IsPartial || evt.Response == nil ||
+			len(evt.Response.Choices) == 0 {
+			continue
+		}
+		if hasFilterPrefix(evt.FilterKey, firstPrefix) &&
+			evt.Response.Choices[0].Delta.Content == "draft" {
+			sawFirstChunk = true
+		}
+		if hasFilterPrefix(evt.FilterKey, finalPrefix) &&
+			evt.Response.Choices[0].Delta.Content == "answer" {
+			sawFinalChunk = true
+		}
+	}
+	require.False(t, sawFirstChunk)
+	require.True(t, sawFinalChunk)
+}
+
 func TestGraphAgent_GraphTerminalMessagesOnly_KeepsParallelTerminalNodes(
 	t *testing.T,
 ) {
@@ -2353,6 +2391,7 @@ func TestTerminalAgentScopePrefix(t *testing.T) {
 	)
 
 	require.Empty(t, terminalAgentScopePrefix(rootFilterKey, nil))
+	require.Empty(t, terminalAgentScopePrefix("", &graph.Node{}))
 
 	defaultScopeGraph, err := graph.NewStateGraph(
 		graph.MessagesStateSchema(),
@@ -2426,6 +2465,21 @@ func TestIsTerminalMessageNode(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, isTerminalMessageNode(endsGraph, routerNode))
 
+	endOnlyGraph, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddAgentNode(
+			routerNodeID,
+			graph.WithEndsMap(map[string]string{
+				"done": graph.End,
+			}),
+		).
+		SetEntryPoint(routerNodeID).
+		SetFinishPoint(routerNodeID).
+		Compile()
+	require.NoError(t, err)
+	endOnlyNode, ok := endOnlyGraph.Node(routerNodeID)
+	require.True(t, ok)
+	require.True(t, isTerminalMessageNode(endOnlyGraph, endOnlyNode))
+
 	conditionalGraph, err := graph.NewStateGraph(
 		graph.MessagesStateSchema(),
 	).
@@ -2482,6 +2536,30 @@ func TestIsTerminalMessageNode(t *testing.T) {
 			directConditionalGraph,
 			directConditionalNode,
 		),
+	)
+
+	endConditionalGraph, err := graph.NewStateGraph(
+		graph.MessagesStateSchema(),
+	).
+		AddAgentNode(routerNodeID).
+		AddConditionalEdges(
+			routerNodeID,
+			func(ctx context.Context, state graph.State) (string, error) {
+				return "done", nil
+			},
+			map[string]string{
+				"done": graph.End,
+			},
+		).
+		SetEntryPoint(routerNodeID).
+		SetFinishPoint(routerNodeID).
+		Compile()
+	require.NoError(t, err)
+	endConditionalNode, ok := endConditionalGraph.Node(routerNodeID)
+	require.True(t, ok)
+	require.True(
+		t,
+		isTerminalMessageNode(endConditionalGraph, endConditionalNode),
 	)
 }
 
@@ -2591,6 +2669,9 @@ func TestTerminalMessageFilterMatchAgentScopePrefix(t *testing.T) {
 }
 
 func TestTerminalMessageFilterAllows(t *testing.T) {
+	var nilFilter *terminalMessageFilter
+	require.True(t, nilFilter.Allows(&event.Event{}))
+
 	filter := terminalMessageFilter{
 		enabled: true,
 		llmNodeAuthors: map[string]struct{}{
@@ -2657,12 +2738,25 @@ func TestTerminalMessageFilterAllows(t *testing.T) {
 	unknownAuthorEvent := &event.Event{
 		Author: "external",
 		Response: &model.Response{
+			ID: "external-response",
 			Choices: []model.Choice{{
 				Message: model.NewAssistantMessage("answer"),
 			}},
 		},
 	}
 	require.True(t, filter.Allows(unknownAuthorEvent))
+	_, ok := filter.nonTerminalResponseIDs["external-response"]
+	require.False(t, ok)
+
+	emptyResponseIDEvent := &event.Event{
+		Author: "final_llm",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("answer"),
+			}},
+		},
+	}
+	require.True(t, filter.Allows(emptyResponseIDEvent))
 
 	ambiguousScopeFilter := terminalMessageFilter{
 		enabled: true,
@@ -2714,6 +2808,54 @@ func TestTerminalMessageFilterAllows(t *testing.T) {
 		`"unknown-response"`,
 	)
 	require.True(t, filter.Allows(unknownCompletion))
+
+	missingResponseIDCompletion := visibleCompletion.Clone()
+	delete(
+		missingResponseIDCompletion.StateDelta,
+		graph.StateKeyLastResponseID,
+	)
+	require.True(t, filter.Allows(missingResponseIDCompletion))
+}
+
+func TestTerminalMessageFilterRecordResponseID(t *testing.T) {
+	filter := terminalMessageFilter{
+		terminalResponseIDs: make(map[string]struct{}),
+	}
+
+	filter.recordResponseID("", true)
+	require.Empty(t, filter.terminalResponseIDs)
+
+	const responseID = "terminal-response"
+	filter.recordResponseID(responseID, true)
+	filter.recordResponseID(responseID, false)
+	_, ok := filter.nonTerminalResponseIDs[responseID]
+	require.False(t, ok)
+}
+
+func TestCompletionResponseIDFromStateDelta(t *testing.T) {
+	require.Empty(t, completionResponseIDFromStateDelta(nil))
+	require.Empty(t, completionResponseIDFromStateDelta(&event.Event{}))
+
+	emptyStateDelta := &event.Event{StateDelta: map[string][]byte{}}
+	require.Empty(t, completionResponseIDFromStateDelta(emptyStateDelta))
+
+	invalidStateDelta := &event.Event{
+		StateDelta: map[string][]byte{
+			graph.StateKeyLastResponseID: []byte("{"),
+		},
+	}
+	require.Empty(t, completionResponseIDFromStateDelta(invalidStateDelta))
+
+	validStateDelta := &event.Event{
+		StateDelta: map[string][]byte{
+			graph.StateKeyLastResponseID: []byte(`"response-id"`),
+		},
+	}
+	require.Equal(
+		t,
+		"response-id",
+		completionResponseIDFromStateDelta(validStateDelta),
+	)
 }
 
 func TestGraphAgent_DisableGraphCompletionEvent_WithAfterCallbackCustomResponse(t *testing.T) {
