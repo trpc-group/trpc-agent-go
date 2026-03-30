@@ -206,6 +206,15 @@ func TestWithGraphEmitFinalModelResponses(t *testing.T) {
 	require.False(t, ro.GraphEmitFinalModelResponses)
 }
 
+func TestWithGraphTerminalMessagesOnly(t *testing.T) {
+	var ro RunOptions
+	WithGraphTerminalMessagesOnly(true)(&ro)
+	require.True(t, ro.GraphTerminalMessagesOnly)
+
+	WithGraphTerminalMessagesOnly(false)(&ro)
+	require.False(t, ro.GraphTerminalMessagesOnly)
+}
+
 func TestWithStreamMode(t *testing.T) {
 	t.Run("enables stream mode", func(t *testing.T) {
 		var ro RunOptions

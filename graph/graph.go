@@ -306,6 +306,11 @@ func (n *Node) Model() model.Model {
 	return n.llmModel
 }
 
+// AgentEventScope returns the configured event scope for an agent node.
+func (n *Node) AgentEventScope() string {
+	return n.agentEventScope
+}
+
 // HasTools reports whether the node has statically configured tools.
 func (n *Node) HasTools() bool {
 	return len(n.baseTools) > 0 || len(n.toolSets) > 0
