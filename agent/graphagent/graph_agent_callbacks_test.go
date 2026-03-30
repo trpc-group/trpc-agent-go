@@ -14,6 +14,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -56,6 +57,63 @@ func TestGraphAgent_BeforeCallback_CustomResponse(t *testing.T) {
 	require.Len(t, events, 1)
 	require.Equal(t, model.RoleAssistant, events[0].Response.Choices[0].Message.Role)
 	require.Equal(t, "short-circuit", events[0].Response.Choices[0].Message.Content)
+}
+
+func TestGraphAgent_BeforeCallback_CustomResponseUsesInvocationBufferSize(t *testing.T) {
+	g := buildTrivialGraph(t)
+	callbacks := agent.NewCallbacks().
+		RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+			return &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("short-circuit")}}}, nil
+		})
+	ga, err := New("ga", g, WithAgentCallbacks(callbacks), WithChannelBufferSize(1))
+	require.NoError(t, err)
+	inv := &agent.Invocation{
+		Message: model.NewUserMessage("hi"),
+		RunOptions: agent.NewRunOptions(
+			agent.WithEventChannelBufferSize(7),
+		),
+	}
+	ga.setupInvocation(inv)
+	ch, err := ga.runWithCallbacks(context.Background(), inv)
+	require.NoError(t, err)
+	require.Equal(t, 7, cap(ch))
+	for range ch {
+	}
+}
+
+func TestGraphAgent_BeforeCallback_CustomResponseKeepsSingleBuffer(t *testing.T) {
+	g := buildTrivialGraph(t)
+	callbacks := agent.NewCallbacks().
+		RegisterBeforeAgent(func(ctx context.Context, inv *agent.Invocation) (*model.Response, error) {
+			return &model.Response{Choices: []model.Choice{{Message: model.NewAssistantMessage("short-circuit")}}}, nil
+		})
+	ga, err := New("ga", g, WithAgentCallbacks(callbacks), WithChannelBufferSize(0))
+	require.NoError(t, err)
+	inv := &agent.Invocation{Message: model.NewUserMessage("hi")}
+	ga.setupInvocation(inv)
+
+	type result struct {
+		ch  <-chan *event.Event
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		ch, runErr := ga.runWithCallbacks(context.Background(), inv)
+		done <- result{ch: ch, err: runErr}
+	}()
+
+	select {
+	case res := <-done:
+		require.NoError(t, res.err)
+		require.Equal(t, 1, cap(res.ch))
+		var events []*event.Event
+		for evt := range res.ch {
+			events = append(events, evt)
+		}
+		require.Len(t, events, 1)
+	case <-time.After(time.Second):
+		t.Fatal("expected short-circuit callback response without blocking")
+	}
 }
 
 func TestGraphAgent_BeforeCallback_Error(t *testing.T) {
@@ -101,6 +159,28 @@ func TestGraphAgent_AfterCallback_CustomResponseAppended(t *testing.T) {
 	require.NotNil(t, last)
 	require.Equal(t, model.RoleAssistant, last.Response.Choices[0].Message.Role)
 	require.Equal(t, "tail", last.Response.Choices[0].Message.Content)
+}
+
+func TestGraphAgent_AfterCallbackWrapUsesInvocationBufferSize(t *testing.T) {
+	g := buildTrivialGraph(t)
+	callbacks := agent.NewCallbacks().
+		RegisterAfterAgent(func(ctx context.Context, inv *agent.Invocation, runErr error) (*model.Response, error) {
+			return nil, nil
+		})
+	ga, err := New("ga", g, WithAgentCallbacks(callbacks), WithChannelBufferSize(1))
+	require.NoError(t, err)
+	inv := &agent.Invocation{
+		Message: model.NewUserMessage("go"),
+		RunOptions: agent.NewRunOptions(
+			agent.WithEventChannelBufferSize(7),
+		),
+	}
+	ga.setupInvocation(inv)
+	ch, err := ga.runWithCallbacks(context.Background(), inv)
+	require.NoError(t, err)
+	require.Equal(t, 7, cap(ch))
+	for range ch {
+	}
 }
 
 func TestGraphAgent_AfterCallback_ErrorEmitsErrorEvent(t *testing.T) {
@@ -174,4 +254,145 @@ func TestGraphAgent_CallbackContextPropagation(t *testing.T) {
 
 	// Verify that the context value was captured in AfterAgent callback.
 	require.Equal(t, testValue, capturedValue, "context value should be propagated from BeforeAgent to AfterAgent")
+}
+
+func TestGraphAgent_BeforeCallbackContextOverride_PreservesCompletionCapture(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	var sawInvocation bool
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		_, sawInvocation = agent.InvocationFromContext(ctx)
+		return graph.State{
+			graph.StateKeyLastResponse: "answer",
+		}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return &agent.BeforeAgentResult{
+			Context: context.Background(),
+		}, nil
+	})
+	graphAgent, err := New("test-graph", compiled, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		AgentName:    "test-graph",
+		Message:      model.NewUserMessage("test"),
+		RunOptions: agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		),
+	}
+	ctx := graph.WithGraphCompletionCapture(
+		agent.NewInvocationContext(context.Background(), invocation),
+	)
+	events, err := graphAgent.runWithCallbacks(ctx, invocation)
+	require.NoError(t, err)
+
+	var sawRawCompletion bool
+	var sawVisibleCompletion bool
+	for evt := range events {
+		if evt.Done && evt.Object == graph.ObjectTypeGraphExecution {
+			sawRawCompletion = true
+		}
+		if evt.Done && evt.Object == model.ObjectTypeChatCompletion {
+			sawVisibleCompletion = true
+		}
+	}
+
+	require.True(t, sawInvocation)
+	require.True(t, sawRawCompletion)
+	require.False(t, sawVisibleCompletion)
+}
+
+func TestGraphAgent_BeforeCallbackExplicitWithoutCapture_CanClearCompletionCapture(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{
+			graph.StateKeyLastResponse: "answer",
+		}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return &agent.BeforeAgentResult{
+			Context: graph.WithoutGraphCompletionCapture(context.Background()),
+		}, nil
+	})
+	graphAgent, err := New("test-graph", compiled, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		AgentName:    "test-graph",
+		Message:      model.NewUserMessage("test"),
+		RunOptions: agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		),
+	}
+	ctx := graph.WithGraphCompletionCapture(
+		agent.NewInvocationContext(context.Background(), invocation),
+	)
+	events, err := graphAgent.runWithCallbacks(ctx, invocation)
+	require.NoError(t, err)
+
+	var sawRawCompletion bool
+	var sawVisibleCompletion bool
+	for evt := range events {
+		if evt.Done && evt.Object == graph.ObjectTypeGraphExecution {
+			sawRawCompletion = true
+		}
+		if evt.Done && evt.Object == model.ObjectTypeChatCompletion {
+			sawVisibleCompletion = true
+		}
+	}
+
+	require.False(t, sawRawCompletion)
+	require.True(t, sawVisibleCompletion)
+}
+
+func TestGraphAgent_BeforeCallbackContextOverride_CanForceCompletionCapture(t *testing.T) {
+	schema := graph.MessagesStateSchema()
+	sg := graph.NewStateGraph(schema)
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{
+			graph.StateKeyLastResponse: "answer",
+		}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterBeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		return &agent.BeforeAgentResult{
+			Context: graph.WithGraphCompletionCapture(context.Background()),
+		}, nil
+	})
+	graphAgent, err := New("test-graph", compiled, WithAgentCallbacks(callbacks))
+	require.NoError(t, err)
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		AgentName:    "test-graph",
+		Message:      model.NewUserMessage("test"),
+		RunOptions: agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		),
+	}
+	events, err := graphAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+
+	var sawRawCompletion bool
+	var sawVisibleCompletion bool
+	for evt := range events {
+		if evt.Done && evt.Object == graph.ObjectTypeGraphExecution {
+			sawRawCompletion = true
+		}
+		if graph.IsVisibleGraphCompletionEvent(evt) {
+			sawVisibleCompletion = true
+		}
+	}
+
+	require.True(t, sawRawCompletion)
+	require.False(t, sawVisibleCompletion)
 }

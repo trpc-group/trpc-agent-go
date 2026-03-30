@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
@@ -33,6 +34,8 @@ const (
 
 	memoryNotFoundErrSubstr = "memory with id"
 	memoryNotFoundErrMarker = "not found"
+
+	autoMemoryLastExtractAtStateKeyPrefix = memory.SessionStateKeyAutoMemoryLastExtractAt + ":"
 )
 
 // MemoryJob represents a job for async memory extraction.
@@ -51,10 +54,11 @@ type AutoMemoryConfig struct {
 	MemoryQueueSize  int
 	MemoryJobTimeout time.Duration
 	// EnabledTools controls which memory operations the worker
-	// is allowed to execute. When non-empty, only operations
-	// whose corresponding tool name is present are executed;
-	// others are silently skipped. A nil or empty map means all
-	// operations are allowed (default).
+	// is allowed to execute. When nil, all operations are
+	// allowed (default). When non-nil, only operations whose
+	// corresponding tool name is present are executed; others
+	// are silently skipped. A non-nil empty map disables all
+	// operations.
 	EnabledTools map[string]struct{}
 }
 
@@ -182,13 +186,20 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 		log.DebugfContext(ctx, "auto_memory: skipped due to nil session")
 		return nil
 	}
-	userKey := memory.UserKey{AppName: sess.AppName, UserID: sess.UserID}
-	if userKey.AppName == "" || userKey.UserID == "" {
+	// runner.enqueueAutoMemoryJob already folds any run-scoped memory user
+	// override into the cloned job session, so ResolveUserKey should read the
+	// effective user directly from sess without a separate runtimeState map.
+	appName, userID, ok := imemory.ResolveUserKey(sess, nil)
+	if !ok {
 		log.DebugfContext(ctx, "auto_memory: skipped due to empty userKey")
 		return nil
 	}
+	userKey := memory.UserKey{AppName: appName, UserID: userID}
 
-	since := readLastExtractAt(sess)
+	// Scan new transcript events from the cloned job snapshot, but persist the
+	// per-user extraction cursor on the original session carried via context.
+	cursorSession := autoMemoryCursorSession(ctx, sess)
+	since := readLastExtractAt(cursorSession, userKey)
 	latestTs, messages := scanDeltaSince(sess, since)
 	if len(messages) == 0 {
 		log.DebugfContext(ctx, "auto_memory: skipped due to no new messages for user %s/%s",
@@ -216,7 +227,7 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 	job := &MemoryJob{
 		Ctx:      context.WithoutCancel(ctx),
 		UserKey:  userKey,
-		Session:  sess,
+		Session:  cursorSession,
 		LatestTs: latestTs,
 		Messages: messages,
 	}
@@ -239,7 +250,7 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 	if err := w.createAutoMemory(syncCtx, userKey, messages); err != nil {
 		return err
 	}
-	writeLastExtractAt(sess, latestTs)
+	writeLastExtractAt(cursorSession, userKey, latestTs)
 	return nil
 }
 
@@ -296,7 +307,7 @@ func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 			job.UserKey.AppName, job.UserKey.UserID, err)
 		return
 	}
-	writeLastExtractAt(job.Session, job.LatestTs)
+	writeLastExtractAt(job.Session, job.UserKey, job.LatestTs)
 }
 
 // createAutoMemory performs memory extraction and persists operations.
@@ -315,9 +326,9 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	// likely to need updating or deduplication.
 	existing, err := w.searchRelevantMemories(ctx, userKey, messages)
 	if err != nil {
-		log.WarnfContext(ctx, "auto_memory: failed to search existing memories for user %s/%s: %v",
+		log.WarnfContext(ctx, "auto_memory: failed to prepare existing memories for user %s/%s: %v",
 			userKey.AppName, userKey.UserID, err)
-		existing = nil
+		return fmt.Errorf("auto_memory: prepare existing memories failed: %w", err)
 	}
 
 	// Extract memory operations.
@@ -340,7 +351,9 @@ func (w *AutoMemoryWorker) createAutoMemory(
 // and searches for existing memories that are semantically related.
 // This avoids injecting the full memory set into the extractor prompt,
 // keeping token usage proportional to the conversation size rather than
-// the total memory count.
+// the total memory count. When the search path fails, it falls back to
+// loading a small set of recent memories so extraction still has
+// deduplication context instead of silently proceeding with none.
 func (w *AutoMemoryWorker) searchRelevantMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -350,23 +363,60 @@ func (w *AutoMemoryWorker) searchRelevantMemories(
 	if query == "" {
 		return nil, nil
 	}
-	return w.operator.SearchMemories(ctx, userKey, query)
+	entries, err := w.operator.SearchMemories(ctx, userKey, query)
+	if err == nil {
+		return entries, nil
+	}
+	fallback, readErr := w.operator.ReadMemories(
+		ctx, userKey, DefaultMaxSearchResults,
+	)
+	if readErr != nil {
+		return nil, fmt.Errorf(
+			"search existing memories failed: %w; fallback read failed: %v",
+			err, readErr,
+		)
+	}
+	log.WarnfContext(ctx,
+		"auto_memory: search existing memories failed, using recent fallback for user %s/%s: %v",
+		userKey.AppName, userKey.UserID, err)
+	return fallback, nil
 }
 
 // buildSearchQuery extracts user-side text from conversation messages
 // and concatenates it into a single search query.
 func buildSearchQuery(messages []model.Message) string {
-	var sb strings.Builder
-	for _, m := range messages {
-		if m.Role != model.RoleUser || m.Content == "" {
+	parts := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role != model.RoleUser {
 			continue
 		}
-		if sb.Len() > 0 {
-			sb.WriteByte(' ')
+		text := messageSearchText(msg)
+		if text == "" {
+			continue
 		}
-		sb.WriteString(m.Content)
+		parts = append(parts, text)
 	}
-	return sb.String()
+	return strings.Join(parts, " ")
+}
+
+// messageSearchText extracts searchable text from a user message.
+// It preserves both the legacy Content field and text ContentParts.
+func messageSearchText(msg model.Message) string {
+	parts := make([]string, 0, 1+len(msg.ContentParts))
+	if text := strings.TrimSpace(msg.Content); text != "" {
+		parts = append(parts, text)
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText || part.Text == nil {
+			continue
+		}
+		text := strings.TrimSpace(*part.Text)
+		if text == "" {
+			continue
+		}
+		parts = append(parts, text)
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 func isMemoryNotFoundError(err error) bool {
@@ -389,10 +439,10 @@ var operationToolName = map[extractor.OperationType]string{
 
 // isToolEnabled checks whether the given tool name is allowed
 // by the EnabledTools configuration. Returns true when the
-// allow-list is nil or empty (all tools enabled by default).
+// allow-list is nil. A non-nil empty map disables all tools.
 func (w *AutoMemoryWorker) isToolEnabled(toolName string) bool {
 	et := w.config.EnabledTools
-	if len(et) == 0 {
+	if et == nil {
 		return true
 	}
 	_, ok := et[toolName]
@@ -516,25 +566,94 @@ func hashUserKey(userKey memory.UserKey) int {
 	return int(h.Sum32())
 }
 
-// readLastExtractAt reads the last auto memory extraction timestamp from session state.
-// Returns zero time if not found or parsing fails.
-func readLastExtractAt(sess *session.Session) time.Time {
-	raw, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+func autoMemoryCursorSession(
+	ctx context.Context,
+	sess *session.Session,
+) *session.Session {
+	if scopedSess, ok := imemory.AutoMemoryCursorSessionFromContext(ctx); ok {
+		return scopedSess
+	}
+	return sess
+}
+
+func autoMemoryLastExtractAtStateKey(userKey memory.UserKey) string {
+	userID := strings.TrimSpace(userKey.UserID)
+	if userID == "" {
+		return memory.SessionStateKeyAutoMemoryLastExtractAt
+	}
+	return autoMemoryLastExtractAtStateKeyPrefix + userID
+}
+
+func shouldUseLegacyLastExtractAtState(
+	sess *session.Session,
+	userKey memory.UserKey,
+) bool {
+	if sess == nil {
+		return false
+	}
+	return strings.TrimSpace(sess.UserID) == strings.TrimSpace(userKey.UserID)
+}
+
+func readLastExtractAtState(sess *session.Session, key string) (time.Time, bool) {
+	if sess == nil {
+		return time.Time{}, false
+	}
+	raw, ok := sess.GetState(key)
 	if !ok || len(raw) == 0 {
-		return time.Time{}
+		return time.Time{}, false
 	}
 	ts, err := time.Parse(time.RFC3339Nano, string(raw))
 	if err != nil {
-		return time.Time{}
+		return time.Time{}, false
 	}
-	return ts
+	return ts, true
+}
+
+// readLastExtractAt reads the last auto memory extraction timestamp from session state.
+// Returns zero time if not found or parsing fails.
+func readLastExtractAt(
+	sess *session.Session,
+	userKey memory.UserKey,
+) time.Time {
+	if ts, ok := readLastExtractAtState(
+		sess,
+		autoMemoryLastExtractAtStateKey(userKey),
+	); ok {
+		return ts
+	}
+	if shouldUseLegacyLastExtractAtState(sess, userKey) {
+		if ts, ok := readLastExtractAtState(
+			sess,
+			memory.SessionStateKeyAutoMemoryLastExtractAt,
+		); ok {
+			return ts
+		}
+	}
+	return time.Time{}
+}
+
+func writeLastExtractAtState(sess *session.Session, key string, ts time.Time) {
+	if sess == nil {
+		return
+	}
+	sess.SetState(key, []byte(ts.UTC().Format(time.RFC3339Nano)))
 }
 
 // writeLastExtractAt writes the last auto memory extraction timestamp to session state.
 // The timestamp represents the last included event's timestamp for incremental extraction.
-func writeLastExtractAt(sess *session.Session, ts time.Time) {
-	sess.SetState(memory.SessionStateKeyAutoMemoryLastExtractAt,
-		[]byte(ts.UTC().Format(time.RFC3339Nano)))
+func writeLastExtractAt(
+	sess *session.Session,
+	userKey memory.UserKey,
+	ts time.Time,
+) {
+	writeLastExtractAtState(sess, autoMemoryLastExtractAtStateKey(userKey), ts)
+	if shouldUseLegacyLastExtractAtState(sess, userKey) {
+		writeLastExtractAtState(
+			sess,
+			memory.SessionStateKeyAutoMemoryLastExtractAt,
+			ts,
+		)
+	}
 }
 
 // scanDeltaSince scans session events since the given timestamp and extracts messages.

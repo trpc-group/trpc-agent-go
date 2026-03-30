@@ -505,6 +505,25 @@ func TestSummarizeRequest_NilTraceDoesNotPanic(t *testing.T) {
 	require.Empty(t, summary.ContentParts[0].File.Data.Ref)
 }
 
+func TestSummarizeRequest_StoresRequestSystemPrompt(t *testing.T) {
+	t.Parallel()
+
+	req := gwproto.MessageRequest{
+		Channel:             "gateway",
+		Text:                "hello",
+		RequestSystemPrompt: "Use the active persona for tone.",
+	}
+
+	summary, err := SummarizeRequest(nil, req)
+	require.NoError(t, err)
+	require.Equal(t, "hello", summary.Text)
+	require.Equal(
+		t,
+		"Use the active persona for tone.",
+		summary.RequestSystemPrompt,
+	)
+}
+
 func TestSafeComponent_SanitizesAndTruncates(t *testing.T) {
 	t.Parallel()
 

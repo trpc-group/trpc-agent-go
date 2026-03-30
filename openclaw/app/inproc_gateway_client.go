@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
@@ -41,6 +42,7 @@ const (
 	errNilGatewayServer = "gateway client: nil server"
 	errNilCronService   = "gateway client: cron service unavailable"
 	errNilPersonaStore  = "gateway client: persona store unavailable"
+	errUnknownJob       = "gateway client: unknown scheduled job"
 
 	debugTraceMetaFile = "meta.json"
 
@@ -55,9 +57,10 @@ type inProcGatewayClient struct {
 	memories memory.Service
 	cronSvc  *cron.Service
 
-	debugDir string
-	uploads  *uploads.Store
-	personas *persona.Store
+	debugDir        string
+	uploads         *uploads.Store
+	personas        *persona.Store
+	memoryFileStore *memoryfile.Store
 }
 
 func newInProcGatewayClient(
@@ -94,6 +97,13 @@ func (c *inProcGatewayClient) SetPersonaStore(store *persona.Store) {
 		return
 	}
 	c.personas = store
+}
+
+func (c *inProcGatewayClient) SetMemoryFileStore(store *memoryfile.Store) {
+	if c == nil {
+		return
+	}
+	c.memoryFileStore = store
 }
 
 func (c *inProcGatewayClient) SendMessage(
@@ -224,6 +234,11 @@ func (c *inProcGatewayClient) ForgetUser(
 			return fmt.Errorf("forget: delete personas: %w", err)
 		}
 	}
+	if c.memoryFileStore != nil {
+		if err := c.memoryFileStore.DeleteUser(ctx, appName, userID); err != nil {
+			return fmt.Errorf("forget: delete user memory files: %w", err)
+		}
+	}
 
 	if err := deleteDebugTraces(
 		ctx,
@@ -305,6 +320,66 @@ func (c *inProcGatewayClient) ClearScheduledJobs(
 	)
 }
 
+func (c *inProcGatewayClient) SetScheduledJobEnabled(
+	_ context.Context,
+	channel string,
+	userID string,
+	target string,
+	jobID string,
+	enabled bool,
+) (gwclient.ScheduledJobSummary, error) {
+	if c == nil || c.cronSvc == nil {
+		return gwclient.ScheduledJobSummary{},
+			errors.New(errNilCronService)
+	}
+
+	job, err := c.scopedScheduledJob(
+		channel,
+		userID,
+		target,
+		jobID,
+	)
+	if err != nil {
+		return gwclient.ScheduledJobSummary{}, err
+	}
+
+	updated, err := c.cronSvc.Update(
+		job.ID,
+		cron.Patch{Enabled: &enabled},
+	)
+	if err != nil {
+		return gwclient.ScheduledJobSummary{}, err
+	}
+	return summarizeScheduledJob(updated), nil
+}
+
+func (c *inProcGatewayClient) RemoveScheduledJob(
+	_ context.Context,
+	channel string,
+	userID string,
+	target string,
+	jobID string,
+) (bool, error) {
+	if c == nil || c.cronSvc == nil {
+		return false, errors.New(errNilCronService)
+	}
+
+	job, err := c.scopedScheduledJob(
+		channel,
+		userID,
+		target,
+		jobID,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	if err := c.cronSvc.Remove(job.ID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func errorForGWStatus(status int, apiErr *gwclient.APIError) error {
 	if status == http.StatusOK {
 		return nil
@@ -332,14 +407,51 @@ func cronDeliveryTarget(
 
 func summarizeScheduledJob(job *cron.Job) gwclient.ScheduledJobSummary {
 	return gwclient.ScheduledJobSummary{
-		ID:         job.ID,
-		Name:       job.Name,
-		Enabled:    job.Enabled,
-		Schedule:   jobScheduleSummary(job.Schedule),
-		NextRunAt:  cloneTime(job.NextRunAt),
-		LastStatus: job.LastStatus,
-		LastError:  job.LastError,
+		ID:               job.ID,
+		Name:             job.Name,
+		Enabled:          job.Enabled,
+		Schedule:         jobScheduleSummary(job.Schedule),
+		Message:          job.Message,
+		MaxRuns:          job.Policy.MaxRuns,
+		RunCount:         job.Stats.RunCount,
+		SuccessCount:     job.Stats.SuccessCount,
+		FailureCount:     job.Stats.FailureCount,
+		DeliveryFailures: job.Stats.DeliveryFailureCount,
+		EndsAt:           cloneTime(job.Policy.EndsAt),
+		OverlapPolicy:    job.Policy.OverlapPolicy,
+		NextRunAt:        cloneTime(job.NextRunAt),
+		LastStatus:       job.LastStatus,
+		LastError:        job.LastError,
+		LastOutput:       job.LastOutput,
+		DeliveryChannel:  job.Delivery.Channel,
+		DeliveryTarget:   job.Delivery.Target,
 	}
+}
+
+func (c *inProcGatewayClient) scopedScheduledJob(
+	channel string,
+	userID string,
+	target string,
+	jobID string,
+) (*cron.Job, error) {
+	trimmedID := strings.TrimSpace(jobID)
+	if trimmedID == "" {
+		return nil, fmt.Errorf("%s: empty id", errUnknownJob)
+	}
+
+	jobs := c.cronSvc.ListForUser(
+		userID,
+		cronDeliveryTarget(channel, target),
+	)
+	for _, job := range jobs {
+		if job == nil {
+			continue
+		}
+		if strings.TrimSpace(job.ID) == trimmedID {
+			return job, nil
+		}
+	}
+	return nil, fmt.Errorf("%s: %s", errUnknownJob, trimmedID)
 }
 
 func jobScheduleSummary(schedule cron.Schedule) string {

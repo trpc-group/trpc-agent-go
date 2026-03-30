@@ -47,8 +47,7 @@ const (
 	//nolint:gosec
 	deepSeekAPIKeyName     string = "DEEPSEEK_API_KEY"
 	defaultDeepSeekBaseURL string = "https://api.deepseek.com"
-	deepSeekHostFragment   string = "deepseek.com"
-	deepSeekModelPrefix    string = "deepseek"
+	deepSeekAPIHost        string = "api.deepseek.com"
 
 	//nolint:gosec
 	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
@@ -258,7 +257,7 @@ func New(name string, opts ...Option) *Model {
 		opt(&o)
 	}
 	if !o.variantSet {
-		o.Variant = inferVariant(name, o.BaseURL)
+		o.Variant = inferVariant(o.BaseURL)
 	}
 
 	cfg, cfgOK := variantConfigs[o.Variant]
@@ -328,16 +327,11 @@ func New(name string, opts ...Option) *Model {
 	}
 }
 
-func inferVariant(name string, baseURL string) Variant {
-	if isDeepSeekModelName(name) || isDeepSeekBaseURL(baseURL) {
+func inferVariant(baseURL string) Variant {
+	if isDeepSeekBaseURL(baseURL) {
 		return VariantDeepSeek
 	}
 	return VariantOpenAI
-}
-
-func isDeepSeekModelName(name string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(name))
-	return strings.HasPrefix(normalized, deepSeekModelPrefix)
 }
 
 func isDeepSeekBaseURL(raw string) bool {
@@ -347,10 +341,9 @@ func isDeepSeekBaseURL(raw string) bool {
 	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		return strings.Contains(strings.ToLower(trimmed), deepSeekHostFragment)
+		return false
 	}
-	host := strings.ToLower(parsed.Hostname())
-	return strings.Contains(host, deepSeekHostFragment)
+	return strings.EqualFold(parsed.Hostname(), deepSeekAPIHost)
 }
 
 // Info implements the model.Model interface.
@@ -387,12 +380,15 @@ func (m *Model) GenerateContent(
 	if err != nil {
 		return nil, err
 	}
+	// Execute callback synchronously before starting the goroutine
+	// to avoid a race where the runner and HTTP handler finish
+	// (closing the SSE writer) while the callback is still running.
+	if m.chatRequestCallback != nil {
+		m.chatRequestCallback(ctx, chatRequest)
+	}
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
-		if m.chatRequestCallback != nil {
-			m.chatRequestCallback(ctx, chatRequest)
-		}
 		if request.Stream {
 			m.handleStreamingResponse(ctx, *chatRequest, responseChan, opts...)
 		} else {

@@ -33,6 +33,7 @@ const (
 type skillsToolResultProcessorOptions struct {
 	loadMode                     string
 	skipFallbackOnSessionSummary bool
+	repoResolver                 func(*agent.Invocation) skill.Repository
 }
 
 // SkillsToolResultRequestProcessorOption configures
@@ -69,6 +70,15 @@ func WithSkipSkillsFallbackOnSessionSummary(
 	}
 }
 
+// WithSkillsToolResultRepositoryResolver sets an invocation-aware repository resolver.
+func WithSkillsToolResultRepositoryResolver(
+	resolver func(*agent.Invocation) skill.Repository,
+) SkillsToolResultRequestProcessorOption {
+	return func(o *skillsToolResultProcessorOptions) {
+		o.repoResolver = resolver
+	}
+}
+
 // SkillsToolResultRequestProcessor materializes loaded skill content
 // into tool result messages (skill_load / skill_select_docs) when
 // possible.
@@ -81,8 +91,9 @@ func WithSkipSkillsFallbackOnSessionSummary(
 // option is enabled, the fallback system message is skipped only when the
 // loaded skill content is already represented elsewhere in the prompt.
 type SkillsToolResultRequestProcessor struct {
-	repo     skill.Repository
-	loadMode string
+	repo         skill.Repository
+	repoResolver func(*agent.Invocation) skill.Repository
+	loadMode     string
 
 	skipFallbackOnSessionSummary bool
 }
@@ -103,6 +114,7 @@ func NewSkillsToolResultRequestProcessor(
 	}
 	return &SkillsToolResultRequestProcessor{
 		repo:                         repo,
+		repoResolver:                 options.repoResolver,
 		loadMode:                     normalizeSkillLoadMode(options.loadMode),
 		skipFallbackOnSessionSummary: options.skipFallbackOnSessionSummary,
 	}
@@ -115,7 +127,11 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 	req *model.Request,
 	ch chan<- *event.Event,
 ) {
-	if req == nil || inv == nil || inv.Session == nil || p.repo == nil {
+	if req == nil || inv == nil || inv.Session == nil {
+		return
+	}
+	repo := p.repositoryForInvocation(inv)
+	if repo == nil {
 		return
 	}
 
@@ -143,6 +159,7 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 		out, ok := p.buildToolResultContent(
 			ctx,
 			inv,
+			repo,
 			skillName,
 			msg.Content,
 		)
@@ -156,6 +173,7 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 	fallbackContent := p.buildFallbackSystemContent(
 		ctx,
 		inv,
+		repo,
 		loaded,
 		materialized,
 	)
@@ -170,6 +188,15 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 	}
 
 	p.maybeOffloadLoadedSkills(ctx, inv, loaded, ch)
+}
+
+func (p *SkillsToolResultRequestProcessor) repositoryForInvocation(
+	inv *agent.Invocation,
+) skill.Repository {
+	if p.repoResolver != nil {
+		return p.repoResolver(inv)
+	}
+	return p.repo
 }
 
 func hasSessionSummary(inv *agent.Invocation) bool {
@@ -299,10 +326,11 @@ func isLoadedToolStub(toolOutput string, skillName string) bool {
 func (p *SkillsToolResultRequestProcessor) buildToolResultContent(
 	ctx context.Context,
 	inv *agent.Invocation,
+	repo skill.Repository,
 	skillName string,
 	toolOutput string,
 ) (string, bool) {
-	sk, err := p.repo.Get(skillName)
+	sk, err := skill.GetForContext(ctx, repo, skillName)
 	if err != nil || sk == nil {
 		log.WarnfContext(
 			ctx,
@@ -331,7 +359,7 @@ func (p *SkillsToolResultRequestProcessor) buildToolResultContent(
 		b.WriteString("\n")
 	}
 
-	sel := p.getDocsSelection(inv, skillName)
+	sel := p.getDocsSelection(ctx, inv, repo, skillName)
 	b.WriteString("Docs loaded: ")
 	if len(sel) == 0 {
 		b.WriteString("none\n")
@@ -349,10 +377,12 @@ func (p *SkillsToolResultRequestProcessor) buildToolResultContent(
 }
 
 func (p *SkillsToolResultRequestProcessor) getDocsSelection(
+	ctx context.Context,
 	inv *agent.Invocation,
+	repo skill.Repository,
 	name string,
 ) []string {
-	if inv == nil || inv.Session == nil {
+	if inv == nil || inv.Session == nil || repo == nil {
 		return nil
 	}
 	key := skill.DocsKey(inv.AgentName, name)
@@ -361,7 +391,7 @@ func (p *SkillsToolResultRequestProcessor) getDocsSelection(
 		return nil
 	}
 	if string(v) == "*" {
-		sk, err := p.repo.Get(name)
+		sk, err := skill.GetForContext(ctx, repo, name)
 		if err != nil || sk == nil {
 			return nil
 		}
@@ -406,6 +436,7 @@ func buildDocsText(sk *skill.Skill, wanted []string) string {
 func (p *SkillsToolResultRequestProcessor) buildFallbackSystemContent(
 	ctx context.Context,
 	inv *agent.Invocation,
+	repo skill.Repository,
 	loaded []string,
 	materialized map[string]struct{},
 ) string {
@@ -423,8 +454,9 @@ func (p *SkillsToolResultRequestProcessor) buildFallbackSystemContent(
 	var b strings.Builder
 	b.WriteString(skillsLoadedContextHeader)
 	b.WriteString("\n")
+	var appended bool
 	for _, name := range missing {
-		sk, err := p.repo.Get(name)
+		sk, err := skill.GetForContext(ctx, repo, name)
 		if err != nil || sk == nil {
 			log.WarnfContext(
 				ctx,
@@ -434,14 +466,16 @@ func (p *SkillsToolResultRequestProcessor) buildFallbackSystemContent(
 			)
 			continue
 		}
+		appended = true
 		if strings.TrimSpace(sk.Body) != "" {
 			b.WriteString("\n[Loaded] ")
 			b.WriteString(name)
 			b.WriteString("\n\n")
 			b.WriteString(sk.Body)
 			b.WriteString("\n")
+			appended = true
 		}
-		sel := p.getDocsSelection(inv, name)
+		sel := p.getDocsSelection(ctx, inv, repo, name)
 		b.WriteString("Docs loaded: ")
 		if len(sel) == 0 {
 			b.WriteString("none\n")
@@ -452,8 +486,12 @@ func (p *SkillsToolResultRequestProcessor) buildFallbackSystemContent(
 		if len(sel) > 0 {
 			if docText := buildDocsText(sk, sel); docText != "" {
 				b.WriteString(docText)
+				appended = true
 			}
 		}
+	}
+	if !appended {
+		return ""
 	}
 	return strings.TrimSpace(b.String())
 }

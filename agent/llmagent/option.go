@@ -308,6 +308,8 @@ type Options struct {
 
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
+	// skillFilter narrows the visible skill set per run context.
+	skillFilter skill.VisibilityFilter
 	// skillToolProfile controls which built-in skill tools are registered.
 	skillToolProfile string
 	// skillsToolingGuidance overrides the built-in skills guidance block.
@@ -516,6 +518,15 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
 		opts.skillsRepository = repo
+	}
+}
+
+// WithSkillFilter narrows visible skills per run context without changing the
+// mounted repository roots. The filter is evaluated against skill summaries
+// and can read runtime state from ctx.
+func WithSkillFilter(filter skill.VisibilityFilter) Option {
+	return func(opts *Options) {
+		opts.skillFilter = filter
 	}
 }
 

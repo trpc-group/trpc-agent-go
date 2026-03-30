@@ -220,6 +220,7 @@ func (c *Callbacks) processCallbackResult(
 		return false
 	}
 	if result.Context != nil {
+		result.Context = PreserveGraphCompletionCapture(*ctx, result.Context)
 		*ctx = result.Context
 	}
 	if result.CustomResponse != nil {
@@ -329,6 +330,7 @@ func (c *Callbacks) processAfterCallbackResult(
 		return false
 	}
 	if result.Context != nil {
+		result.Context = PreserveGraphCompletionCapture(*ctx, result.Context)
 		*ctx = result.Context
 	}
 	if result.CustomResponse != nil {

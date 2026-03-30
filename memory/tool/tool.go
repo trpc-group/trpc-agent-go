@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -506,14 +507,22 @@ func GetAppAndUserFromContext(ctx context.Context) (string, string, error) {
 		return "", "", errors.New("invocation exists but no session available")
 	}
 
-	// Session has AppName and UserID fields.
-	if invocation.Session.AppName != "" && invocation.Session.UserID != "" {
-		return invocation.Session.AppName, invocation.Session.UserID, nil
+	userID, ok := imemory.ResolveUserID(
+		invocation.Session,
+		invocation.RunOptions.RuntimeState,
+	)
+	if invocation.Session.AppName != "" && ok {
+		return invocation.Session.AppName, userID, nil
 	}
 
 	// Return error if session exists but missing required fields.
-	return "", "", fmt.Errorf("session exists but missing appName or userID: appName=%s, userID=%s",
-		invocation.Session.AppName, invocation.Session.UserID)
+	return "", "", fmt.Errorf(
+		"session exists but missing appName or userID: appName=%s, session.UserID=%s, resolvedUserID=%q, resolved=%t",
+		invocation.Session.AppName,
+		invocation.Session.UserID,
+		userID,
+		ok,
+	)
 }
 
 // buildMetadata constructs MemoryMetadata from tool

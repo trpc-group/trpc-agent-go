@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -86,6 +87,9 @@ func TestEvent_WithOptions_And_Clone(t *testing.T) {
 		WithResponse(resp),
 		WithObject("obj-x"),
 		WithStateDelta(sd),
+		WithExtension("conversation", map[string]string{
+			"actor": "alice",
+		}),
 		WithStructuredOutputPayload(map[string]any{"x": 1}),
 		WithSkipSummarization(),
 	)
@@ -96,6 +100,7 @@ func TestEvent_WithOptions_And_Clone(t *testing.T) {
 	require.True(t, sevt.Actions.SkipSummarization)
 	require.NotNil(t, sevt.StructuredOutput)
 	require.NotNil(t, sevt.StateDelta)
+	require.NotNil(t, sevt.Extensions)
 	require.Equal(t, "v", string(sevt.StateDelta["k"]))
 
 	// LongRunningToolIDs prepared for clone coverage
@@ -116,6 +121,58 @@ func TestEvent_WithOptions_And_Clone(t *testing.T) {
 	if _, ok := clone.LongRunningToolIDs["id2"]; ok {
 		t.Fatalf("clone should not contain id2")
 	}
+	got, ok, err := GetExtension[map[string]string](
+		clone,
+		"conversation",
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "alice", got["actor"])
+}
+
+func TestEvent_SetAndGetExtension(t *testing.T) {
+	evt := New("inv-1", "author")
+	err := SetExtension(evt, "ext", map[string]string{
+		"speaker": "bob",
+	})
+	require.NoError(t, err)
+
+	got, ok, err := GetExtension[map[string]string](evt, "ext")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "bob", got["speaker"])
+}
+
+func TestEvent_ExtensionHelpers_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(
+		t,
+		SetExtension(nil, "ext", map[string]string{"speaker": "bob"}),
+	)
+
+	evt := New("inv-1", "author")
+	require.NoError(
+		t,
+		SetExtension(evt, "", map[string]string{"speaker": "bob"}),
+	)
+	require.Nil(t, evt.Extensions)
+
+	WithExtension("bad", func() {})(evt)
+	_, ok, err := GetExtension[map[string]string](evt, "bad")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	_, ok, err = GetExtension[map[string]string](evt, "")
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	evt.Extensions = map[string]json.RawMessage{
+		"bad": json.RawMessage("{"),
+	}
+	_, ok, err = GetExtension[map[string]string](evt, "bad")
+	require.Error(t, err)
+	require.False(t, ok)
 }
 
 func TestEvent_Filter(t *testing.T) {
@@ -174,6 +231,23 @@ func TestEvent_Marshal_And_Unmarshal(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Empty(t, nullEvt)
+}
+
+func TestEvent_MarshalOmitsExecutionTrace(t *testing.T) {
+	evt := New("inv-1", "author", WithResponse(&model.Response{Done: true}))
+	evt.ExecutionTrace = &trace.Trace{
+		RootAgentName:    "assistant",
+		RootInvocationID: "inv-1",
+	}
+	data, err := json.Marshal(evt)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "ExecutionTrace")
+	require.NotContains(t, string(data), "rootAgentName")
+}
+
+func TestRedactedEventForLogging_NilAndSnapshotBranches(t *testing.T) {
+	require.Equal(t, Event{}, redactedEventForLogging(nil))
+	require.Nil(t, cloneExecutionTraceSnapshot(nil))
 }
 
 func TestEmitEventWithTimeout(t *testing.T) {
@@ -294,6 +368,27 @@ func TestEmitEventWithTimeout_TraceEnabled_BlockingSend(t *testing.T) {
 	ch2 := make(chan *Event)
 	go func() { <-ch2 }()
 	require.NoError(t, EmitEventWithTimeout(ctx, ch2, evt, time.Second))
+}
+
+func TestSnapshotEvent_RedactsExecutionTrace(t *testing.T) {
+	log.SetTraceEnabled(true)
+	t.Cleanup(func() { log.SetTraceEnabled(false) })
+
+	evt := New("invocationID", "author")
+	evt.ExecutionTrace = &trace.Trace{
+		RootAgentName: "assistant",
+		Steps: []trace.Step{
+			{
+				Input:  &trace.Snapshot{Text: "secret input"},
+				Output: &trace.Snapshot{Text: "secret output"},
+			},
+		},
+	}
+	snapshot := snapshotEvent(evt)
+	require.NotEmpty(t, snapshot)
+	require.NotContains(t, snapshot, "secret input")
+	require.NotContains(t, snapshot, "secret output")
+	require.Contains(t, snapshot, "ExecutionTrace:<nil>")
 }
 
 func TestTryEmitReadyEvent(t *testing.T) {

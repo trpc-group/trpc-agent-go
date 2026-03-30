@@ -32,6 +32,7 @@ Redis storage is suitable for production environments and distributed applicatio
 | `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | TTL for user-level state |
 | `WithKeyPrefix(prefix string)` | `string` | `""` | Redis key prefix; all keys will start with `prefix:`. Useful when multiple apps share one Redis instance |
 | `WithCompatMode(mode CompatMode)` | `CompatMode` | `CompatModeLegacy` | Storage compatibility mode. Options: `CompatModeNone`, `CompatModeLegacy`, `CompatModeTransition`. See [Storage Compatibility Mode (CompatMode)](#storage-compatibility-mode-compatmode) |
+| `WithEnableUserSessionIndex(enable bool)` | `bool` | `false` | Enable the per-user session index for HashIdx. See [User Session Index](#user-session-index) |
 
 **Async Persistence:**
 
@@ -165,6 +166,14 @@ How it works:
 
 !!! warning "Caution"
     In async persistence mode, events still in the channel may be lost if the process crashes unexpectedly. Evaluate whether to enable this based on your data consistency requirements.
+
+## User Session Index
+
+`WithEnableUserSessionIndex(true)` is an optional capability for HashIdx storage only. It maintains a user-scoped index that maps `userID` to the session IDs created by that user.
+
+The main purpose of this index is to avoid the SCAN operation currently used by `ListSessions`.
+
+This option is intended for fresh HashIdx writes. If you enable it on an environment that already contains historical HashIdx sessions created before the index was introduced, those older sessions will not automatically appear in the index unless you migrate or rebuild the index separately.
 
 ## Storage Compatibility Mode (CompatMode)
 

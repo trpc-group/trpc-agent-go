@@ -73,6 +73,71 @@ timeout: 100ms
 	require.NotEmpty(t, tools[0].Declaration().Name)
 }
 
+func TestNewBrowserTools_Succeeds(t *testing.T) {
+	t.Parallel()
+
+	cfg := yamlNode(t, `
+default_profile: "openclaw"
+evaluate_enabled: false
+profiles:
+  - name: "openclaw"
+    transport: "stdio"
+    command: "npx"
+    args: ["--yes", "@playwright/mcp@latest"]
+    timeout: "5m"
+`)
+	tools, err := newBrowserTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.NoError(t, err)
+	require.Len(t, tools, 1)
+	require.Equal(t, "browser", tools[0].Declaration().Name)
+}
+
+func TestNewBrowserTools_ServerBackedProfileSucceeds(t *testing.T) {
+	t.Parallel()
+
+	cfg := yamlNode(t, `
+default_profile: "openclaw"
+server_url: "http://127.0.0.1:9223"
+profiles:
+  - name: "openclaw"
+`)
+	tools, err := newBrowserTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.NoError(t, err)
+	require.Len(t, tools, 1)
+	require.Equal(t, "browser", tools[0].Declaration().Name)
+}
+
+func TestNewBrowserTools_ErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	_, err := newBrowserTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{
+			Config: yamlNode(t, "unknown_field: true\n"),
+		},
+	)
+	require.Error(t, err)
+
+	_, err = newBrowserTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{
+			Config: yamlNode(t, `
+profiles:
+  - name: "openclaw"
+    transport: "bad"
+`),
+		},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported transport")
+}
+
 func TestValidateMCPConnection_StdioRequiresCommand(t *testing.T) {
 	t.Parallel()
 

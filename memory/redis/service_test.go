@@ -146,12 +146,12 @@ func TestServiceOpts_WithCustomTool(t *testing.T) {
 	assert.NotNil(t, opts.toolCreators[toolName])
 	_, hasAdd := opts.enabledTools[toolName]
 	assert.True(t, hasAdd, "Expected tool to be enabled")
+	_, explicitlySet := opts.userExplicitlySet[toolName]
+	assert.True(t, explicitlySet, "Expected tool to be marked explicit")
 }
 
 func TestServiceOpts_WithToolEnabled(t *testing.T) {
-	opts := ServiceOpts{
-		enabledTools: make(map[string]struct{}),
-	}
+	opts := ServiceOpts{}
 
 	toolName := memory.SearchToolName
 
@@ -159,12 +159,38 @@ func TestServiceOpts_WithToolEnabled(t *testing.T) {
 
 	_, hasSearch := opts.enabledTools[toolName]
 	assert.True(t, hasSearch, "Expected tool to be enabled")
+	_, explicitlySet := opts.userExplicitlySet[toolName]
+	assert.True(t, explicitlySet, "Expected tool to be marked as explicitly set")
 
 	// Test disabling.
 	WithToolEnabled(toolName, false)(&opts)
 
 	_, hasSearch = opts.enabledTools[toolName]
 	assert.False(t, hasSearch, "Expected tool to be disabled")
+	_, explicitlySet = opts.userExplicitlySet[toolName]
+	assert.True(t, explicitlySet, "Expected explicit setting to be preserved")
+}
+
+func TestServiceOpts_WithAutoMemoryExposedTools(t *testing.T) {
+	opts := ServiceOpts{}
+
+	WithAutoMemoryExposedTools(memory.AddToolName)(&opts)
+
+	_, exposed := opts.toolExposed[memory.AddToolName]
+	_, hidden := opts.toolHidden[memory.AddToolName]
+	assert.True(t, exposed, "Expected tool to be explicitly exposed")
+	assert.False(t, hidden, "Expected tool not to be explicitly hidden")
+
+	WithToolExposed(memory.AddToolName, false)(&opts)
+
+	_, exposed = opts.toolExposed[memory.AddToolName]
+	_, hidden = opts.toolHidden[memory.AddToolName]
+	assert.False(t, exposed, "Expected tool exposure to be cleared")
+	assert.True(t, hidden, "Expected tool to be explicitly hidden")
+
+	WithAutoMemoryExposedTools("invalid_tool")(&opts)
+	_, exposed = opts.toolExposed["invalid_tool"]
+	assert.False(t, exposed, "Expected invalid tool not to be tracked")
 }
 
 func TestServiceOpts_InvalidToolName(t *testing.T) {

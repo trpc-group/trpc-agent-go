@@ -53,6 +53,7 @@ type skillsRequestProcessorOptions struct {
 	maxLoadedSkills   int
 	toolProfile       string
 	execToolsDisabled bool
+	repoResolver      func(*agent.Invocation) skill.Repository
 }
 
 // SkillsRequestProcessorOption configures SkillsRequestProcessor.
@@ -122,6 +123,15 @@ func WithSkillExecToolsDisabled() SkillsRequestProcessorOption {
 	}
 }
 
+// WithSkillsRepositoryResolver sets an invocation-aware repository resolver.
+func WithSkillsRepositoryResolver(
+	resolver func(*agent.Invocation) skill.Repository,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.repoResolver = resolver
+	}
+}
+
 // WithMaxLoadedSkills caps how many skills remain "loaded" in session
 // state.
 //
@@ -148,6 +158,7 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
 	repo              skill.Repository
+	repoResolver      func(*agent.Invocation) skill.Repository
 	toolingGuidance   *string
 	loadMode          string
 	toolResultMode    bool
@@ -174,6 +185,7 @@ func NewSkillsRequestProcessor(
 	}
 	return &SkillsRequestProcessor{
 		repo:              repo,
+		repoResolver:      options.repoResolver,
 		toolingGuidance:   options.toolingGuidance,
 		loadMode:          normalizeSkillLoadMode(options.loadMode),
 		toolResultMode:    options.toolResultMode,
@@ -202,7 +214,8 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	ctx context.Context, inv *agent.Invocation, req *model.Request,
 	ch chan<- *event.Event,
 ) {
-	if req == nil || inv == nil || inv.Session == nil || p.repo == nil {
+	repo := p.repositoryForInvocation(inv)
+	if req == nil || inv == nil || inv.Session == nil || repo == nil {
 		return
 	}
 
@@ -212,7 +225,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 
 	// 1) Always inject overview (names + descriptions) into system
 	//    message. Merge into existing system message if present.
-	p.injectOverview(req)
+	p.injectOverview(ctx, req, repo)
 
 	loaded := p.getLoadedSkills(inv)
 	loaded = p.maybeCapLoadedSkills(ctx, inv, loaded, ch)
@@ -232,7 +245,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 
 	var lb strings.Builder
 	for _, name := range loaded {
-		sk, err := p.repo.Get(name)
+		sk, err := skill.GetForContext(ctx, repo, name)
 		if err != nil || sk == nil {
 			log.WarnfContext(
 				ctx,
@@ -250,7 +263,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 			lb.WriteString("\n")
 		}
 		// Docs
-		sel := p.getDocsSelection(inv, name)
+		sel := p.getDocsSelection(ctx, inv, name)
 		// Summary line to make selected docs explicit.
 		lb.WriteString("Docs loaded: ")
 		if len(sel) == 0 {
@@ -277,6 +290,15 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 		inv.InvocationID, inv.AgentName,
 		event.WithObject(model.ObjectTypePreprocessingInstruction),
 	))
+}
+
+func (p *SkillsRequestProcessor) repositoryForInvocation(
+	inv *agent.Invocation,
+) skill.Repository {
+	if p.repoResolver != nil {
+		return p.repoResolver(inv)
+	}
+	return p.repo
 }
 
 func (p *SkillsRequestProcessor) maybeCapLoadedSkills(
@@ -603,8 +625,12 @@ func (p *SkillsRequestProcessor) maybeOffloadLoadedSkills(
 	))
 }
 
-func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
-	sums := p.repo.Summaries()
+func (p *SkillsRequestProcessor) injectOverview(
+	ctx context.Context,
+	req *model.Request,
+	repo skill.Repository,
+) {
+	sums := skill.SummariesForContext(ctx, repo)
 	if len(sums) == 0 {
 		return
 	}
@@ -643,7 +669,8 @@ func (p *SkillsRequestProcessor) injectOverview(req *model.Request) {
 func (p *SkillsRequestProcessor) toolingGuidanceText() string {
 	if p.toolingGuidance == nil {
 		return defaultToolingAndWorkspaceGuidance(
-			p.toolProfile, p.execToolsDisabled,
+			p.toolProfile,
+			p.execToolsDisabled,
 		)
 	}
 	return normalizeGuidance(*p.toolingGuidance)
@@ -673,12 +700,15 @@ func (p *SkillsRequestProcessor) capabilityGuidanceText() string {
 }
 
 func defaultToolingAndWorkspaceGuidance(
-	profile string, execToolsDisabled bool,
+	profile string,
+	execToolsDisabled bool,
 ) string {
 	if skillprofile.IsKnowledgeOnly(profile) {
 		return defaultKnowledgeOnlyGuidance()
 	}
-	return defaultFullToolingAndWorkspaceGuidance(execToolsDisabled)
+	return defaultFullToolingAndWorkspaceGuidance(
+		execToolsDisabled,
+	)
 }
 
 func defaultKnowledgeOnlyGuidance() string {
@@ -700,7 +730,9 @@ func defaultKnowledgeOnlyGuidance() string {
 	return b.String()
 }
 
-func defaultFullToolingAndWorkspaceGuidance(execToolsDisabled bool) string {
+func defaultFullToolingAndWorkspaceGuidance(
+	execToolsDisabled bool,
+) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(skillsToolingGuidanceHeader)
@@ -765,82 +797,47 @@ func defaultFullToolingAndWorkspaceGuidance(execToolsDisabled bool) string {
 	b.WriteString("- Treat loaded skill docs as guidance, not perfect ")
 	b.WriteString("truth; when runtime help or stderr disagrees, trust ")
 	b.WriteString("observed runtime behavior.\n")
-	b.WriteString("- Prefer commands or scripts bundled inside the ")
-	b.WriteString("skill workspace when they exist; they are more ")
-	b.WriteString("stable than ad hoc shell built around external ")
-	b.WriteString("CLIs.\n")
-	b.WriteString("- Progressive disclosure: call skill_load with only ")
-	b.WriteString("skill first.\n")
+	b.WriteString("- Loading a skill gives you instructions and bundled ")
+	b.WriteString("resources; it does not execute the skill by itself.\n")
+	b.WriteString("- The skill summaries above are routing summaries only; ")
+	b.WriteString("they do not replace SKILL.md or other loaded docs.\n")
+	b.WriteString("- If the loaded content already provides enough ")
+	b.WriteString("guidance to answer or produce the requested result, ")
+	b.WriteString("respond directly.\n")
+	b.WriteString("- If you decide to use a skill, load SKILL.md before ")
+	if execToolsDisabled {
+		b.WriteString("the first skill_run for that skill, then load only ")
+		b.WriteString("the docs you still need.\n")
+	} else {
+		b.WriteString("the first skill_run or skill_exec for that skill, ")
+		b.WriteString("then load only the docs you still need.\n")
+	}
+	b.WriteString("- Do not infer commands, script entrypoints, or ")
+	b.WriteString("resource layouts from the short summary alone.\n")
 	b.WriteString("- For docs, prefer skill_list_docs + ")
 	b.WriteString("skill_select_docs to load only what you need.\n")
 	b.WriteString("- Avoid include_all_docs unless you need every doc ")
 	b.WriteString("or the user asks.\n")
-	b.WriteString("- Use skill_run primarily for commands required by ")
-	b.WriteString("the skill docs or bundled scripts, plus the minimal ")
-	b.WriteString("read-only probe commands needed to verify external ")
-	b.WriteString("CLI behavior.\n")
+	b.WriteString("- Use execution tools only when running a command ")
+	b.WriteString("will reveal or produce information or files you ")
+	b.WriteString("still need.\n")
 	if !execToolsDisabled {
-		b.WriteString("- Use skill_exec when a command may stay running, ")
-		b.WriteString("prompt for input, or require incremental stdin/TTY ")
-		b.WriteString("interaction. Then use skill_write_stdin or ")
-		b.WriteString("skill_poll_session until it exits, and ")
-		b.WriteString("skill_kill_session to stop it if needed.\n")
-		b.WriteString("- For CLIs that launch $EDITOR, prefer editor_text ")
-		b.WriteString("on skill_run or skill_exec instead of trying to ")
-		b.WriteString("drive a full-screen editor through stdin.\n")
+		b.WriteString("- Use skill_exec only when a command needs ")
+		b.WriteString("incremental stdin or TTY-style interaction; ")
+		b.WriteString("otherwise prefer one-shot execution.\n")
 	} else {
-		b.WriteString("- For CLIs that launch $EDITOR, prefer editor_text ")
-		b.WriteString("on skill_run instead of trying to drive a ")
-		b.WriteString("full-screen editor through stdin.\n")
+		b.WriteString("- Do not assume interactive execution is available ")
+		b.WriteString("when only one-shot execution tools are present.\n")
 	}
-	b.WriteString("- Safe probe commands include patterns such as ")
-	b.WriteString("`--help`, `-h`, `--version`, or `<subcommand> ")
-	b.WriteString("--help` when exact syntax is uncertain or a command ")
-	b.WriteString("fails.\n")
-	b.WriteString("- Keep probes targeted and bounded; avoid broad ")
-	b.WriteString("shell exploration when a small help query can ")
-	b.WriteString("verify the contract.\n")
-	b.WriteString("- Do not invent subcommands, flags, or positional ")
-	b.WriteString("arguments that do not appear in the loaded skill ")
-	b.WriteString("docs, bundled scripts, observed help text, or a ")
-	b.WriteString("prior successful command.\n")
 	b.WriteString("- skill_run is a command runner inside the skill ")
 	b.WriteString("workspace, not a magic capability. It does not ")
 	b.WriteString("automatically add the skill directory to PATH or ")
 	b.WriteString("install dependencies; invoke scripts via an explicit ")
 	b.WriteString("interpreter and path (e.g., python3 scripts/foo.py).\n")
-	b.WriteString("- Read the skill_run tool description each time: if ")
-	b.WriteString("it mentions allowed_commands/denied_commands (or ")
-	b.WriteString("previews Allowed commands), then shell syntax is ")
-	b.WriteString("disabled and the command must be a single executable ")
-	b.WriteString("+ args only (no pipes/redirects/chaining, no bash ")
-	b.WriteString("-c). Use env/cwd fields and split multi-step ")
-	b.WriteString("workflows into multiple skill_run calls.\n")
-	b.WriteString("- Before executing, avoid guessing command names, ")
-	b.WriteString("script paths, or dependencies. If the exact ")
-	b.WriteString("executable/path is not explicitly given by the ")
-	b.WriteString("loaded SKILL.md/docs, first do a small, targeted ")
-	b.WriteString("check to confirm it exists (e.g., list the relevant ")
-	b.WriteString("directory, check file existence, or verify the ")
-	b.WriteString("executable is on PATH). Under command restrictions, ")
-	b.WriteString("use only allowed commands for these checks.\n")
-	b.WriteString("- When skill_run fails, do not stop early. If the ")
-	b.WriteString("tool returns an error (no structured result), read ")
-	b.WriteString("it and adjust (often restriction violation or ")
-	b.WriteString("missing skill_load). If it returns a structured ")
-	b.WriteString("result, treat non-zero exit_code or timed_out as ")
-	b.WriteString("failure; inspect stderr/warnings, verify assumptions ")
-	b.WriteString("(files, PATH, deps), consult SKILL.md/docs, and ")
-	b.WriteString("retry with an adjusted command. Avoid repeating the ")
-	b.WriteString("exact same failing command; after a couple attempts, ")
-	b.WriteString("explain what you checked and ask for missing ")
-	b.WriteString("information.\n")
-	b.WriteString("- When the body and needed docs are present, call ")
-	b.WriteString("skill_run to execute or validate those commands.\n")
-	b.WriteString("- If a CLI appears interactive-only and you cannot ")
-	b.WriteString("confirm a non-interactive path, do not claim ")
-	b.WriteString("success; explain the limitation and give the best ")
-	b.WriteString("fallback.\n")
+	b.WriteString("- When you execute, follow the tool description, ")
+	b.WriteString("loaded skill docs, bundled scripts, and observed ")
+	b.WriteString("runtime behavior rather than inventing shell syntax ")
+	b.WriteString("or command arguments.\n")
 	return b.String()
 }
 
@@ -877,8 +874,14 @@ func (p *SkillsRequestProcessor) getLoadedSkills(
 }
 
 func (p *SkillsRequestProcessor) getDocsSelection(
-	inv *agent.Invocation, name string,
+	ctx context.Context,
+	inv *agent.Invocation,
+	name string,
 ) []string {
+	repo := p.repositoryForInvocation(inv)
+	if repo == nil {
+		return nil
+	}
 	key := skill.DocsKey(inv.AgentName, name)
 	v, ok := inv.Session.GetState(key)
 	if !ok || len(v) == 0 {
@@ -886,7 +889,7 @@ func (p *SkillsRequestProcessor) getDocsSelection(
 	}
 	if string(v) == "*" {
 		// Select all doc files present.
-		sk, err := p.repo.Get(name)
+		sk, err := skill.GetForContext(ctx, repo, name)
 		if err != nil || sk == nil {
 			return nil
 		}

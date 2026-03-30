@@ -45,6 +45,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
@@ -139,6 +140,20 @@ func joinSystemMessages(req *model.Request) string {
 	return strings.Join(parts, "\n\n")
 }
 
+func findToolDeclaration(
+	tools []tool.Tool,
+	name string,
+) *tool.Declaration {
+	for _, item := range tools {
+		decl := item.Declaration()
+		if decl == nil || decl.Name != name {
+			continue
+		}
+		return decl
+	}
+	return nil
+}
+
 func TestRun_ParseErrorExitCode(t *testing.T) {
 	t.Parallel()
 
@@ -169,6 +184,159 @@ func TestNewRuntime_BuildsGatewayHandler(t *testing.T) {
 	require.NotEmpty(t, rt.Gateway.StatusPath)
 	require.NotEmpty(t, rt.Gateway.CancelPath)
 	require.Empty(t, rt.Channels)
+}
+
+func TestNewRuntime_MemoryBackendFile_DisablesStructuredMemory(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rt, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-memory-backend", memoryBackendFile,
+		"-memory-auto",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = rt.Close()
+	})
+	require.Nil(t, rt.memorySvc)
+	require.Nil(t, memoryServiceTools(nil))
+}
+
+func TestFileMemoryStoreForBackend_FileOnly(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	require.Same(
+		t,
+		store,
+		fileMemoryStoreForBackend(memoryBackendFile, store),
+	)
+	require.Nil(
+		t,
+		fileMemoryStoreForBackend(memoryBackendInMemory, store),
+	)
+	require.Nil(
+		t,
+		fileMemoryStoreForBackend(memoryBackendSQLite, store),
+	)
+}
+
+func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	decl := findToolDeclaration(bundle.tools, "exec_command")
+	require.NotNil(t, decl)
+	require.NotContains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
+}
+
+func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store)
+	decl := findToolDeclaration(bundle.tools, "exec_command")
+	require.NotNil(t, decl)
+	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
+}
+
+func TestBuildOpenClawTools_IncludesConversationHistoryTool(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	decl := findToolDeclaration(bundle.tools, "conversation_history")
+	require.NotNil(t, decl)
+	require.Contains(
+		t,
+		decl.Description,
+		"current conversation session",
+	)
+}
+
+func TestNewRuntimeStores_CreatesAllStores(t *testing.T) {
+	t.Parallel()
+
+	stores, err := newRuntimeStores(t.TempDir())
+	require.NoError(t, err)
+	require.NotNil(t, stores.uploads)
+	require.NotNil(t, stores.personas)
+	require.NotNil(t, stores.memoryFiles)
+}
+
+func TestNewRuntimeStores_EmptyStateDirReturnsError(t *testing.T) {
+	t.Parallel()
+
+	_, err := newRuntimeStores(" ")
+	require.Error(t, err)
+}
+
+func TestNewRuntime_RuntimeStoresErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	stateFile := filepath.Join(t.TempDir(), "state-file")
+	require.NoError(t, os.WriteFile(stateFile, []byte("x"), 0o600))
+
+	_, err := NewRuntime(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", stateFile,
+		"-skills-root", t.TempDir(),
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create runtime stores failed")
+}
+
+func TestRun_HTTPListenErrorPath_WithFileMemoryBackend(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+
+	err := run(ctx, []string{
+		"-http-addr", "127.0.0.1:-1",
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+		"-memory-backend", memoryBackendFile,
+		"-enable-openclaw-tools",
+	})
+	require.NoError(t, err)
+}
+
+func TestRun_RuntimeStoresErrorExitCode(t *testing.T) {
+	t.Parallel()
+
+	stateFile := filepath.Join(t.TempDir(), "state-file")
+	require.NoError(t, os.WriteFile(stateFile, []byte("x"), 0o600))
+
+	err := run(context.Background(), []string{
+		"-mode", modeMock,
+		"-state-dir", stateFile,
+		"-skills-root", t.TempDir(),
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.ErrorContains(t, exitErr.Err, "create runtime stores failed")
 }
 
 func TestNewRuntime_A2AConfigErrorExitCode(t *testing.T) {
@@ -907,6 +1075,114 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 	)
 }
 
+func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, []tool.Tool{
+		stubTool{name: "browser"},
+	}, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.Contains(
+		t,
+		sys,
+		"For real browser automation, use browser.",
+	)
+}
+
+func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	typeName := strings.ReplaceAll(
+		t.Name(),
+		"/",
+		"_",
+	)
+	require.NoError(t, registry.RegisterToolProvider(
+		typeName,
+		func(
+			_ registry.ToolProviderDeps,
+			spec registry.PluginSpec,
+		) ([]tool.Tool, error) {
+			return []tool.Tool{stubTool{name: "browser"}}, nil
+		},
+	))
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("{}"), &node))
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+		ToolProviders: []pluginSpec{{
+			Type:   typeName,
+			Config: &node,
+		}},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.Contains(
+		t,
+		sys,
+		"For real browser automation, use browser.",
+	)
+}
+
+func TestNewAgent_ToolProviderErrorIsReturned(t *testing.T) {
+	t.Parallel()
+
+	typeName := strings.ReplaceAll(t.Name(), "/", "_")
+	require.NoError(t, registry.RegisterToolProvider(
+		typeName,
+		func(
+			_ registry.ToolProviderDeps,
+			spec registry.PluginSpec,
+		) ([]tool.Tool, error) {
+			return nil, errors.New("tool provider boom")
+		},
+	))
+
+	var node yaml.Node
+	require.NoError(t, yaml.Unmarshal([]byte("{}"), &node))
+
+	_, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: createAppTestSkill(t),
+		StateDir:   t.TempDir(),
+		ToolProviders: []pluginSpec{{
+			Type:   typeName,
+			Config: &node,
+		}},
+	}, nil, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tool provider boom")
+}
+
 func TestNewAgent_SkillsLoadModeTurnClearsLoadedState(t *testing.T) {
 	t.Parallel()
 
@@ -1495,19 +1771,19 @@ func TestConfigFingerprint_Deterministic(t *testing.T) {
 }
 
 func TestParseOpenAIVariant_Explicit(t *testing.T) {
-	v, err := parseOpenAIVariant(string(openai.VariantOpenAI), "gpt-5")
+	v, err := parseOpenAIVariant(string(openai.VariantOpenAI), "")
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantOpenAI, v)
 }
 
 func TestParseOpenAIVariant_Auto(t *testing.T) {
-	v, err := parseOpenAIVariant(openAIVariantAuto, "deepseek-chat")
+	v, err := parseOpenAIVariant(openAIVariantAuto, "https://api.deepseek.com/v1")
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantDeepSeek, v)
 }
 
 func TestParseOpenAIVariant_Unknown(t *testing.T) {
-	_, err := parseOpenAIVariant("nope", "gpt-5")
+	_, err := parseOpenAIVariant("nope", "")
 	require.Error(t, err)
 }
 
@@ -1515,15 +1791,29 @@ func TestInferOpenAIVariant(t *testing.T) {
 	require.Equal(
 		t,
 		openai.VariantDeepSeek,
-		inferOpenAIVariant("deepseek-r1"),
+		inferOpenAIVariant("https://api.deepseek.com/v1"),
 	)
-	require.Equal(t, openai.VariantQwen, inferOpenAIVariant("qwen2.5"))
+	require.Equal(
+		t,
+		openai.VariantQwen,
+		inferOpenAIVariant("https://dashscope.aliyuncs.com/compatible-mode/v1"),
+	)
 	require.Equal(
 		t,
 		openai.VariantHunyuan,
-		inferOpenAIVariant("hunyuan-t1"),
+		inferOpenAIVariant("https://api.hunyuan.cloud.tencent.com/v1"),
 	)
-	require.Equal(t, openai.VariantOpenAI, inferOpenAIVariant("gpt-5"))
+	require.Equal(
+		t,
+		openai.VariantOpenAI,
+		inferOpenAIVariant("https://deepseek.com/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantOpenAI,
+		inferOpenAIVariant("https://proxy.example.com/v1"),
+	)
+	require.Equal(t, openai.VariantOpenAI, inferOpenAIVariant("deepseek-chat"))
 }
 
 func TestNewModel_Mock(t *testing.T) {
@@ -1983,6 +2273,25 @@ func (t stubTool) Declaration() *tool.Declaration {
 		Name:        t.name,
 		Description: "stub tool",
 	}
+}
+
+type nilDeclTool struct{}
+
+func (t nilDeclTool) Declaration() *tool.Declaration {
+	return nil
+}
+
+func TestHasToolNamed(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, hasToolNamed([]tool.Tool{
+		nilDeclTool{},
+		stubTool{name: "browser"},
+	}, "browser"))
+	require.False(t, hasToolNamed([]tool.Tool{
+		nilDeclTool{},
+		stubTool{name: "exec_command"},
+	}, "browser"))
 }
 
 func TestToolsFromProviders(t *testing.T) {
@@ -2667,6 +2976,29 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	memoryRoot, err := memoryfile.DefaultRoot(debugDir)
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(memoryRoot)
+	require.NoError(t, err)
+	memoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		appName,
+		userID,
+	)
+	require.NoError(t, err)
+	otherUserMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		appName,
+		"u2",
+	)
+	require.NoError(t, err)
+	otherAppMemoryPath, err := memoryStore.EnsureMemory(
+		ctx,
+		"other-app",
+		userID,
+	)
+	require.NoError(t, err)
+
 	srv, err := gateway.New(&inProcGWTestRunner{})
 	require.NoError(t, err)
 
@@ -2679,6 +3011,7 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 		uploadStore,
 	)
 	c.SetPersonaStore(personaStore)
+	c.SetMemoryFileStore(memoryStore)
 
 	require.NoError(t, c.ForgetUser(ctx, channelName, userID))
 
@@ -2713,6 +3046,15 @@ func TestInProcGatewayClient_ForgetUser_DeletesState(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, persona.PresetDefault, currentPreset.ID)
+
+	_, err = os.Stat(memoryPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	_, err = os.Stat(otherUserMemoryPath)
+	require.NoError(t, err)
+
+	_, err = os.Stat(otherAppMemoryPath)
+	require.NoError(t, err)
 }
 
 func TestInProcGatewayClient_ForgetUser_ClearsCronJobsOnlyOnce(
@@ -2824,6 +3166,37 @@ func TestInProcGatewayClient_ForgetUser_ValidationErrors(t *testing.T) {
 	require.NoError(t, c4.ForgetUser(ctx, "telegram", "u1"))
 }
 
+func TestInProcGatewayClient_SetMemoryFileStore_NilReceiverIsNoop(t *testing.T) {
+	t.Parallel()
+
+	var client *inProcGatewayClient
+	client.SetMemoryFileStore(nil)
+}
+
+func TestInProcGatewayClient_ForgetUser_DeleteMemoryFilesError(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+	_, err = store.EnsureMemory(context.Background(), appName, "u1")
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	c.SetMemoryFileStore(store)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = c.ForgetUser(ctx, "telegram", "u1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "forget: delete user memory files")
+}
+
 func TestInProcGatewayClient_ScheduledJobs(t *testing.T) {
 	t.Parallel()
 
@@ -2917,6 +3290,151 @@ func TestInProcGatewayClient_ScheduledJobs_RequireCronService(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Equal(t, errNilCronService, err.Error())
+
+	_, err = c.SetScheduledJobEnabled(
+		context.Background(),
+		"telegram",
+		"u1",
+		"100",
+		"job-1",
+		false,
+	)
+	require.Error(t, err)
+	require.Equal(t, errNilCronService, err.Error())
+
+	_, err = c.RemoveScheduledJob(
+		context.Background(),
+		"telegram",
+		"u1",
+		"100",
+		"job-1",
+	)
+	require.Error(t, err)
+	require.Equal(t, errNilCronService, err.Error())
+}
+
+func TestInProcGatewayClient_ManageScheduledJob(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 6, 16, 0, 0, 0, time.UTC)
+	cronSvc, err := cron.NewService(
+		t.TempDir(),
+		&inProcGWTestRunner{},
+		nil,
+		cron.WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, cronSvc.Close())
+	})
+
+	job, err := cronSvc.Add(&cron.Job{
+		Name:    "cpu report",
+		Enabled: true,
+		Schedule: cron.Schedule{
+			Kind:  cron.ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect cpu",
+		UserID:  "u1",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+		LastStatus: cron.StatusSucceeded,
+		LastOutput: "ok",
+	})
+	require.NoError(t, err)
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	c.SetCronService(cronSvc)
+
+	updated, err := c.SetScheduledJobEnabled(
+		context.Background(),
+		"telegram",
+		"u1",
+		"100",
+		job.ID,
+		false,
+	)
+	require.NoError(t, err)
+	require.False(t, updated.Enabled)
+	require.Equal(t, "collect cpu", updated.Message)
+	require.Equal(t, "ok", updated.LastOutput)
+	require.Equal(t, "telegram", updated.DeliveryChannel)
+	require.Equal(t, "100", updated.DeliveryTarget)
+
+	removed, err := c.RemoveScheduledJob(
+		context.Background(),
+		"telegram",
+		"u1",
+		"100",
+		job.ID,
+	)
+	require.NoError(t, err)
+	require.True(t, removed)
+	require.Nil(t, cronSvc.Get(job.ID))
+}
+
+func TestInProcGatewayClient_ScheduledJobScopeErrors(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 6, 16, 0, 0, 0, time.UTC)
+	cronSvc, err := cron.NewService(
+		t.TempDir(),
+		&inProcGWTestRunner{},
+		nil,
+		cron.WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, cronSvc.Close())
+	})
+
+	_, err = cronSvc.Add(&cron.Job{
+		Name:    "cpu report",
+		Enabled: true,
+		Schedule: cron.Schedule{
+			Kind:  cron.ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect cpu",
+		UserID:  "u1",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(srv, appName, nil, nil, "")
+	c.SetCronService(cronSvc)
+
+	_, err = c.SetScheduledJobEnabled(
+		context.Background(),
+		"telegram",
+		"u1",
+		"999",
+		"",
+		false,
+	)
+	require.ErrorContains(t, err, errUnknownJob)
+
+	removed, err := c.RemoveScheduledJob(
+		context.Background(),
+		"telegram",
+		"u1",
+		"999",
+		"job-1",
+	)
+	require.ErrorContains(t, err, errUnknownJob)
+	require.False(t, removed)
 }
 
 func TestInProcGatewayClient_PresetPersona(t *testing.T) {

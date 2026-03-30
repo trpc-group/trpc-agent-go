@@ -290,6 +290,64 @@ func TestRunTool_FailedRun_KeepsNonEmptyOutputFiles(t *testing.T) {
 		warnFailedRunEmptyOutputFiles)
 }
 
+func TestNewRunTool_InitializesWorkspaceRegistryAndFlags(t *testing.T) {
+	t.Setenv(envAllowedCommands, "echo, ls\tprintf")
+	t.Setenv(envDeniedCommands, "rm, curl")
+	reg := codeexecutor.NewWorkspaceRegistry()
+
+	rt := NewRunTool(
+		nil,
+		localexec.New(),
+		WithWorkspaceRegistry(reg),
+		WithForceSaveArtifacts(true),
+		WithRequireSkillLoaded(true),
+	)
+
+	require.Same(t, reg, rt.reg)
+	require.NotNil(t, rt.wsr)
+	require.True(t, rt.forceSaveArtifacts)
+	require.True(t, rt.requireSkillLoaded)
+	require.Contains(t, rt.allowedCmds, "echo")
+	require.Contains(t, rt.allowedCmds, "ls")
+	require.Contains(t, rt.allowedCmds, "printf")
+	require.Contains(t, rt.deniedCmds, "rm")
+	require.Contains(t, rt.deniedCmds, "curl")
+}
+
+func TestNewRunTool_ExplicitCommandListsOverrideEnv(t *testing.T) {
+	t.Setenv(envAllowedCommands, "echo,ls")
+	t.Setenv(envDeniedCommands, "rm,curl")
+
+	rt := NewRunTool(
+		nil,
+		localexec.New(),
+		WithAllowedCommands("printf"),
+		WithDeniedCommands("cat"),
+	)
+
+	require.Len(t, rt.allowedCmds, 1)
+	require.Contains(t, rt.allowedCmds, "printf")
+	require.NotContains(t, rt.allowedCmds, "echo")
+	require.Len(t, rt.deniedCmds, 1)
+	require.Contains(t, rt.deniedCmds, "cat")
+	require.NotContains(t, rt.deniedCmds, "rm")
+}
+
+func TestSplitCommandList(t *testing.T) {
+	require.Nil(t, splitCommandList(""))
+	require.Nil(t, splitCommandList("   "))
+	require.Equal(
+		t,
+		[]string{"echo", "ls", "printf"},
+		splitCommandList("echo, ls\tprintf"),
+	)
+	require.Equal(
+		t,
+		[]string{"echo", "ls"},
+		splitCommandList("echo,,  ls"),
+	)
+}
+
 func TestRunTool_FailedRun_DeletesCachedOutputFiles(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -4558,6 +4616,38 @@ func TestCopySkillStager_StageSkill_PropagatesStageError(t *testing.T) {
 		Repository: repo,
 	})
 	require.ErrorContains(t, err, "workspace fs is not configured")
+}
+
+func TestCopySkillStager_StageSkill_ContextAwareRepoRejectsHiddenSkill(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, testSkillName)
+	writeSkill(t, root, "other")
+
+	base, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	repo := skill.NewFilteredRepository(
+		base,
+		func(ctx context.Context, summary skill.Summary) bool {
+			userID, _ := agent.GetRuntimeStateValueFromContext[string](
+				ctx,
+				"user_id",
+			)
+			return userID == "user-a" && summary.Name == testSkillName
+		},
+	)
+
+	stager := &copySkillStager{tool: &RunTool{}}
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+		})),
+	)
+	_, err = stager.StageSkill(ctx, SkillStageRequest{
+		SkillName:  "other",
+		Repository: repo,
+	})
+	require.EqualError(t, err, `skill "other" not found`)
 }
 
 func TestNormalizeSkillStageResult(t *testing.T) {

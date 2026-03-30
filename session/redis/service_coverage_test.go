@@ -1153,21 +1153,21 @@ func TestListSessions_MixedStorages(t *testing.T) {
 	userKey := session.UserKey{AppName: "app", UserID: "user"}
 
 	// Create hashidx session
-	svcN, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	svcN, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeNone))
 	require.NoError(t, err)
 	_, err = svcN.CreateSession(ctx, session.Key{AppName: "app", UserID: "user", SessionID: "hash-sess"}, nil)
 	require.NoError(t, err)
 	svcN.Close()
 
 	// Create zset session
-	svcT, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 	_, err = svcT.CreateSession(ctx, session.Key{AppName: "app", UserID: "user", SessionID: "zset-sess"}, nil)
 	require.NoError(t, err)
 	svcT.Close()
 
 	// List using Transition mode should find both
-	svcT2, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeTransition))
+	svcT2, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeTransition))
 	require.NoError(t, err)
 	defer svcT2.Close()
 
@@ -2059,7 +2059,7 @@ func TestListSessions_HashidxError(t *testing.T) {
 	redisURL := "redis://" + mr.Addr()
 	defer mr.Close()
 
-	svc, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(CompatModeNone))
+	svc, err := NewService(WithRedisClientURL(redisURL), WithEnableUserSessionIndex(true), WithCompatMode(CompatModeNone))
 	require.NoError(t, err)
 
 	ctx := context.Background()

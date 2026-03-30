@@ -12,19 +12,22 @@ package llmflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
 	"sort"
 	"time"
 
+	"github.com/google/uuid"
 	oteltrace "go.opentelemetry.io/otel/trace"
-
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
@@ -36,7 +39,9 @@ import (
 
 const (
 	// Timeout for event completion signaling.
-	eventCompletionTimeout = 5 * time.Second
+	eventCompletionTimeout    = 5 * time.Second
+	generatedResponseIDPrefix = "llmflow-response-"
+	queuedUserAuthor          = "user"
 
 	errMsgNoModelResponse = "no response received from model"
 
@@ -92,6 +97,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(eventChan)
+		defer steer.Close(invocation)
 		defer recoverFlowRunPanic(ctx, invocation, eventChan)
 
 		// Mark the invocation so the runner skips redundant async
@@ -120,9 +126,18 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			}
 			firstIteration = false
 
+			if err := f.maybeConsumeQueuedUserMessages(
+				ctx,
+				invocation,
+				eventChan,
+			); err != nil {
+				return
+			}
+
 			// Run one step (one LLM call cycle).
 			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
 			if err != nil {
+				steer.Close(invocation)
 				// Treat context cancellation as graceful termination (common in streaming
 				// pipelines where the client closes the stream after final event).
 				if errors.Is(err, context.Canceled) {
@@ -172,6 +187,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			// If no events were produced in this step, treat as terminal to avoid busy loop.
 			// Also break when EndInvocation is set or a final response is observed.
 			if lastEvent == nil || invocation.EndInvocation || lastEvent.IsFinalResponse() {
+				steer.Close(invocation)
 				break
 			}
 		}
@@ -221,6 +237,96 @@ func flowAgentName(invocation *agent.Invocation) string {
 		return ""
 	}
 	return invocation.AgentName
+}
+
+func traceSnapshotFromMessages(messages []model.Message) *atrace.Snapshot {
+	if len(messages) == 0 {
+		return nil
+	}
+	bytes, err := json.Marshal(messages)
+	if err != nil {
+		return nil
+	}
+	return &atrace.Snapshot{Text: string(bytes)}
+}
+
+func traceSnapshotFromEvent(evt *event.Event) *atrace.Snapshot {
+	if evt == nil || evt.Response == nil {
+		return nil
+	}
+	bytes, err := json.Marshal(evt.Response)
+	if err != nil {
+		return nil
+	}
+	return &atrace.Snapshot{Text: string(bytes)}
+}
+
+func (f *Flow) maybeConsumeQueuedUserMessages(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) error {
+	if !steer.IsAttached(invocation) {
+		return nil
+	}
+
+	messages := steer.Drain(invocation)
+	if len(messages) == 0 {
+		return nil
+	}
+
+	for _, message := range messages {
+		invocation.Message = message
+
+		evt := event.NewResponseEvent(
+			invocation.InvocationID,
+			queuedUserAuthor,
+			&model.Response{
+				Done: false,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: message,
+				}},
+			},
+		)
+		evt.RequiresCompletion = true
+
+		if err := agent.EmitEvent(
+			ctx,
+			invocation,
+			eventChan,
+			evt,
+		); err != nil {
+			return err
+		}
+
+		completionID := agent.GetAppendEventNoticeKey(evt.ID)
+		err := invocation.AddNoticeChannelAndWait(
+			ctx,
+			completionID,
+			flowEventWaitTimeout(ctx),
+		)
+		if errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		if err != nil {
+			log.WarnfContext(
+				ctx,
+				"Wait for queued user message persistence failed: %v",
+				err,
+			)
+		}
+	}
+
+	return nil
+}
+
+func flowEventWaitTimeout(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return eventCompletionTimeout
 }
 
 // maybeResumePendingToolCalls inspects the latest session events and, when
@@ -324,18 +430,21 @@ func (f *Flow) runOneStep(
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
 	var lastEvent *event.Event
-
 	// Initialize empty LLM request.
 	llmRequest := &model.Request{
 		Tools: make(map[string]tool.Tool), // Initialize tools map
 	}
-
 	// 1. Preprocess (prepare request).
 	f.preprocess(ctx, invocation, llmRequest, eventChan)
-
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
+	stepID := agent.StartExecutionTraceStep(
+		invocation,
+		agent.InvocationTraceNodeID(invocation),
+		traceSnapshotFromMessages(llmRequest.Messages),
+		nil,
+	)
 	var span oteltrace.Span
 	var modelName string
 	if invocation.Model != nil {
@@ -348,10 +457,13 @@ func (f *Flow) runOneStep(
 	// 2. Call LLM (get response sequence).
 	ctx, responseSeq, err := f.callLLM(ctx, invocation, llmRequest)
 	if err != nil {
+		agent.FinishExecutionTraceStep(invocation, stepID, nil, err)
 		return nil, err
 	}
 	// 3. Process streaming responses.
-	return f.processStreamingResponses(ctx, invocation, llmRequest, responseSeq, eventChan, span, startedSpan)
+	lastEvent, err = f.processStreamingResponses(ctx, invocation, llmRequest, responseSeq, eventChan, span, startedSpan)
+	agent.FinishExecutionTraceStep(invocation, stepID, traceSnapshotFromEvent(lastEvent), err)
+	return lastEvent, err
 }
 
 // processStreamingResponses handles the streaming response processing logic.
@@ -748,6 +860,15 @@ type ToolFilterProvider interface {
 	FilterTools(ctx context.Context) []tool.Tool
 }
 
+// InvocationToolSurfaceProvider is an optional interface that exposes
+// invocation-scoped tools and user-tool classification.
+type InvocationToolSurfaceProvider interface {
+	InvocationToolSurface(
+		ctx context.Context,
+		invocation *agent.Invocation,
+	) ([]tool.Tool, map[string]bool)
+}
+
 // getFilteredTools returns the list of tools for this invocation after applying the filter.
 //
 // User tools (can be filtered):
@@ -771,9 +892,16 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 		return cached
 	}
 
-	// Get all tools from the agent.
 	var allTools []tool.Tool
-	if provider, ok := invocation.Agent.(ToolFilterProvider); ok {
+	var userToolNames map[string]bool
+	hasUserToolTracking := false
+	if provider, ok := invocation.Agent.(InvocationToolSurfaceProvider); ok {
+		allTools, userToolNames = provider.InvocationToolSurface(
+			ctx,
+			invocation,
+		)
+		hasUserToolTracking = userToolNames != nil
+	} else if provider, ok := invocation.Agent.(ToolFilterProvider); ok {
 		allTools = provider.FilterTools(ctx)
 	} else {
 		allTools = invocation.Agent.Tools()
@@ -788,15 +916,15 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 	// Get user tools (if the agent supports it).
 	// User tools are those explicitly registered via WithTools and WithToolSets.
 	// Framework tools (Knowledge, SubAgents) are never filtered.
-	var userToolNames map[string]bool
-	hasUserToolTracking := false
-	if provider, ok := invocation.Agent.(UserToolsProvider); ok {
-		userTools := provider.UserTools()
-		hasUserToolTracking = true
-		// Build a map for fast lookup.
-		userToolNames = make(map[string]bool, len(userTools))
-		for _, t := range userTools {
-			userToolNames[t.Declaration().Name] = true
+	if !hasUserToolTracking {
+		if provider, ok := invocation.Agent.(UserToolsProvider); ok {
+			userTools := provider.UserTools()
+			hasUserToolTracking = true
+			// Build a map for fast lookup.
+			userToolNames = make(map[string]bool, len(userTools))
+			for _, t := range userTools {
+				userToolNames[t.Declaration().Name] = true
+			}
 		}
 	}
 
@@ -992,7 +1120,7 @@ func (f *Flow) generateContentSeq(
 		if seq == nil {
 			return nil, errors.New(errMsgNoModelResponse)
 		}
-		return seq, nil
+		return normalizeResponseIDs(seq), nil
 	}
 
 	responseChan, err := invocation.Model.GenerateContent(ctx, llmRequest)
@@ -1006,13 +1134,53 @@ func (f *Flow) generateContentSeq(
 		return nil, err
 	}
 
-	return func(yield func(*model.Response) bool) {
+	return normalizeResponseIDs(func(yield func(*model.Response) bool) {
 		for resp := range responseChan {
 			if !yield(resp) {
 				return
 			}
 		}
-	}, nil
+	}), nil
+}
+
+func normalizeResponseIDs(seq model.Seq[*model.Response]) model.Seq[*model.Response] {
+	if seq == nil {
+		return nil
+	}
+	return func(yield func(*model.Response) bool) {
+		currentID := ""
+		seq(func(resp *model.Response) bool {
+			normalized := normalizeResponseID(resp, &currentID)
+			keepGoing := yield(normalized)
+			if normalized != nil && normalized.Done && !normalized.IsPartial {
+				currentID = ""
+			}
+			return keepGoing
+		})
+	}
+}
+
+func normalizeResponseID(resp *model.Response, currentID *string) *model.Response {
+	if resp == nil {
+		return nil
+	}
+	if currentID == nil {
+		return resp
+	}
+	// Preserve one stable ID for the entire active response stream.
+	if *currentID == "" {
+		if resp.ID != "" {
+			*currentID = resp.ID
+		} else {
+			*currentID = generatedResponseIDPrefix + uuid.NewString()
+		}
+	}
+	if resp.ID == *currentID {
+		return resp
+	}
+	cloned := resp.Clone()
+	cloned.ID = *currentID
+	return cloned
 }
 
 // postprocess handles post-LLM call processing using response processors.

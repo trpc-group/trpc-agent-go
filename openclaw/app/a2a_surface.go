@@ -20,19 +20,12 @@ import (
 	protocol "trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a"
 )
 
 const (
 	defaultA2AUserIDHeader = "X-User-ID"
-
-	a2aInputModeText  = "text"
-	a2aOutputModeText = "text"
-
-	a2aSkillTagDefault = "default"
-	a2aSkillTagTool    = "tool"
 
 	a2aVersionKey = "version"
 )
@@ -79,9 +72,11 @@ func newA2ASurface(
 		userIDHeader = defaultA2AUserIDHeader
 	}
 
-	card := buildOpenClawA2ACard(ag, opts, host)
+	card, err := buildOpenClawA2ACard(ag, opts, host)
+	if err != nil {
+		return A2ASurface{}, fmt.Errorf("build a2a agent card failed: %w", err)
+	}
 	srv, err := a2aserver.New(
-		a2aserver.WithAgent(ag, opts.A2AStreaming),
 		a2aserver.WithRunner(procRunner),
 		a2aserver.WithAgentCard(card),
 		a2aserver.WithUserIDHeader(userIDHeader),
@@ -106,7 +101,7 @@ func buildOpenClawA2ACard(
 	ag agent.Agent,
 	opts runOptions,
 	host string,
-) a2a.AgentCard {
+) (a2a.AgentCard, error) {
 	info := ag.Info()
 	name := strings.TrimSpace(opts.A2AName)
 	if name == "" {
@@ -117,67 +112,11 @@ func buildOpenClawA2ACard(
 		desc = info.Description
 	}
 
-	return a2a.AgentCard{
-		Name:        name,
-		Description: desc,
-		URL:         host,
-		Capabilities: a2a.AgentCapabilities{
-			Streaming: boolPtr(opts.A2AStreaming),
-			Extensions: []a2a.AgentExtension{{
-				URI: ia2a.ExtensionTRPCA2AVersion,
-				Params: map[string]any{
-					a2aVersionKey: ia2a.InteractionVersion,
-				},
-			}},
-		},
-		Skills: buildOpenClawA2ASkills(
-			ag,
-			opts.A2AAdvertiseTools,
-			name,
-			desc,
-		),
-		DefaultInputModes:  []string{a2aInputModeText},
-		DefaultOutputModes: []string{a2aOutputModeText},
+	var cardOpts []a2aserver.AgentCardOption
+	if opts.A2AAdvertiseTools && ag != nil {
+		cardOpts = append(cardOpts, a2aserver.WithCardTools(ag.Tools()...))
 	}
-}
-
-func buildOpenClawA2ASkills(
-	ag agent.Agent,
-	advertiseTools bool,
-	name string,
-	desc string,
-) []a2a.AgentSkill {
-	descCopy := desc
-	skills := []a2a.AgentSkill{{
-		Name:        name,
-		Description: &descCopy,
-		InputModes:  []string{a2aInputModeText},
-		OutputModes: []string{a2aOutputModeText},
-		Tags:        []string{a2aSkillTagDefault},
-	}}
-	if !advertiseTools || ag == nil {
-		return skills
-	}
-
-	for _, tool := range ag.Tools() {
-		if tool == nil {
-			continue
-		}
-		decl := tool.Declaration()
-		if decl == nil {
-			continue
-		}
-		toolDesc := decl.Description
-		skills = append(skills, a2a.AgentSkill{
-			Name:        decl.Name,
-			Description: &toolDesc,
-			InputModes:  []string{a2aInputModeText},
-			OutputModes: []string{a2aOutputModeText},
-			Tags:        []string{a2aSkillTagTool},
-		})
-	}
-
-	return skills
+	return a2aserver.NewAgentCard(name, desc, host, opts.A2AStreaming, cardOpts...)
 }
 
 func extractA2ABasePath(host string) (string, error) {
@@ -248,8 +187,4 @@ func a2aStartupLines(surface A2ASurface) []startupLogLine {
 		)},
 		{text: fmt.Sprintf("A2A URL: %s", surface.URL)},
 	}
-}
-
-func boolPtr(v bool) *bool {
-	return &v
 }

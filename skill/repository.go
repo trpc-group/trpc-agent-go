@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -69,9 +70,16 @@ type Repository interface {
 	Path(name string) (string, error)
 }
 
+// RefreshableRepository can rescan its backing skill sources.
+type RefreshableRepository interface {
+	Repository
+	Refresh() error
+}
+
 // FSRepository implements Repository backed by filesystem roots.
 type FSRepository struct {
 	roots []string
+	mu    sync.RWMutex
 	// name -> directory path that contains SKILL.md
 	index map[string]string
 }
@@ -88,26 +96,44 @@ func NewFSRepository(roots ...string) (*FSRepository, error) {
 			resolved = append(resolved, p)
 		}
 	}
-	r := &FSRepository{roots: resolved, index: map[string]string{}}
-	if err := r.scan(); err != nil {
+	index, err := scanRoots(resolved)
+	if err != nil {
 		return nil, err
 	}
-	return r, nil
+	return &FSRepository{
+		roots: resolved,
+		index: index,
+	}, nil
+}
+
+// Refresh rescans the configured roots and replaces the skill index.
+func (r *FSRepository) Refresh() error {
+	index, err := scanRoots(r.roots)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.index = index
+	r.mu.Unlock()
+	return nil
 }
 
 // Path returns the directory path that contains the given skill.
 // It allows staging the whole skill folder for execution.
 func (r *FSRepository) Path(name string) (string, error) {
+	r.mu.RLock()
 	dir, ok := r.index[name]
+	r.mu.RUnlock()
 	if !ok {
 		return "", fmt.Errorf("skill %q not found", name)
 	}
 	return dir, nil
 }
 
-func (r *FSRepository) scan() error {
+func scanRoots(roots []string) (map[string]string, error) {
+	index := map[string]string{}
 	seen := map[string]struct{}{}
-	for _, root := range r.roots {
+	for _, root := range roots {
 		if root == "" {
 			continue
 		}
@@ -145,19 +171,26 @@ func (r *FSRepository) scan() error {
 				return nil
 			}
 			// Record first occurrence; later ones ignored.
-			if _, ok := r.index[name]; !ok {
-				r.index[name] = p
+			if _, ok := index[name]; !ok {
+				index[name] = p
 			}
 			return nil
 		})
 	}
-	return nil
+	return index, nil
 }
 
 // Summaries implements Repository.
 func (r *FSRepository) Summaries() []Summary {
-	out := make([]Summary, 0, len(r.index))
+	r.mu.RLock()
+	index := make(map[string]string, len(r.index))
 	for name, dir := range r.index {
+		index[name] = dir
+	}
+	r.mu.RUnlock()
+
+	out := make([]Summary, 0, len(index))
+	for name, dir := range index {
 		sf := filepath.Join(dir, skillFile)
 		s, err := parseSummary(sf)
 		if err != nil {
@@ -176,7 +209,9 @@ func (r *FSRepository) Summaries() []Summary {
 
 // Get implements Repository.
 func (r *FSRepository) Get(name string) (*Skill, error) {
+	r.mu.RLock()
 	dir, ok := r.index[name]
+	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("skill %q not found", name)
 	}

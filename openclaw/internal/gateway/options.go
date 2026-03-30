@@ -12,12 +12,14 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
@@ -27,12 +29,13 @@ type SessionIDFunc func(InboundMessage) (string, error)
 
 // RunOptionInput describes one gateway run before invoking the runner.
 type RunOptionInput struct {
-	Inbound   InboundMessage
-	UserID    string
-	SessionID string
-	RequestID string
-	Message   model.Message
-	Trace     *debugrecorder.Trace
+	Inbound    InboundMessage
+	UserID     string
+	SessionID  string
+	RequestID  string
+	Message    model.Message
+	Trace      *debugrecorder.Trace
+	Extensions map[string]json.RawMessage
 }
 
 // RunOptionResolver decorates context and options for one gateway run.
@@ -57,6 +60,7 @@ type options struct {
 	allowPrivatePartURLs bool
 	allowedPartPatterns  []string
 	audioTranscriber     audioTranscriber
+	appName              string
 
 	sessionIDFunc SessionIDFunc
 
@@ -69,7 +73,8 @@ type options struct {
 	recorder *debugrecorder.Recorder
 	uploads  *uploads.Store
 
-	personaStore *persona.Store
+	personaStore    *persona.Store
+	memoryFileStore *memoryfile.Store
 }
 
 // Option is a function that configures a gateway server.
@@ -227,6 +232,21 @@ func WithAllowedContentPartDomains(domains ...string) Option {
 func WithPersonaStore(store *persona.Store) Option {
 	return func(o *options) {
 		o.personaStore = store
+	}
+}
+
+// WithMemoryFileStore sets the file-based memory store used for per-run
+// context injection.
+func WithMemoryFileStore(store *memoryfile.Store) Option {
+	return func(o *options) {
+		o.memoryFileStore = store
+	}
+}
+
+// WithAppName sets the app name used by file-based memory injection.
+func WithAppName(appName string) Option {
+	return func(o *options) {
+		o.appName = strings.TrimSpace(appName)
 	}
 }
 

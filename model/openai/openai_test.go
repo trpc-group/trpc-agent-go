@@ -86,17 +86,31 @@ func TestNew(t *testing.T) {
 			},
 		},
 		{
-			name:      "infer deepseek from model name",
+			name:      "does not infer deepseek from official model name",
 			modelName: "deepseek-chat",
-			opts:      nil,
-			expectOpts: []Option{
+			opts: []Option{
 				WithAPIKey(testKey),
-				WithBaseURL(defaultDeepSeekBaseURL),
-				WithVariant(VariantDeepSeek),
 			},
+			expectOpts: nil,
 		},
 		{
-			name:      "infer deepseek from base url",
+			name:      "does not infer deepseek from reasoner model name",
+			modelName: "deepseek-reasoner",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "does not infer deepseek from third party deepseek model name",
+			modelName: "deepseek-v3.2",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "infers deepseek from official deepseek base url",
 			modelName: "custom-model",
 			opts: []Option{
 				WithBaseURL("https://api.deepseek.com/v1"),
@@ -108,12 +122,41 @@ func TestNew(t *testing.T) {
 			},
 		},
 		{
-			name:      "explicit variant beats deepseek inference",
+			name:      "explicit variant sets deepseek on official model name",
 			modelName: "deepseek-chat",
 			opts: []Option{
-				WithVariant(VariantOpenAI),
+				WithVariant(VariantDeepSeek),
 			},
-			expectOpts: nil,
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultDeepSeekBaseURL),
+			},
+		},
+		{
+			name:      "explicit deepseek variant preserves custom proxy base url",
+			modelName: "deepseek-chat",
+			opts: []Option{
+				WithVariant(VariantDeepSeek),
+				WithBaseURL("https://proxy.example.com/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+		},
+		{
+			name:      "custom proxy base url before explicit deepseek variant is preserved",
+			modelName: "deepseek-chat",
+			opts: []Option{
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
 		},
 	}
 
@@ -139,42 +182,34 @@ func TestNew(t *testing.T) {
 }
 
 func TestIsDeepSeekBaseURL(t *testing.T) {
-	const (
-		deepSeekURL        = "https://api.deepseek.com/v1"
-		upperDeepSeekURL   = " HTTPS://API.DEEPSEEK.COM/V1 "
-		invalidDeepSeekURL = "https://api.deepseek.com/%zz"
-		openAIURL          = "https://api.openai.com/v1"
-		emptyURL           = "   "
-	)
-
 	tests := []struct {
 		name   string
 		rawURL string
 		want   bool
 	}{
 		{
-			name:   "matches deepseek host",
-			rawURL: deepSeekURL,
+			name:   "matches official api host",
+			rawURL: "https://api.deepseek.com/v1",
 			want:   true,
 		},
 		{
-			name:   "matches deepseek host after trim and lowercase",
-			rawURL: upperDeepSeekURL,
+			name:   "matches official api host after trim and lowercase",
+			rawURL: " HTTPS://API.DEEPSEEK.COM/V1 ",
 			want:   true,
 		},
 		{
-			name:   "falls back to substring match on parse error",
-			rawURL: invalidDeepSeekURL,
-			want:   true,
-		},
-		{
-			name:   "does not match other hosts",
-			rawURL: openAIURL,
+			name:   "does not match non api deepseek host",
+			rawURL: "https://deepseek.com/v1",
 			want:   false,
 		},
 		{
-			name:   "empty url is not deepseek",
-			rawURL: emptyURL,
+			name:   "does not match custom proxy host",
+			rawURL: "https://deepseek-proxy.internal/v1",
+			want:   false,
+		},
+		{
+			name:   "parse error does not fall back to substring match",
+			rawURL: "https://api.deepseek.com/%zz",
 			want:   false,
 		},
 	}
@@ -4009,7 +4044,7 @@ func TestConvertUserMessageContent_HunyuanVariant(t *testing.T) {
 }
 
 func TestConvertUserMessageContent_DeepSeekVariant(t *testing.T) {
-	m := New("deepseek-chat")
+	m := New("deepseek-chat", WithVariant(VariantDeepSeek))
 
 	t.Run("omits non-text content parts", func(t *testing.T) {
 		message := model.Message{
@@ -5169,7 +5204,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 		},
 		{
 			name:  "deepseek thinking",
-			model: New("deepseek-chat"),
+			model: New("deepseek-chat", WithVariant(VariantDeepSeek)),
 			args: args{
 				request: &model.Request{
 					Messages: []model.Message{},
@@ -5180,7 +5215,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 				},
 			},
 			want1: []openaiopt.RequestOption{
-				openaiopt.WithJSONSet(model.ThinkingEnabledKey, true),
+				openaiopt.WithJSONSet("thinking", map[string]string{"type": "enabled"}),
 			},
 		},
 		{
@@ -7011,4 +7046,91 @@ func TestAppendUserContentParts_SkipsInternalFiles(t *testing.T) {
 	})
 	require.Nil(t, fields)
 	require.Empty(t, dst)
+}
+
+// TestChatRequestCallbackSynchronous verifies that
+// chatRequestCallback is invoked synchronously inside
+// GenerateContent, before the response goroutine starts.
+func TestChatRequestCallbackSynchronous(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non_streaming", stream: false},
+		{name: "streaming", stream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(
+						r.URL.Path, "/chat/completions",
+					) {
+						http.Error(w, "not found",
+							http.StatusNotFound)
+						return
+					}
+					if tt.stream {
+						w.Header().Set("Content-Type",
+							"text/event-stream")
+						fmt.Fprint(w, "data: {\"id\":\"s\","+
+							"\"object\":\"chat.completion.chunk\","+
+							"\"created\":1,\"model\":\"m\","+
+							"\"choices\":[{\"index\":0,"+
+							"\"delta\":{\"content\":\"hi\"},"+
+							"\"finish_reason\":\"stop\"}]}\n\n")
+						fmt.Fprint(w, "data: [DONE]\n\n")
+						return
+					}
+					w.Header().Set("Content-Type",
+						"application/json")
+					fmt.Fprint(w, `{"id":"n","object":`+
+						`"chat.completion","created":1,`+
+						`"model":"m","choices":[{"index":0,`+
+						`"message":{"role":"assistant",`+
+						`"content":"hi"},`+
+						`"finish_reason":"stop"}]}`)
+				}))
+			defer server.Close()
+
+			var callCount int64
+			m := New("test-model",
+				WithBaseURL(server.URL),
+				WithAPIKey("key"),
+				WithChatRequestCallback(
+					func(_ context.Context,
+						_ *openai.ChatCompletionNewParams,
+					) {
+						callCount++
+					}),
+			)
+
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					Stream: tt.stream,
+				},
+			}
+
+			ch, err := m.GenerateContent(
+				context.Background(), req)
+			require.NoError(t, err)
+
+			// Callback must have fired synchronously
+			// before GenerateContent returned.
+			assert.Equal(t, int64(1), callCount,
+				"callback must execute exactly once "+
+					"before GenerateContent returns")
+
+			// Drain the channel to avoid goroutine leak.
+			for range ch {
+			}
+
+			// Confirm no extra invocations after drain.
+			assert.Equal(t, int64(1), callCount,
+				"callback must not be called more than once")
+		})
+	}
 }

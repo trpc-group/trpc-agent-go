@@ -31,6 +31,7 @@ type stubRunner struct {
 	sessionID string
 	message   model.Message
 	runOpts   agent.RunOptions
+	messages  []string
 	reply     string
 }
 
@@ -50,6 +51,7 @@ func (s *stubRunner) Run(
 		opt(&runOpts)
 	}
 	s.runOpts = runOpts
+	s.messages = append(s.messages, message.Content)
 	reply := s.reply
 	s.mu.Unlock()
 
@@ -67,6 +69,15 @@ func (s *stubRunner) Run(
 }
 
 func (s *stubRunner) Close() error { return nil }
+
+func (s *stubRunner) messagesSnapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]string, len(s.messages))
+	copy(out, s.messages)
+	return out
+}
 
 type blockingRunner struct {
 	started chan struct{}
@@ -108,6 +119,72 @@ func (r *blockingRunner) Run(
 }
 
 func (r *blockingRunner) Close() error { return nil }
+
+type replaceAwareRunner struct {
+	mu      sync.Mutex
+	started []chan struct{}
+	ctxs    []context.Context
+	release chan struct{}
+	reply   string
+	callCnt int
+}
+
+func (r *replaceAwareRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	message model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	r.mu.Lock()
+	started := make(chan struct{})
+	r.started = append(r.started, started)
+	r.ctxs = append(r.ctxs, ctx)
+	r.callCnt++
+	r.mu.Unlock()
+	close(started)
+
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.release:
+		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		ch <- &event.Event{
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(r.reply),
+				}},
+			},
+		}
+	}()
+	return ch, nil
+}
+
+func (r *replaceAwareRunner) Close() error { return nil }
+
+func (r *replaceAwareRunner) calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.callCnt
+}
+
+func (r *replaceAwareRunner) ctxAt(index int) context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if index < 0 || index >= len(r.ctxs) {
+		return nil
+	}
+	return r.ctxs[index]
+}
 
 type stubSender struct {
 	mu     sync.Mutex
@@ -681,6 +758,300 @@ func TestServiceRemoveForUserCancelsRunningDelivery(t *testing.T) {
 	)
 }
 
+func TestServiceDisablesJobAfterMaxRuns(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 20, 0, 0, 0, time.UTC)
+	runner := &stubRunner{reply: "tick"}
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		nil,
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "limited",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1s",
+		},
+		Policy: ExecutionPolicy{
+			MaxRuns: 2,
+		},
+		Message: "say hi",
+		UserID:  "user-1",
+	})
+	require.NoError(t, err)
+
+	now = now.Add(time.Second)
+	svc.triggerDue(context.Background())
+	waitFor(t, func() bool {
+		got := svc.Get(job.ID)
+		return got != nil && got.LastStatus == StatusSucceeded
+	})
+
+	first := svc.Get(job.ID)
+	require.NotNil(t, first)
+	require.True(t, first.Enabled)
+	require.Equal(t, 1, first.Stats.RunCount)
+	require.Equal(t, 1, first.Stats.SuccessCount)
+	require.NotNil(t, first.NextRunAt)
+	firstMessages := runner.messagesSnapshot()
+	require.Len(t, firstMessages, 1)
+	require.Contains(t, firstMessages[0], "- run_index: 1")
+	require.Contains(t, firstMessages[0], "- max_runs: 2")
+	require.Contains(t, firstMessages[0], "- remaining_runs: 1")
+	require.Contains(t, firstMessages[0], "- is_final_run: false")
+
+	now = now.Add(time.Second)
+	svc.triggerDue(context.Background())
+	waitFor(t, func() bool {
+		got := svc.Get(job.ID)
+		return got != nil &&
+			got.LastStatus == StatusSucceeded &&
+			!got.Enabled
+	})
+
+	second := svc.Get(job.ID)
+	require.NotNil(t, second)
+	require.False(t, second.Enabled)
+	require.Nil(t, second.NextRunAt)
+	require.Equal(t, 2, second.Stats.RunCount)
+	require.Equal(t, 2, second.Stats.SuccessCount)
+	secondMessages := runner.messagesSnapshot()
+	require.Len(t, secondMessages, 2)
+	require.Contains(t, secondMessages[1], "- run_index: 2")
+	require.Contains(t, secondMessages[1], "- max_runs: 2")
+	require.Contains(t, secondMessages[1], "- remaining_runs: 0")
+	require.Contains(t, secondMessages[1], "- is_final_run: true")
+}
+
+func TestServiceReplaceOverlapPolicy(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 25, 21, 0, 0, 0, time.UTC)
+	runner := &replaceAwareRunner{
+		release: make(chan struct{}),
+		reply:   "done",
+	}
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		nil,
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "replace",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1s",
+		},
+		Policy: ExecutionPolicy{
+			OverlapPolicy: OverlapPolicyReplace,
+		},
+		Message: "report",
+		UserID:  "user-1",
+	})
+	require.NoError(t, err)
+
+	now = now.Add(time.Second)
+	svc.triggerDue(context.Background())
+	waitFor(t, func() bool {
+		return runner.calls() == 1
+	})
+
+	firstCtx := runner.ctxAt(0)
+	require.NotNil(t, firstCtx)
+
+	now = now.Add(time.Second)
+	svc.triggerDue(context.Background())
+	waitFor(t, func() bool {
+		return runner.calls() == 2
+	})
+
+	waitFor(t, func() bool {
+		select {
+		case <-firstCtx.Done():
+			return true
+		default:
+			return false
+		}
+	})
+
+	close(runner.release)
+	waitFor(t, func() bool {
+		return svc.Status()["jobs_running"] == 0
+	})
+
+	got := svc.Get(job.ID)
+	require.NotNil(t, got)
+	require.True(t, got.Enabled)
+	require.Equal(t, 2, got.Stats.RunCount)
+	require.Equal(t, 1, got.Stats.SuccessCount)
+	require.Equal(t, StatusSucceeded, got.LastStatus)
+}
+
+func TestServiceRunNow_DeliveryFailureWithoutRouter(t *testing.T) {
+	t.Parallel()
+
+	runner := &stubRunner{reply: "done"}
+	svc, err := NewService(t.TempDir(), runner, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitFor(t, func() bool {
+		got := svc.Get(job.ID)
+		return got != nil &&
+			got.LastStatus == StatusDeliveryFailed
+	})
+
+	got := svc.Get(job.ID)
+	require.NotNil(t, got)
+	require.Equal(t, 1, got.Stats.RunCount)
+	require.Equal(t, 1, got.Stats.DeliveryFailureCount)
+	require.Equal(t, StatusDeliveryFailed, got.LastStatus)
+	require.Contains(t, got.LastError, "nil outbound router")
+}
+
+func TestService_RunStateHelpers(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 26, 10, 0, 0, 0, time.UTC)
+	svc := &Service{
+		clock:   func() time.Time { return now },
+		jobs:    make(map[string]*Job),
+		running: make(map[string]*jobRun),
+	}
+
+	_, _, _, err := svc.markRunning("missing", context.Background())
+	require.ErrorContains(t, err, "unknown job")
+
+	job := &Job{
+		ID:      "job-1",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+	}
+	svc.jobs[job.ID] = job
+	svc.running[job.ID] = &jobRun{}
+	_, _, _, err = svc.markRunning(job.ID, context.Background())
+	require.ErrorContains(t, err, "already running")
+
+	svc.running = make(map[string]*jobRun)
+	job.Policy.MaxRuns = 1
+	job.Stats.RunCount = 1
+	_, _, _, err = svc.markRunning(job.ID, context.Background())
+	require.ErrorContains(t, err, "no longer schedulable")
+	require.False(t, job.Enabled)
+
+	job.Enabled = true
+	job.Stats.RunCount = 0
+	job.Policy.MaxRuns = 0
+	clone, runCtx, token, err := svc.markRunning(job.ID, nil)
+	require.NoError(t, err)
+	require.Equal(t, job.ID, clone.ID)
+	require.NotNil(t, runCtx)
+	require.NotEmpty(t, token)
+	require.Equal(t, StatusRunning, job.LastStatus)
+	require.Equal(t, 1, job.Stats.RunCount)
+	require.True(t, svc.deliveryAllowed(job.ID, token))
+
+	svc.mu.Lock()
+	svc.suppressRunLocked(job.ID)
+	svc.mu.Unlock()
+	require.False(t, svc.deliveryAllowed(job.ID, token))
+
+	svc.mu.Lock()
+	svc.removeJobLocked(job.ID, false)
+	require.Nil(t, svc.jobs[job.ID])
+	require.NotNil(t, svc.running[job.ID])
+	svc.removeJobLocked(job.ID, true)
+	svc.mu.Unlock()
+	require.ErrorIs(t, runCtx.Err(), context.Canceled)
+}
+
+func TestService_RetireAndRunPolicyHelpers(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 26, 10, 0, 0, 0, time.UTC)
+	future := now.Add(time.Hour)
+
+	require.False(t, retireJobLocked(nil, now))
+	require.False(t, retireJobLocked(&Job{Enabled: false}, now))
+
+	job := &Job{
+		Enabled: true,
+		Policy: ExecutionPolicy{
+			MaxRuns: 2,
+			EndsAt:  &future,
+		},
+		Stats: ExecutionStats{
+			RunCount: 2,
+		},
+	}
+	require.True(t, executionLimitReached(job))
+	require.True(t, retireJobLocked(job, now))
+	require.False(t, job.Enabled)
+	require.Nil(t, job.NextRunAt)
+
+	next := now.Add(30 * time.Minute)
+	job = &Job{
+		Enabled: true,
+		Policy: ExecutionPolicy{
+			EndsAt: &future,
+		},
+	}
+	require.False(t, executionWindowClosed(job, now))
+	require.True(t, nextRunAllowed(job, &next, now))
+	applyNextRunPolicy(job, &next, now)
+	require.NotNil(t, job.NextRunAt)
+	require.Equal(t, next, *job.NextRunAt)
+
+	job.Policy.EndsAt = timePointer(now)
+	require.False(t, nextRunAllowed(job, &next, now))
+	applyNextRunPolicy(job, &next, now)
+	require.False(t, job.Enabled)
+	require.Nil(t, job.NextRunAt)
+
+	require.Equal(t, now, scheduledRunBase(nil, now))
+	require.NotNil(t, scheduledRunRuntimeState(&Job{}))
+}
+
 func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -722,6 +1093,12 @@ func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 
 	runtimeState := scheduledRunRuntimeState(&Job{
 		ID: "job-1",
+		Policy: ExecutionPolicy{
+			MaxRuns: 3,
+		},
+		Stats: ExecutionStats{
+			RunCount: 2,
+		},
 		Delivery: outbound.DeliveryTarget{
 			Channel: "telegram",
 			Target:  "1",
@@ -729,10 +1106,40 @@ func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 	})
 	require.Equal(t, true, runtimeState[runtimeStateScheduledRun])
 	require.Equal(t, "job-1", runtimeState[runtimeStateJobID])
+	require.Equal(t, 2, runtimeState[runtimeStateRunIndex])
+	require.Equal(t, true, runtimeState[runtimeStateHasMaxRuns])
+	require.Equal(t, 3, runtimeState[runtimeStateMaxRuns])
+	require.Equal(t, 1, runtimeState[runtimeStateRemaining])
+	require.Equal(t, false, runtimeState[runtimeStateIsFinalRun])
 	require.Contains(
 		t,
-		buildScheduledRunMessage(" collect cpu "),
-		"collect cpu",
+		buildScheduledRunMessage(&Job{
+			Message: "collect {{.Cron.RunIndex}}/" +
+				"{{.Cron.MaxRuns}}{{if .Cron.IsFinalRun}}" +
+				" final{{end}}",
+			Policy: ExecutionPolicy{
+				MaxRuns: 3,
+			},
+			Stats: ExecutionStats{
+				RunCount: 2,
+			},
+		}),
+		"collect 2/3",
+	)
+	require.Contains(
+		t,
+		buildScheduledRunMessage(&Job{
+			Message: "collect {{.Cron.RunIndex}}/" +
+				"{{.Cron.MaxRuns}}{{if .Cron.IsFinalRun}}" +
+				" final{{end}}",
+			Policy: ExecutionPolicy{
+				MaxRuns: 3,
+			},
+			Stats: ExecutionStats{
+				RunCount: 3,
+			},
+		}),
+		"collect 3/3 final",
 	)
 
 	acc := cronReplyAccumulator{}
@@ -769,6 +1176,51 @@ func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 		Kind:     ScheduleKindCron,
 		CronExpr: "0 * * * *",
 	}))
+	require.Equal(
+		t,
+		"report {{.Cron.Missing}}",
+		renderScheduledRunTask(
+			"report {{.Cron.Missing}}",
+			cronRunTemplateData{},
+		),
+	)
+	require.Equal(
+		t,
+		"report {{",
+		renderScheduledRunTask(
+			"report {{",
+			cronRunTemplateData{},
+		),
+	)
+
+	job := &Job{
+		Policy: ExecutionPolicy{
+			MaxRuns: 1,
+			EndsAt:  cloneTimePtr(&now),
+		},
+		Stats: ExecutionStats{
+			RunCount: 1,
+		},
+	}
+	require.True(t, executionLimitReached(job))
+	require.True(t, executionWindowClosed(job, now))
+	require.False(
+		t,
+		nextRunAllowed(
+			job,
+			cloneTimePtr(&now),
+			now,
+		),
+	)
+
+	applyNextRunPolicy(nil, nil, now)
+	applyNextRunPolicy(&Job{}, nil, now)
+
+	require.Equal(
+		t,
+		"",
+		sanitizeStoredOutput(" \n\t "),
+	)
 }
 
 func waitFor(t *testing.T, fn func() bool) {
@@ -782,4 +1234,8 @@ func waitFor(t *testing.T, fn func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("condition was not met")
+}
+
+func timePointer(ts time.Time) *time.Time {
+	return &ts
 }

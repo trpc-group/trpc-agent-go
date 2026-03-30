@@ -12,6 +12,7 @@ package a2aagent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -55,6 +56,7 @@ type A2AAgent struct {
 	streamingBufSize     int                    // Buffer size for streaming responses
 	streamingRespHandler StreamingRespHandler   // Handler for streaming responses
 	transferStateKey     []string               // Keys in session state to transfer to the A2A agent message by metadata
+	buildMessageHook     BuildMessageHook       // Hook called after A2A message is built but before it is sent
 	userIDHeader         string                 // HTTP header name to send UserID to A2A server
 	enableStreaming      *bool                  // Explicitly set streaming mode; nil means use agent card capability
 
@@ -251,17 +253,56 @@ func (r *A2AAgent) shouldUseStreaming(invocation *agent.Invocation) bool {
 	return false
 }
 
-// buildA2AMessage constructs A2A message from session events
+// buildA2AMessage constructs A2A message from session events.
+// It assembles a middleware chain around the base converter:
+//
+//	transferStateKey → user hook → base converter
+//
+// transferStateKey is the outermost layer so it always runs even if
+// the user hook short-circuits (skips calling next).
 func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) (*protocol.Message, error) {
 	if r.a2aMessageConverter == nil {
 		return nil, fmt.Errorf("a2a message converter not set")
 	}
-	message, err := r.a2aMessageConverter.ConvertToA2AMessage(isStream, r.name, invocation)
-	if err != nil || message == nil {
-		return nil, fmt.Errorf("custom A2A converter failed, msg:%v, err:%w", message, err)
+
+	// Base converter function.
+	convertFn := r.a2aMessageConverter.ConvertToA2AMessage
+
+	// User hook layer wraps the base converter.
+	if r.buildMessageHook != nil {
+		convertFn = r.buildMessageHook(convertFn)
 	}
 
+	// Built-in layer (outermost): transfer state keys into message metadata.
+	// Placed after hook so it always runs regardless of hook behavior.
 	if len(r.transferStateKey) > 0 {
+		convertFn = r.wrapWithTransferState(convertFn)
+	}
+
+	message, err := convertFn(isStream, r.name, invocation)
+	if err != nil {
+		return nil, fmt.Errorf("A2A message conversion failed: %w", err)
+	}
+	if message == nil {
+		return nil, errors.New("A2A message conversion returned nil message")
+	}
+	return message, nil
+}
+
+// wrapWithTransferState returns a middleware that injects transferStateKey values
+// from RuntimeState into the message metadata after calling next.
+func (r *A2AAgent) wrapWithTransferState(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+	return func(isStream bool, agentName string, invocation *agent.Invocation) (*protocol.Message, error) {
+		message, err := next(isStream, agentName, invocation)
+		if err != nil {
+			return nil, err
+		}
+		if message == nil {
+			return nil, nil
+		}
+		if invocation.RunOptions.RuntimeState == nil {
+			return message, nil
+		}
 		if message.Metadata == nil {
 			message.Metadata = make(map[string]any)
 		}
@@ -270,8 +311,8 @@ func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) 
 				message.Metadata[key] = value
 			}
 		}
+		return message, nil
 	}
-	return message, nil
 }
 
 // runStreaming handles streaming A2A communication

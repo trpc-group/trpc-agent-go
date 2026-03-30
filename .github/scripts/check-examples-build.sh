@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${script_dir}/examples-modules.sh"
 export CGO_ENABLED=0
 
 # This script checks that all Go example modules can be built with CGO disabled.
@@ -19,14 +21,9 @@ has_flag_prefix() {
 }
 
 main() {
-	# Resolve repository paths.
-	local script_dir repo_root examples_dir
-	script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-	repo_root="$(cd "${script_dir}/../.." && pwd)"
-	examples_dir="$repo_root/examples"
 	# Validate the examples directory exists.
-	if [[ ! -d "$examples_dir" ]]; then
-		echo "examples directory not found: $examples_dir" >&2
+	if [[ ! -d "${EXAMPLES_DIR}" ]]; then
+		echo "examples directory not found: ${EXAMPLES_DIR}" >&2
 		return 2
 	fi
 	# Build the `go build` arguments.
@@ -35,47 +32,46 @@ main() {
 		build_args+=("-mod=readonly")
 	fi
 	build_args+=("$@")
-	# Discover all example Go modules.
 	local -a mod_files=()
-	while IFS= read -r modfile; do
-		mod_files+=("$modfile")
-	done < <(find "$examples_dir" -name go.mod -type f | sort)
+	select_examples_modules_for_current_shard mod_files
+	echo "Shard: $(examples_shard_label)"
+	echo "Selected modules: ${#mod_files[@]}"
+	local modfile
+	for modfile in "${mod_files[@]}"; do
+		echo "  - $(examples_module_path "${modfile}")"
+	done
 	if (( ${#mod_files[@]} == 0 )); then
-		echo "no go.mod files found under examples directory." >&2
+		echo "no examples modules selected for this shard." >&2
 		return 2
 	fi
 	# Build each module and record failures.
 	local -a failed_modules=()
-	local modfile module_dir rel_dir build_out_dir
+	local module_dir module_path build_out_dir
 	build_out_dir="$(mktemp -d -t trpc-agent-go-examples-build-XXXXXX)"
 	trap "rm -rf \"$build_out_dir\"" EXIT
 	for modfile in "${mod_files[@]}"; do
-		# Skip placeholder modules.
-		if head -n 5 "${modfile}" | grep -q "DO NOT USE!"; then
-			continue
-		fi
 		module_dir="$(dirname "$modfile")"
-		rel_dir="${module_dir#"$repo_root"/}"
-		echo "==> Build: $rel_dir"
+		module_path="$(examples_module_path "${modfile}")"
+		echo "==> Build: $module_path"
 		local build_log build_log2
 		# Try a standard build first.
 		if build_log=$(cd "$module_dir" && go build "${build_args[@]}" ./... 2>&1); then
 			if [[ -n "$build_log" ]]; then
 				printf '%s\n' "$build_log"
 			fi
-			echo "OK : $rel_dir"
+			echo "OK : $module_path"
 		else
 			# Retry by writing binaries into a temporary directory.
 			if build_log2=$(cd "$module_dir" && go build -o "$build_out_dir/" "${build_args[@]}" ./... 2>&1); then
 				if [[ -n "$build_log2" ]]; then
 					printf '%s\n' "$build_log2"
 				fi
-				echo "OK : $rel_dir"
+				echo "OK : $module_path"
 			else
 				printf '%s\n' "$build_log" >&2
 				printf '%s\n' "$build_log2" >&2
-				echo "Build failed: $rel_dir" >&2
-				failed_modules+=("$rel_dir")
+				echo "Build failed: $module_path" >&2
+				failed_modules+=("$module_path")
 			fi
 		fi
 		echo

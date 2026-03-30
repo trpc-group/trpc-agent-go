@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -135,6 +136,7 @@ type Server struct {
 	runner  runner.Runner
 	managed runner.ManagedRunner
 
+	appName       string
 	sessionIDFunc SessionIDFunc
 
 	allowUsers        map[string]struct{}
@@ -152,6 +154,7 @@ type Server struct {
 	uploads          *uploads.Store
 	audioTranscriber audioTranscriber
 	personaStore     *persona.Store
+	memoryFileStore  *memoryfile.Store
 }
 
 // New creates a gateway server with the provided runner.
@@ -224,6 +227,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		partFetcher:       fetcher,
 		runner:            r,
 		managed:           managed,
+		appName:           strings.TrimSpace(options.appName),
 		sessionIDFunc:     sessionIDFunc,
 		allowUsers:        options.allowUsers,
 		requireMention:    options.requireMention,
@@ -235,6 +239,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		uploads:           options.uploads,
 		audioTranscriber:  audioTranscriber,
 		personaStore:      options.personaStore,
+		memoryFileStore:   options.memoryFileStore,
 	}
 
 	mux := http.NewServeMux()
@@ -528,29 +533,37 @@ func (s *Server) resolveRunOptions(
 	ctx context.Context,
 	run preparedMessageRun,
 ) (context.Context, []agent.RunOption) {
+	var extra []agent.RunOption
+	if s != nil && s.runOptionResolver != nil {
+		resolvedCtx, resolvedExtra := s.runOptionResolver(
+			ctx,
+			RunOptionInput{
+				Inbound:   run.inbound,
+				UserID:    run.userID,
+				SessionID: run.sessionID,
+				RequestID: run.requestID,
+				Message:   run.userMsg,
+				Trace:     debugrecorder.TraceFromContext(ctx),
+				Extensions: cloneExtensions(
+					run.extensions,
+				),
+			},
+		)
+		if resolvedCtx != nil {
+			ctx = resolvedCtx
+		}
+		extra = resolvedExtra
+	}
+
+	extraCfg := agent.NewRunOptions(extra...)
 	runOpts := s.runOptions(
+		ctx,
 		run.userID,
 		run.sessionID,
 		run.requestID,
+		run.requestSystemPrompt,
+		extraCfg.RuntimeState,
 	)
-	if s == nil || s.runOptionResolver == nil {
-		return ctx, runOpts
-	}
-
-	resolvedCtx, extra := s.runOptionResolver(
-		ctx,
-		RunOptionInput{
-			Inbound:   run.inbound,
-			UserID:    run.userID,
-			SessionID: run.sessionID,
-			RequestID: run.requestID,
-			Message:   run.userMsg,
-			Trace:     debugrecorder.TraceFromContext(ctx),
-		},
-	)
-	if resolvedCtx != nil {
-		ctx = resolvedCtx
-	}
 	if len(extra) == 0 {
 		return ctx, runOpts
 	}
@@ -559,17 +572,23 @@ func (s *Server) resolveRunOptions(
 }
 
 func (s *Server) runOptions(
+	ctx context.Context,
 	userID string,
 	sessionID string,
 	requestID string,
+	requestSystemPrompt string,
+	runtimeState map[string]any,
 ) []agent.RunOption {
 	runOpts := make([]agent.RunOption, 0, 1)
 	if requestID != "" {
 		runOpts = append(runOpts, agent.WithRequestID(requestID))
 	}
 	if messages := s.injectedContextMessages(
+		ctx,
 		userID,
 		sessionID,
+		requestSystemPrompt,
+		runtimeState,
 	); len(messages) > 0 {
 		runOpts = append(
 			runOpts,
@@ -620,6 +639,11 @@ func (a *replyAccumulator) consumeFull(rsp *model.Response) {
 	if rsp == nil {
 		return
 	}
+	if responseHasPublicContent(rsp) {
+		a.builder.Reset()
+		a.Text = ""
+		return
+	}
 	if len(rsp.Choices) == 0 {
 		return
 	}
@@ -633,6 +657,11 @@ func (a *replyAccumulator) consumeFull(rsp *model.Response) {
 
 func (a *replyAccumulator) consumeDelta(rsp *model.Response) {
 	if rsp == nil {
+		return
+	}
+	if responseHasPublicContent(rsp) {
+		a.builder.Reset()
+		a.Text = ""
 		return
 	}
 	if a.seenFull {

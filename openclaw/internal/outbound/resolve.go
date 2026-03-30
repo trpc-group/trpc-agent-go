@@ -21,6 +21,17 @@ import (
 const (
 	runtimeStateDeliveryChannel = "openclaw.delivery.channel"
 	runtimeStateDeliveryTarget  = "openclaw.delivery.target"
+
+	wecomChannelName = "wecom"
+
+	wecomThreadPrefix = wecomChannelName + ":thread:"
+	wecomChatPrefix   = wecomChannelName + ":chat:"
+	wecomDMPrefix     = wecomChannelName + ":dm:"
+
+	wecomScopedUserSeparator = ":user:"
+
+	wecomGroupTargetPrefix  = "group:"
+	wecomSingleTargetPrefix = "single:"
 )
 
 // ResolveTarget chooses an outbound target from explicit args, runtime
@@ -39,6 +50,9 @@ func ResolveTarget(
 		return DeliveryTarget{}, fmt.Errorf(
 			"outbound: unable to resolve target",
 		)
+	}
+	if err := validateTarget(target); err != nil {
+		return DeliveryTarget{}, err
 	}
 	return target, nil
 }
@@ -62,10 +76,13 @@ func sanitizeTarget(target DeliveryTarget) DeliveryTarget {
 }
 
 func fillTargetFromOpaqueValue(target DeliveryTarget) DeliveryTarget {
-	if target.Channel != "" || target.Target == "" {
+	if target.Target == "" {
 		return target
 	}
-	if resolved, ok := resolveFromOpaqueTarget(target.Target); ok {
+	if resolved, ok := resolveTargetValue(
+		target.Channel,
+		target.Target,
+	); ok {
 		return resolved
 	}
 	return target
@@ -129,15 +146,154 @@ func ResolveTargetFromSessionID(sessionID string) (DeliveryTarget, bool) {
 			Target:  target,
 		}, true
 	}
-	return DeliveryTarget{}, false
-}
-
-func resolveFromOpaqueTarget(value string) (DeliveryTarget, bool) {
-	if target, ok := telegram.ResolveTextTargetFromSessionID(value); ok {
+	if target, ok := normalizeWeComTarget(sessionID); ok {
 		return DeliveryTarget{
-			Channel: telegram.ChannelName,
+			Channel: wecomChannelName,
 			Target:  target,
 		}, true
 	}
 	return DeliveryTarget{}, false
+}
+
+func resolveFromOpaqueTarget(value string) (DeliveryTarget, bool) {
+	return resolveTargetValue("", value)
+}
+
+func resolveTargetValue(
+	channelID string,
+	value string,
+) (DeliveryTarget, bool) {
+	if target, ok := resolveTelegramTargetValue(
+		channelID,
+		value,
+	); ok {
+		return target, true
+	}
+	if target, ok := resolveWeComTargetValue(
+		channelID,
+		value,
+	); ok {
+		return target, true
+	}
+	return DeliveryTarget{}, false
+}
+
+func resolveTelegramTargetValue(
+	channelID string,
+	value string,
+) (DeliveryTarget, bool) {
+	if channelID != "" && channelID != telegram.ChannelName {
+		return DeliveryTarget{}, false
+	}
+	target, ok := telegram.ResolveTextTargetFromSessionID(value)
+	if !ok {
+		return DeliveryTarget{}, false
+	}
+	return DeliveryTarget{
+		Channel: telegram.ChannelName,
+		Target:  target,
+	}, true
+}
+
+func resolveWeComTargetValue(
+	channelID string,
+	value string,
+) (DeliveryTarget, bool) {
+	if channelID != "" && channelID != wecomChannelName {
+		return DeliveryTarget{}, false
+	}
+	target, ok := normalizeWeComTarget(value)
+	if !ok {
+		return DeliveryTarget{}, false
+	}
+	return DeliveryTarget{
+		Channel: wecomChannelName,
+		Target:  target,
+	}, true
+}
+
+func validateTarget(target DeliveryTarget) error {
+	if target.Channel != wecomChannelName {
+		return nil
+	}
+	if _, ok := parseWeComPushTarget(target.Target); ok {
+		return nil
+	}
+	return fmt.Errorf(
+		"outbound: invalid target for %s: %s",
+		target.Channel,
+		target.Target,
+	)
+}
+
+func normalizeWeComTarget(value string) (string, bool) {
+	raw := strings.TrimSpace(value)
+	if target, ok := parseWeComPushTarget(raw); ok {
+		return target, true
+	}
+	switch {
+	case strings.HasPrefix(raw, wecomThreadPrefix):
+		return normalizeWeComTarget(
+			strings.TrimPrefix(raw, wecomThreadPrefix),
+		)
+	case strings.HasPrefix(raw, wecomChatPrefix):
+		return normalizeWeComChatTarget(
+			strings.TrimPrefix(raw, wecomChatPrefix),
+		)
+	case strings.HasPrefix(raw, wecomDMPrefix):
+		return normalizeWeComDMTarget(
+			strings.TrimPrefix(raw, wecomDMPrefix),
+		)
+	default:
+		return "", false
+	}
+}
+
+func normalizeWeComChatTarget(value string) (string, bool) {
+	chatID := strings.TrimSpace(value)
+	if idx := strings.Index(chatID, wecomScopedUserSeparator); idx >= 0 {
+		chatID = chatID[:idx]
+	}
+	chatID = strings.TrimSpace(chatID)
+	if chatID == "" {
+		return "", false
+	}
+	return wecomGroupTargetPrefix + chatID, true
+}
+
+func normalizeWeComDMTarget(value string) (string, bool) {
+	userID := strings.TrimSpace(value)
+	if userID == "" {
+		return "", false
+	}
+	return wecomSingleTargetPrefix + userID, true
+}
+
+func parseWeComPushTarget(value string) (string, bool) {
+	raw := strings.TrimSpace(value)
+	switch {
+	case strings.HasPrefix(raw, wecomGroupTargetPrefix):
+		return parseWeComPushTargetWithPrefix(
+			raw,
+			wecomGroupTargetPrefix,
+		)
+	case strings.HasPrefix(raw, wecomSingleTargetPrefix):
+		return parseWeComPushTargetWithPrefix(
+			raw,
+			wecomSingleTargetPrefix,
+		)
+	default:
+		return "", false
+	}
+}
+
+func parseWeComPushTargetWithPrefix(
+	value string,
+	prefix string,
+) (string, bool) {
+	id := strings.TrimSpace(strings.TrimPrefix(value, prefix))
+	if id == "" {
+		return "", false
+	}
+	return prefix + id, true
 }
