@@ -31,9 +31,9 @@ type TerminalLoss struct {
 	EvalCaseID string
 	// MetricName identifies which metric produced this loss value.
 	MetricName string
-	// Severity indicates how urgently this loss should influence optimization.
+	// Severity indicates how urgently this loss should influence optimization when available.
 	Severity LossSeverity
-	// StepID links this loss back to the trace step that triggered it.
+	// StepID identifies one terminal trace step where this loss starts propagation.
 	StepID string
 	// Loss is the serialized loss payload used by gradient computation.
 	Loss string

@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -108,10 +109,9 @@ type scriptedEvalOutcome struct {
 	score             float64
 	metricStatus      status.EvalStatus
 	reason            string
-	stepID            string
-	severity          promptiter.LossSeverity
 	appliedSurfaceIDs []string
 	missingTrace      bool
+	executionTrace    *atrace.Trace
 }
 
 type scriptedEvalService struct {
@@ -140,6 +140,11 @@ func (s *scriptedEvalService) Inference(
 	callOptions := service.NewOptions(opt...)
 	runOptions := agent.NewRunOptions(callOptions.RunOptions...)
 	profileValue := runOptions.Instruction
+	if patch, ok := surfacepatch.PatchForNode(runOptions.CustomAgentConfigs, "node_1"); ok {
+		if instruction, ok := patch.Instruction(); ok {
+			profileValue = instruction
+		}
+	}
 	if profileValue == "" {
 		profileValue = "base prompt"
 	}
@@ -200,10 +205,8 @@ func (s *scriptedEvalService) Evaluate(
 						EvalStatus: outcome.metricStatus,
 						Threshold:  threshold,
 						Details: &evalresult.EvalMetricResultDetails{
-							Reason:   outcome.reason,
-							Score:    outcome.score,
-							StepID:   outcome.stepID,
-							Severity: string(outcome.severity),
+							Reason: outcome.reason,
+							Score:  outcome.score,
 						},
 					},
 				},
@@ -243,6 +246,9 @@ func buildScriptedExecutionTrace(outcome scriptedEvalOutcome) *atrace.Trace {
 	if outcome.missingTrace {
 		return nil
 	}
+	if outcome.executionTrace != nil {
+		return outcome.executionTrace
+	}
 	return &atrace.Trace{
 		RootAgentName:    "target",
 		RootInvocationID: "invocation_1",
@@ -251,6 +257,7 @@ func buildScriptedExecutionTrace(outcome scriptedEvalOutcome) *atrace.Trace {
 		Steps: []atrace.Step{
 			{
 				StepID:            "step_1",
+				InvocationID:      "invocation_1",
 				NodeID:            "node_1",
 				AppliedSurfaceIDs: append([]string(nil), outcome.appliedSurfaceIDs...),
 				Input:             &atrace.Snapshot{Text: "input"},
@@ -509,12 +516,104 @@ func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
 	assert.Len(t, evalService.runOptions, 3)
 	assert.Empty(t, evalService.runOptions[0].Instruction)
 	assert.Empty(t, evalService.runOptions[1].Instruction)
-	assert.Equal(t, "accepted prompt", evalService.runOptions[2].Instruction)
+	_, ok := surfacepatch.PatchForNode(evalService.runOptions[0].CustomAgentConfigs, "node_1")
+	assert.False(t, ok)
+	_, ok = surfacepatch.PatchForNode(evalService.runOptions[1].CustomAgentConfigs, "node_1")
+	assert.False(t, ok)
+	patch, ok := surfacepatch.PatchForNode(evalService.runOptions[2].CustomAgentConfigs, "node_1")
+	assert.True(t, ok)
+	instruction, ok := patch.Instruction()
+	assert.True(t, ok)
+	assert.Equal(t, "accepted prompt", instruction)
 	assert.True(t, evalService.runOptions[0].ExecutionTraceEnabled)
 	assert.True(t, evalService.runOptions[1].ExecutionTraceEnabled)
 	assert.True(t, evalService.runOptions[2].ExecutionTraceEnabled)
 	assert.Equal(t, "accepted prompt", profileText(result.Rounds[0].OutputProfile))
 	assert.Equal(t, "accepted prompt", profileText(result.AcceptedProfile))
+}
+
+func TestCompileProfileRunOptionsUsesNodeSurfacePatchForNonEntryNode(t *testing.T) {
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "entry",
+		Nodes: []astructure.Node{
+			{NodeID: "entry", Kind: astructure.NodeKindLLM, Name: "entry"},
+			{NodeID: "reviewer", Kind: astructure.NodeKindLLM, Name: "reviewer"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "entry#instruction",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
+					Text: stringPtr("entry prompt"),
+				},
+			},
+			{
+				SurfaceID: "reviewer#instruction",
+				NodeID:    "reviewer",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
+					Text: stringPtr("review prompt"),
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
+		StructureID: "structure_1",
+		Overrides: []promptiter.SurfaceOverride{
+			{
+				SurfaceID: "reviewer#instruction",
+				Value: astructure.SurfaceValue{
+					Text: stringPtr("patched review prompt"),
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	opts := agent.NewRunOptions(runOptions...)
+	assert.Empty(t, opts.Instruction)
+	assert.True(t, opts.ExecutionTraceEnabled)
+	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "reviewer")
+	assert.True(t, ok)
+	instruction, ok := patch.Instruction()
+	assert.True(t, ok)
+	assert.Equal(t, "patched review prompt", instruction)
+}
+
+func TestCompileProfileRunOptionsRejectsModelOverrideWithoutModelInstance(t *testing.T) {
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "entry",
+		Nodes: []astructure.Node{
+			{NodeID: "entry", Kind: astructure.NodeKindLLM, Name: "entry"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "entry#model",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeModel,
+				Value: astructure.SurfaceValue{
+					Model: &astructure.ModelRef{Name: "base-model"},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	_, err = compileProfileRunOptions(structure, &promptiter.Profile{
+		StructureID: "structure_1",
+		Overrides: []promptiter.SurfaceOverride{
+			{
+				SurfaceID: "entry#model",
+				Value: astructure.SurfaceValue{
+					Model: &astructure.ModelRef{Name: "patched-model"},
+				},
+			},
+		},
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "require a model instance")
 }
 
 func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T) {
@@ -562,6 +661,7 @@ func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T
 							Steps: []atrace.Step{
 								{
 									StepID:            "step_1",
+									InvocationID:      "invocation_first",
 									NodeID:            "node_1",
 									AppliedSurfaceIDs: []string{testSurfaceID},
 									Output:            &atrace.Snapshot{Text: "first output"},
@@ -588,6 +688,7 @@ func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T
 							Steps: []atrace.Step{
 								{
 									StepID:            "step_1",
+									InvocationID:      "invocation_second",
 									NodeID:            "node_1",
 									AppliedSurfaceIDs: []string{testSurfaceID},
 									Output:            &atrace.Snapshot{Text: "second output"},
@@ -604,8 +705,6 @@ func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T
 	assert.Equal(t, "validation", result.EvalSetID)
 	assert.Equal(t, "case_1", result.EvalCaseID)
 	assert.Equal(t, "session_first", result.SessionID)
-	assert.Equal(t, "invocation_first", result.InvocationID)
-	assert.Equal(t, "first output", result.Output.Text)
 	assert.Len(t, result.Metrics, 1)
 	assert.Equal(t, 0.9, result.Metrics[0].Score)
 }
@@ -708,30 +807,135 @@ func TestRunRejectsStructureExportFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "boom")
 }
 
-func TestRunRejectsMetricWithoutStepID(t *testing.T) {
-	evalService := newScriptedEvalService(func(evalSetID string, profileValue string) scriptedEvalOutcome {
-		outcome := scriptedOutcome(evalSetID, profileValue)
-		if evalSetID == "train" {
-			outcome.stepID = ""
-		}
-		return outcome
+func TestLossUsesTraceTerminalStep(t *testing.T) {
+	losses, err := (&engine{}).loss(&EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Trace: &atrace.Trace{
+							Status: atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{
+									StepID: "step_1",
+									NodeID: "node_1",
+								},
+								{
+									StepID:             "step_2",
+									NodeID:             "node_1",
+									PredecessorStepIDs: []string{"step_1"},
+								},
+								{
+									StepID:             "step_3",
+									NodeID:             "node_1",
+									PredecessorStepIDs: []string{"step_2"},
+								},
+							},
+						},
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     "needs improvement",
+							},
+						},
+					},
+				},
+			},
+		},
 	})
-	engineInstance, err := New(
-		context.Background(),
-		testTargetAgent(),
-		newTestAgentEvaluator(t, evalService),
-		&fakeBackwarder{},
-		&fakeAggregator{},
-		&fakeOptimizer{},
-	)
 	assert.NoError(t, err)
-	_, err = engineInstance.Run(context.Background(), &RunRequest{
-		TrainEvalSetIDs:      []string{"train"},
-		ValidationEvalSetIDs: []string{"validation"},
-		MaxRounds:            1,
+	if assert.Len(t, losses, 1) && assert.Len(t, losses[0].TerminalLosses, 1) {
+		assert.Equal(t, "step_3", losses[0].TerminalLosses[0].StepID)
+		assert.Empty(t, losses[0].TerminalLosses[0].Severity)
+	}
+}
+
+func TestTraceTerminalStepIDsReturnsTraceTerminalSet(t *testing.T) {
+	stepIDs, err := traceTerminalStepIDs(&atrace.Trace{
+		Status: atrace.TraceStatusCompleted,
+		Steps: []atrace.Step{
+			{
+				StepID:       "step_1",
+				InvocationID: "root-inv",
+				NodeID:       "node_1",
+			},
+			{
+				StepID:             "step_2",
+				InvocationID:       "child-inv",
+				ParentInvocationID: "root-inv",
+				NodeID:             "node_1",
+				PredecessorStepIDs: []string{"step_1"},
+			},
+			{
+				StepID:             "step_3",
+				InvocationID:       "child-inv",
+				ParentInvocationID: "root-inv",
+				NodeID:             "node_1",
+				PredecessorStepIDs: []string{"step_1"},
+			},
+			{
+				StepID:       "step_4",
+				InvocationID: "root-inv",
+				NodeID:       "node_1",
+			},
+		},
 	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "missing step id")
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"step_2", "step_3", "step_4"}, stepIDs)
+}
+
+func TestLossExpandsMetricAcrossTraceTerminalSteps(t *testing.T) {
+	losses, err := (&engine{}).loss(&EvaluationResult{
+		EvalSets: []EvalSetResult{
+			{
+				EvalSetID: "train",
+				Cases: []CaseResult{
+					{
+						EvalSetID:  "train",
+						EvalCaseID: "case_1",
+						Trace: &atrace.Trace{
+							Status: atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{
+									StepID:       "step_1",
+									InvocationID: "invocation_1",
+									NodeID:       "node_1",
+								},
+								{
+									StepID:             "step_2",
+									InvocationID:       "invocation_1",
+									NodeID:             "node_1",
+									PredecessorStepIDs: []string{"step_1"},
+								},
+								{
+									StepID:             "step_3",
+									InvocationID:       "invocation_1",
+									NodeID:             "node_1",
+									PredecessorStepIDs: []string{"step_1"},
+								},
+							},
+						},
+						Metrics: []MetricResult{
+							{
+								MetricName: "quality",
+								Status:     status.EvalStatusFailed,
+								Reason:     "needs improvement",
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	if assert.Len(t, losses, 1) && assert.Len(t, losses[0].TerminalLosses, 2) {
+		assert.Equal(t, "step_2", losses[0].TerminalLosses[0].StepID)
+		assert.Equal(t, "step_3", losses[0].TerminalLosses[1].StepID)
+	}
 }
 
 func scriptedOutcome(evalSetID string, profileValue string) scriptedEvalOutcome {
@@ -741,8 +945,6 @@ func scriptedOutcome(evalSetID string, profileValue string) scriptedEvalOutcome 
 			score:             0.4,
 			metricStatus:      status.EvalStatusFailed,
 			reason:            "needs improvement",
-			stepID:            "step_1",
-			severity:          promptiter.LossSeverityP1,
 			appliedSurfaceIDs: []string{testSurfaceID},
 		}
 		if profileValue == "accepted prompt" {

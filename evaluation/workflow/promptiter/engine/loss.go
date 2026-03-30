@@ -39,20 +39,6 @@ func (e *engine) loss(result *EvaluationResult) ([]promptiter.CaseLoss, error) {
 				if metric.Status != status.EvalStatusFailed {
 					continue
 				}
-				if strings.TrimSpace(metric.StepID) == "" {
-					return nil, fmt.Errorf(
-						"metric %q for eval case %q is missing step id",
-						metric.MetricName,
-						evalCase.EvalCaseID,
-					)
-				}
-				if !isKnownLossSeverity(metric.Severity) {
-					return nil, fmt.Errorf(
-						"metric %q for eval case %q is missing valid severity",
-						metric.MetricName,
-						evalCase.EvalCaseID,
-					)
-				}
 				if strings.TrimSpace(metric.Reason) == "" {
 					return nil, fmt.Errorf(
 						"metric %q for eval case %q is missing loss reason",
@@ -60,14 +46,23 @@ func (e *engine) loss(result *EvaluationResult) ([]promptiter.CaseLoss, error) {
 						evalCase.EvalCaseID,
 					)
 				}
-				caseLoss.TerminalLosses = append(caseLoss.TerminalLosses, promptiter.TerminalLoss{
-					EvalSetID:  evalCase.EvalSetID,
-					EvalCaseID: evalCase.EvalCaseID,
-					MetricName: metric.MetricName,
-					Severity:   metric.Severity,
-					StepID:     metric.StepID,
-					Loss:       strings.TrimSpace(metric.Reason),
-				})
+				terminalStepIDs, err := traceTerminalStepIDs(evalCase.Trace)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"resolve terminal step for eval case %q: %w",
+						evalCase.EvalCaseID,
+						err,
+					)
+				}
+				for _, terminalStepID := range terminalStepIDs {
+					caseLoss.TerminalLosses = append(caseLoss.TerminalLosses, promptiter.TerminalLoss{
+						EvalSetID:  evalCase.EvalSetID,
+						EvalCaseID: evalCase.EvalCaseID,
+						MetricName: metric.MetricName,
+						StepID:     terminalStepID,
+						Loss:       strings.TrimSpace(metric.Reason),
+					})
+				}
 			}
 			if len(caseLoss.TerminalLosses) == 0 {
 				continue
@@ -93,14 +88,62 @@ func (e *engine) loss(result *EvaluationResult) ([]promptiter.CaseLoss, error) {
 	return losses, nil
 }
 
-func isKnownLossSeverity(severity promptiter.LossSeverity) bool {
-	switch severity {
-	case promptiter.LossSeverityP0,
-		promptiter.LossSeverityP1,
-		promptiter.LossSeverityP2,
-		promptiter.LossSeverityP3:
-		return true
-	default:
-		return false
+func traceTerminalStepIDs(trace *atrace.Trace) ([]string, error) {
+	if trace == nil {
+		return nil, errors.New("execution trace is nil")
 	}
+	if len(trace.Steps) == 0 {
+		return nil, errors.New("execution trace has no steps")
+	}
+	stepIndex := make(map[string]struct{}, len(trace.Steps))
+	stepOrder := make(map[string]int, len(trace.Steps))
+	referenced := make(map[string]struct{}, len(trace.Steps))
+	for _, step := range trace.Steps {
+		if step.StepID == "" {
+			return nil, errors.New("execution trace step id is empty")
+		}
+		if _, ok := stepIndex[step.StepID]; ok {
+			return nil, fmt.Errorf("duplicate execution trace step id %q", step.StepID)
+		}
+		stepIndex[step.StepID] = struct{}{}
+		stepOrder[step.StepID] = len(stepOrder)
+	}
+	for _, step := range trace.Steps {
+		for _, predecessorStepID := range step.PredecessorStepIDs {
+			if predecessorStepID == "" {
+				return nil, fmt.Errorf("execution trace step %q predecessor step id is empty", step.StepID)
+			}
+			if _, ok := stepIndex[predecessorStepID]; !ok {
+				return nil, fmt.Errorf(
+					"execution trace step %q references unknown predecessor step id %q",
+					step.StepID,
+					predecessorStepID,
+				)
+			}
+			referenced[predecessorStepID] = struct{}{}
+		}
+	}
+	terminalStepIDs := make(map[string]struct{})
+	for _, step := range trace.Steps {
+		if _, ok := referenced[step.StepID]; ok {
+			continue
+		}
+		terminalStepIDs[step.StepID] = struct{}{}
+	}
+	terminalIDs := sortStepIDs(terminalStepIDs, stepOrder)
+	if len(terminalIDs) == 0 {
+		return nil, errors.New("execution trace has no terminal step")
+	}
+	return terminalIDs, nil
+}
+
+func sortStepIDs(stepIDs map[string]struct{}, stepOrder map[string]int) []string {
+	ids := make([]string, 0, len(stepIDs))
+	for stepID := range stepIDs {
+		ids = append(ids, stepID)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		return stepOrder[ids[i]] < stepOrder[ids[j]]
+	})
+	return ids
 }
