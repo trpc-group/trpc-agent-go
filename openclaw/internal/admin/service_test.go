@@ -291,7 +291,9 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
-	require.Contains(t, body, "OpenClaw Admin")
+	require.Contains(t, body, "TRPC-CLAW admin")
+	require.Contains(t, body, "TRPC-CLAW")
+	require.Contains(t, body, "trpc-claw")
 	require.Contains(t, body, "/skills")
 	require.Contains(t, body, "127.0.0.1:8080")
 	require.Contains(t, body, "telegram")

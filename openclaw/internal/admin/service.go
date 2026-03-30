@@ -85,6 +85,10 @@ const (
 	browserProbeTimeout = 1500 * time.Millisecond
 
 	formatTimeLayout = "2006-01-02 15:04:05 MST"
+
+	adminBrandName     = "TRPC-CLAW"
+	adminBrandTitle    = "TRPC-CLAW admin"
+	adminRuntimePrefix = "trpc-claw"
 )
 
 type adminView string
@@ -1048,9 +1052,10 @@ func (s *Service) handleToggleSkill(
 		state = "enabled"
 	}
 	message := fmt.Sprintf(
-		"Saved %s as %s. Restart OpenClaw to apply runtime changes.",
+		"Saved %s as %s. Restart %s to apply runtime changes.",
 		name,
 		state,
+		adminBrandName,
 	)
 	if s.cfg.Skills != nil && s.cfg.Skills.SkillsRefreshable() {
 		message = fmt.Sprintf(
@@ -1654,6 +1659,21 @@ func browserEndpointSummary(view browserEndpointView) string {
 	return strings.Join(parts, ", ")
 }
 
+func displayAdminAppName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+	lower := strings.ToLower(trimmed)
+	if lower == "openclaw" {
+		return adminRuntimePrefix
+	}
+	if strings.HasPrefix(lower, "openclaw-") {
+		return adminRuntimePrefix + trimmed[len("openclaw"):]
+	}
+	return trimmed
+}
+
 func (s *Service) resolveDebugFile(
 	tracePath string,
 	name string,
@@ -1748,6 +1768,7 @@ var adminPage = template.Must(
 	template.New("admin").Funcs(template.FuncMap{
 		"formatTime":             formatTime,
 		"browserEndpointSummary": browserEndpointSummary,
+		"displayAdminAppName":    displayAdminAppName,
 	}).Parse(adminPageHTML),
 )
 
@@ -1757,7 +1778,7 @@ const adminPageHTML = `<!doctype html>
   <meta charset="utf-8">
   <meta http-equiv="refresh" content="{{.RefreshSeconds}}">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OpenClaw Admin</title>
+  <title>TRPC-CLAW admin</title>
   <style>
     :root {
       color-scheme: light;
@@ -2402,12 +2423,12 @@ const adminPageHTML = `<!doctype html>
   <div class="app-shell">
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <div class="sidebar-mark">OC</div>
+        <div class="sidebar-mark">TC</div>
         <div>
           <div class="sidebar-eyebrow">control</div>
-          <div class="sidebar-title">OpenClaw</div>
+          <div class="sidebar-title">TRPC-CLAW</div>
           {{if .Snapshot.AppName}}
-          <div class="sidebar-subtle">{{.Snapshot.AppName}}</div>
+          <div class="sidebar-subtle">{{displayAdminAppName .Snapshot.AppName}}</div>
           {{end}}
         </div>
       </div>
@@ -2429,7 +2450,7 @@ const adminPageHTML = `<!doctype html>
     <main>
       <div class="page-wrap">
         <header class="page-header">
-          <p class="page-kicker">OpenClaw Admin</p>
+          <p class="page-kicker">TRPC-CLAW admin</p>
           <h1>{{.PageTitle}}</h1>
           <p class="subtle">{{.PageSummary}}</p>
         </header>
@@ -2489,7 +2510,7 @@ const adminPageHTML = `<!doctype html>
         <h2>Runtime</h2>
         <dl class="meta">
           <dt>App</dt>
-          <dd>{{.Snapshot.AppName}}</dd>
+          <dd>{{displayAdminAppName .Snapshot.AppName}}</dd>
           <dt>Agent Type</dt>
           <dd>
             {{if .Snapshot.AgentType}}
