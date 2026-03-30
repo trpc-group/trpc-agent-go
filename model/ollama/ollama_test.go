@@ -65,6 +65,68 @@ func Test_Model_Info(t *testing.T) {
 	assert.Equal(t, "llama3.2:latest", info.Name)
 }
 
+func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
+	t.Run("request callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatRequestCallback: func(ctx context.Context, req *api.ChatRequest) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatRequestCallback(context.Background(), &api.ChatRequest{})
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("response callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatResponseCallback: func(ctx context.Context, req *api.ChatRequest, resp *api.ChatResponse) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatResponseCallback(context.Background(), &api.ChatRequest{}, &api.ChatResponse{})
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("chunk callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatChunkCallback: func(ctx context.Context, req *api.ChatRequest, chunk *api.ChatResponse) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatChunkCallback(context.Background(), &api.ChatRequest{}, &api.ChatResponse{})
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("stream complete callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatStreamCompleteCallback: func(ctx context.Context, req *api.ChatRequest, err error) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatStreamCompleteCallback(context.Background(), &api.ChatRequest{}, nil)
+		})
+		assert.True(t, callbackCalled)
+	})
+}
+
 // TestNew tests the constructor with various options.
 func TestNew(t *testing.T) {
 	tests := []struct {
@@ -589,14 +651,15 @@ func Test_HandleStreamingResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var chunkCalled, streamCompleteCalled bool
+	var chunkCalled bool
+	streamCompleteCalled := make(chan struct{})
 	m := New("gpt-oss:20b",
 		WithHost(srv.URL),
 		WithChatChunkCallback(func(ctx context.Context, req *api.ChatRequest, chunk *api.ChatResponse) {
 			chunkCalled = true
 		}),
 		WithChatStreamCompleteCallback(func(ctx context.Context, req *api.ChatRequest, err error) {
-			streamCompleteCalled = true
+			close(streamCompleteCalled)
 		}),
 	)
 
@@ -624,7 +687,12 @@ func Test_HandleStreamingResponse(t *testing.T) {
 		assert.Equal(t, responseID, resp.ID)
 		if resp.Done {
 			final = resp
-			time.Sleep(time.Second)
+			select {
+			case <-streamCompleteCalled:
+				// Success.
+			default:
+				t.Fatal("stream complete callback must run before final response is emitted")
+			}
 			break
 		}
 		if resp.IsPartial {
@@ -637,7 +705,145 @@ func Test_HandleStreamingResponse(t *testing.T) {
 	assert.NotEmpty(t, responseID)
 	assert.True(t, final.Done)
 	assert.True(t, chunkCalled)
-	assert.True(t, streamCompleteCalled)
+	select {
+	case <-streamCompleteCalled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
+}
+
+// Test_HandleStreamingResponseWithoutFinalChunk tests a stream that ends
+// without a terminal done chunk.
+func Test_HandleStreamingResponseWithoutFinalChunk(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/chat") && !strings.HasPrefix(r.URL.Path, "/api/show") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/show" {
+			resp := map[string]any{
+				"model_info": map[string]any{
+					"gptoss.context_length": 131072,
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		require.True(t, ok)
+		chunk := map[string]any{
+			"model":      "llama3.2:latest",
+			"created_at": "2024-01-01T00:00:00Z",
+			"message":    map[string]any{"role": "assistant", "content": "Hello"},
+			"done":       false,
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(chunk))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	streamCompleteCalled := make(chan error, 1)
+	m := New("gpt-oss:20b",
+		WithHost(srv.URL),
+		WithChatStreamCompleteCallback(func(ctx context.Context,
+			req *api.ChatRequest, err error) {
+			streamCompleteCalled <- err
+		}),
+	)
+
+	const responseID = "ollama-stream-no-final"
+	responseChan := make(chan *model.Response, 2)
+	m.handleStreamingResponse(
+		context.Background(),
+		api.ChatRequest{},
+		responseID,
+		responseChan,
+	)
+	close(responseChan)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.Len(t, responses, 1)
+	assert.Equal(t, responseID, responses[0].ID)
+	assert.True(t, responses[0].IsPartial)
+	assert.False(t, responses[0].Done)
+	select {
+	case streamErr := <-streamCompleteCalled:
+		assert.NoError(t, streamErr)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
+}
+
+// Test_HandleStreamingResponseCallbackOnContextCancel tests callback timing
+// when streaming aborts with context cancellation.
+func Test_HandleStreamingResponseCallbackOnContextCancel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/chat") && !strings.HasPrefix(r.URL.Path, "/api/show") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/show" {
+			resp := map[string]any{
+				"model_info": map[string]any{
+					"gptoss.context_length": 131072,
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		require.True(t, ok)
+		chunk := map[string]any{
+			"model":      "llama3.2:latest",
+			"created_at": "2024-01-01T00:00:00Z",
+			"message":    map[string]any{"role": "assistant", "content": "Hello"},
+			"done":       false,
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(chunk))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	streamCompleteCalled := make(chan error, 1)
+	m := New("gpt-oss:20b",
+		WithHost(srv.URL),
+		WithChatStreamCompleteCallback(func(ctx context.Context,
+			req *api.ChatRequest, err error) {
+			streamCompleteCalled <- err
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	const responseID = "ollama-stream-canceled"
+	responseChan := make(chan *model.Response)
+	m.handleStreamingResponse(ctx, api.ChatRequest{}, responseID, responseChan)
+
+	select {
+	case streamErr := <-streamCompleteCalled:
+		require.ErrorIs(t, streamErr, context.Canceled)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
+	select {
+	case resp := <-responseChan:
+		t.Fatalf("unexpected response: %#v", resp)
+	case <-time.After(100 * time.Millisecond):
+		// no response after cancellation, as expected
+	}
 }
 
 // Test_HandleErrorResponse tests error response handling.
