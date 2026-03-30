@@ -287,6 +287,9 @@ func (s *Service) addEvent(
 	key session.Key,
 	evt *event.Event,
 ) error {
+	s.stateWriteMu.Lock()
+	defer s.stateWriteMu.Unlock()
+
 	now := time.Now().UTC()
 
 	var (
@@ -404,6 +407,9 @@ func (s *Service) addTrackEvent(
 	key session.Key,
 	trackEvent *session.TrackEvent,
 ) error {
+	s.stateWriteMu.Lock()
+	defer s.stateWriteMu.Unlock()
+
 	now := time.Now().UTC()
 
 	var (
