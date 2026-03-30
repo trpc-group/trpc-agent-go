@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,6 +53,12 @@ type staticGraphAgentModel struct {
 type emptyIDGraphAgentModel struct {
 	name    string
 	content string
+}
+
+type streamingGraphAgentModel struct {
+	name   string
+	deltas []string
+	final  string
 }
 
 func (m *staticGraphAgentModel) GenerateContent(
@@ -93,6 +100,35 @@ func (m *emptyIDGraphAgentModel) GenerateContent(
 }
 
 func (m *emptyIDGraphAgentModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *streamingGraphAgentModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, len(m.deltas)+1)
+	for _, delta := range m.deltas {
+		ch <- &model.Response{
+			ID:        "graphagent-response-" + m.name,
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.NewAssistantMessage(delta),
+			}},
+		}
+	}
+	ch <- &model.Response{
+		ID:   "graphagent-response-" + m.name,
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage(m.final),
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *streamingGraphAgentModel) Info() model.Info {
 	return model.Info{Name: m.name}
 }
 
@@ -2087,6 +2123,160 @@ func TestGraphAgent_DisableGraphCompletionEvent_GraphEmitFinalModelResponses_Aft
 	require.Equal(t, "answer", fullRespEvent.Response.Choices[0].Message.Content)
 }
 
+func TestGraphAgent_GraphTerminalMessagesOnly_DefaultCompatibility(
+	t *testing.T,
+) {
+	ga := newSerialTerminalMessageGraphAgent(t, "", "")
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("test")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithGraphEmitFinalModelResponses(true),
+		)),
+	)
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	var sawFirstChunk bool
+	var sawFinalChunk bool
+	firstPrefix := scopePrefix(ga.Info().Name, "first")
+	finalPrefix := scopePrefix(ga.Info().Name, "final")
+	for evt := range events {
+		if !evt.IsPartial || evt.Response == nil ||
+			len(evt.Response.Choices) == 0 {
+			continue
+		}
+		if hasFilterPrefix(evt.FilterKey, firstPrefix) &&
+			evt.Response.Choices[0].Delta.Content == "draft" {
+			sawFirstChunk = true
+		}
+		if hasFilterPrefix(evt.FilterKey, finalPrefix) &&
+			evt.Response.Choices[0].Delta.Content == "answer" {
+			sawFinalChunk = true
+		}
+	}
+	require.True(t, sawFirstChunk)
+	require.True(t, sawFinalChunk)
+}
+
+func TestGraphAgent_GraphTerminalMessagesOnly_HidesIntermediateAgentNodes(
+	t *testing.T,
+) {
+	firstScope := "scopes/first"
+	finalScope := "scopes/final"
+	ga := newSerialTerminalMessageGraphAgent(t, firstScope, finalScope)
+	firstNode, ok := ga.graph.Node("first")
+	require.True(t, ok)
+	require.False(t, isTerminalMessageNode(ga.graph, firstNode))
+	finalNode, ok := ga.graph.Node("final")
+	require.True(t, ok)
+	require.True(t, isTerminalMessageNode(ga.graph, finalNode))
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("test")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithGraphEmitFinalModelResponses(true),
+			agent.WithGraphTerminalMessagesOnly(true),
+		)),
+	)
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	var sawFirstChunk bool
+	var sawFinalChunk bool
+	var firstChunkFilterKey string
+	var firstChunkAuthor string
+	firstPrefix := scopePrefix(ga.Info().Name, firstScope)
+	finalPrefix := scopePrefix(ga.Info().Name, finalScope)
+	for evt := range events {
+		if !evt.IsPartial || evt.Response == nil ||
+			len(evt.Response.Choices) == 0 {
+			continue
+		}
+		if hasFilterPrefix(evt.FilterKey, firstPrefix) &&
+			evt.Response.Choices[0].Delta.Content == "draft" {
+			sawFirstChunk = true
+			firstChunkFilterKey = evt.FilterKey
+			firstChunkAuthor = evt.Author
+		}
+		if hasFilterPrefix(evt.FilterKey, finalPrefix) &&
+			evt.Response.Choices[0].Delta.Content == "answer" {
+			sawFinalChunk = true
+		}
+	}
+	require.Falsef(
+		t,
+		sawFirstChunk,
+		"first chunk filter=%q author=%q",
+		firstChunkFilterKey,
+		firstChunkAuthor,
+	)
+	require.True(t, sawFinalChunk)
+}
+
+func TestGraphAgent_GraphTerminalMessagesOnly_KeepsParallelTerminalNodes(
+	t *testing.T,
+) {
+	workerA := newStreamingChildGraphAgent(t, "final_a", "A")
+	workerB := newStreamingChildGraphAgent(t, "final_b", "B")
+
+	parentGraph, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddNode(
+			"start",
+			func(ctx context.Context, state graph.State) (any, error) {
+				return graph.State{}, nil
+			},
+		).
+		AddAgentNode("final_a").
+		AddAgentNode("final_b").
+		AddEdge("start", "final_a").
+		AddEdge("start", "final_b").
+		SetEntryPoint("start").
+		SetFinishPoint("final_a").
+		SetFinishPoint("final_b").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New(
+		"parallel-terminal-message-filter",
+		parentGraph,
+		WithSubAgents([]agent.Agent{workerA, workerB}),
+	)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("test")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithGraphEmitFinalModelResponses(true),
+			agent.WithGraphTerminalMessagesOnly(true),
+		)),
+	)
+
+	events, err := ga.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	var sawA bool
+	var sawB bool
+	prefixA := scopePrefix(ga.Info().Name, "final_a")
+	prefixB := scopePrefix(ga.Info().Name, "final_b")
+	for evt := range events {
+		if !evt.IsPartial || evt.Response == nil ||
+			len(evt.Response.Choices) == 0 {
+			continue
+		}
+		if hasFilterPrefix(evt.FilterKey, prefixA) &&
+			evt.Response.Choices[0].Delta.Content == "A" {
+			sawA = true
+		}
+		if hasFilterPrefix(evt.FilterKey, prefixB) &&
+			evt.Response.Choices[0].Delta.Content == "B" {
+			sawB = true
+		}
+	}
+	require.True(t, sawA)
+	require.True(t, sawB)
+}
+
 func TestGraphAgent_DisableGraphCompletionEvent_WithAfterCallbackCustomResponse(t *testing.T) {
 	g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
 		AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
@@ -3148,6 +3338,93 @@ func TestResolveGraphAgentErrorType(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func newStreamingChildGraphAgent(
+	t *testing.T,
+	name string,
+	final string,
+) *GraphAgent {
+	t.Helper()
+
+	g, err := graph.NewStateGraph(graph.MessagesStateSchema()).
+		AddLLMNode(
+			"child_llm",
+			&streamingGraphAgentModel{
+				name:   name,
+				deltas: []string{final},
+				final:  final,
+			},
+			"i1",
+			nil,
+		).
+		SetEntryPoint("child_llm").
+		SetFinishPoint("child_llm").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New(name, g)
+	require.NoError(t, err)
+	return ga
+}
+
+func newSerialTerminalMessageGraphAgent(
+	t *testing.T,
+	firstScope string,
+	finalScope string,
+) *GraphAgent {
+	t.Helper()
+
+	firstAgent := newStreamingChildGraphAgent(t, "first", "draft")
+	finalAgent := newStreamingChildGraphAgent(t, "final", "answer")
+
+	builder := graph.NewStateGraph(graph.MessagesStateSchema())
+	firstOpts := []graph.Option{}
+	if firstScope != "" {
+		firstOpts = append(firstOpts, graph.WithSubgraphEventScope(firstScope))
+	}
+	finalOpts := []graph.Option{
+		graph.WithSubgraphInputFromLastResponse(),
+	}
+	if finalScope != "" {
+		finalOpts = append(finalOpts, graph.WithSubgraphEventScope(finalScope))
+	}
+	parentGraph, err := builder.
+		AddAgentNode("first", firstOpts...).
+		AddAgentNode("final", finalOpts...).
+		AddEdge("first", "final").
+		SetEntryPoint("first").
+		SetFinishPoint("final").
+		Compile()
+	require.NoError(t, err)
+
+	ga, err := New(
+		"serial-terminal-message-filter",
+		parentGraph,
+		WithSubAgents([]agent.Agent{firstAgent, finalAgent}),
+	)
+	require.NoError(t, err)
+	return ga
+}
+
+func scopePrefix(root string, scope string) string {
+	if root == "" {
+		return scope
+	}
+	return root + agent.EventFilterKeyDelimiter + scope
+}
+
+func hasFilterPrefix(filterKey string, prefix string) bool {
+	if filterKey == prefix {
+		return true
+	}
+	if filterKey == "" || prefix == "" {
+		return false
+	}
+	return strings.HasPrefix(
+		filterKey,
+		prefix+agent.EventFilterKeyDelimiter,
+	)
 }
 
 func normalizeGraphAgentTraceForAssertion(executionTrace *atrace.Trace) atrace.Trace {

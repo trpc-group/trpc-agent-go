@@ -372,7 +372,9 @@ func (ga *GraphAgent) runWithCallbacks(ctx context.Context, invocation *agent.In
 	if err != nil {
 		return nil, err
 	}
-	if ga.agentCallbacks != nil || shouldWrapHiddenCompletion {
+	if ga.agentCallbacks != nil ||
+		shouldWrapHiddenCompletion ||
+		invocation.RunOptions.GraphTerminalMessagesOnly {
 		return ga.wrapEventChannel(
 			ctx,
 			invocation,
@@ -640,6 +642,10 @@ func (ga *GraphAgent) forwardWrappedEvents(
 ) (*event.Event, bool) {
 	var fullRespEvent *event.Event
 	var emittedAssistantResponseIDs map[string]struct{}
+	terminalMessageFilter := newTerminalMessageFilter(
+		invocation,
+		ga.graph,
+	)
 	visibleCtx := graph.WithoutGraphCompletionCapture(ctx)
 	for evt := range originalChan {
 		outEvt := evt
@@ -671,6 +677,9 @@ func (ga *GraphAgent) forwardWrappedEvents(
 				) {
 				outEvt = visibleEvent
 			}
+		}
+		if !terminalMessageFilter.Allows(outEvt) {
+			continue
 		}
 		if err := event.EmitEvent(ctx, wrappedChan, outEvt); err != nil {
 			return nil, false

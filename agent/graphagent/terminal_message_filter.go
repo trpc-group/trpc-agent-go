@@ -1,0 +1,187 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package graphagent
+
+import (
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
+)
+
+type terminalMessageFilter struct {
+	enabled               bool
+	llmNodeAuthors        map[string]struct{}
+	terminalLLMAuthors    map[string]struct{}
+	agentScopePrefixes    map[string]struct{}
+	terminalScopePrefixes map[string]struct{}
+}
+
+func newTerminalMessageFilter(
+	invocation *agent.Invocation,
+	g *graph.Graph,
+) terminalMessageFilter {
+	if invocation == nil ||
+		!invocation.RunOptions.GraphTerminalMessagesOnly ||
+		g == nil {
+		return terminalMessageFilter{}
+	}
+
+	filter := terminalMessageFilter{
+		enabled:               true,
+		llmNodeAuthors:        make(map[string]struct{}),
+		terminalLLMAuthors:    make(map[string]struct{}),
+		agentScopePrefixes:    make(map[string]struct{}),
+		terminalScopePrefixes: make(map[string]struct{}),
+	}
+	rootFilterKey := terminalMessageRootFilterKey(invocation)
+	for _, node := range g.Nodes() {
+		if node == nil {
+			continue
+		}
+		switch node.Type {
+		case graph.NodeTypeLLM:
+			filter.llmNodeAuthors[node.ID] = struct{}{}
+			if isTerminalMessageNode(g, node) {
+				filter.terminalLLMAuthors[node.ID] = struct{}{}
+			}
+		case graph.NodeTypeAgent:
+			prefix := terminalAgentScopePrefix(rootFilterKey, node)
+			if prefix == "" {
+				continue
+			}
+			filter.agentScopePrefixes[prefix] = struct{}{}
+			if isTerminalMessageNode(g, node) {
+				filter.terminalScopePrefixes[prefix] = struct{}{}
+			}
+		}
+	}
+	return filter
+}
+
+func terminalMessageRootFilterKey(
+	invocation *agent.Invocation,
+) string {
+	if invocation == nil {
+		return ""
+	}
+	if filterKey := invocation.GetEventFilterKey(); filterKey != "" {
+		return filterKey
+	}
+	return invocation.AgentName
+}
+
+func (f terminalMessageFilter) Allows(evt *event.Event) bool {
+	if !f.enabled || !shouldFilterTerminalMessageEvent(evt) {
+		return true
+	}
+
+	if prefix, ok := f.matchAgentScopePrefix(evt.FilterKey); ok {
+		_, ok = f.terminalScopePrefixes[prefix]
+		return ok
+	}
+
+	if _, ok := f.llmNodeAuthors[evt.Author]; !ok {
+		return true
+	}
+	_, ok := f.terminalLLMAuthors[evt.Author]
+	return ok
+}
+
+func (f terminalMessageFilter) matchAgentScopePrefix(
+	filterKey string,
+) (string, bool) {
+	if filterKey == "" {
+		return "", false
+	}
+	longest := ""
+	for prefix := range f.agentScopePrefixes {
+		if !matchesFilterPrefix(filterKey, prefix) {
+			continue
+		}
+		if len(prefix) > len(longest) {
+			longest = prefix
+		}
+	}
+	if longest == "" {
+		return "", false
+	}
+	return longest, true
+}
+
+func terminalAgentScopePrefix(rootFilterKey string, node *graph.Node) string {
+	if node == nil {
+		return ""
+	}
+	scope := node.AgentEventScope()
+	if scope == "" {
+		scope = node.ID
+	}
+	if scope == "" {
+		return ""
+	}
+	if rootFilterKey == "" {
+		return scope
+	}
+	return rootFilterKey + agent.EventFilterKeyDelimiter + scope
+}
+
+func isTerminalMessageNode(g *graph.Graph, node *graph.Node) bool {
+	if g == nil || node == nil {
+		return false
+	}
+	for _, edge := range g.Edges(node.ID) {
+		if edge == nil ||
+			edge.From == graph.Start ||
+			edge.To == "" ||
+			edge.To == graph.End {
+			continue
+		}
+		return false
+	}
+	for _, target := range node.EndTargets() {
+		if target == "" || target == graph.End {
+			continue
+		}
+		return false
+	}
+	if conditionalEdge, ok := g.ConditionalEdge(node.ID); ok &&
+		conditionalEdge != nil {
+		for _, target := range conditionalEdge.PathMap {
+			if target == "" || target == graph.End {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+func shouldFilterTerminalMessageEvent(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil {
+		return false
+	}
+	if graph.IsVisibleGraphCompletionEvent(evt) {
+		return true
+	}
+	return evt.IsPartial || len(evt.Response.Choices) > 0
+}
+
+func matchesFilterPrefix(filterKey string, prefix string) bool {
+	if filterKey == prefix {
+		return true
+	}
+	if filterKey == "" || prefix == "" {
+		return false
+	}
+	prefixWithDelimiter := prefix + agent.EventFilterKeyDelimiter
+	return strings.HasPrefix(filterKey, prefixWithDelimiter)
+}
