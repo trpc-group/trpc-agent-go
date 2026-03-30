@@ -196,7 +196,9 @@ func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 	}
 }
 
-// WithChatStreamCompleteCallback sets the function to be called when streaming is completed.
+// WithChatStreamCompleteCallback sets the function to be called when
+// streaming is completed. The callback runs synchronously before the
+// terminal streaming result is surfaced to the caller.
 // Called for both successful and failed streaming completions.
 func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	return func(opts *options) {
