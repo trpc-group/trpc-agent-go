@@ -43,6 +43,9 @@ type stubSkillsProvider struct {
 	report        ocskills.StatusReport
 	err           error
 	configPath    string
+	refreshable   bool
+	refreshCount  int
+	refreshErr    error
 	lastConfigKey string
 	lastEnabled   bool
 	setErr        error
@@ -61,6 +64,21 @@ func (p *stubSkillsProvider) SkillsConfigPath() string {
 		return ""
 	}
 	return p.configPath
+}
+
+func (p *stubSkillsProvider) SkillsRefreshable() bool {
+	if p == nil {
+		return false
+	}
+	return p.refreshable
+}
+
+func (p *stubSkillsProvider) RefreshSkills() error {
+	if p == nil {
+		return nil
+	}
+	p.refreshCount++
+	return p.refreshErr
 }
 
 func (p *stubSkillsProvider) SetSkillEnabled(
@@ -277,7 +295,8 @@ func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
 	svc := New(Config{
 		AppName: "openclaw",
 		Skills: &stubSkillsProvider{
-			configPath: "/tmp/openclaw.yaml",
+			configPath:  "/tmp/openclaw.yaml",
+			refreshable: true,
 			report: ocskills.StatusReport{
 				Skills: []ocskills.StatusEntry{{
 					Name:        "weather-probe",
@@ -303,6 +322,7 @@ func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
 	require.Contains(t, body, "Skills Inventory")
 	require.Contains(t, body, "weather-probe")
 	require.Contains(t, body, "/api/skills/status")
+	require.Contains(t, body, "/api/skills/refresh")
 	require.Contains(t, body, "/api/skills/toggle")
 	require.Contains(t, body, "/tmp/openclaw.yaml")
 	require.Contains(t, body, "OPENAI_API_KEY")
@@ -338,7 +358,8 @@ func TestServiceToggleSkillEndpoint(t *testing.T) {
 	t.Parallel()
 
 	provider := &stubSkillsProvider{
-		configPath: "/tmp/openclaw.yaml",
+		configPath:  "/tmp/openclaw.yaml",
+		refreshable: true,
 	}
 	svc := New(Config{Skills: provider})
 
@@ -366,7 +387,67 @@ func TestServiceToggleSkillEndpoint(t *testing.T) {
 	require.Contains(
 		t,
 		loc.Query().Get(queryNotice),
-		"Restart OpenClaw to apply runtime changes.",
+		"Changes apply on the next turn.",
+	)
+}
+
+func TestServiceRefreshSkillsEndpoint(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubSkillsProvider{refreshable: true}
+	svc := New(Config{Skills: provider})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeSkillsRefresh,
+		strings.NewReader("return_to=skills-admin"),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Equal(t, 1, provider.refreshCount)
+
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(t, "skills-admin", loc.Fragment)
+	require.Contains(
+		t,
+		loc.Query().Get(queryNotice),
+		"Refreshed skills.",
+	)
+}
+
+func TestServiceRefreshSkillsEndpointRequiresLiveRepo(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Skills: &stubSkillsProvider{},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeSkillsRefresh,
+		strings.NewReader("return_to=skills-admin"),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"live skills repository is not available",
+		loc.Query().Get(queryError),
 	)
 }
 

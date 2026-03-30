@@ -71,6 +71,13 @@ func BuildStatus(roots []string, opts ...Option) (StatusReport, error) {
 }
 
 func (r *Repository) Status() StatusReport {
+	if r == nil {
+		return StatusReport{}
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	if r == nil || r.base == nil {
 		return StatusReport{}
 	}

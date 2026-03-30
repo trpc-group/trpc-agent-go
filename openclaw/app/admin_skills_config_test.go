@@ -82,3 +82,82 @@ func TestAdminSkillsProviderSetSkillEnabled_UpdatesMemory(t *testing.T) {
 	require.NotNil(t, provider.skillConfigs["weather-api"].Enabled)
 	require.False(t, *provider.skillConfigs["weather-api"].Enabled)
 }
+
+func TestAdminSkillsProviderSetSkillEnabled_UpdatesLiveRepo(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "openclaw.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("app_name: demo\n"), 0o600))
+
+	root := t.TempDir()
+	writeTestSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+metadata:
+  openclaw:
+    skillKey: "weather-api"
+---
+
+# weather-probe
+`)
+
+	repo, err := ocskills.NewRepository([]string{root})
+	require.NoError(t, err)
+
+	provider := &adminSkillsProvider{
+		configPath: path,
+		repo:       repo,
+	}
+
+	require.NoError(t, provider.SetSkillEnabled("weather-api", false))
+
+	report, err := provider.SkillsStatus()
+	require.NoError(t, err)
+	require.Len(t, report.Skills, 1)
+	require.True(t, report.Skills[0].Disabled)
+	require.False(t, report.Skills[0].Eligible)
+	require.Equal(t, "disabled by config", report.Skills[0].Reason)
+}
+
+func TestAdminSkillsProviderRefreshSkills_UpdatesLiveRepo(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repo, err := ocskills.NewRepository([]string{root})
+	require.NoError(t, err)
+
+	provider := &adminSkillsProvider{
+		repo: repo,
+	}
+
+	report, err := provider.SkillsStatus()
+	require.NoError(t, err)
+	require.Empty(t, report.Skills)
+
+	writeTestSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+---
+
+# weather-probe
+`)
+
+	require.NoError(t, provider.RefreshSkills())
+
+	report, err = provider.SkillsStatus()
+	require.NoError(t, err)
+	require.Len(t, report.Skills, 1)
+	require.Equal(t, "weather-probe", report.Skills[0].Name)
+}
+
+func writeTestSkill(t *testing.T, root, name, body string) {
+	t.Helper()
+
+	dir := filepath.Join(root, name)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "SKILL.md"),
+		[]byte(body),
+		0o644,
+	))
+}

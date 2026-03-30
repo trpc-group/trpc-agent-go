@@ -32,6 +32,7 @@ const (
 
 	routeStatusJSON        = "/api/status"
 	routeSkillsJSON        = "/api/skills/status"
+	routeSkillsRefresh     = "/api/skills/refresh"
 	routeSkillToggle       = "/api/skills/toggle"
 	routeJobsJSON          = "/api/cron/jobs"
 	routeJobRun            = "/api/cron/jobs/run"
@@ -156,6 +157,8 @@ type BrowserManagedStatusProvider interface {
 type SkillsStatusProvider interface {
 	SkillsStatus() (ocskills.StatusReport, error)
 	SkillsConfigPath() string
+	SkillsRefreshable() bool
+	RefreshSkills() error
 	SetSkillEnabled(configKey string, enabled bool) error
 }
 
@@ -222,6 +225,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeIndex, s.handleIndex)
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
+	mux.HandleFunc(routeSkillsRefresh, s.handleRefreshSkills)
 	mux.HandleFunc(routeSkillToggle, s.handleToggleSkill)
 	mux.HandleFunc(routeJobsJSON, s.handleJobsJSON)
 	mux.HandleFunc(routeJobRun, s.handleRunJob)
@@ -359,6 +363,7 @@ type skillsStatus struct {
 	Enabled         bool              `json:"enabled"`
 	Error           string            `json:"error,omitempty"`
 	Writable        bool              `json:"writable"`
+	Refreshable     bool              `json:"refreshable"`
 	ConfigPath      string            `json:"config_path,omitempty"`
 	TotalCount      int               `json:"total_count"`
 	ReadyCount      int               `json:"ready_count"`
@@ -492,10 +497,11 @@ func (s *Service) skillsStatus() skillsStatus {
 	}
 
 	out := skillsStatus{
-		Enabled:    true,
-		Writable:   strings.TrimSpace(s.cfg.Skills.SkillsConfigPath()) != "",
-		ConfigPath: strings.TrimSpace(s.cfg.Skills.SkillsConfigPath()),
-		TotalCount: len(report.Skills),
+		Enabled:     true,
+		Writable:    strings.TrimSpace(s.cfg.Skills.SkillsConfigPath()) != "",
+		Refreshable: s.cfg.Skills.SkillsRefreshable(),
+		ConfigPath:  strings.TrimSpace(s.cfg.Skills.SkillsConfigPath()),
+		TotalCount:  len(report.Skills),
 	}
 
 	bundledSkills := make([]skillView, 0, len(report.Skills))
@@ -799,6 +805,44 @@ func (s *Service) handleSkillsJSON(
 	writeJSON(w, http.StatusOK, s.skillsStatus())
 }
 
+func (s *Service) handleRefreshSkills(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	returnTo := strings.TrimSpace(r.FormValue(formReturnTo))
+	if s.cfg.Skills == nil || !s.cfg.Skills.SkillsRefreshable() {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			"live skills repository is not available",
+			returnTo,
+		)
+		return
+	}
+	if err := s.cfg.Skills.RefreshSkills(); err != nil {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			err.Error(),
+			returnTo,
+		)
+		return
+	}
+	s.redirectWithMessageAt(
+		w,
+		r,
+		queryNotice,
+		"Refreshed skills. New or removed skill folders will be available on the next turn.",
+		returnTo,
+	)
+}
+
 func (s *Service) handleToggleSkill(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -821,15 +865,23 @@ func (s *Service) handleToggleSkill(
 	if enabled {
 		state = "enabled"
 	}
+	message := fmt.Sprintf(
+		"Saved %s as %s. Restart OpenClaw to apply runtime changes.",
+		name,
+		state,
+	)
+	if s.cfg.Skills != nil && s.cfg.Skills.SkillsRefreshable() {
+		message = fmt.Sprintf(
+			"Saved %s as %s. Changes apply on the next turn.",
+			name,
+			state,
+		)
+	}
 	s.redirectWithMessageAt(
 		w,
 		r,
 		queryNotice,
-		fmt.Sprintf(
-			"Saved %s as %s. Restart OpenClaw to apply runtime changes.",
-			name,
-			state,
-		),
+		message,
 		returnTo,
 	)
 }
@@ -1630,24 +1682,81 @@ const adminPageHTML = `<!doctype html>
       color: white;
     }
     .skills-controls {
-      display: flex;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px 16px;
       align-items: center;
-      gap: 12px;
-      margin-top: 16px;
+      margin-top: 18px;
+    }
+    .skills-search-wrap {
+      min-width: 0;
     }
     .skills-controls input {
-      flex: 1 1 260px;
-      min-width: 220px;
+      width: 100%;
       border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 10px 14px;
+      padding: 12px 16px;
       font: inherit;
       background: var(--panel-strong);
       color: var(--ink);
     }
+    .skills-toolbar-side {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+    .skills-shown {
+      color: var(--muted);
+      font-weight: 700;
+      white-space: nowrap;
+    }
     .skills-config-note {
       margin-top: 12px;
+    }
+    .skills-header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 18px;
+      align-items: flex-end;
+      justify-content: space-between;
+    }
+    .skills-header-copy {
+      max-width: 820px;
+    }
+    .skills-lead {
+      margin: 8px 0 0;
+      color: var(--muted);
+      max-width: 700px;
+    }
+    .skills-meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+      align-items: center;
+    }
+    .skills-meta-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding: 6px 11px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(15, 111, 97, 0.04);
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .skills-meta-pill code {
+      background: rgba(15, 111, 97, 0.08);
+    }
+    .skills-meta-action {
+      margin: 0;
+    }
+    .skills-meta-action button {
+      padding: 7px 12px;
+      font-size: 14px;
     }
     .skills-group {
       margin-top: 18px;
@@ -1663,21 +1772,37 @@ const adminPageHTML = `<!doctype html>
       border: 1px solid var(--line);
       border-radius: 18px;
       background: var(--panel-strong);
-      padding: 14px 16px;
       margin-top: 12px;
+      overflow: hidden;
+      transition: box-shadow 140ms ease, border-color 140ms ease;
+    }
+    .skill-card[open] {
+      border-color: rgba(15, 111, 97, 0.28);
+      box-shadow: 0 14px 28px rgba(35, 29, 22, 0.08);
     }
     .skill-card summary {
       list-style: none;
       cursor: pointer;
+      padding: 16px 18px;
     }
     .skill-card summary::-webkit-details-marker {
       display: none;
     }
-    .skill-title {
+    .skill-main {
       display: flex;
-      align-items: center;
       justify-content: space-between;
-      gap: 14px;
+      align-items: flex-start;
+      gap: 18px;
+    }
+    .skill-copy {
+      min-width: 0;
+      flex: 1 1 auto;
+    }
+    .skill-headline {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
     }
     .skill-name {
       display: flex;
@@ -1699,16 +1824,19 @@ const adminPageHTML = `<!doctype html>
     .skill-badges {
       display: flex;
       flex-wrap: wrap;
-      justify-content: flex-end;
       gap: 8px;
+    }
+    .skill-badges.inline {
+      margin-top: 10px;
     }
     .skill-summary-side {
       display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: flex-end;
-      gap: 14px;
+      flex-direction: column;
+      align-items: flex-end;
+      justify-content: flex-start;
+      gap: 8px;
       flex: 0 0 auto;
+      min-width: 72px;
     }
     .skill-badge {
       border-radius: 999px;
@@ -1739,22 +1867,34 @@ const adminPageHTML = `<!doctype html>
       border-color: rgba(95, 87, 77, 0.18);
       background: rgba(95, 87, 77, 0.08);
     }
-    .skill-note {
-      margin-top: 8px;
+    .skill-description {
+      margin-top: 10px;
+      color: #3f3932;
+      max-width: 820px;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .skill-card[open] .skill-description {
+      display: block;
+      overflow: visible;
+    }
+    .skill-reason {
+      margin-top: 6px;
       color: var(--muted);
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .skill-card[open] .skill-reason {
+      white-space: normal;
     }
     .skill-toggle-group {
       display: inline-flex;
       align-items: center;
-      gap: 10px;
       flex: 0 0 auto;
-    }
-    .skill-toggle-label {
-      font-size: 12px;
-      font-weight: 700;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
     }
     .skill-inline-toggle-form {
       margin: 0;
@@ -1805,8 +1945,9 @@ const adminPageHTML = `<!doctype html>
     }
     .skill-details {
       margin-top: 14px;
-      padding-top: 14px;
+      padding: 14px 18px 18px;
       border-top: 1px solid var(--line);
+      background: rgba(15, 111, 97, 0.02);
     }
     .skill-details-head {
       display: flex;
@@ -1827,12 +1968,22 @@ const adminPageHTML = `<!doctype html>
     @media (max-width: 760px) {
       h1 { font-size: 30px; }
       .meta { grid-template-columns: 1fr; }
-      .skill-title {
+      .skills-controls {
+        grid-template-columns: 1fr;
+      }
+      .skills-toolbar-side {
+        justify-content: space-between;
+      }
+      .skills-header {
         align-items: flex-start;
+      }
+      .skill-main {
+        flex-direction: column;
       }
       .skill-summary-side {
         width: 100%;
         justify-content: flex-start;
+        align-items: flex-start;
       }
       table, thead, tbody, th, td, tr { display: block; }
       thead { display: none; }
@@ -2382,23 +2533,57 @@ const adminPageHTML = `<!doctype html>
     </section>
 
     <section class="card" style="margin-top: 24px;" id="skills-admin" data-skills-root>
-      <h2>Skills Inventory</h2>
-      <p class="subtle">
-        Inventory of bundled, local, project, and external skills discovered
-        by this runtime. Use it to see which skills are ready, which are
-        blocked or disabled, and which requirement is still missing before
-        they can run.
-      </p>
-      {{if .Snapshot.Skills.Writable}}
+      <div class="skills-header">
+        <div class="skills-header-copy">
+          <h2>Skills Inventory</h2>
+          <p class="skills-lead">
+            Bundled, local, project, and external skills discovered by this
+            runtime.
+          </p>
+        </div>
+      </div>
+      <div class="skills-meta-row">
+        {{if .Snapshot.Skills.Writable}}
+        <span class="skills-meta-pill">
+          Config <code>{{.Snapshot.Skills.ConfigPath}}</code>
+        </span>
+        {{else}}
+        <span class="skills-meta-pill">
+          Read-only runtime view
+        </span>
+        {{end}}
+        <span class="skills-meta-pill">
+          {{if .Snapshot.Skills.Refreshable}}
+            Changes apply on the next turn
+          {{else if .Snapshot.Skills.Writable}}
+            Restart OpenClaw after saving
+          {{else}}
+            Enable and disable unavailable here
+          {{end}}
+        </span>
+        {{if and .Snapshot.Skills.Refreshable (not .Snapshot.Skills.Writable)}}
+        <span class="skills-meta-pill">
+          Refresh discovers added or removed skill folders
+        </span>
+        {{end}}
+        {{if .Snapshot.Skills.Refreshable}}
+        <form method="post" action="/api/skills/refresh" class="skills-meta-action">
+          <input type="hidden" name="return_to" value="skills-admin">
+          <button class="secondary" type="submit">Refresh from disk</button>
+        </form>
+        {{end}}
+      </div>
+      {{if and .Snapshot.Skills.Writable .Snapshot.Skills.Refreshable}}
       <p class="subtle skills-config-note">
-        Enable and disable writes are persisted to
-        <code>{{.Snapshot.Skills.ConfigPath}}</code>. Restart OpenClaw after
-        saving to apply runtime changes.
+        Enabled updates config. Refresh scans skill folders on disk.
       </p>
-      {{else}}
+      {{else if .Snapshot.Skills.Writable}}
       <p class="subtle skills-config-note">
-        This runtime was started without a writable config file, so
-        enable/disable is unavailable here.
+        Enabled updates config, but runtime changes still require a restart.
+      </p>
+      {{else if .Snapshot.Skills.Refreshable}}
+      <p class="subtle skills-config-note">
+        Refresh scans skill folders on disk.
       </p>
       {{end}}
       {{if .Snapshot.Skills.Error}}
@@ -2422,12 +2607,16 @@ const adminPageHTML = `<!doctype html>
         </button>
       </div>
       <div class="skills-controls">
-        <input
-          type="search"
-          placeholder="Search skills by name, path, key, env, or reason"
-          data-skills-filter
-        >
-        <span class="subtle"><span data-skills-shown>{{.Snapshot.Skills.TotalCount}}</span> shown</span>
+        <div class="skills-search-wrap">
+          <input
+            type="search"
+            placeholder="Search skills by name, path, key, env, or reason"
+            data-skills-filter
+          >
+        </div>
+        <div class="skills-toolbar-side">
+          <span class="skills-shown"><span data-skills-shown>{{.Snapshot.Skills.TotalCount}}</span> shown</span>
+        </div>
       </div>
 
       {{range .Snapshot.Skills.Groups}}
@@ -2442,31 +2631,30 @@ const adminPageHTML = `<!doctype html>
           data-skill-search="{{.SearchText}}"
         >
           <summary>
-            <div class="skill-title">
-              <div>
-                <div class="skill-name">
-                  <span class="skill-dot {{.Status}}"></span>
-                  {{if .Emoji}}<span>{{.Emoji}}</span>{{end}}
-                  <span>{{.Name}}</span>
+            <div class="skill-main">
+              <div class="skill-copy">
+                <div class="skill-headline">
+                  <div class="skill-name">
+                    <span class="skill-dot {{.Status}}"></span>
+                    {{if .Emoji}}<span>{{.Emoji}}</span>{{end}}
+                    <span>{{.Name}}</span>
+                  </div>
                 </div>
-                <div class="skill-note">{{.Description}}</div>
-                {{if .Reason}}
-                <div class="skill-note">Reason: {{.Reason}}</div>
-                {{end}}
-              </div>
-              <div class="skill-summary-side">
-                <div class="skill-badges">
-                  <span class="skill-badge status {{.Status}}">
-                    {{if eq .Status "ready"}}Ready{{else if eq .Status "disabled"}}Disabled{{else}}Setup Required{{end}}
-                  </span>
+                <div class="skill-badges inline">
+                  {{if eq .Status "needs-setup"}}<span class="skill-badge status needs-setup">Setup Required</span>{{end}}
                   {{if .Bundled}}<span class="skill-badge">bundled</span>{{end}}
                   {{if .BlockedByAllowlist}}<span class="skill-badge">allowlist</span>{{end}}
                   {{if .Always}}<span class="skill-badge">always</span>{{end}}
                   {{if .PrimaryEnv}}<span class="skill-badge">{{.PrimaryEnv}}</span>{{end}}
                 </div>
+                <div class="skill-description">{{.Description}}</div>
+                {{if .Reason}}
+                <div class="skill-reason">Reason: {{.Reason}}</div>
+                {{end}}
+              </div>
+              <div class="skill-summary-side">
                 {{if $.Snapshot.Skills.Writable}}
                 <div class="skill-toggle-group">
-                  <span class="skill-toggle-label">Enabled</span>
                   <form
                     method="post"
                     action="/api/skills/toggle"
@@ -2499,7 +2687,11 @@ const adminPageHTML = `<!doctype html>
           <div class="skill-details">
             <div class="skill-details-head">
               <div class="subtle">
-                {{if $.Snapshot.Skills.Writable}}
+                {{if and $.Snapshot.Skills.Writable $.Snapshot.Skills.Refreshable}}
+                The row-level Enabled switch saves
+                <code>skills.entries.{{.ConfigKey}}.enabled</code> and refreshes
+                this runtime for the next turn.
+                {{else if $.Snapshot.Skills.Writable}}
                 The row-level Enabled switch saves
                 <code>skills.entries.{{.ConfigKey}}.enabled</code> for this
                 skill.

@@ -1302,6 +1302,62 @@ func TestBundledSkills_ParseFrontMatterAndMetadata(t *testing.T) {
 	}
 }
 
+func TestRepositoryRefresh_DiscoversNewSkill(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+	require.Empty(t, repo.Summaries())
+
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+---
+
+# weather-probe
+`)
+
+	require.NoError(t, repo.Refresh())
+
+	summaries := repo.Summaries()
+	require.Len(t, summaries, 1)
+	require.Equal(t, "weather-probe", summaries[0].Name)
+}
+
+func TestRepositorySetSkillEnabled_ReindexesEligibility(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+metadata:
+  openclaw:
+    skillKey: "weather-api"
+---
+
+# weather-probe
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+	require.Len(t, repo.Summaries(), 1)
+
+	require.NoError(t, repo.SetSkillEnabled("weather-api", false))
+
+	require.Empty(t, repo.Summaries())
+
+	_, err = repo.Get("weather-probe")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disabled by config")
+
+	report := repo.Status()
+	require.Len(t, report.Skills, 1)
+	require.True(t, report.Skills[0].Disabled)
+	require.False(t, report.Skills[0].Eligible)
+}
+
 func writeSkill(t *testing.T, root, name, skillMd string) string {
 	t.Helper()
 	dir := filepath.Join(root, name)

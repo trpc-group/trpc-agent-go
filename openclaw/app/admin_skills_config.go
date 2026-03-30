@@ -27,14 +27,23 @@ func (p *adminSkillsProvider) SkillsStatus() (ocskills.StatusReport, error) {
 	}
 
 	p.mu.RLock()
+	repo := p.repo
 	skillConfigs := cloneAdminSkillConfigs(p.skillConfigs)
+	roots := append([]string(nil), p.roots...)
+	bundledRoot := strings.TrimSpace(p.bundledRoot)
+	configKeys := append([]string(nil), p.configKeys...)
+	allowBundled := append([]string(nil), p.allowBundled...)
 	p.mu.RUnlock()
 
+	if repo != nil {
+		return repo.Status(), nil
+	}
+
 	return ocskills.BuildStatus(
-		p.roots,
-		ocskills.WithBundledSkillsRoot(p.bundledRoot),
-		ocskills.WithConfigKeys(p.configKeys),
-		ocskills.WithAllowBundled(p.allowBundled),
+		roots,
+		ocskills.WithBundledSkillsRoot(bundledRoot),
+		ocskills.WithConfigKeys(configKeys),
+		ocskills.WithAllowBundled(allowBundled),
 		ocskills.WithSkillConfigs(skillConfigs),
 	)
 }
@@ -47,6 +56,30 @@ func (p *adminSkillsProvider) SkillsConfigPath() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return strings.TrimSpace(p.configPath)
+}
+
+func (p *adminSkillsProvider) SkillsRefreshable() bool {
+	if p == nil {
+		return false
+	}
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.repo != nil
+}
+
+func (p *adminSkillsProvider) RefreshSkills() error {
+	if p == nil {
+		return fmt.Errorf("skills config is not available")
+	}
+
+	p.mu.RLock()
+	repo := p.repo
+	p.mu.RUnlock()
+	if repo == nil {
+		return fmt.Errorf("live skills repository is not available")
+	}
+	return repo.Refresh()
 }
 
 func (p *adminSkillsProvider) SetSkillEnabled(
@@ -73,7 +106,11 @@ func (p *adminSkillsProvider) SetSkillEnabled(
 
 	value := enabled
 	p.mu.Lock()
+	repo := p.repo
 	defer p.mu.Unlock()
+	if repo != nil {
+		return repo.SetSkillEnabled(key, enabled)
+	}
 	if p.skillConfigs == nil {
 		p.skillConfigs = map[string]ocskills.SkillConfig{}
 	}
