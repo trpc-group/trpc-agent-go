@@ -510,6 +510,7 @@ func (s *Server) streamLocked(
 		SessionID: run.sessionID,
 		RequestID: requestID,
 		Reply:     reply,
+		Usage:     cloneGatewayUsage(result.Usage),
 	}) {
 		return streamOutcome{
 			status: traceStatusError,
@@ -520,6 +521,7 @@ func (s *Server) streamLocked(
 		Type:      gwproto.StreamEventTypeRunCompleted,
 		SessionID: run.sessionID,
 		RequestID: requestID,
+		Usage:     cloneGatewayUsage(result.Usage),
 	}) {
 		return streamOutcome{
 			status: traceStatusError,
