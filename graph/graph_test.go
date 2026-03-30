@@ -153,6 +153,12 @@ func TestNode_EndTargets_DeduplicatesConcreteTargets(t *testing.T) {
 	assert.Equal(t, []string{"done", "retry"}, node.EndTargets())
 }
 
+func TestNode_AgentEventScope(t *testing.T) {
+	node := &Node{agentEventScope: "scope/child"}
+	assert.Equal(t, "scope/child", node.AgentEventScope())
+	assert.Empty(t, (&Node{}).AgentEventScope())
+}
+
 func TestNode_Tools_SkipsNilBaseTools(t *testing.T) {
 	node := &Node{
 		baseTools: map[string]tool.Tool{
