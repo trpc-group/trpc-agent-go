@@ -81,6 +81,54 @@ func TestResolveContextWindow(t *testing.T) {
 	}
 }
 
+func TestLookupContextWindow(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelName string
+		expected  int
+		ok        bool
+	}{
+		{
+			name:      "exact match",
+			modelName: "gpt-4o",
+			expected:  128000,
+			ok:        true,
+		},
+		{
+			name:      "case insensitive match",
+			modelName: "GPT-4O",
+			expected:  128000,
+			ok:        true,
+		},
+		{
+			name:      "prefix match",
+			modelName: "gpt-4o-mini-preview",
+			expected:  200000,
+			ok:        true,
+		},
+		{
+			name:      "unknown model",
+			modelName: "unknown-model",
+			expected:  0,
+			ok:        false,
+		},
+		{
+			name:      "empty model",
+			modelName: "",
+			expected:  0,
+			ok:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, ok := LookupContextWindow(tt.modelName)
+			assert.Equal(t, tt.expected, result)
+			assert.Equal(t, tt.ok, ok)
+		})
+	}
+}
+
 func TestGetAllModelContextWindows(t *testing.T) {
 	// Test that GetAllModelContextWindows returns a copy
 	original := GetAllModelContextWindows()

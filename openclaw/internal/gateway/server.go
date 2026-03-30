@@ -459,25 +459,26 @@ func (s *Server) writeError(
 func (s *Server) run(
 	ctx context.Context,
 	run preparedMessageRun,
-) (string, string, error) {
+) (string, string, *gwproto.Usage, error) {
 	var (
 		reply    string
 		resolved string
+		usage    *gwproto.Usage
 		runErr   error
 	)
 	s.lanes.withLock(run.sessionID, func() {
-		reply, resolved, runErr = s.runLocked(
+		reply, resolved, usage, runErr = s.runLocked(
 			ctx,
 			run,
 		)
 	})
-	return reply, resolved, runErr
+	return reply, resolved, usage, runErr
 }
 
 func (s *Server) runLocked(
 	ctx context.Context,
 	run preparedMessageRun,
-) (string, string, error) {
+) (string, string, *gwproto.Usage, error) {
 	trace := debugrecorder.TraceFromContext(ctx)
 
 	if trace != nil {
@@ -503,7 +504,7 @@ func (s *Server) runLocked(
 		if trace != nil {
 			_ = trace.RecordError(err)
 		}
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	result := newReplyAccumulator()
@@ -518,15 +519,15 @@ func (s *Server) runLocked(
 		if trace != nil {
 			_ = trace.RecordError(result.Error)
 		}
-		return "", result.RequestID, result.Error
+		return "", result.RequestID, cloneGatewayUsage(result.Usage), result.Error
 	}
 	if result.Text == "" {
 		if trace != nil {
 			_ = trace.RecordError(errEmptyReplyValue)
 		}
-		return "", result.RequestID, errEmptyReplyValue
+		return "", result.RequestID, cloneGatewayUsage(result.Usage), errEmptyReplyValue
 	}
-	return result.Text, result.RequestID, nil
+	return result.Text, result.RequestID, cloneGatewayUsage(result.Usage), nil
 }
 
 func (s *Server) resolveRunOptions(
@@ -602,6 +603,7 @@ type replyAccumulator struct {
 	Text      string
 	RequestID string
 	Error     error
+	Usage     *gwproto.Usage
 
 	seenFull bool
 	builder  strings.Builder
@@ -621,6 +623,7 @@ func (a *replyAccumulator) Consume(evt *event.Event) {
 	if evt.Response == nil {
 		return
 	}
+	a.captureUsage(evt.Response)
 	if evt.Error != nil {
 		a.Error = errors.New(evt.Error.Message)
 		return
@@ -674,6 +677,79 @@ func (a *replyAccumulator) consumeDelta(rsp *model.Response) {
 		a.builder.WriteString(choice.Delta.Content)
 	}
 	a.Text = a.builder.String()
+}
+
+func (a *replyAccumulator) captureUsage(rsp *model.Response) {
+	if a == nil || !responseShouldAggregateUsage(rsp) {
+		return
+	}
+	usage := usageFromModelUsage(rsp.Usage)
+	if usage == nil {
+		return
+	}
+	a.Usage = mergeGatewayUsage(a.Usage, usage)
+}
+
+func usageFromModelUsage(usage *model.Usage) *gwproto.Usage {
+	if !modelUsageHasKnownTokenCounts(usage) {
+		return nil
+	}
+	return &gwproto.Usage{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+	}
+}
+
+func modelUsageHasKnownTokenCounts(usage *model.Usage) bool {
+	if usage == nil {
+		return false
+	}
+	return usage.PromptTokens != 0 ||
+		usage.CompletionTokens != 0 ||
+		usage.TotalTokens != 0
+}
+
+func responseShouldAggregateUsage(rsp *model.Response) bool {
+	if rsp == nil || rsp.Usage == nil {
+		return false
+	}
+	switch rsp.Object {
+	case model.ObjectTypeChatCompletion:
+		return true
+	case model.ObjectTypeChatCompletionChunk:
+		return rsp.Done
+	default:
+		return false
+	}
+}
+
+func mergeGatewayUsage(
+	accumulated *gwproto.Usage,
+	usage *gwproto.Usage,
+) *gwproto.Usage {
+	if usage == nil {
+		return cloneGatewayUsage(accumulated)
+	}
+	if accumulated == nil {
+		return cloneGatewayUsage(usage)
+	}
+	return &gwproto.Usage{
+		PromptTokens: accumulated.PromptTokens +
+			usage.PromptTokens,
+		CompletionTokens: accumulated.CompletionTokens +
+			usage.CompletionTokens,
+		TotalTokens: accumulated.TotalTokens +
+			usage.TotalTokens,
+	}
+}
+
+func cloneGatewayUsage(usage *gwproto.Usage) *gwproto.Usage {
+	if usage == nil {
+		return nil
+	}
+	cloned := *usage
+	return &cloned
 }
 
 type laneLocker struct {

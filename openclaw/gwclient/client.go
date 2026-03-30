@@ -87,11 +87,15 @@ type StreamEvent = gwproto.StreamEvent
 // APIError matches gateway error payloads.
 type APIError = gwproto.APIError
 
+// Usage matches gateway token usage payloads.
+type Usage = gwproto.Usage
+
 // MessageResponse matches the gateway /messages response JSON.
 type MessageResponse struct {
 	SessionID string    `json:"session_id,omitempty"`
 	RequestID string    `json:"request_id,omitempty"`
 	Reply     string    `json:"reply,omitempty"`
+	Usage     *Usage    `json:"usage,omitempty"`
 	Ignored   bool      `json:"ignored,omitempty"`
 	Error     *APIError `json:"error,omitempty"`
 
