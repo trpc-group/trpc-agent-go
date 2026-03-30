@@ -1565,6 +1565,19 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:      "knowledges",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				KnowledgesConfig: map[string]*yaml.Node{
+					"docs": yamlNode(t, `
+vector_store:
+  type: inmemory
+`),
+				},
+			},
+			wantErr: true,
+		},
+		{
 			name:      "refresh-toolsets-on-run",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{

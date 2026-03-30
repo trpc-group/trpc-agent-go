@@ -37,7 +37,7 @@ embedder:
 	require.Equal(t, yaml.MappingNode, cfg.Embedder.Node.Kind)
 }
 
-func TestBuildKnowledgeTools_SingleKnowledgeUsesDefaultTool(t *testing.T) {
+func TestBuildKnowledgeTools_SingleKnowledgeUsesGenericTool(t *testing.T) {
 	t.Parallel()
 
 	bundle, err := buildKnowledgeTools(map[string]*yaml.Node{
@@ -50,8 +50,8 @@ vector_store:
 	})
 	require.NoError(t, err)
 	require.NotNil(t, bundle)
-	require.NotNil(t, bundle.defaultKnowledge)
-	require.Empty(t, bundle.tools)
+	require.Len(t, bundle.tools, 1)
+	require.Equal(t, "knowledge_search", bundle.tools[0].Declaration().Name)
 }
 
 func TestBuildKnowledgeTools_MultipleKnowledgesCreateNamedTools(t *testing.T) {
@@ -69,10 +69,26 @@ vector_store:
 	})
 	require.NoError(t, err)
 	require.NotNil(t, bundle)
-	require.Nil(t, bundle.defaultKnowledge)
 	require.Len(t, bundle.tools, 2)
 	require.Equal(t, "docs_kb_knowledge_search", bundle.tools[0].Declaration().Name)
 	require.Equal(t, "faq_knowledge_search", bundle.tools[1].Declaration().Name)
+}
+
+func TestBuildKnowledgeTools_RejectsCollidingToolNames(t *testing.T) {
+	t.Parallel()
+
+	_, err := buildKnowledgeTools(map[string]*yaml.Node{
+		"Docs KB": yamlNode(t, `
+vector_store:
+  type: inmemory
+`),
+		"Docs-KB": yamlNode(t, `
+vector_store:
+  type: inmemory
+`),
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "knowledge tool name collision")
 }
 
 func TestBuildKnowledgeTools_InvalidConfigFails(t *testing.T) {
@@ -116,7 +132,24 @@ vector_store:
 	})
 	require.NoError(t, err)
 	require.NotNil(t, bundle)
-	require.NotNil(t, bundle.defaultKnowledge)
+	require.Len(t, bundle.tools, 1)
+	require.Equal(t, "knowledge_search", bundle.tools[0].Declaration().Name)
+}
+
+func TestBuildKnowledgeTools_SingleKnowledgeUsesGenericToolNameWithMaxResultsConfig(t *testing.T) {
+	t.Parallel()
+
+	bundle, err := buildKnowledgeTools(map[string]*yaml.Node{
+		"docs": yamlNode(t, `
+vector_store:
+  type: inmemory
+  max_results: 3
+`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, bundle)
+	require.Len(t, bundle.tools, 1)
+	require.Equal(t, "knowledge_search", bundle.tools[0].Declaration().Name)
 }
 
 func TestBuildKnowledgeTools_VectorStoreUsesTypeSpecificValidation(t *testing.T) {
@@ -388,6 +421,19 @@ dimensions: 384
 `))
 	require.NoError(t, err)
 	require.Equal(t, 384, knowledgeEmbedderDimensions(emb))
+}
+
+func TestKnowledgeToolMaxResults_ReadsVectorStoreConfig(t *testing.T) {
+	t.Parallel()
+
+	maxResults, err := knowledgeToolMaxResults(yamlNode(t, `
+vector_store:
+  type: pgvector
+  url: postgres://user:pass@127.0.0.1:5432/dbname?sslmode=disable
+  max_results: 6
+`))
+	require.NoError(t, err)
+	require.Equal(t, 6, maxResults)
 }
 
 func TestBuildKnowledgeVectorStore_ElasticsearchBuildsSuccessfully(t *testing.T) {

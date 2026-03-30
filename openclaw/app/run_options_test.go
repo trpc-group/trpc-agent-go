@@ -835,6 +835,9 @@ knowledges:
 
 	_, err := parseRunOptions([]string{"-config", cfgPath})
 	require.Error(t, err)
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
 	require.Contains(t, err.Error(), "knowledges.entries[0].name is empty")
 }
 
@@ -854,6 +857,9 @@ knowledges:
 
 	_, err := parseRunOptions([]string{"-config", cfgPath})
 	require.Error(t, err)
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
 	require.Contains(t, err.Error(), "duplicate knowledge name: docs")
 }
 
@@ -1021,7 +1027,7 @@ func mappingValue(node *yaml.Node, key string) *yaml.Node {
 	if node == nil {
 		return nil
 	}
-	if node != nil && node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
 		node = node.Content[0]
 	}
 	for i := 0; i+1 < len(node.Content); i += 2 {

@@ -30,8 +30,7 @@ import (
 )
 
 type knowledgeToolsBundle struct {
-	defaultKnowledge knowledge.Knowledge
-	tools            []tool.Tool
+	tools []tool.Tool
 }
 
 type knowledgeDependencyConfig struct {
@@ -65,25 +64,76 @@ func buildKnowledgeTools(
 
 	names := sortedKnowledgeNames(knowledges)
 	if len(names) == 1 {
+		maxResults, err := knowledgeToolMaxResults(configs[names[0]])
+		if err != nil {
+			return nil, fmt.Errorf(
+				"knowledge %q tool config invalid: %w",
+				names[0],
+				err,
+			)
+		}
+		toolOpts := []knowledgetool.Option{
+			knowledgetool.WithToolName("knowledge_search"),
+			knowledgetool.WithToolDescription(
+				"Search for relevant information in the knowledge base.",
+			),
+		}
+		if maxResults > 0 {
+			toolOpts = append(
+				toolOpts,
+				knowledgetool.WithMaxResults(maxResults),
+			)
+		}
 		return &knowledgeToolsBundle{
-			defaultKnowledge: knowledges[names[0]],
+			tools: []tool.Tool{
+				knowledgetool.NewKnowledgeSearchTool(
+					knowledges[names[0]],
+					toolOpts...,
+				),
+			},
 		}, nil
 	}
 
 	tools := make([]tool.Tool, 0, len(names))
+	seenToolNames := make(map[string]string, len(names))
 	for _, name := range names {
-		tools = append(tools, knowledgetool.NewAgenticFilterSearchTool(
-			knowledges[name],
-			nil,
-			knowledgetool.WithToolName(
-				knowledgeToolName(name),
-			),
+		toolName := knowledgeToolName(name)
+		if existing, ok := seenToolNames[toolName]; ok {
+			return nil, fmt.Errorf(
+				"knowledge tool name collision: %q and %q both map to %q",
+				existing,
+				name,
+				toolName,
+			)
+		}
+		seenToolNames[toolName] = name
+		maxResults, err := knowledgeToolMaxResults(configs[name])
+		if err != nil {
+			return nil, fmt.Errorf(
+				"knowledge %q tool config invalid: %w",
+				name,
+				err,
+			)
+		}
+		toolOpts := []knowledgetool.Option{
+			knowledgetool.WithToolName(toolName),
 			knowledgetool.WithToolDescription(
 				fmt.Sprintf(
 					"Search for relevant information in the %q knowledge base.",
 					name,
 				),
 			),
+		}
+		if maxResults > 0 {
+			toolOpts = append(
+				toolOpts,
+				knowledgetool.WithMaxResults(maxResults),
+			)
+		}
+		tools = append(tools, knowledgetool.NewAgenticFilterSearchTool(
+			knowledges[name],
+			nil,
+			toolOpts...,
 		))
 	}
 
@@ -384,6 +434,60 @@ func knowledgeEmbedderDimensions(e embedder.Embedder) int {
 		return 0
 	}
 	return e.GetDimensions()
+}
+
+func knowledgeToolMaxResults(node *yaml.Node) (int, error) {
+	if node == nil {
+		return 0, nil
+	}
+
+	var cfg knowledgeDependencyConfig
+	if err := registry.DecodeStrict(node, &cfg); err != nil {
+		return 0, fmt.Errorf("decode failed: %w", err)
+	}
+	return knowledgeVectorStoreMaxResults(cfg.VectorStore)
+}
+
+func knowledgeVectorStoreMaxResults(
+	cfg *rawKnowledgeComponent,
+) (int, error) {
+	if cfg == nil || cfg.Node == nil {
+		return 0, nil
+	}
+
+	typeName, err := knowledgeComponentType(cfg.Node)
+	if err != nil {
+		return 0, fmt.Errorf("vector_store type invalid: %w", err)
+	}
+	switch typeName {
+	case "", "inmemory":
+		var c inmemoryKnowledgeVectorStoreConfig
+		if err := registry.DecodeStrict(cfg.Node, &c); err != nil {
+			return 0, err
+		}
+		return positiveIntValue(c.MaxResults), nil
+	case "pgvector":
+		var c pgvectorKnowledgeVectorStoreConfig
+		if err := registry.DecodeStrict(cfg.Node, &c); err != nil {
+			return 0, err
+		}
+		return positiveIntValue(c.MaxResults), nil
+	case "elasticsearch":
+		var c elasticsearchKnowledgeVectorStoreConfig
+		if err := registry.DecodeStrict(cfg.Node, &c); err != nil {
+			return 0, err
+		}
+		return positiveIntValue(c.MaxResults), nil
+	default:
+		return 0, fmt.Errorf("unsupported vector_store.type: %s", typeName)
+	}
+}
+
+func positiveIntValue(v *int) int {
+	if v == nil || *v <= 0 {
+		return 0
+	}
+	return *v
 }
 
 func sortedKnowledgeNames(

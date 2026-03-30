@@ -1676,6 +1676,11 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support tools.toolsets",
 		)
 	}
+	if len(opts.KnowledgesConfig) > 0 {
+		return errors.New(
+			"claude-code agent does not support knowledges",
+		)
+	}
 	if opts.RefreshToolSetsOnRun {
 		return errors.New(
 			"claude-code agent does not support refresh-toolsets-on-run",
@@ -1900,9 +1905,6 @@ func newAgent(
 				*cfg.SkillsToolingGuide,
 			),
 		)
-	}
-	if knowledgeTools != nil && knowledgeTools.defaultKnowledge != nil {
-		opts = append(opts, llmagent.WithKnowledge(knowledgeTools.defaultKnowledge))
 	}
 	if len(tools) > 0 {
 		opts = append(opts, llmagent.WithTools(tools))
