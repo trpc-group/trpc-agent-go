@@ -331,6 +331,73 @@ func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
 	require.Contains(t, body, "OPENAI_API_KEY")
 }
 
+func TestServiceHandlerRendersAdminPages(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+	handler := svc.Handler()
+
+	cases := []struct {
+		name    string
+		path    string
+		title   string
+		summary string
+	}{
+		{
+			name:    "automation",
+			path:    routeAutomation,
+			title:   "Automation",
+			summary: "Inspect scheduled jobs, trigger one-off runs, and clear automation state.",
+		},
+		{
+			name:    "sessions",
+			path:    routeSessions,
+			title:   "Sessions",
+			summary: "Review exec sessions, upload sessions, and recently persisted files.",
+		},
+		{
+			name:    "debug",
+			path:    routeDebug,
+			title:   "Debug",
+			summary: "Browse debug session indexes, recent traces, and Langfuse readiness.",
+		},
+		{
+			name:    "browser",
+			path:    routeBrowser,
+			title:   "Browser",
+			summary: "Inspect browser providers, managed browser-server state, nodes, and profiles.",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusOK, rr.Code)
+			require.Contains(t, rr.Body.String(), tc.title)
+			require.Contains(t, rr.Body.String(), tc.summary)
+		})
+	}
+}
+
+func TestServiceRenderPageRejectsNonGET(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+	req := httptest.NewRequest(http.MethodPost, routeOverview, nil)
+	rr := httptest.NewRecorder()
+
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	require.Contains(t, rr.Body.String(), "method not allowed")
+}
+
 func TestServiceSkillsStatusErrorRetainsRecoveryFields(t *testing.T) {
 	t.Parallel()
 
@@ -374,6 +441,19 @@ func TestServiceSkillsJSONEndpoint(t *testing.T) {
 	require.Contains(t, rr.Body.String(), `"total_count": 1`)
 	require.Contains(t, rr.Body.String(), `"label": "Bundled Skills"`)
 	require.Contains(t, rr.Body.String(), `"name": "weather-probe"`)
+}
+
+func TestServiceSkillsJSONEndpointRejectsMethod(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+	req := httptest.NewRequest(http.MethodPost, routeSkillsJSON, nil)
+	rr := httptest.NewRecorder()
+
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	require.Contains(t, rr.Body.String(), "method not allowed")
 }
 
 func TestServiceToggleSkillEndpoint(t *testing.T) {
@@ -474,6 +554,139 @@ func TestServiceRefreshSkillsEndpointRequiresLiveRepo(t *testing.T) {
 		"live skills repository is not available",
 		loc.Query().Get(queryError),
 	)
+}
+
+func TestServiceRefreshSkillsEndpointReportsProviderError(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubSkillsProvider{
+		refreshable: true,
+		refreshErr:  errors.New("refresh boom"),
+	}
+	svc := New(Config{Skills: provider})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeSkillsRefresh,
+		strings.NewReader("return_to=skills-admin&return_path=%2Fskills"),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Equal(t, 1, provider.refreshCount)
+
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(t, routeSkillsPage, loc.Path)
+	require.Equal(t, "skills-admin", loc.Fragment)
+	require.Equal(t, "refresh boom", loc.Query().Get(queryError))
+}
+
+func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
+	t.Parallel()
+
+	type pageCase struct {
+		path    string
+		view    adminView
+		title   string
+		summary string
+	}
+
+	cases := []pageCase{
+		{
+			path:    routeOverview,
+			view:    viewOverview,
+			title:   "Overview",
+			summary: "Runtime summary, gateway surfaces, and entry points into the rest of the admin.",
+		},
+		{
+			path:    routeSkillsPage,
+			view:    viewSkills,
+			title:   "Skills",
+			summary: "Discover installed skills, refresh folders from disk, and manage config-backed enablement.",
+		},
+		{
+			path:    routeAutomation,
+			view:    viewAutomation,
+			title:   "Automation",
+			summary: "Inspect scheduled jobs, trigger one-off runs, and clear automation state.",
+		},
+		{
+			path:    routeSessions,
+			view:    viewSessions,
+			title:   "Sessions",
+			summary: "Review exec sessions, upload sessions, and recently persisted files.",
+		},
+		{
+			path:    routeDebug,
+			view:    viewDebug,
+			title:   "Debug",
+			summary: "Browse debug session indexes, recent traces, and Langfuse readiness.",
+		},
+		{
+			path:    routeBrowser,
+			view:    viewBrowser,
+			title:   "Browser",
+			summary: "Inspect browser providers, managed browser-server state, nodes, and profiles.",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.title, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.title, pageTitle(tc.view))
+			require.Equal(t, tc.summary, pageSummary(tc.view))
+			require.Equal(t, tc.path, navPath(tc.path))
+			require.Equal(t, tc.view, navViewForPath(tc.path))
+		})
+	}
+
+	require.Equal(t, routeOverview, navPath(routeIndex))
+	require.Equal(t, viewOverview, navViewForPath(routeIndex))
+	require.Empty(t, navPath(" /unknown "))
+	require.Equal(t, viewOverview, navViewForPath(" /unknown "))
+}
+
+func TestSkillInstallViewsFromStatus_TrimsValues(t *testing.T) {
+	t.Parallel()
+
+	out := skillInstallViewsFromStatus([]ocskills.StatusInstallOption{
+		{
+			ID:    " brew-jq ",
+			Kind:  " brew ",
+			Label: " brew install jq ",
+			Bins:  []string{" jq ", " yq "},
+		},
+		{
+			ID:    " custom ",
+			Kind:  " custom ",
+			Label: " custom installer ",
+		},
+	})
+	require.Equal(
+		t,
+		[]skillInstallView{
+			{
+				ID:    "brew-jq",
+				Kind:  "brew",
+				Label: "brew install jq",
+				Bins:  []string{" jq ", " yq "},
+			},
+			{
+				ID:    "custom",
+				Kind:  "custom",
+				Label: "custom installer",
+			},
+		},
+		out,
+	)
+	require.Nil(t, skillInstallViewsFromStatus(nil))
 }
 
 func TestServiceToggleSkillEndpointRequiresConfigPath(t *testing.T) {

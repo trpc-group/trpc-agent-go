@@ -10,6 +10,8 @@
 package skills
 
 import (
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -94,4 +96,228 @@ metadata:
 	require.True(t, entry.Disabled)
 	require.False(t, entry.Eligible)
 	require.Empty(t, entry.Missing.Env)
+}
+
+func TestStatusHelpers_MissingRequirementsAndInstallers(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, missingOS([]string{runtime.GOOS}))
+	require.Equal(
+		t,
+		[]string{"definitely-not-this-os"},
+		missingOS([]string{"definitely-not-this-os"}),
+	)
+	require.Equal(
+		t,
+		[]string{"definitely-missing-bin"},
+		missingBins([]string{"", " definitely-missing-bin "}),
+	)
+	require.Nil(t, missingAnyBins([]string{"go", "definitely-missing"}))
+	require.Equal(
+		t,
+		[]string{"definitely-missing-a", "definitely-missing-b"},
+		missingAnyBins([]string{
+			"",
+			" definitely-missing-a ",
+			" definitely-missing-b ",
+		}),
+	)
+
+	cfg := SkillConfig{
+		APIKey: "secret",
+		Env: map[string]string{
+			"CUSTOM_ENV": "configured",
+		},
+	}
+	require.Equal(
+		t,
+		[]string{envOpenSSLConf, "MISSING_ENV"},
+		missingEnv(
+			[]string{"PATH", envOpenSSLConf, "CUSTOM_ENV", "PRIMARY_ENV", "MISSING_ENV"},
+			"PRIMARY_ENV",
+			cfg,
+		),
+	)
+	require.Equal(
+		t,
+		[]string{"channels.discord.token"},
+		missingConfig(
+			[]string{" channels.telegram.token ", "channels.discord.token"},
+			map[string]struct{}{"channels.telegram.token": {}},
+		),
+	)
+
+	meta := &openClawMetadata{
+		PrimaryEnv: "PRIMARY_ENV",
+		OS:         []string{"definitely-not-this-os"},
+		Requires: openClawRequires{
+			Bins:    []string{"definitely-missing-bin"},
+			AnyBins: []string{"definitely-missing-a", "definitely-missing-b"},
+			Env:     []string{"PRIMARY_ENV", "MISSING_ENV"},
+			Config:  []string{" channels.discord.token "},
+		},
+	}
+	require.Equal(
+		t,
+		StatusRequirements{
+			OS:      []string{"definitely-not-this-os"},
+			Bins:    []string{"definitely-missing-bin"},
+			AnyBins: []string{"definitely-missing-a", "definitely-missing-b"},
+			Env:     []string{"PRIMARY_ENV", "MISSING_ENV"},
+			Config:  []string{"channels.discord.token"},
+		},
+		requiredStatus(meta),
+	)
+	require.Equal(
+		t,
+		StatusRequirements{
+			OS:      []string{"definitely-not-this-os"},
+			Bins:    []string{"definitely-missing-bin"},
+			AnyBins: []string{"definitely-missing-a", "definitely-missing-b"},
+			Env:     []string{"MISSING_ENV"},
+			Config:  []string{"channels.discord.token"},
+		},
+		missingStatus(meta, nil, cfg),
+	)
+	require.Equal(
+		t,
+		[]string{"channels.telegram.token", "channels.discord.token"},
+		normalizeRequirementConfig(
+			[]string{
+				" channels.telegram.token ",
+				"",
+				"channels.discord.token",
+			},
+		),
+	)
+	require.Empty(t, missingStatus(&openClawMetadata{Always: true}, nil, cfg))
+
+	options := normalizeStatusInstall([]openClawInstallEntry{
+		{Kind: "brew", Formula: "jq"},
+		{Kind: "go", Module: "example.com/cmd@latest"},
+		{Kind: "uv", Package: "ruff"},
+		{Kind: "node", Packages: []string{"ccusage", "git-wrapped"}},
+		{Kind: "download", URL: "https://example.com/tool.tar.gz"},
+		{Kind: "custom", Label: "Custom label", Bins: []string{" tool "}},
+		{Kind: "custom"},
+		{Kind: " ", Label: "skip"},
+	})
+	require.Equal(
+		t,
+		[]string{
+			"brew install jq",
+			"go install example.com/cmd@latest",
+			"uv tool install ruff",
+			"npm install -g ccusage git-wrapped",
+			"download tool.tar.gz",
+			"Custom label",
+			"run installer",
+		},
+		[]string{
+			options[0].Label,
+			options[1].Label,
+			options[2].Label,
+			options[3].Label,
+			options[4].Label,
+			options[5].Label,
+			options[6].Label,
+		},
+	)
+	require.Equal(t, []string{"tool"}, options[5].Bins)
+	require.Nil(t, normalizeStatusInstall([]openClawInstallEntry{{Kind: ""}}))
+}
+
+func TestStatusHelpers_SourceAndConfigResolution(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "weather-api", statusConfigKey(nil, " weather-api ", "weather"))
+	require.Equal(
+		t,
+		"weather",
+		statusConfigKey(
+			&Repository{skillConfigs: map[string]SkillConfig{"weather": {}}},
+			"",
+			" weather ",
+		),
+	)
+	require.Equal(
+		t,
+		"weather-api",
+		statusConfigKey(
+			&Repository{skillConfigs: map[string]SkillConfig{"weather-api": {}}},
+			" weather-api ",
+			"weather",
+		),
+	)
+
+	root := t.TempDir()
+	require.Equal(t, "bundled", resolveStatusSource("/tmp/skill", true, nil))
+	require.Equal(t, "unknown", resolveStatusSource("", false, nil))
+	require.Equal(
+		t,
+		"codex",
+		resolveStatusSource(
+			filepath.Join(root, ".codex", "skills", "demo"),
+			false,
+			nil,
+		),
+	)
+	require.Equal(
+		t,
+		"local",
+		resolveStatusSource(
+			filepath.Join(root, "skills", "local", "demo"),
+			false,
+			nil,
+		),
+	)
+	require.Equal(
+		t,
+		"project",
+		resolveStatusSource(
+			filepath.Join(root, ".agents", "skills", "demo"),
+			false,
+			nil,
+		),
+	)
+
+	workspaceRoot := filepath.Join(root, "workspace", "skills")
+	require.Equal(
+		t,
+		"workspace",
+		resolveStatusSource(
+			filepath.Join(workspaceRoot, "demo"),
+			false,
+			[]string{workspaceRoot},
+		),
+	)
+	extraRoot := filepath.Join(root, "extra-root")
+	require.Equal(
+		t,
+		"extra",
+		resolveStatusSource(
+			filepath.Join(extraRoot, "demo"),
+			false,
+			[]string{extraRoot},
+		),
+	)
+	require.Equal(
+		t,
+		"custom",
+		resolveStatusSource(
+			filepath.Join(root, "custom", "demo"),
+			false,
+			[]string{filepath.Join(root, "other")},
+		),
+	)
+}
+
+func TestStatus_NilAndZeroValueRepository(t *testing.T) {
+	t.Parallel()
+
+	var nilRepo *Repository
+	require.Empty(t, nilRepo.Status().Skills)
+
+	var zero Repository
+	require.Empty(t, zero.Status().Skills)
 }
