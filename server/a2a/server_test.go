@@ -3267,6 +3267,165 @@ func TestMessageProcessor_ProcessMessage_MultipleEvents(t *testing.T) {
 	assert.Equal(t, 1, len(resultTask.Artifacts))
 }
 
+func TestBuildTaskErrorMetadata(t *testing.T) {
+	t.Run("nil event returns nil", func(t *testing.T) {
+		assert.Nil(t, buildTaskErrorMetadata(nil))
+	})
+
+	t.Run("missing response returns nil", func(t *testing.T) {
+		assert.Nil(
+			t,
+			buildTaskErrorMetadata(&event.Event{}),
+		)
+	})
+
+	t.Run("missing error returns nil", func(t *testing.T) {
+		assert.Nil(t, buildTaskErrorMetadata(&event.Event{
+			Response: &model.Response{},
+		}))
+	})
+
+	t.Run("flow error keeps failed metadata", func(t *testing.T) {
+		metadata := buildTaskErrorMetadata(&event.Event{
+			Response: &model.Response{
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "task failed",
+				},
+			},
+		})
+
+		if assert.NotNil(t, metadata) {
+			assert.Equal(
+				t,
+				model.ObjectTypeError,
+				metadata[ia2a.MessageMetadataObjectTypeKey],
+			)
+			assert.Equal(
+				t,
+				model.ErrorTypeFlowError,
+				metadata[ia2a.MessageMetadataErrorTypeKey],
+			)
+			assert.Equal(
+				t,
+				"task failed",
+				metadata[ia2a.MessageMetadataErrorMessageKey],
+			)
+			assert.Equal(
+				t,
+				string(protocol.TaskStateFailed),
+				metadata[ia2a.MessageMetadataTaskStateKey],
+			)
+			_, ok := metadata[ia2a.MessageMetadataResponseIDKey]
+			assert.False(t, ok)
+		}
+	})
+
+	t.Run("stop agent error keeps canceled state and response id", func(t *testing.T) {
+		const responseID = "resp-1"
+		metadata := buildTaskErrorMetadata(&event.Event{
+			Response: &model.Response{
+				ID: responseID,
+				Error: &model.ResponseError{
+					Type:    agent.ErrorTypeStopAgentError,
+					Message: "task canceled",
+				},
+			},
+		})
+
+		if assert.NotNil(t, metadata) {
+			assert.Equal(
+				t,
+				string(protocol.TaskStateCanceled),
+				metadata[ia2a.MessageMetadataTaskStateKey],
+			)
+			assert.Equal(
+				t,
+				responseID,
+				metadata[ia2a.MessageMetadataResponseIDKey],
+			)
+		}
+	})
+}
+
+func TestBuildTaskErrorMessage(t *testing.T) {
+	const (
+		taskID = "task-1"
+		ctxID  = "ctx-1"
+	)
+
+	t.Run("nil event returns nil", func(t *testing.T) {
+		assert.Nil(t, buildTaskErrorMessage(taskID, ctxID, nil))
+	})
+
+	t.Run("missing response returns nil", func(t *testing.T) {
+		assert.Nil(
+			t,
+			buildTaskErrorMessage(
+				taskID,
+				ctxID,
+				&event.Event{},
+			),
+		)
+	})
+
+	t.Run("missing error returns nil", func(t *testing.T) {
+		assert.Nil(t, buildTaskErrorMessage(
+			taskID,
+			ctxID,
+			&event.Event{
+				Response: &model.Response{},
+			},
+		))
+	})
+
+	t.Run("response id and text are preserved without metadata", func(t *testing.T) {
+		const responseID = "resp-2"
+		msg := buildTaskErrorMessage(taskID, ctxID, &event.Event{
+			Response: &model.Response{
+				ID: responseID,
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "task failed",
+				},
+			},
+		})
+
+		if assert.NotNil(t, msg) {
+			assert.Equal(t, responseID, msg.MessageID)
+			assert.Nil(t, msg.Metadata)
+			if assert.Len(t, msg.Parts, 1) {
+				var text string
+				switch part := msg.Parts[0].(type) {
+				case *protocol.TextPart:
+					text = part.Text
+				case protocol.TextPart:
+					text = part.Text
+				}
+				if assert.NotEmpty(t, text) {
+					assert.Equal(t, "task failed", text)
+				}
+			}
+		}
+	})
+
+	t.Run("empty error message keeps empty parts", func(t *testing.T) {
+		msg := buildTaskErrorMessage(taskID, ctxID, &event.Event{
+			Response: &model.Response{
+				Error: &model.ResponseError{
+					Type: model.ErrorTypeFlowError,
+				},
+			},
+		})
+
+		if assert.NotNil(t, msg) {
+			assert.NotEmpty(t, msg.MessageID)
+			assert.Nil(t, msg.Metadata)
+			assert.Len(t, msg.Parts, 0)
+		}
+	})
+}
+
 func TestMessageProcessor_ProcessMessage_StructuredTaskError(
 	t *testing.T,
 ) {
