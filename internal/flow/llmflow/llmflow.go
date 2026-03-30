@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
@@ -40,6 +41,7 @@ const (
 	// Timeout for event completion signaling.
 	eventCompletionTimeout    = 5 * time.Second
 	generatedResponseIDPrefix = "llmflow-response-"
+	queuedUserAuthor          = "user"
 
 	errMsgNoModelResponse = "no response received from model"
 
@@ -95,6 +97,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(eventChan)
+		defer steer.Close(invocation)
 		defer recoverFlowRunPanic(ctx, invocation, eventChan)
 
 		// Mark the invocation so the runner skips redundant async
@@ -123,9 +126,18 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			}
 			firstIteration = false
 
+			if err := f.maybeConsumeQueuedUserMessages(
+				ctx,
+				invocation,
+				eventChan,
+			); err != nil {
+				return
+			}
+
 			// Run one step (one LLM call cycle).
 			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
 			if err != nil {
+				steer.Close(invocation)
 				// Treat context cancellation as graceful termination (common in streaming
 				// pipelines where the client closes the stream after final event).
 				if errors.Is(err, context.Canceled) {
@@ -175,6 +187,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 			// If no events were produced in this step, treat as terminal to avoid busy loop.
 			// Also break when EndInvocation is set or a final response is observed.
 			if lastEvent == nil || invocation.EndInvocation || lastEvent.IsFinalResponse() {
+				steer.Close(invocation)
 				break
 			}
 		}
@@ -246,6 +259,74 @@ func traceSnapshotFromEvent(evt *event.Event) *atrace.Snapshot {
 		return nil
 	}
 	return &atrace.Snapshot{Text: string(bytes)}
+}
+
+func (f *Flow) maybeConsumeQueuedUserMessages(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+) error {
+	if !steer.IsAttached(invocation) {
+		return nil
+	}
+
+	messages := steer.Drain(invocation)
+	if len(messages) == 0 {
+		return nil
+	}
+
+	for _, message := range messages {
+		invocation.Message = message
+
+		evt := event.NewResponseEvent(
+			invocation.InvocationID,
+			queuedUserAuthor,
+			&model.Response{
+				Done: false,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: message,
+				}},
+			},
+		)
+		evt.RequiresCompletion = true
+
+		if err := agent.EmitEvent(
+			ctx,
+			invocation,
+			eventChan,
+			evt,
+		); err != nil {
+			return err
+		}
+
+		completionID := agent.GetAppendEventNoticeKey(evt.ID)
+		err := invocation.AddNoticeChannelAndWait(
+			ctx,
+			completionID,
+			flowEventWaitTimeout(ctx),
+		)
+		if errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		if err != nil {
+			log.WarnfContext(
+				ctx,
+				"Wait for queued user message persistence failed: %v",
+				err,
+			)
+		}
+	}
+
+	return nil
+}
+
+func flowEventWaitTimeout(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return time.Until(deadline)
+	}
+	return eventCompletionTimeout
 }
 
 // maybeResumePendingToolCalls inspects the latest session events and, when

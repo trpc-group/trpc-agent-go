@@ -315,6 +315,96 @@ _ = ok
 managed.Cancel(requestID)
 ```
 
+#### 在同一轮 run 中排队插入新的用户消息
+
+有些场景下，你并不想启动第二轮 run，而是希望继续使用当前的
+`requestID`，把新的 `role=user` 消息排队，等当前这一轮 assistant 处理完后，
+再插入到同一轮 run 里。
+
+可以使用 `runner.EnqueueUserMessage(...)`：
+
+```go
+requestID := "req-123"
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Draft a launch note."),
+    agent.WithRequestID(requestID),
+)
+if err != nil {
+    panic(err)
+}
+
+go func() {
+    time.Sleep(time.Second)
+    err := runner.EnqueueUserMessage(
+        r,
+        requestID,
+        model.NewUserMessage("Also make the tone warmer."),
+    )
+    if err != nil {
+        log.Printf("enqueue steer failed: %v", err)
+    }
+}()
+
+_ = eventChan
+```
+
+可以把一次 assistant 输出看成一轮：
+
+- 如果这次 assistant 只是普通回复，那么这一轮到 assistant 回复结束为止
+- 如果这次 assistant 发起了 `tool_call`，那么这一轮要等这批 tool 全部执行完
+
+新的用户消息只能插在两轮之间，不会插到一轮中间。
+
+最直观的理解是：
+
+```text
+user(Q1)
+assistant(tool_call A)
+tool(result A)
+user(Q2, queued steer)
+assistant(...)
+```
+
+如果一条 assistant 消息里一次发起了多个 tool，那么也要等这一整轮结束：
+
+```text
+user(Q1)
+assistant(tool_calls A, B)
+tool(result A)
+tool(result B)
+user(Q2, queued steer)
+assistant(...)
+```
+
+不会出现下面这种插法：
+
+```text
+user(Q1)
+assistant(tool_calls A, B)
+tool(result A)
+user(Q2, queued steer)
+tool(result B)
+```
+
+因为这会把同一轮里的 `tool_call -> tool_response` 结构拆开。
+
+所以它的行为可以简单理解成：
+
+- 这**不会**启动第二轮 run
+- 新消息会先进入队列，不会立刻写 Session
+- 只有上一轮 assistant 及其附属 tool 全部完成后，才会把消息追加进去
+- 这能保证 `tool_call -> tool_response` 结构保持完整
+- 如果 run 已经结束，enqueue 会返回错误
+
+如果你想和实现对应起来看，它实际发生在一次 `runOneStep()` 结束之后、下一次
+`runOneStep()` 开始之前。
+
+可运行示例：`examples/steer/`
+
 #### DetachedCancel（忽略父 ctx cancel）
 
 在 Go 里，`context.Context`（通常命名为 `ctx`）同时承载“取消信号”和“截止时间”。
