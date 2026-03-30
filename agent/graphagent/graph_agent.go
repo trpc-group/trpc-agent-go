@@ -414,7 +414,9 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
 			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
 			processor.WithEventMessageProjector(
-				ga.options.EventMessageProjector,
+				processor.EventMessageProjector(
+					ga.options.EventMessageProjector,
+				),
 			),
 		}
 		if ga.options.ReasoningContentMode != "" {

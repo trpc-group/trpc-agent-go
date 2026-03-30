@@ -526,6 +526,10 @@ func hasProjectionMetadata(annotation Annotation) bool {
 		strings.TrimSpace(annotation.QuoteText) != ""
 }
 
+// isSyntheticProjectionEvent matches the zero-value event.Event{} used by
+// ContentRequestProcessor when projecting the current invocation message.
+// If event.Event grows new non-zero-default fields, or callers populate any
+// field on this synthetic event, update this heuristic accordingly.
 func isSyntheticProjectionEvent(evt event.Event) bool {
 	return evt.Author == "" &&
 		evt.Response == nil &&

@@ -331,7 +331,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
 		processor.WithPreloadMemory(options.PreloadMemory),
 		processor.WithEventMessageProjector(
-			options.EventMessageProjector,
+			processor.EventMessageProjector(
+				options.EventMessageProjector,
+			),
 		),
 		processor.WithFewShotResolver(a.fewShotForInvocation),
 	}

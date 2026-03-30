@@ -12,8 +12,10 @@ package graphagent
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const (
@@ -67,7 +69,11 @@ const (
 
 // EventMessageProjector projects one event-derived message into the
 // model-facing request view.
-type EventMessageProjector = processor.EventMessageProjector
+type EventMessageProjector func(
+	inv *agent.Invocation,
+	evt event.Event,
+	msg model.Message,
+) model.Message
 
 // Option is a function that configures a GraphAgent.
 type Option func(*Options)
