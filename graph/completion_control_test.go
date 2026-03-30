@@ -160,6 +160,31 @@ func TestVisibleGraphCompletionEventWithDedup_DedupsByResponseID(t *testing.T) {
 	require.Empty(t, visible.Response.Choices)
 }
 
+func TestVisibleGraphCompletionEventWithDedup_DedupsByMetadataFinalResponseID(
+	t *testing.T,
+) {
+	emitted := RecordAssistantResponseID(nil, &event.Event{
+		Response: &model.Response{
+			ID:     "resp-1",
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("answer"),
+			}},
+		},
+	})
+	raw := NewGraphCompletionEvent(
+		WithCompletionEventFinalState(State{
+			StateKeyLastResponse: "answer",
+		}),
+		WithCompletionEventFinalResponseID("resp-1"),
+	)
+
+	visible, ok := VisibleGraphCompletionEventWithDedup(raw, emitted)
+	require.True(t, ok)
+	require.Empty(t, visible.Response.Choices)
+}
+
 func TestVisibleGraphCompletionEventWithDedup_DoesNotFallbackToSignatureWhenResponseIDDiffers(
 	t *testing.T,
 ) {
@@ -280,16 +305,6 @@ func TestShouldSuppressGraphCompletionEvent(t *testing.T) {
 	require.True(t, ShouldSuppressGraphCompletionEvent(context.Background(), invocation, raw))
 	require.False(t, ShouldSuppressGraphCompletionEvent(WithGraphCompletionCapture(context.Background()), invocation, raw))
 	require.False(t, ShouldSuppressGraphCompletionEvent(context.Background(), invocation, &event.Event{}))
-}
-
-func TestCompletionResponseIDFromStateDelta(t *testing.T) {
-	require.Empty(t, completionResponseIDFromStateDelta(nil))
-	require.Empty(t, completionResponseIDFromStateDelta(map[string][]byte{
-		StateKeyLastResponseID: []byte("{"),
-	}))
-	require.Equal(t, "resp-1", completionResponseIDFromStateDelta(map[string][]byte{
-		StateKeyLastResponseID: []byte(`"resp-1"`),
-	}))
 }
 
 func TestRecordAssistantResponseID_IgnoresUnsupportedEvents(t *testing.T) {
