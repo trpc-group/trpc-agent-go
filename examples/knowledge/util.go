@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/sqlitevec"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector"
 )
 
@@ -44,6 +45,7 @@ type VectorStoreType string
 const (
 	VectorStoreInMemory      VectorStoreType = "inmemory"
 	VectorStorePGVector      VectorStoreType = "pgvector"
+	VectorStoreSQLiteVec     VectorStoreType = "sqlitevec"
 	VectorStoreTCVector      VectorStoreType = "tcvector"
 	VectorStoreElasticsearch VectorStoreType = "elasticsearch"
 	VectorStoreMilvus        VectorStoreType = "milvus"
@@ -54,6 +56,8 @@ func NewVectorStoreByType(storeType VectorStoreType) (vectorstore.VectorStore, e
 	switch storeType {
 	case VectorStorePGVector:
 		return newPGVectorStore()
+	case VectorStoreSQLiteVec:
+		return newSQLiteVecStore()
 	case VectorStoreTCVector:
 		return newTCVectorStore()
 	case VectorStoreElasticsearch:
@@ -65,6 +69,18 @@ func NewVectorStoreByType(storeType VectorStoreType) (vectorstore.VectorStore, e
 	default:
 		return inmemory.New(), nil
 	}
+}
+
+func newSQLiteVecStore() (vectorstore.VectorStore, error) {
+	dsn := GetEnvOrDefault("SQLITEVEC_DSN", "file:knowledge.sqlite?_busy_timeout=5000")
+	table := GetEnvOrDefault("SQLITEVEC_TABLE", "knowledge_documents")
+	metaTable := GetEnvOrDefault("SQLITEVEC_METADATA_TABLE", "knowledge_document_meta")
+
+	return sqlitevec.New(
+		sqlitevec.WithDSN(dsn),
+		sqlitevec.WithTableName(table),
+		sqlitevec.WithMetadataTableName(metaTable),
+	)
 }
 
 func newPGVectorStore() (vectorstore.VectorStore, error) {

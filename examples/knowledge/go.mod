@@ -10,6 +10,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch => ../../knowledge/vectorstore/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus => ../../knowledge/vectorstore/milvus
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../../knowledge/vectorstore/pgvector
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/sqlitevec => ../../knowledge/vectorstore/sqlitevec
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../../knowledge/vectorstore/tcvector
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch => ../../storage/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/storage/milvus => ../../storage/milvus
@@ -24,10 +25,12 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch v0.2.1
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus v0.8.1-0.20251222024650-ea147adf3d21
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/sqlitevec v0.0.0-20260327150826-d407bd208503
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.2.0
 )
 
 require (
+	github.com/asg017/sqlite-vec-go-bindings v0.1.6 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
@@ -84,6 +87,7 @@ require (
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/mattn/go-runewidth v0.0.19 // indirect
+	github.com/mattn/go-sqlite3 v1.14.32 // indirect
 	github.com/milvus-io/milvus-proto/go-api/v2 v2.6.3 // indirect
 	github.com/milvus-io/milvus/client/v2 v2.6.1 // indirect
 	github.com/milvus-io/milvus/pkg/v2 v2.6.3 // indirect
@@ -92,6 +96,8 @@ require (
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/mozillazg/go-httpheader v0.4.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/ncruces/go-sqlite3 v0.17.1 // indirect
+	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/opencontainers/runtime-spec v1.0.2 // indirect
 	github.com/otiai10/gosseract/v2 v2.4.1 // indirect
@@ -117,6 +123,7 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tencent/vectordatabase-sdk-go v1.8.0 // indirect
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.69 // indirect
+	github.com/tetratelabs/wazero v1.7.3 // indirect
 	github.com/tidwall/gjson v1.17.1 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect

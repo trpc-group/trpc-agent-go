@@ -49,7 +49,7 @@ import (
 var (
 	defaultQuery   = "What are Large Language Models and how do they work?"
 	modelName      = getEnvOrDefault("MODEL_NAME", "deepseek-chat")
-	vectorStore    = flag.String("vectorstore", "inmemory", "Vector store type: inmemory|pgvector|tcvector|elasticsearch")
+	vectorStore    = flag.String("vectorstore", "inmemory", "Vector store type: inmemory|sqlitevec|pgvector|tcvector|elasticsearch")
 	query          = flag.String("query", defaultQuery, "Query to ask the knowledge base")
 	showProgress   = flag.Bool("show-progress", false, "Show load progress (log-based)")
 	prettyProgress = flag.Bool("pretty-progress", true, "Show pretty multi-line progress bars (overrides -show-progress)")

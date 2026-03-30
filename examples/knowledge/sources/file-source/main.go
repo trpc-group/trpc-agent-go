@@ -46,7 +46,7 @@ import (
 
 var (
 	defaultModelName = "deepseek-chat"
-	vectorStore      = flag.String("vectorstore", "inmemory", "Vector store type: inmemory|pgvector|tcvector|elasticsearch")
+	vectorStore      = flag.String("vectorstore", "inmemory", "Vector store type: inmemory|sqlitevec|pgvector|tcvector|elasticsearch")
 )
 
 func main() {
