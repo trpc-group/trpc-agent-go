@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
@@ -38,8 +39,40 @@ type stubBMP struct {
 	status BrowserManagedService
 }
 
+type stubSkillsProvider struct {
+	report        ocskills.StatusReport
+	err           error
+	configPath    string
+	lastConfigKey string
+	lastEnabled   bool
+	setErr        error
+}
+
 func (p stubBMP) BrowserManagedStatus() BrowserManagedService {
 	return p.status
+}
+
+func (p *stubSkillsProvider) SkillsStatus() (ocskills.StatusReport, error) {
+	return p.report, p.err
+}
+
+func (p *stubSkillsProvider) SkillsConfigPath() string {
+	if p == nil {
+		return ""
+	}
+	return p.configPath
+}
+
+func (p *stubSkillsProvider) SetSkillEnabled(
+	configKey string,
+	enabled bool,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.lastConfigKey = configKey
+	p.lastEnabled = enabled
+	return p.setErr
 }
 
 func (r *stubRunner) Run(
@@ -236,6 +269,134 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 	require.Contains(t, body, "cpu report")
 	require.Contains(t, body, "127.0.0.1:8080")
 	require.Contains(t, body, "telegram")
+}
+
+func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		AppName: "openclaw",
+		Skills: &stubSkillsProvider{
+			configPath: "/tmp/openclaw.yaml",
+			report: ocskills.StatusReport{
+				Skills: []ocskills.StatusEntry{{
+					Name:        "weather-probe",
+					Description: "Probe weather prerequisites",
+					SkillKey:    "weather-api",
+					ConfigKey:   "weather-api",
+					FilePath:    "/tmp/skills/weather-probe",
+					Source:      "bundled",
+					Reason:      "missing env: OPENAI_API_KEY",
+					PrimaryEnv:  "OPENAI_API_KEY",
+					Bundled:     true,
+				}},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeIndex, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "Skills Inventory")
+	require.Contains(t, body, "weather-probe")
+	require.Contains(t, body, "/api/skills/status")
+	require.Contains(t, body, "/api/skills/toggle")
+	require.Contains(t, body, "/tmp/openclaw.yaml")
+	require.Contains(t, body, "OPENAI_API_KEY")
+}
+
+func TestServiceSkillsJSONEndpoint(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Skills: &stubSkillsProvider{
+			report: ocskills.StatusReport{
+				Skills: []ocskills.StatusEntry{{
+					Name:        "weather-probe",
+					Description: "Probe weather prerequisites",
+					Bundled:     true,
+					Eligible:    true,
+				}},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeSkillsJSON, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"total_count": 1`)
+	require.Contains(t, rr.Body.String(), `"label": "Bundled Skills"`)
+	require.Contains(t, rr.Body.String(), `"name": "weather-probe"`)
+}
+
+func TestServiceToggleSkillEndpoint(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubSkillsProvider{
+		configPath: "/tmp/openclaw.yaml",
+	}
+	svc := New(Config{Skills: provider})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeSkillToggle,
+		strings.NewReader(
+			"skill_key=weather-api&skill_name=weather-probe&enabled=false&return_to=skill-card-weather-api",
+		),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Equal(t, "weather-api", provider.lastConfigKey)
+	require.False(t, provider.lastEnabled)
+
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(t, "skill-card-weather-api", loc.Fragment)
+	require.Contains(
+		t,
+		loc.Query().Get(queryNotice),
+		"Restart OpenClaw to apply runtime changes.",
+	)
+}
+
+func TestServiceToggleSkillEndpointRequiresConfigPath(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Skills: &stubSkillsProvider{},
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeSkillToggle,
+		strings.NewReader("skill_key=weather-api&enabled=true"),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"skill toggles require a config-backed runtime",
+		loc.Query().Get(queryError),
+	)
 }
 
 func TestServiceJobEndpoints(t *testing.T) {

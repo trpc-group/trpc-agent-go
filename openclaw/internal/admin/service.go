@@ -23,6 +23,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
@@ -30,6 +31,8 @@ const (
 	routeIndex = "/"
 
 	routeStatusJSON        = "/api/status"
+	routeSkillsJSON        = "/api/skills/status"
+	routeSkillToggle       = "/api/skills/toggle"
 	routeJobsJSON          = "/api/cron/jobs"
 	routeJobRun            = "/api/cron/jobs/run"
 	routeJobRemove         = "/api/cron/jobs/remove"
@@ -55,6 +58,10 @@ const (
 	queryPath      = "path"
 	queryDownload  = "download"
 	formJobID      = "job_id"
+	formSkillKey   = "skill_key"
+	formSkillName  = "skill_name"
+	formEnabled    = "enabled"
+	formReturnTo   = "return_to"
 
 	refreshSeconds = 15
 
@@ -104,6 +111,7 @@ type Config struct {
 
 	Channels      []string
 	GatewayRoutes Routes
+	Skills        SkillsStatusProvider
 	Browser       BrowserConfig
 
 	Cron *cron.Service
@@ -143,6 +151,12 @@ type BrowserNode struct {
 
 type BrowserManagedStatusProvider interface {
 	BrowserManagedStatus() BrowserManagedService
+}
+
+type SkillsStatusProvider interface {
+	SkillsStatus() (ocskills.StatusReport, error)
+	SkillsConfigPath() string
+	SetSkillEnabled(configKey string, enabled bool) error
 }
 
 type BrowserManagedService struct {
@@ -207,6 +221,8 @@ func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc(routeIndex, s.handleIndex)
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
+	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
+	mux.HandleFunc(routeSkillToggle, s.handleToggleSkill)
 	mux.HandleFunc(routeJobsJSON, s.handleJobsJSON)
 	mux.HandleFunc(routeJobRun, s.handleRunJob)
 	mux.HandleFunc(routeJobRemove, s.handleRemoveJob)
@@ -251,6 +267,7 @@ type snapshot struct {
 	Channels []string      `json:"channels,omitempty"`
 	Routes   Routes        `json:"routes,omitempty"`
 	Browser  browserStatus `json:"browser"`
+	Skills   skillsStatus  `json:"skills"`
 	Exec     execStatus    `json:"exec"`
 	Uploads  uploadsStatus `json:"uploads"`
 	Cron     cronStatus    `json:"cron"`
@@ -338,6 +355,63 @@ type jobView struct {
 	LastError  string     `json:"last_error,omitempty"`
 }
 
+type skillsStatus struct {
+	Enabled         bool              `json:"enabled"`
+	Error           string            `json:"error,omitempty"`
+	Writable        bool              `json:"writable"`
+	ConfigPath      string            `json:"config_path,omitempty"`
+	TotalCount      int               `json:"total_count"`
+	ReadyCount      int               `json:"ready_count"`
+	NeedsSetupCount int               `json:"needs_setup_count"`
+	DisabledCount   int               `json:"disabled_count"`
+	BundledCount    int               `json:"bundled_count"`
+	Groups          []skillsGroupView `json:"groups,omitempty"`
+}
+
+type skillsGroupView struct {
+	ID     string      `json:"id,omitempty"`
+	Label  string      `json:"label,omitempty"`
+	Skills []skillView `json:"skills,omitempty"`
+}
+
+type skillView struct {
+	Name               string                `json:"name,omitempty"`
+	Description        string                `json:"description,omitempty"`
+	SkillKey           string                `json:"skill_key,omitempty"`
+	ConfigKey          string                `json:"config_key,omitempty"`
+	FilePath           string                `json:"file_path,omitempty"`
+	Source             string                `json:"source,omitempty"`
+	Reason             string                `json:"reason,omitempty"`
+	Emoji              string                `json:"emoji,omitempty"`
+	Homepage           string                `json:"homepage,omitempty"`
+	PrimaryEnv         string                `json:"primary_env,omitempty"`
+	Status             string                `json:"status,omitempty"`
+	SearchText         string                `json:"search_text,omitempty"`
+	Bundled            bool                  `json:"bundled"`
+	Always             bool                  `json:"always"`
+	Disabled           bool                  `json:"disabled"`
+	Eligible           bool                  `json:"eligible"`
+	BlockedByAllowlist bool                  `json:"blocked_by_allowlist"`
+	Requirements       skillRequirementsView `json:"requirements,omitempty"`
+	Missing            skillRequirementsView `json:"missing,omitempty"`
+	Install            []skillInstallView    `json:"install,omitempty"`
+}
+
+type skillRequirementsView struct {
+	OS      []string `json:"os,omitempty"`
+	Bins    []string `json:"bins,omitempty"`
+	AnyBins []string `json:"any_bins,omitempty"`
+	Env     []string `json:"env,omitempty"`
+	Config  []string `json:"config,omitempty"`
+}
+
+type skillInstallView struct {
+	ID    string   `json:"id,omitempty"`
+	Kind  string   `json:"kind,omitempty"`
+	Label string   `json:"label,omitempty"`
+	Bins  []string `json:"bins,omitempty"`
+}
+
 type pageData struct {
 	Snapshot       snapshot
 	Notice         string
@@ -370,6 +444,7 @@ func (s *Service) Snapshot() snapshot {
 		StateDir:       strings.TrimSpace(s.cfg.StateDir),
 		DebugDir:       strings.TrimSpace(s.cfg.DebugDir),
 		Routes:         s.cfg.GatewayRoutes,
+		Skills:         s.skillsStatus(),
 		Browser:        s.browserStatus(),
 		Exec:           s.execStatus(),
 		Uploads:        s.uploadsStatus(),
@@ -399,6 +474,134 @@ func (s *Service) Snapshot() snapshot {
 			continue
 		}
 		out.Cron.Jobs = append(out.Cron.Jobs, jobViewFromJob(job))
+	}
+	return out
+}
+
+func (s *Service) skillsStatus() skillsStatus {
+	if s == nil || s.cfg.Skills == nil {
+		return skillsStatus{}
+	}
+
+	report, err := s.cfg.Skills.SkillsStatus()
+	if err != nil {
+		return skillsStatus{
+			Enabled: true,
+			Error:   strings.TrimSpace(err.Error()),
+		}
+	}
+
+	out := skillsStatus{
+		Enabled:    true,
+		Writable:   strings.TrimSpace(s.cfg.Skills.SkillsConfigPath()) != "",
+		ConfigPath: strings.TrimSpace(s.cfg.Skills.SkillsConfigPath()),
+		TotalCount: len(report.Skills),
+	}
+
+	bundledSkills := make([]skillView, 0, len(report.Skills))
+	otherSkills := make([]skillView, 0, len(report.Skills))
+	for _, entry := range report.Skills {
+		view := skillViewFromStatus(entry)
+		switch view.Status {
+		case "disabled":
+			out.DisabledCount++
+		case "ready":
+			out.ReadyCount++
+		default:
+			out.NeedsSetupCount++
+		}
+		if view.Bundled {
+			out.BundledCount++
+			bundledSkills = append(bundledSkills, view)
+			continue
+		}
+		otherSkills = append(otherSkills, view)
+	}
+
+	if len(bundledSkills) > 0 {
+		out.Groups = append(out.Groups, skillsGroupView{
+			ID:     "bundled",
+			Label:  "Bundled Skills",
+			Skills: bundledSkills,
+		})
+	}
+	if len(otherSkills) > 0 {
+		out.Groups = append(out.Groups, skillsGroupView{
+			ID:     "other",
+			Label:  "Additional Skills",
+			Skills: otherSkills,
+		})
+	}
+	return out
+}
+
+func skillViewFromStatus(entry ocskills.StatusEntry) skillView {
+	view := skillView{
+		Name:               strings.TrimSpace(entry.Name),
+		Description:        strings.TrimSpace(entry.Description),
+		SkillKey:           strings.TrimSpace(entry.SkillKey),
+		ConfigKey:          strings.TrimSpace(entry.ConfigKey),
+		FilePath:           strings.TrimSpace(entry.FilePath),
+		Source:             strings.TrimSpace(entry.Source),
+		Reason:             strings.TrimSpace(entry.Reason),
+		Emoji:              strings.TrimSpace(entry.Emoji),
+		Homepage:           strings.TrimSpace(entry.Homepage),
+		PrimaryEnv:         strings.TrimSpace(entry.PrimaryEnv),
+		Bundled:            entry.Bundled,
+		Always:             entry.Always,
+		Disabled:           entry.Disabled,
+		Eligible:           entry.Eligible,
+		BlockedByAllowlist: entry.BlockedByAllowlist,
+		Requirements:       skillRequirementsViewFromStatus(entry.Requirements),
+		Missing:            skillRequirementsViewFromStatus(entry.Missing),
+		Install:            skillInstallViewsFromStatus(entry.Install),
+	}
+	switch {
+	case view.Disabled:
+		view.Status = "disabled"
+	case view.Eligible:
+		view.Status = "ready"
+	default:
+		view.Status = "needs-setup"
+	}
+	view.SearchText = strings.ToLower(strings.Join([]string{
+		view.Name,
+		view.Description,
+		view.SkillKey,
+		view.Source,
+		view.Reason,
+		view.PrimaryEnv,
+		view.FilePath,
+	}, " "))
+	return view
+}
+
+func skillRequirementsViewFromStatus(
+	req ocskills.StatusRequirements,
+) skillRequirementsView {
+	return skillRequirementsView{
+		OS:      append([]string(nil), req.OS...),
+		Bins:    append([]string(nil), req.Bins...),
+		AnyBins: append([]string(nil), req.AnyBins...),
+		Env:     append([]string(nil), req.Env...),
+		Config:  append([]string(nil), req.Config...),
+	}
+}
+
+func skillInstallViewsFromStatus(
+	options []ocskills.StatusInstallOption,
+) []skillInstallView {
+	if len(options) == 0 {
+		return nil
+	}
+	out := make([]skillInstallView, 0, len(options))
+	for _, option := range options {
+		out = append(out, skillInstallView{
+			ID:    strings.TrimSpace(option.ID),
+			Kind:  strings.TrimSpace(option.Kind),
+			Label: strings.TrimSpace(option.Label),
+			Bins:  append([]string(nil), option.Bins...),
+		})
 	}
 	return out
 }
@@ -583,6 +786,74 @@ func (s *Service) handleStatusJSON(
 		return
 	}
 	writeJSON(w, http.StatusOK, s.Snapshot())
+}
+
+func (s *Service) handleSkillsJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.skillsStatus())
+}
+
+func (s *Service) handleToggleSkill(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	configKey, enabled, skillName, returnTo, ok := s.requireSkillTogglePOST(w, r)
+	if !ok {
+		return
+	}
+
+	if err := s.cfg.Skills.SetSkillEnabled(configKey, enabled); err != nil {
+		s.redirectWithMessageAt(w, r, queryError, err.Error(), returnTo)
+		return
+	}
+
+	name := strings.TrimSpace(skillName)
+	if name == "" {
+		name = strings.TrimSpace(configKey)
+	}
+	state := "disabled"
+	if enabled {
+		state = "enabled"
+	}
+	s.redirectWithMessageAt(
+		w,
+		r,
+		queryNotice,
+		fmt.Sprintf(
+			"Saved %s as %s. Restart OpenClaw to apply runtime changes.",
+			name,
+			state,
+		),
+		returnTo,
+	)
+}
+
+func (s *Service) redirectWithMessageAt(
+	w http.ResponseWriter,
+	r *http.Request,
+	key string,
+	message string,
+	fragment string,
+) {
+	target := &url.URL{
+		Path:     routeIndex,
+		Fragment: strings.TrimSpace(fragment),
+	}
+	values := url.Values{}
+	values.Set(key, message)
+	target.RawQuery = values.Encode()
+	http.Redirect(
+		w,
+		r,
+		target.String(),
+		http.StatusSeeOther,
+	)
 }
 
 func (s *Service) handleJobsJSON(
@@ -871,20 +1142,77 @@ func (s *Service) requireCronPOST(
 	return true
 }
 
+func (s *Service) requireSkillTogglePOST(
+	w http.ResponseWriter,
+	r *http.Request,
+) (string, bool, string, string, bool) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return "", false, "", "", false
+	}
+	if s.cfg.Skills == nil {
+		http.Error(w, "skills are not enabled", http.StatusNotFound)
+		return "", false, "", "", false
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return "", false, "", "", false
+	}
+
+	configKey := strings.TrimSpace(r.FormValue(formSkillKey))
+	returnTo := strings.TrimSpace(r.FormValue(formReturnTo))
+	if configKey == "" {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			"skill_key is required",
+			returnTo,
+		)
+		return "", false, "", "", false
+	}
+
+	rawEnabled := strings.TrimSpace(r.FormValue(formEnabled))
+	enabled := rawEnabled == "true" || rawEnabled == "1"
+	if rawEnabled != "true" &&
+		rawEnabled != "false" &&
+		rawEnabled != "1" &&
+		rawEnabled != "0" {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			"enabled must be true or false",
+			returnTo,
+		)
+		return "", false, "", "", false
+	}
+
+	if strings.TrimSpace(s.cfg.Skills.SkillsConfigPath()) == "" {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			"skill toggles require a config-backed runtime",
+			returnTo,
+		)
+		return "", false, "", "", false
+	}
+
+	return configKey,
+		enabled,
+		strings.TrimSpace(r.FormValue(formSkillName)),
+		returnTo,
+		true
+}
+
 func (s *Service) redirectWithMessage(
 	w http.ResponseWriter,
 	r *http.Request,
 	key string,
 	message string,
 ) {
-	values := url.Values{}
-	values.Set(key, message)
-	http.Redirect(
-		w,
-		r,
-		routeIndex+"?"+values.Encode(),
-		http.StatusSeeOther,
-	)
+	s.redirectWithMessageAt(w, r, key, message, "")
 }
 
 func writeJSON(w http.ResponseWriter, code int, value any) {
@@ -1287,9 +1615,225 @@ const adminPageHTML = `<!doctype html>
       width: 220px;
       max-width: 100%;
     }
+    .filter-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .filter-tab {
+      background: #e6ddcf;
+      color: var(--ink);
+    }
+    .filter-tab.active {
+      background: var(--accent);
+      color: white;
+    }
+    .skills-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .skills-controls input {
+      flex: 1 1 260px;
+      min-width: 220px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 10px 14px;
+      font: inherit;
+      background: var(--panel-strong);
+      color: var(--ink);
+    }
+    .skills-config-note {
+      margin-top: 12px;
+    }
+    .skills-group {
+      margin-top: 18px;
+    }
+    .skills-group h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .skill-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel-strong);
+      padding: 14px 16px;
+      margin-top: 12px;
+    }
+    .skill-card summary {
+      list-style: none;
+      cursor: pointer;
+    }
+    .skill-card summary::-webkit-details-marker {
+      display: none;
+    }
+    .skill-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    .skill-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 17px;
+    }
+    .skill-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--line);
+      flex: 0 0 auto;
+    }
+    .skill-dot.ready { background: var(--ok); }
+    .skill-dot.needs-setup { background: #c27a20; }
+    .skill-dot.disabled { background: var(--muted); }
+    .skill-badges {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .skill-summary-side {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 14px;
+      flex: 0 0 auto;
+    }
+    .skill-badge {
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 12px;
+      border: 1px solid var(--line);
+      background: rgba(15, 111, 97, 0.08);
+      color: var(--ink);
+    }
+    .skill-badge.status {
+      padding: 6px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+    .skill-badge.ready {
+      color: var(--ok);
+      border-color: rgba(45, 109, 63, 0.25);
+      background: rgba(45, 109, 63, 0.08);
+    }
+    .skill-badge.needs-setup {
+      color: #9b5f12;
+      border-color: rgba(194, 122, 32, 0.25);
+      background: rgba(194, 122, 32, 0.08);
+    }
+    .skill-badge.disabled {
+      color: var(--muted);
+      border-color: rgba(95, 87, 77, 0.18);
+      background: rgba(95, 87, 77, 0.08);
+    }
+    .skill-note {
+      margin-top: 8px;
+      color: var(--muted);
+    }
+    .skill-toggle-group {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex: 0 0 auto;
+    }
+    .skill-toggle-label {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .skill-inline-toggle-form {
+      margin: 0;
+      flex: 0 0 auto;
+    }
+    .skill-inline-toggle {
+      display: inline-flex;
+      align-items: center;
+      border: 0;
+      border-radius: 999px;
+      padding: 0;
+      background: transparent;
+      color: var(--ink);
+      cursor: pointer;
+      font: inherit;
+    }
+    .skill-inline-toggle:focus-visible {
+      outline: 2px solid rgba(15, 111, 97, 0.42);
+      outline-offset: 3px;
+    }
+    .skill-inline-toggle-track {
+      position: relative;
+      width: 54px;
+      height: 32px;
+      border-radius: 999px;
+      background: rgba(95, 87, 77, 0.28);
+      border: 1px solid rgba(95, 87, 77, 0.18);
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    .skill-inline-toggle-track::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      background: white;
+      box-shadow: 0 4px 10px rgba(35, 29, 22, 0.18);
+      transition: transform 120ms ease;
+    }
+    .skill-inline-toggle.enabled .skill-inline-toggle-track {
+      background: rgba(45, 109, 63, 0.9);
+      border-color: rgba(45, 109, 63, 0.35);
+    }
+    .skill-inline-toggle.enabled .skill-inline-toggle-track::after {
+      transform: translateX(22px);
+    }
+    .skill-details {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+    .skill-details-head {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .skill-details-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    }
+    .skill-list {
+      margin: 8px 0 0;
+      padding-left: 18px;
+    }
     @media (max-width: 760px) {
       h1 { font-size: 30px; }
       .meta { grid-template-columns: 1fr; }
+      .skill-title {
+        align-items: flex-start;
+      }
+      .skill-summary-side {
+        width: 100%;
+        justify-content: flex-start;
+      }
       table, thead, tbody, th, td, tr { display: block; }
       thead { display: none; }
       td {
@@ -1327,6 +1871,10 @@ const adminPageHTML = `<!doctype html>
       <article class="card">
         <span class="stat-label">Jobs</span>
         <span class="stat-value">{{.Snapshot.Cron.JobCount}}</span>
+      </article>
+      <article class="card">
+        <span class="stat-label">Skills</span>
+        <span class="stat-value">{{.Snapshot.Skills.TotalCount}}</span>
       </article>
       <article class="card">
         <span class="stat-label">Exec Sessions</span>
@@ -1451,6 +1999,7 @@ const adminPageHTML = `<!doctype html>
           <dt>JSON</dt>
           <dd>
             <a href="/api/status">status</a> ·
+            <a href="/api/skills/status">skills</a> ·
             <a href="/api/cron/jobs">jobs</a> ·
             <a href="/api/exec/sessions">exec</a> ·
             <a href="/api/uploads">uploads</a> ·
@@ -1484,6 +2033,32 @@ const adminPageHTML = `<!doctype html>
         {{else}}
         <p class="empty">Scheduled jobs are not enabled for this runtime.</p>
         {{end}}
+      </article>
+
+      <article class="card">
+        <h2>Skills Surface</h2>
+        <p class="subtle">
+          Read-only management view for bundled, local, and external skills.
+          It highlights disabled skills, setup gaps, and the config/env
+          requirements you still need to satisfy before a skill becomes usable.
+        </p>
+        <dl class="meta">
+          <dt>Total</dt>
+          <dd>{{.Snapshot.Skills.TotalCount}}</dd>
+          <dt>Ready</dt>
+          <dd>{{.Snapshot.Skills.ReadyCount}}</dd>
+          <dt>Needs Setup</dt>
+          <dd>{{.Snapshot.Skills.NeedsSetupCount}}</dd>
+          <dt>Disabled</dt>
+          <dd>{{.Snapshot.Skills.DisabledCount}}</dd>
+          <dt>Bundled</dt>
+          <dd>{{.Snapshot.Skills.BundledCount}}</dd>
+          <dt>JSON</dt>
+          <dd><a href="/api/skills/status">/api/skills/status</a></dd>
+        </dl>
+        <p class="subtle" style="margin-top: 12px;">
+          Jump to <a href="#skills-admin">Skills Inventory</a>.
+        </p>
       </article>
 
       <article class="card">
@@ -1804,6 +2379,257 @@ const adminPageHTML = `<!doctype html>
         <p class="empty">Browser tool is not configured for this runtime.</p>
         {{end}}
       </article>
+    </section>
+
+    <section class="card" style="margin-top: 24px;" id="skills-admin" data-skills-root>
+      <h2>Skills Inventory</h2>
+      <p class="subtle">
+        Inventory of bundled, local, project, and external skills discovered
+        by this runtime. Use it to see which skills are ready, which are
+        blocked or disabled, and which requirement is still missing before
+        they can run.
+      </p>
+      {{if .Snapshot.Skills.Writable}}
+      <p class="subtle skills-config-note">
+        Enable and disable writes are persisted to
+        <code>{{.Snapshot.Skills.ConfigPath}}</code>. Restart OpenClaw after
+        saving to apply runtime changes.
+      </p>
+      {{else}}
+      <p class="subtle skills-config-note">
+        This runtime was started without a writable config file, so
+        enable/disable is unavailable here.
+      </p>
+      {{end}}
+      {{if .Snapshot.Skills.Error}}
+      <div class="notice err" style="margin-top: 12px;">
+        {{.Snapshot.Skills.Error}}
+      </div>
+      {{end}}
+      {{if .Snapshot.Skills.Groups}}
+      <div class="filter-tabs">
+        <button class="filter-tab active" type="button" data-skill-tab="all">
+          All {{.Snapshot.Skills.TotalCount}}
+        </button>
+        <button class="filter-tab" type="button" data-skill-tab="ready">
+          Ready {{.Snapshot.Skills.ReadyCount}}
+        </button>
+        <button class="filter-tab" type="button" data-skill-tab="needs-setup">
+          Needs Setup {{.Snapshot.Skills.NeedsSetupCount}}
+        </button>
+        <button class="filter-tab" type="button" data-skill-tab="disabled">
+          Disabled {{.Snapshot.Skills.DisabledCount}}
+        </button>
+      </div>
+      <div class="skills-controls">
+        <input
+          type="search"
+          placeholder="Search skills by name, path, key, env, or reason"
+          data-skills-filter
+        >
+        <span class="subtle"><span data-skills-shown>{{.Snapshot.Skills.TotalCount}}</span> shown</span>
+      </div>
+
+      {{range .Snapshot.Skills.Groups}}
+      <div class="skills-group" data-skills-group id="skills-group-{{.ID}}">
+        <h3>{{.Label}}</h3>
+        {{range .Skills}}
+        <details
+          class="skill-card"
+          id="skill-card-{{.ConfigKey}}"
+          data-skill-card
+          data-skill-status="{{.Status}}"
+          data-skill-search="{{.SearchText}}"
+        >
+          <summary>
+            <div class="skill-title">
+              <div>
+                <div class="skill-name">
+                  <span class="skill-dot {{.Status}}"></span>
+                  {{if .Emoji}}<span>{{.Emoji}}</span>{{end}}
+                  <span>{{.Name}}</span>
+                </div>
+                <div class="skill-note">{{.Description}}</div>
+                {{if .Reason}}
+                <div class="skill-note">Reason: {{.Reason}}</div>
+                {{end}}
+              </div>
+              <div class="skill-summary-side">
+                <div class="skill-badges">
+                  <span class="skill-badge status {{.Status}}">
+                    {{if eq .Status "ready"}}Ready{{else if eq .Status "disabled"}}Disabled{{else}}Setup Required{{end}}
+                  </span>
+                  {{if .Bundled}}<span class="skill-badge">bundled</span>{{end}}
+                  {{if .BlockedByAllowlist}}<span class="skill-badge">allowlist</span>{{end}}
+                  {{if .Always}}<span class="skill-badge">always</span>{{end}}
+                  {{if .PrimaryEnv}}<span class="skill-badge">{{.PrimaryEnv}}</span>{{end}}
+                </div>
+                {{if $.Snapshot.Skills.Writable}}
+                <div class="skill-toggle-group">
+                  <span class="skill-toggle-label">Enabled</span>
+                  <form
+                    method="post"
+                    action="/api/skills/toggle"
+                    class="skill-inline-toggle-form"
+                    data-skill-inline-toggle
+                    data-skill-config="{{.ConfigKey}}"
+                  >
+                    <input type="hidden" name="skill_key" value="{{.ConfigKey}}">
+                    <input type="hidden" name="skill_name" value="{{.Name}}">
+                    <input type="hidden" name="enabled" value="{{if .Disabled}}true{{else}}false{{end}}">
+                    <input type="hidden" name="return_to" value="skill-card-{{.ConfigKey}}">
+                    <button
+                      class="skill-inline-toggle {{if not .Disabled}}enabled{{end}}"
+                      type="submit"
+                      data-skill-toggle-button
+                      data-skill-switch="{{.ConfigKey}}"
+                      role="switch"
+                      aria-checked="{{if .Disabled}}false{{else}}true{{end}}"
+                      aria-label="Enabled for {{.Name}}"
+                      title="{{if .Disabled}}Enable{{else}}Disable{{end}} {{.Name}}"
+                    >
+                      <span class="skill-inline-toggle-track" aria-hidden="true"></span>
+                    </button>
+                  </form>
+                </div>
+                {{end}}
+              </div>
+            </div>
+          </summary>
+          <div class="skill-details">
+            <div class="skill-details-head">
+              <div class="subtle">
+                {{if $.Snapshot.Skills.Writable}}
+                The row-level Enabled switch saves
+                <code>skills.entries.{{.ConfigKey}}.enabled</code> for this
+                skill.
+                {{else}}
+                Enable/disable controls are unavailable for this runtime.
+                {{end}}
+              </div>
+            </div>
+            <div class="skill-details-grid">
+              <div>
+                <strong>Skill Key</strong>
+                <div><code>{{.SkillKey}}</code></div>
+              </div>
+              <div>
+                <strong>Config Key</strong>
+                <div><code>{{.ConfigKey}}</code></div>
+              </div>
+              <div>
+                <strong>Source</strong>
+                <div>{{if .Source}}{{.Source}}{{else}}unknown{{end}}</div>
+              </div>
+              <div>
+                <strong>Primary Env</strong>
+                <div>{{if .PrimaryEnv}}<code>{{.PrimaryEnv}}</code>{{else}}-{{end}}</div>
+              </div>
+              <div>
+                <strong>Path</strong>
+                <div><code>{{.FilePath}}</code></div>
+              </div>
+              <div>
+                <strong>Homepage</strong>
+                <div>
+                  {{if .Homepage}}
+                  <a href="{{.Homepage}}" target="_blank" rel="noopener noreferrer">{{.Homepage}}</a>
+                  {{else}}-{{end}}
+                </div>
+              </div>
+            </div>
+
+            {{if or .Missing.Bins .Missing.AnyBins .Missing.Env .Missing.Config .Missing.OS}}
+            <div style="margin-top: 14px;">
+              <strong>Missing Requirements</strong>
+              <ul class="skill-list">
+                {{if .Missing.Bins}}
+                <li>bins:
+                  {{range $i, $item := .Missing.Bins}}{{if $i}}, {{end}}<code>{{$item}}</code>{{end}}
+                </li>
+                {{end}}
+                {{if .Missing.AnyBins}}
+                <li>one of:
+                  {{range $i, $item := .Missing.AnyBins}}{{if $i}}, {{end}}<code>{{$item}}</code>{{end}}
+                </li>
+                {{end}}
+                {{if .Missing.Env}}
+                <li>env:
+                  {{range $i, $item := .Missing.Env}}{{if $i}}, {{end}}<code>{{$item}}</code>{{end}}
+                </li>
+                {{end}}
+                {{if .Missing.Config}}
+                <li>config:
+                  {{range $i, $item := .Missing.Config}}{{if $i}}, {{end}}<code>{{$item}}</code>{{end}}
+                </li>
+                {{end}}
+                {{if .Missing.OS}}
+                <li>os:
+                  {{range $i, $item := .Missing.OS}}{{if $i}}, {{end}}{{$item}}{{end}}
+                </li>
+                {{end}}
+              </ul>
+            </div>
+            {{end}}
+
+            {{if or .Requirements.Bins .Requirements.AnyBins .Requirements.Env .Requirements.Config .Requirements.OS}}
+            <div style="margin-top: 14px;">
+              <strong>Declared Requirements</strong>
+              <ul class="skill-list">
+                {{if .Requirements.Bins}}
+                <li>bins:
+                  {{range $i, $item := .Requirements.Bins}}{{if $i}}, {{end}}<code>{{$item}}</code>{{end}}
+                </li>
+                {{end}}
+                {{if .Requirements.AnyBins}}
+                <li>one of:
+                  {{range $i, $item := .Requirements.AnyBins}}{{if $i}}, {{end}}<code>{{$item}}</code>{{end}}
+                </li>
+                {{end}}
+                {{if .Requirements.Env}}
+                <li>env:
+                  {{range $i, $item := .Requirements.Env}}{{if $i}}, {{end}}<code>{{$item}}</code>{{end}}
+                </li>
+                {{end}}
+                {{if .Requirements.Config}}
+                <li>config:
+                  {{range $i, $item := .Requirements.Config}}{{if $i}}, {{end}}<code>{{$item}}</code>{{end}}
+                </li>
+                {{end}}
+                {{if .Requirements.OS}}
+                <li>os:
+                  {{range $i, $item := .Requirements.OS}}{{if $i}}, {{end}}{{$item}}{{end}}
+                </li>
+                {{end}}
+              </ul>
+            </div>
+            {{end}}
+
+            {{if .Install}}
+            <div style="margin-top: 14px;">
+              <strong>Suggested Installers</strong>
+              <ul class="skill-list">
+                {{range .Install}}
+                <li>
+                  <code>{{.Label}}</code>
+                  {{if .Bins}}
+                  <span class="subtle">
+                    (provides {{range $i, $item := .Bins}}{{if $i}}, {{end}}<code>{{$item}}</code>{{end}})
+                  </span>
+                  {{end}}
+                </li>
+                {{end}}
+              </ul>
+            </div>
+            {{end}}
+          </div>
+        </details>
+        {{end}}
+      </div>
+      {{end}}
+      {{else}}
+      <p class="empty">No skills discovered.</p>
+      {{end}}
     </section>
 
     <section class="card" style="margin-top: 24px;">
@@ -2153,5 +2979,170 @@ const adminPageHTML = `<!doctype html>
       {{end}}
     </section>
   </main>
+  <script>
+    (function () {
+      const root = document.querySelector("[data-skills-root]");
+      if (!root) return;
+
+      const search = root.querySelector("[data-skills-filter]");
+      const shown = root.querySelector("[data-skills-shown]");
+      const tabs = Array.from(root.querySelectorAll("[data-skill-tab]"));
+      const cards = Array.from(root.querySelectorAll("[data-skill-card]"));
+      const groups = Array.from(root.querySelectorAll("[data-skills-group]"));
+      const inlineToggleForms = Array.from(root.querySelectorAll("[data-skill-inline-toggle]"));
+      const inlineToggleButtons = Array.from(root.querySelectorAll("[data-skill-toggle-button]"));
+      const scrollRestoreKey = "openclaw-admin-skills-scroll";
+      let active = "all";
+
+      const saveScrollRestore = (form) => {
+        if (!form || !window.sessionStorage) return;
+        const button = form.querySelector("[data-skill-toggle-button]");
+        const card = form.closest("[data-skill-card]");
+        const returnField = form.querySelector('input[name="return_to"]');
+        const payload = {
+          path: window.location.pathname,
+          configKey: form.getAttribute("data-skill-config") || "",
+          cardId: card ? card.id : "",
+          viewportTop: button ? button.getBoundingClientRect().top : 0,
+          scrollY: window.scrollY || window.pageYOffset || 0,
+          active,
+          searchValue: search ? search.value : "",
+          ts: Date.now()
+        };
+        try {
+          window.sessionStorage.setItem(
+            scrollRestoreKey,
+            JSON.stringify(payload)
+          );
+        } catch (_) {}
+        if (returnField) {
+          returnField.value = "";
+        }
+      };
+
+      const restoreScrollPosition = () => {
+        if (!window.sessionStorage) return;
+        let raw = "";
+        try {
+          raw = window.sessionStorage.getItem(scrollRestoreKey) || "";
+        } catch (_) {
+          return;
+        }
+        if (!raw) return;
+
+        let payload = null;
+        try {
+          payload = JSON.parse(raw);
+        } catch (_) {
+          payload = null;
+        }
+        try {
+          window.sessionStorage.removeItem(scrollRestoreKey);
+        } catch (_) {}
+        if (!payload || payload.path !== window.location.pathname) {
+          return;
+        }
+        if (typeof payload.searchValue === "string" && search) {
+          search.value = payload.searchValue;
+        }
+        if (typeof payload.active === "string" && payload.active) {
+          active = payload.active;
+        }
+        refresh();
+
+        const apply = () => {
+          const savedY = Number(payload.scrollY);
+          if (Number.isFinite(savedY)) {
+            window.scrollTo(0, savedY);
+          }
+
+          let target = null;
+          if (payload.configKey) {
+            target = root.querySelector(
+              '[data-skill-switch="' + payload.configKey + '"]'
+            );
+          }
+          if (!target && payload.cardId) {
+            target = document.getElementById(payload.cardId);
+          }
+          const savedTop = Number(payload.viewportTop);
+          if (!target || !Number.isFinite(savedTop)) {
+            return;
+          }
+          const rect = target.getBoundingClientRect();
+          if (!rect || rect.height === 0) {
+            return;
+          }
+          window.scrollBy(0, rect.top - savedTop);
+        };
+
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(apply);
+        });
+      };
+
+      const matches = (card) => {
+        const status = card.getAttribute("data-skill-status") || "";
+        if (active !== "all" && status !== active) return false;
+        const needle = (search && search.value ? search.value : "").trim().toLowerCase();
+        if (!needle) return true;
+        const haystack = (card.getAttribute("data-skill-search") || "").toLowerCase();
+        return haystack.indexOf(needle) >= 0;
+      };
+
+      const refresh = () => {
+        let visibleCount = 0;
+        cards.forEach((card) => {
+          const visible = matches(card);
+          card.hidden = !visible;
+          if (visible) visibleCount += 1;
+        });
+        groups.forEach((group) => {
+          const visibleCards = group.querySelectorAll("[data-skill-card]:not([hidden])");
+          group.hidden = visibleCards.length === 0;
+        });
+        if (shown) shown.textContent = String(visibleCount);
+        tabs.forEach((tab) => {
+          tab.classList.toggle("active", (tab.getAttribute("data-skill-tab") || "") === active);
+        });
+      };
+
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => {
+          active = tab.getAttribute("data-skill-tab") || "all";
+          refresh();
+        });
+      });
+      if (search) {
+        search.addEventListener("input", refresh);
+      }
+      inlineToggleForms.forEach((form) => {
+        form.addEventListener("click", (event) => {
+          event.stopPropagation();
+        });
+        form.addEventListener("keydown", (event) => {
+          event.stopPropagation();
+        });
+        form.addEventListener("submit", () => {
+          saveScrollRestore(form);
+        });
+      });
+      inlineToggleButtons.forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const form = button.form;
+          if (!form) return;
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+            return;
+          }
+          form.submit();
+        });
+      });
+      refresh();
+      restoreScrollPosition();
+    })();
+  </script>
 </body>
 </html>`

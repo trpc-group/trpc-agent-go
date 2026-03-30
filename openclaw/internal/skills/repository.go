@@ -34,7 +34,8 @@ type SkillConfig struct {
 }
 
 type Repository struct {
-	base skill.Repository
+	base  skill.Repository
+	roots []string
 
 	eligible map[string]struct{}
 	reasons  map[string]string
@@ -103,6 +104,7 @@ func NewRepository(roots []string, opts ...Option) (*Repository, error) {
 
 	r := &Repository{
 		base:     base,
+		roots:    append([]string(nil), roots...),
 		eligible: map[string]struct{}{},
 		reasons:  map[string]string{},
 		baseDirs: map[string]string{},
