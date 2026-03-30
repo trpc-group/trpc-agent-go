@@ -3331,6 +3331,8 @@ func TestMessageProcessor_ProcessMessage_StructuredTaskError(
 	assert.NotNil(t, task.Metadata)
 	assert.Equal(t, code, task.Metadata[ia2a.MessageMetadataErrorCodeKey])
 	assert.NotNil(t, task.Status.Message)
+	assert.Nil(t, task.Status.Message.Metadata)
+	assert.Len(t, task.Status.Message.Parts, 1)
 }
 
 func TestMessageProcessor_ProcessMessage_MultipleEvents_PreservesArtifactMetadata(
@@ -3474,6 +3476,10 @@ func TestMessageProcessor_ProcessBatchStreamingEvents_StructuredTaskError(
 			code,
 			status.Metadata[ia2a.MessageMetadataErrorCodeKey],
 		)
+		if assert.NotNil(t, status.Status.Message) {
+			assert.Nil(t, status.Status.Message.Metadata)
+			assert.Len(t, status.Status.Message.Parts, 1)
+		}
 	default:
 		t.Fatal("expected task failure status event")
 	}
@@ -3551,6 +3557,10 @@ done:
 		code,
 		status.Metadata[ia2a.MessageMetadataErrorCodeKey],
 	)
+	if assert.NotNil(t, status.Status.Message) {
+		assert.Nil(t, status.Status.Message.Metadata)
+		assert.Len(t, status.Status.Message.Parts, 1)
+	}
 }
 
 func TestMessageProcessor_ProcessBatchStreamingEvents_GraphNodeErrorNotTerminal(

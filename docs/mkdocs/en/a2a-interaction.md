@@ -260,7 +260,11 @@ sequenceDiagram
 
 ### Client-Side Filtering Rules
 
-- `TaskStatusUpdateEvent` (submitted/completed): Task lifecycle signals, no user content
+- `TaskStatusUpdateEvent` (submitted/completed): task lifecycle signals, no
+  user content
+- `TaskStatusUpdateEvent` (failed/rejected/canceled) with structured error
+  metadata: terminal failure. Read outer metadata for machine branching and use
+  `status.message.parts` only for display text.
 - `TaskArtifactUpdateEvent` with `lastChunk=true`: Stream end signal or aggregated result
 
 ### Role of `llm_response_id`

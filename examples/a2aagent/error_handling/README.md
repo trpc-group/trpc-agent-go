@@ -39,7 +39,11 @@ With this option enabled:
 
 - unary requests return a failed `Task`
 - streaming requests emit a failed `TaskStatusUpdateEvent`
-- the task metadata keeps `error_type`, `error_code`, and `error_message`
+- outer task or status-event metadata keeps `error_type`, `error_code`,
+  `error_message`, and `task_state`
+- `status.message.parts` keeps the display text
+- `status.message.metadata` is intentionally left empty so structured fields are
+  not duplicated again
 
 ## Client-side setup
 
@@ -63,6 +67,46 @@ That means business code can keep one standard rule:
 - consume events
 - branch on `evt.Response.Error`
 - read `Type`, `Code`, and `Message`
+
+## How to read the remote payload
+
+Think of the remote failure payload as two channels:
+
+- machine channel: outer `Task.Metadata` or
+  `TaskStatusUpdateEvent.Metadata`
+- display channel: `status.message.parts`
+
+For a streaming failure, the payload is shaped like this:
+
+```json
+{
+  "kind": "status-update",
+  "metadata": {
+    "object_type": "error",
+    "error_type": "flow_error",
+    "error_code": "REMOTE_VALIDATION_FAILED",
+    "error_message": "validation failed",
+    "task_state": "failed"
+  },
+  "status": {
+    "state": "failed",
+    "message": {
+      "parts": [
+        {
+          "kind": "text",
+          "text": "validation failed"
+        }
+      ]
+    }
+  }
+}
+```
+
+The recommended business-side rule is therefore:
+
+- use `status.state` or reconstructed `evt.Response.Error` for branching
+- read structured fields from outer metadata
+- treat `status.message.parts` as text for logs, UI, or operator display
 
 ## Run the example
 
