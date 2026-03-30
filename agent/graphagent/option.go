@@ -65,6 +65,10 @@ const (
 	IsolatedInvocation
 )
 
+// EventMessageProjector projects one event-derived message into the
+// model-facing request view.
+type EventMessageProjector = processor.EventMessageProjector
+
 // Option is a function that configures a GraphAgent.
 type Option func(*Options)
 
@@ -107,6 +111,9 @@ type Options struct {
 	// conversations. This is useful for models like DeepSeek that output reasoning_content
 	// in thinking mode.
 	ReasoningContentMode string
+	// EventMessageProjector rewrites one event-derived message before it
+	// is appended to the model request.
+	EventMessageProjector EventMessageProjector
 
 	// ExecutorOptions allows passing additional executor options directly.
 	// These options are applied after the mapped options (ChannelBufferSize,
@@ -255,6 +262,16 @@ func WithReasoningContentMode(mode string) Option {
 func WithSummaryFormatter(formatter func(summary string) string) Option {
 	return func(opts *Options) {
 		opts.summaryFormatter = formatter
+	}
+}
+
+// WithEventMessageProjector rewrites one event-derived message before
+// it is appended to the model request.
+func WithEventMessageProjector(
+	projector EventMessageProjector,
+) Option {
+	return func(opts *Options) {
+		opts.EventMessageProjector = projector
 	}
 }
 

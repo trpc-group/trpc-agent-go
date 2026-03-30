@@ -96,6 +96,10 @@ const (
 	IsolatedInvocation
 )
 
+// EventMessageProjector projects one event-derived message into the
+// model-facing request view.
+type EventMessageProjector = processor.EventMessageProjector
+
 var (
 	defaultOptions = Options{
 		ChannelBufferSize:                    defaultChannelBufferSize,
@@ -250,6 +254,9 @@ type Options struct {
 	// Default is false, so same-branch events are merged into user context
 	// unless explicitly opted into preserving roles.
 	PreserveSameBranch bool
+	// EventMessageProjector rewrites one event-derived message before it
+	// is appended to the model request.
+	EventMessageProjector EventMessageProjector
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
 	// StructuredOutputType is the reflect.Type of the example pointer used to generate the schema.
@@ -859,6 +866,16 @@ func WithMaxHistoryRuns(maxRuns int) Option {
 func WithPreserveSameBranch(preserve bool) Option {
 	return func(opts *Options) {
 		opts.PreserveSameBranch = preserve
+	}
+}
+
+// WithEventMessageProjector rewrites one event-derived message before
+// it is appended to the model request.
+func WithEventMessageProjector(
+	projector EventMessageProjector,
+) Option {
+	return func(opts *Options) {
+		opts.EventMessageProjector = projector
 	}
 }
 

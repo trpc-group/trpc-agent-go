@@ -171,6 +171,46 @@ func TestBuildInjectedContextMessages(t *testing.T) {
 	require.Equal(t, "latest answer", got[2].Content)
 }
 
+func TestProjectEventMessage(t *testing.T) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeText,
+					Text: stringPointer("hello"),
+				},
+				{
+					Type: model.ContentTypeFile,
+					File: &model.File{Name: "a.txt"},
+				},
+			},
+		}),
+	)
+	inv.RunOptions.RuntimeState = RuntimeState(Annotation{
+		ActorID:    "u1",
+		ActorLabel: "Alice",
+		QuoteText:  "earlier",
+	})
+
+	got := ProjectEventMessage(
+		inv,
+		event.Event{},
+		inv.Message,
+	)
+	require.Equal(
+		t,
+		"Speaker: Alice\nQuoted message: earlier\nMessage: hello",
+		got.Content,
+	)
+	require.Len(t, got.ContentParts, 1)
+	require.Equal(
+		t,
+		model.ContentTypeFile,
+		got.ContentParts[0].Type,
+	)
+}
+
 func TestHistoryHelpers_RenderAndFilter(t *testing.T) {
 	t.Parallel()
 
