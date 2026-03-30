@@ -36,6 +36,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	runnerlog "trpc.group/trpc-go/trpc-agent-go/log"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -44,6 +45,7 @@ import (
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // mockAgent implements the agent.Agent interface for testing.
@@ -139,6 +141,24 @@ type staticModel struct {
 	content string
 }
 
+type unsupportedSteerRunner struct{}
+
+func (unsupportedSteerRunner) Run(
+	context.Context,
+	string,
+	string,
+	model.Message,
+	...agent.RunOption,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (unsupportedSteerRunner) Close() error {
+	return nil
+}
+
 type emptyIDModel struct {
 	name    string
 	content string
@@ -194,6 +214,55 @@ type runnerStructuredOutputTypedPayload struct {
 type capturedModelRequest struct {
 	messages         []model.Message
 	structuredOutput *model.StructuredOutput
+}
+
+type sequentialModel struct {
+	name      string
+	responses []*model.Response
+
+	mu       sync.Mutex
+	requests []*capturedModelRequest
+	nextIdx  int
+}
+
+func (m *sequentialModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if req != nil {
+		m.requests = append(
+			m.requests,
+			cloneCapturedModelRequest(req),
+		)
+	}
+
+	if m.nextIdx >= len(m.responses) {
+		return nil, fmt.Errorf(
+			"unexpected model call %d",
+			m.nextIdx,
+		)
+	}
+
+	resp := m.responses[m.nextIdx]
+	m.nextIdx++
+
+	ch := make(chan *model.Response, 1)
+	ch <- resp
+	close(ch)
+	return ch, nil
+}
+
+func (m *sequentialModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *sequentialModel) Requests() []*capturedModelRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]*capturedModelRequest(nil), m.requests...)
 }
 
 type capturingStructuredOutputModel struct {
@@ -266,6 +335,18 @@ func firstSystemMessageContent(messages []model.Message) string {
 	return ""
 }
 
+func findMessageIndex(
+	messages []model.Message,
+	match func(model.Message) bool,
+) int {
+	for i, message := range messages {
+		if match(message) {
+			return i
+		}
+	}
+	return -1
+}
+
 func collectStructuredOutput(events <-chan *event.Event) any {
 	var structured any
 	for evt := range events {
@@ -274,6 +355,258 @@ func collectStructuredOutput(events <-chan *event.Event) any {
 		}
 	}
 	return structured
+}
+
+func TestEnqueueUserMessage_Errors(t *testing.T) {
+	err := EnqueueUserMessage(
+		unsupportedSteerRunner{},
+		"req-1",
+		model.NewUserMessage("hello"),
+	)
+	require.ErrorIs(t, err, ErrQueuedUserMessageUnsupported)
+
+	ag := &mockAgent{name: "runner-agent"}
+	r := NewRunner("runner-steer-errors", ag)
+
+	err = EnqueueUserMessage(r, "", model.NewUserMessage("hello"))
+	require.EqualError(t, err, "runner: empty request id")
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.NewAssistantMessage("no"),
+	)
+	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{Role: model.RoleUser},
+	)
+	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.NewUserMessage("hello"),
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+}
+
+func TestRunner_EnqueueUserMessage_ConsumesAtSafeBoundary(
+	t *testing.T,
+) {
+	const (
+		appName          = "runner-steer-safe-boundary"
+		userID           = "user-1"
+		sessionID        = "session-1"
+		requestID        = "req-steer-1"
+		toolName         = "lookup"
+		toolDescription  = "Looks up a topic"
+		initialQuestion  = "Search alpha"
+		steerQuestionOne = "Also compare beta"
+		steerQuestionTwo = "Summarize in one sentence"
+		finalAnswer      = "Alpha and beta compared."
+	)
+
+	type lookupInput struct {
+		Topic string `json:"topic"`
+	}
+	type lookupOutput struct {
+		Result string `json:"result"`
+	}
+
+	modelStub := &sequentialModel{
+		name: "sequential-steer-model",
+		responses: []*model.Response{
+			{
+				ID:   "resp-tool-call",
+				Done: true,
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID:   "tool-call-1",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      toolName,
+								Arguments: []byte(`{"topic":"alpha"}`),
+							},
+						}},
+					},
+				}},
+			},
+			{
+				ID: "resp-final",
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage(finalAnswer),
+				}},
+				Done: true,
+			},
+		},
+	}
+
+	var (
+		runnerInstance Runner
+		enqueueErrs    []error
+		enqueueMu      sync.Mutex
+	)
+
+	toolImpl := function.NewFunctionTool(
+		func(
+			_ context.Context,
+			input lookupInput,
+		) (lookupOutput, error) {
+			enqueueMu.Lock()
+			enqueueErrs = append(
+				enqueueErrs,
+				EnqueueUserMessage(
+					runnerInstance,
+					requestID,
+					model.NewUserMessage(steerQuestionOne),
+				),
+				EnqueueUserMessage(
+					runnerInstance,
+					requestID,
+					model.Message{Content: steerQuestionTwo},
+				),
+			)
+			enqueueMu.Unlock()
+			return lookupOutput{
+				Result: "tool result for " + input.Topic,
+			}, nil
+		},
+		function.WithName(toolName),
+		function.WithDescription(toolDescription),
+	)
+
+	ag := llmagent.New(
+		"steer-agent",
+		llmagent.WithModel(modelStub),
+		llmagent.WithTools([]tool.Tool{toolImpl}),
+	)
+
+	runnerInstance = NewRunner(appName, ag)
+
+	events, err := runnerInstance.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage(initialQuestion),
+		agent.WithRequestID(requestID),
+	)
+	require.NoError(t, err)
+
+	var (
+		completionEvent *event.Event
+		sawFinalAnswer  bool
+	)
+	for evt := range events {
+		if evt != nil && evt.Response != nil &&
+			len(evt.Response.Choices) > 0 &&
+			evt.Response.Choices[0].Message.Content == finalAnswer {
+			sawFinalAnswer = true
+		}
+		if evt != nil && evt.IsRunnerCompletion() {
+			completionEvent = evt
+		}
+	}
+
+	require.NotNil(t, completionEvent)
+	require.True(t, sawFinalAnswer)
+
+	enqueueMu.Lock()
+	require.Len(t, enqueueErrs, 2)
+	for _, enqueueErr := range enqueueErrs {
+		require.NoError(t, enqueueErr)
+	}
+	enqueueMu.Unlock()
+
+	requests := modelStub.Requests()
+	require.Len(t, requests, 2)
+
+	secondRequest := requests[1]
+	require.NotNil(t, secondRequest)
+
+	initialIdx := findMessageIndex(
+		secondRequest.messages,
+		func(message model.Message) bool {
+			return message.Role == model.RoleUser &&
+				message.Content == initialQuestion
+		},
+	)
+	toolCallIdx := findMessageIndex(
+		secondRequest.messages,
+		func(message model.Message) bool {
+			return message.Role == model.RoleAssistant &&
+				len(message.ToolCalls) == 1 &&
+				message.ToolCalls[0].Function.Name == toolName
+		},
+	)
+	toolResultIdx := findMessageIndex(
+		secondRequest.messages,
+		func(message model.Message) bool {
+			return message.Role == model.RoleTool &&
+				message.ToolID == "tool-call-1" &&
+				message.ToolName == toolName &&
+				message.Content != ""
+		},
+	)
+	steerOneIdx := findMessageIndex(
+		secondRequest.messages,
+		func(message model.Message) bool {
+			return message.Role == model.RoleUser &&
+				message.Content == steerQuestionOne
+		},
+	)
+	steerTwoIdx := findMessageIndex(
+		secondRequest.messages,
+		func(message model.Message) bool {
+			return message.Role == model.RoleUser &&
+				message.Content == steerQuestionTwo
+		},
+	)
+
+	require.NotEqual(t, -1, initialIdx)
+	require.NotEqual(t, -1, toolCallIdx)
+	require.NotEqual(t, -1, toolResultIdx)
+	require.NotEqual(t, -1, steerOneIdx)
+	require.NotEqual(t, -1, steerTwoIdx)
+
+	require.Less(t, initialIdx, toolCallIdx)
+	require.Less(t, toolCallIdx, toolResultIdx)
+	require.Less(t, toolResultIdx, steerOneIdx)
+	require.Less(t, steerOneIdx, steerTwoIdx)
+	require.Contains(
+		t,
+		secondRequest.messages[toolResultIdx].Content,
+		"tool result for alpha",
+	)
+}
+
+func TestRunner_EnqueueUserMessage_ClosingRunReturnsNotFound(
+	t *testing.T,
+) {
+	rr := &runner{}
+	queue := steer.NewQueue()
+
+	_, err := rr.registerRun(
+		"req-closing",
+		RunStatus{},
+		func() {},
+		queue,
+	)
+	require.NoError(t, err)
+
+	queue.Close()
+
+	err = rr.EnqueueUserMessage(
+		"req-closing",
+		model.NewUserMessage("hello"),
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
 }
 
 func runRunnerWithTypedStructuredOutput(
@@ -4517,21 +4850,21 @@ func TestRunner_Close_CancelsRunningRuns(t *testing.T) {
 func TestRunner_registerRun_ValidatesInput(t *testing.T) {
 	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
 
-	_, err := rr.registerRun("", RunStatus{}, func() {})
+	_, err := rr.registerRun("", RunStatus{}, func() {}, nil)
 	require.Error(t, err)
 
-	_, err = rr.registerRun("run", RunStatus{}, nil)
+	_, err = rr.registerRun("run", RunStatus{}, nil, nil)
 	require.Error(t, err)
 }
 
 func TestRunner_registerRun_DuplicateRunID(t *testing.T) {
 	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
 
-	handle, err := rr.registerRun("run", RunStatus{}, func() {})
+	handle, err := rr.registerRun("run", RunStatus{}, func() {}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, handle)
 
-	_, err = rr.registerRun("run", RunStatus{}, func() {})
+	_, err = rr.registerRun("run", RunStatus{}, func() {}, nil)
 	require.Error(t, err)
 }
 

@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -207,6 +208,146 @@ func TestCreateLLMResponseEvent_LongRunningIDs(t *testing.T) {
 	rsp := &model.Response{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "x", Function: model.FunctionDefinitionParam{Name: "slow"}}}}}}}
 	evt := f.createLLMResponseEvent(inv, inv, rsp, req)
 	require.Contains(t, evt.LongRunningToolIDs, "x")
+}
+
+func TestMaybeConsumeQueuedUserMessages_NoQueue(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation()
+	ch := make(chan *event.Event, 1)
+
+	err := f.maybeConsumeQueuedUserMessages(
+		context.Background(),
+		inv,
+		ch,
+	)
+	require.NoError(t, err)
+	require.Empty(t, ch)
+}
+
+func TestMaybeConsumeQueuedUserMessages_DrainsInOrder(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-steer"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-steer",
+		}),
+	)
+
+	queue := steer.NewQueue()
+	steer.Attach(inv, queue)
+	require.True(t, queue.Enqueue(model.NewUserMessage("first")))
+	require.True(t, queue.Enqueue(model.NewUserMessage("second")))
+
+	ch := make(chan *event.Event, 2)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 2; i++ {
+			evt := <-ch
+			require.NotNil(t, evt)
+			require.Equal(t, queuedUserAuthor, evt.Author)
+			require.True(t, evt.RequiresCompletion)
+			require.Equal(
+				t,
+				[]string{"first", "second"}[i],
+				evt.Choices[0].Message.Content,
+			)
+			require.NoError(
+				t,
+				inv.NotifyCompletion(
+					context.Background(),
+					agent.GetAppendEventNoticeKey(evt.ID),
+				),
+			)
+		}
+	}()
+
+	err := f.maybeConsumeQueuedUserMessages(
+		context.Background(),
+		inv,
+		ch,
+	)
+	require.NoError(t, err)
+	<-done
+	require.Equal(t, "second", inv.Message.Content)
+	require.Nil(t, steer.Drain(inv))
+}
+
+func TestMaybeConsumeQueuedUserMessages_ContextCanceledOnEmit(
+	t *testing.T,
+) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation()
+	queue := steer.NewQueue()
+	steer.Attach(inv, queue)
+	require.True(t, queue.Enqueue(model.NewUserMessage("hello")))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := f.maybeConsumeQueuedUserMessages(
+		ctx,
+		inv,
+		make(chan *event.Event),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestFlowEventWaitTimeout(t *testing.T) {
+	require.Equal(
+		t,
+		eventCompletionTimeout,
+		flowEventWaitTimeout(context.Background()),
+	)
+
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(25*time.Millisecond),
+	)
+	defer cancel()
+
+	timeout := flowEventWaitTimeout(ctx)
+	require.Greater(t, timeout, 0*time.Millisecond)
+	require.LessOrEqual(t, timeout, 25*time.Millisecond)
+}
+
+func TestRun_ClosesQueuedUserMessagesAfterTerminalStep(t *testing.T) {
+	f := New(nil, nil, Options{})
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-close-steer"),
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationModel(&mockModel{
+			responses: []*model.Response{
+				{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("done")},
+					},
+				},
+			},
+		}),
+	)
+
+	queue := steer.NewQueue()
+	steer.Attach(inv, queue)
+
+	eventChan, err := f.Run(context.Background(), inv)
+	require.NoError(t, err)
+
+	for evt := range eventChan {
+		if evt == nil || !evt.RequiresCompletion {
+			continue
+		}
+		require.NoError(
+			t,
+			inv.NotifyCompletion(
+				context.Background(),
+				agent.GetAppendEventNoticeKey(evt.ID),
+			),
+		)
+	}
+
+	require.False(t, queue.Enqueue(model.NewUserMessage("late")))
 }
 
 // TestProcessStreamingResponses_RepairsToolCallArgumentsWhenEnabled verifies tool call arguments are repaired when enabled.

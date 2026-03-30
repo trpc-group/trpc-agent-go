@@ -322,6 +322,101 @@ _ = ok
 managed.Cancel(requestID)
 ```
 
+#### Queue a New User Message into the Same Run
+
+Sometimes you do not want to start a second run. You want to keep the current
+`requestID`, queue a new `role=user` message, and insert it only after the
+current assistant round is finished.
+
+Use `runner.EnqueueUserMessage(...)`:
+
+```go
+requestID := "req-123"
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Draft a launch note."),
+    agent.WithRequestID(requestID),
+)
+if err != nil {
+    panic(err)
+}
+
+go func() {
+    time.Sleep(time.Second)
+    err := runner.EnqueueUserMessage(
+        r,
+        requestID,
+        model.NewUserMessage("Also make the tone warmer."),
+    )
+    if err != nil {
+        log.Printf("enqueue steer failed: %v", err)
+    }
+}()
+
+_ = eventChan
+```
+
+Think of one assistant output as one round:
+
+- If the assistant only replies with text, the round ends at that reply
+- If the assistant emits `tool_call`s, the round ends only after that whole
+  tool batch finishes
+
+The queued user message can only be inserted between rounds. It is never
+inserted in the middle of a round.
+
+The simplest valid shape is:
+
+```text
+user(Q1)
+assistant(tool_call A)
+tool(result A)
+user(Q2, queued steer)
+assistant(...)
+```
+
+If one assistant message emits multiple tool calls, the framework still waits
+for the whole round:
+
+```text
+user(Q1)
+assistant(tool_calls A, B)
+tool(result A)
+tool(result B)
+user(Q2, queued steer)
+assistant(...)
+```
+
+It will not insert like this:
+
+```text
+user(Q1)
+assistant(tool_calls A, B)
+tool(result A)
+user(Q2, queued steer)
+tool(result B)
+```
+
+because that would break the `tool_call -> tool_response` structure of the
+same assistant round.
+
+So the behavior is:
+
+- This does **not** start a second run
+- The message is queued first, not written to session immediately
+- It is appended only after the previous assistant round and its tool work are
+  fully finished
+- This keeps the `tool_call -> tool_response` structure intact
+- If the run has already finished, enqueue returns an error
+
+If you want the implementation-level mapping, this happens after one
+`runOneStep()` finishes and before the next `runOneStep()` starts.
+
+Runnable example: `examples/steer/`
+
 #### Detached Cancellation (background execution)
 
 In Go, `context.Context` (often named `ctx`) carries both cancellation and a
