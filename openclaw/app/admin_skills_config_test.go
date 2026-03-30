@@ -201,6 +201,29 @@ description: "Probe weather prerequisites"
 	require.False(t, provider.SkillsRefreshable())
 }
 
+func TestAdminSkillsProviderSetSkillEnabled_ErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	var nilProvider *adminSkillsProvider
+	require.EqualError(
+		t,
+		nilProvider.SetSkillEnabled("weather-api", true),
+		"skills config is not available",
+	)
+
+	provider := &adminSkillsProvider{}
+	require.EqualError(
+		t,
+		provider.SetSkillEnabled(" ", true),
+		"skill config key is required",
+	)
+	require.EqualError(
+		t,
+		provider.SetSkillEnabled("weather-api", true),
+		"skill toggles require a config-backed runtime",
+	)
+}
+
 func TestCloneAdminSkillConfigs_ClonesAndTrims(t *testing.T) {
 	t.Parallel()
 
@@ -343,6 +366,16 @@ func TestSetSkillEnabledInConfig_ErrorPathsAndWriteConfigDocument(t *testing.T) 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "config skills")
 
+	path = filepath.Join(t.TempDir(), "empty.yaml")
+	require.NoError(t, os.WriteFile(path, nil, 0o644))
+	require.NoError(t, setSkillEnabledInConfig(path, "weather-api", true))
+	cfg, err := loadConfigFile(path)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Skills)
+	require.Contains(t, cfg.Skills.Entries, "weather-api")
+	require.NotNil(t, cfg.Skills.Entries["weather-api"].Enabled)
+	require.True(t, *cfg.Skills.Entries["weather-api"].Enabled)
+
 	doc := yaml.Node{
 		Kind: yaml.DocumentNode,
 		Content: []*yaml.Node{{
@@ -364,6 +397,12 @@ func TestSetSkillEnabledInConfig_ErrorPathsAndWriteConfigDocument(t *testing.T) 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+
+	err = writeConfigDocument(
+		filepath.Join(t.TempDir(), "missing", "write.yaml"),
+		&doc,
+	)
+	require.Error(t, err)
 }
 
 func writeTestSkill(t *testing.T, root, name, body string) {
