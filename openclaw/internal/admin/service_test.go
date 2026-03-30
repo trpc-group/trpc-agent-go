@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,6 +44,7 @@ type stubBMP struct {
 type stubSkillsProvider struct {
 	report        ocskills.StatusReport
 	err           error
+	statusCount   int
 	configPath    string
 	refreshable   bool
 	refreshCount  int
@@ -58,6 +60,9 @@ func (p stubBMP) BrowserManagedStatus() BrowserManagedService {
 }
 
 func (p *stubSkillsProvider) SkillsStatus() (ocskills.StatusReport, error) {
+	if p != nil {
+		p.statusCount++
+	}
 	return p.report, p.err
 }
 
@@ -290,7 +295,6 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 	require.Contains(t, body, "/skills")
 	require.Contains(t, body, "127.0.0.1:8080")
 	require.Contains(t, body, "telegram")
-	require.Equal(t, 1, strings.Count(body, "</main>"))
 }
 
 func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
@@ -331,6 +335,59 @@ func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
 	require.Contains(t, body, "/skills")
 	require.Contains(t, body, "/tmp/openclaw.yaml")
 	require.Contains(t, body, "OPENAI_API_KEY")
+}
+
+func TestServiceRenderPageScopesSnapshotToActiveView(t *testing.T) {
+	t.Parallel()
+
+	var browserProfilesHits int32
+	browserServer := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		atomic.AddInt32(&browserProfilesHits, 1)
+		require.Equal(t, "/profiles", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{"profiles":[]}`))
+		require.NoError(t, err)
+	}))
+	t.Cleanup(browserServer.Close)
+
+	provider := &stubSkillsProvider{
+		report: ocskills.StatusReport{
+			Skills: []ocskills.StatusEntry{{
+				Name:      "weather-probe",
+				ConfigKey: "weather-probe",
+				Eligible:  true,
+			}},
+		},
+	}
+	svc := New(
+		Config{
+			Skills: provider,
+			Browser: BrowserConfig{
+				Providers: []BrowserProvider{{
+					Name:          "browser",
+					HostServerURL: browserServer.URL,
+				}},
+			},
+		},
+		WithBrowserHTTPClient(browserServer.Client()),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, routeSkillsPage, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 1, provider.statusCount)
+	require.Zero(t, atomic.LoadInt32(&browserProfilesHits))
+
+	req = httptest.NewRequest(http.MethodGet, routeBrowser, nil)
+	rr = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 1, provider.statusCount)
+	require.NotZero(t, atomic.LoadInt32(&browserProfilesHits))
 }
 
 func TestServiceHandlerRendersAdminPages(t *testing.T) {

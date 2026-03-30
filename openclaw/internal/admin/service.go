@@ -466,6 +466,17 @@ type adminNavItem struct {
 }
 
 func (s *Service) Snapshot() snapshot {
+	out := s.baseSnapshot()
+	out.Skills = s.skillsStatus()
+	out.Browser = s.browserStatus()
+	out.Exec = s.execStatus()
+	out.Uploads = s.uploadsStatus()
+	out.Debug = s.debugStatus()
+	out.Cron = s.cronStatus()
+	return out
+}
+
+func (s *Service) baseSnapshot() snapshot {
 	now := s.now()
 	out := snapshot{
 		GeneratedAt:    now,
@@ -491,25 +502,45 @@ func (s *Service) Snapshot() snapshot {
 		StateDir:       strings.TrimSpace(s.cfg.StateDir),
 		DebugDir:       strings.TrimSpace(s.cfg.DebugDir),
 		Routes:         s.cfg.GatewayRoutes,
-		Skills:         s.skillsStatus(),
-		Browser:        s.browserStatus(),
-		Exec:           s.execStatus(),
-		Uploads:        s.uploadsStatus(),
-		Debug:          s.debugStatus(),
 	}
 
 	if len(s.cfg.Channels) > 0 {
 		out.Channels = append([]string(nil), s.cfg.Channels...)
 		sort.Strings(out.Channels)
 	}
+	return out
+}
 
-	if s.cfg.Cron == nil {
-		return out
+func (s *Service) snapshotForView(view adminView) snapshot {
+	if view == viewOverview {
+		return s.Snapshot()
+	}
+
+	out := s.baseSnapshot()
+	switch view {
+	case viewSkills:
+		out.Skills = s.skillsStatus()
+	case viewAutomation:
+		out.Cron = s.cronStatus()
+	case viewSessions:
+		out.Exec = s.execStatus()
+		out.Uploads = s.uploadsStatus()
+	case viewDebug:
+		out.Debug = s.debugStatus()
+	case viewBrowser:
+		out.Browser = s.browserStatus()
+	}
+	return out
+}
+
+func (s *Service) cronStatus() cronStatus {
+	if s == nil || s.cfg.Cron == nil {
+		return cronStatus{}
 	}
 
 	status := s.cfg.Cron.Status()
 	jobs := s.cfg.Cron.List()
-	out.Cron = cronStatus{
+	out := cronStatus{
 		Enabled:     true,
 		JobCount:    len(jobs),
 		RunningJobs: intFromMap(status["jobs_running"]),
@@ -520,7 +551,7 @@ func (s *Service) Snapshot() snapshot {
 		if job == nil {
 			continue
 		}
-		out.Cron.Jobs = append(out.Cron.Jobs, jobViewFromJob(job))
+		out.Jobs = append(out.Jobs, jobViewFromJob(job))
 	}
 	return out
 }
@@ -852,7 +883,7 @@ func (s *Service) renderPage(
 	}
 
 	data := pageData{
-		Snapshot:       s.Snapshot(),
+		Snapshot:       s.snapshotForView(view),
 		Notice:         strings.TrimSpace(r.URL.Query().Get(queryNotice)),
 		Error:          strings.TrimSpace(r.URL.Query().Get(queryError)),
 		RefreshSeconds: refreshSeconds,
@@ -1115,7 +1146,7 @@ func (s *Service) handleJobsJSON(
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.Snapshot().Cron.Jobs)
+	writeJSON(w, http.StatusOK, s.cronStatus().Jobs)
 }
 
 func (s *Service) handleExecSessionsJSON(
@@ -1126,7 +1157,7 @@ func (s *Service) handleExecSessionsJSON(
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.Snapshot().Exec.Sessions)
+	writeJSON(w, http.StatusOK, s.execStatus().Sessions)
 }
 
 func (s *Service) handleUploadsJSON(
