@@ -1864,6 +1864,9 @@ func newAgent(
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
 		llmagent.WithPreloadMemory(cfg.PreloadMemory),
+		llmagent.WithEventMessageProjector(
+			conversation.ProjectEventMessage,
+		),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
 	}
 	opts = append(opts, llmagent.WithSkills(repo))
