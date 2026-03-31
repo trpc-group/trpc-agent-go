@@ -548,7 +548,10 @@ func (s *sessionSummarizer) generateSummary(
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
 	defer span.End()
 
-	prompt := s.buildSummaryPrompt(conversationText)
+	prompt, err := s.buildSummaryPrompt(conversationText)
+	if err != nil {
+		return ctx, "", fmt.Errorf("failed to render summary prompt: %w", err)
+	}
 	request := newSummaryRequest(prompt)
 
 	invocation, ok := agent.InvocationFromContext(ctx)
@@ -644,7 +647,7 @@ func (s *sessionSummarizer) generateSummary(
 	return ctx, summaryText, nil
 }
 
-func (s *sessionSummarizer) buildSummaryPrompt(conversationText string) string {
+func (s *sessionSummarizer) buildSummaryPrompt(conversationText string) (string, error) {
 	vars := prompt.Vars{
 		conversationTextVar: conversationText,
 		maxSummaryWordsVar:  "",
@@ -652,7 +655,10 @@ func (s *sessionSummarizer) buildSummaryPrompt(conversationText string) string {
 	if s.maxSummaryWords > 0 {
 		vars[maxSummaryWordsVar] = strconv.Itoa(s.maxSummaryWords)
 	}
-	return prompt.Text{Template: s.prompt}.Render(vars)
+	return prompt.Text{Template: s.prompt}.Render(
+		prompt.RenderEnv{Vars: vars},
+		prompt.WithUnknownBehavior(prompt.ErrorOnUnknown),
+	)
 }
 
 func newSummaryRequest(prompt string) *model.Request {

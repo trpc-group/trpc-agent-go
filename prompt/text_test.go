@@ -14,28 +14,82 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type mapResolver map[string]string
+
+func (r mapResolver) Resolve(ref Ref) (string, bool, error) {
+	key := ref.Name
+	if ref.Namespace != "" {
+		key = ref.Namespace + ":" + ref.Name
+	}
+	value, ok := r[key]
+	return value, ok, nil
+}
+
 func TestTextRender_ReplacesKnownVarsAndKeepsUnknown(t *testing.T) {
 	tpl := Text{
 		Template: "hello {name} from {city} and {user:name}",
 	}
 
-	rendered := tpl.Render(Vars{
-		"name": "alice",
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"name": "alice",
+		},
 	})
 
+	require.NoError(t, err)
 	require.Equal(t, "hello alice from {city} and {user:name}", rendered)
 }
 
-func TestTextRender_PreservesUnmatchedComplexBraceFormsInTemplate(t *testing.T) {
+func TestTextRender_UsesResolverForBareAndNamespacedPlaceholders(t *testing.T) {
 	tpl := Text{
-		Template: "summary {conversation_text} state {user:name}",
+		Template: "summary {conversation_text} state {user:name} topic {research_topics}",
 	}
 
-	rendered := tpl.Render(Vars{
-		"conversation_text": "done",
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"conversation_text": "done",
+		},
+		Resolver: mapResolver{
+			"user:name":       "alice",
+			"research_topics": "ai",
+		},
 	})
 
-	require.Equal(t, "summary done state {user:name}", rendered)
+	require.NoError(t, err)
+	require.Equal(t, "summary done state alice topic ai", rendered)
+}
+
+func TestTextRender_VarsTakePrecedenceOverResolverFallback(t *testing.T) {
+	tpl := Text{
+		Template: "name {name}",
+	}
+
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"name": "alice",
+		},
+		Resolver: mapResolver{
+			"name": "bob",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "name alice", rendered)
+}
+
+func TestTextRender_OptionalMissingCollapsesToEmpty(t *testing.T) {
+	tpl := Text{
+		Template: "summary {conversation_text} {user:name?} {app:banner?}",
+	}
+
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"conversation_text": "done",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "summary done  ", rendered)
 }
 
 func TestTextRender_SubstitutedValuesMayContainSimpleBraces(t *testing.T) {
@@ -43,20 +97,69 @@ func TestTextRender_SubstitutedValuesMayContainSimpleBraces(t *testing.T) {
 		Template: "msg: {conversation_text}",
 	}
 
-	rendered := tpl.Render(Vars{
-		"conversation_text": `user said {name} and {city}`,
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"conversation_text": `user said {name} and {city}`,
+		},
 	})
 
+	require.NoError(t, err)
 	require.Equal(t, "msg: user said {name} and {city}", rendered)
+}
+
+func TestTextRender_NormalizesLegacyMustache(t *testing.T) {
+	tpl := Text{
+		Template: "hello {{ name }} from {{user:city?}}",
+	}
+
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"name": "alice",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "hello alice from ", rendered)
+}
+
+func TestTextRender_StrictUnknownReturnsError(t *testing.T) {
+	tpl := Text{
+		Template: "hello {name} from {city}",
+	}
+
+	rendered, err := tpl.Render(
+		RenderEnv{
+			Vars: Vars{
+				"name": "alice",
+			},
+		},
+		WithUnknownBehavior(ErrorOnUnknown),
+	)
+
+	require.Equal(t, "hello alice from {city}", rendered)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "{city}")
+}
+
+func TestTextRender_ArtifactPlaceholderCompatibility(t *testing.T) {
+	tpl := Text{
+		Template: "Content {artifact.file.txt} optional {artifact.file.txt?}",
+	}
+
+	rendered, err := tpl.Render(RenderEnv{})
+
+	require.NoError(t, err)
+	require.Equal(t, "Content {artifact.file.txt} optional ", rendered)
 }
 
 func TestTextValidateRequired(t *testing.T) {
 	tpl := Text{
-		Template: "summary {conversation_text} limit {max_summary_words}",
+		Template: "summary {conversation_text} limit {max_summary_words} state {user:name?}",
 	}
 
 	require.NoError(t, tpl.ValidateRequired("conversation_text"))
 	require.NoError(t, tpl.ValidateRequired("conversation_text", "max_summary_words"))
+	require.NoError(t, tpl.ValidateRequired("user:name"))
 
 	err := tpl.ValidateRequired("conversation_text", "missing")
 	require.Error(t, err)

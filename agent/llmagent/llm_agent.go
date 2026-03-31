@@ -1439,18 +1439,18 @@ func (a *LLMAgent) SetModelGlobalInstructions(prompts map[string]string) {
 func (a *LLMAgent) getInstruction() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.instruction.Render(nil)
+	return a.instruction.Template
 }
 
 // getSystemPrompt returns the current system prompt with read lock.
 func (a *LLMAgent) getSystemPrompt() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.systemPrompt.Render(nil)
+	return a.systemPrompt.Template
 }
 
 func (a *LLMAgent) instructionForInvocation(inv *agent.Invocation) string {
-	return a.instructionPromptForInvocation(inv).Render(nil)
+	return a.instructionPromptForInvocation(inv).Template
 }
 
 func (a *LLMAgent) instructionPromptForInvocation(inv *agent.Invocation) prompt.Text {
@@ -1479,7 +1479,7 @@ func (a *LLMAgent) instructionPromptForInvocation(inv *agent.Invocation) prompt.
 }
 
 func (a *LLMAgent) systemPromptForInvocation(inv *agent.Invocation) string {
-	return a.systemPromptTextForInvocation(inv).Render(nil)
+	return a.systemPromptTextForInvocation(inv).Template
 }
 
 func (a *LLMAgent) systemPromptTextForInvocation(inv *agent.Invocation) prompt.Text {
