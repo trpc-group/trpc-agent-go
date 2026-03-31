@@ -54,6 +54,10 @@ func commandProcessGroupID(cmd *exec.Cmd) int {
 	if cmd == nil || cmd.Process == nil {
 		return 0
 	}
+	// Both spawn paths make the child the leader of its owned group.
+	// Pipe mode sets Setpgid=true, and PTY mode starts a new session.
+	// That keeps PGID == PID here, while signalProcessTree still falls
+	// back to direct process signals if group signaling fails.
 	return cmd.Process.Pid
 }
 

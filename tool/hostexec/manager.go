@@ -29,6 +29,7 @@ const (
 	defaultMaxLines   = 20_000
 	defaultJobTTL     = 30 * time.Minute
 	defaultKillGrace  = 2 * time.Second
+	timeoutKillGrace  = time.Duration(0)
 	defaultIODrain    = 1 * time.Second
 	maxTimeoutSeconds = int64((1<<63)-1) /
 		int64(time.Second)
@@ -399,7 +400,7 @@ func startSession(
 			if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 				_ = sess.kill(
 					context.Background(),
-					defaultKillGrace,
+					timeoutKillGrace,
 				)
 			}
 		}

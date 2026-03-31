@@ -20,7 +20,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -464,6 +463,44 @@ func TestNewToolSet_TimeoutKillsBackgroundChild(
 
 	_ = pollUntilExited(t, mgr, sessionID)
 	waitForProcessExit(t, bgPID, 3*time.Second)
+}
+
+func TestNewToolSet_TimeoutDoesNotWaitForGrace(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group cleanup is tested on unix")
+	}
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet(WithJobTTL(10 * time.Second))
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, _, _, mgr := toolSetTools(t, set)
+	started := time.Now()
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command":     `bash -lc "trap '' TERM; sleep 1000"`,
+			"background":  true,
+			"timeout_sec": 1,
+		}),
+	)
+	require.NoError(t, err)
+
+	res := out.(map[string]any)
+	sessionID := res["session_id"].(string)
+	require.NotEmpty(t, sessionID)
+
+	_ = pollUntilExited(t, mgr, sessionID)
+	require.Less(
+		t,
+		time.Since(started),
+		2500*time.Millisecond,
+	)
 }
 
 func TestNewToolSet_PTYForeground(t *testing.T) {
@@ -1139,31 +1176,4 @@ func parseBackgroundPID(t *testing.T, output string) int {
 
 	t.Fatalf("did not find background pid marker in %q", output)
 	return 0
-}
-
-func processExists(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
-}
-
-func waitForProcessExit(
-	t *testing.T,
-	pid int,
-	timeout time.Duration,
-) {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if !processExists(pid) {
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	t.Fatalf("background child pid %d is still alive", pid)
 }
