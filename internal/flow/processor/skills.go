@@ -168,13 +168,13 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 //   - skill.DocsKey(agentName, skillName) ->
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
-	repo              skill.Repository
-	repoResolver      func(*agent.Invocation) skill.Repository
-	toolingGuidance   *string
-	loadMode          string
-	toolResultMode    bool
-	maxLoadedSkills   int
-	toolFlags         skillprofile.Flags
+	repo            skill.Repository
+	repoResolver    func(*agent.Invocation) skill.Repository
+	toolingGuidance *string
+	loadMode        string
+	toolResultMode  bool
+	maxLoadedSkills int
+	toolFlags       skillprofile.Flags
 }
 
 const (
@@ -206,13 +206,13 @@ func NewSkillsRequestProcessor(
 		flags = flags.WithoutInteractiveExecution()
 	}
 	return &SkillsRequestProcessor{
-		repo:              repo,
-		repoResolver:      options.repoResolver,
-		toolingGuidance:   options.toolingGuidance,
-		loadMode:          normalizeSkillLoadMode(options.loadMode),
-		toolResultMode:    options.toolResultMode,
-		maxLoadedSkills:   options.maxLoadedSkills,
-		toolFlags:         flags,
+		repo:            repo,
+		repoResolver:    options.repoResolver,
+		toolingGuidance: options.toolingGuidance,
+		loadMode:        normalizeSkillLoadMode(options.loadMode),
+		toolResultMode:  options.toolResultMode,
+		maxLoadedSkills: options.maxLoadedSkills,
+		toolFlags:       flags,
 	}
 }
 
