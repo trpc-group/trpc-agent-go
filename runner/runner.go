@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -759,6 +760,8 @@ type eventLoopContext struct {
 	flushChan                          chan *flush.FlushRequest
 	processedEventCh                   chan *event.Event
 	runHandle                          *runHandle
+	baselineFinalResponseID            string
+	priorAssistantResponseIDs          map[string]struct{}
 	finalStateDelta                    map[string][]byte
 	finalChoices                       []model.Choice
 	fallbackChoices                    []model.Choice
@@ -766,6 +769,7 @@ type eventLoopContext struct {
 	fallbackStateDelta                 map[string][]byte
 	finalError                         *model.ResponseError
 	graphCompletionSeen                bool
+	freshAssistantContentProduced      bool
 	persistedAssistantResponseIDs      map[string]struct{}
 	persistedAssistantChoiceSignatures map[string]struct{}
 	emittedAssistantChoiceSignatures   map[string]struct{}
@@ -792,12 +796,14 @@ func (r *runner) processAgentEvents(
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
 	loop := &eventLoopContext{
-		sess:             sess,
-		invocation:       invocation,
-		agentEventCh:     agentEventCh,
-		flushChan:        flushChan,
-		processedEventCh: processedEventCh,
-		runHandle:        handle,
+		sess:                      sess,
+		invocation:                invocation,
+		agentEventCh:              agentEventCh,
+		flushChan:                 flushChan,
+		processedEventCh:          processedEventCh,
+		runHandle:                 handle,
+		baselineFinalResponseID:   baselineFinalResponseID(sess, invocation.RunOptions.RuntimeState),
+		priorAssistantResponseIDs: collectPriorAssistantResponseIDs(sess),
 		streamFilter: graph.NewStreamModeFilter(
 			invocation.RunOptions.StreamModeEnabled,
 			invocation.RunOptions.StreamModes,
@@ -877,6 +883,7 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
 	}
 	r.captureCompletionFallback(loop, agentEvent)
+	r.markCompletionSnapshotOnly(loop, agentEvent)
 	if shouldSuppressGraphCompletionEvent(loop, agentEvent) {
 		return nil
 	}
@@ -935,6 +942,9 @@ func (r *runner) recordPersistedAssistantEvent(
 	}
 	if agentEvent.Response == nil {
 		return
+	}
+	if !isSnapshotOnlyVisibleGraphCompletion(agentEvent) {
+		loop.freshAssistantContentProduced = true
 	}
 	if loop.persistedAssistantResponseIDs == nil {
 		loop.persistedAssistantResponseIDs = make(map[string]struct{})
@@ -1036,6 +1046,26 @@ func copyEventInvocationFields(dst *event.Event, src *event.Event) {
 	if dst.FilterKey == "" {
 		dst.FilterKey = src.FilterKey
 	}
+}
+
+func (r *runner) markCompletionSnapshotOnly(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) {
+	if loop == nil || agentEvent == nil {
+		return
+	}
+	if !isGraphCompletionSnapshotEvent(agentEvent) {
+		return
+	}
+	if !shouldMarkCompletionSnapshotOnly(
+		loop,
+		agentEvent.Response.Choices,
+		agentEvent.StateDelta,
+	) {
+		return
+	}
+	graph.SetCompletionSnapshotOnlyInStateDelta(agentEvent.StateDelta, true)
 }
 
 func (r *runner) recordEmittedAssistantResponseID(
@@ -1432,6 +1462,16 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			echoFinalChoices,
 		)
 	}
+	if shouldMarkCompletionSnapshotOnly(
+		loop,
+		runnerCompletionEvent.Response.Choices,
+		runnerCompletionEvent.StateDelta,
+	) {
+		graph.SetCompletionSnapshotOnlyInStateDelta(
+			runnerCompletionEvent.StateDelta,
+			true,
+		)
+	}
 	runnerCompletionEvent.ExecutionTrace = agent.BuildExecutionTrace(
 		loop.invocation,
 		resolveExecutionTraceStatus(loop, ctx.Err()),
@@ -1645,6 +1685,64 @@ func visibleCompletionAlreadyEmitted(
 	return alreadyVisible
 }
 
+func shouldMarkCompletionSnapshotOnly(
+	loop *eventLoopContext,
+	choices []model.Choice,
+	finalStateDelta map[string][]byte,
+) bool {
+	if loop == nil || len(choices) == 0 {
+		return false
+	}
+	if !isResumeRun(loop) {
+		return false
+	}
+	if runProducedAssistantContent(loop) {
+		return false
+	}
+	currentFinalResponseID := finalResponseIDFromStateDelta(finalStateDelta)
+	if currentFinalResponseID == "" {
+		return false
+	}
+	if _, ok := loop.priorAssistantResponseIDs[currentFinalResponseID]; ok {
+		return true
+	}
+	if loop.baselineFinalResponseID == "" {
+		return false
+	}
+	return currentFinalResponseID == loop.baselineFinalResponseID
+}
+
+func isResumeRun(loop *eventLoopContext) bool {
+	if loop == nil || loop.invocation == nil || loop.invocation.RunOptions.RuntimeState == nil {
+		return false
+	}
+	switch cmd := loop.invocation.RunOptions.RuntimeState[graph.StateKeyCommand].(type) {
+	case *graph.Command:
+		return cmd != nil && (cmd.Resume != nil || len(cmd.ResumeMap) > 0)
+	case graph.Command:
+		return cmd.Resume != nil || len(cmd.ResumeMap) > 0
+	case *graph.ResumeCommand:
+		return cmd != nil && (cmd.Resume != nil || len(cmd.ResumeMap) > 0)
+	case graph.ResumeCommand:
+		return cmd.Resume != nil || len(cmd.ResumeMap) > 0
+	default:
+		return false
+	}
+}
+
+func runProducedAssistantContent(loop *eventLoopContext) bool {
+	if loop == nil {
+		return false
+	}
+	return loop.freshAssistantContentProduced
+}
+
+func isSnapshotOnlyVisibleGraphCompletion(e *event.Event) bool {
+	return e != nil &&
+		graph.IsVisibleGraphCompletionEvent(e) &&
+		graph.CompletionSnapshotOnlyFromStateDelta(e.StateDelta)
+}
+
 func cloneChoices(choices []model.Choice) []model.Choice {
 	if len(choices) == 0 {
 		return nil
@@ -1686,6 +1784,121 @@ func assistantChoiceSignature(choices []model.Choice) string {
 
 func finalResponseIDFromStateDelta(finalStateDelta map[string][]byte) string {
 	return graph.FinalResponseIDFromStateDelta(finalStateDelta)
+}
+
+func baselineFinalResponseID(sess *session.Session, runtimeState map[string]any) string {
+	if sess != nil && len(sess.State) > 0 {
+		if responseID := finalResponseIDFromStateDelta(map[string][]byte(sess.State)); responseID != "" {
+			return responseID
+		}
+	}
+	return baselineFinalResponseIDFromRuntimeState(runtimeState)
+}
+
+func collectPriorAssistantResponseIDs(sess *session.Session) map[string]struct{} {
+	if sess == nil || len(sess.Events) == 0 {
+		return nil
+	}
+	var responseIDs map[string]struct{}
+	for i := range sess.Events {
+		evt := &sess.Events[i]
+		if evt == nil || evt.Response == nil || evt.IsPartial {
+			continue
+		}
+		if isGraphCompletionEvent(evt) {
+			continue
+		}
+		if !eventHasAssistantMessageContent(evt) {
+			continue
+		}
+		responseID := evt.Response.ID
+		if graph.IsVisibleGraphCompletionEvent(evt) {
+			if visibleResponseID := finalResponseIDFromStateDelta(evt.StateDelta); visibleResponseID != "" {
+				responseID = visibleResponseID
+			}
+		}
+		if responseID == "" {
+			continue
+		}
+		if responseIDs == nil {
+			responseIDs = make(map[string]struct{})
+		}
+		responseIDs[responseID] = struct{}{}
+	}
+	return responseIDs
+}
+
+func baselineFinalResponseIDFromRuntimeState(runtimeState map[string]any) string {
+	if len(runtimeState) == 0 {
+		return ""
+	}
+	if responseID, ok := stringValueFromRuntimeState(runtimeState[graph.StateKeyLastResponseID]); ok {
+		return responseID
+	}
+	return completionMetadataFinalResponseID(runtimeState[graph.MetadataKeyCompletion])
+}
+
+func stringValueFromRuntimeState(value any) (string, bool) {
+	switch v := value.(type) {
+	case string:
+		if v == "" {
+			return "", false
+		}
+		return v, true
+	case []byte:
+		if len(v) == 0 {
+			return "", false
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil && s != "" {
+			return s, true
+		}
+		raw := strings.TrimSpace(string(v))
+		if raw == "" {
+			return "", false
+		}
+		if strings.HasPrefix(raw, "{") ||
+			strings.HasPrefix(raw, "[") ||
+			strings.HasPrefix(raw, "\"") {
+			return "", false
+		}
+		if raw != "" {
+			return raw, true
+		}
+	}
+	return "", false
+}
+
+func completionMetadataFinalResponseID(value any) string {
+	switch v := value.(type) {
+	case graph.CompletionMetadata:
+		return v.FinalResponseID
+	case *graph.CompletionMetadata:
+		if v != nil {
+			return v.FinalResponseID
+		}
+	case map[string]any:
+		if responseID, ok := v["finalResponseID"].(string); ok {
+			return responseID
+		}
+	case string:
+		if v == "" {
+			return ""
+		}
+		var metadata graph.CompletionMetadata
+		if err := json.Unmarshal([]byte(v), &metadata); err == nil {
+			return metadata.FinalResponseID
+		}
+	case []byte:
+		if len(v) == 0 {
+			return ""
+		}
+		var metadata graph.CompletionMetadata
+		if err := json.Unmarshal(v, &metadata); err == nil {
+			return metadata.FinalResponseID
+		}
+	}
+	return ""
 }
 
 func finalResponseTextFromStateDelta(finalStateDelta map[string][]byte) string {
