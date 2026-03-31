@@ -54,6 +54,16 @@ func TestWithMetadataHelpers(t *testing.T) {
 	require.Contains(t, e.StateDelta, MetadataKeyState)
 }
 
+func TestFinalResponseIDFromStateDelta_EdgeCases(t *testing.T) {
+	require.Empty(t, FinalResponseIDFromStateDelta(nil))
+	require.Empty(t, FinalResponseIDFromStateDelta(map[string][]byte{
+		StateKeyLastResponseID: []byte(`""`),
+	}))
+	require.Empty(t, FinalResponseIDFromStateDelta(map[string][]byte{
+		MetadataKeyCompletion: []byte("{"),
+	}))
+}
+
 func TestNewNodeEvents(t *testing.T) {
 	start := time.Now().Add(-time.Second).UTC()
 	end := start.Add(150 * time.Millisecond)
@@ -325,6 +335,7 @@ func TestNewGraphCompletionEvent(t *testing.T) {
 	e := NewGraphCompletionEvent(
 		WithCompletionEventInvocationID("inv"),
 		WithCompletionEventFinalState(final),
+		WithCompletionEventFinalResponseID("resp-final"),
 		WithCompletionEventTotalSteps(10),
 		WithCompletionEventTotalDuration(100*time.Millisecond),
 	)
@@ -341,6 +352,7 @@ func TestNewGraphCompletionEvent(t *testing.T) {
 	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyCompletion], &cm))
 	require.Equal(t, 10, cm.TotalSteps)
 	require.Equal(t, 3, cm.FinalStateKeys) // includes StateKeyLastResponse + k1 + k2
+	require.Equal(t, "resp-final", cm.FinalResponseID)
 }
 
 func TestNewGraphCompletionEvent_EncodeJSONBytes(t *testing.T) {

@@ -42,6 +42,14 @@ func TestNewBuilder(t *testing.T) {
 	}
 }
 
+func TestExecutionContextFromState_EdgeCases(t *testing.T) {
+	require.Nil(t, executionContextFromState(nil))
+	require.Nil(t, executionContextFromState(State{}))
+	require.Nil(t, executionContextFromState(State{
+		StateKeyExecContext: "not-an-exec-context",
+	}))
+}
+
 func TestBuilderAddFunctionNode(t *testing.T) {
 	builder := NewStateGraph(NewStateSchema())
 
@@ -701,6 +709,134 @@ func TestProcessAgentEventStream_StreamOutputWritesHiddenGraphCompletionFinal(
 	b, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Equal(t, "hidden-final", string(b))
+}
+
+func TestProcessAgentEventStream_CapturesAssistantLastResponseID(t *testing.T) {
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-last-response-id"))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	agentEvents := make(chan *event.Event, 1)
+	parentEventChan := make(chan *event.Event, 1)
+	agentEvents <- event.NewResponseEvent(
+		inv.InvocationID,
+		"child",
+		&model.Response{
+			ID:        "resp-child-final",
+			Object:    model.ObjectTypeChatCompletion,
+			Done:      true,
+			IsPartial: false,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("child final"),
+			}},
+		},
+	)
+	close(agentEvents)
+
+	res, err := processAgentEventStream(
+		ctx,
+		inv,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"child",
+		"",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "child final", res.lastResponse)
+	require.Equal(t, "resp-child-final", res.lastResponseID)
+}
+
+func TestUpdateAgentLastResponseValue_IgnoresResponseIDWithoutMessageContent(t *testing.T) {
+	lastResponse := "existing"
+	lastResponseID := "existing-id"
+	updateAgentLastResponseValue(
+		&lastResponse,
+		&lastResponseID,
+		&event.Event{
+			Response: &model.Response{
+				ID: "resp-only-id",
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(""),
+				}},
+			},
+		},
+	)
+	require.Equal(t, "existing", lastResponse)
+	require.Equal(t, "existing-id", lastResponseID)
+}
+
+func TestFinalizeAgentNodeOutput_DefaultPreservesStateContractAndStoresFallback(t *testing.T) {
+	execCtx := &ExecutionContext{}
+	out := finalizeAgentNodeOutput(
+		State{StateKeyExecContext: execCtx},
+		"child-node",
+		agentEventStreamResult{
+			lastResponse:   "child final",
+			lastResponseID: "resp-child-final",
+		},
+		nil,
+		"",
+	)
+
+	state, ok := out.(State)
+	require.True(t, ok)
+	require.Equal(t, "child final", state[StateKeyLastResponse])
+	_, exists := state[StateKeyLastResponseID]
+	require.False(t, exists)
+	require.Equal(
+		t,
+		map[string]any{"child-node": "child final"},
+		state[StateKeyNodeResponses],
+	)
+	require.Equal(t, "child final", execCtx.completionIdentityText)
+	require.Equal(t, "resp-child-final", execCtx.completionIdentity)
+}
+
+func TestFinalizeAgentNodeOutput_OutputMapperDoesNotInjectLastResponseID(t *testing.T) {
+	execCtx := &ExecutionContext{}
+	out := finalizeAgentNodeOutput(
+		State{StateKeyExecContext: execCtx},
+		"child-node",
+		agentEventStreamResult{
+			lastResponse:   "child final",
+			lastResponseID: "resp-child-final",
+		},
+		func(_ State, _ SubgraphResult) State {
+			return State{"custom": "value"}
+		},
+		"",
+	)
+
+	state, ok := out.(State)
+	require.True(t, ok)
+	require.Equal(t, "value", state["custom"])
+	_, exists := state[StateKeyLastResponseID]
+	require.False(t, exists)
+	require.Equal(t, "", state[StateKeyUserInput])
+	require.Equal(t, "child final", execCtx.completionIdentityText)
+	require.Equal(t, "resp-child-final", execCtx.completionIdentity)
+}
+
+func TestFinalizeAgentNodeOutput_OutputMapperEmptyPreservesNoUpdateContract(t *testing.T) {
+	execCtx := &ExecutionContext{}
+	out := finalizeAgentNodeOutput(
+		State{StateKeyExecContext: execCtx},
+		"child-node",
+		agentEventStreamResult{
+			lastResponseID: "resp-child-final",
+		},
+		func(_ State, _ SubgraphResult) State {
+			return State{}
+		},
+		"",
+	)
+
+	state, ok := out.(State)
+	require.True(t, ok)
+	require.Len(t, state, 0)
+	require.Equal(t, "resp-child-final", execCtx.completionIdentity)
 }
 
 func TestProcessAgentEventStream_StreamOutputCloseWithError(

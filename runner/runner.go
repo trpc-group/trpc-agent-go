@@ -753,26 +753,26 @@ func (r *runner) getOrCreateSession(
 
 // eventLoopContext bundles all channels and state required by the event loop.
 type eventLoopContext struct {
-	sess                                       *session.Session
-	invocation                                 *agent.Invocation
-	agentEventCh                               <-chan *event.Event
-	flushChan                                  chan *flush.FlushRequest
-	processedEventCh                           chan *event.Event
-	runHandle                                  *runHandle
-	finalStateDelta                            map[string][]byte
-	finalChoices                               []model.Choice
-	fallbackChoices                            []model.Choice
-	fallbackResponseID                         string
-	fallbackStateDelta                         map[string][]byte
-	finalError                                 *model.ResponseError
-	graphCompletionSeen                        bool
-	filteredPersistedAssistantResponseIDs      map[string]struct{}
-	filteredPersistedAssistantChoiceSignatures map[string]struct{}
-	emittedAssistantChoiceSignatures           map[string]struct{}
-	visibleCompletionResponseIDs               map[string]struct{}
-	visibleCompletionChoiceSignatures          map[string]struct{}
-	sawTerminalError                           bool
-	streamFilter                               graph.StreamModeFilter
+	sess                               *session.Session
+	invocation                         *agent.Invocation
+	agentEventCh                       <-chan *event.Event
+	flushChan                          chan *flush.FlushRequest
+	processedEventCh                   chan *event.Event
+	runHandle                          *runHandle
+	finalStateDelta                    map[string][]byte
+	finalChoices                       []model.Choice
+	fallbackChoices                    []model.Choice
+	fallbackResponseID                 string
+	fallbackStateDelta                 map[string][]byte
+	finalError                         *model.ResponseError
+	graphCompletionSeen                bool
+	persistedAssistantResponseIDs      map[string]struct{}
+	persistedAssistantChoiceSignatures map[string]struct{}
+	emittedAssistantChoiceSignatures   map[string]struct{}
+	visibleCompletionResponseIDs       map[string]struct{}
+	visibleCompletionChoiceSignatures  map[string]struct{}
+	sawTerminalError                   bool
+	streamFilter                       graph.StreamModeFilter
 	// emittedAssistantResponseIDs tracks response IDs that already produced a
 	// non-partial assistant message event during this run.
 	//
@@ -891,10 +891,9 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 
 	// Append qualifying events to session and trigger summarization.
 	persisted := r.handleEventPersistence(ctx, loop.invocation, loop.sess, agentEvent)
-	r.recordFilteredPersistedAssistantEvent(
+	r.recordPersistedAssistantEvent(
 		loop,
 		agentEvent,
-		shouldForwardEvent,
 		persisted,
 	)
 
@@ -920,13 +919,12 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	return nil
 }
 
-func (r *runner) recordFilteredPersistedAssistantEvent(
+func (r *runner) recordPersistedAssistantEvent(
 	loop *eventLoopContext,
 	agentEvent *event.Event,
-	shouldForwardEvent bool,
 	persisted bool,
 ) {
-	if loop == nil || agentEvent == nil || shouldForwardEvent || !persisted {
+	if loop == nil || agentEvent == nil || !persisted {
 		return
 	}
 	if isGraphCompletionEvent(agentEvent) {
@@ -938,25 +936,25 @@ func (r *runner) recordFilteredPersistedAssistantEvent(
 	if agentEvent.Response == nil {
 		return
 	}
-	if loop.filteredPersistedAssistantResponseIDs == nil {
-		loop.filteredPersistedAssistantResponseIDs = make(map[string]struct{})
+	if loop.persistedAssistantResponseIDs == nil {
+		loop.persistedAssistantResponseIDs = make(map[string]struct{})
 	}
 	if agentEvent.Response.ID != "" {
-		loop.filteredPersistedAssistantResponseIDs[agentEvent.Response.ID] = struct{}{}
+		loop.persistedAssistantResponseIDs[agentEvent.Response.ID] = struct{}{}
 	}
 	if graph.IsVisibleGraphCompletionEvent(agentEvent) {
 		if responseID := finalResponseIDFromStateDelta(agentEvent.StateDelta); responseID != "" {
-			loop.filteredPersistedAssistantResponseIDs[responseID] = struct{}{}
+			loop.persistedAssistantResponseIDs[responseID] = struct{}{}
 		}
 	}
 	signature := assistantChoiceSignature(agentEvent.Response.Choices)
 	if signature == "" {
 		return
 	}
-	if loop.filteredPersistedAssistantChoiceSignatures == nil {
-		loop.filteredPersistedAssistantChoiceSignatures = make(map[string]struct{})
+	if loop.persistedAssistantChoiceSignatures == nil {
+		loop.persistedAssistantChoiceSignatures = make(map[string]struct{})
 	}
-	loop.filteredPersistedAssistantChoiceSignatures[signature] = struct{}{}
+	loop.persistedAssistantChoiceSignatures[signature] = struct{}{}
 }
 
 func (r *runner) recordVisibleCompletionEmission(
@@ -1521,28 +1519,28 @@ func shouldClearRunnerCompletionChoicesInSession(
 	finalChoices []model.Choice,
 	finalStateDelta map[string][]byte,
 ) bool {
-	if loop == nil ||
-		loop.invocation == nil ||
-		!agent.IsGraphCompletionEventDisabled(loop.invocation) {
+	if loop == nil {
 		return false
 	}
 	finalResponseID := finalResponseIDFromStateDelta(finalStateDelta)
 	if finalResponseID != "" {
-		if _, ok := loop.filteredPersistedAssistantResponseIDs[finalResponseID]; ok {
+		if _, ok := loop.persistedAssistantResponseIDs[finalResponseID]; ok {
 			return true
 		}
-		_, ok := loop.emittedAssistantResponseIDs[finalResponseID]
-		return ok
+		return false
+	}
+	if loop.invocation == nil ||
+		!agent.IsGraphCompletionEventDisabled(loop.invocation) {
+		return false
 	}
 	signature := assistantChoiceSignature(finalChoices)
 	if signature == "" {
 		return false
 	}
-	if _, ok := loop.filteredPersistedAssistantChoiceSignatures[signature]; ok {
+	if _, ok := loop.persistedAssistantChoiceSignatures[signature]; ok {
 		return true
 	}
-	_, ok := loop.emittedAssistantChoiceSignatures[signature]
-	return ok
+	return false
 }
 
 func (r *runner) completionChoicesForRunner(
@@ -1687,18 +1685,7 @@ func assistantChoiceSignature(choices []model.Choice) string {
 }
 
 func finalResponseIDFromStateDelta(finalStateDelta map[string][]byte) string {
-	if finalStateDelta == nil {
-		return ""
-	}
-	raw, ok := finalStateDelta[graph.StateKeyLastResponseID]
-	if !ok || len(raw) == 0 {
-		return ""
-	}
-	var responseID string
-	if err := json.Unmarshal(raw, &responseID); err != nil {
-		return ""
-	}
-	return responseID
+	return graph.FinalResponseIDFromStateDelta(finalStateDelta)
 }
 
 func finalResponseTextFromStateDelta(finalStateDelta map[string][]byte) string {

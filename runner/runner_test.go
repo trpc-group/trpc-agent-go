@@ -4230,7 +4230,7 @@ func TestShouldClearRunnerCompletionChoicesInSession_DoesNotDedupMismatchedRespo
 	t *testing.T,
 ) {
 	loop := &eventLoopContext{
-		filteredPersistedAssistantChoiceSignatures: map[string]struct{}{
+		persistedAssistantChoiceSignatures: map[string]struct{}{
 			assistantChoiceSignature([]model.Choice{{
 				Index:   0,
 				Message: model.NewAssistantMessage("wrapped-final"),
@@ -4260,7 +4260,7 @@ func TestShouldClearRunnerCompletionChoicesInSession_FallsBackToChoiceSignatureW
 				agent.WithDisableGraphCompletionEvent(true),
 			)),
 		),
-		filteredPersistedAssistantChoiceSignatures: map[string]struct{}{
+		persistedAssistantChoiceSignatures: map[string]struct{}{
 			assistantChoiceSignature([]model.Choice{{
 				Index:   0,
 				Message: model.NewAssistantMessage("wrapped-final"),
@@ -4278,7 +4278,7 @@ func TestShouldClearRunnerCompletionChoicesInSession_FallsBackToChoiceSignatureW
 	))
 }
 
-func TestShouldClearRunnerCompletionChoicesInSession_PreservesLegacyChoicesWithoutHiddenCompletion(
+func TestShouldClearRunnerCompletionChoicesInSession_DedupsByPersistedResponseIDEvenWhenGraphCompletionEventIsVisible(
 	t *testing.T,
 ) {
 	loop := &eventLoopContext{
@@ -4287,7 +4287,61 @@ func TestShouldClearRunnerCompletionChoicesInSession_PreservesLegacyChoicesWitho
 				agent.WithGraphEmitFinalModelResponses(true),
 			)),
 		),
-		filteredPersistedAssistantChoiceSignatures: map[string]struct{}{
+		persistedAssistantResponseIDs: map[string]struct{}{
+			"response-from-state": {},
+		},
+	}
+	finalChoices := []model.Choice{{
+		Index:   0,
+		Message: model.NewAssistantMessage("wrapped-final"),
+	}}
+	finalStateDelta := map[string][]byte{
+		graph.StateKeyLastResponseID: []byte(`"response-from-state"`),
+	}
+	require.True(t, shouldClearRunnerCompletionChoicesInSession(
+		loop,
+		finalChoices,
+		finalStateDelta,
+	))
+}
+
+func TestShouldClearRunnerCompletionChoicesInSession_DoesNotDedupUsingEmittedResponseIDWithoutPersistence(
+	t *testing.T,
+) {
+	loop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithGraphEmitFinalModelResponses(true),
+			)),
+		),
+		emittedAssistantResponseIDs: map[string]struct{}{
+			"response-from-state": {},
+		},
+	}
+	finalChoices := []model.Choice{{
+		Index:   0,
+		Message: model.NewAssistantMessage("wrapped-final"),
+	}}
+	finalStateDelta := map[string][]byte{
+		graph.StateKeyLastResponseID: []byte(`"response-from-state"`),
+	}
+	require.False(t, shouldClearRunnerCompletionChoicesInSession(
+		loop,
+		finalChoices,
+		finalStateDelta,
+	))
+}
+
+func TestShouldClearRunnerCompletionChoicesInSession_PreservesVisibleChoicesWhenResponseIDMissing(
+	t *testing.T,
+) {
+	loop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithGraphEmitFinalModelResponses(true),
+			)),
+		),
+		persistedAssistantChoiceSignatures: map[string]struct{}{
 			assistantChoiceSignature([]model.Choice{{
 				Index:   0,
 				Message: model.NewAssistantMessage("wrapped-final"),
@@ -4946,11 +5000,26 @@ func TestFinalResponseIDFromStateDelta_Cases(t *testing.T) {
 		require.Equal(t, "", finalResponseIDFromStateDelta(delta))
 	})
 
+	t.Run("invalid json falls back to completion metadata", func(t *testing.T) {
+		delta := map[string][]byte{
+			graph.StateKeyLastResponseID: []byte(invalidJSON),
+			graph.MetadataKeyCompletion:  []byte(`{"finalResponseID":"resp-from-metadata"}`),
+		}
+		require.Equal(t, "resp-from-metadata", finalResponseIDFromStateDelta(delta))
+	})
+
 	t.Run("valid json", func(t *testing.T) {
 		delta := map[string][]byte{
 			graph.StateKeyLastResponseID: []byte(responseIDJSON),
 		}
 		require.Equal(t, responseID, finalResponseIDFromStateDelta(delta))
+	})
+
+	t.Run("completion metadata fallback", func(t *testing.T) {
+		delta := map[string][]byte{
+			graph.MetadataKeyCompletion: []byte(`{"finalResponseID":"resp-from-metadata"}`),
+		}
+		require.Equal(t, "resp-from-metadata", finalResponseIDFromStateDelta(delta))
 	})
 }
 
@@ -6288,6 +6357,70 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesGraphChildAgentPatch(
 	)
 }
 
+func TestRunner_GraphChildAgentNode_PersistedRunnerCompletionDoesNotReplayIntoNextTurnHistory(
+	t *testing.T,
+) {
+	const (
+		appName    = "app"
+		userID     = "u"
+		sessionID  = "session-graph-child-replay"
+		firstReply = "child first"
+	)
+
+	childModel := &scriptedSurfaceModel{
+		name: "graph-child-history",
+		responses: []model.Message{
+			model.NewAssistantMessage(firstReply),
+			model.NewAssistantMessage("child second"),
+		},
+	}
+	child := llmagent.New("researcher", llmagent.WithModel(childModel))
+
+	builder := graph.NewStateGraph(graph.MessagesStateSchema())
+	builder.AddAgentNode("researcher")
+	builder.SetEntryPoint("researcher")
+	builder.SetFinishPoint("researcher")
+	parent, err := graphagent.New(
+		"assistant",
+		builder.MustCompile(),
+		graphagent.WithSubAgents([]agent.Agent{child}),
+	)
+	require.NoError(t, err)
+
+	svc := sessioninmemory.NewSessionService()
+	r := NewRunner(appName, parent, WithSessionService(svc))
+
+	firstTurn, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("hello"),
+	)
+	require.NoError(t, err)
+	firstCompletion := collectRunnerCompletionEvent(t, firstTurn)
+	require.NotNil(t, firstCompletion.Response)
+	require.Len(t, firstCompletion.Response.Choices, 1)
+	require.Equal(t, firstReply, firstCompletion.Response.Choices[0].Message.Content)
+	assertSessionKeepsSingleFinalAssistantEvent(t, svc, sessionID, firstReply)
+
+	secondTurn, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("next"),
+	)
+	require.NoError(t, err)
+	_ = collectRunnerCompletionEvent(t, secondTurn)
+
+	requests := childModel.Requests()
+	require.Len(t, requests, 2)
+	require.Equal(
+		t,
+		[]string{"user:hello", "assistant:" + firstReply, "user:next"},
+		surfaceRoleContentSummaries(requests[1].messages),
+	)
+}
+
 func cloneSurfaceCapturedRequest(req *model.Request) *surfaceCapturedRequest {
 	if req == nil {
 		return nil
@@ -6387,6 +6520,17 @@ func surfaceMessageContents(messages []model.Message) []string {
 		}
 	}
 	return contents
+}
+
+func surfaceRoleContentSummaries(messages []model.Message) []string {
+	summaries := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message.Content == "" {
+			continue
+		}
+		summaries = append(summaries, string(message.Role)+":"+message.Content)
+	}
+	return summaries
 }
 
 func countStringValues(values []string, target string) int {
