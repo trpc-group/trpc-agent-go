@@ -340,7 +340,7 @@ func TestSkillsRequestProcessor_ListDocsOnlyGuidance(t *testing.T) {
 	require.Contains(t, sys, skillsCapabilityHeader)
 	require.Contains(t, sys, "skill doc inspection only")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
-	require.Contains(t, sys, "inspect available doc names only")
+	require.Contains(t, sys, "Use skills only to inspect available doc names")
 	require.NotContains(t, sys, "skill_load.docs or include_all_docs")
 	require.NotContains(t, sys, "load SKILL.md first")
 	require.NotContains(t, sys, "skill_run runs with CWD")
@@ -365,8 +365,8 @@ func TestSkillsRequestProcessor_RunOnlyGuidance(t *testing.T) {
 	require.Contains(t, sys, skillsOverviewHeader)
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.NotContains(t, sys, skillsCapabilityHeader)
-	require.Contains(t, sys, "bundled scripts or observed help output")
-	require.Contains(t, sys, "When skill loading is unavailable")
+	require.Contains(t, sys, "Built-in skill loading is unavailable")
+	require.Contains(t, sys, "bundled scripts, and observed runtime behavior")
 	require.NotContains(t, sys, "missing skill_load")
 	require.NotContains(t, sys, "consult the loaded SKILL.md/docs")
 }
@@ -400,7 +400,7 @@ func TestDefaultToolingAndWorkspaceGuidance_CatalogOnly(t *testing.T) {
 	text := defaultToolingAndWorkspaceGuidance(skillprofile.Flags{})
 	require.Contains(t, text, skillsToolingGuidanceHeader)
 	require.Contains(t, text, "Use the skill overview as a catalog only")
-	require.Contains(t, text, "loading, doc inspection, and execution tools")
+	require.Contains(t, text, "skill tools are unavailable in this configuration")
 }
 
 func TestDefaultToolingAndWorkspaceGuidance_InvalidFlagsFallback(t *testing.T) {
@@ -420,12 +420,12 @@ func TestDefaultDocHelpersOnlyGuidance_Variants(t *testing.T) {
 		{
 			name:  "list and select",
 			flags: skillprofile.Flags{ListDocs: true, SelectDocs: true},
-			want:  "inspect available doc names and adjust doc selection state only",
+			want:  "inspect available doc names or adjust doc selection state",
 		},
 		{
 			name:  "select only",
 			flags: skillprofile.Flags{SelectDocs: true},
-			want:  "adjust doc selection state only when doc names are already known",
+			want:  "adjust doc selection when doc names are already known",
 		},
 	}
 	for _, tt := range tests {
