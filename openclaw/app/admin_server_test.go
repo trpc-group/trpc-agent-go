@@ -99,9 +99,11 @@ nodes:
 		nil,
 		"127.0.0.1:8081",
 		"http://127.0.0.1:8081",
+		nil,
 	)
 
 	require.Len(t, cfg.Browser.Providers, 1)
+	require.NotNil(t, cfg.Skills)
 	provider := cfg.Browser.Providers[0]
 	require.Equal(t, "primary-browser", provider.Name)
 	require.Equal(t, "openclaw", provider.DefaultProfile)

@@ -139,6 +139,9 @@ func (t *ListTool) buildOutput(mode string) listOutput {
 		return listOutput{Total: 0}
 	}
 
+	t.repo.mu.RLock()
+	defer t.repo.mu.RUnlock()
+
 	sums := t.repo.base.Summaries()
 	sort.Slice(sums, func(i, j int) bool {
 		return sums[i].Name < sums[j].Name

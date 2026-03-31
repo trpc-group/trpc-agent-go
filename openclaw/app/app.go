@@ -624,8 +624,9 @@ func NewRuntime(
 	extraTools = append(extraTools, openClawTools.tools...)
 
 	var (
-		toolSets []tool.ToolSet
-		ag       agent.Agent
+		toolSets   []tool.ToolSet
+		ag         agent.Agent
+		skillsRepo *ocskills.Repository
 	)
 	if agentType == agentTypeClaudeCode {
 		ag, err = newClaudeCodeAgent(opts)
@@ -642,7 +643,7 @@ func NewRuntime(
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
-		ag, err = newAgent(mdl, agentConfig{
+		ag, skillsRepo, err = newAgent(mdl, agentConfig{
 			AppName:           opts.AppName,
 			AddSessionSummary: opts.AddSessionSummary,
 			MaxHistoryRuns:    opts.MaxHistoryRuns,
@@ -859,6 +860,7 @@ func NewRuntime(
 			nil,
 			opts.AdminAddr,
 			adminURL,
+			skillsRepo,
 		))
 		rt.Admin = AdminSurface{
 			Handler: adminSvc.Handler(),
@@ -1044,8 +1046,9 @@ func run(ctx context.Context, args []string) error {
 	extraTools = append(extraTools, openClawTools.tools...)
 
 	var (
-		toolSets []tool.ToolSet
-		ag       agent.Agent
+		toolSets   []tool.ToolSet
+		ag         agent.Agent
+		skillsRepo *ocskills.Repository
 	)
 	defer func() {
 		closeToolSets(toolSets)
@@ -1065,7 +1068,7 @@ func run(ctx context.Context, args []string) error {
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
-		ag, err = newAgent(mdl, agentConfig{
+		ag, skillsRepo, err = newAgent(mdl, agentConfig{
 			AppName:           opts.AppName,
 			AddSessionSummary: opts.AddSessionSummary,
 			MaxHistoryRuns:    opts.MaxHistoryRuns,
@@ -1300,6 +1303,7 @@ func run(ctx context.Context, args []string) error {
 			browserServerSup,
 			adminBinding.addr,
 			adminBinding.url,
+			skillsRepo,
 		))
 		adminSrv = &http.Server{
 			Handler:           adminSvc.Handler(),
@@ -1811,7 +1815,7 @@ func newAgent(
 	cfg agentConfig,
 	extraTools []tool.Tool,
 	toolSets []tool.ToolSet,
-) (agent.Agent, error) {
+) (agent.Agent, *ocskills.Repository, error) {
 	instruction := strings.TrimSpace(cfg.Instruction)
 	if instruction == "" {
 		instruction = defaultAgentInstruction
@@ -1834,7 +1838,7 @@ func newAgent(
 		ocskills.WithSkillConfigs(cfg.SkillConfigs),
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	tools := append([]tool.Tool(nil), extraTools...)
@@ -1847,7 +1851,7 @@ func newAgent(
 			cfg.ToolProviders,
 		)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		tools = append(tools, extra...)
 	}
@@ -1912,7 +1916,7 @@ func newAgent(
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
 
-	return llmagent.New(defaultAgentName, opts...), nil
+	return llmagent.New(defaultAgentName, opts...), repo, nil
 }
 
 func hasToolNamed(tools []tool.Tool, name string) bool {
