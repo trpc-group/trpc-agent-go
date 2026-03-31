@@ -1836,7 +1836,7 @@ func newAgent(
 	}
 	knowledgeTools, err := buildKnowledgeTools(cfg.KnowledgesConfig)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
