@@ -769,6 +769,7 @@ type eventLoopContext struct {
 	fallbackStateDelta                 map[string][]byte
 	finalError                         *model.ResponseError
 	graphCompletionSeen                bool
+	freshAssistantContentProduced      bool
 	persistedAssistantResponseIDs      map[string]struct{}
 	persistedAssistantChoiceSignatures map[string]struct{}
 	emittedAssistantChoiceSignatures   map[string]struct{}
@@ -941,6 +942,9 @@ func (r *runner) recordPersistedAssistantEvent(
 	}
 	if agentEvent.Response == nil {
 		return
+	}
+	if !isSnapshotOnlyVisibleGraphCompletion(agentEvent) {
+		loop.freshAssistantContentProduced = true
 	}
 	if loop.persistedAssistantResponseIDs == nil {
 		loop.persistedAssistantResponseIDs = make(map[string]struct{})
@@ -1730,8 +1734,13 @@ func runProducedAssistantContent(loop *eventLoopContext) bool {
 	if loop == nil {
 		return false
 	}
-	return len(loop.persistedAssistantResponseIDs) > 0 ||
-		len(loop.persistedAssistantChoiceSignatures) > 0
+	return loop.freshAssistantContentProduced
+}
+
+func isSnapshotOnlyVisibleGraphCompletion(e *event.Event) bool {
+	return e != nil &&
+		graph.IsVisibleGraphCompletionEvent(e) &&
+		graph.CompletionSnapshotOnlyFromStateDelta(e.StateDelta)
 }
 
 func cloneChoices(choices []model.Choice) []model.Choice {

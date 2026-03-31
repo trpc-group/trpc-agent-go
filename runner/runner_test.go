@@ -4409,12 +4409,30 @@ func TestShouldMarkCompletionSnapshotOnly_SkipsNormalRunsAndFreshAssistantRuns(t
 					}),
 				)),
 			),
-			baselineFinalResponseID: "resp-2",
-			persistedAssistantResponseIDs: map[string]struct{}{
-				"resp-1": {},
-			},
+			baselineFinalResponseID:       "resp-2",
+			freshAssistantContentProduced: true,
 		}
 		require.False(t, shouldMarkCompletionSnapshotOnly(loop, choices, finalStateDelta))
+	})
+
+	t.Run("resume with only snapshot-only visible completion recorded", func(t *testing.T) {
+		loop := &eventLoopContext{
+			invocation: agent.NewInvocation(
+				agent.WithInvocationRunOptions(agent.NewRunOptions(
+					agent.WithRuntimeState(graph.State{
+						graph.StateKeyCommand: graph.NewResumeCommand().WithResume("approve"),
+					}),
+				)),
+			),
+			baselineFinalResponseID: "resp-2",
+			priorAssistantResponseIDs: map[string]struct{}{
+				"resp-2": {},
+			},
+			persistedAssistantResponseIDs: map[string]struct{}{
+				"resp-2": {},
+			},
+		}
+		require.True(t, shouldMarkCompletionSnapshotOnly(loop, choices, finalStateDelta))
 	})
 
 	t.Run("resume with fresh completion identity", func(t *testing.T) {
@@ -4679,7 +4697,7 @@ func TestIsResumeRunAndRunProducedAssistantContent(t *testing.T) {
 	require.False(t, runProducedAssistantContent(nil))
 	require.False(t, runProducedAssistantContent(&eventLoopContext{}))
 	require.True(t, runProducedAssistantContent(&eventLoopContext{
-		persistedAssistantChoiceSignatures: map[string]struct{}{"sig": {}},
+		freshAssistantContentProduced: true,
 	}))
 }
 
@@ -4719,6 +4737,44 @@ func TestMarkCompletionSnapshotOnly(t *testing.T) {
 	)
 	rr.markCompletionSnapshotOnly(loop, graphEvt)
 	require.True(t, graph.CompletionSnapshotOnlyFromStateDelta(graphEvt.StateDelta))
+}
+
+func TestRecordPersistedAssistantEvent_DoesNotCountSnapshotOnlyVisibleCompletionAsFreshContent(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+
+	loop := &eventLoopContext{}
+	snapshotOnlyVisible, ok := graph.VisibleGraphCompletionEventForAuthor(
+		graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID("inv"),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse:   "assistant",
+				graph.StateKeyLastResponseID: "resp-1",
+			}),
+			graph.WithCompletionEventSnapshotOnly(true),
+		),
+		"graph-child",
+	)
+	require.True(t, ok)
+
+	rr.recordPersistedAssistantEvent(loop, snapshotOnlyVisible, true)
+	require.False(t, loop.freshAssistantContentProduced)
+	require.Contains(t, loop.persistedAssistantResponseIDs, "resp-1")
+
+	freshVisible, ok := graph.VisibleGraphCompletionEventForAuthor(
+		graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID("inv"),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse:   "assistant",
+				graph.StateKeyLastResponseID: "resp-2",
+			}),
+		),
+		"graph-child",
+	)
+	require.True(t, ok)
+
+	rr.recordPersistedAssistantEvent(loop, freshVisible, true)
+	require.True(t, loop.freshAssistantContentProduced)
+	require.Contains(t, loop.persistedAssistantResponseIDs, "resp-2")
 }
 
 func TestAssistantChoiceSignature_UsesAllAssistantChoices(t *testing.T) {
