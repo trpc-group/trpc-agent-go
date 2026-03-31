@@ -877,6 +877,7 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
 	}
 	r.captureCompletionFallback(loop, agentEvent)
+	r.markCompletionSnapshotOnly(loop, agentEvent)
 	if shouldSuppressGraphCompletionEvent(loop, agentEvent) {
 		return nil
 	}
@@ -1036,6 +1037,22 @@ func copyEventInvocationFields(dst *event.Event, src *event.Event) {
 	if dst.FilterKey == "" {
 		dst.FilterKey = src.FilterKey
 	}
+}
+
+func (r *runner) markCompletionSnapshotOnly(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) {
+	if loop == nil || agentEvent == nil {
+		return
+	}
+	if !isGraphCompletionSnapshotEvent(agentEvent) {
+		return
+	}
+	if !shouldMarkCompletionSnapshotOnly(loop, agentEvent.Response.Choices) {
+		return
+	}
+	graph.SetCompletionSnapshotOnlyInStateDelta(agentEvent.StateDelta, true)
 }
 
 func (r *runner) recordEmittedAssistantResponseID(
@@ -1432,6 +1449,15 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			echoFinalChoices,
 		)
 	}
+	if shouldMarkCompletionSnapshotOnly(
+		loop,
+		runnerCompletionEvent.Response.Choices,
+	) {
+		graph.SetCompletionSnapshotOnlyInStateDelta(
+			runnerCompletionEvent.StateDelta,
+			true,
+		)
+	}
 	runnerCompletionEvent.ExecutionTrace = agent.BuildExecutionTrace(
 		loop.invocation,
 		resolveExecutionTraceStatus(loop, ctx.Err()),
@@ -1643,6 +1669,41 @@ func visibleCompletionAlreadyEmitted(
 	}
 	_, alreadyVisible := loop.visibleCompletionChoiceSignatures[signature]
 	return alreadyVisible
+}
+
+func shouldMarkCompletionSnapshotOnly(
+	loop *eventLoopContext,
+	choices []model.Choice,
+) bool {
+	if loop == nil || len(choices) == 0 {
+		return false
+	}
+	if !isResumeRun(loop) {
+		return false
+	}
+	return !runProducedAssistantContent(loop)
+}
+
+func isResumeRun(loop *eventLoopContext) bool {
+	if loop == nil || loop.invocation == nil || loop.invocation.RunOptions.RuntimeState == nil {
+		return false
+	}
+	switch cmd := loop.invocation.RunOptions.RuntimeState[graph.StateKeyCommand].(type) {
+	case *graph.Command:
+		return cmd != nil && (cmd.Resume != nil || len(cmd.ResumeMap) > 0)
+	case *graph.ResumeCommand:
+		return cmd != nil && (cmd.Resume != nil || len(cmd.ResumeMap) > 0)
+	default:
+		return false
+	}
+}
+
+func runProducedAssistantContent(loop *eventLoopContext) bool {
+	if loop == nil {
+		return false
+	}
+	return len(loop.persistedAssistantResponseIDs) > 0 ||
+		len(loop.persistedAssistantChoiceSignatures) > 0
 }
 
 func cloneChoices(choices []model.Choice) []model.Choice {

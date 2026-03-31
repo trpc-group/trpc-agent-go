@@ -64,6 +64,21 @@ func TestFinalResponseIDFromStateDelta_EdgeCases(t *testing.T) {
 	}))
 }
 
+func TestCompletionSnapshotOnlyMetadataHelpers(t *testing.T) {
+	stateDelta := map[string][]byte{
+		MetadataKeyCompletion: []byte(`{"finalResponseID":"resp-1"}`),
+	}
+	require.False(t, CompletionSnapshotOnlyFromStateDelta(stateDelta))
+
+	SetCompletionSnapshotOnlyInStateDelta(stateDelta, true)
+	require.True(t, CompletionSnapshotOnlyFromStateDelta(stateDelta))
+
+	var metadata CompletionMetadata
+	require.NoError(t, json.Unmarshal(stateDelta[MetadataKeyCompletion], &metadata))
+	require.True(t, metadata.SnapshotOnly)
+	require.Equal(t, "resp-1", metadata.FinalResponseID)
+}
+
 func TestNewNodeEvents(t *testing.T) {
 	start := time.Now().Add(-time.Second).UTC()
 	end := start.Add(150 * time.Millisecond)

@@ -4359,6 +4359,54 @@ func TestShouldClearRunnerCompletionChoicesInSession_PreservesVisibleChoicesWhen
 	))
 }
 
+func TestShouldMarkCompletionSnapshotOnly_ResumeRunWithoutNewAssistantContent(t *testing.T) {
+	loop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithRuntimeState(graph.State{
+					graph.StateKeyCommand: graph.NewResumeCommand().WithResume("approve"),
+				}),
+			)),
+		),
+	}
+	choices := []model.Choice{{
+		Index:   0,
+		Message: model.NewAssistantMessage("stale-final"),
+	}}
+
+	require.True(t, shouldMarkCompletionSnapshotOnly(loop, choices))
+}
+
+func TestShouldMarkCompletionSnapshotOnly_SkipsNormalRunsAndFreshAssistantRuns(t *testing.T) {
+	choices := []model.Choice{{
+		Index:   0,
+		Message: model.NewAssistantMessage("fresh-final"),
+	}}
+
+	t.Run("normal run", func(t *testing.T) {
+		loop := &eventLoopContext{
+			invocation: agent.NewInvocation(),
+		}
+		require.False(t, shouldMarkCompletionSnapshotOnly(loop, choices))
+	})
+
+	t.Run("resume with assistant content produced", func(t *testing.T) {
+		loop := &eventLoopContext{
+			invocation: agent.NewInvocation(
+				agent.WithInvocationRunOptions(agent.NewRunOptions(
+					agent.WithRuntimeState(graph.State{
+						graph.StateKeyCommand: graph.NewResumeCommand().WithResume("approve"),
+					}),
+				)),
+			),
+			persistedAssistantResponseIDs: map[string]struct{}{
+				"resp-1": {},
+			},
+		}
+		require.False(t, shouldMarkCompletionSnapshotOnly(loop, choices))
+	})
+}
+
 func TestAssistantChoiceSignature_UsesAllAssistantChoices(t *testing.T) {
 	require.Equal(
 		t,
