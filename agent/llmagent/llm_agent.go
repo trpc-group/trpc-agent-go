@@ -521,6 +521,7 @@ func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
 		allTools,
 		options,
 		workspaceRegistry,
+		nil,
 	)
 	allTools = appendSkillTools(allTools, options, runTool)
 	return allTools, userToolNames
@@ -674,6 +675,7 @@ func appendWorkspaceExecTool(
 	allTools []tool.Tool,
 	options *Options,
 	reg *codeexecutor.WorkspaceRegistry,
+	inv *agent.Invocation,
 ) []tool.Tool {
 	if !executorSupportsWorkspaceExec(options) {
 		return allTools
@@ -685,8 +687,13 @@ func appendWorkspaceExecTool(
 	allTools = append(
 		allTools,
 		execTool,
-		toolworkspaceexec.NewPublishArtifactTool(execTool),
 	)
+	if toolworkspaceexec.SupportsArtifactSave(inv) {
+		allTools = append(
+			allTools,
+			toolworkspaceexec.NewSaveArtifactTool(execTool),
+		)
+	}
 	if executorSupportsWorkspaceExecSessions(options) {
 		allTools = append(
 			allTools,

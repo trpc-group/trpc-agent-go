@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -119,7 +120,7 @@ func TestLLMAgent_WorkspaceExecRegisteredForExplicitExecutor(t *testing.T) {
 	}
 
 	require.True(t, names["workspace_exec"])
-	require.True(t, names["workspace_publish_artifact"])
+	require.False(t, names["workspace_save_artifact"])
 	require.False(t, names["workspace_write_stdin"])
 	require.False(t, names["workspace_kill_session"])
 }
@@ -136,7 +137,7 @@ func TestLLMAgent_WorkspaceExecSessionToolsRegisteredForInteractiveExecutor(
 	}
 
 	require.True(t, names["workspace_exec"])
-	require.True(t, names["workspace_publish_artifact"])
+	require.False(t, names["workspace_save_artifact"])
 	require.True(t, names["workspace_write_stdin"])
 	require.True(t, names["workspace_kill_session"])
 }
@@ -189,7 +190,36 @@ func TestLLMAgent_WorkspaceExecOmittedWithoutExplicitExecutor(t *testing.T) {
 	}
 
 	require.False(t, names["workspace_exec"])
-	require.False(t, names["workspace_publish_artifact"])
+	require.False(t, names["workspace_save_artifact"])
+}
+
+func TestLLMAgent_WorkspaceSaveArtifactRegisteredForInvocationCapability(
+	t *testing.T,
+) {
+	a := New("tester", WithCodeExecutor(&stubExec{}))
+	inv := &agent.Invocation{
+		Session: &session.Session{
+			ID:      "sess",
+			AppName: "app",
+			UserID:  "user",
+		},
+		ArtifactService: inmemory.NewService(),
+	}
+
+	tools, _ := a.InvocationToolSurface(context.Background(), inv)
+	require.NotNil(t, findTool(tools, "workspace_exec"))
+	require.NotNil(t, findTool(tools, "workspace_save_artifact"))
+}
+
+func TestLLMAgent_WorkspaceSaveArtifactOmittedWithoutInvocationCapability(
+	t *testing.T,
+) {
+	a := New("tester", WithCodeExecutor(&stubExec{}))
+	inv := &agent.Invocation{Session: &session.Session{ID: "sess"}}
+
+	tools, _ := a.InvocationToolSurface(context.Background(), inv)
+	require.NotNil(t, findTool(tools, "workspace_exec"))
+	require.Nil(t, findTool(tools, "workspace_save_artifact"))
 }
 
 func TestLLMAgent_SkillRunUsesDefaultExecutorWhenNoExplicitExecutor(t *testing.T) {
@@ -1163,7 +1193,7 @@ func TestLLMAgent_GuidanceOmitsExecForNonInteractiveExecutor(t *testing.T) {
 	require.NotContains(t, sys, "skill_kill_session")
 	require.Contains(t, sys, "workspace_exec",
 		"workspace_exec guidance should still be present when executor supports workspace execution")
-	require.Contains(t, sys, "workspace_publish_artifact")
+	require.NotContains(t, sys, "workspace_save_artifact")
 	require.NotContains(t, sys, "workspace_write_stdin",
 		"workspace_exec session guidance should be omitted when executor is non-interactive")
 	require.NotContains(t, sys, "workspace_kill_session")
@@ -1196,7 +1226,7 @@ func TestLLMAgent_GuidanceIncludesExecForInteractiveExecutor(t *testing.T) {
 	require.Contains(t, sys, workspaceExecGuidanceHeader)
 	require.Contains(t, sys, "skill_exec")
 	require.Contains(t, sys, "workspace_exec")
-	require.Contains(t, sys, "workspace_publish_artifact")
+	require.NotContains(t, sys, "workspace_save_artifact")
 	require.Contains(t, sys, "workspace_write_stdin")
 	require.Contains(t, sys, "workspace_kill_session")
 }
@@ -1223,8 +1253,37 @@ func TestLLMAgent_WorkspaceExecGuidanceWithoutSkillsRepo(t *testing.T) {
 	require.Contains(t, sys, "workspace is its scope, not its capability limit")
 	require.Contains(t, sys, "Prefer work/, out/, and runs/")
 	require.Contains(t, sys, "verify first before claiming the limitation")
-	require.Contains(t, sys, "workspace_publish_artifact")
+	require.NotContains(t, sys, "workspace_save_artifact")
 	require.NotContains(t, sys, "skills/")
 	require.NotContains(t, sys, "workspace_write_stdin")
 	require.NotContains(t, sys, skillsOverviewHeader)
+}
+
+func TestLLMAgent_WorkspaceExecGuidanceIncludesSaveArtifactWhenAvailable(
+	t *testing.T,
+) {
+	opts := &Options{}
+	WithCodeExecutor(&stubExec{})(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session: &session.Session{
+			ID:      "sess",
+			AppName: "app",
+			UserID:  "user",
+		},
+		ArtifactService: inmemory.NewService(),
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	sys := findSystemMessageContaining(req, workspaceExecGuidanceHeader)
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, "workspace_save_artifact")
+	require.NotContains(t, sys, "download, open, or preview")
 }
