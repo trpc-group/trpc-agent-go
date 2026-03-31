@@ -1187,7 +1187,10 @@ func (p *ContentRequestProcessor) shouldIncludeEvent(evt event.Event, inv *agent
 // isEventEligibleForInclusion checks basic event validity before expensive
 // filtering logic runs.
 func isEventEligibleForInclusion(evt event.Event) bool {
-	return evt.Response != nil && !evt.IsPartial && evt.IsValidContent()
+	return evt.Response != nil &&
+		!evt.IsPartial &&
+		evt.IsValidContent() &&
+		!graph.CompletionSnapshotOnlyFromStateDelta(evt.StateDelta)
 }
 
 // isStrictInvocationMessage checks whether the event exactly matches the

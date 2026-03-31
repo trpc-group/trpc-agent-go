@@ -20,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -1466,6 +1467,14 @@ func createTestEvent(author, content string, timestamp time.Time) event.Event {
 			},
 		},
 	}
+}
+
+func TestIsEventEligibleForInclusion_SkipsSnapshotOnlyCompletion(t *testing.T) {
+	evt := createTestEvent("graph", "snapshot", time.Now())
+	evt.StateDelta = map[string][]byte{}
+	graph.SetCompletionSnapshotOnlyInStateDelta(evt.StateDelta, true)
+
+	assert.False(t, isEventEligibleForInclusion(evt))
 }
 
 // TestContentRequestProcessor_Integration_MaxHistoryRunsAndAddSessionSummary tests the interaction
