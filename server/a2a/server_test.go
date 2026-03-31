@@ -3267,6 +3267,195 @@ func TestMessageProcessor_ProcessMessage_MultipleEvents(t *testing.T) {
 	assert.Equal(t, 1, len(resultTask.Artifacts))
 }
 
+func TestBuildTaskErrorMetadata(t *testing.T) {
+	t.Run("nil event returns nil", func(t *testing.T) {
+		assert.Nil(t, buildTaskErrorMetadata(nil))
+	})
+
+	t.Run("missing response returns nil", func(t *testing.T) {
+		assert.Nil(
+			t,
+			buildTaskErrorMetadata(&event.Event{}),
+		)
+	})
+
+	t.Run("missing error returns nil", func(t *testing.T) {
+		assert.Nil(t, buildTaskErrorMetadata(&event.Event{
+			Response: &model.Response{},
+		}))
+	})
+
+	t.Run("flow error keeps failed metadata", func(t *testing.T) {
+		metadata := buildTaskErrorMetadata(&event.Event{
+			Response: &model.Response{
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "task failed",
+				},
+			},
+		})
+
+		if assert.NotNil(t, metadata) {
+			assert.Equal(
+				t,
+				model.ObjectTypeError,
+				metadata[ia2a.MessageMetadataObjectTypeKey],
+			)
+			assert.Equal(
+				t,
+				model.ErrorTypeFlowError,
+				metadata[ia2a.MessageMetadataErrorTypeKey],
+			)
+			assert.Equal(
+				t,
+				"task failed",
+				metadata[ia2a.MessageMetadataErrorMessageKey],
+			)
+			assert.Equal(
+				t,
+				string(protocol.TaskStateFailed),
+				metadata[ia2a.MessageMetadataTaskStateKey],
+			)
+			_, ok := metadata[ia2a.MessageMetadataResponseIDKey]
+			assert.False(t, ok)
+		}
+	})
+
+	t.Run("stop agent error keeps canceled state and response id", func(t *testing.T) {
+		const responseID = "resp-1"
+		metadata := buildTaskErrorMetadata(&event.Event{
+			Response: &model.Response{
+				ID: responseID,
+				Error: &model.ResponseError{
+					Type:    agent.ErrorTypeStopAgentError,
+					Message: "task canceled",
+				},
+			},
+		})
+
+		if assert.NotNil(t, metadata) {
+			assert.Equal(
+				t,
+				string(protocol.TaskStateCanceled),
+				metadata[ia2a.MessageMetadataTaskStateKey],
+			)
+			assert.Equal(
+				t,
+				responseID,
+				metadata[ia2a.MessageMetadataResponseIDKey],
+			)
+		}
+	})
+}
+
+func TestBuildTaskErrorMessage(t *testing.T) {
+	const (
+		taskID = "task-1"
+		ctxID  = "ctx-1"
+	)
+
+	t.Run("nil event returns nil", func(t *testing.T) {
+		assert.Nil(t, buildTaskErrorMessage(taskID, ctxID, nil, nil))
+	})
+
+	t.Run("missing response returns nil", func(t *testing.T) {
+		assert.Nil(
+			t,
+			buildTaskErrorMessage(
+				taskID,
+				ctxID,
+				&event.Event{},
+				nil,
+			),
+		)
+	})
+
+	t.Run("missing error returns nil", func(t *testing.T) {
+		assert.Nil(t, buildTaskErrorMessage(
+			taskID,
+			ctxID,
+			&event.Event{
+				Response: &model.Response{},
+			},
+			nil,
+		))
+	})
+
+	t.Run("response id and text keep mirrored metadata", func(t *testing.T) {
+		const responseID = "resp-2"
+		agentEvent := &event.Event{
+			Response: &model.Response{
+				ID: responseID,
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "task failed",
+				},
+			},
+		}
+		metadata := buildTaskErrorMetadata(agentEvent)
+		msg := buildTaskErrorMessage(
+			taskID,
+			ctxID,
+			agentEvent,
+			metadata,
+		)
+
+		if assert.NotNil(t, msg) {
+			assert.Equal(t, responseID, msg.MessageID)
+			if assert.NotNil(t, msg.Metadata) {
+				assert.Equal(
+					t,
+					metadata[ia2a.MessageMetadataErrorTypeKey],
+					msg.Metadata[ia2a.MessageMetadataErrorTypeKey],
+				)
+				assert.Equal(
+					t,
+					metadata[ia2a.MessageMetadataTaskStateKey],
+					msg.Metadata[ia2a.MessageMetadataTaskStateKey],
+				)
+			}
+			if assert.Len(t, msg.Parts, 1) {
+				var text string
+				switch part := msg.Parts[0].(type) {
+				case *protocol.TextPart:
+					text = part.Text
+				case protocol.TextPart:
+					text = part.Text
+				}
+				if assert.NotEmpty(t, text) {
+					assert.Equal(t, "task failed", text)
+				}
+			}
+
+			metadata[ia2a.MessageMetadataErrorCodeKey] = "mutated"
+			_, ok := msg.Metadata[ia2a.MessageMetadataErrorCodeKey]
+			assert.False(t, ok)
+		}
+	})
+
+	t.Run("empty error message keeps empty parts", func(t *testing.T) {
+		agentEvent := &event.Event{
+			Response: &model.Response{
+				Error: &model.ResponseError{
+					Type: model.ErrorTypeFlowError,
+				},
+			},
+		}
+		msg := buildTaskErrorMessage(
+			taskID,
+			ctxID,
+			agentEvent,
+			buildTaskErrorMetadata(agentEvent),
+		)
+
+		if assert.NotNil(t, msg) {
+			assert.NotEmpty(t, msg.MessageID)
+			assert.NotNil(t, msg.Metadata)
+			assert.Len(t, msg.Parts, 0)
+		}
+	})
+}
+
 func TestMessageProcessor_ProcessMessage_StructuredTaskError(
 	t *testing.T,
 ) {
@@ -3331,6 +3520,15 @@ func TestMessageProcessor_ProcessMessage_StructuredTaskError(
 	assert.NotNil(t, task.Metadata)
 	assert.Equal(t, code, task.Metadata[ia2a.MessageMetadataErrorCodeKey])
 	assert.NotNil(t, task.Status.Message)
+	assert.Equal(
+		t,
+		task.Metadata[ia2a.MessageMetadataErrorCodeKey],
+		task.Status.Message.Metadata[ia2a.MessageMetadataErrorCodeKey],
+	)
+	task.Metadata["new_key"] = "task-only"
+	_, ok = task.Status.Message.Metadata["new_key"]
+	assert.False(t, ok)
+	assert.Len(t, task.Status.Message.Parts, 1)
 }
 
 func TestMessageProcessor_ProcessMessage_MultipleEvents_PreservesArtifactMetadata(
@@ -3474,6 +3672,16 @@ func TestMessageProcessor_ProcessBatchStreamingEvents_StructuredTaskError(
 			code,
 			status.Metadata[ia2a.MessageMetadataErrorCodeKey],
 		)
+		if assert.NotNil(t, status.Status.Message) {
+			messageMetadata := status.Status.Message.Metadata
+			messageCode := messageMetadata[ia2a.MessageMetadataErrorCodeKey]
+			assert.Equal(
+				t,
+				status.Metadata[ia2a.MessageMetadataErrorCodeKey],
+				messageCode,
+			)
+			assert.Len(t, status.Status.Message.Parts, 1)
+		}
 	default:
 		t.Fatal("expected task failure status event")
 	}
@@ -3551,6 +3759,16 @@ done:
 		code,
 		status.Metadata[ia2a.MessageMetadataErrorCodeKey],
 	)
+	if assert.NotNil(t, status.Status.Message) {
+		messageMetadata := status.Status.Message.Metadata
+		messageCode := messageMetadata[ia2a.MessageMetadataErrorCodeKey]
+		assert.Equal(
+			t,
+			status.Metadata[ia2a.MessageMetadataErrorCodeKey],
+			messageCode,
+		)
+		assert.Len(t, status.Status.Message.Parts, 1)
+	}
 }
 
 func TestMessageProcessor_ProcessBatchStreamingEvents_GraphNodeErrorNotTerminal(

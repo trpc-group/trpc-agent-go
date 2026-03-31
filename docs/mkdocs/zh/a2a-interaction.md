@@ -253,7 +253,12 @@ sequenceDiagram
 
 ### Client 端过滤规则
 
-- `TaskStatusUpdateEvent`（submitted/completed）：任务生命周期信号，不含用户内容
+- `TaskStatusUpdateEvent`（submitted/completed）：任务生命周期信号，不含用户
+  内容
+- 带 structured error metadata 的
+  `TaskStatusUpdateEvent`（failed/rejected/canceled）：终态失败。机器判断优先读
+  外层 metadata，`status.message.metadata` 作为 `0.1` 的兼容镜像，
+  `status.message.parts` 只用于展示文本。
 - `TaskArtifactUpdateEvent` 且 `lastChunk=true`：流结束信号或聚合结果
 
 ### `llm_response_id` 的作用
