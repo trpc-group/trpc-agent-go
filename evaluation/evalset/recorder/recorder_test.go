@@ -98,6 +98,36 @@ func TestRecorder_MultiTurn_AppendsConversation(t *testing.T) {
 	assert.Equal(t, "r-2", c.Conversation[1].InvocationID)
 }
 
+func TestRecorder_SingleTurn_ToolTrajectoryWithoutFinalResponse_Persists(t *testing.T) {
+	ctx := context.Background()
+	manager := inmemory.New()
+	rec, err := New(manager)
+	require.NoError(t, err)
+	inv := newTestInvocation("app-1", "u-1", "s-1", "r-1", model.NewUserMessage("hi"))
+	events := []*event.Event{
+		newToolCallEvent(inv, "tool-1", "calc", `{"x":1}`),
+		newToolResultEvent(inv, "tool-1", "calc", `{"y":2}`),
+		newRunnerCompletionEvent(inv),
+	}
+	for _, e := range events {
+		_, hookErr := rec.onEvent(ctx, inv, e)
+		require.NoError(t, hookErr)
+	}
+	require.NoError(t, rec.Close(ctx))
+	c, err := manager.GetCase(ctx, "app-1", "s-1", "s-1")
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	require.Len(t, c.Conversation, 1)
+	got := c.Conversation[0]
+	require.NotNil(t, got)
+	assert.Nil(t, got.FinalResponse)
+	require.Len(t, got.Tools, 1)
+	assert.Equal(t, "tool-1", got.Tools[0].ID)
+	assert.Equal(t, "calc", got.Tools[0].Name)
+	assert.Equal(t, map[string]any{"x": float64(1)}, got.Tools[0].Arguments)
+	assert.Equal(t, map[string]any{"y": float64(2)}, got.Tools[0].Result)
+}
+
 func TestRecorder_ErrorTurn_PersistsOnce(t *testing.T) {
 	ctx := context.Background()
 	manager := inmemory.New()
@@ -477,8 +507,17 @@ func TestRecorder_HelperBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, msg)
 	assert.Equal(t, "ok", msg.Content)
-	_, err = buildFinalResponse(turnSnapshot{}, false)
-	require.ErrorContains(t, err, "final response is missing")
+	msg, err = buildFinalResponse(turnSnapshot{tools: []*evalset.Tool{{ID: "tool-1"}}}, false)
+	require.NoError(t, err)
+	assert.Nil(t, msg)
+	msg, err = buildFinalResponse(turnSnapshot{
+		intermediateResponses: []model.Message{model.NewAssistantMessage("mid")},
+	}, false)
+	require.NoError(t, err)
+	assert.Nil(t, msg)
+	msg, err = buildFinalResponse(turnSnapshot{}, false)
+	require.NoError(t, err)
+	assert.Nil(t, msg)
 	assert.Equal(t, "[RUN_ERROR] unknown: unknown", formatRunError(model.ResponseError{}))
 	_, ok := extractAssistantContentMessage(nil)
 	assert.False(t, ok)
