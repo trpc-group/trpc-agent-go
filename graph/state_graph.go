@@ -1595,12 +1595,9 @@ func ensureSystemHead(in []model.Message, sys string) []model.Message {
 
 // extractExecutionContext extracts execution context from state.
 func extractExecutionContext(state State) (invocationID, sessionID, appName, userID string, eventChan chan<- *event.Event) {
-	if execCtx, exists := state[StateKeyExecContext]; exists {
-		execContext, ok := execCtx.(*ExecutionContext)
-		if ok {
-			eventChan = execContext.EventChan
-			invocationID = execContext.InvocationID
-		}
+	if execContext := executionContextFromState(state); execContext != nil {
+		eventChan = execContext.EventChan
+		invocationID = execContext.InvocationID
 	}
 	if sess, ok := state[StateKeySession]; ok {
 		if s, ok := sess.(*session.Session); ok && s != nil {
@@ -1611,6 +1608,21 @@ func extractExecutionContext(state State) (invocationID, sessionID, appName, use
 
 	}
 	return invocationID, sessionID, appName, userID, eventChan
+}
+
+func executionContextFromState(state State) *ExecutionContext {
+	if state == nil {
+		return nil
+	}
+	execCtx, exists := state[StateKeyExecContext]
+	if !exists {
+		return nil
+	}
+	execContext, ok := execCtx.(*ExecutionContext)
+	if !ok {
+		return nil
+	}
+	return execContext
 }
 
 // modelResponseConfig contains configuration for processing model responses.
@@ -2621,6 +2633,12 @@ func finalizeAgentNodeOutput(
 	if userInputKey == "" {
 		userInputKey = StateKeyUserInput
 	}
+	if execCtx := executionContextFromState(state); execCtx != nil {
+		execCtx.setCompletionIdentity(
+			streamRes.lastResponse,
+			streamRes.lastResponseID,
+		)
+	}
 	if outputMapper != nil {
 		mapped := outputMapper(state, SubgraphResult{
 			LastResponse:       streamRes.lastResponse,
@@ -2768,6 +2786,7 @@ func stateStringOr(state State, key string, fallback string) string {
 
 type agentEventStreamResult struct {
 	lastResponse     string
+	lastResponseID   string
 	finalState       State
 	rawDelta         map[string][]byte
 	fallbackState    State
@@ -2894,21 +2913,24 @@ func updateAgentLastResponse(res *agentEventStreamResult, ev *event.Event) {
 	if res == nil {
 		return
 	}
-	updateAgentLastResponseValue(&res.lastResponse, ev)
+	updateAgentLastResponseValue(&res.lastResponse, &res.lastResponseID, ev)
 }
 
-func updateAgentLastResponseValue(lastResponse *string, ev *event.Event) {
-	if lastResponse == nil || ev == nil || ev.Response == nil {
+func updateAgentLastResponseValue(lastResponse *string, lastResponseID *string, ev *event.Event) {
+	if lastResponse == nil || lastResponseID == nil || ev == nil || ev.Response == nil {
 		return
 	}
 	if len(ev.Response.Choices) == 0 {
 		return
 	}
-	msg := ev.Response.Choices[0].Message.Content
-	if msg == "" {
+	msg := ev.Response.Choices[0].Message
+	if msg.Role != model.RoleAssistant || msg.Content == "" {
 		return
 	}
-	*lastResponse = msg
+	if ev.Response.ID != "" {
+		*lastResponseID = ev.Response.ID
+	}
+	*lastResponse = msg.Content
 }
 
 func updateAgentStructuredOutput(res *agentEventStreamResult, ev *event.Event) {
@@ -3191,6 +3213,7 @@ func processAgentEventStream(
 		invocation,
 	)
 	streamLastResponse := ""
+	streamLastResponseID := ""
 	tap, err := newAgentDeltaStreamTap(ctx, streamName, &streamLastResponse)
 	if err != nil {
 		return res, err
@@ -3219,7 +3242,7 @@ func processAgentEventStream(
 				invalidateSuccessResult,
 				propagateChildAgentErrors,
 			)
-			updateAgentLastResponseValue(&streamLastResponse, agentEvent)
+			updateAgentLastResponseValue(&streamLastResponse, &streamLastResponseID, agentEvent)
 			continue
 		}
 		// Forward the event to the parent event channel.
@@ -3234,7 +3257,7 @@ func processAgentEventStream(
 			invalidateSuccessResult,
 			propagateChildAgentErrors,
 		)
-		updateAgentLastResponseValue(&streamLastResponse, agentEvent)
+		updateAgentLastResponseValue(&streamLastResponse, &streamLastResponseID, agentEvent)
 	}
 	if propagateChildAgentErrors && res.terminalErr != nil {
 		return res, res.terminalErr
@@ -3251,6 +3274,20 @@ func processAgentEventStream(
 			res.fallbackState = finalState
 			res.fallbackRawDelta = rawDelta
 		}
+	}
+	if res.lastResponseID == "" {
+		res.lastResponseID = stateStringOr(
+			res.finalState,
+			StateKeyLastResponseID,
+			streamLastResponseID,
+		)
+	}
+	if res.lastResponseID == "" {
+		res.lastResponseID = stateStringOr(
+			res.fallbackState,
+			StateKeyLastResponseID,
+			streamLastResponseID,
+		)
 	}
 
 	return res, nil

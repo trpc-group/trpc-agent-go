@@ -346,6 +346,10 @@ type CompletionMetadata struct {
 	TotalDuration time.Duration `json:"totalDuration"`
 	// FinalStateKeys is the number of keys in the final state.
 	FinalStateKeys int `json:"finalStateKeys"`
+	// FinalResponseID carries the stable identity of the terminal assistant
+	// response when the graph can provide one. When available, this is
+	// typically the underlying model response ID.
+	FinalResponseID string `json:"finalResponseID,omitempty"`
 }
 
 // NodeCustomEventCategory represents the category of node custom events.
@@ -1080,10 +1084,11 @@ func WithStateEventStateSize(stateSize int) StateEventOption {
 
 // CompletionEventOptions contains options for creating completion events.
 type CompletionEventOptions struct {
-	InvocationID  string
-	FinalState    State
-	TotalSteps    int
-	TotalDuration time.Duration
+	InvocationID    string
+	FinalState      State
+	FinalResponseID string
+	TotalSteps      int
+	TotalDuration   time.Duration
 }
 
 // CompletionEventOption is a function that configures completion event options.
@@ -1100,6 +1105,14 @@ func WithCompletionEventInvocationID(invocationID string) CompletionEventOption 
 func WithCompletionEventFinalState(finalState State) CompletionEventOption {
 	return func(opts *CompletionEventOptions) {
 		opts.FinalState = finalState
+	}
+}
+
+// WithCompletionEventFinalResponseID sets the terminal response ID for
+// completion events when one is available.
+func WithCompletionEventFinalResponseID(responseID string) CompletionEventOption {
+	return func(opts *CompletionEventOptions) {
+		opts.FinalResponseID = responseID
 	}
 }
 
@@ -1484,13 +1497,40 @@ func buildFinalChoices(text string) []model.Choice {
 // addCompletionMetadata attaches completion metadata to StateDelta.
 func addCompletionMetadata(e *event.Event, options *CompletionEventOptions) {
 	completionMetadata := CompletionMetadata{
-		TotalSteps:     options.TotalSteps,
-		TotalDuration:  options.TotalDuration,
-		FinalStateKeys: len(extractStateKeys(options.FinalState)),
+		TotalSteps:      options.TotalSteps,
+		TotalDuration:   options.TotalDuration,
+		FinalStateKeys:  len(extractStateKeys(options.FinalState)),
+		FinalResponseID: options.FinalResponseID,
 	}
 	if jsonData, err := json.Marshal(completionMetadata); err == nil {
 		e.StateDelta[MetadataKeyCompletion] = jsonData
 	}
+}
+
+// FinalResponseIDFromStateDelta returns the stable terminal response identity
+// carried by a graph completion snapshot when one is available.
+func FinalResponseIDFromStateDelta(stateDelta map[string][]byte) string {
+	if stateDelta == nil {
+		return ""
+	}
+	raw, ok := stateDelta[StateKeyLastResponseID]
+	if ok && len(raw) > 0 {
+		var responseID string
+		if err := json.Unmarshal(raw, &responseID); err == nil {
+			if responseID != "" {
+				return responseID
+			}
+		}
+	}
+	metadataRaw, ok := stateDelta[MetadataKeyCompletion]
+	if !ok || len(metadataRaw) == 0 {
+		return ""
+	}
+	var metadata CompletionMetadata
+	if err := json.Unmarshal(metadataRaw, &metadata); err != nil {
+		return ""
+	}
+	return metadata.FinalResponseID
 }
 
 // serializeFinalState writes serializable final state keys into StateDelta.

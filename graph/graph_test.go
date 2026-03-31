@@ -209,6 +209,16 @@ func TestNode_Tools_RefreshesToolSetsWhenEnabled(t *testing.T) {
 	assert.Equal(t, "simple_echo", tools[1].Declaration().Name)
 }
 
+func TestExecutionContextCompletionIdentity_NilReceiver(t *testing.T) {
+	var execCtx *ExecutionContext
+
+	execCtx.setCompletionIdentity("answer", "resp-1")
+	state, text, identity := execCtx.snapshotCompletionState(nil)
+	require.Nil(t, state)
+	require.Empty(t, text)
+	require.Empty(t, identity)
+}
+
 func TestValidate_NoStaticReachabilityRequired(t *testing.T) {
 	schema := NewStateSchema()
 	sg := NewStateGraph(schema)

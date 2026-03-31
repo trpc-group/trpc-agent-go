@@ -227,7 +227,7 @@ func shouldClearVisibleGraphCompletionChoices(
 	if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
 		return false
 	}
-	responseID := completionResponseIDFromStateDelta(evt.StateDelta)
+	responseID := FinalResponseIDFromStateDelta(evt.StateDelta)
 	if responseID != "" {
 		_, ok := emittedAssistantResponseIDs["id:"+responseID]
 		return ok
@@ -251,21 +251,6 @@ func visibleGraphCompletionNeedsFullResponseSnapshot(
 		return false
 	}
 	return len(visible.Response.Choices) == 0
-}
-
-func completionResponseIDFromStateDelta(stateDelta map[string][]byte) string {
-	if stateDelta == nil {
-		return ""
-	}
-	raw, ok := stateDelta[StateKeyLastResponseID]
-	if !ok || len(raw) == 0 {
-		return ""
-	}
-	var responseID string
-	if err := json.Unmarshal(raw, &responseID); err != nil {
-		return ""
-	}
-	return responseID
 }
 
 func assistantChoiceSignature(choices []model.Choice) string {
