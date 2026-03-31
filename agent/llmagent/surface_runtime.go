@@ -109,6 +109,7 @@ func (a *LLMAgent) InvocationToolSurface(
 		allTools,
 		&options,
 		workspaceRegistry,
+		inv,
 	)
 	allTools = appendSkillToolsWithRepo(
 		allTools,

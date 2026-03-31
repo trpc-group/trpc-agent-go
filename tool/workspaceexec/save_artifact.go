@@ -27,16 +27,16 @@ import (
 
 const defaultWorkspaceArtifactMaxBytes = 64 * 1024 * 1024
 
-// PublishArtifactTool publishes an existing workspace file as an artifact.
-type PublishArtifactTool struct {
+// SaveArtifactTool persists an existing workspace file as an artifact.
+type SaveArtifactTool struct {
 	exec *ExecTool
 }
 
-type publishArtifactInput struct {
+type saveArtifactInput struct {
 	Path string `json:"path"`
 }
 
-type publishArtifactOutput struct {
+type saveArtifactOutput struct {
 	Path      string `json:"path"`
 	SavedAs   string `json:"saved_as"`
 	Version   int    `json:"version"`
@@ -51,23 +51,24 @@ type artifactStateRef struct {
 	Ref     string `json:"ref"`
 }
 
-type publishArtifactStateDelta struct {
+type saveArtifactStateDelta struct {
 	ToolCallID string             `json:"tool_call_id"`
 	Artifacts  []artifactStateRef `json:"artifacts"`
 }
 
-// NewPublishArtifactTool creates a tool for publishing final workspace files.
-func NewPublishArtifactTool(exec *ExecTool) *PublishArtifactTool {
-	return &PublishArtifactTool{exec: exec}
+// NewSaveArtifactTool creates a tool for persisting final workspace files.
+func NewSaveArtifactTool(exec *ExecTool) *SaveArtifactTool {
+	return &SaveArtifactTool{exec: exec}
 }
 
-// Declaration returns the schema for workspace_publish_artifact.
-func (t *PublishArtifactTool) Declaration() *tool.Declaration {
+// Declaration returns the schema for workspace_save_artifact.
+func (t *SaveArtifactTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name: "workspace_publish_artifact",
-		Description: "Publish an existing file from the current shared " +
-			"executor workspace as an artifact. Use this only for final " +
-			"deliverables that already exist in work/, out/, or runs/.",
+		Name: "workspace_save_artifact",
+		Description: "Save an existing file from the current shared " +
+			"executor workspace as an artifact. Use this when you need " +
+			"a stable artifact reference for an already existing file " +
+			"under work/, out/, or runs/.",
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"path"},
@@ -81,7 +82,7 @@ func (t *PublishArtifactTool) Declaration() *tool.Declaration {
 		},
 		OutputSchema: &tool.Schema{
 			Type:        "object",
-			Description: "Artifact reference for a published workspace file.",
+			Description: "Artifact reference for a saved workspace file.",
 			Required:    []string{"path", "saved_as", "version", "ref", "size_bytes"},
 			Properties: map[string]*tool.Schema{
 				"path":       {Type: "string", Description: "Workspace-relative source path."},
@@ -96,14 +97,14 @@ func (t *PublishArtifactTool) Declaration() *tool.Declaration {
 }
 
 // Call persists an existing workspace file through the artifact service.
-func (t *PublishArtifactTool) Call(
+func (t *SaveArtifactTool) Call(
 	ctx context.Context,
 	input []byte,
 ) (any, error) {
 	if t == nil || t.exec == nil {
-		return nil, errors.New("workspace_publish_artifact is not configured")
+		return nil, errors.New("workspace_save_artifact is not configured")
 	}
-	var in publishArtifactInput
+	var in saveArtifactInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, err
 	}
@@ -111,10 +112,10 @@ func (t *PublishArtifactTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	reason := artifactPublishSkipReason(ctx)
+	reason := artifactSaveSkipReason(ctx)
 	if reason != "" {
 		return nil, fmt.Errorf(
-			"workspace_publish_artifact requires artifact service and session info: %s",
+			"workspace_save_artifact requires artifact service and session info: %s",
 			reason,
 		)
 	}
@@ -152,7 +153,7 @@ func (t *PublishArtifactTool) Call(
 	if ref.SavedAs == "" {
 		return nil, fmt.Errorf("workspace artifact was not persisted: %s", rel)
 	}
-	return publishArtifactOutput{
+	return saveArtifactOutput{
 		Path:      rel,
 		SavedAs:   ref.SavedAs,
 		Version:   ref.Version,
@@ -162,9 +163,9 @@ func (t *PublishArtifactTool) Call(
 	}, nil
 }
 
-// StateDelta returns a replayable artifact ref list when workspace_publish_artifact
+// StateDelta returns a replayable artifact ref list when workspace_save_artifact
 // successfully persists a workspace file via Artifact service.
-func (t *PublishArtifactTool) StateDelta(
+func (t *SaveArtifactTool) StateDelta(
 	toolCallID string,
 	_ []byte,
 	resultJSON []byte,
@@ -173,7 +174,7 @@ func (t *PublishArtifactTool) StateDelta(
 	if toolCallID == "" || len(resultJSON) == 0 {
 		return nil
 	}
-	var out publishArtifactOutput
+	var out saveArtifactOutput
 	if err := json.Unmarshal(resultJSON, &out); err != nil {
 		return nil
 	}
@@ -185,7 +186,7 @@ func (t *PublishArtifactTool) StateDelta(
 	if ref == "" {
 		ref = fmt.Sprintf("artifact://%s@%d", savedAs, out.Version)
 	}
-	b, err := json.Marshal(publishArtifactStateDelta{
+	b, err := json.Marshal(saveArtifactStateDelta{
 		ToolCallID: toolCallID,
 		Artifacts: []artifactStateRef{{
 			Name:    savedAs,
@@ -202,26 +203,38 @@ func (t *PublishArtifactTool) StateDelta(
 }
 
 const (
-	publishReasonNoInvocation = "invocation is missing from context"
-	publishReasonNoService    = "artifact service is not configured"
-	publishReasonNoSession    = "session is missing from invocation"
-	publishReasonNoSessionIDs = "session app/user/session IDs are missing"
+	saveReasonNoInvocation = "invocation is missing from context"
+	saveReasonNoService    = "artifact service is not configured"
+	saveReasonNoSession    = "session is missing from invocation"
+	saveReasonNoSessionIDs = "session app/user/session IDs are missing"
 )
 
-func artifactPublishSkipReason(ctx context.Context) string {
-	inv, ok := agent.InvocationFromContext(ctx)
-	if !ok || inv == nil {
-		return publishReasonNoInvocation
-	}
-	if inv.ArtifactService == nil {
-		return publishReasonNoService
-	}
-	if inv.Session == nil {
-		return publishReasonNoSession
+// SupportsArtifactSave reports whether the current invocation can
+// persist artifacts for workspace tools.
+func SupportsArtifactSave(inv *agent.Invocation) bool {
+	if inv == nil || inv.ArtifactService == nil || inv.Session == nil {
+		return false
 	}
 	if inv.Session.AppName == "" || inv.Session.UserID == "" ||
 		inv.Session.ID == "" {
-		return publishReasonNoSessionIDs
+		return false
+	}
+	return true
+}
+
+func artifactSaveSkipReason(ctx context.Context) string {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return saveReasonNoInvocation
+	}
+	if inv.ArtifactService == nil {
+		return saveReasonNoService
+	}
+	if inv.Session == nil {
+		return saveReasonNoSession
+	}
+	if !SupportsArtifactSave(inv) {
+		return saveReasonNoSessionIDs
 	}
 	return ""
 }
@@ -264,7 +277,7 @@ func normalizeArtifactPath(raw string) (string, error) {
 		}
 		if !isAllowedPublishArtifactPath(rel) {
 			return "", fmt.Errorf(
-				"path must stay under supported publish roots such as work/, out/, or runs/: %q",
+				"path must stay under supported artifact roots such as work/, out/, or runs/: %q",
 				raw,
 			)
 		}
@@ -276,7 +289,7 @@ func normalizeArtifactPath(raw string) (string, error) {
 	}
 	if !isAllowedPublishArtifactPath(rel) {
 		return "", fmt.Errorf(
-			"path must stay under supported publish roots such as work/, out/, or runs/: %q",
+			"path must stay under supported artifact roots such as work/, out/, or runs/: %q",
 			raw,
 		)
 	}
@@ -296,5 +309,5 @@ func isAllowedPublishArtifactPath(rel string) bool {
 	}
 }
 
-var _ tool.Tool = (*PublishArtifactTool)(nil)
-var _ tool.CallableTool = (*PublishArtifactTool)(nil)
+var _ tool.Tool = (*SaveArtifactTool)(nil)
+var _ tool.CallableTool = (*SaveArtifactTool)(nil)

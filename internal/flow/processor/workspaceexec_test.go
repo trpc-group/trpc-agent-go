@@ -17,7 +17,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -58,9 +60,7 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_NoSkillsRepo(
 	require.Contains(t, sys, "Network access depends on the current executor environment")
 	require.Contains(t, sys, "verify first before claiming the limitation")
 	require.Contains(t, sys, "command availability, file presence, or access to a known URL")
-	require.Contains(t, sys, "workspace_publish_artifact")
-	require.Contains(t, sys, "download, open, or preview")
-	require.Contains(t, sys, "artifact service or session info is not configured")
+	require.NotContains(t, sys, "workspace_save_artifact")
 	require.NotContains(t, sys, "skills/")
 	require.NotContains(t, sys, "workspace_write_stdin")
 }
@@ -78,7 +78,15 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_InteractiveWithSkillsRepo(
 
 	p.ProcessRequest(
 		context.Background(),
-		&agent.Invocation{AgentName: "tester"},
+		&agent.Invocation{
+			AgentName: "tester",
+			Session: &session.Session{
+				ID:      "sess",
+				AppName: "app",
+				UserID:  "user",
+			},
+			ArtifactService: inmemory.NewService(),
+		},
 		req,
 		nil,
 	)
@@ -92,9 +100,7 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_InteractiveWithSkillsRepo(
 	require.Contains(t, sys, "Network access depends on the current executor environment")
 	require.Contains(t, sys, "verify first before claiming the limitation")
 	require.Contains(t, sys, "command availability, file presence, or access to a known URL")
-	require.Contains(t, sys, "workspace_publish_artifact")
-	require.Contains(t, sys, "download, open, or preview")
-	require.Contains(t, sys, "artifact service or session info is not configured")
+	require.Contains(t, sys, "workspace_save_artifact")
 	require.Contains(t, sys, "Paths under skills/")
 	require.Contains(t, sys, "workspace_write_stdin")
 	require.Contains(t, sys, "workspace_kill_session")
