@@ -603,7 +603,7 @@ func TestNewAgent_KnowledgeConfigRegistersSearchTool(t *testing.T) {
 	t.Parallel()
 
 	mdl := &captureRequestModel{}
-	agt, err := newAgent(mdl, agentConfig{
+	agt, _, err := newAgent(mdl, agentConfig{
 		AppName:      "demo",
 		SkillsRoot:   t.TempDir(),
 		StateDir:     t.TempDir(),
@@ -625,7 +625,7 @@ func TestNewAgent_MultipleKnowledgeConfigsRegisterNamedTools(t *testing.T) {
 	t.Parallel()
 
 	mdl := &captureRequestModel{}
-	agt, err := newAgent(mdl, agentConfig{
+	agt, _, err := newAgent(mdl, agentConfig{
 		AppName:    "demo",
 		SkillsRoot: t.TempDir(),
 		StateDir:   t.TempDir(),
@@ -650,7 +650,7 @@ vector_store:
 func TestNewAgent_InvalidKnowledgeConfigReturnsError(t *testing.T) {
 	t.Parallel()
 
-	_, err := newAgent(&captureRequestModel{}, agentConfig{
+	_, _, err := newAgent(&captureRequestModel{}, agentConfig{
 		AppName:    "demo",
 		SkillsRoot: t.TempDir(),
 		StateDir:   t.TempDir(),
