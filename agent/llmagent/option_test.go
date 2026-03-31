@@ -330,6 +330,20 @@ func TestWithSkillToolProfile(t *testing.T) {
 	require.Equal(t, "full", opts.skillToolProfile)
 }
 
+func TestWithAllowedSkillTools(t *testing.T) {
+	opts := &Options{}
+	WithAllowedSkillTools(SkillToolLoad, SkillToolRun)(opts)
+	require.Equal(
+		t,
+		[]string{"skill_load", "skill_run"},
+		opts.allowedSkillTools,
+	)
+
+	WithAllowedSkillTools()(opts)
+	require.NotNil(t, opts.allowedSkillTools)
+	require.Empty(t, opts.allowedSkillTools)
+}
+
 func TestWithSummaryFormatter(t *testing.T) {
 	tests := []struct {
 		name      string

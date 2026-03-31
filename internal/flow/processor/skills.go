@@ -52,6 +52,8 @@ type skillsRequestProcessorOptions struct {
 	toolResultMode    bool
 	maxLoadedSkills   int
 	toolProfile       string
+	toolFlags         skillprofile.Flags
+	hasToolFlags      bool
 	execToolsDisabled bool
 	repoResolver      func(*agent.Invocation) skill.Repository
 }
@@ -77,7 +79,8 @@ func WithSkillLoadMode(mode string) SkillsRequestProcessorOption {
 //
 // Behavior:
 //   - Not configured: use the built-in default guidance.
-//   - Configured with empty string: omit the guidance block.
+//   - Configured with empty string: omit both the tooling/workspace
+//     guidance block and the capability disclosure block.
 //   - Configured with non-empty string: append the provided text.
 func WithSkillsToolingGuidance(
 	guidance string,
@@ -109,6 +112,15 @@ func WithSkillsLoadedContentInToolResults(
 func WithSkillToolProfile(profile string) SkillsRequestProcessorOption {
 	return func(o *skillsRequestProcessorOptions) {
 		o.toolProfile = profile
+	}
+}
+
+// WithSkillToolFlags configures the exact built-in skill tool capabilities so
+// the processor can emit guidance that matches the final registered tool set.
+func WithSkillToolFlags(flags skillprofile.Flags) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.toolFlags = flags
+		o.hasToolFlags = true
 	}
 }
 
@@ -157,14 +169,13 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 //   - skill.DocsKey(agentName, skillName) ->
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
-	repo              skill.Repository
-	repoResolver      func(*agent.Invocation) skill.Repository
-	toolingGuidance   *string
-	loadMode          string
-	toolResultMode    bool
-	maxLoadedSkills   int
-	toolProfile       string
-	execToolsDisabled bool
+	repo            skill.Repository
+	repoResolver    func(*agent.Invocation) skill.Repository
+	toolingGuidance *string
+	loadMode        string
+	toolResultMode  bool
+	maxLoadedSkills int
+	toolFlags       skillprofile.Flags
 }
 
 const (
@@ -183,15 +194,26 @@ func NewSkillsRequestProcessor(
 		}
 		opt(&options)
 	}
+
+	flags := options.toolFlags
+	if !options.hasToolFlags {
+		var err error
+		flags, err = skillprofile.ResolveFlags(options.toolProfile, nil)
+		if err != nil {
+			flags = skillprofile.Flags{}
+		}
+	}
+	if options.execToolsDisabled {
+		flags = flags.WithoutInteractiveExecution()
+	}
 	return &SkillsRequestProcessor{
-		repo:              repo,
-		repoResolver:      options.repoResolver,
-		toolingGuidance:   options.toolingGuidance,
-		loadMode:          normalizeSkillLoadMode(options.loadMode),
-		toolResultMode:    options.toolResultMode,
-		maxLoadedSkills:   options.maxLoadedSkills,
-		toolProfile:       skillprofile.Normalize(options.toolProfile),
-		execToolsDisabled: options.execToolsDisabled,
+		repo:            repo,
+		repoResolver:    options.repoResolver,
+		toolingGuidance: options.toolingGuidance,
+		loadMode:        normalizeSkillLoadMode(options.loadMode),
+		toolResultMode:  options.toolResultMode,
+		maxLoadedSkills: options.maxLoadedSkills,
+		toolFlags:       flags,
 	}
 }
 
@@ -668,50 +690,83 @@ func (p *SkillsRequestProcessor) injectOverview(
 
 func (p *SkillsRequestProcessor) toolingGuidanceText() string {
 	if p.toolingGuidance == nil {
-		return defaultToolingAndWorkspaceGuidance(
-			p.toolProfile,
-			p.execToolsDisabled,
-		)
+		return defaultToolingAndWorkspaceGuidance(p.toolFlags)
 	}
 	return normalizeGuidance(*p.toolingGuidance)
 }
 
 func (p *SkillsRequestProcessor) capabilityGuidanceText() string {
-	if !skillprofile.IsKnowledgeOnly(p.toolProfile) {
+	if p.toolingGuidance != nil && *p.toolingGuidance == "" {
 		return ""
 	}
-	if p.toolingGuidance != nil && *p.toolingGuidance == "" {
+	if p.toolFlags.Run {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(skillsCapabilityHeader)
 	b.WriteString("\n")
-	b.WriteString("- This profile supports skill discovery and knowledge ")
-	b.WriteString("loading only.\n")
-	b.WriteString("- Execution-oriented skill tools are unavailable in ")
-	b.WriteString("the current mode.\n")
-	b.WriteString("- If a loaded skill describes scripts, shell commands, ")
-	b.WriteString("workspace paths, generated files, or interactive flows, ")
-	b.WriteString("treat that content as reference only. Use other ")
-	b.WriteString("registered tools for real actions, or explain that ")
-	b.WriteString("execution is unavailable in the current mode.\n")
+	if p.toolFlags.Load {
+		b.WriteString("- This configuration supports skill discovery and ")
+		b.WriteString("knowledge loading only.\n")
+		b.WriteString("- Built-in skill execution tools are unavailable in ")
+		b.WriteString("the current mode.\n")
+		b.WriteString("- If a loaded skill describes scripts, shell commands, ")
+		b.WriteString("workspace paths, generated files, or interactive ")
+		b.WriteString("flows, treat that content as reference only. Use ")
+		b.WriteString("other registered tools for real actions, or explain ")
+		b.WriteString("that execution is unavailable in the current mode.\n")
+		return b.String()
+	}
+	if p.toolFlags.HasDocHelpers() {
+		b.WriteString("- This configuration supports skill discovery and ")
+		b.WriteString("skill doc inspection only.\n")
+		b.WriteString("- Built-in skill loading and execution tools are ")
+		b.WriteString("unavailable in the current mode.\n")
+		b.WriteString("- Listing or selecting docs does not inject SKILL.md ")
+		b.WriteString("or doc contents into model context by itself.\n")
+		return b.String()
+	}
+	b.WriteString("- This configuration exposes skill summaries only. ")
+	b.WriteString("Built-in skill tools are unavailable in the current ")
+	b.WriteString("mode.\n")
+	b.WriteString("- Treat the skill overview as a catalog of possible ")
+	b.WriteString("capabilities. Use other registered tools, or explain ")
+	b.WriteString("the limitation clearly when the task depends on ")
+	b.WriteString("skill loading or execution.\n")
 	return b.String()
 }
 
-func defaultToolingAndWorkspaceGuidance(
-	profile string,
-	execToolsDisabled bool,
-) string {
-	if skillprofile.IsKnowledgeOnly(profile) {
-		return defaultKnowledgeOnlyGuidance()
+func defaultToolingAndWorkspaceGuidance(flags skillprofile.Flags) string {
+	if !flags.Any() {
+		return defaultCatalogOnlyGuidance()
 	}
-	return defaultFullToolingAndWorkspaceGuidance(
-		execToolsDisabled,
-	)
+	if !flags.Run {
+		if flags.Load {
+			return defaultKnowledgeOnlyGuidance(flags)
+		}
+		if flags.HasDocHelpers() {
+			return defaultDocHelpersOnlyGuidance(flags)
+		}
+		return defaultCatalogOnlyGuidance()
+	}
+	return defaultFullToolingAndWorkspaceGuidance(flags)
 }
 
-func defaultKnowledgeOnlyGuidance() string {
+func defaultCatalogOnlyGuidance() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(skillsToolingGuidanceHeader)
+	b.WriteString("\n")
+	b.WriteString("- Use the skill overview as a catalog only. Built-in ")
+	b.WriteString("skill tools are unavailable in this configuration; ")
+	b.WriteString("if a task depends on loading or executing a skill, ")
+	b.WriteString("use other registered tools or explain the limitation ")
+	b.WriteString("clearly.\n")
+	return b.String()
+}
+
+func defaultKnowledgeOnlyGuidance(flags skillprofile.Flags) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(skillsToolingGuidanceHeader)
@@ -719,8 +774,7 @@ func defaultKnowledgeOnlyGuidance() string {
 	b.WriteString("- Use skills for progressive disclosure only: load ")
 	b.WriteString("SKILL.md first, then inspect only the documentation ")
 	b.WriteString("needed for the current task.\n")
-	b.WriteString("- Avoid include_all_docs unless the user asks or the ")
-	b.WriteString("task genuinely needs the full doc set.\n")
+	appendKnowledgeGuidance(&b, flags)
 	b.WriteString("- Treat loaded skill content as domain guidance. Do ")
 	b.WriteString("not claim you executed scripts, shell commands, or ")
 	b.WriteString("interactive flows described by the skill.\n")
@@ -730,9 +784,30 @@ func defaultKnowledgeOnlyGuidance() string {
 	return b.String()
 }
 
-func defaultFullToolingAndWorkspaceGuidance(
-	execToolsDisabled bool,
-) string {
+func defaultDocHelpersOnlyGuidance(flags skillprofile.Flags) string {
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(skillsToolingGuidanceHeader)
+	b.WriteString("\n")
+	switch {
+	case flags.ListDocs && flags.SelectDocs:
+		b.WriteString("- Use skills only to inspect available doc names or ")
+		b.WriteString("adjust doc selection state.\n")
+	case flags.ListDocs:
+		b.WriteString("- Use skills only to inspect available doc names.\n")
+	case flags.SelectDocs:
+		b.WriteString("- Use skills only to adjust doc selection when doc ")
+		b.WriteString("names are already known.\n")
+	}
+	b.WriteString("- Built-in skill loading is unavailable, so doc ")
+	b.WriteString("helpers do not inject SKILL.md or doc contents into ")
+	b.WriteString("context; if the task needs loaded content or ")
+	b.WriteString("execution, use other registered tools or explain ")
+	b.WriteString("the limitation clearly.\n")
+	return b.String()
+}
+
+func defaultFullToolingAndWorkspaceGuidance(flags skillprofile.Flags) string {
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(skillsToolingGuidanceHeader)
@@ -794,34 +869,43 @@ func defaultFullToolingAndWorkspaceGuidance(
 	b.WriteString("results from $OUTPUT_DIR (or a skill's out/ ")
 	b.WriteString("directory) instead of copying them back into ")
 	b.WriteString("inputs directories.\n")
-	b.WriteString("- Treat loaded skill docs as guidance, not perfect ")
-	b.WriteString("truth; when runtime help or stderr disagrees, trust ")
-	b.WriteString("observed runtime behavior.\n")
-	b.WriteString("- Loading a skill gives you instructions and bundled ")
-	b.WriteString("resources; it does not execute the skill by itself.\n")
-	b.WriteString("- The skill summaries above are routing summaries only; ")
-	b.WriteString("they do not replace SKILL.md or other loaded docs.\n")
-	b.WriteString("- If the loaded content already provides enough ")
-	b.WriteString("guidance to answer or produce the requested result, ")
-	b.WriteString("respond directly.\n")
-	b.WriteString("- If you decide to use a skill, load SKILL.md before ")
-	if execToolsDisabled {
-		b.WriteString("the first skill_run for that skill, then load only ")
-		b.WriteString("the docs you still need.\n")
-	} else {
-		b.WriteString("the first skill_run or skill_exec for that skill, ")
+	if flags.Load {
+		b.WriteString("- Treat loaded skill docs as guidance, not perfect ")
+		b.WriteString("truth; when runtime help or stderr disagrees, trust ")
+		b.WriteString("observed runtime behavior.\n")
+		b.WriteString("- Loading a skill gives you instructions and bundled ")
+		b.WriteString("resources; it does not execute the skill by itself.\n")
+		b.WriteString("- The skill summaries above are routing summaries ")
+		b.WriteString("only; they do not replace SKILL.md or other loaded ")
+		b.WriteString("docs.\n")
+		b.WriteString("- If the loaded content already provides enough ")
+		b.WriteString("guidance to answer or produce the requested result, ")
+		b.WriteString("respond directly.\n")
+		b.WriteString("- If you decide to use a skill, load SKILL.md before ")
+		if flags.RequiresExecSessionTools() {
+			b.WriteString("the first skill_run or skill_exec for that skill, ")
+		} else {
+			b.WriteString("the first skill_run for that skill, ")
+		}
 		b.WriteString("then load only the docs you still need.\n")
+		b.WriteString("- Do not infer commands, script entrypoints, or ")
+		b.WriteString("resource layouts from the short summary alone.\n")
+		appendKnowledgeGuidance(&b, flags)
+	} else if flags.HasDocHelpers() {
+		b.WriteString("- Built-in skill loading is unavailable in this ")
+		b.WriteString("configuration. Doc listing or selection helpers ")
+		b.WriteString("can inspect doc names or selection state, but they ")
+		b.WriteString("do not inject SKILL.md or doc contents into ")
+		b.WriteString("context.\n")
+	} else {
+		b.WriteString("- Built-in skill loading is unavailable in this ")
+		b.WriteString("configuration; do not assume SKILL.md or doc ")
+		b.WriteString("contents are in context.\n")
 	}
-	b.WriteString("- Do not infer commands, script entrypoints, or ")
-	b.WriteString("resource layouts from the short summary alone.\n")
-	b.WriteString("- For docs, prefer skill_list_docs + ")
-	b.WriteString("skill_select_docs to load only what you need.\n")
-	b.WriteString("- Avoid include_all_docs unless you need every doc ")
-	b.WriteString("or the user asks.\n")
-	b.WriteString("- Use execution tools only when running a command ")
-	b.WriteString("will reveal or produce information or files you ")
-	b.WriteString("still need.\n")
-	if !execToolsDisabled {
+	b.WriteString("- Use execution tools only when running a command will ")
+	b.WriteString("reveal or produce information or files you still ")
+	b.WriteString("need.\n")
+	if flags.RequiresExecSessionTools() {
 		b.WriteString("- Use skill_exec only when a command needs ")
 		b.WriteString("incremental stdin or TTY-style interaction; ")
 		b.WriteString("otherwise prefer one-shot execution.\n")
@@ -835,10 +919,38 @@ func defaultFullToolingAndWorkspaceGuidance(
 	b.WriteString("install dependencies; invoke scripts via an explicit ")
 	b.WriteString("interpreter and path (e.g., python3 scripts/foo.py).\n")
 	b.WriteString("- When you execute, follow the tool description, ")
-	b.WriteString("loaded skill docs, bundled scripts, and observed ")
-	b.WriteString("runtime behavior rather than inventing shell syntax ")
-	b.WriteString("or command arguments.\n")
+	if flags.Load {
+		b.WriteString("loaded skill docs, ")
+	}
+	b.WriteString("bundled scripts, and observed runtime behavior ")
+	b.WriteString("rather than inventing shell syntax or command ")
+	b.WriteString("arguments.\n")
 	return b.String()
+}
+
+func appendKnowledgeGuidance(
+	b *strings.Builder,
+	flags skillprofile.Flags,
+) {
+	if !flags.Load {
+		return
+	}
+	switch {
+	case flags.ListDocs && flags.SelectDocs:
+		b.WriteString("- Use the available doc listing and selection helpers ")
+		b.WriteString("to keep documentation loads targeted.\n")
+	case flags.ListDocs:
+		b.WriteString("- Use the available doc listing helper to discover ")
+		b.WriteString("doc names, then load only the docs you need.\n")
+	case flags.SelectDocs:
+		b.WriteString("- If doc names are already known, use the available ")
+		b.WriteString("doc selection helper to keep loaded docs targeted.\n")
+	default:
+		b.WriteString("- If you need docs, request them directly with ")
+		b.WriteString("skill_load.docs or include_all_docs.\n")
+	}
+	b.WriteString("- Avoid include_all_docs unless the user asks or the ")
+	b.WriteString("task genuinely needs the full doc set.\n")
 }
 
 func normalizeGuidance(guidance string) string {
