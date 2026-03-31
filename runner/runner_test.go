@@ -4532,6 +4532,173 @@ func TestCollectPriorAssistantResponseIDs(t *testing.T) {
 	require.Len(t, ids, 2)
 }
 
+func TestCollectPriorAssistantResponseIDs_SkipsNonAssistantBranches(t *testing.T) {
+	sess := &session.Session{
+		Events: []event.Event{
+			{},
+			{
+				Response: &model.Response{
+					ID:        "partial-resp",
+					IsPartial: true,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("partial"),
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					ID: "user-resp",
+					Choices: []model.Choice{{
+						Message: model.NewUserMessage("user"),
+					}},
+				},
+			},
+			func() event.Event {
+				evt := graph.NewGraphCompletionEvent(
+					graph.WithCompletionEventInvocationID("inv-skip"),
+					graph.WithCompletionEventFinalState(graph.State{
+						graph.StateKeyLastResponse:   "graph-completion",
+						graph.StateKeyLastResponseID: "graph-completion-id",
+					}),
+				)
+				return *evt
+			}(),
+			{
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("missing-id"),
+					}},
+				},
+			},
+		},
+	}
+
+	require.Nil(t, collectPriorAssistantResponseIDs(nil))
+	require.Nil(t, collectPriorAssistantResponseIDs(&session.Session{}))
+	require.Nil(t, collectPriorAssistantResponseIDs(sess))
+}
+
+func TestStringValueFromRuntimeState(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  any
+		want   string
+		wantOK bool
+	}{
+		{name: "plain string", input: "resp-1", want: "resp-1", wantOK: true},
+		{name: "empty string", input: "", wantOK: false},
+		{name: "json encoded bytes", input: []byte(`"resp-2"`), want: "resp-2", wantOK: true},
+		{name: "plain bytes", input: []byte(`resp-3`), want: "resp-3", wantOK: true},
+		{name: "empty bytes", input: []byte{}, wantOK: false},
+		{name: "object bytes", input: []byte(`{}`), wantOK: false},
+		{name: "array bytes", input: []byte(`[]`), wantOK: false},
+		{name: "quoted raw bytes", input: []byte(`"x`), wantOK: false},
+		{name: "unsupported type", input: 123, wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := stringValueFromRuntimeState(tt.input)
+			require.Equal(t, tt.wantOK, ok)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestCompletionMetadataFinalResponseID(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+		want  string
+	}{
+		{name: "metadata struct", input: graph.CompletionMetadata{FinalResponseID: "resp-1"}, want: "resp-1"},
+		{name: "metadata pointer", input: &graph.CompletionMetadata{FinalResponseID: "resp-2"}, want: "resp-2"},
+		{name: "nil metadata pointer", input: (*graph.CompletionMetadata)(nil), want: ""},
+		{name: "map value", input: map[string]any{"finalResponseID": "resp-3"}, want: "resp-3"},
+		{name: "map missing", input: map[string]any{"other": "x"}, want: ""},
+		{name: "json string", input: `{"finalResponseID":"resp-4"}`, want: "resp-4"},
+		{name: "invalid string", input: `{`, want: ""},
+		{name: "json bytes", input: []byte(`{"finalResponseID":"resp-5"}`), want: "resp-5"},
+		{name: "invalid bytes", input: []byte(`{`), want: ""},
+		{name: "unsupported type", input: 1, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, completionMetadataFinalResponseID(tt.input))
+		})
+	}
+}
+
+func TestIsResumeRunAndRunProducedAssistantContent(t *testing.T) {
+	require.False(t, isResumeRun(nil))
+	require.False(t, isResumeRun(&eventLoopContext{invocation: agent.NewInvocation()}))
+
+	cmdLoop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithRuntimeState(graph.State{
+					graph.StateKeyCommand: &graph.Command{ResumeMap: map[string]any{"k": "v"}},
+				}),
+			)),
+		),
+	}
+	require.True(t, isResumeRun(cmdLoop))
+
+	resumeLoop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithRuntimeState(graph.State{
+					graph.StateKeyCommand: graph.NewResumeCommand().WithResume("ok"),
+				}),
+			)),
+		),
+	}
+	require.True(t, isResumeRun(resumeLoop))
+
+	require.False(t, runProducedAssistantContent(nil))
+	require.False(t, runProducedAssistantContent(&eventLoopContext{}))
+	require.True(t, runProducedAssistantContent(&eventLoopContext{
+		persistedAssistantChoiceSignatures: map[string]struct{}{"sig": {}},
+	}))
+}
+
+func TestMarkCompletionSnapshotOnly(t *testing.T) {
+	rr := NewRunner("app", &noOpAgent{name: "a"}).(*runner)
+
+	require.NotPanics(t, func() {
+		rr.markCompletionSnapshotOnly(nil, nil)
+	})
+
+	loop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithRuntimeState(graph.State{
+					graph.StateKeyCommand: graph.NewResumeCommand().WithResume("approve"),
+				}),
+			)),
+		),
+		priorAssistantResponseIDs: map[string]struct{}{"resp-1": {}},
+	}
+
+	nonGraph := event.NewResponseEvent("inv", "agent", &model.Response{
+		ID: "resp-1",
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("assistant"),
+		}},
+	})
+	rr.markCompletionSnapshotOnly(loop, nonGraph)
+	require.False(t, graph.CompletionSnapshotOnlyFromStateDelta(nonGraph.StateDelta))
+
+	graphEvt := graph.NewGraphCompletionEvent(
+		graph.WithCompletionEventInvocationID("inv"),
+		graph.WithCompletionEventFinalState(graph.State{
+			graph.StateKeyLastResponse:   "assistant",
+			graph.StateKeyLastResponseID: "resp-1",
+		}),
+	)
+	rr.markCompletionSnapshotOnly(loop, graphEvt)
+	require.True(t, graph.CompletionSnapshotOnlyFromStateDelta(graphEvt.StateDelta))
+}
+
 func TestAssistantChoiceSignature_UsesAllAssistantChoices(t *testing.T) {
 	require.Equal(
 		t,

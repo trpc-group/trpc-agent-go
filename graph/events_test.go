@@ -79,6 +79,32 @@ func TestCompletionSnapshotOnlyMetadataHelpers(t *testing.T) {
 	require.Equal(t, "resp-1", metadata.FinalResponseID)
 }
 
+func TestCompletionSnapshotOnlyMetadataHelpers_EdgeCases(t *testing.T) {
+	require.False(t, CompletionSnapshotOnlyFromStateDelta(nil))
+	require.False(t, CompletionSnapshotOnlyFromStateDelta(map[string][]byte{}))
+	require.False(t, CompletionSnapshotOnlyFromStateDelta(map[string][]byte{
+		MetadataKeyCompletion: []byte("{"),
+	}))
+
+	stateDelta := map[string][]byte{
+		MetadataKeyCompletion: []byte("{"),
+	}
+	SetCompletionSnapshotOnlyInStateDelta(stateDelta, false)
+	var metadata CompletionMetadata
+	require.NoError(t, json.Unmarshal(stateDelta[MetadataKeyCompletion], &metadata))
+	require.False(t, metadata.SnapshotOnly)
+
+	require.NotPanics(t, func() {
+		SetCompletionSnapshotOnlyInStateDelta(nil, true)
+	})
+}
+
+func TestWithCompletionEventSnapshotOnly(t *testing.T) {
+	opts := &CompletionEventOptions{}
+	WithCompletionEventSnapshotOnly(true)(opts)
+	require.True(t, opts.SnapshotOnly)
+}
+
 func TestNewNodeEvents(t *testing.T) {
 	start := time.Now().Add(-time.Second).UTC()
 	end := start.Add(150 * time.Millisecond)
