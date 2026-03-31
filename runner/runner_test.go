@@ -4643,6 +4643,17 @@ func TestIsResumeRunAndRunProducedAssistantContent(t *testing.T) {
 	}
 	require.True(t, isResumeRun(cmdLoop))
 
+	cmdValueLoop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithRuntimeState(graph.State{
+					graph.StateKeyCommand: graph.Command{ResumeMap: map[string]any{"k": "v"}},
+				}),
+			)),
+		),
+	}
+	require.True(t, isResumeRun(cmdValueLoop))
+
 	resumeLoop := &eventLoopContext{
 		invocation: agent.NewInvocation(
 			agent.WithInvocationRunOptions(agent.NewRunOptions(
@@ -4653,6 +4664,17 @@ func TestIsResumeRunAndRunProducedAssistantContent(t *testing.T) {
 		),
 	}
 	require.True(t, isResumeRun(resumeLoop))
+
+	resumeValueLoop := &eventLoopContext{
+		invocation: agent.NewInvocation(
+			agent.WithInvocationRunOptions(agent.NewRunOptions(
+				agent.WithRuntimeState(graph.State{
+					graph.StateKeyCommand: graph.ResumeCommand{Resume: "ok"},
+				}),
+			)),
+		),
+	}
+	require.True(t, isResumeRun(resumeValueLoop))
 
 	require.False(t, runProducedAssistantContent(nil))
 	require.False(t, runProducedAssistantContent(&eventLoopContext{}))

@@ -1715,8 +1715,12 @@ func isResumeRun(loop *eventLoopContext) bool {
 	switch cmd := loop.invocation.RunOptions.RuntimeState[graph.StateKeyCommand].(type) {
 	case *graph.Command:
 		return cmd != nil && (cmd.Resume != nil || len(cmd.ResumeMap) > 0)
+	case graph.Command:
+		return cmd.Resume != nil || len(cmd.ResumeMap) > 0
 	case *graph.ResumeCommand:
 		return cmd != nil && (cmd.Resume != nil || len(cmd.ResumeMap) > 0)
+	case graph.ResumeCommand:
+		return cmd.Resume != nil || len(cmd.ResumeMap) > 0
 	default:
 		return false
 	}
