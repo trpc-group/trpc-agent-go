@@ -296,6 +296,57 @@ func TestLLMAgent_SkillKnowledgeOnlyToolsRegistered(t *testing.T) {
 	require.False(t, names["skill_kill_session"])
 }
 
+func TestLLMAgent_SkillLoadOnlyToolsRegistered(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithAllowedSkillTools(SkillToolLoad),
+	)
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		d := tl.Declaration()
+		if d != nil {
+			names[d.Name] = true
+		}
+	}
+	require.True(t, names["skill_load"])
+	require.False(t, names["skill_select_docs"])
+	require.False(t, names["skill_list_docs"])
+	require.False(t, names["skill_run"])
+	require.False(t, names["skill_exec"])
+	require.False(t, names["skill_write_stdin"])
+	require.False(t, names["skill_poll_session"])
+	require.False(t, names["skill_kill_session"])
+}
+
+func TestLLMAgent_SkillListDocsOnlyToolsRegistered(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithAllowedSkillTools(SkillToolListDocs),
+	)
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		d := tl.Declaration()
+		if d != nil {
+			names[d.Name] = true
+		}
+	}
+	require.False(t, names["skill_load"])
+	require.True(t, names["skill_list_docs"])
+	require.False(t, names["skill_select_docs"])
+	require.False(t, names["skill_run"])
+	require.False(t, names["skill_exec"])
+}
+
 func TestLLMAgent_SkillRunToolExecutes(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
@@ -617,7 +668,7 @@ func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_WiresPrompt(
 	require.NotEmpty(t, sys)
 	require.Contains(t, sys, skillsCapabilityHeader)
 	require.Contains(t, sys, "skill discovery and knowledge loading only")
-	require.Contains(t, sys, "Execution-oriented skill tools are unavailable")
+	require.Contains(t, sys, "Built-in skill execution tools are unavailable")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.NotContains(t, sys, "skill_run runs with CWD")
 }
@@ -659,6 +710,106 @@ func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_GuidanceDisabled(
 	require.NotEmpty(t, sys)
 	require.NotContains(t, sys, skillsCapabilityHeader)
 	require.NotContains(t, sys, skillsToolingGuidanceHeader)
+}
+
+func TestLLMAgent_WithAllowedSkillTools_LoadOnly_WiresPrompt(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithAllowedSkillTools(SkillToolLoad)(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, skillsCapabilityHeader)
+	require.Contains(t, sys, "skill discovery and knowledge loading only")
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.Contains(t, sys, "skill_load.docs or include_all_docs")
+	require.NotContains(t, sys, "skill_list_docs")
+	require.NotContains(t, sys, "skill_select_docs")
+	require.NotContains(t, sys, "skill_run runs with CWD")
+}
+
+func TestLLMAgent_WithAllowedSkillTools_InvalidDependenciesPanic(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	require.PanicsWithValue(
+		t,
+		"Invalid LLMAgent configuration: skill_exec requires skill_run",
+		func() {
+			New(
+				"tester",
+				WithSkills(repo),
+				WithAllowedSkillTools(SkillToolLoad, SkillToolExec),
+			)
+		},
+	)
+}
+
+func TestLLMAgent_WithAllowedSkillTools_RunWithoutLoadPanicsByDefault(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	require.PanicsWithValue(
+		t,
+		"Invalid LLMAgent configuration: skill_run and skill_exec require skill_load when WithSkillRunRequireSkillLoaded is enabled",
+		func() {
+			New(
+				"tester",
+				WithSkills(repo),
+				WithAllowedSkillTools(SkillToolRun),
+			)
+		},
+	)
+}
+
+func TestLLMAgent_WithAllowedSkillTools_RunWithoutLoadAllowedWhenRequireDisabled(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithAllowedSkillTools(SkillToolRun),
+		WithSkillRunRequireSkillLoaded(false),
+	)
+	require.Nil(t, findTool(a.Tools(), "skill_load"))
+	require.NotNil(t, findTool(a.Tools(), "skill_run"))
 }
 
 func TestLLMAgent_SkillRun_DeniedCommands_Enforced(t *testing.T) {
