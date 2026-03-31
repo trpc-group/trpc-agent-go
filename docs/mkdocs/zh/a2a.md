@@ -109,7 +109,11 @@ server, _ := a2aserver.New(
 )
 ```
 
-任务状态更新（`submitted`、`completed`）仍然会以 `TaskStatusUpdateEvent` 的形式下发。
+任务状态更新（`submitted`、`completed`）仍然会以 `TaskStatusUpdateEvent` 的形式
+下发。如果开启 `WithStructuredTaskErrors(true)`，终态失败也会通过 failed
+`TaskStatusUpdateEvent` 下发：机器可读字段优先位于外层 metadata，并为了 `0.1`
+兼容继续镜像到 `status.message.metadata`，展示文本位于
+`status.message.parts`。
 
 #### 直接使用 A2A 协议客户端调用
 

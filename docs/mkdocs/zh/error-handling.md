@@ -757,6 +757,59 @@ server, err := a2aserver.New(
 - 只有终态错误会转换成 failed task；`graph.node.error` 这类中间事件仍然按
   graph 事件继续透传
 
+这里的 payload 是按两层职责来组织的：
+
+- 外层 `Task.Metadata` 或 `TaskStatusUpdateEvent.Metadata`：推荐优先读取的
+  机器可读结构化错误字段，例如 `error_type`、`error_code`、
+  `error_message`、`task_state`、`llm_response_id`
+- `Status.Message.Metadata`：为了兼容 A2A interaction spec `0.1`，继续镜像
+  同一份机器可读字段
+- `Status.Message.Parts`：给人直接展示的文本
+
+一个 streaming 终态失败的 shape 大致如下：
+
+```json
+{
+  "kind": "status-update",
+  "metadata": {
+    "object_type": "error",
+    "error_type": "flow_error",
+    "error_code": "REMOTE_VALIDATION_FAILED",
+    "error_message": "validation failed",
+    "task_state": "failed",
+    "llm_response_id": "resp-1"
+  },
+  "status": {
+    "state": "failed",
+    "message": {
+      "messageId": "resp-1",
+      "role": "agent",
+      "metadata": {
+        "object_type": "error",
+        "error_type": "flow_error",
+        "error_code": "REMOTE_VALIDATION_FAILED",
+        "error_message": "validation failed",
+        "task_state": "failed",
+        "llm_response_id": "resp-1"
+      },
+      "parts": [
+        {
+          "kind": "text",
+          "text": "validation failed"
+        }
+      ]
+    }
+  }
+}
+```
+
+因此业务侧可以用一条稳定规则处理：
+
+- 用 `status.state` 判断任务终态
+- 优先用外层 metadata 读取结构化错误字段
+- `status.message.metadata` 只作为兼容旧客户端的镜像字段
+- `status.message.parts` 只作为展示文本，不作为机器判断的主来源
+
 ### Client 侧
 
 `A2AAgent` 会自动识别这类结构化 task failure。
@@ -771,6 +824,13 @@ server, err := a2aserver.New(
 
 在 streaming 模式下，`A2AAgent` 还会避免“先收到终态错误，再补一条正常 final
 assistant message”的歧义行为。
+
+换句话说，默认 client 路径已经遵循同一套规则：
+
+- 外层 metadata 是重建 `Response.Error` 的首选来源
+- `status.message.metadata` 继续作为 `0.1` 的兼容镜像
+- `status.message.parts` 只是给人读的兜底文本通道
+- 业务代码继续基于 `evt.Response.Error` 分支，而不是解析文本
 
 完整的 server / client 接入方式：
 

@@ -98,6 +98,17 @@ func buildRuntimeState(metadata map[string]any) map[string]any {
 	return runtimeState
 }
 
+func cloneMetadata(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	return cloned
+}
+
 func buildProcessor(
 	agent agent.Agent,
 	sessionService session.Service,
@@ -292,10 +303,33 @@ func taskErrorState(
 	return protocol.TaskStateFailed
 }
 
+func buildTaskErrorMetadata(
+	agentEvent *event.Event,
+) map[string]any {
+	if agentEvent == nil || agentEvent.Response == nil {
+		return nil
+	}
+	respErr := agentEvent.Response.Error
+	if respErr == nil {
+		return nil
+	}
+
+	metadata := ia2a.WithResponseErrorMetadata(nil, respErr)
+	metadata[ia2a.MessageMetadataTaskStateKey] = string(
+		taskErrorState(respErr),
+	)
+	if agentEvent.Response.ID != "" {
+		metadata[ia2a.MessageMetadataResponseIDKey] =
+			agentEvent.Response.ID
+	}
+	return metadata
+}
+
 func buildTaskErrorMessage(
 	taskID string,
 	ctxID string,
 	agentEvent *event.Event,
+	metadata map[string]any,
 ) *protocol.Message {
 	if agentEvent == nil || agentEvent.Response == nil {
 		return nil
@@ -315,17 +349,9 @@ func buildTaskErrorMessage(
 		&taskID,
 		&ctxID,
 	)
-	msg.Metadata = ia2a.WithResponseErrorMetadata(
-		msg.Metadata,
-		respErr,
-	)
-	msg.Metadata[ia2a.MessageMetadataTaskStateKey] = string(
-		taskErrorState(respErr),
-	)
+	msg.Metadata = cloneMetadata(metadata)
 	if agentEvent.Response.ID != "" {
 		msg.MessageID = agentEvent.Response.ID
-		msg.Metadata[ia2a.MessageMetadataResponseIDKey] =
-			agentEvent.Response.ID
 	}
 	return &msg
 }
@@ -336,14 +362,21 @@ func buildStructuredFailureTask(
 	history []protocol.Message,
 	agentEvent *event.Event,
 ) *protocol.Task {
+	taskMetadata := buildTaskErrorMetadata(agentEvent)
+	statusMsg := buildTaskErrorMessage(
+		taskID,
+		ctxID,
+		agentEvent,
+		taskMetadata,
+	)
 	task := protocol.NewTask(taskID, ctxID)
 	task.History = history
 	task.Status = protocol.TaskStatus{
 		State:     taskErrorState(agentEvent.Response.Error),
-		Message:   buildTaskErrorMessage(taskID, ctxID, agentEvent),
+		Message:   statusMsg,
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
-	task.Metadata = task.Status.Message.Metadata
+	task.Metadata = taskMetadata
 	return task
 }
 
