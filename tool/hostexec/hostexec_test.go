@@ -503,6 +503,32 @@ func TestNewToolSet_TimeoutDoesNotWaitForGrace(
 	)
 }
 
+func TestRunForeground_ContextCancel(t *testing.T) {
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	const cancelDelay = 100 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		time.Sleep(cancelDelay)
+		cancel()
+	}()
+
+	output, exitCode, err := runForeground(
+		ctx,
+		execParams{Command: "sleep 5"},
+		5*time.Second,
+		nil,
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, output)
+	require.Zero(t, exitCode)
+}
+
 func TestNewToolSet_PTYForeground(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("pty is not supported on windows")
