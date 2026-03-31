@@ -29,6 +29,7 @@ const (
 	defaultMaxLines   = 20_000
 	defaultJobTTL     = 30 * time.Minute
 	defaultKillGrace  = 2 * time.Second
+	timeoutKillGrace  = time.Duration(0)
 	defaultIODrain    = 1 * time.Second
 	maxTimeoutSeconds = int64((1<<63)-1) /
 		int64(time.Second)
@@ -174,18 +175,26 @@ func runForeground(
 	timeout time.Duration,
 	baseEnv map[string]string,
 ) (string, int, error) {
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd, err := shellCmd(runCtx, params.Command)
+	sess, err := startSession(
+		"",
+		params,
+		timeout,
+		baseEnv,
+		0,
+	)
 	if err != nil {
 		return "", 0, err
 	}
-	cmd.Dir = params.Workdir
-	cmd.Env = mergedEnv(baseEnv, params.Env)
 
-	output, runErr := cmd.CombinedOutput()
-	return string(output), exitCode(runErr), nil
+	select {
+	case <-ctx.Done():
+		_ = sess.kill(context.Background(), defaultKillGrace)
+		return "", 0, ctx.Err()
+	case <-sess.doneCh:
+	}
+
+	out, code := sess.allOutput()
+	return out, code, nil
 }
 
 func timeoutDuration(timeoutS int) time.Duration {
@@ -199,7 +208,7 @@ func timeoutDuration(timeoutS int) time.Duration {
 }
 
 func shellCmd(
-	ctx context.Context,
+	_ context.Context,
 	command string,
 ) (*exec.Cmd, error) {
 	shell, args, err := shellSpec()
@@ -208,8 +217,7 @@ func shellCmd(
 	}
 	// nosemgrep: go.lang.security.audit.dangerous-exec-command
 	// hostexec intentionally executes trusted host commands.
-	return exec.CommandContext(
-		ctx,
+	return exec.Command(
 		shell,
 		append(args, command)...,
 	), nil //nolint:gosec
@@ -274,6 +282,30 @@ func (m *manager) startBackground(
 	params execParams,
 	timeout time.Duration,
 ) (*session, error) {
+	sess, err := startSession(
+		newSessionID(),
+		params,
+		timeout,
+		m.baseEnv,
+		m.maxLines,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	m.sessions[sess.id] = sess
+	m.mu.Unlock()
+	return sess, nil
+}
+
+func startSession(
+	id string,
+	params execParams,
+	timeout time.Duration,
+	baseEnv map[string]string,
+	maxLines int,
+) (*session, error) {
 	runCtx, cancel := context.WithTimeout(
 		context.Background(),
 		timeout,
@@ -284,9 +316,9 @@ func (m *manager) startBackground(
 		return nil, err
 	}
 	cmd.Dir = params.Workdir
-	cmd.Env = mergedEnv(m.baseEnv, params.Env)
+	cmd.Env = mergedEnv(baseEnv, params.Env)
 
-	sess := newSession(newSessionID(), params.Command, m.maxLines)
+	sess := newSession(id, params.Command, maxLines)
 	sess.cancel = cancel
 	sess.cmd = cmd
 
@@ -296,6 +328,7 @@ func (m *manager) startBackground(
 			cancel()
 			return nil, err
 		}
+		sess.processGroupID = commandProcessGroupID(cmd)
 		sess.stdin = master
 		sess.closeIO = closeIO
 		sess.ioWG.Add(1)
@@ -309,6 +342,7 @@ func (m *manager) startBackground(
 			cancel()
 			return nil, err
 		}
+		preparePipeCommand(cmd)
 		sess.stdin = stdin
 		sess.closeIO = func() error {
 			_ = stdin.Close()
@@ -321,6 +355,7 @@ func (m *manager) startBackground(
 			_ = sess.closeIO()
 			return nil, err
 		}
+		sess.processGroupID = commandProcessGroupID(cmd)
 		sess.ioWG.Add(2)
 		go func() {
 			defer sess.ioWG.Done()
@@ -337,16 +372,18 @@ func (m *manager) startBackground(
 		close(sess.ioDone)
 	}()
 
-	m.mu.Lock()
-	m.sessions[sess.id] = sess
-	m.mu.Unlock()
-
 	go func() {
 		// Use cmd.Process.Wait() instead of cmd.Wait() because
 		// cmd.Wait() closes StdoutPipe/StderrPipe readers before
 		// the readFrom goroutines are done consuming those pipes.
 		processState, _ := cmd.Process.Wait()
 		waitDone(sess.ioDone, defaultIODrain)
+		_ = terminateProcessTree(
+			context.Background(),
+			cmd.Process,
+			sess.processGroupID,
+			defaultKillGrace,
+		)
 		code := -1
 		if processState != nil {
 			code = processState.ExitCode()
@@ -354,6 +391,19 @@ func (m *manager) startBackground(
 		sess.markDone(code)
 		cancel()
 		_ = sess.closeIO()
+	}()
+
+	go func() {
+		select {
+		case <-sess.doneCh:
+		case <-runCtx.Done():
+			if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+				_ = sess.kill(
+					context.Background(),
+					timeoutKillGrace,
+				)
+			}
+		}
 	}()
 
 	return sess, nil
