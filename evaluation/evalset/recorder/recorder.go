@@ -329,7 +329,7 @@ func buildFinalResponse(snapshot turnSnapshot, isError bool) (*model.Message, er
 		final := snapshot.finalResponse
 		return &final, nil
 	}
-	return nil, errors.New("final response is missing")
+	return nil, nil
 }
 
 func formatRunError(err model.ResponseError) string {
