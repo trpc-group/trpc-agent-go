@@ -32,6 +32,8 @@ import (
 	"syscall"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -664,6 +666,7 @@ func NewRuntime(
 			SkillsToolResults:  opts.SkillsToolResults,
 			SkillsSkipFallback: opts.SkillsSkipFallback,
 			SkillsToolingGuide: opts.SkillsToolingGuide,
+			KnowledgesConfig:   opts.KnowledgesConfig,
 			StateDir:           resolvedStateDir,
 
 			EnableLocalExec:     opts.EnableLocalExec,
@@ -1089,6 +1092,7 @@ func run(ctx context.Context, args []string) error {
 			SkillsToolResults:  opts.SkillsToolResults,
 			SkillsSkipFallback: opts.SkillsSkipFallback,
 			SkillsToolingGuide: opts.SkillsToolingGuide,
+			KnowledgesConfig:   opts.KnowledgesConfig,
 			StateDir:           resolvedStateDir,
 
 			EnableLocalExec:     opts.EnableLocalExec,
@@ -1676,6 +1680,11 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support tools.toolsets",
 		)
 	}
+	if len(opts.KnowledgesConfig) > 0 {
+		return errors.New(
+			"claude-code agent does not support knowledges",
+		)
+	}
 	if opts.RefreshToolSetsOnRun {
 		return errors.New(
 			"claude-code agent does not support refresh-toolsets-on-run",
@@ -1825,7 +1834,10 @@ func newAgent(
 			instruction + "\n\n" + openClawToolingGuidance,
 		)
 	}
-
+	knowledgeTools, err := buildKnowledgeTools(cfg.KnowledgesConfig)
+	if err != nil {
+		return nil, err
+	}
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
 	bundledRoot := resolveBundledSkillsRoot(cwd, cfg.StateDir)
@@ -1842,6 +1854,9 @@ func newAgent(
 	}
 
 	tools := append([]tool.Tool(nil), extraTools...)
+	if knowledgeTools != nil && len(knowledgeTools.tools) > 0 {
+		tools = append(tools, knowledgeTools.tools...)
+	}
 	tools = append(tools, ocskills.NewListTool(repo))
 	if len(cfg.ToolProviders) > 0 {
 		extra, err := toolsFromProviders(
@@ -2104,6 +2119,7 @@ type agentConfig struct {
 	SkillsToolResults  bool
 	SkillsSkipFallback bool
 	SkillsToolingGuide *string
+	KnowledgesConfig   map[string]*yaml.Node
 
 	StateDir string
 

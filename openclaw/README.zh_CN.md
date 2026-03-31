@@ -250,6 +250,19 @@ model:
   name: "gpt-5"
   openai_variant: "auto"
 
+# 可选：knowledge 后端，用于 knowledge search tools。
+# 这里只配置 embedder 和 vector store，知识内容加载需要在运行时单独触发。
+knowledges:
+  entries:
+    - name: "docs"
+      embedder:
+        type: "openai"
+        model: "text-embedding-3-small"
+        dimensions: 1536
+      vector_store:
+        type: "inmemory"
+        max_results: 5
+
 tools:
   # 可选；默认为串行执行。
   # 启用后，当模型在一个步骤中返回多个 tool call 时，
@@ -299,6 +312,31 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 - 时长字段使用 Go 风格的字符串，如 `60s`、`10m`、`1h`。
 - 对于密钥（模型 key、Telegram token），请勿将其纳入版本控制。
   建议尽可能使用环境变量。
+- `knowledges` 当前只负责把 embedder / vector store 接到 runtime；
+  文档加载是独立的运行时动作。
+- `pgvector` knowledge 配置示例：
+
+  ```yaml
+  knowledges:
+    entries:
+      - name: "trpc_agent_go"
+        embedder:
+          type: "openai"
+          model: "text-embedding-3-small"
+          base_url: "${OPENAI_BASE_URL}"
+          api_key: "${OPENAI_API_KEY}"
+          dimensions: 1536
+        vector_store:
+          type: "pgvector"
+          url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
+          table: "trpc_agent_go"
+          index_dimension: 1536
+          enable_tsvector: true
+          max_results: 5
+  ```
+
+  表名建议使用 `trpc_agent_go` 这类安全标识符，不要直接用
+  `trpc-agent-go` 这样的原始名字。
 - 示例 Telegram 配置已经把原生 `browser` 工具接到了本地默认
   browser-server 地址。当 `server_url` 指向
   `http://127.0.0.1:19790` 时，`go run ./cmd/openclaw` 会先探活该地址，

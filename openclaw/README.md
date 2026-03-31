@@ -260,6 +260,20 @@ model:
   name: "gpt-5"
   openai_variant: "auto"
 
+# Optional: knowledge backends used by knowledge search tools.
+# This only configures the embedder and vector store. Content loading
+# can be triggered separately at runtime.
+knowledges:
+  entries:
+    - name: "docs"
+      embedder:
+        type: "openai"
+        model: "text-embedding-3-small"
+        dimensions: 1536
+      vector_store:
+        type: "inmemory"
+        max_results: 5
+
 tools:
   # Optional; default is serial execution.
   # When enabled and the model returns multiple tool calls in one step,
@@ -309,6 +323,31 @@ Notes:
 - Duration fields use Go-style strings like `60s`, `10m`, `1h`.
 - For secrets (model keys, Telegram tokens), keep them out of version control.
   Prefer environment variables when available.
+- `knowledges` currently configures only embedder / vector store wiring.
+  Loading documents into a knowledge base is a separate runtime action.
+- Example `pgvector` knowledge config:
+
+  ```yaml
+  knowledges:
+    entries:
+      - name: "trpc_agent_go"
+        embedder:
+          type: "openai"
+          model: "text-embedding-3-small"
+          base_url: "${OPENAI_BASE_URL}"
+          api_key: "${OPENAI_API_KEY}"
+          dimensions: 1536
+        vector_store:
+          type: "pgvector"
+          url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
+          table: "trpc_agent_go"
+          index_dimension: 1536
+          enable_tsvector: true
+          max_results: 5
+  ```
+
+  Use identifier-safe table names such as `trpc_agent_go`; do not use raw
+  names like `trpc-agent-go`.
 - The sample Telegram config enables the native `browser` tool against the
   local browser-server defaults. When `server_url` points at
   `http://127.0.0.1:19790`, `go run ./cmd/openclaw` now probes that address

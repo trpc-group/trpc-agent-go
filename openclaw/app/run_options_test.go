@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
@@ -800,6 +801,129 @@ skills:
 	require.Equal(t, "b,c", opts.SkillsAllowBundled)
 }
 
+func TestParseRunOptions_KnowledgesEntriesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  entries:
+    - name: "docs"
+      embedder:
+        type: "openai"
+        model: "text-embedding-3-small"
+      vector_store:
+        type: "inmemory"
+        max_results: 5
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Len(t, opts.KnowledgesConfig, 1)
+	require.Contains(t, opts.KnowledgesConfig, "docs")
+	require.NotNil(t, opts.KnowledgesConfig["docs"])
+}
+
+func TestParseRunOptions_KnowledgesEntriesRequireName(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  entries:
+    - vector_store:
+        type: "inmemory"
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.Contains(t, err.Error(), "knowledges.entries[0].name is empty")
+}
+
+func TestParseRunOptions_KnowledgesEntriesRejectDuplicateNames(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+knowledges:
+  entries:
+    - name: "docs"
+      vector_store:
+        type: "inmemory"
+    - name: "docs"
+      vector_store:
+        type: "inmemory"
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.Contains(t, err.Error(), "duplicate knowledge name: docs")
+}
+
+func TestConvertKnowledgeConfigs_SkipsEntriesWithoutComponents(t *testing.T) {
+	t.Parallel()
+
+	configs, err := convertKnowledgeConfigs([]knowledgeEntryConfig{
+		{Name: "empty"},
+		{
+			Name: "docs",
+			VectorStore: &rawYAMLNode{Node: yamlNode(t, `
+type: inmemory
+max_results: 5
+`)},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, configs, 1)
+	require.NotContains(t, configs, "empty")
+	require.Contains(t, configs, "docs")
+}
+
+func TestConvertKnowledgeConfigs_EmptyEntriesReturnNil(t *testing.T) {
+	t.Parallel()
+
+	configs, err := convertKnowledgeConfigs(nil)
+	require.NoError(t, err)
+	require.Nil(t, configs)
+}
+
+func TestConvertKnowledgeConfigs_ClonesNestedNodes(t *testing.T) {
+	t.Parallel()
+
+	embedderNode := yamlNode(t, `
+type: openai
+model: text-embedding-3-small
+`)
+	vectorStoreNode := yamlNode(t, `
+type: inmemory
+max_results: 5
+`)
+
+	configs, err := convertKnowledgeConfigs([]knowledgeEntryConfig{{
+		Name:        "docs",
+		Embedder:    &rawYAMLNode{Node: embedderNode},
+		VectorStore: &rawYAMLNode{Node: vectorStoreNode},
+	}})
+	require.NoError(t, err)
+
+	mappingValue(embedderNode, "model").Value = "mutated-model"
+	mappingValue(vectorStoreNode, "max_results").Value = "99"
+
+	gotEmbedder := mappingValue(configs["docs"], "embedder")
+	gotVectorStore := mappingValue(configs["docs"], "vector_store")
+	require.Equal(t, "text-embedding-3-small", mappingValue(gotEmbedder, "model").Value)
+	require.Equal(t, "5", mappingValue(gotVectorStore, "max_results").Value)
+}
+
+func TestCloneYAMLNode_NilReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, cloneYAMLNode(nil))
+}
+
 func TestParseRunOptions_DebugRecorder_ConfigApplied(t *testing.T) {
 	t.Parallel()
 
@@ -897,4 +1021,19 @@ func writeTempConfig(t *testing.T, body string) string {
 	path := filepath.Join(dir, "openclaw.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	return path
+}
+
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil {
+		return nil
+	}
+	if node.Kind == yaml.DocumentNode && len(node.Content) > 0 {
+		node = node.Content[0]
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }
