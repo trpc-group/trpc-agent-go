@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -282,6 +283,11 @@ func buildFinalStreamingMetadata(evt *event.Event) map[string]any {
 	}
 
 	var metadata map[string]any
+	if responseID := finalStreamingResponseID(evt); responseID != "" {
+		metadata = map[string]any{
+			ia2a.MessageMetadataResponseIDKey: responseID,
+		}
+	}
 	if evt.Response != nil && evt.Response.Error != nil {
 		metadata = ia2a.WithResponseErrorMetadata(metadata, evt.Response.Error)
 	}
@@ -292,6 +298,21 @@ func buildFinalStreamingMetadata(evt *event.Event) map[string]any {
 		metadata[ia2a.MessageMetadataStateDeltaKey] = stateDelta
 	}
 	return metadata
+}
+
+func finalStreamingResponseID(evt *event.Event) string {
+	if evt == nil || len(evt.StateDelta) == 0 {
+		return ""
+	}
+	raw, ok := evt.StateDelta[graph.StateKeyLastResponseID]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	var responseID string
+	if err := json.Unmarshal(raw, &responseID); err != nil {
+		return ""
+	}
+	return responseID
 }
 
 func cloneStreamingMetadata(metadata map[string]any) map[string]any {

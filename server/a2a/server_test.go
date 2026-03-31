@@ -1184,7 +1184,8 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 				Done:   true,
 			},
 			StateDelta: map[string][]byte{
-				"last_response": []byte(`"final"`),
+				"last_response":              []byte(`"final"`),
+				graph.StateKeyLastResponseID: []byte(`"resp-final"`),
 			},
 		}
 		var finalMetadata map[string]any
@@ -1199,7 +1200,7 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 		)
 		assert.NoError(t, err)
 		assert.False(t, cont)
-		assert.Empty(t, finalMetadata[ia2a.MessageMetadataResponseIDKey])
+		assert.Equal(t, "resp-final", finalMetadata[ia2a.MessageMetadataResponseIDKey])
 		rawStateDelta, ok := finalMetadata[ia2a.MessageMetadataStateDeltaKey]
 		if assert.True(t, ok, "expected state_delta metadata") {
 			decoded := ia2a.DecodeStateDeltaMetadata(rawStateDelta)
@@ -3634,7 +3635,8 @@ func TestProcessAgentStreamingEvents_HidesRunnerCompletion_TaskArtifact(t *testi
 			Done:   true,
 		},
 		StateDelta: map[string][]byte{
-			"last_response": []byte(`"final"`),
+			"last_response":              []byte(`"final"`),
+			graph.StateKeyLastResponseID: []byte(`"resp-final"`),
 		},
 	}
 	close(events)
@@ -3692,7 +3694,7 @@ doneArtifact:
 		assert.True(t, *finalArtifact.LastChunk)
 	}
 	assert.Empty(t, finalArtifact.Artifact.Parts)
-	assert.NotContains(t, finalArtifact.Metadata, ia2a.MessageMetadataResponseIDKey)
+	assert.Equal(t, "resp-final", finalArtifact.Metadata[ia2a.MessageMetadataResponseIDKey])
 	assert.NotContains(t, finalArtifact.Metadata, ia2a.MessageMetadataObjectTypeKey)
 	rawStateDelta, ok := finalArtifact.Metadata[ia2a.MessageMetadataStateDeltaKey]
 	if assert.True(t, ok, "expected state_delta on final artifact") {
@@ -3714,7 +3716,8 @@ func TestProcessAgentStreamingEvents_HidesRunnerCompletion_MessageMode(t *testin
 			Done:   true,
 		},
 		StateDelta: map[string][]byte{
-			"last_response": []byte(`"final"`),
+			"last_response":              []byte(`"final"`),
+			graph.StateKeyLastResponseID: []byte(`"resp-final"`),
 		},
 	}
 	close(events)
@@ -3766,7 +3769,7 @@ doneMessage:
 	}
 
 	assert.Equal(t, protocol.TaskStateCompleted, completed.Status.State)
-	assert.NotContains(t, completed.Metadata, ia2a.MessageMetadataResponseIDKey)
+	assert.Equal(t, "resp-final", completed.Metadata[ia2a.MessageMetadataResponseIDKey])
 	assert.NotContains(t, completed.Metadata, ia2a.MessageMetadataObjectTypeKey)
 	rawStateDelta, ok := completed.Metadata[ia2a.MessageMetadataStateDeltaKey]
 	if assert.True(t, ok, "expected state_delta on completed status") {
@@ -3793,7 +3796,8 @@ func TestProcessAgentStreamingEvents_PropagatesRunnerCompletionError_TaskArtifac
 			},
 		},
 		StateDelta: map[string][]byte{
-			"last_response": []byte(`"final"`),
+			"last_response":              []byte(`"final"`),
+			graph.StateKeyLastResponseID: []byte(`"resp-final"`),
 		},
 	}
 	close(events)
@@ -3842,6 +3846,7 @@ doneArtifactError:
 	assert.Equal(t, model.ErrorTypeFlowError, finalArtifact.Metadata[ia2a.MessageMetadataErrorTypeKey])
 	assert.Equal(t, "runner failed", finalArtifact.Metadata[ia2a.MessageMetadataErrorMessageKey])
 	assert.Equal(t, code, finalArtifact.Metadata[ia2a.MessageMetadataErrorCodeKey])
+	assert.Equal(t, "resp-final", finalArtifact.Metadata[ia2a.MessageMetadataResponseIDKey])
 	rawStateDelta, ok := finalArtifact.Metadata[ia2a.MessageMetadataStateDeltaKey]
 	if assert.True(t, ok, "expected state_delta on final artifact") {
 		decoded := ia2a.DecodeStateDeltaMetadata(rawStateDelta)
@@ -3867,7 +3872,8 @@ func TestProcessAgentStreamingEvents_PropagatesRunnerCompletionError_MessageMode
 			},
 		},
 		StateDelta: map[string][]byte{
-			"last_response": []byte(`"final"`),
+			"last_response":              []byte(`"final"`),
+			graph.StateKeyLastResponseID: []byte(`"resp-final"`),
 		},
 	}
 	close(events)
@@ -3918,6 +3924,7 @@ doneMessageError:
 	assert.Equal(t, model.ErrorTypeFlowError, completed.Metadata[ia2a.MessageMetadataErrorTypeKey])
 	assert.Equal(t, "runner failed", completed.Metadata[ia2a.MessageMetadataErrorMessageKey])
 	assert.Equal(t, code, completed.Metadata[ia2a.MessageMetadataErrorCodeKey])
+	assert.Equal(t, "resp-final", completed.Metadata[ia2a.MessageMetadataResponseIDKey])
 	rawStateDelta, ok := completed.Metadata[ia2a.MessageMetadataStateDeltaKey]
 	if assert.True(t, ok, "expected state_delta on completed status") {
 		decoded := ia2a.DecodeStateDeltaMetadata(rawStateDelta)
