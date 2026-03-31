@@ -647,7 +647,8 @@ func WithSkipSkillsFallbackOnSessionSummary(
 //
 // Behavior:
 //   - Not configured: use the built-in default guidance.
-//   - Configured with empty string: omit the guidance block.
+//   - Configured with empty string: omit both the tooling/workspace
+//     guidance block and the capability disclosure block.
 //   - Configured with non-empty string: append the provided text.
 func WithSkillsToolingGuidance(
 	guidance string,
