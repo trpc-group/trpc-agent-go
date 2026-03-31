@@ -1110,7 +1110,7 @@ func TestRunTool_PrimaryOutput_SelectsByName(t *testing.T) {
 }
 
 func TestSelectPrimaryOutput_SkipsNonTextAndEmpty(t *testing.T) {
-	large := strings.Repeat("a", maxPrimaryOutputChars+1)
+	large := strings.Repeat("a", defaultPrimaryOutputSize+1)
 	files := []runFile{
 		{
 			File: codeexecutor.File{
@@ -4054,7 +4054,7 @@ func TestResolveCWD_WorkspaceEnvPrefixes(t *testing.T) {
 }
 
 func TestBuildRunOutput_TruncatesStdoutStderr(t *testing.T) {
-	long := strings.Repeat("a", maxOutputChars+1)
+	long := strings.Repeat("a", defaultStdoutStderrBytes+1)
 	rr := codeexecutor.RunResult{
 		Stdout:   long,
 		Stderr:   long,
@@ -4062,8 +4062,34 @@ func TestBuildRunOutput_TruncatesStdoutStderr(t *testing.T) {
 	}
 	out := buildRunOutput(rr, nil)
 	require.Len(t, out.Warnings, 2)
-	require.Equal(t, maxOutputChars, len(out.Stdout))
-	require.Equal(t, maxOutputChars, len(out.Stderr))
+	require.Equal(t, defaultStdoutStderrBytes, len(out.Stdout))
+	require.Equal(t, defaultStdoutStderrBytes, len(out.Stderr))
+}
+
+func TestBuildRunOutputWithLimits_OverridesDefaults(t *testing.T) {
+	limits := RunOutputLimits{
+		StdoutStderrBytes:  4,
+		PrimaryOutputBytes: 4,
+	}
+	long := strings.Repeat("a", limits.StdoutStderrBytes+1)
+	out := buildRunOutputWithLimits(
+		codeexecutor.RunResult{
+			Stdout: long,
+			Stderr: long,
+		},
+		[]codeexecutor.File{
+			{
+				Name:     "out/a.txt",
+				Content:  "12345",
+				MIMEType: "text/plain",
+			},
+		},
+		limits,
+	)
+	require.Len(t, out.Warnings, 2)
+	require.Equal(t, limits.StdoutStderrBytes, len(out.Stdout))
+	require.Equal(t, limits.StdoutStderrBytes, len(out.Stderr))
+	require.Nil(t, out.PrimaryOutput)
 }
 
 type countingFS struct {
