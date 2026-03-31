@@ -300,6 +300,18 @@ agent := llmagent.New(
 )
 ```
 
+Fine-grained allowlist:
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithAllowedSkillTools(
+        llmagent.SkillToolLoad,
+    ),
+)
+```
+
 Key points:
 - Request processor injects overview and on‑demand content:
   [internal/flow/processor/skills.go]
@@ -315,9 +327,15 @@ Key points:
     prompt guidance is suppressed.
   - `knowledge_only` profile: only `skill_load`, `skill_select_docs`,
     and `skill_list_docs`.
-  - Executor requirement follows the profile:
-    `full` usually also needs `WithCodeExecutor(...)`;
-    `knowledge_only` does not.
+  - `WithAllowedSkillTools(...)` overrides the profile with an explicit
+    allowlist, for example `SkillToolLoad` only.
+  - If the allowlist includes `skill_run` / `skill_exec`, the default
+    `WithSkillRunRequireSkillLoaded(true)` still requires `skill_load`
+    to be enabled as well. To omit `skill_load`, explicitly set
+    `llmagent.WithSkillRunRequireSkillLoaded(false)`.
+  - Executor requirement follows the final registered tool set:
+    any configuration without `skill_run` / `skill_exec` does not need
+    `WithCodeExecutor(...)`.
 - Note: when `WithCodeExecutor` is set, LLMAgent will (by default) try to
   execute Markdown fenced code blocks in model responses. If you only need
   the executor for `skill_run`, disable this behavior with
@@ -326,8 +344,10 @@ Key points:
   block after the `Available skills:` list in the system message.
   - Disable it (to save prompt tokens): `llmagent.WithSkillsToolingGuidance("")`.
   - Or replace it with your own text: `llmagent.WithSkillsToolingGuidance("...")`.
+  - Guidance follows the final registered skill tools, including
+    `WithAllowedSkillTools(...)`.
   - If you disable it, make sure your instruction tells the model which
-    skill tools are available in your chosen profile.
+    skill tools are available in your chosen profile or allowlist.
   - Loader: [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
   - Runner: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
