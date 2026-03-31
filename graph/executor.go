@@ -1587,14 +1587,41 @@ func (e *Executor) buildCompletionEvent(
 	// Take a deep snapshot of the final state under read lock.
 	// IMPORTANT: Skip volatile/non-serializable keys (e.g., Session, callbacks, exec context)
 	// to avoid racing on their internal maps/slices managed by other goroutines.
-	finalStateCopy := execCtx.State.deepCopy(false, e.graph.Schema().Fields)
+	finalStateCopy, identityText, identity := execCtx.snapshotCompletionState(
+		e.graph.Schema().Fields,
+	)
 	completionEvent := NewGraphCompletionEvent(
 		WithCompletionEventInvocationID(execCtx.InvocationID),
 		WithCompletionEventFinalState(finalStateCopy),
+		WithCompletionEventFinalResponseID(resolveCompletionResponseID(
+			finalStateCopy,
+			identityText,
+			identity,
+		)),
 		WithCompletionEventTotalSteps(stepsExecuted),
 		WithCompletionEventTotalDuration(time.Since(startTime)),
 	)
 	return completionEvent
+}
+
+func resolveCompletionResponseID(
+	finalState State,
+	identityText string,
+	identity string,
+) string {
+	if finalState == nil {
+		return ""
+	}
+	if responseID, ok := finalState[StateKeyLastResponseID].(string); ok && responseID != "" {
+		return responseID
+	}
+	if identity == "" || identityText == "" {
+		return ""
+	}
+	if finalText, ok := finalState[StateKeyLastResponse].(string); ok && finalText == identityText {
+		return identity
+	}
+	return ""
 }
 
 // createCheckpointAndSave creates a checkpoint and persists any pending writes

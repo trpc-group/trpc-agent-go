@@ -68,6 +68,20 @@ func requireToolExecutionMetadata(t *testing.T, evt *event.Event) ToolExecutionM
 	return meta
 }
 
+func TestResolveCompletionResponseID_EdgeCases(t *testing.T) {
+	require.Empty(t, resolveCompletionResponseID(nil, "answer", "resp-1"))
+	require.Equal(t, "resp-1", resolveCompletionResponseID(State{
+		StateKeyLastResponseID: "resp-1",
+		StateKeyLastResponse:   "answer",
+	}, "other", "resp-2"))
+	require.Equal(t, "resp-fallback", resolveCompletionResponseID(State{
+		StateKeyLastResponse: "answer",
+	}, "answer", "resp-fallback"))
+	require.Empty(t, resolveCompletionResponseID(State{
+		StateKeyLastResponse: "other",
+	}, "answer", "resp-1"))
+}
+
 // TestDocumentProcessingWorkflow tests a comprehensive document processing workflow
 // that mimics real-world usage with LLM nodes, tool nodes, and conditional routing.
 func TestDocumentProcessingWorkflow(t *testing.T) {
