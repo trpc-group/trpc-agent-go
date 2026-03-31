@@ -19,6 +19,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
@@ -47,10 +48,14 @@ const (
 	// This key is used to store the last included timestamp in the session state.
 	lastIncludedTsKey = "summary:last_included_ts"
 
-	// conversationTextPlaceholder is the placeholder for conversation text.
-	conversationTextPlaceholder = "{conversation_text}"
-	// maxSummaryWordsPlaceholder is the placeholder for max summary words.
-	maxSummaryWordsPlaceholder = "{max_summary_words}"
+	// conversationTextVar is the prompt variable name for conversation text (without braces).
+	conversationTextVar = "conversation_text"
+	// conversationTextPlaceholder is the placeholder for conversation text in templates.
+	conversationTextPlaceholder = "{" + conversationTextVar + "}"
+	// maxSummaryWordsVar is the prompt variable name for max summary words (without braces).
+	maxSummaryWordsVar = "max_summary_words"
+	// maxSummaryWordsPlaceholder is the placeholder for max summary words in templates.
+	maxSummaryWordsPlaceholder = "{" + maxSummaryWordsVar + "}"
 
 	// authorUser is the user author.
 	authorUser = "user"
@@ -116,12 +121,19 @@ func defaultToolResultFormatter(msg model.Message) string {
 // validatePrompt validates that the prompt contains required placeholders.
 // conversationTextPlaceholder is always required.
 // maxSummaryWordsPlaceholder is required when maxSummaryWords > 0.
-func validatePrompt(prompt string, maxSummaryWords int) error {
-	if !strings.Contains(prompt, conversationTextPlaceholder) {
+func validatePrompt(template string, maxSummaryWords int) error {
+	textPrompt := prompt.Text{Template: template}
+	if err := textPrompt.ValidateRequired(
+		conversationTextVar,
+	); err != nil {
 		return fmt.Errorf("prompt must include %s placeholder", conversationTextPlaceholder)
 	}
-	if maxSummaryWords > 0 && !strings.Contains(prompt, maxSummaryWordsPlaceholder) {
-		return fmt.Errorf("prompt must include %s placeholder when maxSummaryWords > 0", maxSummaryWordsPlaceholder)
+	if maxSummaryWords > 0 {
+		if err := textPrompt.ValidateRequired(
+			maxSummaryWordsVar,
+		); err != nil {
+			return fmt.Errorf("prompt must include %s placeholder when maxSummaryWords > 0", maxSummaryWordsPlaceholder)
+		}
 	}
 	return nil
 }
@@ -632,26 +644,24 @@ func (s *sessionSummarizer) generateSummary(
 }
 
 func (s *sessionSummarizer) buildSummaryPrompt(conversationText string) string {
-	prompt := strings.Replace(
-		s.prompt,
-		conversationTextPlaceholder,
-		conversationText,
-		1,
-	)
-
-	// Replace max summary words placeholder if it exists.
+	vars := prompt.Vars{
+		conversationTextVar: conversationText,
+		maxSummaryWordsVar:  "",
+	}
 	if s.maxSummaryWords > 0 {
-		// Replace with the actual number.
-		return strings.Replace(
-			prompt,
-			maxSummaryWordsPlaceholder,
-			fmt.Sprintf("%d", s.maxSummaryWords),
-			1,
+		vars[maxSummaryWordsVar] = fmt.Sprintf(
+			"%d",
+			s.maxSummaryWords,
 		)
 	}
+	textPrompt := prompt.Text{Template: s.prompt}
+	rendered, err := textPrompt.RenderStrict(vars)
+	if err == nil {
+		return rendered
+	}
 
-	// Remove the placeholder if no word limit is set.
-	return strings.Replace(prompt, maxSummaryWordsPlaceholder, "", 1)
+	log.Warnf("failed to render summary prompt: %v", err)
+	return textPrompt.Render(vars)
 }
 
 func newSummaryRequest(prompt string) *model.Request {

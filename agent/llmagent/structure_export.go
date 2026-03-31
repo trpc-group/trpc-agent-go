@@ -26,8 +26,8 @@ func (a *LLMAgent) Export(
 ) (*structure.Snapshot, error) {
 	a.mu.RLock()
 	name := a.name
-	instruction := a.instruction
-	globalInstruction := a.systemPrompt
+	instruction := a.instruction.Template
+	globalInstruction := a.systemPrompt.Template
 	currentModel := a.model
 	hasToolSurface := len(a.option.Tools) > 0 || len(a.option.ToolSets) > 0
 	skillRepo := a.option.skillsRepository
