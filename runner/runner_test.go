@@ -4368,13 +4368,20 @@ func TestShouldMarkCompletionSnapshotOnly_ResumeRunWithoutNewAssistantContent(t 
 				}),
 			)),
 		),
+		baselineFinalResponseID: "resp-1",
+		priorAssistantResponseIDs: map[string]struct{}{
+			"resp-1": {},
+		},
 	}
 	choices := []model.Choice{{
 		Index:   0,
 		Message: model.NewAssistantMessage("stale-final"),
 	}}
+	finalStateDelta := map[string][]byte{
+		graph.StateKeyLastResponseID: []byte(`"resp-1"`),
+	}
 
-	require.True(t, shouldMarkCompletionSnapshotOnly(loop, choices))
+	require.True(t, shouldMarkCompletionSnapshotOnly(loop, choices, finalStateDelta))
 }
 
 func TestShouldMarkCompletionSnapshotOnly_SkipsNormalRunsAndFreshAssistantRuns(t *testing.T) {
@@ -4382,12 +4389,15 @@ func TestShouldMarkCompletionSnapshotOnly_SkipsNormalRunsAndFreshAssistantRuns(t
 		Index:   0,
 		Message: model.NewAssistantMessage("fresh-final"),
 	}}
+	finalStateDelta := map[string][]byte{
+		graph.StateKeyLastResponseID: []byte(`"resp-2"`),
+	}
 
 	t.Run("normal run", func(t *testing.T) {
 		loop := &eventLoopContext{
 			invocation: agent.NewInvocation(),
 		}
-		require.False(t, shouldMarkCompletionSnapshotOnly(loop, choices))
+		require.False(t, shouldMarkCompletionSnapshotOnly(loop, choices, finalStateDelta))
 	})
 
 	t.Run("resume with assistant content produced", func(t *testing.T) {
@@ -4399,12 +4409,127 @@ func TestShouldMarkCompletionSnapshotOnly_SkipsNormalRunsAndFreshAssistantRuns(t
 					}),
 				)),
 			),
+			baselineFinalResponseID: "resp-2",
 			persistedAssistantResponseIDs: map[string]struct{}{
 				"resp-1": {},
 			},
 		}
-		require.False(t, shouldMarkCompletionSnapshotOnly(loop, choices))
+		require.False(t, shouldMarkCompletionSnapshotOnly(loop, choices, finalStateDelta))
 	})
+
+	t.Run("resume with fresh completion identity", func(t *testing.T) {
+		loop := &eventLoopContext{
+			invocation: agent.NewInvocation(
+				agent.WithInvocationRunOptions(agent.NewRunOptions(
+					agent.WithRuntimeState(graph.State{
+						graph.StateKeyCommand: graph.NewResumeCommand().WithResume("approve"),
+					}),
+				)),
+			),
+			baselineFinalResponseID: "resp-1",
+		}
+		require.False(t, shouldMarkCompletionSnapshotOnly(loop, choices, finalStateDelta))
+	})
+
+	t.Run("resume without baseline identity", func(t *testing.T) {
+		loop := &eventLoopContext{
+			invocation: agent.NewInvocation(
+				agent.WithInvocationRunOptions(agent.NewRunOptions(
+					agent.WithRuntimeState(graph.State{
+						graph.StateKeyCommand: graph.NewResumeCommand().WithResume("approve"),
+					}),
+				)),
+			),
+		}
+		require.False(t, shouldMarkCompletionSnapshotOnly(loop, choices, finalStateDelta))
+	})
+}
+
+func TestBaselineFinalResponseIDFromRuntimeState(t *testing.T) {
+	t.Run("state key string", func(t *testing.T) {
+		runtimeState := map[string]any{
+			graph.StateKeyLastResponseID: "resp-1",
+		}
+		require.Equal(t, "resp-1", baselineFinalResponseIDFromRuntimeState(runtimeState))
+	})
+
+	t.Run("completion metadata bytes", func(t *testing.T) {
+		runtimeState := map[string]any{
+			graph.MetadataKeyCompletion: []byte(`{"finalResponseID":"resp-meta"}`),
+		}
+		require.Equal(t, "resp-meta", baselineFinalResponseIDFromRuntimeState(runtimeState))
+	})
+
+	t.Run("invalid state key falls back to metadata", func(t *testing.T) {
+		runtimeState := map[string]any{
+			graph.StateKeyLastResponseID: []byte("{"),
+			graph.MetadataKeyCompletion:  []byte(`{"finalResponseID":"resp-meta"}`),
+		}
+		require.Equal(t, "resp-meta", baselineFinalResponseIDFromRuntimeState(runtimeState))
+	})
+}
+
+func TestBaselineFinalResponseID(t *testing.T) {
+	t.Run("session state takes precedence", func(t *testing.T) {
+		sess := &session.Session{
+			State: session.StateMap{
+				graph.StateKeyLastResponseID: []byte(`"resp-from-session"`),
+			},
+		}
+		runtimeState := map[string]any{
+			graph.StateKeyLastResponseID: "resp-from-runtime",
+		}
+		require.Equal(t, "resp-from-session", baselineFinalResponseID(sess, runtimeState))
+	})
+
+	t.Run("falls back to runtime state", func(t *testing.T) {
+		runtimeState := map[string]any{
+			graph.StateKeyLastResponseID: "resp-from-runtime",
+		}
+		require.Equal(t, "resp-from-runtime", baselineFinalResponseID(nil, runtimeState))
+	})
+}
+
+func TestCollectPriorAssistantResponseIDs(t *testing.T) {
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				Response: &model.Response{
+					ID: "resp-1",
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("assistant-1"),
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Done:   true,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("runner-completion"),
+					}},
+				},
+				Author: "app",
+			},
+			func() event.Event {
+				raw := graph.NewGraphCompletionEvent(
+					graph.WithCompletionEventInvocationID("inv"),
+					graph.WithCompletionEventFinalState(graph.State{
+						graph.StateKeyLastResponse:   "visible-final",
+						graph.StateKeyLastResponseID: "visible-resp",
+					}),
+				)
+				visible, ok := graph.VisibleGraphCompletionEventForAuthor(raw, "graph-child")
+				require.True(t, ok)
+				return *visible
+			}(),
+		},
+	}
+
+	ids := collectPriorAssistantResponseIDs(sess)
+	require.Contains(t, ids, "resp-1")
+	require.Contains(t, ids, "visible-resp")
+	require.Len(t, ids, 2)
 }
 
 func TestAssistantChoiceSignature_UsesAllAssistantChoices(t *testing.T) {
