@@ -113,7 +113,11 @@ server, _ := a2aserver.New(
 ```
 
 Task state updates (`submitted`, `completed`) are still emitted as
-`TaskStatusUpdateEvent`.
+`TaskStatusUpdateEvent`. If `WithStructuredTaskErrors(true)` is enabled,
+terminal failures are also emitted as failed task status updates, with
+machine-readable fields preferred on the outer metadata, mirrored into
+`status.message.metadata` for `0.1` compatibility, and display text in
+`status.message.parts`.
 
 #### Direct A2A Protocol Client Call
 

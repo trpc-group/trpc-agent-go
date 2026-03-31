@@ -777,6 +777,61 @@ With this option enabled:
 - only terminal errors become failed tasks; intermediate graph events such as
   `graph.node.error` continue to flow as graph observability events
 
+The payload is intentionally split into two layers:
+
+- outer `Task.Metadata` or `TaskStatusUpdateEvent.Metadata`: the preferred
+  machine-readable error fields such as `error_type`, `error_code`,
+  `error_message`, `task_state`, and `llm_response_id`
+- `Status.Message.Metadata`: the same machine-readable fields mirrored for A2A
+  interaction spec `0.1` compatibility
+- `Status.Message.Parts`: user-facing text to display directly
+
+For example, a streaming terminal failure is shaped like this:
+
+```json
+{
+  "kind": "status-update",
+  "metadata": {
+    "object_type": "error",
+    "error_type": "flow_error",
+    "error_code": "REMOTE_VALIDATION_FAILED",
+    "error_message": "validation failed",
+    "task_state": "failed",
+    "llm_response_id": "resp-1"
+  },
+  "status": {
+    "state": "failed",
+    "message": {
+      "messageId": "resp-1",
+      "role": "agent",
+      "metadata": {
+        "object_type": "error",
+        "error_type": "flow_error",
+        "error_code": "REMOTE_VALIDATION_FAILED",
+        "error_message": "validation failed",
+        "task_state": "failed",
+        "llm_response_id": "resp-1"
+      },
+      "parts": [
+        {
+          "kind": "text",
+          "text": "validation failed"
+        }
+      ]
+    }
+  }
+}
+```
+
+That leads to a simple business-side rule:
+
+- branch on `status.state`
+- read structured fields from outer metadata first
+- accept `status.message.metadata` as a compatibility mirror for legacy
+  consumers
+- treat `status.message.parts` as display text, not as the primary source for
+  machine branching
+
 ### Client side
 
 `A2AAgent` recognizes those structured task failures automatically.
@@ -792,6 +847,14 @@ For failed, rejected, or canceled remote tasks, it now emits a normal
 In streaming mode, `A2AAgent` also stops emitting the synthetic final assistant
 message after a terminal task error. This avoids the ambiguous pattern of
 "error first, then normal final message".
+
+In other words, the default client path already follows the same rule:
+
+- outer metadata is the preferred source to rebuild `Response.Error`
+- `status.message.metadata` remains a compatibility mirror for `0.1`
+- `status.message.parts` is only a human-readable fallback channel
+- business code should keep branching on `evt.Response.Error`, not on parsed
+  text content
 
 Complete server and client setup:
 
