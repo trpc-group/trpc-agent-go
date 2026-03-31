@@ -16,10 +16,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,6 +36,8 @@ type session struct {
 	stdin   io.WriteCloser
 	closeIO func() error
 	cancel  context.CancelFunc
+
+	processGroupID int
 
 	doneCh chan struct{}
 	ioDone chan struct{}
@@ -296,6 +296,7 @@ func (s *session) kill(
 	s.mu.Lock()
 	cmd := s.cmd
 	cancel := s.cancel
+	processGroupID := s.processGroupID
 	s.mu.Unlock()
 
 	if cmd == nil || cmd.Process == nil {
@@ -305,33 +306,16 @@ func (s *session) kill(
 		return nil
 	}
 
-	if runtime.GOOS != "windows" {
-		_ = cmd.Process.Signal(syscall.SIGTERM)
+	err := terminateProcessTree(
+		ctx,
+		cmd.Process,
+		processGroupID,
+		grace,
+	)
+	if cancel != nil {
+		cancel()
 	}
-
-	if grace < 0 {
-		grace = 0
-	}
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
-
-	select {
-	case <-s.doneCh:
-		if cancel != nil {
-			cancel()
-		}
-		return nil
-	case <-ctx.Done():
-		if cancel != nil {
-			cancel()
-		}
-		return killProcess(cmd.Process)
-	case <-timer.C:
-		if cancel != nil {
-			cancel()
-		}
-		return killProcess(cmd.Process)
-	}
+	return err
 }
 
 func (s *session) close() error {
