@@ -26,31 +26,28 @@ func TestTextRender_ReplacesKnownVarsAndKeepsUnknown(t *testing.T) {
 	require.Equal(t, "hello alice from {city} and {user:name}", rendered)
 }
 
-func TestTextRenderStrict_ErrorsOnMissingSimpleVars(t *testing.T) {
-	tpl := Text{
-		Template: "hello {name} from {city}",
-	}
-
-	rendered, err := tpl.RenderStrict(Vars{
-		"name": "alice",
-	})
-
-	require.Error(t, err)
-	require.Empty(t, rendered)
-	require.Contains(t, err.Error(), "{city}")
-}
-
-func TestTextRenderStrict_IgnoresNonSimplePlaceholders(t *testing.T) {
+func TestTextRender_PreservesUnmatchedComplexBraceFormsInTemplate(t *testing.T) {
 	tpl := Text{
 		Template: "summary {conversation_text} state {user:name}",
 	}
 
-	rendered, err := tpl.RenderStrict(Vars{
+	rendered := tpl.Render(Vars{
 		"conversation_text": "done",
 	})
 
-	require.NoError(t, err)
 	require.Equal(t, "summary done state {user:name}", rendered)
+}
+
+func TestTextRender_SubstitutedValuesMayContainSimpleBraces(t *testing.T) {
+	tpl := Text{
+		Template: "msg: {conversation_text}",
+	}
+
+	rendered := tpl.Render(Vars{
+		"conversation_text": `user said {name} and {city}`,
+	})
+
+	require.Equal(t, "msg: user said {name} and {city}", rendered)
 }
 
 func TestTextValidateRequired(t *testing.T) {

@@ -11,6 +11,7 @@ package summary
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -649,19 +650,9 @@ func (s *sessionSummarizer) buildSummaryPrompt(conversationText string) string {
 		maxSummaryWordsVar:  "",
 	}
 	if s.maxSummaryWords > 0 {
-		vars[maxSummaryWordsVar] = fmt.Sprintf(
-			"%d",
-			s.maxSummaryWords,
-		)
+		vars[maxSummaryWordsVar] = strconv.Itoa(s.maxSummaryWords)
 	}
-	textPrompt := prompt.Text{Template: s.prompt}
-	rendered, err := textPrompt.RenderStrict(vars)
-	if err == nil {
-		return rendered
-	}
-
-	log.Warnf("failed to render summary prompt: %v", err)
-	return textPrompt.Render(vars)
+	return prompt.Text{Template: s.prompt}.Render(vars)
 }
 
 func newSummaryRequest(prompt string) *model.Request {

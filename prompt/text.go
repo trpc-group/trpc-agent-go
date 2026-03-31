@@ -54,20 +54,6 @@ func (t Text) Render(vars Vars) string {
 	)
 }
 
-// RenderStrict renders the template and fails if any simple {name} placeholder
-// remains unresolved afterward.
-func (t Text) RenderStrict(vars Vars) (string, error) {
-	rendered := t.Render(vars)
-	missing := collectPlaceholderNames(rendered)
-	if len(missing) == 0 {
-		return rendered, nil
-	}
-	return "", fmt.Errorf(
-		"prompt: missing variables: %s",
-		strings.Join(formatPlaceholderNames(missing), ", "),
-	)
-}
-
 // ValidateRequired checks that the template contains all required placeholders.
 func (t Text) ValidateRequired(names ...string) error {
 	if len(names) == 0 {
