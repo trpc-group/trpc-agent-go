@@ -10,7 +10,11 @@
 
 package skillprofile
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestNormalize(t *testing.T) {
 	tests := map[string]string{
@@ -29,7 +33,8 @@ func TestNormalize(t *testing.T) {
 }
 
 func TestResolveFlags(t *testing.T) {
-	full := ResolveFlags(Full)
+	full, err := ResolveFlags(Full, nil)
+	require.NoError(t, err)
 	if !full.Load || !full.SelectDocs || !full.ListDocs || !full.Run ||
 		!full.Exec || !full.WriteStdin || !full.PollSession ||
 		!full.KillSession {
@@ -40,7 +45,8 @@ func TestResolveFlags(t *testing.T) {
 			full.RequiresExecutionTools(), full.RequiresExecSessionTools())
 	}
 
-	knowledgeOnly := ResolveFlags(KnowledgeOnly)
+	knowledgeOnly, err := ResolveFlags(KnowledgeOnly, nil)
+	require.NoError(t, err)
 	if !knowledgeOnly.Load || !knowledgeOnly.SelectDocs || !knowledgeOnly.ListDocs {
 		t.Fatalf("ResolveFlags(knowledge_only) = %+v, want knowledge tools enabled", knowledgeOnly)
 	}
@@ -53,4 +59,117 @@ func TestResolveFlags(t *testing.T) {
 			knowledgeOnly.RequiresExecutionTools(),
 			knowledgeOnly.RequiresExecSessionTools())
 	}
+}
+
+func TestResolveFlags_WithAllowedTools(t *testing.T) {
+	flags, err := ResolveFlags(
+		Full,
+		[]string{ToolLoad, ToolRun},
+	)
+	require.NoError(t, err)
+	require.Equal(t, Flags{
+		Load: true,
+		Run:  true,
+	}, flags)
+
+	loadOnly, err := ResolveFlags(
+		Full,
+		[]string{" skill_load "},
+	)
+	require.NoError(t, err)
+	require.Equal(t, Flags{Load: true}, loadOnly)
+
+	listOnly, err := ResolveFlags(
+		Full,
+		[]string{ToolListDocs},
+	)
+	require.NoError(t, err)
+	require.Equal(t, Flags{ListDocs: true}, listOnly)
+
+	selectOnly, err := ResolveFlags(
+		Full,
+		[]string{ToolSelectDocs},
+	)
+	require.NoError(t, err)
+	require.Equal(t, Flags{SelectDocs: true}, selectOnly)
+
+	interactive, err := ResolveFlags(
+		Full,
+		[]string{ToolRun, ToolExec, ToolPollSession, ToolKillSession},
+	)
+	require.NoError(t, err)
+	require.Equal(t, Flags{
+		Run:         true,
+		Exec:        true,
+		PollSession: true,
+		KillSession: true,
+	}, interactive)
+}
+
+func TestResolveFlags_WithAllowedTools_Invalid(t *testing.T) {
+	tests := []struct {
+		name         string
+		allowedTools []string
+		wantErr      string
+	}{
+		{
+			name:         "unknown tool",
+			allowedTools: []string{"skill_unknown"},
+			wantErr:      `unknown skill tool "skill_unknown"`,
+		},
+		{
+			name:         "exec requires run",
+			allowedTools: []string{ToolLoad, ToolExec},
+			wantErr:      ToolExec + " requires " + ToolRun,
+		},
+		{
+			name:         "stdin requires exec",
+			allowedTools: []string{ToolLoad, ToolRun, ToolWriteStdin},
+			wantErr:      ToolWriteStdin + " requires " + ToolExec,
+		},
+		{
+			name:         "poll requires exec",
+			allowedTools: []string{ToolLoad, ToolRun, ToolPollSession},
+			wantErr:      ToolPollSession + " requires " + ToolExec,
+		},
+		{
+			name:         "kill requires exec",
+			allowedTools: []string{ToolLoad, ToolRun, ToolKillSession},
+			wantErr:      ToolKillSession + " requires " + ToolExec,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ResolveFlags(Full, tt.allowedTools)
+			require.EqualError(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestFlagsHelpers(t *testing.T) {
+	flags := Flags{
+		Load:        true,
+		ListDocs:    true,
+		Run:         true,
+		Exec:        true,
+		WriteStdin:  true,
+		PollSession: true,
+		KillSession: true,
+	}
+	require.True(t, flags.Any())
+	require.True(t, flags.HasKnowledgeTools())
+	require.True(t, flags.HasDocHelpers())
+
+	nonInteractive := flags.WithoutInteractiveExecution()
+	require.Equal(t, Flags{
+		Load:     true,
+		ListDocs: true,
+		Run:      true,
+	}, nonInteractive)
+}
+
+func TestIsKnowledgeOnly(t *testing.T) {
+	require.True(t, IsKnowledgeOnly(" KNOWLEDGE_ONLY "))
+	require.False(t, IsKnowledgeOnly("full"))
+	require.False(t, IsKnowledgeOnly("unknown"))
 }
