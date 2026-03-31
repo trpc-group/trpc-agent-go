@@ -1349,6 +1349,13 @@ func TestRun_WithTelegram_BaseURLOverride(t *testing.T) {
 	dir := t.TempDir()
 	token := "token"
 
+	// gotMe is signalled once the mock server receives the Telegram
+	// getMe request, which means initialisation reached the point where
+	// the base-URL override was applied. We use it to cancel the context
+	// only *after* the handshake succeeds so that the test is reliable on
+	// slow CI runners.
+	gotMe := make(chan struct{}, 1)
+
 	srv := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
 		r *http.Request,
@@ -1359,6 +1366,10 @@ func TestRun_WithTelegram_BaseURLOverride(t *testing.T) {
 			_, _ = io.WriteString(w,
 				`{"ok":true,"result":{"id":1,"username":"bot"}}`,
 			)
+			select {
+			case gotMe <- struct{}{}:
+			default:
+			}
 		case "/bot" + token + "/getUpdates":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"ok":true,"result":[]}`)
@@ -1386,7 +1397,17 @@ func TestRun_WithTelegram_BaseURLOverride(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	time.AfterFunc(50*time.Millisecond, cancel)
+
+	// Cancel as soon as getMe succeeds, or bail after a generous timeout.
+	go func() {
+		select {
+		case <-gotMe:
+			// Give the server loop a moment to finish set-up.
+			time.Sleep(50 * time.Millisecond)
+		case <-time.After(5 * time.Second):
+		}
+		cancel()
+	}()
 
 	runErr := run(ctx, []string{
 		"-http-addr", "127.0.0.1:0",
@@ -1540,6 +1561,19 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
 				ToolSets: []pluginSpec{{Type: "x"}},
+			},
+			wantErr: true,
+		},
+		{
+			name:      "knowledges",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				KnowledgesConfig: map[string]*yaml.Node{
+					"docs": yamlNode(t, `
+vector_store:
+  type: inmemory
+`),
+				},
 			},
 			wantErr: true,
 		},
