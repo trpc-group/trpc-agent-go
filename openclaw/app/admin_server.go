@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
@@ -120,6 +122,7 @@ func buildAdminConfig(
 	browserManaged admin.BrowserManagedStatusProvider,
 	adminAddr string,
 	adminURL string,
+	skillsRepo *ocskills.Repository,
 ) admin.Config {
 	return admin.Config{
 		AppName:        opts.AppName,
@@ -143,6 +146,7 @@ func buildAdminConfig(
 		DebugDir:       debugDir,
 		Channels:       channelIDs(channels),
 		GatewayRoutes:  routes,
+		Skills:         buildAdminSkillsProvider(opts, stateDir, skillsRepo),
 		Browser: buildBrowserAdminConfig(
 			opts.ToolProviders,
 			browserManaged,
@@ -250,4 +254,37 @@ func adminModelName(
 		return ""
 	}
 	return strings.TrimSpace(opts.OpenAIModel)
+}
+
+type adminSkillsProvider struct {
+	mu           sync.RWMutex
+	configPath   string
+	repo         *ocskills.Repository
+	roots        []string
+	bundledRoot  string
+	configKeys   []string
+	allowBundled []string
+	skillConfigs map[string]ocskills.SkillConfig
+}
+
+func buildAdminSkillsProvider(
+	opts runOptions,
+	stateDir string,
+	repo *ocskills.Repository,
+) admin.SkillsStatusProvider {
+	cwd, _ := os.Getwd()
+	cfg := agentConfig{
+		SkillsRoot:      opts.SkillsRoot,
+		SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
+		StateDir:        stateDir,
+	}
+	return &adminSkillsProvider{
+		configPath:   strings.TrimSpace(opts.ConfigPath),
+		repo:         repo,
+		roots:        resolveSkillRoots(cwd, cfg),
+		bundledRoot:  resolveBundledSkillsRoot(cwd, stateDir),
+		configKeys:   resolveSkillConfigKeys(opts),
+		allowBundled: splitCSV(opts.SkillsAllowBundled),
+		skillConfigs: opts.SkillConfigs,
+	}
 }

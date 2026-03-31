@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -34,7 +35,10 @@ type SkillConfig struct {
 }
 
 type Repository struct {
-	base skill.Repository
+	mu sync.RWMutex
+
+	base  skill.Repository
+	roots []string
 
 	eligible map[string]struct{}
 	reasons  map[string]string
@@ -103,6 +107,7 @@ func NewRepository(roots []string, opts ...Option) (*Repository, error) {
 
 	r := &Repository{
 		base:     base,
+		roots:    append([]string(nil), roots...),
 		eligible: map[string]struct{}{},
 		reasons:  map[string]string{},
 		baseDirs: map[string]string{},
@@ -115,11 +120,14 @@ func NewRepository(roots []string, opts ...Option) (*Repository, error) {
 		}
 	}
 
-	r.index()
+	r.indexLocked()
 	return r, nil
 }
 
 func (r *Repository) Summaries() []skill.Summary {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	if r.base == nil {
 		return nil
 	}
@@ -135,6 +143,9 @@ func (r *Repository) Summaries() []skill.Summary {
 }
 
 func (r *Repository) Get(name string) (*skill.Skill, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	if strings.TrimSpace(name) == "" {
 		return nil, errors.New("empty skill name")
 	}
@@ -180,6 +191,9 @@ func (r *Repository) Get(name string) (*skill.Skill, error) {
 }
 
 func (r *Repository) Path(name string) (string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	if strings.TrimSpace(name) == "" {
 		return "", errors.New("empty skill name")
 	}
@@ -203,6 +217,9 @@ func (r *Repository) SkillRunEnv(
 	if r == nil || r.base == nil {
 		return nil, nil
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	name := strings.TrimSpace(skillName)
 	if name == "" {
 		return nil, nil
@@ -249,6 +266,8 @@ func (r *Repository) DependencySources(
 	if r == nil || r.base == nil {
 		return nil, nil
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
 	selected := normalizeSkillNames(names)
 	summaries := r.base.Summaries()
@@ -295,10 +314,66 @@ func (r *Repository) DependencySources(
 	return out, nil
 }
 
-func (r *Repository) index() {
+func (r *Repository) Refresh() error {
+	if r == nil {
+		return nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if refreshable, ok := r.base.(skill.RefreshableRepository); ok {
+		if err := refreshable.Refresh(); err != nil {
+			return err
+		}
+	}
+	r.indexLocked()
+	return nil
+}
+
+func (r *Repository) SetSkillEnabled(
+	configKey string,
+	enabled bool,
+) error {
+	if r == nil {
+		return fmt.Errorf("skills repository is not available")
+	}
+
+	key := strings.TrimSpace(configKey)
+	if key == "" {
+		return fmt.Errorf("skill config key is required")
+	}
+
+	value := enabled
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.skillConfigs == nil {
+		r.skillConfigs = map[string]SkillConfig{}
+	}
+	cfg := r.skillConfigs[key]
+	cfg.Enabled = &value
+	r.skillConfigs[key] = cfg
+	r.indexLocked()
+	return nil
+}
+
+func (r *Repository) indexLocked() {
 	if r.base == nil {
+		r.eligible = map[string]struct{}{}
+		r.reasons = map[string]string{}
+		r.baseDirs = map[string]string{}
+		r.metas = map[string]*openClawMetadata{}
+		r.skillKey = map[string]string{}
 		return
 	}
+
+	eligibleSet := map[string]struct{}{}
+	reasons := map[string]string{}
+	baseDirs := map[string]string{}
+	metas := map[string]*openClawMetadata{}
+	skillKeys := map[string]string{}
 
 	sums := r.base.Summaries()
 	names := make([]string, 0, len(sums))
@@ -336,16 +411,16 @@ func (r *Repository) index() {
 		if meta.SkillKey != "" {
 			skillKey = meta.SkillKey
 		}
-		r.skillKey[name] = skillKey
+		skillKeys[name] = skillKey
 
 		if ok {
 			m := meta
-			r.metas[name] = &m
+			metas[name] = &m
 		}
 
 		cfg, _ := r.resolveSkillConfig(skillKey, name)
 
-		eligible, reason := evaluateSkill(
+		isEligible, reason := evaluateSkill(
 			name,
 			meta,
 			ok,
@@ -354,8 +429,8 @@ func (r *Repository) index() {
 			r.isBundledSkill(baseDir),
 			r.allowBundled,
 		)
-		if !eligible {
-			r.reasons[name] = reason
+		if !isEligible {
+			reasons[name] = reason
 			if r.debug && reason != "" {
 				log.Infof(
 					"skip skill %q: %s",
@@ -366,9 +441,15 @@ func (r *Repository) index() {
 			continue
 		}
 
-		r.eligible[name] = struct{}{}
-		r.baseDirs[name] = baseDir
+		eligibleSet[name] = struct{}{}
+		baseDirs[name] = baseDir
 	}
+
+	r.eligible = eligibleSet
+	r.reasons = reasons
+	r.baseDirs = baseDirs
+	r.metas = metas
+	r.skillKey = skillKeys
 }
 
 func evaluateSkill(
@@ -765,3 +846,4 @@ func isBlockedSkillEnvKey(key string) bool {
 }
 
 var _ skill.Repository = (*Repository)(nil)
+var _ skill.RefreshableRepository = (*Repository)(nil)

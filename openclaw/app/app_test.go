@@ -1035,7 +1035,7 @@ func TestRun_PromptDirWithoutMarkdownExitCode(t *testing.T) {
 func TestNewAgent_EmptyInstructionUsesDefault(t *testing.T) {
 	t.Parallel()
 
-	agt, err := newAgent(&echoModel{name: "mock"}, agentConfig{
+	agt, _, err := newAgent(&echoModel{name: "mock"}, agentConfig{
 		AppName:      "demo",
 		SkillsRoot:   t.TempDir(),
 		StateDir:     t.TempDir(),
@@ -1052,7 +1052,7 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 	root := createAppTestSkill(t)
 	mdl := &captureRequestModel{}
 	guide := ""
-	agt, err := newAgent(mdl, agentConfig{
+	agt, _, err := newAgent(mdl, agentConfig{
 		AppName:            "demo",
 		SkillsRoot:         root,
 		StateDir:           t.TempDir(),
@@ -1080,7 +1080,7 @@ func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
 
 	root := createAppTestSkill(t)
 	mdl := &captureRequestModel{}
-	agt, err := newAgent(mdl, agentConfig{
+	agt, _, err := newAgent(mdl, agentConfig{
 		AppName:    "demo",
 		SkillsRoot: root,
 		StateDir:   t.TempDir(),
@@ -1128,7 +1128,7 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 
 	root := createAppTestSkill(t)
 	mdl := &captureRequestModel{}
-	agt, err := newAgent(mdl, agentConfig{
+	agt, _, err := newAgent(mdl, agentConfig{
 		AppName:    "demo",
 		SkillsRoot: root,
 		StateDir:   t.TempDir(),
@@ -1170,7 +1170,7 @@ func TestNewAgent_ToolProviderErrorIsReturned(t *testing.T) {
 	var node yaml.Node
 	require.NoError(t, yaml.Unmarshal([]byte("{}"), &node))
 
-	_, err := newAgent(&captureRequestModel{}, agentConfig{
+	_, _, err := newAgent(&captureRequestModel{}, agentConfig{
 		AppName:    "demo",
 		SkillsRoot: createAppTestSkill(t),
 		StateDir:   t.TempDir(),
@@ -1188,7 +1188,7 @@ func TestNewAgent_SkillsLoadModeTurnClearsLoadedState(t *testing.T) {
 
 	root := createAppTestSkill(t)
 	mdl := &captureRequestModel{}
-	agt, err := newAgent(mdl, agentConfig{
+	agt, _, err := newAgent(mdl, agentConfig{
 		AppName:        "demo",
 		SkillsRoot:     root,
 		StateDir:       t.TempDir(),
@@ -1212,7 +1212,7 @@ func TestNewAgent_SkillsToolResults_ConfigApplied(t *testing.T) {
 
 	root := createAppTestSkill(t)
 	mdl := &captureRequestModel{}
-	agt, err := newAgent(mdl, agentConfig{
+	agt, _, err := newAgent(mdl, agentConfig{
 		AppName:           "demo",
 		SkillsRoot:        root,
 		StateDir:          t.TempDir(),
