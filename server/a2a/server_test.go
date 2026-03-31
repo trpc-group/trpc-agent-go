@@ -1110,6 +1110,7 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 			[]*event.Event{},
 			sub,
 			nil,
+			nil,
 		)
 		assert.NoError(t, err)
 		assert.True(t, cont)
@@ -1125,6 +1126,7 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 			msg,
 			batch,
 			sub,
+			nil,
 			nil,
 		)
 		assert.NoError(t, err)
@@ -1142,6 +1144,7 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 			msg,
 			[]*event.Event{evt},
 			sub,
+			nil,
 			nil,
 		)
 		assert.Error(t, err)
@@ -1166,6 +1169,7 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 			[]*event.Event{evt},
 			sendErrSub,
 			nil,
+			nil,
 		)
 		assert.Error(t, err)
 	})
@@ -1179,7 +1183,12 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 				Object: model.ObjectTypeRunnerCompletion,
 				Done:   true,
 			},
+			StateDelta: map[string][]byte{
+				"last_response":              []byte(`"final"`),
+				graph.StateKeyLastResponseID: []byte(`"resp-final"`),
+			},
 		}
+		var finalMetadata map[string]any
 		cont, err := proc.processBatchStreamingEvents(
 			ctx,
 			taskID,
@@ -1187,9 +1196,16 @@ func TestMessageProcessor_ProcessBatchStreamingEvents(t *testing.T) {
 			[]*event.Event{final},
 			sub,
 			nil,
+			&finalMetadata,
 		)
 		assert.NoError(t, err)
 		assert.False(t, cont)
+		assert.Equal(t, "resp-final", finalMetadata[ia2a.MessageMetadataResponseIDKey])
+		rawStateDelta, ok := finalMetadata[ia2a.MessageMetadataStateDeltaKey]
+		if assert.True(t, ok, "expected state_delta metadata") {
+			decoded := ia2a.DecodeStateDeltaMetadata(rawStateDelta)
+			assert.Equal(t, []byte(`"final"`), decoded["last_response"])
+		}
 	})
 }
 
@@ -3655,6 +3671,7 @@ func TestMessageProcessor_ProcessBatchStreamingEvents_StructuredTaskError(
 		}},
 		subscriber,
 		&terminalTaskError,
+		nil,
 	)
 	assert.NoError(t, err)
 	assert.False(t, cont)
@@ -3811,6 +3828,7 @@ func TestMessageProcessor_ProcessBatchStreamingEvents_GraphNodeErrorNotTerminal(
 		}},
 		subscriber,
 		&terminalTaskError,
+		nil,
 	)
 	assert.NoError(t, err)
 	assert.True(t, cont)
@@ -3821,6 +3839,478 @@ func TestMessageProcessor_ProcessBatchStreamingEvents_GraphNodeErrorNotTerminal(
 		t.Fatalf("unexpected streaming result: %#v", streamEvent)
 	default:
 	}
+}
+
+func TestProcessAgentStreamingEvents_HidesRunnerCompletion_TaskArtifact(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event, 1)
+	events <- &event.Event{
+		Response: &model.Response{
+			ID:     "runner-completion-test",
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+		StateDelta: map[string][]byte{
+			"last_response":              []byte(`"final"`),
+			graph.StateKeyLastResponseID: []byte(`"resp-final"`),
+		},
+	}
+	close(events)
+
+	subscriber := &mockTaskSubscriber{
+		channel: make(chan protocol.StreamingMessageEvent, 4),
+	}
+	processor := createTestMessageProcessor()
+
+	processor.processAgentStreamingEvents(
+		ctx,
+		"task-1",
+		"user",
+		"session",
+		msg,
+		events,
+		subscriber,
+		&mockTaskHandler{},
+	)
+
+	var results []protocol.StreamingMessageResult
+	for {
+		select {
+		case streamEvent, ok := <-subscriber.channel:
+			if !ok {
+				goto doneArtifact
+			}
+			if streamEvent.Result != nil {
+				results = append(results, streamEvent.Result)
+			}
+		default:
+			goto doneArtifact
+		}
+	}
+
+doneArtifact:
+	if !assert.Len(t, results, 3) {
+		return
+	}
+
+	_, ok := results[0].(*protocol.TaskStatusUpdateEvent)
+	if !assert.True(t, ok, "expected submitted status event") {
+		return
+	}
+	finalArtifact, ok := results[1].(*protocol.TaskArtifactUpdateEvent)
+	if !assert.True(t, ok, "expected final artifact event") {
+		return
+	}
+	completed, ok := results[2].(*protocol.TaskStatusUpdateEvent)
+	if !assert.True(t, ok, "expected completed status event") {
+		return
+	}
+
+	if assert.NotNil(t, finalArtifact.LastChunk, "expected final artifact marker") {
+		assert.True(t, *finalArtifact.LastChunk)
+	}
+	assert.Empty(t, finalArtifact.Artifact.Parts)
+	assert.Equal(t, "resp-final", finalArtifact.Metadata[ia2a.MessageMetadataResponseIDKey])
+	assert.NotContains(t, finalArtifact.Metadata, ia2a.MessageMetadataObjectTypeKey)
+	rawStateDelta, ok := finalArtifact.Metadata[ia2a.MessageMetadataStateDeltaKey]
+	if assert.True(t, ok, "expected state_delta on final artifact") {
+		decoded := ia2a.DecodeStateDeltaMetadata(rawStateDelta)
+		assert.Equal(t, []byte(`"final"`), decoded["last_response"])
+	}
+	assert.Nil(t, completed.Metadata)
+}
+
+func TestProcessAgentStreamingEvents_HidesRunnerCompletion_MessageMode(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	events := make(chan *event.Event, 1)
+	events <- &event.Event{
+		Response: &model.Response{
+			ID:     "runner-completion-test",
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+		},
+		StateDelta: map[string][]byte{
+			"last_response":              []byte(`"final"`),
+			graph.StateKeyLastResponseID: []byte(`"resp-final"`),
+		},
+	}
+	close(events)
+
+	subscriber := &mockTaskSubscriber{
+		channel: make(chan protocol.StreamingMessageEvent, 4),
+	}
+	processor := createTestMessageProcessor()
+	processor.streamingEventType = StreamingEventTypeMessage
+
+	processor.processAgentStreamingEvents(
+		ctx,
+		"task-1",
+		"user",
+		"session",
+		msg,
+		events,
+		subscriber,
+		&mockTaskHandler{},
+	)
+
+	var results []protocol.StreamingMessageResult
+	for {
+		select {
+		case streamEvent, ok := <-subscriber.channel:
+			if !ok {
+				goto doneMessage
+			}
+			if streamEvent.Result != nil {
+				results = append(results, streamEvent.Result)
+			}
+		default:
+			goto doneMessage
+		}
+	}
+
+doneMessage:
+	if !assert.Len(t, results, 2) {
+		return
+	}
+
+	_, ok := results[0].(*protocol.TaskStatusUpdateEvent)
+	if !assert.True(t, ok, "expected submitted status event") {
+		return
+	}
+	completed, ok := results[1].(*protocol.TaskStatusUpdateEvent)
+	if !assert.True(t, ok, "expected completed status event") {
+		return
+	}
+
+	assert.Equal(t, protocol.TaskStateCompleted, completed.Status.State)
+	assert.Equal(t, "resp-final", completed.Metadata[ia2a.MessageMetadataResponseIDKey])
+	assert.NotContains(t, completed.Metadata, ia2a.MessageMetadataObjectTypeKey)
+	rawStateDelta, ok := completed.Metadata[ia2a.MessageMetadataStateDeltaKey]
+	if assert.True(t, ok, "expected state_delta on completed status") {
+		decoded := ia2a.DecodeStateDeltaMetadata(rawStateDelta)
+		assert.Equal(t, []byte(`"final"`), decoded["last_response"])
+	}
+}
+
+func TestProcessAgentStreamingEvents_PropagatesRunnerCompletionError_TaskArtifact(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	code := "A2A_500"
+	events := make(chan *event.Event, 1)
+	events <- &event.Event{
+		Response: &model.Response{
+			ID:     "runner-completion-test",
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+			Error: &model.ResponseError{
+				Type:    model.ErrorTypeFlowError,
+				Message: "runner failed",
+				Code:    &code,
+			},
+		},
+		StateDelta: map[string][]byte{
+			"last_response":              []byte(`"final"`),
+			graph.StateKeyLastResponseID: []byte(`"resp-final"`),
+		},
+	}
+	close(events)
+
+	subscriber := &mockTaskSubscriber{
+		channel: make(chan protocol.StreamingMessageEvent, 4),
+	}
+	processor := createTestMessageProcessor()
+
+	processor.processAgentStreamingEvents(
+		ctx,
+		"task-1",
+		"user",
+		"session",
+		msg,
+		events,
+		subscriber,
+		&mockTaskHandler{},
+	)
+
+	var results []protocol.StreamingMessageResult
+	for {
+		select {
+		case streamEvent, ok := <-subscriber.channel:
+			if !ok {
+				goto doneArtifactError
+			}
+			if streamEvent.Result != nil {
+				results = append(results, streamEvent.Result)
+			}
+		default:
+			goto doneArtifactError
+		}
+	}
+
+doneArtifactError:
+	if !assert.Len(t, results, 3) {
+		return
+	}
+
+	finalArtifact, ok := results[1].(*protocol.TaskArtifactUpdateEvent)
+	if !assert.True(t, ok, "expected final artifact event") {
+		return
+	}
+	assert.Equal(t, model.ObjectTypeError, finalArtifact.Metadata[ia2a.MessageMetadataObjectTypeKey])
+	assert.Equal(t, model.ErrorTypeFlowError, finalArtifact.Metadata[ia2a.MessageMetadataErrorTypeKey])
+	assert.Equal(t, "runner failed", finalArtifact.Metadata[ia2a.MessageMetadataErrorMessageKey])
+	assert.Equal(t, code, finalArtifact.Metadata[ia2a.MessageMetadataErrorCodeKey])
+	assert.Equal(t, "resp-final", finalArtifact.Metadata[ia2a.MessageMetadataResponseIDKey])
+	rawStateDelta, ok := finalArtifact.Metadata[ia2a.MessageMetadataStateDeltaKey]
+	if assert.True(t, ok, "expected state_delta on final artifact") {
+		decoded := ia2a.DecodeStateDeltaMetadata(rawStateDelta)
+		assert.Equal(t, []byte(`"final"`), decoded["last_response"])
+	}
+}
+
+func TestProcessAgentStreamingEvents_PropagatesRunnerCompletionError_MessageMode(t *testing.T) {
+	ctx := context.Background()
+	ctxID := "ctx"
+	msg := &protocol.Message{ContextID: &ctxID}
+	code := "A2A_500"
+	events := make(chan *event.Event, 1)
+	events <- &event.Event{
+		Response: &model.Response{
+			ID:     "runner-completion-test",
+			Object: model.ObjectTypeRunnerCompletion,
+			Done:   true,
+			Error: &model.ResponseError{
+				Type:    model.ErrorTypeFlowError,
+				Message: "runner failed",
+				Code:    &code,
+			},
+		},
+		StateDelta: map[string][]byte{
+			"last_response":              []byte(`"final"`),
+			graph.StateKeyLastResponseID: []byte(`"resp-final"`),
+		},
+	}
+	close(events)
+
+	subscriber := &mockTaskSubscriber{
+		channel: make(chan protocol.StreamingMessageEvent, 4),
+	}
+	processor := createTestMessageProcessor()
+	processor.streamingEventType = StreamingEventTypeMessage
+
+	processor.processAgentStreamingEvents(
+		ctx,
+		"task-1",
+		"user",
+		"session",
+		msg,
+		events,
+		subscriber,
+		&mockTaskHandler{},
+	)
+
+	var results []protocol.StreamingMessageResult
+	for {
+		select {
+		case streamEvent, ok := <-subscriber.channel:
+			if !ok {
+				goto doneMessageError
+			}
+			if streamEvent.Result != nil {
+				results = append(results, streamEvent.Result)
+			}
+		default:
+			goto doneMessageError
+		}
+	}
+
+doneMessageError:
+	if !assert.Len(t, results, 2) {
+		return
+	}
+
+	completed, ok := results[1].(*protocol.TaskStatusUpdateEvent)
+	if !assert.True(t, ok, "expected completed status event") {
+		return
+	}
+
+	assert.Equal(t, model.ObjectTypeError, completed.Metadata[ia2a.MessageMetadataObjectTypeKey])
+	assert.Equal(t, model.ErrorTypeFlowError, completed.Metadata[ia2a.MessageMetadataErrorTypeKey])
+	assert.Equal(t, "runner failed", completed.Metadata[ia2a.MessageMetadataErrorMessageKey])
+	assert.Equal(t, code, completed.Metadata[ia2a.MessageMetadataErrorCodeKey])
+	assert.Equal(t, "resp-final", completed.Metadata[ia2a.MessageMetadataResponseIDKey])
+	rawStateDelta, ok := completed.Metadata[ia2a.MessageMetadataStateDeltaKey]
+	if assert.True(t, ok, "expected state_delta on completed status") {
+		decoded := ia2a.DecodeStateDeltaMetadata(rawStateDelta)
+		assert.Equal(t, []byte(`"final"`), decoded["last_response"])
+	}
+}
+
+func TestBuildFinalStreamingMetadata(t *testing.T) {
+	t.Run("nil event", func(t *testing.T) {
+		assert.Nil(t, buildFinalStreamingMetadata(nil))
+	})
+
+	t.Run("empty event no metadata", func(t *testing.T) {
+		evt := &event.Event{}
+		assert.Nil(t, buildFinalStreamingMetadata(evt))
+	})
+
+	t.Run("only response id from state delta", func(t *testing.T) {
+		evt := &event.Event{
+			StateDelta: map[string][]byte{
+				graph.StateKeyLastResponseID: []byte(`"chatcmpl-abc"`),
+			},
+		}
+		meta := buildFinalStreamingMetadata(evt)
+		assert.Equal(t, "chatcmpl-abc", meta[ia2a.MessageMetadataResponseIDKey])
+		_, hasStateDelta := meta[ia2a.MessageMetadataStateDeltaKey]
+		assert.True(t, hasStateDelta, "state_delta should be encoded")
+	})
+
+	t.Run("only error no state delta", func(t *testing.T) {
+		evt := &event.Event{
+			Response: &model.Response{
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "boom",
+				},
+			},
+		}
+		meta := buildFinalStreamingMetadata(evt)
+		assert.Equal(t, model.ObjectTypeError, meta[ia2a.MessageMetadataObjectTypeKey])
+		assert.Equal(t, "boom", meta[ia2a.MessageMetadataErrorMessageKey])
+	})
+
+	t.Run("only state delta no response id key", func(t *testing.T) {
+		evt := &event.Event{
+			StateDelta: map[string][]byte{
+				"custom_key": []byte(`"val"`),
+			},
+		}
+		meta := buildFinalStreamingMetadata(evt)
+		assert.Nil(t, meta[ia2a.MessageMetadataResponseIDKey])
+		rawSD, ok := meta[ia2a.MessageMetadataStateDeltaKey]
+		assert.True(t, ok)
+		decoded := ia2a.DecodeStateDeltaMetadata(rawSD)
+		assert.Equal(t, []byte(`"val"`), decoded["custom_key"])
+	})
+}
+
+func TestFinalStreamingResponseID(t *testing.T) {
+	t.Run("nil event", func(t *testing.T) {
+		assert.Empty(t, finalStreamingResponseID(nil))
+	})
+
+	t.Run("empty state delta", func(t *testing.T) {
+		evt := &event.Event{}
+		assert.Empty(t, finalStreamingResponseID(evt))
+	})
+
+	t.Run("missing key", func(t *testing.T) {
+		evt := &event.Event{
+			StateDelta: map[string][]byte{
+				"other": []byte(`"x"`),
+			},
+		}
+		assert.Empty(t, finalStreamingResponseID(evt))
+	})
+
+	t.Run("empty value", func(t *testing.T) {
+		evt := &event.Event{
+			StateDelta: map[string][]byte{
+				graph.StateKeyLastResponseID: nil,
+			},
+		}
+		assert.Empty(t, finalStreamingResponseID(evt))
+	})
+
+	t.Run("invalid json", func(t *testing.T) {
+		evt := &event.Event{
+			StateDelta: map[string][]byte{
+				graph.StateKeyLastResponseID: []byte("{bad"),
+			},
+		}
+		assert.Empty(t, finalStreamingResponseID(evt))
+	})
+
+	t.Run("valid json", func(t *testing.T) {
+		evt := &event.Event{
+			StateDelta: map[string][]byte{
+				graph.StateKeyLastResponseID: []byte(`"chatcmpl-123"`),
+			},
+		}
+		assert.Equal(t, "chatcmpl-123", finalStreamingResponseID(evt))
+	})
+}
+
+func TestMergeRunnerCompletionStateDeltaIntoLastMessage(t *testing.T) {
+	t.Run("empty messages", func(t *testing.T) {
+		assert.False(t, mergeRunnerCompletionStateDeltaIntoLastMessage(
+			nil, map[string][]byte{"k": []byte("v")},
+		))
+	})
+
+	t.Run("empty state delta", func(t *testing.T) {
+		msgs := []protocol.Message{{}}
+		assert.False(t, mergeRunnerCompletionStateDeltaIntoLastMessage(msgs, nil))
+	})
+
+	t.Run("nil metadata on last message", func(t *testing.T) {
+		msgs := []protocol.Message{{}}
+		ok := mergeRunnerCompletionStateDeltaIntoLastMessage(
+			msgs,
+			map[string][]byte{"k": []byte(`"v"`)},
+		)
+		assert.True(t, ok)
+		assert.NotNil(t, msgs[0].Metadata)
+		rawSD := msgs[0].Metadata[ia2a.MessageMetadataStateDeltaKey]
+		decoded := ia2a.DecodeStateDeltaMetadata(rawSD)
+		assert.Equal(t, []byte(`"v"`), decoded["k"])
+	})
+
+	t.Run("merge with existing state delta", func(t *testing.T) {
+		existing := EncodeStateDeltaMetadata(map[string][]byte{
+			"old": []byte(`"old_val"`),
+		})
+		msgs := []protocol.Message{{
+			Metadata: map[string]any{
+				ia2a.MessageMetadataStateDeltaKey: existing,
+			},
+		}}
+		ok := mergeRunnerCompletionStateDeltaIntoLastMessage(
+			msgs,
+			map[string][]byte{"new": []byte(`"new_val"`)},
+		)
+		assert.True(t, ok)
+		rawSD := msgs[0].Metadata[ia2a.MessageMetadataStateDeltaKey]
+		decoded := ia2a.DecodeStateDeltaMetadata(rawSD)
+		assert.Equal(t, []byte(`"old_val"`), decoded["old"])
+		assert.Equal(t, []byte(`"new_val"`), decoded["new"])
+	})
+
+	t.Run("nil value in state delta", func(t *testing.T) {
+		msgs := []protocol.Message{{}}
+		ok := mergeRunnerCompletionStateDeltaIntoLastMessage(
+			msgs,
+			map[string][]byte{"k": nil},
+		)
+		assert.True(t, ok)
+	})
+}
+
+func TestCloneStateDeltaBytes(t *testing.T) {
+	assert.Nil(t, cloneStateDeltaBytes(nil))
+
+	original := []byte("hello")
+	cloned := cloneStateDeltaBytes(original)
+	assert.Equal(t, original, cloned)
+	cloned[0] = 'H'
+	assert.NotEqual(t, original, cloned, "clone must not share backing array")
 }
 
 // TestMessageProcessor_ProcessMessage_NoPartsCollected tests handling when no parts are collected

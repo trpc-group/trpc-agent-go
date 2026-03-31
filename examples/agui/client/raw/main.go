@@ -157,14 +157,14 @@ func formatEvent(evt events.Event) []string {
 	case *events.RunErrorEvent:
 		return []string{fmt.Sprintf("Agent> %s: %s", label, e.Message)}
 	case *events.TextMessageStartEvent:
-		return []string{fmt.Sprintf("Agent> %s", label)}
+		return []string{fmt.Sprintf("Agent> %s message_id=%s", label, e.MessageID)}
 	case *events.TextMessageContentEvent:
 		if strings.TrimSpace(e.Delta) == "" {
 			return nil
 		}
-		return []string{fmt.Sprintf("Agent> %s %s", label, e.Delta)}
+		return []string{fmt.Sprintf("Agent> %s message_id=%s %s", label, e.MessageID, e.Delta)}
 	case *events.TextMessageEndEvent:
-		return []string{fmt.Sprintf("Agent> %s", label)}
+		return []string{fmt.Sprintf("Agent> %s message_id=%s", label, e.MessageID)}
 	case *events.ToolCallStartEvent:
 		return []string{fmt.Sprintf("Agent> %s tool call '%s' started, id: %s", label, e.ToolCallName, e.ToolCallID)}
 	case *events.ToolCallArgsEvent:
