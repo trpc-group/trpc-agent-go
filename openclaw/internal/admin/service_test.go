@@ -11,12 +11,14 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
@@ -38,8 +41,64 @@ type stubBMP struct {
 	status BrowserManagedService
 }
 
+type stubSkillsProvider struct {
+	report        ocskills.StatusReport
+	err           error
+	statusCount   int
+	configPath    string
+	refreshable   bool
+	refreshCount  int
+	refreshErr    error
+	lastConfigKey string
+	lastEnabled   bool
+	setCount      int
+	setErr        error
+}
+
 func (p stubBMP) BrowserManagedStatus() BrowserManagedService {
 	return p.status
+}
+
+func (p *stubSkillsProvider) SkillsStatus() (ocskills.StatusReport, error) {
+	if p != nil {
+		p.statusCount++
+	}
+	return p.report, p.err
+}
+
+func (p *stubSkillsProvider) SkillsConfigPath() string {
+	if p == nil {
+		return ""
+	}
+	return p.configPath
+}
+
+func (p *stubSkillsProvider) SkillsRefreshable() bool {
+	if p == nil {
+		return false
+	}
+	return p.refreshable
+}
+
+func (p *stubSkillsProvider) RefreshSkills() error {
+	if p == nil {
+		return nil
+	}
+	p.refreshCount++
+	return p.refreshErr
+}
+
+func (p *stubSkillsProvider) SetSkillEnabled(
+	configKey string,
+	enabled bool,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.setCount++
+	p.lastConfigKey = configKey
+	p.lastEnabled = enabled
+	return p.setErr
 }
 
 func (r *stubRunner) Run(
@@ -232,10 +291,514 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
-	require.Contains(t, body, "OpenClaw Admin")
-	require.Contains(t, body, "cpu report")
+	require.Contains(t, body, "TRPC-CLAW admin")
+	require.Contains(t, body, "TRPC-CLAW")
+	require.Contains(t, body, "trpc-claw")
+	require.Contains(t, body, "/skills")
 	require.Contains(t, body, "127.0.0.1:8080")
 	require.Contains(t, body, "telegram")
+}
+
+func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		AppName: "openclaw",
+		Skills: &stubSkillsProvider{
+			configPath:  "/tmp/openclaw.yaml",
+			refreshable: true,
+			report: ocskills.StatusReport{
+				Skills: []ocskills.StatusEntry{{
+					Name:        "weather-probe",
+					Description: "Probe weather prerequisites",
+					SkillKey:    "weather-api",
+					ConfigKey:   "weather-api",
+					FilePath:    "/tmp/skills/weather-probe",
+					Source:      "bundled",
+					Reason:      "missing env: OPENAI_API_KEY",
+					PrimaryEnv:  "OPENAI_API_KEY",
+					Bundled:     true,
+				}},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeSkillsPage, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "Skills Inventory")
+	require.Contains(t, body, "weather-probe")
+	require.Contains(t, body, "/api/skills/refresh")
+	require.Contains(t, body, "/api/skills/toggle")
+	require.Contains(t, body, "/overview")
+	require.Contains(t, body, "/skills")
+	require.Contains(t, body, "/tmp/openclaw.yaml")
+	require.Contains(t, body, "OPENAI_API_KEY")
+}
+
+func TestServiceRenderPageScopesSnapshotToActiveView(t *testing.T) {
+	t.Parallel()
+
+	var browserProfilesHits int32
+	browserServer := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		atomic.AddInt32(&browserProfilesHits, 1)
+		require.Equal(t, "/profiles", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte(`{"profiles":[]}`))
+		require.NoError(t, err)
+	}))
+	t.Cleanup(browserServer.Close)
+
+	provider := &stubSkillsProvider{
+		report: ocskills.StatusReport{
+			Skills: []ocskills.StatusEntry{{
+				Name:      "weather-probe",
+				ConfigKey: "weather-probe",
+				Eligible:  true,
+			}},
+		},
+	}
+	svc := New(
+		Config{
+			Skills: provider,
+			Browser: BrowserConfig{
+				Providers: []BrowserProvider{{
+					Name:          "browser",
+					HostServerURL: browserServer.URL,
+				}},
+			},
+		},
+		WithBrowserHTTPClient(browserServer.Client()),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, routeSkillsPage, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 1, provider.statusCount)
+	require.Zero(t, atomic.LoadInt32(&browserProfilesHits))
+
+	req = httptest.NewRequest(http.MethodGet, routeBrowser, nil)
+	rr = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 1, provider.statusCount)
+	require.NotZero(t, atomic.LoadInt32(&browserProfilesHits))
+}
+
+func TestServiceHandlerRendersAdminPages(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+	handler := svc.Handler()
+
+	cases := []struct {
+		name    string
+		path    string
+		title   string
+		summary string
+	}{
+		{
+			name:    "automation",
+			path:    routeAutomation,
+			title:   "Automation",
+			summary: "Inspect scheduled jobs, trigger one-off runs, and clear automation state.",
+		},
+		{
+			name:    "sessions",
+			path:    routeSessions,
+			title:   "Sessions",
+			summary: "Review exec sessions, upload sessions, and recently persisted files.",
+		},
+		{
+			name:    "debug",
+			path:    routeDebug,
+			title:   "Debug",
+			summary: "Browse debug session indexes, recent traces, and Langfuse readiness.",
+		},
+		{
+			name:    "browser",
+			path:    routeBrowser,
+			title:   "Browser",
+			summary: "Inspect browser providers, managed browser-server state, nodes, and profiles.",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			require.Equal(t, http.StatusOK, rr.Code)
+			require.Contains(t, rr.Body.String(), tc.title)
+			require.Contains(t, rr.Body.String(), tc.summary)
+		})
+	}
+}
+
+func TestServiceRenderPageRejectsNonGET(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+	req := httptest.NewRequest(http.MethodPost, routeOverview, nil)
+	rr := httptest.NewRecorder()
+
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	require.Contains(t, rr.Body.String(), "method not allowed")
+}
+
+func TestServiceSkillsStatusErrorRetainsRecoveryFields(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Skills: &stubSkillsProvider{
+			configPath:  "/tmp/openclaw.yaml",
+			refreshable: true,
+			err:         errors.New("skills status boom"),
+		},
+	})
+
+	status := svc.skillsStatus()
+	require.True(t, status.Enabled)
+	require.True(t, status.Writable)
+	require.True(t, status.Refreshable)
+	require.Equal(t, "/tmp/openclaw.yaml", status.ConfigPath)
+	require.Equal(t, "skills status boom", status.Error)
+}
+
+func TestServiceHandlerSuppressesSkillsEmptyStateOnError(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Skills: &stubSkillsProvider{
+			configPath:  "/tmp/openclaw.yaml",
+			refreshable: true,
+			err:         errors.New("skills status boom"),
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeSkillsPage, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "skills status boom")
+	require.NotContains(t, body, "No skills discovered.")
+}
+
+func TestServiceSkillsJSONEndpoint(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Skills: &stubSkillsProvider{
+			report: ocskills.StatusReport{
+				Skills: []ocskills.StatusEntry{{
+					Name:        "weather-probe",
+					Description: "Probe weather prerequisites",
+					Bundled:     true,
+					Eligible:    true,
+				}},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeSkillsJSON, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"total_count": 1`)
+	require.Contains(t, rr.Body.String(), `"label": "Bundled Skills"`)
+	require.Contains(t, rr.Body.String(), `"name": "weather-probe"`)
+}
+
+func TestServiceSkillsJSONEndpointRejectsMethod(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+	req := httptest.NewRequest(http.MethodPost, routeSkillsJSON, nil)
+	rr := httptest.NewRecorder()
+
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	require.Contains(t, rr.Body.String(), "method not allowed")
+}
+
+func TestServiceToggleSkillEndpoint(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubSkillsProvider{
+		configPath:  "/tmp/openclaw.yaml",
+		refreshable: true,
+	}
+	svc := New(Config{Skills: provider})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeSkillToggle,
+		strings.NewReader(
+			"skill_key=weather-api&skill_name=weather-probe&enabled=false&return_to=skill-card-weather-api&return_path=%2Fskills",
+		),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Equal(t, "weather-api", provider.lastConfigKey)
+	require.False(t, provider.lastEnabled)
+
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(t, routeSkillsPage, loc.Path)
+	require.Equal(t, "skill-card-weather-api", loc.Fragment)
+	require.Contains(
+		t,
+		loc.Query().Get(queryNotice),
+		"Changes apply on the next turn.",
+	)
+}
+
+func TestServiceRefreshSkillsEndpoint(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubSkillsProvider{refreshable: true}
+	svc := New(Config{Skills: provider})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeSkillsRefresh,
+		strings.NewReader("return_to=skills-admin&return_path=%2Fskills"),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Equal(t, 1, provider.refreshCount)
+
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(t, routeSkillsPage, loc.Path)
+	require.Equal(t, "skills-admin", loc.Fragment)
+	require.Contains(
+		t,
+		loc.Query().Get(queryNotice),
+		"Refreshed skills.",
+	)
+}
+
+func TestServiceRefreshSkillsEndpointRequiresLiveRepo(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubSkillsProvider{}
+	svc := New(Config{Skills: provider})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeSkillsRefresh,
+		strings.NewReader("return_to=skills-admin&return_path=%2Fskills"),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(t, routeSkillsPage, loc.Path)
+	require.Equal(t, "skills-admin", loc.Fragment)
+	require.Zero(t, provider.refreshCount)
+	require.Equal(
+		t,
+		"live skills repository is not available",
+		loc.Query().Get(queryError),
+	)
+}
+
+func TestServiceRefreshSkillsEndpointReportsProviderError(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubSkillsProvider{
+		refreshable: true,
+		refreshErr:  errors.New("refresh boom"),
+	}
+	svc := New(Config{Skills: provider})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeSkillsRefresh,
+		strings.NewReader("return_to=skills-admin&return_path=%2Fskills"),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Equal(t, 1, provider.refreshCount)
+
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(t, routeSkillsPage, loc.Path)
+	require.Equal(t, "skills-admin", loc.Fragment)
+	require.Equal(t, "refresh boom", loc.Query().Get(queryError))
+}
+
+func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
+	t.Parallel()
+
+	type pageCase struct {
+		path    string
+		view    adminView
+		title   string
+		summary string
+	}
+
+	cases := []pageCase{
+		{
+			path:    routeOverview,
+			view:    viewOverview,
+			title:   "Overview",
+			summary: "Runtime summary, gateway surfaces, and entry points into the rest of the admin.",
+		},
+		{
+			path:    routeSkillsPage,
+			view:    viewSkills,
+			title:   "Skills",
+			summary: "Discover installed skills, refresh folders from disk, and manage config-backed enablement.",
+		},
+		{
+			path:    routeAutomation,
+			view:    viewAutomation,
+			title:   "Automation",
+			summary: "Inspect scheduled jobs, trigger one-off runs, and clear automation state.",
+		},
+		{
+			path:    routeSessions,
+			view:    viewSessions,
+			title:   "Sessions",
+			summary: "Review exec sessions, upload sessions, and recently persisted files.",
+		},
+		{
+			path:    routeDebug,
+			view:    viewDebug,
+			title:   "Debug",
+			summary: "Browse debug session indexes, recent traces, and Langfuse readiness.",
+		},
+		{
+			path:    routeBrowser,
+			view:    viewBrowser,
+			title:   "Browser",
+			summary: "Inspect browser providers, managed browser-server state, nodes, and profiles.",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.title, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.title, pageTitle(tc.view))
+			require.Equal(t, tc.summary, pageSummary(tc.view))
+			require.Equal(t, tc.path, navPath(tc.path))
+			require.Equal(t, tc.view, navViewForPath(tc.path))
+		})
+	}
+
+	require.Equal(t, routeOverview, navPath(routeIndex))
+	require.Equal(t, viewOverview, navViewForPath(routeIndex))
+	require.Empty(t, navPath(" /unknown "))
+	require.Equal(t, viewOverview, navViewForPath(" /unknown "))
+}
+
+func TestSkillInstallViewsFromStatus_TrimsValues(t *testing.T) {
+	t.Parallel()
+
+	out := skillInstallViewsFromStatus([]ocskills.StatusInstallOption{
+		{
+			ID:    " brew-jq ",
+			Kind:  " brew ",
+			Label: " brew install jq ",
+			Bins:  []string{" jq ", " yq "},
+		},
+		{
+			ID:    " custom ",
+			Kind:  " custom ",
+			Label: " custom installer ",
+		},
+	})
+	require.Equal(
+		t,
+		[]skillInstallView{
+			{
+				ID:    "brew-jq",
+				Kind:  "brew",
+				Label: "brew install jq",
+				Bins:  []string{" jq ", " yq "},
+			},
+			{
+				ID:    "custom",
+				Kind:  "custom",
+				Label: "custom installer",
+			},
+		},
+		out,
+	)
+	require.Nil(t, skillInstallViewsFromStatus(nil))
+}
+
+func TestServiceToggleSkillEndpointRequiresConfigPath(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubSkillsProvider{}
+	svc := New(Config{Skills: provider})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeSkillToggle,
+		strings.NewReader("skill_key=weather-api&enabled=true"),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Zero(t, provider.setCount)
+	loc, err := url.Parse(rr.Header().Get("Location"))
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"skill toggles require a config-backed runtime",
+		loc.Query().Get(queryError),
+	)
 }
 
 func TestServiceJobEndpoints(t *testing.T) {
@@ -1218,7 +1781,7 @@ func TestHandleIndex_RendersUploadPreviews(t *testing.T) {
 		AdminURL:   "http://127.0.0.1:19789",
 	})
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, routeIndex, nil)
+	req := httptest.NewRequest(http.MethodGet, routeSessions, nil)
 
 	svc.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
