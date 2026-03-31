@@ -18,13 +18,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+const backgroundPIDMarker = "__hostexec_bg_pid:"
 
 func TestNewToolSet_Foreground(t *testing.T) {
 	if _, _, err := shellSpec(); err != nil {
@@ -321,6 +325,147 @@ func TestNewToolSet_CloseKillsSessions(t *testing.T) {
 	require.Empty(t, toolMgr.sessions)
 }
 
+func TestNewToolSet_KillSessionKillsBackgroundChild(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group cleanup is tested on unix")
+	}
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet(WithJobTTL(10 * time.Second))
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, _, killTool, mgr := toolSetTools(t, set)
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command":    backgroundChildCommand(true),
+			"background": true,
+		}),
+	)
+	require.NoError(t, err)
+
+	res := out.(map[string]any)
+	sessionID := res["session_id"].(string)
+	require.NotEmpty(t, sessionID)
+
+	output := outputField(res)
+	if !strings.Contains(output, backgroundPIDMarker) {
+		output += waitForOutputContains(
+			t,
+			mgr,
+			sessionID,
+			backgroundPIDMarker,
+		)
+	}
+	bgPID := parseBackgroundPID(t, output)
+	require.True(t, processExists(bgPID))
+
+	_, err = killTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"session_id": sessionID,
+		}),
+	)
+	require.NoError(t, err)
+
+	_ = pollUntilExited(t, mgr, sessionID)
+	waitForProcessExit(t, bgPID, 3*time.Second)
+}
+
+func TestNewToolSet_ExitedShellCleansBackgroundChild(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group cleanup is tested on unix")
+	}
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet(WithJobTTL(10 * time.Second))
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, _, _, mgr := toolSetTools(t, set)
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command":    backgroundChildCommand(false),
+			"background": true,
+		}),
+	)
+	require.NoError(t, err)
+
+	res := out.(map[string]any)
+	sessionID := res["session_id"].(string)
+	require.NotEmpty(t, sessionID)
+
+	output := outputField(res)
+	if !strings.Contains(output, backgroundPIDMarker) {
+		output += waitForOutputContains(
+			t,
+			mgr,
+			sessionID,
+			backgroundPIDMarker,
+		)
+	}
+	bgPID := parseBackgroundPID(t, output)
+	require.True(t, processExists(bgPID))
+
+	_ = pollUntilExited(t, mgr, sessionID)
+	waitForProcessExit(t, bgPID, 3*time.Second)
+}
+
+func TestNewToolSet_TimeoutKillsBackgroundChild(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group cleanup is tested on unix")
+	}
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet(WithJobTTL(10 * time.Second))
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, _, _, mgr := toolSetTools(t, set)
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command":     backgroundChildCommand(true),
+			"background":  true,
+			"timeout_sec": 1,
+		}),
+	)
+	require.NoError(t, err)
+
+	res := out.(map[string]any)
+	sessionID := res["session_id"].(string)
+	require.NotEmpty(t, sessionID)
+
+	output := outputField(res)
+	if !strings.Contains(output, backgroundPIDMarker) {
+		output += waitForOutputContains(
+			t,
+			mgr,
+			sessionID,
+			backgroundPIDMarker,
+		)
+	}
+	bgPID := parseBackgroundPID(t, output)
+	require.True(t, processExists(bgPID))
+
+	_ = pollUntilExited(t, mgr, sessionID)
+	waitForProcessExit(t, bgPID, 3*time.Second)
+}
+
 func TestNewToolSet_PTYForeground(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("pty is not supported on windows")
@@ -347,6 +492,59 @@ func TestNewToolSet_PTYForeground(t *testing.T) {
 	res := out.(map[string]any)
 	require.Equal(t, programStatusExited, res["status"])
 	require.Contains(t, outputField(res), "hi")
+}
+
+func TestNewToolSet_PTYKillSessionKillsBackgroundChild(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pty is not supported on windows")
+	}
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet(WithJobTTL(10 * time.Second))
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, _, killTool, mgr := toolSetTools(t, set)
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command":    backgroundChildCommand(true),
+			"background": true,
+			"tty":        true,
+		}),
+	)
+	require.NoError(t, err)
+
+	res := out.(map[string]any)
+	sessionID := res["session_id"].(string)
+	require.NotEmpty(t, sessionID)
+
+	output := outputField(res)
+	if !strings.Contains(output, backgroundPIDMarker) {
+		output += waitForOutputContains(
+			t,
+			mgr,
+			sessionID,
+			backgroundPIDMarker,
+		)
+	}
+	bgPID := parseBackgroundPID(t, output)
+	require.True(t, processExists(bgPID))
+
+	_, err = killTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"session_id": sessionID,
+		}),
+	)
+	require.NoError(t, err)
+
+	_ = pollUntilExited(t, mgr, sessionID)
+	waitForProcessExit(t, bgPID, 3*time.Second)
 }
 
 func TestResolveWorkdir(t *testing.T) {
@@ -911,4 +1109,61 @@ func mustJSON(t *testing.T, value any) []byte {
 func outputField(out map[string]any) string {
 	value, _ := out["output"].(string)
 	return strings.TrimSpace(value)
+}
+
+func backgroundChildCommand(wait bool) string {
+	command := "sleep 1000 & bg=$!; echo " +
+		backgroundPIDMarker + "$bg"
+	if wait {
+		return command + "; wait"
+	}
+	return command
+}
+
+func parseBackgroundPID(t *testing.T, output string) int {
+	t.Helper()
+
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		index := strings.Index(line, backgroundPIDMarker)
+		if index < 0 {
+			continue
+		}
+		pidText := strings.TrimSpace(
+			line[index+len(backgroundPIDMarker):],
+		)
+		pid, err := strconv.Atoi(pidText)
+		require.NoError(t, err)
+		return pid
+	}
+
+	t.Fatalf("did not find background pid marker in %q", output)
+	return 0
+}
+
+func processExists(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func waitForProcessExit(
+	t *testing.T,
+	pid int,
+	timeout time.Duration,
+) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !processExists(pid) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	t.Fatalf("background child pid %d is still alive", pid)
 }
