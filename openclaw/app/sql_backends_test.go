@@ -12,6 +12,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"sync"
 	"testing"
 
 	clickhouseDrv "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -29,6 +30,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
+
+var postgresBuilderTestMu sync.Mutex
 
 func TestNewMySQLSessionBackend_MissingConfigFails(t *testing.T) {
 	t.Parallel()
@@ -470,6 +473,7 @@ func stubMySQLBuilder(t *testing.T) (storagemysql.Client, func()) {
 func stubPostgresBuilder(t *testing.T) (storagepostgres.Client, func()) {
 	t.Helper()
 
+	postgresBuilderTestMu.Lock()
 	original := storagepostgres.GetClientBuilder()
 	storagepostgres.SetClientBuilder(func(
 		_ context.Context,
@@ -479,6 +483,7 @@ func stubPostgresBuilder(t *testing.T) (storagepostgres.Client, func()) {
 	})
 	return stubPostgresClient{}, func() {
 		storagepostgres.SetClientBuilder(original)
+		postgresBuilderTestMu.Unlock()
 	}
 }
 
