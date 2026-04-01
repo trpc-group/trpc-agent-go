@@ -24,6 +24,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
 
@@ -164,6 +165,7 @@ type runOptions struct {
 	OpenAIModel        string
 	OpenAIVariant      string
 	OpenAIBaseURL      string
+	GenerationConfig   *model.GenerationConfig
 	ModelConfig        *yaml.Node
 	KnowledgesConfig   map[string]*yaml.Node
 	SkillsRoot         string
@@ -959,11 +961,25 @@ type ralphLoopVerifyConfig struct {
 }
 
 type modelConfig struct {
-	Mode          *string      `yaml:"mode,omitempty"`
-	Name          *string      `yaml:"name,omitempty"`
-	BaseURL       *string      `yaml:"base_url,omitempty"`
-	OpenAIVariant *string      `yaml:"openai_variant,omitempty"`
-	Config        *rawYAMLNode `yaml:"config,omitempty"`
+	Mode             *string               `yaml:"mode,omitempty"`
+	Name             *string               `yaml:"name,omitempty"`
+	BaseURL          *string               `yaml:"base_url,omitempty"`
+	OpenAIVariant    *string               `yaml:"openai_variant,omitempty"`
+	GenerationConfig *generationConfigYAML `yaml:"generation_config,omitempty"`
+	Config           *rawYAMLNode          `yaml:"config,omitempty"`
+}
+
+type generationConfigYAML struct {
+	MaxTokens        *int     `yaml:"max_tokens,omitempty"`
+	Temperature      *float64 `yaml:"temperature,omitempty"`
+	TopP             *float64 `yaml:"top_p,omitempty"`
+	Stream           *bool    `yaml:"stream,omitempty"`
+	Stop             []string `yaml:"stop,omitempty"`
+	PresencePenalty  *float64 `yaml:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64 `yaml:"frequency_penalty,omitempty"`
+	ReasoningEffort  *string  `yaml:"reasoning_effort,omitempty"`
+	ThinkingEnabled  *bool    `yaml:"thinking_enabled,omitempty"`
+	ThinkingTokens   *int     `yaml:"thinking_tokens,omitempty"`
 }
 
 type gatewayConfig struct {
@@ -1372,6 +1388,11 @@ func (cfg *fileConfig) apply(
 		}
 		if cfg.Model.Config != nil {
 			opts.ModelConfig = cfg.Model.Config.Node
+		}
+		if cfg.Model.GenerationConfig != nil {
+			opts.GenerationConfig = resolveGenerationConfigYAML(
+				cfg.Model.GenerationConfig,
+			)
 		}
 	}
 	if cfg.Knowledges != nil {
@@ -1981,4 +2002,36 @@ func firstStringPtr(primary, fallback *string) *string {
 		return primary
 	}
 	return fallback
+}
+
+func resolveGenerationConfigYAML(
+	cfg *generationConfigYAML,
+) *model.GenerationConfig {
+	if cfg == nil {
+		return nil
+	}
+	out := &model.GenerationConfig{Stream: true}
+	out.MaxTokens = cfg.MaxTokens
+	out.Temperature = cfg.Temperature
+	out.TopP = cfg.TopP
+	if cfg.Stream != nil {
+		out.Stream = *cfg.Stream
+	}
+	if cfg.Stop != nil {
+		out.Stop = append([]string(nil), cfg.Stop...)
+	}
+	out.PresencePenalty = cfg.PresencePenalty
+	out.FrequencyPenalty = cfg.FrequencyPenalty
+	out.ReasoningEffort = trimStringPtr(cfg.ReasoningEffort)
+	out.ThinkingEnabled = cfg.ThinkingEnabled
+	out.ThinkingTokens = cfg.ThinkingTokens
+	return out
+}
+
+func trimStringPtr(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*v)
+	return &trimmed
 }
