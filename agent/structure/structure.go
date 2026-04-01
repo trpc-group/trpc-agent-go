@@ -100,10 +100,13 @@ type SurfaceValue struct {
 type PromptSyntax string
 
 const (
+	// PromptSyntaxMixedBrace represents mixed-mode placeholders where both
+	// {name} and {{name}} are recognized in the same template.
+	PromptSyntaxMixedBrace PromptSyntax = "mixed_brace"
 	// PromptSyntaxSingleBrace represents single-brace placeholders such as {name}.
 	PromptSyntaxSingleBrace PromptSyntax = "single_brace"
-	// PromptSyntaxDoubleCurly represents double-curly placeholders such as {{name}}.
-	PromptSyntaxDoubleCurly PromptSyntax = "double_curly"
+	// PromptSyntaxDoubleBrace represents double-brace placeholders such as {{name}}.
+	PromptSyntaxDoubleBrace PromptSyntax = "double_brace"
 )
 
 // FewShotExample is one few-shot example group.

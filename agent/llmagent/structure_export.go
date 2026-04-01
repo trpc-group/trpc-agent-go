@@ -161,8 +161,11 @@ func exportTextSurfaceValue(text prompt.Text) structure.SurfaceValue {
 	value := structure.SurfaceValue{
 		Text: stringPtr(text.Template),
 	}
-	if text.Syntax == prompt.SyntaxDoubleCurly {
-		value.PromptSyntax = promptSyntaxPtr(structure.PromptSyntaxDoubleCurly)
+	switch text.Syntax {
+	case prompt.SyntaxSingleBrace:
+		value.PromptSyntax = promptSyntaxPtr(structure.PromptSyntaxSingleBrace)
+	case prompt.SyntaxDoubleBrace:
+		value.PromptSyntax = promptSyntaxPtr(structure.PromptSyntaxDoubleBrace)
 	}
 	return value
 }

@@ -6,6 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
+// Package promptcore provides core text rendering functionality for prompt templates.
 package promptcore
 
 import (
@@ -21,10 +22,10 @@ type SyntaxMode int
 const (
 	// SyntaxModeSingleBrace recognizes {name} placeholders.
 	SyntaxModeSingleBrace SyntaxMode = iota
-	// SyntaxModeDoubleCurly recognizes {{name}} placeholders.
-	SyntaxModeDoubleCurly
-	// SyntaxModeCompatMixed recognizes both single-brace and double-curly placeholders.
-	SyntaxModeCompatMixed
+	// SyntaxModeDoubleBrace recognizes {{name}} placeholders.
+	SyntaxModeDoubleBrace
+	// SyntaxModeMixedBrace recognizes both single-brace and double-brace placeholders.
+	SyntaxModeMixedBrace
 )
 
 // UnknownBehavior controls how unresolved placeholders are handled.
@@ -190,11 +191,11 @@ func scanPlaceholder(
 	cfg config,
 ) (int, *placeholderToken) {
 	switch syntax {
-	case SyntaxModeDoubleCurly:
+	case SyntaxModeDoubleBrace:
 		if strings.HasPrefix(template[start:], "{{") {
 			return parseDoubleCurlyAt(template, start, cfg)
 		}
-	case SyntaxModeCompatMixed:
+	case SyntaxModeMixedBrace:
 		if strings.HasPrefix(template[start:], "{{") {
 			return parseDoubleCurlyAt(template, start, cfg)
 		}

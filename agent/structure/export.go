@@ -394,7 +394,7 @@ func validateTextSurfaceValue(value SurfaceValue) error {
 	}
 	if value.PromptSyntax != nil {
 		switch *value.PromptSyntax {
-		case PromptSyntaxSingleBrace, PromptSyntaxDoubleCurly:
+		case PromptSyntaxMixedBrace, PromptSyntaxSingleBrace, PromptSyntaxDoubleBrace:
 		default:
 			return fmt.Errorf("unknown prompt syntax %q", *value.PromptSyntax)
 		}

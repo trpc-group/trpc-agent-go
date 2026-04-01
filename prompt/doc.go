@@ -9,9 +9,13 @@
 // Package prompt provides small text prompt rendering helpers.
 //
 // The package centers on one text template type with:
-//   - explicit syntax selection for either {name} or {{name}} placeholders
+//   - three syntax modes: mixed (default), single-brace only, or double-curly only
 //   - optional resolver-backed placeholders such as {user:name}
 //   - lightweight prompt identity metadata
+//
+// The default SyntaxMixedBrace mode recognizes both {name} and {{name}}
+// placeholders in the same template. SyntaxSingleBrace and SyntaxDoubleBrace
+// restrict recognition to one delimiter style.
 //
 // Double-curly placeholders are treated as variable substitution only; this
 // package does not implement full Mustache control syntax such as sections or

@@ -175,15 +175,15 @@ func TestExport_LLMAgent_ConfiguredSnapshot(t *testing.T) {
 	})
 }
 
-func TestExport_LLMAgent_DoubleCurlySyntax(t *testing.T) {
+func TestExport_LLMAgent_DoubleBraceSyntax(t *testing.T) {
 	ag := New("assistant")
 	ag.instruction = prompt.Text{
 		Template: "{{ solve }}",
-		Syntax:   prompt.SyntaxDoubleCurly,
+		Syntax:   prompt.SyntaxDoubleBrace,
 	}
 	ag.systemPrompt = prompt.Text{
 		Template: "{{ system }}",
-		Syntax:   prompt.SyntaxDoubleCurly,
+		Syntax:   prompt.SyntaxDoubleBrace,
 	}
 
 	snapshot, err := structure.Export(context.Background(), ag)
@@ -201,7 +201,7 @@ func TestExport_LLMAgent_DoubleCurlySyntax(t *testing.T) {
 				Type:      structure.SurfaceTypeGlobalInstruction,
 				Value: structure.SurfaceValue{
 					Text:         textPtr("{{ system }}"),
-					PromptSyntax: promptSyntaxPtr(structure.PromptSyntaxDoubleCurly),
+					PromptSyntax: promptSyntaxPtr(structure.PromptSyntaxDoubleBrace),
 				},
 			},
 			{
@@ -210,7 +210,7 @@ func TestExport_LLMAgent_DoubleCurlySyntax(t *testing.T) {
 				Type:      structure.SurfaceTypeInstruction,
 				Value: structure.SurfaceValue{
 					Text:         textPtr("{{ solve }}"),
-					PromptSyntax: promptSyntaxPtr(structure.PromptSyntaxDoubleCurly),
+					PromptSyntax: promptSyntaxPtr(structure.PromptSyntaxDoubleBrace),
 				},
 			},
 		},

@@ -144,7 +144,7 @@ func (c *Client) FetchTextPrompt(ctx context.Context, name string, opts ...Fetch
 	return TextPromptResult{
 		Text: prompt.Text{
 			Template: templateStr,
-			Syntax:   prompt.SyntaxDoubleCurly,
+			Syntax:   prompt.SyntaxDoubleBrace,
 			Meta: prompt.Meta{
 				Name:    raw.Name,
 				Version: strconv.Itoa(raw.Version),

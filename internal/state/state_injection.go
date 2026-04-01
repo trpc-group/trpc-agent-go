@@ -76,7 +76,7 @@ func injectSessionState(
 	}
 	rendered, err := promptcore.Render(
 		template,
-		promptcore.SyntaxModeCompatMixed,
+		promptcore.SyntaxModeMixedBrace,
 		promptcore.Env{
 			Resolve: func(name string) (string, bool, error) {
 				return resolver.Resolve(prompt.Ref{Name: name})

@@ -61,7 +61,7 @@ func TestFetchTextPrompt_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "As a {{criticLevel}} movie critic, do you like {{movie}}?", result.Text.Template)
-	assert.Equal(t, prompt.SyntaxDoubleCurly, result.Text.Syntax)
+	assert.Equal(t, prompt.SyntaxDoubleBrace, result.Text.Syntax)
 	assert.Equal(t, "movie-critic", result.Text.Meta.Name)
 	assert.Equal(t, "3", result.Text.Meta.Version)
 	assert.Equal(t, 3, result.Version)

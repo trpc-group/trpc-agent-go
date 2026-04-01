@@ -37,13 +37,20 @@ type Vars map[string]string
 type Syntax int
 
 const (
-	// SyntaxSingleBrace recognizes {name} placeholders.
-	SyntaxSingleBrace Syntax = iota
-	// SyntaxDoubleCurly recognizes {{name}} placeholders.
+	// SyntaxMixedBrace recognizes both {name} and {{name}} placeholders.
 	//
-	// This supports double-curly variable substitution only. It does not
+	// This is the default syntax mode. It treats single-brace and double-brace
+	// tokens as equivalent placeholder delimiters in the same template.
+	SyntaxMixedBrace Syntax = iota
+	// SyntaxSingleBrace recognizes {name} placeholders only.
+	// Double-brace tokens such as {{name}} are treated as literal text.
+	SyntaxSingleBrace
+	// SyntaxDoubleBrace recognizes {{name}} placeholders only.
+	// Single-brace tokens such as {name} are treated as literal text.
+	//
+	// This supports double-brace variable substitution only. It does not
 	// implement full Mustache syntax such as sections or partials.
-	SyntaxDoubleCurly
+	SyntaxDoubleBrace
 )
 
 // Text is a minimal text prompt template with optional metadata.
@@ -220,10 +227,12 @@ func formatPlaceholderNames(names []string) []string {
 
 func toCoreSyntax(s Syntax) promptcore.SyntaxMode {
 	switch s {
-	case SyntaxDoubleCurly:
-		return promptcore.SyntaxModeDoubleCurly
-	default:
+	case SyntaxSingleBrace:
 		return promptcore.SyntaxModeSingleBrace
+	case SyntaxDoubleBrace:
+		return promptcore.SyntaxModeDoubleBrace
+	default:
+		return promptcore.SyntaxModeMixedBrace
 	}
 }
 

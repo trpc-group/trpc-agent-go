@@ -374,7 +374,7 @@ func TestValidateSurfaceValue_CoversAdditionalBranches(t *testing.T) {
 	}
 	require.NoError(t, validateSurfaceValue(SurfaceTypeInstruction, SurfaceValue{
 		Text:         stringPtr("instruction"),
-		PromptSyntax: promptSyntaxPtr(PromptSyntaxDoubleCurly),
+		PromptSyntax: promptSyntaxPtr(PromptSyntaxDoubleBrace),
 	}))
 	require.NoError(t, validateSurfaceValue(SurfaceTypeFewShot, SurfaceValue{FewShot: fewShot}))
 	require.Error(t, validateSurfaceValue(SurfaceTypeFewShot, SurfaceValue{

@@ -136,9 +136,10 @@ func TestTextRender_SingleBraceAllowsOuterWhitespace(t *testing.T) {
 	require.Equal(t, "hello alice from ", rendered)
 }
 
-func TestTextRender_LeavesLegacyMustacheUntouched(t *testing.T) {
+func TestTextRender_SingleBraceLeavesDoubleCurlyUntouched(t *testing.T) {
 	tpl := Text{
 		Template: "hello {{ name }} from {{user:city?}}",
+		Syntax:   SyntaxSingleBrace,
 	}
 
 	rendered, err := tpl.Render(RenderEnv{
@@ -151,10 +152,26 @@ func TestTextRender_LeavesLegacyMustacheUntouched(t *testing.T) {
 	require.Equal(t, "hello {{ name }} from {{user:city?}}", rendered)
 }
 
-func TestTextRender_DoubleCurlySyntax(t *testing.T) {
+func TestTextRender_DefaultMixedRecognizesBothDelimiters(t *testing.T) {
+	tpl := Text{
+		Template: "hello {name} from {{city}}",
+	}
+
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"name": "alice",
+			"city": "paris",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "hello alice from paris", rendered)
+}
+
+func TestTextRender_DoubleBraceSyntax(t *testing.T) {
 	tpl := Text{
 		Template: "hello {{ name }} from {{ city }} and {{ user:name? }}",
-		Syntax:   SyntaxDoubleCurly,
+		Syntax:   SyntaxDoubleBrace,
 	}
 
 	rendered, err := tpl.Render(RenderEnv{
@@ -168,9 +185,10 @@ func TestTextRender_DoubleCurlySyntax(t *testing.T) {
 	require.Equal(t, "hello alice from paris and ", rendered)
 }
 
-func TestTextValidateRequired_IgnoresLegacyMustache(t *testing.T) {
+func TestTextValidateRequired_SingleBraceIgnoresDoubleCurly(t *testing.T) {
 	tpl := Text{
 		Template: "hello {{name}}",
+		Syntax:   SyntaxSingleBrace,
 	}
 
 	err := tpl.ValidateRequired("name")
@@ -178,10 +196,18 @@ func TestTextValidateRequired_IgnoresLegacyMustache(t *testing.T) {
 	require.Contains(t, err.Error(), "{name}")
 }
 
-func TestTextValidateRequired_DoubleCurlySyntax(t *testing.T) {
+func TestTextValidateRequired_DefaultMixedRecognizesDoubleCurly(t *testing.T) {
 	tpl := Text{
 		Template: "hello {{name}}",
-		Syntax:   SyntaxDoubleCurly,
+	}
+
+	require.NoError(t, tpl.ValidateRequired("name"))
+}
+
+func TestTextValidateRequired_DoubleBraceSyntax(t *testing.T) {
+	tpl := Text{
+		Template: "hello {{name}}",
+		Syntax:   SyntaxDoubleBrace,
 	}
 
 	require.NoError(t, tpl.ValidateRequired("name"))
