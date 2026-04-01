@@ -960,6 +960,139 @@ func Test_HandleStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 	}
 }
 
+// Test_HandleStreamingResponse_PartialToolInput verifies that the streaming
+// handler succeeds even when a content_block_stop event arrives before all
+// input_json_delta events have been received (i.e. the tool-call input JSON is
+// incomplete).  This mirrors the behaviour observed with certain
+// Anthropic-compatible API proxies (issue #1550).
+func Test_HandleStreamingResponse_PartialToolInput(t *testing.T) {
+	// SSE stream where the tool-use block's input_json_delta is intentionally
+	// truncated: the closing "}" of the JSON object is never sent before the
+	// content_block_stop arrives.
+	sse := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_partial","type":"message","role":"assistant","model":"claude-3-sonnet","content":[],"usage":{"input_tokens":10,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
+		"",
+		"event: content_block_start",
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_01","name":"get_weather","input":{}}}`,
+		"",
+		// First (and only) delta – deliberately missing the closing "}" so that
+		// cb.Input is partial JSON when content_block_stop fires.
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\": \"London\""}}`,
+		"",
+		// content_block_stop arrives while cb.Input is still partial JSON.
+		"event: content_block_stop",
+		`data: {"type":"content_block_stop","index":0}`,
+		"",
+		"event: message_delta",
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":""},"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":0,"output_tokens":5,"server_tool_use":{"web_search_requests":0}}}`,
+		"",
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader(sse))}, nil
+		})}
+	}
+
+	m := New("claude-test", WithHTTPClientOptions())
+	req := &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("U")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	ctx := context.Background()
+	ch, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	var final *model.Response
+	for resp := range ch {
+		if resp.Done {
+			final = resp
+			break
+		}
+	}
+	// The stream must complete without an error response, even though the tool
+	// input JSON was partial when content_block_stop arrived.
+	require.NotNil(t, final)
+	assert.Nil(t, final.Error, "unexpected error in final response: %v", final.Error)
+	assert.True(t, final.Done)
+}
+
+// Test_HandleStreamingResponse_NullInitialToolInput verifies that an
+// Anthropic-compatible API that sends "null" (instead of "{}") as the initial
+// tool-use input placeholder is handled correctly: the first input_json_delta
+// replaces the null placeholder rather than being appended to it.
+func Test_HandleStreamingResponse_NullInitialToolInput(t *testing.T) {
+	sse := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_null","type":"message","role":"assistant","model":"claude-3-sonnet","content":[],"usage":{"input_tokens":10,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
+		"",
+		// "input" is null instead of the standard {}.
+		"event: content_block_start",
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_02","name":"get_weather","input":null}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\": \"Paris\""}}`,
+		"",
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"}"}}`,
+		"",
+		"event: content_block_stop",
+		`data: {"type":"content_block_stop","index":0}`,
+		"",
+		"event: message_delta",
+		`data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":""},"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":0,"output_tokens":5,"server_tool_use":{"web_search_requests":0}}}`,
+		"",
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
+		"",
+	}, "\n")
+
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader(sse))}, nil
+		})}
+	}
+
+	m := New("claude-test", WithHTTPClientOptions())
+	req := &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("U")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	ctx := context.Background()
+	ch, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	var final *model.Response
+	for resp := range ch {
+		if resp.Done {
+			final = resp
+			break
+		}
+	}
+	require.NotNil(t, final)
+	assert.Nil(t, final.Error, "unexpected error in final response: %v", final.Error)
+	assert.True(t, final.Done)
+	// The tool call must be present with correctly reconstructed arguments.
+	require.Len(t, final.Choices, 1)
+	require.Len(t, final.Choices[0].Message.ToolCalls, 1)
+	tc := final.Choices[0].Message.ToolCalls[0]
+	assert.Equal(t, "get_weather", tc.Function.Name)
+	assert.Equal(t, `{"city":"Paris"}`, string(tc.Function.Arguments))
+}
+
 func Test_HandleStreamingResponse_StreamErrorUsesNilAccumulator(t *testing.T) {
 	streamErr := errors.New("stream read error")
 
