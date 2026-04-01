@@ -840,7 +840,11 @@ func WithStructuredOutputJSON(examplePtr any, strict bool, description string) O
 			t = reflect.PointerTo(rt)
 		}
 		// Generate a robust JSON schema via the generator.
-		gen := jsonschema.New()
+		genOpts := make([]jsonschema.Option, 0, 1)
+		if strict {
+			genOpts = append(genOpts, jsonschema.WithStrict())
+		}
+		gen := jsonschema.New(genOpts...)
 		schema := gen.Generate(t.Elem())
 		name := t.Elem().Name()
 		if name == "" {

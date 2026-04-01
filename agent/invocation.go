@@ -622,7 +622,11 @@ func WithStructuredOutputJSON(examplePtr any, strict bool, description string) R
 		} else {
 			t = reflect.PointerTo(rt)
 		}
-		gen := jsonschema.New()
+		genOpts := make([]jsonschema.Option, 0, 1)
+		if strict {
+			genOpts = append(genOpts, jsonschema.WithStrict())
+		}
+		gen := jsonschema.New(genOpts...)
 		schema := gen.Generate(t.Elem())
 		name := t.Elem().Name()
 		if name == "" {
