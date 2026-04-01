@@ -2053,7 +2053,15 @@ func truncateOutputWithLimit(s string, limit int) (string, bool) {
 	if len(s) <= limit {
 		return s, false
 	}
-	return s[:limit], true
+	truncated := s[:limit]
+	if utf8.ValidString(truncated) {
+		return truncated, true
+	}
+	n := validUTF8PrefixLen(truncated)
+	if n <= 0 {
+		return "", true
+	}
+	return truncated[:n], true
 }
 
 func toRunFiles(files []codeexecutor.File) []runFile {

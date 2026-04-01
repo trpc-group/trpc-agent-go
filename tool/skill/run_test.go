@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -4090,6 +4091,53 @@ func TestBuildRunOutputWithLimits_OverridesDefaults(t *testing.T) {
 	require.Equal(t, limits.StdoutStderrBytes, len(out.Stdout))
 	require.Equal(t, limits.StdoutStderrBytes, len(out.Stderr))
 	require.Nil(t, out.PrimaryOutput)
+}
+
+func TestBuildRunOutputWithLimits_UsesDefaultsWhenUnset(t *testing.T) {
+	long := strings.Repeat("a", defaultStdoutStderrBytes+1)
+	out := buildRunOutputWithLimits(
+		codeexecutor.RunResult{
+			Stdout: long,
+		},
+		[]codeexecutor.File{
+			{
+				Name:     "out/a.txt",
+				Content:  "ok",
+				MIMEType: "text/plain",
+			},
+		},
+		RunOutputLimits{},
+	)
+	require.Equal(t, defaultStdoutStderrBytes, len(out.Stdout))
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, "out/a.txt", out.PrimaryOutput.Name)
+}
+
+func TestBuildRunOutputWithLimits_PreservesUTF8Boundary(t *testing.T) {
+	limits := RunOutputLimits{
+		StdoutStderrBytes:  5,
+		PrimaryOutputBytes: 1,
+	}
+	long := strings.Repeat("你", 3)
+	out := buildRunOutputWithLimits(
+		codeexecutor.RunResult{
+			Stdout: long,
+			Stderr: long,
+		},
+		nil,
+		limits,
+	)
+	require.Len(t, out.Warnings, 2)
+	require.Equal(t, "你", out.Stdout)
+	require.Equal(t, "你", out.Stderr)
+	require.True(t, utf8.ValidString(out.Stdout))
+	require.True(t, utf8.ValidString(out.Stderr))
+	require.LessOrEqual(t, len(out.Stdout), limits.StdoutStderrBytes)
+	require.LessOrEqual(t, len(out.Stderr), limits.StdoutStderrBytes)
+
+	truncated, ok := truncateOutputWithLimit("你", 1)
+	require.True(t, ok)
+	require.Equal(t, "", truncated)
 }
 
 type countingFS struct {
