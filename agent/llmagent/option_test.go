@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
@@ -224,6 +226,38 @@ func TestWithSkipSkillsFallbackOnSessionSummary(t *testing.T) {
 		WithSkipSkillsFallbackOnSessionSummary(false),
 	)
 	require.False(t, b.option.SkipSkillsFallbackOnSessionSummary)
+}
+
+func TestNew_DefaultGenerationConfigKeepsStreaming(t *testing.T) {
+	a := New("test-agent")
+	require.True(t, a.genConfig.Stream)
+	require.False(t, a.option.generationConfigConfigured)
+}
+
+func TestWithGenerationConfig_ExplicitFalseDisablesStreaming(
+	t *testing.T,
+) {
+	a := New(
+		"test-agent",
+		WithGenerationConfig(model.GenerationConfig{Stream: false}),
+	)
+	require.False(t, a.genConfig.Stream)
+	require.True(t, a.option.generationConfigConfigured)
+}
+
+func TestBuildRequestProcessors_DefaultGenerationConfigUsesStreamTrue(
+	t *testing.T,
+) {
+	procs := buildRequestProcessors("test-agent", &Options{})
+	var basicProc *processor.BasicRequestProcessor
+	for _, proc := range procs {
+		if candidate, ok := proc.(*processor.BasicRequestProcessor); ok {
+			basicProc = candidate
+			break
+		}
+	}
+	require.NotNil(t, basicProc)
+	require.True(t, basicProc.GenerationConfig.Stream)
 }
 
 func TestWithMaxLimits_OnOptions(t *testing.T) {
