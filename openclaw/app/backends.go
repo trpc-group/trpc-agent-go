@@ -264,39 +264,32 @@ func newSessionSummarizer(
 		return nil, errors.New("session summary requires a model")
 	}
 
-	checks := make([]summary.Checker, 0, 3)
-	if opts.SessionSummaryEventCount > 0 {
-		checks = append(
-			checks,
-			summary.CheckEventThreshold(opts.SessionSummaryEventCount),
-		)
-	}
-	if opts.SessionSummaryTokenCount > 0 {
-		checks = append(
-			checks,
-			summary.CheckTokenThreshold(opts.SessionSummaryTokenCount),
-		)
-	}
-	if opts.SessionSummaryIdleThreshold > 0 {
-		checks = append(
-			checks,
-			summary.CheckTimeThreshold(opts.SessionSummaryIdleThreshold),
+	// Override the token counter heuristic when configured.
+	// The framework default (4 runes/token) works well for English but
+	// underestimates Chinese text (~1–2 runes/token). Setting a lower
+	// value ensures summary triggers fire at the right time.
+	if opts.SessionSummaryApproxRunesPerToken > 0 {
+		summary.SetTokenCounter(
+			model.NewSimpleTokenCounter(
+				model.WithApproxRunesPerToken(
+					opts.SessionSummaryApproxRunesPerToken,
+				),
+			),
 		)
 	}
 
-	if len(checks) == 0 {
-		checks = append(
-			checks,
-			summary.CheckEventThreshold(defaultSessionSummaryEventThreshold),
-		)
-	}
-
-	options := make([]summary.Option, 0, 3)
+	options := make([]summary.Option, 0, 6)
 	options = append(options, summary.WithName(appName))
 	options = append(
 		options,
 		summary.WithPreSummaryHook(
 			conversation.PreSummaryHook,
+		),
+	)
+	options = append(
+		options,
+		summary.WithToolResultFormatter(
+			summaryToolResultFormatter,
 		),
 	)
 	if opts.SessionSummaryMaxWords > 0 {
@@ -306,17 +299,73 @@ func newSessionSummarizer(
 		)
 	}
 
-	policy, err := parseSummaryPolicy(opts.SessionSummaryPolicy)
-	if err != nil {
-		return nil, err
-	}
-	switch policy {
-	case summaryPolicyAll:
-		options = append(options, summary.WithChecksAll(checks...))
-	case summaryPolicyAny:
-		options = append(options, summary.WithChecksAny(checks...))
+	mode := strings.ToLower(strings.TrimSpace(opts.SessionSummaryMode))
+	switch mode {
+	case summaryModeAuto:
+		// Context-window aware: dynamically resolve the model's context
+		// window at evaluation time, trigger when delta tokens exceed a
+		// fraction of it (default 50%). Zero-configuration.
+		options = append(options, summary.WithContextThreshold())
+	case summaryModeManual, "":
+		// Manual thresholds (original behavior).
+		checks := make([]summary.Checker, 0, 3)
+		if opts.SessionSummaryEventCount > 0 {
+			checks = append(
+				checks,
+				summary.CheckEventThreshold(
+					opts.SessionSummaryEventCount,
+				),
+			)
+		}
+		if opts.SessionSummaryTokenCount > 0 {
+			checks = append(
+				checks,
+				summary.CheckTokenThreshold(
+					opts.SessionSummaryTokenCount,
+				),
+			)
+		}
+		if opts.SessionSummaryIdleThreshold > 0 {
+			checks = append(
+				checks,
+				summary.CheckTimeThreshold(
+					opts.SessionSummaryIdleThreshold,
+				),
+			)
+		}
+		if len(checks) == 0 {
+			checks = append(
+				checks,
+				summary.CheckEventThreshold(
+					defaultSessionSummaryEventThreshold,
+				),
+			)
+		}
+
+		policy, err := parseSummaryPolicy(opts.SessionSummaryPolicy)
+		if err != nil {
+			return nil, err
+		}
+		switch policy {
+		case summaryPolicyAll:
+			options = append(
+				options,
+				summary.WithChecksAll(checks...),
+			)
+		case summaryPolicyAny:
+			options = append(
+				options,
+				summary.WithChecksAny(checks...),
+			)
+		default:
+			return nil, fmt.Errorf(
+				"unsupported summary policy: %s", policy,
+			)
+		}
 	default:
-		return nil, fmt.Errorf("unsupported summary policy: %s", policy)
+		return nil, fmt.Errorf(
+			"unsupported session summary mode: %s", mode,
+		)
 	}
 
 	return summary.NewSummarizer(mdl, options...), nil
@@ -391,4 +440,26 @@ func newAutoMemoryExtractor(
 	}
 
 	return memextractor.NewExtractor(mdl, extOpts...), nil
+}
+
+const summaryToolResultMaxRunes = 2000
+
+// summaryToolResultFormatter truncates large tool results to avoid blowing
+// the summarizer model's context window. web_fetch and similar tools can
+// return 100 KB+ of HTML/Markdown; without truncation the conversation text
+// sent to the summary LLM will exceed small-to-medium model limits.
+func summaryToolResultFormatter(msg model.Message) string {
+	content := strings.TrimSpace(msg.Content)
+	if content == "" {
+		return ""
+	}
+	name := msg.ToolName
+	if name == "" {
+		name = "tool"
+	}
+	runes := []rune(content)
+	if len(runes) > summaryToolResultMaxRunes {
+		content = string(runes[:summaryToolResultMaxRunes]) + "... [truncated]"
+	}
+	return fmt.Sprintf("[%s returned: %s]", name, content)
 }
