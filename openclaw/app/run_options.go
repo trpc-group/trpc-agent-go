@@ -15,6 +15,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
 
@@ -53,6 +55,9 @@ const (
 
 	summaryPolicyAny = "any"
 	summaryPolicyAll = "all"
+
+	summaryModeAuto   = "auto"
+	summaryModeManual = "manual"
 
 	defaultSessionSummaryEventThreshold = 20
 	defaultSkillsLoadMode               = "turn"
@@ -160,6 +165,7 @@ type runOptions struct {
 	OpenAIModel        string
 	OpenAIVariant      string
 	OpenAIBaseURL      string
+	GenerationConfig   *model.GenerationConfig
 	ModelConfig        *yaml.Node
 	KnowledgesConfig   map[string]*yaml.Node
 	SkillsRoot         string
@@ -202,12 +208,14 @@ type runOptions struct {
 	MemoryAutoMessageThreshold int
 	MemoryAutoTimeInterval     time.Duration
 
-	SessionSummaryEnabled       bool
-	SessionSummaryPolicy        string
-	SessionSummaryEventCount    int
-	SessionSummaryTokenCount    int
-	SessionSummaryIdleThreshold time.Duration
-	SessionSummaryMaxWords      int
+	SessionSummaryEnabled             bool
+	SessionSummaryMode                string
+	SessionSummaryPolicy              string
+	SessionSummaryEventCount          int
+	SessionSummaryTokenCount          int
+	SessionSummaryIdleThreshold       time.Duration
+	SessionSummaryMaxWords            int
+	SessionSummaryApproxRunesPerToken float64
 
 	EnableLocalExec     bool
 	EnableOpenClawTools bool
@@ -675,10 +683,16 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Enable session summarization (optional)",
 	)
 	fs.StringVar(
+		&opts.SessionSummaryMode,
+		"session-summary-mode",
+		"",
+		"Summary trigger mode: auto (context-window aware) or manual (explicit thresholds)",
+	)
+	fs.StringVar(
 		&opts.SessionSummaryPolicy,
 		"session-summary-policy",
 		summaryPolicyAny,
-		"Session summary gating policy: any|all",
+		"Session summary gating policy: any|all (only used in manual mode)",
 	)
 	fs.IntVar(
 		&opts.SessionSummaryEventCount,
@@ -703,6 +717,13 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"session-summary-max-words",
 		0,
 		"Max summary words (0 means no limit)",
+	)
+	fs.Float64Var(
+		&opts.SessionSummaryApproxRunesPerToken,
+		"session-summary-approx-runes-per-token",
+		0,
+		"Approximate runes per token for summary token estimation "+
+			"(0 uses framework default 4.0; set ~2.0 for Chinese-heavy content)",
 	)
 	fs.BoolVar(
 		&opts.EnableLocalExec,
@@ -940,11 +961,25 @@ type ralphLoopVerifyConfig struct {
 }
 
 type modelConfig struct {
-	Mode          *string      `yaml:"mode,omitempty"`
-	Name          *string      `yaml:"name,omitempty"`
-	BaseURL       *string      `yaml:"base_url,omitempty"`
-	OpenAIVariant *string      `yaml:"openai_variant,omitempty"`
-	Config        *rawYAMLNode `yaml:"config,omitempty"`
+	Mode             *string               `yaml:"mode,omitempty"`
+	Name             *string               `yaml:"name,omitempty"`
+	BaseURL          *string               `yaml:"base_url,omitempty"`
+	OpenAIVariant    *string               `yaml:"openai_variant,omitempty"`
+	GenerationConfig *generationConfigYAML `yaml:"generation_config,omitempty"`
+	Config           *rawYAMLNode          `yaml:"config,omitempty"`
+}
+
+type generationConfigYAML struct {
+	MaxTokens        *int     `yaml:"max_tokens,omitempty"`
+	Temperature      *float64 `yaml:"temperature,omitempty"`
+	TopP             *float64 `yaml:"top_p,omitempty"`
+	Stream           *bool    `yaml:"stream,omitempty"`
+	Stop             []string `yaml:"stop,omitempty"`
+	PresencePenalty  *float64 `yaml:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64 `yaml:"frequency_penalty,omitempty"`
+	ReasoningEffort  *string  `yaml:"reasoning_effort,omitempty"`
+	ThinkingEnabled  *bool    `yaml:"thinking_enabled,omitempty"`
+	ThinkingTokens   *int     `yaml:"thinking_tokens,omitempty"`
 }
 
 type gatewayConfig struct {
@@ -1045,12 +1080,14 @@ type redisConfig struct {
 }
 
 type summaryConfig struct {
-	Enabled        *bool   `yaml:"enabled,omitempty"`
-	Policy         *string `yaml:"policy,omitempty"`
-	EventThreshold *int    `yaml:"event_threshold,omitempty"`
-	TokenThreshold *int    `yaml:"token_threshold,omitempty"`
-	IdleThreshold  *string `yaml:"idle_threshold,omitempty"`
-	MaxWords       *int    `yaml:"max_words,omitempty"`
+	Enabled             *bool    `yaml:"enabled,omitempty"`
+	Mode                *string  `yaml:"mode,omitempty"`
+	Policy              *string  `yaml:"policy,omitempty"`
+	EventThreshold      *int     `yaml:"event_threshold,omitempty"`
+	TokenThreshold      *int     `yaml:"token_threshold,omitempty"`
+	IdleThreshold       *string  `yaml:"idle_threshold,omitempty"`
+	MaxWords            *int     `yaml:"max_words,omitempty"`
+	ApproxRunesPerToken *float64 `yaml:"approx_runes_per_token,omitempty"`
 }
 
 type memoryAuto struct {
@@ -1351,6 +1388,11 @@ func (cfg *fileConfig) apply(
 		}
 		if cfg.Model.Config != nil {
 			opts.ModelConfig = cfg.Model.Config.Node
+		}
+		if cfg.Model.GenerationConfig != nil {
+			opts.GenerationConfig = resolveGenerationConfigYAML(
+				cfg.Model.GenerationConfig,
+			)
 		}
 	}
 	if cfg.Knowledges != nil {
@@ -1795,6 +1837,9 @@ func applySessionSummary(
 	if cfg.Enabled != nil && !flagWasSet(set, "session-summary") {
 		opts.SessionSummaryEnabled = *cfg.Enabled
 	}
+	if cfg.Mode != nil && !flagWasSet(set, "session-summary-mode") {
+		opts.SessionSummaryMode = strings.TrimSpace(*cfg.Mode)
+	}
 	if cfg.Policy != nil && !flagWasSet(set, "session-summary-policy") {
 		opts.SessionSummaryPolicy = strings.TrimSpace(*cfg.Policy)
 	}
@@ -1815,6 +1860,10 @@ func applySessionSummary(
 	}
 	if cfg.MaxWords != nil && !flagWasSet(set, "session-summary-max-words") {
 		opts.SessionSummaryMaxWords = *cfg.MaxWords
+	}
+	if cfg.ApproxRunesPerToken != nil &&
+		!flagWasSet(set, "session-summary-approx-runes-per-token") {
+		opts.SessionSummaryApproxRunesPerToken = *cfg.ApproxRunesPerToken
 	}
 	return nil
 }
@@ -1890,6 +1939,12 @@ func finalizeRunOptions(opts *runOptions) error {
 	opts.LangfuseTraceURLTemplate = strings.TrimSpace(
 		opts.LangfuseTraceURLTemplate,
 	)
+	if v := opts.SessionSummaryApproxRunesPerToken; math.IsNaN(v) ||
+		math.IsInf(v, 0) || v < 0 {
+		return fmt.Errorf(
+			"invalid session-summary-approx-runes-per-token: %v", v,
+		)
+	}
 	normalizeA2AOptions(opts)
 	return nil
 }
@@ -1947,4 +2002,36 @@ func firstStringPtr(primary, fallback *string) *string {
 		return primary
 	}
 	return fallback
+}
+
+func resolveGenerationConfigYAML(
+	cfg *generationConfigYAML,
+) *model.GenerationConfig {
+	if cfg == nil {
+		return nil
+	}
+	out := &model.GenerationConfig{Stream: true}
+	out.MaxTokens = cfg.MaxTokens
+	out.Temperature = cfg.Temperature
+	out.TopP = cfg.TopP
+	if cfg.Stream != nil {
+		out.Stream = *cfg.Stream
+	}
+	if cfg.Stop != nil {
+		out.Stop = append([]string(nil), cfg.Stop...)
+	}
+	out.PresencePenalty = cfg.PresencePenalty
+	out.FrequencyPenalty = cfg.FrequencyPenalty
+	out.ReasoningEffort = trimStringPtr(cfg.ReasoningEffort)
+	out.ThinkingEnabled = cfg.ThinkingEnabled
+	out.ThinkingTokens = cfg.ThinkingTokens
+	return out
+}
+
+func trimStringPtr(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*v)
+	return &trimmed
 }

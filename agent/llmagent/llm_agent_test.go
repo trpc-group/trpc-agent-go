@@ -1225,6 +1225,33 @@ func TestLLMAgent_OptionsWithStructuredOutputJSON(t *testing.T) {
 	require.Equal(t, "test description", opts.StructuredOutput.JSONSchema.Description)
 }
 
+func TestLLMAgent_OptionsWithStructuredOutputJSON_StrictFlagControlsGeneratedSchema(t *testing.T) {
+	type MyStruct struct {
+		Field    string   `json:"field"`
+		Optional []string `json:"optional"`
+	}
+
+	strictOpts := &Options{}
+	WithStructuredOutputJSON(new(MyStruct), true, "strict")(strictOpts)
+	require.NotNil(t, strictOpts.StructuredOutput)
+	strictSchema := strictOpts.StructuredOutput.JSONSchema.Schema
+	strictRequired := strictSchema["required"].([]string)
+	require.Len(t, strictRequired, 2)
+	strictProps := strictSchema["properties"].(map[string]any)
+	_, hasAnyOf := strictProps["optional"].(map[string]any)["anyOf"]
+	require.True(t, hasAnyOf)
+
+	nonStrictOpts := &Options{}
+	WithStructuredOutputJSON(new(MyStruct), false, "non-strict")(nonStrictOpts)
+	require.NotNil(t, nonStrictOpts.StructuredOutput)
+	nonStrictSchema := nonStrictOpts.StructuredOutput.JSONSchema.Schema
+	nonStrictRequired := nonStrictSchema["required"].([]string)
+	require.Equal(t, []string{"field"}, nonStrictRequired)
+	nonStrictProps := nonStrictSchema["properties"].(map[string]any)
+	_, hasAnyOf = nonStrictProps["optional"].(map[string]any)["anyOf"]
+	require.False(t, hasAnyOf)
+}
+
 func TestLLMAgent_OptionsWithStructuredOutputJSONSchema(t *testing.T) {
 	schema := map[string]any{"type": "object"}
 	opts := &Options{}

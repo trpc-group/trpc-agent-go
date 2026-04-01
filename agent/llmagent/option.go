@@ -163,6 +163,9 @@ type Options struct {
 	ModelGlobalInstructions map[string]string
 	// GenerationConfig contains the generation configuration.
 	GenerationConfig model.GenerationConfig
+	// generationConfigConfigured records whether callers explicitly set
+	// generation configuration through WithGenerationConfig.
+	generationConfigConfigured bool
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
 	codeExecutor      codeexecutor.CodeExecutor
@@ -473,6 +476,7 @@ func WithModelGlobalInstructions(prompts map[string]string) Option {
 func WithGenerationConfig(config model.GenerationConfig) Option {
 	return func(opts *Options) {
 		opts.GenerationConfig = config
+		opts.generationConfigConfigured = true
 	}
 }
 
@@ -840,7 +844,11 @@ func WithStructuredOutputJSON(examplePtr any, strict bool, description string) O
 			t = reflect.PointerTo(rt)
 		}
 		// Generate a robust JSON schema via the generator.
-		gen := jsonschema.New()
+		genOpts := make([]jsonschema.Option, 0, 1)
+		if strict {
+			genOpts = append(genOpts, jsonschema.WithStrict())
+		}
+		gen := jsonschema.New(genOpts...)
 		schema := gen.Generate(t.Elem())
 		name := t.Elem().Name()
 		if name == "" {

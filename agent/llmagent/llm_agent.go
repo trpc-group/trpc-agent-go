@@ -109,29 +109,33 @@ func New(name string, opts ...Option) *LLMAgent {
 	// Initialize models map and determine the initial model.
 	initialModel, models := initializeModels(&options)
 
+	resolvedGenCfg := resolveDefaultGenerationConfig(&options)
+
 	// Construct the agent first so request processors can access dynamic getters.
 	a := &LLMAgent{
-		name:                    name,
-		model:                   initialModel,
-		models:                  models,
-		description:             options.Description,
-		instruction:             newTextPrompt(options.Instruction),
-		systemPrompt:            newTextPrompt(options.GlobalInstruction),
-		modelInstructions:       cloneTextPromptMap(options.ModelInstructions),
-		modelGlobalInstructions: cloneTextPromptMap(options.ModelGlobalInstructions),
-		genConfig:               options.GenerationConfig,
-		codeExecutor:            options.codeExecutor,
-		tools:                   tools,
-		userToolNames:           userToolNames,
-		planner:                 options.Planner,
-		subAgents:               options.SubAgents,
-		agentCallbacks:          options.AgentCallbacks,
-		outputKey:               options.OutputKey,
-		outputSchema:            options.OutputSchema,
-		inputSchema:             options.InputSchema,
-		structuredOutput:        options.StructuredOutput,
-		structuredOutputType:    options.StructuredOutputType,
-		option:                  options,
+		name:              name,
+		model:             initialModel,
+		models:            models,
+		description:       options.Description,
+		instruction:       options.Instruction,
+		systemPrompt:      options.GlobalInstruction,
+		modelInstructions: cloneStringMap(options.ModelInstructions),
+		modelGlobalInstructions: cloneStringMap(
+			options.ModelGlobalInstructions,
+		),
+		genConfig:            resolvedGenCfg,
+		codeExecutor:         options.codeExecutor,
+		tools:                tools,
+		userToolNames:        userToolNames,
+		planner:              options.Planner,
+		subAgents:            options.SubAgents,
+		agentCallbacks:       options.AgentCallbacks,
+		outputKey:            options.OutputKey,
+		outputSchema:         options.OutputSchema,
+		inputSchema:          options.InputSchema,
+		structuredOutput:     options.StructuredOutput,
+		structuredOutputType: options.StructuredOutputType,
+		option:               options,
 	}
 
 	// Prepare request processors in the correct order, wiring dynamic getters.
@@ -204,7 +208,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 
 	// 1. Basic processor - handles generation config.
 	basicOptions := []processor.BasicOption{
-		processor.WithGenerationConfig(options.GenerationConfig),
+		processor.WithGenerationConfig(
+			resolveDefaultGenerationConfig(options),
+		),
 	}
 	basicProcessor := processor.NewBasicRequestProcessor(basicOptions...)
 	requestProcessors = append(requestProcessors, basicProcessor)
@@ -352,6 +358,15 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	requestProcessors = appendTimeProcessor(options, requestProcessors)
 
 	return requestProcessors
+}
+
+func resolveDefaultGenerationConfig(
+	options *Options,
+) model.GenerationConfig {
+	if options != nil && options.generationConfigConfigured {
+		return options.GenerationConfig
+	}
+	return model.GenerationConfig{Stream: true}
 }
 
 func hasStaticOutputResponseProcessor(options *Options) bool {

@@ -1153,6 +1153,51 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 	)
 }
 
+func TestNewAgent_DefaultGenerationConfigStreams(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	require.True(t, req.GenerationConfig.Stream)
+}
+
+func TestNewAgent_GenerationConfigOverrideApplied(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+		GenerationConfig: &model.GenerationConfig{
+			Stream: false,
+		},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	require.False(t, req.GenerationConfig.Stream)
+}
+
 func TestNewAgent_ToolProviderErrorIsReturned(t *testing.T) {
 	t.Parallel()
 

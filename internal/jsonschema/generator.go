@@ -8,9 +8,9 @@
 //
 
 // Package jsonschema provides utilities to generate JSON Schema documents
-// from Go types. The generator is recursive and production-ready with
-// support for nested structs, arrays/slices, maps, enums, time formats,
-// and $defs/$ref for de-duplication and recursion safety.
+// from Go types. The generator is recursive and supports both legacy
+// Go-style optional-field schemas and strict structured-output-compatible
+// schemas for provider-native response formats.
 package jsonschema
 
 import (
@@ -23,6 +23,8 @@ import (
 // Generator generates JSON Schema from Go types.
 type Generator struct {
 	mu sync.Mutex
+	// strict enables strict structured-output-compatible object schemas.
+	strict bool
 	// visited maps a Go type to a $defs key.
 	visited map[reflect.Type]string
 	// defs stores schema definitions keyed by definition name.
@@ -36,8 +38,10 @@ type Generator struct {
 }
 
 // New returns a new Generator instance.
-func New() *Generator {
+func New(optionFns ...Option) *Generator {
+	generatorOptions := newOptions(optionFns...)
 	return &Generator{
+		strict:     generatorOptions.strict,
 		visited:    make(map[reflect.Type]string),
 		defs:       make(map[string]map[string]any),
 		processing: make(map[reflect.Type]bool),
@@ -48,7 +52,7 @@ func New() *Generator {
 // Generate returns a JSON schema for the provided type. The returned
 // schema may include a $defs section when needed.
 func (g *Generator) Generate(t reflect.Type) map[string]any {
-	if t.Kind() == reflect.Pointer {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	root := g.toSchema(t)
@@ -79,7 +83,7 @@ var kindToJSONType = map[reflect.Kind]string{
 
 func (g *Generator) toSchema(t reflect.Type) map[string]any {
 	// Handle pointers by unwrapping to element type.
-	if t.Kind() == reflect.Pointer {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
@@ -166,8 +170,11 @@ func (g *Generator) schemaForStruct(t reflect.Type) map[string]any {
 		}
 		fieldSchema := g.toSchema(f.Type)
 		applyFieldTags(fieldSchema, f)
+		if g.strict && (isOmitEmpty(jsonTag) || isPointerLike(f.Type)) {
+			fieldSchema = makeNullable(fieldSchema)
+		}
 		props[name] = fieldSchema
-		if !isOmitEmpty(jsonTag) && !isPointerLike(f.Type) {
+		if g.strict || (!isOmitEmpty(jsonTag) && !isPointerLike(f.Type)) {
 			required = append(required, name)
 		}
 	}
@@ -186,6 +193,38 @@ func (g *Generator) schemaForStruct(t reflect.Type) map[string]any {
 		g.defs[defKey] = obj
 	}
 	return obj
+}
+
+func makeNullable(schema map[string]any) map[string]any {
+	if schema == nil {
+		return map[string]any{"type": "null"}
+	}
+	if hasNullableAnyOf(schema) {
+		return schema
+	}
+	return map[string]any{
+		"anyOf": []any{
+			schema,
+			map[string]any{"type": "null"},
+		},
+	}
+}
+
+func hasNullableAnyOf(schema map[string]any) bool {
+	anyOf, ok := schema["anyOf"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range anyOf {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if itemMap["type"] == "null" {
+			return true
+		}
+	}
+	return false
 }
 
 func applyFieldTags(fieldSchema map[string]any, f reflect.StructField) {
