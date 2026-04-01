@@ -98,8 +98,7 @@ type placeholderToken struct {
 }
 
 var (
-	bracePlaceholderRE          = regexp.MustCompile(`\{([^{}]+)\}`)
-	legacyMustachePlaceholderRE = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*)*)(\?)?\s*\}\}`)
+	bracePlaceholderRE = regexp.MustCompile(`\{([^{}]+)\}`)
 )
 
 // Render replaces known placeholders with values from the render environment.
@@ -193,14 +192,13 @@ func collectPlaceholderNames(template string) []string {
 }
 
 func analyzeText(template string) textAnalysis {
-	normalized := normalizeLegacyMustache(template)
-	if normalized == "" {
-		return textAnalysis{normalized: normalized}
+	if template == "" {
+		return textAnalysis{normalized: template}
 	}
 
-	matches := bracePlaceholderRE.FindAllStringSubmatchIndex(normalized, -1)
+	matches := bracePlaceholderRE.FindAllStringSubmatchIndex(template, -1)
 	if len(matches) == 0 {
-		return textAnalysis{normalized: normalized}
+		return textAnalysis{normalized: template}
 	}
 
 	parts := make([]textPart, 0, len(matches)*2+1)
@@ -212,10 +210,15 @@ func analyzeText(template string) textAnalysis {
 		start, end := match[0], match[1]
 		innerStart, innerEnd := match[2], match[3]
 		if start > last {
-			parts = append(parts, textPart{literal: normalized[last:start]})
+			parts = append(parts, textPart{literal: template[last:start]})
 		}
-		raw := normalized[start:end]
-		token, ok := parsePlaceholder(raw, normalized[innerStart:innerEnd])
+		raw := template[start:end]
+		if isLegacyMustacheSpan(template, start, end) {
+			parts = append(parts, textPart{literal: raw})
+			last = end
+			continue
+		}
+		token, ok := parsePlaceholder(raw, template[innerStart:innerEnd])
 		if ok {
 			tokenCopy := token
 			parts = append(parts, textPart{placeholder: &tokenCopy})
@@ -224,20 +227,18 @@ func analyzeText(template string) textAnalysis {
 		}
 		last = end
 	}
-	if last < len(normalized) {
-		parts = append(parts, textPart{literal: normalized[last:]})
+	if last < len(template) {
+		parts = append(parts, textPart{literal: template[last:]})
 	}
 	return textAnalysis{
-		normalized: normalized,
+		normalized: template,
 		parts:      parts,
 	}
 }
 
-func normalizeLegacyMustache(template string) string {
-	if template == "" {
-		return template
-	}
-	return legacyMustachePlaceholderRE.ReplaceAllString(template, `{$1$2}`)
+func isLegacyMustacheSpan(template string, start, end int) bool {
+	return (start > 0 && template[start-1] == '{') ||
+		(end < len(template) && template[end] == '}')
 }
 
 func parsePlaceholder(raw, inner string) (placeholderToken, bool) {

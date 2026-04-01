@@ -121,7 +121,7 @@ func TestTextRender_SubstitutedValuesMayContainSimpleBraces(t *testing.T) {
 	require.Equal(t, "msg: user said {name} and {city}", rendered)
 }
 
-func TestTextRender_NormalizesLegacyMustache(t *testing.T) {
+func TestTextRender_LeavesLegacyMustacheUntouched(t *testing.T) {
 	tpl := Text{
 		Template: "hello {{ name }} from {{user:city?}}",
 	}
@@ -133,7 +133,17 @@ func TestTextRender_NormalizesLegacyMustache(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, "hello alice from ", rendered)
+	require.Equal(t, "hello {{ name }} from {{user:city?}}", rendered)
+}
+
+func TestTextValidateRequired_IgnoresLegacyMustache(t *testing.T) {
+	tpl := Text{
+		Template: "hello {{name}}",
+	}
+
+	err := tpl.ValidateRequired("name")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "{name}")
 }
 
 func TestTextRender_StrictUnknownReturnsError(t *testing.T) {
