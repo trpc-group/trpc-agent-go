@@ -88,12 +88,23 @@ type Surface struct {
 
 // SurfaceValue is a discriminated union keyed by SurfaceType.
 type SurfaceValue struct {
-	Text    *string
-	FewShot []FewShotExample
-	Model   *ModelRef
-	Tools   []ToolRef
-	Skills  []SkillRef
+	Text         *string
+	PromptSyntax *PromptSyntax
+	FewShot      []FewShotExample
+	Model        *ModelRef
+	Tools        []ToolRef
+	Skills       []SkillRef
 }
+
+// PromptSyntax describes how a prompt text surface should interpret placeholders.
+type PromptSyntax string
+
+const (
+	// PromptSyntaxSingleBrace represents single-brace placeholders such as {name}.
+	PromptSyntaxSingleBrace PromptSyntax = "single_brace"
+	// PromptSyntaxDoubleCurly represents double-curly placeholders such as {{name}}.
+	PromptSyntaxDoubleCurly PromptSyntax = "double_curly"
+)
 
 // FewShotExample is one few-shot example group.
 type FewShotExample struct {

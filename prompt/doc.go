@@ -9,12 +9,13 @@
 // Package prompt provides small text prompt rendering helpers.
 //
 // The package centers on one text template type with:
-//   - {name} placeholders resolved from explicit Vars
+//   - explicit syntax selection for either {name} or {{name}} placeholders
 //   - optional resolver-backed placeholders such as {user:name}
 //   - lightweight prompt identity metadata
 //
-// Legacy Mustache-style placeholders like {{name}} are normalized into the
-// canonical single-brace form during rendering.
+// Double-curly placeholders are treated as variable substitution only; this
+// package does not implement full Mustache control syntax such as sections or
+// partials.
 //
 // More advanced behaviors such as few-shot assembly, chat prompt composition,
 // and remote prompt registries remain in their existing packages for now.

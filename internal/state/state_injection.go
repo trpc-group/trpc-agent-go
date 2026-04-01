@@ -14,10 +14,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/internal/promptcore"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -27,32 +27,11 @@ const (
 	stateInvocationKey = "invocation:"
 )
 
-// mustachePlaceholderRE matches Mustache-style placeholders like {{key}},
-// optionally allowing namespaces (user:, app:, temp:) and the optional
-// suffix '?' (e.g., {{key?}}, {{temp:value}}). It purposely restricts the
-// allowed characters to avoid over-replacing in free text.
-var mustachePlaceholderRE = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*:(?:[A-Za-z_][A-Za-z0-9_]*)|[A-Za-z_][A-Za-z0-9_]*)(\?)?\s*\}\}`)
-
-// normalizePlaceholders converts supported Mustache-style placeholders
-// to the framework's native single-brace form before injection.
-// Examples:
-//
-//	{{key}}          -> {key}
-//	{{key?}}         -> {key?}
-//	{{user:name}}    -> {user:name}
-//	{{temp:value?}}  -> {temp:value?}
-func normalizePlaceholders(s string) string {
-	if s == "" {
-		return s
-	}
-	return mustachePlaceholderRE.ReplaceAllString(s, `{$1$2}`)
-}
-
 // InjectSessionState replaces state variables in the instruction template with their corresponding values from session state.
-// This function supports the following patterns:
+// This function supports both {name} and {{name}} placeholders.
 // - {variable_name}: Replaces with the value of the variable from session state.
 // - {variable_name?}: Optional variable, replaces with empty string if not found.
-// - {artifact.filename}: Replaces with artifact content (not implemented yet).
+// - {artifact.filename}: Preserved when unresolved, or collapsed when optional.
 //
 // Example:
 //
@@ -91,68 +70,25 @@ func injectSessionState(
 		return template, nil
 	}
 
-	// 1) Normalize Mustache-style placeholders ({{...}}) into the framework's
-	//    native single-brace form so downstream logic works uniformly.
-	//    This provides global compatibility for templates authored with
-	//    systems like Agno without requiring callers to pre-process.
-	template = normalizePlaceholders(template)
-
-	// Regular expression to match state variables in curly braces.
-	// Supports optional variables with ? suffix.
-	stateVarPattern := regexp.MustCompile(`\{([^{}]+)\}`)
 	resolver := stateResolver{
 		invocation: invocation,
 		session:    sess,
 	}
-
-	var resolveErr error
-	result := stateVarPattern.ReplaceAllStringFunc(template, func(match string) string {
-		// Extract the variable name from the match.
-		varName := strings.Trim(match, "{}")
-
-		// Check if this is an optional variable.
-		optional := false
-		if strings.HasSuffix(varName, "?") {
-			optional = true
-			varName = strings.TrimSuffix(varName, "?")
-		}
-
-		// Check if this is an artifact reference.
-		if strings.HasPrefix(varName, "artifact.") {
-			// TODO: Implement artifact injection when artifact service is available.
-			if optional {
-				return ""
-			}
-			return match // Return original match if not optional.
-		}
-
-		// Validate the variable name.
-		if !isValidStateName(varName) {
-			return match // Return original match for invalid names.
-		}
-
-		value, found, err := resolver.Resolve(prompt.Ref{Name: varName})
-		if err != nil {
-			resolveErr = err
-			return match
-		}
-		if found {
-			return value
-		}
-
-		// Variable not found.
-		if optional {
-			return "" // Return empty string for optional variables.
-		}
-
-		// For non-optional variables, return the original match to preserve the template.
-		// This allows the LLM to see the unresolved variable and handle it appropriately.
-		return match
-	})
-	if resolveErr != nil {
-		return template, resolveErr
+	rendered, err := promptcore.Render(
+		template,
+		promptcore.SyntaxModeCompatMixed,
+		promptcore.Env{
+			Resolve: func(name string) (string, bool, error) {
+				return resolver.Resolve(prompt.Ref{Name: name})
+			},
+		},
+		promptcore.PreserveUnknown,
+		promptcore.WithAcceptName(isValidStateName),
+	)
+	if err != nil {
+		return template, err
 	}
-	return result, nil
+	return rendered, nil
 }
 
 type stateResolver struct {
@@ -210,16 +146,21 @@ func renderStateValue(raw []byte) string {
 	}
 }
 
-// isValidStateName checks if the variable name is a valid state name.
-// Valid state names are either:
-// - Valid identifiers (alphanumeric + underscore, starting with letter or underscore)
-// - Names with prefixes like "app:", "user:", "temp:" followed by valid identifiers
+// isValidStateName checks whether a placeholder name belongs to the legacy
+// state-injection subset.
+//
+// Keeping this narrower than the public prompt grammar preserves historical
+// behavior: placeholders outside the old subset remain literal in the state
+// adapter, including optional placeholders.
 func isValidStateName(varName string) bool {
 	if varName == "" {
 		return false
 	}
 
-	// Check if it's a simple identifier.
+	if strings.HasPrefix(varName, "artifact.") {
+		return true
+	}
+
 	if isIdentifier(varName) {
 		return true
 	}
@@ -228,7 +169,12 @@ func isValidStateName(varName string) bool {
 	parts := strings.Split(varName, ":")
 	if len(parts) == 2 {
 		prefix := parts[0] + ":"
-		validPrefixes := []string{session.StateAppPrefix, session.StateUserPrefix, session.StateTempPrefix, stateInvocationKey}
+		validPrefixes := []string{
+			session.StateAppPrefix,
+			session.StateUserPrefix,
+			session.StateTempPrefix,
+			stateInvocationKey,
+		}
 		for _, validPrefix := range validPrefixes {
 			if prefix == validPrefix {
 				return isIdentifier(parts[1])

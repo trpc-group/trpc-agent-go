@@ -121,6 +121,21 @@ func TestTextRender_SubstitutedValuesMayContainSimpleBraces(t *testing.T) {
 	require.Equal(t, "msg: user said {name} and {city}", rendered)
 }
 
+func TestTextRender_SingleBraceAllowsOuterWhitespace(t *testing.T) {
+	tpl := Text{
+		Template: "hello { name } from { user:name ? }",
+	}
+
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"name": "alice",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "hello alice from ", rendered)
+}
+
 func TestTextRender_LeavesLegacyMustacheUntouched(t *testing.T) {
 	tpl := Text{
 		Template: "hello {{ name }} from {{user:city?}}",
@@ -136,6 +151,23 @@ func TestTextRender_LeavesLegacyMustacheUntouched(t *testing.T) {
 	require.Equal(t, "hello {{ name }} from {{user:city?}}", rendered)
 }
 
+func TestTextRender_DoubleCurlySyntax(t *testing.T) {
+	tpl := Text{
+		Template: "hello {{ name }} from {{ city }} and {{ user:name? }}",
+		Syntax:   SyntaxDoubleCurly,
+	}
+
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"name": "alice",
+			"city": "paris",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "hello alice from paris and ", rendered)
+}
+
 func TestTextValidateRequired_IgnoresLegacyMustache(t *testing.T) {
 	tpl := Text{
 		Template: "hello {{name}}",
@@ -144,6 +176,15 @@ func TestTextValidateRequired_IgnoresLegacyMustache(t *testing.T) {
 	err := tpl.ValidateRequired("name")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "{name}")
+}
+
+func TestTextValidateRequired_DoubleCurlySyntax(t *testing.T) {
+	tpl := Text{
+		Template: "hello {{name}}",
+		Syntax:   SyntaxDoubleCurly,
+	}
+
+	require.NoError(t, tpl.ValidateRequired("name"))
 }
 
 func TestTextRender_StrictUnknownReturnsError(t *testing.T) {
@@ -173,7 +214,7 @@ func TestTextRender_LeavesOpaquePlaceholdersUntouched(t *testing.T) {
 	rendered, err := tpl.Render(RenderEnv{})
 
 	require.NoError(t, err)
-	require.Equal(t, "Content {artifact.file.txt} optional {artifact.file.txt?}", rendered)
+	require.Equal(t, "Content {artifact.file.txt} optional ", rendered)
 }
 
 func TestTextValidateRequired(t *testing.T) {

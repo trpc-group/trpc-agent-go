@@ -10,9 +10,10 @@ package prompt
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/promptcore"
 )
 
 // Meta identifies a prompt template for observability or future registry use.
@@ -24,10 +25,24 @@ type Meta struct {
 // Vars stores runtime values used to render a prompt template.
 type Vars map[string]string
 
+// Syntax controls which placeholder delimiters are recognized.
+type Syntax int
+
+const (
+	// SyntaxSingleBrace recognizes {name} placeholders.
+	SyntaxSingleBrace Syntax = iota
+	// SyntaxDoubleCurly recognizes {{name}} placeholders.
+	//
+	// This supports double-curly variable substitution only. It does not
+	// implement full Mustache syntax such as sections or partials.
+	SyntaxDoubleCurly
+)
+
 // Text is a minimal text prompt template with optional metadata.
 type Text struct {
 	Template string
 	Meta     Meta
+	Syntax   Syntax
 }
 
 // RenderEnv contains runtime values used to render a prompt template.
@@ -81,26 +96,6 @@ type renderConfig struct {
 	unknownBehavior UnknownBehavior
 }
 
-type textAnalysis struct {
-	normalized string
-	parts      []textPart
-}
-
-type textPart struct {
-	literal     string
-	placeholder *placeholderToken
-}
-
-type placeholderToken struct {
-	raw      string
-	ref      Ref
-	optional bool
-}
-
-var (
-	bracePlaceholderRE = regexp.MustCompile(`\{([^{}]+)\}`)
-)
-
 // Render replaces known placeholders with values from the render environment.
 // Unknown placeholders are preserved by default so later stages can still see them.
 func (t Text) Render(env RenderEnv, opts ...RenderOption) (string, error) {
@@ -110,44 +105,20 @@ func (t Text) Render(env RenderEnv, opts ...RenderOption) (string, error) {
 			opt(&cfg)
 		}
 	}
-
-	analysis := analyzeText(t.Template)
-	if len(analysis.parts) == 0 {
-		return analysis.normalized, nil
-	}
-
-	var builder strings.Builder
-	var unresolved []string
-	for _, part := range analysis.parts {
-		if part.placeholder == nil {
-			builder.WriteString(part.literal)
-			continue
-		}
-
-		value, ok, err := renderPlaceholder(*part.placeholder, env)
-		if err != nil {
-			return "", err
-		}
-		if ok {
-			builder.WriteString(value)
-			continue
-		}
-		if part.placeholder.optional {
-			continue
-		}
-		builder.WriteString(part.placeholder.raw)
-		if cfg.unknownBehavior == ErrorOnUnknown {
-			unresolved = append(unresolved, part.placeholder.raw)
-		}
-	}
-
-	if len(unresolved) > 0 {
-		return builder.String(), fmt.Errorf(
-			"prompt: unresolved placeholders: %s",
-			strings.Join(uniqueSortedStrings(unresolved), ", "),
-		)
-	}
-	return builder.String(), nil
+	return promptcore.Render(
+		t.Template,
+		toCoreSyntax(t.Syntax),
+		promptcore.Env{
+			Vars: env.Vars,
+			Resolve: func(name string) (string, bool, error) {
+				if env.Resolver == nil {
+					return "", false, nil
+				}
+				return env.Resolver.Resolve(Ref{Name: name})
+			},
+		},
+		toCoreUnknownBehavior(cfg.unknownBehavior),
+	)
 }
 
 // ValidateRequired checks that the template contains all required placeholders.
@@ -156,7 +127,10 @@ func (t Text) ValidateRequired(names ...string) error {
 		return nil
 	}
 	present := make(map[string]struct{})
-	for _, name := range collectPlaceholderNames(t.Template) {
+	for _, name := range promptcore.PlaceholderNames(
+		t.Template,
+		toCoreSyntax(t.Syntax),
+	) {
 		present[name] = struct{}{}
 	}
 
@@ -174,111 +148,6 @@ func (t Text) ValidateRequired(names ...string) error {
 		"prompt: missing required placeholders: %s",
 		strings.Join(formatPlaceholderNames(missing), ", "),
 	)
-}
-
-func collectPlaceholderNames(template string) []string {
-	analysis := analyzeText(template)
-	if len(analysis.parts) == 0 {
-		return nil
-	}
-	var names []string
-	for _, part := range analysis.parts {
-		if part.placeholder == nil {
-			continue
-		}
-		names = append(names, placeholderName(part.placeholder.ref))
-	}
-	return uniqueSortedNames(names)
-}
-
-func analyzeText(template string) textAnalysis {
-	if template == "" {
-		return textAnalysis{normalized: template}
-	}
-
-	matches := bracePlaceholderRE.FindAllStringSubmatchIndex(template, -1)
-	if len(matches) == 0 {
-		return textAnalysis{normalized: template}
-	}
-
-	parts := make([]textPart, 0, len(matches)*2+1)
-	last := 0
-	for _, match := range matches {
-		if len(match) < 4 {
-			continue
-		}
-		start, end := match[0], match[1]
-		innerStart, innerEnd := match[2], match[3]
-		if start > last {
-			parts = append(parts, textPart{literal: template[last:start]})
-		}
-		raw := template[start:end]
-		if isLegacyMustacheSpan(template, start, end) {
-			parts = append(parts, textPart{literal: raw})
-			last = end
-			continue
-		}
-		token, ok := parsePlaceholder(raw, template[innerStart:innerEnd])
-		if ok {
-			tokenCopy := token
-			parts = append(parts, textPart{placeholder: &tokenCopy})
-		} else {
-			parts = append(parts, textPart{literal: raw})
-		}
-		last = end
-	}
-	if last < len(template) {
-		parts = append(parts, textPart{literal: template[last:]})
-	}
-	return textAnalysis{
-		normalized: template,
-		parts:      parts,
-	}
-}
-
-func isLegacyMustacheSpan(template string, start, end int) bool {
-	return (start > 0 && template[start-1] == '{') ||
-		(end < len(template) && template[end] == '}')
-}
-
-func parsePlaceholder(raw, inner string) (placeholderToken, bool) {
-	name := inner
-	optional := false
-	if strings.HasSuffix(name, "?") {
-		optional = true
-		name = strings.TrimSuffix(name, "?")
-	}
-	if name == "" {
-		return placeholderToken{}, false
-	}
-	ref, ok := parseRef(name)
-	if !ok {
-		return placeholderToken{}, false
-	}
-	return placeholderToken{
-		raw:      raw,
-		ref:      ref,
-		optional: optional,
-	}, true
-}
-
-func parseRef(name string) (Ref, bool) {
-	if !isRefName(name) {
-		return Ref{}, false
-	}
-	return Ref{Name: name}, true
-}
-
-func renderPlaceholder(token placeholderToken, env RenderEnv) (string, bool, error) {
-	if env.Vars != nil {
-		if value, ok := env.Vars[token.ref.Name]; ok {
-			return value, true, nil
-		}
-	}
-	if env.Resolver == nil {
-		return "", false, nil
-	}
-	return env.Resolver.Resolve(token.ref)
 }
 
 func normalizeNames(names []string) []string {
@@ -341,41 +210,20 @@ func formatPlaceholderNames(names []string) []string {
 	return formatted
 }
 
-func placeholderName(ref Ref) string {
-	return ref.Name
+func toCoreSyntax(s Syntax) promptcore.SyntaxMode {
+	switch s {
+	case SyntaxDoubleCurly:
+		return promptcore.SyntaxModeDoubleCurly
+	default:
+		return promptcore.SyntaxModeSingleBrace
+	}
 }
 
-func isRefName(s string) bool {
-	if s == "" {
-		return false
+func toCoreUnknownBehavior(b UnknownBehavior) promptcore.UnknownBehavior {
+	switch b {
+	case ErrorOnUnknown:
+		return promptcore.ErrorOnUnknown
+	default:
+		return promptcore.PreserveUnknown
 	}
-	for _, part := range strings.Split(s, ":") {
-		if !isIdentifier(part) {
-			return false
-		}
-	}
-	return true
-}
-
-func isIdentifier(s string) bool {
-	if s == "" {
-		return false
-	}
-	if !isLetterOrUnderscore(rune(s[0])) {
-		return false
-	}
-	for _, r := range s[1:] {
-		if !isLetterOrDigitOrUnderscore(r) {
-			return false
-		}
-	}
-	return true
-}
-
-func isLetterOrUnderscore(r rune) bool {
-	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_'
-}
-
-func isLetterOrDigitOrUnderscore(r rune) bool {
-	return isLetterOrUnderscore(r) || (r >= '0' && r <= '9')
 }

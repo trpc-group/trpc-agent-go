@@ -91,6 +91,20 @@ func TestInjectSessionState(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name:        "invalid optional variable name",
+			template:    "Hello {invalid-name?}!",
+			state:       map[string]any{},
+			expected:    "Hello {invalid-name?}!", // Invalid names stay literal even when optional.
+			expectError: false,
+		},
+		{
+			name:        "numeric leading variable name remains literal",
+			template:    "Hello {123invalid}!",
+			state:       map[string]any{"123invalid": "value"},
+			expected:    "Hello {123invalid}!",
+			expectError: false,
+		},
+		{
 			name:        "artifact reference (not implemented)",
 			template:    "Content: {artifact.file.txt}",
 			state:       map[string]any{},
@@ -197,6 +211,7 @@ func TestIsValidStateName(t *testing.T) {
 		{"user:preference", true},
 		{"app:setting", true},
 		{"temp:value", true},
+		{"invocation:key", true},
 		{"invalid-name", false},
 		{"invalid name", false},
 		{"123invalid", false},
@@ -211,29 +226,14 @@ func TestIsValidStateName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := isValidStateName(tt.name)
 			if result != tt.expected {
-				t.Errorf("isValidStateName(%q) = %v, expected %v", tt.name, result, tt.expected)
+				t.Errorf(
+					"isValidStateName(%q) = %v, expected %v",
+					tt.name,
+					result,
+					tt.expected,
+				)
 			}
 		})
-	}
-}
-
-func TestNormalizePlaceholders_MustacheToNative(t *testing.T) {
-	cases := map[string]string{
-		"{{key}}":             "{key}",
-		"{{ key }}":           "{key}",
-		"{{key?}}":            "{key?}",
-		"{{ user:name }}":     "{user:name}",
-		"{{app:setting}}":     "{app:setting}",
-		"x {{temp:value?}} y": "x {temp:value?} y",
-		// invalid names should remain untouched
-		"{{invalid-name}}": "{{invalid-name}}",
-		"{{ 123abc }}":     "{{ 123abc }}",
-	}
-	for in, want := range cases {
-		got := normalizePlaceholders(in)
-		if got != want {
-			t.Fatalf("normalizePlaceholders(%q)=%q, want=%q", in, got, want)
-		}
 	}
 }
 
@@ -267,6 +267,26 @@ func TestInjectSessionState_MustachePlaceholders(t *testing.T) {
 	s, err = InjectSessionState("bad {{invalid-name}}", inv)
 	if err != nil || s != "bad {{invalid-name}}" {
 		t.Fatalf("InjectSessionState invalid mustache: got %q err=%v", s, err)
+	}
+
+	// Invalid optional name stays too.
+	s, err = InjectSessionState("bad {{invalid-name?}}", inv)
+	if err != nil || s != "bad {{invalid-name?}}" {
+		t.Fatalf("InjectSessionState invalid optional mustache: got %q err=%v", s, err)
+	}
+}
+
+func TestInjectSessionState_SingleBracePlaceholdersWithWhitespace(t *testing.T) {
+	sm := make(session.StateMap)
+	sm["name"] = []byte(`"alice"`)
+	inv := &agent.Invocation{Session: &session.Session{State: sm}}
+
+	s, err := InjectSessionState("hi { name } and { missing ? }", inv)
+	if err != nil {
+		t.Fatalf("InjectSessionState whitespace: got err=%v", err)
+	}
+	if s != "hi alice and " {
+		t.Fatalf("InjectSessionState whitespace: got %q", s)
 	}
 }
 
