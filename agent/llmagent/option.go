@@ -163,6 +163,9 @@ type Options struct {
 	ModelGlobalInstructions map[string]string
 	// GenerationConfig contains the generation configuration.
 	GenerationConfig model.GenerationConfig
+	// generationConfigConfigured records whether callers explicitly set
+	// generation configuration through WithGenerationConfig.
+	generationConfigConfigured bool
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
 	codeExecutor      codeexecutor.CodeExecutor
@@ -473,6 +476,7 @@ func WithModelGlobalInstructions(prompts map[string]string) Option {
 func WithGenerationConfig(config model.GenerationConfig) Option {
 	return func(opts *Options) {
 		opts.GenerationConfig = config
+		opts.generationConfigConfigured = true
 	}
 }
 
