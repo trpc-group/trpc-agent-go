@@ -1499,6 +1499,7 @@ func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
 	handler.ServeHTTP(openRR, openReq)
 	require.Equal(t, http.StatusOK, openRR.Code)
 	require.Equal(t, "video", openRR.Body.String())
+	require.Equal(t, "5", openRR.Header().Get(headerContentLength))
 
 	downloadRR := httptest.NewRecorder()
 	downloadReq := httptest.NewRequest(
@@ -1515,6 +1516,11 @@ func TestServiceSnapshotIncludesUploadsAndExec(t *testing.T) {
 		t,
 		downloadRR.Header().Get("Content-Disposition"),
 		"clip.mp4",
+	)
+	require.Equal(
+		t,
+		"5",
+		downloadRR.Header().Get(headerContentLength),
 	)
 }
 
@@ -1830,6 +1836,204 @@ func TestRelativeRequestReference(t *testing.T) {
 			"/skills?notice=ok#skills-admin",
 		),
 	)
+}
+
+func TestRelativeRequestReference_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		currentPathSegment,
+		relativePathReference(
+			routeSkillsPage+rootPath,
+			routeSkillsPage,
+		),
+	)
+
+	type testCase struct {
+		name        string
+		requestPath string
+		target      string
+		want        string
+	}
+
+	cases := []testCase{
+		{
+			name:        "nested page",
+			requestPath: "/skills/setup/",
+			target:      routeSkillsPage,
+			want:        parentPathSegment,
+		},
+		{
+			name:        "plain relative target",
+			requestPath: routeOverview,
+			target:      "skills",
+			want:        "skills",
+		},
+		{
+			name:        "absolute url",
+			requestPath: routeOverview,
+			target:      "https://example.com/skills",
+			want:        "https://example.com/skills",
+		},
+		{
+			name:        "scheme relative",
+			requestPath: routeOverview,
+			target:      "//example.com/skills",
+			want:        "//example.com/skills",
+		},
+		{
+			name:        "invalid escape",
+			requestPath: routeOverview,
+			target:      "/%zz",
+			want:        "/%zz",
+		},
+	}
+
+	for _, tt := range cases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(
+				t,
+				tt.want,
+				relativeRequestReference(
+					tt.requestPath,
+					tt.target,
+				),
+			)
+		})
+	}
+}
+
+func TestIsHTMLContentType(t *testing.T) {
+	t.Parallel()
+
+	type testCase struct {
+		name        string
+		contentType string
+		want        bool
+	}
+
+	cases := []testCase{
+		{
+			name:        "html with charset",
+			contentType: "text/html; charset=utf-8",
+			want:        true,
+		},
+		{
+			name:        "html with invalid params",
+			contentType: " Text/HTML; charset",
+			want:        true,
+		},
+		{
+			name:        "json",
+			contentType: "application/json",
+			want:        false,
+		},
+		{
+			name:        "empty",
+			contentType: "",
+			want:        false,
+		},
+	}
+
+	for _, tt := range cases {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(
+				t,
+				tt.want,
+				isHTMLContentType(tt.contentType),
+			)
+		})
+	}
+}
+
+func TestRewriteHTMLBody(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`
+<html><body>
+<a href="/skills" data-path="/skills">Skills</a>
+<form action="/api/skills/refresh">
+<button formaction="/api/cron/jobs/run">Run</button>
+</form>
+<img src="/uploads/file?path=clip.mp4">
+</body></html>`)
+
+	got, ok := rewriteHTMLBody(
+		routeOverview,
+		"text/html; charset=utf-8",
+		body,
+	)
+	require.True(t, ok)
+	require.Contains(t, string(got), `href="skills"`)
+	require.Contains(
+		t,
+		string(got),
+		`action="api/skills/refresh"`,
+	)
+	require.Contains(
+		t,
+		string(got),
+		`formaction="api/cron/jobs/run"`,
+	)
+	require.Contains(
+		t,
+		string(got),
+		`src="uploads/file?path=clip.mp4"`,
+	)
+	require.Contains(t, string(got), `data-path="/skills"`)
+}
+
+func TestRewriteHTMLBodySkipsNonHTML(t *testing.T) {
+	t.Parallel()
+
+	jsonBody := []byte(`{"href":"/skills"}`)
+	got, ok := rewriteHTMLBody(
+		routeOverview,
+		"application/json",
+		jsonBody,
+	)
+	require.False(t, ok)
+	require.Equal(t, jsonBody, got)
+
+	got, ok = rewriteHTMLBody(routeOverview, htmlMediaType, nil)
+	require.False(t, ok)
+	require.Nil(t, got)
+}
+
+func TestRelativePathInternalHelpers(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, wrapRelativeLinks(nil))
+	require.Nil(t, wrapRelativeLinksFunc(nil))
+
+	writer := newBufferedResponseWriter()
+	require.NotNil(t, writer.Header())
+
+	writer.WriteHeader(http.StatusCreated)
+	writer.WriteHeader(http.StatusAccepted)
+	writer.Flush()
+
+	require.Equal(t, http.StatusCreated, writer.status)
+	require.True(t, writer.wroteHeader)
+
+	require.Equal(t, rootPath, requestBaseDir(""))
+	require.Equal(t, "/skills", requestBaseDir("skills/setup"))
+	require.Equal(t, rootPath, requestPath(nil))
+	require.Equal(t, rootPath, requestPath(&http.Request{}))
+	require.Equal(
+		t,
+		routeSkillsPage,
+		requestPath(&http.Request{
+			URL: &url.URL{Path: routeSkillsPage},
+		}),
+	)
+
+	rewriteHTMLReferences(nil, routeOverview)
 }
 
 func TestServiceUploadsJSON_RewritesGeneratedNames(t *testing.T) {

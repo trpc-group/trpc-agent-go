@@ -53,6 +53,16 @@ func wrapRelativeLinks(base http.Handler) http.Handler {
 	})
 }
 
+func wrapRelativeLinksFunc(
+	handler http.HandlerFunc,
+) http.HandlerFunc {
+	if handler == nil {
+		return nil
+	}
+	wrapped := wrapRelativeLinks(handler)
+	return wrapped.ServeHTTP
+}
+
 type bufferedResponseWriter struct {
 	header      http.Header
 	body        bytes.Buffer
