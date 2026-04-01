@@ -36,16 +36,15 @@ type RenderEnv struct {
 	Resolver Resolver
 }
 
-// Ref identifies a resolver-backed placeholder.
+// Ref identifies a resolver-backed placeholder using the raw extracted name.
 type Ref struct {
-	Namespace string
-	Name      string
+	Name string
 }
 
 // Resolver resolves prompt references discovered during rendering.
 type Resolver interface {
-	// Resolve returns the replacement text for ref, whether a value was found,
-	// and any fatal resolution error.
+	// Resolve returns the replacement text for ref.Name, whether a value was
+	// found, and any fatal resolution error.
 	//
 	// The found flag is intentionally separate from the string result so the
 	// renderer can distinguish "resolved to an empty string" from "not found".
@@ -92,15 +91,7 @@ type textPart struct {
 	placeholder *placeholderToken
 }
 
-type placeholderKind int
-
-const (
-	placeholderKindRef placeholderKind = iota
-	placeholderKindArtifact
-)
-
 type placeholderToken struct {
-	kind     placeholderKind
 	raw      string
 	ref      Ref
 	optional bool
@@ -108,7 +99,7 @@ type placeholderToken struct {
 
 var (
 	bracePlaceholderRE          = regexp.MustCompile(`\{([^{}]+)\}`)
-	legacyMustachePlaceholderRE = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*)?)(\?)?\s*\}\}`)
+	legacyMustachePlaceholderRE = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z_][A-Za-z0-9_]*)*)(\?)?\s*\}\}`)
 )
 
 // Render replaces known placeholders with values from the render environment.
@@ -193,7 +184,7 @@ func collectPlaceholderNames(template string) []string {
 	}
 	var names []string
 	for _, part := range analysis.parts {
-		if part.placeholder == nil || part.placeholder.kind != placeholderKindRef {
+		if part.placeholder == nil {
 			continue
 		}
 		names = append(names, placeholderName(part.placeholder.ref))
@@ -259,20 +250,11 @@ func parsePlaceholder(raw, inner string) (placeholderToken, bool) {
 	if name == "" {
 		return placeholderToken{}, false
 	}
-	if strings.HasPrefix(name, "artifact.") {
-		return placeholderToken{
-			kind:     placeholderKindArtifact,
-			raw:      raw,
-			optional: optional,
-		}, true
-	}
-
 	ref, ok := parseRef(name)
 	if !ok {
 		return placeholderToken{}, false
 	}
 	return placeholderToken{
-		kind:     placeholderKindRef,
 		raw:      raw,
 		ref:      ref,
 		optional: optional,
@@ -280,36 +262,22 @@ func parsePlaceholder(raw, inner string) (placeholderToken, bool) {
 }
 
 func parseRef(name string) (Ref, bool) {
-	namespace, key, ok := strings.Cut(name, ":")
-	if ok {
-		if !isIdentifier(namespace) || !isIdentifier(key) {
-			return Ref{}, false
-		}
-		return Ref{Namespace: namespace, Name: key}, true
-	}
-	if !isIdentifier(name) {
+	if !isRefName(name) {
 		return Ref{}, false
 	}
 	return Ref{Name: name}, true
 }
 
 func renderPlaceholder(token placeholderToken, env RenderEnv) (string, bool, error) {
-	switch token.kind {
-	case placeholderKindArtifact:
-		return "", false, nil
-	case placeholderKindRef:
-		if token.ref.Namespace == "" && env.Vars != nil {
-			if value, ok := env.Vars[token.ref.Name]; ok {
-				return value, true, nil
-			}
+	if env.Vars != nil {
+		if value, ok := env.Vars[token.ref.Name]; ok {
+			return value, true, nil
 		}
-		if env.Resolver == nil {
-			return "", false, nil
-		}
-		return env.Resolver.Resolve(token.ref)
-	default:
+	}
+	if env.Resolver == nil {
 		return "", false, nil
 	}
+	return env.Resolver.Resolve(token.ref)
 }
 
 func normalizeNames(names []string) []string {
@@ -373,10 +341,19 @@ func formatPlaceholderNames(names []string) []string {
 }
 
 func placeholderName(ref Ref) string {
-	if ref.Namespace == "" {
-		return ref.Name
+	return ref.Name
+}
+
+func isRefName(s string) bool {
+	if s == "" {
+		return false
 	}
-	return ref.Namespace + ":" + ref.Name
+	for _, part := range strings.Split(s, ":") {
+		if !isIdentifier(part) {
+			return false
+		}
+	}
+	return true
 }
 
 func isIdentifier(s string) bool {

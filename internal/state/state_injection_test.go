@@ -98,6 +98,13 @@ func TestInjectSessionState(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name:        "optional artifact reference (not implemented)",
+			template:    "Content: {artifact.file.txt?}",
+			state:       map[string]any{},
+			expected:    "Content: ", // Optional artifact references collapse to empty.
+			expectError: false,
+		},
+		{
 			name:        "prefixed variable names",
 			template:    "User: {user:preference}, App: {app:setting}",
 			state:       map[string]any{"user:preference": "dark", "app:setting": "enabled"},

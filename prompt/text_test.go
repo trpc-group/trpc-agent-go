@@ -17,11 +17,7 @@ import (
 type mapResolver map[string]string
 
 func (r mapResolver) Resolve(ref Ref) (string, bool, error) {
-	key := ref.Name
-	if ref.Namespace != "" {
-		key = ref.Namespace + ":" + ref.Name
-	}
-	value, ok := r[key]
+	value, ok := r[ref.Name]
 	return value, ok, nil
 }
 
@@ -75,6 +71,24 @@ func TestTextRender_VarsTakePrecedenceOverResolverFallback(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "name alice", rendered)
+}
+
+func TestTextRender_VarsMatchRawExtractedPlaceholderName(t *testing.T) {
+	tpl := Text{
+		Template: "user {user:name}",
+	}
+
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"user:name": "alice",
+		},
+		Resolver: mapResolver{
+			"user:name": "bob",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "user alice", rendered)
 }
 
 func TestTextRender_OptionalMissingCollapsesToEmpty(t *testing.T) {
@@ -141,7 +155,7 @@ func TestTextRender_StrictUnknownReturnsError(t *testing.T) {
 	require.Contains(t, err.Error(), "{city}")
 }
 
-func TestTextRender_ArtifactPlaceholderCompatibility(t *testing.T) {
+func TestTextRender_LeavesOpaquePlaceholdersUntouched(t *testing.T) {
 	tpl := Text{
 		Template: "Content {artifact.file.txt} optional {artifact.file.txt?}",
 	}
@@ -149,7 +163,7 @@ func TestTextRender_ArtifactPlaceholderCompatibility(t *testing.T) {
 	rendered, err := tpl.Render(RenderEnv{})
 
 	require.NoError(t, err)
-	require.Equal(t, "Content {artifact.file.txt} optional ", rendered)
+	require.Equal(t, "Content {artifact.file.txt} optional {artifact.file.txt?}", rendered)
 }
 
 func TestTextValidateRequired(t *testing.T) {

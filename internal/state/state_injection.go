@@ -87,16 +87,72 @@ func injectSessionState(
 	invocation *agent.Invocation,
 	sess *session.Session,
 ) (string, error) {
-	rendered, err := prompt.Text{Template: template}.Render(prompt.RenderEnv{
-		Resolver: stateResolver{
-			invocation: invocation,
-			session:    sess,
-		},
-	})
-	if err != nil {
-		return template, err
+	if template == "" {
+		return template, nil
 	}
-	return rendered, nil
+
+	// 1) Normalize Mustache-style placeholders ({{...}}) into the framework's
+	//    native single-brace form so downstream logic works uniformly.
+	//    This provides global compatibility for templates authored with
+	//    systems like Agno without requiring callers to pre-process.
+	template = normalizePlaceholders(template)
+
+	// Regular expression to match state variables in curly braces.
+	// Supports optional variables with ? suffix.
+	stateVarPattern := regexp.MustCompile(`\{([^{}]+)\}`)
+	resolver := stateResolver{
+		invocation: invocation,
+		session:    sess,
+	}
+
+	var resolveErr error
+	result := stateVarPattern.ReplaceAllStringFunc(template, func(match string) string {
+		// Extract the variable name from the match.
+		varName := strings.Trim(match, "{}")
+
+		// Check if this is an optional variable.
+		optional := false
+		if strings.HasSuffix(varName, "?") {
+			optional = true
+			varName = strings.TrimSuffix(varName, "?")
+		}
+
+		// Check if this is an artifact reference.
+		if strings.HasPrefix(varName, "artifact.") {
+			// TODO: Implement artifact injection when artifact service is available.
+			if optional {
+				return ""
+			}
+			return match // Return original match if not optional.
+		}
+
+		// Validate the variable name.
+		if !isValidStateName(varName) {
+			return match // Return original match for invalid names.
+		}
+
+		value, found, err := resolver.Resolve(prompt.Ref{Name: varName})
+		if err != nil {
+			resolveErr = err
+			return match
+		}
+		if found {
+			return value
+		}
+
+		// Variable not found.
+		if optional {
+			return "" // Return empty string for optional variables.
+		}
+
+		// For non-optional variables, return the original match to preserve the template.
+		// This allows the LLM to see the unresolved variable and handle it appropriately.
+		return match
+	})
+	if resolveErr != nil {
+		return template, resolveErr
+	}
+	return result, nil
 }
 
 type stateResolver struct {
@@ -105,37 +161,24 @@ type stateResolver struct {
 }
 
 func (r stateResolver) Resolve(ref prompt.Ref) (string, bool, error) {
-	switch ref.Namespace {
-	case stateInvocationKey[:len(stateInvocationKey)-1]:
-		if r.invocation == nil {
-			return "", false, nil
-		}
-		if val, exists := r.invocation.GetState(ref.Name); exists && val != nil {
+	if stateKey, ok := strings.CutPrefix(ref.Name, stateInvocationKey); ok && r.invocation != nil {
+		if val, exists := r.invocation.GetState(stateKey); exists && val != nil {
 			return fmt.Sprintf("%+v", val), true, nil
 		}
-		return "", false, nil
-	case "", session.StateAppPrefix[:len(session.StateAppPrefix)-1],
-		session.StateUserPrefix[:len(session.StateUserPrefix)-1],
-		session.StateTempPrefix[:len(session.StateTempPrefix)-1]:
-		sessionToUse := r.session
-		if sessionToUse == nil && r.invocation != nil {
-			sessionToUse = r.invocation.Session
-		}
-		if sessionToUse == nil {
-			return "", false, nil
-		}
-		key := ref.Name
-		if ref.Namespace != "" {
-			key = ref.Namespace + ":" + ref.Name
-		}
-		jsonBytes, exists := sessionToUse.GetState(key)
-		if !exists {
-			return "", false, nil
-		}
-		return renderStateValue(jsonBytes), true, nil
-	default:
-		return "", false, nil
 	}
+
+	// Get the value from session state.
+	sessionToUse := r.session
+	if sessionToUse == nil && r.invocation != nil {
+		sessionToUse = r.invocation.Session
+	}
+	if sessionToUse != nil {
+		if jsonBytes, exists := sessionToUse.GetState(ref.Name); exists {
+			return renderStateValue(jsonBytes), true, nil
+		}
+	}
+
+	return "", false, nil
 }
 
 // renderStateValue converts a raw state value to its string representation.
