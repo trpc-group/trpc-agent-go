@@ -313,6 +313,58 @@ agent:
 	require.Equal(t, -1, opts.PreloadMemory)
 }
 
+func TestParseRunOptions_ModelGenerationConfig_DefaultsStreamTrue(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+model:
+  mode: "mock"
+  generation_config:
+    max_tokens: 256
+    temperature: 0.1
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.NotNil(t, opts.GenerationConfig)
+	require.True(t, opts.GenerationConfig.Stream)
+	require.Equal(t, intPtrValue(256), opts.GenerationConfig.MaxTokens)
+	require.Equal(
+		t,
+		float64PtrValue(0.1),
+		opts.GenerationConfig.Temperature,
+	)
+}
+
+func TestParseRunOptions_ModelGenerationConfig_PreservesFalseStream(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+model:
+  mode: "mock"
+  generation_config:
+    stream: false
+    stop:
+      - "DONE"
+    reasoning_effort: " medium "
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.NotNil(t, opts.GenerationConfig)
+	require.False(t, opts.GenerationConfig.Stream)
+	require.Equal(t, []string{"DONE"}, opts.GenerationConfig.Stop)
+	require.Equal(
+		t,
+		stringPtrValue("medium"),
+		opts.GenerationConfig.ReasoningEffort,
+	)
+}
+
 func TestParseRunOptions_UnknownFieldFails(t *testing.T) {
 	t.Parallel()
 
@@ -391,6 +443,37 @@ func TestExpandEnvPlaceholders_MissingBraceIsPreserved(t *testing.T) {
 	out, err := expandEnvPlaceholders(in)
 	require.NoError(t, err)
 	require.Equal(t, in, out)
+}
+
+func TestResolveGenerationConfigYAML_DefaultsStreamTrue(t *testing.T) {
+	t.Parallel()
+
+	got := resolveGenerationConfigYAML(&generationConfigYAML{})
+	require.NotNil(t, got)
+	require.True(t, got.Stream)
+}
+
+func TestResolveGenerationConfigYAML_ExplicitFalseWins(t *testing.T) {
+	t.Parallel()
+
+	stream := false
+	got := resolveGenerationConfigYAML(&generationConfigYAML{
+		Stream: &stream,
+	})
+	require.NotNil(t, got)
+	require.False(t, got.Stream)
+}
+
+func intPtrValue(v int) *int {
+	return &v
+}
+
+func float64PtrValue(v float64) *float64 {
+	return &v
+}
+
+func stringPtrValue(v string) *string {
+	return &v
 }
 
 func TestExpandEnvPlaceholders_ReplacesMultiple(t *testing.T) {

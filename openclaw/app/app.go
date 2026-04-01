@@ -650,6 +650,7 @@ func NewRuntime(
 			AddSessionSummary: opts.AddSessionSummary,
 			MaxHistoryRuns:    opts.MaxHistoryRuns,
 			PreloadMemory:     opts.PreloadMemory,
+			GenerationConfig:  opts.GenerationConfig,
 			Instruction:       prompts.Instruction,
 			SystemPrompt:      prompts.SystemPrompt,
 
@@ -1076,6 +1077,7 @@ func run(ctx context.Context, args []string) error {
 			AddSessionSummary: opts.AddSessionSummary,
 			MaxHistoryRuns:    opts.MaxHistoryRuns,
 			PreloadMemory:     opts.PreloadMemory,
+			GenerationConfig:  opts.GenerationConfig,
 			Instruction:       prompts.Instruction,
 			SystemPrompt:      prompts.SystemPrompt,
 
@@ -1888,6 +1890,12 @@ func newAgent(
 		),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
 	}
+	if cfg.GenerationConfig != nil {
+		opts = append(
+			opts,
+			llmagent.WithGenerationConfig(*cfg.GenerationConfig),
+		)
+	}
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
 		opts,
@@ -2105,6 +2113,7 @@ type agentConfig struct {
 	AddSessionSummary bool
 	MaxHistoryRuns    int
 	PreloadMemory     int
+	GenerationConfig  *model.GenerationConfig
 	Instruction       string
 	SystemPrompt      string
 
