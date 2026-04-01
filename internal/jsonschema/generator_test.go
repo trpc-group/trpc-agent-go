@@ -70,6 +70,29 @@ func TestGenerator_Recursive(t *testing.T) {
 	if _, ok := schema["$defs"]; !ok {
 		t.Fatalf("expected $defs for recursive type")
 	}
+	props := schema["properties"].(map[string]any)
+	nextSchema := props["next"].(map[string]any)
+	if nextSchema["$ref"] == nil {
+		t.Fatalf("expected recursive field to keep $ref, got %v", nextSchema)
+	}
+}
+
+func TestGenerator_StrictRecursive(t *testing.T) {
+	gen := New(WithStrict())
+	schema := gen.Generate(reflect.TypeOf(&RecursiveNode{}))
+	if _, ok := schema["$defs"]; !ok {
+		t.Fatalf("expected $defs for recursive type")
+	}
+	props := schema["properties"].(map[string]any)
+	nextSchema := props["next"].(map[string]any)
+	nextAnyOf := nextSchema["anyOf"].([]any)
+	if len(nextAnyOf) != 2 {
+		t.Fatalf("expected recursive field to be nullable, got %v", nextSchema)
+	}
+	refSchema := nextAnyOf[0].(map[string]any)
+	if refSchema["$ref"] == nil {
+		t.Fatalf("expected recursive field to keep $ref, got %v", refSchema)
+	}
 }
 
 type Mixed struct {
@@ -79,11 +102,132 @@ type Mixed struct {
 	AnyMap map[string]any `json:"any_map"`
 }
 
+type structuredOutputDetail struct {
+	City  string `json:"city"`
+	Codes []int  `json:"codes"`
+}
+
+type structuredOutputPayload struct {
+	Answer   string                  `json:"answer"`
+	Detail   *structuredOutputDetail `json:"detail"`
+	Tags     []string                `json:"tags"`
+	Scores   [2]int                  `json:"scores"`
+	Optional string                  `json:"optional,omitempty"`
+}
+
+type structuredOutputMapPayload struct {
+	Answer string            `json:"answer"`
+	Labels map[string]string `json:"labels"`
+}
+
 func TestGenerator_MixedKinds(t *testing.T) {
 	gen := New()
 	schema := gen.Generate(reflect.TypeOf(Mixed{}))
 	if schema["type"] != "object" {
 		t.Fatalf("expected object root")
+	}
+}
+
+func TestGenerator_DefaultStructuredOutputPreservesOptionalFields(t *testing.T) {
+	gen := New()
+	schema := gen.Generate(reflect.TypeOf(structuredOutputPayload{}))
+	props := schema["properties"].(map[string]any)
+
+	required := schema["required"].([]string)
+	if len(required) != 2 {
+		t.Fatalf("expected only non-optional properties to be required, got %v", required)
+	}
+	if required[0] != "answer" || required[1] != "scores" {
+		t.Fatalf("expected required fields [answer scores], got %v", required)
+	}
+
+	detailSchema := props["detail"].(map[string]any)
+	if detailSchema["type"] != "object" {
+		t.Fatalf("expected detail object schema, got %v", detailSchema["type"])
+	}
+	detailRequired := detailSchema["required"].([]string)
+	if len(detailRequired) != 1 || detailRequired[0] != "city" {
+		t.Fatalf("expected nested required fields [city], got %v", detailRequired)
+	}
+
+	tagsSchema := props["tags"].(map[string]any)
+	if tagsSchema["type"] != "array" {
+		t.Fatalf("expected slice field tags to remain array, got %v", tagsSchema)
+	}
+
+	optionalSchema := props["optional"].(map[string]any)
+	if optionalSchema["type"] != "string" {
+		t.Fatalf("expected omitempty field optional to remain string, got %v", optionalSchema)
+	}
+
+	scoresSchema := props["scores"].(map[string]any)
+	if scoresSchema["type"] != "array" {
+		t.Fatalf("expected fixed array schema to remain array, got %v", scoresSchema["type"])
+	}
+}
+
+func TestGenerator_StrictStructuredOutputCompatibility(t *testing.T) {
+	gen := New(WithStrict())
+	schema := gen.Generate(reflect.TypeOf(structuredOutputPayload{}))
+	props := schema["properties"].(map[string]any)
+
+	required := schema["required"].([]string)
+	if len(required) != len(props) {
+		t.Fatalf("expected all properties to be required, got %v for %v", required, props)
+	}
+
+	detailSchema := props["detail"].(map[string]any)
+	detailAnyOf := detailSchema["anyOf"].([]any)
+	if len(detailAnyOf) != 2 {
+		t.Fatalf("expected nullable anyOf for detail, got %v", detailSchema)
+	}
+	detailObject := detailAnyOf[0].(map[string]any)
+	if detailObject["type"] != "object" {
+		t.Fatalf("expected detail object schema, got %v", detailObject["type"])
+	}
+	detailRequired := detailObject["required"].([]string)
+	if len(detailRequired) != 2 || detailRequired[0] != "city" || detailRequired[1] != "codes" {
+		t.Fatalf("expected nested required fields [city codes], got %v", detailRequired)
+	}
+
+	tagsSchema := props["tags"].(map[string]any)
+	if _, ok := tagsSchema["anyOf"].([]any); !ok {
+		t.Fatalf("expected nullable anyOf for slice field tags, got %v", tagsSchema)
+	}
+
+	optionalSchema := props["optional"].(map[string]any)
+	if _, ok := optionalSchema["anyOf"].([]any); !ok {
+		t.Fatalf("expected nullable anyOf for omitempty field optional, got %v", optionalSchema)
+	}
+
+	scoresSchema := props["scores"].(map[string]any)
+	if scoresSchema["type"] != "array" {
+		t.Fatalf("expected fixed array schema to remain array, got %v", scoresSchema["type"])
+	}
+}
+
+func TestGenerator_StructuredOutputMapCompatibility(t *testing.T) {
+	gen := New(WithStrict())
+	schema := gen.Generate(reflect.TypeOf(structuredOutputMapPayload{}))
+	props := schema["properties"].(map[string]any)
+
+	required := schema["required"].([]string)
+	if len(required) != len(props) {
+		t.Fatalf("expected all properties to be required, got %v for %v", required, props)
+	}
+
+	labelsSchema := props["labels"].(map[string]any)
+	labelsAnyOf := labelsSchema["anyOf"].([]any)
+	if len(labelsAnyOf) != 2 {
+		t.Fatalf("expected nullable anyOf for labels, got %v", labelsSchema)
+	}
+	labelsObject := labelsAnyOf[0].(map[string]any)
+	if labelsObject["type"] != "object" {
+		t.Fatalf("expected labels object schema, got %v", labelsObject["type"])
+	}
+	additionalProperties := labelsObject["additionalProperties"].(map[string]any)
+	if additionalProperties["type"] != "string" {
+		t.Fatalf("expected map value schema to remain string, got %v", additionalProperties["type"])
 	}
 }
 
@@ -97,6 +241,21 @@ func TestGenerator_MapWithNonStringKey(t *testing.T) {
 	props := schema["properties"].(map[string]any)
 	intMapSchema := props["int_map"].(map[string]any)
 	// Should fallback to array representation.
+	if intMapSchema["type"] != "array" {
+		t.Fatalf("expected array type for non-string key map, got %v", intMapSchema["type"])
+	}
+}
+
+func TestGenerator_StrictMapWithNonStringKey(t *testing.T) {
+	type NonStringKeyMap struct {
+		IntMap map[int]string `json:"int_map"`
+	}
+	gen := New(WithStrict())
+	schema := gen.Generate(reflect.TypeOf(NonStringKeyMap{}))
+	props := schema["properties"].(map[string]any)
+	intMapSchema := props["int_map"].(map[string]any)
+	intMapAnyOf := intMapSchema["anyOf"].([]any)
+	intMapSchema = intMapAnyOf[0].(map[string]any)
 	if intMapSchema["type"] != "array" {
 		t.Fatalf("expected array type for non-string key map, got %v", intMapSchema["type"])
 	}
@@ -160,6 +319,12 @@ func TestGenerator_DefinitionName(t *testing.T) {
 		t.Errorf("expected non-empty definition name for named struct")
 	}
 
+	builtinType := reflect.TypeOf(int(0))
+	defNameBuiltin := gen.definitionName(builtinType)
+	if defNameBuiltin != "int" {
+		t.Errorf("expected builtin definition name int, got %s", defNameBuiltin)
+	}
+
 	// Test with anonymous struct (no name, no package path).
 	anonType := reflect.TypeOf(struct{ Field string }{})
 	defName2 := gen.definitionName(anonType)
@@ -171,6 +336,54 @@ func TestGenerator_DefinitionName(t *testing.T) {
 	defName3 := gen.definitionName(anonType)
 	if defName2 == defName3 {
 		t.Errorf("expected unique definition names for multiple anonymous structs")
+	}
+}
+
+func TestMakeNullable(t *testing.T) {
+	nilSchema := makeNullable(nil)
+	if nilSchema["type"] != "null" {
+		t.Fatalf("expected nil schema to become null, got %v", nilSchema)
+	}
+
+	baseSchema := map[string]any{"type": "string"}
+	nullableSchema := makeNullable(baseSchema)
+	anyOf, ok := nullableSchema["anyOf"].([]any)
+	if !ok || len(anyOf) != 2 {
+		t.Fatalf("expected anyOf nullable schema, got %v", nullableSchema)
+	}
+
+	alreadyNullable := map[string]any{
+		"anyOf": []any{
+			map[string]any{"type": "string"},
+			map[string]any{"type": "null"},
+		},
+	}
+	if !reflect.DeepEqual(makeNullable(alreadyNullable), alreadyNullable) {
+		t.Fatalf("expected already nullable schema to be returned as-is")
+	}
+}
+
+func TestHasNullableAnyOf(t *testing.T) {
+	if hasNullableAnyOf(map[string]any{"type": "string"}) {
+		t.Fatalf("expected schema without anyOf to be non-nullable")
+	}
+
+	if hasNullableAnyOf(map[string]any{
+		"anyOf": []any{
+			"invalid",
+			map[string]any{"type": "string"},
+		},
+	}) {
+		t.Fatalf("expected anyOf without null branch to be non-nullable")
+	}
+
+	if !hasNullableAnyOf(map[string]any{
+		"anyOf": []any{
+			map[string]any{"type": "string"},
+			map[string]any{"type": "null"},
+		},
+	}) {
+		t.Fatalf("expected anyOf with null branch to be nullable")
 	}
 }
 

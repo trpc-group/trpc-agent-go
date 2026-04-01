@@ -11,6 +11,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -40,6 +41,7 @@ import (
 	runnerlog "trpc.group/trpc-go/trpc-agent-go/log"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -209,6 +211,23 @@ func (m *emptyIDModel) Info() model.Info { return model.Info{Name: m.name} }
 type runnerStructuredOutputTypedPayload struct {
 	Answer string `json:"answer"`
 	Score  int    `json:"score"`
+}
+
+type realStructuredOutputComplexDetail struct {
+	City  string `json:"city"`
+	Codes []int  `json:"codes"`
+}
+
+type realStructuredOutputComplexPayload struct {
+	Answer string                             `json:"answer"`
+	Detail *realStructuredOutputComplexDetail `json:"detail"`
+	Tags   []string                           `json:"tags"`
+	Scores [2]int                             `json:"scores"`
+}
+
+type realStructuredOutputMapPayload struct {
+	Answer string            `json:"answer"`
+	Labels map[string]string `json:"labels"`
 }
 
 type capturedModelRequest struct {
@@ -817,6 +836,295 @@ func TestRunner_Run_WithRunStructuredOutputJSON_PassesThroughGraphAgent(t *testi
 	require.NotNil(t, captured.structuredOutput.JSONSchema)
 	require.Equal(t, "runnerStructuredOutputTypedPayload", captured.structuredOutput.JSONSchema.Name)
 	require.Equal(t, description, captured.structuredOutput.JSONSchema.Description)
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSON_SupportsPointerSliceAndArrayFields_RealOpenAI(
+	t *testing.T,
+) {
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		t.Skip("OPENAI_API_KEY not set, skipping real API test")
+	}
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	temperature := 0.0
+	maxTokens := 200
+	modelOptions := []openai.Option{openai.WithAPIKey(apiKey)}
+	if baseURL != "" {
+		modelOptions = append(modelOptions, openai.WithBaseURL(baseURL))
+	}
+	modelInstance := openai.New("gpt-4o-mini", modelOptions...)
+	ag := llmagent.New(
+		"real-complex-structured-output-agent",
+		llmagent.WithModel(modelInstance),
+		llmagent.WithGenerationConfig(model.GenerationConfig{
+			MaxTokens:   &maxTokens,
+			Temperature: &temperature,
+			Stream:      false,
+		}),
+	)
+	r := NewRunner(
+		"real-complex-structured-output-app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, r.Close())
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	eventCh, err := r.Run(
+		ctx,
+		"user-real-complex",
+		"session-real-complex",
+		model.NewUserMessage(
+			"Return a JSON object that exactly matches the schema and uses exactly these values: "+
+				`answer="ok", detail.city="shenzhen", detail.codes=[1,2], tags=["alpha","beta"], scores=[7,9].`,
+		),
+		agent.WithStructuredOutputJSON(
+			new(realStructuredOutputComplexPayload),
+			true,
+			"Return one complex typed payload.",
+		),
+	)
+	require.NoError(t, err)
+	var structured any
+	for evt := range eventCh {
+		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		if evt.StructuredOutput != nil {
+			structured = evt.StructuredOutput
+		}
+	}
+	payload, ok := structured.(*realStructuredOutputComplexPayload)
+	require.True(t, ok, "expected complex typed structured output payload, got %T", structured)
+	require.Equal(t, "ok", payload.Answer)
+	require.NotNil(t, payload.Detail)
+	require.Equal(t, "shenzhen", payload.Detail.City)
+	require.Equal(t, []int{1, 2}, payload.Detail.Codes)
+	require.Equal(t, []string{"alpha", "beta"}, payload.Tags)
+	require.Equal(t, [2]int{7, 9}, payload.Scores)
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSON_SupportsPointerSliceAndArrayFields_NonStrict_RealOpenAI(
+	t *testing.T,
+) {
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		t.Skip("OPENAI_API_KEY not set, skipping real API test")
+	}
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	temperature := 0.0
+	maxTokens := 200
+	modelOptions := []openai.Option{openai.WithAPIKey(apiKey)}
+	if baseURL != "" {
+		modelOptions = append(modelOptions, openai.WithBaseURL(baseURL))
+	}
+	modelInstance := openai.New("gpt-4o-mini", modelOptions...)
+	ag := llmagent.New(
+		"real-complex-structured-output-nonstrict-agent",
+		llmagent.WithModel(modelInstance),
+		llmagent.WithGenerationConfig(model.GenerationConfig{
+			MaxTokens:   &maxTokens,
+			Temperature: &temperature,
+			Stream:      false,
+		}),
+	)
+	r := NewRunner(
+		"real-complex-structured-output-nonstrict-app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, r.Close())
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	eventCh, err := r.Run(
+		ctx,
+		"user-real-complex-nonstrict",
+		"session-real-complex-nonstrict",
+		model.NewUserMessage(
+			"Return a JSON object that exactly matches the schema and uses exactly these values: "+
+				`answer="ok", detail.city="shenzhen", detail.codes=[1,2], tags=["alpha","beta"], scores=[7,9].`,
+		),
+		agent.WithStructuredOutputJSON(
+			new(realStructuredOutputComplexPayload),
+			false,
+			"Return one complex typed payload.",
+		),
+	)
+	require.NoError(t, err)
+	var structured any
+	for evt := range eventCh {
+		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		if evt.StructuredOutput != nil {
+			structured = evt.StructuredOutput
+		}
+	}
+	payload, ok := structured.(*realStructuredOutputComplexPayload)
+	require.True(t, ok, "expected complex typed structured output payload, got %T", structured)
+	require.Equal(t, "ok", payload.Answer)
+	require.NotNil(t, payload.Detail)
+	require.Equal(t, "shenzhen", payload.Detail.City)
+	require.Equal(t, []int{1, 2}, payload.Detail.Codes)
+	require.Equal(t, []string{"alpha", "beta"}, payload.Tags)
+	require.Equal(t, [2]int{7, 9}, payload.Scores)
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSONSchema_LegacyNonStrictPointerSliceAndArrayFields_RealOpenAI(
+	t *testing.T,
+) {
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		t.Skip("OPENAI_API_KEY not set, skipping real API test")
+	}
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	temperature := 0.0
+	maxTokens := 200
+	modelOptions := []openai.Option{openai.WithAPIKey(apiKey)}
+	if baseURL != "" {
+		modelOptions = append(modelOptions, openai.WithBaseURL(baseURL))
+	}
+	modelInstance := openai.New("gpt-4o-mini", modelOptions...)
+	ag := llmagent.New(
+		"real-legacy-complex-structured-output-nonstrict-agent",
+		llmagent.WithModel(modelInstance),
+		llmagent.WithGenerationConfig(model.GenerationConfig{
+			MaxTokens:   &maxTokens,
+			Temperature: &temperature,
+			Stream:      false,
+		}),
+	)
+	r := NewRunner(
+		"real-legacy-complex-structured-output-nonstrict-app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, r.Close())
+	})
+	legacySchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+			"detail": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"city": map[string]any{"type": "string"},
+					"codes": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "integer"},
+					},
+				},
+				"required":             []string{"city"},
+				"additionalProperties": false,
+			},
+			"tags": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+			"scores": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "integer"},
+			},
+		},
+		"required":             []string{"answer", "scores"},
+		"additionalProperties": false,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	eventCh, err := r.Run(
+		ctx,
+		"user-real-legacy-complex-nonstrict",
+		"session-real-legacy-complex-nonstrict",
+		model.NewUserMessage(
+			"Return a JSON object that exactly matches the schema and uses exactly these values: "+
+				`answer="ok", detail.city="shenzhen", detail.codes=[1,2], tags=["alpha","beta"], scores=[7,9].`,
+		),
+		agent.WithStructuredOutputJSONSchema(
+			"legacy_complex_payload",
+			legacySchema,
+			false,
+			"Return one complex typed payload.",
+		),
+	)
+	require.NoError(t, err)
+	var structured any
+	for evt := range eventCh {
+		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		if evt.StructuredOutput != nil {
+			structured = evt.StructuredOutput
+		}
+	}
+	require.NotNil(t, structured, "expected structured output payload")
+	body, err := json.Marshal(structured)
+	require.NoError(t, err)
+	require.JSONEq(
+		t,
+		`{"answer":"ok","detail":{"city":"shenzhen","codes":[1,2]},"tags":["alpha","beta"],"scores":[7,9]}`,
+		string(body),
+	)
+}
+
+func TestRunner_Run_WithRunStructuredOutputJSON_SupportsStringMap_RealOpenAI(
+	t *testing.T,
+) {
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		t.Skip("OPENAI_API_KEY not set, skipping real API test")
+	}
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	temperature := 0.0
+	maxTokens := 200
+	modelOptions := []openai.Option{openai.WithAPIKey(apiKey)}
+	if baseURL != "" {
+		modelOptions = append(modelOptions, openai.WithBaseURL(baseURL))
+	}
+	modelInstance := openai.New("gpt-4o-mini", modelOptions...)
+	ag := llmagent.New(
+		"real-map-structured-output-agent",
+		llmagent.WithModel(modelInstance),
+		llmagent.WithGenerationConfig(model.GenerationConfig{
+			MaxTokens:   &maxTokens,
+			Temperature: &temperature,
+			Stream:      false,
+		}),
+	)
+	r := NewRunner(
+		"real-map-structured-output-app",
+		ag,
+		WithSessionService(sessioninmemory.NewSessionService()),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, r.Close())
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	eventCh, err := r.Run(
+		ctx,
+		"user-real-map",
+		"session-real-map",
+		model.NewUserMessage(
+			"Return a JSON object that exactly matches the schema and uses exactly these values: "+
+				`answer="ok", labels={"env":"test","region":"sz"}.`,
+		),
+		agent.WithStructuredOutputJSON(
+			new(realStructuredOutputMapPayload),
+			true,
+			"Return one typed payload with a string map.",
+		),
+	)
+	require.NoError(t, err)
+	var structured any
+	for evt := range eventCh {
+		require.Nil(t, evt.Error, "unexpected runner event error: %+v", evt.Error)
+		if evt.StructuredOutput != nil {
+			structured = evt.StructuredOutput
+		}
+	}
+	payload, ok := structured.(*realStructuredOutputMapPayload)
+	require.True(t, ok, "expected typed structured output payload, got %T", structured)
+	require.Equal(t, "ok", payload.Answer)
+	require.Equal(t, map[string]string{"env": "test", "region": "sz"}, payload.Labels)
 }
 
 func TestRunner_SessionIntegration(t *testing.T) {
