@@ -324,6 +324,9 @@ type Options struct {
 	skillFilter skill.VisibilityFilter
 	// skillToolProfile controls which built-in skill tools are registered.
 	skillToolProfile string
+	// allowedSkillTools, when non-nil, overrides skillToolProfile and limits
+	// the final built-in skill tool registration set to this explicit allowlist.
+	allowedSkillTools []string
 	// skillsToolingGuidance overrides the built-in skills guidance block.
 	skillsToolingGuidance *string
 	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
@@ -381,6 +384,10 @@ type Options struct {
 // SkillToolProfile controls which framework-provided skill tools are enabled.
 type SkillToolProfile string
 
+// SkillTool identifies a built-in framework-provided skill tool that can be
+// exposed when skills are enabled.
+type SkillTool string
+
 const (
 	// SkillToolProfileFull keeps the existing behavior and registers the full
 	// built-in skill tool suite, including execution tools.
@@ -388,6 +395,23 @@ const (
 	// SkillToolProfileKnowledgeOnly registers only progressive-disclosure skill
 	// tools used for knowledge injection. No execution tools are exposed.
 	SkillToolProfileKnowledgeOnly SkillToolProfile = skillprofile.KnowledgeOnly
+
+	// SkillToolLoad loads SKILL.md and optional docs into model context.
+	SkillToolLoad SkillTool = skillprofile.ToolLoad
+	// SkillToolListDocs lists the docs exposed by a skill.
+	SkillToolListDocs SkillTool = skillprofile.ToolListDocs
+	// SkillToolSelectDocs updates which docs are selected for a skill.
+	SkillToolSelectDocs SkillTool = skillprofile.ToolSelectDocs
+	// SkillToolRun executes a non-interactive command inside a skill workspace.
+	SkillToolRun SkillTool = skillprofile.ToolRun
+	// SkillToolExec starts an interactive skill execution session.
+	SkillToolExec SkillTool = skillprofile.ToolExec
+	// SkillToolWriteStdin writes stdin to a running skill_exec session.
+	SkillToolWriteStdin SkillTool = skillprofile.ToolWriteStdin
+	// SkillToolPollSession polls a running skill_exec session.
+	SkillToolPollSession SkillTool = skillprofile.ToolPollSession
+	// SkillToolKillSession terminates a running skill_exec session.
+	SkillToolKillSession SkillTool = skillprofile.ToolKillSession
 )
 
 // WithModel sets the model to use.
@@ -554,6 +578,23 @@ func WithSkillToolProfile(profile SkillToolProfile) Option {
 	}
 }
 
+// WithAllowedSkillTools overrides the profile-derived built-in skill tool set
+// with an explicit allowlist.
+//
+// When not configured, built-in skill tools continue to follow
+// WithSkillToolProfile (default: full).
+//
+// When configured with no tools, no built-in skill tools are registered.
+func WithAllowedSkillTools(tools ...SkillTool) Option {
+	return func(opts *Options) {
+		names := make([]string, 0, len(tools))
+		for _, tl := range tools {
+			names = append(names, string(tl))
+		}
+		opts.allowedSkillTools = names
+	}
+}
+
 // WithSkillLoadMode sets how long skill bodies/docs loaded via skill_load
 // remain available in the system prompt.
 //
@@ -606,7 +647,8 @@ func WithSkipSkillsFallbackOnSessionSummary(
 //
 // Behavior:
 //   - Not configured: use the built-in default guidance.
-//   - Configured with empty string: omit the guidance block.
+//   - Configured with empty string: omit both the tooling/workspace
+//     guidance block and the capability disclosure block.
 //   - Configured with non-empty string: append the provided text.
 func WithSkillsToolingGuidance(
 	guidance string,

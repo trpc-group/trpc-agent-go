@@ -1,3 +1,5 @@
+//go:build linux
+
 //
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
@@ -7,6 +9,15 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package workspaceexec exposes shared executor-workspace tools such as
-// workspace_exec and workspace_publish_artifact.
-package workspaceexec
+package hostexec
+
+import "syscall"
+
+func applyParentDeathSignal(
+	attr *syscall.SysProcAttr,
+) {
+	if attr == nil {
+		return
+	}
+	attr.Pdeathsig = syscall.SIGTERM
+}

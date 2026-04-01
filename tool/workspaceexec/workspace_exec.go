@@ -7,6 +7,8 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
+// Package workspaceexec exposes shared executor-workspace tools such as
+// workspace_exec and workspace_save_artifact.
 package workspaceexec
 
 import (
