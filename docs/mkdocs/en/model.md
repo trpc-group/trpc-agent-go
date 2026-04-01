@@ -1488,6 +1488,9 @@ model := openai.New("deepseek-chat",
 
 The framework automatically calculates "maxInputTokens" based on the model's context window:
 
+!!! note "Context Window Registration"
+    Both Token Tailoring and session summary `WithContextThreshold` rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with `model.RegisterModelContextWindow("my-model", 32768)` or `model.RegisterModelContextWindows(map[string]int{...})`. See the [Session Summary documentation](session.md#session-summary) for a full example.
+
 ```
 safetyMargin = contextWindow × 10%
 calculatedMax = contextWindow - 2048 (output reserve) - 512 (protocol overhead) - safetyMargin
