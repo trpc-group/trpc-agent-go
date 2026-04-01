@@ -533,7 +533,7 @@ func TestListSessions(t *testing.T) {
 	userKey := session.UserKey{AppName: "app", UserID: "u1"}
 
 	t.Run("empty", func(t *testing.T) {
-		sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+		sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{}, false)
 		require.NoError(t, err)
 		assert.Empty(t, sessions)
 	})
@@ -555,7 +555,7 @@ func TestListSessions(t *testing.T) {
 			rdb.(*redis.Client).HSet(ctx, c.sessionStateKey(key), key.SessionID, string(b))
 		}
 
-		sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+		sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{}, false)
 		require.NoError(t, err)
 		require.Len(t, sessions, 3)
 		// Sorting is done at the service layer, not internally.

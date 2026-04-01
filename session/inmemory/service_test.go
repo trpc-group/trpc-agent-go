@@ -491,6 +491,53 @@ func TestListSessions(t *testing.T) {
 	}
 }
 
+func TestListSessions_WithListSessionOnlyMeta(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app1", UserID: "user1", SessionID: "session1"}
+	userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+
+	err := service.UpdateAppState(ctx, key.AppName, session.StateMap{"app_key": []byte("app_value")})
+	require.NoError(t, err)
+	err = service.UpdateUserState(ctx, userKey, session.StateMap{"user_key": []byte("user_value")})
+	require.NoError(t, err)
+
+	sess, err := service.CreateSession(ctx, key, session.StateMap{"session_key": []byte("session_value")})
+	require.NoError(t, err)
+
+	evt := event.New("test-invocation", "author")
+	evt.Response = &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+		}},
+	}
+	require.NoError(t, service.AppendEvent(ctx, sess, evt))
+	require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"track-payload"`),
+		Timestamp: time.Now(),
+	}))
+
+	sessions, err := service.ListSessions(ctx, userKey, session.WithListSessionOnlyMeta())
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+
+	got := sessions[0]
+	assert.Empty(t, got.Events)
+	assert.Nil(t, got.Tracks)
+	assert.Equal(t, []byte("session_value"), got.State["session_key"])
+	assert.Equal(t, []byte("app_value"), got.State[session.StateAppPrefix+"app_key"])
+	assert.Equal(t, []byte("user_value"), got.State[session.StateUserPrefix+"user_key"])
+	assert.Equal(t, key.SessionID, got.ID)
+	assert.False(t, got.CreatedAt.IsZero())
+	assert.False(t, got.UpdatedAt.IsZero())
+}
+
 func TestDeleteSession(t *testing.T) {
 	// setup function to create test data for each test case
 	setup := func(t *testing.T, service *SessionService) session.Key {
