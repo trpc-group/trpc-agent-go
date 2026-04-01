@@ -267,7 +267,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeDebugSessionsJSON, s.handleDebugSessionsJSON)
 	mux.HandleFunc(routeDebugTracesJSON, s.handleDebugTracesJSON)
 	mux.HandleFunc(routeDebugFile, s.handleDebugFile)
-	return mux
+	return wrapRelativeLinks(mux)
 }
 
 type snapshot struct {

@@ -294,7 +294,8 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 	require.Contains(t, body, "TRPC-CLAW admin")
 	require.Contains(t, body, "TRPC-CLAW")
 	require.Contains(t, body, "trpc-claw")
-	require.Contains(t, body, "/skills")
+	require.Contains(t, body, `href="skills"`)
+	require.Contains(t, body, `action="api/cron/jobs/clear"`)
 	require.Contains(t, body, "127.0.0.1:8080")
 	require.Contains(t, body, "telegram")
 }
@@ -331,10 +332,10 @@ func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
 	body := rr.Body.String()
 	require.Contains(t, body, "Skills Inventory")
 	require.Contains(t, body, "weather-probe")
-	require.Contains(t, body, "/api/skills/refresh")
-	require.Contains(t, body, "/api/skills/toggle")
-	require.Contains(t, body, "/overview")
-	require.Contains(t, body, "/skills")
+	require.Contains(t, body, `action="api/skills/refresh"`)
+	require.Contains(t, body, `action="api/skills/toggle"`)
+	require.Contains(t, body, `href="overview"`)
+	require.Contains(t, body, `href="skills"`)
 	require.Contains(t, body, "/tmp/openclaw.yaml")
 	require.Contains(t, body, "OPENAI_API_KEY")
 }
@@ -565,14 +566,20 @@ func TestServiceToggleSkillEndpoint(t *testing.T) {
 	require.Equal(t, "weather-api", provider.lastConfigKey)
 	require.False(t, provider.lastEnabled)
 
-	loc, err := url.Parse(rr.Header().Get("Location"))
-	require.NoError(t, err)
-	require.Equal(t, routeSkillsPage, loc.Path)
-	require.Equal(t, "skill-card-weather-api", loc.Fragment)
-	require.Contains(
+	values := url.Values{}
+	values.Set(
+		queryNotice,
+		"Saved weather-probe as disabled. Changes apply on the next turn.",
+	)
+	target := (&url.URL{
+		Path:     routeSkillsPage,
+		Fragment: "skill-card-weather-api",
+		RawQuery: values.Encode(),
+	}).String()
+	require.Equal(
 		t,
-		loc.Query().Get(queryNotice),
-		"Changes apply on the next turn.",
+		relativeRequestReference(routeSkillToggle, target),
+		rr.Header().Get(headerLocation),
 	)
 }
 
@@ -597,14 +604,21 @@ func TestServiceRefreshSkillsEndpoint(t *testing.T) {
 	require.Equal(t, http.StatusSeeOther, rr.Code)
 	require.Equal(t, 1, provider.refreshCount)
 
-	loc, err := url.Parse(rr.Header().Get("Location"))
-	require.NoError(t, err)
-	require.Equal(t, routeSkillsPage, loc.Path)
-	require.Equal(t, "skills-admin", loc.Fragment)
-	require.Contains(
+	values := url.Values{}
+	values.Set(
+		queryNotice,
+		"Refreshed skills. New or removed skill folders "+
+			"will be available on the next turn.",
+	)
+	target := (&url.URL{
+		Path:     routeSkillsPage,
+		Fragment: "skills-admin",
+		RawQuery: values.Encode(),
+	}).String()
+	require.Equal(
 		t,
-		loc.Query().Get(queryNotice),
-		"Refreshed skills.",
+		relativeRequestReference(routeSkillsRefresh, target),
+		rr.Header().Get(headerLocation),
 	)
 }
 
@@ -627,15 +641,18 @@ func TestServiceRefreshSkillsEndpointRequiresLiveRepo(t *testing.T) {
 	svc.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusSeeOther, rr.Code)
-	loc, err := url.Parse(rr.Header().Get("Location"))
-	require.NoError(t, err)
-	require.Equal(t, routeSkillsPage, loc.Path)
-	require.Equal(t, "skills-admin", loc.Fragment)
 	require.Zero(t, provider.refreshCount)
+	values := url.Values{}
+	values.Set(queryError, "live skills repository is not available")
+	target := (&url.URL{
+		Path:     routeSkillsPage,
+		Fragment: "skills-admin",
+		RawQuery: values.Encode(),
+	}).String()
 	require.Equal(
 		t,
-		"live skills repository is not available",
-		loc.Query().Get(queryError),
+		relativeRequestReference(routeSkillsRefresh, target),
+		rr.Header().Get(headerLocation),
 	)
 }
 
@@ -663,11 +680,18 @@ func TestServiceRefreshSkillsEndpointReportsProviderError(t *testing.T) {
 	require.Equal(t, http.StatusSeeOther, rr.Code)
 	require.Equal(t, 1, provider.refreshCount)
 
-	loc, err := url.Parse(rr.Header().Get("Location"))
-	require.NoError(t, err)
-	require.Equal(t, routeSkillsPage, loc.Path)
-	require.Equal(t, "skills-admin", loc.Fragment)
-	require.Equal(t, "refresh boom", loc.Query().Get(queryError))
+	values := url.Values{}
+	values.Set(queryError, "refresh boom")
+	target := (&url.URL{
+		Path:     routeSkillsPage,
+		Fragment: "skills-admin",
+		RawQuery: values.Encode(),
+	}).String()
+	require.Equal(
+		t,
+		relativeRequestReference(routeSkillsRefresh, target),
+		rr.Header().Get(headerLocation),
+	)
 }
 
 func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
@@ -792,12 +816,10 @@ func TestServiceToggleSkillEndpointRequiresConfigPath(t *testing.T) {
 
 	require.Equal(t, http.StatusSeeOther, rr.Code)
 	require.Zero(t, provider.setCount)
-	loc, err := url.Parse(rr.Header().Get("Location"))
-	require.NoError(t, err)
-	require.Equal(
+	require.Contains(
 		t,
-		"skill toggles require a config-backed runtime",
-		loc.Query().Get(queryError),
+		rr.Header().Get(headerLocation),
+		"skill+toggles+require+a+config-backed+runtime",
 	)
 }
 
@@ -1785,11 +1807,29 @@ func TestHandleIndex_RendersUploadPreviews(t *testing.T) {
 
 	svc.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
-	require.Contains(t, rr.Body.String(), "<img src=\"/uploads/file?")
+	require.Contains(t, rr.Body.String(), "<img src=\"uploads/file?")
 	require.Contains(t, rr.Body.String(), "<audio controls")
 	require.Contains(t, rr.Body.String(), "<video controls")
 	require.Contains(t, rr.Body.String(), ">open preview</a>")
 	require.Contains(t, rr.Body.String(), "<code>video/mp4</code>")
+}
+
+func TestRelativeRequestReference(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"overview",
+		relativePathReference(routeIndex, routeOverview),
+	)
+	require.Equal(
+		t,
+		"../../skills?notice=ok#skills-admin",
+		relativeRequestReference(
+			routeSkillsRefresh,
+			"/skills?notice=ok#skills-admin",
+		),
+	)
 }
 
 func TestServiceUploadsJSON_RewritesGeneratedNames(t *testing.T) {
