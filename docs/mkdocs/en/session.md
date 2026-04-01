@@ -1839,6 +1839,26 @@ Configure the summarizer behavior with the following options:
 - **`WithTokenThreshold(tokenCount int)`**: Trigger summarization when the new token count since last summary exceeds the threshold. Example: `WithTokenThreshold(4000)` triggers when 4000+ new tokens have been added since last summary.
 - **`WithTimeThreshold(interval time.Duration)`**: Trigger summarization when time elapsed since the last event exceeds the interval. Example: `WithTimeThreshold(5*time.Minute)` triggers after 5 minutes of inactivity.
 
+!!! note "Context Window Registration"
+    `WithContextThreshold` and Token Tailoring both rely on the framework's built-in model context window registry. The registry includes many popular models (OpenAI, Anthropic, Google, DeepSeek, Qwen, etc.), but may not cover every model — especially private deployments, fine-tuned variants, or newer releases. If your model is not recognized (context window resolves to 0 or falls back to the default), register it manually at startup:
+
+    ```go
+    import "trpc.group/trpc-go/trpc-agent-go/model"
+
+    func init() {
+        // Register a single model.
+        model.RegisterModelContextWindow("my-custom-model", 32768)
+
+        // Or register multiple models at once.
+        model.RegisterModelContextWindows(map[string]int{
+            "my-custom-model-32k": 32768,
+            "my-custom-model-128k": 131072,
+        })
+    }
+    ```
+
+    Model names are matched case-insensitively, and the registry also supports prefix matching (e.g., registering `"my-model"` will match `"my-model-v2"`).
+
 **Composite Conditions:**
 
 - **`WithChecksAll(checks ...Checker)`**: Require all conditions to be met (AND logic). Use with `Check*` functions (not `With*`). Example:

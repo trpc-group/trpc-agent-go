@@ -1937,6 +1937,26 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - **`WithTokenThreshold(tokenCount int)`**：当自上次摘要后的 token 数量超过阈值时触发摘要。示例：`WithTokenThreshold(4000)` 在自上次摘要后新增 4000 个 token 后触发。
 - **`WithTimeThreshold(interval time.Duration)`**：当自上次事件后经过的时间超过间隔时触发摘要。示例：`WithTimeThreshold(5*time.Minute)` 在 5 分钟无活动后触发。
 
+!!! note "Context Window 注册"
+    `WithContextThreshold` 和 Token Tailoring 都依赖框架内置的模型 context window 注册表。注册表已包含大量常见模型（OpenAI、Anthropic、Google、DeepSeek、Qwen 等），但不一定覆盖所有模型——特别是私有部署、微调变体或较新发布的模型。如果你的模型未被识别（context window 解析为 0 或回退到默认值），请在启动时手动注册：
+
+    ```go
+    import "trpc.group/trpc-go/trpc-agent-go/model"
+
+    func init() {
+        // 注册单个模型
+        model.RegisterModelContextWindow("my-custom-model", 32768)
+
+        // 或批量注册多个模型
+        model.RegisterModelContextWindows(map[string]int{
+            "my-custom-model-32k":  32768,
+            "my-custom-model-128k": 131072,
+        })
+    }
+    ```
+
+    模型名匹配不区分大小写，注册表也支持前缀匹配（例如注册 `"my-model"` 会匹配 `"my-model-v2"`）。
+
 **组合条件：**
 
 - **`WithChecksAll(checks ...Checker)`**：要求所有条件都满足（AND 逻辑）。使用 `Check*` 函数（不是 `With*`）。示例：
