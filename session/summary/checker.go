@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -312,4 +313,133 @@ func anyContextChecks(checks []ContextChecker) ContextChecker {
 		}
 		return false
 	}
+}
+
+// Default context-threshold constants.
+const (
+	// defaultContextThresholdRatio is the default fraction of the model's
+	// context window that triggers summarization.
+	defaultContextThresholdRatio = 0.5
+
+	// defaultContextThresholdMinTokens is the absolute minimum token count
+	// before summarization can trigger, regardless of ratio. This prevents
+	// premature summarization for very small context windows.
+	defaultContextThresholdMinTokens = 2000
+
+	// defaultContextThresholdFallbackWindow is the context window used when
+	// the model cannot be identified from the invocation context or the
+	// model registry.
+	defaultContextThresholdFallbackWindow = 8192
+)
+
+// ContextThresholdOption configures the context-threshold checker.
+type ContextThresholdOption func(*contextThresholdOptions)
+
+// contextThresholdOptions holds configuration for CheckContextThreshold.
+type contextThresholdOptions struct {
+	// thresholdRatio is the fraction of context window that triggers
+	// summarization. Default: 0.5 (50%).
+	thresholdRatio float64
+
+	// fallbackContextWindow is used when the model's context window
+	// cannot be determined from the invocation context or registry.
+	// Default: 8192.
+	fallbackContextWindow int
+
+	// minTokenThreshold is the absolute minimum token count before
+	// summarization can trigger, regardless of ratio.
+	// Default: 2000.
+	minTokenThreshold int
+}
+
+// WithContextThresholdRatio sets the fraction of the model's context
+// window at which summarization triggers. Default: 0.5 (50%).
+// Values outside (0, 1] are ignored.
+func WithContextThresholdRatio(ratio float64) ContextThresholdOption {
+	return func(o *contextThresholdOptions) {
+		if ratio > 0 && ratio <= 1 {
+			o.thresholdRatio = ratio
+		}
+	}
+}
+
+// WithContextThresholdFallbackWindow sets the context window used when
+// the model cannot be identified at runtime. Default: 8192.
+func WithContextThresholdFallbackWindow(tokens int) ContextThresholdOption {
+	return func(o *contextThresholdOptions) {
+		if tokens > 0 {
+			o.fallbackContextWindow = tokens
+		}
+	}
+}
+
+// WithContextThresholdMinTokens sets the absolute minimum token count
+// before summarization can trigger. Default: 2000.
+func WithContextThresholdMinTokens(tokens int) ContextThresholdOption {
+	return func(o *contextThresholdOptions) {
+		if tokens >= 0 {
+			o.minTokenThreshold = tokens
+		}
+	}
+}
+
+// CheckContextThreshold creates a context-aware checker that dynamically
+// resolves the model's context window at evaluation time and triggers
+// summarization when the estimated token count of delta events exceeds
+// a percentage of that context window.
+//
+// Unlike CheckTokenThreshold which uses a fixed token count, this
+// checker adapts automatically when the user switches models — the
+// threshold is recalculated on every evaluation based on the model
+// currently attached to the invocation in ctx.
+//
+// This provides a zero-configuration experience similar to Codex CLI
+// and Claude Code, where the framework automatically decides when to
+// compress conversation history based on the model's capacity.
+//
+// When the model cannot be determined from ctx, falls back to
+// the summarizer model's context window (when used via WithContextThreshold),
+// then to the configured fallbackContextWindow (default 8192).
+func CheckContextThreshold(opts ...ContextThresholdOption) ContextChecker {
+	o := contextThresholdOptions{
+		thresholdRatio:        defaultContextThresholdRatio,
+		fallbackContextWindow: defaultContextThresholdFallbackWindow,
+		minTokenThreshold:     defaultContextThresholdMinTokens,
+	}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	return func(ctx context.Context, sess *session.Session) bool {
+		contextWindow := resolveContextWindowFromCtx(
+			ctx, o.fallbackContextWindow,
+		)
+		threshold := int(float64(contextWindow) * o.thresholdRatio)
+		if threshold < o.minTokenThreshold {
+			threshold = o.minTokenThreshold
+		}
+		return checkTokenThreshold(ctx, threshold, sess)
+	}
+}
+
+// resolveContextWindowFromCtx attempts to determine the model's context
+// window from the current request context. It tries, in order:
+//  1. invocation.Model from ctx → model registry lookup by name
+//  2. user-configured fallback
+//  3. framework default (8192)
+func resolveContextWindowFromCtx(ctx context.Context, fallback int) int {
+	if ctx != nil {
+		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+			if inv.Model != nil {
+				name := inv.Model.Info().Name
+				if w, ok := model.LookupModelContextWindow(name); ok {
+					return w
+				}
+			}
+		}
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return defaultContextThresholdFallbackWindow
 }

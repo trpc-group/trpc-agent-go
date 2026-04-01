@@ -208,6 +208,8 @@ The `SessionSummarizer` supports various configuration options to customize summ
 
 ### Trigger Options
 
+- **`WithContextThreshold(opts ...ContextThresholdOption)`**: Zero-configuration trigger that dynamically resolves the model's context window at runtime. Calculates a token threshold as a fraction of the context window (default 50%), automatically adapting when the user switches models. Recommended for coding agents and long-running sessions. Options: `WithContextThresholdRatio(ratio)`, `WithContextThresholdFallbackWindow(tokens)`, `WithContextThresholdMinTokens(tokens)`.
+
 - **`WithEventThreshold(eventCount int)`**: Triggers summarization when the number of events exceeds the threshold.
 
 - **`WithTokenThreshold(tokenCount int)`**: Triggers summarization when the estimated token count exceeds the threshold (0=disabled).
@@ -221,6 +223,14 @@ The `SessionSummarizer` supports various configuration options to customize summ
 - **`WithChecksAll(checks ...Checker)`**: Triggers summarization when ALL of the provided checks pass (AND logic).
 
 ### Example Usage
+
+```go
+// Zero-configuration: auto-detect context window and compact when needed
+sum := summary.NewSummarizer(model,
+    summary.WithContextThreshold(), // Recommended for coding agents
+    summary.WithMaxSummaryWords(200),
+)
+```
 
 ```go
 // Basic configuration

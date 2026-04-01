@@ -15,6 +15,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +54,9 @@ const (
 
 	summaryPolicyAny = "any"
 	summaryPolicyAll = "all"
+
+	summaryModeAuto   = "auto"
+	summaryModeManual = "manual"
 
 	defaultSessionSummaryEventThreshold = 20
 	defaultSkillsLoadMode               = "turn"
@@ -202,12 +206,14 @@ type runOptions struct {
 	MemoryAutoMessageThreshold int
 	MemoryAutoTimeInterval     time.Duration
 
-	SessionSummaryEnabled       bool
-	SessionSummaryPolicy        string
-	SessionSummaryEventCount    int
-	SessionSummaryTokenCount    int
-	SessionSummaryIdleThreshold time.Duration
-	SessionSummaryMaxWords      int
+	SessionSummaryEnabled             bool
+	SessionSummaryMode                string
+	SessionSummaryPolicy              string
+	SessionSummaryEventCount          int
+	SessionSummaryTokenCount          int
+	SessionSummaryIdleThreshold       time.Duration
+	SessionSummaryMaxWords            int
+	SessionSummaryApproxRunesPerToken float64
 
 	EnableLocalExec     bool
 	EnableOpenClawTools bool
@@ -675,10 +681,16 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Enable session summarization (optional)",
 	)
 	fs.StringVar(
+		&opts.SessionSummaryMode,
+		"session-summary-mode",
+		"",
+		"Summary trigger mode: auto (context-window aware) or manual (explicit thresholds)",
+	)
+	fs.StringVar(
 		&opts.SessionSummaryPolicy,
 		"session-summary-policy",
 		summaryPolicyAny,
-		"Session summary gating policy: any|all",
+		"Session summary gating policy: any|all (only used in manual mode)",
 	)
 	fs.IntVar(
 		&opts.SessionSummaryEventCount,
@@ -703,6 +715,13 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"session-summary-max-words",
 		0,
 		"Max summary words (0 means no limit)",
+	)
+	fs.Float64Var(
+		&opts.SessionSummaryApproxRunesPerToken,
+		"session-summary-approx-runes-per-token",
+		0,
+		"Approximate runes per token for summary token estimation "+
+			"(0 uses framework default 4.0; set ~2.0 for Chinese-heavy content)",
 	)
 	fs.BoolVar(
 		&opts.EnableLocalExec,
@@ -1045,12 +1064,14 @@ type redisConfig struct {
 }
 
 type summaryConfig struct {
-	Enabled        *bool   `yaml:"enabled,omitempty"`
-	Policy         *string `yaml:"policy,omitempty"`
-	EventThreshold *int    `yaml:"event_threshold,omitempty"`
-	TokenThreshold *int    `yaml:"token_threshold,omitempty"`
-	IdleThreshold  *string `yaml:"idle_threshold,omitempty"`
-	MaxWords       *int    `yaml:"max_words,omitempty"`
+	Enabled             *bool    `yaml:"enabled,omitempty"`
+	Mode                *string  `yaml:"mode,omitempty"`
+	Policy              *string  `yaml:"policy,omitempty"`
+	EventThreshold      *int     `yaml:"event_threshold,omitempty"`
+	TokenThreshold      *int     `yaml:"token_threshold,omitempty"`
+	IdleThreshold       *string  `yaml:"idle_threshold,omitempty"`
+	MaxWords            *int     `yaml:"max_words,omitempty"`
+	ApproxRunesPerToken *float64 `yaml:"approx_runes_per_token,omitempty"`
 }
 
 type memoryAuto struct {
@@ -1795,6 +1816,9 @@ func applySessionSummary(
 	if cfg.Enabled != nil && !flagWasSet(set, "session-summary") {
 		opts.SessionSummaryEnabled = *cfg.Enabled
 	}
+	if cfg.Mode != nil && !flagWasSet(set, "session-summary-mode") {
+		opts.SessionSummaryMode = strings.TrimSpace(*cfg.Mode)
+	}
 	if cfg.Policy != nil && !flagWasSet(set, "session-summary-policy") {
 		opts.SessionSummaryPolicy = strings.TrimSpace(*cfg.Policy)
 	}
@@ -1815,6 +1839,10 @@ func applySessionSummary(
 	}
 	if cfg.MaxWords != nil && !flagWasSet(set, "session-summary-max-words") {
 		opts.SessionSummaryMaxWords = *cfg.MaxWords
+	}
+	if cfg.ApproxRunesPerToken != nil &&
+		!flagWasSet(set, "session-summary-approx-runes-per-token") {
+		opts.SessionSummaryApproxRunesPerToken = *cfg.ApproxRunesPerToken
 	}
 	return nil
 }
@@ -1890,6 +1918,12 @@ func finalizeRunOptions(opts *runOptions) error {
 	opts.LangfuseTraceURLTemplate = strings.TrimSpace(
 		opts.LangfuseTraceURLTemplate,
 	)
+	if v := opts.SessionSummaryApproxRunesPerToken; math.IsNaN(v) ||
+		math.IsInf(v, 0) || v < 0 {
+		return fmt.Errorf(
+			"invalid session-summary-approx-runes-per-token: %v", v,
+		)
+	}
 	normalizeA2AOptions(opts)
 	return nil
 }

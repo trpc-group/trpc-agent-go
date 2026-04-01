@@ -50,6 +50,13 @@ type Usage struct {
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+
+	// LastPromptTokens is the prompt_tokens from the most recent LLM call
+	// within the request. Unlike PromptTokens which aggregates across all
+	// LLM calls in a request (tool-call loops), this field reflects the
+	// actual context window occupancy of the final call and is used for
+	// accurate context usage display.
+	LastPromptTokens int `json:"last_prompt_tokens,omitempty"`
 }
 
 // MessageResponse matches the gateway /messages response JSON.
