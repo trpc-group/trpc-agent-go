@@ -245,21 +245,54 @@ func New(cfg Config, opts ...Option) *Service {
 
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc(routeIndex, s.handleOverview)
-	mux.HandleFunc(routeOverview, s.handleOverview)
-	mux.HandleFunc(routeSkillsPage, s.handleSkillsPage)
-	mux.HandleFunc(routeAutomation, s.handleAutomationPage)
-	mux.HandleFunc(routeSessions, s.handleSessionsPage)
-	mux.HandleFunc(routeDebug, s.handleDebugPage)
-	mux.HandleFunc(routeBrowser, s.handleBrowserPage)
+	mux.HandleFunc(
+		routeIndex,
+		wrapRelativeLinksFunc(s.handleOverview),
+	)
+	mux.HandleFunc(
+		routeOverview,
+		wrapRelativeLinksFunc(s.handleOverview),
+	)
+	mux.HandleFunc(
+		routeSkillsPage,
+		wrapRelativeLinksFunc(s.handleSkillsPage),
+	)
+	mux.HandleFunc(
+		routeAutomation,
+		wrapRelativeLinksFunc(s.handleAutomationPage),
+	)
+	mux.HandleFunc(
+		routeSessions,
+		wrapRelativeLinksFunc(s.handleSessionsPage),
+	)
+	mux.HandleFunc(
+		routeDebug,
+		wrapRelativeLinksFunc(s.handleDebugPage),
+	)
+	mux.HandleFunc(
+		routeBrowser,
+		wrapRelativeLinksFunc(s.handleBrowserPage),
+	)
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
-	mux.HandleFunc(routeSkillsRefresh, s.handleRefreshSkills)
-	mux.HandleFunc(routeSkillToggle, s.handleToggleSkill)
+	mux.HandleFunc(
+		routeSkillsRefresh,
+		wrapRelativeLinksFunc(s.handleRefreshSkills),
+	)
+	mux.HandleFunc(
+		routeSkillToggle,
+		wrapRelativeLinksFunc(s.handleToggleSkill),
+	)
 	mux.HandleFunc(routeJobsJSON, s.handleJobsJSON)
-	mux.HandleFunc(routeJobRun, s.handleRunJob)
-	mux.HandleFunc(routeJobRemove, s.handleRemoveJob)
-	mux.HandleFunc(routeJobsClear, s.handleClearJobs)
+	mux.HandleFunc(routeJobRun, wrapRelativeLinksFunc(s.handleRunJob))
+	mux.HandleFunc(
+		routeJobRemove,
+		wrapRelativeLinksFunc(s.handleRemoveJob),
+	)
+	mux.HandleFunc(
+		routeJobsClear,
+		wrapRelativeLinksFunc(s.handleClearJobs),
+	)
 	mux.HandleFunc(routeExecSessionsJSON, s.handleExecSessionsJSON)
 	mux.HandleFunc(routeUploadsJSON, s.handleUploadsJSON)
 	mux.HandleFunc(routeUploadSessions, s.handleUploadSessionsJSON)
