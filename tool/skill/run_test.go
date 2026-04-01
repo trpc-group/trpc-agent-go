@@ -2230,6 +2230,28 @@ func TestRunTool_Declaration(t *testing.T) {
 	require.Contains(t, d.InputSchema.Required, "command")
 	cmdDesc := d.InputSchema.Properties["command"].Description
 	require.Equal(t, "Shell command", cmdDesc)
+	require.Contains(t, d.Description, "Use stdout/stderr for short logs")
+	require.Contains(t, d.Description, "output_files or outputs")
+}
+
+func TestNewRunTool_NormalizesOutputLimits(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		rt := NewRunTool(
+			nil,
+			nil,
+			WithRunOutputLimits(RunOutputLimits{}),
+		)
+		require.Equal(t, defaultRunOutputLimits(), rt.outputLimits)
+	})
+
+	t.Run("custom", func(t *testing.T) {
+		limits := RunOutputLimits{
+			StdoutStderrBytes:  8,
+			PrimaryOutputBytes: 16,
+		}
+		rt := NewRunTool(nil, nil, WithRunOutputLimits(limits))
+		require.Equal(t, limits, rt.outputLimits)
+	})
 }
 
 func TestRunTool_Declaration_IncludesAllowedCommandsPreview(t *testing.T) {
@@ -4138,6 +4160,87 @@ func TestBuildRunOutputWithLimits_PreservesUTF8Boundary(t *testing.T) {
 	truncated, ok := truncateOutputWithLimit("你", 1)
 	require.True(t, ok)
 	require.Equal(t, "", truncated)
+}
+
+func TestTruncateOutput_UsesDefaultLimit(t *testing.T) {
+	long := strings.Repeat("a", defaultStdoutStderrBytes+1)
+
+	truncated, ok := truncateOutput(long)
+
+	require.True(t, ok)
+	require.Len(t, truncated, defaultStdoutStderrBytes)
+}
+
+func TestTruncateOutputWithLimit_UsesDefaultWhenUnset(t *testing.T) {
+	long := strings.Repeat("a", defaultStdoutStderrBytes+1)
+
+	truncated, ok := truncateOutputWithLimit(long, 0)
+
+	require.True(t, ok)
+	require.Len(t, truncated, defaultStdoutStderrBytes)
+}
+
+func TestSelectPrimaryOutputWithLimit_UsesDefaultWhenUnset(t *testing.T) {
+	files := []runFile{
+		{
+			File: codeexecutor.File{
+				Name:     outATxt,
+				Content:  contentHi,
+				MIMEType: "text/plain",
+			},
+		},
+	}
+
+	got := selectPrimaryOutputWithLimit(files, 0)
+
+	require.NotNil(t, got)
+	require.Equal(t, outATxt, got.Name)
+}
+
+func TestMergeAutoPrimaryOutput_UsesDefaultLimit(t *testing.T) {
+	files := []codeexecutor.File{
+		{
+			Name:     outATxt,
+			Content:  contentHi,
+			MIMEType: "text/plain",
+		},
+	}
+	out := &runOutput{}
+
+	mergeAutoPrimaryOutput(files, out)
+
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, outATxt, out.PrimaryOutput.Name)
+}
+
+func TestRunTool_buildRunOutput_UsesConfiguredAutoPrimaryLimit(t *testing.T) {
+	rt := NewRunTool(
+		nil,
+		nil,
+		WithRunOutputLimits(RunOutputLimits{
+			PrimaryOutputBytes: 4,
+		}),
+	)
+
+	out, err := rt.buildRunOutput(
+		context.Background(),
+		codeexecutor.RunResult{},
+		[]codeexecutor.File{
+			{
+				Name:     outATxt,
+				Content:  "12345",
+				MIMEType: "text/plain",
+			},
+		},
+		nil,
+		nil,
+		runInput{},
+		false,
+		"",
+	)
+
+	require.NoError(t, err)
+	require.Nil(t, out.PrimaryOutput)
 }
 
 type countingFS struct {
