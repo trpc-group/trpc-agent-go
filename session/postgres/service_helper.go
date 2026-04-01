@@ -27,6 +27,7 @@ func (s *Service) getSession(
 	key session.Key,
 	limit int,
 	afterTime time.Time,
+	offset int,
 ) (*session.Session, error) {
 	// Query session state (always filter deleted records)
 	var sessState *SessionState
@@ -77,7 +78,7 @@ func (s *Service) getSession(
 
 	// Query events (always filter deleted records)
 	// Note: limit here only controls how many events to return, not delete from database
-	eventsList, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime, offset)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
@@ -125,6 +126,7 @@ func (s *Service) listSessions(
 	key session.UserKey,
 	limit int,
 	afterTime time.Time,
+	offset int,
 ) ([]*session.Session, error) {
 	// Query app state
 	appState, err := s.ListAppStates(ctx, key.AppName)
@@ -183,7 +185,7 @@ func (s *Service) listSessions(
 
 	// Batch load events for all sessions
 	// Note: limit here only controls how many events to return per session, not delete from database
-	eventsList, err := s.getEventsList(ctx, sessionKeys, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, sessionKeys, limit, afterTime, offset)
 	if err != nil {
 		return nil, fmt.Errorf("get events list failed: %w", err)
 	}
@@ -607,15 +609,26 @@ func applyOptions(opts ...session.Option) *session.Options {
 }
 
 // getEventsList batch loads events for multiple sessions.
-// Note: limit here only controls how many events to return per session, not delete from database
+// Note: limit here only controls how many events to return per session, not delete from database.
+// When limit > 0, uses PostgreSQL window functions (ROW_NUMBER) to apply per-session LIMIT
+// at the database level, avoiding loading all events into memory.
 func (s *Service) getEventsList(
 	ctx context.Context,
 	sessionKeys []session.Key,
 	limit int,
 	afterTime time.Time,
+	offset int,
 ) ([][]event.Event, error) {
 	if len(sessionKeys) == 0 {
 		return nil, nil
+	}
+
+	// Resolve defaults before building query so they can be pushed to SQL level
+	if limit <= 0 {
+		limit = s.opts.sessionEventLimit
+	}
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
 
 	// Build session IDs array
@@ -624,15 +637,8 @@ func (s *Service) getEventsList(
 		sessionIDs[i] = key.SessionID
 	}
 
-	// Query events for all sessions
-	query := fmt.Sprintf(`
-			SELECT session_id, event
-			FROM %s
-			WHERE app_name = $1 AND user_id = $2
-			AND session_id = ANY($3::varchar[])
-			AND deleted_at IS NULL
-			ORDER BY session_id, created_at ASC`, s.tableSessionEvents)
-	args := []any{sessionKeys[0].AppName, sessionKeys[0].UserID, sessionIDs}
+	// Build the SQL query with DB-level pagination using ROW_NUMBER window function.
+	query, args := s.buildEventsQuery(sessionKeys, sessionIDs, limit, afterTime, offset)
 
 	// Execute query and group events by session
 	eventsMap := make(map[string][]event.Event)
@@ -662,13 +668,9 @@ func (s *Service) getEventsList(
 		return nil, fmt.Errorf("query events failed: %w", err)
 	}
 
-	if limit <= 0 {
-		limit = s.opts.sessionEventLimit
-	}
-	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
-		afterTime = time.Now().Add(-s.opts.sessionTTL)
-	}
-	// Build result list in the same order as sessionKeys
+	// Build result list in the same order as sessionKeys.
+	// ApplyEventFiltering is still applied for the user-message guarantee,
+	// but with far fewer rows since DB-level pagination already limits the data.
 	result := make([][]event.Event, len(sessionKeys))
 	for i, key := range sessionKeys {
 		events := eventsMap[key.SessionID]
@@ -679,11 +681,60 @@ func (s *Service) getEventsList(
 		sess := &session.Session{
 			Events: events,
 		}
-		sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+		sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime), session.WithEventOffset(offset))
 		result[i] = sess.Events
 	}
 
 	return result, nil
+}
+
+// buildEventsQuery constructs the SQL query and arguments for loading events with
+// DB-level pagination using PostgreSQL window functions.
+// ROW_NUMBER() is partitioned by session_id and ordered by created_at DESC,
+// so rn=1 is the most recent event per session. We filter by rn to apply
+// per-session LIMIT and OFFSET at the database level.
+// The outer ORDER BY (session_id, rn DESC) produces ascending created_at order.
+func (s *Service) buildEventsQuery(
+	sessionKeys []session.Key,
+	sessionIDs []string,
+	limit int,
+	afterTime time.Time,
+	offset int,
+) (string, []any) {
+	// Build inner WHERE clause
+	whereClause := `app_name = $1 AND user_id = $2
+				AND session_id = ANY($3::varchar[])
+				AND deleted_at IS NULL`
+
+	paramIdx := 4
+	baseArgs := []any{sessionKeys[0].AppName, sessionKeys[0].UserID, sessionIDs}
+
+	if !afterTime.IsZero() {
+		whereClause += fmt.Sprintf(` AND created_at > $%d`, paramIdx)
+		baseArgs = append(baseArgs, afterTime)
+		paramIdx++
+	}
+
+	// Build the outer WHERE clause for rn filtering
+	var rnClause string
+	if offset > 0 {
+		rnClause = fmt.Sprintf(`rn > $%d AND rn <= $%d + $%d`, paramIdx, paramIdx, paramIdx+1)
+		baseArgs = append(baseArgs, offset, limit)
+	} else {
+		rnClause = fmt.Sprintf(`rn <= $%d`, paramIdx)
+		baseArgs = append(baseArgs, limit)
+	}
+
+	query := fmt.Sprintf(`
+				SELECT session_id, event FROM (
+					SELECT session_id, event,
+						ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at DESC) as rn
+					FROM %s
+					WHERE %s
+				) sub WHERE %s
+				ORDER BY session_id, rn DESC`, s.tableSessionEvents, whereClause, rnClause)
+
+	return query, baseArgs
 }
 
 // getTrackEvents batch loads track events for multiple tracks.

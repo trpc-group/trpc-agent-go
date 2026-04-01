@@ -496,7 +496,15 @@ func (sess *Session) ApplyEventFiltering(opts ...Option) {
 		}
 	}
 
-	// Apply event number limit
+	// Apply event offset and number limit
+	if opt.EventOffset > 0 {
+		endIdx := len(sess.Events) - opt.EventOffset
+		if endIdx <= 0 {
+			sess.Events = []event.Event{}
+		} else {
+			sess.Events = sess.Events[:endIdx]
+		}
+	}
 	if opt.EventNum > 0 && len(sess.Events) > opt.EventNum {
 		sess.Events = sess.Events[len(sess.Events)-opt.EventNum:]
 	}
@@ -579,8 +587,9 @@ type Summary struct {
 
 // Options is the options for getting a session.
 type Options struct {
-	EventNum  int       // EventNum is the number of recent events.
-	EventTime time.Time // EventTime is the after time.
+	EventNum    int       // EventNum is the number of recent events.
+	EventTime   time.Time // EventTime is the after time.
+	EventOffset int       // EventOffset is the number of recent events to skip (for pagination).
 }
 
 // Option is the option for a session.
@@ -597,6 +606,17 @@ func WithEventNum(num int) Option {
 func WithEventTime(time time.Time) Option {
 	return func(o *Options) {
 		o.EventTime = time
+	}
+}
+
+// WithEventOffset is the option for skipping a number of recent events (for pagination).
+// When used with WithEventNum, it skips the most recent EventOffset events
+// and then returns the next EventNum events.
+// For example, WithEventNum(50) + WithEventOffset(0) returns the last 50 events,
+// while WithEventNum(50) + WithEventOffset(50) returns events 51-100 from the end.
+func WithEventOffset(offset int) Option {
+	return func(o *Options) {
+		o.EventOffset = offset
 	}
 }
 

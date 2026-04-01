@@ -90,6 +90,39 @@ func TestWithEventTime(t *testing.T) {
 	}
 }
 
+func TestWithEventOffset(t *testing.T) {
+	tests := []struct {
+		name     string
+		offset   int
+		expected int
+	}{
+		{
+			name:     "positive offset",
+			offset:   10,
+			expected: 10,
+		},
+		{
+			name:     "zero",
+			offset:   0,
+			expected: 0,
+		},
+		{
+			name:     "negative offset",
+			offset:   -5,
+			expected: -5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			option := WithEventOffset(tt.offset)
+			opts := &Options{}
+			option(opts)
+			assert.Equal(t, tt.expected, opts.EventOffset)
+		})
+	}
+}
+
 func TestWithSummaryFilterKey(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -966,6 +999,48 @@ func TestApplyEventFiltering(t *testing.T) {
 				*createTestEvent(model.RoleAssistant, "msg 2", baseTime.Add(time.Minute), nil),
 			},
 			description: "Should keep all events when no filters applied",
+		},
+		{
+			name: "event offset - skip recent events",
+			inputSession: createTestSession([]event.Event{
+				*createTestEvent(model.RoleUser, "msg 1", baseTime, nil),
+				*createTestEvent(model.RoleAssistant, "msg 2", baseTime.Add(time.Minute), nil),
+				*createTestEvent(model.RoleUser, "msg 3", baseTime.Add(2*time.Minute), nil),
+				*createTestEvent(model.RoleAssistant, "msg 4", baseTime.Add(3*time.Minute), nil),
+			}, nil),
+			options: []Option{WithEventNum(2), WithEventOffset(2)},
+			expectedEvents: []event.Event{
+				*createTestEvent(model.RoleUser, "msg 1", baseTime, nil),
+				*createTestEvent(model.RoleAssistant, "msg 2", baseTime.Add(time.Minute), nil),
+			},
+			description: "Should skip the 2 most recent and return the next 2",
+		},
+		{
+			name: "event offset - offset exceeds event count",
+			inputSession: createTestSession([]event.Event{
+				*createTestEvent(model.RoleUser, "msg 1", baseTime, nil),
+				*createTestEvent(model.RoleAssistant, "msg 2", baseTime.Add(time.Minute), nil),
+			}, nil),
+			options: []Option{WithEventNum(2), WithEventOffset(5)},
+			expectedEvents: []event.Event{
+				*createTestEvent(model.RoleUser, "msg 1", baseTime, nil),
+			},
+			description: "Should return last user message when offset exceeds total events",
+		},
+		{
+			name: "event offset without event num",
+			inputSession: createTestSession([]event.Event{
+				*createTestEvent(model.RoleUser, "msg 1", baseTime, nil),
+				*createTestEvent(model.RoleAssistant, "msg 2", baseTime.Add(time.Minute), nil),
+				*createTestEvent(model.RoleUser, "msg 3", baseTime.Add(2*time.Minute), nil),
+				*createTestEvent(model.RoleAssistant, "msg 4", baseTime.Add(3*time.Minute), nil),
+			}, nil),
+			options: []Option{WithEventOffset(2)},
+			expectedEvents: []event.Event{
+				*createTestEvent(model.RoleUser, "msg 1", baseTime, nil),
+				*createTestEvent(model.RoleAssistant, "msg 2", baseTime.Add(time.Minute), nil),
+			},
+			description: "Should skip 2 most recent events and return all remaining",
 		},
 	}
 

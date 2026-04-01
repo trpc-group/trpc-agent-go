@@ -331,6 +331,7 @@ func (s *Service) GetSession(
 			c.Key,
 			c.Options.EventNum,
 			c.Options.EventTime,
+			c.Options.EventOffset,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -354,7 +355,7 @@ func (s *Service) ListSessions(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
-	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime)
+	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime, opt.EventOffset)
 	if err != nil {
 		return nil, fmt.Errorf("postgres session service get session list failed: %w", err)
 	}

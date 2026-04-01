@@ -2305,10 +2305,10 @@ func TestGetSession_WithEventLimit(t *testing.T) {
 		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
 		WillReturnRows(userRows)
 
-	// Mock events - with LIMIT in query (limit controls how many to return, not delete)
+	// Mock events - with DB-level LIMIT using ROW_NUMBER window function
 	eventRows := sqlmock.NewRows([]string{"session_id", "event"})
-	mock.ExpectQuery("SELECT session_id, event FROM session_events").
-		WithArgs("test-app", "test-user", "{test-session}").
+	mock.ExpectQuery("SELECT session_id, event FROM").
+		WithArgs("test-app", "test-user", "{test-session}", 5).
 		WillReturnRows(eventRows)
 
 	// WithEventNum(5) controls how many events to return in the query
@@ -2358,10 +2358,10 @@ func TestGetSession_WithTTL(t *testing.T) {
 		WithArgs("test-app", "test-user", sqlmock.AnyArg()).
 		WillReturnRows(userRows)
 
-	// Mock events
+	// Mock events - with DB-level LIMIT and afterTime filter from TTL
 	eventRows := sqlmock.NewRows([]string{"test-session", "event"})
-	mock.ExpectQuery("SELECT session_id, event FROM session_events").
-		WithArgs("test-app", "test-user", "{test-session}").
+	mock.ExpectQuery("SELECT session_id, event FROM").
+		WithArgs("test-app", "test-user", "{test-session}", sqlmock.AnyArg(), 1000).
 		WillReturnRows(eventRows)
 
 	sess, err := s.GetSession(context.Background(), key)
