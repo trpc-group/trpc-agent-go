@@ -572,13 +572,13 @@ func TestServiceToggleSkillEndpoint(t *testing.T) {
 		"Saved weather-probe as disabled. Changes apply on the next turn.",
 	)
 	target := (&url.URL{
-		Path:     routeSkillsPage,
+		Path:     "../../skills",
 		Fragment: "skill-card-weather-api",
 		RawQuery: values.Encode(),
 	}).String()
 	require.Equal(
 		t,
-		relativeRequestReference(routeSkillToggle, target),
+		target,
 		rr.Header().Get(headerLocation),
 	)
 }
@@ -611,13 +611,13 @@ func TestServiceRefreshSkillsEndpoint(t *testing.T) {
 			"will be available on the next turn.",
 	)
 	target := (&url.URL{
-		Path:     routeSkillsPage,
+		Path:     "../../skills",
 		Fragment: "skills-admin",
 		RawQuery: values.Encode(),
 	}).String()
 	require.Equal(
 		t,
-		relativeRequestReference(routeSkillsRefresh, target),
+		target,
 		rr.Header().Get(headerLocation),
 	)
 }
@@ -645,13 +645,13 @@ func TestServiceRefreshSkillsEndpointRequiresLiveRepo(t *testing.T) {
 	values := url.Values{}
 	values.Set(queryError, "live skills repository is not available")
 	target := (&url.URL{
-		Path:     routeSkillsPage,
+		Path:     "../../skills",
 		Fragment: "skills-admin",
 		RawQuery: values.Encode(),
 	}).String()
 	require.Equal(
 		t,
-		relativeRequestReference(routeSkillsRefresh, target),
+		target,
 		rr.Header().Get(headerLocation),
 	)
 }
@@ -683,13 +683,13 @@ func TestServiceRefreshSkillsEndpointReportsProviderError(t *testing.T) {
 	values := url.Values{}
 	values.Set(queryError, "refresh boom")
 	target := (&url.URL{
-		Path:     routeSkillsPage,
+		Path:     "../../skills",
 		Fragment: "skills-admin",
 		RawQuery: values.Encode(),
 	}).String()
 	require.Equal(
 		t,
-		relativeRequestReference(routeSkillsRefresh, target),
+		target,
 		rr.Header().Get(headerLocation),
 	)
 }
@@ -816,10 +816,19 @@ func TestServiceToggleSkillEndpointRequiresConfigPath(t *testing.T) {
 
 	require.Equal(t, http.StatusSeeOther, rr.Code)
 	require.Zero(t, provider.setCount)
-	require.Contains(
+	values := url.Values{}
+	values.Set(
+		queryError,
+		"skill toggles require a config-backed runtime",
+	)
+	target := (&url.URL{
+		Path:     "../..",
+		RawQuery: values.Encode(),
+	}).String()
+	require.Equal(
 		t,
+		target,
 		rr.Header().Get(headerLocation),
-		"skill+toggles+require+a+config-backed+runtime",
 	)
 }
 
