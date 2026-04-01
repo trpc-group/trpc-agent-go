@@ -111,29 +111,27 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Construct the agent first so request processors can access dynamic getters.
 	a := &LLMAgent{
-		name:              name,
-		model:             initialModel,
-		models:            models,
-		description:       options.Description,
-		instruction:       newTextPrompt(options.Instruction),
-		systemPrompt:      newTextPrompt(options.GlobalInstruction),
-		modelInstructions: cloneTextPromptMap(options.ModelInstructions),
-		modelGlobalInstructions: cloneTextPromptMap(
-			options.ModelGlobalInstructions,
-		),
-		genConfig:            options.GenerationConfig,
-		codeExecutor:         options.codeExecutor,
-		tools:                tools,
-		userToolNames:        userToolNames,
-		planner:              options.Planner,
-		subAgents:            options.SubAgents,
-		agentCallbacks:       options.AgentCallbacks,
-		outputKey:            options.OutputKey,
-		outputSchema:         options.OutputSchema,
-		inputSchema:          options.InputSchema,
-		structuredOutput:     options.StructuredOutput,
-		structuredOutputType: options.StructuredOutputType,
-		option:               options,
+		name:                    name,
+		model:                   initialModel,
+		models:                  models,
+		description:             options.Description,
+		instruction:             newTextPrompt(options.Instruction),
+		systemPrompt:            newTextPrompt(options.GlobalInstruction),
+		modelInstructions:       cloneTextPromptMap(options.ModelInstructions),
+		modelGlobalInstructions: cloneTextPromptMap(options.ModelGlobalInstructions),
+		genConfig:               options.GenerationConfig,
+		codeExecutor:            options.codeExecutor,
+		tools:                   tools,
+		userToolNames:           userToolNames,
+		planner:                 options.Planner,
+		subAgents:               options.SubAgents,
+		agentCallbacks:          options.AgentCallbacks,
+		outputKey:               options.OutputKey,
+		outputSchema:            options.OutputSchema,
+		inputSchema:             options.InputSchema,
+		structuredOutput:        options.StructuredOutput,
+		structuredOutputType:    options.StructuredOutputType,
+		option:                  options,
 	}
 
 	// Prepare request processors in the correct order, wiring dynamic getters.
@@ -228,12 +226,8 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		)
 	}
 	instructionOpts = append(instructionOpts,
-		processor.WithInstructionResolver(
-			a.instructionForInvocation,
-		),
-		processor.WithSystemPromptResolver(
-			a.systemPromptForInvocation,
-		),
+		processor.WithInstructionResolver(a.instructionForInvocation),
+		processor.WithSystemPromptResolver(a.systemPromptForInvocation),
 	)
 	instructionProcessor := processor.NewInstructionRequestProcessor(
 		"", // static value unused when resolver is present

@@ -9,12 +9,20 @@
 package prompt
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/promptcore"
 )
+
+// Source fetches a prompt template dynamically, for example from a remote
+// prompt management service. Implementations should handle caching internally
+// when low-latency access is required.
+type Source interface {
+	FetchPrompt(ctx context.Context) (Text, error)
+}
 
 // Meta identifies a prompt template for observability or future registry use.
 type Meta struct {
