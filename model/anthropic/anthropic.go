@@ -504,10 +504,39 @@ func (m *Model) handleStreamingResponse(
 loop:
 	for stream.Next() {
 		chunk := stream.Current()
+		// Guard against invalid/partial JSON in tool-use Input fields before
+		// accumulation.  Certain Anthropic-compatible APIs either send
+		// content_block_stop before all input_json_delta events arrive
+		// (leaving the accumulated Input as incomplete JSON) or send "null"
+		// instead of "{}" as the initial input placeholder.  Both cases cause
+		// json.Marshal to fail inside Accumulate, which would abort the whole
+		// stream.  We fix these cases pre-emptively so that Accumulate
+		// succeeds and the stream can complete normally.
+		switch chunk.Type {
+		case "content_block_stop":
+			// Ensure the current (last) content block has valid JSON in Input.
+			if len(acc.Content) > 0 {
+				ensureValidToolInput(&acc.Content[len(acc.Content)-1])
+			}
+		case "message_stop":
+			// Ensure all content blocks have valid JSON in Input.
+			for i := range acc.Content {
+				ensureValidToolInput(&acc.Content[i])
+			}
+		}
 		// Accumulate into accumulator.
 		if err := acc.Accumulate(chunk); err != nil {
 			streamErr = err
 			break
+		}
+		// After accumulating a content_block_start event, fix a "null" initial
+		// Input so that the first subsequent input_json_delta replaces it
+		// (instead of appending to it and producing "null{...}").
+		if chunk.Type == "content_block_start" && len(acc.Content) > 0 {
+			cb := &acc.Content[len(acc.Content)-1]
+			if string(cb.Input) == "null" {
+				cb.Input = json.RawMessage("{}")
+			}
 		}
 		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
 		// Build partial response.
@@ -671,6 +700,17 @@ func (m *Model) sendErrorResponse(ctx context.Context, responseChan chan<- *mode
 	select {
 	case responseChan <- errorResponse:
 	case <-ctx.Done():
+	}
+}
+
+// ensureValidToolInput resets a ContentBlockUnion's Input to an empty JSON
+// object if it contains invalid or partial JSON.  This prevents json.Marshal
+// from failing during accumulation when a stream ends before all
+// input_json_delta events are received (e.g. with Anthropic-compatible APIs
+// that don't strictly follow the streaming protocol).
+func ensureValidToolInput(cb *anthropic.ContentBlockUnion) {
+	if len(cb.Input) > 0 && !json.Valid(cb.Input) {
+		cb.Input = json.RawMessage("{}")
 	}
 }
 
