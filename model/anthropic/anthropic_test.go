@@ -896,6 +896,7 @@ func Test_HandleStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 		"event: message_stop",
 		`data: {"type":"message_stop"}`,
 		"",
+		"",
 	}, "\n")
 
 	orig := model.DefaultNewHTTPClient
@@ -991,6 +992,7 @@ func Test_HandleStreamingResponse_PartialToolInput(t *testing.T) {
 		"event: message_stop",
 		`data: {"type":"message_stop"}`,
 		"",
+		"",
 	}, "\n")
 
 	orig := model.DefaultNewHTTPClient
@@ -1054,6 +1056,7 @@ func Test_HandleStreamingResponse_NullInitialToolInput(t *testing.T) {
 		"event: message_stop",
 		`data: {"type":"message_stop"}`,
 		"",
+		"",
 	}, "\n")
 
 	orig := model.DefaultNewHTTPClient
@@ -1091,6 +1094,66 @@ func Test_HandleStreamingResponse_NullInitialToolInput(t *testing.T) {
 	tc := final.Choices[0].Message.ToolCalls[0]
 	assert.Equal(t, "get_weather", tc.Function.Name)
 	assert.Equal(t, `{"city":"Paris"}`, string(tc.Function.Arguments))
+}
+
+// Test_HandleStreamingResponse_MessageStopPreflightGuard verifies that the
+// message_stop pre-flight guard handles a broken proxy that sends message_stop
+// without a preceding content_block_stop, leaving the tool-use Input as
+// partial JSON.  Without the guard, acc.Accumulate would call json.Marshal on
+// the partial Input and return an error.
+func Test_HandleStreamingResponse_MessageStopPreflightGuard(t *testing.T) {
+	// SSE stream where content_block_stop is intentionally omitted: the
+	// proxy jumps straight from an incomplete input_json_delta to
+	// message_stop, leaving the accumulated Input as invalid JSON.
+	sse := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_msgstop","type":"message","role":"assistant","model":"claude-3-sonnet","content":[],"usage":{"input_tokens":10,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`,
+		"",
+		"event: content_block_start",
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_03","name":"get_weather","input":{}}}`,
+		"",
+		// Partial JSON – closing "}" is never sent.
+		"event: content_block_delta",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\": \"Tokyo\""}}`,
+		"",
+		// No content_block_stop – the proxy jumps straight to message_stop.
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
+		"",
+		"",
+	}, "\n")
+
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader(sse))}, nil
+		})}
+	}
+
+	m := New("claude-test", WithHTTPClientOptions())
+	req := &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("U")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	ctx := context.Background()
+	ch, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	var final *model.Response
+	for resp := range ch {
+		if resp.Done {
+			final = resp
+			break
+		}
+	}
+	// The stream must complete without error even though content_block_stop
+	// was never sent and the tool input was partial when message_stop fired.
+	require.NotNil(t, final)
+	assert.Nil(t, final.Error, "unexpected error in final response: %v", final.Error)
+	assert.True(t, final.Done)
 }
 
 func Test_HandleStreamingResponse_StreamErrorUsesNilAccumulator(t *testing.T) {
@@ -2342,6 +2405,7 @@ func TestChatRequestCallbackSynchronous(t *testing.T) {
 					"",
 					"event: message_stop",
 					`data: {"type":"message_stop"}`,
+					"",
 					"",
 				}, "\n")
 				model.DefaultNewHTTPClient = func(

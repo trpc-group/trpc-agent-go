@@ -505,13 +505,11 @@ loop:
 	for stream.Next() {
 		chunk := stream.Current()
 		// Guard against invalid/partial JSON in tool-use Input fields before
-		// accumulation.  Certain Anthropic-compatible APIs either send
-		// content_block_stop before all input_json_delta events arrive
-		// (leaving the accumulated Input as incomplete JSON) or send "null"
-		// instead of "{}" as the initial input placeholder.  Both cases cause
-		// json.Marshal to fail inside Accumulate, which would abort the whole
-		// stream.  We fix these cases pre-emptively so that Accumulate
-		// succeeds and the stream can complete normally.
+		// accumulation.  Certain Anthropic-compatible APIs send
+		// content_block_stop (or message_stop) before all input_json_delta
+		// events arrive, leaving the accumulated Input as incomplete JSON.
+		// json.Marshal then fails inside Accumulate, aborting the whole
+		// stream.  We sanitise pre-emptively so that Accumulate succeeds.
 		switch chunk.Type {
 		case "content_block_stop":
 			// Ensure the current (last) content block has valid JSON in Input.
@@ -528,15 +526,6 @@ loop:
 		if err := acc.Accumulate(chunk); err != nil {
 			streamErr = err
 			break
-		}
-		// After accumulating a content_block_start event, fix a "null" initial
-		// Input so that the first subsequent input_json_delta replaces it
-		// (instead of appending to it and producing "null{...}").
-		if chunk.Type == "content_block_start" && len(acc.Content) > 0 {
-			cb := &acc.Content[len(acc.Content)-1]
-			if string(cb.Input) == "null" {
-				cb.Input = json.RawMessage("{}")
-			}
 		}
 		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
 		// Build partial response.
