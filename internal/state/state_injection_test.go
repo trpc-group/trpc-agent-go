@@ -424,6 +424,64 @@ func TestInjectSessionStateWithSession_SessionOverride(t *testing.T) {
 	}
 }
 
+func TestInjectSessionState_InvocationPlaceholderDoesNotFallbackToSession(t *testing.T) {
+	const (
+		template = "Hello {name}, Case={invocation:case}"
+		want     = "Hello Bob, Case={invocation:case}"
+	)
+
+	invSessState := make(session.StateMap)
+	invSessState["name"] = []byte(`"Bob"`)
+	invSessState["invocation:case"] = []byte(`"from-session"`)
+	inv := &agent.Invocation{Session: &session.Session{State: invSessState}}
+
+	got, err := InjectSessionState(template, inv)
+	if err != nil {
+		t.Fatalf(
+			"InjectSessionState invocation fallback: unexpected error: %v",
+			err,
+		)
+	}
+	if got != want {
+		t.Fatalf(
+			"InjectSessionState invocation fallback: got %q, want %q",
+			got,
+			want,
+		)
+	}
+}
+
+func TestInjectSessionStateWithSession_InvocationPlaceholderDoesNotFallbackToOverride(t *testing.T) {
+	const (
+		template = "Hello {name}, Case={invocation:case}"
+		want     = "Hello Alice, Case={invocation:case}"
+	)
+
+	sessState := make(session.StateMap)
+	sessState["name"] = []byte(`"Alice"`)
+	sessState["invocation:case"] = []byte(`"from-override-session"`)
+	sess := &session.Session{State: sessState}
+
+	invSessState := make(session.StateMap)
+	invSessState["name"] = []byte(`"Bob"`)
+	inv := &agent.Invocation{Session: &session.Session{State: invSessState}}
+
+	got, err := InjectSessionStateWithSession(template, inv, sess)
+	if err != nil {
+		t.Fatalf(
+			"InjectSessionStateWithSession invocation fallback: unexpected error: %v",
+			err,
+		)
+	}
+	if got != want {
+		t.Fatalf(
+			"InjectSessionStateWithSession invocation fallback: got %q, want %q",
+			got,
+			want,
+		)
+	}
+}
+
 func TestInjectSessionStateWithSession_NoRecursiveExpansion(t *testing.T) {
 	const (
 		template = "X={invocation:x}"

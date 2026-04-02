@@ -97,10 +97,13 @@ type stateResolver struct {
 }
 
 func (r stateResolver) Resolve(ref prompt.Ref) (string, bool, error) {
-	if stateKey, ok := strings.CutPrefix(ref.Name, stateInvocationKey); ok && r.invocation != nil {
-		if val, exists := r.invocation.GetState(stateKey); exists && val != nil {
-			return fmt.Sprintf("%+v", val), true, nil
+	if stateKey, ok := strings.CutPrefix(ref.Name, stateInvocationKey); ok {
+		if r.invocation != nil {
+			if val, exists := r.invocation.GetState(stateKey); exists && val != nil {
+				return fmt.Sprintf("%+v", val), true, nil
+			}
 		}
+		return "", false, nil
 	}
 
 	// Get the value from session state.
