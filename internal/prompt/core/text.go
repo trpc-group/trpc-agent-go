@@ -21,19 +21,29 @@ import (
 type SyntaxMode int
 
 const (
-	// SyntaxModeSingleBrace recognizes {name} placeholders.
-	SyntaxModeSingleBrace SyntaxMode = iota
-	// SyntaxModeDoubleBrace recognizes {{name}} placeholders.
+	// SyntaxModeMixedBrace recognizes both single-brace and double-brace
+	// placeholders. In both forms, name itself matches the regexp
+	// `[^\s{}'"`?]+`. A trailing '?' marks the placeholder optional and is not
+	// part of name. Double-brace placeholders still ignore outer whitespace.
+	SyntaxModeMixedBrace SyntaxMode = iota
+	// SyntaxModeSingleBrace recognizes placeholders such as {name} or {name?}.
+	//
+	// Here name matches the regexp `[^\s{}'"`?]+`. A trailing '?' marks the
+	// placeholder optional and is not part of name.
+	SyntaxModeSingleBrace
+	// SyntaxModeDoubleBrace recognizes placeholders such as {{name}},
+	// {{name?}}, or {{user:name}}.
+	//
+	// Here name matches the regexp `[^\s{}'"`?]+`. A trailing '?' marks the
+	// placeholder optional and is not part of name. Outer whitespace is ignored.
 	SyntaxModeDoubleBrace
-	// SyntaxModeMixedBrace recognizes both single-brace and double-brace placeholders.
-	SyntaxModeMixedBrace
 )
 
 // UnknownBehavior controls how unresolved placeholders are handled.
 type UnknownBehavior int
 
 const (
-	// PreserveUnknown leaves unresolved placeholders untouched.
+	// PreserveUnknown keeps unresolved placeholders in the rendered output.
 	PreserveUnknown UnknownBehavior = iota
 	// ErrorOnUnknown returns an error when a non-optional placeholder cannot be resolved.
 	ErrorOnUnknown
@@ -57,8 +67,8 @@ type config struct {
 
 // WithAcceptName filters which parsed placeholder names are treated as real placeholders.
 //
-// Returning false keeps the original text literal, even for syntactically valid
-// optional placeholders.
+// Returning false keeps the placeholder unresolved in its preserved output form,
+// even for syntactically valid optional placeholders.
 func WithAcceptName(fn func(string) bool) Option {
 	return func(cfg *config) {
 		cfg.acceptName = fn
@@ -74,6 +84,7 @@ type placeholderToken struct {
 	raw      string
 	name     string
 	optional bool
+	accepted bool
 }
 
 // Render replaces placeholders with values from env.
@@ -95,6 +106,10 @@ func Render(
 	for _, part := range parts {
 		if part.placeholder == nil {
 			builder.WriteString(part.literal)
+			continue
+		}
+		if !part.placeholder.accepted {
+			builder.WriteString(part.placeholder.raw)
 			continue
 		}
 
@@ -135,6 +150,9 @@ func PlaceholderNames(template string, syntax SyntaxMode, opts ...Option) []stri
 	var names []string
 	for _, part := range parts {
 		if part.placeholder == nil {
+			continue
+		}
+		if !part.placeholder.accepted {
 			continue
 		}
 		names = append(names, part.placeholder.name)
@@ -240,7 +258,12 @@ func parseSingleBraceAt(
 	}
 	span := end + 2
 	raw := template[start : start+span]
-	token, ok := parsePlaceholder(raw, template[start+1:start+span-1], cfg)
+	token, ok := parsePlaceholder(
+		raw,
+		template[start+1:start+span-1],
+		singleBraceDelimiter,
+		cfg,
+	)
 	if !ok {
 		return span, nil
 	}
@@ -262,29 +285,76 @@ func parseDoubleCurlyAt(
 	}
 	span := end + 4
 	raw := template[start : start+span]
-	token, ok := parsePlaceholder(raw, template[start+2:start+span-2], cfg)
+	token, ok := parsePlaceholder(
+		raw,
+		template[start+2:start+span-2],
+		doubleBraceDelimiter,
+		cfg,
+	)
 	if !ok {
 		return span, nil
 	}
 	return span, &token
 }
 
-func parsePlaceholder(raw, inner string, cfg config) (placeholderToken, bool) {
-	name, optional, ok := parseName(inner)
+type delimiterKind int
+
+const (
+	singleBraceDelimiter delimiterKind = iota
+	doubleBraceDelimiter
+)
+
+func parsePlaceholder(
+	raw, inner string,
+	delimiter delimiterKind,
+	cfg config,
+) (placeholderToken, bool) {
+	name, optional, ok := parseName(inner, delimiter)
 	if !ok {
 		return placeholderToken{}, false
 	}
-	if cfg.acceptName != nil && !cfg.acceptName(name) {
-		return placeholderToken{}, false
+	accepted := true
+	if cfg.acceptName != nil {
+		accepted = cfg.acceptName(name)
 	}
 	return placeholderToken{
 		raw:      raw,
 		name:     name,
 		optional: optional,
+		accepted: accepted,
 	}, true
 }
 
-func parseName(inner string) (string, bool, bool) {
+func parseName(inner string, delimiter delimiterKind) (string, bool, bool) {
+	switch delimiter {
+	case doubleBraceDelimiter:
+		return parseDoubleBraceName(inner)
+	default:
+		return parseSingleBraceName(inner)
+	}
+}
+
+func parseSingleBraceName(inner string) (string, bool, bool) {
+	name := inner
+	if name == "" {
+		return "", false, false
+	}
+
+	optional := false
+	if strings.HasSuffix(name, "?") {
+		optional = true
+		name = strings.TrimSuffix(name, "?")
+	}
+	if name == "" || strings.Contains(name, "?") {
+		return "", false, false
+	}
+	if !isValidName(name) {
+		return "", false, false
+	}
+	return name, optional, true
+}
+
+func parseDoubleBraceName(inner string) (string, bool, bool) {
 	name := strings.TrimSpace(inner)
 	if name == "" {
 		return "", false, false
@@ -293,7 +363,7 @@ func parseName(inner string) (string, bool, bool) {
 	optional := false
 	if strings.HasSuffix(name, "?") {
 		optional = true
-		name = strings.TrimSpace(strings.TrimSuffix(name, "?"))
+		name = strings.TrimSuffix(name, "?")
 	}
 	if name == "" || strings.Contains(name, "?") {
 		return "", false, false
