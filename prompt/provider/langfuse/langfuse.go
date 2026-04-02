@@ -33,6 +33,8 @@ type clientConfig struct {
 	httpClient *http.Client
 }
 
+const defaultHTTPTimeout = 30 * time.Second
+
 // Client fetches text prompts from the Langfuse REST API.
 type Client struct {
 	baseURL    string
@@ -43,7 +45,9 @@ type Client struct {
 
 // NewClient creates a Langfuse prompt client from a shared ConnectionConfig.
 func NewClient(cfg config.ConnectionConfig, opts ...ClientOption) *Client {
-	cc := clientConfig{httpClient: http.DefaultClient}
+	cc := clientConfig{
+		httpClient: &http.Client{Timeout: defaultHTTPTimeout},
+	}
 	for _, opt := range opts {
 		opt(&cc)
 	}
@@ -186,7 +190,9 @@ func WithCacheTTL(ttl time.Duration) SourceOption {
 
 // TextPromptSource returns a [prompt.Source] that fetches the named text prompt
 // with the given fetch options. Results are cached with a default TTL of 60s.
-// On fetch failure, a valid cached value is returned if available.
+// On fetch failure, a valid cached value is returned if available. Caller
+// cancellation or deadline expiry is returned directly and does not use stale
+// cache.
 func (c *Client) TextPromptSource(name string, opts ...FetchOption) prompt.Source {
 	return c.TextPromptSourceWithOptions(name, opts)
 }
@@ -229,6 +235,9 @@ func (s *cachedSource) FetchPrompt(ctx context.Context) (prompt.Text, error) {
 
 	result, err := s.client.FetchTextPrompt(ctx, s.name, s.fetchOpt...)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return prompt.Text{}, ctxErr
+		}
 		s.mu.RLock()
 		if s.valid {
 			t := s.cached

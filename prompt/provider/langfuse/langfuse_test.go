@@ -35,6 +35,17 @@ func newTestServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *C
 	return srv, client
 }
 
+func TestNewClient_DefaultHTTPTimeout(t *testing.T) {
+	client := NewClient(config.ConnectionConfig{
+		PublicKey: "pk-test",
+		SecretKey: "sk-test",
+		BaseURL:   "https://example.com",
+	})
+
+	require.NotNil(t, client.httpClient)
+	assert.Equal(t, defaultHTTPTimeout, client.httpClient.Timeout)
+}
+
 func TestFetchTextPrompt_Success(t *testing.T) {
 	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/public/v2/prompts/movie-critic", r.URL.Path)
@@ -245,6 +256,58 @@ func TestTextPromptSource_StaleOnError(t *testing.T) {
 	t2, err := source.FetchPrompt(context.Background())
 	require.NoError(t, err, "should return stale cache on error")
 	assert.Equal(t, "ok", t2.Template)
+}
+
+func TestTextPromptSource_CanceledContextDoesNotReturnStale(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		resp := apiPromptResponse{Name: "p", Version: 1, Type: "text", Prompt: "ok"}
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	source := client.TextPromptSourceWithOptions(
+		"p",
+		nil,
+		WithCacheTTL(10*time.Millisecond),
+	)
+
+	t1, err := source.FetchPrompt(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "ok", t1.Template)
+
+	time.Sleep(15 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	t2, err := source.FetchPrompt(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, prompt.Text{}, t2)
+}
+
+func TestTextPromptSource_ExpiredDeadlineDoesNotReturnStale(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		resp := apiPromptResponse{Name: "p", Version: 1, Type: "text", Prompt: "ok"}
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	source := client.TextPromptSourceWithOptions(
+		"p",
+		nil,
+		WithCacheTTL(10*time.Millisecond),
+	)
+
+	t1, err := source.FetchPrompt(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "ok", t1.Template)
+
+	time.Sleep(15 * time.Millisecond)
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	t2, err := source.FetchPrompt(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, prompt.Text{}, t2)
 }
 
 func TestTextPromptSource_ErrorWithNoCache(t *testing.T) {
