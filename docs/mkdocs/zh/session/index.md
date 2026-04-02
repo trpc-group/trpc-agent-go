@@ -418,6 +418,19 @@ for _, sess := range sessions {
 }
 ```
 
+```go
+// 仅获取会话元数据，不返回 Events 和 Tracks
+sessions, err := sessionService.ListSessions(ctx, session.UserKey{
+    AppName: "my-agent",
+    UserID:  "user123",
+}, session.WithListSessionOnlyMeta())
+```
+
+说明：
+
+- `session.WithListSessionOnlyMeta()` 只用于 `ListSessions`
+- 当前仅 `inmemory` 和 `redis` 后端支持该优化
+
 #### 手动删除会话
 
 ```go

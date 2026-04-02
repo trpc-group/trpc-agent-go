@@ -116,6 +116,46 @@ func applyTrackFiltering(sess *session.Session, opt *session.Options) {
 	}
 }
 
+func cloneSessionListMetadata(sess *session.Session) *session.Session {
+	if sess == nil {
+		return nil
+	}
+
+	copiedSess := session.NewSession(
+		sess.AppName,
+		sess.UserID,
+		sess.ID,
+		session.WithSessionCreatedAt(sess.CreatedAt),
+		session.WithSessionUpdatedAt(sess.UpdatedAt),
+	)
+
+	if state := sess.SnapshotState(); state != nil {
+		copiedSess.State = state
+	}
+
+	sess.SummariesMu.RLock()
+	if len(sess.Summaries) > 0 {
+		copiedSess.Summaries = make(map[string]*session.Summary, len(sess.Summaries))
+		for key, sum := range sess.Summaries {
+			if sum == nil {
+				continue
+			}
+			copied := *sum
+			copiedSess.Summaries[key] = &copied
+		}
+	}
+	sess.SummariesMu.RUnlock()
+
+	if sess.ServiceMeta != nil {
+		copiedSess.ServiceMeta = make(map[string]string, len(sess.ServiceMeta))
+		for key, value := range sess.ServiceMeta {
+			copiedSess.ServiceMeta[key] = value
+		}
+	}
+
+	return copiedSess
+}
+
 // appSessions is a map of userID to sessions, it store sessions of one app.
 type appSessions struct {
 	mu        sync.RWMutex
@@ -365,6 +405,15 @@ func (s *SessionService) ListSessions(
 	for _, o := range opts {
 		o(opt)
 	}
+	appState := getValidState(app.appState)
+	userState := getValidState(app.userState[userKey.UserID])
+	if appState == nil {
+		appState = make(session.StateMap)
+	}
+	if userState == nil {
+		userState = make(session.StateMap)
+	}
+
 	sessList := make([]*session.Session, 0, len(app.sessions[userKey.UserID]))
 	for _, sWithTTL := range app.sessions[userKey.UserID] {
 		// Check if session is expired
@@ -372,18 +421,16 @@ func (s *SessionService) ListSessions(
 		if s == nil {
 			continue // Skip expired sessions
 		}
-		copiedSess := s.Clone()
-		copiedSess.ApplyEventFiltering(opts...)
-		applyTrackFiltering(copiedSess, opt)
 
-		appState := getValidState(app.appState)
-		userState := getValidState(app.userState[userKey.UserID])
-		if appState == nil {
-			appState = make(session.StateMap)
+		var copiedSess *session.Session
+		if opt.ListSessionOnlyMeta {
+			copiedSess = cloneSessionListMetadata(s)
+		} else {
+			copiedSess = s.Clone()
+			copiedSess.ApplyEventFiltering(opts...)
+			applyTrackFiltering(copiedSess, opt)
 		}
-		if userState == nil {
-			userState = make(session.StateMap)
-		}
+
 		sessList = append(sessList, mergeState(appState, userState, copiedSess))
 	}
 	return sessList, nil

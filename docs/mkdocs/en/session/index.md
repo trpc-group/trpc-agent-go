@@ -412,6 +412,19 @@ for _, sess := range sessions {
 }
 ```
 
+```go
+// Fetch session metadata only, without Events or Tracks
+sessions, err := sessionService.ListSessions(ctx, session.UserKey{
+    AppName: "my-agent",
+    UserID:  "user123",
+}, session.WithListSessionOnlyMeta())
+```
+
+Notes:
+
+- `session.WithListSessionOnlyMeta()` is only for `ListSessions`
+- This optimization is currently supported only by the `inmemory` and `redis` backends
+
 #### Delete Session
 
 ```go

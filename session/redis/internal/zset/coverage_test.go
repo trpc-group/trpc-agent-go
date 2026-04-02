@@ -228,7 +228,7 @@ func TestCov_ListSessions_PipelineError(t *testing.T) {
 
 	mr.Close()
 
-	_, err := c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{})
+	_, err := c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{}, false)
 	require.Error(t, err)
 }
 
@@ -532,7 +532,7 @@ func TestCov_ListSessions_WithValidTracks(t *testing.T) {
 	require.NoError(t, err)
 
 	// ListSessions should work with tracks
-	sessions, err := c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{})
+	sessions, err := c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{}, false)
 	require.NoError(t, err)
 	assert.Len(t, sessions, 2)
 }
@@ -562,7 +562,7 @@ func TestCov_ListSessions_CorruptStateReturnsEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	// ListSessions returns empty list (error swallowed by len check)
-	sessions, err := c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{})
+	sessions, err := c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{}, false)
 	require.NoError(t, err)
 	assert.Empty(t, sessions)
 }
@@ -585,7 +585,7 @@ func TestCov_ListSessions_EventsPipelineError(t *testing.T) {
 	err = rdb.Set(ctx, eventKey, "not-a-zset", 0).Err()
 	require.NoError(t, err)
 
-	_, err = c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{})
+	_, err = c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{}, false)
 	require.Error(t, err)
 }
 
@@ -609,7 +609,7 @@ func TestCov_ListSessions_MalformedEventsSkipped(t *testing.T) {
 	}).Err()
 	require.NoError(t, err)
 
-	sessions, err := c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{})
+	sessions, err := c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{}, false)
 	require.NoError(t, err)
 	assert.Len(t, sessions, 1)
 }
@@ -923,7 +923,7 @@ func TestCov_ListSessions_TrackEventsPipelineError(t *testing.T) {
 	err = rdb.Set(ctx, trackKey, "not-a-zset", 0).Err()
 	require.NoError(t, err)
 
-	_, err = c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{})
+	_, err = c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 0, time.Time{}, false)
 	require.Error(t, err)
 }
 
@@ -952,7 +952,7 @@ func TestCov_ListSessions_WithTrackLimit(t *testing.T) {
 	}
 
 	// ListSessions with limit=2 exercises the limit > 0 branch in getTrackEvents
-	sessions, err := c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 2, time.Time{})
+	sessions, err := c.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"}, 2, time.Time{}, false)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 }

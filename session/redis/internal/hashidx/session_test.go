@@ -429,7 +429,7 @@ func TestClient_ListSessions(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{}, false)
 	require.NoError(t, err)
 	assert.Len(t, sessions, 3)
 }
@@ -448,7 +448,7 @@ func TestClient_ListSessions_FallbackToScanWhenUserIndexDisabled(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{}, false)
 	require.NoError(t, err)
 	assert.Len(t, sessions, 3)
 }
@@ -468,7 +468,7 @@ func TestClient_ListSessions_CleansStaleUserIndexEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, rdb.HSet(ctx, indexKey, "ghost", staleEntry).Err())
 
-	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{}, false)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, validKey.SessionID, sessions[0].ID)
@@ -500,7 +500,7 @@ func TestClient_ListSessions_SkipsInvalidMetaFromUserIndex(t *testing.T) {
 	require.NoError(t, rdb.HSet(ctx, indexKey, badKey.SessionID, entry).Err())
 	require.NoError(t, rdb.Set(ctx, badMetaKey, "not-json", 0).Err())
 
-	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{}, false)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, validKey.SessionID, sessions[0].ID)
@@ -731,7 +731,7 @@ func TestClient_ListSessions_WithEventsAndAppState(t *testing.T) {
 		require.NoError(t, c.AppendTrackEvent(ctx, key, te, tracksJSON))
 	}
 
-	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{}, false)
 	require.NoError(t, err)
 	require.Len(t, sessions, 2)
 
@@ -992,7 +992,7 @@ func TestLoadSessionBasic_LuaError(t *testing.T) {
 	// Close Redis so loadSessionBasic's Lua call fails
 	mr.Close()
 
-	_, err = c.loadSessionBasic(ctx, key, metaJSON, 0, time.Time{})
+	_, err = c.loadSessionBasic(ctx, key, metaJSON, 0, time.Time{}, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "load events")
 }
@@ -1003,7 +1003,7 @@ func TestLoadSessionBasic_BadMeta(t *testing.T) {
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "u1", SessionID: "cov-basic-badmeta"}
 
-	_, err := c.loadSessionBasic(ctx, key, []byte("not-json"), 0, time.Time{})
+	_, err := c.loadSessionBasic(ctx, key, []byte("not-json"), 0, time.Time{}, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal session meta")
 }
@@ -1069,7 +1069,7 @@ func TestListSessions_ErrorFromUserIndex(t *testing.T) {
 
 	mr.Close()
 
-	_, err = c.ListSessions(ctx, userKey, 0, time.Time{})
+	_, err = c.ListSessions(ctx, userKey, 0, time.Time{}, false)
 	require.Error(t, err)
 }
 
@@ -1087,7 +1087,7 @@ func TestListSessions_ErrorFromScan(t *testing.T) {
 
 	mr.Close()
 
-	_, err = c.ListSessions(ctx, userKey, 0, time.Time{})
+	_, err = c.ListSessions(ctx, userKey, 0, time.Time{}, false)
 	require.Error(t, err)
 }
 
@@ -1097,7 +1097,7 @@ func TestListSessions_EmptyReturnsNil(t *testing.T) {
 	ctx := context.Background()
 
 	userKey := session.UserKey{AppName: "app", UserID: "empty-user"}
-	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{}, false)
 	require.NoError(t, err)
 	assert.Nil(t, sessions)
 }
@@ -1119,7 +1119,7 @@ func TestListSessionsByScan_SkipsInvalidMeta(t *testing.T) {
 	metaKey := c.keys.SessionMetaKey(badKey)
 	require.NoError(t, rdb.Set(ctx, metaKey, "not-json", 0).Err())
 
-	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{})
+	sessions, err := c.ListSessions(ctx, userKey, 0, time.Time{}, false)
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "scan-good", sessions[0].ID)
@@ -1178,7 +1178,7 @@ func TestLoadSessionBasic_BadEventJSON(t *testing.T) {
 	require.NoError(t, err)
 
 	// loadSessionBasic should succeed but skip the bad JSON event via continue
-	sess, err := c.loadSessionBasic(ctx, key, metaJSON, 0, time.Time{})
+	sess, err := c.loadSessionBasic(ctx, key, metaJSON, 0, time.Time{}, false)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	// Only the valid event should be returned (bad one skipped)

@@ -436,7 +436,7 @@ func (s *Service) ListSessions(
 	opt := applyOptions(opts...)
 	eventLimit := s.getEffectiveEventLimit(opt.EventNum)
 
-	hashidxSessions, err := s.hashidxClient.ListSessions(ctx, userKey, eventLimit, opt.EventTime)
+	hashidxSessions, err := s.hashidxClient.ListSessions(ctx, userKey, eventLimit, opt.EventTime, opt.ListSessionOnlyMeta)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions (hashidx): %w", err)
 	}
@@ -446,7 +446,7 @@ func (s *Service) ListSessions(
 		return hashidxSessions, nil
 	}
 
-	zsetSessions, err := s.zsetClient.ListSessions(ctx, userKey, eventLimit, opt.EventTime)
+	zsetSessions, err := s.zsetClient.ListSessions(ctx, userKey, eventLimit, opt.EventTime, opt.ListSessionOnlyMeta)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions (zset): %w", err)
 	}

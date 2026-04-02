@@ -577,10 +577,12 @@ type Summary struct {
 	UpdatedAt time.Time `json:"updated_at"`       // UpdatedAt is the update timestamp in UTC.
 }
 
-// Options is the options for getting a session.
+// Options contains shared session-service options.
+// Not every field applies to every service method.
 type Options struct {
-	EventNum  int       // EventNum is the number of recent events.
-	EventTime time.Time // EventTime is the after time.
+	EventNum            int       // EventNum is the number of recent events.
+	EventTime           time.Time // EventTime is the after time.
+	ListSessionOnlyMeta bool      // ListSessionOnlyMeta is only honored by ListSessions.
 }
 
 // Option is the option for a session.
@@ -597,6 +599,15 @@ func WithEventNum(num int) Option {
 func WithEventTime(time time.Time) Option {
 	return func(o *Options) {
 		o.EventTime = time
+	}
+}
+
+// WithListSessionOnlyMeta requests ListSessions to return only session metadata
+// without events or tracks. Callers should only use this option with ListSessions.
+// The optimization is currently implemented by the in-memory and redis session services.
+func WithListSessionOnlyMeta() Option {
+	return func(o *Options) {
+		o.ListSessionOnlyMeta = true
 	}
 }
 
@@ -628,6 +639,8 @@ type Service interface {
 	GetSession(ctx context.Context, key Key, options ...Option) (*Session, error)
 
 	// ListSessions lists all sessions by user scope of session key.
+	// When WithListSessionOnlyMeta is provided, supported implementations omit events
+	// and tracks and only return session metadata plus merged state.
 	ListSessions(ctx context.Context, userKey UserKey, options ...Option) ([]*Session, error)
 
 	// DeleteSession deletes a session.
