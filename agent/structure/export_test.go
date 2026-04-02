@@ -372,6 +372,10 @@ func TestValidateSurfaceValue_CoversAdditionalBranches(t *testing.T) {
 			},
 		},
 	}
+	require.NoError(t, validateSurfaceValue(SurfaceTypeInstruction, SurfaceValue{
+		Text:         stringPtr("instruction"),
+		PromptSyntax: promptSyntaxPtr(PromptSyntaxDoubleBrace),
+	}))
 	require.NoError(t, validateSurfaceValue(SurfaceTypeFewShot, SurfaceValue{FewShot: fewShot}))
 	require.Error(t, validateSurfaceValue(SurfaceTypeFewShot, SurfaceValue{
 		Text:    stringPtr("invalid"),
@@ -381,8 +385,8 @@ func TestValidateSurfaceValue_CoversAdditionalBranches(t *testing.T) {
 		Model: &ModelRef{Name: "gpt"},
 	}))
 	require.Error(t, validateSurfaceValue(SurfaceTypeModel, SurfaceValue{
-		Model: &ModelRef{Name: "gpt"},
-		Tools: []ToolRef{{ID: "echo"}},
+		Model:        &ModelRef{Name: "gpt"},
+		PromptSyntax: promptSyntaxPtr(PromptSyntaxSingleBrace),
 	}))
 	require.NoError(t, validateSurfaceValue(SurfaceTypeTool, SurfaceValue{
 		Tools: []ToolRef{{ID: "echo"}},
@@ -608,6 +612,10 @@ func TestExport_PropagatesExporterError(t *testing.T) {
 }
 
 func stringPtr(value string) *string {
+	return &value
+}
+
+func promptSyntaxPtr(value PromptSyntax) *PromptSyntax {
 	return &value
 }
 

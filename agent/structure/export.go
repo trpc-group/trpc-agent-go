@@ -194,6 +194,10 @@ func cloneSurfaceValue(value SurfaceValue) SurfaceValue {
 		text := *value.Text
 		cloned.Text = &text
 	}
+	if value.PromptSyntax != nil {
+		promptSyntax := *value.PromptSyntax
+		cloned.PromptSyntax = &promptSyntax
+	}
 	if value.Model != nil {
 		modelRef := *value.Model
 		cloned.Model = &modelRef
@@ -388,32 +392,39 @@ func validateTextSurfaceValue(value SurfaceValue) error {
 	if len(value.FewShot) > 0 || value.Model != nil || len(value.Tools) > 0 || len(value.Skills) > 0 {
 		return errors.New("text surface must not carry other value branches")
 	}
+	if value.PromptSyntax != nil {
+		switch *value.PromptSyntax {
+		case PromptSyntaxMixedBrace, PromptSyntaxSingleBrace, PromptSyntaxDoubleBrace:
+		default:
+			return fmt.Errorf("unknown prompt syntax %q", *value.PromptSyntax)
+		}
+	}
 	return nil
 }
 
 func validateFewShotSurfaceValue(value SurfaceValue) error {
-	if value.Text != nil || value.Model != nil || len(value.Tools) > 0 || len(value.Skills) > 0 {
+	if value.Text != nil || value.PromptSyntax != nil || value.Model != nil || len(value.Tools) > 0 || len(value.Skills) > 0 {
 		return errors.New("few-shot surface must not carry other value branches")
 	}
 	return nil
 }
 
 func validateModelSurfaceValue(value SurfaceValue) error {
-	if value.Text != nil || len(value.FewShot) > 0 || len(value.Tools) > 0 || len(value.Skills) > 0 {
+	if value.Text != nil || value.PromptSyntax != nil || len(value.FewShot) > 0 || len(value.Tools) > 0 || len(value.Skills) > 0 {
 		return errors.New("model surface must not carry other value branches")
 	}
 	return nil
 }
 
 func validateToolSurfaceValue(value SurfaceValue) error {
-	if value.Text != nil || len(value.FewShot) > 0 || value.Model != nil || len(value.Skills) > 0 {
+	if value.Text != nil || value.PromptSyntax != nil || len(value.FewShot) > 0 || value.Model != nil || len(value.Skills) > 0 {
 		return errors.New("tool surface must not carry other value branches")
 	}
 	return nil
 }
 
 func validateSkillSurfaceValue(value SurfaceValue) error {
-	if value.Text != nil || len(value.FewShot) > 0 || value.Model != nil || len(value.Tools) > 0 {
+	if value.Text != nil || value.PromptSyntax != nil || len(value.FewShot) > 0 || value.Model != nil || len(value.Tools) > 0 {
 		return errors.New("skill surface must not carry other value branches")
 	}
 	return nil

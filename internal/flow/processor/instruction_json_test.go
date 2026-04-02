@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -205,5 +206,48 @@ func TestInstructionProc_JSONInjection_UsesInvocationStructuredOutput(t *testing
 	}
 	if strings.Contains(content, `"x"`) {
 		t.Errorf("did not expect static schema to be used when invocation schema is present")
+	}
+}
+
+func TestInstructionProc_JSONInjection_AppendsSchemaAfterPlaceholderRendering(
+	t *testing.T,
+) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"x": map[string]any{
+				"type":        "string",
+				"description": "literal {research_topics}",
+			},
+		},
+	}
+
+	p := NewInstructionRequestProcessor(
+		"topic {research_topics}",
+		"",
+		WithOutputSchema(schema),
+	)
+
+	req := &model.Request{Messages: []model.Message{model.NewUserMessage("hi")}}
+	inv := &agent.Invocation{
+		AgentName:    "a",
+		InvocationID: "id-4",
+		Session: &session.Session{State: session.StateMap{
+			"research_topics": []byte(`"AI"`),
+		}},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	if len(req.Messages) == 0 || req.Messages[0].Role != model.RoleSystem {
+		t.Fatalf("expected a system message to be created")
+	}
+	content := req.Messages[0].Content
+	if !strings.Contains(content, "topic AI") {
+		t.Fatalf("expected rendered instruction content, got %q", content)
+	}
+	if !strings.Contains(content, `"description": "literal {research_topics}"`) {
+		t.Fatalf("expected schema text to keep literal braces, got %q", content)
 	}
 }
