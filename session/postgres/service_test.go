@@ -204,6 +204,48 @@ func expectLoadSessionStateForUpdate(
 		WithArgs(key.AppName, key.UserID, key.SessionID)
 }
 
+func TestGetSession_EventPageValidation(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	sess, err := s.GetSession(
+		context.Background(),
+		key,
+		session.WithGetSessionEventPage(0, 10),
+		session.WithEventNum(1),
+	)
+	require.ErrorIs(t, err, session.ErrEventPageConflictsWithEventFilters)
+	assert.Nil(t, sess)
+}
+
+func TestListSessions_EventPageValidation(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	userKey := session.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	sessions, err := s.ListSessions(
+		context.Background(),
+		userKey,
+		session.WithGetSessionEventPage(0, 10),
+	)
+	require.ErrorIs(t, err, session.ErrEventPageOnlyForGetSession)
+	assert.Nil(t, sessions)
+}
+
 // TestServiceOpts contains options for creating a test service
 type TestServiceOpts struct {
 	sessionTTL         time.Duration

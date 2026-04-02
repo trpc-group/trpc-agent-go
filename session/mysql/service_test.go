@@ -247,6 +247,48 @@ func TestCreateSession_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestGetSession_EventPageValidation(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	sess, err := s.GetSession(
+		context.Background(),
+		key,
+		session.WithGetSessionEventPage(0, 10),
+		session.WithEventNum(1),
+	)
+	require.ErrorIs(t, err, session.ErrEventPageConflictsWithEventFilters)
+	assert.Nil(t, sess)
+}
+
+func TestListSessions_EventPageValidation(t *testing.T) {
+	db, _, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	userKey := session.UserKey{
+		AppName: "test-app",
+		UserID:  "user-123",
+	}
+
+	sessions, err := s.ListSessions(
+		context.Background(),
+		userKey,
+		session.WithGetSessionEventPage(0, 10),
+	)
+	require.ErrorIs(t, err, session.ErrEventPageOnlyForGetSession)
+	assert.Nil(t, sessions)
+}
+
 func TestCreateSession_CopiesStateValueAndKeepsNil(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

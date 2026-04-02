@@ -628,7 +628,7 @@ func (s *Service) getEventsList(
 		if len(sessionKeys) != 1 {
 			return nil, fmt.Errorf("event paging only supports a single session")
 		}
-		return s.getPagedEvents(ctx, sessionKeys[0], page)
+		return s.getPagedEvents(ctx, sessionKeys[0], afterTime, page)
 	}
 
 	sessionIDs := make([]string, len(sessionKeys))
@@ -697,16 +697,22 @@ func (s *Service) getEventsList(
 func (s *Service) getPagedEvents(
 	ctx context.Context,
 	key session.Key,
+	afterTime time.Time,
 	page *session.EventPage,
 ) ([][]event.Event, error) {
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+
 	query := fmt.Sprintf(`
 		SELECT session_id, event FROM (
 			SELECT session_id, event, created_at, id
 			FROM %s
 			WHERE app_name = $1 AND user_id = $2 AND session_id = $3
+			AND created_at >= $4
 			AND deleted_at IS NULL
 			ORDER BY created_at DESC, id DESC
-			LIMIT $4 OFFSET $5
+			LIMIT $5 OFFSET $6
 		) page
 		ORDER BY created_at ASC, id ASC`, s.tableSessionEvents)
 
@@ -730,7 +736,7 @@ func (s *Service) getPagedEvents(
 			events = append(events, evt)
 		}
 		return nil
-	}, query, key.AppName, key.UserID, key.SessionID, page.Limit, page.Offset)
+	}, query, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("query events failed: %w", err)
 	}

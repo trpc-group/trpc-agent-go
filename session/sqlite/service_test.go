@@ -669,3 +669,23 @@ func TestSessionSQLite_NewService_NilDB_Error(t *testing.T) {
 	_, err := NewService(nil)
 	require.Error(t, err)
 }
+
+func TestSessionSQLite_EventPageValidation(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	userKey := session.UserKey{AppName: "app", UserID: "u1"}
+
+	sess, err := svc.GetSession(context.Background(), key, session.WithGetSessionEventPage(0, 10))
+	require.ErrorIs(t, err, session.ErrEventPageUnsupported)
+	require.Nil(t, sess)
+
+	sessions, err := svc.ListSessions(context.Background(), userKey, session.WithGetSessionEventPage(0, 10))
+	require.ErrorIs(t, err, session.ErrEventPageOnlyForGetSession)
+	require.Nil(t, sessions)
+}

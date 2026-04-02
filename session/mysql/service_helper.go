@@ -528,7 +528,7 @@ func (s *Service) getEventsList(
 		if len(sessionKeys) != 1 {
 			return nil, fmt.Errorf("event paging only supports a single session")
 		}
-		return s.getPagedEvents(ctx, sessionKeys[0], sessionCreatedAts[0], page)
+		return s.getPagedEvents(ctx, sessionKeys[0], sessionCreatedAts[0], afterTime, page)
 	}
 
 	placeholders := make([]string, len(sessionKeys))
@@ -605,8 +605,16 @@ func (s *Service) getPagedEvents(
 	ctx context.Context,
 	key session.Key,
 	sessionCreatedAt time.Time,
+	afterTime time.Time,
 	page *session.EventPage,
 ) ([][]event.Event, error) {
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+	if sessionCreatedAt.After(afterTime) {
+		afterTime = sessionCreatedAt
+	}
+
 	query := fmt.Sprintf(`
 		SELECT app_name, user_id, session_id, event, created_at FROM (
 			SELECT app_name, user_id, session_id, event, created_at, id
@@ -636,7 +644,7 @@ func (s *Service) getPagedEvents(
 		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
 		rowsBySession[keyStr] = append(rowsBySession[keyStr], evt)
 		return nil
-	}, query, key.AppName, key.UserID, key.SessionID, sessionCreatedAt, page.Limit, page.Offset)
+	}, query, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}

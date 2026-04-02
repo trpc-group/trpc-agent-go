@@ -392,6 +392,13 @@ func (s *SessionService) ListSessions(
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
+	opt := &session.Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+	if err := session.ValidateListSessionsOptions(opt); err != nil {
+		return nil, err
+	}
 	app, ok := s.getAppSessions(userKey.AppName)
 	if !ok {
 		return []*session.Session{}, nil
@@ -404,13 +411,6 @@ func (s *SessionService) ListSessions(
 		return []*session.Session{}, nil
 	}
 
-	opt := &session.Options{}
-	for _, o := range opts {
-		o(opt)
-	}
-	if err := session.ValidateListSessionsOptions(opt); err != nil {
-		return nil, err
-	}
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[userKey.UserID])
 	if appState == nil {

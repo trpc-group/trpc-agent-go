@@ -875,7 +875,7 @@ func TestGetEventsList(t *testing.T) {
 			AddRow("sess1", evt3Bytes)
 
 		mock.ExpectQuery("SELECT session_id, event FROM").
-			WithArgs("app1", "user1", "sess1", 2, 1).
+			WithArgs("app1", "user1", "sess1", sqlmock.AnyArg(), 2, 1).
 			WillReturnRows(rows)
 
 		result, err := s.getEventsList(
@@ -887,6 +887,48 @@ func TestGetEventsList(t *testing.T) {
 		assert.Equal(t, "inv-2", result[0][0].InvocationID)
 		assert.Equal(t, "inv-3", result[0][1].InvocationID)
 		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("WithEventPageUsesTTLLowerBound", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db, WithSessionTTL(time.Hour))
+		keys := []session.Key{
+			{AppName: "app1", UserID: "user1", SessionID: "sess1"},
+		}
+
+		rows := sqlmock.NewRows([]string{"session_id", "event"})
+		mock.ExpectQuery("SELECT session_id, event FROM").
+			WithArgs("app1", "user1", "sess1", sqlmock.AnyArg(), 2, 0).
+			WillReturnRows(rows)
+
+		result, err := s.getEventsList(
+			context.Background(), keys, 0, time.Time{}, &session.EventPage{Offset: 0, Limit: 2},
+		)
+		assert.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Empty(t, result[0])
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("WithEventPageRequiresSingleSession", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db)
+		keys := []session.Key{
+			{AppName: "app1", UserID: "user1", SessionID: "sess1"},
+			{AppName: "app1", UserID: "user1", SessionID: "sess2"},
+		}
+
+		result, err := s.getEventsList(
+			context.Background(), keys, 0, time.Time{}, &session.EventPage{Offset: 0, Limit: 2},
+		)
+		require.Error(t, err)
+		assert.Nil(t, result)
 	})
 
 	t.Run("NoLimit", func(t *testing.T) {
