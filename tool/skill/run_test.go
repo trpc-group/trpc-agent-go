@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 
@@ -1110,7 +1111,7 @@ func TestRunTool_PrimaryOutput_SelectsByName(t *testing.T) {
 }
 
 func TestSelectPrimaryOutput_SkipsNonTextAndEmpty(t *testing.T) {
-	large := strings.Repeat("a", maxPrimaryOutputChars+1)
+	large := strings.Repeat("a", defaultPrimaryOutputSize+1)
 	files := []runFile{
 		{
 			File: codeexecutor.File{
@@ -2229,6 +2230,28 @@ func TestRunTool_Declaration(t *testing.T) {
 	require.Contains(t, d.InputSchema.Required, "command")
 	cmdDesc := d.InputSchema.Properties["command"].Description
 	require.Equal(t, "Shell command", cmdDesc)
+	require.Contains(t, d.Description, "Use stdout/stderr for short logs")
+	require.Contains(t, d.Description, "output_files or outputs")
+}
+
+func TestNewRunTool_NormalizesOutputLimits(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
+		rt := NewRunTool(
+			nil,
+			nil,
+			WithRunOutputLimits(RunOutputLimits{}),
+		)
+		require.Equal(t, defaultRunOutputLimits(), rt.outputLimits)
+	})
+
+	t.Run("custom", func(t *testing.T) {
+		limits := RunOutputLimits{
+			StdoutStderrBytes:  8,
+			PrimaryOutputBytes: 16,
+		}
+		rt := NewRunTool(nil, nil, WithRunOutputLimits(limits))
+		require.Equal(t, limits, rt.outputLimits)
+	})
 }
 
 func TestRunTool_Declaration_IncludesAllowedCommandsPreview(t *testing.T) {
@@ -4054,7 +4077,7 @@ func TestResolveCWD_WorkspaceEnvPrefixes(t *testing.T) {
 }
 
 func TestBuildRunOutput_TruncatesStdoutStderr(t *testing.T) {
-	long := strings.Repeat("a", maxOutputChars+1)
+	long := strings.Repeat("a", defaultStdoutStderrBytes+1)
 	rr := codeexecutor.RunResult{
 		Stdout:   long,
 		Stderr:   long,
@@ -4062,8 +4085,162 @@ func TestBuildRunOutput_TruncatesStdoutStderr(t *testing.T) {
 	}
 	out := buildRunOutput(rr, nil)
 	require.Len(t, out.Warnings, 2)
-	require.Equal(t, maxOutputChars, len(out.Stdout))
-	require.Equal(t, maxOutputChars, len(out.Stderr))
+	require.Equal(t, defaultStdoutStderrBytes, len(out.Stdout))
+	require.Equal(t, defaultStdoutStderrBytes, len(out.Stderr))
+}
+
+func TestBuildRunOutputWithLimits_OverridesDefaults(t *testing.T) {
+	limits := RunOutputLimits{
+		StdoutStderrBytes:  4,
+		PrimaryOutputBytes: 4,
+	}
+	long := strings.Repeat("a", limits.StdoutStderrBytes+1)
+	out := buildRunOutputWithLimits(
+		codeexecutor.RunResult{
+			Stdout: long,
+			Stderr: long,
+		},
+		[]codeexecutor.File{
+			{
+				Name:     "out/a.txt",
+				Content:  "12345",
+				MIMEType: "text/plain",
+			},
+		},
+		limits,
+	)
+	require.Len(t, out.Warnings, 2)
+	require.Equal(t, limits.StdoutStderrBytes, len(out.Stdout))
+	require.Equal(t, limits.StdoutStderrBytes, len(out.Stderr))
+	require.Nil(t, out.PrimaryOutput)
+}
+
+func TestBuildRunOutputWithLimits_UsesDefaultsWhenUnset(t *testing.T) {
+	long := strings.Repeat("a", defaultStdoutStderrBytes+1)
+	out := buildRunOutputWithLimits(
+		codeexecutor.RunResult{
+			Stdout: long,
+		},
+		[]codeexecutor.File{
+			{
+				Name:     "out/a.txt",
+				Content:  "ok",
+				MIMEType: "text/plain",
+			},
+		},
+		RunOutputLimits{},
+	)
+	require.Equal(t, defaultStdoutStderrBytes, len(out.Stdout))
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, "out/a.txt", out.PrimaryOutput.Name)
+}
+
+func TestBuildRunOutputWithLimits_PreservesUTF8Boundary(t *testing.T) {
+	limits := RunOutputLimits{
+		StdoutStderrBytes:  5,
+		PrimaryOutputBytes: 1,
+	}
+	long := strings.Repeat("你", 3)
+	out := buildRunOutputWithLimits(
+		codeexecutor.RunResult{
+			Stdout: long,
+			Stderr: long,
+		},
+		nil,
+		limits,
+	)
+	require.Len(t, out.Warnings, 2)
+	require.Equal(t, "你", out.Stdout)
+	require.Equal(t, "你", out.Stderr)
+	require.True(t, utf8.ValidString(out.Stdout))
+	require.True(t, utf8.ValidString(out.Stderr))
+	require.LessOrEqual(t, len(out.Stdout), limits.StdoutStderrBytes)
+	require.LessOrEqual(t, len(out.Stderr), limits.StdoutStderrBytes)
+
+	truncated, ok := truncateOutputWithLimit("你", 1)
+	require.True(t, ok)
+	require.Equal(t, "", truncated)
+}
+
+func TestTruncateOutput_UsesDefaultLimit(t *testing.T) {
+	long := strings.Repeat("a", defaultStdoutStderrBytes+1)
+
+	truncated, ok := truncateOutput(long)
+
+	require.True(t, ok)
+	require.Len(t, truncated, defaultStdoutStderrBytes)
+}
+
+func TestTruncateOutputWithLimit_UsesDefaultWhenUnset(t *testing.T) {
+	long := strings.Repeat("a", defaultStdoutStderrBytes+1)
+
+	truncated, ok := truncateOutputWithLimit(long, 0)
+
+	require.True(t, ok)
+	require.Len(t, truncated, defaultStdoutStderrBytes)
+}
+
+func TestSelectPrimaryOutputWithLimit_UsesDefaultWhenUnset(t *testing.T) {
+	files := []runFile{
+		{
+			File: codeexecutor.File{
+				Name:     outATxt,
+				Content:  contentHi,
+				MIMEType: "text/plain",
+			},
+		},
+	}
+
+	got := selectPrimaryOutputWithLimit(files, 0)
+
+	require.NotNil(t, got)
+	require.Equal(t, outATxt, got.Name)
+}
+
+func TestMergeAutoPrimaryOutput_UsesDefaultLimit(t *testing.T) {
+	files := []codeexecutor.File{
+		{
+			Name:     outATxt,
+			Content:  contentHi,
+			MIMEType: "text/plain",
+		},
+	}
+	out := &runOutput{}
+
+	mergeAutoPrimaryOutput(files, out)
+
+	require.NotNil(t, out.PrimaryOutput)
+	require.Equal(t, outATxt, out.PrimaryOutput.Name)
+}
+
+func TestRunTool_buildRunOutput_UsesConfiguredAutoPrimaryLimit(t *testing.T) {
+	rt := NewRunTool(
+		nil,
+		nil,
+		WithRunOutputLimits(RunOutputLimits{
+			PrimaryOutputBytes: 4,
+		}),
+	)
+
+	out, err := rt.buildRunOutput(
+		context.Background(),
+		codeexecutor.RunResult{},
+		[]codeexecutor.File{
+			{
+				Name:     outATxt,
+				Content:  "12345",
+				MIMEType: "text/plain",
+			},
+		},
+		nil,
+		nil,
+		runInput{},
+		false,
+		"",
+	)
+
+	require.NoError(t, err)
+	require.Nil(t, out.PrimaryOutput)
 }
 
 type countingFS struct {

@@ -58,6 +58,19 @@ type RunTool struct {
 
 	forceSaveArtifacts bool
 	requireSkillLoaded bool
+	outputLimits       RunOutputLimits
+}
+
+// RunOutputLimits controls how much inline text skill_run returns.
+//
+// These limits apply to stdout/stderr and primary_output selection only.
+// Collected files still follow the workspace collector limits.
+type RunOutputLimits struct {
+	// StdoutStderrBytes is the per-stream inline limit for stdout/stderr.
+	StdoutStderrBytes int
+	// PrimaryOutputBytes is the largest text file eligible for
+	// primary_output.
+	PrimaryOutputBytes int
 }
 
 // SkillRunEnvProvider is an optional interface for skill repositories that
@@ -90,6 +103,7 @@ func NewRunTool(
 			opt(rt)
 		}
 	}
+	rt.outputLimits = normalizeRunOutputLimits(rt.outputLimits)
 	if rt.skillStager == nil {
 		rt.skillStager = newCopySkillStager(rt)
 	}
@@ -175,6 +189,18 @@ func WithDeniedCommands(cmds ...string) func(*RunTool) {
 func WithForceSaveArtifacts(enable bool) func(*RunTool) {
 	return func(t *RunTool) {
 		t.forceSaveArtifacts = enable
+	}
+}
+
+// WithRunOutputLimits customizes the inline stdout/stderr limit and the
+// maximum file size eligible for primary_output.
+//
+// These limits do not change output_files collection limits. For large text
+// payloads, prefer writing files under out/ and collecting them with
+// output_files or outputs.
+func WithRunOutputLimits(limits RunOutputLimits) func(*RunTool) {
+	return func(t *RunTool) {
+		t.outputLimits = limits
 	}
 }
 
@@ -338,6 +364,9 @@ func (t *RunTool) Declaration() *tool.Declaration {
 	desc := "Run a command inside a skill workspace. " +
 		"Use it only for commands required by the skill " +
 		"docs (not for generic shell tasks). " +
+		"Use stdout/stderr for short logs; for large or " +
+		"structured text, write files under out/ and " +
+		"return them via output_files or outputs. " +
 		"User-uploaded file inputs are staged under " +
 		"$WORK_DIR/inputs (also visible as inputs/). " +
 		"For declarative inputs, to paths starting with " +
@@ -665,8 +694,12 @@ func (t *RunTool) buildRunOutput(
 	outputsSaveSkipReason string,
 ) (runOutput, error) {
 	trimTruncatedUTF8TextFiles(files)
-	out := buildRunOutput(rr, files)
-	mergeAutoPrimaryOutput(autoFiles, &out)
+	out := buildRunOutputWithLimits(rr, files, t.outputLimits)
+	mergeAutoPrimaryOutputWithLimit(
+		autoFiles,
+		&out,
+		t.outputLimits.PrimaryOutputBytes,
+	)
 	appendOutputsSaveWarning(&out, outputsSaveSkipReason)
 	saveArtifacts := in.SaveArtifacts && len(in.OutputFiles) > 0
 	if err := t.attachArtifactsIfRequested(
@@ -1835,8 +1868,27 @@ func (t *RunTool) prepareOutputs(
 func buildRunOutput(
 	rr codeexecutor.RunResult, files []codeexecutor.File,
 ) runOutput {
-	stdout, stdoutTrunc := truncateOutput(rr.Stdout)
-	stderr, stderrTrunc := truncateOutput(rr.Stderr)
+	return buildRunOutputWithLimits(
+		rr,
+		files,
+		defaultRunOutputLimits(),
+	)
+}
+
+func buildRunOutputWithLimits(
+	rr codeexecutor.RunResult,
+	files []codeexecutor.File,
+	limits RunOutputLimits,
+) runOutput {
+	limits = normalizeRunOutputLimits(limits)
+	stdout, stdoutTrunc := truncateOutputWithLimit(
+		rr.Stdout,
+		limits.StdoutStderrBytes,
+	)
+	stderr, stderrTrunc := truncateOutputWithLimit(
+		rr.Stderr,
+		limits.StdoutStderrBytes,
+	)
 	var warnings []string
 	if stdoutTrunc {
 		warnings = append(warnings, warnStdoutTruncated)
@@ -1847,14 +1899,17 @@ func buildRunOutput(
 
 	outFiles := toRunFiles(files)
 	return runOutput{
-		OutputFiles:   outFiles,
-		PrimaryOutput: selectPrimaryOutput(outFiles),
-		Stdout:        stdout,
-		Stderr:        stderr,
-		ExitCode:      rr.ExitCode,
-		TimedOut:      rr.TimedOut,
-		Duration:      rr.Duration.Milliseconds(),
-		Warnings:      warnings,
+		OutputFiles: outFiles,
+		PrimaryOutput: selectPrimaryOutputWithLimit(
+			outFiles,
+			limits.PrimaryOutputBytes,
+		),
+		Stdout:   stdout,
+		Stderr:   stderr,
+		ExitCode: rr.ExitCode,
+		TimedOut: rr.TimedOut,
+		Duration: rr.Duration.Milliseconds(),
+		Warnings: warnings,
 	}
 }
 
@@ -1972,11 +2027,8 @@ func filterFailedEmptyManifestFiles(
 }
 
 const (
-	maxOutputChars = 16 * 1024
-)
-
-const (
-	maxPrimaryOutputChars = 32 * 1024
+	defaultStdoutStderrBytes = 16 * 1024
+	defaultPrimaryOutputSize = 32 * 1024
 )
 
 const (
@@ -1988,10 +2040,28 @@ const (
 )
 
 func truncateOutput(s string) (string, bool) {
-	if len(s) <= maxOutputChars {
+	return truncateOutputWithLimit(
+		s,
+		defaultStdoutStderrBytes,
+	)
+}
+
+func truncateOutputWithLimit(s string, limit int) (string, bool) {
+	if limit <= 0 {
+		limit = defaultStdoutStderrBytes
+	}
+	if len(s) <= limit {
 		return s, false
 	}
-	return s[:maxOutputChars], true
+	truncated := s[:limit]
+	if utf8.ValidString(truncated) {
+		return truncated, true
+	}
+	n := validUTF8PrefixLen(truncated)
+	if n <= 0 {
+		return "", true
+	}
+	return truncated[:n], true
 }
 
 func toRunFiles(files []codeexecutor.File) []runFile {
@@ -2062,6 +2132,19 @@ func validUTF8PrefixLen(s string) int {
 }
 
 func selectPrimaryOutput(files []runFile) *runFile {
+	return selectPrimaryOutputWithLimit(
+		files,
+		defaultPrimaryOutputSize,
+	)
+}
+
+func selectPrimaryOutputWithLimit(
+	files []runFile,
+	limit int,
+) *runFile {
+	if limit <= 0 {
+		limit = defaultPrimaryOutputSize
+	}
 	var best *runFile
 	for _, f := range files {
 		if strings.TrimSpace(f.Content) == "" {
@@ -2070,7 +2153,7 @@ func selectPrimaryOutput(files []runFile) *runFile {
 		if !codeexecutor.IsTextMIME(f.MIMEType) {
 			continue
 		}
-		if len(f.Content) > maxPrimaryOutputChars {
+		if len(f.Content) > limit {
 			continue
 		}
 		if best != nil && best.Name < f.Name {
@@ -2083,11 +2166,43 @@ func selectPrimaryOutput(files []runFile) *runFile {
 }
 
 func mergeAutoPrimaryOutput(files []codeexecutor.File, out *runOutput) {
+	mergeAutoPrimaryOutputWithLimit(
+		files,
+		out,
+		defaultPrimaryOutputSize,
+	)
+}
+
+func mergeAutoPrimaryOutputWithLimit(
+	files []codeexecutor.File,
+	out *runOutput,
+	limit int,
+) {
 	if out == nil || out.PrimaryOutput != nil || len(files) == 0 {
 		return
 	}
 	runFiles := toRunFiles(files)
-	out.PrimaryOutput = selectPrimaryOutput(runFiles)
+	out.PrimaryOutput = selectPrimaryOutputWithLimit(
+		runFiles,
+		limit,
+	)
+}
+
+func defaultRunOutputLimits() RunOutputLimits {
+	return RunOutputLimits{
+		StdoutStderrBytes:  defaultStdoutStderrBytes,
+		PrimaryOutputBytes: defaultPrimaryOutputSize,
+	}
+}
+
+func normalizeRunOutputLimits(limits RunOutputLimits) RunOutputLimits {
+	if limits.StdoutStderrBytes <= 0 {
+		limits.StdoutStderrBytes = defaultStdoutStderrBytes
+	}
+	if limits.PrimaryOutputBytes <= 0 {
+		limits.PrimaryOutputBytes = defaultPrimaryOutputSize
+	}
+	return limits
 }
 
 // attachArtifactsIfRequested saves files as artifacts when requested
