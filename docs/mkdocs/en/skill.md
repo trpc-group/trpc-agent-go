@@ -1086,19 +1086,35 @@ Optional behavior (force artifact persistence):
   / `outputs.save`:
   - `llmagent.WithSkillRunForceSaveArtifacts(true)`
 
+Optional behavior (inline output limits):
+- In code, you can customize how much inline text `skill_run` returns:
+  - `llmagent.WithSkillRunOutputLimits(toolskill.RunOutputLimits{StdoutStderrBytes: 128 * 1024, PrimaryOutputBytes: 128 * 1024})`
+- This changes only `stdout`, `stderr`, and `primary_output`.
+  `output_files` / `outputs` still use the workspace collector limits
+  (default 4 MiB/file).
+
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
+  - `stdout` / `stderr` are for logs and short status text. They may be
+    truncated at the configured inline limit (default 16 KiB each).
+    For large or structured text that the model must read, prefer
+    `output_files` or `outputs`.
 - `staged_inputs` (optional): files staged from the conversation into
   `work/inputs/` for this run
 - `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`,
   `size_bytes`, `truncated`
   - Convenience pointer to the "best" small text output file (when one
     exists). Prefer this when there is a single main output.
+  - Only text files within the configured size limit (default 32 KiB)
+    are considered for `primary_output`.
 - `output_files` with `name`, `ref`, `content`, `mime_type`, `size_bytes`,
   `truncated`
   - `ref` is a stable `workspace://<name>` reference that can be passed
     to other tools
   - For non-text files, `content` is omitted.
+  - Prefer this path for large or structured text outputs; file
+    collection uses workspace collector limits instead of the smaller
+    stdout/stderr inline budget.
   - When `omit_inline_content=true`, `content` is omitted for all files.
     Use `ref` with `read_file` to fetch text content on demand.
   - `size_bytes` is the file size on disk; `truncated=true` means the
