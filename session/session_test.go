@@ -90,6 +90,59 @@ func TestWithEventTime(t *testing.T) {
 	}
 }
 
+func TestWithGetSessionEventPage(t *testing.T) {
+	option := WithGetSessionEventPage(20, 50)
+	opts := &Options{}
+	option(opts)
+
+	require.NotNil(t, opts.EventPage)
+	assert.Equal(t, 20, opts.EventPage.Offset)
+	assert.Equal(t, 50, opts.EventPage.Limit)
+}
+
+func TestValidateGetSessionOptions(t *testing.T) {
+	t.Run("no page", func(t *testing.T) {
+		err := ValidateGetSessionOptions(&Options{}, false)
+		require.NoError(t, err)
+	})
+
+	t.Run("unsupported backend", func(t *testing.T) {
+		err := ValidateGetSessionOptions(&Options{
+			EventPage: &EventPage{Offset: 0, Limit: 10},
+		}, false)
+		require.ErrorIs(t, err, ErrEventPageUnsupported)
+	})
+
+	t.Run("invalid page", func(t *testing.T) {
+		err := ValidateGetSessionOptions(&Options{
+			EventPage: &EventPage{Offset: -1, Limit: 0},
+		}, true)
+		require.ErrorIs(t, err, ErrInvalidEventPage)
+	})
+
+	t.Run("conflicts with event filters", func(t *testing.T) {
+		err := ValidateGetSessionOptions(&Options{
+			EventNum:  5,
+			EventPage: &EventPage{Offset: 0, Limit: 10},
+		}, true)
+		require.ErrorIs(t, err, ErrEventPageConflictsWithEventFilters)
+	})
+
+	t.Run("valid page", func(t *testing.T) {
+		err := ValidateGetSessionOptions(&Options{
+			EventPage: &EventPage{Offset: 0, Limit: 10},
+		}, true)
+		require.NoError(t, err)
+	})
+}
+
+func TestValidateListSessionsOptions(t *testing.T) {
+	err := ValidateListSessionsOptions(&Options{
+		EventPage: &EventPage{Offset: 0, Limit: 10},
+	})
+	require.ErrorIs(t, err, ErrEventPageOnlyForGetSession)
+}
+
 func TestWithSummaryFilterKey(t *testing.T) {
 	tests := []struct {
 		name      string

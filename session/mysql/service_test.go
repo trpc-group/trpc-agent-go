@@ -1798,7 +1798,7 @@ func TestListSessions_WithEvents(t *testing.T) {
 	eventBytes, _ := json.Marshal(evt)
 
 	// Mock: Batch load events with data
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM session_events")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM")).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
 			AddRow(userKey.AppName, userKey.UserID, "session-1", eventBytes, time.Now()))
 
@@ -1873,7 +1873,7 @@ func TestGetSession_WithEvents(t *testing.T) {
 	event2Bytes, _ := json.Marshal(evt2)
 
 	// Mock: Query events (multiple rows)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM session_events")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
 			AddRow(key.AppName, key.UserID, key.SessionID, event1Bytes, time.Now()).
@@ -2235,7 +2235,7 @@ func TestGetSession_WithAfterTime(t *testing.T) {
 
 	// Mock: Query events with afterTime filter (should filter events)
 	afterTime := time.Now().Add(-1 * time.Hour)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM session_events")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM")).
 		WithArgs(key.AppName, key.UserID, key.SessionID).
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}))
 

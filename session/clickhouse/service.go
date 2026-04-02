@@ -283,6 +283,9 @@ func (s *Service) GetSession(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
+	if err := session.ValidateGetSessionOptions(opt, false); err != nil {
+		return nil, err
+	}
 
 	hctx := &session.GetSessionContext{
 		Context: ctx,
@@ -309,6 +312,9 @@ func (s *Service) ListSessions(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
+	if err := session.ValidateListSessionsOptions(opt); err != nil {
+		return nil, err
+	}
 	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse session service get session list failed: %w", err)
