@@ -117,10 +117,10 @@ func New(name string, opts ...Option) *LLMAgent {
 		model:             initialModel,
 		models:            models,
 		description:       options.Description,
-		instruction:       options.Instruction,
-		systemPrompt:      options.GlobalInstruction,
-		modelInstructions: cloneStringMap(options.ModelInstructions),
-		modelGlobalInstructions: cloneStringMap(
+		instruction:       newTextPrompt(options.Instruction),
+		systemPrompt:      newTextPrompt(options.GlobalInstruction),
+		modelInstructions: cloneTextPromptMap(options.ModelInstructions),
+		modelGlobalInstructions: cloneTextPromptMap(
 			options.ModelGlobalInstructions,
 		),
 		genConfig:            resolvedGenCfg,

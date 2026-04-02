@@ -6,7 +6,8 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package promptcore provides core text rendering functionality for prompt templates.
+// Package promptcore provides the internal text rendering engine behind the
+// public prompt package.
 package promptcore
 
 import (

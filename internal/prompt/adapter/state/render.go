@@ -5,9 +5,8 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
 
-// Package state provides state injection functionality.
+// Package state provides state-backed prompt rendering adapters.
 package state
 
 import (
@@ -17,8 +16,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/internal/promptcore"
-	"trpc.group/trpc-go/trpc-agent-go/prompt"
+	"trpc.group/trpc-go/trpc-agent-go/internal/prompt/core"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -27,41 +25,58 @@ const (
 	stateInvocationKey = "invocation:"
 )
 
-// InjectSessionState replaces state variables in the instruction template with their corresponding values from session state.
-// This function supports both {name} and {{name}} placeholders.
-// - {variable_name}: Replaces with the value of the variable from session state.
-// - {variable_name?}: Optional variable, replaces with empty string if not found.
-// - {artifact.filename}: Preserved when unresolved, or collapsed when optional.
+// Option configures [Render].
+type Option func(*renderConfig)
+
+type renderConfig struct {
+	session *session.Session
+}
+
+// WithSession overrides the session used for non-invocation placeholders.
+// {invocation:*} placeholders continue to read from invocation state.
+func WithSession(sess *session.Session) Option {
+	return func(cfg *renderConfig) {
+		cfg.session = sess
+	}
+}
+
+// Render replaces supported placeholders in template with values from
+// invocation state and session state.
+//
+// This adapter accepts the legacy state-injection subset of mixed-brace
+// placeholders:
+//   - {name} or {{name}} for bare identifiers
+//   - {name?} or {{name?}} for optional identifiers
+//   - {app:key}, {user:key}, or {temp:key} for namespaced session state
+//   - {invocation:key} for invocation-scoped state
+//   - {artifact.filename} or {artifact.filename?} for artifact references
+//
+// {invocation:*} placeholders are resolved only from invocation state. Other
+// supported placeholders are resolved from invocation.Session. Supported
+// optional placeholders collapse to an empty string when unresolved, while
+// unresolved non-optional placeholders remain literal. Placeholders outside
+// this subset remain literal.
 //
 // Example:
 //
 //	template: "Tell me about the city stored in {capital_city}."
 //	state: {"capital_city": "Paris"}
 //	result: "Tell me about the city stored in Paris."
-func InjectSessionState(template string, invocation *agent.Invocation) (string, error) {
-	return injectSessionState(template, invocation, nil)
-}
-
-// InjectSessionStateWithSession injects state into template using invocation
-// state and an explicit session override.
-//
-// This is useful when the caller wants to read placeholders from a session
-// object that is not attached to the invocation, while still supporting
-// {invocation:*} placeholders.
-//
-// Precedence:
-//   - {invocation:*} reads from invocation state (invocation.GetState)
-//   - other placeholders read from the provided session when non-nil;
-//     otherwise from invocation.Session
-func InjectSessionStateWithSession(
+func Render(
 	template string,
 	invocation *agent.Invocation,
-	sess *session.Session,
+	opts ...Option,
 ) (string, error) {
-	return injectSessionState(template, invocation, sess)
+	cfg := renderConfig{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	return render(template, invocation, cfg.session)
 }
 
-func injectSessionState(
+func render(
 	template string,
 	invocation *agent.Invocation,
 	sess *session.Session,
@@ -79,7 +94,7 @@ func injectSessionState(
 		promptcore.SyntaxModeMixedBrace,
 		promptcore.Env{
 			Resolve: func(name string) (string, bool, error) {
-				return resolver.Resolve(prompt.Ref{Name: name})
+				return resolver.Resolve(name)
 			},
 		},
 		promptcore.PreserveUnknown,
@@ -96,8 +111,8 @@ type stateResolver struct {
 	session    *session.Session
 }
 
-func (r stateResolver) Resolve(ref prompt.Ref) (string, bool, error) {
-	if stateKey, ok := strings.CutPrefix(ref.Name, stateInvocationKey); ok {
+func (r stateResolver) Resolve(name string) (string, bool, error) {
+	if stateKey, ok := strings.CutPrefix(name, stateInvocationKey); ok {
 		if r.invocation != nil {
 			if val, exists := r.invocation.GetState(stateKey); exists && val != nil {
 				return fmt.Sprintf("%+v", val), true, nil
@@ -112,7 +127,7 @@ func (r stateResolver) Resolve(ref prompt.Ref) (string, bool, error) {
 		sessionToUse = r.invocation.Session
 	}
 	if sessionToUse != nil {
-		if jsonBytes, exists := sessionToUse.GetState(ref.Name); exists {
+		if jsonBytes, exists := sessionToUse.GetState(name); exists {
 			return renderStateValue(jsonBytes), true, nil
 		}
 	}

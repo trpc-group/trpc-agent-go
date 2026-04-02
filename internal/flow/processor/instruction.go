@@ -17,7 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state"
+	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -303,7 +303,7 @@ func (p *InstructionRequestProcessor) injectStateIntoContent(
 		return content
 	}
 
-	processedContent, err := state.InjectSessionState(content, invocation)
+	processedContent, err := promptstate.Render(content, invocation)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
