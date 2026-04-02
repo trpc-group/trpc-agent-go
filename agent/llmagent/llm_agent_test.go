@@ -326,6 +326,29 @@ func TestBuildRequestProcessors_PreserveSameBranchWiring(t *testing.T) {
 	require.False(t, crp.PreserveSameBranch)
 }
 
+func TestBuildRequestProcessors_PreloadSessionRecallWiring(t *testing.T) {
+	opts := &Options{}
+	WithPreloadSessionRecall(4)(opts)
+	WithPreloadSessionRecallMinScore(0.6)(opts)
+	WithPreloadSessionRecallSearchMode(session.SearchModeDense)(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.Equal(t, 4, crp.PreloadSessionRecall)
+	require.Equal(t, 0.6, crp.PreloadSessionRecallMinScore)
+	require.Equal(
+		t,
+		session.SearchModeDense,
+		crp.PreloadSessionRecallSearchMode,
+	)
+}
+
 func TestBuildRequestProcessors_EventMessageProjectorWiring(
 	t *testing.T,
 ) {
@@ -341,7 +364,6 @@ func TestBuildRequestProcessors_EventMessageProjectorWiring(
 	opts := &Options{}
 	WithEventMessageProjector(projector)(opts)
 	procs := buildRequestProcessors("tester", opts)
-
 	var crp *processor.ContentRequestProcessor
 	for _, p := range procs {
 		if v, ok := p.(*processor.ContentRequestProcessor); ok {

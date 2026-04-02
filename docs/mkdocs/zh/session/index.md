@@ -16,10 +16,10 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 - **会话摘要**：使用 LLM 自动压缩长对话历史，在保留关键上下文的同时显著降低 token 消耗
 - **事件限制**：控制每个会话存储的最大事件数量，防止内存溢出
 - **TTL 管理**：支持会话数据的自动过期清理
-- **多存储后端**：支持内存、SQLite、Redis、PostgreSQL、MySQL、ClickHouse 存储
+- **多存储后端**：支持内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse 存储
 - **并发安全**：内置读写锁保证并发访问安全
 - **自动管理**：集成 Runner 后自动处理会话创建、加载和更新
-- **软删除支持**：PostgreSQL/MySQL/ClickHouse 支持软删除，数据可恢复
+- **软删除支持**：SQLite/PostgreSQL/PGVector/MySQL/ClickHouse 支持软删除，数据可恢复
 
 ## 快速开始
 
@@ -27,7 +27,7 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 
 tRPC-Agent-Go 的会话管理通过 `runner.WithSessionService` 集成到 Runner 中，Runner 会自动处理会话的创建、加载、更新和持久化。
 
-**支持的存储后端：** 内存（Memory）、SQLite、Redis、PostgreSQL、MySQL、ClickHouse
+**支持的存储后端：** 内存（Memory）、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse
 
 **默认行为：** 如果不配置 `runner.WithSessionService`，Runner 会默认使用内存存储（Memory），数据在进程重启后会丢失。
 
@@ -323,12 +323,13 @@ TTL 仅在**写操作**时刷新（如 CreateSession、AppendEvent、UpdateSessi
 | SQLite | 定期扫描（软删除或硬删除） | 是 |
 | Redis 存储 | Redis 原生 TTL | 是 |
 | PostgreSQL | 定期扫描（软删除或硬删除） | 是 |
+| PGVector | 定期扫描（软删除或硬删除） | 是 |
 | MySQL | 定期扫描（软删除或硬删除） | 是 |
 | ClickHouse | 应用层清理 + Native TTL | 是 |
 
 ## 存储后端对比
 
-tRPC-Agent-Go 提供六种会话存储后端，满足不同场景需求：
+tRPC-Agent-Go 提供七种会话存储后端，满足不同场景需求：
 
 | 存储类型 | 适用场景 | 持久化 | 分布式 | 复杂查询 |
 | --- | --- | --- | --- | --- |
@@ -336,6 +337,7 @@ tRPC-Agent-Go 提供六种会话存储后端，满足不同场景需求：
 | [SQLite](sqlite.md) | 本地持久化、单机 | ✅ | ❌ | ✅ |
 | [Redis 存储](redis.md) | 生产环境、分布式 | ✅ | ✅ | ❌ |
 | [PostgreSQL](postgres.md) | 生产环境、复杂查询 | ✅ | ✅ | ✅ |
+| [PGVector](pgvector.md) | 生产环境、语义召回 | ✅ | ✅ | ✅ |
 | [MySQL](mysql.md) | 生产环境、复杂查询 | ✅ | ✅ | ✅ |
 | [ClickHouse](clickhouse.md) | 生产环境、海量日志 | ✅ | ✅ | ✅ |
 
@@ -397,7 +399,7 @@ sessionService := inmemory.NewSessionService(
 
 **责任链执行**：Hook 通过 `next()` 形成链式调用，可提前返回以短路后续逻辑，错误会向上传递。
 
-**跨后端一致**：内存、Redis、PostgreSQL、MySQL、ClickHouse 所有存储后端均已统一接入 Hook 机制，构造服务时注入 Hook 切片即可，使用方式完全一致。
+**跨后端一致**：内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse 所有存储后端均已统一接入 Hook 机制，构造服务时注入 Hook 切片即可，使用方式完全一致。
 
 ## 高级用法
 
@@ -627,8 +629,10 @@ type TrackService interface {
 | 存储后端 | 是否实现 TrackService |
 | --- | --- |
 | 内存存储（inmemory） | ✅ |
+| SQLite | ✅ |
 | Redis 存储 | ✅ |
 | PostgreSQL 存储 | ✅ |
+| PGVector | ✅ |
 | MySQL 存储 | ✅ |
 | ClickHouse 存储 | ❌ |
 
@@ -653,6 +657,33 @@ err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
 trackEvents, err := sess.GetTrackEvents("ui-events")
 ```
 
+## 语义召回（仅 PGVector）
+
+`session/pgvector` 后端额外实现了 `session.SearchableService`，可以按语义相似度在某个用户的一个或多个会话里检索历史消息。只有已持久化的用户/助手文本事件会被建立索引；工具调用、工具结果、partial 事件和空内容不会进入检索索引。
+
+```go
+searchSvc, ok := sessionService.(session.SearchableService)
+if ok {
+    hits, err := searchSvc.SearchEvents(ctx, session.EventSearchRequest{
+        Query: "travel plan",
+        UserKey: session.UserKey{
+            AppName: "my-agent",
+            UserID:  "user123",
+        },
+        SearchMode: session.SearchModeHybrid,
+        MaxResults: 5,
+    })
+    _ = hits
+    _ = err
+}
+```
+
+如果你使用的是 LLMAgent，那么像 `session/pgvector` 这种可检索后端还可以通过
+`llmagent.WithPreloadSessionRecall(...)` 把跨会话 recall 自动预加载到
+system prompt 中。
+
+更详细的配置项、索引行为和检索过滤条件，请参考 [PGVector 会话存储](pgvector.md)。
+
 ## 相关文档
 
 - [会话摘要](summary.md) - 自动压缩长对话历史
@@ -660,6 +691,7 @@ trackEvents, err := sess.GetTrackEvents("ui-events")
 - [SQLite 存储](sqlite.md) - 本地持久化、单机
 - [Redis 存储](redis.md) - 生产环境分布式存储
 - [PostgreSQL 存储](postgres.md) - 关系型数据库存储
+- [PGVector 会话存储](pgvector.md) - 基于 PostgreSQL 的语义会话检索
 - [MySQL 存储](mysql.md) - 关系型数据库存储
 - [ClickHouse 存储](clickhouse.md) - 海量数据存储
 

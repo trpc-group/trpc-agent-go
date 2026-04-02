@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
@@ -310,6 +311,30 @@ func TestWithPreloadMemory(t *testing.T) {
 			require.Equal(t, tt.expectedLimit, opts.PreloadMemory)
 		})
 	}
+}
+
+func TestWithPreloadSessionRecall(t *testing.T) {
+	opts := &Options{}
+	WithPreloadSessionRecall(6)(opts)
+	require.Equal(t, 6, opts.PreloadSessionRecall)
+
+	WithPreloadSessionRecall(0)(opts)
+	require.Equal(t, 0, opts.PreloadSessionRecall)
+}
+
+func TestWithPreloadSessionRecallMinScore(t *testing.T) {
+	opts := &Options{}
+	WithPreloadSessionRecallMinScore(0.42)(opts)
+	require.Equal(t, 0.42, opts.PreloadSessionRecallMinScore)
+}
+
+func TestWithPreloadSessionRecallSearchMode(t *testing.T) {
+	opts := &Options{}
+	WithPreloadSessionRecallSearchMode(session.SearchModeDense)(opts)
+	require.Equal(t, session.SearchModeDense, opts.PreloadSessionRecallSearchMode)
+
+	WithPreloadSessionRecallSearchMode(session.SearchMode("invalid"))(opts)
+	require.Equal(t, session.SearchModeHybrid, opts.PreloadSessionRecallSearchMode)
 }
 
 func TestWithSkillRunAllowedCommands_CopiesSlice(t *testing.T) {

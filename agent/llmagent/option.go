@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
@@ -127,6 +128,9 @@ var (
 		//     memories. Consider using a positive budget (e.g., 10-50) for
 		//     production use.
 		PreloadMemory: 0,
+		// Default to disabling query-time session recall preload.
+		PreloadSessionRecall:           0,
+		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
 
 		SkillLoadMode: SkillLoadModeTurn,
 
@@ -366,6 +370,19 @@ type Options struct {
 	// When 0 (default), no memories are preloaded (use tools instead).
 	// When < 0, all memories are loaded.
 	PreloadMemory int
+	// PreloadSessionRecall sets the number of recalled
+	// session events to preload into the system prompt.
+	// When > 0, search runs across other sessions owned by
+	// the current user. When 0 (default), recall preload is
+	// disabled.
+	PreloadSessionRecall int
+	// PreloadSessionRecallMinScore filters low-confidence
+	// recalled session hits before injection.
+	PreloadSessionRecallMinScore float64
+	// PreloadSessionRecallSearchMode controls which
+	// retrieval mode is used for query-time session recall.
+	// Default is session.SearchModeHybrid.
+	PreloadSessionRecallSearchMode session.SearchMode
 
 	// postToolPromptEnabled controls whether the post-tool dynamic prompt
 	// injection is enabled. When nil (default), injection is enabled to
@@ -1064,6 +1081,40 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 func WithPreloadMemory(limit int) Option {
 	return func(opts *Options) {
 		opts.PreloadMemory = limit
+	}
+}
+
+// WithPreloadSessionRecall sets the number of recalled
+// session events to preload into the system prompt.
+func WithPreloadSessionRecall(limit int) Option {
+	return func(opts *Options) {
+		opts.PreloadSessionRecall = limit
+	}
+}
+
+// WithPreloadSessionRecallMinScore sets the minimum
+// search score required for preloaded session recall.
+func WithPreloadSessionRecallMinScore(minScore float64) Option {
+	return func(opts *Options) {
+		opts.PreloadSessionRecallMinScore = minScore
+	}
+}
+
+// WithPreloadSessionRecallSearchMode sets the retrieval
+// mode used for query-time session recall preload.
+// Default is session.SearchModeHybrid.
+func WithPreloadSessionRecallSearchMode(
+	mode session.SearchMode,
+) Option {
+	return func(opts *Options) {
+		switch mode {
+		case "", session.SearchModeHybrid:
+			opts.PreloadSessionRecallSearchMode = session.SearchModeHybrid
+		case session.SearchModeDense:
+			opts.PreloadSessionRecallSearchMode = session.SearchModeDense
+		default:
+			opts.PreloadSessionRecallSearchMode = session.SearchModeHybrid
+		}
 	}
 }
 
