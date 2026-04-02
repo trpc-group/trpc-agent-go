@@ -69,6 +69,22 @@ func TestFetchTextPrompt_Success(t *testing.T) {
 	assert.Equal(t, "gpt-4o", result.Config["model"])
 }
 
+func TestFetchTextPrompt_EncodesPromptNameWithFolders(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/public/v2/prompts/folder%2Fsubfolder%2Fprompt-name?label=production", r.RequestURI)
+		resp := apiPromptResponse{
+			Name:    "folder/subfolder/prompt-name",
+			Version: 1,
+			Type:    "text",
+			Prompt:  "hi",
+		}
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	_, err := client.FetchTextPrompt(context.Background(), "folder/subfolder/prompt-name")
+	require.NoError(t, err)
+}
+
 func TestFetchTextPrompt_WithLabel(t *testing.T) {
 	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "staging", r.URL.Query().Get("label"))
@@ -90,6 +106,32 @@ func TestFetchTextPrompt_WithVersion(t *testing.T) {
 
 	_, err := client.FetchTextPrompt(context.Background(), "p", WithVersion(5))
 	require.NoError(t, err)
+}
+
+func TestFetchTextPrompt_MixedSelectorOrder(t *testing.T) {
+	t.Run("label overrides earlier version", func(t *testing.T) {
+		_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "staging", r.URL.Query().Get("label"))
+			assert.Empty(t, r.URL.Query().Get("version"))
+			resp := apiPromptResponse{Name: "p", Version: 2, Type: "text", Prompt: "staging"}
+			json.NewEncoder(w).Encode(resp)
+		})
+
+		_, err := client.FetchTextPrompt(context.Background(), "p", WithVersion(5), WithLabel("staging"))
+		require.NoError(t, err)
+	})
+
+	t.Run("version overrides earlier label", func(t *testing.T) {
+		_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "5", r.URL.Query().Get("version"))
+			assert.Empty(t, r.URL.Query().Get("label"))
+			resp := apiPromptResponse{Name: "p", Version: 5, Type: "text", Prompt: "v5"}
+			json.NewEncoder(w).Encode(resp)
+		})
+
+		_, err := client.FetchTextPrompt(context.Background(), "p", WithLabel("staging"), WithVersion(5))
+		require.NoError(t, err)
+	})
 }
 
 func TestFetchTextPrompt_ChatTypeRejected(t *testing.T) {

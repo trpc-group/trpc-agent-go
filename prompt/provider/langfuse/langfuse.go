@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,13 +31,6 @@ type ClientOption func(*clientConfig)
 
 type clientConfig struct {
 	httpClient *http.Client
-}
-
-// WithHTTPClient overrides the default HTTP client used for API requests.
-func WithHTTPClient(c *http.Client) ClientOption {
-	return func(cfg *clientConfig) {
-		cfg.httpClient = c
-	}
 }
 
 // Client fetches text prompts from the Langfuse REST API.
@@ -65,12 +59,14 @@ func NewClient(cfg config.ConnectionConfig, opts ...ClientOption) *Client {
 type FetchOption func(*fetchConfig)
 
 type fetchConfig struct {
-	label   string
-	version int // 0 means unset
+	label   string // "" means unset
+	version int    // 0 means unset
 }
 
 // WithLabel fetches the prompt version carrying the given label.
-// The default label is "production" when neither label nor version is specified.
+// Langfuse resolves prompts by either label or version, so this clears any
+// previously selected version. The default label is "production" when neither
+// label nor version is specified.
 func WithLabel(label string) FetchOption {
 	return func(cfg *fetchConfig) {
 		cfg.label = label
@@ -79,6 +75,8 @@ func WithLabel(label string) FetchOption {
 }
 
 // WithVersion fetches a specific prompt version number.
+// Langfuse resolves prompts by either version or label, so this clears any
+// previously selected label.
 func WithVersion(version int) FetchOption {
 	return func(cfg *fetchConfig) {
 		cfg.version = version
@@ -95,6 +93,7 @@ type TextPromptResult struct {
 }
 
 // FetchTextPrompt fetches a text prompt by name from the Langfuse API.
+// Prompt names containing folder paths are URL-escaped as a single path segment.
 // Only prompts with type "text" are accepted; chat prompts return an error.
 func (c *Client) FetchTextPrompt(ctx context.Context, name string, opts ...FetchOption) (TextPromptResult, error) {
 	cfg := fetchConfig{label: "production"}
@@ -102,17 +101,18 @@ func (c *Client) FetchTextPrompt(ctx context.Context, name string, opts ...Fetch
 		opt(&cfg)
 	}
 
-	reqURL := c.baseURL + "/api/public/v2/prompts/" + name
-	if cfg.version > 0 {
-		reqURL += "?version=" + strconv.Itoa(cfg.version)
-	} else if cfg.label != "" {
-		reqURL += "?label=" + cfg.label
-	}
-
+	reqURL := c.baseURL + "/api/public/v2/prompts/" + url.PathEscape(name)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return TextPromptResult{}, fmt.Errorf("langfuse: create request: %w", err)
 	}
+	q := req.URL.Query()
+	if cfg.version > 0 {
+		q.Set("version", strconv.Itoa(cfg.version))
+	} else if cfg.label != "" {
+		q.Set("label", cfg.label)
+	}
+	req.URL.RawQuery = q.Encode()
 	req.SetBasicAuth(c.publicKey, c.secretKey)
 	req.Header.Set("Accept", "application/json")
 
