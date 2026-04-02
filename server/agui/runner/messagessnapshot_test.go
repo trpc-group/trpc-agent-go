@@ -137,6 +137,59 @@ func TestMessagesSnapshotHappyPath(t *testing.T) {
 	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
 }
 
+func TestMessagesSnapshotPreservesDistinctCanonicalToolCallIDsAcrossTurns(t *testing.T) {
+	firstToolCallID := "trpc-agent-go-toolcall:inv-1:rsp-1:call-1:c0:t0"
+	secondToolCallID := "trpc-agent-go-toolcall:inv-2:rsp-2:call-1:c0:t0"
+	svc := &testSessionService{
+		trackEvents: []session.TrackEvent{
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user"))),
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-1", "hello")),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-1")),
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
+			newTrackEvent(t, aguievents.NewToolCallStartEvent(firstToolCallID, "calc", aguievents.WithParentMessageID("assistant-1"))),
+			newTrackEvent(t, aguievents.NewToolCallArgsEvent(firstToolCallID, "{\"a\":1}")),
+			newTrackEvent(t, aguievents.NewToolCallEndEvent(firstToolCallID)),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("assistant-1")),
+			newTrackEvent(t, aguievents.NewToolCallResultEvent("tool-msg-1", firstToolCallID, "1")),
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("user-2", aguievents.WithRole("user"))),
+			newTrackEvent(t, aguievents.NewTextMessageContentEvent("user-2", "again")),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("user-2")),
+			newTrackEvent(t, aguievents.NewTextMessageStartEvent("assistant-2", aguievents.WithRole("assistant"))),
+			newTrackEvent(t, aguievents.NewToolCallStartEvent(secondToolCallID, "calc", aguievents.WithParentMessageID("assistant-2"))),
+			newTrackEvent(t, aguievents.NewToolCallArgsEvent(secondToolCallID, "{\"a\":2}")),
+			newTrackEvent(t, aguievents.NewToolCallEndEvent(secondToolCallID)),
+			newTrackEvent(t, aguievents.NewTextMessageEndEvent("assistant-2")),
+			newTrackEvent(t, aguievents.NewToolCallResultEvent("tool-msg-2", secondToolCallID, "2")),
+		},
+	}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner:            noopBaseRunner{},
+		userIDResolver:    NewOptions().UserIDResolver,
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		tracker:           tracker,
+	}
+	stream, err := r.MessagesSnapshot(
+		context.Background(),
+		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
+	)
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Len(t, snapshot.Messages, 6)
+	require.Len(t, snapshot.Messages[1].ToolCalls, 1)
+	require.Len(t, snapshot.Messages[4].ToolCalls, 1)
+	assert.Equal(t, firstToolCallID, snapshot.Messages[1].ToolCalls[0].ID)
+	assert.Equal(t, secondToolCallID, snapshot.Messages[4].ToolCalls[0].ID)
+	assert.Equal(t, firstToolCallID, snapshot.Messages[2].ToolCallID)
+	assert.Equal(t, secondToolCallID, snapshot.Messages[5].ToolCallID)
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
+}
+
 func TestMessagesSnapshotAllowsConcurrentRequests(t *testing.T) {
 	unblock := make(chan struct{})
 	trackEvents := &session.TrackEvents{

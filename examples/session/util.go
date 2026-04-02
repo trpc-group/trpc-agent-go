@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -32,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/mysql"
+	sessionpgvector "trpc.group/trpc-go/trpc-agent-go/session/pgvector"
 	"trpc.group/trpc-go/trpc-agent-go/session/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis"
 	sessionsqlite "trpc.group/trpc-go/trpc-agent-go/session/sqlite"
@@ -47,6 +49,7 @@ const (
 	SessionSQLite     SessionType = "sqlite"
 	SessionRedis      SessionType = "redis"
 	SessionPostgres   SessionType = "postgres"
+	SessionPGVector   SessionType = "pgvector"
 	SessionMySQL      SessionType = "mysql"
 	SessionClickHouse SessionType = "clickhouse"
 )
@@ -64,8 +67,8 @@ type SessionServiceConfig struct {
 // type.
 //
 // Parameters:
-//   - sessionType: one of inmemory, sqlite, redis, postgres, mysql,
-//     clickhouse
+//   - sessionType: one of inmemory, sqlite, redis, postgres, pgvector,
+//     mysql, clickhouse
 //   - cfg: session service configuration (eventLimit, ttl, hooks)
 //
 // Environment variables by session type:
@@ -74,6 +77,8 @@ type SessionServiceConfig struct {
 //	  file:sessions.db?_busy_timeout=5000)
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
+//	pgvector:   PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER,
+//	  PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_EMBEDDER_MODEL
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD,
 //	  MYSQL_DATABASE
 //	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
@@ -89,6 +94,8 @@ func NewSessionServiceByType(
 		return newRedisSessionService(cfg)
 	case SessionPostgres:
 		return newPostgresSessionService(cfg)
+	case SessionPGVector:
+		return newPGVectorSessionService(cfg)
 	case SessionMySQL:
 		return newMySQLSessionService(cfg)
 	case SessionClickHouse:
@@ -106,6 +113,10 @@ const (
 	sqliteDriverName          = "sqlite3"
 	defaultSQLiteMaxOpenConns = 1
 	defaultSQLiteMaxIdleConns = 1
+
+	openAIEmbeddingAPIKeyEnvKey  = "OPENAI_EMBEDDING_API_KEY"
+	openAIEmbeddingBaseURLEnvKey = "OPENAI_EMBEDDING_BASE_URL"
+	openAIEmbeddingModelEnvKey   = "OPENAI_EMBEDDING_MODEL"
 )
 
 func newSQLiteSessionService(
@@ -190,6 +201,81 @@ func newPostgresSessionService(
 		postgres.WithSessionTTL(cfg.TTL),
 		postgres.WithAppendEventHook(cfg.AppendEventHooks...),
 		postgres.WithGetSessionHook(cfg.GetSessionHooks...),
+	)
+}
+
+func getEmbeddingModel(defaultModel string) string {
+	if env := os.Getenv(openAIEmbeddingModelEnvKey); env != "" {
+		return env
+	}
+	return defaultModel
+}
+
+func newOpenAIEmbedder(defaultModel string) *openaiembedder.Embedder {
+	modelName := getEmbeddingModel(defaultModel)
+	opts := []openaiembedder.Option{
+		openaiembedder.WithModel(modelName),
+	}
+
+	if apiKey := os.Getenv(openAIEmbeddingAPIKeyEnvKey); apiKey != "" {
+		opts = append(opts, openaiembedder.WithAPIKey(apiKey))
+	}
+
+	baseURL := os.Getenv(openAIEmbeddingBaseURLEnvKey)
+	if baseURL == "" {
+		baseURL = os.Getenv("OPENAI_BASE_URL")
+	}
+	if baseURL != "" {
+		opts = append(opts, openaiembedder.WithBaseURL(baseURL))
+	}
+
+	return openaiembedder.New(opts...)
+}
+
+// newPGVectorSessionService creates a PostgreSQL + pgvector
+// backed session service.
+// Environment variables:
+//   - PGVECTOR_HOST: PostgreSQL host (default: localhost)
+//   - PGVECTOR_PORT: PostgreSQL port (default: 5432)
+//   - PGVECTOR_USER: PostgreSQL user (default: postgres)
+//   - PGVECTOR_PASSWORD: PostgreSQL password (default: empty)
+//   - PGVECTOR_DATABASE: PostgreSQL database (default:
+//     trpc-agent-go-pgsession)
+//   - PGVECTOR_EMBEDDER_MODEL: Embedder model name (default:
+//     text-embedding-3-small)
+func newPGVectorSessionService(
+	cfg SessionServiceConfig,
+) (session.Service, error) {
+	host := GetEnvOrDefault("PGVECTOR_HOST", "localhost")
+	portStr := GetEnvOrDefault("PGVECTOR_PORT", "5432")
+	port := 5432
+	if parsed, err := strconv.Atoi(portStr); err == nil {
+		port = parsed
+	}
+	user := GetEnvOrDefault("PGVECTOR_USER", "postgres")
+	password := GetEnvOrDefault("PGVECTOR_PASSWORD", "")
+	database := GetEnvOrDefault(
+		"PGVECTOR_DATABASE", "trpc-agent-go-pgsession",
+	)
+	embedderModel := GetEnvOrDefault(
+		"PGVECTOR_EMBEDDER_MODEL",
+		openaiembedder.DefaultModel,
+	)
+	embedder := newOpenAIEmbedder(embedderModel)
+
+	return sessionpgvector.NewService(
+		sessionpgvector.WithHost(host),
+		sessionpgvector.WithPort(port),
+		sessionpgvector.WithUser(user),
+		sessionpgvector.WithPassword(password),
+		sessionpgvector.WithDatabase(database),
+		sessionpgvector.WithIndexDimension(embedder.GetDimensions()),
+		sessionpgvector.WithEmbedder(embedder),
+		sessionpgvector.WithTablePrefix("trpc_"),
+		sessionpgvector.WithSessionEventLimit(cfg.EventLimit),
+		sessionpgvector.WithSessionTTL(cfg.TTL),
+		sessionpgvector.WithAppendEventHook(cfg.AppendEventHooks...),
+		sessionpgvector.WithGetSessionHook(cfg.GetSessionHooks...),
 	)
 }
 
@@ -422,6 +508,9 @@ func PrintSessionEvents(
 	sess, err := svc.GetSession(ctx, key)
 	if err != nil {
 		return fmt.Errorf("get session failed: %w", err)
+	}
+	if sess == nil {
+		return fmt.Errorf("session not found")
 	}
 
 	events := sess.GetEvents()
