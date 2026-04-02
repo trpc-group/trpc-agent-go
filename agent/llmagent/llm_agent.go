@@ -769,7 +769,7 @@ func buildSkillRunToolWithRepo(
 		exec = defaultCodeExecutor()
 	}
 
-	runOpts := make([]func(*toolskill.RunTool), 0, 5)
+	runOpts := make([]func(*toolskill.RunTool), 0, 6)
 	if len(options.skillRunAllowedCommands) > 0 {
 		runOpts = append(
 			runOpts,
@@ -786,6 +786,12 @@ func buildSkillRunToolWithRepo(
 			),
 		)
 	}
+	runOpts = append(
+		runOpts,
+		toolskill.WithRunOutputLimits(
+			options.skillRunOutputLimits,
+		),
+	)
 	if options.skillRunForceSaveArtifacts {
 		runOpts = append(runOpts, toolskill.WithForceSaveArtifacts(true))
 	}

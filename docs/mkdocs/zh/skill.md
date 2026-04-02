@@ -1050,18 +1050,33 @@ agent := llmagent.New(
   即便模型未显式设置 `save_as_artifacts` / `outputs.save`：
   - `llmagent.WithSkillRunForceSaveArtifacts(true)`
 
+可选行为（内联输出限额）：
+- 代码侧可配置 `skill_run` 返回多少内联文本：
+  - `llmagent.WithSkillRunOutputLimits(toolskill.RunOutputLimits{StdoutStderrBytes: 128 * 1024, PrimaryOutputBytes: 128 * 1024})`
+- 这个配置只影响 `stdout`、`stderr` 和 `primary_output`。
+  `output_files` / `outputs` 仍然使用工作区文件收集上限
+  （默认 4 MiB/文件）。
+
 输出：
 - `stdout`、`stderr`、`exit_code`、`timed_out`、`duration_ms`
+  - `stdout` / `stderr` 更适合日志和短状态文本。它们会受可配置的
+    内联上限控制（默认各 16 KiB）。
+    如果模型需要读取大段或结构化文本，优先用 `output_files` 或
+    `outputs`。
 - `staged_inputs`（可选）：本次执行前从对话自动 stage 进
   `work/inputs/` 的文件列表
 - `primary_output`（可选）：包含 `name`、`ref`、`content`、`mime_type`、
   `size_bytes`、`truncated`
   - 便捷字段：指向“最合适的”小型文本输出文件（若存在）。当只有一个主要输出时
     优先使用它。
+  - 只有不超过配置上限的文本文件才会进入 `primary_output`
+    （默认 32 KiB）。
 - `output_files`：文件列表（`name`、`ref`、`content`、`mime_type`、
   `size_bytes`、`truncated`）
   - `ref` 是稳定的 `workspace://<name>` 引用，可传给其它工具使用
   - 非文本文件的 `content` 会被省略。
+  - 对于大文本或结构化输出，优先走这条通道；文件收集遵循工作区
+    收集上限，而不是较小的 stdout/stderr 内联预算。
   - 当 `omit_inline_content=true` 时，所有文件的 `content` 会被省略。可用
     `ref` 配合 `read_file` 按需读取文本内容。
   - `size_bytes` 表示磁盘上的文件大小；`truncated=true` 表示收集内容触发了

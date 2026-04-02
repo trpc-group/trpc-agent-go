@@ -364,6 +364,16 @@ func TestWithSkillRunForceSaveArtifacts(t *testing.T) {
 	require.False(t, opts.skillRunForceSaveArtifacts)
 }
 
+func TestWithSkillRunOutputLimits(t *testing.T) {
+	opts := &Options{}
+	limits := toolskill.RunOutputLimits{
+		StdoutStderrBytes:  128,
+		PrimaryOutputBytes: 256,
+	}
+	WithSkillRunOutputLimits(limits)(opts)
+	require.Equal(t, limits, opts.skillRunOutputLimits)
+}
+
 func TestWithSkillRunRequireSkillLoaded(t *testing.T) {
 	opts := &Options{}
 	WithSkillRunRequireSkillLoaded(true)(opts)

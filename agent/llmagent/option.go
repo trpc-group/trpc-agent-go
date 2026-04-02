@@ -340,6 +340,8 @@ type Options struct {
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
 	skillRunDeniedCommands []string
+	// skillRunOutputLimits customizes inline skill_run output sizes.
+	skillRunOutputLimits toolskill.RunOutputLimits
 
 	// skillRunForceSaveArtifacts forces skill_run to persist collected
 	// outputs via the artifact service when possible.
@@ -697,6 +699,16 @@ func WithSkillRunDeniedCommands(cmds ...string) Option {
 		opts.skillRunDeniedCommands = append(
 			[]string(nil), cmds...,
 		)
+	}
+}
+
+// WithSkillRunOutputLimits customizes inline stdout/stderr and
+// primary_output limits for skill_run.
+func WithSkillRunOutputLimits(
+	limits toolskill.RunOutputLimits,
+) Option {
+	return func(opts *Options) {
+		opts.skillRunOutputLimits = limits
 	}
 }
 

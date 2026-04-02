@@ -368,6 +368,51 @@ func TestLLMAgent_SkillRunToolExecutes(t *testing.T) {
 	require.Contains(t, out, "hello")
 }
 
+func TestLLMAgent_SkillRun_OutputLimits_Configurable(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillRunOutputLimits(toolskill.RunOutputLimits{
+			StdoutStderrBytes:  4,
+			PrimaryOutputBytes: 4,
+		}),
+	)
+	tl := findTool(a.Tools(), "skill_run")
+	require.NotNil(t, tl)
+
+	args := map[string]any{
+		"skill": testSkillName,
+		"command": "mkdir -p out; printf 12345 > out/a.txt; " +
+			"cat out/a.txt",
+		"output_files": []string{"out/a.txt"},
+	}
+	b, err := json.Marshal(args)
+	require.NoError(t, err)
+	res, err := tl.(tool.CallableTool).Call(context.Background(), b)
+	require.NoError(t, err)
+
+	jb, err := json.Marshal(res)
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(jb, &m))
+
+	stdout, _ := m["stdout"].(string)
+	require.Len(t, stdout, 4)
+	require.Nil(t, m["primary_output"])
+
+	files, ok := m["output_files"].([]any)
+	require.True(t, ok)
+	require.Len(t, files, 1)
+	file0, ok := files[0].(map[string]any)
+	require.True(t, ok)
+	content, _ := file0["content"].(string)
+	require.Equal(t, "12345", content)
+}
+
 // stubExec implements CodeExecutor and exposes an Engine
 // whose runner marks ran=true on use.
 type stubExec struct {

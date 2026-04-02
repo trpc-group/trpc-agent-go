@@ -171,5 +171,13 @@ Recommended patterns:
 - When calling `skill_run`, write outputs under `out/` and set
   `output_files` so the tool returns text file contents inline.
   Non-text files (like images) are returned as metadata only.
+- Treat `stdout` / `stderr` as log channels. If the model needs to read
+  large or structured text, write it under `out/` and return it through
+  `output_files` or `outputs`; those file channels use the collector
+  limit (default 4 MiB/file), not the smaller inline stdout/stderr
+  budget.
+- If you really need larger inline `stdout` / `stderr`, configure
+  `llmagent.WithSkillRunOutputLimits(...)`, but file outputs are still
+  the recommended path.
 - When passing an output file to other tools, use `output_files[*].ref`
   (a `workspace://...` reference), not a host filesystem path.
