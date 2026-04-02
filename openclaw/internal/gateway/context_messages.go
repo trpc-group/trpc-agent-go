@@ -13,7 +13,6 @@ import (
 	"context"
 	"strings"
 
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
@@ -26,7 +25,6 @@ func (s *Server) injectedContextMessages(
 	userID string,
 	sessionID string,
 	requestSystemPrompt string,
-	runtimeState map[string]any,
 ) []model.Message {
 	out := make([]model.Message, 0, 4)
 	if msg := requestSystemPromptMessage(requestSystemPrompt); msg != nil {
@@ -38,7 +36,7 @@ func (s *Server) injectedContextMessages(
 	); msg != nil {
 		out = append(out, *msg)
 	}
-	out = append(out, s.memoryFileContextMessages(ctx, userID, runtimeState)...)
+	out = append(out, s.memoryFileContextMessages(ctx, userID)...)
 	out = append(out, s.uploadContextMessages(userID, sessionID)...)
 	return out
 }
@@ -94,7 +92,6 @@ func buildPersonaContextText(preset persona.Preset) string {
 func (s *Server) memoryFileContextMessages(
 	ctx context.Context,
 	userID string,
-	runtimeState map[string]any,
 ) []model.Message {
 	if s == nil || s.memoryFileStore == nil {
 		return nil
@@ -104,17 +101,10 @@ func (s *Server) memoryFileContextMessages(
 	if appName == "" {
 		return nil
 	}
-	memoryUserID := strings.TrimSpace(userID)
-	if resolvedUserID, ok := imemory.ResolveUserID(nil, runtimeState); ok {
-		memoryUserID = resolvedUserID
-	}
-	if memoryUserID == "" {
-		return nil
-	}
 	path, err := s.memoryFileStore.EnsureMemory(
 		ctx,
 		appName,
-		memoryUserID,
+		userID,
 	)
 	if err != nil {
 		return nil
