@@ -20,7 +20,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/prompt"
 )
 
 // referenceDate returns the reference date for the extraction.
@@ -281,16 +280,11 @@ func (e *memoryExtractor) buildSystemPrompt(
 ) string {
 	var sb strings.Builder
 
+	// Substitute the {current_date} placeholder in the prompt.
 	dateStr := refDate.UTC().Format(time.DateOnly)
-	renderedPrompt, err := prompt.Text{Template: e.prompt}.Render(prompt.RenderEnv{
-		Vars: prompt.Vars{
-			"current_date": dateStr,
-		},
-	})
-	if err != nil {
-		renderedPrompt = e.prompt
-	}
-	sb.WriteString(renderedPrompt)
+	sb.WriteString(strings.ReplaceAll(
+		e.prompt, currentDatePlaceholder, dateStr,
+	))
 
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")

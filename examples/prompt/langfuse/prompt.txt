@@ -1,3 +1,0 @@
-name: movie-critic
-label: production
-text prompt: As a {{criticlevel}} movie critic, do you like {{movie}}?

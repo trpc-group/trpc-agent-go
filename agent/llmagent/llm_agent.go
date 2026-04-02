@@ -36,7 +36,6 @@ import (
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
-	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -58,10 +57,10 @@ type LLMAgent struct {
 	model                   model.Model
 	models                  map[string]model.Model // Registered models for switching
 	description             string
-	instruction             prompt.Text
-	systemPrompt            prompt.Text
-	modelInstructions       map[string]prompt.Text
-	modelGlobalInstructions map[string]prompt.Text
+	instruction             string
+	systemPrompt            string
+	modelInstructions       map[string]string
+	modelGlobalInstructions map[string]string
 	genConfig               model.GenerationConfig
 	flow                    flow.Flow
 	tools                   []tool.Tool     // All tools (user tools + framework tools)
@@ -117,10 +116,10 @@ func New(name string, opts ...Option) *LLMAgent {
 		model:             initialModel,
 		models:            models,
 		description:       options.Description,
-		instruction:       newTextPrompt(options.Instruction),
-		systemPrompt:      newTextPrompt(options.GlobalInstruction),
-		modelInstructions: cloneTextPromptMap(options.ModelInstructions),
-		modelGlobalInstructions: cloneTextPromptMap(
+		instruction:       options.Instruction,
+		systemPrompt:      options.GlobalInstruction,
+		modelInstructions: cloneStringMap(options.ModelInstructions),
+		modelGlobalInstructions: cloneStringMap(
 			options.ModelGlobalInstructions,
 		),
 		genConfig:            resolvedGenCfg,
@@ -234,8 +233,12 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		)
 	}
 	instructionOpts = append(instructionOpts,
-		processor.WithInstructionResolver(a.instructionForInvocation),
-		processor.WithSystemPromptResolver(a.systemPromptForInvocation),
+		processor.WithInstructionResolver(
+			a.instructionForInvocation,
+		),
+		processor.WithSystemPromptResolver(
+			a.systemPromptForInvocation,
+		),
 	)
 	instructionProcessor := processor.NewInstructionRequestProcessor(
 		"", // static value unused when resolver is present
@@ -453,28 +456,13 @@ func buildRequestProcessors(name string, options *Options) []flow.RequestProcess
 	prepareSkillsRepository(options)
 	dummy := &LLMAgent{
 		name:                    name,
-		instruction:             newTextPrompt(options.Instruction),
-		systemPrompt:            newTextPrompt(options.GlobalInstruction),
-		modelInstructions:       cloneTextPromptMap(options.ModelInstructions),
-		modelGlobalInstructions: cloneTextPromptMap(options.ModelGlobalInstructions),
+		instruction:             options.Instruction,
+		systemPrompt:            options.GlobalInstruction,
+		modelInstructions:       cloneStringMap(options.ModelInstructions),
+		modelGlobalInstructions: cloneStringMap(options.ModelGlobalInstructions),
 		option:                  *options,
 	}
 	return buildRequestProcessorsWithAgent(dummy, options)
-}
-
-func newTextPrompt(template string) prompt.Text {
-	return prompt.Text{Template: template}
-}
-
-func cloneTextPromptMap(src map[string]string) map[string]prompt.Text {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]prompt.Text, len(src))
-	for key, value := range src {
-		dst[key] = newTextPrompt(value)
-	}
-	return dst
 }
 
 func prepareSkillsRepository(options *Options) {
@@ -1462,7 +1450,7 @@ func (a *LLMAgent) SetModelByName(modelName string) error {
 // Subsequent requests will use the new instruction without recreating the agent.
 func (a *LLMAgent) SetInstruction(instruction string) {
 	a.mu.Lock()
-	a.instruction = newTextPrompt(instruction)
+	a.instruction = instruction
 	a.mu.Unlock()
 }
 
@@ -1470,14 +1458,14 @@ func (a *LLMAgent) SetInstruction(instruction string) {
 // This affects the system-level prompt prepended to requests.
 func (a *LLMAgent) SetGlobalInstruction(systemPrompt string) {
 	a.mu.Lock()
-	a.systemPrompt = newTextPrompt(systemPrompt)
+	a.systemPrompt = systemPrompt
 	a.mu.Unlock()
 }
 
 // SetModelInstructions updates the model-specific instruction overrides.
 // Key: model.Info().Name, Value: instruction text.
 func (a *LLMAgent) SetModelInstructions(instructions map[string]string) {
-	copied := cloneTextPromptMap(instructions)
+	copied := cloneStringMap(instructions)
 	a.mu.Lock()
 	a.modelInstructions = copied
 	a.mu.Unlock()
@@ -1487,7 +1475,7 @@ func (a *LLMAgent) SetModelInstructions(instructions map[string]string) {
 // overrides.
 // Key: model.Info().Name, Value: system prompt text.
 func (a *LLMAgent) SetModelGlobalInstructions(prompts map[string]string) {
-	copied := cloneTextPromptMap(prompts)
+	copied := cloneStringMap(prompts)
 	a.mu.Lock()
 	a.modelGlobalInstructions = copied
 	a.mu.Unlock()
@@ -1497,28 +1485,24 @@ func (a *LLMAgent) SetModelGlobalInstructions(prompts map[string]string) {
 func (a *LLMAgent) getInstruction() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.instruction.Template
+	return a.instruction
 }
 
 // getSystemPrompt returns the current system prompt with read lock.
 func (a *LLMAgent) getSystemPrompt() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.systemPrompt.Template
+	return a.systemPrompt
 }
 
 func (a *LLMAgent) instructionForInvocation(inv *agent.Invocation) string {
-	return a.instructionPromptForInvocation(inv).Template
-}
-
-func (a *LLMAgent) instructionPromptForInvocation(inv *agent.Invocation) prompt.Text {
 	if patch, ok := a.rootSurfacePatch(inv); ok {
 		if instruction, ok := patch.Instruction(); ok {
-			return newTextPrompt(instruction)
+			return instruction
 		}
 	}
 	if inv != nil && inv.RunOptions.Instruction != "" {
-		return newTextPrompt(inv.RunOptions.Instruction)
+		return inv.RunOptions.Instruction
 	}
 	modelName := ""
 	if inv != nil && inv.Model != nil {
@@ -1537,17 +1521,13 @@ func (a *LLMAgent) instructionPromptForInvocation(inv *agent.Invocation) prompt.
 }
 
 func (a *LLMAgent) systemPromptForInvocation(inv *agent.Invocation) string {
-	return a.systemPromptTextForInvocation(inv).Template
-}
-
-func (a *LLMAgent) systemPromptTextForInvocation(inv *agent.Invocation) prompt.Text {
 	if patch, ok := a.rootSurfacePatch(inv); ok {
 		if prompt, ok := patch.GlobalInstruction(); ok {
-			return newTextPrompt(prompt)
+			return prompt
 		}
 	}
 	if inv != nil && inv.RunOptions.GlobalInstruction != "" {
-		return newTextPrompt(inv.RunOptions.GlobalInstruction)
+		return inv.RunOptions.GlobalInstruction
 	}
 	modelName := ""
 	if inv != nil && inv.Model != nil {
