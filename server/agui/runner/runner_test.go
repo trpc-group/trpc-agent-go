@@ -23,14 +23,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	toolcallidplugin "trpc.group/trpc-go/trpc-agent-go/plugin/toolcallid"
+	baserunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 func TestNew(t *testing.T) {
@@ -2106,6 +2111,225 @@ func TestRunTrackingErrorsAreIgnored(t *testing.T) {
 	evts := collectEvents(t, eventsCh)
 	assert.Len(t, evts, 1)
 	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+}
+
+func TestRunUsesCanonicalToolCallIDFromInstalledPlugin(t *testing.T) {
+	modelStub := &toolCallIDRunnerIntegrationModel{
+		responses: [][]*model.Response{
+			{{
+				ID:        "rsp-tool",
+				Object:    model.ObjectTypeChatCompletion,
+				Done:      true,
+				IsPartial: false,
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID:   "call-1",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "echo",
+								Arguments: []byte(`{"value":"ok"}`),
+							},
+						}},
+					},
+				}},
+			}},
+			{{
+				ID:        "rsp-final",
+				Object:    model.ObjectTypeChatCompletion,
+				Done:      true,
+				IsPartial: false,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("done"),
+				}},
+			}},
+		},
+	}
+	echoTool := function.NewFunctionTool(
+		func(_ context.Context, input struct {
+			Value string `json:"value"`
+		}) (string, error) {
+			return input.Value, nil
+		},
+		function.WithName("echo"),
+		function.WithDescription("Echoes the input."),
+	)
+	ag := llmagent.New(
+		"assistant",
+		llmagent.WithModel(modelStub),
+		llmagent.WithTools([]tool.Tool{echoTool}),
+	)
+	underlying := baserunner.NewRunner(
+		"toolcallid-agui-app",
+		ag,
+		baserunner.WithPlugins(toolcallidplugin.New()),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, underlying.Close())
+	})
+	r := New(underlying)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hello"}},
+	}
+	eventCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	events := collectEvents(t, eventCh)
+	var (
+		startID  string
+		argsID   string
+		endID    string
+		resultID string
+	)
+	for _, evt := range events {
+		switch v := evt.(type) {
+		case *aguievents.ToolCallStartEvent:
+			startID = v.ToolCallID
+		case *aguievents.ToolCallArgsEvent:
+			argsID = v.ToolCallID
+		case *aguievents.ToolCallEndEvent:
+			endID = v.ToolCallID
+		case *aguievents.ToolCallResultEvent:
+			resultID = v.ToolCallID
+		}
+	}
+	require.NotEmpty(t, startID)
+	require.Equal(t, startID, argsID)
+	require.Equal(t, startID, endID)
+	require.Equal(t, startID, resultID)
+	require.NotEqual(t, "call-1", startID)
+	require.Contains(t, startID, "trpc-agent-go-toolcall:")
+}
+
+func TestRunGraphToolMetadataUsesCanonicalToolCallID(t *testing.T) {
+	const canonicalToolCallID = "trpc-agent-go-toolcall:inv-1:rsp-1:call-1:c0:t0"
+	rawToolMeta, err := json.Marshal(graph.ToolExecutionMetadata{
+		ResponseID: "assistant-1",
+		ToolName:   "echo",
+		ToolID:     canonicalToolCallID,
+		Phase:      graph.ToolExecutionPhaseStart,
+		Input:      `{"value":"ok"}`,
+	})
+	require.NoError(t, err)
+	agentEvents := make(chan *agentevent.Event, 2)
+	agentEvents <- &agentevent.Event{
+		ID: "tool-start",
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyTool: rawToolMeta,
+		},
+	}
+	agentEvents <- &agentevent.Event{
+		ID: "tool-result",
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					Content:  "ok",
+					ToolID:   canonicalToolCallID,
+					ToolName: "echo",
+				},
+			}},
+		},
+	}
+	close(agentEvents)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	r := New(underlying)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hello"}},
+	}
+	eventCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	events := collectEvents(t, eventCh)
+	var (
+		startID  string
+		argsID   string
+		endID    string
+		resultID string
+	)
+	for _, evt := range events {
+		switch v := evt.(type) {
+		case *aguievents.ToolCallStartEvent:
+			startID = v.ToolCallID
+		case *aguievents.ToolCallArgsEvent:
+			argsID = v.ToolCallID
+		case *aguievents.ToolCallEndEvent:
+			endID = v.ToolCallID
+		case *aguievents.ToolCallResultEvent:
+			resultID = v.ToolCallID
+		}
+	}
+	require.Equal(t, canonicalToolCallID, startID)
+	require.Equal(t, canonicalToolCallID, argsID)
+	require.Equal(t, canonicalToolCallID, endID)
+	require.Equal(t, canonicalToolCallID, resultID)
+}
+
+type toolCallIDRunnerIntegrationModel struct {
+	mu        sync.Mutex
+	responses [][]*model.Response
+	callIndex int
+}
+
+func (m *toolCallIDRunnerIntegrationModel) Info() model.Info {
+	return model.Info{Name: "toolcallid-agui-model"}
+}
+
+func (m *toolCallIDRunnerIntegrationModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	callIndex := m.callIndex
+	m.callIndex++
+	var responses []*model.Response
+	if callIndex < len(m.responses) {
+		responses = m.responses[callIndex]
+	}
+	m.mu.Unlock()
+	ch := make(chan *model.Response, len(responses))
+	for _, rsp := range responses {
+		ch <- cloneToolCallIDRunnerIntegrationResponse(rsp)
+	}
+	close(ch)
+	return ch, nil
+}
+
+func cloneToolCallIDRunnerIntegrationResponse(rsp *model.Response) *model.Response {
+	if rsp == nil {
+		return nil
+	}
+	cloned := rsp.Clone()
+	choices := make([]model.Choice, len(rsp.Choices))
+	for i, choice := range rsp.Choices {
+		choices[i] = choice
+		choices[i].Message = cloneToolCallIDRunnerIntegrationMessage(choice.Message)
+		choices[i].Delta = cloneToolCallIDRunnerIntegrationMessage(choice.Delta)
+	}
+	cloned.Choices = choices
+	return cloned
+}
+
+func cloneToolCallIDRunnerIntegrationMessage(message model.Message) model.Message {
+	cloned := message
+	if len(message.ToolCalls) > 0 {
+		cloned.ToolCalls = append([]model.ToolCall(nil), message.ToolCalls...)
+	}
+	if len(message.ContentParts) > 0 {
+		cloned.ContentParts = append([]model.ContentPart(nil), message.ContentParts...)
+	}
+	return cloned
 }
 
 func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event {

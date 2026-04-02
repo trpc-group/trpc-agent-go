@@ -472,6 +472,34 @@ func (p *ToolArgsPlugin) Register(reg *plugin.Registry) {
 `plugin.NewGlobalInstruction(text)` 会在每一次模型请求前，统一追加一条 system
 message。适合用来实现全局策略或统一行为（例如安全约束、风格要求）。
 
+### ToolCallID
+
+`plugin/toolcallid` 下的 `toolcallid.New()` 用于在模型返回最终 `ToolCall.ID` 后统一改写为框架使用的 tool call ID。当 provider / model 不能稳定保证 `ToolCall.ID` 足够唯一时，可以启用这个插件。
+
+使用示例如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolcallid"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(
+		toolcallid.New(),
+	),
+)
+defer runnerInstance.Close()
+```
+
+该插件挂载在 `AfterModel`，会在最终可用的 tool call ID 上做统一改写。改写完成后，框架后续处理会继续使用该 ID。
+
+如果其他插件也在 `AfterModel` 阶段依赖最终 `ToolCall.ID`，应把 `toolcallid.New()` 放在它们前面。
+
+完整示例见 [examples/toolcallid](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/toolcallid)。
+
 ### Guardrail（护栏）
 
 `plugin/guardrail` 下的 `guardrail.New(...)` 是顶层插件入口，用来把一个或多个护栏能力接到 Runner 上。
@@ -745,7 +773,7 @@ if err != nil {
 - 明显 unsafe intent 被阻断
 - 偏防御/分析型请求被放行
 
-说明：目前仓库内置了 Logging、GlobalInstruction、Guardrail 三类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
+说明：目前仓库内置了 Logging、GlobalInstruction、ToolCallID、Guardrail 四类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
 
 ## 如何扩展：写一个自己的插件
 
