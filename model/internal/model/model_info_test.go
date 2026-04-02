@@ -47,9 +47,99 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  400000,
 		},
 		{
+			name:      "exact match - GPT-5.4",
+			modelName: "gpt-5.4",
+			expected:  1050000,
+		},
+		{
+			name:      "exact match - GPT-5.4-pro",
+			modelName: "gpt-5.4-pro",
+			expected:  1050000,
+		},
+		{
 			name:      "exact match - GPT-5.2-instant",
 			modelName: "gpt-5.2-instant",
 			expected:  400000,
+		},
+		{
+			name:      "exact match - Claude Sonnet 4.6",
+			modelName: "claude-sonnet-4-6",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - Claude Opus 4.5 alias",
+			modelName: "claude-opus-4-5",
+			expected:  200000,
+		},
+		{
+			name:      "exact match - Claude Sonnet 4.5 alias",
+			modelName: "claude-sonnet-4-5",
+			expected:  200000,
+		},
+		{
+			name:      "exact match - Claude Haiku 4.5 alias",
+			modelName: "claude-haiku-4-5",
+			expected:  200000,
+		},
+		{
+			name:      "exact match - GLM-5",
+			modelName: "glm-5",
+			expected:  200000,
+		},
+		{
+			name:      "exact match - GLM-5 Hugging Face repo",
+			modelName: "zai-org/glm-5",
+			expected:  200000,
+		},
+		{
+			name:      "exact match - GLM-4.5-Air Hugging Face repo",
+			modelName: "zai-org/glm-4.5-air",
+			expected:  128000,
+		},
+		{
+			name:      "exact match - GLM-5.1",
+			modelName: "glm-5.1",
+			expected:  204800,
+		},
+		{
+			name:      "exact match - Qwen3-Max",
+			modelName: "qwen3-max",
+			expected:  262144,
+		},
+		{
+			name:      "exact match - Qwen3.5-Plus",
+			modelName: "qwen3.5-plus",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - Qwen-Max",
+			modelName: "qwen-max",
+			expected:  131072,
+		},
+		{
+			name:      "exact match - Qwen-Plus",
+			modelName: "qwen-plus",
+			expected:  1000000,
+		},
+		{
+			name:      "exact match - DeepSeek chat",
+			modelName: "deepseek-chat",
+			expected:  131072,
+		},
+		{
+			name:      "exact match - Kimi K2.5",
+			modelName: "kimi-k2.5",
+			expected:  256000,
+		},
+		{
+			name:      "exact match - Kimi K2 legacy preview",
+			modelName: "kimi-k2-0711-preview",
+			expected:  128000,
+		},
+		{
+			name:      "exact match - MiniMax M2.7",
+			modelName: "minimax-m2.7",
+			expected:  204800,
 		},
 		{
 			name:      "case insensitive match",
@@ -65,6 +155,26 @@ func TestResolveContextWindow(t *testing.T) {
 			name:      "prefix match - Gemini prefix",
 			modelName: "gemini-1.5-pro",
 			expected:  2097152,
+		},
+		{
+			name:      "longest prefix match - GPT-5.4 snapshot",
+			modelName: "gpt-5.4-2026-03-05",
+			expected:  1050000,
+		},
+		{
+			name:      "longest prefix match - GPT-5.4 mini snapshot",
+			modelName: "gpt-5.4-mini-2026-03-17",
+			expected:  400000,
+		},
+		{
+			name:      "prefix match - Claude alias snapshot with at separator",
+			modelName: "claude-opus-4-5@20251101",
+			expected:  200000,
+		},
+		{
+			name:      "no prefix match without separator boundary",
+			modelName: "gpt-5.4x",
+			expected:  defaultContextWindow,
 		},
 		{
 			name:      "unknown model fallback",
@@ -107,6 +217,36 @@ func TestLookupContextWindow(t *testing.T) {
 			ok:        true,
 		},
 		{
+			name:      "new provider exact match",
+			modelName: "minimax-m2.5-highspeed",
+			expected:  204800,
+			ok:        true,
+		},
+		{
+			name:      "separator boundary prefix match",
+			modelName: "glm-5@latest",
+			expected:  200000,
+			ok:        true,
+		},
+		{
+			name:      "qwen snapshot prefix match",
+			modelName: "qwen-max-2025-01-25",
+			expected:  131072,
+			ok:        true,
+		},
+		{
+			name:      "hugging face repo exact match",
+			modelName: "zai-org/glm-4.7-flash",
+			expected:  200000,
+			ok:        true,
+		},
+		{
+			name:      "no boundary prefix match",
+			modelName: "glm-5x",
+			expected:  0,
+			ok:        false,
+		},
+		{
 			name:      "unknown model",
 			modelName: "unknown-model",
 			expected:  0,
@@ -125,6 +265,58 @@ func TestLookupContextWindow(t *testing.T) {
 			result, ok := LookupContextWindow(tt.modelName)
 			assert.Equal(t, tt.expected, result)
 			assert.Equal(t, tt.ok, ok)
+		})
+	}
+}
+
+func TestIsModelPrefixMatch(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelName string
+		prefix    string
+		expected  bool
+	}{
+		{
+			name:      "exact match",
+			modelName: "glm-5",
+			prefix:    "glm-5",
+			expected:  true,
+		},
+		{
+			name:      "hyphen separator match",
+			modelName: "qwen-max-2025-01-25",
+			prefix:    "qwen-max",
+			expected:  true,
+		},
+		{
+			name:      "at separator match",
+			modelName: "claude-opus-4-5@20251101",
+			prefix:    "claude-opus-4-5",
+			expected:  true,
+		},
+		{
+			name:      "colon separator match",
+			modelName: "glm-5:latest",
+			prefix:    "glm-5",
+			expected:  true,
+		},
+		{
+			name:      "prefix without valid separator",
+			modelName: "gpt-5.4x",
+			prefix:    "gpt-5.4",
+			expected:  false,
+		},
+		{
+			name:      "no prefix match",
+			modelName: "kimi-k2.5",
+			prefix:    "glm-5",
+			expected:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isModelPrefixMatch(tt.modelName, tt.prefix))
 		})
 	}
 }
