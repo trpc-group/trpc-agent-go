@@ -136,6 +136,11 @@ var (
 
 		SkipSkillsFallbackOnSessionSummary: true,
 
+		EnableContextCompaction:              false,
+		ContextCompactionThresholdRatio:      0.7,
+		ContextCompactionToolResultMaxTokens: processor.DefaultContextCompactionToolResultMaxTokens,
+		ContextCompactionKeepRecentRequests:  processor.DefaultContextCompactionKeepRecentRequests,
+
 		skillRunRequireSkillLoaded: true,
 	}
 )
@@ -240,6 +245,23 @@ type Options struct {
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
+	// EnableContextCompaction enables prompt-side context compaction.
+	// Historical oversized tool results can be compacted during request
+	// projection even when AddSessionSummary is false. When AddSessionSummary
+	// is also true, the framework may additionally trigger a one-time
+	// synchronous summary refresh before the LLM call.
+	EnableContextCompaction bool
+	// ContextCompactionThresholdRatio controls when the pre-LLM synchronous
+	// summary retry triggers, expressed as a fraction of the model context
+	// window. This retry only applies when AddSessionSummary is enabled.
+	ContextCompactionThresholdRatio float64
+	// ContextCompactionToolResultMaxTokens sets the token threshold above
+	// which
+	// historical tool results are replaced with a placeholder.
+	ContextCompactionToolResultMaxTokens int
+	// ContextCompactionKeepRecentRequests preserves the latest N completed
+	// requests in full when request-side context compaction is enabled.
+	ContextCompactionKeepRecentRequests int
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	summaryFormatter func(summary string) string
@@ -951,6 +973,49 @@ func WithSyncSummaryIntraRun(enable bool) Option {
 func WithMaxHistoryRuns(maxRuns int) Option {
 	return func(opts *Options) {
 		opts.MaxHistoryRuns = maxRuns
+	}
+}
+
+// WithEnableContextCompaction enables prompt-side context compaction.
+// Historical oversized tool results can be compacted during request
+// projection even when AddSessionSummary is false. When AddSessionSummary is
+// also true, the framework may additionally trigger a one-time synchronous
+// summary refresh before the LLM call.
+func WithEnableContextCompaction(enable bool) Option {
+	return func(opts *Options) {
+		opts.EnableContextCompaction = enable
+	}
+}
+
+// WithContextCompactionThresholdRatio sets the fraction of the model context
+// window at which pre-LLM synchronous summary retry triggers. This retry is
+// only available when AddSessionSummary is enabled.
+func WithContextCompactionThresholdRatio(ratio float64) Option {
+	return func(opts *Options) {
+		if ratio > 0 && ratio <= 1 {
+			opts.ContextCompactionThresholdRatio = ratio
+		}
+	}
+}
+
+// WithContextCompactionToolResultMaxTokens sets the token threshold above
+// which
+// historical tool results are replaced with a placeholder.
+func WithContextCompactionToolResultMaxTokens(tokens int) Option {
+	return func(opts *Options) {
+		if tokens >= 0 {
+			opts.ContextCompactionToolResultMaxTokens = tokens
+		}
+	}
+}
+
+// WithContextCompactionKeepRecentRequests preserves the latest N completed
+// requests in full when request-side context compaction is enabled.
+func WithContextCompactionKeepRecentRequests(n int) Option {
+	return func(opts *Options) {
+		if n >= 0 {
+			opts.ContextCompactionKeepRecentRequests = n
+		}
 	}
 }
 

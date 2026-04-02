@@ -56,22 +56,30 @@ const (
 	// entire lifetime of an Invocation, even when underlying ToolSets are
 	// dynamic.
 	stateKeyToolsSnapshot = "llmflow:tools_snapshot"
+
+	defaultContextCompactionThresholdRatio = 0.7
+	contextCompactionFallbackWindow        = 8192
+	contextCompactionMinTokens             = 2000
 )
 
 // Options contains configuration options for creating a Flow.
 type Options struct {
-	ChannelBufferSize   int // Buffer size for event channels (default: 256).
-	ModelCallbacks      *model.Callbacks
-	SyncSummaryIntraRun bool
+	ChannelBufferSize               int // Buffer size for event channels (default: 256).
+	ModelCallbacks                  *model.Callbacks
+	SyncSummaryIntraRun             bool
+	EnableContextCompaction         bool
+	ContextCompactionThresholdRatio float64
 }
 
 // Flow provides the basic flow implementation.
 type Flow struct {
-	requestProcessors   []flow.RequestProcessor
-	responseProcessors  []flow.ResponseProcessor
-	channelBufferSize   int
-	modelCallbacks      *model.Callbacks
-	syncSummaryIntraRun bool
+	requestProcessors               []flow.RequestProcessor
+	responseProcessors              []flow.ResponseProcessor
+	channelBufferSize               int
+	modelCallbacks                  *model.Callbacks
+	syncSummaryIntraRun             bool
+	enableContextCompaction         bool
+	contextCompactionThresholdRatio float64
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -82,11 +90,15 @@ func New(
 	opts Options,
 ) *Flow {
 	return &Flow{
-		requestProcessors:   requestProcessors,
-		responseProcessors:  responseProcessors,
-		channelBufferSize:   opts.ChannelBufferSize,
-		modelCallbacks:      opts.ModelCallbacks,
-		syncSummaryIntraRun: opts.SyncSummaryIntraRun,
+		requestProcessors:       requestProcessors,
+		responseProcessors:      responseProcessors,
+		channelBufferSize:       opts.ChannelBufferSize,
+		modelCallbacks:          opts.ModelCallbacks,
+		syncSummaryIntraRun:     opts.SyncSummaryIntraRun,
+		enableContextCompaction: opts.EnableContextCompaction,
+		contextCompactionThresholdRatio: normalizeContextCompactionThresholdRatio(
+			opts.ContextCompactionThresholdRatio,
+		),
 	}
 }
 
@@ -436,6 +448,10 @@ func (f *Flow) runOneStep(
 	}
 	// 1. Preprocess (prepare request).
 	f.preprocess(ctx, invocation, llmRequest, eventChan)
+	if invocation.EndInvocation {
+		return lastEvent, nil
+	}
+	llmRequest = f.maybeCompactContextBeforeLLM(ctx, invocation, llmRequest)
 	if invocation.EndInvocation {
 		return lastEvent, nil
 	}
@@ -843,6 +859,112 @@ func (f *Flow) preprocess(
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
 	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(llmRequest.Messages, llmRequest.Tools)
+}
+
+func normalizeContextCompactionThresholdRatio(ratio float64) float64 {
+	if ratio > 0 && ratio <= 1 {
+		return ratio
+	}
+	return defaultContextCompactionThresholdRatio
+}
+
+func (f *Flow) maybeCompactContextBeforeLLM(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) *model.Request {
+	if req == nil || !f.enableContextCompaction || invocation == nil ||
+		invocation.Session == nil || invocation.SessionService == nil ||
+		!f.supportsSyncSummaryRetry() {
+		return req
+	}
+	if !shouldSyncCompactContext(
+		ctx,
+		invocation,
+		req,
+		f.contextCompactionThresholdRatio,
+	) {
+		return req
+	}
+
+	if err := invocation.SessionService.CreateSessionSummary(
+		ctx,
+		invocation.Session,
+		invocation.GetEventFilterKey(),
+		false,
+	); err != nil {
+		log.DebugfContext(
+			ctx,
+			"Pre-LLM context compaction skipped for agent %s: %v",
+			invocation.AgentName,
+			err,
+		)
+		return req
+	}
+
+	log.DebugfContext(
+		ctx,
+		"Pre-LLM context compaction rebuilt request for agent %s",
+		invocation.AgentName,
+	)
+
+	rebuilt := &model.Request{
+		Tools: make(map[string]tool.Tool),
+	}
+	f.preprocess(ctx, invocation, rebuilt, nil)
+	return rebuilt
+}
+
+func (f *Flow) supportsSyncSummaryRetry() bool {
+	for _, requestProcessor := range f.requestProcessors {
+		contentProcessor, ok := requestProcessor.(*processor.ContentRequestProcessor)
+		if !ok {
+			continue
+		}
+		if contentProcessor.AddSessionSummary &&
+			contentProcessor.TimelineFilterMode == processor.TimelineFilterAll {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldSyncCompactContext(
+	ctx context.Context,
+	inv *agent.Invocation,
+	req *model.Request,
+	ratio float64,
+) bool {
+	if inv == nil || inv.Model == nil || req == nil || len(req.Messages) == 0 {
+		return false
+	}
+
+	counter := model.NewSimpleTokenCounter()
+	tokens, err := counter.CountTokensRange(ctx, req.Messages, 0, len(req.Messages))
+	if err != nil {
+		return false
+	}
+
+	threshold := contextCompactionThreshold(inv, ratio)
+	return tokens >= threshold
+}
+
+func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
+	contextWindow := contextCompactionFallbackWindow
+	if inv != nil && inv.Model != nil {
+		if window, ok := model.LookupModelContextWindow(inv.Model.Info().Name); ok {
+			contextWindow = window
+		}
+	}
+
+	threshold := int(float64(contextWindow) * normalizeContextCompactionThresholdRatio(ratio))
+	if threshold < contextCompactionMinTokens {
+		threshold = contextCompactionMinTokens
+	}
+	if threshold > contextWindow {
+		threshold = contextWindow
+	}
+	return threshold
 }
 
 // UserToolsProvider is an optional interface that agents can implement to expose

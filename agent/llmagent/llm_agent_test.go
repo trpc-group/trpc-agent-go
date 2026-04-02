@@ -296,6 +296,25 @@ func TestBuildRequestProcessors_MaxHistoryRunsWiring(t *testing.T) {
 	require.Equal(t, 0, crp.MaxHistoryRuns)
 }
 
+func TestBuildRequestProcessors_ContextCompactionWiring(t *testing.T) {
+	opts := &Options{}
+	WithEnableContextCompaction(true)(opts)
+	WithContextCompactionKeepRecentRequests(2)(opts)
+	WithContextCompactionToolResultMaxTokens(2048)(opts)
+
+	procs := buildRequestProcessors("test-agent", opts)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.True(t, crp.ContextCompactionConfig.Enabled)
+	require.Equal(t, 2, crp.ContextCompactionConfig.KeepRecentRequests)
+	require.Equal(t, 2048, crp.ContextCompactionConfig.ToolResultMaxTokens)
+}
+
 // Test that buildRequestProcessors wires PreserveSameBranch into
 // ContentRequestProcessor correctly.
 func TestBuildRequestProcessors_PreserveSameBranchWiring(t *testing.T) {
