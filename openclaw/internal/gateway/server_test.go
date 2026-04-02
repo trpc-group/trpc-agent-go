@@ -32,7 +32,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
@@ -452,7 +454,11 @@ func TestServerUploadContextMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	srv := &Server{uploads: store}
-	msgs := srv.uploadContextMessages("u1", "telegram:dm:u1:s1")
+	msgs := srv.uploadContextMessages(
+		context.Background(),
+		"u1",
+		"telegram:dm:u1:s1",
+	)
 	require.Len(t, msgs, 1)
 	require.Contains(t, msgs[0].Content, recentUploadContextHeader)
 	require.Contains(t, msgs[0].Content, "clip.mp4 [video]")
@@ -480,9 +486,75 @@ func TestServerUploadContextMessages_UsesStoredMimeType(t *testing.T) {
 	require.NoError(t, err)
 
 	srv := &Server{uploads: store}
-	msgs := srv.uploadContextMessages("u1", "telegram:dm:u1:s1")
+	msgs := srv.uploadContextMessages(
+		context.Background(),
+		"u1",
+		"telegram:dm:u1:s1",
+	)
 	require.Len(t, msgs, 1)
 	require.Contains(t, msgs[0].Content, "video-note [video]")
+}
+
+func TestUploadScopeFromRequest_UsesStorageUserOverride(t *testing.T) {
+	t.Parallel()
+
+	extensions, err := conversation.MergeRequestExtension(
+		nil,
+		conversation.Annotation{StorageUserID: "chat-scope"},
+	)
+	require.NoError(t, err)
+
+	scope := uploadScopeFromRequest(gwproto.MessageRequest{
+		Channel:    "demo",
+		From:       "user1",
+		Thread:     "room-1",
+		UserID:     "canonical-user",
+		Text:       "hello",
+		Extensions: extensions,
+	})
+	require.Equal(
+		t,
+		uploads.Scope{
+			Channel:   "demo",
+			UserID:    "chat-scope",
+			SessionID: "demo:thread:room-1",
+		},
+		scope,
+	)
+}
+
+func TestServerUploadContextMessages_UsesStorageUserOverride(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "demo",
+		UserID:    "chat-scope",
+		SessionID: "demo:thread:room-1",
+	}
+	_, err = store.Save(
+		context.Background(),
+		scope,
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	srv := &Server{uploads: store}
+	ctx := conversationscope.WithStorageUserID(
+		context.Background(),
+		"chat-scope",
+	)
+	msgs := srv.uploadContextMessages(
+		ctx,
+		"canonical-user",
+		"demo:thread:room-1",
+	)
+	require.Len(t, msgs, 1)
+	require.Contains(t, msgs[0].Content, "clip.mp4 [video]")
 }
 
 func TestServerInjectedContextMessages_IncludePersonaAndUploads(t *testing.T) {
@@ -644,6 +716,74 @@ func TestServerInjectedContextMessages_IncludeMemoryFiles(t *testing.T) {
 	require.Contains(t, msgs[1].Content, "Keep replies concise")
 	require.NotContains(t, msgs[1].Content, "Use another app memory")
 	require.Contains(t, msgs[2].Content, recentUploadContextHeader)
+}
+
+func TestServerInjectedContextMessages_UsesCanonicalMemoryAndStorageScopedUploads(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	uploadStore, err := uploads.NewStore(t.TempDir())
+	require.NoError(t, err)
+
+	memoryPath, err := memoryStore.EnsureMemory(
+		context.Background(),
+		"demo-app",
+		"canonical-user",
+	)
+	require.NoError(t, err)
+	require.NoError(
+		t,
+		os.WriteFile(memoryPath, []byte("## Preferences\n\n- Remember my name."), 0o600),
+	)
+
+	otherMemoryPath, err := memoryStore.EnsureMemory(
+		context.Background(),
+		"demo-app",
+		"chat-scope",
+	)
+	require.NoError(t, err)
+	require.NoError(
+		t,
+		os.WriteFile(otherMemoryPath, []byte("## Preferences\n\n- Wrong scope."), 0o600),
+	)
+
+	_, err = uploadStore.Save(
+		context.Background(),
+		uploads.Scope{
+			Channel:   "demo",
+			UserID:    "chat-scope",
+			SessionID: "demo:thread:room-1",
+		},
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	srv := &Server{
+		appName:         "demo-app",
+		uploads:         uploadStore,
+		memoryFileStore: memoryStore,
+	}
+	ctx := conversationscope.WithStorageUserID(
+		context.Background(),
+		"chat-scope",
+	)
+	msgs := srv.injectedContextMessages(
+		ctx,
+		"canonical-user",
+		"demo:thread:room-1",
+		"",
+	)
+	require.Len(t, msgs, 2)
+	require.Contains(t, msgs[0].Content, "Remember my name")
+	require.NotContains(t, msgs[0].Content, "Wrong scope")
+	require.Contains(t, msgs[1].Content, "clip.mp4 [video]")
 }
 
 func TestServerInjectedContextMessages_CanceledContextSkipsMemoryFiles(t *testing.T) {

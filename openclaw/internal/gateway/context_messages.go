@@ -37,7 +37,7 @@ func (s *Server) injectedContextMessages(
 		out = append(out, *msg)
 	}
 	out = append(out, s.memoryFileContextMessages(ctx, userID)...)
-	out = append(out, s.uploadContextMessages(userID, sessionID)...)
+	out = append(out, s.uploadContextMessages(ctx, userID, sessionID)...)
 	return out
 }
 
@@ -98,7 +98,8 @@ func (s *Server) memoryFileContextMessages(
 	}
 
 	appName := strings.TrimSpace(s.appName)
-	if appName == "" {
+	userID = strings.TrimSpace(userID)
+	if appName == "" || userID == "" {
 		return nil
 	}
 	path, err := s.memoryFileStore.EnsureMemory(

@@ -26,11 +26,12 @@ import (
 
 func TestMergeRequestExtensionRoundTrip(t *testing.T) {
 	extensions, err := MergeRequestExtension(nil, Annotation{
-		HistoryMode: HistoryModeShared,
-		ActorID:     "u1",
-		ActorLabel:  "Alice",
-		ActorLabels: map[string]string{"u2": "Bob"},
-		QuoteText:   "hello",
+		HistoryMode:   HistoryModeShared,
+		StorageUserID: "chat-scope",
+		ActorID:       "u1",
+		ActorLabel:    "Alice",
+		ActorLabels:   map[string]string{"u2": "Bob"},
+		QuoteText:     "hello",
 	})
 	require.NoError(t, err)
 
@@ -40,6 +41,7 @@ func TestMergeRequestExtensionRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, HistoryModeShared, annotation.HistoryMode)
+	require.Equal(t, "chat-scope", annotation.StorageUserID)
 	require.Equal(t, "u1", annotation.ActorID)
 	require.Equal(t, "Alice", annotation.ActorLabel)
 	require.Equal(

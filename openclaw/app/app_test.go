@@ -42,6 +42,7 @@ import (
 	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
@@ -3195,6 +3196,90 @@ func TestInProcGatewayClient_ForgetUser_ClearsCronJobsOnlyOnce(
 	)
 }
 
+func TestInProcGatewayClient_ForgetUser_ClearsIndexedStorageScopes(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	ctx := context.Background()
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	sessSvc := sessioninmemory.NewSessionService()
+	uploadStore, err := uploads.NewStore(t.TempDir())
+	require.NoError(t, err)
+
+	const (
+		channelName     = "demo"
+		canonicalUserID = "u1"
+		storageUserID   = "chat-scope"
+		sessionID       = "demo:thread:room-1"
+	)
+	require.NoError(
+		t,
+		conversationscope.RememberIndexedStorageUser(
+			ctx,
+			sessSvc,
+			appName,
+			canonicalUserID,
+			storageUserID,
+		),
+	)
+	_, err = sessSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   appName,
+			UserID:    storageUserID,
+			SessionID: sessionID,
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	saved, err := uploadStore.Save(
+		ctx,
+		uploads.Scope{
+			Channel:   channelName,
+			UserID:    storageUserID,
+			SessionID: sessionID,
+		},
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	c := newInProcGatewayClient(
+		srv,
+		appName,
+		sessSvc,
+		nil,
+		"",
+		uploadStore,
+	)
+	require.NoError(t, c.ForgetUser(ctx, channelName, canonicalUserID))
+
+	sessions, err := sessSvc.ListSessions(
+		ctx,
+		session.UserKey{
+			AppName: appName,
+			UserID:  storageUserID,
+		},
+	)
+	require.NoError(t, err)
+	require.Empty(t, sessions)
+
+	indexedStorageUsers, err := conversationscope.ListIndexedStorageUsers(
+		ctx,
+		sessSvc,
+		appName,
+		canonicalUserID,
+	)
+	require.NoError(t, err)
+	require.Empty(t, indexedStorageUsers)
+
+	_, err = os.Stat(saved.Path)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestInProcGatewayClient_ForgetUser_ValidationErrors(t *testing.T) {
 	t.Parallel()
 
@@ -3535,8 +3620,10 @@ func TestInProcGatewayClient_PresetPersona(t *testing.T) {
 type errSessionService struct {
 	session.Service
 
-	listErr   error
-	deleteErr error
+	listErr            error
+	deleteErr          error
+	listUserStatesErr  error
+	deleteUserStateErr error
 }
 
 func (s errSessionService) ListSessions(
@@ -3559,6 +3646,27 @@ func (s errSessionService) DeleteSession(
 		return s.deleteErr
 	}
 	return s.Service.DeleteSession(ctx, key, options...)
+}
+
+func (s errSessionService) ListUserStates(
+	ctx context.Context,
+	userKey session.UserKey,
+) (session.StateMap, error) {
+	if s.listUserStatesErr != nil {
+		return nil, s.listUserStatesErr
+	}
+	return s.Service.ListUserStates(ctx, userKey)
+}
+
+func (s errSessionService) DeleteUserState(
+	ctx context.Context,
+	userKey session.UserKey,
+	key string,
+) error {
+	if s.deleteUserStateErr != nil {
+		return s.deleteUserStateErr
+	}
+	return s.Service.DeleteUserState(ctx, userKey, key)
 }
 
 type errMemoryService struct {
@@ -3621,6 +3729,83 @@ func TestInProcGatewayClient_ForgetUser_DeleteSessionError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "forget: delete session")
 	require.Contains(t, err.Error(), "delete boom")
+}
+
+func TestInProcGatewayClient_ForgetUser_ListStorageScopesError(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	sessSvc := errSessionService{
+		Service:           sessioninmemory.NewSessionService(),
+		listUserStatesErr: errors.New("user state boom"),
+	}
+	c := newInProcGatewayClient(srv, appName, sessSvc, nil, "")
+
+	err = c.ForgetUser(context.Background(), "telegram", "u1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "forget: list storage scopes")
+	require.Contains(t, err.Error(), "user state boom")
+}
+
+func TestInProcGatewayClient_ForgetUser_DeleteStorageScopeIndexError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	base := sessioninmemory.NewSessionService()
+	require.NoError(
+		t,
+		conversationscope.RememberIndexedStorageUser(
+			ctx,
+			base,
+			appName,
+			"u1",
+			"chat-scope",
+		),
+	)
+	_, err = base.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   appName,
+			UserID:    "chat-scope",
+			SessionID: "demo:thread:room-1",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+
+	sessSvc := errSessionService{
+		Service:            base,
+		deleteUserStateErr: errors.New("delete state boom"),
+	}
+	c := newInProcGatewayClient(srv, appName, sessSvc, nil, "")
+
+	err = c.ForgetUser(ctx, "telegram", "u1")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "forget: delete storage scope index")
+	require.Contains(t, err.Error(), "delete state boom")
+}
+
+func TestAppendUniqueUserIDs_SkipsBlanksAndDuplicates(t *testing.T) {
+	t.Parallel()
+
+	got := appendUniqueUserIDs(
+		[]string{"u1", " u1 ", " "},
+		"chat-scope",
+		"u1",
+		" chat-scope ",
+		"",
+		"chat-scope-2",
+	)
+	require.Equal(
+		t,
+		[]string{"u1", "chat-scope", "chat-scope-2"},
+		got,
+	)
 }
 
 func TestInProcGatewayClient_ForgetUser_ClearMemoriesError(t *testing.T) {

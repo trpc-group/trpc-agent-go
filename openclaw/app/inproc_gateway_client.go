@@ -24,6 +24,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
@@ -194,26 +195,58 @@ func (c *inProcGatewayClient) ForgetUser(
 		}
 	}
 
+	storageUserIDs := []string{userID}
 	if c.sessions != nil {
-		userKey := session.UserKey{AppName: appName, UserID: userID}
-		sessions, err := c.sessions.ListSessions(ctx, userKey)
+		indexedStorageUsers, err := conversationscope.ListIndexedStorageUsers(
+			ctx,
+			c.sessions,
+			appName,
+			userID,
+		)
 		if err != nil {
-			return fmt.Errorf("forget: list sessions: %w", err)
+			return fmt.Errorf("forget: list storage scopes: %w", err)
 		}
-		for _, sess := range sessions {
-			if sess == nil || strings.TrimSpace(sess.ID) == "" {
-				continue
+		storageUserIDs = appendUniqueUserIDs(
+			storageUserIDs,
+			indexedStorageUsers...,
+		)
+		for _, storageUserID := range storageUserIDs {
+			sessions, err := c.sessions.ListSessions(
+				ctx,
+				session.UserKey{AppName: appName, UserID: storageUserID},
+			)
+			if err != nil {
+				return fmt.Errorf("forget: list sessions: %w", err)
 			}
-			if cron.IsRunSessionID(sess.ID) {
-				continue
+			for _, sess := range sessions {
+				if sess == nil || strings.TrimSpace(sess.ID) == "" {
+					continue
+				}
+				if cron.IsRunSessionID(sess.ID) {
+					continue
+				}
+				key := session.Key{
+					AppName:   appName,
+					UserID:    storageUserID,
+					SessionID: sess.ID,
+				}
+				if err := c.sessions.DeleteSession(ctx, key); err != nil {
+					return fmt.Errorf("forget: delete session: %w", err)
+				}
 			}
-			key := session.Key{
-				AppName:   appName,
-				UserID:    userID,
-				SessionID: sess.ID,
-			}
-			if err := c.sessions.DeleteSession(ctx, key); err != nil {
-				return fmt.Errorf("forget: delete session: %w", err)
+		}
+		for _, storageUserID := range indexedStorageUsers {
+			if err := conversationscope.DeleteIndexedStorageUser(
+				ctx,
+				c.sessions,
+				appName,
+				userID,
+				storageUserID,
+			); err != nil {
+				return fmt.Errorf(
+					"forget: delete storage scope index: %w",
+					err,
+				)
 			}
 		}
 	}
@@ -226,8 +259,14 @@ func (c *inProcGatewayClient) ForgetUser(
 	}
 
 	if c.uploads != nil {
-		if err := c.uploads.DeleteUser(ctx, channel, userID); err != nil {
-			return fmt.Errorf("forget: delete uploads: %w", err)
+		for _, storageUserID := range storageUserIDs {
+			if err := c.uploads.DeleteUser(
+				ctx,
+				channel,
+				storageUserID,
+			); err != nil {
+				return fmt.Errorf("forget: delete uploads: %w", err)
+			}
 		}
 	}
 	if c.personas != nil {
@@ -252,6 +291,26 @@ func (c *inProcGatewayClient) ForgetUser(
 	}
 
 	return nil
+}
+
+func appendUniqueUserIDs(
+	base []string,
+	extra ...string,
+) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, userID := range append(base, extra...) {
+		userID = strings.TrimSpace(userID)
+		if userID == "" {
+			continue
+		}
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+		out = append(out, userID)
+	}
+	return out
 }
 
 func (c *inProcGatewayClient) ListPresetPersonas() []persona.Preset {
