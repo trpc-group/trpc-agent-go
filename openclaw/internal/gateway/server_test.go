@@ -31,7 +31,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
@@ -528,7 +527,6 @@ func TestServerInjectedContextMessages_IncludePersonaAndUploads(t *testing.T) {
 		"u1",
 		sessionID,
 		"",
-		nil,
 	)
 	require.Len(t, msgs, 2)
 	require.Contains(t, msgs[0].Content, personaContextHeader)
@@ -548,7 +546,6 @@ func TestServerInjectedContextMessages_IncludeRequestSystemPrompt(
 		"u1",
 		"telegram:dm:u1",
 		"Follow the channel runtime guidance.",
-		nil,
 	)
 	require.Len(t, msgs, 1)
 	require.Equal(t, model.RoleSystem, msgs[0].Role)
@@ -639,7 +636,6 @@ func TestServerInjectedContextMessages_IncludeMemoryFiles(t *testing.T) {
 		"u1",
 		sessionID,
 		"",
-		nil,
 	)
 	require.Len(t, msgs, 3)
 	require.Contains(t, msgs[0].Content, personaContextHeader)
@@ -670,7 +666,6 @@ func TestServerInjectedContextMessages_CanceledContextSkipsMemoryFiles(t *testin
 		"u1",
 		"telegram:dm:u1",
 		"",
-		nil,
 	)
 	require.Empty(t, msgs)
 }
@@ -693,7 +688,6 @@ func TestServerInjectedContextMessages_EmptyAppNameSkipsMemoryFiles(t *testing.T
 		"u1",
 		"telegram:dm:u1",
 		"",
-		nil,
 	)
 	require.Empty(t, msgs)
 }
@@ -716,7 +710,6 @@ func TestServerInjectedContextMessages_EmptyUserIDSkipsMemoryFiles(t *testing.T)
 		" ",
 		"telegram:dm:u1",
 		"",
-		nil,
 	)
 	require.Empty(t, msgs)
 }
@@ -747,50 +740,8 @@ func TestServerInjectedContextMessages_EmptyMemoryFileSkipsMessage(t *testing.T)
 		"u1",
 		"telegram:dm:u1",
 		"",
-		nil,
 	)
 	require.Empty(t, msgs)
-}
-
-func TestServerInjectedContextMessages_RuntimeStateOverridesMemoryUser(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	root, err := memoryfile.DefaultRoot(t.TempDir())
-	require.NoError(t, err)
-	memoryStore, err := memoryfile.NewStore(root)
-	require.NoError(t, err)
-
-	path, err := memoryStore.EnsureMemory(
-		context.Background(),
-		"demo-app",
-		"actor-user",
-	)
-	require.NoError(t, err)
-	require.NoError(
-		t,
-		os.WriteFile(
-			path,
-			[]byte("## Preferences\n\n- Use the actor-scoped memory."),
-			0o600,
-		),
-	)
-
-	srv := &Server{
-		appName:         "demo-app",
-		memoryFileStore: memoryStore,
-	}
-
-	msgs := srv.injectedContextMessages(
-		context.Background(),
-		"scope-user",
-		"telegram:thread:group1",
-		"",
-		imemory.RuntimeState("actor-user"),
-	)
-	require.Len(t, msgs, 1)
-	require.Contains(t, msgs[0].Content, "actor-scoped memory")
 }
 
 func TestDefaultSessionID_MissingFromForDM(t *testing.T) {
@@ -1621,69 +1572,6 @@ func TestServer_ProcessMessage_RunOptionResolver_Composes(t *testing.T) {
 	require.Equal(t, firstTag, runner.ctx.Value(firstKey))
 	require.Equal(t, secondTag, runner.ctx.Value(secondKey))
 	require.Len(t, runner.opts.TraceStartedCallbacks, 2)
-}
-
-func TestServer_ProcessMessage_RunOptionResolver_AppliesMemoryRuntimeStateBeforeInjectedContext(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	root, err := memoryfile.DefaultRoot(t.TempDir())
-	require.NoError(t, err)
-	memoryStore, err := memoryfile.NewStore(root)
-	require.NoError(t, err)
-
-	path, err := memoryStore.EnsureMemory(
-		context.Background(),
-		"demo-app",
-		"actor-user",
-	)
-	require.NoError(t, err)
-	require.NoError(
-		t,
-		os.WriteFile(
-			path,
-			[]byte("## Preferences\n\n- Use actor memory."),
-			0o600,
-		),
-	)
-
-	runner := &runOptionsRunner{}
-	srv, err := New(
-		runner,
-		WithAppName("demo-app"),
-		WithMemoryFileStore(memoryStore),
-		WithRunOptionResolver(func(
-			ctx context.Context,
-			_ RunOptionInput,
-		) (context.Context, []agent.RunOption) {
-			return ctx, []agent.RunOption{
-				agent.MergeRuntimeState(
-					imemory.RuntimeState("actor-user"),
-				),
-			}
-		}),
-	)
-	require.NoError(t, err)
-
-	rsp, status := srv.ProcessMessage(
-		context.Background(),
-		gwproto.MessageRequest{
-			Channel:   "telegram",
-			From:      "scope-user",
-			SessionID: "telegram:thread:group1",
-			Text:      "hello",
-		},
-	)
-	require.Equal(t, http.StatusOK, status)
-	require.Equal(t, "ok", rsp.Reply)
-
-	opts := runner.Options()
-	require.Len(t, opts.InjectedContextMessages, 1)
-	require.Contains(t, opts.InjectedContextMessages[0].Content, "Use actor memory")
-	userID, ok := imemory.ResolveUserID(nil, opts.RuntimeState)
-	require.True(t, ok)
-	require.Equal(t, "actor-user", userID)
 }
 
 func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {
