@@ -14,7 +14,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -40,14 +39,6 @@ func buildConversationRunOptionResolver(
 		}
 
 		runtimeState := conversation.RuntimeState(annotation)
-		if actorState := imemory.RuntimeState(annotation.ActorID); len(actorState) > 0 {
-			if runtimeState == nil {
-				runtimeState = make(map[string]any, len(actorState))
-			}
-			for key, value := range actorState {
-				runtimeState[key] = value
-			}
-		}
 		runOpts := make([]agent.RunOption, 0, 2)
 		if annotation.HistoryMode == conversation.HistoryModeShared {
 			if runtimeState == nil {

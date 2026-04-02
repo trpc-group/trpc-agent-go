@@ -534,37 +534,34 @@ func (s *Server) resolveRunOptions(
 	ctx context.Context,
 	run preparedMessageRun,
 ) (context.Context, []agent.RunOption) {
-	var extra []agent.RunOption
-	if s != nil && s.runOptionResolver != nil {
-		resolvedCtx, resolvedExtra := s.runOptionResolver(
-			ctx,
-			RunOptionInput{
-				Inbound:   run.inbound,
-				UserID:    run.userID,
-				SessionID: run.sessionID,
-				RequestID: run.requestID,
-				Message:   run.userMsg,
-				Trace:     debugrecorder.TraceFromContext(ctx),
-				Extensions: cloneExtensions(
-					run.extensions,
-				),
-			},
-		)
-		if resolvedCtx != nil {
-			ctx = resolvedCtx
-		}
-		extra = resolvedExtra
-	}
-
-	extraCfg := agent.NewRunOptions(extra...)
 	runOpts := s.runOptions(
 		ctx,
 		run.userID,
 		run.sessionID,
 		run.requestID,
 		run.requestSystemPrompt,
-		extraCfg.RuntimeState,
 	)
+	if s == nil || s.runOptionResolver == nil {
+		return ctx, runOpts
+	}
+
+	resolvedCtx, extra := s.runOptionResolver(
+		ctx,
+		RunOptionInput{
+			Inbound:   run.inbound,
+			UserID:    run.userID,
+			SessionID: run.sessionID,
+			RequestID: run.requestID,
+			Message:   run.userMsg,
+			Trace:     debugrecorder.TraceFromContext(ctx),
+			Extensions: cloneExtensions(
+				run.extensions,
+			),
+		},
+	)
+	if resolvedCtx != nil {
+		ctx = resolvedCtx
+	}
 	if len(extra) == 0 {
 		return ctx, runOpts
 	}
@@ -578,7 +575,6 @@ func (s *Server) runOptions(
 	sessionID string,
 	requestID string,
 	requestSystemPrompt string,
-	runtimeState map[string]any,
 ) []agent.RunOption {
 	runOpts := make([]agent.RunOption, 0, 1)
 	if requestID != "" {
@@ -589,7 +585,6 @@ func (s *Server) runOptions(
 		userID,
 		sessionID,
 		requestSystemPrompt,
-		runtimeState,
 	); len(messages) > 0 {
 		runOpts = append(
 			runOpts,

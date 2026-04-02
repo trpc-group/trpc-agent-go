@@ -23,7 +23,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -139,20 +138,6 @@ func (m *mockMemoryService) BuildInstruction(enabledTools []string, defaultPromp
 
 // createMockContext creates a mock context with session information.
 func createMockContext(appName, userID string, service memory.Service) context.Context {
-	return createMockContextWithRunOptions(
-		appName,
-		userID,
-		service,
-		agent.RunOptions{},
-	)
-}
-
-func createMockContextWithRunOptions(
-	appName string,
-	userID string,
-	service memory.Service,
-	runOptions agent.RunOptions,
-) context.Context {
 	mockSession := &session.Session{
 		ID:        "test-session",
 		AppName:   appName,
@@ -167,7 +152,6 @@ func createMockContextWithRunOptions(
 		AgentName:     "test-agent",
 		Session:       mockSession,
 		MemoryService: service,
-		RunOptions:    runOptions,
 	}
 
 	return agent.NewInvocationContext(context.Background(), mockInvocation)
@@ -230,46 +214,6 @@ func TestMemoryTool_AddMemory_WithoutTopics(t *testing.T) {
 	assert.Equal(t, "User likes coffee", response.Memory, "Expected memory 'User likes coffee', got '%s'", response.Memory)
 	assert.NotNil(t, response.Topics, "Expected topics to be empty slice, got nil")
 	assert.Len(t, response.Topics, 0, "Expected 0 topics, got %d", len(response.Topics))
-}
-
-func TestMemoryTool_AddMemory_RuntimeStateOverridesUser(t *testing.T) {
-	service := newMockMemoryService()
-	tool := NewAddTool()
-
-	ctx := createMockContextWithRunOptions(
-		"test-app",
-		"scope-user",
-		service,
-		agent.RunOptions{
-			RuntimeState: imemory.RuntimeState("actor-user"),
-		},
-	)
-
-	args := map[string]any{
-		"memory": "User prefers terse answers",
-	}
-
-	jsonArgs, err := json.Marshal(args)
-	require.NoError(t, err)
-
-	_, err = tool.Call(ctx, jsonArgs)
-	require.NoError(t, err)
-
-	actorMemories, err := service.ReadMemories(
-		context.Background(),
-		memory.UserKey{AppName: "test-app", UserID: "actor-user"},
-		10,
-	)
-	require.NoError(t, err)
-	require.Len(t, actorMemories, 1)
-
-	scopeMemories, err := service.ReadMemories(
-		context.Background(),
-		memory.UserKey{AppName: "test-app", UserID: "scope-user"},
-		10,
-	)
-	require.NoError(t, err)
-	require.Empty(t, scopeMemories)
 }
 
 func TestMemoryTool_Declaration(t *testing.T) {

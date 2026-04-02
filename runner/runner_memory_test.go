@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -28,7 +27,6 @@ type mockMemoryServiceForAutoMemory struct {
 	enqueueCalled bool
 	enqueueErr    error
 	sess          *session.Session
-	cursorSess    *session.Session
 }
 
 func (m *mockMemoryServiceForAutoMemory) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string, _ ...memory.AddOption) error {
@@ -62,7 +60,6 @@ func (m *mockMemoryServiceForAutoMemory) Tools() []tool.Tool {
 func (m *mockMemoryServiceForAutoMemory) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
 	m.enqueueCalled = true
 	m.sess = sess
-	m.cursorSess, _ = imemory.AutoMemoryCursorSessionFromContext(ctx)
 	return m.enqueueErr
 }
 
@@ -75,14 +72,14 @@ func TestEnqueueAutoMemoryJob(t *testing.T) {
 		r := &runner{memoryService: nil}
 		sess := session.NewSession("app", "user", "sess")
 		// Should not panic with nil memory service.
-		r.enqueueAutoMemoryJob(context.Background(), sess, nil)
+		r.enqueueAutoMemoryJob(context.Background(), sess)
 	})
 
 	t.Run("nil session", func(t *testing.T) {
 		mockSvc := &mockMemoryServiceForAutoMemory{}
 		r := &runner{memoryService: mockSvc}
 		// Should not panic with nil session.
-		r.enqueueAutoMemoryJob(context.Background(), nil, nil)
+		r.enqueueAutoMemoryJob(context.Background(), nil)
 		require.False(t, mockSvc.enqueueCalled)
 	})
 
@@ -90,31 +87,9 @@ func TestEnqueueAutoMemoryJob(t *testing.T) {
 		mockSvc := &mockMemoryServiceForAutoMemory{}
 		r := &runner{memoryService: mockSvc}
 		sess := session.NewSession("app", "user", "sess")
-		r.enqueueAutoMemoryJob(context.Background(), sess, nil)
+		r.enqueueAutoMemoryJob(context.Background(), sess)
 		require.True(t, mockSvc.enqueueCalled)
 		require.Same(t, sess, mockSvc.sess)
-	})
-
-	t.Run("clones session when runtime state overrides memory user", func(t *testing.T) {
-		mockSvc := &mockMemoryServiceForAutoMemory{}
-		r := &runner{memoryService: mockSvc}
-		sess := session.NewSession("app", "scope-user", "sess")
-		r.enqueueAutoMemoryJob(
-			context.Background(),
-			sess,
-			imemory.RuntimeState("actor-user"),
-		)
-		require.True(t, mockSvc.enqueueCalled)
-		require.NotSame(t, sess, mockSvc.sess)
-		require.Same(t, sess, mockSvc.cursorSess)
-
-		userID, ok := imemory.ResolveUserID(mockSvc.sess, nil)
-		require.True(t, ok)
-		require.Equal(t, "actor-user", userID)
-
-		originalUserID, ok := imemory.ResolveUserID(sess, nil)
-		require.True(t, ok)
-		require.Equal(t, "scope-user", originalUserID)
 	})
 
 	t.Run("handles enqueue error gracefully", func(t *testing.T) {
@@ -122,7 +97,7 @@ func TestEnqueueAutoMemoryJob(t *testing.T) {
 		r := &runner{memoryService: mockSvc}
 		sess := session.NewSession("app", "user", "sess")
 		// Should not panic even if enqueue fails.
-		r.enqueueAutoMemoryJob(context.Background(), sess, nil)
+		r.enqueueAutoMemoryJob(context.Background(), sess)
 		require.True(t, mockSvc.enqueueCalled)
 	})
 }

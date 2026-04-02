@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	imemory "trpc.group/trpc-go/trpc-agent-go/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -1222,48 +1221,6 @@ func TestAutoMemoryWorker_DeltaMessages_UsesTimestamp(t *testing.T) {
 	assert.True(t, capturedLastExtractAt.Equal(t1.UTC()))
 }
 
-func TestAutoMemoryWorker_DeltaMessages_UsesActorScopedTimestampFromCursorSession(
-	t *testing.T,
-) {
-	var capturedMessageCount int
-	var capturedLastExtractAt *time.Time
-	ext := &mockExtractorWithCapture{
-		shouldExtract: false,
-		captureCtx: func(ctx *extractor.ExtractionContext) {
-			capturedMessageCount = len(ctx.Messages)
-			capturedLastExtractAt = ctx.LastExtractAt
-		},
-	}
-	op := newMockOperator()
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{Extractor: ext}, op)
-
-	originalSess := newTestSession("test-app", "scope-user")
-	t1 := time.Now().Add(-2 * time.Minute)
-	t2 := t1.Add(time.Minute)
-	appendSessionMessage(originalSess, t1, model.NewUserMessage("hello"))
-	appendSessionMessage(originalSess, t2, model.NewAssistantMessage("world"))
-
-	actorKey := memory.UserKey{AppName: "test-app", UserID: "actor-user"}
-	writeLastExtractAt(originalSess, actorKey, t1)
-
-	clonedSess := imemory.CloneSessionWithRuntimeState(
-		originalSess,
-		imemory.RuntimeState("actor-user"),
-	)
-
-	err := worker.EnqueueJob(
-		imemory.ContextWithAutoMemoryCursorSession(
-			context.Background(),
-			originalSess,
-		),
-		clonedSess,
-	)
-	require.NoError(t, err)
-	assert.Equal(t, 1, capturedMessageCount)
-	require.NotNil(t, capturedLastExtractAt)
-	assert.True(t, capturedLastExtractAt.Equal(t1.UTC()))
-}
-
 func TestAutoMemoryWorker_EnqueueJob_NilSession(t *testing.T) {
 	ext := &mockExtractor{}
 	op := newMockOperator()
@@ -1444,35 +1401,9 @@ func TestReadLastExtractAt_ParseError(t *testing.T) {
 	sess.SetState(memory.SessionStateKeyAutoMemoryLastExtractAt,
 		[]byte("not-a-valid-timestamp"))
 
-	ts := readLastExtractAt(
-		sess,
-		memory.UserKey{AppName: "test-app", UserID: "user-1"},
-	)
+	ts := readLastExtractAt(sess)
 
 	assert.True(t, ts.IsZero())
-}
-
-func TestReadLastExtractAt_FallsBackToLegacySessionStateForMatchingUser(
-	t *testing.T,
-) {
-	sess := newTestSession("test-app", "user-1")
-	ts := time.Now().UTC().Truncate(time.Nanosecond)
-	sess.SetState(
-		memory.SessionStateKeyAutoMemoryLastExtractAt,
-		[]byte(ts.Format(time.RFC3339Nano)),
-	)
-
-	got := readLastExtractAt(
-		sess,
-		memory.UserKey{AppName: "test-app", UserID: "user-1"},
-	)
-	assert.True(t, got.Equal(ts))
-
-	got = readLastExtractAt(
-		sess,
-		memory.UserKey{AppName: "test-app", UserID: "actor-user"},
-	)
-	assert.True(t, got.IsZero())
 }
 
 func TestScanDeltaSince_NilResponse(t *testing.T) {
@@ -1578,60 +1509,6 @@ func TestAutoMemoryWorker_WritesLastExtractAt_OnSuccess(t *testing.T) {
 	ts, parseErr := time.Parse(time.RFC3339Nano, string(raw))
 	require.NoError(t, parseErr)
 	assert.True(t, ts.Equal(t2.UTC()))
-}
-
-func TestAutoMemoryWorker_WritesLastExtractAt_ToCursorSessionForActorScopedUser(
-	t *testing.T,
-) {
-	worker := NewAutoMemoryWorker(
-		AutoMemoryConfig{
-			Extractor:        &mockExtractor{},
-			MemoryJobTimeout: time.Second,
-		},
-		newMockOperator(),
-	)
-
-	originalSess := newTestSession("test-app", "scope-user")
-	t1 := time.Now().Add(-time.Minute)
-	t2 := t1.Add(time.Second)
-	appendSessionMessage(originalSess, t1, model.NewUserMessage("m1"))
-	appendSessionMessage(originalSess, t2, model.NewAssistantMessage("m2"))
-
-	clonedSess := imemory.CloneSessionWithRuntimeState(
-		originalSess,
-		imemory.RuntimeState("actor-user"),
-	)
-
-	err := worker.EnqueueJob(
-		imemory.ContextWithAutoMemoryCursorSession(
-			context.Background(),
-			originalSess,
-		),
-		clonedSess,
-	)
-	require.NoError(t, err)
-
-	raw, ok := originalSess.GetState(
-		autoMemoryLastExtractAtStateKey(
-			memory.UserKey{AppName: "test-app", UserID: "actor-user"},
-		),
-	)
-	require.True(t, ok)
-	require.NotEmpty(t, raw)
-
-	ts, parseErr := time.Parse(time.RFC3339Nano, string(raw))
-	require.NoError(t, parseErr)
-	assert.True(t, ts.Equal(t2.UTC()))
-
-	_, ok = clonedSess.GetState(
-		autoMemoryLastExtractAtStateKey(
-			memory.UserKey{AppName: "test-app", UserID: "actor-user"},
-		),
-	)
-	assert.False(t, ok)
-
-	_, ok = originalSess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
-	assert.False(t, ok)
 }
 
 // configurableExtractor is a mock extractor implementing
