@@ -289,7 +289,7 @@ func (r *DifyAgent) buildWorkflowStreamingRequest(
 	}
 
 	// Send final aggregated event
-	r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String())
+	r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String(), invocation.InvocationID)
 	return nil
 }
 
@@ -299,11 +299,14 @@ func (r *DifyAgent) sendFinalStreamingEvent(
 	eventChan chan<- *event.Event,
 	invocation *agent.Invocation,
 	aggregatedContent string,
+	messageID string,
 ) {
 	agent.EmitEvent(ctx, invocation, eventChan, event.New(
 		invocation.InvocationID,
 		r.name,
 		event.WithResponse(&model.Response{
+			ID:        messageID,
+			Object:    model.ObjectTypeChatCompletion,
 			Done:      true,
 			IsPartial: false,
 			Timestamp: time.Now(),
@@ -346,11 +349,11 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 		}
 
 		var aggregatedContentBuilder strings.Builder
+		var lastMessageID string
 		for streamEvent := range streamChan {
 			if err := agent.CheckContextCancelled(ctx); err != nil {
 				return
 			}
-
 			evt, content, err := r.processStreamEvent(ctx, streamEvent, invocation)
 			if err != nil {
 				r.sendErrorEvent(ctx, eventChan, invocation, err.Error())
@@ -362,6 +365,11 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 				continue
 			}
 
+			// 记录流式事件的 MessageID，用于最终事件保持一致
+			if evt.Response != nil && evt.Response.ID != "" {
+				lastMessageID = evt.Response.ID
+			}
+
 			if content != "" {
 				aggregatedContentBuilder.WriteString(content)
 			}
@@ -369,7 +377,7 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 			agent.EmitEvent(ctx, invocation, eventChan, evt)
 		}
 
-		r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String())
+		r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String(), lastMessageID)
 	}()
 	return eventChan, nil
 }

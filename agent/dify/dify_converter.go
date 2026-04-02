@@ -77,6 +77,12 @@ func (d *defaultDifyEventConverter) ConvertToEvent(
 		return
 	}
 
+	// 使用 Dify 返回的消息 ID，确保 AG-UI translator 能正确识别消息
+	responseID := resp.ID
+	if responseID == "" {
+		responseID = resp.ConversationID
+	}
+
 	message := model.Message{
 		Role:    model.RoleAssistant,
 		Content: resp.Answer,
@@ -86,6 +92,8 @@ func (d *defaultDifyEventConverter) ConvertToEvent(
 		invocation.InvocationID,
 		agentName,
 		event.WithResponse(&model.Response{
+			ID:        responseID,
+			Object:    model.ObjectTypeChatCompletion,
 			Choices:   []model.Choice{{Message: message, Delta: message}},
 			Timestamp: time.Now(),
 			Created:   time.Now().Unix(),
@@ -104,6 +112,17 @@ func (d *defaultDifyEventConverter) ConvertStreamingToEvent(
 	if resp.Answer == "" {
 		return
 	}
+
+	// 使用 Dify 返回的 MessageID 作为 Response.ID，确保 AG-UI translator
+	// 能正确触发 TextMessageStartEvent。如果 MessageID 为空则依次回退。
+	responseID := resp.MessageID
+	if responseID == "" {
+		responseID = resp.ConversationID
+	}
+	if responseID == "" {
+		responseID = resp.ID
+	}
+
 	message := model.Message{
 		Role:    model.RoleAssistant,
 		Content: resp.Answer,
@@ -113,6 +132,7 @@ func (d *defaultDifyEventConverter) ConvertStreamingToEvent(
 		invocation.InvocationID,
 		agentName,
 		event.WithResponse(&model.Response{
+			ID:        responseID,
 			Object:    model.ObjectTypeChatCompletionChunk,
 			Choices:   []model.Choice{{Delta: message}},
 			Timestamp: time.Now(),
