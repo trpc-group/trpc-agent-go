@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/delivery"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
@@ -34,9 +35,10 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 	extensions, err := conversation.MergeRequestExtension(
 		nil,
 		conversation.Annotation{
-			HistoryMode: conversation.HistoryModeShared,
-			ActorID:     "user1",
-			ActorLabel:  "Alice",
+			HistoryMode:   conversation.HistoryModeShared,
+			StorageUserID: "chat-scope",
+			ActorID:       "user1",
+			ActorLabel:    "Alice",
 			ActorLabels: map[string]string{
 				"user1": "alice.dev",
 			},
@@ -63,7 +65,7 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 		context.Background(),
 		input,
 	)
-	_, conversationOpts := buildConversationRunOptionResolver(
+	ctx, conversationOpts := buildConversationRunOptionResolver(
 		"demo-app",
 		nil,
 		conversation.HistoryOptions{},
@@ -79,6 +81,11 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 	for _, opt := range conversationOpts {
 		opt(&cfg)
 	}
+	require.Equal(
+		t,
+		"chat-scope",
+		conversationscope.StorageUserIDFromContext(ctx, ""),
+	)
 
 	require.Equal(
 		t,
@@ -93,9 +100,10 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 	require.Equal(
 		t,
 		conversation.Annotation{
-			HistoryMode: conversation.HistoryModeShared,
-			ActorID:     "user1",
-			ActorLabel:  "Alice",
+			HistoryMode:   conversation.HistoryModeShared,
+			StorageUserID: "chat-scope",
+			ActorID:       "user1",
+			ActorLabel:    "Alice",
 			ActorLabels: map[string]string{
 				"user1": "alice.dev",
 			},
@@ -114,13 +122,14 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 ) {
 	t.Parallel()
 
-	sessSvc := sessioninmemory.NewSessionService()
+	baseSessSvc := sessioninmemory.NewSessionService()
+	sessSvc := conversationscope.WrapSessionService(baseSessSvc)
 	key := session.Key{
 		AppName:   "demo-app",
-		UserID:    "scope-user",
+		UserID:    "chat-scope",
 		SessionID: "session-1",
 	}
-	sess, err := sessSvc.CreateSession(
+	sess, err := baseSessSvc.CreateSession(
 		context.Background(),
 		key,
 		nil,
@@ -149,7 +158,7 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 	))
 	require.NoError(
 		t,
-		sessSvc.AppendEvent(context.Background(), sess, userEvt),
+		baseSessSvc.AppendEvent(context.Background(), sess, userEvt),
 	)
 
 	assistantEvt := event.NewResponseEvent(
@@ -164,15 +173,16 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 	assistantEvt.Timestamp = time.Now().Add(time.Second)
 	require.NoError(
 		t,
-		sessSvc.AppendEvent(context.Background(), sess, assistantEvt),
+		baseSessSvc.AppendEvent(context.Background(), sess, assistantEvt),
 	)
 
 	extensions, err := conversation.MergeRequestExtension(
 		nil,
 		conversation.Annotation{
-			HistoryMode: conversation.HistoryModeShared,
-			ActorID:     "u-1",
-			ActorLabel:  "Alice",
+			HistoryMode:   conversation.HistoryModeShared,
+			StorageUserID: "chat-scope",
+			ActorID:       "u-1",
+			ActorLabel:    "Alice",
 			ActorLabels: map[string]string{
 				"u-1": "alice.dev",
 			},
@@ -180,17 +190,22 @@ func TestBuildConversationRunOptionResolverSharedHistory(
 	)
 	require.NoError(t, err)
 
-	_, runOpts := buildConversationRunOptionResolver(
+	ctx, runOpts := buildConversationRunOptionResolver(
 		"demo-app",
 		sessSvc,
 		conversation.HistoryOptions{},
 	)(
 		context.Background(),
 		gateway.RunOptionInput{
-			UserID:     key.UserID,
+			UserID:     "canonical-user",
 			SessionID:  key.SessionID,
 			Extensions: extensions,
 		},
+	)
+	require.Equal(
+		t,
+		"chat-scope",
+		conversationscope.StorageUserIDFromContext(ctx, ""),
 	)
 
 	cfg := agent.RunOptions{}
