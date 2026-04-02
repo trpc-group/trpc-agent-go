@@ -121,7 +121,7 @@ func TestTextRender_SubstitutedValuesMayContainSimpleBraces(t *testing.T) {
 	require.Equal(t, "msg: user said {name} and {city}", rendered)
 }
 
-func TestTextRender_SingleBraceAllowsOuterWhitespace(t *testing.T) {
+func TestTextRender_SingleBraceWhitespaceStaysLiteral(t *testing.T) {
 	tpl := Text{
 		Template: "hello { name } from { user:name ? }",
 	}
@@ -133,7 +133,7 @@ func TestTextRender_SingleBraceAllowsOuterWhitespace(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, "hello alice from ", rendered)
+	require.Equal(t, "hello { name } from { user:name ? }", rendered)
 }
 
 func TestTextRender_SingleBraceLeavesDoubleCurlyUntouched(t *testing.T) {
@@ -168,6 +168,40 @@ func TestTextRender_DefaultMixedRecognizesBothDelimiters(t *testing.T) {
 	require.Equal(t, "hello alice from paris", rendered)
 }
 
+func TestTextRender_DefaultMixedPreservesUnresolvedDoubleBrace(t *testing.T) {
+	tpl := Text{
+		Template: "hello {{name}} from {{city}}",
+	}
+
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"name": "alice",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "hello alice from {{city}}", rendered)
+}
+
+func TestTextRender_StrictUnknownPreservesDoubleBraceInOutputAndError(t *testing.T) {
+	tpl := Text{
+		Template: "hello {{name}} from {{city}}",
+	}
+
+	rendered, err := tpl.Render(
+		RenderEnv{
+			Vars: Vars{
+				"name": "alice",
+			},
+		},
+		WithUnknownBehavior(ErrorOnUnknown),
+	)
+
+	require.Equal(t, "hello alice from {{city}}", rendered)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "{{city}}")
+}
+
 func TestTextRender_DoubleBraceSyntax(t *testing.T) {
 	tpl := Text{
 		Template: "hello {{ name }} from {{ city }} and {{ user:name? }}",
@@ -183,6 +217,23 @@ func TestTextRender_DoubleBraceSyntax(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "hello alice from paris and ", rendered)
+}
+
+func TestTextRender_DoubleBraceUsesSameNameFormatAsSingleBrace(t *testing.T) {
+	tpl := Text{
+		Template: "file {{artifact.file.txt}} slug {{invalid-name}}",
+		Syntax:   SyntaxDoubleBrace,
+	}
+
+	rendered, err := tpl.Render(RenderEnv{
+		Vars: Vars{
+			"artifact.file.txt": "report.md",
+			"invalid-name":      "release-1",
+		},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "file report.md slug release-1", rendered)
 }
 
 func TestTextValidateRequired_SingleBraceIgnoresDoubleCurly(t *testing.T) {
