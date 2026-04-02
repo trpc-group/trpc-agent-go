@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/hashidx"
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/util"
 )
 
 func TestNewService(t *testing.T) {
@@ -776,6 +777,83 @@ func TestService_ListSessions_WithOptions(t *testing.T) {
 	sessions2, err := service.ListSessions(ctx, userKey, session.WithEventTime(time.Now().Add(-1*time.Hour)))
 	require.NoError(t, err)
 	assert.Len(t, sessions2, 3)
+}
+
+func TestService_ListSessions_WithListSessionOnlyMeta(t *testing.T) {
+	tests := []struct {
+		name        string
+		options     []ServiceOpt
+		storageType string
+	}{
+		{
+			name: "hashidx",
+			options: []ServiceOpt{
+				WithEnableUserSessionIndex(true),
+			},
+			storageType: "hashidx",
+		},
+		{
+			name: "zset transition",
+			options: []ServiceOpt{
+				WithEnableUserSessionIndex(true),
+				WithCompatMode(CompatModeTransition),
+			},
+			storageType: "zset",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			defer cleanup()
+
+			options := append([]ServiceOpt{WithRedisClientURL(redisURL)}, tt.options...)
+			service, err := NewService(options...)
+			require.NoError(t, err)
+			defer service.Close()
+
+			ctx := context.Background()
+			key := session.Key{AppName: "testapp", UserID: "user123", SessionID: "session123"}
+			userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+
+			err = service.UpdateAppState(ctx, key.AppName, session.StateMap{"app_key": []byte("app_value")})
+			require.NoError(t, err)
+			err = service.UpdateUserState(ctx, userKey, session.StateMap{"user_key": []byte("user_value")})
+			require.NoError(t, err)
+
+			sess, err := service.CreateSession(ctx, key, session.StateMap{"session_key": []byte("session_value")})
+			require.NoError(t, err)
+
+			evt := event.New("test-invocation", "author")
+			evt.Response = &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: "hello",
+					},
+				}},
+			}
+			require.NoError(t, service.AppendEvent(ctx, sess, evt))
+			require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+				Track:     "alpha",
+				Payload:   json.RawMessage(`"track-payload"`),
+				Timestamp: time.Now(),
+			}))
+
+			sessions, err := service.ListSessions(ctx, userKey, session.WithListSessionOnlyMeta())
+			require.NoError(t, err)
+			require.Len(t, sessions, 1)
+
+			got := sessions[0]
+			assert.Empty(t, got.Events)
+			assert.Nil(t, got.Tracks)
+			assert.Equal(t, []byte("session_value"), got.State["session_key"])
+			assert.Equal(t, []byte("app_value"), got.State[session.StateAppPrefix+"app_key"])
+			assert.Equal(t, []byte("user_value"), got.State[session.StateUserPrefix+"user_key"])
+			assert.Equal(t, key.SessionID, got.ID)
+			assert.Equal(t, tt.storageType, got.ServiceMeta[util.ServiceMetaStorageTypeKey])
+		})
+	}
 }
 
 func TestService_MergeState_Priority(t *testing.T) {

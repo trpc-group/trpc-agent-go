@@ -792,7 +792,7 @@ svc := inmemory.NewSessionService(
 _ = svc
 ```
 
-`AppendEventHook` 的接口说明见 `docs/mkdocs/zh/session.md`，也可以参考
+`AppendEventHook` 的接口说明见 [Session 文档](session/index.md)，也可以参考
 可运行示例 `examples/session/hook`。
 
 说明：

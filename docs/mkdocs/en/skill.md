@@ -813,7 +813,7 @@ svc := inmemory.NewSessionService(
 _ = svc
 ```
 
-See `docs/mkdocs/en/session.md` (“AppendEventHook”) for the hook API, and
+See [Session docs](session/index.md) (“AppendEventHook”) for the hook API, and
 `examples/session/hook` for a runnable example.
 
 Notes:

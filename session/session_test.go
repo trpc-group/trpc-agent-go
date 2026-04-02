@@ -2259,6 +2259,63 @@ func TestSession_Clone_ServiceMeta(t *testing.T) {
 	}
 }
 
+func TestSession_Clone_WithTracksAndNilSummary(t *testing.T) {
+	original := &Session{
+		ID:      "session-tracks",
+		AppName: "app",
+		UserID:  "user",
+		Tracks: map[Track]*TrackEvents{
+			"track-empty": {
+				Track:  "track-empty",
+				Events: nil,
+			},
+			"track-data": {
+				Track: "track-data",
+				Events: []TrackEvent{
+					{Track: "track-data", Payload: json.RawMessage(`"payload"`), Timestamp: time.Now()},
+				},
+			},
+		},
+		Summaries: map[string]*Summary{
+			"empty": nil,
+			"full":  {Summary: "copied"},
+		},
+		State: StateMap{},
+	}
+
+	cloned := original.Clone()
+	require.NotNil(t, cloned)
+	require.NotNil(t, cloned.Tracks)
+	require.Contains(t, cloned.Tracks, Track("track-empty"))
+	require.Contains(t, cloned.Tracks, Track("track-data"))
+	assert.Nil(t, cloned.Summaries["empty"])
+	require.NotNil(t, cloned.Summaries["full"])
+	assert.Equal(t, "copied", cloned.Summaries["full"].Summary)
+}
+
+func TestSession_HasStateKeyWithPrefix_EmptyStateMap(t *testing.T) {
+	sess := &Session{State: StateMap{}}
+	assert.False(t, sess.HasStateKeyWithPrefix("foo:"))
+}
+
+func TestApplyEventStateDelta_InitializesStateAndCopiesNilValue(t *testing.T) {
+	sess := &Session{}
+	ev := createTestEvent(model.RoleUser, "test", time.Now(), StateMap{"key": nil})
+
+	sess.ApplyEventStateDelta(ev)
+
+	require.NotNil(t, sess.State)
+	value, ok := sess.State["key"]
+	require.True(t, ok)
+	assert.Nil(t, value)
+}
+
+func TestWithListSessionOnlyMeta(t *testing.T) {
+	opt := &Options{}
+	WithListSessionOnlyMeta()(opt)
+	assert.True(t, opt.ListSessionOnlyMeta)
+}
+
 // TestSession_SnapshotTracksState tests the SnapshotTracksState method.
 func TestSession_SnapshotTracksState(t *testing.T) {
 	tests := []struct {

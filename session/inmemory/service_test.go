@@ -491,6 +491,126 @@ func TestListSessions(t *testing.T) {
 	}
 }
 
+func TestListSessions_WithListSessionOnlyMeta(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app1", UserID: "user1", SessionID: "session1"}
+	userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+
+	err := service.UpdateAppState(ctx, key.AppName, session.StateMap{"app_key": []byte("app_value")})
+	require.NoError(t, err)
+	err = service.UpdateUserState(ctx, userKey, session.StateMap{"user_key": []byte("user_value")})
+	require.NoError(t, err)
+
+	sess, err := service.CreateSession(ctx, key, session.StateMap{"session_key": []byte("session_value")})
+	require.NoError(t, err)
+
+	evt := event.New("test-invocation", "author")
+	evt.Response = &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+		}},
+	}
+	require.NoError(t, service.AppendEvent(ctx, sess, evt))
+	require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"track-payload"`),
+		Timestamp: time.Now(),
+	}))
+
+	sessions, err := service.ListSessions(ctx, userKey, session.WithListSessionOnlyMeta())
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+
+	got := sessions[0]
+	assert.Empty(t, got.Events)
+	assert.Nil(t, got.Tracks)
+	assert.Equal(t, []byte("session_value"), got.State["session_key"])
+	assert.Equal(t, []byte("app_value"), got.State[session.StateAppPrefix+"app_key"])
+	assert.Equal(t, []byte("user_value"), got.State[session.StateUserPrefix+"user_key"])
+	assert.Equal(t, key.SessionID, got.ID)
+	assert.False(t, got.CreatedAt.IsZero())
+	assert.False(t, got.UpdatedAt.IsZero())
+}
+
+func TestCloneSessionListMetadata(t *testing.T) {
+	t.Run("nil session", func(t *testing.T) {
+		assert.Nil(t, cloneSessionListMetadata(nil))
+	})
+
+	t.Run("copies summaries and service meta without events and tracks", func(t *testing.T) {
+		original := &session.Session{
+			ID:      "s1",
+			AppName: "app",
+			UserID:  "user",
+			State:   session.StateMap{"k": []byte("v")},
+			Tracks: map[session.Track]*session.TrackEvents{
+				"alpha": {Track: "alpha", Events: []session.TrackEvent{{Track: "alpha", Timestamp: time.Now()}}},
+			},
+			Summaries: map[string]*session.Summary{
+				"empty": nil,
+				"full":  {Summary: "sum", UpdatedAt: time.Now()},
+			},
+			ServiceMeta: map[string]string{"storage": "memory"},
+		}
+
+		cloned := cloneSessionListMetadata(original)
+		require.NotNil(t, cloned)
+		assert.Nil(t, cloned.Tracks)
+		assert.Empty(t, cloned.Events)
+		assert.Equal(t, []byte("v"), cloned.State["k"])
+		assert.Nil(t, cloned.Summaries["empty"])
+		require.NotNil(t, cloned.Summaries["full"])
+		assert.Equal(t, "sum", cloned.Summaries["full"].Summary)
+		assert.Equal(t, "memory", cloned.ServiceMeta["storage"])
+	})
+}
+
+func TestUpdateSessionState(t *testing.T) {
+	service := NewSessionService(WithSessionTTL(time.Minute))
+	defer service.Close()
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app1", UserID: "user1", SessionID: "session1"}
+	_, err := service.CreateSession(ctx, key, session.StateMap{"existing": []byte("value")})
+	require.NoError(t, err)
+
+	t.Run("success", func(t *testing.T) {
+		err := service.UpdateSessionState(ctx, key, session.StateMap{
+			"session_key":                         []byte("updated"),
+			session.StateTempPrefix + "ephemeral": []byte("temp"),
+		})
+		require.NoError(t, err)
+
+		sess, getErr := service.GetSession(ctx, key)
+		require.NoError(t, getErr)
+		require.NotNil(t, sess)
+		assert.Equal(t, []byte("updated"), sess.State["session_key"])
+		assert.Equal(t, []byte("temp"), sess.State[session.StateTempPrefix+"ephemeral"])
+	})
+
+	t.Run("reject app prefix", func(t *testing.T) {
+		err := service.UpdateSessionState(ctx, key, session.StateMap{
+			session.StateAppPrefix + "bad": []byte("x"),
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "use UpdateAppState instead")
+	})
+
+	t.Run("reject user prefix", func(t *testing.T) {
+		err := service.UpdateSessionState(ctx, key, session.StateMap{
+			session.StateUserPrefix + "bad": []byte("x"),
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "use UpdateUserState instead")
+	})
+}
+
 func TestDeleteSession(t *testing.T) {
 	// setup function to create test data for each test case
 	setup := func(t *testing.T, service *SessionService) session.Key {

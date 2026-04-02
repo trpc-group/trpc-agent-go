@@ -456,14 +456,14 @@ func (c *Client) RefreshSummaryTTL(ctx context.Context, key session.Key) error {
 // - App/User state merged (batch loaded, shared across sessions)
 // - Track events loaded
 // - Note: Summaries are NOT loaded in ListSessions (same as zset)
-func (c *Client) ListSessions(ctx context.Context, userKey session.UserKey, limit int, afterTime time.Time) ([]*session.Session, error) {
+func (c *Client) ListSessions(ctx context.Context, userKey session.UserKey, limit int, afterTime time.Time, listOnlyMeta bool) ([]*session.Session, error) {
 	var sessions []*session.Session
 	var err error
 
 	if c.cfg.EnableUserSessionIndex {
-		sessions, err = c.listSessionsFromUserIndex(ctx, userKey, limit, afterTime)
+		sessions, err = c.listSessionsFromUserIndex(ctx, userKey, limit, afterTime, listOnlyMeta)
 	} else {
-		sessions, err = c.listSessionsByScan(ctx, userKey, limit, afterTime)
+		sessions, err = c.listSessionsByScan(ctx, userKey, limit, afterTime, listOnlyMeta)
 	}
 	if err != nil {
 		return nil, err
@@ -484,8 +484,10 @@ func (c *Client) ListSessions(ctx context.Context, userKey session.UserKey, limi
 				sess.SetState(session.StateUserPrefix+k, v)
 			}
 
-			key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
-			c.loadAndAttachTrackEvents(ctx, key, sess, nil, limit, afterTime)
+			if !listOnlyMeta {
+				key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+				c.loadAndAttachTrackEvents(ctx, key, sess, nil, limit, afterTime)
+			}
 		}
 
 		_ = c.RefreshAppStateTTL(ctx, userKey.AppName)
@@ -500,6 +502,7 @@ func (c *Client) listSessionsByScan(
 	userKey session.UserKey,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
 ) ([]*session.Session, error) {
 	pattern := c.keys.SessionMetaPattern(userKey)
 	iter := c.client.Scan(ctx, 0, pattern, 100).Iterator()
@@ -521,7 +524,7 @@ func (c *Client) listSessionsByScan(
 			UserID:    meta.UserID,
 			SessionID: meta.ID,
 		}
-		sess, err := c.loadSessionBasic(ctx, key, metaJSON, limit, afterTime)
+		sess, err := c.loadSessionBasic(ctx, key, metaJSON, limit, afterTime, listOnlyMeta)
 		if err == nil && sess != nil {
 			sessions = append(sessions, sess)
 		}
@@ -539,6 +542,7 @@ func (c *Client) listSessionsFromUserIndex(
 	userKey session.UserKey,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
 ) ([]*session.Session, error) {
 	sessionIDs, err := c.listSessionIDsFromUserIndex(ctx, userKey)
 	if err != nil {
@@ -579,7 +583,7 @@ func (c *Client) listSessionsFromUserIndex(
 			UserID:    meta.UserID,
 			SessionID: meta.ID,
 		}
-		sess, err := c.loadSessionBasic(ctx, key, metaJSON, limit, afterTime)
+		sess, err := c.loadSessionBasic(ctx, key, metaJSON, limit, afterTime, listOnlyMeta)
 		if err == nil && sess != nil {
 			sessions = append(sessions, sess)
 		}
@@ -591,12 +595,14 @@ func (c *Client) listSessionsFromUserIndex(
 
 // loadSessionBasic loads session with events only (no app/user state, no track, no summary).
 // Used by ListSessions where post-processing is done in batch.
+// When listOnlyMeta is true, events are not loaded from Redis.
 func (c *Client) loadSessionBasic(
 	ctx context.Context,
 	key session.Key,
 	metaJSON []byte,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
 ) (*session.Session, error) {
 	var meta sessionMeta
 	if err := json.Unmarshal(metaJSON, &meta); err != nil {
@@ -608,26 +614,28 @@ func (c *Client) loadSessionBasic(
 	sess.CreatedAt = meta.CreatedAt
 	sess.UpdatedAt = meta.UpdatedAt
 
-	result, err := luaLoadEvents.Run(ctx, c.client,
-		[]string{
-			c.keys.EventDataKey(key),
-			c.keys.EventTimeIndexKey(key),
-		},
-		0, int64(-1), 0,
-	).StringSlice()
-	if err != nil && err != redis.Nil {
-		return nil, fmt.Errorf("load events: %w", err)
-	}
-
-	for _, evtJSON := range result {
-		var evt event.Event
-		if err := json.Unmarshal([]byte(evtJSON), &evt); err != nil {
-			continue
+	if !listOnlyMeta {
+		result, err := luaLoadEvents.Run(ctx, c.client,
+			[]string{
+				c.keys.EventDataKey(key),
+				c.keys.EventTimeIndexKey(key),
+			},
+			0, int64(-1), 0,
+		).StringSlice()
+		if err != nil && err != redis.Nil {
+			return nil, fmt.Errorf("load events: %w", err)
 		}
-		sess.Events = append(sess.Events, evt)
-	}
 
-	sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+		for _, evtJSON := range result {
+			var evt event.Event
+			if err := json.Unmarshal([]byte(evtJSON), &evt); err != nil {
+				continue
+			}
+			sess.Events = append(sess.Events, evt)
+		}
+
+		sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+	}
 
 	sess.ServiceMeta = map[string]string{util.ServiceMetaStorageTypeKey: util.StorageTypeHashIdx}
 

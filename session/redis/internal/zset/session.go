@@ -59,6 +59,30 @@ type SessionState struct {
 	UpdatedAt time.Time        `json:"updatedAt"`
 }
 
+func buildListedSession(
+	appName, userID string,
+	sessState *SessionState,
+	events []event.Event,
+	trackEvents map[session.Track][]session.TrackEvent,
+	appState, userState session.StateMap,
+) *session.Session {
+	options := []session.SessionOptions{
+		session.WithSessionState(sessState.State),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	}
+	if events != nil {
+		options = append(options, session.WithSessionEvents(events))
+	}
+
+	sess := session.NewSession(appName, userID, sessState.ID, options...)
+	if len(trackEvents) > 0 {
+		util.AttachTrackEvents(sess, []map[session.Track][]session.TrackEvent{trackEvents})
+	}
+	sess.ServiceMeta = map[string]string{util.ServiceMetaStorageTypeKey: util.StorageTypeZset}
+	return util.MergeState(appState, userState, sess)
+}
+
 // CreateSession creates a new session using ZSet logic.
 // SessionID must be provided by the caller; empty SessionID returns an error.
 func (c *Client) CreateSession(
@@ -214,11 +238,13 @@ func (c *Client) AppendEvent(ctx context.Context, key session.Key, event *event.
 }
 
 // ListSessions lists sessions in ZSet.
+// When listOnlyMeta is true, events and track events are not loaded from Redis.
 func (c *Client) ListSessions(
 	ctx context.Context,
 	key session.UserKey,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
 ) ([]*session.Session, error) {
 	pipe := c.client.Pipeline()
 	sessKey := session.Key{AppName: key.AppName, UserID: key.UserID}
@@ -247,6 +273,16 @@ func (c *Client) ListSessions(
 	}
 
 	sessList := make([]*session.Session, 0, len(sessStates))
+
+	if listOnlyMeta {
+		for _, sessState := range sessStates {
+			sessList = append(sessList, buildListedSession(
+				key.AppName, key.UserID, sessState, nil, nil, appState, userState,
+			))
+		}
+		return sessList, nil
+	}
+
 	sessionKeys := make([]session.Key, 0, len(sessStates))
 	for _, sessState := range sessStates {
 		sessionKeys = append(sessionKeys, session.Key{
@@ -268,33 +304,9 @@ func (c *Client) ListSessions(
 	}
 
 	for i, sessState := range sessStates {
-		sess := session.NewSession(
-			key.AppName, key.UserID, sessState.ID,
-			session.WithSessionState(sessState.State),
-			session.WithSessionEvents(events[i]),
-			session.WithSessionCreatedAt(sessState.CreatedAt),
-			session.WithSessionUpdatedAt(sessState.UpdatedAt),
-		)
-		util.AttachTrackEvents(sess, []map[session.Track][]session.TrackEvent{trackEvents[i]}) // Helper expects a slice but we process one by one in helper... no helper processes slice of maps. Wait.
-		// util.AttachTrackEvents expects []map...
-		// In service.go logic:
-		/*
-			if len(trackEvents[i]) > 0 {
-				sess.Tracks = make ...
-			}
-		*/
-		// util.AttachTrackEvents(sess, trackEvents) <-- this was wrong in my thought process if trackEvents is per session?
-		// getTrackEvents returns []map[session.Track][]session.TrackEvent.
-		// So trackEvents[i] is map[session.Track][]session.TrackEvent.
-		// util.AttachTrackEvents signature: func(sess, []map...)
-		// It expects slice of maps because original code processed batch results.
-		// Let's pass a slice of 1 map.
-		util.AttachTrackEvents(sess, []map[session.Track][]session.TrackEvent{trackEvents[i]})
-
-		// Inject ZSet version tag into ServiceMeta (not persisted, memory only)
-		sess.ServiceMeta = map[string]string{util.ServiceMetaStorageTypeKey: util.StorageTypeZset}
-
-		sessList = append(sessList, util.MergeState(appState, userState, sess))
+		sessList = append(sessList, buildListedSession(
+			key.AppName, key.UserID, sessState, events[i], trackEvents[i], appState, userState,
+		))
 	}
 	return sessList, nil
 }
