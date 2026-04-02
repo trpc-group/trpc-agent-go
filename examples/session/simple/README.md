@@ -7,7 +7,7 @@ This example demonstrates advanced session management capabilities using the `Ru
 This implementation highlights the power of session management in conversational AI:
 
 - **Multiple Sessions**: Create and switch between multiple independent conversation contexts
-- **Persistent Storage**: Support for SQLite, Redis, PostgreSQL, MySQL, and ClickHouse backends
+- **Persistent Storage**: Support for SQLite, Redis, PostgreSQL, pgvector, MySQL, and ClickHouse backends
 - **Session Discovery**: List and switch between existing sessions
 
 
@@ -17,7 +17,8 @@ This implementation highlights the power of session management in conversational
 - **Session Switching**: Switch between sessions with `/use <id>`
 - **Session Listing**: View all active sessions with `/sessions`
 - **History Recap**: Ask the agent to summarize conversation with `/history`
-- **Backend Flexibility**: Choose from in-memory, SQLite, Redis, PostgreSQL, MySQL, or ClickHouse storage
+- **Semantic Recall**: Use `/search <query>` when the backend implements `session.SearchableService`
+- **Backend Flexibility**: Choose from in-memory, SQLite, Redis, PostgreSQL, pgvector, MySQL, or ClickHouse storage
 - **Context Preservation**: Each session maintains independent conversation history
 - **Langfuse Tracing**: Optional OpenTelemetry tracing for Redis session operations via Langfuse
 
@@ -25,7 +26,7 @@ This implementation highlights the power of session management in conversational
 
 - Go 1.21 or later
 - Valid OpenAI API key (or compatible API endpoint)
-- Optional: SQLite file or Redis/PostgreSQL/MySQL/ClickHouse server (depending on backend choice)
+- Optional: SQLite file, Redis server, PostgreSQL server, PostgreSQL with `pgvector`, MySQL server, or ClickHouse server (depending on backend choice)
 
 ## Environment Variables
 
@@ -57,6 +58,23 @@ This implementation highlights the power of session management in conversational
 | `PG_PASSWORD` | PostgreSQL password   | ``                |
 | `PG_DATABASE` | PostgreSQL database   | `trpc-agent-go`   |
 
+**PGVector:**
+| Variable                   | Description           | Default Value                 |
+| -------------------------- | --------------------- | ----------------------------- |
+| `PGVECTOR_HOST`            | PostgreSQL host       | `localhost`                   |
+| `PGVECTOR_PORT`            | PostgreSQL port       | `5432`                        |
+| `PGVECTOR_USER`            | PostgreSQL user       | `postgres`                    |
+| `PGVECTOR_PASSWORD`        | PostgreSQL password   | ``                            |
+| `PGVECTOR_DATABASE`        | PostgreSQL database   | `trpc-agent-go-pgsession`     |
+| `PGVECTOR_EMBEDDER_MODEL`  | Embedding model       | `text-embedding-3-small`      |
+
+Optional dedicated embedding credentials:
+
+| Variable                        | Description                     | Default |
+| ------------------------------- | ------------------------------- | ------- |
+| `OPENAI_EMBEDDING_API_KEY`      | Embedding API key               | Falls back to `OPENAI_API_KEY` |
+| `OPENAI_EMBEDDING_BASE_URL`     | Embedding API base URL          | Falls back to `OPENAI_BASE_URL` |
+
 **MySQL:**
 | Variable         | Description        | Default Value    |
 | ---------------- | ------------------ | ---------------- |
@@ -80,10 +98,11 @@ This implementation highlights the power of session management in conversational
 | Argument           | Description                                         | Default Value    |
 | ------------------ | --------------------------------------------------- | ---------------- |
 | `-model`           | Name of the model to use                            | `MODEL_NAME` env var |
-| `-session`         | Session backend: inmemory/sqlite/redis/postgres/mysql/clickhouse | `redis` |
+| `-session`         | Session backend: inmemory/sqlite/redis/postgres/pgvector/mysql/clickhouse | `redis` |
 | `-streaming`       | Enable streaming mode for responses                 | `true`           |
 | `-event-limit`     | Maximum number of events to store per session       | `1000`           |
 | `-session-ttl`     | Session time-to-live duration                       | `10s`            |
+| `-search-topk`     | Maximum recalled events shown by `/search`          | `5`              |
 | `-debug`           | Enable debug mode to print session events           | `true`           |
 | `-enable-trace`    | Enable Langfuse tracing for session operations      | `true`           |
 
@@ -150,6 +169,30 @@ export PG_DATABASE="sessions_db"
 go run . -session postgres
 ```
 
+### With PGVector Backend
+
+```bash
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+export PGVECTOR_HOST="localhost"
+export PGVECTOR_USER="postgres"
+export PGVECTOR_PASSWORD="your-password"
+export PGVECTOR_DATABASE="trpc-agent-go-pgsession"
+export PGVECTOR_EMBEDDER_MODEL="text-embedding-3-small"
+export OPENAI_EMBEDDING_API_KEY="$OPENAI_API_KEY"
+export OPENAI_EMBEDDING_BASE_URL="$OPENAI_BASE_URL"
+go run . -session pgvector
+```
+
+Once the pgvector backend is active, the chat loop also exposes semantic
+recall:
+
+```text
+You: /search travel plan
+Semantic recall for "travel plan":
+   1. [0.927] assistant ...
+```
+
 ### With MySQL Backend
 
 ```bash
@@ -209,10 +252,11 @@ The example supports the following session management commands:
 
 | Command            | Description                                        |
 | ------------------ | -------------------------------------------------- |
-| `/new`             | Create a new session with a fresh conversation     |
+| `/new [id]`        | Create a new session, optionally with a custom ID  |
 | `/sessions`        | List all known session IDs                         |
 | `/use <id>`        | Switch to an existing session or create a new one  |
 | `/history`         | Ask the assistant to recap the conversation        |
+| `/search <query>`  | Recall similar events when supported by backend    |
 | `/exit`            | End the conversation                               |
 
 ## Session Management Workflow

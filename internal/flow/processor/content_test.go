@@ -1617,13 +1617,14 @@ func Test_toMap(t *testing.T) {
 func TestNewContentRequestProcessor(t *testing.T) {
 
 	defaultWant := &ContentRequestProcessor{
-		BranchFilterMode:   "prefix",
-		AddContextPrefix:   true,
-		PreserveSameBranch: false,
-		TimelineFilterMode: "all",
-		AddSessionSummary:  false,
-		MaxHistoryRuns:     0,
-		PreloadMemory:      0, // Default to disable preloading.
+		BranchFilterMode:               "prefix",
+		AddContextPrefix:               true,
+		PreserveSameBranch:             false,
+		TimelineFilterMode:             "all",
+		AddSessionSummary:              false,
+		MaxHistoryRuns:                 0,
+		PreloadMemory:                  0, // Default to disable preloading.
+		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
 	}
 
 	tests := []struct {
@@ -1657,13 +1658,14 @@ func TestNewContentRequestProcessor(t *testing.T) {
 				WithBranchFilterMode("all"),
 			},
 			want: &ContentRequestProcessor{
-				BranchFilterMode:   "all",
-				AddContextPrefix:   false,
-				PreserveSameBranch: false,
-				TimelineFilterMode: TimelineFilterCurrentRequest,
-				AddSessionSummary:  false,
-				MaxHistoryRuns:     0,
-				PreloadMemory:      0,
+				BranchFilterMode:               "all",
+				AddContextPrefix:               false,
+				PreserveSameBranch:             false,
+				TimelineFilterMode:             TimelineFilterCurrentRequest,
+				AddSessionSummary:              false,
+				MaxHistoryRuns:                 0,
+				PreloadMemory:                  0,
+				PreloadSessionRecallSearchMode: session.SearchModeHybrid,
 			},
 		},
 
