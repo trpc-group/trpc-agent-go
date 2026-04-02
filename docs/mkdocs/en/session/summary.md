@@ -598,6 +598,28 @@ llmagent.WithAddSessionSummary(true)
 - Guarantees complete context: compressed history + full new conversation
 - **`WithMaxHistoryRuns` parameter is ignored**
 
+**Optional: Prompt-side context compaction**
+
+When `WithEnableContextCompaction(true)` is enabled, the framework adds a lightweight Phase 1 compaction pass before the LLM call:
+
+- Historical oversized tool results from older requests are replaced with a placeholder while keeping `ToolID` and `ToolName`
+- The current request is never compacted
+- The latest `ContextCompactionKeepRecentRequests` completed requests are kept intact
+- If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model
+- Model-layer token tailoring remains the final fallback
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithContextCompactionThresholdRatio(0.7),
+    llmagent.WithContextCompactionToolResultMaxTokens(1024),
+    llmagent.WithContextCompactionKeepRecentRequests(1),
+)
+```
+
 **Context structure**:
 
 ```
@@ -633,6 +655,8 @@ llmagent.WithMaxHistoryRuns(10)
 - No summary message added
 - Only includes the most recent `MaxHistoryRuns` conversation turns
 - `MaxHistoryRuns=0` means no limit, includes all history
+- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted during request projection
+- The pre-LLM synchronous summary retry is disabled in this mode
 
 **Context structure**:
 
@@ -655,6 +679,8 @@ llmagent.WithMaxHistoryRuns(10)
 | Short sessions (single consultation) | `AddSessionSummary=false`<br>`MaxHistoryRuns=10` | Simple and direct, no summary overhead |
 | Debug/Test | `AddSessionSummary=false`<br>`MaxHistoryRuns=5` | Quick validation, reduce noise |
 | High concurrency | `AddSessionSummary=true`<br>Increase worker count | Async processing, no impact on response speed |
+
+If your long sessions frequently contain large tool outputs such as search results, logs, or code scan output, enable `EnableContextCompaction=true`. Pair it with `AddSessionSummary=true` when you also want the pre-LLM synchronous summary retry.
 
 ## Summary Format Customization
 

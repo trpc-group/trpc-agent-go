@@ -282,14 +282,13 @@ summarizer := summary.NewSummarizer(
 
 **上下文注入机制：**
 
-启用摘要后，框架会将摘要作为独立的系统消息插入到第一个现有系统消息之后，同时包含摘要时间点之后的所有增量事件，保证完整上下文：
+启用摘要后，框架会将摘要合并到已有系统消息中；如果原来没有系统消息，则会前置插入一条新的系统消息。同时保留摘要时间点之后的所有增量事件，保证完整上下文：
 
 ```
 When AddSessionSummary = true:
 ┌─────────────────────────────────────────┐
-│ Existing System Message (optional)      │ ← 如果存在
-├─────────────────────────────────────────┤
-│ Session Summary (system message)        │ ← 插入到第一个系统消息之后
+│ System Prompt                           │ ← 若已存在系统消息，则与摘要合并；
+│ (merged with Session Summary)           │    否则前置插入新的系统消息
 ├─────────────────────────────────────────┤
 │ Event 1 (after summary)                 │ ┐
 │ Event 2                                 │ │
@@ -1864,10 +1863,33 @@ llmagent.WithAddSessionSummary(true)
 
 **工作方式：**
 
-- 会话摘要作为独立的系统消息插入到第一个现有系统消息之后（如果没有系统消息则前置添加）
+- 会话摘要会合并到已有系统消息中；如果没有系统消息，则前置添加一条新的系统消息
 - 包含摘要时间点之后的**所有增量事件**（不截断）
 - 保证完整上下文：浓缩历史 + 完整新对话
 - **`WithMaxHistoryRuns` 参数被忽略**
+
+**可选：Prompt 侧上下文压缩**
+
+当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前增加一层轻量压缩：
+
+- 只压缩旧 request 中过长的 `tool result`
+- 只替换正文，仍保留 `ToolID` 和 `ToolName`
+- 当前 request 永远不压
+- 最近 `ContextCompactionKeepRecentRequests` 个已完成 request 会完整保留
+- 如果同时开启了 `WithAddSessionSummary(true)`，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 `CreateSessionSummary(...)` 并重建 request
+- 模型层的 token tailoring 仍然作为最后兜底
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithContextCompactionThresholdRatio(0.7),
+    llmagent.WithContextCompactionToolResultMaxTokens(1024),
+    llmagent.WithContextCompactionKeepRecentRequests(1),
+)
+```
 
 **上下文结构：**
 
@@ -1899,6 +1921,8 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - 不添加摘要消息
 - 只包含最近 `MaxHistoryRuns` 轮对话
 - `MaxHistoryRuns=0` 时不限制，包含所有历史
+- 如果开启 `WithEnableContextCompaction(true)`，保留下来的旧 request 中超长 `tool result` 仍可在 request projection 阶段被压缩
+- 这个模式下不会触发 pre-LLM 的同步摘要重试
 
 **上下文结构：**
 
@@ -1916,6 +1940,8 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 **适用场景：** 短会话、测试环境，或需要精确控制上下文窗口大小。
 
 #### 模式选择建议
+
+如果你的长会话里经常出现搜索结果、日志、代码扫描输出这类长 `tool result`，建议开启 `EnableContextCompaction=true`。如果你还希望在接近 context window 时多一次同步摘要兜底，再配合 `AddSessionSummary=true` 一起使用。
 
 | 场景                   | 推荐配置                                         | 说明                       |
 | ---------------------- | ------------------------------------------------ | -------------------------- |

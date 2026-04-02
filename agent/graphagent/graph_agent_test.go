@@ -1472,6 +1472,130 @@ func TestGraphAgent_CreateInitialStateWithSessionSummary_FromService(t *testing.
 	// Summary already covers prior history, so the latest run may start with summary only.
 }
 
+func TestGraphAgent_CreateInitialStateWithContextCompaction(t *testing.T) {
+	const agentName = "test-agent"
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(
+		agentName,
+		g,
+		WithAddSessionSummary(true),
+		WithEnableContextCompaction(true),
+		WithContextCompactionToolResultMaxTokens(10),
+		WithContextCompactionKeepRecentRequests(1),
+	)
+	require.NoError(t, err)
+
+	sess := &session.Session{
+		ID: "test-session",
+		Events: []event.Event{
+			{
+				RequestID: "req-old",
+				FilterKey: agentName,
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role: model.RoleAssistant,
+							ToolCalls: []model.ToolCall{{
+								ID: "tool-call-old",
+								Function: model.FunctionDefinitionParam{
+									Name:      "worker",
+									Arguments: []byte(`{}`),
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				RequestID: "req-old",
+				FilterKey: agentName,
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewToolMessage(
+							"tool-call-old",
+							"worker",
+							strings.Repeat("old-result ", 64),
+						),
+					}},
+				},
+			},
+			{
+				RequestID: "req-recent",
+				FilterKey: agentName,
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role: model.RoleAssistant,
+							ToolCalls: []model.ToolCall{{
+								ID: "tool-call-recent",
+								Function: model.FunctionDefinitionParam{
+									Name:      "worker",
+									Arguments: []byte(`{}`),
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				RequestID: "req-recent",
+				FilterKey: agentName,
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewToolMessage(
+							"tool-call-recent",
+							"worker",
+							strings.Repeat("recent-result ", 64),
+						),
+					}},
+				},
+			},
+		},
+	}
+
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-current"}),
+		agent.WithInvocationEventFilterKey(agentName),
+	)
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(context.Background(), invocation)
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.Len(t, messages, 5)
+	require.Equal(t, model.RoleAssistant, messages[0].Role)
+	require.Equal(t, model.RoleTool, messages[1].Role)
+	require.Equal(t, "Historical tool result omitted to save context.", messages[1].Content)
+	require.Equal(t, "tool-call-old", messages[1].ToolID)
+	require.Equal(t, "worker", messages[1].ToolName)
+	require.Equal(t, model.RoleAssistant, messages[2].Role)
+	require.Contains(t, messages[3].Content, "recent-result")
+	require.Equal(t, model.RoleTool, messages[3].Role)
+	require.Equal(t, "tool-call-recent", messages[3].ToolID)
+	require.Equal(t, "worker", messages[3].ToolName)
+	require.Equal(t, "hello", messages[4].Content)
+}
+
 // TestGraphAgent_CreateInitialStateWithResume tests checkpoint resume behavior.
 func TestGraphAgent_CreateInitialStateWithResume(t *testing.T) {
 	// Create a simple graph.

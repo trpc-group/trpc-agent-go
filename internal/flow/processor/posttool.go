@@ -28,11 +28,12 @@ const DefaultPostToolPrompt = "[Tool Prompt] Analyze the tool result. " +
 	"Answer as if you already know the information. Do NOT expose any internal process, tool usage, or source of information. " +
 	"Do not use phrases that reference tools, searches, or retrieved data, like \"according to xxx, based on xxx\". Keep your answer concise and to the point.\n"
 
-// PostToolRequestProcessor inspects the built req.Messages for tool-result
-// messages (role=tool). When present, it appends the dynamic prompt to the
-// existing system message to steer the model's next response. This avoids
-// inserting a user message between tool results and the assistant turn,
-// which is not part of the standard OpenAI message ordering contract.
+// PostToolRequestProcessor inspects the built req.Messages for pending
+// tool-result messages. When the current request still ends at a tool result,
+// it appends the dynamic prompt to the existing system message to steer the
+// model's next response. This avoids inserting a user message between tool
+// results and the assistant turn, which is not part of the standard OpenAI
+// message ordering contract.
 //
 // Inspired by CrewAI's post_tool_reasoning mechanism, but injected via
 // system prompt instead of user message for better cross-model compatibility.
@@ -69,8 +70,9 @@ func NewPostToolRequestProcessor(opts ...PostToolOption) *PostToolRequestProcess
 }
 
 // ProcessRequest implements flow.RequestProcessor.
-// It checks whether req.Messages contains any tool-result messages. If so,
-// it appends the dynamic prompt to the system message.
+// It checks whether req.Messages still has pending tool results from the
+// active tool loop. If so, it appends the dynamic prompt to the system
+// message.
 func (p *PostToolRequestProcessor) ProcessRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -81,7 +83,7 @@ func (p *PostToolRequestProcessor) ProcessRequest(
 		return
 	}
 
-	if !hasToolResultMessages(req.Messages) &&
+	if !hasPendingToolResultMessages(req.Messages) &&
 		!hasCompactedToolResultMessages(invocation) {
 		return
 	}
@@ -102,12 +104,18 @@ func (p *PostToolRequestProcessor) ProcessRequest(
 	}
 }
 
-// hasToolResultMessages returns true if msgs contains at least one message
-// with role=tool, indicating tool results are present in the conversation.
-func hasToolResultMessages(msgs []model.Message) bool {
+// hasPendingToolResultMessages returns true when the latest non-system message
+// in the request is a tool result. Historical tool results that are followed
+// by assistant or user messages do not count as pending.
+func hasPendingToolResultMessages(msgs []model.Message) bool {
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == model.RoleTool {
+		switch msgs[i].Role {
+		case model.RoleSystem:
+			continue
+		case model.RoleTool:
 			return true
+		default:
+			return false
 		}
 	}
 	return false

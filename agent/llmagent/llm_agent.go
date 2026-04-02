@@ -188,9 +188,11 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Create flow with the provided processors and options.
 	flowOpts := llmflow.Options{
-		ChannelBufferSize:   options.ChannelBufferSize,
-		ModelCallbacks:      options.ModelCallbacks,
-		SyncSummaryIntraRun: options.SyncSummaryIntraRun,
+		ChannelBufferSize:               options.ChannelBufferSize,
+		ModelCallbacks:                  options.ModelCallbacks,
+		SyncSummaryIntraRun:             options.SyncSummaryIntraRun,
+		EnableContextCompaction:         options.EnableContextCompaction,
+		ContextCompactionThresholdRatio: options.ContextCompactionThresholdRatio,
 	}
 
 	a.flow = llmflow.New(
@@ -325,6 +327,13 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
+		processor.WithEnableContextCompaction(options.EnableContextCompaction),
+		processor.WithContextCompactionKeepRecentRequests(
+			options.ContextCompactionKeepRecentRequests,
+		),
+		processor.WithContextCompactionToolResultMaxTokens(
+			options.ContextCompactionToolResultMaxTokens,
+		),
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),

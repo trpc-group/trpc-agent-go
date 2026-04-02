@@ -422,6 +422,15 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		contentOpts := []processor.ContentOption{
 			processor.WithAddSessionSummary(ga.options.AddSessionSummary),
 			processor.WithMaxHistoryRuns(ga.options.MaxHistoryRuns),
+			processor.WithEnableContextCompaction(
+				ga.options.EnableContextCompaction,
+			),
+			processor.WithContextCompactionKeepRecentRequests(
+				ga.options.ContextCompactionKeepRecentRequests,
+			),
+			processor.WithContextCompactionToolResultMaxTokens(
+				ga.options.ContextCompactionToolResultMaxTokens,
+			),
 			processor.WithPreserveSameBranch(true),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
 			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
