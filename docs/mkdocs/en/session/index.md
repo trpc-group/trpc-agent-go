@@ -16,10 +16,10 @@ Within the same conversation, it enables natural continuity between turns, preve
 - **Session Summary**: Uses LLM to automatically compress long conversation history, significantly reducing token consumption while preserving key context
 - **Event Limit**: Controls the maximum number of events stored per session to prevent memory overflow
 - **TTL Management**: Supports automatic expiration and cleanup of session data
-- **Multiple Storage Backends**: Supports Memory, SQLite, Redis, PostgreSQL, MySQL, and ClickHouse
+- **Multiple Storage Backends**: Supports Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, and ClickHouse
 - **Concurrency Safe**: Built-in read-write locks ensure safe concurrent access
 - **Automatic Management**: Automatically handles session creation, loading, and updates when integrated with Runner
-- **Soft Delete Support**: PostgreSQL/MySQL/ClickHouse support soft delete for data recovery
+- **Soft Delete Support**: SQLite/PostgreSQL/PGVector/MySQL/ClickHouse support soft delete for data recovery
 
 ## Quick Start
 
@@ -27,7 +27,7 @@ Within the same conversation, it enables natural continuity between turns, preve
 
 Session management in tRPC-Agent-Go is integrated into the Runner via `runner.WithSessionService`. The Runner automatically handles session creation, loading, updating, and persistence.
 
-**Supported Storage Backends:** Memory, Redis, PostgreSQL, MySQL, ClickHouse
+**Supported Storage Backends:** Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse
 
 **Default Behavior:** If `runner.WithSessionService` is not configured, the Runner defaults to in-memory storage, and data will be lost after process restart.
 
@@ -317,14 +317,16 @@ TTL is only refreshed on **write operations** (e.g., CreateSession, AppendEvent,
 | Storage Type | Expiration Mechanism | Auto Cleanup |
 | --- | --- | --- |
 | Memory | Periodic scan + check on access | Yes |
+| SQLite | Periodic scan (soft/hard delete) | Yes |
 | Redis | Native Redis TTL | Yes |
 | PostgreSQL | Periodic scan (soft/hard delete) | Yes |
+| PGVector | Periodic scan (soft/hard delete) | Yes |
 | MySQL | Periodic scan (soft/hard delete) | Yes |
 | ClickHouse | Application-level cleanup + Native TTL | Yes |
 
 ## Storage Backend Comparison
 
-tRPC-Agent-Go provides six session storage backends for different scenarios:
+tRPC-Agent-Go provides seven session storage backends for different scenarios:
 
 | Storage Type | Use Case | Persistence | Distributed | Complex Queries |
 | --- | --- | --- | --- | --- |
@@ -332,6 +334,7 @@ tRPC-Agent-Go provides six session storage backends for different scenarios:
 | [SQLite](sqlite.md) | Local persistence, single-node | ✅ | ❌ | ✅ |
 | [Redis](redis.md) | Production, distributed | ✅ | ✅ | ❌ |
 | [PostgreSQL](postgres.md) | Production, complex queries | ✅ | ✅ | ✅ |
+| [PGVector](pgvector.md) | Production, semantic recall | ✅ | ✅ | ✅ |
 | [MySQL](mysql.md) | Production, complex queries | ✅ | ✅ | ✅ |
 | [ClickHouse](clickhouse.md) | Production, massive data | ✅ | ✅ | ✅ |
 
@@ -391,7 +394,7 @@ sessionService := inmemory.NewSessionService(
 
 **Chain of Responsibility**: Hooks form a chain via `next()`. You can return early to short-circuit subsequent logic, and errors propagate upward.
 
-**Cross-Backend Consistency**: All storage backends (Memory, Redis, PostgreSQL, MySQL, ClickHouse) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.
+**Cross-Backend Consistency**: All storage backends (Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.
 
 ## Advanced Usage
 
@@ -614,8 +617,10 @@ Not all storage backends implement `TrackService`. A type assertion is required:
 | Storage Backend | Implements TrackService |
 | --- | --- |
 | Memory (inmemory) | ✅ |
+| SQLite | ✅ |
 | Redis | ✅ |
 | PostgreSQL | ✅ |
+| PGVector | ✅ |
 | MySQL | ✅ |
 | ClickHouse | ❌ |
 
@@ -640,6 +645,33 @@ err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
 trackEvents, err := sess.GetTrackEvents("ui-events")
 ```
 
+## Semantic Recall (PGVector Only)
+
+The `session/pgvector` backend also implements `session.SearchableService`, so you can search a user's historical messages across one or more sessions by semantic similarity. Only persisted user/assistant text events are indexed; tool calls, tool results, partial events, and empty content are skipped.
+
+```go
+searchSvc, ok := sessionService.(session.SearchableService)
+if ok {
+    hits, err := searchSvc.SearchEvents(ctx, session.EventSearchRequest{
+        Query: "travel plan",
+        UserKey: session.UserKey{
+            AppName: "my-agent",
+            UserID:  "user123",
+        },
+        SearchMode: session.SearchModeHybrid,
+        MaxResults: 5,
+    })
+    _ = hits
+    _ = err
+}
+```
+
+If you are using LLMAgent, searchable backends such as `session/pgvector` can
+also preload cross-session recall into the system prompt via
+`llmagent.WithPreloadSessionRecall(...)`.
+
+See [PGVector Session](pgvector.md) for configuration details, indexing behavior, and search filters.
+
 ## Related Documentation
 
 - [Session Summary](summary.md) - Automatic compression of long conversation history
@@ -647,6 +679,7 @@ trackEvents, err := sess.GetTrackEvents("ui-events")
 - [SQLite Storage](sqlite.md) - Local persistence, single-node
 - [Redis Storage](redis.md) - Production distributed storage
 - [PostgreSQL Storage](postgres.md) - Relational database storage
+- [PGVector Session](pgvector.md) - PostgreSQL session storage with semantic recall
 - [MySQL Storage](mysql.md) - Relational database storage
 - [ClickHouse Storage](clickhouse.md) - Massive data storage
 

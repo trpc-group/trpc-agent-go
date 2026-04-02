@@ -26,6 +26,7 @@
 //	go run . -session=sqlite
 //	go run . -session=redis -consecutive=merge
 //	go run . -session=postgres -consecutive=placeholder
+//	go run . -session=pgvector -consecutive=placeholder
 //	go run . -session=mysql -consecutive=skip
 //	go run . -session=clickhouse
 //
@@ -36,6 +37,8 @@
 //	  file:sessions.db?_busy_timeout=5000)
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
+//	pgvector:   PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER,
+//	  PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_EMBEDDER_MODEL
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD,
 //	  MYSQL_DATABASE
 //	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
@@ -74,7 +77,7 @@ var (
 		"session",
 		"inmemory",
 		"Session backend: inmemory / sqlite / redis / "+
-			"postgres / mysql / clickhouse",
+			"postgres / pgvector / mysql / clickhouse",
 	)
 	consecutiveHandler = flag.String(
 		"consecutive",

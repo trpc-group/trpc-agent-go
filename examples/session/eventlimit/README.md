@@ -19,10 +19,11 @@ go run main.go -session=sqlite
 go run main.go -session=redis
 go run main.go -session=mysql
 go run main.go -session=postgres
+go run main.go -session=pgvector
 go run main.go -session=clickhouse
 
 # Customize event limit (default: 4)
-go run main.go -session=clickhouse -limit=6
+go run main.go -session=pgvector -limit=6
 ```
 
 ## Example Output

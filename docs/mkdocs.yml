@@ -33,6 +33,7 @@ nav:
           - Redis Session: session/redis.md
           - MySQL Session: session/mysql.md
           - PostgreSQL Session: session/postgres.md
+          - PGVector Session: session/pgvector.md
           - ClickHouse Session: session/clickhouse.md
       - Knowledge:
           - Overview: knowledge/index.md
@@ -104,6 +105,7 @@ plugins:
                     - Redis Session: session/redis.md
                     - MySQL Session: session/mysql.md
                     - PostgreSQL Session: session/postgres.md
+                    - PGVector Session: session/pgvector.md
                     - ClickHouse Session: session/clickhouse.md
                 - Knowledge:
                     - 概述: knowledge/index.md
@@ -161,6 +163,7 @@ theme:
         name: Switch to light mode
 
 markdown_extensions:
+  - admonition
   - pymdownx.arithmatex:
       generic: true
   - pymdownx.highlight:
