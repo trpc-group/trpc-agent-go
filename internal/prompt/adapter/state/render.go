@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	"trpc.group/trpc-go/trpc-agent-go/internal/prompt/core"
+	promptcore "trpc.group/trpc-go/trpc-agent-go/internal/prompt/core"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 

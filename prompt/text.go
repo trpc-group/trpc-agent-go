@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/prompt/core"
+	promptcore "trpc.group/trpc-go/trpc-agent-go/internal/prompt/core"
 )
 
 // Source fetches a prompt template dynamically, for example from a remote
