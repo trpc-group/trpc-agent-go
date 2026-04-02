@@ -77,6 +77,11 @@ func main() {
         llmagent.WithModel(llm),
         llmagent.WithInstruction("You are a helpful assistant"),
         llmagent.WithAddSessionSummary(true),
+        // Optional: compact oversized historical tool results before the LLM call
+        // WithAddSessionSummary(true) additionally enables one sync summary retry when needed
+        llmagent.WithEnableContextCompaction(true),
+        llmagent.WithContextCompactionToolResultMaxTokens(1024),
+        llmagent.WithContextCompactionKeepRecentRequests(1),
         // Note: WithAddSessionSummary(true) ignores WithMaxHistoryRuns
         // Summary includes all history, incremental events are fully retained
     )

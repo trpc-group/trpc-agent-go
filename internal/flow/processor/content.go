@@ -138,7 +138,10 @@ type ContentRequestProcessor struct {
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
 	EventMessageProjector EventMessageProjector
-	fewShotResolver       func(*agent.Invocation) [][]model.Message
+	// ContextCompactionConfig controls request-side historical tool-result
+	// compaction before messages are sent to the model.
+	ContextCompactionConfig ContextCompactionConfig
+	fewShotResolver         func(*agent.Invocation) [][]model.Message
 }
 
 type contentRequestRuntimeConfig struct {
@@ -293,6 +296,31 @@ func WithEventMessageProjector(
 	}
 }
 
+// WithEnableContextCompaction toggles prompt-side context compaction during
+// history projection. Historical oversized tool results can be compacted
+// regardless of whether AddSessionSummary is enabled.
+func WithEnableContextCompaction(enable bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ContextCompactionConfig.Enabled = enable
+	}
+}
+
+// WithContextCompactionKeepRecentRequests preserves the latest N completed
+// requests in full when context compaction is enabled.
+func WithContextCompactionKeepRecentRequests(n int) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ContextCompactionConfig.KeepRecentRequests = n
+	}
+}
+
+// WithContextCompactionToolResultMaxTokens sets the token threshold above which
+// historical tool results are replaced with a placeholder.
+func WithContextCompactionToolResultMaxTokens(tokens int) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ContextCompactionConfig.ToolResultMaxTokens = tokens
+	}
+}
+
 // WithFewShotResolver sets an invocation-aware few-shot resolver.
 func WithFewShotResolver(
 	resolver func(*agent.Invocation) [][]model.Message,
@@ -306,7 +334,12 @@ const (
 	mergedUserSeparator = "\n\n"
 	contextPrefix       = "For context:"
 
-	contentHasSessionSummaryStateKey       = "processor:content:has_session_summary"
+	contentHasSessionSummaryStateKey = "processor:content:has_session_summary"
+	// contentHasCompactedToolResultsStateKey indicates that current-turn tool
+	// results were compacted to preserve the active ReAct loop after the session
+	// summary absorbed earlier invocation history. Historical request compaction
+	// must not set this flag, because downstream processors use it as a
+	// same-turn signal.
 	contentHasCompactedToolResultsStateKey = "processor:content:has_compacted_tool_results"
 	compactedToolResultPlaceholder         = "Tool result omitted from raw history; details are captured in the session summary above."
 )
@@ -335,6 +368,10 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 		PreloadMemory:                  0,
 		PreloadSessionRecall:           0,
 		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
+		ContextCompactionConfig: ContextCompactionConfig{
+			KeepRecentRequests:  DefaultContextCompactionKeepRecentRequests,
+			ToolResultMaxTokens: DefaultContextCompactionToolResultMaxTokens,
+		},
 	}
 
 	// Apply options.
@@ -665,6 +702,25 @@ func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, si
 
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
+	if p.TimelineFilterMode == TimelineFilterAll {
+		var stats ContextCompactionStats
+		resultEvents, stats = compactIncrementEvents(
+			context.Background(),
+			resultEvents,
+			inv.RunOptions.RequestID,
+			inv.InvocationID,
+			p.ContextCompactionConfig,
+		)
+		if stats.ToolResultsCompacted > 0 {
+			log.DebugfContext(
+				context.Background(),
+				"Context compaction omitted %d historical tool results (~%d tokens) for agent %s",
+				stats.ToolResultsCompacted,
+				stats.EstimatedTokensSaved,
+				inv.AgentName,
+			)
+		}
+	}
 
 	// Get current request ID for reasoning content filtering.
 	currentRequestID := inv.RunOptions.RequestID

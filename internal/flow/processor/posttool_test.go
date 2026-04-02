@@ -55,6 +55,36 @@ func TestPostToolRequestProcessor_WithToolResults_DefaultPrompt(t *testing.T) {
 	assert.Contains(t, req.Messages[0].Content, "Analyze the tool result")
 }
 
+func TestPostToolRequestProcessor_IgnoresHistoricalToolResults(t *testing.T) {
+	p := NewPostToolRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("You are helpful."),
+			model.NewUserMessage("Search for Go tutorials"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "call_1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "search",
+						Arguments: []byte(`{"q":"go tutorials"}`),
+					},
+				}},
+			},
+			model.NewToolMessage("call_1", "search", `{"results":["tutorial1"]}`),
+			model.NewAssistantMessage("Here is one tutorial."),
+			model.NewUserMessage("What about Rust?"),
+		},
+	}
+
+	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
+
+	require.Len(t, req.Messages, 6)
+	assert.Equal(t, "You are helpful.", req.Messages[0].Content)
+	assert.NotContains(t, req.Messages[0].Content, "[Tool Prompt]")
+}
+
 func TestPostToolRequestProcessor_WithCompactedToolResultsState(t *testing.T) {
 	p := NewPostToolRequestProcessor()
 	inv := &agent.Invocation{}
@@ -152,7 +182,7 @@ func TestPostToolRequestProcessor_NoSystemMessage(t *testing.T) {
 	assert.Equal(t, model.RoleUser, req.Messages[1].Role)
 }
 
-func TestHasToolResultMessages(t *testing.T) {
+func TestHasPendingToolResultMessages(t *testing.T) {
 	tests := []struct {
 		name     string
 		messages []model.Message
@@ -172,7 +202,7 @@ func TestHasToolResultMessages(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "has tool message",
+			name: "trailing tool message",
 			messages: []model.Message{
 				model.NewUserMessage("hi"),
 				model.NewToolMessage("id", "fn", "result"),
@@ -186,13 +216,22 @@ func TestHasToolResultMessages(t *testing.T) {
 				model.NewToolMessage("id", "fn", "result"),
 				model.NewAssistantMessage("done"),
 			},
+			want: false,
+		},
+		{
+			name: "ignore trailing system messages",
+			messages: []model.Message{
+				model.NewUserMessage("hi"),
+				model.NewToolMessage("id", "fn", "result"),
+				model.NewSystemMessage("system"),
+			},
 			want: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := hasToolResultMessages(tt.messages)
+			got := hasPendingToolResultMessages(tt.messages)
 			assert.Equal(t, tt.want, got)
 		})
 	}

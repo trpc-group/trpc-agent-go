@@ -79,6 +79,28 @@ func TestWithSyncSummaryIntraRun(t *testing.T) {
 	require.False(t, opts.SyncSummaryIntraRun)
 }
 
+func TestWithContextCompactionOptions(t *testing.T) {
+	opts := &Options{}
+
+	WithEnableContextCompaction(true)(opts)
+	require.True(t, opts.EnableContextCompaction)
+
+	WithContextCompactionThresholdRatio(0.8)(opts)
+	require.Equal(t, 0.8, opts.ContextCompactionThresholdRatio)
+	WithContextCompactionThresholdRatio(0)(opts)
+	require.Equal(t, 0.8, opts.ContextCompactionThresholdRatio)
+
+	WithContextCompactionToolResultMaxTokens(2048)(opts)
+	require.Equal(t, 2048, opts.ContextCompactionToolResultMaxTokens)
+	WithContextCompactionToolResultMaxTokens(-1)(opts)
+	require.Equal(t, 2048, opts.ContextCompactionToolResultMaxTokens)
+
+	WithContextCompactionKeepRecentRequests(3)(opts)
+	require.Equal(t, 3, opts.ContextCompactionKeepRecentRequests)
+	WithContextCompactionKeepRecentRequests(-1)(opts)
+	require.Equal(t, 3, opts.ContextCompactionKeepRecentRequests)
+}
+
 func TestWithMessageFilterMode(t *testing.T) {
 	tests := []struct {
 		name                   string

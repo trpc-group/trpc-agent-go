@@ -1625,6 +1625,10 @@ func TestNewContentRequestProcessor(t *testing.T) {
 		MaxHistoryRuns:                 0,
 		PreloadMemory:                  0, // Default to disable preloading.
 		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
+		ContextCompactionConfig: ContextCompactionConfig{
+			KeepRecentRequests:  DefaultContextCompactionKeepRecentRequests,
+			ToolResultMaxTokens: DefaultContextCompactionToolResultMaxTokens,
+		},
 	}
 
 	tests := []struct {
@@ -1657,16 +1661,14 @@ func TestNewContentRequestProcessor(t *testing.T) {
 				WithTimelineFilterMode(TimelineFilterCurrentRequest),
 				WithBranchFilterMode("all"),
 			},
-			want: &ContentRequestProcessor{
-				BranchFilterMode:               "all",
-				AddContextPrefix:               false,
-				PreserveSameBranch:             false,
-				TimelineFilterMode:             TimelineFilterCurrentRequest,
-				AddSessionSummary:              false,
-				MaxHistoryRuns:                 0,
-				PreloadMemory:                  0,
-				PreloadSessionRecallSearchMode: session.SearchModeHybrid,
-			},
+			want: func() *ContentRequestProcessor {
+				w := *defaultWant
+				w.BranchFilterMode = "all"
+				w.AddContextPrefix = false
+				w.PreserveSameBranch = false
+				w.TimelineFilterMode = TimelineFilterCurrentRequest
+				return &w
+			}(),
 		},
 
 		{
