@@ -40,16 +40,24 @@ const (
 	// SyntaxMixedBrace recognizes both {name} and {{name}} placeholders.
 	//
 	// This is the default syntax mode. It treats single-brace and double-brace
-	// tokens as equivalent placeholder delimiters in the same template.
+	// tokens as equivalent placeholder delimiters in the same template. In both
+	// forms, name itself matches the regexp `[^\s{}'"`?]+`. A trailing '?'
+	// marks the placeholder optional and is not part of name. Double-brace
+	// placeholders still ignore outer whitespace.
 	SyntaxMixedBrace Syntax = iota
 	// SyntaxSingleBrace recognizes {name} placeholders only.
 	// Double-brace tokens such as {{name}} are treated as literal text.
+	//
+	// Here name matches the regexp `[^\s{}'"`?]+`. A trailing '?' marks the
+	// placeholder optional and is not part of name.
 	SyntaxSingleBrace
 	// SyntaxDoubleBrace recognizes {{name}} placeholders only.
 	// Single-brace tokens such as {name} are treated as literal text.
 	//
 	// This supports double-brace variable substitution only. It does not
-	// implement full Mustache syntax such as sections or partials.
+	// implement full Mustache syntax such as sections or partials. Here name
+	// matches the regexp `[^\s{}'"`?]+`. A trailing '?' marks the placeholder
+	// optional and is not part of name, and outer whitespace is ignored.
 	SyntaxDoubleBrace
 )
 
@@ -91,7 +99,7 @@ type Resolver interface {
 type UnknownBehavior int
 
 const (
-	// PreserveUnknown leaves unresolved placeholders untouched.
+	// PreserveUnknown keeps unresolved placeholders in the rendered output.
 	PreserveUnknown UnknownBehavior = iota
 	// ErrorOnUnknown returns an error when a non-optional placeholder cannot be resolved.
 	ErrorOnUnknown
