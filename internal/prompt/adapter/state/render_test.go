@@ -275,7 +275,7 @@ func TestRender_MustachePlaceholders(t *testing.T) {
 	}
 }
 
-func TestRender_SingleBracePlaceholdersWithWhitespace(t *testing.T) {
+func TestRender_SingleBracePlaceholdersWithWhitespaceStayLiteral(t *testing.T) {
 	sm := make(session.StateMap)
 	sm["name"] = []byte(`"alice"`)
 	inv := &agent.Invocation{Session: &session.Session{State: sm}}
@@ -284,8 +284,107 @@ func TestRender_SingleBracePlaceholdersWithWhitespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render whitespace: got err=%v", err)
 	}
-	if s != "hi alice and " {
+	if s != "hi { name } and { missing ? }" {
 		t.Fatalf("Render whitespace: got %q", s)
+	}
+}
+
+func TestRender_StateInjectionScenarios(t *testing.T) {
+	tests := []struct {
+		name            string
+		template        string
+		sessionState    map[string]any
+		invocationState map[string]any
+		overrideState   map[string]any
+		want            string
+	}{
+		{
+			name:         "supported double brace resolves",
+			template:     "Hello {{name}} from {{user:city}}",
+			sessionState: map[string]any{"name": "alice", "user:city": "paris"},
+			want:         "Hello alice from paris",
+		},
+		{
+			name:         "supported double brace unknown stays double brace",
+			template:     "Hello {{name}} from {{user:city}}",
+			sessionState: map[string]any{"name": "alice"},
+			want:         "Hello alice from {{user:city}}",
+		},
+		{
+			name:     "unknown prefix double brace stays literal",
+			template: "Hello {{unknown:name}} and {{unknown:name?}}",
+			want:     "Hello {{unknown:name}} and {{unknown:name?}}",
+		},
+		{
+			name:         "single brace whitespace stays literal",
+			template:     "Hello { name } and { missing ? }",
+			sessionState: map[string]any{"name": "alice"},
+			want:         "Hello { name } and { missing ? }",
+		},
+		{
+			name:         "double brace whitespace still resolves",
+			template:     "Hello {{ name }} and {{ user:city? }}",
+			sessionState: map[string]any{"name": "alice"},
+			want:         "Hello alice and ",
+		},
+		{
+			name:         "incomplete double brace falls back to single brace",
+			template:     "Hello {{name}",
+			sessionState: map[string]any{"name": "alice"},
+			want:         "Hello {alice",
+		},
+		{
+			name:     "incomplete optional double brace collapses missing value",
+			template: "Hello {{name?}",
+			want:     "Hello {",
+		},
+		{
+			name:         "incomplete optional double brace uses value when present",
+			template:     "Hello {{name?}",
+			sessionState: map[string]any{"name": "alice"},
+			want:         "Hello {alice",
+		},
+		{
+			name:     "double brace space before optional stays literal",
+			template: "Hello {{ name ? }}",
+			want:     "Hello {{ name ? }}",
+		},
+		{
+			name:            "invocation placeholder does not fallback to session",
+			template:        "Hello {{name}}, Case={{invocation:case}}",
+			sessionState:    map[string]any{"name": "bob", "invocation:case": "from-session"},
+			invocationState: map[string]any{"case": "case-1"},
+			want:            "Hello bob, Case=case-1",
+		},
+		{
+			name:            "session override respects precedence",
+			template:        "Hello {{name}}, Case={{invocation:case}}",
+			sessionState:    map[string]any{"name": "bob"},
+			overrideState:   map[string]any{"name": "alice"},
+			invocationState: map[string]any{"case": "case-1"},
+			want:            "Hello alice, Case=case-1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inv := newTestInvocation(tt.sessionState, tt.invocationState)
+			override := newTestSession(tt.overrideState)
+
+			var opts []Option
+			if override != nil {
+				opts = append(opts, WithSession(override))
+			}
+
+			got, err := Render(tt.template, inv, opts...)
+			if err != nil {
+				t.Fatalf("Render: unexpected error: %v", err)
+			}
+
+			if got != tt.want {
+				t.Fatalf("Render mismatch: got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -508,4 +607,33 @@ func TestRender_WithSessionNoRecursiveExpansion(t *testing.T) {
 			want,
 		)
 	}
+}
+
+func newTestInvocation(
+	sessionState map[string]any,
+	invocationState map[string]any,
+) *agent.Invocation {
+	inv := &agent.Invocation{
+		Session: newTestSession(sessionState),
+	}
+	for key, value := range invocationState {
+		inv.SetState(key, value)
+	}
+	return inv
+}
+
+func newTestSession(values map[string]any) *session.Session {
+	if values == nil {
+		return nil
+	}
+
+	stateMap := make(session.StateMap, len(values))
+	for key, value := range values {
+		jsonBytes, err := json.Marshal(value)
+		if err != nil {
+			panic(fmt.Sprintf("marshal test state %q: %v", key, err))
+		}
+		stateMap[key] = jsonBytes
+	}
+	return &session.Session{State: stateMap}
 }
