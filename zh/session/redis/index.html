@@ -1291,6 +1291,29 @@
   
   
     <li class="md-nav__item">
+      <a href="../pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../clickhouse/" class="md-nav__link">
         
   
@@ -2420,30 +2443,28 @@
 </tr>
 </tbody>
 </table>
-<p>!!! note "关于 Root Span"
-    Session 的操作由 Runner 执行，发生在 Agent 的 <code>Run()</code> 调用前后。而 Agent 的 root span 是在 <code>agent.Run()</code> 内部创建的，Session span 不会自动挂载到 Agent span 下。因此，如果需要在 Langfuse 等可观测平台中看到完整的 Session span 链路，需要在调用 <code>runner.Run()</code> 之前手动创建一个 root span：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 1</span>
-<span class="normal"> 2</span>
-<span class="normal"> 3</span>
-<span class="normal"> 4</span>
-<span class="normal"> 5</span>
-<span class="normal"> 6</span>
-<span class="normal"> 7</span>
-<span class="normal"> 8</span>
-<span class="normal"> 9</span>
-<span class="normal">10</span>
-<span class="normal">11</span></pre></div></td><td class="code"><div><pre><span></span><code>```go
-import atrace &quot;trpc.group/trpc-go/trpc-agent-go/telemetry/trace&quot;
-
-// Create a root span before runner.Run(), so that session spans
-// (create_session, get_session, append_event, etc.) become children
-// of this root span via context propagation.
-ctx, span := atrace.Tracer.Start(ctx, &quot;my_request&quot;)
-defer span.End()
-
-eventChan, err := r.Run(ctx, userID, sessionID, message)
-```
-</code></pre></div></td></tr></table></div>
+<div class="admonition note">
+<p class="admonition-title">关于 Root Span</p>
+<p>Session 的操作由 Runner 执行，发生在 Agent 的 <code>Run()</code> 调用前后。而 Agent 的 root span 是在 <code>agent.Run()</code> 内部创建的，Session span 不会自动挂载到 Agent span 下。因此，如果需要在 Langfuse 等可观测平台中看到完整的 Session span 链路，需要在调用 <code>runner.Run()</code> 之前手动创建一个 root span：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span>
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span>
+<span class="normal"><a href="#__codelineno-0-7">7</a></span>
+<span class="normal"><a href="#__codelineno-0-8">8</a></span>
+<span class="normal"><a href="#__codelineno-0-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nx">atrace</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/telemetry/trace&quot;</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="c1">// Create a root span before runner.Run(), so that session spans</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="c1">// (create_session, get_session, append_event, etc.) become children</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="c1">// of this root span via context propagation.</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">span</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">atrace</span><span class="p">.</span><span class="nx">Tracer</span><span class="p">.</span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;my_request&quot;</span><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="k">defer</span><span class="w"> </span><span class="nx">span</span><span class="p">.</span><span class="nx">End</span><span class="p">()</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+</div>
 <p><strong>Hook 配置：</strong></p>
 <table>
 <thead>
@@ -2591,20 +2612,24 @@ eventChan, err := r.Run(ctx, userID, sessionID, message)
 <li>异步写入超时时间为 2 秒（<code>defaultAsyncPersistTimeout</code>）。</li>
 <li>调用 <code>Close()</code> 时会关闭所有 channel 并等待 worker 完成剩余任务。</li>
 </ul>
-<p>!!! warning "注意"
-    异步持久化模式下，如果服务进程异常退出，channel 中尚未消费的事件可能会丢失。请根据业务对数据一致性的要求评估是否启用。</p>
+<div class="admonition warning">
+<p class="admonition-title">注意</p>
+<p>异步持久化模式下，如果服务进程异常退出，channel 中尚未消费的事件可能会丢失。请根据业务对数据一致性的要求评估是否启用。</p>
+</div>
 <h2 id="session">用户级 Session 索引</h2>
 <p><code>WithEnableUserSessionIndex(true)</code> 是一个只对 HashIdx 存储生效的可选能力。它会维护一个按用户维度组织的索引，用来建立 <code>userID -&gt; 该用户创建的 sessionID</code> 之间的关联映射。</p>
 <p>这个索引当前的主要目的是避免 <code>ListSessions</code> 里现有的 SCAN 操作。</p>
 <p>该选项更适合新写入的 HashIdx 数据。如果在一个已经存在历史 HashIdx session 的环境里直接开启它，这些旧 session 不会自动出现在 index 中，除非额外做迁移或重建索引。</p>
 <h2 id="compatmode">存储兼容模式（CompatMode）</h2>
 <p>新版本 Redis Session 使用了全新的存储引擎（HashIdx），按用户维度散列到不同的 Redis Cluster slot，消除了旧版本所有数据集中在同一 slot 的热点问题。如果你有旧版本的数据需要迁移，可以通过 <code>WithCompatMode</code> 配置兼容模式实现平滑过渡。</p>
-<p>!!! tip "大多数情况下无需关注兼容模式"
-    默认的 <code>CompatModeLegacy</code> 模式已经能够自动处理新旧数据的读写兼容，<strong>直接升级即可正常工作</strong>。只有在以下两种情况下才需要关注兼容模式配置：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1</span>
-<span class="normal">2</span></pre></div></td><td class="code"><div><pre><span></span><code>1. **大量使用了 UserState**：新旧引擎的 UserState 使用不同的 Redis Key，`CreateSession`/`GetSession` 内部合并 UserState 时仅读取新 key，升级后旧 UserState 数据不会自动带入新 session。如果业务重度依赖 UserState，需要按下文说明选择合适的兼容模式。
-2. **大规模多节点灰度发布**：新旧版本实例同时运行时，需要使用 `CompatModeTransition` 保证混合部署兼容。
-</code></pre></div></td></tr></table></div>
+<div class="admonition tip">
+<p class="admonition-title">大多数情况下无需关注兼容模式</p>
+<p>默认的 <code>CompatModeLegacy</code> 模式已经能够自动处理新旧数据的读写兼容，<strong>直接升级即可正常工作</strong>。只有在以下两种情况下才需要关注兼容模式配置：</p>
+<ol>
+<li><strong>大量使用了 UserState</strong>：新旧引擎的 UserState 使用不同的 Redis Key，<code>CreateSession</code>/<code>GetSession</code> 内部合并 UserState 时仅读取新 key，升级后旧 UserState 数据不会自动带入新 session。如果业务重度依赖 UserState，需要按下文说明选择合适的兼容模式。</li>
+<li><strong>大规模多节点灰度发布</strong>：新旧版本实例同时运行时，需要使用 <code>CompatModeTransition</code> 保证混合部署兼容。</li>
+</ol>
+</div>
 <h3 id="_7">新业务（无历史数据）</h3>
 <p><strong>直接使用 <code>CompatModeNone</code></strong>，跳过所有兼容逻辑，获得最佳性能：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>

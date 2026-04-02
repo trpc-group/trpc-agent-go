@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/session/inmemory/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/session/pgvector/">
       
       
-        <link rel="prev" href="../summary/">
+        <link rel="prev" href="../postgres/">
       
       
-        <link rel="next" href="../sqlite/">
+        <link rel="next" href="../clickhouse/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Memory Session - tRPC-Agent-Go</title>
+        <title>PGVector Session - tRPC-Agent-Go</title>
       
     
     
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#memory-storage" class="md-skip">
+        <a href="#pgvector-session-storage" class="md-skip">
           Skip to content
         </a>
       
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Memory Session
+              PGVector Session
             
           </span>
         </div>
@@ -172,7 +172,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../../zh/session/inmemory/" hreflang="zh" class="md-select__link">
+            <a href="../../zh/session/pgvector/" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -990,32 +990,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Memory Session
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../inmemory/" class="md-nav__link">
         
   
   
@@ -1026,89 +1004,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#features" class="md-nav__link">
-    <span class="md-ellipsis">
-      Features
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Options
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#basic-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Basic Configuration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#with-summary" class="md-nav__link">
-    <span class="md-ellipsis">
-      With Summary
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#with-hooks" class="md-nav__link">
-    <span class="md-ellipsis">
-      With Hooks
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#use-cases" class="md-nav__link">
-    <span class="md-ellipsis">
-      Use Cases
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Notes
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1210,10 +1105,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../pgvector/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1224,6 +1141,209 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Features
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Options
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#connection-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Connection Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Session Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#async-persistence-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Async Persistence Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#summary-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#schema-and-table-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Schema and Table Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hook-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hook Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vector-and-search-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Vector and Search Configuration
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#instance-reuse" class="md-nav__link">
+    <span class="md-ellipsis">
+      Instance Reuse
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#semantic-recall" class="md-nav__link">
+    <span class="md-ellipsis">
+      Semantic Recall
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Semantic Recall">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#search-request-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      Search Request Fields
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llmagent-recall-preload" class="md-nav__link">
+    <span class="md-ellipsis">
+      LLMAgent Recall Preload
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#indexing-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      Indexing Behavior
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#database-initialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database Initialization
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      Storage Structure
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#use-cases" class="md-nav__link">
+    <span class="md-ellipsis">
+      Use Cases
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Notes
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -2028,6 +2148,75 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Configuration Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#connection-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Connection Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#session-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Session Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#async-persistence-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Async Persistence Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#summary-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#schema-and-table-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Schema and Table Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hook-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hook Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vector-and-search-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Vector and Search Configuration
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2040,18 +2229,69 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#with-summary" class="md-nav__link">
+  <a href="#instance-reuse" class="md-nav__link">
     <span class="md-ellipsis">
-      With Summary
+      Instance Reuse
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#with-hooks" class="md-nav__link">
+  <a href="#semantic-recall" class="md-nav__link">
     <span class="md-ellipsis">
-      With Hooks
+      Semantic Recall
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Semantic Recall">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#search-request-fields" class="md-nav__link">
+    <span class="md-ellipsis">
+      Search Request Fields
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llmagent-recall-preload" class="md-nav__link">
+    <span class="md-ellipsis">
+      LLMAgent Recall Preload
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#indexing-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      Indexing Behavior
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#database-initialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database Initialization
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#storage-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      Storage Structure
     </span>
   </a>
   
@@ -2091,7 +2331,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/session/inmemory.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/session/pgvector.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2100,24 +2340,100 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/session/inmemory.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/session/pgvector.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="memory-storage">Memory Storage</h1>
-<p>Memory storage is suitable for development environments and small-scale applications. It requires no external dependencies and works out of the box.</p>
+<h1 id="pgvector-session-storage">PGVector Session Storage</h1>
+<blockquote>
+<p><strong>Example Code</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/simple">examples/session/simple</a></p>
+</blockquote>
+<p>PGVector session storage builds on <code>session/postgres</code> and adds pgvector-based semantic recall for session events. It is suitable when you need both durable session persistence and the ability to search historical conversation content by meaning.</p>
+<p>All regular PostgreSQL session capabilities still apply here: TTL cleanup, soft delete, summaries, hooks, schema/table prefixing, and async persistence. PGVector adds event embeddings, HNSW indexing, and a search API over stored session events.</p>
 <h2 id="features">Features</h2>
 <ul>
-<li>✅ No external dependencies</li>
-<li>✅ Works out of the box</li>
-<li>✅ High-performance read/write</li>
-<li>❌ Data not persisted (lost after process restart)</li>
-<li>❌ No distributed support</li>
+<li>✅ Data persistence</li>
+<li>✅ Distributed support</li>
+<li>✅ Semantic recall across sessions</li>
+<li>✅ Hybrid recall (<code>dense</code> + PostgreSQL full-text branch)</li>
+<li>✅ Soft delete support</li>
+<li>✅ Schema and table prefix support</li>
+<li>✅ Async persistence support</li>
+<li>✅ Summary and Hook support</li>
 </ul>
 <h2 id="configuration-options">Configuration Options</h2>
+<h3 id="connection-configuration">Connection Configuration</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithPostgresClientDSN(dsn string)</code></td>
+<td><code>string</code></td>
+<td>-</td>
+<td>PostgreSQL DSN, format: <code>postgres://user:password@localhost:5432/dbname?sslmode=disable</code> (highest priority)</td>
+</tr>
+<tr>
+<td><code>WithHost(host string)</code></td>
+<td><code>string</code></td>
+<td><code>localhost</code></td>
+<td>PostgreSQL server address</td>
+</tr>
+<tr>
+<td><code>WithPort(port int)</code></td>
+<td><code>int</code></td>
+<td><code>5432</code></td>
+<td>PostgreSQL server port</td>
+</tr>
+<tr>
+<td><code>WithUser(user string)</code></td>
+<td><code>string</code></td>
+<td><code>""</code></td>
+<td>Database username</td>
+</tr>
+<tr>
+<td><code>WithPassword(password string)</code></td>
+<td><code>string</code></td>
+<td><code>""</code></td>
+<td>Database password</td>
+</tr>
+<tr>
+<td><code>WithDatabase(database string)</code></td>
+<td><code>string</code></td>
+<td><code>trpc-agent-go-pgsession</code></td>
+<td>Database name</td>
+</tr>
+<tr>
+<td><code>WithSSLMode(sslMode string)</code></td>
+<td><code>string</code></td>
+<td><code>disable</code></td>
+<td>SSL mode: <code>disable</code>, <code>require</code>, <code>verify-ca</code>, <code>verify-full</code></td>
+</tr>
+<tr>
+<td><code>WithPostgresInstance(name string)</code></td>
+<td><code>string</code></td>
+<td>-</td>
+<td>Use a pre-configured PostgreSQL instance (lowest priority)</td>
+</tr>
+<tr>
+<td><code>WithExtraOptions(extraOptions ...any)</code></td>
+<td><code>[]any</code></td>
+<td><code>nil</code></td>
+<td>Extra options for the PostgreSQL client</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Priority</strong>: <code>WithPostgresClientDSN</code> &gt; <code>WithHost/Port/User/Password/Database</code> &gt; <code>WithPostgresInstance</code></p>
+<h3 id="session-configuration">Session Configuration</h3>
 <table>
 <thead>
 <tr>
@@ -2132,32 +2448,76 @@
 <td><code>WithSessionEventLimit(limit int)</code></td>
 <td><code>int</code></td>
 <td><code>1000</code></td>
-<td>Maximum events per session; oldest events are evicted when exceeded</td>
+<td>Maximum events per session</td>
 </tr>
 <tr>
 <td><code>WithSessionTTL(ttl time.Duration)</code></td>
 <td><code>time.Duration</code></td>
 <td><code>0</code> (no expiry)</td>
-<td>TTL for session state and event list</td>
+<td>Session TTL</td>
 </tr>
 <tr>
 <td><code>WithAppStateTTL(ttl time.Duration)</code></td>
 <td><code>time.Duration</code></td>
 <td><code>0</code> (no expiry)</td>
-<td>TTL for app-level state</td>
+<td>App state TTL</td>
 </tr>
 <tr>
 <td><code>WithUserStateTTL(ttl time.Duration)</code></td>
 <td><code>time.Duration</code></td>
 <td><code>0</code> (no expiry)</td>
-<td>TTL for user-level state</td>
+<td>User state TTL</td>
 </tr>
 <tr>
 <td><code>WithCleanupInterval(interval time.Duration)</code></td>
 <td><code>time.Duration</code></td>
 <td><code>0</code> (auto)</td>
-<td>Cleanup interval for expired data; defaults to 5 minutes if any TTL is configured</td>
+<td>TTL cleanup interval; defaults to 5 minutes if any TTL is configured</td>
 </tr>
+<tr>
+<td><code>WithSoftDelete(enable bool)</code></td>
+<td><code>bool</code></td>
+<td><code>true</code></td>
+<td>Enable or disable soft delete</td>
+</tr>
+</tbody>
+</table>
+<h3 id="async-persistence-configuration">Async Persistence Configuration</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithEnableAsyncPersist(enable bool)</code></td>
+<td><code>bool</code></td>
+<td><code>false</code></td>
+<td>Enable async persistence for session and track events</td>
+</tr>
+<tr>
+<td><code>WithAsyncPersisterNum(num int)</code></td>
+<td><code>int</code></td>
+<td><code>10</code></td>
+<td>Number of async persistence workers</td>
+</tr>
+</tbody>
+</table>
+<h3 id="summary-configuration">Summary Configuration</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
 <tr>
 <td><code>WithSummarizer(s summary.SessionSummarizer)</code></td>
 <td><code>summary.SessionSummarizer</code></td>
@@ -2182,6 +2542,50 @@
 <td><code>60s</code></td>
 <td>Timeout for a single summary job</td>
 </tr>
+</tbody>
+</table>
+<h3 id="schema-and-table-configuration">Schema and Table Configuration</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithSchema(schema string)</code></td>
+<td><code>string</code></td>
+<td><code>""</code> (default schema)</td>
+<td>Specify schema name</td>
+</tr>
+<tr>
+<td><code>WithTablePrefix(prefix string)</code></td>
+<td><code>string</code></td>
+<td><code>""</code></td>
+<td>Table name prefix</td>
+</tr>
+<tr>
+<td><code>WithSkipDBInit(skip bool)</code></td>
+<td><code>bool</code></td>
+<td><code>false</code></td>
+<td>Skip automatic database initialization</td>
+</tr>
+</tbody>
+</table>
+<h3 id="hook-configuration">Hook Configuration</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
 <tr>
 <td><code>WithAppendEventHook(hooks ...session.AppendEventHook)</code></td>
 <td><code>[]session.AppendEventHook</code></td>
@@ -2193,6 +2597,79 @@
 <td><code>[]session.GetSessionHook</code></td>
 <td><code>nil</code></td>
 <td>Add session read hooks</td>
+</tr>
+</tbody>
+</table>
+<h3 id="vector-and-search-configuration">Vector and Search Configuration</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithEmbedder(e embedder.Embedder)</code></td>
+<td><code>embedder.Embedder</code></td>
+<td>required</td>
+<td>Embedder used for event embeddings and query embeddings</td>
+</tr>
+<tr>
+<td><code>WithIndexDimension(dim int)</code></td>
+<td><code>int</code></td>
+<td><code>1536</code></td>
+<td>Embedding dimension; should match the configured embedder</td>
+</tr>
+<tr>
+<td><code>WithEmbedTimeout(timeout time.Duration)</code></td>
+<td><code>time.Duration</code></td>
+<td><code>30s</code></td>
+<td>Timeout for embedding API calls</td>
+</tr>
+<tr>
+<td><code>WithSyncIndexing(sync bool)</code></td>
+<td><code>bool</code></td>
+<td><code>false</code></td>
+<td>Generate embeddings synchronously after event persistence</td>
+</tr>
+<tr>
+<td><code>WithIndexTextBuilder(builder IndexTextBuilder)</code></td>
+<td><code>IndexTextBuilder</code></td>
+<td><code>nil</code></td>
+<td>Customize the text written to <code>content_text</code> before embedding</td>
+</tr>
+<tr>
+<td><code>WithMaxResults(n int)</code></td>
+<td><code>int</code></td>
+<td><code>5</code></td>
+<td>Default result count for <code>SearchEvents</code></td>
+</tr>
+<tr>
+<td><code>WithHNSWM(m int)</code></td>
+<td><code>int</code></td>
+<td><code>16</code></td>
+<td>HNSW index <code>m</code> parameter</td>
+</tr>
+<tr>
+<td><code>WithHNSWEfConstruction(ef int)</code></td>
+<td><code>int</code></td>
+<td><code>200</code></td>
+<td>HNSW index <code>ef_construction</code> parameter</td>
+</tr>
+<tr>
+<td><code>WithHybridRRFK(k int)</code></td>
+<td><code>int</code></td>
+<td><code>60</code></td>
+<td>Reciprocal Rank Fusion constant for hybrid search</td>
+</tr>
+<tr>
+<td><code>WithHybridCandidateRatio(ratio int)</code></td>
+<td><code>int</code></td>
+<td><code>3</code></td>
+<td>Candidate multiplier per hybrid branch before fusion</td>
 </tr>
 </tbody>
 </table>
@@ -2219,31 +2696,33 @@
 <span class="normal"><a href="#__codelineno-0-20">20</a></span>
 <span class="normal"><a href="#__codelineno-0-21">21</a></span>
 <span class="normal"><a href="#__codelineno-0-22">22</a></span>
-<span class="normal"><a href="#__codelineno-0-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="c1">// Default configuration (development)</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="c1">// Result:</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="c1">// - Up to 1000 events per session</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="c1">// - All data never expires</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="c1">// - No automatic cleanup</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="c1">// Production-like configuration</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">(</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">500</span><span class="p">),</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSessionTTL</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithAppStateTTL</span><span class="p">(</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithUserStateTTL</span><span class="p">(</span><span class="mi">7</span><span class="o">*</span><span class="mi">24</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithCleanupInterval</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="p">)</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="c1">// Result:</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="c1">// - Up to 500 events per session</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="c1">// - Session expires 30 minutes after last write</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="c1">// - App state expires after 24 hours</span>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="c1">// - User state expires after 7 days</span>
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="c1">// - Expired data cleaned up every 10 minutes</span>
+<span class="normal"><a href="#__codelineno-0-23">23</a></span>
+<span class="normal"><a href="#__codelineno-0-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;time&quot;</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">openaiembedder</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai&quot;</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nx">sessionpgvector</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/pgvector&quot;</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="nx">embedder</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openaiembedder</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">openaiembedder</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="s">&quot;text-embedding-3-small&quot;</span><span class="p">),</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="p">)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionpgvector</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">    </span><span class="nx">sessionpgvector</span><span class="p">.</span><span class="nx">WithPostgresClientDSN</span><span class="p">(</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">        </span><span class="s">&quot;postgres://user:password@localhost:5432/trpc_sessions?sslmode=disable&quot;</span><span class="p">,</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="nx">sessionpgvector</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="nx">sessionpgvector</span><span class="p">.</span><span class="nx">WithIndexDimension</span><span class="p">(</span><span class="nx">embedder</span><span class="p">.</span><span class="nx">GetDimensions</span><span class="p">()),</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="w">    </span><span class="nx">sessionpgvector</span><span class="p">.</span><span class="nx">WithSessionTTL</span><span class="p">(</span><span class="mi">30</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">),</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="w">    </span><span class="nx">sessionpgvector</span><span class="p">.</span><span class="nx">WithSoftDelete</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="p">)</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="p">}</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="k">defer</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="with-summary">With Summary</h2>
+<h2 id="instance-reuse">Instance Reuse</h2>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
@@ -2261,26 +2740,33 @@
 <span class="normal"><a href="#__codelineno-1-15">15</a></span>
 <span class="normal"><a href="#__codelineno-1-16">16</a></span>
 <span class="normal"><a href="#__codelineno-1-17">17</a></span>
-<span class="normal"><a href="#__codelineno-1-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/summary&quot;</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="p">)</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithEventThreshold</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">200</span><span class="p">),</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="p">)</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">(</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSessionEventLimit</span><span class="p">(</span><span class="mi">1000</span><span class="p">),</span>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummarizer</span><span class="p">(</span><span class="nx">summarizer</span><span class="p">),</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithAsyncSummaryNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryQueueSize</span><span class="p">(</span><span class="mi">100</span><span class="p">),</span>
-</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithSummaryJobTimeout</span><span class="p">(</span><span class="mi">60</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">),</span>
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-1-18">18</a></span>
+<span class="normal"><a href="#__codelineno-1-19">19</a></span>
+<span class="normal"><a href="#__codelineno-1-20">20</a></span>
+<span class="normal"><a href="#__codelineno-1-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="nx">openaiembedder</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai&quot;</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">sessionpg</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/pgvector&quot;</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/storage/postgres&quot;</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="p">)</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="nx">postgres</span><span class="p">.</span><span class="nx">RegisterPostgresInstance</span><span class="p">(</span><span class="s">&quot;my-postgres-instance&quot;</span><span class="p">,</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="w">    </span><span class="nx">postgres</span><span class="p">.</span><span class="nx">WithClientConnString</span><span class="p">(</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="w">        </span><span class="s">&quot;postgres://user:password@localhost:5432/trpc_sessions?sslmode=disable&quot;</span><span class="p">,</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="p">)</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a><span class="nx">embedder</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openaiembedder</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a><span class="w">    </span><span class="nx">openaiembedder</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="s">&quot;text-embedding-3-small&quot;</span><span class="p">),</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15"></a><span class="p">)</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16"></a>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionpg</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18"></a><span class="w">    </span><span class="nx">sessionpg</span><span class="p">.</span><span class="nx">WithPostgresInstance</span><span class="p">(</span><span class="s">&quot;my-postgres-instance&quot;</span><span class="p">),</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19"></a><span class="w">    </span><span class="nx">sessionpg</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20"></a><span class="w">    </span><span class="nx">sessionpg</span><span class="p">.</span><span class="nx">WithIndexDimension</span><span class="p">(</span><span class="nx">embedder</span><span class="p">.</span><span class="nx">GetDimensions</span><span class="p">()),</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="with-hooks">With Hooks</h2>
+<h2 id="semantic-recall">Semantic Recall</h2>
+<p><code>*pgvector.Service</code> also implements <code>session.SearchableService</code>, so you can search a user's historical messages directly after creating the service:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
@@ -2294,21 +2780,211 @@
 <span class="normal"><a href="#__codelineno-2-11">11</a></span>
 <span class="normal"><a href="#__codelineno-2-12">12</a></span>
 <span class="normal"><a href="#__codelineno-2-13">13</a></span>
-<span class="normal"><a href="#__codelineno-2-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">sessionService</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithAppendEventHook</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="o">*</span><span class="nx">session</span><span class="p">.</span><span class="nx">AppendEventContext</span><span class="p">,</span><span class="w"> </span><span class="nx">next</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Appending event to session %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">ctx</span><span class="p">.</span><span class="nx">Session</span><span class="p">.</span><span class="nx">ID</span><span class="p">)</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">next</span><span class="p">()</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="w">    </span><span class="nx">inmemory</span><span class="p">.</span><span class="nx">WithGetSessionHook</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="o">*</span><span class="nx">session</span><span class="p">.</span><span class="nx">GetSessionContext</span><span class="p">,</span><span class="w"> </span><span class="nx">next</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">session</span><span class="p">.</span><span class="nx">Session</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">))</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">session</span><span class="p">.</span><span class="nx">Session</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">        </span><span class="nx">sess</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">next</span><span class="p">()</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Got session %s with %d events&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">sess</span><span class="p">.</span><span class="nx">ID</span><span class="p">,</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">sess</span><span class="p">.</span><span class="nx">Events</span><span class="p">))</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">    </span><span class="p">}),</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-2-14">14</a></span>
+<span class="normal"><a href="#__codelineno-2-15">15</a></span>
+<span class="normal"><a href="#__codelineno-2-16">16</a></span>
+<span class="normal"><a href="#__codelineno-2-17">17</a></span>
+<span class="normal"><a href="#__codelineno-2-18">18</a></span>
+<span class="normal"><a href="#__codelineno-2-19">19</a></span>
+<span class="normal"><a href="#__codelineno-2-20">20</a></span>
+<span class="normal"><a href="#__codelineno-2-21">21</a></span>
+<span class="normal"><a href="#__codelineno-2-22">22</a></span>
+<span class="normal"><a href="#__codelineno-2-23">23</a></span>
+<span class="normal"><a href="#__codelineno-2-24">24</a></span>
+<span class="normal"><a href="#__codelineno-2-25">25</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session&quot;</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="p">)</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="nx">results</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.</span><span class="nx">SearchEvents</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">EventSearchRequest</span><span class="p">{</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">    </span><span class="nx">Query</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;travel plan&quot;</span><span class="p">,</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="w">    </span><span class="nx">UserKey</span><span class="p">:</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">UserKey</span><span class="p">{</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">        </span><span class="nx">AppName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">        </span><span class="nx">UserID</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;user123&quot;</span><span class="p">,</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="w">    </span><span class="nx">SearchMode</span><span class="p">:</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">SearchModeHybrid</span><span class="p">,</span>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17"></a><span class="w">    </span><span class="nx">MaxResults</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="p">})</span>
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21"></a><span class="p">}</span>
+</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22"></a>
+</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23"></a><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">hit</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">results</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;[%0.3f] %s %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">hit</span><span class="p">.</span><span class="nx">Score</span><span class="p">,</span><span class="w"> </span><span class="nx">hit</span><span class="p">.</span><span class="nx">SessionKey</span><span class="p">.</span><span class="nx">SessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">hit</span><span class="p">.</span><span class="nx">Text</span><span class="p">)</span>
+</span><span id="__span-2-25"><a id="__codelineno-2-25" name="__codelineno-2-25"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="search-request-fields">Search Request Fields</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Query</code></td>
+<td>Required query text for semantic recall</td>
+</tr>
+<tr>
+<td><code>UserKey</code></td>
+<td>Required search scope: <code>&lt;appName, userID&gt;</code></td>
+</tr>
+<tr>
+<td><code>SessionIDs</code></td>
+<td>Restrict recall to specific session IDs</td>
+</tr>
+<tr>
+<td><code>ExcludeSessionIDs</code></td>
+<td>Exclude specific session IDs from recall</td>
+</tr>
+<tr>
+<td><code>Roles</code></td>
+<td>Limit matches to specific message roles</td>
+</tr>
+<tr>
+<td><code>CreatedAfter</code> / <code>CreatedBefore</code></td>
+<td>Restrict results by event time window</td>
+</tr>
+<tr>
+<td><code>FilterKey</code></td>
+<td>Filter events by hierarchical branch/filter key</td>
+</tr>
+<tr>
+<td><code>MaxResults</code></td>
+<td>Override backend default result count</td>
+</tr>
+<tr>
+<td><code>MinScore</code></td>
+<td>Dense similarity threshold; most useful with <code>SearchModeDense</code></td>
+</tr>
+<tr>
+<td><code>SearchMode</code></td>
+<td><code>session.SearchModeDense</code> (default) or <code>session.SearchModeHybrid</code></td>
+</tr>
+<tr>
+<td><code>HybridRRFK</code></td>
+<td>Override the default RRF constant for hybrid recall</td>
+</tr>
+<tr>
+<td><code>HybridCandidateRatio</code></td>
+<td>Override how many candidates each hybrid branch fetches before fusion</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Search modes</strong></p>
+<ul>
+<li><code>SearchModeDense</code>: embedding similarity only</li>
+<li><code>SearchModeHybrid</code>: dense retrieval + PostgreSQL full-text retrieval, fused with Reciprocal Rank Fusion (RRF)</li>
+</ul>
+<h3 id="llmagent-recall-preload">LLMAgent Recall Preload</h3>
+<p>Because <code>*pgvector.Service</code> implements <code>session.SearchableService</code>, LLMAgent can
+automatically use the current user message as a recall query and inject matched
+events from other sessions into the system prompt:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-3-10">10</a></span>
+<span class="normal"><a href="#__codelineno-3-11">11</a></span>
+<span class="normal"><a href="#__codelineno-3-12">12</a></span>
+<span class="normal"><a href="#__codelineno-3-13">13</a></span>
+<span class="normal"><a href="#__codelineno-3-14">14</a></span>
+<span class="normal"><a href="#__codelineno-3-15">15</a></span>
+<span class="normal"><a href="#__codelineno-3-16">16</a></span>
+<span class="normal"><a href="#__codelineno-3-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session&quot;</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="p">)</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="nx">assistant</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadSessionRecall</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadSessionRecallMinScore</span><span class="p">(</span><span class="mf">0.70</span><span class="p">),</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadSessionRecallSearchMode</span><span class="p">(</span><span class="nx">session</span><span class="p">.</span><span class="nx">SearchModeHybrid</span><span class="p">),</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="p">)</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">assistant</span><span class="p">,</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionService</span><span class="p">),</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Notes:</p>
+<ul>
+<li>Recall is scoped to the same user and automatically excludes the current session, so only <strong>other sessions</strong> are searched.</li>
+<li>The recalled snippets are <strong>merged into the system message</strong> and labeled as untrusted historical data.</li>
+<li>If the current request has no text query, the backend returns no hits, or a sub-flow uses <code>include_contents="none"</code>, recall preload is skipped.</li>
+<li>Call <code>SearchEvents</code> directly when you need explicit filters such as <code>SessionIDs</code>, <code>Roles</code>, or time windows.</li>
+</ul>
+<h2 id="indexing-behavior">Indexing Behavior</h2>
+<p>PGVector indexes events after they are persisted:</p>
+<ul>
+<li>Only persisted user/assistant text events are indexed</li>
+<li>Tool calls, tool results, partial events, and empty content are skipped</li>
+<li>By default, embeddings are generated asynchronously after the write succeeds</li>
+<li>If you need a newly appended event to be searchable immediately, use <code>WithSyncIndexing(true)</code></li>
+<li>Embedding failures do not roll back the session write; they are logged as warnings</li>
+<li><code>WithIndexTextBuilder(...)</code> lets you enrich or normalize the text before it is embedded and stored in <code>content_text</code></li>
+</ul>
+<p>This means semantic recall is <strong>eventually consistent</strong> by default.</p>
+<h2 id="database-initialization">Database Initialization</h2>
+<p>Unless <code>WithSkipDBInit(true)</code> is enabled, the service initializes PostgreSQL automatically:</p>
+<ol>
+<li>Enables the <code>pgvector</code> extension with <code>CREATE EXTENSION IF NOT EXISTS vector</code></li>
+<li>Creates the same core tables used by <code>session/postgres</code></li>
+<li>Extends <code>session_events</code> with vector-search columns</li>
+<li>Creates a GIN index for the keyword branch and an HNSW index for dense recall</li>
+</ol>
+<p>If HNSW index creation fails, the service logs a warning and continues running. Dense recall still works, but it may fall back to slower query plans depending on your PostgreSQL/pgvector setup.</p>
+<p>If you use <code>WithSkipDBInit(true)</code>, make sure the extension, tables, columns, and indexes already exist, and that the <code>embedding</code> column dimension matches <code>WithIndexDimension(...)</code>.</p>
+<h2 id="storage-structure">Storage Structure</h2>
+<p>All regular session tables are the same as <code>session/postgres</code>. PGVector extends <code>session_events</code> with additional search fields:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Type</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>content_text</code></td>
+<td><code>TEXT</code></td>
+<td>Indexed text returned in recall results</td>
+</tr>
+<tr>
+<td><code>role</code></td>
+<td><code>VARCHAR(32)</code></td>
+<td>Normalized role used for filtering and display</td>
+</tr>
+<tr>
+<td><code>embedding</code></td>
+<td><code>vector(N)</code></td>
+<td>Event embedding used for dense recall</td>
+</tr>
+<tr>
+<td><code>search_vector</code></td>
+<td><code>tsvector</code></td>
+<td>Generated PostgreSQL text-search vector for the hybrid keyword branch</td>
+</tr>
+</tbody>
+</table>
+<p>Additional indexes:</p>
+<ul>
+<li><code>GIN(search_vector)</code> for the PostgreSQL full-text branch</li>
+<li><code>HNSW(embedding vector_cosine_ops)</code> for vector similarity recall</li>
+</ul>
 <h2 id="use-cases">Use Cases</h2>
 <table>
 <thead>
@@ -2319,29 +2995,34 @@
 </thead>
 <tbody>
 <tr>
-<td>Development/Testing</td>
-<td>Default configuration</td>
+<td>Durable chat history with semantic lookup</td>
+<td>Default setup + <code>WithEmbedder(...)</code></td>
 </tr>
 <tr>
-<td>Single-node small apps</td>
-<td>Configure TTL and EventLimit</td>
+<td>Cross-session recall for the same user</td>
+<td>Use <code>SearchEvents</code> with <code>SearchModeHybrid</code></td>
 </tr>
 <tr>
-<td>Demo</td>
-<td>Default configuration</td>
+<td>Low-latency writes</td>
+<td>Keep default async indexing</td>
 </tr>
 <tr>
-<td>Unit tests</td>
-<td>Default config, create new instance per test</td>
+<td>Immediate recall after append</td>
+<td>Enable <code>WithSyncIndexing(true)</code></td>
+</tr>
+<tr>
+<td>Multi-tenant PostgreSQL</td>
+<td>Configure <code>WithSchema(...)</code> and/or <code>WithTablePrefix(...)</code></td>
 </tr>
 </tbody>
 </table>
 <h2 id="notes">Notes</h2>
 <ol>
-<li><strong>No persistence</strong>: All data is lost after process restart; not suitable for production</li>
-<li><strong>Memory usage</strong>: Large numbers of sessions may cause high memory usage; configure reasonable EventLimit and TTL</li>
-<li><strong>No distributed support</strong>: Data is not shared across instances; each instance has independent session data</li>
-<li><strong>Concurrency safe</strong>: Built-in read-write locks support concurrent access</li>
+<li><strong>Embedder is required</strong>: <code>NewService()</code> returns an error if <code>WithEmbedder(...)</code> is missing.</li>
+<li><strong>Dimensions must match</strong>: if the embedder reports a dimension, it must match <code>WithIndexDimension(...)</code>.</li>
+<li><strong>Text search language</strong>: the built-in PostgreSQL text-search branch uses <code>to_tsvector('english', content_text)</code>. Dense recall still works for non-English content, but hybrid keyword behavior follows PostgreSQL's <code>english</code> text-search configuration.</li>
+<li><strong>Permissions</strong>: automatic initialization requires permission to create extensions, tables, and indexes.</li>
+<li><strong>Resource cleanup</strong>: call <code>Close()</code> when the service is no longer needed.</li>
 </ol>
 
 
@@ -2365,7 +3046,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 6, 2026 08:00:11 UTC">2026-03-06 08:00:11</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 2, 2026 03:24:40 UTC">2026-04-02 03:24:40</span>
   </span>
 
     
@@ -2375,7 +3056,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 5, 2026 07:26:33 UTC">2026-03-05 07:26:33</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 2, 2026 03:24:40 UTC">2026-04-02 03:24:40</span>
   </span>
 
     
@@ -2456,7 +3137,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../summary/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Session Summary">
+          <a href="../postgres/" class="md-footer__link md-footer__link--prev" aria-label="Previous: PostgreSQL Session">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -2466,20 +3147,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Session Summary
+                PostgreSQL Session
               </div>
             </div>
           </a>
         
         
           
-          <a href="../sqlite/" class="md-footer__link md-footer__link--next" aria-label="Next: SQLite Session">
+          <a href="../clickhouse/" class="md-footer__link md-footer__link--next" aria-label="Next: ClickHouse Session">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                SQLite Session
+                ClickHouse Session
               </div>
             </div>
             <div class="md-footer__button md-icon">

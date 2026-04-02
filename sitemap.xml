@@ -344,6 +344,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/session/mysql/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/session/pgvector/</loc>
+        <lastmod>2026-04-02</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/session/pgvector/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/session/pgvector/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/session/postgres/</loc>
         <lastmod>2026-04-02</lastmod>
         <changefreq>daily</changefreq>
@@ -713,6 +720,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/session/mysql/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/session/mysql/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/session/pgvector/</loc>
+        <lastmod>2026-04-02</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/session/pgvector/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/session/pgvector/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/session/postgres/</loc>

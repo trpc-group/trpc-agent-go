@@ -1291,6 +1291,29 @@
   
   
     <li class="md-nav__item">
+      <a href="../pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../clickhouse/" class="md-nav__link">
         
   
@@ -2420,30 +2443,28 @@
 </tr>
 </tbody>
 </table>
-<p>!!! note "About Root Span"
-    Session operations are executed by the Runner before and after the Agent's <code>Run()</code> call. The Agent's root span is created inside <code>agent.Run()</code>, so Session spans are not automatically attached under it. To see the full Session span chain in observability platforms like Langfuse, manually create a root span before calling <code>runner.Run()</code>:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 1</span>
-<span class="normal"> 2</span>
-<span class="normal"> 3</span>
-<span class="normal"> 4</span>
-<span class="normal"> 5</span>
-<span class="normal"> 6</span>
-<span class="normal"> 7</span>
-<span class="normal"> 8</span>
-<span class="normal"> 9</span>
-<span class="normal">10</span>
-<span class="normal">11</span></pre></div></td><td class="code"><div><pre><span></span><code>```go
-import atrace &quot;trpc.group/trpc-go/trpc-agent-go/telemetry/trace&quot;
-
-// Create a root span before runner.Run(), so that session spans
-// (create_session, get_session, append_event, etc.) become children
-// of this root span via context propagation.
-ctx, span := atrace.Tracer.Start(ctx, &quot;my_request&quot;)
-defer span.End()
-
-eventChan, err := r.Run(ctx, userID, sessionID, message)
-```
-</code></pre></div></td></tr></table></div>
+<div class="admonition note">
+<p class="admonition-title">About Root Span</p>
+<p>Session operations are executed by the Runner before and after the Agent's <code>Run()</code> call. The Agent's root span is created inside <code>agent.Run()</code>, so Session spans are not automatically attached under it. To see the full Session span chain in observability platforms like Langfuse, manually create a root span before calling <code>runner.Run()</code>:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span>
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span>
+<span class="normal"><a href="#__codelineno-0-7">7</a></span>
+<span class="normal"><a href="#__codelineno-0-8">8</a></span>
+<span class="normal"><a href="#__codelineno-0-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nx">atrace</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/telemetry/trace&quot;</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="c1">// Create a root span before runner.Run(), so that session spans</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="c1">// (create_session, get_session, append_event, etc.) become children</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="c1">// of this root span via context propagation.</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">span</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">atrace</span><span class="p">.</span><span class="nx">Tracer</span><span class="p">.</span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;my_request&quot;</span><span class="p">)</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="k">defer</span><span class="w"> </span><span class="nx">span</span><span class="p">.</span><span class="nx">End</span><span class="p">()</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="nx">eventChan</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+</div>
 <p><strong>Hooks:</strong></p>
 <table>
 <thead>
@@ -2591,20 +2612,24 @@ eventChan, err := r.Run(ctx, userID, sessionID, message)
 <li>Async write timeout is 2 seconds (<code>defaultAsyncPersistTimeout</code>).</li>
 <li>Calling <code>Close()</code> closes all channels and waits for workers to drain remaining tasks.</li>
 </ul>
-<p>!!! warning "Caution"
-    In async persistence mode, events still in the channel may be lost if the process crashes unexpectedly. Evaluate whether to enable this based on your data consistency requirements.</p>
+<div class="admonition warning">
+<p class="admonition-title">Caution</p>
+<p>In async persistence mode, events still in the channel may be lost if the process crashes unexpectedly. Evaluate whether to enable this based on your data consistency requirements.</p>
+</div>
 <h2 id="user-session-index">User Session Index</h2>
 <p><code>WithEnableUserSessionIndex(true)</code> is an optional capability for HashIdx storage only. It maintains a user-scoped index that maps <code>userID</code> to the session IDs created by that user.</p>
 <p>The main purpose of this index is to avoid the SCAN operation currently used by <code>ListSessions</code>.</p>
 <p>This option is intended for fresh HashIdx writes. If you enable it on an environment that already contains historical HashIdx sessions created before the index was introduced, those older sessions will not automatically appear in the index unless you migrate or rebuild the index separately.</p>
 <h2 id="storage-compatibility-mode-compatmode">Storage Compatibility Mode (CompatMode)</h2>
 <p>The new version of Redis Session uses a new storage engine (HashIdx) that distributes data across different Redis Cluster slots by user, eliminating the hotspot issue where all data was concentrated in a single slot in the old version. If you have legacy data to migrate, use <code>WithCompatMode</code> to configure compatibility mode for a smooth transition.</p>
-<p>!!! tip "In most cases, you don't need to worry about compatibility mode"
-    The default <code>CompatModeLegacy</code> mode automatically handles read/write compatibility between old and new data — <strong>just upgrade and it works</strong>. You only need to pay attention to compatibility mode configuration in these two cases:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">1</span>
-<span class="normal">2</span></pre></div></td><td class="code"><div><pre><span></span><code>1. **Heavy use of UserState**: The old and new engines use different Redis keys for UserState. `CreateSession`/`GetSession` only read the new key when merging UserState internally, so legacy UserState data won&#39;t automatically carry over to new sessions. If your application relies heavily on UserState, choose the appropriate compatibility mode as described below.
-2. **Large-scale canary deployment**: When old and new instances run simultaneously, use `CompatModeTransition` to ensure mixed-deployment compatibility.
-</code></pre></div></td></tr></table></div>
+<div class="admonition tip">
+<p class="admonition-title">In most cases, you don't need to worry about compatibility mode</p>
+<p>The default <code>CompatModeLegacy</code> mode automatically handles read/write compatibility between old and new data — <strong>just upgrade and it works</strong>. You only need to pay attention to compatibility mode configuration in these two cases:</p>
+<ol>
+<li><strong>Heavy use of UserState</strong>: The old and new engines use different Redis keys for UserState. <code>CreateSession</code>/<code>GetSession</code> only read the new key when merging UserState internally, so legacy UserState data won't automatically carry over to new sessions. If your application relies heavily on UserState, choose the appropriate compatibility mode as described below.</li>
+<li><strong>Large-scale canary deployment</strong>: When old and new instances run simultaneously, use <code>CompatModeTransition</code> to ensure mixed-deployment compatibility.</li>
+</ol>
+</div>
 <h3 id="new-deployments-no-legacy-data">New Deployments (No Legacy Data)</h3>
 <p><strong>Use <code>CompatModeNone</code> directly</strong> to skip all compatibility logic and get the best performance:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>

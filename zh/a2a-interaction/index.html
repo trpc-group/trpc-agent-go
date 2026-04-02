@@ -1093,6 +1093,29 @@
   
   
     <li class="md-nav__item">
+      <a href="../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../session/clickhouse/" class="md-nav__link">
         
   
@@ -2139,8 +2162,10 @@
 
 
 <h1 id="a2a">A2A 协议交互规范</h1>
-<p>!!! note "说明"
-    本文档定义了 trpc-agent-go 框架内部对 A2A 协议的扩展实现规范。普通用户在使用 A2A Client/Server 时无需关注此文档内容，框架已自动处理所有协议转换细节。仅当您需要开发非 trpc-agent-go 的 A2A Client/Server 对接本框架时，才需参考此规范。</p>
+<div class="admonition note">
+<p class="admonition-title">说明</p>
+<p>本文档定义了 trpc-agent-go 框架内部对 A2A 协议的扩展实现规范。普通用户在使用 A2A Client/Server 时无需关注此文档内容，框架已自动处理所有协议转换细节。仅当您需要开发非 trpc-agent-go 的 A2A Client/Server 对接本框架时，才需参考此规范。</p>
+</div>
 <h2 id="_1">背景</h2>
 <p><a href="https://a2a-protocol.org/latest/specification/">A2A (Agent-to-Agent) 协议</a> 定义了 Agent 间通信的基础数据模型（Message、Task、Part 等）和操作接口（SendMessage、StreamMessage 等）。A2A 规范在开篇明确了协议的设计目标：</p>
 <blockquote>
@@ -2157,8 +2182,10 @@
 <p>可以看到，A2A 期望 Agent 之间以「黑盒」方式协作——彼此发现能力、协商交互模式、管理协作任务，但不需要访问对方的工具（Tools）、记忆（Memory）和内部状态（Internal State）。基于这一设计理念，Agent 执行过程中的 trace 数据——如工具调用链路（Function Call / Response）、代码执行过程、模型推理步骤（Reasoning）等——并不在 A2A 协议的规范范围内，协议也没有定义这些数据应如何传递。</p>
 <p>然而在实际的多 Agent 编排场景中，部分用户希望能够看到远程 Agent 的执行路径，以便进行调试、审计或更精细的协同。考虑到这一需求，trpc-agent-go 利用 A2A 协议预留的扩展机制（<code>DataPart</code>、<code>Message.metadata</code> 等），在不违背协议规范的前提下支持了这些数据的传递。</p>
 <p>本文档定义了 trpc-agent-go 在 A2A 协议之上的<strong>交互规范</strong>，作为 Client 和 Server 实现的标准参考。当 A2A 协议升级时，本文档将同步更新。</p>
-<p>!!! info "后续规划"
-    为了更好地符合 A2A 规范的设计理念，工具调用等执行过程数据的跨 Agent 传递，后续将设计为独立的 <strong>extension</strong>，用户可通过配置自行决定是否开启。如果希望严格遵循 A2A 的黑盒协作模式、不暴露内部执行细节，关闭即可，此时仅传递最终结果。</p>
+<div class="admonition info">
+<p class="admonition-title">后续规划</p>
+<p>为了更好地符合 A2A 规范的设计理念，工具调用等执行过程数据的跨 Agent 传递，后续将设计为独立的 <strong>extension</strong>，用户可通过配置自行决定是否开启。如果希望严格遵循 A2A 的黑盒协作模式、不暴露内部执行细节，关闭即可，此时仅传递最终结果。</p>
+</div>
 <blockquote>
 <p>完整的 A2A 协议规范请参考：https://a2a-protocol.org/latest/specification/</p>
 <p>框架使用指南请参考：<a href="../a2a/">A2A 集成指南</a></p>

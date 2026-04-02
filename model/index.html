@@ -2132,6 +2132,29 @@
   
   
     <li class="md-nav__item">
+      <a href="../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../session/clickhouse/" class="md-nav__link">
         
   
@@ -6104,8 +6127,10 @@ metrics logic.</p>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Token Calculation Formula</strong>:</p>
 <p>The framework automatically calculates "maxInputTokens" based on the model's context window:</p>
-<p>!!! note "Context Window Registration"
-    Both Token Tailoring and session summary <code>WithContextThreshold</code> rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with <code>model.RegisterModelContextWindow("my-model", 32768)</code> or <code>model.RegisterModelContextWindows(map[string]int{...})</code>. See the <a href="../session/#session-summary">Session Summary documentation</a> for a full example.</p>
+<div class="admonition note">
+<p class="admonition-title">Context Window Registration</p>
+<p>Both Token Tailoring and session summary <code>WithContextThreshold</code> rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with <code>model.RegisterModelContextWindow("my-model", 32768)</code> or <code>model.RegisterModelContextWindows(map[string]int{...})</code>. See the <a href="../session/#session-summary">Session Summary documentation</a> for a full example.</p>
+</div>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1">1</a></span>
 <span class="normal"><a href="#__codelineno-47-2">2</a></span>
 <span class="normal"><a href="#__codelineno-47-3">3</a></span>

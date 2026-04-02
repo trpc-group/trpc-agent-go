@@ -1282,6 +1282,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#semantic-recall-pgvector-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      Semantic Recall (PGVector Only)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#related-documentation" class="md-nav__link">
     <span class="md-ellipsis">
       Related Documentation
@@ -1436,6 +1445,29 @@
   
   <span class="md-ellipsis">
     PostgreSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
     
   </span>
   
@@ -2515,6 +2547,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#semantic-recall-pgvector-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      Semantic Recall (PGVector Only)
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#related-documentation" class="md-nav__link">
     <span class="md-ellipsis">
       Related Documentation
@@ -2576,15 +2617,15 @@
 <li><strong>Session Summary</strong>: Uses LLM to automatically compress long conversation history, significantly reducing token consumption while preserving key context</li>
 <li><strong>Event Limit</strong>: Controls the maximum number of events stored per session to prevent memory overflow</li>
 <li><strong>TTL Management</strong>: Supports automatic expiration and cleanup of session data</li>
-<li><strong>Multiple Storage Backends</strong>: Supports Memory, SQLite, Redis, PostgreSQL, MySQL, and ClickHouse</li>
+<li><strong>Multiple Storage Backends</strong>: Supports Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, and ClickHouse</li>
 <li><strong>Concurrency Safe</strong>: Built-in read-write locks ensure safe concurrent access</li>
 <li><strong>Automatic Management</strong>: Automatically handles session creation, loading, and updates when integrated with Runner</li>
-<li><strong>Soft Delete Support</strong>: PostgreSQL/MySQL/ClickHouse support soft delete for data recovery</li>
+<li><strong>Soft Delete Support</strong>: SQLite/PostgreSQL/PGVector/MySQL/ClickHouse support soft delete for data recovery</li>
 </ul>
 <h2 id="quick-start">Quick Start</h2>
 <h3 id="integration-with-runner">Integration with Runner</h3>
 <p>Session management in tRPC-Agent-Go is integrated into the Runner via <code>runner.WithSessionService</code>. The Runner automatically handles session creation, loading, updating, and persistence.</p>
-<p><strong>Supported Storage Backends:</strong> Memory, Redis, PostgreSQL, MySQL, ClickHouse</p>
+<p><strong>Supported Storage Backends:</strong> Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse</p>
 <p><strong>Default Behavior:</strong> If <code>runner.WithSessionService</code> is not configured, the Runner defaults to in-memory storage, and data will be lost after process restart.</p>
 <h3 id="basic-example">Basic Example</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">  1</a></span>
@@ -3091,12 +3132,22 @@
 <td>Yes</td>
 </tr>
 <tr>
+<td>SQLite</td>
+<td>Periodic scan (soft/hard delete)</td>
+<td>Yes</td>
+</tr>
+<tr>
 <td>Redis</td>
 <td>Native Redis TTL</td>
 <td>Yes</td>
 </tr>
 <tr>
 <td>PostgreSQL</td>
+<td>Periodic scan (soft/hard delete)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>PGVector</td>
 <td>Periodic scan (soft/hard delete)</td>
 <td>Yes</td>
 </tr>
@@ -3113,7 +3164,7 @@
 </tbody>
 </table>
 <h2 id="storage-backend-comparison">Storage Backend Comparison</h2>
-<p>tRPC-Agent-Go provides six session storage backends for different scenarios:</p>
+<p>tRPC-Agent-Go provides seven session storage backends for different scenarios:</p>
 <table>
 <thead>
 <tr>
@@ -3149,6 +3200,13 @@
 <tr>
 <td><a href="postgres/">PostgreSQL</a></td>
 <td>Production, complex queries</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><a href="pgvector/">PGVector</a></td>
+<td>Production, semantic recall</td>
 <td>✅</td>
 <td>✅</td>
 <td>✅</td>
@@ -3239,7 +3297,7 @@
 </span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Chain of Responsibility</strong>: Hooks form a chain via <code>next()</code>. You can return early to short-circuit subsequent logic, and errors propagate upward.</p>
-<p><strong>Cross-Backend Consistency</strong>: All storage backends (Memory, Redis, PostgreSQL, MySQL, ClickHouse) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.</p>
+<p><strong>Cross-Backend Consistency</strong>: All storage backends (Memory, SQLite, Redis, PostgreSQL, PGVector, MySQL, ClickHouse) have unified Hook support. Simply inject Hook slices when constructing the service — the usage is identical across all backends.</p>
 <h2 id="advanced-usage">Advanced Usage</h2>
 <h3 id="using-session-service-api-directly">Using Session Service API Directly</h3>
 <p>In most cases, you should use session management through the Runner, which handles all details automatically. However, in some special scenarios (such as session management dashboards, data migration, analytics, etc.), you may need to operate the Session Service directly.</p>
@@ -3554,11 +3612,19 @@
 <td>✅</td>
 </tr>
 <tr>
+<td>SQLite</td>
+<td>✅</td>
+</tr>
+<tr>
 <td>Redis</td>
 <td>✅</td>
 </tr>
 <tr>
 <td>PostgreSQL</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>PGVector</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -3604,6 +3670,40 @@
 </span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15"></a><span class="c1">// Retrieve track events from session</span>
 </span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16"></a><span class="nx">trackEvents</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sess</span><span class="p">.</span><span class="nx">GetTrackEvents</span><span class="p">(</span><span class="s">&quot;ui-events&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<h2 id="semantic-recall-pgvector-only">Semantic Recall (PGVector Only)</h2>
+<p>The <code>session/pgvector</code> backend also implements <code>session.SearchableService</code>, so you can search a user's historical messages across one or more sessions by semantic similarity. Only persisted user/assistant text events are indexed; tool calls, tool results, partial events, and empty content are skipped.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-17-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-17-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-17-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-17-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-17-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-17-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-17-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-17-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-17-10">10</a></span>
+<span class="normal"><a href="#__codelineno-17-11">11</a></span>
+<span class="normal"><a href="#__codelineno-17-12">12</a></span>
+<span class="normal"><a href="#__codelineno-17-13">13</a></span>
+<span class="normal"><a href="#__codelineno-17-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="nx">searchSvc</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.(</span><span class="nx">session</span><span class="p">.</span><span class="nx">SearchableService</span><span class="p">)</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="w">    </span><span class="nx">hits</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">searchSvc</span><span class="p">.</span><span class="nx">SearchEvents</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">EventSearchRequest</span><span class="p">{</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a><span class="w">        </span><span class="nx">Query</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;travel plan&quot;</span><span class="p">,</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a><span class="w">        </span><span class="nx">UserKey</span><span class="p">:</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">UserKey</span><span class="p">{</span>
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6"></a><span class="w">            </span><span class="nx">AppName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7"></a><span class="w">            </span><span class="nx">UserID</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;user123&quot;</span><span class="p">,</span>
+</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9"></a><span class="w">        </span><span class="nx">SearchMode</span><span class="p">:</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">SearchModeHybrid</span><span class="p">,</span>
+</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10"></a><span class="w">        </span><span class="nx">MaxResults</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+</span><span id="__span-17-11"><a id="__codelineno-17-11" name="__codelineno-17-11"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-17-12"><a id="__codelineno-17-12" name="__codelineno-17-12"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">hits</span>
+</span><span id="__span-17-13"><a id="__codelineno-17-13" name="__codelineno-17-13"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-17-14"><a id="__codelineno-17-14" name="__codelineno-17-14"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>If you are using LLMAgent, searchable backends such as <code>session/pgvector</code> can
+also preload cross-session recall into the system prompt via
+<code>llmagent.WithPreloadSessionRecall(...)</code>.</p>
+<p>See <a href="pgvector/">PGVector Session</a> for configuration details, indexing behavior, and search filters.</p>
 <h2 id="related-documentation">Related Documentation</h2>
 <ul>
 <li><a href="summary/">Session Summary</a> - Automatic compression of long conversation history</li>
@@ -3611,6 +3711,7 @@
 <li><a href="sqlite/">SQLite Storage</a> - Local persistence, single-node</li>
 <li><a href="redis/">Redis Storage</a> - Production distributed storage</li>
 <li><a href="postgres/">PostgreSQL Storage</a> - Relational database storage</li>
+<li><a href="pgvector/">PGVector Session</a> - PostgreSQL session storage with semantic recall</li>
 <li><a href="mysql/">MySQL Storage</a> - Relational database storage</li>
 <li><a href="clickhouse/">ClickHouse Storage</a> - Massive data storage</li>
 </ul>
@@ -3642,7 +3743,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 2, 2026 02:07:04 UTC">2026-04-02 02:07:04</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 2, 2026 03:24:40 UTC">2026-04-02 03:24:40</span>
   </span>
 
     

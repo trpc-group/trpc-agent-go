@@ -1282,6 +1282,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pgvector" class="md-nav__link">
+    <span class="md-ellipsis">
+      语义召回（仅 PGVector）
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#_15" class="md-nav__link">
     <span class="md-ellipsis">
       相关文档
@@ -1436,6 +1445,29 @@
   
   <span class="md-ellipsis">
     PostgreSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
     
   </span>
   
@@ -2515,6 +2547,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#pgvector" class="md-nav__link">
+    <span class="md-ellipsis">
+      语义召回（仅 PGVector）
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#_15" class="md-nav__link">
     <span class="md-ellipsis">
       相关文档
@@ -2576,15 +2617,15 @@
 <li><strong>会话摘要</strong>：使用 LLM 自动压缩长对话历史，在保留关键上下文的同时显著降低 token 消耗</li>
 <li><strong>事件限制</strong>：控制每个会话存储的最大事件数量，防止内存溢出</li>
 <li><strong>TTL 管理</strong>：支持会话数据的自动过期清理</li>
-<li><strong>多存储后端</strong>：支持内存、SQLite、Redis、PostgreSQL、MySQL、ClickHouse 存储</li>
+<li><strong>多存储后端</strong>：支持内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse 存储</li>
 <li><strong>并发安全</strong>：内置读写锁保证并发访问安全</li>
 <li><strong>自动管理</strong>：集成 Runner 后自动处理会话创建、加载和更新</li>
-<li><strong>软删除支持</strong>：PostgreSQL/MySQL/ClickHouse 支持软删除，数据可恢复</li>
+<li><strong>软删除支持</strong>：SQLite/PostgreSQL/PGVector/MySQL/ClickHouse 支持软删除，数据可恢复</li>
 </ul>
 <h2 id="_4">快速开始</h2>
 <h3 id="runner">集成到 Runner</h3>
 <p>tRPC-Agent-Go 的会话管理通过 <code>runner.WithSessionService</code> 集成到 Runner 中，Runner 会自动处理会话的创建、加载、更新和持久化。</p>
-<p><strong>支持的存储后端：</strong> 内存（Memory）、SQLite、Redis、PostgreSQL、MySQL、ClickHouse</p>
+<p><strong>支持的存储后端：</strong> 内存（Memory）、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse</p>
 <p><strong>默认行为：</strong> 如果不配置 <code>runner.WithSessionService</code>，Runner 会默认使用内存存储（Memory），数据在进程重启后会丢失。</p>
 <h3 id="_5">基础示例</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">  1</a></span>
@@ -3112,6 +3153,11 @@
 <td>是</td>
 </tr>
 <tr>
+<td>PGVector</td>
+<td>定期扫描（软删除或硬删除）</td>
+<td>是</td>
+</tr>
+<tr>
 <td>MySQL</td>
 <td>定期扫描（软删除或硬删除）</td>
 <td>是</td>
@@ -3124,7 +3170,7 @@
 </tbody>
 </table>
 <h2 id="_8">存储后端对比</h2>
-<p>tRPC-Agent-Go 提供六种会话存储后端，满足不同场景需求：</p>
+<p>tRPC-Agent-Go 提供七种会话存储后端，满足不同场景需求：</p>
 <table>
 <thead>
 <tr>
@@ -3160,6 +3206,13 @@
 <tr>
 <td><a href="postgres/">PostgreSQL</a></td>
 <td>生产环境、复杂查询</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><a href="pgvector/">PGVector</a></td>
+<td>生产环境、语义召回</td>
 <td>✅</td>
 <td>✅</td>
 <td>✅</td>
@@ -3254,7 +3307,7 @@
 </span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>责任链执行</strong>：Hook 通过 <code>next()</code> 形成链式调用，可提前返回以短路后续逻辑，错误会向上传递。</p>
-<p><strong>跨后端一致</strong>：内存、Redis、PostgreSQL、MySQL、ClickHouse 所有存储后端均已统一接入 Hook 机制，构造服务时注入 Hook 切片即可，使用方式完全一致。</p>
+<p><strong>跨后端一致</strong>：内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse 所有存储后端均已统一接入 Hook 机制，构造服务时注入 Hook 切片即可，使用方式完全一致。</p>
 <h2 id="_10">高级用法</h2>
 <h3 id="session-service-api">直接使用 Session Service API</h3>
 <p>在大多数情况下，您应该通过 Runner 使用会话管理，Runner 会自动处理所有细节。但在某些特殊场景下（如会话管理后台、数据迁移、统计分析等），您可能需要直接操作 Session Service。</p>
@@ -3583,11 +3636,19 @@
 <td>✅</td>
 </tr>
 <tr>
+<td>SQLite</td>
+<td>✅</td>
+</tr>
+<tr>
 <td>Redis 存储</td>
 <td>✅</td>
 </tr>
 <tr>
 <td>PostgreSQL 存储</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>PGVector</td>
 <td>✅</td>
 </tr>
 <tr>
@@ -3633,6 +3694,40 @@
 </span><span id="__span-16-15"><a id="__codelineno-16-15" name="__codelineno-16-15"></a><span class="c1">// 从会话中获取 Track 事件</span>
 </span><span id="__span-16-16"><a id="__codelineno-16-16" name="__codelineno-16-16"></a><span class="nx">trackEvents</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sess</span><span class="p">.</span><span class="nx">GetTrackEvents</span><span class="p">(</span><span class="s">&quot;ui-events&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<h2 id="pgvector">语义召回（仅 PGVector）</h2>
+<p><code>session/pgvector</code> 后端额外实现了 <code>session.SearchableService</code>，可以按语义相似度在某个用户的一个或多个会话里检索历史消息。只有已持久化的用户/助手文本事件会被建立索引；工具调用、工具结果、partial 事件和空内容不会进入检索索引。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-17-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-17-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-17-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-17-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-17-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-17-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-17-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-17-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-17-10">10</a></span>
+<span class="normal"><a href="#__codelineno-17-11">11</a></span>
+<span class="normal"><a href="#__codelineno-17-12">12</a></span>
+<span class="normal"><a href="#__codelineno-17-13">13</a></span>
+<span class="normal"><a href="#__codelineno-17-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="nx">searchSvc</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">.(</span><span class="nx">session</span><span class="p">.</span><span class="nx">SearchableService</span><span class="p">)</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="k">if</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="w">    </span><span class="nx">hits</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">searchSvc</span><span class="p">.</span><span class="nx">SearchEvents</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">EventSearchRequest</span><span class="p">{</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a><span class="w">        </span><span class="nx">Query</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;travel plan&quot;</span><span class="p">,</span>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a><span class="w">        </span><span class="nx">UserKey</span><span class="p">:</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">UserKey</span><span class="p">{</span>
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6"></a><span class="w">            </span><span class="nx">AppName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7"></a><span class="w">            </span><span class="nx">UserID</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;user123&quot;</span><span class="p">,</span>
+</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9"></a><span class="w">        </span><span class="nx">SearchMode</span><span class="p">:</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">SearchModeHybrid</span><span class="p">,</span>
+</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10"></a><span class="w">        </span><span class="nx">MaxResults</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">,</span>
+</span><span id="__span-17-11"><a id="__codelineno-17-11" name="__codelineno-17-11"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-17-12"><a id="__codelineno-17-12" name="__codelineno-17-12"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">hits</span>
+</span><span id="__span-17-13"><a id="__codelineno-17-13" name="__codelineno-17-13"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-17-14"><a id="__codelineno-17-14" name="__codelineno-17-14"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>如果你使用的是 LLMAgent，那么像 <code>session/pgvector</code> 这种可检索后端还可以通过
+<code>llmagent.WithPreloadSessionRecall(...)</code> 把跨会话 recall 自动预加载到
+system prompt 中。</p>
+<p>更详细的配置项、索引行为和检索过滤条件，请参考 <a href="pgvector/">PGVector 会话存储</a>。</p>
 <h2 id="_15">相关文档</h2>
 <ul>
 <li><a href="summary/">会话摘要</a> - 自动压缩长对话历史</li>
@@ -3640,6 +3735,7 @@
 <li><a href="sqlite/">SQLite 存储</a> - 本地持久化、单机</li>
 <li><a href="redis/">Redis 存储</a> - 生产环境分布式存储</li>
 <li><a href="postgres/">PostgreSQL 存储</a> - 关系型数据库存储</li>
+<li><a href="pgvector/">PGVector 会话存储</a> - 基于 PostgreSQL 的语义会话检索</li>
 <li><a href="mysql/">MySQL 存储</a> - 关系型数据库存储</li>
 <li><a href="clickhouse/">ClickHouse 存储</a> - 海量数据存储</li>
 </ul>
@@ -3671,7 +3767,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月2日 02:07:04 UTC">2026-04-02 02:07:04</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月2日 03:24:40 UTC">2026-04-02 03:24:40</span>
   </span>
 
     

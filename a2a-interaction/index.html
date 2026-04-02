@@ -1093,6 +1093,29 @@
   
   
     <li class="md-nav__item">
+      <a href="../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../session/clickhouse/" class="md-nav__link">
         
   
@@ -2148,8 +2171,10 @@
 
 
 <h1 id="a2a-protocol-interaction-specification">A2A Protocol Interaction Specification</h1>
-<p>!!! note "Note"
-    This document defines the extended implementation specification for the A2A protocol within the trpc-agent-go framework. Regular users do not need to read this document when using A2A Client/Server — the framework automatically handles all protocol conversion details. You only need to refer to this specification when developing a non-trpc-agent-go A2A Client/Server that interoperates with this framework.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This document defines the extended implementation specification for the A2A protocol within the trpc-agent-go framework. Regular users do not need to read this document when using A2A Client/Server — the framework automatically handles all protocol conversion details. You only need to refer to this specification when developing a non-trpc-agent-go A2A Client/Server that interoperates with this framework.</p>
+</div>
 <h2 id="background">Background</h2>
 <p>The <a href="https://a2a-protocol.org/latest/specification/">A2A (Agent-to-Agent) protocol</a> defines the basic data models (Message, Task, Part, etc.) and operation interfaces (SendMessage, StreamMessage, etc.) for inter-Agent communication. The A2A specification states its design goals at the very beginning:</p>
 <blockquote>
@@ -2166,8 +2191,10 @@
 <p>As shown above, A2A envisions agents collaborating as "black boxes" — discovering capabilities, negotiating interaction modalities, and managing collaborative tasks, but without needing access to each other's Tools, Memory, or Internal State. Based on this design philosophy, trace data from an Agent's execution process — such as tool call chains (Function Call / Response), code execution steps, and model reasoning steps (Reasoning) — falls outside the scope of the A2A protocol, which does not define how such data should be transmitted.</p>
 <p>However, in real-world multi-Agent orchestration scenarios, some users want to see the execution path of a remote Agent for debugging, auditing, or finer-grained coordination. To address this need, trpc-agent-go leverages the extension mechanisms reserved by the A2A protocol (<code>DataPart</code>, <code>Message.metadata</code>, etc.) to support the transmission of such data without violating the protocol specification.</p>
 <p>This document defines the <strong>interaction specification</strong> of trpc-agent-go on top of the A2A protocol, serving as the standard reference for Client and Server implementations. This document will be updated as the A2A protocol evolves.</p>
-<p>!!! info "Future Plans"
-    To better align with the A2A specification's design philosophy, the cross-Agent transmission of execution process data such as tool calls will be designed as an independent <strong>extension</strong>, allowing users to decide whether to enable it through configuration. If you prefer to strictly follow A2A's black-box collaboration model without exposing internal execution details, simply disable it — only final results will be transmitted.</p>
+<div class="admonition info">
+<p class="admonition-title">Future Plans</p>
+<p>To better align with the A2A specification's design philosophy, the cross-Agent transmission of execution process data such as tool calls will be designed as an independent <strong>extension</strong>, allowing users to decide whether to enable it through configuration. If you prefer to strictly follow A2A's black-box collaboration model without exposing internal execution details, simply disable it — only final results will be transmitted.</p>
+</div>
 <blockquote>
 <p>For the complete A2A protocol specification, see: https://a2a-protocol.org/latest/specification/</p>
 <p>For the framework usage guide, see: <a href="../a2a/">A2A Integration Guide</a></p>
