@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -169,6 +170,48 @@ func TestExport_LLMAgent_ConfiguredSnapshot(t *testing.T) {
 				NodeID:    "assistant/sub",
 				Type:      structure.SurfaceTypeInstruction,
 				Value:     structure.SurfaceValue{Text: textPtr("")},
+			},
+		},
+	})
+}
+
+func TestExport_LLMAgent_DoubleBraceSyntax(t *testing.T) {
+	ag := New("assistant")
+	ag.instruction = prompt.Text{
+		Template: "{{ solve }}",
+		Syntax:   prompt.SyntaxDoubleBrace,
+	}
+	ag.systemPrompt = prompt.Text{
+		Template: "{{ system }}",
+		Syntax:   prompt.SyntaxDoubleBrace,
+	}
+
+	snapshot, err := structure.Export(context.Background(), ag)
+	require.NoError(t, err)
+	assertLLMSnapshotEqual(t, snapshot, &structure.Snapshot{
+		EntryNodeID: "assistant",
+		Nodes: []structure.Node{
+			{NodeID: "assistant", Kind: structure.NodeKindLLM, Name: "assistant"},
+		},
+		Edges: []structure.Edge{},
+		Surfaces: []structure.Surface{
+			{
+				SurfaceID: "assistant#global_instruction",
+				NodeID:    "assistant",
+				Type:      structure.SurfaceTypeGlobalInstruction,
+				Value: structure.SurfaceValue{
+					Text:         textPtr("{{ system }}"),
+					PromptSyntax: promptSyntaxPtr(structure.PromptSyntaxDoubleBrace),
+				},
+			},
+			{
+				SurfaceID: "assistant#instruction",
+				NodeID:    "assistant",
+				Type:      structure.SurfaceTypeInstruction,
+				Value: structure.SurfaceValue{
+					Text:         textPtr("{{ solve }}"),
+					PromptSyntax: promptSyntaxPtr(structure.PromptSyntaxDoubleBrace),
+				},
 			},
 		},
 	})

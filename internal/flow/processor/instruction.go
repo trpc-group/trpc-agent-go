@@ -17,7 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state"
+	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -154,7 +154,7 @@ func NewInstructionRequestProcessor(
 
 // ProcessRequest implements the flow.RequestProcessor interface.
 // It adds instruction content and system prompt to the request if provided.
-// State variables in instructions are automatically replaced with values from session state.
+// Prompt placeholders are rendered before any structured-output instructions are appended.
 func (p *InstructionRequestProcessor) ProcessRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -195,8 +195,8 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 	p.sendPreprocessingEvent(ctx, invocation, ch)
 }
 
-// processInstructionsWithState processes instruction and system prompt with
-// state injection.
+// processInstructionsWithState resolves instruction and system prompt content,
+// renders prompt placeholders, and then appends structured-output instructions.
 func (p *InstructionRequestProcessor) processInstructionsWithState(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -234,7 +234,23 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(
 		processedSystemPrompt = invocation.RunOptions.GlobalInstruction
 	}
 
-	// Automatically inject JSON output instructions.
+	if invocation != nil {
+		processedInstruction = p.injectStateIntoContent(
+			ctx,
+			invocation,
+			processedInstruction,
+			"instruction",
+		)
+		processedSystemPrompt = p.injectStateIntoContent(
+			ctx,
+			invocation,
+			processedSystemPrompt,
+			"system prompt",
+		)
+	}
+
+	// Automatically inject JSON output instructions after prompt rendering so
+	// literal schema braces are never interpreted as placeholders.
 	// Precedence: invocation.StructuredOutputSchema > StructuredOutputSchema > OutputSchema.
 	if structuredOutputSchema := p.resolveStructuredOutputSchema(invocation); structuredOutputSchema != nil {
 		jsonInstructions := p.generateStructuredOutputJSONInstructions(
@@ -250,21 +266,6 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(
 		processedInstruction = p.combineInstructions(
 			processedInstruction,
 			jsonInstructions,
-		)
-	}
-
-	if invocation != nil {
-		processedInstruction = p.injectStateIntoContent(
-			ctx,
-			invocation,
-			processedInstruction,
-			"instruction",
-		)
-		processedSystemPrompt = p.injectStateIntoContent(
-			ctx,
-			invocation,
-			processedSystemPrompt,
-			"system prompt",
 		)
 	}
 
@@ -302,7 +303,7 @@ func (p *InstructionRequestProcessor) injectStateIntoContent(
 		return content
 	}
 
-	processedContent, err := state.InjectSessionState(content, invocation)
+	processedContent, err := promptstate.Render(content, invocation)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,

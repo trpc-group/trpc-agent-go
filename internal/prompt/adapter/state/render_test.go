@@ -5,7 +5,6 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
-//
 
 package state
 
@@ -18,7 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-func TestInjectSessionState(t *testing.T) {
+func TestRender(t *testing.T) {
 	tests := []struct {
 		name        string
 		template    string
@@ -91,10 +90,31 @@ func TestInjectSessionState(t *testing.T) {
 			expectError: false,
 		},
 		{
+			name:        "invalid optional variable name",
+			template:    "Hello {invalid-name?}!",
+			state:       map[string]any{},
+			expected:    "Hello {invalid-name?}!", // Invalid names stay literal even when optional.
+			expectError: false,
+		},
+		{
+			name:        "numeric leading variable name remains literal",
+			template:    "Hello {123invalid}!",
+			state:       map[string]any{"123invalid": "value"},
+			expected:    "Hello {123invalid}!",
+			expectError: false,
+		},
+		{
 			name:        "artifact reference (not implemented)",
 			template:    "Content: {artifact.file.txt}",
 			state:       map[string]any{},
 			expected:    "Content: {artifact.file.txt}", // Should preserve artifact references
+			expectError: false,
+		},
+		{
+			name:        "optional artifact reference (not implemented)",
+			template:    "Content: {artifact.file.txt?}",
+			state:       map[string]any{},
+			expected:    "Content: ", // Optional artifact references collapse to empty.
 			expectError: false,
 		},
 		{
@@ -149,7 +169,7 @@ func TestInjectSessionState(t *testing.T) {
 				}
 			}
 
-			result, err := InjectSessionState(tt.template, invocation)
+			result, err := Render(tt.template, invocation)
 
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error but got none")
@@ -164,11 +184,11 @@ func TestInjectSessionState(t *testing.T) {
 	}
 }
 
-func TestInjectSessionStateWithNilInvocation(t *testing.T) {
+func TestRenderWithNilInvocation(t *testing.T) {
 	template := "Hello {name}!"
 	expected := "Hello {name}!" // Should preserve template when no invocation
 
-	result, err := InjectSessionState(template, nil)
+	result, err := Render(template, nil)
 
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
@@ -190,6 +210,7 @@ func TestIsValidStateName(t *testing.T) {
 		{"user:preference", true},
 		{"app:setting", true},
 		{"temp:value", true},
+		{"invocation:key", true},
 		{"invalid-name", false},
 		{"invalid name", false},
 		{"123invalid", false},
@@ -204,33 +225,18 @@ func TestIsValidStateName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := isValidStateName(tt.name)
 			if result != tt.expected {
-				t.Errorf("isValidStateName(%q) = %v, expected %v", tt.name, result, tt.expected)
+				t.Errorf(
+					"isValidStateName(%q) = %v, expected %v",
+					tt.name,
+					result,
+					tt.expected,
+				)
 			}
 		})
 	}
 }
 
-func TestNormalizePlaceholders_MustacheToNative(t *testing.T) {
-	cases := map[string]string{
-		"{{key}}":             "{key}",
-		"{{ key }}":           "{key}",
-		"{{key?}}":            "{key?}",
-		"{{ user:name }}":     "{user:name}",
-		"{{app:setting}}":     "{app:setting}",
-		"x {{temp:value?}} y": "x {temp:value?} y",
-		// invalid names should remain untouched
-		"{{invalid-name}}": "{{invalid-name}}",
-		"{{ 123abc }}":     "{{ 123abc }}",
-	}
-	for in, want := range cases {
-		got := normalizePlaceholders(in)
-		if got != want {
-			t.Fatalf("normalizePlaceholders(%q)=%q, want=%q", in, got, want)
-		}
-	}
-}
-
-func TestInjectSessionState_MustachePlaceholders(t *testing.T) {
+func TestRender_MustachePlaceholders(t *testing.T) {
 	// Prepare invocation session state
 	sm := make(session.StateMap)
 	sm["key"] = []byte(`"v"`)
@@ -239,47 +245,67 @@ func TestInjectSessionState_MustachePlaceholders(t *testing.T) {
 	inv := &agent.Invocation{Session: &session.Session{State: sm}}
 
 	// Simple mustache
-	s, err := InjectSessionState("hi {{key}}", inv)
+	s, err := Render("hi {{key}}", inv)
 	if err != nil || s != "hi v" {
-		t.Fatalf("InjectSessionState simple: got %q err=%v", s, err)
+		t.Fatalf("Render simple: got %q err=%v", s, err)
 	}
 
 	// Namespaced and optional + spaces
-	s, err = InjectSessionState("U={{ user:name }}, C={{ temp:value? }}", inv)
+	s, err = Render("U={{ user:name }}, C={{ temp:value? }}", inv)
 	if err != nil || s != "U=alice, C=ctx" {
-		t.Fatalf("InjectSessionState ns: got %q err=%v", s, err)
+		t.Fatalf("Render ns: got %q err=%v", s, err)
 	}
 
 	// Optional missing
-	s, err = InjectSessionState("X={{missing?}}.", inv)
+	s, err = Render("X={{missing?}}.", inv)
 	if err != nil || s != "X=." {
-		t.Fatalf("InjectSessionState missing optional: got %q err=%v", s, err)
+		t.Fatalf("Render missing optional: got %q err=%v", s, err)
 	}
 
 	// Invalid name stays
-	s, err = InjectSessionState("bad {{invalid-name}}", inv)
+	s, err = Render("bad {{invalid-name}}", inv)
 	if err != nil || s != "bad {{invalid-name}}" {
-		t.Fatalf("InjectSessionState invalid mustache: got %q err=%v", s, err)
+		t.Fatalf("Render invalid mustache: got %q err=%v", s, err)
+	}
+
+	// Invalid optional name stays too.
+	s, err = Render("bad {{invalid-name?}}", inv)
+	if err != nil || s != "bad {{invalid-name?}}" {
+		t.Fatalf("Render invalid optional mustache: got %q err=%v", s, err)
 	}
 }
 
-func TestInjectSessionState_RawNumericString(t *testing.T) {
+func TestRender_SingleBracePlaceholdersWithWhitespace(t *testing.T) {
+	sm := make(session.StateMap)
+	sm["name"] = []byte(`"alice"`)
+	inv := &agent.Invocation{Session: &session.Session{State: sm}}
+
+	s, err := Render("hi { name } and { missing ? }", inv)
+	if err != nil {
+		t.Fatalf("Render whitespace: got err=%v", err)
+	}
+	if s != "hi alice and " {
+		t.Fatalf("Render whitespace: got %q", s)
+	}
+}
+
+func TestRender_RawNumericString(t *testing.T) {
 	// Prepare invocation session state with a raw numeric-looking string value.
 	sm := make(session.StateMap)
 	sm["code"] = []byte("123456789012345678901234567890")
 	inv := &agent.Invocation{Session: &session.Session{State: sm}}
 
-	s, err := InjectSessionState("Code: {code}", inv)
+	s, err := Render("Code: {code}", inv)
 	if err != nil {
-		t.Fatalf("InjectSessionState raw numeric string: unexpected error: %v", err)
+		t.Fatalf("Render raw numeric string: unexpected error: %v", err)
 	}
 	const want = "Code: 123456789012345678901234567890"
 	if s != want {
-		t.Fatalf("InjectSessionState raw numeric string: got %q, want %q", s, want)
+		t.Fatalf("Render raw numeric string: got %q, want %q", s, want)
 	}
 }
 
-func TestInjectSessionState_RawNumericPrefixText(t *testing.T) {
+func TestRender_RawNumericPrefixText(t *testing.T) {
 	cases := []struct {
 		name string
 		raw  string
@@ -302,7 +328,7 @@ func TestInjectSessionState_RawNumericPrefixText(t *testing.T) {
 		stateKey  = "value"
 		template  = "V={value}"
 		wantFmt   = "V=%s"
-		errPrefix = "InjectSessionState raw numeric prefix text"
+		errPrefix = "Render raw numeric prefix text"
 	)
 
 	for _, tt := range cases {
@@ -313,7 +339,7 @@ func TestInjectSessionState_RawNumericPrefixText(t *testing.T) {
 				Session: &session.Session{State: sm},
 			}
 
-			got, err := InjectSessionState(template, inv)
+			got, err := Render(template, inv)
 			if err != nil {
 				t.Fatalf("%s: unexpected error: %v", errPrefix, err)
 			}
@@ -326,12 +352,12 @@ func TestInjectSessionState_RawNumericPrefixText(t *testing.T) {
 	}
 }
 
-func TestInjectSessionState_EmptyRawValue(t *testing.T) {
+func TestRender_EmptyRawValue(t *testing.T) {
 	const (
 		stateKey  = "empty"
 		template  = "E={empty}"
 		want      = "E="
-		errPrefix = "InjectSessionState empty raw value"
+		errPrefix = "Render empty raw value"
 	)
 
 	sm := make(session.StateMap)
@@ -340,7 +366,7 @@ func TestInjectSessionState_EmptyRawValue(t *testing.T) {
 		Session: &session.Session{State: sm},
 	}
 
-	got, err := InjectSessionState(template, inv)
+	got, err := Render(template, inv)
 	if err != nil {
 		t.Fatalf("%s: unexpected error: %v", errPrefix, err)
 	}
@@ -349,24 +375,24 @@ func TestInjectSessionState_EmptyRawValue(t *testing.T) {
 	}
 }
 
-func TestInjectSessionState_JSONObjectAndArray(t *testing.T) {
+func TestRender_JSONObjectAndArray(t *testing.T) {
 	sm := make(session.StateMap)
 	sm["obj"] = []byte(`{"a":1,"b":[2,3]}`)
 	sm["arr"] = []byte(`[{"x":1},{"x":2}]`)
 	inv := &agent.Invocation{Session: &session.Session{State: sm}}
 
-	got, err := InjectSessionState("O={obj}; A={arr}", inv)
+	got, err := Render("O={obj}; A={arr}", inv)
 	if err != nil {
-		t.Fatalf("InjectSessionState json: unexpected error: %v", err)
+		t.Fatalf("Render json: unexpected error: %v", err)
 	}
 
 	const want = `O={"a":1,"b":[2,3]}; A=[{"x":1},{"x":2}]`
 	if got != want {
-		t.Fatalf("InjectSessionState json: got %q, want %q", got, want)
+		t.Fatalf("Render json: got %q, want %q", got, want)
 	}
 }
 
-func TestInjectSessionStateWithSession_SessionOverride(t *testing.T) {
+func TestRender_WithSessionOverride(t *testing.T) {
 	const (
 		template = "Hello {name}, Case={invocation:case}"
 		want     = "Hello Alice, Case=case-1"
@@ -381,23 +407,81 @@ func TestInjectSessionStateWithSession_SessionOverride(t *testing.T) {
 	inv := &agent.Invocation{Session: &session.Session{State: invSessState}}
 	inv.SetState("case", "case-1")
 
-	got, err := InjectSessionStateWithSession(template, inv, sess)
+	got, err := Render(template, inv, WithSession(sess))
 	if err != nil {
 		t.Fatalf(
-			"InjectSessionStateWithSession override: unexpected error: %v",
+			"Render with session override: unexpected error: %v",
 			err,
 		)
 	}
 	if got != want {
 		t.Fatalf(
-			"InjectSessionStateWithSession override: got %q, want %q",
+			"Render with session override: got %q, want %q",
 			got,
 			want,
 		)
 	}
 }
 
-func TestInjectSessionStateWithSession_NoRecursiveExpansion(t *testing.T) {
+func TestRender_InvocationPlaceholderDoesNotFallbackToSession(t *testing.T) {
+	const (
+		template = "Hello {name}, Case={invocation:case}"
+		want     = "Hello Bob, Case={invocation:case}"
+	)
+
+	invSessState := make(session.StateMap)
+	invSessState["name"] = []byte(`"Bob"`)
+	invSessState["invocation:case"] = []byte(`"from-session"`)
+	inv := &agent.Invocation{Session: &session.Session{State: invSessState}}
+
+	got, err := Render(template, inv)
+	if err != nil {
+		t.Fatalf(
+			"Render invocation fallback: unexpected error: %v",
+			err,
+		)
+	}
+	if got != want {
+		t.Fatalf(
+			"Render invocation fallback: got %q, want %q",
+			got,
+			want,
+		)
+	}
+}
+
+func TestRender_WithSessionInvocationPlaceholderDoesNotFallbackToOverride(t *testing.T) {
+	const (
+		template = "Hello {name}, Case={invocation:case}"
+		want     = "Hello Alice, Case={invocation:case}"
+	)
+
+	sessState := make(session.StateMap)
+	sessState["name"] = []byte(`"Alice"`)
+	sessState["invocation:case"] = []byte(`"from-override-session"`)
+	sess := &session.Session{State: sessState}
+
+	invSessState := make(session.StateMap)
+	invSessState["name"] = []byte(`"Bob"`)
+	inv := &agent.Invocation{Session: &session.Session{State: invSessState}}
+
+	got, err := Render(template, inv, WithSession(sess))
+	if err != nil {
+		t.Fatalf(
+			"Render with session invocation fallback: unexpected error: %v",
+			err,
+		)
+	}
+	if got != want {
+		t.Fatalf(
+			"Render with session invocation fallback: got %q, want %q",
+			got,
+			want,
+		)
+	}
+}
+
+func TestRender_WithSessionNoRecursiveExpansion(t *testing.T) {
 	const (
 		template = "X={invocation:x}"
 		want     = "X={user:name}"
@@ -410,16 +494,16 @@ func TestInjectSessionStateWithSession_NoRecursiveExpansion(t *testing.T) {
 	inv := &agent.Invocation{}
 	inv.SetState("x", "{user:name}")
 
-	got, err := InjectSessionStateWithSession(template, inv, sess)
+	got, err := Render(template, inv, WithSession(sess))
 	if err != nil {
 		t.Fatalf(
-			"InjectSessionStateWithSession recursion: unexpected error: %v",
+			"Render with session recursion: unexpected error: %v",
 			err,
 		)
 	}
 	if got != want {
 		t.Fatalf(
-			"InjectSessionStateWithSession recursion: got %q, want %q",
+			"Render with session recursion: got %q, want %q",
 			got,
 			want,
 		)

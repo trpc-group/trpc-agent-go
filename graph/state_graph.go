@@ -33,7 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
-	stateinject "trpc.group/trpc-go/trpc-agent-go/internal/state"
+	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -1550,10 +1550,10 @@ func (r *llmRunner) processInstruction(state State) string {
 		}
 	}
 
-	if injected, err := stateinject.InjectSessionStateWithSession(
+	if injected, err := promptstate.Render(
 		instr,
 		invocation,
-		sess,
+		promptstate.WithSession(sess),
 	); err == nil {
 		return injected
 	}

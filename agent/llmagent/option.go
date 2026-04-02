@@ -158,17 +158,29 @@ type Options struct {
 	Models map[string]model.Model
 	// Description is a description of the agent.
 	Description string
-	// Instruction is the instruction for the agent.
+	// Instruction is the instruction template for the agent.
+	// It is rendered at request time using the same placeholder subset as the
+	// internal prompt state adapter in `internal/prompt/adapter/state`. See
+	// `Render` there for supported placeholder forms and resolution rules.
 	Instruction string
-	// GlobalInstruction is the global instruction for the agent.
-	// It will be used for all agents in the agent tree.
+	// GlobalInstruction is the global instruction template for the agent.
+	// It will be used for all agents in the agent tree and is rendered at
+	// request time using the same placeholder subset as the internal prompt
+	// state adapter in `internal/prompt/adapter/state`. See `Render` there for
+	// supported placeholder forms and resolution rules.
 	GlobalInstruction string
-	// ModelInstructions maps model.Info().Name to a model-specific instruction.
-	// When present, it overrides Instruction for matching models.
+	// ModelInstructions maps model.Info().Name to a model-specific instruction
+	// template. When present, it overrides Instruction for matching models.
+	// Values are rendered at request time using the same placeholder subset as
+	// the internal prompt state adapter in `internal/prompt/adapter/state`. See
+	// `Render` there for supported placeholder forms and resolution rules.
 	ModelInstructions map[string]string
 	// ModelGlobalInstructions maps model.Info().Name to a model-specific system
-	// prompt.
-	// When present, it overrides GlobalInstruction for matching models.
+	// prompt template. When present, it overrides GlobalInstruction for matching
+	// models. Values are rendered at request time using the same placeholder
+	// subset as the internal prompt state adapter in
+	// `internal/prompt/adapter/state`. See `Render` there for supported
+	// placeholder forms and resolution rules.
 	ModelGlobalInstructions map[string]string
 	// GenerationConfig contains the generation configuration.
 	GenerationConfig model.GenerationConfig
@@ -483,21 +495,30 @@ func WithDescription(description string) Option {
 	}
 }
 
-// WithInstruction sets the instruction of the agent.
+// WithInstruction sets the instruction template of the agent.
+// The template uses the same placeholder subset as the internal prompt state
+// adapter in `internal/prompt/adapter/state`. See `Render` there for supported
+// placeholder forms and resolution rules.
 func WithInstruction(instruction string) Option {
 	return func(opts *Options) {
 		opts.Instruction = instruction
 	}
 }
 
-// WithGlobalInstruction sets the global instruction of the agent.
+// WithGlobalInstruction sets the global instruction template of the agent.
+// The template uses the same placeholder subset as the internal prompt state
+// adapter in `internal/prompt/adapter/state`. See `Render` there for supported
+// placeholder forms and resolution rules.
 func WithGlobalInstruction(instruction string) Option {
 	return func(opts *Options) {
 		opts.GlobalInstruction = instruction
 	}
 }
 
-// WithModelInstructions sets model-specific instruction overrides.
+// WithModelInstructions sets model-specific instruction template overrides.
+// Values use the same placeholder subset as the internal prompt state adapter
+// in `internal/prompt/adapter/state`. See `Render` there for supported
+// placeholder forms and resolution rules.
 // Key: model.Info().Name, Value: instruction text.
 func WithModelInstructions(instructions map[string]string) Option {
 	return func(opts *Options) {
@@ -505,7 +526,10 @@ func WithModelInstructions(instructions map[string]string) Option {
 	}
 }
 
-// WithModelGlobalInstructions sets model-specific system prompt overrides.
+// WithModelGlobalInstructions sets model-specific system prompt template
+// overrides. Values use the same placeholder subset as the internal prompt
+// state adapter in `internal/prompt/adapter/state`. See `Render` there for
+// supported placeholder forms and resolution rules.
 // Key: model.Info().Name, Value: system prompt text.
 func WithModelGlobalInstructions(prompts map[string]string) Option {
 	return func(opts *Options) {
