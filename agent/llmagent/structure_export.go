@@ -15,6 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
+	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -48,12 +49,12 @@ func (a *LLMAgent) Export(
 			{
 				NodeID: rootNodeID,
 				Type:   structure.SurfaceTypeInstruction,
-				Value:  structure.SurfaceValue{Text: stringPtr(instruction)},
+				Value:  exportTextSurfaceValue(instruction),
 			},
 			{
 				NodeID: rootNodeID,
 				Type:   structure.SurfaceTypeGlobalInstruction,
-				Value:  structure.SurfaceValue{Text: stringPtr(globalInstruction)},
+				Value:  exportTextSurfaceValue(globalInstruction),
 			},
 		},
 	}
@@ -153,5 +154,22 @@ func exportSkillRefs(summaries []skill.Summary) []structure.SkillRef {
 }
 
 func stringPtr(value string) *string {
+	return &value
+}
+
+func exportTextSurfaceValue(text prompt.Text) structure.SurfaceValue {
+	value := structure.SurfaceValue{
+		Text: stringPtr(text.Template),
+	}
+	switch text.Syntax {
+	case prompt.SyntaxSingleBrace:
+		value.PromptSyntax = promptSyntaxPtr(structure.PromptSyntaxSingleBrace)
+	case prompt.SyntaxDoubleBrace:
+		value.PromptSyntax = promptSyntaxPtr(structure.PromptSyntaxDoubleBrace)
+	}
+	return value
+}
+
+func promptSyntaxPtr(value structure.PromptSyntax) *structure.PromptSyntax {
 	return &value
 }
