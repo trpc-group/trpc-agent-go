@@ -18,11 +18,12 @@ import (
 
 // Annotation stores channel-provided conversation metadata.
 type Annotation struct {
-	HistoryMode string            `json:"history_mode,omitempty"`
-	ActorID     string            `json:"actor_id,omitempty"`
-	ActorLabel  string            `json:"actor_label,omitempty"`
-	ActorLabels map[string]string `json:"actor_labels,omitempty"`
-	QuoteText   string            `json:"quote_text,omitempty"`
+	HistoryMode   string            `json:"history_mode,omitempty"`
+	StorageUserID string            `json:"storage_user_id,omitempty"`
+	ActorID       string            `json:"actor_id,omitempty"`
+	ActorLabel    string            `json:"actor_label,omitempty"`
+	ActorLabels   map[string]string `json:"actor_labels,omitempty"`
+	QuoteText     string            `json:"quote_text,omitempty"`
 }
 
 // MergeRequestExtension stores conversation metadata in request
@@ -151,6 +152,7 @@ func decodeAnnotation(
 
 func isZeroRuntimeAnnotation(annotation Annotation) bool {
 	return strings.TrimSpace(annotation.HistoryMode) == "" &&
+		strings.TrimSpace(annotation.StorageUserID) == "" &&
 		strings.TrimSpace(annotation.ActorID) == "" &&
 		strings.TrimSpace(annotation.ActorLabel) == "" &&
 		len(annotation.ActorLabels) == 0 &&
@@ -160,6 +162,9 @@ func isZeroRuntimeAnnotation(annotation Annotation) bool {
 func normalizeAnnotation(annotation Annotation) Annotation {
 	annotation.HistoryMode = strings.TrimSpace(
 		annotation.HistoryMode,
+	)
+	annotation.StorageUserID = strings.TrimSpace(
+		annotation.StorageUserID,
 	)
 	annotation.ActorID = strings.TrimSpace(annotation.ActorID)
 	annotation.ActorLabel = strings.TrimSpace(
