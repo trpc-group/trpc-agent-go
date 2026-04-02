@@ -3863,18 +3863,32 @@ option：</p>
 - 代码侧可配置强制让 <code>skill_run</code> 尽量把收集到的输出保存到制品服务，
   即便模型未显式设置 <code>save_as_artifacts</code> / <code>outputs.save</code>：
   - <code>llmagent.WithSkillRunForceSaveArtifacts(true)</code></p>
+<p>可选行为（内联输出限额）：
+- 代码侧可配置 <code>skill_run</code> 返回多少内联文本：
+  - <code>llmagent.WithSkillRunOutputLimits(toolskill.RunOutputLimits{StdoutStderrBytes: 128 * 1024, PrimaryOutputBytes: 128 * 1024})</code>
+- 这个配置只影响 <code>stdout</code>、<code>stderr</code> 和 <code>primary_output</code>。
+  <code>output_files</code> / <code>outputs</code> 仍然使用工作区文件收集上限
+  （默认 4 MiB/文件）。</p>
 <p>输出：
 - <code>stdout</code>、<code>stderr</code>、<code>exit_code</code>、<code>timed_out</code>、<code>duration_ms</code>
+  - <code>stdout</code> / <code>stderr</code> 更适合日志和短状态文本。它们会受可配置的
+    内联上限控制（默认各 16 KiB）。
+    如果模型需要读取大段或结构化文本，优先用 <code>output_files</code> 或
+    <code>outputs</code>。
 - <code>staged_inputs</code>（可选）：本次执行前从对话自动 stage 进
   <code>work/inputs/</code> 的文件列表
 - <code>primary_output</code>（可选）：包含 <code>name</code>、<code>ref</code>、<code>content</code>、<code>mime_type</code>、
   <code>size_bytes</code>、<code>truncated</code>
   - 便捷字段：指向“最合适的”小型文本输出文件（若存在）。当只有一个主要输出时
     优先使用它。
+  - 只有不超过配置上限的文本文件才会进入 <code>primary_output</code>
+    （默认 32 KiB）。
 - <code>output_files</code>：文件列表（<code>name</code>、<code>ref</code>、<code>content</code>、<code>mime_type</code>、
   <code>size_bytes</code>、<code>truncated</code>）
   - <code>ref</code> 是稳定的 <code>workspace://&lt;name&gt;</code> 引用，可传给其它工具使用
   - 非文本文件的 <code>content</code> 会被省略。
+  - 对于大文本或结构化输出，优先走这条通道；文件收集遵循工作区
+    收集上限，而不是较小的 stdout/stderr 内联预算。
   - 当 <code>omit_inline_content=true</code> 时，所有文件的 <code>content</code> 会被省略。可用
     <code>ref</code> 配合 <code>read_file</code> 按需读取文本内容。
   - <code>size_bytes</code> 表示磁盘上的文件大小；<code>truncated=true</code> 表示收集内容触发了
@@ -4135,7 +4149,7 @@ option：</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月2日 02:07:04 UTC">2026-04-02 02:07:04</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月2日 06:10:45 UTC">2026-04-02 06:10:45</span>
   </span>
 
     

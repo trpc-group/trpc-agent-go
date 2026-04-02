@@ -3890,19 +3890,34 @@ them directly when driving the conversation naturally.</p>
   artifacts (best effort) even if the model omits <code>save_as_artifacts</code>
   / <code>outputs.save</code>:
   - <code>llmagent.WithSkillRunForceSaveArtifacts(true)</code></p>
+<p>Optional behavior (inline output limits):
+- In code, you can customize how much inline text <code>skill_run</code> returns:
+  - <code>llmagent.WithSkillRunOutputLimits(toolskill.RunOutputLimits{StdoutStderrBytes: 128 * 1024, PrimaryOutputBytes: 128 * 1024})</code>
+- This changes only <code>stdout</code>, <code>stderr</code>, and <code>primary_output</code>.
+  <code>output_files</code> / <code>outputs</code> still use the workspace collector limits
+  (default 4 MiB/file).</p>
 <p>Output:
 - <code>stdout</code>, <code>stderr</code>, <code>exit_code</code>, <code>timed_out</code>, <code>duration_ms</code>
+  - <code>stdout</code> / <code>stderr</code> are for logs and short status text. They may be
+    truncated at the configured inline limit (default 16 KiB each).
+    For large or structured text that the model must read, prefer
+    <code>output_files</code> or <code>outputs</code>.
 - <code>staged_inputs</code> (optional): files staged from the conversation into
   <code>work/inputs/</code> for this run
 - <code>primary_output</code> (optional) with <code>name</code>, <code>ref</code>, <code>content</code>, <code>mime_type</code>,
   <code>size_bytes</code>, <code>truncated</code>
   - Convenience pointer to the "best" small text output file (when one
     exists). Prefer this when there is a single main output.
+  - Only text files within the configured size limit (default 32 KiB)
+    are considered for <code>primary_output</code>.
 - <code>output_files</code> with <code>name</code>, <code>ref</code>, <code>content</code>, <code>mime_type</code>, <code>size_bytes</code>,
   <code>truncated</code>
   - <code>ref</code> is a stable <code>workspace://&lt;name&gt;</code> reference that can be passed
     to other tools
   - For non-text files, <code>content</code> is omitted.
+  - Prefer this path for large or structured text outputs; file
+    collection uses workspace collector limits instead of the smaller
+    stdout/stderr inline budget.
   - When <code>omit_inline_content=true</code>, <code>content</code> is omitted for all files.
     Use <code>ref</code> with <code>read_file</code> to fetch text content on demand.
   - <code>size_bytes</code> is the file size on disk; <code>truncated=true</code> means the
@@ -4165,7 +4180,7 @@ in tools like <code>read_file</code>.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 2, 2026 02:07:04 UTC">2026-04-02 02:07:04</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 2, 2026 06:10:45 UTC">2026-04-02 06:10:45</span>
   </span>
 
     
