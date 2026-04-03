@@ -20,6 +20,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+type surfaceReportingTestAgent struct {
+	mockAgent
+	surfaceIDs []string
+}
+
+func (a *surfaceReportingTestAgent) ExecutionTraceAppliedSurfaceIDs(_ *Invocation) []string {
+	return append([]string(nil), a.surfaceIDs...)
+}
+
 func TestNewInvocation_InitializesExecutionTraceMetadata(t *testing.T) {
 	inv := NewInvocation(
 		WithInvocationAgent(&mockAgent{name: "assistant/root~"}),
@@ -140,6 +149,7 @@ func TestExecutionTraceHelpers_HandleNilAndDisabledInvocation(t *testing.T) {
 	assert.Empty(t, InvocationTraceNodeID(nilInv))
 	assert.Empty(t, StartExecutionTraceStep(nilInv, "assistant", nil, nil))
 	FinishExecutionTraceStep(nilInv, "step-1", nil, nil)
+	SetExecutionTraceStepAppliedSurfaceIDs(nilInv, "step-1")
 	assert.Nil(t, NextExecutionTracePredecessors(nilInv))
 	assert.Nil(t, BuildExecutionTrace(nilInv, atrace.TraceStatusCompleted))
 	nilInv.ensureTraceCaptureMetadata()
@@ -152,6 +162,7 @@ func TestExecutionTraceHelpers_HandleNilAndDisabledInvocation(t *testing.T) {
 	assert.Empty(t, StartExecutionTraceStep(disabled, "", nil, nil))
 	FinishExecutionTraceStep(disabled, "step-1", nil, nil)
 	FinishExecutionTraceStep(disabled, "", nil, nil)
+	SetExecutionTraceStepAppliedSurfaceIDs(disabled, "step-1")
 	assert.Nil(t, NextExecutionTracePredecessors(disabled))
 	assert.Nil(t, BuildExecutionTrace(disabled, atrace.TraceStatusCompleted))
 }
@@ -173,6 +184,67 @@ func TestExecutionTraceHelpers_RecordStepErrorAndUtilityBranches(t *testing.T) {
 	assert.Nil(t, cloneStringSlice(nil))
 	assert.Equal(t, "_", escapeTraceLocalName(""))
 	assert.Equal(t, "team~1worker~0", escapeTraceLocalName("team/worker~"))
+}
+
+func TestExecutionTraceHelpers_RecordAppliedSurfaceIDs(t *testing.T) {
+	inv := NewInvocation(
+		WithInvocationAgent(&surfaceReportingTestAgent{
+			mockAgent:  mockAgent{name: "assistant"},
+			surfaceIDs: []string{"assistant#instruction", "assistant#model"},
+		}),
+		WithInvocationRunOptions(RunOptions{ExecutionTraceEnabled: true}),
+		WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	stepID := StartExecutionTraceStep(
+		inv,
+		InvocationTraceNodeID(inv),
+		&atrace.Snapshot{Text: "input"},
+		nil,
+	)
+	require.NotEmpty(t, stepID)
+	SetExecutionTraceStepAppliedSurfaceIDs(inv, stepID)
+	FinishExecutionTraceStep(inv, stepID, &atrace.Snapshot{Text: "output"}, nil)
+	executionTrace := BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	assert.Equal(t, []string{"assistant#instruction", "assistant#model"}, executionTrace.Steps[0].AppliedSurfaceIDs)
+}
+
+func TestExecutionTraceHelpers_SetAppliedSurfaceIDs_IgnoresNilAgent(t *testing.T) {
+	inv := NewInvocation(
+		WithInvocationAgent(&mockAgent{name: "assistant"}),
+		WithInvocationRunOptions(RunOptions{ExecutionTraceEnabled: true}),
+		WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	stepID := StartExecutionTraceStep(
+		inv,
+		InvocationTraceNodeID(inv),
+		&atrace.Snapshot{Text: "input"},
+		nil,
+	)
+	require.NotEmpty(t, stepID)
+	inv.Agent = nil
+	SetExecutionTraceStepAppliedSurfaceIDs(inv, stepID)
+	FinishExecutionTraceStep(inv, stepID, &atrace.Snapshot{Text: "output"}, nil)
+	executionTrace := BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	assert.Empty(t, executionTrace.Steps[0].AppliedSurfaceIDs)
+}
+
+func TestExecutionTraceHelpers_SetAppliedSurfaceIDs_IgnoresEmptyStepID(t *testing.T) {
+	inv := NewInvocation(
+		WithInvocationAgent(&surfaceReportingTestAgent{
+			mockAgent:  mockAgent{name: "assistant"},
+			surfaceIDs: []string{"assistant#instruction"},
+		}),
+		WithInvocationRunOptions(RunOptions{ExecutionTraceEnabled: true}),
+		WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	SetExecutionTraceStepAppliedSurfaceIDs(inv, "")
+	executionTrace := BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	assert.Empty(t, executionTrace.Steps)
 }
 
 func TestInvocationSurfaceRootNodeID_LifecycleAndFallback(t *testing.T) {

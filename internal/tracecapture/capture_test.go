@@ -110,6 +110,32 @@ func TestCapture_BuildReturnsDetachedCopies(t *testing.T) {
 	assert.Equal(t, "output", second.Steps[0].Output.Text)
 }
 
+func TestCapture_AppliedSurfaceIDsAreCopiedAndUpdated(t *testing.T) {
+	startedAt := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+	capture := New("assistant", "root-inv", "session-1", startedAt)
+	initialSurfaceIDs := []string{"assistant#instruction"}
+	stepID := capture.StartStep(StartStepInput{
+		InvocationID:      "root-inv",
+		AgentName:         "assistant",
+		Branch:            "assistant",
+		NodeID:            "assistant",
+		StartedAt:         startedAt,
+		AppliedSurfaceIDs: initialSurfaceIDs,
+	})
+	initialSurfaceIDs[0] = "mutated"
+	capture.SetStepAppliedSurfaceIDs("missing", []string{"ignored"})
+	updatedSurfaceIDs := []string{"assistant#model", "assistant#tool"}
+	capture.SetStepAppliedSurfaceIDs(stepID, updatedSurfaceIDs)
+	updatedSurfaceIDs[0] = "changed"
+	trace := capture.Build(atrace.TraceStatusCompleted, startedAt.Add(time.Second))
+	require.Len(t, trace.Steps, 1)
+	assert.Equal(t, []string{"assistant#model", "assistant#tool"}, trace.Steps[0].AppliedSurfaceIDs)
+	trace.Steps[0].AppliedSurfaceIDs[0] = "trace-mutated"
+	second := capture.Build(atrace.TraceStatusCompleted, startedAt.Add(2*time.Second))
+	require.Len(t, second.Steps, 1)
+	assert.Equal(t, []string{"assistant#model", "assistant#tool"}, second.Steps[0].AppliedSurfaceIDs)
+}
+
 func TestCapture_PredecessorsForInvocation_UsesNestedChildTerminals(t *testing.T) {
 	startedAt := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
 	capture := New("assistant", "root-inv", "session-1", startedAt)
@@ -147,6 +173,7 @@ func TestCapture_CoversNilGuardsAndMetadataFallbacks(t *testing.T) {
 	assert.Equal(t, []string{"entry"}, nilCapture.PredecessorsForInvocation("inv", []string{"entry"}))
 	assert.Empty(t, nilCapture.StartStep(StartStepInput{InvocationID: "inv"}))
 	nilCapture.FinishStep("step-1", nil, "", time.Time{})
+	nilCapture.SetStepAppliedSurfaceIDs("step-1", []string{"assistant#instruction"})
 	nilCapture.SetRootAgentName("assistant")
 	nilCapture.SetSessionID("session-1")
 	nilCapture.RegisterInvocation("parent", "child")
@@ -168,6 +195,7 @@ func TestCapture_CoversNilGuardsAndMetadataFallbacks(t *testing.T) {
 		NodeID:             "assistant/node",
 	})
 	require.NotEmpty(t, stepID)
+	capture.SetStepAppliedSurfaceIDs("", []string{"assistant#instruction"})
 	capture.FinishStep("missing", nil, "", time.Time{})
 	capture.FinishStep(stepID, nil, "boom", time.Time{})
 	trace := capture.Build(atrace.TraceStatusFailed, time.Time{})

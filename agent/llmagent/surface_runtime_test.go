@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -92,6 +93,148 @@ func TestLLMAgent_SurfacePatch_ModelOverridesLegacyRunOptions(t *testing.T) {
 
 	agt.setupInvocation(inv)
 	require.Equal(t, patchedModel, inv.Model)
+}
+
+func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs(t *testing.T) {
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithInstruction("static instruction"),
+		WithGlobalInstruction("static system prompt"),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("test-agent"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	agt.setupInvocation(inv)
+	require.Equal(
+		t,
+		[]string{
+			"test-agent#instruction",
+			"test-agent#global_instruction",
+			"test-agent#model",
+		},
+		agt.ExecutionTraceAppliedSurfaceIDs(inv),
+	)
+}
+
+func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesFilteredToolSnapshot(t *testing.T) {
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithTools([]tool.Tool{
+			dummyTool{decl: &tool.Declaration{Name: "user_tool"}},
+		}),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("test-agent"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+		)),
+	)
+	agt.setupInvocation(inv)
+	inv.SetState("llmflow:has_filtered_user_tools", false)
+	require.NotContains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "test-agent#tool")
+	inv.SetState("llmflow:has_filtered_user_tools", true)
+	require.Contains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "test-agent#tool")
+}
+
+func TestLLMAgent_SurfaceRuntimeHelpers_CoverPatchAndFallbackBranches(t *testing.T) {
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithTools([]tool.Tool{
+			dummyTool{decl: &tool.Declaration{Name: "static_user_tool"}},
+		}),
+	)
+	emptyPatchInv := agent.NewInvocation()
+	_, ok := agt.rootSurfacePatch(nil)
+	require.False(t, ok)
+	_, ok = agt.rootSurfacePatch(emptyPatchInv)
+	require.False(t, ok)
+	require.Nil(t, agt.fewShotForInvocation(emptyPatchInv))
+	require.Nil(t, agt.skillRepositoryForInvocation(emptyPatchInv))
+	_, ok = agt.modelSurfaceForInvocation(emptyPatchInv)
+	require.False(t, ok)
+	require.Nil(t, agt.ExecutionTraceAppliedSurfaceIDs(emptyPatchInv))
+	userTools, userToolNames := agt.userToolsForInvocation(context.Background(), surfacepatch.Patch{})
+	require.Len(t, userTools, 1)
+	require.True(t, userToolNames["static_user_tool"])
+	dynamicAgent := New(
+		"dynamic-agent",
+		WithModel(newDummyModel()),
+		WithToolSets([]tool.ToolSet{dummyToolSet{name: "dynamic-tools"}}),
+		WithRefreshToolSetsOnRun(true),
+	)
+	dynamicTools, dynamicUserToolNames := dynamicAgent.userToolsForInvocation(
+		context.Background(),
+		surfacepatch.Patch{},
+	)
+	require.NotEmpty(t, dynamicTools)
+	require.NotEmpty(t, dynamicUserToolNames)
+	var patch agent.SurfacePatch
+	patch.SetFewShot([][]model.Message{{model.NewUserMessage("few-shot user")}})
+	patch.SetTools([]tool.Tool{
+		dummyTool{decl: &tool.Declaration{Name: "patched_user_tool"}},
+	})
+	patch.SetSkillRepository(&mockSkillRepository{
+		summaries: []skill.Summary{{Name: "skill-a", Description: "desc"}},
+	})
+	patch.SetModel(newDummyModel())
+	patchedInv := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("test-agent"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithSurfacePatchForNode("test-agent", patch),
+		)),
+	)
+	agt.setupInvocation(patchedInv)
+	patchedInv.SetState("llmflow:has_filtered_user_tools", false)
+	require.Len(t, agt.fewShotForInvocation(patchedInv), 1)
+	require.NotNil(t, agt.skillRepositoryForInvocation(patchedInv))
+	m, ok := agt.modelSurfaceForInvocation(patchedInv)
+	require.True(t, ok)
+	require.NotNil(t, m)
+	require.ElementsMatch(
+		t,
+		[]string{
+			"test-agent#few_shot",
+			"test-agent#model",
+			"test-agent#skill",
+		},
+		agt.ExecutionTraceAppliedSurfaceIDs(patchedInv),
+	)
+	rootPatch, ok := agt.rootSurfacePatch(patchedInv)
+	require.True(t, ok)
+	userTools, userToolNames = agt.userToolsForInvocation(context.Background(), rootPatch)
+	require.Len(t, userTools, 1)
+	require.Equal(t, "patched_user_tool", userTools[0].Declaration().Name)
+	require.True(t, userToolNames["patched_user_tool"])
+	unchangedTools, unchangedNames := filterInvocationUserTools(
+		context.Background(),
+		userTools,
+		userToolNames,
+		nil,
+	)
+	require.Equal(t, userTools, unchangedTools)
+	require.Equal(t, userToolNames, unchangedNames)
+	filteredTools, filteredNames := filterInvocationUserTools(
+		context.Background(),
+		[]tool.Tool{
+			nil,
+			dummyTool{decl: nil},
+			dummyTool{decl: &tool.Declaration{Name: "keep"}},
+			dummyTool{decl: &tool.Declaration{Name: "drop"}},
+		},
+		map[string]bool{"keep": true, "drop": true},
+		func(_ context.Context, tl tool.Tool) bool {
+			return tl.Declaration().Name == "keep"
+		},
+	)
+	require.Len(t, filteredTools, 1)
+	require.Equal(t, "keep", filteredTools[0].Declaration().Name)
+	require.Equal(t, map[string]bool{"keep": true}, filteredNames)
 }
 
 func TestLLMAgent_RunOptions_OverrideStaticInstructionAndSystemPrompt(

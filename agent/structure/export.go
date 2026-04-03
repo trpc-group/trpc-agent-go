@@ -112,7 +112,7 @@ func normalizeSnapshot(raw *Snapshot) (*Snapshot, error) {
 		if _, exists := nodeByID[surface.NodeID]; !exists {
 			return nil, fmt.Errorf("surface node %q does not exist", surface.NodeID)
 		}
-		key := surfaceKey(surface.NodeID, surface.Type)
+		key := SurfaceID(surface.NodeID, surface.Type)
 		if _, exists := seenSurfaceTypes[key]; exists {
 			return nil, fmt.Errorf(
 				"duplicate surface type %q on node %q",
@@ -338,10 +338,6 @@ func uniqueSkillRefs(refs []SkillRef) []SkillRef {
 		}
 	}
 	return out
-}
-
-func surfaceKey(nodeID string, surfaceType SurfaceType) string {
-	return nodeID + "#" + string(surfaceType)
 }
 
 func opaqueLeafSnapshot(a agent.Agent) *Snapshot {

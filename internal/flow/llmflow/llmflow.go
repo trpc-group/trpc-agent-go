@@ -57,11 +57,23 @@ const (
 	// entire lifetime of an Invocation, even when underlying ToolSets are
 	// dynamic.
 	stateKeyToolsSnapshot = "llmflow:tools_snapshot"
+	// stateKeyHasFilteredUserTools caches whether the final filtered tool
+	// snapshot for this invocation still contains any user tool.
+	stateKeyHasFilteredUserTools = "llmflow:has_filtered_user_tools"
 
 	defaultContextCompactionThresholdRatio = 0.7
 	contextCompactionFallbackWindow        = 8192
 	contextCompactionMinTokens             = 2000
 )
+
+// InvocationHasFilteredUserTools reports whether the cached filtered tool
+// snapshot for this invocation still contains any user tool.
+func InvocationHasFilteredUserTools(invocation *agent.Invocation) (bool, bool) {
+	if invocation == nil {
+		return false, false
+	}
+	return agent.GetStateValue[bool](invocation, stateKeyHasFilteredUserTools)
+}
 
 // Options contains configuration options for creating a Flow.
 type Options struct {
@@ -490,6 +502,7 @@ func (f *Flow) runOneStep(
 		traceSnapshotFromMessages(llmRequest.Messages),
 		nil,
 	)
+	agent.SetExecutionTraceStepAppliedSurfaceIDs(invocation, stepID)
 	var span oteltrace.Span
 	var modelName string
 	if invocation.Model != nil {
@@ -1343,6 +1356,10 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 	// If no filter is specified, return all tools for this invocation.
 	if invocation.RunOptions.ToolFilter == nil {
 		invocation.SetState(stateKeyToolsSnapshot, allTools)
+		invocation.SetState(
+			stateKeyHasFilteredUserTools,
+			hasTrackedUserTool(allTools, hasUserToolTracking, userToolNames),
+		)
 		return allTools
 	}
 
@@ -1390,8 +1407,34 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 	})
 
 	invocation.SetState(stateKeyToolsSnapshot, filtered)
+	invocation.SetState(
+		stateKeyHasFilteredUserTools,
+		hasTrackedUserTool(filtered, hasUserToolTracking, userToolNames),
+	)
 
 	return filtered
+}
+
+func hasTrackedUserTool(
+	tools []tool.Tool,
+	hasUserToolTracking bool,
+	userToolNames map[string]bool,
+) bool {
+	if len(tools) == 0 {
+		return false
+	}
+	if !hasUserToolTracking {
+		return true
+	}
+	for _, tl := range tools {
+		if tl == nil || tl.Declaration() == nil {
+			continue
+		}
+		if userToolNames[tl.Declaration().Name] {
+			return true
+		}
+	}
+	return false
 }
 
 // callLLM performs the actual LLM call using core/model.
