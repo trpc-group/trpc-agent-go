@@ -604,12 +604,26 @@ llmagent.WithAddSessionSummary(true)
 
 **可选：Prompt 侧上下文压缩**
 
-当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前增加一层轻量压缩：
+当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前执行两遍压缩：
 
-- 只压缩旧 request 中过长的 `tool result`
-- 只替换正文，仍保留 `ToolID` 和 `ToolName`
-- 当前 request 永远不压
-- 最近 `ContextCompactionKeepRecentRequests` 个已完成 request 会完整保留
+**Pass 1 — 历史 tool result 占位替换**（`ContextCompactionToolResultMaxTokens`，默认 1024 tokens）：
+
+- 只作用于**旧 request** 中超过阈值的 `tool result`，将其内容整体替换为简短占位符，但保留 `ToolID` 和 `ToolName`
+- 当前 request 和最近 `ContextCompactionKeepRecentRequests` 个已完成 request 不受影响
+- 适合清理已不重要的历史工具输出
+
+**Pass 2 — 超大 tool result 截断**（`ContextCompactionOversizedToolResultMaxTokens`，默认 8192 tokens）：
+
+- 作用于**所有 tool result，包括当前 request 的**
+- 超过阈值的 tool result 会使用首尾保留策略截断：保留内容的开头和结尾，中间插入 `[...N characters truncated...]` 标记
+- 这是防止单个超大 tool result 直接撑爆 context window 的安全网（例如 `web_fetch` 返回 800K+ 字符的 HTML）
+
+两遍压缩的定位不同：Pass 1 低阈值、全量替换，激进清理旧历史；Pass 2 高阈值、只在极端情况触发，但能保护当前 request。
+
+Pass 2 独立于 `EnableContextCompaction`，只要 `ContextCompactionOversizedToolResultMaxTokens > 0` 就会生效。
+
+此外：
+
 - 如果同时开启了 `WithAddSessionSummary(true)`，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 `CreateSessionSummary(...)` 并重建 request
 - 模型层的 token tailoring 仍然作为最后兜底
 
@@ -620,7 +634,8 @@ agent := llmagent.New(
     llmagent.WithAddSessionSummary(true),
     llmagent.WithEnableContextCompaction(true),
     llmagent.WithContextCompactionThresholdRatio(0.7),
-    llmagent.WithContextCompactionToolResultMaxTokens(1024),
+    llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: 旧 tool result → 占位符
+    llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: 任意超大 result → 首尾保留截断
     llmagent.WithContextCompactionKeepRecentRequests(1),
 )
 ```
@@ -660,7 +675,7 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - 不添加摘要消息
 - 只包含最近 `MaxHistoryRuns` 轮对话
 - `MaxHistoryRuns=0` 时不限制，包含所有历史
-- 如果开启 `WithEnableContextCompaction(true)`，保留下来的旧 request 中超长 `tool result` 仍可在 request projection 阶段被压缩
+- 如果开启 `WithEnableContextCompaction(true)`，保留下来的旧 request 中超长 `tool result` 仍可在 request projection 阶段被压缩；此外只要 `ContextCompactionOversizedToolResultMaxTokens > 0`（即使未开启 `EnableContextCompaction`），任意 request 中的超大 tool result 也会被首尾保留截断
 - 这个模式下不会触发 pre-LLM 的同步摘要重试
 
 **上下文结构**：
@@ -686,6 +701,8 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 | 高并发场景 | `AddSessionSummary=true`<br>增加 worker 数量 | 异步处理，不影响响应速度 |
 
 如果你的长会话里经常出现搜索结果、日志、代码扫描输出这类长 `tool result`，建议开启 `EnableContextCompaction=true`。如果你还希望在接近 context window 时多一次同步摘要兜底，再配合 `AddSessionSummary=true` 一起使用。
+
+> **提示**：如果你的 agent 使用了 `web_fetch` 等可能单次返回超大结果的工具，`ContextCompactionOversizedToolResultMaxTokens` 尤为重要——它能防止单个 tool result 吃光整个 context window，即使该 result 属于当前正在处理的（受保护的）request。它独立于 `EnableContextCompaction`，默认开启。
 
 ## 摘要格式自定义
 

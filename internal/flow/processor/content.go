@@ -320,6 +320,16 @@ func WithContextCompactionToolResultMaxTokens(tokens int) ContentOption {
 	}
 }
 
+// WithContextCompactionOversizedToolResultMaxTokens sets the token threshold
+// above which any tool result (including from the current request) is truncated
+// using head+tail preservation. This safety net fires regardless of whether
+// EnableContextCompaction is set.
+func WithContextCompactionOversizedToolResultMaxTokens(tokens int) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ContextCompactionConfig.OversizedToolResultMaxTokens = tokens
+	}
+}
+
 // WithFewShotResolver sets an invocation-aware few-shot resolver.
 func WithFewShotResolver(
 	resolver func(*agent.Invocation) [][]model.Message,
@@ -368,8 +378,9 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 		PreloadSessionRecall:           0,
 		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
 		ContextCompactionConfig: ContextCompactionConfig{
-			KeepRecentRequests:  DefaultContextCompactionKeepRecentRequests,
-			ToolResultMaxTokens: DefaultContextCompactionToolResultMaxTokens,
+			KeepRecentRequests:           DefaultContextCompactionKeepRecentRequests,
+			ToolResultMaxTokens:          DefaultContextCompactionToolResultMaxTokens,
+			OversizedToolResultMaxTokens: DefaultContextCompactionOversizedToolResultMaxTokens,
 		},
 	}
 
@@ -1109,68 +1120,141 @@ func (p *ContentRequestProcessor) getCurrentInvocationMessages(inv *agent.Invoca
 		return nil
 	}
 
-	var events []event.Event
-	inv.Session.EventMu.RLock()
-	for _, evt := range inv.Session.Events {
-		// Only include events from current invocation
-		if evt.InvocationID != inv.InvocationID {
-			continue
-		}
-		// Skip invalid events
-		if evt.Response == nil || evt.IsPartial || !evt.IsValidContent() {
-			continue
-		}
-		// use error fill message content if message content is empty
-		if len(evt.Response.Choices) > 0 && evt.Response.Choices[0].Message.Content == "" && evt.Response.Error != nil {
-			rsp := evt.Response.Clone()
-			rsp.Choices[0].Message.Content = fmt.Sprintf("type: %s, message: %s", rsp.Error.Type, rsp.Error.Message)
-			evt.Response = rsp
-		}
-		events = append(events, evt)
-	}
-	inv.Session.EventMu.RUnlock()
-
-	// insert invocation message if not already included
-	var hasInvocationMessage bool
-	for _, evt := range events {
-		if invocationMessageEqual(inv.Message, evt.Choices[0].Message) {
-			hasInvocationMessage = true
-			break
-		}
-	}
-	if !hasInvocationMessage && model.HasPayload(inv.Message) {
+	events := p.collectCurrentInvocationEvents(inv)
+	if !containsInvocationMessage(events, inv.Message) &&
+		model.HasPayload(inv.Message) {
 		events = p.insertInvocationMessage(events, inv)
 	}
 
+	messages := p.projectCurrentInvocationMessages(inv, events)
+	messages = p.mergeUserMessages(messages)
+	messages = p.truncateOversizedToolResultMessages(messages)
+	messages = annotateUserMessagesWithAttachedFiles(messages)
+	return messages
+}
+
+func (p *ContentRequestProcessor) collectCurrentInvocationEvents(
+	inv *agent.Invocation,
+) []event.Event {
+	var events []event.Event
+	inv.Session.EventMu.RLock()
+	for _, evt := range inv.Session.Events {
+		if !isCurrentInvocationEligibleEvent(evt, inv.InvocationID) {
+			continue
+		}
+		events = append(events, normalizeCurrentInvocationEvent(evt))
+	}
+	inv.Session.EventMu.RUnlock()
+	return events
+}
+
+func isCurrentInvocationEligibleEvent(
+	evt event.Event,
+	invocationID string,
+) bool {
+	return evt.InvocationID == invocationID &&
+		evt.Response != nil &&
+		!evt.IsPartial &&
+		evt.IsValidContent()
+}
+
+func normalizeCurrentInvocationEvent(evt event.Event) event.Event {
+	if len(evt.Response.Choices) > 0 &&
+		evt.Response.Choices[0].Message.Content == "" &&
+		evt.Response.Error != nil {
+		rsp := evt.Response.Clone()
+		rsp.Choices[0].Message.Content = fmt.Sprintf(
+			"type: %s, message: %s",
+			rsp.Error.Type,
+			rsp.Error.Message,
+		)
+		evt.Response = rsp
+	}
+	return evt
+}
+
+func containsInvocationMessage(
+	events []event.Event,
+	invocationMessage model.Message,
+) bool {
+	for _, evt := range events {
+		if len(evt.Choices) == 0 {
+			continue
+		}
+		if invocationMessageEqual(invocationMessage, evt.Choices[0].Message) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *ContentRequestProcessor) projectCurrentInvocationMessages(
+	inv *agent.Invocation,
+	events []event.Event,
+) []model.Message {
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 
-	// Get current request ID for reasoning content filtering.
 	currentRequestID := inv.RunOptions.RequestID
-
-	// Convert events to messages with reasoning content handling.
 	var messages []model.Message
 	for _, evt := range resultEvents {
-		// Convert foreign events or keep as-is (consistent with getIncrementMessages).
-		ev := evt
-		if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
-			ev = p.convertForeignEvent(&ev)
-		}
-		if len(ev.Choices) > 0 {
-			for _, choice := range ev.Choices {
-				msg := choice.Message
-				msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
-				msg = p.projectEventMessage(inv, evt, msg)
-				if isEmptyAssistantMessage(msg) {
-					continue
-				}
-				messages = append(messages, msg)
-			}
-		}
+		messages = append(
+			messages,
+			p.projectMessagesForEvent(inv, evt, currentRequestID)...,
+		)
+	}
+	return messages
+}
+
+func (p *ContentRequestProcessor) projectMessagesForEvent(
+	inv *agent.Invocation,
+	evt event.Event,
+	currentRequestID string,
+) []model.Message {
+	ev := evt
+	if p.isOtherAgentReply(inv.AgentName, inv.Branch, &ev) {
+		ev = p.convertForeignEvent(&ev)
+	}
+	if len(ev.Choices) == 0 {
+		return nil
 	}
 
-	messages = p.mergeUserMessages(messages)
-	messages = annotateUserMessagesWithAttachedFiles(messages)
+	var messages []model.Message
+	for _, choice := range ev.Choices {
+		msg := choice.Message
+		msg = p.processReasoningContent(msg, evt.RequestID, currentRequestID)
+		msg = p.projectEventMessage(inv, evt, msg)
+		if isEmptyAssistantMessage(msg) {
+			continue
+		}
+		messages = append(messages, msg)
+	}
+	return messages
+}
+
+func (p *ContentRequestProcessor) truncateOversizedToolResultMessages(
+	messages []model.Message,
+) []model.Message {
+	if p.ContextCompactionConfig.OversizedToolResultMaxTokens <= 0 {
+		return messages
+	}
+
+	var cloned bool
+	for i := range messages {
+		msg, truncated, _ := truncateOversizedToolResultMessage(
+			context.Background(),
+			messages[i],
+			p.ContextCompactionConfig.OversizedToolResultMaxTokens,
+		)
+		if !truncated {
+			continue
+		}
+		if !cloned {
+			messages = append([]model.Message(nil), messages...)
+			cloned = true
+		}
+		messages[i] = msg
+	}
 	return messages
 }
 

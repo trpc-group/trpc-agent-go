@@ -12,11 +12,13 @@ package processor
 import (
 	"context"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -1626,8 +1628,9 @@ func TestNewContentRequestProcessor(t *testing.T) {
 		PreloadMemory:                  0, // Default to disable preloading.
 		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
 		ContextCompactionConfig: ContextCompactionConfig{
-			KeepRecentRequests:  DefaultContextCompactionKeepRecentRequests,
-			ToolResultMaxTokens: DefaultContextCompactionToolResultMaxTokens,
+			KeepRecentRequests:           DefaultContextCompactionKeepRecentRequests,
+			ToolResultMaxTokens:          DefaultContextCompactionToolResultMaxTokens,
+			OversizedToolResultMaxTokens: DefaultContextCompactionOversizedToolResultMaxTokens,
 		},
 	}
 
@@ -1701,6 +1704,17 @@ func TestNewContentRequestProcessor(t *testing.T) {
 			want: func() *ContentRequestProcessor {
 				w := *defaultWant
 				w.BranchFilterMode = "exact"
+				return &w
+			}(),
+		},
+		{
+			name: "oversized tool result limit option",
+			args: []ContentOption{
+				WithContextCompactionOversizedToolResultMaxTokens(64),
+			},
+			want: func() *ContentRequestProcessor {
+				w := *defaultWant
+				w.ContextCompactionConfig.OversizedToolResultMaxTokens = 64
 				return &w
 			}(),
 		},
@@ -2452,6 +2466,80 @@ func TestContentRequestProcessor_IncludeContentsNoneSkipsHistory(t *testing.T) {
 	if msg.Role != model.RoleUser || msg.Content != "current" {
 		t.Fatalf("unexpected message: %+v", msg)
 	}
+}
+
+func TestContentRequestProcessor_IncludeContentsNoneTruncatesOversizedToolResults(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithEnableContextCompaction(true),
+		WithContextCompactionOversizedToolResultMaxTokens(32),
+	)
+
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			{
+				Author:       "assistant",
+				RequestID:    "req-1",
+				InvocationID: "inv-1",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role: model.RoleAssistant,
+								ToolCalls: []model.ToolCall{
+									{
+										ID: "call-1",
+										Function: model.FunctionDefinitionParam{
+											Name:      "fetch",
+											Arguments: []byte(`{}`),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:       "tool",
+				RequestID:    "req-1",
+				InvocationID: "inv-1",
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+					Choices: []model.Choice{
+						{
+							Message: model.NewToolMessage(
+								"call-1",
+								"fetch",
+								"HEAD-"+strings.Repeat("middle-", 400)+"-TAIL",
+							),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv-1"),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-1",
+			RuntimeState: map[string]any{
+				"include_contents": "none",
+			},
+		}),
+	)
+
+	req := &model.Request{}
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 3)
+	require.Equal(t, model.RoleTool, req.Messages[2].Role)
+	require.Contains(t, req.Messages[2].Content, "[... ")
+	require.True(t, strings.HasPrefix(req.Messages[2].Content, "HEAD-"))
+	require.True(t, strings.HasSuffix(req.Messages[2].Content, "-TAIL"))
 }
 
 func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {

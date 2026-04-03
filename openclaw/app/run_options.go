@@ -24,6 +24,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
@@ -62,9 +63,11 @@ const (
 	defaultSessionSummaryEventThreshold = 20
 	defaultSkillsLoadMode               = "turn"
 
-	flagAddSessionSummary = "add-session-summary"
-	flagMaxHistoryRuns    = "max-history-runs"
-	flagPreloadMemory     = "preload-memory"
+	flagAddSessionSummary                             = "add-session-summary"
+	flagEnableContextCompaction                       = "enable-context-compaction"
+	flagContextCompactionOversizedToolResultMaxTokens = "context-compaction-oversized-tool-result-max-tokens"
+	flagMaxHistoryRuns                                = "max-history-runs"
+	flagPreloadMemory                                 = "preload-memory"
 
 	flagAgentInstruction       = "agent-instruction"
 	flagAgentInstructionFiles  = "agent-instruction-files"
@@ -132,9 +135,11 @@ type runOptions struct {
 	A2AName           string
 	A2ADescription    string
 
-	AddSessionSummary bool
-	MaxHistoryRuns    int
-	PreloadMemory     int
+	AddSessionSummary                             bool
+	EnableContextCompaction                       bool
+	ContextCompactionOversizedToolResultMaxTokens int
+	MaxHistoryRuns                                int
+	PreloadMemory                                 int
 
 	AgentInstruction       string
 	AgentInstructionFiles  string
@@ -348,6 +353,18 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagAddSessionSummary,
 		false,
 		"Prepend session summary to the model context (optional)",
+	)
+	fs.BoolVar(
+		&opts.EnableContextCompaction,
+		flagEnableContextCompaction,
+		false,
+		"Enable prompt-side context compaction to control context window growth",
+	)
+	fs.IntVar(
+		&opts.ContextCompactionOversizedToolResultMaxTokens,
+		flagContextCompactionOversizedToolResultMaxTokens,
+		processor.DefaultContextCompactionOversizedToolResultMaxTokens,
+		"Truncate oversized tool results with head+tail preservation (0=disable)",
 	)
 	fs.IntVar(
 		&opts.MaxHistoryRuns,
@@ -922,9 +939,11 @@ type debugRecorderConfig struct {
 type agentRunConfig struct {
 	Type *string `yaml:"type,omitempty"`
 
-	AddSessionSummary *bool `yaml:"add_session_summary,omitempty"`
-	MaxHistoryRuns    *int  `yaml:"max_history_runs,omitempty"`
-	PreloadMemory     *int  `yaml:"preload_memory,omitempty"`
+	AddSessionSummary                             *bool `yaml:"add_session_summary,omitempty"`
+	EnableContextCompaction                       *bool `yaml:"enable_context_compaction,omitempty"`
+	ContextCompactionOversizedToolResultMaxTokens *int  `yaml:"context_compaction_oversized_tool_result_max_tokens,omitempty"`
+	MaxHistoryRuns                                *int  `yaml:"max_history_runs,omitempty"`
+	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
 
 	Instruction      *string  `yaml:"instruction,omitempty"`
 	InstructionFiles []string `yaml:"instruction_files,omitempty"`
@@ -1281,6 +1300,14 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.AddSessionSummary != nil &&
 			!flagWasSet(set, flagAddSessionSummary) {
 			opts.AddSessionSummary = *cfg.Agent.AddSessionSummary
+		}
+		if cfg.Agent.EnableContextCompaction != nil &&
+			!flagWasSet(set, flagEnableContextCompaction) {
+			opts.EnableContextCompaction = *cfg.Agent.EnableContextCompaction
+		}
+		if cfg.Agent.ContextCompactionOversizedToolResultMaxTokens != nil &&
+			!flagWasSet(set, flagContextCompactionOversizedToolResultMaxTokens) {
+			opts.ContextCompactionOversizedToolResultMaxTokens = *cfg.Agent.ContextCompactionOversizedToolResultMaxTokens
 		}
 		if cfg.Agent.MaxHistoryRuns != nil &&
 			!flagWasSet(set, flagMaxHistoryRuns) {

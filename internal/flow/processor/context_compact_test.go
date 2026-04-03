@@ -200,14 +200,198 @@ func TestCompactHistoricalToolResultMessage_SkipsWhenPlaceholderIsNotSmaller(t *
 
 func TestNormalizeContextCompactionConfig(t *testing.T) {
 	cfg := normalizeContextCompactionConfig(ContextCompactionConfig{
-		Enabled:             true,
-		KeepRecentRequests:  -1,
-		ToolResultMaxTokens: -5,
+		Enabled:                      true,
+		KeepRecentRequests:           -1,
+		ToolResultMaxTokens:          -5,
+		OversizedToolResultMaxTokens: -9,
 	})
 
 	require.True(t, cfg.Enabled)
 	require.Zero(t, cfg.KeepRecentRequests)
 	require.Zero(t, cfg.ToolResultMaxTokens)
+	require.Zero(t, cfg.OversizedToolResultMaxTokens)
+}
+
+func TestCompactIncrementEvents_TruncatesOversizedCurrentToolResult(t *testing.T) {
+	content := "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL"
+	evt := event.Event{
+		RequestID:    "req-current",
+		InvocationID: "inv-current",
+		FilterKey:    "test-agent",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage("tool-call-current", "worker", content),
+			}},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		[]event.Event{evt},
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled:                      true,
+			KeepRecentRequests:           1,
+			ToolResultMaxTokens:          10,
+			OversizedToolResultMaxTokens: 32,
+		},
+	)
+
+	require.Len(t, compacted, 1)
+	got := compacted[0].Response.Choices[0].Message.Content
+	require.NotEqual(t, content, got)
+	require.Contains(t, got, "[... ")
+	require.True(t, strings.HasPrefix(got, "HEAD-"))
+	require.True(t, strings.HasSuffix(got, "-TAIL"))
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+	require.Greater(t, stats.EstimatedTokensSaved, 0)
+}
+
+func TestCompactIncrementEvents_TruncatesOversizedHistoricalToolResult(t *testing.T) {
+	content := "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL"
+	events := []event.Event{
+		{
+			RequestID:    "req-current",
+			InvocationID: "inv-current",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage("tool-call-current", "worker", "ok"),
+				}},
+			},
+		},
+		{
+			RequestID:    "req-history",
+			InvocationID: "inv-history",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage("tool-call-history", "worker", content),
+				}},
+			},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		events,
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled:                      true,
+			KeepRecentRequests:           1,
+			ToolResultMaxTokens:          10,
+			OversizedToolResultMaxTokens: 32,
+		},
+	)
+
+	require.Len(t, compacted, 2)
+	got := compacted[1].Response.Choices[0].Message.Content
+	require.NotEqual(t, content, got)
+	require.Contains(t, got, "[... ")
+	require.True(t, strings.HasPrefix(got, "HEAD-"))
+	require.True(t, strings.HasSuffix(got, "-TAIL"))
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+	require.Greater(t, stats.EstimatedTokensSaved, 0)
+}
+
+func TestCompactIncrementEvents_Pass2WorksWithoutPass1Context(t *testing.T) {
+	content := "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL"
+	evt := event.Event{
+		InvocationID: "inv-current",
+		FilterKey:    "test-agent",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage("tool-call-current", "worker", content),
+			}},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		[]event.Event{evt},
+		"",
+		"",
+		ContextCompactionConfig{
+			Enabled:                      true,
+			ToolResultMaxTokens:          0,
+			OversizedToolResultMaxTokens: 32,
+		},
+	)
+
+	require.Len(t, compacted, 1)
+	got := compacted[0].Response.Choices[0].Message.Content
+	require.NotEqual(t, content, got)
+	require.Contains(t, got, "[... ")
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+	require.Greater(t, stats.EstimatedTokensSaved, 0)
+}
+
+func TestTruncateOversizedToolResultMessage_PreservesContentParts(t *testing.T) {
+	partText := "structured payload"
+	msg := model.Message{
+		Role:    model.RoleTool,
+		Content: "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL",
+		ContentParts: []model.ContentPart{{
+			Type: model.ContentTypeText,
+			Text: &partText,
+		}},
+		ToolID:   "tool-call-current",
+		ToolName: "worker",
+	}
+
+	compacted, changed, savedTokens := truncateOversizedToolResultMessage(
+		context.Background(),
+		msg,
+		32,
+	)
+
+	require.True(t, changed)
+	require.Greater(t, savedTokens, 0)
+	require.Contains(t, compacted.Content, "[... ")
+	require.Equal(t, msg.ContentParts, compacted.ContentParts)
+}
+
+func TestTruncateOversizedToolResultMessage_ContentPartsOnlyKeepsPayload(t *testing.T) {
+	partText := strings.Repeat("segment-", 400)
+	msg := model.Message{
+		Role: model.RoleTool,
+		ContentParts: []model.ContentPart{{
+			Type: model.ContentTypeText,
+			Text: &partText,
+		}},
+		ToolID:   "tool-call-current",
+		ToolName: "worker",
+	}
+
+	compacted, changed, savedTokens := truncateOversizedToolResultMessage(
+		context.Background(),
+		msg,
+		32,
+	)
+
+	require.False(t, changed)
+	require.Zero(t, savedTokens)
+	require.Equal(t, msg, compacted)
+}
+
+func TestTruncateMiddle(t *testing.T) {
+	require.Equal(t, "short", truncateMiddle("short", 100))
+
+	input := strings.Repeat("x", 500)
+	truncated := truncateMiddle(input, 200)
+	require.Contains(t, truncated, "[... 300 characters truncated ...]")
+	require.LessOrEqual(t, len([]rune(truncated)), 200,
+		"output must not exceed maxChars")
+
+	tiny := truncateMiddle("ABCDEFGHIJ0123456789", 10)
+	require.Equal(t, "ABCDEFGHIJ", tiny,
+		"when marker is too large, fall back to head-only truncation")
 }
 
 func TestContentRequestProcessor_ProcessRequest_ContextCompactionWithoutSummary(t *testing.T) {

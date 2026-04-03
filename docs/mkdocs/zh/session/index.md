@@ -80,7 +80,8 @@ func main() {
         llmagent.WithAddSessionSummary(true), // 可选：启用摘要注入到上下文
         llmagent.WithEnableContextCompaction(true), // 可选：压缩历史超长 tool result
         // 配合 WithAddSessionSummary(true) 时，还会在必要时多一次同步摘要重试
-        llmagent.WithContextCompactionToolResultMaxTokens(1024),
+        llmagent.WithContextCompactionToolResultMaxTokens(1024),  // 旧 tool result → 占位符
+        llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // 超大 result → 首尾保留截断
         llmagent.WithContextCompactionKeepRecentRequests(1),
         // 注意：WithAddSessionSummary(true) 时会忽略 WithMaxHistoryRuns 配置
         // 摘要会包含所有历史，增量事件会完整保留
