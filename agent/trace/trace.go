@@ -45,6 +45,7 @@ type Step struct {
 	StartedAt          time.Time
 	EndedAt            time.Time
 	PredecessorStepIDs []string
+	AppliedSurfaceIDs  []string
 	Input              *Snapshot
 	Output             *Snapshot
 	Error              string
