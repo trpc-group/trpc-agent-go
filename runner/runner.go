@@ -1356,6 +1356,7 @@ func shouldPropagateFallbackStateKey(key string) bool {
 		graph.MetadataKeyModel,
 		graph.MetadataKeyCheckpoint,
 		graph.MetadataKeyCacheHit,
+		graph.MetadataKeyNodeEmitter,
 		graph.MetadataKeyNodeCustom:
 		return false
 	default:

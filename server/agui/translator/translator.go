@@ -275,9 +275,18 @@ func (t *translator) graphNodeActivityEvents(evt *agentevent.Event) []aguievents
 	if meta.NodeID == "" {
 		return nil
 	}
-	// Agent nodes emit an additional start event without attempt metadata; ignore it to avoid duplicates.
-	if meta.NodeType == graph.NodeTypeAgent && meta.Attempt == 0 {
-		return nil
+	if meta.NodeType == graph.NodeTypeAgent {
+		switch graph.NodeEventEmitterFromStateDelta(evt.StateDelta) {
+		case graph.NodeEventEmitterExecutor:
+		case graph.NodeEventEmitterAgentHelper:
+			return nil
+		default:
+			// Backward-compatible fallback for older cores that do not emit explicit
+			// lifecycle source metadata.
+			if meta.Attempt == 0 {
+				return nil
+			}
+		}
 	}
 
 	value := graphNodePatchValue{NodeID: meta.NodeID, Phase: string(meta.Phase)}
