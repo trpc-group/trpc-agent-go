@@ -12,6 +12,7 @@ package memoryfile
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -369,6 +370,214 @@ func TestEnsureMemory_WriteFileErrorReturnsError(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = store.EnsureMemory(context.Background(), "demo-app", "u1")
+	require.Error(t, err)
+}
+
+func TestStoreUpdateMemoryCreatesAndWrites(t *testing.T) {
+	t.Parallel()
+
+	root, err := DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.UpdateMemory(
+		context.Background(),
+		"demo-app",
+		"u1",
+		func(current string) (string, error) {
+			require.Contains(t, current, "# Memory")
+			return current + "\n- Added fact\n", nil
+		},
+	)
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "- Added fact")
+}
+
+func TestStoreUpdateMemoryUpdatesExistingFile(t *testing.T) {
+	t.Parallel()
+
+	root, err := DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.MemoryPath("demo-app", "u1")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), dirPerm))
+	require.NoError(t, os.WriteFile(path, []byte("original"), filePerm))
+
+	got, err := store.UpdateMemory(
+		context.Background(),
+		"demo-app",
+		"u1",
+		func(current string) (string, error) {
+			require.Equal(t, "original", current)
+			return "updated", nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, path, got)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "updated", string(raw))
+}
+
+func TestStoreUpdateMemory_NilStoreReturnsError(t *testing.T) {
+	t.Parallel()
+
+	var store *Store
+	_, err := store.UpdateMemory(
+		context.Background(),
+		"demo-app",
+		"u1",
+		func(current string) (string, error) {
+			return current, nil
+		},
+	)
+	require.Error(t, err)
+}
+
+func TestStoreUpdateMemory_NilUpdateReturnsError(t *testing.T) {
+	t.Parallel()
+
+	root, err := DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	_, err = store.UpdateMemory(context.Background(), "demo-app", "u1", nil)
+	require.Error(t, err)
+}
+
+func TestStoreUpdateMemory_CanceledContextReturnsError(t *testing.T) {
+	t.Parallel()
+
+	root, err := DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = store.UpdateMemory(
+		ctx,
+		"demo-app",
+		"u1",
+		func(current string) (string, error) {
+			return current, nil
+		},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestStoreUpdateMemory_EmptyScopeReturnsError(t *testing.T) {
+	t.Parallel()
+
+	root, err := DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	_, err = store.UpdateMemory(
+		context.Background(),
+		" ",
+		"u1",
+		func(current string) (string, error) {
+			return current, nil
+		},
+	)
+	require.Error(t, err)
+}
+
+func TestStoreUpdateMemory_UpdateFuncErrorKeepsOriginalFile(t *testing.T) {
+	t.Parallel()
+
+	root, err := DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.MemoryPath("demo-app", "u1")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), dirPerm))
+	require.NoError(t, os.WriteFile(path, []byte("original"), filePerm))
+
+	updateErr := errors.New("boom")
+	_, err = store.UpdateMemory(
+		context.Background(),
+		"demo-app",
+		"u1",
+		func(current string) (string, error) {
+			require.Equal(t, "original", current)
+			return "", updateErr
+		},
+	)
+	require.ErrorIs(t, err, updateErr)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "original", string(raw))
+}
+
+func TestStoreUpdateMemory_CanceledAfterUpdateKeepsOriginalFile(t *testing.T) {
+	t.Parallel()
+
+	root, err := DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.MemoryPath("demo-app", "u1")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), dirPerm))
+	require.NoError(t, os.WriteFile(path, []byte("original"), filePerm))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err = store.UpdateMemory(
+		ctx,
+		"demo-app",
+		"u1",
+		func(current string) (string, error) {
+			cancel()
+			return "updated", nil
+		},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "original", string(raw))
+}
+
+func TestStoreUpdateMemory_WriteErrorReturnsError(t *testing.T) {
+	t.Parallel()
+
+	root, err := DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.MemoryPath("demo-app", "u1")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), dirPerm))
+	require.NoError(t, os.WriteFile(path, []byte("original"), filePerm))
+
+	_, err = store.UpdateMemory(
+		context.Background(),
+		"demo-app",
+		"u1",
+		func(current string) (string, error) {
+			require.NoError(t, os.Remove(path))
+			require.NoError(t, os.Mkdir(path, dirPerm))
+			return "updated", nil
+		},
+	)
 	require.Error(t, err)
 }
 

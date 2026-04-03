@@ -102,6 +102,54 @@ func (s *Store) EnsureMemory(
 	return path, nil
 }
 
+func (s *Store) UpdateMemory(
+	ctx context.Context,
+	appName string,
+	userID string,
+	update func(current string) (string, error),
+) (string, error) {
+	if s == nil {
+		return "", errors.New("memoryfile: nil store")
+	}
+	if update == nil {
+		return "", errors.New("memoryfile: nil update func")
+	}
+	if err := contextErr(ctx); err != nil {
+		return "", err
+	}
+	path, err := s.MemoryPath(appName, userID)
+	if err != nil {
+		return "", err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := contextErr(ctx); err != nil {
+		return "", err
+	}
+	if !fileExists(path) {
+		if err := writeFileAtomic(path, []byte(DefaultTemplate())); err != nil {
+			return "", err
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	next, err := update(string(raw))
+	if err != nil {
+		return "", err
+	}
+	if err := contextErr(ctx); err != nil {
+		return "", err
+	}
+	if err := writeFileAtomic(path, []byte(next)); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func (s *Store) ReadFile(path string, maxBytes int) (string, error) {
 	if s == nil {
 		return "", errors.New("memoryfile: nil store")
