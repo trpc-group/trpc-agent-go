@@ -670,6 +670,7 @@ func NewRuntime(
 			SkillsToolingGuide: opts.SkillsToolingGuide,
 			KnowledgesConfig:   opts.KnowledgesConfig,
 			StateDir:           resolvedStateDir,
+			MemoryFileStore:    fileMemoryStore,
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
@@ -1098,6 +1099,7 @@ func run(ctx context.Context, args []string) error {
 			SkillsToolingGuide: opts.SkillsToolingGuide,
 			KnowledgesConfig:   opts.KnowledgesConfig,
 			StateDir:           resolvedStateDir,
+			MemoryFileStore:    fileMemoryStore,
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
@@ -1939,6 +1941,11 @@ func newAgent(
 	}
 
 	callbacks := tool.NewCallbacks()
+	registerMemoryFileToolCallback(
+		callbacks,
+		cfg.MemoryFileStore,
+		cfg.StateDir,
+	)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
 
@@ -2134,6 +2141,8 @@ type agentConfig struct {
 	KnowledgesConfig   map[string]*yaml.Node
 
 	StateDir string
+
+	MemoryFileStore *memoryfile.Store
 
 	EnableLocalExec bool
 
