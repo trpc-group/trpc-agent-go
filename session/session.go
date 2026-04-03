@@ -37,6 +37,14 @@ var (
 	ErrSessionIDRequired = errors.New("sessionID is required")
 	// ErrNilSession is the error for session is nil.
 	ErrNilSession = errors.New("session is nil")
+	// ErrEventPageOnlyForGetSession indicates event paging is not supported by ListSessions.
+	ErrEventPageOnlyForGetSession = errors.New("event page is only supported by GetSession")
+	// ErrEventPageUnsupported indicates the backend does not support event paging.
+	ErrEventPageUnsupported = errors.New("event page is only supported by postgres/mysql GetSession")
+	// ErrInvalidEventPage indicates event paging arguments are invalid.
+	ErrInvalidEventPage = errors.New("event page requires offset >= 0 and limit > 0")
+	// ErrEventPageConflictsWithEventFilters indicates paging cannot be mixed with context filters.
+	ErrEventPageConflictsWithEventFilters = errors.New("event page cannot be combined with EventNum or EventTime")
 )
 
 // SummaryFilterKeyAllContents is the filter key representing
@@ -581,9 +589,18 @@ type Summary struct {
 // Options contains shared session-service options.
 // Not every field applies to every service method.
 type Options struct {
-	EventNum            int       // EventNum is the number of recent events.
-	EventTime           time.Time // EventTime is the after time.
-	ListSessionOnlyMeta bool      // ListSessionOnlyMeta is only honored by ListSessions.
+	EventNum            int        // EventNum is the number of recent events (context-window mode).
+	EventTime           time.Time  // EventTime is the after time.
+	EventPage           *EventPage // EventPage enables GetSession-only offset pagination when non-nil.
+	ListSessionOnlyMeta bool       // ListSessionOnlyMeta is only honored by ListSessions.
+}
+
+// EventPage specifies GetSession-only offset-based pagination for session events.
+// When set, the backend returns a strict event page and skips ApplyEventFiltering.
+// Offset counts from the most recent event (0 = most recent page).
+type EventPage struct {
+	Offset int // Offset is the number of most-recent events to skip.
+	Limit  int // Limit is the maximum number of events to return per page.
 }
 
 // Option is the option for a session.
@@ -610,6 +627,43 @@ func WithListSessionOnlyMeta() Option {
 	return func(o *Options) {
 		o.ListSessionOnlyMeta = true
 	}
+}
+
+// WithGetSessionEventPage enables strict offset/limit pagination for GetSession events.
+// offset counts backwards from the most recent event (0 = most recent page).
+// limit is the page size. This option is only supported by postgres/mysql GetSession.
+func WithGetSessionEventPage(offset, limit int) Option {
+	return func(o *Options) {
+		o.EventPage = &EventPage{
+			Offset: offset,
+			Limit:  limit,
+		}
+	}
+}
+
+// ValidateGetSessionOptions validates GetSession-only option semantics.
+func ValidateGetSessionOptions(opts *Options, supportsEventPage bool) error {
+	if opts == nil || opts.EventPage == nil {
+		return nil
+	}
+	if !supportsEventPage {
+		return ErrEventPageUnsupported
+	}
+	if opts.EventPage.Offset < 0 || opts.EventPage.Limit <= 0 {
+		return ErrInvalidEventPage
+	}
+	if opts.EventNum != 0 || !opts.EventTime.IsZero() {
+		return ErrEventPageConflictsWithEventFilters
+	}
+	return nil
+}
+
+// ValidateListSessionsOptions validates ListSessions-only option semantics.
+func ValidateListSessionsOptions(opts *Options) error {
+	if opts == nil || opts.EventPage == nil {
+		return nil
+	}
+	return ErrEventPageOnlyForGetSession
 }
 
 // SummaryOption is the option for getting session summary.

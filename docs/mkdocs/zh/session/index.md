@@ -15,6 +15,7 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 - **上下文管理**：自动加载历史对话，实现真正的多轮对话
 - **会话摘要**：使用 LLM 自动压缩长对话历史，在保留关键上下文的同时显著降低 token 消耗
 - **事件限制**：控制每个会话存储的最大事件数量，防止内存溢出
+- **事件分页**：PostgreSQL/MySQL 支持 `GetSession` 历史事件分页读取
 - **TTL 管理**：支持会话数据的自动过期清理
 - **多存储后端**：支持内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse 存储
 - **并发安全**：内置读写锁保证并发访问安全
@@ -464,6 +465,12 @@ sess, err := sessionService.GetSession(ctx, key,
 // 获取指定时间后的事件
 sess, err := sessionService.GetSession(ctx, key,
     session.WithEventTime(time.Now().Add(-1*time.Hour)))
+
+// 分页获取历史事件
+// 仅 PostgreSQL / MySQL 的 GetSession 支持
+// EventPage 与 EventNum / EventTime 不能同时使用
+sess, err := sessionService.GetSession(ctx, key,
+    session.WithGetSessionEventPage(20, 10))
 ```
 
 #### 直接追加事件到会话

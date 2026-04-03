@@ -540,7 +540,7 @@ func TestGetSession(t *testing.T) {
 			WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		sess, err := s.getSession(context.Background(), key, 0, time.Time{})
+		sess, err := s.getSession(context.Background(), key, 0, time.Time{}, nil)
 		assert.Error(t, err)
 		assert.Nil(t, sess)
 		assert.Contains(t, err.Error(), "unmarshal session state failed")
@@ -579,12 +579,12 @@ func TestGetSession(t *testing.T) {
 			WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
-		mock.ExpectQuery("SELECT session_id, event FROM session_events").
+		mock.ExpectQuery("SELECT session_id, event FROM").
 			WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}).
 				AddRow("session1", []byte("invalid-event-json")))
 
-		sess, err := s.getSession(context.Background(), key, 0, time.Time{})
+		sess, err := s.getSession(context.Background(), key, 0, time.Time{}, nil)
 		assert.Error(t, err)
 		assert.Nil(t, sess)
 		assert.Contains(t, err.Error(), "get events failed")
@@ -644,7 +644,7 @@ func TestGetSession(t *testing.T) {
 			WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
 
-		mock.ExpectQuery("SELECT session_id, event FROM session_events").
+		mock.ExpectQuery("SELECT session_id, event FROM").
 			WithArgs(key.AppName, key.UserID, sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}))
 
@@ -715,7 +715,7 @@ func TestGetEventsList(t *testing.T) {
 		defer db.Close()
 
 		s := createTestService(t, db)
-		result, err := s.getEventsList(context.Background(), []session.Key{}, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), []session.Key{}, 0, time.Time{}, nil)
 		assert.NoError(t, err)
 		assert.Nil(t, result)
 		require.NoError(t, mock.ExpectationsWereMet())
@@ -734,11 +734,11 @@ func TestGetEventsList(t *testing.T) {
 		rows := sqlmock.NewRows([]string{"session_id", "event"}).
 			AddRow("sess1", []byte("invalid-json"))
 
-		mock.ExpectQuery("SELECT session_id, event FROM session_events").
+		mock.ExpectQuery("SELECT session_id, event FROM").
 			WithArgs("app1", "user1", sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{}, nil)
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "unmarshal event failed")
@@ -795,17 +795,140 @@ func TestGetEventsList(t *testing.T) {
 			AddRow(keys[0].SessionID, evt2Bytes).
 			AddRow(keys[0].SessionID, evt3Bytes)
 
-		mock.ExpectQuery("SELECT session_id, event FROM session_events").
+		mock.ExpectQuery("SELECT session_id, event FROM").
 			WithArgs(keys[0].AppName, keys[0].UserID, sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 2, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 2, time.Time{}, nil)
 		assert.NoError(t, err)
 		require.Len(t, result, 1)
 		require.Len(t, result[0], 2)
 		assert.Equal(t, "inv-2", result[0][0].InvocationID)
 		assert.Equal(t, "inv-3", result[0][1].InvocationID)
 		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("WithLimitKeepsLastUserAnchor", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db)
+		keys := []session.Key{
+			{AppName: "app1", UserID: "user1", SessionID: "sess1"},
+		}
+
+		evt1 := event.NewResponseEvent("inv-1", "author1", &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user message"}}},
+		})
+		evt2 := event.NewResponseEvent("inv-2", "author1", &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant-1"}}},
+		})
+		evt3 := event.NewResponseEvent("inv-3", "author1", &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant-2"}}},
+		})
+
+		evt1Bytes, _ := json.Marshal(evt1)
+		evt2Bytes, _ := json.Marshal(evt2)
+		evt3Bytes, _ := json.Marshal(evt3)
+
+		rows := sqlmock.NewRows([]string{"session_id", "event"}).
+			AddRow("sess1", evt1Bytes).
+			AddRow("sess1", evt2Bytes).
+			AddRow("sess1", evt3Bytes)
+
+		mock.ExpectQuery("SELECT session_id, event FROM").
+			WithArgs("app1", "user1", sqlmock.AnyArg()).
+			WillReturnRows(rows)
+
+		result, err := s.getEventsList(context.Background(), keys, 2, time.Time{}, nil)
+		assert.NoError(t, err)
+		require.Len(t, result, 1)
+		require.Len(t, result[0], 3)
+		assert.Equal(t, "inv-1", result[0][0].InvocationID)
+		assert.Equal(t, "inv-2", result[0][1].InvocationID)
+		assert.Equal(t, "inv-3", result[0][2].InvocationID)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("WithEventPage", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db)
+		keys := []session.Key{
+			{AppName: "app1", UserID: "user1", SessionID: "sess1"},
+		}
+
+		evt2 := event.NewResponseEvent("inv-2", "author1", &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "user-2"}}},
+		})
+		evt3 := event.NewResponseEvent("inv-3", "author1", &model.Response{
+			Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "assistant-3"}}},
+		})
+		evt2Bytes, _ := json.Marshal(evt2)
+		evt3Bytes, _ := json.Marshal(evt3)
+
+		rows := sqlmock.NewRows([]string{"session_id", "event"}).
+			AddRow("sess1", evt2Bytes).
+			AddRow("sess1", evt3Bytes)
+
+		mock.ExpectQuery("SELECT session_id, event FROM").
+			WithArgs("app1", "user1", "sess1", sqlmock.AnyArg(), 2, 1).
+			WillReturnRows(rows)
+
+		result, err := s.getEventsList(
+			context.Background(), keys, 0, time.Time{}, &session.EventPage{Offset: 1, Limit: 2},
+		)
+		assert.NoError(t, err)
+		require.Len(t, result, 1)
+		require.Len(t, result[0], 2)
+		assert.Equal(t, "inv-2", result[0][0].InvocationID)
+		assert.Equal(t, "inv-3", result[0][1].InvocationID)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("WithEventPageUsesTTLLowerBound", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db, WithSessionTTL(time.Hour))
+		keys := []session.Key{
+			{AppName: "app1", UserID: "user1", SessionID: "sess1"},
+		}
+
+		rows := sqlmock.NewRows([]string{"session_id", "event"})
+		mock.ExpectQuery("SELECT session_id, event FROM").
+			WithArgs("app1", "user1", "sess1", sqlmock.AnyArg(), 2, 0).
+			WillReturnRows(rows)
+
+		result, err := s.getEventsList(
+			context.Background(), keys, 0, time.Time{}, &session.EventPage{Offset: 0, Limit: 2},
+		)
+		assert.NoError(t, err)
+		require.Len(t, result, 1)
+		assert.Empty(t, result[0])
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("WithEventPageRequiresSingleSession", func(t *testing.T) {
+		db, _, err := sqlmock.New()
+		require.NoError(t, err)
+		defer db.Close()
+
+		s := createTestService(t, db)
+		keys := []session.Key{
+			{AppName: "app1", UserID: "user1", SessionID: "sess1"},
+			{AppName: "app1", UserID: "user1", SessionID: "sess2"},
+		}
+
+		result, err := s.getEventsList(
+			context.Background(), keys, 0, time.Time{}, &session.EventPage{Offset: 0, Limit: 2},
+		)
+		require.Error(t, err)
+		assert.Nil(t, result)
 	})
 
 	t.Run("NoLimit", func(t *testing.T) {
@@ -858,11 +981,11 @@ func TestGetEventsList(t *testing.T) {
 			AddRow("sess1", evt2Bytes).
 			AddRow("sess1", evt3Bytes)
 
-		mock.ExpectQuery("SELECT session_id, event FROM session_events").
+		mock.ExpectQuery("SELECT session_id, event FROM").
 			WithArgs("app1", "user1", sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{}, nil)
 		assert.NoError(t, err)
 		require.Len(t, result, 1)
 		require.Len(t, result[0], 3)
@@ -885,14 +1008,13 @@ func TestGetEventsList(t *testing.T) {
 		rows := sqlmock.NewRows([]string{"app_name", "user_id"}).
 			AddRow("app1", "user1")
 
-		mock.ExpectQuery("SELECT session_id, event FROM session_events").
+		mock.ExpectQuery("SELECT session_id, event FROM").
 			WithArgs("app1", "user1", sqlmock.AnyArg()).
 			WillReturnRows(rows)
 
-		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{})
+		result, err := s.getEventsList(context.Background(), keys, 0, time.Time{}, nil)
 		assert.Error(t, err)
 		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "unmarshal event failed")
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }

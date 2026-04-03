@@ -27,6 +27,7 @@ func (s *Service) getSession(
 	key session.Key,
 	limit int,
 	afterTime time.Time,
+	page *session.EventPage,
 ) (*session.Session, error) {
 	// Query session state (always filter deleted records)
 	var sessState *SessionState
@@ -77,7 +78,7 @@ func (s *Service) getSession(
 
 	// Query events (always filter deleted records)
 	// Note: limit here only controls how many events to return, not delete from database
-	eventsList, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime, page)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
@@ -183,7 +184,7 @@ func (s *Service) listSessions(
 
 	// Batch load events for all sessions
 	// Note: limit here only controls how many events to return per session, not delete from database
-	eventsList, err := s.getEventsList(ctx, sessionKeys, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, sessionKeys, limit, afterTime, nil)
 	if err != nil {
 		return nil, fmt.Errorf("get events list failed: %w", err)
 	}
@@ -607,34 +608,49 @@ func applyOptions(opts ...session.Option) *session.Options {
 }
 
 // getEventsList batch loads events for multiple sessions.
-// Note: limit here only controls how many events to return per session, not delete from database
+//
+// When page is nil (context-window mode), time filtering and user-message
+// anchoring are done in memory via ApplyEventFiltering on the full event
+// history. When page is non-nil (pagination mode), strict offset/limit is
+// applied in SQL for GetSession and ApplyEventFiltering is skipped.
 func (s *Service) getEventsList(
 	ctx context.Context,
 	sessionKeys []session.Key,
 	limit int,
 	afterTime time.Time,
+	page *session.EventPage,
 ) ([][]event.Event, error) {
 	if len(sessionKeys) == 0 {
 		return nil, nil
 	}
 
-	// Build session IDs array
+	if page != nil {
+		if len(sessionKeys) != 1 {
+			return nil, fmt.Errorf("event paging only supports a single session")
+		}
+		return s.getPagedEvents(ctx, sessionKeys[0], afterTime, page)
+	}
+
 	sessionIDs := make([]string, len(sessionKeys))
 	for i, key := range sessionKeys {
 		sessionIDs[i] = key.SessionID
 	}
 
-	// Query events for all sessions
+	if limit <= 0 {
+		limit = s.opts.sessionEventLimit
+	}
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+
 	query := fmt.Sprintf(`
-			SELECT session_id, event
-			FROM %s
-			WHERE app_name = $1 AND user_id = $2
-			AND session_id = ANY($3::varchar[])
-			AND deleted_at IS NULL
-			ORDER BY session_id, created_at ASC`, s.tableSessionEvents)
+		SELECT session_id, event FROM %s
+		WHERE app_name = $1 AND user_id = $2
+		AND session_id = ANY($3::varchar[])
+		AND deleted_at IS NULL
+		ORDER BY session_id, created_at ASC, id ASC`, s.tableSessionEvents)
 	args := []any{sessionKeys[0].AppName, sessionKeys[0].UserID, sessionIDs}
 
-	// Execute query and group events by session
 	eventsMap := make(map[string][]event.Event)
 	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
@@ -644,7 +660,6 @@ func (s *Service) getEventsList(
 				return err
 			}
 
-			// Skip null events (from LEFT JOIN when no events exist)
 			if eventBytes == nil {
 				continue
 			}
@@ -662,13 +677,6 @@ func (s *Service) getEventsList(
 		return nil, fmt.Errorf("query events failed: %w", err)
 	}
 
-	if limit <= 0 {
-		limit = s.opts.sessionEventLimit
-	}
-	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
-		afterTime = time.Now().Add(-s.opts.sessionTTL)
-	}
-	// Build result list in the same order as sessionKeys
 	result := make([][]event.Event, len(sessionKeys))
 	for i, key := range sessionKeys {
 		events := eventsMap[key.SessionID]
@@ -684,6 +692,56 @@ func (s *Service) getEventsList(
 	}
 
 	return result, nil
+}
+
+func (s *Service) getPagedEvents(
+	ctx context.Context,
+	key session.Key,
+	afterTime time.Time,
+	page *session.EventPage,
+) ([][]event.Event, error) {
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT session_id, event FROM (
+			SELECT session_id, event, created_at, id
+			FROM %s
+			WHERE app_name = $1 AND user_id = $2 AND session_id = $3
+			AND created_at >= $4
+			AND deleted_at IS NULL
+			ORDER BY created_at DESC, id DESC
+			LIMIT $5 OFFSET $6
+		) page
+		ORDER BY created_at ASC, id ASC`, s.tableSessionEvents)
+
+	events := make([]event.Event, 0, page.Limit)
+	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
+		for rows.Next() {
+			var sessionID string
+			var eventBytes []byte
+			if err := rows.Scan(&sessionID, &eventBytes); err != nil {
+				return err
+			}
+
+			if eventBytes == nil {
+				continue
+			}
+
+			var evt event.Event
+			if err := json.Unmarshal(eventBytes, &evt); err != nil {
+				return fmt.Errorf("unmarshal event failed: %w", err)
+			}
+			events = append(events, evt)
+		}
+		return nil
+	}, query, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("query events failed: %w", err)
+	}
+
+	return [][]event.Event{events}, nil
 }
 
 // getTrackEvents batch loads track events for multiple tracks.

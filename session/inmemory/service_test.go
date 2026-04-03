@@ -1874,3 +1874,27 @@ func TestGetSessionHook(t *testing.T) {
 		assert.Equal(t, []string{"hook1_before", "hook2_before", "hook2_after", "hook1_after"}, order)
 	})
 }
+
+func TestSessionService_EventPageValidation(t *testing.T) {
+	service := NewSessionService()
+	defer service.Close()
+
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	userKey := session.UserKey{AppName: "app", UserID: "user"}
+
+	sess, err := service.GetSession(
+		context.Background(),
+		key,
+		session.WithGetSessionEventPage(0, 10),
+	)
+	assert.ErrorIs(t, err, session.ErrEventPageUnsupported)
+	assert.Nil(t, sess)
+
+	sessions, err := service.ListSessions(
+		context.Background(),
+		userKey,
+		session.WithGetSessionEventPage(0, 10),
+	)
+	assert.ErrorIs(t, err, session.ErrEventPageOnlyForGetSession)
+	assert.Nil(t, sessions)
+}
