@@ -218,9 +218,14 @@ func (s *sessionSummarizer) ShouldSummarizeWithContext(
 	if sess == nil || len(sess.Events) == 0 {
 		return false
 	}
+	if len(s.filterEventsForSummary(sess.Events)) == 0 {
+		return false
+	}
+
+	checkSess := s.buildCheckSession(sess)
 
 	for _, check := range s.checks {
-		if !check(ctx, sess) {
+		if !check(ctx, checkSess) {
 			return false
 		}
 	}
@@ -300,6 +305,23 @@ func (s *sessionSummarizer) recordLastIncludedTimestamp(sess *session.Session, e
 	}
 	last := events[len(events)-1].Timestamp.UTC()
 	sess.SetState(lastIncludedTsKey, []byte(last.Format(time.RFC3339Nano)))
+}
+
+func (s *sessionSummarizer) buildCheckSession(
+	sess *session.Session,
+) *session.Session {
+	if sess == nil {
+		return nil
+	}
+	checkSess := sess.Clone()
+	delta := filterDeltaEvents(checkSess)
+	filtered := s.filterEventsForSummary(delta)
+	primary := filterPrimaryEvents(filtered, checkSess.AppName)
+	checkSess.SetState(
+		tokenThresholdConversationTextStateKey,
+		[]byte(s.extractConversationText(primary)),
+	)
+	return checkSess
 }
 
 // filterEventsForSummary filters events for summarization, excluding recent events

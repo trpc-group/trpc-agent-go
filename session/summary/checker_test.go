@@ -454,6 +454,29 @@ func TestCheckTokenThreshold(t *testing.T) {
 		// non-empty key → triggers.
 		assert.True(t, checker(sess))
 	})
+
+	t.Run("injected conversation text takes precedence", func(t *testing.T) {
+		checker := CheckTokenThreshold(100)
+		sess := &session.Session{
+			Events: []event.Event{
+				{
+					Author:    "tool",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolID:   "call-1",
+							ToolName: "read_file",
+							Content:  strings.Repeat("x", 2000),
+						},
+					}}},
+				},
+			},
+			State: session.StateMap{
+				tokenThresholdConversationTextStateKey: []byte("short"),
+			},
+		}
+		assert.False(t, checker(sess))
+	})
 }
 
 func TestCheckTokenThreshold_EmptyEvents(t *testing.T) {

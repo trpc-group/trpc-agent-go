@@ -94,6 +94,146 @@ func TestOptions(t *testing.T) {
 		assert.Equal(t, 1, counter.miss)
 	})
 
+	t.Run("WithTokenThreshold honors skipRecent-filtered input", func(t *testing.T) {
+		s := NewSummarizer(
+			&testModel{},
+			WithSkipRecent(func(_ []event.Event) int { return 2 }),
+			WithTokenThreshold(100),
+		)
+		sess := &session.Session{Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "short"},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "reply"},
+				}}},
+			},
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("a", 800)},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("b", 800)},
+				}}},
+			},
+		}}
+		assert.False(t, s.ShouldSummarize(sess))
+	})
+
+	t.Run("WithTokenThreshold honors summarizer tool result formatter", func(t *testing.T) {
+		s := NewSummarizer(
+			&testModel{},
+			WithToolResultFormatter(func(model.Message) string { return "" }),
+			WithTokenThreshold(100),
+		)
+		sess := &session.Session{Events: []event.Event{
+			{
+				Author:    "tool",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolID:   "call-1",
+						ToolName: "read_file",
+						Content:  strings.Repeat("x", 2000),
+					},
+				}}},
+			},
+		}}
+		assert.False(t, s.ShouldSummarize(sess))
+	})
+
+	t.Run("WithChecksAny token checker honors skipRecent-filtered input", func(t *testing.T) {
+		s := NewSummarizer(
+			&testModel{},
+			WithSkipRecent(func(_ []event.Event) int { return 2 }),
+			WithChecksAny(CheckTokenThreshold(100)),
+		)
+		sess := &session.Session{Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "short"},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "reply"},
+				}}},
+			},
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("a", 800)},
+				}}},
+			},
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: strings.Repeat("b", 800)},
+				}}},
+			},
+		}}
+		assert.False(t, s.ShouldSummarize(sess))
+	})
+
+	t.Run("WithChecksAny token checker honors summarizer tool result formatter", func(t *testing.T) {
+		s := NewSummarizer(
+			&testModel{},
+			WithToolResultFormatter(func(model.Message) string { return "" }),
+			WithChecksAny(CheckTokenThreshold(100)),
+		)
+		sess := &session.Session{Events: []event.Event{
+			{
+				Author:    "tool",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolID:   "call-1",
+						ToolName: "read_file",
+						Content:  strings.Repeat("x", 2000),
+					},
+				}}},
+			},
+		}}
+		assert.False(t, s.ShouldSummarize(sess))
+	})
+
+	t.Run("effective empty input suppresses summarize even when custom checks pass", func(t *testing.T) {
+		s := NewSummarizer(
+			&testModel{},
+			WithSkipRecent(func(events []event.Event) int { return len(events) }),
+			WithChecksAny(func(*session.Session) bool { return true }),
+		)
+		sess := &session.Session{Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "hello"},
+				}}},
+			},
+		}}
+		assert.False(t, s.ShouldSummarize(sess))
+	})
+
 	t.Run("WithEventThreshold", func(t *testing.T) {
 		s := NewSummarizer(&testModel{}, WithEventThreshold(2))
 		md := s.Metadata()

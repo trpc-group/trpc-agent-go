@@ -1506,6 +1506,41 @@ func TestSessionSummarizer_RecordLastIncludedTimestamp_NoStateOrEvents(t *testin
 	})
 }
 
+func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
+	t.Run("returns nil for nil session", func(t *testing.T) {
+		s := &sessionSummarizer{}
+		assert.Nil(t, s.buildCheckSession(nil))
+	})
+
+	t.Run("injects effective token text from formatter-aware delta", func(t *testing.T) {
+		s := &sessionSummarizer{
+			toolResultFormatter: func(model.Message) string { return "" },
+		}
+		sess := &session.Session{
+			Events: []event.Event{
+				{
+					Author:    "tool",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							ToolID:   "call-1",
+							ToolName: "read_file",
+							Content:  strings.Repeat("x", 2000),
+						},
+					}}},
+				},
+			},
+		}
+
+		checkSess := s.buildCheckSession(sess)
+		require.NotNil(t, checkSess)
+
+		raw, ok := checkSess.GetState(tokenThresholdConversationTextStateKey)
+		require.True(t, ok)
+		assert.Empty(t, string(raw))
+	})
+}
+
 func TestSessionSummarizer_Metadata_IncludesSkipRecent(t *testing.T) {
 	s := NewSummarizer(&fakeModel{}, WithSkipRecent(func(_ []event.Event) int { return 3 }))
 	metadata := s.Metadata()

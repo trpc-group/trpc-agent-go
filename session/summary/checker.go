@@ -36,6 +36,9 @@ var (
 	defaultTokenCounter   model.TokenCounter = model.NewSimpleTokenCounter()
 )
 
+const tokenThresholdConversationTextStateKey = session.StateTempPrefix +
+	"summary:token_threshold_conversation_text"
+
 func getTokenCounter() model.TokenCounter {
 	defaultTokenCounterMu.RLock()
 	counter := defaultTokenCounter
@@ -212,6 +215,8 @@ func checkTokenThresholdFromText(
 // token count of the primary-agent events since the last summary exceeds
 // the given threshold. Sub-agent events (FilterKey != AppName) are excluded
 // so that child agent tokens do not inflate the parent threshold check.
+// When a summarizer injects effective summary text into the session state,
+// that text takes precedence over the default event extraction logic.
 //
 // Note:
 // Token accounting via model usage is not stable once session summary
@@ -241,6 +246,13 @@ func checkTokenThreshold(
 	tokenCount int,
 	sess *session.Session,
 ) bool {
+	if conversationText, ok := getInjectedTokenThresholdConversationText(sess); ok {
+		return checkTokenThresholdFromText(
+			ctx,
+			tokenCount,
+			conversationText,
+		)
+	}
 	delta := filterDeltaEvents(sess)
 	if len(delta) == 0 {
 		return false
@@ -257,6 +269,19 @@ func checkTokenThreshold(
 		tokenCount,
 		conversationText,
 	)
+}
+
+func getInjectedTokenThresholdConversationText(
+	sess *session.Session,
+) (string, bool) {
+	if sess == nil {
+		return "", false
+	}
+	raw, ok := sess.GetState(tokenThresholdConversationTextStateKey)
+	if !ok {
+		return "", false
+	}
+	return string(raw), true
 }
 
 // ChecksAll composes multiple checkers using AND logic.
