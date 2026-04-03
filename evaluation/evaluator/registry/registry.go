@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	finalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/finalresponse"
 	llmfinalresponse "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/finalresponse"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/hallucination"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubriccritic"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubricknowledgerecall"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubricresponse"
@@ -59,6 +60,8 @@ func New() Registry {
 	r.Register(rubricResponse.Name(), rubricResponse)
 	rubricKnowledgeRecall := rubricknowledgerecall.New()
 	r.Register(rubricKnowledgeRecall.Name(), rubricKnowledgeRecall)
+	hallucinationEvaluator := hallucination.New()
+	r.Register(hallucinationEvaluator.Name(), hallucinationEvaluator)
 	return r
 }
 

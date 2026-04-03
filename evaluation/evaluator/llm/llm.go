@@ -14,9 +14,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/judger"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/invocationsaggregator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
@@ -25,7 +25,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/provider"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -98,7 +97,7 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 		}
 		samples := make([]*evaluator.PerInvocationResult, 0, numSamples)
 		for range numSamples {
-			response, err := judgeModelResponse(ctx, messages, evalMetric)
+			response, err := judger.Judge(ctx, messages, evalMetric)
 			if err != nil {
 				return nil, fmt.Errorf("judge response: %w", err)
 			}
@@ -153,82 +152,4 @@ func (r *LLMBaseEvaluator) ScoreBasedOnResponse(ctx context.Context, resp *model
 func (r *LLMBaseEvaluator) ConstructMessages(ctx context.Context, actuals, expecteds []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) ([]model.Message, error) {
 	return r.LLMEvaluator.ConstructMessages(ctx, actuals, expecteds, evalMetric)
-}
-
-// judgeModelResponse calls the judge model and returns the final response.
-func judgeModelResponse(ctx context.Context, messages []model.Message,
-	evalMetric *metric.EvalMetric) (*model.Response, error) {
-	judgeCriterion := evalMetric.Criterion.LLMJudge
-	if judgeRunnerOptions := judgeCriterion.JudgeRunnerOptions; judgeRunnerOptions != nil && judgeRunnerOptions.Runner != nil {
-		return judgeRunnerResponse(ctx, judgeRunnerOptions.Runner, messages)
-	}
-	judgeModel := judgeCriterion.JudgeModel
-	if judgeModel == nil {
-		return nil, fmt.Errorf("judge model is nil")
-	}
-	generation := judgeModel.Generation
-	if generation == nil {
-		generation = &llm.DefaultGeneration
-	}
-	req := model.Request{
-		Messages:         messages,
-		GenerationConfig: *generation,
-	}
-	req.GenerationConfig.Stream = false
-	modelInstance, err := provider.Model(
-		judgeModel.ProviderName,
-		judgeModel.ModelName,
-		provider.WithVariant(judgeModel.Variant),
-		provider.WithAPIKey(judgeModel.APIKey),
-		provider.WithBaseURL(judgeModel.BaseURL),
-		provider.WithExtraFields(judgeModel.ExtraFields),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create model instance: %w", err)
-	}
-	responses, err := modelInstance.GenerateContent(ctx, &req)
-	if err != nil {
-		return nil, fmt.Errorf("generate response: %w", err)
-	}
-	for response := range responses {
-		if response.Error != nil {
-			return nil, fmt.Errorf("response error: %v", response.Error)
-		}
-		if response.IsFinalResponse() {
-			return response, nil
-		}
-	}
-	return nil, fmt.Errorf("no final response")
-}
-
-func judgeRunnerResponse(ctx context.Context, judgeRunner runner.Runner, messages []model.Message) (*model.Response, error) {
-	if judgeRunner == nil {
-		return nil, fmt.Errorf("judge runner is nil")
-	}
-	events, err := runner.RunWithMessages(
-		ctx,
-		judgeRunner,
-		uuid.NewString(),
-		uuid.NewString(),
-		messages,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("runner run: %w", err)
-	}
-	var finalResponse *model.Response
-	for event := range events {
-		if event == nil {
-			continue
-		}
-		if event.Error != nil {
-			return nil, fmt.Errorf("event: %v", event.Error)
-		}
-		if event.Response != nil && event.IsFinalResponse() {
-			finalResponse = event.Response.Clone()
-		}
-	}
-	if finalResponse == nil {
-		return nil, fmt.Errorf("no final response")
-	}
-	return finalResponse, nil
 }
