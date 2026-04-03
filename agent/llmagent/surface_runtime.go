@@ -12,7 +12,9 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -72,6 +74,34 @@ func (a *LLMAgent) modelSurfaceForInvocation(
 		return nil, false
 	}
 	return patch.Model()
+}
+
+// ExecutionTraceAppliedSurfaceIDs reports the effective surfaces that affected one invocation step.
+func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []string {
+	nodeID := agent.InvocationSurfaceRootNodeID(inv)
+	if nodeID == "" {
+		return nil
+	}
+	appliedSurfaceIDs := make([]string, 0, 6)
+	if a.instructionForInvocation(inv) != "" {
+		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeInstruction))
+	}
+	if a.systemPromptForInvocation(inv) != "" {
+		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeGlobalInstruction))
+	}
+	if examples := a.fewShotForInvocation(inv); len(examples) > 0 {
+		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeFewShot))
+	}
+	if inv != nil && inv.Model != nil {
+		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeModel))
+	}
+	if hasUserTools, ok := llmflow.InvocationHasFilteredUserTools(inv); ok && hasUserTools {
+		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeTool))
+	}
+	if a.skillRepositoryForInvocation(inv) != nil {
+		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeSkill))
+	}
+	return appliedSurfaceIDs
 }
 
 // InvocationToolSurface returns the invocation-scoped tool surface and user tool names.

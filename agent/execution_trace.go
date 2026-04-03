@@ -165,6 +165,24 @@ func FinishExecutionTraceStep(
 	inv.traceCapture.FinishStep(stepID, output, errText, time.Now())
 }
 
+// SetExecutionTraceStepAppliedSurfaceIDs records one step's applied surfaces from the invocation agent when supported.
+func SetExecutionTraceStepAppliedSurfaceIDs(inv *Invocation, stepID string) {
+	if inv == nil || stepID == "" || inv.Agent == nil {
+		return
+	}
+	reporter, ok := inv.Agent.(interface {
+		ExecutionTraceAppliedSurfaceIDs(inv *Invocation) []string
+	})
+	if !ok {
+		return
+	}
+	inv.initializeExecutionTrace()
+	if inv.traceCapture == nil {
+		return
+	}
+	inv.traceCapture.SetStepAppliedSurfaceIDs(stepID, reporter.ExecutionTraceAppliedSurfaceIDs(inv))
+}
+
 // NextExecutionTracePredecessors returns the predecessor set for the next real step or child invocation.
 func NextExecutionTracePredecessors(inv *Invocation) []string {
 	if inv == nil {
