@@ -1312,6 +1312,48 @@ Common spans:
 - Isolation: Scripts run within a workspace boundary and only selected
   output files are brought back, not the script source.
 
+## Executor Environment Variable Injection
+
+When the executor runs remotely (containers, cloud functions, etc.),
+host environment variables are not automatically available.
+`codeexecutor.NewEnvInjectingCodeExecutor` wraps any `CodeExecutor`
+so that a provider function is called on every `RunProgram` /
+`StartProgram` to merge extra env vars into `RunProgramSpec.Env`.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+
+wrapped := codeexecutor.NewEnvInjectingCodeExecutor(exec,
+    func(ctx context.Context) map[string]string {
+        // Read caller-supplied env from ctx.
+        // Source is up to you: RuntimeState, request headers, DB, etc.
+        return map[string]string{"GITHUB_TOKEN": "..."}
+    },
+)
+
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithCodeExecutor(wrapped),  // use wrapped instead of raw exec
+)
+```
+
+Behavior:
+
+- Covers all paths through `Engine.Runner()`: `skill_run`,
+  `workspace_exec`, and interactive sessions.
+- Provider-returned keys **never override** keys already set in
+  the tool's `env` argument.
+- Evaluated on each `RunProgram` call; no state shared between calls.
+- Zero overhead when the provider returns `nil`.
+- You can also wrap at the Engine level:
+  `codeexecutor.NewEnvInjectingEngine(eng, provider)`.
+
+Typical use case: in a multi-user agent service, each user passes
+their tokens via AG-UI `state` or HTTP headers; the provider reads
+them from the request context and injects them into the executor
+transparently — the LLM never sees the credentials.
+
 ## Troubleshooting
 
 - Unknown skill: verify name and repository path; ensure the overview

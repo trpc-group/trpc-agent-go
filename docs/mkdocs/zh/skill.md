@@ -1274,6 +1274,46 @@ agent := llmagent.New(
 - 执行隔离：脚本以工作区为边界，输出文件由通配符精确收集，避免
   将脚本源码或非必要文件带入模型上下文。
 
+## 执行器环境变量注入
+
+当执行器运行在远端（容器、云函数等）时，宿主进程的环境变量不会
+自动传递。`codeexecutor.NewEnvInjectingCodeExecutor` 可以包装
+任意 `CodeExecutor`，在每次 `RunProgram` / `StartProgram`
+调用前，从 `context` 动态读取环境变量并合并到
+`RunProgramSpec.Env`。
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+
+wrapped := codeexecutor.NewEnvInjectingCodeExecutor(exec,
+    func(ctx context.Context) map[string]string {
+        // 从 ctx 中读取调用方提供的环境变量。
+        // 来源由业务自行决定：RuntimeState、请求头、DB 查询等。
+        return map[string]string{"GITHUB_TOKEN": "..."}
+    },
+)
+
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithCodeExecutor(wrapped),  // 用 wrapped 代替原始 exec
+)
+```
+
+行为：
+
+- 覆盖所有走 `Engine.Runner()` 的执行路径：`skill_run`、
+  `workspace_exec`、交互式会话。
+- provider 返回的 key **不覆盖** tool 显式传入的 `env`。
+- 每次 `RunProgram` 调用时求值，不在调用间共享状态。
+- provider 返回 `nil` 时零开销跳过。
+- 也可以只包装 Engine 层：
+  `codeexecutor.NewEnvInjectingEngine(eng, provider)`。
+
+典型场景：多用户 Agent 服务中，每个用户通过 AG-UI `state` 或
+HTTP header 传入自己的 token，provider 从请求上下文中读取后注入
+执行器，LLM 无需感知。
+
 ## 故障排查
 
 - “unknown skill”：确认技能名与仓库路径；调用 `skill_load` 前
