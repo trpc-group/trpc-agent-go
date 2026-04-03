@@ -10,6 +10,7 @@ package structure
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -230,6 +231,42 @@ func TestExport_NormalizesAndSortsSnapshot(t *testing.T) {
 	}, snapshot.Surfaces[1].Value.Skills)
 	assert.Equal(t, "root#tool", snapshot.Surfaces[2].SurfaceID)
 	assert.Equal(t, []ToolRef{{ID: "a"}, {ID: "b"}}, snapshot.Surfaces[2].Value.Tools)
+}
+
+func TestCloneSurfaceValue_ClonesModelHeaders(t *testing.T) {
+	value := SurfaceValue{
+		Model: &ModelRef{
+			Provider: "openai",
+			Name:     "gpt-5.2",
+			Headers:  map[string]string{"X-Test": "1"},
+		},
+	}
+	cloned := cloneSurfaceValue(value)
+	require.NotNil(t, cloned.Model)
+	require.NotSame(t, value.Model, cloned.Model)
+	require.Equal(t, map[string]string{"X-Test": "1"}, cloned.Model.Headers)
+	cloned.Model.Headers["X-Test"] = "2"
+	assert.Equal(t, "1", value.Model.Headers["X-Test"])
+}
+
+func TestCloneSurfaceValue_ClonesEmptyModelHeaders(t *testing.T) {
+	value := SurfaceValue{
+		Model: &ModelRef{
+			Name:    "gpt-5.2",
+			Headers: map[string]string{},
+		},
+	}
+	cloned := cloneSurfaceValue(value)
+	require.NotNil(t, cloned.Model)
+	require.NotNil(t, cloned.Model.Headers)
+	cloned.Model.Headers["X-Test"] = "1"
+	assert.Empty(t, value.Model.Headers)
+}
+
+func TestModelRef_JSONOmitsEmptyFields(t *testing.T) {
+	data, err := json.Marshal(ModelRef{Name: "gpt-5.2"})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"Name":"gpt-5.2"}`, string(data))
 }
 
 func TestExport_RejectsDuplicateNodeID(t *testing.T) {
