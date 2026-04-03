@@ -10,6 +10,12 @@ Make sure you have Go installed and the project dependencies are available.
 
 The example shows how to use the OpenAI-like model implementation with automatic environment variable reading and flexible command line configuration.
 
+See also the focused sub-examples in this directory:
+
+- `retry/` for SDK-level retry configuration.
+- `switch/` for runtime model switching.
+- `failover/` for primary/backup model failover before the first non-error chunk.
+
 ## Key Features
 
 1. **Environment Variable Support**: Automatically reads `OPENAI_API_KEY` and `OPENAI_BASE_URL`

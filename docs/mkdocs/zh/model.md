@@ -2358,3 +2358,41 @@ provider.Register("custom-provider", func(opts *provider.Options) (model.Model, 
 
 customModel, err := provider.Model("custom-provider", "custom-model")
 ```
+
+## 模型容灾（Failover）
+
+`model/failover` 提供了一个按优先级顺序兜底的模型包装器。它可将多个 `model.Model` 组成主备链路，在主模型不可用时自动切到下一个候选模型，适用于主备域名、主备网关或不同模型提供方之间的切换场景。
+
+**快速开始：**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model/failover"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+primary := openai.New(
+    "gpt-4o-mini",
+    openai.WithBaseURL("https://api.openai.com/v1"),
+)
+backup := openai.New(
+    "deepseek-chat",
+    openai.WithBaseURL("https://api.deepseek.com/v1"),
+)
+
+llm, err := failover.New(
+    failover.WithCandidates(primary, backup),
+)
+if err != nil {
+    return err
+}
+```
+
+`failover.New(...)` 返回普通的 `model.Model`，可以直接传给 `llmagent.WithModel(...)` 等接受 `model.Model` 的位置使用。完整示例见 [examples/model/failover](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/failover)。
+
+**切换规则：**
+
+- 按 `WithCandidates(...)` 传入的顺序依次尝试候选模型。
+- 只有在收到首个非错误 chunk 之前，才允许从当前候选模型切换到下一个候选模型。
+- 如果当前候选模型在此之前直接返回 `error`，或返回带 `Response.Error` 的错误响应，就会继续尝试下一个候选模型。
+- 一旦已经向调用方返回过任意非错误 chunk，后续即使流式过程中再出错，也不会重放到备模型，而是直接将错误返回给调用方。
