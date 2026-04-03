@@ -136,11 +136,51 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 	}
 
 	maybeMigrateLegacySkillState(ctx, inv, ch)
+	loaded := p.applyLoadedSkillContext(ctx, inv, req, repo)
+	p.maybeOffloadLoadedSkills(ctx, inv, loaded, ch)
+}
 
+// SupportsContextCompactionRebuild reports whether loaded skill materialization
+// can be safely replayed during the sync-summary rebuild path.
+func (p *SkillsToolResultRequestProcessor) SupportsContextCompactionRebuild(
+	inv *agent.Invocation,
+) bool {
+	if p.loadMode != SkillLoadModeOnce {
+		return true
+	}
+	if inv == nil || inv.Session == nil {
+		return true
+	}
+	return len(p.getLoadedSkills(inv)) == 0
+}
+
+// RebuildRequestForContextCompaction reapplies loaded skill materialization
+// without mutating session state during the sync-summary rebuild path.
+func (p *SkillsToolResultRequestProcessor) RebuildRequestForContextCompaction(
+	ctx context.Context,
+	inv *agent.Invocation,
+	req *model.Request,
+) {
+	if req == nil || inv == nil || inv.Session == nil {
+		return
+	}
+	repo := p.repositoryForInvocation(inv)
+	if repo == nil {
+		return
+	}
+	p.applyLoadedSkillContext(ctx, inv, req, repo)
+}
+
+func (p *SkillsToolResultRequestProcessor) applyLoadedSkillContext(
+	ctx context.Context,
+	inv *agent.Invocation,
+	req *model.Request,
+	repo skill.Repository,
+) []string {
 	loaded := p.getLoadedSkills(inv)
 	if len(loaded) == 0 {
 		p.removeLoadedContextMessage(req)
-		return
+		return nil
 	}
 	sort.Strings(loaded) // stable prompt order
 
@@ -186,8 +226,7 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 	} else {
 		p.upsertLoadedContextMessage(req, fallbackContent)
 	}
-
-	p.maybeOffloadLoadedSkills(ctx, inv, loaded, ch)
+	return loaded
 }
 
 func (p *SkillsToolResultRequestProcessor) repositoryForInvocation(

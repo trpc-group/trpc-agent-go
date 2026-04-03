@@ -284,7 +284,7 @@ summarizer := summary.NewSummarizer(
 
 启用摘要后，框架会将摘要合并到已有系统消息中；如果原来没有系统消息，则会前置插入一条新的系统消息。同时保留摘要时间点之后的所有增量事件，保证完整上下文：
 
-```
+```text
 When AddSessionSummary = true:
 ┌─────────────────────────────────────────┐
 │ System Prompt                           │ ← 若已存在系统消息，则与摘要合并；
@@ -1893,11 +1893,10 @@ agent := llmagent.New(
 
 **上下文结构：**
 
-```
+```text
 ┌─────────────────────────────────────────┐
-│ System Prompt                           │
-├─────────────────────────────────────────┤
-│ Session Summary (system message)        │ ← Compressed history
+│ System Prompt                           │ ← 若已存在系统消息，则与摘要合并；
+│ (merged with Session Summary)           │    否则前置插入新的系统消息
 ├─────────────────────────────────────────┤
 │ Event 1 (after summary)                 │ ┐
 │ Event 2                                 │ │

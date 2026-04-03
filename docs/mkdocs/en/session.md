@@ -283,15 +283,12 @@ Notes:
 
 **Context Injection Mechanism:**
 
-After enabling summary, the framework prepends the summary as a system message to the LLM input, while including all incremental events after the summary timestamp to ensure complete context:
+After enabling summary, the framework merges the summary into the existing system message when one exists, or prepends a new system message when none exists. It also includes all incremental events after the summary timestamp to ensure complete context:
 
-```
+```text
 ┌─────────────────────────────────────────┐
-│ System Prompt                           │
-├─────────────────────────────────────────┤
-│ Session Summary (system message)        │ ← Compressed version of historical conversations
-│ - Updated at: 2024-01-10 14:30          │   (events before updated_at)
-│ - Includes: Event1 ~ Event20            │
+│ System Prompt                           │ ← Existing system prompt, if present,
+│ (merged with Session Summary)           │    now merged with summary content
 ├─────────────────────────────────────────┤
 │ Event 21 (user message)                 │ ┐
 │ Event 22 (assistant response)           │ │
@@ -1819,7 +1816,7 @@ llmAgent := llmagent.New(
 
 **Context Construction Details:**
 
-```
+```text
 When AddSessionSummary = true:
 ┌─────────────────────────────────────┐
 │ System Prompt                       │ ← Existing system prompt, if present,

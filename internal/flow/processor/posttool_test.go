@@ -182,6 +182,29 @@ func TestPostToolRequestProcessor_NoSystemMessage(t *testing.T) {
 	assert.Equal(t, model.RoleUser, req.Messages[1].Role)
 }
 
+func TestPostToolRequestProcessor_RebuildRequestForContextCompaction(
+	t *testing.T,
+) {
+	p := NewPostToolRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("You are helpful."),
+			model.NewToolMessage("call_1", "search", "result"),
+		},
+	}
+
+	require.True(t, p.SupportsContextCompactionRebuild(&agent.Invocation{}))
+
+	p.RebuildRequestForContextCompaction(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+	)
+
+	require.Len(t, req.Messages, 2)
+	assert.Contains(t, req.Messages[0].Content, "[Tool Prompt]")
+}
+
 func TestHasPendingToolResultMessages(t *testing.T) {
 	tests := []struct {
 		name     string
