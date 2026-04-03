@@ -3115,6 +3115,7 @@ func isTerminalAgentErrorEvent(ev *event.Event) bool {
 		MetadataKeyState,
 		MetadataKeyCheckpoint,
 		MetadataKeyCacheHit,
+		MetadataKeyNodeEmitter,
 		MetadataKeyNodeCustom,
 	} {
 		if _, ok := ev.StateDelta[key]; ok {
@@ -3366,6 +3367,7 @@ func shouldPropagateAgentFallbackStateKey(
 		MetadataKeyModel,
 		MetadataKeyCheckpoint,
 		MetadataKeyCacheHit,
+		MetadataKeyNodeEmitter,
 		MetadataKeyNodeCustom:
 		return false
 	default:
@@ -5208,6 +5210,7 @@ func emitAgentStartEvent(
 		WithNodeEventInvocationID(invocationID),
 		WithNodeEventNodeID(nodeID),
 		WithNodeEventNodeType(NodeTypeAgent),
+		WithNodeEventEmitter(NodeEventEmitterAgentHelper),
 		WithNodeEventStartTime(startTime),
 	)
 	agent.EmitEvent(ctx, invocation, eventChan, agentStartEvent)
@@ -5232,6 +5235,7 @@ func emitAgentCompleteEvent(
 		WithNodeEventInvocationID(invocationID),
 		WithNodeEventNodeID(nodeID),
 		WithNodeEventNodeType(NodeTypeAgent),
+		WithNodeEventEmitter(NodeEventEmitterAgentHelper),
 		WithNodeEventStartTime(startTime),
 		WithNodeEventEndTime(endTime),
 	)
@@ -5258,6 +5262,7 @@ func emitAgentErrorEvent(
 		WithNodeEventInvocationID(invocationID),
 		WithNodeEventNodeID(nodeID),
 		WithNodeEventNodeType(NodeTypeAgent),
+		WithNodeEventEmitter(NodeEventEmitterAgentHelper),
 		WithNodeEventStartTime(startTime),
 		WithNodeEventEndTime(endTime),
 		WithNodeEventError(err.Error()),

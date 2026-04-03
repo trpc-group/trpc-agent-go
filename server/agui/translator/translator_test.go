@@ -2084,6 +2084,76 @@ func TestGraphNodeCompleteEmitsActivityDelta(t *testing.T) {
 	assert.Equal(t, graphNodePatchValue{NodeID: "node-complete", Phase: "complete"}, delta.Patch[0].Value)
 }
 
+func TestGraphNodeCompleteEmitsActivityDeltaForAgentExecutorEmitterWithoutAttempt(t *testing.T) {
+	tr := newTranslatorForTest(t, WithGraphNodeLifecycleActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+
+	evt := graph.NewNodeCompleteEvent(
+		graph.WithNodeEventInvocationID("inv-1"),
+		graph.WithNodeEventNodeID("agent-node-complete"),
+		graph.WithNodeEventNodeType(graph.NodeTypeAgent),
+		graph.WithNodeEventEmitter(graph.NodeEventEmitterExecutor),
+	)
+	evt.Response = &model.Response{Choices: []model.Choice{{}}}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.Equal(t, graphNodeLifecycleActivityType, delta.ActivityType)
+	assert.Len(t, delta.Patch, 1)
+	assert.Equal(t, graphNodePatchPath, delta.Patch[0].Path)
+	assert.Equal(t, graphNodePatchValue{NodeID: "agent-node-complete", Phase: "complete"}, delta.Patch[0].Value)
+}
+
+func TestGraphNodeCompleteIgnoresActivityDeltaForAgentHelperEmitter(t *testing.T) {
+	tr := newTranslatorForTest(t, WithGraphNodeLifecycleActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+
+	evt := graph.NewNodeCompleteEvent(
+		graph.WithNodeEventInvocationID("inv-1"),
+		graph.WithNodeEventNodeID("agent-node-complete"),
+		graph.WithNodeEventNodeType(graph.NodeTypeAgent),
+		graph.WithNodeEventEmitter(graph.NodeEventEmitterAgentHelper),
+	)
+	evt.Response = &model.Response{Choices: []model.Choice{{}}}
+
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func TestGraphNodeCompleteWithoutEmitterPreservesLegacyIgnoreBehaviorForAgentNode(t *testing.T) {
+	tr := newTranslatorForTest(t, WithGraphNodeLifecycleActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+
+	meta := graph.NodeExecutionMetadata{
+		NodeID:   "agent-node-complete",
+		NodeType: graph.NodeTypeAgent,
+		Phase:    graph.ExecutionPhaseComplete,
+	}
+	raw, err := json.Marshal(meta)
+	assert.NoError(t, err)
+
+	evt := &agentevent.Event{
+		ID:       "agent-node-complete-legacy",
+		Response: &model.Response{Choices: []model.Choice{{}}},
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyNode: raw,
+		},
+	}
+	events, err := tr.Translate(context.Background(), evt)
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+}
+
 func TestGraphNodeErrorEmitsActivityDelta(t *testing.T) {
 	tr := newTranslatorForTest(t, WithGraphNodeLifecycleActivityEnabled(true))
 	if tr == nil {

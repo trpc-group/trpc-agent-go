@@ -3711,6 +3711,7 @@ func (e *Executor) emitNodeStartEvent(
 		WithNodeEventInvocationID(execCtx.InvocationID),
 		WithNodeEventNodeID(nodeID),
 		WithNodeEventNodeType(nodeType),
+		WithNodeEventEmitter(NodeEventEmitterExecutor),
 		WithNodeEventStepNumber(step),
 		WithNodeEventStartTime(startTime),
 		WithNodeEventInputKeys(inputKeys),
@@ -3807,6 +3808,7 @@ func (e *Executor) emitNodeErrorEvent(
 		WithNodeEventInvocationID(execCtx.InvocationID),
 		WithNodeEventNodeID(nodeID),
 		WithNodeEventNodeType(nodeType),
+		WithNodeEventEmitter(NodeEventEmitterExecutor),
 		WithNodeEventStepNumber(step),
 		WithNodeEventError(err.Error()),
 		WithNodeEventResponseError(
@@ -4239,6 +4241,7 @@ func (e *Executor) emitNodeCompleteEvent(
 		WithNodeEventInvocationID(execCtx.InvocationID),
 		WithNodeEventNodeID(nodeID),
 		WithNodeEventNodeType(nodeType),
+		WithNodeEventEmitter(NodeEventEmitterExecutor),
 		WithNodeEventStepNumber(step),
 		WithNodeEventStartTime(startTime),
 		WithNodeEventEndTime(execEndTime),

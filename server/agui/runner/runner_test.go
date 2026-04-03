@@ -106,6 +106,79 @@ func TestRunEmitsGraphNodeStartActivityWhenEnabled(t *testing.T) {
 	assert.True(t, found)
 }
 
+func TestRunEmitsCanonicalAgentNodeLifecycleWhenEmitterMetadataPresent(t *testing.T) {
+	startTime := time.Unix(1710000000, 0)
+	endTime := startTime.Add(2 * time.Second)
+
+	agentEvents := make(chan *agentevent.Event, 4)
+	agentEvents <- graph.NewNodeStartEvent(
+		graph.WithNodeEventInvocationID("inv-1"),
+		graph.WithNodeEventNodeID("agent-node-1"),
+		graph.WithNodeEventNodeType(graph.NodeTypeAgent),
+		graph.WithNodeEventEmitter(graph.NodeEventEmitterAgentHelper),
+		graph.WithNodeEventStartTime(startTime),
+	)
+	agentEvents <- graph.NewNodeStartEvent(
+		graph.WithNodeEventInvocationID("inv-1"),
+		graph.WithNodeEventNodeID("agent-node-1"),
+		graph.WithNodeEventNodeType(graph.NodeTypeAgent),
+		graph.WithNodeEventEmitter(graph.NodeEventEmitterExecutor),
+		graph.WithNodeEventAttempt(1),
+		graph.WithNodeEventStartTime(startTime),
+	)
+	agentEvents <- graph.NewNodeCompleteEvent(
+		graph.WithNodeEventInvocationID("inv-1"),
+		graph.WithNodeEventNodeID("agent-node-1"),
+		graph.WithNodeEventNodeType(graph.NodeTypeAgent),
+		graph.WithNodeEventEmitter(graph.NodeEventEmitterAgentHelper),
+		graph.WithNodeEventStartTime(startTime),
+		graph.WithNodeEventEndTime(endTime),
+	)
+	agentEvents <- graph.NewNodeCompleteEvent(
+		graph.WithNodeEventInvocationID("inv-1"),
+		graph.WithNodeEventNodeID("agent-node-1"),
+		graph.WithNodeEventNodeType(graph.NodeTypeAgent),
+		graph.WithNodeEventEmitter(graph.NodeEventEmitterExecutor),
+		graph.WithNodeEventStepNumber(1),
+		graph.WithNodeEventStartTime(startTime),
+		graph.WithNodeEventEndTime(endTime),
+	)
+	close(agentEvents)
+
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+
+	r := New(underlying, WithGraphNodeLifecycleActivityEnabled(true))
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+
+	evts := collectEvents(t, eventsCh)
+	var phases []string
+	for _, evt := range evts {
+		delta, ok := evt.(*aguievents.ActivityDeltaEvent)
+		if !ok || delta.ActivityType != "graph.node.lifecycle" || len(delta.Patch) == 0 {
+			continue
+		}
+		raw, err := json.Marshal(delta.Patch[0].Value)
+		require.NoError(t, err)
+		var patchValue map[string]any
+		require.NoError(t, json.Unmarshal(raw, &patchValue))
+		phase, _ := patchValue["phase"].(string)
+		phases = append(phases, phase)
+	}
+
+	require.Equal(t, []string{"start", "complete"}, phases)
+}
+
 func TestRunEmitsGraphNodeInterruptActivityWhenEnabled(t *testing.T) {
 	meta := graph.PregelStepMetadata{
 		StepNumber:     3,
