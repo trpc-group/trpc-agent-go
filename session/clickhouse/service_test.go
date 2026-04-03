@@ -486,3 +486,17 @@ func TestService_UpdateSessionState(t *testing.T) {
 	err := s.UpdateSessionState(ctx, key, session.StateMap{"k1": []byte("v1")})
 	assert.NoError(t, err)
 }
+
+func TestService_EventPageValidation(t *testing.T) {
+	s := &Service{}
+	key := session.Key{AppName: "test-app", UserID: "test-user", SessionID: "test-session"}
+	userKey := session.UserKey{AppName: "test-app", UserID: "test-user"}
+
+	sess, err := s.GetSession(context.Background(), key, session.WithGetSessionEventPage(0, 10))
+	assert.ErrorIs(t, err, session.ErrEventPageUnsupported)
+	assert.Nil(t, sess)
+
+	sessions, err := s.ListSessions(context.Background(), userKey, session.WithGetSessionEventPage(0, 10))
+	assert.ErrorIs(t, err, session.ErrEventPageOnlyForGetSession)
+	assert.Nil(t, sessions)
+}

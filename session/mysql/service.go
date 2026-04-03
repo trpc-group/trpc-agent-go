@@ -343,6 +343,9 @@ func (s *Service) GetSession(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
+	if err := session.ValidateGetSessionOptions(opt, true); err != nil {
+		return nil, err
+	}
 	hctx := &session.GetSessionContext{
 		Context: ctx,
 		Key:     key,
@@ -357,6 +360,7 @@ func (s *Service) GetSession(
 			c.Key,
 			c.Options.EventNum,
 			c.Options.EventTime,
+			c.Options.EventPage,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -379,6 +383,9 @@ func (s *Service) ListSessions(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
+	if err := session.ValidateListSessionsOptions(opt); err != nil {
+		return nil, err
+	}
 	sessList, err := s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime)
 	if err != nil {
 		return nil, fmt.Errorf("mysql session service get session list failed: %w", err)

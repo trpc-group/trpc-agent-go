@@ -28,6 +28,7 @@ func (s *Service) getSession(
 	key session.Key,
 	limit int,
 	afterTime time.Time,
+	page *session.EventPage,
 ) (*session.Session, error) {
 	// Query session state (MySQL syntax with ?)
 	var sessState *SessionState
@@ -84,7 +85,7 @@ func (s *Service) getSession(
 	}
 
 	// Batch load events for all sessions
-	eventsList, err := s.getEventsList(ctx, []session.Key{key}, []time.Time{sessState.CreatedAt}, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, []session.Key{key}, []time.Time{sessState.CreatedAt}, limit, afterTime, page)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
@@ -191,7 +192,7 @@ func (s *Service) listSessions(
 	}
 
 	// Batch load events for all sessions
-	eventsList, err := s.getEventsList(ctx, sessionKeys, sessionCreatedAts, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, sessionKeys, sessionCreatedAts, limit, afterTime, nil)
 	if err != nil {
 		return nil, fmt.Errorf("get events list failed: %w", err)
 	}
@@ -506,19 +507,30 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 // getEventsList loads events for multiple sessions in batch.
 // sessionCreatedAts is used to filter out events created before the session was (re)created,
 // which handles the case where an expired session is overwritten but old events still exist.
+//
+// When page is nil (context-window mode), time filtering and user-message
+// anchoring are done in memory via ApplyEventFiltering on the full event
+// history. When page is non-nil (pagination mode), strict offset/limit is
+// applied in SQL for GetSession and ApplyEventFiltering is skipped.
 func (s *Service) getEventsList(
 	ctx context.Context,
 	sessionKeys []session.Key,
 	sessionCreatedAts []time.Time,
 	limit int,
 	afterTime time.Time,
+	page *session.EventPage,
 ) ([][]event.Event, error) {
 	if len(sessionKeys) == 0 {
 		return nil, nil
 	}
 
-	// Build IN clause for batch query (MySQL doesn't support arrays like PostgreSQL)
-	// We'll use (app_name, user_id, session_id) IN (...) pattern
+	if page != nil {
+		if len(sessionKeys) != 1 {
+			return nil, fmt.Errorf("event paging only supports a single session")
+		}
+		return s.getPagedEvents(ctx, sessionKeys[0], sessionCreatedAts[0], afterTime, page)
+	}
+
 	placeholders := make([]string, len(sessionKeys))
 	args := make([]any, 0, len(sessionKeys)*3)
 
@@ -527,26 +539,28 @@ func (s *Service) getEventsList(
 		args = append(args, key.AppName, key.UserID, key.SessionID)
 	}
 
-	// Note: We cannot apply LIMIT in SQL because we're querying multiple sessions
-	// The limit is applied per session in memory after grouping by session key
+	if limit <= 0 {
+		limit = s.opts.sessionEventLimit
+	}
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+
 	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event, created_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
 		AND deleted_at IS NULL
-		ORDER BY app_name, user_id, session_id, created_at ASC`,
+		ORDER BY app_name, user_id, session_id, created_at ASC, id ASC`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
 
-	// Build a map of session key to created_at for filtering
 	sessionCreatedAtMap := make(map[string]time.Time, len(sessionKeys))
 	for i, key := range sessionKeys {
 		keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
 		sessionCreatedAtMap[keyStr] = sessionCreatedAts[i]
 	}
 
-	// Map to collect events by session
 	eventsMap := make(map[string][]event.Event)
 
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		// rows.Next() is already called by the Query loop
 		var appName, userID, sessionID string
 		var eventBytes []byte
 		var eventCreatedAt time.Time
@@ -555,10 +569,9 @@ func (s *Service) getEventsList(
 		}
 		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
 
-		// Filter out events created before the session was (re)created
 		if sessCreatedAt, ok := sessionCreatedAtMap[keyStr]; ok {
 			if eventCreatedAt.Before(sessCreatedAt) {
-				return nil // skip this event
+				return nil
 			}
 		}
 
@@ -574,25 +587,70 @@ func (s *Service) getEventsList(
 		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}
 
-	if limit <= 0 {
-		limit = s.opts.sessionEventLimit
-	}
-	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
-		afterTime = time.Now().Add(-s.opts.sessionTTL)
-	}
-
-	// Build result in same order as sessionKeys
 	result := make([][]event.Event, len(sessionKeys))
 	for i, key := range sessionKeys {
 		keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
+		events := eventsMap[keyStr]
 		sess := session.Session{
-			Events: eventsMap[keyStr],
+			Events: events,
 		}
 		sess.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
 		result[i] = sess.Events
 	}
 
 	return result, nil
+}
+
+func (s *Service) getPagedEvents(
+	ctx context.Context,
+	key session.Key,
+	sessionCreatedAt time.Time,
+	afterTime time.Time,
+	page *session.EventPage,
+) ([][]event.Event, error) {
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+	if sessionCreatedAt.After(afterTime) {
+		afterTime = sessionCreatedAt
+	}
+
+	query := fmt.Sprintf(`
+		SELECT app_name, user_id, session_id, event, created_at FROM (
+			SELECT app_name, user_id, session_id, event, created_at, id
+			FROM %s
+			WHERE app_name = ? AND user_id = ? AND session_id = ?
+			AND created_at >= ?
+			AND deleted_at IS NULL
+			ORDER BY created_at DESC, id DESC
+			LIMIT ? OFFSET ?
+		) page
+		ORDER BY created_at ASC, id ASC`,
+		s.tableSessionEvents)
+
+	rowsBySession := make(map[string][]event.Event, 1)
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var appName, userID, sessionID string
+		var eventBytes []byte
+		var eventCreatedAt time.Time
+		if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes, &eventCreatedAt); err != nil {
+			return err
+		}
+
+		var evt event.Event
+		if err := json.Unmarshal(eventBytes, &evt); err != nil {
+			return fmt.Errorf("unmarshal event failed: %w", err)
+		}
+		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
+		rowsBySession[keyStr] = append(rowsBySession[keyStr], evt)
+		return nil
+	}, query, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("batch get events failed: %w", err)
+	}
+
+	keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
+	return [][]event.Event{rowsBySession[keyStr]}, nil
 }
 
 // getTrackEvents loads track events for multiple sessions in batch.
