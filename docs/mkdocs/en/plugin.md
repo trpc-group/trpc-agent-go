@@ -481,6 +481,28 @@ If another plugin depends on the final `ToolCall.ID` in `AfterModel`,
 For a complete runnable example, see
 [examples/toolcallid](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/toolcallid).
 
+### MessageMerger
+
+`messagemerger.New(opts...)` from `plugin/messagemerger` merges consecutive `system`, `user`, and `assistant` messages before every model request. This is useful when a third-party backend requires a strict alternating chat transcript and rejects adjacent same-role messages such as `user,user` or `assistant,assistant`.
+
+The plugin intentionally does **not** merge `tool` messages, so per-call fields such as `tool_id` and `tool_name` remain intact. The inserted text separator can be configured with `messagemerger.WithSeparator(...)`.
+
+A typical setup looks like this:
+
+```go
+merger := messagemerger.New(
+	messagemerger.WithName("strict_sequence_normalizer"),
+)
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(merger),
+)
+defer runnerInstance.Close()
+```
+
+Full example: [examples/plugin/messagemerger](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/messagemerger).
+
 ### Guardrail
 
 `guardrail.New(...)` from `plugin/guardrail` is the top-level plugin that wires one or more guardrail capabilities into the runner.
