@@ -1159,7 +1159,7 @@
         <li class="md-nav__item">
   <a href="#_13" class="md-nav__link">
     <span class="md-ellipsis">
-      故障排查
+      执行器环境变量注入
     </span>
   </a>
   
@@ -1167,6 +1167,15 @@
       
         <li class="md-nav__item">
   <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      故障排查
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
     <span class="md-ellipsis">
       参考与示例
     </span>
@@ -2466,7 +2475,7 @@
         <li class="md-nav__item">
   <a href="#_13" class="md-nav__link">
     <span class="md-ellipsis">
-      故障排查
+      执行器环境变量注入
     </span>
   </a>
   
@@ -2474,6 +2483,15 @@
       
         <li class="md-nav__item">
   <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      故障排查
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
     <span class="md-ellipsis">
       参考与示例
     </span>
@@ -4092,7 +4110,56 @@ option：</p>
 <li>执行隔离：脚本以工作区为边界，输出文件由通配符精确收集，避免
   将脚本源码或非必要文件带入模型上下文。</li>
 </ul>
-<h2 id="_13">故障排查</h2>
+<h2 id="_13">执行器环境变量注入</h2>
+<p>当执行器运行在远端（容器、云函数等）时，宿主进程的环境变量不会
+自动传递。<code>codeexecutor.NewEnvInjectingCodeExecutor</code> 可以包装
+任意 <code>CodeExecutor</code>，在每次 <code>RunProgram</code> / <code>StartProgram</code>
+调用前，从 <code>context</code> 动态读取环境变量并合并到
+<code>RunProgramSpec.Env</code>。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-25-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-25-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-25-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-25-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-25-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-25-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-25-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-25-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-25-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-25-10">10</a></span>
+<span class="normal"><a href="#__codelineno-25-11">11</a></span>
+<span class="normal"><a href="#__codelineno-25-12">12</a></span>
+<span class="normal"><a href="#__codelineno-25-13">13</a></span>
+<span class="normal"><a href="#__codelineno-25-14">14</a></span>
+<span class="normal"><a href="#__codelineno-25-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/codeexecutor&quot;</span>
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2"></a>
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3"></a><span class="nx">wrapped</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codeexecutor</span><span class="p">.</span><span class="nx">NewEnvInjectingCodeExecutor</span><span class="p">(</span><span class="nx">exec</span><span class="p">,</span>
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4"></a><span class="w">    </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5"></a><span class="w">        </span><span class="c1">// 从 ctx 中读取调用方提供的环境变量。</span>
+</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6"></a><span class="w">        </span><span class="c1">// 来源由业务自行决定：RuntimeState、请求头、DB 查询等。</span>
+</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;GITHUB_TOKEN&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;...&quot;</span><span class="p">}</span>
+</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-25-9"><a id="__codelineno-25-9" name="__codelineno-25-9"></a><span class="p">)</span>
+</span><span id="__span-25-10"><a id="__codelineno-25-10" name="__codelineno-25-10"></a>
+</span><span id="__span-25-11"><a id="__codelineno-25-11" name="__codelineno-25-11"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-25-12"><a id="__codelineno-25-12" name="__codelineno-25-12"></a><span class="w">    </span><span class="s">&quot;skills-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-25-13"><a id="__codelineno-25-13" name="__codelineno-25-13"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-25-14"><a id="__codelineno-25-14" name="__codelineno-25-14"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">wrapped</span><span class="p">),</span><span class="w">  </span><span class="c1">// 用 wrapped 代替原始 exec</span>
+</span><span id="__span-25-15"><a id="__codelineno-25-15" name="__codelineno-25-15"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>行为：</p>
+<ul>
+<li>覆盖所有走 <code>Engine.Runner()</code> 的执行路径：<code>skill_run</code>、
+  <code>workspace_exec</code>、交互式会话。</li>
+<li>provider 返回的 key <strong>不覆盖</strong> tool 显式传入的 <code>env</code>。</li>
+<li>每次 <code>RunProgram</code> 调用时求值，不在调用间共享状态。</li>
+<li>provider 返回 <code>nil</code> 时零开销跳过。</li>
+<li>也可以只包装 Engine 层：
+  <code>codeexecutor.NewEnvInjectingEngine(eng, provider)</code>。</li>
+</ul>
+<p>典型场景：多用户 Agent 服务中，每个用户通过 AG-UI <code>state</code> 或
+HTTP header 传入自己的 token，provider 从请求上下文中读取后注入
+执行器，LLM 无需感知。</p>
+<h2 id="_14">故障排查</h2>
 <ul>
 <li>“unknown skill”：确认技能名与仓库路径；调用 <code>skill_load</code> 前
   先检查“概览注入”是否包含该技能</li>
@@ -4102,7 +4169,7 @@ option：</p>
   网络默认关闭，避免依赖网络的脚本</li>
 <li>输出文件未返回：检查 <code>output_files</code> 通配符是否指向正确位置</li>
 </ul>
-<h2 id="_14">参考与示例</h2>
+<h2 id="_15">参考与示例</h2>
 <ul>
 <li>背景：<ul>
 <li>工程博客：
@@ -4149,7 +4216,7 @@ option：</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月2日 06:10:45 UTC">2026-04-02 06:10:45</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月3日 07:05:06 UTC">2026-04-03 07:05:06</span>
   </span>
 
     

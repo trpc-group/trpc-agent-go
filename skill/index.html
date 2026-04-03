@@ -1157,6 +1157,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#executor-environment-variable-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Executor Environment Variable Injection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#troubleshooting" class="md-nav__link">
     <span class="md-ellipsis">
       Troubleshooting
@@ -2458,6 +2467,15 @@
   <a href="#rationale-and-design" class="md-nav__link">
     <span class="md-ellipsis">
       Rationale and Design
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#executor-environment-variable-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Executor Environment Variable Injection
     </span>
   </a>
   
@@ -4121,6 +4139,57 @@ in tools like <code>read_file</code>.</p>
 <li>Isolation: Scripts run within a workspace boundary and only selected
   output files are brought back, not the script source.</li>
 </ul>
+<h2 id="executor-environment-variable-injection">Executor Environment Variable Injection</h2>
+<p>When the executor runs remotely (containers, cloud functions, etc.),
+host environment variables are not automatically available.
+<code>codeexecutor.NewEnvInjectingCodeExecutor</code> wraps any <code>CodeExecutor</code>
+so that a provider function is called on every <code>RunProgram</code> /
+<code>StartProgram</code> to merge extra env vars into <code>RunProgramSpec.Env</code>.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-25-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-25-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-25-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-25-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-25-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-25-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-25-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-25-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-25-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-25-10">10</a></span>
+<span class="normal"><a href="#__codelineno-25-11">11</a></span>
+<span class="normal"><a href="#__codelineno-25-12">12</a></span>
+<span class="normal"><a href="#__codelineno-25-13">13</a></span>
+<span class="normal"><a href="#__codelineno-25-14">14</a></span>
+<span class="normal"><a href="#__codelineno-25-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/codeexecutor&quot;</span>
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2"></a>
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3"></a><span class="nx">wrapped</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codeexecutor</span><span class="p">.</span><span class="nx">NewEnvInjectingCodeExecutor</span><span class="p">(</span><span class="nx">exec</span><span class="p">,</span>
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4"></a><span class="w">    </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5"></a><span class="w">        </span><span class="c1">// Read caller-supplied env from ctx.</span>
+</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6"></a><span class="w">        </span><span class="c1">// Source is up to you: RuntimeState, request headers, DB, etc.</span>
+</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;GITHUB_TOKEN&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;...&quot;</span><span class="p">}</span>
+</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-25-9"><a id="__codelineno-25-9" name="__codelineno-25-9"></a><span class="p">)</span>
+</span><span id="__span-25-10"><a id="__codelineno-25-10" name="__codelineno-25-10"></a>
+</span><span id="__span-25-11"><a id="__codelineno-25-11" name="__codelineno-25-11"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-25-12"><a id="__codelineno-25-12" name="__codelineno-25-12"></a><span class="w">    </span><span class="s">&quot;skills-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-25-13"><a id="__codelineno-25-13" name="__codelineno-25-13"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-25-14"><a id="__codelineno-25-14" name="__codelineno-25-14"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">wrapped</span><span class="p">),</span><span class="w">  </span><span class="c1">// use wrapped instead of raw exec</span>
+</span><span id="__span-25-15"><a id="__codelineno-25-15" name="__codelineno-25-15"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Behavior:</p>
+<ul>
+<li>Covers all paths through <code>Engine.Runner()</code>: <code>skill_run</code>,
+  <code>workspace_exec</code>, and interactive sessions.</li>
+<li>Provider-returned keys <strong>never override</strong> keys already set in
+  the tool's <code>env</code> argument.</li>
+<li>Evaluated on each <code>RunProgram</code> call; no state shared between calls.</li>
+<li>Zero overhead when the provider returns <code>nil</code>.</li>
+<li>You can also wrap at the Engine level:
+  <code>codeexecutor.NewEnvInjectingEngine(eng, provider)</code>.</li>
+</ul>
+<p>Typical use case: in a multi-user agent service, each user passes
+their tokens via AG-UI <code>state</code> or HTTP headers; the provider reads
+them from the request context and injects them into the executor
+transparently — the LLM never sees the credentials.</p>
 <h2 id="troubleshooting">Troubleshooting</h2>
 <ul>
 <li>Unknown skill: verify name and repository path; ensure the overview
@@ -4180,7 +4249,7 @@ in tools like <code>read_file</code>.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 2, 2026 06:10:45 UTC">2026-04-02 06:10:45</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 3, 2026 07:05:06 UTC">2026-04-03 07:05:06</span>
   </span>
 
     
