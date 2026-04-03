@@ -71,6 +71,8 @@ const (
 const (
 	// MetadataKeyNode is the key for node execution metadata.
 	MetadataKeyNode = "_node_metadata"
+	// MetadataKeyNodeEmitter is the key for node lifecycle emitter metadata.
+	MetadataKeyNodeEmitter = "_node_emitter"
 	// MetadataKeyPregel is the key for Pregel step metadata.
 	MetadataKeyPregel = "_pregel_metadata"
 	// MetadataKeyChannel is the key for channel update metadata.
@@ -109,6 +111,16 @@ const (
 func (nt NodeType) String() string {
 	return string(nt)
 }
+
+// NodeEventEmitter identifies which graph component emitted a node lifecycle
+// event. This is auxiliary routing metadata for downstream translators.
+type NodeEventEmitter string
+
+// Node lifecycle emitter constants.
+const (
+	NodeEventEmitterExecutor    NodeEventEmitter = "executor"
+	NodeEventEmitterAgentHelper NodeEventEmitter = "agent_helper"
+)
 
 // ExecutionPhase represents the phase of node execution.
 type ExecutionPhase string
@@ -412,6 +424,36 @@ func WithNodeMetadata(metadata NodeExecutionMetadata) EventOption {
 	}
 }
 
+// NodeEventEmitterFromStateDelta extracts the node lifecycle emitter marker
+// from an event state delta when one is present.
+func NodeEventEmitterFromStateDelta(stateDelta map[string][]byte) NodeEventEmitter {
+	if len(stateDelta) == 0 {
+		return ""
+	}
+	raw, ok := stateDelta[MetadataKeyNodeEmitter]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	var emitter NodeEventEmitter
+	if err := json.Unmarshal(raw, &emitter); err != nil {
+		return ""
+	}
+	return emitter
+}
+
+// SetNodeEventEmitterInStateDelta stores a node lifecycle emitter marker in
+// state delta metadata. Empty emitters are ignored.
+func SetNodeEventEmitterInStateDelta(stateDelta map[string][]byte, emitter NodeEventEmitter) {
+	if len(stateDelta) == 0 || emitter == "" {
+		return
+	}
+	raw, err := json.Marshal(emitter)
+	if err != nil {
+		return
+	}
+	stateDelta[MetadataKeyNodeEmitter] = raw
+}
+
 // WithToolMetadata adds tool execution metadata to the event.
 func WithToolMetadata(metadata ToolExecutionMetadata) EventOption {
 	return func(e *event.Event) {
@@ -518,6 +560,7 @@ type NodeEventOptions struct {
 	InvocationID  string
 	NodeID        string
 	NodeType      NodeType
+	Emitter       NodeEventEmitter
 	StepNumber    int
 	StartTime     time.Time
 	EndTime       time.Time
@@ -603,6 +646,13 @@ func WithNodeEventNodeID(nodeID string) NodeEventOption {
 func WithNodeEventNodeType(nodeType NodeType) NodeEventOption {
 	return func(opts *NodeEventOptions) {
 		opts.NodeType = nodeType
+	}
+}
+
+// WithNodeEventEmitter sets the lifecycle emitter/source for node events.
+func WithNodeEventEmitter(emitter NodeEventEmitter) NodeEventOption {
+	return func(opts *NodeEventOptions) {
+		opts.Emitter = emitter
 	}
 }
 
@@ -1161,10 +1211,12 @@ func NewNodeStartEvent(opts ...NodeEventOption) *event.Event {
 		Attempt:     options.Attempt,
 		MaxAttempts: options.MaxAttempts,
 	}
-	return NewGraphEvent(options.InvocationID,
+	evt := NewGraphEvent(options.InvocationID,
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
 		ObjectTypeGraphNodeStart,
 		WithNodeMetadata(metadata))
+	SetNodeEventEmitterInStateDelta(evt.StateDelta, options.Emitter)
+	return evt
 }
 
 // NewNodeCompleteEvent creates a new node completion event.
@@ -1188,10 +1240,12 @@ func NewNodeCompleteEvent(opts ...NodeEventOption) *event.Event {
 		Attempt:     options.Attempt,
 		MaxAttempts: options.MaxAttempts,
 	}
-	return NewGraphEvent(options.InvocationID,
+	evt := NewGraphEvent(options.InvocationID,
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
 		ObjectTypeGraphNodeComplete,
 		WithNodeMetadata(metadata))
+	SetNodeEventEmitterInStateDelta(evt.StateDelta, options.Emitter)
+	return evt
 }
 
 // NewNodeErrorEvent creates a new node error event.
@@ -1219,6 +1273,7 @@ func NewNodeErrorEvent(opts ...NodeEventOption) *event.Event {
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
 		ObjectTypeGraphNodeError,
 		WithNodeMetadata(metadata))
+	SetNodeEventEmitterInStateDelta(graphEvent.StateDelta, options.Emitter)
 
 	respErr := options.ResponseError
 	if respErr == nil && options.Error != "" {

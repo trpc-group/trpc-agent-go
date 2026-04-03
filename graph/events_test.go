@@ -105,6 +105,19 @@ func TestWithCompletionEventSnapshotOnly(t *testing.T) {
 	require.True(t, opts.SnapshotOnly)
 }
 
+func TestNodeEventEmitterMetadataHelpers(t *testing.T) {
+	stateDelta := map[string][]byte{
+		MetadataKeyNode: []byte(`{"nodeId":"n1","nodeType":"function","phase":"start"}`),
+	}
+	require.Empty(t, NodeEventEmitterFromStateDelta(stateDelta))
+
+	SetNodeEventEmitterInStateDelta(stateDelta, NodeEventEmitterExecutor)
+	require.Equal(t, NodeEventEmitterExecutor, NodeEventEmitterFromStateDelta(stateDelta))
+
+	SetNodeEventEmitterInStateDelta(nil, NodeEventEmitterAgentHelper)
+	require.Equal(t, NodeEventEmitterExecutor, NodeEventEmitterFromStateDelta(stateDelta))
+}
+
 func TestNewNodeEvents(t *testing.T) {
 	start := time.Now().Add(-time.Second).UTC()
 	end := start.Add(150 * time.Millisecond)
