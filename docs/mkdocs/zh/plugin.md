@@ -773,7 +773,27 @@ if err != nil {
 - 明显 unsafe intent 被阻断
 - 偏防御/分析型请求被放行
 
-说明：目前仓库内置了 Logging、GlobalInstruction、ToolCallID、Guardrail 四类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
+### MessageMerger（消息合并）
+
+`plugin/messagemerger` 下的 `messagemerger.New(opts...)` 会在每一次模型请求前，把连续的 `system`、`user`、`assistant` 消息合并成一条。这适用于某些第三方模型平台要求消息严格交替、不能出现连续同 role 消息的场景，例如调用方传入的历史里出现 `user,user` 或 `assistant,assistant`。
+
+这个插件**不会**合并 `tool` 消息，以保留 `tool_id`、`tool_name` 等逐次调用语义。文本合并时插入的分隔符可通过 `messagemerger.WithSeparator(...)` 配置。
+
+代码示例如下：
+
+```go
+merger := messagemerger.New()
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(merger),
+)
+defer runnerInstance.Close()
+```
+
+完整示例见 [examples/plugin/messagemerger](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/messagemerger)。
+
+说明：目前仓库内置了 Logging、GlobalInstruction、ToolCallID、MessageMerger、Guardrail 五类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
 
 ## 如何扩展：写一个自己的插件
 
