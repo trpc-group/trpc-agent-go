@@ -1,0 +1,9 @@
+[
+  {
+    "metricName": "llm_hallucinations",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {}
+    }
+  }
+]
