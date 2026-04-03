@@ -1184,6 +1184,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#messagemerger" class="md-nav__link">
+    <span class="md-ellipsis">
+      MessageMerger（消息合并）
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2695,6 +2704,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#messagemerger" class="md-nav__link">
+    <span class="md-ellipsis">
+      MessageMerger（消息合并）
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3732,7 +3750,26 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <li>明显 unsafe intent 被阻断</li>
 <li>偏防御/分析型请求被放行</li>
 </ul>
-<p>说明：目前仓库内置了 Logging、GlobalInstruction、ToolCallID、Guardrail 四类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。</p>
+<h3 id="messagemerger">MessageMerger（消息合并）</h3>
+<p><code>plugin/messagemerger</code> 下的 <code>messagemerger.New(opts...)</code> 会在每一次模型请求前，把连续的 <code>system</code>、<code>user</code>、<code>assistant</code> 消息合并成一条。这适用于某些第三方模型平台要求消息严格交替、不能出现连续同 role 消息的场景，例如调用方传入的历史里出现 <code>user,user</code> 或 <code>assistant,assistant</code>。</p>
+<p>这个插件<strong>不会</strong>合并 <code>tool</code> 消息，以保留 <code>tool_id</code>、<code>tool_name</code> 等逐次调用语义。文本合并时插入的分隔符可通过 <code>messagemerger.WithSeparator(...)</code> 配置。</p>
+<p>代码示例如下：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1">1</a></span>
+<span class="normal"><a href="#__codelineno-16-2">2</a></span>
+<span class="normal"><a href="#__codelineno-16-3">3</a></span>
+<span class="normal"><a href="#__codelineno-16-4">4</a></span>
+<span class="normal"><a href="#__codelineno-16-5">5</a></span>
+<span class="normal"><a href="#__codelineno-16-6">6</a></span>
+<span class="normal"><a href="#__codelineno-16-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a><span class="nx">merger</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">messagemerger</span><span class="p">.</span><span class="nx">New</span><span class="p">()</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">merger</span><span class="p">),</span>
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a><span class="p">)</span>
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+<p>完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/messagemerger">examples/plugin/messagemerger</a>。</p>
+<p>说明：目前仓库内置了 Logging、GlobalInstruction、ToolCallID、MessageMerger、Guardrail 五类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。</p>
 <h2 id="_13">如何扩展：写一个自己的插件</h2>
 <h3 id="1_1">1) 实现接口</h3>
 <p>自定义一个类型，实现：</p>
@@ -3749,42 +3786,42 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
 <li><code>OnEvent</code></li>
 </ul>
 <p>注册回调的方式就是：在 <code>Register(reg *plugin.Registry)</code> 中调用这些方法。例如：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-16-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-16-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-16-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-16-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-16-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-16-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-16-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-16-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-16-10">10</a></span>
-<span class="normal"><a href="#__codelineno-16-11">11</a></span>
-<span class="normal"><a href="#__codelineno-16-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">MyPlugin</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a>
-</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">MyPlugin</span><span class="p">)</span><span class="w"> </span><span class="nx">Name</span><span class="p">()</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;my_plugin&quot;</span><span class="w"> </span><span class="p">}</span>
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a>
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">MyPlugin</span><span class="p">)</span><span class="w"> </span><span class="nx">Register</span><span class="p">(</span><span class="nx">reg</span><span class="w"> </span><span class="o">*</span><span class="nx">plugin</span><span class="p">.</span><span class="nx">Registry</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a><span class="w">    </span><span class="nx">reg</span><span class="p">.</span><span class="nx">BeforeModel</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span>
-</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7"></a><span class="w">        </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8"></a><span class="w">        </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BeforeModelArgs</span><span class="p">,</span>
-</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9"></a><span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BeforeModelResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-16-11"><a id="__codelineno-16-11" name="__codelineno-16-11"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-16-12"><a id="__codelineno-16-12" name="__codelineno-16-12"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-17-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-17-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-17-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-17-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-17-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-17-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-17-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-17-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-17-10">10</a></span>
+<span class="normal"><a href="#__codelineno-17-11">11</a></span>
+<span class="normal"><a href="#__codelineno-17-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">MyPlugin</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">MyPlugin</span><span class="p">)</span><span class="w"> </span><span class="nx">Name</span><span class="p">()</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;my_plugin&quot;</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">MyPlugin</span><span class="p">)</span><span class="w"> </span><span class="nx">Register</span><span class="p">(</span><span class="nx">reg</span><span class="w"> </span><span class="o">*</span><span class="nx">plugin</span><span class="p">.</span><span class="nx">Registry</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6"></a><span class="w">    </span><span class="nx">reg</span><span class="p">.</span><span class="nx">BeforeModel</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span>
+</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7"></a><span class="w">        </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8"></a><span class="w">        </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BeforeModelArgs</span><span class="p">,</span>
+</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9"></a><span class="w">    </span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BeforeModelResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-17-11"><a id="__codelineno-17-11" name="__codelineno-17-11"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-17-12"><a id="__codelineno-17-12" name="__codelineno-17-12"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>注册完插件后，需要在创建 Runner 时启用它：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
-<span class="normal"><a href="#__codelineno-17-2">2</a></span>
-<span class="normal"><a href="#__codelineno-17-3">3</a></span>
-<span class="normal"><a href="#__codelineno-17-4">4</a></span>
-<span class="normal"><a href="#__codelineno-17-5">5</a></span>
-<span class="normal"><a href="#__codelineno-17-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">MyPlugin</span><span class="p">{}),</span>
-</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a><span class="p">)</span>
-</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
+<span class="normal"><a href="#__codelineno-18-2">2</a></span>
+<span class="normal"><a href="#__codelineno-18-3">3</a></span>
+<span class="normal"><a href="#__codelineno-18-4">4</a></span>
+<span class="normal"><a href="#__codelineno-18-5">5</a></span>
+<span class="normal"><a href="#__codelineno-18-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a><span class="nx">runnerInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a><span class="w">    </span><span class="nx">agentInstance</span><span class="p">,</span>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">MyPlugin</span><span class="p">{}),</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5"></a><span class="p">)</span>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runnerInstance</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="3-plugincloser">3)（可选）实现 <code>plugin.Closer</code></h3>
 <p>如果插件需要释放资源（文件、后台 goroutine、缓冲区等），实现 <code>Close(ctx)</code> 让 Runner
@@ -3816,7 +3853,7 @@ message。适合用来实现全局策略或统一行为（例如安全约束、�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月2日 02:14:38 UTC">2026-04-02 02:14:38</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月3日 03:29:41 UTC">2026-04-03 03:29:41</span>
   </span>
 
     
