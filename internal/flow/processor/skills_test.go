@@ -1859,6 +1859,123 @@ func TestSkillsToolResultRequestProcessor_SessionSummary_AllowsFallback(
 	require.Equal(t, 1, matchCount)
 }
 
+func TestSkillsToolResultRequestProcessor_SupportsContextCompactionRebuild(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	t.Run("turn mode supports rebuild", func(t *testing.T) {
+		p := NewSkillsToolResultRequestProcessor(
+			repo,
+			WithSkillsToolResultLoadMode(SkillLoadModeTurn),
+		)
+		inv := &agent.Invocation{
+			AgentName: "tester",
+			Session: &session.Session{
+				State: session.StateMap{
+					skill.LoadedKey("tester", "calc"): []byte("1"),
+				},
+			},
+		}
+		require.True(t, p.SupportsContextCompactionRebuild(inv))
+	})
+
+	t.Run("once mode blocks rebuild when loaded skills exist", func(t *testing.T) {
+		p := NewSkillsToolResultRequestProcessor(
+			repo,
+			WithSkillsToolResultLoadMode(SkillLoadModeOnce),
+		)
+		inv := &agent.Invocation{
+			AgentName: "tester",
+			Session: &session.Session{
+				State: session.StateMap{
+					skill.LoadedKey("tester", "calc"): []byte("1"),
+				},
+			},
+		}
+		require.False(t, p.SupportsContextCompactionRebuild(inv))
+	})
+
+	t.Run("once mode stays safe when nothing is loaded", func(t *testing.T) {
+		p := NewSkillsToolResultRequestProcessor(
+			repo,
+			WithSkillsToolResultLoadMode(SkillLoadModeOnce),
+		)
+		inv := &agent.Invocation{
+			AgentName: "tester",
+			Session:   &session.Session{State: session.StateMap{}},
+		}
+		require.True(t, p.SupportsContextCompactionRebuild(inv))
+	})
+}
+
+func TestSkillsToolResultRequestProcessor_RebuildRequestForContextCompaction(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+
+	args, err := json.Marshal(skillNameInput{Skill: "calc"})
+	require.NoError(t, err)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "tc1",
+					Function: model.FunctionDefinitionParam{
+						Name:      skillToolLoad,
+						Arguments: args,
+					},
+				}},
+			},
+			{
+				Role:     model.RoleTool,
+				ToolName: skillToolLoad,
+				ToolID:   "tc1",
+				Content:  loadedPrefix + " calc",
+			},
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeTurn),
+	)
+	p.RebuildRequestForContextCompaction(
+		context.Background(),
+		inv,
+		req,
+	)
+
+	require.Contains(t, req.Messages[2].Content, "[Loaded] calc")
+	require.Contains(t, req.Messages[2].Content, "B")
+	loaded, ok := inv.Session.GetState(skill.LoadedKey("tester", "calc"))
+	require.True(t, ok)
+	require.Equal(t, []byte("1"), loaded)
+}
+
 func TestHasSessionSummary(t *testing.T) {
 	require.False(t, hasSessionSummary(nil))
 
