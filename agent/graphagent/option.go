@@ -116,6 +116,11 @@ type Options struct {
 	// ContextCompactionKeepRecentRequests preserves the latest N completed
 	// requests in full when request-side context compaction is enabled.
 	ContextCompactionKeepRecentRequests int
+	// ContextCompactionOversizedToolResultMaxTokens sets the token threshold
+	// above which any tool result (including from the current request) is
+	// truncated using head+tail preservation. Fires regardless of
+	// EnableContextCompaction. 0 disables it.
+	ContextCompactionOversizedToolResultMaxTokens int
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses default formatSummaryContent function.
 	summaryFormatter func(summary string) string
@@ -142,9 +147,10 @@ type Options struct {
 
 var (
 	defaultOptions = Options{
-		ChannelBufferSize:                    defaultChannelBufferSize,
-		ContextCompactionToolResultMaxTokens: processor.DefaultContextCompactionToolResultMaxTokens,
-		ContextCompactionKeepRecentRequests:  processor.DefaultContextCompactionKeepRecentRequests,
+		ChannelBufferSize:                             defaultChannelBufferSize,
+		ContextCompactionToolResultMaxTokens:          processor.DefaultContextCompactionToolResultMaxTokens,
+		ContextCompactionKeepRecentRequests:           processor.DefaultContextCompactionKeepRecentRequests,
+		ContextCompactionOversizedToolResultMaxTokens: processor.DefaultContextCompactionOversizedToolResultMaxTokens,
 	}
 )
 
@@ -254,6 +260,17 @@ func WithContextCompactionKeepRecentRequests(n int) Option {
 	return func(opts *Options) {
 		if n >= 0 {
 			opts.ContextCompactionKeepRecentRequests = n
+		}
+	}
+}
+
+// WithContextCompactionOversizedToolResultMaxTokens sets the token threshold
+// above which any tool result (including from the current request) is truncated
+// using head+tail preservation. Fires regardless of EnableContextCompaction.
+func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
+	return func(opts *Options) {
+		if tokens >= 0 {
+			opts.ContextCompactionOversizedToolResultMaxTokens = tokens
 		}
 	}
 }

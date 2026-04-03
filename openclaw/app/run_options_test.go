@@ -269,6 +269,8 @@ agent:
   claude_env: ["A=B"]
   claude_work_dir: "/tmp/work"
   add_session_summary: false
+  enable_context_compaction: false
+  context_compaction_oversized_tool_result_max_tokens: 2048
   max_history_runs: 123
   preload_memory: 2
 `)
@@ -290,6 +292,8 @@ agent:
 		"-agent-ralph-verify-env", "X=1",
 		"-claude-bin", "/tmp/claude",
 		"-add-session-summary",
+		"-enable-context-compaction",
+		"-context-compaction-oversized-tool-result-max-tokens", "256",
 		"-max-history-runs", "9",
 		"-preload-memory", "-1",
 	})
@@ -309,6 +313,8 @@ agent:
 	require.Equal(t, "X=1", opts.RalphLoopVerifyEnv)
 	require.Equal(t, "/tmp/claude", opts.ClaudeBin)
 	require.True(t, opts.AddSessionSummary)
+	require.True(t, opts.EnableContextCompaction)
+	require.Equal(t, 256, opts.ContextCompactionOversizedToolResultMaxTokens)
 	require.Equal(t, 9, opts.MaxHistoryRuns)
 	require.Equal(t, -1, opts.PreloadMemory)
 }
@@ -548,6 +554,8 @@ agent:
   claude_env: ["FOO=bar","X=1"]
   claude_work_dir: "/tmp/work"
   add_session_summary: true
+  enable_context_compaction: true
+  context_compaction_oversized_tool_result_max_tokens: 4096
   max_history_runs: 50
   preload_memory: 10
   instruction: "instruction"
@@ -684,6 +692,8 @@ memory:
 	require.Equal(t, "/tmp/work", opts.ClaudeWorkDir)
 
 	require.True(t, opts.AddSessionSummary)
+	require.True(t, opts.EnableContextCompaction)
+	require.Equal(t, 4096, opts.ContextCompactionOversizedToolResultMaxTokens)
 	require.Equal(t, 50, opts.MaxHistoryRuns)
 	require.Equal(t, 10, opts.PreloadMemory)
 	require.Equal(t, "instruction", opts.AgentInstruction)

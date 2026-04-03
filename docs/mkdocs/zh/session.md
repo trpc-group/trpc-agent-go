@@ -1870,12 +1870,11 @@ llmagent.WithAddSessionSummary(true)
 
 **可选：Prompt 侧上下文压缩**
 
-当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前增加一层轻量压缩：
+当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前执行两遍压缩：
 
-- 只压缩旧 request 中过长的 `tool result`
-- 只替换正文，仍保留 `ToolID` 和 `ToolName`
-- 当前 request 永远不压
-- 最近 `ContextCompactionKeepRecentRequests` 个已完成 request 会完整保留
+- **Pass 1** — 旧 request 中超过 `ContextCompactionToolResultMaxTokens`（默认 1024 tokens）的 tool result 整体替换为占位符，保留 `ToolID` 和 `ToolName`
+- **Pass 2** — 任意 request（包括当前 request）中超过 `ContextCompactionOversizedToolResultMaxTokens`（默认 8192 tokens）的单个 tool result，使用首尾保留策略截断，中间插入 `[...N characters truncated...]` 标记。Pass 2 独立于 `EnableContextCompaction`，只要设置了值就会生效
+- 最近 `ContextCompactionKeepRecentRequests` 个已完成 request 不受 Pass 1 影响（但 Pass 2 仍会生效）
 - 如果同时开启了 `WithAddSessionSummary(true)`，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 `CreateSessionSummary(...)` 并重建 request
 - 模型层的 token tailoring 仍然作为最后兜底
 
@@ -1886,7 +1885,8 @@ agent := llmagent.New(
     llmagent.WithAddSessionSummary(true),
     llmagent.WithEnableContextCompaction(true),
     llmagent.WithContextCompactionThresholdRatio(0.7),
-    llmagent.WithContextCompactionToolResultMaxTokens(1024),
+    llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: 旧 tool result → 占位符
+    llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: 任意超大 result → 首尾保留截断
     llmagent.WithContextCompactionKeepRecentRequests(1),
 )
 ```
@@ -1920,7 +1920,7 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - 不添加摘要消息
 - 只包含最近 `MaxHistoryRuns` 轮对话
 - `MaxHistoryRuns=0` 时不限制，包含所有历史
-- 如果开启 `WithEnableContextCompaction(true)`，保留下来的旧 request 中超长 `tool result` 仍可在 request projection 阶段被压缩
+- 如果开启 `WithEnableContextCompaction(true)`，旧 request 中超长 tool result 仍可在 request projection 阶段被压缩（Pass 1），同时任意 request 中的超大 tool result 也会被首尾保留截断（Pass 2）
 - 这个模式下不会触发 pre-LLM 的同步摘要重试
 
 **上下文结构：**
