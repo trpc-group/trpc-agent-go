@@ -339,6 +339,9 @@ func (s *SessionService) GetSession(
 }
 
 func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *session.Options) (*session.Session, error) {
+	if err := session.ValidateGetSessionOptions(opt, false); err != nil {
+		return nil, err
+	}
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
 		return nil, nil
@@ -389,6 +392,13 @@ func (s *SessionService) ListSessions(
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
+	opt := &session.Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+	if err := session.ValidateListSessionsOptions(opt); err != nil {
+		return nil, err
+	}
 	app, ok := s.getAppSessions(userKey.AppName)
 	if !ok {
 		return []*session.Session{}, nil
@@ -401,10 +411,6 @@ func (s *SessionService) ListSessions(
 		return []*session.Session{}, nil
 	}
 
-	opt := &session.Options{}
-	for _, o := range opts {
-		o(opt)
-	}
 	appState := getValidState(app.appState)
 	userState := getValidState(app.userState[userKey.UserID])
 	if appState == nil {
@@ -413,7 +419,6 @@ func (s *SessionService) ListSessions(
 	if userState == nil {
 		userState = make(session.StateMap)
 	}
-
 	sessList := make([]*session.Session, 0, len(app.sessions[userKey.UserID]))
 	for _, sWithTTL := range app.sessions[userKey.UserID] {
 		// Check if session is expired

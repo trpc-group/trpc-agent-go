@@ -361,3 +361,27 @@ func TestService_CorruptedData_Events(t *testing.T) {
 	_, err = service.GetSession(ctx, key)
 	assert.Error(t, err)
 }
+
+func TestService_EventPageValidation(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(WithRedisClientURL(redisURL))
+	require.NoError(t, err)
+	defer service.Close()
+
+	key := session.Key{AppName: "testapp", UserID: "user123", SessionID: "session123"}
+	userKey := session.UserKey{AppName: "testapp", UserID: "user123"}
+
+	sess, err := service.GetSession(context.Background(), key, session.WithGetSessionEventPage(0, 10))
+	assert.ErrorIs(t, err, session.ErrEventPageUnsupported)
+	assert.Nil(t, sess)
+
+	sessions, err := service.ListSessions(
+		context.Background(),
+		userKey,
+		session.WithGetSessionEventPage(0, 10),
+	)
+	assert.ErrorIs(t, err, session.ErrEventPageOnlyForGetSession)
+	assert.Nil(t, sessions)
+}
