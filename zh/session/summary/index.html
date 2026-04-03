@@ -3817,32 +3817,45 @@
 <li><strong><code>WithMaxHistoryRuns</code> 参数被忽略</strong></li>
 </ul>
 <p><strong>可选：Prompt 侧上下文压缩</strong></p>
-<p>当开启 <code>WithEnableContextCompaction(true)</code> 时，框架会在真正调用模型前增加一层轻量压缩：</p>
+<p>当开启 <code>WithEnableContextCompaction(true)</code> 时，框架会在真正调用模型前执行两遍压缩：</p>
+<p><strong>Pass 1 — 历史 tool result 占位替换</strong>（<code>ContextCompactionToolResultMaxTokens</code>，默认 1024 tokens）：</p>
 <ul>
-<li>只压缩旧 request 中过长的 <code>tool result</code></li>
-<li>只替换正文，仍保留 <code>ToolID</code> 和 <code>ToolName</code></li>
-<li>当前 request 永远不压</li>
-<li>最近 <code>ContextCompactionKeepRecentRequests</code> 个已完成 request 会完整保留</li>
+<li>只作用于<strong>旧 request</strong> 中超过阈值的 <code>tool result</code>，将其内容整体替换为简短占位符，但保留 <code>ToolID</code> 和 <code>ToolName</code></li>
+<li>当前 request 和最近 <code>ContextCompactionKeepRecentRequests</code> 个已完成 request 不受影响</li>
+<li>适合清理已不重要的历史工具输出</li>
+</ul>
+<p><strong>Pass 2 — 超大 tool result 截断</strong>（<code>ContextCompactionOversizedToolResultMaxTokens</code>，默认 8192 tokens）：</p>
+<ul>
+<li>作用于<strong>所有 tool result，包括当前 request 的</strong></li>
+<li>超过阈值的 tool result 会使用首尾保留策略截断：保留内容的开头和结尾，中间插入 <code>[...N characters truncated...]</code> 标记</li>
+<li>这是防止单个超大 tool result 直接撑爆 context window 的安全网（例如 <code>web_fetch</code> 返回 800K+ 字符的 HTML）</li>
+</ul>
+<p>两遍压缩的定位不同：Pass 1 低阈值、全量替换，激进清理旧历史；Pass 2 高阈值、只在极端情况触发，但能保护当前 request。</p>
+<p>Pass 2 独立于 <code>EnableContextCompaction</code>，只要 <code>ContextCompactionOversizedToolResultMaxTokens &gt; 0</code> 就会生效。</p>
+<p>此外：</p>
+<ul>
 <li>如果同时开启了 <code>WithAddSessionSummary(true)</code>，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 <code>CreateSessionSummary(...)</code> 并重建 request</li>
 <li>模型层的 token tailoring 仍然作为最后兜底</li>
 </ul>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
-<span class="normal"><a href="#__codelineno-17-2">2</a></span>
-<span class="normal"><a href="#__codelineno-17-3">3</a></span>
-<span class="normal"><a href="#__codelineno-17-4">4</a></span>
-<span class="normal"><a href="#__codelineno-17-5">5</a></span>
-<span class="normal"><a href="#__codelineno-17-6">6</a></span>
-<span class="normal"><a href="#__codelineno-17-7">7</a></span>
-<span class="normal"><a href="#__codelineno-17-8">8</a></span>
-<span class="normal"><a href="#__codelineno-17-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-17-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-17-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-17-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-17-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-17-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-17-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-17-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-17-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-17-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="w">    </span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
 </span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
 </span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAddSessionSummary</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
 </span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithEnableContextCompaction</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
 </span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithContextCompactionThresholdRatio</span><span class="p">(</span><span class="mf">0.7</span><span class="p">),</span>
-</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithContextCompactionToolResultMaxTokens</span><span class="p">(</span><span class="mi">1024</span><span class="p">),</span>
-</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithContextCompactionKeepRecentRequests</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
-</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9"></a><span class="p">)</span>
+</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithContextCompactionToolResultMaxTokens</span><span class="p">(</span><span class="mi">1024</span><span class="p">),</span><span class="w">  </span><span class="c1">// Pass 1: 旧 tool result → 占位符</span>
+</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithContextCompactionOversizedToolResultMaxTokens</span><span class="p">(</span><span class="mi">8192</span><span class="p">),</span><span class="w">  </span><span class="c1">// Pass 2: 任意超大 result → 首尾保留截断</span>
+</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithContextCompactionKeepRecentRequests</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
+</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>上下文结构</strong>：</p>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1"> 1</a></span>
@@ -3882,7 +3895,7 @@
 <li>不添加摘要消息</li>
 <li>只包含最近 <code>MaxHistoryRuns</code> 轮对话</li>
 <li><code>MaxHistoryRuns=0</code> 时不限制，包含所有历史</li>
-<li>如果开启 <code>WithEnableContextCompaction(true)</code>，保留下来的旧 request 中超长 <code>tool result</code> 仍可在 request projection 阶段被压缩</li>
+<li>如果开启 <code>WithEnableContextCompaction(true)</code>，保留下来的旧 request 中超长 <code>tool result</code> 仍可在 request projection 阶段被压缩；此外只要 <code>ContextCompactionOversizedToolResultMaxTokens &gt; 0</code>（即使未开启 <code>EnableContextCompaction</code>），任意 request 中的超大 tool result 也会被首尾保留截断</li>
 <li>这个模式下不会触发 pre-LLM 的同步摘要重试</li>
 </ul>
 <p><strong>上下文结构</strong>：</p>
@@ -3935,6 +3948,9 @@
 </tbody>
 </table>
 <p>如果你的长会话里经常出现搜索结果、日志、代码扫描输出这类长 <code>tool result</code>，建议开启 <code>EnableContextCompaction=true</code>。如果你还希望在接近 context window 时多一次同步摘要兜底，再配合 <code>AddSessionSummary=true</code> 一起使用。</p>
+<blockquote>
+<p><strong>提示</strong>：如果你的 agent 使用了 <code>web_fetch</code> 等可能单次返回超大结果的工具，<code>ContextCompactionOversizedToolResultMaxTokens</code> 尤为重要——它能防止单个 tool result 吃光整个 context window，即使该 result 属于当前正在处理的（受保护的）request。它独立于 <code>EnableContextCompaction</code>，默认开启。</p>
+</blockquote>
 <h2 id="_18">摘要格式自定义</h2>
 <p>默认情况下，会话摘要会以包含上下文标签和关于优先考虑当前对话信息的提示进行格式化：</p>
 <p><strong>默认格式</strong>：</p>
@@ -4247,7 +4263,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月2日 06:11:53 UTC">2026-04-02 06:11:53</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月3日 09:56:32 UTC">2026-04-03 09:56:32</span>
   </span>
 
     
