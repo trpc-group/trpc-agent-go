@@ -28,6 +28,13 @@ func TestOptions(t *testing.T) {
 		assert.Equal(t, "test", sm.prompt)
 	})
 
+	t.Run("WithSystemPrompt", func(t *testing.T) {
+		s := NewSummarizer(&testModel{}, WithSystemPrompt("system"))
+		sm, ok := s.(*sessionSummarizer)
+		assert.True(t, ok)
+		assert.Equal(t, "system", sm.systemPrompt)
+	})
+
 	t.Run("WithName", func(t *testing.T) {
 		s := NewSummarizer(&testModel{}, WithName("  demo  "))
 		sm, ok := s.(*sessionSummarizer)
