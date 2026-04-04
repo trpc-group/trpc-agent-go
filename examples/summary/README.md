@@ -170,7 +170,7 @@ You can customize the summary prompt to control how conversations are summarized
 ### Available Placeholders
 
 - **`{conversation_text}`**: The conversation content to be summarized
-- **`{max_summary_words}`**: The maximum word count for the summary (only included when `WithMaxSummaryWords` is set). In the default prompt, this placeholder is replaced with a natural instruction like "Please keep the summary within 100 words." In custom prompts, it's replaced with just the number, allowing you to control the wording in your preferred language.
+- **`{max_summary_words}`**: The maximum word count for the summary (only included when `WithMaxSummaryWords` is set). In the default prompt, this placeholder is replaced with a natural instruction like "Please keep the summary within 100 words." In custom prompts, it's replaced with just the number, allowing you to control the wording in your preferred language. When `WithMaxSummaryWords(...)` is set, include this placeholder in either `WithPrompt(...)` or `WithSystemPrompt(...)`.
 
 ### Example Usage
 
@@ -192,6 +192,10 @@ summary.WithPrompt("请将以下对话总结为不超过{max_summary_words}个�
 
 // Custom prompt with length limit (mixed language)
 summary.WithPrompt("请总结以下对话，控制在{max_summary_words}字以内：{conversation_text}")
+
+// Put stable instructions in a dedicated system message
+summary.WithSystemPrompt("Focus on decisions and keep it within {max_summary_words} words.")
+summary.WithPrompt("<conversation>\n{conversation_text}\n</conversation>\n\nSummary:")
 ```
 
 ## Summary Options
@@ -203,6 +207,8 @@ The `SessionSummarizer` supports various configuration options to customize summ
 - **`WithMaxSummaryWords(maxWords int)`**: Sets the maximum word count for generated summaries. When set to 0 (default), no word limit is applied. The word limit is included in the prompt to guide the model's generation rather than truncating the output.
 
 - **`WithPrompt(prompt string)`**: Customizes the prompt template used for summary generation. The prompt must include the `{conversation_text}` placeholder. See the [Prompt Customization](#prompt-customization) section for details and examples.
+
+- **`WithSystemPrompt(prompt string)`**: Adds a dedicated system message for summarization instructions. It must not include `{conversation_text}`; keep the conversation content in the user prompt so the system message remains instruction-only.
 
 - **`WithSkipRecent(skipFunc SkipRecentFunc)`**: Sets a custom function that returns how many recent events to skip during summarization. Return 0 to skip none. Useful for avoiding summarizing very recent/incomplete turns, or applying time/content-based skipping strategies.
 
