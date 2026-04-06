@@ -102,7 +102,7 @@ func run() error {
 			Stream:    *streaming,
 		}),
 		llmagent.WithTools([]tool.Tool{calcTool}),
-		llmagent.WithTemporarySubtasks(),
+		llmagent.WithSubtask(),
 	)
 
 	r := runner.NewRunner(appName, llmAgent, runner.WithSessionService(sessionService))

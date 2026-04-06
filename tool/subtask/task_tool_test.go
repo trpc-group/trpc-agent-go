@@ -7,7 +7,7 @@
 //
 //
 
-package spawn
+package subtask
 
 import (
 	"context"
@@ -225,7 +225,7 @@ func TestCall_InheritContext(t *testing.T) {
 	require.Greater(t, childEvents, 0, "expected at least one child event with inherited filter key")
 }
 
-func TestScopeTools_StripsSpawnTools(t *testing.T) {
+func TestScopeTools_StripsExcludedTools(t *testing.T) {
 	calc := &simpleTool{name: "calculator"}
 	taskT := &simpleTool{name: ToolName}
 	transferT := &simpleTool{name: transfer.TransferToolName}
@@ -236,7 +236,7 @@ func TestScopeTools_StripsSpawnTools(t *testing.T) {
 	scoped := scopeTools(all, nil)
 	names := toolNames(scoped)
 	require.ElementsMatch(t, []string{"calculator", "knowledge_search"}, names,
-		"default scope should keep user and non-spawn framework tools")
+		"default scope should keep user and non-excluded framework tools")
 }
 
 func TestScopeTools_WithExplicitNames(t *testing.T) {
@@ -250,10 +250,10 @@ func TestScopeTools_WithExplicitNames(t *testing.T) {
 	scoped := scopeTools(all, []string{"calculator", "knowledge_search"})
 	names := toolNames(scoped)
 	require.ElementsMatch(t, []string{"calculator", "knowledge_search"}, names,
-		"explicit names should be respected, spawn tools excluded")
+		"explicit names should be respected, excluded tools stripped")
 }
 
-func TestScopeTools_ExplicitNameCannotForceSpawnTool(t *testing.T) {
+func TestScopeTools_ExplicitNameCannotForceExcludedTool(t *testing.T) {
 	calc := &simpleTool{name: "calculator"}
 	taskT := &simpleTool{name: ToolName}
 
@@ -262,7 +262,7 @@ func TestScopeTools_ExplicitNameCannotForceSpawnTool(t *testing.T) {
 	scoped := scopeTools(all, []string{"calculator", ToolName})
 	names := toolNames(scoped)
 	require.Equal(t, []string{"calculator"}, names,
-		"explicitly naming a spawn tool should not include it")
+		"explicitly naming an excluded tool should not include it")
 }
 
 func TestToolScopedAgent_DelegatesToParent(t *testing.T) {

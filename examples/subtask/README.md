@@ -12,7 +12,7 @@ LLM attention is a finite resource — as the context window grows, attention to
 llmAgent := llmagent.New("my-agent",
     llmagent.WithModel(model),
     llmagent.WithTools(userTools),
-    llmagent.WithTemporarySubtasks(),  // enables the subtask tool
+    llmagent.WithSubtask(),  // enables the subtask tool
 )
 ```
 
@@ -21,7 +21,7 @@ llmAgent := llmagent.New("my-agent",
 ```bash
 export OPENAI_BASE_URL="https://api.openai.com/v1"
 export OPENAI_API_KEY="your-key"
-cd examples/dynamicagent
+cd examples/subtask
 go run . -model=gpt-4o-mini
 ```
 

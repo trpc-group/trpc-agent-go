@@ -7,12 +7,12 @@
 //
 //
 
-// Package spawn provides the subtask tool that lets an agent spawn
-// an ephemeral sub-agent at runtime. The sub-agent reuses the parent
+// Package subtask provides the subtask tool that lets an agent delegate
+// an ephemeral sub-task at runtime. The sub-agent reuses the parent
 // agent's capabilities (model, tools) but runs in an isolated context
 // scope, preventing intermediate reasoning and tool-call noise from
 // polluting the parent's context window.
-package spawn
+package subtask
 
 import (
 	"context"
@@ -33,10 +33,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
-// spawnToolNames lists the tool names that should be stripped from the
-// sub-agent's tool set to prevent recursive spawning or incompatible
-// semantics inside a tool call.
-var spawnToolNames = map[string]struct{}{
+// excludedToolNames lists the tool names that should be stripped from
+// the sub-agent's tool set to prevent recursive delegation or
+// incompatible semantics inside a tool call.
+var excludedToolNames = map[string]struct{}{
 	ToolName:                  {},
 	transfer.TransferToolName: {},
 }
@@ -319,9 +319,10 @@ func persistable(evt *event.Event) *event.Event {
 }
 
 // scopeTools builds the tool list for the subtask sub-agent.
-// It always strips spawn/transfer tools to prevent recursion and
-// incompatible semantics. When allowNames is non-empty, only tools
-// whose names appear in that list (AND are not spawn tools) are kept.
+// It always strips excluded tools (subtask, transfer) to prevent
+// recursion and incompatible semantics. When allowNames is non-empty,
+// only tools whose names appear in that list (AND are not excluded)
+// are kept.
 func scopeTools(all []tool.Tool, allowNames []string) []tool.Tool {
 	if len(allowNames) > 0 {
 		nameSet := make(map[string]struct{}, len(allowNames))
@@ -331,7 +332,7 @@ func scopeTools(all []tool.Tool, allowNames []string) []tool.Tool {
 		var out []tool.Tool
 		for _, t := range all {
 			name := t.Declaration().Name
-			if _, blocked := spawnToolNames[name]; blocked {
+			if _, blocked := excludedToolNames[name]; blocked {
 				continue
 			}
 			if _, ok := nameSet[name]; ok {
@@ -343,7 +344,7 @@ func scopeTools(all []tool.Tool, allowNames []string) []tool.Tool {
 
 	var out []tool.Tool
 	for _, t := range all {
-		if _, blocked := spawnToolNames[t.Declaration().Name]; !blocked {
+		if _, blocked := excludedToolNames[t.Declaration().Name]; !blocked {
 			out = append(out, t)
 		}
 	}

@@ -608,7 +608,7 @@ Agents can autonomously create and manage sub-agents at runtime, without develop
 
 **Why?** LLM attention is a finite resource — as the context window grows, attention to key information dilutes. When the parent agent recognizes a sub-task will generate heavy intermediate reasoning (tool calls, retries, exploration), it can delegate to a sub-agent with an independent context. The sub-agent may consume tens of thousands of tokens internally, but the parent agent only sees the final result (a few hundred tokens) — effectively creating a **context compression boundary** that keeps the parent agent focused.
 
-Enabled via `WithTemporarySubtasks()`.
+Enabled via `WithSubtask()`.
 
 #### Setup
 
@@ -616,7 +616,7 @@ Enabled via `WithTemporarySubtasks()`.
 llmAgent := llmagent.New("my-agent",
     llmagent.WithModel(model),
     llmagent.WithTools(userTools),
-    llmagent.WithTemporarySubtasks(),  // enables `subtask` tool
+    llmagent.WithSubtask(),  // enables `subtask` tool
 )
 ```
 
@@ -639,7 +639,7 @@ subtask({
 #### Example
 
 ```bash
-cd examples/dynamicagent
+cd examples/subtask
 export OPENAI_API_KEY="your-key"
 go run . -model=gpt-4o-mini
 ```

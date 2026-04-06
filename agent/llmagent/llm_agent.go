@@ -39,7 +39,7 @@ import (
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
-	toolspawn "trpc.group/trpc-go/trpc-agent-go/tool/spawn"
+	toolsubtask "trpc.group/trpc-go/trpc-agent-go/tool/subtask"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
@@ -965,8 +965,8 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 		}
 	}
 
-	if a.option.TemporarySubtasks {
-		base = append(base, toolspawn.NewSubtaskTool(a.option.subtaskToolOptions...))
+	if a.option.Subtask {
+		base = append(base, toolsubtask.NewSubtaskTool(a.option.subtaskToolOptions...))
 	}
 	if len(a.subAgents) == 0 {
 		return base
