@@ -640,6 +640,8 @@ subtask({
 - `inherit_context: false`（默认）：子 Agent 从干净上下文开始
 - `inherit_context: true`：子 Agent 能看到父的对话历史（通过 filter key 前缀匹配）
 
+LLM 可能在一次响应中发起多个 `subtask` 调用，默认串行执行；如需并行，添加 `WithEnableParallelTools(true)`。
+
 #### 示例
 
 ```bash

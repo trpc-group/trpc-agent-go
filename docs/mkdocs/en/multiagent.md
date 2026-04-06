@@ -641,6 +641,8 @@ The framework then creates an ephemeral sub-agent that inherits the parent's mod
 - `inherit_context: false` (default): the sub-agent starts with a clean context
 - `inherit_context: true`: the sub-agent can see the parent's conversation history (via filter key prefix matching)
 
+The LLM may issue multiple `subtask` calls in a single response. By default these run serially; add `WithEnableParallelTools(true)` to execute them concurrently.
+
 #### Example
 
 ```bash
