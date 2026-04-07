@@ -315,7 +315,7 @@ func TestGraphResumeStateFromStateDelta(t *testing.T) {
 		}
 		raw, _ := json.Marshal(meta)
 		delta := map[string][]byte{
-			graph.CfgKeyLineageID: []byte(`"ln-flat"`),
+			graph.CfgKeyLineageID:   []byte(`"ln-flat"`),
 			graph.MetadataKeyPregel: raw,
 		}
 		encoded := EncodeStateDeltaMetadata(delta)
@@ -411,8 +411,8 @@ func TestGraphResumeStateFromMetadata(t *testing.T) {
 		}
 		metadata := map[string]any{
 			MessageMetadataStateDeltaKey: EncodeStateDeltaMetadata(delta),
-			graph.CfgKeyLineageID:       "ln-flat",
-			graph.CfgKeyCheckpointID:    "ck-flat",
+			graph.CfgKeyLineageID:        "ln-flat",
+			graph.CfgKeyCheckpointID:     "ck-flat",
 		}
 		state := GraphResumeStateFromMetadata(metadata)
 		require.NotNil(t, state)

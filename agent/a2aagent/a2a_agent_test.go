@@ -933,8 +933,8 @@ func TestTransferStateKeyWildcardInBuild(t *testing.T) {
 			},
 			RunOptions: agent.RunOptions{
 				RuntimeState: map[string]any{
-					"user.id":  42,
-					"order.id": 100,
+					"user.id":   42,
+					"order.id":  100,
 					"user.name": "alice",
 				},
 			},

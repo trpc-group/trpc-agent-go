@@ -3180,7 +3180,7 @@ func TestGraphResumeStateFromMetadata(t *testing.T) {
 		pregelJSON := []byte(`{"lineageId":"ln-p","checkpointId":"ck-p","checkpointNs":"ns-p","interruptKey":"approval"}`)
 		stateDelta := EncodeStateDeltaMetadata(map[string][]byte{
 			graph.MetadataKeyPregel: pregelJSON,
-			"resume":               []byte(`"yes"`),
+			"resume":                []byte(`"yes"`),
 		})
 		state := ia2a.GraphResumeStateFromMetadata(map[string]any{
 			ia2a.MessageMetadataStateDeltaKey: stateDelta,
