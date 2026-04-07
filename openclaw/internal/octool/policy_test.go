@@ -106,3 +106,51 @@ func TestChatCommandSafetyPolicy_BlocksStateRuntimeEnvPath(t *testing.T) {
 	})
 	require.ErrorContains(t, err, reasonSensitivePath)
 }
+
+func TestChatCommandSafetyPolicy_BlocksEnvFileHandleReference(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	envFile := filepath.Join("/tmp", "openclaw", "runtime", "env.sh")
+
+	err := NewChatCommandSafetyPolicy()(context.Background(), CommandRequest{
+		Command: `cat "$TRPC_CLAW_ENV_FILE"`,
+		Env: map[string]string{
+			envTRPCClawEnvFile: envFile,
+		},
+	})
+	require.ErrorContains(t, err, reasonSensitivePath)
+}
+
+func TestChatCommandSafetyPolicy_BlocksQuotedStateDirRuntimePath(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	stateDir := filepath.Join("/tmp", "openclaw-state")
+
+	err := NewChatCommandSafetyPolicy()(context.Background(), CommandRequest{
+		Command: `cat "$TRPC_CLAW_STATE_DIR"/runtime/env.sh`,
+		Env: map[string]string{
+			envTRPCClawStateDir: stateDir,
+		},
+	})
+	require.ErrorContains(t, err, reasonSensitivePath)
+}
+
+func TestChatCommandSafetyPolicy_BlocksStateDirCredentialHandle(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	stateDir := filepath.Join("/tmp", "openclaw-state")
+
+	err := NewChatCommandSafetyPolicy()(context.Background(), CommandRequest{
+		Command: `cat ${TRPC_CLAW_STATE_DIR}/git-credentials`,
+		Env: map[string]string{
+			envTRPCClawStateDir: stateDir,
+		},
+	})
+	require.ErrorContains(t, err, reasonSensitivePath)
+}

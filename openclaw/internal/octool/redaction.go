@@ -49,8 +49,9 @@ var (
 type OutputRedactor func(CommandRequest, string) string
 
 type sensitiveValue struct {
-	Name  string
-	Value string
+	Name       string
+	Value      string
+	AllowShort bool
 }
 
 // NewChatCommandOutputRedactor redacts sensitive env values from output.
@@ -67,7 +68,7 @@ func redactCommandOutput(req CommandRequest, output string) string {
 }
 
 func knownSensitiveValues(req CommandRequest) []sensitiveValue {
-	byName := make(map[string]string)
+	byName := make(map[string]sensitiveValue)
 	addSensitiveEnvValues(byName, req.Env)
 	addInlineSensitiveValues(byName, req.Command)
 	if len(byName) == 0 {
@@ -75,11 +76,12 @@ func knownSensitiveValues(req CommandRequest) []sensitiveValue {
 	}
 
 	out := make([]sensitiveValue, 0, len(byName))
-	for name, value := range byName {
-		if len(value) < minSensitiveValueLength {
+	for _, item := range byName {
+		if !item.AllowShort &&
+			len(item.Value) < minSensitiveValueLength {
 			continue
 		}
-		out = append(out, sensitiveValue{Name: name, Value: value})
+		out = append(out, item)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if len(out[i].Value) == len(out[j].Value) {
@@ -91,7 +93,7 @@ func knownSensitiveValues(req CommandRequest) []sensitiveValue {
 }
 
 func addSensitiveEnvValues(
-	out map[string]string,
+	out map[string]sensitiveValue,
 	env map[string]string,
 ) {
 	for name, value := range env {
@@ -101,12 +103,16 @@ func addSensitiveEnvValues(
 		if strings.TrimSpace(value) == "" {
 			continue
 		}
-		out[strings.ToUpper(name)] = value
+		out[strings.ToUpper(name)] = sensitiveValue{
+			Name:       strings.ToUpper(name),
+			Value:      value,
+			AllowShort: true,
+		}
 	}
 }
 
 func addInlineSensitiveValues(
-	out map[string]string,
+	out map[string]sensitiveValue,
 	command string,
 ) {
 	matches := sensitiveInlineAssignPattern.FindAllStringSubmatch(
@@ -125,7 +131,13 @@ func addInlineSensitiveValues(
 		if value == "" {
 			continue
 		}
-		out[name] = value
+		if _, ok := out[name]; ok {
+			continue
+		}
+		out[name] = sensitiveValue{
+			Name:  name,
+			Value: value,
+		}
 	}
 }
 

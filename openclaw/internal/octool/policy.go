@@ -30,6 +30,8 @@ const (
 
 	protectedRuntimeEnvRelPath = "runtime/env.sh"
 	protectedGitCredentialFile = "git-credentials"
+
+	shellQuoteChars = `"'`
 )
 
 var protectedPathFragments = []string{
@@ -97,7 +99,7 @@ func newCommandRequest(params execParams) CommandRequest {
 }
 
 func blocksSensitivePath(command string) bool {
-	return blocksSensitivePathWithFragments(
+	return matchesProtectedPathFragments(
 		normalizePolicyCommand(command),
 		protectedPathFragments,
 	)
@@ -108,12 +110,16 @@ func blocksSensitivePathRequest(req CommandRequest) bool {
 	if command == "" {
 		return false
 	}
-	if blocksSensitivePathWithFragments(command, protectedPathFragments) {
+	if matchesProtectedPathFragments(command, protectedPathFragments) {
 		return true
 	}
-	return blocksSensitivePathWithFragments(
-		command,
-		dynamicProtectedPathFragments(req.Env),
+	dynamicFragments := dynamicProtectedPathFragments(req.Env)
+	if matchesProtectedPathFragments(command, dynamicFragments) {
+		return true
+	}
+	return matchesProtectedPathFragments(
+		expandProtectedEnvReferences(command, req.Env),
+		dynamicFragments,
 	)
 }
 
@@ -138,6 +144,20 @@ func blocksSensitivePathWithFragments(
 		}
 	}
 	return false
+}
+
+func matchesProtectedPathFragments(
+	command string,
+	fragments []string,
+) bool {
+	if blocksSensitivePathWithFragments(command, fragments) {
+		return true
+	}
+	unquoted := stripShellQuotes(command)
+	if unquoted == command {
+		return false
+	}
+	return blocksSensitivePathWithFragments(unquoted, fragments)
 }
 
 func dynamicProtectedPathFragments(env map[string]string) []string {
@@ -165,6 +185,44 @@ func dynamicProtectedPathFragments(env map[string]string) []string {
 	return out
 }
 
+func expandProtectedEnvReferences(
+	command string,
+	env map[string]string,
+) string {
+	if command == "" || len(env) == 0 {
+		return command
+	}
+	expanded := expandProtectedEnvReference(
+		command,
+		envTRPCClawEnvFile,
+		env[envTRPCClawEnvFile],
+	)
+	return expandProtectedEnvReference(
+		expanded,
+		envTRPCClawStateDir,
+		env[envTRPCClawStateDir],
+	)
+}
+
+func expandProtectedEnvReference(
+	command string,
+	envName string,
+	value string,
+) string {
+	fragment := normalizePathFragment(value)
+	if fragment == "" {
+		return command
+	}
+	lowerName := strings.ToLower(envName)
+	replacer := strings.NewReplacer(
+		"$"+lowerName,
+		fragment,
+		"${"+lowerName+"}",
+		fragment,
+	)
+	return replacer.Replace(command)
+}
+
 func appendProtectedPathFragment(out []string, raw string) []string {
 	fragment := normalizePathFragment(raw)
 	if fragment == "" {
@@ -179,6 +237,18 @@ func normalizePathFragment(raw string) string {
 		return ""
 	}
 	return strings.ToLower(filepath.ToSlash(trimmed))
+}
+
+func stripShellQuotes(command string) string {
+	if command == "" {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune(shellQuoteChars, r) {
+			return -1
+		}
+		return r
+	}, command)
 }
 
 func containsSensitivePathFragment(command, fragment string) bool {

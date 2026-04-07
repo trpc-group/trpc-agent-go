@@ -51,8 +51,10 @@ type Manager struct {
 
 	clock func() time.Time
 
-	shellEnvOnce sync.Once
-	shellEnv     map[string]string
+	shellEnvMu       sync.Mutex
+	shellEnvReady    bool
+	shellEnv         map[string]string
+	shellEnvSnapshot func(context.Context) map[string]string
 }
 
 type Option func(*Manager)
@@ -96,10 +98,11 @@ func WithOutputRedactor(redactor OutputRedactor) Option {
 
 func NewManager(opts ...Option) *Manager {
 	m := &Manager{
-		sessions: map[string]*session{},
-		maxLines: defaultMaxLines,
-		jobTTL:   defaultJobTTL,
-		clock:    time.Now,
+		sessions:         map[string]*session{},
+		maxLines:         defaultMaxLines,
+		jobTTL:           defaultJobTTL,
+		clock:            time.Now,
+		shellEnvSnapshot: snapshotLoginShellEnv,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -139,10 +142,13 @@ func (m *Manager) Exec(
 	if params.Command == "" {
 		return execResult{}, errors.New("command is required")
 	}
-	req := m.commandRequest(params)
-	if m.policy != nil {
-		if err := m.policy(ctx, req); err != nil {
-			return execResult{}, err
+	var req CommandRequest
+	if m.policy != nil || m.redactor != nil {
+		req = m.commandRequest(ctx, params)
+		if m.policy != nil {
+			if err := m.policy(ctx, req); err != nil {
+				return execResult{}, err
+			}
 		}
 	}
 	redact := m.outputRedactor(req)
@@ -403,14 +409,20 @@ func copyEnvMap(env map[string]string) map[string]string {
 	return out
 }
 
-func (m *Manager) commandRequest(params execParams) CommandRequest {
+func (m *Manager) commandRequest(
+	ctx context.Context,
+	params execParams,
+) CommandRequest {
 	req := newCommandRequest(params)
-	req.Env = m.commandEnv(params.Env)
+	req.Env = m.commandEnv(ctx, params.Env)
 	return req
 }
 
-func (m *Manager) commandEnv(extra map[string]string) map[string]string {
-	out := m.loginShellEnv()
+func (m *Manager) commandEnv(
+	ctx context.Context,
+	extra map[string]string,
+) map[string]string {
+	out := m.loginShellEnv(ctx)
 	if len(out) == 0 {
 		out = currentProcessEnvMap()
 	}
@@ -495,18 +507,39 @@ func splitEnvPair(pair string) (string, string, bool) {
 	return pair[:idx], pair[idx+1:], true
 }
 
-func (m *Manager) loginShellEnv() map[string]string {
-	m.shellEnvOnce.Do(func() {
-		m.shellEnv = snapshotLoginShellEnv()
-	})
-	return copyEnvMap(m.shellEnv)
+func (m *Manager) loginShellEnv(ctx context.Context) map[string]string {
+	m.shellEnvMu.Lock()
+	if m.shellEnvReady {
+		out := copyEnvMap(m.shellEnv)
+		m.shellEnvMu.Unlock()
+		return out
+	}
+	snapshot := m.shellEnvSnapshot
+	m.shellEnvMu.Unlock()
+
+	if snapshot == nil {
+		snapshot = snapshotLoginShellEnv
+	}
+	env := snapshot(ctx)
+	if len(env) == 0 {
+		return nil
+	}
+
+	m.shellEnvMu.Lock()
+	if !m.shellEnvReady {
+		m.shellEnv = copyEnvMap(env)
+		m.shellEnvReady = true
+	}
+	out := copyEnvMap(m.shellEnv)
+	m.shellEnvMu.Unlock()
+	return out
 }
 
-func snapshotLoginShellEnv() map[string]string {
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		defaultShellEnvTimeout,
-	)
+func snapshotLoginShellEnv(ctx context.Context) map[string]string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, defaultShellEnvTimeout)
 	defer cancel()
 
 	out, err := shellCmd(ctx, shellEnvDumpCommand).Output()

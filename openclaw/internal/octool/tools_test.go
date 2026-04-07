@@ -113,6 +113,31 @@ func TestExecTool_RedactsSensitiveEnvValueOutput(t *testing.T) {
 	require.NotContains(t, res.Output, "sk-test-secret")
 }
 
+func TestExecTool_RedactsShortSensitiveEnvValueOutput(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithOutputRedactor(NewChatCommandOutputRedactor()),
+	)
+	tool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf %s '12345'",
+		"env": map[string]string{
+			"DB_PASSWORD": "12345",
+		},
+		"yieldMs": 0,
+	})
+	out, err := tool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Contains(t, res.Output, "[REDACTED:DB_PASSWORD]")
+	require.NotContains(t, res.Output, "12345")
+}
+
 func TestExecTool_BlocksShellProfileAccess(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
@@ -858,6 +883,63 @@ func TestManager_ExecErrors(t *testing.T) {
 
 	_, err = mgr.Exec(context.Background(), execParams{})
 	require.Error(t, err)
+}
+
+func TestManager_ExecSkipsShellSnapshotWithoutHooks(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager()
+	mgr.shellEnvSnapshot = func(context.Context) map[string]string {
+		t.Fatal("unexpected shell env snapshot")
+		return nil
+	}
+
+	yieldMs := 0
+	out, err := mgr.Exec(context.Background(), execParams{
+		Command: "echo ok",
+		YieldMs: &yieldMs,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "exited", out.Status)
+	require.Contains(t, out.Output, "ok")
+}
+
+func TestManager_LoginShellEnvRespectsContextAndRetries(
+	t *testing.T,
+) {
+	mgr := NewManager()
+	calls := 0
+	mgr.shellEnvSnapshot = func(ctx context.Context) map[string]string {
+		calls++
+		if calls == 1 {
+			<-ctx.Done()
+			return nil
+		}
+		return map[string]string{
+			"OPENAI_API_KEY": "sk-test-secret",
+		}
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan map[string]string, 1)
+	go func() {
+		done <- mgr.loginShellEnv(canceled)
+	}()
+
+	select {
+	case env := <-done:
+		require.Nil(t, env)
+	case <-time.After(time.Second):
+		t.Fatal("login shell env snapshot ignored request context")
+	}
+
+	env := mgr.loginShellEnv(context.Background())
+	require.Equal(t, "sk-test-secret", env["OPENAI_API_KEY"])
+	require.Equal(t, 2, calls)
 }
 
 func TestUploadEnvFromContext(t *testing.T) {
