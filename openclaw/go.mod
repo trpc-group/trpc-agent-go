@@ -98,6 +98,7 @@ require (
 	github.com/elastic/go-elasticsearch/v8 v8.19.0 // indirect
 	github.com/elastic/go-elasticsearch/v9 v9.1.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
+	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/getkin/kin-openapi v0.133.0 // indirect
 	github.com/go-ego/gse v1.0.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect

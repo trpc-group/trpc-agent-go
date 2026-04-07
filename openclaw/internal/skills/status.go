@@ -60,6 +60,7 @@ type StatusEntry struct {
 
 type StatusReport struct {
 	Skills []StatusEntry `json:"skills,omitempty"`
+	Watch  *WatchStatus  `json:"watch,omitempty"`
 }
 
 func BuildStatus(roots []string, opts ...Option) (StatusReport, error) {

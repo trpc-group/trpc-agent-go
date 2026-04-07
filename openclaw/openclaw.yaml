@@ -19,6 +19,15 @@ model:
   name: "gpt-5"
   openai_variant: "auto"
 
+# skills:
+#   extra_dirs:
+#     - "${HOME}/.codex/skills"
+#     - "./.agents/skills"
+#   watch: true
+#   watch_bundled: false
+#   watch_debounce_ms: 250
+#   load_mode: "turn" # once|turn|session
+
 tools:
   enable_parallel_tools: true
   providers:
