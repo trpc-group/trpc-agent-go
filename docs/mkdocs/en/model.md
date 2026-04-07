@@ -216,6 +216,13 @@ type GenerationConfig struct {
 }
 ```
 
+`GenerationConfig` itself is just a plain struct, and its zero value
+means `Stream=false`. For `LLMAgent`, if you omit
+`llmagent.WithGenerationConfig(...)`, the framework forwards that zero
+value as-is, so the default behavior is non-streaming. Higher-level
+wrappers can still choose different semantics by setting their own
+explicit defaults.
+
 ### Response Structure
 
 ```go

@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -256,10 +257,64 @@ func TestWithSkipSkillsFallbackOnSessionSummary(t *testing.T) {
 	require.False(t, b.option.SkipSkillsFallbackOnSessionSummary)
 }
 
-func TestNew_DefaultGenerationConfigKeepsStreaming(t *testing.T) {
+func TestNew_DefaultGenerationConfigKeepsLegacyNonStreaming(t *testing.T) {
 	a := New("test-agent")
-	require.True(t, a.genConfig.Stream)
-	require.False(t, a.option.generationConfigConfigured)
+	require.False(t, a.genConfig.Stream)
+}
+
+func TestLLMAgent_Run_DefaultGenerationConfigUsesPublicStreamingBehavior(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	runAndCapture := func(
+		t *testing.T,
+		runOptions ...agent.RunOption,
+	) *model.Request {
+		t.Helper()
+
+		mdl := &captureModel{}
+		agt := New("test-agent", WithModel(mdl))
+
+		invOpts := []agent.InvocationOptions{
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+			agent.WithInvocationSession(&session.Session{}),
+		}
+		if len(runOptions) > 0 {
+			invOpts = append(
+				invOpts,
+				agent.WithInvocationRunOptions(
+					agent.NewRunOptions(runOptions...),
+				),
+			)
+		}
+		inv := agent.NewInvocation(invOpts...)
+
+		ch, err := agt.Run(context.Background(), inv)
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		for evt := range ch {
+			if evt != nil && evt.RequiresCompletion {
+				key := agent.GetAppendEventNoticeKey(evt.ID)
+				_ = inv.AddNoticeChannel(ctx, key)
+				_ = inv.NotifyCompletion(ctx, key)
+			}
+		}
+
+		require.NotNil(t, mdl.got)
+		return mdl.got
+	}
+
+	t.Run("default is non-streaming", func(t *testing.T) {
+		req := runAndCapture(t)
+		require.False(t, req.GenerationConfig.Stream)
+	})
+
+	t.Run("per-run override enables streaming", func(t *testing.T) {
+		req := runAndCapture(t, agent.WithStream(true))
+		require.True(t, req.GenerationConfig.Stream)
+	})
 }
 
 func TestWithGenerationConfig_ExplicitFalseDisablesStreaming(
@@ -270,10 +325,9 @@ func TestWithGenerationConfig_ExplicitFalseDisablesStreaming(
 		WithGenerationConfig(model.GenerationConfig{Stream: false}),
 	)
 	require.False(t, a.genConfig.Stream)
-	require.True(t, a.option.generationConfigConfigured)
 }
 
-func TestBuildRequestProcessors_DefaultGenerationConfigUsesStreamTrue(
+func TestBuildRequestProcessors_DefaultGenerationConfigUsesZeroValue(
 	t *testing.T,
 ) {
 	procs := buildRequestProcessors("test-agent", &Options{})
@@ -285,7 +339,7 @@ func TestBuildRequestProcessors_DefaultGenerationConfigUsesStreamTrue(
 		}
 	}
 	require.NotNil(t, basicProc)
-	require.True(t, basicProc.GenerationConfig.Stream)
+	require.False(t, basicProc.GenerationConfig.Stream)
 }
 
 func TestWithMaxLimits_OnOptions(t *testing.T) {
