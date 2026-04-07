@@ -20,9 +20,10 @@ import (
 
 // DecodeOutputJSON decodes one runner output into one typed JSON payload.
 //
-// It accepts only exact structured outputs of type T or *T. When structured
-// output is absent, it falls back to decoding the final assistant content as
-// JSON.
+// It first accepts exact structured outputs of type T or *T. When the runner
+// returns a generic JSON-compatible value, it falls back to marshaling that
+// payload back into JSON and decoding it into T. When structured output is
+// absent, it falls back to decoding the final assistant content as JSON.
 func DecodeOutputJSON[T any](output *irunner.Output) (*T, error) {
 	if output == nil {
 		return nil, nil
@@ -43,7 +44,7 @@ func DecodeOutputJSON[T any](output *irunner.Output) (*T, error) {
 	return decoded, nil
 }
 
-// decodeStructuredOutputExact accepts only exact typed structured outputs.
+// decodeStructuredOutput decodes exact typed payloads and generic JSON objects.
 func decodeStructuredOutputExact[T any](payload any) (*T, error) {
 	if payload == nil {
 		return nil, nil
@@ -65,7 +66,15 @@ func decodeStructuredOutputExact[T any](payload any) (*T, error) {
 		reflect.ValueOf(decoded).Elem().Set(payloadValue.Elem())
 		return decoded, nil
 	default:
-		return nil, fmt.Errorf("unsupported structured output type %T", payload)
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("marshal structured output failed: %w", err)
+		}
+		var decoded T
+		if err := json.Unmarshal(payloadJSON, &decoded); err != nil {
+			return nil, fmt.Errorf("unmarshal structured output failed: %w", err)
+		}
+		return &decoded, nil
 	}
 }
 

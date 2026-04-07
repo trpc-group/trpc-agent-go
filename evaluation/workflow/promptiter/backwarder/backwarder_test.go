@@ -386,8 +386,8 @@ func TestBackwardRejectsInvalidResultOutput(t *testing.T) {
 
 		rsp, err := bw.Backward(context.Background(), newInstructionRequest())
 
-		assert.Error(t, err)
-		assert.Nil(t, rsp)
+		assert.NoError(t, err)
+		assert.Equal(t, "fix citation grounding", rsp.Gradients[0].Gradient)
 	})
 
 	t.Run("final content array", func(t *testing.T) {

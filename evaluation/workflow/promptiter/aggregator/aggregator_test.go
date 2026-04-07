@@ -343,8 +343,8 @@ func TestAggregateRejectsBareGradientArrayOutput(t *testing.T) {
 			},
 		})
 
-		assert.Error(t, err)
-		assert.Nil(t, rsp)
+		assert.NoError(t, err)
+		assert.Equal(t, "keep citation", rsp.Gradient.Gradients[0].Gradient)
 	})
 
 	t.Run("structured output array", func(t *testing.T) {

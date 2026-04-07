@@ -275,8 +275,8 @@ func TestOptimizeRejectsInvalidPatchOutput(t *testing.T) {
 
 		rsp, err := oz.Optimize(context.Background(), newInstructionRequest("current instruction"))
 
-		assert.Error(t, err)
-		assert.Nil(t, rsp)
+		assert.NoError(t, err)
+		assert.Equal(t, "updated instruction", *rsp.Patch.Value.Text)
 	})
 
 	t.Run("final content array", func(t *testing.T) {

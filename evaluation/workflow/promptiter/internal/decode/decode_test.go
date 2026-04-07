@@ -74,7 +74,7 @@ func TestDecodeOutputJSONFallsBackToFinalContent(t *testing.T) {
 	}, decoded)
 }
 
-func TestDecodeOutputJSONRejectsUnsupportedStructuredOutput(t *testing.T) {
+func TestDecodeOutputJSONAcceptsGenericStructuredOutputObject(t *testing.T) {
 	decoded, err := DecodeOutputJSON[samplePayload](&irunner.Output{
 		StructuredOutput: map[string]any{
 			"name":  "runner",
@@ -82,8 +82,11 @@ func TestDecodeOutputJSONRejectsUnsupportedStructuredOutput(t *testing.T) {
 		},
 	})
 
-	assert.Error(t, err)
-	assert.Nil(t, decoded)
+	assert.NoError(t, err)
+	assert.Equal(t, &samplePayload{
+		Name:  "runner",
+		Count: 4,
+	}, decoded)
 }
 
 func TestDecodeOutputJSONRejectsInvalidFinalContent(t *testing.T) {
