@@ -3141,6 +3141,117 @@ func TestMessageProcessor_ProcessMessage_NilResponse(t *testing.T) {
 	assert.NotNil(t, result.Result)
 }
 
+func TestGraphResumeStateFromMetadata(t *testing.T) {
+	t.Run("checkpoint only keeps checkpoint state without command", func(t *testing.T) {
+		state := graphResumeStateFromMetadata(map[string]any{
+			graph.CfgKeyCheckpointID: "ck-1",
+		})
+		if assert.NotNil(t, state) {
+			assert.Equal(t, "ck-1", state[graph.CfgKeyCheckpointID])
+			_, exists := state[graph.StateKeyCommand]
+			assert.False(t, exists)
+		}
+	})
+
+	t.Run("graph_control resume builds state and command", func(t *testing.T) {
+		state := graphResumeStateFromMetadata(map[string]any{
+			ia2a.MessageMetadataGraphControlKey: ia2a.GraphControlMetadata{
+				Resume: &ia2a.GraphResumeMetadata{
+					LineageID:    "ln-1",
+					CheckpointID: "ck-1",
+					Resume:       "approve",
+					ResumeMap:    map[string]any{"approval": true},
+				},
+			},
+		})
+		if assert.NotNil(t, state) {
+			assert.Equal(t, "ln-1", state[graph.CfgKeyLineageID])
+			assert.Equal(t, "ck-1", state[graph.CfgKeyCheckpointID])
+			cmd, ok := state[graph.StateKeyCommand].(*graph.ResumeCommand)
+			if assert.True(t, ok, "expected ResumeCommand in state") {
+				assert.Equal(t, "approve", cmd.Resume)
+				assert.Equal(t, true, cmd.ResumeMap["approval"])
+			}
+		}
+	})
+
+	t.Run("flattened resume and resume_map remain backward compatible", func(t *testing.T) {
+		state := graphResumeStateFromMetadata(map[string]any{
+			graph.CfgKeyCheckpointID: "ck-1",
+			"resume":                 "approve",
+			graph.CfgKeyResumeMap:    map[string]any{"approval": true},
+		})
+		cmd, ok := state[graph.StateKeyCommand].(*graph.ResumeCommand)
+		if assert.True(t, ok, "expected ResumeCommand in state") {
+			assert.Equal(t, "approve", cmd.Resume)
+			assert.Equal(t, true, cmd.ResumeMap["approval"])
+		}
+	})
+}
+
+func TestMessageProcessor_ProcessMessage_GraphResumeMetadataBecomesCommand(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: "user-1"})
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "graph-resume-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("resume")},
+		Metadata: map[string]any{
+			ia2a.MessageMetadataGraphControlKey: ia2a.GraphControlMetadata{
+				Resume: &ia2a.GraphResumeMetadata{
+					LineageID:    "ln-1",
+					CheckpointID: "ck-1",
+					Resume:       "approve",
+					ResumeMap:    map[string]any{"approval": true},
+				},
+			},
+		},
+	}
+
+	processor := &messageProcessor{
+		debugLogging:         false,
+		a2aToAgentConverter:  &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter:  &mockEventToA2AConverter{},
+		errorHandler:         defaultErrorHandler,
+		structuredTaskErrors: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				var ro agent.RunOptions
+				for _, opt := range opts {
+					opt(&ro)
+				}
+				if assert.NotNil(t, ro.RuntimeState) {
+					assert.Equal(t, "ln-1", ro.RuntimeState[graph.CfgKeyLineageID])
+					assert.Equal(t, "ck-1", ro.RuntimeState[graph.CfgKeyCheckpointID])
+					cmd, ok := ro.RuntimeState[graph.StateKeyCommand].(*graph.ResumeCommand)
+					if assert.True(t, ok, "expected ResumeCommand in runtime state") {
+						assert.Equal(t, "approve", cmd.Resume)
+						assert.Equal(t, true, cmd.ResumeMap["approval"])
+					}
+				}
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+	}
+
+	result, err := processor.ProcessMessage(
+		ctx,
+		msg,
+		taskmanager.ProcessOptions{},
+		&mockTaskHandler{},
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
 // TestMessageProcessor_ProcessMessage_ConversionFailure tests handling of conversion errors
 func TestMessageProcessor_ProcessMessage_ConversionFailure(t *testing.T) {
 	ctxID := "ctx"

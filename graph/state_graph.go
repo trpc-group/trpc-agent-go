@@ -2296,6 +2296,13 @@ type subgraphInterruptInfo struct {
 	childTaskID       string
 }
 
+type extractedPregelInterrupt struct {
+	interrupt    *InterruptError
+	lineageID    string
+	checkpointID string
+	checkpointNS string
+}
+
 func subgraphInterruptInfoFromState(
 	state State,
 ) (subgraphInterruptInfo, bool) {
@@ -2332,7 +2339,7 @@ func subgraphInterruptInfoFromState(
 	return info, true
 }
 
-func extractPregelInterrupt(e *event.Event) (*InterruptError, bool) {
+func extractPregelInterruptInfo(e *event.Event) (*extractedPregelInterrupt, bool) {
 	if e == nil {
 		return nil, false
 	}
@@ -2361,7 +2368,20 @@ func extractPregelInterrupt(e *event.Event) (*InterruptError, bool) {
 	}
 	intr.Key = interruptKey
 	intr.TaskID = interruptKey
-	return intr, true
+	return &extractedPregelInterrupt{
+		interrupt:    intr,
+		lineageID:    meta.LineageID,
+		checkpointID: meta.CheckpointID,
+		checkpointNS: meta.CheckpointNS,
+	}, true
+}
+
+func extractPregelInterrupt(e *event.Event) (*InterruptError, bool) {
+	info, ok := extractPregelInterruptInfo(e)
+	if !ok || info == nil || info.interrupt == nil {
+		return nil, false
+	}
+	return info.interrupt, true
 }
 
 func latestInterruptedCheckpointID(
@@ -2600,6 +2620,7 @@ func setSubgraphInterruptState(
 	childState State,
 	invocation *agent.Invocation,
 	childTaskID string,
+	interruptInfo *extractedPregelInterrupt,
 ) {
 	fallbackLineageID := ""
 	if invocation != nil {
@@ -2607,12 +2628,53 @@ func setSubgraphInterruptState(
 	}
 	childLineageID := stateStringOr(childState, CfgKeyLineageID, fallbackLineageID)
 	childNamespace := stateStringOr(childState, CfgKeyCheckpointNS, targetAgent.Info().Name)
-	childCheckpointID, ckptErr := latestInterruptedCheckpointID(
-		ctx, targetAgent, childLineageID, childNamespace,
-	)
-	if ckptErr != nil {
-		log.DebugfContext(ctx, "subgraph: latest checkpoint failed: %v", ckptErr)
+	childCheckpointID := ""
+
+	applyInterruptInfo := func() {
+		// Use checkpoint identity carried by interrupt event metadata.
+		// This is the only reliable source for remote subgraphs.
+		if interruptInfo == nil {
+			return
+		}
+		if interruptInfo.lineageID != "" {
+			childLineageID = interruptInfo.lineageID
+		}
+		if interruptInfo.checkpointNS != "" {
+			childNamespace = interruptInfo.checkpointNS
+		}
+		if interruptInfo.checkpointID != "" {
+			childCheckpointID = interruptInfo.checkpointID
+		}
 	}
+
+	resolveLatestInterruptedCheckpoint := func() {
+		// Best-effort lookup from local checkpoint manager for GraphAgent subgraphs.
+		if childCheckpointID != "" {
+			return
+		}
+		latest, ckptErr := latestInterruptedCheckpointID(ctx, targetAgent, childLineageID, childNamespace)
+		if ckptErr != nil {
+			log.DebugfContext(ctx, "subgraph: latest checkpoint failed: %v", ckptErr)
+			return
+		}
+		childCheckpointID = latest
+	}
+
+	_, hasLocalExecutor := targetAgent.(executorProvider)
+	if hasLocalExecutor {
+		// Local GraphAgent subgraph: prefer local checkpoint manager lookup.
+		resolveLatestInterruptedCheckpoint()
+		// Fallback to event metadata when local lookup returns empty.
+		if childCheckpointID == "" {
+			applyInterruptInfo()
+		}
+	} else {
+		// Remote subgraph (for example A2A): prefer metadata from interrupt event.
+		applyInterruptInfo()
+		// Keep local lookup as a no-op-safe fallback for mixed/custom agents.
+		resolveLatestInterruptedCheckpoint()
+	}
+
 	state[StateKeySubgraphInterrupt] = map[string]any{
 		subgraphInterruptKeyParentNodeID:      nodeID,
 		subgraphInterruptKeyChildAgentName:    agentName,
@@ -2748,6 +2810,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 				childState,
 				invocation,
 				streamRes.interrupt.TaskID,
+				streamRes.interruptInfo,
 			)
 			intr := NewInterruptError(streamRes.interrupt.Value)
 			intr.TaskID = streamRes.interrupt.TaskID
@@ -2793,6 +2856,7 @@ type agentEventStreamResult struct {
 	fallbackRawDelta map[string][]byte
 	structuredOutput any
 	interrupt        *InterruptError
+	interruptInfo    *extractedPregelInterrupt
 	terminalErr      error
 	terminalErrMeta  agentTerminalErrorMeta
 	finalError       *model.ResponseError
@@ -2947,11 +3011,12 @@ func updateAgentInterrupt(res *agentEventStreamResult, ev *event.Event) {
 	if res == nil || res.interrupt != nil {
 		return
 	}
-	intr, ok := extractPregelInterrupt(ev)
-	if !ok {
+	info, ok := extractPregelInterruptInfo(ev)
+	if !ok || info == nil || info.interrupt == nil {
 		return
 	}
-	res.interrupt = intr
+	res.interrupt = info.interrupt
+	res.interruptInfo = info
 }
 
 func clearAgentSuccessResultOnError(res *agentEventStreamResult, ev *event.Event) {

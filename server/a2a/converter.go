@@ -12,6 +12,7 @@ package a2a
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -182,11 +183,46 @@ func (c *defaultEventToA2AMessage) buildMessageMetadata(evt *event.Event) map[st
 	if stateDelta := ia2a.EncodeStateDeltaMetadata(evt.StateDelta); len(stateDelta) > 0 {
 		metadata[ia2a.MessageMetadataStateDeltaKey] = stateDelta
 	}
+	if interruptMeta := graphInterruptMetadata(evt); interruptMeta != nil {
+		metadata[ia2a.MessageMetadataGraphControlKey] = interruptMeta
+	}
 
 	if len(metadata) == 0 {
 		return nil
 	}
 	return metadata
+}
+
+func graphInterruptMetadata(evt *event.Event) *ia2a.GraphControlMetadata {
+	if evt == nil || evt.Response == nil || evt.Response.Object != graph.ObjectTypeGraphPregelStep {
+		return nil
+	}
+	if len(evt.StateDelta) == 0 {
+		return nil
+	}
+	raw, ok := evt.StateDelta[graph.MetadataKeyPregel]
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+
+	var meta graph.PregelStepMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return nil
+	}
+	if meta.InterruptKey == "" && meta.CheckpointID == "" && meta.LineageID == "" && meta.InterruptValue == nil {
+		return nil
+	}
+
+	return &ia2a.GraphControlMetadata{
+		Interrupt: &ia2a.GraphInterruptMetadata{
+			Key:          meta.InterruptKey,
+			Value:        meta.InterruptValue,
+			LineageID:    meta.LineageID,
+			CheckpointID: meta.CheckpointID,
+			CheckpointNS: meta.CheckpointNS,
+			ObjectType:   evt.Response.Object,
+		},
+	}
 }
 
 func hasStructuredMetadata(metadata map[string]any) bool {
@@ -232,7 +268,6 @@ func (c *defaultEventToA2AMessage) shouldEmitEvent(evt *event.Event) bool {
 	if !strings.HasPrefix(objectType, graphObjectPrefix) {
 		return true
 	}
-
 	allowedObjectTypes := c.graphEventObjectAllowlist
 	if allowedObjectTypes == nil {
 		allowedObjectTypes = defaultAllowedGraphObjectTypes

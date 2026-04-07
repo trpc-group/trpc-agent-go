@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
@@ -278,6 +279,7 @@ func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) 
 	if len(r.transferStateKey) > 0 {
 		convertFn = r.wrapWithTransferState(convertFn)
 	}
+	convertFn = r.wrapWithGraphResumeMetadata(convertFn)
 
 	message, err := convertFn(isStream, r.name, invocation)
 	if err != nil {
@@ -311,6 +313,99 @@ func (r *A2AAgent) wrapWithTransferState(next ConvertToA2AMessageFunc) ConvertTo
 				message.Metadata[key] = value
 			}
 		}
+		return message, nil
+	}
+}
+
+func cloneAnyMap(src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func graphResumeMetadataFromRuntimeState(state map[string]any) *ia2a.GraphControlMetadata {
+	if len(state) == 0 {
+		return nil
+	}
+
+	resume := &ia2a.GraphResumeMetadata{}
+	hasResume := false
+
+	if lineageID, ok := state[graph.CfgKeyLineageID].(string); ok && lineageID != "" {
+		resume.LineageID = lineageID
+		hasResume = true
+	}
+	if checkpointID, ok := state[graph.CfgKeyCheckpointID].(string); ok && checkpointID != "" {
+		resume.CheckpointID = checkpointID
+		hasResume = true
+	}
+	if checkpointNS, ok := state[graph.CfgKeyCheckpointNS].(string); ok && checkpointNS != "" {
+		resume.CheckpointNS = checkpointNS
+		hasResume = true
+	}
+
+	switch cmd := state[graph.StateKeyCommand].(type) {
+	case *graph.Command:
+		if cmd != nil {
+			if cmd.Resume != nil {
+				resume.Resume = cmd.Resume
+				hasResume = true
+			}
+			if len(cmd.ResumeMap) > 0 {
+				resume.ResumeMap = cloneAnyMap(cmd.ResumeMap)
+				hasResume = true
+			}
+		}
+	case *graph.ResumeCommand:
+		if cmd != nil {
+			if cmd.Resume != nil {
+				resume.Resume = cmd.Resume
+				hasResume = true
+			}
+			if len(cmd.ResumeMap) > 0 {
+				resume.ResumeMap = cloneAnyMap(cmd.ResumeMap)
+				hasResume = true
+			}
+		}
+	}
+
+	if !hasResume {
+		return nil
+	}
+	return &ia2a.GraphControlMetadata{Resume: resume}
+}
+
+func (r *A2AAgent) wrapWithGraphResumeMetadata(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+	return func(isStream bool, agentName string, invocation *agent.Invocation) (*protocol.Message, error) {
+		message, err := next(isStream, agentName, invocation)
+		if err != nil {
+			return nil, err
+		}
+		if message == nil || invocation == nil {
+			return message, nil
+		}
+		control := graphResumeMetadataFromRuntimeState(invocation.RunOptions.RuntimeState)
+		if control == nil || control.Resume == nil {
+			return message, nil
+		}
+		if message.Metadata == nil {
+			message.Metadata = make(map[string]any)
+		}
+		if existing, ok := ia2a.DecodeGraphControlMetadata(message.Metadata[ia2a.MessageMetadataGraphControlKey]); ok && existing != nil {
+			merged := &ia2a.GraphControlMetadata{
+				Interrupt: existing.Interrupt,
+				Resume:    existing.Resume,
+			}
+			merged.Resume = control.Resume
+			message.Metadata[ia2a.MessageMetadataGraphControlKey] = merged
+			return message, nil
+		}
+		message.Metadata[ia2a.MessageMetadataGraphControlKey] = control
 		return message, nil
 	}
 }

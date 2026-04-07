@@ -10,7 +10,11 @@
 // Package a2a provides shared constants and utilities for A2A protocol handling.
 package a2a
 
-import "trpc.group/trpc-go/trpc-agent-go/model"
+import (
+	"encoding/json"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
 
 const (
 	// DataPartMetadataTypeKey is the metadata key for DataPart type.
@@ -146,7 +150,67 @@ const (
 	// request messages to declare which interaction spec version it supports.
 	// The server can use this to apply version-specific conversion logic.
 	MessageMetadataInteractionSpecVersionKey = "interaction_spec_version"
+
+	// MessageMetadataGraphControlKey stores graph-specific control metadata.
+	// It is used for graph interrupt exposure and graph resume requests.
+	MessageMetadataGraphControlKey = "graph_control"
 )
+
+// GraphControlMetadata carries graph-specific control information through A2A
+// message metadata.
+type GraphControlMetadata struct {
+	Interrupt *GraphInterruptMetadata `json:"interrupt,omitempty"`
+	Resume    *GraphResumeMetadata    `json:"resume,omitempty"`
+}
+
+// GraphInterruptMetadata describes a graph interrupt exposed to A2A callers.
+type GraphInterruptMetadata struct {
+	Key          string `json:"key,omitempty"`
+	Value        any    `json:"value,omitempty"`
+	LineageID    string `json:"lineage_id,omitempty"`
+	CheckpointID string `json:"checkpoint_id,omitempty"`
+	CheckpointNS string `json:"checkpoint_ns,omitempty"`
+	ObjectType   string `json:"object_type,omitempty"`
+}
+
+// GraphResumeMetadata describes a graph resume request received through A2A.
+type GraphResumeMetadata struct {
+	LineageID    string         `json:"lineage_id,omitempty"`
+	CheckpointID string         `json:"checkpoint_id,omitempty"`
+	CheckpointNS string         `json:"checkpoint_ns,omitempty"`
+	Resume       any            `json:"resume,omitempty"`
+	ResumeMap    map[string]any `json:"resume_map,omitempty"`
+}
+
+// DecodeGraphControlMetadata converts a generic metadata payload into
+// GraphControlMetadata.
+func DecodeGraphControlMetadata(raw any) (*GraphControlMetadata, bool) {
+	if raw == nil {
+		return nil, false
+	}
+	switch v := raw.(type) {
+	case GraphControlMetadata:
+		return &v, true
+	case *GraphControlMetadata:
+		if v == nil {
+			return nil, false
+		}
+		return v, true
+	}
+
+	data, err := json.Marshal(raw)
+	if err != nil || len(data) == 0 || string(data) == "null" {
+		return nil, false
+	}
+	var meta GraphControlMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, false
+	}
+	if meta.Interrupt == nil && meta.Resume == nil {
+		return nil, false
+	}
+	return &meta, true
+}
 
 // GetADKMetadataKey returns the ADK-compatible metadata key with "adk_" prefix.
 // For example, GetADKMetadataKey("app_name") returns "adk_app_name".

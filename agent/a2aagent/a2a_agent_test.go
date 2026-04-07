@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -808,6 +809,44 @@ func TestWithTransferStateKey(t *testing.T) {
 			t.Error("other_key should not be transferred")
 		}
 	})
+
+	t.Run("graph resume metadata is injected from runtime state", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "resume child graph",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					graph.CfgKeyLineageID:    "ln-1",
+					graph.CfgKeyCheckpointID: "ck-1",
+					graph.CfgKeyCheckpointNS: "ns-1",
+					graph.StateKeyCommand: &graph.Command{
+						Resume:    "approve",
+						ResumeMap: map[string]any{"approval": true},
+					},
+				},
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+
+		control, ok := ia2a.DecodeGraphControlMetadata(msg.Metadata[ia2a.MessageMetadataGraphControlKey])
+		require.True(t, ok, "expected graph_control metadata")
+		require.NotNil(t, control.Resume)
+		require.Equal(t, "ln-1", control.Resume.LineageID)
+		require.Equal(t, "ck-1", control.Resume.CheckpointID)
+		require.Equal(t, "ns-1", control.Resume.CheckpointNS)
+		require.Equal(t, "approve", control.Resume.Resume)
+		require.Equal(t, true, control.Resume.ResumeMap["approval"])
+	})
 }
 
 func TestWithBuildMessageHook(t *testing.T) {
@@ -968,6 +1007,93 @@ func TestWithBuildMessageHook(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, msg)
 		require.Equal(t, "state_value", msg.Metadata["state_key"])
+	})
+
+	t.Run("short-circuit hook still gets graph resume metadata", func(t *testing.T) {
+		customMsg := protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]protocol.Part{protocol.NewTextPart("custom")},
+		)
+
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					return &customMsg, nil
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					graph.CfgKeyCheckpointID: "ck-2",
+				},
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+		control, ok := ia2a.DecodeGraphControlMetadata(msg.Metadata[ia2a.MessageMetadataGraphControlKey])
+		require.True(t, ok, "expected graph_control metadata")
+		require.NotNil(t, control.Resume)
+		require.Equal(t, "ck-2", control.Resume.CheckpointID)
+	})
+
+	t.Run("graph resume metadata merges with existing graph_control", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			name:                "test-agent",
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
+				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+					msg, err := next(isStream, agentName, inv)
+					if err != nil {
+						return nil, err
+					}
+					if msg.Metadata == nil {
+						msg.Metadata = make(map[string]any)
+					}
+					msg.Metadata[ia2a.MessageMetadataGraphControlKey] = &ia2a.GraphControlMetadata{
+						Interrupt: &ia2a.GraphInterruptMetadata{
+							Key:          "approval",
+							CheckpointID: "old-ck",
+						},
+					}
+					return msg, nil
+				}
+			},
+		}
+
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					graph.CfgKeyLineageID:    "ln-9",
+					graph.CfgKeyCheckpointID: "ck-9",
+				},
+			},
+		}
+
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.NotNil(t, msg)
+		control, ok := ia2a.DecodeGraphControlMetadata(msg.Metadata[ia2a.MessageMetadataGraphControlKey])
+		require.True(t, ok, "expected graph_control metadata")
+		require.NotNil(t, control.Interrupt)
+		require.Equal(t, "approval", control.Interrupt.Key)
+		require.Equal(t, "old-ck", control.Interrupt.CheckpointID)
+		require.NotNil(t, control.Resume)
+		require.Equal(t, "ln-9", control.Resume.LineageID)
+		require.Equal(t, "ck-9", control.Resume.CheckpointID)
 	})
 }
 

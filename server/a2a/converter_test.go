@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -892,6 +893,67 @@ func TestDefaultEventToA2AMessage_GraphEventFilter(t *testing.T) {
 		}
 		if streamingInternal == nil {
 			t.Fatal("expected non-nil streaming result for internal graph event when allowlist matches")
+		}
+	})
+
+	t.Run("allowlist forwards interrupt pregel events with graph control metadata", func(t *testing.T) {
+		converter := &defaultEventToA2AMessage{graphEventObjectAllowlist: []string{"graph.pregel.step"}}
+		intrEvt := graph.NewPregelInterruptEvent(
+			graph.WithPregelEventInvocationID("inv-1"),
+			graph.WithPregelEventStepNumber(3),
+			graph.WithPregelEventNodeID("approval"),
+			graph.WithPregelEventInterruptKey("approval"),
+			graph.WithPregelEventInterruptValue(map[string]any{"prompt": "approve?"}),
+			graph.WithPregelEventLineageID("ln-1"),
+			graph.WithPregelEventCheckpointID("ck-1"),
+			graph.WithPregelEventCheckpointNS("ns-1"),
+		)
+		intrEvt.Response.Choices = []model.Choice{{Message: model.Message{}}}
+
+		unaryResult, err := converter.ConvertToA2AMessage(
+			context.Background(),
+			intrEvt,
+			EventToA2AUnaryOptions{},
+		)
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage(interrupt) error: %v", err)
+		}
+		msg, ok := unaryResult.(*protocol.Message)
+		if !ok {
+			t.Fatalf("expected *protocol.Message, got %T", unaryResult)
+		}
+		control, ok := ia2a.DecodeGraphControlMetadata(msg.Metadata[ia2a.MessageMetadataGraphControlKey])
+		if !assert.True(t, ok, "expected graph_control metadata") {
+			return
+		}
+		if assert.NotNil(t, control.Interrupt) {
+			assert.Equal(t, "approval", control.Interrupt.Key)
+			assert.Equal(t, "ln-1", control.Interrupt.LineageID)
+			assert.Equal(t, "ck-1", control.Interrupt.CheckpointID)
+			assert.Equal(t, "ns-1", control.Interrupt.CheckpointNS)
+		}
+
+		streamingResult, err := converter.ConvertStreamingToA2AMessage(
+			context.Background(),
+			intrEvt,
+			EventToA2AStreamingOptions{CtxID: "ctx-1", TaskID: "task-1"},
+		)
+		if err != nil {
+			t.Fatalf("ConvertStreamingToA2AMessage(interrupt) error: %v", err)
+		}
+		taskEvent, ok := streamingResult.(*protocol.TaskArtifactUpdateEvent)
+		if !ok {
+			t.Fatalf("expected *protocol.TaskArtifactUpdateEvent, got %T", streamingResult)
+		}
+		control, ok = ia2a.DecodeGraphControlMetadata(taskEvent.Metadata[ia2a.MessageMetadataGraphControlKey])
+		if !assert.True(t, ok, "expected graph_control metadata") {
+			return
+		}
+		if assert.NotNil(t, control.Interrupt) {
+			assert.Equal(t, "approval", control.Interrupt.Key)
+			assert.Equal(t, "ln-1", control.Interrupt.LineageID)
+			assert.Equal(t, "ck-1", control.Interrupt.CheckpointID)
+			assert.Equal(t, "ns-1", control.Interrupt.CheckpointNS)
 		}
 	})
 }
