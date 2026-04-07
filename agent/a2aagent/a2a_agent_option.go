@@ -104,7 +104,13 @@ func WithStreamingRespHandler(handler StreamingRespHandler) Option {
 	}
 }
 
-// WithTransferStateKey sets the keys in session state to transfer to the A2A agent message by metadata
+// WithTransferStateKey sets the keys in session state to transfer to the A2A agent message by metadata.
+//
+// Supported patterns:
+//   - "*"         — transfer all keys from RuntimeState
+//   - "prefix*"   — transfer keys with the given prefix (e.g. "user.*" or "user*")
+//   - "*suffix"   — transfer keys with the given suffix (e.g. "*.id" or "*id")
+//   - "exact_key" — transfer only the exact key
 func WithTransferStateKey(key ...string) Option {
 	return func(a *A2AAgent) {
 		a.transferStateKey = append(a.transferStateKey, key...)

@@ -822,6 +822,31 @@ a2aAgent, _ := a2aagent.New(
 )
 ```
 
+### Graph Interrupt and Resume via A2A
+
+When the remote A2A Server runs a Graph Agent that uses `graph.Interrupt`, extra configuration is needed:
+
+- **Server-side**: Use `WithGraphEventObjectAllowlist("*")` to allow all internal graph events (including interrupts) through
+- **Client-side**: Use `WithTransferStateKey("*")` to forward all RuntimeState keys into A2A metadata, ensuring checkpoint/lineage resume info is propagated
+
+```go
+// Server
+server, _ := a2aserver.New(
+    a2aserver.WithAgent(graphAgent, true),
+    a2aserver.WithGraphEventObjectAllowlist("*"),
+    a2aserver.WithStreamingEventType(a2aserver.StreamingEventTypeMessage),
+)
+
+// Client
+subAgent, _ := a2aagent.New(
+    a2aagent.WithAgentCardURL("http://remote:8888"),
+    a2aagent.WithEnableStreaming(true),
+    a2aagent.WithTransferStateKey("*"),
+)
+```
+
+> Full example: [examples/graph/a2a_interrupt](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/a2a_interrupt)
+
 ## Protocol Interaction Specification
 
 For detailed specifications on how tool calls, code execution, reasoning content, and other events are transmitted through the A2A protocol, as well as Metadata field definitions, ADK compatibility mode, and distributed tracing, please refer to the dedicated document:

@@ -7,10 +7,12 @@ graph connected through A2A.
 
 1. A parent `GraphAgent` calls a remote `GraphAgent` using an `A2AAgent`.
 2. The remote graph interrupts at `graph.Interrupt(...)`.
-3. The parent graph run stops and stores subgraph interrupt metadata.
-4. The parent graph resumes with `ResumeMap`.
-5. Resume metadata is sent back through A2A to the remote graph.
-6. The remote graph continues from the original checkpoint and finishes.
+3. Interrupt metadata (lineage, checkpoint, namespace) travels back through A2A
+   inside the existing `state_delta` envelope (`_pregel_metadata`).
+4. The parent graph run stops and stores subgraph interrupt metadata.
+5. The parent graph resumes with `ResumeMap`.
+6. Resume metadata is sent back through A2A to the remote graph.
+7. The remote graph continues from the original checkpoint and finishes.
 
 ## Flow
 
@@ -49,6 +51,36 @@ sequenceDiagram
     end
 ```
 
+## How interrupt metadata travels
+
+Interrupt information is carried inside the existing `state_delta` metadata
+channel. No separate `graph_control` key is needed.
+
+**Downstream (interrupt, Server → Client):**
+
+```
+Graph Engine → event.StateDelta[_pregel_metadata]
+  → Server EncodeStateDeltaMetadata → A2A Message metadata["state_delta"]
+  → A2A Agent DecodeStateDeltaMetadata → event.StateDelta[_pregel_metadata]
+  → Parent graph extracts lineage/checkpoint/namespace
+```
+
+**Upstream (resume, Client → Server):**
+
+```
+Parent graph RuntimeState[lineage_id, checkpoint_id, ...]
+  → A2A message.Metadata (flattened keys)
+  → Server graphResumeStateFromMetadata → graph.ResumeCommand
+  → Graph resumes from checkpoint
+```
+
+The server-side `GraphResumeStateFromMetadata` (in `internal/a2a`) supports
+three fallback paths:
+
+1. `state_delta` encoded resume fields (preferred)
+2. `_pregel_metadata` inside `state_delta` (for interrupt events echoed back)
+3. Flattened metadata keys (backward compatibility)
+
 ## Flow Logic
 
 1. Parent graph starts with user input and runs `parent_intake` to build a case brief.
@@ -58,7 +90,8 @@ sequenceDiagram
 4. Remote graph captures and stores case brief at `remote_capture_case_brief`.
 5. Remote graph produces risk signals and verdict, then pauses at
    `remote_ask_approval` via `graph.Interrupt(...)`.
-6. Interrupt metadata is propagated back to parent, and parent checkpoint is marked interrupted.
+6. Interrupt metadata is propagated back to parent via `state_delta._pregel_metadata`,
+   and parent checkpoint is marked interrupted.
 7. Parent resumes with:
    - `checkpoint_id`: interrupted parent checkpoint to continue from
    - `StateKeyCommand.ResumeMap["remote_ask_approval"]=true`: answer for remote interrupt key
@@ -73,6 +106,7 @@ sequenceDiagram
 | Parent runtime state | `lineage_id` (`graph.CfgKeyLineageID`) | Execution lineage identifier | Used by checkpoint manager to locate run history |
 | Parent runtime state | `checkpoint_ns` (`graph.CfgKeyCheckpointNS`) | Parent checkpoint namespace | Combined with lineage to isolate this run |
 | Remote interrupt | `remote_ask_approval` (interrupt key) | Manual approval prompt key (use node ID as key) | Stored as pending interrupt value until resume |
+| A2A transport | `state_delta._pregel_metadata` | Interrupt metadata (lineage, checkpoint, namespace, interrupt key/value) | Carried in A2A message metadata envelope |
 | Parent checkpoint | `graph.StateKeySubgraphInterrupt` | Subgraph interrupt metadata | Persisted in parent interrupted checkpoint |
 | Parent resume state | `checkpoint_id` (`graph.CfgKeyCheckpointID`) | Resume from this parent checkpoint | Tells graph where to continue |
 | Parent resume state | `graph.StateKeyCommand.ResumeMap["remote_ask_approval"]` | Resume answer for remote interrupt | Propagated to remote interrupt continuation |
@@ -84,6 +118,22 @@ Field mapping in parent output mapper:
 
 - `remote_approved` -> `approved_from_remote`
 - `remote_summary` -> `remote_summary`
+
+## A2A Server Configuration
+
+The server must allowlist interrupt-related graph event types:
+
+```go
+a2aserver.WithGraphEventObjectAllowlist(
+    graph.ObjectTypeGraphExecution,
+    graph.ObjectTypeGraphNodeCustom,
+    graph.ObjectTypeGraphPregelStep,
+    graph.ObjectTypeGraphCheckpointInterrupt,
+)
+```
+
+Without this, interrupt events are filtered out and the client cannot detect
+that the graph has paused.
 
 ## Demo simplification
 

@@ -815,6 +815,31 @@ a2aAgent, _ := a2aagent.New(
 ```
 
 
+### 通过 A2A 传递 Graph 中断与恢复
+
+当远程 A2A Server 运行 Graph Agent 并使用了 `graph.Interrupt` 时，需要额外配置：
+
+- **Server 端**：使用 `WithGraphEventObjectAllowlist("*")` 放行所有 graph 内部事件（含中断）
+- **Client 端**：使用 `WithTransferStateKey("*")` 将 RuntimeState 传递到 A2A metadata，确保 checkpoint/lineage 等恢复信息能传回
+
+```go
+// Server
+server, _ := a2aserver.New(
+    a2aserver.WithAgent(graphAgent, true),
+    a2aserver.WithGraphEventObjectAllowlist("*"),
+    a2aserver.WithStreamingEventType(a2aserver.StreamingEventTypeMessage),
+)
+
+// Client
+subAgent, _ := a2aagent.New(
+    a2aagent.WithAgentCardURL("http://remote:8888"),
+    a2aagent.WithEnableStreaming(true),
+    a2aagent.WithTransferStateKey("*"),
+)
+```
+
+> 完整示例：[examples/graph/a2a_interrupt](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/a2a_interrupt)
+
 ## 协议交互规范
 
 关于 A2A 协议中工具调用、代码执行、思考内容等事件的传递规范，以及 Metadata 字段定义、ADK 兼容模式、分布式追踪等详细说明，请参考独立文档：

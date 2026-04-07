@@ -278,92 +278,6 @@ type messageProcessor struct {
 	runOptions           []agent.RunOption
 }
 
-func cloneAnyMap(src map[string]any) map[string]any {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make(map[string]any, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
-	return dst
-}
-
-func graphResumeStateFromMetadata(metadata map[string]any) map[string]any {
-	if len(metadata) == 0 {
-		return nil
-	}
-
-	if control, ok := ia2a.DecodeGraphControlMetadata(
-		metadata[ia2a.MessageMetadataGraphControlKey],
-	); ok && control != nil && control.Resume != nil {
-		state := make(map[string]any, 4)
-		if control.Resume.LineageID != "" {
-			state[graph.CfgKeyLineageID] = control.Resume.LineageID
-		}
-		if control.Resume.CheckpointID != "" {
-			state[graph.CfgKeyCheckpointID] = control.Resume.CheckpointID
-		}
-		if control.Resume.CheckpointNS != "" {
-			state[graph.CfgKeyCheckpointNS] = control.Resume.CheckpointNS
-		}
-
-		hasResume := false
-		cmd := graph.NewResumeCommand()
-		if control.Resume.Resume != nil {
-			cmd.WithResume(control.Resume.Resume)
-			hasResume = true
-		}
-		if len(control.Resume.ResumeMap) > 0 {
-			cmd.WithResumeMap(cloneAnyMap(control.Resume.ResumeMap))
-			hasResume = true
-		}
-		if hasResume {
-			state[graph.StateKeyCommand] = cmd
-		}
-		if len(state) > 0 {
-			return state
-		}
-	}
-
-	// Backward compatibility for flattened fields.
-	state := make(map[string]any, 4)
-	if lineageID, ok := metadata[graph.CfgKeyLineageID]; ok {
-		state[graph.CfgKeyLineageID] = lineageID
-	}
-	checkpointID, hasCheckpoint := metadata[graph.CfgKeyCheckpointID]
-	if hasCheckpoint {
-		state[graph.CfgKeyCheckpointID] = checkpointID
-	}
-	if checkpointNS, ok := metadata[graph.CfgKeyCheckpointNS]; ok {
-		state[graph.CfgKeyCheckpointNS] = checkpointNS
-	}
-	if !hasCheckpoint {
-		if len(state) == 0 {
-			return nil
-		}
-		return state
-	}
-
-	cmd := graph.NewResumeCommand()
-	hasResume := false
-	if resume, ok := metadata["resume"]; ok {
-		cmd.WithResume(resume)
-		hasResume = true
-	}
-	if resumeMap, ok := metadata[graph.CfgKeyResumeMap].(map[string]any); ok && len(resumeMap) > 0 {
-		cmd.WithResumeMap(cloneAnyMap(resumeMap))
-		hasResume = true
-	}
-	if hasResume {
-		state[graph.StateKeyCommand] = cmd
-	}
-	if len(state) == 0 {
-		return nil
-	}
-	return state
-}
-
 func isFinalStreamingEvent(evt *event.Event) bool {
 	if evt == nil || evt.Response == nil {
 		return false
@@ -650,6 +564,13 @@ func (m *messageProcessor) ProcessMessage(
 			return
 		}
 		a2aState := buildRuntimeState(message.Metadata)
+		// Overlay structured graph resume state (e.g. ResumeCommand) so that
+		// it takes precedence over the raw flattened metadata keys.
+		if resumeState := ia2a.GraphResumeStateFromMetadata(message.Metadata); len(resumeState) > 0 {
+			for k, v := range resumeState {
+				a2aState[k] = v
+			}
+		}
 		if opts.RuntimeState == nil {
 			opts.RuntimeState = a2aState
 			return
@@ -663,18 +584,6 @@ func (m *messageProcessor) ProcessMessage(
 			merged[k] = v
 		}
 		opts.RuntimeState = merged
-	})
-	runnerOpts = append(runnerOpts, func(opts *agent.RunOptions) {
-		state := graphResumeStateFromMetadata(message.Metadata)
-		if len(state) == 0 {
-			return
-		}
-		if opts.RuntimeState == nil {
-			opts.RuntimeState = make(map[string]any, len(state))
-		}
-		for key, value := range state {
-			opts.RuntimeState[key] = value
-		}
 	})
 
 	if options.Streaming {

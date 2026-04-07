@@ -34,7 +34,6 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -809,43 +808,171 @@ func TestWithTransferStateKey(t *testing.T) {
 			t.Error("other_key should not be transferred")
 		}
 	})
+}
 
-	t.Run("graph resume metadata is injected from runtime state", func(t *testing.T) {
-		a2aAgent := &A2AAgent{
-			name:                "test-agent",
-			a2aMessageConverter: &defaultEventA2AConverter{},
+func TestMatchStateKeys(t *testing.T) {
+	src := map[string]any{
+		"user.name":    "alice",
+		"user.id":      42,
+		"order.id":     100,
+		"order.status": "pending",
+		"trace_id":     "abc",
+		"simple":       "value",
+	}
+
+	t.Run("wildcard star transfers all keys", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("*", src, dst)
+		require.Len(t, dst, len(src))
+		for k, v := range src {
+			require.Equal(t, v, dst[k])
 		}
+	})
 
+	t.Run("prefix.* transfers matching keys", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("user.*", src, dst)
+		require.Len(t, dst, 2)
+		require.Equal(t, "alice", dst["user.name"])
+		require.Equal(t, 42, dst["user.id"])
+	})
+
+	t.Run("*.suffix transfers matching keys", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("*.id", src, dst)
+		require.Len(t, dst, 2)
+		require.Equal(t, 42, dst["user.id"])
+		require.Equal(t, 100, dst["order.id"])
+	})
+
+	t.Run("exact key transfers single key", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("trace_id", src, dst)
+		require.Len(t, dst, 1)
+		require.Equal(t, "abc", dst["trace_id"])
+	})
+
+	t.Run("no match produces empty dst", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("nonexistent", src, dst)
+		require.Empty(t, dst)
+	})
+
+	t.Run("prefix.* no match", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("foo.*", src, dst)
+		require.Empty(t, dst)
+	})
+
+	t.Run("*.suffix no match", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("*.bar", src, dst)
+		require.Empty(t, dst)
+	})
+}
+
+func TestTransferStateKeyWildcardInBuild(t *testing.T) {
+	t.Run("wildcard * transfers all state keys", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"*"},
+		}
 		invocation := &agent.Invocation{
 			Message: model.Message{
 				Role:    model.RoleUser,
-				Content: "resume child graph",
+				Content: "hello",
 			},
 			RunOptions: agent.RunOptions{
 				RuntimeState: map[string]any{
-					graph.CfgKeyLineageID:    "ln-1",
-					graph.CfgKeyCheckpointID: "ck-1",
-					graph.CfgKeyCheckpointNS: "ns-1",
-					graph.StateKeyCommand: &graph.Command{
-						Resume:    "approve",
-						ResumeMap: map[string]any{"approval": true},
-					},
+					"key1": "v1",
+					"key2": "v2",
 				},
 			},
 		}
-
 		msg, err := a2aAgent.buildA2AMessage(invocation, false)
 		require.NoError(t, err)
-		require.NotNil(t, msg)
+		require.Equal(t, "v1", msg.Metadata["key1"])
+		require.Equal(t, "v2", msg.Metadata["key2"])
+	})
 
-		control, ok := ia2a.DecodeGraphControlMetadata(msg.Metadata[ia2a.MessageMetadataGraphControlKey])
-		require.True(t, ok, "expected graph_control metadata")
-		require.NotNil(t, control.Resume)
-		require.Equal(t, "ln-1", control.Resume.LineageID)
-		require.Equal(t, "ck-1", control.Resume.CheckpointID)
-		require.Equal(t, "ns-1", control.Resume.CheckpointNS)
-		require.Equal(t, "approve", control.Resume.Resume)
-		require.Equal(t, true, control.Resume.ResumeMap["approval"])
+	t.Run("prefix.* pattern in buildA2AMessage", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"user.*"},
+		}
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"user.name": "alice",
+					"user.age":  30,
+					"order.id":  100,
+				},
+			},
+		}
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.Equal(t, "alice", msg.Metadata["user.name"])
+		require.Equal(t, 30, msg.Metadata["user.age"])
+		_, exists := msg.Metadata["order.id"]
+		require.False(t, exists)
+	})
+
+	t.Run("*.suffix pattern in buildA2AMessage", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"*.id"},
+		}
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"user.id":  42,
+					"order.id": 100,
+					"user.name": "alice",
+				},
+			},
+		}
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.Equal(t, 42, msg.Metadata["user.id"])
+		require.Equal(t, 100, msg.Metadata["order.id"])
+		_, exists := msg.Metadata["user.name"]
+		require.False(t, exists)
+	})
+
+	t.Run("mixed patterns", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"user.*", "trace_id"},
+		}
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"user.name": "alice",
+					"user.id":   42,
+					"trace_id":  "t-123",
+					"order.id":  100,
+				},
+			},
+		}
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.Equal(t, "alice", msg.Metadata["user.name"])
+		require.Equal(t, 42, msg.Metadata["user.id"])
+		require.Equal(t, "t-123", msg.Metadata["trace_id"])
+		_, exists := msg.Metadata["order.id"]
+		require.False(t, exists)
 	})
 }
 
@@ -1007,93 +1134,6 @@ func TestWithBuildMessageHook(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, msg)
 		require.Equal(t, "state_value", msg.Metadata["state_key"])
-	})
-
-	t.Run("short-circuit hook still gets graph resume metadata", func(t *testing.T) {
-		customMsg := protocol.NewMessage(
-			protocol.MessageRoleUser,
-			[]protocol.Part{protocol.NewTextPart("custom")},
-		)
-
-		a2aAgent := &A2AAgent{
-			name:                "test-agent",
-			a2aMessageConverter: &defaultEventA2AConverter{},
-			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
-				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
-					return &customMsg, nil
-				}
-			},
-		}
-
-		invocation := &agent.Invocation{
-			Message: model.Message{
-				Role:    model.RoleUser,
-				Content: "hello",
-			},
-			RunOptions: agent.RunOptions{
-				RuntimeState: map[string]any{
-					graph.CfgKeyCheckpointID: "ck-2",
-				},
-			},
-		}
-
-		msg, err := a2aAgent.buildA2AMessage(invocation, false)
-		require.NoError(t, err)
-		require.NotNil(t, msg)
-		control, ok := ia2a.DecodeGraphControlMetadata(msg.Metadata[ia2a.MessageMetadataGraphControlKey])
-		require.True(t, ok, "expected graph_control metadata")
-		require.NotNil(t, control.Resume)
-		require.Equal(t, "ck-2", control.Resume.CheckpointID)
-	})
-
-	t.Run("graph resume metadata merges with existing graph_control", func(t *testing.T) {
-		a2aAgent := &A2AAgent{
-			name:                "test-agent",
-			a2aMessageConverter: &defaultEventA2AConverter{},
-			buildMessageHook: func(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
-				return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
-					msg, err := next(isStream, agentName, inv)
-					if err != nil {
-						return nil, err
-					}
-					if msg.Metadata == nil {
-						msg.Metadata = make(map[string]any)
-					}
-					msg.Metadata[ia2a.MessageMetadataGraphControlKey] = &ia2a.GraphControlMetadata{
-						Interrupt: &ia2a.GraphInterruptMetadata{
-							Key:          "approval",
-							CheckpointID: "old-ck",
-						},
-					}
-					return msg, nil
-				}
-			},
-		}
-
-		invocation := &agent.Invocation{
-			Message: model.Message{
-				Role:    model.RoleUser,
-				Content: "hello",
-			},
-			RunOptions: agent.RunOptions{
-				RuntimeState: map[string]any{
-					graph.CfgKeyLineageID:    "ln-9",
-					graph.CfgKeyCheckpointID: "ck-9",
-				},
-			},
-		}
-
-		msg, err := a2aAgent.buildA2AMessage(invocation, false)
-		require.NoError(t, err)
-		require.NotNil(t, msg)
-		control, ok := ia2a.DecodeGraphControlMetadata(msg.Metadata[ia2a.MessageMetadataGraphControlKey])
-		require.True(t, ok, "expected graph_control metadata")
-		require.NotNil(t, control.Interrupt)
-		require.Equal(t, "approval", control.Interrupt.Key)
-		require.Equal(t, "old-ck", control.Interrupt.CheckpointID)
-		require.NotNil(t, control.Resume)
-		require.Equal(t, "ln-9", control.Resume.LineageID)
-		require.Equal(t, "ck-9", control.Resume.CheckpointID)
 	})
 }
 

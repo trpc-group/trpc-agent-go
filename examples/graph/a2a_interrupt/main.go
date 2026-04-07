@@ -113,7 +113,7 @@ func run(ctx context.Context) error {
 			graph.ObjectTypeGraphPregelStep,
 			graph.ObjectTypeGraphCheckpointInterrupt,
 		),
-		// Message streaming keeps graph metadata (state_delta / graph_control)
+		// Message streaming keeps graph metadata (state_delta)
 		// on a direct Message event path, which is more robust for interrupt propagation.
 		a2aserver.WithStreamingEventType(a2aserver.StreamingEventTypeMessage),
 	)
@@ -140,6 +140,7 @@ func run(ctx context.Context) error {
 		a2aagent.WithAgentCardURL(fmt.Sprintf("http://%s", resolvedHost)),
 		a2aagent.WithName(remoteAgentName),
 		a2aagent.WithEnableStreaming(*streaming),
+		a2aagent.WithTransferStateKey("*"),
 	)
 	if err != nil {
 		return fmt.Errorf("create a2a sub-agent: %w", err)
@@ -250,6 +251,9 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("phase 2 failed: %w", err)
 	}
 	completion := phase2Result.completion
+	if completion == nil {
+		return fmt.Errorf("phase 2: no graph completion event received")
+	}
 
 	finalMessage, err := decodeJSONString(
 		completion.StateDelta,
@@ -591,13 +595,7 @@ func runGraphAgent(
 }
 
 func isGraphCompletionEvent(ev *event.Event) bool {
-	if ev == nil || !ev.Done {
-		return false
-	}
-	if ev.Object == graph.ObjectTypeGraphExecution {
-		return true
-	}
-	return ev.Response != nil && ev.Response.Object == graph.ObjectTypeGraphExecution
+	return graph.IsGraphCompletionEvent(ev) || graph.IsVisibleGraphCompletionEvent(ev)
 }
 
 func isPregelInterruptEvent(ev *event.Event) bool {

@@ -28,7 +28,6 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
@@ -279,7 +278,6 @@ func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) 
 	if len(r.transferStateKey) > 0 {
 		convertFn = r.wrapWithTransferState(convertFn)
 	}
-	convertFn = r.wrapWithGraphResumeMetadata(convertFn)
 
 	message, err := convertFn(isStream, r.name, invocation)
 	if err != nil {
@@ -293,6 +291,12 @@ func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) 
 
 // wrapWithTransferState returns a middleware that injects transferStateKey values
 // from RuntimeState into the message metadata after calling next.
+//
+// Supported patterns:
+//   - "*"        — transfer all keys
+//   - "prefix*"  — transfer keys with the given prefix (e.g. "user.*" or "user*")
+//   - "*suffix"  — transfer keys with the given suffix (e.g. "*.id" or "*id")
+//   - "exact"    — transfer only the exact key
 func (r *A2AAgent) wrapWithTransferState(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
 	return func(isStream bool, agentName string, invocation *agent.Invocation) (*protocol.Message, error) {
 		message, err := next(isStream, agentName, invocation)
@@ -308,105 +312,38 @@ func (r *A2AAgent) wrapWithTransferState(next ConvertToA2AMessageFunc) ConvertTo
 		if message.Metadata == nil {
 			message.Metadata = make(map[string]any)
 		}
-		for _, key := range r.transferStateKey {
-			if value, ok := invocation.RunOptions.RuntimeState[key]; ok {
-				message.Metadata[key] = value
-			}
+		for _, pattern := range r.transferStateKey {
+			matchStateKeys(pattern, invocation.RunOptions.RuntimeState, message.Metadata)
 		}
 		return message, nil
 	}
 }
 
-func cloneAnyMap(src map[string]any) map[string]any {
-	if len(src) == 0 {
-		return nil
-	}
-	dst := make(map[string]any, len(src))
-	for key, value := range src {
-		dst[key] = value
-	}
-	return dst
-}
-
-func graphResumeMetadataFromRuntimeState(state map[string]any) *ia2a.GraphControlMetadata {
-	if len(state) == 0 {
-		return nil
-	}
-
-	resume := &ia2a.GraphResumeMetadata{}
-	hasResume := false
-
-	if lineageID, ok := state[graph.CfgKeyLineageID].(string); ok && lineageID != "" {
-		resume.LineageID = lineageID
-		hasResume = true
-	}
-	if checkpointID, ok := state[graph.CfgKeyCheckpointID].(string); ok && checkpointID != "" {
-		resume.CheckpointID = checkpointID
-		hasResume = true
-	}
-	if checkpointNS, ok := state[graph.CfgKeyCheckpointNS].(string); ok && checkpointNS != "" {
-		resume.CheckpointNS = checkpointNS
-		hasResume = true
-	}
-
-	switch cmd := state[graph.StateKeyCommand].(type) {
-	case *graph.Command:
-		if cmd != nil {
-			if cmd.Resume != nil {
-				resume.Resume = cmd.Resume
-				hasResume = true
-			}
-			if len(cmd.ResumeMap) > 0 {
-				resume.ResumeMap = cloneAnyMap(cmd.ResumeMap)
-				hasResume = true
+// matchStateKeys copies keys from src to dst that match the given pattern.
+func matchStateKeys(pattern string, src map[string]any, dst map[string]any) {
+	switch {
+	case pattern == "*":
+		for k, v := range src {
+			dst[k] = v
+		}
+	case strings.HasPrefix(pattern, "*"):
+		suffix := pattern[1:]
+		for k, v := range src {
+			if strings.HasSuffix(k, suffix) {
+				dst[k] = v
 			}
 		}
-	case *graph.ResumeCommand:
-		if cmd != nil {
-			if cmd.Resume != nil {
-				resume.Resume = cmd.Resume
-				hasResume = true
-			}
-			if len(cmd.ResumeMap) > 0 {
-				resume.ResumeMap = cloneAnyMap(cmd.ResumeMap)
-				hasResume = true
+	case strings.HasSuffix(pattern, "*"):
+		prefix := pattern[:len(pattern)-1]
+		for k, v := range src {
+			if strings.HasPrefix(k, prefix) {
+				dst[k] = v
 			}
 		}
-	}
-
-	if !hasResume {
-		return nil
-	}
-	return &ia2a.GraphControlMetadata{Resume: resume}
-}
-
-func (r *A2AAgent) wrapWithGraphResumeMetadata(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
-	return func(isStream bool, agentName string, invocation *agent.Invocation) (*protocol.Message, error) {
-		message, err := next(isStream, agentName, invocation)
-		if err != nil {
-			return nil, err
+	default:
+		if v, ok := src[pattern]; ok {
+			dst[pattern] = v
 		}
-		if message == nil || invocation == nil {
-			return message, nil
-		}
-		control := graphResumeMetadataFromRuntimeState(invocation.RunOptions.RuntimeState)
-		if control == nil || control.Resume == nil {
-			return message, nil
-		}
-		if message.Metadata == nil {
-			message.Metadata = make(map[string]any)
-		}
-		if existing, ok := ia2a.DecodeGraphControlMetadata(message.Metadata[ia2a.MessageMetadataGraphControlKey]); ok && existing != nil {
-			merged := &ia2a.GraphControlMetadata{
-				Interrupt: existing.Interrupt,
-				Resume:    existing.Resume,
-			}
-			merged.Resume = control.Resume
-			message.Metadata[ia2a.MessageMetadataGraphControlKey] = merged
-			return message, nil
-		}
-		message.Metadata[ia2a.MessageMetadataGraphControlKey] = control
-		return message, nil
 	}
 }
 

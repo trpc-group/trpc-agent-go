@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -896,7 +897,7 @@ func TestDefaultEventToA2AMessage_GraphEventFilter(t *testing.T) {
 		}
 	})
 
-	t.Run("allowlist forwards interrupt pregel events with graph control metadata", func(t *testing.T) {
+	t.Run("allowlist forwards interrupt pregel events with interrupt info in state_delta", func(t *testing.T) {
 		converter := &defaultEventToA2AMessage{graphEventObjectAllowlist: []string{"graph.pregel.step"}}
 		intrEvt := graph.NewPregelInterruptEvent(
 			graph.WithPregelEventInvocationID("inv-1"),
@@ -922,16 +923,22 @@ func TestDefaultEventToA2AMessage_GraphEventFilter(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected *protocol.Message, got %T", unaryResult)
 		}
-		control, ok := ia2a.DecodeGraphControlMetadata(msg.Metadata[ia2a.MessageMetadataGraphControlKey])
-		if !assert.True(t, ok, "expected graph_control metadata") {
+		// Interrupt info should be in state_delta._pregel_metadata
+		sdRaw, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]
+		if !assert.True(t, ok, "expected state_delta metadata") {
 			return
 		}
-		if assert.NotNil(t, control.Interrupt) {
-			assert.Equal(t, "approval", control.Interrupt.Key)
-			assert.Equal(t, "ln-1", control.Interrupt.LineageID)
-			assert.Equal(t, "ck-1", control.Interrupt.CheckpointID)
-			assert.Equal(t, "ns-1", control.Interrupt.CheckpointNS)
+		sd := ia2a.DecodeStateDeltaMetadata(sdRaw)
+		pregelRaw, ok := sd[graph.MetadataKeyPregel]
+		if !assert.True(t, ok, "expected _pregel_metadata in state_delta") {
+			return
 		}
+		var pregel graph.PregelStepMetadata
+		require.NoError(t, json.Unmarshal(pregelRaw, &pregel))
+		assert.Equal(t, "approval", pregel.InterruptKey)
+		assert.Equal(t, "ln-1", pregel.LineageID)
+		assert.Equal(t, "ck-1", pregel.CheckpointID)
+		assert.Equal(t, "ns-1", pregel.CheckpointNS)
 
 		streamingResult, err := converter.ConvertStreamingToA2AMessage(
 			context.Background(),
@@ -945,16 +952,20 @@ func TestDefaultEventToA2AMessage_GraphEventFilter(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected *protocol.TaskArtifactUpdateEvent, got %T", streamingResult)
 		}
-		control, ok = ia2a.DecodeGraphControlMetadata(taskEvent.Metadata[ia2a.MessageMetadataGraphControlKey])
-		if !assert.True(t, ok, "expected graph_control metadata") {
+		sdRaw, ok = taskEvent.Metadata[ia2a.MessageMetadataStateDeltaKey]
+		if !assert.True(t, ok, "expected state_delta metadata in streaming") {
 			return
 		}
-		if assert.NotNil(t, control.Interrupt) {
-			assert.Equal(t, "approval", control.Interrupt.Key)
-			assert.Equal(t, "ln-1", control.Interrupt.LineageID)
-			assert.Equal(t, "ck-1", control.Interrupt.CheckpointID)
-			assert.Equal(t, "ns-1", control.Interrupt.CheckpointNS)
+		sd = ia2a.DecodeStateDeltaMetadata(sdRaw)
+		pregelRaw, ok = sd[graph.MetadataKeyPregel]
+		if !assert.True(t, ok, "expected _pregel_metadata in streaming state_delta") {
+			return
 		}
+		require.NoError(t, json.Unmarshal(pregelRaw, &pregel))
+		assert.Equal(t, "approval", pregel.InterruptKey)
+		assert.Equal(t, "ln-1", pregel.LineageID)
+		assert.Equal(t, "ck-1", pregel.CheckpointID)
+		assert.Equal(t, "ns-1", pregel.CheckpointNS)
 	})
 }
 
