@@ -3335,6 +3335,88 @@ func TestDefaultEventToA2AMessage_ReasoningContent(t *testing.T) {
 	}
 }
 
+func TestMatchesAllowedGraphObjectType(t *testing.T) {
+	tests := []struct {
+		name     string
+		objType  string
+		allowed  []string
+		expected bool
+	}{
+		{
+			name:     "exact match",
+			objType:  "graph.execution",
+			allowed:  []string{"graph.execution"},
+			expected: true,
+		},
+		{
+			name:     "wildcard all",
+			objType:  "graph.node.start",
+			allowed:  []string{"*"},
+			expected: true,
+		},
+		{
+			name:     "prefix wildcard with dot",
+			objType:  "graph.node.start",
+			allowed:  []string{"graph.*"},
+			expected: true,
+		},
+		{
+			name:     "prefix wildcard without dot",
+			objType:  "graph.node.start",
+			allowed:  []string{"graph*"},
+			expected: true,
+		},
+		{
+			name:     "prefix wildcard no match",
+			objType:  "chat.completion",
+			allowed:  []string{"graph.*"},
+			expected: false,
+		},
+		{
+			name:     "suffix wildcard with dot",
+			objType:  "graph.node.start",
+			allowed:  []string{"*.start"},
+			expected: true,
+		},
+		{
+			name:     "suffix wildcard without dot",
+			objType:  "graph.node.start",
+			allowed:  []string{"*start"},
+			expected: true,
+		},
+		{
+			name:     "suffix wildcard no match",
+			objType:  "graph.node.start",
+			allowed:  []string{"*.end"},
+			expected: false,
+		},
+		{
+			name:     "no match at all",
+			objType:  "custom.type",
+			allowed:  []string{"graph.execution", "graph.node.*"},
+			expected: false,
+		},
+		{
+			name:     "empty allowed list",
+			objType:  "graph.node.start",
+			allowed:  nil,
+			expected: false,
+		},
+		{
+			name:     "multiple patterns with suffix match",
+			objType:  "graph.pregel.step",
+			allowed:  []string{"graph.execution", "*.step"},
+			expected: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := matchesAllowedGraphObjectType(tt.objType, tt.allowed)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestDefaultEventToA2AMessage_StreamingReasoningContent(t *testing.T) {
 	tests := []struct {
 		name            string
