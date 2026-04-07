@@ -655,7 +655,7 @@ func TestDifyAgent_SendFinalStreamingEvent(t *testing.T) {
 	}
 
 	eventChan := make(chan *event.Event, 1)
-	difyAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "aggregated content")
+	difyAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "aggregated content", "msg-123")
 	close(eventChan)
 
 	evt := <-eventChan
@@ -671,12 +671,136 @@ func TestDifyAgent_SendFinalStreamingEvent(t *testing.T) {
 	if evt.Response.IsPartial {
 		t.Error("expected IsPartial to be false")
 	}
+	if evt.Response.ID != "msg-123" {
+		t.Errorf("expected Response.ID 'msg-123', got: %s", evt.Response.ID)
+	}
+	if evt.Response.Object != model.ObjectTypeChatCompletion {
+		t.Errorf("expected Object type ChatCompletion, got: %s", evt.Response.Object)
+	}
 	if len(evt.Response.Choices) == 0 {
 		t.Fatal("expected choices")
 	}
 	if evt.Response.Choices[0].Message.Content != "aggregated content" {
 		t.Errorf("expected content 'aggregated content', got: %s", evt.Response.Choices[0].Message.Content)
 	}
+}
+
+func TestDifyAgent_SendFinalStreamingEvent_EmptyMessageID(t *testing.T) {
+	difyAgent := &DifyAgent{
+		name: "test-agent",
+	}
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-inv",
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	difyAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "content", "")
+	close(eventChan)
+
+	evt := <-eventChan
+	if evt == nil {
+		t.Fatal("expected event")
+	}
+	if evt.Response.ID != "" {
+		t.Errorf("expected empty Response.ID, got: %s", evt.Response.ID)
+	}
+	if evt.Response.Object != model.ObjectTypeChatCompletion {
+		t.Errorf("expected Object type ChatCompletion, got: %s", evt.Response.Object)
+	}
+}
+
+func TestDifyAgent_SendFinalStreamingEvent_WithMessageID(t *testing.T) {
+	difyAgent := &DifyAgent{
+		name: "test-agent",
+	}
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-inv",
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	difyAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "final content", "conversation-id-abc")
+	close(eventChan)
+
+	evt := <-eventChan
+	if evt == nil {
+		t.Fatal("expected event")
+	}
+	if evt.Response == nil {
+		t.Fatal("expected response")
+	}
+	if evt.Response.ID != "conversation-id-abc" {
+		t.Errorf("expected Response.ID 'conversation-id-abc', got: %s", evt.Response.ID)
+	}
+	if evt.Response.Object != model.ObjectTypeChatCompletion {
+		t.Errorf("expected Object type ChatCompletion, got: %s", evt.Response.Object)
+	}
+	if !evt.Response.Done {
+		t.Error("expected Done to be true")
+	}
+	if evt.Response.IsPartial {
+		t.Error("expected IsPartial to be false")
+	}
+	if len(evt.Response.Choices) == 0 {
+		t.Fatal("expected choices")
+	}
+	if evt.Response.Choices[0].Message.Content != "final content" {
+		t.Errorf("expected content 'final content', got: %s", evt.Response.Choices[0].Message.Content)
+	}
+}
+
+// TestDifyAgent_ProcessStreamEvent_TracksMessageID 验证流式事件中 Response.ID 被正确设置
+func TestDifyAgent_ProcessStreamEvent_TracksMessageID(t *testing.T) {
+	difyAgent := &DifyAgent{
+		name:           "test-agent",
+		eventConverter: &defaultDifyEventConverter{},
+	}
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-inv",
+	}
+
+	t.Run("event carries Response.ID from MessageID", func(t *testing.T) {
+		streamEvent := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:         "chunk",
+				MessageID:      "msg-id-001",
+				ConversationID: "conv-id-001",
+			},
+		}
+
+		evt, _, err := difyAgent.processStreamEvent(context.Background(), streamEvent, invocation)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+		if evt == nil {
+			t.Fatal("expected event")
+		}
+		if evt.Response == nil {
+			t.Fatal("expected response")
+		}
+		if evt.Response.ID != "msg-id-001" {
+			t.Errorf("expected Response.ID 'msg-id-001', got: %s", evt.Response.ID)
+		}
+	})
+
+	t.Run("empty answer returns nil event without Response.ID", func(t *testing.T) {
+		streamEvent := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:    "",
+				MessageID: "msg-id-002",
+			},
+		}
+
+		evt, _, err := difyAgent.processStreamEvent(context.Background(), streamEvent, invocation)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+		if evt != nil {
+			t.Error("expected nil event for empty answer")
+		}
+	})
 }
 
 // Test new extracted functions for non-streaming
