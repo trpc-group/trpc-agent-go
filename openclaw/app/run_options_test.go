@@ -1179,3 +1179,18 @@ func TestFinalizeRunOptions_ApproxRunesPerToken(t *testing.T) {
 		require.Error(t, finalizeRunOptions(opts))
 	})
 }
+
+func TestFinalizeRunOptions_SkillsWatchDebounce(t *testing.T) {
+	t.Parallel()
+
+	opts := &runOptions{
+		SkillsWatchDebounce: -time.Millisecond,
+	}
+
+	err := finalizeRunOptions(opts)
+	require.EqualError(
+		t,
+		err,
+		"invalid skills watch debounce: -1ms",
+	)
+}
