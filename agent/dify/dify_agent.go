@@ -237,10 +237,16 @@ func (r *DifyAgent) buildWorkflowStreamingRequest(
 	req.ResponseMode = "streaming"
 
 	var aggregatedContentBuilder strings.Builder
+	var workflowRunID string
 
 	err = r.difyClient.API().RunStreamWorkflow(ctx, req, func(resp dify.StreamingResponse) {
 		if err := agent.CheckContextCancelled(ctx); err != nil {
 			return
+		}
+
+		// Track workflow_run_id from streaming response for tracing correlation with Dify logs
+		if resp.WorkflowRunID != "" {
+			workflowRunID = resp.WorkflowRunID
 		}
 
 		// Convert workflow streaming response to event
@@ -271,6 +277,7 @@ func (r *DifyAgent) buildWorkflowStreamingRequest(
 				invocation.InvocationID,
 				r.name,
 				event.WithResponse(&model.Response{
+					ID:        workflowRunID,
 					Object:    model.ObjectTypeChatCompletionChunk,
 					Choices:   []model.Choice{{Delta: message}},
 					Timestamp: time.Now(),
@@ -288,8 +295,12 @@ func (r *DifyAgent) buildWorkflowStreamingRequest(
 		return fmt.Errorf("workflow streaming request failed to %s: %v", r.baseUrl, err)
 	}
 
-	// Send final aggregated event
-	r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String(), invocation.InvocationID)
+	// Send final aggregated event with Dify-assigned workflow_run_id for proper tracing
+	finalID := workflowRunID
+	if finalID == "" {
+		finalID = invocation.InvocationID
+	}
+	r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String(), finalID)
 	return nil
 }
 
