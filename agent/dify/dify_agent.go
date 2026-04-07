@@ -365,7 +365,7 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 				continue
 			}
 
-			// 记录流式事件的 MessageID，用于最终事件保持一致
+			// Record the streaming event's MessageID to keep the final event consistent
 			if evt.Response != nil && evt.Response.ID != "" {
 				lastMessageID = evt.Response.ID
 			}
@@ -508,6 +508,8 @@ func (r *DifyAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+// getDifyClient returns a Dify client instance, preferring the custom getDifyClientFunc if set,
+// otherwise creating a client with the default configuration.
 func (r *DifyAgent) getDifyClient(
 	invocation *agent.Invocation,
 ) (*dify.Client, error) {
