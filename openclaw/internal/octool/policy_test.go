@@ -11,15 +11,16 @@ package octool
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestBlocksSensitivePath_BlocksDotEnvAccess(t *testing.T) {
+func TestBlocksSensitivePath_AllowsDotEnvAccess(t *testing.T) {
 	t.Parallel()
 
-	require.True(t, blocksSensitivePath(`python - <<'PY'
+	require.False(t, blocksSensitivePath(`python - <<'PY'
 from pathlib import Path
 print(Path("/tmp/.env.local").read_text())
 PY`))
@@ -63,72 +64,6 @@ func TestSensitivePathBoundaryHelpers(t *testing.T) {
 
 	require.True(t, hasSensitivePathBoundaryAfter(`~/.ssh/config`, 6, `.ssh/`))
 	require.True(t, hasSensitivePathBoundaryAfter(`cat ~/.bashrc`, 13, `.bashrc`))
-	require.True(t, hasSensitivePathBoundaryAfter(`cat /tmp/.env.local`, 13, `.env`))
-	require.False(t, hasSensitivePathBoundaryAfter(`cat /tmp/.envfile`, 13, `.env`))
-}
-
-func TestBlocksSensitiveEnv_BlocksPythonSensitiveVarRead(t *testing.T) {
-	t.Parallel()
-
-	require.True(t, blocksSensitiveEnv(`python - <<'PY'
-import os
-print(os.environ.get("OPENAI_API_KEY"))
-PY`))
-}
-
-func TestBlocksSensitiveEnv_BlocksNodeSensitiveVarRead(t *testing.T) {
-	t.Parallel()
-
-	require.True(
-		t,
-		blocksSensitiveEnv(
-			`node -e 'console.log(process.env.OPENAI_API_KEY)'`,
-		),
-	)
-}
-
-func TestBlocksSensitiveEnv_BlocksNodeBracketSensitiveVarRead(t *testing.T) {
-	t.Parallel()
-
-	require.True(
-		t,
-		blocksSensitiveEnv(
-			`node -e 'console.log(process.env["OPENAI_API_KEY"])'`,
-		),
-	)
-}
-
-func TestBlocksSensitiveEnv_BlocksGoLookupEnvSensitiveVarRead(t *testing.T) {
-	t.Parallel()
-
-	require.True(t, blocksSensitiveEnv(`go run <<'EOF'
-package main
-
-import "os"
-
-func main() {
-	_, _ = os.LookupEnv("OPENAI_API_KEY")
-}
-EOF`))
-}
-
-func TestBlocksSensitiveEnv_AllowsSafeRuntimeReadWithSensitiveLocalNames(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	require.False(t, blocksSensitiveEnv(`python - <<'PY'
-import os
-token = "placeholder"
-api_key = "placeholder"
-print(os.environ.get("OPENCLAW_MEMORY_FILE"))
-PY`))
-}
-
-func TestBlocksSensitiveEnv_BlocksShellSensitiveExpansion(t *testing.T) {
-	t.Parallel()
-
-	require.True(t, blocksSensitiveEnv(`echo $OPENAI_API_KEY`))
 }
 
 func TestChatCommandSafetyPolicy_AllowsPythonOsEnviron(t *testing.T) {
@@ -143,7 +78,7 @@ PY`,
 	require.NoError(t, err)
 }
 
-func TestChatCommandSafetyPolicy_BlocksPythonSensitiveEnvRead(t *testing.T) {
+func TestChatCommandSafetyPolicy_AllowsPythonSensitiveEnvRead(t *testing.T) {
 	t.Parallel()
 
 	err := NewChatCommandSafetyPolicy()(context.Background(), CommandRequest{
@@ -152,22 +87,22 @@ import os
 print(os.environ.get("OPENAI_API_KEY"))
 PY`,
 	})
-	require.ErrorContains(t, err, reasonSensitiveEnv)
+	require.NoError(t, err)
 }
 
-func TestChatCommandSafetyPolicy_BlocksGoLookupEnvSensitiveEnvRead(t *testing.T) {
+func TestChatCommandSafetyPolicy_BlocksStateRuntimeEnvPath(t *testing.T) {
 	t.Parallel()
 
+	stateDir := filepath.Join("/tmp", "openclaw-state")
+
 	err := NewChatCommandSafetyPolicy()(context.Background(), CommandRequest{
-		Command: `go run <<'EOF'
-package main
-
-import "os"
-
-func main() {
-	_, _ = os.LookupEnv("OPENAI_API_KEY")
-}
-EOF`,
+		Command: "cat " + filepath.Join(
+			stateDir,
+			protectedRuntimeEnvRelPath,
+		),
+		Env: map[string]string{
+			envTRPCClawStateDir: stateDir,
+		},
 	})
-	require.ErrorContains(t, err, reasonSensitiveEnv)
+	require.ErrorContains(t, err, reasonSensitivePath)
 }

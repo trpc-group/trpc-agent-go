@@ -2233,6 +2233,9 @@ func buildOpenClawTools(
 		octool.WithCommandPolicy(
 			octool.NewChatCommandSafetyPolicy(),
 		),
+		octool.WithOutputRedactor(
+			octool.NewChatCommandOutputRedactor(),
+		),
 	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)

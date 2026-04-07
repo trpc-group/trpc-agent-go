@@ -88,26 +88,29 @@ func TestExecTool_UsesManagerBaseEnv(t *testing.T) {
 	require.Contains(t, strings.TrimSpace(res.Output), "ok")
 }
 
-func TestExecTool_BlocksSensitiveEnvReads(t *testing.T) {
+func TestExecTool_RedactsSensitiveEnvValueOutput(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
 	}
 
 	mgr := NewManager(
-		WithCommandPolicy(NewChatCommandSafetyPolicy()),
+		WithOutputRedactor(NewChatCommandOutputRedactor()),
 	)
 	tool := newExecCommandTool(mgr)
 
 	args := mustJSON(t, map[string]any{
-		"command": "echo $OPENAI_API_KEY",
+		"command": "printf %s 'sk-test-secret'",
+		"env": map[string]string{
+			"OPENAI_API_KEY": "sk-test-secret",
+		},
 		"yieldMs": 0,
 	})
-	_, err := tool.Call(context.Background(), args)
-	require.ErrorContains(
-		t,
-		err,
-		"reading or printing sensitive credentials",
-	)
+	out, err := tool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Contains(t, res.Output, "[REDACTED:OPENAI_API_KEY]")
+	require.NotContains(t, res.Output, "sk-test-secret")
 }
 
 func TestExecTool_BlocksShellProfileAccess(t *testing.T) {
@@ -130,6 +133,33 @@ func TestExecTool_BlocksShellProfileAccess(t *testing.T) {
 		err,
 		"shell or credential files is not allowed",
 	)
+}
+
+func TestExecTool_RedactsSensitiveKeyValueOutput(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithOutputRedactor(NewChatCommandOutputRedactor()),
+	)
+	tool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command": `printf 'OPENAI_API_KEY=sk-test-secret
+SAFE_NAME=ok
+"OPENAI_API_KEY": "sk-test-secret",
+'`,
+		"yieldMs": 0,
+	})
+	out, err := tool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Contains(t, res.Output, "OPENAI_API_KEY=[REDACTED]")
+	require.Contains(t, res.Output, `OPENAI_API_KEY": "[REDACTED]"`)
+	require.Contains(t, res.Output, "SAFE_NAME=ok")
+	require.NotContains(t, res.Output, "sk-test-secret")
 }
 
 func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
@@ -558,6 +588,51 @@ func TestProcessTool_Write(t *testing.T) {
 	output := outputField(writeAny.(map[string]any))
 	output += pollUntilExited(t, mgr, res.SessionID)
 	require.Contains(t, output, "got:ok")
+}
+
+func TestProcessTool_WriteRedactsSensitiveValueOutput(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithJobTTL(10*time.Second),
+		WithOutputRedactor(NewChatCommandOutputRedactor()),
+	)
+	execTool := newExecCommandTool(mgr)
+	writeTool := newWriteStdinTool(mgr)
+
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command": "read -r x; printf %s 'sk-live-secret'",
+			"env": map[string]string{
+				"OPENAI_API_KEY": "sk-live-secret",
+			},
+			"background": true,
+		}),
+	)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	writeAny, err := writeTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"session_id": res.SessionID,
+			"chars":      "ok\n",
+		}),
+	)
+	require.NoError(t, err)
+
+	output := outputField(writeAny.(map[string]any))
+	output += pollUntilExited(t, mgr, res.SessionID)
+	require.Contains(t, output, "[REDACTED:OPENAI_API_KEY]")
+	require.NotContains(t, output, "sk-live-secret")
+
+	logAny, err := mgr.log(res.SessionID, nil, nil)
+	require.NoError(t, err)
+	require.Contains(t, logAny.Output, "[REDACTED:OPENAI_API_KEY]")
+	require.NotContains(t, logAny.Output, "sk-live-secret")
 }
 
 func TestTools_InvalidArgs(t *testing.T) {
