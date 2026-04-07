@@ -467,7 +467,7 @@ func TestProcessFileNotRegular(t *testing.T) {
 	os.Mkdir(subDir, 0755)
 
 	src := New([]string{tmpDir})
-	_, err := src.processFile(subDir)
+	_, err := src.processFile(context.Background(), subDir)
 	if err == nil {
 		t.Error("expected error when processing directory as file")
 	}

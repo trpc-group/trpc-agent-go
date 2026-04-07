@@ -146,7 +146,7 @@ func (stubReader) SupportedExtensions() []string {
 func TestProcessFile_Directory(t *testing.T) {
 	dir := t.TempDir()
 	src := New([]string{})
-	if _, err := src.processFile(dir); err == nil {
+	if _, err := src.processFile(context.Background(), dir); err == nil {
 		t.Fatalf("expected error for directory path")
 	}
 }
@@ -216,7 +216,7 @@ func TestOptions(t *testing.T) {
 }
 func TestProcessFile_Unsupported(t *testing.T) {
 	src := New([]string{})
-	_, err := src.processFile("nonexistent.xyz")
+	_, err := src.processFile(context.Background(), "nonexistent.xyz")
 	if err == nil {
 		t.Fatalf("expected error for unsupported file")
 	}
@@ -421,7 +421,7 @@ func TestProcessFileNotRegular(t *testing.T) {
 	tmpDir := t.TempDir()
 	src := New([]string{tmpDir})
 
-	_, err := src.processFile(tmpDir)
+	_, err := src.processFile(context.Background(), tmpDir)
 	if err == nil {
 		t.Error("expected error when processing directory as file")
 	}
@@ -439,7 +439,7 @@ func TestProcessFileAbsPathError(t *testing.T) {
 	}
 
 	src := New([]string{filePath})
-	docs, err := src.processFile(filePath)
+	docs, err := src.processFile(context.Background(), filePath)
 	if err != nil {
 		t.Fatalf("processFile failed: %v", err)
 	}

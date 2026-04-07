@@ -12,6 +12,7 @@ package file
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
@@ -101,5 +102,19 @@ func WithTransformers(transformers ...transform.Transformer) Option {
 func WithFileReaderType(fileType source.FileReaderType) Option {
 	return func(s *Source) {
 		s.fileReaderType = fileType
+	}
+}
+
+// WithExtractor sets a content extractor for handling complex or unsupported formats.
+// When configured, the extractor is used for files whose extension matches
+// the extractor's supported formats. The extracted content (text or markdown)
+// is then passed to the appropriate reader for chunking and further processing.
+//
+// Example:
+//
+//	source := file.New(paths, file.WithExtractor(myVisionExtractor))
+func WithExtractor(e extractor.Extractor) Option {
+	return func(s *Source) {
+		s.contentExtractor = e
 	}
 }

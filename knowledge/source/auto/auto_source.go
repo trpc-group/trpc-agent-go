@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	dirsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/dir"
@@ -47,6 +48,7 @@ type Source struct {
 	ocrExtractor           ocr.Extractor
 	transformers           []transform.Transformer
 	fileReaderType         source.FileReaderType
+	contentExtractor       extractor.Extractor
 }
 
 // New creates a new auto knowledge source.
@@ -230,6 +232,9 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 	}
 	if len(s.transformers) > 0 {
 		opts = append(opts, filesource.WithTransformers(s.transformers...))
+	}
+	if s.contentExtractor != nil {
+		opts = append(opts, filesource.WithExtractor(s.contentExtractor))
 	}
 	fileSource := filesource.New([]string{input}, opts...)
 
