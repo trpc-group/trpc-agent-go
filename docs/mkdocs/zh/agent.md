@@ -54,6 +54,12 @@ genConfig := model.GenerationConfig{
 }
 ```
 
+如果没有显式传入 `llmagent.WithGenerationConfig(...)`，`LLMAgent`
+默认会透传零值 `model.GenerationConfig{}`，因此默认是非流式
+（`Stream=false`）。如果你需要流式输出，请显式设置
+`Stream: true`，或在单次请求上使用 `agent.WithStream(true)`。
+某些上层封装可能会自行设置不同的默认值，例如 OpenClaw 会显式开启流式。
+
 ### 创建 LLMAgent
 
 使用模型实例和配置创建 LLMAgent，同时设置 Agent 的 Description 与 Instruction。

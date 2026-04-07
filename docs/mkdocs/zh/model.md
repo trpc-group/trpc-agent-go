@@ -216,6 +216,11 @@ type GenerationConfig struct {
 }
 ```
 
+`GenerationConfig` 本身只是一个普通结构体，它的零值等价于
+`Stream=false`。对 `LLMAgent` 来说，如果没有显式传入
+`llmagent.WithGenerationConfig(...)`，框架会直接使用这个零值，
+因此默认是非流式。更上层的封装如果需要不同语义，也可以显式设置自己的默认值。
+
 ### Response 结构
 
 ```go

@@ -54,6 +54,14 @@ genConfig := model.GenerationConfig{
 }
 ```
 
+If you do not explicitly pass `llmagent.WithGenerationConfig(...)`,
+`LLMAgent` forwards the zero-value `model.GenerationConfig{}` by default,
+so the default behavior is non-streaming (`Stream=false`). If you need
+streaming output, set `Stream: true` explicitly, or override it per
+request with `agent.WithStream(true)`. Higher-level wrappers may choose
+their own explicit defaults. For example, OpenClaw enables streaming by
+default.
+
 ### Creating LLMAgent
 
 Use the model instance and configuration to create an LLMAgent, while setting the Agent's Description and Instruction.
