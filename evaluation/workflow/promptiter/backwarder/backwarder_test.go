@@ -277,6 +277,61 @@ func TestBackwardUsesRequestScopedStructuredOutputSchema(t *testing.T) {
 	}
 }
 
+func TestBackwardUsesAllowedGradientSurfaceIDsInStructuredOutputSchema(t *testing.T) {
+	r := &fakeRunner{
+		events: []*event.Event{
+			event.NewResponseEvent(
+				"invocation-id",
+				"backwarder",
+				&model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{
+							Message: model.NewAssistantMessage(`{"Gradients":[{"SurfaceID":"surf_1","Severity":"P1","Gradient":"fix citation grounding"}]}`),
+						},
+					},
+				},
+			),
+		},
+	}
+	bw, err := New(context.Background(), r)
+	assert.NoError(t, err)
+
+	rsp, err := bw.Backward(context.Background(), newRestrictedInstructionRequest())
+
+	assert.NoError(t, err)
+	assert.NotNil(t, rsp)
+	if assert.NotNil(t, r.lastRunOpts.StructuredOutput) && assert.NotNil(t, r.lastRunOpts.StructuredOutput.JSONSchema) {
+		schema := r.lastRunOpts.StructuredOutput.JSONSchema.Schema
+		schemaProps, ok := schema["properties"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		gradientsSchema, ok := schemaProps["Gradients"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		gradientItem, ok := gradientsSchema["items"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		gradientProps, ok := gradientItem["properties"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		gradientSurfaceIDSchema, ok := gradientProps["SurfaceID"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		assert.Equal(t, []string{"surf_1"}, gradientSurfaceIDSchema["enum"])
+	}
+}
+
 func TestBackwardStructuredOutputSchema_EmptyCollectionsStillDeclareItems(t *testing.T) {
 	request := newInstructionRequest()
 	request.Surfaces = nil
@@ -437,6 +492,30 @@ func TestBackwardRejectsInvalidResultOutput(t *testing.T) {
 
 		assert.Error(t, err)
 		assert.Nil(t, rsp)
+	})
+
+	t.Run("gradient outside allowed surface ids", func(t *testing.T) {
+		bw, err := New(context.Background(), &fakeRunner{
+			events: []*event.Event{
+				event.NewResponseEvent(
+					"invocation-id",
+					"backwarder",
+					&model.Response{
+						Done: true,
+						Choices: []model.Choice{
+							{Message: model.NewAssistantMessage(`{"Gradients":[{"SurfaceID":"surf_2","Severity":"P1","Gradient":"fix citation grounding"}]}`)},
+						},
+					},
+				),
+			},
+		})
+		assert.NoError(t, err)
+
+		rsp, err := bw.Backward(context.Background(), newRestrictedInstructionRequest())
+
+		assert.Error(t, err)
+		assert.Nil(t, rsp)
+		assert.Contains(t, err.Error(), "allowed gradient surfaces")
 	})
 
 	t.Run("unknown predecessor step id", func(t *testing.T) {
@@ -739,4 +818,18 @@ func newInstructionRequest() *Request {
 			},
 		},
 	}
+}
+
+func newRestrictedInstructionRequest() *Request {
+	request := newInstructionRequest()
+	request.Surfaces = append(request.Surfaces, astructure.Surface{
+		SurfaceID: "surf_2",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeModel,
+		Value: astructure.SurfaceValue{
+			Model: &astructure.ModelRef{Name: "gpt-test"},
+		},
+	})
+	request.AllowedGradientSurfaceIDs = []string{"surf_1"}
+	return request
 }

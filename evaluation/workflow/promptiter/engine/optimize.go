@@ -24,6 +24,7 @@ func (e *engine) optimize(
 	structure *structureState,
 	profile *promptiter.Profile,
 	aggregation *AggregationResult,
+	targetSurfaceSet targetSurfaceSet,
 ) (*promptiter.PatchSet, error) {
 	if e.optimizer == nil {
 		return nil, errors.New("optimizer is nil")
@@ -37,6 +38,9 @@ func (e *engine) optimize(
 	overrideIndex := buildOverrideIndex(profile)
 	patches := make([]promptiter.SurfacePatch, 0, len(aggregation.Surfaces))
 	for _, aggregatedSurface := range aggregation.Surfaces {
+		if !targetSurfaceSet.contains(aggregatedSurface.SurfaceID) {
+			return nil, fmt.Errorf("aggregated surface id %q is outside target surfaces", aggregatedSurface.SurfaceID)
+		}
 		surface, err := resolveProfileSurface(structure, overrideIndex, aggregatedSurface.SurfaceID)
 		if err != nil {
 			return nil, err

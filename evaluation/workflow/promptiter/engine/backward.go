@@ -45,6 +45,7 @@ func (e *engine) backward(
 	profile *promptiter.Profile,
 	train *EvaluationResult,
 	losses []promptiter.CaseLoss,
+	targetSurfaceSet targetSurfaceSet,
 ) (*BackwardResult, error) {
 	if e.backwarder == nil {
 		return nil, errors.New("backwarder is nil")
@@ -67,7 +68,7 @@ func (e *engine) backward(
 				caseLoss.EvalSetID,
 			)
 		}
-		caseResult, err := e.backwardCase(ctx, structure, overrideIndex, evalCase, caseLoss)
+		caseResult, err := e.backwardCase(ctx, structure, overrideIndex, evalCase, caseLoss, targetSurfaceSet)
 		if err != nil {
 			return nil, err
 		}
@@ -112,6 +113,7 @@ func (e *engine) backwardCase(
 	overrideIndex map[string]promptiter.SurfaceOverride,
 	evalCase CaseResult,
 	caseLoss promptiter.CaseLoss,
+	targetSurfaceSet targetSurfaceSet,
 ) (*CaseBackwardResult, error) {
 	if evalCase.Trace == nil {
 		return nil, fmt.Errorf(
@@ -155,7 +157,7 @@ func (e *engine) backwardCase(
 		if len(incoming) == 0 {
 			continue
 		}
-		request, err := buildBackwardRequest(structure, overrideIndex, stepIndex, evalCase, step, incoming)
+		request, err := buildBackwardRequest(structure, overrideIndex, stepIndex, evalCase, step, incoming, targetSurfaceSet)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"build backward request for eval case %q step %q: %w",
@@ -270,12 +272,14 @@ func buildBackwardRequest(
 	evalCase CaseResult,
 	step atrace.Step,
 	incoming []backwarder.GradientPacket,
+	targetSurfaceSet targetSurfaceSet,
 ) (*backwarder.Request, error) {
 	node, ok := structure.nodeIndex[step.NodeID]
 	if !ok {
 		return nil, fmt.Errorf("step %q references unknown node id %q", step.StepID, step.NodeID)
 	}
 	surfaces := make([]astructure.Surface, 0, len(step.AppliedSurfaceIDs))
+	allowedGradientSurfaceIDs := make([]string, 0, len(step.AppliedSurfaceIDs))
 	seenSurfaces := make(map[string]struct{}, len(step.AppliedSurfaceIDs))
 	for _, surfaceID := range step.AppliedSurfaceIDs {
 		if surfaceID == "" {
@@ -290,6 +294,9 @@ func buildBackwardRequest(
 			return nil, err
 		}
 		surfaces = append(surfaces, surface)
+		if targetSurfaceSet != nil && targetSurfaceSet.contains(surfaceID) {
+			allowedGradientSurfaceIDs = append(allowedGradientSurfaceIDs, surfaceID)
+		}
 	}
 	predecessors := make([]backwarder.Predecessor, 0, len(step.PredecessorStepIDs))
 	for _, predecessorStepID := range step.PredecessorStepIDs {
@@ -309,17 +316,28 @@ func buildBackwardRequest(
 		input = &atrace.Snapshot{}
 	}
 	return &backwarder.Request{
-		EvalSetID:    evalCase.EvalSetID,
-		EvalCaseID:   evalCase.EvalCaseID,
-		Node:         &node,
-		StepID:       step.StepID,
-		Input:        input,
-		Output:       cloneTraceSnapshot(step.Output),
-		Error:        step.Error,
-		Surfaces:     surfaces,
-		Predecessors: predecessors,
-		Incoming:     incoming,
+		EvalSetID:                 evalCase.EvalSetID,
+		EvalCaseID:                evalCase.EvalCaseID,
+		Node:                      &node,
+		StepID:                    step.StepID,
+		Input:                     input,
+		Output:                    cloneTraceSnapshot(step.Output),
+		Error:                     step.Error,
+		Surfaces:                  surfaces,
+		AllowedGradientSurfaceIDs: allowedGradientSurfaceIDsOrNil(targetSurfaceSet, allowedGradientSurfaceIDs),
+		Predecessors:              predecessors,
+		Incoming:                  incoming,
 	}, nil
+}
+
+func allowedGradientSurfaceIDsOrNil(
+	targetSurfaceSet targetSurfaceSet,
+	allowedGradientSurfaceIDs []string,
+) []string {
+	if targetSurfaceSet == nil {
+		return nil
+	}
+	return append([]string(nil), allowedGradientSurfaceIDs...)
 }
 
 func cloneTraceSnapshot(snapshot *atrace.Snapshot) *atrace.Snapshot {

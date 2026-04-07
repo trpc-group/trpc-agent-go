@@ -698,6 +698,144 @@ func TestCompileProfileRunOptionsDefaultsModelProviderToOpenAI(t *testing.T) {
 	assert.Equal(t, "patched-model", modelValue.Info().Name)
 }
 
+func TestBuildBackwardRequestKeepsContextSurfacesButRestrictsAllowedGradientSurfaceIDs(t *testing.T) {
+	instructionText := "base prompt"
+	modelRef := &astructure.ModelRef{Name: "gpt-test"}
+	instructionSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeInstruction)
+	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "node_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM, Name: "writer"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: instructionSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
+					Text: &instructionText,
+				},
+			},
+			{
+				SurfaceID: modelSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeModel,
+				Value: astructure.SurfaceValue{
+					Model: modelRef,
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	request, err := buildBackwardRequest(
+		structure,
+		nil,
+		map[string]indexedTraceStep{},
+		CaseResult{EvalSetID: "train", EvalCaseID: "case_1"},
+		atrace.Step{
+			StepID:            "step_1",
+			NodeID:            "node_1",
+			AppliedSurfaceIDs: []string{instructionSurfaceID, modelSurfaceID},
+		},
+		[]backwarder.GradientPacket{
+			{
+				FromStepID: "step_2",
+				Severity:   promptiter.LossSeverityP1,
+				Gradient:   "focus on the live call",
+			},
+		},
+		targetSurfaceSet{instructionSurfaceID: {}},
+	)
+	assert.NoError(t, err)
+	if assert.NotNil(t, request) {
+		assert.Len(t, request.Surfaces, 2)
+		assert.Equal(t, []string{instructionSurfaceID}, request.AllowedGradientSurfaceIDs)
+	}
+}
+
+func TestAggregateRejectsOutOfScopeGradient(t *testing.T) {
+	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "node_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM, Name: "writer"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: modelSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeModel,
+				Value: astructure.SurfaceValue{
+					Model: &astructure.ModelRef{Name: "gpt-test"},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	aggregatorInstance := &fakeAggregator{}
+	engineInstance := &engine{aggregator: aggregatorInstance}
+	_, err = engineInstance.aggregate(context.Background(), structure, &BackwardResult{
+		Cases: []CaseBackwardResult{
+			{
+				StepGradients: []promptiter.StepGradient{
+					{
+						StepID: "step_1",
+						NodeID: "node_1",
+						Gradients: []promptiter.SurfaceGradient{
+							{
+								SurfaceID: modelSurfaceID,
+								Gradient:  "change the model",
+							},
+						},
+					},
+				},
+			},
+		},
+	}, targetSurfaceSet{testSurfaceID: {}})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "outside target surfaces")
+	assert.Empty(t, aggregatorInstance.requests)
+}
+
+func TestOptimizeRejectsOutOfScopeSurface(t *testing.T) {
+	modelSurfaceID := astructure.SurfaceID("node_1", astructure.SurfaceTypeModel)
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "node_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM, Name: "writer"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: modelSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeModel,
+				Value: astructure.SurfaceValue{
+					Model: &astructure.ModelRef{Name: "gpt-test"},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	optimizerInstance := &fakeOptimizer{}
+	engineInstance := &engine{optimizer: optimizerInstance}
+	_, err = engineInstance.optimize(context.Background(), structure, nil, &AggregationResult{
+		Surfaces: []promptiter.AggregatedSurfaceGradient{
+			{
+				SurfaceID: modelSurfaceID,
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeModel,
+			},
+		},
+	}, targetSurfaceSet{testSurfaceID: {}})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "outside target surfaces")
+	assert.Empty(t, optimizerInstance.requests)
+}
+
 func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T) {
 	structure, err := newStructureState(testStructureSnapshot(t))
 	assert.NoError(t, err)
@@ -836,6 +974,46 @@ func TestRunRejectsInvalidInitialProfile(t *testing.T) {
 			},
 		},
 		MaxRounds: 1,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown")
+}
+
+func TestRunRejectsEmptyTargetSurfaceIDs(t *testing.T) {
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
+		&fakeBackwarder{},
+		&fakeAggregator{},
+		&fakeOptimizer{},
+	)
+	assert.NoError(t, err)
+	_, err = engineInstance.Run(context.Background(), &RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		TargetSurfaceIDs:     []string{},
+		MaxRounds:            1,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "target surface ids must not be empty")
+}
+
+func TestRunRejectsUnknownTargetSurfaceID(t *testing.T) {
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
+		&fakeBackwarder{},
+		&fakeAggregator{},
+		&fakeOptimizer{},
+	)
+	assert.NoError(t, err)
+	_, err = engineInstance.Run(context.Background(), &RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		TargetSurfaceIDs:     []string{"unknown#instruction"},
+		MaxRounds:            1,
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown")

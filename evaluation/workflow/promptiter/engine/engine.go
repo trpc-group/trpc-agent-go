@@ -52,6 +52,8 @@ type RunRequest struct {
 	StopPolicy StopPolicy
 	// MaxRounds is the hard cap for outer optimization iterations.
 	MaxRounds int
+	// TargetSurfaceIDs limits this run to optimizing only the listed surfaces.
+	TargetSurfaceIDs []string
 }
 
 // RunResult stores the end state and historical trace of a multi-round run.
@@ -154,6 +156,10 @@ func (e *engine) Run(ctx context.Context, request *RunRequest) (*RunResult, erro
 	if err != nil {
 		return nil, fmt.Errorf("create structure state: %w", err)
 	}
+	targetSurfaceSet, err := compileTargetSurfaceIDs(structure, request.TargetSurfaceIDs)
+	if err != nil {
+		return nil, fmt.Errorf("compile target surface ids: %w", err)
+	}
 	initialProfile, err := normalizeProfile(structure, request.InitialProfile)
 	if err != nil {
 		return nil, fmt.Errorf("normalize initial profile: %w", err)
@@ -186,6 +192,7 @@ func (e *engine) Run(ctx context.Context, request *RunRequest) (*RunResult, erro
 			ctx,
 			request,
 			structure,
+			targetSurfaceSet,
 			evaluationOptions,
 			acceptedProfile,
 			acceptedValidationScore,
@@ -227,6 +234,8 @@ func (e *engine) validateRunRequest(request *RunRequest) error {
 		return errors.New("validation evaluation set ids are empty")
 	case request.MaxRounds <= 0:
 		return errors.New("max rounds must be greater than 0")
+	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
+		return errors.New("target surface ids must not be empty")
 	case e.targetAgent == nil:
 		return errors.New("target agent is nil")
 	case e.agentEvaluator == nil:
@@ -251,6 +260,7 @@ func (e *engine) executeRound(
 	ctx context.Context,
 	request *RunRequest,
 	structure *structureState,
+	targetSurfaceSet targetSurfaceSet,
 	evaluationOptions EvaluationOptions,
 	acceptedProfile *promptiter.Profile,
 	acceptedValidationScore float64,
@@ -276,17 +286,17 @@ func (e *engine) executeRound(
 		return nil, 0, fmt.Errorf("extract train losses round %d: %w", roundNumber, err)
 	}
 	roundResult.Losses = losses
-	backwardResult, err := e.backward(ctx, structure, acceptedProfile, trainResult, losses)
+	backwardResult, err := e.backward(ctx, structure, acceptedProfile, trainResult, losses, targetSurfaceSet)
 	if err != nil {
 		return nil, 0, fmt.Errorf("backward round %d: %w", roundNumber, err)
 	}
 	roundResult.Backward = backwardResult
-	aggregationResult, err := e.aggregate(ctx, structure, backwardResult)
+	aggregationResult, err := e.aggregate(ctx, structure, backwardResult, targetSurfaceSet)
 	if err != nil {
 		return nil, 0, fmt.Errorf("aggregate round %d: %w", roundNumber, err)
 	}
 	roundResult.Aggregation = aggregationResult
-	patchSet, err := e.optimize(ctx, structure, acceptedProfile, aggregationResult)
+	patchSet, err := e.optimize(ctx, structure, acceptedProfile, aggregationResult, targetSurfaceSet)
 	if err != nil {
 		return nil, 0, fmt.Errorf("optimize round %d: %w", roundNumber, err)
 	}

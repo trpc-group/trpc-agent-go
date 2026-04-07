@@ -29,6 +29,7 @@ func (e *engine) aggregate(
 	ctx context.Context,
 	structure *structureState,
 	backward *BackwardResult,
+	targetSurfaceSet targetSurfaceSet,
 ) (*AggregationResult, error) {
 	if e.aggregator == nil {
 		return nil, errors.New("aggregator is nil")
@@ -41,6 +42,9 @@ func (e *engine) aggregate(
 		for _, caseResult := range backward.Cases {
 			for _, stepGradient := range caseResult.StepGradients {
 				for _, gradient := range stepGradient.Gradients {
+					if !targetSurfaceSet.contains(gradient.SurfaceID) {
+						return nil, fmt.Errorf("step gradient surface id %q is outside target surfaces", gradient.SurfaceID)
+					}
 					grouped[gradient.SurfaceID] = append(grouped[gradient.SurfaceID], gradient)
 				}
 			}

@@ -49,6 +49,8 @@ type Request struct {
 	Error string
 	// Surfaces are all surfaces whose values affected this step.
 	Surfaces []astructure.Surface
+	// AllowedGradientSurfaceIDs limits which surfaces may appear in Gradients.
+	AllowedGradientSurfaceIDs []string
 	// Predecessors stores direct predecessor execution steps.
 	Predecessors []Predecessor
 	// Incoming carries raw gradients that need to be processed at this step.
@@ -201,7 +203,7 @@ func (b *backwarder) Backward(ctx context.Context, request *Request) (*Result, e
 }
 
 func isNoOpBackwardRequest(request *Request) bool {
-	return request != nil && len(request.Surfaces) == 0 && len(request.Predecessors) == 0
+	return request != nil && len(requestAllowedGradientSurfaceIDs(request)) == 0 && len(request.Predecessors) == 0
 }
 
 func backwardStructuredOutput(request *Request) agent.RunOption {
@@ -214,7 +216,7 @@ func backwardStructuredOutput(request *Request) agent.RunOption {
 }
 
 func backwardResultSchema(request *Request) map[string]any {
-	surfaceIDs := requestSurfaceIDs(request)
+	surfaceIDs := requestAllowedGradientSurfaceIDs(request)
 	predecessorStepIDs := requestPredecessorStepIDs(request)
 	return map[string]any{
 		"type": "object",
@@ -244,6 +246,16 @@ func requestSurfaceIDs(request *Request) []string {
 		ids = append(ids, surface.SurfaceID)
 	}
 	return ids
+}
+
+func requestAllowedGradientSurfaceIDs(request *Request) []string {
+	if request == nil {
+		return nil
+	}
+	if request.AllowedGradientSurfaceIDs == nil {
+		return requestSurfaceIDs(request)
+	}
+	return append([]string(nil), request.AllowedGradientSurfaceIDs...)
 }
 
 func requestPredecessorStepIDs(request *Request) []string {
@@ -371,8 +383,12 @@ func normalizeRequest(request *Request) (*Request, error) {
 	if request.Input == nil {
 		return nil, errors.New("input is nil")
 	}
-	if _, err := isurface.BuildIndex(request.Surfaces); err != nil {
+	surfaceIndex, err := isurface.BuildIndex(request.Surfaces)
+	if err != nil {
 		return nil, fmt.Errorf("build surface index: %w", err)
+	}
+	if _, err := normalizeAllowedGradientSurfaceIDs(request, surfaceIndex); err != nil {
+		return nil, fmt.Errorf("normalize allowed gradient surface ids: %w", err)
 	}
 	if _, err := buildPredecessorIndex(request.Predecessors); err != nil {
 		return nil, fmt.Errorf("build predecessor index: %w", err)
@@ -402,6 +418,10 @@ func sanitizeBackwardResult(request *Request, result *Result) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build surface index: %w", err)
 	}
+	allowedGradientSurfaceIndex, err := buildAllowedGradientSurfaceIndex(request, surfaceIndex)
+	if err != nil {
+		return nil, fmt.Errorf("build allowed gradient surface index: %w", err)
+	}
 	predecessorIndex, err := buildPredecessorIndex(request.Predecessors)
 	if err != nil {
 		return nil, fmt.Errorf("build predecessor index: %w", err)
@@ -411,7 +431,7 @@ func sanitizeBackwardResult(request *Request, result *Result) (*Result, error) {
 		Upstream:  make([]Propagation, 0, len(result.Upstream)),
 	}
 	for _, gradient := range result.Gradients {
-		sanitizedGradient, keep, err := sanitizeSurfaceGradient(request, surfaceIndex, gradient)
+		sanitizedGradient, keep, err := sanitizeSurfaceGradient(request, allowedGradientSurfaceIndex, gradient)
 		if err != nil {
 			return nil, fmt.Errorf("sanitize surface gradient: %w", err)
 		}
@@ -543,6 +563,48 @@ func buildPredecessorIndex(predecessors []Predecessor) (map[string]Predecessor, 
 	return index, nil
 }
 
+func normalizeAllowedGradientSurfaceIDs(
+	request *Request,
+	surfaceIndex map[string]astructure.Surface,
+) ([]string, error) {
+	if request == nil || request.AllowedGradientSurfaceIDs == nil {
+		return nil, nil
+	}
+	normalized := make([]string, 0, len(request.AllowedGradientSurfaceIDs))
+	seen := make(map[string]struct{}, len(request.AllowedGradientSurfaceIDs))
+	for _, surfaceID := range request.AllowedGradientSurfaceIDs {
+		if surfaceID == "" {
+			return nil, errors.New("allowed gradient surface id is empty")
+		}
+		if _, ok := surfaceIndex[surfaceID]; !ok {
+			return nil, fmt.Errorf("allowed gradient surface id %q is not part of request surfaces", surfaceID)
+		}
+		if _, ok := seen[surfaceID]; ok {
+			continue
+		}
+		seen[surfaceID] = struct{}{}
+		normalized = append(normalized, surfaceID)
+	}
+	request.AllowedGradientSurfaceIDs = normalized
+	return normalized, nil
+}
+
+func buildAllowedGradientSurfaceIndex(
+	request *Request,
+	surfaceIndex map[string]astructure.Surface,
+) (map[string]astructure.Surface, error) {
+	allowedSurfaceIDs := requestAllowedGradientSurfaceIDs(request)
+	index := make(map[string]astructure.Surface, len(allowedSurfaceIDs))
+	for _, surfaceID := range allowedSurfaceIDs {
+		surface, ok := surfaceIndex[surfaceID]
+		if !ok {
+			return nil, fmt.Errorf("allowed gradient surface id %q is not part of request surfaces", surfaceID)
+		}
+		index[surfaceID] = surface
+	}
+	return index, nil
+}
+
 func sanitizeGradientSurfaceID(
 	surfaceIndex map[string]astructure.Surface,
 	surfaceID string,
@@ -556,7 +618,7 @@ func sanitizeGradientSurfaceID(
 		return "", errors.New("gradient surface id is empty")
 	default:
 		if _, ok := surfaceIndex[surfaceID]; !ok {
-			return "", fmt.Errorf("gradient surface id %q is not part of request surfaces", surfaceID)
+			return "", fmt.Errorf("gradient surface id %q is not part of allowed gradient surfaces", surfaceID)
 		}
 		return surfaceID, nil
 	}
