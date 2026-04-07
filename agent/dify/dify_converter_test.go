@@ -110,6 +110,83 @@ func TestDefaultDifyEventConverter_ConvertToEvent(t *testing.T) {
 			t.Errorf("expected empty content, got '%s'", choice.Message.Content)
 		}
 	})
+
+	t.Run("sets Response.ID from resp.ID", func(t *testing.T) {
+		resp := &dify.ChatMessageResponse{
+			Answer: "Hello",
+		}
+		resp.ID = "msg-abc-123"
+		resp.ConversationID = "conv-xyz-456"
+
+		invocation := &agent.Invocation{
+			InvocationID: "inv-123",
+		}
+
+		evt := converter.ConvertToEvent(resp, "test-agent", invocation)
+
+		if evt == nil {
+			t.Fatal("expected event, got nil")
+		}
+		if evt.Response.ID != "msg-abc-123" {
+			t.Errorf("expected Response.ID 'msg-abc-123', got '%s'", evt.Response.ID)
+		}
+	})
+
+	t.Run("falls back to ConversationID when ID is empty", func(t *testing.T) {
+		resp := &dify.ChatMessageResponse{
+			Answer: "Hello",
+		}
+		resp.ID = ""
+		resp.ConversationID = "conv-xyz-456"
+
+		invocation := &agent.Invocation{
+			InvocationID: "inv-123",
+		}
+
+		evt := converter.ConvertToEvent(resp, "test-agent", invocation)
+
+		if evt == nil {
+			t.Fatal("expected event, got nil")
+		}
+		if evt.Response.ID != "conv-xyz-456" {
+			t.Errorf("expected Response.ID 'conv-xyz-456', got '%s'", evt.Response.ID)
+		}
+	})
+
+	t.Run("sets Response.Object to ChatCompletion", func(t *testing.T) {
+		resp := &dify.ChatMessageResponse{
+			Answer: "Hello",
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "inv-123",
+		}
+
+		evt := converter.ConvertToEvent(resp, "test-agent", invocation)
+
+		if evt == nil {
+			t.Fatal("expected event, got nil")
+		}
+		if evt.Response.Object != model.ObjectTypeChatCompletion {
+			t.Errorf("expected Object type '%s', got '%s'", model.ObjectTypeChatCompletion, evt.Response.Object)
+		}
+	})
+
+	t.Run("nil response does not set Response.ID", func(t *testing.T) {
+		invocation := &agent.Invocation{
+			InvocationID: "inv-123",
+		}
+
+		evt := converter.ConvertToEvent(nil, "test-agent", invocation)
+
+		if evt == nil {
+			t.Fatal("expected event, got nil")
+		}
+		// nil 响应走默认分支，不设置 ID
+		if evt.Response.ID != "" {
+			t.Errorf("expected empty Response.ID for nil response, got '%s'", evt.Response.ID)
+		}
+	})
 }
 
 func TestDefaultDifyEventConverter_ConvertStreamingToEvent(t *testing.T) {
@@ -177,6 +254,122 @@ func TestDefaultDifyEventConverter_ConvertStreamingToEvent(t *testing.T) {
 
 		if event != nil {
 			t.Error("expected nil event for empty answer")
+		}
+	})
+
+	t.Run("sets Response.ID from MessageID", func(t *testing.T) {
+		resp := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:         "Hello",
+				MessageID:      "msg-stream-123",
+				ConversationID: "conv-stream-456",
+			},
+		}
+		resp.ID = "id-stream-789"
+
+		invocation := &agent.Invocation{
+			InvocationID: "inv-123",
+		}
+
+		evt := converter.ConvertStreamingToEvent(resp, "test-agent", invocation)
+
+		if evt == nil {
+			t.Fatal("expected event, got nil")
+		}
+		if evt.Response.ID != "msg-stream-123" {
+			t.Errorf("expected Response.ID 'msg-stream-123', got '%s'", evt.Response.ID)
+		}
+	})
+
+	t.Run("falls back to ConversationID when MessageID is empty", func(t *testing.T) {
+		resp := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:         "Hello",
+				MessageID:      "",
+				ConversationID: "conv-stream-456",
+			},
+		}
+		resp.ID = "id-stream-789"
+
+		invocation := &agent.Invocation{
+			InvocationID: "inv-123",
+		}
+
+		evt := converter.ConvertStreamingToEvent(resp, "test-agent", invocation)
+
+		if evt == nil {
+			t.Fatal("expected event, got nil")
+		}
+		if evt.Response.ID != "conv-stream-456" {
+			t.Errorf("expected Response.ID 'conv-stream-456', got '%s'", evt.Response.ID)
+		}
+	})
+
+	t.Run("falls back to ID when MessageID and ConversationID are empty", func(t *testing.T) {
+		resp := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:         "Hello",
+				MessageID:      "",
+				ConversationID: "",
+			},
+		}
+		resp.ID = "id-stream-789"
+
+		invocation := &agent.Invocation{
+			InvocationID: "inv-123",
+		}
+
+		evt := converter.ConvertStreamingToEvent(resp, "test-agent", invocation)
+
+		if evt == nil {
+			t.Fatal("expected event, got nil")
+		}
+		if evt.Response.ID != "id-stream-789" {
+			t.Errorf("expected Response.ID 'id-stream-789', got '%s'", evt.Response.ID)
+		}
+	})
+
+	t.Run("Response.ID is empty when all IDs are empty", func(t *testing.T) {
+		resp := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:         "Hello",
+				MessageID:      "",
+				ConversationID: "",
+			},
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "inv-123",
+		}
+
+		evt := converter.ConvertStreamingToEvent(resp, "test-agent", invocation)
+
+		if evt == nil {
+			t.Fatal("expected event, got nil")
+		}
+		if evt.Response.ID != "" {
+			t.Errorf("expected empty Response.ID, got '%s'", evt.Response.ID)
+		}
+	})
+
+	t.Run("sets Response.Object to ChatCompletionChunk", func(t *testing.T) {
+		resp := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer: "Hello",
+			},
+		}
+
+		invocation := &agent.Invocation{
+			InvocationID: "inv-123",
+		}
+
+		evt := converter.ConvertStreamingToEvent(resp, "test-agent", invocation)
+
+		if evt == nil {
+			t.Fatal("expected event, got nil")
+		}
+		if evt.Response.Object != model.ObjectTypeChatCompletionChunk {
+			t.Errorf("expected Object type '%s', got '%s'", model.ObjectTypeChatCompletionChunk, evt.Response.Object)
 		}
 	})
 }

@@ -59,9 +59,13 @@ type DifyWorkflowRequestConverter interface {
 	) (dify.WorkflowRequest, error)
 }
 
+// defaultDifyEventConverter is the default implementation of DifyEventConverter.
+// It converts Dify chatflow/workflow responses to internal event format.
 type defaultDifyEventConverter struct {
 }
 
+// ConvertToEvent converts a Dify ChatMessageResponse to an internal Event.
+// If resp is nil, it returns a default empty assistant message event.
 func (d *defaultDifyEventConverter) ConvertToEvent(
 	resp *dify.ChatMessageResponse,
 	agentName string,
@@ -77,6 +81,12 @@ func (d *defaultDifyEventConverter) ConvertToEvent(
 		return
 	}
 
+	// set Dify response ID, ensure AG-UI translator can correctly identify the message
+	responseID := resp.ID
+	if responseID == "" {
+		responseID = resp.ConversationID
+	}
+
 	message := model.Message{
 		Role:    model.RoleAssistant,
 		Content: resp.Answer,
@@ -86,6 +96,8 @@ func (d *defaultDifyEventConverter) ConvertToEvent(
 		invocation.InvocationID,
 		agentName,
 		event.WithResponse(&model.Response{
+			ID:        responseID,
+			Object:    model.ObjectTypeChatCompletion,
 			Choices:   []model.Choice{{Message: message, Delta: message}},
 			Timestamp: time.Now(),
 			Created:   time.Now().Unix(),
@@ -96,6 +108,8 @@ func (d *defaultDifyEventConverter) ConvertToEvent(
 	return
 }
 
+// ConvertStreamingToEvent converts a Dify streaming response to an internal Event.
+// Returns nil if the response Answer is empty.
 func (d *defaultDifyEventConverter) ConvertStreamingToEvent(
 	resp dify.ChatMessageStreamChannelResponse,
 	agentName string,
@@ -104,6 +118,17 @@ func (d *defaultDifyEventConverter) ConvertStreamingToEvent(
 	if resp.Answer == "" {
 		return
 	}
+
+	// set Dify return MessageID as Response.ID, ensure AG-UI translator
+	// can correctly trigger TextMessageStartEvent. If MessageID is empty, fall back in order.
+	responseID := resp.MessageID
+	if responseID == "" {
+		responseID = resp.ConversationID
+	}
+	if responseID == "" {
+		responseID = resp.ID
+	}
+
 	message := model.Message{
 		Role:    model.RoleAssistant,
 		Content: resp.Answer,
@@ -113,6 +138,7 @@ func (d *defaultDifyEventConverter) ConvertStreamingToEvent(
 		invocation.InvocationID,
 		agentName,
 		event.WithResponse(&model.Response{
+			ID:        responseID,
 			Object:    model.ObjectTypeChatCompletionChunk,
 			Choices:   []model.Choice{{Delta: message}},
 			Timestamp: time.Now(),
@@ -125,9 +151,13 @@ func (d *defaultDifyEventConverter) ConvertStreamingToEvent(
 	return
 }
 
+// defaultEventDifyConverter is the default implementation of DifyRequestConverter.
+// It converts agent invocations to Dify ChatMessageRequest format.
 type defaultEventDifyConverter struct {
 }
 
+// ConvertToDifyRequest converts an agent invocation to a Dify ChatMessageRequest.
+// It handles text, image, and file content parts from the invocation message.
 func (d *defaultEventDifyConverter) ConvertToDifyRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -144,7 +174,7 @@ func (d *defaultEventDifyConverter) ConvertToDifyRequest(
 		req.User = "anonymous"
 	}
 
-	// 流式返回
+	// Enable streaming response mode
 	if isStream {
 		req.ResponseMode = "streaming"
 	}
@@ -181,9 +211,12 @@ func (d *defaultEventDifyConverter) ConvertToDifyRequest(
 	return req, nil
 }
 
-// defaultWorkflowRequestConverter is the default converter for workflow requests
+// defaultWorkflowRequestConverter is the default implementation of DifyWorkflowRequestConverter.
+// It converts agent invocations to Dify WorkflowRequest format.
 type defaultWorkflowRequestConverter struct{}
 
+// ConvertToWorkflowRequest converts an agent invocation to a Dify WorkflowRequest.
+// It extracts query, image, and file inputs from the invocation message content parts.
 func (d *defaultWorkflowRequestConverter) ConvertToWorkflowRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
