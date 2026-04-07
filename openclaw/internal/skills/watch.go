@@ -10,6 +10,7 @@
 package skills
 
 import (
+	iofs "io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -272,8 +273,16 @@ func (s *WatchService) relevantEvent(
 
 	s.watchMu.RLock()
 	defer s.watchMu.RUnlock()
-	if _, ok := s.watched[path]; ok {
-		return path, true
+	current := path
+	for current != "." && current != "" {
+		if _, ok := s.watched[current]; ok {
+			return path, true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
 	}
 	return "", false
 }
@@ -348,19 +357,7 @@ func (s *WatchService) desiredWatchDirs() map[string]struct{} {
 			continue
 		}
 		if watchDirExists(root) {
-			dirs[root] = struct{}{}
-			entries, err := os.ReadDir(root)
-			if err != nil {
-				continue
-			}
-			for _, entry := range entries {
-				if !entry.IsDir() {
-					continue
-				}
-				if isIgnoredWatchName(entry.Name()) {
-					continue
-				}
-				path := filepath.Join(root, entry.Name())
+			for path := range collectWatchDirs(root) {
 				dirs[path] = struct{}{}
 			}
 			continue
@@ -370,6 +367,27 @@ func (s *WatchService) desiredWatchDirs() map[string]struct{} {
 			dirs[parent] = struct{}{}
 		}
 	}
+	return dirs
+}
+
+func collectWatchDirs(root string) map[string]struct{} {
+	dirs := map[string]struct{}{}
+	_ = filepath.WalkDir(
+		root,
+		func(path string, d iofs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if !d.IsDir() {
+				return nil
+			}
+			if path != root && isIgnoredWatchName(d.Name()) {
+				return filepath.SkipDir
+			}
+			dirs[path] = struct{}{}
+			return nil
+		},
+	)
 	return dirs
 }
 

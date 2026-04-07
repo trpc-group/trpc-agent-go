@@ -86,6 +86,38 @@ func TestWatchService_RefreshesWhenRootCreatedLater(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestWatchService_RefreshesWhenNestedFileChanges(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	skillDir := writeSkill(t, root, "demo", watchTestSkill)
+	guideDir := filepath.Join(skillDir, "docs")
+	guidePath := filepath.Join(guideDir, "guide.md")
+	require.NoError(t, os.MkdirAll(guideDir, 0o755))
+	require.NoError(t, os.WriteFile(guidePath, []byte("v1"), 0o644))
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	watch := NewWatchService(repo, []string{root}, WatchConfig{
+		Enabled:  true,
+		Debounce: 20 * time.Millisecond,
+	})
+	require.NotNil(t, watch)
+	t.Cleanup(func() {
+		require.NoError(t, watch.Close())
+	})
+
+	require.NoError(t, os.WriteFile(guidePath, []byte("v2"), 0o644))
+
+	require.Eventually(t, func() bool {
+		status := watch.Status()
+		return status != nil &&
+			status.Generation >= 1 &&
+			status.LastChangedPath == guidePath
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestWatchService_DisabledDoesNotRefresh(t *testing.T) {
 	root := t.TempDir()
 	repo, err := NewRepository([]string{root})
@@ -235,15 +267,19 @@ func TestWatchService_RelevantEventAndDesiredWatchDirs(t *testing.T) {
 	require.NoError(t, err)
 
 	skillDir := filepath.Join(root, "demo")
+	nestedDir := filepath.Join(skillDir, "docs")
+	nestedFile := filepath.Join(nestedDir, "guide.md")
 	ignoredDir := filepath.Join(root, "node_modules")
-	plainFile := filepath.Join(root, "note.txt")
+	outsideFile := filepath.Join(t.TempDir(), "note.txt")
 	watchedDir := filepath.Join(root, "watched")
 	missingRoot := filepath.Join(t.TempDir(), "missing", "skills")
 
 	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	require.NoError(t, os.MkdirAll(nestedDir, 0o755))
 	require.NoError(t, os.MkdirAll(ignoredDir, 0o755))
 	require.NoError(t, os.MkdirAll(watchedDir, 0o755))
-	require.NoError(t, os.WriteFile(plainFile, []byte("note"), 0o644))
+	require.NoError(t, os.WriteFile(nestedFile, []byte("guide"), 0o644))
+	require.NoError(t, os.WriteFile(outsideFile, []byte("note"), 0o644))
 
 	watch := &WatchService{
 		repo: repo,
@@ -253,6 +289,8 @@ func TestWatchService_RelevantEventAndDesiredWatchDirs(t *testing.T) {
 			"",
 		},
 		watched: map[string]struct{}{
+			root:       {},
+			nestedDir:  {},
 			watchedDir: {},
 		},
 	}
@@ -260,13 +298,14 @@ func TestWatchService_RelevantEventAndDesiredWatchDirs(t *testing.T) {
 	dirs := watch.desiredWatchDirs()
 	require.Contains(t, dirs, root)
 	require.Contains(t, dirs, skillDir)
+	require.Contains(t, dirs, nestedDir)
 	require.Contains(
 		t,
 		dirs,
 		nearestExistingWatchParent(missingRoot),
 	)
 	require.NotContains(t, dirs, ignoredDir)
-	require.NotContains(t, dirs, plainFile)
+	require.NotContains(t, dirs, outsideFile)
 
 	path, ok := watch.relevantEvent(fsnotify.Event{Name: " "})
 	require.False(t, ok)
@@ -300,7 +339,11 @@ func TestWatchService_RelevantEventAndDesiredWatchDirs(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, watchedDir, path)
 
-	path, ok = watch.relevantEvent(fsnotify.Event{Name: plainFile})
+	path, ok = watch.relevantEvent(fsnotify.Event{Name: nestedFile})
+	require.True(t, ok)
+	require.Equal(t, nestedFile, path)
+
+	path, ok = watch.relevantEvent(fsnotify.Event{Name: outsideFile})
 	require.False(t, ok)
 	require.Empty(t, path)
 }
