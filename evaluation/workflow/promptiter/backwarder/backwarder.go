@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
@@ -148,6 +149,12 @@ func (b *backwarder) Backward(ctx context.Context, request *Request) (*Result, e
 	if err != nil {
 		return nil, fmt.Errorf("normalize backward request: %w", err)
 	}
+	if isNoOpBackwardRequest(normalizedRequest) {
+		return &Result{
+			Gradients: []promptiter.SurfaceGradient{},
+			Upstream:  []Propagation{},
+		}, nil
+	}
 	message, err := b.messageBuilder(ctx, normalizedRequest)
 	if err != nil {
 		return nil, fmt.Errorf("build backward message: %w", err)
@@ -163,12 +170,14 @@ func (b *backwarder) Backward(ctx context.Context, request *Request) (*Result, e
 	if sessionID == "" {
 		return nil, errors.New("session id is empty")
 	}
+	runOptions := slices.Clone(b.runOptions)
+	runOptions = append(runOptions, backwardStructuredOutput(normalizedRequest))
 	events, err := b.runner.Run(
 		ctx,
 		userID,
 		sessionID,
 		*message,
-		b.runOptions...,
+		runOptions...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
@@ -189,6 +198,155 @@ func (b *backwarder) Backward(ctx context.Context, request *Request) (*Result, e
 		return nil, fmt.Errorf("sanitize backward result: %w", err)
 	}
 	return result, nil
+}
+
+func isNoOpBackwardRequest(request *Request) bool {
+	return request != nil && len(request.Surfaces) == 0 && len(request.Predecessors) == 0
+}
+
+func backwardStructuredOutput(request *Request) agent.RunOption {
+	return agent.WithStructuredOutputJSONSchema(
+		"BackwardResult",
+		backwardResultSchema(request),
+		true,
+		"One PromptIter backward propagation result.",
+	)
+}
+
+func backwardResultSchema(request *Request) map[string]any {
+	surfaceIDs := requestSurfaceIDs(request)
+	predecessorStepIDs := requestPredecessorStepIDs(request)
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"Gradients": backwardGradientArraySchema(surfaceIDs),
+			"Upstream":  backwardPropagationArraySchema(predecessorStepIDs),
+		},
+		"required":             []string{"Gradients", "Upstream"},
+		"additionalProperties": false,
+	}
+}
+
+func requestSurfaceIDs(request *Request) []string {
+	if request == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(request.Surfaces))
+	seen := make(map[string]struct{}, len(request.Surfaces))
+	for _, surface := range request.Surfaces {
+		if surface.SurfaceID == "" {
+			continue
+		}
+		if _, ok := seen[surface.SurfaceID]; ok {
+			continue
+		}
+		seen[surface.SurfaceID] = struct{}{}
+		ids = append(ids, surface.SurfaceID)
+	}
+	return ids
+}
+
+func requestPredecessorStepIDs(request *Request) []string {
+	if request == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(request.Predecessors))
+	seen := make(map[string]struct{}, len(request.Predecessors))
+	for _, predecessor := range request.Predecessors {
+		if predecessor.StepID == "" {
+			continue
+		}
+		if _, ok := seen[predecessor.StepID]; ok {
+			continue
+		}
+		seen[predecessor.StepID] = struct{}{}
+		ids = append(ids, predecessor.StepID)
+	}
+	return ids
+}
+
+func backwardGradientArraySchema(surfaceIDs []string) map[string]any {
+	itemSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"SurfaceID": map[string]any{
+				"type": "string",
+				"enum": surfaceIDs,
+			},
+			"Severity": map[string]any{
+				"type": "string",
+				"enum": []string{
+					string(promptiter.LossSeverityP0),
+					string(promptiter.LossSeverityP1),
+					string(promptiter.LossSeverityP2),
+					string(promptiter.LossSeverityP3),
+				},
+			},
+			"Gradient": map[string]any{
+				"type": "string",
+			},
+		},
+		"required":             []string{"SurfaceID", "Severity", "Gradient"},
+		"additionalProperties": false,
+	}
+	if len(surfaceIDs) == 0 {
+		return map[string]any{
+			"type":     "array",
+			"items":    itemSchema,
+			"maxItems": 0,
+		}
+	}
+	return map[string]any{
+		"type":  "array",
+		"items": itemSchema,
+	}
+}
+
+func backwardPropagationArraySchema(predecessorStepIDs []string) map[string]any {
+	itemSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"PredecessorStepID": map[string]any{
+				"type": "string",
+				"enum": predecessorStepIDs,
+			},
+			"Gradients": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"Severity": map[string]any{
+							"type": "string",
+							"enum": []string{
+								string(promptiter.LossSeverityP0),
+								string(promptiter.LossSeverityP1),
+								string(promptiter.LossSeverityP2),
+								string(promptiter.LossSeverityP3),
+							},
+						},
+						"Gradient": map[string]any{
+							"type": "string",
+						},
+					},
+					"required":             []string{"Severity", "Gradient"},
+					"additionalProperties": false,
+				},
+			},
+		},
+		"required":             []string{"PredecessorStepID", "Gradients"},
+		"additionalProperties": false,
+	}
+	if len(predecessorStepIDs) == 0 {
+		return map[string]any{
+			"type":     "array",
+			"items":    itemSchema,
+			"maxItems": 0,
+		}
+	}
+	return map[string]any{
+		"type":  "array",
+		"items": itemSchema,
+	}
 }
 
 func normalizeRequest(request *Request) (*Request, error) {

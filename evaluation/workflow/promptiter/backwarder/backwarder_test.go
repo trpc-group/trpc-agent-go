@@ -11,7 +11,6 @@ package backwarder
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -32,6 +31,7 @@ type fakeRunner struct {
 	lastSessionID string
 	lastMessage   model.Message
 	lastRunOpts   agent.RunOptions
+	runCalls      int
 }
 
 func (f *fakeRunner) Run(
@@ -42,6 +42,7 @@ func (f *fakeRunner) Run(
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
 	_ = ctx
+	f.runCalls++
 	f.lastUserID = userID
 	f.lastSessionID = sessionID
 	f.lastMessage = message
@@ -197,7 +198,142 @@ func TestBackwardUsesDefaultUUIDSessionID(t *testing.T) {
 	assert.NoError(t, sessionParseErr)
 	assert.NotNil(t, r.lastRunOpts.StructuredOutput)
 	assert.Equal(t, model.StructuredOutputJSONSchema, r.lastRunOpts.StructuredOutput.Type)
-	assert.Equal(t, reflect.TypeOf((*Result)(nil)), r.lastRunOpts.StructuredOutputType)
+	assert.Nil(t, r.lastRunOpts.StructuredOutputType)
+}
+
+func TestBackwardUsesRequestScopedStructuredOutputSchema(t *testing.T) {
+	r := &fakeRunner{
+		events: []*event.Event{
+			event.NewResponseEvent(
+				"invocation-id",
+				"backwarder",
+				&model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{
+							Message: model.NewAssistantMessage(`{"Gradients":[{"SurfaceID":"surf_1","Severity":"P1","Gradient":"fix citation grounding"}],"Upstream":[{"PredecessorStepID":"pred_1","Gradients":[{"Severity":"P1","Gradient":"need stronger evidence packet"}]}]}`),
+						},
+					},
+				},
+			),
+		},
+	}
+	bw, err := New(context.Background(), r)
+	assert.NoError(t, err)
+
+	rsp, err := bw.Backward(context.Background(), newInstructionRequest())
+
+	assert.NoError(t, err)
+	assert.NotNil(t, rsp)
+	if assert.NotNil(t, r.lastRunOpts.StructuredOutput) && assert.NotNil(t, r.lastRunOpts.StructuredOutput.JSONSchema) {
+		schema := r.lastRunOpts.StructuredOutput.JSONSchema.Schema
+		schemaProps, ok := schema["properties"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		gradientsSchema, ok := schemaProps["Gradients"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		gradientItem, ok := gradientsSchema["items"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		gradientProps, ok := gradientItem["properties"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		gradientSurfaceIDSchema, ok := gradientProps["SurfaceID"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		assert.Equal(t, []string{"surf_1"}, gradientSurfaceIDSchema["enum"])
+		upstreamSchema, ok := schemaProps["Upstream"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		upstreamItem, ok := upstreamSchema["items"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		upstreamProps, ok := upstreamItem["properties"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		upstreamPredecessorSchema, ok := upstreamProps["PredecessorStepID"].(map[string]any)
+		assert.True(t, ok)
+		if !ok {
+			return
+		}
+		assert.Equal(t, []string{"pred_1"}, upstreamPredecessorSchema["enum"])
+	}
+}
+
+func TestBackwardStructuredOutputSchema_EmptyCollectionsStillDeclareItems(t *testing.T) {
+	request := newInstructionRequest()
+	request.Surfaces = nil
+	request.Predecessors = nil
+
+	schema := backwardResultSchema(request)
+	schemaProps, ok := schema["properties"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	gradientsSchema, ok := schemaProps["Gradients"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	assert.Equal(t, 0, gradientsSchema["maxItems"])
+	assert.Contains(t, gradientsSchema, "items")
+	upstreamSchema, ok := schemaProps["Upstream"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	assert.Equal(t, 0, upstreamSchema["maxItems"])
+	assert.Contains(t, upstreamSchema, "items")
+}
+
+func TestBackwardAllowsEmptyResultForRootControlStep(t *testing.T) {
+	r := &fakeRunner{
+		events: []*event.Event{
+			event.NewResponseEvent(
+				"invocation-id",
+				"backwarder",
+				&model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage(`{"Gradients":[],"Upstream":[]}`)},
+					},
+				},
+			),
+		},
+	}
+	bw, err := New(context.Background(), r)
+	assert.NoError(t, err)
+	request := newInstructionRequest()
+	request.StepID = "root_step"
+	request.Surfaces = nil
+	request.Predecessors = nil
+
+	rsp, err := bw.Backward(context.Background(), request)
+
+	assert.NoError(t, err)
+	assert.Equal(t, &Result{
+		Gradients: []promptiter.SurfaceGradient{},
+		Upstream:  []Propagation{},
+	}, rsp)
+	assert.Equal(t, 0, r.runCalls)
 }
 
 func TestBackwardFallsBackToFinalContent(t *testing.T) {

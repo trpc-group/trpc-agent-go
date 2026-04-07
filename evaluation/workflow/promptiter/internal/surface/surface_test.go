@@ -36,7 +36,11 @@ func TestValidateValue(t *testing.T) {
 	))
 	assert.NoError(t, ValidateValue(
 		astructure.SurfaceTypeModel,
-		astructure.SurfaceValue{Model: &astructure.ModelRef{Name: "m"}},
+		astructure.SurfaceValue{Model: &astructure.ModelRef{
+			Provider: "openai",
+			Name:     "m",
+			Headers:  map[string]string{"X-Test": "1"},
+		}},
 	))
 
 	assert.Error(t, ValidateValue(
@@ -125,16 +129,27 @@ func TestSanitizeValue(t *testing.T) {
 	assert.Nil(t, sanitizedFewShot.Model)
 	assert.NotNil(t, sanitizedFewShot.FewShot)
 
+	modelRef := &astructure.ModelRef{
+		Provider: "openai",
+		Name:     "m",
+		Headers:  map[string]string{"X-Test": "1"},
+	}
 	sanitizedModel, err := SanitizeValue(
 		astructure.SurfaceTypeModel,
 		astructure.SurfaceValue{
 			Text:  &emptyText,
-			Model: &astructure.ModelRef{Name: "m"},
+			Model: modelRef,
 		},
 	)
 	assert.NoError(t, err)
 	assert.Nil(t, sanitizedModel.Text)
-	assert.Equal(t, &astructure.ModelRef{Name: "m"}, sanitizedModel.Model)
+	assert.Equal(t, &astructure.ModelRef{
+		Provider: "openai",
+		Name:     "m",
+		Headers:  map[string]string{"X-Test": "1"},
+	}, sanitizedModel.Model)
+	sanitizedModel.Model.Headers["X-Test"] = "2"
+	assert.Equal(t, "1", modelRef.Headers["X-Test"])
 }
 
 func TestSanitizeValueRejectsInvalidInput(t *testing.T) {

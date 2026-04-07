@@ -12,6 +12,8 @@ package surface
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"strings"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 )
@@ -58,7 +60,7 @@ func ValidateValue(surfaceType astructure.SurfaceType, value astructure.SurfaceV
 		if value.Model == nil {
 			return errors.New("model is nil")
 		}
-		if value.Model.Name == "" {
+		if strings.TrimSpace(value.Model.Name) == "" {
 			return errors.New("model name is empty")
 		}
 		if value.Text != nil {
@@ -135,7 +137,7 @@ func SanitizeValue(
 		if value.Model == nil {
 			return astructure.SurfaceValue{}, errors.New("model is nil")
 		}
-		if value.Model.Name == "" {
+		if strings.TrimSpace(value.Model.Name) == "" {
 			return astructure.SurfaceValue{}, errors.New("model name is empty")
 		}
 		if value.Text != nil && *value.Text != "" {
@@ -197,6 +199,14 @@ func cloneModel(modelValue *astructure.ModelRef) *astructure.ModelRef {
 		return nil
 	}
 	cloned := *modelValue
+	cloned.Provider = strings.TrimSpace(modelValue.Provider)
+	cloned.Name = strings.TrimSpace(modelValue.Name)
+	cloned.Variant = strings.TrimSpace(modelValue.Variant)
+	cloned.BaseURL = strings.TrimSpace(modelValue.BaseURL)
+	cloned.APIKey = strings.TrimSpace(modelValue.APIKey)
+	if len(modelValue.Headers) > 0 {
+		cloned.Headers = maps.Clone(modelValue.Headers)
+	}
 	return &cloned
 }
 
@@ -204,5 +214,10 @@ func isEmptyModel(modelValue *astructure.ModelRef) bool {
 	if modelValue == nil {
 		return true
 	}
-	return modelValue.Name == ""
+	return strings.TrimSpace(modelValue.Provider) == "" &&
+		strings.TrimSpace(modelValue.Name) == "" &&
+		strings.TrimSpace(modelValue.Variant) == "" &&
+		strings.TrimSpace(modelValue.BaseURL) == "" &&
+		strings.TrimSpace(modelValue.APIKey) == "" &&
+		len(modelValue.Headers) == 0
 }

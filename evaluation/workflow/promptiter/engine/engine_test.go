@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/provider"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -112,6 +113,23 @@ type scriptedEvalOutcome struct {
 	appliedSurfaceIDs []string
 	missingTrace      bool
 	executionTrace    *atrace.Trace
+}
+
+type providerBackedTestModel struct {
+	name string
+}
+
+func (m *providerBackedTestModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (m *providerBackedTestModel) Info() model.Info {
+	return model.Info{Name: m.name}
 }
 
 type scriptedEvalService struct {
@@ -582,7 +600,66 @@ func TestCompileProfileRunOptionsUsesNodeSurfacePatchForNonEntryNode(t *testing.
 	assert.Equal(t, "patched review prompt", instruction)
 }
 
-func TestCompileProfileRunOptionsRejectsModelOverrideWithoutModelInstance(t *testing.T) {
+func TestCompileProfileRunOptionsUsesModelSurfacePatch(t *testing.T) {
+	const providerName = "promptiter_test_provider"
+	var capturedOptions provider.Options
+	provider.Register(providerName, func(opts *provider.Options) (model.Model, error) {
+		capturedOptions = *opts
+		return &providerBackedTestModel{name: opts.ModelName}, nil
+	})
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "entry",
+		Nodes: []astructure.Node{
+			{NodeID: "entry", Kind: astructure.NodeKindLLM, Name: "entry"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "entry#model",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeModel,
+				Value: astructure.SurfaceValue{
+					Model: &astructure.ModelRef{
+						Provider: providerName,
+						Name:     "base-model",
+					},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
+		StructureID: "structure_1",
+		Overrides: []promptiter.SurfaceOverride{
+			{
+				SurfaceID: "entry#model",
+				Value: astructure.SurfaceValue{
+					Model: &astructure.ModelRef{
+						Provider: providerName,
+						Name:     "patched-model",
+						BaseURL:  "https://api.example.com/v1",
+						APIKey:   "secret",
+						Headers:  map[string]string{"X-Test": "1"},
+					},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	opts := agent.NewRunOptions(runOptions...)
+	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "entry")
+	assert.True(t, ok)
+	modelValue, ok := patch.Model()
+	assert.True(t, ok)
+	assert.Equal(t, "patched-model", modelValue.Info().Name)
+	assert.Equal(t, providerName, capturedOptions.ProviderName)
+	assert.Equal(t, "patched-model", capturedOptions.ModelName)
+	assert.Equal(t, "https://api.example.com/v1", capturedOptions.BaseURL)
+	assert.Equal(t, "secret", capturedOptions.APIKey)
+	assert.Equal(t, map[string]string{"X-Test": "1"}, capturedOptions.Headers)
+}
+
+func TestCompileProfileRunOptionsDefaultsModelProviderToOpenAI(t *testing.T) {
 	structure, err := newStructureState(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "entry",
@@ -601,7 +678,7 @@ func TestCompileProfileRunOptionsRejectsModelOverrideWithoutModelInstance(t *tes
 		},
 	})
 	assert.NoError(t, err)
-	_, err = compileProfileRunOptions(structure, &promptiter.Profile{
+	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
 		StructureID: "structure_1",
 		Overrides: []promptiter.SurfaceOverride{
 			{
@@ -612,8 +689,13 @@ func TestCompileProfileRunOptionsRejectsModelOverrideWithoutModelInstance(t *tes
 			},
 		},
 	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "require a model instance")
+	assert.NoError(t, err)
+	opts := agent.NewRunOptions(runOptions...)
+	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "entry")
+	assert.True(t, ok)
+	modelValue, ok := patch.Model()
+	assert.True(t, ok)
+	assert.Equal(t, "patched-model", modelValue.Info().Name)
 }
 
 func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -24,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/provider"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -265,11 +267,12 @@ func applySurfaceOverrideToPatch(
 		patch.SetFewShot(examples)
 		return nil
 	case astructure.SurfaceTypeModel:
-		return fmt.Errorf(
-			"surface %q type %q is not supported by generic evaluation because runtime node surface patches require a model instance",
-			surface.SurfaceID,
-			surface.Type,
-		)
+		modelInstance, err := buildModelInstance(value.Model)
+		if err != nil {
+			return fmt.Errorf("surface %q model value is invalid: %w", surface.SurfaceID, err)
+		}
+		patch.SetModel(modelInstance)
+		return nil
 	default:
 		return fmt.Errorf(
 			"surface %q type %q is not supported by generic evaluation",
@@ -277,6 +280,40 @@ func applySurfaceOverrideToPatch(
 			surface.Type,
 		)
 	}
+}
+
+func buildModelInstance(ref *astructure.ModelRef) (model.Model, error) {
+	if ref == nil {
+		return nil, errors.New("model ref is nil")
+	}
+	providerName := strings.TrimSpace(ref.Provider)
+	if providerName == "" {
+		providerName = "openai"
+	}
+	modelName := strings.TrimSpace(ref.Name)
+	if modelName == "" {
+		return nil, errors.New("model name is empty")
+	}
+	options := make([]provider.Option, 0, 4)
+	if variant := strings.TrimSpace(ref.Variant); variant != "" {
+		options = append(options, provider.WithVariant(variant))
+	}
+	if baseURL := strings.TrimSpace(ref.BaseURL); baseURL != "" {
+		options = append(options, provider.WithBaseURL(baseURL))
+	}
+	if apiKey := strings.TrimSpace(ref.APIKey); apiKey != "" {
+		options = append(options, provider.WithAPIKey(apiKey))
+	}
+	if len(ref.Headers) > 0 {
+		headers := make(map[string]string, len(ref.Headers))
+		maps.Copy(headers, ref.Headers)
+		options = append(options, provider.WithHeaders(headers))
+	}
+	modelInstance, err := provider.Model(providerName, modelName, options...)
+	if err != nil {
+		return nil, err
+	}
+	return modelInstance, nil
 }
 
 func convertFewShotExamples(
