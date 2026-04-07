@@ -1887,10 +1887,16 @@ func newAgent(
 		)
 	}
 
+	genConfig := model.GenerationConfig{Stream: true}
+	if cfg.GenerationConfig != nil {
+		genConfig = *cfg.GenerationConfig
+	}
+
 	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
 		llmagent.WithInstruction(instruction),
 		llmagent.WithGlobalInstruction(strings.TrimSpace(cfg.SystemPrompt)),
+		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithEnableContextCompaction(cfg.EnableContextCompaction),
 		llmagent.WithContextCompactionOversizedToolResultMaxTokens(cfg.ContextCompactionOversizedToolResultMaxTokens),
@@ -1900,12 +1906,6 @@ func newAgent(
 			conversation.ProjectEventMessage,
 		),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
-	}
-	if cfg.GenerationConfig != nil {
-		opts = append(
-			opts,
-			llmagent.WithGenerationConfig(*cfg.GenerationConfig),
-		)
 	}
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(

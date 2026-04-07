@@ -109,8 +109,6 @@ func New(name string, opts ...Option) *LLMAgent {
 	// Initialize models map and determine the initial model.
 	initialModel, models := initializeModels(&options)
 
-	resolvedGenCfg := resolveDefaultGenerationConfig(&options)
-
 	// Construct the agent first so request processors can access dynamic getters.
 	a := &LLMAgent{
 		name:              name,
@@ -123,7 +121,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		modelGlobalInstructions: cloneTextPromptMap(
 			options.ModelGlobalInstructions,
 		),
-		genConfig:            resolvedGenCfg,
+		genConfig:            options.GenerationConfig,
 		codeExecutor:         options.codeExecutor,
 		tools:                tools,
 		userToolNames:        userToolNames,
@@ -210,9 +208,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 
 	// 1. Basic processor - handles generation config.
 	basicOptions := []processor.BasicOption{
-		processor.WithGenerationConfig(
-			resolveDefaultGenerationConfig(options),
-		),
+		processor.WithGenerationConfig(options.GenerationConfig),
 	}
 	basicProcessor := processor.NewBasicRequestProcessor(basicOptions...)
 	requestProcessors = append(requestProcessors, basicProcessor)
@@ -377,15 +373,6 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	requestProcessors = appendTimeProcessor(options, requestProcessors)
 
 	return requestProcessors
-}
-
-func resolveDefaultGenerationConfig(
-	options *Options,
-) model.GenerationConfig {
-	if options != nil && options.generationConfigConfigured {
-		return options.GenerationConfig
-	}
-	return model.GenerationConfig{Stream: true}
 }
 
 func hasStaticOutputResponseProcessor(options *Options) bool {
