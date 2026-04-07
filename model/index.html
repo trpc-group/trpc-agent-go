@@ -4273,6 +4273,12 @@
 </span><span id="__span-7-43"><a id="__codelineno-7-43" name="__codelineno-7-43"></a><span class="w">    </span><span class="nx">ThinkingTokens</span><span class="w"> </span><span class="o">*</span><span class="kt">int</span><span class="w"> </span><span class="s">`json:&quot;-&quot;`</span>
 </span><span id="__span-7-44"><a id="__codelineno-7-44" name="__codelineno-7-44"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<p><code>GenerationConfig</code> itself is just a plain struct, and its zero value
+means <code>Stream=false</code>. For <code>LLMAgent</code>, if you omit
+<code>llmagent.WithGenerationConfig(...)</code>, the framework forwards that zero
+value as-is, so the default behavior is non-streaming. Higher-level
+wrappers can still choose different semantics by setting their own
+explicit defaults.</p>
 <h3 id="response-structure">Response Structure</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-8-2"> 2</a></span>
@@ -7489,7 +7495,7 @@ to preserve the default clean text-streaming behavior.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 3, 2026 03:28:01 UTC">2026-04-03 03:28:01</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 7, 2026 12:57:39 UTC">2026-04-07 12:57:39</span>
   </span>
 
     
