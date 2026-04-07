@@ -2630,12 +2630,9 @@ func setSubgraphInterruptState(
 	childNamespace := stateStringOr(childState, CfgKeyCheckpointNS, targetAgent.Info().Name)
 	childCheckpointID := ""
 
-	applyInterruptInfo := func() {
-		// Use checkpoint identity carried by interrupt event metadata.
-		// This is the only reliable source for remote subgraphs.
-		if interruptInfo == nil {
-			return
-		}
+	// Unify local/remote handling: rely on interrupt event metadata rather than
+	// local executor/checkpoint-manager lookups.
+	if interruptInfo != nil {
 		if interruptInfo.lineageID != "" {
 			childLineageID = interruptInfo.lineageID
 		}
@@ -2647,32 +2644,23 @@ func setSubgraphInterruptState(
 		}
 	}
 
-	resolveLatestInterruptedCheckpoint := func() {
-		// Best-effort lookup from local checkpoint manager for GraphAgent subgraphs.
-		if childCheckpointID != "" {
-			return
-		}
+	// Fallback: when metadata does not carry checkpoint_id, best-effort lookup
+	// from local checkpoint manager for local GraphAgent subgraphs.
+	if childCheckpointID == "" {
+		log.DebugfContext(
+			ctx,
+			"subgraph: fallback to latest interrupted checkpoint lookup: agent=%s node=%s lineage=%s namespace=%s",
+			agentName,
+			nodeID,
+			childLineageID,
+			childNamespace,
+		)
 		latest, ckptErr := latestInterruptedCheckpointID(ctx, targetAgent, childLineageID, childNamespace)
 		if ckptErr != nil {
 			log.DebugfContext(ctx, "subgraph: latest checkpoint failed: %v", ckptErr)
-			return
+		} else {
+			childCheckpointID = latest
 		}
-		childCheckpointID = latest
-	}
-
-	_, hasLocalExecutor := targetAgent.(executorProvider)
-	if hasLocalExecutor {
-		// Local GraphAgent subgraph: prefer local checkpoint manager lookup.
-		resolveLatestInterruptedCheckpoint()
-		// Fallback to event metadata when local lookup returns empty.
-		if childCheckpointID == "" {
-			applyInterruptInfo()
-		}
-	} else {
-		// Remote subgraph (for example A2A): prefer metadata from interrupt event.
-		applyInterruptInfo()
-		// Keep local lookup as a no-op-safe fallback for mixed/custom agents.
-		resolveLatestInterruptedCheckpoint()
 	}
 
 	state[StateKeySubgraphInterrupt] = map[string]any{
@@ -3008,13 +2996,17 @@ func updateAgentStructuredOutput(res *agentEventStreamResult, ev *event.Event) {
 }
 
 func updateAgentInterrupt(res *agentEventStreamResult, ev *event.Event) {
-	if res == nil || res.interrupt != nil {
+	if res == nil {
 		return
 	}
 	info, ok := extractPregelInterruptInfo(ev)
 	if !ok || info == nil || info.interrupt == nil {
 		return
 	}
+	// Keep the latest interrupt metadata observed in the stream.
+	// In nested subgraphs, a deeper child interrupt may appear first, followed by
+	// the immediate child interrupt propagated upward. Using the latest metadata
+	// avoids pinning parent resume state to a deeper descendant checkpoint.
 	res.interrupt = info.interrupt
 	res.interruptInfo = info
 }
