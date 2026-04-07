@@ -185,7 +185,7 @@ func (t *SubtaskTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 
 	childAgent := &toolScopedAgent{
 		Agent:       parentAgent,
-		scopedTools: scopeTools(parentAgent.Tools(), req.Tools),
+		scopedTools: scopeTools(parentAgent.Tools(), req.Tools, t.name),
 	}
 
 	subInv := parentInv.Clone(
@@ -319,11 +319,18 @@ func persistable(evt *event.Event) *event.Event {
 }
 
 // scopeTools builds the tool list for the subtask sub-agent.
-// It always strips excluded tools (subtask, transfer) to prevent
-// recursion and incompatible semantics. When allowNames is non-empty,
-// only tools whose names appear in that list (AND are not excluded)
-// are kept.
-func scopeTools(all []tool.Tool, allowNames []string) []tool.Tool {
+// It always strips excluded tools (subtask, transfer) and the caller's
+// own tool name (to handle WithSubtaskName renames) to prevent recursion
+// and incompatible semantics. When allowNames is non-empty, only tools
+// whose names appear in that list (AND are not excluded) are kept.
+func scopeTools(all []tool.Tool, allowNames []string, callerName string) []tool.Tool {
+	blocked := func(name string) bool {
+		if _, ok := excludedToolNames[name]; ok {
+			return true
+		}
+		return name == callerName
+	}
+
 	if len(allowNames) > 0 {
 		nameSet := make(map[string]struct{}, len(allowNames))
 		for _, n := range allowNames {
@@ -332,7 +339,7 @@ func scopeTools(all []tool.Tool, allowNames []string) []tool.Tool {
 		var out []tool.Tool
 		for _, t := range all {
 			name := t.Declaration().Name
-			if _, blocked := excludedToolNames[name]; blocked {
+			if blocked(name) {
 				continue
 			}
 			if _, ok := nameSet[name]; ok {
@@ -344,7 +351,7 @@ func scopeTools(all []tool.Tool, allowNames []string) []tool.Tool {
 
 	var out []tool.Tool
 	for _, t := range all {
-		if _, blocked := excludedToolNames[t.Declaration().Name]; !blocked {
+		if !blocked(t.Declaration().Name) {
 			out = append(out, t)
 		}
 	}

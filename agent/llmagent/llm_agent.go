@@ -97,6 +97,9 @@ func New(name string, opts ...Option) *LLMAgent {
 		if len(options.SubAgents) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
 		}
+		if options.Subtask {
+			panic("Invalid LLMAgent configuration: if output_schema is set, WithSubtask must not be enabled")
+		}
 	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.

@@ -233,7 +233,7 @@ func TestScopeTools_StripsExcludedTools(t *testing.T) {
 
 	all := []tool.Tool{calc, taskT, transferT, knowledgeT}
 
-	scoped := scopeTools(all, nil)
+	scoped := scopeTools(all, nil, ToolName)
 	names := toolNames(scoped)
 	require.ElementsMatch(t, []string{"calculator", "knowledge_search"}, names,
 		"default scope should keep user and non-excluded framework tools")
@@ -247,7 +247,7 @@ func TestScopeTools_WithExplicitNames(t *testing.T) {
 
 	all := []tool.Tool{calc, weather, taskT, knowledgeT}
 
-	scoped := scopeTools(all, []string{"calculator", "knowledge_search"})
+	scoped := scopeTools(all, []string{"calculator", "knowledge_search"}, ToolName)
 	names := toolNames(scoped)
 	require.ElementsMatch(t, []string{"calculator", "knowledge_search"}, names,
 		"explicit names should be respected, excluded tools stripped")
@@ -259,7 +259,7 @@ func TestScopeTools_ExplicitNameCannotForceExcludedTool(t *testing.T) {
 
 	all := []tool.Tool{calc, taskT}
 
-	scoped := scopeTools(all, []string{"calculator", ToolName})
+	scoped := scopeTools(all, []string{"calculator", ToolName}, ToolName)
 	names := toolNames(scoped)
 	require.Equal(t, []string{"calculator"}, names,
 		"explicitly naming an excluded tool should not include it")

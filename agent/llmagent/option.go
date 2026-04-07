@@ -270,7 +270,7 @@ type Options struct {
 
 	// Subtask, when true, registers the built-in `subtask` tool
 	// (ephemeral call-return delegation).
-	Subtask  bool
+	Subtask            bool
 	subtaskToolOptions []toolsubtask.SubtaskOption
 
 	// RefreshToolSetsOnRun controls whether tools from ToolSets are
