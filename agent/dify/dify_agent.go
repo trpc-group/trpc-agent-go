@@ -237,10 +237,16 @@ func (r *DifyAgent) buildWorkflowStreamingRequest(
 	req.ResponseMode = "streaming"
 
 	var aggregatedContentBuilder strings.Builder
+	var workflowRunID string
 
 	err = r.difyClient.API().RunStreamWorkflow(ctx, req, func(resp dify.StreamingResponse) {
 		if err := agent.CheckContextCancelled(ctx); err != nil {
 			return
+		}
+
+		// Track workflow_run_id from streaming response for tracing correlation with Dify logs
+		if resp.WorkflowRunID != "" {
+			workflowRunID = resp.WorkflowRunID
 		}
 
 		// Convert workflow streaming response to event
@@ -271,6 +277,7 @@ func (r *DifyAgent) buildWorkflowStreamingRequest(
 				invocation.InvocationID,
 				r.name,
 				event.WithResponse(&model.Response{
+					ID:        workflowRunID,
 					Object:    model.ObjectTypeChatCompletionChunk,
 					Choices:   []model.Choice{{Delta: message}},
 					Timestamp: time.Now(),
@@ -288,8 +295,12 @@ func (r *DifyAgent) buildWorkflowStreamingRequest(
 		return fmt.Errorf("workflow streaming request failed to %s: %v", r.baseUrl, err)
 	}
 
-	// Send final aggregated event
-	r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String())
+	// Send final aggregated event with Dify-assigned workflow_run_id for proper tracing
+	finalID := workflowRunID
+	if finalID == "" {
+		finalID = invocation.InvocationID
+	}
+	r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String(), finalID)
 	return nil
 }
 
@@ -299,11 +310,14 @@ func (r *DifyAgent) sendFinalStreamingEvent(
 	eventChan chan<- *event.Event,
 	invocation *agent.Invocation,
 	aggregatedContent string,
+	messageID string,
 ) {
 	agent.EmitEvent(ctx, invocation, eventChan, event.New(
 		invocation.InvocationID,
 		r.name,
 		event.WithResponse(&model.Response{
+			ID:        messageID,
+			Object:    model.ObjectTypeChatCompletion,
 			Done:      true,
 			IsPartial: false,
 			Timestamp: time.Now(),
@@ -346,11 +360,11 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 		}
 
 		var aggregatedContentBuilder strings.Builder
+		var lastMessageID string
 		for streamEvent := range streamChan {
 			if err := agent.CheckContextCancelled(ctx); err != nil {
 				return
 			}
-
 			evt, content, err := r.processStreamEvent(ctx, streamEvent, invocation)
 			if err != nil {
 				r.sendErrorEvent(ctx, eventChan, invocation, err.Error())
@@ -362,6 +376,11 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 				continue
 			}
 
+			// Record the streaming event's MessageID to keep the final event consistent
+			if evt.Response != nil && evt.Response.ID != "" {
+				lastMessageID = evt.Response.ID
+			}
+
 			if content != "" {
 				aggregatedContentBuilder.WriteString(content)
 			}
@@ -369,7 +388,7 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 			agent.EmitEvent(ctx, invocation, eventChan, evt)
 		}
 
-		r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String())
+		r.sendFinalStreamingEvent(ctx, eventChan, invocation, aggregatedContentBuilder.String(), lastMessageID)
 	}()
 	return eventChan, nil
 }
@@ -500,6 +519,8 @@ func (r *DifyAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+// getDifyClient returns a Dify client instance, preferring the custom getDifyClientFunc if set,
+// otherwise creating a client with the default configuration.
 func (r *DifyAgent) getDifyClient(
 	invocation *agent.Invocation,
 ) (*dify.Client, error) {
