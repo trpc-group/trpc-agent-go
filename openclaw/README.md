@@ -1185,9 +1185,9 @@ result messages. This keeps the system prompt more stable while still
 letting `SkillLoadMode` control how long loaded skill state survives.
 
 When `skills.watch` is enabled, changes under local filesystem skill
-roots are picked up automatically on the next turn. Official install
-flows should still prefer staged publish plus explicit refresh after the
-final rename.
+roots are picked up automatically after the watch debounce fires.
+Official install flows should still prefer staged publish plus explicit
+refresh after the final rename.
 
 The built-in skills guidance is also more runtime-oriented by default:
 the agent prefers skill-owned scripts when present and may use minimal
