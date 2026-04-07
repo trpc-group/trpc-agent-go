@@ -317,8 +317,12 @@ func runChildAgentInsideTool(
     }
 
     childRunOptions := parentInv.RunOptions
-    if childRunOptions.RuntimeState == nil {
-        childRunOptions.RuntimeState = make(map[string]any, 1)
+    childRunOptions.RuntimeState = make(
+        map[string]any,
+        len(parentInv.RunOptions.RuntimeState)+1,
+    )
+    for key, value := range parentInv.RunOptions.RuntimeState {
+        childRunOptions.RuntimeState[key] = value
     }
     childRunOptions.RuntimeState[
         runtimeStateParentToolCallID
@@ -363,6 +367,10 @@ func runChildAgentInsideTool(
     return final, nil
 }
 ```
+
+Copy `RuntimeState` before writing to it. `Invocation.Clone(...)`
+does not deep-copy the `map`, so mutating a reused map would also
+mutate the parent Invocation.
 
 Inside the child Agent, if you need to read the originating tool call ID
 again, read it from runtime state:

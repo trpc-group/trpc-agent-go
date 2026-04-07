@@ -312,8 +312,12 @@ func runChildAgentInsideTool(
     }
 
     childRunOptions := parentInv.RunOptions
-    if childRunOptions.RuntimeState == nil {
-        childRunOptions.RuntimeState = make(map[string]any, 1)
+    childRunOptions.RuntimeState = make(
+        map[string]any,
+        len(parentInv.RunOptions.RuntimeState)+1,
+    )
+    for key, value := range parentInv.RunOptions.RuntimeState {
+        childRunOptions.RuntimeState[key] = value
     }
     childRunOptions.RuntimeState[
         runtimeStateParentToolCallID
@@ -358,6 +362,10 @@ func runChildAgentInsideTool(
     return final, nil
 }
 ```
+
+写入前先复制一份 `RuntimeState`。`Invocation.Clone(...)`
+不会对 `map` 做深拷贝；如果直接复用并写入，就会连父
+Invocation 一起改掉。
 
 子 Agent 内部如果还需要继续读取这个“来源 tool_call_id”，可以直接从
 运行时状态里拿：
