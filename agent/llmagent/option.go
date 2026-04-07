@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
@@ -127,10 +128,18 @@ var (
 		//     memories. Consider using a positive budget (e.g., 10-50) for
 		//     production use.
 		PreloadMemory: 0,
+		// Default to disabling query-time session recall preload.
+		PreloadSessionRecall:           0,
+		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
 
 		SkillLoadMode: SkillLoadModeTurn,
 
 		SkipSkillsFallbackOnSessionSummary: true,
+
+		EnableContextCompaction:              false,
+		ContextCompactionThresholdRatio:      0.7,
+		ContextCompactionToolResultMaxTokens: processor.DefaultContextCompactionToolResultMaxTokens,
+		ContextCompactionKeepRecentRequests:  processor.DefaultContextCompactionKeepRecentRequests,
 
 		skillRunRequireSkillLoaded: true,
 	}
@@ -149,17 +158,29 @@ type Options struct {
 	Models map[string]model.Model
 	// Description is a description of the agent.
 	Description string
-	// Instruction is the instruction for the agent.
+	// Instruction is the instruction template for the agent.
+	// It is rendered at request time using the same placeholder subset as the
+	// internal prompt state adapter in `internal/prompt/adapter/state`. See
+	// `Render` there for supported placeholder forms and resolution rules.
 	Instruction string
-	// GlobalInstruction is the global instruction for the agent.
-	// It will be used for all agents in the agent tree.
+	// GlobalInstruction is the global instruction template for the agent.
+	// It will be used for all agents in the agent tree and is rendered at
+	// request time using the same placeholder subset as the internal prompt
+	// state adapter in `internal/prompt/adapter/state`. See `Render` there for
+	// supported placeholder forms and resolution rules.
 	GlobalInstruction string
-	// ModelInstructions maps model.Info().Name to a model-specific instruction.
-	// When present, it overrides Instruction for matching models.
+	// ModelInstructions maps model.Info().Name to a model-specific instruction
+	// template. When present, it overrides Instruction for matching models.
+	// Values are rendered at request time using the same placeholder subset as
+	// the internal prompt state adapter in `internal/prompt/adapter/state`. See
+	// `Render` there for supported placeholder forms and resolution rules.
 	ModelInstructions map[string]string
 	// ModelGlobalInstructions maps model.Info().Name to a model-specific system
-	// prompt.
-	// When present, it overrides GlobalInstruction for matching models.
+	// prompt template. When present, it overrides GlobalInstruction for matching
+	// models. Values are rendered at request time using the same placeholder
+	// subset as the internal prompt state adapter in
+	// `internal/prompt/adapter/state`. See `Render` there for supported
+	// placeholder forms and resolution rules.
 	ModelGlobalInstructions map[string]string
 	// GenerationConfig contains the generation configuration.
 	GenerationConfig model.GenerationConfig
@@ -236,6 +257,23 @@ type Options struct {
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
+	// EnableContextCompaction enables prompt-side context compaction.
+	// Historical oversized tool results can be compacted during request
+	// projection even when AddSessionSummary is false. When AddSessionSummary
+	// is also true, the framework may additionally trigger a one-time
+	// synchronous summary refresh before the LLM call.
+	EnableContextCompaction bool
+	// ContextCompactionThresholdRatio controls when the pre-LLM synchronous
+	// summary retry triggers, expressed as a fraction of the model context
+	// window. This retry only applies when AddSessionSummary is enabled.
+	ContextCompactionThresholdRatio float64
+	// ContextCompactionToolResultMaxTokens sets the token threshold above
+	// which
+	// historical tool results are replaced with a placeholder.
+	ContextCompactionToolResultMaxTokens int
+	// ContextCompactionKeepRecentRequests preserves the latest N completed
+	// requests in full when request-side context compaction is enabled.
+	ContextCompactionKeepRecentRequests int
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	summaryFormatter func(summary string) string
@@ -336,6 +374,8 @@ type Options struct {
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
 	skillRunDeniedCommands []string
+	// skillRunOutputLimits customizes inline skill_run output sizes.
+	skillRunOutputLimits toolskill.RunOutputLimits
 
 	// skillRunForceSaveArtifacts forces skill_run to persist collected
 	// outputs via the artifact service when possible.
@@ -366,6 +406,19 @@ type Options struct {
 	// When 0 (default), no memories are preloaded (use tools instead).
 	// When < 0, all memories are loaded.
 	PreloadMemory int
+	// PreloadSessionRecall sets the number of recalled
+	// session events to preload into the system prompt.
+	// When > 0, search runs across other sessions owned by
+	// the current user. When 0 (default), recall preload is
+	// disabled.
+	PreloadSessionRecall int
+	// PreloadSessionRecallMinScore filters low-confidence
+	// recalled session hits before injection.
+	PreloadSessionRecallMinScore float64
+	// PreloadSessionRecallSearchMode controls which
+	// retrieval mode is used for query-time session recall.
+	// Default is session.SearchModeHybrid.
+	PreloadSessionRecallSearchMode session.SearchMode
 
 	// postToolPromptEnabled controls whether the post-tool dynamic prompt
 	// injection is enabled. When nil (default), injection is enabled to
@@ -442,21 +495,30 @@ func WithDescription(description string) Option {
 	}
 }
 
-// WithInstruction sets the instruction of the agent.
+// WithInstruction sets the instruction template of the agent.
+// The template uses the same placeholder subset as the internal prompt state
+// adapter in `internal/prompt/adapter/state`. See `Render` there for supported
+// placeholder forms and resolution rules.
 func WithInstruction(instruction string) Option {
 	return func(opts *Options) {
 		opts.Instruction = instruction
 	}
 }
 
-// WithGlobalInstruction sets the global instruction of the agent.
+// WithGlobalInstruction sets the global instruction template of the agent.
+// The template uses the same placeholder subset as the internal prompt state
+// adapter in `internal/prompt/adapter/state`. See `Render` there for supported
+// placeholder forms and resolution rules.
 func WithGlobalInstruction(instruction string) Option {
 	return func(opts *Options) {
 		opts.GlobalInstruction = instruction
 	}
 }
 
-// WithModelInstructions sets model-specific instruction overrides.
+// WithModelInstructions sets model-specific instruction template overrides.
+// Values use the same placeholder subset as the internal prompt state adapter
+// in `internal/prompt/adapter/state`. See `Render` there for supported
+// placeholder forms and resolution rules.
 // Key: model.Info().Name, Value: instruction text.
 func WithModelInstructions(instructions map[string]string) Option {
 	return func(opts *Options) {
@@ -464,7 +526,10 @@ func WithModelInstructions(instructions map[string]string) Option {
 	}
 }
 
-// WithModelGlobalInstructions sets model-specific system prompt overrides.
+// WithModelGlobalInstructions sets model-specific system prompt template
+// overrides. Values use the same placeholder subset as the internal prompt
+// state adapter in `internal/prompt/adapter/state`. See `Render` there for
+// supported placeholder forms and resolution rules.
 // Key: model.Info().Name, Value: system prompt text.
 func WithModelGlobalInstructions(prompts map[string]string) Option {
 	return func(opts *Options) {
@@ -680,6 +745,16 @@ func WithSkillRunDeniedCommands(cmds ...string) Option {
 		opts.skillRunDeniedCommands = append(
 			[]string(nil), cmds...,
 		)
+	}
+}
+
+// WithSkillRunOutputLimits customizes inline stdout/stderr and
+// primary_output limits for skill_run.
+func WithSkillRunOutputLimits(
+	limits toolskill.RunOutputLimits,
+) Option {
+	return func(opts *Options) {
+		opts.skillRunOutputLimits = limits
 	}
 }
 
@@ -925,6 +1000,49 @@ func WithMaxHistoryRuns(maxRuns int) Option {
 	}
 }
 
+// WithEnableContextCompaction enables prompt-side context compaction.
+// Historical oversized tool results can be compacted during request
+// projection even when AddSessionSummary is false. When AddSessionSummary is
+// also true, the framework may additionally trigger a one-time synchronous
+// summary refresh before the LLM call.
+func WithEnableContextCompaction(enable bool) Option {
+	return func(opts *Options) {
+		opts.EnableContextCompaction = enable
+	}
+}
+
+// WithContextCompactionThresholdRatio sets the fraction of the model context
+// window at which pre-LLM synchronous summary retry triggers. This retry is
+// only available when AddSessionSummary is enabled.
+func WithContextCompactionThresholdRatio(ratio float64) Option {
+	return func(opts *Options) {
+		if ratio > 0 && ratio <= 1 {
+			opts.ContextCompactionThresholdRatio = ratio
+		}
+	}
+}
+
+// WithContextCompactionToolResultMaxTokens sets the token threshold above
+// which
+// historical tool results are replaced with a placeholder.
+func WithContextCompactionToolResultMaxTokens(tokens int) Option {
+	return func(opts *Options) {
+		if tokens >= 0 {
+			opts.ContextCompactionToolResultMaxTokens = tokens
+		}
+	}
+}
+
+// WithContextCompactionKeepRecentRequests preserves the latest N completed
+// requests in full when request-side context compaction is enabled.
+func WithContextCompactionKeepRecentRequests(n int) Option {
+	return func(opts *Options) {
+		if n >= 0 {
+			opts.ContextCompactionKeepRecentRequests = n
+		}
+	}
+}
+
 // WithPreserveSameBranch controls whether messages from the same invocation
 // branch lineage (ancestor/descendant) should preserve their original roles
 // instead of being rewritten into user context when used as history.
@@ -1064,6 +1182,40 @@ func WithMessageFilterMode(mode MessageFilterMode) Option {
 func WithPreloadMemory(limit int) Option {
 	return func(opts *Options) {
 		opts.PreloadMemory = limit
+	}
+}
+
+// WithPreloadSessionRecall sets the number of recalled
+// session events to preload into the system prompt.
+func WithPreloadSessionRecall(limit int) Option {
+	return func(opts *Options) {
+		opts.PreloadSessionRecall = limit
+	}
+}
+
+// WithPreloadSessionRecallMinScore sets the minimum
+// search score required for preloaded session recall.
+func WithPreloadSessionRecallMinScore(minScore float64) Option {
+	return func(opts *Options) {
+		opts.PreloadSessionRecallMinScore = minScore
+	}
+}
+
+// WithPreloadSessionRecallSearchMode sets the retrieval
+// mode used for query-time session recall preload.
+// Default is session.SearchModeHybrid.
+func WithPreloadSessionRecallSearchMode(
+	mode session.SearchMode,
+) Option {
+	return func(opts *Options) {
+		switch mode {
+		case "", session.SearchModeHybrid:
+			opts.PreloadSessionRecallSearchMode = session.SearchModeHybrid
+		case session.SearchModeDense:
+			opts.PreloadSessionRecallSearchMode = session.SearchModeDense
+		default:
+			opts.PreloadSessionRecallSearchMode = session.SearchModeHybrid
+		}
 	}
 }
 

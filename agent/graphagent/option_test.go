@@ -145,6 +145,23 @@ func TestWithMaxHistoryRuns(t *testing.T) {
 	require.Equal(t, 0, opts.MaxHistoryRuns)
 }
 
+func TestWithContextCompactionOptions(t *testing.T) {
+	opts := &Options{}
+
+	WithEnableContextCompaction(true)(opts)
+	require.True(t, opts.EnableContextCompaction)
+
+	WithContextCompactionToolResultMaxTokens(2048)(opts)
+	require.Equal(t, 2048, opts.ContextCompactionToolResultMaxTokens)
+	WithContextCompactionToolResultMaxTokens(-1)(opts)
+	require.Equal(t, 2048, opts.ContextCompactionToolResultMaxTokens)
+
+	WithContextCompactionKeepRecentRequests(2)(opts)
+	require.Equal(t, 2, opts.ContextCompactionKeepRecentRequests)
+	WithContextCompactionKeepRecentRequests(-1)(opts)
+	require.Equal(t, 2, opts.ContextCompactionKeepRecentRequests)
+}
+
 func TestWithReasoningContentMode(t *testing.T) {
 	tests := []struct {
 		name     string

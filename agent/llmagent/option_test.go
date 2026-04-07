@@ -17,6 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
@@ -76,6 +77,28 @@ func TestWithSyncSummaryIntraRun(t *testing.T) {
 
 	WithSyncSummaryIntraRun(false)(opts)
 	require.False(t, opts.SyncSummaryIntraRun)
+}
+
+func TestWithContextCompactionOptions(t *testing.T) {
+	opts := &Options{}
+
+	WithEnableContextCompaction(true)(opts)
+	require.True(t, opts.EnableContextCompaction)
+
+	WithContextCompactionThresholdRatio(0.8)(opts)
+	require.Equal(t, 0.8, opts.ContextCompactionThresholdRatio)
+	WithContextCompactionThresholdRatio(0)(opts)
+	require.Equal(t, 0.8, opts.ContextCompactionThresholdRatio)
+
+	WithContextCompactionToolResultMaxTokens(2048)(opts)
+	require.Equal(t, 2048, opts.ContextCompactionToolResultMaxTokens)
+	WithContextCompactionToolResultMaxTokens(-1)(opts)
+	require.Equal(t, 2048, opts.ContextCompactionToolResultMaxTokens)
+
+	WithContextCompactionKeepRecentRequests(3)(opts)
+	require.Equal(t, 3, opts.ContextCompactionKeepRecentRequests)
+	WithContextCompactionKeepRecentRequests(-1)(opts)
+	require.Equal(t, 3, opts.ContextCompactionKeepRecentRequests)
 }
 
 func TestWithMessageFilterMode(t *testing.T) {
@@ -312,6 +335,30 @@ func TestWithPreloadMemory(t *testing.T) {
 	}
 }
 
+func TestWithPreloadSessionRecall(t *testing.T) {
+	opts := &Options{}
+	WithPreloadSessionRecall(6)(opts)
+	require.Equal(t, 6, opts.PreloadSessionRecall)
+
+	WithPreloadSessionRecall(0)(opts)
+	require.Equal(t, 0, opts.PreloadSessionRecall)
+}
+
+func TestWithPreloadSessionRecallMinScore(t *testing.T) {
+	opts := &Options{}
+	WithPreloadSessionRecallMinScore(0.42)(opts)
+	require.Equal(t, 0.42, opts.PreloadSessionRecallMinScore)
+}
+
+func TestWithPreloadSessionRecallSearchMode(t *testing.T) {
+	opts := &Options{}
+	WithPreloadSessionRecallSearchMode(session.SearchModeDense)(opts)
+	require.Equal(t, session.SearchModeDense, opts.PreloadSessionRecallSearchMode)
+
+	WithPreloadSessionRecallSearchMode(session.SearchMode("invalid"))(opts)
+	require.Equal(t, session.SearchModeHybrid, opts.PreloadSessionRecallSearchMode)
+}
+
 func TestWithSkillRunAllowedCommands_CopiesSlice(t *testing.T) {
 	in := []string{"echo", "ls"}
 	opts := &Options{}
@@ -337,6 +384,16 @@ func TestWithSkillRunForceSaveArtifacts(t *testing.T) {
 
 	WithSkillRunForceSaveArtifacts(false)(opts)
 	require.False(t, opts.skillRunForceSaveArtifacts)
+}
+
+func TestWithSkillRunOutputLimits(t *testing.T) {
+	opts := &Options{}
+	limits := toolskill.RunOutputLimits{
+		StdoutStderrBytes:  128,
+		PrimaryOutputBytes: 256,
+	}
+	WithSkillRunOutputLimits(limits)(opts)
+	require.Equal(t, limits, opts.skillRunOutputLimits)
 }
 
 func TestWithSkillRunRequireSkillLoaded(t *testing.T) {

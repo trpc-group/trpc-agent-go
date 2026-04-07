@@ -21,6 +21,7 @@
 //	go run main.go -session=redis
 //	go run main.go -session=mysql
 //	go run main.go -session=postgres
+//	go run main.go -session=pgvector
 //	go run main.go -session=clickhouse
 //
 // Environment variables by session type:
@@ -29,6 +30,8 @@
 //	  file:sessions.db?_busy_timeout=5000)
 //	redis:      REDIS_ADDR (default: localhost:6379)
 //	postgres:   PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DATABASE
+//	pgvector:   PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER,
+//	  PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_EMBEDDER_MODEL
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD,
 //	  MYSQL_DATABASE
 //	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
@@ -58,7 +61,7 @@ var (
 		"session",
 		"inmemory",
 		"Session backend: inmemory/sqlite/redis/mysql/"+
-			"postgres/clickhouse",
+			"postgres/pgvector/clickhouse",
 	)
 	ttlSeconds = flag.Int(
 		"ttl",
@@ -176,7 +179,8 @@ func main() {
 			len(sess.Events),
 		)
 	}
-	fmt.Println("Phase 2 complete: session cleaned up\n")
+	fmt.Println("Phase 2 complete: session cleaned up")
+	fmt.Println()
 
 	// ========== Phase 3: New session after expiry ==========
 	fmt.Println("Phase 3: fresh conversation after expiry")
