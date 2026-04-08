@@ -176,7 +176,7 @@ knowledge/
 │   └── chardedup.go     # Character deduplicator (merge consecutive duplicate characters)
 ├── extractor/            # Content extractors (convert complex formats into markdown/text first)
 │   ├── extractor.go     # Extractor interface definition
-│   └── docling/         # Docling extractor implementation (separate go.mod)
+│   └── docling/         # Docling extractor implementation
 ├── document/             # Document processing
 │   ├── document.go      # Document structure definition
 │   └── reader/          # Document readers (supports txt/md/csv/json/docx/pdf, etc.)

@@ -172,7 +172,7 @@ knowledge/
 │   └── chardedup.go     # 字符去重器（合并连续重复字符）
 ├── extractor/            # 内容提取器（将复杂格式先转换为 markdown/text）
 │   ├── extractor.go     # Extractor 接口定义
-│   └── docling/         # Docling 提取器实现（独立 go.mod）
+│   └── docling/         # Docling 提取器实现
 ├── document/             # 文档处理
 │   ├── document.go      # Document 结构定义
 │   └── reader/          # 文档读取器（支持 txt/md/csv/json/docx/pdf 等格式）
