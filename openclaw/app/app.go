@@ -891,6 +891,7 @@ func NewRuntime(
 			adminURL,
 			skillsRepo,
 			skillsWatch,
+			fileMemoryStore,
 		))
 		rt.Admin = AdminSurface{
 			Handler: adminSvc.Handler(),
@@ -1372,6 +1373,7 @@ func run(ctx context.Context, args []string) error {
 			adminBinding.url,
 			skillsRepo,
 			skillsWatch,
+			fileMemoryStore,
 		))
 		adminSrv = &http.Server{
 			Handler:           adminSvc.Handler(),

@@ -51,6 +51,13 @@ func NewStore(root string) (*Store, error) {
 	return &Store{root: filepath.Clean(root)}, nil
 }
 
+func (s *Store) Root() string {
+	if s == nil {
+		return ""
+	}
+	return s.root
+}
+
 func (s *Store) MemoryDir(appName string, userID string) (string, error) {
 	if s == nil {
 		return "", errors.New("memoryfile: nil store")
