@@ -72,13 +72,14 @@ func (s *Service) memoryStatusWithFiles(includeFiles bool) memoryStatus {
 		Enabled: strings.TrimSpace(s.cfg.MemoryBackend) != "",
 		Backend: strings.TrimSpace(s.cfg.MemoryBackend),
 	}
-	if s.cfg.MemoryFiles == nil {
+	root, ok := configuredMemoryRoot(s.cfg.MemoryFiles)
+	if !ok {
 		return out
 	}
 	out.FileEnabled = true
-	out.Root = strings.TrimSpace(s.cfg.MemoryFiles.Root())
+	out.Root = root
 
-	files, err := memoryFileViews(s.cfg.MemoryFiles)
+	files, err := memoryFileViews(s.cfg.MemoryFiles, includeFiles)
 	if err != nil {
 		out.Error = err.Error()
 		return out
@@ -98,13 +99,24 @@ func (s *Service) memoryStatusWithFiles(includeFiles bool) memoryStatus {
 	return out
 }
 
-func memoryFileViews(store MemoryFileStore) ([]memoryFileView, error) {
+func configuredMemoryRoot(store MemoryFileStore) (string, bool) {
 	if store == nil {
-		return nil, nil
+		return "", false
 	}
 	root := strings.TrimSpace(store.Root())
 	if root == "" {
-		return nil, errors.New("memory file root is not configured")
+		return "", false
+	}
+	return root, true
+}
+
+func memoryFileViews(
+	store MemoryFileStore,
+	includePreview bool,
+) ([]memoryFileView, error) {
+	root, ok := configuredMemoryRoot(store)
+	if !ok {
+		return nil, nil
 	}
 
 	apps, err := os.ReadDir(root)
@@ -143,10 +155,13 @@ func memoryFileViews(store MemoryFileStore) ([]memoryFileView, error) {
 				continue
 			}
 			rel = filepath.ToSlash(rel)
-			preview, _ := store.ReadFile(
-				filePath,
-				maxMemoryFilePreviewBytes,
-			)
+			preview := ""
+			if includePreview {
+				preview, _ = store.ReadFile(
+					filePath,
+					maxMemoryFilePreviewBytes,
+				)
+			}
 			files = append(files, memoryFileView{
 				AppName:      decodeMemoryPathPart(appDir.Name()),
 				UserID:       decodeMemoryPathPart(userDir.Name()),

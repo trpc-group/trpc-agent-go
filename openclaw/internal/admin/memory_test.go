@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,7 +24,8 @@ import (
 )
 
 type memoryStoreStub struct {
-	root string
+	root      string
+	readCount *atomic.Int32
 }
 
 func (s memoryStoreStub) Root() string {
@@ -31,6 +33,9 @@ func (s memoryStoreStub) Root() string {
 }
 
 func (s memoryStoreStub) ReadFile(string, int) (string, error) {
+	if s.readCount != nil {
+		s.readCount.Add(1)
+	}
 	return "", nil
 }
 
@@ -64,10 +69,62 @@ func TestMemoryStatusWithFiles_NilServiceAndNoStore(t *testing.T) {
 	require.Empty(t, status.Files)
 }
 
+func TestMemoryStatusSummary_DoesNotReadMemoryFilePreview(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	app := base64.RawURLEncoding.EncodeToString([]byte("openclaw"))
+	user := base64.RawURLEncoding.EncodeToString([]byte("alice"))
+	dir := filepath.Join(root, app, user)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(dir, memoryFileName),
+			[]byte("# Memory\n\n- Alice prefers concise updates.\n"),
+			0o600,
+		),
+	)
+
+	var reads atomic.Int32
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   memoryStoreStub{root: root, readCount: &reads},
+	})
+
+	status := svc.memoryStatusSummary()
+	require.True(t, status.FileEnabled)
+	require.Equal(t, 1, status.FileCount)
+	require.Empty(t, status.Files)
+	require.Zero(t, reads.Load())
+
+	full := svc.memoryStatus()
+	require.Len(t, full.Files, 1)
+	require.EqualValues(t, 1, reads.Load())
+}
+
+func TestMemoryStatusSummary_TypedNilStoreStaysUnconfigured(t *testing.T) {
+	t.Parallel()
+
+	var typedNil *memoryfile.Store
+	var store MemoryFileStore = typedNil
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+
+	status := svc.memoryStatusSummary()
+	require.True(t, status.Enabled)
+	require.False(t, status.FileEnabled)
+	require.Empty(t, status.Root)
+	require.Empty(t, status.Error)
+}
+
 func TestMemoryFileViews_NilStoreReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
-	views, err := memoryFileViews(nil)
+	views, err := memoryFileViews(nil, true)
 	require.NoError(t, err)
 	require.Empty(t, views)
 }
@@ -130,7 +187,7 @@ func TestMemoryFileViews_CoversFilesystemVariants(t *testing.T) {
 		os.MkdirAll(filepath.Join(root, appOpenclaw, userBob, memoryFileName), 0o755),
 	)
 
-	views, err := memoryFileViews(store)
+	views, err := memoryFileViews(store, true)
 	require.NoError(t, err)
 	require.Len(t, views, 3)
 
@@ -172,9 +229,12 @@ func TestMemoryFileViews_SortsByModifiedAtAppAndUser(t *testing.T) {
 	writeMemoryFile(appA, userB)
 	writeMemoryFile(appB, userA)
 
-	views, err := memoryFileViews(store)
+	views, err := memoryFileViews(store, false)
 	require.NoError(t, err)
 	require.Len(t, views, 3)
+	require.Empty(t, views[0].Preview)
+	require.Empty(t, views[1].Preview)
+	require.Empty(t, views[2].Preview)
 	require.Equal(t, "aaa", views[0].AppName)
 	require.Equal(t, "bob", views[0].UserID)
 	require.Equal(t, "bbb", views[1].AppName)
@@ -189,7 +249,7 @@ func TestMemoryFileViews_NonexistentAndInvalidRoots(t *testing.T) {
 	store, err := memoryfile.NewStore(filepath.Join(t.TempDir(), "missing"))
 	require.NoError(t, err)
 
-	views, err := memoryFileViews(store)
+	views, err := memoryFileViews(store, true)
 	require.NoError(t, err)
 	require.Empty(t, views)
 
@@ -198,7 +258,7 @@ func TestMemoryFileViews_NonexistentAndInvalidRoots(t *testing.T) {
 	store, err = memoryfile.NewStore(rootFile)
 	require.NoError(t, err)
 
-	_, err = memoryFileViews(store)
+	_, err = memoryFileViews(store, true)
 	require.ErrorContains(t, err, "read memory root")
 }
 
@@ -221,7 +281,7 @@ func TestMemoryFileViews_SkipsUnreadableAppDir(t *testing.T) {
 	require.NoError(t, os.Chmod(appDir, 0))
 	defer os.Chmod(appDir, 0o700)
 
-	views, err := memoryFileViews(store)
+	views, err := memoryFileViews(store, true)
 	require.NoError(t, err)
 	require.Empty(t, views)
 }

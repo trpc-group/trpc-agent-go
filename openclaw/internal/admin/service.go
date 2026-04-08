@@ -1070,7 +1070,8 @@ func (s *Service) handleMemoryFile(
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.cfg.MemoryFiles == nil {
+	root, ok := configuredMemoryRoot(s.cfg.MemoryFiles)
+	if !ok {
 		http.Error(
 			w,
 			"memory file store is not configured",
@@ -1079,7 +1080,7 @@ func (s *Service) handleMemoryFile(
 		return
 	}
 	filePath, err := resolveMemoryFile(
-		s.cfg.MemoryFiles.Root(),
+		root,
 		strings.TrimSpace(r.URL.Query().Get(queryPath)),
 	)
 	if err != nil {

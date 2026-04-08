@@ -482,6 +482,28 @@ func TestServiceMemoryFileEndpointRequiresStore(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "not configured")
 }
 
+func TestServiceMemoryFileEndpointRejectsTypedNilStore(t *testing.T) {
+	t.Parallel()
+
+	var typedNil *memoryfile.Store
+	var store MemoryFileStore = typedNil
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+	req := httptest.NewRequest(
+		http.MethodGet,
+		routeMemoryFile+"?path=app%2Fuser%2FMEMORY.md",
+		nil,
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	require.Contains(t, rr.Body.String(), "not configured")
+}
+
 func TestServiceMemoryFileEndpoint_MethodAndPathValidation(t *testing.T) {
 	t.Parallel()
 
