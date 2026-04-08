@@ -317,3 +317,25 @@ func TestResolveMemoryFile_RejectsDirectory(t *testing.T) {
 	_, err := resolveMemoryFile(root, "app/user/MEMORY.md")
 	require.ErrorContains(t, err, "memory path is a directory")
 }
+
+func TestResolveMemoryFile_RejectsSymlinkEscapes(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions are not reliable on windows")
+	}
+
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	require.NoError(t, os.WriteFile(outside, []byte("# Memory\n"), 0o600))
+
+	dir := filepath.Join(root, "app", "user")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(
+		t,
+		os.Symlink(outside, filepath.Join(dir, memoryFileName)),
+	)
+
+	_, err := resolveMemoryFile(root, "app/user/MEMORY.md")
+	require.ErrorContains(t, err, "memory file escapes memory root")
+}

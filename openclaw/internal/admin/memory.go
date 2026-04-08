@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -72,8 +73,13 @@ func (s *Service) memoryStatusWithFiles(includeFiles bool) memoryStatus {
 		Enabled: strings.TrimSpace(s.cfg.MemoryBackend) != "",
 		Backend: strings.TrimSpace(s.cfg.MemoryBackend),
 	}
-	root, ok := configuredMemoryRoot(s.cfg.MemoryFiles)
-	if !ok {
+	root, configured, err := configuredMemoryRoot(s.cfg.MemoryFiles)
+	if err != nil {
+		out.FileEnabled = true
+		out.Error = err.Error()
+		return out
+	}
+	if !configured {
 		return out
 	}
 	out.FileEnabled = true
@@ -99,23 +105,32 @@ func (s *Service) memoryStatusWithFiles(includeFiles bool) memoryStatus {
 	return out
 }
 
-func configuredMemoryRoot(store MemoryFileStore) (string, bool) {
+func configuredMemoryRoot(
+	store MemoryFileStore,
+) (string, bool, error) {
 	if store == nil {
-		return "", false
+		return "", false, nil
+	}
+	value := reflect.ValueOf(store)
+	if value.Kind() == reflect.Pointer && value.IsNil() {
+		return "", false, nil
 	}
 	root := strings.TrimSpace(store.Root())
 	if root == "" {
-		return "", false
+		return "", false, errors.New("memory file root is not configured")
 	}
-	return root, true
+	return root, true, nil
 }
 
 func memoryFileViews(
 	store MemoryFileStore,
 	includePreview bool,
 ) ([]memoryFileView, error) {
-	root, ok := configuredMemoryRoot(store)
-	if !ok {
+	root, configured, err := configuredMemoryRoot(store)
+	if err != nil {
+		return nil, err
+	}
+	if !configured {
 		return nil, nil
 	}
 
@@ -262,6 +277,12 @@ func resolveMemoryFile(root string, relPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve memory root: %w", err)
 	}
+	resolvedRoot := absRoot
+	if evaluatedRoot, err := filepath.EvalSymlinks(absRoot); err == nil {
+		resolvedRoot = evaluatedRoot
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("resolve memory root: %w", err)
+	}
 	absCandidate, err := filepath.Abs(candidate)
 	if err != nil {
 		return "", fmt.Errorf("resolve memory file: %w", err)
@@ -273,12 +294,30 @@ func resolveMemoryFile(root string, relPath string) (string, error) {
 		) {
 		return "", fmt.Errorf("memory file escapes memory root")
 	}
-	info, err := os.Stat(absCandidate)
+	resolvedPath, err := filepath.EvalSymlinks(absCandidate)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("memory file not found")
+		}
+		return "", fmt.Errorf("resolve memory file: %w", err)
+	}
+	absResolved, err := filepath.Abs(resolvedPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve memory file: %w", err)
+	}
+	if absResolved != resolvedRoot &&
+		!strings.HasPrefix(
+			absResolved,
+			resolvedRoot+string(os.PathSeparator),
+		) {
+		return "", fmt.Errorf("memory file escapes memory root")
+	}
+	info, err := os.Stat(absResolved)
 	if err != nil {
 		return "", fmt.Errorf("memory file not found")
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("memory path is a directory")
 	}
-	return absCandidate, nil
+	return absResolved, nil
 }

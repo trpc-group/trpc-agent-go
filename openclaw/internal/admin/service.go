@@ -1070,8 +1070,8 @@ func (s *Service) handleMemoryFile(
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	root, ok := configuredMemoryRoot(s.cfg.MemoryFiles)
-	if !ok {
+	root, configured, err := configuredMemoryRoot(s.cfg.MemoryFiles)
+	if err != nil || !configured {
 		http.Error(
 			w,
 			"memory file store is not configured",
@@ -3243,7 +3243,13 @@ const adminPageHTML = `<!doctype html>
           <dd>{{if .Snapshot.Memory.Backend}}{{.Snapshot.Memory.Backend}}{{else}}-{{end}}</dd>
           <dt>Storage Mode</dt>
           <dd>
-            {{if .Snapshot.Memory.FileEnabled}}
+            {{if eq .Snapshot.Memory.Backend "file"}}
+              {{if .Snapshot.Memory.FileEnabled}}
+                File-backed <code>MEMORY.md</code>
+              {{else}}
+                file backend not configured
+              {{end}}
+            {{else if .Snapshot.Memory.FileEnabled}}
               File-backed <code>MEMORY.md</code>
             {{else if .Snapshot.Memory.Enabled}}
               Structured memory service
@@ -3253,16 +3259,22 @@ const adminPageHTML = `<!doctype html>
           </dd>
           <dt>Structured Memory</dt>
           <dd>
-            {{if and .Snapshot.Memory.Enabled (not .Snapshot.Memory.FileEnabled)}}
-              enabled
-            {{else if .Snapshot.Memory.FileEnabled}}
+            {{if eq .Snapshot.Memory.Backend "file"}}
               not used by file backend
+            {{else if and .Snapshot.Memory.Enabled (not .Snapshot.Memory.FileEnabled)}}
+              enabled
             {{else}}
               unavailable
             {{end}}
           </dd>
           <dt>File Inventory</dt>
-          <dd>{{if .Snapshot.Memory.FileEnabled}}available{{else}}not available{{end}}</dd>
+          <dd>
+            {{if eq .Snapshot.Memory.Backend "file"}}
+              {{if .Snapshot.Memory.FileEnabled}}available{{else}}not configured{{end}}
+            {{else}}
+              not available
+            {{end}}
+          </dd>
           <dt>JSON</dt>
           <dd><a href="/api/memory/files">/api/memory/files</a></dd>
         </dl>
@@ -3366,7 +3378,13 @@ const adminPageHTML = `<!doctype html>
       <p class="empty" data-memory-empty hidden>No matching memory files.</p>
       {{else if not .Snapshot.Memory.Error}}
       <p class="empty">
-        {{if .Snapshot.Memory.FileEnabled}}
+        {{if eq .Snapshot.Memory.Backend "file"}}
+          {{if .Snapshot.Memory.FileEnabled}}
+            No file-backed memory files discovered yet.
+          {{else}}
+            File-backed memory store is not configured for this runtime.
+          {{end}}
+        {{else if .Snapshot.Memory.FileEnabled}}
           No file-backed memory files discovered yet.
         {{else}}
           File-backed memory inventory is only available when the runtime uses

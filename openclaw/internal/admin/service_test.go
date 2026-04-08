@@ -384,6 +384,25 @@ func TestServiceHandlerRendersMemoryInventory(t *testing.T) {
 	require.Contains(t, body, "Search users or memory content")
 }
 
+func TestServiceHandlerRendersMemoryInventory_FileBackendUnconfigured(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		MemoryBackend: "file",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeMemory, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "file backend not configured")
+	require.Contains(t, body, "File-backed memory store is not configured for this runtime.")
+	require.Contains(t, body, "not configured")
+	require.NotContains(t, body, "Structured memory service")
+}
+
 func TestServiceMemoryFilesJSONEndpoint(t *testing.T) {
 	t.Parallel()
 
@@ -544,7 +563,9 @@ func TestResolveMemoryFileGuards(t *testing.T) {
 
 	got, err := resolveMemoryFile(root, "app/user/MEMORY.md")
 	require.NoError(t, err)
-	require.Equal(t, path, got)
+	expected, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+	require.Equal(t, expected, got)
 
 	_, err = resolveMemoryFile("", "app/user/MEMORY.md")
 	require.ErrorContains(t, err, "not configured")
