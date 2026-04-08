@@ -605,6 +605,9 @@ skills:
   extra_dirs: ["/extra1","/extra2"]
   debug: true
   allowBundled: ["gh-issues","notion"]
+  watch: false
+  watch_bundled: true
+  watch_debounce_ms: 125
   load_mode: "session"
   max_loaded_skills: 3
   loaded_content_in_tool_results: false
@@ -744,6 +747,9 @@ memory:
 	require.Equal(t, "/extra1,/extra2", opts.SkillsExtraDir)
 	require.True(t, opts.SkillsDebug)
 	require.Equal(t, "gh-issues,notion", opts.SkillsAllowBundled)
+	require.False(t, opts.SkillsWatch)
+	require.True(t, opts.SkillsWatchBundled)
+	require.Equal(t, 125*time.Millisecond, opts.SkillsWatchDebounce)
 	require.Equal(t, "session", opts.SkillsLoadMode)
 	require.Equal(t, 3, opts.SkillsMaxLoaded)
 	require.False(t, opts.SkillsToolResults)
@@ -1043,6 +1049,13 @@ func TestParseRunOptions_SkillsDefaults(t *testing.T) {
 
 	opts, err := parseRunOptions(nil)
 	require.NoError(t, err)
+	require.True(t, opts.SkillsWatch)
+	require.False(t, opts.SkillsWatchBundled)
+	require.Equal(
+		t,
+		defaultSkillsWatchDebounce,
+		opts.SkillsWatchDebounce,
+	)
 	require.Equal(t, defaultSkillsLoadMode, opts.SkillsLoadMode)
 	require.True(t, opts.SkillsToolResults)
 	require.True(t, opts.SkillsSkipFallback)
@@ -1165,4 +1178,19 @@ func TestFinalizeRunOptions_ApproxRunesPerToken(t *testing.T) {
 		}
 		require.Error(t, finalizeRunOptions(opts))
 	})
+}
+
+func TestFinalizeRunOptions_SkillsWatchDebounce(t *testing.T) {
+	t.Parallel()
+
+	opts := &runOptions{
+		SkillsWatchDebounce: -time.Millisecond,
+	}
+
+	err := finalizeRunOptions(opts)
+	require.EqualError(
+		t,
+		err,
+		"invalid skills watch debounce: -1ms",
+	)
 }

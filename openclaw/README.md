@@ -1159,6 +1159,10 @@ skills:
   # Optional: restrict which bundled skills are enabled by default.
   # Applies only to bundled skills under ./openclaw/skills.
   allowBundled: ["gh-issues", "notion"]
+  # Watch mutable local skill roots and refresh automatically.
+  watch: true
+  watch_bundled: false
+  watch_debounce_ms: 250
   load_mode: "turn" # once|turn|session
   loaded_content_in_tool_results: true
   max_loaded_skills: 0
@@ -1179,6 +1183,11 @@ skills:
 OpenClaw defaults to materializing loaded skill bodies/docs into tool
 result messages. This keeps the system prompt more stable while still
 letting `SkillLoadMode` control how long loaded skill state survives.
+
+When `skills.watch` is enabled, changes under local filesystem skill
+roots are picked up automatically after the watch debounce fires.
+Official install flows should still prefer staged publish plus explicit
+refresh after the final rename.
 
 The built-in skills guidance is also more runtime-oriented by default:
 the agent prefers skill-owned scripts when present and may use minimal

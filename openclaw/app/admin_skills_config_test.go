@@ -167,6 +167,94 @@ description: "Probe weather prerequisites"
 	require.Equal(t, "weather-probe", report.Skills[0].Name)
 }
 
+func TestAdminSkillsProviderSkillsStatus_AttachesWatchStatus(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeTestSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+---
+
+# weather-probe
+`)
+
+	repo, err := ocskills.NewRepository([]string{root})
+	require.NoError(t, err)
+
+	watch := ocskills.NewWatchService(
+		repo,
+		[]string{root},
+		ocskills.WatchConfig{Enabled: false},
+	)
+	require.NotNil(t, watch)
+	t.Cleanup(func() {
+		require.NoError(t, watch.Close())
+	})
+
+	provider := &adminSkillsProvider{
+		roots: []string{root},
+		watch: watch,
+	}
+
+	report, err := provider.SkillsStatus()
+	require.NoError(t, err)
+	require.Len(t, report.Skills, 1)
+	require.NotNil(t, report.Watch)
+	require.False(t, report.Watch.Enabled)
+}
+
+func TestAdminSkillsProviderSkillsStatus_BuildError(t *testing.T) {
+	t.Parallel()
+
+	provider := &adminSkillsProvider{
+		roots: []string{"cos://bucket/skills.zip"},
+	}
+
+	_, err := provider.SkillsStatus()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported skills root URL")
+}
+
+func TestAdminSkillsProviderRefreshSkills_UsesWatchRefresh(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repo, err := ocskills.NewRepository([]string{root})
+	require.NoError(t, err)
+
+	watch := ocskills.NewWatchService(
+		repo,
+		[]string{root},
+		ocskills.WatchConfig{Enabled: false},
+	)
+	require.NotNil(t, watch)
+	t.Cleanup(func() {
+		require.NoError(t, watch.Close())
+	})
+
+	provider := &adminSkillsProvider{
+		repo:  repo,
+		watch: watch,
+	}
+
+	writeTestSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+---
+
+# weather-probe
+`)
+
+	require.NoError(t, provider.RefreshSkills())
+
+	report, err := provider.SkillsStatus()
+	require.NoError(t, err)
+	require.Len(t, report.Skills, 1)
+	require.NotNil(t, report.Watch)
+	require.Equal(t, "manual", report.Watch.LastRefreshReason)
+}
+
 func TestAdminSkillsProviderHelpersAndFallbackStatus(t *testing.T) {
 	t.Parallel()
 
