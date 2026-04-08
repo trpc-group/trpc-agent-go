@@ -29,6 +29,7 @@ import (
 type session struct {
 	id      string
 	command string
+	redact  func(string) string
 
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
@@ -160,7 +161,7 @@ func (s *session) tail(lines int) string {
 		}
 		out += s.partial
 	}
-	return out
+	return applyOutputRedactor(s.redact, out)
 }
 
 func (s *session) allOutput() (string, int) {
@@ -174,7 +175,7 @@ func (s *session) allOutput() (string, int) {
 		}
 		out += s.partial
 	}
-	return out, s.exitCode
+	return applyOutputRedactor(s.redact, out), s.exitCode
 }
 
 type processSession struct {
@@ -239,7 +240,7 @@ func (s *session) poll(limit *int) processPoll {
 	s.pollCursor = end
 
 	res := processPoll{
-		Output:     out,
+		Output:     applyOutputRedactor(s.redact, out),
 		Offset:     start,
 		NextOffset: end,
 	}
@@ -291,7 +292,7 @@ func (s *session) log(offset *int, limit *int) processLog {
 	out := strings.Join(s.lines[from:to], "\n")
 
 	return processLog{
-		Output:     out,
+		Output:     applyOutputRedactor(s.redact, out),
 		Offset:     start,
 		NextOffset: end,
 	}
