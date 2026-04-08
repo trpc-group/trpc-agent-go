@@ -192,25 +192,32 @@ func execToolDescription(hasMemoryFile bool) string {
 	parts := []string{
 		"Execute a host shell command. Use this for general local shell work.",
 		"Interactive commands can continue with write_stdin.",
-		"Credential exfiltration and direct reads or writes of shell and " +
-			"credential files may be blocked by policy.",
-		"When a chat upload is available, OPENCLAW_LAST_UPLOAD_PATH, " +
-			"OPENCLAW_LAST_UPLOAD_HOST_REF, OPENCLAW_LAST_UPLOAD_NAME, " +
-			"OPENCLAW_LAST_UPLOAD_MIME, kind-specific " +
-			"OPENCLAW_LAST_*_PATH vars, OPENCLAW_SESSION_UPLOADS_DIR, " +
-			"and OPENCLAW_RECENT_UPLOADS_JSON point to stable " +
-			"attachment metadata, host refs, and host paths.",
+		"Protected shell and credential paths may be blocked by policy.",
+		"Sensitive env values may be redacted from returned output.",
 		"Do not use this just to inspect a PDF or spreadsheet already " +
 			"in chat; prefer read_document or read_spreadsheet for that.",
 	}
+	uploadText := "When a chat upload is available, " +
+		"OPENCLAW_LAST_UPLOAD_PATH, OPENCLAW_LAST_UPLOAD_HOST_REF, " +
+		"OPENCLAW_LAST_UPLOAD_NAME, OPENCLAW_LAST_UPLOAD_MIME, " +
+		"kind-specific OPENCLAW_LAST_*_PATH vars, " +
+		"OPENCLAW_SESSION_UPLOADS_DIR, and " +
+		"OPENCLAW_RECENT_UPLOADS_JSON point to stable " +
+		"attachment metadata, host refs, and host paths."
 	if hasMemoryFile {
-		parts[2] = "When a chat upload is available, " +
+		uploadText = "When a chat upload is available, " +
 			"OPENCLAW_LAST_UPLOAD_PATH, OPENCLAW_LAST_UPLOAD_HOST_REF, " +
 			"OPENCLAW_LAST_UPLOAD_NAME, OPENCLAW_LAST_UPLOAD_MIME, " +
 			"kind-specific OPENCLAW_LAST_*_PATH vars, " +
 			"OPENCLAW_MEMORY_FILE, OPENCLAW_SESSION_UPLOADS_DIR, and " +
 			"OPENCLAW_RECENT_UPLOADS_JSON point to stable attachment " +
 			"metadata, memory-file paths, host refs, and host paths."
+	}
+	parts = append(
+		parts,
+		uploadText,
+	)
+	if hasMemoryFile {
 		parts = append(
 			parts,
 			"OPENCLAW_MEMORY_FILE is a user-owned file, not hidden "+

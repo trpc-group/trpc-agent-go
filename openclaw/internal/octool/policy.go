@@ -12,7 +12,7 @@ package octool
 import (
 	"context"
 	"fmt"
-	"regexp"
+	"path/filepath"
 	"strings"
 )
 
@@ -20,68 +20,37 @@ const (
 	errCommandPolicyRejected = "exec_command blocked by safety " +
 		"policy: %s"
 
-	reasonSensitiveEnv = "reading or printing sensitive " +
-		"credentials is not allowed in chat"
 	reasonSensitivePath = "reading or modifying shell or " +
 		"credential files is not allowed in chat"
 
 	sensitivePathBoundaryChars = " \t\r\n\"'`=:/\\|&;()[]{}<>"
+
+	envTRPCClawEnvFile  = "TRPC_CLAW_ENV_FILE"
+	envTRPCClawStateDir = "TRPC_CLAW_STATE_DIR"
+
+	protectedRuntimeEnvRelPath = "runtime/env.sh"
+	protectedGitCredentialFile = "git-credentials"
+
+	shellQuoteChars = `"'`
 )
 
-var (
-	sensitiveEnvNamePattern = regexp.MustCompile(
-		`(?i)\b[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|` +
-			`ACCESS_KEY|PRIVATE_KEY)[A-Z0-9_]*\b`,
-	)
-
-	sensitiveEnvRuntimeReadPatterns = []*regexp.Regexp{
-		regexp.MustCompile(
-			`(?i)\bos\.environ\.get\s*\(\s*["']([a-z0-9_]+)["']`,
-		),
-		regexp.MustCompile(
-			`(?i)\bos\.environ\s*\[\s*["']([a-z0-9_]+)["']`,
-		),
-		regexp.MustCompile(
-			`(?i)\b(?:os\.)?getenv\s*\(\s*["']([a-z0-9_]+)["']`,
-		),
-		regexp.MustCompile(
-			`(?i)\b(?:os\.)?lookupenv\s*\(\s*["']([a-z0-9_]+)["']`,
-		),
-		regexp.MustCompile(`(?i)\bprocess\.env\.([a-z0-9_]+)\b`),
-		regexp.MustCompile(
-			`(?i)\bprocess\.env\s*\[\s*["']([a-z0-9_]+)["']`,
-		),
-		regexp.MustCompile(`(?i)\benv\s*\[\s*["']([a-z0-9_]+)["']`),
-	}
-
-	sensitivePathFragments = []string{
-		".aws/config",
-		".aws/credentials",
-		".bash_profile",
-		".bashrc",
-		".config/gcloud",
-		".docker/config.json",
-		".env",
-		".git-credentials",
-		".kube/config",
-		".netrc",
-		".npmrc",
-		".profile",
-		".pypirc",
-		".ssh/",
-		".zprofile",
-		".zshenv",
-		".zshrc",
-	}
-
-	sensitiveEnvReadHints = []string{
-		"${",
-		"$",
-		"printenv",
-		"env ",
-		"export ",
-	}
-)
+var protectedPathFragments = []string{
+	".aws/credentials",
+	".bash_profile",
+	".bashrc",
+	".config/gcloud",
+	".docker/config.json",
+	".git-credentials",
+	".kube/config",
+	".netrc",
+	".npmrc",
+	".profile",
+	".pypirc",
+	".ssh/",
+	".zprofile",
+	".zshenv",
+	".zshrc",
+}
 
 // CommandRequest is the normalized command metadata checked by policies.
 type CommandRequest struct {
@@ -97,27 +66,17 @@ type CommandRequest struct {
 // CommandPolicy decides whether one exec_command call is allowed.
 type CommandPolicy func(context.Context, CommandRequest) error
 
-// NewChatCommandSafetyPolicy blocks credential exfiltration attempts and
-// direct access to shell/profile credential files in chat contexts.
+// NewChatCommandSafetyPolicy blocks direct access to protected shell and
+// credential paths in chat contexts.
 func NewChatCommandSafetyPolicy() CommandPolicy {
 	return func(
 		_ context.Context,
 		req CommandRequest,
 	) error {
-		command := strings.ToLower(strings.TrimSpace(req.Command))
-		if command == "" {
-			return nil
-		}
-		if blocksSensitivePath(command) {
+		if blocksSensitivePathRequest(req) {
 			return fmt.Errorf(
 				errCommandPolicyRejected,
 				reasonSensitivePath,
-			)
-		}
-		if blocksSensitiveEnv(command) {
-			return fmt.Errorf(
-				errCommandPolicyRejected,
-				reasonSensitiveEnv,
 			)
 		}
 		return nil
@@ -136,36 +95,228 @@ func newCommandRequest(params execParams) CommandRequest {
 	}
 }
 
-func blocksSensitiveEnv(command string) bool {
-	for _, pattern := range sensitiveEnvRuntimeReadPatterns {
-		matches := pattern.FindAllStringSubmatch(command, -1)
-		for _, match := range matches {
-			if len(match) < 2 {
-				continue
-			}
-			if sensitiveEnvNamePattern.MatchString(match[1]) {
-				return true
-			}
-		}
+func blocksSensitivePath(command string) bool {
+	return matchesProtectedPathFragments(
+		normalizePolicyCommand(command),
+		protectedPathFragments,
+	)
+}
+
+func blocksSensitivePathRequest(req CommandRequest) bool {
+	workdirFragments := dynamicProtectedWorkdirFragments(req.Env)
+	if blocksSensitivePathValue(
+		req.Workdir,
+		protectedWorkdirFragments(),
+		workdirFragments,
+		req.Env,
+	) {
+		return true
 	}
-	if !sensitiveEnvNamePattern.MatchString(command) {
+
+	return blocksSensitivePathValue(
+		req.Command,
+		protectedPathFragments,
+		dynamicProtectedPathFragments(req.Env),
+		req.Env,
+	)
+}
+
+func blocksSensitivePathValue(
+	raw string,
+	protectedFragments []string,
+	dynamicFragments []string,
+	env map[string]string,
+) bool {
+	value := normalizePolicyCommand(raw)
+	if value == "" {
 		return false
 	}
-	for _, hint := range sensitiveEnvReadHints {
-		if strings.Contains(command, hint) {
+	if matchesProtectedPathFragments(value, protectedFragments) {
+		return true
+	}
+	if matchesProtectedPathFragments(value, dynamicFragments) {
+		return true
+	}
+	return matchesProtectedPathFragments(
+		expandProtectedEnvReferences(value, env),
+		dynamicFragments,
+	)
+}
+
+func normalizePolicyCommand(command string) string {
+	trimmed := strings.TrimSpace(command)
+	if trimmed == "" {
+		return ""
+	}
+	return strings.ToLower(filepath.ToSlash(trimmed))
+}
+
+func blocksSensitivePathWithFragments(
+	command string,
+	fragments []string,
+) bool {
+	if command == "" {
+		return false
+	}
+	for _, fragment := range fragments {
+		if containsSensitivePathFragment(command, fragment) {
 			return true
 		}
 	}
 	return false
 }
 
-func blocksSensitivePath(command string) bool {
-	for _, fragment := range sensitivePathFragments {
-		if containsSensitivePathFragment(command, fragment) {
-			return true
-		}
+func matchesProtectedPathFragments(
+	command string,
+	fragments []string,
+) bool {
+	if blocksSensitivePathWithFragments(command, fragments) {
+		return true
 	}
-	return false
+	unquoted := stripShellQuotes(command)
+	if unquoted == command {
+		return false
+	}
+	return blocksSensitivePathWithFragments(unquoted, fragments)
+}
+
+func dynamicProtectedPathFragments(env map[string]string) []string {
+	out := make([]string, 0, 3)
+	if len(env) == 0 {
+		return out
+	}
+	out = appendProtectedPathFragment(
+		out,
+		env[envTRPCClawEnvFile],
+	)
+
+	stateDir := strings.TrimSpace(env[envTRPCClawStateDir])
+	if stateDir == "" {
+		return out
+	}
+	out = appendProtectedPathFragment(
+		out,
+		filepath.Join(stateDir, protectedRuntimeEnvRelPath),
+	)
+	out = appendProtectedPathFragment(
+		out,
+		filepath.Join(stateDir, protectedGitCredentialFile),
+	)
+	return out
+}
+
+func protectedWorkdirFragments() []string {
+	out := make([]string, 0, len(protectedPathFragments))
+	for _, fragment := range protectedPathFragments {
+		out = append(
+			out,
+			strings.TrimSuffix(fragment, "/"),
+		)
+	}
+	return out
+}
+
+func dynamicProtectedWorkdirFragments(env map[string]string) []string {
+	out := make([]string, 0, 3)
+	if len(env) == 0 {
+		return out
+	}
+	out = appendProtectedPathDir(
+		out,
+		env[envTRPCClawEnvFile],
+	)
+
+	stateDir := strings.TrimSpace(env[envTRPCClawStateDir])
+	if stateDir == "" {
+		return out
+	}
+	out = appendProtectedPathFragment(out, stateDir)
+	out = appendProtectedPathFragment(
+		out,
+		filepath.Join(
+			stateDir,
+			filepath.Dir(protectedRuntimeEnvRelPath),
+		),
+	)
+	return out
+}
+
+func expandProtectedEnvReferences(
+	command string,
+	env map[string]string,
+) string {
+	if command == "" || len(env) == 0 {
+		return command
+	}
+	expanded := expandProtectedEnvReference(
+		command,
+		envTRPCClawEnvFile,
+		env[envTRPCClawEnvFile],
+	)
+	return expandProtectedEnvReference(
+		expanded,
+		envTRPCClawStateDir,
+		env[envTRPCClawStateDir],
+	)
+}
+
+func expandProtectedEnvReference(
+	command string,
+	envName string,
+	value string,
+) string {
+	fragment := normalizePathFragment(value)
+	if fragment == "" {
+		return command
+	}
+	lowerName := strings.ToLower(envName)
+	replacer := strings.NewReplacer(
+		"$"+lowerName,
+		fragment,
+		"${"+lowerName+"}",
+		fragment,
+	)
+	return replacer.Replace(command)
+}
+
+func appendProtectedPathFragment(out []string, raw string) []string {
+	fragment := normalizePathFragment(raw)
+	if fragment == "" {
+		return out
+	}
+	return append(out, fragment)
+}
+
+func appendProtectedPathDir(out []string, raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return out
+	}
+	dir := filepath.Dir(trimmed)
+	if dir == "." {
+		return out
+	}
+	return appendProtectedPathFragment(out, dir)
+}
+
+func normalizePathFragment(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	return strings.ToLower(filepath.ToSlash(trimmed))
+}
+
+func stripShellQuotes(command string) string {
+	if command == "" {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune(shellQuoteChars, r) {
+			return -1
+		}
+		return r
+	}, command)
 }
 
 func containsSensitivePathFragment(command, fragment string) bool {
