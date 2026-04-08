@@ -11,7 +11,10 @@
 package app
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"io"
@@ -55,6 +58,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 	langfuseobs "trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 )
+
+const eventsFileNameForTest = "events.jsonl"
 
 type captureRequestModel struct {
 	got *model.Request
@@ -1939,6 +1944,12 @@ func TestNewModel_OpenAI_DebugRecorderWiresRequestCapture(
 func TestRecordDebugOpenAIChatRequestJSON_WritesTraceEvent(t *testing.T) {
 	t.Parallel()
 
+	const (
+		modelName = "gpt-4o"
+		userRole  = "user"
+		userText  = "hello"
+	)
+
 	rec, err := debugrecorder.New(t.TempDir(), "")
 	require.NoError(t, err)
 
@@ -1960,9 +1971,21 @@ func TestRecordDebugOpenAIChatRequestJSON_WritesTraceEvent(t *testing.T) {
 		trace.Close(debugrecorder.TraceEnd{Status: "ok"}),
 	)
 
-	raw, err := os.ReadFile(filepath.Join(trace.Dir(), "events.jsonl"))
+	raw, err := os.ReadFile(
+		filepath.Join(trace.Dir(), eventsFileNameForTest),
+	)
 	require.NoError(t, err)
-	require.Contains(t, string(raw), debugrecorder.KindModelReq)
+
+	ev := findModelRequestEventForTest(t, raw)
+	require.Equal(
+		t,
+		debugrecorder.ProviderOpenAIChatCompletions,
+		ev.Payload.Provider,
+	)
+	require.Equal(t, modelName, ev.Payload.Request.Model)
+	require.Len(t, ev.Payload.Request.Messages, 1)
+	require.Equal(t, userRole, ev.Payload.Request.Messages[0].Role)
+	require.Equal(t, userText, ev.Payload.Request.Messages[0].Content)
 }
 
 func TestRecordDebugOpenAIChatRequestJSON_NoTraceIsNoOp(t *testing.T) {
@@ -1998,7 +2021,9 @@ func TestRecordDebugOpenAIChatRequestJSON_InvalidJSONSkipsEvent(
 		trace.Close(debugrecorder.TraceEnd{Status: "ok"}),
 	)
 
-	raw, err := os.ReadFile(filepath.Join(trace.Dir(), "events.jsonl"))
+	raw, err := os.ReadFile(
+		filepath.Join(trace.Dir(), eventsFileNameForTest),
+	)
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), debugrecorder.KindModelReq)
 }
@@ -2017,6 +2042,46 @@ func hasOpenAIRequestJSONCallback(
 		FieldByName("chatRequestJSONCallback")
 	require.True(t, field.IsValid())
 	return !field.IsNil()
+}
+
+type modelRequestEventForTest struct {
+	Kind    string                     `json:"kind"`
+	Payload modelRequestPayloadForTest `json:"payload"`
+}
+
+type modelRequestPayloadForTest struct {
+	Provider string                  `json:"provider"`
+	Request  modelRequestBodyForTest `json:"request"`
+}
+
+type modelRequestBodyForTest struct {
+	Model    string                       `json:"model"`
+	Messages []modelRequestMessageForTest `json:"messages"`
+}
+
+type modelRequestMessageForTest struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+func findModelRequestEventForTest(
+	t *testing.T,
+	raw []byte,
+) modelRequestEventForTest {
+	t.Helper()
+
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	for scanner.Scan() {
+		var got modelRequestEventForTest
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &got))
+		if got.Kind != debugrecorder.KindModelReq {
+			continue
+		}
+		return got
+	}
+	require.NoError(t, scanner.Err())
+	t.Fatalf("model request event not found")
+	return modelRequestEventForTest{}
 }
 
 func TestNewModel_UnsupportedMode(t *testing.T) {
