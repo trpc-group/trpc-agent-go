@@ -30,6 +30,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+const debugEventsFilePattern = "events.jsonl*"
+
 func TestParseStreamingMode_DefaultAndInvalid(t *testing.T) {
 	t.Parallel()
 
@@ -183,12 +185,12 @@ func TestChannel_CallGatewayAndReply_RecorderCreatesTrace(t *testing.T) {
 	require.NoError(t, err)
 
 	matches, err := filepath.Glob(
-		filepath.Join(rec.Dir(), "*", "*", debugEventsFileName),
+		filepath.Join(rec.Dir(), "*", "*", debugEventsFilePattern),
 	)
 	require.NoError(t, err)
 	require.Len(t, matches, 1)
 
-	raw, err := os.ReadFile(matches[0])
+	raw, err := debugrecorder.ReadEventsFile(filepath.Dir(matches[0]))
 	require.NoError(t, err)
 	require.Contains(t, string(raw), debugrecorder.KindTelegramMessage)
 }

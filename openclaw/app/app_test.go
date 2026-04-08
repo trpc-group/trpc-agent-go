@@ -11,7 +11,10 @@
 package app
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"io"
@@ -19,6 +22,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1917,6 +1921,161 @@ func TestNewModel_OpenAI(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "gpt-5", mdl.Info().Name)
+	require.False(t, hasOpenAIRequestJSONCallback(t, mdl))
+}
+
+func TestNewModel_OpenAI_DebugRecorderWiresRequestCapture(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{
+		ModelMode:            modeOpenAI,
+		OpenAIModel:          "gpt-5",
+		OpenAIVariant:        openAIVariantAuto,
+		DebugRecorderEnabled: true,
+	})
+	require.NoError(t, err)
+	require.True(t, hasOpenAIRequestJSONCallback(t, mdl))
+}
+
+func TestRecordDebugOpenAIChatRequestJSON_WritesTraceEvent(t *testing.T) {
+	t.Parallel()
+
+	const (
+		modelName = "gpt-4o"
+		userRole  = "user"
+		userText  = "hello"
+	)
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		Channel: "gateway",
+	})
+	require.NoError(t, err)
+
+	ctx := debugrecorder.WithTrace(context.Background(), trace)
+	recordDebugOpenAIChatRequestJSON(
+		ctx,
+		[]byte(
+			`{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`,
+		),
+		nil,
+	)
+	require.NoError(
+		t,
+		trace.Close(debugrecorder.TraceEnd{Status: "ok"}),
+	)
+
+	raw, err := debugrecorder.ReadEventsFile(trace.Dir())
+	require.NoError(t, err)
+
+	ev := findModelRequestEventForTest(t, raw)
+	require.Equal(
+		t,
+		debugrecorder.ProviderOpenAIChatCompletions,
+		ev.Payload.Provider,
+	)
+	require.Equal(t, modelName, ev.Payload.Request.Model)
+	require.Len(t, ev.Payload.Request.Messages, 1)
+	require.Equal(t, userRole, ev.Payload.Request.Messages[0].Role)
+	require.Equal(t, userText, ev.Payload.Request.Messages[0].Content)
+}
+
+func TestRecordDebugOpenAIChatRequestJSON_NoTraceIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	recordDebugOpenAIChatRequestJSON(
+		context.Background(),
+		[]byte(`{"model":"gpt-4o"}`),
+		nil,
+	)
+}
+
+func TestRecordDebugOpenAIChatRequestJSON_InvalidJSONSkipsEvent(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		Channel: "gateway",
+	})
+	require.NoError(t, err)
+
+	recordDebugOpenAIChatRequestJSON(
+		debugrecorder.WithTrace(context.Background(), trace),
+		[]byte("{"),
+		nil,
+	)
+	require.NoError(
+		t,
+		trace.Close(debugrecorder.TraceEnd{Status: "ok"}),
+	)
+
+	raw, err := debugrecorder.ReadEventsFile(trace.Dir())
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), debugrecorder.KindModelReq)
+}
+
+func hasOpenAIRequestJSONCallback(
+	t *testing.T,
+	mdl model.Model,
+) bool {
+	t.Helper()
+
+	openAIModel, ok := mdl.(*openai.Model)
+	require.True(t, ok)
+
+	field := reflect.ValueOf(openAIModel).
+		Elem().
+		FieldByName("chatRequestJSONCallback")
+	require.True(t, field.IsValid())
+	return !field.IsNil()
+}
+
+type modelRequestEventForTest struct {
+	Kind    string                     `json:"kind"`
+	Payload modelRequestPayloadForTest `json:"payload"`
+}
+
+type modelRequestPayloadForTest struct {
+	Provider string                  `json:"provider"`
+	Request  modelRequestBodyForTest `json:"request"`
+}
+
+type modelRequestBodyForTest struct {
+	Model    string                       `json:"model"`
+	Messages []modelRequestMessageForTest `json:"messages"`
+}
+
+type modelRequestMessageForTest struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+func findModelRequestEventForTest(
+	t *testing.T,
+	raw []byte,
+) modelRequestEventForTest {
+	t.Helper()
+
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	for scanner.Scan() {
+		var got modelRequestEventForTest
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &got))
+		if got.Kind != debugrecorder.KindModelReq {
+			continue
+		}
+		return got
+	}
+	require.NoError(t, scanner.Err())
+	t.Fatalf("model request event not found")
+	return modelRequestEventForTest{}
 }
 
 func TestNewModel_UnsupportedMode(t *testing.T) {

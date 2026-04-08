@@ -12,7 +12,11 @@ package debugrecorder
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
+	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -172,11 +176,15 @@ func TestTrace_Close_WritesEndAndResult(t *testing.T) {
 	_, err = os.Stat(filepath.Join(trace.Dir(), resultFileName))
 	require.NoError(t, err)
 
-	evs, err := os.Open(filepath.Join(trace.Dir(), eventsFileName))
+	_, err = os.Stat(filepath.Join(trace.Dir(), eventsFileName))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(filepath.Join(trace.Dir(), eventsGzipFileName))
 	require.NoError(t, err)
-	defer evs.Close()
 
-	scanner := bufio.NewScanner(evs)
+	raw, err := ReadEventsFile(trace.Dir())
+	require.NoError(t, err)
+
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	foundEnd := false
 	for scanner.Scan() {
 		var rec record
@@ -187,6 +195,43 @@ func TestTrace_Close_WritesEndAndResult(t *testing.T) {
 	}
 	require.NoError(t, scanner.Err())
 	require.True(t, foundEnd)
+}
+
+func TestReadEventsFile_PrefersRawAndFallsBackToGzip(t *testing.T) {
+	t.Parallel()
+
+	rec, err := New(t.TempDir(), modeFull)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(TraceStart{Channel: "gateway"})
+	require.NoError(t, err)
+
+	require.NoError(t, trace.RecordText("hello"))
+
+	rawPath, compressed, err := ResolveEventsFilePath(trace.Dir())
+	require.NoError(t, err)
+	require.False(t, compressed)
+	require.Equal(t, filepath.Join(trace.Dir(), eventsFileName), rawPath)
+
+	beforeClose, err := ReadEventsFile(trace.Dir())
+	require.NoError(t, err)
+	require.Contains(t, string(beforeClose), KindText)
+
+	require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
+
+	gzipPath, compressed, err := ResolveEventsFilePath(trace.Dir())
+	require.NoError(t, err)
+	require.True(t, compressed)
+	require.Equal(
+		t,
+		filepath.Join(trace.Dir(), eventsGzipFileName),
+		gzipPath,
+	)
+
+	afterClose, err := ReadEventsFile(trace.Dir())
+	require.NoError(t, err)
+	require.Contains(t, string(afterClose), KindText)
+	require.Contains(t, string(afterClose), KindTraceEnd)
 }
 
 func TestTrace_Record_ValidationAndClosedIsNoOp(t *testing.T) {
@@ -203,6 +248,22 @@ func TestTrace_Record_ValidationAndClosedIsNoOp(t *testing.T) {
 	require.NoError(t, trace.RecordError(errors.New("boom")))
 	require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
 	require.NoError(t, trace.RecordText("ignored after close"))
+}
+
+func TestTrace_Close_PropagatesEventsCloseError(t *testing.T) {
+	t.Parallel()
+
+	eventsFile, err := os.CreateTemp(t.TempDir(), "events-*.jsonl")
+	require.NoError(t, err)
+	require.NoError(t, eventsFile.Close())
+
+	trace := &Trace{
+		root:   t.TempDir(),
+		events: eventsFile,
+	}
+
+	err = trace.Close(TraceEnd{Status: "ok"})
+	require.Error(t, err)
 }
 
 func TestTrace_StoreBlob_SafeModeDoesNotWrite(t *testing.T) {
@@ -346,6 +407,543 @@ func TestContextHelpers(t *testing.T) {
 
 	require.Nil(t, RecorderFromContext(nil))
 	require.Nil(t, TraceFromContext(nil))
+}
+
+func TestRecordModelRequest_WritesEvent(t *testing.T) {
+	t.Parallel()
+
+	rec, err := New(t.TempDir(), modeFull)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(TraceStart{Channel: "gateway"})
+	require.NoError(t, err)
+
+	ctx := WithTrace(context.Background(), trace)
+	payload := map[string]any{
+		"model": "gpt-4o",
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "hello",
+			},
+		},
+	}
+	require.NoError(
+		t,
+		RecordModelRequest(
+			ctx,
+			ProviderOpenAIChatCompletions,
+			payload,
+		),
+	)
+	require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
+
+	raw, err := ReadEventsFile(trace.Dir())
+	require.NoError(t, err)
+
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	found := false
+	for scanner.Scan() {
+		var got record
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &got))
+		if got.Kind != KindModelReq {
+			continue
+		}
+		found = true
+
+		payload, ok := got.Payload.(map[string]any)
+		require.True(t, ok)
+		require.Equal(
+			t,
+			ProviderOpenAIChatCompletions,
+			payload["provider"],
+		)
+
+		request, ok := payload["request"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "gpt-4o", request["model"])
+
+		messages, ok := request["messages"].([]any)
+		require.True(t, ok)
+		require.Len(t, messages, 1)
+
+		message, ok := messages[0].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "user", message["role"])
+		require.Equal(t, "hello", message["content"])
+	}
+	require.NoError(t, scanner.Err())
+	require.True(t, found)
+}
+
+func TestRecordModelRequest_NoTraceIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	payload := map[string]any{"model": "gpt-4o"}
+	require.NoError(
+		t,
+		RecordModelRequest(
+			context.Background(),
+			ProviderOpenAIChatCompletions,
+			payload,
+		),
+	)
+	require.NoError(
+		t,
+		RecordModelRequest(context.Background(), "", nil),
+	)
+}
+
+func TestResolveEventsFilePath_GuardsAndFallbacks(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := ResolveEventsFilePath("")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty trace dir")
+
+	traceDir := t.TempDir()
+	_, _, err = ResolveEventsFilePath(traceDir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "events file not found")
+
+	eventsDir := filepath.Join(traceDir, eventsFileName)
+	require.NoError(t, os.MkdirAll(eventsDir, 0o700))
+	_, _, err = ResolveEventsFilePath(traceDir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "events path is a directory")
+
+	require.NoError(t, os.RemoveAll(eventsDir))
+
+	gzipDir := filepath.Join(traceDir, eventsGzipFileName)
+	require.NoError(t, os.MkdirAll(gzipDir, 0o700))
+	_, _, err = ResolveEventsFilePath(traceDir)
+	require.Error(t, err)
+	require.Contains(
+		t,
+		err.Error(),
+		"compressed events path is a directory",
+	)
+}
+
+func TestReadEventsFile_InvalidGzipFails(t *testing.T) {
+	t.Parallel()
+
+	traceDir := t.TempDir()
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(traceDir, eventsGzipFileName),
+			[]byte("not-gzip"),
+			0o600,
+		),
+	)
+
+	_, err := ReadEventsFile(traceDir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "open gzip reader")
+}
+
+func TestReadEventsFile_RawReadErrorFails(t *testing.T) {
+	t.Parallel()
+
+	traceDir := t.TempDir()
+	path := filepath.Join(traceDir, eventsFileName)
+	require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+	require.NoError(t, os.Chmod(path, 0))
+	t.Cleanup(func() {
+		_ = os.Chmod(path, 0o600)
+	})
+
+	_, err := ReadEventsFile(traceDir)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "read events")
+}
+
+func TestCompressEventsFile_GuardsAndReplacesExistingGzip(t *testing.T) {
+	t.Parallel()
+
+	err := compressEventsFile("")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty events path")
+
+	traceDir := t.TempDir()
+	eventsPath := filepath.Join(traceDir, eventsFileName)
+	err = compressEventsFile(eventsPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "open events")
+
+	const rawEvents = "{\"kind\":\"trace.start\"}\n"
+	require.NoError(
+		t,
+		os.WriteFile(eventsPath, []byte(rawEvents), 0o600),
+	)
+
+	gzipPath := filepath.Join(traceDir, eventsGzipFileName)
+	writeGzipFileForTest(t, gzipPath, []byte("stale"))
+
+	require.NoError(t, compressEventsFile(eventsPath))
+
+	_, err = os.Stat(eventsPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	raw, err := readGzipFile(gzipPath)
+	require.NoError(t, err)
+	require.Equal(t, rawEvents, string(raw))
+}
+
+func TestCompressEventsFile_CreateTempAndRemoveOldErrors(t *testing.T) {
+	t.Parallel()
+
+	traceDir := t.TempDir()
+	eventsPath := filepath.Join(traceDir, eventsFileName)
+	require.NoError(t, os.WriteFile(eventsPath, []byte("x\n"), 0o600))
+
+	require.NoError(t, os.Chmod(traceDir, 0o500))
+	err := compressEventsFile(eventsPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "create compressed events")
+	require.NoError(t, os.Chmod(traceDir, 0o700))
+
+	require.NoError(t, os.WriteFile(eventsPath, []byte("x\n"), 0o600))
+
+	gzipPath := filepath.Join(traceDir, eventsGzipFileName)
+	require.NoError(t, os.MkdirAll(gzipPath, 0o700))
+	require.NoError(
+		t,
+		os.WriteFile(filepath.Join(gzipPath, "keep"), []byte("x"), 0o600),
+	)
+
+	err = compressEventsFile(eventsPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "remove old compressed events")
+}
+
+func TestVerifyGzipFile_DetectsMismatch(t *testing.T) {
+	t.Parallel()
+
+	traceDir := t.TempDir()
+	gzipPath := filepath.Join(traceDir, eventsGzipFileName)
+	raw := []byte("{\"kind\":\"trace.start\"}\n")
+	writeGzipFileForTest(t, gzipPath, raw)
+
+	sum := sha256.Sum256(raw)
+
+	err := verifyGzipFile(gzipPath, sum[:], int64(len(raw))+1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "size mismatch")
+
+	err = verifyGzipFile(
+		gzipPath,
+		bytes.Repeat([]byte{'a'}, sha256.Size),
+		int64(len(raw)),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "hash mismatch")
+}
+
+func TestVerifyGzipFile_Guards(t *testing.T) {
+	t.Parallel()
+
+	err := verifyGzipFile(
+		filepath.Join(t.TempDir(), "missing.gz"),
+		bytes.Repeat([]byte{'a'}, sha256.Size),
+		1,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "open compressed events")
+
+	path := filepath.Join(t.TempDir(), eventsGzipFileName)
+	require.NoError(t, os.WriteFile(path, []byte("bad"), 0o600))
+
+	err = verifyGzipFile(
+		path,
+		bytes.Repeat([]byte{'a'}, sha256.Size),
+		1,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "open gzip reader")
+}
+
+func TestReadGzipFile_Guards(t *testing.T) {
+	t.Parallel()
+
+	_, err := readGzipFile(filepath.Join(t.TempDir(), "missing.gz"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "open compressed events")
+
+	path := filepath.Join(t.TempDir(), eventsGzipFileName)
+	require.NoError(t, os.WriteFile(path, []byte("bad"), 0o600))
+
+	_, err = readGzipFile(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "open gzip reader")
+}
+
+func TestReadGzipFile_AndVerifyGzipFile_TruncatedGzipFail(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), eventsGzipFileName)
+	writeGzipFileForTest(t, path, []byte("hello"))
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Greater(t, len(raw), 1)
+	require.NoError(t, os.WriteFile(path, raw[:len(raw)-1], 0o600))
+
+	_, err = readGzipFile(path)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "read compressed events")
+
+	sum := sha256.Sum256([]byte("hello"))
+	err = verifyGzipFile(path, sum[:], int64(len("hello")))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "verify compressed events")
+}
+
+func TestSanitizeModelRequestPayload_ProviderAndGuardBranches(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	payload := map[string]any{"model": "gpt-4o"}
+	got, err := sanitizeModelRequestPayload(
+		nil,
+		"other-provider",
+		payload,
+	)
+	require.NoError(t, err)
+	require.Equal(t, payload, got)
+
+	sanitizer := &modelRequestPayloadSanitizer{}
+
+	gotValue, replaced, err := sanitizer.replaceInlineData("content", "x")
+	require.NoError(t, err)
+	require.Nil(t, gotValue)
+	require.False(t, replaced)
+
+	gotValue, replaced, err = sanitizer.replaceInlineData("url", 123)
+	require.NoError(t, err)
+	require.Nil(t, gotValue)
+	require.False(t, replaced)
+
+	gotValue, replaced, err = sanitizer.replaceInlineData(
+		"url",
+		"data:image/png,not-base64",
+	)
+	require.NoError(t, err)
+	require.Nil(t, gotValue)
+	require.False(t, replaced)
+}
+
+func TestSanitizeModelRequestPayload_ErrorPropagation(t *testing.T) {
+	t.Parallel()
+
+	trace := newFailingBlobTrace(t)
+	dataURL := dataURLForTest("image/png", []byte("img"))
+
+	tests := []struct {
+		name    string
+		payload any
+	}{
+		{
+			name: "top-level-inline",
+			payload: map[string]any{
+				"url": dataURL,
+			},
+		},
+		{
+			name: "nested-map-inline",
+			payload: map[string]any{
+				"outer": map[string]any{
+					"url": dataURL,
+				},
+			},
+		},
+		{
+			name: "array-inline",
+			payload: []any{
+				map[string]any{
+					"url": dataURL,
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := sanitizeModelRequestPayload(
+				trace,
+				ProviderOpenAIChatCompletions,
+				tt.payload,
+			)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "mkdir")
+		})
+	}
+
+	err := RecordModelRequest(
+		WithTrace(context.Background(), trace),
+		ProviderOpenAIChatCompletions,
+		map[string]any{"url": dataURL},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "mkdir")
+}
+
+func TestParseDataURL_GuardsAndDefaults(t *testing.T) {
+	t.Parallel()
+
+	_, _, ok := parseDataURL("https://example.com")
+	require.False(t, ok)
+
+	_, _, ok = parseDataURL("data:image/png;base64")
+	require.False(t, ok)
+
+	_, _, ok = parseDataURL("data:image/png,abcd")
+	require.False(t, ok)
+
+	mimeType, data, ok := parseDataURL(
+		"data:;base64," +
+			base64.StdEncoding.EncodeToString([]byte("hi")),
+	)
+	require.True(t, ok)
+	require.Equal(t, modelRequestDefaultMIMEType, mimeType)
+	require.Equal(t, []byte("hi"), data)
+
+	_, _, ok = parseDataURL("data:image/png;base64,%%%")
+	require.False(t, ok)
+}
+
+func TestResolveEventsFilePath_StatErrorOnFileTraceDir(t *testing.T) {
+	t.Parallel()
+
+	tracePath := filepath.Join(t.TempDir(), "trace-file")
+	require.NoError(t, os.WriteFile(tracePath, []byte("x"), 0o600))
+
+	_, _, err := ResolveEventsFilePath(tracePath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stat events")
+}
+
+func TestRecordModelRequest_SafeModeSummarizesInlineMedia(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rec, err := New(t.TempDir(), modeSafe)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(TraceStart{Channel: "gateway"})
+	require.NoError(t, err)
+
+	payload := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"content": []any{
+					map[string]any{
+						"type": "input_image",
+						"image_url": map[string]any{
+							"url": dataURLForTest(
+								"image/png",
+								[]byte("img"),
+							),
+						},
+					},
+					map[string]any{
+						"type": "input_audio",
+						"input_audio": map[string]any{
+							"data": dataURLForTest(
+								"audio/wav",
+								[]byte("aud"),
+							),
+						},
+					},
+					map[string]any{
+						"type": "input_file",
+						"file": map[string]any{
+							"file_data": dataURLForTest(
+								"text/plain",
+								[]byte("doc"),
+							),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(
+		t,
+		RecordModelRequest(
+			WithTrace(context.Background(), trace),
+			ProviderOpenAIChatCompletions,
+			payload,
+		),
+	)
+	require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
+
+	ev := findModelRequestEvent(t, trace.Dir())
+	reqPayload := ev["request"].(map[string]any)
+	msgs := reqPayload["messages"].([]any)
+	msg := msgs[0].(map[string]any)
+	content := msg["content"].([]any)
+
+	imageURL := content[0].(map[string]any)["image_url"].(map[string]any)
+	assertInlineSummary(t, imageURL["url"], "image/png", 3, false)
+
+	inputAudio := content[1].(map[string]any)["input_audio"].(map[string]any)
+	assertInlineSummary(t, inputAudio["data"], "audio/wav", 3, false)
+
+	file := content[2].(map[string]any)["file"].(map[string]any)
+	assertInlineSummary(t, file["file_data"], "text/plain", 3, false)
+}
+
+func TestRecordModelRequest_FullModeStoresInlineMediaBlobs(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rec, err := New(t.TempDir(), modeFull)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(TraceStart{Channel: "gateway"})
+	require.NoError(t, err)
+
+	payload := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"content": []any{
+					map[string]any{
+						"type": "input_image",
+						"image_url": map[string]any{
+							"url": dataURLForTest(
+								"image/png",
+								[]byte("img"),
+							),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(
+		t,
+		RecordModelRequest(
+			WithTrace(context.Background(), trace),
+			ProviderOpenAIChatCompletions,
+			payload,
+		),
+	)
+	require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
+
+	ev := findModelRequestEvent(t, trace.Dir())
+	reqPayload := ev["request"].(map[string]any)
+	msgs := reqPayload["messages"].([]any)
+	msg := msgs[0].(map[string]any)
+	content := msg["content"].([]any)
+	imageURL := content[0].(map[string]any)["image_url"].(map[string]any)
+	assertInlineSummary(t, imageURL["url"], "image/png", 3, true)
 }
 
 func TestWriteJSONFile_EmptyPathFails(t *testing.T) {
@@ -685,4 +1283,96 @@ func TestWriteTraceIDJSON_GuardsAndErrors(t *testing.T) {
 	err := writeTraceIDJSON(path, "trace-1")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unmarshal json")
+}
+
+func dataURLForTest(
+	mimeType string,
+	data []byte,
+) string {
+	return modelRequestDataURLPrefix + mimeType +
+		modelRequestBase64Delimiter +
+		base64.StdEncoding.EncodeToString(data)
+}
+
+func writeGzipFileForTest(
+	t *testing.T,
+	path string,
+	data []byte,
+) {
+	t.Helper()
+
+	file, err := os.OpenFile(
+		path,
+		os.O_CREATE|os.O_WRONLY|os.O_TRUNC,
+		0o600,
+	)
+	require.NoError(t, err)
+
+	writer := gzip.NewWriter(file)
+	_, err = writer.Write(data)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, file.Close())
+}
+
+func newFailingBlobTrace(t *testing.T) *Trace {
+	t.Helper()
+
+	root := filepath.Join(t.TempDir(), "trace-root-file")
+	require.NoError(t, os.WriteFile(root, []byte("x"), 0o600))
+	return &Trace{
+		root: root,
+		mode: modeFull,
+	}
+}
+
+func findModelRequestEvent(
+	t *testing.T,
+	traceDir string,
+) map[string]any {
+	t.Helper()
+
+	raw, err := ReadEventsFile(traceDir)
+	require.NoError(t, err)
+
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	for scanner.Scan() {
+		var got record
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &got))
+		if got.Kind != KindModelReq {
+			continue
+		}
+
+		payload, ok := got.Payload.(map[string]any)
+		require.True(t, ok)
+		return payload
+	}
+	require.NoError(t, scanner.Err())
+	t.Fatalf("model request event not found")
+	return nil
+}
+
+func assertInlineSummary(
+	t *testing.T,
+	value any,
+	mimeType string,
+	size int,
+	wantRef bool,
+) {
+	t.Helper()
+
+	summary, ok := value.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, mimeType, summary[modelRequestFieldMIMEType])
+
+	blob, ok := summary[modelRequestFieldBlob].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, float64(size), blob["size"])
+
+	ref, _ := blob["ref"].(string)
+	if wantRef {
+		require.NotEmpty(t, ref)
+		return
+	}
+	require.Empty(t, ref)
 }

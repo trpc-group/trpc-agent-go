@@ -1511,8 +1511,48 @@ func TestModel_CallbackAssignment(t *testing.T) {
 
 		// Verify that callbacks are nil when not provided.
 		assert.Nil(t, m.chatRequestCallback, "expected chat request callback to be nil")
+		assert.Nil(
+			t,
+			m.chatRequestJSONCallback,
+			"expected chat request json callback to be nil",
+		)
 		assert.Nil(t, m.chatResponseCallback, "expected chat response callback to be nil")
 		assert.Nil(t, m.chatChunkCallback, "expected chat chunk callback to be nil")
+	})
+
+	t.Run("request json callback assignment", func(t *testing.T) {
+		var (
+			callbackRaw []byte
+			callbackErr error
+		)
+		m := New(
+			"test-model",
+			WithAPIKey("test-key"),
+			WithChatRequestJSONCallback(func(
+				ctx context.Context,
+				raw []byte,
+				err error,
+			) {
+				callbackRaw = append([]byte(nil), raw...)
+				callbackErr = err
+			}),
+		)
+
+		assert.NotNil(t, m.chatRequestJSONCallback)
+
+		req := &openaigo.ChatCompletionNewParams{
+			Model: "test-model",
+			Messages: []openaigo.ChatCompletionMessageParamUnion{
+				openaigo.UserMessage("hello"),
+			},
+		}
+		wantRaw, err := req.MarshalJSON()
+		require.NoError(t, err)
+
+		m.runChatRequestJSONCallback(context.Background(), req)
+
+		require.NoError(t, callbackErr)
+		assert.JSONEq(t, string(wantRaw), string(callbackRaw))
 	})
 }
 
@@ -1529,6 +1569,29 @@ func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
 
 		require.NotPanics(t, func() {
 			m.runChatRequestCallback(context.Background(), &openaigo.ChatCompletionNewParams{})
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("request json callback", func(t *testing.T) {
+		callbackCalled := false
+		m := New("test-model",
+			WithAPIKey("test-key"),
+			WithChatRequestJSONCallback(func(
+				ctx context.Context,
+				raw []byte,
+				err error,
+			) {
+				callbackCalled = true
+				panic("boom")
+			}),
+		)
+
+		require.NotPanics(t, func() {
+			m.runChatRequestJSONCallback(
+				context.Background(),
+				&openaigo.ChatCompletionNewParams{},
+			)
 		})
 		assert.True(t, callbackCalled)
 	})

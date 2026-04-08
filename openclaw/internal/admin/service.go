@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
@@ -78,6 +79,7 @@ const (
 	debugMetaFileName   = "meta.json"
 	debugEventsFileName = "events.jsonl"
 	debugResultFileName = "result.json"
+	debugEventsMIMEType = "application/x-ndjson; charset=utf-8"
 
 	maxDebugSessionRows = 12
 	maxDebugTraceRows   = 18
@@ -1314,6 +1316,22 @@ func (s *Service) handleDebugFile(
 	tracePath := strings.TrimSpace(r.URL.Query().Get(queryTrace))
 	name := strings.TrimSpace(r.URL.Query().Get(queryName))
 	relPath := strings.TrimSpace(r.URL.Query().Get(queryPath))
+	if relPath == "" && name == debugEventsFileName {
+		traceDir, err := s.resolveDebugTraceDir(tracePath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		data, err := debugrecorder.ReadEventsFile(traceDir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set(headerContentType, debugEventsMIMEType)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+		return
+	}
 	filePath, err := s.resolveDebugFile(tracePath, name, relPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1719,17 +1737,39 @@ func (s *Service) resolveDebugFile(
 	if strings.TrimSpace(relPath) != "" {
 		return resolveDebugRootFile(root, relPath)
 	}
-	if strings.TrimSpace(tracePath) == "" {
-		return "", fmt.Errorf("trace path is required")
-	}
 	if !isAllowedDebugFile(name) {
 		return "", fmt.Errorf("unsupported debug file: %s", name)
+	}
+	traceDir, err := s.resolveDebugTraceDir(tracePath)
+	if err != nil {
+		return "", err
+	}
+
+	candidate := filepath.Join(traceDir, name)
+	if name == debugEventsFileName {
+		resolved, _, err := debugrecorder.ResolveEventsFilePath(traceDir)
+		if err == nil {
+			return resolved, nil
+		}
+	}
+	if _, err := os.Stat(candidate); err != nil {
+		return "", fmt.Errorf("debug file not found")
+	}
+	return candidate, nil
+}
+
+func (s *Service) resolveDebugTraceDir(tracePath string) (string, error) {
+	root := strings.TrimSpace(s.cfg.DebugDir)
+	if root == "" {
+		return "", fmt.Errorf("debug recorder is not configured")
+	}
+	if strings.TrimSpace(tracePath) == "" {
+		return "", fmt.Errorf("trace path is required")
 	}
 
 	candidate := filepath.Clean(filepath.Join(
 		root,
 		filepath.FromSlash(tracePath),
-		name,
 	))
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -1744,10 +1784,14 @@ func (s *Service) resolveDebugFile(
 			absCandidate,
 			absRoot+string(os.PathSeparator),
 		) {
-		return "", fmt.Errorf("debug file escapes debug root")
+		return "", fmt.Errorf("debug trace escapes debug root")
 	}
-	if _, err := os.Stat(absCandidate); err != nil {
-		return "", fmt.Errorf("debug file not found")
+	info, err := os.Stat(absCandidate)
+	if err != nil {
+		return "", fmt.Errorf("debug trace not found")
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("debug trace path is not a directory")
 	}
 	return absCandidate, nil
 }

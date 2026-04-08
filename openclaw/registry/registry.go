@@ -182,10 +182,11 @@ type ToolSetProviderFactory func(
 
 // ModelSpec describes which model to create.
 type ModelSpec struct {
-	Type          string
-	Name          string
-	BaseURL       string
-	OpenAIVariant string
+	Type                 string
+	Name                 string
+	BaseURL              string
+	OpenAIVariant        string
+	DebugRecorderEnabled bool
 
 	Config *yaml.Node
 }

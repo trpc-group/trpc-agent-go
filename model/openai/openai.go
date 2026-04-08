@@ -224,6 +224,7 @@ type Model struct {
 	showToolCallDelta          bool
 	channelBufferSize          int
 	chatRequestCallback        ChatRequestCallbackFunc
+	chatRequestJSONCallback    ChatRequestJSONCallbackFunc
 	chatResponseCallback       ChatResponseCallbackFunc
 	chatChunkCallback          ChatChunkCallbackFunc
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
@@ -302,6 +303,7 @@ func New(name string, opts ...Option) *Model {
 		showToolCallDelta:          o.ShowToolCallDelta,
 		channelBufferSize:          o.ChannelBufferSize,
 		chatRequestCallback:        o.ChatRequestCallback,
+		chatRequestJSONCallback:    o.ChatRequestJSONCallback,
 		chatResponseCallback:       o.ChatResponseCallback,
 		chatChunkCallback:          o.ChatChunkCallback,
 		chatStreamCompleteCallback: o.ChatStreamCompleteCallback,
@@ -364,6 +366,29 @@ func (m *Model) runChatRequestCallback(
 	m.chatRequestCallback(ctx, chatRequest)
 }
 
+func (m *Model) runChatRequestJSONCallback(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+) {
+	if m.chatRequestJSONCallback == nil {
+		return
+	}
+
+	var (
+		raw []byte
+		err error
+	)
+	if chatRequest != nil {
+		raw, err = chatRequest.MarshalJSON()
+	}
+
+	defer imodel.RecoverCallbackPanic(
+		ctx,
+		"chat request json callback",
+	)
+	m.chatRequestJSONCallback(ctx, raw, err)
+}
+
 func (m *Model) runChatResponseCallback(
 	ctx context.Context,
 	chatRequest *openai.ChatCompletionNewParams,
@@ -419,6 +444,7 @@ func (m *Model) GenerateContent(
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
+	m.runChatRequestJSONCallback(ctx, chatRequest)
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
@@ -442,6 +468,7 @@ func (m *Model) GenerateContentIter(
 	}
 	return func(yield func(*model.Response) bool) {
 		m.runChatRequestCallback(ctx, chatRequest)
+		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {
 				return false
