@@ -135,35 +135,45 @@ func GraphResumeStateFromStateDelta(stateDeltaRaw any) map[string]any {
 }
 
 // GraphResumeStateFromMetadata extracts graph resume state from A2A message
-// metadata. It tries state_delta first, then falls back to flattened metadata
-// fields for backward compatibility.
+// metadata. It prefers state_delta for checkpoint and resume data, then fills
+// in any missing pieces from flattened metadata for backward compatibility.
 func GraphResumeStateFromMetadata(metadata map[string]any) map[string]any {
 	if len(metadata) == 0 {
 		return nil
 	}
 
-	if state := GraphResumeStateFromStateDelta(
+	state := GraphResumeStateFromStateDelta(
 		metadata[MessageMetadataStateDeltaKey],
-	); len(state) > 0 {
-		return state
+	)
+	if state == nil {
+		state = make(map[string]any, 4)
 	}
 
 	// Backward compatibility for flattened fields.
-	state := make(map[string]any, 4)
-	if lineageID, ok := metadata[graph.CfgKeyLineageID]; ok {
-		state[graph.CfgKeyLineageID] = lineageID
+	if _, ok := state[graph.CfgKeyLineageID]; !ok {
+		if lineageID, ok := metadata[graph.CfgKeyLineageID]; ok {
+			state[graph.CfgKeyLineageID] = lineageID
+		}
 	}
-	checkpointID, hasCheckpoint := metadata[graph.CfgKeyCheckpointID]
-	if hasCheckpoint {
-		state[graph.CfgKeyCheckpointID] = checkpointID
+	if _, ok := state[graph.CfgKeyCheckpointID]; !ok {
+		if checkpointID, ok := metadata[graph.CfgKeyCheckpointID]; ok {
+			state[graph.CfgKeyCheckpointID] = checkpointID
+		}
 	}
-	if checkpointNS, ok := metadata[graph.CfgKeyCheckpointNS]; ok {
-		state[graph.CfgKeyCheckpointNS] = checkpointNS
+	if _, ok := state[graph.CfgKeyCheckpointNS]; !ok {
+		if checkpointNS, ok := metadata[graph.CfgKeyCheckpointNS]; ok {
+			state[graph.CfgKeyCheckpointNS] = checkpointNS
+		}
 	}
+	_, hasCheckpoint := state[graph.CfgKeyCheckpointID]
 	if !hasCheckpoint {
 		if len(state) == 0 {
 			return nil
 		}
+		return state
+	}
+
+	if _, ok := state[graph.StateKeyCommand].(*graph.ResumeCommand); ok {
 		return state
 	}
 

@@ -826,24 +826,38 @@ a2aAgent, _ := a2aagent.New(
 
 When the remote A2A Server runs a Graph Agent that uses `graph.Interrupt`, extra configuration is needed:
 
-- **Server-side**: Use `WithGraphEventObjectAllowlist("*")` to allow all internal graph events (including interrupts) through
-- **Client-side**: Use `WithTransferStateKey("*")` to forward all RuntimeState keys into A2A metadata, ensuring checkpoint/lineage resume info is propagated
+- **Server-side**: Allow at least `graph.execution` and `graph.pregel.step`; the former preserves the graph's terminal completion event, while the latter lets interrupt events carry resume metadata such as `state_delta` and `pregel_metadata` back through A2A. If you do not want to maintain a narrow allowlist, use `WithGraphEventObjectAllowlist("*")` instead.
+- **Client-side**: Forward at least `graph.CfgKeyLineageID`, `graph.CfgKeyCheckpointID`, `graph.CfgKeyCheckpointNS`, and `graph.StateKeyCommand`, so resume requests can send lineage/checkpoint/command data back to the remote graph. If you want to forward the full RuntimeState, use `WithTransferStateKey("*")` instead.
 
 ```go
 // Server
 server, _ := a2aserver.New(
     a2aserver.WithAgent(graphAgent, true),
-    a2aserver.WithGraphEventObjectAllowlist("*"),
-    a2aserver.WithStreamingEventType(a2aserver.StreamingEventTypeMessage),
+    a2aserver.WithGraphEventObjectAllowlist(
+        "graph.execution",
+        "graph.pregel.step",
+    ),
 )
 
 // Client
 subAgent, _ := a2aagent.New(
     a2aagent.WithAgentCardURL("http://remote:8888"),
     a2aagent.WithEnableStreaming(true),
-    a2aagent.WithTransferStateKey("*"),
+    a2aagent.WithTransferStateKey(
+        graph.CfgKeyLineageID,
+        graph.CfgKeyCheckpointID,
+        graph.CfgKeyCheckpointNS,
+        graph.StateKeyCommand,
+    ),
 )
 ```
+
+Notes:
+
+- `graph.execution` preserves the graph's terminal completion event.
+- `graph.pregel.step` is the key graph event object used to carry interrupt/resume metadata.
+- `graph.StateKeyCommand` carries `Resume` / `ResumeMap`, which the remote graph uses to continue from the interrupted node.
+- `"*"` remains a convenient catch-all option for debugging or when full state forwarding is acceptable.
 
 > Full example: [examples/graph/a2a_interrupt](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/a2a_interrupt)
 

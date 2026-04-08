@@ -420,6 +420,29 @@ func TestGraphResumeStateFromMetadata(t *testing.T) {
 		assert.Equal(t, "ck-sd", state[graph.CfgKeyCheckpointID])
 	})
 
+	t.Run("state_delta checkpoint merges serialized Command fallback", func(t *testing.T) {
+		delta := map[string][]byte{
+			graph.CfgKeyLineageID:    []byte(`"ln-sd"`),
+			graph.CfgKeyCheckpointID: []byte(`"ck-sd"`),
+		}
+		metadata := map[string]any{
+			MessageMetadataStateDeltaKey: EncodeStateDeltaMetadata(delta),
+			graph.CfgKeyCheckpointID:     "ck-flat",
+			graph.StateKeyCommand: map[string]any{
+				"Resume":    "approve",
+				"ResumeMap": map[string]any{"approval": true},
+			},
+		}
+		state := GraphResumeStateFromMetadata(metadata)
+		require.NotNil(t, state)
+		assert.Equal(t, "ln-sd", state[graph.CfgKeyLineageID])
+		assert.Equal(t, "ck-sd", state[graph.CfgKeyCheckpointID])
+		cmd, ok := state[graph.StateKeyCommand].(*graph.ResumeCommand)
+		require.True(t, ok)
+		assert.Equal(t, "approve", cmd.Resume)
+		assert.Equal(t, true, cmd.ResumeMap["approval"])
+	})
+
 	t.Run("flattened fields fallback", func(t *testing.T) {
 		metadata := map[string]any{
 			graph.CfgKeyLineageID:    "ln-flat",
