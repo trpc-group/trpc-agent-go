@@ -210,6 +210,195 @@ for {
 reader.Close()
 ```
 
+### 在 Tool 实现里获取 Tool Call ID
+
+当模型发出一条 `tool_call` 后，框架会在真正执行工具前，把这次调用的
+`tool_call_id` 注入到工具执行的 `context.Context` 中。
+
+这意味着：在你自己的 Tool 实现里，框架**支持**直接读取这条 ID。
+
+这个能力对以下场景特别有用：
+
+- 同名工具并发调用时，为每次调用生成不冲突的状态键
+- 给日志、监控、埋点、trace 打上稳定的工具调用标识
+- 当工具内部再触发一个子 Agent 时，把“这个子 Agent 来自哪条
+  tool_call”传给 UI 或上层编排逻辑
+
+当前这套机制适用于：
+
+- LLMAgent 中的普通函数工具
+- LLMAgent 中的流式工具
+- GraphAgent 的工具执行节点
+- Tool callbacks / plugins（回调参数里也会带 `ToolCallID`）
+
+#### 最直接的用法
+
+在工具实现中调用 `tool.ToolCallIDFromContext(ctx)` 即可：
+
+```go
+const defaultToolCallID = "default"
+
+type searchArgs struct {
+    Query string `json:"query"`
+}
+
+func searchDocs(
+    ctx context.Context,
+    args searchArgs,
+) (map[string]any, error) {
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+        toolCallID = defaultToolCallID
+    }
+
+    log.Printf(
+        "tool_call_id=%s query=%s",
+        toolCallID,
+        args.Query,
+    )
+
+    return map[string]any{
+        "tool_call_id": toolCallID,
+        "query":        args.Query,
+    }, nil
+}
+```
+
+如果你只是想在 Tool 里打印日志、做指标、写 Invocation
+State，通常到这里就够了。
+
+完整可运行示例可参考 `examples/toolcallid`。
+
+#### 当 Tool 内部还要拉起子 Agent 时
+
+这里要先区分两个概念：
+
+- `tool_call_id`：模型发出的“这一条工具调用”的 ID
+- `InvocationID` / `ParentInvocationID`：Agent 执行树里的父子调用关系
+
+如果你的目标是“让 UI 把子 Agent 的输出挂到主 Agent 的某条工具调用下面”，
+推荐把这两层信息都保留下来：
+
+1. 用 `tool.ToolCallIDFromContext(ctx)` 取到当前 `tool_call_id`
+2. 用 `agent.InvocationFromContext(ctx)` 取到父 Invocation
+3. 用 `parentInv.Clone(...)` 创建子 Invocation
+4. 把 `tool_call_id` 放进子 Invocation 的 `RunOptions.RuntimeState`
+5. UI 侧同时使用：
+   - `InvocationID` / `ParentInvocationID` 建立调用树
+   - 你传下去的 `tool_call_id` 绑定“来源于哪条 tool_call”
+
+示例（假设 `childAgent` 已经是一个可运行的子 Agent 实例）：
+
+```go
+const runtimeStateParentToolCallID = "display.parent_tool_call_id"
+const defaultToolCallID = "default"
+
+type delegateArgs struct {
+    Message string `json:"message"`
+}
+
+func runChildAgentInsideTool(
+    ctx context.Context,
+    args delegateArgs,
+) (string, error) {
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+        toolCallID = defaultToolCallID
+    }
+
+    parentInv, ok := agent.InvocationFromContext(ctx)
+    if !ok || parentInv == nil {
+        return "", errors.New("missing parent invocation")
+    }
+
+    childRunOptions := parentInv.RunOptions
+    childRunOptions.RuntimeState = make(
+        map[string]any,
+        len(parentInv.RunOptions.RuntimeState)+1,
+    )
+    for key, value := range parentInv.RunOptions.RuntimeState {
+        childRunOptions.RuntimeState[key] = value
+    }
+    childRunOptions.RuntimeState[
+        runtimeStateParentToolCallID
+    ] = toolCallID
+
+    childInv := parentInv.Clone(
+        agent.WithInvocationAgent(childAgent),
+        agent.WithInvocationMessage(
+            model.NewUserMessage(args.Message),
+        ),
+        agent.WithInvocationRunOptions(childRunOptions),
+    )
+
+    childCtx := agent.NewInvocationContext(ctx, childInv)
+    eventCh, err := agent.RunWithPlugins(
+        childCtx,
+        childInv,
+        childAgent,
+    )
+    if err != nil {
+        return "", err
+    }
+
+    var final string
+    for ev := range eventCh {
+        if ev.Response != nil && len(ev.Response.Choices) > 0 {
+            msg := ev.Response.Choices[0].Message
+            if msg.Content != "" {
+                final = msg.Content
+            }
+        }
+        // Child events naturally carry:
+        // - ev.InvocationID       == childInv.InvocationID
+        // - ev.ParentInvocationID == parentInv.InvocationID
+        //
+        // Your renderer can build the invocation tree from these two
+        // fields, and read runtimeStateParentToolCallID from the child
+        // invocation path to attach that subtree back to the original
+        // tool-call card.
+    }
+
+    return final, nil
+}
+```
+
+写入前先复制一份 `RuntimeState`。`Invocation.Clone(...)`
+不会对 `map` 做深拷贝；如果直接复用并写入，就会连父
+Invocation 一起改掉。
+
+子 Agent 内部如果还需要继续读取这个“来源 tool_call_id”，可以直接从
+运行时状态里拿：
+
+```go
+toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
+    ctx,
+    runtimeStateParentToolCallID,
+)
+```
+
+#### 推荐实践
+
+- 如果你只需要“这一条工具调用”的标识，直接用
+  `tool.ToolCallIDFromContext(ctx)`
+- 如果你要表达“子 Agent 是谁触发的”，不要只依赖 `tool_call_id`
+  一个字段；调用树请优先看 `InvocationID` / `ParentInvocationID`
+- 如果 UI 还要回挂到“具体哪条工具卡片”，再把 `tool_call_id`
+  通过 `RuntimeState` 或自定义事件元数据显式传下去
+- 如果你用的是 `AgentTool`，框架已经会用 `Invocation.Clone(...)`
+  维护父子 Invocation 关系；UI 侧通常已经能看到清晰的父子调用树。
+  只有在你还想把子树额外绑定回某条 tool card 时，才需要再传
+  `tool_call_id`
+
+#### 一个容易忽略的细节
+
+框架会在执行工具前把 `tool_call_id` 注入到 context。
+但如果你的 `BeforeTool` 回调主动返回了一个全新的裸 `Context`
+（没有保留原值），那后续工具代码里就拿不到这个 ID 了。
+
+因此，如果你会在回调里替换 context，记得把已有的 context value
+一并透传。
+
 ## 内置工具类型
 
 ### DuckDuckGo 搜索工具
