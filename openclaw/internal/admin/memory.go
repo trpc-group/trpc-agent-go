@@ -57,6 +57,14 @@ type memoryFileView struct {
 }
 
 func (s *Service) memoryStatus() memoryStatus {
+	return s.memoryStatusWithFiles(true)
+}
+
+func (s *Service) memoryStatusSummary() memoryStatus {
+	return s.memoryStatusWithFiles(false)
+}
+
+func (s *Service) memoryStatusWithFiles(includeFiles bool) memoryStatus {
 	if s == nil {
 		return memoryStatus{}
 	}
@@ -75,7 +83,6 @@ func (s *Service) memoryStatus() memoryStatus {
 		out.Error = err.Error()
 		return out
 	}
-	out.Files = files
 	out.FileCount = len(files)
 	for i := range files {
 		out.TotalBytes += files[i].SizeBytes
@@ -84,6 +91,9 @@ func (s *Service) memoryStatus() memoryStatus {
 			modified := files[i].ModifiedAt
 			out.LastModified = &modified
 		}
+	}
+	if includeFiles {
+		out.Files = files
 	}
 	return out
 }

@@ -517,7 +517,7 @@ type adminNavItem struct {
 func (s *Service) Snapshot() snapshot {
 	out := s.baseSnapshot()
 	out.Skills = s.skillsStatus()
-	out.Memory = s.memoryStatus()
+	out.Memory = s.memoryStatusSummary()
 	out.Browser = s.browserStatus()
 	out.Exec = s.execStatus()
 	out.Uploads = s.uploadsStatus()

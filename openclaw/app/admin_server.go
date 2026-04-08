@@ -154,7 +154,7 @@ func buildAdminConfig(
 			skillsRepo,
 			skillsWatch,
 		),
-		MemoryFiles:    memoryFiles,
+		MemoryFiles: memoryFiles,
 		Browser: buildBrowserAdminConfig(
 			opts.ToolProviders,
 			browserManaged,

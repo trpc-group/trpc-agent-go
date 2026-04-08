@@ -514,6 +514,37 @@ func TestSummarizeMemoryPreview(t *testing.T) {
 	require.Empty(t, got)
 }
 
+func TestServiceSnapshotOmitsMemoryFilesFromStatus(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+	_, err = store.UpdateMemory(
+		context.Background(),
+		"openclaw",
+		"alice",
+		func(string) (string, error) {
+			return "# Memory\n\n- Alice prefers concise updates.\n", nil
+		},
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+
+	snap := svc.Snapshot()
+	require.Equal(t, 1, snap.Memory.FileCount)
+	require.Len(t, snap.Memory.Files, 0)
+
+	viewSnap := svc.snapshotForView(viewMemory)
+	require.Len(t, viewSnap.Memory.Files, 1)
+	require.Equal(t, "alice", viewSnap.Memory.Files[0].UserID)
+}
+
 func TestServiceRenderPageScopesSnapshotToActiveView(t *testing.T) {
 	t.Parallel()
 
