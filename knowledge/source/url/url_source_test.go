@@ -91,6 +91,30 @@ func (m *mockURLContentExtractor) Close() error {
 	return nil
 }
 
+type pngContentExtractor struct {
+	called bool
+}
+
+func (m *pngContentExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return m.ExtractFromReader(ctx, strings.NewReader(string(data)), opts...)
+}
+
+func (m *pngContentExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	m.called = true
+	return &extractor.Result{
+		Reader: strings.NewReader("# Extracted PNG\n\ncontent"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (m *pngContentExtractor) SupportedFormats() []string {
+	return []string{".png"}
+}
+
+func (m *pngContentExtractor) Close() error {
+	return nil
+}
+
 // TestReadDocuments verifies URL Source with and without custom chunk
 // configuration.
 func TestReadDocuments(t *testing.T) {
@@ -811,6 +835,59 @@ func TestReadDocuments_WithURLExtractor(t *testing.T) {
 	}
 	if ext.calledURL != "https://example.com/test.pdf" {
 		t.Fatalf("expected ExtractFromURL to be used, got %q", ext.calledURL)
+	}
+	if docs[0].Content == "" {
+		t.Fatal("expected extracted content")
+	}
+}
+
+func TestReadDocuments_WithURLExtractorUnsupportedExtensionFallsBackToReader(t *testing.T) {
+	ctx := context.Background()
+	ext := &mockURLContentExtractor{}
+	content := "plain text fallback"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(content))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL + "/notes.txt"}, WithExtractor(ext))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	if ext.calledURL != "" {
+		t.Fatalf("expected ExtractFromURL not to be used, got %q", ext.calledURL)
+	}
+	if docs[0].Content != content {
+		t.Fatalf("expected reader fallback content %q, got %q", content, docs[0].Content)
+	}
+}
+
+func TestReadDocuments_WithExtractor_ContentTypeFallbackForImages(t *testing.T) {
+	ctx := context.Background()
+	ext := &pngContentExtractor{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("png-bytes"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL + "/download"}, WithExtractor(ext))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	if !ext.called {
+		t.Fatal("expected extractor to be used via content-type fallback")
 	}
 	if docs[0].Content == "" {
 		t.Fatal("expected extracted content")

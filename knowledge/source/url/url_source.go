@@ -138,10 +138,9 @@ func (s *Source) processURL(ctx context.Context, fetchingURL string, identifierU
 	}
 
 	fileName := s.getFileName(parsedIdentifierURL, "")
-	if s.contentExtractor != nil {
-		if urlExtractor, ok := s.contentExtractor.(extractor.URLExtractor); ok {
-			return s.readExtractedResult(ctx, urlExtractor, fetchingURL, parsedIdentifierURL, fileName)
-		}
+	if s.shouldUseURLExtractor(parsedIdentifierURL) {
+		urlExtractor := s.contentExtractor.(extractor.URLExtractor)
+		return s.readExtractedResult(ctx, urlExtractor, fetchingURL, parsedIdentifierURL, fileName)
 	}
 
 	// Create HTTP request with context.
@@ -229,6 +228,21 @@ func (s *Source) processURL(ctx context.Context, fetchingURL string, identifierU
 	return documents, nil
 }
 
+func (s *Source) shouldUseURLExtractor(parsedIdentifierURL *url.URL) bool {
+	if s.contentExtractor == nil {
+		return false
+	}
+	urlExtractor, ok := s.contentExtractor.(extractor.URLExtractor)
+	if !ok || urlExtractor == nil {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(parsedIdentifierURL.Path))
+	if ext == "" {
+		return false
+	}
+	return extractor.Supports(s.contentExtractor, ext)
+}
+
 func (s *Source) readExtractedResult(
 	ctx context.Context,
 	urlExtractor extractor.URLExtractor,
@@ -286,8 +300,20 @@ func extractorExtFromContentType(contentType string) string {
 		return ".pdf"
 	case strings.Contains(mainType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
 		return ".docx"
+	case strings.Contains(mainType, "application/vnd.openxmlformats-officedocument.presentationml.presentation"):
+		return ".pptx"
+	case strings.Contains(mainType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+		return ".xlsx"
 	case strings.Contains(mainType, "text/csv"):
 		return ".csv"
+	case strings.Contains(mainType, "image/png"):
+		return ".png"
+	case strings.Contains(mainType, "image/jpeg"):
+		return ".jpg"
+	case strings.Contains(mainType, "image/tiff"):
+		return ".tiff"
+	case strings.Contains(mainType, "image/bmp"):
+		return ".bmp"
 	default:
 		return ""
 	}
