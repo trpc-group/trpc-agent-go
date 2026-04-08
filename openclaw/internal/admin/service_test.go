@@ -417,6 +417,17 @@ func TestServiceMemoryFilesJSONEndpoint(t *testing.T) {
 	require.Contains(t, body, `"user_id": "alice"`)
 }
 
+func TestServiceMemoryFilesJSONEndpoint_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+	req := httptest.NewRequest(http.MethodPost, routeMemoryFilesJSON, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
+
 func TestServiceMemoryFileEndpoint(t *testing.T) {
 	t.Parallel()
 
@@ -469,6 +480,35 @@ func TestServiceMemoryFileEndpointRequiresStore(t *testing.T) {
 
 	require.Equal(t, http.StatusNotFound, rr.Code)
 	require.Contains(t, rr.Body.String(), "not configured")
+}
+
+func TestServiceMemoryFileEndpoint_MethodAndPathValidation(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, routeMemoryFile, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+
+	req = httptest.NewRequest(
+		http.MethodGet,
+		routeMemoryFile+"?path="+url.QueryEscape(filepath.Join(root, "app", "user", "MEMORY.md")),
+		nil,
+	)
+	rr = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "invalid memory file path")
 }
 
 func TestResolveMemoryFileGuards(t *testing.T) {
