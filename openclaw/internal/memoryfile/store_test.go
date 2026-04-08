@@ -43,6 +43,18 @@ func TestNewStore_EmptyRootReturnsError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestStoreRoot_ReturnsConfiguredRootAndHandlesNilStore(t *testing.T) {
+	t.Parallel()
+
+	var nilStore *Store
+	require.Empty(t, nilStore.Root())
+
+	root := filepath.Join(t.TempDir(), "memory")
+	store, err := NewStore(root)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Clean(root), store.Root())
+}
+
 func TestStoreEnsureMemoryCreatesTemplate(t *testing.T) {
 	t.Parallel()
 

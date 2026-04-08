@@ -124,6 +124,7 @@ func buildAdminConfig(
 	adminURL string,
 	skillsRepo *ocskills.Repository,
 	skillsWatch *ocskills.WatchService,
+	memoryFiles admin.MemoryFileStore,
 ) admin.Config {
 	return admin.Config{
 		AppName:        opts.AppName,
@@ -153,6 +154,7 @@ func buildAdminConfig(
 			skillsRepo,
 			skillsWatch,
 		),
+		MemoryFiles: memoryFiles,
 		Browser: buildBrowserAdminConfig(
 			opts.ToolProviders,
 			browserManaged,
