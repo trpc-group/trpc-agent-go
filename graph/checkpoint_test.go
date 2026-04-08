@@ -1481,6 +1481,57 @@ func TestShouldEmitModelResponseEvent_NilResponse(t *testing.T) {
 	)
 }
 
+func TestShouldEmitModelResponseEvent_DoneWithReasoningContent(t *testing.T) {
+	t.Run("done response without reasoning is not emitted", func(t *testing.T) {
+		rsp := &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "answer",
+				},
+			}},
+		}
+		require.False(t, shouldEmitModelResponseEvent(rsp, nil))
+	})
+
+	t.Run("done response with reasoning IS emitted", func(t *testing.T) {
+		rsp := &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:             model.RoleAssistant,
+					Content:          "answer",
+					ReasoningContent: "thinking step by step",
+				},
+			}},
+		}
+		require.True(t, shouldEmitModelResponseEvent(rsp, nil),
+			"final response with ReasoningContent must be emitted for session persistence")
+	})
+
+	t.Run("non-done response is always emitted", func(t *testing.T) {
+		rsp := &model.Response{
+			Done: false,
+			Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleAssistant, Content: "partial"},
+			}},
+		}
+		require.True(t, shouldEmitModelResponseEvent(rsp, nil))
+	})
+}
+
+func TestResponseHasReasoningContent(t *testing.T) {
+	require.False(t, responseHasReasoningContent(nil))
+	require.False(t, responseHasReasoningContent(&model.Response{}))
+	require.False(t, responseHasReasoningContent(&model.Response{
+		Choices: []model.Choice{{Message: model.Message{Content: "text"}}},
+	}))
+	require.True(t, responseHasReasoningContent(&model.Response{
+		Choices: []model.Choice{{Message: model.Message{ReasoningContent: "think"}}},
+	}))
+}
+
 func TestProcessModelResponse_AfterModelCustomResponse(t *testing.T) {
 	tracer := oteltrace.NewNoopTracerProvider().Tracer("t")
 	_, span := tracer.Start(context.Background(), "s")
