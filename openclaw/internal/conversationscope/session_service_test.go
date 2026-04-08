@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -55,12 +56,15 @@ type recordingSessionService struct {
 	updateSessionState  session.StateMap
 	appendSession       *session.Session
 	appendEvent         *event.Event
+	appendFunc          func(*session.Session, *event.Event)
 	createSummarySess   *session.Session
 	createSummaryKey    string
 	createSummaryForce  bool
+	createSummaryFunc   func(*session.Session, string, bool)
 	enqueueSummarySess  *session.Session
 	enqueueSummaryKey   string
 	enqueueSummaryForce bool
+	enqueueSummaryFunc  func(*session.Session, string, bool)
 	getSummarySess      *session.Session
 	getSummaryText      string
 	getSummaryOK        bool
@@ -208,6 +212,9 @@ func (r *recordingSessionService) AppendEvent(
 ) error {
 	r.appendSession = sess
 	r.appendEvent = evt
+	if r.appendFunc != nil {
+		r.appendFunc(sess, evt)
+	}
 	return nil
 }
 
@@ -220,6 +227,9 @@ func (r *recordingSessionService) CreateSessionSummary(
 	r.createSummarySess = sess
 	r.createSummaryKey = filterKey
 	r.createSummaryForce = force
+	if r.createSummaryFunc != nil {
+		r.createSummaryFunc(sess, filterKey, force)
+	}
 	return nil
 }
 
@@ -232,6 +242,9 @@ func (r *recordingSessionService) EnqueueSummaryJob(
 	r.enqueueSummarySess = sess
 	r.enqueueSummaryKey = filterKey
 	r.enqueueSummaryForce = force
+	if r.enqueueSummaryFunc != nil {
+		r.enqueueSummaryFunc(sess, filterKey, force)
+	}
 	return nil
 }
 
@@ -360,6 +373,13 @@ func TestWrapSessionService_UsesContextStorageScopeForStorage(t *testing.T) {
 			),
 		),
 	)
+	require.Equal(t, "canonical-user", sess.UserID)
+	require.Len(t, sess.Events, 2)
+	require.True(
+		t,
+		sess.Events[1].Response.Choices[0].Message.Role ==
+			model.RoleAssistant,
+	)
 
 	updated, err := base.GetSession(context.Background(), storageKey)
 	require.NoError(t, err)
@@ -369,6 +389,61 @@ func TestWrapSessionService_UsesContextStorageScopeForStorage(t *testing.T) {
 	raw, ok := updated.GetState("migrated")
 	require.True(t, ok)
 	require.Equal(t, []byte("yes"), raw)
+}
+
+func TestWrapSessionService_SyncsSummaryRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	const filterKey = "branch"
+
+	updatedAt := time.Date(
+		2026,
+		time.April,
+		8,
+		20,
+		11,
+		0,
+		0,
+		time.UTC,
+	)
+	rec := &recordingSessionService{
+		createSummaryFunc: func(
+			sess *session.Session,
+			filterKey string,
+			force bool,
+		) {
+			sess.SummariesMu.Lock()
+			sess.Summaries = map[string]*session.Summary{
+				filterKey: {
+					Summary:   "group summary",
+					UpdatedAt: updatedAt,
+				},
+			}
+			sess.SummariesMu.Unlock()
+			sess.UpdatedAt = updatedAt
+		},
+	}
+	wrapped := WrapSessionService(rec)
+	ctx := WithStorageUserID(context.Background(), "chat-scope")
+	sess := session.NewSession(
+		"demo-app",
+		"canonical-user",
+		"sess-1",
+	)
+
+	err := wrapped.CreateSessionSummary(ctx, sess, filterKey, true)
+	require.NoError(t, err)
+	require.Equal(t, "canonical-user", sess.UserID)
+	require.Equal(t, updatedAt, sess.UpdatedAt)
+
+	sess.SummariesMu.RLock()
+	sum := sess.Summaries[filterKey]
+	sess.SummariesMu.RUnlock()
+
+	require.NotNil(t, sum)
+	require.Equal(t, "group summary", sum.Summary)
+	require.Equal(t, updatedAt, sum.UpdatedAt)
+	require.Equal(t, "chat-scope", rec.createSummarySess.UserID)
 }
 
 func TestWrapSessionService_WithoutStorageOverrideKeepsCanonicalUser(t *testing.T) {
