@@ -86,8 +86,10 @@ func TestExtract_Success(t *testing.T) {
 		data, err := io.ReadAll(file)
 		require.NoError(t, err)
 		assert.Equal(t, "fake pdf content", string(data))
+		assert.Equal(t, "md", r.FormValue("to_formats"))
+		assert.Equal(t, "placeholder", r.FormValue("image_export_mode"))
 
-		resp := convertResponse{}
+		resp := convertDocumentResponse{}
 		resp.Document.MdContent = "# Extracted Title\n\nSome content here."
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -106,7 +108,7 @@ func TestExtract_Success(t *testing.T) {
 
 func TestExtractFromReader_Success(t *testing.T) {
 	server := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		resp := convertResponse{}
+		resp := convertDocumentResponse{}
 		resp.Document.MdContent = "# From Reader"
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -128,11 +130,10 @@ func TestExtract_WithOutputFormat(t *testing.T) {
 		err := r.ParseMultipartForm(10 << 20)
 		require.NoError(t, err)
 
-		opts := r.FormValue("options")
-		assert.Contains(t, opts, `"to":"text"`)
+		assert.Equal(t, "text", r.FormValue("to_formats"))
 
-		resp := convertResponse{}
-		resp.Document.MdContent = "plain text content"
+		resp := convertDocumentResponse{}
+		resp.Document.TextContent = "plain text content"
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	})
@@ -143,6 +144,9 @@ func TestExtract_WithOutputFormat(t *testing.T) {
 		extractor.WithOutputFormat(extractor.FormatText))
 	require.NoError(t, err)
 	assert.Equal(t, extractor.FormatText, result.Format)
+	content, err := io.ReadAll(result.Reader)
+	require.NoError(t, err)
+	assert.Equal(t, "plain text content", string(content))
 }
 
 func TestExtract_WithOCRDisabled(t *testing.T) {
@@ -150,10 +154,9 @@ func TestExtract_WithOCRDisabled(t *testing.T) {
 		err := r.ParseMultipartForm(10 << 20)
 		require.NoError(t, err)
 
-		opts := r.FormValue("options")
-		assert.Contains(t, opts, `"ocr":false`)
+		assert.Equal(t, "false", r.FormValue("do_ocr"))
 
-		resp := convertResponse{}
+		resp := convertDocumentResponse{}
 		resp.Document.MdContent = "# No OCR"
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -181,7 +184,7 @@ func TestExtract_ServerError(t *testing.T) {
 
 func TestExtract_EmptyContent(t *testing.T) {
 	server := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		resp := convertResponse{}
+		resp := convertDocumentResponse{}
 		resp.Document.MdContent = ""
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
@@ -210,7 +213,7 @@ func TestExtract_InvalidJSON(t *testing.T) {
 func TestExtract_ContextCancelled(t *testing.T) {
 	server := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
-		resp := convertResponse{}
+		resp := convertDocumentResponse{}
 		resp.Document.MdContent = "# Late"
 		json.NewEncoder(w).Encode(resp)
 	})
@@ -231,6 +234,47 @@ func TestExtract_ConnectionRefused(t *testing.T) {
 	assert.Contains(t, err.Error(), "docling request failed")
 }
 
+func TestExtract_ImageExportModeFormField(t *testing.T) {
+	server := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		err := r.ParseMultipartForm(10 << 20)
+		require.NoError(t, err)
+
+		// image_export_mode should be a separate form field, not inside options JSON.
+		assert.Equal(t, "placeholder", r.FormValue("image_export_mode"))
+
+		resp := convertDocumentResponse{}
+		resp.Document.MdContent = "# Placeholder Mode"
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+	defer server.Close()
+
+	ext := New(WithEndpoint(server.URL))
+	result, err := ext.Extract(context.Background(), []byte("data"))
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
+func TestExtract_ImageExportModeEmbedded(t *testing.T) {
+	server := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		err := r.ParseMultipartForm(10 << 20)
+		require.NoError(t, err)
+
+		assert.Equal(t, "embedded", r.FormValue("image_export_mode"))
+
+		resp := convertDocumentResponse{}
+		resp.Document.MdContent = "# Embedded Mode"
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+	defer server.Close()
+
+	ext := New(WithEndpoint(server.URL), WithImageRefMode(ImageRefModeEmbedded))
+	result, err := ext.Extract(context.Background(), []byte("data"))
+	require.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
 func TestBuildPipelineOptions(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -240,44 +284,84 @@ func TestBuildPipelineOptions(t *testing.T) {
 		empty    bool
 	}{
 		{
-			name:     "default options include placeholder image mode",
-			ext:      New(),
-			eopts:    &extractor.Options{},
-			contains: []string{`"image_export_mode":"placeholder"`},
+			name:  "default options produce empty pipeline opts",
+			ext:   New(),
+			eopts: &extractor.Options{},
+			empty: true,
 		},
 		{
-			name:     "OCR disabled",
-			ext:      New(WithOCR(false)),
-			eopts:    &extractor.Options{},
-			contains: []string{`"ocr":false`},
+			name:  "default options",
+			ext:   New(),
+			eopts: &extractor.Options{},
+			contains: []string{
+				`"to_formats":["md"]`,
+				`"image_export_mode":"placeholder"`,
+			},
 		},
 		{
-			name:     "text output format",
-			ext:      New(),
-			eopts:    &extractor.Options{OutputFormat: extractor.FormatText},
-			contains: []string{`"to":"text"`},
+			name:  "OCR disabled",
+			ext:   New(WithOCR(false)),
+			eopts: &extractor.Options{},
+			contains: []string{
+				`"do_ocr":false`,
+				`"to_formats":["md"]`,
+			},
 		},
 		{
-			name:     "image ref mode embedded override",
-			ext:      New(WithImageRefMode(ImageRefModeEmbedded)),
-			eopts:    &extractor.Options{},
-			contains: []string{`"image_export_mode":"embedded"`},
+			name:  "text output format",
+			ext:   New(),
+			eopts: &extractor.Options{OutputFormat: extractor.FormatText},
+			contains: []string{
+				`"to_formats":["text"]`,
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.ext.buildPipelineOptions(tt.eopts)
-			if tt.empty {
-				assert.Empty(t, result)
-			} else {
-				for _, s := range tt.contains {
-					assert.Contains(t, result, s)
-				}
+			data, err := json.Marshal(buildConvertOptions(tt.ext.opts, tt.eopts))
+			require.NoError(t, err)
+			result := string(data)
+			for _, s := range tt.contains {
+				assert.Contains(t, result, s)
 			}
 		})
 	}
 }
 
+func TestExtractFromURL_Success(t *testing.T) {
+	server := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, convertSourcePath, r.URL.Path)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+
+		var req convertSourceRequest
+		err := json.NewDecoder(r.Body).Decode(&req)
+		require.NoError(t, err)
+		require.Len(t, req.Sources, 1)
+		assert.Equal(t, "http", req.Sources[0].Kind)
+		assert.Equal(t, "https://example.com/test.pdf", req.Sources[0].URL)
+		assert.Equal(t, "inbody", req.Target.Kind)
+		assert.Equal(t, []string{"md"}, req.Options.ToFormats)
+		assert.Equal(t, ImageRefModePlaceholder, req.Options.ImageExportMode)
+
+		resp := convertDocumentResponse{}
+		resp.Document.MdContent = "# From URL"
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	})
+	defer server.Close()
+
+	ext := New(WithEndpoint(server.URL))
+	result, err := ext.ExtractFromURL(context.Background(), "https://example.com/test.pdf")
+	require.NoError(t, err)
+
+	content, err := io.ReadAll(result.Reader)
+	require.NoError(t, err)
+	assert.Equal(t, extractor.FormatMarkdown, result.Format)
+	assert.Equal(t, "# From URL", string(content))
+}
+
 // Verify that Extractor implements the extractor.Extractor interface at compile time.
 var _ extractor.Extractor = (*Extractor)(nil)
+var _ extractor.URLExtractor = (*Extractor)(nil)

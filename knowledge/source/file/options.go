@@ -31,7 +31,12 @@ func WithName(name string) Option {
 // WithMetadata sets additional metadata for the source.
 func WithMetadata(metadata map[string]any) Option {
 	return func(s *Source) {
-		s.metadata = metadata
+		if s.metadata == nil {
+			s.metadata = make(map[string]any)
+		}
+		for k, v := range metadata {
+			s.metadata[k] = v
+		}
 	}
 }
 

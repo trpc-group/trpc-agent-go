@@ -11,6 +11,7 @@ package url
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	neturl "net/url"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 
 	// Import readers to register them
@@ -35,6 +37,58 @@ type mockChunkingStrategy struct {
 
 func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
 	return []*document.Document{doc}, nil
+}
+
+type mockContentExtractor struct{}
+
+func (m *mockContentExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return &extractor.Result{
+		Reader: strings.NewReader("# Extracted\n\ncontent"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (m *mockContentExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	return &extractor.Result{
+		Reader: strings.NewReader("# Extracted\n\ncontent"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (m *mockContentExtractor) SupportedFormats() []string {
+	return []string{".pdf"}
+}
+
+func (m *mockContentExtractor) Close() error {
+	return nil
+}
+
+type mockURLContentExtractor struct {
+	calledURL string
+}
+
+func (m *mockURLContentExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return (&mockContentExtractor{}).Extract(ctx, data, opts...)
+}
+
+func (m *mockURLContentExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	return (&mockContentExtractor{}).ExtractFromReader(ctx, reader, opts...)
+}
+
+func (m *mockURLContentExtractor) ExtractFromURL(ctx context.Context, sourceURL string, opts ...extractor.Option) (*extractor.Result, error) {
+	m.calledURL = sourceURL
+	return &extractor.Result{
+		Reader: strings.NewReader("# Extracted From URL\n\ncontent"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (m *mockURLContentExtractor) SupportedFormats() []string {
+	return []string{".pdf"}
+}
+
+func (m *mockURLContentExtractor) Close() error {
+	return nil
 }
 
 // TestReadDocuments verifies URL Source with and without custom chunk
@@ -156,6 +210,21 @@ func TestWithMetadata(t *testing.T) {
 		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
 			t.Fatalf("metadata[%s] not set correctly, expected %v, got %v", k, expectedValue, actualValue)
 		}
+	}
+}
+
+func TestWithMetadataCopiesInputMap(t *testing.T) {
+	meta := map[string]any{"source": "test-source"}
+	src := New([]string{"https://example.com"}, WithMetadata(meta))
+
+	meta["source"] = "changed"
+	meta["new"] = "value"
+
+	if got := src.metadata["source"]; got != "test-source" {
+		t.Fatalf("metadata should be copied, got %v", got)
+	}
+	if _, ok := src.metadata["new"]; ok {
+		t.Fatal("source metadata should not observe new keys added to input map")
 	}
 }
 
@@ -673,5 +742,77 @@ func TestFileReaderTypeWithChunking(t *testing.T) {
 	}
 	if len(docs) == 0 {
 		t.Fatal("expected at least one document")
+	}
+}
+
+func TestWithExtractor(t *testing.T) {
+	src := New([]string{"https://example.com"}, WithExtractor(&mockContentExtractor{}))
+
+	if src.contentExtractor == nil {
+		t.Fatal("content extractor should be set")
+	}
+}
+
+func TestReadDocuments_WithExtractor(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-test"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL}, WithExtractor(&mockContentExtractor{}))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	if docs[0].Content == "" {
+		t.Fatal("expected extracted content")
+	}
+}
+
+func TestReadDocuments_WithExtractor_ContentTypeFallback(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-test"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL + "/1706.03762"}, WithExtractor(&mockContentExtractor{}))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	if docs[0].Content == "" {
+		t.Fatal("expected extracted content")
+	}
+}
+
+func TestReadDocuments_WithURLExtractor(t *testing.T) {
+	ctx := context.Background()
+	ext := &mockURLContentExtractor{}
+
+	src := New([]string{"https://example.com/test.pdf"}, WithExtractor(ext))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	if ext.calledURL != "https://example.com/test.pdf" {
+		t.Fatalf("expected ExtractFromURL to be used, got %q", ext.calledURL)
+	}
+	if docs[0].Content == "" {
+		t.Fatal("expected extracted content")
 	}
 }

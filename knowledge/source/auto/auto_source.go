@@ -170,6 +170,9 @@ func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Do
 	if len(s.transformers) > 0 {
 		opts = append(opts, urlsource.WithTransformers(s.transformers...))
 	}
+	if s.contentExtractor != nil {
+		opts = append(opts, urlsource.WithExtractor(s.contentExtractor))
+	}
 
 	urlSource := urlsource.New([]string{input}, opts...)
 	// Copy metadata.
@@ -201,6 +204,9 @@ func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*docum
 	}
 	if len(s.transformers) > 0 {
 		opts = append(opts, dirsource.WithTransformers(s.transformers...))
+	}
+	if s.contentExtractor != nil {
+		opts = append(opts, dirsource.WithExtractor(s.contentExtractor))
 	}
 	dirSource := dirsource.New([]string{input}, opts...)
 	// Copy metadata.

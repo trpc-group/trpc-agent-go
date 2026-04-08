@@ -108,7 +108,7 @@ func WithFileReaderType(fileType source.FileReaderType) Option {
 }
 
 // WithExtractor sets a content extractor for handling complex or unsupported formats.
-// This option will be passed to directory and file sources when auto-detecting the source type.
+// This option will be passed to URL, directory, and file sources when auto-detecting the source type.
 //
 // Example:
 //

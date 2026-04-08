@@ -44,9 +44,6 @@ type Result struct {
 	// Format indicates the output format, which maps to a reader type.
 	// Typically "text" or "markdown".
 	Format string
-
-	// Name is a suggested document name derived from the input.
-	Name string
 }
 
 // Extractor defines the interface for content extraction from various formats.
@@ -67,6 +64,14 @@ type Extractor interface {
 
 	// Close releases any resources held by the extractor.
 	Close() error
+}
+
+// URLExtractor is an optional extension interface for extractors that can
+// directly process a remote URL without the caller downloading the content
+// first. Implementations may use service-side source fetching APIs.
+type URLExtractor interface {
+	// ExtractFromURL converts content fetched directly from the given URL.
+	ExtractFromURL(ctx context.Context, sourceURL string, opts ...Option) (*Result, error)
 }
 
 // Option defines a function type for configuring extraction operations.

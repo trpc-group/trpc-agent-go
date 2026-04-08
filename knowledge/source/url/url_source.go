@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
@@ -46,6 +47,7 @@ type Source struct {
 	customChunkingStrategy chunking.Strategy
 	transformers           []transform.Transformer
 	fileReaderType         source.FileReaderType
+	contentExtractor       extractor.Extractor
 }
 
 // New creates a new URL knowledge source.
@@ -101,7 +103,7 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 		if len(s.fetchURLs) > 0 {
 			fetchingURL = s.fetchURLs[i]
 		}
-		documents, err := s.processURL(fetchingURL, identifierURL)
+		documents, err := s.processURL(ctx, fetchingURL, identifierURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to process URL %s: %w", identifierURL, err)
 		}
@@ -122,7 +124,7 @@ func (s *Source) Type() string {
 }
 
 // processURL downloads content from a URL and returns its documents.
-func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*document.Document, error) {
+func (s *Source) processURL(ctx context.Context, fetchingURL string, identifierURL string) ([]*document.Document, error) {
 	// Parse the URL.
 	_, err := url.Parse(fetchingURL)
 	if err != nil {
@@ -135,8 +137,15 @@ func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*docume
 		return nil, fmt.Errorf("failed to parse identifier URL: %w", err)
 	}
 
+	fileName := s.getFileName(parsedIdentifierURL, "")
+	if s.contentExtractor != nil {
+		if urlExtractor, ok := s.contentExtractor.(extractor.URLExtractor); ok {
+			return s.readExtractedResult(ctx, urlExtractor, fetchingURL, parsedIdentifierURL, fileName)
+		}
+	}
+
 	// Create HTTP request with context.
-	req, err := http.NewRequest("GET", fetchingURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", fetchingURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -157,18 +166,41 @@ func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*docume
 
 	// Determine the content type and file name.
 	contentType := resp.Header.Get("Content-Type")
-	fileName := s.getFileName(parsedIdentifierURL, contentType)
-	// Determine file type and get appropriate reader.
-	fileType := isource.ResolveFileType(string(s.fileReaderType), isource.GetFileTypeFromContentType(contentType, fileName))
-	reader, exists := s.readers[fileType]
-	if !exists {
-		return nil, fmt.Errorf("no reader available for file type: %s", fileType)
-	}
+	fileName = s.getFileName(parsedIdentifierURL, contentType)
 
-	// Read the content using the reader's ReadFromReader method.
-	documents, err := reader.ReadFromReader(fileName, resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read content with reader: %w", err)
+	var documents []*document.Document
+	ext := strings.ToLower(filepath.Ext(fileName))
+	if s.contentExtractor != nil && !extractor.Supports(s.contentExtractor, ext) {
+		if inferredExt := extractorExtFromContentType(contentType); inferredExt != "" {
+			ext = inferredExt
+		}
+	}
+	if s.contentExtractor != nil && extractor.Supports(s.contentExtractor, ext) {
+		result, err := s.contentExtractor.ExtractFromReader(ctx, resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("content extraction failed: %w", err)
+		}
+		r, exists := s.readers[result.Format]
+		if !exists {
+			return nil, fmt.Errorf("no reader available for extracted format: %s", result.Format)
+		}
+		documents, err = r.ReadFromReader(fileName, result.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read extracted content with reader: %w", err)
+		}
+	} else {
+		// Determine file type and get appropriate reader.
+		fileType := isource.ResolveFileType(string(s.fileReaderType), isource.GetFileTypeFromContentType(contentType, fileName))
+		reader, exists := s.readers[fileType]
+		if !exists {
+			return nil, fmt.Errorf("no reader available for file type: %s", fileType)
+		}
+
+		// Read the content using the reader's ReadFromReader method.
+		documents, err = reader.ReadFromReader(fileName, resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read content with reader: %w", err)
+		}
 	}
 
 	// Create metadata for this URL.
@@ -195,6 +227,70 @@ func (s *Source) processURL(fetchingURL string, identifierURL string) ([]*docume
 	}
 
 	return documents, nil
+}
+
+func (s *Source) readExtractedResult(
+	ctx context.Context,
+	urlExtractor extractor.URLExtractor,
+	fetchingURL string,
+	parsedIdentifierURL *url.URL,
+	fileName string,
+) ([]*document.Document, error) {
+	result, err := urlExtractor.ExtractFromURL(ctx, fetchingURL)
+	if err != nil {
+		return nil, fmt.Errorf("content extraction failed: %w", err)
+	}
+	r, exists := s.readers[result.Format]
+	if !exists {
+		return nil, fmt.Errorf("no reader available for extracted format: %s", result.Format)
+	}
+	documents, err := r.ReadFromReader(fileName, result.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read extracted content with reader: %w", err)
+	}
+
+	metadata := make(map[string]any)
+	for k, v := range s.metadata {
+		metadata[k] = v
+	}
+	metadata[source.MetaSource] = source.TypeURL
+	metadata[source.MetaURL] = parsedIdentifierURL.String()
+	metadata[source.MetaURLHost] = parsedIdentifierURL.Host
+	metadata[source.MetaURLPath] = parsedIdentifierURL.Path
+	metadata[source.MetaURLScheme] = parsedIdentifierURL.Scheme
+	metadata[source.MetaURI] = parsedIdentifierURL.String()
+	metadata[source.MetaSourceName] = s.name
+
+	for _, doc := range documents {
+		if doc.Metadata == nil {
+			doc.Metadata = make(map[string]any)
+		}
+		for k, v := range metadata {
+			doc.Metadata[k] = v
+		}
+	}
+	return documents, nil
+}
+
+func extractorExtFromContentType(contentType string) string {
+	if contentType == "" {
+		return ""
+	}
+	parts := strings.Split(contentType, ";")
+	mainType := strings.TrimSpace(parts[0])
+
+	switch {
+	case strings.Contains(mainType, "text/html"):
+		return ".html"
+	case strings.Contains(mainType, "application/pdf"):
+		return ".pdf"
+	case strings.Contains(mainType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
+		return ".docx"
+	case strings.Contains(mainType, "text/csv"):
+		return ".csv"
+	default:
+		return ""
+	}
 }
 
 // getFileName extracts a file name from the URL or content type.

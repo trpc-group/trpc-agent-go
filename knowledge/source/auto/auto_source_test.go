@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
@@ -44,6 +45,30 @@ func (m *mockTransformer) Postprocess(docs []*document.Document) ([]*document.Do
 
 func (m *mockTransformer) Name() string {
 	return "MockTransformer"
+}
+
+type mockContentExtractor struct{}
+
+func (m *mockContentExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return &extractor.Result{
+		Reader: strings.NewReader("# Extracted\n\ncontent"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (m *mockContentExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	return &extractor.Result{
+		Reader: strings.NewReader("# Extracted\n\ncontent"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (m *mockContentExtractor) SupportedFormats() []string {
+	return []string{".pdf"}
+}
+
+func (m *mockContentExtractor) Close() error {
+	return nil
 }
 
 func TestWithTransformers(t *testing.T) {
@@ -218,6 +243,29 @@ func TestProcessAsDirectoryWithCustomChunking(t *testing.T) {
 	}
 	if len(docs) == 0 {
 		t.Error("expected at least one document")
+	}
+}
+
+func TestProcessAsDirectoryWithExtractor(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+
+	filePath := filepath.Join(tmpDir, "test.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-test"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{}, WithExtractor(&mockContentExtractor{}))
+
+	docs, err := src.processAsDirectory(ctx, tmpDir)
+	if err != nil {
+		t.Fatalf("processAsDirectory failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	if docs[0].Content == "" {
+		t.Fatal("expected extracted content")
 	}
 }
 

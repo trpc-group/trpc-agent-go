@@ -11,6 +11,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 
@@ -64,6 +66,52 @@ func (m *mockTransformer) Postprocess(docs []*document.Document) ([]*document.Do
 func (m *mockTransformer) Name() string {
 	return "MockTransformer"
 }
+
+type recordingExtractor struct {
+	format string
+	err    error
+}
+
+func (r *recordingExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return r.ExtractFromReader(ctx, strings.NewReader(string(data)), opts...)
+}
+
+func (r *recordingExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return &extractor.Result{
+		Reader: strings.NewReader("# extracted"),
+		Format: r.format,
+	}, nil
+}
+
+func (r *recordingExtractor) SupportedFormats() []string {
+	return []string{".pdf"}
+}
+
+func (r *recordingExtractor) Close() error { return nil }
+
+type captureReader struct {
+	lastName string
+}
+
+func (c *captureReader) ReadFromReader(name string, r io.Reader) ([]*document.Document, error) {
+	c.lastName = name
+	return []*document.Document{{Content: "ok"}}, nil
+}
+
+func (c *captureReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	return nil, errors.New("unexpected ReadFromFile call")
+}
+
+func (c *captureReader) ReadFromURL(url string) ([]*document.Document, error) {
+	return nil, errors.New("unexpected ReadFromURL call")
+}
+
+func (c *captureReader) Name() string { return "capture" }
+
+func (c *captureReader) SupportedExtensions() []string { return []string{".md"} }
 
 // TestReadDocuments verifies that File Source correctly reads documents with
 // and without custom chunk configuration.
@@ -294,6 +342,42 @@ func TestWithMetadata(t *testing.T) {
 		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
 			t.Errorf("metadata[%s] = %v, want %v", k, actualValue, expectedValue)
 		}
+	}
+}
+
+func TestWithMetadataCopiesInputMap(t *testing.T) {
+	meta := map[string]any{"author": "test-author"}
+	src := New([]string{"test.txt"}, WithMetadata(meta))
+
+	meta["author"] = "changed"
+	meta["new"] = "value"
+
+	if got := src.metadata["author"]; got != "test-author" {
+		t.Fatalf("metadata should be copied, got %v", got)
+	}
+	if _, ok := src.metadata["new"]; ok {
+		t.Fatal("source metadata should not observe new keys added to input map")
+	}
+}
+
+func TestProcessFile_WithExtractorPreservesFileName(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-test"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	reader := &captureReader{}
+	src := New([]string{filePath}, WithExtractor(&recordingExtractor{format: extractor.FormatMarkdown}))
+	src.readers[extractor.FormatMarkdown] = reader
+
+	_, err := src.processFile(ctx, filePath)
+	if err != nil {
+		t.Fatalf("processFile failed: %v", err)
+	}
+	if reader.lastName != "sample.pdf" {
+		t.Fatalf("expected extracted reader name sample.pdf, got %s", reader.lastName)
 	}
 }
 

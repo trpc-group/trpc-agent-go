@@ -25,12 +25,8 @@ package docling
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
-	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
@@ -41,6 +37,7 @@ const (
 	defaultTimeout  = 5 * time.Minute
 
 	convertFilePath = "/v1/convert/file"
+	convertSourcePath = "/v1/convert/source"
 )
 
 // Extractor implements extractor.Extractor by calling a Docling Serve instance.
@@ -66,17 +63,6 @@ func New(opts ...Option) *Extractor {
 	return &Extractor{opts: o}
 }
 
-// convertResponse represents the Docling Serve v1 convert response.
-type convertResponse struct {
-	Document struct {
-		MdContent string `json:"md_content"`
-	} `json:"document"`
-	Status string `json:"status"`
-	Errors []struct {
-		ErrorMessage string `json:"error_message"`
-	} `json:"errors"`
-}
-
 // Extract converts the given data by uploading it to Docling Serve.
 func (e *Extractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
 	return e.ExtractFromReader(ctx, bytes.NewReader(data), opts...)
@@ -85,77 +71,7 @@ func (e *Extractor) Extract(ctx context.Context, data []byte, opts ...extractor.
 // ExtractFromReader converts content from a reader by uploading to Docling Serve.
 func (e *Extractor) ExtractFromReader(ctx context.Context, r io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
 	eopts := extractor.ApplyOptions(opts...)
-
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	// Add the file part.
-	part, err := writer.CreateFormFile("files", "document")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create form file: %w", err)
-	}
-	if _, err = io.Copy(part, r); err != nil {
-		return nil, fmt.Errorf("failed to copy data to form: %w", err)
-	}
-
-	// Add pipeline options as JSON.
-	pipelineOpts := e.buildPipelineOptions(eopts)
-	if pipelineOpts != "" {
-		if err = writer.WriteField("options", pipelineOpts); err != nil {
-			return nil, fmt.Errorf("failed to write options field: %w", err)
-		}
-	}
-
-	if err = writer.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
-	}
-
-	url := strings.TrimRight(e.opts.endpoint, "/") + convertFilePath
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := e.opts.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("docling request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("docling returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var convResp convertResponse
-	if err = json.NewDecoder(resp.Body).Decode(&convResp); err != nil {
-		return nil, fmt.Errorf("failed to decode docling response: %w", err)
-	}
-
-	if convResp.Status != "" && convResp.Status != "success" {
-		errMsg := convResp.Status
-		if len(convResp.Errors) > 0 {
-			errMsg = convResp.Errors[0].ErrorMessage
-		}
-		return nil, fmt.Errorf("docling conversion failed: %s", errMsg)
-	}
-
-	content := convResp.Document.MdContent
-	if content == "" {
-		return nil, fmt.Errorf("docling returned empty content")
-	}
-
-	outputFormat := extractor.FormatMarkdown
-	if eopts.OutputFormat != "" {
-		outputFormat = eopts.OutputFormat
-	}
-
-	return &extractor.Result{
-		Reader: strings.NewReader(content),
-		Format: outputFormat,
-	}, nil
+	return e.doFileConvert(ctx, r, eopts)
 }
 
 // SupportedFormats returns the file extensions this extractor handles.
@@ -163,34 +79,14 @@ func (e *Extractor) SupportedFormats() []string {
 	return e.opts.formats
 }
 
+// ExtractFromURL converts content from a remote URL using Docling Serve's
+// source conversion endpoint. This avoids downloading supported URLs locally
+// before sending them to Docling.
+func (e *Extractor) ExtractFromURL(ctx context.Context, sourceURL string, opts ...extractor.Option) (*extractor.Result, error) {
+	return e.doSourceConvert(ctx, sourceURL, extractor.ApplyOptions(opts...))
+}
+
 // Close releases resources. Docling extractor is stateless, so this is a no-op.
 func (e *Extractor) Close() error {
 	return nil
-}
-
-// buildPipelineOptions builds the JSON options payload for Docling Serve.
-func (e *Extractor) buildPipelineOptions(eopts *extractor.Options) string {
-	pipelineOpts := map[string]any{}
-
-	if !e.opts.ocrEnabled {
-		pipelineOpts["ocr"] = false
-	}
-
-	if eopts.OutputFormat == extractor.FormatText {
-		pipelineOpts["to"] = "text"
-	}
-
-	if e.opts.imageRefMode != "" {
-		pipelineOpts["image_export_mode"] = string(e.opts.imageRefMode)
-	}
-
-	if len(pipelineOpts) == 0 {
-		return ""
-	}
-
-	data, err := json.Marshal(pipelineOpts)
-	if err != nil {
-		return ""
-	}
-	return string(data)
 }

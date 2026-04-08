@@ -16,7 +16,6 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 
@@ -34,7 +33,6 @@ type ReaderConfig struct {
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
 	transformers           []transform.Transformer
-	contentExtractor       extractor.Extractor
 }
 
 // ReaderOption is a functional option for configuring readers.
@@ -73,22 +71,6 @@ func WithTransformers(transformers ...transform.Transformer) ReaderOption {
 	return func(c *ReaderConfig) {
 		c.transformers = transformers
 	}
-}
-
-// WithContentExtractor sets the content extractor for handling unsupported or complex formats.
-func WithContentExtractor(e extractor.Extractor) ReaderOption {
-	return func(c *ReaderConfig) {
-		c.contentExtractor = e
-	}
-}
-
-// GetContentExtractor returns the content extractor from the given options.
-func GetContentExtractor(opts ...ReaderOption) extractor.Extractor {
-	config := &ReaderConfig{}
-	for _, opt := range opts {
-		opt(config)
-	}
-	return config.contentExtractor
 }
 
 // GetReaders returns all available readers configured with the given options.

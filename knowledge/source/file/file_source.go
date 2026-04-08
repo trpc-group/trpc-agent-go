@@ -123,7 +123,7 @@ func (s *Source) processFile(ctx context.Context, filePath string) ([]*document.
 	}
 
 	ext := strings.ToLower(filepath.Ext(filePath))
-	fileName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+	fileName := filepath.Base(filePath)
 
 	var documents []*document.Document
 
@@ -161,7 +161,6 @@ func (s *Source) processFile(ctx context.Context, filePath string) ([]*document.
 	metadata[source.MetaSourceName] = s.name
 
 	// Add metadata to all documents.
-	chunkIndex := 0
 	for _, doc := range documents {
 		if doc.Metadata == nil {
 			doc.Metadata = make(map[string]any)
@@ -169,7 +168,6 @@ func (s *Source) processFile(ctx context.Context, filePath string) ([]*document.
 		for k, v := range metadata {
 			doc.Metadata[k] = v
 		}
-		chunkIndex++
 	}
 	return documents, nil
 }
@@ -177,20 +175,15 @@ func (s *Source) processFile(ctx context.Context, filePath string) ([]*document.
 // extractAndRead uses the content extractor to convert the file, then pipes
 // the result through the appropriate reader for chunking and processing.
 func (s *Source) extractAndRead(ctx context.Context, filePath, fileName string) ([]*document.Document, error) {
-	data, err := os.ReadFile(filePath)
+	f, err := os.Open(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file for extraction: %w", err)
+		return nil, fmt.Errorf("failed to open file for extraction: %w", err)
 	}
+	defer f.Close()
 
-	result, err := s.contentExtractor.Extract(ctx, data)
+	result, err := s.contentExtractor.ExtractFromReader(ctx, f)
 	if err != nil {
 		return nil, fmt.Errorf("content extraction failed: %w", err)
-	}
-
-	// Use the extractor's suggested name if available.
-	name := fileName
-	if result.Name != "" {
-		name = result.Name
 	}
 
 	// Find the reader matching the extraction output format.
@@ -199,7 +192,7 @@ func (s *Source) extractAndRead(ctx context.Context, filePath, fileName string) 
 		return nil, fmt.Errorf("no reader available for extracted format: %s", result.Format)
 	}
 
-	return r.ReadFromReader(name, result.Reader)
+	return r.ReadFromReader(fileName, result.Reader)
 }
 
 // readWithReader uses the registered reader to process the file directly.
