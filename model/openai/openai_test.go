@@ -1573,6 +1573,29 @@ func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
 		assert.True(t, callbackCalled)
 	})
 
+	t.Run("request json callback", func(t *testing.T) {
+		callbackCalled := false
+		m := New("test-model",
+			WithAPIKey("test-key"),
+			WithChatRequestJSONCallback(func(
+				ctx context.Context,
+				raw []byte,
+				err error,
+			) {
+				callbackCalled = true
+				panic("boom")
+			}),
+		)
+
+		require.NotPanics(t, func() {
+			m.runChatRequestJSONCallback(
+				context.Background(),
+				&openaigo.ChatCompletionNewParams{},
+			)
+		})
+		assert.True(t, callbackCalled)
+	})
+
 	t.Run("response callback", func(t *testing.T) {
 		callbackCalled := false
 		m := New("test-model",

@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1917,6 +1918,22 @@ func TestNewModel_OpenAI(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "gpt-5", mdl.Info().Name)
+	require.False(t, hasOpenAIRequestJSONCallback(t, mdl))
+}
+
+func TestNewModel_OpenAI_DebugRecorderWiresRequestCapture(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	mdl, err := modelFromOptions(runOptions{
+		ModelMode:            modeOpenAI,
+		OpenAIModel:          "gpt-5",
+		OpenAIVariant:        openAIVariantAuto,
+		DebugRecorderEnabled: true,
+	})
+	require.NoError(t, err)
+	require.True(t, hasOpenAIRequestJSONCallback(t, mdl))
 }
 
 func TestRecordDebugOpenAIChatRequestJSON_WritesTraceEvent(t *testing.T) {
@@ -1946,6 +1963,60 @@ func TestRecordDebugOpenAIChatRequestJSON_WritesTraceEvent(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(trace.Dir(), "events.jsonl"))
 	require.NoError(t, err)
 	require.Contains(t, string(raw), debugrecorder.KindModelReq)
+}
+
+func TestRecordDebugOpenAIChatRequestJSON_NoTraceIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	recordDebugOpenAIChatRequestJSON(
+		context.Background(),
+		[]byte(`{"model":"gpt-4o"}`),
+		nil,
+	)
+}
+
+func TestRecordDebugOpenAIChatRequestJSON_InvalidJSONSkipsEvent(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		Channel: "gateway",
+	})
+	require.NoError(t, err)
+
+	recordDebugOpenAIChatRequestJSON(
+		debugrecorder.WithTrace(context.Background(), trace),
+		[]byte("{"),
+		nil,
+	)
+	require.NoError(
+		t,
+		trace.Close(debugrecorder.TraceEnd{Status: "ok"}),
+	)
+
+	raw, err := os.ReadFile(filepath.Join(trace.Dir(), "events.jsonl"))
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), debugrecorder.KindModelReq)
+}
+
+func hasOpenAIRequestJSONCallback(
+	t *testing.T,
+	mdl model.Model,
+) bool {
+	t.Helper()
+
+	openAIModel, ok := mdl.(*openai.Model)
+	require.True(t, ok)
+
+	field := reflect.ValueOf(openAIModel).
+		Elem().
+		FieldByName("chatRequestJSONCallback")
+	require.True(t, field.IsValid())
+	return !field.IsNil()
 }
 
 func TestNewModel_UnsupportedMode(t *testing.T) {

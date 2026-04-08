@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -372,7 +373,7 @@ func TestRecordModelRequest_WritesEvent(t *testing.T) {
 		t,
 		RecordModelRequest(
 			ctx,
-			"openai.chat.completions",
+			ProviderOpenAIChatCompletions,
 			payload,
 		),
 	)
@@ -396,7 +397,7 @@ func TestRecordModelRequest_WritesEvent(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(
 			t,
-			"openai.chat.completions",
+			ProviderOpenAIChatCompletions,
 			payload["provider"],
 		)
 
@@ -425,11 +426,132 @@ func TestRecordModelRequest_NoTraceIsNoOp(t *testing.T) {
 		t,
 		RecordModelRequest(
 			context.Background(),
-			"openai.chat.completions",
+			ProviderOpenAIChatCompletions,
 			payload,
 		),
 	)
 	require.NoError(t, RecordModelRequest(nil, "", nil))
+}
+
+func TestRecordModelRequest_SafeModeSummarizesInlineMedia(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rec, err := New(t.TempDir(), modeSafe)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(TraceStart{Channel: "gateway"})
+	require.NoError(t, err)
+
+	payload := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"content": []any{
+					map[string]any{
+						"type": "input_image",
+						"image_url": map[string]any{
+							"url": dataURLForTest(
+								"image/png",
+								[]byte("img"),
+							),
+						},
+					},
+					map[string]any{
+						"type": "input_audio",
+						"input_audio": map[string]any{
+							"data": dataURLForTest(
+								"audio/wav",
+								[]byte("aud"),
+							),
+						},
+					},
+					map[string]any{
+						"type": "input_file",
+						"file": map[string]any{
+							"file_data": dataURLForTest(
+								"text/plain",
+								[]byte("doc"),
+							),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(
+		t,
+		RecordModelRequest(
+			WithTrace(context.Background(), trace),
+			ProviderOpenAIChatCompletions,
+			payload,
+		),
+	)
+	require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
+
+	ev := findModelRequestEvent(t, trace.Dir())
+	reqPayload := ev["request"].(map[string]any)
+	msgs := reqPayload["messages"].([]any)
+	msg := msgs[0].(map[string]any)
+	content := msg["content"].([]any)
+
+	imageURL := content[0].(map[string]any)["image_url"].(map[string]any)
+	assertInlineSummary(t, imageURL["url"], "image/png", 3, false)
+
+	inputAudio := content[1].(map[string]any)["input_audio"].(map[string]any)
+	assertInlineSummary(t, inputAudio["data"], "audio/wav", 3, false)
+
+	file := content[2].(map[string]any)["file"].(map[string]any)
+	assertInlineSummary(t, file["file_data"], "text/plain", 3, false)
+}
+
+func TestRecordModelRequest_FullModeStoresInlineMediaBlobs(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rec, err := New(t.TempDir(), modeFull)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(TraceStart{Channel: "gateway"})
+	require.NoError(t, err)
+
+	payload := map[string]any{
+		"messages": []any{
+			map[string]any{
+				"content": []any{
+					map[string]any{
+						"type": "input_image",
+						"image_url": map[string]any{
+							"url": dataURLForTest(
+								"image/png",
+								[]byte("img"),
+							),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	require.NoError(
+		t,
+		RecordModelRequest(
+			WithTrace(context.Background(), trace),
+			ProviderOpenAIChatCompletions,
+			payload,
+		),
+	)
+	require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
+
+	ev := findModelRequestEvent(t, trace.Dir())
+	reqPayload := ev["request"].(map[string]any)
+	msgs := reqPayload["messages"].([]any)
+	msg := msgs[0].(map[string]any)
+	content := msg["content"].([]any)
+	imageURL := content[0].(map[string]any)["image_url"].(map[string]any)
+	assertInlineSummary(t, imageURL["url"], "image/png", 3, true)
 }
 
 func TestWriteJSONFile_EmptyPathFails(t *testing.T) {
@@ -769,4 +891,65 @@ func TestWriteTraceIDJSON_GuardsAndErrors(t *testing.T) {
 	err := writeTraceIDJSON(path, "trace-1")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unmarshal json")
+}
+
+func dataURLForTest(
+	mimeType string,
+	data []byte,
+) string {
+	return modelRequestDataURLPrefix + mimeType +
+		modelRequestBase64Delimiter +
+		base64.StdEncoding.EncodeToString(data)
+}
+
+func findModelRequestEvent(
+	t *testing.T,
+	traceDir string,
+) map[string]any {
+	t.Helper()
+
+	evs, err := os.Open(filepath.Join(traceDir, eventsFileName))
+	require.NoError(t, err)
+	defer evs.Close()
+
+	scanner := bufio.NewScanner(evs)
+	for scanner.Scan() {
+		var got record
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &got))
+		if got.Kind != KindModelReq {
+			continue
+		}
+
+		payload, ok := got.Payload.(map[string]any)
+		require.True(t, ok)
+		return payload
+	}
+	require.NoError(t, scanner.Err())
+	t.Fatalf("model request event not found")
+	return nil
+}
+
+func assertInlineSummary(
+	t *testing.T,
+	value any,
+	mimeType string,
+	size int,
+	wantRef bool,
+) {
+	t.Helper()
+
+	summary, ok := value.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, mimeType, summary[modelRequestFieldMIMEType])
+
+	blob, ok := summary[modelRequestFieldBlob].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, float64(size), blob["size"])
+
+	ref, _ := blob["ref"].(string)
+	if wantRef {
+		require.NotEmpty(t, ref)
+		return
+	}
+	require.Empty(t, ref)
 }

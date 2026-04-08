@@ -16,12 +16,15 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,11 +60,23 @@ const (
 	KindModelReq    = "model.chat.request"
 	KindRunnerEvent = "runner.event"
 
+	ProviderOpenAIChatCompletions = "openai.chat.completions"
+
 	KindTelegramMessage    = "telegram.message"
 	KindTelegramAttachment = "telegram.attachment"
 
 	errEmptyDir  = "debug recorder: empty dir"
 	errEmptyKind = "debug trace: empty kind"
+
+	modelRequestDataURLPrefix   = "data:"
+	modelRequestBase64Delimiter = ";base64,"
+	modelRequestDefaultMIMEType = "application/octet-stream"
+	modelRequestInlineBlobName  = "inline"
+	modelRequestFieldBlob       = "blob"
+	modelRequestFieldData       = "data"
+	modelRequestFieldFileData   = "file_data"
+	modelRequestFieldMIMEType   = "mime_type"
+	modelRequestFieldURL        = "url"
 
 	maxTraceBaseLen     = 96
 	maxSafeComponentLen = 64
@@ -724,6 +739,11 @@ type modelRequestRecord struct {
 	Request  any    `json:"request,omitempty"`
 }
 
+type inlineDataSummary struct {
+	MIMEType string  `json:"mime_type,omitempty"`
+	Blob     BlobRef `json:"blob,omitempty"`
+}
+
 func RecordModelRequest(
 	ctx context.Context,
 	provider string,
@@ -735,13 +755,181 @@ func RecordModelRequest(
 		return nil
 	}
 
+	sanitized, err := sanitizeModelRequestPayload(
+		trace,
+		provider,
+		payload,
+	)
+	if err != nil {
+		return err
+	}
+
 	return trace.Record(
 		KindModelReq,
 		modelRequestRecord{
 			Provider: provider,
-			Request:  payload,
+			Request:  sanitized,
 		},
 	)
+}
+
+type modelRequestPayloadSanitizer struct {
+	trace           *Trace
+	inlineBlobCount int
+}
+
+func sanitizeModelRequestPayload(
+	trace *Trace,
+	provider string,
+	payload any,
+) (any, error) {
+	switch provider {
+	case ProviderOpenAIChatCompletions:
+		sanitizer := &modelRequestPayloadSanitizer{trace: trace}
+		return sanitizer.walk(payload)
+	default:
+		return payload, nil
+	}
+}
+
+func (s *modelRequestPayloadSanitizer) walk(
+	value any,
+) (any, error) {
+	switch v := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, child := range v {
+			replaced, ok, err := s.replaceInlineData(
+				key,
+				child,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				out[key] = replaced
+				continue
+			}
+
+			next, err := s.walk(child)
+			if err != nil {
+				return nil, err
+			}
+			out[key] = next
+		}
+		return out, nil
+	case []any:
+		out := make([]any, len(v))
+		for i := range v {
+			next, err := s.walk(v[i])
+			if err != nil {
+				return nil, err
+			}
+			out[i] = next
+		}
+		return out, nil
+	default:
+		return value, nil
+	}
+}
+
+func (s *modelRequestPayloadSanitizer) replaceInlineData(
+	key string,
+	value any,
+) (any, bool, error) {
+	if !isInlineDataField(key) {
+		return nil, false, nil
+	}
+
+	raw, ok := value.(string)
+	if !ok {
+		return nil, false, nil
+	}
+
+	mimeType, data, ok := parseDataURL(raw)
+	if !ok {
+		return nil, false, nil
+	}
+
+	ref, err := s.trace.StoreBlob(
+		s.nextInlineBlobName(mimeType),
+		data,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return inlineDataSummary{
+		MIMEType: mimeType,
+		Blob:     ref,
+	}, true, nil
+}
+
+func (s *modelRequestPayloadSanitizer) nextInlineBlobName(
+	mimeType string,
+) string {
+	s.inlineBlobCount++
+	name := modelRequestInlineBlobName + "_" +
+		strconv.Itoa(s.inlineBlobCount)
+	if ext := fileExtForMIMEType(mimeType); ext != "" {
+		name += ext
+	}
+	return name
+}
+
+func isInlineDataField(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case modelRequestFieldData,
+		modelRequestFieldFileData,
+		modelRequestFieldURL:
+		return true
+	default:
+		return false
+	}
+}
+
+func parseDataURL(raw string) (string, []byte, bool) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, modelRequestDataURLPrefix) {
+		return "", nil, false
+	}
+
+	header, encoded, ok := strings.Cut(raw, ",")
+	if !ok {
+		return "", nil, false
+	}
+	if !strings.HasSuffix(header, modelRequestBase64Delimiter[:len(
+		modelRequestBase64Delimiter,
+	)-1]) {
+		return "", nil, false
+	}
+
+	mimeType := strings.TrimPrefix(header, modelRequestDataURLPrefix)
+	mimeType = strings.TrimSuffix(
+		mimeType,
+		modelRequestBase64Delimiter[:len(
+			modelRequestBase64Delimiter,
+		)-1],
+	)
+	if strings.TrimSpace(mimeType) == "" {
+		mimeType = modelRequestDefaultMIMEType
+	}
+
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", nil, false
+	}
+	return mimeType, data, true
+}
+
+func fileExtForMIMEType(mimeType string) string {
+	exts, err := mime.ExtensionsByType(
+		strings.TrimSpace(mimeType),
+	)
+	if err != nil || len(exts) == 0 {
+		return ""
+	}
+	return exts[0]
 }
 
 func writeJSONFile(path string, v any) error {

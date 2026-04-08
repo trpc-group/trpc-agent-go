@@ -84,8 +84,6 @@ const (
 
 	defaultDebugRecorderDir = "debug"
 
-	debugRecorderOpenAIChatReqProvider = "openai.chat.completions"
-
 	defaultAgentName        = "assistant"
 	defaultAgentInstruction = "You are a helpful assistant. " +
 		"Keep replies concise."
@@ -2489,6 +2487,10 @@ func recordDebugOpenAIChatRequestJSON(
 	raw []byte,
 	marshalErr error,
 ) {
+	if debugrecorder.TraceFromContext(ctx) == nil {
+		return
+	}
+
 	err := marshalErr
 	if err == nil && len(raw) > 0 {
 		var payload any
@@ -2496,7 +2498,7 @@ func recordDebugOpenAIChatRequestJSON(
 		if err == nil {
 			err = debugrecorder.RecordModelRequest(
 				ctx,
-				debugRecorderOpenAIChatReqProvider,
+				debugrecorder.ProviderOpenAIChatCompletions,
 				payload,
 			)
 		}
@@ -2524,9 +2526,14 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	opts := []openai.Option{
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
-		openai.WithChatRequestJSONCallback(
-			recordDebugOpenAIChatRequestJSON,
-		),
+	}
+	if spec.DebugRecorderEnabled {
+		opts = append(
+			opts,
+			openai.WithChatRequestJSONCallback(
+				recordDebugOpenAIChatRequestJSON,
+			),
+		)
 	}
 	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))
@@ -2551,11 +2558,12 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 	}
 
 	spec := registry.ModelSpec{
-		Type:          mode,
-		Name:          opts.OpenAIModel,
-		BaseURL:       baseURL,
-		OpenAIVariant: opts.OpenAIVariant,
-		Config:        opts.ModelConfig,
+		Type:                 mode,
+		Name:                 opts.OpenAIModel,
+		BaseURL:              baseURL,
+		OpenAIVariant:        opts.OpenAIVariant,
+		DebugRecorderEnabled: opts.DebugRecorderEnabled,
+		Config:               opts.ModelConfig,
 	}
 	return f(spec)
 }
