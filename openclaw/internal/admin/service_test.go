@@ -1418,6 +1418,51 @@ func TestServiceDebugEndpoints_ServesCompressedEvents(t *testing.T) {
 	require.Contains(t, eventsRR.Body.String(), "trace.start")
 }
 
+func TestServiceHandleDebugFile_CompressedEventsErrors(t *testing.T) {
+	t.Parallel()
+
+	debugRoot := t.TempDir()
+	svc := New(Config{DebugDir: debugRoot})
+	handler := svc.Handler()
+
+	missingRR := httptest.NewRecorder()
+	missingReq := httptest.NewRequest(
+		http.MethodGet,
+		routeDebugFile+"?"+url.Values{
+			queryTrace: []string{"20260306/missing"},
+			queryName:  []string{debugEventsFileName},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(missingRR, missingReq)
+	require.Equal(t, http.StatusBadRequest, missingRR.Code)
+	require.Contains(t, missingRR.Body.String(), "debug trace not found")
+
+	tracePath := filepath.Join(debugRoot, "20260306", "trace")
+	require.NoError(t, os.MkdirAll(tracePath, 0o755))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(tracePath, debugEventsFileName+".gz"),
+			[]byte("bad"),
+			0o600,
+		),
+	)
+
+	badGzipRR := httptest.NewRecorder()
+	badGzipReq := httptest.NewRequest(
+		http.MethodGet,
+		routeDebugFile+"?"+url.Values{
+			queryTrace: []string{"20260306/trace"},
+			queryName:  []string{debugEventsFileName},
+		}.Encode(),
+		nil,
+	)
+	handler.ServeHTTP(badGzipRR, badGzipReq)
+	require.Equal(t, http.StatusBadRequest, badGzipRR.Code)
+	require.Contains(t, badGzipRR.Body.String(), "open gzip reader")
+}
+
 func TestServiceClearAndValidationPaths(t *testing.T) {
 	t.Parallel()
 
@@ -2419,6 +2464,16 @@ func TestServiceResolveDebugFileAndMethodChecks(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, eventsPath+".gz", got)
 
+	emptyTraceDir := filepath.Join(debugDir, "20260307", "empty-trace")
+	require.NoError(t, os.MkdirAll(emptyTraceDir, 0o755))
+	_, err = svc.resolveDebugFile(
+		"20260307/empty-trace",
+		debugEventsFileName,
+		"",
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "debug file not found")
+
 	serviceLog := filepath.Join(debugDir, "services", "browser-server.log")
 	require.NoError(
 		t,
@@ -2443,6 +2498,24 @@ func TestServiceResolveDebugFileAndMethodChecks(t *testing.T) {
 	require.Error(t, err)
 	_, err = svc.resolveDebugFile("", "", "../escape")
 	require.Error(t, err)
+
+	_, err = svc.resolveDebugTraceDir("")
+	require.Error(t, err)
+	_, err = New(Config{}).resolveDebugTraceDir("20260307/trace")
+	require.Error(t, err)
+
+	fileTracePath := filepath.Join(debugDir, "20260307", "trace-file")
+	require.NoError(
+		t,
+		os.MkdirAll(filepath.Dir(fileTracePath), 0o755),
+	)
+	require.NoError(
+		t,
+		os.WriteFile(fileTracePath, []byte("x"), 0o600),
+	)
+	_, err = svc.resolveDebugTraceDir("20260307/trace-file")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not a directory")
 
 	handler := svc.Handler()
 	routes := []string{
