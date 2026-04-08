@@ -38,16 +38,27 @@ func (p *adminSkillsProvider) SkillsStatus() (ocskills.StatusReport, error) {
 	p.mu.RUnlock()
 
 	if repo != nil {
-		return repo.Status(), nil
+		report := repo.Status()
+		if p.watch != nil {
+			report.Watch = p.watch.Status()
+		}
+		return report, nil
 	}
 
-	return ocskills.BuildStatus(
+	report, err := ocskills.BuildStatus(
 		roots,
 		ocskills.WithBundledSkillsRoot(bundledRoot),
 		ocskills.WithConfigKeys(configKeys),
 		ocskills.WithAllowBundled(allowBundled),
 		ocskills.WithSkillConfigs(skillConfigs),
 	)
+	if err != nil {
+		return ocskills.StatusReport{}, err
+	}
+	if p.watch != nil {
+		report.Watch = p.watch.Status()
+	}
+	return report, nil
 }
 
 func (p *adminSkillsProvider) SkillsConfigPath() string {
@@ -77,9 +88,13 @@ func (p *adminSkillsProvider) RefreshSkills() error {
 
 	p.mu.RLock()
 	repo := p.repo
+	watch := p.watch
 	p.mu.RUnlock()
 	if repo == nil {
 		return fmt.Errorf("live skills repository is not available")
+	}
+	if watch != nil {
+		return watch.Refresh()
 	}
 	return repo.Refresh()
 }

@@ -62,6 +62,7 @@ const (
 
 	defaultSessionSummaryEventThreshold = 20
 	defaultSkillsLoadMode               = "turn"
+	defaultSkillsWatchDebounce          = 250 * time.Millisecond
 
 	flagAddSessionSummary                             = "add-session-summary"
 	flagEnableContextCompaction                       = "enable-context-compaction"
@@ -88,11 +89,14 @@ const (
 
 	flagEnableParallelTools = "enable-parallel-tools"
 
-	flagSkillsAllowBundled = "skills-allow-bundled"
-	flagSkillsLoadMode     = "skills-load-mode"
-	flagSkillsMaxLoaded    = "skills-max-loaded"
-	flagSkillsToolResults  = "skills-loaded-content-in-tool-results"
-	flagSkillsSkipFallback = "skills-skip-fallback-on-session-summary"
+	flagSkillsAllowBundled  = "skills-allow-bundled"
+	flagSkillsWatch         = "skills-watch"
+	flagSkillsWatchBundled  = "skills-watch-bundled"
+	flagSkillsWatchDebounce = "skills-watch-debounce"
+	flagSkillsLoadMode      = "skills-load-mode"
+	flagSkillsMaxLoaded     = "skills-max-loaded"
+	flagSkillsToolResults   = "skills-loaded-content-in-tool-results"
+	flagSkillsSkipFallback  = "skills-skip-fallback-on-session-summary"
 
 	flagDebugRecorder     = "debug-recorder"
 	flagDebugRecorderDir  = "debug-recorder-dir"
@@ -166,24 +170,27 @@ type runOptions struct {
 	ClaudeEnv          string
 	ClaudeWorkDir      string
 
-	ModelMode          string
-	OpenAIModel        string
-	OpenAIVariant      string
-	OpenAIBaseURL      string
-	GenerationConfig   *model.GenerationConfig
-	ModelConfig        *yaml.Node
-	KnowledgesConfig   map[string]*yaml.Node
-	SkillsRoot         string
-	SkillsExtraDir     string
-	SkillsDebug        bool
-	SkillsAllowBundled string
-	SkillConfigs       map[string]ocskills.SkillConfig
-	SkillsLoadMode     string
-	SkillsMaxLoaded    int
-	SkillsToolResults  bool
-	SkillsSkipFallback bool
-	SkillsToolingGuide *string
-	StateDir           string
+	ModelMode           string
+	OpenAIModel         string
+	OpenAIVariant       string
+	OpenAIBaseURL       string
+	GenerationConfig    *model.GenerationConfig
+	ModelConfig         *yaml.Node
+	KnowledgesConfig    map[string]*yaml.Node
+	SkillsRoot          string
+	SkillsExtraDir      string
+	SkillsDebug         bool
+	SkillsAllowBundled  string
+	SkillConfigs        map[string]ocskills.SkillConfig
+	SkillsWatch         bool
+	SkillsWatchBundled  bool
+	SkillsWatchDebounce time.Duration
+	SkillsLoadMode      string
+	SkillsMaxLoaded     int
+	SkillsToolResults   bool
+	SkillsSkipFallback  bool
+	SkillsToolingGuide  *string
+	StateDir            string
 
 	DebugRecorderEnabled bool
 	DebugRecorderDir     string
@@ -252,9 +259,11 @@ func parseRunOptions(args []string) (runOptions, error) {
 		OpenAIModel:   defaultOpenAIModelName(),
 		OpenAIVariant: defaultOpenAIVariant,
 
-		SkillsLoadMode:     defaultSkillsLoadMode,
-		SkillsToolResults:  true,
-		SkillsSkipFallback: true,
+		SkillsWatch:         true,
+		SkillsWatchDebounce: defaultSkillsWatchDebounce,
+		SkillsLoadMode:      defaultSkillsLoadMode,
+		SkillsToolResults:   true,
+		SkillsSkipFallback:  true,
 
 		SessionBackend: sessionBackendInMemory,
 		MemoryBackend:  memoryBackendInMemory,
@@ -563,6 +572,24 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagSkillsAllowBundled,
 		"",
 		"Comma-separated allowlist of bundled skills",
+	)
+	fs.BoolVar(
+		&opts.SkillsWatch,
+		flagSkillsWatch,
+		true,
+		"Watch local skill roots and refresh automatically",
+	)
+	fs.DurationVar(
+		&opts.SkillsWatchDebounce,
+		flagSkillsWatchDebounce,
+		defaultSkillsWatchDebounce,
+		"Debounce for automatic skill refreshes",
+	)
+	fs.BoolVar(
+		&opts.SkillsWatchBundled,
+		flagSkillsWatchBundled,
+		false,
+		"Also watch bundled skills roots for local changes",
 	)
 	fs.StringVar(
 		&opts.SkillsLoadMode,
@@ -1012,12 +1039,17 @@ type skillsConfig struct {
 	ExtraDirs []string `yaml:"extra_dirs,omitempty"`
 	Debug     *bool    `yaml:"debug,omitempty"`
 
-	AllowBundled      []string `yaml:"allow_bundled,omitempty"`
-	AllowBundledCamel []string `yaml:"allowBundled,omitempty"`
-	LoadMode          *string  `yaml:"load_mode,omitempty"`
-	LoadModeCamel     *string  `yaml:"loadMode,omitempty"`
-	MaxLoadedSkills   *int     `yaml:"max_loaded_skills,omitempty"`
-	MaxLoadedCamel    *int     `yaml:"maxLoadedSkills,omitempty"`
+	AllowBundled       []string `yaml:"allow_bundled,omitempty"`
+	AllowBundledCamel  []string `yaml:"allowBundled,omitempty"`
+	Watch              *bool    `yaml:"watch,omitempty"`
+	WatchBundled       *bool    `yaml:"watch_bundled,omitempty"`
+	WatchBundledCamel  *bool    `yaml:"watchBundled,omitempty"`
+	WatchDebounceMS    *int     `yaml:"watch_debounce_ms,omitempty"`
+	WatchDebounceCamel *int     `yaml:"watchDebounceMs,omitempty"`
+	LoadMode           *string  `yaml:"load_mode,omitempty"`
+	LoadModeCamel      *string  `yaml:"loadMode,omitempty"`
+	MaxLoadedSkills    *int     `yaml:"max_loaded_skills,omitempty"`
+	MaxLoadedCamel     *int     `yaml:"maxLoadedSkills,omitempty"`
 
 	ToolResults          *bool   `yaml:"loaded_content_in_tool_results,omitempty"`
 	ToolResultsCamel     *bool   `yaml:"loadedContentInToolResults,omitempty"`
@@ -1479,6 +1511,28 @@ func (cfg *fileConfig) apply(
 				allowBundled,
 				csvDelimiter,
 			)
+		}
+		if cfg.Skills.Watch != nil &&
+			!flagWasSet(set, flagSkillsWatch) {
+			opts.SkillsWatch = *cfg.Skills.Watch
+		}
+		watchBundled := firstBoolPtr(
+			cfg.Skills.WatchBundled,
+			cfg.Skills.WatchBundledCamel,
+		)
+		if watchBundled != nil &&
+			!flagWasSet(set, flagSkillsWatchBundled) {
+			opts.SkillsWatchBundled = *watchBundled
+		}
+		watchDebounceMS := firstIntPtr(
+			cfg.Skills.WatchDebounceMS,
+			cfg.Skills.WatchDebounceCamel,
+		)
+		if watchDebounceMS != nil &&
+			!flagWasSet(set, flagSkillsWatchDebounce) {
+			opts.SkillsWatchDebounce = time.Duration(
+				*watchDebounceMS,
+			) * time.Millisecond
 		}
 		if len(cfg.Skills.Entries) > 0 {
 			opts.SkillConfigs = convertSkillConfigs(
@@ -1954,6 +2008,12 @@ func finalizeRunOptions(opts *runOptions) error {
 		return err
 	}
 	opts.SkillsLoadMode = mode
+	if opts.SkillsWatchDebounce < 0 {
+		return fmt.Errorf(
+			"invalid skills watch debounce: %v",
+			opts.SkillsWatchDebounce,
+		)
+	}
 	opts.MemoryBackend = resolveMemoryBackendType(opts.MemoryBackend)
 	opts.AdminAddr = strings.TrimSpace(opts.AdminAddr)
 	if opts.AdminEnabled && opts.AdminAddr == "" {

@@ -36,6 +36,7 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.26.0
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/creack/pty v1.1.24
+	github.com/fsnotify/fsnotify v1.7.0
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/google/uuid v1.6.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
