@@ -466,6 +466,96 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 	assert.Equal(t, "accepted prompt", *backward.requests[1].Surfaces[0].Value.Text)
 }
 
+func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
+	backward := &fakeBackwarder{
+		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
+			_ = ctx
+			return &backwarder.Result{
+				Gradients: []promptiter.SurfaceGradient{
+					{
+						EvalSetID:  request.EvalSetID,
+						EvalCaseID: request.EvalCaseID,
+						StepID:     request.StepID,
+						SurfaceID:  testSurfaceID,
+						Severity:   promptiter.LossSeverityP1,
+						Gradient:   "improve prompt",
+					},
+				},
+			}, nil
+		},
+	}
+	aggregatorInstance := &fakeAggregator{
+		fn: func(ctx context.Context, request *aggregator.Request) (*aggregator.Result, error) {
+			_ = ctx
+			return &aggregator.Result{
+				Gradient: &promptiter.AggregatedSurfaceGradient{
+					SurfaceID: request.SurfaceID,
+					NodeID:    request.NodeID,
+					Type:      request.Type,
+					Gradients: append([]promptiter.SurfaceGradient(nil), request.Gradients...),
+				},
+			}, nil
+		},
+	}
+	optimizerInstance := &fakeOptimizer{
+		fn: func(ctx context.Context, request *optimizer.Request) (*optimizer.Result, error) {
+			_ = ctx
+			return &optimizer.Result{
+				Patch: &promptiter.SurfacePatch{
+					SurfaceID: request.Surface.SurfaceID,
+					Value: astructure.SurfaceValue{
+						Text: stringPtr("accepted prompt"),
+					},
+					Reason: "update prompt",
+				},
+			}, nil
+		},
+	}
+	evalService := newScriptedEvalService(scriptedOutcome)
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		newTestAgentEvaluator(t, evalService),
+		backward,
+		aggregatorInstance,
+		optimizerInstance,
+	)
+	assert.NoError(t, err)
+	var observedKinds []EventKind
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		AcceptancePolicy: AcceptancePolicy{
+			MinScoreGain: 0.1,
+		},
+		StopPolicy: StopPolicy{
+			MaxRoundsWithoutAcceptance: 1,
+		},
+		MaxRounds: 1,
+	}, WithObserver(func(ctx context.Context, event *Event) error {
+		_ = ctx
+		if assert.NotNil(t, event) {
+			observedKinds = append(observedKinds, event.Kind)
+		}
+		return nil
+	}))
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, []EventKind{
+		EventKindStructureSnapshot,
+		EventKindBaselineValidation,
+		EventKindRoundStarted,
+		EventKindRoundTrainEvaluation,
+		EventKindRoundLosses,
+		EventKindRoundBackward,
+		EventKindRoundAggregation,
+		EventKindRoundPatchSet,
+		EventKindRoundOutputProfile,
+		EventKindRoundValidation,
+		EventKindRoundCompleted,
+	}, observedKinds)
+}
+
 func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
 	backward := &fakeBackwarder{
 		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {

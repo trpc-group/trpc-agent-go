@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
+	iprofile "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/profile"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -29,7 +30,7 @@ type Engine interface {
 	// Describe returns the current structure snapshot used to build traces and profiles.
 	Describe(ctx context.Context) (*astructure.Snapshot, error)
 	// Run executes multi-round optimization using training and validation feedback loops.
-	Run(ctx context.Context, request *RunRequest) (*RunResult, error)
+	Run(ctx context.Context, request *RunRequest, opts ...Option) (*RunResult, error)
 }
 
 // RunRequest carries the inputs required to start PromptIter optimization.
@@ -56,17 +57,43 @@ type RunRequest struct {
 	TargetSurfaceIDs []string
 }
 
-// RunResult stores the end state and historical trace of a multi-round run.
+// RunStatus identifies the lifecycle state of one PromptIter run view.
+type RunStatus string
+
+const (
+	// RunStatusQueued indicates that the run has been created but has not started execution.
+	RunStatusQueued RunStatus = "queued"
+	// RunStatusRunning indicates that the run is actively executing.
+	RunStatusRunning RunStatus = "running"
+	// RunStatusSucceeded indicates that the run finished successfully.
+	RunStatusSucceeded RunStatus = "succeeded"
+	// RunStatusFailed indicates that the run finished with an error.
+	RunStatusFailed RunStatus = "failed"
+	// RunStatusCanceled indicates that the run was canceled before completion.
+	RunStatusCanceled RunStatus = "canceled"
+)
+
+// RunResult stores the state and historical trace of one PromptIter execution.
 type RunResult struct {
+	// ID uniquely identifies this run when the caller uses manager-backed execution.
+	ID string
+	// Status stores the lifecycle state of the run.
+	Status RunStatus
+	// CurrentRound stores the latest round started by the run.
+	CurrentRound int
 	// Structure is the snapshot used for all rounds in this request.
 	Structure *astructure.Snapshot
+	// BaselineValidation stores the accepted baseline validation result before optimization rounds.
+	BaselineValidation *EvaluationResult
 	// AcceptedProfile is the profile that passed acceptance and can be published.
 	AcceptedProfile *promptiter.Profile
 	// Rounds stores intermediate results of every optimization round.
 	Rounds []RoundResult
+	// ErrorMessage stores the terminal run error when the run failed or was canceled.
+	ErrorMessage string
 }
 
-// RoundResult captures all artifacts for one optimization round.
+// RoundResult captures all observable state for one optimization round.
 type RoundResult struct {
 	// Round is the one-based index of this optimization cycle.
 	Round int
@@ -144,13 +171,25 @@ func (e *engine) Describe(ctx context.Context) (*astructure.Snapshot, error) {
 }
 
 // Run executes all optimization stages in sequence for each configured round.
-func (e *engine) Run(ctx context.Context, request *RunRequest) (*RunResult, error) {
+func (e *engine) Run(ctx context.Context, request *RunRequest, opts ...Option) (*RunResult, error) {
+	options := newOptions(opts...)
+	return e.run(ctx, request, options.observer)
+}
+
+func (e *engine) run(
+	ctx context.Context,
+	request *RunRequest,
+	observer Observer,
+) (*RunResult, error) {
 	if err := e.validateRunRequest(request); err != nil {
 		return nil, err
 	}
 	snapshot, err := e.describeStructure(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("describe structure: %w", err)
+	}
+	if err := appendRunEvent(ctx, observer, EventKindStructureSnapshot, 0, snapshot); err != nil {
+		return nil, err
 	}
 	structure, err := newStructureState(snapshot)
 	if err != nil {
@@ -181,18 +220,26 @@ func (e *engine) Run(ctx context.Context, request *RunRequest) (*RunResult, erro
 	if err != nil {
 		return nil, fmt.Errorf("compute accepted baseline score: %w", err)
 	}
+	if err := appendRunEvent(ctx, observer, EventKindBaselineValidation, 0, baselineValidation); err != nil {
+		return nil, err
+	}
 	result := &RunResult{
-		Structure:       structure.snapshot,
-		AcceptedProfile: cloneProfile(acceptedProfile),
-		Rounds:          make([]RoundResult, 0, request.MaxRounds),
+		Status:             RunStatusRunning,
+		CurrentRound:       0,
+		Structure:          structure.snapshot,
+		BaselineValidation: baselineValidation,
+		AcceptedProfile:    iprofile.Clone(acceptedProfile),
+		Rounds:             make([]RoundResult, 0, request.MaxRounds),
 	}
 	roundsWithoutAcceptance := 0
 	for roundNumber := 1; roundNumber <= request.MaxRounds; roundNumber++ {
+		result.CurrentRound = roundNumber
 		roundResult, effectiveScore, err := e.executeRound(
 			ctx,
 			request,
 			structure,
 			targetSurfaceSet,
+			observer,
 			evaluationOptions,
 			acceptedProfile,
 			acceptedValidationScore,
@@ -215,12 +262,35 @@ func (e *engine) Run(ctx context.Context, request *RunRequest) (*RunResult, erro
 			roundsWithoutAcceptance,
 			effectiveScore,
 		)
+		accepted := roundResult.Acceptance != nil && roundResult.Acceptance.Accepted
+		acceptanceReason := ""
+		scoreDelta := 0.0
+		if roundResult.Acceptance != nil {
+			acceptanceReason = roundResult.Acceptance.Reason
+			scoreDelta = roundResult.Acceptance.ScoreDelta
+		}
+		shouldStop := false
+		stopReason := ""
+		if roundResult.Stop != nil {
+			shouldStop = roundResult.Stop.ShouldStop
+			stopReason = roundResult.Stop.Reason
+		}
+		if err := appendRunEvent(ctx, observer, EventKindRoundCompleted, roundNumber, &RoundCompleted{
+			Accepted:         accepted,
+			AcceptanceReason: acceptanceReason,
+			ScoreDelta:       scoreDelta,
+			ShouldStop:       shouldStop,
+			StopReason:       stopReason,
+		}); err != nil {
+			return nil, err
+		}
 		result.Rounds = append(result.Rounds, *roundResult)
-		result.AcceptedProfile = cloneProfile(acceptedProfile)
+		result.AcceptedProfile = iprofile.Clone(acceptedProfile)
 		if roundResult.Stop.ShouldStop {
 			break
 		}
 	}
+	result.Status = RunStatusSucceeded
 	return result, nil
 }
 
@@ -261,14 +331,18 @@ func (e *engine) executeRound(
 	request *RunRequest,
 	structure *structureState,
 	targetSurfaceSet targetSurfaceSet,
+	observer Observer,
 	evaluationOptions EvaluationOptions,
 	acceptedProfile *promptiter.Profile,
 	acceptedValidationScore float64,
 	roundNumber int,
 ) (*RoundResult, float64, error) {
+	if err := appendRunEvent(ctx, observer, EventKindRoundStarted, roundNumber, nil); err != nil {
+		return nil, 0, err
+	}
 	roundResult := &RoundResult{
 		Round:        roundNumber,
-		InputProfile: cloneProfile(acceptedProfile),
+		InputProfile: iprofile.Clone(acceptedProfile),
 	}
 	trainResult, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
 		request.TrainEvalSetIDs,
@@ -281,31 +355,49 @@ func (e *engine) executeRound(
 		return nil, 0, fmt.Errorf("evaluate train round %d: %w", roundNumber, err)
 	}
 	roundResult.Train = trainResult
+	if err := appendRunEvent(ctx, observer, EventKindRoundTrainEvaluation, roundNumber, trainResult); err != nil {
+		return nil, 0, err
+	}
 	losses, err := e.loss(trainResult)
 	if err != nil {
 		return nil, 0, fmt.Errorf("extract train losses round %d: %w", roundNumber, err)
 	}
 	roundResult.Losses = losses
+	if err := appendRunEvent(ctx, observer, EventKindRoundLosses, roundNumber, losses); err != nil {
+		return nil, 0, err
+	}
 	backwardResult, err := e.backward(ctx, structure, acceptedProfile, trainResult, losses, targetSurfaceSet)
 	if err != nil {
 		return nil, 0, fmt.Errorf("backward round %d: %w", roundNumber, err)
 	}
 	roundResult.Backward = backwardResult
+	if err := appendRunEvent(ctx, observer, EventKindRoundBackward, roundNumber, backwardResult); err != nil {
+		return nil, 0, err
+	}
 	aggregationResult, err := e.aggregate(ctx, structure, backwardResult, targetSurfaceSet)
 	if err != nil {
 		return nil, 0, fmt.Errorf("aggregate round %d: %w", roundNumber, err)
 	}
 	roundResult.Aggregation = aggregationResult
+	if err := appendRunEvent(ctx, observer, EventKindRoundAggregation, roundNumber, aggregationResult); err != nil {
+		return nil, 0, err
+	}
 	patchSet, err := e.optimize(ctx, structure, acceptedProfile, aggregationResult, targetSurfaceSet)
 	if err != nil {
 		return nil, 0, fmt.Errorf("optimize round %d: %w", roundNumber, err)
 	}
 	roundResult.Patches = patchSet
+	if err := appendRunEvent(ctx, observer, EventKindRoundPatchSet, roundNumber, patchSet); err != nil {
+		return nil, 0, err
+	}
 	outputProfile, err := applyPatchSet(structure, acceptedProfile, patchSet)
 	if err != nil {
 		return nil, 0, fmt.Errorf("apply patches round %d: %w", roundNumber, err)
 	}
 	roundResult.OutputProfile = outputProfile
+	if err := appendRunEvent(ctx, observer, EventKindRoundOutputProfile, roundNumber, outputProfile); err != nil {
+		return nil, 0, err
+	}
 	validationResult, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
 		request.ValidationEvalSetIDs,
 		outputProfile,
@@ -321,6 +413,9 @@ func (e *engine) executeRound(
 	candidateScore, err := evaluationScore(validationResult)
 	if err != nil {
 		return nil, 0, fmt.Errorf("compute validation score round %d: %w", roundNumber, err)
+	}
+	if err := appendRunEvent(ctx, observer, EventKindRoundValidation, roundNumber, validationResult); err != nil {
+		return nil, 0, err
 	}
 	acceptanceDecision := e.accept(request.AcceptancePolicy, baselineScore, candidateScore)
 	roundResult.Acceptance = acceptanceDecision
@@ -343,7 +438,7 @@ func (e *engine) newEvaluationRequest(
 			[]string(nil),
 			evalSetIDs...,
 		),
-		Profile: cloneProfile(profile),
+		Profile: profile,
 		Teacher: teacher,
 		Judge:   judge,
 		Options: options,

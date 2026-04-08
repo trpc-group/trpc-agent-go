@@ -93,6 +93,8 @@ type EvalSetResult struct {
 
 // EvaluationResult stores complete evaluation output for one run phase.
 type EvaluationResult struct {
+	// OverallScore stores the aggregate score across all evaluation sets.
+	OverallScore float64
 	// EvalSets stores results grouped by evaluation set.
 	EvalSets []EvalSetResult
 }
@@ -118,6 +120,7 @@ func (e *engine) evaluate(
 		return nil, errors.New("evaluation set id is empty")
 	}
 	results := make([]EvalSetResult, 0, len(request.EvalSetIDs))
+	totalScore := 0.0
 	for _, evalSetID := range request.EvalSetIDs {
 		options, err := buildEvaluationCallOptions(structure, request)
 		if err != nil {
@@ -132,8 +135,12 @@ func (e *engine) evaluate(
 			return nil, err
 		}
 		results = append(results, *evalSetResult)
+		totalScore += evalSetResult.OverallScore
 	}
-	return &EvaluationResult{EvalSets: results}, nil
+	return &EvaluationResult{
+		OverallScore: totalScore / float64(len(results)),
+		EvalSets:     results,
+	}, nil
 }
 
 func evaluationScore(result *EvaluationResult) (float64, error) {
@@ -143,11 +150,7 @@ func evaluationScore(result *EvaluationResult) (float64, error) {
 	if len(result.EvalSets) == 0 {
 		return 0, errors.New("evaluation result has no eval sets")
 	}
-	totalScore := 0.0
-	for _, evalSet := range result.EvalSets {
-		totalScore += evalSet.OverallScore
-	}
-	return totalScore / float64(len(result.EvalSets)), nil
+	return result.OverallScore, nil
 }
 
 func buildEvaluationCallOptions(

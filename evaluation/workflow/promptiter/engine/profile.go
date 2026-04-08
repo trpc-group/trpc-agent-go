@@ -172,20 +172,3 @@ func resolveProfileSurface(
 	surface.Value = isurface.CloneValue(surface.Value)
 	return surface, nil
 }
-
-func cloneProfile(profile *promptiter.Profile) *promptiter.Profile {
-	if profile == nil {
-		return nil
-	}
-	cloned := &promptiter.Profile{
-		StructureID: profile.StructureID,
-		Overrides:   make([]promptiter.SurfaceOverride, 0, len(profile.Overrides)),
-	}
-	for _, override := range profile.Overrides {
-		cloned.Overrides = append(cloned.Overrides, promptiter.SurfaceOverride{
-			SurfaceID: override.SurfaceID,
-			Value:     isurface.CloneValue(override.Value),
-		})
-	}
-	return cloned
-}
