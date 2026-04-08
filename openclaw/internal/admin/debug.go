@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 )
 
 type debugStatus struct {
@@ -255,7 +257,7 @@ func (s *Service) readDebugTrace(
 	if fileExists(filepath.Join(traceAbs, debugMetaFileName)) {
 		out.MetaURL = s.debugFileURL(traceRel, debugMetaFileName)
 	}
-	if fileExists(filepath.Join(traceAbs, debugEventsFileName)) {
+	if _, _, err := debugrecorder.ResolveEventsFilePath(traceAbs); err == nil {
 		out.EventsURL = s.debugFileURL(traceRel, debugEventsFileName)
 	}
 	if fileExists(filepath.Join(traceAbs, debugResultFileName)) {

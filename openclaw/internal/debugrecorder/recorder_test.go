@@ -12,6 +12,7 @@ package debugrecorder
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -174,11 +175,15 @@ func TestTrace_Close_WritesEndAndResult(t *testing.T) {
 	_, err = os.Stat(filepath.Join(trace.Dir(), resultFileName))
 	require.NoError(t, err)
 
-	evs, err := os.Open(filepath.Join(trace.Dir(), eventsFileName))
+	_, err = os.Stat(filepath.Join(trace.Dir(), eventsFileName))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(filepath.Join(trace.Dir(), eventsGzipFileName))
 	require.NoError(t, err)
-	defer evs.Close()
 
-	scanner := bufio.NewScanner(evs)
+	raw, err := ReadEventsFile(trace.Dir())
+	require.NoError(t, err)
+
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	foundEnd := false
 	for scanner.Scan() {
 		var rec record
@@ -189,6 +194,43 @@ func TestTrace_Close_WritesEndAndResult(t *testing.T) {
 	}
 	require.NoError(t, scanner.Err())
 	require.True(t, foundEnd)
+}
+
+func TestReadEventsFile_PrefersRawAndFallsBackToGzip(t *testing.T) {
+	t.Parallel()
+
+	rec, err := New(t.TempDir(), modeFull)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(TraceStart{Channel: "gateway"})
+	require.NoError(t, err)
+
+	require.NoError(t, trace.RecordText("hello"))
+
+	rawPath, compressed, err := ResolveEventsFilePath(trace.Dir())
+	require.NoError(t, err)
+	require.False(t, compressed)
+	require.Equal(t, filepath.Join(trace.Dir(), eventsFileName), rawPath)
+
+	beforeClose, err := ReadEventsFile(trace.Dir())
+	require.NoError(t, err)
+	require.Contains(t, string(beforeClose), KindText)
+
+	require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
+
+	gzipPath, compressed, err := ResolveEventsFilePath(trace.Dir())
+	require.NoError(t, err)
+	require.True(t, compressed)
+	require.Equal(
+		t,
+		filepath.Join(trace.Dir(), eventsGzipFileName),
+		gzipPath,
+	)
+
+	afterClose, err := ReadEventsFile(trace.Dir())
+	require.NoError(t, err)
+	require.Contains(t, string(afterClose), KindText)
+	require.Contains(t, string(afterClose), KindTraceEnd)
 }
 
 func TestTrace_Record_ValidationAndClosedIsNoOp(t *testing.T) {
@@ -379,11 +421,10 @@ func TestRecordModelRequest_WritesEvent(t *testing.T) {
 	)
 	require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
 
-	evs, err := os.Open(filepath.Join(trace.Dir(), eventsFileName))
+	raw, err := ReadEventsFile(trace.Dir())
 	require.NoError(t, err)
-	defer evs.Close()
 
-	scanner := bufio.NewScanner(evs)
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	found := false
 	for scanner.Scan() {
 		var got record
@@ -908,11 +949,10 @@ func findModelRequestEvent(
 ) map[string]any {
 	t.Helper()
 
-	evs, err := os.Open(filepath.Join(traceDir, eventsFileName))
+	raw, err := ReadEventsFile(traceDir)
 	require.NoError(t, err)
-	defer evs.Close()
 
-	scanner := bufio.NewScanner(evs)
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	for scanner.Scan() {
 		var got record
 		require.NoError(t, json.Unmarshal(scanner.Bytes(), &got))

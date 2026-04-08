@@ -59,8 +59,6 @@ import (
 	langfuseobs "trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
 )
 
-const eventsFileNameForTest = "events.jsonl"
-
 type captureRequestModel struct {
 	got *model.Request
 }
@@ -1971,9 +1969,7 @@ func TestRecordDebugOpenAIChatRequestJSON_WritesTraceEvent(t *testing.T) {
 		trace.Close(debugrecorder.TraceEnd{Status: "ok"}),
 	)
 
-	raw, err := os.ReadFile(
-		filepath.Join(trace.Dir(), eventsFileNameForTest),
-	)
+	raw, err := debugrecorder.ReadEventsFile(trace.Dir())
 	require.NoError(t, err)
 
 	ev := findModelRequestEventForTest(t, raw)
@@ -2021,9 +2017,7 @@ func TestRecordDebugOpenAIChatRequestJSON_InvalidJSONSkipsEvent(
 		trace.Close(debugrecorder.TraceEnd{Status: "ok"}),
 	)
 
-	raw, err := os.ReadFile(
-		filepath.Join(trace.Dir(), eventsFileNameForTest),
-	)
+	raw, err := debugrecorder.ReadEventsFile(trace.Dir())
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), debugrecorder.KindModelReq)
 }

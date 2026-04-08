@@ -12,6 +12,7 @@ package telegram
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -34,8 +35,6 @@ const (
 	contentTypeText = "text/plain"
 
 	mimeAudioMP3 = "audio/mpeg"
-
-	debugEventsFileName = "events.jsonl"
 )
 
 type debugEventRecord struct {
@@ -546,11 +545,10 @@ func TestAppendPhotoPart_RecordsAttachmentInTrace(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, trace.Close(debugrecorder.TraceEnd{Status: "ok"}))
 
-	evs, err := os.Open(filepath.Join(trace.Dir(), debugEventsFileName))
+	raw, err := debugrecorder.ReadEventsFile(trace.Dir())
 	require.NoError(t, err)
-	defer evs.Close()
 
-	scanner := bufio.NewScanner(evs)
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	found := false
 	for scanner.Scan() {
 		var evt debugEventRecord
@@ -1320,11 +1318,10 @@ func TestAppendAudioPart_MP3BuildsAudioPartAndRecordsTrace(t *testing.T) {
 
 	require.NoError(t, trace.Close(debugrecorder.TraceEnd{Status: "ok"}))
 
-	evs, err := os.Open(filepath.Join(trace.Dir(), debugEventsFileName))
+	raw, err := debugrecorder.ReadEventsFile(trace.Dir())
 	require.NoError(t, err)
-	defer evs.Close()
 
-	scanner := bufio.NewScanner(evs)
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
 	found := false
 	for scanner.Scan() {
 		var evt debugEventRecord

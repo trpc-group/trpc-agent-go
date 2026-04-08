@@ -10,6 +10,7 @@
 package admin
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"net/http"
@@ -180,6 +181,29 @@ func writeDebugTraceFixture(
 		0o600,
 	))
 	return traceDir
+}
+
+func gzipDebugTraceEventsFixture(t *testing.T, traceDir string) {
+	t.Helper()
+
+	eventsPath := filepath.Join(traceDir, debugEventsFileName)
+	raw, err := os.ReadFile(eventsPath)
+	require.NoError(t, err)
+
+	gzipPath := eventsPath + ".gz"
+	file, err := os.OpenFile(
+		gzipPath,
+		os.O_CREATE|os.O_WRONLY|os.O_TRUNC,
+		0o600,
+	)
+	require.NoError(t, err)
+
+	writer := gzip.NewWriter(file)
+	_, err = writer.Write(raw)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, file.Close())
+	require.NoError(t, os.Remove(eventsPath))
 }
 
 func TestNormalizeLangfuseStatus_TrimsValues(t *testing.T) {
@@ -1357,6 +1381,43 @@ func TestServiceDebugEndpoints(t *testing.T) {
 	require.Contains(t, metaRR.Body.String(), "req-1")
 }
 
+func TestServiceDebugEndpoints_ServesCompressedEvents(t *testing.T) {
+	t.Parallel()
+
+	debugRoot := t.TempDir()
+	now := time.Date(2026, 3, 6, 18, 10, 0, 0, time.UTC)
+	traceDir := writeDebugTraceFixture(
+		t,
+		debugRoot,
+		"telegram:dm:1",
+		"req-1",
+		now,
+		"trace-1",
+	)
+	gzipDebugTraceEventsFixture(t, traceDir)
+
+	svc := New(Config{DebugDir: debugRoot})
+	handler := svc.Handler()
+	snap := svc.Snapshot()
+	require.Len(t, snap.Debug.RecentTraces, 1)
+	require.NotEmpty(t, snap.Debug.RecentTraces[0].EventsURL)
+
+	eventsRR := httptest.NewRecorder()
+	eventsReq := httptest.NewRequest(
+		http.MethodGet,
+		snap.Debug.RecentTraces[0].EventsURL,
+		nil,
+	)
+	handler.ServeHTTP(eventsRR, eventsReq)
+	require.Equal(t, http.StatusOK, eventsRR.Code)
+	require.Equal(
+		t,
+		debugEventsMIMEType,
+		eventsRR.Header().Get(headerContentType),
+	)
+	require.Contains(t, eventsRR.Body.String(), "trace.start")
+}
+
 func TestServiceClearAndValidationPaths(t *testing.T) {
 	t.Parallel()
 
@@ -2342,6 +2403,21 @@ func TestServiceResolveDebugFileAndMethodChecks(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, metaPath, got)
+
+	eventsPath := filepath.Join(traceDir, debugEventsFileName)
+	require.NoError(
+		t,
+		os.WriteFile(eventsPath, []byte("{\"kind\":\"trace.start\"}\n"), 0o600),
+	)
+	gzipDebugTraceEventsFixture(t, traceDir)
+
+	got, err = svc.resolveDebugFile(
+		"20260307/trace",
+		debugEventsFileName,
+		"",
+	)
+	require.NoError(t, err)
+	require.Equal(t, eventsPath+".gz", got)
 
 	serviceLog := filepath.Join(debugDir, "services", "browser-server.log")
 	require.NoError(

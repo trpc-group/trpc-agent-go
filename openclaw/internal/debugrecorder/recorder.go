@@ -13,6 +13,8 @@
 package debugrecorder
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -21,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"os"
 	"path/filepath"
@@ -45,10 +48,11 @@ const (
 	defaultAttachmentsDir = "attachments"
 	defaultBySessionDir   = "by-session"
 
-	eventsFileName = "events.jsonl"
-	metaFileName   = "meta.json"
-	resultFileName = "result.json"
-	traceRefName   = "trace.json"
+	eventsFileName     = "events.jsonl"
+	eventsGzipFileName = eventsFileName + ".gz"
+	metaFileName       = "meta.json"
+	resultFileName     = "result.json"
+	traceRefName       = "trace.json"
 
 	KindTraceStart  = "trace.start"
 	KindTraceEnd    = "trace.end"
@@ -81,6 +85,8 @@ const (
 	maxTraceBaseLen     = 96
 	maxSafeComponentLen = 64
 	traceSuffixBytes    = 4
+
+	gzipCompressionLevel = gzip.DefaultCompression
 )
 
 type Mode string
@@ -663,9 +669,13 @@ func (t *Trace) Close(end TraceEnd) error {
 	if t.events == nil {
 		return nil
 	}
+	eventsPath := filepath.Join(t.root, eventsFileName)
 	err := t.events.Close()
 	t.events = nil
-	return err
+	if err != nil {
+		return err
+	}
+	return compressEventsFile(eventsPath)
 }
 
 func (t *Trace) SetTraceID(traceID string) error {
@@ -945,6 +955,242 @@ func writeJSONFile(path string, v any) error {
 		return fmt.Errorf("debug recorder: write file: %w", err)
 	}
 	return nil
+}
+
+func ResolveEventsFilePath(traceDir string) (string, bool, error) {
+	traceDir = strings.TrimSpace(traceDir)
+	if traceDir == "" {
+		return "", false, errors.New(
+			"debug recorder: empty trace dir",
+		)
+	}
+
+	eventsPath := filepath.Join(traceDir, eventsFileName)
+	info, err := os.Stat(eventsPath)
+	switch {
+	case err == nil && !info.IsDir():
+		return eventsPath, false, nil
+	case err == nil:
+		return "", false, fmt.Errorf(
+			"debug recorder: events path is a directory",
+		)
+	case !errors.Is(err, os.ErrNotExist):
+		return "", false, fmt.Errorf(
+			"debug recorder: stat events: %w",
+			err,
+		)
+	}
+
+	gzipPath := filepath.Join(traceDir, eventsGzipFileName)
+	info, err = os.Stat(gzipPath)
+	switch {
+	case err == nil && !info.IsDir():
+		return gzipPath, true, nil
+	case err == nil:
+		return "", false, fmt.Errorf(
+			"debug recorder: compressed events path is a directory",
+		)
+	case errors.Is(err, os.ErrNotExist):
+		return "", false, fmt.Errorf(
+			"debug recorder: events file not found",
+		)
+	default:
+		return "", false, fmt.Errorf(
+			"debug recorder: stat compressed events: %w",
+			err,
+		)
+	}
+}
+
+func ReadEventsFile(traceDir string) ([]byte, error) {
+	path, compressed, err := ResolveEventsFilePath(traceDir)
+	if err != nil {
+		return nil, err
+	}
+	if !compressed {
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil, fmt.Errorf(
+				"debug recorder: read events: %w",
+				readErr,
+			)
+		}
+		return raw, nil
+	}
+	return readGzipFile(path)
+}
+
+func compressEventsFile(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("debug recorder: empty events path")
+	}
+
+	src, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("debug recorder: open events: %w", err)
+	}
+	defer src.Close()
+
+	temp, err := os.CreateTemp(
+		filepath.Dir(path),
+		eventsGzipFileName+".*.tmp",
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"debug recorder: create compressed events: %w",
+			err,
+		)
+	}
+
+	tempPath := temp.Name()
+	keepTemp := false
+	defer func() {
+		if keepTemp {
+			return
+		}
+		_ = os.Remove(tempPath)
+	}()
+
+	hasher := sha256.New()
+	writer, err := gzip.NewWriterLevel(
+		temp,
+		gzipCompressionLevel,
+	)
+	if err != nil {
+		_ = temp.Close()
+		return fmt.Errorf(
+			"debug recorder: create gzip writer: %w",
+			err,
+		)
+	}
+
+	size, err := io.Copy(writer, io.TeeReader(src, hasher))
+	if err != nil {
+		_ = writer.Close()
+		_ = temp.Close()
+		return fmt.Errorf(
+			"debug recorder: gzip events: %w",
+			err,
+		)
+	}
+	if err := writer.Close(); err != nil {
+		_ = temp.Close()
+		return fmt.Errorf(
+			"debug recorder: close gzip writer: %w",
+			err,
+		)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf(
+			"debug recorder: close compressed events: %w",
+			err,
+		)
+	}
+
+	if err := verifyGzipFile(tempPath, hasher.Sum(nil), size); err != nil {
+		return err
+	}
+
+	gzipPath := filepath.Join(
+		filepath.Dir(path),
+		eventsGzipFileName,
+	)
+	if err := os.Remove(gzipPath); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf(
+			"debug recorder: remove old compressed events: %w",
+			err,
+		)
+	}
+	if err := os.Rename(tempPath, gzipPath); err != nil {
+		return fmt.Errorf(
+			"debug recorder: rename compressed events: %w",
+			err,
+		)
+	}
+	keepTemp = true
+
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf(
+			"debug recorder: remove raw events: %w",
+			err,
+		)
+	}
+	return nil
+}
+
+func verifyGzipFile(path string, wantHash []byte, wantSize int64) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf(
+			"debug recorder: open compressed events: %w",
+			err,
+		)
+	}
+	defer file.Close()
+
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return fmt.Errorf(
+			"debug recorder: open gzip reader: %w",
+			err,
+		)
+	}
+	defer reader.Close()
+
+	hasher := sha256.New()
+	size, err := io.Copy(hasher, reader)
+	if err != nil {
+		return fmt.Errorf(
+			"debug recorder: verify compressed events: %w",
+			err,
+		)
+	}
+	if size != wantSize {
+		return fmt.Errorf(
+			"debug recorder: gzip verification size mismatch: "+
+				"got %d want %d",
+			size,
+			wantSize,
+		)
+	}
+
+	if !bytes.Equal(hasher.Sum(nil), wantHash) {
+		return errors.New(
+			"debug recorder: gzip verification hash mismatch",
+		)
+	}
+	return nil
+}
+
+func readGzipFile(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"debug recorder: open compressed events: %w",
+			err,
+		)
+	}
+	defer file.Close()
+
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"debug recorder: open gzip reader: %w",
+			err,
+		)
+	}
+	defer reader.Close()
+
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"debug recorder: read compressed events: %w",
+			err,
+		)
+	}
+	return raw, nil
 }
 
 func writeTraceIDJSON(path string, traceID string) error {
