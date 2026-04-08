@@ -211,6 +211,200 @@ for {
 reader.Close()
 ```
 
+### Access Tool Call ID inside Tool implementations
+
+When the model emits a `tool_call`, the framework injects that call's
+`tool_call_id` into the tool execution `context.Context` before your tool
+starts running.
+
+This means the framework **does support** reading the current tool call ID
+directly inside your own Tool implementation.
+
+This is especially useful when you want to:
+
+- create unique state keys for concurrent calls to the same tool
+- attach a stable identifier to logs, metrics, or traces
+- launch a child Agent inside the tool and tell your UI which
+  `tool_call` that child Agent belongs to
+
+Today this mechanism applies to:
+
+- regular function tools in LLMAgent
+- streamable tools in LLMAgent
+- tool execution in GraphAgent tools nodes
+- Tool callbacks and plugins as well
+
+#### The simplest form
+
+Call `tool.ToolCallIDFromContext(ctx)` inside the tool:
+
+```go
+const defaultToolCallID = "default"
+
+type searchArgs struct {
+    Query string `json:"query"`
+}
+
+func searchDocs(
+    ctx context.Context,
+    args searchArgs,
+) (map[string]any, error) {
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+        toolCallID = defaultToolCallID
+    }
+
+    log.Printf(
+        "tool_call_id=%s query=%s",
+        toolCallID,
+        args.Query,
+    )
+
+    return map[string]any{
+        "tool_call_id": toolCallID,
+        "query":        args.Query,
+    }, nil
+}
+```
+
+If all you need is per-call logging, metrics, or Invocation State, this is
+usually enough.
+
+For a runnable end-to-end example, see `examples/toolcallid`.
+
+#### When the Tool also launches a child Agent
+
+There are two different kinds of identifiers here:
+
+- `tool_call_id`: identifies one model-issued tool call
+- `InvocationID` / `ParentInvocationID`: identify parent-child Agent runs
+
+If your goal is "show the child Agent output under the specific tool card in
+the UI", keep both layers:
+
+1. Read the current `tool_call_id` with
+   `tool.ToolCallIDFromContext(ctx)`
+2. Read the parent Invocation with `agent.InvocationFromContext(ctx)`
+3. Create the child Invocation with `parentInv.Clone(...)`
+4. Put the `tool_call_id` into the child Invocation
+   `RunOptions.RuntimeState`
+5. In the renderer, use:
+   - `InvocationID` / `ParentInvocationID` for the execution tree
+   - the propagated `tool_call_id` for the originating tool card
+
+Example (assuming `childAgent` is an existing runnable child Agent):
+
+```go
+const runtimeStateParentToolCallID = "display.parent_tool_call_id"
+const defaultToolCallID = "default"
+
+type delegateArgs struct {
+    Message string `json:"message"`
+}
+
+func runChildAgentInsideTool(
+    ctx context.Context,
+    args delegateArgs,
+) (string, error) {
+    toolCallID, ok := tool.ToolCallIDFromContext(ctx)
+    if !ok || toolCallID == "" {
+        toolCallID = defaultToolCallID
+    }
+
+    parentInv, ok := agent.InvocationFromContext(ctx)
+    if !ok || parentInv == nil {
+        return "", errors.New("missing parent invocation")
+    }
+
+    childRunOptions := parentInv.RunOptions
+    childRunOptions.RuntimeState = make(
+        map[string]any,
+        len(parentInv.RunOptions.RuntimeState)+1,
+    )
+    for key, value := range parentInv.RunOptions.RuntimeState {
+        childRunOptions.RuntimeState[key] = value
+    }
+    childRunOptions.RuntimeState[
+        runtimeStateParentToolCallID
+    ] = toolCallID
+
+    childInv := parentInv.Clone(
+        agent.WithInvocationAgent(childAgent),
+        agent.WithInvocationMessage(
+            model.NewUserMessage(args.Message),
+        ),
+        agent.WithInvocationRunOptions(childRunOptions),
+    )
+
+    childCtx := agent.NewInvocationContext(ctx, childInv)
+    eventCh, err := agent.RunWithPlugins(
+        childCtx,
+        childInv,
+        childAgent,
+    )
+    if err != nil {
+        return "", err
+    }
+
+    var final string
+    for ev := range eventCh {
+        if ev.Response != nil && len(ev.Response.Choices) > 0 {
+            msg := ev.Response.Choices[0].Message
+            if msg.Content != "" {
+                final = msg.Content
+            }
+        }
+        // Child events naturally carry:
+        // - ev.InvocationID       == childInv.InvocationID
+        // - ev.ParentInvocationID == parentInv.InvocationID
+        //
+        // Your renderer can build the invocation tree from these two
+        // fields, and read runtimeStateParentToolCallID from the child
+        // invocation path to attach that subtree back to the original
+        // tool-call card.
+    }
+
+    return final, nil
+}
+```
+
+Copy `RuntimeState` before writing to it. `Invocation.Clone(...)`
+does not deep-copy the `map`, so mutating a reused map would also
+mutate the parent Invocation.
+
+Inside the child Agent, if you need to read the originating tool call ID
+again, read it from runtime state:
+
+```go
+toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
+    ctx,
+    runtimeStateParentToolCallID,
+)
+```
+
+#### Recommended pattern
+
+- If you only need the identifier for the current tool call, use
+  `tool.ToolCallIDFromContext(ctx)`
+- If you need to represent "which child Agent belongs to which parent
+  execution", rely on `InvocationID` / `ParentInvocationID`
+- If the UI must also attach that child subtree back to a specific tool
+  card, propagate `tool_call_id` explicitly through `RuntimeState` or
+  custom event metadata
+- If you are using `AgentTool`, the framework already maintains parent-child
+  Invocation linkage via `Invocation.Clone(...)`. In many UIs that is
+  already enough. Propagate `tool_call_id` only when you need the extra
+  tool-card association
+
+#### One subtle caveat
+
+The framework injects `tool_call_id` before tool execution.
+However, if a `BeforeTool` callback replaces the context with a brand-new
+bare context, downstream tool code will no longer see that ID.
+
+So if you replace the context inside callbacks, make sure you preserve the
+existing context values you still need.
+
 ## Built-in Tools
 
 ### DuckDuckGo Search Tool
