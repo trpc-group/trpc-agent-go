@@ -166,11 +166,17 @@ func (s *sessionService) AppendEvent(
 	evt *event.Event,
 	options ...session.Option,
 ) error {
-	return s.next.AppendEvent(
+	return s.withStorageSessionRuntimeSync(
 		ctx,
-		rewriteSessionForStorage(ctx, sess),
-		evt,
-		options...,
+		sess,
+		func(storageSess *session.Session) error {
+			return s.next.AppendEvent(
+				ctx,
+				storageSess,
+				evt,
+				options...,
+			)
+		},
 	)
 }
 
@@ -180,11 +186,17 @@ func (s *sessionService) CreateSessionSummary(
 	filterKey string,
 	force bool,
 ) error {
-	return s.next.CreateSessionSummary(
+	return s.withStorageSessionRuntimeSync(
 		ctx,
-		rewriteSessionForStorage(ctx, sess),
-		filterKey,
-		force,
+		sess,
+		func(storageSess *session.Session) error {
+			return s.next.CreateSessionSummary(
+				ctx,
+				storageSess,
+				filterKey,
+				force,
+			)
+		},
 	)
 }
 
@@ -194,11 +206,17 @@ func (s *sessionService) EnqueueSummaryJob(
 	filterKey string,
 	force bool,
 ) error {
-	return s.next.EnqueueSummaryJob(
+	return s.withStorageSessionRuntimeSync(
 		ctx,
-		rewriteSessionForStorage(ctx, sess),
-		filterKey,
-		force,
+		sess,
+		func(storageSess *session.Session) error {
+			return s.next.EnqueueSummaryJob(
+				ctx,
+				storageSess,
+				filterKey,
+				force,
+			)
+		},
 	)
 }
 
@@ -250,4 +268,49 @@ func rewriteSessionForUser(
 	cloned := sess.Clone()
 	cloned.UserID = userID
 	return cloned
+}
+
+// withStorageSessionRuntimeSync keeps the caller's canonical session runtime
+// state aligned with backend-visible mutations applied to a storage-scoped
+// clone. This preserves canonical UserID semantics while avoiding split-brain
+// state during the current invocation.
+func (s *sessionService) withStorageSessionRuntimeSync(
+	ctx context.Context,
+	sess *session.Session,
+	apply func(*session.Session) error,
+) error {
+	storageSess := rewriteSessionForStorage(ctx, sess)
+	if err := apply(storageSess); err != nil {
+		return err
+	}
+	syncSessionRuntimeState(sess, storageSess)
+	return nil
+}
+
+func syncSessionRuntimeState(
+	dst *session.Session,
+	src *session.Session,
+) {
+	if dst == nil || src == nil || dst == src {
+		return
+	}
+
+	snapshot := src.Clone()
+
+	dst.EventMu.Lock()
+	dst.Events = snapshot.Events
+	dst.EventMu.Unlock()
+
+	session.WithSessionState(snapshot.State)(dst)
+
+	dst.TracksMu.Lock()
+	dst.Tracks = snapshot.Tracks
+	dst.TracksMu.Unlock()
+
+	dst.SummariesMu.Lock()
+	dst.Summaries = snapshot.Summaries
+	dst.SummariesMu.Unlock()
+
+	dst.ServiceMeta = snapshot.ServiceMeta
+	dst.UpdatedAt = snapshot.UpdatedAt
 }
