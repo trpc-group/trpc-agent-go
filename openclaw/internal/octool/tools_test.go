@@ -138,6 +138,94 @@ func TestExecTool_RedactsShortSensitiveEnvValueOutput(t *testing.T) {
 	require.NotContains(t, res.Output, "12345")
 }
 
+func TestKnownSensitiveValues_InlineAssignmentOverridesEnv(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	values := knownSensitiveValues(CommandRequest{
+		Command: `export OPENAI_API_KEY='sk-inline-secret'`,
+		Env: map[string]string{
+			"OPENAI_API_KEY": "sk-env-secret",
+		},
+	})
+	require.Len(t, values, 1)
+	require.Equal(t, "OPENAI_API_KEY", values[0].Name)
+	require.Equal(t, "sk-inline-secret", values[0].Value)
+	require.False(t, values[0].AllowShort)
+}
+
+func TestKnownSensitiveValues_SkipsShortInlineValue(t *testing.T) {
+	t.Parallel()
+
+	values := knownSensitiveValues(CommandRequest{
+		Command: "export OPENAI_API_KEY=short",
+	})
+	require.Empty(t, values)
+}
+
+func TestTrimMatchingQuotes(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "value", trimMatchingQuotes(`"value"`))
+	require.Equal(t, "value", trimMatchingQuotes(`'value'`))
+	require.Equal(t, "value", trimMatchingQuotes("value"))
+	require.False(t, hasWrappedQuotes("x", '"'))
+}
+
+func TestRedactCommandOutput_EmptyOutput(t *testing.T) {
+	t.Parallel()
+
+	output := " \n"
+	require.Equal(
+		t,
+		output,
+		redactCommandOutput(CommandRequest{}, output),
+	)
+}
+
+func TestAddSensitiveEnvValues_IgnoresBlankAndSafeValues(t *testing.T) {
+	t.Parallel()
+
+	values := make(map[string]sensitiveValue)
+	addSensitiveEnvValues(values, map[string]string{
+		"OPENAI_API_KEY": "",
+		"SAFE_NAME":      "ok",
+	})
+	require.Empty(t, values)
+}
+
+func TestAddInlineSensitiveValues_IgnoresBlankAndSafeValues(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	values := make(map[string]sensitiveValue)
+	addInlineSensitiveValues(
+		values,
+		`export OPENAI_API_KEY='' SAFE_NAME=ok`,
+	)
+	require.Empty(t, values)
+}
+
+func TestRedactSensitiveValues_IgnoresEmptyTrackedValue(t *testing.T) {
+	t.Parallel()
+
+	output := redactSensitiveValues("safe", []sensitiveValue{{
+		Name:  "OPENAI_API_KEY",
+		Value: "",
+	}})
+	require.Equal(t, "safe", output)
+}
+
+func TestRedactColonLine_IgnoresSafeName(t *testing.T) {
+	t.Parallel()
+
+	redacted, ok := redactColonLine(`"SAFE_NAME": "ok"`)
+	require.False(t, ok)
+	require.Empty(t, redacted)
+}
+
 func TestExecTool_BlocksShellProfileAccess(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
@@ -692,7 +780,9 @@ func TestTools_Declaration(t *testing.T) {
 	require.Equal(t, toolKillSession, killTool.Declaration().Name)
 }
 
-func TestExecToolDeclaration_HidesMemoryFileGuidanceWithoutStore(t *testing.T) {
+func TestExecToolDeclaration_HidesMemoryFileGuidanceWithoutStore(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	decl := newExecCommandTool(NewManager()).Declaration()
@@ -700,7 +790,9 @@ func TestExecToolDeclaration_HidesMemoryFileGuidanceWithoutStore(t *testing.T) {
 	require.NotContains(t, decl.Description, envMemoryFile)
 }
 
-func TestExecToolDeclaration_ExposesMemoryFileGuidanceWithStore(t *testing.T) {
+func TestExecToolDeclaration_ExposesMemoryFileGuidanceWithStore(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	root, err := memoryfile.DefaultRoot(t.TempDir())
@@ -891,7 +983,10 @@ func TestManager_ExecSkipsShellSnapshotWithoutHooks(t *testing.T) {
 	}
 
 	mgr := NewManager()
-	mgr.shellEnvSnapshot = func(context.Context) map[string]string {
+	mgr.shellEnvSnapshot = func(
+		context.Context,
+		string,
+	) map[string]string {
 		t.Fatal("unexpected shell env snapshot")
 		return nil
 	}
@@ -906,13 +1001,113 @@ func TestManager_ExecSkipsShellSnapshotWithoutHooks(t *testing.T) {
 	require.Contains(t, out.Output, "ok")
 }
 
-func TestManager_LoginShellEnvRespectsContextAndRetries(
+func TestManager_CommandEnvUsesWorkdirSnapshot(t *testing.T) {
+	mgr := NewManager(WithBaseEnv(map[string]string{
+		"BASE_ONLY": "base",
+		"SHARED":    "base",
+		" ":         "skip",
+	}))
+
+	var gotWorkdir string
+	mgr.shellEnvSnapshot = func(
+		_ context.Context,
+		workdir string,
+	) map[string]string {
+		gotWorkdir = workdir
+		return map[string]string{
+			"OPENAI_API_KEY": "sk-shell-secret",
+			"SHARED":         "shell",
+		}
+	}
+
+	env := mgr.commandEnv(
+		context.Background(),
+		"/tmp/work",
+		map[string]string{
+			"EXTRA_ONLY": "extra",
+			"SHARED":     "extra",
+			" ":          "skip",
+		},
+	)
+	require.Equal(t, "/tmp/work", gotWorkdir)
+	require.Equal(t, "sk-shell-secret", env["OPENAI_API_KEY"])
+	require.Equal(t, "base", env["BASE_ONLY"])
+	require.Equal(t, "extra", env["EXTRA_ONLY"])
+	require.Equal(t, "extra", env["SHARED"])
+	_, ok := env[" "]
+	require.False(t, ok)
+}
+
+func TestManager_CommandEnvFallsBackToProcessEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-process-secret")
+
+	mgr := NewManager()
+	mgr.shellEnvSnapshot = func(
+		context.Context,
+		string,
+	) map[string]string {
+		return nil
+	}
+
+	env := mgr.commandEnv(
+		context.Background(),
+		"",
+		map[string]string{
+			"EXTRA_ONLY": "extra",
+		},
+	)
+	require.Equal(t, "sk-process-secret", env["OPENAI_API_KEY"])
+	require.Equal(t, "extra", env["EXTRA_ONLY"])
+}
+
+func TestMergeEnvMaps_EmptyInputsReturnNil(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, mergeEnvMaps(nil, nil))
+}
+
+func TestEnvListToMap_IgnoresInvalidPairs(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, envListToMap(nil))
+
+	env := envListToMap([]string{
+		"OPENAI_API_KEY=sk-test-secret",
+		"EMPTY_VALUE=",
+		"INVALID",
+		"=MISSING_KEY",
+		"",
+	})
+	require.Equal(t, "sk-test-secret", env["OPENAI_API_KEY"])
+	require.Equal(t, "", env["EMPTY_VALUE"])
+	_, ok := env[""]
+	require.False(t, ok)
+}
+
+func TestBlocksSensitivePathValue_EmptyInput(t *testing.T) {
+	t.Parallel()
+
+	require.False(t, blocksSensitivePathValue("", nil, nil, nil))
+}
+
+func TestAppendProtectedPathDir_IgnoresRelativePath(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, appendProtectedPathDir(nil, "env.sh"))
+}
+
+func TestManager_LoginShellEnvRespectsContextAndWorkdir(
 	t *testing.T,
 ) {
 	mgr := NewManager()
 	calls := 0
-	mgr.shellEnvSnapshot = func(ctx context.Context) map[string]string {
+	workdirs := make([]string, 0, 2)
+	mgr.shellEnvSnapshot = func(
+		ctx context.Context,
+		workdir string,
+	) map[string]string {
 		calls++
+		workdirs = append(workdirs, workdir)
 		if calls == 1 {
 			<-ctx.Done()
 			return nil
@@ -927,7 +1122,7 @@ func TestManager_LoginShellEnvRespectsContextAndRetries(
 
 	done := make(chan map[string]string, 1)
 	go func() {
-		done <- mgr.loginShellEnv(canceled)
+		done <- mgr.loginShellEnv(canceled, "/tmp/one")
 	}()
 
 	select {
@@ -937,9 +1132,10 @@ func TestManager_LoginShellEnvRespectsContextAndRetries(
 		t.Fatal("login shell env snapshot ignored request context")
 	}
 
-	env := mgr.loginShellEnv(context.Background())
+	env := mgr.loginShellEnv(context.Background(), "/tmp/two")
 	require.Equal(t, "sk-test-secret", env["OPENAI_API_KEY"])
 	require.Equal(t, 2, calls)
+	require.Equal(t, []string{"/tmp/one", "/tmp/two"}, workdirs)
 }
 
 func TestUploadEnvFromContext(t *testing.T) {

@@ -51,10 +51,7 @@ type Manager struct {
 
 	clock func() time.Time
 
-	shellEnvMu       sync.Mutex
-	shellEnvReady    bool
-	shellEnv         map[string]string
-	shellEnvSnapshot func(context.Context) map[string]string
+	shellEnvSnapshot func(context.Context, string) map[string]string
 }
 
 type Option func(*Manager)
@@ -414,15 +411,20 @@ func (m *Manager) commandRequest(
 	params execParams,
 ) CommandRequest {
 	req := newCommandRequest(params)
-	req.Env = m.commandEnv(ctx, params.Env)
+	req.Env = m.commandEnv(
+		ctx,
+		params.Workdir,
+		params.Env,
+	)
 	return req
 }
 
 func (m *Manager) commandEnv(
 	ctx context.Context,
+	workdir string,
 	extra map[string]string,
 ) map[string]string {
-	out := m.loginShellEnv(ctx)
+	out := m.loginShellEnv(ctx, workdir)
 	if len(out) == 0 {
 		out = currentProcessEnvMap()
 	}
@@ -507,42 +509,31 @@ func splitEnvPair(pair string) (string, string, bool) {
 	return pair[:idx], pair[idx+1:], true
 }
 
-func (m *Manager) loginShellEnv(ctx context.Context) map[string]string {
-	m.shellEnvMu.Lock()
-	if m.shellEnvReady {
-		out := copyEnvMap(m.shellEnv)
-		m.shellEnvMu.Unlock()
-		return out
-	}
+func (m *Manager) loginShellEnv(
+	ctx context.Context,
+	workdir string,
+) map[string]string {
 	snapshot := m.shellEnvSnapshot
-	m.shellEnvMu.Unlock()
-
 	if snapshot == nil {
 		snapshot = snapshotLoginShellEnv
 	}
-	env := snapshot(ctx)
-	if len(env) == 0 {
-		return nil
-	}
-
-	m.shellEnvMu.Lock()
-	if !m.shellEnvReady {
-		m.shellEnv = copyEnvMap(env)
-		m.shellEnvReady = true
-	}
-	out := copyEnvMap(m.shellEnv)
-	m.shellEnvMu.Unlock()
-	return out
+	return snapshot(ctx, workdir)
 }
 
-func snapshotLoginShellEnv(ctx context.Context) map[string]string {
+func snapshotLoginShellEnv(
+	ctx context.Context,
+	workdir string,
+) map[string]string {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(ctx, defaultShellEnvTimeout)
 	defer cancel()
 
-	out, err := shellCmd(ctx, shellEnvDumpCommand).Output()
+	cmd := shellCmd(ctx, shellEnvDumpCommand)
+	cmd.Dir = workdir
+
+	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}

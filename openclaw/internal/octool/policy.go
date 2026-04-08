@@ -73,9 +73,6 @@ func NewChatCommandSafetyPolicy() CommandPolicy {
 		_ context.Context,
 		req CommandRequest,
 	) error {
-		if strings.TrimSpace(req.Command) == "" {
-			return nil
-		}
 		if blocksSensitivePathRequest(req) {
 			return fmt.Errorf(
 				errCommandPolicyRejected,
@@ -106,19 +103,42 @@ func blocksSensitivePath(command string) bool {
 }
 
 func blocksSensitivePathRequest(req CommandRequest) bool {
-	command := normalizePolicyCommand(req.Command)
-	if command == "" {
-		return false
-	}
-	if matchesProtectedPathFragments(command, protectedPathFragments) {
+	workdirFragments := dynamicProtectedWorkdirFragments(req.Env)
+	if blocksSensitivePathValue(
+		req.Workdir,
+		protectedWorkdirFragments(),
+		workdirFragments,
+		req.Env,
+	) {
 		return true
 	}
-	dynamicFragments := dynamicProtectedPathFragments(req.Env)
-	if matchesProtectedPathFragments(command, dynamicFragments) {
+
+	return blocksSensitivePathValue(
+		req.Command,
+		protectedPathFragments,
+		dynamicProtectedPathFragments(req.Env),
+		req.Env,
+	)
+}
+
+func blocksSensitivePathValue(
+	raw string,
+	protectedFragments []string,
+	dynamicFragments []string,
+	env map[string]string,
+) bool {
+	value := normalizePolicyCommand(raw)
+	if value == "" {
+		return false
+	}
+	if matchesProtectedPathFragments(value, protectedFragments) {
+		return true
+	}
+	if matchesProtectedPathFragments(value, dynamicFragments) {
 		return true
 	}
 	return matchesProtectedPathFragments(
-		expandProtectedEnvReferences(command, req.Env),
+		expandProtectedEnvReferences(value, env),
 		dynamicFragments,
 	)
 }
@@ -185,6 +205,42 @@ func dynamicProtectedPathFragments(env map[string]string) []string {
 	return out
 }
 
+func protectedWorkdirFragments() []string {
+	out := make([]string, 0, len(protectedPathFragments))
+	for _, fragment := range protectedPathFragments {
+		out = append(
+			out,
+			strings.TrimSuffix(fragment, "/"),
+		)
+	}
+	return out
+}
+
+func dynamicProtectedWorkdirFragments(env map[string]string) []string {
+	out := make([]string, 0, 3)
+	if len(env) == 0 {
+		return out
+	}
+	out = appendProtectedPathDir(
+		out,
+		env[envTRPCClawEnvFile],
+	)
+
+	stateDir := strings.TrimSpace(env[envTRPCClawStateDir])
+	if stateDir == "" {
+		return out
+	}
+	out = appendProtectedPathFragment(out, stateDir)
+	out = appendProtectedPathFragment(
+		out,
+		filepath.Join(
+			stateDir,
+			filepath.Dir(protectedRuntimeEnvRelPath),
+		),
+	)
+	return out
+}
+
 func expandProtectedEnvReferences(
 	command string,
 	env map[string]string,
@@ -229,6 +285,18 @@ func appendProtectedPathFragment(out []string, raw string) []string {
 		return out
 	}
 	return append(out, fragment)
+}
+
+func appendProtectedPathDir(out []string, raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return out
+	}
+	dir := filepath.Dir(trimmed)
+	if dir == "." {
+		return out
+	}
+	return appendProtectedPathFragment(out, dir)
 }
 
 func normalizePathFragment(raw string) string {

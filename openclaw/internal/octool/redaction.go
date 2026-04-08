@@ -131,9 +131,6 @@ func addInlineSensitiveValues(
 		if value == "" {
 			continue
 		}
-		if _, ok := out[name]; ok {
-			continue
-		}
 		out[name] = sensitiveValue{
 			Name:  name,
 			Value: value,

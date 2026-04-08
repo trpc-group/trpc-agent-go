@@ -63,7 +63,11 @@ func TestSensitivePathBoundaryHelpers(t *testing.T) {
 	require.False(t, hasSensitivePathBoundaryBefore(`x.bashrc`, 1))
 
 	require.True(t, hasSensitivePathBoundaryAfter(`~/.ssh/config`, 6, `.ssh/`))
-	require.True(t, hasSensitivePathBoundaryAfter(`cat ~/.bashrc`, 13, `.bashrc`))
+	require.True(t, hasSensitivePathBoundaryAfter(
+		`cat ~/.bashrc`,
+		13,
+		`.bashrc`,
+	))
 }
 
 func TestChatCommandSafetyPolicy_AllowsPythonOsEnviron(t *testing.T) {
@@ -150,6 +154,53 @@ func TestChatCommandSafetyPolicy_BlocksStateDirCredentialHandle(
 		Command: `cat ${TRPC_CLAW_STATE_DIR}/git-credentials`,
 		Env: map[string]string{
 			envTRPCClawStateDir: stateDir,
+		},
+	})
+	require.ErrorContains(t, err, reasonSensitivePath)
+}
+
+func TestChatCommandSafetyPolicy_BlocksProtectedWorkdir(t *testing.T) {
+	t.Parallel()
+
+	err := NewChatCommandSafetyPolicy()(context.Background(), CommandRequest{
+		Command: "cat config",
+		Workdir: filepath.Join("/tmp", ".ssh"),
+	})
+	require.ErrorContains(t, err, reasonSensitivePath)
+}
+
+func TestChatCommandSafetyPolicy_BlocksStateRuntimeWorkdir(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	stateDir := filepath.Join("/tmp", "openclaw-state")
+
+	err := NewChatCommandSafetyPolicy()(context.Background(), CommandRequest{
+		Command: "cat env.sh",
+		Workdir: filepath.Join(
+			stateDir,
+			filepath.Dir(protectedRuntimeEnvRelPath),
+		),
+		Env: map[string]string{
+			envTRPCClawStateDir: stateDir,
+		},
+	})
+	require.ErrorContains(t, err, reasonSensitivePath)
+}
+
+func TestChatCommandSafetyPolicy_BlocksEnvFileParentWorkdir(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	envFile := filepath.Join("/tmp", "openclaw", "runtime", "env.sh")
+
+	err := NewChatCommandSafetyPolicy()(context.Background(), CommandRequest{
+		Command: "cat env.sh",
+		Workdir: filepath.Dir(envFile),
+		Env: map[string]string{
+			envTRPCClawEnvFile: envFile,
 		},
 	})
 	require.ErrorContains(t, err, reasonSensitivePath)
