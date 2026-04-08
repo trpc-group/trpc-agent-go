@@ -18,6 +18,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -82,6 +83,8 @@ const (
 	csvDelimiter = ","
 
 	defaultDebugRecorderDir = "debug"
+
+	debugRecorderOpenAIChatReqProvider = "openai.chat.completions"
 
 	defaultAgentName        = "assistant"
 	defaultAgentInstruction = "You are a helpful assistant. " +
@@ -2481,6 +2484,31 @@ func newMockModel(_ registry.ModelSpec) (model.Model, error) {
 	return &echoModel{name: "mock-echo"}, nil
 }
 
+func recordDebugOpenAIChatRequestJSON(
+	ctx context.Context,
+	raw []byte,
+	marshalErr error,
+) {
+	err := marshalErr
+	if err == nil && len(raw) > 0 {
+		var payload any
+		err = json.Unmarshal(raw, &payload)
+		if err == nil {
+			err = debugrecorder.RecordModelRequest(
+				ctx,
+				debugRecorderOpenAIChatReqProvider,
+				payload,
+			)
+		}
+	}
+	if err != nil {
+		log.Warnf(
+			"debug recorder failed to capture chat request: %v",
+			err,
+		)
+	}
+}
+
 func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	name := strings.TrimSpace(spec.Name)
 	if name == "" {
@@ -2496,6 +2524,9 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	opts := []openai.Option{
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
+		openai.WithChatRequestJSONCallback(
+			recordDebugOpenAIChatRequestJSON,
+		),
 	}
 	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))

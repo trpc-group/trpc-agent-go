@@ -12,6 +12,7 @@ package debugrecorder
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -346,6 +347,89 @@ func TestContextHelpers(t *testing.T) {
 
 	require.Nil(t, RecorderFromContext(nil))
 	require.Nil(t, TraceFromContext(nil))
+}
+
+func TestRecordModelRequest_WritesEvent(t *testing.T) {
+	t.Parallel()
+
+	rec, err := New(t.TempDir(), modeFull)
+	require.NoError(t, err)
+
+	trace, err := rec.Start(TraceStart{Channel: "gateway"})
+	require.NoError(t, err)
+
+	ctx := WithTrace(context.Background(), trace)
+	payload := map[string]any{
+		"model": "gpt-4o",
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": "hello",
+			},
+		},
+	}
+	require.NoError(
+		t,
+		RecordModelRequest(
+			ctx,
+			"openai.chat.completions",
+			payload,
+		),
+	)
+	require.NoError(t, trace.Close(TraceEnd{Status: "ok"}))
+
+	evs, err := os.Open(filepath.Join(trace.Dir(), eventsFileName))
+	require.NoError(t, err)
+	defer evs.Close()
+
+	scanner := bufio.NewScanner(evs)
+	found := false
+	for scanner.Scan() {
+		var got record
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &got))
+		if got.Kind != KindModelReq {
+			continue
+		}
+		found = true
+
+		payload, ok := got.Payload.(map[string]any)
+		require.True(t, ok)
+		require.Equal(
+			t,
+			"openai.chat.completions",
+			payload["provider"],
+		)
+
+		request, ok := payload["request"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "gpt-4o", request["model"])
+
+		messages, ok := request["messages"].([]any)
+		require.True(t, ok)
+		require.Len(t, messages, 1)
+
+		message, ok := messages[0].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "user", message["role"])
+		require.Equal(t, "hello", message["content"])
+	}
+	require.NoError(t, scanner.Err())
+	require.True(t, found)
+}
+
+func TestRecordModelRequest_NoTraceIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	payload := map[string]any{"model": "gpt-4o"}
+	require.NoError(
+		t,
+		RecordModelRequest(
+			context.Background(),
+			"openai.chat.completions",
+			payload,
+		),
+	)
+	require.NoError(t, RecordModelRequest(nil, "", nil))
 }
 
 func TestWriteJSONFile_EmptyPathFails(t *testing.T) {

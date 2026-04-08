@@ -1919,6 +1919,35 @@ func TestNewModel_OpenAI(t *testing.T) {
 	require.Equal(t, "gpt-5", mdl.Info().Name)
 }
 
+func TestRecordDebugOpenAIChatRequestJSON_WritesTraceEvent(t *testing.T) {
+	t.Parallel()
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		Channel: "gateway",
+	})
+	require.NoError(t, err)
+
+	ctx := debugrecorder.WithTrace(context.Background(), trace)
+	recordDebugOpenAIChatRequestJSON(
+		ctx,
+		[]byte(
+			`{"model":"gpt-4o","messages":[{"role":"user","content":"hello"}]}`,
+		),
+		nil,
+	)
+	require.NoError(
+		t,
+		trace.Close(debugrecorder.TraceEnd{Status: "ok"}),
+	)
+
+	raw, err := os.ReadFile(filepath.Join(trace.Dir(), "events.jsonl"))
+	require.NoError(t, err)
+	require.Contains(t, string(raw), debugrecorder.KindModelReq)
+}
+
 func TestNewModel_UnsupportedMode(t *testing.T) {
 	_, err := modelFromOptions(runOptions{ModelMode: "x"})
 	require.Error(t, err)

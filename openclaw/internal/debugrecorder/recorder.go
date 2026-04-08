@@ -54,6 +54,7 @@ const (
 	KindGatewayReq  = "gateway.request"
 	KindGatewayRsp  = "gateway.response"
 	KindGatewayRun  = "gateway.run.start"
+	KindModelReq    = "model.chat.request"
 	KindRunnerEvent = "runner.event"
 
 	KindTelegramMessage    = "telegram.message"
@@ -716,6 +717,31 @@ func RecorderFromContext(ctx context.Context) *Recorder {
 	}
 	v, _ := ctx.Value(recorderKey{}).(*Recorder)
 	return v
+}
+
+type modelRequestRecord struct {
+	Provider string `json:"provider,omitempty"`
+	Request  any    `json:"request,omitempty"`
+}
+
+func RecordModelRequest(
+	ctx context.Context,
+	provider string,
+	payload any,
+) error {
+	trace := TraceFromContext(ctx)
+	provider = strings.TrimSpace(provider)
+	if trace == nil || provider == "" || payload == nil {
+		return nil
+	}
+
+	return trace.Record(
+		KindModelReq,
+		modelRequestRecord{
+			Provider: provider,
+			Request:  payload,
+		},
+	)
 }
 
 func writeJSONFile(path string, v any) error {
