@@ -1747,7 +1747,7 @@ func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {
 	require.Equal(t, "ok", rsp.Reply)
 
 	matches, err := filepath.Glob(
-		filepath.Join(dir, "*", "*", debugEventsFile),
+		filepath.Join(dir, "*", "*", debugEventsFile+"*"),
 	)
 	require.NoError(t, err)
 	require.Len(t, matches, 1)
@@ -4393,7 +4393,7 @@ func TestServer_StreamMessage_DebugRecorderPaths(t *testing.T) {
 	require.Len(t, collectGatewayStreamEvents(t, stream), 5)
 
 	matches, err := filepath.Glob(
-		filepath.Join(dir, "*", "*", debugEventsFile),
+		filepath.Join(dir, "*", "*", debugEventsFile+"*"),
 	)
 	require.NoError(t, err)
 	require.Len(t, matches, 1)
@@ -4423,7 +4423,7 @@ func TestServer_StreamMessage_DebugRecorderPaths(t *testing.T) {
 	require.Len(t, collectGatewayStreamEvents(t, stream), 2)
 
 	matches, err = filepath.Glob(
-		filepath.Join(dir, "*", "*", debugEventsFile),
+		filepath.Join(dir, "*", "*", debugEventsFile+"*"),
 	)
 	require.NoError(t, err)
 	require.Len(t, matches, 1)

@@ -132,9 +132,7 @@ func TestOpenClawToolResultMessages_RecordsTraceEvent(t *testing.T) {
 		debugrecorder.TraceEnd{Status: "ok"},
 	))
 
-	data, err := os.ReadFile(
-		filepath.Join(trace.Dir(), "events.jsonl"),
-	)
+	data, err := debugrecorder.ReadEventsFile(trace.Dir())
 	require.NoError(t, err)
 	require.Contains(t, string(data), toolResultImagesTraceKind)
 	require.Contains(t, string(data), "frame.png")

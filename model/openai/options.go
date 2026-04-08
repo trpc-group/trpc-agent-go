@@ -32,6 +32,14 @@ type ChatRequestCallbackFunc func(
 	chatRequest *openai.ChatCompletionNewParams,
 )
 
+// ChatRequestJSONCallbackFunc is the function type for the chat request
+// JSON callback.
+type ChatRequestJSONCallbackFunc func(
+	ctx context.Context,
+	chatRequestJSON []byte,
+	marshalErr error,
+)
+
 // ChatResponseCallbackFunc is the function type for the chat response callback.
 type ChatResponseCallbackFunc func(
 	ctx context.Context,
@@ -67,6 +75,8 @@ type options struct {
 	HTTPClientOptions []HTTPClientOption
 	// Callback for the chat request.
 	ChatRequestCallback ChatRequestCallbackFunc
+	// Callback for the marshaled chat request JSON.
+	ChatRequestJSONCallback ChatRequestJSONCallbackFunc
 	// Callback for the chat response.
 	ChatResponseCallback ChatResponseCallbackFunc
 	// Callback for the chat chunk.
@@ -170,6 +180,14 @@ func WithChannelBufferSize(size int) Option {
 func WithChatRequestCallback(fn ChatRequestCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatRequestCallback = fn
+	}
+}
+
+// WithChatRequestJSONCallback sets the function to be called with the
+// marshaled chat request JSON before sending the request.
+func WithChatRequestJSONCallback(fn ChatRequestJSONCallbackFunc) Option {
+	return func(opts *options) {
+		opts.ChatRequestJSONCallback = fn
 	}
 }
 
