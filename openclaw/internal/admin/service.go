@@ -33,6 +33,7 @@ const (
 	routeIndex      = "/"
 	routeOverview   = "/overview"
 	routeSkillsPage = "/skills"
+	routeMemory     = "/memory"
 	routeAutomation = "/automation"
 	routeSessions   = "/sessions"
 	routeDebug      = "/debug"
@@ -42,6 +43,8 @@ const (
 	routeSkillsJSON        = "/api/skills/status"
 	routeSkillsRefresh     = "/api/skills/refresh"
 	routeSkillToggle       = "/api/skills/toggle"
+	routeMemoryFilesJSON   = "/api/memory/files"
+	routeMemoryFile        = "/memory/file"
 	routeJobsJSON          = "/api/cron/jobs"
 	routeJobRun            = "/api/cron/jobs/run"
 	routeJobRemove         = "/api/cron/jobs/remove"
@@ -98,6 +101,7 @@ type adminView string
 const (
 	viewOverview   adminView = "overview"
 	viewSkills     adminView = "skills"
+	viewMemory     adminView = "memory"
 	viewAutomation adminView = "automation"
 	viewSessions   adminView = "sessions"
 	viewDebug      adminView = "debug"
@@ -138,6 +142,7 @@ type Config struct {
 	Channels      []string
 	GatewayRoutes Routes
 	Skills        SkillsStatusProvider
+	MemoryFiles   MemoryFileStore
 	Browser       BrowserConfig
 
 	Cron *cron.Service
@@ -260,6 +265,10 @@ func (s *Service) Handler() http.Handler {
 		wrapRelativeLinksFunc(s.handleSkillsPage),
 	)
 	mux.HandleFunc(
+		routeMemory,
+		wrapRelativeLinksFunc(s.handleMemoryPage),
+	)
+	mux.HandleFunc(
 		routeAutomation,
 		wrapRelativeLinksFunc(s.handleAutomationPage),
 	)
@@ -277,6 +286,8 @@ func (s *Service) Handler() http.Handler {
 	)
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
+	mux.HandleFunc(routeMemoryFilesJSON, s.handleMemoryFilesJSON)
+	mux.HandleFunc(routeMemoryFile, s.handleMemoryFile)
 	mux.HandleFunc(
 		routeSkillsRefresh,
 		wrapRelativeLinksFunc(s.handleRefreshSkills),
@@ -337,6 +348,7 @@ type snapshot struct {
 	Routes   Routes        `json:"routes,omitempty"`
 	Browser  browserStatus `json:"browser"`
 	Skills   skillsStatus  `json:"skills"`
+	Memory   memoryStatus  `json:"memory"`
 	Exec     execStatus    `json:"exec"`
 	Uploads  uploadsStatus `json:"uploads"`
 	Cron     cronStatus    `json:"cron"`
@@ -507,6 +519,7 @@ type adminNavItem struct {
 func (s *Service) Snapshot() snapshot {
 	out := s.baseSnapshot()
 	out.Skills = s.skillsStatus()
+	out.Memory = s.memoryStatusSummary()
 	out.Browser = s.browserStatus()
 	out.Exec = s.execStatus()
 	out.Uploads = s.uploadsStatus()
@@ -559,6 +572,8 @@ func (s *Service) snapshotForView(view adminView) snapshot {
 	switch view {
 	case viewSkills:
 		out.Skills = s.skillsStatus()
+	case viewMemory:
+		out.Memory = s.memoryStatus()
 	case viewAutomation:
 		out.Cron = s.cronStatus()
 	case viewSessions:
@@ -883,6 +898,13 @@ func (s *Service) handleSkillsPage(
 	s.renderPage(w, r, viewSkills)
 }
 
+func (s *Service) handleMemoryPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewMemory)
+}
+
 func (s *Service) handleAutomationPage(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -949,8 +971,9 @@ func adminNavSections(active adminView) []adminNavSection {
 			Items: []adminNavItem{
 				{Label: "Overview", Path: routeOverview},
 				{Label: "Skills", Path: routeSkillsPage},
-				{Label: "Automation", Path: routeAutomation},
 				{Label: "Sessions", Path: routeSessions},
+				{Label: "Memory", Path: routeMemory},
+				{Label: "Automation", Path: routeAutomation},
 			},
 		},
 		{
@@ -974,6 +997,8 @@ func pageTitle(view adminView) string {
 	switch view {
 	case viewSkills:
 		return "Skills"
+	case viewMemory:
+		return "Memory"
 	case viewAutomation:
 		return "Automation"
 	case viewSessions:
@@ -991,6 +1016,8 @@ func pageSummary(view adminView) string {
 	switch view {
 	case viewSkills:
 		return "Discover installed skills, refresh folders from disk, and manage config-backed enablement."
+	case viewMemory:
+		return "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory."
 	case viewAutomation:
 		return "Inspect scheduled jobs, trigger one-off runs, and clear automation state."
 	case viewSessions:
@@ -1024,6 +1051,45 @@ func (s *Service) handleSkillsJSON(
 		return
 	}
 	writeJSON(w, http.StatusOK, s.skillsStatus())
+}
+
+func (s *Service) handleMemoryFilesJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.memoryStatus())
+}
+
+func (s *Service) handleMemoryFile(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	root, configured, err := configuredMemoryRoot(s.cfg.MemoryFiles)
+	if err != nil || !configured {
+		http.Error(
+			w,
+			"memory file store is not configured",
+			http.StatusNotFound,
+		)
+		return
+	}
+	filePath, err := resolveMemoryFile(
+		root,
+		strings.TrimSpace(r.URL.Query().Get(queryPath)),
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.ServeFile(w, r, filePath)
 }
 
 func (s *Service) handleRefreshSkills(
@@ -1146,6 +1212,8 @@ func navPath(raw string) string {
 		return routeOverview
 	case routeSkillsPage:
 		return routeSkillsPage
+	case routeMemory:
+		return routeMemory
 	case routeAutomation:
 		return routeAutomation
 	case routeSessions:
@@ -1165,6 +1233,8 @@ func navViewForPath(path string) adminView {
 		return viewOverview
 	case routeSkillsPage:
 		return viewSkills
+	case routeMemory:
+		return viewMemory
 	case routeAutomation:
 		return viewAutomation
 	case routeSessions:
@@ -2451,6 +2521,60 @@ const adminPageHTML = `<!doctype html>
       margin: 8px 0 0;
       padding-left: 18px;
     }
+    .memory-preview {
+      max-width: 540px;
+      color: #3f3932;
+      white-space: pre-wrap;
+    }
+    .memory-scope {
+      display: grid;
+      gap: 4px;
+    }
+    .memory-controls {
+      margin: 18px 0 12px;
+    }
+    .memory-filter-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .memory-filter-head label {
+      color: var(--muted);
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
+    .memory-filter-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 12px;
+      min-width: 0;
+    }
+    .memory-filter-field {
+      min-width: 0;
+    }
+    .memory-filter-field label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
+    .memory-filter-field input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 12px 16px;
+      font: inherit;
+      background: var(--panel-strong);
+      color: var(--ink);
+    }
+    .memory-shown {
+      color: var(--muted);
+      font-weight: 700;
+      white-space: nowrap;
+    }
     @media (max-width: 760px) {
       .app-shell {
         grid-template-columns: 1fr;
@@ -2469,8 +2593,15 @@ const adminPageHTML = `<!doctype html>
       .skills-controls {
         grid-template-columns: 1fr;
       }
+      .memory-filter-grid {
+        grid-template-columns: 1fr;
+      }
       .skills-toolbar-side {
         justify-content: space-between;
+      }
+      .memory-filter-head {
+        align-items: flex-start;
+        flex-direction: column;
       }
       .skills-header {
         align-items: flex-start;
@@ -2551,6 +2682,10 @@ const adminPageHTML = `<!doctype html>
       <article class="card">
         <span class="stat-label">Skills</span>
         <span class="stat-value">{{.Snapshot.Skills.TotalCount}}</span>
+      </article>
+      <article class="card">
+        <span class="stat-label">Memory Files</span>
+        <span class="stat-value">{{.Snapshot.Memory.FileCount}}</span>
       </article>
       <article class="card">
         <span class="stat-label">Exec Sessions</span>
@@ -2676,6 +2811,7 @@ const adminPageHTML = `<!doctype html>
           <dd>
             <a href="/api/status">status</a> ·
             <a href="/api/skills/status">skills</a> ·
+            <a href="/api/memory/files">memory</a> ·
             <a href="/api/cron/jobs">jobs</a> ·
             <a href="/api/exec/sessions">exec</a> ·
             <a href="/api/uploads">uploads</a> ·
@@ -2755,6 +2891,29 @@ const adminPageHTML = `<!doctype html>
           <dd>{{len .Snapshot.Uploads.Sessions}}</dd>
           <dt>Open</dt>
           <dd><a href="/sessions">Sessions</a></dd>
+        </dl>
+      </article>
+
+      <article class="card">
+        <h2>Memory Surface</h2>
+        <p class="subtle">
+          Durable memory can use structured backends or file-backed
+          <code>MEMORY.md</code> scopes. The Memory page inventories the
+          file-backed scopes when this runtime uses the file backend.
+        </p>
+        <dl class="meta">
+          <dt>Backend</dt>
+          <dd>{{if .Snapshot.Memory.Backend}}{{.Snapshot.Memory.Backend}}{{else}}-{{end}}</dd>
+          <dt>File Memory</dt>
+          <dd>{{.Snapshot.Memory.FileEnabled}}</dd>
+          <dt>Files</dt>
+          <dd>{{.Snapshot.Memory.FileCount}}</dd>
+          <dt>Total Bytes</dt>
+          <dd>{{.Snapshot.Memory.TotalBytes}}</dd>
+          <dt>JSON</dt>
+          <dd><a href="/api/memory/files">/api/memory/files</a></dd>
+          <dt>Open</dt>
+          <dd><a href="/memory">Memory</a></dd>
         </dl>
       </article>
 
@@ -3115,6 +3274,167 @@ const adminPageHTML = `<!doctype html>
       {{end}}
       {{else if not .Snapshot.Skills.Error}}
       <p class="empty">No skills discovered.</p>
+      {{end}}
+    </section>
+    {{end}}
+
+    {{if eq .View "memory"}}
+    <section class="panels">
+      <article class="card">
+        <h2>Memory Backend</h2>
+        <dl class="meta">
+          <dt>Backend</dt>
+          <dd>{{if .Snapshot.Memory.Backend}}{{.Snapshot.Memory.Backend}}{{else}}-{{end}}</dd>
+          <dt>Storage Mode</dt>
+          <dd>
+            {{if eq .Snapshot.Memory.Backend "file"}}
+              {{if .Snapshot.Memory.FileEnabled}}
+                File-backed <code>MEMORY.md</code>
+              {{else}}
+                file backend not configured
+              {{end}}
+            {{else if .Snapshot.Memory.FileEnabled}}
+              File-backed <code>MEMORY.md</code>
+            {{else if .Snapshot.Memory.Enabled}}
+              Structured memory service
+            {{else}}
+              unavailable
+            {{end}}
+          </dd>
+          <dt>Structured Memory</dt>
+          <dd>
+            {{if eq .Snapshot.Memory.Backend "file"}}
+              not used by file backend
+            {{else if and .Snapshot.Memory.Enabled (not .Snapshot.Memory.FileEnabled)}}
+              enabled
+            {{else}}
+              unavailable
+            {{end}}
+          </dd>
+          <dt>File Inventory</dt>
+          <dd>
+            {{if eq .Snapshot.Memory.Backend "file"}}
+              {{if .Snapshot.Memory.FileEnabled}}available{{else}}not configured{{end}}
+            {{else}}
+              not available
+            {{end}}
+          </dd>
+          <dt>JSON</dt>
+          <dd><a href="/api/memory/files">/api/memory/files</a></dd>
+        </dl>
+      </article>
+      <article class="card">
+        <h2>File Inventory</h2>
+        <dl class="meta">
+          <dt>Root</dt>
+          <dd>
+            {{if .Snapshot.Memory.Root}}
+              <code>{{.Snapshot.Memory.Root}}</code>
+            {{else}}
+              -
+            {{end}}
+          </dd>
+          <dt>Files</dt>
+          <dd>{{.Snapshot.Memory.FileCount}}</dd>
+          <dt>Total Bytes</dt>
+          <dd>{{.Snapshot.Memory.TotalBytes}}</dd>
+          <dt>Last Modified</dt>
+          <dd>{{formatTime .Snapshot.Memory.LastModified}}</dd>
+        </dl>
+      </article>
+    </section>
+
+    <section class="card" style="margin-top: 24px;">
+      <h2>Memory Files</h2>
+      <p class="subtle">
+        File-backed memory stores one visible <code>MEMORY.md</code> per
+        app/user scope. Use this inventory to inspect what durable memory the
+        runtime can inject into future turns.
+      </p>
+      {{if .Snapshot.Memory.Error}}
+      <div class="notice err" style="margin-top: 12px;">
+        {{.Snapshot.Memory.Error}}
+      </div>
+      {{end}}
+      {{if .Snapshot.Memory.Files}}
+      <div class="memory-controls" data-memory-root>
+        <div class="memory-filter-head">
+          <label for="memory-search">Search memory</label>
+          <span class="memory-shown">
+            <span data-memory-shown>{{.Snapshot.Memory.FileCount}}</span> shown
+          </span>
+        </div>
+        <div class="memory-filter-grid">
+          <div class="memory-filter-field">
+            <input
+              id="memory-search"
+              type="search"
+              placeholder="Search users or memory content"
+              data-memory-search
+            >
+          </div>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Scope</th>
+            <th>Preview</th>
+            <th>File</th>
+            <th>Size</th>
+            <th>Modified</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Snapshot.Memory.Files}}
+          <tr
+            data-memory-row
+            data-memory-app="{{.AppName}}"
+            data-memory-user="{{.UserID}}"
+            data-memory-search="{{.UserID}} {{.Preview}}"
+          >
+            <td>
+              <div class="memory-scope">
+                <span>app <code>{{.AppName}}</code></span>
+                <span>user <code>{{.UserID}}</code></span>
+              </div>
+            </td>
+            <td>
+              {{if .Preview}}
+              <div class="memory-preview">{{.Preview}}</div>
+              {{else}}
+              <span class="subtle">empty</span>
+              {{end}}
+            </td>
+            <td>
+              <a href="{{.OpenURL}}" target="_blank" rel="noopener noreferrer">
+                open
+              </a>
+              <br>
+              <code>{{.RelativePath}}</code>
+            </td>
+            <td>{{.SizeBytes}}</td>
+            <td>{{formatTime .ModifiedAt}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      <p class="empty" data-memory-empty hidden>No matching memory files.</p>
+      {{else if not .Snapshot.Memory.Error}}
+      <p class="empty">
+        {{if eq .Snapshot.Memory.Backend "file"}}
+          {{if .Snapshot.Memory.FileEnabled}}
+            No file-backed memory files discovered yet.
+          {{else}}
+            File-backed memory store is not configured for this runtime.
+          {{end}}
+        {{else if .Snapshot.Memory.FileEnabled}}
+          No file-backed memory files discovered yet.
+        {{else}}
+          File-backed memory inventory is only available when the runtime uses
+          the <code>file</code> memory backend.
+        {{end}}
+      </p>
       {{end}}
     </section>
     {{end}}
@@ -3920,6 +4240,40 @@ const adminPageHTML = `<!doctype html>
       });
       refresh();
       restoreScrollPosition();
+    })();
+
+    (function () {
+      const root = document.querySelector("[data-memory-root]");
+      if (!root) return;
+
+      const search = root.querySelector("[data-memory-search]");
+      const shown = root.querySelector("[data-memory-shown]");
+      const empty = document.querySelector("[data-memory-empty]");
+      const rows = Array.from(document.querySelectorAll("[data-memory-row]"));
+
+      const matches = (row) => {
+        const needle = (search && search.value ? search.value : "").trim().toLowerCase();
+        if (!needle) return true;
+        const haystack = (row.getAttribute("data-memory-search") || "").toLowerCase();
+        if (haystack.indexOf(needle) === -1) return false;
+        return true;
+      };
+
+      const refresh = () => {
+        let visibleCount = 0;
+        rows.forEach((row) => {
+          const visible = matches(row);
+          row.hidden = !visible;
+          if (visible) visibleCount += 1;
+        });
+        if (shown) shown.textContent = String(visibleCount);
+        if (empty) empty.hidden = visibleCount !== 0;
+      };
+
+      if (search) {
+        search.addEventListener("input", refresh);
+      }
+      refresh();
     })();
   </script>
       </div>

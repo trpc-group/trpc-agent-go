@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
@@ -364,6 +365,293 @@ func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
 	require.Contains(t, body, "OPENAI_API_KEY")
 }
 
+func TestServiceHandlerRendersMemoryInventory(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+	_, err = store.UpdateMemory(
+		context.Background(),
+		"openclaw",
+		"alice",
+		func(string) (string, error) {
+			return "# Memory\n\n- Alice prefers concise updates.\n", nil
+		},
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeMemory, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "Memory Files")
+	require.Contains(t, body, "openclaw")
+	require.Contains(t, body, "alice")
+	require.Contains(t, body, "Alice prefers concise updates.")
+	require.Contains(t, body, `href="api/memory/files"`)
+	require.Contains(t, body, `href="memory/file?path=`)
+	require.Contains(t, body, `data-memory-root`)
+	require.Contains(t, body, `data-memory-search`)
+	require.Contains(t, body, `data-memory-row`)
+	require.Contains(t, body, `data-memory-app="openclaw"`)
+	require.Contains(t, body, `data-memory-user="alice"`)
+	require.Contains(t, body, `data-memory-search="alice`)
+	require.Contains(t, body, "Search users or memory content")
+}
+
+func TestServiceHandlerRendersMemoryInventory_FileBackendUnconfigured(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		MemoryBackend: "file",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeMemory, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "file backend not configured")
+	require.Contains(t, body, "File-backed memory store is not configured for this runtime.")
+	require.Contains(t, body, "not configured")
+	require.NotContains(t, body, "Structured memory service")
+}
+
+func TestServiceMemoryFilesJSONEndpoint(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+	_, err = store.UpdateMemory(
+		context.Background(),
+		"openclaw",
+		"alice",
+		func(string) (string, error) {
+			return "# Memory\n\n- Alice prefers concise updates.\n", nil
+		},
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeMemoryFilesJSON, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, `"file_count": 1`)
+	require.Contains(t, body, `"app_name": "openclaw"`)
+	require.Contains(t, body, `"user_id": "alice"`)
+}
+
+func TestServiceMemoryFilesJSONEndpoint_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+	req := httptest.NewRequest(http.MethodPost, routeMemoryFilesJSON, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
+
+func TestServiceMemoryFileEndpoint(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+	_, err = store.UpdateMemory(
+		context.Background(),
+		"openclaw",
+		"alice",
+		func(string) (string, error) {
+			return "# Memory\n\n- Alice prefers concise updates.\n", nil
+		},
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+	status := svc.memoryStatus()
+	require.Len(t, status.Files, 1)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		routeMemoryFile+"?path="+url.QueryEscape(
+			status.Files[0].RelativePath,
+		),
+		nil,
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "Alice prefers concise updates.")
+}
+
+func TestServiceMemoryFileEndpointRequiresStore(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+	req := httptest.NewRequest(
+		http.MethodGet,
+		routeMemoryFile+"?path=app%2Fuser%2FMEMORY.md",
+		nil,
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	require.Contains(t, rr.Body.String(), "not configured")
+}
+
+func TestServiceMemoryFileEndpointRejectsTypedNilStore(t *testing.T) {
+	t.Parallel()
+
+	var typedNil *memoryfile.Store
+	var store MemoryFileStore = typedNil
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+	req := httptest.NewRequest(
+		http.MethodGet,
+		routeMemoryFile+"?path=app%2Fuser%2FMEMORY.md",
+		nil,
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	require.Contains(t, rr.Body.String(), "not configured")
+}
+
+func TestServiceMemoryFileEndpoint_MethodAndPathValidation(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, routeMemoryFile, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+
+	req = httptest.NewRequest(
+		http.MethodGet,
+		routeMemoryFile+"?path="+url.QueryEscape(filepath.Join(root, "app", "user", "MEMORY.md")),
+		nil,
+	)
+	rr = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "invalid memory file path")
+}
+
+func TestResolveMemoryFileGuards(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "app", "user")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	path := filepath.Join(dir, "MEMORY.md")
+	require.NoError(t, os.WriteFile(path, []byte("# Memory\n"), 0o600))
+
+	got, err := resolveMemoryFile(root, "app/user/MEMORY.md")
+	require.NoError(t, err)
+	expected, err := filepath.EvalSymlinks(path)
+	require.NoError(t, err)
+	require.Equal(t, expected, got)
+
+	_, err = resolveMemoryFile("", "app/user/MEMORY.md")
+	require.ErrorContains(t, err, "not configured")
+
+	_, err = resolveMemoryFile(root, "")
+	require.ErrorContains(t, err, "required")
+
+	_, err = resolveMemoryFile(root, "../MEMORY.md")
+	require.ErrorContains(t, err, "invalid memory file path")
+
+	_, err = resolveMemoryFile(root, "app/user/notes.md")
+	require.ErrorContains(t, err, "unsupported memory file")
+
+	_, err = resolveMemoryFile(root, "app/user/missing/MEMORY.md")
+	require.ErrorContains(t, err, "memory file not found")
+}
+
+func TestSummarizeMemoryPreview(t *testing.T) {
+	t.Parallel()
+
+	input := "# Memory\n\n- first\n- second\n- third\n- fourth\n"
+	got := summarizeMemoryPreview(input, 3, 220)
+	require.Equal(t, "- first\n- second\n- third...", got)
+
+	got = summarizeMemoryPreview("# Memory\n\n- only one\n", 3, 220)
+	require.Equal(t, "- only one", got)
+
+	got = summarizeMemoryPreview("# Memory\n\n", 3, 220)
+	require.Empty(t, got)
+}
+
+func TestServiceSnapshotOmitsMemoryFilesFromStatus(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+	_, err = store.UpdateMemory(
+		context.Background(),
+		"openclaw",
+		"alice",
+		func(string) (string, error) {
+			return "# Memory\n\n- Alice prefers concise updates.\n", nil
+		},
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+
+	snap := svc.Snapshot()
+	require.Equal(t, 1, snap.Memory.FileCount)
+	require.Len(t, snap.Memory.Files, 0)
+
+	viewSnap := svc.snapshotForView(viewMemory)
+	require.Len(t, viewSnap.Memory.Files, 1)
+	require.Equal(t, "alice", viewSnap.Memory.Files[0].UserID)
+}
+
 func TestServiceRenderPageScopesSnapshotToActiveView(t *testing.T) {
 	t.Parallel()
 
@@ -429,6 +717,12 @@ func TestServiceHandlerRendersAdminPages(t *testing.T) {
 		title   string
 		summary string
 	}{
+		{
+			name:    "memory",
+			path:    routeMemory,
+			title:   "Memory",
+			summary: "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory.",
+		},
 		{
 			name:    "automation",
 			path:    routeAutomation,
@@ -740,6 +1034,12 @@ func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
 			view:    viewSkills,
 			title:   "Skills",
 			summary: "Discover installed skills, refresh folders from disk, and manage config-backed enablement.",
+		},
+		{
+			path:    routeMemory,
+			view:    viewMemory,
+			title:   "Memory",
+			summary: "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory.",
 		},
 		{
 			path:    routeAutomation,
