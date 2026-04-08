@@ -13,6 +13,7 @@ package url
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -143,63 +144,9 @@ func (s *Source) processURL(ctx context.Context, fetchingURL string, identifierU
 		return s.readExtractedResult(ctx, urlExtractor, fetchingURL, parsedIdentifierURL, fileName)
 	}
 
-	// Create HTTP request with context.
-	req, err := http.NewRequestWithContext(ctx, "GET", fetchingURL, nil)
+	documents, _, err := s.fetchAndRead(ctx, fetchingURL, parsedIdentifierURL, fileName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// Set user agent to avoid being blocked.
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; KnowledgeSource/1.0)")
-
-	// Make the request.
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download URL: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP error: %d", resp.StatusCode)
-	}
-
-	// Determine the content type and file name.
-	contentType := resp.Header.Get("Content-Type")
-	fileName = s.getFileName(parsedIdentifierURL, contentType)
-
-	var documents []*document.Document
-	ext := strings.ToLower(filepath.Ext(fileName))
-	if s.contentExtractor != nil && !extractor.Supports(s.contentExtractor, ext) {
-		if inferredExt := extractorExtFromContentType(contentType); inferredExt != "" {
-			ext = inferredExt
-		}
-	}
-	if s.contentExtractor != nil && extractor.Supports(s.contentExtractor, ext) {
-		result, err := s.contentExtractor.ExtractFromReader(ctx, resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("content extraction failed: %w", err)
-		}
-		r, exists := s.readers[result.Format]
-		if !exists {
-			return nil, fmt.Errorf("no reader available for extracted format: %s", result.Format)
-		}
-		documents, err = r.ReadFromReader(fileName, result.Reader)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read extracted content with reader: %w", err)
-		}
-	} else {
-		// Determine file type and get appropriate reader.
-		fileType := isource.ResolveFileType(string(s.fileReaderType), isource.GetFileTypeFromContentType(contentType, fileName))
-		reader, exists := s.readers[fileType]
-		if !exists {
-			return nil, fmt.Errorf("no reader available for file type: %s", fileType)
-		}
-
-		// Read the content using the reader's ReadFromReader method.
-		documents, err = reader.ReadFromReader(fileName, resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read content with reader: %w", err)
-		}
+		return nil, err
 	}
 
 	// Create metadata for this URL.
@@ -225,6 +172,76 @@ func (s *Source) processURL(ctx context.Context, fetchingURL string, identifierU
 		}
 	}
 
+	return documents, nil
+}
+
+// fetchAndRead performs the HTTP download and reads the content using the appropriate reader or extractor.
+// It returns the documents, the resolved file name, and any error.
+func (s *Source) fetchAndRead(ctx context.Context, fetchingURL string, parsedIdentifierURL *url.URL, fileName string) ([]*document.Document, string, error) {
+	// Create HTTP request with context.
+	req, err := http.NewRequestWithContext(ctx, "GET", fetchingURL, nil)
+	if err != nil {
+		return nil, fileName, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set user agent to avoid being blocked.
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; KnowledgeSource/1.0)")
+
+	// Make the request.
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, fileName, fmt.Errorf("failed to download URL: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fileName, fmt.Errorf("HTTP error: %d", resp.StatusCode)
+	}
+
+	// Determine the content type and file name.
+	contentType := resp.Header.Get("Content-Type")
+	fileName = s.getFileName(parsedIdentifierURL, contentType)
+
+	ext := strings.ToLower(filepath.Ext(fileName))
+	if s.contentExtractor != nil && !extractor.Supports(s.contentExtractor, ext) {
+		if inferredExt := extractorExtFromContentType(contentType); inferredExt != "" {
+			ext = inferredExt
+		}
+	}
+	if s.contentExtractor != nil && extractor.Supports(s.contentExtractor, ext) {
+		docs, err := s.extractFromResponse(ctx, resp.Body, fileName)
+		return docs, fileName, err
+	}
+
+	// Determine file type and get appropriate reader.
+	fileType := isource.ResolveFileType(string(s.fileReaderType), isource.GetFileTypeFromContentType(contentType, fileName))
+	r, exists := s.readers[fileType]
+	if !exists {
+		return nil, fileName, fmt.Errorf("no reader available for file type: %s", fileType)
+	}
+
+	// Read the content using the reader's ReadFromReader method.
+	documents, err := r.ReadFromReader(fileName, resp.Body)
+	if err != nil {
+		return nil, fileName, fmt.Errorf("failed to read content with reader: %w", err)
+	}
+	return documents, fileName, nil
+}
+
+// extractFromResponse uses the content extractor to process the HTTP response body.
+func (s *Source) extractFromResponse(ctx context.Context, body io.Reader, fileName string) ([]*document.Document, error) {
+	result, err := s.contentExtractor.ExtractFromReader(ctx, body)
+	if err != nil {
+		return nil, fmt.Errorf("content extraction failed: %w", err)
+	}
+	r, exists := s.readers[result.Format]
+	if !exists {
+		return nil, fmt.Errorf("no reader available for extracted format: %s", result.Format)
+	}
+	documents, err := r.ReadFromReader(fileName, result.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read extracted content with reader: %w", err)
+	}
 	return documents, nil
 }
 
