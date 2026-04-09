@@ -13,6 +13,7 @@
 // Prerequisites:
 //   - A running Docling Serve instance (default: http://localhost:5001)
 //     docker run -p 5001:5001 ghcr.io/docling-project/docling-serve
+//
 // Example usage:
 //
 //	cd examples/knowledge/features/extractor
