@@ -118,7 +118,9 @@ func WithFileReaderType(fileType source.FileReaderType) Option {
 
 // WithExtractor sets a content extractor for handling complex or unsupported formats.
 // When configured, the extractor is used for URL content whose inferred file
-// extension matches the extractor's supported formats.
+// extension matches the extractor's supported formats. The source always
+// fetches content through the configured HTTP client and passes the response
+// body to ExtractFromReader.
 func WithExtractor(e extractor.Extractor) Option {
 	return func(s *Source) {
 		s.contentExtractor = e

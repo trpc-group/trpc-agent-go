@@ -14,7 +14,7 @@ docker run -p 5001:5001 ghcr.io/docling-project/docling-serve
 
 ## Run the example
 
-From [`examples/knowledge`](../main.go), run:
+From [`examples/knowledge`](../README.md), run:
 
 ```bash
 go run ./features/extractor -endpoint http://127.0.0.1:5001 -output ./output

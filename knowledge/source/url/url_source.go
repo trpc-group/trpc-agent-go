@@ -139,11 +139,6 @@ func (s *Source) processURL(ctx context.Context, fetchingURL string, identifierU
 	}
 
 	fileName := s.getFileName(parsedIdentifierURL, "")
-	if s.shouldUseURLExtractor(parsedIdentifierURL) {
-		urlExtractor := s.contentExtractor.(extractor.URLExtractor)
-		return s.readExtractedResult(ctx, urlExtractor, fetchingURL, parsedIdentifierURL, fileName)
-	}
-
 	documents, _, err := s.fetchAndRead(ctx, fetchingURL, parsedIdentifierURL, fileName)
 	if err != nil {
 		return nil, err
@@ -241,64 +236,6 @@ func (s *Source) extractFromResponse(ctx context.Context, body io.Reader, fileNa
 	documents, err := r.ReadFromReader(fileName, result.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read extracted content with reader: %w", err)
-	}
-	return documents, nil
-}
-
-func (s *Source) shouldUseURLExtractor(parsedIdentifierURL *url.URL) bool {
-	if s.contentExtractor == nil {
-		return false
-	}
-	urlExtractor, ok := s.contentExtractor.(extractor.URLExtractor)
-	if !ok || urlExtractor == nil {
-		return false
-	}
-	ext := strings.ToLower(filepath.Ext(parsedIdentifierURL.Path))
-	if ext == "" {
-		return false
-	}
-	return extractor.Supports(s.contentExtractor, ext)
-}
-
-func (s *Source) readExtractedResult(
-	ctx context.Context,
-	urlExtractor extractor.URLExtractor,
-	fetchingURL string,
-	parsedIdentifierURL *url.URL,
-	fileName string,
-) ([]*document.Document, error) {
-	result, err := urlExtractor.ExtractFromURL(ctx, fetchingURL)
-	if err != nil {
-		return nil, fmt.Errorf("content extraction failed: %w", err)
-	}
-	r, exists := s.readers[result.Format]
-	if !exists {
-		return nil, fmt.Errorf("no reader available for extracted format: %s", result.Format)
-	}
-	documents, err := r.ReadFromReader(fileName, result.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read extracted content with reader: %w", err)
-	}
-
-	metadata := make(map[string]any)
-	for k, v := range s.metadata {
-		metadata[k] = v
-	}
-	metadata[source.MetaSource] = source.TypeURL
-	metadata[source.MetaURL] = parsedIdentifierURL.String()
-	metadata[source.MetaURLHost] = parsedIdentifierURL.Host
-	metadata[source.MetaURLPath] = parsedIdentifierURL.Path
-	metadata[source.MetaURLScheme] = parsedIdentifierURL.Scheme
-	metadata[source.MetaURI] = parsedIdentifierURL.String()
-	metadata[source.MetaSourceName] = s.name
-
-	for _, doc := range documents {
-		if doc.Metadata == nil {
-			doc.Metadata = make(map[string]any)
-		}
-		for k, v := range metadata {
-			doc.Metadata[k] = v
-		}
 	}
 	return documents, nil
 }

@@ -36,8 +36,7 @@ const (
 	defaultEndpoint = "http://localhost:5001"
 	defaultTimeout  = 5 * time.Minute
 
-	convertFilePath   = "/v1/convert/file"
-	convertSourcePath = "/v1/convert/source"
+	convertFilePath = "/v1/convert/file"
 )
 
 // Extractor implements extractor.Extractor by calling a Docling Serve instance.
@@ -77,13 +76,6 @@ func (e *Extractor) ExtractFromReader(ctx context.Context, r io.Reader, opts ...
 // SupportedFormats returns the file extensions this extractor handles.
 func (e *Extractor) SupportedFormats() []string {
 	return e.opts.formats
-}
-
-// ExtractFromURL converts content from a remote URL using Docling Serve's
-// source conversion endpoint. This avoids downloading supported URLs locally
-// before sending them to Docling.
-func (e *Extractor) ExtractFromURL(ctx context.Context, sourceURL string, opts ...extractor.Option) (*extractor.Result, error) {
-	return e.doSourceConvert(ctx, sourceURL, extractor.ApplyOptions(opts...))
 }
 
 // Close releases resources. Docling extractor is stateless, so this is a no-op.

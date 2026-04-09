@@ -27,22 +27,6 @@ type convertOptions struct {
 	DoOCR           *bool        `json:"do_ocr,omitempty"`
 }
 
-type httpSourceRequest struct {
-	URL     string         `json:"url"`
-	Headers map[string]any `json:"headers,omitempty"`
-	Kind    string         `json:"kind"`
-}
-
-type inBodyTarget struct {
-	Kind string `json:"kind"`
-}
-
-type convertSourceRequest struct {
-	Options convertOptions      `json:"options,omitempty"`
-	Sources []httpSourceRequest `json:"sources"`
-	Target  inBodyTarget        `json:"target"`
-}
-
 type convertDocumentResponse struct {
 	Document exportDocumentResponse `json:"document"`
 	Status   string                 `json:"status"`
@@ -176,42 +160,6 @@ func (e *Extractor) doFileConvert(ctx context.Context, r io.Reader, eopts *extra
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := e.opts.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("docling request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	convResp, err := decodeConvertResponse(resp)
-	if err != nil {
-		return nil, err
-	}
-	return toExtractorResult(convResp, eopts.OutputFormat)
-}
-
-func (e *Extractor) doSourceConvert(ctx context.Context, sourceURL string, eopts *extractor.Options) (*extractor.Result, error) {
-	reqBody := convertSourceRequest{
-		Options: buildConvertOptions(e.opts, eopts),
-		Sources: []httpSourceRequest{{
-			URL:  sourceURL,
-			Kind: "http",
-		}},
-		Target: inBodyTarget{Kind: "inbody"},
-	}
-
-	payload, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal docling source request: %w", err)
-	}
-
-	url := strings.TrimRight(e.opts.endpoint, "/") + convertSourcePath
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := e.opts.httpClient.Do(req)

@@ -66,14 +66,6 @@ type Extractor interface {
 	Close() error
 }
 
-// URLExtractor is an optional extension interface for extractors that can
-// directly process a remote URL without the caller downloading the content
-// first. Implementations may use service-side source fetching APIs.
-type URLExtractor interface {
-	// ExtractFromURL converts content fetched directly from the given URL.
-	ExtractFromURL(ctx context.Context, sourceURL string, opts ...Option) (*Result, error)
-}
-
 // Option defines a function type for configuring extraction operations.
 type Option func(*Options)
 

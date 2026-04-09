@@ -41,6 +41,7 @@ nav:
           - Reranker: knowledge/reranker.md
           - Source: knowledge/source.md
           - Filter: knowledge/filter.md
+          - Extractor: knowledge/extractor.md
           - Management: knowledge/management.md
           - OCR: knowledge/ocr.md
           - VectorStore:

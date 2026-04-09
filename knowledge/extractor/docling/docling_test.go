@@ -281,14 +281,7 @@ func TestBuildPipelineOptions(t *testing.T) {
 		ext      *Extractor
 		eopts    *extractor.Options
 		contains []string
-		empty    bool
 	}{
-		{
-			name:  "default options produce empty pipeline opts",
-			ext:   New(),
-			eopts: &extractor.Options{},
-			empty: true,
-		},
 		{
 			name:  "default options",
 			ext:   New(),
@@ -329,42 +322,8 @@ func TestBuildPipelineOptions(t *testing.T) {
 	}
 }
 
-func TestExtractFromURL_Success(t *testing.T) {
-	server := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, convertSourcePath, r.URL.Path)
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
-
-		var req convertSourceRequest
-		err := json.NewDecoder(r.Body).Decode(&req)
-		require.NoError(t, err)
-		require.Len(t, req.Sources, 1)
-		assert.Equal(t, "http", req.Sources[0].Kind)
-		assert.Equal(t, "https://example.com/test.pdf", req.Sources[0].URL)
-		assert.Equal(t, "inbody", req.Target.Kind)
-		assert.Equal(t, []string{"md"}, req.Options.ToFormats)
-		assert.Equal(t, ImageRefModePlaceholder, req.Options.ImageExportMode)
-
-		resp := convertDocumentResponse{}
-		resp.Document.MdContent = "# From URL"
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	})
-	defer server.Close()
-
-	ext := New(WithEndpoint(server.URL))
-	result, err := ext.ExtractFromURL(context.Background(), "https://example.com/test.pdf")
-	require.NoError(t, err)
-
-	content, err := io.ReadAll(result.Reader)
-	require.NoError(t, err)
-	assert.Equal(t, extractor.FormatMarkdown, result.Format)
-	assert.Equal(t, "# From URL", string(content))
-}
-
 // Verify that Extractor implements the extractor.Extractor interface at compile time.
 var _ extractor.Extractor = (*Extractor)(nil)
-var _ extractor.URLExtractor = (*Extractor)(nil)
 
 // TestDecodeConvertResponse_ConversionFailed verifies error when status is not "success".
 func TestDecodeConvertResponse_ConversionFailed(t *testing.T) {
@@ -460,79 +419,6 @@ func TestWriteFileRequest_MultipleFormats(t *testing.T) {
 	// OCR enabled (default) - do_ocr field should NOT be written
 	ext := New(WithEndpoint(server.URL), WithOCR(true))
 	result, err := ext.Extract(context.Background(), []byte("data"))
-	require.NoError(t, err)
-	assert.NotNil(t, result)
-}
-
-// TestExtractFromURL_ServerError verifies error handling when source convert returns non-200.
-func TestExtractFromURL_ServerError(t *testing.T) {
-	server := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadGateway)
-		w.Write([]byte("bad gateway"))
-	})
-	defer server.Close()
-
-	ext := New(WithEndpoint(server.URL))
-	_, err := ext.ExtractFromURL(context.Background(), "https://example.com/test.pdf")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "502")
-}
-
-// TestExtractFromURL_EmptyContent verifies error when source convert returns empty content.
-func TestExtractFromURL_EmptyContent(t *testing.T) {
-	server := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		resp := convertDocumentResponse{}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	})
-	defer server.Close()
-
-	ext := New(WithEndpoint(server.URL))
-	_, err := ext.ExtractFromURL(context.Background(), "https://example.com/test.pdf")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "empty content")
-}
-
-// TestExtractFromURL_ConnectionRefused verifies error when source convert endpoint is unreachable.
-func TestExtractFromURL_ConnectionRefused(t *testing.T) {
-	ext := New(WithEndpoint("http://localhost:1"))
-	_, err := ext.ExtractFromURL(context.Background(), "https://example.com/test.pdf")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "docling request failed")
-}
-
-// TestExtractFromURL_InvalidJSON verifies error when source convert returns invalid JSON.
-func TestExtractFromURL_InvalidJSON(t *testing.T) {
-	server := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("not json"))
-	})
-	defer server.Close()
-
-	ext := New(WithEndpoint(server.URL))
-	_, err := ext.ExtractFromURL(context.Background(), "https://example.com/test.pdf")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to decode")
-}
-
-// TestExtractFromURL_WithOCRDisabled verifies OCR disabled is passed to source convert.
-func TestExtractFromURL_WithOCRDisabled(t *testing.T) {
-	server := newMockServer(t, func(w http.ResponseWriter, r *http.Request) {
-		var req convertSourceRequest
-		err := json.NewDecoder(r.Body).Decode(&req)
-		require.NoError(t, err)
-		require.NotNil(t, req.Options.DoOCR)
-		assert.False(t, *req.Options.DoOCR)
-
-		resp := convertDocumentResponse{}
-		resp.Document.MdContent = "# No OCR URL"
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	})
-	defer server.Close()
-
-	ext := New(WithEndpoint(server.URL), WithOCR(false))
-	result, err := ext.ExtractFromURL(context.Background(), "https://example.com/test.pdf")
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 }
