@@ -57,6 +57,29 @@ type stubSkillsProvider struct {
 	setErr        error
 }
 
+type stubPromptsProvider struct {
+	status PromptsStatus
+	err    error
+
+	runtimeBundle string
+	runtimeValue  string
+	runtimeCount  int
+
+	fileBundle string
+	filePath   string
+	fileValue  string
+	fileCount  int
+
+	createBundle string
+	createName   string
+	createValue  string
+	createCount  int
+
+	deleteBundle string
+	deletePath   string
+	deleteCount  int
+}
+
 func (p stubBMP) BrowserManagedStatus() BrowserManagedService {
 	return p.status
 }
@@ -101,6 +124,72 @@ func (p *stubSkillsProvider) SetSkillEnabled(
 	p.lastConfigKey = configKey
 	p.lastEnabled = enabled
 	return p.setErr
+}
+
+func (p *stubPromptsProvider) PromptsStatus() (
+	PromptsStatus,
+	error,
+) {
+	if p == nil {
+		return PromptsStatus{}, nil
+	}
+	return p.status, p.err
+}
+
+func (p *stubPromptsProvider) SavePromptRuntime(
+	bundleKey string,
+	content string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.runtimeCount++
+	p.runtimeBundle = bundleKey
+	p.runtimeValue = content
+	return nil
+}
+
+func (p *stubPromptsProvider) SavePromptFile(
+	bundleKey string,
+	path string,
+	content string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.fileCount++
+	p.fileBundle = bundleKey
+	p.filePath = path
+	p.fileValue = content
+	return nil
+}
+
+func (p *stubPromptsProvider) CreatePromptFile(
+	bundleKey string,
+	fileName string,
+	content string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.createCount++
+	p.createBundle = bundleKey
+	p.createName = fileName
+	p.createValue = content
+	return nil
+}
+
+func (p *stubPromptsProvider) DeletePromptFile(
+	bundleKey string,
+	path string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.deleteCount++
+	p.deleteBundle = bundleKey
+	p.deletePath = path
+	return nil
 }
 
 func (r *stubRunner) Run(
@@ -1036,6 +1125,12 @@ func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
 			summary: "Discover installed skills, refresh folders from disk, and manage config-backed enablement.",
 		},
 		{
+			path:    routePrompts,
+			view:    viewPrompts,
+			title:   "Prompts",
+			summary: "Inspect effective prompts, edit prompt files, and apply live runtime overrides.",
+		},
+		{
 			path:    routeMemory,
 			view:    viewMemory,
 			title:   "Memory",
@@ -1082,6 +1177,58 @@ func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
 	require.Equal(t, viewOverview, navViewForPath(routeIndex))
 	require.Empty(t, navPath(" /unknown "))
 	require.Equal(t, viewOverview, navViewForPath(" /unknown "))
+}
+
+func TestService_PromptsPageAndActions(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubPromptsProvider{
+		status: PromptsStatus{
+			Enabled: true,
+			Bundles: []PromptBundleState{{
+				Key:             "agent_instruction",
+				Title:           "Agent Instruction",
+				EffectiveValue:  "live prompt",
+				ConfiguredValue: "configured prompt",
+				RuntimeEditable: true,
+				Files: []PromptFileState{{
+					Path:    "/tmp/instruction.md",
+					Label:   "instruction.md",
+					Content: "body",
+				}},
+			}},
+		},
+	}
+	svc := New(Config{Prompts: provider})
+
+	req := httptest.NewRequest(http.MethodGet, routePrompts, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "Prompt Management")
+	require.Contains(t, rec.Body.String(), "Agent Instruction")
+
+	values := url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptContent:   {"override"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptRuntimeSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, provider.runtimeCount)
+	require.Equal(t, "agent_instruction", provider.runtimeBundle)
+	require.Equal(t, "override", provider.runtimeValue)
 }
 
 func TestSkillInstallViewsFromStatus_TrimsValues(t *testing.T) {

@@ -996,6 +996,7 @@ func NewRuntime(
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			rt.prompts,
 			nil,
 			opts.AdminAddr,
 			adminURL,
@@ -1284,6 +1285,11 @@ func run(ctx context.Context, args []string) error {
 			Err:  fmt.Errorf("create agent failed: %w", err),
 		}
 	}
+	promptController := newRuntimePromptController(
+		ag,
+		prompts.Instruction,
+		prompts.SystemPrompt,
+	)
 
 	bridgedSessionSvc := conversationscope.WrapSessionService(sessionSvc)
 	runnerOpts := []runner.Option{
@@ -1478,6 +1484,7 @@ func run(ctx context.Context, args []string) error {
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			promptController,
 			browserServerSup,
 			adminBinding.addr,
 			adminBinding.url,

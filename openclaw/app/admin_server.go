@@ -119,6 +119,7 @@ func buildAdminConfig(
 	routes admin.Routes,
 	cronSvc *cron.Service,
 	execMgr *octool.Manager,
+	promptController *RuntimePromptController,
 	browserManaged admin.BrowserManagedStatusProvider,
 	adminAddr string,
 	adminURL string,
@@ -153,6 +154,10 @@ func buildAdminConfig(
 			stateDir,
 			skillsRepo,
 			skillsWatch,
+		),
+		Prompts: buildAdminPromptProvider(
+			opts,
+			promptController,
 		),
 		MemoryFiles: memoryFiles,
 		Browser: buildBrowserAdminConfig(

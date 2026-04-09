@@ -33,6 +33,7 @@ const (
 	routeIndex      = "/"
 	routeOverview   = "/overview"
 	routeSkillsPage = "/skills"
+	routePrompts    = "/prompts"
 	routeMemory     = "/memory"
 	routeAutomation = "/automation"
 	routeSessions   = "/sessions"
@@ -101,6 +102,7 @@ type adminView string
 const (
 	viewOverview   adminView = "overview"
 	viewSkills     adminView = "skills"
+	viewPrompts    adminView = "prompts"
 	viewMemory     adminView = "memory"
 	viewAutomation adminView = "automation"
 	viewSessions   adminView = "sessions"
@@ -142,6 +144,7 @@ type Config struct {
 	Channels      []string
 	GatewayRoutes Routes
 	Skills        SkillsStatusProvider
+	Prompts       PromptsProvider
 	MemoryFiles   MemoryFileStore
 	Browser       BrowserConfig
 
@@ -265,6 +268,10 @@ func (s *Service) Handler() http.Handler {
 		wrapRelativeLinksFunc(s.handleSkillsPage),
 	)
 	mux.HandleFunc(
+		routePrompts,
+		wrapRelativeLinksFunc(s.handlePromptsPage),
+	)
+	mux.HandleFunc(
 		routeMemory,
 		wrapRelativeLinksFunc(s.handleMemoryPage),
 	)
@@ -286,8 +293,25 @@ func (s *Service) Handler() http.Handler {
 	)
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
+	mux.HandleFunc(routePromptsJSON, s.handlePromptsJSON)
 	mux.HandleFunc(routeMemoryFilesJSON, s.handleMemoryFilesJSON)
 	mux.HandleFunc(routeMemoryFile, s.handleMemoryFile)
+	mux.HandleFunc(
+		routePromptRuntimeSave,
+		wrapRelativeLinksFunc(s.handleSavePromptRuntime),
+	)
+	mux.HandleFunc(
+		routePromptFileSave,
+		wrapRelativeLinksFunc(s.handleSavePromptFile),
+	)
+	mux.HandleFunc(
+		routePromptFileCreate,
+		wrapRelativeLinksFunc(s.handleCreatePromptFile),
+	)
+	mux.HandleFunc(
+		routePromptFileDelete,
+		wrapRelativeLinksFunc(s.handleDeletePromptFile),
+	)
 	mux.HandleFunc(
 		routeSkillsRefresh,
 		wrapRelativeLinksFunc(s.handleRefreshSkills),
@@ -496,6 +520,7 @@ type skillInstallView struct {
 
 type pageData struct {
 	Snapshot       snapshot
+	Prompts        PromptsStatus
 	Notice         string
 	Error          string
 	RefreshSeconds int
@@ -898,6 +923,13 @@ func (s *Service) handleSkillsPage(
 	s.renderPage(w, r, viewSkills)
 }
 
+func (s *Service) handlePromptsPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewPrompts)
+}
+
 func (s *Service) handleMemoryPage(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -945,6 +977,7 @@ func (s *Service) renderPage(
 
 	data := pageData{
 		Snapshot:       s.snapshotForView(view),
+		Prompts:        s.promptsStatus(),
 		Notice:         strings.TrimSpace(r.URL.Query().Get(queryNotice)),
 		Error:          strings.TrimSpace(r.URL.Query().Get(queryError)),
 		RefreshSeconds: refreshSeconds,
@@ -971,6 +1004,7 @@ func adminNavSections(active adminView) []adminNavSection {
 			Items: []adminNavItem{
 				{Label: "Overview", Path: routeOverview},
 				{Label: "Skills", Path: routeSkillsPage},
+				{Label: "Prompts", Path: routePrompts},
 				{Label: "Sessions", Path: routeSessions},
 				{Label: "Memory", Path: routeMemory},
 				{Label: "Automation", Path: routeAutomation},
@@ -997,6 +1031,8 @@ func pageTitle(view adminView) string {
 	switch view {
 	case viewSkills:
 		return "Skills"
+	case viewPrompts:
+		return "Prompts"
 	case viewMemory:
 		return "Memory"
 	case viewAutomation:
@@ -1016,6 +1052,8 @@ func pageSummary(view adminView) string {
 	switch view {
 	case viewSkills:
 		return "Discover installed skills, refresh folders from disk, and manage config-backed enablement."
+	case viewPrompts:
+		return "Inspect effective prompts, edit prompt files, and apply live runtime overrides."
 	case viewMemory:
 		return "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory."
 	case viewAutomation:
@@ -1212,6 +1250,8 @@ func navPath(raw string) string {
 		return routeOverview
 	case routeSkillsPage:
 		return routeSkillsPage
+	case routePrompts:
+		return routePrompts
 	case routeMemory:
 		return routeMemory
 	case routeAutomation:
@@ -1233,6 +1273,8 @@ func navViewForPath(path string) adminView {
 		return viewOverview
 	case routeSkillsPage:
 		return viewSkills
+	case routePrompts:
+		return viewPrompts
 	case routeMemory:
 		return viewMemory
 	case routeAutomation:
@@ -1916,7 +1958,7 @@ var adminPage = template.Must(
 		"formatTime":             formatTime,
 		"browserEndpointSummary": browserEndpointSummary,
 		"displayAdminAppName":    displayAdminAppName,
-	}).Parse(adminPageHTML),
+	}).Parse(adminPageHTML + promptsPageTemplateHTML),
 )
 
 const adminPageHTML = `<!doctype html>
@@ -2122,6 +2164,23 @@ const adminPageHTML = `<!doctype html>
       padding: 2px 6px;
       border-radius: 8px;
       word-break: break-all;
+    }
+    input[type="text"],
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px 14px;
+      font: inherit;
+      background: var(--panel-strong);
+      color: var(--ink);
+    }
+    textarea {
+      min-height: 160px;
+      resize: vertical;
+      white-space: pre-wrap;
+      font-family: "SFMono-Regular", "SFMono-Regular", monospace;
+      line-height: 1.45;
     }
     table {
       width: 100%;
@@ -3276,6 +3335,10 @@ const adminPageHTML = `<!doctype html>
       <p class="empty">No skills discovered.</p>
       {{end}}
     </section>
+    {{end}}
+
+    {{if eq .View "prompts"}}
+    {{template "promptsPage" .}}
     {{end}}
 
     {{if eq .View "memory"}}
