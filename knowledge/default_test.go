@@ -528,6 +528,38 @@ func TestBuiltinKnowledge_SearchTableDriven(t *testing.T) {
 	}
 }
 
+func TestBuiltinKnowledge_Search_FilterOnlyDefaultsToFilterMode(t *testing.T) {
+	mockRet := &mockRetriever{
+		result: &retriever.Result{
+			Documents: []*retriever.RelevantDocument{
+				{
+					Document: &document.Document{ID: "doc1", Content: "test content"},
+					Score:    1,
+				},
+			},
+		},
+	}
+	kb := &BuiltinKnowledge{retriever: mockRet}
+
+	_, err := kb.Search(context.Background(), &SearchRequest{
+		SearchFilter: &SearchFilter{
+			Metadata: map[string]any{"category": "test"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if mockRet.lastReq == nil {
+		t.Fatal("expected retriever request to be recorded")
+	}
+	if mockRet.lastReq.SearchMode != vectorstore.SearchModeFilter {
+		t.Fatalf("expected search mode %d, got %d", vectorstore.SearchModeFilter, mockRet.lastReq.SearchMode)
+	}
+	if mockRet.lastReq.Filter == nil || mockRet.lastReq.Filter.Metadata["category"] != "test" {
+		t.Fatal("expected metadata filter to be forwarded to retriever")
+	}
+}
+
 // Test Close functionality using table-driven tests
 func TestBuiltinKnowledge_Close(t *testing.T) {
 	tests := []struct {
@@ -818,9 +850,11 @@ type mockRetriever struct {
 	result   *retriever.Result
 	err      error
 	closeErr error
+	lastReq  *retriever.Query
 }
 
 func (m *mockRetriever) Retrieve(ctx context.Context, req *retriever.Query) (*retriever.Result, error) {
+	m.lastReq = req
 	return m.result, m.err
 }
 

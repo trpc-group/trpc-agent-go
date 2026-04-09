@@ -1066,6 +1066,12 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 		minScore = 0.0
 	}
 
+	searchMode := req.SearchMode
+	if req.Query == "" && hasSearchFilter(req.SearchFilter) {
+		log.DebugfContext(ctx, "knowledge search: empty query with filter, switching search mode to filter")
+		searchMode = vectorstore.SearchModeFilter
+	}
+
 	// Use built-in retriever for RAG pipeline with full context.
 	// The retriever will handle query enhancement if configured.
 	retrieverReq := &retriever.Query{
@@ -1076,7 +1082,7 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 		Filter:     convertQueryFilter(req.SearchFilter),
 		Limit:      req.MaxResults,
 		MinScore:   minScore,
-		SearchMode: req.SearchMode,
+		SearchMode: searchMode,
 	}
 
 	result, err := dk.retriever.Retrieve(ctx, retrieverReq)
@@ -1105,6 +1111,13 @@ func (dk *BuiltinKnowledge) Search(ctx context.Context, req *SearchRequest) (*Se
 		Text:      content,
 		Documents: documents,
 	}, nil
+}
+
+func hasSearchFilter(filter *SearchFilter) bool {
+	if filter == nil {
+		return false
+	}
+	return len(filter.DocumentIDs) > 0 || len(filter.Metadata) > 0 || filter.FilterCondition != nil
 }
 
 // Close closes the knowledge base and releases resources.
