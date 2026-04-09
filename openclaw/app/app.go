@@ -467,7 +467,7 @@ type Runtime struct {
 	A2A      A2ASurface
 	Admin    AdminSurface
 	Channels []channel.Channel
-	Prompts  *RuntimePromptController
+	prompts  *RuntimePromptController
 
 	runner            runner.Runner
 	cronRunner        closeFunc
@@ -526,6 +526,15 @@ func newRuntimePromptController(
 	}
 }
 
+// PromptController exposes runtime prompt updates without changing
+// Runtime's exported struct layout.
+func (r *Runtime) PromptController() *RuntimePromptController {
+	if r == nil {
+		return nil
+	}
+	return r.prompts
+}
+
 func (c *RuntimePromptController) Snapshot() PromptSnapshot {
 	if c == nil {
 		return PromptSnapshot{}
@@ -571,8 +580,20 @@ func (c *RuntimePromptController) SetPrompts(
 	instruction string,
 	systemPrompt string,
 ) {
-	c.SetInstruction(instruction)
-	c.SetSystemPrompt(systemPrompt)
+	if c == nil {
+		return
+	}
+	llm, ok := c.agent.(*llmagent.LLMAgent)
+	if !ok {
+		return
+	}
+	llm.SetPrompts(instruction, systemPrompt)
+	c.mu.Lock()
+	c.snapshot = PromptSnapshot{
+		Instruction:  instruction,
+		SystemPrompt: systemPrompt,
+	}
+	c.mu.Unlock()
 }
 
 // NewRuntime constructs an OpenClaw runtime based on CLI args / config file,
@@ -794,7 +815,7 @@ func NewRuntime(
 			Err:  fmt.Errorf("create agent failed: %w", err),
 		}
 	}
-	rt.Prompts = newRuntimePromptController(
+	rt.prompts = newRuntimePromptController(
 		ag,
 		prompts.Instruction,
 		prompts.SystemPrompt,

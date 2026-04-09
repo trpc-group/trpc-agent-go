@@ -64,6 +64,33 @@ type captureRequestModel struct {
 	got *model.Request
 }
 
+type stubRuntimeAgent struct{}
+
+func (stubRuntimeAgent) Run(
+	context.Context,
+	*agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (stubRuntimeAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (stubRuntimeAgent) Info() agent.Info {
+	return agent.Info{Name: "stub"}
+}
+
+func (stubRuntimeAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (stubRuntimeAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
 func (m *captureRequestModel) GenerateContent(
 	ctx context.Context,
 	req *model.Request,
@@ -179,6 +206,46 @@ func TestRuntimePromptControllerUpdatesAgentPrompts(
 	require.Contains(t, system, "new system")
 	require.NotContains(t, system, "old instruction")
 	require.NotContains(t, system, "old system")
+}
+
+func TestRuntimePromptControllerCompatibilityGuards(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(
+		t,
+		newRuntimePromptController(nil, "instruction", "system"),
+	)
+	require.Nil(
+		t,
+		newRuntimePromptController(
+			stubRuntimeAgent{},
+			"instruction",
+			"system",
+		),
+	)
+
+	var nilCtrl *RuntimePromptController
+	nilCtrl.SetInstruction("instruction")
+	nilCtrl.SetSystemPrompt("system")
+	nilCtrl.SetPrompts("instruction", "system")
+	require.Equal(t, PromptSnapshot{}, nilCtrl.Snapshot())
+
+	ctrl := &RuntimePromptController{agent: stubRuntimeAgent{}}
+	ctrl.SetInstruction("instruction")
+	ctrl.SetSystemPrompt("system")
+	ctrl.SetPrompts("instruction", "system")
+	require.Equal(t, PromptSnapshot{}, ctrl.Snapshot())
+}
+
+func TestRuntimePromptControllerMethod(t *testing.T) {
+	t.Parallel()
+
+	ctrl := &RuntimePromptController{}
+	rt := &Runtime{prompts: ctrl}
+	require.Same(t, ctrl, rt.PromptController())
+
+	var nilRuntime *Runtime
+	require.Nil(t, nilRuntime.PromptController())
 }
 
 func findToolDeclaration(
