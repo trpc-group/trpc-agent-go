@@ -32,6 +32,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
@@ -143,6 +144,41 @@ func joinSystemMessages(req *model.Request) string {
 		parts = append(parts, msg.Content)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func TestRuntimePromptControllerUpdatesAgentPrompts(
+	t *testing.T,
+) {
+	mdl := &captureRequestModel{}
+	agt := llmagent.New(
+		"test",
+		llmagent.WithModel(mdl),
+		llmagent.WithInstruction("old instruction"),
+		llmagent.WithGlobalInstruction("old system"),
+	)
+	ctrl := newRuntimePromptController(
+		agt,
+		"old instruction",
+		"old system",
+	)
+	require.NotNil(t, ctrl)
+
+	ctrl.SetPrompts("new instruction", "new system")
+	snapshot := ctrl.Snapshot()
+	require.Equal(t, "new instruction", snapshot.Instruction)
+	require.Equal(t, "new system", snapshot.SystemPrompt)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		session.NewSession("app", "user", "sess"),
+	)
+	system := joinSystemMessages(req)
+	require.Contains(t, system, "new instruction")
+	require.Contains(t, system, "new system")
+	require.NotContains(t, system, "old instruction")
+	require.NotContains(t, system, "old system")
 }
 
 func findToolDeclaration(

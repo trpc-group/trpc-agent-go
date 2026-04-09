@@ -30,6 +30,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -466,6 +467,7 @@ type Runtime struct {
 	A2A      A2ASurface
 	Admin    AdminSurface
 	Channels []channel.Channel
+	Prompts  *RuntimePromptController
 
 	runner            runner.Runner
 	cronRunner        closeFunc
@@ -490,6 +492,87 @@ type AdminSurface struct {
 	Handler http.Handler
 	Addr    string
 	URL     string
+}
+
+type PromptSnapshot struct {
+	Instruction  string
+	SystemPrompt string
+}
+
+type RuntimePromptController struct {
+	agent agent.Agent
+
+	mu       sync.RWMutex
+	snapshot PromptSnapshot
+}
+
+func newRuntimePromptController(
+	agt agent.Agent,
+	instruction string,
+	systemPrompt string,
+) *RuntimePromptController {
+	if agt == nil {
+		return nil
+	}
+	if _, ok := agt.(*llmagent.LLMAgent); !ok {
+		return nil
+	}
+	return &RuntimePromptController{
+		agent: agt,
+		snapshot: PromptSnapshot{
+			Instruction:  instruction,
+			SystemPrompt: systemPrompt,
+		},
+	}
+}
+
+func (c *RuntimePromptController) Snapshot() PromptSnapshot {
+	if c == nil {
+		return PromptSnapshot{}
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.snapshot
+}
+
+func (c *RuntimePromptController) SetInstruction(
+	instruction string,
+) {
+	if c == nil {
+		return
+	}
+	llm, ok := c.agent.(*llmagent.LLMAgent)
+	if !ok {
+		return
+	}
+	llm.SetInstruction(instruction)
+	c.mu.Lock()
+	c.snapshot.Instruction = instruction
+	c.mu.Unlock()
+}
+
+func (c *RuntimePromptController) SetSystemPrompt(
+	systemPrompt string,
+) {
+	if c == nil {
+		return
+	}
+	llm, ok := c.agent.(*llmagent.LLMAgent)
+	if !ok {
+		return
+	}
+	llm.SetGlobalInstruction(systemPrompt)
+	c.mu.Lock()
+	c.snapshot.SystemPrompt = systemPrompt
+	c.mu.Unlock()
+}
+
+func (c *RuntimePromptController) SetPrompts(
+	instruction string,
+	systemPrompt string,
+) {
+	c.SetInstruction(instruction)
+	c.SetSystemPrompt(systemPrompt)
 }
 
 // NewRuntime constructs an OpenClaw runtime based on CLI args / config file,
@@ -711,6 +794,11 @@ func NewRuntime(
 			Err:  fmt.Errorf("create agent failed: %w", err),
 		}
 	}
+	rt.Prompts = newRuntimePromptController(
+		ag,
+		prompts.Instruction,
+		prompts.SystemPrompt,
+	)
 	rt.toolSets = toolSets
 	rt.skillsWatch = skillsWatch
 
