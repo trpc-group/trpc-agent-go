@@ -21,8 +21,8 @@ import (
 	"syscall"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
 	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"

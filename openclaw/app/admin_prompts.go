@@ -17,7 +17,7 @@ import (
 	"strings"
 	"sync"
 
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 )
 
 const (
@@ -110,6 +110,16 @@ func (p *adminPromptProvider) SavePromptRuntime(
 	}
 
 	return p.applyLocked()
+}
+
+func (p *adminPromptProvider) SavePromptInline(
+	bundleKey string,
+	content string,
+) error {
+	if p == nil {
+		return fmt.Errorf("prompt provider is unavailable")
+	}
+	return fmt.Errorf("inline prompt edits are not supported: %s", bundleKey)
 }
 
 func (p *adminPromptProvider) SavePromptFile(
@@ -212,6 +222,7 @@ func (p *adminPromptProvider) bundleStateLocked(
 		Title:              title,
 		ConfiguredValue:    configured,
 		EffectiveValue:     strings.TrimSpace(effective),
+		InlineEditable:     false,
 		RuntimeEditable:    true,
 		RuntimeOverride:    override != nil,
 		SupportsFileEdits:  len(files) > 0,

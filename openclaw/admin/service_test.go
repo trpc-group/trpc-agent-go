@@ -61,6 +61,10 @@ type stubPromptsProvider struct {
 	status PromptsStatus
 	err    error
 
+	inlineBundle string
+	inlineValue  string
+	inlineCount  int
+
 	runtimeBundle string
 	runtimeValue  string
 	runtimeCount  int
@@ -78,6 +82,24 @@ type stubPromptsProvider struct {
 	deleteBundle string
 	deletePath   string
 	deleteCount  int
+}
+
+type stubPersonasProvider struct {
+	status PersonasStatus
+	err    error
+
+	defaultPersona string
+	defaultCount   int
+
+	storeKey    string
+	personaID   string
+	personaName string
+	personaBody string
+	saveCount   int
+
+	deleteStore string
+	deleteID    string
+	deleteCount int
 }
 
 func (p stubBMP) BrowserManagedStatus() BrowserManagedService {
@@ -149,6 +171,19 @@ func (p *stubPromptsProvider) SavePromptRuntime(
 	return nil
 }
 
+func (p *stubPromptsProvider) SavePromptInline(
+	bundleKey string,
+	content string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.inlineCount++
+	p.inlineBundle = bundleKey
+	p.inlineValue = content
+	return nil
+}
+
 func (p *stubPromptsProvider) SavePromptFile(
 	bundleKey string,
 	path string,
@@ -189,6 +224,57 @@ func (p *stubPromptsProvider) DeletePromptFile(
 	p.deleteCount++
 	p.deleteBundle = bundleKey
 	p.deletePath = path
+	return nil
+}
+
+func (p *stubPersonasProvider) PersonasStatus() (
+	PersonasStatus,
+	error,
+) {
+	if p == nil {
+		return PersonasStatus{}, nil
+	}
+	return p.status, p.err
+}
+
+func (p *stubPersonasProvider) SavePersona(
+	storeKey string,
+	personaID string,
+	name string,
+	prompt string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.saveCount++
+	p.storeKey = storeKey
+	p.personaID = personaID
+	p.personaName = name
+	p.personaBody = prompt
+	return nil
+}
+
+func (p *stubPersonasProvider) DeletePersona(
+	storeKey string,
+	personaID string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.deleteCount++
+	p.deleteStore = storeKey
+	p.deleteID = personaID
+	return nil
+}
+
+func (p *stubPersonasProvider) SetDefaultPersona(
+	personaID string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.defaultCount++
+	p.defaultPersona = personaID
 	return nil
 }
 
@@ -1128,7 +1214,7 @@ func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
 			path:    routePrompts,
 			view:    viewPrompts,
 			title:   "Prompts",
-			summary: "Inspect effective prompts, edit prompt files, and apply live runtime overrides.",
+			summary: "Inspect prompt bundles, edit file-backed prompts, and manage persona stores.",
 		},
 		{
 			path:    routeMemory,
@@ -1190,6 +1276,8 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 				Title:           "Agent Instruction",
 				EffectiveValue:  "live prompt",
 				ConfiguredValue: "configured prompt",
+				InlineEditable:  true,
+				InlineValue:     "inline prompt",
 				RuntimeEditable: true,
 				Files: []PromptFileState{{
 					Path:    "/tmp/instruction.md",
@@ -1199,7 +1287,31 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 			}},
 		},
 	}
-	svc := New(Config{Prompts: provider})
+	personas := &stubPersonasProvider{
+		status: PersonasStatus{
+			Enabled:          true,
+			DefaultPersonaID: "friendly",
+			DefaultOptions: []PersonaOption{{
+				ID:   "friendly",
+				Name: "Friendly",
+			}},
+			Stores: []PersonaStoreView{{
+				Key:           "agent",
+				Title:         "Agent Personas",
+				CreateEnabled: true,
+				Personas: []PersonaView{{
+					ID:       "friendly",
+					Name:     "Friendly",
+					Prompt:   "warm tone",
+					Editable: true,
+				}},
+			}},
+		},
+	}
+	svc := New(Config{
+		Prompts:  provider,
+		Personas: personas,
+	})
 
 	req := httptest.NewRequest(http.MethodGet, routePrompts, nil)
 	rec := httptest.NewRecorder()
@@ -1207,8 +1319,31 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), "Prompt Management")
 	require.Contains(t, rec.Body.String(), "Agent Instruction")
+	require.Contains(t, rec.Body.String(), "Agent Personas")
 
 	values := url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptContent:   {"inline override"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptInlineSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, provider.inlineCount)
+	require.Equal(t, "agent_instruction", provider.inlineBundle)
+	require.Equal(t, "inline override", provider.inlineValue)
+
+	values = url.Values{
 		formPromptBundleKey: {"agent_instruction"},
 		formPromptContent:   {"override"},
 		formReturnPath:      {routePrompts},
@@ -1229,6 +1364,50 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 	require.Equal(t, 1, provider.runtimeCount)
 	require.Equal(t, "agent_instruction", provider.runtimeBundle)
 	require.Equal(t, "override", provider.runtimeValue)
+
+	values = url.Values{
+		formPersonaID:  {"friendly"},
+		formReturnPath: {routePrompts},
+		formReturnTo:   {"personas-default"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePersonaDefaultSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, personas.defaultCount)
+	require.Equal(t, "friendly", personas.defaultPersona)
+
+	values = url.Values{
+		formPersonaStoreKey: {"agent"},
+		formPersonaName:     {"Warm"},
+		formPersonaPrompt:   {"custom prompt"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"persona-store-agent"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePersonaSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, personas.saveCount)
+	require.Equal(t, "agent", personas.storeKey)
+	require.Equal(t, "Warm", personas.personaName)
+	require.Equal(t, "custom prompt", personas.personaBody)
 }
 
 func TestSkillInstallViewsFromStatus_TrimsValues(t *testing.T) {

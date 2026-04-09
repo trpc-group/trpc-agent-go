@@ -44,6 +44,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
@@ -66,6 +67,8 @@ type captureRequestModel struct {
 
 type stubRuntimeAgent struct{}
 
+type stubAdminPromptsProvider struct{}
+
 func (stubRuntimeAgent) Run(
 	context.Context,
 	*agent.Invocation,
@@ -76,6 +79,50 @@ func (stubRuntimeAgent) Run(
 }
 
 func (stubRuntimeAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (stubAdminPromptsProvider) PromptsStatus() (
+	admin.PromptsStatus,
+	error,
+) {
+	return admin.PromptsStatus{}, nil
+}
+
+func (stubAdminPromptsProvider) SavePromptInline(
+	string,
+	string,
+) error {
+	return nil
+}
+
+func (stubAdminPromptsProvider) SavePromptRuntime(
+	string,
+	string,
+) error {
+	return nil
+}
+
+func (stubAdminPromptsProvider) SavePromptFile(
+	string,
+	string,
+	string,
+) error {
+	return nil
+}
+
+func (stubAdminPromptsProvider) CreatePromptFile(
+	string,
+	string,
+	string,
+) error {
+	return nil
+}
+
+func (stubAdminPromptsProvider) DeletePromptFile(
+	string,
+	string,
+) error {
 	return nil
 }
 
@@ -246,6 +293,27 @@ func TestRuntimePromptControllerMethod(t *testing.T) {
 
 	var nilRuntime *Runtime
 	require.Nil(t, nilRuntime.PromptController())
+}
+
+func TestRuntimeConfigureAdmin(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{
+		adminCfg: &admin.Config{
+			AdminAddr: "127.0.0.1:8081",
+			AdminURL:  "http://127.0.0.1:8081",
+		},
+	}
+
+	rt.ConfigureAdmin(func(cfg *admin.Config) {
+		cfg.Prompts = stubAdminPromptsProvider{}
+	})
+
+	require.NotNil(t, rt.adminCfg)
+	require.NotNil(t, rt.Admin.Handler)
+	require.Equal(t, "127.0.0.1:8081", rt.Admin.Addr)
+	require.Equal(t, "http://127.0.0.1:8081", rt.Admin.URL)
+	require.NotNil(t, rt.adminCfg.Prompts)
 }
 
 func findToolDeclaration(

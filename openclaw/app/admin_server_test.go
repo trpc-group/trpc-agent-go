@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 )
 
 func TestOpenAdminBinding_AutoPortFallback(t *testing.T) {

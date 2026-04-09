@@ -49,8 +49,8 @@ import (
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
 	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationtool"
@@ -468,6 +468,7 @@ type Runtime struct {
 	Admin    AdminSurface
 	Channels []channel.Channel
 	prompts  *RuntimePromptController
+	adminCfg *admin.Config
 
 	runner            runner.Runner
 	cronRunner        closeFunc
@@ -533,6 +534,27 @@ func (r *Runtime) PromptController() *RuntimePromptController {
 		return nil
 	}
 	return r.prompts
+}
+
+func (r *Runtime) ConfigureAdmin(
+	configure func(*admin.Config),
+) {
+	if r == nil || r.adminCfg == nil || configure == nil {
+		return
+	}
+	cfg := *r.adminCfg
+	configure(&cfg)
+	r.applyAdminConfig(cfg)
+}
+
+func (r *Runtime) applyAdminConfig(cfg admin.Config) {
+	if r == nil {
+		return
+	}
+	r.adminCfg = &cfg
+	r.Admin.Handler = admin.New(cfg).Handler()
+	r.Admin.Addr = strings.TrimSpace(cfg.AdminAddr)
+	r.Admin.URL = strings.TrimSpace(cfg.AdminURL)
 }
 
 func (c *RuntimePromptController) Snapshot() PromptSnapshot {
@@ -979,7 +1001,7 @@ func NewRuntime(
 
 	if opts.AdminEnabled {
 		adminURL := listenURL(opts.AdminAddr)
-		adminSvc := admin.New(buildAdminConfig(
+		adminCfg := buildAdminConfig(
 			opts,
 			agentType,
 			instanceID,
@@ -1003,12 +1025,8 @@ func NewRuntime(
 			skillsRepo,
 			skillsWatch,
 			fileMemoryStore,
-		))
-		rt.Admin = AdminSurface{
-			Handler: adminSvc.Handler(),
-			Addr:    opts.AdminAddr,
-			URL:     adminURL,
-		}
+		)
+		rt.applyAdminConfig(adminCfg)
 	}
 
 	return rt, nil

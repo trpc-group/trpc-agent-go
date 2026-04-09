@@ -15,24 +15,47 @@ import (
 )
 
 const (
-	routePromptsJSON       = "/api/prompts"
-	routePromptRuntimeSave = "/api/prompts/runtime"
-	routePromptFileSave    = "/api/prompts/file"
-	routePromptFileCreate  = "/api/prompts/file/create"
-	routePromptFileDelete  = "/api/prompts/file/delete"
+	routePromptsJSON        = "/api/prompts"
+	routePromptInlineSave   = "/api/prompts/inline"
+	routePromptRuntimeSave  = "/api/prompts/runtime"
+	routePromptFileSave     = "/api/prompts/file"
+	routePromptFileCreate   = "/api/prompts/file/create"
+	routePromptFileDelete   = "/api/prompts/file/delete"
+	routePersonasJSON       = "/api/personas"
+	routePersonaSave        = "/api/personas/save"
+	routePersonaDelete      = "/api/personas/delete"
+	routePersonaDefaultSave = "/api/personas/default"
 
 	formPromptBundleKey = "bundle_key"
 	formPromptPath      = "path"
 	formPromptFileName  = "file_name"
 	formPromptContent   = "content"
+
+	formPersonaStoreKey = "store_key"
+	formPersonaID       = "persona_id"
+	formPersonaName     = "persona_name"
+	formPersonaPrompt   = "persona_prompt"
 )
 
 type PromptsProvider interface {
 	PromptsStatus() (PromptsStatus, error)
+	SavePromptInline(bundleKey string, content string) error
 	SavePromptRuntime(bundleKey string, content string) error
 	SavePromptFile(bundleKey string, path string, content string) error
 	CreatePromptFile(bundleKey string, fileName string, content string) error
 	DeletePromptFile(bundleKey string, path string) error
+}
+
+type PersonasProvider interface {
+	PersonasStatus() (PersonasStatus, error)
+	SavePersona(
+		storeKey string,
+		personaID string,
+		name string,
+		prompt string,
+	) error
+	DeletePersona(storeKey string, personaID string) error
+	SetDefaultPersona(personaID string) error
 }
 
 type PromptsStatus struct {
@@ -41,11 +64,21 @@ type PromptsStatus struct {
 	Bundles []PromptBundleState `json:"bundles,omitempty"`
 }
 
+type PersonasStatus struct {
+	Enabled          bool               `json:"enabled"`
+	Error            string             `json:"error,omitempty"`
+	DefaultPersonaID string             `json:"default_persona_id,omitempty"`
+	DefaultOptions   []PersonaOption    `json:"default_options,omitempty"`
+	Stores           []PersonaStoreView `json:"stores,omitempty"`
+}
+
 type PromptBundleState struct {
 	Key                string            `json:"key,omitempty"`
 	Title              string            `json:"title,omitempty"`
 	ConfiguredValue    string            `json:"configured_value,omitempty"`
 	EffectiveValue     string            `json:"effective_value,omitempty"`
+	InlineValue        string            `json:"inline_value,omitempty"`
+	InlineEditable     bool              `json:"inline_editable"`
 	RuntimeValue       string            `json:"runtime_value,omitempty"`
 	RuntimeEditable    bool              `json:"runtime_editable"`
 	RuntimeOverride    bool              `json:"runtime_override"`
@@ -66,6 +99,30 @@ type PromptFileState struct {
 	Deletable bool   `json:"deletable"`
 }
 
+type PersonaOption struct {
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Summary string `json:"summary,omitempty"`
+}
+
+type PersonaStoreView struct {
+	Key           string        `json:"key,omitempty"`
+	Title         string        `json:"title,omitempty"`
+	Path          string        `json:"path,omitempty"`
+	CreateEnabled bool          `json:"create_enabled"`
+	Personas      []PersonaView `json:"personas,omitempty"`
+}
+
+type PersonaView struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	Prompt    string `json:"prompt,omitempty"`
+	BuiltIn   bool   `json:"built_in"`
+	Editable  bool   `json:"editable"`
+	Deletable bool   `json:"deletable"`
+}
+
 func (s *Service) promptsStatus() PromptsStatus {
 	if s == nil || s.cfg.Prompts == nil {
 		return PromptsStatus{}
@@ -73,6 +130,21 @@ func (s *Service) promptsStatus() PromptsStatus {
 	status, err := s.cfg.Prompts.PromptsStatus()
 	if err != nil {
 		return PromptsStatus{
+			Enabled: true,
+			Error:   strings.TrimSpace(err.Error()),
+		}
+	}
+	status.Enabled = true
+	return status
+}
+
+func (s *Service) personasStatus() PersonasStatus {
+	if s == nil || s.cfg.Personas == nil {
+		return PersonasStatus{}
+	}
+	status, err := s.cfg.Personas.PersonasStatus()
+	if err != nil {
+		return PersonasStatus{
 			Enabled: true,
 			Error:   strings.TrimSpace(err.Error()),
 		}
@@ -90,6 +162,48 @@ func (s *Service) handlePromptsJSON(
 		return
 	}
 	writeJSON(w, http.StatusOK, s.promptsStatus())
+}
+
+func (s *Service) handlePersonasJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.personasStatus())
+}
+
+func (s *Service) handleSavePromptInline(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	bundleKey, content, returnTo, ok := s.requirePromptPOST(w, r)
+	if !ok {
+		return
+	}
+	if err := s.cfg.Prompts.SavePromptInline(bundleKey, content); err != nil {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			err.Error(),
+			returnTo,
+		)
+		return
+	}
+	s.redirectWithMessageAt(
+		w,
+		r,
+		queryNotice,
+		"Saved inline prompt value.",
+		returnTo,
+	)
 }
 
 func (s *Service) handleSavePromptRuntime(
@@ -255,6 +369,123 @@ func (s *Service) handleDeletePromptFile(
 	)
 }
 
+func (s *Service) handleSavePersona(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	storeKey, personaID, name, prompt, returnTo, ok := s.requirePersonaPOST(
+		w,
+		r,
+	)
+	if !ok {
+		return
+	}
+	if err := s.cfg.Personas.SavePersona(
+		storeKey,
+		personaID,
+		name,
+		prompt,
+	); err != nil {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			err.Error(),
+			returnTo,
+		)
+		return
+	}
+	s.redirectWithMessageAt(
+		w,
+		r,
+		queryNotice,
+		"Saved persona.",
+		returnTo,
+	)
+}
+
+func (s *Service) handleDeletePersona(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	storeKey, personaID, _, _, returnTo, ok := s.requirePersonaPOST(w, r)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(personaID) == "" {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			"persona_id is required",
+			returnTo,
+		)
+		return
+	}
+	if err := s.cfg.Personas.DeletePersona(storeKey, personaID); err != nil {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			err.Error(),
+			returnTo,
+		)
+		return
+	}
+	s.redirectWithMessageAt(
+		w,
+		r,
+		queryNotice,
+		"Deleted persona.",
+		returnTo,
+	)
+}
+
+func (s *Service) handleSaveDefaultPersona(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s == nil || s.cfg.Personas == nil {
+		http.Error(w, "personas are not enabled", http.StatusNotFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	personaID := strings.TrimSpace(r.FormValue(formPersonaID))
+	returnTo := strings.TrimSpace(r.FormValue(formReturnTo))
+	if err := s.cfg.Personas.SetDefaultPersona(personaID); err != nil {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			err.Error(),
+			returnTo,
+		)
+		return
+	}
+	s.redirectWithMessageAt(
+		w,
+		r,
+		queryNotice,
+		"Updated default persona.",
+		returnTo,
+	)
+}
+
 func (s *Service) requirePromptPOST(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -284,22 +515,42 @@ func (s *Service) requirePromptPOST(
 		true
 }
 
+func (s *Service) requirePersonaPOST(
+	w http.ResponseWriter,
+	r *http.Request,
+) (string, string, string, string, string, bool) {
+	if s == nil || s.cfg.Personas == nil {
+		http.Error(w, "personas are not enabled", http.StatusNotFound)
+		return "", "", "", "", "", false
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return "", "", "", "", "", false
+	}
+	return strings.TrimSpace(r.FormValue(formPersonaStoreKey)),
+		strings.TrimSpace(r.FormValue(formPersonaID)),
+		strings.TrimSpace(r.FormValue(formPersonaName)),
+		r.FormValue(formPersonaPrompt),
+		strings.TrimSpace(r.FormValue(formReturnTo)),
+		true
+}
+
 const promptsPageTemplateHTML = `
 {{define "promptsPage"}}
     <section class="panels">
       <article class="card">
         <h2>Prompt Management</h2>
         <p class="subtle">
-          Inspect effective prompts, edit configured files, and apply
-          runtime-only overrides without restarting the runtime.
+          Inspect effective prompts, edit configured files, and manage
+          runtime-level prompt and persona customization from one place.
         </p>
         <dl class="meta">
-          <dt>Bundles</dt>
+          <dt>Prompt Bundles</dt>
           <dd>{{len .Prompts.Bundles}}</dd>
+          <dt>Persona Stores</dt>
+          <dd>{{len .Personas.Stores}}</dd>
           <dt>JSON</dt>
           <dd><a href="/api/prompts">/api/prompts</a></dd>
-          <dt>Persistence</dt>
-          <dd>File edits persist. Runtime overrides reset on restart.</dd>
         </dl>
       </article>
     </section>
@@ -307,9 +558,7 @@ const promptsPageTemplateHTML = `
     <section class="card" style="margin-top: 24px;">
       <h2>Prompt Bundles</h2>
       <p class="subtle">
-        File-backed edits flow back into the live runtime immediately. When a
-        bundle is backed by a directory, you can add or remove markdown files
-        directly from this page.
+        File-backed edits flow back into the live runtime immediately.
       </p>
       {{if .Prompts.Error}}
       <div class="notice err" style="margin-top: 12px;">
@@ -324,10 +573,10 @@ const promptsPageTemplateHTML = `
         <dl class="meta">
           <dt>Configured Files</dt>
           <dd>{{len .Files}}</dd>
-          <dt>Runtime Override</dt>
-          <dd>{{if .RuntimeOverride}}active{{else}}off{{end}}</dd>
           <dt>Create Dir</dt>
           <dd>{{if .CreateDir}}<code>{{.CreateDir}}</code>{{else}}-{{end}}</dd>
+          <dt>Runtime Override</dt>
+          <dd>{{if .RuntimeOverride}}active{{else}}off{{end}}</dd>
         </dl>
         {{if .LoadError}}
         <div class="notice err" style="margin-top: 12px;">
@@ -353,6 +602,24 @@ const promptsPageTemplateHTML = `
             {{end}}
           </article>
         </div>
+
+        {{if .InlineEditable}}
+        <div class="card" style="margin-top: 16px;">
+          <h4 style="margin: 0 0 10px;">Inline Prompt Value</h4>
+          <form method="post" action="/api/prompts/inline">
+            <input type="hidden" name="bundle_key" value="{{.Key}}">
+            <input type="hidden" name="return_path" value="/prompts">
+            <input type="hidden" name="return_to" value="prompt-{{.Key}}">
+            <textarea
+              name="content"
+              style="width: 100%; min-height: 160px; margin-top: 12px;"
+            >{{.InlineValue}}</textarea>
+            <div class="actions" style="margin-top: 12px;">
+              <button type="submit">Save Inline Value</button>
+            </div>
+          </form>
+        </div>
+        {{end}}
 
         {{if .RuntimeEditable}}
         <div class="card" style="margin-top: 16px;">
@@ -468,5 +735,117 @@ const promptsPageTemplateHTML = `
       <p class="empty">Prompt management is not available for this runtime.</p>
       {{end}}
     </section>
+
+    {{if .Personas.Enabled}}
+    <section class="card" style="margin-top: 24px;">
+      <h2>Persona Stores</h2>
+      <p class="subtle">
+        Manage the default persona and any file-backed persona definitions
+        exposed by this runtime.
+      </p>
+      {{if .Personas.Error}}
+      <div class="notice err" style="margin-top: 12px;">
+        {{.Personas.Error}}
+      </div>
+      {{end}}
+      <article class="card" style="margin-top: 18px;" id="personas-default">
+        <h3>Default Persona</h3>
+        <form method="post" action="/api/personas/default">
+          <input type="hidden" name="return_path" value="/prompts">
+          <input type="hidden" name="return_to" value="personas-default">
+          <label for="default-persona">Persona</label>
+          <select id="default-persona" name="persona_id">
+            <option value="">(default)</option>
+            {{range .Personas.DefaultOptions}}
+            <option value="{{.ID}}"{{if eq $.Personas.DefaultPersonaID .ID}} selected{{end}}>
+              {{.Name}} ({{.ID}})
+            </option>
+            {{end}}
+          </select>
+          <div class="actions" style="margin-top: 12px;">
+            <button type="submit">Save Default Persona</button>
+          </div>
+        </form>
+      </article>
+
+      {{range .Personas.Stores}}
+      {{$store := .}}
+      <article class="card" style="margin-top: 18px;" id="persona-store-{{.Key}}">
+        <h3>{{.Title}}</h3>
+        {{if .Path}}
+        <p class="subtle">Store path: <code>{{.Path}}</code></p>
+        {{end}}
+
+        {{range .Personas}}
+        <div class="card" style="margin-top: 12px;">
+          <div style="display: flex; gap: 12px; justify-content: space-between; align-items: baseline; flex-wrap: wrap;">
+            <strong>{{.Name}}</strong>
+            <code>{{.ID}}</code>
+          </div>
+          {{if .Summary}}
+          <p class="subtle" style="margin-top: 10px;">{{.Summary}}</p>
+          {{end}}
+          {{if .Editable}}
+          <form method="post" action="/api/personas/save" style="margin-top: 12px;">
+            <input type="hidden" name="store_key" value="{{$store.Key}}">
+            <input type="hidden" name="persona_id" value="{{.ID}}">
+            <input type="hidden" name="return_path" value="/prompts">
+            <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
+            <label>Name</label>
+            <input type="text" name="persona_name" value="{{.Name}}">
+            <label style="margin-top: 12px;">Prompt</label>
+            <textarea
+              name="persona_prompt"
+              style="width: 100%; min-height: 180px;"
+            >{{.Prompt}}</textarea>
+            <div class="actions" style="margin-top: 12px;">
+              <button type="submit">Save Persona</button>
+            </div>
+          </form>
+          {{end}}
+          {{if .Deletable}}
+          <form method="post" action="/api/personas/delete" style="margin-top: 8px;">
+            <input type="hidden" name="store_key" value="{{$store.Key}}">
+            <input type="hidden" name="persona_id" value="{{.ID}}">
+            <input type="hidden" name="return_path" value="/prompts">
+            <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
+            <div class="actions">
+              <button
+                class="warn"
+                type="submit"
+                onclick="return confirm('Delete this persona override?');"
+              >
+                Delete Persona
+              </button>
+            </div>
+          </form>
+          {{end}}
+        </div>
+        {{end}}
+
+        {{if .CreateEnabled}}
+        <div class="card" style="margin-top: 12px;">
+          <h4 style="margin: 0 0 10px;">Create Persona</h4>
+          <form method="post" action="/api/personas/save">
+            <input type="hidden" name="store_key" value="{{$store.Key}}">
+            <input type="hidden" name="return_path" value="/prompts">
+            <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
+            <label>Name</label>
+            <input type="text" name="persona_name">
+            <label style="margin-top: 12px;">Prompt</label>
+            <textarea
+              name="persona_prompt"
+              style="width: 100%; min-height: 180px;"
+            ></textarea>
+            <div class="actions" style="margin-top: 12px;">
+              <button class="secondary" type="submit">Create Persona</button>
+            </div>
+          </form>
+        </div>
+        {{end}}
+      </article>
+      {{end}}
+    </section>
+    {{end}}
 {{end}}
 `

@@ -145,6 +145,7 @@ type Config struct {
 	GatewayRoutes Routes
 	Skills        SkillsStatusProvider
 	Prompts       PromptsProvider
+	Personas      PersonasProvider
 	MemoryFiles   MemoryFileStore
 	Browser       BrowserConfig
 
@@ -294,8 +295,13 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
 	mux.HandleFunc(routePromptsJSON, s.handlePromptsJSON)
+	mux.HandleFunc(routePersonasJSON, s.handlePersonasJSON)
 	mux.HandleFunc(routeMemoryFilesJSON, s.handleMemoryFilesJSON)
 	mux.HandleFunc(routeMemoryFile, s.handleMemoryFile)
+	mux.HandleFunc(
+		routePromptInlineSave,
+		wrapRelativeLinksFunc(s.handleSavePromptInline),
+	)
 	mux.HandleFunc(
 		routePromptRuntimeSave,
 		wrapRelativeLinksFunc(s.handleSavePromptRuntime),
@@ -311,6 +317,18 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(
 		routePromptFileDelete,
 		wrapRelativeLinksFunc(s.handleDeletePromptFile),
+	)
+	mux.HandleFunc(
+		routePersonaSave,
+		wrapRelativeLinksFunc(s.handleSavePersona),
+	)
+	mux.HandleFunc(
+		routePersonaDelete,
+		wrapRelativeLinksFunc(s.handleDeletePersona),
+	)
+	mux.HandleFunc(
+		routePersonaDefaultSave,
+		wrapRelativeLinksFunc(s.handleSaveDefaultPersona),
 	)
 	mux.HandleFunc(
 		routeSkillsRefresh,
@@ -521,6 +539,7 @@ type skillInstallView struct {
 type pageData struct {
 	Snapshot       snapshot
 	Prompts        PromptsStatus
+	Personas       PersonasStatus
 	Notice         string
 	Error          string
 	RefreshSeconds int
@@ -978,6 +997,7 @@ func (s *Service) renderPage(
 	data := pageData{
 		Snapshot:       s.snapshotForView(view),
 		Prompts:        s.promptsStatus(),
+		Personas:       s.personasStatus(),
 		Notice:         strings.TrimSpace(r.URL.Query().Get(queryNotice)),
 		Error:          strings.TrimSpace(r.URL.Query().Get(queryError)),
 		RefreshSeconds: refreshSeconds,
@@ -1053,7 +1073,7 @@ func pageSummary(view adminView) string {
 	case viewSkills:
 		return "Discover installed skills, refresh folders from disk, and manage config-backed enablement."
 	case viewPrompts:
-		return "Inspect effective prompts, edit prompt files, and apply live runtime overrides."
+		return "Inspect prompt bundles, edit file-backed prompts, and manage persona stores."
 	case viewMemory:
 		return "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory."
 	case viewAutomation:
