@@ -991,7 +991,11 @@ func imageToURLOrBase64(image *model.Image) string {
 	if image.URL != "" {
 		return image.URL
 	}
-	return "data:image/" + image.Format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
+	format := image.Format
+	if strings.HasPrefix(format, "image/") {
+		return "data:" + format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
+	}
+	return "data:image/" + format + ";base64," + base64.StdEncoding.EncodeToString(image.Data)
 }
 
 func isProviderFileID(fileID string) bool {
