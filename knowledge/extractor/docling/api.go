@@ -22,9 +22,9 @@ import (
 )
 
 type convertOptions struct {
-	ToFormats       []string      `json:"to_formats,omitempty"`
-	ImageExportMode ImageRefMode  `json:"image_export_mode,omitempty"`
-	DoOCR           *bool         `json:"do_ocr,omitempty"`
+	ToFormats       []string     `json:"to_formats,omitempty"`
+	ImageExportMode ImageRefMode `json:"image_export_mode,omitempty"`
+	DoOCR           *bool        `json:"do_ocr,omitempty"`
 }
 
 type httpSourceRequest struct {

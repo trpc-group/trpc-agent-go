@@ -665,3 +665,111 @@ func TestFileReaderTypeWithChunking(t *testing.T) {
 		t.Fatal("expected at least one document")
 	}
 }
+
+// TestExtractAndRead_ExtractionError verifies error propagation when ExtractFromReader fails.
+func TestExtractAndRead_ExtractionError(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-test"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath}, WithExtractor(&recordingExtractor{
+		err: errors.New("extraction failed"),
+	}))
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when extraction fails")
+	}
+	if !strings.Contains(err.Error(), "extraction failed") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestExtractAndRead_UnknownFormat verifies error when extracted format has no reader.
+func TestExtractAndRead_UnknownFormat(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-test"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath}, WithExtractor(&recordingExtractor{
+		format: "unknown_format_xyz",
+	}))
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when no reader for extracted format")
+	}
+	if !strings.Contains(err.Error(), "no reader available") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestReadWithReader_UnknownFileType verifies error when no reader is available for file type.
+func TestReadWithReader_UnknownFileType(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("data"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath})
+	// Remove the text reader to trigger "no reader available" error
+	delete(src.readers, "text")
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when no reader available for file type")
+	}
+	if !strings.Contains(err.Error(), "no reader available") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestReadDocuments_ReadError verifies error propagation when reader fails.
+func TestReadDocuments_ReadError(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("content"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath})
+	// Replace the text reader with one that always fails
+	src.readers["text"] = &failReader{}
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when reader fails")
+	}
+}
+
+// failReader is a reader that always returns an error.
+type failReader struct{}
+
+func (f *failReader) ReadFromReader(name string, r io.Reader) ([]*document.Document, error) {
+	return nil, errors.New("read from reader failed")
+}
+
+func (f *failReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	return nil, errors.New("read from file failed")
+}
+
+func (f *failReader) ReadFromURL(url string) ([]*document.Document, error) {
+	return nil, errors.New("read from url failed")
+}
+
+func (f *failReader) Name() string { return "fail" }
+
+func (f *failReader) SupportedExtensions() []string { return []string{".txt"} }
+
+// TestWithMetadata_EmptyMap verifies WithMetadata with empty map.
+func TestWithMetadata_EmptyMap(t *testing.T) {
+	src := New([]string{"test.txt"}, WithMetadata(map[string]any{}))
+	if src.metadata == nil {
+		t.Error("metadata should not be nil after WithMetadata")
+	}
+}

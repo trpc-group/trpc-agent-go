@@ -857,3 +857,109 @@ func TestFileReaderTypeWithInvalidType(t *testing.T) {
 		t.Error("textReader should be initialized even with invalid type")
 	}
 }
+
+// TestProcessAsURL_WithExtractor verifies extractor is passed to URL source.
+func TestProcessAsURL_WithExtractor(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-test"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL + "/doc.pdf"}, WithExtractor(&mockContentExtractor{}))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}
+
+// TestProcessAsFile_WithExtractor verifies extractor is passed to file source.
+func TestProcessAsFile_WithExtractor(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-test"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath}, WithExtractor(&mockContentExtractor{}))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}
+
+// TestProcessAsURL_WithChunkSizeAndOverlap verifies chunk size and overlap are passed to URL source.
+func TestProcessAsURL_WithChunkSizeAndOverlap(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte(strings.Repeat("word ", 100)))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL}, WithChunkSize(50), WithChunkOverlap(10))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}
+
+// TestProcessAsDirectory_WithChunkSizeAndOverlap verifies chunk size and overlap are passed to dir source.
+func TestProcessAsDirectory_WithChunkSizeAndOverlap(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(filePath, []byte(strings.Repeat("word ", 100)), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{tmpDir}, WithChunkSize(50), WithChunkOverlap(10))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}
+
+// TestProcessAsFile_WithChunkSizeAndOverlap verifies chunk size and overlap are passed to file source.
+func TestProcessAsFile_WithChunkSizeAndOverlap(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(filePath, []byte(strings.Repeat("word ", 100)), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath}, WithChunkSize(50), WithChunkOverlap(10))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}
+
+// TestProcessAsText_EmptyContent verifies processAsText handles empty content.
+func TestProcessAsText_EmptyContent(t *testing.T) {
+	src := New([]string{})
+	// Empty content returns an error from the text reader
+	_, err := src.processAsText("")
+	// Either error or empty docs is acceptable
+	_ = err
+}

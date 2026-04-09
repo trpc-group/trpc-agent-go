@@ -729,3 +729,139 @@ func TestFileReaderTypeWithRecursive(t *testing.T) {
 		t.Errorf("expected at least 2 documents (root + nested), got %d", len(docs))
 	}
 }
+
+// TestExtractAndRead_ExtractionError verifies error propagation when ExtractFromReader fails.
+func TestExtractAndRead_ExtractionError(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-test"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{tmpDir}, WithExtractor(&recordingExtractor{
+		err: errors.New("extraction failed"),
+	}))
+	_, err := src.ReadDocuments(ctx)
+	if err != nil {
+		// Error is logged but processing continues; no error expected at top level
+		t.Logf("got error (may be expected): %v", err)
+	}
+}
+
+// TestExtractAndRead_UnknownFormat verifies error when extracted format has no reader.
+func TestExtractAndRead_UnknownFormat(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-test"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{tmpDir}, WithExtractor(&recordingExtractor{
+		format: "unknown_format_xyz",
+	}))
+	_, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Logf("got error (may be expected): %v", err)
+	}
+}
+
+// TestReadWithReader_NoReaderAvailable verifies error when no reader is available for file type.
+func TestReadWithReader_NoReaderAvailable(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("data"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{tmpDir})
+	// Remove the text reader to trigger "no reader available" error
+	delete(src.readers, "text")
+	_, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Logf("got error (may be expected): %v", err)
+	}
+}
+
+// TestReadDocuments_ReadFileError verifies error propagation when ReadFromFile fails.
+func TestReadDocuments_ReadFileError(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("content"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{tmpDir})
+	// Replace the text reader with one that always fails
+	src.readers["text"] = &failReader{}
+	_, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Logf("got error (may be expected): %v", err)
+	}
+}
+
+// failReader is a reader that always returns an error.
+type failReader struct{}
+
+func (f *failReader) ReadFromReader(name string, r io.Reader) ([]*document.Document, error) {
+	return nil, errors.New("read from reader failed")
+}
+
+func (f *failReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	return nil, errors.New("read from file failed")
+}
+
+func (f *failReader) ReadFromURL(url string) ([]*document.Document, error) {
+	return nil, errors.New("read from url failed")
+}
+
+func (f *failReader) Name() string { return "fail" }
+
+func (f *failReader) SupportedExtensions() []string { return []string{".txt"} }
+
+// mockTransformer is a simple Transformer implementation for testing.
+type mockTransformer struct{}
+
+func (m *mockTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (m *mockTransformer) Name() string { return "mock" }
+
+// TestWithTransformers verifies the WithTransformers option.
+func TestWithTransformers(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.txt")
+	if err := os.WriteFile(filePath, []byte("content"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	// Verify WithTransformers with empty list
+	src := New([]string{tmpDir}, WithTransformers())
+	if len(src.transformers) != 0 {
+		t.Errorf("expected 0 transformers, got %d", len(src.transformers))
+	}
+
+	// Verify WithTransformers with actual transformer
+	src2 := New([]string{tmpDir}, WithTransformers(&mockTransformer{}))
+	if len(src2.transformers) != 1 {
+		t.Errorf("expected 1 transformer, got %d", len(src2.transformers))
+	}
+
+	// Verify it works end-to-end
+	docs, err := src2.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments with transformer failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+}

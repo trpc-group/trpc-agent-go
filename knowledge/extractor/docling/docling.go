@@ -36,7 +36,7 @@ const (
 	defaultEndpoint = "http://localhost:5001"
 	defaultTimeout  = 5 * time.Minute
 
-	convertFilePath = "/v1/convert/file"
+	convertFilePath   = "/v1/convert/file"
 	convertSourcePath = "/v1/convert/source"
 )
 

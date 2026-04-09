@@ -1198,3 +1198,50 @@ func TestReadDocuments_DocumentWithNilMetadata(t *testing.T) {
 		}
 	}
 }
+
+// TestExtractFromResponse_UnknownFormat verifies error when ExtractFromReader returns unknown format.
+func TestExtractFromResponse_UnknownFormat(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-test"))
+	}))
+	defer server.Close()
+
+	// unknownFormatExtractor returns an unknown format so no reader is found
+	src := New([]string{server.URL + "/doc.pdf"}, WithExtractor(&unknownFormatURLExtractor{}))
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when no reader for extracted format")
+	}
+}
+
+// failReadExtractor returns markdown format but the reader will fail.
+type failReadExtractor struct{}
+
+func (e *failReadExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return e.ExtractFromReader(ctx, strings.NewReader(string(data)), opts...)
+}
+
+func (e *failReadExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	return &extractor.Result{
+		Reader: strings.NewReader("data"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (e *failReadExtractor) SupportedFormats() []string {
+	return []string{".pdf"}
+}
+
+func (e *failReadExtractor) Close() error { return nil }
+
+// TestFetchAndRead_CreateRequestError verifies error when request creation fails.
+func TestFetchAndRead_CreateRequestError(t *testing.T) {
+	src := New([]string{"http://\x00invalid"})
+	_, err := src.ReadDocuments(context.Background())
+	if err == nil {
+		t.Fatal("expected error for invalid URL")
+	}
+}
