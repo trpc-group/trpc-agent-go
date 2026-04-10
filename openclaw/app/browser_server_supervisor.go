@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
