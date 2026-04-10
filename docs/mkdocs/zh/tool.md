@@ -637,6 +637,249 @@ agent := llmagent.New(
   （例如每次请求不同的认证头、追踪字段），更稳妥的做法通常是手动
   `toolSet.Tools(ctx)`，再通过 `WithTools(...)` 注入。
 
+### MCP Broker（按需发现 MCP）
+
+除了直接把远端 MCP 工具展开成一等 Tool 之外，框架还提供了另一种
+接入方式：`tool/mcpbroker`。
+
+`mcpbroker` 的核心思路是：
+
+- 不在一开始把远端 MCP 的全部工具都暴露给模型
+- 先只暴露少量 broker 工具
+- 让模型在需要时再逐步发现和调用远端 MCP 能力
+
+这类模式更适合**长尾工具很多、但单次请求只会命中少量工具**的场景。
+
+#### 什么时候用 MCP Broker
+
+推荐使用 `mcpbroker` 的场景：
+
+- 某个 MCP 服务工具很多，不希望每轮都把完整工具表面塞给模型
+- 某些能力是“储备能力”或“长尾能力”，并不是高频调用
+- 需要通过 Skill、System Prompt、User Prompt 等增量信息，动态连接某个远端 MCP endpoint
+- 希望用较小、较稳定的初始工具面换取更低的上下文压力
+
+更适合继续使用 `mcp.NewMCPToolSet()` 的场景：
+
+- 高频、稳定、已知能力
+- 希望把远端工具直接升格成一等 Tool
+- 更看重调用路径更短、约束更强、工具调用成功率更高
+
+这两种方式可以组合使用：
+
+- 高频热点能力继续使用 `MCP ToolSet`
+- 低频长尾能力放进 `mcpbroker`
+
+#### 与 MCP ToolSet 的区别
+
+两者的主要区别是“工具暴露时机”不同：
+
+- `MCP ToolSet`
+  - 在初始化或运行时先 `initialize + tools/list`
+  - 把远端每个 MCP tool 直接变成 Agent 可见 Tool
+- `mcpbroker`
+  - 初始只暴露 4 个 broker 工具
+  - 模型先发现 server，再发现 tool，再检查指定 tool 的 schema，最后再调用
+
+可以把它理解为：
+
+- `MCP ToolSet`：直接挂远端工具
+- `mcpbroker`：按需发现远端工具
+
+典型 trade-off：
+
+- `MCP ToolSet`：更快、更强约束，但工具面更大
+- `mcpbroker`：更省上下文、更适合长尾与动态能力，但多一步 discovery，整体可能更慢
+
+#### 基本接入方式
+
+```go
+import (
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+    "trpc.group/trpc-go/trpc-agent-go/tool/mcpbroker"
+)
+
+broker := mcpbroker.New(
+    mcpbroker.WithServers(map[string]mcp.ConnectionConfig{
+        "local_stdio_code": {
+            Transport: "stdio",
+            Command:   "go",
+            Args:      []string{"run", "./stdio_server/main.go"},
+            Timeout:   10 * time.Second,
+        },
+    }),
+    mcpbroker.WithAllowAdHocHTTP(true),
+)
+
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(model),
+    llmagent.WithTools(broker.Tools()),
+)
+```
+
+当前 `mcpbroker` 是**工具层接入**，不会像 `Skill` 那样自动向
+`System Prompt` 注入策略提示。如果你希望模型更稳定地理解：
+
+- 什么时候先列 server
+- 什么时候先 `mcp_list_tools`
+- 什么时候再 `mcp_inspect_tools`
+- 什么时候再 `mcp_call`
+
+通常仍然建议在业务侧 instruction 里补少量高层 guidance。
+
+#### 模型可见的 4 个工具
+
+当前模型只会看到这 4 个工具：
+
+- `mcp_list_servers`
+- `mcp_list_tools`
+- `mcp_inspect_tools`
+- `mcp_call`
+
+推荐的调用顺序通常是：
+
+1. `mcp_list_servers()`：查看 broker 已知的命名 MCP server
+2. `mcp_list_tools(selector)`：查看某个 server 或远端 URL 的轻量工具目录
+3. `mcp_inspect_tools(selector, tools[])`：只展开指定工具的 schema
+4. `mcp_call(selector, arguments)`：调用具体 MCP tool
+
+这意味着模型不再一开始就看到完整远端工具集，而是先通过 broker
+渐进式探索。
+
+#### Selector 心智模型
+
+`mcpbroker` 的核心输入不是 `server_name + tool_name + url` 的混合对象，
+而是统一使用 `selector`：
+
+- 在 `mcp_list_tools` 中：
+  - 命名 server：`local_stdio_code`
+  - 动态 URL：`https://example.com/mcp`
+- 在 `mcp_call` 中：
+  - 命名 tool：`local_stdio_code.add`
+  - 动态 URL tool：`https://example.com/mcp.add`
+
+如果某个 ad-hoc HTTP endpoint 会让点分隔 selector 产生歧义，也支持：
+
+- `https://example.com/mcp#tool=add`
+
+真正的 MCP tool 参数统一放在：
+
+- `mcp_call(..., arguments={...})`
+
+而不是放在顶层字段里。
+
+#### 渐进式发现方式
+
+- 先用 `mcp_list_tools` 获取轻量摘要
+- 只有准备调用某个具体 tool 时，再用 `mcp_inspect_tools`
+  只展开该 tool 的 schema
+
+这和“先把完整 schema 全部塞给模型”相比，更适合上下文预算紧张的场景。
+
+#### 动态 URL 与 Skill 场景
+
+`mcpbroker` 支持 ad-hoc HTTP MCP：
+
+```go
+broker := mcpbroker.New(
+    mcpbroker.WithAllowAdHocHTTP(true),
+)
+```
+
+`WithAllowAdHocHTTP(true)` 会让 HTTP(S) MCP 的 `selector` 成为模型可控输入。
+生产环境里，建议先在业务侧对 URL、域名和路径做 allowlist 或其它校验，
+再把 ad-hoc HTTP 当成可信集成路径使用。
+
+这类动态连接通常需要先有一个“信息来源”告诉模型：
+
+- 这个 MCP endpoint 存在
+- 它大概能做什么
+- 该用什么 URL 去连接
+
+这个信息来源可以是：
+
+- System Prompt
+- User Prompt
+- Skill
+- 知识库
+
+也就是说，`mcpbroker` 解决的是“如何连、如何看、如何调”，
+而不是“模型为什么会想到去连这个 MCP”。
+
+这也让 `mcpbroker` 很适合与 Skill 配合使用。有些 Skill 只在自身
+场景下需要某个专用 MCP 能力，这类 MCP 工具不一定要在整个会话中
+长期作为全局工具暴露；还有些 Skill 会在加载后提供一个增量出现的
+远端 MCP endpoint。此时 Skill 可以负责提供“这个 MCP 存在、能做什么、
+该连哪个 URL”的信息来源，而 `mcpbroker` 负责动态连接以及渐进式暴露
+工具和 schema。
+
+完整示例可参考：
+
+- `examples/mcpbroker/basic`
+
+其中包含：
+
+- 本地命名 MCP server
+- Skill 提供远端 streamable HTTP MCP endpoint
+- 模型通过 `skill_load -> mcp_list_tools -> mcp_inspect_tools -> mcp_call` 动态连接远端 MCP
+
+#### 鉴权 Hook（Per-Run Header 注入）
+
+对于 HTTP 型 MCP，`mcpbroker` 还提供两类运行时扩展点：
+
+- `WithHTTPHeaderInjector(...)`
+- `WithErrorInterceptor(...)`
+
+适用场景：
+
+- 不希望让模型直接携带 `Authorization`
+- 需要根据当前用户、租户、workspace，在每次调用时动态注入 token
+- 希望在远端返回 401/403 时，由业务层把底层错误包装成更友好的错误信息
+
+示例：
+
+```go
+broker := mcpbroker.New(
+    mcpbroker.WithAllowAdHocHTTP(true),
+    mcpbroker.WithHTTPHeaderInjector(func(ctx context.Context, req *mcpbroker.HeaderInjectRequest) (map[string]string, error) {
+        token, _ := resolveUserTokenFromContext(ctx, req.BaseURL)
+        if token == "" {
+            return nil, nil
+        }
+        return map[string]string{
+            "Authorization": "Bearer " + token,
+        }, nil
+    }),
+    mcpbroker.WithErrorInterceptor(func(ctx context.Context, req *mcpbroker.BrokerErrorRequest) (*mcpbroker.BrokerErrorDecision, error) {
+        if isUnauthorized(req.Err) {
+            return &mcpbroker.BrokerErrorDecision{
+                Handled:   true,
+                WrapError: fmt.Errorf("当前用户需要先在宿主系统完成授权，然后再重试"),
+            }, nil
+        }
+        return nil, nil
+    }),
+)
+```
+
+这里的设计重点是：
+
+- 模型只负责选择 `selector`
+- 业务代码负责从 `ctx` 中识别当前用户，并注入 HTTP Header
+- `mcpbroker` 本身不管理复杂的 OAuth session 状态机
+
+开启 `WithAllowAdHocHTTP(true)` 后，URL selector 可能来自模型可见上下文。
+生产环境中应在 `HTTPHeaderInjector` 里基于 `req.IsAdHoc` 和 `req.BaseURL`
+做 allowlist / URL 校验，再返回敏感 Header。
+
+完整示例可参考：
+
+- `examples/mcpbroker/authhooks`
+
 ## Agent 工具 (AgentTool)
 
 AgentTool 允许把一个现有的 Agent 以工具的形式暴露给上层 Agent 使用。相比普通函数工具，AgentTool 的优势在于：
