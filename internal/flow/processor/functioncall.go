@@ -1374,8 +1374,12 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		if toolResult != nil {
 			suppressDefaultToolMessage = false
 		}
+		pluginErr := toolErr
+		if afterCallbackReplacedResult(toolErr, toolResult) {
+			pluginErr = nil
+		}
 		return ctx, toolResult, toolCall.Function.Arguments,
-			suppressDefaultToolMessage, skipSummarization, toolErr
+			suppressDefaultToolMessage, skipSummarization, pluginErr
 	}
 	ctx, toolResult, localSkip, err := p.runAfterToolCallbacks(
 		ctx,
@@ -1391,8 +1395,31 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	if toolResult != nil {
 		suppressDefaultToolMessage = false
 	}
+	// When the after-tool callback replaced the result with a CustomResult,
+	// the original tool execution error should be cleared so that the
+	// caller uses the replacement result as the tool response message
+	// instead of discarding it due to a non-nil error.
+	if afterCallbackReplacedResult(toolErr, toolResult) {
+		toolErr = nil
+	}
 	return ctx, toolResult, toolCall.Function.Arguments,
 		suppressDefaultToolMessage, skipSummarization || localSkip, toolErr
+}
+
+// afterCallbackReplacedResult returns true when the after-tool callback has
+// replaced the original (failed) tool result with a non-nil custom result.
+// In that case the original toolErr should be cleared so that the framework
+// sends the replacement result as the tool response message to the model.
+// StopError is excluded because it carries a control-flow signal that must
+// not be silently swallowed by a callback result replacement.
+func afterCallbackReplacedResult(toolErr error, toolResult any) bool {
+	if toolErr == nil || toolResult == nil {
+		return false
+	}
+	if _, ok := agent.AsStopError(toolErr); ok {
+		return false
+	}
+	return true
 }
 
 // isStreamable returns true if the tool supports streaming and its stream
