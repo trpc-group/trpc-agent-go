@@ -14,6 +14,7 @@ import (
 	"net/http"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
@@ -39,7 +40,12 @@ func WithContentFetchingURL(url []string) Option {
 // WithMetadata sets additional metadata for the source.
 func WithMetadata(metadata map[string]any) Option {
 	return func(s *Source) {
-		s.metadata = metadata
+		if s.metadata == nil {
+			s.metadata = make(map[string]any)
+		}
+		for k, v := range metadata {
+			s.metadata[k] = v
+		}
 	}
 }
 
@@ -107,5 +113,16 @@ func WithTransformers(transformers ...transform.Transformer) Option {
 func WithFileReaderType(fileType source.FileReaderType) Option {
 	return func(s *Source) {
 		s.fileReaderType = fileType
+	}
+}
+
+// WithExtractor sets a content extractor for handling complex or unsupported formats.
+// When configured, the extractor is used for URL content whose inferred file
+// extension matches the extractor's supported formats. The source always
+// fetches content through the configured HTTP client and passes the response
+// body to ExtractFromReader.
+func WithExtractor(e extractor.Extractor) Option {
+	return func(s *Source) {
+		s.contentExtractor = e
 	}
 }
