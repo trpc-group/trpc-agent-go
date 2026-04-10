@@ -1854,7 +1854,13 @@ func shouldEmitModelResponseEvent(
 	if invocation != nil && invocation.RunOptions.GraphEmitFinalModelResponses {
 		return shouldEmitModelResponse(rsp)
 	}
-	return !rsp.Done
+	if !rsp.Done {
+		return true
+	}
+	// Emit the final (Done) response when it carries ReasoningContent so
+	// the runner can persist it into the session. Without this, thinking
+	// content from graph LLM nodes is lost across conversation turns.
+	return responseHasReasoningContent(rsp)
 }
 
 // processModelResponse processes a single model response.
@@ -1940,6 +1946,20 @@ func processModelResponse(ctx context.Context, config modelResponseConfig) (cont
 		)
 	}
 	return ctx, llmEvent, nil
+}
+
+// responseHasReasoningContent reports whether any choice in the response
+// carries reasoning/thinking content.
+func responseHasReasoningContent(rsp *model.Response) bool {
+	if rsp == nil {
+		return false
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Message.ReasoningContent != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldEmitModelResponse(rsp *model.Response) bool {
@@ -4330,7 +4350,7 @@ func emitFastModelResponseEvent(
 		llmEvent = &event.Event{}
 	}
 
-	shouldEmit := !response.Done
+	shouldEmit := !response.Done || responseHasReasoningContent(response)
 	eventID := ""
 	if !response.IsPartial || !partialEventIDsDisabled {
 		eventID = uuid.NewString()
