@@ -78,7 +78,20 @@ const (
 	// SkillLoadModeSession keeps loaded skill content available across
 	// invocations until cleared or the session expires.
 	SkillLoadModeSession = processor.SkillLoadModeSession
+
+	// SessionSummaryInjectionSystem injects the session summary as a system
+	// message (default behavior).
+	SessionSummaryInjectionSystem = processor.SessionSummaryInjectionSystem
+	// SessionSummaryInjectionUser injects the session summary as a user
+	// message that participates in token-budget trimming for sliding-window
+	// behavior. If the first history message is also user, the summary is
+	// merged into it.
+	SessionSummaryInjectionUser = processor.SessionSummaryInjectionUser
 )
+
+// SessionSummaryInjectionMode controls how the session summary is injected
+// into the model request.
+type SessionSummaryInjectionMode = processor.SessionSummaryInjectionMode
 
 // MessageFilterMode is the mode for filtering messages.
 type MessageFilterMode int
@@ -246,6 +259,11 @@ type Options struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// as a system message when available (default: false).
 	AddSessionSummary bool
+	// SessionSummaryInjectionMode controls how the session summary is injected
+	// into the model request. Default is "system" (SessionSummaryInjectionSystem).
+	// Set to "user" (SessionSummaryInjectionUser) to inject as a user message
+	// that participates in token-budget trimming for sliding-window behavior.
+	SessionSummaryInjectionMode processor.SessionSummaryInjectionMode
 	// SyncSummaryIntraRun controls whether to refresh session summary
 	// synchronously between LLM loop iterations inside the same run.
 	// When false (default), summary refresh happens asynchronously and
@@ -981,6 +999,20 @@ func WithAddContextPrefix(addPrefix bool) Option {
 func WithAddSessionSummary(addSummary bool) Option {
 	return func(opts *Options) {
 		opts.AddSessionSummary = addSummary
+	}
+}
+
+// WithSessionSummaryInjectionMode sets the injection mode for session summaries.
+//
+// Available modes:
+//   - processor.SessionSummaryInjectionSystem (default): injects as system message.
+//   - processor.SessionSummaryInjectionUser: injects as a user message that
+//     participates in token-budget trimming for sliding-window behavior.
+//     If the first history message is also a user message, the summary is
+//     merged into it to avoid consecutive user messages.
+func WithSessionSummaryInjectionMode(mode processor.SessionSummaryInjectionMode) Option {
+	return func(opts *Options) {
+		opts.SessionSummaryInjectionMode = mode
 	}
 }
 

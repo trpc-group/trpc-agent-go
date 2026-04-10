@@ -80,6 +80,18 @@ func TestWithSyncSummaryIntraRun(t *testing.T) {
 	require.False(t, opts.SyncSummaryIntraRun)
 }
 
+func TestWithSessionSummaryInjectionMode(t *testing.T) {
+	opts := &Options{}
+	// Default should be zero value (empty string, treated as system).
+	require.Equal(t, processor.SessionSummaryInjectionMode(""), opts.SessionSummaryInjectionMode)
+
+	WithSessionSummaryInjectionMode(SessionSummaryInjectionUser)(opts)
+	require.Equal(t, processor.SessionSummaryInjectionUser, opts.SessionSummaryInjectionMode)
+
+	WithSessionSummaryInjectionMode(SessionSummaryInjectionSystem)(opts)
+	require.Equal(t, processor.SessionSummaryInjectionSystem, opts.SessionSummaryInjectionMode)
+}
+
 func TestWithContextCompactionOptions(t *testing.T) {
 	opts := &Options{}
 

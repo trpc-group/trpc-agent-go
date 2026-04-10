@@ -34,6 +34,26 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+// SessionSummaryInjectionMode controls how the session summary is injected
+// into the model request.
+type SessionSummaryInjectionMode string
+
+const (
+	// SessionSummaryInjectionSystem injects the summary as a system message
+	// (default). The summary is merged into the existing system message or
+	// prepended as a new one. This makes the summary part of the preserved
+	// head in token tailoring and is not subject to sliding-window trimming.
+	SessionSummaryInjectionSystem SessionSummaryInjectionMode = "system"
+
+	// SessionSummaryInjectionUser injects the summary as a user message
+	// placed between few-shot examples and session history. If the first
+	// history message is also a user message, the summary is merged into it
+	// to avoid consecutive user messages that some models reject. This mode
+	// allows the summary to participate in token-budget trimming like any
+	// other user-anchored round, enabling a true sliding-window experience.
+	SessionSummaryInjectionUser SessionSummaryInjectionMode = "user"
+)
+
 // Content inclusion options.
 const (
 	// BranchFilterModePrefix Prefix matching pattern
@@ -92,8 +112,11 @@ type ContentRequestProcessor struct {
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
 	// AddSessionSummary controls whether to prepend the current branch summary
-	// as a system message to the request if available.
+	// to the request if available.
 	AddSessionSummary bool
+	// SessionSummaryInjectionMode controls how the session summary is injected
+	// into the model request. Default is SessionSummaryInjectionSystem.
+	SessionSummaryInjectionMode SessionSummaryInjectionMode
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
@@ -192,6 +215,25 @@ func WithAddContextPrefix(addPrefix bool) ContentOption {
 func WithAddSessionSummary(add bool) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.AddSessionSummary = add
+	}
+}
+
+// WithSessionSummaryInjectionMode sets the injection mode for session summaries.
+//
+// Available modes:
+//   - SessionSummaryInjectionSystem (default): injects as system message,
+//     merged into existing system message or prepended.
+//   - SessionSummaryInjectionUser: injects as a user message between few-shot
+//     examples and session history. If the first history message is also user,
+//     the summary is merged into it to avoid consecutive user messages.
+func WithSessionSummaryInjectionMode(mode SessionSummaryInjectionMode) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		switch mode {
+		case SessionSummaryInjectionUser:
+			p.SessionSummaryInjectionMode = SessionSummaryInjectionUser
+		default:
+			p.SessionSummaryInjectionMode = SessionSummaryInjectionSystem
+		}
 	}
 }
 
@@ -496,13 +538,13 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 
 	var messages []model.Message
 	var summaryUpdatedAt time.Time
-	var summaryMsg *model.Message
+	var summaryText string
 	// Skip session summary when include_contents=none, but still get current
 	// invocation's events (tool calls/results) to maintain ReAct loop context.
 	if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
 		// Fetch session summary early so we can insert it after other
 		// semi-stable system blocks (for example, preloaded memories).
-		summaryMsg, summaryUpdatedAt = p.getSessionSummaryMessage(invocation)
+		summaryText, summaryUpdatedAt = p.getSessionSummaryText(invocation)
 	}
 
 	// Preload memories into system prompt if configured.
@@ -512,9 +554,20 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 			p.injectSystemContextMessage(req, *memMsg)
 		}
 	}
-	if summaryMsg != nil {
+	if summaryText != "" {
 		invocation.SetState(contentHasSessionSummaryStateKey, true)
-		p.injectSystemContextMessage(req, *summaryMsg)
+		if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
+			// User-mode injection is deferred until after history messages are
+			// collected, so the summary can be merged with the first user
+			// message in history when applicable.
+		} else {
+			// Default system-mode: inject as system context message.
+			summaryMsg := model.Message{
+				Role:    model.RoleSystem,
+				Content: p.formatSummary(summaryText),
+			}
+			p.injectSystemContextMessage(req, summaryMsg)
+		}
 	}
 	if !skipHistory &&
 		p.PreloadSessionRecall > 0 &&
@@ -537,6 +590,16 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 		if p.hasCompactedCurrentInvocationToolResults(invocation, summaryUpdatedAt) {
 			invocation.SetState(contentHasCompactedToolResultsStateKey, true)
 		}
+	}
+
+	// When user-mode summary injection is active, prepend the summary as a
+	// user message before history. If the first history message is also a user
+	// message, merge the summary into it to avoid consecutive user messages
+	// that some providers reject. Also check if req.Messages already ends with
+	// a user message (e.g. from injected context or few-shot) and merge there
+	// instead of creating adjacent user messages.
+	if summaryText != "" && p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
+		messages = p.prependSummaryUserMessage(summaryText, messages, req.Messages)
 	}
 
 	req.Messages = append(req.Messages, messages...)
@@ -578,11 +641,12 @@ func (p *ContentRequestProcessor) injectInjectedContextMessages(invocation *agen
 	req.Messages = append(req.Messages, messages...)
 }
 
-// getSessionSummaryMessage returns the current-branch session summary as a
-// system message if available and non-empty, along with its UpdatedAt timestamp.
-func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation) (*model.Message, time.Time) {
+// getSessionSummaryText returns the raw session summary text and its
+// UpdatedAt timestamp for the current branch. It does not format or assign
+// a role — callers decide how to inject the text into the request.
+func (p *ContentRequestProcessor) getSessionSummaryText(inv *agent.Invocation) (string, time.Time) {
 	if inv.Session == nil {
-		return nil, time.Time{}
+		return "", time.Time{}
 	}
 
 	// Acquire read lock to protect Summaries access.
@@ -590,7 +654,7 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	defer inv.Session.SummariesMu.RUnlock()
 
 	if inv.Session.Summaries == nil {
-		return nil, time.Time{}
+		return "", time.Time{}
 	}
 	filter := inv.GetEventFilterKey()
 	// For BranchFilterModeAll, prefer the full-session summary under empty filter key.
@@ -601,21 +665,95 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 	// Try exact match first.
 	sum := inv.Session.Summaries[filter]
 	if sum != nil && sum.Summary != "" {
-		content := p.formatSummary(sum.Summary)
-		return &model.Message{Role: model.RoleSystem, Content: content}, sum.UpdatedAt
+		return sum.Summary, sum.UpdatedAt
 	}
 
 	// For BranchFilterModePrefix, aggregate summaries with matching prefix.
-	// This handles the case where events have custom filterKeys (e.g., "app/user-messages")
-	// but the invocation's eventFilterKey is the app prefix (e.g., "app").
 	if p.BranchFilterMode == BranchFilterModePrefix && filter != "" {
-		summaryText, updatedAt := p.aggregatePrefixSummaries(inv.Session.Summaries, filter)
-		if summaryText != "" {
-			content := p.formatSummary(summaryText)
-			return &model.Message{Role: model.RoleSystem, Content: content}, updatedAt
-		}
+		return p.aggregatePrefixSummaries(inv.Session.Summaries, filter)
 	}
-	return nil, time.Time{}
+	return "", time.Time{}
+}
+
+// getSessionSummaryMessage returns the current-branch session summary as a
+// system message if available and non-empty, along with its UpdatedAt timestamp.
+func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation) (*model.Message, time.Time) {
+	text, updatedAt := p.getSessionSummaryText(inv)
+	if text == "" {
+		return nil, time.Time{}
+	}
+	content := p.formatSummary(text)
+	return &model.Message{Role: model.RoleSystem, Content: content}, updatedAt
+}
+
+// prependSummaryUserMessage prepends the session summary as a user message
+// before history messages. It checks three merge opportunities in order:
+//  1. If reqPrefix (req.Messages before history) ends with a user message,
+//     merge the summary into that trailing message to avoid adjacent user roles.
+//  2. If the first history message is a user message, merge the summary into it.
+//  3. Otherwise prepend as an independent user message.
+//
+// When merging into reqPrefix, the function mutates reqPrefix in place and
+// returns messages unchanged. The caller appends messages to req.Messages
+// after this call.
+func (p *ContentRequestProcessor) prependSummaryUserMessage(
+	summaryText string,
+	messages []model.Message,
+	reqPrefix []model.Message,
+) []model.Message {
+	if summaryText == "" {
+		return messages
+	}
+	formatted := p.formatSummaryForUser(summaryText)
+	if formatted == "" {
+		return messages
+	}
+
+	// Case 1: reqPrefix (existing req.Messages) ends with a user message.
+	// Merge summary into that message to avoid consecutive user roles.
+	if len(reqPrefix) > 0 && reqPrefix[len(reqPrefix)-1].Role == model.RoleUser {
+		last := &reqPrefix[len(reqPrefix)-1]
+		if last.Content == "" {
+			last.Content = formatted
+		} else {
+			last.Content = last.Content + mergedUserSeparator + formatted
+		}
+		return messages
+	}
+
+	// Case 2: first history message is user — merge into it.
+	if len(messages) > 0 && messages[0].Role == model.RoleUser {
+		merged := make([]model.Message, len(messages))
+		copy(merged, messages)
+		if merged[0].Content == "" {
+			merged[0].Content = formatted
+		} else {
+			merged[0].Content = formatted + mergedUserSeparator + merged[0].Content
+		}
+		return merged
+	}
+
+	// Case 3: prepend as independent user message.
+	out := make([]model.Message, 0, len(messages)+1)
+	out = append(out, model.Message{
+		Role:    model.RoleUser,
+		Content: formatted,
+	})
+	out = append(out, messages...)
+	return out
+}
+
+// formatSummaryForUser returns a user-role-friendly summary text.
+// It uses the custom SummaryFormatter if set, otherwise applies a neutral
+// default suitable for user-channel injection.
+func (p *ContentRequestProcessor) formatSummaryForUser(summary string) string {
+	if p.SummaryFormatter != nil {
+		return p.SummaryFormatter(summary)
+	}
+	return fmt.Sprintf("Context from previous interactions:\n\n"+
+		"<summary_of_previous_interactions>\n%s\n</summary_of_previous_interactions>\n\n"+
+		"Treat this as background context. If it conflicts with this conversation, "+
+		"prefer this conversation.\n", summary)
 }
 
 // aggregatePrefixSummaries aggregates all summaries whose keys have the given prefix.
