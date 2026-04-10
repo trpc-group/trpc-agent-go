@@ -549,9 +549,9 @@ func adminPromptBundleSummary(key string) string {
 func adminPromptConfiguredLabel(key string) string {
 	switch strings.TrimSpace(key) {
 	case adminPromptInstructionBundle:
-		return "Configured Instruction Sources"
+		return "Configured Instruction Text"
 	case adminPromptSystemBundle:
-		return "Configured System Sources"
+		return "Configured System Text"
 	default:
 		return "Configured Prompt"
 	}
@@ -560,11 +560,11 @@ func adminPromptConfiguredLabel(key string) string {
 func adminPromptEffectiveLabel(key string) string {
 	switch strings.TrimSpace(key) {
 	case adminPromptInstructionBundle:
-		return "Effective Instruction"
+		return "Live Instruction Text"
 	case adminPromptSystemBundle:
-		return "Effective System Prompt"
+		return "Live System Text"
 	default:
-		return "Effective Prompt"
+		return "Live Prompt Text"
 	}
 }
 
@@ -572,18 +572,18 @@ func adminPromptSourceSummary(key string, fileCount int) string {
 	switch strings.TrimSpace(key) {
 	case adminPromptInstructionBundle:
 		if fileCount == 0 {
-			return "Built-in defaults"
+			return "Built-in text"
 		}
 	case adminPromptSystemBundle:
 		if fileCount == 0 {
-			return "Inline or runtime-only configuration"
+			return "Config text or runtime-only text"
 		}
 	}
 	if fileCount == 1 {
-		return "1 editable file"
+		return "1 file"
 	}
 	if fileCount > 1 {
-		return fmt.Sprintf("%d editable files", fileCount)
+		return fmt.Sprintf("%d files", fileCount)
 	}
 	return "No editable files"
 }
