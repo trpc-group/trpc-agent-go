@@ -84,6 +84,12 @@ func (s *Service) Do(ctx context.Context) error {
 	if embeddingPayload["full_name"] != "example.com/demo.Service.Do" {
 		t.Fatalf("embedding full_name = %v, want %s", embeddingPayload["full_name"], "example.com/demo.Service.Do")
 	}
+	if embeddingPayload["id"] != "example.com/demo.Service.Do" {
+		t.Fatalf("embedding id = %v, want %s", embeddingPayload["id"], "example.com/demo.Service.Do")
+	}
+	if _, ok := embeddingPayload["receiver_type"]; ok {
+		t.Fatalf("embedding should not include receiver_type, got %v", embeddingPayload["receiver_type"])
+	}
 
 	aliasDoc := findDocByFullName(t, docs, "example.com/demo.ID")
 	assertMetadataEquals(t, aliasDoc.Metadata, "trpc_ast_type", "Alias")
@@ -123,6 +129,41 @@ func main() {}
 	assertMetadataEquals(t, docs[0].Metadata, source.MetaChunkIndex, 0)
 	if docs[0].EmbeddingText == "" {
 		t.Fatal("expected file embedding text to be populated")
+	}
+	var filePayload map[string]any
+	if err := json.Unmarshal([]byte(docs[0].EmbeddingText), &filePayload); err != nil {
+		t.Fatalf("failed to unmarshal file embedding text: %v", err)
+	}
+	if filePayload["id"] != goFile {
+		t.Fatalf("file embedding id = %v, want %s", filePayload["id"], goFile)
+	}
+	if filePayload["file_path"] != goFile {
+		t.Fatalf("file embedding file_path = %v, want %s", filePayload["file_path"], goFile)
+	}
+}
+
+func TestReadFromDirectoryParsesWholeModule(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeTestFile(t, filepath.Join(tmpDir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeTestFile(t, filepath.Join(tmpDir, "service.go"), `package demo
+
+type Service struct{}
+`)
+	writeTestFile(t, filepath.Join(tmpDir, "method.go"), `package demo
+
+func (s *Service) Do() error { return nil }
+`)
+
+	r := New().(*Reader)
+	docs, err := r.ReadFromDirectory(tmpDir)
+	if err != nil {
+		t.Fatalf("ReadFromDirectory() error = %v", err)
+	}
+	if findDocByFullName(t, docs, "example.com/demo.Service") == nil {
+		t.Fatal("expected service document")
+	}
+	if findDocByFullName(t, docs, "example.com/demo.Service.Do") == nil {
+		t.Fatal("expected method document")
 	}
 }
 

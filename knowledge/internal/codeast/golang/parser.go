@@ -18,6 +18,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
@@ -122,6 +123,102 @@ func (p *Parser) ParseContent(name, content string) (*codeast.Result, error) {
 	}, nil
 }
 
+// ParseDirectory parses a Go directory/module and returns semantic nodes across all files.
+func (p *Parser) ParseDirectory(dirPath string) (*codeast.Result, error) {
+	absDir, err := filepath.Abs(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	fset := token.NewFileSet()
+	pkgFiles := make(map[string][]*ast.File)
+	pkgNames := make(map[string]string)
+	fileInfos := make(map[string]*codeast.FileInfo)
+	var orderedFiles []string
+
+	err = filepath.Walk(absDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			if path != absDir {
+				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if !info.Mode().IsRegular() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+
+		fileNode, err := goparser.ParseFile(fset, path, nil, goparser.ParseComments)
+		if err != nil {
+			return nil
+		}
+		dir := filepath.Dir(path)
+		pkgFiles[dir] = append(pkgFiles[dir], fileNode)
+		pkgNames[dir] = fileNode.Name.Name
+		fileInfos[path] = buildFileInfo(path, fileNode)
+		orderedFiles = append(orderedFiles, path)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk directory: %w", err)
+	}
+	if len(pkgFiles) == 0 {
+		return &codeast.Result{File: &codeast.FileInfo{Name: absDir, Language: codeast.LanguageGo}}, nil
+	}
+
+	modulePath := parseGoModulePath(filepath.Join(absDir, "go.mod"))
+	if modulePath == "" {
+		modulePath = filepath.Base(absDir)
+	}
+
+	var allNodes []*codeast.Node
+	sort.Strings(orderedFiles)
+	for dir, files := range pkgFiles {
+		relPath, _ := filepath.Rel(absDir, dir)
+		pkgID := modulePath
+		if relPath != "." && relPath != "" {
+			pkgID = modulePath + "/" + filepath.ToSlash(relPath)
+		}
+		pkg := &parsedPackage{ID: pkgID, Name: pkgNames[dir], Syntax: files, Fset: fset}
+		nodes, err := p.extractor.Extract(&extractInput{pkg: pkg, fset: fset})
+		if err != nil {
+			return nil, err
+		}
+		allNodes = append(allNodes, nodes...)
+	}
+
+	var mergedImports []string
+	seenImports := make(map[string]struct{})
+	for _, path := range orderedFiles {
+		info := fileInfos[path]
+		if info == nil {
+			continue
+		}
+		for _, imp := range info.Imports {
+			if _, ok := seenImports[imp]; ok {
+				continue
+			}
+			seenImports[imp] = struct{}{}
+			mergedImports = append(mergedImports, imp)
+		}
+	}
+
+	return &codeast.Result{
+		File: &codeast.FileInfo{
+			Name:     absDir,
+			Language: codeast.LanguageGo,
+			Package:  modulePath,
+			Imports:  mergedImports,
+		},
+		Nodes: allNodes,
+		Edges: []*codeast.Edge{},
+	}, nil
+}
+
 // ParseFileInfo extracts file-level metadata without requiring a full semantic extraction result.
 func (p *Parser) ParseFileInfo(name, content string) (*codeast.FileInfo, error) {
 	fset := token.NewFileSet()
@@ -155,33 +252,18 @@ func BuildNodeEmbeddingText(node *codeast.Node) string {
 	}
 
 	comment := strings.TrimSpace(node.Comment)
-	payload := map[string]any{
+	payload := map[string]string{
+		"id":        node.ID,
 		"type":      string(node.Type),
 		"name":      node.Name,
 		"full_name": node.FullName,
 		"package":   node.Package,
 		"file_path": node.FilePath,
-	}
-	if node.Signature != "" {
-		payload["signature"] = node.Signature
-	}
-	if comment != "" {
-		payload["comment"] = comment
+		"signature": node.Signature,
+		"comment":   comment,
 	}
 	if len(node.Imports) > 0 {
-		payload["imports"] = node.Imports
-	}
-	if receiverType, ok := node.Metadata[codeast.MetadataKeyReceiverType].(string); ok && receiverType != "" {
-		payload["receiver_type"] = receiverType
-	}
-	if exported, ok := node.Metadata[codeast.MetadataKeyExported].(bool); ok {
-		payload["exported"] = exported
-	}
-	if goTypeKind, ok := node.Metadata["go_type_kind"].(string); ok && goTypeKind != "" {
-		payload["go_type_kind"] = goTypeKind
-	}
-	if goValueKind, ok := node.Metadata["go_value_kind"].(string); ok && goValueKind != "" {
-		payload["go_value_kind"] = goValueKind
+		payload["imports"] = strings.Join(node.Imports, ", ")
 	}
 
 	jsonBytes, _ := json.Marshal(payload)
@@ -190,18 +272,21 @@ func BuildNodeEmbeddingText(node *codeast.Node) string {
 
 // BuildFileEmbeddingText builds the embedding payload for a whole Go file document.
 func BuildFileEmbeddingText(content, name, packagePath string, imports []string) string {
-	payload := map[string]any{
+	payload := map[string]string{
+		"id":        name,
 		"type":      "file",
 		"name":      name,
 		"full_name": name,
-		"language":  string(codeast.LanguageGo),
-		"content":   content,
-	}
-	if packagePath != "" {
-		payload["package"] = packagePath
+		"package":   packagePath,
+		"file_path": name,
+		"comment":   "",
+		"signature": "",
 	}
 	if len(imports) > 0 {
-		payload["imports"] = imports
+		payload["imports"] = strings.Join(imports, ", ")
+	}
+	if content != "" {
+		payload["code"] = content
 	}
 
 	jsonBytes, _ := json.Marshal(payload)

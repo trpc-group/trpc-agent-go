@@ -15,6 +15,7 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 )
 
 // Source types
@@ -22,6 +23,7 @@ const (
 	TypeAuto = "auto"
 	TypeFile = "file"
 	TypeDir  = "dir"
+	TypeRepo = "repo"
 	TypeURL  = "url"
 )
 
@@ -88,6 +90,10 @@ const (
 	MetaURI        = MetaPrefix + "uri"         // URI (absolute path / URL / md5 for pure text)
 	MetaSourceName = MetaPrefix + "source_name" // source name
 	MetaChunkIndex = MetaPrefix + "chunk_index" // chunk index
+	MetaRepoName   = codeast.TrpcAstMetaPrefix + "repo_name"
+	MetaRepoURL    = codeast.TrpcAstMetaPrefix + "repo_url"
+	MetaBranch     = codeast.TrpcAstMetaPrefix + "branch"
+	MetaRepoPath   = MetaPrefix + "repo_path"
 )
 
 // Source represents a knowledge source that can provide documents.

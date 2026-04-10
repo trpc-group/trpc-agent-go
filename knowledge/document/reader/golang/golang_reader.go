@@ -136,6 +136,36 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 	return r.processContent(string(content), r.extractFileNameFromURL(urlStr), nil)
 }
 
+// ReadFromDirectory reads a Go module or directory and returns AST entity documents.
+// It performs package-aware parsing across the directory instead of processing files independently.
+func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error) {
+	absDir, err := filepath.Abs(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	}
+	stat, err := os.Stat(absDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat directory: %w", err)
+	}
+	if !stat.IsDir() {
+		return nil, fmt.Errorf("not a directory: %s", dirPath)
+	}
+
+	result, err := r.parser.ParseDirectory(absDir)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || len(result.Nodes) == 0 {
+		return nil, nil
+	}
+
+	baseMetadata := map[string]any{
+		source.MetaSource:     source.TypeDir,
+		source.MetaSourceName: r.Name(),
+	}
+	return r.applyTransformers(r.nodesToDocuments(result, baseMetadata))
+}
+
 func (r *Reader) processContent(content, name string, baseMetadata map[string]any) ([]*document.Document, error) {
 	if !r.chunk {
 		doc := r.createFileDocument(content, name, baseMetadata)
@@ -174,6 +204,7 @@ func (r *Reader) nodeToDocument(node *codeast.Node, baseMetadata map[string]any,
 	}
 
 	doc.Metadata["trpc_ast_type"] = string(node.Type)
+	doc.Metadata["trpc_ast_id"] = node.ID
 	doc.Metadata["trpc_ast_name"] = node.Name
 	doc.Metadata["trpc_ast_full_name"] = node.FullName
 	doc.Metadata["trpc_ast_language"] = string(node.Language)
@@ -233,10 +264,12 @@ func (r *Reader) createFileDocumentFromInfo(content, name string, baseMetadata m
 	}
 
 	doc.Metadata["trpc_ast_type"] = "file"
+	doc.Metadata["trpc_ast_id"] = name
 	doc.Metadata["trpc_ast_name"] = name
 	doc.Metadata["trpc_ast_full_name"] = name
 	doc.Metadata["trpc_ast_language"] = "go"
 	doc.Metadata["trpc_ast_scope"] = "code"
+	doc.Metadata["trpc_ast_file_path"] = name
 	if fileInfo != nil {
 		if fileInfo.Package != "" {
 			doc.Metadata["trpc_ast_package"] = fileInfo.Package
