@@ -75,6 +75,17 @@ func TestAdminPromptProviderStatus(t *testing.T) {
 		status.Bundles[0].ConfiguredValue,
 	)
 	require.Equal(t, "Instruction", status.Bundles[0].Title)
+	require.Equal(
+		t,
+		"Configured Instruction Text",
+		status.Bundles[0].ConfiguredLabel,
+	)
+	require.Equal(
+		t,
+		"Live Instruction Text",
+		status.Bundles[0].EffectiveLabel,
+	)
+	require.Equal(t, "1 file", status.Bundles[0].SourceSummary)
 	require.Len(t, status.Bundles[0].Files, 1)
 	require.True(t, status.Bundles[0].CreateEnabled)
 
@@ -83,6 +94,17 @@ func TestAdminPromptProviderStatus(t *testing.T) {
 		"system from file",
 		status.Bundles[1].ConfiguredValue,
 	)
+	require.Equal(
+		t,
+		"Configured System Text",
+		status.Bundles[1].ConfiguredLabel,
+	)
+	require.Equal(
+		t,
+		"Live System Text",
+		status.Bundles[1].EffectiveLabel,
+	)
+	require.Equal(t, "1 file", status.Bundles[1].SourceSummary)
 	require.Len(t, status.Bundles[1].Files, 1)
 	require.False(t, status.Bundles[1].CreateEnabled)
 }
