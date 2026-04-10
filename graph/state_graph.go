@@ -2296,6 +2296,13 @@ type subgraphInterruptInfo struct {
 	childTaskID       string
 }
 
+type extractedPregelInterrupt struct {
+	interrupt    *InterruptError
+	lineageID    string
+	checkpointID string
+	checkpointNS string
+}
+
 func subgraphInterruptInfoFromState(
 	state State,
 ) (subgraphInterruptInfo, bool) {
@@ -2332,7 +2339,7 @@ func subgraphInterruptInfoFromState(
 	return info, true
 }
 
-func extractPregelInterrupt(e *event.Event) (*InterruptError, bool) {
+func extractPregelInterruptInfo(e *event.Event) (*extractedPregelInterrupt, bool) {
 	if e == nil {
 		return nil, false
 	}
@@ -2361,7 +2368,20 @@ func extractPregelInterrupt(e *event.Event) (*InterruptError, bool) {
 	}
 	intr.Key = interruptKey
 	intr.TaskID = interruptKey
-	return intr, true
+	return &extractedPregelInterrupt{
+		interrupt:    intr,
+		lineageID:    meta.LineageID,
+		checkpointID: meta.CheckpointID,
+		checkpointNS: meta.CheckpointNS,
+	}, true
+}
+
+func extractPregelInterrupt(e *event.Event) (*InterruptError, bool) {
+	info, ok := extractPregelInterruptInfo(e)
+	if !ok || info == nil || info.interrupt == nil {
+		return nil, false
+	}
+	return info.interrupt, true
 }
 
 func latestInterruptedCheckpointID(
@@ -2600,6 +2620,7 @@ func setSubgraphInterruptState(
 	childState State,
 	invocation *agent.Invocation,
 	childTaskID string,
+	interruptInfo *extractedPregelInterrupt,
 ) {
 	fallbackLineageID := ""
 	if invocation != nil {
@@ -2607,12 +2628,41 @@ func setSubgraphInterruptState(
 	}
 	childLineageID := stateStringOr(childState, CfgKeyLineageID, fallbackLineageID)
 	childNamespace := stateStringOr(childState, CfgKeyCheckpointNS, targetAgent.Info().Name)
-	childCheckpointID, ckptErr := latestInterruptedCheckpointID(
-		ctx, targetAgent, childLineageID, childNamespace,
-	)
-	if ckptErr != nil {
-		log.DebugfContext(ctx, "subgraph: latest checkpoint failed: %v", ckptErr)
+	childCheckpointID := ""
+
+	// Unify local/remote handling: rely on interrupt event metadata rather than
+	// local executor/checkpoint-manager lookups.
+	if interruptInfo != nil {
+		if interruptInfo.lineageID != "" {
+			childLineageID = interruptInfo.lineageID
+		}
+		if interruptInfo.checkpointNS != "" {
+			childNamespace = interruptInfo.checkpointNS
+		}
+		if interruptInfo.checkpointID != "" {
+			childCheckpointID = interruptInfo.checkpointID
+		}
 	}
+
+	// Fallback: when metadata does not carry checkpoint_id, best-effort lookup
+	// from local checkpoint manager for local GraphAgent subgraphs.
+	if childCheckpointID == "" {
+		log.DebugfContext(
+			ctx,
+			"subgraph: fallback to latest interrupted checkpoint lookup: agent=%s node=%s lineage=%s namespace=%s",
+			agentName,
+			nodeID,
+			childLineageID,
+			childNamespace,
+		)
+		latest, ckptErr := latestInterruptedCheckpointID(ctx, targetAgent, childLineageID, childNamespace)
+		if ckptErr != nil {
+			log.DebugfContext(ctx, "subgraph: latest checkpoint failed: %v", ckptErr)
+		} else {
+			childCheckpointID = latest
+		}
+	}
+
 	state[StateKeySubgraphInterrupt] = map[string]any{
 		subgraphInterruptKeyParentNodeID:      nodeID,
 		subgraphInterruptKeyChildAgentName:    agentName,
@@ -2748,6 +2798,7 @@ func NewAgentNodeFunc(agentName string, opts ...Option) NodeFunc {
 				childState,
 				invocation,
 				streamRes.interrupt.TaskID,
+				streamRes.interruptInfo,
 			)
 			intr := NewInterruptError(streamRes.interrupt.Value)
 			intr.TaskID = streamRes.interrupt.TaskID
@@ -2793,6 +2844,7 @@ type agentEventStreamResult struct {
 	fallbackRawDelta map[string][]byte
 	structuredOutput any
 	interrupt        *InterruptError
+	interruptInfo    *extractedPregelInterrupt
 	terminalErr      error
 	terminalErrMeta  agentTerminalErrorMeta
 	finalError       *model.ResponseError
@@ -2944,14 +2996,19 @@ func updateAgentStructuredOutput(res *agentEventStreamResult, ev *event.Event) {
 }
 
 func updateAgentInterrupt(res *agentEventStreamResult, ev *event.Event) {
-	if res == nil || res.interrupt != nil {
+	if res == nil {
 		return
 	}
-	intr, ok := extractPregelInterrupt(ev)
-	if !ok {
+	info, ok := extractPregelInterruptInfo(ev)
+	if !ok || info == nil || info.interrupt == nil {
 		return
 	}
-	res.interrupt = intr
+	// Keep the latest interrupt metadata observed in the stream.
+	// In nested subgraphs, a deeper child interrupt may appear first, followed by
+	// the immediate child interrupt propagated upward. Using the latest metadata
+	// avoids pinning parent resume state to a deeper descendant checkpoint.
+	res.interrupt = info.interrupt
+	res.interruptInfo = info
 }
 
 func clearAgentSuccessResultOnError(res *agentEventStreamResult, ev *event.Event) {

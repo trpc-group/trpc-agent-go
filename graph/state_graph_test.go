@@ -3722,6 +3722,9 @@ func TestExtractPregelInterrupt(t *testing.T) {
 		nodeID       = "n"
 		interruptKey = "k"
 		interruptVal = "prompt"
+		lineageID    = "ln-1"
+		checkpointID = "ck-1"
+		checkpointNS = "ns-1"
 	)
 
 	_, ok := extractPregelInterrupt(nil)
@@ -3785,6 +3788,9 @@ func TestExtractPregelInterrupt(t *testing.T) {
 		NodeID:         nodeID,
 		InterruptKey:   interruptKey,
 		InterruptValue: interruptVal,
+		LineageID:      lineageID,
+		CheckpointID:   checkpointID,
+		CheckpointNS:   checkpointNS,
 	}
 	b, err = json.Marshal(meta)
 	require.NoError(t, err)
@@ -3803,6 +3809,13 @@ func TestExtractPregelInterrupt(t *testing.T) {
 	require.Equal(t, interruptKey, intr.TaskID)
 	require.Equal(t, interruptKey, intr.Key)
 	require.Equal(t, interruptVal, intr.Value)
+
+	info, ok := extractPregelInterruptInfo(e)
+	require.True(t, ok)
+	require.NotNil(t, info)
+	require.Equal(t, lineageID, info.lineageID)
+	require.Equal(t, checkpointID, info.checkpointID)
+	require.Equal(t, checkpointNS, info.checkpointNS)
 
 	meta = PregelStepMetadata{
 		NodeID:         testEmptyString,
@@ -3834,6 +3847,41 @@ func TestExtractPregelInterrupt(t *testing.T) {
 	)
 	_, ok = extractPregelInterrupt(e)
 	require.False(t, ok)
+}
+
+func TestSetSubgraphInterruptState_PrefersInterruptMetadata(t *testing.T) {
+	state := State{}
+	childState := State{
+		CfgKeyLineageID:    "child-ln-local",
+		CfgKeyCheckpointNS: "child-ns-local",
+	}
+	targetAgent := &inspectAgent{name: "remote-child"}
+
+	setSubgraphInterruptState(
+		context.Background(),
+		state,
+		"parent-node",
+		"remote-child",
+		targetAgent,
+		childState,
+		&agent.Invocation{InvocationID: "fallback-ln"},
+		"approval",
+		&extractedPregelInterrupt{
+			interrupt:    &InterruptError{TaskID: "approval"},
+			lineageID:    "child-ln-remote",
+			checkpointID: "child-ck-remote",
+			checkpointNS: "child-ns-remote",
+		},
+	)
+
+	info, ok := subgraphInterruptInfoFromState(state)
+	require.True(t, ok)
+	require.Equal(t, "parent-node", info.parentNodeID)
+	require.Equal(t, "remote-child", info.childAgentName)
+	require.Equal(t, "child-ln-remote", info.childLineageID)
+	require.Equal(t, "child-ck-remote", info.childCheckpointID)
+	require.Equal(t, "child-ns-remote", info.childCheckpointNS)
+	require.Equal(t, "approval", info.childTaskID)
 }
 
 func TestLatestInterruptedCheckpointID(t *testing.T) {

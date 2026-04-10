@@ -3141,6 +3141,315 @@ func TestMessageProcessor_ProcessMessage_NilResponse(t *testing.T) {
 	assert.NotNil(t, result.Result)
 }
 
+func TestGraphResumeStateFromMetadata(t *testing.T) {
+	t.Run("checkpoint only keeps checkpoint state without command", func(t *testing.T) {
+		state := ia2a.GraphResumeStateFromMetadata(map[string]any{
+			graph.CfgKeyCheckpointID: "ck-1",
+		})
+		if assert.NotNil(t, state) {
+			assert.Equal(t, "ck-1", state[graph.CfgKeyCheckpointID])
+			_, exists := state[graph.StateKeyCommand]
+			assert.False(t, exists)
+		}
+	})
+
+	t.Run("state_delta resume builds state and command", func(t *testing.T) {
+		stateDelta := EncodeStateDeltaMetadata(map[string][]byte{
+			graph.CfgKeyLineageID:    []byte(`"ln-sd"`),
+			graph.CfgKeyCheckpointID: []byte(`"ck-sd"`),
+			graph.CfgKeyCheckpointNS: []byte(`"ns-sd"`),
+			"resume":                 []byte(`"approve"`),
+			graph.CfgKeyResumeMap:    []byte(`{"approval":true}`),
+		})
+		state := ia2a.GraphResumeStateFromMetadata(map[string]any{
+			ia2a.MessageMetadataStateDeltaKey: stateDelta,
+		})
+		if assert.NotNil(t, state) {
+			assert.Equal(t, "ln-sd", state[graph.CfgKeyLineageID])
+			assert.Equal(t, "ck-sd", state[graph.CfgKeyCheckpointID])
+			assert.Equal(t, "ns-sd", state[graph.CfgKeyCheckpointNS])
+			cmd, ok := state[graph.StateKeyCommand].(*graph.ResumeCommand)
+			if assert.True(t, ok, "expected ResumeCommand in state") {
+				assert.Equal(t, "approve", cmd.Resume)
+				assert.Equal(t, true, cmd.ResumeMap["approval"])
+			}
+		}
+	})
+
+	t.Run("state_delta pregel_metadata fallback extracts checkpoint info", func(t *testing.T) {
+		pregelJSON := []byte(`{"lineageId":"ln-p","checkpointId":"ck-p","checkpointNs":"ns-p","interruptKey":"approval"}`)
+		stateDelta := EncodeStateDeltaMetadata(map[string][]byte{
+			graph.MetadataKeyPregel: pregelJSON,
+			"resume":                []byte(`"yes"`),
+		})
+		state := ia2a.GraphResumeStateFromMetadata(map[string]any{
+			ia2a.MessageMetadataStateDeltaKey: stateDelta,
+		})
+		if assert.NotNil(t, state) {
+			assert.Equal(t, "ln-p", state[graph.CfgKeyLineageID])
+			assert.Equal(t, "ck-p", state[graph.CfgKeyCheckpointID])
+			assert.Equal(t, "ns-p", state[graph.CfgKeyCheckpointNS])
+			cmd, ok := state[graph.StateKeyCommand].(*graph.ResumeCommand)
+			if assert.True(t, ok, "expected ResumeCommand in state") {
+				assert.Equal(t, "yes", cmd.Resume)
+			}
+		}
+	})
+
+	t.Run("state_delta checkpoint merges serialized Command fallback", func(t *testing.T) {
+		state := ia2a.GraphResumeStateFromMetadata(map[string]any{
+			ia2a.MessageMetadataStateDeltaKey: EncodeStateDeltaMetadata(map[string][]byte{
+				graph.CfgKeyLineageID:    []byte(`"ln-sd"`),
+				graph.CfgKeyCheckpointID: []byte(`"ck-sd"`),
+			}),
+			graph.StateKeyCommand: map[string]any{
+				"Resume":    "approve",
+				"ResumeMap": map[string]any{"approval": true},
+			},
+		})
+		if assert.NotNil(t, state) {
+			assert.Equal(t, "ln-sd", state[graph.CfgKeyLineageID])
+			assert.Equal(t, "ck-sd", state[graph.CfgKeyCheckpointID])
+			cmd, ok := state[graph.StateKeyCommand].(*graph.ResumeCommand)
+			if assert.True(t, ok, "expected ResumeCommand in state") {
+				assert.Equal(t, "approve", cmd.Resume)
+				assert.Equal(t, true, cmd.ResumeMap["approval"])
+			}
+		}
+	})
+
+	t.Run("flattened resume and resume_map remain backward compatible", func(t *testing.T) {
+		state := ia2a.GraphResumeStateFromMetadata(map[string]any{
+			graph.CfgKeyCheckpointID: "ck-1",
+			"resume":                 "approve",
+			graph.CfgKeyResumeMap:    map[string]any{"approval": true},
+		})
+		cmd, ok := state[graph.StateKeyCommand].(*graph.ResumeCommand)
+		if assert.True(t, ok, "expected ResumeCommand in state") {
+			assert.Equal(t, "approve", cmd.Resume)
+			assert.Equal(t, true, cmd.ResumeMap["approval"])
+		}
+	})
+
+	t.Run("serialized Command struct via transferStateKey fallback", func(t *testing.T) {
+		state := ia2a.GraphResumeStateFromMetadata(map[string]any{
+			graph.CfgKeyCheckpointID: "ck-cmd",
+			graph.CfgKeyLineageID:    "ln-cmd",
+			graph.CfgKeyCheckpointNS: "ns-cmd",
+			graph.StateKeyCommand: map[string]any{
+				"Resume":    nil,
+				"ResumeMap": map[string]any{"remote_ask_approval": true},
+			},
+		})
+		if assert.NotNil(t, state) {
+			assert.Equal(t, "ln-cmd", state[graph.CfgKeyLineageID])
+			assert.Equal(t, "ck-cmd", state[graph.CfgKeyCheckpointID])
+			assert.Equal(t, "ns-cmd", state[graph.CfgKeyCheckpointNS])
+			cmd, ok := state[graph.StateKeyCommand].(*graph.ResumeCommand)
+			if assert.True(t, ok, "expected ResumeCommand in state") {
+				assert.Equal(t, true, cmd.ResumeMap["remote_ask_approval"])
+			}
+		}
+	})
+
+	t.Run("serialized Command struct with Resume value", func(t *testing.T) {
+		state := ia2a.GraphResumeStateFromMetadata(map[string]any{
+			graph.CfgKeyCheckpointID: "ck-2",
+			graph.StateKeyCommand: map[string]any{
+				"Resume":    "approved",
+				"ResumeMap": nil,
+			},
+		})
+		if assert.NotNil(t, state) {
+			cmd, ok := state[graph.StateKeyCommand].(*graph.ResumeCommand)
+			if assert.True(t, ok, "expected ResumeCommand in state") {
+				assert.Equal(t, "approved", cmd.Resume)
+			}
+		}
+	})
+}
+
+func TestMessageProcessor_ProcessMessage_GraphResumeMetadataBecomesCommand(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: "user-1"})
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "graph-resume-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("resume")},
+		Metadata: map[string]any{
+			ia2a.MessageMetadataStateDeltaKey: EncodeStateDeltaMetadata(map[string][]byte{
+				graph.CfgKeyLineageID:    []byte(`"ln-1"`),
+				graph.CfgKeyCheckpointID: []byte(`"ck-1"`),
+				"resume":                 []byte(`"approve"`),
+				graph.CfgKeyResumeMap:    []byte(`{"approval":true}`),
+			}),
+		},
+	}
+
+	processor := &messageProcessor{
+		debugLogging:         false,
+		a2aToAgentConverter:  &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter:  &mockEventToA2AConverter{},
+		errorHandler:         defaultErrorHandler,
+		structuredTaskErrors: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				var ro agent.RunOptions
+				for _, opt := range opts {
+					opt(&ro)
+				}
+				if assert.NotNil(t, ro.RuntimeState) {
+					assert.Equal(t, "ln-1", ro.RuntimeState[graph.CfgKeyLineageID])
+					assert.Equal(t, "ck-1", ro.RuntimeState[graph.CfgKeyCheckpointID])
+					cmd, ok := ro.RuntimeState[graph.StateKeyCommand].(*graph.ResumeCommand)
+					if assert.True(t, ok, "expected ResumeCommand in runtime state") {
+						assert.Equal(t, "approve", cmd.Resume)
+						assert.Equal(t, true, cmd.ResumeMap["approval"])
+					}
+				}
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+	}
+
+	result, err := processor.ProcessMessage(
+		ctx,
+		msg,
+		taskmanager.ProcessOptions{},
+		&mockTaskHandler{},
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
+func TestMessageProcessor_ProcessMessage_StateDeltaResumeBecomesCommand(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: "user-1"})
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "state-delta-resume-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("resume")},
+		Metadata: map[string]any{
+			ia2a.MessageMetadataStateDeltaKey: EncodeStateDeltaMetadata(map[string][]byte{
+				graph.CfgKeyLineageID:    []byte(`"ln-sd"`),
+				graph.CfgKeyCheckpointID: []byte(`"ck-sd"`),
+				"resume":                 []byte(`"approve"`),
+				graph.CfgKeyResumeMap:    []byte(`{"approval":true}`),
+			}),
+		},
+	}
+
+	processor := &messageProcessor{
+		debugLogging:         false,
+		a2aToAgentConverter:  &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter:  &mockEventToA2AConverter{},
+		errorHandler:         defaultErrorHandler,
+		structuredTaskErrors: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				var ro agent.RunOptions
+				for _, opt := range opts {
+					opt(&ro)
+				}
+				if assert.NotNil(t, ro.RuntimeState) {
+					assert.Equal(t, "ln-sd", ro.RuntimeState[graph.CfgKeyLineageID])
+					assert.Equal(t, "ck-sd", ro.RuntimeState[graph.CfgKeyCheckpointID])
+					cmd, ok := ro.RuntimeState[graph.StateKeyCommand].(*graph.ResumeCommand)
+					if assert.True(t, ok, "expected ResumeCommand in runtime state") {
+						assert.Equal(t, "approve", cmd.Resume)
+						assert.Equal(t, true, cmd.ResumeMap["approval"])
+					}
+				}
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{
+					Response: &model.Response{
+						Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
+					},
+				}
+				close(ch)
+				return ch, nil
+			},
+		},
+	}
+
+	result, err := processor.ProcessMessage(
+		ctx,
+		msg,
+		taskmanager.ProcessOptions{},
+		&mockTaskHandler{},
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
+func TestMessageProcessor_ProcessMessage_StateDeltaCheckpointAndSerializedCommandBecomeResumeCommand(t *testing.T) {
+	ctxID := "ctx"
+	ctx := context.WithValue(context.Background(), auth.AuthUserKey, &auth.User{ID: "user-1"})
+	msg := protocol.Message{
+		ContextID: &ctxID,
+		MessageID: "state-delta-command-fallback-test",
+		Role:      protocol.MessageRoleUser,
+		Parts:     []protocol.Part{protocol.NewTextPart("resume")},
+		Metadata: map[string]any{
+			ia2a.MessageMetadataStateDeltaKey: EncodeStateDeltaMetadata(map[string][]byte{
+				graph.CfgKeyLineageID:    []byte(`"ln-sd"`),
+				graph.CfgKeyCheckpointID: []byte(`"ck-sd"`),
+			}),
+			graph.StateKeyCommand: map[string]any{
+				"Resume":    "approve",
+				"ResumeMap": map[string]any{"approval": true},
+			},
+		},
+	}
+
+	processor := &messageProcessor{
+		debugLogging:         false,
+		a2aToAgentConverter:  &defaultA2AMessageToAgentMessage{},
+		eventToA2AConverter:  &mockEventToA2AConverter{},
+		errorHandler:         defaultErrorHandler,
+		structuredTaskErrors: false,
+		runner: &mockRunner{
+			runFunc: func(ctx context.Context, userID string, sessionID string, message model.Message, opts ...agent.RunOption) (<-chan *event.Event, error) {
+				var ro agent.RunOptions
+				for _, opt := range opts {
+					opt(&ro)
+				}
+				if assert.NotNil(t, ro.RuntimeState) {
+					assert.Equal(t, "ln-sd", ro.RuntimeState[graph.CfgKeyLineageID])
+					assert.Equal(t, "ck-sd", ro.RuntimeState[graph.CfgKeyCheckpointID])
+					cmd, ok := ro.RuntimeState[graph.StateKeyCommand].(*graph.ResumeCommand)
+					if assert.True(t, ok, "expected ResumeCommand in runtime state") {
+						assert.Equal(t, "approve", cmd.Resume)
+						assert.Equal(t, true, cmd.ResumeMap["approval"])
+					}
+				}
+				ch := make(chan *event.Event, 1)
+				ch <- &event.Event{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "ok"}}}}}
+				close(ch)
+				return ch, nil
+			},
+		},
+	}
+
+	result, err := processor.ProcessMessage(
+		ctx,
+		msg,
+		taskmanager.ProcessOptions{},
+		&mockTaskHandler{},
+	)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+}
+
 // TestMessageProcessor_ProcessMessage_ConversionFailure tests handling of conversion errors
 func TestMessageProcessor_ProcessMessage_ConversionFailure(t *testing.T) {
 	ctxID := "ctx"
