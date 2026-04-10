@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 )
@@ -71,13 +72,13 @@ func (p *adminPromptProvider) PromptsStatus() (
 	bundles := []admin.PromptBundleState{
 		p.bundleStateLocked(
 			adminPromptInstructionBundle,
-			"Agent Instruction",
+			"Instruction",
 			snapshot.Instruction,
 			p.instructionOverride,
 		),
 		p.bundleStateLocked(
 			adminPromptSystemBundle,
-			"Agent System Prompt",
+			"System Prompt",
 			snapshot.SystemPrompt,
 			p.systemOverride,
 		),
@@ -85,6 +86,22 @@ func (p *adminPromptProvider) PromptsStatus() (
 
 	return admin.PromptsStatus{
 		Enabled: true,
+		Sections: []admin.PromptSectionState{{
+			Key:     "core",
+			Title:   "Core Prompt",
+			Summary: "These blocks shape the assistant across every turn.",
+			Bundles: bundles,
+		}},
+		Previews: []admin.PromptPreviewState{{
+			Key:   "agent",
+			Title: "Agent Prompt",
+			Summary: "The resolved instruction and system prompt text" +
+				" currently applied to the runtime.",
+			Content: buildAdminPromptPreview(
+				snapshot.Instruction,
+				snapshot.SystemPrompt,
+			),
+		}},
 		Bundles: bundles,
 	}, nil
 }
@@ -220,7 +237,11 @@ func (p *adminPromptProvider) bundleStateLocked(
 	state := admin.PromptBundleState{
 		Key:                key,
 		Title:              title,
+		Summary:            adminPromptBundleSummary(key),
+		SourceSummary:      adminPromptSourceSummary(key, len(files)),
+		ConfiguredLabel:    adminPromptConfiguredLabel(key),
 		ConfiguredValue:    configured,
+		EffectiveLabel:     adminPromptEffectiveLabel(key),
 		EffectiveValue:     strings.TrimSpace(effective),
 		InlineEditable:     false,
 		RuntimeEditable:    true,
@@ -297,7 +318,7 @@ func (p *adminPromptProvider) bundleFilesLocked(
 	for _, path := range files {
 		state := admin.PromptFileState{
 			Path:  path,
-			Label: filepath.Base(path),
+			Label: displayAdminPromptFileLabel(path),
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
@@ -335,7 +356,7 @@ func (p *adminPromptProvider) bundleFilesLocked(
 		path := filepath.Join(dir, name)
 		state := admin.PromptFileState{
 			Path:      path,
-			Label:     name,
+			Label:     displayAdminPromptFileLabel(path),
 			Deletable: true,
 		}
 		data, readErr := os.ReadFile(path)
@@ -479,6 +500,113 @@ func (p *adminPromptProvider) applyLocked() error {
 	}
 	p.controller.SetPrompts(instruction, systemPrompt)
 	return nil
+}
+
+func buildAdminPromptPreview(
+	instruction string,
+	systemPrompt string,
+) string {
+	parts := make([]string, 0, 2)
+	if value := strings.TrimSpace(instruction); value != "" {
+		parts = append(parts, adminPromptPreviewBlock(
+			"Instruction",
+			value,
+		))
+	}
+	if value := strings.TrimSpace(systemPrompt); value != "" {
+		parts = append(parts, adminPromptPreviewBlock(
+			"System Prompt",
+			value,
+		))
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
+func adminPromptPreviewBlock(
+	title string,
+	content string,
+) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	return title + "\n" + strings.Repeat("=", len(title)) +
+		"\n" + content
+}
+
+func adminPromptBundleSummary(key string) string {
+	switch strings.TrimSpace(key) {
+	case adminPromptInstructionBundle:
+		return "Shapes how the assistant reasons and follows project" +
+			" guidance across turns."
+	case adminPromptSystemBundle:
+		return "Defines runtime-level guardrails and identity guidance."
+	default:
+		return ""
+	}
+}
+
+func adminPromptConfiguredLabel(key string) string {
+	switch strings.TrimSpace(key) {
+	case adminPromptInstructionBundle:
+		return "Configured Instruction Sources"
+	case adminPromptSystemBundle:
+		return "Configured System Sources"
+	default:
+		return "Configured Prompt"
+	}
+}
+
+func adminPromptEffectiveLabel(key string) string {
+	switch strings.TrimSpace(key) {
+	case adminPromptInstructionBundle:
+		return "Effective Instruction"
+	case adminPromptSystemBundle:
+		return "Effective System Prompt"
+	default:
+		return "Effective Prompt"
+	}
+}
+
+func adminPromptSourceSummary(key string, fileCount int) string {
+	switch strings.TrimSpace(key) {
+	case adminPromptInstructionBundle:
+		if fileCount == 0 {
+			return "Built-in defaults"
+		}
+	case adminPromptSystemBundle:
+		if fileCount == 0 {
+			return "Inline or runtime-only configuration"
+		}
+	}
+	if fileCount == 1 {
+		return "1 editable file"
+	}
+	if fileCount > 1 {
+		return fmt.Sprintf("%d editable files", fileCount)
+	}
+	return "No editable files"
+}
+
+func displayAdminPromptFileLabel(path string) string {
+	base := filepath.Base(strings.TrimSpace(path))
+	ext := filepath.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+	name = strings.ReplaceAll(name, "_", " ")
+	name = strings.ReplaceAll(name, "-", " ")
+	parts := strings.Fields(name)
+	if len(parts) == 0 {
+		return base
+	}
+	for i := range parts {
+		runes := []rune(parts[i])
+		if len(runes) == 0 {
+			continue
+		}
+		runes[0] = unicode.ToUpper(runes[0])
+		parts[i] = string(runes)
+	}
+	return strings.Join(parts, " ")
 }
 
 func promptOverridePtr(content string) *string {

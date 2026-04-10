@@ -1289,7 +1289,7 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 			Enabled: true,
 			Bundles: []PromptBundleState{{
 				Key:             "agent_instruction",
-				Title:           "Agent Instruction",
+				Title:           "Instruction",
 				EffectiveValue:  "live prompt",
 				ConfiguredValue: "configured prompt",
 				InlineEditable:  true,
@@ -1300,6 +1300,26 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 					Label:   "instruction.md",
 					Content: "body",
 				}},
+			}},
+			Sections: []PromptSectionState{{
+				Key:     "core",
+				Title:   "Core Prompt",
+				Summary: "These blocks shape the assistant across every turn.",
+				Bundles: []PromptBundleState{{
+					Key:             "agent_instruction",
+					Title:           "Instruction",
+					EffectiveValue:  "live prompt",
+					ConfiguredValue: "configured prompt",
+					InlineEditable:  true,
+					InlineValue:     "inline prompt",
+					RuntimeEditable: true,
+				}},
+			}},
+			Previews: []PromptPreviewState{{
+				Key:     "agent",
+				Title:   "Agent Prompt",
+				Summary: "The resolved instruction and system prompt text currently applied to the runtime.",
+				Content: "Instruction\n===========\nlive prompt",
 			}},
 		},
 	}
@@ -1333,8 +1353,10 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 	rec := httptest.NewRecorder()
 	svc.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "Prompt Management")
-	require.Contains(t, rec.Body.String(), "Agent Instruction")
+	require.Contains(t, rec.Body.String(), "Prompt Control")
+	require.Contains(t, rec.Body.String(), "Core Prompt")
+	require.Contains(t, rec.Body.String(), "Instruction")
+	require.Contains(t, rec.Body.String(), "Final Prompt Preview")
 	require.NotContains(t, rec.Body.String(), "Agent Personas")
 	require.Contains(t, rec.Body.String(), "/personas")
 
@@ -1470,7 +1492,7 @@ func TestService_PromptAndPersonaJSONAndMutations(t *testing.T) {
 			Enabled: true,
 			Bundles: []PromptBundleState{{
 				Key:   "agent_instruction",
-				Title: "Agent Instruction",
+				Title: "Instruction",
 			}},
 		},
 	}

@@ -98,8 +98,8 @@ const (
 	adminRuntimePrefix = "trpc-claw"
 
 	pageSummaryPrompts = "" +
-		"Inspect prompt bundles, edit file-backed prompts, " +
-		"and manage live prompt sources."
+		"Edit the main prompt blocks, inspect the assembled " +
+		"prompt previews, and keep file-level edits in one place."
 	pageSummaryPersonas = "" +
 		"Manage the default persona and any file-backed " +
 		"persona definitions exposed by this runtime."
@@ -2007,6 +2007,10 @@ var adminPage = template.Must(
 		"formatTime":             formatTime,
 		"browserEndpointSummary": browserEndpointSummary,
 		"displayAdminAppName":    displayAdminAppName,
+		"promptSections":         promptSections,
+		"promptBlockCount":       promptBlockCount,
+		"hasPromptValue":         hasPromptValue,
+		"promptValuesDiffer":     promptValuesDiffer,
 	}).Parse(
 		adminPageHTML +
 			promptsPageTemplateHTML +

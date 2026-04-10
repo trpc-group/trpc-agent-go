@@ -63,12 +63,18 @@ func TestAdminPromptProviderStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, status.Enabled)
 	require.Len(t, status.Bundles, 2)
+	require.Len(t, status.Sections, 1)
+	require.Equal(t, "Core Prompt", status.Sections[0].Title)
+	require.Len(t, status.Previews, 1)
+	require.Equal(t, "Agent Prompt", status.Previews[0].Title)
+	require.Contains(t, status.Previews[0].Content, "Instruction")
 
 	require.Equal(
 		t,
 		"inline instruction\n\ndir instruction",
 		status.Bundles[0].ConfiguredValue,
 	)
+	require.Equal(t, "Instruction", status.Bundles[0].Title)
 	require.Len(t, status.Bundles[0].Files, 1)
 	require.True(t, status.Bundles[0].CreateEnabled)
 
@@ -465,8 +471,8 @@ func TestAdminPromptProviderAdditionalCoverage(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, files, 2)
-	require.Equal(t, "10_base.md", files[0].Label)
-	require.Equal(t, "40_broken.md", files[1].Label)
+	require.Equal(t, "10 Base", files[0].Label)
+	require.Equal(t, "40 Broken", files[1].Label)
 	require.NotEmpty(t, files[1].Error)
 
 	missingDirProvider := &adminPromptProvider{
