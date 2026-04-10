@@ -417,6 +417,44 @@ If you want the implementation-level mapping, this happens after one
 
 Runnable example: `examples/steer/`
 
+#### Per-Request App Name Override (multi-tenant isolation)
+
+By default, Runner uses the `appName` supplied at construction for session keys
+and event filter keys. If a single Runner instance serves multiple projects or
+tenants, you can override the app name on each `Run` call with
+`agent.WithAppName`:
+
+```go
+// One runner, two projects.
+r := runner.NewRunner("default-app", myAgent)
+
+// Project A — sessions are stored under "project-a".
+evA, _ := r.Run(ctx, userID, sessionID, msg,
+    agent.WithAppName("project-a"),
+)
+
+// Project B — sessions are stored under "project-b", fully isolated from A.
+evB, _ := r.Run(ctx, userID, sessionID, msg,
+    agent.WithAppName("project-b"),
+)
+```
+
+When `WithAppName` is **not** provided (or the value is empty), the runner
+falls back to the constructor-supplied default app name. The override affects:
+
+| Dimension | Default (no override) | With `WithAppName("X")` |
+|---|---|---|
+| `session.Key.AppName` | constructor `appName` | `"X"` |
+| Default `EventFilterKey` | constructor `appName` | `"X"` |
+
+Other runner-level registrations (observability `appid`, agent registry) remain
+bound to the original constructor `appName`.
+
+!!! note
+    `appName` must not be empty. If neither the constructor nor `WithAppName`
+    provides a non-empty value, the session service returns
+    `session.ErrAppNameRequired`.
+
 #### Detached Cancellation (background execution)
 
 In Go, `context.Context` (often named `ctx`) carries both cancellation and a

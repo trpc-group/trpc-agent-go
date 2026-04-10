@@ -222,6 +222,17 @@ func NewRunOptions(opts ...RunOption) RunOptions {
 // TraceStartedCallback receives the root span context for a run.
 type TraceStartedCallback func(oteltrace.SpanContext)
 
+// WithAppName overrides the runner's default app name for this specific run.
+//
+// This enables a single runner to serve multiple projects or tenants
+// by isolating session and memory data under different app names.
+// When not set, the runner uses its constructor-provided default app name.
+func WithAppName(name string) RunOption {
+	return func(opts *RunOptions) {
+		opts.AppName = name
+	}
+}
+
 // WithRuntimeState sets the runtime state for the RunOptions.
 func WithRuntimeState(state map[string]any) RunOption {
 	return func(opts *RunOptions) {
@@ -789,6 +800,16 @@ func setRunControlConfig(opts *RunOptions, cfg runControlConfig) {
 
 // RunOptions is the options for the Run method.
 type RunOptions struct {
+	// AppName overrides the runner's default app name for this specific run.
+	//
+	// When set, the runner uses this value instead of its constructor-provided
+	// app name for session keys, memory operations, and event filter keys.
+	// This enables a single runner instance to serve multiple projects or
+	// tenants, isolating their session and memory data by app name.
+	//
+	// If empty, the runner falls back to its default app name.
+	AppName string
+
 	// RuntimeState contains key-value pairs that will be merged into the initial state
 	// for this specific run. This allows callers to pass dynamic parameters
 	// (e.g., room ID, user context) without modifying the agent's base initial state.
