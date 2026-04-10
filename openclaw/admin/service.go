@@ -2037,13 +2037,17 @@ func isAllowedDebugFile(name string) bool {
 
 var adminPage = template.Must(
 	template.New("admin").Funcs(template.FuncMap{
-		"formatTime":             formatTime,
-		"browserEndpointSummary": browserEndpointSummary,
-		"displayAdminAppName":    displayAdminAppName,
-		"promptSections":         promptSections,
-		"promptBlockCount":       promptBlockCount,
-		"hasPromptValue":         hasPromptValue,
-		"promptValuesDiffer":     promptValuesDiffer,
+		"formatTime":                 formatTime,
+		"browserEndpointSummary":     browserEndpointSummary,
+		"displayAdminAppName":        displayAdminAppName,
+		"promptSections":             promptSections,
+		"promptBlockCount":           promptBlockCount,
+		"hasPromptValue":             hasPromptValue,
+		"promptValuesDiffer":         promptValuesDiffer,
+		"promptCollapsedSummary":     promptCollapsedSummary,
+		"promptInlineEditorTitle":    promptInlineEditorTitle,
+		"promptInlineEditorSummary":  promptInlineEditorSummary,
+		"promptRuntimeEditorSummary": promptRuntimeEditorSummary,
 	}).Parse(
 		adminPageHTML +
 			promptsPageTemplateHTML +
@@ -2674,7 +2678,31 @@ const adminPageHTML = `<!doctype html>
     .memory-preview {
       max-width: 540px;
       color: #3f3932;
+      overflow-wrap: anywhere;
       white-space: pre-wrap;
+    }
+    .prompt-detail {
+      overflow: hidden;
+    }
+    .prompt-detail[open] {
+      border-color: rgba(15, 111, 97, 0.28);
+      box-shadow: 0 14px 28px rgba(35, 29, 22, 0.08);
+    }
+    .prompt-detail summary {
+      list-style: none;
+      cursor: pointer;
+    }
+    .prompt-detail summary::-webkit-details-marker {
+      display: none;
+    }
+    .prompt-detail-copy,
+    .prompt-detail-hint {
+      margin: 8px 0 0;
+    }
+    .prompt-detail-body {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
     }
     .memory-scope {
       display: grid;

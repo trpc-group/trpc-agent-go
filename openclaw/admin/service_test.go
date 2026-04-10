@@ -1392,6 +1392,10 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "Core Prompt")
 	require.Contains(t, rec.Body.String(), "Instruction")
 	require.Contains(t, rec.Body.String(), "Final Prompt Preview")
+	require.Contains(t, rec.Body.String(), "prompt-detail")
+	require.Contains(t, rec.Body.String(), "Instruction Config Text")
+	require.Contains(t, rec.Body.String(), "Save Config Text")
+	require.NotContains(t, rec.Body.String(), "Inline Source")
 	require.NotContains(t, rec.Body.String(), "Agent Personas")
 	require.Contains(t, rec.Body.String(), "/personas")
 
@@ -1482,6 +1486,69 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 	require.Equal(t, "agent", personas.storeKey)
 	require.Equal(t, "Warm", personas.personaName)
 	require.Equal(t, "custom prompt", personas.personaBody)
+}
+
+func TestPromptCollapsedSummary(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"No prompt text is currently active.",
+		promptCollapsedSummary(""),
+	)
+	require.Equal(
+		t,
+		"1 line. Starts with: single line",
+		promptCollapsedSummary("single line"),
+	)
+	require.Equal(
+		t,
+		"2 lines. Starts with: first line",
+		promptCollapsedSummary("first line\nsecond line"),
+	)
+}
+
+func TestPromptHelperFunctions(t *testing.T) {
+	t.Parallel()
+
+	longLine := strings.Repeat("a", promptSummaryMaxRunes+5)
+	require.Equal(
+		t,
+		strings.Repeat("a", promptSummaryMaxRunes)+"...",
+		promptSummarySnippet(longLine),
+	)
+	require.Equal(
+		t,
+		"first real line",
+		promptSummarySnippet("\n\n first   real   line \nsecond"),
+	)
+	require.Equal(t, "", promptSummarySnippet("\n \n\t"))
+
+	require.Equal(t, 0, promptLineCount(""))
+	require.Equal(t, 2, promptLineCount("first\nsecond\n"))
+
+	require.Equal(
+		t,
+		"Text Stored In Config",
+		promptInlineEditorTitle(PromptBundleState{}),
+	)
+	require.Equal(
+		t,
+		"Instruction Config Text",
+		promptInlineEditorTitle(PromptBundleState{Title: "Instruction"}),
+	)
+	require.Contains(
+		t,
+		promptInlineEditorSummary(PromptBundleState{}),
+		"config file",
+	)
+	require.Contains(
+		t,
+		promptRuntimeEditorSummary(PromptBundleState{}),
+		"running process only",
+	)
 }
 
 func TestService_IdentityPageAndActions(t *testing.T) {

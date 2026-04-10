@@ -75,6 +75,17 @@ func TestAdminPromptProviderStatus(t *testing.T) {
 		status.Bundles[0].ConfiguredValue,
 	)
 	require.Equal(t, "Instruction", status.Bundles[0].Title)
+	require.Equal(
+		t,
+		"Configured Instruction Text",
+		status.Bundles[0].ConfiguredLabel,
+	)
+	require.Equal(
+		t,
+		"Live Instruction Text",
+		status.Bundles[0].EffectiveLabel,
+	)
+	require.Equal(t, "1 file", status.Bundles[0].SourceSummary)
 	require.Len(t, status.Bundles[0].Files, 1)
 	require.True(t, status.Bundles[0].CreateEnabled)
 
@@ -83,6 +94,17 @@ func TestAdminPromptProviderStatus(t *testing.T) {
 		"system from file",
 		status.Bundles[1].ConfiguredValue,
 	)
+	require.Equal(
+		t,
+		"Configured System Text",
+		status.Bundles[1].ConfiguredLabel,
+	)
+	require.Equal(
+		t,
+		"Live System Text",
+		status.Bundles[1].EffectiveLabel,
+	)
+	require.Equal(t, "1 file", status.Bundles[1].SourceSummary)
 	require.Len(t, status.Bundles[1].Files, 1)
 	require.False(t, status.Bundles[1].CreateEnabled)
 }
@@ -526,4 +548,39 @@ func TestAdminPromptProviderAdditionalCoverage(t *testing.T) {
 	path, err := cwdProvider.resolvePromptPath("relative.md")
 	require.NoError(t, err)
 	require.True(t, filepath.IsAbs(path))
+}
+
+func TestAdminPromptHelperLabelsAndSourceSummary(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"Configured Prompt",
+		adminPromptConfiguredLabel("other"),
+	)
+	require.Equal(
+		t,
+		"Live Prompt Text",
+		adminPromptEffectiveLabel("other"),
+	)
+	require.Equal(
+		t,
+		"Built-in text",
+		adminPromptSourceSummary(adminPromptInstructionBundle, 0),
+	)
+	require.Equal(
+		t,
+		"Config text or runtime-only text",
+		adminPromptSourceSummary(adminPromptSystemBundle, 0),
+	)
+	require.Equal(
+		t,
+		"No editable files",
+		adminPromptSourceSummary("other", 0),
+	)
+	require.Equal(
+		t,
+		"2 files",
+		adminPromptSourceSummary("other", 2),
+	)
 }
