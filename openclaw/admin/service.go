@@ -34,6 +34,7 @@ const (
 	routeOverview   = "/overview"
 	routeSkillsPage = "/skills"
 	routePrompts    = "/prompts"
+	routePersonas   = "/personas"
 	routeMemory     = "/memory"
 	routeAutomation = "/automation"
 	routeSessions   = "/sessions"
@@ -95,6 +96,13 @@ const (
 	adminBrandName     = "TRPC-CLAW"
 	adminBrandTitle    = "TRPC-CLAW admin"
 	adminRuntimePrefix = "trpc-claw"
+
+	pageSummaryPrompts = "" +
+		"Inspect prompt bundles, edit file-backed prompts, " +
+		"and manage live prompt sources."
+	pageSummaryPersonas = "" +
+		"Manage the default persona and any file-backed " +
+		"persona definitions exposed by this runtime."
 )
 
 type adminView string
@@ -103,6 +111,7 @@ const (
 	viewOverview   adminView = "overview"
 	viewSkills     adminView = "skills"
 	viewPrompts    adminView = "prompts"
+	viewPersonas   adminView = "personas"
 	viewMemory     adminView = "memory"
 	viewAutomation adminView = "automation"
 	viewSessions   adminView = "sessions"
@@ -271,6 +280,10 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(
 		routePrompts,
 		wrapRelativeLinksFunc(s.handlePromptsPage),
+	)
+	mux.HandleFunc(
+		routePersonas,
+		wrapRelativeLinksFunc(s.handlePersonasPage),
 	)
 	mux.HandleFunc(
 		routeMemory,
@@ -949,6 +962,13 @@ func (s *Service) handlePromptsPage(
 	s.renderPage(w, r, viewPrompts)
 }
 
+func (s *Service) handlePersonasPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewPersonas)
+}
+
 func (s *Service) handleMemoryPage(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1025,6 +1045,7 @@ func adminNavSections(active adminView) []adminNavSection {
 				{Label: "Overview", Path: routeOverview},
 				{Label: "Skills", Path: routeSkillsPage},
 				{Label: "Prompts", Path: routePrompts},
+				{Label: "Personas", Path: routePersonas},
 				{Label: "Sessions", Path: routeSessions},
 				{Label: "Memory", Path: routeMemory},
 				{Label: "Automation", Path: routeAutomation},
@@ -1053,6 +1074,8 @@ func pageTitle(view adminView) string {
 		return "Skills"
 	case viewPrompts:
 		return "Prompts"
+	case viewPersonas:
+		return "Personas"
 	case viewMemory:
 		return "Memory"
 	case viewAutomation:
@@ -1073,7 +1096,9 @@ func pageSummary(view adminView) string {
 	case viewSkills:
 		return "Discover installed skills, refresh folders from disk, and manage config-backed enablement."
 	case viewPrompts:
-		return "Inspect prompt bundles, edit file-backed prompts, and manage persona stores."
+		return pageSummaryPrompts
+	case viewPersonas:
+		return pageSummaryPersonas
 	case viewMemory:
 		return "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory."
 	case viewAutomation:
@@ -1272,6 +1297,8 @@ func navPath(raw string) string {
 		return routeSkillsPage
 	case routePrompts:
 		return routePrompts
+	case routePersonas:
+		return routePersonas
 	case routeMemory:
 		return routeMemory
 	case routeAutomation:
@@ -1295,6 +1322,8 @@ func navViewForPath(path string) adminView {
 		return viewSkills
 	case routePrompts:
 		return viewPrompts
+	case routePersonas:
+		return viewPersonas
 	case routeMemory:
 		return viewMemory
 	case routeAutomation:
@@ -1978,7 +2007,11 @@ var adminPage = template.Must(
 		"formatTime":             formatTime,
 		"browserEndpointSummary": browserEndpointSummary,
 		"displayAdminAppName":    displayAdminAppName,
-	}).Parse(adminPageHTML + promptsPageTemplateHTML),
+	}).Parse(
+		adminPageHTML +
+			promptsPageTemplateHTML +
+			personasPageTemplateHTML,
+	),
 )
 
 const adminPageHTML = `<!doctype html>
@@ -3359,6 +3392,10 @@ const adminPageHTML = `<!doctype html>
 
     {{if eq .View "prompts"}}
     {{template "promptsPage" .}}
+    {{end}}
+
+    {{if eq .View "personas"}}
+    {{template "personasPage" .}}
     {{end}}
 
     {{if eq .View "memory"}}

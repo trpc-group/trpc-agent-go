@@ -1214,7 +1214,13 @@ func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
 			path:    routePrompts,
 			view:    viewPrompts,
 			title:   "Prompts",
-			summary: "Inspect prompt bundles, edit file-backed prompts, and manage persona stores.",
+			summary: pageSummaryPrompts,
+		},
+		{
+			path:    routePersonas,
+			view:    viewPersonas,
+			title:   "Personas",
+			summary: pageSummaryPersonas,
 		},
 		{
 			path:    routeMemory,
@@ -1319,7 +1325,8 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), "Prompt Management")
 	require.Contains(t, rec.Body.String(), "Agent Instruction")
-	require.Contains(t, rec.Body.String(), "Agent Personas")
+	require.NotContains(t, rec.Body.String(), "Agent Personas")
+	require.Contains(t, rec.Body.String(), "/personas")
 
 	values := url.Values{
 		formPromptBundleKey: {"agent_instruction"},
@@ -1367,7 +1374,7 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 
 	values = url.Values{
 		formPersonaID:  {"friendly"},
-		formReturnPath: {routePrompts},
+		formReturnPath: {routePersonas},
 		formReturnTo:   {"personas-default"},
 	}
 	req = httptest.NewRequest(
@@ -1389,7 +1396,7 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 		formPersonaStoreKey: {"agent"},
 		formPersonaName:     {"Warm"},
 		formPersonaPrompt:   {"custom prompt"},
-		formReturnPath:      {routePrompts},
+		formReturnPath:      {routePersonas},
 		formReturnTo:        {"persona-store-agent"},
 	}
 	req = httptest.NewRequest(
@@ -1408,6 +1415,41 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 	require.Equal(t, "agent", personas.storeKey)
 	require.Equal(t, "Warm", personas.personaName)
 	require.Equal(t, "custom prompt", personas.personaBody)
+}
+
+func TestService_PersonasPageAndActions(t *testing.T) {
+	t.Parallel()
+
+	personas := &stubPersonasProvider{
+		status: PersonasStatus{
+			Enabled:          true,
+			DefaultPersonaID: "friendly",
+			DefaultOptions: []PersonaOption{{
+				ID:   "friendly",
+				Name: "Friendly",
+			}},
+			Stores: []PersonaStoreView{{
+				Key:           "agent",
+				Title:         "Agent Personas",
+				CreateEnabled: true,
+				Personas: []PersonaView{{
+					ID:       "friendly",
+					Name:     "Friendly",
+					Prompt:   "warm tone",
+					Editable: true,
+				}},
+			}},
+		},
+	}
+	svc := New(Config{Personas: personas})
+
+	req := httptest.NewRequest(http.MethodGet, routePersonas, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "Persona Management")
+	require.Contains(t, rec.Body.String(), "Agent Personas")
+	require.Contains(t, rec.Body.String(), "/api/personas")
 }
 
 func TestSkillInstallViewsFromStatus_TrimsValues(t *testing.T) {

@@ -542,13 +542,13 @@ const promptsPageTemplateHTML = `
         <h2>Prompt Management</h2>
         <p class="subtle">
           Inspect effective prompts, edit configured files, and manage
-          runtime-level prompt and persona customization from one place.
+          runtime-level prompt customization from one place.
         </p>
         <dl class="meta">
           <dt>Prompt Bundles</dt>
           <dd>{{len .Prompts.Bundles}}</dd>
-          <dt>Persona Stores</dt>
-          <dd>{{len .Personas.Stores}}</dd>
+          <dt>Personas</dt>
+          <dd><a href="/personas">/personas</a></dd>
           <dt>JSON</dt>
           <dd><a href="/api/prompts">/api/prompts</a></dd>
         </dl>
@@ -735,6 +735,34 @@ const promptsPageTemplateHTML = `
       <p class="empty">Prompt management is not available for this runtime.</p>
       {{end}}
     </section>
+{{end}}
+`
+
+const personasPageTemplateHTML = `
+{{define "personasPage"}}
+    <section class="panels">
+      <article class="card">
+        <h2>Persona Management</h2>
+        <p class="subtle">
+          Manage the default persona and any file-backed persona
+          definitions exposed by this runtime.
+        </p>
+        <dl class="meta">
+          <dt>Default Persona</dt>
+          <dd>
+            {{if .Personas.DefaultPersonaID}}
+              {{.Personas.DefaultPersonaID}}
+            {{else}}
+              (default)
+            {{end}}
+          </dd>
+          <dt>Persona Stores</dt>
+          <dd>{{len .Personas.Stores}}</dd>
+          <dt>JSON</dt>
+          <dd><a href="/api/personas">/api/personas</a></dd>
+        </dl>
+      </article>
+    </section>
 
     {{if .Personas.Enabled}}
     <section class="card" style="margin-top: 24px;">
@@ -751,7 +779,7 @@ const promptsPageTemplateHTML = `
       <article class="card" style="margin-top: 18px;" id="personas-default">
         <h3>Default Persona</h3>
         <form method="post" action="/api/personas/default">
-          <input type="hidden" name="return_path" value="/prompts">
+          <input type="hidden" name="return_path" value="/personas">
           <input type="hidden" name="return_to" value="personas-default">
           <label for="default-persona">Persona</label>
           <select id="default-persona" name="persona_id">
@@ -789,7 +817,7 @@ const promptsPageTemplateHTML = `
           <form method="post" action="/api/personas/save" style="margin-top: 12px;">
             <input type="hidden" name="store_key" value="{{$store.Key}}">
             <input type="hidden" name="persona_id" value="{{.ID}}">
-            <input type="hidden" name="return_path" value="/prompts">
+            <input type="hidden" name="return_path" value="/personas">
             <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
             <label>Name</label>
             <input type="text" name="persona_name" value="{{.Name}}">
@@ -807,7 +835,7 @@ const promptsPageTemplateHTML = `
           <form method="post" action="/api/personas/delete" style="margin-top: 8px;">
             <input type="hidden" name="store_key" value="{{$store.Key}}">
             <input type="hidden" name="persona_id" value="{{.ID}}">
-            <input type="hidden" name="return_path" value="/prompts">
+            <input type="hidden" name="return_path" value="/personas">
             <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
             <div class="actions">
               <button
@@ -828,7 +856,7 @@ const promptsPageTemplateHTML = `
           <h4 style="margin: 0 0 10px;">Create Persona</h4>
           <form method="post" action="/api/personas/save">
             <input type="hidden" name="store_key" value="{{$store.Key}}">
-            <input type="hidden" name="return_path" value="/prompts">
+            <input type="hidden" name="return_path" value="/personas">
             <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
             <label>Name</label>
             <input type="text" name="persona_name">
