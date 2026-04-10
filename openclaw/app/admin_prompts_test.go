@@ -231,3 +231,149 @@ func TestAdminPromptProviderSavePromptRuntime(t *testing.T) {
 		provider.controller.Snapshot().Instruction,
 	)
 }
+
+func TestAdminPromptProviderErrorsAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	var nilProvider *adminPromptProvider
+	_, err := nilProvider.PromptsStatus()
+	require.NoError(t, err)
+	require.Error(t, nilProvider.SavePromptInline(
+		adminPromptInstructionBundle,
+		"inline",
+	))
+	require.Error(t, nilProvider.SavePromptRuntime(
+		adminPromptInstructionBundle,
+		"runtime",
+	))
+	require.Error(t, nilProvider.SavePromptFile(
+		adminPromptInstructionBundle,
+		"/tmp/prompt.md",
+		"body",
+	))
+	require.Error(t, nilProvider.CreatePromptFile(
+		adminPromptInstructionBundle,
+		"20_extra.md",
+		"body",
+	))
+	require.Error(t, nilProvider.DeletePromptFile(
+		adminPromptInstructionBundle,
+		"/tmp/prompt.md",
+	))
+
+	root := t.TempDir()
+	systemPath := filepath.Join(root, "system.md")
+	require.NoError(t, os.WriteFile(
+		systemPath,
+		[]byte("system\n"),
+		0o600,
+	))
+	dirPath := filepath.Join(root, "instruction")
+	require.NoError(t, os.MkdirAll(dirPath, 0o700))
+	existingPath := filepath.Join(dirPath, "10_base.md")
+	require.NoError(t, os.WriteFile(
+		existingPath,
+		[]byte("base\n"),
+		0o600,
+	))
+
+	provider := &adminPromptProvider{
+		cwd: root,
+		opts: runOptions{
+			AgentInstructionDir:    dirPath,
+			AgentSystemPromptFiles: systemPath,
+			AgentSystemPromptDir:   "",
+			AgentInstructionFiles:  "",
+			AgentInstruction:       "",
+			AgentSystemPrompt:      "",
+		},
+	}
+
+	require.Error(t, provider.SavePromptInline(
+		adminPromptInstructionBundle,
+		"inline",
+	))
+	require.Error(t, provider.SavePromptRuntime("unknown", "runtime"))
+	require.Error(t, provider.SavePromptFile(
+		adminPromptInstructionBundle,
+		filepath.Join(root, "missing.md"),
+		"body",
+	))
+	require.Error(t, provider.CreatePromptFile(
+		adminPromptInstructionBundle,
+		"10_base.md",
+		"body",
+	))
+	require.Error(t, provider.DeletePromptFile(
+		adminPromptSystemBundle,
+		systemPath,
+	))
+
+	_, err = provider.bundleConfiguredPromptLocked("unknown")
+	require.Error(t, err)
+	_, err = provider.bundleCreateDirLocked(adminPromptSystemBundle)
+	require.Error(t, err)
+	_, _, err = provider.bundleResolvedPathsLocked("unknown")
+	require.Error(t, err)
+
+	found, ok, err := provider.lookupPromptFileLocked(
+		adminPromptInstructionBundle,
+		existingPath,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, existingPath, found.Path)
+
+	_, ok, err = provider.lookupPromptFileLocked(
+		adminPromptInstructionBundle,
+		filepath.Join(root, "other.md"),
+	)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	absPath, err := provider.resolvePromptPath(systemPath)
+	require.NoError(t, err)
+	require.Equal(t, systemPath, absPath)
+
+	relPath, err := provider.resolvePromptPath("instruction/10_base.md")
+	require.NoError(t, err)
+	require.Equal(t, existingPath, relPath)
+
+	paths, dir, err := provider.resolvePromptPaths(
+		[]string{"instruction/10_base.md", ""},
+		"instruction",
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{existingPath}, paths)
+	require.Equal(t, dirPath, dir)
+
+	noCtrl := &adminPromptProvider{
+		cwd:  root,
+		opts: provider.opts,
+	}
+	require.NoError(t, noCtrl.applyLocked())
+
+	require.Nil(t, promptOverridePtr(""))
+	ptr := promptOverridePtr("  kept  ")
+	require.NotNil(t, ptr)
+	require.Equal(t, "kept", *ptr)
+
+	require.Error(t, writeAdminPromptFile("", "body"))
+
+	newPath := filepath.Join(root, "nested", "30_extra.md")
+	require.NoError(t, writeAdminPromptFile(newPath, "body"))
+	data, err := os.ReadFile(newPath)
+	require.NoError(t, err)
+	require.Equal(t, "body\n", string(data))
+
+	name, err := normalizeAdminPromptFileName("30_extra")
+	require.NoError(t, err)
+	require.Equal(t, "30_extra.md", name)
+
+	_, err = normalizeAdminPromptFileName("")
+	require.Error(t, err)
+	_, err = normalizeAdminPromptFileName("../bad")
+	require.Error(t, err)
+	_, err = normalizeAdminPromptFileName(".")
+	require.Error(t, err)
+}
