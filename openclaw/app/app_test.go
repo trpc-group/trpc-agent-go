@@ -284,6 +284,37 @@ func TestRuntimePromptControllerCompatibilityGuards(t *testing.T) {
 	require.Equal(t, PromptSnapshot{}, ctrl.Snapshot())
 }
 
+func TestRuntimePromptControllerIndividualSetters(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt := llmagent.New(
+		"test",
+		llmagent.WithModel(mdl),
+		llmagent.WithInstruction("old instruction"),
+		llmagent.WithGlobalInstruction("old system"),
+	)
+	ctrl := newRuntimePromptController(
+		agt,
+		"old instruction",
+		"old system",
+	)
+	require.NotNil(t, ctrl)
+
+	ctrl.SetInstruction("new instruction")
+	ctrl.SetSystemPrompt("new system")
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		session.NewSession("app", "user", "sess"),
+	)
+	system := joinSystemMessages(req)
+	require.Contains(t, system, "new instruction")
+	require.Contains(t, system, "new system")
+}
+
 func TestRuntimePromptControllerMethod(t *testing.T) {
 	t.Parallel()
 
@@ -314,6 +345,20 @@ func TestRuntimeConfigureAdmin(t *testing.T) {
 	require.Equal(t, "127.0.0.1:8081", rt.Admin.Addr)
 	require.Equal(t, "http://127.0.0.1:8081", rt.Admin.URL)
 	require.NotNil(t, rt.adminCfg.Prompts)
+}
+
+func TestRuntimeConfigureAdminNoAdminConfig(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{}
+	rt.ConfigureAdmin(func(cfg *admin.Config) {
+		cfg.AppName = "ignored"
+	})
+	require.Nil(t, rt.adminCfg)
+	require.Empty(t, rt.Admin)
+
+	var nilRuntime *Runtime
+	nilRuntime.applyAdminConfig(admin.Config{})
 }
 
 func findToolDeclaration(

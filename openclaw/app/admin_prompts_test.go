@@ -377,3 +377,147 @@ func TestAdminPromptProviderErrorsAndHelpers(t *testing.T) {
 	_, err = normalizeAdminPromptFileName(".")
 	require.Error(t, err)
 }
+
+func TestAdminPromptProviderAdditionalCoverage(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	systemDir := filepath.Join(root, "system_dir")
+	require.NoError(t, os.MkdirAll(systemDir, 0o700))
+	systemFile := filepath.Join(systemDir, "10_system.md")
+	require.NoError(t, os.WriteFile(
+		systemFile,
+		[]byte("system\n"),
+		0o600,
+	))
+
+	instructionDir := filepath.Join(root, "instruction")
+	require.NoError(t, os.MkdirAll(instructionDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(instructionDir, "10_base.md"),
+		[]byte("base\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(instructionDir, "notes.txt"),
+		[]byte("skip\n"),
+		0o600,
+	))
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(instructionDir, "subdir"),
+		0o700,
+	))
+
+	opts := runOptions{
+		AgentInstructionDir:   instructionDir,
+		AgentSystemPromptDir:  systemDir,
+		AgentSystemPrompt:     "inline system",
+		AgentInstruction:      "",
+		AgentInstructionFiles: "",
+	}
+	prompts, err := resolveAgentPromptsForDir(opts, root)
+	require.NoError(t, err)
+
+	provider := &adminPromptProvider{
+		cwd:  root,
+		opts: opts,
+		controller: newRuntimePromptController(
+			llmagent.New(
+				"test",
+				llmagent.WithInstruction(prompts.Instruction),
+				llmagent.WithGlobalInstruction(prompts.SystemPrompt),
+			),
+			prompts.Instruction,
+			prompts.SystemPrompt,
+		),
+	}
+
+	require.NoError(t, provider.SavePromptRuntime(
+		adminPromptSystemBundle,
+		"system override",
+	))
+	require.Equal(
+		t,
+		"system override",
+		provider.controller.Snapshot().SystemPrompt,
+	)
+
+	state := provider.bundleStateLocked(
+		adminPromptSystemBundle,
+		"Agent System Prompt",
+		"live system",
+		provider.systemOverride,
+	)
+	require.Equal(t, "system override", state.RuntimeValue)
+
+	brokenPath := filepath.Join(instructionDir, "40_broken.md")
+	require.NoError(t, os.Symlink(
+		filepath.Join(root, "missing.md"),
+		brokenPath,
+	))
+
+	fileProvider := &adminPromptProvider{
+		cwd:  root,
+		opts: opts,
+	}
+	files, err := fileProvider.bundleFilesLocked(
+		adminPromptInstructionBundle,
+	)
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	require.Equal(t, "10_base.md", files[0].Label)
+	require.Equal(t, "40_broken.md", files[1].Label)
+	require.NotEmpty(t, files[1].Error)
+
+	missingDirProvider := &adminPromptProvider{
+		cwd: root,
+		opts: runOptions{
+			AgentInstructionDir: filepath.Join(root, "does-not-exist"),
+		},
+	}
+	files, err = missingDirProvider.bundleFilesLocked(
+		adminPromptInstructionBundle,
+	)
+	require.NoError(t, err)
+	require.Empty(t, files)
+
+	fileAsDir := filepath.Join(root, "not-a-dir")
+	require.NoError(t, os.WriteFile(
+		fileAsDir,
+		[]byte("body\n"),
+		0o600,
+	))
+	invalidDirProvider := &adminPromptProvider{
+		cwd: root,
+		opts: runOptions{
+			AgentInstructionDir: fileAsDir,
+		},
+	}
+	_, err = invalidDirProvider.bundleFilesLocked(
+		adminPromptInstructionBundle,
+	)
+	require.Error(t, err)
+
+	emptyProvider := &adminPromptProvider{
+		cwd:  root,
+		opts: runOptions{},
+	}
+	instruction, err := emptyProvider.bundleConfiguredPromptLocked(
+		adminPromptInstructionBundle,
+	)
+	require.NoError(t, err)
+	require.Equal(t, defaultAgentInstruction, instruction)
+
+	state = emptyProvider.bundleStateLocked(
+		"unknown",
+		"Unknown",
+		"",
+		nil,
+	)
+	require.NotEmpty(t, state.LoadError)
+
+	cwdProvider := &adminPromptProvider{}
+	path, err := cwdProvider.resolvePromptPath("relative.md")
+	require.NoError(t, err)
+	require.True(t, filepath.IsAbs(path))
+}

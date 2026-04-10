@@ -1943,6 +1943,92 @@ func TestService_PromptAndPersonaActionErrors(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rec.Code)
 }
 
+func TestPromptStatusAndFormParsingErrors(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Prompts: &stubPromptsProvider{
+			err: errors.New("prompt status failed"),
+		},
+		Personas: &stubPersonasProvider{
+			err: errors.New("persona status failed"),
+		},
+	})
+
+	require.Equal(
+		t,
+		"prompt status failed",
+		svc.promptsStatus().Error,
+	)
+	require.Equal(
+		t,
+		"persona status failed",
+		svc.personasStatus().Error,
+	)
+
+	badForm := "%"
+	contentType := "application/x-www-form-urlencoded"
+
+	promptReq := httptest.NewRequest(
+		http.MethodPost,
+		routePromptRuntimeSave,
+		strings.NewReader(badForm),
+	)
+	promptReq.Header.Set("Content-Type", contentType)
+	promptRec := httptest.NewRecorder()
+	_, _, _, ok := svc.requirePromptPOST(promptRec, promptReq)
+	require.False(t, ok)
+	require.Equal(t, http.StatusBadRequest, promptRec.Code)
+
+	personaReq := httptest.NewRequest(
+		http.MethodPost,
+		routePersonaSave,
+		strings.NewReader(badForm),
+	)
+	personaReq.Header.Set("Content-Type", contentType)
+	personaRec := httptest.NewRecorder()
+	_, _, _, _, _, ok = svc.requirePersonaPOST(personaRec, personaReq)
+	require.False(t, ok)
+	require.Equal(t, http.StatusBadRequest, personaRec.Code)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routePersonaDefaultSave,
+		strings.NewReader(badForm),
+	)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestPromptAndPersonaHandlersRejectWrongMethod(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Prompts:  &stubPromptsProvider{},
+		Personas: &stubPersonasProvider{},
+	})
+
+	paths := []string{
+		routePromptInlineSave,
+		routePromptRuntimeSave,
+		routePromptFileSave,
+		routePromptFileCreate,
+		routePromptFileDelete,
+		routePersonaSave,
+		routePersonaDelete,
+		routePersonaDefaultSave,
+	}
+
+	for _, path := range paths {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		svc.Handler().ServeHTTP(rec, req)
+		require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	}
+}
+
 func TestSkillInstallViewsFromStatus_TrimsValues(t *testing.T) {
 	t.Parallel()
 
