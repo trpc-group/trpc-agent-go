@@ -1465,6 +1465,18 @@ func (a *LLMAgent) SetGlobalInstruction(systemPrompt string) {
 	a.mu.Unlock()
 }
 
+// SetPrompts updates the instruction and global system prompt together.
+// Subsequent requests observe the pair from a single agent lock.
+func (a *LLMAgent) SetPrompts(
+	instruction string,
+	systemPrompt string,
+) {
+	a.mu.Lock()
+	a.instruction = newTextPrompt(instruction)
+	a.systemPrompt = newTextPrompt(systemPrompt)
+	a.mu.Unlock()
+}
+
 // SetModelInstructions updates the model-specific instruction overrides.
 // Key: model.Info().Name, Value: instruction text.
 func (a *LLMAgent) SetModelInstructions(instructions map[string]string) {

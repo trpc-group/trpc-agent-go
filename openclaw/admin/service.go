@@ -33,6 +33,9 @@ const (
 	routeIndex      = "/"
 	routeOverview   = "/overview"
 	routeSkillsPage = "/skills"
+	routePrompts    = "/prompts"
+	routeIdentity   = "/identity"
+	routePersonas   = "/personas"
 	routeMemory     = "/memory"
 	routeAutomation = "/automation"
 	routeSessions   = "/sessions"
@@ -94,6 +97,16 @@ const (
 	adminBrandName     = "TRPC-CLAW"
 	adminBrandTitle    = "TRPC-CLAW admin"
 	adminRuntimePrefix = "trpc-claw"
+
+	pageSummaryPrompts = "" +
+		"Edit the main prompt blocks, inspect the assembled " +
+		"prompt previews, and keep file-level edits in one place."
+	pageSummaryIdentity = "" +
+		"Set the assistant's global default name while keeping " +
+		"the runtime product as a separate read-only fact."
+	pageSummaryPersonas = "" +
+		"Manage the default persona and any file-backed " +
+		"persona definitions exposed by this runtime."
 )
 
 type adminView string
@@ -101,6 +114,9 @@ type adminView string
 const (
 	viewOverview   adminView = "overview"
 	viewSkills     adminView = "skills"
+	viewPrompts    adminView = "prompts"
+	viewIdentity   adminView = "identity"
+	viewPersonas   adminView = "personas"
 	viewMemory     adminView = "memory"
 	viewAutomation adminView = "automation"
 	viewSessions   adminView = "sessions"
@@ -142,6 +158,9 @@ type Config struct {
 	Channels      []string
 	GatewayRoutes Routes
 	Skills        SkillsStatusProvider
+	Prompts       PromptsProvider
+	Identity      IdentityProvider
+	Personas      PersonasProvider
 	MemoryFiles   MemoryFileStore
 	Browser       BrowserConfig
 
@@ -265,6 +284,18 @@ func (s *Service) Handler() http.Handler {
 		wrapRelativeLinksFunc(s.handleSkillsPage),
 	)
 	mux.HandleFunc(
+		routePrompts,
+		wrapRelativeLinksFunc(s.handlePromptsPage),
+	)
+	mux.HandleFunc(
+		routeIdentity,
+		wrapRelativeLinksFunc(s.handleIdentityPage),
+	)
+	mux.HandleFunc(
+		routePersonas,
+		wrapRelativeLinksFunc(s.handlePersonasPage),
+	)
+	mux.HandleFunc(
 		routeMemory,
 		wrapRelativeLinksFunc(s.handleMemoryPage),
 	)
@@ -286,8 +317,47 @@ func (s *Service) Handler() http.Handler {
 	)
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
+	mux.HandleFunc(routePromptsJSON, s.handlePromptsJSON)
+	mux.HandleFunc(routeIdentityJSON, s.handleIdentityJSON)
+	mux.HandleFunc(routePersonasJSON, s.handlePersonasJSON)
 	mux.HandleFunc(routeMemoryFilesJSON, s.handleMemoryFilesJSON)
 	mux.HandleFunc(routeMemoryFile, s.handleMemoryFile)
+	mux.HandleFunc(
+		routePromptInlineSave,
+		wrapRelativeLinksFunc(s.handleSavePromptInline),
+	)
+	mux.HandleFunc(
+		routePromptRuntimeSave,
+		wrapRelativeLinksFunc(s.handleSavePromptRuntime),
+	)
+	mux.HandleFunc(
+		routePromptFileSave,
+		wrapRelativeLinksFunc(s.handleSavePromptFile),
+	)
+	mux.HandleFunc(
+		routePromptFileCreate,
+		wrapRelativeLinksFunc(s.handleCreatePromptFile),
+	)
+	mux.HandleFunc(
+		routePromptFileDelete,
+		wrapRelativeLinksFunc(s.handleDeletePromptFile),
+	)
+	mux.HandleFunc(
+		routeIdentitySave,
+		wrapRelativeLinksFunc(s.handleSaveIdentity),
+	)
+	mux.HandleFunc(
+		routePersonaSave,
+		wrapRelativeLinksFunc(s.handleSavePersona),
+	)
+	mux.HandleFunc(
+		routePersonaDelete,
+		wrapRelativeLinksFunc(s.handleDeletePersona),
+	)
+	mux.HandleFunc(
+		routePersonaDefaultSave,
+		wrapRelativeLinksFunc(s.handleSaveDefaultPersona),
+	)
 	mux.HandleFunc(
 		routeSkillsRefresh,
 		wrapRelativeLinksFunc(s.handleRefreshSkills),
@@ -496,6 +566,9 @@ type skillInstallView struct {
 
 type pageData struct {
 	Snapshot       snapshot
+	Prompts        PromptsStatus
+	Identity       IdentityStatus
+	Personas       PersonasStatus
 	Notice         string
 	Error          string
 	RefreshSeconds int
@@ -898,6 +971,27 @@ func (s *Service) handleSkillsPage(
 	s.renderPage(w, r, viewSkills)
 }
 
+func (s *Service) handlePromptsPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewPrompts)
+}
+
+func (s *Service) handleIdentityPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewIdentity)
+}
+
+func (s *Service) handlePersonasPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewPersonas)
+}
+
 func (s *Service) handleMemoryPage(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -945,6 +1039,9 @@ func (s *Service) renderPage(
 
 	data := pageData{
 		Snapshot:       s.snapshotForView(view),
+		Prompts:        s.promptsStatus(),
+		Identity:       s.identityStatus(),
+		Personas:       s.personasStatus(),
 		Notice:         strings.TrimSpace(r.URL.Query().Get(queryNotice)),
 		Error:          strings.TrimSpace(r.URL.Query().Get(queryError)),
 		RefreshSeconds: refreshSeconds,
@@ -971,6 +1068,9 @@ func adminNavSections(active adminView) []adminNavSection {
 			Items: []adminNavItem{
 				{Label: "Overview", Path: routeOverview},
 				{Label: "Skills", Path: routeSkillsPage},
+				{Label: "Prompts", Path: routePrompts},
+				{Label: "Identity", Path: routeIdentity},
+				{Label: "Personas", Path: routePersonas},
 				{Label: "Sessions", Path: routeSessions},
 				{Label: "Memory", Path: routeMemory},
 				{Label: "Automation", Path: routeAutomation},
@@ -997,6 +1097,12 @@ func pageTitle(view adminView) string {
 	switch view {
 	case viewSkills:
 		return "Skills"
+	case viewPrompts:
+		return "Prompts"
+	case viewIdentity:
+		return "Identity"
+	case viewPersonas:
+		return "Personas"
 	case viewMemory:
 		return "Memory"
 	case viewAutomation:
@@ -1016,6 +1122,12 @@ func pageSummary(view adminView) string {
 	switch view {
 	case viewSkills:
 		return "Discover installed skills, refresh folders from disk, and manage config-backed enablement."
+	case viewPrompts:
+		return pageSummaryPrompts
+	case viewIdentity:
+		return pageSummaryIdentity
+	case viewPersonas:
+		return pageSummaryPersonas
 	case viewMemory:
 		return "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory."
 	case viewAutomation:
@@ -1212,6 +1324,12 @@ func navPath(raw string) string {
 		return routeOverview
 	case routeSkillsPage:
 		return routeSkillsPage
+	case routePrompts:
+		return routePrompts
+	case routeIdentity:
+		return routeIdentity
+	case routePersonas:
+		return routePersonas
 	case routeMemory:
 		return routeMemory
 	case routeAutomation:
@@ -1233,6 +1351,12 @@ func navViewForPath(path string) adminView {
 		return viewOverview
 	case routeSkillsPage:
 		return viewSkills
+	case routePrompts:
+		return viewPrompts
+	case routeIdentity:
+		return viewIdentity
+	case routePersonas:
+		return viewPersonas
 	case routeMemory:
 		return viewMemory
 	case routeAutomation:
@@ -1916,7 +2040,16 @@ var adminPage = template.Must(
 		"formatTime":             formatTime,
 		"browserEndpointSummary": browserEndpointSummary,
 		"displayAdminAppName":    displayAdminAppName,
-	}).Parse(adminPageHTML),
+		"promptSections":         promptSections,
+		"promptBlockCount":       promptBlockCount,
+		"hasPromptValue":         hasPromptValue,
+		"promptValuesDiffer":     promptValuesDiffer,
+	}).Parse(
+		adminPageHTML +
+			promptsPageTemplateHTML +
+			identityPageTemplateHTML +
+			personasPageTemplateHTML,
+	),
 )
 
 const adminPageHTML = `<!doctype html>
@@ -2122,6 +2255,23 @@ const adminPageHTML = `<!doctype html>
       padding: 2px 6px;
       border-radius: 8px;
       word-break: break-all;
+    }
+    input[type="text"],
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px 14px;
+      font: inherit;
+      background: var(--panel-strong);
+      color: var(--ink);
+    }
+    textarea {
+      min-height: 160px;
+      resize: vertical;
+      white-space: pre-wrap;
+      font-family: "SFMono-Regular", "SFMono-Regular", monospace;
+      line-height: 1.45;
     }
     table {
       width: 100%;
@@ -3276,6 +3426,18 @@ const adminPageHTML = `<!doctype html>
       <p class="empty">No skills discovered.</p>
       {{end}}
     </section>
+    {{end}}
+
+    {{if eq .View "prompts"}}
+    {{template "promptsPage" .}}
+    {{end}}
+
+    {{if eq .View "identity"}}
+    {{template "identityPage" .}}
+    {{end}}
+
+    {{if eq .View "personas"}}
+    {{template "personasPage" .}}
     {{end}}
 
     {{if eq .View "memory"}}

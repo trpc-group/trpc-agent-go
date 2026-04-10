@@ -32,6 +32,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
@@ -43,6 +44,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
@@ -61,6 +63,79 @@ import (
 
 type captureRequestModel struct {
 	got *model.Request
+}
+
+type stubRuntimeAgent struct{}
+
+type stubAdminPromptsProvider struct{}
+
+func (stubRuntimeAgent) Run(
+	context.Context,
+	*agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (stubRuntimeAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (stubAdminPromptsProvider) PromptsStatus() (
+	admin.PromptsStatus,
+	error,
+) {
+	return admin.PromptsStatus{}, nil
+}
+
+func (stubAdminPromptsProvider) SavePromptInline(
+	string,
+	string,
+) error {
+	return nil
+}
+
+func (stubAdminPromptsProvider) SavePromptRuntime(
+	string,
+	string,
+) error {
+	return nil
+}
+
+func (stubAdminPromptsProvider) SavePromptFile(
+	string,
+	string,
+	string,
+) error {
+	return nil
+}
+
+func (stubAdminPromptsProvider) CreatePromptFile(
+	string,
+	string,
+	string,
+) error {
+	return nil
+}
+
+func (stubAdminPromptsProvider) DeletePromptFile(
+	string,
+	string,
+) error {
+	return nil
+}
+
+func (stubRuntimeAgent) Info() agent.Info {
+	return agent.Info{Name: "stub"}
+}
+
+func (stubRuntimeAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (stubRuntimeAgent) FindSubAgent(string) agent.Agent {
+	return nil
 }
 
 func (m *captureRequestModel) GenerateContent(
@@ -143,6 +218,147 @@ func joinSystemMessages(req *model.Request) string {
 		parts = append(parts, msg.Content)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+func TestRuntimePromptControllerUpdatesAgentPrompts(
+	t *testing.T,
+) {
+	mdl := &captureRequestModel{}
+	agt := llmagent.New(
+		"test",
+		llmagent.WithModel(mdl),
+		llmagent.WithInstruction("old instruction"),
+		llmagent.WithGlobalInstruction("old system"),
+	)
+	ctrl := newRuntimePromptController(
+		agt,
+		"old instruction",
+		"old system",
+	)
+	require.NotNil(t, ctrl)
+
+	ctrl.SetPrompts("new instruction", "new system")
+	snapshot := ctrl.Snapshot()
+	require.Equal(t, "new instruction", snapshot.Instruction)
+	require.Equal(t, "new system", snapshot.SystemPrompt)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		session.NewSession("app", "user", "sess"),
+	)
+	system := joinSystemMessages(req)
+	require.Contains(t, system, "new instruction")
+	require.Contains(t, system, "new system")
+	require.NotContains(t, system, "old instruction")
+	require.NotContains(t, system, "old system")
+}
+
+func TestRuntimePromptControllerCompatibilityGuards(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(
+		t,
+		newRuntimePromptController(nil, "instruction", "system"),
+	)
+	require.Nil(
+		t,
+		newRuntimePromptController(
+			stubRuntimeAgent{},
+			"instruction",
+			"system",
+		),
+	)
+
+	var nilCtrl *RuntimePromptController
+	nilCtrl.SetInstruction("instruction")
+	nilCtrl.SetSystemPrompt("system")
+	nilCtrl.SetPrompts("instruction", "system")
+	require.Equal(t, PromptSnapshot{}, nilCtrl.Snapshot())
+
+	ctrl := &RuntimePromptController{agent: stubRuntimeAgent{}}
+	ctrl.SetInstruction("instruction")
+	ctrl.SetSystemPrompt("system")
+	ctrl.SetPrompts("instruction", "system")
+	require.Equal(t, PromptSnapshot{}, ctrl.Snapshot())
+}
+
+func TestRuntimePromptControllerIndividualSetters(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt := llmagent.New(
+		"test",
+		llmagent.WithModel(mdl),
+		llmagent.WithInstruction("old instruction"),
+		llmagent.WithGlobalInstruction("old system"),
+	)
+	ctrl := newRuntimePromptController(
+		agt,
+		"old instruction",
+		"old system",
+	)
+	require.NotNil(t, ctrl)
+
+	ctrl.SetInstruction("new instruction")
+	ctrl.SetSystemPrompt("new system")
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		session.NewSession("app", "user", "sess"),
+	)
+	system := joinSystemMessages(req)
+	require.Contains(t, system, "new instruction")
+	require.Contains(t, system, "new system")
+}
+
+func TestRuntimePromptControllerMethod(t *testing.T) {
+	t.Parallel()
+
+	ctrl := &RuntimePromptController{}
+	rt := &Runtime{prompts: ctrl}
+	require.Same(t, ctrl, rt.PromptController())
+
+	var nilRuntime *Runtime
+	require.Nil(t, nilRuntime.PromptController())
+}
+
+func TestRuntimeConfigureAdmin(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{
+		adminCfg: &admin.Config{
+			AdminAddr: "127.0.0.1:8081",
+			AdminURL:  "http://127.0.0.1:8081",
+		},
+	}
+
+	rt.ConfigureAdmin(func(cfg *admin.Config) {
+		cfg.Prompts = stubAdminPromptsProvider{}
+	})
+
+	require.NotNil(t, rt.adminCfg)
+	require.NotNil(t, rt.Admin.Handler)
+	require.Equal(t, "127.0.0.1:8081", rt.Admin.Addr)
+	require.Equal(t, "http://127.0.0.1:8081", rt.Admin.URL)
+	require.NotNil(t, rt.adminCfg.Prompts)
+}
+
+func TestRuntimeConfigureAdminNoAdminConfig(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{}
+	rt.ConfigureAdmin(func(cfg *admin.Config) {
+		cfg.AppName = "ignored"
+	})
+	require.Nil(t, rt.adminCfg)
+	require.Empty(t, rt.Admin)
+
+	var nilRuntime *Runtime
+	nilRuntime.applyAdminConfig(admin.Config{})
 }
 
 func findToolDeclaration(
