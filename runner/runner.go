@@ -398,11 +398,19 @@ func (r *runner) Run(
 		ro.RequestID = uuid.NewString()
 	}
 
+	// Resolve per-request app name override. When the caller provides an
+	// AppName via RunOption, it takes precedence over the runner default so
+	// that a single runner can isolate session/memory data across projects.
+	effectiveAppName := r.appName
+	if ro.AppName != "" {
+		effectiveAppName = ro.AppName
+	}
+
 	execCtx, execCancel := r.newExecutionContext(ctx, ro)
 
 	// Resolve or create the session for this user and conversation.
 	sessionKey := session.Key{
-		AppName:   r.appName,
+		AppName:   effectiveAppName,
 		UserID:    userID,
 		SessionID: sessionID,
 	}
@@ -419,7 +427,7 @@ func (r *runner) Run(
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
 
-	eventFilterKey := r.appName
+	eventFilterKey := effectiveAppName
 	if ro.EventFilterKey != "" {
 		eventFilterKey = ro.EventFilterKey
 	}
@@ -461,49 +469,19 @@ func (r *runner) Run(
 	// If caller provided a history via RunOptions and the session is empty,
 	// persist that history into the session exactly once, so subsequent turns
 	// and tool calls build on the same canonical transcript.
-	if len(ro.Messages) > 0 && sess.GetEventCount() == 0 {
-		for _, msg := range ro.Messages {
-			author := ag.Info().Name
-			if msg.Role == model.RoleUser {
-				author = authorUser
-			}
-			m := msg
-			seedEvt := event.NewResponseEvent(
-				invocation.InvocationID,
-				author,
-				&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: m}}},
-			)
-			agent.InjectIntoEvent(invocation, seedEvt)
-			seedEvt = r.applyEventPlugins(execCtx, invocation, seedEvt)
-			appendErr := r.sessionService.AppendEvent(
-				execCtx,
-				sess,
-				seedEvt,
-			)
-			if appendErr != nil {
-				steer.Clear(invocation)
-				r.unregisterRun(ro.RequestID)
-				execCancel()
-				return nil, appendErr
-			}
-		}
+	if err := r.seedSessionHistory(execCtx, sess, invocation, ag, ro); err != nil {
+		steer.Clear(invocation)
+		r.unregisterRun(ro.RequestID)
+		execCancel()
+		return nil, err
 	}
 
 	// Append the incoming message to the session if it has payload.
-	if model.HasPayload(message) && shouldAppendUserMessage(message, ro.Messages) {
-		evt := event.NewResponseEvent(
-			invocation.InvocationID,
-			authorUser,
-			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
-		)
-		agent.InjectIntoEvent(invocation, evt)
-		evt = r.applyEventPlugins(execCtx, invocation, evt)
-		if err := r.sessionService.AppendEvent(execCtx, sess, evt); err != nil {
-			steer.Clear(invocation)
-			r.unregisterRun(ro.RequestID)
-			execCancel()
-			return nil, err
-		}
+	if err := r.appendIncomingMessage(execCtx, sess, invocation, message, ro); err != nil {
+		steer.Clear(invocation)
+		r.unregisterRun(ro.RequestID)
+		execCancel()
+		return nil, err
 	}
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
@@ -558,6 +536,62 @@ func (r *runner) Run(
 		flushChan,
 		handle,
 	), nil
+}
+
+// seedSessionHistory persists caller-supplied history messages into an empty
+// session so that subsequent turns and tool calls build on the same canonical
+// transcript. It is a no-op when no messages are provided or the session
+// already contains events.
+func (r *runner) seedSessionHistory(
+	ctx context.Context,
+	sess *session.Session,
+	invocation *agent.Invocation,
+	ag agent.Agent,
+	ro agent.RunOptions,
+) error {
+	if len(ro.Messages) == 0 || sess.GetEventCount() != 0 {
+		return nil
+	}
+	for _, msg := range ro.Messages {
+		author := ag.Info().Name
+		if msg.Role == model.RoleUser {
+			author = authorUser
+		}
+		m := msg
+		seedEvt := event.NewResponseEvent(
+			invocation.InvocationID,
+			author,
+			&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: m}}},
+		)
+		agent.InjectIntoEvent(invocation, seedEvt)
+		seedEvt = r.applyEventPlugins(ctx, invocation, seedEvt)
+		if err := r.sessionService.AppendEvent(ctx, sess, seedEvt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// appendIncomingMessage appends the user's incoming message to the session
+// when it carries a payload and is not already covered by the seeded history.
+func (r *runner) appendIncomingMessage(
+	ctx context.Context,
+	sess *session.Session,
+	invocation *agent.Invocation,
+	message model.Message,
+	ro agent.RunOptions,
+) error {
+	if !model.HasPayload(message) || !shouldAppendUserMessage(message, ro.Messages) {
+		return nil
+	}
+	evt := event.NewResponseEvent(
+		invocation.InvocationID,
+		authorUser,
+		&model.Response{Done: false, Choices: []model.Choice{{Index: 0, Message: message}}},
+	)
+	agent.InjectIntoEvent(invocation, evt)
+	evt = r.applyEventPlugins(ctx, invocation, evt)
+	return r.sessionService.AppendEvent(ctx, sess, evt)
 }
 
 func (r *runner) Cancel(requestID string) bool {
@@ -1412,10 +1446,16 @@ func shouldPropagateFallbackState(err *model.ResponseError) bool {
 // emitRunnerCompletion creates and emits the final runner completion event,
 // optionally propagating graph-level completion data.
 func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContext) {
+	// Resolve per-request app name override for the completion Author.
+	completionAuthor := r.appName
+	if ro := loop.invocation.RunOptions; ro.AppName != "" {
+		completionAuthor = ro.AppName
+	}
+
 	// Create runner completion event.
 	runnerCompletionEvent := event.NewResponseEvent(
 		loop.invocation.InvocationID,
-		r.appName,
+		completionAuthor,
 		&model.Response{
 			ID:        "runner-completion-" + uuid.New().String(),
 			Object:    model.ObjectTypeRunnerCompletion,

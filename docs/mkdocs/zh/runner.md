@@ -405,6 +405,42 @@ tool(result B)
 
 可运行示例：`examples/steer/`
 
+#### 按请求覆盖 AppName（多租户隔离）
+
+默认情况下，Runner 使用构造时传入的 `appName` 作为 session key 和事件过滤 key。
+如果一个 Runner 实例需要同时服务多个项目或租户，可以在每次 `Run` 调用时通过
+`agent.WithAppName` 覆盖 app name：
+
+```go
+// 一个 Runner，两个项目。
+r := runner.NewRunner("default-app", myAgent)
+
+// 项目 A — session 数据存储在 "project-a" 下。
+evA, _ := r.Run(ctx, userID, sessionID, msg,
+    agent.WithAppName("project-a"),
+)
+
+// 项目 B — session 数据存储在 "project-b" 下，与 A 完全隔离。
+evB, _ := r.Run(ctx, userID, sessionID, msg,
+    agent.WithAppName("project-b"),
+)
+```
+
+当 **未传入** `WithAppName`（或值为空字符串）时，Runner 会回退到构造函数提供的
+默认 app name。此覆盖影响的维度如下：
+
+| 维度 | 默认（无覆盖） | 使用 `WithAppName("X")` |
+|---|---|---|
+| `session.Key.AppName` | 构造时 `appName` | `"X"` |
+| 默认 `EventFilterKey` | 构造时 `appName` | `"X"` |
+
+Runner 级别的其他注册（可观测性 `appid`、agent 注册表）仍然绑定到构造时的原始
+`appName`。
+
+!!! note
+    `appName` 不能为空。如果构造函数和 `WithAppName` 都没有提供非空值，
+    session 服务会返回 `session.ErrAppNameRequired`。
+
 #### DetachedCancel（忽略父 ctx cancel）
 
 在 Go 里，`context.Context`（通常命名为 `ctx`）同时承载“取消信号”和“截止时间”。

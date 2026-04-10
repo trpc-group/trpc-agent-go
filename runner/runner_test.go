@@ -7298,3 +7298,176 @@ func createNamedRunnerTestSkillRepository(
 	require.NoError(t, err)
 	return repo
 }
+
+// TestRunner_WithAppName_OverridesSessionKey verifies that agent.WithAppName
+// overrides the runner's default app name for session isolation.
+func TestRunner_WithAppName_OverridesSessionKey(t *testing.T) {
+	const (
+		defaultAppName  = "default-app"
+		overrideAppName = "project-alpha"
+		userID          = "user-1"
+		sessionID       = "session-1"
+	)
+
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &mockAgent{name: "app-name-agent"}
+	r := NewRunner(defaultAppName, ag, WithSessionService(sessionService))
+
+	// Run with overridden app name.
+	ch, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("hello"),
+		agent.WithAppName(overrideAppName),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	// The session should exist under the overridden app name.
+	overrideSess, err := sessionService.GetSession(
+		context.Background(),
+		session.Key{AppName: overrideAppName, UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, overrideSess, "session should exist under overridden app name")
+
+	// The session should NOT exist under the default app name.
+	defaultSess, err := sessionService.GetSession(
+		context.Background(),
+		session.Key{AppName: defaultAppName, UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	assert.Nil(t, defaultSess, "session should not exist under default app name")
+}
+
+// TestRunner_WithAppName_FallbackToDefault verifies that when no AppName
+// override is provided, the runner uses its default app name.
+func TestRunner_WithAppName_FallbackToDefault(t *testing.T) {
+	const (
+		defaultAppName = "fallback-app"
+		userID         = "user-1"
+		sessionID      = "session-fallback"
+	)
+
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &mockAgent{name: "fallback-agent"}
+	r := NewRunner(defaultAppName, ag, WithSessionService(sessionService))
+
+	ch, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("hello"),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	// The session should exist under the default app name.
+	sess, err := sessionService.GetSession(
+		context.Background(),
+		session.Key{AppName: defaultAppName, UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess, "session should exist under default app name")
+}
+
+// TestRunner_WithAppName_IsolatesDifferentProjects verifies that two runs
+// with different AppName overrides create isolated sessions.
+func TestRunner_WithAppName_IsolatesDifferentProjects(t *testing.T) {
+	const (
+		defaultAppName = "shared-runner"
+		projectA       = "project-a"
+		projectB       = "project-b"
+		userID         = "user-1"
+		sessionID      = "shared-session"
+	)
+
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &mockAgent{name: "isolation-agent"}
+	r := NewRunner(defaultAppName, ag, WithSessionService(sessionService))
+
+	// Run for project A.
+	chA, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("hello from A"),
+		agent.WithAppName(projectA),
+	)
+	require.NoError(t, err)
+	for range chA {
+	}
+
+	// Run for project B.
+	chB, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("hello from B"),
+		agent.WithAppName(projectB),
+	)
+	require.NoError(t, err)
+	for range chB {
+	}
+
+	// Both sessions should exist under their respective app names.
+	sessA, err := sessionService.GetSession(
+		context.Background(),
+		session.Key{AppName: projectA, UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sessA, "project A session should exist")
+
+	sessB, err := sessionService.GetSession(
+		context.Background(),
+		session.Key{AppName: projectB, UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sessB, "project B session should exist")
+
+	// Default app name should have no session.
+	sessDefault, err := sessionService.GetSession(
+		context.Background(),
+		session.Key{AppName: defaultAppName, UserID: userID, SessionID: sessionID},
+	)
+	require.NoError(t, err)
+	assert.Nil(t, sessDefault, "default app name should have no session")
+}
+
+// TestRunner_WithAppName_CompletionEventAuthor verifies that the runner
+// completion event uses the overridden app name as its Author, not the
+// runner's default app name.
+func TestRunner_WithAppName_CompletionEventAuthor(t *testing.T) {
+	const (
+		defaultAppName  = "default-app"
+		overrideAppName = "tenant-x"
+		userID          = "user-1"
+		sessionID       = "session-completion"
+	)
+
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &mockAgent{name: "completion-author-agent"}
+	r := NewRunner(defaultAppName, ag, WithSessionService(sessionService))
+
+	ch, err := r.Run(
+		context.Background(),
+		userID,
+		sessionID,
+		model.NewUserMessage("hello"),
+		agent.WithAppName(overrideAppName),
+	)
+	require.NoError(t, err)
+
+	var completionAuthor string
+	for ev := range ch {
+		if ev.Response != nil && ev.Response.Object == model.ObjectTypeRunnerCompletion {
+			completionAuthor = ev.Author
+		}
+	}
+
+	assert.Equal(t, overrideAppName, completionAuthor,
+		"runner completion event Author should use the overridden app name")
+}
