@@ -18,6 +18,7 @@ This pattern provides:
 
 - **Intelligent Retrieval**: Semantic search based on vector similarity
 - **Multi-source Support**: Support for files, directories, URLs, and other knowledge sources
+- **Complex Document Extraction**: Support extracting PDFs, HTML, and other complex formats into Markdown or text before loading
 - **Flexible Storage**: Support for in-memory, PostgreSQL, TcVector, and other storage backends
 - **High-performance Processing**: Concurrent processing and batch document loading
 - **Knowledge Filtering**: Support for static filtering and Agent intelligent filtering via metadata
@@ -173,6 +174,9 @@ knowledge/
 │   ├── transform.go     # Transformer interface definition
 │   ├── charfilter.go    # Character filter (remove specified characters)
 │   └── chardedup.go     # Character deduplicator (merge consecutive duplicate characters)
+├── extractor/            # Content extractors (convert complex formats into markdown/text first)
+│   ├── extractor.go     # Extractor interface definition
+│   └── docling/         # Docling extractor implementation
 ├── document/             # Document processing
 │   ├── document.go      # Document structure definition
 │   └── reader/          # Document readers (supports txt/md/csv/json/docx/pdf, etc.)
@@ -397,7 +401,7 @@ To ensure fair comparison, all four systems use identical configurations:
 - [Embedder](embedder.md) - Text vectorization model configuration
 - [Reranker](reranker.md) - Retrieval result reranking
 - [Document Sources](source.md) - File, directory, URL, and other knowledge source configuration
-- [OCR Text Recognition](ocr.md) - Configure Tesseract OCR for text extraction
+- [OCR Text Recognition](ocr.md) - Configure OCR-based text extraction for images and scanned content
 - [Filters](filter.md) - Basic filters and intelligent filters
 - [Knowledge Base Management](management.md) - Dynamic source management and status monitoring
 - [Common Issues](troubleshooting.md) - Common issues and solutions
