@@ -30,6 +30,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -48,8 +49,8 @@ import (
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
 	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationtool"
@@ -466,6 +467,8 @@ type Runtime struct {
 	A2A      A2ASurface
 	Admin    AdminSurface
 	Channels []channel.Channel
+	prompts  *RuntimePromptController
+	adminCfg *admin.Config
 
 	runner            runner.Runner
 	cronRunner        closeFunc
@@ -490,6 +493,129 @@ type AdminSurface struct {
 	Handler http.Handler
 	Addr    string
 	URL     string
+}
+
+type PromptSnapshot struct {
+	Instruction  string
+	SystemPrompt string
+}
+
+type RuntimePromptController struct {
+	agent agent.Agent
+
+	mu       sync.RWMutex
+	snapshot PromptSnapshot
+}
+
+func newRuntimePromptController(
+	agt agent.Agent,
+	instruction string,
+	systemPrompt string,
+) *RuntimePromptController {
+	if agt == nil {
+		return nil
+	}
+	if _, ok := agt.(*llmagent.LLMAgent); !ok {
+		return nil
+	}
+	return &RuntimePromptController{
+		agent: agt,
+		snapshot: PromptSnapshot{
+			Instruction:  instruction,
+			SystemPrompt: systemPrompt,
+		},
+	}
+}
+
+// PromptController exposes runtime prompt updates without changing
+// Runtime's exported struct layout.
+func (r *Runtime) PromptController() *RuntimePromptController {
+	if r == nil {
+		return nil
+	}
+	return r.prompts
+}
+
+func (r *Runtime) ConfigureAdmin(
+	configure func(*admin.Config),
+) {
+	if r == nil || r.adminCfg == nil || configure == nil {
+		return
+	}
+	cfg := *r.adminCfg
+	configure(&cfg)
+	r.applyAdminConfig(cfg)
+}
+
+func (r *Runtime) applyAdminConfig(cfg admin.Config) {
+	if r == nil {
+		return
+	}
+	r.adminCfg = &cfg
+	r.Admin.Handler = admin.New(cfg).Handler()
+	r.Admin.Addr = strings.TrimSpace(cfg.AdminAddr)
+	r.Admin.URL = strings.TrimSpace(cfg.AdminURL)
+}
+
+func (c *RuntimePromptController) Snapshot() PromptSnapshot {
+	if c == nil {
+		return PromptSnapshot{}
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.snapshot
+}
+
+func (c *RuntimePromptController) SetInstruction(
+	instruction string,
+) {
+	if c == nil {
+		return
+	}
+	llm, ok := c.agent.(*llmagent.LLMAgent)
+	if !ok {
+		return
+	}
+	llm.SetInstruction(instruction)
+	c.mu.Lock()
+	c.snapshot.Instruction = instruction
+	c.mu.Unlock()
+}
+
+func (c *RuntimePromptController) SetSystemPrompt(
+	systemPrompt string,
+) {
+	if c == nil {
+		return
+	}
+	llm, ok := c.agent.(*llmagent.LLMAgent)
+	if !ok {
+		return
+	}
+	llm.SetGlobalInstruction(systemPrompt)
+	c.mu.Lock()
+	c.snapshot.SystemPrompt = systemPrompt
+	c.mu.Unlock()
+}
+
+func (c *RuntimePromptController) SetPrompts(
+	instruction string,
+	systemPrompt string,
+) {
+	if c == nil {
+		return
+	}
+	llm, ok := c.agent.(*llmagent.LLMAgent)
+	if !ok {
+		return
+	}
+	llm.SetPrompts(instruction, systemPrompt)
+	c.mu.Lock()
+	c.snapshot = PromptSnapshot{
+		Instruction:  instruction,
+		SystemPrompt: systemPrompt,
+	}
+	c.mu.Unlock()
 }
 
 // NewRuntime constructs an OpenClaw runtime based on CLI args / config file,
@@ -711,6 +837,11 @@ func NewRuntime(
 			Err:  fmt.Errorf("create agent failed: %w", err),
 		}
 	}
+	rt.prompts = newRuntimePromptController(
+		ag,
+		prompts.Instruction,
+		prompts.SystemPrompt,
+	)
 	rt.toolSets = toolSets
 	rt.skillsWatch = skillsWatch
 
@@ -870,7 +1001,7 @@ func NewRuntime(
 
 	if opts.AdminEnabled {
 		adminURL := listenURL(opts.AdminAddr)
-		adminSvc := admin.New(buildAdminConfig(
+		adminCfg := buildAdminConfig(
 			opts,
 			agentType,
 			instanceID,
@@ -887,18 +1018,15 @@ func NewRuntime(
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			rt.prompts,
 			nil,
 			opts.AdminAddr,
 			adminURL,
 			skillsRepo,
 			skillsWatch,
 			fileMemoryStore,
-		))
-		rt.Admin = AdminSurface{
-			Handler: adminSvc.Handler(),
-			Addr:    opts.AdminAddr,
-			URL:     adminURL,
-		}
+		)
+		rt.applyAdminConfig(adminCfg)
 	}
 
 	return rt, nil
@@ -1175,6 +1303,11 @@ func run(ctx context.Context, args []string) error {
 			Err:  fmt.Errorf("create agent failed: %w", err),
 		}
 	}
+	promptController := newRuntimePromptController(
+		ag,
+		prompts.Instruction,
+		prompts.SystemPrompt,
+	)
 
 	bridgedSessionSvc := conversationscope.WrapSessionService(sessionSvc)
 	runnerOpts := []runner.Option{
@@ -1369,6 +1502,7 @@ func run(ctx context.Context, args []string) error {
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			promptController,
 			browserServerSup,
 			adminBinding.addr,
 			adminBinding.url,

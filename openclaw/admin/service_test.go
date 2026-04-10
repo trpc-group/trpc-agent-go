@@ -57,6 +57,70 @@ type stubSkillsProvider struct {
 	setErr        error
 }
 
+type stubPromptsProvider struct {
+	status PromptsStatus
+	err    error
+
+	inlineErr  error
+	runtimeErr error
+	fileErr    error
+	createErr  error
+	deleteErr  error
+
+	inlineBundle string
+	inlineValue  string
+	inlineCount  int
+
+	runtimeBundle string
+	runtimeValue  string
+	runtimeCount  int
+
+	fileBundle string
+	filePath   string
+	fileValue  string
+	fileCount  int
+
+	createBundle string
+	createName   string
+	createValue  string
+	createCount  int
+
+	deleteBundle string
+	deletePath   string
+	deleteCount  int
+}
+
+type stubIdentityProvider struct {
+	status IdentityStatus
+	err    error
+
+	saveErr   error
+	saveName  string
+	saveCount int
+}
+
+type stubPersonasProvider struct {
+	status PersonasStatus
+	err    error
+
+	defaultErr error
+	saveErr    error
+	deleteErr  error
+
+	defaultPersona string
+	defaultCount   int
+
+	storeKey    string
+	personaID   string
+	personaName string
+	personaBody string
+	saveCount   int
+
+	deleteStore string
+	deleteID    string
+	deleteCount int
+}
+
 func (p stubBMP) BrowserManagedStatus() BrowserManagedService {
 	return p.status
 }
@@ -101,6 +165,156 @@ func (p *stubSkillsProvider) SetSkillEnabled(
 	p.lastConfigKey = configKey
 	p.lastEnabled = enabled
 	return p.setErr
+}
+
+func (p *stubPromptsProvider) PromptsStatus() (
+	PromptsStatus,
+	error,
+) {
+	if p == nil {
+		return PromptsStatus{}, nil
+	}
+	return p.status, p.err
+}
+
+func (p *stubPromptsProvider) SavePromptRuntime(
+	bundleKey string,
+	content string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.runtimeCount++
+	p.runtimeBundle = bundleKey
+	p.runtimeValue = content
+	return p.runtimeErr
+}
+
+func (p *stubPromptsProvider) SavePromptInline(
+	bundleKey string,
+	content string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.inlineCount++
+	p.inlineBundle = bundleKey
+	p.inlineValue = content
+	return p.inlineErr
+}
+
+func (p *stubPromptsProvider) SavePromptFile(
+	bundleKey string,
+	path string,
+	content string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.fileCount++
+	p.fileBundle = bundleKey
+	p.filePath = path
+	p.fileValue = content
+	return p.fileErr
+}
+
+func (p *stubPromptsProvider) CreatePromptFile(
+	bundleKey string,
+	fileName string,
+	content string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.createCount++
+	p.createBundle = bundleKey
+	p.createName = fileName
+	p.createValue = content
+	return p.createErr
+}
+
+func (p *stubPromptsProvider) DeletePromptFile(
+	bundleKey string,
+	path string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.deleteCount++
+	p.deleteBundle = bundleKey
+	p.deletePath = path
+	return p.deleteErr
+}
+
+func (p *stubIdentityProvider) IdentityStatus() (
+	IdentityStatus,
+	error,
+) {
+	if p == nil {
+		return IdentityStatus{}, nil
+	}
+	return p.status, p.err
+}
+
+func (p *stubIdentityProvider) SaveAssistantName(
+	name string,
+) error {
+	if p != nil {
+		p.saveCount++
+		p.saveName = name
+	}
+	return p.saveErr
+}
+
+func (p *stubPersonasProvider) PersonasStatus() (
+	PersonasStatus,
+	error,
+) {
+	if p == nil {
+		return PersonasStatus{}, nil
+	}
+	return p.status, p.err
+}
+
+func (p *stubPersonasProvider) SavePersona(
+	storeKey string,
+	personaID string,
+	name string,
+	prompt string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.saveCount++
+	p.storeKey = storeKey
+	p.personaID = personaID
+	p.personaName = name
+	p.personaBody = prompt
+	return p.saveErr
+}
+
+func (p *stubPersonasProvider) DeletePersona(
+	storeKey string,
+	personaID string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.deleteCount++
+	p.deleteStore = storeKey
+	p.deleteID = personaID
+	return p.deleteErr
+}
+
+func (p *stubPersonasProvider) SetDefaultPersona(
+	personaID string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.defaultCount++
+	p.defaultPersona = personaID
+	return p.defaultErr
 }
 
 func (r *stubRunner) Run(
@@ -1036,6 +1250,24 @@ func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
 			summary: "Discover installed skills, refresh folders from disk, and manage config-backed enablement.",
 		},
 		{
+			path:    routePrompts,
+			view:    viewPrompts,
+			title:   "Prompts",
+			summary: pageSummaryPrompts,
+		},
+		{
+			path:    routeIdentity,
+			view:    viewIdentity,
+			title:   "Identity",
+			summary: pageSummaryIdentity,
+		},
+		{
+			path:    routePersonas,
+			view:    viewPersonas,
+			title:   "Personas",
+			summary: pageSummaryPersonas,
+		},
+		{
 			path:    routeMemory,
 			view:    viewMemory,
 			title:   "Memory",
@@ -1082,6 +1314,882 @@ func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
 	require.Equal(t, viewOverview, navViewForPath(routeIndex))
 	require.Empty(t, navPath(" /unknown "))
 	require.Equal(t, viewOverview, navViewForPath(" /unknown "))
+}
+
+func TestService_PromptsPageAndActions(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubPromptsProvider{
+		status: PromptsStatus{
+			Enabled: true,
+			Bundles: []PromptBundleState{{
+				Key:             "agent_instruction",
+				Title:           "Instruction",
+				EffectiveValue:  "live prompt",
+				ConfiguredValue: "configured prompt",
+				InlineEditable:  true,
+				InlineValue:     "inline prompt",
+				RuntimeEditable: true,
+				Files: []PromptFileState{{
+					Path:    "/tmp/instruction.md",
+					Label:   "instruction.md",
+					Content: "body",
+				}},
+			}},
+			Sections: []PromptSectionState{{
+				Key:     "core",
+				Title:   "Core Prompt",
+				Summary: "These blocks shape the assistant across every turn.",
+				Bundles: []PromptBundleState{{
+					Key:             "agent_instruction",
+					Title:           "Instruction",
+					EffectiveValue:  "live prompt",
+					ConfiguredValue: "configured prompt",
+					InlineEditable:  true,
+					InlineValue:     "inline prompt",
+					RuntimeEditable: true,
+				}},
+			}},
+			Previews: []PromptPreviewState{{
+				Key:     "agent",
+				Title:   "Agent Prompt",
+				Summary: "The resolved instruction and system prompt text currently applied to the runtime.",
+				Content: "Instruction\n===========\nlive prompt",
+			}},
+		},
+	}
+	personas := &stubPersonasProvider{
+		status: PersonasStatus{
+			Enabled:          true,
+			DefaultPersonaID: "friendly",
+			DefaultOptions: []PersonaOption{{
+				ID:   "friendly",
+				Name: "Friendly",
+			}},
+			Stores: []PersonaStoreView{{
+				Key:           "agent",
+				Title:         "Agent Personas",
+				CreateEnabled: true,
+				Personas: []PersonaView{{
+					ID:       "friendly",
+					Name:     "Friendly",
+					Prompt:   "warm tone",
+					Editable: true,
+				}},
+			}},
+		},
+	}
+	svc := New(Config{
+		Prompts:  provider,
+		Personas: personas,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routePrompts, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "Prompt Control")
+	require.Contains(t, rec.Body.String(), "Core Prompt")
+	require.Contains(t, rec.Body.String(), "Instruction")
+	require.Contains(t, rec.Body.String(), "Final Prompt Preview")
+	require.NotContains(t, rec.Body.String(), "Agent Personas")
+	require.Contains(t, rec.Body.String(), "/personas")
+
+	values := url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptContent:   {"inline override"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptInlineSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, provider.inlineCount)
+	require.Equal(t, "agent_instruction", provider.inlineBundle)
+	require.Equal(t, "inline override", provider.inlineValue)
+
+	values = url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptContent:   {"override"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptRuntimeSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, provider.runtimeCount)
+	require.Equal(t, "agent_instruction", provider.runtimeBundle)
+	require.Equal(t, "override", provider.runtimeValue)
+
+	values = url.Values{
+		formPersonaID:  {"friendly"},
+		formReturnPath: {routePersonas},
+		formReturnTo:   {"personas-default"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePersonaDefaultSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, personas.defaultCount)
+	require.Equal(t, "friendly", personas.defaultPersona)
+
+	values = url.Values{
+		formPersonaStoreKey: {"agent"},
+		formPersonaName:     {"Warm"},
+		formPersonaPrompt:   {"custom prompt"},
+		formReturnPath:      {routePersonas},
+		formReturnTo:        {"persona-store-agent"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePersonaSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, personas.saveCount)
+	require.Equal(t, "agent", personas.storeKey)
+	require.Equal(t, "Warm", personas.personaName)
+	require.Equal(t, "custom prompt", personas.personaBody)
+}
+
+func TestService_IdentityPageAndActions(t *testing.T) {
+	t.Parallel()
+
+	identity := &stubIdentityProvider{
+		status: IdentityStatus{
+			Enabled:        true,
+			ConfiguredName: "Claw",
+			EffectiveName:  "Claw",
+			RuntimeProduct: "trpc-claw",
+			SourcePath:     "/tmp/IDENTITY.md",
+		},
+	}
+	svc := New(Config{Identity: identity})
+
+	req := httptest.NewRequest(http.MethodGet, routeIdentity, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "Assistant Name")
+	require.Contains(t, rec.Body.String(), "trpc-claw")
+	require.Contains(t, rec.Body.String(), "/api/identity")
+
+	req = httptest.NewRequest(http.MethodGet, routeIdentityJSON, nil)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "\"effective_name\"")
+
+	values := url.Values{
+		formAssistantName: {"Nora"},
+		formReturnPath:    {routeIdentity},
+		formReturnTo:      {"identity-global"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routeIdentitySave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, identity.saveCount)
+	require.Equal(t, "Nora", identity.saveName)
+}
+
+func TestService_PersonasPageAndActions(t *testing.T) {
+	t.Parallel()
+
+	personas := &stubPersonasProvider{
+		status: PersonasStatus{
+			Enabled:          true,
+			DefaultPersonaID: "friendly",
+			DefaultOptions: []PersonaOption{{
+				ID:   "friendly",
+				Name: "Friendly",
+			}},
+			Stores: []PersonaStoreView{{
+				Key:           "agent",
+				Title:         "Agent Personas",
+				CreateEnabled: true,
+				Personas: []PersonaView{{
+					ID:       "friendly",
+					Name:     "Friendly",
+					Prompt:   "warm tone",
+					Editable: true,
+				}},
+			}},
+		},
+	}
+	svc := New(Config{Personas: personas})
+
+	req := httptest.NewRequest(http.MethodGet, routePersonas, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "Persona Management")
+	require.Contains(t, rec.Body.String(), "Agent Personas")
+	require.Contains(t, rec.Body.String(), "/api/personas")
+}
+
+func TestService_PromptAndPersonaJSONAndMutations(t *testing.T) {
+	t.Parallel()
+
+	prompts := &stubPromptsProvider{
+		status: PromptsStatus{
+			Enabled: true,
+			Bundles: []PromptBundleState{{
+				Key:   "agent_instruction",
+				Title: "Instruction",
+			}},
+		},
+	}
+	personas := &stubPersonasProvider{
+		status: PersonasStatus{
+			Enabled: true,
+			Stores: []PersonaStoreView{{
+				Key:   "agent",
+				Title: "Agent Personas",
+			}},
+		},
+	}
+	svc := New(Config{
+		Prompts:  prompts,
+		Personas: personas,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routePromptsJSON, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "agent_instruction")
+
+	req = httptest.NewRequest(http.MethodGet, routePersonasJSON, nil)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "Agent Personas")
+
+	values := url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptPath:      {"/tmp/instruction.md"},
+		formPromptContent:   {"file body"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptFileSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, prompts.fileCount)
+	require.Equal(t, "/tmp/instruction.md", prompts.filePath)
+
+	values = url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptFileName:  {"20_extra.md"},
+		formPromptContent:   {"extra"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptFileCreate,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, prompts.createCount)
+	require.Equal(t, "20_extra.md", prompts.createName)
+
+	values = url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptPath:      {"/tmp/instruction.md"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptFileDelete,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, prompts.deleteCount)
+	require.Equal(t, "/tmp/instruction.md", prompts.deletePath)
+
+	values = url.Values{
+		formPersonaStoreKey: {"agent"},
+		formPersonaID:       {"friendly"},
+		formReturnPath:      {routePersonas},
+		formReturnTo:        {"persona-store-agent"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePersonaDelete,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, personas.deleteCount)
+	require.Equal(t, "friendly", personas.deleteID)
+}
+
+func TestService_PromptAndPersonaActionErrors(t *testing.T) {
+	t.Parallel()
+
+	prompts := &stubPromptsProvider{
+		inlineErr:  errors.New("inline failed"),
+		runtimeErr: errors.New("runtime failed"),
+		fileErr:    errors.New("file failed"),
+		createErr:  errors.New("create failed"),
+		deleteErr:  errors.New("delete failed"),
+	}
+	personas := &stubPersonasProvider{
+		saveErr:    errors.New("save failed"),
+		deleteErr:  errors.New("delete failed"),
+		defaultErr: errors.New("default failed"),
+	}
+	identity := &stubIdentityProvider{
+		saveErr: errors.New("save failed"),
+	}
+	svc := New(Config{
+		Prompts:  prompts,
+		Identity: identity,
+		Personas: personas,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, routePromptsJSON, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	req = httptest.NewRequest(http.MethodPost, routePersonasJSON, nil)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	req = httptest.NewRequest(http.MethodPost, routeIdentityJSON, nil)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	values := url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptContent:   {"inline"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptInlineSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"inline+failed",
+	)
+
+	values = url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptContent:   {"runtime"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptRuntimeSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"runtime+failed",
+	)
+
+	values = url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptFileSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"path+is+required",
+	)
+
+	values = url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptPath:      {"/tmp/instruction.md"},
+		formPromptContent:   {"body"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptFileSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"file+failed",
+	)
+
+	values = url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptContent:   {"body"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptFileCreate,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"file_name+is+required",
+	)
+
+	values = url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptFileName:  {"20_extra.md"},
+		formPromptContent:   {"body"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptFileCreate,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"create+failed",
+	)
+
+	values = url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptFileDelete,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"path+is+required",
+	)
+
+	values = url.Values{
+		formPromptBundleKey: {"agent_instruction"},
+		formPromptPath:      {"/tmp/instruction.md"},
+		formReturnPath:      {routePrompts},
+		formReturnTo:        {"prompt-agent_instruction"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptFileDelete,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"delete+failed",
+	)
+
+	values = url.Values{
+		formReturnPath: {routePrompts},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePromptInlineSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"bundle_key+is+required",
+	)
+
+	values = url.Values{
+		formAssistantName: {"Claw"},
+		formReturnPath:    {routeIdentity},
+		formReturnTo:      {"identity-global"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routeIdentitySave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"save+failed",
+	)
+
+	values = url.Values{
+		formPersonaStoreKey: {"agent"},
+		formPersonaID:       {"friendly"},
+		formPersonaName:     {"Friendly"},
+		formPersonaPrompt:   {"prompt"},
+		formReturnPath:      {routePersonas},
+		formReturnTo:        {"persona-store-agent"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePersonaSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"save+failed",
+	)
+
+	values = url.Values{
+		formPersonaStoreKey: {"agent"},
+		formReturnPath:      {routePersonas},
+		formReturnTo:        {"persona-store-agent"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePersonaDelete,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"persona_id+is+required",
+	)
+
+	values = url.Values{
+		formPersonaStoreKey: {"agent"},
+		formPersonaID:       {"friendly"},
+		formReturnPath:      {routePersonas},
+		formReturnTo:        {"persona-store-agent"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePersonaDelete,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"delete+failed",
+	)
+
+	values = url.Values{
+		formPersonaID:  {"friendly"},
+		formReturnPath: {routePersonas},
+		formReturnTo:   {"personas-default"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routePersonaDefaultSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"default+failed",
+	)
+
+	nilSvc := New(Config{})
+	req = httptest.NewRequest(http.MethodPost, routePromptInlineSave, nil)
+	rec = httptest.NewRecorder()
+	nilSvc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+
+	req = httptest.NewRequest(http.MethodPost, routePersonaSave, nil)
+	rec = httptest.NewRecorder()
+	nilSvc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+
+	req = httptest.NewRequest(http.MethodPost, routeIdentitySave, nil)
+	rec = httptest.NewRecorder()
+	nilSvc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+
+	req = httptest.NewRequest(http.MethodPost, routePersonaDefaultSave, nil)
+	rec = httptest.NewRecorder()
+	nilSvc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestPromptStatusAndFormParsingErrors(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Prompts: &stubPromptsProvider{
+			err: errors.New("prompt status failed"),
+		},
+		Identity: &stubIdentityProvider{
+			err: errors.New("identity status failed"),
+		},
+		Personas: &stubPersonasProvider{
+			err: errors.New("persona status failed"),
+		},
+	})
+
+	require.Equal(
+		t,
+		"prompt status failed",
+		svc.promptsStatus().Error,
+	)
+	require.Equal(
+		t,
+		"persona status failed",
+		svc.personasStatus().Error,
+	)
+	require.Equal(
+		t,
+		"identity status failed",
+		svc.identityStatus().Error,
+	)
+
+	badForm := "%"
+	contentType := "application/x-www-form-urlencoded"
+
+	promptReq := httptest.NewRequest(
+		http.MethodPost,
+		routePromptRuntimeSave,
+		strings.NewReader(badForm),
+	)
+	promptReq.Header.Set("Content-Type", contentType)
+	promptRec := httptest.NewRecorder()
+	_, _, _, ok := svc.requirePromptPOST(promptRec, promptReq)
+	require.False(t, ok)
+	require.Equal(t, http.StatusBadRequest, promptRec.Code)
+
+	personaReq := httptest.NewRequest(
+		http.MethodPost,
+		routePersonaSave,
+		strings.NewReader(badForm),
+	)
+	personaReq.Header.Set("Content-Type", contentType)
+	personaRec := httptest.NewRecorder()
+	_, _, _, _, _, ok = svc.requirePersonaPOST(personaRec, personaReq)
+	require.False(t, ok)
+	require.Equal(t, http.StatusBadRequest, personaRec.Code)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routePersonaDefaultSave,
+		strings.NewReader(badForm),
+	)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routeIdentitySave,
+		strings.NewReader(badForm),
+	)
+	req.Header.Set("Content-Type", contentType)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestPromptAndPersonaHandlersRejectWrongMethod(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Prompts:  &stubPromptsProvider{},
+		Identity: &stubIdentityProvider{},
+		Personas: &stubPersonasProvider{},
+	})
+
+	paths := []string{
+		routePromptInlineSave,
+		routePromptRuntimeSave,
+		routePromptFileSave,
+		routePromptFileCreate,
+		routePromptFileDelete,
+		routeIdentitySave,
+		routePersonaSave,
+		routePersonaDelete,
+		routePersonaDefaultSave,
+	}
+
+	for _, path := range paths {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		svc.Handler().ServeHTTP(rec, req)
+		require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	}
 }
 
 func TestSkillInstallViewsFromStatus_TrimsValues(t *testing.T) {

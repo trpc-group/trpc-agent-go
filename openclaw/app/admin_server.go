@@ -21,8 +21,8 @@ import (
 	"syscall"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
 	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
@@ -119,6 +119,7 @@ func buildAdminConfig(
 	routes admin.Routes,
 	cronSvc *cron.Service,
 	execMgr *octool.Manager,
+	promptController *RuntimePromptController,
 	browserManaged admin.BrowserManagedStatusProvider,
 	adminAddr string,
 	adminURL string,
@@ -153,6 +154,10 @@ func buildAdminConfig(
 			stateDir,
 			skillsRepo,
 			skillsWatch,
+		),
+		Prompts: buildAdminPromptProvider(
+			opts,
+			promptController,
 		),
 		MemoryFiles: memoryFiles,
 		Browser: buildBrowserAdminConfig(

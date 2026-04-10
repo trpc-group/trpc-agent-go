@@ -1481,6 +1481,20 @@ func TestLLMAgent_SetGlobalInstruction(t *testing.T) {
 	require.Equal(t, "updated global", agt.getSystemPrompt())
 }
 
+func TestLLMAgent_SetPrompts(t *testing.T) {
+	agt := New(
+		"test",
+		WithInstruction("initial instruction"),
+		WithGlobalInstruction("initial global"),
+	)
+	require.Equal(t, "initial instruction", agt.getInstruction())
+	require.Equal(t, "initial global", agt.getSystemPrompt())
+
+	agt.SetPrompts("updated instruction", "updated global")
+	require.Equal(t, "updated instruction", agt.getInstruction())
+	require.Equal(t, "updated global", agt.getSystemPrompt())
+}
+
 func TestLLMAgent_ModelInstructions(t *testing.T) {
 	mdl := openai.New(testModelPromptModelName)
 	agt := New(
