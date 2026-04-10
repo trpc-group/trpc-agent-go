@@ -1510,6 +1510,47 @@ func TestPromptCollapsedSummary(
 	)
 }
 
+func TestPromptHelperFunctions(t *testing.T) {
+	t.Parallel()
+
+	longLine := strings.Repeat("a", promptSummaryMaxRunes+5)
+	require.Equal(
+		t,
+		strings.Repeat("a", promptSummaryMaxRunes)+"...",
+		promptSummarySnippet(longLine),
+	)
+	require.Equal(
+		t,
+		"first real line",
+		promptSummarySnippet("\n\n first   real   line \nsecond"),
+	)
+	require.Equal(t, "", promptSummarySnippet("\n \n\t"))
+
+	require.Equal(t, 0, promptLineCount(""))
+	require.Equal(t, 2, promptLineCount("first\nsecond\n"))
+
+	require.Equal(
+		t,
+		"Text Stored In Config",
+		promptInlineEditorTitle(PromptBundleState{}),
+	)
+	require.Equal(
+		t,
+		"Instruction Config Text",
+		promptInlineEditorTitle(PromptBundleState{Title: "Instruction"}),
+	)
+	require.Contains(
+		t,
+		promptInlineEditorSummary(PromptBundleState{}),
+		"config file",
+	)
+	require.Contains(
+		t,
+		promptRuntimeEditorSummary(PromptBundleState{}),
+		"running process only",
+	)
+}
+
 func TestService_IdentityPageAndActions(t *testing.T) {
 	t.Parallel()
 

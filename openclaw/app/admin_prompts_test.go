@@ -549,3 +549,38 @@ func TestAdminPromptProviderAdditionalCoverage(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, filepath.IsAbs(path))
 }
+
+func TestAdminPromptHelperLabelsAndSourceSummary(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		"Configured Prompt",
+		adminPromptConfiguredLabel("other"),
+	)
+	require.Equal(
+		t,
+		"Live Prompt Text",
+		adminPromptEffectiveLabel("other"),
+	)
+	require.Equal(
+		t,
+		"Built-in text",
+		adminPromptSourceSummary(adminPromptInstructionBundle, 0),
+	)
+	require.Equal(
+		t,
+		"Config text or runtime-only text",
+		adminPromptSourceSummary(adminPromptSystemBundle, 0),
+	)
+	require.Equal(
+		t,
+		"No editable files",
+		adminPromptSourceSummary("other", 0),
+	)
+	require.Equal(
+		t,
+		"2 files",
+		adminPromptSourceSummary("other", 2),
+	)
+}
