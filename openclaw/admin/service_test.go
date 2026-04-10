@@ -90,6 +90,15 @@ type stubPromptsProvider struct {
 	deleteCount  int
 }
 
+type stubIdentityProvider struct {
+	status IdentityStatus
+	err    error
+
+	saveErr   error
+	saveName  string
+	saveCount int
+}
+
 type stubPersonasProvider struct {
 	status PersonasStatus
 	err    error
@@ -235,6 +244,26 @@ func (p *stubPromptsProvider) DeletePromptFile(
 	p.deleteBundle = bundleKey
 	p.deletePath = path
 	return p.deleteErr
+}
+
+func (p *stubIdentityProvider) IdentityStatus() (
+	IdentityStatus,
+	error,
+) {
+	if p == nil {
+		return IdentityStatus{}, nil
+	}
+	return p.status, p.err
+}
+
+func (p *stubIdentityProvider) SaveAssistantName(
+	name string,
+) error {
+	if p != nil {
+		p.saveCount++
+		p.saveName = name
+	}
+	return p.saveErr
 }
 
 func (p *stubPersonasProvider) PersonasStatus() (
@@ -1227,6 +1256,12 @@ func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
 			summary: pageSummaryPrompts,
 		},
 		{
+			path:    routeIdentity,
+			view:    viewIdentity,
+			title:   "Identity",
+			summary: pageSummaryIdentity,
+		},
+		{
 			path:    routePersonas,
 			view:    viewPersonas,
 			title:   "Personas",
@@ -1449,6 +1484,55 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 	require.Equal(t, "custom prompt", personas.personaBody)
 }
 
+func TestService_IdentityPageAndActions(t *testing.T) {
+	t.Parallel()
+
+	identity := &stubIdentityProvider{
+		status: IdentityStatus{
+			Enabled:        true,
+			ConfiguredName: "Claw",
+			EffectiveName:  "Claw",
+			RuntimeProduct: "trpc-claw",
+			SourcePath:     "/tmp/IDENTITY.md",
+		},
+	}
+	svc := New(Config{Identity: identity})
+
+	req := httptest.NewRequest(http.MethodGet, routeIdentity, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "Assistant Name")
+	require.Contains(t, rec.Body.String(), "trpc-claw")
+	require.Contains(t, rec.Body.String(), "/api/identity")
+
+	req = httptest.NewRequest(http.MethodGet, routeIdentityJSON, nil)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "\"effective_name\"")
+
+	values := url.Values{
+		formAssistantName: {"Nora"},
+		formReturnPath:    {routeIdentity},
+		formReturnTo:      {"identity-global"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routeIdentitySave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, identity.saveCount)
+	require.Equal(t, "Nora", identity.saveName)
+}
+
 func TestService_PersonasPageAndActions(t *testing.T) {
 	t.Parallel()
 
@@ -1624,8 +1708,12 @@ func TestService_PromptAndPersonaActionErrors(t *testing.T) {
 		deleteErr:  errors.New("delete failed"),
 		defaultErr: errors.New("default failed"),
 	}
+	identity := &stubIdentityProvider{
+		saveErr: errors.New("save failed"),
+	}
 	svc := New(Config{
 		Prompts:  prompts,
+		Identity: identity,
 		Personas: personas,
 	})
 
@@ -1635,6 +1723,11 @@ func TestService_PromptAndPersonaActionErrors(t *testing.T) {
 	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 
 	req = httptest.NewRequest(http.MethodPost, routePersonasJSON, nil)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	req = httptest.NewRequest(http.MethodPost, routeIdentityJSON, nil)
 	rec = httptest.NewRecorder()
 	svc.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
@@ -1853,6 +1946,29 @@ func TestService_PromptAndPersonaActionErrors(t *testing.T) {
 	)
 
 	values = url.Values{
+		formAssistantName: {"Claw"},
+		formReturnPath:    {routeIdentity},
+		formReturnTo:      {"identity-global"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routeIdentitySave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Contains(
+		t,
+		rec.Header().Get(headerLocation),
+		"save+failed",
+	)
+
+	values = url.Values{
 		formPersonaStoreKey: {"agent"},
 		formPersonaID:       {"friendly"},
 		formPersonaName:     {"Friendly"},
@@ -1959,6 +2075,11 @@ func TestService_PromptAndPersonaActionErrors(t *testing.T) {
 	nilSvc.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusNotFound, rec.Code)
 
+	req = httptest.NewRequest(http.MethodPost, routeIdentitySave, nil)
+	rec = httptest.NewRecorder()
+	nilSvc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+
 	req = httptest.NewRequest(http.MethodPost, routePersonaDefaultSave, nil)
 	rec = httptest.NewRecorder()
 	nilSvc.Handler().ServeHTTP(rec, req)
@@ -1971,6 +2092,9 @@ func TestPromptStatusAndFormParsingErrors(t *testing.T) {
 	svc := New(Config{
 		Prompts: &stubPromptsProvider{
 			err: errors.New("prompt status failed"),
+		},
+		Identity: &stubIdentityProvider{
+			err: errors.New("identity status failed"),
 		},
 		Personas: &stubPersonasProvider{
 			err: errors.New("persona status failed"),
@@ -1986,6 +2110,11 @@ func TestPromptStatusAndFormParsingErrors(t *testing.T) {
 		t,
 		"persona status failed",
 		svc.personasStatus().Error,
+	)
+	require.Equal(
+		t,
+		"identity status failed",
+		svc.identityStatus().Error,
 	)
 
 	badForm := "%"
@@ -2022,6 +2151,16 @@ func TestPromptStatusAndFormParsingErrors(t *testing.T) {
 	rec := httptest.NewRecorder()
 	svc.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
+
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routeIdentitySave,
+		strings.NewReader(badForm),
+	)
+	req.Header.Set("Content-Type", contentType)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 func TestPromptAndPersonaHandlersRejectWrongMethod(t *testing.T) {
@@ -2029,6 +2168,7 @@ func TestPromptAndPersonaHandlersRejectWrongMethod(t *testing.T) {
 
 	svc := New(Config{
 		Prompts:  &stubPromptsProvider{},
+		Identity: &stubIdentityProvider{},
 		Personas: &stubPersonasProvider{},
 	})
 
@@ -2038,6 +2178,7 @@ func TestPromptAndPersonaHandlersRejectWrongMethod(t *testing.T) {
 		routePromptFileSave,
 		routePromptFileCreate,
 		routePromptFileDelete,
+		routeIdentitySave,
 		routePersonaSave,
 		routePersonaDelete,
 		routePersonaDefaultSave,

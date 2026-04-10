@@ -34,6 +34,7 @@ const (
 	routeOverview   = "/overview"
 	routeSkillsPage = "/skills"
 	routePrompts    = "/prompts"
+	routeIdentity   = "/identity"
 	routePersonas   = "/personas"
 	routeMemory     = "/memory"
 	routeAutomation = "/automation"
@@ -100,6 +101,9 @@ const (
 	pageSummaryPrompts = "" +
 		"Edit the main prompt blocks, inspect the assembled " +
 		"prompt previews, and keep file-level edits in one place."
+	pageSummaryIdentity = "" +
+		"Set the assistant's global default name while keeping " +
+		"the runtime product as a separate read-only fact."
 	pageSummaryPersonas = "" +
 		"Manage the default persona and any file-backed " +
 		"persona definitions exposed by this runtime."
@@ -111,6 +115,7 @@ const (
 	viewOverview   adminView = "overview"
 	viewSkills     adminView = "skills"
 	viewPrompts    adminView = "prompts"
+	viewIdentity   adminView = "identity"
 	viewPersonas   adminView = "personas"
 	viewMemory     adminView = "memory"
 	viewAutomation adminView = "automation"
@@ -154,6 +159,7 @@ type Config struct {
 	GatewayRoutes Routes
 	Skills        SkillsStatusProvider
 	Prompts       PromptsProvider
+	Identity      IdentityProvider
 	Personas      PersonasProvider
 	MemoryFiles   MemoryFileStore
 	Browser       BrowserConfig
@@ -282,6 +288,10 @@ func (s *Service) Handler() http.Handler {
 		wrapRelativeLinksFunc(s.handlePromptsPage),
 	)
 	mux.HandleFunc(
+		routeIdentity,
+		wrapRelativeLinksFunc(s.handleIdentityPage),
+	)
+	mux.HandleFunc(
 		routePersonas,
 		wrapRelativeLinksFunc(s.handlePersonasPage),
 	)
@@ -308,6 +318,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
 	mux.HandleFunc(routePromptsJSON, s.handlePromptsJSON)
+	mux.HandleFunc(routeIdentityJSON, s.handleIdentityJSON)
 	mux.HandleFunc(routePersonasJSON, s.handlePersonasJSON)
 	mux.HandleFunc(routeMemoryFilesJSON, s.handleMemoryFilesJSON)
 	mux.HandleFunc(routeMemoryFile, s.handleMemoryFile)
@@ -330,6 +341,10 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(
 		routePromptFileDelete,
 		wrapRelativeLinksFunc(s.handleDeletePromptFile),
+	)
+	mux.HandleFunc(
+		routeIdentitySave,
+		wrapRelativeLinksFunc(s.handleSaveIdentity),
 	)
 	mux.HandleFunc(
 		routePersonaSave,
@@ -552,6 +567,7 @@ type skillInstallView struct {
 type pageData struct {
 	Snapshot       snapshot
 	Prompts        PromptsStatus
+	Identity       IdentityStatus
 	Personas       PersonasStatus
 	Notice         string
 	Error          string
@@ -962,6 +978,13 @@ func (s *Service) handlePromptsPage(
 	s.renderPage(w, r, viewPrompts)
 }
 
+func (s *Service) handleIdentityPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewIdentity)
+}
+
 func (s *Service) handlePersonasPage(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1017,6 +1040,7 @@ func (s *Service) renderPage(
 	data := pageData{
 		Snapshot:       s.snapshotForView(view),
 		Prompts:        s.promptsStatus(),
+		Identity:       s.identityStatus(),
 		Personas:       s.personasStatus(),
 		Notice:         strings.TrimSpace(r.URL.Query().Get(queryNotice)),
 		Error:          strings.TrimSpace(r.URL.Query().Get(queryError)),
@@ -1045,6 +1069,7 @@ func adminNavSections(active adminView) []adminNavSection {
 				{Label: "Overview", Path: routeOverview},
 				{Label: "Skills", Path: routeSkillsPage},
 				{Label: "Prompts", Path: routePrompts},
+				{Label: "Identity", Path: routeIdentity},
 				{Label: "Personas", Path: routePersonas},
 				{Label: "Sessions", Path: routeSessions},
 				{Label: "Memory", Path: routeMemory},
@@ -1074,6 +1099,8 @@ func pageTitle(view adminView) string {
 		return "Skills"
 	case viewPrompts:
 		return "Prompts"
+	case viewIdentity:
+		return "Identity"
 	case viewPersonas:
 		return "Personas"
 	case viewMemory:
@@ -1097,6 +1124,8 @@ func pageSummary(view adminView) string {
 		return "Discover installed skills, refresh folders from disk, and manage config-backed enablement."
 	case viewPrompts:
 		return pageSummaryPrompts
+	case viewIdentity:
+		return pageSummaryIdentity
 	case viewPersonas:
 		return pageSummaryPersonas
 	case viewMemory:
@@ -1297,6 +1326,8 @@ func navPath(raw string) string {
 		return routeSkillsPage
 	case routePrompts:
 		return routePrompts
+	case routeIdentity:
+		return routeIdentity
 	case routePersonas:
 		return routePersonas
 	case routeMemory:
@@ -1322,6 +1353,8 @@ func navViewForPath(path string) adminView {
 		return viewSkills
 	case routePrompts:
 		return viewPrompts
+	case routeIdentity:
+		return viewIdentity
 	case routePersonas:
 		return viewPersonas
 	case routeMemory:
@@ -2014,6 +2047,7 @@ var adminPage = template.Must(
 	}).Parse(
 		adminPageHTML +
 			promptsPageTemplateHTML +
+			identityPageTemplateHTML +
 			personasPageTemplateHTML,
 	),
 )
@@ -3396,6 +3430,10 @@ const adminPageHTML = `<!doctype html>
 
     {{if eq .View "prompts"}}
     {{template "promptsPage" .}}
+    {{end}}
+
+    {{if eq .View "identity"}}
+    {{template "identityPage" .}}
     {{end}}
 
     {{if eq .View "personas"}}
