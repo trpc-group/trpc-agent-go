@@ -5149,7 +5149,7 @@ func TestExecuteToolWithCallbacks_PluginAfterToolError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestExecuteToolWithCallbacks_PluginAfterToolOverridePreservesErr(
+func TestExecuteToolWithCallbacks_PluginAfterToolOverrideClearsErr(
 	t *testing.T,
 ) {
 	localAfterCalled := false
@@ -5203,9 +5203,180 @@ func TestExecuteToolWithCallbacks_PluginAfterToolOverridePreservesErr(
 		tl,
 		nil,
 	)
-	require.ErrorIs(t, err, toolErr)
+	// When a plugin AfterTool callback replaces the failed tool result with
+	// a CustomResult, the original tool error should be cleared so that the
+	// framework sends the replacement as the tool response message.
+	require.NoError(t, err)
 	require.False(t, localAfterCalled)
 	require.Equal(t, map[string]any{"p": true}, res)
+}
+
+// TestExecuteToolWithCallbacks_LocalAfterToolCustomResultReplacesFailedResult
+// verifies that when a tool execution fails and the local AfterTool callback
+// returns a non-nil CustomResult, the original error is cleared and the
+// CustomResult is used as the tool response message to the model.
+// This is the exact scenario reported by users: MCP tool fails, AfterTool
+// callback formats a friendly error message via CustomResult, but the model
+// still sees the original failure.
+func TestExecuteToolWithCallbacks_LocalAfterToolCustomResultReplacesFailedResult(
+	t *testing.T,
+) {
+	replacementResult := map[string]string{
+		"status":  "error",
+		"message": "The tool encountered an issue, please try a different approach.",
+	}
+
+	local := tool.NewCallbacks()
+	local.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		// Simulate the user's scenario: detect tool failure and provide
+		// a formatted custom result.
+		if args.Error != nil {
+			return &tool.AfterToolResult{
+				CustomResult: replacementResult,
+			}, nil
+		}
+		return nil, nil
+	})
+
+	proc := NewFunctionCallResponseProcessor(false, local)
+	inv := &agent.Invocation{AgentName: "test-agent"}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "mcp_tool"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, errors.New("Tool Exec Failed: connection timeout")
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "mcp_tool",
+			Arguments: []byte(`{"query":"test"}`),
+		},
+	}
+
+	_, res, _, _, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
+	// The original tool error should be cleared because the callback
+	// replaced the result.
+	require.NoError(t, err)
+	require.Equal(t, replacementResult, res)
+}
+
+// TestExecuteToolCall_LocalAfterToolCustomResultProducesToolMessage verifies
+// the end-to-end flow: a failed tool + AfterTool CustomResult produces a
+// proper RoleTool message with the custom content.
+func TestExecuteToolCall_LocalAfterToolCustomResultProducesToolMessage(
+	t *testing.T,
+) {
+	replacementResult := "Formatted error: tool timed out, please retry."
+
+	local := tool.NewCallbacks()
+	local.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		if args.Error != nil {
+			return &tool.AfterToolResult{
+				CustomResult: replacementResult,
+			}, nil
+		}
+		return nil, nil
+	})
+
+	proc := NewFunctionCallResponseProcessor(false, local)
+	inv := &agent.Invocation{
+		AgentName: "test-agent",
+		Model:     &mockModel{},
+	}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "mcp_tool"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, errors.New("Tool Exec Failed")
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "mcp_tool",
+			Arguments: []byte(`{}`),
+		},
+	}
+	tools := map[string]tool.Tool{"mcp_tool": tl}
+
+	_, choices, _, _, _, err := proc.executeToolCall(
+		context.Background(),
+		inv,
+		toolCall,
+		tools,
+		0,
+		nil,
+	)
+	// choices should not be nil; the custom result should appear as a
+	// RoleTool message.
+	require.NoError(t, err)
+	require.NotNil(t, choices)
+	require.Len(t, choices, 1)
+	require.Equal(t, model.RoleTool, choices[0].Message.Role)
+	require.Equal(t, "call-1", choices[0].Message.ToolID)
+	require.Contains(t, choices[0].Message.Content, "Formatted error")
+}
+
+// TestExecuteToolWithCallbacks_StopErrorPreservedWithCustomResult verifies that
+// when a tool returns a StopError, the error is NOT cleared even if the
+// AfterTool callback provides a CustomResult. StopError is a control-flow
+// signal that must propagate so the agent can stop execution.
+func TestExecuteToolWithCallbacks_StopErrorPreservedWithCustomResult(
+	t *testing.T,
+) {
+	local := tool.NewCallbacks()
+	local.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		if args.Error != nil {
+			return &tool.AfterToolResult{
+				CustomResult: "friendly stop message",
+			}, nil
+		}
+		return nil, nil
+	})
+
+	proc := NewFunctionCallResponseProcessor(false, local)
+	inv := &agent.Invocation{AgentName: "test-agent"}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "stop_tool"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return nil, agent.NewStopError("max iterations reached")
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-stop",
+		Function: model.FunctionDefinitionParam{
+			Name:      "stop_tool",
+			Arguments: []byte(`{}`),
+		},
+	}
+
+	_, _, _, _, _, err := proc.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		toolCall,
+		tl,
+		nil,
+	)
+	// StopError must be preserved even though the callback returned a
+	// CustomResult.
+	require.Error(t, err)
+	_, ok := agent.AsStopError(err)
+	require.True(t, ok, "expected StopError to be preserved")
 }
 
 func TestExecuteToolWithCallbacks_BeforeError(t *testing.T) {
