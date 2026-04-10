@@ -643,6 +643,258 @@ Common pitfalls:
   pattern is usually to call `toolSet.Tools(ctx)` yourself and inject the
   resulting tools via `WithTools(...)`.
 
+### MCP Broker (On-Demand MCP Discovery)
+
+In addition to expanding remote MCP tools into first-class Tools, the
+framework also provides another integration style:
+`tool/mcpbroker`.
+
+The core idea of `mcpbroker` is:
+
+- do not expose every remote MCP tool up front
+- expose only a very small broker surface first
+- let the model discover and call remote MCP tools only when needed
+
+This is a better fit when the remote MCP surface is large, but a single
+request usually needs only a small subset of that surface.
+
+#### When to Use MCP Broker
+
+Use `mcpbroker` when:
+
+- an MCP server exposes many tools and you do not want to send the full
+  tool surface to the model on every turn
+- some tools are long-tail or backup capabilities rather than hot-path tools
+- a Skill, System Prompt, or User Prompt reveals an MCP endpoint that
+  should be connected dynamically
+- you want a smaller and more stable initial tool surface
+
+Keep using `mcp.NewMCPToolSet()` when:
+
+- the capability is high-frequency, stable, and already known
+- you want remote MCP tools to become first-class Tools directly
+- you care more about shorter execution paths and stronger schema-level
+  constraints
+
+The two patterns can be mixed:
+
+- use `MCP ToolSet` for hot-path capabilities
+- use `mcpbroker` for long-tail or dynamically discovered capabilities
+
+#### How It Differs from MCP ToolSet
+
+The main difference is **when** remote MCP tools become visible:
+
+- `MCP ToolSet`
+  - performs `initialize + tools/list`
+  - expands remote MCP tools into model-visible Tools
+- `mcpbroker`
+  - initially exposes only 4 broker tools
+  - the model discovers servers, then tools, then inspects selected schemas, then calls a concrete tool
+
+You can think of them as:
+
+- `MCP ToolSet`: directly mount remote tools
+- `mcpbroker`: discover remote tools on demand
+
+Typical trade-offs:
+
+- `MCP ToolSet`: faster and more strongly constrained, but larger tool surface
+- `mcpbroker`: lighter on context and better for long-tail / dynamic capabilities, but usually slower because discovery adds extra steps
+
+#### Basic Integration
+
+```go
+import (
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+    "trpc.group/trpc-go/trpc-agent-go/tool/mcpbroker"
+)
+
+broker := mcpbroker.New(
+    mcpbroker.WithServers(map[string]mcp.ConnectionConfig{
+        "local_stdio_code": {
+            Transport: "stdio",
+            Command:   "go",
+            Args:      []string{"run", "./stdio_server/main.go"},
+            Timeout:   10 * time.Second,
+        },
+    }),
+    mcpbroker.WithAllowAdHocHTTP(true),
+)
+
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(model),
+    llmagent.WithTools(broker.Tools()),
+)
+```
+
+Today `mcpbroker` is a **tool-layer integration**. Unlike `Skill`, it
+does not automatically inject routing guidance into the system prompt.
+If you want the model to behave more predictably, it is still useful to
+add a small amount of business-level instruction such as:
+
+- when to list named servers first
+- when to use `mcp_list_tools` first
+- when to expand selected tools with `mcp_inspect_tools`
+- when to prefer broker over direct tools
+
+#### The 4 Model-Visible Broker Tools
+
+The model only sees these 4 tools:
+
+- `mcp_list_servers`
+- `mcp_list_tools`
+- `mcp_inspect_tools`
+- `mcp_call`
+
+The recommended flow is usually:
+
+1. `mcp_list_servers()` to inspect named servers already known to the broker
+2. `mcp_list_tools(selector)` to inspect a server or ad-hoc MCP endpoint with lightweight summaries
+3. `mcp_inspect_tools(selector, tools[])` to expand schema for only the selected tools
+4. `mcp_call(selector, arguments)` to call one concrete MCP tool
+
+So instead of seeing the entire remote tool surface immediately, the
+model explores it progressively through the broker.
+
+#### Selector Mental Model
+
+`mcpbroker` intentionally avoids a mixed input model like
+`server_name + tool_name + url`. Instead it uses a unified `selector`:
+
+- In `mcp_list_tools`:
+  - named server: `local_stdio_code`
+  - ad-hoc URL: `https://example.com/mcp`
+- In `mcp_call`:
+  - named tool: `local_stdio_code.add`
+  - ad-hoc URL tool: `https://example.com/mcp.add`
+
+If an ad-hoc HTTP endpoint would make dot-based selectors ambiguous, `mcpbroker`
+also supports:
+
+- `https://example.com/mcp#tool=add`
+
+Remote MCP tool parameters always go into:
+
+- `mcp_call(..., arguments={...})`
+
+and not into top-level wrapper fields.
+
+#### Progressive Discovery Flow
+
+- start with `mcp_list_tools` for lightweight summaries
+- only use `mcp_inspect_tools` when preparing to call a specific tool
+
+Compared with sending every full schema up front, this is usually more
+friendly to tight context budgets.
+
+#### Dynamic URL and Skill Scenarios
+
+`mcpbroker` supports ad-hoc HTTP MCP targets:
+
+```go
+broker := mcpbroker.New(
+    mcpbroker.WithAllowAdHocHTTP(true),
+)
+```
+
+`WithAllowAdHocHTTP(true)` makes `selector` model-controlled input for
+HTTP(S) MCP targets. In production, validate or allowlist the URL, domain, and
+path before treating ad-hoc HTTP as a trusted integration path.
+
+In practice, dynamic connection still requires some **information
+source** to tell the model:
+
+- that this MCP endpoint exists
+- what it roughly does
+- which URL should be used
+
+That source can be:
+
+- a System Prompt
+- a User Prompt
+- a Skill
+- a knowledge source
+
+In other words, `mcpbroker` solves “how to connect / inspect / call”.
+It does not solve “why would the model think of connecting to this MCP
+in the first place”.
+
+This makes `mcpbroker` a natural companion to Skills. Some Skills only
+need a dedicated MCP capability while that Skill is relevant, so those
+MCP tools do not need to stay exposed as global tools for the whole
+conversation. Other Skills may reveal an incremental MCP endpoint that
+is only known after the Skill is loaded. In both cases, the Skill can
+act as the information source, while `mcpbroker` handles the dynamic
+connection and progressive tool/schema disclosure.
+
+See:
+
+- `examples/mcpbroker/basic`
+
+That example includes:
+
+- a named local MCP server
+- a Skill that reveals a remote streamable HTTP MCP endpoint
+- a model flow like `skill_load -> mcp_list_tools -> mcp_inspect_tools -> mcp_call`
+
+#### Auth Hooks (Per-Run Header Injection)
+
+For HTTP MCP targets, `mcpbroker` also provides runtime auth hooks:
+
+- `WithHTTPHeaderInjector(...)`
+- `WithErrorInterceptor(...)`
+
+These hooks are useful when:
+
+- you do not want the model to provide `Authorization` itself
+- you need to inject a user-specific token on every request
+- you want business code to wrap 401/403 responses into clearer errors
+
+Example:
+
+```go
+broker := mcpbroker.New(
+    mcpbroker.WithAllowAdHocHTTP(true),
+    mcpbroker.WithHTTPHeaderInjector(func(ctx context.Context, req *mcpbroker.HeaderInjectRequest) (map[string]string, error) {
+        token, _ := resolveUserTokenFromContext(ctx, req.BaseURL)
+        if token == "" {
+            return nil, nil
+        }
+        return map[string]string{
+            "Authorization": "Bearer " + token,
+        }, nil
+    }),
+    mcpbroker.WithErrorInterceptor(func(ctx context.Context, req *mcpbroker.BrokerErrorRequest) (*mcpbroker.BrokerErrorDecision, error) {
+        if isUnauthorized(req.Err) {
+            return &mcpbroker.BrokerErrorDecision{
+                Handled:   true,
+                WrapError: fmt.Errorf("the current user must authorize this provider in the host application before retrying"),
+            }, nil
+        }
+        return nil, nil
+    }),
+)
+```
+
+The key design point is:
+
+- the model chooses the `selector`
+- business code resolves headers from `ctx`
+- `mcpbroker` does not manage a full OAuth session state machine
+
+When `WithAllowAdHocHTTP(true)` is enabled, URL selectors may come from
+model-visible context. In production, validate `req.IsAdHoc` and `req.BaseURL`
+inside your `HTTPHeaderInjector` before returning sensitive headers.
+
+See:
+
+- `examples/mcpbroker/authhooks`
+
 ## Agent Tool (AgentTool)
 
 AgentTool lets you expose an existing Agent as a tool to be used by a parent Agent. Compared with a plain function tool, AgentTool provides:

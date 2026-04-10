@@ -1,0 +1,431 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package mcpbroker provides opt-in MCP discovery/call broker tools.
+package mcpbroker
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"sort"
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	mcpcfg "trpc.group/trpc-go/trpc-agent-go/tool/mcp"
+)
+
+const (
+	listServersToolName  = "mcp_list_servers"
+	listToolsToolName    = "mcp_list_tools"
+	inspectToolsToolName = "mcp_inspect_tools"
+	callToolToolName     = "mcp_call"
+)
+
+const (
+	originCode = "code"
+)
+
+const (
+	targetTypeStdio = "stdio"
+	targetTypeHTTP  = "http"
+)
+
+var defaultSensitiveHeaderDenylist = []string{
+	"authorization",
+	"proxy-authorization",
+	"cookie",
+	"set-cookie",
+	"x-api-key",
+}
+
+// Broker provides a small set of MCP management tools for agents.
+type Broker struct {
+	options brokerOptions
+}
+
+// Option configures a Broker.
+type Option func(*brokerOptions)
+
+type brokerOptions struct {
+	servers                     map[string]mcpcfg.ConnectionConfig
+	allowAdHocHTTP              bool
+	adhocSensitiveHeaderDenyset map[string]struct{}
+	httpHeaderInjector          HTTPHeaderInjector
+	errorInterceptor            ErrorInterceptor
+}
+
+// HTTPHeaderInjector resolves per-run HTTP headers for MCP requests.
+type HTTPHeaderInjector func(context.Context, *HeaderInjectRequest) (map[string]string, error)
+
+// HeaderInjectRequest describes an MCP HTTP request before execution.
+type HeaderInjectRequest struct {
+	Selector  string
+	BaseURL   string
+	ToolName  string
+	Phase     string
+	Transport string
+	IsAdHoc   bool
+}
+
+// ErrorInterceptor lets business code classify and transform MCP HTTP errors.
+type ErrorInterceptor func(context.Context, *BrokerErrorRequest) (*BrokerErrorDecision, error)
+
+// BrokerErrorRequest describes an MCP HTTP operation error.
+type BrokerErrorRequest struct {
+	Selector  string
+	BaseURL   string
+	ToolName  string
+	Phase     string
+	Transport string
+	IsAdHoc   bool
+	Err       error
+}
+
+// BrokerErrorDecision controls how an intercepted error is surfaced.
+type BrokerErrorDecision struct {
+	WrapError error
+	Handled   bool
+}
+
+// New creates a new MCP broker.
+func New(opts ...Option) *Broker {
+	options := brokerOptions{
+		servers: make(map[string]mcpcfg.ConnectionConfig),
+		adhocSensitiveHeaderDenyset: func() map[string]struct{} {
+			result := make(map[string]struct{}, len(defaultSensitiveHeaderDenylist))
+			for _, name := range defaultSensitiveHeaderDenylist {
+				result[name] = struct{}{}
+			}
+			return result
+		}(),
+	}
+
+	for _, opt := range opts {
+		opt(&options)
+	}
+
+	return &Broker{options: options}
+}
+
+// WithServers adds named MCP server configurations provided by code.
+func WithServers(servers map[string]mcpcfg.ConnectionConfig) Option {
+	return func(opts *brokerOptions) {
+		if len(servers) == 0 {
+			return
+		}
+		if opts.servers == nil {
+			opts.servers = make(map[string]mcpcfg.ConnectionConfig, len(servers))
+		}
+		for name, cfg := range servers {
+			opts.servers[name] = cloneConnectionConfig(cfg)
+		}
+	}
+}
+
+// WithAllowAdHocHTTP controls whether ad-hoc HTTP MCP targets are allowed.
+func WithAllowAdHocHTTP(enabled bool) Option {
+	return func(opts *brokerOptions) {
+		opts.allowAdHocHTTP = enabled
+	}
+}
+
+// WithAdHocSensitiveHeaderDenylist adds case-insensitive denylist header names
+// for ad-hoc HTTP MCP calls.
+func WithAdHocSensitiveHeaderDenylist(headers []string) Option {
+	return func(opts *brokerOptions) {
+		if len(headers) == 0 {
+			return
+		}
+		if opts.adhocSensitiveHeaderDenyset == nil {
+			opts.adhocSensitiveHeaderDenyset = make(map[string]struct{})
+		}
+		for _, header := range headers {
+			header = strings.ToLower(strings.TrimSpace(header))
+			if header == "" {
+				continue
+			}
+			opts.adhocSensitiveHeaderDenyset[header] = struct{}{}
+		}
+	}
+}
+
+// WithHTTPHeaderInjector injects per-run HTTP headers derived from context and target metadata.
+func WithHTTPHeaderInjector(fn HTTPHeaderInjector) Option {
+	return func(opts *brokerOptions) {
+		opts.httpHeaderInjector = fn
+	}
+}
+
+// WithErrorInterceptor intercepts HTTP MCP execution errors and may translate them for model consumption.
+func WithErrorInterceptor(fn ErrorInterceptor) Option {
+	return func(opts *brokerOptions) {
+		opts.errorInterceptor = fn
+	}
+}
+
+// Tools returns the broker's MCP management tools.
+func (b *Broker) Tools() []tool.Tool {
+	return newBrokerTools(b)
+}
+
+type namedServer struct {
+	Name       string
+	Origin     string
+	TargetType string
+	Config     mcpcfg.ConnectionConfig
+}
+
+func (b *Broker) resolveNamedServers() ([]namedServer, map[string]namedServer, error) {
+	merged := make(map[string]namedServer, len(b.options.servers))
+	for name, cfg := range b.options.servers {
+		server, serverErr := normalizeNamedServer(name, cfg, originCode)
+		if serverErr != nil {
+			return nil, nil, serverErr
+		}
+		if _, exists := merged[server.Name]; exists {
+			return nil, nil, fmt.Errorf("duplicate MCP server name after normalization: %s", server.Name)
+		}
+		merged[server.Name] = server
+	}
+
+	list := make([]namedServer, 0, len(merged))
+	for _, server := range merged {
+		list = append(list, server)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].Name < list[j].Name
+	})
+
+	return list, merged, nil
+}
+
+func (b *Broker) resolveTarget(input targetInput) (resolvedTarget, error) {
+	serverName := strings.TrimSpace(input.ServerName)
+	urlValue := strings.TrimSpace(input.URL)
+
+	if serverName == "" && urlValue == "" {
+		return resolvedTarget{}, fmt.Errorf("exactly one of server_name or url is required")
+	}
+
+	if serverName != "" {
+		_, merged, err := b.resolveNamedServers()
+		if err != nil {
+			return resolvedTarget{}, err
+		}
+		server, ok := merged[serverName]
+		if !ok {
+			return resolvedTarget{}, fmt.Errorf("unknown MCP server: %s", serverName)
+		}
+		return resolvedTarget{
+			Name:       server.Name,
+			Origin:     server.Origin,
+			TargetType: server.TargetType,
+			Config:     server.Config,
+		}, nil
+	}
+
+	if !b.options.allowAdHocHTTP {
+		return resolvedTarget{}, fmt.Errorf("ad-hoc HTTP MCP is disabled")
+	}
+
+	config, targetType, err := b.buildAdHocConfig(input)
+	if err != nil {
+		return resolvedTarget{}, err
+	}
+	return resolvedTarget{
+		Origin:     "adhoc",
+		TargetType: targetType,
+		Config:     config,
+	}, nil
+}
+
+func (b *Broker) listServers(ctx context.Context, _ listServersInput) (listServersOutput, error) {
+	servers, _, err := b.resolveNamedServers()
+	if err != nil {
+		return listServersOutput{}, err
+	}
+
+	output := listServersOutput{Servers: make([]listServersServer, 0, len(servers))}
+	for _, server := range servers {
+		output.Servers = append(output.Servers, listServersServer{
+			Name:      server.Name,
+			Transport: server.Config.Transport,
+		})
+	}
+	return output, nil
+}
+
+func (b *Broker) resolveListSelector(
+	selector string,
+	transport string,
+	headers map[string]string,
+) (resolvedTarget, string, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return resolvedTarget{}, "", fmt.Errorf("selector is required")
+	}
+
+	if looksLikeHTTPSelector(selector) {
+		target, err := b.resolveTarget(targetInput{
+			URL:       selector,
+			Transport: transport,
+			Headers:   headers,
+		})
+		if err != nil {
+			return resolvedTarget{}, "", err
+		}
+		return target, selector, nil
+	}
+
+	target, err := b.resolveTarget(targetInput{
+		ServerName: selector,
+		Transport:  transport,
+		Headers:    headers,
+	})
+	if err != nil {
+		return resolvedTarget{}, "", err
+	}
+	return target, selector, nil
+}
+
+func (b *Broker) resolveCallSelector(
+	selector string,
+	transport string,
+	headers map[string]string,
+) (resolvedTarget, string, string, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return resolvedTarget{}, "", "", fmt.Errorf("selector is required")
+	}
+
+	if looksLikeHTTPSelector(selector) {
+		baseURL, toolName, err := splitHTTPToolSelector(selector)
+		if err != nil {
+			return resolvedTarget{}, "", "", err
+		}
+		target, targetErr := b.resolveTarget(targetInput{
+			URL:       baseURL,
+			Transport: transport,
+			Headers:   headers,
+		})
+		if targetErr != nil {
+			return resolvedTarget{}, "", "", targetErr
+		}
+		return target, baseURL, toolName, nil
+	}
+
+	serverName, toolName, err := b.splitNamedToolSelector(selector)
+	if err != nil {
+		return resolvedTarget{}, "", "", err
+	}
+	target, targetErr := b.resolveTarget(targetInput{
+		ServerName: serverName,
+		Transport:  transport,
+		Headers:    headers,
+	})
+	if targetErr != nil {
+		return resolvedTarget{}, "", "", targetErr
+	}
+	return target, serverName, toolName, nil
+}
+
+func (b *Broker) splitNamedToolSelector(selector string) (string, string, error) {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return "", "", fmt.Errorf("selector is required")
+	}
+
+	_, merged, err := b.resolveNamedServers()
+	if err != nil {
+		return "", "", err
+	}
+
+	bestName := ""
+	for name := range merged {
+		prefix := name + "."
+		if strings.HasPrefix(selector, prefix) && len(name) > len(bestName) {
+			bestName = name
+		}
+	}
+	if bestName != "" {
+		toolName := strings.TrimSpace(strings.TrimPrefix(selector, bestName+"."))
+		if toolName == "" {
+			return "", "", fmt.Errorf("call selector must be <server>.<tool>, <url>.<tool>, or <url>#tool=<tool>")
+		}
+		return bestName, toolName, nil
+	}
+
+	lastDot := strings.LastIndex(selector, ".")
+	if lastDot <= 0 || lastDot == len(selector)-1 {
+		return "", "", fmt.Errorf("call selector must be <server>.<tool>, <url>.<tool>, or <url>#tool=<tool>")
+	}
+
+	serverName := strings.TrimSpace(selector[:lastDot])
+	if _, ok := merged[serverName]; !ok {
+		return "", "", fmt.Errorf("unknown MCP server: %s", serverName)
+	}
+	return serverName, strings.TrimSpace(selector[lastDot+1:]), nil
+}
+
+func splitHTTPToolSelector(selector string) (string, string, error) {
+	selector = strings.TrimSpace(selector)
+	if fragmentIndex := strings.Index(selector, "#tool="); fragmentIndex >= 0 {
+		baseURL := strings.TrimSpace(selector[:fragmentIndex])
+		toolName := strings.TrimSpace(selector[fragmentIndex+len("#tool="):])
+		if baseURL == "" || toolName == "" {
+			return "", "", fmt.Errorf("call selector must be <server>.<tool>, <url>.<tool>, or <url>#tool=<tool>")
+		}
+		return baseURL, toolName, nil
+	}
+
+	parsedURL, err := url.Parse(selector)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid HTTP selector %q: %w", selector, err)
+	}
+	pathValue := parsedURL.EscapedPath()
+	lastSlash := strings.LastIndex(pathValue, "/")
+	segment := pathValue[lastSlash+1:]
+	firstDot := strings.Index(segment, ".")
+	if firstDot <= 0 || firstDot == len(segment)-1 {
+		return "", "", fmt.Errorf("call selector must be <server>.<tool>, <url>.<tool>, or <url>#tool=<tool>")
+	}
+
+	toolName := strings.TrimSpace(segment[firstDot+1:])
+	parsedURL.Path = strings.TrimSpace(pathValue[:lastSlash+1] + segment[:firstDot])
+	parsedURL.RawPath = parsedURL.Path
+	baseURL := strings.TrimSpace(parsedURL.String())
+	if baseURL == "" || toolName == "" {
+		return "", "", fmt.Errorf("call selector must be <server>.<tool>, <url>.<tool>, or <url>#tool=<tool>")
+	}
+	return baseURL, toolName, nil
+}
+
+func shouldUseFragmentHTTPToolSelector(selector string) bool {
+	selector = strings.TrimSpace(selector)
+	parsedURL, err := url.Parse(selector)
+	if err != nil {
+		return true
+	}
+	if parsedURL.RawQuery != "" || parsedURL.Fragment != "" {
+		return true
+	}
+	pathValue := parsedURL.EscapedPath()
+	if pathValue == "" {
+		return false
+	}
+	lastSlash := strings.LastIndex(pathValue, "/")
+	segment := pathValue[lastSlash+1:]
+	return strings.Contains(segment, ".")
+}
+
+func looksLikeHTTPSelector(selector string) bool {
+	selector = strings.ToLower(strings.TrimSpace(selector))
+	return strings.HasPrefix(selector, "http://") || strings.HasPrefix(selector, "https://")
+}
