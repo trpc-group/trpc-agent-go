@@ -2156,6 +2156,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#graph-interrupt-and-resume-via-a2a" class="md-nav__link">
+    <span class="md-ellipsis">
+      Graph Interrupt and Resume via A2A
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2682,6 +2691,15 @@
   <a href="#custom-converters" class="md-nav__link">
     <span class="md-ellipsis">
       Custom Converters
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#graph-interrupt-and-resume-via-a2a" class="md-nav__link">
+    <span class="md-ellipsis">
+      Graph Interrupt and Resume via A2A
     </span>
   </a>
   
@@ -3951,6 +3969,62 @@ If the client explicitly sets <code>agent.WithStream(...)</code> or <code>a2aage
 </span><span id="__span-23-43"><a id="__codelineno-23-43" name="__codelineno-23-43"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithCustomEventConverter</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">CustomEventConverter</span><span class="p">{}),</span>
 </span><span id="__span-23-44"><a id="__codelineno-23-44" name="__codelineno-23-44"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="graph-interrupt-and-resume-via-a2a">Graph Interrupt and Resume via A2A</h3>
+<p>When the remote A2A Server runs a Graph Agent that uses <code>graph.Interrupt</code>, extra configuration is needed:</p>
+<ul>
+<li><strong>Server-side</strong>: Allow at least <code>graph.execution</code> and <code>graph.pregel.step</code>; the former preserves the graph's terminal completion event, while the latter lets interrupt events carry resume metadata such as <code>state_delta</code> and <code>pregel_metadata</code> back through A2A. If you do not want to maintain a narrow allowlist, use <code>WithGraphEventObjectAllowlist("*")</code> instead.</li>
+<li><strong>Client-side</strong>: Forward at least <code>graph.CfgKeyLineageID</code>, <code>graph.CfgKeyCheckpointID</code>, <code>graph.CfgKeyCheckpointNS</code>, and <code>graph.StateKeyCommand</code>, so resume requests can send lineage/checkpoint/command data back to the remote graph. If you want to forward the full RuntimeState, use <code>WithTransferStateKey("*")</code> instead.</li>
+</ul>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-24-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-24-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-24-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-24-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-24-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-24-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-24-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-24-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-24-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-24-10">10</a></span>
+<span class="normal"><a href="#__codelineno-24-11">11</a></span>
+<span class="normal"><a href="#__codelineno-24-12">12</a></span>
+<span class="normal"><a href="#__codelineno-24-13">13</a></span>
+<span class="normal"><a href="#__codelineno-24-14">14</a></span>
+<span class="normal"><a href="#__codelineno-24-15">15</a></span>
+<span class="normal"><a href="#__codelineno-24-16">16</a></span>
+<span class="normal"><a href="#__codelineno-24-17">17</a></span>
+<span class="normal"><a href="#__codelineno-24-18">18</a></span>
+<span class="normal"><a href="#__codelineno-24-19">19</a></span>
+<span class="normal"><a href="#__codelineno-24-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1"></a><span class="c1">// Server</span>
+</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">graphAgent</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4"></a><span class="w">    </span><span class="nx">a2aserver</span><span class="p">.</span><span class="nx">WithGraphEventObjectAllowlist</span><span class="p">(</span>
+</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5"></a><span class="w">        </span><span class="s">&quot;graph.execution&quot;</span><span class="p">,</span>
+</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6"></a><span class="w">        </span><span class="s">&quot;graph.pregel.step&quot;</span><span class="p">,</span>
+</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8"></a><span class="p">)</span>
+</span><span id="__span-24-9"><a id="__codelineno-24-9" name="__codelineno-24-9"></a>
+</span><span id="__span-24-10"><a id="__codelineno-24-10" name="__codelineno-24-10"></a><span class="c1">// Client</span>
+</span><span id="__span-24-11"><a id="__codelineno-24-11" name="__codelineno-24-11"></a><span class="nx">subAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-24-12"><a id="__codelineno-24-12" name="__codelineno-24-12"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithAgentCardURL</span><span class="p">(</span><span class="s">&quot;http://remote:8888&quot;</span><span class="p">),</span>
+</span><span id="__span-24-13"><a id="__codelineno-24-13" name="__codelineno-24-13"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithEnableStreaming</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-24-14"><a id="__codelineno-24-14" name="__codelineno-24-14"></a><span class="w">    </span><span class="nx">a2aagent</span><span class="p">.</span><span class="nx">WithTransferStateKey</span><span class="p">(</span>
+</span><span id="__span-24-15"><a id="__codelineno-24-15" name="__codelineno-24-15"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">CfgKeyLineageID</span><span class="p">,</span>
+</span><span id="__span-24-16"><a id="__codelineno-24-16" name="__codelineno-24-16"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">CfgKeyCheckpointID</span><span class="p">,</span>
+</span><span id="__span-24-17"><a id="__codelineno-24-17" name="__codelineno-24-17"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">CfgKeyCheckpointNS</span><span class="p">,</span>
+</span><span id="__span-24-18"><a id="__codelineno-24-18" name="__codelineno-24-18"></a><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyCommand</span><span class="p">,</span>
+</span><span id="__span-24-19"><a id="__codelineno-24-19" name="__codelineno-24-19"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-24-20"><a id="__codelineno-24-20" name="__codelineno-24-20"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Notes:</p>
+<ul>
+<li><code>graph.execution</code> preserves the graph's terminal completion event.</li>
+<li><code>graph.pregel.step</code> is the key graph event object used to carry interrupt/resume metadata.</li>
+<li><code>graph.StateKeyCommand</code> carries <code>Resume</code> / <code>ResumeMap</code>, which the remote graph uses to continue from the interrupted node.</li>
+<li><code>"*"</code> remains a convenient catch-all option for debugging or when full state forwarding is acceptable.</li>
+</ul>
+<blockquote>
+<p>Full example: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/a2a_interrupt">examples/graph/a2a_interrupt</a></p>
+</blockquote>
 <h2 id="protocol-interaction-specification">Protocol Interaction Specification</h2>
 <p>For detailed specifications on how tool calls, code execution, reasoning content, and other events are transmitted through the A2A protocol, as well as Metadata field definitions, ADK compatibility mode, and distributed tracing, please refer to the dedicated document:</p>
 <p><strong><a href="../a2a-interaction/">A2A Protocol Interaction Specification</a></strong></p>
@@ -3981,21 +4055,21 @@ If the client explicitly sets <code>agent.WithStream(...)</code> or <code>a2aage
 </tbody>
 </table>
 <h3 id="typical-architecture-pattern">Typical Architecture Pattern</h3>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-24-1">1</a></span>
-<span class="normal"><a href="#__codelineno-24-2">2</a></span>
-<span class="normal"><a href="#__codelineno-24-3">3</a></span>
-<span class="normal"><a href="#__codelineno-24-4">4</a></span>
-<span class="normal"><a href="#__codelineno-24-5">5</a></span>
-<span class="normal"><a href="#__codelineno-24-6">6</a></span>
-<span class="normal"><a href="#__codelineno-24-7">7</a></span>
-<span class="normal"><a href="#__codelineno-24-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1"></a>┌─────────────┐ A2A protocol  ┌───────────────┐
-</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2"></a>│   Client    │──────────────→│ A2A Server    │
-</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3"></a>│ (A2AAgent)  │               │ (local Agent) │
-</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4"></a>└─────────────┘               └───────────────┘
-</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5"></a>      ↑                              ↑
-</span><span id="__span-24-6"><a id="__codelineno-24-6" name="__codelineno-24-6"></a>      │                              │
-</span><span id="__span-24-7"><a id="__codelineno-24-7" name="__codelineno-24-7"></a>   Call remote                   Expose local
-</span><span id="__span-24-8"><a id="__codelineno-24-8" name="__codelineno-24-8"></a>   Agent service                 Agent service
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-25-1">1</a></span>
+<span class="normal"><a href="#__codelineno-25-2">2</a></span>
+<span class="normal"><a href="#__codelineno-25-3">3</a></span>
+<span class="normal"><a href="#__codelineno-25-4">4</a></span>
+<span class="normal"><a href="#__codelineno-25-5">5</a></span>
+<span class="normal"><a href="#__codelineno-25-6">6</a></span>
+<span class="normal"><a href="#__codelineno-25-7">7</a></span>
+<span class="normal"><a href="#__codelineno-25-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1"></a>┌─────────────┐ A2A protocol  ┌───────────────┐
+</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2"></a>│   Client    │──────────────→│ A2A Server    │
+</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3"></a>│ (A2AAgent)  │               │ (local Agent) │
+</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4"></a>└─────────────┘               └───────────────┘
+</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5"></a>      ↑                              ↑
+</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6"></a>      │                              │
+</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7"></a>   Call remote                   Expose local
+</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8"></a>   Agent service                 Agent service
 </span></code></pre></div></td></tr></table></div>
 <p>Through the combined use of A2A Server and A2AAgent, you can easily build distributed Agent systems.</p>
 <h3 id="a2a-server-configuration-reference">A2A Server Configuration Reference</h3>
@@ -4146,7 +4220,7 @@ If the client explicitly sets <code>agent.WithStream(...)</code> or <code>a2aage
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 31, 2026 06:23:14 UTC">2026-03-31 06:23:14</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 10, 2026 02:13:47 UTC">2026-04-10 02:13:47</span>
   </span>
 
     
