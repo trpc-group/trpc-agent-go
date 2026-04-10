@@ -6,6 +6,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf => ../../knowledge/document/reader/pdf
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini => ../../knowledge/embedder/gemini
+	trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling => ../../knowledge/extractor/docling
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract => ../../knowledge/ocr/tesseract
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/elasticsearch => ../../knowledge/vectorstore/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus => ../../knowledge/vectorstore/milvus

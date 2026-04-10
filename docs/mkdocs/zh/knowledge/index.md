@@ -18,6 +18,7 @@ Knowledge 系统的使用遵循以下模式：
 
 - **智能检索**：基于向量相似度的语义搜索
 - **多源支持**：支持文件、目录、URL 等多种知识来源
+- **复杂文档提取**：支持在加载前先将 PDF、HTML 等复杂格式转换为 Markdown 或文本
 - **灵活存储**：支持内存、PostgreSQL、TcVector 等多种存储后端
 - **高性能处理**：并发处理和批量文档加载
 - **知识过滤**：通过元数据，支持知识的静态过滤和 Agent 智能过滤
@@ -169,6 +170,9 @@ knowledge/
 │   ├── transform.go     # Transformer 接口定义
 │   ├── charfilter.go    # 字符过滤器（移除指定字符）
 │   └── chardedup.go     # 字符去重器（合并连续重复字符）
+├── extractor/            # 内容提取器（将复杂格式先转换为 markdown/text）
+│   ├── extractor.go     # Extractor 接口定义
+│   └── docling/         # Docling 提取器实现
 ├── document/             # 文档处理
 │   ├── document.go      # Document 结构定义
 │   └── reader/          # 文档读取器（支持 txt/md/csv/json/docx/pdf 等格式）
@@ -419,6 +423,7 @@ err := kb.Load(ctx,
 - [Embedder](embedder.md) - 文本向量化模型配置
 - [Reranker](reranker.md) - 检索结果精排
 - [文档源](source.md) - 文件、目录、URL 等知识来源配置
+- [Extractor 内容提取](extractor.md) - 复杂文档和网页转 Markdown / 文本
 - [OCR 图片文字识别](ocr.md) - 配置 Tesseract OCR 提取文本
 - [过滤器](filter.md) - 基础过滤器和智能过滤器
 - [知识库管理](management.md) - 动态源管理和状态监控

@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
@@ -45,6 +46,7 @@ type Source struct {
 	ocrExtractor           ocr.Extractor
 	transformers           []transform.Transformer
 	fileReaderType         source.FileReaderType
+	contentExtractor       extractor.Extractor
 }
 
 // New creates a new directory knowledge source.
@@ -128,7 +130,7 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 		totalFiles += len(filePaths)
 
 		for _, filePath := range filePaths {
-			documents, err := s.processFile(filePath)
+			documents, err := s.processFile(ctx, filePath)
 			if err != nil {
 				// Log error but continue with other files.
 				fmt.Printf("Warning: failed to process file %s: %v\n", filePath, err)
@@ -202,7 +204,7 @@ func (s *Source) getFilePaths(dirPath string) ([]string, error) {
 }
 
 // processFile processes a single file and returns its documents.
-func (s *Source) processFile(filePath string) ([]*document.Document, error) {
+func (s *Source) processFile(ctx context.Context, filePath string) ([]*document.Document, error) {
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat file: %w", err)
@@ -211,17 +213,19 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 		return nil, fmt.Errorf("not a regular file: %s", filePath)
 	}
 
-	// Determine file type and get appropriate reader.
-	fileType := s.getFileType(filePath)
-	reader, exists := s.readers[fileType]
-	if !exists {
-		return nil, fmt.Errorf("no reader available for file type: %s", fileType)
-	}
+	ext := strings.ToLower(filepath.Ext(filePath))
+	fileName := filepath.Base(filePath)
 
-	// Read the file using the reader's ReadFromFile method.
-	documents, err := reader.ReadFromFile(filePath)
+	var documents []*document.Document
+
+	// If a content extractor is configured and supports this extension, use it.
+	if s.contentExtractor != nil && extractor.Supports(s.contentExtractor, ext) {
+		documents, err = s.extractAndRead(ctx, filePath, fileName)
+	} else {
+		documents, err = s.readWithReader(filePath)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file with reader: %w", err)
+		return nil, err
 	}
 
 	// Create metadata for this file.
@@ -257,6 +261,42 @@ func (s *Source) processFile(filePath string) ([]*document.Document, error) {
 		}
 	}
 
+	return documents, nil
+}
+
+// extractAndRead uses the content extractor to convert the file, then pipes
+// the result through the appropriate reader for chunking and processing.
+func (s *Source) extractAndRead(ctx context.Context, filePath, fileName string) ([]*document.Document, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file for extraction: %w", err)
+	}
+	defer f.Close()
+
+	result, err := s.contentExtractor.ExtractFromReader(ctx, f)
+	if err != nil {
+		return nil, fmt.Errorf("content extraction failed: %w", err)
+	}
+
+	r, exists := s.readers[result.Format]
+	if !exists {
+		return nil, fmt.Errorf("no reader available for extracted format: %s", result.Format)
+	}
+
+	return r.ReadFromReader(fileName, result.Reader)
+}
+
+// readWithReader uses the registered reader to process the file directly.
+func (s *Source) readWithReader(filePath string) ([]*document.Document, error) {
+	fileType := s.getFileType(filePath)
+	r, exists := s.readers[fileType]
+	if !exists {
+		return nil, fmt.Errorf("no reader available for file type: %s", fileType)
+	}
+	documents, err := r.ReadFromFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file with reader: %w", err)
+	}
 	return documents, nil
 }
 
