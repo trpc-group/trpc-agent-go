@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/proto"
@@ -131,6 +132,8 @@ func GetFileType(filePath string) string {
 		return "docx"
 	case ".proto":
 		return "proto"
+	case ".go":
+		return "go"
 	default:
 		return "text"
 	}
@@ -154,6 +157,8 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 			return "csv"
 		case strings.Contains(mainType, "application/pdf"):
 			return "pdf"
+		case strings.Contains(mainType, "text/x-go"), strings.Contains(mainType, "application/x-go"):
+			return "go"
 		case strings.Contains(mainType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
 			return "docx"
 		}
@@ -176,6 +181,8 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 		return "docx"
 	case ".proto":
 		return "proto"
+	case ".go":
+		return "go"
 	default:
 		// Unknown extension, fallback to text reader
 		return "text"
