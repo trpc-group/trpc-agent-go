@@ -319,6 +319,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	contentOpts := []processor.ContentOption{
 		processor.WithAddContextPrefix(options.AddContextPrefix),
 		processor.WithAddSessionSummary(options.AddSessionSummary),
+		processor.WithSessionSummaryInjectionMode(options.SessionSummaryInjectionMode),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
 		processor.WithEnableContextCompaction(options.EnableContextCompaction),
 		processor.WithContextCompactionKeepRecentRequests(

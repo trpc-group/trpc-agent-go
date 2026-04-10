@@ -136,6 +136,15 @@ func TestWithAddSessionSummary(t *testing.T) {
 	require.False(t, opts.AddSessionSummary)
 }
 
+func TestWithSessionSummaryInjectionMode(t *testing.T) {
+	opts := &Options{}
+	WithSessionSummaryInjectionMode(SessionSummaryInjectionUser)(opts)
+	require.Equal(t, SessionSummaryInjectionUser, opts.SessionSummaryInjectionMode)
+
+	WithSessionSummaryInjectionMode(SessionSummaryInjectionSystem)(opts)
+	require.Equal(t, SessionSummaryInjectionSystem, opts.SessionSummaryInjectionMode)
+}
+
 func TestWithMaxHistoryRuns(t *testing.T) {
 	opts := &Options{}
 	WithMaxHistoryRuns(5)(opts)
