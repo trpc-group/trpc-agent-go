@@ -211,8 +211,13 @@ func matchesAllowedGraphObjectType(objectType string, allowedObjectTypes []strin
 		if allowed == objectType || allowed == "*" {
 			return true
 		}
-		if strings.HasSuffix(allowed, "*") {
-			prefix := strings.TrimSuffix(allowed, "*")
+		if strings.HasPrefix(allowed, "*") {
+			suffix := allowed[1:]
+			if strings.HasSuffix(objectType, suffix) {
+				return true
+			}
+		} else if strings.HasSuffix(allowed, "*") {
+			prefix := allowed[:len(allowed)-1]
 			if strings.HasPrefix(objectType, prefix) {
 				return true
 			}
@@ -232,7 +237,6 @@ func (c *defaultEventToA2AMessage) shouldEmitEvent(evt *event.Event) bool {
 	if !strings.HasPrefix(objectType, graphObjectPrefix) {
 		return true
 	}
-
 	allowedObjectTypes := c.graphEventObjectAllowlist
 	if allowedObjectTypes == nil {
 		allowedObjectTypes = defaultAllowedGraphObjectTypes

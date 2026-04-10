@@ -4615,6 +4615,7 @@ func (e *Executor) handleInterrupt(
 		WithPregelEventInterruptValue(interrupt.Value),
 		WithPregelEventLineageID(GetLineageID(checkpointConfig)),
 		WithPregelEventCheckpointID(GetCheckpointID(checkpointConfig)),
+		WithPregelEventCheckpointNS(GetNamespace(checkpointConfig)),
 	)
 	if shouldEmitPregelStepEvents(invocation) {
 		agent.EmitEvent(eventCtx, invocation, execCtx.EventChan, interruptEvent)

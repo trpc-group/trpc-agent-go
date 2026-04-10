@@ -10,7 +10,9 @@
 // Package a2a provides shared constants and utilities for A2A protocol handling.
 package a2a
 
-import "trpc.group/trpc-go/trpc-agent-go/model"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
 
 const (
 	// DataPartMetadataTypeKey is the metadata key for DataPart type.

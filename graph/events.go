@@ -306,6 +306,8 @@ type PregelStepMetadata struct {
 	LineageID string `json:"lineageId,omitempty"`
 	// CheckpointID is the checkpoint ID that can be used for resuming.
 	CheckpointID string `json:"checkpointId,omitempty"`
+	// CheckpointNS is the checkpoint namespace that can be used for resuming.
+	CheckpointNS string `json:"checkpointNs,omitempty"`
 }
 
 // ChannelUpdateMetadata contains metadata about channel updates.
@@ -930,6 +932,7 @@ type PregelEventOptions struct {
 	InterruptValue  any
 	LineageID       string
 	CheckpointID    string
+	CheckpointNS    string
 }
 
 // PregelEventOption is a function that configures Pregel event options.
@@ -1038,6 +1041,13 @@ func WithPregelEventLineageID(lineageID string) PregelEventOption {
 func WithPregelEventCheckpointID(checkpointID string) PregelEventOption {
 	return func(opts *PregelEventOptions) {
 		opts.CheckpointID = checkpointID
+	}
+}
+
+// WithPregelEventCheckpointNS sets the checkpoint namespace for Pregel events.
+func WithPregelEventCheckpointNS(checkpointNS string) PregelEventOption {
+	return func(opts *PregelEventOptions) {
+		opts.CheckpointNS = checkpointNS
 	}
 }
 
@@ -1470,6 +1480,7 @@ func NewPregelInterruptEvent(opts ...PregelEventOption) *event.Event {
 		InterruptValue: options.InterruptValue,
 		LineageID:      options.LineageID,
 		CheckpointID:   options.CheckpointID,
+		CheckpointNS:   options.CheckpointNS,
 	}
 	return NewGraphEvent(options.InvocationID, AuthorGraphPregel, ObjectTypeGraphPregelStep,
 		WithPregelMetadata(metadata))

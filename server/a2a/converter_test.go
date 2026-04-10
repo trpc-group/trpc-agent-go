@@ -13,9 +13,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -893,6 +895,77 @@ func TestDefaultEventToA2AMessage_GraphEventFilter(t *testing.T) {
 		if streamingInternal == nil {
 			t.Fatal("expected non-nil streaming result for internal graph event when allowlist matches")
 		}
+	})
+
+	t.Run("allowlist forwards interrupt pregel events with interrupt info in state_delta", func(t *testing.T) {
+		converter := &defaultEventToA2AMessage{graphEventObjectAllowlist: []string{"graph.pregel.step"}}
+		intrEvt := graph.NewPregelInterruptEvent(
+			graph.WithPregelEventInvocationID("inv-1"),
+			graph.WithPregelEventStepNumber(3),
+			graph.WithPregelEventNodeID("approval"),
+			graph.WithPregelEventInterruptKey("approval"),
+			graph.WithPregelEventInterruptValue(map[string]any{"prompt": "approve?"}),
+			graph.WithPregelEventLineageID("ln-1"),
+			graph.WithPregelEventCheckpointID("ck-1"),
+			graph.WithPregelEventCheckpointNS("ns-1"),
+		)
+		intrEvt.Response.Choices = []model.Choice{{Message: model.Message{}}}
+
+		unaryResult, err := converter.ConvertToA2AMessage(
+			context.Background(),
+			intrEvt,
+			EventToA2AUnaryOptions{},
+		)
+		if err != nil {
+			t.Fatalf("ConvertToA2AMessage(interrupt) error: %v", err)
+		}
+		msg, ok := unaryResult.(*protocol.Message)
+		if !ok {
+			t.Fatalf("expected *protocol.Message, got %T", unaryResult)
+		}
+		// Interrupt info should be in state_delta._pregel_metadata
+		sdRaw, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]
+		if !assert.True(t, ok, "expected state_delta metadata") {
+			return
+		}
+		sd := ia2a.DecodeStateDeltaMetadata(sdRaw)
+		pregelRaw, ok := sd[graph.MetadataKeyPregel]
+		if !assert.True(t, ok, "expected _pregel_metadata in state_delta") {
+			return
+		}
+		var pregel graph.PregelStepMetadata
+		require.NoError(t, json.Unmarshal(pregelRaw, &pregel))
+		assert.Equal(t, "approval", pregel.InterruptKey)
+		assert.Equal(t, "ln-1", pregel.LineageID)
+		assert.Equal(t, "ck-1", pregel.CheckpointID)
+		assert.Equal(t, "ns-1", pregel.CheckpointNS)
+
+		streamingResult, err := converter.ConvertStreamingToA2AMessage(
+			context.Background(),
+			intrEvt,
+			EventToA2AStreamingOptions{CtxID: "ctx-1", TaskID: "task-1"},
+		)
+		if err != nil {
+			t.Fatalf("ConvertStreamingToA2AMessage(interrupt) error: %v", err)
+		}
+		taskEvent, ok := streamingResult.(*protocol.TaskArtifactUpdateEvent)
+		if !ok {
+			t.Fatalf("expected *protocol.TaskArtifactUpdateEvent, got %T", streamingResult)
+		}
+		sdRaw, ok = taskEvent.Metadata[ia2a.MessageMetadataStateDeltaKey]
+		if !assert.True(t, ok, "expected state_delta metadata in streaming") {
+			return
+		}
+		sd = ia2a.DecodeStateDeltaMetadata(sdRaw)
+		pregelRaw, ok = sd[graph.MetadataKeyPregel]
+		if !assert.True(t, ok, "expected _pregel_metadata in streaming state_delta") {
+			return
+		}
+		require.NoError(t, json.Unmarshal(pregelRaw, &pregel))
+		assert.Equal(t, "approval", pregel.InterruptKey)
+		assert.Equal(t, "ln-1", pregel.LineageID)
+		assert.Equal(t, "ck-1", pregel.CheckpointID)
+		assert.Equal(t, "ns-1", pregel.CheckpointNS)
 	})
 }
 
@@ -3258,6 +3331,88 @@ func TestDefaultEventToA2AMessage_ReasoningContent(t *testing.T) {
 					t.Errorf("expected %q key in metadata, got %v", expectedKey, firstPart.Metadata)
 				}
 			}
+		})
+	}
+}
+
+func TestMatchesAllowedGraphObjectType(t *testing.T) {
+	tests := []struct {
+		name     string
+		objType  string
+		allowed  []string
+		expected bool
+	}{
+		{
+			name:     "exact match",
+			objType:  "graph.execution",
+			allowed:  []string{"graph.execution"},
+			expected: true,
+		},
+		{
+			name:     "wildcard all",
+			objType:  "graph.node.start",
+			allowed:  []string{"*"},
+			expected: true,
+		},
+		{
+			name:     "prefix wildcard with dot",
+			objType:  "graph.node.start",
+			allowed:  []string{"graph.*"},
+			expected: true,
+		},
+		{
+			name:     "prefix wildcard without dot",
+			objType:  "graph.node.start",
+			allowed:  []string{"graph*"},
+			expected: true,
+		},
+		{
+			name:     "prefix wildcard no match",
+			objType:  "chat.completion",
+			allowed:  []string{"graph.*"},
+			expected: false,
+		},
+		{
+			name:     "suffix wildcard with dot",
+			objType:  "graph.node.start",
+			allowed:  []string{"*.start"},
+			expected: true,
+		},
+		{
+			name:     "suffix wildcard without dot",
+			objType:  "graph.node.start",
+			allowed:  []string{"*start"},
+			expected: true,
+		},
+		{
+			name:     "suffix wildcard no match",
+			objType:  "graph.node.start",
+			allowed:  []string{"*.end"},
+			expected: false,
+		},
+		{
+			name:     "no match at all",
+			objType:  "custom.type",
+			allowed:  []string{"graph.execution", "graph.node.*"},
+			expected: false,
+		},
+		{
+			name:     "empty allowed list",
+			objType:  "graph.node.start",
+			allowed:  nil,
+			expected: false,
+		},
+		{
+			name:     "multiple patterns with suffix match",
+			objType:  "graph.pregel.step",
+			allowed:  []string{"graph.execution", "*.step"},
+			expected: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := matchesAllowedGraphObjectType(tt.objType, tt.allowed)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

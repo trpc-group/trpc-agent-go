@@ -291,6 +291,12 @@ func (r *A2AAgent) buildA2AMessage(invocation *agent.Invocation, isStream bool) 
 
 // wrapWithTransferState returns a middleware that injects transferStateKey values
 // from RuntimeState into the message metadata after calling next.
+//
+// Supported patterns:
+//   - "*"        — transfer all keys
+//   - "prefix*"  — transfer keys with the given prefix (e.g. "user.*" or "user*")
+//   - "*suffix"  — transfer keys with the given suffix (e.g. "*.id" or "*id")
+//   - "exact"    — transfer only the exact key
 func (r *A2AAgent) wrapWithTransferState(next ConvertToA2AMessageFunc) ConvertToA2AMessageFunc {
 	return func(isStream bool, agentName string, invocation *agent.Invocation) (*protocol.Message, error) {
 		message, err := next(isStream, agentName, invocation)
@@ -306,12 +312,38 @@ func (r *A2AAgent) wrapWithTransferState(next ConvertToA2AMessageFunc) ConvertTo
 		if message.Metadata == nil {
 			message.Metadata = make(map[string]any)
 		}
-		for _, key := range r.transferStateKey {
-			if value, ok := invocation.RunOptions.RuntimeState[key]; ok {
-				message.Metadata[key] = value
-			}
+		for _, pattern := range r.transferStateKey {
+			matchStateKeys(pattern, invocation.RunOptions.RuntimeState, message.Metadata)
 		}
 		return message, nil
+	}
+}
+
+// matchStateKeys copies keys from src to dst that match the given pattern.
+func matchStateKeys(pattern string, src map[string]any, dst map[string]any) {
+	switch {
+	case pattern == "*":
+		for k, v := range src {
+			dst[k] = v
+		}
+	case strings.HasPrefix(pattern, "*"):
+		suffix := pattern[1:]
+		for k, v := range src {
+			if strings.HasSuffix(k, suffix) {
+				dst[k] = v
+			}
+		}
+	case strings.HasSuffix(pattern, "*"):
+		prefix := pattern[:len(pattern)-1]
+		for k, v := range src {
+			if strings.HasPrefix(k, prefix) {
+				dst[k] = v
+			}
+		}
+	default:
+		if v, ok := src[pattern]; ok {
+			dst[pattern] = v
+		}
 	}
 }
 

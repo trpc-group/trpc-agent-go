@@ -810,6 +810,172 @@ func TestWithTransferStateKey(t *testing.T) {
 	})
 }
 
+func TestMatchStateKeys(t *testing.T) {
+	src := map[string]any{
+		"user.name":    "alice",
+		"user.id":      42,
+		"order.id":     100,
+		"order.status": "pending",
+		"trace_id":     "abc",
+		"simple":       "value",
+	}
+
+	t.Run("wildcard star transfers all keys", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("*", src, dst)
+		require.Len(t, dst, len(src))
+		for k, v := range src {
+			require.Equal(t, v, dst[k])
+		}
+	})
+
+	t.Run("prefix.* transfers matching keys", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("user.*", src, dst)
+		require.Len(t, dst, 2)
+		require.Equal(t, "alice", dst["user.name"])
+		require.Equal(t, 42, dst["user.id"])
+	})
+
+	t.Run("*.suffix transfers matching keys", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("*.id", src, dst)
+		require.Len(t, dst, 2)
+		require.Equal(t, 42, dst["user.id"])
+		require.Equal(t, 100, dst["order.id"])
+	})
+
+	t.Run("exact key transfers single key", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("trace_id", src, dst)
+		require.Len(t, dst, 1)
+		require.Equal(t, "abc", dst["trace_id"])
+	})
+
+	t.Run("no match produces empty dst", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("nonexistent", src, dst)
+		require.Empty(t, dst)
+	})
+
+	t.Run("prefix.* no match", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("foo.*", src, dst)
+		require.Empty(t, dst)
+	})
+
+	t.Run("*.suffix no match", func(t *testing.T) {
+		dst := make(map[string]any)
+		matchStateKeys("*.bar", src, dst)
+		require.Empty(t, dst)
+	})
+}
+
+func TestTransferStateKeyWildcardInBuild(t *testing.T) {
+	t.Run("wildcard * transfers all state keys", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"*"},
+		}
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"key1": "v1",
+					"key2": "v2",
+				},
+			},
+		}
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.Equal(t, "v1", msg.Metadata["key1"])
+		require.Equal(t, "v2", msg.Metadata["key2"])
+	})
+
+	t.Run("prefix.* pattern in buildA2AMessage", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"user.*"},
+		}
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"user.name": "alice",
+					"user.age":  30,
+					"order.id":  100,
+				},
+			},
+		}
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.Equal(t, "alice", msg.Metadata["user.name"])
+		require.Equal(t, 30, msg.Metadata["user.age"])
+		_, exists := msg.Metadata["order.id"]
+		require.False(t, exists)
+	})
+
+	t.Run("*.suffix pattern in buildA2AMessage", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"*.id"},
+		}
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"user.id":   42,
+					"order.id":  100,
+					"user.name": "alice",
+				},
+			},
+		}
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.Equal(t, 42, msg.Metadata["user.id"])
+		require.Equal(t, 100, msg.Metadata["order.id"])
+		_, exists := msg.Metadata["user.name"]
+		require.False(t, exists)
+	})
+
+	t.Run("mixed patterns", func(t *testing.T) {
+		a2aAgent := &A2AAgent{
+			a2aMessageConverter: &defaultEventA2AConverter{},
+			transferStateKey:    []string{"user.*", "trace_id"},
+		}
+		invocation := &agent.Invocation{
+			Message: model.Message{
+				Role:    model.RoleUser,
+				Content: "hello",
+			},
+			RunOptions: agent.RunOptions{
+				RuntimeState: map[string]any{
+					"user.name": "alice",
+					"user.id":   42,
+					"trace_id":  "t-123",
+					"order.id":  100,
+				},
+			},
+		}
+		msg, err := a2aAgent.buildA2AMessage(invocation, false)
+		require.NoError(t, err)
+		require.Equal(t, "alice", msg.Metadata["user.name"])
+		require.Equal(t, 42, msg.Metadata["user.id"])
+		require.Equal(t, "t-123", msg.Metadata["trace_id"])
+		_, exists := msg.Metadata["order.id"]
+		require.False(t, exists)
+	})
+}
+
 func TestWithBuildMessageHook(t *testing.T) {
 	t.Run("hook modifies message after conversion", func(t *testing.T) {
 		a2aAgent := &A2AAgent{

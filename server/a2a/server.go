@@ -564,6 +564,13 @@ func (m *messageProcessor) ProcessMessage(
 			return
 		}
 		a2aState := buildRuntimeState(message.Metadata)
+		// Overlay structured graph resume state (e.g. ResumeCommand) so that
+		// it takes precedence over the raw flattened metadata keys.
+		if resumeState := ia2a.GraphResumeStateFromMetadata(message.Metadata); len(resumeState) > 0 {
+			for k, v := range resumeState {
+				a2aState[k] = v
+			}
+		}
 		if opts.RuntimeState == nil {
 			opts.RuntimeState = a2aState
 			return

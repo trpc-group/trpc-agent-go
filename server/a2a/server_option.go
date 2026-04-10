@@ -157,7 +157,8 @@ func WithRunner(r runner.Runner) Option {
 // Matching applies only when object type starts with "graph.".
 //   - default (option not set): only graph.execution is forwarded.
 //   - exact rule: "graph.node.start"
-//   - prefix rule: "graph.node.*" (trailing '*' means prefix match)
+//   - prefix rule: "graph.node.*" or "graph.node*" (trailing '*' means prefix match)
+//   - suffix rule: "*step" or "*.step" (leading '*' means suffix match)
 //   - wildcard rule: "*" (allow all graph.* object types)
 func WithGraphEventObjectAllowlist(objectTypes ...string) Option {
 	return func(opts *options) {
