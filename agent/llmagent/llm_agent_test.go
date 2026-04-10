@@ -266,6 +266,39 @@ func TestBuildRequestProcessors_AddSessionSummaryWiring(t *testing.T) {
 	require.False(t, crp.AddSessionSummary)
 }
 
+// Test that buildRequestProcessors wires SessionSummaryInjectionMode into
+// ContentRequestProcessor correctly.
+func TestBuildRequestProcessors_SessionSummaryInjectionModeWiring(t *testing.T) {
+	// user mode
+	optsUser := &Options{}
+	WithAddSessionSummary(true)(optsUser)
+	WithSessionSummaryInjectionMode(SessionSummaryInjectionUser)(optsUser)
+	procs := buildRequestProcessors("test-agent", optsUser)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.True(t, crp.AddSessionSummary)
+	require.Equal(t, processor.SessionSummaryInjectionUser, crp.SessionSummaryInjectionMode)
+
+	// default (system) mode
+	optsSystem := &Options{}
+	WithAddSessionSummary(true)(optsSystem)
+	procs = buildRequestProcessors("test-agent", optsSystem)
+	crp = nil
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.True(t, crp.AddSessionSummary)
+	require.Equal(t, processor.SessionSummaryInjectionSystem, crp.SessionSummaryInjectionMode)
+}
+
 // Test that buildRequestProcessors wires MaxHistoryRuns into
 // ContentRequestProcessor correctly.
 func TestBuildRequestProcessors_MaxHistoryRunsWiring(t *testing.T) {
