@@ -3648,11 +3648,14 @@ API:
 - `graph.WithCallOptions(...)` attaches call options to this run.
 - `graph.WithCallGenerationConfigPatch(...)` overrides `model.GenerationConfig`
   fields for LLM nodes in the current graph scope.
+- `graph.WithCallResumeStateWhitelist(keys...)` allows selected
+  `RuntimeState` keys to override checkpoint-restored values during resume in
+  the current graph scope.
 - `graph.DesignateNode(nodeID, ...)` targets a specific node in the current
   graph.
   - For LLM nodes: affects that node's model call.
   - For Agent nodes (subgraphs): affects the child invocation, so it becomes the
-    default for the nested graph.
+  default for the nested graph.
 - `graph.DesignateNodeWithPath(graph.NodePath{...}, ...)` targets a node inside
   nested subgraphs (path segments are node IDs).
 
@@ -3694,6 +3697,32 @@ ch, err := r.Run(ctx, userID, sessionID, msg, runOpts)
 ```
 
 See `examples/graph/call_options_generation_config` for a runnable demo.
+
+Resume-state whitelist example:
+
+```go
+runOpts := graph.WithCallOptions(
+    graph.WithCallResumeStateWhitelist("request_id", "tenant_config"),
+    graph.DesignateNode("child_agent",
+        graph.WithCallResumeStateWhitelist("request_id"),
+    ),
+)
+
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
+        graph.CfgKeyCheckpointID: checkpointID,
+        "request_id":            requestID,
+        "tenant_config":         tenantConfig,
+    }),
+    runOpts,
+)
+```
+
+Without a whitelist, resume still prefers checkpoint values. The whitelist is
+useful for request-scoped values that should be refreshed on every resume while
+leaving the rest of the checkpointed state unchanged.
 
 #### ToolSets in Graphs vs Agents
 
@@ -4001,7 +4030,12 @@ Use a stable business identifier for `namespace` in production (e.g., `svc:prod:
 
 Resuming from a checkpoint gives you "time travel" (rewind to any checkpoint and continue). For HITL and debugging, you often want one extra step: edit the state at a checkpoint and keep running from there.
 
-Important detail: on resume, the executor restores state from the checkpoint first. `runtime_state` does not override existing checkpoint keys; it only fills missing non-internal keys. If you need to change an existing key, you must write a new checkpoint.
+Important detail: on resume, the executor restores state from the checkpoint
+first. By default, `runtime_state` does not override existing checkpoint keys;
+it only fills missing non-internal keys. If you need to override a small set of
+existing keys for one resume, use
+`graph.WithCallOptions(graph.WithCallResumeStateWhitelist(...))`. If you need to
+change the checkpointed state itself, write a new checkpoint.
 
 Use `graph.TimeTravel`:
 

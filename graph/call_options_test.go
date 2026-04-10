@@ -397,6 +397,29 @@ func TestScopeCallOptionsForSubgraph(t *testing.T) {
 	require.Equal(t, callOptsTestTempNode, *patch.Temperature)
 }
 
+func TestWithCallResumeStateWhitelist_ScopesToSubgraph(t *testing.T) {
+	runOpts := agent.RunOptions{}
+	WithCallOptions(
+		WithCallResumeStateWhitelist("root"),
+		DesignateNode(
+			callOptsTestNodeChild,
+			WithCallResumeStateWhitelist("child"),
+		),
+	)(&runOpts)
+
+	parent := graphCallOptionsFromConfigs(runOpts.CustomAgentConfigs)
+	require.NotNil(t, parent)
+	_, ok := parent.resumeStateWhitelist["root"]
+	require.True(t, ok)
+
+	child := scopeCallOptionsForSubgraph(parent, callOptsTestNodeChild)
+	require.NotNil(t, child)
+	_, ok = child.resumeStateWhitelist["root"]
+	require.True(t, ok)
+	_, ok = child.resumeStateWhitelist["child"]
+	require.True(t, ok)
+}
+
 func TestCallOptions_AppliedToNestedSubgraph(t *testing.T) {
 	childModel := &captureModel{}
 	childGraph, err := NewStateGraph(MessagesStateSchema()).
