@@ -11,6 +11,7 @@ package admin
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -175,6 +176,64 @@ func hasPromptValue(raw string) bool {
 
 func promptValuesDiffer(left string, right string) bool {
 	return strings.TrimSpace(left) != strings.TrimSpace(right)
+}
+
+const promptSummaryMaxRunes = 120
+
+func promptCollapsedSummary(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "No prompt text is currently active."
+	}
+	snippet := promptSummarySnippet(trimmed)
+	lineCount := promptLineCount(trimmed)
+	if lineCount <= 1 {
+		return "1 line. Starts with: " + snippet
+	}
+	return strconv.Itoa(lineCount) +
+		" lines. Starts with: " + snippet
+}
+
+func promptSummarySnippet(raw string) string {
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.Join(strings.Fields(line), " ")
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		runes := []rune(line)
+		if len(runes) <= promptSummaryMaxRunes {
+			return line
+		}
+		return string(runes[:promptSummaryMaxRunes]) + "..."
+	}
+	return ""
+}
+
+func promptLineCount(raw string) int {
+	if strings.TrimSpace(raw) == "" {
+		return 0
+	}
+	return len(strings.Split(strings.TrimRight(raw, "\n"), "\n"))
+}
+
+func promptInlineEditorTitle(bundle PromptBundleState) string {
+	if strings.TrimSpace(bundle.Title) == "" {
+		return "Text Stored In Config"
+	}
+	return bundle.Title + " Config Text"
+}
+
+func promptInlineEditorSummary(bundle PromptBundleState) string {
+	return "This edits the text stored directly in the config file " +
+		"for this block. It is combined with any file-based sources " +
+		"before the live prompt is assembled."
+}
+
+func promptRuntimeEditorSummary(bundle PromptBundleState) string {
+	return "This temporary text replaces the configured text for " +
+		"the running process only. Clear it to fall back to config " +
+		"and files."
 }
 
 func (s *Service) promptsStatus() PromptsStatus {
@@ -627,17 +686,24 @@ const promptsPageTemplateHTML = `
         prompt blocks in this runtime.
       </p>
       {{range .Prompts.Previews}}
-      <article class="card" style="margin-top: 18px;" id="preview-{{.Key}}">
-        <h3>{{.Title}}</h3>
-        {{if .Summary}}
-        <p class="subtle">{{.Summary}}</p>
-        {{end}}
-        {{if .Content}}
-        <div class="memory-preview">{{.Content}}</div>
-        {{else}}
-        <p class="empty">No prompt content is currently active.</p>
-        {{end}}
-      </article>
+      <details class="card prompt-detail" style="margin-top: 18px;" id="preview-{{.Key}}">
+        <summary>
+          <strong>{{.Title}}</strong>
+          {{if .Summary}}
+          <p class="subtle prompt-detail-copy">{{.Summary}}</p>
+          {{end}}
+          <p class="subtle prompt-detail-hint">
+            {{promptCollapsedSummary .Content}}
+          </p>
+        </summary>
+        <div class="prompt-detail-body">
+          {{if .Content}}
+          <div class="memory-preview">{{.Content}}</div>
+          {{else}}
+          <p class="empty">No prompt content is currently active.</p>
+          {{end}}
+        </div>
+      </details>
       {{end}}
     </section>
     {{end}}
@@ -657,7 +723,7 @@ const promptsPageTemplateHTML = `
         <p class="subtle">{{.Summary}}</p>
         {{end}}
         <dl class="meta">
-          <dt>Source</dt>
+          <dt>Source Setup</dt>
           <dd>{{if .SourceSummary}}{{.SourceSummary}}{{else}}-{{end}}</dd>
           <dt>Editable Files</dt>
           <dd>{{len .Files}}</dd>
@@ -671,29 +737,48 @@ const promptsPageTemplateHTML = `
         {{end}}
 
         <div class="panels" style="grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));">
-          <article class="card">
-            <h4 style="margin: 0 0 10px;">
-              {{if .EffectiveLabel}}{{.EffectiveLabel}}{{else}}Effective Prompt{{end}}
-            </h4>
-            {{if .EffectiveValue}}
-            <div class="memory-preview">{{.EffectiveValue}}</div>
-            {{else}}
-            <p class="empty">This block does not add any prompt text.</p>
-            {{end}}
-          </article>
+          <details class="card prompt-detail">
+            <summary>
+              <strong>
+                {{if .EffectiveLabel}}{{.EffectiveLabel}}{{else}}Effective Prompt{{end}}
+              </strong>
+              <p class="subtle prompt-detail-hint">
+                {{promptCollapsedSummary .EffectiveValue}}
+              </p>
+            </summary>
+            <div class="prompt-detail-body">
+              {{if .EffectiveValue}}
+              <div class="memory-preview">{{.EffectiveValue}}</div>
+              {{else}}
+              <p class="empty">This block does not add any prompt text.</p>
+              {{end}}
+            </div>
+          </details>
           {{if and (hasPromptValue .ConfiguredValue) (promptValuesDiffer .ConfiguredValue .EffectiveValue)}}
-          <article class="card">
-            <h4 style="margin: 0 0 10px;">
-              {{if .ConfiguredLabel}}{{.ConfiguredLabel}}{{else}}Configured Prompt{{end}}
-            </h4>
-            <div class="memory-preview">{{.ConfiguredValue}}</div>
-          </article>
+          <details class="card prompt-detail">
+            <summary>
+              <strong>
+                {{if .ConfiguredLabel}}{{.ConfiguredLabel}}{{else}}Configured Prompt{{end}}
+              </strong>
+              <p class="subtle prompt-detail-hint">
+                {{promptCollapsedSummary .ConfiguredValue}}
+              </p>
+            </summary>
+            <div class="prompt-detail-body">
+              <div class="memory-preview">{{.ConfiguredValue}}</div>
+            </div>
+          </details>
           {{end}}
         </div>
 
         {{if .InlineEditable}}
         <div class="card" style="margin-top: 16px;">
-          <h4 style="margin: 0 0 10px;">Inline Source</h4>
+          <h4 style="margin: 0 0 10px;">
+            {{promptInlineEditorTitle .}}
+          </h4>
+          <p class="subtle">
+            {{promptInlineEditorSummary .}}
+          </p>
           <form method="post" action="/api/prompts/inline">
             <input type="hidden" name="bundle_key" value="{{.Key}}">
             <input type="hidden" name="return_path" value="/prompts">
@@ -703,7 +788,7 @@ const promptsPageTemplateHTML = `
               style="width: 100%; min-height: 160px; margin-top: 12px;"
             >{{.InlineValue}}</textarea>
             <div class="actions" style="margin-top: 12px;">
-              <button type="submit">Save Inline Value</button>
+              <button type="submit">Save Config Text</button>
             </div>
           </form>
         </div>
@@ -713,7 +798,7 @@ const promptsPageTemplateHTML = `
         <div class="card" style="margin-top: 16px;">
           <h4 style="margin: 0 0 10px;">Runtime Override</h4>
           <p class="subtle">
-            Leave this empty to fall back to the configured prompt sources.
+            {{promptRuntimeEditorSummary .}}
           </p>
           <form method="post" action="/api/prompts/runtime">
             <input type="hidden" name="bundle_key" value="{{.Key}}">

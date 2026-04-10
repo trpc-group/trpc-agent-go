@@ -53,7 +53,15 @@ func TestWatchService_RefreshesWhenSkillAdded(t *testing.T) {
 	writeSkill(t, root, "demo", watchTestSkill)
 
 	require.Eventually(t, func() bool {
-		return hasSkillSummary(repo.Summaries(), "demo")
+		if !hasSkillSummary(repo.Summaries(), "demo") {
+			return false
+		}
+		status := watch.Status()
+		return status != nil &&
+			status.LastRefreshReason ==
+				watchRefreshReasonWatch &&
+			status.LastRefreshAt != nil &&
+			status.Generation >= 1
 	}, time.Second, 10*time.Millisecond)
 
 	status := watch.Status()
