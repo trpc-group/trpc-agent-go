@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/vectorstore/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/extractor/">
       
       
-        <link rel="prev" href="../ocr/">
+        <link rel="prev" href="../source/">
       
       
-        <link rel="next" href="inmemory/">
+        <link rel="next" href="../filter/">
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
@@ -22,7 +22,7 @@
     
     
       
-        <title>概述 - tRPC-Agent-Go</title>
+        <title>内容提取器 - tRPC-Agent-Go</title>
       
     
     
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#vectorstore" class="md-skip">
+        <a href="#extractor" class="md-skip">
           跳转至
         </a>
       
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              概述
+              内容提取器
             
           </span>
         </div>
@@ -166,7 +166,7 @@
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="../../../knowledge/vectorstore/" hreflang="en" class="md-select__link">
+            <a href="../../../knowledge/extractor/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
@@ -1292,10 +1292,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../extractor/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    内容提取器
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1306,6 +1328,80 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#extractorreaderocr" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extractor、Reader、OCR 的区别
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      当前接入方式
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#docling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Docling 提取器
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      使用示例
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extractor_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      什么时候用 Extractor
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      相关文档
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1384,8 +1480,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1396,11 +1490,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_9" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_9" >
         
           
           <label class="md-nav__link" for="__nav_2_12_9" id="__nav_2_12_9_label" tabindex="0">
@@ -1416,7 +1510,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_9_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_9_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_12_9">
             <span class="md-nav__icon md-icon"></span>
             向量存储
@@ -1427,32 +1521,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    概述
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../vectorstore/" class="md-nav__link">
         
   
   
@@ -1463,62 +1535,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="目录">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      目录
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      支持的向量存储
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_2" class="md-nav__link">
-    <span class="md-ellipsis">
-      搜索模式
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_3" class="md-nav__link">
-    <span class="md-ellipsis">
-      过滤器支持
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_4" class="md-nav__link">
-    <span class="md-ellipsis">
-      更多内容
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1531,7 +1547,7 @@
   
   
     <li class="md-nav__item">
-      <a href="inmemory/" class="md-nav__link">
+      <a href="../vectorstore/inmemory/" class="md-nav__link">
         
   
   
@@ -1554,7 +1570,7 @@
   
   
     <li class="md-nav__item">
-      <a href="pgvector/" class="md-nav__link">
+      <a href="../vectorstore/pgvector/" class="md-nav__link">
         
   
   
@@ -1577,7 +1593,7 @@
   
   
     <li class="md-nav__item">
-      <a href="tcvector/" class="md-nav__link">
+      <a href="../vectorstore/tcvector/" class="md-nav__link">
         
   
   
@@ -1600,7 +1616,7 @@
   
   
     <li class="md-nav__item">
-      <a href="elasticsearch/" class="md-nav__link">
+      <a href="../vectorstore/elasticsearch/" class="md-nav__link">
         
   
   
@@ -1623,7 +1639,7 @@
   
   
     <li class="md-nav__item">
-      <a href="qdrant/" class="md-nav__link">
+      <a href="../vectorstore/qdrant/" class="md-nav__link">
         
   
   
@@ -1646,7 +1662,7 @@
   
   
     <li class="md-nav__item">
-      <a href="milvus/" class="md-nav__link">
+      <a href="../vectorstore/milvus/" class="md-nav__link">
         
   
   
@@ -2011,9 +2027,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#extractorreaderocr" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extractor、Reader、OCR 的区别
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#_1" class="md-nav__link">
     <span class="md-ellipsis">
-      支持的向量存储
+      当前接入方式
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#docling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Docling 提取器
     </span>
   </a>
   
@@ -2022,7 +2056,16 @@
         <li class="md-nav__item">
   <a href="#_2" class="md-nav__link">
     <span class="md-ellipsis">
-      搜索模式
+      使用示例
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extractor_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      什么时候用 Extractor
     </span>
   </a>
   
@@ -2031,16 +2074,7 @@
         <li class="md-nav__item">
   <a href="#_3" class="md-nav__link">
     <span class="md-ellipsis">
-      过滤器支持
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_4" class="md-nav__link">
-    <span class="md-ellipsis">
-      更多内容
+      相关文档
     </span>
   </a>
   
@@ -2062,7 +2096,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/knowledge/vectorstore/index.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/knowledge/extractor.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2071,189 +2105,169 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/knowledge/vectorstore/index.md" title="查看本页的源代码" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/knowledge/extractor.md" title="查看本页的源代码" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="vectorstore">向量存储 (VectorStore)</h1>
+<h1 id="extractor">Extractor 内容提取</h1>
 <blockquote>
-<p><strong>示例代码</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores">examples/knowledge/vectorstores</a></p>
+<p><strong>完整示例</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/extractor">examples/knowledge/features/extractor</a></p>
 </blockquote>
-<p>向量存储是 Knowledge 系统的核心组件，负责存储和检索文档的向量表示。</p>
-<h2 id="_1">支持的向量存储</h2>
-<p>trpc-agent-go 支持多种向量存储实现：</p>
-<table>
-<thead>
-<tr>
-<th>向量存储</th>
-<th>说明</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="inmemory/">Memory</a></td>
-<td>内存向量存储</td>
-</tr>
-<tr>
-<td><a href="pgvector/">PGVector</a></td>
-<td>PostgreSQL + pgvector 扩展</td>
-</tr>
-<tr>
-<td><a href="tcvector/">TcVector</a></td>
-<td>腾讯云向量数据库</td>
-</tr>
-<tr>
-<td><a href="elasticsearch/">Elasticsearch</a></td>
-<td>支持 v7/v8/v9 多版本</td>
-</tr>
-<tr>
-<td><a href="qdrant/">Qdrant</a></td>
-<td>高性能向量数据库</td>
-</tr>
-<tr>
-<td><a href="milvus/">Milvus</a></td>
-<td>高性能向量数据库</td>
-</tr>
-</tbody>
-</table>
-<h2 id="_2">搜索模式</h2>
-<p>向量存储支持四种搜索模式，系统会根据查询内容<strong>自动选择</strong>最合适的模式：</p>
-<table>
-<thead>
-<tr>
-<th>搜索模式</th>
-<th>枚举值</th>
-<th>说明</th>
-<th>特殊要求</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Vector</strong></td>
-<td><code>SearchModeVector</code></td>
-<td>语义相似度搜索，理解查询意图</td>
-<td>需要 Embedder</td>
-</tr>
-<tr>
-<td><strong>Keyword</strong></td>
-<td><code>SearchModeKeyword</code></td>
-<td>关键词精确匹配，适合专业术语</td>
-<td>PGVector 需启用 <code>WithEnableTSVector(true)</code></td>
-</tr>
-<tr>
-<td><strong>Hybrid</strong></td>
-<td><code>SearchModeHybrid</code></td>
-<td>混合向量和关键词（推荐，默认）</td>
-<td>PGVector 需启用 <code>WithEnableTSVector(true)</code></td>
-</tr>
-<tr>
-<td><strong>Filter</strong></td>
-<td><code>SearchModeFilter</code></td>
-<td>仅按元数据过滤，不计算相似度</td>
-<td>-</td>
-</tr>
-</tbody>
-</table>
-<p><strong>示例</strong>:
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-0-10">10</a></span>
-<span class="normal"><a href="#__codelineno-0-11">11</a></span>
-<span class="normal"><a href="#__codelineno-0-12">12</a></span>
-<span class="normal"><a href="#__codelineno-0-13">13</a></span>
-<span class="normal"><a href="#__codelineno-0-14">14</a></span>
-<span class="normal"><a href="#__codelineno-0-15">15</a></span>
-<span class="normal"><a href="#__codelineno-0-16">16</a></span>
-<span class="normal"><a href="#__codelineno-0-17">17</a></span>
-<span class="normal"><a href="#__codelineno-0-18">18</a></span>
-<span class="normal"><a href="#__codelineno-0-19">19</a></span>
-<span class="normal"><a href="#__codelineno-0-20">20</a></span>
-<span class="normal"><a href="#__codelineno-0-21">21</a></span>
-<span class="normal"><a href="#__codelineno-0-22">22</a></span>
-<span class="normal"><a href="#__codelineno-0-23">23</a></span>
-<span class="normal"><a href="#__codelineno-0-24">24</a></span>
-<span class="normal"><a href="#__codelineno-0-25">25</a></span>
-<span class="normal"><a href="#__codelineno-0-26">26</a></span>
-<span class="normal"><a href="#__codelineno-0-27">27</a></span>
-<span class="normal"><a href="#__codelineno-0-28">28</a></span>
-<span class="normal"><a href="#__codelineno-0-29">29</a></span>
-<span class="normal"><a href="#__codelineno-0-30">30</a></span>
-<span class="normal"><a href="#__codelineno-0-31">31</a></span>
-<span class="normal"><a href="#__codelineno-0-32">32</a></span>
-<span class="normal"><a href="#__codelineno-0-33">33</a></span>
-<span class="normal"><a href="#__codelineno-0-34">34</a></span>
-<span class="normal"><a href="#__codelineno-0-35">35</a></span>
-<span class="normal"><a href="#__codelineno-0-36">36</a></span>
-<span class="normal"><a href="#__codelineno-0-37">37</a></span>
-<span class="normal"><a href="#__codelineno-0-38">38</a></span>
-<span class="normal"><a href="#__codelineno-0-39">39</a></span>
-<span class="normal"><a href="#__codelineno-0-40">40</a></span>
-<span class="normal"><a href="#__codelineno-0-41">41</a></span>
-<span class="normal"><a href="#__codelineno-0-42">42</a></span>
-<span class="normal"><a href="#__codelineno-0-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="c1">// 默认自动搜索</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="nx">reqSearch</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">SearchRequest</span><span class="p">{</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">Query</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Large language model applications&quot;</span><span class="p">,</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="c1">//History: nil,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="c1">//UserID: &quot;&quot;,</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="c1">//SessionID: &quot;&quot;,</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="c1">//MaxResults: 0,</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="c1">//MinScore: 0,</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="c1">//SearchFilter: nil,</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">    </span><span class="c1">//SearchMode: 0,</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="p">}</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="nx">rspSearch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Search</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">reqSearch</span><span class="p">)</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Debugf</span><span class="p">(</span><span class="s">&quot;Failed to search knowledge base: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="k">return</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="p">}</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">&quot;Search Result:[%+v]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">rspSearch</span><span class="p">)</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">rspSearch</span><span class="p">.</span><span class="nx">Documents</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">&quot;rspSearch.DOC_%d.score=%v,doc:[%+v]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Score</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Document</span><span class="p">)</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="p">}</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a>
-</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="c1">// 带过滤条件搜索</span>
-</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="nx">filter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">SearchFilter</span><span class="p">{</span>
-</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="w">    </span><span class="c1">//DocumentIDs: nil,</span>
-</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a><span class="w">    </span><span class="c1">//Metadata: nil,</span>
-</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="w">    </span><span class="nx">FilterCondition</span><span class="p">:</span><span class="w"> </span><span class="nx">searchfilter</span><span class="p">.</span><span class="nx">And</span><span class="p">(</span>
-</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a><span class="w">        </span><span class="nx">searchfilter</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="s">&quot;category&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;film&quot;</span><span class="p">),</span>
-</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="w">        </span><span class="nx">searchfilter</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="s">&quot;country_code&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;us&quot;</span><span class="p">),</span>
-</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a><span class="p">}</span>
-</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="nx">reqSearchWithFilter</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">SearchRequest</span><span class="p">{</span>
-</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="w">    </span><span class="nx">Query</span><span class="p">:</span><span class="w">        </span><span class="s">&quot;排行第一的电影&quot;</span><span class="p">,</span>
-</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a><span class="w">    </span><span class="nx">SearchFilter</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">filter</span><span class="p">,</span>
-</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="p">}</span>
-</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="nx">rspSearchWithFilter</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Search</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">reqSearchWithFilter</span><span class="p">)</span>
-</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Debugf</span><span class="p">(</span><span class="s">&quot;Failed to search knowledge base: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="w">    </span><span class="k">return</span>
-</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a><span class="p">}</span>
-</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">&quot;Search Result:[%+v]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">rspSearchWithFilter</span><span class="p">)</span>
-</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">rspSearchWithFilter</span><span class="p">.</span><span class="nx">Documents</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-42"><a id="__codelineno-0-42" name="__codelineno-0-42"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Infof</span><span class="p">(</span><span class="s">&quot;rspSearchWithFilter.DOC_%d.score=%v,doc:[%+v]&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Score</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Document</span><span class="p">)</span>
-</span><span id="__span-0-43"><a id="__codelineno-0-43" name="__codelineno-0-43"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div></p>
-<h2 id="_3">过滤器支持</h2>
-<p>所有向量存储都支持过滤器功能，包括 ID 过滤、元数据过滤和复杂条件过滤（<code>FilterCondition</code>）。</p>
-<h2 id="_4">更多内容</h2>
+<p>Extractor 用于在进入 Reader 和 Chunking 之前，先把复杂原始内容转换成更适合后续处理的中间格式。</p>
+<p>典型处理链路如下：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>原始文件 / URL 响应体 -&gt; Extractor -&gt; markdown / text -&gt; Reader -&gt; Chunking -&gt; Document
+</span></code></pre></div></td></tr></table></div>
+<p>这类能力适合 PDF、HTML、Office 文档、图片等不适合直接按文本切块的输入。</p>
+<h2 id="extractorreaderocr">Extractor、Reader、OCR 的区别</h2>
 <ul>
-<li><a href="inmemory/">Memory</a> - 内存向量存储配置</li>
-<li><a href="pgvector/">PGVector</a> - PostgreSQL + pgvector 配置</li>
-<li><a href="tcvector/">TcVector</a> - 腾讯云向量数据库配置</li>
-<li><a href="elasticsearch/">Elasticsearch</a> - Elasticsearch 配置</li>
-<li><a href="qdrant/">Qdrant</a> - Qdrant 配置</li>
-<li><a href="milvus/">Milvus</a> - Milvus 配置</li>
+<li><strong>Extractor</strong>：把复杂格式转换为 <code>markdown</code> 或 <code>text</code>，本质上更偏“文档转换”；某些实现内部也可能带 OCR 能力</li>
+<li><strong>Reader</strong>：读取 <code>markdown</code> / <code>text</code> / <code>json</code> / <code>csv</code> 等内容，并执行 chunking</li>
+<li><strong>OCR</strong>：从图片或扫描页中识别文字，通常作为 PDF Reader 的内部增强能力</li>
+</ul>
+<p>可以简单理解为：</p>
+<ul>
+<li><code>Extractor</code> 解决“先把内容变成可读文本”</li>
+<li><code>Reader</code> 解决“如何把文本组织成文档与分块”</li>
+<li><code>OCR</code> 解决“图像里有没有文字可识别”</li>
+</ul>
+<p>如果你的输入已经是 <code>.md</code>、<code>.txt</code>、<code>.json</code> 这类格式，通常不需要额外引入 Extractor，直接交给 Reader 即可。</p>
+<p>如果输入属于复杂的静态网页、复杂格式的 PDF、论文、海报等版面结构较强的内容，则更推荐优先使用 <code>Extractor</code>，尤其是像 <code>Docling</code> 这类能够更好保留结构信息的实现。</p>
+<h2 id="_1">当前接入方式</h2>
+<p>目前以下 Source 支持通过 <code>WithExtractor(...)</code> 接入内容提取器：</p>
+<ul>
+<li><code>filesource.WithExtractor(...)</code></li>
+<li><code>dirsource.WithExtractor(...)</code></li>
+<li><code>urlsource.WithExtractor(...)</code></li>
+<li><code>autosource.WithExtractor(...)</code></li>
+</ul>
+<p>其中 <code>URL Source</code> 的典型链路是：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a>URL -&gt; 下载响应体 -&gt; Extractor -&gt; markdown -&gt; Markdown Reader -&gt; MarkdownChunking
+</span></code></pre></div></td></tr></table></div>
+<p>这意味着当链接返回的是 <code>application/pdf</code>、<code>text/html</code> 等复杂内容时，可以先交给 Extractor，再交给对应 Reader 继续处理。</p>
+<p>对于支持直接远程取源的 Extractor（例如 Docling），<code>URL Source</code> 还可以直接走服务端的 URL 转换接口，而不是先由本地下载响应体后再上传。</p>
+<h2 id="docling">Docling 提取器</h2>
+<p>当前仓库内置的内容提取器实现是 <code>Docling</code>：</p>
+<ul>
+<li>包路径：<code>trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling</code></li>
+<li>默认支持：<code>.pdf</code>、<code>.html</code>、<code>.docx</code>、<code>.pptx</code>、图片、<code>.csv</code> 等格式</li>
+<li>默认输出：<code>markdown</code></li>
+</ul>
+<p>如果你想在本地快速体验，可以直接用 Docker 启动 <code>Docling Serve</code>：</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-p<span class="w"> </span><span class="m">5001</span>:5001<span class="w"> </span>ghcr.io/docling-project/docling-serve
+</span></code></pre></div></td></tr></table></div>
+<p><code>Docling</code> 的部署门槛相对较低，适合本地开发机直接跑起来做文档转换实验，不需要额外搭建复杂服务。</p>
+<p>Docling 适合：</p>
+<ul>
+<li>PDF -&gt; Markdown</li>
+<li>HTML 网页 -&gt; Markdown</li>
+<li>Office 文档 -&gt; Markdown / 文本</li>
+</ul>
+<p>对于扫描 PDF、图片型 PDF、结构复杂的 HTML / Office 文档，<strong>推荐优先使用 Docling 作为主处理路径</strong>。</p>
+<p>同时需要注意：<code>Docling</code> 本身已经内置 OCR 能力，因此在这类链路里通常<strong>不需要再额外配置独立的 OCR 能力</strong>。</p>
+<h2 id="_2">使用示例</h2>
+<p>下面的示例展示了如何将 Docling 注入到 URL Source 中，对链接内容先提取再切分：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-3-10">10</a></span>
+<span class="normal"><a href="#__codelineno-3-11">11</a></span>
+<span class="normal"><a href="#__codelineno-3-12">12</a></span>
+<span class="normal"><a href="#__codelineno-3-13">13</a></span>
+<span class="normal"><a href="#__codelineno-3-14">14</a></span>
+<span class="normal"><a href="#__codelineno-3-15">15</a></span>
+<span class="normal"><a href="#__codelineno-3-16">16</a></span>
+<span class="normal"><a href="#__codelineno-3-17">17</a></span>
+<span class="normal"><a href="#__codelineno-3-18">18</a></span>
+<span class="normal"><a href="#__codelineno-3-19">19</a></span>
+<span class="normal"><a href="#__codelineno-3-20">20</a></span>
+<span class="normal"><a href="#__codelineno-3-21">21</a></span>
+<span class="normal"><a href="#__codelineno-3-22">22</a></span>
+<span class="normal"><a href="#__codelineno-3-23">23</a></span>
+<span class="normal"><a href="#__codelineno-3-24">24</a></span>
+<span class="normal"><a href="#__codelineno-3-25">25</a></span>
+<span class="normal"><a href="#__codelineno-3-26">26</a></span>
+<span class="normal"><a href="#__codelineno-3-27">27</a></span>
+<span class="normal"><a href="#__codelineno-3-28">28</a></span>
+<span class="normal"><a href="#__codelineno-3-29">29</a></span>
+<span class="normal"><a href="#__codelineno-3-30">30</a></span>
+<span class="normal"><a href="#__codelineno-3-31">31</a></span>
+<span class="normal"><a href="#__codelineno-3-32">32</a></span>
+<span class="normal"><a href="#__codelineno-3-33">33</a></span>
+<span class="normal"><a href="#__codelineno-3-34">34</a></span>
+<span class="normal"><a href="#__codelineno-3-35">35</a></span>
+<span class="normal"><a href="#__codelineno-3-36">36</a></span>
+<span class="normal"><a href="#__codelineno-3-37">37</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling&quot;</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">urlsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/url&quot;</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="c1">// 注册 markdown reader，用于处理 extractor 输出的 markdown 内容。</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown&quot;</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="p">)</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="w">    </span><span class="nx">ext</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">docling</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a><span class="w">        </span><span class="nx">docling</span><span class="p">.</span><span class="nx">WithEndpoint</span><span class="p">(</span><span class="s">&quot;http://localhost:5001&quot;</span><span class="p">),</span>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="w">    </span><span class="k">defer</span><span class="w"> </span><span class="nx">ext</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="w">    </span><span class="nx">src</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23"></a><span class="w">            </span><span class="s">&quot;https://arxiv.org/pdf/1706.03762&quot;</span><span class="p">,</span>
+</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24"></a><span class="w">            </span><span class="s">&quot;https://www.rfc-editor.org/rfc/rfc9110.html&quot;</span><span class="p">,</span>
+</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithExtractor</span><span class="p">(</span><span class="nx">ext</span><span class="p">),</span>
+</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithChunkSize</span><span class="p">(</span><span class="mi">500</span><span class="p">),</span>
+</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithChunkOverlap</span><span class="p">(</span><span class="mi">50</span><span class="p">),</span>
+</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30"></a>
+</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31"></a><span class="w">    </span><span class="nx">docs</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">src</span><span class="p">.</span><span class="nx">ReadDocuments</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35"></a>
+</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">docs</span>
+</span><span id="__span-3-37"><a id="__codelineno-3-37" name="__codelineno-3-37"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>更完整的示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/extractor">examples/knowledge/features/extractor</a>。</p>
+<h2 id="extractor_1">什么时候用 Extractor</h2>
+<p>推荐使用 <code>Extractor</code> 的情况：</p>
+<ul>
+<li>希望 PDF / HTML 保留更好的结构信息</li>
+<li>原始格式不适合直接用现有 Reader 读取</li>
+<li>需要统一将多种复杂格式转成 Markdown 后再进入同一套切分流程</li>
+</ul>
+<p>不一定需要 <code>Extractor</code> 的情况：</p>
+<ul>
+<li>输入本身已经是 <code>.md</code>、<code>.txt</code>、<code>.json</code> 等可直接读取格式</li>
+<li>只需要 PDF 的纯文本抽取，不在意 Markdown 结构</li>
+<li>只需要 OCR 图像识别，而不是完整文档格式转换</li>
+</ul>
+<p>推荐优先使用 <code>OCR</code> 而不是 <code>Extractor</code> 的情况：</p>
+<ul>
+<li>输入本身是单张图片或纯图片流</li>
+<li>你只关心识别出的纯文本，不关心 Markdown 结构和版面保留</li>
+<li>你希望将 OCR 能力作为某个 Reader 的内部增强，而不是引入完整文档转换服务</li>
+</ul>
+<h2 id="_3">相关文档</h2>
+<ul>
+<li><a href="../source/">文档源</a> - Source 类型与配置方式</li>
+<li><a href="../ocr/">OCR 图片文字识别</a> - 扫描件和图片文字识别</li>
+<li><a href="../">Knowledge 概述</a> - Knowledge 模块整体结构与能力</li>
 </ul>
 
 
@@ -2277,7 +2291,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月5日 08:17:10 UTC">2026-03-05 08:17:10</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月10日 07:58:56 UTC">2026-04-10 07:58:56</span>
   </span>
 
     
@@ -2287,7 +2301,7 @@
     <span class="md-icon" title="创建日期">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月8日 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月10日 07:58:56 UTC">2026-04-10 07:58:56</span>
   </span>
 
     
@@ -2368,7 +2382,7 @@
       <nav class="md-footer__inner md-grid" aria-label="页脚" >
         
           
-          <a href="../ocr/" class="md-footer__link md-footer__link--prev" aria-label="上一页: OCR">
+          <a href="../source/" class="md-footer__link md-footer__link--prev" aria-label="上一页: 数据源">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -2378,20 +2392,20 @@
                 上一页
               </span>
               <div class="md-ellipsis">
-                OCR
+                数据源
               </div>
             </div>
           </a>
         
         
           
-          <a href="inmemory/" class="md-footer__link md-footer__link--next" aria-label="下一页: Memory">
+          <a href="../filter/" class="md-footer__link md-footer__link--next" aria-label="下一页: 过滤器">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 下一页
               </span>
               <div class="md-ellipsis">
-                Memory
+                过滤器
               </div>
             </div>
             <div class="md-footer__button md-icon">

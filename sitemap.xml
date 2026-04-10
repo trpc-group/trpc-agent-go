@@ -225,6 +225,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/embedder/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/knowledge/extractor/</loc>
+        <lastmod>2026-04-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/knowledge/extractor/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/extractor/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/knowledge/filter/</loc>
         <lastmod>2026-04-10</lastmod>
         <changefreq>daily</changefreq>
@@ -601,6 +608,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/embedder/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/knowledge/embedder/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/knowledge/extractor/</loc>
+        <lastmod>2026-04-10</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/extractor/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/knowledge/extractor/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/knowledge/filter/</loc>

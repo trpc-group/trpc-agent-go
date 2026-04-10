@@ -1586,6 +1586,29 @@
   
   
     <li class="md-nav__item">
+      <a href="extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    内容提取器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="filter/" class="md-nav__link">
         
   
@@ -1666,10 +1689,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_12_9" >
         
           
-          <label class="md-nav__link" for="__nav_2_12_8" id="__nav_2_12_8_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_12_9" id="__nav_2_12_9_label" tabindex="0">
             
   
   
@@ -1682,8 +1705,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_12_8">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_12_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_12_9">
             <span class="md-nav__icon md-icon"></span>
             向量存储
           </label>
@@ -2495,6 +2518,7 @@
 <ul>
 <li><strong>智能检索</strong>：基于向量相似度的语义搜索</li>
 <li><strong>多源支持</strong>：支持文件、目录、URL 等多种知识来源</li>
+<li><strong>复杂文档提取</strong>：支持在加载前先将 PDF、HTML 等复杂格式转换为 Markdown 或文本</li>
 <li><strong>灵活存储</strong>：支持内存、PostgreSQL、TcVector 等多种存储后端</li>
 <li><strong>高性能处理</strong>：并发处理和批量文档加载</li>
 <li><strong>知识过滤</strong>：通过元数据，支持知识的静态过滤和 Agent 智能过滤</li>
@@ -2723,7 +2747,10 @@
 <span class="normal"><a href="#__codelineno-2-37">37</a></span>
 <span class="normal"><a href="#__codelineno-2-38">38</a></span>
 <span class="normal"><a href="#__codelineno-2-39">39</a></span>
-<span class="normal"><a href="#__codelineno-2-40">40</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>knowledge/
+<span class="normal"><a href="#__codelineno-2-40">40</a></span>
+<span class="normal"><a href="#__codelineno-2-41">41</a></span>
+<span class="normal"><a href="#__codelineno-2-42">42</a></span>
+<span class="normal"><a href="#__codelineno-2-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>knowledge/
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a>├── knowledge.go          # 核心接口定义和主要实现
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a>├── source/               # 文档源管理
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a>│   ├── source.go        # Source 接口定义
@@ -2754,15 +2781,18 @@
 </span><span id="__span-2-29"><a id="__codelineno-2-29" name="__codelineno-2-29"></a>│   ├── transform.go     # Transformer 接口定义
 </span><span id="__span-2-30"><a id="__codelineno-2-30" name="__codelineno-2-30"></a>│   ├── charfilter.go    # 字符过滤器（移除指定字符）
 </span><span id="__span-2-31"><a id="__codelineno-2-31" name="__codelineno-2-31"></a>│   └── chardedup.go     # 字符去重器（合并连续重复字符）
-</span><span id="__span-2-32"><a id="__codelineno-2-32" name="__codelineno-2-32"></a>├── document/             # 文档处理
-</span><span id="__span-2-33"><a id="__codelineno-2-33" name="__codelineno-2-33"></a>│   ├── document.go      # Document 结构定义
-</span><span id="__span-2-34"><a id="__codelineno-2-34" name="__codelineno-2-34"></a>│   └── reader/          # 文档读取器（支持 txt/md/csv/json/docx/pdf 等格式）
-</span><span id="__span-2-35"><a id="__codelineno-2-35" name="__codelineno-2-35"></a>├── query/                # 查询增强器
-</span><span id="__span-2-36"><a id="__codelineno-2-36" name="__codelineno-2-36"></a>│   ├── query.go         # QueryEnhancer 接口定义
-</span><span id="__span-2-37"><a id="__codelineno-2-37" name="__codelineno-2-37"></a>│   └── passthrough.go   # 默认透传增强器
-</span><span id="__span-2-38"><a id="__codelineno-2-38" name="__codelineno-2-38"></a>└── ocr/                  # OCR 文字识别
-</span><span id="__span-2-39"><a id="__codelineno-2-39" name="__codelineno-2-39"></a>    ├── ocr.go           # Extractor 接口定义
-</span><span id="__span-2-40"><a id="__codelineno-2-40" name="__codelineno-2-40"></a>    └── tesseract/       # Tesseract OCR 实现（独立 go.mod）
+</span><span id="__span-2-32"><a id="__codelineno-2-32" name="__codelineno-2-32"></a>├── extractor/            # 内容提取器（将复杂格式先转换为 markdown/text）
+</span><span id="__span-2-33"><a id="__codelineno-2-33" name="__codelineno-2-33"></a>│   ├── extractor.go     # Extractor 接口定义
+</span><span id="__span-2-34"><a id="__codelineno-2-34" name="__codelineno-2-34"></a>│   └── docling/         # Docling 提取器实现
+</span><span id="__span-2-35"><a id="__codelineno-2-35" name="__codelineno-2-35"></a>├── document/             # 文档处理
+</span><span id="__span-2-36"><a id="__codelineno-2-36" name="__codelineno-2-36"></a>│   ├── document.go      # Document 结构定义
+</span><span id="__span-2-37"><a id="__codelineno-2-37" name="__codelineno-2-37"></a>│   └── reader/          # 文档读取器（支持 txt/md/csv/json/docx/pdf 等格式）
+</span><span id="__span-2-38"><a id="__codelineno-2-38" name="__codelineno-2-38"></a>├── query/                # 查询增强器
+</span><span id="__span-2-39"><a id="__codelineno-2-39" name="__codelineno-2-39"></a>│   ├── query.go         # QueryEnhancer 接口定义
+</span><span id="__span-2-40"><a id="__codelineno-2-40" name="__codelineno-2-40"></a>│   └── passthrough.go   # 默认透传增强器
+</span><span id="__span-2-41"><a id="__codelineno-2-41" name="__codelineno-2-41"></a>└── ocr/                  # OCR 文字识别
+</span><span id="__span-2-42"><a id="__codelineno-2-42" name="__codelineno-2-42"></a>    ├── ocr.go           # Extractor 接口定义
+</span><span id="__span-2-43"><a id="__codelineno-2-43" name="__codelineno-2-43"></a>    └── tesseract/       # Tesseract OCR 实现（独立 go.mod）
 </span></code></pre></div></td></tr></table></div>
 <h2 id="agent_1">与 Agent 集成</h2>
 <p>Knowledge 系统提供了搜索工具，可以将知识库能力集成到 Agent 中。</p>
@@ -3166,6 +3196,7 @@
 <li><a href="embedder/">Embedder</a> - 文本向量化模型配置</li>
 <li><a href="reranker/">Reranker</a> - 检索结果精排</li>
 <li><a href="source/">文档源</a> - 文件、目录、URL 等知识来源配置</li>
+<li><a href="extractor/">Extractor 内容提取</a> - 复杂文档和网页转 Markdown / 文本</li>
 <li><a href="ocr/">OCR 图片文字识别</a> - 配置 Tesseract OCR 提取文本</li>
 <li><a href="filter/">过滤器</a> - 基础过滤器和智能过滤器</li>
 <li><a href="management/">知识库管理</a> - 动态源管理和状态监控</li>
@@ -3193,7 +3224,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月20日 09:53:34 UTC">2026-03-20 09:53:34</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月10日 07:58:56 UTC">2026-04-10 07:58:56</span>
   </span>
 
     
