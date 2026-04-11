@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -610,14 +611,16 @@ func buildSkillRunTool(options *Options) *toolskill.RunTool {
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
 
-	ctx, span := trace.Tracer.Start(
-		ctx,
-		fmt.Sprintf(
-			"%s %s",
-			itelemetry.OperationInvokeAgent,
-			a.name,
-		),
-	)
+	// Check if the parent context already carries an invoke_agent span
+	// (created by NewAgentNodeFunc). If so, enrich the existing span
+	// instead of creating a redundant child span that ends asynchronously
+	// and may be lost during batch flushes, causing phantom parent IDs
+	// in Langfuse and broken DAG visualizations.
+	span, ownsSpan := resolveOrCreateInvokeAgentSpan(ctx, a.name)
+	if ownsSpan {
+		ctx = sdktrace.ContextWithSpan(ctx, span)
+	}
+
 	effectiveGenConfig := a.genConfig
 	if invocation.RunOptions.Stream != nil {
 		effectiveGenConfig.Stream = *invocation.RunOptions.Stream
@@ -644,17 +647,48 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 		// Check if this is a custom response error (early return)
 		var customErr *haveCustomResponseError
 		if errors.As(err, &customErr) {
-			span.End()
+			if ownsSpan {
+				span.End()
+			}
 			return customErr.EventChan, nil
 		}
 		// Handle actual errors
 		span.SetStatus(codes.Error, err.Error())
 		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
-		span.End()
+		if ownsSpan {
+			span.End()
+		}
 		return nil, err
 	}
 
-	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker), nil
+	return a.wrapEventChannelWithTelemetry(ctx, invocation, flowEventChan, span, tracker, ownsSpan), nil
+}
+
+// resolveOrCreateInvokeAgentSpan checks if the parent context already has an
+// invoke_agent span (e.g. from NewAgentNodeFunc in graph execution). If so,
+// returns it with ownsSpan=false so the caller does not end it. When the parent
+// span is absent or has a different operation, a new child span is created and
+// ownsSpan=true is returned.
+func resolveOrCreateInvokeAgentSpan(ctx context.Context, agentName string) (sdktrace.Span, bool) {
+	parentSpan := sdktrace.SpanFromContext(ctx)
+	if parentSpan != nil && parentSpan.SpanContext().IsValid() && parentSpan.IsRecording() {
+		// Use the instrumentation span interface to access the span name.
+		// The OTel SDK's concrete span type implements an unexported Name()
+		// method, but we can check via the stringer or attribute pattern.
+		// A simpler, reliable approach: check if the span was started with
+		// the invoke_agent prefix by inspecting the span's string representation.
+		if namer, ok := parentSpan.(interface{ Name() string }); ok {
+			if strings.HasPrefix(namer.Name(), itelemetry.OperationInvokeAgent+" ") {
+				return parentSpan, false
+			}
+		}
+	}
+	// No suitable parent span — create a new one.
+	_, span := trace.Tracer.Start(
+		ctx,
+		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName),
+	)
+	return span, true
 }
 
 // executeAgentFlow executes the agent flow with before agent callbacks.
@@ -748,6 +782,7 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 	originalChan <-chan *event.Event,
 	span sdktrace.Span,
 	tracker *itelemetry.InvokeAgentTracker,
+	ownsSpan bool,
 ) <-chan *event.Event {
 	// Create a new channel with the same capacity as the original channel
 	wrappedChan := make(chan *event.Event, cap(originalChan))
@@ -763,7 +798,9 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 			}
 			tracker.SetResponseErrorType(responseErrorType)
 			tracker.RecordMetrics()()
-			span.End()
+			if ownsSpan {
+				span.End()
+			}
 			close(wrappedChan)
 		}()
 
