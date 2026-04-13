@@ -80,8 +80,8 @@ func StageConversationFiles(
 	}
 
 	files := filesFromSession(inv.Session)
-	if len(files) == 0 {
-		files = filesFromMessage(inv.Message)
+	if msgFiles := filesFromMessage(inv.Message); len(msgFiles) > 0 {
+		files = append(files, msgFiles...)
 	}
 	if len(files) == 0 {
 		return nil, nil
@@ -281,8 +281,9 @@ func stageConversationFile(
 	if rawName == "" {
 		rawName = fmt.Sprintf(inputNameFmt, idx+1)
 	}
+	name := SanitizeFileName(rawName)
 
-	key, hasKey := fastKey(f)
+	key, hasKey := reuseKey(f, name)
 	if hasKey {
 		if to, ok := existingByKey[key]; ok {
 			return &StagedInput{
@@ -297,7 +298,6 @@ func stageConversationFile(
 		return nil, warn
 	}
 
-	name := SanitizeFileName(rawName)
 	name = UniqueFileName(usedNames, existingTo, name)
 	to := path.Join(codeexecutor.DirWork, "inputs", name)
 	*puts = append(*puts, codeexecutor.PutFile{
@@ -340,6 +340,15 @@ func fastKey(f model.File) (string, bool) {
 	}
 	sum := sha256.Sum256(f.Data)
 	return keySHA256Prefix + hex.EncodeToString(sum[:]), true
+}
+
+func reuseKey(f model.File, sanitizedName string) (string, bool) {
+	key, ok := fastKey(f)
+	if !ok {
+		return "", false
+	}
+	name := strings.ToLower(SanitizeFileName(sanitizedName))
+	return key + "/name/" + name, true
 }
 
 func filesFromSession(sess *session.Session) []model.File {

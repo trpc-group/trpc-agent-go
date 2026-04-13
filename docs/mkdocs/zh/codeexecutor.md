@@ -123,11 +123,11 @@ agent := llmagent.New(
 
 ## 用户上传的文件会出现在哪里
 
-如果用户消息里带了文件，执行前框架会把这些文件自动放进：
+在支持会话文件自动 stage 的执行路径里，框架会在执行前把这些文件物化到：
 
-- `work/inputs/<文件名>`
+- `work/inputs/` 目录下
 
-这个步骤在执行前自动完成，不需要再单独调用额外工具来预置文件。
+实际文件名可能经过清洗或去重，不保证逐字保留原始文件名。
 
 常见的传入方式有两种。
 
@@ -155,7 +155,7 @@ msg := model.NewUserMessage("请处理这个文件")
 msg.AddFileIDWithName("artifact://uploads/report.pdf@1", "report.pdf")
 ```
 
-执行前，框架会解析这个引用，并把文件写到 `work/inputs/report.pdf`。
+执行前，框架会解析这个引用，并把文件写到 `work/inputs/` 下。
 
 ## 示例：先上传 artifact，再交给执行环境
 

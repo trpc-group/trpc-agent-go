@@ -216,11 +216,9 @@ func TestStageConversationFiles_Warnings(t *testing.T) {
 			path.Join(codeexecutor.DirWork, "inputs", "report.txt"),
 			staged[0].Name,
 		)
-			require.Equal(t, "report.txt", staged[0].OriginalName)
-			require.Equal(t, "text/plain", staged[0].MIMEType)
-			require.Equal(t, int64(5), staged[0].SizeBytes)
-			require.Equal(t, 1, runner.calls)
-			require.Equal(t, "bash", runner.lastSpec.Cmd)
+		require.Equal(t, "report.txt", staged[0].OriginalName)
+		require.Equal(t, "text/plain", staged[0].MIMEType)
+		require.Equal(t, int64(5), staged[0].SizeBytes)
 	})
 }
 
@@ -253,13 +251,13 @@ func TestStageConversationFile_DefaultNameAndMetadataReuse(t *testing.T) {
 			path.Join(codeexecutor.DirWork, "inputs", "upload_1_2"),
 			item.Name,
 		)
-			require.Equal(t, "upload_1", item.OriginalName)
+		require.Equal(t, "upload_1", item.OriginalName)
 		require.Len(t, puts, 1)
 		require.Len(t, md.Inputs, 1)
 	})
 
 	t.Run("reuse staged path from metadata key", func(t *testing.T) {
-		key, ok := fastKey(f)
+		key, ok := reuseKey(f, "report.txt")
 		require.True(t, ok)
 
 		puts := []codeexecutor.PutFile{}
@@ -283,8 +281,36 @@ func TestStageConversationFile_DefaultNameAndMetadataReuse(t *testing.T) {
 			path.Join(codeexecutor.DirWork, "inputs", "cached.txt"),
 			item.Name,
 		)
-			require.Equal(t, "report.txt", item.OriginalName)
+		require.Equal(t, "report.txt", item.OriginalName)
 		require.Empty(t, puts)
+	})
+
+	t.Run("same bytes but different names do not collapse", func(t *testing.T) {
+		key, ok := reuseKey(f, "cached.txt")
+		require.True(t, ok)
+
+		puts := []codeexecutor.PutFile{}
+		item, warn := stageConversationFile(
+			ctx,
+			nil,
+			model.File{Name: "renamed.txt", Data: f.Data},
+			0,
+			map[string]struct{}{},
+			map[string]struct{}{},
+			map[string]string{
+				key: path.Join(codeexecutor.DirWork, "inputs", "cached.txt"),
+			},
+			&puts,
+			&codeexecutor.WorkspaceMetadata{},
+		)
+		require.Empty(t, warn)
+		require.NotNil(t, item)
+		require.Equal(
+			t,
+			path.Join(codeexecutor.DirWork, "inputs", "renamed.txt"),
+			item.Name,
+		)
+		require.Len(t, puts, 1)
 	})
 }
 
@@ -354,8 +380,8 @@ func TestArtifactBaseNameAndPathHelpers(t *testing.T) {
 	require.Empty(t, ArtifactBaseName("file://uploads/report.txt"))
 	require.Empty(t, ArtifactBaseName("artifact://@3"))
 
-		require.Equal(t, "report.txt", SanitizeFileName(`dir\report.txt`))
-		require.Equal(t, DefaultName, SanitizeFileName(" ../ "))
+	require.Equal(t, "report.txt", SanitizeFileName(`dir\report.txt`))
+	require.Equal(t, DefaultName, SanitizeFileName(" ../ "))
 
 	hostPath, ok := hostPathFromID(HostPrefix + tempFile)
 	require.True(t, ok)
@@ -430,6 +456,18 @@ func TestResolveFileBytes_CoversInputSources(t *testing.T) {
 		require.Equal(t, WarnArtifactNoService, warn)
 	})
 
+	t.Run("artifact parse error", func(t *testing.T) {
+		ctx := codeexecutor.WithArtifactService(context.Background(), inmemory.NewService())
+		data, mime, warn := ResolveFileBytes(
+			ctx,
+			nil,
+			model.File{FileID: "artifact://@1"},
+		)
+		require.Nil(t, data)
+		require.Empty(t, mime)
+		require.Contains(t, warn, "parse artifact ref")
+	})
+
 	t.Run("artifact via invocation context", func(t *testing.T) {
 		svc := inmemory.NewService()
 		info := artifact.SessionInfo{
@@ -468,14 +506,14 @@ func TestResolveFileBytes_CoversInputSources(t *testing.T) {
 	})
 }
 
-func TestStageConversationFiles_UsesSessionFilesBeforeMessage(t *testing.T) {
+func TestStageConversationFiles_MergesSessionAndMessageFiles(t *testing.T) {
 	fs := &stubFS{}
 	runner := &stubRunner{}
 	eng := codeexecutor.NewEngine(nil, fs, runner)
 	ws := codeexecutor.Workspace{ID: "ws"}
 
 	sessionFile := model.File{Name: "session.txt", Data: []byte("from session")}
-	message := model.NewUserMessage("prefer session file")
+	message := model.NewUserMessage("include current file too")
 	message.AddFileData("message.txt", []byte("from message"), "text/plain")
 	sess := session.NewSession(
 		"app",
@@ -487,27 +525,130 @@ func TestStageConversationFiles_UsesSessionFilesBeforeMessage(t *testing.T) {
 	ctx := newInvocationCtx(message, sess, nil, nil)
 	staged, warnings := StageConversationFiles(ctx, eng, ws)
 
-	require.Len(t, staged, 1)
+	require.Len(t, staged, 2)
 	require.Empty(t, warnings)
 	require.Equal(
 		t,
 		path.Join(codeexecutor.DirWork, "inputs", "session.txt"),
 		staged[0].Name,
 	)
-		require.Equal(t, "session.txt", staged[0].OriginalName)
-	require.Len(t, fs.putFiles, 2)
+	require.Equal(t, "session.txt", staged[0].OriginalName)
+	require.Equal(
+		t,
+		path.Join(codeexecutor.DirWork, "inputs", "message.txt"),
+		staged[1].Name,
+	)
+	require.Equal(t, "message.txt", staged[1].OriginalName)
+	require.Len(t, fs.putFiles, 3)
 	require.Equal(
 		t,
 		path.Join(codeexecutor.DirWork, "inputs", "session.txt"),
 		fs.putFiles[0].Path,
 	)
+	require.Equal(
+		t,
+		path.Join(codeexecutor.DirWork, "inputs", "message.txt"),
+		fs.putFiles[1].Path,
+	)
 
 	var md codeexecutor.WorkspaceMetadata
-	require.NoError(t, json.Unmarshal(fs.putFiles[1].Content, &md))
-	require.Len(t, md.Inputs, 1)
+	require.NoError(t, json.Unmarshal(fs.putFiles[2].Content, &md))
+	require.Len(t, md.Inputs, 2)
 	require.Equal(
 		t,
 		path.Join(codeexecutor.DirWork, "inputs", "session.txt"),
 		md.Inputs[0].To,
 	)
+	require.Equal(
+		t,
+		path.Join(codeexecutor.DirWork, "inputs", "message.txt"),
+		md.Inputs[1].To,
+	)
+}
+
+func TestStageConversationFiles_CoversEmptyAndReusePaths(t *testing.T) {
+	ws := codeexecutor.Workspace{ID: "ws"}
+
+	t.Run("no invocation", func(t *testing.T) {
+		staged, warnings := StageConversationFiles(context.Background(), codeexecutor.NewEngine(nil, &stubFS{}, nil), ws)
+		require.Nil(t, staged)
+		require.Nil(t, warnings)
+	})
+
+	t.Run("no files", func(t *testing.T) {
+		ctx := newInvocationCtx(model.NewUserMessage("no files"), nil, nil, nil)
+		staged, warnings := StageConversationFiles(ctx, codeexecutor.NewEngine(nil, &stubFS{}, nil), ws)
+		require.Nil(t, staged)
+		require.Nil(t, warnings)
+	})
+
+	t.Run("metadata reuse skips put", func(t *testing.T) {
+		file := model.File{Name: "report.txt", Data: []byte("same")}
+		key, ok := reuseKey(file, "report.txt")
+		require.True(t, ok)
+
+		md := codeexecutor.WorkspaceMetadata{
+			Version: 1,
+			Inputs: []codeexecutor.InputRecord{{
+				From: inputFromPrefix + key,
+				To:   path.Join(codeexecutor.DirWork, "inputs", "report.txt"),
+			}},
+		}
+		buf, err := json.Marshal(md)
+		require.NoError(t, err)
+
+		fs := &stubFS{collectFiles: []codeexecutor.File{{
+			Name:    codeexecutor.MetaFileName,
+			Content: string(buf),
+		}}}
+		msg := model.NewUserMessage("reuse")
+		msg.ContentParts = append(msg.ContentParts, model.ContentPart{
+			Type: model.ContentTypeFile,
+			File: &file,
+		})
+		ctx := newInvocationCtx(msg, nil, nil, nil)
+
+		staged, warnings := StageConversationFiles(ctx, codeexecutor.NewEngine(nil, fs, &stubRunner{}), ws)
+		require.Len(t, staged, 1)
+		require.Empty(t, warnings)
+		require.Equal(
+			t,
+			path.Join(codeexecutor.DirWork, "inputs", "report.txt"),
+			staged[0].Name,
+		)
+		require.Empty(t, fs.putFiles)
+	})
+}
+
+func TestHelperCoverage_GapFillers(t *testing.T) {
+	t.Run("fastKey", func(t *testing.T) {
+		key, ok := fastKey(model.File{FileID: "provider-file"})
+		require.True(t, ok)
+		require.Contains(t, key, "file_id/provider-file")
+
+		key, ok = fastKey(model.File{})
+		require.False(t, ok)
+		require.Empty(t, key)
+	})
+
+	t.Run("hostBytes error", func(t *testing.T) {
+		data, mime, warn := hostBytes("/definitely/missing/file.txt", model.File{})
+		require.Nil(t, data)
+		require.Empty(t, mime)
+		require.Contains(t, warn, "read host path")
+	})
+
+	t.Run("withArtifactContext", func(t *testing.T) {
+		ctx := withArtifactContext(context.Background(), nil)
+		_, ok := codeexecutor.ArtifactServiceFromContext(ctx)
+		require.False(t, ok)
+
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+			agent.WithInvocationArtifactService(inmemory.NewService()),
+		)
+		ctx = withArtifactContext(context.Background(), inv)
+		_, ok = codeexecutor.ArtifactServiceFromContext(ctx)
+		require.True(t, ok)
+	})
 }

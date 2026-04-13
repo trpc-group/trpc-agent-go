@@ -125,13 +125,13 @@ Common paths:
 
 ## Where Uploaded Files Appear
 
-If a user message contains files, the framework materializes them before
-execution into:
+On execution paths that support conversation-file auto-staging, the framework
+materializes these files before execution into:
 
-- `work/inputs/<filename>`
+- the `work/inputs/` directory
 
-This happens automatically before execution. No extra tool call is required to
-pre-stage these files.
+The actual filename may be sanitized or de-duplicated, so the original basename
+is not guaranteed verbatim.
 
 There are two common ways to provide such files.
 
@@ -159,8 +159,8 @@ msg := model.NewUserMessage("Please process this file.")
 msg.AddFileIDWithName("artifact://uploads/report.pdf@1", "report.pdf")
 ```
 
-Before execution, the framework resolves that reference and writes the file to
-`work/inputs/report.pdf`.
+Before execution, the framework resolves that reference and writes the file
+under `work/inputs/`.
 
 ## Example: Upload to Artifact First
 
