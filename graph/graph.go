@@ -163,6 +163,8 @@ type Node struct {
 	modelCallbacks *model.Callbacks
 	// just for tool node.
 	toolCallbacks *tool.Callbacks
+	// toolCallRetryPolicy configures single tool-call retry for tools nodes.
+	toolCallRetryPolicy *tool.RetryPolicy
 
 	// enableParallelTools toggles parallel execution for Tools nodes.
 	// When true, multiple tool calls in a single assistant response are executed concurrently.

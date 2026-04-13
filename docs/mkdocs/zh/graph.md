@@ -1594,6 +1594,31 @@ stateGraph.AddToolsNode(
 )
 ```
 
+为 ToolsNode 配置 Tool 调用重试：
+
+```go
+policy := &tool.RetryPolicy{
+    MaxAttempts:     2,
+    InitialInterval: 200 * time.Millisecond,
+    BackoffFactor:   2.0,
+    MaxInterval:     time.Second,
+}
+
+stateGraph.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithToolCallRetryPolicy(policy),
+)
+```
+
+说明：
+
+- 默认关闭；未配置时 ToolsNode 行为不变。
+- 当前仅对 `CallableTool` 生效；`StreamableTool` 暂不支持。
+- 重试只作用于当前这次工具调用，不会重跑整个 ToolsNode。
+- 默认判定只重试常见瞬时 raw error；如果需要覆盖结果级失败，可通过 `tool.RetryPolicy.RetryOn` 自定义。
+- 可运行示例见 [examples/graph/tool_call_retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/tool_call_retry)。
+
 **工具调用配对机制与二次进入 LLM：**
 
 - 从 `messages` 尾部向前扫描最近的 `assistant(tool_calls)`；遇到 `user`

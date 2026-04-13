@@ -232,3 +232,14 @@ func TestMCPToolResult_GetCallbackResult(t *testing.T) {
 		t.Fatalf("expected %d content item(s), got %d", len(expected), len(callbackResult))
 	}
 }
+
+func TestMCPToolResult_RetryResultError(t *testing.T) {
+	result := &mcpToolResult{IsError: true}
+	if !result.RetryResultError() {
+		t.Fatal("expected RetryResultError to report true")
+	}
+	result.IsError = false
+	if result.RetryResultError() {
+		t.Fatal("expected RetryResultError to report false")
+	}
+}
