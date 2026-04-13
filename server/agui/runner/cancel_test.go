@@ -169,6 +169,47 @@ func TestCancelIgnoresRunID(t *testing.T) {
 	collectEvents(t, events)
 }
 
+func TestCancelUsesResolvedAppName(t *testing.T) {
+	ctxCh := make(chan context.Context, 1)
+	underlying := &waitCancelRunner{ctxCh: ctxCh}
+	r := New(
+		underlying,
+		WithAppName("static-app"),
+		WithAppNameResolver(forwardedPropsAppNameResolver),
+	).(*runner)
+	input := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"appName": "dynamic-app"},
+		Messages:       []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	events, err := r.Run(context.Background(), input)
+	assert.NoError(t, err)
+	select {
+	case evt := <-events:
+		assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evt)
+	case <-time.After(3 * time.Second):
+		assert.FailNow(t, "timeout waiting for RUN_STARTED")
+	}
+	runCtx := <-ctxCh
+	assert.NotNil(t, runCtx)
+	err = r.Cancel(context.Background(), &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "other-run",
+		ForwardedProps: map[string]any{"appName": "dynamic-app"},
+	})
+	assert.NoError(t, err)
+	assert.Eventually(t, func() bool {
+		select {
+		case <-runCtx.Done():
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 10*time.Millisecond)
+	collectEvents(t, events)
+}
+
 func TestCancelClosesReasoningStream(t *testing.T) {
 	r := New(
 		&reasoningWaitRunner{},
@@ -482,4 +523,16 @@ func TestCancelUserIDResolverError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve user ID")
+}
+
+func TestCancelAppNameResolverError(t *testing.T) {
+	r := &runner{
+		runner: &fakeRunner{},
+		appNameResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
+			return "", errors.New("boom")
+		},
+		userIDResolver: NewOptions().UserIDResolver,
+	}
+	err := r.Cancel(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	assert.ErrorContains(t, err, "resolve app name")
 }

@@ -206,6 +206,13 @@ func WithAppName(n string) Option {
 	}
 }
 
+// WithAppNameResolver sets the app name resolver.
+func WithAppNameResolver(r aguirunner.AppNameResolver) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithAppNameResolver(r))
+	}
+}
+
 // WithSessionService sets the session service.
 func WithSessionService(service session.Service) Option {
 	return func(o *options) {
