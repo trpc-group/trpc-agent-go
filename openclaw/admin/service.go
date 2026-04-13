@@ -1113,8 +1113,27 @@ func resolveSelectedChat(
 	if err != nil {
 		return selected, strings.TrimSpace(err.Error())
 	}
+	if err := validateChatDetail(*selected, detail); err != nil {
+		return selected, strings.TrimSpace(err.Error())
+	}
 	merged := mergeChatView(*selected, detail)
 	return &merged, ""
+}
+
+func validateChatDetail(base ChatView, detail ChatView) error {
+	baseSessionID := strings.TrimSpace(base.BaseSessionID)
+	detailSessionID := strings.TrimSpace(detail.BaseSessionID)
+	if detailSessionID == "" || baseSessionID == "" {
+		return nil
+	}
+	if detailSessionID == baseSessionID {
+		return nil
+	}
+	return fmt.Errorf(
+		"chat detail mismatch: expected %q, got %q",
+		baseSessionID,
+		detailSessionID,
+	)
 }
 
 func mergeChatView(
@@ -1122,24 +1141,6 @@ func mergeChatView(
 	detail ChatView,
 ) ChatView {
 	merged := base
-	if value := strings.TrimSpace(detail.BaseSessionID); value != "" {
-		merged.BaseSessionID = value
-	}
-	if value := strings.TrimSpace(detail.DisplayLabel); value != "" {
-		merged.DisplayLabel = value
-	}
-	if value := strings.TrimSpace(detail.Kind); value != "" {
-		merged.Kind = value
-	}
-	if value := strings.TrimSpace(detail.KindLabel); value != "" {
-		merged.KindLabel = value
-	}
-	if value := strings.TrimSpace(detail.CurrentSessionID); value != "" {
-		merged.CurrentSessionID = value
-	}
-	if value := strings.TrimSpace(detail.RecallSessionID); value != "" {
-		merged.RecallSessionID = value
-	}
 	if !detail.LastActivity.IsZero() {
 		merged.LastActivity = detail.LastActivity
 	}

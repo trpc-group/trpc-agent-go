@@ -126,6 +126,7 @@ type stubChatsProvider struct {
 	err    error
 
 	detail       ChatView
+	detailRaw    bool
 	detailErr    error
 	detailChatID string
 	detailCount  int
@@ -289,7 +290,11 @@ func (p *stubChatsProvider) ChatDetail(
 	if p.detailErr != nil {
 		return ChatView{}, p.detailErr
 	}
-	if strings.TrimSpace(p.detail.BaseSessionID) != "" {
+	if p.detailRaw {
+		return p.detail, nil
+	}
+	if strings.TrimSpace(p.detail.BaseSessionID) ==
+		strings.TrimSpace(baseSessionID) {
 		return p.detail, nil
 	}
 	for _, chat := range p.status.Chats {
@@ -2132,11 +2137,11 @@ func TestChatsHelpers(t *testing.T) {
 	chats := &stubChatsProvider{
 		status: status,
 		detail: ChatView{
-			BaseSessionID: "wecom:dm:bob",
 			Transcript: []ChatTranscriptView{{
 				SessionID: "wecom:dm:bob:2",
 			}},
 		},
+		detailRaw: true,
 	}
 	selected, detailErr := resolveSelectedChat(
 		status,
@@ -2149,6 +2154,28 @@ func TestChatsHelpers(t *testing.T) {
 	require.Equal(t, "Custom source", selected.NameSource)
 	require.True(t, selected.OverridesGlobal)
 	require.Equal(t, "wecom:dm:bob", chats.detailChatID)
+
+	chats.detail = ChatView{
+		BaseSessionID: "wrong",
+		Transcript: []ChatTranscriptView{{
+			SessionID: "wrong:2",
+		}},
+	}
+	chats.detailRaw = true
+	selected, detailErr = resolveSelectedChat(
+		status,
+		chats,
+		"wecom:dm:bob",
+	)
+	require.NotNil(t, selected)
+	require.Equal(
+		t,
+		"chat detail mismatch: expected \"wecom:dm:bob\", got \"wrong\"",
+		detailErr,
+	)
+	require.Nil(t, selected.Transcript)
+	require.Equal(t, "wecom:dm:bob", selected.BaseSessionID)
+	require.Equal(t, "Custom source", selected.NameSource)
 
 	selected, detailErr = resolveSelectedChat(
 		status,
