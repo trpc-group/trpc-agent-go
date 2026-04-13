@@ -16,7 +16,11 @@ import (
 	"time"
 )
 
-const routeChatsJSON = "/api/chats"
+const (
+	routeChatsJSON = "/api/chats"
+
+	knownUserSeparator = ", "
+)
 
 type ChatsProvider interface {
 	ChatsStatus() (ChatsStatus, error)
@@ -52,7 +56,13 @@ type ChatView struct {
 	PersonaPinned         bool              `json:"persona_pinned"`
 	WorkspacePath         string            `json:"workspace_path,omitempty"`
 	KnownUserIDs          []string          `json:"known_user_ids,omitempty"`
+	KnownUsers            []KnownUserView   `json:"known_users,omitempty"`
 	History               []ChatSessionView `json:"history,omitempty"`
+}
+
+type KnownUserView struct {
+	UserID string `json:"user_id,omitempty"`
+	Label  string `json:"label,omitempty"`
 }
 
 type ChatSessionView struct {
@@ -126,10 +136,36 @@ func chatDisplayLabel(chat ChatView) string {
 }
 
 func chatKnownUsers(chat ChatView) string {
+	if len(chat.KnownUsers) != 0 {
+		parts := make([]string, 0, len(chat.KnownUsers))
+		for _, user := range chat.KnownUsers {
+			label := chatKnownUserLabel(user)
+			if label == "" {
+				continue
+			}
+			parts = append(parts, label)
+		}
+		if len(parts) != 0 {
+			return strings.Join(parts, knownUserSeparator)
+		}
+	}
 	if len(chat.KnownUserIDs) == 0 {
 		return "-"
 	}
-	return strings.Join(chat.KnownUserIDs, ", ")
+	return strings.Join(chat.KnownUserIDs, knownUserSeparator)
+}
+
+func chatKnownUserLabel(user KnownUserView) string {
+	userID := strings.TrimSpace(user.UserID)
+	label := strings.TrimSpace(user.Label)
+	switch {
+	case label != "" && userID != "" && label != userID:
+		return label + " (" + userID + ")"
+	case label != "":
+		return label
+	default:
+		return userID
+	}
 }
 
 func chatNameSourceLabel(chat ChatView) string {

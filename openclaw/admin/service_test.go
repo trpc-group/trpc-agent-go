@@ -1780,7 +1780,10 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 				OverridesGlobal:       true,
 				PersonaLabel:          "Creative",
 				WorkspacePath:         "/repo",
-				KnownUserIDs:          []string{"alice"},
+				KnownUsers: []KnownUserView{{
+					UserID: "alice",
+					Label:  "Alice Chen",
+				}},
 				History: []ChatSessionView{{
 					SessionID:    "wecom:dm:alice:171",
 					LastActivity: time.Unix(1700000000, 0),
@@ -1817,6 +1820,7 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 	require.Contains(t, body, "Recent Sessions")
 	require.Contains(t, body, "<code>wecom:dm:alice</code>")
 	require.Contains(t, body, "href=\"identity#identity-global\"")
+	require.Contains(t, body, "Alice Chen (alice)")
 
 	req = httptest.NewRequest(http.MethodGet, routeChatsJSON, nil)
 	rec = httptest.NewRecorder()
@@ -1932,6 +1936,31 @@ func TestChatsHelpers(t *testing.T) {
 	)
 	require.Equal(t, "-", chatKnownUsers(ChatView{}))
 	require.Equal(t, "alice, bob", chatKnownUsers(status.Chats[1]))
+	require.Equal(
+		t,
+		"Alice (T00010001), Bob (T00010002)",
+		chatKnownUsers(ChatView{
+			KnownUsers: []KnownUserView{
+				{
+					UserID: "T00010001",
+					Label:  "Alice",
+				},
+				{
+					UserID: "T00010002",
+					Label:  "Bob",
+				},
+			},
+		}),
+	)
+	require.Equal(
+		t,
+		"T00010003",
+		chatKnownUsers(ChatView{
+			KnownUsers: []KnownUserView{{
+				UserID: "T00010003",
+			}},
+		}),
+	)
 	require.Equal(
 		t,
 		"Current chat name",
