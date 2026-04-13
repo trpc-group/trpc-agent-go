@@ -1718,6 +1718,47 @@ func TestService_IdentityPageShowsChatsError(t *testing.T) {
 	)
 }
 
+func TestService_IdentityPageClearAction(t *testing.T) {
+	t.Parallel()
+
+	identity := &stubIdentityProvider{
+		status: IdentityStatus{
+			Enabled:        true,
+			ConfiguredName: "Claw",
+			EffectiveName:  "Claw",
+			RuntimeProduct: "trpc-claw",
+			SourcePath:     "/tmp/IDENTITY.md",
+		},
+	}
+	svc := New(Config{Identity: identity})
+
+	values := url.Values{
+		formAssistantName: {""},
+		formReturnPath:    {routeIdentity},
+		formReturnTo:      {"identity-global"},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeIdentitySave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, identity.saveCount)
+	require.Empty(t, identity.saveName)
+	require.Contains(
+		t,
+		rec.Header().Get("Location"),
+		"Cleared+default+name.",
+	)
+}
+
 func TestService_ChatsPageAndJSON(t *testing.T) {
 	t.Parallel()
 
@@ -1787,6 +1828,135 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 		rec.Body.String(),
 		"\"base_session_id\": \"wecom:dm:alice\"",
 	)
+}
+
+func TestService_ChatsPageFallbackStates(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+
+	req := httptest.NewRequest(http.MethodGet, routeChats, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(
+		t,
+		rec.Body.String(),
+		"Chat tracking is not available for this runtime.",
+	)
+
+	chats := &stubChatsProvider{
+		status: ChatsStatus{
+			Enabled: true,
+		},
+	}
+	svc = New(Config{Chats: chats})
+
+	req = httptest.NewRequest(
+		http.MethodGet,
+		routeChats+"?chat_id=missing",
+		nil,
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(
+		t,
+		rec.Body.String(),
+		"No tracked chats are available yet.",
+	)
+	require.Contains(
+		t,
+		rec.Body.String(),
+		"Choose a tracked chat from the list to inspect its current",
+	)
+
+	req = httptest.NewRequest(http.MethodPost, routeChatsJSON, nil)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestChatsHelpers(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, selectedChatID(nil))
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		routeChats+"?chat_id=%20wecom%3Adm%3Abob%20",
+		nil,
+	)
+	require.Equal(t, "wecom:dm:bob", selectedChatID(req))
+
+	status := ChatsStatus{
+		Chats: []ChatView{
+			{
+				BaseSessionID: "wecom:dm:alice",
+				LastActivity:  time.Unix(1700000000, 0),
+			},
+			{
+				BaseSessionID:         "wecom:group:room-1",
+				DisplayLabel:          "Room 1",
+				ChatAssistantOverride: "林妹妹",
+				OverridesGlobal:       true,
+				LastActivity:          time.Unix(1700000100, 0),
+				KnownUserIDs:          []string{"alice", "bob"},
+			},
+			{
+				BaseSessionID:   "wecom:dm:bob",
+				OverridesGlobal: true,
+				LastActivity:    time.Unix(1700000050, 0),
+				NameSource:      "Custom source",
+			},
+		},
+	}
+
+	selected := selectChatView(status, "")
+	require.NotNil(t, selected)
+	require.Equal(t, "wecom:dm:alice", selected.BaseSessionID)
+
+	selected = selectChatView(status, "wecom:dm:bob")
+	require.NotNil(t, selected)
+	require.Equal(t, "wecom:dm:bob", selected.BaseSessionID)
+
+	require.Nil(t, selectChatView(status, "missing"))
+	require.Nil(t, selectChatView(ChatsStatus{}, ""))
+
+	require.Equal(
+		t,
+		"wecom:dm:alice",
+		chatDisplayLabel(ChatView{BaseSessionID: "wecom:dm:alice"}),
+	)
+	require.Equal(t, "-", chatKnownUsers(ChatView{}))
+	require.Equal(t, "alice, bob", chatKnownUsers(status.Chats[1]))
+	require.Equal(
+		t,
+		"Current chat name",
+		chatNameSourceLabel(ChatView{
+			ChatAssistantOverride: "林妹妹",
+		}),
+	)
+	require.Equal(
+		t,
+		"Custom source",
+		chatNameSourceLabel(status.Chats[2]),
+	)
+	require.Equal(t, "Default name", chatNameSourceLabel(ChatView{}))
+
+	sample := chatOverrideSample(status, 1)
+	require.Len(t, sample, 1)
+	require.Equal(t, "wecom:group:room-1", sample[0].BaseSessionID)
+
+	sample = chatOverrideSample(status, 0)
+	require.Len(t, sample, 2)
+
+	sample = chatOverrideSample(status, 5)
+	require.Len(t, sample, 2)
+
+	require.Equal(t, 2, chatOverrideCount(status.Chats))
 }
 
 func TestService_PersonasPageAndActions(t *testing.T) {

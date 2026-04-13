@@ -269,3 +269,76 @@ func TestNormalizeAdminAssistantName(t *testing.T) {
 	require.Len(t, []rune(got), adminAssistantNameMaxRunes)
 	require.Equal(t, raw[:adminAssistantNameMaxRunes], got)
 }
+
+func TestAdminIdentityHelpers(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, buildAdminChatsProvider(nil))
+	require.Equal(t, appName, defaultAdminRuntimeProduct(" "))
+	require.Equal(
+		t,
+		"",
+		normalizeAdminAssistantName(" 【】 "),
+	)
+
+	name, err := readAdminAssistantName("")
+	require.NoError(t, err)
+	require.Empty(t, name)
+
+	name, err = readAdminAssistantName(
+		filepath.Join(t.TempDir(), "IDENTITY.md"),
+	)
+	require.NoError(t, err)
+	require.Empty(t, name)
+
+	err = writeAdminAssistantName("", "Nora")
+	require.Error(t, err)
+
+	var nilIdentity *adminIdentityProvider
+	status, err := nilIdentity.IdentityStatus()
+	require.NoError(t, err)
+	require.Equal(t, admin.IdentityStatus{}, status)
+	require.Error(t, nilIdentity.SaveAssistantName("Nora"))
+
+	var nilChats *adminChatsProvider
+	chatsStatus, err := nilChats.ChatsStatus()
+	require.NoError(t, err)
+	require.Equal(t, admin.ChatsStatus{}, chatsStatus)
+}
+
+func TestAdminIdentityProvider_FallbackAndErrors(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	identity := buildAdminIdentityProvider(stateDir, "runtime-product")
+
+	status, err := identity.IdentityStatus()
+	require.NoError(t, err)
+	require.Equal(t, "runtime-product", status.EffectiveName)
+	require.Empty(t, status.ConfiguredName)
+	require.Equal(t, adminIdentityFallbackRuntime, status.FallbackSource)
+	require.Equal(
+		t,
+		adminDefaultNameSourceApp,
+		identityDefaultNameSource(status),
+	)
+
+	err = identity.SaveAssistantName("")
+	require.NoError(t, err)
+
+	status, err = identity.IdentityStatus()
+	require.NoError(t, err)
+	require.Equal(t, "runtime-product", status.EffectiveName)
+	require.Empty(t, status.ConfiguredName)
+
+	badIdentity := &adminIdentityProvider{
+		filePath:       stateDir,
+		runtimeProduct: "runtime-product",
+	}
+	_, err = badIdentity.IdentityStatus()
+	require.Error(t, err)
+
+	chats := buildAdminChatsProvider(badIdentity)
+	_, err = chats.ChatsStatus()
+	require.Error(t, err)
+}
