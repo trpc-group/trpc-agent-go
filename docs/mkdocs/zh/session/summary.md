@@ -652,7 +652,7 @@ agent := llmagent.New(
 | 模式 | 注入位置 | Token Tailoring 行为 | 适用场景 |
 | --- | --- | --- | --- |
 | `SessionSummaryInjectionSystem`（默认） | 合并到 system message | 摘要在 preserved head 中，不会被裁剪 | 需要摘要始终存在的场景 |
-| `SessionSummaryInjectionUser` | 作为 user message 插入 few-shot 和 history 之间 | 摘要参与普通轮次裁剪，可被滑动窗口淘汰 | 超长对话的滑动窗口场景 |
+| `SessionSummaryInjectionUser` | 优先合并到第一条 user history/current message；否则在靠近 history 的位置注入 | 摘要参与普通轮次裁剪，可被滑动窗口淘汰 | 超长对话的滑动窗口场景 |
 
 **User 模式的消息结构**：
 
@@ -693,7 +693,8 @@ agent := llmagent.New(
 
 **注意事项**：
 
-- User 模式下，如果 session history 的第一条消息也是 user role，摘要会**自动合并**到该消息中，避免产生连续的 user message（某些模型不接受）
+- User 模式下，processor 会优先把摘要合并到第一条 user history/current message，让摘要贴近当前生效的 user 轮次
+- 如果没有可合并的 user history/current message，但 prompt 前缀最后一条已经是 user message（例如 injected context），则会回退合并到那条 user message，避免额外再插入一条相邻的 user block
 - User 模式使用更中性的默认文案（"Context from previous interactions"），避免以系统指令的语气出现在 user role 中
 - 自定义的 `WithSummaryFormatter` 同样对 user 模式生效
 - 摘要的**生成链路不受影响**——注入模式只影响 prompt assembly 层，不影响 summarizer 本身

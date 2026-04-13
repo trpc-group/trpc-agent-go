@@ -1298,7 +1298,25 @@ func TestPrependSummaryUserMessage(t *testing.T) {
 		require.Contains(t, result[0].Content, "original content")
 	})
 
-	t.Run("req_prefix_ends_with_user_merges_into_prefix", func(t *testing.T) {
+	t.Run("first_history_user_preferred_over_req_prefix_user", func(t *testing.T) {
+		prefix := []model.Message{
+			model.NewSystemMessage("system prompt"),
+			model.NewUserMessage("few-shot user example"),
+		}
+		msgs := []model.Message{
+			model.NewUserMessage("history user"),
+			model.NewAssistantMessage("history assistant"),
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, prefix)
+		// Summary should stay attached to the live history user message.
+		require.Equal(t, "few-shot user example", prefix[len(prefix)-1].Content)
+		require.Len(t, result, 2)
+		require.Contains(t, result[0].Content, "some summary")
+		require.Contains(t, result[0].Content, "history user")
+		require.Equal(t, model.RoleAssistant, result[1].Role)
+	})
+
+	t.Run("req_prefix_ends_with_user_merges_into_prefix_as_fallback", func(t *testing.T) {
 		prefix := []model.Message{
 			model.NewSystemMessage("system prompt"),
 			model.NewUserMessage("few-shot user example"),
@@ -1307,10 +1325,10 @@ func TestPrependSummaryUserMessage(t *testing.T) {
 			model.NewAssistantMessage("history assistant"),
 		}
 		result := p.prependSummaryUserMessage("some summary", msgs, prefix)
-		// Summary should be merged into prefix's last user message.
+		// With no user history/current message to attach to, fall back to the
+		// trailing prefix user message.
 		require.Contains(t, prefix[len(prefix)-1].Content, "some summary")
 		require.Contains(t, prefix[len(prefix)-1].Content, "few-shot user example")
-		// messages should be returned unchanged.
 		require.Equal(t, msgs, result)
 	})
 
@@ -1385,7 +1403,7 @@ func TestWithSessionSummaryInjectionMode(t *testing.T) {
 }
 
 // Test user injection mode with injected context ending in user message.
-func TestProcessRequest_SessionSummary_UserMode_InjectedContextEndsWithUser(t *testing.T) {
+func TestProcessRequest_SessionSummary_UserMode_PrefersCurrentUserOverInjectedContext(t *testing.T) {
 	summaryTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
 	sess := &session.Session{
 		Summaries: map[string]*session.Summary{
@@ -1419,23 +1437,82 @@ func TestProcessRequest_SessionSummary_UserMode_InjectedContextEndsWithUser(t *t
 	)
 	p.ProcessRequest(context.Background(), inv, req, nil)
 
-	// The summary should be merged into the injected context user message
-	// (the trailing user msg in req.Messages before history appended).
+	// The summary should stay attached to the live current user message instead
+	// of being merged into the injected-context prefix user message.
 	// System prompt should NOT contain the summary.
 	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	require.NotContains(t, req.Messages[0].Content, "injected context summary",
 		"system prompt should not contain summary in user injection mode")
 
-	// Find the injected context message and verify summary was merged into it.
+	// Injected-context user message should remain untouched.
+	require.Equal(t, "injected context user msg", req.Messages[1].Content)
+
+	// Find the current user message and verify summary was merged into it.
 	foundMerged := false
 	for _, msg := range req.Messages {
 		if msg.Role == model.RoleUser &&
-			strings.Contains(msg.Content, "injected context user msg") &&
+			strings.Contains(msg.Content, "current request") &&
 			strings.Contains(msg.Content, "injected context summary") {
 			foundMerged = true
 			break
 		}
 	}
 	require.True(t, foundMerged,
-		"summary should be merged into the injected context user message")
+		"summary should be merged into the current user message")
+}
+
+func TestProcessRequest_SessionSummary_UserMode_FallsBackToInjectedContextUser(t *testing.T) {
+	summaryTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"test-agent": {
+				Summary:   "fallback summary",
+				UpdatedAt: summaryTime,
+			},
+		},
+		Events: []event.Event{
+			{
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("history assistant"),
+					}},
+				},
+				Author:    "test-agent",
+				Timestamp: summaryTime.Add(time.Second),
+				FilterKey: "test-agent",
+				Version:   event.CurrentVersion,
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-agent"),
+		agent.WithInvocationMessage(model.NewToolMessage("tool-1", "search", "tool result")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			InjectedContextMessages: []model.Message{
+				model.NewUserMessage("injected context user msg"),
+			},
+		}),
+	)
+	inv.AgentName = "test-agent"
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system prompt"),
+		},
+	}
+	p := NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+		WithSessionSummaryInjectionMode(SessionSummaryInjectionUser),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.NotContains(t, req.Messages[0].Content, "fallback summary")
+
+	// No user history/current message is available, so fallback merges into the
+	// injected-context user message instead of inserting a standalone user block.
+	require.Contains(t, req.Messages[1].Content, "injected context user msg")
+	require.Contains(t, req.Messages[1].Content, "fallback summary")
 }
