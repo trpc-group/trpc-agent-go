@@ -1102,3 +1102,28 @@ server, err := agui.New(
 实际效果如下图所示，完整示例可参考 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report)，前端实现可参考 [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat)。
 
 ![report](../assets/gif/agui/report.gif)
+
+### 流式工具执行结果
+
+当工具在服务端执行，且前端需要持续展示执行中的状态时，可以将事件流分成三层来组织。`TOOL_CALL_START`、`TOOL_CALL_ARGS`、`TOOL_CALL_END` 用于描述工具调用本身，`ACTIVITY_SNAPSHOT`、`ACTIVITY_DELTA` 用于承载执行过程中的进度、阶段或日志，`TOOL_CALL_RESULT` 则保留给最终工具结果。这样前端可以分别渲染执行中的状态和最终结果，消息快照回放时也能继续依赖标准的工具结果语义。
+
+推荐的事件流大致如下：
+
+```text
+RUN_STARTED
+→ TOOL_CALL_START
+→ TOOL_CALL_ARGS
+→ TOOL_CALL_END
+→ ACTIVITY_SNAPSHOT
+→ ACTIVITY_DELTA
+→ ACTIVITY_DELTA
+→ ...
+→ ACTIVITY_DELTA   # completed
+→ TOOL_CALL_RESULT
+→ TEXT_MESSAGE_*
+→ RUN_FINISHED
+```
+
+在实现上，通常可以通过自定义 Translator 包装默认 Translator。默认 Translator 继续负责标准 `TOOL_CALL_*` 与最终 `TOOL_CALL_RESULT` 的翻译，自定义部分只处理工具执行过程中的中间结果。比较稳妥的写法是遍历默认 Translator 返回的 `innerEvents`，逐个判断事件类型，并仅对目标 `ToolCallResultEvent` 做改写。partial 结果可以改写为 `ACTIVITY_SNAPSHOT` 或 `ACTIVITY_DELTA`，final 结果则在原始 `TOOL_CALL_RESULT` 之前插入一条 completed 的 `ACTIVITY_DELTA`。其余事件保持原样透传，这样可以保留文本、Graph 活动和其他工具事件的既有行为。
+
+完整示例可参考 [examples/agui/server/streamtool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/streamtool)。该示例使用一个最小 `StreamableTool` 持续输出递增数字，并通过自定义 Translator 将 partial `tool.response` 转为 `tool.execution` 活动事件，同时保留标准 `TOOL_CALL_RESULT` 作为最终结果。
