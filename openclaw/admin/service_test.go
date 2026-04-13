@@ -1368,14 +1368,25 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 			}},
 			Stores: []PersonaStoreView{{
 				Key:           "agent",
-				Title:         "Agent Personas",
+				Title:         "Shared Persona Store",
+				UsageLabels:   []string{"Agent Personas", "WeCom Personas 1"},
 				CreateEnabled: true,
-				Personas: []PersonaView{{
-					ID:       "friendly",
-					Name:     "Friendly",
-					Prompt:   "warm tone",
-					Editable: true,
-				}},
+				Personas: []PersonaView{
+					{
+						ID:       "warm",
+						Name:     "Warm",
+						Summary:  "A direct custom tone.",
+						Prompt:   "custom tone",
+						Editable: true,
+					},
+					{
+						ID:      "friendly",
+						Name:    "Friendly",
+						Summary: "Warm and approachable.",
+						Prompt:  "warm tone",
+						BuiltIn: true,
+					},
+				},
 			}},
 		},
 	}
@@ -1613,14 +1624,25 @@ func TestService_PersonasPageAndActions(t *testing.T) {
 			}},
 			Stores: []PersonaStoreView{{
 				Key:           "agent",
-				Title:         "Agent Personas",
+				Title:         "Shared Persona Store",
+				UsageLabels:   []string{"Agent Personas", "WeCom Personas 1"},
 				CreateEnabled: true,
-				Personas: []PersonaView{{
-					ID:       "friendly",
-					Name:     "Friendly",
-					Prompt:   "warm tone",
-					Editable: true,
-				}},
+				Personas: []PersonaView{
+					{
+						ID:       "warm",
+						Name:     "Warm",
+						Summary:  "A direct custom tone.",
+						Prompt:   "custom tone",
+						Editable: true,
+					},
+					{
+						ID:      "friendly",
+						Name:    "Friendly",
+						Summary: "Warm and approachable.",
+						Prompt:  "warm tone",
+						BuiltIn: true,
+					},
+				},
 			}},
 		},
 	}
@@ -1631,8 +1653,18 @@ func TestService_PersonasPageAndActions(t *testing.T) {
 	svc.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), "Persona Management")
+	require.Contains(t, rec.Body.String(), "Shared Persona Store")
 	require.Contains(t, rec.Body.String(), "Agent Personas")
+	require.Contains(t, rec.Body.String(), "WeCom Personas 1")
+	require.Contains(t, rec.Body.String(), "Create Persona")
+	require.Contains(t, rec.Body.String(), "Custom Personas")
+	require.Contains(t, rec.Body.String(), "Built-in Personas")
 	require.Contains(t, rec.Body.String(), "/api/personas")
+	require.Less(
+		t,
+		strings.Index(rec.Body.String(), "Create Persona"),
+		strings.Index(rec.Body.String(), "Custom Personas"),
+	)
 }
 
 func TestService_PromptAndPersonaJSONAndMutations(t *testing.T) {
@@ -2151,6 +2183,56 @@ func TestService_PromptAndPersonaActionErrors(t *testing.T) {
 	rec = httptest.NewRecorder()
 	nilSvc.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestPersonaHelperFunctions(t *testing.T) {
+	t.Parallel()
+
+	store := PersonaStoreView{
+		UsageLabels: []string{
+			"Agent Personas",
+			" ",
+			"WeCom Personas 1",
+			"Agent Personas",
+		},
+		Personas: []PersonaView{
+			{
+				ID:      "friendly",
+				Name:    "Friendly",
+				Summary: "Warm and approachable.",
+				Prompt:  "Friendly prompt.",
+				BuiltIn: true,
+			},
+			{
+				ID:       "custom",
+				Prompt:   "Custom persona prompt.",
+				Editable: true,
+			},
+		},
+	}
+
+	require.Equal(
+		t,
+		personaStoreTitleFallback,
+		personaStoreTitle(PersonaStoreView{}),
+	)
+	require.Equal(
+		t,
+		[]string{"Agent Personas", "WeCom Personas 1"},
+		personaStoreUsageLabels(store),
+	)
+	require.Len(t, personaCustomPersonas(store), 1)
+	require.Len(t, personaBuiltInPersonas(store), 1)
+	require.Equal(t, 1, personaStoreCustomCount(store))
+	require.Equal(t, 1, personaStoreBuiltInCount(store))
+	require.Equal(t, "custom", personaDisplayName(store.Personas[1]))
+	require.Equal(t, personaKindBuiltIn, personaKindLabel(store.Personas[0]))
+	require.Equal(t, personaKindCustom, personaKindLabel(store.Personas[1]))
+	require.Contains(
+		t,
+		personaSummaryText(store.Personas[1]),
+		"Starts with: Custom persona prompt.",
+	)
 }
 
 func TestPromptStatusAndFormParsingErrors(t *testing.T) {

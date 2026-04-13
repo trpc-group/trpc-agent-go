@@ -36,6 +36,12 @@ const (
 	formPersonaID       = "persona_id"
 	formPersonaName     = "persona_name"
 	formPersonaPrompt   = "persona_prompt"
+
+	personaKindBuiltIn = "built-in"
+	personaKindCustom  = "custom"
+
+	personaStoreSharedTitle   = "Shared Persona Store"
+	personaStoreTitleFallback = "Persona Store"
 )
 
 type PromptsProvider interface {
@@ -130,6 +136,7 @@ type PersonaStoreView struct {
 	Key           string        `json:"key,omitempty"`
 	Title         string        `json:"title,omitempty"`
 	Path          string        `json:"path,omitempty"`
+	UsageLabels   []string      `json:"usage_labels,omitempty"`
 	CreateEnabled bool          `json:"create_enabled"`
 	Personas      []PersonaView `json:"personas,omitempty"`
 }
@@ -234,6 +241,98 @@ func promptRuntimeEditorSummary(bundle PromptBundleState) string {
 	return "This temporary text replaces the configured text for " +
 		"the running process only. Clear it to fall back to config " +
 		"and files."
+}
+
+func personaStoreTitle(store PersonaStoreView) string {
+	title := strings.TrimSpace(store.Title)
+	if title != "" {
+		return title
+	}
+	labels := personaStoreUsageLabels(store)
+	if len(labels) == 1 {
+		return labels[0]
+	}
+	if len(labels) > 1 {
+		return personaStoreSharedTitle
+	}
+	return personaStoreTitleFallback
+}
+
+func personaStoreUsageLabels(store PersonaStoreView) []string {
+	if len(store.UsageLabels) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(store.UsageLabels))
+	seen := map[string]struct{}{}
+	for _, raw := range store.UsageLabels {
+		label := strings.TrimSpace(raw)
+		if label == "" {
+			continue
+		}
+		if _, ok := seen[label]; ok {
+			continue
+		}
+		seen[label] = struct{}{}
+		out = append(out, label)
+	}
+	title := strings.TrimSpace(store.Title)
+	if len(out) == 1 && title != "" && title == out[0] {
+		return nil
+	}
+	return out
+}
+
+func personaCustomPersonas(store PersonaStoreView) []PersonaView {
+	return personaViewsByKind(store.Personas, false)
+}
+
+func personaBuiltInPersonas(store PersonaStoreView) []PersonaView {
+	return personaViewsByKind(store.Personas, true)
+}
+
+func personaViewsByKind(
+	personas []PersonaView,
+	builtIn bool,
+) []PersonaView {
+	out := make([]PersonaView, 0, len(personas))
+	for _, persona := range personas {
+		if persona.BuiltIn != builtIn {
+			continue
+		}
+		out = append(out, persona)
+	}
+	return out
+}
+
+func personaStoreBuiltInCount(store PersonaStoreView) int {
+	return len(personaBuiltInPersonas(store))
+}
+
+func personaStoreCustomCount(store PersonaStoreView) int {
+	return len(personaCustomPersonas(store))
+}
+
+func personaDisplayName(view PersonaView) string {
+	name := strings.TrimSpace(view.Name)
+	if name != "" {
+		return name
+	}
+	return strings.TrimSpace(view.ID)
+}
+
+func personaKindLabel(view PersonaView) string {
+	if view.BuiltIn {
+		return personaKindBuiltIn
+	}
+	return personaKindCustom
+}
+
+func personaSummaryText(view PersonaView) string {
+	summary := strings.TrimSpace(view.Summary)
+	if summary != "" {
+		return summary
+	}
+	return promptCollapsedSummary(view.Prompt)
 }
 
 func (s *Service) promptsStatus() PromptsStatus {
@@ -986,76 +1085,178 @@ const personasPageTemplateHTML = `
       {{range .Personas.Stores}}
       {{$store := .}}
       <article class="card" style="margin-top: 18px;" id="persona-store-{{.Key}}">
-        <h3>{{.Title}}</h3>
-        {{if .Path}}
-        <p class="subtle">Store path: <code>{{.Path}}</code></p>
-        {{end}}
-
-        {{range .Personas}}
-        <div class="card" style="margin-top: 12px;">
-          <div style="display: flex; gap: 12px; justify-content: space-between; align-items: baseline; flex-wrap: wrap;">
-            <strong>{{.Name}}</strong>
-            <code>{{.ID}}</code>
+        <div style="display: flex; gap: 12px; justify-content: space-between; align-items: baseline; flex-wrap: wrap;">
+          <h3 style="margin: 0;">{{personaStoreTitle .}}</h3>
+          <div class="skill-badges inline">
+            {{if gt (personaStoreCustomCount .) 0}}
+            <span class="skill-badge">
+              {{personaStoreCustomCount .}} custom
+            </span>
+            {{end}}
+            {{if gt (personaStoreBuiltInCount .) 0}}
+            <span class="skill-badge">
+              {{personaStoreBuiltInCount .}} built-in
+            </span>
+            {{end}}
           </div>
-          {{if .Summary}}
-          <p class="subtle" style="margin-top: 10px;">{{.Summary}}</p>
-          {{end}}
-          {{if .Editable}}
-          <form method="post" action="/api/personas/save" style="margin-top: 12px;">
-            <input type="hidden" name="store_key" value="{{$store.Key}}">
-            <input type="hidden" name="persona_id" value="{{.ID}}">
-            <input type="hidden" name="return_path" value="/personas">
-            <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
-            <label>Name</label>
-            <input type="text" name="persona_name" value="{{.Name}}">
-            <label style="margin-top: 12px;">Prompt</label>
-            <textarea
-              name="persona_prompt"
-              style="width: 100%; min-height: 180px;"
-            >{{.Prompt}}</textarea>
-            <div class="actions" style="margin-top: 12px;">
-              <button type="submit">Save Persona</button>
-            </div>
-          </form>
-          {{end}}
-          {{if .Deletable}}
-          <form method="post" action="/api/personas/delete" style="margin-top: 8px;">
-            <input type="hidden" name="store_key" value="{{$store.Key}}">
-            <input type="hidden" name="persona_id" value="{{.ID}}">
-            <input type="hidden" name="return_path" value="/personas">
-            <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
-            <div class="actions">
-              <button
-                class="warn"
-                type="submit"
-                onclick="return confirm('Delete this persona override?');"
-              >
-                Delete Persona
-              </button>
-            </div>
-          </form>
+        </div>
+        {{if .Path}}
+        <p class="subtle" style="margin-top: 10px;">
+          Store path: <code>{{.Path}}</code>
+        </p>
+        {{end}}
+        {{with personaStoreUsageLabels .}}
+        <div class="skill-badges inline" style="margin-top: 10px;">
+          {{range .}}
+          <span class="skill-badge">{{.}}</span>
           {{end}}
         </div>
         {{end}}
 
         {{if .CreateEnabled}}
-        <div class="card" style="margin-top: 12px;">
-          <h4 style="margin: 0 0 10px;">Create Persona</h4>
-          <form method="post" action="/api/personas/save">
-            <input type="hidden" name="store_key" value="{{$store.Key}}">
-            <input type="hidden" name="return_path" value="/personas">
-            <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
-            <label>Name</label>
-            <input type="text" name="persona_name">
-            <label style="margin-top: 12px;">Prompt</label>
-            <textarea
-              name="persona_prompt"
-              style="width: 100%; min-height: 180px;"
-            ></textarea>
-            <div class="actions" style="margin-top: 12px;">
-              <button class="secondary" type="submit">Create Persona</button>
+        <details class="card prompt-detail" style="margin-top: 12px;">
+          <summary>
+            <strong>Create Persona</strong>
+            <p class="subtle prompt-detail-hint">
+              Add a new persona in this store without scrolling past the
+              existing definitions.
+            </p>
+          </summary>
+          <div class="prompt-detail-body">
+            <form method="post" action="/api/personas/save">
+              <input type="hidden" name="store_key" value="{{$store.Key}}">
+              <input type="hidden" name="return_path" value="/personas">
+              <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
+              <label>Name</label>
+              <input type="text" name="persona_name">
+              <label style="margin-top: 12px;">Prompt</label>
+              <textarea
+                name="persona_prompt"
+                style="width: 100%; min-height: 180px;"
+              ></textarea>
+              <div class="actions" style="margin-top: 12px;">
+                <button class="secondary" type="submit">Create Persona</button>
+              </div>
+            </form>
+          </div>
+        </details>
+        {{end}}
+
+        {{with personaCustomPersonas .}}
+        <div style="margin-top: 16px;">
+          <h4 style="margin: 0 0 10px;">Custom Personas</h4>
+          {{range .}}
+          <details class="card prompt-detail" style="margin-top: 12px;">
+            <summary>
+              <div style="display: flex; gap: 12px; justify-content: space-between; align-items: baseline; flex-wrap: wrap;">
+                <strong>{{personaDisplayName .}}</strong>
+                <code>{{.ID}}</code>
+              </div>
+              <div class="skill-badges inline" style="margin-top: 8px;">
+                <span class="skill-badge">{{personaKindLabel .}}</span>
+              </div>
+              <p class="subtle prompt-detail-hint">
+                {{personaSummaryText .}}
+              </p>
+            </summary>
+            <div class="prompt-detail-body">
+              {{if .Editable}}
+              <form method="post" action="/api/personas/save">
+                <input type="hidden" name="store_key" value="{{$store.Key}}">
+                <input type="hidden" name="persona_id" value="{{.ID}}">
+                <input type="hidden" name="return_path" value="/personas">
+                <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
+                <label>Name</label>
+                <input type="text" name="persona_name" value="{{.Name}}">
+                <label style="margin-top: 12px;">Prompt</label>
+                <textarea
+                  name="persona_prompt"
+                  style="width: 100%; min-height: 180px;"
+                >{{.Prompt}}</textarea>
+                <div class="actions" style="margin-top: 12px;">
+                  <button type="submit">Save Persona</button>
+                </div>
+              </form>
+              {{end}}
+              {{if .Deletable}}
+              <form method="post" action="/api/personas/delete" style="margin-top: 8px;">
+                <input type="hidden" name="store_key" value="{{$store.Key}}">
+                <input type="hidden" name="persona_id" value="{{.ID}}">
+                <input type="hidden" name="return_path" value="/personas">
+                <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
+                <div class="actions">
+                  <button
+                    class="warn"
+                    type="submit"
+                    onclick="return confirm('Delete this persona override?');"
+                  >
+                    Delete Persona
+                  </button>
+                </div>
+              </form>
+              {{end}}
             </div>
-          </form>
+          </details>
+          {{end}}
+        </div>
+        {{end}}
+
+        {{with personaBuiltInPersonas .}}
+        <div style="margin-top: 16px;">
+          <h4 style="margin: 0 0 10px;">Built-in Personas</h4>
+          {{range .}}
+          <details class="card prompt-detail" style="margin-top: 12px;">
+            <summary>
+              <div style="display: flex; gap: 12px; justify-content: space-between; align-items: baseline; flex-wrap: wrap;">
+                <strong>{{personaDisplayName .}}</strong>
+                <code>{{.ID}}</code>
+              </div>
+              <div class="skill-badges inline" style="margin-top: 8px;">
+                <span class="skill-badge">{{personaKindLabel .}}</span>
+              </div>
+              <p class="subtle prompt-detail-hint">
+                {{personaSummaryText .}}
+              </p>
+            </summary>
+            <div class="prompt-detail-body">
+              {{if .Editable}}
+              <form method="post" action="/api/personas/save">
+                <input type="hidden" name="store_key" value="{{$store.Key}}">
+                <input type="hidden" name="persona_id" value="{{.ID}}">
+                <input type="hidden" name="return_path" value="/personas">
+                <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
+                <label>Name</label>
+                <input type="text" name="persona_name" value="{{.Name}}">
+                <label style="margin-top: 12px;">Prompt</label>
+                <textarea
+                  name="persona_prompt"
+                  style="width: 100%; min-height: 180px;"
+                >{{.Prompt}}</textarea>
+                <div class="actions" style="margin-top: 12px;">
+                  <button type="submit">Save Persona</button>
+                </div>
+              </form>
+              {{end}}
+              {{if .Deletable}}
+              <form method="post" action="/api/personas/delete" style="margin-top: 8px;">
+                <input type="hidden" name="store_key" value="{{$store.Key}}">
+                <input type="hidden" name="persona_id" value="{{.ID}}">
+                <input type="hidden" name="return_path" value="/personas">
+                <input type="hidden" name="return_to" value="persona-store-{{$store.Key}}">
+                <div class="actions">
+                  <button
+                    class="warn"
+                    type="submit"
+                    onclick="return confirm('Delete this persona override?');"
+                  >
+                    Delete Persona
+                  </button>
+                </div>
+              </form>
+              {{end}}
+            </div>
+          </details>
+          {{end}}
         </div>
         {{end}}
       </article>
