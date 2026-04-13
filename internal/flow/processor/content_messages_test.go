@@ -1338,6 +1338,25 @@ func TestPrependSummaryUserMessage(t *testing.T) {
 		require.Equal(t, model.RoleTool, result[2].Role)
 	})
 
+	t.Run("later_empty_history_user_preferred_over_req_prefix_user", func(t *testing.T) {
+		prefix := []model.Message{
+			model.NewSystemMessage("system prompt"),
+			model.NewUserMessage("few-shot user example"),
+		}
+		msgs := []model.Message{
+			model.NewAssistantMessage("history assistant"),
+			{Role: model.RoleUser, Content: ""},
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, prefix)
+		// An empty user message later in history/current should still win over
+		// the trailing prefix user, and the summary should become its content.
+		require.Equal(t, "few-shot user example", prefix[len(prefix)-1].Content)
+		require.Len(t, result, 2)
+		require.Equal(t, model.RoleAssistant, result[0].Role)
+		require.Equal(t, model.RoleUser, result[1].Role)
+		require.Contains(t, result[1].Content, "some summary")
+	})
+
 	t.Run("req_prefix_ends_with_user_merges_into_prefix_as_fallback", func(t *testing.T) {
 		prefix := []model.Message{
 			model.NewSystemMessage("system prompt"),
