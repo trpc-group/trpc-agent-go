@@ -12,6 +12,7 @@ package admin
 import (
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -617,6 +618,9 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 	require.Contains(t, body, `action="api/cron/jobs/clear"`)
 	require.Contains(t, body, "127.0.0.1:8080")
 	require.Contains(t, body, "telegram")
+	require.Contains(t, body, "Refresh page")
+	require.Contains(t, body, `data-page-stale-root`)
+	require.NotContains(t, body, `http-equiv="refresh"`)
 }
 
 func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
@@ -1072,6 +1076,56 @@ func TestServiceRenderPageRejectsNonGET(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "method not allowed")
 }
 
+func TestServicePageStateJSONEndpointStableAcrossClockTicks(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 13, 21, 0, 0, 0, time.UTC)
+	svc := New(
+		Config{
+			AppName: "openclaw",
+			Chats: &stubChatsProvider{
+				status: ChatsStatus{
+					Enabled: true,
+					Chats: []ChatView{{
+						BaseSessionID:      "wecom:dm:T00320026A",
+						DisplayLabel:       "DM · wineguo (T00320026A)",
+						EffectiveAssistant: "winechord",
+					}},
+				},
+			},
+		},
+		WithClock(func() time.Time {
+			return now
+		}),
+	)
+
+	handler := svc.Handler()
+	path := routePageStateJSON + "?" + url.Values{
+		queryView: []string{string(viewChats)},
+	}.Encode()
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var first pageStateStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &first))
+	require.NotEmpty(t, first.Token)
+	require.Equal(t, now, first.UpdatedAt)
+
+	now = now.Add(30 * time.Second)
+	req = httptest.NewRequest(http.MethodGet, path, nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var second pageStateStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &second))
+	require.Equal(t, first.Token, second.Token)
+	require.Equal(t, now, second.UpdatedAt)
+}
+
 func TestServiceSkillsStatusErrorRetainsRecoveryFields(t *testing.T) {
 	t.Parallel()
 
@@ -1492,6 +1546,12 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "prompt-detail")
 	require.Contains(t, rec.Body.String(), "Instruction Config Text")
 	require.Contains(t, rec.Body.String(), "Save Config Text")
+	require.Contains(t, rec.Body.String(), "Refresh page")
+	require.NotContains(
+		t,
+		rec.Body.String(),
+		`data-page-state-path="/api/page/state?view=prompts"`,
+	)
 	require.NotContains(t, rec.Body.String(), "Inline Source")
 	require.NotContains(t, rec.Body.String(), "Agent Personas")
 	require.Contains(t, rec.Body.String(), "/personas")
@@ -1670,6 +1730,12 @@ func TestService_IdentityPageAndActions(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "How Naming Works")
 	require.Contains(t, rec.Body.String(), "trpc-claw")
 	require.Contains(t, rec.Body.String(), "/api/identity")
+	require.Contains(t, rec.Body.String(), "Refresh page")
+	require.NotContains(
+		t,
+		rec.Body.String(),
+		`data-page-state-path="/api/page/state?view=identity"`,
+	)
 
 	req = httptest.NewRequest(http.MethodGet, routeIdentityJSON, nil)
 	rec = httptest.NewRecorder()

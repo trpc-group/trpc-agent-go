@@ -10,6 +10,7 @@
 package admin
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -60,6 +61,7 @@ const (
 	routeDebugSessionsJSON = "/api/debug/sessions"
 	routeDebugTracesJSON   = "/api/debug/traces"
 	routeDebugFile         = "/debug/file"
+	routePageStateJSON     = "/api/page/state"
 
 	queryNotice    = "notice"
 	queryError     = "error"
@@ -75,6 +77,7 @@ const (
 	queryPath      = "path"
 	queryDownload  = "download"
 	queryCursor    = "cursor"
+	queryView      = "view"
 	formJobID      = "job_id"
 	formSkillKey   = "skill_key"
 	formSkillName  = "skill_name"
@@ -328,6 +331,7 @@ func (s *Service) Handler() http.Handler {
 		wrapRelativeLinksFunc(s.handleBrowserPage),
 	)
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
+	mux.HandleFunc(routePageStateJSON, s.handlePageStateJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
 	mux.HandleFunc(routePromptsJSON, s.handlePromptsJSON)
 	mux.HandleFunc(routeIdentityJSON, s.handleIdentityJSON)
@@ -589,11 +593,35 @@ type pageData struct {
 	SelectedChatError string
 	Notice            string
 	Error             string
-	RefreshSeconds    int
+	PageRefresh       pageRefreshData
 	View              adminView
 	PageTitle         string
 	PageSummary       string
 	NavSections       []adminNavSection
+}
+
+type pageRefreshData struct {
+	CurrentPath     string
+	StatePath       string
+	Token           string
+	UpdatedAt       time.Time
+	IntervalSeconds int
+	Watch           bool
+}
+
+type pageStateStatus struct {
+	Token     string    `json:"token,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
+type pageRefreshInput struct {
+	Snapshot          snapshot
+	Prompts           PromptsStatus
+	Identity          IdentityStatus
+	Personas          PersonasStatus
+	Chats             ChatsStatus
+	SelectedChat      *ChatView
+	SelectedChatError string
 }
 
 type adminNavSection struct {
@@ -1064,17 +1092,20 @@ func (s *Service) renderPage(
 		return
 	}
 
+	snapshot := s.snapshotForView(view)
+	prompts := s.promptsStatus()
+	identity := s.identityStatus()
+	personas := s.personasStatus()
 	chats := s.chatsStatus()
 	data := pageData{
-		Snapshot:        s.snapshotForView(view),
-		Prompts:         s.promptsStatus(),
-		Identity:        s.identityStatus(),
-		Personas:        s.personasStatus(),
+		Snapshot:        snapshot,
+		Prompts:         prompts,
+		Identity:        identity,
+		Personas:        personas,
 		Chats:           chats,
 		ChatHistoryPath: routeChatHistoryJSON,
 		Notice:          strings.TrimSpace(r.URL.Query().Get(queryNotice)),
 		Error:           strings.TrimSpace(r.URL.Query().Get(queryError)),
-		RefreshSeconds:  refreshSeconds,
 		View:            view,
 		PageTitle:       pageTitle(view),
 		PageSummary:     pageSummary(view),
@@ -1087,6 +1118,19 @@ func (s *Service) renderPage(
 			selectedChatID(r),
 		)
 	}
+	data.PageRefresh = buildPageRefreshData(
+		r,
+		view,
+		pageRefreshInput{
+			Snapshot:          snapshot,
+			Prompts:           prompts,
+			Identity:          identity,
+			Personas:          personas,
+			Chats:             chats,
+			SelectedChat:      data.SelectedChat,
+			SelectedChatError: data.SelectedChatError,
+		},
+	)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := adminPage.Execute(w, data); err != nil {
@@ -1305,6 +1349,136 @@ func pageSummary(view adminView) string {
 	}
 }
 
+func pageRefreshWatch(view adminView) bool {
+	switch view {
+	case viewOverview,
+		viewSkills,
+		viewChats,
+		viewMemory,
+		viewAutomation,
+		viewSessions,
+		viewDebug,
+		viewBrowser:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildPageRefreshData(
+	r *http.Request,
+	view adminView,
+	input pageRefreshInput,
+) pageRefreshData {
+	return pageRefreshData{
+		CurrentPath:     pageRefreshCurrentPath(r),
+		StatePath:       pageRefreshStatePath(r, view),
+		Token:           pageRefreshToken(view, input),
+		UpdatedAt:       input.Snapshot.GeneratedAt,
+		IntervalSeconds: refreshSeconds,
+		Watch:           pageRefreshWatch(view),
+	}
+}
+
+func pageRefreshCurrentPath(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return routeOverview
+	}
+	values := r.URL.Query()
+	values.Del(queryNotice)
+	values.Del(queryError)
+	path := strings.TrimSpace(r.URL.Path)
+	if path == "" {
+		path = routeOverview
+	}
+	if encoded := values.Encode(); encoded != "" {
+		return path + "?" + encoded
+	}
+	return path
+}
+
+func pageRefreshStatePath(
+	r *http.Request,
+	view adminView,
+) string {
+	values := url.Values{}
+	values.Set(queryView, string(view))
+	if view == viewChats {
+		if chatID := selectedChatID(r); chatID != "" {
+			values.Set(queryChatID, chatID)
+		}
+	}
+	return routePageStateJSON + "?" + values.Encode()
+}
+
+func pageRefreshToken(
+	view adminView,
+	input pageRefreshInput,
+) string {
+	switch view {
+	case viewPrompts:
+		return refreshTokenForValue(input.Prompts)
+	case viewIdentity:
+		return refreshTokenForValue(input.Identity)
+	case viewPersonas:
+		return refreshTokenForValue(input.Personas)
+	case viewChats:
+		return refreshTokenForValue(struct {
+			Chats             ChatsStatus `json:"chats"`
+			SelectedChat      *ChatView   `json:"selected_chat,omitempty"`
+			SelectedChatError string      `json:"selected_chat_error,omitempty"`
+		}{
+			Chats:             input.Chats,
+			SelectedChat:      compactChatView(input.SelectedChat),
+			SelectedChatError: input.SelectedChatError,
+		})
+	default:
+		snapshot := input.Snapshot
+		snapshot.GeneratedAt = time.Time{}
+		return refreshTokenForValue(snapshot)
+	}
+}
+
+func compactChatView(chat *ChatView) *ChatView {
+	if chat == nil {
+		return nil
+	}
+	copy := *chat
+	copy.History = nil
+	copy.Transcript = nil
+	return &copy
+}
+
+func refreshTokenForValue(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func (s *Service) pageRefreshInput(
+	r *http.Request,
+	view adminView,
+) pageRefreshInput {
+	input := pageRefreshInput{
+		Snapshot: s.snapshotForView(view),
+		Prompts:  s.promptsStatus(),
+		Identity: s.identityStatus(),
+		Personas: s.personasStatus(),
+		Chats:    s.chatsStatus(),
+	}
+	if view == viewChats {
+		input.SelectedChat, input.SelectedChatError = resolveSelectedChat(
+			input.Chats,
+			s.cfg.Chats,
+			selectedChatID(r),
+		)
+	}
+	return input
+}
+
 func (s *Service) handleStatusJSON(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1314,6 +1488,25 @@ func (s *Service) handleStatusJSON(
 		return
 	}
 	writeJSON(w, http.StatusOK, s.Snapshot())
+}
+
+func (s *Service) handlePageStateJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	view := adminView(strings.TrimSpace(r.URL.Query().Get(queryView)))
+	if view == "" {
+		view = viewOverview
+	}
+	input := s.pageRefreshInput(r, view)
+	writeJSON(w, http.StatusOK, pageStateStatus{
+		Token:     pageRefreshToken(view, input),
+		UpdatedAt: input.Snapshot.GeneratedAt,
+	})
 }
 
 func (s *Service) handleSkillsJSON(
@@ -2253,7 +2446,6 @@ const adminPageHTML = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="refresh" content="{{.RefreshSeconds}}">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TRPC-CLAW admin</title>
   <style>
@@ -2378,6 +2570,51 @@ const adminPageHTML = `<!doctype html>
     }
     .page-header {
       margin-bottom: 18px;
+    }
+    .page-toolbar {
+      margin-top: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px 16px;
+    }
+    .page-toolbar-copy {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .page-toolbar-updated {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .page-toolbar-note {
+      color: var(--muted);
+      font-size: 14px;
+      max-width: 720px;
+    }
+    .page-refresh-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 253, 248, 0.92);
+      color: var(--ink);
+      text-decoration: none;
+      font-weight: 700;
+      box-shadow: var(--shadow);
+    }
+    .page-refresh-link:hover {
+      border-color: rgba(15, 111, 97, 0.28);
+      color: var(--accent);
+    }
+    .page-refresh-alert {
+      margin-top: 16px;
     }
     .page-kicker {
       margin: 0 0 10px;
@@ -3273,7 +3510,36 @@ const adminPageHTML = `<!doctype html>
           <p class="page-kicker">TRPC-CLAW admin</p>
           <h1>{{.PageTitle}}</h1>
           <p class="subtle">{{.PageSummary}}</p>
+          <div class="page-toolbar">
+            <div class="page-toolbar-copy">
+              <div class="page-toolbar-updated">
+                Updated {{formatTime .PageRefresh.UpdatedAt}}
+              </div>
+              {{if .PageRefresh.Watch}}
+              <div class="page-toolbar-note">
+                This page watches for newer runtime state without
+                interrupting your reading or editing.
+              </div>
+              {{end}}
+            </div>
+            <a class="page-refresh-link" href="{{.PageRefresh.CurrentPath}}">
+              Refresh page
+            </a>
+          </div>
         </header>
+        {{if .PageRefresh.Watch}}
+        <div
+          class="notice page-refresh-alert"
+          hidden
+          data-page-stale-root
+          data-page-state-path="{{.PageRefresh.StatePath}}"
+          data-page-state-token="{{.PageRefresh.Token}}"
+          data-page-refresh-interval="{{.PageRefresh.IntervalSeconds}}"
+        >
+          New runtime state is available for this page.
+          <a href="{{.PageRefresh.CurrentPath}}">Refresh page</a>
+        </div>
+        {{end}}
         {{if .Notice}}<div class="notice ok">{{.Notice}}</div>{{end}}
         {{if .Error}}<div class="notice err">{{.Error}}</div>{{end}}
 
@@ -4706,6 +4972,50 @@ const adminPageHTML = `<!doctype html>
     </section>
     {{end}}
   <script>
+    (function () {
+      const root = document.querySelector("[data-page-stale-root]");
+      if (!root) return;
+
+      const statePath = root.getAttribute("data-page-state-path") || "";
+      const initialToken =
+        root.getAttribute("data-page-state-token") || "";
+      const intervalValue = Number(
+        root.getAttribute("data-page-refresh-interval") || "0"
+      );
+      if (!statePath || !initialToken || intervalValue <= 0) {
+        return;
+      }
+
+      let currentToken = initialToken;
+      let stopped = false;
+
+      const poll = async () => {
+        if (stopped || document.hidden) {
+          return;
+        }
+        try {
+          const response = await fetch(statePath, {
+            headers: { Accept: "application/json" },
+          });
+          if (!response.ok) {
+            return;
+          }
+          const payload = await response.json();
+          const nextToken =
+            payload && typeof payload.token === "string"
+              ? payload.token
+              : "";
+          if (!nextToken || nextToken === currentToken) {
+            return;
+          }
+          root.hidden = false;
+          stopped = true;
+        } catch (_) {}
+      };
+
+      window.setInterval(poll, intervalValue * 1000);
+    })();
+
     (function () {
       const root = document.querySelector("[data-skills-root]");
       if (!root) return;
