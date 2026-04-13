@@ -320,11 +320,20 @@ func TestRuntimePromptControllerMethod(t *testing.T) {
 	t.Parallel()
 
 	ctrl := &RuntimePromptController{}
-	rt := &Runtime{prompts: ctrl}
+	sessSvc := sessioninmemory.NewSessionService()
+	rt := &Runtime{
+		prompts: ctrl,
+		appName: "openclaw",
+		session: sessSvc,
+	}
 	require.Same(t, ctrl, rt.PromptController())
+	require.Equal(t, "openclaw", rt.AppName())
+	require.Same(t, sessSvc, rt.SessionService())
 
 	var nilRuntime *Runtime
 	require.Nil(t, nilRuntime.PromptController())
+	require.Empty(t, nilRuntime.AppName())
+	require.Nil(t, nilRuntime.SessionService())
 }
 
 func TestRuntimeConfigureAdmin(t *testing.T) {

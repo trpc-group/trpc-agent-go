@@ -10,6 +10,7 @@
 package admin
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -60,6 +61,7 @@ const (
 	routeDebugSessionsJSON = "/api/debug/sessions"
 	routeDebugTracesJSON   = "/api/debug/traces"
 	routeDebugFile         = "/debug/file"
+	routePageStateJSON     = "/api/page/state"
 
 	queryNotice    = "notice"
 	queryError     = "error"
@@ -74,6 +76,8 @@ const (
 	queryName      = "name"
 	queryPath      = "path"
 	queryDownload  = "download"
+	queryCursor    = "cursor"
+	queryView      = "view"
 	formJobID      = "job_id"
 	formSkillKey   = "skill_key"
 	formSkillName  = "skill_name"
@@ -110,8 +114,8 @@ const (
 		"Manage the default persona and any file-backed " +
 		"persona definitions exposed by this runtime."
 	pageSummaryChats = "" +
-		"Inspect each chat's current name, default-name fallback, " +
-		"persona, and recent session history."
+		"Inspect each chat's current state, recent transcript, " +
+		"and the safest next step for names and persona."
 )
 
 type adminView string
@@ -327,11 +331,13 @@ func (s *Service) Handler() http.Handler {
 		wrapRelativeLinksFunc(s.handleBrowserPage),
 	)
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
+	mux.HandleFunc(routePageStateJSON, s.handlePageStateJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
 	mux.HandleFunc(routePromptsJSON, s.handlePromptsJSON)
 	mux.HandleFunc(routeIdentityJSON, s.handleIdentityJSON)
 	mux.HandleFunc(routePersonasJSON, s.handlePersonasJSON)
 	mux.HandleFunc(routeChatsJSON, s.handleChatsJSON)
+	mux.HandleFunc(routeChatHistoryJSON, s.handleChatHistoryJSON)
 	mux.HandleFunc(routeMemoryFilesJSON, s.handleMemoryFilesJSON)
 	mux.HandleFunc(routeMemoryFile, s.handleMemoryFile)
 	mux.HandleFunc(
@@ -577,19 +583,45 @@ type skillInstallView struct {
 }
 
 type pageData struct {
-	Snapshot       snapshot
-	Prompts        PromptsStatus
-	Identity       IdentityStatus
-	Personas       PersonasStatus
-	Chats          ChatsStatus
-	SelectedChat   *ChatView
-	Notice         string
-	Error          string
-	RefreshSeconds int
-	View           adminView
-	PageTitle      string
-	PageSummary    string
-	NavSections    []adminNavSection
+	Snapshot          snapshot
+	Prompts           PromptsStatus
+	Identity          IdentityStatus
+	Personas          PersonasStatus
+	Chats             ChatsStatus
+	ChatHistoryPath   string
+	SelectedChat      *ChatView
+	SelectedChatError string
+	Notice            string
+	Error             string
+	PageRefresh       pageRefreshData
+	View              adminView
+	PageTitle         string
+	PageSummary       string
+	NavSections       []adminNavSection
+}
+
+type pageRefreshData struct {
+	CurrentPath     string
+	StatePath       string
+	Token           string
+	UpdatedAt       time.Time
+	IntervalSeconds int
+	Watch           bool
+}
+
+type pageStateStatus struct {
+	Token     string    `json:"token,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
+type pageRefreshInput struct {
+	Snapshot          snapshot
+	Prompts           PromptsStatus
+	Identity          IdentityStatus
+	Personas          PersonasStatus
+	Chats             ChatsStatus
+	SelectedChat      *ChatView
+	SelectedChatError string
 }
 
 type adminNavSection struct {
@@ -1060,22 +1092,45 @@ func (s *Service) renderPage(
 		return
 	}
 
+	snapshot := s.snapshotForView(view)
+	prompts := s.promptsStatus()
+	identity := s.identityStatus()
+	personas := s.personasStatus()
 	chats := s.chatsStatus()
 	data := pageData{
-		Snapshot:       s.snapshotForView(view),
-		Prompts:        s.promptsStatus(),
-		Identity:       s.identityStatus(),
-		Personas:       s.personasStatus(),
-		Chats:          chats,
-		SelectedChat:   selectChatView(chats, selectedChatID(r)),
-		Notice:         strings.TrimSpace(r.URL.Query().Get(queryNotice)),
-		Error:          strings.TrimSpace(r.URL.Query().Get(queryError)),
-		RefreshSeconds: refreshSeconds,
-		View:           view,
-		PageTitle:      pageTitle(view),
-		PageSummary:    pageSummary(view),
-		NavSections:    adminNavSections(view),
+		Snapshot:        snapshot,
+		Prompts:         prompts,
+		Identity:        identity,
+		Personas:        personas,
+		Chats:           chats,
+		ChatHistoryPath: routeChatHistoryJSON,
+		Notice:          strings.TrimSpace(r.URL.Query().Get(queryNotice)),
+		Error:           strings.TrimSpace(r.URL.Query().Get(queryError)),
+		View:            view,
+		PageTitle:       pageTitle(view),
+		PageSummary:     pageSummary(view),
+		NavSections:     adminNavSections(view),
 	}
+	if view == viewChats {
+		data.SelectedChat, data.SelectedChatError = resolveSelectedChat(
+			chats,
+			s.cfg.Chats,
+			selectedChatID(r),
+		)
+	}
+	data.PageRefresh = buildPageRefreshData(
+		r,
+		view,
+		pageRefreshInput{
+			Snapshot:          snapshot,
+			Prompts:           prompts,
+			Identity:          identity,
+			Personas:          personas,
+			Chats:             chats,
+			SelectedChat:      data.SelectedChat,
+			SelectedChatError: data.SelectedChatError,
+		},
+	)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := adminPage.Execute(w, data); err != nil {
@@ -1085,6 +1140,126 @@ func (s *Service) renderPage(
 			http.StatusInternalServerError,
 		)
 	}
+}
+
+func resolveSelectedChat(
+	status ChatsStatus,
+	provider ChatsProvider,
+	selectedID string,
+) (*ChatView, string) {
+	selected := selectChatView(status, selectedID)
+	if selected == nil {
+		return nil, ""
+	}
+	detailProvider, ok := provider.(ChatDetailProvider)
+	if !ok {
+		return selected, ""
+	}
+	detail, err := detailProvider.ChatDetail(
+		strings.TrimSpace(selected.BaseSessionID),
+	)
+	if err != nil {
+		return selected, strings.TrimSpace(err.Error())
+	}
+	if err := validateChatDetail(*selected, detail); err != nil {
+		return selected, strings.TrimSpace(err.Error())
+	}
+	merged := mergeChatView(*selected, detail)
+	return &merged, ""
+}
+
+func validateChatDetail(base ChatView, detail ChatView) error {
+	baseSessionID := strings.TrimSpace(base.BaseSessionID)
+	detailSessionID := strings.TrimSpace(detail.BaseSessionID)
+	if detailSessionID == "" || baseSessionID == "" {
+		return nil
+	}
+	if detailSessionID == baseSessionID {
+		return nil
+	}
+	return fmt.Errorf(
+		"chat detail mismatch: expected %q, got %q",
+		baseSessionID,
+		detailSessionID,
+	)
+}
+
+func mergeChatView(
+	base ChatView,
+	detail ChatView,
+) ChatView {
+	merged := base
+	if strings.TrimSpace(merged.DisplayLabel) == "" {
+		merged.DisplayLabel = strings.TrimSpace(detail.DisplayLabel)
+	}
+	if strings.TrimSpace(merged.Kind) == "" {
+		merged.Kind = strings.TrimSpace(detail.Kind)
+	}
+	if strings.TrimSpace(merged.KindLabel) == "" {
+		merged.KindLabel = strings.TrimSpace(detail.KindLabel)
+	}
+	if strings.TrimSpace(merged.CurrentSessionID) == "" {
+		merged.CurrentSessionID = strings.TrimSpace(
+			detail.CurrentSessionID,
+		)
+	}
+	if strings.TrimSpace(merged.RecallSessionID) == "" {
+		merged.RecallSessionID = strings.TrimSpace(
+			detail.RecallSessionID,
+		)
+	}
+	if !detail.LastActivity.IsZero() {
+		merged.LastActivity = detail.LastActivity
+	}
+	if detail.Epoch != 0 {
+		merged.Epoch = detail.Epoch
+	}
+	if value := strings.TrimSpace(detail.EffectiveAssistant); value != "" {
+		merged.EffectiveAssistant = value
+	}
+	if value := strings.TrimSpace(detail.ChatAssistantOverride); value != "" {
+		merged.ChatAssistantOverride = value
+	}
+	if value := strings.TrimSpace(detail.NameSource); value != "" {
+		merged.NameSource = value
+	}
+	if detail.OverridesGlobal {
+		merged.OverridesGlobal = true
+	}
+	if value := strings.TrimSpace(detail.PersonaID); value != "" {
+		merged.PersonaID = value
+	}
+	if value := strings.TrimSpace(detail.PersonaLabel); value != "" {
+		merged.PersonaLabel = value
+	}
+	if detail.PersonaPinned {
+		merged.PersonaPinned = true
+	}
+	if value := strings.TrimSpace(detail.WorkspacePath); value != "" {
+		merged.WorkspacePath = value
+	}
+	if len(detail.KnownUserIDs) != 0 {
+		merged.KnownUserIDs = detail.KnownUserIDs
+	}
+	if len(detail.KnownUsers) != 0 {
+		merged.KnownUsers = detail.KnownUsers
+	}
+	if len(detail.History) != 0 {
+		merged.History = detail.History
+	}
+	if detail.HistoryTotalCount != 0 {
+		merged.HistoryTotalCount = detail.HistoryTotalCount
+	}
+	if detail.HistoryTruncated {
+		merged.HistoryTruncated = true
+	}
+	if len(detail.Transcript) != 0 {
+		merged.Transcript = detail.Transcript
+	}
+	if detail.TranscriptTruncated {
+		merged.TranscriptTruncated = true
+	}
+	return merged
 }
 
 func adminNavSections(active adminView) []adminNavSection {
@@ -1174,6 +1349,136 @@ func pageSummary(view adminView) string {
 	}
 }
 
+func pageRefreshWatch(view adminView) bool {
+	switch view {
+	case viewOverview,
+		viewSkills,
+		viewChats,
+		viewMemory,
+		viewAutomation,
+		viewSessions,
+		viewDebug,
+		viewBrowser:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildPageRefreshData(
+	r *http.Request,
+	view adminView,
+	input pageRefreshInput,
+) pageRefreshData {
+	return pageRefreshData{
+		CurrentPath:     pageRefreshCurrentPath(r),
+		StatePath:       pageRefreshStatePath(r, view),
+		Token:           pageRefreshToken(view, input),
+		UpdatedAt:       input.Snapshot.GeneratedAt,
+		IntervalSeconds: refreshSeconds,
+		Watch:           pageRefreshWatch(view),
+	}
+}
+
+func pageRefreshCurrentPath(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return routeOverview
+	}
+	values := r.URL.Query()
+	values.Del(queryNotice)
+	values.Del(queryError)
+	path := strings.TrimSpace(r.URL.Path)
+	if path == "" {
+		path = routeOverview
+	}
+	if encoded := values.Encode(); encoded != "" {
+		return path + "?" + encoded
+	}
+	return path
+}
+
+func pageRefreshStatePath(
+	r *http.Request,
+	view adminView,
+) string {
+	values := url.Values{}
+	values.Set(queryView, string(view))
+	if view == viewChats {
+		if chatID := selectedChatID(r); chatID != "" {
+			values.Set(queryChatID, chatID)
+		}
+	}
+	return routePageStateJSON + "?" + values.Encode()
+}
+
+func pageRefreshToken(
+	view adminView,
+	input pageRefreshInput,
+) string {
+	switch view {
+	case viewPrompts:
+		return refreshTokenForValue(input.Prompts)
+	case viewIdentity:
+		return refreshTokenForValue(input.Identity)
+	case viewPersonas:
+		return refreshTokenForValue(input.Personas)
+	case viewChats:
+		return refreshTokenForValue(struct {
+			Chats             ChatsStatus `json:"chats"`
+			SelectedChat      *ChatView   `json:"selected_chat,omitempty"`
+			SelectedChatError string      `json:"selected_chat_error,omitempty"`
+		}{
+			Chats:             input.Chats,
+			SelectedChat:      compactChatView(input.SelectedChat),
+			SelectedChatError: input.SelectedChatError,
+		})
+	default:
+		snapshot := input.Snapshot
+		snapshot.GeneratedAt = time.Time{}
+		return refreshTokenForValue(snapshot)
+	}
+}
+
+func compactChatView(chat *ChatView) *ChatView {
+	if chat == nil {
+		return nil
+	}
+	copy := *chat
+	copy.History = nil
+	copy.Transcript = nil
+	return &copy
+}
+
+func refreshTokenForValue(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func (s *Service) pageRefreshInput(
+	r *http.Request,
+	view adminView,
+) pageRefreshInput {
+	input := pageRefreshInput{
+		Snapshot: s.snapshotForView(view),
+		Prompts:  s.promptsStatus(),
+		Identity: s.identityStatus(),
+		Personas: s.personasStatus(),
+		Chats:    s.chatsStatus(),
+	}
+	if view == viewChats {
+		input.SelectedChat, input.SelectedChatError = resolveSelectedChat(
+			input.Chats,
+			s.cfg.Chats,
+			selectedChatID(r),
+		)
+	}
+	return input
+}
+
 func (s *Service) handleStatusJSON(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1183,6 +1488,25 @@ func (s *Service) handleStatusJSON(
 		return
 	}
 	writeJSON(w, http.StatusOK, s.Snapshot())
+}
+
+func (s *Service) handlePageStateJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	view := adminView(strings.TrimSpace(r.URL.Query().Get(queryView)))
+	if view == "" {
+		view = viewOverview
+	}
+	input := s.pageRefreshInput(r, view)
+	writeJSON(w, http.StatusOK, pageStateStatus{
+		Token:     pageRefreshToken(view, input),
+		UpdatedAt: input.Snapshot.GeneratedAt,
+	})
 }
 
 func (s *Service) handleSkillsJSON(
@@ -2093,9 +2417,22 @@ var adminPage = template.Must(
 		"personaKindLabel":           personaKindLabel,
 		"personaSummaryText":         personaSummaryText,
 		"chatDisplayLabel":           chatDisplayLabel,
+		"chatHistoryAPIPath":         chatHistoryAPIPath,
+		"chatHiddenHistory":          chatHiddenHistory,
+		"chatHiddenTranscript":       chatHiddenTranscript,
+		"chatHiddenTurns":            chatHiddenTurns,
 		"chatKnownUsers":             chatKnownUsers,
+		"chatHasTranscript":          chatHasTranscript,
+		"chatHistorySummary":         chatHistorySummary,
 		"chatNameSourceLabel":        chatNameSourceLabel,
+		"chatTranscriptLabel":        chatTranscriptLabel,
+		"chatTranscriptSummary":      chatTranscriptSummary,
+		"chatTurnSpeaker":            chatTurnSpeaker,
 		"chatOverrideSample":         chatOverrideSample,
+		"chatVisibleHistory":         chatVisibleHistory,
+		"chatVisibleTranscript":      chatVisibleTranscript,
+		"chatVisibleTurns":           chatVisibleTurns,
+		"hasTime":                    hasTime,
 	}).Parse(
 		adminPageHTML +
 			promptsPageTemplateHTML +
@@ -2109,7 +2446,6 @@ const adminPageHTML = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="refresh" content="{{.RefreshSeconds}}">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>TRPC-CLAW admin</title>
   <style>
@@ -2234,6 +2570,51 @@ const adminPageHTML = `<!doctype html>
     }
     .page-header {
       margin-bottom: 18px;
+    }
+    .page-toolbar {
+      margin-top: 16px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px 16px;
+    }
+    .page-toolbar-copy {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .page-toolbar-updated {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .page-toolbar-note {
+      color: var(--muted);
+      font-size: 14px;
+      max-width: 720px;
+    }
+    .page-refresh-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 253, 248, 0.92);
+      color: var(--ink);
+      text-decoration: none;
+      font-weight: 700;
+      box-shadow: var(--shadow);
+    }
+    .page-refresh-link:hover {
+      border-color: rgba(15, 111, 97, 0.28);
+      color: var(--accent);
+    }
+    .page-refresh-alert {
+      margin-top: 16px;
     }
     .page-kicker {
       margin: 0 0 10px;
@@ -2870,6 +3251,179 @@ const adminPageHTML = `<!doctype html>
       overflow-wrap: anywhere;
       word-break: break-word;
     }
+    .chat-detail-section + .chat-detail-section {
+      margin-top: 24px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+    }
+    .chat-detail-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .chat-detail-head h3,
+    .chat-action-card h4,
+    .chat-transcript-title {
+      margin: 0;
+    }
+    .chat-disclosure,
+    .chat-disclosure-more {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 253, 248, 0.72);
+      overflow: hidden;
+    }
+    .chat-disclosure[open],
+    .chat-disclosure-more[open] {
+      border-color: rgba(15, 111, 97, 0.28);
+      box-shadow: 0 14px 28px rgba(35, 29, 22, 0.08);
+    }
+    .chat-disclosure summary,
+    .chat-disclosure-more summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 14px 16px;
+    }
+    .chat-disclosure summary::-webkit-details-marker,
+    .chat-disclosure-more summary::-webkit-details-marker {
+      display: none;
+    }
+    .chat-disclosure-meta {
+      margin: 8px 0 0;
+    }
+    .chat-disclosure-body {
+      margin-top: 0;
+      padding: 0 16px 16px;
+      border-top: 1px solid var(--line);
+    }
+    .chat-disclosure-body > :first-child {
+      margin-top: 14px;
+    }
+    .chat-disclosure-body > :last-child {
+      margin-bottom: 0;
+    }
+    .chat-disclosure-more {
+      margin-top: 12px;
+    }
+    .chat-history-shell {
+      margin-top: 14px;
+    }
+    .chat-history-status {
+      margin: 0;
+    }
+    .chat-history-toolbar {
+      margin: 14px 0 0;
+    }
+    .chat-history-more {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px 14px;
+      background: rgba(255, 253, 248, 0.82);
+      color: var(--ink);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
+    }
+    .chat-history-more:hover,
+    .chat-history-more:focus {
+      border-color: rgba(15, 111, 97, 0.38);
+      box-shadow: 0 12px 24px rgba(35, 29, 22, 0.08);
+      outline: none;
+    }
+    .chat-history-bounded {
+      margin: 12px 0 0;
+    }
+    .chat-timeline {
+      display: grid;
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .chat-timeline-session {
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .chat-timeline-session:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+    .chat-timeline-session-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .chat-timeline-session-label {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .chat-timeline-session-meta {
+      margin-top: 6px;
+    }
+    .chat-transcript-list {
+      display: grid;
+      gap: 14px;
+      margin-top: 12px;
+    }
+    .chat-transcript-card,
+    .chat-action-card {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px 16px;
+      background: rgba(255, 253, 248, 0.72);
+      min-width: 0;
+    }
+    .chat-transcript-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .chat-turn-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .chat-turn {
+      border-left: 3px solid rgba(15, 111, 97, 0.2);
+      padding-left: 12px;
+      min-width: 0;
+    }
+    .chat-turn-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .chat-turn-speaker {
+      font-weight: 700;
+    }
+    .chat-turn-quote {
+      margin: 8px 0 0;
+      padding-left: 12px;
+      border-left: 2px solid var(--line);
+      color: var(--muted);
+    }
+    .chat-turn-text {
+      margin-top: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .chat-action-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      margin-top: 12px;
+    }
     @media (max-width: 760px) {
       .app-shell {
         grid-template-columns: 1fr;
@@ -2956,7 +3510,36 @@ const adminPageHTML = `<!doctype html>
           <p class="page-kicker">TRPC-CLAW admin</p>
           <h1>{{.PageTitle}}</h1>
           <p class="subtle">{{.PageSummary}}</p>
+          <div class="page-toolbar">
+            <div class="page-toolbar-copy">
+              <div class="page-toolbar-updated">
+                Updated {{formatTime .PageRefresh.UpdatedAt}}
+              </div>
+              {{if .PageRefresh.Watch}}
+              <div class="page-toolbar-note">
+                This page watches for newer runtime state without
+                interrupting your reading or editing.
+              </div>
+              {{end}}
+            </div>
+            <a class="page-refresh-link" href="{{.PageRefresh.CurrentPath}}">
+              Refresh page
+            </a>
+          </div>
         </header>
+        {{if .PageRefresh.Watch}}
+        <div
+          class="notice page-refresh-alert"
+          hidden
+          data-page-stale-root
+          data-page-state-path="{{.PageRefresh.StatePath}}"
+          data-page-state-token="{{.PageRefresh.Token}}"
+          data-page-refresh-interval="{{.PageRefresh.IntervalSeconds}}"
+        >
+          New runtime state is available for this page.
+          <a href="{{.PageRefresh.CurrentPath}}">Refresh page</a>
+        </div>
+        {{end}}
         {{if .Notice}}<div class="notice ok">{{.Notice}}</div>{{end}}
         {{if .Error}}<div class="notice err">{{.Error}}</div>{{end}}
 
@@ -4390,6 +4973,50 @@ const adminPageHTML = `<!doctype html>
     {{end}}
   <script>
     (function () {
+      const root = document.querySelector("[data-page-stale-root]");
+      if (!root) return;
+
+      const statePath = root.getAttribute("data-page-state-path") || "";
+      const initialToken =
+        root.getAttribute("data-page-state-token") || "";
+      const intervalValue = Number(
+        root.getAttribute("data-page-refresh-interval") || "0"
+      );
+      if (!statePath || !initialToken || intervalValue <= 0) {
+        return;
+      }
+
+      let currentToken = initialToken;
+      let stopped = false;
+
+      const poll = async () => {
+        if (stopped || document.hidden) {
+          return;
+        }
+        try {
+          const response = await fetch(statePath, {
+            headers: { Accept: "application/json" },
+          });
+          if (!response.ok) {
+            return;
+          }
+          const payload = await response.json();
+          const nextToken =
+            payload && typeof payload.token === "string"
+              ? payload.token
+              : "";
+          if (!nextToken || nextToken === currentToken) {
+            return;
+          }
+          root.hidden = false;
+          stopped = true;
+        } catch (_) {}
+      };
+
+      window.setInterval(poll, intervalValue * 1000);
+    })();
+
+    (function () {
       const root = document.querySelector("[data-skills-root]");
       if (!root) return;
 
@@ -4551,6 +5178,350 @@ const adminPageHTML = `<!doctype html>
       });
       refresh();
       restoreScrollPosition();
+    })();
+
+    (function () {
+      const roots = Array.from(
+        document.querySelectorAll("[data-chat-history-root]")
+      );
+      if (!roots.length) return;
+
+      const itemKindSession = "session";
+      const itemKindTurn = "turn";
+      const fallbackHistoryError = "Unable to load chat history right now.";
+      const fallbackHistoryEmpty =
+        "No recent chat transcript is available in this runtime " +
+        "for this chat right now.";
+      const historyLoadingText = "Loading recent messages...";
+      const historyMoreText = "Load older messages";
+      const historyBoundedText =
+        "This admin view only loads the most recent tracked " +
+        "session lines for this chat.";
+
+      const formatDateTime = (value) => {
+        if (!value) return "";
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return value;
+        return parsed.toLocaleString(undefined, {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+          timeZoneName: "short",
+        });
+      };
+
+      const speakerLabel = (item) => {
+        if (item && typeof item.speaker === "string" && item.speaker.trim()) {
+          return item.speaker.trim();
+        }
+        const role = item && typeof item.role === "string"
+          ? item.role.trim()
+          : "";
+        switch (role) {
+          case "user":
+            return "User";
+          case "assistant":
+            return "Assistant";
+          case "system":
+            return "System";
+          default:
+            return "Turn";
+        }
+      };
+
+      const setText = (node, text) => {
+        if (!node) return;
+        node.textContent = text;
+      };
+
+      const createDiv = (className, text) => {
+        const node = document.createElement("div");
+        if (className) {
+          node.className = className;
+        }
+        if (typeof text === "string") {
+          node.textContent = text;
+        }
+        return node;
+      };
+
+      const updateMeta = (root, page) => {
+        const meta = root.querySelector("[data-chat-history-meta]");
+        if (!meta || !page) return;
+        const loaded = Number(root.getAttribute("data-chat-history-loaded") || "0");
+        const total = Number(page.turn_count || 0);
+        const sessions = Number(page.session_line_count || 0);
+        if (total <= 0) {
+          meta.textContent = fallbackHistoryEmpty;
+          return;
+        }
+        const parts = [];
+        parts.push(
+          "Showing " + String(loaded) + " of " + String(total) +
+          " messages"
+        );
+        if (sessions > 0) {
+          parts.push("from " + String(sessions) + " recent session lines");
+        }
+        meta.textContent = parts.join(" ");
+      };
+
+      const updateBoundedNote = (root, bounded) => {
+        const note = root.querySelector("[data-chat-history-bounded]");
+        if (!note) return;
+        note.hidden = !bounded;
+        if (bounded) {
+          note.textContent = historyBoundedText;
+        }
+      };
+
+      const updateMoreButton = (root, nextCursor) => {
+        const toolbar = root.querySelector("[data-chat-history-toolbar]");
+        const button = root.querySelector("[data-chat-history-more]");
+        if (!toolbar || !button) return;
+        const hasMore = typeof nextCursor === "string" && nextCursor !== "";
+        toolbar.hidden = !hasMore;
+        button.hidden = !hasMore;
+        button.disabled = false;
+        button.textContent = historyMoreText;
+        if (hasMore) {
+          button.setAttribute("data-chat-history-next", nextCursor);
+        } else {
+          button.removeAttribute("data-chat-history-next");
+        }
+      };
+
+      const clearMessages = (root) => {
+        const error = root.querySelector("[data-chat-history-error]");
+        const empty = root.querySelector("[data-chat-history-empty]");
+        if (error) {
+          error.hidden = true;
+          error.textContent = "";
+        }
+        if (empty) {
+          empty.hidden = true;
+          empty.textContent = "";
+        }
+      };
+
+      const showError = (root, message) => {
+        const error = root.querySelector("[data-chat-history-error]");
+        const empty = root.querySelector("[data-chat-history-empty]");
+        if (empty) {
+          empty.hidden = true;
+          empty.textContent = "";
+        }
+        if (!error) return;
+        error.hidden = false;
+        error.textContent = message || fallbackHistoryError;
+      };
+
+      const showEmpty = (root, message) => {
+        const empty = root.querySelector("[data-chat-history-empty]");
+        const error = root.querySelector("[data-chat-history-error]");
+        if (error) {
+          error.hidden = true;
+          error.textContent = "";
+        }
+        if (!empty) return;
+        empty.hidden = false;
+        empty.textContent = message || fallbackHistoryEmpty;
+      };
+
+      const renderSessionItem = (item) => {
+        const wrapper = createDiv("chat-timeline-session");
+        const head = createDiv("chat-timeline-session-head");
+        const copy = document.createElement("div");
+        const title = createDiv(
+          "chat-timeline-session-label",
+          item.session_label || "Recent session"
+        );
+        const meta = createDiv("subtle chat-timeline-session-meta");
+        const code = document.createElement("code");
+        code.textContent = item.session_id || "";
+        meta.appendChild(code);
+        copy.appendChild(title);
+        copy.appendChild(meta);
+        head.appendChild(copy);
+        if (item.last_activity) {
+          head.appendChild(
+            createDiv("subtle", formatDateTime(item.last_activity))
+          );
+        }
+        wrapper.appendChild(head);
+        return wrapper;
+      };
+
+      const renderTurnItem = (item) => {
+        const article = document.createElement("article");
+        article.className = "chat-turn";
+        const head = createDiv("chat-turn-head");
+        head.appendChild(
+          createDiv("chat-turn-speaker", speakerLabel(item))
+        );
+        if (item.timestamp) {
+          head.appendChild(
+            createDiv("subtle", formatDateTime(item.timestamp))
+          );
+        }
+        article.appendChild(head);
+        if (typeof item.quote_text === "string" && item.quote_text.trim()) {
+          article.appendChild(
+            createDiv("chat-turn-quote", item.quote_text)
+          );
+        }
+        article.appendChild(
+          createDiv("chat-turn-text", item.text || "")
+        );
+        return article;
+      };
+
+      const renderHistoryItem = (item) => {
+        if (!item || typeof item.kind !== "string") {
+          return null;
+        }
+        if (item.kind === itemKindSession) {
+          return renderSessionItem(item);
+        }
+        if (item.kind === itemKindTurn) {
+          return renderTurnItem(item);
+        }
+        return null;
+      };
+
+      const updateLoading = (root, loading) => {
+        root.setAttribute(
+          "data-chat-history-loading",
+          loading ? "true" : "false"
+        );
+        const button = root.querySelector("[data-chat-history-more]");
+        if (!button) return;
+        button.disabled = loading;
+        if (loading) {
+          button.textContent = historyLoadingText;
+        } else if (button.hidden !== true) {
+          button.textContent = historyMoreText;
+        }
+      };
+
+      const fetchHistory = async (root, cursor) => {
+        const path = root.getAttribute("data-chat-history-path") || "";
+        const chatID = root.getAttribute("data-chat-id") || "";
+        const url = new URL(path, window.location.origin);
+        url.searchParams.set("chat_id", chatID);
+        if (cursor) {
+          url.searchParams.set("cursor", cursor);
+        }
+        const response = await fetch(url.toString(), {
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) {
+          const text = (await response.text()).trim();
+          throw new Error(text || fallbackHistoryError);
+        }
+        return response.json();
+      };
+
+      const loadHistory = async (root, cursor) => {
+        const items = root.querySelector("[data-chat-history-items]");
+        if (!items) return;
+        if (root.getAttribute("data-chat-history-loading") === "true") {
+          return;
+        }
+        const prepend = typeof cursor === "string" && cursor !== "";
+        const anchor = prepend ? items.firstElementChild : null;
+        const anchorTop = anchor ? anchor.getBoundingClientRect().top : 0;
+        updateLoading(root, true);
+        clearMessages(root);
+        try {
+          const page = await fetchHistory(root, cursor);
+          const fragment = document.createDocumentFragment();
+          const pageItems = Array.isArray(page.items) ? page.items : [];
+          pageItems.forEach((item) => {
+            const node = renderHistoryItem(item);
+            if (node) {
+              fragment.appendChild(node);
+            }
+          });
+          if (!prepend) {
+            items.innerHTML = "";
+          }
+          if (prepend) {
+            items.prepend(fragment);
+          } else {
+            items.appendChild(fragment);
+          }
+
+          const loaded = Number(
+            root.getAttribute("data-chat-history-loaded") || "0"
+          ) + Number(page.returned_turn_count || 0);
+          root.setAttribute(
+            "data-chat-history-loaded",
+            String(loaded)
+          );
+          updateMeta(root, page);
+          updateBoundedNote(root, Boolean(page.bounded));
+          updateMoreButton(root, page.next_cursor || "");
+
+          if (!pageItems.length && Number(page.turn_count || 0) === 0) {
+            showEmpty(root, fallbackHistoryEmpty);
+          }
+          if (prepend && anchor) {
+            window.scrollBy(
+              0,
+              anchor.getBoundingClientRect().top - anchorTop
+            );
+          }
+          root.setAttribute("data-chat-history-loaded-once", "true");
+        } catch (err) {
+          showError(
+            root,
+            err && typeof err.message === "string"
+              ? err.message
+              : fallbackHistoryError
+          );
+        } finally {
+          updateLoading(root, false);
+        }
+      };
+
+      roots.forEach((root) => {
+        const disclosure = root.closest("details");
+        const button = root.querySelector("[data-chat-history-more]");
+        if (button) {
+          button.addEventListener("click", () => {
+            const nextCursor =
+              button.getAttribute("data-chat-history-next") || "";
+            if (!nextCursor) return;
+            loadHistory(root, nextCursor);
+          });
+        }
+        const ensureLoaded = () => {
+          if (
+            root.getAttribute("data-chat-history-loaded-once") ===
+            "true"
+          ) {
+            return;
+          }
+          loadHistory(root, "");
+        };
+        if (disclosure) {
+          disclosure.addEventListener("toggle", () => {
+            if (disclosure.open) {
+              ensureLoaded();
+            }
+          });
+          if (disclosure.open) {
+            ensureLoaded();
+          }
+          return;
+        }
+        ensureLoaded();
+      });
     })();
 
     (function () {
