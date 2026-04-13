@@ -217,6 +217,65 @@ const identityPageTemplateHTML = `
         </div>
       </form>
     </section>
+
+    {{if .Chats.Enabled}}
+    <section class="card" style="margin-top: 24px;" id="identity-chats">
+      <h2>Chat Overrides</h2>
+      <p class="subtle">
+        Chat-specific names override the global default inside one chat.
+        They persist on that chat line until cleared, even if the user
+        starts a new session epoch with <code>/new</code>.
+      </p>
+      <dl class="meta" style="margin-top: 14px;">
+        <dt>Active Overrides</dt>
+        <dd>{{.Chats.OverrideCount}}</dd>
+        <dt>Tracked Chats</dt>
+        <dd>{{.Chats.TotalCount}}</dd>
+        <dt>Open</dt>
+        <dd><a href="/chats">Chats</a></dd>
+      </dl>
+      {{if chatOverrideSample .Chats 6}}
+      <table style="margin-top: 16px;">
+        <thead>
+          <tr>
+            <th>Chat</th>
+            <th>Current Name</th>
+            <th>Override</th>
+            <th>Last Activity</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range chatOverrideSample .Chats 6}}
+          <tr>
+            <td>
+              <a href="/chats?chat_id={{.BaseSessionID}}">
+                {{chatDisplayLabel .}}
+              </a>
+            </td>
+            <td>
+              {{if .EffectiveAssistant}}
+                {{.EffectiveAssistant}}
+              {{else}}
+                -
+              {{end}}
+            </td>
+            <td>
+              {{if .ChatAssistantOverride}}
+                {{.ChatAssistantOverride}}
+              {{else}}
+                -
+              {{end}}
+            </td>
+            <td>{{formatTime .LastActivity}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="empty">No chat-specific name overrides are active.</p>
+      {{end}}
+    </section>
+    {{end}}
     {{else}}
     <section class="card" style="margin-top: 24px;">
       <p class="empty">Identity management is not available for this runtime.</p>
