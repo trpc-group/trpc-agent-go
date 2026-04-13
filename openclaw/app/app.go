@@ -1044,6 +1044,7 @@ func NewRuntime(
 			skillsRepo,
 			skillsWatch,
 			fileMemoryStore,
+			rt.SessionService(),
 		)
 		rt.applyAdminConfig(adminCfg)
 	}
@@ -1528,6 +1529,7 @@ func run(ctx context.Context, args []string) error {
 			skillsRepo,
 			skillsWatch,
 			fileMemoryStore,
+			bridgedSessionSvc,
 		))
 		adminSrv = &http.Server{
 			Handler:           adminSvc.Handler(),

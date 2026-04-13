@@ -53,6 +53,17 @@ func (s *sessionService) CreateSession(
 			err,
 		)
 	}
+	if err := RememberIndexedStorageScope(
+		ctx,
+		s.next,
+		key.AppName,
+		storageKey.UserID,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"remember indexed storage scope for create session: %w",
+			err,
+		)
+	}
 	return rewriteSessionForUser(sess, key.UserID), nil
 }
 
@@ -75,6 +86,17 @@ func (s *sessionService) GetSession(
 	); err != nil {
 		return nil, fmt.Errorf(
 			"remember indexed storage user for get session: %w",
+			err,
+		)
+	}
+	if err := RememberIndexedStorageScope(
+		ctx,
+		s.next,
+		key.AppName,
+		storageKey.UserID,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"remember indexed storage scope for get session: %w",
 			err,
 		)
 	}

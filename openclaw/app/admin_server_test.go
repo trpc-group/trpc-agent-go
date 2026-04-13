@@ -10,6 +10,7 @@
 package app
 
 import (
+	"context"
 	"net"
 	"path/filepath"
 	"testing"
@@ -17,7 +18,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 func TestOpenAdminBinding_AutoPortFallback(t *testing.T) {
@@ -101,6 +107,7 @@ nodes:
 		nil,
 		"127.0.0.1:8081",
 		"http://127.0.0.1:8081",
+		nil,
 		nil,
 		nil,
 		nil,
@@ -190,6 +197,52 @@ func TestBuildAdminConfig_IncludesIdentityAndChatsProviders(
 	t.Parallel()
 
 	stateDir := t.TempDir()
+	ctx := context.Background()
+	baseSessions := sessioninmemory.NewSessionService()
+	wrappedSessions := conversationscope.WrapSessionService(baseSessions)
+	_, err := wrappedSessions.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   "openclaw",
+			UserID:    "chat-scope",
+			SessionID: "sess-1",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	sess, err := wrappedSessions.GetSession(
+		ctx,
+		session.Key{
+			AppName:   "openclaw",
+			UserID:    "chat-scope",
+			SessionID: "sess-1",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	userEvt := event.NewResponseEvent(
+		"inv",
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("hello"),
+			}},
+		},
+	)
+	userEvt.Timestamp = time.Unix(1700000000, 0)
+	require.NoError(t, wrappedSessions.AppendEvent(ctx, sess, userEvt))
+	replyEvt := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("hi"),
+			}},
+		},
+	)
+	replyEvt.Timestamp = time.Unix(1700000010, 0)
+	require.NoError(t, wrappedSessions.AppendEvent(ctx, sess, replyEvt))
+
 	cfg := buildAdminConfig(
 		runOptions{
 			AppName: "openclaw",
@@ -211,6 +264,7 @@ func TestBuildAdminConfig_IncludesIdentityAndChatsProviders(
 		nil,
 		nil,
 		nil,
+		wrappedSessions,
 	)
 
 	require.NotNil(t, cfg.Identity)
@@ -251,7 +305,18 @@ func TestBuildAdminConfig_IncludesIdentityAndChatsProviders(
 		chatsStatus.GlobalAssistantSource,
 	)
 	require.Contains(t, chatsStatus.ChatOverrideHelp, "default name")
-	require.Empty(t, chatsStatus.Chats)
+	require.Len(t, chatsStatus.Chats, 1)
+	require.Equal(t, "chat-scope", chatsStatus.Chats[0].BaseSessionID)
+	require.Equal(t, "sess-1", chatsStatus.Chats[0].CurrentSessionID)
+
+	detailProvider, ok := cfg.Chats.(admin.ChatDetailProvider)
+	require.True(t, ok)
+	detail, err := detailProvider.ChatDetail("chat-scope")
+	require.NoError(t, err)
+	require.Len(t, detail.Transcript, 1)
+	require.Len(t, detail.Transcript[0].Turns, 2)
+	require.Equal(t, "hello", detail.Transcript[0].Turns[0].Text)
+	require.Equal(t, "hi", detail.Transcript[0].Turns[1].Text)
 }
 
 func TestNormalizeAdminAssistantName(t *testing.T) {
@@ -273,7 +338,7 @@ func TestNormalizeAdminAssistantName(t *testing.T) {
 func TestAdminIdentityHelpers(t *testing.T) {
 	t.Parallel()
 
-	require.Nil(t, buildAdminChatsProvider(nil))
+	require.Nil(t, buildAdminChatsProvider(nil, "", nil))
 	require.Equal(t, appName, defaultAdminRuntimeProduct(" "))
 	require.Equal(
 		t,
@@ -338,7 +403,7 @@ func TestAdminIdentityProvider_FallbackAndErrors(t *testing.T) {
 	_, err = badIdentity.IdentityStatus()
 	require.Error(t, err)
 
-	chats := buildAdminChatsProvider(badIdentity)
+	chats := buildAdminChatsProvider(badIdentity, "openclaw", nil)
 	_, err = chats.ChatsStatus()
 	require.Error(t, err)
 }

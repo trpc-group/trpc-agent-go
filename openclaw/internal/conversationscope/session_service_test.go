@@ -40,9 +40,12 @@ type recordingSessionService struct {
 	deleteKey           session.Key
 	updateAppName       string
 	updateAppState      session.StateMap
+	updateAppStateErr   error
 	deleteAppName       string
 	deleteAppKey        string
 	listAppName         string
+	listAppStates       session.StateMap
+	listAppStatesErr    error
 	updateUserKey       session.UserKey
 	updateUserState     session.StateMap
 	updateUserStateErr  error
@@ -139,7 +142,7 @@ func (r *recordingSessionService) UpdateAppState(
 ) error {
 	r.updateAppName = appName
 	r.updateAppState = state
-	return nil
+	return r.updateAppStateErr
 }
 
 func (r *recordingSessionService) DeleteAppState(
@@ -157,6 +160,12 @@ func (r *recordingSessionService) ListAppStates(
 	appName string,
 ) (session.StateMap, error) {
 	r.listAppName = appName
+	if r.listAppStatesErr != nil {
+		return nil, r.listAppStatesErr
+	}
+	if r.listAppStates != nil {
+		return r.listAppStates, nil
+	}
 	return session.StateMap{"a": []byte("b")}, nil
 }
 
@@ -519,6 +528,32 @@ func TestIndexedStorageUsersLifecycle(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, []string{"chat-scope-2"}, storageUsers)
+
+	require.NoError(
+		t,
+		RememberIndexedStorageScope(
+			context.Background(),
+			svc,
+			"demo-app",
+			"chat-scope",
+		),
+	)
+	require.NoError(
+		t,
+		RememberIndexedStorageScope(
+			context.Background(),
+			svc,
+			"demo-app",
+			"chat-scope-2",
+		),
+	)
+	scopes, err := ListIndexedStorageScopes(
+		context.Background(),
+		svc,
+		"demo-app",
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"chat-scope", "chat-scope-2"}, scopes)
 }
 
 func TestIndexedStorageUsersHelpers_EdgeCases(t *testing.T) {
@@ -597,6 +632,7 @@ func TestIndexedStorageUsersHelpers_EdgeCases(t *testing.T) {
 	require.Contains(t, err.Error(), "delete boom")
 
 	require.Nil(t, indexedStorageUsersFromState(nil))
+	require.Nil(t, indexedStorageScopesFromState(nil))
 	require.Equal(
 		t,
 		[]string{"a", "z"},
@@ -608,7 +644,53 @@ func TestIndexedStorageUsersHelpers_EdgeCases(t *testing.T) {
 			"other":                        []byte("1"),
 		}),
 	)
+	require.Equal(
+		t,
+		[]string{"a", "z"},
+		indexedStorageScopesFromState(session.StateMap{
+			storageScopeStatePrefix + " z ": []byte("1"),
+			storageScopeStatePrefix + "a":   []byte("1"),
+			storageScopeStatePrefix + " a ": []byte("1"),
+			storageScopeStatePrefix + "b":   nil,
+			"other":                         []byte("1"),
+		}),
+	)
 	require.Equal(t, "", storageUserStateKey("   "))
+	require.Equal(t, "", storageScopeStateKey("   "))
+
+	require.NoError(
+		t,
+		RememberIndexedStorageScope(
+			context.Background(),
+			nil,
+			"demo-app",
+			"chat-scope",
+		),
+	)
+	scopes, err := ListIndexedStorageScopes(
+		context.Background(),
+		nil,
+		"demo-app",
+	)
+	require.NoError(t, err)
+	require.Nil(t, scopes)
+
+	scopes, err = ListIndexedStorageScopes(
+		context.Background(),
+		sessioninmemory.NewSessionService(),
+		" ",
+	)
+	require.NoError(t, err)
+	require.Nil(t, scopes)
+
+	rec.listAppStatesErr = errors.New("app list boom")
+	_, err = ListIndexedStorageScopes(
+		context.Background(),
+		rec,
+		"demo-app",
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "app list boom")
 }
 
 func TestWrapSessionService_DelegatesAdministrativeMethods(t *testing.T) {
@@ -865,6 +947,36 @@ func TestWrapSessionService_CreateSession_PropagatesIndexingError(t *testing.T) 
 	require.Contains(t, err.Error(), "index boom")
 }
 
+func TestWrapSessionService_CreateSession_PropagatesScopeIndexError(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rec := &recordingSessionService{
+		updateAppStateErr: errors.New("scope boom"),
+	}
+	wrapped := WrapSessionService(rec)
+
+	sess, err := wrapped.CreateSession(
+		WithStorageUserID(context.Background(), "chat-scope"),
+		session.Key{
+			AppName:   "demo-app",
+			UserID:    "canonical-user",
+			SessionID: "sess-1",
+		},
+		nil,
+	)
+	require.Error(t, err)
+	require.Nil(t, sess)
+	require.Equal(t, "demo-app", rec.updateAppName)
+	require.Contains(
+		t,
+		err.Error(),
+		"remember indexed storage scope for create session",
+	)
+	require.Contains(t, err.Error(), "scope boom")
+}
+
 func TestWrapSessionService_GetSession_PropagatesIndexingError(t *testing.T) {
 	t.Parallel()
 
@@ -894,4 +1006,33 @@ func TestWrapSessionService_GetSession_PropagatesIndexingError(t *testing.T) {
 		"remember indexed storage user for get session",
 	)
 	require.Contains(t, err.Error(), "index boom")
+}
+
+func TestWrapSessionService_GetSession_PropagatesScopeIndexError(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	rec := &recordingSessionService{
+		updateAppStateErr: errors.New("scope boom"),
+	}
+	wrapped := WrapSessionService(rec)
+
+	sess, err := wrapped.GetSession(
+		WithStorageUserID(context.Background(), "chat-scope"),
+		session.Key{
+			AppName:   "demo-app",
+			UserID:    "canonical-user",
+			SessionID: "sess-1",
+		},
+	)
+	require.Error(t, err)
+	require.Nil(t, sess)
+	require.Equal(t, "demo-app", rec.updateAppName)
+	require.Contains(
+		t,
+		err.Error(),
+		"remember indexed storage scope for get session",
+	)
+	require.Contains(t, err.Error(), "scope boom")
 }
