@@ -11,6 +11,7 @@ package app
 
 import (
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -181,4 +182,90 @@ nodes:
 	require.Equal(t, "openclaw", provider.Profiles[0].Name)
 	require.Len(t, provider.Nodes, 1)
 	require.Equal(t, "edge", provider.Nodes[0].ID)
+}
+
+func TestBuildAdminConfig_IncludesIdentityAndChatsProviders(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	cfg := buildAdminConfig(
+		runOptions{
+			AppName: "openclaw",
+		},
+		agentTypeLLM,
+		"instance-1",
+		admin.LangfuseStatus{},
+		stateDir,
+		filepath.Join(stateDir, "debug"),
+		time.Unix(0, 0),
+		nil,
+		admin.Routes{},
+		nil,
+		nil,
+		nil,
+		nil,
+		"127.0.0.1:8081",
+		"http://127.0.0.1:8081",
+		nil,
+		nil,
+		nil,
+	)
+
+	require.NotNil(t, cfg.Identity)
+	require.NotNil(t, cfg.Chats)
+
+	identityStatus, err := cfg.Identity.IdentityStatus()
+	require.NoError(t, err)
+	require.Equal(t, "openclaw", identityStatus.EffectiveName)
+	require.Equal(t, "openclaw", identityStatus.RuntimeProduct)
+	require.Equal(
+		t,
+		filepath.Join(stateDir, adminIdentityFileName),
+		identityStatus.SourcePath,
+	)
+	require.Equal(
+		t,
+		adminIdentityFallbackRuntime,
+		identityStatus.FallbackSource,
+	)
+
+	err = cfg.Identity.SaveAssistantName("  Nora   Claw  ")
+	require.NoError(t, err)
+
+	identityStatus, err = cfg.Identity.IdentityStatus()
+	require.NoError(t, err)
+	require.Equal(t, "Nora Claw", identityStatus.ConfiguredName)
+	require.Equal(t, "Nora Claw", identityStatus.EffectiveName)
+	require.Empty(t, identityStatus.FallbackSource)
+
+	chatsStatus, err := cfg.Chats.ChatsStatus()
+	require.NoError(t, err)
+	require.True(t, chatsStatus.Enabled)
+	require.Equal(t, "Nora Claw", chatsStatus.GlobalAssistantName)
+	require.Equal(t, "openclaw", chatsStatus.RuntimeAssistantName)
+	require.Equal(
+		t,
+		adminDefaultNameSourceFile,
+		chatsStatus.GlobalAssistantSource,
+	)
+	require.Contains(t, chatsStatus.ChatOverrideHelp, "default name")
+	require.Empty(t, chatsStatus.Chats)
+}
+
+func TestNormalizeAdminAssistantName(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "", normalizeAdminAssistantName("   "))
+	require.Equal(
+		t,
+		"Nora Claw",
+		normalizeAdminAssistantName(" “Nora   Claw” "),
+	)
+
+	raw := "1234567890123456789012345678901234567890"
+	got := normalizeAdminAssistantName(raw)
+	require.Len(t, []rune(got), adminAssistantNameMaxRunes)
+	require.Equal(t, raw[:adminAssistantNameMaxRunes], got)
 }

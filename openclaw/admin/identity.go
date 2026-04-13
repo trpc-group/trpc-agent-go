@@ -245,7 +245,11 @@ const identityPageTemplateHTML = `
         <dt>Open</dt>
         <dd><a href="/chats">Chats</a></dd>
       </dl>
-      {{if chatOverrideSample .Chats 6}}
+      {{if .Chats.Error}}
+      <div class="notice err" style="margin-top: 12px;">
+        {{.Chats.Error}}
+      </div>
+      {{else if chatOverrideSample .Chats 6}}
       <table style="margin-top: 16px;">
         <thead>
           <tr>

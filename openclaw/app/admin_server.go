@@ -127,6 +127,10 @@ func buildAdminConfig(
 	skillsWatch *ocskills.WatchService,
 	memoryFiles admin.MemoryFileStore,
 ) admin.Config {
+	identity := buildAdminIdentityProvider(
+		stateDir,
+		opts.AppName,
+	)
 	return admin.Config{
 		AppName:        opts.AppName,
 		InstanceID:     instanceID,
@@ -159,6 +163,8 @@ func buildAdminConfig(
 			opts,
 			promptController,
 		),
+		Identity:    identity,
+		Chats:       buildAdminChatsProvider(identity),
 		MemoryFiles: memoryFiles,
 		Browser: buildBrowserAdminConfig(
 			opts.ToolProviders,

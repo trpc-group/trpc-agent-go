@@ -1681,6 +1681,43 @@ func TestService_IdentityPageShowsChatOverrides(t *testing.T) {
 	)
 }
 
+func TestService_IdentityPageShowsChatsError(t *testing.T) {
+	t.Parallel()
+
+	identity := &stubIdentityProvider{
+		status: IdentityStatus{
+			Enabled:        true,
+			ConfiguredName: "Claw",
+			EffectiveName:  "Claw",
+			RuntimeProduct: "trpc-claw",
+			SourcePath:     "/tmp/IDENTITY.md",
+		},
+	}
+	chats := &stubChatsProvider{
+		status: ChatsStatus{
+			Enabled: true,
+			Error:   "chat status failed",
+		},
+	}
+	svc := New(Config{
+		Identity: identity,
+		Chats:    chats,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeIdentity, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "chat status failed")
+	require.NotContains(
+		t,
+		body,
+		"No chat-specific name overrides are active.",
+	)
+}
+
 func TestService_ChatsPageAndJSON(t *testing.T) {
 	t.Parallel()
 
