@@ -196,8 +196,10 @@ func (c *inProcGatewayClient) ForgetUser(
 	}
 
 	storageUserIDs := []string{userID}
+	var indexedStorageUsers []string
+	var err error
 	if c.sessions != nil {
-		indexedStorageUsers, err := conversationscope.ListIndexedStorageUsers(
+		indexedStorageUsers, err = conversationscope.ListIndexedStorageUsers(
 			ctx,
 			c.sessions,
 			appName,
@@ -235,20 +237,6 @@ func (c *inProcGatewayClient) ForgetUser(
 				}
 			}
 		}
-		for _, storageUserID := range indexedStorageUsers {
-			if err := conversationscope.DeleteIndexedStorageUser(
-				ctx,
-				c.sessions,
-				appName,
-				userID,
-				storageUserID,
-			); err != nil {
-				return fmt.Errorf(
-					"forget: delete storage scope index: %w",
-					err,
-				)
-			}
-		}
 	}
 
 	if c.memories != nil {
@@ -275,8 +263,26 @@ func (c *inProcGatewayClient) ForgetUser(
 		}
 	}
 	if c.memoryFileStore != nil {
-		if err := c.memoryFileStore.DeleteUser(ctx, appName, userID); err != nil {
-			return fmt.Errorf("forget: delete user memory files: %w", err)
+		for _, storageUserID := range storageUserIDs {
+			if err := c.memoryFileStore.DeleteUser(ctx, appName, storageUserID); err != nil {
+				return fmt.Errorf("forget: delete user memory files: %w", err)
+			}
+		}
+	}
+	if c.sessions != nil {
+		for _, storageUserID := range indexedStorageUsers {
+			if err := conversationscope.DeleteIndexedStorageUser(
+				ctx,
+				c.sessions,
+				appName,
+				userID,
+				storageUserID,
+			); err != nil {
+				return fmt.Errorf(
+					"forget: delete storage scope index: %w",
+					err,
+				)
+			}
 		}
 	}
 
