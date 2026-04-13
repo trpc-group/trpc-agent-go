@@ -524,3 +524,15 @@ func TestCancelUserIDResolverError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "resolve user ID")
 }
+
+func TestCancelAppNameResolverError(t *testing.T) {
+	r := &runner{
+		runner: &fakeRunner{},
+		appNameResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
+			return "", errors.New("boom")
+		},
+		userIDResolver: NewOptions().UserIDResolver,
+	}
+	err := r.Cancel(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
+	assert.ErrorContains(t, err, "resolve app name")
+}

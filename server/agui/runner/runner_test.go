@@ -930,6 +930,53 @@ func TestRunUsesResolvedAppNameForTrackKey(t *testing.T) {
 	}
 }
 
+func TestRunAppNameResolverError(t *testing.T) {
+	underlying := &fakeRunner{}
+	r := &runner{
+		runner:            underlying,
+		appNameResolver:   func(context.Context, *adapter.RunAgentInput) (string, error) { return "", errors.New("boom") },
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    func(context.Context, *adapter.RunAgentInput) (string, error) { return "demo-user", nil },
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	assert.Nil(t, ch)
+	assert.ErrorContains(t, err, "resolve app name")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestResolveAppNameFallsBackToStaticAppName(t *testing.T) {
+	r := &runner{appName: "static-app"}
+	appName, err := r.resolveAppName(context.Background(), &adapter.RunAgentInput{})
+	assert.NoError(t, err)
+	assert.Equal(t, "static-app", appName)
+	r.appNameResolver = func(context.Context, *adapter.RunAgentInput) (string, error) {
+		return "", nil
+	}
+	appName, err = r.resolveAppName(context.Background(), &adapter.RunAgentInput{})
+	assert.NoError(t, err)
+	assert.Equal(t, "static-app", appName)
+}
+
+func TestResolveAppNameReturnsResolverError(t *testing.T) {
+	r := &runner{
+		appName: "static-app",
+		appNameResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
+			return "", errors.New("boom")
+		},
+	}
+	appName, err := r.resolveAppName(context.Background(), &adapter.RunAgentInput{})
+	assert.Empty(t, appName)
+	assert.EqualError(t, err, "boom")
+}
+
 func TestRecordUserMessageRejectsNilAndNonUserRole(t *testing.T) {
 	r := &runner{}
 	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}

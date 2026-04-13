@@ -476,6 +476,27 @@ func TestMessagesSnapshotUserIDResolverError(t *testing.T) {
 	assert.Contains(t, err.Error(), "resolve user ID")
 }
 
+func TestMessagesSnapshotAppNameResolverError(t *testing.T) {
+	svc := &testSessionService{}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner: noopBaseRunner{},
+		appNameResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
+			return "", errors.New("boom")
+		},
+		userIDResolver:    NewOptions().UserIDResolver,
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		tracker:           tracker,
+	}
+	stream, err := r.MessagesSnapshot(
+		context.Background(),
+		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
+	)
+	assert.Nil(t, stream)
+	assert.ErrorContains(t, err, "resolve app name")
+}
+
 func TestMessagesSnapshotRunAgentInputHookError(t *testing.T) {
 	svc := &testSessionService{}
 	tracker, err := track.New(svc)
