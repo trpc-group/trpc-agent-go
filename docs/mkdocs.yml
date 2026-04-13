@@ -17,6 +17,7 @@ nav:
           - Dify Agent: dify.md
           - Claude Code Agent: claudecode.md
       - Runner: runner.md
+      - Code Executor: codeexecutor.md
       - Error Handling: error-handling.md
       - Model: model.md
       - Callbacks: callbacks.md
