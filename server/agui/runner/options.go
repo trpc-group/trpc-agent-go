@@ -39,6 +39,7 @@ type Options struct {
 	TranslateCallbacks                     *translator.Callbacks // TranslateCallbacks translates the run events to AG-UI events.
 	RunAgentInputHook                      RunAgentInputHook     // RunAgentInputHook allows modifying the run input before processing.
 	AppName                                string                // AppName is the name of the application.
+	AppNameResolver                        AppNameResolver       // AppNameResolver derives the app name for an AG-UI run.
 	SessionService                         session.Service       // SessionService is the session service.
 	StateResolver                          StateResolver         // StateResolver resolves runtime state for an AG-UI run.
 	RunOptionResolver                      RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
@@ -64,6 +65,7 @@ func NewOptions(opt ...Option) *Options {
 		UserIDResolver:                         defaultUserIDResolver,
 		TranslatorFactory:                      defaultTranslatorFactory,
 		RunAgentInputHook:                      defaultRunAgentInputHook,
+		AppNameResolver:                        defaultAppNameResolver,
 		StateResolver:                          defaultStateResolver,
 		RunOptionResolver:                      defaultRunOptionResolver,
 		AggregatorFactory:                      aggregator.New,
@@ -126,6 +128,16 @@ func WithRunAgentInputHook(hook RunAgentInputHook) Option {
 func WithAppName(n string) Option {
 	return func(o *Options) {
 		o.AppName = n
+	}
+}
+
+// AppNameResolver is a function that derives the app name for an AG-UI run.
+type AppNameResolver func(ctx context.Context, input *adapter.RunAgentInput) (string, error)
+
+// WithAppNameResolver sets the app name resolver.
+func WithAppNameResolver(r AppNameResolver) Option {
+	return func(o *Options) {
+		o.AppNameResolver = r
 	}
 }
 
@@ -271,6 +283,11 @@ func defaultTranslatorFactory(ctx context.Context, input *adapter.RunAgentInput,
 // defaultRunAgentInputHook returns the input unchanged.
 func defaultRunAgentInputHook(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
 	return input, nil
+}
+
+// defaultAppNameResolver returns no dynamic app name.
+func defaultAppNameResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
+	return "", nil
 }
 
 // defaultRunOptionResolver is the default run option resolver.

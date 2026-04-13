@@ -205,11 +205,12 @@ To enable message snapshots, configure the following options:
 
 - `agui.WithMessagesSnapshotEnabled(true)` enables message snapshots;
 - `agui.WithMessagesSnapshotPath` sets the custom message snapshot route, defaulting to `/history`;
-- `agui.WithAppName(name)` specifies the application name;
+- `agui.WithAppName(name)` specifies the application name as the default `AppName`;
+- `agui.WithAppNameResolver(resolver)` is optional and overrides `AppName` per request;
 - `agui.WithSessionService(service)` injects the `session.Service` used to look up historical events;
 - `aguirunner.WithUserIDResolver(resolver)` customises how `userID` is resolved, defaulting to `"user"`.
 
-When handling a message snapshot request, the framework extracts `threadId` as the `SessionID` from the AG-UI request body `RunAgentInput`, resolves `userID` using the custom `UserIDResolver`, builds `session.Key` with `appName`, reads the persisted events from session storage, reconstructs the message list required by `MessagesSnapshot`, wraps it into a `MESSAGES_SNAPSHOT` event, and sends matching `RUN_STARTED` and `RUN_FINISHED` events.
+When handling a message snapshot request, the framework extracts `threadId` as the `SessionID` from the AG-UI request body `RunAgentInput`, resolves `userID` using the custom `UserIDResolver`, prefers the `appName` returned by `AppNameResolver`, and falls back to `agui.WithAppName(name)` when the resolver returns an empty value. These values are used to build `session.Key`, read the persisted events from session storage, reconstruct the message list required by `MessagesSnapshot`, wrap it into a `MESSAGES_SNAPSHOT` event, and send matching `RUN_STARTED` and `RUN_FINISHED` events.
 
 Example:
 
@@ -433,6 +434,43 @@ resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, err
 
 runner := runner.NewRunner(agent.Info().Name, agent)
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDResolver(resolver)))
+```
+
+### Custom `AppNameResolver`
+
+By default, AG-UI uses `agui.WithAppName(name)` as the static `AppName` and combines it with `userID` and `threadId` to form the `SessionKey`.
+
+If you need to switch `AppName` per request, implement `AppNameResolver` and inject it with `agui.WithAppNameResolver`. When `AppNameResolver` returns a non-empty string, it overrides `AppName` for that request. When it returns an empty string, the framework falls back to `agui.WithAppName(name)`.
+
+The real-time conversation route, cancel route, and message snapshot route all share the same `AppName` resolution logic. Requests to `/agui`, `/cancel`, and `/history` for the same session should therefore carry the same business identifier.
+
+When message snapshots are enabled, you still need to configure `agui.WithAppName(name)` at startup as the default value. `AppNameResolver` only provides request-level overrides.
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui"
+    "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+)
+
+resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
+    forwardedProps, ok := input.ForwardedProps.(map[string]any)
+    if !ok || forwardedProps == nil {
+        return "", nil
+    }
+    appName, ok := forwardedProps["appName"].(string)
+    if !ok || appName == "" {
+        return "", nil
+    }
+    return appName, nil
+}
+
+runner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(
+    runner,
+    agui.WithAppName("default-app"),
+    agui.WithAppNameResolver(resolver),
+)
 ```
 
 ### Custom `RunOptionResolver`

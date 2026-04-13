@@ -48,6 +48,11 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Same(t, input, modified)
 
+	assert.NotNil(t, opts.AppNameResolver)
+	appName, err := opts.AppNameResolver(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Empty(t, appName)
+
 	assert.NotNil(t, opts.StateResolver)
 	resolvedState, err := opts.StateResolver(context.Background(), input)
 	assert.NoError(t, err)
@@ -169,6 +174,20 @@ func TestWithRunAgentInputHook(t *testing.T) {
 func TestWithAppName(t *testing.T) {
 	opts := NewOptions(WithAppName("custom-app"))
 	assert.Equal(t, "custom-app", opts.AppName)
+}
+
+func TestWithAppNameResolver(t *testing.T) {
+	called := false
+	resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
+		called = true
+		return "custom-app", nil
+	}
+	opts := NewOptions(WithAppNameResolver(resolver))
+	assert.NotNil(t, opts.AppNameResolver)
+	appName, err := opts.AppNameResolver(context.Background(), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, "custom-app", appName)
+	assert.True(t, called)
 }
 
 func TestWithSessionService(t *testing.T) {
