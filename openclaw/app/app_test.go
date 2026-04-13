@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -3720,6 +3721,71 @@ func TestInProcGatewayClient_ForgetUser_DeleteMemoryFilesError(t *testing.T) {
 	err = c.ForgetUser(ctx, "telegram", "u1")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "forget: delete user memory files")
+}
+
+func TestInProcGatewayClient_ForgetUser_DeleteMemoryFilesErrorPreservesStorageScopeIndex(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-based delete failure is unreliable on windows")
+	}
+
+	ctx := context.Background()
+	srv, err := gateway.New(&inProcGWTestRunner{})
+	require.NoError(t, err)
+
+	const (
+		canonicalUserID = "u1"
+		storageUserID   = "chat-scope"
+	)
+
+	sessSvc := sessioninmemory.NewSessionService()
+	require.NoError(
+		t,
+		conversationscope.RememberIndexedStorageUser(
+			ctx,
+			sessSvc,
+			appName,
+			canonicalUserID,
+			storageUserID,
+		),
+	)
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+	_, err = store.EnsureMemory(ctx, appName, storageUserID)
+	require.NoError(t, err)
+
+	scopedDir, err := store.MemoryDir(appName, storageUserID)
+	require.NoError(t, err)
+	scopedParent := filepath.Dir(scopedDir)
+	parentInfo, err := os.Stat(scopedParent)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(scopedParent, 0o500))
+	defer func() {
+		require.NoError(t, os.Chmod(scopedParent, parentInfo.Mode().Perm()))
+	}()
+
+	c := newInProcGatewayClient(srv, appName, sessSvc, nil, "")
+	c.SetMemoryFileStore(store)
+
+	err = c.ForgetUser(ctx, "telegram", canonicalUserID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "forget: delete user memory files")
+
+	indexedStorageUsers, err := conversationscope.ListIndexedStorageUsers(
+		ctx,
+		sessSvc,
+		appName,
+		canonicalUserID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{storageUserID}, indexedStorageUsers)
+
+	_, err = os.Stat(scopedDir)
+	require.NoError(t, err)
 }
 
 func TestInProcGatewayClient_ScheduledJobs(t *testing.T) {

@@ -178,10 +178,11 @@ const (
 		"OPENCLAW_SESSION_UPLOADS_DIR. Prefer writing derived " +
 		"files under " +
 		"OPENCLAW_SESSION_UPLOADS_DIR when you will send them " +
-		"back to the user. OPENCLAW_MEMORY_FILE is a " +
-		"user-owned file, not hidden internal state. If the " +
-		"user asks what you remember or asks to inspect that " +
-		"file, read it and quote or summarize the relevant " +
+		"back to the user. OPENCLAW_MEMORY_FILE is a visible " +
+		"MEMORY.md file for the current scope, not hidden " +
+		"internal state. If the user asks what you remember or " +
+		"asks to inspect that file, read it and quote or " +
+		"summarize the relevant " +
 		"lines. If the user explicitly says 'remember this' " +
 		"or asks you to remember a durable fact, preference, " +
 		"or workflow rule, update OPENCLAW_MEMORY_FILE with a " +
