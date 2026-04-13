@@ -445,8 +445,6 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDRe
 
 ```go
 import (
-    "context"
-
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"

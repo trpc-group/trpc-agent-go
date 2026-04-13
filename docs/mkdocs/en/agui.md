@@ -448,8 +448,6 @@ When message snapshots are enabled, you still need to configure `agui.WithAppNam
 
 ```go
 import (
-    "context"
-
     "trpc.group/trpc-go/trpc-agent-go/runner"
     "trpc.group/trpc-go/trpc-agent-go/server/agui"
     "trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
