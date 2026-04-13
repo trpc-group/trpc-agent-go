@@ -18,6 +18,7 @@ import (
 )
 
 const storageUserStatePrefix = "openclaw.conversation_storage_user:"
+const storageScopeStatePrefix = "openclaw.conversation_storage_scope:"
 
 var storageUserStateValue = []byte("1")
 
@@ -83,6 +84,52 @@ func ListIndexedStorageUsers(
 	return indexedStorageUsersFromState(state), nil
 }
 
+// RememberIndexedStorageScope records one persisted conversation scope at
+// app level so admin surfaces can enumerate known chats.
+func RememberIndexedStorageScope(
+	ctx context.Context,
+	svc session.Service,
+	appName string,
+	storageUserID string,
+) error {
+	if svc == nil {
+		return nil
+	}
+	appName = strings.TrimSpace(appName)
+	storageUserID = strings.TrimSpace(storageUserID)
+	if appName == "" || storageUserID == "" {
+		return nil
+	}
+	return svc.UpdateAppState(
+		ctx,
+		appName,
+		session.StateMap{
+			storageScopeStateKey(storageUserID): storageUserStateValue,
+		},
+	)
+}
+
+// ListIndexedStorageScopes lists persisted conversation scopes remembered
+// for the application.
+func ListIndexedStorageScopes(
+	ctx context.Context,
+	svc session.Service,
+	appName string,
+) ([]string, error) {
+	if svc == nil {
+		return nil, nil
+	}
+	appName = strings.TrimSpace(appName)
+	if appName == "" {
+		return nil, nil
+	}
+	state, err := svc.ListAppStates(ctx, appName)
+	if err != nil {
+		return nil, err
+	}
+	return indexedStorageScopesFromState(state), nil
+}
+
 // DeleteIndexedStorageUser removes one remembered storage scope index.
 func DeleteIndexedStorageUser(
 	ctx context.Context,
@@ -139,10 +186,47 @@ func indexedStorageUsersFromState(state session.StateMap) []string {
 	return out
 }
 
+func indexedStorageScopesFromState(state session.StateMap) []string {
+	if len(state) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(state))
+	out := make([]string, 0, len(state))
+	for key, value := range state {
+		if value == nil || !strings.HasPrefix(key, storageScopeStatePrefix) {
+			continue
+		}
+		storageUserID := strings.TrimSpace(
+			strings.TrimPrefix(key, storageScopeStatePrefix),
+		)
+		if storageUserID == "" {
+			continue
+		}
+		if _, ok := seen[storageUserID]; ok {
+			continue
+		}
+		seen[storageUserID] = struct{}{}
+		out = append(out, storageUserID)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func storageUserStateKey(storageUserID string) string {
 	storageUserID = strings.TrimSpace(storageUserID)
 	if storageUserID == "" {
 		return ""
 	}
 	return storageUserStatePrefix + storageUserID
+}
+
+func storageScopeStateKey(storageUserID string) string {
+	storageUserID = strings.TrimSpace(storageUserID)
+	if storageUserID == "" {
+		return ""
+	}
+	return storageScopeStatePrefix + storageUserID
 }

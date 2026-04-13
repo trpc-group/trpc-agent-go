@@ -21,6 +21,8 @@ import (
 	"syscall"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/session"
+
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
 	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
@@ -126,6 +128,7 @@ func buildAdminConfig(
 	skillsRepo *ocskills.Repository,
 	skillsWatch *ocskills.WatchService,
 	memoryFiles admin.MemoryFileStore,
+	sessionSvc session.Service,
 ) admin.Config {
 	identity := buildAdminIdentityProvider(
 		stateDir,
@@ -163,8 +166,12 @@ func buildAdminConfig(
 			opts,
 			promptController,
 		),
-		Identity:    identity,
-		Chats:       buildAdminChatsProvider(identity),
+		Identity: identity,
+		Chats: buildAdminChatsProvider(
+			identity,
+			opts.AppName,
+			sessionSvc,
+		),
 		MemoryFiles: memoryFiles,
 		Browser: buildBrowserAdminConfig(
 			opts.ToolProviders,
