@@ -947,7 +947,7 @@ func TestWrapSessionService_CreateSession_PropagatesIndexingError(t *testing.T) 
 	require.Contains(t, err.Error(), "index boom")
 }
 
-func TestWrapSessionService_CreateSession_PropagatesScopeIndexError(
+func TestWrapSessionService_CreateSession_IgnoresScopeIndexError(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -966,15 +966,10 @@ func TestWrapSessionService_CreateSession_PropagatesScopeIndexError(
 		},
 		nil,
 	)
-	require.Error(t, err)
-	require.Nil(t, sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 	require.Equal(t, "demo-app", rec.updateAppName)
-	require.Contains(
-		t,
-		err.Error(),
-		"remember indexed storage scope for create session",
-	)
-	require.Contains(t, err.Error(), "scope boom")
+	require.Equal(t, "canonical-user", sess.UserID)
 }
 
 func TestWrapSessionService_GetSession_PropagatesIndexingError(t *testing.T) {
@@ -1008,7 +1003,7 @@ func TestWrapSessionService_GetSession_PropagatesIndexingError(t *testing.T) {
 	require.Contains(t, err.Error(), "index boom")
 }
 
-func TestWrapSessionService_GetSession_PropagatesScopeIndexError(
+func TestWrapSessionService_GetSession_IgnoresScopeIndexError(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -1026,13 +1021,8 @@ func TestWrapSessionService_GetSession_PropagatesScopeIndexError(
 			SessionID: "sess-1",
 		},
 	)
-	require.Error(t, err)
-	require.Nil(t, sess)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
 	require.Equal(t, "demo-app", rec.updateAppName)
-	require.Contains(
-		t,
-		err.Error(),
-		"remember indexed storage scope for get session",
-	)
-	require.Contains(t, err.Error(), "scope boom")
+	require.Equal(t, "canonical-user", sess.UserID)
 }

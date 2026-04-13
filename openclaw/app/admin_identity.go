@@ -275,12 +275,15 @@ func (p *adminChatsProvider) ChatDetail(
 		identityDefaultNameSource(identity),
 		sessions,
 	)
-	detail.Transcript = buildAdminChatTranscript(
+	detail.Transcript, err = buildAdminChatTranscript(
 		strings.TrimSpace(p.appName),
 		p.session,
 		baseSessionID,
 		sessions,
 	)
+	if err != nil {
+		return admin.ChatView{}, err
+	}
 	return detail, nil
 }
 
@@ -424,10 +427,10 @@ func buildAdminChatTranscript(
 	sessionSvc session.Service,
 	baseSessionID string,
 	sessions []*session.Session,
-) []admin.ChatTranscriptView {
+) ([]admin.ChatTranscriptView, error) {
 	if strings.TrimSpace(appName) == "" || sessionSvc == nil ||
 		strings.TrimSpace(baseSessionID) == "" || len(sessions) == 0 {
-		return nil
+		return nil, nil
 	}
 	if len(sessions) > adminChatTranscriptSessionLimit {
 		sessions = sessions[:adminChatTranscriptSessionLimit]
@@ -435,22 +438,25 @@ func buildAdminChatTranscript(
 	transcript := make([]admin.ChatTranscriptView, 0, len(sessions))
 	currentSessionID := strings.TrimSpace(sessions[0].ID)
 	for _, sess := range sessions {
-		view, ok := buildAdminChatTranscriptView(
+		view, ok, err := buildAdminChatTranscriptView(
 			appName,
 			sessionSvc,
 			baseSessionID,
 			currentSessionID,
 			sess,
 		)
+		if err != nil {
+			return nil, err
+		}
 		if !ok {
 			continue
 		}
 		transcript = append(transcript, view)
 	}
 	if len(transcript) == 0 {
-		return nil
+		return nil, nil
 	}
-	return transcript
+	return transcript, nil
 }
 
 func buildAdminChatTranscriptView(
@@ -459,13 +465,13 @@ func buildAdminChatTranscriptView(
 	baseSessionID string,
 	currentSessionID string,
 	sessionMeta *session.Session,
-) (admin.ChatTranscriptView, bool) {
+) (admin.ChatTranscriptView, bool, error) {
 	if sessionMeta == nil {
-		return admin.ChatTranscriptView{}, false
+		return admin.ChatTranscriptView{}, false, nil
 	}
 	sessionID := strings.TrimSpace(sessionMeta.ID)
 	if sessionID == "" {
-		return admin.ChatTranscriptView{}, false
+		return admin.ChatTranscriptView{}, false, nil
 	}
 	sess, err := sessionSvc.GetSession(
 		context.Background(),
@@ -475,8 +481,18 @@ func buildAdminChatTranscriptView(
 			SessionID: sessionID,
 		},
 	)
-	if err != nil || sess == nil {
-		return admin.ChatTranscriptView{}, false
+	if err != nil {
+		return admin.ChatTranscriptView{}, false, fmt.Errorf(
+			"load chat transcript for %q: %w",
+			sessionID,
+			err,
+		)
+	}
+	if sess == nil {
+		return admin.ChatTranscriptView{}, false, fmt.Errorf(
+			"load chat transcript for %q: session not found",
+			sessionID,
+		)
 	}
 
 	turns := conversation.BuildTurns(sess, conversation.TurnOptions{})
@@ -502,7 +518,7 @@ func buildAdminChatTranscriptView(
 		})
 	}
 	if len(mapped) == 0 {
-		return admin.ChatTranscriptView{}, false
+		return admin.ChatTranscriptView{}, false, nil
 	}
 	return admin.ChatTranscriptView{
 		SessionID:    sessionID,
@@ -510,7 +526,7 @@ func buildAdminChatTranscriptView(
 		Current:      sessionID == strings.TrimSpace(currentSessionID),
 		Truncated:    truncated,
 		Turns:        mapped,
-	}, true
+	}, true, nil
 }
 
 func trimAdminChatTranscriptText(text string) string {

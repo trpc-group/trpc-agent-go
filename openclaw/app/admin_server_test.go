@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net"
 	"path/filepath"
 	"testing"
@@ -25,6 +26,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
+
+type transcriptErrorSessionService struct {
+	session.Service
+	getErr error
+}
+
+func (s transcriptErrorSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) (*session.Session, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.Service.GetSession(ctx, key, options...)
+}
 
 func TestOpenAdminBinding_AutoPortFallback(t *testing.T) {
 	t.Parallel()
@@ -317,6 +334,38 @@ func TestBuildAdminConfig_IncludesIdentityAndChatsProviders(
 	require.Len(t, detail.Transcript[0].Turns, 2)
 	require.Equal(t, "hello", detail.Transcript[0].Turns[0].Text)
 	require.Equal(t, "hi", detail.Transcript[0].Turns[1].Text)
+
+	cfg = buildAdminConfig(
+		runOptions{
+			AppName: "openclaw",
+		},
+		agentTypeLLM,
+		"instance-1",
+		admin.LangfuseStatus{},
+		stateDir,
+		filepath.Join(stateDir, "debug"),
+		time.Unix(0, 0),
+		nil,
+		admin.Routes{},
+		nil,
+		nil,
+		nil,
+		nil,
+		"127.0.0.1:8081",
+		"http://127.0.0.1:8081",
+		nil,
+		nil,
+		nil,
+		transcriptErrorSessionService{
+			Service: wrappedSessions,
+			getErr:  errors.New("transcript boom"),
+		},
+	)
+	detailProvider, ok = cfg.Chats.(admin.ChatDetailProvider)
+	require.True(t, ok)
+	_, err = detailProvider.ChatDetail("chat-scope")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "transcript boom")
 }
 
 func TestNormalizeAdminAssistantName(t *testing.T) {
