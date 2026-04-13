@@ -461,6 +461,38 @@ agent := llmagent.New(
 - Set limit values based on task complexity and expected behavior.
 - See [examples/max_limits](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/max_limits) for a complete example.
 
+### Tool Call Retry
+
+If you want LLMAgent to retry a tool call automatically after a failure, configure `llmagent.WithToolCallRetryPolicy(...)`.
+
+```go
+policy := &tool.RetryPolicy{
+    MaxAttempts:     2,
+    InitialInterval: 200 * time.Millisecond,
+    BackoffFactor:   2.0,
+    MaxInterval:     time.Second,
+}
+
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{myTool}),
+    llmagent.WithToolCallRetryPolicy(policy),
+)
+```
+
+Notes:
+
+- The retry applies only to the current tool call. It does not rerun the whole Agent.
+- It is disabled by default, so existing behavior stays unchanged unless you opt in.
+- It currently applies only to `CallableTool`; `StreamableTool` is not retried yet.
+- The default retry rule covers common transient raw errors such as `io.EOF`, `io.ErrUnexpectedEOF`, and network timeouts.
+- If you also want to retry result-level failures, customize `tool.RetryPolicy.RetryOn`.
+
+Runnable example:
+
+- [examples/llmagent_tool_call_retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/llmagent_tool_call_retry)
+
 ### Handling Event Stream
 
 The `eventChan` returned by `runner.Run()` is an event channel. The Agent continuously sends Event objects to this channel during execution.
