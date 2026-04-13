@@ -18,9 +18,13 @@ import (
 )
 
 const (
-	routeChatsJSON = "/api/chats"
+	routeChatsJSON       = "/api/chats"
+	routeChatHistoryJSON = "/api/chats/history"
 
 	knownUserSeparator = ", "
+
+	chatHistoryItemKindSession = "session"
+	chatHistoryItemKindTurn    = "turn"
 )
 
 type ChatsProvider interface {
@@ -29,6 +33,13 @@ type ChatsProvider interface {
 
 type ChatDetailProvider interface {
 	ChatDetail(baseSessionID string) (ChatView, error)
+}
+
+type ChatHistoryProvider interface {
+	ChatHistory(
+		baseSessionID string,
+		cursor string,
+	) (ChatHistoryPage, error)
 }
 
 type ChatsStatus struct {
@@ -67,6 +78,30 @@ type ChatView struct {
 	History               []ChatSessionView    `json:"history,omitempty"`
 	TranscriptTruncated   bool                 `json:"transcript_truncated"`
 	Transcript            []ChatTranscriptView `json:"transcript,omitempty"`
+}
+
+type ChatHistoryPage struct {
+	BaseSessionID     string            `json:"base_session_id,omitempty"`
+	SessionLineCount  int               `json:"session_line_count"`
+	TurnCount         int               `json:"turn_count"`
+	ReturnedTurnCount int               `json:"returned_turn_count"`
+	NextCursor        string            `json:"next_cursor,omitempty"`
+	Bounded           bool              `json:"bounded"`
+	Items             []ChatHistoryItem `json:"items,omitempty"`
+}
+
+type ChatHistoryItem struct {
+	Kind         string    `json:"kind,omitempty"`
+	SessionID    string    `json:"session_id,omitempty"`
+	SessionLabel string    `json:"session_label,omitempty"`
+	LastActivity time.Time `json:"last_activity,omitempty"`
+	Current      bool      `json:"current"`
+	Recall       bool      `json:"recall"`
+	Role         string    `json:"role,omitempty"`
+	Speaker      string    `json:"speaker,omitempty"`
+	QuoteText    string    `json:"quote_text,omitempty"`
+	Text         string    `json:"text,omitempty"`
+	Timestamp    time.Time `json:"timestamp,omitempty"`
 }
 
 type KnownUserView struct {
@@ -125,6 +160,41 @@ func (s *Service) handleChatsJSON(
 		return
 	}
 	writeJSON(w, http.StatusOK, s.chatsStatus())
+}
+
+func (s *Service) handleChatHistoryJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s == nil || s.cfg.Chats == nil {
+		http.Error(w, "chat history not available", http.StatusNotFound)
+		return
+	}
+	provider, ok := s.cfg.Chats.(ChatHistoryProvider)
+	if !ok {
+		http.Error(w, "chat history not available", http.StatusNotFound)
+		return
+	}
+	baseSessionID := selectedChatID(r)
+	if baseSessionID == "" {
+		http.Error(w, "chat_id is required", http.StatusBadRequest)
+		return
+	}
+	cursor := strings.TrimSpace(r.URL.Query().Get(queryCursor))
+	page, err := provider.ChatHistory(baseSessionID, cursor)
+	if err != nil {
+		http.Error(
+			w,
+			strings.TrimSpace(err.Error()),
+			http.StatusInternalServerError,
+		)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
 }
 
 func selectedChatID(r *http.Request) string {
@@ -210,6 +280,10 @@ func chatNameSourceLabel(chat ChatView) string {
 
 func chatHasTranscript(chat ChatView) bool {
 	return len(chat.Transcript) != 0
+}
+
+func chatHistoryAPIPath() string {
+	return routeChatHistoryJSON
 }
 
 func chatVisibleHistory(chat ChatView) []ChatSessionView {
@@ -651,192 +725,44 @@ const chatsPageTemplateHTML = `
             <summary>
               <h3>History</h3>
               <p class="subtle">
-                Recent visible turns from this chat's tracked session
-                lines. Large transcripts stay bounded here by design.
+                Load the newest visible messages for this chat, then
+                keep scrolling upward into older conversation history.
               </p>
               <p class="subtle chat-disclosure-meta">
-                {{chatTranscriptSummary .SelectedChat}}
+                {{chatHistorySummary .SelectedChat}}
               </p>
             </summary>
             <div class="chat-disclosure-body">
               {{if .SelectedChatError}}
               <div class="notice err">{{.SelectedChatError}}</div>
-              {{else if chatHasTranscript .SelectedChat}}
-              {{$visibleTranscript := chatVisibleTranscript .SelectedChat}}
-              {{$hiddenTranscript := chatHiddenTranscript .SelectedChat}}
-              <div class="chat-transcript-list">
-                {{range $visibleTranscript}}
-                <article class="chat-transcript-card">
-                  <div class="chat-transcript-head">
-                    <div>
-                      <div class="chat-transcript-title">
-                        {{chatTranscriptLabel .}}
-                      </div>
-                      <div class="subtle">
-                        <code>{{.SessionID}}</code>
-                      </div>
-                    </div>
-                    <div class="subtle">{{formatTime .LastActivity}}</div>
-                  </div>
-                  {{$visibleTurns := chatVisibleTurns .}}
-                  {{$hiddenTurns := chatHiddenTurns .}}
-                  <div class="chat-turn-list">
-                    {{range $visibleTurns}}
-                    <article class="chat-turn">
-                      <div class="chat-turn-head">
-                        <span class="chat-turn-speaker">
-                          {{chatTurnSpeaker .}}
-                        </span>
-                        {{if hasTime .Timestamp}}
-                        <span class="subtle">{{formatTime .Timestamp}}</span>
-                        {{end}}
-                      </div>
-                      {{if .QuoteText}}
-                      <blockquote class="chat-turn-quote">
-                        {{.QuoteText}}
-                      </blockquote>
-                      {{end}}
-                      <div class="chat-turn-text">{{.Text}}</div>
-                    </article>
-                    {{end}}
-                  </div>
-                  {{if $hiddenTurns}}
-                  <details class="chat-disclosure-more">
-                    <summary>
-                      Show {{len $hiddenTurns}} older turns
-                    </summary>
-                    <div class="chat-disclosure-body">
-                      <div class="chat-turn-list">
-                        {{range $hiddenTurns}}
-                        <article class="chat-turn">
-                          <div class="chat-turn-head">
-                            <span class="chat-turn-speaker">
-                              {{chatTurnSpeaker .}}
-                            </span>
-                            {{if hasTime .Timestamp}}
-                            <span class="subtle">{{formatTime .Timestamp}}</span>
-                            {{end}}
-                          </div>
-                          {{if .QuoteText}}
-                          <blockquote class="chat-turn-quote">
-                            {{.QuoteText}}
-                          </blockquote>
-                          {{end}}
-                          <div class="chat-turn-text">{{.Text}}</div>
-                        </article>
-                        {{end}}
-                      </div>
-                    </div>
-                  </details>
-                  {{end}}
-                  {{if .Truncated}}
-                  <p class="subtle" style="margin-top: 10px;">
-                    Showing the most recent turns for this session line.
-                  </p>
-                  {{end}}
-                </article>
-                {{end}}
-              </div>
-              {{if $hiddenTranscript}}
-              <details class="chat-disclosure-more">
-                <summary>
-                  Show {{len $hiddenTranscript}} older session lines
-                </summary>
-                <div class="chat-disclosure-body">
-                  <div class="chat-transcript-list">
-                    {{range $hiddenTranscript}}
-                    <article class="chat-transcript-card">
-                      <div class="chat-transcript-head">
-                        <div>
-                          <div class="chat-transcript-title">
-                            {{chatTranscriptLabel .}}
-                          </div>
-                          <div class="subtle">
-                            <code>{{.SessionID}}</code>
-                          </div>
-                        </div>
-                        <div class="subtle">
-                          {{formatTime .LastActivity}}
-                        </div>
-                      </div>
-                      {{$visibleTurns := chatVisibleTurns .}}
-                      {{$hiddenTurns := chatHiddenTurns .}}
-                      <div class="chat-turn-list">
-                        {{range $visibleTurns}}
-                        <article class="chat-turn">
-                          <div class="chat-turn-head">
-                            <span class="chat-turn-speaker">
-                              {{chatTurnSpeaker .}}
-                            </span>
-                            {{if hasTime .Timestamp}}
-                            <span class="subtle">
-                              {{formatTime .Timestamp}}
-                            </span>
-                            {{end}}
-                          </div>
-                          {{if .QuoteText}}
-                          <blockquote class="chat-turn-quote">
-                            {{.QuoteText}}
-                          </blockquote>
-                          {{end}}
-                          <div class="chat-turn-text">{{.Text}}</div>
-                        </article>
-                        {{end}}
-                      </div>
-                      {{if $hiddenTurns}}
-                      <details class="chat-disclosure-more">
-                        <summary>
-                          Show {{len $hiddenTurns}} older turns
-                        </summary>
-                        <div class="chat-disclosure-body">
-                          <div class="chat-turn-list">
-                            {{range $hiddenTurns}}
-                            <article class="chat-turn">
-                              <div class="chat-turn-head">
-                                <span class="chat-turn-speaker">
-                                  {{chatTurnSpeaker .}}
-                                </span>
-                                {{if hasTime .Timestamp}}
-                                <span class="subtle">
-                                  {{formatTime .Timestamp}}
-                                </span>
-                                {{end}}
-                              </div>
-                              {{if .QuoteText}}
-                              <blockquote class="chat-turn-quote">
-                                {{.QuoteText}}
-                              </blockquote>
-                              {{end}}
-                              <div class="chat-turn-text">{{.Text}}</div>
-                            </article>
-                            {{end}}
-                          </div>
-                        </div>
-                      </details>
-                      {{end}}
-                      {{if .Truncated}}
-                      <p class="subtle" style="margin-top: 10px;">
-                        Showing the most recent turns for this session
-                        line.
-                      </p>
-                      {{end}}
-                    </article>
-                    {{end}}
-                  </div>
-                </div>
-              </details>
-              {{end}}
-              {{if .SelectedChat.TranscriptTruncated}}
-              <p class="subtle" style="margin-top: 12px;">
-                Showing the most recent session lines in this admin
-                view.
-              </p>
-              {{end}}
               {{else}}
-              <p class="empty">
-                No recent chat transcript is available in this runtime
-                for this chat right now.
-              </p>
+              <div
+                class="chat-history-shell"
+                data-chat-history-root
+                data-chat-history-path="{{chatHistoryAPIPath}}"
+                data-chat-id="{{.SelectedChat.BaseSessionID}}"
+              >
+                <p class="subtle chat-history-status"
+                  data-chat-history-meta>
+                  Expand this panel to load the newest visible
+                  messages for this chat.
+                </p>
+                <div class="chat-history-toolbar"
+                  data-chat-history-toolbar hidden>
+                  <button type="button" class="chat-history-more"
+                    data-chat-history-more hidden>
+                    Load older messages
+                  </button>
+                </div>
+                <div class="notice err"
+                  data-chat-history-error hidden></div>
+                <p class="empty"
+                  data-chat-history-empty hidden></p>
+                <p class="subtle chat-history-bounded"
+                  data-chat-history-bounded hidden></p>
+                <div class="chat-timeline"
+                  data-chat-history-items></div>
+              </div>
               {{end}}
             </div>
           </details>

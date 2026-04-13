@@ -74,6 +74,7 @@ const (
 	queryName      = "name"
 	queryPath      = "path"
 	queryDownload  = "download"
+	queryCursor    = "cursor"
 	formJobID      = "job_id"
 	formSkillKey   = "skill_key"
 	formSkillName  = "skill_name"
@@ -332,6 +333,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeIdentityJSON, s.handleIdentityJSON)
 	mux.HandleFunc(routePersonasJSON, s.handlePersonasJSON)
 	mux.HandleFunc(routeChatsJSON, s.handleChatsJSON)
+	mux.HandleFunc(routeChatHistoryJSON, s.handleChatHistoryJSON)
 	mux.HandleFunc(routeMemoryFilesJSON, s.handleMemoryFilesJSON)
 	mux.HandleFunc(routeMemoryFile, s.handleMemoryFile)
 	mux.HandleFunc(
@@ -582,6 +584,7 @@ type pageData struct {
 	Identity          IdentityStatus
 	Personas          PersonasStatus
 	Chats             ChatsStatus
+	ChatHistoryPath   string
 	SelectedChat      *ChatView
 	SelectedChatError string
 	Notice            string
@@ -1063,18 +1066,19 @@ func (s *Service) renderPage(
 
 	chats := s.chatsStatus()
 	data := pageData{
-		Snapshot:       s.snapshotForView(view),
-		Prompts:        s.promptsStatus(),
-		Identity:       s.identityStatus(),
-		Personas:       s.personasStatus(),
-		Chats:          chats,
-		Notice:         strings.TrimSpace(r.URL.Query().Get(queryNotice)),
-		Error:          strings.TrimSpace(r.URL.Query().Get(queryError)),
-		RefreshSeconds: refreshSeconds,
-		View:           view,
-		PageTitle:      pageTitle(view),
-		PageSummary:    pageSummary(view),
-		NavSections:    adminNavSections(view),
+		Snapshot:        s.snapshotForView(view),
+		Prompts:         s.promptsStatus(),
+		Identity:        s.identityStatus(),
+		Personas:        s.personasStatus(),
+		Chats:           chats,
+		ChatHistoryPath: routeChatHistoryJSON,
+		Notice:          strings.TrimSpace(r.URL.Query().Get(queryNotice)),
+		Error:           strings.TrimSpace(r.URL.Query().Get(queryError)),
+		RefreshSeconds:  refreshSeconds,
+		View:            view,
+		PageTitle:       pageTitle(view),
+		PageSummary:     pageSummary(view),
+		NavSections:     adminNavSections(view),
 	}
 	if view == viewChats {
 		data.SelectedChat, data.SelectedChatError = resolveSelectedChat(
@@ -2220,6 +2224,7 @@ var adminPage = template.Must(
 		"personaKindLabel":           personaKindLabel,
 		"personaSummaryText":         personaSummaryText,
 		"chatDisplayLabel":           chatDisplayLabel,
+		"chatHistoryAPIPath":         chatHistoryAPIPath,
 		"chatHiddenHistory":          chatHiddenHistory,
 		"chatHiddenTranscript":       chatHiddenTranscript,
 		"chatHiddenTurns":            chatHiddenTurns,
@@ -3065,6 +3070,64 @@ const adminPageHTML = `<!doctype html>
     }
     .chat-disclosure-more {
       margin-top: 12px;
+    }
+    .chat-history-shell {
+      margin-top: 14px;
+    }
+    .chat-history-status {
+      margin: 0;
+    }
+    .chat-history-toolbar {
+      margin: 14px 0 0;
+    }
+    .chat-history-more {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px 14px;
+      background: rgba(255, 253, 248, 0.82);
+      color: var(--ink);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
+    }
+    .chat-history-more:hover,
+    .chat-history-more:focus {
+      border-color: rgba(15, 111, 97, 0.38);
+      box-shadow: 0 12px 24px rgba(35, 29, 22, 0.08);
+      outline: none;
+    }
+    .chat-history-bounded {
+      margin: 12px 0 0;
+    }
+    .chat-timeline {
+      display: grid;
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .chat-timeline-session {
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .chat-timeline-session:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+    .chat-timeline-session-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .chat-timeline-session-label {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    .chat-timeline-session-meta {
+      margin-top: 6px;
     }
     .chat-transcript-list {
       display: grid;
@@ -4805,6 +4868,350 @@ const adminPageHTML = `<!doctype html>
       });
       refresh();
       restoreScrollPosition();
+    })();
+
+    (function () {
+      const roots = Array.from(
+        document.querySelectorAll("[data-chat-history-root]")
+      );
+      if (!roots.length) return;
+
+      const itemKindSession = "session";
+      const itemKindTurn = "turn";
+      const fallbackHistoryError = "Unable to load chat history right now.";
+      const fallbackHistoryEmpty =
+        "No recent chat transcript is available in this runtime " +
+        "for this chat right now.";
+      const historyLoadingText = "Loading recent messages...";
+      const historyMoreText = "Load older messages";
+      const historyBoundedText =
+        "This admin view only loads the most recent tracked " +
+        "session lines for this chat.";
+
+      const formatDateTime = (value) => {
+        if (!value) return "";
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return value;
+        return parsed.toLocaleString(undefined, {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: false,
+          timeZoneName: "short",
+        });
+      };
+
+      const speakerLabel = (item) => {
+        if (item && typeof item.speaker === "string" && item.speaker.trim()) {
+          return item.speaker.trim();
+        }
+        const role = item && typeof item.role === "string"
+          ? item.role.trim()
+          : "";
+        switch (role) {
+          case "user":
+            return "User";
+          case "assistant":
+            return "Assistant";
+          case "system":
+            return "System";
+          default:
+            return "Turn";
+        }
+      };
+
+      const setText = (node, text) => {
+        if (!node) return;
+        node.textContent = text;
+      };
+
+      const createDiv = (className, text) => {
+        const node = document.createElement("div");
+        if (className) {
+          node.className = className;
+        }
+        if (typeof text === "string") {
+          node.textContent = text;
+        }
+        return node;
+      };
+
+      const updateMeta = (root, page) => {
+        const meta = root.querySelector("[data-chat-history-meta]");
+        if (!meta || !page) return;
+        const loaded = Number(root.getAttribute("data-chat-history-loaded") || "0");
+        const total = Number(page.turn_count || 0);
+        const sessions = Number(page.session_line_count || 0);
+        if (total <= 0) {
+          meta.textContent = fallbackHistoryEmpty;
+          return;
+        }
+        const parts = [];
+        parts.push(
+          "Showing " + String(loaded) + " of " + String(total) +
+          " messages"
+        );
+        if (sessions > 0) {
+          parts.push("from " + String(sessions) + " recent session lines");
+        }
+        meta.textContent = parts.join(" ");
+      };
+
+      const updateBoundedNote = (root, bounded) => {
+        const note = root.querySelector("[data-chat-history-bounded]");
+        if (!note) return;
+        note.hidden = !bounded;
+        if (bounded) {
+          note.textContent = historyBoundedText;
+        }
+      };
+
+      const updateMoreButton = (root, nextCursor) => {
+        const toolbar = root.querySelector("[data-chat-history-toolbar]");
+        const button = root.querySelector("[data-chat-history-more]");
+        if (!toolbar || !button) return;
+        const hasMore = typeof nextCursor === "string" && nextCursor !== "";
+        toolbar.hidden = !hasMore;
+        button.hidden = !hasMore;
+        button.disabled = false;
+        button.textContent = historyMoreText;
+        if (hasMore) {
+          button.setAttribute("data-chat-history-next", nextCursor);
+        } else {
+          button.removeAttribute("data-chat-history-next");
+        }
+      };
+
+      const clearMessages = (root) => {
+        const error = root.querySelector("[data-chat-history-error]");
+        const empty = root.querySelector("[data-chat-history-empty]");
+        if (error) {
+          error.hidden = true;
+          error.textContent = "";
+        }
+        if (empty) {
+          empty.hidden = true;
+          empty.textContent = "";
+        }
+      };
+
+      const showError = (root, message) => {
+        const error = root.querySelector("[data-chat-history-error]");
+        const empty = root.querySelector("[data-chat-history-empty]");
+        if (empty) {
+          empty.hidden = true;
+          empty.textContent = "";
+        }
+        if (!error) return;
+        error.hidden = false;
+        error.textContent = message || fallbackHistoryError;
+      };
+
+      const showEmpty = (root, message) => {
+        const empty = root.querySelector("[data-chat-history-empty]");
+        const error = root.querySelector("[data-chat-history-error]");
+        if (error) {
+          error.hidden = true;
+          error.textContent = "";
+        }
+        if (!empty) return;
+        empty.hidden = false;
+        empty.textContent = message || fallbackHistoryEmpty;
+      };
+
+      const renderSessionItem = (item) => {
+        const wrapper = createDiv("chat-timeline-session");
+        const head = createDiv("chat-timeline-session-head");
+        const copy = document.createElement("div");
+        const title = createDiv(
+          "chat-timeline-session-label",
+          item.session_label || "Recent session"
+        );
+        const meta = createDiv("subtle chat-timeline-session-meta");
+        const code = document.createElement("code");
+        code.textContent = item.session_id || "";
+        meta.appendChild(code);
+        copy.appendChild(title);
+        copy.appendChild(meta);
+        head.appendChild(copy);
+        if (item.last_activity) {
+          head.appendChild(
+            createDiv("subtle", formatDateTime(item.last_activity))
+          );
+        }
+        wrapper.appendChild(head);
+        return wrapper;
+      };
+
+      const renderTurnItem = (item) => {
+        const article = document.createElement("article");
+        article.className = "chat-turn";
+        const head = createDiv("chat-turn-head");
+        head.appendChild(
+          createDiv("chat-turn-speaker", speakerLabel(item))
+        );
+        if (item.timestamp) {
+          head.appendChild(
+            createDiv("subtle", formatDateTime(item.timestamp))
+          );
+        }
+        article.appendChild(head);
+        if (typeof item.quote_text === "string" && item.quote_text.trim()) {
+          article.appendChild(
+            createDiv("chat-turn-quote", item.quote_text)
+          );
+        }
+        article.appendChild(
+          createDiv("chat-turn-text", item.text || "")
+        );
+        return article;
+      };
+
+      const renderHistoryItem = (item) => {
+        if (!item || typeof item.kind !== "string") {
+          return null;
+        }
+        if (item.kind === itemKindSession) {
+          return renderSessionItem(item);
+        }
+        if (item.kind === itemKindTurn) {
+          return renderTurnItem(item);
+        }
+        return null;
+      };
+
+      const updateLoading = (root, loading) => {
+        root.setAttribute(
+          "data-chat-history-loading",
+          loading ? "true" : "false"
+        );
+        const button = root.querySelector("[data-chat-history-more]");
+        if (!button) return;
+        button.disabled = loading;
+        if (loading) {
+          button.textContent = historyLoadingText;
+        } else if (button.hidden !== true) {
+          button.textContent = historyMoreText;
+        }
+      };
+
+      const fetchHistory = async (root, cursor) => {
+        const path = root.getAttribute("data-chat-history-path") || "";
+        const chatID = root.getAttribute("data-chat-id") || "";
+        const url = new URL(path, window.location.origin);
+        url.searchParams.set("chat_id", chatID);
+        if (cursor) {
+          url.searchParams.set("cursor", cursor);
+        }
+        const response = await fetch(url.toString(), {
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) {
+          const text = (await response.text()).trim();
+          throw new Error(text || fallbackHistoryError);
+        }
+        return response.json();
+      };
+
+      const loadHistory = async (root, cursor) => {
+        const items = root.querySelector("[data-chat-history-items]");
+        if (!items) return;
+        if (root.getAttribute("data-chat-history-loading") === "true") {
+          return;
+        }
+        const prepend = typeof cursor === "string" && cursor !== "";
+        const anchor = prepend ? items.firstElementChild : null;
+        const anchorTop = anchor ? anchor.getBoundingClientRect().top : 0;
+        updateLoading(root, true);
+        clearMessages(root);
+        try {
+          const page = await fetchHistory(root, cursor);
+          const fragment = document.createDocumentFragment();
+          const pageItems = Array.isArray(page.items) ? page.items : [];
+          pageItems.forEach((item) => {
+            const node = renderHistoryItem(item);
+            if (node) {
+              fragment.appendChild(node);
+            }
+          });
+          if (!prepend) {
+            items.innerHTML = "";
+          }
+          if (prepend) {
+            items.prepend(fragment);
+          } else {
+            items.appendChild(fragment);
+          }
+
+          const loaded = Number(
+            root.getAttribute("data-chat-history-loaded") || "0"
+          ) + Number(page.returned_turn_count || 0);
+          root.setAttribute(
+            "data-chat-history-loaded",
+            String(loaded)
+          );
+          updateMeta(root, page);
+          updateBoundedNote(root, Boolean(page.bounded));
+          updateMoreButton(root, page.next_cursor || "");
+
+          if (!pageItems.length && Number(page.turn_count || 0) === 0) {
+            showEmpty(root, fallbackHistoryEmpty);
+          }
+          if (prepend && anchor) {
+            window.scrollBy(
+              0,
+              anchor.getBoundingClientRect().top - anchorTop
+            );
+          }
+          root.setAttribute("data-chat-history-loaded-once", "true");
+        } catch (err) {
+          showError(
+            root,
+            err && typeof err.message === "string"
+              ? err.message
+              : fallbackHistoryError
+          );
+        } finally {
+          updateLoading(root, false);
+        }
+      };
+
+      roots.forEach((root) => {
+        const disclosure = root.closest("details");
+        const button = root.querySelector("[data-chat-history-more]");
+        if (button) {
+          button.addEventListener("click", () => {
+            const nextCursor =
+              button.getAttribute("data-chat-history-next") || "";
+            if (!nextCursor) return;
+            loadHistory(root, nextCursor);
+          });
+        }
+        const ensureLoaded = () => {
+          if (
+            root.getAttribute("data-chat-history-loaded-once") ===
+            "true"
+          ) {
+            return;
+          }
+          loadHistory(root, "");
+        };
+        if (disclosure) {
+          disclosure.addEventListener("toggle", () => {
+            if (disclosure.open) {
+              ensureLoaded();
+            }
+          });
+          if (disclosure.open) {
+            ensureLoaded();
+          }
+          return;
+        }
+        ensureLoaded();
+      });
     })();
 
     (function () {

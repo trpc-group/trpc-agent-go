@@ -125,11 +125,16 @@ type stubChatsProvider struct {
 	status ChatsStatus
 	err    error
 
-	detail       ChatView
-	detailRaw    bool
-	detailErr    error
-	detailChatID string
-	detailCount  int
+	history       ChatHistoryPage
+	historyErr    error
+	historyChatID string
+	historyCursor string
+	historyCount  int
+	detail        ChatView
+	detailRaw     bool
+	detailErr     error
+	detailChatID  string
+	detailCount   int
 }
 
 type stubStatusOnlyChatsProvider struct {
@@ -303,6 +308,22 @@ func (p *stubChatsProvider) ChatDetail(
 		}
 	}
 	return ChatView{}, nil
+}
+
+func (p *stubChatsProvider) ChatHistory(
+	baseSessionID string,
+	cursor string,
+) (ChatHistoryPage, error) {
+	if p == nil {
+		return ChatHistoryPage{}, nil
+	}
+	p.historyCount++
+	p.historyChatID = baseSessionID
+	p.historyCursor = cursor
+	if p.historyErr != nil {
+		return ChatHistoryPage{}, p.historyErr
+	}
+	return p.history, nil
 }
 
 func (p *stubIdentityProvider) IdentityStatus() (
@@ -1854,9 +1875,8 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 				UserID: "alice",
 				Label:  "Alice Chen",
 			}},
-			HistoryTotalCount:   2,
-			HistoryTruncated:    true,
-			TranscriptTruncated: true,
+			HistoryTotalCount: 2,
+			HistoryTruncated:  true,
 			History: []ChatSessionView{{
 				SessionID:    "wecom:dm:alice:171",
 				LastActivity: time.Unix(1700000000, 0),
@@ -1866,35 +1886,32 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 				LastActivity: time.Unix(1699999990, 0),
 				Visible:      false,
 			}},
-			Transcript: []ChatTranscriptView{{
+		},
+		history: ChatHistoryPage{
+			BaseSessionID:     "wecom:dm:alice",
+			SessionLineCount:  2,
+			TurnCount:         3,
+			ReturnedTurnCount: 2,
+			NextCursor:        "2",
+			Bounded:           true,
+			Items: []ChatHistoryItem{{
+				Kind:         chatHistoryItemKindSession,
 				SessionID:    "wecom:dm:alice:171",
+				SessionLabel: "Current session",
 				LastActivity: time.Unix(1700000000, 0),
 				Current:      true,
-				Visible:      true,
-				Turns: []ChatTurnView{{
-					Role:      "user",
-					Speaker:   "Alice Chen",
-					Text:      "Who are you listening to?",
-					Timestamp: time.Unix(1700000000, 0),
-					Visible:   false,
-				}, {
-					Role:      "assistant",
-					Speaker:   "林妹妹",
-					Text:      "I am using this chat's current name.",
-					Timestamp: time.Unix(1700000010, 0),
-					Visible:   true,
-				}},
 			}, {
-				SessionID:    "wecom:dm:alice:170",
-				LastActivity: time.Unix(1699999990, 0),
-				Visible:      false,
-				Turns: []ChatTurnView{{
-					Role:      "assistant",
-					Speaker:   "林妹妹",
-					Text:      "Older session reply.",
-					Timestamp: time.Unix(1699999990, 0),
-					Visible:   true,
-				}},
+				Kind:      chatHistoryItemKindTurn,
+				Role:      "assistant",
+				Speaker:   "林妹妹",
+				Text:      "I am using this chat's current name.",
+				Timestamp: time.Unix(1700000010, 0),
+			}, {
+				Kind:      chatHistoryItemKindTurn,
+				Role:      "assistant",
+				Speaker:   "林妹妹",
+				Text:      "Older session reply.",
+				Timestamp: time.Unix(1699999990, 0),
 			}},
 		},
 	}
@@ -1930,10 +1947,14 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 	require.Contains(t, body, "<code>wecom:dm:alice</code>")
 	require.Contains(t, body, "href=\"identity#identity-global\"")
 	require.Contains(t, body, "Alice Chen (alice)")
-	require.Contains(t, body, "I am using this chat&#39;s current name.")
+	require.Contains(t, body, "data-chat-history-root")
+	require.Contains(t, body, routeChatHistoryJSON)
+	require.Contains(
+		t,
+		body,
+		"Expand this panel to load the newest visible",
+	)
 	require.Contains(t, body, "Show 1 older tracked sessions")
-	require.Contains(t, body, "Show 1 older turns")
-	require.Contains(t, body, "Show 1 older session lines")
 	require.Contains(
 		t,
 		body,
@@ -1941,6 +1962,24 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 	)
 	require.Equal(t, "wecom:dm:alice", chats.detailChatID)
 	require.Equal(t, 1, chats.detailCount)
+
+	req = httptest.NewRequest(
+		http.MethodGet,
+		routeChatHistoryJSON+"?chat_id=wecom%3Adm%3Aalice",
+		nil,
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(
+		t,
+		rec.Body.String(),
+		"\"text\": \"I am using this chat's current name.\"",
+	)
+	require.Contains(t, rec.Body.String(), "\"next_cursor\": \"2\"")
+	require.Equal(t, "wecom:dm:alice", chats.historyChatID)
+	require.Empty(t, chats.historyCursor)
+	require.Equal(t, 1, chats.historyCount)
 
 	req = httptest.NewRequest(http.MethodGet, routeOverview, nil)
 	rec = httptest.NewRecorder()
@@ -2007,6 +2046,20 @@ func TestService_ChatsPageFallbackStates(t *testing.T) {
 	rec = httptest.NewRecorder()
 	svc.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	svc = New(Config{
+		Chats: &stubStatusOnlyChatsProvider{
+			status: ChatsStatus{Enabled: true},
+		},
+	})
+	req = httptest.NewRequest(
+		http.MethodGet,
+		routeChatHistoryJSON+"?chat_id=missing",
+		nil,
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 func TestChatsHelpers(t *testing.T) {
