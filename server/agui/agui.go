@@ -25,7 +25,7 @@ import (
 // Server provides AG-UI server.
 type Server struct {
 	basePath       string          // basePath is the base path for the service.
-	appName        string          // appName is required when history snapshots are enabled.
+	appName        string          // appName is the static app name configured for the AG-UI runner.
 	path           string          // path is the chat message endpoint path.
 	handler        http.Handler    // handler serves chat and optional history routes.
 	sessionService session.Service // sessionService backs stored conversations for snapshots.
