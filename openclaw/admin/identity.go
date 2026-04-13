@@ -120,8 +120,9 @@ const identityPageTemplateHTML = `
       <article class="card">
         <h2>Identity</h2>
         <p class="subtle">
-          Set the assistant's global default name. This affects new
-          chats unless a chat-specific name override is active.
+          Set the assistant's global default name. This is the fallback
+          name for new chats and for any existing chat that does not
+          have its own chat-level override.
         </p>
         <dl class="meta">
           <dt>Assistant Name</dt>
@@ -150,9 +151,19 @@ const identityPageTemplateHTML = `
     <section class="card" style="margin-top: 24px;" id="identity-global">
       <h2>Assistant Name</h2>
       <p class="subtle">
-        This is the global default name. Chat-scoped overrides can still
-        replace it for one active conversation.
+        This is the global fallback name. It can affect other users'
+        private chats and other groups, but only when those chats do
+        not already have their own chat-level override.
       </p>
+      <div class="notice" style="margin-top: 14px;">
+        <strong>How it works</strong><br>
+        1. If one chat already renamed the bot inside that chat, that
+        chat keeps using its own name.<br>
+        2. If another user opens a new private chat and has not renamed
+        the bot there yet, they will see this global name.<br>
+        3. If another group never set its own override, it also falls
+        back to this global name.
+      </div>
       {{if .Identity.Error}}
       <div class="notice err" style="margin-top: 12px;">
         {{.Identity.Error}}
@@ -222,9 +233,10 @@ const identityPageTemplateHTML = `
     <section class="card" style="margin-top: 24px;" id="identity-chats">
       <h2>Chat Overrides</h2>
       <p class="subtle">
-        Chat-specific names override the global default inside one chat.
-        They persist on that chat line until cleared, even if the user
-        starts a new session epoch with <code>/new</code>.
+        A chat override only changes the bot's name inside one tracked
+        chat. It wins over the global fallback, and it stays there until
+        cleared, even if the user starts a new session epoch with
+        <code>/new</code>.
       </p>
       <dl class="meta" style="margin-top: 14px;">
         <dt>Active Overrides</dt>

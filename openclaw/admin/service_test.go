@@ -1735,7 +1735,7 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 	require.Contains(t, body, "Chat Detail")
 	require.Contains(t, body, "Direct Message / alice")
 	require.Contains(t, body, "chat override")
-	require.Contains(t, body, "Tracked Session Lines")
+	require.Contains(t, body, "Recent Sessions")
 	require.Contains(t, body, "<code>wecom:dm:alice</code>")
 
 	req = httptest.NewRequest(http.MethodGet, routeChatsJSON, nil)

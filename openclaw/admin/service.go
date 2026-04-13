@@ -111,7 +111,7 @@ const (
 		"persona definitions exposed by this runtime."
 	pageSummaryChats = "" +
 		"Inspect tracked chats, chat-specific assistant-name " +
-		"overrides, personas, and recent session-line history."
+		"overrides, personas, and recent session history."
 )
 
 type adminView string
@@ -2300,8 +2300,14 @@ const adminPageHTML = `<!doctype html>
     .meta dt {
       color: var(--muted);
       font-weight: 700;
+      min-width: 0;
     }
-    .meta dd { margin: 0; }
+    .meta dd {
+      margin: 0;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     a { color: var(--accent); }
     code {
       background: rgba(15, 111, 97, 0.08);
@@ -2334,8 +2340,11 @@ const adminPageHTML = `<!doctype html>
     th, td {
       text-align: left;
       vertical-align: top;
+      min-width: 0;
       padding: 12px 10px;
       border-top: 1px solid var(--line);
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     th {
       color: var(--muted);
@@ -2801,6 +2810,65 @@ const adminPageHTML = `<!doctype html>
       color: var(--muted);
       font-weight: 700;
       white-space: nowrap;
+    }
+    .chat-list {
+      display: grid;
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .chat-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px 18px;
+      background: rgba(255, 253, 248, 0.72);
+    }
+    .chat-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .chat-card-copy {
+      min-width: 0;
+      flex: 1 1 280px;
+    }
+    .chat-card-title {
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .chat-card-kind {
+      margin-top: 6px;
+      color: var(--muted);
+    }
+    .chat-card-link {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+    .chat-card-grid {
+      display: grid;
+      gap: 10px 18px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      margin-top: 14px;
+    }
+    .chat-card-meta {
+      min-width: 0;
+    }
+    .chat-card-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .chat-card-value {
+      margin-top: 6px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     @media (max-width: 760px) {
       .app-shell {

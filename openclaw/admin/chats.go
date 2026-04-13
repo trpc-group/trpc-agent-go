@@ -202,63 +202,80 @@ const chatsPageTemplateHTML = `
         <h2>Tracked Chats</h2>
         <p class="subtle">
           This view shows tracked chat state from the runtime. It is not
-          a full transcript browser. Use it to inspect per-chat names,
-          personas, workspaces, and recent session-line history.
+          a full transcript browser. Use it to inspect each chat's
+          effective assistant name, chat-level override, persona,
+          workspace, and recent session history.
         </p>
+        {{if .Chats.ChatOverrideHelp}}
+        <div class="notice" style="margin-top: 14px;">
+          {{.Chats.ChatOverrideHelp}}
+        </div>
+        {{end}}
         {{if .Chats.Error}}
         <div class="notice err" style="margin-top: 12px;">
           {{.Chats.Error}}
         </div>
         {{end}}
         {{if .Chats.Chats}}
-        <table>
-          <thead>
-            <tr>
-              <th>Chat</th>
-              <th>Assistant</th>
-              <th>Persona</th>
-              <th>Last Activity</th>
-              <th>Open</th>
-            </tr>
-          </thead>
-          <tbody>
-            {{range .Chats.Chats}}
-            <tr>
-              <td>
-                <strong>{{chatDisplayLabel .}}</strong>
-                {{if .KindLabel}}
-                  <br><span class="subtle">{{.KindLabel}}</span>
-                {{end}}
-              </td>
-              <td>
-                {{if .EffectiveAssistant}}
-                  {{.EffectiveAssistant}}
-                {{else}}
-                  -
-                {{end}}
-                <br><span class="subtle">{{chatNameSourceLabel .}}</span>
-              </td>
-              <td>
-                {{if .PersonaLabel}}
-                  {{.PersonaLabel}}
-                {{else if .PersonaID}}
-                  {{.PersonaID}}
-                {{else}}
-                  -
-                {{end}}
-              </td>
-              <td>{{formatTime .LastActivity}}</td>
-              <td>
-                <a
-                  href="/chats?chat_id={{.BaseSessionID}}"
-                >
-                  inspect
-                </a>
-              </td>
-            </tr>
-            {{end}}
-          </tbody>
-        </table>
+        <div class="chat-list">
+          {{range .Chats.Chats}}
+          <article class="chat-card">
+            <div class="chat-card-head">
+              <div class="chat-card-copy">
+                <div class="chat-card-title">{{chatDisplayLabel .}}</div>
+                <div class="chat-card-kind">
+                  {{if .KindLabel}}
+                    {{.KindLabel}}
+                  {{else if .Kind}}
+                    {{.Kind}}
+                  {{else}}
+                    Tracked chat
+                  {{end}}
+                </div>
+              </div>
+              <div class="chat-card-link">
+                <a href="/chats?chat_id={{.BaseSessionID}}">inspect</a>
+              </div>
+            </div>
+            <div class="chat-card-grid">
+              <div class="chat-card-meta">
+                <div class="chat-card-label">Current Name</div>
+                <div class="chat-card-value">
+                  {{if .EffectiveAssistant}}
+                    {{.EffectiveAssistant}}
+                  {{else}}
+                    -
+                  {{end}}
+                </div>
+              </div>
+              <div class="chat-card-meta">
+                <div class="chat-card-label">Name Source</div>
+                <div class="chat-card-value">
+                  {{chatNameSourceLabel .}}
+                </div>
+              </div>
+              <div class="chat-card-meta">
+                <div class="chat-card-label">Persona</div>
+                <div class="chat-card-value">
+                  {{if .PersonaLabel}}
+                    {{.PersonaLabel}}
+                  {{else if .PersonaID}}
+                    {{.PersonaID}}
+                  {{else}}
+                    -
+                  {{end}}
+                </div>
+              </div>
+              <div class="chat-card-meta">
+                <div class="chat-card-label">Last Activity</div>
+                <div class="chat-card-value">
+                  {{formatTime .LastActivity}}
+                </div>
+              </div>
+            </div>
+          </article>
+          {{end}}
+        </div>
         {{else}}
         <p class="empty">No tracked chats are available yet.</p>
         {{end}}
@@ -341,7 +358,7 @@ const chatsPageTemplateHTML = `
           <dd><a href="/api/chats">/api/chats</a></dd>
         </dl>
 
-        <h3 style="margin: 18px 0 8px;">Tracked Session Lines</h3>
+        <h3 style="margin: 18px 0 8px;">Recent Sessions</h3>
         {{if .SelectedChat.History}}
         <table>
           <thead>
@@ -360,7 +377,7 @@ const chatsPageTemplateHTML = `
           </tbody>
         </table>
         {{else}}
-        <p class="empty">No session-line history has been tracked yet.</p>
+        <p class="empty">No recent sessions have been tracked yet.</p>
         {{end}}
         {{else}}
         <p class="empty">
