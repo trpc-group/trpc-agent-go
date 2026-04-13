@@ -1076,11 +1076,13 @@ func (s *Service) renderPage(
 		PageSummary:    pageSummary(view),
 		NavSections:    adminNavSections(view),
 	}
-	data.SelectedChat, data.SelectedChatError = resolveSelectedChat(
-		chats,
-		s.cfg.Chats,
-		selectedChatID(r),
-	)
+	if view == viewChats {
+		data.SelectedChat, data.SelectedChatError = resolveSelectedChat(
+			chats,
+			s.cfg.Chats,
+			selectedChatID(r),
+		)
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := adminPage.Execute(w, data); err != nil {
@@ -1111,7 +1113,76 @@ func resolveSelectedChat(
 	if err != nil {
 		return selected, strings.TrimSpace(err.Error())
 	}
-	return &detail, ""
+	merged := mergeChatView(*selected, detail)
+	return &merged, ""
+}
+
+func mergeChatView(
+	base ChatView,
+	detail ChatView,
+) ChatView {
+	merged := base
+	if value := strings.TrimSpace(detail.BaseSessionID); value != "" {
+		merged.BaseSessionID = value
+	}
+	if value := strings.TrimSpace(detail.DisplayLabel); value != "" {
+		merged.DisplayLabel = value
+	}
+	if value := strings.TrimSpace(detail.Kind); value != "" {
+		merged.Kind = value
+	}
+	if value := strings.TrimSpace(detail.KindLabel); value != "" {
+		merged.KindLabel = value
+	}
+	if value := strings.TrimSpace(detail.CurrentSessionID); value != "" {
+		merged.CurrentSessionID = value
+	}
+	if value := strings.TrimSpace(detail.RecallSessionID); value != "" {
+		merged.RecallSessionID = value
+	}
+	if !detail.LastActivity.IsZero() {
+		merged.LastActivity = detail.LastActivity
+	}
+	if detail.Epoch != 0 {
+		merged.Epoch = detail.Epoch
+	}
+	if value := strings.TrimSpace(detail.EffectiveAssistant); value != "" {
+		merged.EffectiveAssistant = value
+	}
+	if value := strings.TrimSpace(detail.ChatAssistantOverride); value != "" {
+		merged.ChatAssistantOverride = value
+	}
+	if value := strings.TrimSpace(detail.NameSource); value != "" {
+		merged.NameSource = value
+	}
+	if detail.OverridesGlobal {
+		merged.OverridesGlobal = true
+	}
+	if value := strings.TrimSpace(detail.PersonaID); value != "" {
+		merged.PersonaID = value
+	}
+	if value := strings.TrimSpace(detail.PersonaLabel); value != "" {
+		merged.PersonaLabel = value
+	}
+	if detail.PersonaPinned {
+		merged.PersonaPinned = true
+	}
+	if value := strings.TrimSpace(detail.WorkspacePath); value != "" {
+		merged.WorkspacePath = value
+	}
+	if len(detail.KnownUserIDs) != 0 {
+		merged.KnownUserIDs = detail.KnownUserIDs
+	}
+	if len(detail.KnownUsers) != 0 {
+		merged.KnownUsers = detail.KnownUsers
+	}
+	if len(detail.History) != 0 {
+		merged.History = detail.History
+	}
+	if len(detail.Transcript) != 0 {
+		merged.Transcript = detail.Transcript
+	}
+	return merged
 }
 
 func adminNavSections(active adminView) []adminNavSection {

@@ -1905,6 +1905,12 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 	require.Equal(t, "wecom:dm:alice", chats.detailChatID)
 	require.Equal(t, 1, chats.detailCount)
 
+	req = httptest.NewRequest(http.MethodGet, routeOverview, nil)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, 1, chats.detailCount)
+
 	req = httptest.NewRequest(http.MethodGet, routeChatsJSON, nil)
 	rec = httptest.NewRecorder()
 	svc.Handler().ServeHTTP(rec, req)
@@ -2140,6 +2146,8 @@ func TestChatsHelpers(t *testing.T) {
 	require.NotNil(t, selected)
 	require.Empty(t, detailErr)
 	require.Len(t, selected.Transcript, 1)
+	require.Equal(t, "Custom source", selected.NameSource)
+	require.True(t, selected.OverridesGlobal)
 	require.Equal(t, "wecom:dm:bob", chats.detailChatID)
 
 	selected, detailErr = resolveSelectedChat(
@@ -2159,6 +2167,24 @@ func TestChatsHelpers(t *testing.T) {
 	)
 	require.NotNil(t, selected)
 	require.Equal(t, "boom", detailErr)
+
+	merged := mergeChatView(
+		ChatView{
+			BaseSessionID:   "wecom:dm:bob",
+			DisplayLabel:    "Bob",
+			NameSource:      "Current chat name",
+			OverridesGlobal: true,
+		},
+		ChatView{
+			Transcript: []ChatTranscriptView{{
+				SessionID: "wecom:dm:bob:2",
+			}},
+		},
+	)
+	require.Equal(t, "Bob", merged.DisplayLabel)
+	require.Equal(t, "Current chat name", merged.NameSource)
+	require.True(t, merged.OverridesGlobal)
+	require.Len(t, merged.Transcript, 1)
 
 	selected, detailErr = resolveSelectedChat(
 		status,
