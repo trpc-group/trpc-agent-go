@@ -711,14 +711,14 @@ func TestServerInjectedContextMessages_IncludeMemoryFiles(t *testing.T) {
 	)
 	require.Len(t, msgs, 3)
 	require.Contains(t, msgs[0].Content, personaContextHeader)
-	require.Contains(t, msgs[1].Content, "user-owned file MEMORY.md")
+	require.Contains(t, msgs[1].Content, "visible MEMORY.md file for this user")
 	require.Contains(t, msgs[1].Content, "not hidden internal state")
 	require.Contains(t, msgs[1].Content, "Keep replies concise")
 	require.NotContains(t, msgs[1].Content, "Use another app memory")
 	require.Contains(t, msgs[2].Content, recentUploadContextHeader)
 }
 
-func TestServerInjectedContextMessages_UsesCanonicalMemoryAndStorageScopedUploads(
+func TestServerInjectedContextMessages_UsesLayeredMemoryAndStorageScopedUploads(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -750,7 +750,7 @@ func TestServerInjectedContextMessages_UsesCanonicalMemoryAndStorageScopedUpload
 	require.NoError(t, err)
 	require.NoError(
 		t,
-		os.WriteFile(otherMemoryPath, []byte("## Preferences\n\n- Wrong scope."), 0o600),
+		os.WriteFile(otherMemoryPath, []byte("## Preferences\n\n- Chat rule."), 0o600),
 	)
 
 	_, err = uploadStore.Save(
@@ -780,10 +780,14 @@ func TestServerInjectedContextMessages_UsesCanonicalMemoryAndStorageScopedUpload
 		"demo:thread:room-1",
 		"",
 	)
-	require.Len(t, msgs, 2)
-	require.Contains(t, msgs[0].Content, "Remember my name")
-	require.NotContains(t, msgs[0].Content, "Wrong scope")
-	require.Contains(t, msgs[1].Content, "clip.mp4 [video]")
+	// Layered memory: chat scope primary + user fallback + uploads.
+	require.Len(t, msgs, 3)
+	require.Contains(t, msgs[0].Content, "Chat rule")
+	require.Contains(t, msgs[0].Content, "the current chat scope")
+	require.Contains(t, msgs[1].Content, "Remember my name")
+	require.Contains(t, msgs[1].Content, "this user")
+	require.Contains(t, msgs[2].Content, recentUploadContextHeader)
+	require.Contains(t, msgs[2].Content, "clip.mp4 [video]")
 }
 
 func TestServerInjectedContextMessages_CanceledContextSkipsMemoryFiles(t *testing.T) {

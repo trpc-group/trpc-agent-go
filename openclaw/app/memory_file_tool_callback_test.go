@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
@@ -66,6 +67,48 @@ func TestMemoryFileToolCallback_SaveFileWritesScopedMemory(t *testing.T) {
 
 	_, err = os.Stat(filepath.Join(stateDir, memoryToolFileName))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestMemoryFileToolCallback_SaveFileUsesStorageScopedMemory(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	stateDir, store := newTestMemoryFileStore(t)
+	ctx := conversationscope.WithStorageUserID(
+		newTestMemoryToolContext(),
+		"wecom:chat:room-1",
+	)
+	callback := newMemoryFileToolCallback(store, stateDir)
+
+	result, err := callback(ctx, &tool.BeforeToolArgs{
+		ToolName: memoryToolSaveFileFS,
+		Arguments: []byte(
+			`{"file_name":"MEMORY.md","contents":"- Shared rule\n","overwrite":false}`,
+		),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	chatPath, err := store.EnsureMemory(
+		context.Background(),
+		testMemoryAppName,
+		"wecom:chat:room-1",
+	)
+	require.NoError(t, err)
+	chatRaw, err := os.ReadFile(chatPath)
+	require.NoError(t, err)
+	require.Contains(t, string(chatRaw), "- Shared rule")
+
+	userPath, err := store.EnsureMemory(
+		context.Background(),
+		testMemoryAppName,
+		testMemoryUserID,
+	)
+	require.NoError(t, err)
+	userRaw, err := os.ReadFile(userPath)
+	require.NoError(t, err)
+	require.NotContains(t, string(userRaw), "- Shared rule")
 }
 
 func TestMemoryFileToolCallback_ReadFilePrefersScopedMemory(t *testing.T) {

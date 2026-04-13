@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
@@ -220,10 +221,10 @@ func execToolDescription(hasMemoryFile bool) string {
 	if hasMemoryFile {
 		parts = append(
 			parts,
-			"OPENCLAW_MEMORY_FILE is a user-owned file, not hidden "+
-				"internal state. If the user asks what you remember or "+
-				"asks to inspect that file, read it and quote or "+
-				"summarize the relevant lines.",
+			"OPENCLAW_MEMORY_FILE is a visible MEMORY.md file for the "+
+				"current scope, not hidden internal state. If the user "+
+				"asks what you remember or asks to inspect that file, "+
+				"read it and quote or summarize the relevant lines.",
 			"If the user explicitly says 'remember this' or asks you to "+
 				"remember a durable fact, preference, or workflow rule, "+
 				"update OPENCLAW_MEMORY_FILE with a short bullet.",
@@ -740,6 +741,7 @@ func memoryFileEnvFromContext(
 
 	appName := strings.TrimSpace(inv.Session.AppName)
 	userID := strings.TrimSpace(inv.Session.UserID)
+	userID = conversationscope.StorageUserIDFromContext(ctx, userID)
 	if appName == "" || userID == "" {
 		return nil
 	}

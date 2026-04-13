@@ -15,6 +15,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -77,7 +78,7 @@ func TestStoreEnsureMemoryCreatesTemplate(t *testing.T) {
 	text, err := store.ReadFile(path, 0)
 	require.NoError(t, err)
 	require.Contains(t, text, "# Memory")
-	require.Contains(t, text, "user-owned file")
+	require.Contains(t, text, "visible file for durable memory in the current scope")
 	require.Contains(t, text, "remember this")
 	require.Contains(t, text, "## Preferences")
 	require.Equal(
@@ -616,7 +617,7 @@ func TestBuildContextText(t *testing.T) {
 	t.Parallel()
 
 	text := BuildContextText("- prefers concise replies")
-	require.Contains(t, text, "user-owned file MEMORY.md")
+	require.Contains(t, text, "visible MEMORY.md file for the current scope")
 	require.Contains(t, text, "not hidden internal state")
 	require.Contains(t, text, "prefers concise replies")
 }
@@ -625,6 +626,75 @@ func TestBuildContextText_EmptyReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
 	require.Empty(t, BuildContextText(" \n "))
+}
+
+func TestBuildContextTextForScope(t *testing.T) {
+	t.Parallel()
+
+	text := BuildContextTextForScope(
+		"this user",
+		"- prefers concise replies",
+	)
+	require.Contains(t, text, "visible MEMORY.md file for this user")
+	require.Contains(t, text, "prefers concise replies")
+}
+
+func TestIsDefaultTemplate(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, IsDefaultTemplate(DefaultTemplate()))
+	require.True(t, IsDefaultTemplate("\n"+DefaultTemplate()+"\n"))
+	require.False(t, IsDefaultTemplate("# Memory\n\n- custom fact"))
+
+	// Legacy template text should also be recognised as default.
+	legacyTemplate := strings.Join([]string{
+		"# Memory",
+		"",
+		"This is a user-owned file for durable memory.",
+		"It is user-visible, not hidden internal state.",
+		"If the user asks what is remembered here or asks to " +
+			"inspect this file, the agent may quote or summarize " +
+			"the relevant parts.",
+		"If the user explicitly says \"remember this\" or asks " +
+			"the agent to remember a durable preference, fact, " +
+			"or workflow rule, update this file with a short " +
+			"bullet.",
+		"",
+		"This file stores stable, low-volume memory about the user.",
+		"",
+		"The agent may update this file only when all conditions hold:",
+		"- The information is likely to matter in future sessions.",
+		"- The information is stable, not task-local noise.",
+		"- The information can be written as a short bullet.",
+		"- The information does not contain secrets.",
+		"",
+		"Do not store:",
+		"- Secrets, credentials, or private tokens.",
+		"- Large conversation summaries.",
+		"- One-off debugging details.",
+		"",
+		"## Long-term facts",
+		"",
+		"Use for stable facts such as the user's name or role.",
+		"",
+		"## Preferences",
+		"",
+		"Use for durable tone, nickname, format, or persona " +
+			"preferences.",
+		"",
+		"## Repeated working style",
+		"",
+		"Use for recurring workflow rules such as git, PR, or " +
+			"review habits.",
+		"",
+	}, "\n")
+	require.True(t, IsDefaultTemplate(legacyTemplate))
+	require.True(t, IsDefaultTemplate("\n"+legacyTemplate+"\n"))
+
+	// Edited legacy template with user content should not be default.
+	editedLegacy := legacyTemplate + "\n- My name is Alice"
+	require.False(t, IsDefaultTemplate(editedLegacy))
+	require.False(t, IsDefaultTemplate("\n"+editedLegacy+"\n"))
 }
 
 func TestContextErr_NilContextReturnsNil(t *testing.T) {
