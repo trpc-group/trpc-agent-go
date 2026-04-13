@@ -51,8 +51,12 @@ const (
 	adminChatKindTracked = "tracked"
 	adminChatKindLabel   = "Tracked chat"
 
-	adminChatTranscriptSessionLimit = 3
-	adminChatTranscriptTurnLimit    = 12
+	adminChatHistorySessionLimit    = 12
+	adminChatHistoryVisibleCount    = 5
+	adminChatTranscriptSessionLimit = 8
+	adminChatTranscriptVisibleCount = 2
+	adminChatTranscriptTurnLimit    = 18
+	adminChatTranscriptTurnVisible  = 6
 	adminChatTranscriptTextLimit    = 1500
 )
 
@@ -275,12 +279,13 @@ func (p *adminChatsProvider) ChatDetail(
 		identityDefaultNameSource(identity),
 		sessions,
 	)
-	detail.Transcript, err = buildAdminChatTranscript(
-		strings.TrimSpace(p.appName),
-		p.session,
-		baseSessionID,
-		sessions,
-	)
+	detail.Transcript, detail.TranscriptTruncated, err =
+		buildAdminChatTranscript(
+			strings.TrimSpace(p.appName),
+			p.session,
+			baseSessionID,
+			sessions,
+		)
 	if err != nil {
 		return admin.ChatView{}, err
 	}
@@ -396,11 +401,18 @@ func buildAdminTrackedChatView(
 	defaultSource string,
 	sessions []*session.Session,
 ) admin.ChatView {
+	totalHistoryCount := len(sessions)
+	historyTruncated := false
+	if len(sessions) > adminChatHistorySessionLimit {
+		sessions = sessions[:adminChatHistorySessionLimit]
+		historyTruncated = true
+	}
 	history := make([]admin.ChatSessionView, 0, len(sessions))
-	for _, sess := range sessions {
+	for i, sess := range sessions {
 		history = append(history, admin.ChatSessionView{
 			SessionID:    strings.TrimSpace(sess.ID),
 			LastActivity: sessionActivityTime(sess),
+			Visible:      i < adminChatHistoryVisibleCount,
 		})
 	}
 	currentSessionID := ""
@@ -418,6 +430,8 @@ func buildAdminTrackedChatView(
 		LastActivity:       lastActivity,
 		EffectiveAssistant: strings.TrimSpace(defaultName),
 		NameSource:         strings.TrimSpace(defaultSource),
+		HistoryTotalCount:  totalHistoryCount,
+		HistoryTruncated:   historyTruncated,
 		History:            history,
 	}
 }
@@ -427,17 +441,19 @@ func buildAdminChatTranscript(
 	sessionSvc session.Service,
 	baseSessionID string,
 	sessions []*session.Session,
-) ([]admin.ChatTranscriptView, error) {
+) ([]admin.ChatTranscriptView, bool, error) {
 	if strings.TrimSpace(appName) == "" || sessionSvc == nil ||
 		strings.TrimSpace(baseSessionID) == "" || len(sessions) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
+	truncated := false
 	if len(sessions) > adminChatTranscriptSessionLimit {
 		sessions = sessions[:adminChatTranscriptSessionLimit]
+		truncated = true
 	}
 	transcript := make([]admin.ChatTranscriptView, 0, len(sessions))
 	currentSessionID := strings.TrimSpace(sessions[0].ID)
-	for _, sess := range sessions {
+	for i, sess := range sessions {
 		view, ok, err := buildAdminChatTranscriptView(
 			appName,
 			sessionSvc,
@@ -446,17 +462,19 @@ func buildAdminChatTranscript(
 			sess,
 		)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if !ok {
 			continue
 		}
+		view.Visible = i < adminChatTranscriptVisibleCount ||
+			view.Current || view.Recall
 		transcript = append(transcript, view)
 	}
 	if len(transcript) == 0 {
-		return nil, nil
+		return nil, truncated, nil
 	}
-	return transcript, nil
+	return transcript, truncated, nil
 }
 
 func buildAdminChatTranscriptView(
@@ -519,6 +537,9 @@ func buildAdminChatTranscriptView(
 	}
 	if len(mapped) == 0 {
 		return admin.ChatTranscriptView{}, false, nil
+	}
+	for i := range mapped {
+		mapped[i].Visible = i >= len(mapped)-adminChatTranscriptTurnVisible
 	}
 	return admin.ChatTranscriptView{
 		SessionID:    sessionID,

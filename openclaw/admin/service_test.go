@@ -1828,9 +1828,11 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 					UserID: "alice",
 					Label:  "Alice Chen",
 				}},
+				HistoryTotalCount: 1,
 				History: []ChatSessionView{{
 					SessionID:    "wecom:dm:alice:171",
 					LastActivity: time.Unix(1700000000, 0),
+					Visible:      true,
 				}},
 			}},
 		},
@@ -1852,24 +1854,46 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 				UserID: "alice",
 				Label:  "Alice Chen",
 			}},
+			HistoryTotalCount:   2,
+			HistoryTruncated:    true,
+			TranscriptTruncated: true,
 			History: []ChatSessionView{{
 				SessionID:    "wecom:dm:alice:171",
 				LastActivity: time.Unix(1700000000, 0),
+				Visible:      true,
+			}, {
+				SessionID:    "wecom:dm:alice:170",
+				LastActivity: time.Unix(1699999990, 0),
+				Visible:      false,
 			}},
 			Transcript: []ChatTranscriptView{{
 				SessionID:    "wecom:dm:alice:171",
 				LastActivity: time.Unix(1700000000, 0),
 				Current:      true,
+				Visible:      true,
 				Turns: []ChatTurnView{{
 					Role:      "user",
 					Speaker:   "Alice Chen",
 					Text:      "Who are you listening to?",
 					Timestamp: time.Unix(1700000000, 0),
+					Visible:   false,
 				}, {
 					Role:      "assistant",
 					Speaker:   "林妹妹",
 					Text:      "I am using this chat's current name.",
 					Timestamp: time.Unix(1700000010, 0),
+					Visible:   true,
+				}},
+			}, {
+				SessionID:    "wecom:dm:alice:170",
+				LastActivity: time.Unix(1699999990, 0),
+				Visible:      false,
+				Turns: []ChatTurnView{{
+					Role:      "assistant",
+					Speaker:   "林妹妹",
+					Text:      "Older session reply.",
+					Timestamp: time.Unix(1699999990, 0),
+					Visible:   true,
 				}},
 			}},
 		},
@@ -1907,6 +1931,14 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 	require.Contains(t, body, "href=\"identity#identity-global\"")
 	require.Contains(t, body, "Alice Chen (alice)")
 	require.Contains(t, body, "I am using this chat&#39;s current name.")
+	require.Contains(t, body, "Show 1 older tracked sessions")
+	require.Contains(t, body, "Show 1 older turns")
+	require.Contains(t, body, "Show 1 older session lines")
+	require.Contains(
+		t,
+		body,
+		"Showing the most recent tracked sessions in this admin view.",
+	)
 	require.Equal(t, "wecom:dm:alice", chats.detailChatID)
 	require.Equal(t, 1, chats.detailCount)
 
@@ -2028,6 +2060,16 @@ func TestChatsHelpers(t *testing.T) {
 		"wecom:dm:alice",
 		chatDisplayLabel(ChatView{BaseSessionID: "wecom:dm:alice"}),
 	)
+	require.Equal(
+		t,
+		"No tracked sessions are currently available.",
+		chatHistorySummary(ChatView{}),
+	)
+	require.Equal(
+		t,
+		"2 tracked session lines",
+		chatHistorySummary(ChatView{HistoryTotalCount: 2}),
+	)
 	require.Equal(t, "-", chatKnownUsers(ChatView{}))
 	require.Equal(t, "alice, bob", chatKnownUsers(status.Chats[1]))
 	require.Equal(
@@ -2076,6 +2118,20 @@ func TestChatsHelpers(t *testing.T) {
 	}))
 	require.Equal(
 		t,
+		"No recent transcript is currently available.",
+		chatTranscriptSummary(ChatView{}),
+	)
+	require.Equal(
+		t,
+		"1 recent session lines · 2 visible turns",
+		chatTranscriptSummary(ChatView{
+			Transcript: []ChatTranscriptView{{
+				Turns: []ChatTurnView{{}, {}},
+			}},
+		}),
+	)
+	require.Equal(
+		t,
 		"Current session",
 		chatTranscriptLabel(ChatTranscriptView{Current: true}),
 	)
@@ -2118,6 +2174,52 @@ func TestChatsHelpers(t *testing.T) {
 		t,
 		"Alice Chen",
 		chatKnownUserLabel(KnownUserView{Label: "Alice Chen"}),
+	)
+	require.Len(
+		t,
+		chatVisibleHistory(ChatView{
+			History: []ChatSessionView{{Visible: true}, {Visible: false}},
+		}),
+		1,
+	)
+	require.Len(
+		t,
+		chatHiddenHistory(ChatView{
+			History: []ChatSessionView{{Visible: true}, {Visible: false}},
+		}),
+		1,
+	)
+	require.Len(
+		t,
+		chatVisibleTranscript(ChatView{
+			Transcript: []ChatTranscriptView{
+				{Visible: true}, {Visible: false},
+			},
+		}),
+		1,
+	)
+	require.Len(
+		t,
+		chatHiddenTranscript(ChatView{
+			Transcript: []ChatTranscriptView{
+				{Visible: true}, {Visible: false},
+			},
+		}),
+		1,
+	)
+	require.Len(
+		t,
+		chatVisibleTurns(ChatTranscriptView{
+			Turns: []ChatTurnView{{Visible: true}, {Visible: false}},
+		}),
+		1,
+	)
+	require.Len(
+		t,
+		chatHiddenTurns(ChatTranscriptView{
+			Turns: []ChatTurnView{{Visible: true}, {Visible: false}},
+		}),
+		1,
 	)
 	require.False(t, hasTime(time.Time{}))
 	require.True(t, hasTime(time.Unix(1700000000, 0)))
@@ -2197,12 +2299,16 @@ func TestChatsHelpers(t *testing.T) {
 
 	merged := mergeChatView(
 		ChatView{
-			BaseSessionID:   "wecom:dm:bob",
-			DisplayLabel:    "Bob",
-			NameSource:      "Current chat name",
-			OverridesGlobal: true,
+			BaseSessionID:       "wecom:dm:bob",
+			DisplayLabel:        "Bob",
+			NameSource:          "Current chat name",
+			OverridesGlobal:     true,
+			HistoryTotalCount:   2,
+			TranscriptTruncated: true,
 		},
 		ChatView{
+			HistoryTotalCount: 3,
+			HistoryTruncated:  true,
 			Transcript: []ChatTranscriptView{{
 				SessionID: "wecom:dm:bob:2",
 			}},
@@ -2211,6 +2317,9 @@ func TestChatsHelpers(t *testing.T) {
 	require.Equal(t, "Bob", merged.DisplayLabel)
 	require.Equal(t, "Current chat name", merged.NameSource)
 	require.True(t, merged.OverridesGlobal)
+	require.Equal(t, 3, merged.HistoryTotalCount)
+	require.True(t, merged.HistoryTruncated)
+	require.True(t, merged.TranscriptTruncated)
 	require.Len(t, merged.Transcript, 1)
 
 	merged = mergeChatView(

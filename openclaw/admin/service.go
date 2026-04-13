@@ -1199,8 +1199,17 @@ func mergeChatView(
 	if len(detail.History) != 0 {
 		merged.History = detail.History
 	}
+	if detail.HistoryTotalCount != 0 {
+		merged.HistoryTotalCount = detail.HistoryTotalCount
+	}
+	if detail.HistoryTruncated {
+		merged.HistoryTruncated = true
+	}
 	if len(detail.Transcript) != 0 {
 		merged.Transcript = detail.Transcript
+	}
+	if detail.TranscriptTruncated {
+		merged.TranscriptTruncated = true
 	}
 	return merged
 }
@@ -2211,12 +2220,20 @@ var adminPage = template.Must(
 		"personaKindLabel":           personaKindLabel,
 		"personaSummaryText":         personaSummaryText,
 		"chatDisplayLabel":           chatDisplayLabel,
+		"chatHiddenHistory":          chatHiddenHistory,
+		"chatHiddenTranscript":       chatHiddenTranscript,
+		"chatHiddenTurns":            chatHiddenTurns,
 		"chatKnownUsers":             chatKnownUsers,
 		"chatHasTranscript":          chatHasTranscript,
+		"chatHistorySummary":         chatHistorySummary,
 		"chatNameSourceLabel":        chatNameSourceLabel,
 		"chatTranscriptLabel":        chatTranscriptLabel,
+		"chatTranscriptSummary":      chatTranscriptSummary,
 		"chatTurnSpeaker":            chatTurnSpeaker,
 		"chatOverrideSample":         chatOverrideSample,
+		"chatVisibleHistory":         chatVisibleHistory,
+		"chatVisibleTranscript":      chatVisibleTranscript,
+		"chatVisibleTurns":           chatVisibleTurns,
 		"hasTime":                    hasTime,
 	}).Parse(
 		adminPageHTML +
@@ -3009,6 +3026,45 @@ const adminPageHTML = `<!doctype html>
     .chat-action-card h4,
     .chat-transcript-title {
       margin: 0;
+    }
+    .chat-disclosure,
+    .chat-disclosure-more {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 253, 248, 0.72);
+      overflow: hidden;
+    }
+    .chat-disclosure[open],
+    .chat-disclosure-more[open] {
+      border-color: rgba(15, 111, 97, 0.28);
+      box-shadow: 0 14px 28px rgba(35, 29, 22, 0.08);
+    }
+    .chat-disclosure summary,
+    .chat-disclosure-more summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 14px 16px;
+    }
+    .chat-disclosure summary::-webkit-details-marker,
+    .chat-disclosure-more summary::-webkit-details-marker {
+      display: none;
+    }
+    .chat-disclosure-meta {
+      margin: 8px 0 0;
+    }
+    .chat-disclosure-body {
+      margin-top: 0;
+      padding: 0 16px 16px;
+      border-top: 1px solid var(--line);
+    }
+    .chat-disclosure-body > :first-child {
+      margin-top: 14px;
+    }
+    .chat-disclosure-body > :last-child {
+      margin-bottom: 0;
+    }
+    .chat-disclosure-more {
+      margin-top: 12px;
     }
     .chat-transcript-list {
       display: grid;

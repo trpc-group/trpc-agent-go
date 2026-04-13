@@ -644,6 +644,36 @@ func TestAdminChatsProvider_ViewsAndTranscriptHelpers(t *testing.T) {
 	require.Empty(t, chat.CurrentSessionID)
 	require.True(t, chat.LastActivity.IsZero())
 	require.Empty(t, chat.History)
+	require.Zero(t, chat.HistoryTotalCount)
+	require.False(t, chat.HistoryTruncated)
+
+	manySessions := make([]*session.Session, 0, adminChatHistorySessionLimit+2)
+	for i := 0; i < adminChatHistorySessionLimit+2; i++ {
+		manySessions = append(manySessions, &session.Session{
+			ID:        fmt.Sprintf("chat-many:%02d", i),
+			UpdatedAt: time.Unix(int64(1700001000+i), 0).UTC(),
+		})
+	}
+	chat = buildAdminTrackedChatView(
+		"chat-many",
+		"Nora",
+		adminDefaultNameSourceFile,
+		manySessions,
+	)
+	require.Len(t, chat.History, adminChatHistorySessionLimit)
+	require.Equal(
+		t,
+		adminChatHistorySessionLimit+2,
+		chat.HistoryTotalCount,
+	)
+	require.True(t, chat.HistoryTruncated)
+	visibleHistory := 0
+	for _, item := range chat.History {
+		if item.Visible {
+			visibleHistory++
+		}
+	}
+	require.Equal(t, adminChatHistoryVisibleCount, visibleHistory)
 
 	require.True(t, sessionActivityTime(nil).IsZero())
 	require.Equal(t, time.Time{}, timeZero())
@@ -787,12 +817,52 @@ func TestAdminChatTranscriptHelpers_EdgeCases(t *testing.T) {
 	)
 
 	sessions := []*session.Session{current, middle, older, oldest}
+	for i := 0; i < adminChatTranscriptSessionLimit; i++ {
+		sessionID := fmt.Sprintf("sess-extra-%02d", i)
+		extra, err := baseSvc.CreateSession(
+			ctx,
+			session.Key{
+				AppName:   appName,
+				UserID:    baseID,
+				SessionID: sessionID,
+			},
+			nil,
+		)
+		require.NoError(t, err)
+		extra.CreatedAt = time.Unix(
+			1700000000-int64(i+10),
+			0,
+		).UTC()
+		require.NoError(
+			t,
+			baseSvc.AppendEvent(
+				ctx,
+				extra,
+				event.NewResponseEvent(
+					"inv",
+					"user",
+					&model.Response{
+						Choices: []model.Choice{{
+							Message: model.NewUserMessage(sessionID),
+						}},
+					},
+				),
+			),
+		)
+		sessions = append(sessions, extra)
+	}
 
-	transcript, err := buildAdminChatTranscript("", baseSvc, baseID, sessions)
+	transcript, truncated, err := buildAdminChatTranscript(
+		"",
+		baseSvc,
+		baseID,
+		sessions,
+	)
 	require.NoError(t, err)
 	require.Nil(t, transcript)
+	require.False(t, truncated)
 
-	transcript, err = buildAdminChatTranscript(
+	transcript, truncated, err = buildAdminChatTranscript(
 		appName,
 		nil,
 		baseID,
@@ -800,8 +870,9 @@ func TestAdminChatTranscriptHelpers_EdgeCases(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Nil(t, transcript)
+	require.False(t, truncated)
 
-	transcript, err = buildAdminChatTranscript(
+	transcript, truncated, err = buildAdminChatTranscript(
 		appName,
 		baseSvc,
 		"",
@@ -809,8 +880,9 @@ func TestAdminChatTranscriptHelpers_EdgeCases(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Nil(t, transcript)
+	require.False(t, truncated)
 
-	transcript, err = buildAdminChatTranscript(
+	transcript, truncated, err = buildAdminChatTranscript(
 		appName,
 		baseSvc,
 		baseID,
@@ -818,18 +890,30 @@ func TestAdminChatTranscriptHelpers_EdgeCases(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Nil(t, transcript)
+	require.False(t, truncated)
 
-	transcript, err = buildAdminChatTranscript(
+	transcript, truncated, err = buildAdminChatTranscript(
 		appName,
 		baseSvc,
 		baseID,
 		sessions,
 	)
 	require.NoError(t, err)
+	require.True(t, truncated)
 	require.Len(t, transcript, adminChatTranscriptSessionLimit)
 	require.True(t, transcript[0].Current)
+	require.True(t, transcript[0].Visible)
+	require.True(t, transcript[1].Visible)
+	require.False(t, transcript[2].Visible)
 	require.True(t, transcript[0].Truncated)
 	require.Len(t, transcript[0].Turns, adminChatTranscriptTurnLimit)
+	visibleTurns := 0
+	for _, turn := range transcript[0].Turns {
+		if turn.Visible {
+			visibleTurns++
+		}
+	}
+	require.Equal(t, adminChatTranscriptTurnVisible, visibleTurns)
 	require.Equal(
 		t,
 		"sess-current",

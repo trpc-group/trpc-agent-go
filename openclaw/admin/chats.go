@@ -10,6 +10,7 @@
 package admin
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -61,7 +62,10 @@ type ChatView struct {
 	WorkspacePath         string               `json:"workspace_path,omitempty"`
 	KnownUserIDs          []string             `json:"known_user_ids,omitempty"`
 	KnownUsers            []KnownUserView      `json:"known_users,omitempty"`
+	HistoryTotalCount     int                  `json:"history_total_count"`
+	HistoryTruncated      bool                 `json:"history_truncated"`
 	History               []ChatSessionView    `json:"history,omitempty"`
+	TranscriptTruncated   bool                 `json:"transcript_truncated"`
 	Transcript            []ChatTranscriptView `json:"transcript,omitempty"`
 }
 
@@ -73,6 +77,7 @@ type KnownUserView struct {
 type ChatSessionView struct {
 	SessionID    string    `json:"session_id,omitempty"`
 	LastActivity time.Time `json:"last_activity,omitempty"`
+	Visible      bool      `json:"visible"`
 }
 
 type ChatTranscriptView struct {
@@ -80,6 +85,7 @@ type ChatTranscriptView struct {
 	LastActivity time.Time      `json:"last_activity,omitempty"`
 	Current      bool           `json:"current"`
 	Recall       bool           `json:"recall"`
+	Visible      bool           `json:"visible"`
 	Truncated    bool           `json:"truncated"`
 	Turns        []ChatTurnView `json:"turns,omitempty"`
 }
@@ -90,6 +96,7 @@ type ChatTurnView struct {
 	QuoteText string    `json:"quote_text,omitempty"`
 	Text      string    `json:"text,omitempty"`
 	Timestamp time.Time `json:"timestamp,omitempty"`
+	Visible   bool      `json:"visible"`
 }
 
 func (s *Service) chatsStatus() ChatsStatus {
@@ -203,6 +210,122 @@ func chatNameSourceLabel(chat ChatView) string {
 
 func chatHasTranscript(chat ChatView) bool {
 	return len(chat.Transcript) != 0
+}
+
+func chatVisibleHistory(chat ChatView) []ChatSessionView {
+	return visibleChatSessions(chat.History, true)
+}
+
+func chatHiddenHistory(chat ChatView) []ChatSessionView {
+	return visibleChatSessions(chat.History, false)
+}
+
+func visibleChatSessions(
+	sessions []ChatSessionView,
+	visible bool,
+) []ChatSessionView {
+	if len(sessions) == 0 {
+		return nil
+	}
+	result := make([]ChatSessionView, 0, len(sessions))
+	for _, session := range sessions {
+		if session.Visible != visible {
+			continue
+		}
+		result = append(result, session)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func chatVisibleTranscript(chat ChatView) []ChatTranscriptView {
+	return visibleChatTranscript(chat.Transcript, true)
+}
+
+func chatHiddenTranscript(chat ChatView) []ChatTranscriptView {
+	return visibleChatTranscript(chat.Transcript, false)
+}
+
+func visibleChatTranscript(
+	transcript []ChatTranscriptView,
+	visible bool,
+) []ChatTranscriptView {
+	if len(transcript) == 0 {
+		return nil
+	}
+	result := make([]ChatTranscriptView, 0, len(transcript))
+	for _, view := range transcript {
+		if view.Visible != visible {
+			continue
+		}
+		result = append(result, view)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func chatVisibleTurns(view ChatTranscriptView) []ChatTurnView {
+	return visibleChatTurns(view.Turns, true)
+}
+
+func chatHiddenTurns(view ChatTranscriptView) []ChatTurnView {
+	return visibleChatTurns(view.Turns, false)
+}
+
+func visibleChatTurns(
+	turns []ChatTurnView,
+	visible bool,
+) []ChatTurnView {
+	if len(turns) == 0 {
+		return nil
+	}
+	result := make([]ChatTurnView, 0, len(turns))
+	for _, turn := range turns {
+		if turn.Visible != visible {
+			continue
+		}
+		result = append(result, turn)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func chatTranscriptSummary(chat ChatView) string {
+	sessionCount := len(chat.Transcript)
+	turnCount := 0
+	for _, transcript := range chat.Transcript {
+		turnCount += len(transcript.Turns)
+	}
+	switch {
+	case sessionCount == 0:
+		return "No recent transcript is currently available."
+	case turnCount == 0:
+		return fmt.Sprintf("%d recent session lines", sessionCount)
+	default:
+		return fmt.Sprintf(
+			"%d recent session lines · %d visible turns",
+			sessionCount,
+			turnCount,
+		)
+	}
+}
+
+func chatHistorySummary(chat ChatView) string {
+	count := chat.HistoryTotalCount
+	switch {
+	case count <= 0:
+		return "No tracked sessions are currently available."
+	case count == 1:
+		return "1 tracked session line"
+	default:
+		return fmt.Sprintf("%d tracked session lines", count)
+	}
 }
 
 func chatTranscriptLabel(view ChatTranscriptView) string {
@@ -470,6 +593,8 @@ const chatsPageTemplateHTML = `
 
           <h4 style="margin: 18px 0 8px;">Recent Sessions</h4>
           {{if .SelectedChat.History}}
+          {{$visibleHistory := chatVisibleHistory .SelectedChat}}
+          {{$hiddenHistory := chatHiddenHistory .SelectedChat}}
           <table>
             <thead>
               <tr>
@@ -478,7 +603,7 @@ const chatsPageTemplateHTML = `
               </tr>
             </thead>
             <tbody>
-              {{range .SelectedChat.History}}
+              {{range $visibleHistory}}
               <tr>
                 <td><code>{{.SessionID}}</code></td>
                 <td>{{formatTime .LastActivity}}</td>
@@ -486,69 +611,235 @@ const chatsPageTemplateHTML = `
               {{end}}
             </tbody>
           </table>
+          {{if $hiddenHistory}}
+          <details class="chat-disclosure-more">
+            <summary>
+              Show {{len $hiddenHistory}} older tracked sessions
+            </summary>
+            <div class="chat-disclosure-body">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Session ID</th>
+                    <th>Last Activity</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range $hiddenHistory}}
+                  <tr>
+                    <td><code>{{.SessionID}}</code></td>
+                    <td>{{formatTime .LastActivity}}</td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </div>
+          </details>
+          {{end}}
+          {{if .SelectedChat.HistoryTruncated}}
+          <p class="subtle" style="margin-top: 10px;">
+            Showing the most recent tracked sessions in this admin view.
+          </p>
+          {{end}}
           {{else}}
           <p class="empty">No recent sessions have been tracked yet.</p>
           {{end}}
         </section>
 
         <section class="chat-detail-section" id="chat-history">
-          <div class="chat-detail-head">
-            <h3>History</h3>
-            <p class="subtle">
-              Recent visible turns from this chat's tracked session
-              lines. Large transcripts are intentionally bounded here.
-            </p>
-          </div>
-          {{if .SelectedChatError}}
-          <div class="notice err">{{.SelectedChatError}}</div>
-          {{else if chatHasTranscript .SelectedChat}}
-          <div class="chat-transcript-list">
-            {{range .SelectedChat.Transcript}}
-            <article class="chat-transcript-card">
-              <div class="chat-transcript-head">
-                <div>
-                  <div class="chat-transcript-title">
-                    {{chatTranscriptLabel .}}
+          <details class="chat-disclosure">
+            <summary>
+              <h3>History</h3>
+              <p class="subtle">
+                Recent visible turns from this chat's tracked session
+                lines. Large transcripts stay bounded here by design.
+              </p>
+              <p class="subtle chat-disclosure-meta">
+                {{chatTranscriptSummary .SelectedChat}}
+              </p>
+            </summary>
+            <div class="chat-disclosure-body">
+              {{if .SelectedChatError}}
+              <div class="notice err">{{.SelectedChatError}}</div>
+              {{else if chatHasTranscript .SelectedChat}}
+              {{$visibleTranscript := chatVisibleTranscript .SelectedChat}}
+              {{$hiddenTranscript := chatHiddenTranscript .SelectedChat}}
+              <div class="chat-transcript-list">
+                {{range $visibleTranscript}}
+                <article class="chat-transcript-card">
+                  <div class="chat-transcript-head">
+                    <div>
+                      <div class="chat-transcript-title">
+                        {{chatTranscriptLabel .}}
+                      </div>
+                      <div class="subtle">
+                        <code>{{.SessionID}}</code>
+                      </div>
+                    </div>
+                    <div class="subtle">{{formatTime .LastActivity}}</div>
                   </div>
-                  <div class="subtle">
-                    <code>{{.SessionID}}</code>
-                  </div>
-                </div>
-                <div class="subtle">{{formatTime .LastActivity}}</div>
-              </div>
-              <div class="chat-turn-list">
-                {{range .Turns}}
-                <article class="chat-turn">
-                  <div class="chat-turn-head">
-                    <span class="chat-turn-speaker">
-                      {{chatTurnSpeaker .}}
-                    </span>
-                    {{if hasTime .Timestamp}}
-                    <span class="subtle">{{formatTime .Timestamp}}</span>
+                  {{$visibleTurns := chatVisibleTurns .}}
+                  {{$hiddenTurns := chatHiddenTurns .}}
+                  <div class="chat-turn-list">
+                    {{range $visibleTurns}}
+                    <article class="chat-turn">
+                      <div class="chat-turn-head">
+                        <span class="chat-turn-speaker">
+                          {{chatTurnSpeaker .}}
+                        </span>
+                        {{if hasTime .Timestamp}}
+                        <span class="subtle">{{formatTime .Timestamp}}</span>
+                        {{end}}
+                      </div>
+                      {{if .QuoteText}}
+                      <blockquote class="chat-turn-quote">
+                        {{.QuoteText}}
+                      </blockquote>
+                      {{end}}
+                      <div class="chat-turn-text">{{.Text}}</div>
+                    </article>
                     {{end}}
                   </div>
-                  {{if .QuoteText}}
-                  <blockquote class="chat-turn-quote">
-                    {{.QuoteText}}
-                  </blockquote>
+                  {{if $hiddenTurns}}
+                  <details class="chat-disclosure-more">
+                    <summary>
+                      Show {{len $hiddenTurns}} older turns
+                    </summary>
+                    <div class="chat-disclosure-body">
+                      <div class="chat-turn-list">
+                        {{range $hiddenTurns}}
+                        <article class="chat-turn">
+                          <div class="chat-turn-head">
+                            <span class="chat-turn-speaker">
+                              {{chatTurnSpeaker .}}
+                            </span>
+                            {{if hasTime .Timestamp}}
+                            <span class="subtle">{{formatTime .Timestamp}}</span>
+                            {{end}}
+                          </div>
+                          {{if .QuoteText}}
+                          <blockquote class="chat-turn-quote">
+                            {{.QuoteText}}
+                          </blockquote>
+                          {{end}}
+                          <div class="chat-turn-text">{{.Text}}</div>
+                        </article>
+                        {{end}}
+                      </div>
+                    </div>
+                  </details>
                   {{end}}
-                  <div class="chat-turn-text">{{.Text}}</div>
+                  {{if .Truncated}}
+                  <p class="subtle" style="margin-top: 10px;">
+                    Showing the most recent turns for this session line.
+                  </p>
+                  {{end}}
                 </article>
                 {{end}}
               </div>
-              {{if .Truncated}}
-              <p class="subtle" style="margin-top: 10px;">
-                Showing the most recent turns for this session line.
+              {{if $hiddenTranscript}}
+              <details class="chat-disclosure-more">
+                <summary>
+                  Show {{len $hiddenTranscript}} older session lines
+                </summary>
+                <div class="chat-disclosure-body">
+                  <div class="chat-transcript-list">
+                    {{range $hiddenTranscript}}
+                    <article class="chat-transcript-card">
+                      <div class="chat-transcript-head">
+                        <div>
+                          <div class="chat-transcript-title">
+                            {{chatTranscriptLabel .}}
+                          </div>
+                          <div class="subtle">
+                            <code>{{.SessionID}}</code>
+                          </div>
+                        </div>
+                        <div class="subtle">
+                          {{formatTime .LastActivity}}
+                        </div>
+                      </div>
+                      {{$visibleTurns := chatVisibleTurns .}}
+                      {{$hiddenTurns := chatHiddenTurns .}}
+                      <div class="chat-turn-list">
+                        {{range $visibleTurns}}
+                        <article class="chat-turn">
+                          <div class="chat-turn-head">
+                            <span class="chat-turn-speaker">
+                              {{chatTurnSpeaker .}}
+                            </span>
+                            {{if hasTime .Timestamp}}
+                            <span class="subtle">
+                              {{formatTime .Timestamp}}
+                            </span>
+                            {{end}}
+                          </div>
+                          {{if .QuoteText}}
+                          <blockquote class="chat-turn-quote">
+                            {{.QuoteText}}
+                          </blockquote>
+                          {{end}}
+                          <div class="chat-turn-text">{{.Text}}</div>
+                        </article>
+                        {{end}}
+                      </div>
+                      {{if $hiddenTurns}}
+                      <details class="chat-disclosure-more">
+                        <summary>
+                          Show {{len $hiddenTurns}} older turns
+                        </summary>
+                        <div class="chat-disclosure-body">
+                          <div class="chat-turn-list">
+                            {{range $hiddenTurns}}
+                            <article class="chat-turn">
+                              <div class="chat-turn-head">
+                                <span class="chat-turn-speaker">
+                                  {{chatTurnSpeaker .}}
+                                </span>
+                                {{if hasTime .Timestamp}}
+                                <span class="subtle">
+                                  {{formatTime .Timestamp}}
+                                </span>
+                                {{end}}
+                              </div>
+                              {{if .QuoteText}}
+                              <blockquote class="chat-turn-quote">
+                                {{.QuoteText}}
+                              </blockquote>
+                              {{end}}
+                              <div class="chat-turn-text">{{.Text}}</div>
+                            </article>
+                            {{end}}
+                          </div>
+                        </div>
+                      </details>
+                      {{end}}
+                      {{if .Truncated}}
+                      <p class="subtle" style="margin-top: 10px;">
+                        Showing the most recent turns for this session
+                        line.
+                      </p>
+                      {{end}}
+                    </article>
+                    {{end}}
+                  </div>
+                </div>
+              </details>
+              {{end}}
+              {{if .SelectedChat.TranscriptTruncated}}
+              <p class="subtle" style="margin-top: 12px;">
+                Showing the most recent session lines in this admin
+                view.
               </p>
               {{end}}
-            </article>
-            {{end}}
-          </div>
-          {{else}}
-          <p class="empty">
-            No recent transcript is available for this chat yet.
-          </p>
-          {{end}}
+              {{else}}
+              <p class="empty">
+                No recent chat transcript is available in this runtime
+                for this chat right now.
+              </p>
+              {{end}}
+            </div>
+          </details>
         </section>
 
         <section class="chat-detail-section" id="chat-actions">
