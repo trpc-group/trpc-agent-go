@@ -187,63 +187,19 @@ func (r *Reader) processContent(content, name string, baseMetadata map[string]an
 }
 
 func (r *Reader) nodesToDocuments(result *codeast.Result, baseMetadata map[string]any) []*document.Document {
-	docs := make([]*document.Document, 0, len(result.Nodes))
-	for _, node := range result.Nodes {
-		docs = append(docs, r.nodeToDocument(node, baseMetadata, result.File))
+	payloads := codeast.NodesToDocumentPayloads(result, codeast.NodeDocumentPayloadOptions{
+		BaseMetadata: baseMetadata,
+		FileInfo:     result.File,
+		FormatType: func(entityType codeast.EntityType) string {
+			return string(entityType)
+		},
+		BuildEmbeddingText: codegolang.BuildNodeEmbeddingText,
+	})
+	docs := make([]*document.Document, 0, len(payloads))
+	for _, payload := range payloads {
+		docs = append(docs, idocument.CreateDocumentFromPayload(payload))
 	}
 	return docs
-}
-
-func (r *Reader) nodeToDocument(node *codeast.Node, baseMetadata map[string]any, fileInfo *codeast.FileInfo) *document.Document {
-	doc := idocument.CreateDocument(node.Code, node.Name)
-	if doc.Metadata == nil {
-		doc.Metadata = make(map[string]any)
-	}
-	for k, v := range baseMetadata {
-		doc.Metadata[k] = v
-	}
-
-	doc.Metadata["trpc_ast_type"] = string(node.Type)
-	doc.Metadata["trpc_ast_id"] = node.ID
-	doc.Metadata["trpc_ast_name"] = node.Name
-	doc.Metadata["trpc_ast_full_name"] = node.FullName
-	doc.Metadata["trpc_ast_language"] = string(node.Language)
-	doc.Metadata["trpc_ast_scope"] = string(node.Scope)
-	if node.Package != "" {
-		doc.Metadata["trpc_ast_package"] = node.Package
-	}
-	if node.FilePath != "" {
-		doc.Metadata["trpc_ast_file_path"] = node.FilePath
-	}
-	if node.LineStart > 0 {
-		doc.Metadata["trpc_ast_line_start"] = node.LineStart
-	}
-	if node.LineEnd > 0 {
-		doc.Metadata["trpc_ast_line_end"] = node.LineEnd
-	}
-	if node.Signature != "" {
-		doc.Metadata["trpc_ast_signature"] = node.Signature
-	}
-	if node.Comment != "" {
-		doc.Metadata["trpc_ast_comment"] = strings.TrimSpace(node.Comment)
-	}
-	imports := node.Imports
-	if len(imports) == 0 && fileInfo != nil {
-		imports = fileInfo.Imports
-	}
-	if len(imports) > 0 {
-		doc.Metadata["trpc_ast_imports"] = append([]string(nil), imports...)
-		doc.Metadata["trpc_ast_import_count"] = len(imports)
-	}
-	for k, v := range node.Metadata {
-		doc.Metadata[codeast.TrpcAstMetaPrefix+k] = v
-	}
-
-	doc.Metadata[source.MetaChunkIndex] = node.ChunkIndex
-	doc.Metadata[source.MetaChunkSize] = utf8.RuneCountInString(node.Code)
-	doc.Metadata[source.MetaContentLength] = utf8.RuneCountInString(node.Code)
-	doc.EmbeddingText = codegolang.BuildNodeEmbeddingText(node)
-	return doc
 }
 
 func (r *Reader) createFileDocument(content, name string, baseMetadata map[string]any) *document.Document {

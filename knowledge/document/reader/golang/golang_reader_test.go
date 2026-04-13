@@ -73,7 +73,6 @@ func (s *Service) Do(ctx context.Context) error {
 	methodDoc := findDocByFullName(t, docs, "example.com/demo.Service.Do")
 	assertMetadataEquals(t, methodDoc.Metadata, "trpc_ast_type", "Method")
 	assertMetadataEquals(t, methodDoc.Metadata, "trpc_ast_receiver_type", "*Service")
-	assertMetadataEquals(t, methodDoc.Metadata, "trpc_ast_exported", true)
 	if methodDoc.EmbeddingText == "" {
 		t.Fatal("expected method embedding text to be populated")
 	}

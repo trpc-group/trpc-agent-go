@@ -186,7 +186,6 @@ func (e *defaultExtractor) extractFunction(pkg *parsedPackage, fset *token.FileS
 	signature := e.buildFunctionSignature(fset, decl, receiverType)
 	node := newNode(entityType, decl.Name.Name, id, fullName, code, signature, comment, startPos.Filename, lineStart, endPos.Line, chunkIndex)
 	node.Package = pkg.ID
-	node.Metadata[codeast.MetadataKeyExported] = decl.Name.IsExported()
 	if receiverType != "" {
 		node.Metadata[codeast.MetadataKeyReceiverType] = receiverType
 	}
@@ -311,7 +310,6 @@ func (e *defaultExtractor) extractType(pkg *parsedPackage, fset *token.FileSet, 
 
 	node := newNode(entityType, name, id, fullName, code, signature, comment, startPos.Filename, lineStart, endPos.Line, chunkIndex)
 	node.Package = pkg.ID
-	node.Metadata[codeast.MetadataKeyExported] = spec.Name.IsExported()
 	node.Metadata["go_type_kind"] = goTypeKind
 	return []*codeast.Node{node}
 }
@@ -355,7 +353,6 @@ func (e *defaultExtractor) extractVariable(pkg *parsedPackage, fset *token.FileS
 
 		node := newNode(codeast.EntityVariable, name.Name, id, fullName, code, signature, comment, startPos.Filename, lineStart, endPos.Line, chunkIndex+i)
 		node.Package = pkg.ID
-		node.Metadata[codeast.MetadataKeyExported] = name.IsExported()
 		node.Metadata["go_value_kind"] = keyword
 		nodes = append(nodes, node)
 	}

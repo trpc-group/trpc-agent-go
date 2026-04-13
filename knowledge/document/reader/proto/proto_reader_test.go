@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	codeproto "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast/proto"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
@@ -404,40 +405,51 @@ import "google/protobuf/empty.proto";
 }
 
 func TestHelperFunctions_EmptyBranches(t *testing.T) {
-	e := &entityExtractor{protoPackage: ""}
-
-	if got := e.qualifiedName("Foo"); got != "Foo" {
+	if got := codeproto.QualifiedName("", "Foo"); got != "Foo" {
 		t.Fatalf("qualifiedName empty package mismatch: %s", got)
 	}
-	if got := e.qualifiedNameWithParent("Inner", ""); got != "Inner" {
+	if got := codeproto.QualifiedNameWithParent("Inner", ""); got != "Inner" {
 		t.Fatalf("qualifiedNameWithParent empty parent mismatch: %s", got)
 	}
 
-	e.lines = []string{"line1", "line2"}
-	if got := e.extractCode(0, 1); got != "" {
+	lines := []string{"line1", "line2"}
+	if got := codeproto.ExtractCode(lines, 0, 1); got != "" {
 		t.Fatalf("expected empty extractCode for invalid start, got %q", got)
 	}
-	if got := e.extractCode(3, 4); got != "" {
+	if got := codeproto.ExtractCode(lines, 3, 4); got != "" {
 		t.Fatalf("expected empty extractCode for out-of-range start, got %q", got)
 	}
 }
 
 func TestExtractOptionString_NotFound(t *testing.T) {
-	r := &Reader{}
 	content := `syntax = "proto3";
 package test;`
-	if got := r.extractOptionString(content, "go_package"); got != "" {
+	if got := codeproto.ExtractOptionString(content, "go_package"); got != "" {
 		t.Fatalf("expected empty option string, got %q", got)
 	}
 }
 
 func TestBuildFileEmbeddingText_MinimalMetadata(t *testing.T) {
-	r := &Reader{}
-	text := r.buildFileEmbeddingText("message A {}", "a.proto", map[string]any{})
+	text := codeproto.BuildFileEmbeddingText("message A {}", "a.proto", map[string]any{})
 
 	var got map[string]any
 	if err := json.Unmarshal([]byte(text), &got); err != nil {
 		t.Fatalf("failed to unmarshal embedding text: %v", err)
+	}
+	if got["id"] != "a.proto" {
+		t.Fatalf("expected id=a.proto, got %v", got["id"])
+	}
+	if got["type"] != "file" {
+		t.Fatalf("expected type=file, got %v", got["type"])
+	}
+	if got["file_path"] != "a.proto" {
+		t.Fatalf("expected file_path=a.proto, got %v", got["file_path"])
+	}
+	if _, ok := got["entity_type"]; ok {
+		t.Fatalf("entity_type should not be present")
+	}
+	if _, ok := got["entity_name"]; ok {
+		t.Fatalf("entity_name should not be present")
 	}
 	if _, ok := got["messages"]; ok {
 		t.Fatalf("messages should not be present")
@@ -450,7 +462,7 @@ func TestBuildFileEmbeddingText_MinimalMetadata(t *testing.T) {
 func TestExtractFileOptionsBranches(t *testing.T) {
 	// nil options
 	fd := &descriptorpb.FileDescriptorProto{}
-	goPkg, javaPkg := extractFileOptions(fd)
+	goPkg, javaPkg := codeproto.ExtractFileOptions(fd)
 	if goPkg != "" || javaPkg != "" {
 		t.Fatalf("expected empty options, got go=%q java=%q", goPkg, javaPkg)
 	}
@@ -475,7 +487,7 @@ func TestExtractFileOptionsBranches(t *testing.T) {
 			},
 		},
 	}
-	goPkg, javaPkg = extractFileOptions(fd2)
+	goPkg, javaPkg = codeproto.ExtractFileOptions(fd2)
 	if goPkg != "x/y/z" || javaPkg != "" {
 		t.Fatalf("unexpected options: go=%q java=%q", goPkg, javaPkg)
 	}
@@ -522,8 +534,6 @@ func TestSupportedExtensions(t *testing.T) {
 }
 
 func TestExtractMetadata(t *testing.T) {
-	r := &Reader{}
-
 	tests := []struct {
 		name     string
 		content  string
@@ -534,7 +544,7 @@ func TestExtractMetadata(t *testing.T) {
 			content: `syntax = "proto3";
 package test;`,
 			expected: map[string]any{
-				"trpc_ast_syntax": "proto3",
+				"syntax": "proto3",
 			},
 		},
 		{
@@ -542,7 +552,7 @@ package test;`,
 			content: `syntax = "proto3";
 package example.v1.service;`,
 			expected: map[string]any{
-				"trpc_ast_package": "example.v1.service",
+				"package": "example.v1.service",
 			},
 		},
 		{
@@ -551,7 +561,7 @@ package example.v1.service;`,
 import public "common.proto";
 import weak "optional.proto";`,
 			expected: map[string]any{
-				"trpc_ast_import_count": 3,
+				"import_count": 3,
 			},
 		},
 		{
@@ -561,14 +571,14 @@ import weak "optional.proto";`,
 }
 service OrderService {}`,
 			expected: map[string]any{
-				"trpc_ast_service_count": 2,
+				"service_count": 2,
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			metadata := r.extractFileMetadata(tt.content)
+			metadata := codeproto.ExtractFileMetadata(tt.content)
 			for key, expectedValue := range tt.expected {
 				if actualValue, ok := metadata[key]; !ok {
 					t.Errorf("expected metadata key %s not found", key)
@@ -1018,8 +1028,7 @@ message GetUserRequest { string id = 1; }
 		case "message", "enum", "service", "rpc":
 			t.Errorf("type should be capitalized, got: %s", entityType)
 		default:
-			// For file documents, "proto" is acceptable
-			if entityType != "proto" {
+			if entityType != "file" {
 				t.Errorf("unexpected type value: %s", entityType)
 			}
 		}

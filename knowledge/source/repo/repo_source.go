@@ -22,7 +22,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
-	codegolang "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	isource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/internal/source"
@@ -151,6 +150,10 @@ type repoInfo struct {
 	branch string
 }
 
+type directoryReader interface {
+	ReadFromDirectory(dirPath string) ([]*document.Document, error)
+}
+
 func (s *Source) resolveRepository(ctx context.Context, input string) (string, *repoInfo, func(), error) {
 	if looksLikeGitURL(input) {
 		tmpDir, err := os.MkdirTemp("", "trpc-agent-go-repo-*")
@@ -249,8 +252,8 @@ func (s *Source) processFile(filePath, repoRoot string, info *repoInfo) ([]*docu
 		return nil, fmt.Errorf("no reader available for file type: %s", fileType)
 	}
 	var documents []*document.Document
-	if goReader, ok := r.(*codegolang.Reader); ok {
-		documents, err = goReader.ReadFromDirectory(filepath.Dir(filePath))
+	if dirReader, ok := r.(directoryReader); ok {
+		documents, err = dirReader.ReadFromDirectory(filepath.Dir(filePath))
 	} else {
 		documents, err = r.ReadFromFile(filePath)
 	}
