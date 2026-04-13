@@ -36,12 +36,16 @@ func (r *runner) Cancel(ctx context.Context, runAgentInput *adapter.RunAgentInpu
 	if err != nil {
 		return fmt.Errorf("run input hook: %w", err)
 	}
+	appName, err := r.resolveAppName(ctx, runAgentInput)
+	if err != nil {
+		return fmt.Errorf("resolve app name: %w", err)
+	}
 	userID, err := r.userIDResolver(ctx, runAgentInput)
 	if err != nil {
 		return fmt.Errorf("resolve user ID: %w", err)
 	}
 	key := session.Key{
-		AppName:   r.appName,
+		AppName:   appName,
 		UserID:    userID,
 		SessionID: runAgentInput.ThreadID,
 	}

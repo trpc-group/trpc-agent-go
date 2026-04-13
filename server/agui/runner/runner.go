@@ -72,6 +72,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 	run := &runner{
 		runner:                                 r,
 		appName:                                opts.AppName,
+		appNameResolver:                        opts.AppNameResolver,
 		translatorFactory:                      opts.TranslatorFactory,
 		graphNodeLifecycleActivityEnabled:      opts.GraphNodeLifecycleActivityEnabled,
 		graphNodeInterruptActivityEnabled:      opts.GraphNodeInterruptActivityEnabled,
@@ -99,6 +100,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 // runner is the default implementation of the Runner.
 type runner struct {
 	appName                                string
+	appNameResolver                        AppNameResolver
 	runner                                 trunner.Runner
 	translatorFactory                      TranslatorFactory
 	graphNodeLifecycleActivityEnabled      bool
@@ -223,6 +225,10 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	if err != nil {
 		return nil, fmt.Errorf("resolve run option: %w", err)
 	}
+	appName, err := r.resolveAppName(ctx, runAgentInput)
+	if err != nil {
+		return nil, fmt.Errorf("resolve app name: %w", err)
+	}
 	runtimeState, err := r.stateResolver(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("resolve state: %w", err)
@@ -248,7 +254,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 	}
 	input := &runInput{
 		key: session.Key{
-			AppName:   r.appName,
+			AppName:   appName,
 			UserID:    userID,
 			SessionID: runAgentInput.ThreadID,
 		},
@@ -622,6 +628,20 @@ func (r *runner) applyRunAgentInputHook(ctx context.Context,
 		return input, nil
 	}
 	return newInput, nil
+}
+
+func (r *runner) resolveAppName(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
+	if r.appNameResolver == nil {
+		return r.appName, nil
+	}
+	appName, err := r.appNameResolver(ctx, input)
+	if err != nil {
+		return "", err
+	}
+	if appName != "" {
+		return appName, nil
+	}
+	return r.appName, nil
 }
 
 func (r *runner) handleBeforeTranslate(ctx context.Context, event *event.Event) (*event.Event, error) {
