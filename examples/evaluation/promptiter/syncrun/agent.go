@@ -35,16 +35,39 @@ func newCandidateAgent(m model.Model, instruction string) (agent.Agent, error) {
 	), nil
 }
 
-func newPromptIterWorkerAgent(m model.Model) agent.Agent {
+func newBackwarderAgent(m model.Model) agent.Agent {
+	return newPromptIterStageAgent(
+		"promptiter-backwarder",
+		"Backwarder agent for the PromptIter sports commentary example.",
+		m,
+	)
+}
+
+func newAggregatorAgent(m model.Model) agent.Agent {
+	return newPromptIterStageAgent(
+		"promptiter-aggregator",
+		"Aggregator agent for the PromptIter sports commentary example.",
+		m,
+	)
+}
+
+func newOptimizerAgent(m model.Model) agent.Agent {
+	return newPromptIterStageAgent(
+		"promptiter-optimizer",
+		"Optimizer agent for the PromptIter sports commentary example.",
+		m,
+	)
+}
+
+func newPromptIterStageAgent(name string, description string, m model.Model) agent.Agent {
 	generationConfig := model.GenerationConfig{
 		MaxTokens:   intPtr(4096),
 		Temperature: floatPtr(0.0),
 	}
 	return llmagent.New(
-		"promptiter-worker",
+		name,
 		llmagent.WithModel(m),
-		llmagent.WithInstruction("You are a careful PromptIter worker. Follow the user's request exactly and produce valid JSON when structured output is enabled."),
-		llmagent.WithDescription("Worker agent for PromptIter backward, aggregation, and optimization stages."),
+		llmagent.WithDescription(description),
 		llmagent.WithGenerationConfig(generationConfig),
 	)
 }
@@ -60,21 +83,6 @@ func newJudgeAgent(m model.Model) agent.Agent {
 		llmagent.WithModel(m),
 		llmagent.WithInstruction("Follow the provided evaluation instructions exactly. Treat the user input as structured JSON with current live game state and recent context. Return only the requested judge output."),
 		llmagent.WithDescription("Judge agent for the PromptIter sports commentary rubric evaluation example."),
-		llmagent.WithGenerationConfig(generationConfig),
-	)
-}
-
-func newTeacherAgent(m model.Model) agent.Agent {
-	generationConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(4096),
-		Temperature: floatPtr(0.2),
-		Stream:      false,
-	}
-	return llmagent.New(
-		"commentary-teacher",
-		llmagent.WithModel(m),
-		llmagent.WithInstruction("Write one Chinese sentence of live NBA commentary from the JSON input. Focus on the current event, sound natural and spoken, and anchor the call in concrete live details from the JSON when they sharpen the moment. Output only the text."),
-		llmagent.WithDescription("Teacher agent that generates reference live commentary for evaluation."),
 		llmagent.WithGenerationConfig(generationConfig),
 	)
 }

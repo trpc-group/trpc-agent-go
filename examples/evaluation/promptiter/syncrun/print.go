@@ -12,11 +12,11 @@ import (
 	"errors"
 	"fmt"
 
-	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
 func printSummary(
-	result *promptiterengine.RunResult,
+	result *engine.RunResult,
 	dataDir string,
 	outputDir string,
 	initialInstruction string,
@@ -25,19 +25,10 @@ func printSummary(
 	if result == nil || result.Structure == nil || len(result.Rounds) == 0 {
 		return errors.New("run result is incomplete")
 	}
-	acceptedInstruction := initialInstruction
-	if result.AcceptedProfile != nil {
-		for _, override := range result.AcceptedProfile.Overrides {
-			if override.SurfaceID != targetSurfaceID || override.Value.Text == nil {
-				continue
-			}
-			acceptedInstruction = *override.Value.Text
-			break
-		}
-	}
+	acceptedInstruction := acceptedInstructionText(result, initialInstruction, targetSurfaceID)
 	initialScore := initialValidationScore(result)
 	finalScore := finalAcceptedValidationScore(result)
-	fmt.Println("✅ PromptIter sports commentary example completed")
+	fmt.Println("✅ PromptIter syncrun sports commentary example completed")
 	fmt.Printf("Data directory: %s\n", dataDir)
 	fmt.Printf("Result directory: %s\n", outputDir)
 	fmt.Printf("Structure ID: %s\n", result.Structure.StructureID)
@@ -72,12 +63,15 @@ func printSummary(
 	return nil
 }
 
-func initialValidationScore(result *promptiterengine.RunResult) float64 {
+func initialValidationScore(result *engine.RunResult) float64 {
+	if result.BaselineValidation != nil {
+		return result.BaselineValidation.OverallScore
+	}
 	candidateScore := evaluationResultScore(result.Rounds[0].Validation)
 	return candidateScore - result.Rounds[0].Acceptance.ScoreDelta
 }
 
-func finalAcceptedValidationScore(result *promptiterengine.RunResult) float64 {
+func finalAcceptedValidationScore(result *engine.RunResult) float64 {
 	currentScore := initialValidationScore(result)
 	for _, round := range result.Rounds {
 		if !round.Acceptance.Accepted {
@@ -88,10 +82,25 @@ func finalAcceptedValidationScore(result *promptiterengine.RunResult) float64 {
 	return currentScore
 }
 
-func evaluationResultScore(result *promptiterengine.EvaluationResult) float64 {
-	totalScore := 0.0
-	for _, evalSet := range result.EvalSets {
-		totalScore += evalSet.OverallScore
+func evaluationResultScore(result *engine.EvaluationResult) float64 {
+	return result.OverallScore
+}
+
+func acceptedInstructionText(
+	result *engine.RunResult,
+	initialInstruction string,
+	targetSurfaceID string,
+) string {
+	acceptedInstruction := initialInstruction
+	if result.AcceptedProfile == nil {
+		return acceptedInstruction
 	}
-	return totalScore / float64(len(result.EvalSets))
+	for _, override := range result.AcceptedProfile.Overrides {
+		if override.SurfaceID != targetSurfaceID || override.Value.Text == nil {
+			continue
+		}
+		acceptedInstruction = *override.Value.Text
+		break
+	}
+	return acceptedInstruction
 }

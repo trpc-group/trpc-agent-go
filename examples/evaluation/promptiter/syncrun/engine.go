@@ -39,26 +39,31 @@ const (
 	appName             = "promptiter-nba-commentary-app"
 	candidateAppName    = "promptiter-nba-commentary-candidate"
 	judgeAppName        = "promptiter-nba-commentary-judge"
-	promptIterWorkerApp = "promptiter-nba-commentary-worker"
+	backwarderAppName   = "promptiter-nba-commentary-backwarder"
+	aggregatorAppName   = "promptiter-nba-commentary-aggregator"
+	optimizerAppName    = "promptiter-nba-commentary-optimizer"
 	trainEvalSetID      = "nba-commentary-train"
 	validationEvalSetID = "nba-commentary-validation"
 	sharedMetricFileID  = "sports-commentary"
 )
 
-type runConfig struct {
-	DataDir                   string
-	OutputDir                 string
-	CandidateModelName        string
-	CandidateInstruction      string
-	JudgeModelName            string
-	WorkerModelName           string
-	NumRuns                   int
-	MaxRounds                 int
-	EvalCaseParallelism       int
-	ParallelInferenceEnabled  bool
-	ParallelEvaluationEnabled bool
-	DebugIO                   bool
-	Logger                    *log.Logger
+type syncRunConfig struct {
+	DataDir                    string
+	OutputDir                  string
+	CandidateModelName         string
+	CandidateInstruction       string
+	JudgeModelName             string
+	WorkerModelName            string
+	NumRuns                    int
+	MaxRounds                  int
+	MinScoreGain               float64
+	MaxRoundsWithoutAcceptance int
+	TargetScore                float64
+	EvalCaseParallelism        int
+	ParallelInferenceEnabled   bool
+	ParallelEvaluationEnabled  bool
+	DebugIO                    bool
+	Logger                     *log.Logger
 }
 
 type sharedMetricLocator struct {
@@ -70,16 +75,10 @@ type promptIterRuntime struct {
 	close  func()
 }
 
-func runPromptIterExample(ctx context.Context, cfg runConfig) error {
-	runtime, err := buildPromptIterRuntime(ctx, cfg)
+func runSyncRunExample(ctx context.Context, cfg syncRunConfig) error {
+	result, targetSurfaceID, err := runSyncRun(ctx, cfg)
 	if err != nil {
 		return err
-	}
-	defer runtime.close()
-	targetSurfaceID := astructure.SurfaceID(candidateAgentName, astructure.SurfaceTypeInstruction)
-	result, err := runtime.engine.Run(ctx, buildRunRequest(cfg, targetSurfaceID))
-	if err != nil {
-		return fmt.Errorf("run promptiter: %w", err)
 	}
 	if err := printSummary(
 		result,
@@ -93,7 +92,24 @@ func runPromptIterExample(ctx context.Context, cfg runConfig) error {
 	return nil
 }
 
-func buildPromptIterRuntime(ctx context.Context, cfg runConfig) (*promptIterRuntime, error) {
+func runSyncRun(
+	ctx context.Context,
+	cfg syncRunConfig,
+) (*promptiterengine.RunResult, string, error) {
+	runtime, err := buildPromptIterRuntime(ctx, cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	defer runtime.close()
+	targetSurfaceID := astructure.SurfaceID(candidateAgentName, astructure.SurfaceTypeInstruction)
+	result, err := runtime.engine.Run(ctx, buildRunRequest(cfg, targetSurfaceID))
+	if err != nil {
+		return nil, "", fmt.Errorf("run promptiter: %w", err)
+	}
+	return result, targetSurfaceID, nil
+}
+
+func buildPromptIterRuntime(ctx context.Context, cfg syncRunConfig) (*promptIterRuntime, error) {
 	candidateModel, err := loadOpenAIModel(cfg.CandidateModelName)
 	if err != nil {
 		return nil, fmt.Errorf("load candidate model: %w", err)
@@ -114,24 +130,26 @@ func buildPromptIterRuntime(ctx context.Context, cfg runConfig) (*promptIterRunt
 		return nil, fmt.Errorf("create candidate agent: %w", err)
 	}
 	judgeAgent := newJudgeAgent(judgeModel)
-	teacherAgent := newTeacherAgent(judgeModel)
-	promptIterWorker := newPromptIterWorkerAgent(workerModel)
+	backwarderAgent := newBackwarderAgent(workerModel)
+	aggregatorAgent := newAggregatorAgent(workerModel)
+	optimizerAgent := newOptimizerAgent(workerModel)
 	candidateRunner := runner.NewRunner(candidateAppName, candidateAgent)
 	judgeRunner := runner.NewRunner(judgeAppName, judgeAgent)
-	teacherRunner := runner.NewRunner("promptiter-nba-commentary-teacher", teacherAgent)
-	workerRunner := runner.NewRunner(promptIterWorkerApp, promptIterWorker)
+	backwarderBaseRunner := runner.NewRunner(backwarderAppName, backwarderAgent)
+	aggregatorBaseRunner := runner.NewRunner(aggregatorAppName, aggregatorAgent)
+	optimizerBaseRunner := runner.NewRunner(optimizerAppName, optimizerAgent)
 	logger := cfg.Logger
 	candidateLoggedRunner := newLoggingRunner("candidate", candidateRunner, logger, cfg.DebugIO)
 	judgeLoggedRunner := newLoggingRunner("judge", judgeRunner, logger, cfg.DebugIO)
-	teacherLoggedRunner := newLoggingRunner("teacher", teacherRunner, logger, cfg.DebugIO)
-	backwarderRunner := newLoggingRunner("backwarder", workerRunner, logger, cfg.DebugIO)
-	aggregatorRunner := newLoggingRunner("aggregator", workerRunner, logger, cfg.DebugIO)
-	optimizerRunner := newLoggingRunner("optimizer", workerRunner, logger, cfg.DebugIO)
+	backwarderRunner := newLoggingRunner("backwarder", backwarderBaseRunner, logger, cfg.DebugIO)
+	aggregatorRunner := newLoggingRunner("aggregator", aggregatorBaseRunner, logger, cfg.DebugIO)
+	optimizerRunner := newLoggingRunner("optimizer", optimizerBaseRunner, logger, cfg.DebugIO)
 	closeAll := func() {
 		candidateRunner.Close()
 		judgeRunner.Close()
-		teacherRunner.Close()
-		workerRunner.Close()
+		backwarderBaseRunner.Close()
+		aggregatorBaseRunner.Close()
+		optimizerBaseRunner.Close()
 	}
 	evalSetManager := evalsetlocal.New(evalset.WithBaseDir(cfg.DataDir))
 	metricManager := metriclocal.New(
@@ -151,7 +169,6 @@ func buildPromptIterRuntime(ctx context.Context, cfg runConfig) (*promptIterRunt
 		evaluation.WithMetricManager(metricManager),
 		evaluation.WithEvalResultManager(evalResultManager),
 		evaluation.WithRegistry(registry),
-		evaluation.WithExpectedRunner(teacherLoggedRunner),
 		evaluation.WithJudgeRunner(judgeLoggedRunner),
 		evaluation.WithNumRuns(cfg.NumRuns),
 	)
@@ -199,8 +216,8 @@ func buildPromptIterRuntime(ctx context.Context, cfg runConfig) (*promptIterRunt
 	}, nil
 }
 
-func buildRunRequest(cfg runConfig, targetSurfaceID string) *promptiterengine.RunRequest {
-	targetScore := 1.0
+func buildRunRequest(cfg syncRunConfig, targetSurfaceID string) *promptiterengine.RunRequest {
+	targetScore := cfg.TargetScore
 	return &promptiterengine.RunRequest{
 		TrainEvalSetIDs:      []string{trainEvalSetID},
 		ValidationEvalSetIDs: []string{validationEvalSetID},
@@ -211,10 +228,10 @@ func buildRunRequest(cfg runConfig, targetSurfaceID string) *promptiterengine.Ru
 			EvalCaseParallelEvaluationEnabled: cfg.ParallelEvaluationEnabled,
 		},
 		AcceptancePolicy: promptiterengine.AcceptancePolicy{
-			MinScoreGain: 0.005,
+			MinScoreGain: cfg.MinScoreGain,
 		},
 		StopPolicy: promptiterengine.StopPolicy{
-			MaxRoundsWithoutAcceptance: 5,
+			MaxRoundsWithoutAcceptance: cfg.MaxRoundsWithoutAcceptance,
 			TargetScore:                &targetScore,
 		},
 		MaxRounds:        cfg.MaxRounds,
