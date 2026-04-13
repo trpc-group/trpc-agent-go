@@ -54,11 +54,7 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	if invocation == nil || rsp == nil || rsp.IsPartial {
 		return
 	}
-	ce, ok := invocation.Agent.(agent.CodeExecutor)
-	if !ok || ce == nil {
-		return
-	}
-	e := ce.CodeExecutor()
+	e := codeExecutorForInvocation(invocation)
 	if e == nil {
 		return
 	}
@@ -127,6 +123,22 @@ func (p *CodeExecutionResponseProcessor) ProcessResponse(
 	))
 	//  [Step 3] Skip processing the original model response to continue code generation loop.
 	rsp.Choices[0].Message.Content = ""
+}
+
+func codeExecutorForInvocation(
+	invocation *agent.Invocation,
+) codeexecutor.CodeExecutor {
+	if invocation == nil {
+		return nil
+	}
+	if invocation.RunOptions.CodeExecutor != nil {
+		return invocation.RunOptions.CodeExecutor
+	}
+	ce, ok := invocation.Agent.(agent.CodeExecutor)
+	if !ok || ce == nil {
+		return nil
+	}
+	return ce.CodeExecutor()
 }
 
 func autoExecutableCodeBlocks(

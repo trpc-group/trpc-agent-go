@@ -25,9 +25,11 @@ const (
 )
 
 type workspaceExecRequestProcessorOptions struct {
-	sessionTools  bool
-	hasSkillsRepo bool
-	repoResolver  func(*agent.Invocation) skill.Repository
+	sessionTools     bool
+	hasSkillsRepo    bool
+	repoResolver     func(*agent.Invocation) skill.Repository
+	enabledResolver  func(*agent.Invocation) bool
+	sessionsResolver func(*agent.Invocation) bool
 }
 
 // WorkspaceExecRequestProcessorOption configures
@@ -39,6 +41,26 @@ type WorkspaceExecRequestProcessorOption func(*workspaceExecRequestProcessorOpti
 func WithWorkspaceExecSessionsEnabled() WorkspaceExecRequestProcessorOption {
 	return func(o *workspaceExecRequestProcessorOptions) {
 		o.sessionTools = true
+	}
+}
+
+// WithWorkspaceExecEnabledResolver sets an invocation-aware workspace_exec
+// capability resolver.
+func WithWorkspaceExecEnabledResolver(
+	resolver func(*agent.Invocation) bool,
+) WorkspaceExecRequestProcessorOption {
+	return func(o *workspaceExecRequestProcessorOptions) {
+		o.enabledResolver = resolver
+	}
+}
+
+// WithWorkspaceExecSessionsResolver sets an invocation-aware resolver for
+// workspace_exec session helper capability.
+func WithWorkspaceExecSessionsResolver(
+	resolver func(*agent.Invocation) bool,
+) WorkspaceExecRequestProcessorOption {
+	return func(o *workspaceExecRequestProcessorOptions) {
+		o.sessionsResolver = resolver
 	}
 }
 
@@ -65,6 +87,8 @@ type WorkspaceExecRequestProcessor struct {
 	sessionTools     bool
 	staticSkillsRepo bool
 	repoResolver     func(*agent.Invocation) skill.Repository
+	enabledResolver  func(*agent.Invocation) bool
+	sessionsResolver func(*agent.Invocation) bool
 }
 
 // NewWorkspaceExecRequestProcessor creates a new
@@ -83,6 +107,8 @@ func NewWorkspaceExecRequestProcessor(
 		sessionTools:     options.sessionTools,
 		staticSkillsRepo: options.hasSkillsRepo,
 		repoResolver:     options.repoResolver,
+		enabledResolver:  options.enabledResolver,
+		sessionsResolver: options.sessionsResolver,
 	}
 }
 
@@ -131,6 +157,9 @@ func (p *WorkspaceExecRequestProcessor) ProcessRequest(
 func (p *WorkspaceExecRequestProcessor) guidanceText(
 	inv *agent.Invocation,
 ) string {
+	if !p.enabledForInvocation(inv) {
+		return ""
+	}
 	var b strings.Builder
 	b.WriteString(workspaceExecGuidanceHeader)
 	b.WriteString("\n")
@@ -165,7 +194,7 @@ func (p *WorkspaceExecRequestProcessor) guidanceText(
 		b.WriteString("workspace_exec does not stage skills ")
 		b.WriteString("automatically.\n")
 	}
-	if p.sessionTools {
+	if p.sessionToolsForInvocation(inv) {
 		b.WriteString("- When workspace_exec starts a command that keeps ")
 		b.WriteString("running or waits for stdin, continue with ")
 		b.WriteString("workspace_write_stdin. When chars is empty, ")
@@ -178,6 +207,24 @@ func (p *WorkspaceExecRequestProcessor) guidanceText(
 		b.WriteString("session.\n")
 	}
 	return b.String()
+}
+
+func (p *WorkspaceExecRequestProcessor) enabledForInvocation(
+	inv *agent.Invocation,
+) bool {
+	if p.enabledResolver != nil {
+		return p.enabledResolver(inv)
+	}
+	return true
+}
+
+func (p *WorkspaceExecRequestProcessor) sessionToolsForInvocation(
+	inv *agent.Invocation,
+) bool {
+	if p.sessionsResolver != nil {
+		return p.sessionsResolver(inv)
+	}
+	return p.sessionTools
 }
 
 func (p *WorkspaceExecRequestProcessor) hasSkillsRepo(

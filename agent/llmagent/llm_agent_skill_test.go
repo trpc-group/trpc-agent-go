@@ -193,6 +193,75 @@ func TestLLMAgent_WorkspaceExecOmittedWithoutExplicitExecutor(t *testing.T) {
 	require.False(t, names["workspace_save_artifact"])
 }
 
+func TestLLMAgent_InvocationToolSurface_UsesRunCodeExecutorForWorkspaceExec(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	a := New("tester", WithSkills(repo))
+	inv := &agent.Invocation{
+		RunOptions: agent.NewRunOptions(
+			agent.WithCodeExecutor(&interactiveStubExec{}),
+		),
+	}
+
+	tools, _ := a.InvocationToolSurface(context.Background(), inv)
+	require.NotNil(t, findTool(tools, "workspace_exec"))
+	require.NotNil(t, findTool(tools, "workspace_write_stdin"))
+	require.NotNil(t, findTool(tools, "workspace_kill_session"))
+	require.NotNil(t, findTool(tools, "skill_run"))
+	require.NotNil(t, findTool(tools, "skill_exec"))
+	require.NotNil(t, findTool(tools, "skill_write_stdin"))
+	require.NotNil(t, findTool(tools, "skill_poll_session"))
+	require.NotNil(t, findTool(tools, "skill_kill_session"))
+}
+
+func TestLLMAgent_InvocationToolSurface_RunCodeExecutorOverridesStaticExecutor(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	a := New(
+		"tester",
+		WithSkills(repo),
+		WithCodeExecutor(&interactiveStubExec{}),
+	)
+	inv := &agent.Invocation{
+		RunOptions: agent.NewRunOptions(
+			agent.WithCodeExecutor(&stubExec{}),
+		),
+	}
+
+	tools, _ := a.InvocationToolSurface(context.Background(), inv)
+	require.NotNil(t, findTool(tools, "workspace_exec"))
+	require.Nil(t, findTool(tools, "workspace_write_stdin"))
+	require.Nil(t, findTool(tools, "workspace_kill_session"))
+	require.NotNil(t, findTool(tools, "skill_run"))
+	require.Nil(t, findTool(tools, "skill_exec"))
+	require.Nil(t, findTool(tools, "skill_write_stdin"))
+	require.Nil(t, findTool(tools, "skill_poll_session"))
+	require.Nil(t, findTool(tools, "skill_kill_session"))
+
+	runTool, ok := findTool(tools, "skill_run").(*toolskill.RunTool)
+	require.True(t, ok)
+	runToolVal := reflect.ValueOf(runTool).Elem()
+	execField := reflect.NewAt(
+		runToolVal.FieldByName("exec").Type(),
+		unsafe.Pointer(runToolVal.FieldByName("exec").UnsafeAddr()),
+	).Elem()
+	require.Same(t, inv.RunOptions.CodeExecutor, execField.Interface())
+	args := map[string]any{"skill": testSkillName, "command": "echo ok"}
+	b, err := json.Marshal(args)
+	require.NoError(t, err)
+	_, err = runTool.Call(context.Background(), b)
+	require.NoError(t, err)
+	overrideExec, ok := inv.RunOptions.CodeExecutor.(*stubExec)
+	require.True(t, ok)
+	require.True(t, overrideExec.ran)
+}
+
 func TestLLMAgent_WorkspaceSaveArtifactRegisteredForInvocationCapability(
 	t *testing.T,
 ) {
@@ -1425,6 +1494,43 @@ func TestLLMAgent_GuidanceIncludesExecForInteractiveExecutor(t *testing.T) {
 	require.NotContains(t, sys, "workspace_save_artifact")
 	require.Contains(t, sys, "workspace_write_stdin")
 	require.Contains(t, sys, "workspace_kill_session")
+}
+
+func TestLLMAgent_GuidanceRunCodeExecutorOverrideDisablesInteractiveTools(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+		RunOptions: agent.NewRunOptions(
+			agent.WithCodeExecutor(&stubExec{}),
+		),
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	sys := findSystemMessageContaining(req, skillsOverviewHeader)
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, workspaceExecGuidanceHeader)
+	require.Contains(t, sys, "workspace_exec")
+	require.NotContains(t, sys, "skill_exec")
+	require.NotContains(t, sys, "skill_write_stdin")
+	require.NotContains(t, sys, "skill_poll_session")
+	require.NotContains(t, sys, "skill_kill_session")
+	require.NotContains(t, sys, "workspace_write_stdin")
+	require.NotContains(t, sys, "workspace_kill_session")
 }
 
 func TestLLMAgent_WorkspaceExecGuidanceWithoutSkillsRepo(t *testing.T) {

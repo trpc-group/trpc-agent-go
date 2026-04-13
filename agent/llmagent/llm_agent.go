@@ -276,6 +276,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		),
 		processor.WithSkillLoadMode(options.SkillLoadMode),
 		processor.WithSkillToolFlags(skillFlags),
+		processor.WithSkillToolFlagsResolver(
+			a.skillToolFlagsForInvocation,
+		),
 	)
 	if options.MaxLoadedSkills > 0 {
 		skillsOpts = append(
@@ -298,26 +301,22 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	requestProcessors = append(requestProcessors, skillsProcessor)
 
 	// 6. Workspace exec processor - injects executor/workspace guidance
-	// whenever workspace_exec is registered, even without a skills repo.
-	if executorSupportsWorkspaceExec(options) {
-		var workspaceOpts []processor.WorkspaceExecRequestProcessorOption
-		if executorSupportsWorkspaceExecSessions(options) {
-			workspaceOpts = append(
-				workspaceOpts,
-				processor.WithWorkspaceExecSessionsEnabled(),
-			)
-		}
-		workspaceOpts = append(
-			workspaceOpts,
-			processor.WithWorkspaceExecSkillsRepositoryResolver(
-				a.skillRepositoryForInvocation,
-			),
-		)
-		requestProcessors = append(
-			requestProcessors,
-			processor.NewWorkspaceExecRequestProcessor(workspaceOpts...),
-		)
+	// when the current invocation exposes workspace_exec capability.
+	workspaceOpts := []processor.WorkspaceExecRequestProcessorOption{
+		processor.WithWorkspaceExecEnabledResolver(
+			a.supportsWorkspaceExecForInvocation,
+		),
+		processor.WithWorkspaceExecSessionsResolver(
+			a.supportsWorkspaceExecSessionsForInvocation,
+		),
+		processor.WithWorkspaceExecSkillsRepositoryResolver(
+			a.skillRepositoryForInvocation,
+		),
 	}
+	requestProcessors = append(
+		requestProcessors,
+		processor.NewWorkspaceExecRequestProcessor(workspaceOpts...),
+	)
 
 	// 7. Content processor - appends conversation/context history.
 	contentOpts := []processor.ContentOption{
@@ -620,12 +619,18 @@ func appendSkillTools(
 	options *Options,
 	runTool *toolskill.RunTool,
 ) []tool.Tool {
-	return appendSkillToolsWithRepo(
+	var exec codeexecutor.CodeExecutor
+	if options != nil {
+		exec = options.codeExecutor
+	}
+	return appendSkillToolsWithRepoAndFlags(
 		allTools,
 		options,
 		options.skillsRepository,
 		nil,
 		runTool,
+		exec,
+		mustResolveSkillToolFlags(options),
 	)
 }
 
@@ -636,11 +641,33 @@ func appendSkillToolsWithRepo(
 	reg *codeexecutor.WorkspaceRegistry,
 	runTool *toolskill.RunTool,
 ) []tool.Tool {
+	var exec codeexecutor.CodeExecutor
+	if options != nil {
+		exec = options.codeExecutor
+	}
+	return appendSkillToolsWithRepoAndFlags(
+		allTools,
+		options,
+		repo,
+		reg,
+		runTool,
+		exec,
+		mustResolveSkillToolFlags(options),
+	)
+}
+
+func appendSkillToolsWithRepoAndFlags(
+	allTools []tool.Tool,
+	options *Options,
+	repo skill.Repository,
+	reg *codeexecutor.WorkspaceRegistry,
+	runTool *toolskill.RunTool,
+	exec codeexecutor.CodeExecutor,
+	skillFlags skillprofile.Flags,
+) []tool.Tool {
 	if repo == nil {
 		return allTools
 	}
-
-	skillFlags := mustResolveSkillToolFlags(options)
 	if skillFlags.Load {
 		allTools = append(
 			allTools,
@@ -664,7 +691,7 @@ func appendSkillToolsWithRepo(
 	}
 
 	if runTool == nil {
-		runTool = buildSkillRunToolWithRepo(options, repo, reg)
+		runTool = buildSkillRunToolWithRepo(options, repo, reg, exec)
 	}
 	if skillFlags.Run {
 		allTools = append(allTools, runTool)
@@ -672,10 +699,6 @@ func appendSkillToolsWithRepo(
 	if !skillFlags.RequiresExecSessionTools() {
 		return allTools
 	}
-	if !executorSupportsInteractive(options) {
-		return allTools
-	}
-
 	execTool := toolskill.NewExecTool(runTool)
 	if skillFlags.Exec {
 		allTools = append(allTools, execTool)
@@ -702,6 +725,20 @@ func appendSkillToolsWithRepo(
 }
 
 func mustResolveSkillToolFlags(options *Options) skillprofile.Flags {
+	var exec codeexecutor.CodeExecutor
+	if options != nil {
+		exec = options.codeExecutor
+	}
+	return mustResolveSkillToolFlagsWithExecutor(options, exec)
+}
+
+func mustResolveSkillToolFlagsWithExecutor(
+	options *Options,
+	exec codeexecutor.CodeExecutor,
+) skillprofile.Flags {
+	if options == nil {
+		return skillprofile.Flags{}
+	}
 	flags, err := skillprofile.ResolveFlags(
 		options.skillToolProfile,
 		options.allowedSkillTools,
@@ -720,8 +757,7 @@ func mustResolveSkillToolFlags(options *Options) skillprofile.Flags {
 			"skill_run and skill_exec require skill_load when " +
 			"WithSkillRunRequireSkillLoaded is enabled")
 	}
-
-	if !executorSupportsInteractive(options) {
+	if !codeExecutorSupportsInteractive(exec) {
 		flags = flags.WithoutInteractiveExecution()
 	}
 	return flags
@@ -733,11 +769,33 @@ func appendWorkspaceExecTool(
 	reg *codeexecutor.WorkspaceRegistry,
 	inv *agent.Invocation,
 ) []tool.Tool {
-	if !executorSupportsWorkspaceExec(options) {
+	var exec codeexecutor.CodeExecutor
+	if options != nil {
+		exec = options.codeExecutor
+	}
+	return appendWorkspaceExecToolWithExecutor(
+		allTools,
+		exec,
+		codeExecutorSupportsWorkspaceExec(exec),
+		codeExecutorSupportsWorkspaceExecSessions(exec),
+		reg,
+		inv,
+	)
+}
+
+func appendWorkspaceExecToolWithExecutor(
+	allTools []tool.Tool,
+	exec codeexecutor.CodeExecutor,
+	enabled bool,
+	sessional bool,
+	reg *codeexecutor.WorkspaceRegistry,
+	inv *agent.Invocation,
+) []tool.Tool {
+	if !enabled {
 		return allTools
 	}
 	execTool := toolworkspaceexec.NewExecTool(
-		options.codeExecutor,
+		exec,
 		toolworkspaceexec.WithWorkspaceRegistry(reg),
 	)
 	allTools = append(
@@ -750,7 +808,7 @@ func appendWorkspaceExecTool(
 			toolworkspaceexec.NewSaveArtifactTool(execTool),
 		)
 	}
-	if executorSupportsWorkspaceExecSessions(options) {
+	if sessional {
 		allTools = append(
 			allTools,
 			toolworkspaceexec.NewWriteStdinTool(execTool),
@@ -772,6 +830,7 @@ func buildSkillRunTool(
 		options,
 		options.skillsRepository,
 		reg,
+		nil,
 	)
 }
 
@@ -779,8 +838,11 @@ func buildSkillRunToolWithRepo(
 	options *Options,
 	repo skill.Repository,
 	reg *codeexecutor.WorkspaceRegistry,
+	exec codeexecutor.CodeExecutor,
 ) *toolskill.RunTool {
-	exec := options.codeExecutor
+	if exec == nil && options != nil {
+		exec = options.codeExecutor
+	}
 	if exec == nil {
 		exec = defaultCodeExecutor()
 	}
@@ -842,7 +904,14 @@ func buildSkillRunToolWithRepo(
 // a local engine which does support interactive sessions, so we
 // return true in those cases.
 func executorSupportsInteractive(options *Options) bool {
-	exec := options.codeExecutor
+	var exec codeexecutor.CodeExecutor
+	if options != nil {
+		exec = options.codeExecutor
+	}
+	return codeExecutorSupportsInteractive(exec)
+}
+
+func codeExecutorSupportsInteractive(exec codeexecutor.CodeExecutor) bool {
 	if exec == nil {
 		exec = defaultCodeExecutor()
 	}
@@ -865,10 +934,17 @@ func executorSupportsInteractive(options *Options) bool {
 // not fall back to the local engine because that would silently move
 // commands onto the agent host instead of the configured executor.
 func executorSupportsWorkspaceExec(options *Options) bool {
-	if options == nil || options.codeExecutor == nil {
+	if options == nil {
 		return false
 	}
-	ep, ok := options.codeExecutor.(codeexecutor.EngineProvider)
+	return codeExecutorSupportsWorkspaceExec(options.codeExecutor)
+}
+
+func codeExecutorSupportsWorkspaceExec(exec codeexecutor.CodeExecutor) bool {
+	if exec == nil {
+		return false
+	}
+	ep, ok := exec.(codeexecutor.EngineProvider)
 	if !ok || ep == nil {
 		return false
 	}
@@ -882,10 +958,19 @@ func executorSupportsWorkspaceExec(options *Options) bool {
 // executorSupportsWorkspaceExecSessions reports whether workspace_exec can
 // expose interactive session helpers such as workspace_write_stdin.
 func executorSupportsWorkspaceExecSessions(options *Options) bool {
-	if !executorSupportsWorkspaceExec(options) {
+	if options == nil {
 		return false
 	}
-	ep := options.codeExecutor.(codeexecutor.EngineProvider)
+	return codeExecutorSupportsWorkspaceExecSessions(options.codeExecutor)
+}
+
+func codeExecutorSupportsWorkspaceExecSessions(
+	exec codeexecutor.CodeExecutor,
+) bool {
+	if !codeExecutorSupportsWorkspaceExec(exec) {
+		return false
+	}
+	ep := exec.(codeexecutor.EngineProvider)
 	eng := ep.Engine()
 	if eng == nil || eng.Runner() == nil {
 		return false

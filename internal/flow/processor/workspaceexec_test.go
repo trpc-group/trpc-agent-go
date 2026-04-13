@@ -165,3 +165,49 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_ResolverCanDisableSkillsGu
 	require.NotEmpty(t, req.Messages)
 	require.NotContains(t, req.Messages[0].Content, "Paths under skills/")
 }
+
+func TestWorkspaceExecRequestProcessor_ProcessRequest_DisabledByResolver(
+	t *testing.T,
+) {
+	p := NewWorkspaceExecRequestProcessor(
+		WithWorkspaceExecEnabledResolver(
+			func(*agent.Invocation) bool {
+				return false
+			},
+		),
+	)
+	req := &model.Request{}
+
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{AgentName: "tester"},
+		req,
+		nil,
+	)
+
+	require.Empty(t, req.Messages)
+}
+
+func TestWorkspaceExecRequestProcessor_ProcessRequest_SessionToolsEnabledByResolver(
+	t *testing.T,
+) {
+	p := NewWorkspaceExecRequestProcessor(
+		WithWorkspaceExecSessionsResolver(
+			func(*agent.Invocation) bool {
+				return true
+			},
+		),
+	)
+	req := &model.Request{}
+
+	p.ProcessRequest(
+		context.Background(),
+		&agent.Invocation{AgentName: "tester"},
+		req,
+		nil,
+	)
+
+	require.NotEmpty(t, req.Messages)
+	require.Contains(t, req.Messages[0].Content, "workspace_write_stdin")
+	require.Contains(t, req.Messages[0].Content, "workspace_kill_session")
+}

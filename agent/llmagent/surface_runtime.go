@@ -15,6 +15,7 @@ import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -76,6 +77,50 @@ func (a *LLMAgent) modelSurfaceForInvocation(
 	return patch.Model()
 }
 
+func (a *LLMAgent) codeExecutorForInvocation(
+	inv *agent.Invocation,
+) codeexecutor.CodeExecutor {
+	if inv != nil && inv.RunOptions.CodeExecutor != nil {
+		return inv.RunOptions.CodeExecutor
+	}
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.codeExecutor != nil {
+		return a.codeExecutor
+	}
+	return a.option.codeExecutor
+}
+
+func (a *LLMAgent) supportsWorkspaceExecForInvocation(
+	inv *agent.Invocation,
+) bool {
+	return codeExecutorSupportsWorkspaceExec(a.codeExecutorForInvocation(inv))
+}
+
+func (a *LLMAgent) supportsWorkspaceExecSessionsForInvocation(
+	inv *agent.Invocation,
+) bool {
+	return codeExecutorSupportsWorkspaceExecSessions(a.codeExecutorForInvocation(inv))
+}
+
+func (a *LLMAgent) skillToolFlagsForInvocation(
+	inv *agent.Invocation,
+) skillprofile.Flags {
+	if a == nil {
+		return skillprofile.Flags{}
+	}
+	a.mu.RLock()
+	options := a.option
+	a.mu.RUnlock()
+	return mustResolveSkillToolFlagsWithExecutor(
+		&options,
+		a.codeExecutorForInvocation(inv),
+	)
+}
+
 // ExecutionTraceAppliedSurfaceIDs reports the effective surfaces that affected one invocation step.
 func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []string {
 	nodeID := agent.InvocationSurfaceRootNodeID(inv)
@@ -129,24 +174,32 @@ func (a *LLMAgent) InvocationToolSurface(
 	allTools = appendKnowledgeTools(allTools, &options)
 
 	effectiveSkills := a.skillRepositoryForInvocation(inv)
+	effectiveExec := a.codeExecutorForInvocation(inv)
 	var workspaceRegistry *codeexecutor.WorkspaceRegistry
-	if effectiveSkills != nil && options.codeExecutor != nil {
+	if effectiveSkills != nil && effectiveExec != nil {
 		workspaceRegistry = buildWorkspaceRegistry()
-	} else if executorSupportsWorkspaceExec(&options) {
+	} else if codeExecutorSupportsWorkspaceExec(effectiveExec) {
 		workspaceRegistry = buildWorkspaceRegistry()
 	}
-	allTools = appendWorkspaceExecTool(
+	allTools = appendWorkspaceExecToolWithExecutor(
 		allTools,
-		&options,
+		effectiveExec,
+		codeExecutorSupportsWorkspaceExec(effectiveExec),
+		codeExecutorSupportsWorkspaceExecSessions(effectiveExec),
 		workspaceRegistry,
 		inv,
 	)
-	allTools = appendSkillToolsWithRepo(
+	allTools = appendSkillToolsWithRepoAndFlags(
 		allTools,
 		&options,
 		effectiveSkills,
 		workspaceRegistry,
 		nil,
+		effectiveExec,
+		mustResolveSkillToolFlagsWithExecutor(
+			&options,
+			effectiveExec,
+		),
 	)
 	if len(subAgents) == 0 {
 		return allTools, userToolNames
