@@ -58,6 +58,10 @@ func TestDefaultMessageBuilder(t *testing.T) {
 	}
 	assert.Equal(t, model.RoleUser, msg.Role)
 	assert.Contains(t, msg.Content, "Optimize one PromptIter surface from the provided current value and aggregated gradients.")
+	assert.Contains(t, msg.Content, "Prefer the smallest high-confidence change that preserves working parts of the current value.")
+	assert.Contains(t, msg.Content, "When the current value is mostly correct, prefer removing unsupported or speculative detail before adding new detail.")
+	assert.Contains(t, msg.Content, "Do not trade factual precision for stylistic vividness.")
+	assert.Contains(t, msg.Content, "Avoid broad rewrites unless the gradients indicate multiple independent failures.")
 
 	payloadContent, ok := extractRequestJSON(msg.Content)
 	assert.True(t, ok)

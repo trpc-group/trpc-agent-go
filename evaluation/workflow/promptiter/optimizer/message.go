@@ -31,6 +31,12 @@ Requirements:
 - Do not wrap the response in markdown code fences.
 - Preserve the request surface identity.
 - The patch value must match the request surface type.
+- Prefer the smallest high-confidence change that preserves working parts of the current value.
+- When the current value is mostly correct, prefer removing unsupported or speculative detail before adding new detail.
+- Resolve repeated or consistent gradients first.
+- Avoid broad rewrites unless the gradients indicate multiple independent failures.
+- Do not trade factual precision for stylistic vividness.
+- Add detail only when it is clearly supported by the request and directly required by the gradients.
 - Produce one replacement value and one concise reason.
 
 Request JSON:
