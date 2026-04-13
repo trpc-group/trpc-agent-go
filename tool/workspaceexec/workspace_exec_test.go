@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillstage"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -77,6 +78,101 @@ func TestExecTool_Declaration_DescribesGeneralShellUsage(t *testing.T) {
 	require.Contains(t, decl.Description, "does not depend on a specific skill")
 	require.Contains(t, decl.Description, "curl")
 	require.Contains(t, decl.Description, "environment-dependent network commands")
+	require.Contains(t, decl.Description, "work/inputs")
+}
+
+func TestExecTool_AutoStagesInvocationMessageFiles(t *testing.T) {
+	exec := localexec.New()
+	tl := NewExecTool(exec)
+
+	msg := model.NewUserMessage("upload")
+	msg.AddFileData("notes.txt", []byte("hello from upload"), "text/plain")
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationSession(&session.Session{ID: "sess-upload"}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := execInput{
+		Command: "cat work/inputs/notes.txt",
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	res, err := tl.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(execOutput)
+	require.Equal(t, codeexecutor.ProgramStatusExited, out.Status)
+	require.NotNil(t, out.ExitCode)
+	require.Equal(t, 0, *out.ExitCode)
+	require.Equal(t, "hello from upload", out.Output)
+}
+
+func TestExecTool_AutoStagesSessionFilesAcrossTurns(t *testing.T) {
+	exec := localexec.New()
+	tl := NewExecTool(exec)
+
+	prior := model.NewUserMessage("uploaded earlier")
+	prior.AddFileData("history.txt", []byte("session upload"), "text/plain")
+	sess := &session.Session{
+		ID: "sess-history",
+		Events: []event.Event{{
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: prior,
+				}},
+			},
+		}},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("use previous upload")),
+		agent.WithInvocationSession(sess),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := execInput{
+		Command: "cat work/inputs/history.txt",
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	res, err := tl.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(execOutput)
+	require.Equal(t, codeexecutor.ProgramStatusExited, out.Status)
+	require.NotNil(t, out.ExitCode)
+	require.Equal(t, 0, *out.ExitCode)
+	require.Equal(t, "session upload", out.Output)
+}
+
+func TestExecTool_AutoStageFailureDoesNotBlockCommand(t *testing.T) {
+	exec := localexec.New()
+	tl := NewExecTool(exec)
+
+	msg := model.NewUserMessage("upload")
+	msg.AddFileIDWithName("provider-file-1", "missing.txt")
+	inv := agent.NewInvocation(agent.WithInvocationMessage(msg))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args := execInput{
+		Command: "printf ok",
+		Timeout: timeoutSecSmall,
+	}
+	enc, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	res, err := tl.Call(ctx, enc)
+	require.NoError(t, err)
+
+	out := res.(execOutput)
+	require.Equal(t, codeexecutor.ProgramStatusExited, out.Status)
+	require.NotNil(t, out.ExitCode)
+	require.Equal(t, 0, *out.ExitCode)
+	require.Equal(t, "ok", out.Output)
 }
 
 func TestExecTool_Declaration_NonInteractiveOmitsSessionFields(t *testing.T) {

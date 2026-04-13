@@ -227,7 +227,11 @@ func (s *interactiveSession) Kill(grace time.Duration) error {
 		if cancel != nil {
 			cancel()
 		}
-		return cmd.Process.Kill()
+		err := cmd.Process.Kill()
+		if err != nil && errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		return err
 	}
 }
 
