@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 )
 
@@ -366,6 +367,13 @@ func TestWithMaxLimits_OnOptions(t *testing.T) {
 	if opts.MaxToolIterations != 4 {
 		t.Fatalf("expected MaxToolIterations=4, got %d", opts.MaxToolIterations)
 	}
+}
+
+func TestWithToolCallRetryPolicy_OnOptions(t *testing.T) {
+	opts := &Options{}
+	policy := &tool.RetryPolicy{MaxAttempts: 2}
+	WithToolCallRetryPolicy(policy)(opts)
+	require.Same(t, policy, opts.ToolCallRetryPolicy)
 }
 
 func TestWithPreloadMemory(t *testing.T) {

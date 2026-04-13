@@ -10,6 +10,7 @@ The Tool system is a core component of the tRPC-Agent-Go framework, enabling Age
 - **🌊 Streaming Responses**: Supports both real-time streaming responses and normal responses.
 - **⚡ Parallel Execution**: Tool invocations support parallel execution to improve performance.
 - **🔄 MCP Protocol**: Full support for STDIO, SSE, and Streamable HTTP transports.
+- **🔁 Tool Call Retry**: Supports retrying callable tool calls in LLMAgent and Graph ToolsNode.
 - **🛠️ Configuration Support**: Provides configuration options and filter support.
 - **🧹 Arguments Repair**: Optionally enable `agent.WithToolCallArgumentsJSONRepairEnabled(true)` to best-effort repair `tool_calls` `arguments`, improving robustness for tool execution and external parsing.
 
@@ -406,6 +407,102 @@ So if you replace the context inside callbacks, make sure you preserve the
 existing context values you still need.
 
 ## Built-in Tools
+
+### Tool Call Retry
+
+When a tool call may fail because of a transient issue, you can configure retry for it, for example:
+
+- a temporary network issue;
+- a short timeout;
+- an intermittent failure from an external service.
+
+This feature is disabled by default. It currently applies only to `CallableTool`, and `StreamableTool` is not retried yet. When enabled, the framework retries only the current tool call. It does not rerun the whole Agent or the whole Graph workflow.
+
+### Basic Configuration
+
+```go
+policy := &tool.RetryPolicy{
+    MaxAttempts:     3,
+    InitialInterval: 200 * time.Millisecond,
+    BackoffFactor:   2.0,
+    MaxInterval:     2 * time.Second,
+    Jitter:          true,
+}
+```
+
+Common fields:
+
+- `MaxAttempts`: Total attempt count, including the first call.
+- `InitialInterval`: Delay before the second attempt.
+- `BackoffFactor`: Multiplier for backoff growth.
+- `MaxInterval`: Upper bound for the delay.
+- `Jitter`: Whether to enable jitter.
+
+### Default Retry Rules
+
+If you do not provide `RetryOn`, the framework uses `tool.DefaultRetryOn(...)`.
+
+The default rule is conservative and retries only common transient errors, such as:
+
+- `io.EOF`
+- `io.ErrUnexpectedEOF`
+- timeout / temporary errors reported through `net.Error`
+
+It does not retry `context.Canceled`, `context.DeadlineExceeded`, or result-level failures by default.
+
+### Custom Retry Rules
+
+If the default rule is not enough, you can customize the decision with `RetryOn`. A common pattern is to reuse `tool.DefaultRetryOn(...)` first, then add your own conditions:
+
+```go
+policy := &tool.RetryPolicy{
+    MaxAttempts:     2,
+    InitialInterval: 200 * time.Millisecond,
+    BackoffFactor:   2.0,
+    MaxInterval:     time.Second,
+    RetryOn: func(ctx context.Context, info *tool.RetryInfo) (bool, error) {
+        retry, err := tool.DefaultRetryOn(ctx, info)
+        if err != nil || retry {
+            return retry, err
+        }
+        if info.ResultError {
+            return true, nil
+        }
+        return false, nil
+    },
+}
+```
+
+`tool.RetryInfo` carries the current call information, such as tool name, attempt number, raw error, and result-level failure flag, so you can make your retry decision in one place.
+
+### Enable It in LLMAgent
+
+```go
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{myTool}),
+    llmagent.WithToolCallRetryPolicy(policy),
+)
+```
+
+Runnable example:
+
+- [examples/llmagent_tool_call_retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/llmagent_tool_call_retry)
+
+### Enable It in Graph
+
+```go
+sg.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithToolCallRetryPolicy(policy),
+)
+```
+
+Runnable example:
+
+- [examples/graph/tool_call_retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/tool_call_retry)
 
 ### DuckDuckGo Search Tool
 

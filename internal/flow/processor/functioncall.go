@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -92,14 +93,39 @@ type subAgentCall struct {
 type FunctionCallResponseProcessor struct {
 	enableParallelTools bool
 	toolCallbacks       *tool.Callbacks
+	toolRetryPolicy     *tool.RetryPolicy
+}
+
+// FunctionCallResponseProcessorOption configures a function-call response processor.
+type FunctionCallResponseProcessorOption func(*FunctionCallResponseProcessor)
+
+// WithToolCallRetryPolicy sets the retry policy used for single callable tool invocations.
+func WithToolCallRetryPolicy(policy *tool.RetryPolicy) FunctionCallResponseProcessorOption {
+	return func(p *FunctionCallResponseProcessor) {
+		if policy == nil {
+			p.toolRetryPolicy = nil
+			return
+		}
+		p.toolRetryPolicy = policy
+	}
 }
 
 // NewFunctionCallResponseProcessor creates a new transfer response processor.
-func NewFunctionCallResponseProcessor(enableParallelTools bool, toolCallbacks *tool.Callbacks) *FunctionCallResponseProcessor {
-	return &FunctionCallResponseProcessor{
+func NewFunctionCallResponseProcessor(
+	enableParallelTools bool,
+	toolCallbacks *tool.Callbacks,
+	opts ...FunctionCallResponseProcessorOption,
+) *FunctionCallResponseProcessor {
+	processor := &FunctionCallResponseProcessor{
 		enableParallelTools: enableParallelTools,
 		toolCallbacks:       toolCallbacks,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(processor)
+		}
+	}
+	return processor
 }
 
 // ProcessResponse implements the flow.ResponseProcessor interface.
@@ -1469,17 +1495,57 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 	toolCall model.ToolCall,
 	tl tool.CallableTool,
 ) (context.Context, any, error) {
-	result, err := tl.Call(ctx, toolCall.Function.Arguments)
-	if err != nil {
+	if p.toolRetryPolicy == nil {
+		result, err := tl.Call(ctx, toolCall.Function.Arguments)
+		if err != nil {
+			log.ErrorfContext(
+				ctx,
+				"CallableTool execution failed for %s: %v",
+				toolCall.Function.Name,
+				err,
+			)
+			return ctx, nil, fmt.Errorf("%s: %w", ErrorCallableToolExecution, err)
+		}
+		return ctx, result, nil
+	}
+	runResult := toolretry.Execute(ctx, toolretry.ExecuteInput{
+		ToolName:   toolCall.Function.Name,
+		ToolCallID: toolCall.ID,
+		Arguments:  toolCall.Function.Arguments,
+		Policy:     p.toolRetryPolicy,
+		Call:       tl.Call,
+		ResultError: func(result any) bool {
+			return extractResultError(result)
+		},
+		IsTerminalError: func(err error) bool {
+			_, ok := agent.AsStopError(err)
+			return ok
+		},
+	})
+	if runResult.Error != nil {
 		log.ErrorfContext(
 			ctx,
 			"CallableTool execution failed for %s: %v",
 			toolCall.Function.Name,
-			err,
+			runResult.Error,
 		)
-		return ctx, nil, fmt.Errorf("%s: %w", ErrorCallableToolExecution, err)
+		return ctx, nil, fmt.Errorf("%s: %w", ErrorCallableToolExecution, runResult.Error)
 	}
-	return ctx, result, nil
+	return ctx, runResult.Result, nil
+}
+
+func extractResultError(result any) bool {
+	if result == nil {
+		return false
+	}
+	type resultErrorGetter interface {
+		RetryResultError() bool
+	}
+	rg, ok := result.(resultErrorGetter)
+	if !ok {
+		return false
+	}
+	return rg.RetryResultError()
 }
 
 func buildDefaultToolMessage(

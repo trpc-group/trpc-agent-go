@@ -1528,6 +1528,31 @@ stateGraph.AddToolsNode(
 )
 ```
 
+Configure tool call retry for a ToolsNode:
+
+```go
+policy := &tool.RetryPolicy{
+    MaxAttempts:     2,
+    InitialInterval: 200 * time.Millisecond,
+    BackoffFactor:   2.0,
+    MaxInterval:     time.Second,
+}
+
+stateGraph.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithToolCallRetryPolicy(policy),
+)
+```
+
+Notes:
+
+- The retry applies only to the current tool call. It does not rerun the whole ToolsNode.
+- It is disabled by default, so the ToolsNode keeps its existing behavior unless you opt in.
+- It currently applies only to `CallableTool`; `StreamableTool` is not retried yet.
+- The default retry rule covers common transient raw errors. If you also want to retry result-level failures, customize `tool.RetryPolicy.RetryOn`.
+- Runnable example: [examples/graph/tool_call_retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/tool_call_retry).
+
 Tool-call pairing and second entry into LLM:
 
 - Scan `messages` backward from the tail to find the most recent `assistant(tool_calls)`; stop at `user` to ensure correct pairing.

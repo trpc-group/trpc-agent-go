@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 	"sync"
@@ -111,6 +112,15 @@ func (m *mockCallbackCompatibleResult) GetCallbackResult() any {
 
 func (m *mockCallbackCompatibleResult) GetMeta() map[string]any {
 	return m.meta
+}
+
+type mockRetryResult struct {
+	value string
+	fail  bool
+}
+
+func (m *mockRetryResult) RetryResultError() bool {
+	return m.fail
 }
 
 func TestExecuteSingleToolCallSequential_DisableTracingSkipsSpanCreation(t *testing.T) {
@@ -2676,6 +2686,47 @@ func TestExecuteCallableTool_ErrorWrap(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), ErrorCallableToolExecution)
+}
+
+func TestExecuteCallableTool_ErrorWrapDropsPartialResult(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			return map[string]any{"partial": true}, errors.New("e")
+		},
+	}
+	_, result, err := p.executeCallableTool(context.Background(),
+		model.ToolCall{Function: model.FunctionDefinitionParam{
+			Name: "t",
+		}}, tl,
+	)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Contains(t, err.Error(), ErrorCallableToolExecution)
+}
+
+func TestExecuteCallableTool_NoRetryPolicyCallsToolOnCanceledContext(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var toolCalls int
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "t"},
+		callFn: func(callCtx context.Context, _ []byte) (any, error) {
+			toolCalls++
+			require.ErrorIs(t, callCtx.Err(), context.Canceled)
+			return "ok", nil
+		},
+	}
+	_, result, err := p.executeCallableTool(ctx,
+		model.ToolCall{Function: model.FunctionDefinitionParam{
+			Name: "t",
+		}}, tl,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, toolCalls)
+	require.Equal(t, "ok", result)
 }
 
 func TestConvertToolArguments_InvalidJSON(t *testing.T) {
@@ -6122,4 +6173,139 @@ func TestExtractMetaFromResult_WithEmptyMeta(t *testing.T) {
 	meta := extractMetaFromResult(result)
 	assert.NotNil(t, meta)
 	assert.Empty(t, meta)
+}
+
+func TestExecuteToolWithCallbacks_RetryDoesNotReplayCallbacks(t *testing.T) {
+	var beforeCalls int
+	var afterCalls int
+	var toolCalls int
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		beforeCalls++
+		return &tool.BeforeToolResult{}, nil
+	})
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		afterCalls++
+		require.NoError(t, args.Error)
+		return &tool.AfterToolResult{}, nil
+	})
+	p := NewFunctionCallResponseProcessor(
+		false,
+		callbacks,
+		WithToolCallRetryPolicy(&tool.RetryPolicy{
+			MaxAttempts:     2,
+			InitialInterval: 0,
+		}),
+	)
+	tc := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "retry-tool",
+			Arguments: []byte(`{"x":1}`),
+		},
+	}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "retry-tool"},
+		callFn: func(ctx context.Context, args []byte) (any, error) {
+			toolCalls++
+			if toolCalls == 1 {
+				return nil, io.ErrUnexpectedEOF
+			}
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	gotCtx, result, modifiedArgs, suppressDefaultToolMessage, skipSummarization, err := p.executeToolWithCallbacks(
+		context.Background(),
+		nil,
+		tc,
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, gotCtx)
+	require.Equal(t, 1, beforeCalls)
+	require.Equal(t, 1, afterCalls)
+	require.Equal(t, 2, toolCalls)
+	require.Equal(t, tc.Function.Arguments, modifiedArgs)
+	require.False(t, suppressDefaultToolMessage)
+	require.False(t, skipSummarization)
+	require.Equal(t, map[string]any{"ok": true}, result)
+}
+
+func TestExecuteCallableTool_RetryOnResultError(t *testing.T) {
+	var toolCalls int
+	p := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithToolCallRetryPolicy(&tool.RetryPolicy{
+			MaxAttempts:     2,
+			InitialInterval: 0,
+			RetryOn: func(ctx context.Context, info *tool.RetryInfo) (bool, error) {
+				return info.ResultError, nil
+			},
+		}),
+	)
+	tc := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "retry-tool",
+			Arguments: []byte(`{}`),
+		},
+	}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "retry-tool"},
+		callFn: func(ctx context.Context, args []byte) (any, error) {
+			toolCalls++
+			if toolCalls == 1 {
+				return &mockRetryResult{value: "first", fail: true}, nil
+			}
+			return &mockRetryResult{value: "second"}, nil
+		},
+	}
+	_, result, err := p.executeCallableTool(context.Background(), tc, tl)
+	require.NoError(t, err)
+	require.Equal(t, 2, toolCalls)
+	got, ok := result.(*mockRetryResult)
+	require.True(t, ok)
+	require.Equal(t, "second", got.value)
+}
+
+func TestExecuteCallableTool_DoesNotRetryStopError(t *testing.T) {
+	var toolCalls int
+	p := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithToolCallRetryPolicy(&tool.RetryPolicy{
+			MaxAttempts:     3,
+			InitialInterval: 0,
+			RetryOn: func(ctx context.Context, info *tool.RetryInfo) (bool, error) {
+				return true, nil
+			},
+		}),
+	)
+	tc := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "stop-tool",
+			Arguments: []byte(`{}`),
+		},
+	}
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "stop-tool"},
+		callFn: func(ctx context.Context, args []byte) (any, error) {
+			toolCalls++
+			return nil, agent.NewStopError("stop")
+		},
+	}
+	_, _, err := p.executeCallableTool(context.Background(), tc, tl)
+	require.Error(t, err)
+	_, ok := agent.AsStopError(err)
+	require.True(t, ok)
+	require.Equal(t, 1, toolCalls)
 }

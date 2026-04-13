@@ -433,6 +433,38 @@ agent := llmagent.New(
 - 根据任务的复杂度和预期行为设置限制值。
 - 可以在 [examples/max_limits](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/max_limits) 查看完整示例。
 
+### Tool 调用重试
+
+如果你希望 LLMAgent 在工具调用失败后自动补一次或多次重试，可以配置 `llmagent.WithToolCallRetryPolicy(...)`。
+
+```go
+policy := &tool.RetryPolicy{
+    MaxAttempts:     2,
+    InitialInterval: 200 * time.Millisecond,
+    BackoffFactor:   2.0,
+    MaxInterval:     time.Second,
+}
+
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{myTool}),
+    llmagent.WithToolCallRetryPolicy(policy),
+)
+```
+
+说明：
+
+- 默认关闭；未配置时行为与历史版本保持一致。
+- 当前仅对 `CallableTool` 生效；`StreamableTool` 暂不支持。
+- 重试只作用于当前这次工具调用，不会重跑整个 Agent。
+- 默认判定只重试常见瞬时 raw error，如 `io.EOF`、`io.ErrUnexpectedEOF`、网络超时。
+- 如果需要把结果级失败也纳入重试，可通过 `tool.RetryPolicy.RetryOn` 自定义。
+
+可运行示例：
+
+- [examples/llmagent_tool_call_retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/llmagent_tool_call_retry)
+
 ### 处理事件流
 
 `runner.Run()` 返回的 `eventChan` 是一个事件通道，Agent 执行过程中会持续向这个通道发送 Event 对象。

@@ -1301,6 +1301,137 @@ func TestNewToolsNodeFunc_WithToolCallbacks(t *testing.T) {
 	require.Len(t, msgs, 1, "expected one tool result message")
 }
 
+func TestNewToolsNodeFunc_RetryDoesNotReplayCallbacks(t *testing.T) {
+	var beforeCalls int
+	var afterCalls int
+	var toolCalls int
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		beforeCalls++
+		return &tool.BeforeToolResult{}, nil
+	})
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		afterCalls++
+		require.NoError(t, args.Error)
+		return &tool.AfterToolResult{}, nil
+	})
+	nf := NewToolsNodeFunc(
+		map[string]tool.Tool{
+			"retry": &retryTool{
+				name: "retry",
+				callFn: func(ctx context.Context, args []byte) (any, error) {
+					toolCalls++
+					if toolCalls == 1 {
+						return nil, io.ErrUnexpectedEOF
+					}
+					return map[string]any{"ok": true}, nil
+				},
+			},
+		},
+		WithToolCallbacks(callbacks),
+		WithToolCallRetryPolicy(&tool.RetryPolicy{
+			MaxAttempts:     2,
+			InitialInterval: 0,
+		}),
+	)
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("retry"),
+		}},
+	}
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.Equal(t, 1, beforeCalls)
+	require.Equal(t, 1, afterCalls)
+	require.Equal(t, 2, toolCalls)
+	msgs := res.(State)[StateKeyMessages].([]model.Message)
+	require.Len(t, msgs, 1)
+	require.Contains(t, msgs[0].Content, `"ok":true`)
+}
+
+func TestNewToolsNodeFunc_RetryOnResultError(t *testing.T) {
+	var toolCalls int
+	nf := NewToolsNodeFunc(
+		map[string]tool.Tool{
+			"retry": &retryTool{
+				name: "retry",
+				callFn: func(ctx context.Context, args []byte) (any, error) {
+					toolCalls++
+					if toolCalls == 1 {
+						return &retryToolResult{Value: "first", Fail: true}, nil
+					}
+					return &retryToolResult{Value: "second"}, nil
+				},
+			},
+		},
+		WithToolCallRetryPolicy(&tool.RetryPolicy{
+			MaxAttempts:     2,
+			InitialInterval: 0,
+			RetryOn: func(ctx context.Context, info *tool.RetryInfo) (bool, error) {
+				return info.ResultError, nil
+			},
+		}),
+	)
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "retry",
+					Arguments: []byte(`{}`),
+				},
+			}},
+		}},
+	}
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.Equal(t, 2, toolCalls)
+	msgs := res.(State)[StateKeyMessages].([]model.Message)
+	require.Len(t, msgs, 1)
+	require.Contains(t, msgs[0].Content, `"value":"second"`)
+}
+
+func TestRunToolWithEventContexts_NoRetryPolicyCallsToolOnCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var toolCalls int
+	rt := &retryTool{
+		name: "retry",
+		callFn: func(callCtx context.Context, _ []byte) (any, error) {
+			toolCalls++
+			require.ErrorIs(t, callCtx.Err(), context.Canceled)
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "retry",
+			Arguments: []byte(`{}`),
+		},
+	}
+	_, _, _, _, result, modifiedArgs, err := runToolWithEventContexts(
+		ctx,
+		toolCall,
+		nil,
+		rt,
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, toolCalls)
+	require.Equal(t, map[string]any{"ok": true}, result)
+	require.Equal(t, toolCall.Function.Arguments, modifiedArgs)
+}
+
 func TestNewToolsNodeFunc_ToolCallbacksPrecedence(t *testing.T) {
 	// Test that node-configured callbacks take precedence over state callbacks.
 	var nodeCallbackUsed, stateCallbackUsed bool
@@ -2201,6 +2332,7 @@ func TestStateGraph_NodeOptionSetters(t *testing.T) {
 		func(ctx context.Context, s State) (any, error) { return s, nil },
 		WithCacheKeyFields("a", "b"),
 		WithToolCallbacks(&toolCB),
+		WithToolCallRetryPolicy(&tool.RetryPolicy{MaxAttempts: 2}),
 		WithSubgraphInputMapper(inMapper),
 		WithSubgraphOutputMapper(outMapper),
 		WithSubgraphIsolatedMessages(true),
@@ -2224,6 +2356,8 @@ func TestStateGraph_NodeOptionSetters(t *testing.T) {
 	if n.toolCallbacks != &toolCB {
 		t.Fatalf("toolCallbacks not set")
 	}
+	require.NotNil(t, n.toolCallRetryPolicy)
+	require.Equal(t, 2, n.toolCallRetryPolicy.MaxAttempts)
 	if n.agentInputMapper == nil || n.agentOutputMapper == nil {
 		t.Fatalf("subgraph mappers not set")
 	}
@@ -3026,6 +3160,28 @@ func (s *simpleTool) Declaration() *tool.Declaration {
 
 func (s *simpleTool) Call(ctx context.Context, _ []byte) (any, error) {
 	return map[string]any{"ok": true}, nil
+}
+
+type retryTool struct {
+	name   string
+	callFn func(context.Context, []byte) (any, error)
+}
+
+func (t *retryTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+func (t *retryTool) Call(ctx context.Context, args []byte) (any, error) {
+	return t.callFn(ctx, args)
+}
+
+type retryToolResult struct {
+	Value string `json:"value"`
+	Fail  bool   `json:"-"`
+}
+
+func (r *retryToolResult) RetryResultError() bool {
+	return r.Fail
 }
 
 type countingToolSet struct {

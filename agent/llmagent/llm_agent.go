@@ -169,7 +169,11 @@ func New(name string, opts ...Option) *LLMAgent {
 		)
 	}
 
-	toolcallProcessor := processor.NewFunctionCallResponseProcessor(options.EnableParallelTools, options.ToolCallbacks)
+	toolcallProcessor := processor.NewFunctionCallResponseProcessor(
+		options.EnableParallelTools,
+		options.ToolCallbacks,
+		processor.WithToolCallRetryPolicy(options.ToolCallRetryPolicy),
+	)
 	// Configure default transfer message for direct sub-agent calls.
 	// Default behavior (when not configured): enabled with built-in default message.
 	if options.DefaultTransferMessage != nil {
