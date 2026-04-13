@@ -14,6 +14,7 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -53,6 +54,20 @@ func (s *sessionService) CreateSession(
 			err,
 		)
 	}
+	if err := RememberIndexedStorageScope(
+		ctx,
+		s.next,
+		key.AppName,
+		storageKey.UserID,
+	); err != nil {
+		log.Warnf(
+			"conversation scope: skip create-session scope index "+
+				"%q/%q: %v",
+			key.AppName,
+			storageKey.UserID,
+			err,
+		)
+	}
 	return rewriteSessionForUser(sess, key.UserID), nil
 }
 
@@ -75,6 +90,20 @@ func (s *sessionService) GetSession(
 	); err != nil {
 		return nil, fmt.Errorf(
 			"remember indexed storage user for get session: %w",
+			err,
+		)
+	}
+	if err := RememberIndexedStorageScope(
+		ctx,
+		s.next,
+		key.AppName,
+		storageKey.UserID,
+	); err != nil {
+		log.Warnf(
+			"conversation scope: skip get-session scope index "+
+				"%q/%q: %v",
+			key.AppName,
+			storageKey.UserID,
 			err,
 		)
 	}

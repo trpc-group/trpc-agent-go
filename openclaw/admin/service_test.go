@@ -12,6 +12,7 @@ package admin
 import (
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -122,6 +123,22 @@ type stubPersonasProvider struct {
 }
 
 type stubChatsProvider struct {
+	status ChatsStatus
+	err    error
+
+	history       ChatHistoryPage
+	historyErr    error
+	historyChatID string
+	historyCursor string
+	historyCount  int
+	detail        ChatView
+	detailRaw     bool
+	detailErr     error
+	detailChatID  string
+	detailCount   int
+}
+
+type stubStatusOnlyChatsProvider struct {
 	status ChatsStatus
 	err    error
 }
@@ -251,6 +268,65 @@ func (p *stubPromptsProvider) DeletePromptFile(
 	return p.deleteErr
 }
 
+func (p *stubChatsProvider) ChatsStatus() (ChatsStatus, error) {
+	if p == nil {
+		return ChatsStatus{}, nil
+	}
+	return p.status, p.err
+}
+
+func (p *stubStatusOnlyChatsProvider) ChatsStatus() (
+	ChatsStatus,
+	error,
+) {
+	if p == nil {
+		return ChatsStatus{}, nil
+	}
+	return p.status, p.err
+}
+
+func (p *stubChatsProvider) ChatDetail(
+	baseSessionID string,
+) (ChatView, error) {
+	if p == nil {
+		return ChatView{}, nil
+	}
+	p.detailCount++
+	p.detailChatID = baseSessionID
+	if p.detailErr != nil {
+		return ChatView{}, p.detailErr
+	}
+	if p.detailRaw {
+		return p.detail, nil
+	}
+	if strings.TrimSpace(p.detail.BaseSessionID) ==
+		strings.TrimSpace(baseSessionID) {
+		return p.detail, nil
+	}
+	for _, chat := range p.status.Chats {
+		if chat.BaseSessionID == baseSessionID {
+			return chat, nil
+		}
+	}
+	return ChatView{}, nil
+}
+
+func (p *stubChatsProvider) ChatHistory(
+	baseSessionID string,
+	cursor string,
+) (ChatHistoryPage, error) {
+	if p == nil {
+		return ChatHistoryPage{}, nil
+	}
+	p.historyCount++
+	p.historyChatID = baseSessionID
+	p.historyCursor = cursor
+	if p.historyErr != nil {
+		return ChatHistoryPage{}, p.historyErr
+	}
+	return p.history, nil
+}
+
 func (p *stubIdentityProvider) IdentityStatus() (
 	IdentityStatus,
 	error,
@@ -320,16 +396,6 @@ func (p *stubPersonasProvider) SetDefaultPersona(
 	p.defaultCount++
 	p.defaultPersona = personaID
 	return p.defaultErr
-}
-
-func (p *stubChatsProvider) ChatsStatus() (
-	ChatsStatus,
-	error,
-) {
-	if p == nil {
-		return ChatsStatus{}, nil
-	}
-	return p.status, p.err
 }
 
 func (r *stubRunner) Run(
@@ -552,6 +618,9 @@ func TestServiceHandlerRendersOverview(t *testing.T) {
 	require.Contains(t, body, `action="api/cron/jobs/clear"`)
 	require.Contains(t, body, "127.0.0.1:8080")
 	require.Contains(t, body, "telegram")
+	require.Contains(t, body, "Refresh page")
+	require.Contains(t, body, `data-page-stale-root`)
+	require.NotContains(t, body, `http-equiv="refresh"`)
 }
 
 func TestServiceHandlerRendersSkillsInventory(t *testing.T) {
@@ -1007,6 +1076,56 @@ func TestServiceRenderPageRejectsNonGET(t *testing.T) {
 	require.Contains(t, rr.Body.String(), "method not allowed")
 }
 
+func TestServicePageStateJSONEndpointStableAcrossClockTicks(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 13, 21, 0, 0, 0, time.UTC)
+	svc := New(
+		Config{
+			AppName: "openclaw",
+			Chats: &stubChatsProvider{
+				status: ChatsStatus{
+					Enabled: true,
+					Chats: []ChatView{{
+						BaseSessionID:      "wecom:dm:T00320026A",
+						DisplayLabel:       "DM · wineguo (T00320026A)",
+						EffectiveAssistant: "winechord",
+					}},
+				},
+			},
+		},
+		WithClock(func() time.Time {
+			return now
+		}),
+	)
+
+	handler := svc.Handler()
+	path := routePageStateJSON + "?" + url.Values{
+		queryView: []string{string(viewChats)},
+	}.Encode()
+
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var first pageStateStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &first))
+	require.NotEmpty(t, first.Token)
+	require.Equal(t, now, first.UpdatedAt)
+
+	now = now.Add(30 * time.Second)
+	req = httptest.NewRequest(http.MethodGet, path, nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var second pageStateStatus
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &second))
+	require.Equal(t, first.Token, second.Token)
+	require.Equal(t, now, second.UpdatedAt)
+}
+
 func TestServiceSkillsStatusErrorRetainsRecoveryFields(t *testing.T) {
 	t.Parallel()
 
@@ -1427,6 +1546,12 @@ func TestService_PromptsPageAndActions(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "prompt-detail")
 	require.Contains(t, rec.Body.String(), "Instruction Config Text")
 	require.Contains(t, rec.Body.String(), "Save Config Text")
+	require.Contains(t, rec.Body.String(), "Refresh page")
+	require.NotContains(
+		t,
+		rec.Body.String(),
+		`data-page-state-path="/api/page/state?view=prompts"`,
+	)
 	require.NotContains(t, rec.Body.String(), "Inline Source")
 	require.NotContains(t, rec.Body.String(), "Agent Personas")
 	require.Contains(t, rec.Body.String(), "/personas")
@@ -1605,6 +1730,12 @@ func TestService_IdentityPageAndActions(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "How Naming Works")
 	require.Contains(t, rec.Body.String(), "trpc-claw")
 	require.Contains(t, rec.Body.String(), "/api/identity")
+	require.Contains(t, rec.Body.String(), "Refresh page")
+	require.NotContains(
+		t,
+		rec.Body.String(),
+		`data-page-state-path="/api/page/state?view=identity"`,
+	)
 
 	req = httptest.NewRequest(http.MethodGet, routeIdentityJSON, nil)
 	rec = httptest.NewRecorder()
@@ -1784,10 +1915,69 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 					UserID: "alice",
 					Label:  "Alice Chen",
 				}},
+				HistoryTotalCount: 1,
 				History: []ChatSessionView{{
 					SessionID:    "wecom:dm:alice:171",
 					LastActivity: time.Unix(1700000000, 0),
+					Visible:      true,
 				}},
+			}},
+		},
+		detail: ChatView{
+			BaseSessionID:         "wecom:dm:alice",
+			DisplayLabel:          "Direct Message / alice",
+			KindLabel:             "Direct message",
+			CurrentSessionID:      "wecom:dm:alice:171",
+			RecallSessionID:       "wecom:dm:alice",
+			LastActivity:          time.Unix(1700000000, 0),
+			Epoch:                 171,
+			EffectiveAssistant:    "林妹妹",
+			ChatAssistantOverride: "林妹妹",
+			NameSource:            "Current chat name",
+			OverridesGlobal:       true,
+			PersonaLabel:          "Creative",
+			WorkspacePath:         "/repo",
+			KnownUsers: []KnownUserView{{
+				UserID: "alice",
+				Label:  "Alice Chen",
+			}},
+			HistoryTotalCount: 2,
+			HistoryTruncated:  true,
+			History: []ChatSessionView{{
+				SessionID:    "wecom:dm:alice:171",
+				LastActivity: time.Unix(1700000000, 0),
+				Visible:      true,
+			}, {
+				SessionID:    "wecom:dm:alice:170",
+				LastActivity: time.Unix(1699999990, 0),
+				Visible:      false,
+			}},
+		},
+		history: ChatHistoryPage{
+			BaseSessionID:     "wecom:dm:alice",
+			SessionLineCount:  2,
+			TurnCount:         3,
+			ReturnedTurnCount: 2,
+			NextCursor:        "2",
+			Bounded:           true,
+			Items: []ChatHistoryItem{{
+				Kind:         chatHistoryItemKindSession,
+				SessionID:    "wecom:dm:alice:171",
+				SessionLabel: "Current session",
+				LastActivity: time.Unix(1700000000, 0),
+				Current:      true,
+			}, {
+				Kind:      chatHistoryItemKindTurn,
+				Role:      "assistant",
+				Speaker:   "林妹妹",
+				Text:      "I am using this chat's current name.",
+				Timestamp: time.Unix(1700000010, 0),
+			}, {
+				Kind:      chatHistoryItemKindTurn,
+				Role:      "assistant",
+				Speaker:   "林妹妹",
+				Text:      "Older session reply.",
+				Timestamp: time.Unix(1699999990, 0),
 			}},
 		},
 	}
@@ -1814,13 +2004,54 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	require.Contains(t, body, "Tracked Chats")
-	require.Contains(t, body, "Chat Detail")
+	require.Contains(t, body, "Selected Chat")
 	require.Contains(t, body, "Direct Message / alice")
 	require.Contains(t, body, "Current chat name")
-	require.Contains(t, body, "Recent Sessions")
+	require.Contains(t, body, "Overview")
+	require.Contains(t, body, "History")
+	require.Contains(t, body, "Actions")
 	require.Contains(t, body, "<code>wecom:dm:alice</code>")
 	require.Contains(t, body, "href=\"identity#identity-global\"")
 	require.Contains(t, body, "Alice Chen (alice)")
+	require.Contains(t, body, "data-chat-history-root")
+	require.Contains(t, body, routeChatHistoryJSON)
+	require.Contains(
+		t,
+		body,
+		"Expand this panel to load the newest visible",
+	)
+	require.Contains(t, body, "Show 1 older tracked sessions")
+	require.Contains(
+		t,
+		body,
+		"Showing the most recent tracked sessions in this admin view.",
+	)
+	require.Equal(t, "wecom:dm:alice", chats.detailChatID)
+	require.Equal(t, 1, chats.detailCount)
+
+	req = httptest.NewRequest(
+		http.MethodGet,
+		routeChatHistoryJSON+"?chat_id=wecom%3Adm%3Aalice",
+		nil,
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(
+		t,
+		rec.Body.String(),
+		"\"text\": \"I am using this chat's current name.\"",
+	)
+	require.Contains(t, rec.Body.String(), "\"next_cursor\": \"2\"")
+	require.Equal(t, "wecom:dm:alice", chats.historyChatID)
+	require.Empty(t, chats.historyCursor)
+	require.Equal(t, 1, chats.historyCount)
+
+	req = httptest.NewRequest(http.MethodGet, routeOverview, nil)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, 1, chats.detailCount)
 
 	req = httptest.NewRequest(http.MethodGet, routeChatsJSON, nil)
 	rec = httptest.NewRecorder()
@@ -1881,6 +2112,20 @@ func TestService_ChatsPageFallbackStates(t *testing.T) {
 	rec = httptest.NewRecorder()
 	svc.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	svc = New(Config{
+		Chats: &stubStatusOnlyChatsProvider{
+			status: ChatsStatus{Enabled: true},
+		},
+	})
+	req = httptest.NewRequest(
+		http.MethodGet,
+		routeChatHistoryJSON+"?chat_id=missing",
+		nil,
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 func TestChatsHelpers(t *testing.T) {
@@ -1934,6 +2179,16 @@ func TestChatsHelpers(t *testing.T) {
 		"wecom:dm:alice",
 		chatDisplayLabel(ChatView{BaseSessionID: "wecom:dm:alice"}),
 	)
+	require.Equal(
+		t,
+		"No tracked sessions are currently available.",
+		chatHistorySummary(ChatView{}),
+	)
+	require.Equal(
+		t,
+		"2 tracked session lines",
+		chatHistorySummary(ChatView{HistoryTotalCount: 2}),
+	)
 	require.Equal(t, "-", chatKnownUsers(ChatView{}))
 	require.Equal(t, "alice, bob", chatKnownUsers(status.Chats[1]))
 	require.Equal(
@@ -1974,6 +2229,119 @@ func TestChatsHelpers(t *testing.T) {
 		chatNameSourceLabel(status.Chats[2]),
 	)
 	require.Equal(t, "Default name", chatNameSourceLabel(ChatView{}))
+	require.False(t, chatHasTranscript(ChatView{}))
+	require.True(t, chatHasTranscript(ChatView{
+		Transcript: []ChatTranscriptView{{
+			SessionID: "wecom:dm:alice:171",
+		}},
+	}))
+	require.Equal(
+		t,
+		"No recent transcript is currently available.",
+		chatTranscriptSummary(ChatView{}),
+	)
+	require.Equal(
+		t,
+		"1 recent session lines · 2 visible turns",
+		chatTranscriptSummary(ChatView{
+			Transcript: []ChatTranscriptView{{
+				Turns: []ChatTurnView{{}, {}},
+			}},
+		}),
+	)
+	require.Equal(
+		t,
+		"Current session",
+		chatTranscriptLabel(ChatTranscriptView{Current: true}),
+	)
+	require.Equal(
+		t,
+		"Recall session",
+		chatTranscriptLabel(ChatTranscriptView{Recall: true}),
+	)
+	require.Equal(
+		t,
+		"Recent session",
+		chatTranscriptLabel(ChatTranscriptView{}),
+	)
+	require.Equal(
+		t,
+		"Alice Chen",
+		chatTurnSpeaker(ChatTurnView{Speaker: "Alice Chen"}),
+	)
+	require.Equal(
+		t,
+		"User",
+		chatTurnSpeaker(ChatTurnView{Role: "user"}),
+	)
+	require.Equal(
+		t,
+		"Assistant",
+		chatTurnSpeaker(ChatTurnView{Role: "assistant"}),
+	)
+	require.Equal(
+		t,
+		"System",
+		chatTurnSpeaker(ChatTurnView{Role: "system"}),
+	)
+	require.Equal(
+		t,
+		"Turn",
+		chatTurnSpeaker(ChatTurnView{Role: "tool"}),
+	)
+	require.Equal(
+		t,
+		"Alice Chen",
+		chatKnownUserLabel(KnownUserView{Label: "Alice Chen"}),
+	)
+	require.Len(
+		t,
+		chatVisibleHistory(ChatView{
+			History: []ChatSessionView{{Visible: true}, {Visible: false}},
+		}),
+		1,
+	)
+	require.Len(
+		t,
+		chatHiddenHistory(ChatView{
+			History: []ChatSessionView{{Visible: true}, {Visible: false}},
+		}),
+		1,
+	)
+	require.Len(
+		t,
+		chatVisibleTranscript(ChatView{
+			Transcript: []ChatTranscriptView{
+				{Visible: true}, {Visible: false},
+			},
+		}),
+		1,
+	)
+	require.Len(
+		t,
+		chatHiddenTranscript(ChatView{
+			Transcript: []ChatTranscriptView{
+				{Visible: true}, {Visible: false},
+			},
+		}),
+		1,
+	)
+	require.Len(
+		t,
+		chatVisibleTurns(ChatTranscriptView{
+			Turns: []ChatTurnView{{Visible: true}, {Visible: false}},
+		}),
+		1,
+	)
+	require.Len(
+		t,
+		chatHiddenTurns(ChatTranscriptView{
+			Turns: []ChatTurnView{{Visible: true}, {Visible: false}},
+		}),
+		1,
+	)
+	require.False(t, hasTime(time.Time{}))
+	require.True(t, hasTime(time.Unix(1700000000, 0)))
 
 	sample := chatOverrideSample(status, 1)
 	require.Len(t, sample, 1)
@@ -1986,6 +2354,128 @@ func TestChatsHelpers(t *testing.T) {
 	require.Len(t, sample, 2)
 
 	require.Equal(t, 2, chatOverrideCount(status.Chats))
+
+	chats := &stubChatsProvider{
+		status: status,
+		detail: ChatView{
+			Transcript: []ChatTranscriptView{{
+				SessionID: "wecom:dm:bob:2",
+			}},
+		},
+		detailRaw: true,
+	}
+	selected, detailErr := resolveSelectedChat(
+		status,
+		chats,
+		"wecom:dm:bob",
+	)
+	require.NotNil(t, selected)
+	require.Empty(t, detailErr)
+	require.Len(t, selected.Transcript, 1)
+	require.Equal(t, "Custom source", selected.NameSource)
+	require.True(t, selected.OverridesGlobal)
+	require.Equal(t, "wecom:dm:bob", chats.detailChatID)
+
+	chats.detail = ChatView{
+		BaseSessionID: "wrong",
+		Transcript: []ChatTranscriptView{{
+			SessionID: "wrong:2",
+		}},
+	}
+	chats.detailRaw = true
+	selected, detailErr = resolveSelectedChat(
+		status,
+		chats,
+		"wecom:dm:bob",
+	)
+	require.NotNil(t, selected)
+	require.Equal(
+		t,
+		"chat detail mismatch: expected \"wecom:dm:bob\", got \"wrong\"",
+		detailErr,
+	)
+	require.Nil(t, selected.Transcript)
+	require.Equal(t, "wecom:dm:bob", selected.BaseSessionID)
+	require.Equal(t, "Custom source", selected.NameSource)
+
+	selected, detailErr = resolveSelectedChat(
+		status,
+		&stubStatusOnlyChatsProvider{status: status},
+		"wecom:dm:bob",
+	)
+	require.NotNil(t, selected)
+	require.Empty(t, detailErr)
+	require.Nil(t, selected.Transcript)
+
+	chats.detailErr = errors.New("boom")
+	selected, detailErr = resolveSelectedChat(
+		status,
+		chats,
+		"wecom:dm:bob",
+	)
+	require.NotNil(t, selected)
+	require.Equal(t, "boom", detailErr)
+
+	merged := mergeChatView(
+		ChatView{
+			BaseSessionID:       "wecom:dm:bob",
+			DisplayLabel:        "Bob",
+			NameSource:          "Current chat name",
+			OverridesGlobal:     true,
+			HistoryTotalCount:   2,
+			TranscriptTruncated: true,
+		},
+		ChatView{
+			HistoryTotalCount: 3,
+			HistoryTruncated:  true,
+			Transcript: []ChatTranscriptView{{
+				SessionID: "wecom:dm:bob:2",
+			}},
+		},
+	)
+	require.Equal(t, "Bob", merged.DisplayLabel)
+	require.Equal(t, "Current chat name", merged.NameSource)
+	require.True(t, merged.OverridesGlobal)
+	require.Equal(t, 3, merged.HistoryTotalCount)
+	require.True(t, merged.HistoryTruncated)
+	require.True(t, merged.TranscriptTruncated)
+	require.Len(t, merged.Transcript, 1)
+
+	merged = mergeChatView(
+		ChatView{BaseSessionID: "wecom:dm:alice"},
+		ChatView{
+			BaseSessionID:    "wecom:dm:alice",
+			DisplayLabel:     "Alice",
+			Kind:             "dm",
+			KindLabel:        "Direct message",
+			CurrentSessionID: "sess-2",
+			RecallSessionID:  "sess-1",
+		},
+	)
+	require.Equal(t, "Alice", merged.DisplayLabel)
+	require.Equal(t, "dm", merged.Kind)
+	require.Equal(t, "Direct message", merged.KindLabel)
+	require.Equal(t, "sess-2", merged.CurrentSessionID)
+	require.Equal(t, "sess-1", merged.RecallSessionID)
+
+	selected, detailErr = resolveSelectedChat(
+		status,
+		chats,
+		"missing",
+	)
+	require.Nil(t, selected)
+	require.Empty(t, detailErr)
+}
+
+func TestService_ChatsStatusError(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Chats: &stubChatsProvider{err: errors.New("boom")},
+	})
+	status := svc.chatsStatus()
+	require.True(t, status.Enabled)
+	require.Equal(t, "boom", status.Error)
 }
 
 func TestService_PersonasPageAndActions(t *testing.T) {
