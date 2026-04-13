@@ -131,6 +131,11 @@ type stubChatsProvider struct {
 	detailCount  int
 }
 
+type stubStatusOnlyChatsProvider struct {
+	status ChatsStatus
+	err    error
+}
+
 func (p stubBMP) BrowserManagedStatus() BrowserManagedService {
 	return p.status
 }
@@ -257,6 +262,16 @@ func (p *stubPromptsProvider) DeletePromptFile(
 }
 
 func (p *stubChatsProvider) ChatsStatus() (ChatsStatus, error) {
+	if p == nil {
+		return ChatsStatus{}, nil
+	}
+	return p.status, p.err
+}
+
+func (p *stubStatusOnlyChatsProvider) ChatsStatus() (
+	ChatsStatus,
+	error,
+) {
 	if p == nil {
 		return ChatsStatus{}, nil
 	}
@@ -2070,8 +2085,28 @@ func TestChatsHelpers(t *testing.T) {
 	)
 	require.Equal(
 		t,
+		"User",
+		chatTurnSpeaker(ChatTurnView{Role: "user"}),
+	)
+	require.Equal(
+		t,
 		"Assistant",
 		chatTurnSpeaker(ChatTurnView{Role: "assistant"}),
+	)
+	require.Equal(
+		t,
+		"System",
+		chatTurnSpeaker(ChatTurnView{Role: "system"}),
+	)
+	require.Equal(
+		t,
+		"Turn",
+		chatTurnSpeaker(ChatTurnView{Role: "tool"}),
+	)
+	require.Equal(
+		t,
+		"Alice Chen",
+		chatKnownUserLabel(KnownUserView{Label: "Alice Chen"}),
 	)
 	require.False(t, hasTime(time.Time{}))
 	require.True(t, hasTime(time.Unix(1700000000, 0)))
@@ -2107,6 +2142,15 @@ func TestChatsHelpers(t *testing.T) {
 	require.Len(t, selected.Transcript, 1)
 	require.Equal(t, "wecom:dm:bob", chats.detailChatID)
 
+	selected, detailErr = resolveSelectedChat(
+		status,
+		&stubStatusOnlyChatsProvider{status: status},
+		"wecom:dm:bob",
+	)
+	require.NotNil(t, selected)
+	require.Empty(t, detailErr)
+	require.Nil(t, selected.Transcript)
+
 	chats.detailErr = errors.New("boom")
 	selected, detailErr = resolveSelectedChat(
 		status,
@@ -2115,6 +2159,25 @@ func TestChatsHelpers(t *testing.T) {
 	)
 	require.NotNil(t, selected)
 	require.Equal(t, "boom", detailErr)
+
+	selected, detailErr = resolveSelectedChat(
+		status,
+		chats,
+		"missing",
+	)
+	require.Nil(t, selected)
+	require.Empty(t, detailErr)
+}
+
+func TestService_ChatsStatusError(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		Chats: &stubChatsProvider{err: errors.New("boom")},
+	})
+	status := svc.chatsStatus()
+	require.True(t, status.Enabled)
+	require.Equal(t, "boom", status.Error)
 }
 
 func TestService_PersonasPageAndActions(t *testing.T) {
