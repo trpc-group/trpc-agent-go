@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	aguitypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/google/uuid"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
@@ -381,7 +382,7 @@ func (t *translator) reasoningEvents(rsp *model.Response) ([]aguievents.Event, e
 			t.receivingReasoning = true
 			events = append(events,
 				aguievents.NewReasoningStartEvent(reasoningID),
-				aguievents.NewReasoningMessageStartEvent(reasoningID, model.RoleAssistant.String()),
+				aguievents.NewReasoningMessageStartEvent(reasoningID, string(aguitypes.RoleReasoning)),
 			)
 		case model.ObjectTypeChatCompletion:
 			if rsp.Choices[0].Message.ReasoningContent == "" {
@@ -397,7 +398,7 @@ func (t *translator) reasoningEvents(rsp *model.Response) ([]aguievents.Event, e
 			t.lastReasoningMessageID = reasoningID
 			events = append(events,
 				aguievents.NewReasoningStartEvent(reasoningID),
-				aguievents.NewReasoningMessageStartEvent(reasoningID, model.RoleAssistant.String()),
+				aguievents.NewReasoningMessageStartEvent(reasoningID, string(aguitypes.RoleReasoning)),
 				aguievents.NewReasoningMessageContentEvent(reasoningID, rsp.Choices[0].Message.ReasoningContent),
 				aguievents.NewReasoningMessageEndEvent(reasoningID),
 				aguievents.NewReasoningEndEvent(reasoningID),

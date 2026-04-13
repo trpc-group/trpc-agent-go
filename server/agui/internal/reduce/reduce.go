@@ -372,10 +372,10 @@ func (r *reducer) handleReasoningMessageStart(e *aguievents.ReasoningMessageStar
 		return fmt.Errorf("duplicate reasoning message start: %s", e.MessageID)
 	}
 	role := e.Role
-	if role == "" {
-		role = string(model.RoleAssistant)
-	}
-	if role != string(model.RoleAssistant) {
+	switch role {
+	case "", string(types.RoleReasoning), string(model.RoleAssistant):
+		role = string(types.RoleReasoning)
+	default:
 		return fmt.Errorf("unsupported role: %s", role)
 	}
 	name := r.appName
@@ -465,7 +465,7 @@ func (r *reducer) handleReasoningChunk(e *aguievents.ReasoningMessageChunkEvent)
 	}
 	r.messages = append(r.messages, msg)
 	r.reasonings[messageID] = &reasoningState{
-		role:  string(model.RoleAssistant),
+		role:  string(types.RoleReasoning),
 		name:  r.appName,
 		phase: reasoningReceiving,
 		index: len(r.messages) - 1,
@@ -503,7 +503,7 @@ func (r *reducer) handleReasoningEncryptedValue(e *aguievents.ReasoningEncrypted
 		}
 		r.messages = append(r.messages, msg)
 		r.reasonings[e.EntityID] = &reasoningState{
-			role:  string(model.RoleAssistant),
+			role:  string(types.RoleReasoning),
 			name:  r.appName,
 			phase: reasoningEnded,
 			index: len(r.messages) - 1,
