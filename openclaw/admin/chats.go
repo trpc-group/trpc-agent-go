@@ -188,9 +188,11 @@ const chatsPageTemplateHTML = `
         <span class="stat-label">Global Name</span>
         <span class="stat-value">
           {{if .Identity.EffectiveName}}
-            {{.Identity.EffectiveName}}
+            <a href="/identity#identity-global">
+              {{.Identity.EffectiveName}}
+            </a>
           {{else}}
-            -
+            <a href="/identity#identity-global">-</a>
           {{end}}
         </span>
       </article>

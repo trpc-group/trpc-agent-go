@@ -1738,6 +1738,7 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 	require.Contains(t, body, "Current chat name")
 	require.Contains(t, body, "Recent Sessions")
 	require.Contains(t, body, "<code>wecom:dm:alice</code>")
+	require.Contains(t, body, "href=\"identity#identity-global\"")
 
 	req = httptest.NewRequest(http.MethodGet, routeChatsJSON, nil)
 	rec = httptest.NewRecorder()
