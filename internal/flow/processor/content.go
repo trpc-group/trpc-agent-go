@@ -691,8 +691,8 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 
 // prependSummaryUserMessage prepends the session summary as a user message
 // before history messages. It checks three merge opportunities in order:
-//  1. If the first history/current message is a user message, merge the
-//     summary into it so the summary stays attached to the live user turn.
+//  1. If history/current contains a user message, merge the summary into the
+//     first available one so the summary stays attached to the live user turn.
 //  2. If no such history/current user message exists and reqPrefix
 //     (req.Messages before history) ends with a user message, merge the
 //     summary into that trailing prefix message to avoid an extra adjacent
@@ -715,14 +715,17 @@ func (p *ContentRequestProcessor) prependSummaryUserMessage(
 		return messages
 	}
 
-	// Case 1: first history/current message is user — merge into it.
-	if len(messages) > 0 && messages[0].Role == model.RoleUser {
+	// Case 1: merge into the first available user history/current message.
+	for i := range messages {
+		if messages[i].Role != model.RoleUser {
+			continue
+		}
 		merged := make([]model.Message, len(messages))
 		copy(merged, messages)
-		if merged[0].Content == "" {
-			merged[0].Content = formatted
+		if merged[i].Content == "" {
+			merged[i].Content = formatted
 		} else {
-			merged[0].Content = formatted + mergedUserSeparator + merged[0].Content
+			merged[i].Content = formatted + mergedUserSeparator + merged[i].Content
 		}
 		return merged
 	}

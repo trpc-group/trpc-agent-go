@@ -1260,16 +1260,17 @@ func TestPrependSummaryUserMessage(t *testing.T) {
 		require.Contains(t, result[0].Content, "some summary")
 	})
 
-	t.Run("first_message_not_user", func(t *testing.T) {
+	t.Run("later_user_message_merges", func(t *testing.T) {
 		msgs := []model.Message{
 			model.NewAssistantMessage("hi"),
 			model.NewUserMessage("hello"),
 		}
 		result := p.prependSummaryUserMessage("some summary", msgs, nil)
-		require.Len(t, result, 3)
-		require.Equal(t, model.RoleUser, result[0].Role)
-		require.Contains(t, result[0].Content, "some summary")
-		require.Equal(t, model.RoleAssistant, result[1].Role)
+		require.Len(t, result, 2)
+		require.Equal(t, model.RoleAssistant, result[0].Role)
+		require.Equal(t, model.RoleUser, result[1].Role)
+		require.Contains(t, result[1].Content, "some summary")
+		require.Contains(t, result[1].Content, "hello")
 	})
 
 	t.Run("first_message_is_user_merges", func(t *testing.T) {
@@ -1314,6 +1315,27 @@ func TestPrependSummaryUserMessage(t *testing.T) {
 		require.Contains(t, result[0].Content, "some summary")
 		require.Contains(t, result[0].Content, "history user")
 		require.Equal(t, model.RoleAssistant, result[1].Role)
+	})
+
+	t.Run("later_history_user_preferred_over_req_prefix_user", func(t *testing.T) {
+		prefix := []model.Message{
+			model.NewSystemMessage("system prompt"),
+			model.NewUserMessage("few-shot user example"),
+		}
+		msgs := []model.Message{
+			model.NewAssistantMessage("history assistant"),
+			model.NewUserMessage("current user"),
+			model.NewToolMessage("tool-1", "search", "tool result"),
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, prefix)
+		// Even when history starts with assistant/tool output, the summary
+		// should merge into the first available user message in history/current.
+		require.Equal(t, "few-shot user example", prefix[len(prefix)-1].Content)
+		require.Len(t, result, 3)
+		require.Equal(t, model.RoleAssistant, result[0].Role)
+		require.Contains(t, result[1].Content, "some summary")
+		require.Contains(t, result[1].Content, "current user")
+		require.Equal(t, model.RoleTool, result[2].Role)
 	})
 
 	t.Run("req_prefix_ends_with_user_merges_into_prefix_as_fallback", func(t *testing.T) {
