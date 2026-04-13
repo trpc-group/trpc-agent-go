@@ -286,7 +286,10 @@ func resolveGraphAgentErrorType(fullRespEvent *event.Event, operationErrorType s
 	if fullRespEvent == nil || fullRespEvent.Response == nil || fullRespEvent.Response.Error == nil {
 		return ""
 	}
-	return fullRespEvent.Response.Error.Type
+	return itelemetry.FormatResponseErrorLabel(
+		fullRespEvent.Response.Error,
+		model.ErrorTypeFlowError,
+	)
 }
 
 func recordTraceEvent(

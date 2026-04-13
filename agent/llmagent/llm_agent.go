@@ -1143,9 +1143,15 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
-		var responseErrorType string
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
+			responseErrorType := ""
+			if fullRespEvent != nil && fullRespEvent.Response != nil && fullRespEvent.Response.Error != nil {
+				responseErrorType = itelemetry.FormatResponseErrorLabel(
+					fullRespEvent.Response.Error,
+					model.ErrorTypeRunError,
+				)
+			}
 			if startedSpan && fullRespEvent != nil {
 				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
 			}
@@ -1176,7 +1182,6 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 		// Collect error from the final response event.
 		var agentErr error
 		if fullRespEvent != nil && fullRespEvent.Response != nil && fullRespEvent.Response.Error != nil {
-			responseErrorType = fullRespEvent.Response.Error.Type
 			agentErr = fmt.Errorf("%s: %s", fullRespEvent.Response.Error.Type, fullRespEvent.Response.Error.Message)
 		}
 
@@ -1200,7 +1205,6 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 					agent.ErrorTypeAgentCallbackError,
 					err.Error(),
 				)
-				responseErrorType = agent.ErrorTypeAgentCallbackError
 			} else if result != nil && result.CustomResponse != nil {
 				// Create an event from the custom response.
 				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
