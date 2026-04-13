@@ -124,6 +124,11 @@ type stubPersonasProvider struct {
 type stubChatsProvider struct {
 	status ChatsStatus
 	err    error
+
+	detail       ChatView
+	detailErr    error
+	detailChatID string
+	detailCount  int
 }
 
 func (p stubBMP) BrowserManagedStatus() BrowserManagedService {
@@ -251,6 +256,35 @@ func (p *stubPromptsProvider) DeletePromptFile(
 	return p.deleteErr
 }
 
+func (p *stubChatsProvider) ChatsStatus() (ChatsStatus, error) {
+	if p == nil {
+		return ChatsStatus{}, nil
+	}
+	return p.status, p.err
+}
+
+func (p *stubChatsProvider) ChatDetail(
+	baseSessionID string,
+) (ChatView, error) {
+	if p == nil {
+		return ChatView{}, nil
+	}
+	p.detailCount++
+	p.detailChatID = baseSessionID
+	if p.detailErr != nil {
+		return ChatView{}, p.detailErr
+	}
+	if strings.TrimSpace(p.detail.BaseSessionID) != "" {
+		return p.detail, nil
+	}
+	for _, chat := range p.status.Chats {
+		if chat.BaseSessionID == baseSessionID {
+			return chat, nil
+		}
+	}
+	return ChatView{}, nil
+}
+
 func (p *stubIdentityProvider) IdentityStatus() (
 	IdentityStatus,
 	error,
@@ -320,16 +354,6 @@ func (p *stubPersonasProvider) SetDefaultPersona(
 	p.defaultCount++
 	p.defaultPersona = personaID
 	return p.defaultErr
-}
-
-func (p *stubChatsProvider) ChatsStatus() (
-	ChatsStatus,
-	error,
-) {
-	if p == nil {
-		return ChatsStatus{}, nil
-	}
-	return p.status, p.err
 }
 
 func (r *stubRunner) Run(
@@ -1790,6 +1814,45 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 				}},
 			}},
 		},
+		detail: ChatView{
+			BaseSessionID:         "wecom:dm:alice",
+			DisplayLabel:          "Direct Message / alice",
+			KindLabel:             "Direct message",
+			CurrentSessionID:      "wecom:dm:alice:171",
+			RecallSessionID:       "wecom:dm:alice",
+			LastActivity:          time.Unix(1700000000, 0),
+			Epoch:                 171,
+			EffectiveAssistant:    "林妹妹",
+			ChatAssistantOverride: "林妹妹",
+			NameSource:            "Current chat name",
+			OverridesGlobal:       true,
+			PersonaLabel:          "Creative",
+			WorkspacePath:         "/repo",
+			KnownUsers: []KnownUserView{{
+				UserID: "alice",
+				Label:  "Alice Chen",
+			}},
+			History: []ChatSessionView{{
+				SessionID:    "wecom:dm:alice:171",
+				LastActivity: time.Unix(1700000000, 0),
+			}},
+			Transcript: []ChatTranscriptView{{
+				SessionID:    "wecom:dm:alice:171",
+				LastActivity: time.Unix(1700000000, 0),
+				Current:      true,
+				Turns: []ChatTurnView{{
+					Role:      "user",
+					Speaker:   "Alice Chen",
+					Text:      "Who are you listening to?",
+					Timestamp: time.Unix(1700000000, 0),
+				}, {
+					Role:      "assistant",
+					Speaker:   "林妹妹",
+					Text:      "I am using this chat's current name.",
+					Timestamp: time.Unix(1700000010, 0),
+				}},
+			}},
+		},
 	}
 	identity := &stubIdentityProvider{
 		status: IdentityStatus{
@@ -1814,13 +1877,18 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	require.Contains(t, body, "Tracked Chats")
-	require.Contains(t, body, "Chat Detail")
+	require.Contains(t, body, "Selected Chat")
 	require.Contains(t, body, "Direct Message / alice")
 	require.Contains(t, body, "Current chat name")
-	require.Contains(t, body, "Recent Sessions")
+	require.Contains(t, body, "Overview")
+	require.Contains(t, body, "History")
+	require.Contains(t, body, "Actions")
 	require.Contains(t, body, "<code>wecom:dm:alice</code>")
 	require.Contains(t, body, "href=\"identity#identity-global\"")
 	require.Contains(t, body, "Alice Chen (alice)")
+	require.Contains(t, body, "I am using this chat&#39;s current name.")
+	require.Equal(t, "wecom:dm:alice", chats.detailChatID)
+	require.Equal(t, 1, chats.detailCount)
 
 	req = httptest.NewRequest(http.MethodGet, routeChatsJSON, nil)
 	rec = httptest.NewRecorder()
@@ -1974,6 +2042,39 @@ func TestChatsHelpers(t *testing.T) {
 		chatNameSourceLabel(status.Chats[2]),
 	)
 	require.Equal(t, "Default name", chatNameSourceLabel(ChatView{}))
+	require.False(t, chatHasTranscript(ChatView{}))
+	require.True(t, chatHasTranscript(ChatView{
+		Transcript: []ChatTranscriptView{{
+			SessionID: "wecom:dm:alice:171",
+		}},
+	}))
+	require.Equal(
+		t,
+		"Current session",
+		chatTranscriptLabel(ChatTranscriptView{Current: true}),
+	)
+	require.Equal(
+		t,
+		"Recall session",
+		chatTranscriptLabel(ChatTranscriptView{Recall: true}),
+	)
+	require.Equal(
+		t,
+		"Recent session",
+		chatTranscriptLabel(ChatTranscriptView{}),
+	)
+	require.Equal(
+		t,
+		"Alice Chen",
+		chatTurnSpeaker(ChatTurnView{Speaker: "Alice Chen"}),
+	)
+	require.Equal(
+		t,
+		"Assistant",
+		chatTurnSpeaker(ChatTurnView{Role: "assistant"}),
+	)
+	require.False(t, hasTime(time.Time{}))
+	require.True(t, hasTime(time.Unix(1700000000, 0)))
 
 	sample := chatOverrideSample(status, 1)
 	require.Len(t, sample, 1)
@@ -1986,6 +2087,34 @@ func TestChatsHelpers(t *testing.T) {
 	require.Len(t, sample, 2)
 
 	require.Equal(t, 2, chatOverrideCount(status.Chats))
+
+	chats := &stubChatsProvider{
+		status: status,
+		detail: ChatView{
+			BaseSessionID: "wecom:dm:bob",
+			Transcript: []ChatTranscriptView{{
+				SessionID: "wecom:dm:bob:2",
+			}},
+		},
+	}
+	selected, detailErr := resolveSelectedChat(
+		status,
+		chats,
+		"wecom:dm:bob",
+	)
+	require.NotNil(t, selected)
+	require.Empty(t, detailErr)
+	require.Len(t, selected.Transcript, 1)
+	require.Equal(t, "wecom:dm:bob", chats.detailChatID)
+
+	chats.detailErr = errors.New("boom")
+	selected, detailErr = resolveSelectedChat(
+		status,
+		chats,
+		"wecom:dm:bob",
+	)
+	require.NotNil(t, selected)
+	require.Equal(t, "boom", detailErr)
 }
 
 func TestService_PersonasPageAndActions(t *testing.T) {

@@ -110,8 +110,8 @@ const (
 		"Manage the default persona and any file-backed " +
 		"persona definitions exposed by this runtime."
 	pageSummaryChats = "" +
-		"Inspect each chat's current name, default-name fallback, " +
-		"persona, and recent session history."
+		"Inspect each chat's current state, recent transcript, " +
+		"and the safest next step for names and persona."
 )
 
 type adminView string
@@ -577,19 +577,20 @@ type skillInstallView struct {
 }
 
 type pageData struct {
-	Snapshot       snapshot
-	Prompts        PromptsStatus
-	Identity       IdentityStatus
-	Personas       PersonasStatus
-	Chats          ChatsStatus
-	SelectedChat   *ChatView
-	Notice         string
-	Error          string
-	RefreshSeconds int
-	View           adminView
-	PageTitle      string
-	PageSummary    string
-	NavSections    []adminNavSection
+	Snapshot          snapshot
+	Prompts           PromptsStatus
+	Identity          IdentityStatus
+	Personas          PersonasStatus
+	Chats             ChatsStatus
+	SelectedChat      *ChatView
+	SelectedChatError string
+	Notice            string
+	Error             string
+	RefreshSeconds    int
+	View              adminView
+	PageTitle         string
+	PageSummary       string
+	NavSections       []adminNavSection
 }
 
 type adminNavSection struct {
@@ -1067,7 +1068,6 @@ func (s *Service) renderPage(
 		Identity:       s.identityStatus(),
 		Personas:       s.personasStatus(),
 		Chats:          chats,
-		SelectedChat:   selectChatView(chats, selectedChatID(r)),
 		Notice:         strings.TrimSpace(r.URL.Query().Get(queryNotice)),
 		Error:          strings.TrimSpace(r.URL.Query().Get(queryError)),
 		RefreshSeconds: refreshSeconds,
@@ -1076,6 +1076,11 @@ func (s *Service) renderPage(
 		PageSummary:    pageSummary(view),
 		NavSections:    adminNavSections(view),
 	}
+	data.SelectedChat, data.SelectedChatError = resolveSelectedChat(
+		chats,
+		s.cfg.Chats,
+		selectedChatID(r),
+	)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := adminPage.Execute(w, data); err != nil {
@@ -1085,6 +1090,28 @@ func (s *Service) renderPage(
 			http.StatusInternalServerError,
 		)
 	}
+}
+
+func resolveSelectedChat(
+	status ChatsStatus,
+	provider ChatsProvider,
+	selectedID string,
+) (*ChatView, string) {
+	selected := selectChatView(status, selectedID)
+	if selected == nil {
+		return nil, ""
+	}
+	detailProvider, ok := provider.(ChatDetailProvider)
+	if !ok {
+		return selected, ""
+	}
+	detail, err := detailProvider.ChatDetail(
+		strings.TrimSpace(selected.BaseSessionID),
+	)
+	if err != nil {
+		return selected, strings.TrimSpace(err.Error())
+	}
+	return &detail, ""
 }
 
 func adminNavSections(active adminView) []adminNavSection {
@@ -2094,8 +2121,12 @@ var adminPage = template.Must(
 		"personaSummaryText":         personaSummaryText,
 		"chatDisplayLabel":           chatDisplayLabel,
 		"chatKnownUsers":             chatKnownUsers,
+		"chatHasTranscript":          chatHasTranscript,
 		"chatNameSourceLabel":        chatNameSourceLabel,
+		"chatTranscriptLabel":        chatTranscriptLabel,
+		"chatTurnSpeaker":            chatTurnSpeaker,
 		"chatOverrideSample":         chatOverrideSample,
+		"hasTime":                    hasTime,
 	}).Parse(
 		adminPageHTML +
 			promptsPageTemplateHTML +
@@ -2869,6 +2900,82 @@ const adminPageHTML = `<!doctype html>
       line-height: 1.45;
       overflow-wrap: anywhere;
       word-break: break-word;
+    }
+    .chat-detail-section + .chat-detail-section {
+      margin-top: 24px;
+      padding-top: 22px;
+      border-top: 1px solid var(--line);
+    }
+    .chat-detail-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .chat-detail-head h3,
+    .chat-action-card h4,
+    .chat-transcript-title {
+      margin: 0;
+    }
+    .chat-transcript-list {
+      display: grid;
+      gap: 14px;
+      margin-top: 12px;
+    }
+    .chat-transcript-card,
+    .chat-action-card {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px 16px;
+      background: rgba(255, 253, 248, 0.72);
+      min-width: 0;
+    }
+    .chat-transcript-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .chat-turn-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .chat-turn {
+      border-left: 3px solid rgba(15, 111, 97, 0.2);
+      padding-left: 12px;
+      min-width: 0;
+    }
+    .chat-turn-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .chat-turn-speaker {
+      font-weight: 700;
+    }
+    .chat-turn-quote {
+      margin: 8px 0 0;
+      padding-left: 12px;
+      border-left: 2px solid var(--line);
+      color: var(--muted);
+    }
+    .chat-turn-text {
+      margin-top: 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .chat-action-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      margin-top: 12px;
     }
     @media (max-width: 760px) {
       .app-shell {

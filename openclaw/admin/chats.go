@@ -26,6 +26,10 @@ type ChatsProvider interface {
 	ChatsStatus() (ChatsStatus, error)
 }
 
+type ChatDetailProvider interface {
+	ChatDetail(baseSessionID string) (ChatView, error)
+}
+
 type ChatsStatus struct {
 	Enabled               bool       `json:"enabled"`
 	Error                 string     `json:"error,omitempty"`
@@ -39,25 +43,26 @@ type ChatsStatus struct {
 }
 
 type ChatView struct {
-	BaseSessionID         string            `json:"base_session_id,omitempty"`
-	DisplayLabel          string            `json:"display_label,omitempty"`
-	Kind                  string            `json:"kind,omitempty"`
-	KindLabel             string            `json:"kind_label,omitempty"`
-	CurrentSessionID      string            `json:"current_session_id,omitempty"`
-	RecallSessionID       string            `json:"recall_session_id,omitempty"`
-	LastActivity          time.Time         `json:"last_activity,omitempty"`
-	Epoch                 int64             `json:"epoch,omitempty"`
-	EffectiveAssistant    string            `json:"effective_assistant,omitempty"`
-	ChatAssistantOverride string            `json:"chat_assistant_override,omitempty"`
-	NameSource            string            `json:"name_source,omitempty"`
-	OverridesGlobal       bool              `json:"overrides_global"`
-	PersonaID             string            `json:"persona_id,omitempty"`
-	PersonaLabel          string            `json:"persona_label,omitempty"`
-	PersonaPinned         bool              `json:"persona_pinned"`
-	WorkspacePath         string            `json:"workspace_path,omitempty"`
-	KnownUserIDs          []string          `json:"known_user_ids,omitempty"`
-	KnownUsers            []KnownUserView   `json:"known_users,omitempty"`
-	History               []ChatSessionView `json:"history,omitempty"`
+	BaseSessionID         string               `json:"base_session_id,omitempty"`
+	DisplayLabel          string               `json:"display_label,omitempty"`
+	Kind                  string               `json:"kind,omitempty"`
+	KindLabel             string               `json:"kind_label,omitempty"`
+	CurrentSessionID      string               `json:"current_session_id,omitempty"`
+	RecallSessionID       string               `json:"recall_session_id,omitempty"`
+	LastActivity          time.Time            `json:"last_activity,omitempty"`
+	Epoch                 int64                `json:"epoch,omitempty"`
+	EffectiveAssistant    string               `json:"effective_assistant,omitempty"`
+	ChatAssistantOverride string               `json:"chat_assistant_override,omitempty"`
+	NameSource            string               `json:"name_source,omitempty"`
+	OverridesGlobal       bool                 `json:"overrides_global"`
+	PersonaID             string               `json:"persona_id,omitempty"`
+	PersonaLabel          string               `json:"persona_label,omitempty"`
+	PersonaPinned         bool                 `json:"persona_pinned"`
+	WorkspacePath         string               `json:"workspace_path,omitempty"`
+	KnownUserIDs          []string             `json:"known_user_ids,omitempty"`
+	KnownUsers            []KnownUserView      `json:"known_users,omitempty"`
+	History               []ChatSessionView    `json:"history,omitempty"`
+	Transcript            []ChatTranscriptView `json:"transcript,omitempty"`
 }
 
 type KnownUserView struct {
@@ -68,6 +73,23 @@ type KnownUserView struct {
 type ChatSessionView struct {
 	SessionID    string    `json:"session_id,omitempty"`
 	LastActivity time.Time `json:"last_activity,omitempty"`
+}
+
+type ChatTranscriptView struct {
+	SessionID    string         `json:"session_id,omitempty"`
+	LastActivity time.Time      `json:"last_activity,omitempty"`
+	Current      bool           `json:"current"`
+	Recall       bool           `json:"recall"`
+	Truncated    bool           `json:"truncated"`
+	Turns        []ChatTurnView `json:"turns,omitempty"`
+}
+
+type ChatTurnView struct {
+	Role      string    `json:"role,omitempty"`
+	Speaker   string    `json:"speaker,omitempty"`
+	QuoteText string    `json:"quote_text,omitempty"`
+	Text      string    `json:"text,omitempty"`
+	Timestamp time.Time `json:"timestamp,omitempty"`
 }
 
 func (s *Service) chatsStatus() ChatsStatus {
@@ -177,6 +199,42 @@ func chatNameSourceLabel(chat ChatView) string {
 		return "Current chat name"
 	}
 	return "Default name"
+}
+
+func chatHasTranscript(chat ChatView) bool {
+	return len(chat.Transcript) != 0
+}
+
+func chatTranscriptLabel(view ChatTranscriptView) string {
+	switch {
+	case view.Current:
+		return "Current session"
+	case view.Recall:
+		return "Recall session"
+	default:
+		return "Recent session"
+	}
+}
+
+func chatTurnSpeaker(view ChatTurnView) string {
+	speaker := strings.TrimSpace(view.Speaker)
+	if speaker != "" {
+		return speaker
+	}
+	switch strings.TrimSpace(view.Role) {
+	case "user":
+		return "User"
+	case "assistant":
+		return "Assistant"
+	case "system":
+		return "System"
+	default:
+		return "Turn"
+	}
+}
+
+func hasTime(value time.Time) bool {
+	return !value.IsZero()
 }
 
 func chatOverrideSample(
@@ -320,109 +378,223 @@ const chatsPageTemplateHTML = `
       </article>
 
       <article class="card">
-        <h2>Chat Detail</h2>
+        <h2>Selected Chat</h2>
         {{if .SelectedChat}}
-        <dl class="meta">
-          <dt>Chat</dt>
-          <dd><code>{{.SelectedChat.BaseSessionID}}</code></dd>
-          <dt>Kind</dt>
-          <dd>
-            {{if .SelectedChat.KindLabel}}
-              {{.SelectedChat.KindLabel}}
-            {{else if .SelectedChat.Kind}}
-              {{.SelectedChat.Kind}}
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>Current Name</dt>
-          <dd>
-            {{if .SelectedChat.EffectiveAssistant}}
-              {{.SelectedChat.EffectiveAssistant}}
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>Why This Name</dt>
-          <dd>{{chatNameSourceLabel .SelectedChat}}</dd>
-          <dt>Current Chat Name</dt>
-          <dd>
-            {{if .SelectedChat.ChatAssistantOverride}}
-              {{.SelectedChat.ChatAssistantOverride}}
-            {{else}}
-              (using default name)
-            {{end}}
-          </dd>
-          <dt>Using Its Own Name</dt>
-          <dd>
-            {{if .SelectedChat.OverridesGlobal}}
-              yes
-            {{else}}
-              no
-            {{end}}
-          </dd>
-          <dt>Current Session</dt>
-          <dd><code>{{.SelectedChat.CurrentSessionID}}</code></dd>
-          <dt>Recall Session</dt>
-          <dd>
-            {{if .SelectedChat.RecallSessionID}}
-              <code>{{.SelectedChat.RecallSessionID}}</code>
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>Epoch</dt>
-          <dd>{{.SelectedChat.Epoch}}</dd>
-          <dt>Persona</dt>
-          <dd>
-            {{if .SelectedChat.PersonaLabel}}
-              {{.SelectedChat.PersonaLabel}}
-            {{else if .SelectedChat.PersonaID}}
-              {{.SelectedChat.PersonaID}}
-            {{else}}
-              -
-            {{end}}
-            {{if .SelectedChat.PersonaPinned}}
-              <br><span class="subtle">pinned for this chat</span>
-            {{end}}
-          </dd>
-          <dt>Workspace</dt>
-          <dd>
-            {{if .SelectedChat.WorkspacePath}}
-              <code>{{.SelectedChat.WorkspacePath}}</code>
-            {{else}}
-              -
-            {{end}}
-          </dd>
-          <dt>Known Users</dt>
-          <dd>{{chatKnownUsers .SelectedChat}}</dd>
-          <dt>Last Activity</dt>
-          <dd>{{formatTime .SelectedChat.LastActivity}}</dd>
-          <dt>JSON</dt>
-          <dd><a href="/api/chats">/api/chats</a></dd>
-        </dl>
+        <section class="chat-detail-section" id="chat-overview">
+          <div class="chat-detail-head">
+            <h3>Overview</h3>
+            <p class="subtle">
+              Current state for this chat, including the name it is
+              actually using right now.
+            </p>
+          </div>
+          <dl class="meta">
+            <dt>Chat</dt>
+            <dd><code>{{.SelectedChat.BaseSessionID}}</code></dd>
+            <dt>Kind</dt>
+            <dd>
+              {{if .SelectedChat.KindLabel}}
+                {{.SelectedChat.KindLabel}}
+              {{else if .SelectedChat.Kind}}
+                {{.SelectedChat.Kind}}
+              {{else}}
+                -
+              {{end}}
+            </dd>
+            <dt>Current Name</dt>
+            <dd>
+              {{if .SelectedChat.EffectiveAssistant}}
+                {{.SelectedChat.EffectiveAssistant}}
+              {{else}}
+                -
+              {{end}}
+            </dd>
+            <dt>Why This Name</dt>
+            <dd>{{chatNameSourceLabel .SelectedChat}}</dd>
+            <dt>Current Chat Name</dt>
+            <dd>
+              {{if .SelectedChat.ChatAssistantOverride}}
+                {{.SelectedChat.ChatAssistantOverride}}
+              {{else}}
+                (using the default name)
+              {{end}}
+            </dd>
+            <dt>Using Its Own Name</dt>
+            <dd>
+              {{if .SelectedChat.OverridesGlobal}}
+                yes
+              {{else}}
+                no
+              {{end}}
+            </dd>
+            <dt>Current Session</dt>
+            <dd><code>{{.SelectedChat.CurrentSessionID}}</code></dd>
+            <dt>Recall Session</dt>
+            <dd>
+              {{if .SelectedChat.RecallSessionID}}
+                <code>{{.SelectedChat.RecallSessionID}}</code>
+              {{else}}
+                -
+              {{end}}
+            </dd>
+            <dt>Epoch</dt>
+            <dd>{{.SelectedChat.Epoch}}</dd>
+            <dt>Persona</dt>
+            <dd>
+              {{if .SelectedChat.PersonaLabel}}
+                {{.SelectedChat.PersonaLabel}}
+              {{else if .SelectedChat.PersonaID}}
+                {{.SelectedChat.PersonaID}}
+              {{else}}
+                -
+              {{end}}
+              {{if .SelectedChat.PersonaPinned}}
+                <br><span class="subtle">pinned for this chat</span>
+              {{end}}
+            </dd>
+            <dt>Workspace</dt>
+            <dd>
+              {{if .SelectedChat.WorkspacePath}}
+                <code>{{.SelectedChat.WorkspacePath}}</code>
+              {{else}}
+                -
+              {{end}}
+            </dd>
+            <dt>Known Users</dt>
+            <dd>{{chatKnownUsers .SelectedChat}}</dd>
+            <dt>Last Activity</dt>
+            <dd>{{formatTime .SelectedChat.LastActivity}}</dd>
+            <dt>JSON</dt>
+            <dd><a href="/api/chats">/api/chats</a></dd>
+          </dl>
 
-        <h3 style="margin: 18px 0 8px;">Recent Sessions</h3>
-        {{if .SelectedChat.History}}
-        <table>
-          <thead>
-            <tr>
-              <th>Session ID</th>
-              <th>Last Activity</th>
-            </tr>
-          </thead>
-          <tbody>
-            {{range .SelectedChat.History}}
-            <tr>
-              <td><code>{{.SessionID}}</code></td>
-              <td>{{formatTime .LastActivity}}</td>
-            </tr>
+          <h4 style="margin: 18px 0 8px;">Recent Sessions</h4>
+          {{if .SelectedChat.History}}
+          <table>
+            <thead>
+              <tr>
+                <th>Session ID</th>
+                <th>Last Activity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .SelectedChat.History}}
+              <tr>
+                <td><code>{{.SessionID}}</code></td>
+                <td>{{formatTime .LastActivity}}</td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <p class="empty">No recent sessions have been tracked yet.</p>
+          {{end}}
+        </section>
+
+        <section class="chat-detail-section" id="chat-history">
+          <div class="chat-detail-head">
+            <h3>History</h3>
+            <p class="subtle">
+              Recent visible turns from this chat's tracked session
+              lines. Large transcripts are intentionally bounded here.
+            </p>
+          </div>
+          {{if .SelectedChatError}}
+          <div class="notice err">{{.SelectedChatError}}</div>
+          {{else if chatHasTranscript .SelectedChat}}
+          <div class="chat-transcript-list">
+            {{range .SelectedChat.Transcript}}
+            <article class="chat-transcript-card">
+              <div class="chat-transcript-head">
+                <div>
+                  <div class="chat-transcript-title">
+                    {{chatTranscriptLabel .}}
+                  </div>
+                  <div class="subtle">
+                    <code>{{.SessionID}}</code>
+                  </div>
+                </div>
+                <div class="subtle">{{formatTime .LastActivity}}</div>
+              </div>
+              <div class="chat-turn-list">
+                {{range .Turns}}
+                <article class="chat-turn">
+                  <div class="chat-turn-head">
+                    <span class="chat-turn-speaker">
+                      {{chatTurnSpeaker .}}
+                    </span>
+                    {{if hasTime .Timestamp}}
+                    <span class="subtle">{{formatTime .Timestamp}}</span>
+                    {{end}}
+                  </div>
+                  {{if .QuoteText}}
+                  <blockquote class="chat-turn-quote">
+                    {{.QuoteText}}
+                  </blockquote>
+                  {{end}}
+                  <div class="chat-turn-text">{{.Text}}</div>
+                </article>
+                {{end}}
+              </div>
+              {{if .Truncated}}
+              <p class="subtle" style="margin-top: 10px;">
+                Showing the most recent turns for this session line.
+              </p>
+              {{end}}
+            </article>
             {{end}}
-          </tbody>
-        </table>
-        {{else}}
-        <p class="empty">No recent sessions have been tracked yet.</p>
-        {{end}}
+          </div>
+          {{else}}
+          <p class="empty">
+            No recent transcript is available for this chat yet.
+          </p>
+          {{end}}
+        </section>
+
+        <section class="chat-detail-section" id="chat-actions">
+          <div class="chat-detail-head">
+            <h3>Actions</h3>
+            <p class="subtle">
+              Use the correct surface for the kind of name change you
+              want to make.
+            </p>
+          </div>
+          <div class="chat-action-grid">
+            <article class="chat-action-card">
+              <h4>Default Name</h4>
+              <p class="subtle">
+                Change the default name used by new chats and by chats
+                that do not keep their own current-chat name.
+              </p>
+              <p><a href="/identity#identity-global">Open Identity</a></p>
+            </article>
+            <article class="chat-action-card">
+              <h4>Current Chat Name</h4>
+              {{if .SelectedChat.OverridesGlobal}}
+              <p class="subtle">
+                This chat is using its own current-chat name. Change or
+                clear it from the chat itself if you want this chat to
+                fall back to the default name again.
+              </p>
+              {{else}}
+              <p class="subtle">
+                This chat is already using the default name. Rename it
+                from the chat itself if you want this chat to use its
+                own name.
+              </p>
+              {{end}}
+            </article>
+            <article class="chat-action-card">
+              <h4>Persona</h4>
+              <p class="subtle">
+                Persona defaults and templates live in the Personas
+                admin view. Chat-specific persona state is shown in the
+                overview above.
+              </p>
+              <p><a href="/personas">Open Personas</a></p>
+            </article>
+          </div>
+        </section>
         {{else}}
         <p class="empty">
           Choose a tracked chat from the list to inspect its current
