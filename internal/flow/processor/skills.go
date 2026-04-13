@@ -53,6 +53,7 @@ type skillsRequestProcessorOptions struct {
 	maxLoadedSkills   int
 	toolProfile       string
 	toolFlags         skillprofile.Flags
+	toolFlagsResolver func(*agent.Invocation) skillprofile.Flags
 	hasToolFlags      bool
 	execToolsDisabled bool
 	repoResolver      func(*agent.Invocation) skill.Repository
@@ -124,6 +125,15 @@ func WithSkillToolFlags(flags skillprofile.Flags) SkillsRequestProcessorOption {
 	}
 }
 
+// WithSkillToolFlagsResolver sets an invocation-aware skill tool capability resolver.
+func WithSkillToolFlagsResolver(
+	resolver func(*agent.Invocation) skillprofile.Flags,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.toolFlagsResolver = resolver
+	}
+}
+
 // WithSkillExecToolsDisabled tells the processor that skill_exec and its
 // companion session tools were not registered (e.g. because the executor
 // does not support interactive sessions).  The processor omits the
@@ -169,13 +179,14 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 //   - skill.DocsKey(agentName, skillName) ->
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
-	repo            skill.Repository
-	repoResolver    func(*agent.Invocation) skill.Repository
-	toolingGuidance *string
-	loadMode        string
-	toolResultMode  bool
-	maxLoadedSkills int
-	toolFlags       skillprofile.Flags
+	repo              skill.Repository
+	repoResolver      func(*agent.Invocation) skill.Repository
+	toolingGuidance   *string
+	loadMode          string
+	toolResultMode    bool
+	maxLoadedSkills   int
+	toolFlags         skillprofile.Flags
+	toolFlagsResolver func(*agent.Invocation) skillprofile.Flags
 }
 
 const (
@@ -207,13 +218,14 @@ func NewSkillsRequestProcessor(
 		flags = flags.WithoutInteractiveExecution()
 	}
 	return &SkillsRequestProcessor{
-		repo:            repo,
-		repoResolver:    options.repoResolver,
-		toolingGuidance: options.toolingGuidance,
-		loadMode:        normalizeSkillLoadMode(options.loadMode),
-		toolResultMode:  options.toolResultMode,
-		maxLoadedSkills: options.maxLoadedSkills,
-		toolFlags:       flags,
+		repo:              repo,
+		repoResolver:      options.repoResolver,
+		toolingGuidance:   options.toolingGuidance,
+		loadMode:          normalizeSkillLoadMode(options.loadMode),
+		toolResultMode:    options.toolResultMode,
+		maxLoadedSkills:   options.maxLoadedSkills,
+		toolFlags:         flags,
+		toolFlagsResolver: options.toolFlagsResolver,
 	}
 }
 
@@ -247,7 +259,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 
 	// 1) Always inject overview (names + descriptions) into system
 	//    message. Merge into existing system message if present.
-	p.injectOverview(ctx, req, repo)
+	p.injectOverview(ctx, inv, req, repo)
 
 	loaded := p.getLoadedSkills(inv)
 	loaded = p.maybeCapLoadedSkills(ctx, inv, loaded, ch)
@@ -649,6 +661,7 @@ func (p *SkillsRequestProcessor) maybeOffloadLoadedSkills(
 
 func (p *SkillsRequestProcessor) injectOverview(
 	ctx context.Context,
+	inv *agent.Invocation,
 	req *model.Request,
 	repo skill.Repository,
 ) {
@@ -663,10 +676,11 @@ func (p *SkillsRequestProcessor) injectOverview(
 		line := fmt.Sprintf("- %s: %s\n", s.Name, s.Description)
 		b.WriteString(line)
 	}
-	if capability := p.capabilityGuidanceText(); capability != "" {
+	flags := p.toolFlagsForInvocation(inv)
+	if capability := p.capabilityGuidanceText(flags); capability != "" {
 		b.WriteString(capability)
 	}
-	if guidance := p.toolingGuidanceText(); guidance != "" {
+	if guidance := p.toolingGuidanceText(flags); guidance != "" {
 		b.WriteString(guidance)
 	}
 	overview := b.String()
@@ -688,25 +702,38 @@ func (p *SkillsRequestProcessor) injectOverview(
 	req.Messages = append([]model.Message{msg}, req.Messages...)
 }
 
-func (p *SkillsRequestProcessor) toolingGuidanceText() string {
+func (p *SkillsRequestProcessor) toolFlagsForInvocation(
+	inv *agent.Invocation,
+) skillprofile.Flags {
+	if p.toolFlagsResolver != nil {
+		return p.toolFlagsResolver(inv)
+	}
+	return p.toolFlags
+}
+
+func (p *SkillsRequestProcessor) toolingGuidanceText(
+	flags skillprofile.Flags,
+) string {
 	if p.toolingGuidance == nil {
-		return defaultToolingAndWorkspaceGuidance(p.toolFlags)
+		return defaultToolingAndWorkspaceGuidance(flags)
 	}
 	return normalizeGuidance(*p.toolingGuidance)
 }
 
-func (p *SkillsRequestProcessor) capabilityGuidanceText() string {
+func (p *SkillsRequestProcessor) capabilityGuidanceText(
+	flags skillprofile.Flags,
+) string {
 	if p.toolingGuidance != nil && *p.toolingGuidance == "" {
 		return ""
 	}
-	if p.toolFlags.Run {
+	if flags.Run {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("\n")
 	b.WriteString(skillsCapabilityHeader)
 	b.WriteString("\n")
-	if p.toolFlags.Load {
+	if flags.Load {
 		b.WriteString("- This configuration supports skill discovery and ")
 		b.WriteString("knowledge loading only.\n")
 		b.WriteString("- Built-in skill execution tools are unavailable in ")
@@ -718,7 +745,7 @@ func (p *SkillsRequestProcessor) capabilityGuidanceText() string {
 		b.WriteString("that execution is unavailable in the current mode.\n")
 		return b.String()
 	}
-	if p.toolFlags.HasDocHelpers() {
+	if flags.HasDocHelpers() {
 		b.WriteString("- This configuration supports skill discovery and ")
 		b.WriteString("skill doc inspection only.\n")
 		b.WriteString("- Built-in skill loading and execution tools are ")

@@ -514,3 +514,47 @@ func TestLLMAgent_Run_SurfacePatch_AddsSkillsWithoutStaticRepository(t *testing.
 	require.Contains(t, m.got.Tools, "skill_load")
 	require.Contains(t, m.got.Tools, "workspace_exec")
 }
+
+func TestLLMAgent_SurfaceRuntimeHelpers_NilAgentBranches(t *testing.T) {
+	var agt *LLMAgent
+	require.Nil(t, agt.codeExecutorForInvocation(nil))
+	flags := agt.skillToolFlagsForInvocation(nil)
+	require.False(t, flags.Load)
+	require.False(t, flags.SelectDocs)
+	require.False(t, flags.ListDocs)
+	require.False(t, flags.Run)
+	require.False(t, flags.Exec)
+	require.False(t, flags.WriteStdin)
+	require.False(t, flags.PollSession)
+	require.False(t, flags.KillSession)
+}
+
+func TestLLMAgent_AppendSkillToolsWithRepo_UsesResolvedFlags(t *testing.T) {
+	opts := &Options{}
+	WithSkillToolProfile(SkillToolProfileKnowledgeOnly)(opts)
+	tools := appendSkillToolsWithRepo(
+		nil,
+		opts,
+		&mockSkillRepository{
+			summaries: []skill.Summary{{Name: "skill-a", Description: "desc"}},
+		},
+		nil,
+		nil,
+	)
+	require.NotNil(t, findTool(tools, "skill_load"))
+	require.NotNil(t, findTool(tools, "skill_select_docs"))
+	require.NotNil(t, findTool(tools, "skill_list_docs"))
+	require.Nil(t, findTool(tools, "skill_run"))
+}
+
+func TestLLMAgent_SkillToolFlagsAndWorkspaceExecSessionHelpers_NilOptions(
+	t *testing.T,
+) {
+	flags := mustResolveSkillToolFlagsWithExecutor(nil, nil)
+	require.False(t, flags.Load)
+	require.False(t, flags.SelectDocs)
+	require.False(t, flags.ListDocs)
+	require.False(t, flags.Run)
+	require.False(t, flags.Exec)
+	require.False(t, executorSupportsWorkspaceExecSessions(nil))
+}

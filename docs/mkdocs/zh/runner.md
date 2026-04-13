@@ -503,7 +503,7 @@ eventChan, err := r.Run(
 
 部分模型在生成 `tool_calls` 时，可能产出非严格 JSON 的参数（例如对象 key 未加引号、尾逗号等），从而导致工具执行或外部解析失败。
 
-在 `runner.Run` 中启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)` 后，框架会对 `toolCall.Function.Arguments` 做一次尽力修复，详细使用方法可参照 [ToolCall参数自动修复](./runner.md#tool-call-参数自动修复)。
+在 `runner.Run` 中启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)` 后，框架会对 `toolCall.Function.Arguments` 做一次尽力修复，详细使用方法可参照 [ToolCall参数自动修复](./runner.md#tool-call)。
 
 #### 传入对话历史（auto-seed + 复用 Session）
 
@@ -559,7 +559,29 @@ events, err := r.Run(
 推荐先通过 `structure.Export(...)` 获取稳定 `nodeID`，再把它传给
 `WithSurfacePatchForNode(...)`。同一次运行中如果要覆盖多个节点，可以重复传多个
 `WithSurfacePatchForNode(...)`。完整说明与更多示例见
-[Agent 使用文档：按 `nodeID` 覆盖运行时 surface](./agent.md#按-nodeid-覆盖运行时-surface)。
+[Agent 使用文档：按 `nodeID` 覆盖运行时 surface](./agent.md#nodeid-surface)。
+
+#### 按运行临时覆盖 `code executor`
+
+如果需要为会从 `RunOptions.CodeExecutor` 解析执行器的 Agent 在不同请求中指定不同的执行环境，例如 `LLMAgent`，可以在 `runner.Run(...)` 中直接传入 `agent.WithCodeExecutor(exec)`。
+
+```go
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Run the release checklist skill."),
+    agent.WithCodeExecutor(containerExec),
+)
+```
+
+说明：
+
+- 该选项仅对当前这一次 `runner.Run(...)` 调用生效，不会修改 Agent 的默认配置。
+- 该选项仅对会读取 `RunOptions.CodeExecutor` 的 Agent 生效；如果使用自定义 Agent，请确认其实现会处理该运行参数。
+- 如果创建 Agent 时已经设置 `llmagent.WithCodeExecutor(...)`，则此处传入的执行器会在本次运行中临时覆盖默认值。
+- 本次运行中所有依赖代码执行器的能力，均会使用此处传入的执行器，例如 `workspace_exec`、`skill_run` 和交互式 skill 会话工具。
+- 如果仅需为 `skill_run` 提供运行环境，而不希望模型自动执行回复中的 Markdown 围栏代码，可在创建 Agent 时设置 `llmagent.WithEnableCodeExecutionResponseProcessor(false)`。更多说明见 [Skill 文档](./skill.md)。
 
 ## ✅ 图式流程的“优雅结束”与最终结果读取
 

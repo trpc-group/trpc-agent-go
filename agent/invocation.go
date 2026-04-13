@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
@@ -570,6 +571,15 @@ func WithModelName(name string) RunOption {
 	}
 }
 
+// WithCodeExecutor sets the code executor for this specific run.
+// If set, it temporarily overrides the agent's default code executor for this
+// request only.
+func WithCodeExecutor(exec codeexecutor.CodeExecutor) RunOption {
+	return func(opts *RunOptions) {
+		opts.CodeExecutor = exec
+	}
+}
+
 // WithStream enables or disables streaming for this specific run.
 //
 // When set, it overrides the agent's default Stream setting for this Run.
@@ -950,6 +960,11 @@ type RunOptions struct {
 	// The agent will look up the model by name from its registered models.
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
+
+	// CodeExecutor is the code executor to use for this specific run.
+	// If set, it temporarily overrides the agent's default code executor for
+	// this request only.
+	CodeExecutor codeexecutor.CodeExecutor
 
 	// Stream overrides GenerationConfig.Stream for this run when non-nil.
 	//
