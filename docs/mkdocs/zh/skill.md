@@ -313,8 +313,9 @@ agent := llmagent.New(
     `llmagent.WithSkillRunRequireSkillLoaded(false)`。
   - 是否需要执行器，取决于最终注册的工具集：
     只要没有 `skill_run` / `skill_exec`，就不需要
-    `WithCodeExecutor(...)`。
-- 注意：当你同时设置了 `WithCodeExecutor` 时，LLMAgent 默认会尝试执行
+    `llmagent.WithCodeExecutor(...)` 或 `agent.WithCodeExecutor(...)`。
+- 注意：当你设置了 `llmagent.WithCodeExecutor(...)`，或者在
+  `runner.Run(...)` 里传入 `agent.WithCodeExecutor(...)` 时，LLMAgent 默认会尝试执行
   模型回复里的 Markdown 围栏代码块。如果你只是为了给 `skill_run` 提供运行时，
   不希望自动执行代码块，可以加上
   `llmagent.WithEnableCodeExecutionResponseProcessor(false)`。

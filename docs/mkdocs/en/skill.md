@@ -335,10 +335,11 @@ Key points:
     `llmagent.WithSkillRunRequireSkillLoaded(false)`.
   - Executor requirement follows the final registered tool set:
     any configuration without `skill_run` / `skill_exec` does not need
-    `WithCodeExecutor(...)`.
-- Note: when `WithCodeExecutor` is set, LLMAgent will (by default) try to
-  execute Markdown fenced code blocks in model responses. If you only need
-  the executor for `skill_run`, disable this behavior with
+    `llmagent.WithCodeExecutor(...)` or `agent.WithCodeExecutor(...)`.
+- Note: when `llmagent.WithCodeExecutor(...)` is set, or when
+  `agent.WithCodeExecutor(...)` is passed to `runner.Run(...)`, LLMAgent will
+  (by default) try to execute Markdown fenced code blocks in model responses.
+  If you only need the executor for `skill_run`, disable this behavior with
   `llmagent.WithEnableCodeExecutionResponseProcessor(false)`.
 - By default, the framework appends a small `Tooling and workspace guidance:`
   block after the `Available skills:` list in the system message.

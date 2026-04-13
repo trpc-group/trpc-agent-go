@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -133,6 +134,13 @@ func TestWithMaxRunDuration(t *testing.T) {
 	require.Equal(t, maxRun, ro.MaxRunDuration)
 }
 
+func TestWithCodeExecutor(t *testing.T) {
+	exec := &invocationTestCodeExecutor{}
+	var ro RunOptions
+	WithCodeExecutor(exec)(&ro)
+	require.Same(t, exec, ro.CodeExecutor)
+}
+
 func TestWithA2ARequestOptions(t *testing.T) {
 	tests := []struct {
 		name string
@@ -163,6 +171,19 @@ func TestWithA2ARequestOptions(t *testing.T) {
 			}
 		})
 	}
+}
+
+type invocationTestCodeExecutor struct{}
+
+func (*invocationTestCodeExecutor) ExecuteCode(
+	context.Context,
+	codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (*invocationTestCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
 }
 
 func TestMultipleRunOptions(t *testing.T) {

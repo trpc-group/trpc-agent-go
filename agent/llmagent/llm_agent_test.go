@@ -1167,11 +1167,12 @@ func TestLLMAgent_EnableCodeExecutionResponseProcessor(t *testing.T) {
 		}
 	}
 
-	newInvocation := func() *agent.Invocation {
+	newInvocation := func(opts ...agent.RunOption) *agent.Invocation {
 		return &agent.Invocation{
 			Message:      model.NewUserMessage("hi"),
 			InvocationID: "test-invocation",
 			Session:      &session.Session{ID: "test-session"},
+			RunOptions:   agent.NewRunOptions(opts...),
 		}
 	}
 
@@ -1215,6 +1216,27 @@ func TestLLMAgent_EnableCodeExecutionResponseProcessor(t *testing.T) {
 
 		require.Equal(t, 0, exec.CallCount())
 		require.Equal(t, codeBlock, gotContent)
+	})
+
+	t.Run("run_override_takes_precedence", func(t *testing.T) {
+		staticExec := &countingCodeExecutor{}
+		overrideExec := &countingCodeExecutor{}
+		agt := New(
+			"test",
+			WithModel(newMockModel()),
+			WithCodeExecutor(staticExec),
+		)
+
+		events, err := agt.Run(
+			context.Background(),
+			newInvocation(agent.WithCodeExecutor(overrideExec)),
+		)
+		require.NoError(t, err)
+		for range events {
+		}
+
+		require.Equal(t, 0, staticExec.CallCount())
+		require.Equal(t, 1, overrideExec.CallCount())
 	})
 
 	t.Run("non_executable_markdown_block", func(t *testing.T) {
