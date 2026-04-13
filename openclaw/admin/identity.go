@@ -84,9 +84,9 @@ func (s *Service) handleSaveIdentity(
 		)
 		return
 	}
-	message := "Saved assistant name."
+	message := "Saved default name."
 	if strings.TrimSpace(name) == "" {
-		message = "Cleared assistant name."
+		message = "Cleared default name."
 	}
 	s.redirectWithMessageAt(
 		w,
@@ -118,14 +118,13 @@ const identityPageTemplateHTML = `
 {{define "identityPage"}}
     <section class="panels">
       <article class="card">
-        <h2>Identity</h2>
+        <h2>Default Name</h2>
         <p class="subtle">
-          Set the assistant's global default name. This is the fallback
-          name for new chats and for any existing chat that does not
-          have its own chat-level override.
+          This is the default name used by new chats and by any existing
+          chat that has not picked its own current name yet.
         </p>
         <dl class="meta">
-          <dt>Assistant Name</dt>
+          <dt>Default Name</dt>
           <dd>
             {{if .Identity.EffectiveName}}
               {{.Identity.EffectiveName}}
@@ -149,20 +148,21 @@ const identityPageTemplateHTML = `
 
     {{if .Identity.Enabled}}
     <section class="card" style="margin-top: 24px;" id="identity-global">
-      <h2>Assistant Name</h2>
+      <h2>How Naming Works</h2>
       <p class="subtle">
-        This is the global fallback name. It can affect other users'
-        private chats and other groups, but only when those chats do
-        not already have their own chat-level override.
+        There are only two rules:
       </p>
       <div class="notice" style="margin-top: 14px;">
-        <strong>How it works</strong><br>
-        1. If one chat already renamed the bot inside that chat, that
-        chat keeps using its own name.<br>
-        2. If another user opens a new private chat and has not renamed
-        the bot there yet, they will see this global name.<br>
-        3. If another group never set its own override, it also falls
-        back to this global name.
+        <strong>1. Current chat name wins.</strong><br>
+        If one chat already renamed the bot, that chat keeps using its
+        own name.<br><br>
+        <strong>2. Default name fills the gaps.</strong><br>
+        New chats, and old chats that never picked their own name, fall
+        back to the default name shown here.<br><br>
+        <strong>Commands.</strong><br>
+        Use <code>/name &lt;name&gt;</code> to rename the bot inside one
+        chat. Use <code>/name global &lt;name&gt;</code> to change the
+        default name.
       </div>
       {{if .Identity.Error}}
       <div class="notice err" style="margin-top: 12px;">
@@ -170,7 +170,7 @@ const identityPageTemplateHTML = `
       </div>
       {{end}}
       <dl class="meta" style="margin-top: 14px;">
-        <dt>Effective Name</dt>
+        <dt>Current Default Name</dt>
         <dd>
           {{if .Identity.EffectiveName}}
             {{.Identity.EffectiveName}}
@@ -178,7 +178,7 @@ const identityPageTemplateHTML = `
             -
           {{end}}
         </dd>
-        <dt>Configured Global Name</dt>
+        <dt>Configured Default Name</dt>
         <dd>
           {{if .Identity.ConfiguredName}}
             {{.Identity.ConfiguredName}}
@@ -214,7 +214,7 @@ const identityPageTemplateHTML = `
       <form method="post" action="/api/identity/save" style="margin-top: 16px;">
         <input type="hidden" name="return_path" value="/identity">
         <input type="hidden" name="return_to" value="identity-global">
-        <label for="assistant-name">Assistant Name</label>
+        <label for="assistant-name">Default Name</label>
         <input
           id="assistant-name"
           type="text"
@@ -224,22 +224,21 @@ const identityPageTemplateHTML = `
           style="width: 100%; margin-top: 8px;"
         >
         <div class="actions" style="margin-top: 12px;">
-          <button type="submit">Save Assistant Name</button>
+          <button type="submit">Save Default Name</button>
         </div>
       </form>
     </section>
 
     {{if .Chats.Enabled}}
     <section class="card" style="margin-top: 24px;" id="identity-chats">
-      <h2>Chat Overrides</h2>
+      <h2>Chats Using Their Own Name</h2>
       <p class="subtle">
-        A chat override only changes the bot's name inside one tracked
-        chat. It wins over the global fallback, and it stays there until
-        cleared, even if the user starts a new session epoch with
-        <code>/new</code>.
+        These chats are not using the default name. Each one already has
+        its own current chat name, so changing the default name will not
+        replace it.
       </p>
       <dl class="meta" style="margin-top: 14px;">
-        <dt>Active Overrides</dt>
+        <dt>Chats Using Their Own Name</dt>
         <dd>{{.Chats.OverrideCount}}</dd>
         <dt>Tracked Chats</dt>
         <dd>{{.Chats.TotalCount}}</dd>
@@ -252,7 +251,7 @@ const identityPageTemplateHTML = `
           <tr>
             <th>Chat</th>
             <th>Current Name</th>
-            <th>Override</th>
+            <th>Current Chat Name</th>
             <th>Last Activity</th>
           </tr>
         </thead>

@@ -1601,7 +1601,8 @@ func TestService_IdentityPageAndActions(t *testing.T) {
 	rec := httptest.NewRecorder()
 	svc.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "Assistant Name")
+	require.Contains(t, rec.Body.String(), "Default Name")
+	require.Contains(t, rec.Body.String(), "How Naming Works")
 	require.Contains(t, rec.Body.String(), "trpc-claw")
 	require.Contains(t, rec.Body.String(), "/api/identity")
 
@@ -1669,8 +1670,8 @@ func TestService_IdentityPageShowsChatOverrides(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	require.Contains(t, body, "Chat Overrides")
-	require.Contains(t, body, "Active Overrides")
+	require.Contains(t, body, "Chats Using Their Own Name")
+	require.Contains(t, body, "Current chat name wins")
 	require.Contains(t, body, "Direct Message / alice")
 	require.Contains(t, body, "林妹妹")
 	require.Contains(
@@ -1697,7 +1698,7 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 				Epoch:                 171,
 				EffectiveAssistant:    "林妹妹",
 				ChatAssistantOverride: "林妹妹",
-				NameSource:            "chat override",
+				NameSource:            "Current chat name",
 				OverridesGlobal:       true,
 				PersonaLabel:          "Creative",
 				WorkspacePath:         "/repo",
@@ -1734,7 +1735,7 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 	require.Contains(t, body, "Tracked Chats")
 	require.Contains(t, body, "Chat Detail")
 	require.Contains(t, body, "Direct Message / alice")
-	require.Contains(t, body, "chat override")
+	require.Contains(t, body, "Current chat name")
 	require.Contains(t, body, "Recent Sessions")
 	require.Contains(t, body, "<code>wecom:dm:alice</code>")
 

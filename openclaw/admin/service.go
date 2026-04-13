@@ -104,14 +104,14 @@ const (
 		"Edit the main prompt blocks, inspect the assembled " +
 		"prompt previews, and keep file-level edits in one place."
 	pageSummaryIdentity = "" +
-		"Set the assistant's global default name while keeping " +
-		"the runtime product as a separate read-only fact."
+		"Set the default name, keep current-chat names readable, " +
+		"and leave the runtime product as a separate read-only fact."
 	pageSummaryPersonas = "" +
 		"Manage the default persona and any file-backed " +
 		"persona definitions exposed by this runtime."
 	pageSummaryChats = "" +
-		"Inspect tracked chats, chat-specific assistant-name " +
-		"overrides, personas, and recent session history."
+		"Inspect each chat's current name, default-name fallback, " +
+		"persona, and recent session history."
 )
 
 type adminView string

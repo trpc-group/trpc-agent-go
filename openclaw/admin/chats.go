@@ -138,9 +138,9 @@ func chatNameSourceLabel(chat ChatView) string {
 		return source
 	}
 	if strings.TrimSpace(chat.ChatAssistantOverride) != "" {
-		return "chat override"
+		return "Current chat name"
 	}
-	return "global default"
+	return "Default name"
 }
 
 func chatOverrideSample(
@@ -203,8 +203,8 @@ const chatsPageTemplateHTML = `
         <p class="subtle">
           This view shows tracked chat state from the runtime. It is not
           a full transcript browser. Use it to inspect each chat's
-          effective assistant name, chat-level override, persona,
-          workspace, and recent session history.
+          current name, whether that chat is using its own name or the
+          default name, plus persona, workspace, and recent sessions.
         </p>
         {{if .Chats.ChatOverrideHelp}}
         <div class="notice" style="margin-top: 14px;">
@@ -305,18 +305,24 @@ const chatsPageTemplateHTML = `
               -
             {{end}}
           </dd>
-          <dt>Name Source</dt>
+          <dt>Why This Name</dt>
           <dd>{{chatNameSourceLabel .SelectedChat}}</dd>
-          <dt>Chat Override</dt>
+          <dt>Current Chat Name</dt>
           <dd>
             {{if .SelectedChat.ChatAssistantOverride}}
               {{.SelectedChat.ChatAssistantOverride}}
             {{else}}
-              (unset)
+              (using default name)
             {{end}}
           </dd>
-          <dt>Overrides Global</dt>
-          <dd>{{.SelectedChat.OverridesGlobal}}</dd>
+          <dt>Using Its Own Name</dt>
+          <dd>
+            {{if .SelectedChat.OverridesGlobal}}
+              yes
+            {{else}}
+              no
+            {{end}}
+          </dd>
           <dt>Current Session</dt>
           <dd><code>{{.SelectedChat.CurrentSessionID}}</code></dd>
           <dt>Recall Session</dt>
