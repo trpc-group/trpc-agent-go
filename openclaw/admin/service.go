@@ -2048,6 +2048,15 @@ var adminPage = template.Must(
 		"promptInlineEditorTitle":    promptInlineEditorTitle,
 		"promptInlineEditorSummary":  promptInlineEditorSummary,
 		"promptRuntimeEditorSummary": promptRuntimeEditorSummary,
+		"personaStoreTitle":          personaStoreTitle,
+		"personaStoreUsageLabels":    personaStoreUsageLabels,
+		"personaCustomPersonas":      personaCustomPersonas,
+		"personaBuiltInPersonas":     personaBuiltInPersonas,
+		"personaStoreBuiltInCount":   personaStoreBuiltInCount,
+		"personaStoreCustomCount":    personaStoreCustomCount,
+		"personaDisplayName":         personaDisplayName,
+		"personaKindLabel":           personaKindLabel,
+		"personaSummaryText":         personaSummaryText,
 	}).Parse(
 		adminPageHTML +
 			promptsPageTemplateHTML +
