@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	sessionpkg "trpc.group/trpc-go/trpc-agent-go/session"
@@ -312,6 +313,53 @@ func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
 	require.Equal(t, "exited", res.Status)
 
 	path, err := store.MemoryPath("app", "u1")
+	require.NoError(t, err)
+	require.Contains(t, res.Output, path)
+	require.FileExists(t, path)
+}
+
+func TestExecTool_UsesStorageScopedMemoryFileEnvFromContext(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	stateDir := t.TempDir()
+	root, err := memoryfile.DefaultRoot(stateDir)
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	mgr := NewManager()
+	execTool := NewExecCommandToolWithMemoryFileStore(
+		mgr,
+		nil,
+		store,
+	).(tool.CallableTool)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("app", "u1", "wecom:chat:room-1"),
+		),
+	)
+	ctx := agent.NewInvocationContext(
+		conversationscope.WithStorageUserID(
+			context.Background(),
+			"wecom:chat:room-1",
+		),
+		inv,
+	)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf %s \"$OPENCLAW_MEMORY_FILE\"",
+		"yieldMs": 0,
+	})
+	out, err := execTool.Call(ctx, args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+
+	path, err := store.MemoryPath("app", "wecom:chat:room-1")
 	require.NoError(t, err)
 	require.Contains(t, res.Output, path)
 	require.FileExists(t, path)

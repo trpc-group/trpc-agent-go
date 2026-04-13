@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 )
 
@@ -161,6 +162,7 @@ func memoryToolTargetFromContext(
 	}
 	appName := strings.TrimSpace(inv.Session.AppName)
 	userID := strings.TrimSpace(inv.Session.UserID)
+	userID = conversationscope.StorageUserIDFromContext(ctx, userID)
 	if appName == "" || userID == "" {
 		return memoryToolTarget{}, false, nil
 	}

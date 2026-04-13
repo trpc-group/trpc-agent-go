@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/retriever"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
@@ -528,6 +529,121 @@ func TestBuiltinKnowledge_SearchTableDriven(t *testing.T) {
 	}
 }
 
+func TestBuiltinKnowledge_Search_FilterOnlyDefaultsToFilterMode(t *testing.T) {
+	mockRet := &mockRetriever{
+		result: &retriever.Result{
+			Documents: []*retriever.RelevantDocument{
+				{
+					Document: &document.Document{ID: "doc1", Content: "test content"},
+					Score:    1,
+				},
+			},
+		},
+	}
+	kb := &BuiltinKnowledge{retriever: mockRet}
+
+	_, err := kb.Search(context.Background(), &SearchRequest{
+		SearchFilter: &SearchFilter{
+			Metadata: map[string]any{"category": "test"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if mockRet.lastReq == nil {
+		t.Fatal("expected retriever request to be recorded")
+	}
+	if mockRet.lastReq.SearchMode != vectorstore.SearchModeFilter {
+		t.Fatalf("expected search mode %d, got %d", vectorstore.SearchModeFilter, mockRet.lastReq.SearchMode)
+	}
+	if mockRet.lastReq.Filter == nil || mockRet.lastReq.Filter.Metadata["category"] != "test" {
+		t.Fatal("expected metadata filter to be forwarded to retriever")
+	}
+}
+
+func TestBuiltinKnowledge_Search_WithQueryKeepsExplicitSearchMode(t *testing.T) {
+	mockRet := &mockRetriever{
+		result: &retriever.Result{
+			Documents: []*retriever.RelevantDocument{
+				{
+					Document: &document.Document{ID: "doc1", Content: "test content"},
+					Score:    1,
+				},
+			},
+		},
+	}
+	kb := &BuiltinKnowledge{retriever: mockRet}
+
+	_, err := kb.Search(context.Background(), &SearchRequest{
+		Query:      "test query",
+		SearchMode: vectorstore.SearchModeHybrid,
+		SearchFilter: &SearchFilter{
+			Metadata: map[string]any{"category": "test"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if mockRet.lastReq == nil {
+		t.Fatal("expected retriever request to be recorded")
+	}
+	if mockRet.lastReq.SearchMode != vectorstore.SearchModeHybrid {
+		t.Fatalf("expected search mode %d, got %d", vectorstore.SearchModeHybrid, mockRet.lastReq.SearchMode)
+	}
+}
+
+func TestHasSearchFilter(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter *SearchFilter
+		want   bool
+	}{
+		{
+			name:   "nil filter",
+			filter: nil,
+			want:   false,
+		},
+		{
+			name:   "empty filter",
+			filter: &SearchFilter{},
+			want:   false,
+		},
+		{
+			name: "document ids",
+			filter: &SearchFilter{
+				DocumentIDs: []string{"doc1"},
+			},
+			want: true,
+		},
+		{
+			name: "metadata",
+			filter: &SearchFilter{
+				Metadata: map[string]any{"category": "test"},
+			},
+			want: true,
+		},
+		{
+			name: "filter condition",
+			filter: &SearchFilter{
+				FilterCondition: &searchfilter.UniversalFilterCondition{
+					Field:    "category",
+					Operator: searchfilter.OperatorEqual,
+					Value:    "test",
+				},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasSearchFilter(tt.filter); got != tt.want {
+				t.Fatalf("hasSearchFilter() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 // Test Close functionality using table-driven tests
 func TestBuiltinKnowledge_Close(t *testing.T) {
 	tests := []struct {
@@ -818,9 +934,11 @@ type mockRetriever struct {
 	result   *retriever.Result
 	err      error
 	closeErr error
+	lastReq  *retriever.Query
 }
 
 func (m *mockRetriever) Retrieve(ctx context.Context, req *retriever.Query) (*retriever.Result, error) {
+	m.lastReq = req
 	return m.result, m.err
 }
 

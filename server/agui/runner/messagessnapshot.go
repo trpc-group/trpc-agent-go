@@ -38,9 +38,6 @@ func (r *runner) MessagesSnapshot(ctx context.Context,
 	if runAgentInput == nil {
 		return nil, errors.New("run input cannot be nil")
 	}
-	if r.appName == "" {
-		return nil, errors.New("app name is empty")
-	}
 	if r.tracker == nil {
 		return nil, errors.New("tracker is nil")
 	}
@@ -48,13 +45,20 @@ func (r *runner) MessagesSnapshot(ctx context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("run input hook: %w", err)
 	}
+	appName, err := r.resolveAppName(ctx, runAgentInput)
+	if err != nil {
+		return nil, fmt.Errorf("resolve app name: %w", err)
+	}
+	if appName == "" {
+		return nil, errors.New("app name is empty")
+	}
 	userID, err := r.userIDResolver(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("resolve user ID: %w", err)
 	}
 	input := &runInput{
 		key: session.Key{
-			AppName:   r.appName,
+			AppName:   appName,
 			UserID:    userID,
 			SessionID: runAgentInput.ThreadID,
 		},
@@ -124,7 +128,7 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	if err != nil {
 		return nil, nil, fmt.Errorf("get track events: %w", err)
 	}
-	messages, err := reduce.Reduce(r.appName, sessionKey.UserID, trackEvents.Events)
+	messages, err := reduce.Reduce(sessionKey.AppName, sessionKey.UserID, trackEvents.Events)
 	if err != nil {
 		err = fmt.Errorf("reduce track events: %w", err)
 	}

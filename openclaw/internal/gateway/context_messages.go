@@ -14,11 +14,17 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 )
 
 const personaContextHeader = "Active preset persona for this chat:"
+
+const (
+	chatMemoryScopeLabel = "the current chat scope"
+	userMemoryScopeLabel = "this user"
+)
 
 func (s *Server) injectedContextMessages(
 	ctx context.Context,
@@ -102,24 +108,77 @@ func (s *Server) memoryFileContextMessages(
 	if appName == "" || userID == "" {
 		return nil
 	}
-	path, err := s.memoryFileStore.EnsureMemory(
+
+	primaryUserID := conversationscope.StorageUserIDFromContext(
+		ctx,
+		userID,
+	)
+	messages := make([]model.Message, 0, 2)
+	if msg := s.memoryFileContextMessage(
+		ctx,
+		appName,
+		primaryUserID,
+		func() string {
+			if primaryUserID != userID {
+				return chatMemoryScopeLabel
+			}
+			return userMemoryScopeLabel
+		}(),
+		true,
+	); msg != nil {
+		messages = append(messages, *msg)
+	}
+	if primaryUserID == userID {
+		return messages
+	}
+	if msg := s.memoryFileContextMessage(
 		ctx,
 		appName,
 		userID,
+		userMemoryScopeLabel,
+		false,
+	); msg != nil {
+		messages = append(messages, *msg)
+	}
+	return messages
+}
+
+func (s *Server) memoryFileContextMessage(
+	ctx context.Context,
+	appName string,
+	userID string,
+	scopeLabel string,
+	ensure bool,
+) *model.Message {
+	if s == nil || s.memoryFileStore == nil {
+		return nil
+	}
+	appName = strings.TrimSpace(appName)
+	userID = strings.TrimSpace(userID)
+	if appName == "" || userID == "" {
+		return nil
+	}
+
+	var (
+		path string
+		err  error
 	)
+	if ensure {
+		path, err = s.memoryFileStore.EnsureMemory(ctx, appName, userID)
+	} else {
+		path, err = s.memoryFileStore.MemoryPath(appName, userID)
+	}
 	if err != nil {
 		return nil
 	}
-	text, err := s.memoryFileStore.ReadFile(
-		path,
-		memoryfile.ReadLimit,
-	)
-	if err != nil {
+	text, err := s.memoryFileStore.ReadFile(path, memoryfile.ReadLimit)
+	if err != nil || (!ensure && memoryfile.IsDefaultTemplate(text)) {
 		return nil
 	}
-	content := memoryfile.BuildContextText(text)
+	content := memoryfile.BuildContextTextForScope(scopeLabel, text)
 	if strings.TrimSpace(content) == "" {
 		return nil
 	}
-	return []model.Message{model.NewSystemMessage(content)}
+	msg := model.NewSystemMessage(content)
+	return &msg
 }

@@ -889,6 +889,94 @@ func TestRecordUserMessageTracksCustomEvent(t *testing.T) {
 	assert.Equal(t, "hi", content)
 }
 
+func TestRunUsesResolvedAppNameForTrackKey(t *testing.T) {
+	tracker := &recordingTracker{}
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		appName:            "static-app",
+		appNameResolver:    forwardedPropsAppNameResolver,
+		runner:             underlying,
+		translatorFactory:  defaultTranslatorFactory,
+		userIDResolver:     func(context.Context, *adapter.RunAgentInput) (string, error) { return "demo-user", nil },
+		stateResolver:      defaultStateResolver,
+		runOptionResolver:  defaultRunOptionResolver,
+		tracker:            tracker,
+		startSpan:          defaultStartSpan,
+		translateCallbacks: nil,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"appName": "dynamic-app"},
+		Messages:       []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.NotEmpty(t, tracker.keys)
+	for _, key := range tracker.keys {
+		assert.Equal(t, "dynamic-app", key.AppName)
+		assert.Equal(t, "demo-user", key.UserID)
+		assert.Equal(t, "thread", key.SessionID)
+	}
+}
+
+func TestRunAppNameResolverError(t *testing.T) {
+	underlying := &fakeRunner{}
+	r := &runner{
+		runner:            underlying,
+		appNameResolver:   func(context.Context, *adapter.RunAgentInput) (string, error) { return "", errors.New("boom") },
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    func(context.Context, *adapter.RunAgentInput) (string, error) { return "demo-user", nil },
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	assert.Nil(t, ch)
+	assert.ErrorContains(t, err, "resolve app name")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestResolveAppNameFallsBackToStaticAppName(t *testing.T) {
+	r := &runner{appName: "static-app"}
+	appName, err := r.resolveAppName(context.Background(), &adapter.RunAgentInput{})
+	assert.NoError(t, err)
+	assert.Equal(t, "static-app", appName)
+	r.appNameResolver = func(context.Context, *adapter.RunAgentInput) (string, error) {
+		return "", nil
+	}
+	appName, err = r.resolveAppName(context.Background(), &adapter.RunAgentInput{})
+	assert.NoError(t, err)
+	assert.Equal(t, "static-app", appName)
+}
+
+func TestResolveAppNameReturnsResolverError(t *testing.T) {
+	r := &runner{
+		appName: "static-app",
+		appNameResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
+			return "", errors.New("boom")
+		},
+	}
+	appName, err := r.resolveAppName(context.Background(), &adapter.RunAgentInput{})
+	assert.Empty(t, appName)
+	assert.EqualError(t, err, "boom")
+}
+
 func TestRecordUserMessageRejectsNilAndNonUserRole(t *testing.T) {
 	r := &runner{}
 	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
@@ -2069,12 +2157,14 @@ func (f *flushRecorder) Flush(ctx context.Context, key session.Key) error {
 type recordingTracker struct {
 	mu         sync.Mutex
 	events     []aguievents.Event
+	keys       []session.Key
 	flushCount int
 }
 
 func (r *recordingTracker) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.keys = append(r.keys, key)
 	r.events = append(r.events, event)
 	return nil
 }
@@ -2108,6 +2198,15 @@ func (e *errorTracker) GetEvents(ctx context.Context,
 func (e *errorTracker) Flush(ctx context.Context,
 	_ session.Key) error {
 	return e.flushErr
+}
+
+func forwardedPropsAppNameResolver(_ context.Context, input *adapter.RunAgentInput) (string, error) {
+	props, ok := input.ForwardedProps.(map[string]any)
+	if !ok || props == nil {
+		return "", nil
+	}
+	appName, _ := props["appName"].(string)
+	return appName, nil
 }
 
 type spySpan struct {
