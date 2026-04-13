@@ -84,9 +84,9 @@ func (s *Service) handleSaveIdentity(
 		)
 		return
 	}
-	message := "Saved assistant name."
+	message := "Saved default name."
 	if strings.TrimSpace(name) == "" {
-		message = "Cleared assistant name."
+		message = "Cleared default name."
 	}
 	s.redirectWithMessageAt(
 		w,
@@ -118,13 +118,13 @@ const identityPageTemplateHTML = `
 {{define "identityPage"}}
     <section class="panels">
       <article class="card">
-        <h2>Identity</h2>
+        <h2>Default Name</h2>
         <p class="subtle">
-          Set the assistant's global default name. This affects new
-          chats unless a chat-specific name override is active.
+          This is the default name used by new chats and by any existing
+          chat that has not picked its own current name yet.
         </p>
         <dl class="meta">
-          <dt>Assistant Name</dt>
+          <dt>Default Name</dt>
           <dd>
             {{if .Identity.EffectiveName}}
               {{.Identity.EffectiveName}}
@@ -148,18 +148,29 @@ const identityPageTemplateHTML = `
 
     {{if .Identity.Enabled}}
     <section class="card" style="margin-top: 24px;" id="identity-global">
-      <h2>Assistant Name</h2>
+      <h2>How Naming Works</h2>
       <p class="subtle">
-        This is the global default name. Chat-scoped overrides can still
-        replace it for one active conversation.
+        There are only two rules:
       </p>
+      <div class="notice" style="margin-top: 14px;">
+        <strong>1. Current chat name wins.</strong><br>
+        If one chat already renamed the bot, that chat keeps using its
+        own name.<br><br>
+        <strong>2. Default name fills the gaps.</strong><br>
+        New chats, and old chats that never picked their own name, fall
+        back to the default name shown here.<br><br>
+        <strong>Commands.</strong><br>
+        Use <code>/name &lt;name&gt;</code> to rename the bot inside one
+        chat. Use <code>/name global &lt;name&gt;</code> to change the
+        default name.
+      </div>
       {{if .Identity.Error}}
       <div class="notice err" style="margin-top: 12px;">
         {{.Identity.Error}}
       </div>
       {{end}}
       <dl class="meta" style="margin-top: 14px;">
-        <dt>Effective Name</dt>
+        <dt>Current Default Name</dt>
         <dd>
           {{if .Identity.EffectiveName}}
             {{.Identity.EffectiveName}}
@@ -167,7 +178,7 @@ const identityPageTemplateHTML = `
             -
           {{end}}
         </dd>
-        <dt>Configured Global Name</dt>
+        <dt>Configured Default Name</dt>
         <dd>
           {{if .Identity.ConfiguredName}}
             {{.Identity.ConfiguredName}}
@@ -203,7 +214,7 @@ const identityPageTemplateHTML = `
       <form method="post" action="/api/identity/save" style="margin-top: 16px;">
         <input type="hidden" name="return_path" value="/identity">
         <input type="hidden" name="return_to" value="identity-global">
-        <label for="assistant-name">Assistant Name</label>
+        <label for="assistant-name">Default Name</label>
         <input
           id="assistant-name"
           type="text"
@@ -213,10 +224,73 @@ const identityPageTemplateHTML = `
           style="width: 100%; margin-top: 8px;"
         >
         <div class="actions" style="margin-top: 12px;">
-          <button type="submit">Save Assistant Name</button>
+          <button type="submit">Save Default Name</button>
         </div>
       </form>
     </section>
+
+    {{if .Chats.Enabled}}
+    <section class="card" style="margin-top: 24px;" id="identity-chats">
+      <h2>Chats Using Their Own Name</h2>
+      <p class="subtle">
+        These chats are not using the default name. Each one already has
+        its own current chat name, so changing the default name will not
+        replace it.
+      </p>
+      <dl class="meta" style="margin-top: 14px;">
+        <dt>Chats Using Their Own Name</dt>
+        <dd>{{.Chats.OverrideCount}}</dd>
+        <dt>Tracked Chats</dt>
+        <dd>{{.Chats.TotalCount}}</dd>
+        <dt>Open</dt>
+        <dd><a href="/chats">Chats</a></dd>
+      </dl>
+      {{if .Chats.Error}}
+      <div class="notice err" style="margin-top: 12px;">
+        {{.Chats.Error}}
+      </div>
+      {{else if chatOverrideSample .Chats 6}}
+      <table style="margin-top: 16px;">
+        <thead>
+          <tr>
+            <th>Chat</th>
+            <th>Current Name</th>
+            <th>Current Chat Name</th>
+            <th>Last Activity</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range chatOverrideSample .Chats 6}}
+          <tr>
+            <td>
+              <a href="/chats?chat_id={{.BaseSessionID}}">
+                {{chatDisplayLabel .}}
+              </a>
+            </td>
+            <td>
+              {{if .EffectiveAssistant}}
+                {{.EffectiveAssistant}}
+              {{else}}
+                -
+              {{end}}
+            </td>
+            <td>
+              {{if .ChatAssistantOverride}}
+                {{.ChatAssistantOverride}}
+              {{else}}
+                -
+              {{end}}
+            </td>
+            <td>{{formatTime .LastActivity}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="empty">No chat-specific name overrides are active.</p>
+      {{end}}
+    </section>
+    {{end}}
     {{else}}
     <section class="card" style="margin-top: 24px;">
       <p class="empty">Identity management is not available for this runtime.</p>

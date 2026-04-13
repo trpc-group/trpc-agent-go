@@ -36,6 +36,7 @@ const (
 	routePrompts    = "/prompts"
 	routeIdentity   = "/identity"
 	routePersonas   = "/personas"
+	routeChats      = "/chats"
 	routeMemory     = "/memory"
 	routeAutomation = "/automation"
 	routeSessions   = "/sessions"
@@ -62,6 +63,7 @@ const (
 
 	queryNotice    = "notice"
 	queryError     = "error"
+	queryChatID    = "chat_id"
 	querySessionID = "session_id"
 	queryChannel   = "channel"
 	queryUserID    = "user_id"
@@ -102,11 +104,14 @@ const (
 		"Edit the main prompt blocks, inspect the assembled " +
 		"prompt previews, and keep file-level edits in one place."
 	pageSummaryIdentity = "" +
-		"Set the assistant's global default name while keeping " +
-		"the runtime product as a separate read-only fact."
+		"Set the default name, keep current-chat names readable, " +
+		"and leave the runtime product as a separate read-only fact."
 	pageSummaryPersonas = "" +
 		"Manage the default persona and any file-backed " +
 		"persona definitions exposed by this runtime."
+	pageSummaryChats = "" +
+		"Inspect each chat's current name, default-name fallback, " +
+		"persona, and recent session history."
 )
 
 type adminView string
@@ -117,6 +122,7 @@ const (
 	viewPrompts    adminView = "prompts"
 	viewIdentity   adminView = "identity"
 	viewPersonas   adminView = "personas"
+	viewChats      adminView = "chats"
 	viewMemory     adminView = "memory"
 	viewAutomation adminView = "automation"
 	viewSessions   adminView = "sessions"
@@ -161,6 +167,7 @@ type Config struct {
 	Prompts       PromptsProvider
 	Identity      IdentityProvider
 	Personas      PersonasProvider
+	Chats         ChatsProvider
 	MemoryFiles   MemoryFileStore
 	Browser       BrowserConfig
 
@@ -296,6 +303,10 @@ func (s *Service) Handler() http.Handler {
 		wrapRelativeLinksFunc(s.handlePersonasPage),
 	)
 	mux.HandleFunc(
+		routeChats,
+		wrapRelativeLinksFunc(s.handleChatsPage),
+	)
+	mux.HandleFunc(
 		routeMemory,
 		wrapRelativeLinksFunc(s.handleMemoryPage),
 	)
@@ -320,6 +331,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routePromptsJSON, s.handlePromptsJSON)
 	mux.HandleFunc(routeIdentityJSON, s.handleIdentityJSON)
 	mux.HandleFunc(routePersonasJSON, s.handlePersonasJSON)
+	mux.HandleFunc(routeChatsJSON, s.handleChatsJSON)
 	mux.HandleFunc(routeMemoryFilesJSON, s.handleMemoryFilesJSON)
 	mux.HandleFunc(routeMemoryFile, s.handleMemoryFile)
 	mux.HandleFunc(
@@ -569,6 +581,8 @@ type pageData struct {
 	Prompts        PromptsStatus
 	Identity       IdentityStatus
 	Personas       PersonasStatus
+	Chats          ChatsStatus
+	SelectedChat   *ChatView
 	Notice         string
 	Error          string
 	RefreshSeconds int
@@ -649,6 +663,8 @@ func (s *Service) snapshotForView(view adminView) snapshot {
 		out.Memory = s.memoryStatus()
 	case viewAutomation:
 		out.Cron = s.cronStatus()
+	case viewChats:
+		out.Exec = s.execStatus()
 	case viewSessions:
 		out.Exec = s.execStatus()
 		out.Uploads = s.uploadsStatus()
@@ -992,6 +1008,13 @@ func (s *Service) handlePersonasPage(
 	s.renderPage(w, r, viewPersonas)
 }
 
+func (s *Service) handleChatsPage(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	s.renderPage(w, r, viewChats)
+}
+
 func (s *Service) handleMemoryPage(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -1037,11 +1060,14 @@ func (s *Service) renderPage(
 		return
 	}
 
+	chats := s.chatsStatus()
 	data := pageData{
 		Snapshot:       s.snapshotForView(view),
 		Prompts:        s.promptsStatus(),
 		Identity:       s.identityStatus(),
 		Personas:       s.personasStatus(),
+		Chats:          chats,
+		SelectedChat:   selectChatView(chats, selectedChatID(r)),
 		Notice:         strings.TrimSpace(r.URL.Query().Get(queryNotice)),
 		Error:          strings.TrimSpace(r.URL.Query().Get(queryError)),
 		RefreshSeconds: refreshSeconds,
@@ -1071,7 +1097,7 @@ func adminNavSections(active adminView) []adminNavSection {
 				{Label: "Prompts", Path: routePrompts},
 				{Label: "Identity", Path: routeIdentity},
 				{Label: "Personas", Path: routePersonas},
-				{Label: "Sessions", Path: routeSessions},
+				{Label: "Chats", Path: routeChats},
 				{Label: "Memory", Path: routeMemory},
 				{Label: "Automation", Path: routeAutomation},
 			},
@@ -1079,6 +1105,7 @@ func adminNavSections(active adminView) []adminNavSection {
 		{
 			Label: "Diagnostics",
 			Items: []adminNavItem{
+				{Label: "Runtime Sessions", Path: routeSessions},
 				{Label: "Debug", Path: routeDebug},
 				{Label: "Browser", Path: routeBrowser},
 			},
@@ -1103,12 +1130,14 @@ func pageTitle(view adminView) string {
 		return "Identity"
 	case viewPersonas:
 		return "Personas"
+	case viewChats:
+		return "Chats"
 	case viewMemory:
 		return "Memory"
 	case viewAutomation:
 		return "Automation"
 	case viewSessions:
-		return "Sessions"
+		return "Runtime Sessions"
 	case viewDebug:
 		return "Debug"
 	case viewBrowser:
@@ -1128,6 +1157,8 @@ func pageSummary(view adminView) string {
 		return pageSummaryIdentity
 	case viewPersonas:
 		return pageSummaryPersonas
+	case viewChats:
+		return pageSummaryChats
 	case viewMemory:
 		return "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory."
 	case viewAutomation:
@@ -1330,6 +1361,8 @@ func navPath(raw string) string {
 		return routeIdentity
 	case routePersonas:
 		return routePersonas
+	case routeChats:
+		return routeChats
 	case routeMemory:
 		return routeMemory
 	case routeAutomation:
@@ -1357,6 +1390,8 @@ func navViewForPath(path string) adminView {
 		return viewIdentity
 	case routePersonas:
 		return viewPersonas
+	case routeChats:
+		return viewChats
 	case routeMemory:
 		return viewMemory
 	case routeAutomation:
@@ -2057,9 +2092,14 @@ var adminPage = template.Must(
 		"personaDisplayName":         personaDisplayName,
 		"personaKindLabel":           personaKindLabel,
 		"personaSummaryText":         personaSummaryText,
+		"chatDisplayLabel":           chatDisplayLabel,
+		"chatKnownUsers":             chatKnownUsers,
+		"chatNameSourceLabel":        chatNameSourceLabel,
+		"chatOverrideSample":         chatOverrideSample,
 	}).Parse(
 		adminPageHTML +
 			promptsPageTemplateHTML +
+			chatsPageTemplateHTML +
 			identityPageTemplateHTML +
 			personasPageTemplateHTML,
 	),
@@ -2260,8 +2300,14 @@ const adminPageHTML = `<!doctype html>
     .meta dt {
       color: var(--muted);
       font-weight: 700;
+      min-width: 0;
     }
-    .meta dd { margin: 0; }
+    .meta dd {
+      margin: 0;
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
     a { color: var(--accent); }
     code {
       background: rgba(15, 111, 97, 0.08);
@@ -2294,8 +2340,11 @@ const adminPageHTML = `<!doctype html>
     th, td {
       text-align: left;
       vertical-align: top;
+      min-width: 0;
       padding: 12px 10px;
       border-top: 1px solid var(--line);
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     th {
       color: var(--muted);
@@ -2761,6 +2810,65 @@ const adminPageHTML = `<!doctype html>
       color: var(--muted);
       font-weight: 700;
       white-space: nowrap;
+    }
+    .chat-list {
+      display: grid;
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .chat-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 16px 18px;
+      background: rgba(255, 253, 248, 0.72);
+    }
+    .chat-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .chat-card-copy {
+      min-width: 0;
+      flex: 1 1 280px;
+    }
+    .chat-card-title {
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .chat-card-kind {
+      margin-top: 6px;
+      color: var(--muted);
+    }
+    .chat-card-link {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+    .chat-card-grid {
+      display: grid;
+      gap: 10px 18px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      margin-top: 14px;
+    }
+    .chat-card-meta {
+      min-width: 0;
+    }
+    .chat-card-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .chat-card-value {
+      margin-top: 6px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     @media (max-width: 760px) {
       .app-shell {
@@ -3475,6 +3583,10 @@ const adminPageHTML = `<!doctype html>
 
     {{if eq .View "personas"}}
     {{template "personasPage" .}}
+    {{end}}
+
+    {{if eq .View "chats"}}
+    {{template "chatsPage" .}}
     {{end}}
 
     {{if eq .View "memory"}}
