@@ -2213,6 +2213,23 @@ func TestChatsHelpers(t *testing.T) {
 	require.True(t, merged.OverridesGlobal)
 	require.Len(t, merged.Transcript, 1)
 
+	merged = mergeChatView(
+		ChatView{BaseSessionID: "wecom:dm:alice"},
+		ChatView{
+			BaseSessionID:    "wecom:dm:alice",
+			DisplayLabel:     "Alice",
+			Kind:             "dm",
+			KindLabel:        "Direct message",
+			CurrentSessionID: "sess-2",
+			RecallSessionID:  "sess-1",
+		},
+	)
+	require.Equal(t, "Alice", merged.DisplayLabel)
+	require.Equal(t, "dm", merged.Kind)
+	require.Equal(t, "Direct message", merged.KindLabel)
+	require.Equal(t, "sess-2", merged.CurrentSessionID)
+	require.Equal(t, "sess-1", merged.RecallSessionID)
+
 	selected, detailErr = resolveSelectedChat(
 		status,
 		chats,

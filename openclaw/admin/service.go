@@ -1141,6 +1141,25 @@ func mergeChatView(
 	detail ChatView,
 ) ChatView {
 	merged := base
+	if strings.TrimSpace(merged.DisplayLabel) == "" {
+		merged.DisplayLabel = strings.TrimSpace(detail.DisplayLabel)
+	}
+	if strings.TrimSpace(merged.Kind) == "" {
+		merged.Kind = strings.TrimSpace(detail.Kind)
+	}
+	if strings.TrimSpace(merged.KindLabel) == "" {
+		merged.KindLabel = strings.TrimSpace(detail.KindLabel)
+	}
+	if strings.TrimSpace(merged.CurrentSessionID) == "" {
+		merged.CurrentSessionID = strings.TrimSpace(
+			detail.CurrentSessionID,
+		)
+	}
+	if strings.TrimSpace(merged.RecallSessionID) == "" {
+		merged.RecallSessionID = strings.TrimSpace(
+			detail.RecallSessionID,
+		)
+	}
 	if !detail.LastActivity.IsZero() {
 		merged.LastActivity = detail.LastActivity
 	}
