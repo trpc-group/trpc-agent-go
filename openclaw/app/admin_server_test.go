@@ -12,8 +12,10 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +31,10 @@ import (
 
 type transcriptErrorSessionService struct {
 	session.Service
-	getErr error
+	getErr     error
+	getNil     bool
+	listErr    error
+	listByUser map[string][]*session.Session
 }
 
 func (s transcriptErrorSessionService) GetSession(
@@ -40,7 +45,24 @@ func (s transcriptErrorSessionService) GetSession(
 	if s.getErr != nil {
 		return nil, s.getErr
 	}
+	if s.getNil {
+		return nil, nil
+	}
 	return s.Service.GetSession(ctx, key, options...)
+}
+
+func (s transcriptErrorSessionService) ListSessions(
+	ctx context.Context,
+	userKey session.UserKey,
+	options ...session.Option,
+) ([]*session.Session, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	if s.listByUser != nil {
+		return s.listByUser[userKey.UserID], nil
+	}
+	return s.Service.ListSessions(ctx, userKey, options...)
 }
 
 func TestOpenAdminBinding_AutoPortFallback(t *testing.T) {
@@ -418,6 +440,10 @@ func TestAdminIdentityHelpers(t *testing.T) {
 	chatsStatus, err := nilChats.ChatsStatus()
 	require.NoError(t, err)
 	require.Equal(t, admin.ChatsStatus{}, chatsStatus)
+
+	_, err = nilChats.ChatDetail("chat-scope")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "chat provider is unavailable")
 }
 
 func TestAdminIdentityProvider_FallbackAndErrors(t *testing.T) {
@@ -455,4 +481,453 @@ func TestAdminIdentityProvider_FallbackAndErrors(t *testing.T) {
 	chats := buildAdminChatsProvider(badIdentity, "openclaw", nil)
 	_, err = chats.ChatsStatus()
 	require.Error(t, err)
+}
+
+func TestAdminChatsProvider_ViewsAndTranscriptHelpers(t *testing.T) {
+	t.Parallel()
+
+	baseSvc := sessioninmemory.NewSessionService()
+	now := time.Unix(1700000200, 0).UTC()
+	tie := time.Unix(1700000100, 0).UTC()
+
+	wrapper := transcriptErrorSessionService{
+		Service: baseSvc,
+		listByUser: map[string][]*session.Session{
+			"chat-new": {{
+				ID:        "chat-new:sess",
+				UserID:    "chat-new",
+				UpdatedAt: now,
+			}},
+			"chat-a": {{
+				ID:        "chat-a:sess",
+				UserID:    "chat-a",
+				CreatedAt: tie,
+			}},
+			"chat-b": {{
+				ID:        "chat-b:sess",
+				UserID:    "chat-b",
+				CreatedAt: tie,
+			}},
+			"chat-zero": {{
+				ID:     "chat-zero:sess",
+				UserID: "chat-zero",
+			}},
+			"chat-filter": {
+				nil,
+				{
+					UserID:    "chat-filter",
+					UpdatedAt: now,
+				},
+				{
+					ID:        "cron:job-1:123",
+					UserID:    "chat-filter",
+					UpdatedAt: now,
+				},
+				{
+					ID:        "chat-filter:old",
+					UserID:    "chat-filter",
+					CreatedAt: tie,
+				},
+				{
+					ID:        "chat-filter:new",
+					UserID:    "chat-filter",
+					UpdatedAt: now,
+				},
+			},
+			"chat-skip": {{
+				ID:     "cron:run:demo",
+				UserID: "chat-skip",
+			}},
+		},
+	}
+
+	ctx := context.Background()
+	for _, scope := range []string{
+		"chat-zero",
+		"chat-b",
+		"chat-new",
+		"chat-a",
+		"chat-skip",
+	} {
+		require.NoError(
+			t,
+			conversationscope.RememberIndexedStorageScope(
+				ctx,
+				wrapper,
+				"openclaw",
+				scope,
+			),
+		)
+	}
+
+	provider := buildAdminChatsProvider(
+		buildAdminIdentityProvider(t.TempDir(), "runtime-product"),
+		"openclaw",
+		wrapper,
+	)
+	require.NotNil(t, provider)
+
+	chats, err := provider.chatViews("Nora", adminDefaultNameSourceFile)
+	require.NoError(t, err)
+	require.Len(t, chats, 4)
+	require.Equal(t, "chat-new", chats[0].BaseSessionID)
+	require.Equal(t, "chat-a", chats[1].BaseSessionID)
+	require.Equal(t, "chat-b", chats[2].BaseSessionID)
+	require.Equal(t, "chat-zero", chats[3].BaseSessionID)
+	require.Equal(t, "Nora", chats[0].EffectiveAssistant)
+	require.Equal(t, adminChatKindTracked, chats[0].Kind)
+	require.Equal(t, adminChatKindLabel, chats[0].KindLabel)
+
+	emptySessions, err := provider.chatSessions("")
+	require.NoError(t, err)
+	require.Nil(t, emptySessions)
+
+	provider = buildAdminChatsProvider(
+		buildAdminIdentityProvider(t.TempDir(), "runtime-product"),
+		"",
+		wrapper,
+	)
+	emptySessions, err = provider.chatSessions("chat-new")
+	require.NoError(t, err)
+	require.Nil(t, emptySessions)
+
+	filteredSessions, err := buildAdminChatsProvider(
+		buildAdminIdentityProvider(t.TempDir(), "runtime-product"),
+		"openclaw",
+		wrapper,
+	).chatSessions("chat-filter")
+	require.NoError(t, err)
+	require.Len(t, filteredSessions, 2)
+	require.Equal(t, "chat-filter:new", filteredSessions[0].ID)
+	require.Equal(t, "chat-filter:old", filteredSessions[1].ID)
+
+	errorProvider := buildAdminChatsProvider(
+		buildAdminIdentityProvider(t.TempDir(), "runtime-product"),
+		"openclaw",
+		transcriptErrorSessionService{
+			Service: baseSvc,
+			listErr: errors.New("list boom"),
+		},
+	)
+	_, err = errorProvider.chatSessions("chat-new")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "list boom")
+	_, err = errorProvider.chatViews("Nora", adminDefaultNameSourceFile)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "list boom")
+	_, err = provider.ChatDetail("")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "chat_id is required")
+	_, err = buildAdminChatsProvider(
+		buildAdminIdentityProvider(t.TempDir(), "runtime-product"),
+		"openclaw",
+		baseSvc,
+	).ChatDetail("chat-missing")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tracked chat not found")
+
+	emptyViews, err := buildAdminChatsProvider(
+		buildAdminIdentityProvider(t.TempDir(), "runtime-product"),
+		"openclaw",
+		baseSvc,
+	).chatViews("Nora", adminDefaultNameSourceFile)
+	require.NoError(t, err)
+	require.Nil(t, emptyViews)
+
+	chat := buildAdminTrackedChatView(
+		"chat-empty",
+		"Nora",
+		adminDefaultNameSourceFile,
+		nil,
+	)
+	require.Equal(t, "chat-empty", chat.BaseSessionID)
+	require.Empty(t, chat.CurrentSessionID)
+	require.True(t, chat.LastActivity.IsZero())
+	require.Empty(t, chat.History)
+
+	require.True(t, sessionActivityTime(nil).IsZero())
+	require.Equal(t, time.Time{}, timeZero())
+}
+
+func TestAdminChatTranscriptHelpers_EdgeCases(t *testing.T) {
+	t.Parallel()
+
+	baseSvc := sessioninmemory.NewSessionService()
+	ctx := context.Background()
+	const (
+		appName = "openclaw"
+		baseID  = "chat-scope"
+	)
+
+	current, err := baseSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   appName,
+			UserID:    baseID,
+			SessionID: "sess-current",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	current.CreatedAt = time.Unix(1700000000, 0).UTC()
+	current.UpdatedAt = time.Unix(1700000300, 0).UTC()
+
+	longText := strings.Repeat("x", adminChatTranscriptTextLimit+5)
+	for i := 0; i < adminChatTranscriptTurnLimit+1; i++ {
+		evt := event.NewResponseEvent(
+			"inv",
+			"user",
+			&model.Response{
+				Choices: []model.Choice{{
+					Message: model.NewUserMessage(
+						fmt.Sprintf("turn-%02d", i),
+					),
+				}},
+			},
+		)
+		evt.Timestamp = time.Unix(int64(1700000300+i), 0).UTC()
+		if i == adminChatTranscriptTurnLimit {
+			evt = event.NewResponseEvent(
+				"inv",
+				"user",
+				&model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewUserMessage(longText),
+					}},
+				},
+			)
+			evt.Timestamp = time.Unix(1700000500, 0).UTC()
+		}
+		require.NoError(t, baseSvc.AppendEvent(ctx, current, evt))
+	}
+
+	middle, err := baseSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   appName,
+			UserID:    baseID,
+			SessionID: "sess-middle",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	middle.CreatedAt = time.Unix(1700000100, 0).UTC()
+	middle.UpdatedAt = time.Unix(1700000200, 0).UTC()
+	require.NoError(
+		t,
+		baseSvc.AppendEvent(
+			ctx,
+			middle,
+			event.NewResponseEvent(
+				"inv",
+				"user",
+				&model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewUserMessage("middle"),
+					}},
+				},
+			),
+		),
+	)
+
+	older, err := baseSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   appName,
+			UserID:    baseID,
+			SessionID: "sess-older",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	older.CreatedAt = time.Unix(1700000050, 0).UTC()
+	require.NoError(
+		t,
+		baseSvc.AppendEvent(
+			ctx,
+			older,
+			event.NewResponseEvent(
+				"inv",
+				"user",
+				&model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewUserMessage("older"),
+					}},
+				},
+			),
+		),
+	)
+
+	oldest, err := baseSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   appName,
+			UserID:    baseID,
+			SessionID: "sess-oldest",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	oldest.CreatedAt = time.Unix(1700000001, 0).UTC()
+	require.NoError(
+		t,
+		baseSvc.AppendEvent(
+			ctx,
+			oldest,
+			event.NewResponseEvent(
+				"inv",
+				"user",
+				&model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewUserMessage("oldest"),
+					}},
+				},
+			),
+		),
+	)
+
+	sessions := []*session.Session{current, middle, older, oldest}
+
+	transcript, err := buildAdminChatTranscript("", baseSvc, baseID, sessions)
+	require.NoError(t, err)
+	require.Nil(t, transcript)
+
+	transcript, err = buildAdminChatTranscript(
+		appName,
+		nil,
+		baseID,
+		sessions,
+	)
+	require.NoError(t, err)
+	require.Nil(t, transcript)
+
+	transcript, err = buildAdminChatTranscript(
+		appName,
+		baseSvc,
+		"",
+		sessions,
+	)
+	require.NoError(t, err)
+	require.Nil(t, transcript)
+
+	transcript, err = buildAdminChatTranscript(
+		appName,
+		baseSvc,
+		baseID,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Nil(t, transcript)
+
+	transcript, err = buildAdminChatTranscript(
+		appName,
+		baseSvc,
+		baseID,
+		sessions,
+	)
+	require.NoError(t, err)
+	require.Len(t, transcript, adminChatTranscriptSessionLimit)
+	require.True(t, transcript[0].Current)
+	require.True(t, transcript[0].Truncated)
+	require.Len(t, transcript[0].Turns, adminChatTranscriptTurnLimit)
+	require.Equal(
+		t,
+		"sess-current",
+		transcript[0].SessionID,
+	)
+	require.True(
+		t,
+		strings.HasSuffix(
+			transcript[0].Turns[len(transcript[0].Turns)-1].Text,
+			"...",
+		),
+	)
+	require.Equal(t, "sess-middle", transcript[1].SessionID)
+	require.Equal(t, "sess-older", transcript[2].SessionID)
+
+	view, ok, err := buildAdminChatTranscriptView(
+		appName,
+		baseSvc,
+		baseID,
+		"sess-current",
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, admin.ChatTranscriptView{}, view)
+
+	view, ok, err = buildAdminChatTranscriptView(
+		appName,
+		baseSvc,
+		baseID,
+		"sess-current",
+		&session.Session{},
+	)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	nilSvc := transcriptErrorSessionService{
+		Service: baseSvc,
+		getNil:  true,
+	}
+	_, ok, err = buildAdminChatTranscriptView(
+		appName,
+		nilSvc,
+		baseID,
+		"sess-current",
+		&session.Session{ID: "sess-missing"},
+	)
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Contains(t, err.Error(), "session not found")
+
+	blank, err := baseSvc.CreateSession(
+		ctx,
+		session.Key{
+			AppName:   appName,
+			UserID:    baseID,
+			SessionID: "sess-blank",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	blank.CreatedAt = time.Unix(1700000400, 0).UTC()
+	require.NoError(
+		t,
+		baseSvc.AppendEvent(
+			ctx,
+			blank,
+			event.NewResponseEvent(
+				"inv",
+				"user",
+				&model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewUserMessage(" "),
+					}},
+				},
+			),
+		),
+	)
+
+	blankView, ok, err := buildAdminChatTranscriptView(
+		appName,
+		baseSvc,
+		baseID,
+		"sess-current",
+		blank,
+	)
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, admin.ChatTranscriptView{}, blankView)
+
+	require.Empty(t, trimAdminChatTranscriptText("   "))
+	require.Equal(
+		t,
+		"hello",
+		trimAdminChatTranscriptText("  hello  "),
+	)
+	require.True(
+		t,
+		strings.HasSuffix(trimAdminChatTranscriptText(longText), "..."),
+	)
 }
