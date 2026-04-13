@@ -166,6 +166,38 @@ func (s *Service) Do() error { return nil }
 	}
 }
 
+func TestReadFromDirectoryIncludesNestedModules(t *testing.T) {
+	tmpDir := t.TempDir()
+	writeTestFile(t, filepath.Join(tmpDir, "go.mod"), "module example.com/root\n\ngo 1.21\n")
+	writeTestFile(t, filepath.Join(tmpDir, "root.go"), `package root
+
+func Root() {}
+`)
+
+	nestedDir := filepath.Join(tmpDir, "examples", "demo")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("failed to mkdir nested dir: %v", err)
+	}
+	writeTestFile(t, filepath.Join(nestedDir, "go.mod"), "module example.com/nested\n\ngo 1.21\n")
+	writeTestFile(t, filepath.Join(nestedDir, "nested.go"), `package demo
+
+func Nested() {}
+`)
+
+	r := New().(*Reader)
+	docs, err := r.ReadFromDirectory(tmpDir)
+	if err != nil {
+		t.Fatalf("ReadFromDirectory() error = %v", err)
+	}
+
+	if findDocByFullName(t, docs, "example.com/root.Root") == nil {
+		t.Fatal("expected root module document")
+	}
+	if findDocByFullName(t, docs, "example.com/nested.Nested") == nil {
+		t.Fatal("expected nested module document")
+	}
+}
+
 func findDocByFullName(t *testing.T, docs []*document.Document, fullName string) *document.Document {
 	t.Helper()
 	for _, doc := range docs {

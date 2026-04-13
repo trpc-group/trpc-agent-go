@@ -141,11 +141,6 @@ func (p *Parser) ParseDirectory(dirPath string) (*codeast.Result, error) {
 			return err
 		}
 		if info.IsDir() {
-			if path != absDir {
-				if _, err := os.Stat(filepath.Join(path, "go.mod")); err == nil {
-					return filepath.SkipDir
-				}
-			}
 			return nil
 		}
 		if !info.Mode().IsRegular() || filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
@@ -178,11 +173,7 @@ func (p *Parser) ParseDirectory(dirPath string) (*codeast.Result, error) {
 	var allNodes []*codeast.Node
 	sort.Strings(orderedFiles)
 	for dir, files := range pkgFiles {
-		relPath, _ := filepath.Rel(absDir, dir)
-		pkgID := modulePath
-		if relPath != "." && relPath != "" {
-			pkgID = modulePath + "/" + filepath.ToSlash(relPath)
-		}
+		pkgID := modulePathForDir(absDir, dir)
 		pkg := &parsedPackage{ID: pkgID, Name: pkgNames[dir], Syntax: files, Fset: fset}
 		nodes, err := p.extractor.Extract(&extractInput{pkg: pkg, fset: fset})
 		if err != nil {
@@ -217,6 +208,20 @@ func (p *Parser) ParseDirectory(dirPath string) (*codeast.Result, error) {
 		Nodes: allNodes,
 		Edges: []*codeast.Edge{},
 	}, nil
+}
+
+func modulePathForDir(baseDir, dir string) string {
+	moduleDir, modulePath := findNearestGoModule(dir)
+	if modulePath == "" {
+		modulePath = filepath.Base(baseDir)
+		moduleDir = baseDir
+	}
+
+	relPath, err := filepath.Rel(moduleDir, dir)
+	if err != nil || relPath == "." || relPath == "" {
+		return modulePath
+	}
+	return modulePath + "/" + filepath.ToSlash(relPath)
 }
 
 // ParseFileInfo extracts file-level metadata without requiring a full semantic extraction result.
@@ -262,9 +267,6 @@ func BuildNodeEmbeddingText(node *codeast.Node) string {
 		"signature": node.Signature,
 		"comment":   comment,
 	}
-	if len(node.Imports) > 0 {
-		payload["imports"] = strings.Join(node.Imports, ", ")
-	}
 
 	jsonBytes, _ := json.Marshal(payload)
 	return string(jsonBytes)
@@ -281,9 +283,6 @@ func BuildFileEmbeddingText(content, name, packagePath string, imports []string)
 		"file_path": name,
 		"comment":   "",
 		"signature": "",
-	}
-	if len(imports) > 0 {
-		payload["imports"] = strings.Join(imports, ", ")
 	}
 	if content != "" {
 		payload["code"] = content

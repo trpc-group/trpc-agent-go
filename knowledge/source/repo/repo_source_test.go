@@ -69,8 +69,18 @@ func TestReadDocumentsSkipsGeneratedFiles(t *testing.T) {
 	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
 	writeRepoFile(t, filepath.Join(repoRoot, "keep.go"), "package demo\n\nfunc Keep() {}\n")
 	writeRepoFile(t, filepath.Join(repoRoot, "skip.pb.go"), "package demo\n\nfunc Skip() {}\n")
+	writeRepoFile(t, filepath.Join(repoRoot, "api.proto"), `syntax = "proto3";
+package demo;
 
-	src := New([]string{repoRoot})
+message KeepProto { string name = 1; }
+`)
+	writeRepoFile(t, filepath.Join(repoRoot, "api.pb.proto"), `syntax = "proto3";
+package demo;
+
+message SkipProto { string name = 1; }
+`)
+
+	src := New([]string{repoRoot}, WithSkipSuffixes([]string{".pb.go", ".pb.proto", ".trpc.go", "_mock.go"}))
 	docs, err := src.ReadDocuments(context.Background())
 	if err != nil {
 		t.Fatalf("ReadDocuments() error = %v", err)
@@ -78,6 +88,28 @@ func TestReadDocumentsSkipsGeneratedFiles(t *testing.T) {
 	for _, doc := range docs {
 		if doc.Metadata["trpc_ast_file_path"] == "skip.pb.go" {
 			t.Fatal("generated file should have been skipped")
+		}
+		if doc.Metadata["trpc_ast_file_path"] == "api.pb.proto" {
+			t.Fatal("generated proto file should have been skipped")
+		}
+	}
+}
+
+func TestReadDocumentsParserTaskRespectsSubdirFilter(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(repoRoot, "service.go"), "package demo\n\ntype Root struct{}\n")
+	writeRepoFile(t, filepath.Join(repoRoot, "internal", "api.go"), "package internal\n\ntype Internal struct{}\n")
+
+	src := New([]string{repoRoot}, WithSubdir("internal"))
+	docs, err := src.ReadDocuments(context.Background())
+	if err != nil {
+		t.Fatalf("ReadDocuments() error = %v", err)
+	}
+
+	for _, doc := range docs {
+		if doc.Metadata["trpc_ast_file_path"] == "service.go" {
+			t.Fatal("root-level Go entity should not be included when subdir=internal")
 		}
 	}
 }
@@ -101,17 +133,81 @@ func (s *Service) Do() error { return nil }
 	}
 
 	var foundService, foundMethod bool
+	var serviceCount, methodCount int
 	for _, doc := range docs {
 		if doc.Metadata["trpc_ast_full_name"] == "example.com/demo.Service" {
 			foundService = true
+			serviceCount++
 		}
 		if doc.Metadata["trpc_ast_full_name"] == "example.com/demo.Service.Do" {
 			foundMethod = true
+			methodCount++
+			assertEqual(t, doc.Metadata["trpc_ast_file_path"], "method.go")
 		}
 	}
 	if !foundService || !foundMethod {
 		t.Fatalf("expected both service and method docs, got service=%v method=%v", foundService, foundMethod)
 	}
+	assertEqual(t, serviceCount, 1)
+	assertEqual(t, methodCount, 1)
+}
+
+func TestReadDocumentsRejectsMultipleRepositoriesPerSource(t *testing.T) {
+	repoRoot := t.TempDir()
+	src := New(nil, WithRepository(
+		Repository{Dir: repoRoot},
+		Repository{URL: "https://example.com/demo.git"},
+	))
+
+	_, err := src.ReadDocuments(context.Background())
+	if err == nil {
+		t.Fatal("expected error for multiple repositories per source")
+	}
+}
+
+func TestResolvedInputsUsesStructuredOptions(t *testing.T) {
+	src := New(nil, WithRepoURLs("https://example.com/demo.git"), WithDirs("/tmp/demo"))
+	inputs := src.resolvedInputs()
+	if len(inputs) != 2 {
+		t.Fatalf("expected 2 inputs, got %d", len(inputs))
+	}
+	assertEqual(t, inputs[0], "https://example.com/demo.git")
+	assertEqual(t, inputs[1], "/tmp/demo")
+}
+
+func TestFirstNonEmpty(t *testing.T) {
+	assertEqual(t, firstNonEmpty("commit-sha", "v1.0.0", "main"), "commit-sha")
+	assertEqual(t, firstNonEmpty("", "v1.0.0", "main"), "v1.0.0")
+	assertEqual(t, firstNonEmpty("", "", "main"), "main")
+	assertEqual(t, firstNonEmpty("", "", ""), "")
+}
+
+func TestResolvedRepositoriesUsesStructuredRepositories(t *testing.T) {
+	src := New(nil, WithRepository(
+		Repository{URL: "https://example.com/demo.git", Branch: "main"},
+		Repository{Dir: "/tmp/demo", Tag: "v1.0.0"},
+	))
+	repositories := src.resolvedRepositories()
+	if len(repositories) != 2 {
+		t.Fatalf("expected 2 repositories, got %d", len(repositories))
+	}
+	assertEqual(t, repositories[0].URL, "https://example.com/demo.git")
+	assertEqual(t, repositories[0].Branch, "main")
+	assertEqual(t, repositories[1].Dir, "/tmp/demo")
+	assertEqual(t, repositories[1].Tag, "v1.0.0")
+}
+
+func TestWithFileExtensionsCopiesCallerSlice(t *testing.T) {
+	extensions := []string{".go", ".proto"}
+	src := New(nil, WithFileExtensions(extensions))
+
+	extensions[0] = ".md"
+
+	if got, want := len(src.fileExtensions), 2; got != want {
+		t.Fatalf("fileExtensions length = %d, want %d", got, want)
+	}
+	assertEqual(t, src.fileExtensions[0], ".go")
+	assertEqual(t, src.fileExtensions[1], ".proto")
 }
 
 func assertEqual(t *testing.T, got, want any) {
@@ -123,6 +219,9 @@ func assertEqual(t *testing.T, got, want any) {
 
 func writeRepoFile(t *testing.T, path, content string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("failed to create parent directory for %s: %v", path, err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write %s: %v", path, err)
 	}

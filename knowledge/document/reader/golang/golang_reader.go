@@ -220,7 +220,6 @@ func (r *Reader) createFileDocumentFromInfo(content, name string, baseMetadata m
 	}
 
 	doc.Metadata["trpc_ast_type"] = "file"
-	doc.Metadata["trpc_ast_id"] = name
 	doc.Metadata["trpc_ast_name"] = name
 	doc.Metadata["trpc_ast_full_name"] = name
 	doc.Metadata["trpc_ast_language"] = "go"

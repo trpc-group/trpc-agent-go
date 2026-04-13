@@ -185,7 +185,6 @@ func (r *Reader) createFileDocument(content, name string, baseMetadata map[strin
 		doc.Metadata[codeast.TrpcAstMetaPrefix+k] = v
 	}
 
-	doc.Metadata[codeast.TrpcAstMetaPrefix+"id"] = name
 	doc.Metadata[codeast.TrpcAstMetaPrefix+"type"] = "file"
 	doc.Metadata[codeast.TrpcAstMetaPrefix+"name"] = name
 	doc.Metadata[codeast.TrpcAstMetaPrefix+"full_name"] = name

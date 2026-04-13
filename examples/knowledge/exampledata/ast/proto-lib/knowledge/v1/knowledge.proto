@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package knowledge.v1;
+
+option go_package = "example.com/ast-demo/proto/knowledge/v1;knowledgev1";
+
+message SearchRequest {
+  string query = 1;
+  int32 limit = 2;
+}
+
+message SearchResult {
+  string id = 1;
+  string snippet = 2;
+}
+
+message SearchResponse {
+  repeated SearchResult results = 1;
+}
+
+service KnowledgeService {
+  rpc Search(SearchRequest) returns (SearchResponse);
+}

@@ -11,14 +11,18 @@
 package repo
 
 import (
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 // Option represents a functional option for configuring repository sources.
 type Option func(*Source)
+
+// WithRepository sets structured repository descriptors explicitly.
+func WithRepository(repositories ...Repository) Option {
+	return func(s *Source) {
+		s.repositories = append([]Repository(nil), repositories...)
+	}
+}
 
 // WithName sets the source name.
 func WithName(name string) Option {
@@ -53,6 +57,13 @@ func WithBranch(branch string) Option {
 	}
 }
 
+// WithTag sets the git tag to checkout when using a git URL.
+func WithTag(tag string) Option {
+	return func(s *Source) {
+		s.tag = tag
+	}
+}
+
 // WithCommit sets the git commit to checkout when using a git URL.
 func WithCommit(commit string) Option {
 	return func(s *Source) {
@@ -74,6 +85,20 @@ func WithRepoURL(repoURL string) Option {
 	}
 }
 
+// WithDirs sets local repository directories explicitly.
+func WithDirs(dirs ...string) Option {
+	return func(s *Source) {
+		s.dirs = append([]string(nil), dirs...)
+	}
+}
+
+// WithRepoURLs sets remote Git repository URLs explicitly.
+func WithRepoURLs(urls ...string) Option {
+	return func(s *Source) {
+		s.repoURLs = append([]string(nil), urls...)
+	}
+}
+
 // WithSubdir limits processing to a subdirectory under the repository root.
 func WithSubdir(subdir string) Option {
 	return func(s *Source) {
@@ -81,17 +106,10 @@ func WithSubdir(subdir string) Option {
 	}
 }
 
-// WithRecursive sets whether to process subdirectories recursively.
-func WithRecursive(recursive bool) Option {
-	return func(s *Source) {
-		s.recursive = recursive
-	}
-}
-
 // WithFileExtensions limits processing to the given file extensions.
 func WithFileExtensions(extensions []string) Option {
 	return func(s *Source) {
-		s.fileExtensions = extensions
+		s.fileExtensions = append([]string(nil), extensions...)
 	}
 }
 
@@ -106,41 +124,6 @@ func WithSkipDirs(dirs []string) Option {
 func WithSkipSuffixes(suffixes []string) Option {
 	return func(s *Source) {
 		s.skipSuffixes = append([]string(nil), suffixes...)
-	}
-}
-
-// WithFileReaderType overrides automatic file type detection.
-func WithFileReaderType(fileType source.FileReaderType) Option {
-	return func(s *Source) {
-		s.fileReaderType = fileType
-	}
-}
-
-// WithCustomChunkingStrategy sets a custom chunking strategy.
-func WithCustomChunkingStrategy(strategy chunking.Strategy) Option {
-	return func(s *Source) {
-		s.customChunkingStrategy = strategy
-	}
-}
-
-// WithChunkSize sets the chunk size for readers.
-func WithChunkSize(size int) Option {
-	return func(s *Source) {
-		s.chunkSize = size
-	}
-}
-
-// WithChunkOverlap sets the chunk overlap for readers.
-func WithChunkOverlap(overlap int) Option {
-	return func(s *Source) {
-		s.chunkOverlap = overlap
-	}
-}
-
-// WithOCRExtractor sets the OCR extractor.
-func WithOCRExtractor(extractor ocr.Extractor) Option {
-	return func(s *Source) {
-		s.ocrExtractor = extractor
 	}
 }
 

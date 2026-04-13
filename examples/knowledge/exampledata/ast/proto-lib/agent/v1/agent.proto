@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package agent.v1;
+
+option go_package = "example.com/ast-demo/proto/agent/v1;agentv1";
+
+message AgentRequest {
+  string query = 1;
+  string session_id = 2;
+}
+
+message AgentReply {
+  string answer = 1;
+}
+
+service AgentService {
+  rpc Ask(AgentRequest) returns (AgentReply);
+}

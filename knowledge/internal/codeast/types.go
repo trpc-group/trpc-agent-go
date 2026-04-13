@@ -205,7 +205,6 @@ func NodeToDocumentPayload(node *Node, opts NodeDocumentPayloadOptions) *Documen
 	}
 
 	metadata[TrpcAstMetaPrefix+"type"] = typeValue
-	metadata[TrpcAstMetaPrefix+"id"] = node.ID
 	metadata[TrpcAstMetaPrefix+"name"] = node.Name
 	metadata[TrpcAstMetaPrefix+"full_name"] = node.FullName
 	metadata[TrpcAstMetaPrefix+"language"] = string(node.Language)
