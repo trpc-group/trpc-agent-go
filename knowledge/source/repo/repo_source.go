@@ -257,6 +257,15 @@ type repoInfo struct {
 	branch string
 }
 
+type checkoutTargetKind string
+
+const (
+	checkoutTargetDefault checkoutTargetKind = "default"
+	checkoutTargetBranch  checkoutTargetKind = "branch"
+	checkoutTargetTag     checkoutTargetKind = "tag"
+	checkoutTargetCommit  checkoutTargetKind = "commit"
+)
+
 type directoryReader interface {
 	ReadFromDirectory(dirPath string) ([]*document.Document, error)
 }
@@ -280,16 +289,10 @@ func (s *Source) resolveRepository(ctx context.Context, repository Repository) (
 			return "", nil, nil, fmt.Errorf("failed to create temp dir: %w", err)
 		}
 		cleanup := func() { _ = os.RemoveAll(tmpDir) }
-		if err := runGit(ctx, "", "clone", "--depth", "1", repository.URL, tmpDir); err != nil {
+		target, err := cloneRemoteRepository(ctx, repository, tmpDir)
+		if err != nil {
 			cleanup()
-			return "", nil, nil, fmt.Errorf("failed to clone repo: %w", err)
-		}
-		target := firstNonEmpty(repository.Commit, repository.Tag, repository.Branch)
-		if target != "" {
-			if err := runGit(ctx, tmpDir, "checkout", target); err != nil {
-				cleanup()
-				return "", nil, nil, fmt.Errorf("failed to checkout %s: %w", target, err)
-			}
+			return "", nil, nil, err
 		}
 		info := &repoInfo{
 			name:   chooseRepoName(repository.RepoName, repository.URL, tmpDir),
@@ -316,6 +319,46 @@ func (s *Source) resolveRepository(ctx context.Context, repository Repository) (
 		branch: firstNonEmpty(repository.Commit, repository.Tag, repository.Branch),
 	}
 	return absPath, info, nil, nil
+}
+
+func resolveCheckoutTarget(repository Repository) (checkoutTargetKind, string) {
+	switch {
+	case repository.Commit != "":
+		return checkoutTargetCommit, repository.Commit
+	case repository.Tag != "":
+		return checkoutTargetTag, repository.Tag
+	case repository.Branch != "":
+		return checkoutTargetBranch, repository.Branch
+	default:
+		return checkoutTargetDefault, ""
+	}
+}
+
+func cloneRemoteRepository(ctx context.Context, repository Repository, tmpDir string) (string, error) {
+	kind, target := resolveCheckoutTarget(repository)
+	switch kind {
+	case checkoutTargetDefault:
+		if err := runGit(ctx, "", "clone", "--depth", "1", repository.URL, tmpDir); err != nil {
+			return "", fmt.Errorf("failed to clone repo: %w", err)
+		}
+	case checkoutTargetBranch, checkoutTargetTag:
+		if err := runGit(ctx, "", "clone", "--depth", "1", "--branch", target, repository.URL, tmpDir); err != nil {
+			return "", fmt.Errorf("failed to clone repo at %s %q: %w", kind, target, err)
+		}
+	case checkoutTargetCommit:
+		if err := runGit(ctx, "", "clone", "--depth", "1", repository.URL, tmpDir); err != nil {
+			return "", fmt.Errorf("failed to clone repo before checking out commit %q: %w", target, err)
+		}
+		if err := runGit(ctx, tmpDir, "fetch", "--depth", "1", "origin", target); err != nil {
+			return "", fmt.Errorf("failed to fetch commit %q: %w", target, err)
+		}
+		if err := runGit(ctx, tmpDir, "checkout", target); err != nil {
+			return "", fmt.Errorf("failed to checkout commit %q: %w", target, err)
+		}
+	default:
+		return "", fmt.Errorf("unsupported checkout target kind: %s", kind)
+	}
+	return target, nil
 }
 
 func (s *Source) getFilePaths(dirPath string) ([]string, error) {
