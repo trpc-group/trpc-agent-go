@@ -121,6 +121,11 @@ type stubPersonasProvider struct {
 	deleteCount int
 }
 
+type stubChatsProvider struct {
+	status ChatsStatus
+	err    error
+}
+
 func (p stubBMP) BrowserManagedStatus() BrowserManagedService {
 	return p.status
 }
@@ -315,6 +320,16 @@ func (p *stubPersonasProvider) SetDefaultPersona(
 	p.defaultCount++
 	p.defaultPersona = personaID
 	return p.defaultErr
+}
+
+func (p *stubChatsProvider) ChatsStatus() (
+	ChatsStatus,
+	error,
+) {
+	if p == nil {
+		return ChatsStatus{}, nil
+	}
+	return p.status, p.err
 }
 
 func (r *stubRunner) Run(
@@ -1268,6 +1283,12 @@ func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
 			summary: pageSummaryPersonas,
 		},
 		{
+			path:    routeChats,
+			view:    viewChats,
+			title:   "Chats",
+			summary: pageSummaryChats,
+		},
+		{
 			path:    routeMemory,
 			view:    viewMemory,
 			title:   "Memory",
@@ -1282,7 +1303,7 @@ func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
 		{
 			path:    routeSessions,
 			view:    viewSessions,
-			title:   "Sessions",
+			title:   "Runtime Sessions",
 			summary: "Review exec sessions, upload sessions, and recently persisted files.",
 		},
 		{
@@ -1580,7 +1601,8 @@ func TestService_IdentityPageAndActions(t *testing.T) {
 	rec := httptest.NewRecorder()
 	svc.Handler().ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Contains(t, rec.Body.String(), "Assistant Name")
+	require.Contains(t, rec.Body.String(), "Default Name")
+	require.Contains(t, rec.Body.String(), "How Naming Works")
 	require.Contains(t, rec.Body.String(), "trpc-claw")
 	require.Contains(t, rec.Body.String(), "/api/identity")
 
@@ -1609,6 +1631,361 @@ func TestService_IdentityPageAndActions(t *testing.T) {
 	require.Equal(t, http.StatusSeeOther, rec.Code)
 	require.Equal(t, 1, identity.saveCount)
 	require.Equal(t, "Nora", identity.saveName)
+}
+
+func TestService_IdentityPageShowsChatOverrides(t *testing.T) {
+	t.Parallel()
+
+	identity := &stubIdentityProvider{
+		status: IdentityStatus{
+			Enabled:        true,
+			ConfiguredName: "Claw",
+			EffectiveName:  "Claw",
+			RuntimeProduct: "trpc-claw",
+			SourcePath:     "/tmp/IDENTITY.md",
+		},
+	}
+	chats := &stubChatsProvider{
+		status: ChatsStatus{
+			Enabled:       true,
+			OverrideCount: 1,
+			Chats: []ChatView{{
+				BaseSessionID:         "wecom:dm:alice",
+				DisplayLabel:          "Direct Message / alice",
+				EffectiveAssistant:    "林妹妹",
+				ChatAssistantOverride: "林妹妹",
+				OverridesGlobal:       true,
+				LastActivity:          time.Unix(1700000000, 0),
+			}},
+		},
+	}
+	svc := New(Config{
+		Identity: identity,
+		Chats:    chats,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeIdentity, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "Chats Using Their Own Name")
+	require.Contains(t, body, "Current chat name wins")
+	require.Contains(t, body, "Direct Message / alice")
+	require.Contains(t, body, "林妹妹")
+	require.Contains(
+		t,
+		body,
+		"chats?chat_id=wecom%3adm%3aalice",
+	)
+}
+
+func TestService_IdentityPageShowsChatsError(t *testing.T) {
+	t.Parallel()
+
+	identity := &stubIdentityProvider{
+		status: IdentityStatus{
+			Enabled:        true,
+			ConfiguredName: "Claw",
+			EffectiveName:  "Claw",
+			RuntimeProduct: "trpc-claw",
+			SourcePath:     "/tmp/IDENTITY.md",
+		},
+	}
+	chats := &stubChatsProvider{
+		status: ChatsStatus{
+			Enabled: true,
+			Error:   "chat status failed",
+		},
+	}
+	svc := New(Config{
+		Identity: identity,
+		Chats:    chats,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeIdentity, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "chat status failed")
+	require.NotContains(
+		t,
+		body,
+		"No chat-specific name overrides are active.",
+	)
+}
+
+func TestService_IdentityPageClearAction(t *testing.T) {
+	t.Parallel()
+
+	identity := &stubIdentityProvider{
+		status: IdentityStatus{
+			Enabled:        true,
+			ConfiguredName: "Claw",
+			EffectiveName:  "Claw",
+			RuntimeProduct: "trpc-claw",
+			SourcePath:     "/tmp/IDENTITY.md",
+		},
+	}
+	svc := New(Config{Identity: identity})
+
+	values := url.Values{
+		formAssistantName: {""},
+		formReturnPath:    {routeIdentity},
+		formReturnTo:      {"identity-global"},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeIdentitySave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusSeeOther, rec.Code)
+	require.Equal(t, 1, identity.saveCount)
+	require.Empty(t, identity.saveName)
+	require.Contains(
+		t,
+		rec.Header().Get("Location"),
+		"Cleared+default+name.",
+	)
+}
+
+func TestService_ChatsPageAndJSON(t *testing.T) {
+	t.Parallel()
+
+	chats := &stubChatsProvider{
+		status: ChatsStatus{
+			Enabled:             true,
+			GlobalAssistantName: "Claw",
+			Chats: []ChatView{{
+				BaseSessionID:         "wecom:dm:alice",
+				DisplayLabel:          "Direct Message / alice",
+				KindLabel:             "Direct message",
+				CurrentSessionID:      "wecom:dm:alice:171",
+				RecallSessionID:       "wecom:dm:alice",
+				LastActivity:          time.Unix(1700000000, 0),
+				Epoch:                 171,
+				EffectiveAssistant:    "林妹妹",
+				ChatAssistantOverride: "林妹妹",
+				NameSource:            "Current chat name",
+				OverridesGlobal:       true,
+				PersonaLabel:          "Creative",
+				WorkspacePath:         "/repo",
+				KnownUsers: []KnownUserView{{
+					UserID: "alice",
+					Label:  "Alice Chen",
+				}},
+				History: []ChatSessionView{{
+					SessionID:    "wecom:dm:alice:171",
+					LastActivity: time.Unix(1700000000, 0),
+				}},
+			}},
+		},
+	}
+	identity := &stubIdentityProvider{
+		status: IdentityStatus{
+			Enabled:        true,
+			EffectiveName:  "Claw",
+			RuntimeProduct: "trpc-claw",
+		},
+	}
+	svc := New(Config{
+		Chats:    chats,
+		Identity: identity,
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		routeChats+"?chat_id=wecom%3Adm%3Aalice",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "Tracked Chats")
+	require.Contains(t, body, "Chat Detail")
+	require.Contains(t, body, "Direct Message / alice")
+	require.Contains(t, body, "Current chat name")
+	require.Contains(t, body, "Recent Sessions")
+	require.Contains(t, body, "<code>wecom:dm:alice</code>")
+	require.Contains(t, body, "href=\"identity#identity-global\"")
+	require.Contains(t, body, "Alice Chen (alice)")
+
+	req = httptest.NewRequest(http.MethodGet, routeChatsJSON, nil)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "\"override_count\": 1")
+	require.Contains(
+		t,
+		rec.Body.String(),
+		"\"base_session_id\": \"wecom:dm:alice\"",
+	)
+}
+
+func TestService_ChatsPageFallbackStates(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+
+	req := httptest.NewRequest(http.MethodGet, routeChats, nil)
+	rec := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(
+		t,
+		rec.Body.String(),
+		"Chat tracking is not available for this runtime.",
+	)
+
+	chats := &stubChatsProvider{
+		status: ChatsStatus{
+			Enabled: true,
+		},
+	}
+	svc = New(Config{Chats: chats})
+
+	req = httptest.NewRequest(
+		http.MethodGet,
+		routeChats+"?chat_id=missing",
+		nil,
+	)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(
+		t,
+		rec.Body.String(),
+		"No tracked chats are available yet.",
+	)
+	require.Contains(
+		t,
+		rec.Body.String(),
+		"Choose a tracked chat from the list to inspect its current",
+	)
+
+	req = httptest.NewRequest(http.MethodPost, routeChatsJSON, nil)
+	rec = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+}
+
+func TestChatsHelpers(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, selectedChatID(nil))
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		routeChats+"?chat_id=%20wecom%3Adm%3Abob%20",
+		nil,
+	)
+	require.Equal(t, "wecom:dm:bob", selectedChatID(req))
+
+	status := ChatsStatus{
+		Chats: []ChatView{
+			{
+				BaseSessionID: "wecom:dm:alice",
+				LastActivity:  time.Unix(1700000000, 0),
+			},
+			{
+				BaseSessionID:         "wecom:group:room-1",
+				DisplayLabel:          "Room 1",
+				ChatAssistantOverride: "林妹妹",
+				OverridesGlobal:       true,
+				LastActivity:          time.Unix(1700000100, 0),
+				KnownUserIDs:          []string{"alice", "bob"},
+			},
+			{
+				BaseSessionID:   "wecom:dm:bob",
+				OverridesGlobal: true,
+				LastActivity:    time.Unix(1700000050, 0),
+				NameSource:      "Custom source",
+			},
+		},
+	}
+
+	selected := selectChatView(status, "")
+	require.NotNil(t, selected)
+	require.Equal(t, "wecom:dm:alice", selected.BaseSessionID)
+
+	selected = selectChatView(status, "wecom:dm:bob")
+	require.NotNil(t, selected)
+	require.Equal(t, "wecom:dm:bob", selected.BaseSessionID)
+
+	require.Nil(t, selectChatView(status, "missing"))
+	require.Nil(t, selectChatView(ChatsStatus{}, ""))
+
+	require.Equal(
+		t,
+		"wecom:dm:alice",
+		chatDisplayLabel(ChatView{BaseSessionID: "wecom:dm:alice"}),
+	)
+	require.Equal(t, "-", chatKnownUsers(ChatView{}))
+	require.Equal(t, "alice, bob", chatKnownUsers(status.Chats[1]))
+	require.Equal(
+		t,
+		"Alice (T00010001), Bob (T00010002)",
+		chatKnownUsers(ChatView{
+			KnownUsers: []KnownUserView{
+				{
+					UserID: "T00010001",
+					Label:  "Alice",
+				},
+				{
+					UserID: "T00010002",
+					Label:  "Bob",
+				},
+			},
+		}),
+	)
+	require.Equal(
+		t,
+		"T00010003",
+		chatKnownUsers(ChatView{
+			KnownUsers: []KnownUserView{{
+				UserID: "T00010003",
+			}},
+		}),
+	)
+	require.Equal(
+		t,
+		"Current chat name",
+		chatNameSourceLabel(ChatView{
+			ChatAssistantOverride: "林妹妹",
+		}),
+	)
+	require.Equal(
+		t,
+		"Custom source",
+		chatNameSourceLabel(status.Chats[2]),
+	)
+	require.Equal(t, "Default name", chatNameSourceLabel(ChatView{}))
+
+	sample := chatOverrideSample(status, 1)
+	require.Len(t, sample, 1)
+	require.Equal(t, "wecom:group:room-1", sample[0].BaseSessionID)
+
+	sample = chatOverrideSample(status, 0)
+	require.Len(t, sample, 2)
+
+	sample = chatOverrideSample(status, 5)
+	require.Len(t, sample, 2)
+
+	require.Equal(t, 2, chatOverrideCount(status.Chats))
 }
 
 func TestService_PersonasPageAndActions(t *testing.T) {
