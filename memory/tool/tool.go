@@ -14,11 +14,38 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+const (
+	memoryToolScopeNote       = "All memory tools operate only on memories already scoped to the current app and current user."
+	memoryReadDirectUseNote   = "If the current request depends on remembered context call the tool directly instead of adding an extra permission round trip."
+	memoryWriteDirectUseNote  = "If the user is clearly asking to remember correct or forget something carry out the memory operation directly."
+	memoryCaptureGuidance     = "Store concise factual memories that help future conversations feel contextual and avoid asking the same question again. Avoid guesses duplicates trivial one off details and sensitive data unless it is needed for the task."
+	memoryDestructiveGuidance = "This operation is destructive. Only use it when the user explicitly asks to remove saved memory or reset it."
+
+	addMemoryDescription         = "Durable memory statement to store for the current user. Write it as a concise third person fact or episode that will help future conversations."
+	topicsDescription            = "Optional topics for categorizing the memory."
+	memoryKindDescription        = "Memory type. Use 'fact' for stable profile or preference information and 'episode' for a specific event."
+	eventTimeDescription         = "When the event happened in ISO 8601 format. Use an absolute date or timestamp. Required when the memory kind is episode."
+	participantsDescription      = "People involved in the event."
+	locationDescription          = "Where the event happened."
+	updateMemoryIDDescription    = "ID of the stored memory to update. Use memory_search or memory_load first if you need to find the right ID."
+	updateMemoryDescription      = "Rewritten memory content that corrects refines or supersedes the stored memory."
+	deleteMemoryIDDescription    = "ID of the stored memory to delete. Use memory_search or memory_load first if you need to find the right ID."
+	clearReasonDescription       = "Optional short reason for clearing all saved memory."
+	searchMemoryQueryDescription = "Search query for remembered profile preferences history or prior conversation context. Use short keyword style queries and call the tool directly when the current request depends on stored memory."
+	searchMemoryKindDescription  = "Optional memory kind preference. Use 'fact' for stable profile style memories and 'episode' for dated events. Leave empty when unsure."
+	timeAfterDescription         = "Optional lower bound for episode event_time in ISO 8601 date format."
+	timeBeforeDescription        = "Optional upper bound for episode event_time in ISO 8601 date format."
+	orderByEventTimeDescription  = "When true order results by event time instead of relevance. Useful for sequence or timeline questions."
+	loadLimitDescription         = "Maximum number of recent memories to load. Defaults to 10."
 )
 
 // Memory function implementations using function.NewFunctionTool.
@@ -39,7 +66,7 @@ func NewAddTool() tool.CallableTool {
 		}
 
 		// Validate input.
-		if req.Memory == "" {
+		if req == nil || req.Memory == "" {
 			return nil, fmt.Errorf("memory add tool: memory content is required for app %s and user %s", appName, userID)
 		}
 
@@ -49,7 +76,12 @@ func NewAddTool() tool.CallableTool {
 		}
 
 		userKey := memory.UserKey{AppName: appName, UserID: userID}
-		err = memoryService.AddMemory(ctx, userKey, req.Memory, req.Topics)
+		ep := buildMetadata(req.MemoryKind, req.EventTime, req.Participants, req.Location)
+		var opts []memory.AddOption
+		if ep != nil {
+			opts = append(opts, memory.WithMetadata(ep))
+		}
+		err = memoryService.AddMemory(ctx, userKey, req.Memory, req.Topics, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add memory: %v", err)
 		}
@@ -64,8 +96,11 @@ func NewAddTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		addFunc,
 		function.WithName(memory.AddToolName),
-		function.WithDescription("Add a new memory about the user. Use this tool to store "+
-			"important information about the user's preferences, background, or past interactions."),
+		function.WithDescription("Add a new durable memory about the user. "+
+			memoryToolScopeNote+" "+
+			memoryWriteDirectUseNote+" "+
+			memoryCaptureGuidance),
+		function.WithInputSchema(addMemoryInputSchema()),
 	)
 }
 
@@ -85,7 +120,7 @@ func NewUpdateTool() tool.CallableTool {
 		}
 
 		// Validate input.
-		if req.MemoryID == "" {
+		if req == nil || req.MemoryID == "" {
 			return nil, fmt.Errorf("memory update tool: memory ID is required for app %s and user %s", appName, userID)
 		}
 
@@ -99,14 +134,21 @@ func NewUpdateTool() tool.CallableTool {
 		}
 
 		memoryKey := memory.Key{AppName: appName, UserID: userID, MemoryID: req.MemoryID}
-		err = memoryService.UpdateMemory(ctx, memoryKey, req.Memory, req.Topics)
+		ep := buildMetadata(req.MemoryKind, req.EventTime, req.Participants, req.Location)
+		result := &memory.UpdateResult{MemoryID: req.MemoryID}
+		var opts []memory.UpdateOption
+		opts = append(opts, memory.WithUpdateResult(result))
+		if ep != nil {
+			opts = append(opts, memory.WithUpdateMetadata(ep))
+		}
+		err = memoryService.UpdateMemory(ctx, memoryKey, req.Memory, req.Topics, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update memory: %v", err)
 		}
 
 		return &UpdateMemoryResponse{
 			Message:  "Memory updated successfully",
-			MemoryID: req.MemoryID,
+			MemoryID: result.MemoryID,
 			Memory:   req.Memory,
 			Topics:   req.Topics,
 		}, nil
@@ -115,8 +157,11 @@ func NewUpdateTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		updateFunc,
 		function.WithName(memory.UpdateToolName),
-		function.WithDescription("Update an existing memory. Use this tool to modify stored "+
-			"information about the user."),
+		function.WithDescription("Update an existing memory about the user. "+
+			memoryToolScopeNote+" "+
+			memoryWriteDirectUseNote+" "+
+			"Prefer updating an existing memory over adding a near duplicate when new information corrects or refines what is already stored."),
+		function.WithInputSchema(updateMemoryInputSchema()),
 	)
 }
 
@@ -136,7 +181,7 @@ func NewDeleteTool() tool.CallableTool {
 		}
 
 		// Validate input.
-		if req.MemoryID == "" {
+		if req == nil || req.MemoryID == "" {
 			return nil, fmt.Errorf("memory delete tool: memory ID is required for app %s and user %s", appName, userID)
 		}
 
@@ -155,8 +200,12 @@ func NewDeleteTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		deleteFunc,
 		function.WithName(memory.DeleteToolName),
-		function.WithDescription("Delete a specific memory. Use this tool to remove outdated "+
-			"or incorrect information about the user."),
+		function.WithDescription("Delete a specific memory about the user. "+
+			memoryToolScopeNote+" "+
+			memoryWriteDirectUseNote+" "+
+			memoryDestructiveGuidance+" "+
+			"Use it for memories that are wrong obsolete or explicitly withdrawn. Prefer update when the memory should remain but needs correction."),
+		function.WithInputSchema(deleteMemoryInputSchema()),
 	)
 }
 
@@ -189,8 +238,11 @@ func NewClearTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		clearFunc,
 		function.WithName(memory.ClearToolName),
-		function.WithDescription("Clear all memories for the user. Use this tool to reset the "+
-			"user's memory completely."),
+		function.WithDescription("Clear all memories for the user. "+
+			memoryToolScopeNote+" "+
+			memoryDestructiveGuidance+" "+
+			"Use it only when the user explicitly asks to forget everything or reset saved context."),
+		function.WithInputSchema(clearMemoryInputSchema()),
 	)
 }
 
@@ -210,25 +262,26 @@ func NewSearchTool() tool.CallableTool {
 		}
 
 		// Validate input.
-		if req.Query == "" {
-			return nil, fmt.Errorf("memory search tool: query is required for app %s and user %s", appName, userID)
+		if req == nil || req.Query == "" {
+			return &SearchMemoryResponse{
+				Query:   "",
+				Results: []Result{},
+				Count:   0,
+			}, nil
 		}
 
 		userKey := memory.UserKey{AppName: appName, UserID: userID}
-		memories, err := memoryService.SearchMemories(ctx, userKey, req.Query)
+		opts := buildSearchOptions(req)
+		memories, err := memoryService.SearchMemories(ctx, userKey,
+			opts.Query, memory.WithSearchOptions(opts))
 		if err != nil {
 			return nil, fmt.Errorf("failed to search memories: %v", err)
 		}
 
 		// Convert MemoryEntry to MemoryResult.
 		results := make([]Result, len(memories))
-		for i, memory := range memories {
-			results[i] = Result{
-				ID:      memory.ID,
-				Memory:  memory.Memory.Memory,
-				Topics:  memory.Memory.Topics,
-				Created: memory.CreatedAt,
-			}
+		for i, m := range memories {
+			results[i] = entryToResult(m)
 		}
 
 		return &SearchMemoryResponse{
@@ -241,8 +294,19 @@ func NewSearchTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		searchFunc,
 		function.WithName(memory.SearchToolName),
-		function.WithDescription("Search for relevant memories about the user. Use this tool to "+
-			"find stored information that matches the query."),
+		function.WithDescription("Search for relevant memories about the user. "+
+			memoryToolScopeNote+" "+
+			memoryReadDirectUseNote+" "+
+			"Returns memories ranked by semantic similarity, each with: id, memory text, topics, kind (fact/episode), "+
+			"event_time, participants, location, and similarity score (0-1, higher = more relevant). "+
+			"IMPORTANT: Check the 'participants' field to verify the memory is about the correct person before using it as evidence. "+
+			"Use short keyword-style queries for best results (e.g. 'Alice hiking trip' instead of 'When did Alice go hiking?'). "+
+			"For multi-part questions, search for each sub-question separately and combine the results. "+
+			"For temporal questions (e.g. 'when did X happen', 'what did user do in May 2023'), "+
+			"use time_after/time_before filters and consider setting order_by_event_time=true. "+
+			"The 'kind' filter is optional and acts as a preference with automatic fallback; "+
+			"omit it when uncertain whether the answer is stored as a fact or episode."),
+		function.WithInputSchema(searchMemoryInputSchema()),
 	)
 }
 
@@ -275,13 +339,8 @@ func NewLoadTool() tool.CallableTool {
 
 		// Convert MemoryEntry to MemoryResult.
 		results := make([]Result, len(memories))
-		for i, memory := range memories {
-			results[i] = Result{
-				ID:      memory.ID,
-				Memory:  memory.Memory.Memory,
-				Topics:  memory.Memory.Topics,
-				Created: memory.CreatedAt,
-			}
+		for i, m := range memories {
+			results[i] = entryToResult(m)
 		}
 
 		return &LoadMemoryResponse{
@@ -294,9 +353,120 @@ func NewLoadTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		loadFunc,
 		function.WithName(memory.LoadToolName),
-		function.WithDescription("Load recent memories about the user. Use this tool to retrieve "+
-			"stored information to provide context for the conversation."),
+		function.WithDescription("Load the most recent memories about the user. "+
+			memoryToolScopeNote+" "+
+			memoryReadDirectUseNote+" "+
+			"Returns memories ordered by last update time. Each memory includes: id, text, topics, "+
+			"kind (fact/episode), event_time, participants, and location. "+
+			"Use this to get a broad overview of what is known about the user."),
+		function.WithInputSchema(loadMemoryInputSchema()),
 	)
+}
+
+func addMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"memory":      stringSchema(addMemoryDescription),
+		"topics":      stringArraySchema(topicsDescription),
+		"memory_kind": stringEnumSchema(memoryKindDescription, "fact", "episode"),
+		"event_time":  stringSchema(eventTimeDescription),
+		"participants": stringArraySchema(
+			participantsDescription,
+		),
+		"location": stringSchema(locationDescription),
+	}, "memory")
+}
+
+func updateMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"memory_id":   stringSchema(updateMemoryIDDescription),
+		"memory":      stringSchema(updateMemoryDescription),
+		"topics":      stringArraySchema(topicsDescription),
+		"memory_kind": stringEnumSchema(memoryKindDescription, "fact", "episode"),
+		"event_time":  stringSchema(eventTimeDescription),
+		"participants": stringArraySchema(
+			participantsDescription,
+		),
+		"location": stringSchema(locationDescription),
+	}, "memory_id", "memory")
+}
+
+func deleteMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"memory_id": stringSchema(deleteMemoryIDDescription),
+	}, "memory_id")
+}
+
+func clearMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"reason": stringSchema(clearReasonDescription),
+	})
+}
+
+func searchMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"query":               stringSchema(searchMemoryQueryDescription),
+		"kind":                stringEnumSchema(searchMemoryKindDescription, "fact", "episode"),
+		"time_after":          stringSchema(timeAfterDescription),
+		"time_before":         stringSchema(timeBeforeDescription),
+		"order_by_event_time": boolSchema(orderByEventTimeDescription),
+	}, "query")
+}
+
+func loadMemoryInputSchema() *tool.Schema {
+	return objectSchema(map[string]*tool.Schema{
+		"limit": integerSchema(loadLimitDescription),
+	})
+}
+
+func objectSchema(properties map[string]*tool.Schema, required ...string) *tool.Schema {
+	return &tool.Schema{
+		Type:       "object",
+		Properties: properties,
+		Required:   required,
+	}
+}
+
+func stringSchema(description string) *tool.Schema {
+	return &tool.Schema{
+		Type:        "string",
+		Description: description,
+	}
+}
+
+func integerSchema(description string) *tool.Schema {
+	return &tool.Schema{
+		Type:        "integer",
+		Description: description,
+	}
+}
+
+func boolSchema(description string) *tool.Schema {
+	return &tool.Schema{
+		Type:        "boolean",
+		Description: description,
+	}
+}
+
+func stringArraySchema(description string) *tool.Schema {
+	return &tool.Schema{
+		Type:        "array",
+		Description: description,
+		Items: &tool.Schema{
+			Type: "string",
+		},
+	}
+}
+
+func stringEnumSchema(description string, values ...string) *tool.Schema {
+	enum := make([]any, 0, len(values))
+	for _, value := range values {
+		enum = append(enum, value)
+	}
+	return &tool.Schema{
+		Type:        "string",
+		Description: description,
+		Enum:        enum,
+	}
 }
 
 // GetMemoryServiceFromContext extracts MemoryService from the invocation context.
@@ -344,4 +514,136 @@ func GetAppAndUserFromContext(ctx context.Context) (string, string, error) {
 	// Return error if session exists but missing required fields.
 	return "", "", fmt.Errorf("session exists but missing appName or userID: appName=%s, userID=%s",
 		invocation.Session.AppName, invocation.Session.UserID)
+}
+
+// buildMetadata constructs MemoryMetadata from tool
+// request strings. Returns nil if no episodic data is
+// provided (backward compatible).
+func buildMetadata(kind, eventTimeStr string, participants []string, location string) *memory.Metadata {
+	if kind == "" && eventTimeStr == "" && len(participants) == 0 && location == "" {
+		return nil
+	}
+	ep := &memory.Metadata{
+		Kind:         memory.Kind(kind),
+		Participants: participants,
+		Location:     location,
+	}
+	if eventTimeStr != "" {
+		ep.EventTime = ParseFlexibleTime(eventTimeStr)
+	}
+	return ep
+}
+
+// buildSearchOptions constructs SearchOptions from a SearchMemoryRequest.
+func buildSearchOptions(req *SearchMemoryRequest) memory.SearchOptions {
+	opts := memory.SearchOptions{
+		Query:        req.Query,
+		Kind:         memory.Kind(req.Kind),
+		Deduplicate:  true,
+		HybridSearch: true,
+	}
+	// Enable kind fallback when a kind filter is requested so that
+	// results of the other kind are still included if the filtered
+	// set is too small.
+	if opts.Kind != "" {
+		opts.KindFallback = true
+	}
+	for _, pair := range []struct {
+		raw   string
+		dst   **time.Time
+		isEnd bool
+	}{
+		{req.TimeAfter, &opts.TimeAfter, false},
+		{req.TimeBefore, &opts.TimeBefore, true},
+	} {
+		if pair.raw == "" {
+			continue
+		}
+		t := ParseFlexibleTime(pair.raw)
+		if t != nil && pair.isEnd {
+			end := EndOfPeriod(*t, pair.raw)
+			t = &end
+		}
+		*pair.dst = t
+	}
+	opts.OrderByEventTime = req.OrderByEventTime
+	return opts
+}
+
+// ParseFlexibleTime tries multiple date/time formats including natural language dates
+// that LLMs commonly produce (e.g. "7 May 2023", "May 7, 2023").
+// Returns nil if the string cannot be parsed.
+//
+// This function is exported so that other packages (e.g. extractor) can reuse
+// the same flexible time parsing logic without duplicating format lists.
+func ParseFlexibleTime(s string) *time.Time {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	for _, layout := range []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+		"2 January 2006",
+		"January 2, 2006",
+		"Jan 2, 2006",
+		"2 Jan 2006",
+		"January 2006",
+		"Jan 2006",
+		"2006-01",
+		"2006",
+	} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return &t
+		}
+	}
+	return nil
+}
+
+// EndOfPeriod adjusts a parsed time to the end of the period implied by the raw string.
+// For month-level dates like "2023-05" or "May 2023", returns the last day of that month.
+// For year-level dates like "2023", returns Dec 31 of that year.
+// For day-level dates, returns the end of that day (23:59:59).
+func EndOfPeriod(t time.Time, raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	// Year-only: "2023"
+	if len(raw) == 4 {
+		return time.Date(t.Year(), 12, 31, 23, 59, 59, 0, t.Location())
+	}
+	// Month-level: "2023-05", "May 2023", "Jan 2023", "January 2023"
+	for _, layout := range []string{"2006-01", "January 2006", "Jan 2006"} {
+		if _, err := time.Parse(layout, raw); err == nil {
+			// Go to the first day of next month, subtract 1 second.
+			nextMonth := t.AddDate(0, 1, 0)
+			return time.Date(nextMonth.Year(), nextMonth.Month(), 1, 0, 0, 0, 0, t.Location()).Add(-time.Second)
+		}
+	}
+	// Day-level: set to end of day.
+	return time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 0, t.Location())
+}
+
+// entryToResult converts a memory.Entry to a tool Result, including episodic fields.
+func entryToResult(e *memory.Entry) Result {
+	r := Result{
+		ID:      e.ID,
+		Memory:  e.Memory.Memory,
+		Topics:  e.Memory.Topics,
+		Created: e.CreatedAt,
+	}
+	if e.Memory.Kind != "" {
+		r.Kind = string(e.Memory.Kind)
+	}
+	if e.Memory.EventTime != nil {
+		r.EventTime = e.Memory.EventTime.Format(time.RFC3339)
+	}
+	if len(e.Memory.Participants) > 0 {
+		r.Participants = e.Memory.Participants
+	}
+	if e.Memory.Location != "" {
+		r.Location = e.Memory.Location
+	}
+	r.Score = e.Score
+	return r
 }

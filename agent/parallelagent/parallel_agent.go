@@ -18,6 +18,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
+	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -33,6 +35,11 @@ type ParallelAgent struct {
 	subAgents         []agent.Agent
 	channelBufferSize int
 	agentCallbacks    *agent.Callbacks
+}
+
+type subAgentEventStream struct {
+	author string
+	ch     <-chan *event.Event
 }
 
 // New creates a new ParallelAgent with the given name and options.
@@ -58,6 +65,8 @@ func New(name string, opts ...Option) *ParallelAgent {
 func (a *ParallelAgent) createBranchInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
+	nodeID string,
+	entryPredecessors []string,
 ) *agent.Invocation {
 	// Create unique invocation ID for this branch.
 	eventFilterKey := baseInvocation.GetEventFilterKey()
@@ -67,12 +76,12 @@ func (a *ParallelAgent) createBranchInvocation(
 		eventFilterKey += agent.EventFilterKeyDelimiter + subAgent.Info().Name
 	}
 
-	branchInvocation := baseInvocation.Clone(
+	return baseInvocation.Clone(
 		agent.WithInvocationAgent(subAgent),
 		agent.WithInvocationEventFilterKey(eventFilterKey),
+		agent.WithInvocationTraceNodeID(nodeID),
+		agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors),
 	)
-
-	return branchInvocation
 }
 
 // setupInvocation prepares the invocation for execution.
@@ -128,15 +137,18 @@ func (a *ParallelAgent) startSubAgents(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) []<-chan *event.Event {
+) []subAgentEventStream {
 	// Start all sub-agents in parallel.
 	var wg sync.WaitGroup
-	eventChans := make([]<-chan *event.Event, len(a.subAgents))
+	eventStreams := make([]subAgentEventStream, len(a.subAgents))
+	pathAllocator := istructure.NewPathAllocator(agent.InvocationTraceNodeID(invocation))
+	entryPredecessors := agent.NextExecutionTracePredecessors(invocation)
 
 	for i, subAgent := range a.subAgents {
+		childNodeID := pathAllocator.Next(subAgent.Info().Name)
 		wg.Add(1)
 		runCtx := agent.CloneContext(ctx)
-		go func(ctx context.Context, idx int, sa agent.Agent) {
+		go func(ctx context.Context, idx int, sa agent.Agent, nodeID string) {
 			defer wg.Done()
 			// Recover from panics in sub-agent execution to prevent
 			// the whole service from crashing.
@@ -157,10 +169,12 @@ func (a *ParallelAgent) startSubAgents(
 			}()
 
 			// Create branch invocation for this sub-agent.
-			branchInvocation := a.createBranchInvocation(sa, invocation)
+			branchInvocation := a.createBranchInvocation(sa, invocation, nodeID, entryPredecessors)
 
 			// Reset invocation information in context
-			branchAgentCtx := agent.NewInvocationContext(ctx, branchInvocation)
+			branchAgentCtx := graph.WithGraphCompletionCapture(
+				agent.NewInvocationContext(ctx, branchInvocation),
+			)
 
 			// Run the sub-agent.
 			subEventChan, err := agent.RunWithPlugins(
@@ -179,13 +193,16 @@ func (a *ParallelAgent) startSubAgents(
 				return
 			}
 
-			eventChans[idx] = subEventChan
-		}(runCtx, i, subAgent)
+			eventStreams[idx] = subAgentEventStream{
+				author: branchInvocation.AgentName,
+				ch:     subEventChan,
+			}
+		}(runCtx, i, subAgent, childNodeID)
 	}
 
 	// Wait for all sub-agents to start.
 	wg.Wait()
-	return eventChans
+	return eventStreams
 }
 
 // handleAfterAgentCallbacks handles post-execution callbacks.
@@ -231,7 +248,7 @@ func (a *ParallelAgent) Run(
 	ctx context.Context,
 	invocation *agent.Invocation,
 ) (<-chan *event.Event, error) {
-	eventChan := make(chan *event.Event, a.channelBufferSize)
+	eventChan := make(chan *event.Event, a.eventChannelBufferSize(invocation))
 
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
@@ -240,6 +257,13 @@ func (a *ParallelAgent) Run(
 	}(runCtx)
 
 	return eventChan, nil
+}
+
+func (a *ParallelAgent) eventChannelBufferSize(invocation *agent.Invocation) int {
+	if size := agent.GetEventChannelBufferSize(invocation); size > 0 {
+		return size
+	}
+	return a.channelBufferSize
 }
 
 // executeParallelRun handles the main execution logic for parallel agent.
@@ -259,11 +283,11 @@ func (a *ParallelAgent) executeParallelRun(
 	}
 
 	// Start sub-agents.
-	eventChans := a.startSubAgents(ctx, invocation, eventChan)
+	eventStreams := a.startSubAgents(ctx, invocation, eventChan)
 
 	// Merge events from all sub-agents and collect full response event.
 	var fullRespEvent *event.Event
-	a.mergeEventStreams(ctx, eventChans, eventChan, &fullRespEvent)
+	a.mergeEventStreams(ctx, invocation, eventStreams, eventChan, &fullRespEvent)
 
 	// Handle after agent callbacks.
 	a.handleAfterAgentCallbacks(ctx, invocation, eventChan, fullRespEvent)
@@ -273,23 +297,26 @@ func (a *ParallelAgent) executeParallelRun(
 // This implementation processes events as they arrive from different sub-agents.
 func (a *ParallelAgent) mergeEventStreams(
 	ctx context.Context,
-	eventChans []<-chan *event.Event,
+	invocation *agent.Invocation,
+	eventStreams []subAgentEventStream,
 	outputChan chan<- *event.Event,
 	fullRespEvent **event.Event,
 ) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	visibleCtx := graph.WithoutGraphCompletionCapture(ctx)
 
 	// Start a goroutine for each input channel.
-	for _, ch := range eventChans {
-		if ch == nil {
+	for _, stream := range eventStreams {
+		if stream.ch == nil {
 			continue
 		}
 
 		runCtx := agent.CloneContext(ctx)
 		wg.Add(1)
-		go func(ctx context.Context, inputChan <-chan *event.Event) {
+		go func(ctx context.Context, stream subAgentEventStream) {
 			defer wg.Done()
+			var emittedAssistantResponseIDs map[string]struct{}
 			// Recover from potential panics during event merging.
 			defer func() {
 				if r := recover(); r != nil {
@@ -298,17 +325,44 @@ func (a *ParallelAgent) mergeEventStreams(
 					log.Errorf("Event merging panic in parallel agent %s: %v", a.name, r)
 				}
 			}()
-			for evt := range inputChan {
+			for evt := range stream.ch {
 				if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
 					mu.Lock()
 					*fullRespEvent = evt
 					mu.Unlock()
 				}
+				if graph.ShouldSuppressGraphCompletionEvent(visibleCtx, invocation, evt) {
+					if visibleEvent, callbackFullRespEvent, ok := graph.VisibleGraphCompletionEventsForForwardingWithAuthor(
+						evt,
+						emittedAssistantResponseIDs,
+						stream.author,
+					); ok {
+						if err := event.EmitEvent(ctx, outputChan, visibleEvent); err != nil {
+							return
+						}
+						if callbackFullRespEvent != nil &&
+							callbackFullRespEvent.Response != nil &&
+							!callbackFullRespEvent.Response.IsPartial {
+							mu.Lock()
+							*fullRespEvent = callbackFullRespEvent
+							mu.Unlock()
+						}
+						emittedAssistantResponseIDs = graph.RecordAssistantResponseID(
+							emittedAssistantResponseIDs,
+							visibleEvent,
+						)
+					}
+					continue
+				}
 				if err := event.EmitEvent(ctx, outputChan, evt); err != nil {
 					return
 				}
+				emittedAssistantResponseIDs = graph.RecordAssistantResponseID(
+					emittedAssistantResponseIDs,
+					evt,
+				)
 			}
-		}(runCtx, ch)
+		}(runCtx, stream)
 	}
 
 	// Wait for all goroutines to finish.

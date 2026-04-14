@@ -116,6 +116,46 @@ func applyTrackFiltering(sess *session.Session, opt *session.Options) {
 	}
 }
 
+func cloneSessionListMetadata(sess *session.Session) *session.Session {
+	if sess == nil {
+		return nil
+	}
+
+	copiedSess := session.NewSession(
+		sess.AppName,
+		sess.UserID,
+		sess.ID,
+		session.WithSessionCreatedAt(sess.CreatedAt),
+		session.WithSessionUpdatedAt(sess.UpdatedAt),
+	)
+
+	if state := sess.SnapshotState(); state != nil {
+		copiedSess.State = state
+	}
+
+	sess.SummariesMu.RLock()
+	if len(sess.Summaries) > 0 {
+		copiedSess.Summaries = make(map[string]*session.Summary, len(sess.Summaries))
+		for key, sum := range sess.Summaries {
+			if sum == nil {
+				continue
+			}
+			copied := *sum
+			copiedSess.Summaries[key] = &copied
+		}
+	}
+	sess.SummariesMu.RUnlock()
+
+	if sess.ServiceMeta != nil {
+		copiedSess.ServiceMeta = make(map[string]string, len(sess.ServiceMeta))
+		for key, value := range sess.ServiceMeta {
+			copiedSess.ServiceMeta[key] = value
+		}
+	}
+
+	return copiedSess
+}
+
 // appSessions is a map of userID to sessions, it store sessions of one app.
 type appSessions struct {
 	mu        sync.RWMutex
@@ -170,8 +210,8 @@ func NewSessionService(options ...ServiceOpt) *SessionService {
 		s.startCleanupRoutine()
 	}
 
-	// Start async summary workers if summarizer is configured
-	if opts.summarizer != nil && opts.asyncSummaryNum > 0 {
+	// Start async summary workers if summary generation is configured.
+	if isummary.HasSummarizer(opts.summarizer) && opts.asyncSummaryNum > 0 {
 		s.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
 			Summarizer:        opts.summarizer,
 			AsyncSummaryNum:   opts.asyncSummaryNum,
@@ -299,6 +339,9 @@ func (s *SessionService) GetSession(
 }
 
 func (s *SessionService) getSession(ctx context.Context, key session.Key, opt *session.Options) (*session.Session, error) {
+	if err := session.ValidateGetSessionOptions(opt, false); err != nil {
+		return nil, err
+	}
 	app, ok := s.getAppSessions(key.AppName)
 	if !ok {
 		return nil, nil
@@ -349,6 +392,13 @@ func (s *SessionService) ListSessions(
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
+	opt := &session.Options{}
+	for _, o := range opts {
+		o(opt)
+	}
+	if err := session.ValidateListSessionsOptions(opt); err != nil {
+		return nil, err
+	}
 	app, ok := s.getAppSessions(userKey.AppName)
 	if !ok {
 		return []*session.Session{}, nil
@@ -361,9 +411,13 @@ func (s *SessionService) ListSessions(
 		return []*session.Session{}, nil
 	}
 
-	opt := &session.Options{}
-	for _, o := range opts {
-		o(opt)
+	appState := getValidState(app.appState)
+	userState := getValidState(app.userState[userKey.UserID])
+	if appState == nil {
+		appState = make(session.StateMap)
+	}
+	if userState == nil {
+		userState = make(session.StateMap)
 	}
 	sessList := make([]*session.Session, 0, len(app.sessions[userKey.UserID]))
 	for _, sWithTTL := range app.sessions[userKey.UserID] {
@@ -372,18 +426,16 @@ func (s *SessionService) ListSessions(
 		if s == nil {
 			continue // Skip expired sessions
 		}
-		copiedSess := s.Clone()
-		copiedSess.ApplyEventFiltering(opts...)
-		applyTrackFiltering(copiedSess, opt)
 
-		appState := getValidState(app.appState)
-		userState := getValidState(app.userState[userKey.UserID])
-		if appState == nil {
-			appState = make(session.StateMap)
+		var copiedSess *session.Session
+		if opt.ListSessionOnlyMeta {
+			copiedSess = cloneSessionListMetadata(s)
+		} else {
+			copiedSess = s.Clone()
+			copiedSess.ApplyEventFiltering(opts...)
+			applyTrackFiltering(copiedSess, opt)
 		}
-		if userState == nil {
-			userState = make(session.StateMap)
-		}
+
 		sessList = append(sessList, mergeState(appState, userState, copiedSess))
 	}
 	return sessList, nil
@@ -858,17 +910,23 @@ func (s *SessionService) Close() error {
 // updateStoredSession updates the stored session with the given event.
 func (s *SessionService) updateStoredSession(sess *session.Session, e *event.Event) {
 	if e.Response != nil && !e.IsPartial && e.IsValidContent() {
+		storedEvent := cloneStoredEvent(e)
 		sess.EventMu.Lock()
-		sess.Events = append(sess.Events, *e)
+		sess.Events = append(sess.Events, storedEvent)
 		if s.opts.sessionEventLimit > 0 && len(sess.Events) > s.opts.sessionEventLimit {
 			sess.ApplyEventFiltering(session.WithEventNum(s.opts.sessionEventLimit))
 		}
 		sess.EventMu.Unlock()
 	}
-
 	sess.UpdatedAt = time.Now()
 	// Merge event state delta to session state.
 	sess.ApplyEventStateDelta(e)
+}
+
+func cloneStoredEvent(e *event.Event) event.Event {
+	storedEvent := *e
+	storedEvent.ExecutionTrace = nil
+	return storedEvent
 }
 
 // mergeState merges app-level and user-level state into the session state.

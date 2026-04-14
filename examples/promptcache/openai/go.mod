@@ -1,8 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/examples/promptcache/openai
 
-go 1.23.0
-
-toolchain go1.24.11
+go 1.24.6
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../../
 
@@ -40,5 +38,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240822170219-fc7c04adadcd // indirect
 	google.golang.org/grpc v1.65.0 // indirect
 	google.golang.org/protobuf v1.34.2 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
 )

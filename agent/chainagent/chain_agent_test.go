@@ -12,14 +12,22 @@ package chainagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/graphagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -117,6 +125,30 @@ func (m *mockErrorEventAgent) Run(ctx context.Context, inv *agent.Invocation) (<
 	return ch, nil
 }
 
+func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	recorder := tracetest.NewSpanRecorder()
+	provider := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(recorder))
+	originalProvider := trace.TracerProvider
+	originalTracer := trace.Tracer
+	trace.TracerProvider = provider
+	trace.Tracer = provider.Tracer("chain-agent-disable-tracing-test")
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		trace.TracerProvider = originalProvider
+		trace.Tracer = originalTracer
+	})
+	return recorder
+}
+
+func findEndedSpanByName(spans []tracesdk.ReadOnlySpan, spanName string) tracesdk.ReadOnlySpan {
+	for _, span := range spans {
+		if span.Name() == spanName {
+			return span
+		}
+	}
+	return nil
+}
+
 type countingAgent struct {
 	name     string
 	runCount *int32
@@ -130,6 +162,95 @@ func (m *countingAgent) Run(ctx context.Context, inv *agent.Invocation) (<-chan 
 	atomic.AddInt32(m.runCount, 1)
 	ch := make(chan *event.Event, 1)
 	close(ch)
+	return ch, nil
+}
+
+type completionResponseIDAgent struct {
+	name string
+}
+
+type manualCompletionAgent struct {
+	name string
+}
+
+func (m *completionResponseIDAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *completionResponseIDAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *completionResponseIDAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+func (m *completionResponseIDAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *completionResponseIDAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		evt := graph.NewGraphCompletionEvent(
+			graph.WithCompletionEventInvocationID(inv.InvocationID),
+			graph.WithCompletionEventFinalState(graph.State{
+				graph.StateKeyLastResponse:   "child-final",
+				graph.StateKeyLastResponseID: "resp-1",
+				"child_state":                "child-state",
+			}),
+		)
+		evt.Author = m.name
+		evt.Response.ID = "resp-1"
+		_ = agent.EmitEvent(ctx, inv, ch, evt)
+	}()
+	return ch, nil
+}
+
+func (m *manualCompletionAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *manualCompletionAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *manualCompletionAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+func (m *manualCompletionAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *manualCompletionAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, 1)
+	go func() {
+		defer close(ch)
+		evt := &event.Event{
+			Response: &model.Response{
+				ID:     "manual-graph-completion",
+				Object: graph.ObjectTypeGraphExecution,
+				Done:   true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("manual-final"),
+				}},
+			},
+			StateDelta: map[string][]byte{
+				"child_state": []byte(`"child-state"`),
+			},
+			InvocationID: inv.InvocationID,
+			Author:       m.name,
+		}
+		_ = agent.EmitEvent(ctx, inv, ch, evt)
+	}()
 	return ch, nil
 }
 
@@ -348,6 +469,24 @@ func TestChainAgent_ChannelBufferSize(t *testing.T) {
 	require.Equal(t, customSize, chainAgent2.channelBufferSize)
 }
 
+func TestChainAgentRun_UsesInvocationEventChannelBufferSize(t *testing.T) {
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{&mockAgent{name: "agent-1", eventCount: 1}}),
+		WithChannelBufferSize(1),
+	)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithEventChannelBufferSize(7),
+		)),
+	)
+	events, err := chainAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	require.Equal(t, 7, cap(events))
+	for range events {
+	}
+}
+
 func TestChainAgent_WithCallbacks(t *testing.T) {
 	// Create agent callbacks.
 	callbacks := agent.NewCallbacks()
@@ -424,12 +563,30 @@ func TestCreateSubAgentInvocation(t *testing.T) {
 	require.Equal(t, "root", base.GetEventFilterKey())
 
 	sub := &mockMinimalAgent{name: "child"}
-	inv := parent.createSubAgentInvocation(sub, base)
+	inv := parent.createSubAgentInvocation(sub, base, "", nil)
 
 	require.Equal(t, "child", inv.AgentName)
 	require.Equal(t, "root", base.GetEventFilterKey())
 	// Ensure original invocation not mutated.
 	require.Equal(t, "parent"+agent.BranchDelimiter+"child", inv.Branch)
+}
+
+func TestChainAgent_Run_DisableTracingSkipsSpanCreation(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	chain := New("chain", WithSubAgents([]agent.Agent{
+		&mockAgent{name: "child", eventCount: 1, eventContent: "ok"},
+	}))
+	invocation := &agent.Invocation{
+		InvocationID: "chain-disable-tracing",
+		RunOptions: agent.RunOptions{
+			DisableTracing: true,
+		},
+	}
+	events, err := chain.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	for range events {
+	}
+	require.Empty(t, recorder.Ended())
 }
 
 func TestChainAgent_FindSubAgentAndInfo(t *testing.T) {
@@ -676,4 +833,322 @@ func TestChainAgent_CallbackContextPropagation(t *testing.T) {
 
 	// Verify that the context value was captured in AfterAgent callback.
 	require.Equal(t, testValue, capturedValue, "context value should be propagated from BeforeAgent to AfterAgent")
+}
+
+func TestChainAgent_DisableGraphCompletionEvent_PreservesAfterAgentResponse(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{graph.StateKeyLastResponse: "child-final"}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	child, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	callbacks := agent.NewCallbacks()
+	var fullRespEvent *event.Event
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		fullRespEvent = args.FullResponseEvent
+		return nil, nil
+	})
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{child}),
+		WithAgentCallbacks(callbacks),
+	)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	events, err := chainAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	for evt := range events {
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+	}
+	require.NotNil(t, fullRespEvent)
+	require.NotNil(t, fullRespEvent.Response)
+	require.Len(t, fullRespEvent.Response.Choices, 1)
+	require.Equal(t, "child-final", fullRespEvent.Response.Choices[0].Message.Content)
+}
+
+func TestChainAgent_DisableGraphCompletionEvent_SuppressesChildCompletionWithCaptureContext(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{graph.StateKeyLastResponse: "child-final"}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	child, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{child}),
+	)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	events, err := chainAgent.Run(graph.WithGraphCompletionCapture(context.Background()), invocation)
+	require.NoError(t, err)
+	for evt := range events {
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+	}
+}
+
+func TestChainAgent_DisableGraphCompletionEvent_PreservesVisibleChildResponse(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{
+			graph.StateKeyLastResponse: "child-final",
+			"child_state":              "child-state",
+		}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	child, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{child}),
+	)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	events, err := chainAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	var visibleEvent *event.Event
+	for evt := range events {
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+		if evt != nil && evt.Response != nil && !evt.Response.IsPartial && len(evt.StateDelta) > 0 {
+			visibleEvent = evt
+		}
+	}
+	require.NotNil(t, visibleEvent)
+	require.Equal(t, model.ObjectTypeChatCompletion, visibleEvent.Object)
+	require.Len(t, visibleEvent.Response.Choices, 1)
+	require.Equal(t, "child-final", visibleEvent.Response.Choices[0].Message.Content)
+	require.Equal(t, []byte(`"child-final"`), visibleEvent.StateDelta[graph.StateKeyLastResponse])
+	require.Equal(t, []byte(`"child-state"`), visibleEvent.StateDelta["child_state"])
+}
+
+func TestChainAgent_DisableGraphCompletionEvent_DoesNotDedupVisibleChildAgainstRawCompletion(
+	t *testing.T,
+) {
+	child := &completionResponseIDAgent{name: "graph-child"}
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{child}),
+	)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	events, err := chainAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+
+	var visibleEvent *event.Event
+	for evt := range events {
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+		if graph.IsVisibleGraphCompletionEvent(evt) {
+			visibleEvent = evt
+		}
+	}
+
+	require.NotNil(t, visibleEvent)
+	require.Len(t, visibleEvent.Response.Choices, 1)
+	require.Equal(t, "child-final", visibleEvent.Response.Choices[0].Message.Content)
+	require.Equal(t, []byte(`"resp-1"`), visibleEvent.StateDelta[graph.StateKeyLastResponseID])
+	require.Equal(t, []byte(`"child-state"`), visibleEvent.StateDelta["child_state"])
+}
+
+func TestChainAgent_DisableGraphCompletionEvent_PreservesStateOnlyChildCompletion(t *testing.T) {
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddNode("done", func(ctx context.Context, state graph.State) (any, error) {
+		return graph.State{
+			"child_state": "child-state",
+		}, nil
+	})
+	compiled := sg.SetEntryPoint("done").SetFinishPoint("done").MustCompile()
+	child, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{child}),
+	)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	events, err := chainAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	var visibleEvent *event.Event
+	for evt := range events {
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+		if evt != nil && evt.Object == model.ObjectTypeChatCompletion && len(evt.StateDelta) > 0 {
+			visibleEvent = evt
+		}
+	}
+	require.NotNil(t, visibleEvent)
+	require.Empty(t, visibleEvent.Response.Choices)
+	require.Equal(t, []byte(`"child-state"`), visibleEvent.StateDelta["child_state"])
+}
+
+func TestChainAgent_DisableGraphCompletionEvent_AddsVisibleCompletionMetadataForManualRawCompletion(
+	t *testing.T,
+) {
+	child := &manualCompletionAgent{name: "graph-child"}
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{child}),
+	)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	events, err := chainAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+
+	var visibleEvent *event.Event
+	for evt := range events {
+		require.False(t, evt.Done && evt.Object == graph.ObjectTypeGraphExecution)
+		if graph.IsVisibleGraphCompletionEvent(evt) {
+			visibleEvent = evt
+		}
+	}
+
+	require.NotNil(t, visibleEvent)
+	require.Equal(t, []byte("{}"), visibleEvent.StateDelta[graph.MetadataKeyCompletion])
+	require.Equal(t, "manual-final", visibleEvent.Response.Choices[0].Message.Content)
+}
+
+func TestChainAgent_Run_RecordsStreamTraceAttribute(t *testing.T) {
+	originalTracer := trace.Tracer
+	defer func() {
+		trace.Tracer = originalTracer
+	}()
+
+	spanRecorder := tracetest.NewSpanRecorder()
+	tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
+	defer func() {
+		_ = tp.Shutdown(context.Background())
+	}()
+	trace.Tracer = tp.Tracer("test")
+
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{
+			&mockAgent{
+				name:         "child",
+				eventCount:   1,
+				eventContent: "streamed content",
+			},
+		}),
+	)
+
+	stream := true
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+		RunOptions: agent.RunOptions{
+			Stream: &stream,
+		},
+	}
+
+	events, err := chainAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	spans := spanRecorder.Ended()
+	require.NotEmpty(t, spans)
+
+	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, chainAgent.Info().Name)
+	agentSpan := findEndedSpanByName(spans, expectedSpanName)
+	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
+
+	found := false
+	foundAgentName := false
+	foundAgentID := false
+	for _, attr := range agentSpan.Attributes() {
+		if string(attr.Key) == semconvtrace.KeyGenAIRequestIsStream {
+			found = true
+			require.True(t, attr.Value.AsBool())
+		}
+		if string(attr.Key) == semconvtrace.KeyGenAIAgentName {
+			foundAgentName = true
+			require.Equal(t, chainAgent.Info().Name, attr.Value.AsString())
+		}
+		if string(attr.Key) == semconvtrace.KeyGenAIAgentID {
+			foundAgentID = true
+			require.Equal(t, chainAgent.Info().Name, attr.Value.AsString())
+		}
+	}
+	require.True(t, found, "expected stream trace attribute to be recorded")
+	require.True(t, foundAgentName, "expected agent name trace attribute to be recorded")
+	require.True(t, foundAgentID, "expected agent id trace attribute to be recorded")
+}
+
+func TestChainAgent_Run_PreservesFinalResponseWhenAfterCallbackReturnsNil(t *testing.T) {
+	originalTracer := trace.Tracer
+	defer func() {
+		trace.Tracer = originalTracer
+	}()
+
+	spanRecorder := tracetest.NewSpanRecorder()
+	tp := tracesdk.NewTracerProvider(tracesdk.WithSpanProcessor(spanRecorder))
+	defer func() {
+		_ = tp.Shutdown(context.Background())
+	}()
+	trace.Tracer = tp.Tracer("test")
+
+	callbacks := agent.NewCallbacks()
+	callbacks.RegisterAfterAgent(func(ctx context.Context, args *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		return nil, nil
+	})
+
+	chainAgent := New(
+		"test-chain",
+		WithSubAgents([]agent.Agent{
+			&mockAgent{
+				name:         "child",
+				eventCount:   1,
+				eventContent: "final content",
+			},
+		}),
+		WithAgentCallbacks(callbacks),
+	)
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-invocation",
+		Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+	}
+
+	events, err := chainAgent.Run(context.Background(), invocation)
+	require.NoError(t, err)
+
+	var received []*event.Event
+	for evt := range events {
+		received = append(received, evt)
+	}
+	require.Len(t, received, 1)
+
+	spans := spanRecorder.Ended()
+	require.NotEmpty(t, spans)
+
+	expectedSpanName := fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, chainAgent.Info().Name)
+	agentSpan := findEndedSpanByName(spans, expectedSpanName)
+	require.NotNil(t, agentSpan, "expected invoke_agent span to be created")
+
+	var outputMessages string
+	for _, attr := range agentSpan.Attributes() {
+		if string(attr.Key) == semconvtrace.KeyGenAIOutputMessages {
+			outputMessages = attr.Value.AsString()
+			break
+		}
+	}
+	require.NotEmpty(t, outputMessages, "expected output messages attribute to be recorded")
+	require.Contains(t, outputMessages, "final content")
 }

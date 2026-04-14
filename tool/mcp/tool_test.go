@@ -216,3 +216,30 @@ func TestMCPToolResult_MarshalJSON(t *testing.T) {
 		t.Errorf("expected %q, got %q", string(expected), string(data))
 	}
 }
+
+func TestMCPToolResult_GetCallbackResult(t *testing.T) {
+	expected := []mcp.Content{mcp.NewTextContent("hello")}
+	result := &mcpToolResult{
+		Content: expected,
+		Meta:    map[string]any{"metadata": "ignored"},
+	}
+
+	callbackResult, ok := result.GetCallbackResult().([]mcp.Content)
+	if !ok {
+		t.Fatalf("expected []mcp.Content, got %T", result.GetCallbackResult())
+	}
+	if len(callbackResult) != len(expected) {
+		t.Fatalf("expected %d content item(s), got %d", len(expected), len(callbackResult))
+	}
+}
+
+func TestMCPToolResult_RetryResultError(t *testing.T) {
+	result := &mcpToolResult{IsError: true}
+	if !result.RetryResultError() {
+		t.Fatal("expected RetryResultError to report true")
+	}
+	result.IsError = false
+	if result.RetryResultError() {
+		t.Fatal("expected RetryResultError to report false")
+	}
+}

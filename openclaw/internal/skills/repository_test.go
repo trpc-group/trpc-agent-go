@@ -184,6 +184,75 @@ func TestAsString_NonString(t *testing.T) {
 	require.Empty(t, asString(123))
 }
 
+func TestOfficialOpenClawSkillMetadata_IsSupported(t *testing.T) {
+	root := filepath.Join("..", "..", "skills")
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		path := filepath.Join(root, entry.Name(), skillFileName)
+		fm, err := parseFrontMatterFile(path)
+		if errors.Is(err, errNoFrontMatter) {
+			continue
+		}
+		require.NoError(t, err, entry.Name())
+
+		rawMeta, ok := fm.Metadata[openClawMetadataKey]
+		if !ok {
+			continue
+		}
+		meta := normalizeStringAnyMap(rawMeta)
+		require.NotNil(t, meta, entry.Name())
+
+		for field := range meta {
+			_, ok := supportedOpenClawMetaFields[field]
+			require.True(t, ok, "%s meta field %q", entry.Name(), field)
+		}
+
+		requires := normalizeStringAnyMap(meta["requires"])
+		for field := range requires {
+			_, ok := supportedOpenClawRequireFields[field]
+			require.True(
+				t,
+				ok,
+				"%s requires field %q",
+				entry.Name(),
+				field,
+			)
+		}
+
+		rawInstall, _ := meta["install"].([]any)
+		for _, item := range rawInstall {
+			action := normalizeStringAnyMap(item)
+			require.NotNil(t, action, entry.Name())
+			for field := range action {
+				_, ok := supportedOpenClawInstallFields[field]
+				require.True(
+					t,
+					ok,
+					"%s install field %q",
+					entry.Name(),
+					field,
+				)
+			}
+			kind, _ := action["kind"].(string)
+			_, ok := supportedOpenClawInstallKinds[kind]
+			require.True(
+				t,
+				ok,
+				"%s install kind %q",
+				entry.Name(),
+				kind,
+			)
+		}
+	}
+}
+
 func TestRepository_GatesOnBins(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("exec lookpath + chmod differs on windows")
@@ -1179,6 +1248,142 @@ func TestBundledSkills_ParseFrontMatterAndMetadata(t *testing.T) {
 		_, _, err = parseOpenClawMetadata(fm)
 		require.NoError(t, err, entry.Name())
 	}
+}
+
+func TestRepositoryRefresh_DiscoversNewSkill(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+	require.Empty(t, repo.Summaries())
+
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+---
+
+# weather-probe
+`)
+
+	require.NoError(t, repo.Refresh())
+
+	summaries := repo.Summaries()
+	require.Len(t, summaries, 1)
+	require.Equal(t, "weather-probe", summaries[0].Name)
+}
+
+func TestRepositorySetSkillEnabled_ReindexesEligibility(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+metadata:
+  openclaw:
+    skillKey: "weather-api"
+---
+
+# weather-probe
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+	require.Len(t, repo.Summaries(), 1)
+
+	require.NoError(t, repo.SetSkillEnabled("weather-api", false))
+
+	require.Empty(t, repo.Summaries())
+
+	_, err = repo.Get("weather-probe")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disabled by config")
+
+	report := repo.Status()
+	require.Len(t, report.Skills, 1)
+	require.True(t, report.Skills[0].Disabled)
+	require.False(t, report.Skills[0].Eligible)
+}
+
+func TestRepositoryRefreshAndSetSkillEnabled_ErrorGuards(t *testing.T) {
+	t.Parallel()
+
+	var nilRepo *Repository
+	require.NoError(t, nilRepo.Refresh())
+	require.EqualError(
+		t,
+		nilRepo.SetSkillEnabled("weather-api", true),
+		"skills repository is not available",
+	)
+
+	repo := &Repository{}
+	require.NoError(t, repo.Refresh())
+	require.NotNil(t, repo.eligible)
+	require.NotNil(t, repo.reasons)
+	require.NotNil(t, repo.baseDirs)
+	require.NotNil(t, repo.metas)
+	require.NotNil(t, repo.skillKey)
+	require.EqualError(
+		t,
+		repo.SetSkillEnabled(" ", true),
+		"skill config key is required",
+	)
+}
+
+func TestRepositoryHelperNormalizersAndBundledDetection(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, normalizeConfigKeys(nil))
+	require.Equal(
+		t,
+		map[string]struct{}{
+			"channels.telegram.token": {},
+			"channels.discord.token":  {},
+		},
+		normalizeConfigKeys([]string{
+			" channels.telegram.token ",
+			"",
+			"CHANNELS.DISCORD.TOKEN",
+		}),
+	)
+	require.Nil(t, normalizeAllowlist(nil))
+	require.Equal(
+		t,
+		map[string]struct{}{"weather-api": {}, "weather": {}},
+		normalizeAllowlist([]string{" weather-api ", "", "weather"}),
+	)
+	require.Nil(t, normalizeSkillConfigs(nil))
+
+	enabled := true
+	cfg := normalizeSkillConfigs(map[string]SkillConfig{
+		" weather-api ": {
+			Enabled: &enabled,
+			APIKey:  " secret ",
+			Env: map[string]string{
+				" TOKEN ": " value ",
+				"":        "ignored",
+				"DROP":    " ",
+			},
+		},
+		"": {APIKey: "skip"},
+	})
+	require.Contains(t, cfg, "weather-api")
+	require.NotNil(t, cfg["weather-api"].Enabled)
+	require.True(t, *cfg["weather-api"].Enabled)
+	require.Equal(t, "secret", cfg["weather-api"].APIKey)
+	require.Equal(t, map[string]string{"TOKEN": "value"}, cfg["weather-api"].Env)
+
+	root := t.TempDir()
+	bundledRoot := filepath.Join(root, "skills")
+	baseDir := filepath.Join(bundledRoot, "demo")
+	require.NoError(t, os.MkdirAll(baseDir, 0o755))
+
+	repo := &Repository{bundledRoot: bundledRoot}
+	require.True(t, repo.isBundledSkill(baseDir))
+	require.False(t, repo.isBundledSkill(bundledRoot))
+	require.False(t, repo.isBundledSkill(filepath.Join(root, "other", "demo")))
+	require.False(t, (&Repository{}).isBundledSkill(baseDir))
 }
 
 func writeSkill(t *testing.T, root, name, skillMd string) string {

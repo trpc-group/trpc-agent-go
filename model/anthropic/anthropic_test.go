@@ -12,6 +12,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,6 +62,79 @@ func Test_Model_Info(t *testing.T) {
 	m := New("claude-3-5-sonnet-latest")
 	info := m.Info()
 	assert.Equal(t, "claude-3-5-sonnet-latest", info.Name)
+}
+
+func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
+	t.Run("request callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatRequestCallback: func(ctx context.Context, req *anthropic.MessageNewParams) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatRequestCallback(context.Background(), &anthropic.MessageNewParams{})
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("response callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatResponseCallback: func(ctx context.Context, req *anthropic.MessageNewParams, resp *anthropic.Message) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatResponseCallback(context.Background(), &anthropic.MessageNewParams{}, &anthropic.Message{})
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("chunk callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatChunkCallback: func(ctx context.Context, req *anthropic.MessageNewParams, chunk *anthropic.MessageStreamEventUnion) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			chunk := anthropic.MessageStreamEventUnion{}
+			m.runChatChunkCallback(context.Background(), &anthropic.MessageNewParams{}, &chunk)
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("stream complete callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatStreamCompleteCallback: func(
+				ctx context.Context,
+				req *anthropic.MessageNewParams,
+				resp *anthropic.Message,
+				err error,
+			) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatStreamCompleteCallback(
+				context.Background(),
+				&anthropic.MessageNewParams{},
+				&anthropic.Message{},
+				nil,
+			)
+		})
+		assert.True(t, callbackCalled)
+	})
 }
 
 func TestWithHeaders_AppendsOptions(t *testing.T) {
@@ -731,6 +805,12 @@ type rtFunc func(*http.Request) (*http.Response, error)
 // RoundTrip implements http.RoundTripper.
 func (f rtFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
+type errReader struct{ err error }
+
+func (r *errReader) Read(_ []byte) (int, error) {
+	return 0, r.err
+}
+
 func Test_HandleNonStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 	// Mock HTTP client to return a fixed Anthropic message JSON body.
 	orig := model.DefaultNewHTTPClient
@@ -828,7 +908,8 @@ func Test_HandleStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 		})}
 	}
 
-	var chunkCalled, streamCompleteCalled bool
+	var chunkCalled bool
+	streamCompleteCalled := make(chan struct{})
 	m := New(
 		"claude-test",
 		WithHTTPClientOptions(),
@@ -838,7 +919,7 @@ func Test_HandleStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 		}),
 		WithChatStreamCompleteCallback(func(_ context.Context, _ *anthropic.MessageNewParams,
 			_ *anthropic.Message, _ error) {
-			streamCompleteCalled = true
+			close(streamCompleteCalled)
 		}),
 	)
 	req := &model.Request{
@@ -856,6 +937,12 @@ func Test_HandleStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 	for resp := range ch {
 		if resp.Done {
 			final = resp
+			select {
+			case <-streamCompleteCalled:
+				// Success.
+			default:
+				t.Fatal("stream complete callback must run before final response is emitted")
+			}
 			break
 		}
 		if resp.IsPartial {
@@ -866,7 +953,140 @@ func Test_HandleStreamingResponse_EndToEnd_NoNetwork(t *testing.T) {
 	assert.NotNil(t, final)
 	assert.True(t, final.Done)
 	assert.True(t, chunkCalled)
-	assert.True(t, streamCompleteCalled)
+	select {
+	case <-streamCompleteCalled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
+}
+
+func Test_HandleStreamingResponse_StreamErrorUsesNilAccumulator(t *testing.T) {
+	streamErr := errors.New("stream read error")
+
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(&errReader{err: streamErr}),
+			}, nil
+		})}
+	}
+
+	callbackCalled := make(chan struct{})
+	var callbackAcc *anthropic.Message
+	var callbackErr error
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithChatStreamCompleteCallback(func(_ context.Context,
+			_ *anthropic.MessageNewParams, acc *anthropic.Message, err error) {
+			callbackAcc = acc
+			callbackErr = err
+			close(callbackCalled)
+		}),
+	)
+	ctx := context.Background()
+	ch, err := m.GenerateContent(ctx, &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("U")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	})
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range ch {
+		responses = append(responses, resp)
+		if resp.Done && resp.Error != nil {
+			select {
+			case <-callbackCalled:
+				assert.Nil(t, callbackAcc)
+				assert.ErrorIs(t, callbackErr, streamErr)
+			default:
+				t.Fatal("stream complete callback must run before terminal error response is emitted")
+			}
+		}
+	}
+
+	require.Len(t, responses, 1)
+	assert.NotNil(t, responses[0].Error)
+	assert.True(t, responses[0].Done)
+	select {
+	case <-callbackCalled:
+		assert.Nil(t, callbackAcc)
+		assert.ErrorIs(t, callbackErr, streamErr)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
+}
+
+func Test_HandleStreamingResponse_ContextCancelStillCallsCallback(t *testing.T) {
+	sse := strings.Join([]string{
+		"event: message_start",
+		"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sse_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-3-sonnet\",\"content\":[]}}",
+		"",
+		"event: content_block_start",
+		"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
+		"",
+		"event: content_block_delta",
+		"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}",
+		"",
+		"",
+	}, "\n")
+
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(sse)),
+			}, nil
+		})}
+	}
+
+	callbackCalled := make(chan struct{})
+	var callbackAcc *anthropic.Message
+	var callbackErr error
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithChatStreamCompleteCallback(func(_ context.Context,
+			_ *anthropic.MessageNewParams, acc *anthropic.Message, err error) {
+			callbackAcc = acc
+			callbackErr = err
+			close(callbackCalled)
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	responseChan := make(chan *model.Response)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+
+	select {
+	case <-callbackCalled:
+		assert.Nil(t, callbackAcc)
+		require.ErrorIs(t, callbackErr, context.Canceled)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
+	select {
+	case resp := <-responseChan:
+		t.Fatalf("unexpected response: %#v", resp)
+	default:
+	}
 }
 
 func Test_HTTPClientOptions_AndAnthropicClientOptions(t *testing.T) {
@@ -1369,12 +1589,8 @@ func TestWithEnableTokenTailoring_RemainingTokensNegative(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// With maxInputTokens=1 and usedTokens=0 (zeroTokenCounter), remaining tokens
-	// should be positive, so MaxTokens should be set to at least the floor (256).
-	// The actual calculation: contextWindow - 0 - 512 - safetyMargin
-	// For claude-3-5-sonnet (200000): 200000 - 0 - 512 - 20000 = 179488
-	// So MaxTokens should be max(179488, 256) = 179488
-	require.Greater(t, captured.MaxTokens, int64(0), "expected MaxTokens to be set when sufficient tokens available")
+	// MaxTokens should not be auto-set by token tailoring.
+	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to remain unset")
 }
 
 // TestWithEnableTokenTailoring_AutoSetMaxTokens tests automatic MaxTokens setting.
@@ -1403,8 +1619,8 @@ func TestWithEnableTokenTailoring_AutoSetMaxTokens(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// MaxTokens should be auto-set when not specified by user.
-	require.Greater(t, captured.MaxTokens, int64(0), "expected MaxTokens > 0")
+	// MaxTokens should stay unset when not specified by user.
+	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to remain unset")
 }
 
 // TestWithEnableTokenTailoring_UserSpecifiedMaxTokens tests user-specified MaxTokens is preserved.
@@ -1974,4 +2190,159 @@ func TestIntegration_AutoOptimalCacheStrategy(t *testing.T) {
 		}
 	}
 	assert.True(t, foundCacheControl, "expected cache control to be automatically applied to assistant message")
+}
+
+// TestChatRequestCallbackSynchronous verifies that
+// chatRequestCallback is invoked synchronously inside
+// GenerateContent, before the response goroutine starts.
+func TestChatRequestCallbackSynchronous(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non_streaming", stream: false},
+		{name: "streaming", stream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orig := model.DefaultNewHTTPClient
+			t.Cleanup(func() {
+				model.DefaultNewHTTPClient = orig
+			})
+			if tt.stream {
+				sse := strings.Join([]string{
+					"event: message_start",
+					`data: {"type":"message_start",` +
+						`"message":{"id":"m1",` +
+						`"type":"message",` +
+						`"role":"assistant",` +
+						`"model":"claude","content":[]}}`,
+					"",
+					"event: content_block_start",
+					`data: {"type":` +
+						`"content_block_start",` +
+						`"index":0,"content_block":` +
+						`{"type":"text","text":""}}`,
+					"",
+					"event: content_block_delta",
+					`data: {"type":` +
+						`"content_block_delta",` +
+						`"index":0,"delta":` +
+						`{"type":"text_delta",` +
+						`"text":"hi"}}`,
+					"",
+					"event: content_block_stop",
+					`data: {"type":` +
+						`"content_block_stop","index":0}`,
+					"",
+					"event: message_delta",
+					`data: {"type":"message_delta",` +
+						`"delta":{"stop_reason":` +
+						`"end_turn","stop_sequence":""},` +
+						`"usage":{` +
+						`"cache_creation_input_tokens":0,` +
+						`"cache_read_input_tokens":0,` +
+						`"input_tokens":0,` +
+						`"output_tokens":0,` +
+						`"server_tool_use":` +
+						`{"web_search_requests":0}}}`,
+					"",
+					"event: message_stop",
+					`data: {"type":"message_stop"}`,
+					"",
+				}, "\n")
+				model.DefaultNewHTTPClient = func(
+					_ ...HTTPClientOption,
+				) model.HTTPClient {
+					return &http.Client{
+						Transport: rtFunc(
+							func(_ *http.Request,
+							) (*http.Response, error) {
+								h := make(http.Header)
+								h.Set("Content-Type",
+									"text/event-stream")
+								return &http.Response{
+									StatusCode: 200,
+									Header:     h,
+									Body: io.NopCloser(
+										strings.NewReader(sse)),
+								}, nil
+							}),
+					}
+				}
+			} else {
+				body := `{"id":"m1","model":"claude",` +
+					`"role":"assistant",` +
+					`"stop_reason":"end_turn",` +
+					`"stop_sequence":"",` +
+					`"type":"message",` +
+					`"usage":{` +
+					`"cache_creation_input_tokens":0,` +
+					`"cache_read_input_tokens":0,` +
+					`"input_tokens":1,` +
+					`"output_tokens":1,` +
+					`"server_tool_use":` +
+					`{"web_search_requests":0}},` +
+					`"content":[{"type":"text",` +
+					`"text":"hi"}]}`
+				model.DefaultNewHTTPClient = func(
+					_ ...HTTPClientOption,
+				) model.HTTPClient {
+					return &http.Client{
+						Transport: rtFunc(
+							func(_ *http.Request,
+							) (*http.Response, error) {
+								h := make(http.Header)
+								h.Set("Content-Type",
+									"application/json")
+								return &http.Response{
+									StatusCode: 200,
+									Header:     h,
+									Body: io.NopCloser(
+										strings.NewReader(body)),
+								}, nil
+							}),
+					}
+				}
+			}
+
+			var callCount int64
+			m := New("claude-test",
+				WithHTTPClientOptions(),
+				WithChatRequestCallback(
+					func(_ context.Context,
+						_ *anthropic.MessageNewParams,
+					) {
+						callCount++
+					}),
+			)
+
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					Stream: tt.stream,
+				},
+			}
+
+			ch, err := m.GenerateContent(
+				context.Background(), req)
+			require.NoError(t, err)
+
+			// Callback must have fired synchronously
+			// before GenerateContent returned.
+			assert.Equal(t, int64(1), callCount,
+				"callback must execute exactly once "+
+					"before GenerateContent returns")
+
+			// Drain the channel to avoid goroutine leak.
+			for range ch {
+			}
+
+			// Confirm no extra invocations after drain.
+			assert.Equal(t, int64(1), callCount,
+				"callback must not be called more than once")
+		})
+	}
 }

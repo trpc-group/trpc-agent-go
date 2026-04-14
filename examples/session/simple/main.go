@@ -18,6 +18,7 @@
 //	go run main.go -session=sqlite
 //	go run main.go -session=redis
 //	go run main.go -session=postgres
+//	go run main.go -session=pgvector
 //	go run main.go -session=mysql
 //	go run main.go -session=clickhouse
 //
@@ -35,6 +36,16 @@
 //		export PG_USER="postgres"
 //		export PG_PASSWORD="password"
 //		export PG_DATABASE="trpc_agent"
+//
+//	pgvector:
+//		export PGVECTOR_HOST="localhost"
+//		export PGVECTOR_PORT="5432"
+//		export PGVECTOR_USER="postgres"
+//		export PGVECTOR_PASSWORD="password"
+//		export PGVECTOR_DATABASE="trpc-agent-go-pgsession"
+//		export PGVECTOR_EMBEDDER_MODEL="text-embedding-3-small"
+//		export OPENAI_EMBEDDING_API_KEY="$OPENAI_API_KEY"
+//		export OPENAI_EMBEDDING_BASE_URL="$OPENAI_BASE_URL"
 //
 //	mysql:
 //		export MYSQL_HOST="localhost"
@@ -65,13 +76,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	alog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/langfuse"
+	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	util "trpc.group/trpc-go/trpc-agent-go/examples/session"
 )
+
+const appName = "session-demo"
+
+type ctxKey string
+
+const requestIDKey ctxKey = "requestID"
 
 var (
 	modelName = flag.String(
@@ -81,9 +101,9 @@ var (
 	)
 	sessServiceName = flag.String(
 		"session",
-		"inmemory",
+		"redis",
 		"Name of the session service to use, inmemory / "+
-			"sqlite / redis / postgres / mysql / clickhouse",
+			"sqlite / redis / postgres / pgvector / mysql / clickhouse",
 	)
 	streaming = flag.Bool(
 		"streaming",
@@ -100,16 +120,49 @@ var (
 		10*time.Second,
 		"Session time-to-live duration",
 	)
+	searchTopK = flag.Int(
+		"search-topk",
+		5,
+		"Maximum number of recalled events to show when /search is available",
+	)
 	debugMode = flag.Bool(
 		"debug",
 		true,
 		"Enable debug mode to print session events after each "+
 			"turn",
 	)
+	enableTrace = flag.Bool(
+		"enable-trace",
+		true,
+		"Enable Langfuse tracing for session operations. "+
+			"Requires LANGFUSE_SECRET_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_HOST env vars.",
+	)
 )
 
 func main() {
 	flag.Parse()
+
+	// Replace the default log functions to inject RequestID from context.
+	origInfofContext := alog.InfofContext
+	alog.InfofContext = func(ctx context.Context, format string, args ...any) {
+		reqID, _ := ctx.Value(requestIDKey).(string)
+		if reqID != "" {
+			format = fmt.Sprintf("[req:%s] %s", reqID, format)
+		}
+		origInfofContext(ctx, format, args...)
+	}
+
+	if *enableTrace {
+		clean, err := langfuse.Start(context.Background())
+		if err != nil {
+			log.Fatalf("failed to start langfuse tracer: %v", err)
+		}
+		defer func() {
+			if err := clean(context.Background()); err != nil {
+				log.Printf("langfuse tracer cleanup: %v", err)
+			}
+		}()
+	}
 
 	fmt.Printf("Session Management Demo\n")
 	fmt.Printf("Model: %s\n", *modelName)
@@ -135,6 +188,7 @@ type multiTurnChat struct {
 	streaming      bool
 	runner         runner.Runner
 	sessionService session.Service
+	searchable     session.SearchableService
 	userID         string
 	sessionID      string
 }
@@ -161,14 +215,18 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 	sessionService, err := util.NewSessionServiceByType(
 		sessionType,
 		util.SessionServiceConfig{
-			EventLimit: *eventLimit,
-			TTL:        *sessionTTL,
+			EventLimit:    *eventLimit,
+			TTL:           *sessionTTL,
+			EnableTracing: *enableTrace,
 		},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create session service: %w", err)
 	}
 	c.sessionService = sessionService
+	if searchable, ok := sessionService.(session.SearchableService); ok {
+		c.searchable = searchable
+	}
 
 	modelInstance := openai.New(c.modelName)
 
@@ -189,7 +247,7 @@ func (c *multiTurnChat) setup(_ context.Context) error {
 	)
 
 	c.runner = runner.NewRunner(
-		"session-demo",
+		appName,
 		llmAgent,
 		runner.WithSessionService(sessionService),
 	)
@@ -206,11 +264,14 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	fmt.Println("Session commands:")
-	fmt.Println("   /history   - Ask the assistant to recap our conversation")
-	fmt.Println("   /new       - Start a brand-new session ID")
-	fmt.Println("   /sessions  - List known session IDs")
-	fmt.Println("   /use <id>  - Switch to an existing (or new) session")
-	fmt.Println("   /exit      - End the conversation")
+	fmt.Println("   /history      - Ask the assistant to recap our conversation")
+	fmt.Println("   /new [id]     - Start a new session (optional: specify custom ID)")
+	fmt.Println("   /sessions     - List known session IDs")
+	fmt.Println("   /use <id>     - Switch to an existing (or new) session")
+	if c.searchable != nil {
+		fmt.Println("   /search <query> - Recall semantically similar events")
+	}
+	fmt.Println("   /exit         - End the conversation")
 	fmt.Println()
 
 	for {
@@ -232,8 +293,9 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 			return nil
 		case lowerInput == "/history":
 			userInput = "show our conversation history"
-		case lowerInput == "/new":
-			c.startNewSession()
+		case strings.HasPrefix(lowerInput, "/new"):
+			customID := strings.TrimSpace(userInput[4:])
+			c.startNewSession(customID)
 			continue
 		case lowerInput == "/sessions":
 			c.listSessions()
@@ -246,6 +308,17 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 			}
 			c.switchSession(target)
 			continue
+		case strings.HasPrefix(lowerInput, "/search"):
+			query := strings.TrimSpace(userInput[len("/search"):])
+			if query == "" {
+				fmt.Println("Usage: /search <query>")
+				continue
+			}
+			if err := c.recallSession(ctx, query); err != nil {
+				fmt.Printf("Recall error: %v\n", err)
+			}
+			fmt.Println()
+			continue
 		}
 
 		if err := c.processMessage(ctx, userInput); err != nil {
@@ -257,7 +330,7 @@ func (c *multiTurnChat) startChat(ctx context.Context) error {
 			if err := util.PrintSessionEvents(
 				ctx,
 				c.sessionService,
-				"session-demo",
+				appName,
 				c.userID,
 				c.sessionID,
 			); err != nil {
@@ -283,6 +356,19 @@ func (c *multiTurnChat) processMessage(
 	message := model.NewUserMessage(userMessage)
 
 	requestID := uuid.New().String()
+
+	// Inject requestID into context for logging.
+	ctx = context.WithValue(ctx, requestIDKey, requestID)
+
+	// Create a root span if tracing is enabled. The session service
+	// will attach its child spans (create_session, get_session, append_event)
+	// to this root span automatically via context propagation.
+	if *enableTrace {
+		spanCtx, span := atrace.Tracer.Start(ctx, "session_demo_request")
+		defer span.End()
+		ctx = spanCtx
+	}
+
 	// Run the agent through the runner.
 	eventChan, err := c.runner.Run(
 		ctx,
@@ -454,9 +540,13 @@ func (c *multiTurnChat) displayContent(
 	*fullContent += content
 }
 
-func (c *multiTurnChat) startNewSession() {
+func (c *multiTurnChat) startNewSession(customID string) {
 	oldSessionID := c.sessionID
-	c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
+	if customID != "" {
+		c.sessionID = customID
+	} else {
+		c.sessionID = fmt.Sprintf("session-%d", time.Now().Unix())
+	}
 	fmt.Printf("Started new session!\n")
 	fmt.Printf("   Previous: %s\n", oldSessionID)
 	fmt.Printf("   Current:  %s\n", c.sessionID)
@@ -467,7 +557,7 @@ func (c *multiTurnChat) startNewSession() {
 func (c *multiTurnChat) listSessions() {
 	ctx := context.Background()
 	userKey := session.UserKey{
-		AppName: "session-demo",
+		AppName: appName,
 		UserID:  c.userID,
 	}
 	sessions, err := c.sessionService.ListSessions(ctx, userKey)
@@ -508,4 +598,74 @@ func (c *multiTurnChat) switchSession(target string) {
 	}
 	c.sessionID = target
 	fmt.Printf("Switched to session %s\n", target)
+}
+
+func (c *multiTurnChat) recallSession(
+	ctx context.Context,
+	query string,
+) error {
+	if c.searchable == nil {
+		fmt.Println("Current session backend does not support semantic search.")
+		return nil
+	}
+
+	results, err := c.searchable.SearchEvents(
+		ctx,
+		session.EventSearchRequest{
+			Query: query,
+			UserKey: session.UserKey{
+				AppName: appName,
+				UserID:  c.userID,
+			},
+			SessionIDs: []string{c.sessionID},
+			MaxResults: *searchTopK,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 {
+		fmt.Println("No recalled events.")
+		return nil
+	}
+
+	fmt.Printf("Semantic recall for %q:\n", query)
+	for i, result := range results {
+		role, content := eventDisplay(result.Event)
+		fmt.Printf(
+			"   %d. [%.3f] %-9s %s\n",
+			i+1,
+			result.Score,
+			role,
+			util.Truncate(content, 80),
+		)
+	}
+	return nil
+}
+
+func eventDisplay(evt event.Event) (string, string) {
+	if evt.Response == nil || len(evt.Response.Choices) == 0 {
+		return "unknown", "<no content>"
+	}
+
+	msg := evt.Response.Choices[0].Message
+	content := strings.TrimSpace(msg.Content)
+	if content == "" && len(msg.ContentParts) > 0 {
+		var parts []string
+		for _, part := range msg.ContentParts {
+			if part.Text != nil && *part.Text != "" {
+				parts = append(parts, *part.Text)
+			}
+		}
+		content = strings.Join(parts, " ")
+	}
+	if content == "" {
+		content = "<empty>"
+	}
+
+	role := string(msg.Role)
+	if role == "" {
+		role = string(model.RoleAssistant)
+	}
+	return role, content
 }

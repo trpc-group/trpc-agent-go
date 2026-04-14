@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // mockMemoryService is a mock implementation of memory.Service for testing.
@@ -41,7 +42,7 @@ func newMockMemoryService() *mockMemoryService {
 	}
 }
 
-func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
+func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string, opts ...memory.AddOption) error {
 	m.counter++
 	memoryID := fmt.Sprintf("memory-%d", m.counter)
 	key := userKey.AppName + ":" + userKey.UserID + ":" + memoryID
@@ -56,10 +57,10 @@ func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKe
 	return nil
 }
 
-func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory string, topics []string) error {
+func (m *mockMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, mem string, topics []string, opts ...memory.UpdateOption) error {
 	key := memoryKey.AppName + ":" + memoryKey.UserID + ":" + memoryKey.MemoryID
 	if entry, exists := m.memories[key]; exists {
-		entry.Memory.Memory = memory
+		entry.Memory.Memory = mem
 		entry.Memory.Topics = topics
 		entry.UpdatedAt = time.Now()
 		return nil
@@ -101,7 +102,7 @@ func (m *mockMemoryService) ReadMemories(ctx context.Context, userKey memory.Use
 	return results, nil
 }
 
-func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
 	var results []*memory.Entry
 	prefix := userKey.AppName + ":" + userKey.UserID + ":"
 
@@ -579,16 +580,15 @@ func TestMemoryTool_SearchMemory_MissingQuery(t *testing.T) {
 	tool := NewSearchTool()
 	ctx := createMockContext("test-app", "test-user", service)
 
-	// Test searching without query.
+	// Test searching without query returns empty results.
 	args := map[string]any{}
 
 	jsonArgs, err := json.Marshal(args)
 	require.NoError(t, err, "Failed to marshal args")
 
 	result, err := tool.Call(ctx, jsonArgs)
-	require.Error(t, err, "Expected error for missing query")
-	assert.Nil(t, result, "Expected nil result on error")
-	assert.Contains(t, err.Error(), "query is required", "Expected specific error message")
+	require.NoError(t, err, "Missing query should return empty results, not error")
+	assert.NotNil(t, result, "Expected non-nil result")
 }
 
 func TestMemoryTool_LoadMemory_DefaultLimit(t *testing.T) {
@@ -757,6 +757,132 @@ func TestMemoryTool_Declaration_AllTools(t *testing.T) {
 			assert.NotNil(t, decl.InputSchema, "Expected non-nil input schema for %s", tt.name)
 		})
 	}
+}
+
+func TestMemoryTool_SearchDeclaration_EncouragesDirectLookup(t *testing.T) {
+	tool := NewSearchTool()
+	decl := tool.Declaration()
+	require.NotNil(t, decl)
+	require.NotNil(t, decl.InputSchema)
+	require.NotNil(t, decl.InputSchema.Properties)
+
+	assert.Contains(t, decl.Description, memoryToolScopeNote)
+	assert.Contains(t, decl.Description, memoryReadDirectUseNote)
+
+	querySchema := decl.InputSchema.Properties["query"]
+	require.NotNil(t, querySchema)
+	assert.Equal(t, searchMemoryQueryDescription, querySchema.Description)
+}
+
+func TestMemoryTool_LoadDeclaration_EncouragesDirectLookup(t *testing.T) {
+	tool := NewLoadTool()
+	decl := tool.Declaration()
+	require.NotNil(t, decl)
+	require.NotNil(t, decl.InputSchema)
+	require.NotNil(t, decl.InputSchema.Properties)
+
+	assert.Contains(t, decl.Description, memoryToolScopeNote)
+	assert.Contains(t, decl.Description, memoryReadDirectUseNote)
+
+	limitSchema := decl.InputSchema.Properties["limit"]
+	require.NotNil(t, limitSchema)
+	assert.Equal(t, loadLimitDescription, limitSchema.Description)
+}
+
+func TestMemoryTool_WriteDeclarations_ContainUsageGuidance(t *testing.T) {
+	tests := []struct {
+		name               string
+		tool               tool.CallableTool
+		expectedDescSubstr []string
+		fieldName          string
+		fieldDescription   string
+	}{
+		{
+			name: "add",
+			tool: NewAddTool(),
+			expectedDescSubstr: []string{
+				memoryToolScopeNote,
+				memoryWriteDirectUseNote,
+				memoryCaptureGuidance,
+			},
+			fieldName:        "memory",
+			fieldDescription: addMemoryDescription,
+		},
+		{
+			name: "update",
+			tool: NewUpdateTool(),
+			expectedDescSubstr: []string{
+				memoryToolScopeNote,
+				memoryWriteDirectUseNote,
+			},
+			fieldName:        "memory_id",
+			fieldDescription: updateMemoryIDDescription,
+		},
+		{
+			name: "delete",
+			tool: NewDeleteTool(),
+			expectedDescSubstr: []string{
+				memoryToolScopeNote,
+				memoryWriteDirectUseNote,
+				memoryDestructiveGuidance,
+			},
+			fieldName:        "memory_id",
+			fieldDescription: deleteMemoryIDDescription,
+		},
+		{
+			name: "clear",
+			tool: NewClearTool(),
+			expectedDescSubstr: []string{
+				memoryToolScopeNote,
+				memoryDestructiveGuidance,
+			},
+			fieldName:        "reason",
+			fieldDescription: clearReasonDescription,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decl := tt.tool.Declaration()
+			require.NotNil(t, decl)
+			require.NotNil(t, decl.InputSchema)
+			require.NotNil(t, decl.InputSchema.Properties)
+
+			for _, expected := range tt.expectedDescSubstr {
+				assert.Contains(t, decl.Description, expected)
+			}
+
+			fieldSchema := decl.InputSchema.Properties[tt.fieldName]
+			require.NotNil(t, fieldSchema)
+			assert.Equal(t, tt.fieldDescription, fieldSchema.Description)
+		})
+	}
+}
+
+func TestMemoryRequestTypes_PreserveSchemaMetadataForExternalTools(t *testing.T) {
+	passThrough := func(_ context.Context, req *SearchMemoryRequest) (*SearchMemoryResponse, error) {
+		return &SearchMemoryResponse{Query: req.Query}, nil
+	}
+
+	tool := function.NewFunctionTool(
+		passThrough,
+		function.WithName("external_memory_search"),
+		function.WithDescription("test"),
+	)
+
+	decl := tool.Declaration()
+	require.NotNil(t, decl)
+	require.NotNil(t, decl.InputSchema)
+	require.NotNil(t, decl.InputSchema.Properties)
+
+	querySchema := decl.InputSchema.Properties["query"]
+	require.NotNil(t, querySchema)
+	assert.Equal(t, "The search query to find relevant memories", querySchema.Description)
+
+	kindSchema := decl.InputSchema.Properties["kind"]
+	require.NotNil(t, kindSchema)
+	assert.Equal(t, "Filter by memory kind: 'fact' or 'episode'. Empty means all.", kindSchema.Description)
+	assert.Equal(t, []any{"fact", "episode"}, kindSchema.Enum)
 }
 
 func TestGetMemoryServiceFromContext(t *testing.T) {
@@ -1024,11 +1150,11 @@ func TestMemoryTool_LoadMemory_ServiceError(t *testing.T) {
 // mockMemoryServiceWithError is a mock that returns errors
 type mockMemoryServiceWithError struct{}
 
-func (m *mockMemoryServiceWithError) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
+func (m *mockMemoryServiceWithError) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string, opts ...memory.AddOption) error {
 	return fmt.Errorf("mock add error")
 }
 
-func (m *mockMemoryServiceWithError) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory string, topics []string) error {
+func (m *mockMemoryServiceWithError) UpdateMemory(ctx context.Context, memoryKey memory.Key, mem string, topics []string, opts ...memory.UpdateOption) error {
 	return fmt.Errorf("mock update error")
 }
 
@@ -1044,7 +1170,7 @@ func (m *mockMemoryServiceWithError) ReadMemories(ctx context.Context, userKey m
 	return nil, fmt.Errorf("mock read error")
 }
 
-func (m *mockMemoryServiceWithError) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+func (m *mockMemoryServiceWithError) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
 	return nil, fmt.Errorf("mock search error")
 }
 
@@ -1062,4 +1188,188 @@ func (m *mockMemoryServiceWithError) Close() error {
 
 func (m *mockMemoryServiceWithError) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
 	return "", false
+}
+
+// --- Episodic helpers unit tests ---
+
+func TestParseFlexibleTime(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantNil  bool
+		wantDate string // "2006-01-02" formatted
+	}{
+		{"RFC3339", "2024-05-07T10:30:00Z", false, "2024-05-07"},
+		{"datetime without TZ", "2024-05-07T10:30:00", false, "2024-05-07"},
+		{"datetime with space", "2024-05-07 10:30:00", false, "2024-05-07"},
+		{"date only", "2024-05-07", false, "2024-05-07"},
+		{"natural long", "7 May 2024", false, "2024-05-07"},
+		{"US format", "May 7, 2024", false, "2024-05-07"},
+		{"abbreviated", "May 2024", false, "2024-05-01"},
+		{"year-month", "2024-05", false, "2024-05-01"},
+		{"year only", "2024", false, "2024-01-01"},
+		{"empty", "", true, ""},
+		{"whitespace", "  ", true, ""},
+		{"unparsable", "last Tuesday", true, ""},
+		{"relative", "yesterday", true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseFlexibleTime(tt.input)
+			if tt.wantNil {
+				assert.Nil(t, got)
+			} else {
+				require.NotNil(t, got)
+				assert.Equal(t, tt.wantDate, got.Format("2006-01-02"))
+			}
+		})
+	}
+}
+
+func TestEndOfPeriod(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want time.Time
+	}{
+		{
+			"year only",
+			"2024",
+			time.Date(2024, 12, 31, 23, 59, 59, 0, time.UTC),
+		},
+		{
+			"month YYYY-MM",
+			"2024-02",
+			time.Date(2024, 2, 29, 23, 59, 59, 0, time.UTC), // leap year
+		},
+		{
+			"month January 2024",
+			"January 2024",
+			time.Date(2024, 1, 31, 23, 59, 59, 0, time.UTC),
+		},
+		{
+			"day level",
+			"2024-05-07",
+			time.Date(2024, 5, 7, 23, 59, 59, 0, time.UTC),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed := ParseFlexibleTime(tt.raw)
+			require.NotNil(t, parsed)
+			got := EndOfPeriod(*parsed, tt.raw)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestBuildMetadata(t *testing.T) {
+	tests := []struct {
+		name         string
+		kind         string
+		eventTimeStr string
+		participants []string
+		location     string
+		wantNil      bool
+		wantKind     memory.Kind
+	}{
+		{
+			name:    "all empty returns nil",
+			wantNil: true,
+		},
+		{
+			name:     "fact with no time",
+			kind:     "fact",
+			wantKind: memory.KindFact,
+		},
+		{
+			name:         "episode with time",
+			kind:         "episode",
+			eventTimeStr: "2024-05-07",
+			wantKind:     memory.KindEpisode,
+		},
+		{
+			name:     "episode without time remains episode",
+			kind:     "episode",
+			wantKind: memory.KindEpisode,
+		},
+		{
+			name:         "episode with unparsable time remains episode",
+			kind:         "episode",
+			eventTimeStr: "sometime last year",
+			wantKind:     memory.KindEpisode,
+		},
+		{
+			name:         "episode with valid time and metadata",
+			kind:         "episode",
+			eventTimeStr: "2024-05-07",
+			participants: []string{"Alice"},
+			location:     "Tokyo",
+			wantKind:     memory.KindEpisode,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildMetadata(tt.kind, tt.eventTimeStr, tt.participants, tt.location)
+			if tt.wantNil {
+				assert.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			assert.Equal(t, tt.wantKind, got.Kind)
+		})
+	}
+}
+
+func TestBuildSearchOptions(t *testing.T) {
+	req := &SearchMemoryRequest{
+		Query:            "Alice hiking",
+		Kind:             "episode",
+		TimeAfter:        "2024-05-01",
+		TimeBefore:       "May 2024",
+		OrderByEventTime: true,
+	}
+
+	got := buildSearchOptions(req)
+
+	assert.Equal(t, "Alice hiking", got.Query)
+	assert.Equal(t, memory.KindEpisode, got.Kind)
+	assert.True(t, got.Deduplicate)
+	assert.True(t, got.HybridSearch)
+	assert.True(t, got.KindFallback)
+	assert.True(t, got.OrderByEventTime)
+	require.NotNil(t, got.TimeAfter)
+	assert.Equal(t, "2024-05-01", got.TimeAfter.Format("2006-01-02"))
+	require.NotNil(t, got.TimeBefore)
+	assert.Equal(t, time.Date(2024, 5, 31, 23, 59, 59, 0, time.UTC), *got.TimeBefore)
+}
+
+func TestEntryToResult(t *testing.T) {
+	now := time.Date(2024, 5, 7, 9, 0, 0, 0, time.UTC)
+	eventTime := time.Date(2024, 5, 1, 18, 30, 0, 0, time.UTC)
+	entry := &memory.Entry{
+		ID:        "mem-1",
+		CreatedAt: now,
+		Score:     0.91,
+		Memory: &memory.Memory{
+			Memory:       "Alice hiked in Kyoto",
+			Topics:       []string{"travel"},
+			Kind:         memory.KindEpisode,
+			EventTime:    &eventTime,
+			Participants: []string{"Alice", "Bob"},
+			Location:     "Kyoto",
+		},
+	}
+
+	got := entryToResult(entry)
+
+	assert.Equal(t, "mem-1", got.ID)
+	assert.Equal(t, "Alice hiked in Kyoto", got.Memory)
+	assert.Equal(t, []string{"travel"}, got.Topics)
+	assert.Equal(t, now, got.Created)
+	assert.Equal(t, "episode", got.Kind)
+	assert.Equal(t, eventTime.Format(time.RFC3339), got.EventTime)
+	assert.Equal(t, []string{"Alice", "Bob"}, got.Participants)
+	assert.Equal(t, "Kyoto", got.Location)
+	assert.Equal(t, 0.91, got.Score)
 }

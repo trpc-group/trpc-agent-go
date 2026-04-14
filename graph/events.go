@@ -71,6 +71,8 @@ const (
 const (
 	// MetadataKeyNode is the key for node execution metadata.
 	MetadataKeyNode = "_node_metadata"
+	// MetadataKeyNodeEmitter is the key for node lifecycle emitter metadata.
+	MetadataKeyNodeEmitter = "_node_emitter"
 	// MetadataKeyPregel is the key for Pregel step metadata.
 	MetadataKeyPregel = "_pregel_metadata"
 	// MetadataKeyChannel is the key for channel update metadata.
@@ -109,6 +111,16 @@ const (
 func (nt NodeType) String() string {
 	return string(nt)
 }
+
+// NodeEventEmitter identifies which graph component emitted a node lifecycle
+// event. This is auxiliary routing metadata for downstream translators.
+type NodeEventEmitter string
+
+// Node lifecycle emitter constants.
+const (
+	NodeEventEmitterExecutor    NodeEventEmitter = "executor"
+	NodeEventEmitterAgentHelper NodeEventEmitter = "agent_helper"
+)
 
 // ExecutionPhase represents the phase of node execution.
 type ExecutionPhase string
@@ -294,6 +306,8 @@ type PregelStepMetadata struct {
 	LineageID string `json:"lineageId,omitempty"`
 	// CheckpointID is the checkpoint ID that can be used for resuming.
 	CheckpointID string `json:"checkpointId,omitempty"`
+	// CheckpointNS is the checkpoint namespace that can be used for resuming.
+	CheckpointNS string `json:"checkpointNs,omitempty"`
 }
 
 // ChannelUpdateMetadata contains metadata about channel updates.
@@ -346,6 +360,13 @@ type CompletionMetadata struct {
 	TotalDuration time.Duration `json:"totalDuration"`
 	// FinalStateKeys is the number of keys in the final state.
 	FinalStateKeys int `json:"finalStateKeys"`
+	// FinalResponseID carries the stable identity of the terminal assistant
+	// response when the graph can provide one. When available, this is
+	// typically the underlying model response ID.
+	FinalResponseID string `json:"finalResponseID,omitempty"`
+	// SnapshotOnly marks terminal completion snapshots that should remain
+	// available to callers but must not be replayed as conversational history.
+	SnapshotOnly bool `json:"snapshotOnly,omitempty"`
 }
 
 // NodeCustomEventCategory represents the category of node custom events.
@@ -403,6 +424,36 @@ func WithNodeMetadata(metadata NodeExecutionMetadata) EventOption {
 			e.StateDelta[MetadataKeyNode] = jsonData
 		}
 	}
+}
+
+// NodeEventEmitterFromStateDelta extracts the node lifecycle emitter marker
+// from an event state delta when one is present.
+func NodeEventEmitterFromStateDelta(stateDelta map[string][]byte) NodeEventEmitter {
+	if len(stateDelta) == 0 {
+		return ""
+	}
+	raw, ok := stateDelta[MetadataKeyNodeEmitter]
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	var emitter NodeEventEmitter
+	if err := json.Unmarshal(raw, &emitter); err != nil {
+		return ""
+	}
+	return emitter
+}
+
+// SetNodeEventEmitterInStateDelta stores a node lifecycle emitter marker in
+// state delta metadata. Empty emitters are ignored.
+func SetNodeEventEmitterInStateDelta(stateDelta map[string][]byte, emitter NodeEventEmitter) {
+	if len(stateDelta) == 0 || emitter == "" {
+		return
+	}
+	raw, err := json.Marshal(emitter)
+	if err != nil {
+		return
+	}
+	stateDelta[MetadataKeyNodeEmitter] = raw
 }
 
 // WithToolMetadata adds tool execution metadata to the event.
@@ -511,6 +562,7 @@ type NodeEventOptions struct {
 	InvocationID  string
 	NodeID        string
 	NodeType      NodeType
+	Emitter       NodeEventEmitter
 	StepNumber    int
 	StartTime     time.Time
 	EndTime       time.Time
@@ -596,6 +648,13 @@ func WithNodeEventNodeID(nodeID string) NodeEventOption {
 func WithNodeEventNodeType(nodeType NodeType) NodeEventOption {
 	return func(opts *NodeEventOptions) {
 		opts.NodeType = nodeType
+	}
+}
+
+// WithNodeEventEmitter sets the lifecycle emitter/source for node events.
+func WithNodeEventEmitter(emitter NodeEventEmitter) NodeEventOption {
+	return func(opts *NodeEventOptions) {
+		opts.Emitter = emitter
 	}
 }
 
@@ -873,6 +932,7 @@ type PregelEventOptions struct {
 	InterruptValue  any
 	LineageID       string
 	CheckpointID    string
+	CheckpointNS    string
 }
 
 // PregelEventOption is a function that configures Pregel event options.
@@ -984,6 +1044,13 @@ func WithPregelEventCheckpointID(checkpointID string) PregelEventOption {
 	}
 }
 
+// WithPregelEventCheckpointNS sets the checkpoint namespace for Pregel events.
+func WithPregelEventCheckpointNS(checkpointNS string) PregelEventOption {
+	return func(opts *PregelEventOptions) {
+		opts.CheckpointNS = checkpointNS
+	}
+}
+
 // ChannelEventOptions contains options for creating channel events.
 type ChannelEventOptions struct {
 	InvocationID   string
@@ -1080,10 +1147,12 @@ func WithStateEventStateSize(stateSize int) StateEventOption {
 
 // CompletionEventOptions contains options for creating completion events.
 type CompletionEventOptions struct {
-	InvocationID  string
-	FinalState    State
-	TotalSteps    int
-	TotalDuration time.Duration
+	InvocationID    string
+	FinalState      State
+	FinalResponseID string
+	TotalSteps      int
+	TotalDuration   time.Duration
+	SnapshotOnly    bool
 }
 
 // CompletionEventOption is a function that configures completion event options.
@@ -1103,6 +1172,14 @@ func WithCompletionEventFinalState(finalState State) CompletionEventOption {
 	}
 }
 
+// WithCompletionEventFinalResponseID sets the terminal response ID for
+// completion events when one is available.
+func WithCompletionEventFinalResponseID(responseID string) CompletionEventOption {
+	return func(opts *CompletionEventOptions) {
+		opts.FinalResponseID = responseID
+	}
+}
+
 // WithCompletionEventTotalSteps sets the total steps for completion events.
 func WithCompletionEventTotalSteps(totalSteps int) CompletionEventOption {
 	return func(opts *CompletionEventOptions) {
@@ -1114,6 +1191,14 @@ func WithCompletionEventTotalSteps(totalSteps int) CompletionEventOption {
 func WithCompletionEventTotalDuration(totalDuration time.Duration) CompletionEventOption {
 	return func(opts *CompletionEventOptions) {
 		opts.TotalDuration = totalDuration
+	}
+}
+
+// WithCompletionEventSnapshotOnly marks completion output as terminal
+// snapshot content that should not be replayed as conversational history.
+func WithCompletionEventSnapshotOnly(snapshotOnly bool) CompletionEventOption {
+	return func(opts *CompletionEventOptions) {
+		opts.SnapshotOnly = snapshotOnly
 	}
 }
 
@@ -1136,10 +1221,12 @@ func NewNodeStartEvent(opts ...NodeEventOption) *event.Event {
 		Attempt:     options.Attempt,
 		MaxAttempts: options.MaxAttempts,
 	}
-	return NewGraphEvent(options.InvocationID,
+	evt := NewGraphEvent(options.InvocationID,
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
 		ObjectTypeGraphNodeStart,
 		WithNodeMetadata(metadata))
+	SetNodeEventEmitterInStateDelta(evt.StateDelta, options.Emitter)
+	return evt
 }
 
 // NewNodeCompleteEvent creates a new node completion event.
@@ -1163,10 +1250,12 @@ func NewNodeCompleteEvent(opts ...NodeEventOption) *event.Event {
 		Attempt:     options.Attempt,
 		MaxAttempts: options.MaxAttempts,
 	}
-	return NewGraphEvent(options.InvocationID,
+	evt := NewGraphEvent(options.InvocationID,
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
 		ObjectTypeGraphNodeComplete,
 		WithNodeMetadata(metadata))
+	SetNodeEventEmitterInStateDelta(evt.StateDelta, options.Emitter)
+	return evt
 }
 
 // NewNodeErrorEvent creates a new node error event.
@@ -1194,6 +1283,7 @@ func NewNodeErrorEvent(opts ...NodeEventOption) *event.Event {
 		formatNodeAuthor(options.NodeID, AuthorGraphNode),
 		ObjectTypeGraphNodeError,
 		WithNodeMetadata(metadata))
+	SetNodeEventEmitterInStateDelta(graphEvent.StateDelta, options.Emitter)
 
 	respErr := options.ResponseError
 	if respErr == nil && options.Error != "" {
@@ -1214,9 +1304,7 @@ func NewNodeErrorEvent(opts ...NodeEventOption) *event.Event {
 		if respErr.Type == "" {
 			respErr.Type = model.ErrorTypeFlowError
 		}
-		graphEvent.Response.Object = model.ObjectTypeError
 		graphEvent.Response.Error = respErr
-		graphEvent.Object = graphEvent.Response.Object
 	}
 	return graphEvent
 }
@@ -1392,6 +1480,7 @@ func NewPregelInterruptEvent(opts ...PregelEventOption) *event.Event {
 		InterruptValue: options.InterruptValue,
 		LineageID:      options.LineageID,
 		CheckpointID:   options.CheckpointID,
+		CheckpointNS:   options.CheckpointNS,
 	}
 	return NewGraphEvent(options.InvocationID, AuthorGraphPregel, ObjectTypeGraphPregelStep,
 		WithPregelMetadata(metadata))
@@ -1486,12 +1575,73 @@ func buildFinalChoices(text string) []model.Choice {
 // addCompletionMetadata attaches completion metadata to StateDelta.
 func addCompletionMetadata(e *event.Event, options *CompletionEventOptions) {
 	completionMetadata := CompletionMetadata{
-		TotalSteps:     options.TotalSteps,
-		TotalDuration:  options.TotalDuration,
-		FinalStateKeys: len(extractStateKeys(options.FinalState)),
+		TotalSteps:      options.TotalSteps,
+		TotalDuration:   options.TotalDuration,
+		FinalStateKeys:  len(extractStateKeys(options.FinalState)),
+		FinalResponseID: options.FinalResponseID,
+		SnapshotOnly:    options.SnapshotOnly,
 	}
 	if jsonData, err := json.Marshal(completionMetadata); err == nil {
 		e.StateDelta[MetadataKeyCompletion] = jsonData
+	}
+}
+
+// FinalResponseIDFromStateDelta returns the stable terminal response identity
+// carried by a graph completion snapshot when one is available.
+func FinalResponseIDFromStateDelta(stateDelta map[string][]byte) string {
+	if stateDelta == nil {
+		return ""
+	}
+	raw, ok := stateDelta[StateKeyLastResponseID]
+	if ok && len(raw) > 0 {
+		var responseID string
+		if err := json.Unmarshal(raw, &responseID); err == nil {
+			if responseID != "" {
+				return responseID
+			}
+		}
+	}
+	metadataRaw, ok := stateDelta[MetadataKeyCompletion]
+	if !ok || len(metadataRaw) == 0 {
+		return ""
+	}
+	var metadata CompletionMetadata
+	if err := json.Unmarshal(metadataRaw, &metadata); err != nil {
+		return ""
+	}
+	return metadata.FinalResponseID
+}
+
+// CompletionSnapshotOnlyFromStateDelta reports whether a completion snapshot
+// should be excluded from conversational history replay.
+func CompletionSnapshotOnlyFromStateDelta(stateDelta map[string][]byte) bool {
+	if stateDelta == nil {
+		return false
+	}
+	metadataRaw, ok := stateDelta[MetadataKeyCompletion]
+	if !ok || len(metadataRaw) == 0 {
+		return false
+	}
+	var metadata CompletionMetadata
+	if err := json.Unmarshal(metadataRaw, &metadata); err != nil {
+		return false
+	}
+	return metadata.SnapshotOnly
+}
+
+// SetCompletionSnapshotOnlyInStateDelta updates completion metadata to mark the
+// snapshot as replay-ineligible conversational history.
+func SetCompletionSnapshotOnlyInStateDelta(stateDelta map[string][]byte, snapshotOnly bool) {
+	if stateDelta == nil {
+		return
+	}
+	metadata := CompletionMetadata{}
+	if raw, ok := stateDelta[MetadataKeyCompletion]; ok && len(raw) > 0 {
+		_ = json.Unmarshal(raw, &metadata)
+	}
+	metadata.SnapshotOnly = snapshotOnly
+	if jsonData, err := json.Marshal(metadata); err == nil {
+		stateDelta[MetadataKeyCompletion] = jsonData
 	}
 }
 

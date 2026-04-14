@@ -33,15 +33,6 @@ const (
 	functionToolType         = "function"
 )
 
-var (
-	protocolOverheadTokens = imodel.DefaultProtocolOverheadTokens
-	reserveOutputTokens    = imodel.DefaultReserveOutputTokens
-	inputTokensFloor       = imodel.DefaultInputTokensFloor
-	outputTokensFloor      = imodel.DefaultOutputTokensFloor
-	safetyMarginRatio      = imodel.DefaultSafetyMarginRatio
-	maxInputTokensRatio    = imodel.DefaultMaxInputTokensRatio
-)
-
 // Model implements the model.Model interface for Hunyuan API.
 type Model struct {
 	client                     *hunyuan.Client
@@ -62,7 +53,6 @@ type Model struct {
 	protocolOverheadTokens int
 	reserveOutputTokens    int
 	inputTokensFloor       int
-	outputTokensFloor      int
 	safetyMarginRatio      float64
 	maxInputTokensRatio    float64
 }
@@ -176,7 +166,6 @@ func New(name string, opts ...Option) *Model {
 		protocolOverheadTokens:     o.tokenTailoringConfig.ProtocolOverheadTokens,
 		reserveOutputTokens:        o.tokenTailoringConfig.ReserveOutputTokens,
 		inputTokensFloor:           o.tokenTailoringConfig.InputTokensFloor,
-		outputTokensFloor:          o.tokenTailoringConfig.OutputTokensFloor,
 		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
 	}
@@ -192,6 +181,53 @@ func (m *Model) Info() model.Info {
 	return model.Info{
 		Name: m.name,
 	}
+}
+
+func (m *Model) runChatRequestCallback(
+	ctx context.Context,
+	chatRequest *hunyuan.ChatCompletionNewParams,
+) {
+	if m.chatRequestCallback == nil {
+		return
+	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat request callback")
+	m.chatRequestCallback(ctx, chatRequest)
+}
+
+func (m *Model) runChatResponseCallback(
+	ctx context.Context,
+	chatRequest *hunyuan.ChatCompletionNewParams,
+	chatResponse *hunyuan.ChatCompletionResponse,
+) {
+	if m.chatResponseCallback == nil {
+		return
+	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat response callback")
+	m.chatResponseCallback(ctx, chatRequest, chatResponse)
+}
+
+func (m *Model) runChatChunkCallback(
+	ctx context.Context,
+	chatRequest *hunyuan.ChatCompletionNewParams,
+	chatChunk *hunyuan.ChatCompletionResponse,
+) {
+	if m.chatChunkCallback == nil {
+		return
+	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat chunk callback")
+	m.chatChunkCallback(ctx, chatRequest, chatChunk)
+}
+
+func (m *Model) runChatStreamCompleteCallback(
+	ctx context.Context,
+	chatRequest *hunyuan.ChatCompletionNewParams,
+	streamErr error,
+) {
+	if m.chatStreamCompleteCallback == nil {
+		return
+	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat stream complete callback")
+	m.chatStreamCompleteCallback(ctx, chatRequest, streamErr)
 }
 
 // GenerateContent generates content from the model.
@@ -211,13 +247,14 @@ func (m *Model) GenerateContent(
 		return nil, fmt.Errorf("build chat request: %w", err)
 	}
 
+	// Execute callback synchronously before starting the goroutine
+	// to avoid a race where the runner and HTTP handler finish
+	// (closing the SSE writer) while the callback is still running.
+	m.runChatRequestCallback(ctx, chatRequest)
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
-		if m.chatRequestCallback != nil {
-			m.chatRequestCallback(ctx, chatRequest)
-		}
 		if request.Stream {
 			m.handleStreamingResponse(ctx, chatRequest, responseChan)
 			return
@@ -359,9 +396,7 @@ func (m *Model) handleNonStreamingResponse(
 		return
 	}
 
-	if m.chatResponseCallback != nil {
-		m.chatResponseCallback(ctx, chatRequest, chatResponse)
-	}
+	m.runChatResponseCallback(ctx, chatRequest, chatResponse)
 
 	response, err := convertChatResponse(chatResponse)
 	if err != nil {
@@ -383,18 +418,23 @@ func (m *Model) handleStreamingResponse(
 	chatRequest *hunyuan.ChatCompletionNewParams,
 	responseChan chan<- *model.Response,
 ) {
-	var streamErr error
+	var (
+		streamErr     error
+		finalResponse *model.Response
+	)
 
 	err := m.client.ChatCompletionStream(ctx, chatRequest, func(chunk *hunyuan.ChatCompletionResponse) error {
-		if m.chatChunkCallback != nil {
-			m.chatChunkCallback(ctx, chatRequest, chunk)
-		}
+		m.runChatChunkCallback(ctx, chatRequest, chunk)
 
 		response, err := convertChatResponse(chunk)
 		if err != nil {
 			return err
 		}
 		response.Model = m.name
+		if response.Done {
+			finalResponse = response
+			return nil
+		}
 
 		// Emit partial response.
 		select {
@@ -408,12 +448,21 @@ func (m *Model) handleStreamingResponse(
 
 	if err != nil {
 		streamErr = err
-		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, err)
 	}
 
-	// Call the stream complete callback.
-	if m.chatStreamCompleteCallback != nil {
-		m.chatStreamCompleteCallback(ctx, chatRequest, streamErr)
+	// Call the stream complete callback before surfacing the terminal result.
+	m.runChatStreamCompleteCallback(ctx, chatRequest, streamErr)
+
+	if streamErr != nil {
+		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
+		return
+	}
+	if finalResponse == nil {
+		return
+	}
+	select {
+	case responseChan <- finalResponse:
+	case <-ctx.Done():
 	}
 }
 

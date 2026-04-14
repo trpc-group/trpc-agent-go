@@ -17,13 +17,19 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/session"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
+	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
+	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
 const adminAutoPortSearchSpan = 32
@@ -107,6 +113,7 @@ func buildAdminConfig(
 	opts runOptions,
 	agentType string,
 	instanceID string,
+	langfuse admin.LangfuseStatus,
 	stateDir string,
 	debugDir string,
 	startedAt time.Time,
@@ -114,9 +121,19 @@ func buildAdminConfig(
 	routes admin.Routes,
 	cronSvc *cron.Service,
 	execMgr *octool.Manager,
+	promptController *RuntimePromptController,
+	browserManaged admin.BrowserManagedStatusProvider,
 	adminAddr string,
 	adminURL string,
+	skillsRepo *ocskills.Repository,
+	skillsWatch *ocskills.WatchService,
+	memoryFiles admin.MemoryFileStore,
+	sessionSvc session.Service,
 ) admin.Config {
+	identity := buildAdminIdentityProvider(
+		stateDir,
+		opts.AppName,
+	)
 	return admin.Config{
 		AppName:        opts.AppName,
 		InstanceID:     instanceID,
@@ -128,18 +145,122 @@ func buildAdminConfig(
 		ModelMode:      strings.TrimSpace(opts.ModelMode),
 		ModelName:      adminModelName(opts, agentType),
 		SessionBackend: strings.TrimSpace(opts.SessionBackend),
-		MemoryBackend:  strings.TrimSpace(opts.MemoryBackend),
+		MemoryBackend:  resolveMemoryBackendType(opts.MemoryBackend),
 		GatewayAddr:    opts.HTTPAddr,
 		GatewayURL:     listenURL(opts.HTTPAddr),
 		AdminAddr:      strings.TrimSpace(adminAddr),
 		AdminURL:       strings.TrimSpace(adminURL),
 		AdminAutoPort:  opts.AdminAutoPort,
+		Langfuse:       langfuse,
 		StateDir:       stateDir,
 		DebugDir:       debugDir,
 		Channels:       channelIDs(channels),
 		GatewayRoutes:  routes,
-		Cron:           cronSvc,
-		Exec:           execMgr,
+		Skills: buildAdminSkillsProvider(
+			opts,
+			stateDir,
+			skillsRepo,
+			skillsWatch,
+		),
+		Prompts: buildAdminPromptProvider(
+			opts,
+			promptController,
+		),
+		Identity: identity,
+		Chats: buildAdminChatsProvider(
+			identity,
+			opts.AppName,
+			sessionSvc,
+		),
+		MemoryFiles: memoryFiles,
+		Browser: buildBrowserAdminConfig(
+			opts.ToolProviders,
+			browserManaged,
+		),
+		Cron: cronSvc,
+		Exec: execMgr,
+	}
+}
+
+func buildBrowserAdminConfig(
+	specs []pluginSpec,
+	managed admin.BrowserManagedStatusProvider,
+) admin.BrowserConfig {
+	providers := make([]admin.BrowserProvider, 0, len(specs))
+	for i := range specs {
+		spec := specs[i]
+		if strings.TrimSpace(spec.Type) != toolProviderBrowser {
+			continue
+		}
+
+		var cfg ocbrowser.Config
+		if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
+			continue
+		}
+
+		provider := admin.BrowserProvider{
+			Name:             strings.TrimSpace(spec.Name),
+			DefaultProfile:   strings.TrimSpace(cfg.DefaultProfile),
+			HostServerURL:    strings.TrimSpace(cfg.ServerURL),
+			SandboxServerURL: strings.TrimSpace(cfg.SandboxServerURL),
+		}
+		if cfg.EvaluateEnabled != nil {
+			provider.EvaluateEnabled = *cfg.EvaluateEnabled
+		}
+		if cfg.AllowLoopback != nil {
+			provider.AllowLoopback = *cfg.AllowLoopback
+		}
+		if cfg.AllowPrivateNet != nil {
+			provider.AllowPrivateNet = *cfg.AllowPrivateNet
+		}
+		if cfg.AllowFileURLs != nil {
+			provider.AllowFileURLs = *cfg.AllowFileURLs
+		}
+
+		if len(cfg.Profiles) > 0 {
+			provider.Profiles = make(
+				[]admin.BrowserProfile,
+				0,
+				len(cfg.Profiles),
+			)
+		}
+		for j := range cfg.Profiles {
+			profile := cfg.Profiles[j]
+			provider.Profiles = append(
+				provider.Profiles,
+				admin.BrowserProfile{
+					Name: strings.TrimSpace(profile.Name),
+					Description: strings.TrimSpace(
+						profile.Description,
+					),
+					Transport: strings.TrimSpace(profile.Transport),
+					ServerURL: strings.TrimSpace(profile.ServerURL),
+					BrowserServerURL: strings.TrimSpace(
+						profile.BrowserServerURL,
+					),
+				},
+			)
+		}
+
+		if len(cfg.Nodes) > 0 {
+			provider.Nodes = make(
+				[]admin.BrowserNode,
+				0,
+				len(cfg.Nodes),
+			)
+		}
+		for j := range cfg.Nodes {
+			node := cfg.Nodes[j]
+			provider.Nodes = append(provider.Nodes, admin.BrowserNode{
+				ID:        strings.TrimSpace(node.ID),
+				ServerURL: strings.TrimSpace(node.ServerURL),
+			})
+		}
+		providers = append(providers, provider)
+	}
+	return admin.BrowserConfig{
+		Providers: providers,
+		Managed:   managed,
 	}
 }
 
@@ -159,4 +280,40 @@ func adminModelName(
 		return ""
 	}
 	return strings.TrimSpace(opts.OpenAIModel)
+}
+
+type adminSkillsProvider struct {
+	mu           sync.RWMutex
+	configPath   string
+	repo         *ocskills.Repository
+	watch        *ocskills.WatchService
+	roots        []string
+	bundledRoot  string
+	configKeys   []string
+	allowBundled []string
+	skillConfigs map[string]ocskills.SkillConfig
+}
+
+func buildAdminSkillsProvider(
+	opts runOptions,
+	stateDir string,
+	repo *ocskills.Repository,
+	watch *ocskills.WatchService,
+) admin.SkillsStatusProvider {
+	cwd, _ := os.Getwd()
+	cfg := agentConfig{
+		SkillsRoot:      opts.SkillsRoot,
+		SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
+		StateDir:        stateDir,
+	}
+	return &adminSkillsProvider{
+		configPath:   strings.TrimSpace(opts.ConfigPath),
+		repo:         repo,
+		watch:        watch,
+		roots:        resolveSkillRoots(cwd, cfg),
+		bundledRoot:  resolveBundledSkillsRoot(cwd, stateDir),
+		configKeys:   resolveSkillConfigKeys(opts),
+		allowBundled: splitCSV(opts.SkillsAllowBundled),
+		skillConfigs: opts.SkillConfigs,
+	}
 }

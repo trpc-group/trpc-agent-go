@@ -28,6 +28,98 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
+	t.Run("request callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatRequestCallback: func(ctx context.Context, chatRequest []*genai.Content) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatRequestCallback(context.Background(), nil)
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("response callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatResponseCallback: func(
+				ctx context.Context,
+				chatRequest []*genai.Content,
+				generateConfig *genai.GenerateContentConfig,
+				chatResponse *genai.GenerateContentResponse,
+			) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatResponseCallback(
+				context.Background(),
+				nil,
+				&genai.GenerateContentConfig{},
+				&genai.GenerateContentResponse{},
+			)
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("chunk callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatChunkCallback: func(
+				ctx context.Context,
+				chatRequest []*genai.Content,
+				generateConfig *genai.GenerateContentConfig,
+				chatResponse *genai.GenerateContentResponse,
+			) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatChunkCallback(
+				context.Background(),
+				nil,
+				&genai.GenerateContentConfig{},
+				&genai.GenerateContentResponse{},
+			)
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("stream complete callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatStreamCompleteCallback: func(
+				ctx context.Context,
+				chatRequest []*genai.Content,
+				generateConfig *genai.GenerateContentConfig,
+				chatResponse *model.Response,
+			) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatStreamCompleteCallback(
+				context.Background(),
+				nil,
+				&genai.GenerateContentConfig{},
+				&model.Response{},
+			)
+		})
+		assert.True(t, callbackCalled)
+	})
+}
+
 func TestModel_convertMessages(t *testing.T) {
 	var (
 		text      = "Text"
@@ -260,6 +352,63 @@ func TestNormalizeToolSchema_MarshalErrorFallsBack(t *testing.T) {
 	props, ok := out["properties"].(map[string]any)
 	require.True(t, ok)
 	require.Empty(t, props)
+}
+
+// namedTool is a test helper like Tool but with a configurable name,
+// used to create distinct tool entries when testing multi-tool behaviour.
+type namedTool struct {
+	name        string
+	inputSchema *tool.Schema
+}
+
+func (t *namedTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        t.name,
+		Description: t.name + " description",
+		InputSchema: t.inputSchema,
+	}
+}
+
+// TestModel_convertTools_EmptyMapReturnsNil verifies that convertTools returns
+// nil (not an empty slice) when the tool map is empty, so the caller never
+// sends an empty "tools" array to the Gemini API.
+func TestModel_convertTools_EmptyMapReturnsNil(t *testing.T) {
+	m := &Model{}
+	require.Nil(t, m.convertTools(nil))
+	require.Nil(t, m.convertTools(map[string]tool.Tool{}))
+}
+
+// TestModel_convertTools_MultipleToolsGroupedIntoSingleTool verifies the
+// Vertex AI compatibility fix: all function declarations must be grouped into
+// a single *genai.Tool object. Vertex AI rejects multiple Tool objects with:
+// "Multiple tools are supported only when they are all search tools."
+// It also verifies that declarations are emitted in sorted-key order so the
+// output is deterministic across runs.
+func TestModel_convertTools_MultipleToolsGroupedIntoSingleTool(t *testing.T) {
+	m := &Model{}
+
+	tools := map[string]tool.Tool{
+		"alpha": &namedTool{name: "alpha", inputSchema: &tool.Schema{Type: "object"}},
+		"beta":  &namedTool{name: "beta"},
+		"gamma": &namedTool{name: "gamma", inputSchema: &tool.Schema{Type: "string"}},
+	}
+
+	converted := m.convertTools(tools)
+
+	// Must produce exactly one *genai.Tool (Vertex AI constraint).
+	require.Len(t, converted, 1, "all declarations must be grouped into a single genai.Tool")
+
+	// Must contain one declaration per input tool.
+	require.Len(t, converted[0].FunctionDeclarations, len(tools),
+		"every tool must produce exactly one FunctionDeclaration")
+
+	// Declarations must be in sorted (alphabetical) key order for determinism.
+	got := make([]string, len(converted[0].FunctionDeclarations))
+	for i, fd := range converted[0].FunctionDeclarations {
+		got[i] = fd.Name
+	}
+	require.Equal(t, []string{"alpha", "beta", "gamma"}, got,
+		"declarations must be sorted by tool name for deterministic output")
 }
 
 func TestNormalizeToolSchema_NilSchemaReturnsNil(t *testing.T) {
@@ -1218,7 +1367,8 @@ func TestModel_GenerateContentStreamingError(t *testing.T) {
 	})
 
 	t.Run("error_with_callbacks", func(t *testing.T) {
-		// Test that chunk callback is not called when error occurs immediately
+		// Test that an immediate streaming error skips chunk callbacks but still
+		// invokes the stream-complete callback before the error becomes visible.
 		streamErr := errors.New("callback test error")
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1231,7 +1381,8 @@ func TestModel_GenerateContentStreamingError(t *testing.T) {
 			Return(seqWithImmediateError[*genai.GenerateContentResponse](streamErr)).AnyTimes()
 
 		chunkCallbackCalled := false
-		completeCallbackCalled := false
+		completeCallbackCalled := make(chan struct{})
+		var completeCallbackResp *model.Response
 
 		m := &Model{
 			client: mockClient,
@@ -1241,7 +1392,8 @@ func TestModel_GenerateContentStreamingError(t *testing.T) {
 			},
 			chatStreamCompleteCallback: func(ctx context.Context, chatRequest []*genai.Content,
 				generateConfig *genai.GenerateContentConfig, chatResponse *model.Response) {
-				completeCallbackCalled = true
+				completeCallbackResp = chatResponse
+				close(completeCallbackCalled)
 			},
 		}
 		respChan, err := m.GenerateContent(context.Background(), req)
@@ -1250,14 +1402,84 @@ func TestModel_GenerateContentStreamingError(t *testing.T) {
 		// Read response (error)
 		resp := <-respChan
 		assert.NotNil(t, resp.Error)
+		select {
+		case <-completeCallbackCalled:
+		default:
+			t.Fatal("stream-complete callback must run before error response is emitted")
+		}
 
 		// Wait for channel to close
 		for range respChan {
 		}
 
-		// Callbacks should not be called when error occurs immediately
+		// Chunk callbacks should still not run on immediate errors.
 		assert.False(t, chunkCallbackCalled, "chunk callback should not be called on immediate error")
-		assert.False(t, completeCallbackCalled, "complete callback should not be called on error")
+		require.NotNil(t, completeCallbackResp)
+		require.NotNil(t, completeCallbackResp.Error)
+		assert.Equal(t, "callback test error", completeCallbackResp.Error.Message)
+	})
+
+	t.Run("mid_stream_error_with_chunk_callback", func(t *testing.T) {
+		// When a mid-stream error occurs after some buffered chunks, the
+		// chatChunkCallback must be invoked for each flushed chunk before the
+		// error response is emitted.  This exercises lines 291-292 of gemini.go.
+		streamErr := errors.New("mid-stream interruption")
+		successChunk := &genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{
+				{Content: &genai.Content{Parts: []*genai.Part{{Text: "partial"}}}},
+			},
+		}
+
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		mockClient := NewMockClient(ctrl)
+		mockModels := NewMockModels(ctrl)
+		mockClient.EXPECT().Models().Return(mockModels).AnyTimes()
+		mockModels.EXPECT().
+			GenerateContentStream(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+			Return(seqFromSliceWithError([]*genai.GenerateContentResponse{successChunk}, streamErr))
+
+		var chunkCallbackRaw []*genai.GenerateContentResponse
+		completeCallbackCalled := make(chan struct{})
+		var completeCallbackResp *model.Response
+		m := &Model{
+			client: mockClient,
+			chatChunkCallback: func(_ context.Context, _ []*genai.Content,
+				_ *genai.GenerateContentConfig, r *genai.GenerateContentResponse) {
+				chunkCallbackRaw = append(chunkCallbackRaw, r)
+			},
+			chatStreamCompleteCallback: func(_ context.Context, _ []*genai.Content,
+				_ *genai.GenerateContentConfig, r *model.Response) {
+				completeCallbackResp = r
+				close(completeCallbackCalled)
+			},
+		}
+		respChan, err := m.GenerateContent(context.Background(), req)
+		require.NoError(t, err)
+
+		partialResp := <-respChan
+		require.NotNil(t, partialResp)
+		require.Nil(t, partialResp.Error)
+		require.Equal(t, "partial", partialResp.Choices[0].Delta.Content)
+
+		errorResp := <-respChan
+		require.NotNil(t, errorResp)
+		require.NotNil(t, errorResp.Error)
+		require.Equal(t, "mid-stream interruption", errorResp.Error.Message)
+		select {
+		case <-completeCallbackCalled:
+		default:
+			t.Fatal("stream-complete callback must run before error response is emitted")
+		}
+		for range respChan {
+		}
+		// chatChunkCallback must have been called once (for the flushed chunk).
+		require.Len(t, chunkCallbackRaw, 1)
+		require.Equal(t, successChunk, chunkCallbackRaw[0])
+		require.NotNil(t, completeCallbackResp)
+		require.NotNil(t, completeCallbackResp.Error)
+		require.Equal(t, "mid-stream interruption", completeCallbackResp.Error.Message)
 	})
 }
 

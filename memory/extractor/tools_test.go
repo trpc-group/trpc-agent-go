@@ -10,6 +10,7 @@ package extractor
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,9 +56,11 @@ func TestParseToolCallArgs_Add(t *testing.T) {
 				"topics": []any{"preferences", "food"},
 			},
 			expected: &Operation{
-				Type:   OperationAdd,
-				Memory: "User likes coffee.",
-				Topics: []string{"preferences", "food"},
+				Type:         OperationAdd,
+				Memory:       "User likes coffee.",
+				Topics:       []string{"preferences", "food"},
+				MemoryKind:   memory.KindFact,
+				Participants: []string{},
 			},
 		},
 		{
@@ -66,9 +69,11 @@ func TestParseToolCallArgs_Add(t *testing.T) {
 				"memory": "User likes tea.",
 			},
 			expected: &Operation{
-				Type:   OperationAdd,
-				Memory: "User likes tea.",
-				Topics: []string{},
+				Type:         OperationAdd,
+				Memory:       "User likes tea.",
+				Topics:       []string{},
+				MemoryKind:   memory.KindFact,
+				Participants: []string{},
 			},
 		},
 		{
@@ -107,10 +112,12 @@ func TestParseToolCallArgs_Update(t *testing.T) {
 				"topics":    []any{"preferences"},
 			},
 			expected: &Operation{
-				Type:     OperationUpdate,
-				MemoryID: "mem-123",
-				Memory:   "User now prefers tea.",
-				Topics:   []string{"preferences"},
+				Type:         OperationUpdate,
+				MemoryID:     "mem-123",
+				Memory:       "User now prefers tea.",
+				Topics:       []string{"preferences"},
+				MemoryKind:   memory.KindFact,
+				Participants: []string{},
 			},
 		},
 		{
@@ -204,6 +211,60 @@ func TestParseToolCallArgs_UnknownTool(t *testing.T) {
 	}
 	op := parseToolCallArgs("unknown_tool", args)
 	assert.Nil(t, op)
+}
+
+func TestParseEpisodicArgs_EpisodeWithTime(t *testing.T) {
+	op := &Operation{}
+	args := map[string]any{
+		"memory_kind":  "episode",
+		"event_time":   "2024-05-07",
+		"participants": []any{"Alice", "Bob"},
+		"location":     "Mt. Fuji",
+	}
+	parseEpisodicArgs(op, args)
+
+	assert.Equal(t, memory.KindEpisode, op.MemoryKind)
+	require.NotNil(t, op.EventTime)
+	assert.Equal(t, time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC), *op.EventTime)
+	assert.Equal(t, []string{"Alice", "Bob"}, op.Participants)
+	assert.Equal(t, "Mt. Fuji", op.Location)
+}
+
+func TestParseEpisodicArgs_EpisodeWithoutTime_RemainsEpisode(t *testing.T) {
+	op := &Operation{}
+	args := map[string]any{
+		"memory_kind":  "episode",
+		"participants": []any{"Alice"},
+	}
+	parseEpisodicArgs(op, args)
+
+	// episode without event_time should remain episode.
+	assert.Equal(t, memory.KindEpisode, op.MemoryKind)
+	assert.Nil(t, op.EventTime)
+	assert.Equal(t, []string{"Alice"}, op.Participants)
+}
+
+func TestParseEpisodicArgs_EpisodeWithUnparsableTime_RemainsEpisode(t *testing.T) {
+	op := &Operation{}
+	args := map[string]any{
+		"memory_kind": "episode",
+		"event_time":  "last Tuesday",
+	}
+	parseEpisodicArgs(op, args)
+
+	assert.Equal(t, memory.KindEpisode, op.MemoryKind)
+	assert.Nil(t, op.EventTime)
+}
+
+func TestParseEpisodicArgs_FactDefault(t *testing.T) {
+	op := &Operation{}
+	args := map[string]any{}
+	parseEpisodicArgs(op, args)
+
+	assert.Equal(t, memory.KindFact, op.MemoryKind)
+	assert.Nil(t, op.EventTime)
+	assert.Equal(t, []string{}, op.Participants)
+	assert.Empty(t, op.Location)
 }
 
 func TestToStringSlice(t *testing.T) {

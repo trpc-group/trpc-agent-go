@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -73,12 +74,30 @@ func (d *defaultA2AEventConverter) ConvertToEvents(
 				events = append(events, evt)
 			}
 		}
+		if isTaskFailureState(v.Status.State) {
+			statusMsg := convertTaskStatusToMessage(&protocol.TaskStatusUpdateEvent{
+				TaskID:    v.ID,
+				ContextID: v.ContextID,
+				Metadata:  v.Metadata,
+				Status:    v.Status,
+			})
+			if evt := d.buildRespEvent(
+				false,
+				statusMsg,
+				agentName,
+				invocation,
+			); evt != nil {
+				events = append(events, evt)
+			}
+			break
+		}
 		// Artifacts contain the final response
 		for i := range v.Artifacts {
 			artifactMsg := &protocol.Message{
 				Role:      protocol.MessageRoleAgent,
 				MessageID: v.Artifacts[i].ArtifactID,
 				Parts:     v.Artifacts[i].Parts,
+				Metadata:  v.Artifacts[i].Metadata,
 			}
 			if evt := d.buildRespEvent(false, artifactMsg, agentName, invocation); evt != nil {
 				events = append(events, evt)
@@ -124,8 +143,11 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 	case *protocol.Task:
 		responseMsg = convertTaskToMessage(v)
 	case *protocol.TaskStatusUpdateEvent:
-		// Status updates (submitted/completed) are control signals, not user-facing content.
-		return nil, nil
+		if !isTaskFailureState(v.Status.State) {
+			// submitted/completed updates are control signals.
+			return nil, nil
+		}
+		responseMsg = convertTaskStatusToMessage(v)
 	case *protocol.TaskArtifactUpdateEvent:
 		if v.IsFinal() {
 			// Final artifact chunk is either an aggregated result or a termination signal,
@@ -219,18 +241,26 @@ func appendImagePart(parts []protocol.Part, cp model.ContentPart) []protocol.Par
 		return parts
 	}
 	if len(cp.Image.Data) > 0 {
-		return append(parts, protocol.NewFilePartWithBytes(
+		fp := protocol.NewFilePartWithBytes(
 			"image",
 			cp.Image.Format,
 			base64.StdEncoding.EncodeToString(cp.Image.Data),
-		))
+		)
+		fp.Metadata = map[string]any{
+			ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeImage,
+		}
+		return append(parts, &fp)
 	}
 	if cp.Image.URL != "" {
-		return append(parts, protocol.NewFilePartWithURI(
+		fp := protocol.NewFilePartWithURI(
 			"image",
 			cp.Image.Format,
 			cp.Image.URL,
-		))
+		)
+		fp.Metadata = map[string]any{
+			ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeImage,
+		}
+		return append(parts, &fp)
 	}
 	return parts
 }
@@ -239,26 +269,47 @@ func appendAudioPart(parts []protocol.Part, cp model.ContentPart) []protocol.Par
 	if cp.Audio == nil || cp.Audio.Data == nil {
 		return parts
 	}
-	return append(parts, protocol.NewFilePartWithBytes(
+	fp := protocol.NewFilePartWithBytes(
 		"audio",
 		cp.Audio.Format,
 		base64.StdEncoding.EncodeToString(cp.Audio.Data),
-	))
+	)
+	fp.Metadata = map[string]any{
+		ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeAudio,
+	}
+	return append(parts, &fp)
 }
 
 func appendFilePart(parts []protocol.Part, cp model.ContentPart) []protocol.Part {
-	if cp.File == nil || len(cp.File.Data) == 0 {
+	if cp.File == nil {
 		return parts
 	}
 	fileName := cp.File.Name
 	if fileName == "" {
 		fileName = "file"
 	}
-	return append(parts, protocol.NewFilePartWithBytes(
-		fileName,
-		cp.File.MimeType,
-		base64.StdEncoding.EncodeToString(cp.File.Data),
-	))
+	metadata := map[string]any{
+		ia2a.FilePartMetadataContentTypeKey: ia2a.FilePartMetadataContentTypeFile,
+	}
+	if len(cp.File.Data) > 0 {
+		fp := protocol.NewFilePartWithBytes(
+			fileName,
+			cp.File.MimeType,
+			base64.StdEncoding.EncodeToString(cp.File.Data),
+		)
+		fp.Metadata = metadata
+		return append(parts, &fp)
+	}
+	if cp.File.FileID != "" {
+		fp := protocol.NewFilePartWithURI(
+			fileName,
+			cp.File.MimeType,
+			cp.File.FileID,
+		)
+		fp.Metadata = metadata
+		return append(parts, &fp)
+	}
+	return parts
 }
 
 // buildRespEvent converts A2A response to tRPC event (used for both streaming and non-streaming mode)
@@ -304,6 +355,15 @@ type parseResult struct {
 
 	// responseID holds the original LLM Response.ID from A2A message metadata
 	responseID string
+
+	// taskState holds the remote task lifecycle state when present.
+	taskState protocol.TaskState
+
+	// responseError holds structured error fields reconstructed from metadata.
+	responseError *model.ResponseError
+
+	// stateDelta holds structured state updates reconstructed from A2A metadata.
+	stateDelta map[string][]byte
 }
 
 // toolResponseData holds tool response information
@@ -344,10 +404,19 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 		if responseID, ok := msg.Metadata[ia2a.MessageMetadataResponseIDKey].(string); ok {
 			result.responseID = responseID
 		}
+		if stateDelta, ok := msg.Metadata[ia2a.MessageMetadataStateDeltaKey]; ok {
+			result.stateDelta = ia2a.DecodeStateDeltaMetadata(stateDelta)
+		}
 	}
 
 	result.textContent = textContent.String()
 	result.reasoningContent = reasoningContent.String()
+	result.taskState = taskStateFromMetadata(msg.Metadata)
+	result.responseError = ia2a.ResponseErrorFromMetadata(
+		msg.Metadata,
+		result.textContent,
+		model.ErrorTypeFlowError,
+	)
 	return result
 }
 
@@ -475,12 +544,19 @@ func processFunctionResponse(d *protocol.DataPart) (content string, id string, n
 		name = toolName
 	}
 
-	// Extract response content - server sends it as raw string
+	// Extract response content. Keep strings as-is, otherwise prefer JSON for
+	// structured values.
 	if response, ok := data[ia2a.ToolCallFieldResponse]; ok {
 		if responseStr, ok := response.(string); ok {
 			content = responseStr
+		} else if jsonBytes, err := json.Marshal(response); err == nil {
+			content = string(jsonBytes)
 		} else {
-			log.Debugf("Tool response is not a string: %T, skip", response)
+			log.Infof(
+				"Tool response JSON marshal failed for type %T, skip: %v",
+				response,
+				err,
+			)
 		}
 	}
 
@@ -543,6 +619,9 @@ func buildEventResponse(
 	if result.tag != "" {
 		opts = append(opts, event.WithTag(result.tag))
 	}
+	if result.stateDelta != nil {
+		opts = append(opts, event.WithStateDelta(result.stateDelta))
+	}
 
 	evt := event.New(invocation.InvocationID, agentName, opts...)
 
@@ -558,8 +637,23 @@ func buildEventResponse(
 	} else {
 		evt.Response = buildNonStreamingResponse(respID, result, role)
 	}
+	markGraphCompletionEvent(evt, result)
 
 	return evt
+}
+
+func markGraphCompletionEvent(evt *event.Event, result *parseResult) {
+	if evt == nil || evt.Response == nil || result == nil {
+		return
+	}
+	if result.objectType != graph.ObjectTypeGraphExecution {
+		return
+	}
+
+	// graph.execution is a terminal subgraph event. Preserve completion
+	// semantics so parent graph agent nodes can reconstruct final state.
+	evt.Response.Done = true
+	evt.Response.IsPartial = false
 }
 
 // buildStreamingResponse creates a response for streaming mode.
@@ -568,6 +662,9 @@ func buildEventResponse(
 // - Text content uses Delta for incremental updates
 func buildStreamingResponse(messageID string, result *parseResult, role protocol.MessageRole) *model.Response {
 	now := time.Now()
+	if respErr := taskResponseError(result); respErr != nil {
+		return buildErrorResponse(messageID, respErr, now)
+	}
 
 	// Tool call: use Message (tool calls are complete units, not streamed incrementally)
 	if len(result.toolCalls) > 0 {
@@ -674,6 +771,9 @@ func extractObjectType(result *parseResult) string {
 // In non-streaming mode, all content uses Message (not Delta).
 func buildNonStreamingResponse(messageID string, result *parseResult, role protocol.MessageRole) *model.Response {
 	now := time.Now()
+	if respErr := taskResponseError(result); respErr != nil {
+		return buildErrorResponse(messageID, respErr, now)
+	}
 	var choices []model.Choice
 	// Tool call: assistant requesting tool execution
 	if len(result.toolCalls) > 0 {
@@ -746,6 +846,100 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 	}
 }
 
+func buildErrorResponse(
+	messageID string,
+	respErr *model.ResponseError,
+	now time.Time,
+) *model.Response {
+	return &model.Response{
+		ID:        messageID,
+		Object:    model.ObjectTypeError,
+		Timestamp: now,
+		Created:   now.Unix(),
+		IsPartial: false,
+		Done:      true,
+		Error:     respErr,
+	}
+}
+
+func taskResponseError(
+	result *parseResult,
+) *model.ResponseError {
+	if result == nil {
+		return nil
+	}
+	if result.responseError != nil {
+		return result.responseError
+	}
+	if !isTaskFailureState(result.taskState) {
+		return nil
+	}
+	message := result.textContent
+	if message == "" {
+		message = taskFailureMessage(result.taskState)
+	}
+	return &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: message,
+	}
+}
+
+func taskFailureMessage(
+	state protocol.TaskState,
+) string {
+	switch state {
+	case protocol.TaskStateCanceled:
+		return "remote task canceled"
+	case protocol.TaskStateRejected:
+		return "remote task rejected"
+	default:
+		return "remote task failed"
+	}
+}
+
+func isTaskFailureState(
+	state protocol.TaskState,
+) bool {
+	switch state {
+	case protocol.TaskStateFailed,
+		protocol.TaskStateRejected,
+		protocol.TaskStateCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+func taskStateFromMetadata(
+	metadata map[string]any,
+) protocol.TaskState {
+	if metadata == nil {
+		return ""
+	}
+	raw, ok := metadata[ia2a.MessageMetadataTaskStateKey].(string)
+	if !ok {
+		return ""
+	}
+	return protocol.TaskState(raw)
+}
+
+func cloneTaskMetadata(
+	metadata map[string]any,
+	taskState protocol.TaskState,
+) map[string]any {
+	if len(metadata) == 0 && taskState == "" {
+		return nil
+	}
+	cloned := make(map[string]any, len(metadata)+1)
+	for key, value := range metadata {
+		cloned[key] = value
+	}
+	if taskState != "" {
+		cloned[ia2a.MessageMetadataTaskStateKey] = string(taskState)
+	}
+	return cloned
+}
+
 // convertTaskToMessage converts a Task to a Message
 func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 	var (
@@ -765,7 +959,7 @@ func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 		Parts:     parts,
 		TaskID:    &task.ID,
 		ContextID: &task.ContextID,
-		Metadata:  task.Metadata,
+		Metadata:  cloneTaskMetadata(task.Metadata, task.Status.State),
 	}
 }
 
@@ -776,7 +970,7 @@ func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol
 		Kind:      protocol.KindMessage,
 		TaskID:    &event.TaskID,
 		ContextID: &event.ContextID,
-		Metadata:  event.Metadata,
+		Metadata:  cloneTaskMetadata(event.Metadata, event.Status.State),
 	}
 	if event.Status.Message != nil {
 		msg.Parts = event.Status.Message.Parts

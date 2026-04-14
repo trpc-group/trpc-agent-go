@@ -473,9 +473,9 @@ func TestToolEvents_And_ExecuteSingleToolCall(t *testing.T) {
 	// prepare event channel
 	ch := make(chan *event.Event, 10)
 	// emit start
-	emitToolStartEvent(context.Background(), ch, "inv-id", "echo", "id-1", "nodeA", time.Now(), []byte(`{"a":1}`), "")
+	emitToolStartEvent(context.Background(), nil, ch, "inv-id", "echo", "id-1", "nodeA", time.Now(), []byte(`{"a":1}`), "")
 	// emit complete
-	emitToolCompleteEvent(context.Background(), toolCompleteEventConfig{EventChan: ch, InvocationID: "inv-id", ToolName: "echo", ToolID: "id-1", NodeID: "nodeA", StartTime: time.Now(), Result: map[string]any{"x": 1}, Error: nil, Arguments: []byte(`{"a":1}`)})
+	emitToolCompleteEvent(context.Background(), nil, toolCompleteEventConfig{EventChan: ch, InvocationID: "inv-id", ToolName: "echo", ToolID: "id-1", NodeID: "nodeA", StartTime: time.Now(), Result: map[string]any{"x": 1}, Error: nil, Arguments: []byte(`{"a":1}`)})
 	// ensure two events were sent
 	e1 := <-ch
 	e2 := <-ch
@@ -1027,7 +1027,7 @@ func TestProcessToolCalls(t *testing.T) {
 
 func TestEmitToolCompleteEvent_WithError(t *testing.T) {
 	ch := make(chan *event.Event, 10)
-	emitToolCompleteEvent(context.Background(), toolCompleteEventConfig{EventChan: ch, InvocationID: "inv", ToolName: "t", ToolID: "id", NodeID: "n", StartTime: time.Now(), Result: nil, Error: fmt.Errorf("err"), Arguments: []byte(`{}`)})
+	emitToolCompleteEvent(context.Background(), nil, toolCompleteEventConfig{EventChan: ch, InvocationID: "inv", ToolName: "t", ToolID: "id", NodeID: "n", StartTime: time.Now(), Result: nil, Error: fmt.Errorf("err"), Arguments: []byte(`{}`)})
 	e := <-ch
 	require.NotNil(t, e)
 }
@@ -1477,8 +1477,59 @@ func TestShouldEmitModelResponse_Cases(t *testing.T) {
 func TestShouldEmitModelResponseEvent_NilResponse(t *testing.T) {
 	require.False(
 		t,
-		shouldEmitModelResponseEvent(context.Background(), nil),
+		shouldEmitModelResponseEvent(nil, nil),
 	)
+}
+
+func TestShouldEmitModelResponseEvent_DoneWithReasoningContent(t *testing.T) {
+	t.Run("done response without reasoning is not emitted", func(t *testing.T) {
+		rsp := &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "answer",
+				},
+			}},
+		}
+		require.False(t, shouldEmitModelResponseEvent(rsp, nil))
+	})
+
+	t.Run("done response with reasoning IS emitted", func(t *testing.T) {
+		rsp := &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:             model.RoleAssistant,
+					Content:          "answer",
+					ReasoningContent: "thinking step by step",
+				},
+			}},
+		}
+		require.True(t, shouldEmitModelResponseEvent(rsp, nil),
+			"final response with ReasoningContent must be emitted for session persistence")
+	})
+
+	t.Run("non-done response is always emitted", func(t *testing.T) {
+		rsp := &model.Response{
+			Done: false,
+			Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleAssistant, Content: "partial"},
+			}},
+		}
+		require.True(t, shouldEmitModelResponseEvent(rsp, nil))
+	})
+}
+
+func TestResponseHasReasoningContent(t *testing.T) {
+	require.False(t, responseHasReasoningContent(nil))
+	require.False(t, responseHasReasoningContent(&model.Response{}))
+	require.False(t, responseHasReasoningContent(&model.Response{
+		Choices: []model.Choice{{Message: model.Message{Content: "text"}}},
+	}))
+	require.True(t, responseHasReasoningContent(&model.Response{
+		Choices: []model.Choice{{Message: model.Message{ReasoningContent: "think"}}},
+	}))
 }
 
 func TestProcessModelResponse_AfterModelCustomResponse(t *testing.T) {

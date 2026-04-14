@@ -50,8 +50,25 @@ func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 		}
 		schema.Required = required
 	}
+	if refVal, ok := schemaMap["$ref"].(string); ok {
+		schema.Ref = refVal
+	}
+	if defsVal, ok := schemaMap["$defs"].(map[string]any); ok {
+		schema.Defs = convertDefs(defsVal)
+	}
 
 	return schema
+}
+
+// convertDefs converts JSON Schema $defs definitions from map[string]any to map[string]*Schema.
+func convertDefs(defs map[string]any) map[string]*tool.Schema {
+	result := make(map[string]*tool.Schema, len(defs))
+	for name, def := range defs {
+		if defMap, ok := def.(map[string]any); ok {
+			result[name] = convertMCPSchemaToSchema(defMap)
+		}
+	}
+	return result
 }
 
 // convertProperties converts property definitions from map[string]any to map[string]*Schema.
@@ -101,6 +118,12 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 			// Handle additionalProperties field.
 			if additionalPropsVal, exists := propMap["additionalProperties"]; exists {
 				propSchema.AdditionalProperties = additionalPropsVal
+			}
+			if refVal, ok := propMap["$ref"].(string); ok {
+				propSchema.Ref = refVal
+			}
+			if defsVal, ok := propMap["$defs"].(map[string]any); ok {
+				propSchema.Defs = convertDefs(defsVal)
 			}
 			result[name] = propSchema
 		}

@@ -32,7 +32,7 @@ const (
 const (
 	defaultTableName      = "memories"
 	defaultIndexDimension = 1536
-	defaultMaxResults     = 10
+	defaultMaxResults     = 15
 )
 
 // Default HNSW index parameters.
@@ -40,6 +40,12 @@ const (
 	defaultHNSWM              = 16
 	defaultHNSWEfConstruction = 64
 )
+
+// Default similarity threshold. Results with cosine similarity below this
+// are filtered out even if within the top-K limit. A value of 0 disables
+// threshold filtering. The default of 0.35 removes very low relevance
+// results that add noise without contributing useful information.
+const defaultSimilarityThreshold = 0.30
 
 // Default timeout settings.
 const (
@@ -56,13 +62,14 @@ type HNSWIndexParams struct {
 }
 
 var defaultOptions = ServiceOpts{
-	tableName:      defaultTableName,
-	indexDimension: defaultIndexDimension,
-	maxResults:     defaultMaxResults,
-	memoryLimit:    imemory.DefaultMemoryLimit,
-	toolCreators:   imemory.AllToolCreators,
-	enabledTools:   imemory.DefaultEnabledTools,
-	asyncMemoryNum: imemory.DefaultAsyncMemoryNum,
+	tableName:           defaultTableName,
+	indexDimension:      defaultIndexDimension,
+	maxResults:          defaultMaxResults,
+	memoryLimit:         imemory.DefaultMemoryLimit,
+	similarityThreshold: defaultSimilarityThreshold,
+	toolCreators:        imemory.AllToolCreators,
+	enabledTools:        imemory.DefaultEnabledTools,
+	asyncMemoryNum:      imemory.DefaultAsyncMemoryNum,
 	hnswParams: &HNSWIndexParams{
 		M:              defaultHNSWM,
 		EfConstruction: defaultHNSWEfConstruction,
@@ -89,13 +96,19 @@ type ServiceOpts struct {
 	memoryLimit    int
 	softDelete     bool
 
+	// similarityThreshold filters out search results with cosine similarity
+	// below this value (range 0-1). A value of 0 disables filtering.
+	similarityThreshold float64
+
 	// Vector index configuration.
 	hnswParams *HNSWIndexParams
 
 	// Tool related settings.
 	toolCreators      map[string]memory.ToolCreator
 	enabledTools      map[string]struct{}
-	userExplicitlySet map[string]bool
+	toolExposed       map[string]struct{}
+	toolHidden        map[string]struct{}
+	userExplicitlySet map[string]struct{}
 
 	// skipDBInit skips database initialization (table and index creation).
 	// Useful when user doesn't have DDL permissions or when tables are managed
@@ -127,9 +140,11 @@ func (o ServiceOpts) clone() ServiceOpts {
 	}
 
 	opts.enabledTools = maps.Clone(o.enabledTools)
+	opts.toolExposed = maps.Clone(o.toolExposed)
+	opts.toolHidden = maps.Clone(o.toolHidden)
 
 	// Initialize userExplicitlySet map (empty for new clone).
-	opts.userExplicitlySet = make(map[string]bool)
+	opts.userExplicitlySet = make(map[string]struct{})
 
 	// Clone HNSW params if present.
 	if o.hnswParams != nil {
@@ -265,8 +280,51 @@ func WithCustomTool(toolName string, creator memory.ToolCreator) ServiceOpt {
 		if !imemory.IsValidToolName(toolName) || creator == nil {
 			return
 		}
+		if opts.toolCreators == nil {
+			opts.toolCreators = make(map[string]memory.ToolCreator)
+		}
+		if opts.enabledTools == nil {
+			opts.enabledTools = make(map[string]struct{})
+		}
+		if opts.userExplicitlySet == nil {
+			opts.userExplicitlySet = make(map[string]struct{})
+		}
 		opts.toolCreators[toolName] = creator
 		opts.enabledTools[toolName] = struct{}{}
+		opts.userExplicitlySet[toolName] = struct{}{}
+	}
+}
+
+// WithAutoMemoryExposedTools exposes enabled tools via Tools() in auto memory
+// mode so the agent can call them directly. Invalid tool names are ignored.
+func WithAutoMemoryExposedTools(toolNames ...string) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		for _, toolName := range toolNames {
+			WithToolExposed(toolName, true)(opts)
+		}
+	}
+}
+
+// WithToolExposed controls whether an enabled memory tool is exposed via
+// Tools(). Use WithAutoMemoryExposedTools for the common auto memory case.
+func WithToolExposed(toolName string, exposed bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if !imemory.IsValidToolName(toolName) {
+			return
+		}
+		if exposed {
+			if opts.toolExposed == nil {
+				opts.toolExposed = make(map[string]struct{})
+			}
+			opts.toolExposed[toolName] = struct{}{}
+			delete(opts.toolHidden, toolName)
+			return
+		}
+		if opts.toolHidden == nil {
+			opts.toolHidden = make(map[string]struct{})
+		}
+		opts.toolHidden[toolName] = struct{}{}
+		delete(opts.toolExposed, toolName)
 	}
 }
 
@@ -283,14 +341,14 @@ func WithToolEnabled(toolName string, enabled bool) ServiceOpt {
 			opts.enabledTools = make(map[string]struct{})
 		}
 		if opts.userExplicitlySet == nil {
-			opts.userExplicitlySet = make(map[string]bool)
+			opts.userExplicitlySet = make(map[string]struct{})
 		}
 		if enabled {
 			opts.enabledTools[toolName] = struct{}{}
 		} else {
 			delete(opts.enabledTools, toolName)
 		}
-		opts.userExplicitlySet[toolName] = true
+		opts.userExplicitlySet[toolName] = struct{}{}
 	}
 }
 
@@ -375,6 +433,18 @@ func WithHNSWIndexParams(params *HNSWIndexParams) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		if params != nil {
 			opts.hnswParams = params
+		}
+	}
+}
+
+// WithSimilarityThreshold sets the minimum cosine similarity threshold
+// for search results. Results below this threshold are filtered out.
+// Value should be between 0 and 1. A value of 0 disables filtering.
+// Default is 0 (disabled).
+func WithSimilarityThreshold(threshold float64) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if threshold >= 0 && threshold <= 1 {
+			opts.similarityThreshold = threshold
 		}
 	}
 }

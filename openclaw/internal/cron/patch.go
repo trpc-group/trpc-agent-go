@@ -17,6 +17,7 @@ type Patch struct {
 	Message    *string
 	Enabled    *bool
 	Schedule   *Schedule
+	Policy     *ExecutionPolicy
 	TimeoutSec *int
 	Channel    *string
 	Target     *string
@@ -34,6 +35,9 @@ func applyPatch(job *Job, patch Patch, now time.Time) error {
 	}
 	if patch.Schedule != nil {
 		job.Schedule = *patch.Schedule
+	}
+	if patch.Policy != nil {
+		job.Policy = *patch.Policy
 	}
 	if patch.TimeoutSec != nil {
 		job.TimeoutSec = *patch.TimeoutSec

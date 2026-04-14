@@ -63,7 +63,7 @@ func runPairing(args []string) int {
 	stateDir := fs.String(
 		flagStateDir,
 		"",
-		"State dir (default: $HOME/.trpc-agent-go/openclaw)",
+		"State dir (default: $HOME/.trpc-agent-go-github/openclaw)",
 	)
 
 	normalizedArgs, err := normalizePairingArgs(args)

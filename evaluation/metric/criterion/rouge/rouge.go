@@ -33,8 +33,25 @@ type RougeCriterion struct {
 	UseStemmer bool `json:"useStemmer,omitempty"`
 	// SplitSummaries splits summaries into sentences for rougeLsum and is ignored for other rouge types.
 	SplitSummaries bool `json:"splitSummaries,omitempty"`
+	// TokenizerName selects a registered tokenizer implementation by name.
+	TokenizerName string `json:"tokenizerName,omitempty"`
 	// Tokenizer overrides the built-in tokenization when provided.
 	Tokenizer Tokenizer `json:"-"`
+}
+
+// New creates a RougeCriterion with the provided options.
+func New(opt ...Option) *RougeCriterion {
+	opts := newOptions(opt...)
+	return &RougeCriterion{
+		Ignore:         opts.ignore,
+		RougeType:      opts.rougeType,
+		Measure:        opts.measure,
+		Threshold:      opts.threshold,
+		UseStemmer:     opts.useStemmer,
+		SplitSummaries: opts.splitSummaries,
+		TokenizerName:  opts.tokenizerName,
+		Tokenizer:      opts.tokenizer,
+	}
 }
 
 // RougeMeasure selects which ROUGE component should be used as a scalar score.

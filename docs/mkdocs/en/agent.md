@@ -54,6 +54,14 @@ genConfig := model.GenerationConfig{
 }
 ```
 
+If you do not explicitly pass `llmagent.WithGenerationConfig(...)`,
+`LLMAgent` forwards the zero-value `model.GenerationConfig{}` by default,
+so the default behavior is non-streaming (`Stream=false`). If you need
+streaming output, set `Stream: true` explicitly, or override it per
+request with `agent.WithStream(true)`. Higher-level wrappers may choose
+their own explicit defaults. For example, OpenClaw enables streaming by
+default.
+
 ### Creating LLMAgent
 
 Use the model instance and configuration to create an LLMAgent, while setting the Agent's Description and Instruction.
@@ -453,6 +461,38 @@ agent := llmagent.New(
 - Set limit values based on task complexity and expected behavior.
 - See [examples/max_limits](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/max_limits) for a complete example.
 
+### Tool Call Retry
+
+If you want LLMAgent to retry a tool call automatically after a failure, configure `llmagent.WithToolCallRetryPolicy(...)`.
+
+```go
+policy := &tool.RetryPolicy{
+    MaxAttempts:     2,
+    InitialInterval: 200 * time.Millisecond,
+    BackoffFactor:   2.0,
+    MaxInterval:     time.Second,
+}
+
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{myTool}),
+    llmagent.WithToolCallRetryPolicy(policy),
+)
+```
+
+Notes:
+
+- The retry applies only to the current tool call. It does not rerun the whole Agent.
+- It is disabled by default, so existing behavior stays unchanged unless you opt in.
+- It currently applies only to `CallableTool`; `StreamableTool` is not retried yet.
+- The default retry rule covers common transient raw errors such as `io.EOF`, `io.ErrUnexpectedEOF`, and network timeouts.
+- If you also want to retry result-level failures, customize `tool.RetryPolicy.RetryOn`.
+
+Runnable example:
+
+- [examples/llmagent_tool_call_retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/llmagent_tool_call_retry)
+
 ### Handling Event Stream
 
 The `eventChan` returned by `runner.Run()` is an event channel. The Agent continuously sends Event objects to this channel during execution.
@@ -491,13 +531,19 @@ for event := range eventChan {
         }
     }
 
-    // Check if completed (note: should not break on tool call completion)
+    // Check whether the current response is complete.
     if event.IsFinalResponse() {
         fmt.Println()
         break
     }
 }
 ```
+
+This example uses `event.IsFinalResponse()` because it only cares about when
+the current reply has been fully printed. If you need to wait until the whole
+`Runner.Run` is truly over, such as when `tool.response` may be followed by
+extra processing or when using GraphAgent, use
+`event.IsRunnerCompletion()` as the loop exit condition instead.
 
 The complete code for this example can be found at [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
 
@@ -1166,3 +1212,230 @@ Caveats
   write `temp:*` via `invocation.Session.SetState` (e.g., via a callback)
   when you need session-scoped temporary values.
 - Placeholders are resolved at request time; changing the stored value updates behavior on the next model request without recreating the agent.
+
+## Static Structure Export
+
+The framework provides static structure export for agents. This is useful for structure inspection, visualization, configuration tools, and diagnostics that need a stable snapshot of nodes, edges, and editable surfaces.
+
+Use `agent/structure` to export a normalized snapshot:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+
+snapshot, err := structure.Export(ctx, llmAgent)
+if err != nil {
+    log.Fatalf("Failed to export structure: %v", err)
+}
+
+fmt.Println(snapshot.StructureID)
+fmt.Println(snapshot.EntryNodeID)
+fmt.Println(len(snapshot.Nodes), len(snapshot.Edges), len(snapshot.Surfaces))
+```
+
+The exported snapshot contains:
+
+- `Nodes`: stable static nodes in the current agent structure
+- `Edges`: static possible connections between nodes
+- `Surfaces`: stable editable baselines such as `instruction`, `model`, `tool`, and `skill`
+
+For a complete example, see [examples/graph/structure_export](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/structure_export).
+
+## Override Runtime Surfaces by `nodeID`
+
+In addition to run-scoped overrides such as `agent.WithInstruction(...)` and
+`agent.WithGlobalInstruction(...)`, the framework also supports overriding
+runtime surfaces for a specific node by stable `nodeID` within a single
+`runner.Run(...)` call.
+
+This is useful when you want to:
+
+- Temporarily change the instruction of one graph node without affecting the entire agent.
+- Apply different instructions, few-shot examples, or tools to multiple nodes in the same `runner.Run(...)`.
+- Precisely target nested nodes inside `chain`, `parallel`, `cycle`, `graph`, `team`, and `swarm` structures.
+
+Entry API:
+
+```go
+var patch agent.SurfacePatch
+patch.SetInstruction("Answer in one short paragraph.")
+patch.SetFewShot([][]model.Message{
+    {
+        model.NewUserMessage("Summarize this report."),
+        model.NewAssistantMessage("Provide a short executive summary first."),
+    },
+})
+
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Please analyze the latest findings."),
+    agent.WithSurfacePatchForNode(nodeID, patch),
+)
+```
+
+### Recommended Workflow
+
+Use the feature in this order:
+
+1. Export a static structure snapshot with `structure.Export(...)`.
+2. Find the stable target `nodeID` from `snapshot.EntryNodeID` or `snapshot.Nodes`.
+3. Build an `agent.SurfacePatch` and set only the surfaces you want to override for this run.
+4. Pass one or more `agent.WithSurfacePatchForNode(...)` options to `runner.Run(...)`.
+
+Example:
+
+```go
+snapshot, err := structure.Export(ctx, workflowAgent)
+if err != nil {
+    return err
+}
+
+var plannerNodeID string
+for _, node := range snapshot.Nodes {
+    if node.Name == "planner" {
+        plannerNodeID = node.NodeID
+        break
+    }
+}
+if plannerNodeID == "" {
+    return errors.New("planner node not found")
+}
+
+var patch agent.SurfacePatch
+patch.SetInstruction("Plan in at most three steps.")
+
+_, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Arrange a trip to Hangzhou next Friday."),
+    agent.WithSurfacePatchForNode(plannerNodeID, patch),
+)
+```
+
+Notes:
+
+- Prefer `nodeID` values exported by `structure.Export(...)` instead of handwritten paths.
+- The override only applies to the current `runner.Run(...)` call and does not mutate the static agent definition.
+- `agent.WithInstruction(...)` and `agent.WithGlobalInstruction(...)` still work and are appropriate when you want one run-scoped override for the root agent. Use `WithSurfacePatchForNode(...)` when you need per-node control.
+
+### Patchable Surfaces
+
+`SurfacePatch` currently provides these setters:
+
+- `SetInstruction(string)`: overrides the node instruction for this run.
+- `SetGlobalInstruction(string)`: overrides the node global instruction for this run.
+- `SetFewShot([][]model.Message)`: overrides the node few-shot examples for this run.
+- `SetModel(model.Model)`: overrides the model instance used by the node for this run.
+- `SetTools([]tool.Tool)`: overrides the node tool surface for this run. This means replacing the tool set visible at runtime, not merely changing tool descriptions.
+- `SetSkillRepository(skill.Repository)`: overrides the node skill repository for this run. Passing `nil` explicitly disables the node skill surface.
+
+Not every node supports every surface. Common cases are:
+
+- Root `LLMAgent`: supports `instruction`, `global_instruction`, `few_shot`, `model`, `tool`, and `skill`.
+- Graph LLM node: supports `instruction`, `few_shot`, `model`, and `tool`.
+- Graph Tools node: supports `tool`.
+- Child nodes inside graph sub-agents, `chain`, `parallel`, `cycle`, `team`, and `swarm`: support depends on the actual target node you patch.
+
+### Override Multiple Nodes in One Run
+
+To patch multiple nodes in the same `runner.Run(...)`, pass multiple
+`agent.WithSurfacePatchForNode(...)` options. There is no separate batch API.
+
+```go
+snapshot, err := structure.Export(ctx, workflowAgent)
+if err != nil {
+    return err
+}
+
+nodeIDs := make(map[string]string)
+for _, node := range snapshot.Nodes {
+    nodeIDs[node.Name] = node.NodeID
+}
+
+var plannerPatch agent.SurfacePatch
+plannerPatch.SetInstruction("Produce no more than three candidate plans.")
+
+var reviewerPatch agent.SurfacePatch
+reviewerPatch.SetInstruction("Reject any plan that lacks cost analysis.")
+
+var toolsPatch agent.SurfacePatch
+toolsPatch.SetTools([]tool.Tool{searchTool, priceTool})
+
+_, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Plan a team offsite in Suzhou next month."),
+    agent.WithSurfacePatchForNode(nodeIDs["planner"], plannerPatch),
+    agent.WithSurfacePatchForNode(nodeIDs["reviewer"], reviewerPatch),
+    agent.WithSurfacePatchForNode(nodeIDs["search_tools"], toolsPatch),
+)
+```
+
+When `WithSurfacePatchForNode(...)` is passed multiple times for the same
+`nodeID`, the framework merges by surface type:
+
+- Different surface types are combined.
+- For the same surface type, the later option overrides the earlier one.
+
+### Composite and Nested Structures
+
+The same pattern applies beyond a single `LLMAgent`:
+
+- `graph`: patch graph LLM nodes, Tools nodes, and the root nodes of child agents mounted inside the graph.
+- `chain`, `parallel`, `cycle`: patch any exported child node.
+- `team` and `swarm`: patch the `coordinator`, member nodes, and members reached after transfer.
+
+The most robust workflow is still:
+
+- export with `structure.Export(...)`
+- select the exported `nodeID`
+- pass the patch through `WithSurfacePatchForNode(...)`
+
+This keeps one rule easy to remember: `nodeID` comes from structure export, and the runtime patch is supplied through `WithSurfacePatchForNode(...)`.
+
+## Execution Trace
+
+The framework can export an execution trace for a single `runner.Run` call. This is useful for understanding which nodes actually ran, how steps depend on each other, and what each step saw as input and output.
+
+Enable it explicitly when you start a run:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+r := runner.NewRunner("demo-app", ag)
+events, err := r.Run(
+    ctx,
+    "user-1",
+    "session-1",
+    model.NewUserMessage("hello"),
+    agent.WithExecutionTraceEnabled(true),
+)
+if err != nil {
+    log.Fatalf("Run failed: %v", err)
+}
+for evt := range events {
+    if evt != nil && evt.IsRunnerCompletion() && evt.ExecutionTrace != nil {
+        fmt.Println(evt.ExecutionTrace.RootAgentName)
+        fmt.Println(evt.ExecutionTrace.Status)
+        fmt.Println(len(evt.ExecutionTrace.Steps))
+    }
+}
+```
+
+Execution traces are attached to the runner completion event as an in-memory artifact. They are not serialized by default.
+
+Each recorded step carries stable fields such as:
+
+- `NodeID`: the static node path for the executed node
+- `PredecessorStepIDs`: the direct step dependencies in this run
+- `Input` and `Output`: stable text snapshots captured for the step
+- `Error`: the terminal step error, when the step fails
+
+For a complete example, see [examples/graph/execution_trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/execution_trace).

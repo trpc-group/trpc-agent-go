@@ -36,9 +36,26 @@ const (
 	defaultCreateFileMode = os.FileMode(0644)
 	// defaultMaxFileSize is the default maximum file size to read, which is 1MB.
 	defaultMaxFileSize = 1024 * 1024
+	// missingFileHintMaxEntries limits how many top-level entries are
+	// suggested when a requested file is missing.
+	missingFileHintMaxEntries = 6
 )
 
-const inputsDirName = "inputs"
+const (
+	inputsDirName = "inputs"
+
+	missingFileEntriesSeparator = ", "
+	missingFileDirectorySuffix  = "/"
+	missingFileListToolName     = "list_file"
+	missingFileSearchToolName   = "search_file"
+	missingFileTopLevelPrefix   = "Top-level entries: "
+	missingFileBaseDirPrefix    = "Base directory: "
+	missingFileRecoveryGuidance = "Use " +
+		missingFileListToolName + " or " +
+		missingFileSearchToolName +
+		" to inspect available paths."
+	missingFileNoEntriesFallback = "(no visible entries)"
+)
 
 // Option is a functional option for configuring the file tool set.
 type Option func(*fileToolSet)
@@ -270,6 +287,54 @@ func (f *fileToolSet) normalizeInputsAlias(relativePath string) string {
 		return filepath.FromSlash(strings.TrimPrefix(slashed, prefix))
 	}
 	return raw
+}
+
+func (f *fileToolSet) missingFileHint() string {
+	if f == nil {
+		return ""
+	}
+
+	parts := []string{
+		missingFileBaseDirPrefix + f.baseDir,
+	}
+	if entries := f.topLevelEntriesHint(); entries != "" {
+		parts = append(
+			parts,
+			missingFileTopLevelPrefix+entries,
+		)
+	}
+	parts = append(parts, missingFileRecoveryGuidance)
+	return strings.Join(parts, ". ")
+}
+
+func (f *fileToolSet) topLevelEntriesHint() string {
+	if f == nil || strings.TrimSpace(f.baseDir) == "" {
+		return ""
+	}
+
+	entries, err := os.ReadDir(f.baseDir)
+	if err != nil {
+		return ""
+	}
+	if len(entries) == 0 {
+		return missingFileNoEntriesFallback
+	}
+
+	names := make([]string, 0, missingFileHintMaxEntries)
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() {
+			name += missingFileDirectorySuffix
+		}
+		names = append(names, name)
+		if len(names) >= missingFileHintMaxEntries {
+			break
+		}
+	}
+	if len(entries) > len(names) {
+		names = append(names, "...")
+	}
+	return strings.Join(names, missingFileEntriesSeparator)
 }
 
 // matchFiles matches files with the given pattern in the target path.

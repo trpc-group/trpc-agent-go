@@ -10,6 +10,9 @@
 package knowledge
 
 import (
+	"context"
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
@@ -70,6 +73,56 @@ func WithSources(sources []source.Source) Option {
 	}
 }
 
+// LoadProgressEvent carries structured progress information emitted during Load.
+// It is delivered to the callback registered via WithLoadProgressCallback.
+//
+// For concurrent loading the callback may be invoked from multiple goroutines
+// concurrently; the order of events across different sources is not guaranteed.
+// Callers must synchronise any shared state accessed inside the callback.
+//
+// An event is always in exactly one of three states:
+//
+//	Done=false, Err=nil  — normal progress update for a source.
+//	Done=false, Err≠nil  — a source encountered an error.
+//	Done=true,  Err=nil  — the entire Load operation finished successfully.
+//
+// The combination Done=true with Err≠nil never occurs.
+type LoadProgressEvent struct {
+	// SourceNames lists all source names involved in the current Load call.
+	// The slice is determined once at the start of Load and is the same for
+	// every event, regardless of which source triggered it.
+	SourceNames []string
+	// SourceName is the name of the source being loaded.
+	SourceName string
+	// SourceProcessed is the number of documents processed so far within this source.
+	SourceProcessed int
+	// SourceTotal is the total number of documents in this source.
+	SourceTotal int
+	// SourceElapsed is the time elapsed since the source started loading.
+	SourceElapsed time.Duration
+	// SourceETA is the estimated time remaining for this source.
+	// It may be zero when the estimate is not available (e.g. at the very start).
+	SourceETA time.Duration
+	// Total is the cumulative number of documents processed across all
+	// sources so far. It increases monotonically throughout the entire Load call.
+	Total int
+	// TotalElapsed is the wall-clock time elapsed since the Load call started.
+	TotalElapsed time.Duration
+	// Done is true when the entire Load operation has finished successfully.
+	// When Done is true, all sources have been fully processed and the event
+	// serves as a final notification. Err will be nil in this case.
+	Done bool
+	// Err is non-nil when a source encounters an error during loading.
+	// SourceName indicates which source failed. The Load call itself will
+	// still return the error; this field allows the callback to update its
+	// display immediately (e.g. mark the source as failed).
+	Err error
+}
+
+// LoadProgressCallback is the callback signature for load progress events.
+// ctx is the same context passed to Load.
+type LoadProgressCallback func(ctx context.Context, event LoadProgressEvent)
+
 // loadConfig holds the configuration for load behavior.
 type loadConfig struct {
 	showProgress     bool
@@ -78,6 +131,7 @@ type loadConfig struct {
 	srcParallelism   int
 	docParallelism   int
 	recreate         bool
+	progressCallback LoadProgressCallback
 }
 
 // LoadOption represents a functional option for configuring load behavior.
@@ -129,6 +183,27 @@ func WithDocConcurrency(n int) LoadOption {
 func WithRecreate(recreate bool) LoadOption {
 	return func(lc *loadConfig) {
 		lc.recreate = recreate
+	}
+}
+
+// WithLoadProgressCallback registers a callback that is invoked at each progress
+// boundary during Load, following the same step-size granularity as
+// WithProgressStepSize (default: every 10 documents per source).
+//
+// The callback receives a LoadProgressEvent with structured fields (SourceName,
+// Processed, Total, Elapsed, ETA) and can be used to drive UIs, metrics, or
+// any other observability integration without parsing log output.
+//
+// When used together with WithShowProgress(true) (the default), both the log
+// output and the callback are emitted; they are fully independent.
+//
+// For concurrent loading (WithSourceConcurrency > 1 or WithDocConcurrency > 1)
+// the callback may be invoked from multiple goroutines concurrently. The order
+// of events across different sources is not guaranteed. Callers must synchronise
+// any shared state accessed inside the callback.
+func WithLoadProgressCallback(cb LoadProgressCallback) LoadOption {
+	return func(lc *loadConfig) {
+		lc.progressCallback = cb
 	}
 }
 

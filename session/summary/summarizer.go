@@ -11,6 +11,7 @@ package summary
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,9 +20,13 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
+
+var _ SessionSummarizer = (*sessionSummarizer)(nil)
+var _ ContextAwareSummarizer = (*sessionSummarizer)(nil)
 
 // Common metadata field keys.
 const (
@@ -44,13 +49,19 @@ const (
 	// This key is used to store the last included timestamp in the session state.
 	lastIncludedTsKey = "summary:last_included_ts"
 
-	// conversationTextPlaceholder is the placeholder for conversation text.
-	conversationTextPlaceholder = "{conversation_text}"
-	// maxSummaryWordsPlaceholder is the placeholder for max summary words.
-	maxSummaryWordsPlaceholder = "{max_summary_words}"
+	// conversationTextVar is the prompt variable name for conversation text (without braces).
+	conversationTextVar = "conversation_text"
+	// conversationTextPlaceholder is the placeholder for conversation text in templates.
+	conversationTextPlaceholder = "{" + conversationTextVar + "}"
+	// maxSummaryWordsVar is the prompt variable name for max summary words (without braces).
+	maxSummaryWordsVar = "max_summary_words"
+	// maxSummaryWordsPlaceholder is the placeholder for max summary words in templates.
+	maxSummaryWordsPlaceholder = "{" + maxSummaryWordsVar + "}"
 
 	// authorUser is the user author.
 	authorUser = "user"
+	// authorSystem is the system author.
+	authorSystem = "system"
 	// authorUnknown is the unknown author.
 	authorUnknown = "unknown"
 )
@@ -108,17 +119,53 @@ func defaultToolResultFormatter(msg model.Message) string {
 	return fmt.Sprintf("[%s returned: %s]", toolName, content)
 }
 
-// validatePrompt validates that the prompt contains required placeholders.
-// conversationTextPlaceholder is always required.
-// maxSummaryWordsPlaceholder is required when maxSummaryWords > 0.
-func validatePrompt(prompt string, maxSummaryWords int) error {
-	if !strings.Contains(prompt, conversationTextPlaceholder) {
+// validatePrompt validates that the user prompt contains the conversation
+// placeholder required to inject the extracted conversation text.
+func validatePrompt(template string) error {
+	textPrompt := prompt.Text{Template: template}
+	if err := textPrompt.ValidateRequired(
+		conversationTextVar,
+	); err != nil {
 		return fmt.Errorf("prompt must include %s placeholder", conversationTextPlaceholder)
 	}
-	if maxSummaryWords > 0 && !strings.Contains(prompt, maxSummaryWordsPlaceholder) {
-		return fmt.Errorf("prompt must include %s placeholder when maxSummaryWords > 0", maxSummaryWordsPlaceholder)
+	return nil
+}
+
+// validateSystemPrompt validates that the system prompt does not include
+// conversation payload placeholders. Keep the conversation content in the user
+// prompt so the system message stays instruction-only.
+func validateSystemPrompt(template string) error {
+	textPrompt := prompt.Text{Template: template}
+	if textPrompt.ValidateRequired(conversationTextVar) == nil {
+		return fmt.Errorf(
+			"system prompt must not include %s placeholder",
+			conversationTextPlaceholder,
+		)
 	}
 	return nil
+}
+
+// promptContainsVar reports whether a prompt template contains the named
+// placeholder.
+func promptContainsVar(template string, varName string) bool {
+	return prompt.Text{Template: template}.ValidateRequired(varName) == nil
+}
+
+// validateMaxSummaryWordsPrompt validates that the max summary words
+// placeholder is present in either the user prompt or the system prompt when a
+// max summary word limit is configured.
+func validateMaxSummaryWordsPrompt(userPrompt string, systemPrompt string, maxSummaryWords int) error {
+	if maxSummaryWords <= 0 {
+		return nil
+	}
+	if promptContainsVar(userPrompt, maxSummaryWordsVar) ||
+		promptContainsVar(systemPrompt, maxSummaryWordsVar) {
+		return nil
+	}
+	return fmt.Errorf(
+		"either prompt or system prompt must include %s placeholder when maxSummaryWords > 0",
+		maxSummaryWordsPlaceholder,
+	)
 }
 
 // getDefaultSummarizerPrompt returns the default prompt for summarization.
@@ -145,7 +192,8 @@ type sessionSummarizer struct {
 	model           model.Model
 	name            string
 	prompt          string
-	checks          []Checker
+	systemPrompt    string
+	checks          []ContextChecker
 	maxSummaryWords int
 	skipRecentFunc  SkipRecentFunc
 
@@ -165,10 +213,10 @@ type sessionSummarizer struct {
 // NewSummarizer creates a new session summarizer.
 func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
-		prompt:          "",          // Will be set after processing options.
-		checks:          []Checker{}, // No default checks - summarization only when explicitly configured.
-		maxSummaryWords: 0,           // 0 means no word limit.
-		skipRecentFunc:  nil,         // nil means no events are skipped.
+		prompt:          "",                 // Will be set after processing options.
+		checks:          []ContextChecker{}, // No default checks - summarization only when explicitly configured.
+		maxSummaryWords: 0,                  // 0 means no word limit.
+		skipRecentFunc:  nil,                // nil means no events are skipped.
 	}
 	s.model = m
 
@@ -179,7 +227,16 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	// Set default prompt if none was provided
 	if s.prompt == "" {
 		s.prompt = getDefaultSummarizerPrompt(s.maxSummaryWords)
-	} else if err := validatePrompt(s.prompt, s.maxSummaryWords); err != nil {
+	}
+	if err := validatePrompt(s.prompt); err != nil {
+		log.Warnf("invalid prompt in NewSummarizer: %v", err)
+	}
+	if s.systemPrompt != "" {
+		if err := validateSystemPrompt(s.systemPrompt); err != nil {
+			log.Warnf("invalid system prompt in NewSummarizer: %v", err)
+		}
+	}
+	if err := validateMaxSummaryWordsPrompt(s.prompt, s.systemPrompt, s.maxSummaryWords); err != nil {
 		log.Warnf("invalid prompt in NewSummarizer: %v", err)
 	}
 
@@ -188,12 +245,26 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 
 // ShouldSummarize checks if the session should be summarized.
 func (s *sessionSummarizer) ShouldSummarize(sess *session.Session) bool {
-	if len(sess.Events) == 0 {
+	return s.ShouldSummarizeWithContext(context.Background(), sess)
+}
+
+// ShouldSummarizeWithContext evaluates configured checks using the current
+// request context when available.
+func (s *sessionSummarizer) ShouldSummarizeWithContext(
+	ctx context.Context,
+	sess *session.Session,
+) bool {
+	if sess == nil || len(sess.Events) == 0 {
+		return false
+	}
+	if len(s.filterEventsForSummary(sess.Events)) == 0 {
 		return false
 	}
 
+	checkSess := s.buildCheckSession(sess)
+
 	for _, check := range s.checks {
-		if !check(sess) {
+		if !check(ctx, checkSess) {
 			return false
 		}
 	}
@@ -275,8 +346,25 @@ func (s *sessionSummarizer) recordLastIncludedTimestamp(sess *session.Session, e
 	sess.SetState(lastIncludedTsKey, []byte(last.Format(time.RFC3339Nano)))
 }
 
+func (s *sessionSummarizer) buildCheckSession(
+	sess *session.Session,
+) *session.Session {
+	if sess == nil {
+		return nil
+	}
+	checkSess := sess.Clone()
+	delta := filterDeltaEvents(checkSess)
+	filtered := s.filterEventsForSummary(delta)
+	primary := filterPrimaryEvents(filtered, checkSess.AppName)
+	checkSess.SetState(
+		tokenThresholdConversationTextStateKey,
+		[]byte(s.extractConversationText(primary)),
+	)
+	return checkSess
+}
+
 // filterEventsForSummary filters events for summarization, excluding recent events
-// and ensuring at least one user message is included for context.
+// and ensuring that retained events still have enough context to summarize.
 func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event.Event {
 	if s.skipRecentFunc == nil {
 		return events
@@ -292,32 +380,118 @@ func (s *sessionSummarizer) filterEventsForSummary(events []event.Event) []event
 
 	filteredEvents := events[:len(events)-skipCount]
 
-	// Ensure the filtered events contain at least one user message for context.
-	for _, e := range filteredEvents {
-		if e.Author == authorUser && e.Response != nil &&
-			len(e.Response.Choices) > 0 &&
-			e.Response.Choices[0].Message.Content != "" {
-			// Found at least one user message, return all filtered events
-			return filteredEvents
-		}
+	if hasUserMessageForSummary(filteredEvents) {
+		return filteredEvents
 	}
 
-	// If no user message found in filtered events, return empty slice.
-	// This prevents generating summaries without proper context.
+	// Delta summarization can prepend the previous summary as a synthetic
+	// system event. Preserve assistant/tool follow-ups when that summary is
+	// still present and at least one real event remains after it.
+	if s.hasPrependedSummaryContext(filteredEvents) {
+		return filteredEvents
+	}
+
 	return []event.Event{}
+}
+
+func hasUserMessageForSummary(events []event.Event) bool {
+	for _, e := range events {
+		if e.Author != authorUser || !eventHasTextContent(e) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func eventHasTextContent(e event.Event) bool {
+	if e.Response == nil || len(e.Response.Choices) == 0 {
+		return false
+	}
+	for _, choice := range e.Response.Choices {
+		if strings.TrimSpace(choice.Message.Content) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func eventHasSummarizableContent(
+	e event.Event,
+	toolCallFmt ToolCallFormatter,
+	toolResultFmt ToolResultFormatter,
+) bool {
+	if e.Response == nil || len(e.Response.Choices) == 0 {
+		return false
+	}
+	for _, choice := range e.Response.Choices {
+		msg := choice.Message
+		for _, tc := range msg.ToolCalls {
+			if toolCallFmt(tc) != "" {
+				return true
+			}
+		}
+		if msg.ToolID != "" {
+			if toolResultFmt(msg) != "" {
+				return true
+			}
+			continue
+		}
+		if strings.TrimSpace(msg.Content) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *sessionSummarizer) hasSummarizableContent(events []event.Event) bool {
+	toolCallFmt := s.toolCallFormatter
+	if toolCallFmt == nil {
+		toolCallFmt = defaultToolCallFormatter
+	}
+	toolResultFmt := s.toolResultFormatter
+	if toolResultFmt == nil {
+		toolResultFmt = defaultToolResultFormatter
+	}
+	for _, e := range events {
+		if eventHasSummarizableContent(e, toolCallFmt, toolResultFmt) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *sessionSummarizer) hasPrependedSummaryContext(events []event.Event) bool {
+	if len(events) < 2 {
+		return false
+	}
+	first := events[0]
+	if first.Author != authorSystem || !eventHasTextContent(first) {
+		return false
+	}
+	// prependPrevSummary inserts a synthetic system event at the head while
+	// preserving the original delta event timestamps after it.
+	if first.Timestamp.Before(events[1].Timestamp) {
+		return false
+	}
+	return s.hasSummarizableContent(events[1:])
 }
 
 // SetPrompt updates the summarizer's prompt dynamically.
 // The prompt must include the placeholder {conversation_text}, which will be
 // replaced with the extracted conversation when generating the summary.
-// If maxSummaryWords > 0, the prompt must also include {max_summary_words}.
-// If an empty prompt is provided, it will be ignored and the current prompt
-// will remain unchanged.
+// If maxSummaryWords > 0, either the user prompt or the configured system
+// prompt must include {max_summary_words}. If an empty prompt is provided, it
+// will be ignored and the current prompt will remain unchanged.
 func (s *sessionSummarizer) SetPrompt(prompt string) {
 	if prompt == "" {
 		return
 	}
-	if err := validatePrompt(prompt, s.maxSummaryWords); err != nil {
+	if err := validatePrompt(prompt); err != nil {
+		log.Warnf("invalid prompt: %v", err)
+		return
+	}
+	if err := validateMaxSummaryWordsPrompt(prompt, s.systemPrompt, s.maxSummaryWords); err != nil {
 		log.Warnf("invalid prompt: %v", err)
 		return
 	}
@@ -439,8 +613,10 @@ func (s *sessionSummarizer) generateSummary(
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
 	defer span.End()
 
-	prompt := s.buildSummaryPrompt(conversationText)
-	request := newSummaryRequest(prompt)
+	request, err := s.buildSummaryRequest(conversationText)
+	if err != nil {
+		return ctx, "", fmt.Errorf("failed to build summary request: %w", err)
+	}
 
 	invocation, ok := agent.InvocationFromContext(ctx)
 	if !ok || invocation == nil {
@@ -535,35 +711,57 @@ func (s *sessionSummarizer) generateSummary(
 	return ctx, summaryText, nil
 }
 
-func (s *sessionSummarizer) buildSummaryPrompt(conversationText string) string {
-	prompt := strings.Replace(
-		s.prompt,
-		conversationTextPlaceholder,
-		conversationText,
-		1,
-	)
-
-	// Replace max summary words placeholder if it exists.
-	if s.maxSummaryWords > 0 {
-		// Replace with the actual number.
-		return strings.Replace(
-			prompt,
-			maxSummaryWordsPlaceholder,
-			fmt.Sprintf("%d", s.maxSummaryWords),
-			1,
-		)
+func (s *sessionSummarizer) buildSummaryPrompt(conversationText string) (string, error) {
+	vars := prompt.Vars{
+		conversationTextVar: conversationText,
+		maxSummaryWordsVar:  "",
 	}
-
-	// Remove the placeholder if no word limit is set.
-	return strings.Replace(prompt, maxSummaryWordsPlaceholder, "", 1)
+	if s.maxSummaryWords > 0 {
+		vars[maxSummaryWordsVar] = strconv.Itoa(s.maxSummaryWords)
+	}
+	return prompt.Text{Template: s.prompt}.Render(
+		prompt.RenderEnv{Vars: vars},
+		prompt.WithUnknownBehavior(prompt.ErrorOnUnknown),
+	)
 }
 
-func newSummaryRequest(prompt string) *model.Request {
+func (s *sessionSummarizer) buildSystemPrompt() (string, error) {
+	if s.systemPrompt == "" {
+		return "", nil
+	}
+	vars := prompt.Vars{
+		maxSummaryWordsVar: "",
+	}
+	if s.maxSummaryWords > 0 {
+		vars[maxSummaryWordsVar] = strconv.Itoa(s.maxSummaryWords)
+	}
+	return prompt.Text{Template: s.systemPrompt}.Render(
+		prompt.RenderEnv{Vars: vars},
+		prompt.WithUnknownBehavior(prompt.ErrorOnUnknown),
+	)
+}
+
+func (s *sessionSummarizer) buildSummaryRequest(conversationText string) (*model.Request, error) {
+	messages := make([]model.Message, 0, 2)
+	systemPrompt, err := s.buildSystemPrompt()
+	if err != nil {
+		return nil, fmt.Errorf("render system prompt: %w", err)
+	}
+	if trimmed := strings.TrimSpace(systemPrompt); trimmed != "" {
+		messages = append(messages, model.NewSystemMessage(systemPrompt))
+	}
+
+	userPrompt, err := s.buildSummaryPrompt(conversationText)
+	if err != nil {
+		return nil, fmt.Errorf("render user prompt: %w", err)
+	}
+	messages = append(messages, model.NewUserMessage(userPrompt))
+	return newSummaryRequest(messages), nil
+}
+
+func newSummaryRequest(messages []model.Message) *model.Request {
 	return &model.Request{
-		Messages: []model.Message{{
-			Role:    authorUser,
-			Content: prompt,
-		}},
+		Messages: messages,
 		GenerationConfig: model.GenerationConfig{
 			Stream: true,
 		},

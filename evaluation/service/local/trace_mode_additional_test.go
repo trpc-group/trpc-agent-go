@@ -182,9 +182,9 @@ func TestBuildExpectedsForEvalDefaultModeRejectsEmptyConversation(t *testing.T) 
 	assert.Nil(t, expecteds)
 }
 
-func TestTraceExpectedsForEvalPreservesUserContentAndHandlesNilInvocation(t *testing.T) {
+func TestUserInputOnlyInvocationsForEvalPreservesUserContentAndHandlesNilInvocation(t *testing.T) {
 	user := &model.Message{Role: model.RoleUser, Content: "prompt"}
-	expecteds := traceExpectedsForEval([]*evalset.Invocation{
+	expecteds := userInputOnlyInvocationsForEval([]*evalset.Invocation{
 		{InvocationID: "inv-1", UserContent: user, FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "answer"}},
 		nil,
 	})

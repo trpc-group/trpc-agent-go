@@ -17,7 +17,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state"
+	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
@@ -154,7 +154,7 @@ func NewInstructionRequestProcessor(
 
 // ProcessRequest implements the flow.RequestProcessor interface.
 // It adds instruction content and system prompt to the request if provided.
-// State variables in instructions are automatically replaced with values from session state.
+// Prompt placeholders are rendered before any structured-output instructions are appended.
 func (p *InstructionRequestProcessor) ProcessRequest(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -184,6 +184,9 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 		ctx,
 		invocation,
 	)
+	if processedInstruction == "" && processedSystemPrompt == "" {
+		return
+	}
 
 	// Update the request messages with processed instructions.
 	p.updateRequestMessages(req, processedInstruction, processedSystemPrompt)
@@ -192,8 +195,8 @@ func (p *InstructionRequestProcessor) ProcessRequest(
 	p.sendPreprocessingEvent(ctx, invocation, ch)
 }
 
-// processInstructionsWithState processes instruction and system prompt with
-// state injection.
+// processInstructionsWithState resolves instruction and system prompt content,
+// renders prompt placeholders, and then appends structured-output instructions.
 func (p *InstructionRequestProcessor) processInstructionsWithState(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -218,33 +221,17 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(
 		processedSystemPrompt = p.SystemPrompt
 	}
 
-	if invocation != nil {
-		if invocation.RunOptions.Instruction != "" {
-			processedInstruction = invocation.RunOptions.Instruction
-		}
-		if invocation.RunOptions.GlobalInstruction != "" {
-			processedSystemPrompt =
-				invocation.RunOptions.GlobalInstruction
-		}
+	if invocation != nil &&
+		p.InstructionResolver == nil &&
+		p.InstructionGetter == nil &&
+		invocation.RunOptions.Instruction != "" {
+		processedInstruction = invocation.RunOptions.Instruction
 	}
-
-	// Automatically inject JSON output instructions.
-	// Precedence: StructuredOutputSchema > OutputSchema.
-	if p.StructuredOutputSchema != nil {
-		jsonInstructions := p.generateStructuredOutputJSONInstructions(
-			invocation,
-			p.StructuredOutputSchema,
-		)
-		processedInstruction = p.combineInstructions(
-			processedInstruction,
-			jsonInstructions,
-		)
-	} else if p.OutputSchema != nil {
-		jsonInstructions := p.generateJSONInstructions(p.OutputSchema)
-		processedInstruction = p.combineInstructions(
-			processedInstruction,
-			jsonInstructions,
-		)
+	if invocation != nil &&
+		p.SystemPromptResolver == nil &&
+		p.SystemPromptGetter == nil &&
+		invocation.RunOptions.GlobalInstruction != "" {
+		processedSystemPrompt = invocation.RunOptions.GlobalInstruction
 	}
 
 	if invocation != nil {
@@ -262,7 +249,37 @@ func (p *InstructionRequestProcessor) processInstructionsWithState(
 		)
 	}
 
+	// Automatically inject JSON output instructions after prompt rendering so
+	// literal schema braces are never interpreted as placeholders.
+	// Precedence: invocation.StructuredOutputSchema > StructuredOutputSchema > OutputSchema.
+	if structuredOutputSchema := p.resolveStructuredOutputSchema(invocation); structuredOutputSchema != nil {
+		jsonInstructions := p.generateStructuredOutputJSONInstructions(
+			invocation,
+			structuredOutputSchema,
+		)
+		processedInstruction = p.combineInstructions(
+			processedInstruction,
+			jsonInstructions,
+		)
+	} else if p.OutputSchema != nil {
+		jsonInstructions := p.generateJSONInstructions(p.OutputSchema)
+		processedInstruction = p.combineInstructions(
+			processedInstruction,
+			jsonInstructions,
+		)
+	}
+
 	return processedInstruction, processedSystemPrompt
+}
+
+func (p *InstructionRequestProcessor) resolveStructuredOutputSchema(invocation *agent.Invocation) map[string]any {
+	if invocation != nil &&
+		invocation.StructuredOutput != nil &&
+		invocation.StructuredOutput.JSONSchema != nil &&
+		invocation.StructuredOutput.JSONSchema.Schema != nil {
+		return invocation.StructuredOutput.JSONSchema.Schema
+	}
+	return p.StructuredOutputSchema
 }
 
 // combineInstructions combines existing instruction with new JSON
@@ -286,7 +303,7 @@ func (p *InstructionRequestProcessor) injectStateIntoContent(
 		return content
 	}
 
-	processedContent, err := state.InjectSessionState(content, invocation)
+	processedContent, err := promptstate.Render(content, invocation)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,

@@ -16,6 +16,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
+	istructure "trpc.group/trpc-go/trpc-agent-go/internal/structure"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -57,13 +59,14 @@ func New(name string, opts ...Option) *CycleAgent {
 func (a *CycleAgent) createSubAgentInvocation(
 	subAgent agent.Agent,
 	baseInvocation *agent.Invocation,
+	nodeID string,
+	entryPredecessors []string,
 ) *agent.Invocation {
-	// Create a copy of the invocation - no shared state mutation.
-	subInvocation := baseInvocation.Clone(
+	return baseInvocation.Clone(
 		agent.WithInvocationAgent(subAgent),
+		agent.WithInvocationTraceNodeID(nodeID),
+		agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors),
 	)
-
-	return subInvocation
 }
 
 // shouldEscalate checks if an event indicates escalation using injectable logic.
@@ -165,14 +168,18 @@ func (a *CycleAgent) runSubAgent(
 	ctx context.Context,
 	subAgent agent.Agent,
 	invocation *agent.Invocation,
+	nodeID string,
+	entryPredecessors []string,
 	eventChan chan<- *event.Event,
 	fullRespEvent **event.Event,
-) bool {
+) (*agent.Invocation, bool) {
 	// Create a proper invocation for the sub-agent with correct attribution.
-	subInvocation := a.createSubAgentInvocation(subAgent, invocation)
+	subInvocation := a.createSubAgentInvocation(subAgent, invocation, nodeID, entryPredecessors)
 
 	// Reset invocation information in context
-	subAgentCtx := agent.NewInvocationContext(ctx, subInvocation)
+	subAgentCtx := graph.WithGraphCompletionCapture(
+		agent.NewInvocationContext(ctx, subInvocation),
+	)
 
 	// Run the sub-agent.
 	subEventChan, err := agent.RunWithPlugins(
@@ -188,54 +195,96 @@ func (a *CycleAgent) runSubAgent(
 			model.ErrorTypeFlowError,
 			err.Error(),
 		))
-		return true // Indicates escalation
+		return subInvocation, true // Indicates escalation
 	}
 
 	// Forward events from the sub-agent and check for escalation.
+	visibleCtx := graph.WithoutGraphCompletionCapture(ctx)
+	var emittedAssistantResponseIDs map[string]struct{}
 	for subEvent := range subEventChan {
 		if subEvent != nil && subEvent.Response != nil && !subEvent.Response.IsPartial {
 			*fullRespEvent = subEvent
 		}
-		if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
-			return true
+		escalationEvent := subEvent
+		if graph.ShouldSuppressGraphCompletionEvent(visibleCtx, invocation, subEvent) {
+			if visibleEvent, callbackFullRespEvent, ok := graph.VisibleGraphCompletionEventsForForwardingWithAuthor(
+				subEvent,
+				emittedAssistantResponseIDs,
+				subInvocation.AgentName,
+			); ok {
+				escalationEvent = visibleEvent
+				if err := event.EmitEvent(ctx, eventChan, visibleEvent); err != nil {
+					return subInvocation, true
+				}
+				if callbackFullRespEvent != nil &&
+					callbackFullRespEvent.Response != nil &&
+					!callbackFullRespEvent.Response.IsPartial {
+					*fullRespEvent = callbackFullRespEvent
+				}
+				emittedAssistantResponseIDs = graph.RecordAssistantResponseID(
+					emittedAssistantResponseIDs,
+					visibleEvent,
+				)
+			}
+		} else {
+			if err := event.EmitEvent(ctx, eventChan, subEvent); err != nil {
+				return subInvocation, true
+			}
+			emittedAssistantResponseIDs = graph.RecordAssistantResponseID(
+				emittedAssistantResponseIDs,
+				subEvent,
+			)
 		}
-		if subEvent != nil && subEvent.Error != nil {
-			return true
+		if escalationEvent != nil && escalationEvent.Error != nil {
+			return subInvocation, true
 		}
 
 		// Check if this event indicates escalation.
-		if a.shouldEscalate(subEvent) {
-			return true // Indicates escalation
+		if a.shouldEscalate(escalationEvent) {
+			return subInvocation, true // Indicates escalation
 		}
 	}
 
-	return false // No escalation
+	return subInvocation, false // No escalation
 }
 
 // runSubAgentsLoop executes all sub-agents in sequence.
 func (a *CycleAgent) runSubAgentsLoop(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	entryPredecessors []string,
 	eventChan chan<- *event.Event,
 	fullRespEvent **event.Event,
-) bool {
+) ([]string, bool) {
+	pathAllocator := istructure.NewPathAllocator(agent.InvocationTraceNodeID(invocation))
+	currentPredecessors := entryPredecessors
 	for _, subAgent := range a.subAgents {
 		// Check if context was cancelled.
 		if err := agent.CheckContextCancelled(ctx); err != nil {
-			return true
+			return currentPredecessors, true
 		}
 
 		// Run the sub-agent.
-		if a.runSubAgent(ctx, subAgent, invocation, eventChan, fullRespEvent) {
-			return true // Indicates escalation or early return
+		subInvocation, shouldStop := a.runSubAgent(
+			ctx,
+			subAgent,
+			invocation,
+			pathAllocator.Next(subAgent.Info().Name),
+			currentPredecessors,
+			eventChan,
+			fullRespEvent,
+		)
+		currentPredecessors = agent.NextExecutionTracePredecessors(subInvocation)
+		if shouldStop {
+			return currentPredecessors, true // Indicates escalation or early return
 		}
 
 		// Check if context was cancelled.
 		if err := agent.CheckContextCancelled(ctx); err != nil {
-			return true
+			return currentPredecessors, true
 		}
 	}
-	return false // No escalation
+	return currentPredecessors, false // No escalation
 }
 
 // handleAfterAgentCallbacks handles post-execution callbacks.
@@ -282,7 +331,7 @@ func (a *CycleAgent) handleAfterAgentCallbacks(
 // Run implements the agent.Agent interface.
 // It executes sub-agents in a loop until escalation or max iterations.
 func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	eventChan := make(chan *event.Event, a.channelBufferSize)
+	eventChan := make(chan *event.Event, a.eventChannelBufferSize(invocation))
 
 	// Setup invocation.
 	a.setupInvocation(invocation)
@@ -300,6 +349,7 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 
 		var timesLooped int
 		var fullRespEvent *event.Event
+		entryPredecessors := agent.NextExecutionTracePredecessors(invocation)
 
 		// Main loop: continue until max iterations or escalation.
 		for a.maxIterations == nil || timesLooped < *a.maxIterations {
@@ -309,7 +359,15 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 			}
 
 			// Run sub-agents loop and collect full response event.
-			if a.runSubAgentsLoop(ctx, invocation, eventChan, &fullRespEvent) {
+			var shouldStop bool
+			entryPredecessors, shouldStop = a.runSubAgentsLoop(
+				ctx,
+				invocation,
+				entryPredecessors,
+				eventChan,
+				&fullRespEvent,
+			)
+			if shouldStop {
 				break // Escalation or early return
 			}
 
@@ -321,6 +379,13 @@ func (a *CycleAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-c
 	}(runCtx)
 
 	return eventChan, nil
+}
+
+func (a *CycleAgent) eventChannelBufferSize(invocation *agent.Invocation) int {
+	if size := agent.GetEventChannelBufferSize(invocation); size > 0 {
+		return size
+	}
+	return a.channelBufferSize
 }
 
 // Tools implements the agent.Agent interface.

@@ -307,12 +307,6 @@ func TestLLMBaseEvaluator_ScoreBelowThreshold(t *testing.T) {
 	assert.Equal(t, status.EvalStatusFailed, res.PerInvocationResults[0].Status)
 }
 
-func TestJudgeModelResponse_UnknownProvider(t *testing.T) {
-	evalMetric := buildEvalMetric("unknown-provider", 1)
-	_, err := judgeModelResponse(context.Background(), []model.Message{}, evalMetric)
-	require.Error(t, err)
-}
-
 func TestLLMBaseEvaluator_JudgeModelError(t *testing.T) {
 	base := &LLMBaseEvaluator{LLMEvaluator: &scriptedLLMEvaluator{scoreValue: 1}}
 	evalMetric := buildEvalMetric("unknown-provider", 1)
@@ -323,49 +317,6 @@ func TestLLMBaseEvaluator_JudgeModelError(t *testing.T) {
 		evalMetric,
 	)
 	require.Error(t, err)
-}
-
-func TestJudgeModelResponseErrors(t *testing.T) {
-	provider.Register("llm-error-provider", func(_ *provider.Options) (model.Model, error) {
-		return &fakeModel{err: assert.AnError}, nil
-	})
-	evalMetric := buildEvalMetric("llm-error-provider", 1)
-	_, err := judgeModelResponse(context.Background(), []model.Message{}, evalMetric)
-	require.Error(t, err)
-
-	provider.Register("llm-response-error-provider", func(_ *provider.Options) (model.Model, error) {
-		return &fakeModel{responses: []*model.Response{{
-			Error: &model.ResponseError{Message: "bad"},
-			Done:  true,
-		}}}, nil
-	})
-	evalMetric = buildEvalMetric("llm-response-error-provider", 1)
-	_, err = judgeModelResponse(context.Background(), []model.Message{}, evalMetric)
-	require.Error(t, err)
-
-	provider.Register("llm-no-final-provider", func(_ *provider.Options) (model.Model, error) {
-		return &fakeModel{responses: []*model.Response{}}, nil
-	})
-	evalMetric = buildEvalMetric("llm-no-final-provider", 1)
-	_, err = judgeModelResponse(context.Background(), []model.Message{}, evalMetric)
-	require.Error(t, err)
-}
-
-func TestJudgeModelResponsePassesVariantToProvider(t *testing.T) {
-	var capturedVariant string
-	provider.Register("llm-variant-provider", func(opts *provider.Options) (model.Model, error) {
-		capturedVariant = opts.Variant
-		return &fakeModel{responses: []*model.Response{{
-			Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
-			Done:    true,
-		}}}, nil
-	})
-	evalMetric := buildEvalMetric("llm-variant-provider", 1)
-	evalMetric.Criterion.LLMJudge.JudgeModel.Variant = "deepseek"
-
-	_, err := judgeModelResponse(context.Background(), []model.Message{{Role: "user", Content: "prompt"}}, evalMetric)
-	require.NoError(t, err)
-	assert.Equal(t, "deepseek", capturedVariant)
 }
 
 func TestLLMBaseEvaluator_NameDescription(t *testing.T) {
@@ -475,55 +426,4 @@ func TestLLMBaseEvaluator_EvaluateUsesDefaultNumSamplesWhenNil(t *testing.T) {
 		evalMetric,
 	)
 	require.NoError(t, err)
-}
-
-func TestJudgeModelResponse_JudgeModelNil(t *testing.T) {
-	evalMetric := &metric.EvalMetric{
-		Threshold: 0.5,
-		Criterion: &criterion.Criterion{
-			LLMJudge: &llm.LLMCriterion{},
-		},
-	}
-
-	_, err := judgeModelResponse(context.Background(), []model.Message{}, evalMetric)
-	require.Error(t, err)
-}
-
-func TestJudgeRunnerResponse_JudgeRunnerNil(t *testing.T) {
-	_, err := judgeRunnerResponse(context.Background(), nil, []model.Message{})
-	require.Error(t, err)
-}
-
-func TestJudgeRunnerResponse_EventError(t *testing.T) {
-	r := &fakeJudgeRunner{
-		events: []*event.Event{
-			nil,
-			event.NewErrorEvent("inv", "judge", model.ErrorTypeRunError, "bad"),
-		},
-	}
-
-	_, err := judgeRunnerResponse(
-		context.Background(),
-		r,
-		[]model.Message{{Role: model.RoleUser, Content: "prompt"}},
-	)
-	require.Error(t, err)
-}
-
-func TestJudgeRunnerResponse_NoFinalResponse(t *testing.T) {
-	r := &fakeJudgeRunner{
-		events: []*event.Event{
-			event.NewResponseEvent("inv", "judge", &model.Response{
-				Choices: []model.Choice{{Message: model.Message{Content: "partial"}}},
-				Done:    false,
-			}),
-		},
-	}
-
-	_, err := judgeRunnerResponse(
-		context.Background(),
-		r,
-		[]model.Message{{Role: model.RoleUser, Content: "prompt"}},
-	)
-	require.Error(t, err)
 }

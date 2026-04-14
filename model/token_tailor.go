@@ -51,6 +51,9 @@ type TokenTailoringConfig struct {
 	// InputTokensFloor is the minimum number of input tokens.
 	InputTokensFloor int
 	// OutputTokensFloor is the minimum number of output tokens.
+	//
+	// Deprecated: OutputTokensFloor is no longer used. Token tailoring no
+	// longer auto-calculates output MaxTokens.
 	OutputTokensFloor int
 	// SafetyMarginRatio is the safety margin ratio for token counting
 	// inaccuracies.

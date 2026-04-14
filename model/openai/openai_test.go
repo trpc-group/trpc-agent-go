@@ -85,6 +85,79 @@ func TestNew(t *testing.T) {
 				WithBaseURL(defaultDeepSeekBaseURL),
 			},
 		},
+		{
+			name:      "does not infer deepseek from official model name",
+			modelName: "deepseek-chat",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "does not infer deepseek from reasoner model name",
+			modelName: "deepseek-reasoner",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "does not infer deepseek from third party deepseek model name",
+			modelName: "deepseek-v3.2",
+			opts: []Option{
+				WithAPIKey(testKey),
+			},
+			expectOpts: nil,
+		},
+		{
+			name:      "infers deepseek from official deepseek base url",
+			modelName: "custom-model",
+			opts: []Option{
+				WithBaseURL("https://api.deepseek.com/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://api.deepseek.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+		},
+		{
+			name:      "explicit variant sets deepseek on official model name",
+			modelName: "deepseek-chat",
+			opts: []Option{
+				WithVariant(VariantDeepSeek),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL(defaultDeepSeekBaseURL),
+			},
+		},
+		{
+			name:      "explicit deepseek variant preserves custom proxy base url",
+			modelName: "deepseek-chat",
+			opts: []Option{
+				WithVariant(VariantDeepSeek),
+				WithBaseURL("https://proxy.example.com/v1"),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+		},
+		{
+			name:      "custom proxy base url before explicit deepseek variant is preserved",
+			modelName: "deepseek-chat",
+			opts: []Option{
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+			expectOpts: []Option{
+				WithAPIKey(testKey),
+				WithBaseURL("https://proxy.example.com/v1"),
+				WithVariant(VariantDeepSeek),
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -92,7 +165,7 @@ func TestNew(t *testing.T) {
 			m := New(tt.modelName, tt.opts...)
 			require.NotNil(t, m, "expected model to be created, got nil")
 
-			o := options{}
+			o := defaultOptions
 			for _, opt := range tt.opts {
 				opt(&o)
 			}
@@ -103,6 +176,90 @@ func TestNew(t *testing.T) {
 			assert.Equal(t, tt.modelName, m.name, "expected model name %s, got %s", tt.modelName, m.name)
 			assert.Equal(t, o.APIKey, m.apiKey, "expected api key %s, got %s", o.APIKey, m.apiKey)
 			assert.Equal(t, o.BaseURL, m.baseURL, "expected base url %s, got %s", o.BaseURL, m.baseURL)
+			assert.Equal(t, o.Variant, m.variant, "expected variant %s, got %s", o.Variant, m.variant)
+		})
+	}
+}
+
+func TestIsDeepSeekBaseURL(t *testing.T) {
+	tests := []struct {
+		name   string
+		rawURL string
+		want   bool
+	}{
+		{
+			name:   "matches official api host",
+			rawURL: "https://api.deepseek.com/v1",
+			want:   true,
+		},
+		{
+			name:   "matches official api host after trim and lowercase",
+			rawURL: " HTTPS://API.DEEPSEEK.COM/V1 ",
+			want:   true,
+		},
+		{
+			name:   "does not match non api deepseek host",
+			rawURL: "https://deepseek.com/v1",
+			want:   false,
+		},
+		{
+			name:   "does not match custom proxy host",
+			rawURL: "https://deepseek-proxy.internal/v1",
+			want:   false,
+		},
+		{
+			name:   "parse error does not fall back to substring match",
+			rawURL: "https://api.deepseek.com/%zz",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isDeepSeekBaseURL(tt.rawURL))
+		})
+	}
+}
+
+func TestOmittedAttachmentHint(t *testing.T) {
+	tests := []struct {
+		name       string
+		imageCount int
+		audioCount int
+		fileCount  int
+		want       string
+	}{
+		{
+			name: "no attachments",
+			want: "",
+		},
+		{
+			name:       "single audio",
+			audioCount: 1,
+			want: "Omitted non-text attachments for this provider: " +
+				"1 audio clip.",
+		},
+		{
+			name:       "plural attachments",
+			imageCount: 2,
+			audioCount: 2,
+			fileCount:  2,
+			want: "Omitted non-text attachments for this provider: " +
+				"2 images, 2 audio clips, 2 files.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(
+				t,
+				tt.want,
+				omittedAttachmentHint(
+					tt.imageCount,
+					tt.audioCount,
+					tt.fileCount,
+				),
+			)
 		})
 	}
 }
@@ -311,6 +468,76 @@ func TestModel_GenerateContentIter_Streaming(t *testing.T) {
 		}
 	}
 	require.True(t, sawHello)
+}
+
+func TestModel_GenerateContentIter_StreamingContextCancellationRunsCallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		chunks := []string{
+			`data: {"id":"iter-stream-cancel","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`,
+			`data: {"id":"iter-stream-cancel","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+	defer server.Close()
+
+	callbackCalled := make(chan error, 1)
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatStreamCompleteCallback(func(
+			ctx context.Context,
+			req *openaigo.ChatCompletionNewParams,
+			acc *openaigo.ChatCompletionAccumulator,
+			streamErr error,
+		) {
+			callbackCalled <- streamErr
+		}),
+	)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hi"),
+		},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	seq, err := m.GenerateContentIter(ctx, req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		cancel()
+		return false
+	})
+
+	require.Len(t, responses, 1)
+	require.False(t, responses[0].Done)
+
+	select {
+	case streamErr := <-callbackCalled:
+		require.ErrorIs(t, streamErr, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
 }
 
 func TestOptions_Validation(t *testing.T) {
@@ -983,17 +1210,28 @@ func TestModel_Callbacks(t *testing.T) {
 		responseChan, err := m.GenerateContent(ctx, request)
 		require.NoError(t, err, "failed to generate content: %v", err)
 
-		// Consume all responses
+		// Consume all responses and ensure the callback runs before
+		// the final response becomes visible to the caller.
+		sawDone := false
 		for response := range responseChan {
-			if response.Done {
-				break
+			if !response.Done {
+				continue
 			}
+			sawDone = true
+			select {
+			case <-callbackCalled:
+				// Success.
+			default:
+				require.Fail(t,
+					"stream complete callback must run before final response is emitted")
+			}
+			break
 		}
+		require.True(t, sawDone,
+			"expected terminal Done response to be emitted")
 
-		// Wait for callback with timeout
 		select {
 		case <-callbackCalled:
-			// Success - callback was called
 		case <-time.After(3 * time.Second):
 			require.Fail(t, "timeout waiting for stream complete callback")
 		}
@@ -1273,8 +1511,163 @@ func TestModel_CallbackAssignment(t *testing.T) {
 
 		// Verify that callbacks are nil when not provided.
 		assert.Nil(t, m.chatRequestCallback, "expected chat request callback to be nil")
+		assert.Nil(
+			t,
+			m.chatRequestJSONCallback,
+			"expected chat request json callback to be nil",
+		)
 		assert.Nil(t, m.chatResponseCallback, "expected chat response callback to be nil")
 		assert.Nil(t, m.chatChunkCallback, "expected chat chunk callback to be nil")
+	})
+
+	t.Run("request json callback assignment", func(t *testing.T) {
+		var (
+			callbackRaw []byte
+			callbackErr error
+		)
+		m := New(
+			"test-model",
+			WithAPIKey("test-key"),
+			WithChatRequestJSONCallback(func(
+				ctx context.Context,
+				raw []byte,
+				err error,
+			) {
+				callbackRaw = append([]byte(nil), raw...)
+				callbackErr = err
+			}),
+		)
+
+		assert.NotNil(t, m.chatRequestJSONCallback)
+
+		req := &openaigo.ChatCompletionNewParams{
+			Model: "test-model",
+			Messages: []openaigo.ChatCompletionMessageParamUnion{
+				openaigo.UserMessage("hello"),
+			},
+		}
+		wantRaw, err := req.MarshalJSON()
+		require.NoError(t, err)
+
+		m.runChatRequestJSONCallback(context.Background(), req)
+
+		require.NoError(t, callbackErr)
+		assert.JSONEq(t, string(wantRaw), string(callbackRaw))
+	})
+}
+
+func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
+	t.Run("request callback", func(t *testing.T) {
+		callbackCalled := false
+		m := New("test-model",
+			WithAPIKey("test-key"),
+			WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
+				callbackCalled = true
+				panic("boom")
+			}),
+		)
+
+		require.NotPanics(t, func() {
+			m.runChatRequestCallback(context.Background(), &openaigo.ChatCompletionNewParams{})
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("request json callback", func(t *testing.T) {
+		callbackCalled := false
+		m := New("test-model",
+			WithAPIKey("test-key"),
+			WithChatRequestJSONCallback(func(
+				ctx context.Context,
+				raw []byte,
+				err error,
+			) {
+				callbackCalled = true
+				panic("boom")
+			}),
+		)
+
+		require.NotPanics(t, func() {
+			m.runChatRequestJSONCallback(
+				context.Background(),
+				&openaigo.ChatCompletionNewParams{},
+			)
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("response callback", func(t *testing.T) {
+		callbackCalled := false
+		m := New("test-model",
+			WithAPIKey("test-key"),
+			WithChatResponseCallback(func(
+				ctx context.Context,
+				req *openaigo.ChatCompletionNewParams,
+				resp *openaigo.ChatCompletion,
+			) {
+				callbackCalled = true
+				panic("boom")
+			}),
+		)
+
+		require.NotPanics(t, func() {
+			m.runChatResponseCallback(
+				context.Background(),
+				&openaigo.ChatCompletionNewParams{},
+				&openaigo.ChatCompletion{},
+			)
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("chunk callback", func(t *testing.T) {
+		callbackCalled := false
+		m := New("test-model",
+			WithAPIKey("test-key"),
+			WithChatChunkCallback(func(
+				ctx context.Context,
+				req *openaigo.ChatCompletionNewParams,
+				chunk *openaigo.ChatCompletionChunk,
+			) {
+				callbackCalled = true
+				panic("boom")
+			}),
+		)
+
+		require.NotPanics(t, func() {
+			m.runChatChunkCallback(
+				context.Background(),
+				&openaigo.ChatCompletionNewParams{},
+				&openaigo.ChatCompletionChunk{},
+			)
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("stream complete callback", func(t *testing.T) {
+		callbackCalled := false
+		m := New("test-model",
+			WithAPIKey("test-key"),
+			WithChatStreamCompleteCallback(func(
+				ctx context.Context,
+				req *openaigo.ChatCompletionNewParams,
+				acc *openaigo.ChatCompletionAccumulator,
+				streamErr error,
+			) {
+				callbackCalled = true
+				panic("boom")
+			}),
+		)
+
+		require.NotPanics(t, func() {
+			m.handleStreamCompleteCallback(
+				context.Background(),
+				openaigo.ChatCompletionNewParams{},
+				openaigo.ChatCompletionAccumulator{},
+				nil,
+			)
+		})
+		assert.True(t, callbackCalled)
 	})
 }
 
@@ -3103,6 +3496,7 @@ func TestWithVariant(t *testing.T) {
 		WithVariant(VariantOpenAI)(opts)
 
 		assert.Equal(t, VariantOpenAI, opts.Variant, "expected variant to be VariantOpenAI")
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
 	})
 
 	t.Run("hunyuan variant", func(t *testing.T) {
@@ -3110,6 +3504,7 @@ func TestWithVariant(t *testing.T) {
 		WithVariant(VariantHunyuan)(opts)
 
 		assert.Equal(t, VariantHunyuan, opts.Variant, "expected variant to be VariantHunyuan")
+		assert.True(t, opts.variantSet, "expected variantSet to be true")
 	})
 
 	t.Run("variant in model creation", func(t *testing.T) {
@@ -3881,6 +4276,71 @@ func TestConvertUserMessageContent_HunyuanVariant(t *testing.T) {
 		assert.Len(t, fileIDs, 2, "expected 2 file IDs")
 		assert.Contains(t, fileIDs, "file-1", "expected file-1")
 		assert.Contains(t, fileIDs, "file-2", "expected file-2")
+	})
+}
+
+func TestConvertUserMessageContent_DeepSeekVariant(t *testing.T) {
+	m := New("deepseek-chat", WithVariant(VariantDeepSeek))
+
+	t.Run("omits non-text content parts", func(t *testing.T) {
+		message := model.Message{
+			Role:    model.RoleUser,
+			Content: "Please inspect this",
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeImage,
+					Image: &model.Image{
+						URL: "https://example.com/image.png",
+					},
+				},
+				{
+					Type: model.ContentTypeFile,
+					File: &model.File{
+						FileID: "file-123",
+					},
+				},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		require.Len(t, content.OfArrayOfContentParts, 2,
+			"expected main text and omission hint")
+		require.NotNil(t, content.OfArrayOfContentParts[0].OfText,
+			"expected first part to be text")
+		require.NotNil(t, content.OfArrayOfContentParts[1].OfText,
+			"expected omission hint to be text")
+		assert.Equal(t, "Please inspect this",
+			content.OfArrayOfContentParts[0].OfText.Text)
+		assert.Contains(t,
+			content.OfArrayOfContentParts[1].OfText.Text,
+			"1 image, 1 file")
+	})
+
+	t.Run("image only becomes text hint", func(t *testing.T) {
+		message := model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeImage,
+					Image: &model.Image{
+						URL: "https://example.com/image.png",
+					},
+				},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		assert.False(t, content.OfString.Valid(),
+			"expected non-string content")
+		require.Len(t, content.OfArrayOfContentParts, 1,
+			"expected one omission hint")
+		require.NotNil(t, content.OfArrayOfContentParts[0].OfText,
+			"expected omission hint to be text")
+		assert.Contains(t,
+			content.OfArrayOfContentParts[0].OfText.Text,
+			"1 image")
 	})
 }
 
@@ -4736,6 +5196,86 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 		assert.NotNil(t, capturedRequest, "expected request to be captured in callback")
 	})
 
+	t.Run("streaming continues when chat stream complete callback panics", func(t *testing.T) {
+		callbackCalled := make(chan struct{})
+		callback := func(
+			ctx context.Context,
+			req *openai.ChatCompletionNewParams,
+			acc *openai.ChatCompletionAccumulator,
+			err error,
+		) {
+			close(callbackCalled)
+			panic("boom")
+		}
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Connection", "keep-alive")
+
+			chunks := []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+				`data: [DONE]`,
+			}
+
+			for _, chunk := range chunks {
+				fmt.Fprintf(w, "%s\n\n", chunk)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		}))
+		defer server.Close()
+
+		m := New("gpt-3.5-turbo",
+			WithBaseURL(server.URL),
+			WithAPIKey("test-key"),
+			WithChatStreamCompleteCallback(callback),
+		)
+
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("Hello"),
+			},
+			GenerationConfig: model.GenerationConfig{
+				Stream: true,
+			},
+		}
+
+		responseChan, err := m.GenerateContent(context.Background(), req)
+		require.NoError(t, err)
+
+		var responses []*model.Response
+		timeout := time.After(2 * time.Second)
+	loop:
+		for {
+			select {
+			case resp, ok := <-responseChan:
+				if !ok {
+					break loop
+				}
+				responses = append(responses, resp)
+			case <-timeout:
+				t.Fatal("timed out waiting for streaming responses")
+			}
+		}
+
+		select {
+		case <-callbackCalled:
+		default:
+			t.Fatal("expected chat stream complete callback to be called")
+		}
+
+		require.NotEmpty(t, responses)
+		finalResp := responses[len(responses)-1]
+		require.True(t, finalResp.Done)
+		require.Len(t, finalResp.Choices, 1)
+		assert.Equal(t, "Hello world", finalResp.Choices[0].Message.Content)
+	})
+
 	t.Run("streaming with reasoning content handling", func(t *testing.T) {
 		// Create mock server with reasoning content
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -4980,7 +5520,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 		},
 		{
 			name:  "deepseek thinking",
-			model: New("deepseek-chat"),
+			model: New("deepseek-chat", WithVariant(VariantDeepSeek)),
 			args: args{
 				request: &model.Request{
 					Messages: []model.Message{},
@@ -4991,7 +5531,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 				},
 			},
 			want1: []openaiopt.RequestOption{
-				openaiopt.WithJSONSet(model.ThinkingEnabledKey, true),
+				openaiopt.WithJSONSet("thinking", map[string]string{"type": "enabled"}),
 			},
 		},
 		{
@@ -5055,7 +5595,6 @@ func TestWithTokenTailoringConfig(t *testing.T) {
 				ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
 				SafetyMarginRatio:      imodel.DefaultSafetyMarginRatio,
 				InputTokensFloor:       imodel.DefaultInputTokensFloor,
-				OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
 				MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
 			},
 		},
@@ -5116,7 +5655,6 @@ func TestWithTokenTailoringConfig(t *testing.T) {
 				ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
 				SafetyMarginRatio:      imodel.DefaultSafetyMarginRatio,
 				InputTokensFloor:       imodel.DefaultInputTokensFloor,
-				OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
 				MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
 			},
 		},
@@ -6345,6 +6883,71 @@ func TestModel_handleStreamCompleteCallback(t *testing.T) {
 		assert.Error(t, capturedErr)
 		assert.Equal(t, "stream error", capturedErr.Error())
 	})
+
+	t.Run("callback panic is recovered", func(t *testing.T) {
+		callbackCalled := false
+		callback := func(ctx context.Context, req *openai.ChatCompletionNewParams, acc *openai.ChatCompletionAccumulator, streamErr error) {
+			callbackCalled = true
+			panic("boom")
+		}
+
+		m := New("test-model", WithAPIKey("test-key"), WithChatStreamCompleteCallback(callback))
+		chatRequest := openai.ChatCompletionNewParams{}
+		acc := openai.ChatCompletionAccumulator{}
+
+		require.NotPanics(t, func() {
+			m.handleStreamCompleteCallback(context.Background(), chatRequest, acc, nil)
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("callback mutations do not affect original accumulator", func(t *testing.T) {
+		callbackCalled := false
+		callback := func(ctx context.Context, req *openai.ChatCompletionNewParams, acc *openai.ChatCompletionAccumulator, streamErr error) {
+			callbackCalled = true
+			require.NotNil(t, acc)
+			acc.Choices[0].Message.Content = "mutated"
+			acc.Choices[0].Message.ToolCalls[0].Function.Arguments = `{"city":"shanghai"}`
+			delete(acc.Choices[0].Message.JSON.ExtraFields, "reasoning_content")
+		}
+
+		m := New("test-model", WithAPIKey("test-key"), WithChatStreamCompleteCallback(callback))
+		chatRequest := openai.ChatCompletionNewParams{}
+		acc := openai.ChatCompletionAccumulator{
+			ChatCompletion: openai.ChatCompletion{
+				ID: "acc-id",
+				Choices: []openai.ChatCompletionChoice{
+					{
+						Index:        0,
+						FinishReason: "stop",
+						Message: openai.ChatCompletionMessage{
+							Content: "original",
+							ToolCalls: []openai.ChatCompletionMessageToolCall{
+								{
+									ID: "call-1",
+									Function: openai.ChatCompletionMessageToolCallFunction{
+										Name:      "weather",
+										Arguments: `{"city":"beijing"}`,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		acc.Choices[0].Message.JSON.ExtraFields = map[string]respjson.Field{
+			"reasoning_content": {},
+		}
+
+		m.handleStreamCompleteCallback(context.Background(), chatRequest, acc, nil)
+
+		assert.True(t, callbackCalled)
+		assert.Equal(t, "original", acc.Choices[0].Message.Content)
+		assert.Equal(t, `{"city":"beijing"}`, acc.Choices[0].Message.ToolCalls[0].Function.Arguments)
+		_, exists := acc.Choices[0].Message.JSON.ExtraFields["reasoning_content"]
+		assert.True(t, exists)
+	})
 }
 
 // TestModel_StreamingResponse_ReasoningChunkNotSuppressed tests that chunks with
@@ -6824,4 +7427,91 @@ func TestAppendUserContentParts_SkipsInternalFiles(t *testing.T) {
 	})
 	require.Nil(t, fields)
 	require.Empty(t, dst)
+}
+
+// TestChatRequestCallbackSynchronous verifies that
+// chatRequestCallback is invoked synchronously inside
+// GenerateContent, before the response goroutine starts.
+func TestChatRequestCallbackSynchronous(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non_streaming", stream: false},
+		{name: "streaming", stream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(
+						r.URL.Path, "/chat/completions",
+					) {
+						http.Error(w, "not found",
+							http.StatusNotFound)
+						return
+					}
+					if tt.stream {
+						w.Header().Set("Content-Type",
+							"text/event-stream")
+						fmt.Fprint(w, "data: {\"id\":\"s\","+
+							"\"object\":\"chat.completion.chunk\","+
+							"\"created\":1,\"model\":\"m\","+
+							"\"choices\":[{\"index\":0,"+
+							"\"delta\":{\"content\":\"hi\"},"+
+							"\"finish_reason\":\"stop\"}]}\n\n")
+						fmt.Fprint(w, "data: [DONE]\n\n")
+						return
+					}
+					w.Header().Set("Content-Type",
+						"application/json")
+					fmt.Fprint(w, `{"id":"n","object":`+
+						`"chat.completion","created":1,`+
+						`"model":"m","choices":[{"index":0,`+
+						`"message":{"role":"assistant",`+
+						`"content":"hi"},`+
+						`"finish_reason":"stop"}]}`)
+				}))
+			defer server.Close()
+
+			var callCount int64
+			m := New("test-model",
+				WithBaseURL(server.URL),
+				WithAPIKey("key"),
+				WithChatRequestCallback(
+					func(_ context.Context,
+						_ *openai.ChatCompletionNewParams,
+					) {
+						callCount++
+					}),
+			)
+
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					Stream: tt.stream,
+				},
+			}
+
+			ch, err := m.GenerateContent(
+				context.Background(), req)
+			require.NoError(t, err)
+
+			// Callback must have fired synchronously
+			// before GenerateContent returned.
+			assert.Equal(t, int64(1), callCount,
+				"callback must execute exactly once "+
+					"before GenerateContent returns")
+
+			// Drain the channel to avoid goroutine leak.
+			for range ch {
+			}
+
+			// Confirm no extra invocations after drain.
+			assert.Equal(t, int64(1), callCount,
+				"callback must not be called more than once")
+		})
+	}
 }

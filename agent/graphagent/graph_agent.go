@@ -17,6 +17,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -105,27 +106,126 @@ func (ga *GraphAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-
 	}
 	// Setup invocation
 	ga.setupInvocation(invocation)
-
-	out := make(chan *event.Event, ga.channelBufferSize)
+	out := make(chan *event.Event, ga.eventChannelBufferSize(invocation))
+	emitChan := out
+	if shouldHideGraphAgentBarrierEvents(invocation) {
+		hiddenChan := make(chan *event.Event, ga.eventChannelBufferSize(invocation))
+		emitChan = hiddenChan
+		forwardCtx := agent.CloneContext(ctx)
+		go ga.forwardVisibleEvents(forwardCtx, invocation, hiddenChan, out)
+	}
 	runCtx := agent.CloneContext(ctx)
-	go ga.runWithBarrier(runCtx, invocation, out)
+	if invocation.RunOptions.DisableTracing && ga.agentCallbacks == nil && !barrier.Enabled(invocation) {
+		go ga.runWithoutBarrier(runCtx, invocation, emitChan)
+		return out, nil
+	}
+	go ga.runWithBarrier(runCtx, invocation, emitChan)
 	return out, nil
+}
+
+// eventChannelBufferSize returns the effective event channel buffer size for a run.
+func (ga *GraphAgent) eventChannelBufferSize(invocation *agent.Invocation) int {
+	if size := agent.GetEventChannelBufferSize(invocation); size > 0 {
+		return size
+	}
+	return ga.channelBufferSize
+}
+
+// singleEventChannelBufferSize reserves one slot for immediate short-circuit responses.
+func (ga *GraphAgent) singleEventChannelBufferSize(invocation *agent.Invocation) int {
+	size := ga.eventChannelBufferSize(invocation)
+	if size <= 0 {
+		return 1
+	}
+	return size
+}
+
+func (ga *GraphAgent) runWithoutBarrier(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event) {
+	initialState := ga.createInitialState(ctx, invocation)
+	executeCtx := ctx
+	suppressHiddenCompletion := shouldSuppressHiddenCompletion(ctx, invocation)
+	if suppressHiddenCompletion {
+		executeCtx = graph.WithGraphCompletionCapture(ctx)
+	}
+	innerChan, err := ga.executor.Execute(executeCtx, initialState, invocation)
+	if err != nil {
+		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
+			model.ErrorTypeFlowError, err.Error())
+		defer close(out)
+		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
+			log.Errorf("graphagent: emit error event failed: %v", emitErr)
+		}
+		return
+	}
+	defer close(out)
+	terminalMessageFilter := newTerminalMessageFilter(invocation, ga.graph)
+	_, _ = ga.forwardWrappedEvents(
+		ctx,
+		invocation,
+		innerChan,
+		suppressHiddenCompletion,
+		func(evt *event.Event) error {
+			if !terminalMessageFilter.Allows(evt) {
+				return nil
+			}
+			return event.EmitEvent(ctx, out, evt)
+		},
+	)
+}
+
+func (ga *GraphAgent) forwardEventStream(ctx context.Context, innerChan <-chan *event.Event, out chan<- *event.Event) {
+	defer close(out)
+	for evt := range innerChan {
+		if err := event.EmitEvent(ctx, out, evt); err != nil {
+			log.Errorf("graphagent: emit event failed: %v.", err)
+			return
+		}
+	}
 }
 
 // runWithBarrier emits a start barrier, waits for completion, then runs the graph with callbacks
 // pipeline and forwards all events to the provided output channel.
 func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event) {
-	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName))
-	itelemetry.TraceBeforeInvokeAgent(span, invocation, ga.description, "", nil)
-	defer span.End()
+	var span oteltrace.Span
+	stream := resolveGraphAgentStream(invocation)
+	tracingEnabled := !invocation.RunOptions.DisableTracing
+	if tracingEnabled {
+		ctx, span = trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, invocation.AgentName))
+		itelemetry.TraceBeforeInvokeAgent(
+			span,
+			invocation,
+			ga.description,
+			"",
+			&model.GenerationConfig{Stream: stream},
+		)
+	}
 	defer close(out)
+	var trackerErr error
+	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, stream, &trackerErr)
+	tokenUsage := &itelemetry.TokenUsage{}
+	var fullRespEvent *event.Event
+	var operationErrorType string
+	defer func() {
+		if tracingEnabled && fullRespEvent != nil {
+			itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
+		}
+		tracker.SetResponseErrorType(resolveGraphAgentErrorType(fullRespEvent, operationErrorType))
+		tracker.RecordMetrics()()
+		if tracingEnabled {
+			span.End()
+		}
+	}()
 	// Emit a barrier event and wait for completion in a dedicated goroutine so that the runner can append all prior
 	// events before GraphAgent reads history.
 	if err := ga.emitStartBarrierAndWait(ctx, invocation, out); err != nil {
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
-		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
+		fullRespEvent = evt
+		operationErrorType = itelemetry.ToErrorType(err, model.ErrorTypeFlowError)
+		if tracingEnabled {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
+		}
 		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
 			log.Errorf("graphagent: emit error event failed: %v", emitErr)
 		}
@@ -135,21 +235,85 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	if err != nil {
 		evt := event.NewErrorEvent(invocation.InvocationID, invocation.AgentName,
 			model.ErrorTypeFlowError, err.Error())
-		span.SetStatus(codes.Error, err.Error())
-		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
+		fullRespEvent = evt
+		operationErrorType = itelemetry.ToErrorType(err, model.ErrorTypeFlowError)
+		if tracingEnabled {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
+		}
 		if emitErr := agent.EmitEvent(ctx, invocation, out, evt); emitErr != nil {
 			log.Errorf("graphagent: emit error event failed: %v.", emitErr)
 		}
 		return
 	}
+	terminalMessageFilter := newTerminalMessageFilter(invocation, ga.graph)
 	for evt := range innerChan {
+		fullRespEvent = recordTraceEvent(tracker, tokenUsage, fullRespEvent, evt)
+		if !terminalMessageFilter.Allows(evt) {
+			continue
+		}
 		if err := event.EmitEvent(ctx, out, evt); err != nil {
-			span.SetStatus(codes.Error, err.Error())
-			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
+			operationErrorType = itelemetry.ToErrorType(err, model.ErrorTypeFlowError)
+			if tracingEnabled {
+				span.SetStatus(codes.Error, err.Error())
+				span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeFlowError)))
+			}
 			log.Errorf("graphagent: emit event failed: %v.", err)
 			return
 		}
 	}
+}
+
+// resolveGraphAgentStream returns the effective streaming mode for GraphAgent.
+// Graph-based executions default to streaming unless the caller explicitly
+// overrides the run with agent.WithStream(false).
+func resolveGraphAgentStream(invocation *agent.Invocation) bool {
+	if invocation != nil && invocation.RunOptions.Stream != nil {
+		return *invocation.RunOptions.Stream
+	}
+	return true
+}
+
+// resolveGraphAgentErrorType collapses the final GraphAgent metric error type.
+// Transport or orchestration failures win because they indicate the invocation
+// itself failed even if a response event had already been observed. Otherwise,
+// use the final response event so after-agent callbacks can replace an earlier
+// failure with a successful custom response.
+func resolveGraphAgentErrorType(fullRespEvent *event.Event, operationErrorType string) string {
+	if operationErrorType != "" {
+		return operationErrorType
+	}
+	if fullRespEvent == nil || fullRespEvent.Response == nil || fullRespEvent.Response.Error == nil {
+		return ""
+	}
+	return fullRespEvent.Response.Error.Type
+}
+
+func recordTraceEvent(
+	tracker *itelemetry.InvokeAgentTracker,
+	tokenUsage *itelemetry.TokenUsage,
+	fullRespEvent *event.Event,
+	evt *event.Event,
+) *event.Event {
+	if evt == nil || evt.Response == nil {
+		return fullRespEvent
+	}
+	if tracker != nil {
+		tracker.TrackResponse(evt.Response)
+	}
+	if evt.Response.IsPartial {
+		return fullRespEvent
+	}
+	if !evt.IsError() && !evt.Response.IsValidContent() &&
+		!(evt.Done && evt.Object == graph.ObjectTypeGraphExecution) {
+		return fullRespEvent
+	}
+	if evt.Response.Usage != nil && tokenUsage != nil {
+		tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
+		tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
+		tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
+	}
+	return evt
 }
 
 // emitStartBarrierAndWait emits a barrier event and waits until the runner has processed it,
@@ -194,7 +358,7 @@ func (ga *GraphAgent) runWithCallbacks(ctx context.Context, invocation *agent.In
 		}
 		if result != nil && result.CustomResponse != nil {
 			// Create a channel that returns the custom response and then closes.
-			eventChan := make(chan *event.Event, 1)
+			eventChan := make(chan *event.Event, ga.singleEventChannelBufferSize(invocation))
 			// Create an event from the custom response.
 			customevent := event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
 			agent.EmitEvent(ctx, invocation, eventChan, customevent)
@@ -209,12 +373,24 @@ func (ga *GraphAgent) runWithCallbacks(ctx context.Context, invocation *agent.In
 	initialState := ga.createInitialState(ctx, invocation)
 
 	// Execute the graph.
-	eventChan, err := ga.executor.Execute(ctx, initialState, invocation)
+	executeCtx := ctx
+	shouldWrapHiddenCompletion := shouldSuppressHiddenCompletion(ctx, invocation)
+	if shouldWrapHiddenCompletion {
+		executeCtx = graph.WithGraphCompletionCapture(ctx)
+	}
+	eventChan, err := ga.executor.Execute(executeCtx, initialState, invocation)
 	if err != nil {
 		return nil, err
 	}
-	if ga.agentCallbacks != nil {
-		return ga.wrapEventChannel(ctx, invocation, eventChan), nil
+	if ga.agentCallbacks != nil ||
+		shouldWrapHiddenCompletion ||
+		invocation.RunOptions.GraphTerminalMessagesOnly {
+		return ga.wrapEventChannel(
+			ctx,
+			invocation,
+			eventChan,
+			shouldWrapHiddenCompletion,
+		), nil
 	}
 	return eventChan, nil
 }
@@ -245,10 +421,28 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		// Default processor: include (possibly overridden) + preserve same branch.
 		contentOpts := []processor.ContentOption{
 			processor.WithAddSessionSummary(ga.options.AddSessionSummary),
+			processor.WithSessionSummaryInjectionMode(ga.options.SessionSummaryInjectionMode),
 			processor.WithMaxHistoryRuns(ga.options.MaxHistoryRuns),
+			processor.WithEnableContextCompaction(
+				ga.options.EnableContextCompaction,
+			),
+			processor.WithContextCompactionKeepRecentRequests(
+				ga.options.ContextCompactionKeepRecentRequests,
+			),
+			processor.WithContextCompactionToolResultMaxTokens(
+				ga.options.ContextCompactionToolResultMaxTokens,
+			),
+			processor.WithContextCompactionOversizedToolResultMaxTokens(
+				ga.options.ContextCompactionOversizedToolResultMaxTokens,
+			),
 			processor.WithPreserveSameBranch(true),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
 			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
+			processor.WithEventMessageProjector(
+				processor.EventMessageProjector(
+					ga.options.EventMessageProjector,
+				),
+			),
 		}
 		if ga.options.ReasoningContentMode != "" {
 			contentOpts = append(contentOpts,
@@ -294,6 +488,64 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	}
 
 	return initialState
+}
+
+func shouldSuppressHiddenCompletion(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) bool {
+	return invocation != nil &&
+		agent.IsGraphCompletionEventDisabled(invocation) &&
+		!graph.ShouldCaptureGraphCompletion(ctx)
+}
+
+func shouldHideGraphAgentBarrierEvents(invocation *agent.Invocation) bool {
+	return invocation != nil &&
+		barrier.Enabled(invocation) &&
+		agent.IsGraphExecutorEventsDisabled(invocation)
+}
+
+func shouldSuppressGraphAgentBarrierEvent(
+	invocation *agent.Invocation,
+	evt *event.Event,
+) bool {
+	return shouldHideGraphAgentBarrierEvents(invocation) &&
+		evt != nil &&
+		evt.Object == graph.ObjectTypeGraphBarrier
+}
+
+func (ga *GraphAgent) forwardVisibleEvents(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	src <-chan *event.Event,
+	dst chan<- *event.Event,
+) {
+	defer close(dst)
+	for evt := range src {
+		if shouldSuppressGraphAgentBarrierEvent(invocation, evt) {
+			if err := completeSuppressedGraphAgentBarrier(ctx, invocation, evt); err != nil {
+				log.Errorf("graphagent: complete hidden barrier failed: %v", err)
+				return
+			}
+			continue
+		}
+		if err := event.EmitEvent(ctx, dst, evt); err != nil {
+			log.Errorf("graphagent: emit forwarded event failed: %v.", err)
+			return
+		}
+	}
+}
+
+func completeSuppressedGraphAgentBarrier(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	evt *event.Event,
+) error {
+	if invocation == nil || evt == nil || !evt.RequiresCompletion {
+		return nil
+	}
+	completionID := agent.GetAppendEventNoticeKey(evt.ID)
+	return invocation.NotifyCompletion(ctx, completionID)
 }
 
 func (ga *GraphAgent) setupInvocation(invocation *agent.Invocation) {
@@ -343,28 +595,33 @@ func (ga *GraphAgent) wrapEventChannel(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	originalChan <-chan *event.Event,
+	suppressHiddenCompletion bool,
 ) <-chan *event.Event {
-	wrappedChan := make(chan *event.Event, ga.channelBufferSize)
+	wrappedChan := make(chan *event.Event, ga.eventChannelBufferSize(invocation))
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		defer close(wrappedChan)
-		var fullRespEvent *event.Event
-		// Forward all events from the original channel
-		for evt := range originalChan {
-			if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
-				fullRespEvent = evt
-			}
-			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
-				return
-			}
+		fullRespEvent, ok := ga.forwardWrappedEvents(
+			ctx,
+			invocation,
+			originalChan,
+			suppressHiddenCompletion,
+			func(evt *event.Event) error {
+				return event.EmitEvent(ctx, wrappedChan, evt)
+			},
+		)
+		if !ok {
+			return
+		}
+		if ga.agentCallbacks == nil {
+			return
 		}
 
 		// Collect error from the final response event so after-agent
 		// callbacks can observe execution failures, matching LLMAgent
 		// semantics.
 		var agentErr error
-		if fullRespEvent != nil &&
-			fullRespEvent.Response != nil &&
+		if fullRespEvent != nil && fullRespEvent.Response != nil &&
 			fullRespEvent.Response.Error != nil {
 			agentErr = fmt.Errorf(
 				"%s: %s",
@@ -404,6 +661,58 @@ func (ga *GraphAgent) wrapEventChannel(
 		agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 	}(runCtx)
 	return wrappedChan
+}
+
+func (ga *GraphAgent) forwardWrappedEvents(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	originalChan <-chan *event.Event,
+	suppressHiddenCompletion bool,
+	emit func(*event.Event) error,
+) (*event.Event, bool) {
+	var fullRespEvent *event.Event
+	var emittedAssistantResponseIDs map[string]struct{}
+	visibleCtx := graph.WithoutGraphCompletionCapture(ctx)
+	for evt := range originalChan {
+		outEvt := evt
+		if evt != nil && evt.Response != nil && !evt.Response.IsPartial {
+			fullRespEvent = evt
+		}
+		shouldWrapCallbackCompletion := invocation != nil &&
+			agent.IsGraphCompletionEventDisabled(invocation) &&
+			graph.IsGraphCompletionEvent(evt)
+		if shouldWrapCallbackCompletion {
+			visibleEvent, callbackFullRespEvent, ok := graph.VisibleGraphCompletionEventsForForwardingWithAuthor(
+				evt,
+				emittedAssistantResponseIDs,
+				invocation.AgentName,
+			)
+			if !ok {
+				continue
+			}
+			if callbackFullRespEvent != nil &&
+				callbackFullRespEvent.Response != nil &&
+				!callbackFullRespEvent.Response.IsPartial {
+				fullRespEvent = callbackFullRespEvent
+			}
+			if suppressHiddenCompletion &&
+				graph.ShouldSuppressGraphCompletionEvent(
+					visibleCtx,
+					invocation,
+					evt,
+				) {
+				outEvt = visibleEvent
+			}
+		}
+		if err := emit(outEvt); err != nil {
+			return nil, false
+		}
+		emittedAssistantResponseIDs = graph.RecordAssistantResponseID(
+			emittedAssistantResponseIDs,
+			outEvt,
+		)
+	}
+	return fullRespEvent, true
 }
 
 // Executor returns the graph executor for direct access to checkpoint management.

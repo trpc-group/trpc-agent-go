@@ -104,7 +104,7 @@ func (t *SelectDocsTool) Declaration() *tool.Declaration {
 func (t *SelectDocsTool) Call(
 	ctx context.Context, args []byte,
 ) (any, error) {
-	in, err := t.parseSelectArgs(args)
+	in, err := t.parseSelectArgs(ctx, args)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +133,8 @@ func (t *SelectDocsTool) Call(
 func (t *SelectDocsTool) StateDelta(
 	_ string, _ []byte, resultJSON []byte,
 ) map[string][]byte {
-	return t.stateDelta("", resultJSON)
+	delta, _ := t.stateDelta("", resultJSON)
+	return delta
 }
 
 // StateDeltaForInvocation writes agent-scoped state for the invocation.
@@ -150,33 +151,39 @@ func (t *SelectDocsTool) StateDeltaForInvocation(
 	if inv != nil {
 		agentName = inv.AgentName
 	}
-	return t.stateDelta(agentName, resultJSON)
+	delta, skillName := t.stateDelta(agentName, resultJSON)
+	return appendLoadedOrderStateDelta(
+		inv,
+		agentName,
+		delta,
+		skillName,
+	)
 }
 
 func (t *SelectDocsTool) stateDelta(
 	agentName string,
 	resultJSON []byte,
-) map[string][]byte {
+) (map[string][]byte, string) {
 	var out selectDocsOutput
 	if err := json.Unmarshal(resultJSON, &out); err != nil {
-		return nil
+		return nil, ""
 	}
 	if out.Skill == "" {
-		return nil
+		return nil, ""
 	}
 	dk := skill.DocsKey(agentName, out.Skill)
 	if out.IncludeAllDocs {
-		return map[string][]byte{dk: []byte("*")}
+		return map[string][]byte{dk: []byte("*")}, out.Skill
 	}
 	// Ensure empty slice encodes to [] rather than null.
 	if out.Selected == nil && !out.IncludeAllDocs {
-		return map[string][]byte{dk: []byte("[]")}
+		return map[string][]byte{dk: []byte("[]")}, out.Skill
 	}
 	b, err := json.Marshal(out.Selected)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
-	return map[string][]byte{dk: b}
+	return map[string][]byte{dk: b}, out.Skill
 }
 
 var _ tool.Tool = (*SelectDocsTool)(nil)
@@ -184,6 +191,7 @@ var _ tool.CallableTool = (*SelectDocsTool)(nil)
 
 // parseSelectArgs validates and normalizes the input.
 func (t *SelectDocsTool) parseSelectArgs(
+	ctx context.Context,
 	args []byte,
 ) (selectDocsInput, error) {
 	var in selectDocsInput
@@ -196,7 +204,7 @@ func (t *SelectDocsTool) parseSelectArgs(
 		return selectDocsInput{}, fmt.Errorf("skill is required")
 	}
 	if t.repo != nil {
-		if _, err := t.repo.Get(in.Skill); err != nil {
+		if _, err := skill.GetForContext(ctx, t.repo, in.Skill); err != nil {
 			return selectDocsInput{}, fmt.Errorf(
 				"unknown skill: %s", in.Skill,
 			)

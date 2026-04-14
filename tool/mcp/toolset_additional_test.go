@@ -127,6 +127,39 @@ func TestSessionManager_CallTool_UsesStructuredContentWhenContentEmpty(t *testin
 	assert.Equal(t, string(expectedJSON), structuredText.Text)
 }
 
+func TestSessionManager_CallTool_UsesStructuredContentWhenContentEmpty_PreservesMeta(t *testing.T) {
+	structured := map[string]any{"count": 1, "foo": "bar"}
+	expectedMeta := map[string]any{"trace_id": "abc123", "source": "structured-only"}
+	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
+	manager.client = &stubConnector{
+		callToolFn: func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			require.NotNil(t, ctx)
+			require.Equal(t, "test-tool", req.Params.Name)
+			return &mcp.CallToolResult{
+				Result: mcp.Result{
+					Meta: expectedMeta,
+				},
+				StructuredContent: structured,
+			}, nil
+		},
+	}
+	manager.connected = true
+	manager.initialized = true
+
+	result, err := manager.callTool(context.Background(), "test-tool", map[string]any{"key": "value"})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Content, 1)
+	require.Equal(t, expectedMeta, result.Meta)
+
+	structuredText, ok := result.Content[0].(mcp.TextContent)
+	require.True(t, ok)
+
+	expectedJSON, err := json.Marshal(structured)
+	require.NoError(t, err)
+	assert.Equal(t, string(expectedJSON), structuredText.Text)
+}
+
 func TestSessionManager_CallTool_IgnoresStructuredContentWhenContentPresent(t *testing.T) {
 	manager := newMCPSessionManager(ConnectionConfig{}, nil, nil)
 	manager.client = &stubConnector{

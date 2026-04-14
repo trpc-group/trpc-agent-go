@@ -11,6 +11,7 @@
 package octool
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,14 +24,19 @@ import (
 )
 
 const (
-	defaultYieldMs   = 10_000
-	defaultTimeoutS  = 1_800
-	defaultLogTail   = 40
-	defaultLogLimit  = 200
-	defaultMaxLines  = 20_000
-	defaultJobTTL    = 30 * time.Minute
-	defaultKillGrace = 2 * time.Second
-	defaultIODrain   = 1 * time.Second
+	defaultYieldMs         = 10_000
+	defaultTimeoutS        = 1_800
+	defaultLogTail         = 40
+	defaultLogLimit        = 200
+	defaultMaxLines        = 20_000
+	defaultJobTTL          = 30 * time.Minute
+	defaultKillGrace       = 2 * time.Second
+	defaultIODrain         = 1 * time.Second
+	defaultShellEnvTimeout = 5 * time.Second
+
+	shellProgram        = "bash"
+	shellLoginFlag      = "-lc"
+	shellEnvDumpCommand = "env -0"
 )
 
 type Manager struct {
@@ -42,6 +48,8 @@ type Manager struct {
 	baseEnv  map[string]string
 
 	clock func() time.Time
+
+	shellEnvSnapshot func(context.Context, string) map[string]string
 }
 
 type Option func(*Manager)
@@ -73,10 +81,11 @@ func WithBaseEnv(env map[string]string) Option {
 
 func NewManager(opts ...Option) *Manager {
 	m := &Manager{
-		sessions: map[string]*session{},
-		maxLines: defaultMaxLines,
-		jobTTL:   defaultJobTTL,
-		clock:    time.Now,
+		sessions:         map[string]*session{},
+		maxLines:         defaultMaxLines,
+		jobTTL:           defaultJobTTL,
+		clock:            time.Now,
+		shellEnvSnapshot: snapshotLoginShellEnv,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -116,6 +125,16 @@ func (m *Manager) Exec(
 	if params.Command == "" {
 		return execResult{}, errors.New("command is required")
 	}
+	var req CommandRequest
+	if m.policy != nil || m.redactor != nil {
+		req = m.commandRequest(ctx, params)
+		if m.policy != nil {
+			if err := m.policy(ctx, req); err != nil {
+				return execResult{}, err
+			}
+		}
+	}
+	redact := m.outputRedactor(req)
 
 	m.cleanupExpired()
 
@@ -141,6 +160,7 @@ func (m *Manager) Exec(
 		if err != nil {
 			return execResult{}, err
 		}
+		out = applyOutputRedactor(redact, out)
 		return execResult{
 			Status:   "exited",
 			Output:   out,
@@ -148,7 +168,7 @@ func (m *Manager) Exec(
 		}, nil
 	}
 
-	sess, err := m.startBackground(params, timeout)
+	sess, err := m.startBackground(params, timeout, redact)
 	if err != nil {
 		return execResult{}, err
 	}
@@ -221,9 +241,12 @@ func runForeground(
 }
 
 func shellCmd(ctx context.Context, command string) *exec.Cmd {
-	const shell = "bash"
-	const flag = "-lc"
-	return exec.CommandContext(ctx, shell, flag, command)
+	return exec.CommandContext(
+		ctx,
+		shellProgram,
+		shellLoginFlag,
+		command,
+	)
 }
 
 func mergedEnv(
@@ -271,6 +294,7 @@ func exitCode(err error) int {
 func (m *Manager) startBackground(
 	params execParams,
 	timeout time.Duration,
+	redact func(string) string,
 ) (*session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	cmd := shellCmd(ctx, params.Command)
@@ -279,6 +303,7 @@ func (m *Manager) startBackground(
 
 	sess := newSession(newSessionID(), params.Command, m.maxLines)
 	sess.cancel = cancel
+	sess.redact = redact
 
 	if params.Pty {
 		master, closeIO, err := startPTY(cmd)

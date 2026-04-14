@@ -40,6 +40,7 @@ var (
 // It is a subset of chat attributes.
 type invokeAgentAttributes struct {
 	AgentName string
+	AgentID   string
 	AppName   string
 	UserID    string
 	System    string
@@ -62,6 +63,9 @@ func (a invokeAgentAttributes) toAttributes() []attribute.KeyValue {
 	}
 	if a.AgentName != "" {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentName, a.AgentName))
+	}
+	if a.AgentID != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIAgentID, a.AgentID))
 	}
 	if a.ErrorType != "" {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyErrorType, a.ErrorType))
@@ -93,9 +97,7 @@ func NewInvokeAgentTracker(
 ) *InvokeAgentTracker {
 	attributes := invokeAgentAttributes{Stream: stream, Error: *err}
 	if invocation != nil {
-		if invocation.AgentName != "" {
-			attributes.AgentName = invocation.AgentName
-		}
+		attributes.AgentName, attributes.AgentID = resolveInvocationAgentIdentity(invocation)
 		if invocation.Model != nil {
 			attributes.System = invocation.Model.Info().Name
 		}

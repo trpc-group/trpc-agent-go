@@ -93,6 +93,7 @@ func isUnsafeStateKey(key string) bool {
 		StateKeyModelCallbacks,
 		StateKeyAgentCallbacks,
 		StateKeyCurrentNodeID,
+		currentTraceStepIDStateKey,
 		StateKeySession,
 		StateKeyGraphInterruptInputs:
 		return true
@@ -113,7 +114,8 @@ func isInternalStateKey(key string) bool {
 	switch key {
 	// Graph metadata keys stored in state delta for instrumentation
 	case MetadataKeyNode, MetadataKeyPregel, MetadataKeyChannel,
-		MetadataKeyState, MetadataKeyCompletion, MetadataKeyNodeCustom:
+		MetadataKeyState, MetadataKeyCompletion, MetadataKeyNodeCustom,
+		MetadataKeyNodeEmitter:
 		return true
 	default:
 		return false

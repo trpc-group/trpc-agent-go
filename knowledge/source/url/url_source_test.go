@@ -11,6 +11,8 @@ package url
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	neturl "net/url"
@@ -19,6 +21,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 
 	// Import readers to register them
@@ -35,6 +38,54 @@ type mockChunkingStrategy struct {
 
 func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
 	return []*document.Document{doc}, nil
+}
+
+type mockContentExtractor struct{}
+
+func (m *mockContentExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return &extractor.Result{
+		Reader: strings.NewReader("# Extracted\n\ncontent"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (m *mockContentExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	return &extractor.Result{
+		Reader: strings.NewReader("# Extracted\n\ncontent"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (m *mockContentExtractor) SupportedFormats() []string {
+	return []string{".pdf"}
+}
+
+func (m *mockContentExtractor) Close() error {
+	return nil
+}
+
+type pngContentExtractor struct {
+	called bool
+}
+
+func (m *pngContentExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return m.ExtractFromReader(ctx, strings.NewReader(string(data)), opts...)
+}
+
+func (m *pngContentExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	m.called = true
+	return &extractor.Result{
+		Reader: strings.NewReader("# Extracted PNG\n\ncontent"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (m *pngContentExtractor) SupportedFormats() []string {
+	return []string{".png"}
+}
+
+func (m *pngContentExtractor) Close() error {
+	return nil
 }
 
 // TestReadDocuments verifies URL Source with and without custom chunk
@@ -156,6 +207,21 @@ func TestWithMetadata(t *testing.T) {
 		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
 			t.Fatalf("metadata[%s] not set correctly, expected %v, got %v", k, expectedValue, actualValue)
 		}
+	}
+}
+
+func TestWithMetadataCopiesInputMap(t *testing.T) {
+	meta := map[string]any{"source": "test-source"}
+	src := New([]string{"https://example.com"}, WithMetadata(meta))
+
+	meta["source"] = "changed"
+	meta["new"] = "value"
+
+	if got := src.metadata["source"]; got != "test-source" {
+		t.Fatalf("metadata should be copied, got %v", got)
+	}
+	if _, ok := src.metadata["new"]; ok {
+		t.Fatal("source metadata should not observe new keys added to input map")
 	}
 }
 
@@ -673,5 +739,460 @@ func TestFileReaderTypeWithChunking(t *testing.T) {
 	}
 	if len(docs) == 0 {
 		t.Fatal("expected at least one document")
+	}
+}
+
+func TestWithExtractor(t *testing.T) {
+	src := New([]string{"https://example.com"}, WithExtractor(&mockContentExtractor{}))
+
+	if src.contentExtractor == nil {
+		t.Fatal("content extractor should be set")
+	}
+}
+
+func TestReadDocuments_WithExtractor(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-test"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL}, WithExtractor(&mockContentExtractor{}))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	if docs[0].Content == "" {
+		t.Fatal("expected extracted content")
+	}
+}
+
+func TestReadDocuments_WithExtractor_ContentTypeFallback(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-test"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL + "/1706.03762"}, WithExtractor(&mockContentExtractor{}))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	if docs[0].Content == "" {
+		t.Fatal("expected extracted content")
+	}
+}
+
+func TestReadDocuments_WithUnsupportedExtractorExtensionFallsBackToReader(t *testing.T) {
+	ctx := context.Background()
+	ext := &mockContentExtractor{}
+	content := "plain text fallback"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(content))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL + "/notes.txt"}, WithExtractor(ext))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	if docs[0].Content != content {
+		t.Fatalf("expected reader fallback content %q, got %q", content, docs[0].Content)
+	}
+}
+
+func TestReadDocuments_WithExtractor_ContentTypeFallbackForImages(t *testing.T) {
+	ctx := context.Background()
+	ext := &pngContentExtractor{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("png-bytes"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL + "/download"}, WithExtractor(ext))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	if !ext.called {
+		t.Fatal("expected extractor to be used via content-type fallback")
+	}
+	if docs[0].Content == "" {
+		t.Fatal("expected extracted content")
+	}
+}
+
+// mockTransformer is a simple Transformer implementation for testing.
+type mockTransformer struct {
+	name      string
+	preCalls  int
+	postCalls int
+}
+
+func (m *mockTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	m.preCalls++
+	return docs, nil
+}
+
+func (m *mockTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	m.postCalls++
+	for _, doc := range docs {
+		if doc.Metadata == nil {
+			doc.Metadata = make(map[string]any)
+		}
+		doc.Metadata["transformer"] = m.name
+	}
+	return docs, nil
+}
+
+func (m *mockTransformer) Name() string {
+	return m.name
+}
+
+// TestWithTransformers verifies the WithTransformers option sets transformers correctly.
+func TestWithTransformers(t *testing.T) {
+	t1 := &mockTransformer{name: "t1"}
+	t2 := &mockTransformer{name: "t2"}
+
+	src := New([]string{"https://example.com"}, WithTransformers(t1, t2))
+
+	if len(src.transformers) != 2 {
+		t.Fatalf("expected 2 transformers, got %d", len(src.transformers))
+	}
+}
+
+// TestWithTransformers_AppliedToReaders verifies transformers are passed to readers via New().
+func TestWithTransformers_AppliedToReaders(t *testing.T) {
+	ctx := context.Background()
+	transformer := &mockTransformer{name: "test-transformer"}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("hello world"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL}, WithTransformers(transformer))
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments with transformer failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	if transformer.preCalls == 0 {
+		t.Fatal("expected transformer Preprocess to be called")
+	}
+	if transformer.postCalls == 0 {
+		t.Fatal("expected transformer Postprocess to be called")
+	}
+	if got := docs[0].Metadata["transformer"]; got != transformer.name {
+		t.Fatalf("expected transformer metadata %q, got %v", transformer.name, got)
+	}
+}
+
+// TestExtractorExtFromContentType verifies all branches of extractorExtFromContentType.
+func TestExtractorExtFromContentType(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		want        string
+	}{
+		{name: "empty", contentType: "", want: ""},
+		{name: "text/html", contentType: "text/html; charset=utf-8", want: ".html"},
+		{name: "application/pdf", contentType: "application/pdf", want: ".pdf"},
+		{name: "docx", contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", want: ".docx"},
+		{name: "pptx", contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", want: ".pptx"},
+		{name: "xlsx", contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", want: ".xlsx"},
+		{name: "text/csv", contentType: "text/csv", want: ".csv"},
+		{name: "image/png", contentType: "image/png", want: ".png"},
+		{name: "image/jpeg", contentType: "image/jpeg", want: ".jpg"},
+		{name: "image/tiff", contentType: "image/tiff", want: ".tiff"},
+		{name: "image/bmp", contentType: "image/bmp", want: ".bmp"},
+		{name: "unknown", contentType: "application/octet-stream", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractorExtFromContentType(tt.contentType)
+			if got != tt.want {
+				t.Errorf("extractorExtFromContentType(%q) = %q, want %q", tt.contentType, got, tt.want)
+			}
+		})
+	}
+}
+
+// errorExtractor simulates an extractor that always fails extraction.
+type errorExtractor struct{}
+
+func (e *errorExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return nil, fmt.Errorf("extract error")
+}
+
+func (e *errorExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	return nil, fmt.Errorf("extract from reader error")
+}
+
+func (e *errorExtractor) SupportedFormats() []string {
+	return []string{".pdf"}
+}
+
+func (e *errorExtractor) Close() error {
+	return nil
+}
+
+// unknownFormatExtractor returns an unknown format so no reader is found.
+type unknownFormatExtractor struct{}
+
+func (e *unknownFormatExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return &extractor.Result{Reader: strings.NewReader("data"), Format: "unknown_format_xyz"}, nil
+}
+
+func (e *unknownFormatExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	return &extractor.Result{Reader: strings.NewReader("data"), Format: "unknown_format_xyz"}, nil
+}
+
+func (e *unknownFormatExtractor) SupportedFormats() []string {
+	return []string{".pdf"}
+}
+
+func (e *unknownFormatExtractor) Close() error {
+	return nil
+}
+
+// TestReadDocuments_ExtractorError verifies error propagation when ExtractFromReader fails.
+func TestReadDocuments_ExtractorError(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-test"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL + "/doc.pdf"}, WithExtractor(&errorExtractor{}))
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when ExtractFromReader fails")
+	}
+}
+
+// TestReadDocuments_ExtractorUnknownFormat verifies error when ExtractFromReader returns unknown format.
+func TestReadDocuments_ExtractorUnknownFormat(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-test"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL + "/doc.pdf"}, WithExtractor(&unknownFormatExtractor{}))
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when no reader for extracted format")
+	}
+}
+
+// TestReadDocuments_UnknownContentTypeFallsBackToText verifies that unknown content-type falls back to text reader.
+func TestReadDocuments_UnknownContentTypeFallsBackToText(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-unknown-type-xyz")
+		_, _ = w.Write([]byte("some data"))
+	}))
+	defer server.Close()
+
+	// Unknown content-type falls back to text reader, so no error expected.
+	src := New([]string{server.URL})
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error for unknown content-type: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document from text fallback reader")
+	}
+}
+
+// TestGetFileName_TextPlain verifies getFileName returns document.txt for text/plain.
+func TestGetFileName_TextPlain(t *testing.T) {
+	s := &Source{}
+	parsed, _ := neturl.Parse("https://example.com/")
+	got := s.getFileName(parsed, "text/plain")
+	if got != "document.txt" {
+		t.Errorf("getFileName() = %q, want %q", got, "document.txt")
+	}
+}
+
+// TestGetFileName_NoHostNoPath verifies getFileName fallback when no host and no path.
+func TestGetFileName_NoHostNoPath(t *testing.T) {
+	s := &Source{}
+	parsed := &neturl.URL{}
+	got := s.getFileName(parsed, "")
+	if got != "document.txt" {
+		t.Errorf("getFileName() = %q, want %q", got, "document.txt")
+	}
+}
+
+// TestWithMetadata_NilMetadataInit verifies WithMetadata initializes nil metadata map.
+func TestWithMetadata_NilMetadataInit(t *testing.T) {
+	s := &Source{}
+	opt := WithMetadata(map[string]any{"key": "value"})
+	opt(s)
+
+	if v, ok := s.metadata["key"]; !ok || v != "value" {
+		t.Errorf("WithMetadata should initialize nil metadata map, got %v", s.metadata)
+	}
+}
+
+// TestReadDocuments_WithExtractor_WithMetadata verifies metadata is preserved when using a fetch URL.
+func TestReadDocuments_WithExtractor_WithMetadata(t *testing.T) {
+	ctx := context.Background()
+	ext := &mockContentExtractor{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/fetch/test.pdf" {
+			t.Fatalf("expected fetch path %q, got %q", "/fetch/test.pdf", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-test"))
+	}))
+	defer server.Close()
+	fetchURL := server.URL + "/fetch/test.pdf"
+	identifierURL := server.URL + "/source/original%2Bdoc.pdf?download=1"
+
+	src := New(
+		[]string{identifierURL},
+		WithContentFetchingURL([]string{fetchURL}),
+		WithExtractor(ext),
+		WithMetadataValue("custom_key", "custom_value"),
+		WithName("test-source"),
+	)
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+
+	// Verify custom metadata is propagated
+	if v, ok := docs[0].Metadata["custom_key"]; !ok || v != "custom_value" {
+		t.Errorf("custom metadata not propagated in readExtractedResult, got %v", docs[0].Metadata)
+	}
+	// Verify source metadata
+	if v, ok := docs[0].Metadata[source.MetaSource]; !ok || v != source.TypeURL {
+		t.Errorf("source type not set in readExtractedResult, got %v", docs[0].Metadata[source.MetaSource])
+	}
+	// Verify source name
+	if v, ok := docs[0].Metadata[source.MetaSourceName]; !ok || v != "test-source" {
+		t.Errorf("source name not set in readExtractedResult, got %v", docs[0].Metadata[source.MetaSourceName])
+	}
+	if got := docs[0].Metadata[source.MetaURL]; got != identifierURL {
+		t.Errorf("expected MetaURL %q, got %v", identifierURL, got)
+	}
+	if got := docs[0].Metadata[source.MetaURI]; got != identifierURL {
+		t.Errorf("expected MetaURI %q, got %v", identifierURL, got)
+	}
+	if got := docs[0].Metadata[source.MetaURLPath]; got != "/source/original+doc.pdf" {
+		t.Errorf("expected MetaURLPath %q, got %v", "/source/original+doc.pdf", got)
+	}
+}
+
+// TestReadDocuments_DocumentWithNilMetadata verifies that documents with nil Metadata are handled.
+func TestReadDocuments_DocumentWithNilMetadata(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("hello"))
+	}))
+	defer server.Close()
+
+	src := New([]string{server.URL})
+	docs, err := src.ReadDocuments(ctx)
+	if err != nil {
+		t.Fatalf("ReadDocuments failed: %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected at least one document")
+	}
+	// All documents should have metadata set
+	for _, doc := range docs {
+		if doc.Metadata == nil {
+			t.Error("document metadata should not be nil after ReadDocuments")
+		}
+		if _, ok := doc.Metadata[source.MetaSource]; !ok {
+			t.Error("document should have MetaSource set")
+		}
+	}
+}
+
+// TestExtractFromResponse_UnknownFormat verifies error when ExtractFromReader returns unknown format.
+func TestExtractFromResponse_UnknownFormat(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-test"))
+	}))
+	defer server.Close()
+
+	// unknownFormatExtractor returns an unknown format so no reader is found
+	src := New([]string{server.URL + "/doc.pdf"}, WithExtractor(&unknownFormatExtractor{}))
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when no reader for extracted format")
+	}
+}
+
+// failReadExtractor returns markdown format but the reader will fail.
+type failReadExtractor struct{}
+
+func (e *failReadExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return e.ExtractFromReader(ctx, strings.NewReader(string(data)), opts...)
+}
+
+func (e *failReadExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	return &extractor.Result{
+		Reader: strings.NewReader("data"),
+		Format: extractor.FormatMarkdown,
+	}, nil
+}
+
+func (e *failReadExtractor) SupportedFormats() []string {
+	return []string{".pdf"}
+}
+
+func (e *failReadExtractor) Close() error { return nil }
+
+// TestFetchAndRead_CreateRequestError verifies error when request creation fails.
+func TestFetchAndRead_CreateRequestError(t *testing.T) {
+	src := New([]string{"http://\x00invalid"})
+	_, err := src.ReadDocuments(context.Background())
+	if err == nil {
+		t.Fatal("expected error for invalid URL")
 	}
 }

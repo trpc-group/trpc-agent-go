@@ -11,6 +11,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 
@@ -64,6 +66,52 @@ func (m *mockTransformer) Postprocess(docs []*document.Document) ([]*document.Do
 func (m *mockTransformer) Name() string {
 	return "MockTransformer"
 }
+
+type recordingExtractor struct {
+	format string
+	err    error
+}
+
+func (r *recordingExtractor) Extract(ctx context.Context, data []byte, opts ...extractor.Option) (*extractor.Result, error) {
+	return r.ExtractFromReader(ctx, strings.NewReader(string(data)), opts...)
+}
+
+func (r *recordingExtractor) ExtractFromReader(ctx context.Context, reader io.Reader, opts ...extractor.Option) (*extractor.Result, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return &extractor.Result{
+		Reader: strings.NewReader("# extracted"),
+		Format: r.format,
+	}, nil
+}
+
+func (r *recordingExtractor) SupportedFormats() []string {
+	return []string{".pdf"}
+}
+
+func (r *recordingExtractor) Close() error { return nil }
+
+type captureReader struct {
+	lastName string
+}
+
+func (c *captureReader) ReadFromReader(name string, r io.Reader) ([]*document.Document, error) {
+	c.lastName = name
+	return []*document.Document{{Content: "ok"}}, nil
+}
+
+func (c *captureReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	return nil, errors.New("unexpected ReadFromFile call")
+}
+
+func (c *captureReader) ReadFromURL(url string) ([]*document.Document, error) {
+	return nil, errors.New("unexpected ReadFromURL call")
+}
+
+func (c *captureReader) Name() string { return "capture" }
+
+func (c *captureReader) SupportedExtensions() []string { return []string{".md"} }
 
 // TestReadDocuments verifies that File Source correctly reads documents with
 // and without custom chunk configuration.
@@ -146,7 +194,7 @@ func (stubReader) SupportedExtensions() []string {
 func TestProcessFile_Directory(t *testing.T) {
 	dir := t.TempDir()
 	src := New([]string{})
-	if _, err := src.processFile(dir); err == nil {
+	if _, err := src.processFile(context.Background(), dir); err == nil {
 		t.Fatalf("expected error for directory path")
 	}
 }
@@ -216,7 +264,7 @@ func TestOptions(t *testing.T) {
 }
 func TestProcessFile_Unsupported(t *testing.T) {
 	src := New([]string{})
-	_, err := src.processFile("nonexistent.xyz")
+	_, err := src.processFile(context.Background(), "nonexistent.xyz")
 	if err == nil {
 		t.Fatalf("expected error for unsupported file")
 	}
@@ -294,6 +342,42 @@ func TestWithMetadata(t *testing.T) {
 		if actualValue, ok := src.metadata[k]; !ok || actualValue != expectedValue {
 			t.Errorf("metadata[%s] = %v, want %v", k, actualValue, expectedValue)
 		}
+	}
+}
+
+func TestWithMetadataCopiesInputMap(t *testing.T) {
+	meta := map[string]any{"author": "test-author"}
+	src := New([]string{"test.txt"}, WithMetadata(meta))
+
+	meta["author"] = "changed"
+	meta["new"] = "value"
+
+	if got := src.metadata["author"]; got != "test-author" {
+		t.Fatalf("metadata should be copied, got %v", got)
+	}
+	if _, ok := src.metadata["new"]; ok {
+		t.Fatal("source metadata should not observe new keys added to input map")
+	}
+}
+
+func TestProcessFile_WithExtractorPreservesFileName(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-test"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	reader := &captureReader{}
+	src := New([]string{filePath}, WithExtractor(&recordingExtractor{format: extractor.FormatMarkdown}))
+	src.readers[extractor.FormatMarkdown] = reader
+
+	_, err := src.processFile(ctx, filePath)
+	if err != nil {
+		t.Fatalf("processFile failed: %v", err)
+	}
+	if reader.lastName != "sample.pdf" {
+		t.Fatalf("expected extracted reader name sample.pdf, got %s", reader.lastName)
 	}
 }
 
@@ -421,7 +505,7 @@ func TestProcessFileNotRegular(t *testing.T) {
 	tmpDir := t.TempDir()
 	src := New([]string{tmpDir})
 
-	_, err := src.processFile(tmpDir)
+	_, err := src.processFile(context.Background(), tmpDir)
 	if err == nil {
 		t.Error("expected error when processing directory as file")
 	}
@@ -439,7 +523,7 @@ func TestProcessFileAbsPathError(t *testing.T) {
 	}
 
 	src := New([]string{filePath})
-	docs, err := src.processFile(filePath)
+	docs, err := src.processFile(context.Background(), filePath)
 	if err != nil {
 		t.Fatalf("processFile failed: %v", err)
 	}
@@ -579,5 +663,113 @@ func TestFileReaderTypeWithChunking(t *testing.T) {
 	}
 	if len(docs) == 0 {
 		t.Fatal("expected at least one document")
+	}
+}
+
+// TestExtractAndRead_ExtractionError verifies error propagation when ExtractFromReader fails.
+func TestExtractAndRead_ExtractionError(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-test"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath}, WithExtractor(&recordingExtractor{
+		err: errors.New("extraction failed"),
+	}))
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when extraction fails")
+	}
+	if !strings.Contains(err.Error(), "extraction failed") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestExtractAndRead_UnknownFormat verifies error when extracted format has no reader.
+func TestExtractAndRead_UnknownFormat(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-test"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath}, WithExtractor(&recordingExtractor{
+		format: "unknown_format_xyz",
+	}))
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when no reader for extracted format")
+	}
+	if !strings.Contains(err.Error(), "no reader available") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestReadWithReader_UnknownFileType verifies error when no reader is available for file type.
+func TestReadWithReader_UnknownFileType(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("data"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath})
+	// Remove the text reader to trigger "no reader available" error
+	delete(src.readers, "text")
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when no reader available for file type")
+	}
+	if !strings.Contains(err.Error(), "no reader available") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestReadDocuments_ReadError verifies error propagation when reader fails.
+func TestReadDocuments_ReadError(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.txt")
+	if err := os.WriteFile(filePath, []byte("content"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	src := New([]string{filePath})
+	// Replace the text reader with one that always fails
+	src.readers["text"] = &failReader{}
+	_, err := src.ReadDocuments(ctx)
+	if err == nil {
+		t.Fatal("expected error when reader fails")
+	}
+}
+
+// failReader is a reader that always returns an error.
+type failReader struct{}
+
+func (f *failReader) ReadFromReader(name string, r io.Reader) ([]*document.Document, error) {
+	return nil, errors.New("read from reader failed")
+}
+
+func (f *failReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	return nil, errors.New("read from file failed")
+}
+
+func (f *failReader) ReadFromURL(url string) ([]*document.Document, error) {
+	return nil, errors.New("read from url failed")
+}
+
+func (f *failReader) Name() string { return "fail" }
+
+func (f *failReader) SupportedExtensions() []string { return []string{".txt"} }
+
+// TestWithMetadata_EmptyMap verifies WithMetadata with empty map.
+func TestWithMetadata_EmptyMap(t *testing.T) {
+	src := New([]string{"test.txt"}, WithMetadata(map[string]any{}))
+	if src.metadata == nil {
+		t.Error("metadata should not be nil after WithMetadata")
 	}
 }

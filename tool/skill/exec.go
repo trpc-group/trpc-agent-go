@@ -18,18 +18,17 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	defaultExecYieldMS = 1_000
-	defaultIOYieldMS   = 400
-	defaultPollLines   = 40
-	defaultPollWait    = 50 * time.Millisecond
-	defaultPollSettle  = 75 * time.Millisecond
-	defaultSessionTTL  = 30 * time.Minute
-	defaultSessionKill = 2 * time.Second
+	defaultExecYieldMS = programsession.DefaultExecYieldMS
+	defaultIOYieldMS   = programsession.DefaultIOYieldMS
+	defaultPollLines   = programsession.DefaultPollLines
+	defaultSessionTTL  = programsession.DefaultSessionTTL
+	defaultSessionKill = programsession.DefaultSessionKill
 )
 
 const (
@@ -98,6 +97,7 @@ type execSession struct {
 	saveRequested         bool
 	outputsSaveSkipReason string
 	final                 *runOutput
+	exitedAt              time.Time
 	finalized             bool
 	finalizedAt           time.Time
 }
@@ -354,7 +354,7 @@ func (t *ExecTool) StreamableCall(
 	runIn, saveRequested, outputsSaveSkipReason := t.run.
 		applyArtifactSaveOverrides(ctx, in.runInput)
 	in.runInput = runIn
-	eng, ws, ctxIO, staged, stageWarn, err := t.run.
+	eng, ws, skillRoot, ctxIO, staged, stageWarn, err := t.run.
 		prepareWorkspaceForRun(ctx, in.runInput)
 	if err != nil {
 		return nil, err
@@ -365,11 +365,12 @@ func (t *ExecTool) StreamableCall(
 			"skill_exec is not supported by the current executor",
 		)
 	}
-	cwd := resolveCWD(in.Cwd, in.Skill)
+	cwd := resolveCWD(in.Cwd, skillRoot)
 	spec, err := t.run.buildRunProgramSpec(
 		ctxIO,
 		eng,
 		ws,
+		skillRoot,
 		cwd,
 		in.runInput,
 	)
@@ -402,8 +403,8 @@ func (t *ExecTool) StreamableCall(
 
 	poll := waitForProgramOutput(
 		proc,
-		yieldDuration(in.YieldMS, defaultExecYieldMS),
-		pollLineLimit(in.PollLines),
+		programsession.YieldDuration(in.YieldMS, defaultExecYieldMS),
+		programsession.PollLineLimit(in.PollLines),
 	)
 	result, err := t.buildExecOutput(ctx, proc.ID(), sess, poll)
 	if err != nil {
@@ -435,8 +436,8 @@ func (t *WriteStdinTool) StreamableCall(
 	}
 	poll := waitForProgramOutput(
 		sess.proc,
-		yieldDuration(in.YieldMS, defaultIOYieldMS),
-		pollLineLimit(in.PollLines),
+		programsession.YieldDuration(in.YieldMS, defaultIOYieldMS),
+		programsession.PollLineLimit(in.PollLines),
 	)
 	result, err := t.exec.buildExecOutput(ctx, in.SessionID, sess, poll)
 	if err != nil {
@@ -463,8 +464,8 @@ func (t *PollSessionTool) StreamableCall(
 	}
 	poll := waitForProgramOutput(
 		sess.proc,
-		yieldDuration(in.YieldMS, defaultIOYieldMS),
-		pollLineLimit(in.PollLines),
+		programsession.YieldDuration(in.YieldMS, defaultIOYieldMS),
+		programsession.PollLineLimit(in.PollLines),
 	)
 	result, err := t.exec.buildExecOutput(ctx, in.SessionID, sess, poll)
 	if err != nil {
@@ -549,9 +550,14 @@ func (t *ExecTool) cleanupExpiredLocked() {
 	now := t.clock()
 	for id, sess := range t.sessions {
 		sess.mu.Lock()
-		expired := sess.finalized &&
-			!sess.finalizedAt.IsZero() &&
-			now.Sub(sess.finalizedAt) >= t.ttl
+		if sess.exitedAt.IsZero() {
+			if state, ok := programsession.State(sess.proc); ok &&
+				state.Status == codeexecutor.ProgramStatusExited {
+				sess.exitedAt = now
+			}
+		}
+		expired := !sess.exitedAt.IsZero() &&
+			now.Sub(sess.exitedAt) >= t.ttl
 		sess.mu.Unlock()
 		if expired {
 			_ = sess.proc.Close()
@@ -650,6 +656,7 @@ func (t *ExecTool) captureFinalResult(
 	sess.final = &out
 	sess.finalized = true
 	sess.finalizedAt = t.clock()
+	sess.exitedAt = sess.finalizedAt
 	_ = sess.proc.Close()
 	return sess.final, nil
 }
@@ -699,76 +706,15 @@ func waitForProgramOutput(
 	yield time.Duration,
 	limit *int,
 ) codeexecutor.ProgramPoll {
-	deadline := time.Now()
-	if yield > 0 {
-		deadline = deadline.Add(yield)
-	}
-	var (
-		out            strings.Builder
-		offset         int
-		nextOffset     int
-		haveChunk      bool
-		settleDeadline time.Time
-	)
-	for {
-		poll := proc.Poll(limit)
-		if poll.Output != "" {
-			if !haveChunk {
-				offset = poll.Offset
-				haveChunk = true
-			}
-			out.WriteString(poll.Output)
-			nextOffset = poll.NextOffset
-			if settleDeadline.IsZero() {
-				settleDeadline = time.Now().Add(defaultPollSettle)
-				if yield <= 0 {
-					deadline = settleDeadline
-				}
-			}
-		} else if !haveChunk {
-			offset = poll.Offset
-			nextOffset = poll.NextOffset
-		} else {
-			nextOffset = poll.NextOffset
-		}
-		if poll.Status == codeexecutor.ProgramStatusExited {
-			poll.Output = out.String()
-			poll.Offset = offset
-			poll.NextOffset = nextOffset
-			return poll
-		}
-		now := time.Now()
-		if !settleDeadline.IsZero() && now.After(settleDeadline) {
-			poll.Output = out.String()
-			poll.Offset = offset
-			poll.NextOffset = nextOffset
-			return poll
-		}
-		if yield > 0 && now.After(deadline) {
-			poll.Output = out.String()
-			poll.Offset = offset
-			poll.NextOffset = nextOffset
-			return poll
-		}
-		time.Sleep(defaultPollWait)
-	}
+	return programsession.WaitForProgramOutput(proc, yield, limit)
 }
 
 func yieldDuration(ms int, fallback int) time.Duration {
-	if ms < 0 {
-		ms = 0
-	}
-	if ms == 0 {
-		ms = fallback
-	}
-	return time.Duration(ms) * time.Millisecond
+	return programsession.YieldDuration(ms, fallback)
 }
 
 func pollLineLimit(lines int) *int {
-	if lines <= 0 {
-		lines = defaultPollLines
-	}
-	return &lines
+	return programsession.PollLineLimit(lines)
 }
 
 func detectInteraction(

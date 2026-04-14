@@ -93,8 +93,13 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, ".venv/")
 	require.Contains(t, sys, "Avoid include_all_docs")
-	require.Contains(t, sys, "Treat loaded skill docs as guidance")
-	require.Contains(t, sys, "Do not invent subcommands, flags")
+	require.Contains(t, sys, "Loading a skill gives you instructions")
+	require.Contains(t, sys, "routing summaries only")
+	require.Contains(t, sys, "If the loaded content already provides enough guidance")
+	require.Contains(t, sys, "load SKILL.md before the first skill_run or skill_exec")
+	require.Contains(t, sys, "Do not infer commands, script entrypoints")
+	require.Contains(t, sys, "Use execution tools only when running a command")
+	require.Contains(t, sys, "When you execute, follow the tool description")
 	require.Contains(t, sys, "[Loaded] calc")
 	require.Contains(t, sys, "Calc body")
 	require.Contains(t, sys, "[Doc] USAGE.md")
@@ -104,6 +109,74 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	ev := <-ch
 	require.NotNil(t, ev)
 	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev.Object)
+}
+
+func TestSkillsRequestProcessor_ProcessRequest_ContextAwareRepoFiltersVisibleSkills(
+	t *testing.T,
+) {
+	base := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "alpha", Description: "A"},
+			{Name: "beta", Description: "B"},
+		},
+		full: map[string]*skill.Skill{
+			"alpha": {
+				Summary: skill.Summary{Name: "alpha"},
+				Body:    "alpha body",
+			},
+			"beta": {
+				Summary: skill.Summary{Name: "beta"},
+				Body:    "beta body",
+			},
+		},
+	}
+	repo := skill.NewFilteredRepository(
+		base,
+		func(ctx context.Context, summary skill.Summary) bool {
+			userID, _ := agent.GetRuntimeStateValueFromContext[string](
+				ctx,
+				"user_id",
+			)
+			if userID == "user-a" {
+				return summary.Name == "alpha"
+			}
+			return summary.Name == "beta"
+		},
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		RunOptions: agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+		},
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "alpha"): []byte("1"),
+				skill.LoadedKey("tester", "beta"):  []byte("1"),
+			},
+		},
+	}
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("base sys"),
+		},
+	}
+
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	p.ProcessRequest(ctx, inv, req, nil)
+
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, "- alpha: A")
+	require.NotContains(t, sys, "- beta: B")
+	require.Contains(t, sys, "[Loaded] alpha")
+	require.Contains(t, sys, "alpha body")
+	require.NotContains(t, sys, "[Loaded] beta")
+	require.NotContains(t, sys, "beta body")
 }
 
 func TestSkillsRequestProcessor_NoDuplicateOverview(t *testing.T) {
@@ -150,6 +223,28 @@ func TestSkillsRequestProcessor_ToolingGuidance_Disabled(t *testing.T) {
 	require.NotContains(t, sys, skillsToolingGuidanceHeader)
 }
 
+func TestSkillsRequestProcessor_ExecToolsDisabled(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{Session: &session.Session{}}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillExecToolsDisabled(),
+	)
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.NotContains(t, sys, "skill_exec")
+	require.NotContains(t, sys, "skill_write_stdin")
+	require.NotContains(t, sys, "skill_poll_session")
+}
+
 func TestSkillsRequestProcessor_KnowledgeOnlyGuidance(t *testing.T) {
 	repo := &mockRepo{
 		sums: []skill.Summary{{Name: "x", Description: "d"}},
@@ -169,11 +264,11 @@ func TestSkillsRequestProcessor_KnowledgeOnlyGuidance(t *testing.T) {
 	require.Contains(t, sys, skillsOverviewHeader)
 	require.Contains(t, sys, skillsCapabilityHeader)
 	require.Contains(t, sys, "skill discovery and knowledge loading only")
-	require.Contains(t, sys, "Execution-oriented skill tools are unavailable")
+	require.Contains(t, sys, "Built-in skill execution tools are unavailable")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.NotContains(t, sys, "skill_run runs with CWD")
 	require.NotContains(t, sys, ".venv/")
-	require.Contains(t, sys, "progressive disclosure only")
+	require.Contains(t, sys, "Use skills for progressive disclosure only")
 	require.Contains(t, sys, "inspect only the documentation needed")
 }
 
@@ -197,6 +292,200 @@ func TestSkillsRequestProcessor_KnowledgeOnlyGuidance_Disabled(t *testing.T) {
 	require.Contains(t, sys, skillsOverviewHeader)
 	require.NotContains(t, sys, skillsCapabilityHeader)
 	require.NotContains(t, sys, skillsToolingGuidanceHeader)
+}
+
+func TestSkillsRequestProcessor_LoadOnlyGuidance(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{Session: &session.Session{}}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillToolFlags(skillprofile.Flags{Load: true}),
+	)
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsOverviewHeader)
+	require.Contains(t, sys, skillsCapabilityHeader)
+	require.Contains(t, sys, "skill discovery and knowledge loading only")
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.Contains(t, sys, "skill_load.docs or include_all_docs")
+	require.NotContains(t, sys, "skill_list_docs")
+	require.NotContains(t, sys, "skill_select_docs")
+	require.NotContains(t, sys, "skill_run runs with CWD")
+}
+
+func TestSkillsRequestProcessor_ListDocsOnlyGuidance(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{Session: &session.Session{}}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillToolFlags(skillprofile.Flags{ListDocs: true}),
+	)
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsOverviewHeader)
+	require.Contains(t, sys, skillsCapabilityHeader)
+	require.Contains(t, sys, "skill doc inspection only")
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.Contains(t, sys, "Use skills only to inspect available doc names")
+	require.NotContains(t, sys, "skill_load.docs or include_all_docs")
+	require.NotContains(t, sys, "load SKILL.md first")
+	require.NotContains(t, sys, "skill_run runs with CWD")
+}
+
+func TestSkillsRequestProcessor_RunOnlyGuidance(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{Session: &session.Session{}}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillToolFlags(skillprofile.Flags{Run: true}),
+	)
+	ch := make(chan *event.Event, 1)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	require.NotEmpty(t, req.Messages)
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillsOverviewHeader)
+	require.Contains(t, sys, skillsToolingGuidanceHeader)
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.Contains(t, sys, "Built-in skill loading is unavailable")
+	require.Contains(t, sys, "bundled scripts, and observed runtime behavior")
+	require.NotContains(t, sys, "missing skill_load")
+	require.NotContains(t, sys, "consult the loaded SKILL.md/docs")
+}
+
+func TestNewSkillsRequestProcessor_ExecToolsDisabled(t *testing.T) {
+	p := NewSkillsRequestProcessor(
+		&mockRepo{},
+		WithSkillToolProfile(skillprofile.Full),
+		WithSkillExecToolsDisabled(),
+	)
+	require.True(t, p.toolFlags.Load)
+	require.True(t, p.toolFlags.Run)
+	require.False(t, p.toolFlags.Exec)
+	require.False(t, p.toolFlags.WriteStdin)
+	require.False(t, p.toolFlags.PollSession)
+	require.False(t, p.toolFlags.KillSession)
+}
+
+func TestSkillsRequestProcessor_CapabilityGuidance_CatalogOnly(t *testing.T) {
+	p := NewSkillsRequestProcessor(
+		&mockRepo{},
+		WithSkillToolFlags(skillprofile.Flags{}),
+	)
+	text := p.capabilityGuidanceText(p.toolFlags)
+	require.Contains(t, text, skillsCapabilityHeader)
+	require.Contains(t, text, "exposes skill summaries only")
+	require.Contains(t, text, "catalog of possible capabilities")
+}
+
+func TestSkillsRequestProcessor_ToolFlagsResolverOverridesStaticFlags(t *testing.T) {
+	p := NewSkillsRequestProcessor(
+		&mockRepo{},
+		WithSkillToolFlags(skillprofile.Flags{Load: true}),
+		WithSkillToolFlagsResolver(func(*agent.Invocation) skillprofile.Flags {
+			return skillprofile.Flags{Run: true}
+		}),
+	)
+	flags := p.toolFlagsForInvocation(&agent.Invocation{})
+	require.False(t, flags.Load)
+	require.True(t, flags.Run)
+}
+
+func TestDefaultToolingAndWorkspaceGuidance_CatalogOnly(t *testing.T) {
+	text := defaultToolingAndWorkspaceGuidance(skillprofile.Flags{})
+	require.Contains(t, text, skillsToolingGuidanceHeader)
+	require.Contains(t, text, "Use the skill overview as a catalog only")
+	require.Contains(t, text, "skill tools are unavailable in this configuration")
+}
+
+func TestDefaultToolingAndWorkspaceGuidance_InvalidFlagsFallback(t *testing.T) {
+	text := defaultToolingAndWorkspaceGuidance(
+		skillprofile.Flags{WriteStdin: true},
+	)
+	require.Contains(t, text, skillsToolingGuidanceHeader)
+	require.Contains(t, text, "Use the skill overview as a catalog only")
+}
+
+func TestDefaultDocHelpersOnlyGuidance_Variants(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags skillprofile.Flags
+		want  string
+	}{
+		{
+			name:  "list and select",
+			flags: skillprofile.Flags{ListDocs: true, SelectDocs: true},
+			want:  "inspect available doc names or adjust doc selection state",
+		},
+		{
+			name:  "select only",
+			flags: skillprofile.Flags{SelectDocs: true},
+			want:  "adjust doc selection when doc names are already known",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			text := defaultDocHelpersOnlyGuidance(tt.flags)
+			require.Contains(t, text, skillsToolingGuidanceHeader)
+			require.Contains(t, text, tt.want)
+			require.Contains(t, text, "Built-in skill loading is unavailable")
+		})
+	}
+}
+
+func TestAppendKnowledgeGuidance_Variants(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags skillprofile.Flags
+		want  string
+	}{
+		{
+			name:  "no load",
+			flags: skillprofile.Flags{ListDocs: true},
+			want:  "",
+		},
+		{
+			name:  "list helper",
+			flags: skillprofile.Flags{Load: true, ListDocs: true},
+			want:  "Use the available doc listing helper to discover doc names",
+		},
+		{
+			name:  "select helper",
+			flags: skillprofile.Flags{Load: true, SelectDocs: true},
+			want:  "If doc names are already known, use the available doc selection helper",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var b strings.Builder
+			appendKnowledgeGuidance(&b, tt.flags)
+			text := b.String()
+			if tt.want == "" {
+				require.Empty(t, text)
+				return
+			}
+			require.Contains(t, text, tt.want)
+			require.Contains(t, text, "Avoid include_all_docs")
+		})
+	}
 }
 
 func TestSkillsRequestProcessor_ArrayDocs_NoSystemMessage(t *testing.T) {
@@ -359,6 +648,9 @@ func TestSkillsRequestProcessor_SkillLoadModeOnce_OffloadsLoadedSkills(
 		Session: &session.Session{
 			State: session.StateMap{
 				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["calc"]`,
+				),
 			},
 		},
 	}
@@ -388,6 +680,11 @@ func TestSkillsRequestProcessor_SkillLoadModeOnce_OffloadsLoadedSkills(
 		ev1.StateDelta,
 		skill.LoadedKey("tester", "calc"),
 	)
+	require.Contains(
+		t,
+		ev1.StateDelta,
+		skill.LoadedOrderKey("tester"),
+	)
 
 	ev2 := <-ch
 	require.NotNil(t, ev2)
@@ -410,6 +707,9 @@ func TestSkillsRequestProcessor_SkillLoadModeTurn_ClearsOncePerInvocation(
 			State: session.StateMap{
 				skill.LoadedKey("tester", "calc"): []byte("1"),
 				skill.DocsKey("tester", "calc"):   []byte("*"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["calc"]`,
+				),
 			},
 		},
 	}
@@ -433,10 +733,18 @@ func TestSkillsRequestProcessor_SkillLoadModeTurn_ClearsOncePerInvocation(
 	docsVal, ok := inv.Session.GetState(skill.DocsKey("tester", "calc"))
 	require.True(t, ok)
 	require.Empty(t, docsVal)
+	orderVal, ok := inv.Session.GetState(skill.LoadedOrderKey("tester"))
+	require.True(t, ok)
+	require.Empty(t, orderVal)
 
 	ev1 := <-ch1
 	require.NotNil(t, ev1)
 	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
+	require.Contains(
+		t,
+		ev1.StateDelta,
+		skill.LoadedOrderKey("tester"),
+	)
 
 	ev2 := <-ch1
 	require.NotNil(t, ev2)
@@ -609,6 +917,9 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_EvictsOldest(
 				skill.LoadedKey("tester", "b"): []byte("1"),
 				skill.LoadedKey("tester", "c"): []byte("1"),
 				skill.LoadedKey("tester", "d"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["a","b","c","d"]`,
+				),
 			},
 			Events: []event.Event{
 				toolResponseEvent(
@@ -665,6 +976,11 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_EvictsOldest(
 	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
 	require.Contains(t, ev1.StateDelta, skill.LoadedKey("tester", "a"))
 	require.Contains(t, ev1.StateDelta, skill.DocsKey("tester", "a"))
+	require.Equal(
+		t,
+		`["b","c","d"]`,
+		string(ev1.StateDelta[skill.LoadedOrderKey("tester")]),
+	)
 
 	ev2 := <-ch
 	require.NotNil(t, ev2)
@@ -701,6 +1017,9 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_SelectDocsTouchesSkill(
 				skill.LoadedKey("tester", "b"): []byte("1"),
 				skill.LoadedKey("tester", "c"): []byte("1"),
 				skill.LoadedKey("tester", "d"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["b","c","d","a"]`,
+				),
 			},
 			Events: []event.Event{
 				toolResponseEvent(
@@ -750,6 +1069,9 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_SelectDocsTouchesSkill(
 	v, ok := inv.Session.GetState(skill.LoadedKey("tester", "b"))
 	require.True(t, ok)
 	require.Empty(t, v)
+	orderVal, ok := inv.Session.GetState(skill.LoadedOrderKey("tester"))
+	require.True(t, ok)
+	require.Equal(t, []byte(`["c","d","a"]`), orderVal)
 }
 
 func TestSkillsRequestProcessor_MaxLoadedSkills_ToolResultMode_EvictsOldest(
@@ -779,6 +1101,9 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_ToolResultMode_EvictsOldest(
 				skill.LoadedKey("tester", "b"): []byte("1"),
 				skill.LoadedKey("tester", "c"): []byte("1"),
 				skill.LoadedKey("tester", "d"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["a","b","c","d"]`,
+				),
 			},
 			Events: []event.Event{
 				toolResponseEvent(
@@ -833,10 +1158,115 @@ func TestSkillsRequestProcessor_MaxLoadedSkills_ToolResultMode_EvictsOldest(
 	ev1 := <-ch
 	require.NotNil(t, ev1)
 	require.Equal(t, model.ObjectTypeStateUpdate, ev1.Object)
+	require.Equal(
+		t,
+		`["b","c","d"]`,
+		string(ev1.StateDelta[skill.LoadedOrderKey("tester")]),
+	)
 
 	ev2 := <-ch
 	require.NotNil(t, ev2)
 	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev2.Object)
+}
+
+func TestSkillsRequestProcessor_MaxLoadedSkills_UsesStoredOrder(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "alpha", Description: "A"},
+			{Name: "beta", Description: "B"},
+			{Name: "gamma", Description: "C"},
+		},
+		full: map[string]*skill.Skill{
+			"alpha": {
+				Summary: skill.Summary{Name: "alpha"},
+				Body:    "Alpha body",
+			},
+			"beta": {
+				Summary: skill.Summary{Name: "beta"},
+				Body:    "Beta body",
+			},
+			"gamma": {
+				Summary: skill.Summary{Name: "gamma"},
+				Body:    "Gamma body",
+			},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "alpha"): []byte("1"),
+				skill.LoadedKey("tester", "beta"):  []byte("1"),
+				skill.LoadedKey("tester", "gamma"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["alpha","beta","gamma"]`,
+				),
+			},
+		},
+	}
+
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("base sys"),
+	}}
+	ch := make(chan *event.Event, 3)
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+		WithMaxLoadedSkills(2),
+	)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	sys := req.Messages[0].Content
+	require.NotContains(t, sys, "[Loaded] alpha")
+	require.Contains(t, sys, "[Loaded] beta")
+	require.Contains(t, sys, "[Loaded] gamma")
+}
+
+func TestKeepMostRecentSkills_UsesStoredOrder(t *testing.T) {
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedOrderKey("tester"): []byte(
+					`["a","b","c","d"]`,
+				),
+			},
+		},
+	}
+	loaded := []string{"d", "b", "a", "c"}
+	keep := keepMostRecentSkills(inv, loaded, 2)
+	require.Equal(t, []string{"c", "d"}, keep)
+}
+
+func TestLoadedSkillOrder_FallsBackFromInvalidStateToEvents(t *testing.T) {
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedOrderKey("tester"): []byte("{"),
+			},
+			Events: []event.Event{
+				toolResponseEvent(
+					"tester",
+					skillToolLoad,
+					loadedPrefix+" b",
+				),
+				toolResponseEvent(
+					"tester",
+					skillToolLoad,
+					loadedPrefix+" a",
+				),
+			},
+		},
+	}
+
+	order := loadedSkillOrder(
+		inv,
+		[]string{"c", "a", "b"},
+	)
+	require.Equal(t, []string{"b", "a", "c"}, order)
 }
 
 func TestKeepMostRecentSkills_FillsAlphabeticallyWhenNoEvents(t *testing.T) {
@@ -848,7 +1278,7 @@ func TestKeepMostRecentSkills_FillsAlphabeticallyWhenNoEvents(t *testing.T) {
 	const max = 3
 
 	keep := keepMostRecentSkills(inv, loaded, max)
-	require.Equal(t, []string{"a", "b", "c"}, keep)
+	require.Equal(t, []string{"b", "c", "d"}, keep)
 }
 
 func TestKeepMostRecentSkills_EarlyReturns(t *testing.T) {
@@ -867,24 +1297,20 @@ func TestKeepMostRecentSkills_EarlyReturns(t *testing.T) {
 	require.Nil(t, keep)
 }
 
-func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
+func TestAppendSkillsToOrderFromToolResponseEvent_EarlyReturns(t *testing.T) {
 	loadedSet := map[string]struct{}{
 		"a": {},
 	}
-	seen := map[string]struct{}{}
-	const max = 3
 
-	keep := appendSkillsFromToolResponseEvent(
+	order := appendSkillsToOrderFromToolResponseEvent(
 		event.Event{},
 		"",
 		loadedSet,
-		seen,
 		nil,
-		max,
 	)
-	require.Nil(t, keep)
+	require.Nil(t, order)
 
-	keep = appendSkillsFromToolResponseEvent(
+	order = appendSkillsToOrderFromToolResponseEvent(
 		event.Event{
 			Response: &model.Response{
 				Object: "not_tool_response",
@@ -892,13 +1318,11 @@ func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
 		},
 		"",
 		loadedSet,
-		seen,
 		nil,
-		max,
 	)
-	require.Nil(t, keep)
+	require.Nil(t, order)
 
-	keep = appendSkillsFromToolResponseEvent(
+	order = appendSkillsToOrderFromToolResponseEvent(
 		event.Event{
 			Response: &model.Response{
 				Object: model.ObjectTypeToolResponse,
@@ -906,19 +1330,14 @@ func TestAppendSkillsFromToolResponseEvent_EarlyReturns(t *testing.T) {
 		},
 		"",
 		loadedSet,
-		seen,
 		nil,
-		max,
 	)
-	require.Nil(t, keep)
+	require.Nil(t, order)
 }
 
-func TestAppendSkillsFromToolResp_SkipsInvalidMessages(t *testing.T) {
+func TestAppendSkillsToOrderFromToolResp_SkipsInvalidMessages(t *testing.T) {
 	loadedSet := map[string]struct{}{
 		"a": {},
-		"b": {},
-	}
-	seen := map[string]struct{}{
 		"b": {},
 	}
 
@@ -962,15 +1381,13 @@ func TestAppendSkillsFromToolResp_SkipsInvalidMessages(t *testing.T) {
 		},
 	}
 
-	keep := appendSkillsFromToolResponseEvent(
+	order := appendSkillsToOrderFromToolResponseEvent(
 		ev,
 		"",
 		loadedSet,
-		seen,
-		nil,
-		10,
+		[]string{"b"},
 	)
-	require.Equal(t, []string{"a"}, keep)
+	require.Equal(t, []string{"b", "a"}, order)
 }
 
 func TestSkillNameFromToolResponse_UnknownTool(t *testing.T) {
@@ -1137,6 +1554,117 @@ func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
 		}
 		require.NotContains(t, m.Content, skillsLoadedContextHeader)
 	}
+}
+
+func TestSkillsToolResultRequestProcessor_FallbackSkipsHiddenSkills(
+	t *testing.T,
+) {
+	base := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "alpha", Description: "A"},
+			{Name: "beta", Description: "B"},
+		},
+		full: map[string]*skill.Skill{
+			"alpha": {Summary: skill.Summary{Name: "alpha"}, Body: "alpha body"},
+			"beta":  {Summary: skill.Summary{Name: "beta"}, Body: "beta body"},
+		},
+	}
+	repo := skill.NewFilteredRepository(
+		base,
+		func(ctx context.Context, summary skill.Summary) bool {
+			userID, _ := agent.GetRuntimeStateValueFromContext[string](
+				ctx,
+				"user_id",
+			)
+			return userID == "user-a" && summary.Name == "alpha"
+		},
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		RunOptions: agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+		},
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "beta"): []byte("1"),
+			},
+		},
+	}
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(repo)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	p.ProcessRequest(ctx, inv, req, nil)
+
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		require.NotContains(t, m.Content, skillsLoadedContextHeader)
+		require.NotContains(t, m.Content, "beta body")
+	}
+}
+
+func TestSkillsToolResultRequestProcessor_FallbackSystemMessageIncludesSelectedDocs(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {
+				Summary: skill.Summary{Name: "calc"},
+				Docs: []skill.Doc{{
+					Path:    "USAGE.md",
+					Content: "use me",
+				}},
+			},
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.DocsKey("tester", "calc"):   []byte(`["USAGE.md"]`),
+			},
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	var found bool
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(m.Content, skillsLoadedContextHeader) {
+			found = true
+			require.Contains(t, m.Content, "Docs loaded: USAGE.md")
+			require.Contains(t, m.Content, "[Doc] USAGE.md")
+			require.Contains(t, m.Content, "use me")
+		}
+	}
+	require.True(t, found)
 }
 
 func TestSkillsToolResultRequestProcessor_SessionSummary_DisablesFallbackWithoutCompactionSignal(
@@ -1344,6 +1872,123 @@ func TestSkillsToolResultRequestProcessor_SessionSummary_AllowsFallback(
 	require.Equal(t, 1, matchCount)
 }
 
+func TestSkillsToolResultRequestProcessor_SupportsContextCompactionRebuild(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+
+	t.Run("turn mode supports rebuild", func(t *testing.T) {
+		p := NewSkillsToolResultRequestProcessor(
+			repo,
+			WithSkillsToolResultLoadMode(SkillLoadModeTurn),
+		)
+		inv := &agent.Invocation{
+			AgentName: "tester",
+			Session: &session.Session{
+				State: session.StateMap{
+					skill.LoadedKey("tester", "calc"): []byte("1"),
+				},
+			},
+		}
+		require.True(t, p.SupportsContextCompactionRebuild(inv))
+	})
+
+	t.Run("once mode blocks rebuild when loaded skills exist", func(t *testing.T) {
+		p := NewSkillsToolResultRequestProcessor(
+			repo,
+			WithSkillsToolResultLoadMode(SkillLoadModeOnce),
+		)
+		inv := &agent.Invocation{
+			AgentName: "tester",
+			Session: &session.Session{
+				State: session.StateMap{
+					skill.LoadedKey("tester", "calc"): []byte("1"),
+				},
+			},
+		}
+		require.False(t, p.SupportsContextCompactionRebuild(inv))
+	})
+
+	t.Run("once mode stays safe when nothing is loaded", func(t *testing.T) {
+		p := NewSkillsToolResultRequestProcessor(
+			repo,
+			WithSkillsToolResultLoadMode(SkillLoadModeOnce),
+		)
+		inv := &agent.Invocation{
+			AgentName: "tester",
+			Session:   &session.Session{State: session.StateMap{}},
+		}
+		require.True(t, p.SupportsContextCompactionRebuild(inv))
+	})
+}
+
+func TestSkillsToolResultRequestProcessor_RebuildRequestForContextCompaction(
+	t *testing.T,
+) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+
+	args, err := json.Marshal(skillNameInput{Skill: "calc"})
+	require.NoError(t, err)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "tc1",
+					Function: model.FunctionDefinitionParam{
+						Name:      skillToolLoad,
+						Arguments: args,
+					},
+				}},
+			},
+			{
+				Role:     model.RoleTool,
+				ToolName: skillToolLoad,
+				ToolID:   "tc1",
+				Content:  loadedPrefix + " calc",
+			},
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeTurn),
+	)
+	p.RebuildRequestForContextCompaction(
+		context.Background(),
+		inv,
+		req,
+	)
+
+	require.Contains(t, req.Messages[2].Content, "[Loaded] calc")
+	require.Contains(t, req.Messages[2].Content, "B")
+	loaded, ok := inv.Session.GetState(skill.LoadedKey("tester", "calc"))
+	require.True(t, ok)
+	require.Equal(t, []byte("1"), loaded)
+}
+
 func TestHasSessionSummary(t *testing.T) {
 	require.False(t, hasSessionSummary(nil))
 
@@ -1370,6 +2015,7 @@ func TestSkillsToolResultRequestProcessor_BuildToolResultContent_Base(
 	out, ok := p.buildToolResultContent(
 		context.Background(),
 		nil,
+		repo,
 		"calc",
 		"ok",
 	)
@@ -1395,6 +2041,9 @@ func TestSkillsToolResultRequestProcessor_SkillLoadModeOnce_Offloads(
 			State: session.StateMap{
 				skill.LoadedKey("tester", "calc"): []byte("1"),
 				skill.DocsKey("tester", "calc"):   []byte("[]"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["calc"]`,
+				),
 			},
 		},
 	}
@@ -1448,6 +2097,9 @@ func TestSkillsToolResultRequestProcessor_SkillLoadModeOnce_Offloads(
 	)
 	require.True(t, ok)
 	require.Empty(t, docsVal)
+	orderVal, ok := inv.Session.GetState(skill.LoadedOrderKey("tester"))
+	require.True(t, ok)
+	require.Empty(t, orderVal)
 
 	ev := <-ch
 	require.NotNil(t, ev)
@@ -1461,6 +2113,11 @@ func TestSkillsToolResultRequestProcessor_SkillLoadModeOnce_Offloads(
 		t,
 		ev.StateDelta,
 		skill.DocsKey("tester", "calc"),
+	)
+	require.Contains(
+		t,
+		ev.StateDelta,
+		skill.LoadedOrderKey("tester"),
 	)
 }
 
@@ -1620,10 +2277,135 @@ func TestSkillsToolResultRequestProcessor_GetDocsSelection_InvalidJSON(
 		},
 	}
 	p := NewSkillsToolResultRequestProcessor(repo)
-	require.Empty(t, p.getDocsSelection(inv, "calc"))
+	require.Empty(t, p.getDocsSelection(context.Background(), inv, repo, "calc"))
 
 	inv.Session.SetState(skill.DocsKey("tester", "missing"), []byte("*"))
-	require.Empty(t, p.getDocsSelection(inv, "missing"))
+	require.Empty(t, p.getDocsSelection(context.Background(), inv, repo, "missing"))
+}
+
+func TestSkillsToolResultRequestProcessor_RepositoryResolver_MaterializesToolResult(
+	t *testing.T,
+) {
+	dynamicRepo := &mockRepo{
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "Dynamic body"},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+	args, err := json.Marshal(skillNameInput{Skill: "calc"})
+	require.NoError(t, err)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "tc1",
+					Function: model.FunctionDefinitionParam{
+						Name:      skillToolLoad,
+						Arguments: args,
+					},
+				}},
+			},
+			{
+				Role:     model.RoleTool,
+				ToolName: skillToolLoad,
+				ToolID:   "tc1",
+				Content:  loadedPrefix + " calc",
+			},
+		},
+	}
+	p := NewSkillsToolResultRequestProcessor(
+		nil,
+		WithSkillsToolResultRepositoryResolver(
+			func(*agent.Invocation) skill.Repository {
+				return dynamicRepo
+			},
+		),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.Contains(t, req.Messages[2].Content, "[Loaded] calc")
+	require.Contains(t, req.Messages[2].Content, "Dynamic body")
+}
+
+func TestSkillsToolResultRequestProcessor_RepositoryResolver_CanDisableStaticRepository(
+	t *testing.T,
+) {
+	staticRepo := &mockRepo{
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "Static body"},
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+	args, err := json.Marshal(skillNameInput{Skill: "calc"})
+	require.NoError(t, err)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					Type: "function",
+					ID:   "tc1",
+					Function: model.FunctionDefinitionParam{
+						Name:      skillToolLoad,
+						Arguments: args,
+					},
+				}},
+			},
+			{
+				Role:     model.RoleTool,
+				ToolName: skillToolLoad,
+				ToolID:   "tc1",
+				Content:  loadedPrefix + " calc",
+			},
+		},
+	}
+	p := NewSkillsToolResultRequestProcessor(
+		staticRepo,
+		WithSkillsToolResultRepositoryResolver(
+			func(*agent.Invocation) skill.Repository {
+				return nil
+			},
+		),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.Equal(t, loadedPrefix+" calc", req.Messages[2].Content)
+	require.Equal(t, -1, findLoadedContextMessageIndex(req.Messages))
+}
+
+func TestSkillsToolResultRequestProcessor_RepositoryResolver_DoesNotPanicOnNilInvocation(
+	t *testing.T,
+) {
+	p := NewSkillsToolResultRequestProcessor(
+		nil,
+		WithSkillsToolResultRepositoryResolver(
+			func(inv *agent.Invocation) skill.Repository {
+				require.Nil(t, inv)
+				return nil
+			},
+		),
+	)
+	require.NotPanics(t, func() {
+		p.ProcessRequest(context.Background(), nil, &model.Request{}, nil)
+	})
 }
 
 func TestBuildDocsText_SkipsEmptyAndUnwanted(t *testing.T) {
@@ -1656,6 +2438,9 @@ func TestSkillsToolResultRequestProcessor_MaybeOffload_NoOpWhenNotOnce(
 		Session: &session.Session{
 			State: session.StateMap{
 				skill.LoadedKey("tester", "calc"): []byte("1"),
+				skill.LoadedOrderKey("tester"): []byte(
+					`["calc"]`,
+				),
 			},
 		},
 	}
@@ -1675,6 +2460,9 @@ func TestSkillsToolResultRequestProcessor_MaybeOffload_NoOpWhenNotOnce(
 	v, ok := inv.Session.GetState(skill.LoadedKey("tester", "calc"))
 	require.True(t, ok)
 	require.Equal(t, []byte("1"), v)
+	orderVal, ok := inv.Session.GetState(skill.LoadedOrderKey("tester"))
+	require.True(t, ok)
+	require.Equal(t, []byte(`["calc"]`), orderVal)
 	require.Len(t, ch, 0)
 }
 

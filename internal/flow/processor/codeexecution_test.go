@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -71,13 +72,125 @@ func TestCodeExecutionResponseProcessor_EmitsCodeAndResultEvents(t *testing.T) {
 	}
 }
 
+func TestCodeExecutionResponseProcessor_SkipsNonExecutableBlocks(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	ctx := context.Background()
+	proc := iprocessor.NewCodeExecutionResponseProcessor()
+
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{
+			name: "text around block",
+			content: "Here you go:\n```bash\n" +
+				"echo hello\n```",
+		},
+		{
+			name: "markdown block",
+			content: "```markdown\n" +
+				"# title\n```",
+		},
+		{
+			name:    "plain unlabeled block",
+			content: "```\nhello\n```",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			inv := &agent.Invocation{
+				Agent:     &testAgent{exec: &stubExec{}},
+				Session:   &session.Session{ID: "test-session"},
+				AgentName: "test-agent",
+			}
+			rsp := &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: tc.content,
+					},
+				}},
+			}
+
+			ch := make(chan *event.Event, 4)
+			proc.ProcessResponse(
+				ctx,
+				inv,
+				&model.Request{},
+				rsp,
+				ch,
+			)
+
+			require.Len(t, ch, 0)
+			require.Len(t, rsp.Choices, 1)
+			require.Equal(
+				t,
+				tc.content,
+				rsp.Choices[0].Message.Content,
+			)
+		})
+	}
+}
+
+func TestCodeExecutionResponseProcessor_UsesRunCodeExecutorOverride(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	proc := iprocessor.NewCodeExecutionResponseProcessor()
+
+	inv := &agent.Invocation{
+		Agent: &testAgent{
+			exec: &stubExec{output: "static"},
+		},
+		Session:   &session.Session{ID: "test-session"},
+		AgentName: "test-agent",
+		RunOptions: agent.RunOptions{
+			CodeExecutor: &stubExec{output: "override"},
+		},
+	}
+	rsp := &model.Response{
+		Done: true,
+		Choices: []model.Choice{
+			{Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "```bash\necho hello\n```",
+			}},
+		},
+	}
+
+	ch := make(chan *event.Event, 4)
+	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
+
+	require.Len(t, ch, 2)
+	<-ch
+	result := <-ch
+	require.NotNil(t, result)
+	require.NotNil(t, result.Response)
+	require.Len(t, result.Response.Choices, 1)
+	require.Contains(t, result.Response.Choices[0].Message.Content, "override")
+}
+
 // stubExec is a simple CodeExecutor stub returning a fixed output
-type stubExec struct{}
+type stubExec struct {
+	output string
+}
 
 func (s *stubExec) ExecuteCode(
 	ctx context.Context, input codeexecutor.CodeExecutionInput,
 ) (codeexecutor.CodeExecutionResult, error) {
-	return codeexecutor.CodeExecutionResult{Output: "OK"}, nil
+	output := s.output
+	if output == "" {
+		output = "OK"
+	}
+	return codeexecutor.CodeExecutionResult{Output: output}, nil
 }
 func (s *stubExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}

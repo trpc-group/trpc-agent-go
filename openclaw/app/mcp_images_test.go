@@ -12,6 +12,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -144,6 +145,25 @@ func TestExtractMCPImages_UnmarshalErrorReturnsNil(t *testing.T) {
 	require.Nil(t, images)
 }
 
+func TestExtractMCPImages_UnwrapsNestedContent(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte("fake image bytes")
+	encoded := base64.StdEncoding.EncodeToString(raw)
+
+	images := extractMCPImages(context.Background(), map[string]any{
+		"action": "screenshot",
+		"content": []mcpContentItem{{
+			Type:     "image",
+			Data:     encoded,
+			MimeType: "image/png",
+		}},
+	})
+	require.Len(t, images, 1)
+	require.Equal(t, raw, images[0].Data)
+	require.Equal(t, "png", images[0].Format)
+}
+
 func TestExtractMCPImages_UnsupportedMimeIsSkipped(t *testing.T) {
 	t.Parallel()
 
@@ -156,6 +176,30 @@ func TestExtractMCPImages_UnsupportedMimeIsSkipped(t *testing.T) {
 		MimeType: "image/tiff",
 	}})
 	require.Nil(t, images)
+}
+
+func TestUnwrapMCPResultContent_FallsBackToOriginalResult(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	plain := map[string]any{"message": "hello"}
+	require.Equal(t, plain, unwrapMCPResultContent(plain))
+
+	raw := func() {}
+	got := unwrapMCPResultContent(raw)
+	require.NotNil(t, got)
+	_, ok := got.(func())
+	require.True(t, ok)
+
+	type invalidEnvelope struct {
+		Content json.RawMessage `json:"content"`
+	}
+	got = unwrapMCPResultContent(invalidEnvelope{
+		Content: json.RawMessage("{"),
+	})
+	_, ok = got.(invalidEnvelope)
+	require.True(t, ok)
 }
 
 func TestMCPImageFormatFromMime_Unsupported(t *testing.T) {

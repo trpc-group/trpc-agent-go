@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -21,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -83,22 +85,26 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 }
 
 type options struct {
-	sessionService      session.Service
-	agent               agent.Agent
-	enableStreaming     bool
-	streamingEventType  StreamingEventType
-	agentCard           *a2a.AgentCard
-	processorBuilder    ProcessorBuilder
-	processorHook       ProcessMessageHook
-	taskManagerBuilder  TaskManagerBuilder
-	a2aToAgentConverter A2AMessageToAgentMessage
-	eventToA2AConverter EventToA2AMessage
-	host                string
-	extraOptions        []a2a.Option
-	errorHandler        ErrorHandler
-	debugLogging        bool
-	userIDHeader        string
-	adkCompatibility    bool
+	sessionService            session.Service
+	agent                     agent.Agent
+	runner                    runner.Runner
+	enableStreaming           bool
+	graphEventObjectAllowlist []string
+	streamingEventType        StreamingEventType
+	agentCard                 *a2a.AgentCard
+	processorBuilder          ProcessorBuilder
+	processorHook             ProcessMessageHook
+	taskManagerBuilder        TaskManagerBuilder
+	runOptions                []agent.RunOption
+	a2aToAgentConverter       A2AMessageToAgentMessage
+	eventToA2AConverter       EventToA2AMessage
+	host                      string
+	extraOptions              []a2a.Option
+	errorHandler              ErrorHandler
+	debugLogging              bool
+	userIDHeader              string
+	adkCompatibility          bool
+	structuredTaskErrors      bool
 }
 
 // Option is a function that configures a Server.
@@ -129,6 +135,7 @@ func WithSessionService(service session.Service) Option {
 }
 
 // WithAgent sets the agent to use.
+// It is mutually exclusive with WithRunner.
 func WithAgent(agent agent.Agent, enableStreaming bool) Option {
 	return func(opts *options) {
 		opts.agent = agent
@@ -136,7 +143,52 @@ func WithAgent(agent agent.Agent, enableStreaming bool) Option {
 	}
 }
 
+// WithRunner sets the runner to use.
+// It is mutually exclusive with WithAgent and requires WithAgentCard.
+func WithRunner(r runner.Runner) Option {
+	return func(opts *options) {
+		opts.runner = r
+	}
+}
+
+// WithGraphEventObjectAllowlist configures which graph object types (evt.Response.Object)
+// are forwarded through A2A.
+//
+// Matching applies only when object type starts with "graph.".
+//   - default (option not set): only graph.execution is forwarded.
+//   - exact rule: "graph.node.start"
+//   - prefix rule: "graph.node.*" or "graph.node*" (trailing '*' means prefix match)
+//   - suffix rule: "*step" or "*.step" (leading '*' means suffix match)
+//   - wildcard rule: "*" (allow all graph.* object types)
+func WithGraphEventObjectAllowlist(objectTypes ...string) Option {
+	return func(opts *options) {
+		opts.graphEventObjectAllowlist = normalizeGraphObjectTypes(objectTypes)
+	}
+}
+
+func normalizeGraphObjectTypes(objectTypes []string) []string {
+	if len(objectTypes) == 0 {
+		return []string{}
+	}
+
+	normalized := make([]string, 0, len(objectTypes))
+	dedup := make(map[string]struct{}, len(objectTypes))
+	for _, objectType := range objectTypes {
+		objectType = strings.TrimSpace(objectType)
+		if objectType == "" {
+			continue
+		}
+		if _, ok := dedup[objectType]; ok {
+			continue
+		}
+		dedup[objectType] = struct{}{}
+		normalized = append(normalized, objectType)
+	}
+	return normalized
+}
+
 // WithAgentCard sets the agent card to use.
+// Use BuildBasicAgentCard to derive a basic card from an agent when needed.
 func WithAgentCard(agentCard a2a.AgentCard) Option {
 	return func(opts *options) {
 		opts.agentCard = &agentCard
@@ -195,7 +247,9 @@ func WithUserIDHeader(header string) Option {
 	}
 }
 
-// WithExtraA2AOptions sets the extra options to use.
+// WithExtraA2AOptions passes extra options to the underlying A2A server.
+// For example, it can be combined with a2a.WithAgentCardHandler and
+// NewAgentCardHandler(...) to serve a dynamically updated AgentCard.
 func WithExtraA2AOptions(opts ...a2a.Option) Option {
 	return func(options *options) {
 		options.extraOptions = append(options.extraOptions, opts...)
@@ -206,6 +260,16 @@ func WithExtraA2AOptions(opts ...a2a.Option) Option {
 func WithTaskManagerBuilder(builder TaskManagerBuilder) Option {
 	return func(opts *options) {
 		opts.taskManagerBuilder = builder
+	}
+}
+
+// WithRunOptions appends additional run options for every agent invocation.
+// These options are applied before the A2A message metadata is merged into RuntimeState.
+// If both WithRunOptions and A2A message metadata set the same RuntimeState key,
+// the A2A metadata value takes precedence (last-write-wins).
+func WithRunOptions(runOpts ...agent.RunOption) Option {
+	return func(opts *options) {
+		opts.runOptions = append(opts.runOptions, runOpts...)
 	}
 }
 
@@ -257,6 +321,14 @@ func WithADKCompatibility(enabled bool) Option {
 func WithStreamingEventType(eventType StreamingEventType) Option {
 	return func(opts *options) {
 		opts.streamingEventType = eventType
+	}
+}
+
+// WithStructuredTaskErrors enables structured propagation of agent
+// Response.Error values through A2A task status metadata.
+func WithStructuredTaskErrors(enable bool) Option {
+	return func(opts *options) {
+		opts.structuredTaskErrors = enable
 	}
 }
 

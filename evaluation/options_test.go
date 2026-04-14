@@ -19,7 +19,9 @@ import (
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 )
 
 type stubService struct{}
@@ -36,6 +38,22 @@ func (stubService) Close() error {
 	return nil
 }
 
+type stubSimulator struct{}
+
+func (stubSimulator) Start(ctx context.Context, req *usersimulation.StartRequest) (usersimulation.Conversation, error) {
+	return stubConversation{}, nil
+}
+
+type stubConversation struct{}
+
+func (stubConversation) Next(ctx context.Context, req *usersimulation.TurnRequest) (*usersimulation.Decision, error) {
+	return &usersimulation.Decision{Stop: true}, nil
+}
+
+func (stubConversation) Close() error {
+	return nil
+}
+
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := newOptions()
 
@@ -44,11 +62,13 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, opts.evalResultManager)
 	assert.NotNil(t, opts.metricManager)
 	assert.NotNil(t, opts.registry)
+	assert.NotNil(t, opts.metricRegistry)
 	assert.Nil(t, opts.evalService)
 	assert.Nil(t, opts.callbacks)
 	assert.Nil(t, opts.evalCaseParallelism)
 	assert.Nil(t, opts.evalCaseParallelInferenceEnabled)
 	assert.Nil(t, opts.evalCaseParallelEvaluationEnabled)
+	assert.False(t, opts.runDetailsEnabled)
 }
 
 func TestWithEvalSetManager(t *testing.T) {
@@ -79,11 +99,24 @@ func TestWithRegistry(t *testing.T) {
 	assert.Equal(t, custom, opts.registry)
 }
 
+func TestWithMetricRegistry(t *testing.T) {
+	custom := metricregistry.New()
+	opts := newOptions(WithMetricRegistry(custom))
+
+	assert.Equal(t, custom, opts.metricRegistry)
+}
+
 func TestWithEvaluationService(t *testing.T) {
 	custom := stubService{}
 	opts := newOptions(WithEvaluationService(custom))
 
 	assert.Equal(t, custom, opts.evalService)
+}
+
+func TestWithUserSimulator(t *testing.T) {
+	custom := stubSimulator{}
+	opts := newOptions(WithUserSimulator(custom))
+	assert.Equal(t, custom, opts.userSimulator)
 }
 
 func TestWithCallbacks(t *testing.T) {
@@ -108,6 +141,15 @@ func TestWithJudgeRunner(t *testing.T) {
 func TestWithNumRuns(t *testing.T) {
 	opts := newOptions(WithNumRuns(5))
 	assert.Equal(t, 5, opts.numRuns)
+}
+
+func TestWithNumRunsParallelEnabled(t *testing.T) {
+	opts := newOptions(WithNumRunsParallelEnabled(true))
+	assert.NotNil(t, opts.numRunsParallelEnabled)
+	if opts.numRunsParallelEnabled == nil {
+		return
+	}
+	assert.True(t, *opts.numRunsParallelEnabled)
 }
 
 func TestWithEvalCaseParallelism(t *testing.T) {
@@ -137,6 +179,11 @@ func TestWithEvalCaseParallelEvaluationEnabled(t *testing.T) {
 	assert.True(t, *opts.evalCaseParallelEvaluationEnabled)
 }
 
+func TestWithRunDetailsEnabled(t *testing.T) {
+	opts := newOptions(WithRunDetailsEnabled(true))
+	assert.True(t, opts.runDetailsEnabled)
+}
+
 func TestOptionsValidateRejectsNilOptions(t *testing.T) {
 	var opts *options
 
@@ -154,6 +201,16 @@ func TestOptionsValidateRejectsNilRegistry(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "registry is nil")
+}
+
+func TestOptionsValidateRejectsNilMetricRegistry(t *testing.T) {
+	opts := newOptions()
+	opts.metricRegistry = nil
+
+	err := opts.validate(false)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "metric registry is nil")
 }
 
 func TestOptionsValidateRejectsNilEvalServiceWhenRequired(t *testing.T) {

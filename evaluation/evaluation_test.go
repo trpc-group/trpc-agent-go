@@ -15,9 +15,11 @@ import (
 	"os"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	evalresultlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local"
@@ -30,6 +32,7 @@ import (
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -91,6 +94,72 @@ func (f *fakeService) Close() error {
 
 type countingService struct {
 	closed int32
+}
+
+type blockingRunService struct {
+	release     chan struct{}
+	started     chan struct{}
+	inFlight    int32
+	maxInFlight int32
+}
+
+func newBlockingRunService() *blockingRunService {
+	return &blockingRunService{
+		release: make(chan struct{}),
+		started: make(chan struct{}, 16),
+	}
+}
+
+func (s *blockingRunService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
+	current := atomic.AddInt32(&s.inFlight, 1)
+	updateMaxInt32(&s.maxInFlight, current)
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		atomic.AddInt32(&s.inFlight, -1)
+		return nil, ctx.Err()
+	case <-s.release:
+	}
+	atomic.AddInt32(&s.inFlight, -1)
+	return []*service.InferenceResult{{
+		AppName:    req.AppName,
+		EvalSetID:  req.EvalSetID,
+		EvalCaseID: "case",
+		Status:     status.EvalStatusPassed,
+	}}, nil
+}
+
+func (s *blockingRunService) Evaluate(ctx context.Context, req *service.EvaluateRequest, opt ...service.Option) (*service.EvalSetRunResult, error) {
+	return &service.EvalSetRunResult{
+		AppName:   req.AppName,
+		EvalSetID: req.EvalSetID,
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			makeEvalCaseResult(req.EvalSetID, "case", "metric", 1, 0, status.EvalStatusPassed),
+		},
+	}, nil
+}
+
+func (s *blockingRunService) Close() error {
+	return nil
+}
+
+func updateMaxInt32(target *int32, value int32) {
+	for {
+		current := atomic.LoadInt32(target)
+		if current >= value {
+			return
+		}
+		if atomic.CompareAndSwapInt32(target, current, value) {
+			return
+		}
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func (c *countingService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
@@ -279,14 +348,17 @@ func makeEvalCaseResult(evalSetID, caseID string, metricName string, score float
 
 func defaultTestOptions(ae *agentEvaluator) *options {
 	return &options{
-		evalSetManager:    ae.evalSetManager,
-		evalResultManager: ae.evalResultManager,
-		metricManager:     ae.metricManager,
-		registry:          ae.registry,
-		evalService:       ae.evalService,
-		judgeRunner:       ae.judgeRunner,
-		numRuns:           ae.numRuns,
-		runOptions:        append([]agent.RunOption(nil), ae.runOptions...),
+		evalSetManager:         ae.evalSetManager,
+		evalResultManager:      ae.evalResultManager,
+		metricManager:          ae.metricManager,
+		registry:               ae.registry,
+		metricRegistry:         ae.metricRegistry,
+		evalService:            ae.evalService,
+		judgeRunner:            ae.judgeRunner,
+		numRuns:                ae.numRuns,
+		numRunsParallelEnabled: ae.numRunsParallelEnabled,
+		runDetailsEnabled:      ae.runDetailsEnabled,
+		runOptions:             append([]agent.RunOption(nil), ae.runOptions...),
 	}
 }
 
@@ -445,6 +517,47 @@ func TestAgentEvaluatorEvaluateDoesNotOverrideServiceCallOptionsByDefault(t *tes
 	assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelEvaluationEnabled)
 }
 
+func TestAgentEvaluatorEvaluatePassesExpectedRunnerToInferenceAndEvaluate(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+
+	probeSvc := &optionProbeService{}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(registry.New()),
+		WithEvaluationService(probeSvc),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+
+	expected := stubRunner{}
+	_, err = ae.Evaluate(ctx, evalSetID, WithExpectedRunner(expected))
+	assert.NoError(t, err)
+
+	assert.NotNil(t, probeSvc.lastInferenceOptions)
+	if assert.NotNil(t, probeSvc.lastInferenceOptions) {
+		assert.Equal(t, expected, probeSvc.lastInferenceOptions.ExpectedRunner)
+	}
+	assert.NotNil(t, probeSvc.lastEvaluateOptions)
+	if assert.NotNil(t, probeSvc.lastEvaluateOptions) {
+		assert.Equal(t, expected, probeSvc.lastEvaluateOptions.ExpectedRunner)
+	}
+}
+
 func TestAgentEvaluatorClose_CollectsErrors(t *testing.T) {
 	ev, err := New(
 		"app",
@@ -489,6 +602,7 @@ func TestAgentEvaluatorEvaluateAttachesInvocation(t *testing.T) {
 		metricManager:     metricinmemory.New(),
 		evalResultManager: evalresultinmemory.New(),
 		registry:          registry.New(),
+		metricRegistry:    metricregistry.New(),
 		numRuns:           1,
 	}
 
@@ -681,6 +795,78 @@ func TestAgentEvaluatorEvaluateAppliesPerCallNumRuns(t *testing.T) {
 
 	assert.Len(t, svc.inferenceRequests, 2)
 	assert.Len(t, svc.evaluateRequests, 2)
+}
+
+func TestAgentEvaluatorRunEvaluationExecutesRunsConcurrently(t *testing.T) {
+	ctx := context.Background()
+	svc := newBlockingRunService()
+	ae := &agentEvaluator{
+		appName:                "app",
+		evalService:            svc,
+		metricManager:          &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		evalResultManager:      evalresultinmemory.New(),
+		numRuns:                3,
+		numRunsParallelEnabled: boolPtr(true),
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ae.runEvaluation(ctx, "set", defaultTestOptions(ae))
+		done <- err
+	}()
+	timeout := time.NewTimer(2 * time.Second)
+	defer timeout.Stop()
+	for atomic.LoadInt32(&svc.maxInFlight) < 2 {
+		select {
+		case err := <-done:
+			assert.NoError(t, err)
+			t.Fatal("expected at least two runs to overlap before evaluation completed")
+		case <-svc.started:
+		case <-timeout.C:
+			close(svc.release)
+			err := <-done
+			assert.NoError(t, err)
+			assert.GreaterOrEqual(t, atomic.LoadInt32(&svc.maxInFlight), int32(2))
+			t.Fatal("timed out waiting for concurrent runs")
+		}
+	}
+	close(svc.release)
+	err := <-done
+	assert.NoError(t, err)
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&svc.maxInFlight), int32(2))
+}
+
+func TestAgentEvaluatorRunEvaluationRequiresParallelEnabled(t *testing.T) {
+	ctx := context.Background()
+	svc := newBlockingRunService()
+	ae := &agentEvaluator{
+		appName:           "app",
+		evalService:       svc,
+		metricManager:     &fakeMetricManager{metrics: map[string]*metric.EvalMetric{}},
+		evalResultManager: evalresultinmemory.New(),
+		numRuns:           3,
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ae.runEvaluation(ctx, "set", defaultTestOptions(ae))
+		done <- err
+	}()
+	select {
+	case <-svc.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the first run to start")
+	}
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+		t.Fatal("expected serial execution to block on the first run")
+	case <-svc.started:
+		t.Fatal("expected numRuns to remain serial by default")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(svc.release)
+	err := <-done
+	assert.NoError(t, err)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&svc.maxInFlight))
 }
 
 func TestAgentEvaluatorEvaluateRejectsInvalidPerCallOptions(t *testing.T) {
@@ -940,6 +1126,7 @@ func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
 	assert.Len(t, caseResult.MetricResults, 1)
 	assert.InDelta(t, 1.0, caseResult.MetricResults[0].Score, 0.001)
 	assert.Len(t, caseResult.EvalCaseResults, 2)
+	assert.Nil(t, caseResult.RunDetails)
 
 	assert.Len(t, svc.inferenceRequests, 2)
 	assert.Len(t, svc.evaluateRequests, 2)
@@ -951,6 +1138,114 @@ func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
 		if req.EvaluateConfig != nil {
 			assert.Len(t, req.EvaluateConfig.EvalMetrics, 1)
 			assert.Equal(t, metricName, req.EvaluateConfig.EvalMetrics[0].MetricName)
+		}
+	}
+}
+
+func TestAgentEvaluatorEvaluateIncludesRunDetailsWhenEnabled(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-1"
+	metricName := "metric"
+	metricMgr := metricinmemory.New()
+	err := metricMgr.Add(ctx, appName, evalSetID, &metric.EvalMetric{MetricName: metricName, Threshold: 1})
+	assert.NoError(t, err)
+	evalSetMgr := evalsetinmemory.New()
+	_, err = evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	runOneTrace := &agenttrace.Trace{RootInvocationID: "root-1", SessionID: "session-1", Status: agenttrace.TraceStatusCompleted}
+	runTwoTrace := &agenttrace.Trace{RootInvocationID: "root-2", SessionID: "session-2", Status: agenttrace.TraceStatusCompleted}
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{
+			{{
+				AppName:         appName,
+				EvalSetID:       evalSetID,
+				EvalCaseID:      caseID,
+				Inferences:      []*evalset.Invocation{{InvocationID: "inv-1"}},
+				SessionID:       "session-1",
+				UserID:          "user-1",
+				Status:          status.EvalStatusPassed,
+				ExecutionTraces: []*agenttrace.Trace{runOneTrace},
+			}},
+			{{
+				AppName:         appName,
+				EvalSetID:       evalSetID,
+				EvalCaseID:      caseID,
+				Inferences:      []*evalset.Invocation{{InvocationID: "inv-2"}},
+				SessionID:       "session-2",
+				UserID:          "user-2",
+				Status:          status.EvalStatusPassed,
+				ExecutionTraces: []*agenttrace.Trace{runTwoTrace},
+			}},
+		},
+		evaluateResults: []*service.EvalSetRunResult{
+			{
+				AppName:   appName,
+				EvalSetID: evalSetID,
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					makeEvalCaseResult(evalSetID, caseID, metricName, 0.5, 1, status.EvalStatusFailed),
+				},
+			},
+			{
+				AppName:   appName,
+				EvalSetID: evalSetID,
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					makeEvalCaseResult(evalSetID, caseID, metricName, 1.5, 1, status.EvalStatusPassed),
+				},
+			},
+		},
+	}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithMetricManager(metricMgr),
+		WithEvalSetManager(evalSetMgr),
+		WithRegistry(registry.New()),
+		WithEvaluationService(svc),
+		WithNumRuns(2),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+	evaluationResult, err := ae.Evaluate(ctx, evalSetID, WithRunDetailsEnabled(true))
+	assert.NoError(t, err)
+	if !assert.Len(t, evaluationResult.EvalCases, 1) {
+		return
+	}
+	caseResult := evaluationResult.EvalCases[0]
+	if !assert.Len(t, caseResult.RunDetails, 2) {
+		return
+	}
+	assert.Equal(t, 1, caseResult.RunDetails[0].RunID)
+	assert.Equal(t, 1, caseResult.EvalCaseResults[0].RunID)
+	if assert.NotNil(t, caseResult.RunDetails[0].Inference) {
+		assert.Equal(t, "session-1", caseResult.RunDetails[0].Inference.SessionID)
+		assert.Equal(t, "user-1", caseResult.RunDetails[0].Inference.UserID)
+		assert.Equal(t, status.EvalStatusPassed, caseResult.RunDetails[0].Inference.Status)
+		if assert.Len(t, caseResult.RunDetails[0].Inference.Inferences, 1) {
+			assert.Equal(t, "inv-1", caseResult.RunDetails[0].Inference.Inferences[0].InvocationID)
+		}
+		if assert.Len(t, caseResult.RunDetails[0].Inference.ExecutionTraces, 1) {
+			assert.Equal(t, "root-1", caseResult.RunDetails[0].Inference.ExecutionTraces[0].RootInvocationID)
+			assert.Equal(t, "session-1", caseResult.RunDetails[0].Inference.ExecutionTraces[0].SessionID)
+		}
+	}
+	assert.Equal(t, 2, caseResult.RunDetails[1].RunID)
+	assert.Equal(t, 2, caseResult.EvalCaseResults[1].RunID)
+	if assert.NotNil(t, caseResult.RunDetails[1].Inference) {
+		assert.Equal(t, "session-2", caseResult.RunDetails[1].Inference.SessionID)
+		assert.Equal(t, "user-2", caseResult.RunDetails[1].Inference.UserID)
+		if assert.Len(t, caseResult.RunDetails[1].Inference.Inferences, 1) {
+			assert.Equal(t, "inv-2", caseResult.RunDetails[1].Inference.Inferences[0].InvocationID)
+		}
+		if assert.Len(t, caseResult.RunDetails[1].Inference.ExecutionTraces, 1) {
+			assert.Equal(t, "root-2", caseResult.RunDetails[1].Inference.ExecutionTraces[0].RootInvocationID)
+			assert.Equal(t, "session-2", caseResult.RunDetails[1].Inference.ExecutionTraces[0].SessionID)
 		}
 	}
 }
@@ -1120,6 +1415,44 @@ func TestAgentEvaluatorRunEvaluationInjectsJudgeRunnerIntoLLMJudgeMetrics(t *tes
 		return
 	}
 	assert.Equal(t, judgeRunner, gotMetric.Criterion.LLMJudge.JudgeRunnerOptions.Runner)
+}
+
+func TestAgentEvaluatorRunEvaluationPassesMetricRegistryToService(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	svc := &fakeService{
+		inferenceResults: [][]*service.InferenceResult{{}},
+	}
+	metricMgr := metricinmemory.New()
+	err := metricMgr.Add(ctx, appName, evalSetID, &metric.EvalMetric{MetricName: "metric"})
+	if !assert.NoError(t, err) {
+		return
+	}
+	customMetricRegistry := metricregistry.New()
+	res, err := New(
+		appName,
+		&stubRunner{},
+		WithEvaluationService(svc),
+		WithMetricManager(metricMgr),
+		WithMetricRegistry(customMetricRegistry),
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	ae, ok := res.(*agentEvaluator)
+	if !assert.True(t, ok) {
+		return
+	}
+
+	_, err = ae.runEvaluation(ctx, evalSetID, defaultTestOptions(ae))
+	if !assert.NoError(t, err) {
+		return
+	}
+	if !assert.Len(t, svc.evaluateOptions, 1) {
+		return
+	}
+	assert.Equal(t, customMetricRegistry, svc.evaluateOptions[0].MetricRegistry)
 }
 
 func TestAgentEvaluatorRunEvaluationNilRunResult(t *testing.T) {

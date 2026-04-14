@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -39,7 +40,10 @@ func (m *mockRepo) Path(name string) (string, error) { return "", nil }
 func TestLoadTool_Call_ValidatesAndDelta(t *testing.T) {
 	repo := &mockRepo{ok: map[string]bool{"calc": true}}
 	lt := NewLoadTool(repo)
-	inv := &agent.Invocation{AgentName: "tester"}
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session:   &session.Session{State: session.StateMap{}},
+	}
 
 	// include_all_docs path
 	args := loadInput{Skill: "calc", IncludeAllDocs: true}
@@ -51,12 +55,24 @@ func TestLoadTool_Call_ValidatesAndDelta(t *testing.T) {
 	delta := lt.StateDeltaForInvocation(inv, "call-1", b, nil)
 	require.Equal(t, []byte("1"), delta[skill.LoadedKey("tester", "calc")])
 	require.Equal(t, []byte("*"), delta[skill.DocsKey("tester", "calc")])
+	require.Equal(
+		t,
+		`["calc"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
+	inv.Session.State[skill.LoadedOrderKey("tester")] =
+		delta[skill.LoadedOrderKey("tester")]
 
 	// docs array path
 	args = loadInput{Skill: "calc", Docs: []string{"A.md"}}
 	b, _ = json.Marshal(args)
 	delta = lt.StateDeltaForInvocation(inv, "call-2", b, nil)
 	require.NotNil(t, delta[skill.DocsKey("tester", "calc")])
+	require.Equal(
+		t,
+		`["calc"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
 
 	// only loaded, no docs selection
 	args = loadInput{Skill: "calc"}
@@ -65,6 +81,11 @@ func TestLoadTool_Call_ValidatesAndDelta(t *testing.T) {
 	require.Equal(t, []byte("1"), delta[skill.LoadedKey("tester", "calc")])
 	_, ok := delta[skill.DocsKey("tester", "calc")]
 	require.False(t, ok)
+	require.Equal(
+		t,
+		`["calc"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
 }
 
 func TestLoadTool_Call_Errors(t *testing.T) {
@@ -104,6 +125,38 @@ func TestLoadTool_Call_NoRepoSkipsValidation(t *testing.T) {
 	require.Equal(t, "loaded: x", out)
 }
 
+func TestAppendLoadedOrderStateDelta(t *testing.T) {
+	delta := appendLoadedOrderStateDelta(nil, "tester", nil, "calc")
+	require.Equal(
+		t,
+		`["calc"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
+
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedOrderKey("tester"): []byte(`["a","b"]`),
+			},
+		},
+	}
+	delta = appendLoadedOrderStateDelta(
+		inv,
+		"tester",
+		map[string][]byte{},
+		"a",
+	)
+	require.Equal(
+		t,
+		`["b","a"]`,
+		string(delta[skill.LoadedOrderKey("tester")]),
+	)
+
+	delta = appendLoadedOrderStateDelta(inv, "tester", nil, " ")
+	require.Nil(t, delta)
+}
+
 func TestSkillNameEnum_SortsAndSkipsEmpty(t *testing.T) {
 	repo := &mockRepo{
 		ok: map[string]bool{},
@@ -134,4 +187,66 @@ func TestSkillNameEnum_AllEmptyNamesReturnsNil(t *testing.T) {
 		},
 	}
 	require.Nil(t, skillNameEnum(repo))
+}
+
+func TestLoadTool_Call_ContextAwareRepoHonorsFilter(t *testing.T) {
+	base := &mockRepo{
+		ok: map[string]bool{
+			"alpha": true,
+			"beta":  true,
+		},
+		sums: []skill.Summary{
+			{Name: "alpha"},
+			{Name: "beta"},
+		},
+	}
+	repo := skill.NewFilteredRepository(
+		base,
+		func(ctx context.Context, summary skill.Summary) bool {
+			userID, _ := agent.GetRuntimeStateValueFromContext[string](
+				ctx,
+				"user_id",
+			)
+			return userID == "user-a" && summary.Name == "alpha"
+		},
+	)
+	lt := NewLoadTool(repo)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(agent.WithInvocationRunOptions(agent.RunOptions{
+			RuntimeState: map[string]any{"user_id": "user-a"},
+		})),
+	)
+
+	_, err := lt.Call(ctx, []byte(`{"skill":"alpha"}`))
+	require.NoError(t, err)
+
+	_, err = lt.Call(ctx, []byte(`{"skill":"beta"}`))
+	require.ErrorContains(t, err, "unknown skill: beta")
+}
+
+func TestSkillNameEnum_ContextAwareRepoReturnsNil(t *testing.T) {
+	repo := skill.NewFilteredRepository(
+		&mockRepo{
+			ok: map[string]bool{"alpha": true},
+			sums: []skill.Summary{
+				{Name: "alpha"},
+			},
+		},
+		func(context.Context, skill.Summary) bool { return true },
+	)
+	require.Nil(t, skillNameEnum(repo))
+}
+
+func TestSkillNameEnum_NilFilterWrapperKeepsPlainRepoEnum(t *testing.T) {
+	repo := skill.NewFilteredRepository(
+		&mockRepo{
+			ok: map[string]bool{"alpha": true},
+			sums: []skill.Summary{
+				{Name: "alpha"},
+			},
+		},
+		nil,
+	)
+	require.Equal(t, []any{"alpha"}, skillNameEnum(repo))
 }

@@ -54,6 +54,12 @@ genConfig := model.GenerationConfig{
 }
 ```
 
+如果没有显式传入 `llmagent.WithGenerationConfig(...)`，`LLMAgent`
+默认会透传零值 `model.GenerationConfig{}`，因此默认是非流式
+（`Stream=false`）。如果你需要流式输出，请显式设置
+`Stream: true`，或在单次请求上使用 `agent.WithStream(true)`。
+某些上层封装可能会自行设置不同的默认值，例如 OpenClaw 会显式开启流式。
+
 ### 创建 LLMAgent
 
 使用模型实例和配置创建 LLMAgent，同时设置 Agent 的 Description 与 Instruction。
@@ -427,6 +433,38 @@ agent := llmagent.New(
 - 根据任务的复杂度和预期行为设置限制值。
 - 可以在 [examples/max_limits](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/max_limits) 查看完整示例。
 
+### Tool 调用重试
+
+如果你希望 LLMAgent 在工具调用失败后自动补一次或多次重试，可以配置 `llmagent.WithToolCallRetryPolicy(...)`。
+
+```go
+policy := &tool.RetryPolicy{
+    MaxAttempts:     2,
+    InitialInterval: 200 * time.Millisecond,
+    BackoffFactor:   2.0,
+    MaxInterval:     time.Second,
+}
+
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{myTool}),
+    llmagent.WithToolCallRetryPolicy(policy),
+)
+```
+
+说明：
+
+- 默认关闭；未配置时行为与历史版本保持一致。
+- 当前仅对 `CallableTool` 生效；`StreamableTool` 暂不支持。
+- 重试只作用于当前这次工具调用，不会重跑整个 Agent。
+- 默认判定只重试常见瞬时 raw error，如 `io.EOF`、`io.ErrUnexpectedEOF`、网络超时。
+- 如果需要把结果级失败也纳入重试，可通过 `tool.RetryPolicy.RetryOn` 自定义。
+
+可运行示例：
+
+- [examples/llmagent_tool_call_retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/llmagent_tool_call_retry)
+
 ### 处理事件流
 
 `runner.Run()` 返回的 `eventChan` 是一个事件通道，Agent 执行过程中会持续向这个通道发送 Event 对象。
@@ -465,13 +503,18 @@ for event := range eventChan {
         }
     }
 
-    // 检查是否完成（注意：工具调用完成时不应该 break）
+    // 检查当前这条响应是否已完整结束
     if event.IsFinalResponse() {
         fmt.Println()
         break
     }
 }
 ```
+
+上面的示例使用 `event.IsFinalResponse()`，是因为它只关心“当前这条回复何时
+完整输出完”。如果你需要等待整次 `Runner.Run` 真正结束，例如
+`tool.response` 后可能还有后续处理，或在 GraphAgent 中还要等待图上其他节点
+完成，请改用 `event.IsRunnerCompletion()` 作为退出条件。
 
 该示例的完整代码可见 [examples/runner](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
 
@@ -1135,3 +1178,228 @@ llm := llmagent.New(
 - 内存版 `UpdateUserState` 出于安全设计禁止写 `temp:*`；需要会话内
   临时值时，通过 `invocation.Session.SetState` 写入（例如通过回调）。
 - 占位符是在“请求时”解析；只要你换了存储的值，下一次模型请求就会用新值，无需重建 Agent。
+
+## 静态结构导出
+
+框架提供了 Agent 的静态结构导出能力，可用于结构检查、可视化、配置工具和结构诊断等需要稳定节点图与 surface 基线的场景。
+
+可以通过 `agent/structure` 导出规范化快照：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+
+snapshot, err := structure.Export(ctx, llmAgent)
+if err != nil {
+    log.Fatalf("导出结构失败: %v", err)
+}
+
+fmt.Println(snapshot.StructureID)
+fmt.Println(snapshot.EntryNodeID)
+fmt.Println(len(snapshot.Nodes), len(snapshot.Edges), len(snapshot.Surfaces))
+```
+
+导出的快照包含：
+
+- `Nodes`：当前 Agent 结构中的稳定静态节点
+- `Edges`：节点之间静态上可能出现的连接
+- `Surfaces`：稳定可编辑的基线面，例如 `instruction`、`model`、`tool`、`skill`
+
+完整示例见 [examples/graph/structure_export](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/structure_export)。
+
+## 按 `nodeID` 覆盖运行时 surface
+
+除了 `agent.WithInstruction(...)`、`agent.WithGlobalInstruction(...)` 这种“整次
+`runner.Run(...)` 调用级”的覆盖方式之外，框架还支持在一次运行中按稳定
+`nodeID` 精确覆盖指定节点的运行时 surface。
+
+这个能力适合这些场景：
+
+- 只想临时改某个 graph 节点的指令，不影响整棵 Agent。
+- 同一次 `runner.Run(...)` 里，同时给多个节点设置不同的 instruction、few-shot 或 tools。
+- 在 `chain`、`parallel`、`cycle`、`graph`、`team`、`swarm` 等嵌套结构中，精确命中某个子节点。
+
+入口 API：
+
+```go
+var patch agent.SurfacePatch
+patch.SetInstruction("Answer in one short paragraph.")
+patch.SetFewShot([][]model.Message{
+    {
+        model.NewUserMessage("Summarize this report."),
+        model.NewAssistantMessage("Provide a short executive summary first."),
+    },
+})
+
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Please analyze the latest findings."),
+    agent.WithSurfacePatchForNode(nodeID, patch),
+)
+```
+
+### 使用步骤
+
+推荐按下面的顺序使用：
+
+1. 先通过 `structure.Export(...)` 导出静态结构快照。
+2. 从 `snapshot.EntryNodeID` 或 `snapshot.Nodes` 中找到目标节点的稳定 `nodeID`。
+3. 构造 `agent.SurfacePatch`，只设置这次运行需要覆盖的 surface。
+4. 在 `runner.Run(...)` 中传入一个或多个 `agent.WithSurfacePatchForNode(...)`。
+
+示例：
+
+```go
+snapshot, err := structure.Export(ctx, workflowAgent)
+if err != nil {
+    return err
+}
+
+var plannerNodeID string
+for _, node := range snapshot.Nodes {
+    if node.Name == "planner" {
+        plannerNodeID = node.NodeID
+        break
+    }
+}
+if plannerNodeID == "" {
+    return errors.New("planner node not found")
+}
+
+var patch agent.SurfacePatch
+patch.SetInstruction("Plan in at most three steps.")
+
+_, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Arrange a trip to Hangzhou next Friday."),
+    agent.WithSurfacePatchForNode(plannerNodeID, patch),
+)
+```
+
+注意事项：
+
+- 调用方应优先使用 `structure.Export(...)` 导出的 `nodeID`，不要依赖手写路径。
+- 这个能力只对当前这一次 `runner.Run(...)` 生效，不会修改 Agent 的静态定义。
+- `agent.WithInstruction(...)` / `agent.WithGlobalInstruction(...)` 仍然保留，适合“整次运行统一覆盖根 Agent 提示词”的场景；需要按节点精确控制时，再使用 `WithSurfacePatchForNode(...)`。
+
+### 可覆盖的 surface
+
+`SurfacePatch` 目前提供这些 setter：
+
+- `SetInstruction(string)`：覆盖该节点本次运行的 instruction。
+- `SetGlobalInstruction(string)`：覆盖该节点本次运行的 global instruction。
+- `SetFewShot([][]model.Message)`：覆盖该节点本次运行的 few-shot 示例。
+- `SetModel(model.Model)`：覆盖该节点本次运行使用的模型实例。
+- `SetTools([]tool.Tool)`：覆盖该节点本次运行的工具 surface。它表达的是“替换本次运行可见的工具集合”，不是只改工具描述文本。
+- `SetSkillRepository(skill.Repository)`：覆盖该节点本次运行的 skill repository；传 `nil` 可显式禁用该节点的 skill surface。
+
+不是每种节点都支持全部 surface，常见情况如下：
+
+- 根 `LLMAgent`：支持 `instruction`、`global_instruction`、`few_shot`、`model`、`tool`、`skill`。
+- graph 的 LLM 节点：支持 `instruction`、`few_shot`、`model`、`tool`。
+- graph 的 Tools 节点：支持 `tool`。
+- graph 子 Agent、`chain`、`parallel`、`cycle`、`team`、`swarm` 中的子节点：是否可覆盖，取决于命中的那个具体子节点本身支持哪些 surface。
+
+### 在同一次运行中覆盖多个节点
+
+如果要在同一次 `runner.Run(...)` 里同时覆盖多个节点，直接重复传多个
+`agent.WithSurfacePatchForNode(...)` 即可，不需要额外的批量 API。
+
+```go
+snapshot, err := structure.Export(ctx, workflowAgent)
+if err != nil {
+    return err
+}
+
+nodeIDs := make(map[string]string)
+for _, node := range snapshot.Nodes {
+    nodeIDs[node.Name] = node.NodeID
+}
+
+var plannerPatch agent.SurfacePatch
+plannerPatch.SetInstruction("Produce no more than three candidate plans.")
+
+var reviewerPatch agent.SurfacePatch
+reviewerPatch.SetInstruction("Reject any plan that lacks cost analysis.")
+
+var toolsPatch agent.SurfacePatch
+toolsPatch.SetTools([]tool.Tool{searchTool, priceTool})
+
+_, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Plan a team offsite in Suzhou next month."),
+    agent.WithSurfacePatchForNode(nodeIDs["planner"], plannerPatch),
+    agent.WithSurfacePatchForNode(nodeIDs["reviewer"], reviewerPatch),
+    agent.WithSurfacePatchForNode(nodeIDs["search_tools"], toolsPatch),
+)
+```
+
+对同一 `nodeID` 多次传 `WithSurfacePatchForNode(...)` 时，框架会按 surface 类型合并：
+
+- 不同 surface 类型彼此合并。
+- 同一种 surface 类型后传入的值覆盖先传入的值。
+
+### 组合结构与嵌套结构
+
+这套能力不只适用于单个 `LLMAgent`。在这些结构里也建议使用同样的方法：
+
+- `graph`：可覆盖图中的 LLM 节点、Tools 节点，以及图中挂载的子 Agent 根节点。
+- `chain`、`parallel`、`cycle`：可覆盖任意导出出来的子节点。
+- `team` / `swarm`：可覆盖 `coordinator`、成员节点，以及 transfer 后到达的成员节点。
+
+在这些场景里，最稳妥的做法仍然是：
+
+- 先 `structure.Export(...)`
+- 再使用导出的 `nodeID`
+- 最后在 `runner.Run(...)` 中传入 patch
+
+这样用户只需要记住一套规则：`nodeID` 由结构导出提供，运行时 patch 由 `WithSurfacePatchForNode(...)` 提供。
+
+## 执行图导出
+
+框架可以为单次 `runner.Run` 调用导出执行图，用来观察这次运行里哪些节点真的执行了、各个步骤之间如何依赖，以及每个步骤看到的输入和输出快照。
+
+需要在运行时显式开启：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+r := runner.NewRunner("demo-app", ag)
+events, err := r.Run(
+    ctx,
+    "user-1",
+    "session-1",
+    model.NewUserMessage("hello"),
+    agent.WithExecutionTraceEnabled(true),
+)
+if err != nil {
+    log.Fatalf("运行失败: %v", err)
+}
+for evt := range events {
+    if evt != nil && evt.IsRunnerCompletion() && evt.ExecutionTrace != nil {
+        fmt.Println(evt.ExecutionTrace.RootAgentName)
+        fmt.Println(evt.ExecutionTrace.Status)
+        fmt.Println(len(evt.ExecutionTrace.Steps))
+    }
+}
+```
+
+执行图挂在 runner completion event 上，属于进程内工件，默认不会参与序列化。
+
+每个步骤都会带上这些稳定字段：
+
+- `NodeID`：本次执行对应的静态节点路径
+- `PredecessorStepIDs`：这次运行里该步骤的直接前驱步骤
+- `Input` 和 `Output`：步骤输入输出的稳定文本快照
+- `Error`：步骤失败时记录的终态错误
+
+完整示例见 [examples/graph/execution_trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/execution_trace)。

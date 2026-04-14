@@ -13,12 +13,14 @@ package graph
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -116,6 +118,13 @@ type Node struct {
 	// Agent nodes. When empty, StateKeyUserInput is used.
 	userInputKey string
 
+	// instruction stores the static instruction for LLM nodes.
+	instruction string
+	// llmModel stores the static model for LLM nodes.
+	llmModel model.Model
+	// baseTools stores the static tools configured directly on the node.
+	baseTools map[string]tool.Tool
+
 	toolSets             []tool.ToolSet
 	refreshToolSetsOnRun bool
 	// Per-node callbacks for fine-grained control
@@ -154,6 +163,8 @@ type Node struct {
 	modelCallbacks *model.Callbacks
 	// just for tool node.
 	toolCallbacks *tool.Callbacks
+	// toolCallRetryPolicy configures single tool-call retry for tools nodes.
+	toolCallRetryPolicy *tool.RetryPolicy
 
 	// enableParallelTools toggles parallel execution for Tools nodes.
 	// When true, multiple tool calls in a single assistant response are executed concurrently.
@@ -251,6 +262,20 @@ func (g *Graph) Node(id string) (*Node, bool) {
 	return node, exists
 }
 
+// Nodes returns all nodes in the graph sorted by node ID.
+func (g *Graph) Nodes() []*Node {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	nodes := make([]*Node, 0, len(g.nodes))
+	for _, node := range g.nodes {
+		nodes = append(nodes, node)
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].ID < nodes[j].ID
+	})
+	return nodes
+}
+
 // Edges returns all outgoing edges from a node.
 func (g *Graph) Edges(nodeID string) []*Edge {
 	g.mu.RLock()
@@ -271,6 +296,80 @@ func (g *Graph) EntryPoint() string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 	return g.entryPoint
+}
+
+// Instruction returns the static instruction for an LLM node.
+func (n *Node) Instruction() string {
+	return n.instruction
+}
+
+// Model returns the static model for an LLM node.
+func (n *Node) Model() model.Model {
+	return n.llmModel
+}
+
+// AgentEventScope returns the configured event scope for an agent node.
+func (n *Node) AgentEventScope() string {
+	return n.agentEventScope
+}
+
+// HasTools reports whether the node has statically configured tools.
+func (n *Node) HasTools() bool {
+	return len(n.baseTools) > 0 || len(n.toolSets) > 0
+}
+
+// EndTargets returns the concrete end targets declared on the node.
+func (n *Node) EndTargets() []string {
+	if len(n.ends) == 0 {
+		return nil
+	}
+	targets := make([]string, 0, len(n.ends))
+	seen := make(map[string]struct{}, len(n.ends))
+	for _, target := range n.ends {
+		if target == "" || target == End {
+			continue
+		}
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+	return targets
+}
+
+// Tools returns the static visible tools of the node.
+func (n *Node) Tools(ctx context.Context) []tool.Tool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	toolsByName := make(map[string]tool.Tool, len(n.baseTools))
+	for name, currentTool := range n.baseTools {
+		if currentTool == nil || currentTool.Declaration() == nil {
+			continue
+		}
+		toolsByName[name] = currentTool
+	}
+	if n.refreshToolSetsOnRun {
+		for _, toolSet := range n.toolSets {
+			namedToolSet := itool.NewNamedToolSet(toolSet)
+			for _, currentTool := range namedToolSet.Tools(ctx) {
+				if currentTool == nil || currentTool.Declaration() == nil {
+					continue
+				}
+				toolsByName[currentTool.Declaration().Name] = currentTool
+			}
+		}
+	}
+	tools := make([]tool.Tool, 0, len(toolsByName))
+	for _, currentTool := range toolsByName {
+		tools = append(tools, currentTool)
+	}
+	sort.Slice(tools, func(i, j int) bool {
+		return tools[i].Declaration().Name < tools[j].Declaration().Name
+	})
+	return tools
 }
 
 // Schema returns the state schema.
@@ -382,39 +481,67 @@ type ExecutionContext struct {
 	Graph        *Graph
 	EventChan    chan<- *event.Event
 	InvocationID string
-
 	// Invocation is the per-run invocation context. Nodes may use it to
 	// read invocation-scoped state (for example, {invocation:*} placeholders).
 	Invocation *agent.Invocation
-
 	// channels holds the per-execution Pregel channels. These are constructed
 	// from the Graph's static channel definitions when the execution starts
 	// and are never shared across concurrent runs.
 	channels *channel.Manager
-
 	// stateMutex protects State reads/writes.
 	stateMutex sync.RWMutex
 	State      State
-
+	// completionIdentity* carry internal agent-node completion identity when
+	// the public graph state does not expose StateKeyLastResponseID.
+	completionIdentityText string
+	completionIdentity     string
 	// pendingMu protects pendingWrites operations.
 	pendingMu     sync.Mutex
 	pendingWrites []PendingWrite
 	resumed       bool
 	seq           atomic.Int64 // Atomic sequence counter for deterministic replay
-
 	// tasksMutex protects pendingTasks queue operations.
 	tasksMutex   sync.Mutex
 	pendingTasks []*Task
-
 	// versionsSeen tracks which channel versions each node has seen.
 	// Map from nodeID -> channelName -> version number.
 	versionsSeen   map[string]map[string]int64
 	versionsSeenMu sync.RWMutex
-
 	// lastCheckpoint holds the most recent checkpoint used for planning
 	// when resuming. Keeping this per-execution avoids cross-run sharing
 	// when a single Executor is reused concurrently.
 	lastCheckpoint *Checkpoint
+	// traceMu protects execution trace planning and task-to-step bookkeeping.
+	traceMu sync.Mutex
+	// traceChannelSources tracks the source step ids currently attached to a channel.
+	traceChannelSources map[string][]string
+	// traceChannelSourceSteps tracks the step number for last-value/ephemeral provenance.
+	traceChannelSourceSteps map[string]int
+	// traceBarrierChannelSources tracks the latest source step id for each barrier sender.
+	traceBarrierChannelSources map[string]map[string]string
+	// traceStepIDByTaskID tracks the real trace step created for each task.
+	traceStepIDByTaskID map[string]string
+}
+
+func (e *ExecutionContext) setCompletionIdentity(text, identity string) {
+	if e == nil {
+		return
+	}
+	e.stateMutex.Lock()
+	defer e.stateMutex.Unlock()
+	e.completionIdentityText = text
+	e.completionIdentity = identity
+}
+
+func (e *ExecutionContext) snapshotCompletionState(
+	fields map[string]StateField,
+) (State, string, string) {
+	if e == nil {
+		return nil, "", ""
+	}
+	e.stateMutex.RLock()
+	defer e.stateMutex.RUnlock()
+	return e.State.deepCopy(false, fields), e.completionIdentityText, e.completionIdentity
 }
 
 // Command represents a command that combines state updates with routing.

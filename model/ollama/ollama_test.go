@@ -12,6 +12,7 @@ package ollama
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -62,6 +63,68 @@ func Test_Model_Info(t *testing.T) {
 	m := New("llama3.2:latest")
 	info := m.Info()
 	assert.Equal(t, "llama3.2:latest", info.Name)
+}
+
+func TestModel_CallbackPanicsAreRecovered(t *testing.T) {
+	t.Run("request callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatRequestCallback: func(ctx context.Context, req *api.ChatRequest) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatRequestCallback(context.Background(), &api.ChatRequest{})
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("response callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatResponseCallback: func(ctx context.Context, req *api.ChatRequest, resp *api.ChatResponse) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatResponseCallback(context.Background(), &api.ChatRequest{}, &api.ChatResponse{})
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("chunk callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatChunkCallback: func(ctx context.Context, req *api.ChatRequest, chunk *api.ChatResponse) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatChunkCallback(context.Background(), &api.ChatRequest{}, &api.ChatResponse{})
+		})
+		assert.True(t, callbackCalled)
+	})
+
+	t.Run("stream complete callback", func(t *testing.T) {
+		callbackCalled := false
+		m := &Model{
+			chatStreamCompleteCallback: func(ctx context.Context, req *api.ChatRequest, err error) {
+				callbackCalled = true
+				panic("boom")
+			},
+		}
+
+		require.NotPanics(t, func() {
+			m.runChatStreamCompleteCallback(context.Background(), &api.ChatRequest{}, nil)
+		})
+		assert.True(t, callbackCalled)
+	})
 }
 
 // TestNew tests the constructor with various options.
@@ -515,6 +578,7 @@ func Test_HandleNonStreamingResponse(t *testing.T) {
 	}
 
 	assert.NotNil(t, got)
+	assert.NotEmpty(t, got.ID)
 	assert.True(t, got.Done)
 	assert.Nil(t, got.Error)
 	assert.Equal(t, "Hello!", got.Choices[0].Message.Content)
@@ -587,14 +651,15 @@ func Test_HandleStreamingResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var chunkCalled, streamCompleteCalled bool
+	var chunkCalled bool
+	streamCompleteCalled := make(chan struct{})
 	m := New("gpt-oss:20b",
 		WithHost(srv.URL),
 		WithChatChunkCallback(func(ctx context.Context, req *api.ChatRequest, chunk *api.ChatResponse) {
 			chunkCalled = true
 		}),
 		WithChatStreamCompleteCallback(func(ctx context.Context, req *api.ChatRequest, err error) {
-			streamCompleteCalled = true
+			close(streamCompleteCalled)
 		}),
 	)
 
@@ -613,10 +678,21 @@ func Test_HandleStreamingResponse(t *testing.T) {
 
 	var partials int
 	var final *model.Response
+	var responseID string
 	for resp := range ch {
+		assert.NotEmpty(t, resp.ID)
+		if responseID == "" {
+			responseID = resp.ID
+		}
+		assert.Equal(t, responseID, resp.ID)
 		if resp.Done {
 			final = resp
-			time.Sleep(time.Second)
+			select {
+			case <-streamCompleteCalled:
+				// Success.
+			default:
+				t.Fatal("stream complete callback must run before final response is emitted")
+			}
 			break
 		}
 		if resp.IsPartial {
@@ -626,9 +702,148 @@ func Test_HandleStreamingResponse(t *testing.T) {
 
 	assert.Equal(t, partials, 2)
 	assert.NotNil(t, final)
+	assert.NotEmpty(t, responseID)
 	assert.True(t, final.Done)
 	assert.True(t, chunkCalled)
-	assert.True(t, streamCompleteCalled)
+	select {
+	case <-streamCompleteCalled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
+}
+
+// Test_HandleStreamingResponseWithoutFinalChunk tests a stream that ends
+// without a terminal done chunk.
+func Test_HandleStreamingResponseWithoutFinalChunk(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/chat") && !strings.HasPrefix(r.URL.Path, "/api/show") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/show" {
+			resp := map[string]any{
+				"model_info": map[string]any{
+					"gptoss.context_length": 131072,
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		require.True(t, ok)
+		chunk := map[string]any{
+			"model":      "llama3.2:latest",
+			"created_at": "2024-01-01T00:00:00Z",
+			"message":    map[string]any{"role": "assistant", "content": "Hello"},
+			"done":       false,
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(chunk))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	streamCompleteCalled := make(chan error, 1)
+	m := New("gpt-oss:20b",
+		WithHost(srv.URL),
+		WithChatStreamCompleteCallback(func(ctx context.Context,
+			req *api.ChatRequest, err error) {
+			streamCompleteCalled <- err
+		}),
+	)
+
+	const responseID = "ollama-stream-no-final"
+	responseChan := make(chan *model.Response, 2)
+	m.handleStreamingResponse(
+		context.Background(),
+		api.ChatRequest{},
+		responseID,
+		responseChan,
+	)
+	close(responseChan)
+
+	var responses []*model.Response
+	for resp := range responseChan {
+		responses = append(responses, resp)
+	}
+
+	require.Len(t, responses, 1)
+	assert.Equal(t, responseID, responses[0].ID)
+	assert.True(t, responses[0].IsPartial)
+	assert.False(t, responses[0].Done)
+	select {
+	case streamErr := <-streamCompleteCalled:
+		assert.NoError(t, streamErr)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
+}
+
+// Test_HandleStreamingResponseCallbackOnContextCancel tests callback timing
+// when streaming aborts with context cancellation.
+func Test_HandleStreamingResponseCallbackOnContextCancel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/chat") && !strings.HasPrefix(r.URL.Path, "/api/show") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/show" {
+			resp := map[string]any{
+				"model_info": map[string]any{
+					"gptoss.context_length": 131072,
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		require.True(t, ok)
+		chunk := map[string]any{
+			"model":      "llama3.2:latest",
+			"created_at": "2024-01-01T00:00:00Z",
+			"message":    map[string]any{"role": "assistant", "content": "Hello"},
+			"done":       false,
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(chunk))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	streamCompleteCalled := make(chan error, 1)
+	m := New("gpt-oss:20b",
+		WithHost(srv.URL),
+		WithChatStreamCompleteCallback(func(ctx context.Context,
+			req *api.ChatRequest, err error) {
+			streamCompleteCalled <- err
+		}),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	const responseID = "ollama-stream-canceled"
+	responseChan := make(chan *model.Response)
+	m.handleStreamingResponse(ctx, api.ChatRequest{}, responseID, responseChan)
+
+	select {
+	case streamErr := <-streamCompleteCalled:
+		require.ErrorIs(t, streamErr, context.Canceled)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for stream complete callback")
+	}
+	select {
+	case resp := <-responseChan:
+		t.Fatalf("unexpected response: %#v", resp)
+	case <-time.After(100 * time.Millisecond):
+		// no response after cancellation, as expected
+	}
 }
 
 // Test_HandleErrorResponse tests error response handling.
@@ -656,8 +871,25 @@ func Test_HandleErrorResponse(t *testing.T) {
 	}
 
 	assert.NotNil(t, got)
+	assert.NotEmpty(t, got.ID)
 	assert.NotNil(t, got.Error)
 	assert.True(t, got.Done)
+}
+
+func Test_sendErrorResponse_PreservesResponseID(t *testing.T) {
+	m := New("llama3.2:latest")
+	ch := make(chan *model.Response, 1)
+	m.sendErrorResponse(context.Background(), ch, "ollama-response-error", model.ErrorTypeStreamError, errors.New("boom"))
+	select {
+	case got := <-ch:
+		require.NotNil(t, got)
+		assert.Equal(t, "ollama-response-error", got.ID)
+		assert.NotNil(t, got.Error)
+		assert.Equal(t, model.ErrorTypeStreamError, got.Error.Type)
+		assert.True(t, got.Done)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for error response")
+	}
 }
 
 // Test_buildChatRequest tests chat request building.
@@ -871,6 +1103,7 @@ func TestWithEnableTokenTailoring_Disabled(t *testing.T) {
 
 // Test_convertChatResponse tests chat response conversion.
 func Test_convertChatResponse(t *testing.T) {
+	const responseID = "ollama-response-1"
 	resp := api.ChatResponse{
 		Model:     "llama3.2:latest",
 		CreatedAt: time.Now(),
@@ -885,8 +1118,9 @@ func Test_convertChatResponse(t *testing.T) {
 		},
 	}
 
-	result, err := convertChatResponse(resp)
+	result, err := convertChatResponse(resp, responseID)
 	require.NoError(t, err)
+	assert.Equal(t, responseID, result.ID)
 	assert.True(t, result.Done)
 	assert.Equal(t, "Hello", result.Choices[0].Message.Content)
 	assert.Equal(t, 10, result.Usage.PromptTokens)
@@ -896,6 +1130,7 @@ func Test_convertChatResponse(t *testing.T) {
 
 // Test_convertChatResponse_WithToolCalls tests response with tool calls.
 func Test_convertChatResponse_WithToolCalls(t *testing.T) {
+	const responseID = "ollama-response-2"
 	resp := api.ChatResponse{
 		Model:     "llama3.2:latest",
 		CreatedAt: time.Now(),
@@ -923,8 +1158,9 @@ func Test_convertChatResponse_WithToolCalls(t *testing.T) {
 		},
 	}
 
-	result, err := convertChatResponse(resp)
+	result, err := convertChatResponse(resp, responseID)
 	require.NoError(t, err)
+	assert.Equal(t, responseID, result.ID)
 	assert.True(t, result.Done)
 	assert.Equal(t, 1, len(result.Choices[0].Message.ToolCalls))
 	assert.Equal(t, "call1", result.Choices[0].Message.ToolCalls[0].ID)
@@ -1033,4 +1269,111 @@ func Test_WithKeepAlive(t *testing.T) {
 	m := New("test-model", WithKeepAlive(duration))
 	assert.NotNil(t, m.keepAlive)
 	assert.Equal(t, duration, m.keepAlive.Duration)
+}
+
+// TestChatRequestCallbackSynchronous verifies that
+// chatRequestCallback is invoked synchronously inside
+// GenerateContent, before the response goroutine starts.
+func TestChatRequestCallbackSynchronous(t *testing.T) {
+	tests := []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non_streaming", stream: false},
+		{name: "streaming", stream: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type",
+						"application/json")
+					if r.URL.Path == "/api/show" {
+						json.NewEncoder(w).Encode(
+							map[string]any{
+								"model_info": map[string]any{
+									"llama.context_length": 4096,
+								},
+							})
+						return
+					}
+					if tt.stream {
+						flusher, ok :=
+							w.(http.Flusher)
+						if !ok {
+							http.Error(w,
+								"no flusher",
+								http.StatusInternalServerError)
+							return
+						}
+						chunks := []map[string]any{
+							{
+								"model":      "m",
+								"created_at": "2024-01-01T00:00:00Z",
+								"message": map[string]any{
+									"role":    "assistant",
+									"content": "hi",
+								},
+								"done":              true,
+								"prompt_eval_count": 1,
+								"eval_count":        1,
+							},
+						}
+						for _, c := range chunks {
+							json.NewEncoder(w).Encode(c)
+							flusher.Flush()
+						}
+						return
+					}
+					json.NewEncoder(w).Encode(
+						map[string]any{
+							"model":             "m",
+							"created_at":        "2024-01-01T00:00:00Z",
+							"message":           map[string]any{"role": "assistant", "content": "hi"},
+							"done":              true,
+							"prompt_eval_count": 1,
+							"eval_count":        1,
+						})
+				}))
+			defer srv.Close()
+
+			var callCount int64
+			m := New("test-model",
+				WithHost(srv.URL),
+				WithChatRequestCallback(
+					func(_ context.Context,
+						_ *api.ChatRequest,
+					) {
+						callCount++
+					}),
+			)
+
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					Stream: tt.stream,
+				},
+			}
+
+			ch, err := m.GenerateContent(
+				context.Background(), req)
+			require.NoError(t, err)
+
+			// Callback must have fired synchronously
+			// before GenerateContent returned.
+			assert.Equal(t, int64(1), callCount,
+				"callback must execute exactly once "+
+					"before GenerateContent returns")
+
+			// Drain the channel to avoid goroutine leak.
+			for range ch {
+			}
+
+			// Confirm no extra invocations after drain.
+			assert.Equal(t, int64(1), callCount,
+				"callback must not be called more than once")
+		})
+	}
 }

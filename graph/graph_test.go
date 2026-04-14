@@ -18,7 +18,17 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+type graphTestTool struct {
+	name string
+}
+
+func (t *graphTestTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
 
 func TestNew(t *testing.T) {
 	schema := NewStateSchema()
@@ -129,6 +139,84 @@ func TestAddConditionalEdge_PathMapValidation(t *testing.T) {
 	if err := g.addConditionalEdge(ce); err == nil {
 		t.Fatalf("expected error when path map points to missing node")
 	}
+}
+
+func TestNode_EndTargets_DeduplicatesConcreteTargets(t *testing.T) {
+	node := &Node{
+		ends: map[string]string{
+			"first":  "done",
+			"second": "done",
+			"retry":  "retry",
+			"end":    End,
+		},
+	}
+	assert.Equal(t, []string{"done", "retry"}, node.EndTargets())
+}
+
+func TestNode_AgentEventScope(t *testing.T) {
+	node := &Node{agentEventScope: "scope/child"}
+	assert.Equal(t, "scope/child", node.AgentEventScope())
+	assert.Empty(t, (&Node{}).AgentEventScope())
+}
+
+func TestNode_Tools_SkipsNilBaseTools(t *testing.T) {
+	node := &Node{
+		baseTools: map[string]tool.Tool{
+			"valid": &graphTestTool{name: "valid"},
+			"nil":   nil,
+		},
+	}
+	tools := node.Tools(context.Background())
+	require.Len(t, tools, 1)
+	assert.Equal(t, "valid", tools[0].Declaration().Name)
+}
+
+func TestGraph_NodeAccessorsAndSortedNodes(t *testing.T) {
+	g := New(NewStateSchema())
+	modelRef := &captureModel{}
+	require.NoError(t, g.addNode(&Node{ID: "b", Name: "B", Function: func(ctx context.Context, s State) (any, error) {
+		return s, nil
+	}}))
+	require.NoError(t, g.addNode(&Node{
+		ID:          "a",
+		Name:        "A",
+		Function:    func(ctx context.Context, s State) (any, error) { return s, nil },
+		instruction: "plan",
+		llmModel:    modelRef,
+		toolSets:    []tool.ToolSet{&simpleToolSet{name: "simple"}},
+	}))
+	nodes := g.Nodes()
+	require.Len(t, nodes, 2)
+	assert.Equal(t, "a", nodes[0].ID)
+	assert.Equal(t, "b", nodes[1].ID)
+	assert.Equal(t, "plan", nodes[0].Instruction())
+	assert.Same(t, modelRef, nodes[0].Model())
+	assert.True(t, nodes[0].HasTools())
+	assert.False(t, (&Node{}).HasTools())
+}
+
+func TestNode_Tools_RefreshesToolSetsWhenEnabled(t *testing.T) {
+	node := &Node{
+		baseTools: map[string]tool.Tool{
+			"base": &graphTestTool{name: "base"},
+		},
+		toolSets:             []tool.ToolSet{&simpleToolSet{name: "simple"}},
+		refreshToolSetsOnRun: true,
+	}
+	tools := node.Tools(nil)
+	require.Len(t, tools, 2)
+	assert.Equal(t, "base", tools[0].Declaration().Name)
+	assert.Equal(t, "simple_echo", tools[1].Declaration().Name)
+}
+
+func TestExecutionContextCompletionIdentity_NilReceiver(t *testing.T) {
+	var execCtx *ExecutionContext
+
+	execCtx.setCompletionIdentity("answer", "resp-1")
+	state, text, identity := execCtx.snapshotCompletionState(nil)
+	require.Nil(t, state)
+	require.Empty(t, text)
+	require.Empty(t, identity)
 }
 
 func TestValidate_NoStaticReachabilityRequired(t *testing.T) {

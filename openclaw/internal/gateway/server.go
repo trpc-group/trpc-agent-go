@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -74,6 +75,7 @@ const (
 
 	emptyReplyFallbackText = "I didn't produce a visible " +
 		"reply. Please try again."
+	runCanceledMessage = "request canceled"
 )
 
 var errEmptyReplyValue = errors.New(errEmptyReply)
@@ -134,13 +136,17 @@ type Server struct {
 	runner  runner.Runner
 	managed runner.ManagedRunner
 
+	appName       string
 	sessionIDFunc SessionIDFunc
 
-	allowUsers      map[string]struct{}
-	requireMention  bool
-	mentionPatterns []string
+	allowUsers        map[string]struct{}
+	requireMention    bool
+	mentionPatterns   []string
+	runOptionResolver RunOptionResolver
 
 	lanes *laneLocker
+
+	canceled *cancelTracker
 
 	handler http.Handler
 
@@ -148,6 +154,7 @@ type Server struct {
 	uploads          *uploads.Store
 	audioTranscriber audioTranscriber
 	personaStore     *persona.Store
+	memoryFileStore  *memoryfile.Store
 }
 
 // New creates a gateway server with the provided runner.
@@ -447,44 +454,36 @@ func (s *Server) writeError(
 
 func (s *Server) run(
 	ctx context.Context,
-	userID string,
-	sessionID string,
-	requestID string,
-	msg model.Message,
-) (string, string, error) {
+	run preparedMessageRun,
+) (string, string, *gwproto.Usage, error) {
 	var (
 		reply    string
 		resolved string
+		usage    *gwproto.Usage
 		runErr   error
 	)
-	s.lanes.withLock(sessionID, func() {
-		reply, resolved, runErr = s.runLocked(
+	s.lanes.withLock(run.sessionID, func() {
+		reply, resolved, usage, runErr = s.runLocked(
 			ctx,
-			userID,
-			sessionID,
-			requestID,
-			msg,
+			run,
 		)
 	})
-	return reply, resolved, runErr
+	return reply, resolved, usage, runErr
 }
 
 func (s *Server) runLocked(
 	ctx context.Context,
-	userID string,
-	sessionID string,
-	requestID string,
-	msg model.Message,
-) (string, string, error) {
+	run preparedMessageRun,
+) (string, string, *gwproto.Usage, error) {
 	trace := debugrecorder.TraceFromContext(ctx)
 
 	if trace != nil {
 		_ = trace.Record(
 			debugrecorder.KindGatewayRun,
 			map[string]any{
-				"user_id":    userID,
-				"session_id": sessionID,
-				"request_id": requestID,
+				"user_id":    run.userID,
+				"session_id": run.sessionID,
+				"request_id": run.requestID,
 			},
 		)
 	}
@@ -500,7 +499,7 @@ func (s *Server) runLocked(
 		if trace != nil {
 			_ = trace.RecordError(err)
 		}
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	result := newReplyAccumulator()
@@ -515,15 +514,79 @@ func (s *Server) runLocked(
 		if trace != nil {
 			_ = trace.RecordError(result.Error)
 		}
-		return "", result.RequestID, result.Error
+		return "", result.RequestID, cloneGatewayUsage(result.Usage), result.Error
 	}
 	if result.Text == "" {
 		if trace != nil {
 			_ = trace.RecordError(errEmptyReplyValue)
 		}
-		return "", result.RequestID, errEmptyReplyValue
+		return "", result.RequestID, cloneGatewayUsage(result.Usage), errEmptyReplyValue
 	}
-	return result.Text, result.RequestID, nil
+	return result.Text, result.RequestID, cloneGatewayUsage(result.Usage), nil
+}
+
+func (s *Server) resolveRunOptions(
+	ctx context.Context,
+	run preparedMessageRun,
+) (context.Context, []agent.RunOption) {
+	extra := []agent.RunOption(nil)
+	if s != nil && s.runOptionResolver != nil {
+		resolvedCtx, resolvedOpts := s.runOptionResolver(
+			ctx,
+			RunOptionInput{
+				Inbound:   run.inbound,
+				UserID:    run.userID,
+				SessionID: run.sessionID,
+				RequestID: run.requestID,
+				Message:   run.userMsg,
+				Trace:     debugrecorder.TraceFromContext(ctx),
+				Extensions: cloneExtensions(
+					run.extensions,
+				),
+			},
+		)
+		if resolvedCtx != nil {
+			ctx = resolvedCtx
+		}
+		extra = resolvedOpts
+	}
+	runOpts := s.runOptions(
+		ctx,
+		run.userID,
+		run.sessionID,
+		run.requestID,
+		run.requestSystemPrompt,
+	)
+	if len(extra) == 0 {
+		return ctx, runOpts
+	}
+	runOpts = append(runOpts, extra...)
+	return ctx, runOpts
+}
+
+func (s *Server) runOptions(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	requestID string,
+	requestSystemPrompt string,
+) []agent.RunOption {
+	runOpts := make([]agent.RunOption, 0, 1)
+	if requestID != "" {
+		runOpts = append(runOpts, agent.WithRequestID(requestID))
+	}
+	if messages := s.injectedContextMessages(
+		ctx,
+		userID,
+		sessionID,
+		requestSystemPrompt,
+	); len(messages) > 0 {
+		runOpts = append(
+			runOpts,
+			agent.WithInjectedContextMessages(messages),
+		)
+	}
+	return runOpts
 }
 
 func (s *Server) runOptions(
@@ -551,6 +614,7 @@ type replyAccumulator struct {
 	Text      string
 	RequestID string
 	Error     error
+	Usage     *gwproto.Usage
 
 	seenFull bool
 	builder  strings.Builder
@@ -570,6 +634,7 @@ func (a *replyAccumulator) Consume(evt *event.Event) {
 	if evt.Response == nil {
 		return
 	}
+	a.captureUsage(evt.Response)
 	if evt.Error != nil {
 		a.Error = errors.New(evt.Error.Message)
 		return
@@ -588,6 +653,11 @@ func (a *replyAccumulator) consumeFull(rsp *model.Response) {
 	if rsp == nil {
 		return
 	}
+	if responseHasPublicContent(rsp) {
+		a.builder.Reset()
+		a.Text = ""
+		return
+	}
 	if len(rsp.Choices) == 0 {
 		return
 	}
@@ -603,6 +673,11 @@ func (a *replyAccumulator) consumeDelta(rsp *model.Response) {
 	if rsp == nil {
 		return
 	}
+	if responseHasPublicContent(rsp) {
+		a.builder.Reset()
+		a.Text = ""
+		return
+	}
 	if a.seenFull {
 		return
 	}
@@ -615,9 +690,132 @@ func (a *replyAccumulator) consumeDelta(rsp *model.Response) {
 	a.Text = a.builder.String()
 }
 
+func (a *replyAccumulator) captureUsage(rsp *model.Response) {
+	if a == nil || !responseShouldAggregateUsage(rsp) {
+		return
+	}
+	usage := usageFromModelUsage(rsp.Usage)
+	if usage == nil {
+		return
+	}
+	a.Usage = mergeGatewayUsage(a.Usage, usage)
+}
+
+func usageFromModelUsage(usage *model.Usage) *gwproto.Usage {
+	if !modelUsageHasKnownTokenCounts(usage) {
+		return nil
+	}
+	return &gwproto.Usage{
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+	}
+}
+
+func modelUsageHasKnownTokenCounts(usage *model.Usage) bool {
+	if usage == nil {
+		return false
+	}
+	return usage.PromptTokens != 0 ||
+		usage.CompletionTokens != 0 ||
+		usage.TotalTokens != 0
+}
+
+func responseShouldAggregateUsage(rsp *model.Response) bool {
+	if rsp == nil || rsp.Usage == nil {
+		return false
+	}
+	switch rsp.Object {
+	case model.ObjectTypeChatCompletion:
+		return true
+	case model.ObjectTypeChatCompletionChunk:
+		return rsp.Done
+	default:
+		return false
+	}
+}
+
+func mergeGatewayUsage(
+	accumulated *gwproto.Usage,
+	usage *gwproto.Usage,
+) *gwproto.Usage {
+	if usage == nil {
+		return cloneGatewayUsage(accumulated)
+	}
+	if accumulated == nil {
+		cloned := cloneGatewayUsage(usage)
+		if cloned != nil {
+			cloned.LastPromptTokens = usage.PromptTokens
+		}
+		return cloned
+	}
+	lastPrompt := accumulated.LastPromptTokens
+	if usage.PromptTokens > 0 {
+		lastPrompt = usage.PromptTokens
+	}
+	return &gwproto.Usage{
+		PromptTokens: accumulated.PromptTokens +
+			usage.PromptTokens,
+		CompletionTokens: accumulated.CompletionTokens +
+			usage.CompletionTokens,
+		TotalTokens: accumulated.TotalTokens +
+			usage.TotalTokens,
+		LastPromptTokens: lastPrompt,
+	}
+}
+
+func cloneGatewayUsage(usage *gwproto.Usage) *gwproto.Usage {
+	if usage == nil {
+		return nil
+	}
+	cloned := *usage
+	return &cloned
+}
+
 type laneLocker struct {
 	mu    sync.Mutex
 	lanes map[string]*laneEntry
+}
+
+type cancelTracker struct {
+	mu  sync.Mutex
+	ids map[string]struct{}
+}
+
+func newCancelTracker() *cancelTracker {
+	return &cancelTracker{
+		ids: make(map[string]struct{}),
+	}
+}
+
+func (t *cancelTracker) Mark(requestID string) {
+	if t == nil {
+		return
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.ids[requestID] = struct{}{}
+}
+
+func (t *cancelTracker) Take(requestID string) bool {
+	if t == nil {
+		return false
+	}
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, ok := t.ids[requestID]; !ok {
+		return false
+	}
+	delete(t.ids, requestID)
+	return true
 }
 
 func newLaneLocker() *laneLocker {

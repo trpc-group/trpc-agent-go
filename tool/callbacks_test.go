@@ -30,6 +30,19 @@ type ToolError struct {
 	Message string
 }
 
+type callbackCompatibleResult struct {
+	callbackResult any
+	meta           map[string]any
+}
+
+func (c *callbackCompatibleResult) GetCallbackResult() any {
+	return c.callbackResult
+}
+
+func (c *callbackCompatibleResult) GetMeta() map[string]any {
+	return c.meta
+}
+
 // Error returns the error message.
 func (e *ToolError) Error() string {
 	return e.Message
@@ -717,6 +730,109 @@ func TestRunAfterTool_Multiple(t *testing.T) {
 	customResult, ok := result.CustomResult.(map[string]string)
 	require.True(t, ok)
 	require.Equal(t, "from-second", customResult["result"])
+}
+
+func TestRunAfterTool_NormalizesResultOnlyForCallbackInvocation(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	rawResult := &callbackCompatibleResult{
+		callbackResult: map[string]string{"callback": "result"},
+		meta:           map[string]any{"source": "mcp"},
+	}
+	afterArgs := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      rawResult,
+		Meta:        rawResult.meta,
+	}
+
+	var seenResult any
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		seenResult = args.Result
+		require.Equal(t, rawResult.meta, args.Meta)
+		return &tool.AfterToolResult{}, nil
+	})
+
+	result, err := callbacks.RunAfterTool(context.Background(), afterArgs)
+	require.NoError(t, err)
+	require.Equal(t, rawResult.callbackResult, seenResult)
+	require.Same(t, rawResult, afterArgs.Result)
+	require.NotNil(t, result)
+	require.Nil(t, result.CustomResult)
+}
+
+func TestRunAfterTool_PreservesSkipSummarizationAcrossCallbacks(t *testing.T) {
+	callbacks := tool.NewCallbacks(tool.WithContinueOnResponse(true))
+	marker := map[string]string{"result": "callback"}
+	secondCalled := false
+
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{CustomResult: marker}, nil
+	})
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		secondCalled = true
+		return &tool.AfterToolResult{SkipSummarization: true}, nil
+	})
+
+	result, err := callbacks.RunAfterTool(context.Background(),
+		&tool.AfterToolArgs{
+			ToolName:    "test-tool",
+			Declaration: &tool.Declaration{Name: "test-tool"},
+			Arguments:   []byte("{}"),
+			Result:      map[string]any{"ok": true},
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, secondCalled)
+	require.NotNil(t, result)
+	require.True(t, result.SkipSummarization)
+	require.Equal(t, marker, result.CustomResult)
+}
+
+func TestRunAfterTool_NoCallbacksPreservesOriginalResultShape(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	rawResult := &callbackCompatibleResult{
+		callbackResult: map[string]string{"callback": "result"},
+		meta:           map[string]any{"source": "mcp"},
+	}
+	afterArgs := &tool.AfterToolArgs{
+		ToolName:    "test-tool",
+		Declaration: &tool.Declaration{Name: "test-tool"},
+		Arguments:   []byte(`{}`),
+		Result:      rawResult,
+		Meta:        rawResult.meta,
+	}
+
+	result, err := callbacks.RunAfterTool(context.Background(), afterArgs)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Same(t, rawResult, result.CustomResult)
+	require.Same(t, rawResult, afterArgs.Result)
+}
+
+func TestRunAfterTool_NilArgsWithStructuredCallback(t *testing.T) {
+	callbacks := tool.NewCallbacks()
+
+	called := false
+	callbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		called = true
+		require.Nil(t, args)
+		return &tool.AfterToolResult{}, nil
+	})
+
+	result, err := callbacks.RunAfterTool(context.Background(), nil)
+	require.NoError(t, err)
+	require.True(t, called)
+	require.NotNil(t, result)
+	require.Nil(t, result.CustomResult)
 }
 
 // Mock tool for testing

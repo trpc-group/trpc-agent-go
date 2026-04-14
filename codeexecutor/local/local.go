@@ -50,7 +50,7 @@ func WithTimeout(timeout time.Duration) CodeExecutorOption {
 	return func(l *CodeExecutor) { l.Timeout = timeout }
 }
 
-// WithCleanTempFiles toggles cleanup of temporary files.
+// WithCleanTempFiles toggles cleanup of temporary helper files.
 func WithCleanTempFiles(clean bool) CodeExecutorOption {
 	return func(l *CodeExecutor) { l.CleanTempFiles = clean }
 }
@@ -87,6 +87,13 @@ var defaultCodeBlockDelimiter = codeexecutor.CodeBlockDelimiter{
 	Start: "```",
 	End:   "```",
 }
+
+const (
+	codeFilePatternBase = "code_*"
+	pythonFileExt       = ".py"
+	shellFileExt        = ".sh"
+	prepareFileErrFmt   = "failed to prepare %s file: %w"
+)
 
 // New creates a local CodeExecutor.
 func New(options ...CodeExecutorOption) *CodeExecutor {
@@ -191,21 +198,14 @@ func (e *CodeExecutor) executeCodeBlock(
 	return e.executeCommand(ctx, cmdDir, cmdArgs)
 }
 
-// prepareCodeFile writes code to a temporary file.
+// prepareCodeFile writes code to a temporary helper file.
 func (e *CodeExecutor) prepareCodeFile(
-	workDir string, block codeexecutor.CodeBlock, blockIndex int,
-) (string, error) {
-	ext := ""
-	switch strings.ToLower(block.Language) {
-	case "python", "py", "python3":
-		ext = ".py"
-	case "bash", "sh":
-		ext = ".sh"
-	default:
-		return "", fmt.Errorf("unsupported language: %s", block.Language)
+	workDir string, block codeexecutor.CodeBlock,
+) (filePath string, err error) {
+	ext, err := helperFileExtension(block.Language)
+	if err != nil {
+		return "", err
 	}
-	fileName := fmt.Sprintf("code_%d%s", blockIndex, ext)
-	filePath := filepath.Join(workDir, fileName)
 	content := strings.TrimSpace(block.Code)
 	if strings.EqualFold(block.Language, "python") ||
 		strings.EqualFold(block.Language, "py") ||
@@ -215,12 +215,42 @@ func (e *CodeExecutor) prepareCodeFile(
 			content = content + "\n"
 		}
 	}
+	helperFile, err := os.CreateTemp(
+		workDir, codeFilePatternBase+ext,
+	)
+	if err != nil {
+		return "", fmt.Errorf(
+			"failed to create %s file: %w", block.Language, err,
+		)
+	}
+	filePath = helperFile.Name()
+	_ = helperFile.Close()
 	fileMode := e.getFileMode(block.Language)
-	if err := os.WriteFile(filePath, []byte(content), fileMode); err != nil {
-		return "", fmt.Errorf("failed to write %s file: %w",
-			block.Language, err)
+	if err = writeHelperFile(filePath, content, fileMode); err != nil {
+		return "", fmt.Errorf(prepareFileErrFmt, block.Language, err)
 	}
 	return filePath, nil
+}
+
+func writeHelperFile(
+	filePath, content string,
+	fileMode os.FileMode,
+) error {
+	if err := os.WriteFile(filePath, []byte(content), fileMode); err != nil {
+		return err
+	}
+	return os.Chmod(filePath, fileMode)
+}
+
+func helperFileExtension(language string) (string, error) {
+	switch strings.ToLower(language) {
+	case "python", "py", "python3":
+		return pythonFileExt, nil
+	case "bash", "sh":
+		return shellFileExt, nil
+	default:
+		return "", fmt.Errorf("unsupported language: %s", language)
+	}
 }
 
 func (e *CodeExecutor) getFileMode(language string) os.FileMode {
@@ -263,6 +293,10 @@ func (e *CodeExecutor) executeCommand(
 		)
 	}
 	return string(output), nil
+}
+
+func removeHelperFile(path string) {
+	_ = os.Remove(path)
 }
 
 // CodeBlockDelimiter returns the code block delimiter used by the local

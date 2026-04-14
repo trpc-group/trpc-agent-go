@@ -20,6 +20,8 @@ func (s *local) resolveInferenceOptions(opt ...service.Option) (*service.Options
 	callOpts := &service.Options{
 		EvalSetManager:                    s.evalSetManager,
 		SessionIDSupplier:                 s.sessionIDSupplier,
+		ExpectedRunner:                    s.expectedRunner,
+		UserSimulator:                     s.userSimulator,
 		Callbacks:                         s.callbacks,
 		RunOptions:                        append([]agent.RunOption(nil), s.runOptions...),
 		EvalCaseParallelism:               s.evalCaseParallelism,
@@ -50,7 +52,10 @@ func (s *local) resolveEvaluateOptions(opt ...service.Option) (*service.Options,
 	callOpts := &service.Options{
 		EvalSetManager:                    s.evalSetManager,
 		Registry:                          s.registry,
+		MetricRegistry:                    s.metricRegistry,
+		ExpectedRunner:                    s.expectedRunner,
 		Callbacks:                         s.callbacks,
+		RunOptions:                        append([]agent.RunOption(nil), s.runOptions...),
 		EvalCaseParallelism:               s.evalCaseParallelism,
 		EvalCaseParallelInferenceEnabled:  s.evalCaseParallelInferenceEnabled,
 		EvalCaseParallelEvaluationEnabled: s.evalCaseParallelEvaluationEnabled,
@@ -63,6 +68,9 @@ func (s *local) resolveEvaluateOptions(opt ...service.Option) (*service.Options,
 	}
 	if callOpts.Registry == nil {
 		return nil, errors.New("registry is nil")
+	}
+	if callOpts.MetricRegistry == nil {
+		return nil, errors.New("metric registry is nil")
 	}
 	if callOpts.EvalCaseParallelEvaluationEnabled {
 		if callOpts.EvalCaseParallelism <= 0 {

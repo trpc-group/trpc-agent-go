@@ -1,0 +1,166 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: "en-US"
+tone_instructions: >-
+  Concise professional reviews. Bilingual output: EN first, ZH collapsed.
+  Framework repo: prioritize semantic/behavioral compat, stable
+  defaults/contracts, extensibility, generality, usability, and CI-hard
+  design/behavior issues; avoid style debates.
+early_access: false
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  poem: false
+  review_status: true
+  review_details: false
+  commit_status: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: false
+  estimate_code_review_effort: true
+  in_progress_fortune: false
+  path_filters:
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.jpeg"
+    - "!**/*.gif"
+    - "!**/*.svg"
+    - "!**/*.ico"
+    - "!**/*.pdf"
+    - "!**/*.zip"
+    - "!**/*.tar"
+    - "!**/*.tgz"
+    - "!**/*.gz"
+    - "!**/*.7z"
+    - "!**/*.exe"
+    - "!**/*.dll"
+    - "!**/*.so"
+    - "!**/*.dylib"
+    - "!**/*.a"
+    - "!**/*.o"
+    - "!**/*.wasm"
+
+  high_level_summary_instructions: |-
+    Please output a bilingual high-level summary.
+    Show the English summary first.
+    Wrap the Chinese translation in a Markdown-compatible HTML details block collapsed by default.
+    Both versions must cover: change overview, compatibility and behavioral risks, and recommended validation steps.
+    Be specific and actionable. Avoid generic praise and irrelevant style commentary.
+    The Chinese section must use this exact wrapper:
+    <details>
+    <summary>中文</summary>
+    
+    Chinese summary here.
+    
+    </details>
+
+  path_instructions:
+    - path: "**/*.go"
+      instructions: |
+        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
+        This is framework code. Review priorities:
+        1. Semantic and behavioral compatibility
+        2. Extensibility
+        3. Generality
+        4. Ease of use
+        5. Concurrency safety, resource boundaries, and error handling
+        6. Code style
+
+        Focus on:
+        - Whether default behavior remains stable and new capability is introduced through optional config, options, interfaces, callbacks, or plugins rather than by changing existing paths.
+        - Whether exported types, exported functions, exported methods, interfaces, options, error semantics, nil or zero-value semantics, JSON or serialization fields, event ordering, or streaming semantics introduce breaking changes.
+        - Adding struct fields is usually compatible. Do not raise blocking comments for that alone, but do check serialization compatibility, zero-value semantics, and default behavior.
+        - When agent, runner, graph, tool, or similar execution paths change, whether event flow, stateDelta, tool invocation order, cancellation propagation, retry semantics, or long-running tool markers change in externally observable ways.
+        - Whether abstractions remain capability-oriented rather than vendor-oriented, and avoid leaking provider-specific, model-specific, or business-specific assumptions into public layers.
+        - Whether the change introduces global mutable state, implicit singletons, unbounded queues, infinite retries, goroutine leaks, incorrect channel-closing order, or background tasks that cannot stop promptly.
+        - Whether persistence- or protocol-related structures such as session, memory, artifact, knowledge, and vectorstore remain backward compatible and have migration and rollback paths.
+        - Whether errors preserve root causes and remain distinguishable to callers. Control-flow errors should not be retried as ordinary failures.
+        - Whether security boundaries stay clear: treat external input, URLs, paths, command arguments, and model-driven tool invocations as untrusted.
+        - Whether new APIs or configuration keep the minimum required setup, sensible defaults, and consistent naming and parameter ordering.
+
+        Avoid:
+        - Suggestions about naming, formatting, comment style, or "more elegant refactors" based only on personal preference.
+        - Suggestions that break public contracts or default behavior merely for implementation convenience.
+
+        If you believe a change is an intentional behavioral change, explicitly state:
+        - what the old behavior was;
+        - what the new behavior is;
+        - which users or extension points are affected;
+        - which tests, examples, or documentation should be updated accordingly.
+
+    - path: "**/*_test.go"
+      instructions: |
+        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
+        Prioritize whether tests validate external behavior rather than implementation details.
+
+        Focus on:
+        - Whether the main path, boundary conditions, error paths, and regression scenarios are covered.
+        - Whether concurrency-related changes cover cancellation, shutdown, error propagation, goroutine cleanup, channel ordering, and backpressure.
+        - Whether streaming output, event flow, stateDelta, and tool invocation chains verify order, consistency, and termination semantics.
+        - Whether tests are stable and avoid time.Sleep, randomness, real external services, or machine-specific environment differences.
+        - Whether mocks, fakes, httptest, temporary directories, or other controllable substitutes are preferred.
+        - Whether assertions are strong enough to ensure the intended behavior is actually verified.
+
+        Do not suggest weakening assertions, deleting tests, or widening mocks merely to hide real problems.
+
+    - path: "test/**"
+      instructions: |
+        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
+        Treat code under test/ as test infrastructure rather than ordinary business code.
+
+        Focus on:
+        - Whether test helper code is small, clear, single-purpose, and reusable.
+        - Whether it avoids relying on real external services and unstable environments.
+        - Whether it avoids hiding real behavior by pushing too much logic into fixtures.
+        - Whether logs, test data, and example configuration leak sensitive information.
+
+    - path: "examples/**"
+      instructions: |
+        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
+        Examples represent the recommended usage and the user's first impression. Review them for reproducibility, clarity, and safe execution.
+
+        Focus on:
+        - Whether they use public APIs and reflect the current recommended usage.
+        - Whether runtime steps, dependencies, environment variables, and side effects are clear.
+        - Whether sensitive information is passed through environment variables and whether example output avoids leaking tokens, secrets, or private data.
+        - Whether each example is small enough and focused on one capability instead of becoming a hidden "mini production system."
+        - Whether examples are updated when public APIs, defaults, or recommended usage change.
+
+    - path: "**/*.md"
+      instructions: |
+        Write all review output bilingually: English first, then Chinese in collapsed <details><summary>中文</summary>...</details>.
+        The goal of documentation is to accurately communicate the current public contract, not to optimize for writing style.
+
+        Focus on:
+        - Whether commands, import paths, configuration keys, defaults, and return behavior match the current code.
+        - Whether README.md and README.zh_CN.md describe external usage consistently, or clearly explain any intentional differences.
+        - Whether documentation is updated when public APIs, default behavior, migration paths, or compatibility strategy change.
+        - Whether example code, configuration snippets, and directory paths are actually usable in the current repository layout.
+  tools:
+    github-checks:
+      enabled: true
+      timeout_ms: 900000
+    golangci-lint:
+      enabled: true
+      config_file: ".golangci.yml"
+    shellcheck:
+      enabled: true
+    markdownlint:
+      enabled: true
+    gitleaks:
+      enabled: true
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+      - "[skip review]"
+
+chat:
+  auto_reply: true
+  art: false

@@ -11,7 +11,9 @@ package dify
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/cloudernative/dify-sdk-go"
@@ -655,7 +657,7 @@ func TestDifyAgent_SendFinalStreamingEvent(t *testing.T) {
 	}
 
 	eventChan := make(chan *event.Event, 1)
-	difyAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "aggregated content")
+	difyAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "aggregated content", "msg-123")
 	close(eventChan)
 
 	evt := <-eventChan
@@ -671,12 +673,136 @@ func TestDifyAgent_SendFinalStreamingEvent(t *testing.T) {
 	if evt.Response.IsPartial {
 		t.Error("expected IsPartial to be false")
 	}
+	if evt.Response.ID != "msg-123" {
+		t.Errorf("expected Response.ID 'msg-123', got: %s", evt.Response.ID)
+	}
+	if evt.Response.Object != model.ObjectTypeChatCompletion {
+		t.Errorf("expected Object type ChatCompletion, got: %s", evt.Response.Object)
+	}
 	if len(evt.Response.Choices) == 0 {
 		t.Fatal("expected choices")
 	}
 	if evt.Response.Choices[0].Message.Content != "aggregated content" {
 		t.Errorf("expected content 'aggregated content', got: %s", evt.Response.Choices[0].Message.Content)
 	}
+}
+
+func TestDifyAgent_SendFinalStreamingEvent_EmptyMessageID(t *testing.T) {
+	difyAgent := &DifyAgent{
+		name: "test-agent",
+	}
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-inv",
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	difyAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "content", "")
+	close(eventChan)
+
+	evt := <-eventChan
+	if evt == nil {
+		t.Fatal("expected event")
+	}
+	if evt.Response.ID != "" {
+		t.Errorf("expected empty Response.ID, got: %s", evt.Response.ID)
+	}
+	if evt.Response.Object != model.ObjectTypeChatCompletion {
+		t.Errorf("expected Object type ChatCompletion, got: %s", evt.Response.Object)
+	}
+}
+
+func TestDifyAgent_SendFinalStreamingEvent_WithMessageID(t *testing.T) {
+	difyAgent := &DifyAgent{
+		name: "test-agent",
+	}
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-inv",
+	}
+
+	eventChan := make(chan *event.Event, 1)
+	difyAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "final content", "conversation-id-abc")
+	close(eventChan)
+
+	evt := <-eventChan
+	if evt == nil {
+		t.Fatal("expected event")
+	}
+	if evt.Response == nil {
+		t.Fatal("expected response")
+	}
+	if evt.Response.ID != "conversation-id-abc" {
+		t.Errorf("expected Response.ID 'conversation-id-abc', got: %s", evt.Response.ID)
+	}
+	if evt.Response.Object != model.ObjectTypeChatCompletion {
+		t.Errorf("expected Object type ChatCompletion, got: %s", evt.Response.Object)
+	}
+	if !evt.Response.Done {
+		t.Error("expected Done to be true")
+	}
+	if evt.Response.IsPartial {
+		t.Error("expected IsPartial to be false")
+	}
+	if len(evt.Response.Choices) == 0 {
+		t.Fatal("expected choices")
+	}
+	if evt.Response.Choices[0].Message.Content != "final content" {
+		t.Errorf("expected content 'final content', got: %s", evt.Response.Choices[0].Message.Content)
+	}
+}
+
+// TestDifyAgent_ProcessStreamEvent_TracksMessageID verifies that Response.ID is correctly set in streaming events
+func TestDifyAgent_ProcessStreamEvent_TracksMessageID(t *testing.T) {
+	difyAgent := &DifyAgent{
+		name:           "test-agent",
+		eventConverter: &defaultDifyEventConverter{},
+	}
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-inv",
+	}
+
+	t.Run("event carries Response.ID from MessageID", func(t *testing.T) {
+		streamEvent := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:         "chunk",
+				MessageID:      "msg-id-001",
+				ConversationID: "conv-id-001",
+			},
+		}
+
+		evt, _, err := difyAgent.processStreamEvent(context.Background(), streamEvent, invocation)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+		if evt == nil {
+			t.Fatal("expected event")
+		}
+		if evt.Response == nil {
+			t.Fatal("expected response")
+		}
+		if evt.Response.ID != "msg-id-001" {
+			t.Errorf("expected Response.ID 'msg-id-001', got: %s", evt.Response.ID)
+		}
+	})
+
+	t.Run("empty answer returns nil event without Response.ID", func(t *testing.T) {
+		streamEvent := dify.ChatMessageStreamChannelResponse{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:    "",
+				MessageID: "msg-id-002",
+			},
+		}
+
+		evt, _, err := difyAgent.processStreamEvent(context.Background(), streamEvent, invocation)
+		if err != nil {
+			t.Errorf("expected no error, got: %v", err)
+		}
+		if evt != nil {
+			t.Error("expected nil event for empty answer")
+		}
+	})
 }
 
 // Test new extracted functions for non-streaming
@@ -772,13 +898,13 @@ func TestDifyAgent_Run_IntegrationWithMockServer(t *testing.T) {
 			t.Fatalf("Run failed: %v", err)
 		}
 
-		// 收集所有事件
+		// Collect all events
 		var events []*event.Event
 		for evt := range eventChan {
 			events = append(events, evt)
 		}
 
-		// 验证至少收到一个响应事件
+		// Verify at least one response event is received
 		if len(events) == 0 {
 			t.Error("Expected at least one event")
 		}
@@ -839,13 +965,13 @@ func TestDifyAgent_Run_IntegrationWithMockServer(t *testing.T) {
 			t.Fatalf("Run failed: %v", err)
 		}
 
-		// 收集流式事件
+		// Collect streaming events
 		var events []*event.Event
 		for evt := range eventChan {
 			events = append(events, evt)
 		}
 
-		// 流式响应应该返回多个事件
+		// Streaming response should return multiple events
 		if len(events) < 1 {
 			t.Errorf("Expected streaming events, got %d", len(events))
 		}
@@ -936,17 +1062,17 @@ func TestDifyAgent_BuildDifyRequest_Integration(t *testing.T) {
 			},
 		}
 
-		// 非流式
+		// Non-streaming
 		reqNonStream, err := difyAgent.buildDifyRequest(context.Background(), invocation, false)
 		if err != nil {
 			t.Fatalf("buildDifyRequest (non-stream) failed: %v", err)
 		}
-		// 非流式模式下 ResponseMode 为空字符串（默认为 blocking）
+		// In non-streaming mode, ResponseMode should be empty string (defaults to blocking)
 		if reqNonStream.ResponseMode != "" {
 			t.Errorf("Expected empty response mode for non-streaming, got: %s", reqNonStream.ResponseMode)
 		}
 
-		// 流式
+		// Streaming
 		reqStream, err := difyAgent.buildDifyRequest(context.Background(), invocation, true)
 		if err != nil {
 			t.Fatalf("buildDifyRequest (stream) failed: %v", err)
@@ -1549,6 +1675,344 @@ func TestDifyAgent_WorkflowOutputFields(t *testing.T) {
 
 	// Reset mock server
 	mockServer.SetCustomResponse(nil)
+}
+
+// ========== Workflow/Chatflow Streaming Response.ID Tests ==========
+
+// TestDifyAgent_WorkflowStreaming_ResponseID verifies that Response.ID of workflow streaming
+// intermediate chunks and final event uses Dify's workflow_run_id, not invocation.InvocationID
+func TestDifyAgent_WorkflowStreaming_ResponseID(t *testing.T) {
+	mockServer := NewMockDifyServer()
+	defer mockServer.Close()
+
+	streaming := true
+	difyAgent := createMockDifyAgent(t, mockServer,
+		WithMode(ModeWorkflow),
+	)
+	difyAgent.enableStreaming = &streaming
+
+	invocation := &agent.Invocation{
+		InvocationID: "should-not-appear-as-response-id",
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "Test workflow streaming ID",
+		},
+		RunOptions: agent.RunOptions{
+			RuntimeState: make(map[string]any),
+		},
+	}
+
+	eventChan, err := difyAgent.Run(context.Background(), invocation)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	var events []*event.Event
+	for evt := range eventChan {
+		events = append(events, evt)
+	}
+
+	if len(events) == 0 {
+		t.Fatal("Expected at least one event")
+	}
+
+	// Verify all events have Response.ID equal to mock-run-1 (workflow_run_id from mock server),
+	// not invocation.InvocationID
+	for i, evt := range events {
+		if evt.Response == nil {
+			continue
+		}
+		// Skip error events
+		if evt.Response.Error != nil {
+			continue
+		}
+		if evt.Response.ID == "should-not-appear-as-response-id" {
+			t.Errorf("event[%d]: Response.ID should be workflow_run_id, not invocation.InvocationID", i)
+		}
+		if evt.Response.ID != "mock-run-1" {
+			t.Errorf("event[%d]: expected Response.ID 'mock-run-1', got: '%s'", i, evt.Response.ID)
+		}
+	}
+
+	// Verify the last event is the final event (Done=true) with correct ID
+	lastEvt := events[len(events)-1]
+	if lastEvt.Response == nil {
+		t.Fatal("last event should have response")
+	}
+	if !lastEvt.Response.Done {
+		t.Error("last event should be Done=true (final event)")
+	}
+	if lastEvt.Response.ID != "mock-run-1" {
+		t.Errorf("final event: expected Response.ID 'mock-run-1', got: '%s'", lastEvt.Response.ID)
+	}
+}
+
+// TestDifyAgent_WorkflowStreaming_FallbackID verifies that when WorkflowRunID is empty
+// in workflow streaming callbacks, final event's Response.ID falls back to invocation.InvocationID
+func TestDifyAgent_WorkflowStreaming_FallbackID(t *testing.T) {
+	mockServer := NewMockDifyServer()
+	defer mockServer.Close()
+
+	// Custom workflow handler that returns SSE events without workflow_run_id
+	mockServer.WorkflowHandler = func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		responseMode, _ := req["response_mode"].(string)
+		if responseMode != "streaming" {
+			handleNonStreamingWorkflow(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		// Send SSE events without workflow_run_id
+		events := []string{
+			`data: {"event": "workflow_started", "task_id": "task-no-run-id"}`,
+			`data: {"event": "node_finished", "task_id": "task-no-run-id", "data": {"id": "node-1", "outputs": {"answer": "No run ID result"}}}`,
+			`data: {"event": "workflow_finished", "task_id": "task-no-run-id", "data": {"status": "succeeded", "outputs": {"answer": "No run ID result"}}}`,
+		}
+
+		for _, evt := range events {
+			w.Write([]byte(evt + "\n\n"))
+			flusher.Flush()
+		}
+	}
+
+	streaming := true
+	difyAgent := createMockDifyAgent(t, mockServer,
+		WithMode(ModeWorkflow),
+	)
+	difyAgent.enableStreaming = &streaming
+
+	invocation := &agent.Invocation{
+		InvocationID: "fallback-invocation-id",
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "Test fallback ID",
+		},
+		RunOptions: agent.RunOptions{
+			RuntimeState: make(map[string]any),
+		},
+	}
+
+	eventChan, err := difyAgent.Run(context.Background(), invocation)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	var events []*event.Event
+	for evt := range eventChan {
+		events = append(events, evt)
+	}
+
+	if len(events) == 0 {
+		t.Fatal("Expected at least one event")
+	}
+
+	// Find the final event (Done=true) and verify its Response.ID falls back to invocation.InvocationID
+	var foundFinal bool
+	for _, evt := range events {
+		if evt.Response != nil && evt.Response.Done {
+			foundFinal = true
+			if evt.Response.ID != "fallback-invocation-id" {
+				t.Errorf("final event: expected Response.ID to fallback to 'fallback-invocation-id', got: '%s'", evt.Response.ID)
+			}
+		}
+	}
+	if !foundFinal {
+		t.Error("Expected to find a final event with Done=true")
+	}
+}
+
+// TestDifyAgent_ChatflowStreaming_ConsistentMessageID verifies that in chatflow streaming,
+// all chunks and the final event share the same message_id
+func TestDifyAgent_ChatflowStreaming_ConsistentMessageID(t *testing.T) {
+	difyAgent := &DifyAgent{
+		name:           "test-agent",
+		eventConverter: &defaultDifyEventConverter{},
+	}
+
+	invocation := &agent.Invocation{
+		InvocationID: "test-inv",
+	}
+
+	// Simulate multiple chatflow streaming chunks, all sharing the same message_id
+	chunks := []dify.ChatMessageStreamChannelResponse{
+		{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:         "Hello ",
+				MessageID:      "consistent-msg-id",
+				ConversationID: "conv-1",
+			},
+		},
+		{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:         "from ",
+				MessageID:      "consistent-msg-id",
+				ConversationID: "conv-1",
+			},
+		},
+		{
+			ChatMessageStreamResponse: dify.ChatMessageStreamResponse{
+				Answer:         "Dify!",
+				MessageID:      "consistent-msg-id",
+				ConversationID: "conv-1",
+			},
+		},
+	}
+
+	var lastMessageID string
+	for i, chunk := range chunks {
+		evt, _, err := difyAgent.processStreamEvent(context.Background(), chunk, invocation)
+		if err != nil {
+			t.Fatalf("chunk[%d]: unexpected error: %v", i, err)
+		}
+		if evt == nil {
+			t.Fatalf("chunk[%d]: expected event, got nil", i)
+		}
+		if evt.Response == nil {
+			t.Fatalf("chunk[%d]: expected response", i)
+		}
+
+		// Verify all chunks have consistent Response.ID
+		if i == 0 {
+			lastMessageID = evt.Response.ID
+		} else {
+			if evt.Response.ID != lastMessageID {
+				t.Errorf("chunk[%d]: expected Response.ID '%s', got '%s' — message_id should be consistent across all chunks",
+					i, lastMessageID, evt.Response.ID)
+			}
+		}
+	}
+
+	// Verify lastMessageID equals consistent-msg-id
+	if lastMessageID != "consistent-msg-id" {
+		t.Errorf("expected lastMessageID 'consistent-msg-id', got: '%s'", lastMessageID)
+	}
+
+	// Verify the final event also uses the same message_id
+	eventChan := make(chan *event.Event, 1)
+	difyAgent.sendFinalStreamingEvent(context.Background(), eventChan, invocation, "Hello from Dify!", lastMessageID)
+	close(eventChan)
+
+	finalEvt := <-eventChan
+	if finalEvt == nil {
+		t.Fatal("expected final event")
+	}
+	if finalEvt.Response.ID != "consistent-msg-id" {
+		t.Errorf("final event: expected Response.ID 'consistent-msg-id', got: '%s'", finalEvt.Response.ID)
+	}
+	if !finalEvt.Response.Done {
+		t.Error("final event should have Done=true")
+	}
+}
+
+// TestDifyAgent_WorkflowStreaming_ChunkIDConsistency verifies that in workflow streaming,
+// all intermediate chunks use the same workflowRunID as Response.ID
+func TestDifyAgent_WorkflowStreaming_ChunkIDConsistency(t *testing.T) {
+	mockServer := NewMockDifyServer()
+	defer mockServer.Close()
+
+	// Custom workflow handler that returns multiple node_finished events with content
+	mockServer.WorkflowHandler = func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		responseMode, _ := req["response_mode"].(string)
+		if responseMode != "streaming" {
+			handleNonStreamingWorkflow(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		// All events share the same workflow_run_id
+		events := []string{
+			`data: {"event": "workflow_started", "task_id": "task-1", "workflow_run_id": "consistent-wf-run-id"}`,
+			`data: {"event": "node_finished", "task_id": "task-1", "workflow_run_id": "consistent-wf-run-id", "data": {"id": "node-1", "outputs": {"answer": "Part 1 "}}}`,
+			`data: {"event": "node_finished", "task_id": "task-1", "workflow_run_id": "consistent-wf-run-id", "data": {"id": "node-2", "outputs": {"answer": "Part 2"}}}`,
+			`data: {"event": "workflow_finished", "task_id": "task-1", "workflow_run_id": "consistent-wf-run-id", "data": {"status": "succeeded"}}`,
+		}
+
+		for _, evt := range events {
+			w.Write([]byte(evt + "\n\n"))
+			flusher.Flush()
+		}
+	}
+
+	streaming := true
+	difyAgent := createMockDifyAgent(t, mockServer,
+		WithMode(ModeWorkflow),
+	)
+	difyAgent.enableStreaming = &streaming
+
+	invocation := &agent.Invocation{
+		InvocationID: "chunk-consistency-test",
+		Message: model.Message{
+			Role:    model.RoleUser,
+			Content: "Test chunk ID consistency",
+		},
+		RunOptions: agent.RunOptions{
+			RuntimeState: make(map[string]any),
+		},
+	}
+
+	eventChan, err := difyAgent.Run(context.Background(), invocation)
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	var events []*event.Event
+	for evt := range eventChan {
+		events = append(events, evt)
+	}
+
+	if len(events) == 0 {
+		t.Fatal("Expected at least one event")
+	}
+
+	// Verify all events have Response.ID equal to consistent-wf-run-id
+	for i, evt := range events {
+		if evt.Response == nil || evt.Response.Error != nil {
+			continue
+		}
+		if evt.Response.ID != "consistent-wf-run-id" {
+			t.Errorf("event[%d]: expected Response.ID 'consistent-wf-run-id', got: '%s'", i, evt.Response.ID)
+		}
+	}
+
+	// Verify aggregated content is correct
+	lastEvt := events[len(events)-1]
+	if lastEvt.Response != nil && lastEvt.Response.Done && len(lastEvt.Response.Choices) > 0 {
+		expectedContent := "Part 1 Part 2"
+		actualContent := lastEvt.Response.Choices[0].Message.Content
+		if actualContent != expectedContent {
+			t.Errorf("final event: expected aggregated content '%s', got: '%s'", expectedContent, actualContent)
+		}
+	}
 }
 
 // Helper converter for error testing

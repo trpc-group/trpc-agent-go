@@ -27,19 +27,24 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
+const testTimeout = 2 * time.Second
+
 const (
-	testTimeout   = 2 * time.Second
 	testShortWait = 100 * time.Millisecond
 
 	debugEventsFile     = "events.jsonl"
@@ -184,6 +189,58 @@ func (r *runOptionsRunner) Options() agent.RunOptions {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.opts
+}
+
+type resolvingRunner struct {
+	mu    sync.Mutex
+	ctx   context.Context
+	opts  agent.RunOptions
+	msg   model.Message
+	user  string
+	sess  string
+	calls int
+}
+
+func (r *resolvingRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	msg model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	cfg := agent.RunOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+	r.ctx = ctx
+	r.opts = cfg
+	r.msg = msg
+	r.user = userID
+	r.sess = sessionID
+	r.calls++
+
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("ok")},
+			},
+			Done: true,
+		},
+		RequestID: "req-1",
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (r *resolvingRunner) Close() error {
+	return nil
 }
 
 func strPtr(s string) *string {
@@ -397,7 +454,11 @@ func TestServerUploadContextMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	srv := &Server{uploads: store}
-	msgs := srv.uploadContextMessages("u1", "telegram:dm:u1:s1")
+	msgs := srv.uploadContextMessages(
+		context.Background(),
+		"u1",
+		"telegram:dm:u1:s1",
+	)
 	require.Len(t, msgs, 1)
 	require.Contains(t, msgs[0].Content, recentUploadContextHeader)
 	require.Contains(t, msgs[0].Content, "clip.mp4 [video]")
@@ -425,9 +486,75 @@ func TestServerUploadContextMessages_UsesStoredMimeType(t *testing.T) {
 	require.NoError(t, err)
 
 	srv := &Server{uploads: store}
-	msgs := srv.uploadContextMessages("u1", "telegram:dm:u1:s1")
+	msgs := srv.uploadContextMessages(
+		context.Background(),
+		"u1",
+		"telegram:dm:u1:s1",
+	)
 	require.Len(t, msgs, 1)
 	require.Contains(t, msgs[0].Content, "video-note [video]")
+}
+
+func TestUploadScopeFromRequest_UsesStorageUserOverride(t *testing.T) {
+	t.Parallel()
+
+	extensions, err := conversation.MergeRequestExtension(
+		nil,
+		conversation.Annotation{StorageUserID: "chat-scope"},
+	)
+	require.NoError(t, err)
+
+	scope := uploadScopeFromRequest(gwproto.MessageRequest{
+		Channel:    "demo",
+		From:       "user1",
+		Thread:     "room-1",
+		UserID:     "canonical-user",
+		Text:       "hello",
+		Extensions: extensions,
+	})
+	require.Equal(
+		t,
+		uploads.Scope{
+			Channel:   "demo",
+			UserID:    "chat-scope",
+			SessionID: "demo:thread:room-1",
+		},
+		scope,
+	)
+}
+
+func TestServerUploadContextMessages_UsesStorageUserOverride(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "demo",
+		UserID:    "chat-scope",
+		SessionID: "demo:thread:room-1",
+	}
+	_, err = store.Save(
+		context.Background(),
+		scope,
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	srv := &Server{uploads: store}
+	ctx := conversationscope.WithStorageUserID(
+		context.Background(),
+		"chat-scope",
+	)
+	msgs := srv.uploadContextMessages(
+		ctx,
+		"canonical-user",
+		"demo:thread:room-1",
+	)
+	require.Len(t, msgs, 1)
+	require.Contains(t, msgs[0].Content, "clip.mp4 [video]")
 }
 
 func TestServerInjectedContextMessages_IncludePersonaAndUploads(t *testing.T) {
@@ -467,12 +594,298 @@ func TestServerInjectedContextMessages_IncludePersonaAndUploads(t *testing.T) {
 		uploads:      uploadStore,
 		personaStore: personaStore,
 	}
-	msgs := srv.injectedContextMessages("u1", sessionID)
+	msgs := srv.injectedContextMessages(
+		context.Background(),
+		"u1",
+		sessionID,
+		"",
+	)
 	require.Len(t, msgs, 2)
 	require.Contains(t, msgs[0].Content, personaContextHeader)
 	require.Contains(t, msgs[0].Content, persona.PresetGirlfriend)
 	require.Contains(t, msgs[1].Content, recentUploadContextHeader)
 	require.Contains(t, msgs[1].Content, "clip.mp4 [video]")
+}
+
+func TestServerInjectedContextMessages_IncludeRequestSystemPrompt(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	srv := &Server{}
+	msgs := srv.injectedContextMessages(
+		context.Background(),
+		"u1",
+		"telegram:dm:u1",
+		"Follow the channel runtime guidance.",
+	)
+	require.Len(t, msgs, 1)
+	require.Equal(t, model.RoleSystem, msgs[0].Role)
+	require.Equal(
+		t,
+		"Follow the channel runtime guidance.",
+		msgs[0].Content,
+	)
+}
+
+func TestServerInjectedContextMessages_IncludeMemoryFiles(t *testing.T) {
+	t.Parallel()
+
+	const appName = "demo-app"
+
+	stateDir := t.TempDir()
+	uploadStore, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	personaPath, err := persona.DefaultStorePath(stateDir)
+	require.NoError(t, err)
+	personaStore, err := persona.NewStore(personaPath)
+	require.NoError(t, err)
+
+	memoryRoot, err := memoryfile.DefaultRoot(stateDir)
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(memoryRoot)
+	require.NoError(t, err)
+
+	sessionID := "telegram:dm:u1:rotated"
+	scope := uploads.Scope{
+		Channel:   "telegram",
+		UserID:    "u1",
+		SessionID: sessionID,
+	}
+	_, err = uploadStore.Save(
+		context.Background(),
+		scope,
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	_, err = personaStore.Set(
+		context.Background(),
+		persona.DMScopeKey("telegram", "u1"),
+		persona.PresetGirlfriend,
+	)
+	require.NoError(t, err)
+
+	path, err := memoryStore.EnsureMemory(
+		context.Background(),
+		appName,
+		"u1",
+	)
+	require.NoError(t, err)
+	require.NoError(
+		t,
+		os.WriteFile(
+			path,
+			[]byte("## Preferences\n\n- Keep replies concise."),
+			0o600,
+		),
+	)
+	otherPath, err := memoryStore.EnsureMemory(
+		context.Background(),
+		"other-app",
+		"u1",
+	)
+	require.NoError(t, err)
+	require.NoError(
+		t,
+		os.WriteFile(
+			otherPath,
+			[]byte("## Preferences\n\n- Use another app memory."),
+			0o600,
+		),
+	)
+
+	srv := &Server{
+		appName:         appName,
+		uploads:         uploadStore,
+		personaStore:    personaStore,
+		memoryFileStore: memoryStore,
+	}
+	msgs := srv.injectedContextMessages(
+		context.Background(),
+		"u1",
+		sessionID,
+		"",
+	)
+	require.Len(t, msgs, 3)
+	require.Contains(t, msgs[0].Content, personaContextHeader)
+	require.Contains(t, msgs[1].Content, "visible MEMORY.md file for this user")
+	require.Contains(t, msgs[1].Content, "not hidden internal state")
+	require.Contains(t, msgs[1].Content, "Keep replies concise")
+	require.NotContains(t, msgs[1].Content, "Use another app memory")
+	require.Contains(t, msgs[2].Content, recentUploadContextHeader)
+}
+
+func TestServerInjectedContextMessages_UsesLayeredMemoryAndStorageScopedUploads(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	uploadStore, err := uploads.NewStore(t.TempDir())
+	require.NoError(t, err)
+
+	memoryPath, err := memoryStore.EnsureMemory(
+		context.Background(),
+		"demo-app",
+		"canonical-user",
+	)
+	require.NoError(t, err)
+	require.NoError(
+		t,
+		os.WriteFile(memoryPath, []byte("## Preferences\n\n- Remember my name."), 0o600),
+	)
+
+	otherMemoryPath, err := memoryStore.EnsureMemory(
+		context.Background(),
+		"demo-app",
+		"chat-scope",
+	)
+	require.NoError(t, err)
+	require.NoError(
+		t,
+		os.WriteFile(otherMemoryPath, []byte("## Preferences\n\n- Chat rule."), 0o600),
+	)
+
+	_, err = uploadStore.Save(
+		context.Background(),
+		uploads.Scope{
+			Channel:   "demo",
+			UserID:    "chat-scope",
+			SessionID: "demo:thread:room-1",
+		},
+		"clip.mp4",
+		[]byte("video"),
+	)
+	require.NoError(t, err)
+
+	srv := &Server{
+		appName:         "demo-app",
+		uploads:         uploadStore,
+		memoryFileStore: memoryStore,
+	}
+	ctx := conversationscope.WithStorageUserID(
+		context.Background(),
+		"chat-scope",
+	)
+	msgs := srv.injectedContextMessages(
+		ctx,
+		"canonical-user",
+		"demo:thread:room-1",
+		"",
+	)
+	// Layered memory: chat scope primary + user fallback + uploads.
+	require.Len(t, msgs, 3)
+	require.Contains(t, msgs[0].Content, "Chat rule")
+	require.Contains(t, msgs[0].Content, "the current chat scope")
+	require.Contains(t, msgs[1].Content, "Remember my name")
+	require.Contains(t, msgs[1].Content, "this user")
+	require.Contains(t, msgs[2].Content, recentUploadContextHeader)
+	require.Contains(t, msgs[2].Content, "clip.mp4 [video]")
+}
+
+func TestServerInjectedContextMessages_CanceledContextSkipsMemoryFiles(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	srv := &Server{
+		appName:         "demo-app",
+		memoryFileStore: memoryStore,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	msgs := srv.injectedContextMessages(
+		ctx,
+		"u1",
+		"telegram:dm:u1",
+		"",
+	)
+	require.Empty(t, msgs)
+}
+
+func TestServerInjectedContextMessages_EmptyAppNameSkipsMemoryFiles(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	srv := &Server{
+		appName:         " ",
+		memoryFileStore: memoryStore,
+	}
+
+	msgs := srv.injectedContextMessages(
+		context.Background(),
+		"u1",
+		"telegram:dm:u1",
+		"",
+	)
+	require.Empty(t, msgs)
+}
+
+func TestServerInjectedContextMessages_EmptyUserIDSkipsMemoryFiles(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	srv := &Server{
+		appName:         "demo-app",
+		memoryFileStore: memoryStore,
+	}
+
+	msgs := srv.injectedContextMessages(
+		context.Background(),
+		" ",
+		"telegram:dm:u1",
+		"",
+	)
+	require.Empty(t, msgs)
+}
+
+func TestServerInjectedContextMessages_EmptyMemoryFileSkipsMessage(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	memoryStore, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	path, err := memoryStore.EnsureMemory(
+		context.Background(),
+		"demo-app",
+		"u1",
+	)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte(" \n "), 0o600))
+
+	srv := &Server{
+		appName:         "demo-app",
+		memoryFileStore: memoryStore,
+	}
+
+	msgs := srv.injectedContextMessages(
+		context.Background(),
+		"u1",
+		"telegram:dm:u1",
+		"",
+	)
+	require.Empty(t, msgs)
 }
 
 func TestDefaultSessionID_MissingFromForDM(t *testing.T) {
@@ -1108,6 +1521,203 @@ func TestServer_ProcessMessage_IncludesRecentUploadContext(t *testing.T) {
 	)
 }
 
+func TestServer_ProcessMessage_KeepsUserTextSeparateFromRequestSystemPrompt(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	runner := &resolvingRunner{}
+	srv, err := New(runner)
+	require.NoError(t, err)
+
+	req := gwproto.MessageRequest{
+		Channel:             "telegram",
+		From:                "u1",
+		SessionID:           "telegram:dm:u1",
+		Text:                "hello",
+		RequestSystemPrompt: "Use the active persona for tone.",
+	}
+
+	rsp, status := srv.ProcessMessage(context.Background(), req)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "ok", rsp.Reply)
+	require.Equal(t, "hello", runner.msg.Content)
+	require.Len(t, runner.opts.InjectedContextMessages, 1)
+	require.Equal(
+		t,
+		"Use the active persona for tone.",
+		runner.opts.InjectedContextMessages[0].Content,
+	)
+}
+
+func TestServer_ProcessMessage_RunOptionResolver(t *testing.T) {
+	t.Parallel()
+
+	type ctxKey string
+
+	const resolverKey ctxKey = "resolver"
+	const resolverTag = "langfuse"
+
+	runner := &resolvingRunner{}
+	srv, err := New(
+		runner,
+		WithRunOptionResolver(func(
+			ctx context.Context,
+			input RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			require.Equal(t, "telegram", input.Inbound.Channel)
+			require.Equal(t, "u1", input.Inbound.From)
+			require.Equal(t, "msg-1", input.Inbound.MessageID)
+			require.Equal(t, "u1", input.UserID)
+			require.Equal(t, "telegram:dm:u1", input.SessionID)
+			require.Equal(t, "req-in", input.RequestID)
+			require.Equal(t, "hello", input.Message.Content)
+			require.Equal(
+				t,
+				json.RawMessage(`{"actor_id":"u1"}`),
+				input.Extensions["ext"],
+			)
+			return context.WithValue(
+					ctx,
+					resolverKey,
+					resolverTag,
+				), []agent.RunOption{
+					agent.WithInstruction("resolver"),
+				}
+		}),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			Channel:   "telegram",
+			From:      "u1",
+			MessageID: "msg-1",
+			RequestID: "req-in",
+			Text:      "hello",
+			Extensions: map[string]json.RawMessage{
+				"ext": json.RawMessage(`{"actor_id":"u1"}`),
+			},
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "req-1", rsp.RequestID)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, resolverTag, runner.ctx.Value(resolverKey))
+	require.Equal(t, "resolver", runner.opts.Instruction)
+	require.Equal(t, "req-in", runner.opts.RequestID)
+	require.Equal(t, "u1", runner.user)
+	require.Equal(t, "telegram:dm:u1", runner.sess)
+	require.Equal(t, "hello", runner.msg.Content)
+	require.Equal(t, 1, runner.calls)
+}
+
+func TestServer_ProcessMessage_RunOptionResolver_NoExtraOptions(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	type ctxKey string
+
+	const resolverKey ctxKey = "resolver"
+
+	runner := &resolvingRunner{}
+	srv, err := New(
+		runner,
+		WithRunOptionResolver(func(
+			ctx context.Context,
+			_ RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			return context.WithValue(ctx, resolverKey, "ok"), nil
+		}),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			Channel: "telegram",
+			From:    "u1",
+			Text:    "hello",
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "req-1", rsp.RequestID)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, "ok", runner.ctx.Value(resolverKey))
+	require.Empty(t, runner.opts.Instruction)
+}
+
+func TestServer_ProcessMessage_RunOptionResolver_Composes(t *testing.T) {
+	t.Parallel()
+
+	type ctxKey string
+
+	const (
+		firstKey  ctxKey = "first"
+		secondKey ctxKey = "second"
+		firstTag         = "langfuse"
+		secondTag        = "audit"
+	)
+
+	runner := &resolvingRunner{}
+	srv, err := New(
+		runner,
+		WithRunOptionResolver(func(
+			ctx context.Context,
+			_ RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			return context.WithValue(
+					ctx,
+					firstKey,
+					firstTag,
+				), []agent.RunOption{
+					agent.WithTraceStartedCallback(
+						func(oteltrace.SpanContext) {},
+					),
+				}
+		}),
+		WithRunOptionResolver(func(
+			ctx context.Context,
+			_ RunOptionInput,
+		) (context.Context, []agent.RunOption) {
+			require.Equal(t, firstTag, ctx.Value(firstKey))
+			return context.WithValue(
+					ctx,
+					secondKey,
+					secondTag,
+				), []agent.RunOption{
+					agent.WithTraceStartedCallback(
+						func(oteltrace.SpanContext) {},
+					),
+				}
+		}),
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			Channel: "telegram",
+			From:    "u1",
+			Text:    "hello",
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "req-1", rsp.RequestID)
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, firstTag, runner.ctx.Value(firstKey))
+	require.Equal(t, secondTag, runner.ctx.Value(secondKey))
+	require.Len(t, runner.opts.TraceStartedCallbacks, 2)
+}
+
 func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {
 	t.Parallel()
 
@@ -1141,7 +1751,7 @@ func TestServer_ProcessMessage_DebugRecorderWritesTrace(t *testing.T) {
 	require.Equal(t, "ok", rsp.Reply)
 
 	matches, err := filepath.Glob(
-		filepath.Join(dir, "*", "*", debugEventsFile),
+		filepath.Join(dir, "*", "*", debugEventsFile+"*"),
 	)
 	require.NoError(t, err)
 	require.Len(t, matches, 1)
@@ -1821,7 +2431,7 @@ func TestServer_ProcessMessage_NilServer(t *testing.T) {
 	t.Parallel()
 
 	var srv *Server
-	rsp, status := srv.ProcessMessage(nil, gwproto.MessageRequest{})
+	rsp, status := srv.ProcessMessage(context.TODO(), gwproto.MessageRequest{})
 	require.Equal(t, http.StatusInternalServerError, status)
 	require.NotNil(t, rsp.Error)
 	require.Equal(t, errTypeInternal, rsp.Error.Type)
@@ -1900,7 +2510,7 @@ func TestServer_CancelRequest_NilContext(t *testing.T) {
 	srv, err := New(r)
 	require.NoError(t, err)
 
-	canceled, apiErr, status := srv.CancelRequest(nil, "req-1")
+	canceled, apiErr, status := srv.CancelRequest(context.TODO(), "req-1")
 	require.True(t, canceled)
 	require.Nil(t, apiErr)
 	require.Equal(t, http.StatusOK, status)
@@ -2059,6 +2669,90 @@ func TestReplyAccumulator_ChunksAndFull(t *testing.T) {
 		},
 	})
 	require.Equal(t, "full", acc.Text)
+}
+
+func TestReplyAccumulator_IgnoresPublicToolCallContent(t *testing.T) {
+	t.Parallel()
+
+	acc := newReplyAccumulator()
+	acc.Consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{
+				{Delta: model.Message{Content: "draft"}},
+			},
+		},
+		RequestID: "req-1",
+	})
+	require.Equal(t, "draft", acc.Text)
+
+	acc.Consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "let me check",
+						ToolCalls: []model.ToolCall{{
+							ID: "call-1",
+						}},
+					},
+				},
+			},
+		},
+	})
+	require.Empty(t, acc.Text)
+
+	acc.Consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("final")},
+			},
+		},
+	})
+	require.Equal(t, "final", acc.Text)
+}
+
+func TestReplyAccumulator_IgnoresPublicToolCallDelta(t *testing.T) {
+	t.Parallel()
+
+	acc := newReplyAccumulator()
+	acc.Consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{
+				{Delta: model.Message{Content: "draft"}},
+			},
+		},
+	})
+	require.Equal(t, "draft", acc.Text)
+
+	acc.Consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					Content: "let me check",
+					ToolCalls: []model.ToolCall{{
+						ID: "call-1",
+					}},
+				},
+			}},
+		},
+	})
+	require.Empty(t, acc.Text)
+
+	acc.Consume(&event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("final")},
+			},
+		},
+	})
+	require.Equal(t, "final", acc.Text)
 }
 
 func TestReplyAccumulator_IgnoresNilAndUnsupported(t *testing.T) {

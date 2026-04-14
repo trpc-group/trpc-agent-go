@@ -14,6 +14,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,8 +31,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
+	criteriontext "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
+	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -41,8 +48,9 @@ type fakeRunner struct {
 	events []*event.Event
 	err    error
 
-	mu    sync.Mutex
-	calls []model.Message
+	mu         sync.Mutex
+	calls      []model.Message
+	sessionIDs []string
 }
 
 func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
@@ -51,6 +59,7 @@ func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, m
 	}
 	f.mu.Lock()
 	f.calls = append(f.calls, message)
+	f.sessionIDs = append(f.sessionIDs, sessionID)
 	f.mu.Unlock()
 
 	ch := make(chan *event.Event, len(f.events))
@@ -222,6 +231,122 @@ func makeEvalCase(appName, caseID, prompt string) *evalset.EvalCase {
 			State:   map[string]any{},
 		},
 	}
+}
+
+func TestLocalEvaluateResolvesMetricRegistryCompareName(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	evalCaseID := "case-1"
+	evalSetManager := evalsetinmemory.New()
+	_, err := evalSetManager.Create(ctx, appName, evalSetID)
+	if !assert.NoError(t, err) {
+		return
+	}
+	expectedCase := makeEvalCase(appName, evalCaseID, "question")
+	expectedCase.Conversation[0].FinalResponse = &model.Message{
+		Role:    model.RoleAssistant,
+		Content: " answer ",
+	}
+	err = evalSetManager.AddCase(ctx, appName, evalSetID, expectedCase)
+	if !assert.NoError(t, err) {
+		return
+	}
+	metricDir := t.TempDir()
+	metricManager := metriclocal.New(metric.WithBaseDir(metricDir))
+	err = metricManager.Add(ctx, appName, evalSetID, &metric.EvalMetric{
+		MetricName: "final_response_avg_score",
+		Threshold:  1.0,
+		Criterion: &criterion.Criterion{
+			FinalResponse: &finalresponse.FinalResponseCriterion{
+				Text: &criteriontext.TextCriterion{CompareName: "trim_equal"},
+			},
+		},
+	})
+	if !assert.NoError(t, err) {
+		return
+	}
+	loadedMetric, err := metricManager.Get(ctx, appName, evalSetID, "final_response_avg_score")
+	if !assert.NoError(t, err) {
+		return
+	}
+	customMetricRegistry := metricregistry.New()
+	err = customMetricRegistry.RegisterTextCompare("trim_equal", func(actual, expected string) (bool, error) {
+		return strings.TrimSpace(actual) == strings.TrimSpace(expected), nil
+	})
+	if !assert.NoError(t, err) {
+		return
+	}
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(evalSetManager),
+		service.WithRegistry(registry.New()),
+		service.WithMetricRegistry(customMetricRegistry),
+	)
+	if !assert.NoError(t, err) {
+		return
+	}
+	result, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:   appName,
+		EvalSetID: evalSetID,
+		InferenceResults: []*service.InferenceResult{
+			{
+				AppName:    appName,
+				EvalSetID:  evalSetID,
+				EvalCaseID: evalCaseID,
+				SessionID:  "session",
+				UserID:     "user",
+				Status:     status.EvalStatusPassed,
+				Inferences: []*evalset.Invocation{
+					makeActualInvocation(evalCaseID+"-1", "question", "answer"),
+				},
+			},
+		},
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{loadedMetric},
+		},
+	})
+	if !assert.NoError(t, err) {
+		return
+	}
+	if !assert.Len(t, result.EvalCaseResults, 1) {
+		return
+	}
+	caseResult := result.EvalCaseResults[0]
+	assert.Equal(t, status.EvalStatusPassed, caseResult.FinalEvalStatus)
+	if assert.Len(t, caseResult.OverallEvalMetricResults, 1) {
+		assert.Equal(t, status.EvalStatusPassed, caseResult.OverallEvalMetricResults[0].EvalStatus)
+	}
+	if assert.NotNil(t, loadedMetric.Criterion) && assert.NotNil(t, loadedMetric.Criterion.FinalResponse) &&
+		assert.NotNil(t, loadedMetric.Criterion.FinalResponse.Text) {
+		assert.NotNil(t, loadedMetric.Criterion.FinalResponse.Text.Compare)
+	}
+}
+
+func TestLocalResolveMetricExtensionsValidation(t *testing.T) {
+	svc := &local{}
+	assert.ErrorContains(t, svc.resolveMetricExtensions(nil, metricregistry.New()), "evaluate config is nil")
+	assert.ErrorContains(t, svc.resolveMetricExtensions(&service.EvaluateConfig{}, nil), "metric registry is nil")
+}
+
+func TestLocalResolveMetricExtensionsReturnsResolveError(t *testing.T) {
+	svc := &local{}
+	err := svc.resolveMetricExtensions(
+		&service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{
+				{
+					Criterion: &criterion.Criterion{
+						FinalResponse: &finalresponse.FinalResponseCriterion{
+							Text: &criteriontext.TextCriterion{CompareName: "missing"},
+						},
+					},
+				},
+			},
+		},
+		metricregistry.New(),
+	)
+	assert.ErrorContains(t, err, "resolve metric at index 0")
+	assert.ErrorContains(t, err, "text compare missing not found")
 }
 
 func makeInferenceResult(appName, evalSetID, caseID, sessionID string, inferences []*evalset.Invocation) *service.InferenceResult {
@@ -2247,6 +2372,13 @@ func TestLocalEvaluateExpectedRunnerEnabledUsesExpectedRunnerOutputs(t *testing.
 	inferenceResults, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
 	assert.NoError(t, err)
 	assert.Len(t, inferenceResults, 1)
+	if assert.Len(t, inferenceResults, 1) {
+		assert.Len(t, inferenceResults[0].ExpectedInferences, 1)
+	}
+	expectedRunner.mu.Lock()
+	callsAfterInference := len(expectedRunner.calls)
+	expectedRunner.mu.Unlock()
+	assert.Equal(t, 1, callsAfterInference)
 
 	runResult, err := svc.Evaluate(ctx, &service.EvaluateRequest{
 		AppName:          appName,
@@ -2271,11 +2403,262 @@ func TestLocalEvaluateExpectedRunnerEnabledUsesExpectedRunnerOutputs(t *testing.
 
 	expectedRunner.mu.Lock()
 	expectedCalls := len(expectedRunner.calls)
+	expectedSessionID := ""
+	if expectedCalls > 0 {
+		expectedSessionID = expectedRunner.sessionIDs[0]
+	}
 	expectedRunner.mu.Unlock()
 	assert.Equal(t, 1, expectedCalls)
+	assert.Equal(t, "session-expected", expectedSessionID)
+	actualRunner.mu.Lock()
+	actualCalls := len(actualRunner.calls)
+	actualSessionID := ""
+	if actualCalls > 0 {
+		actualSessionID = actualRunner.sessionIDs[0]
+	}
+	actualRunner.mu.Unlock()
+	assert.Equal(t, 1, actualCalls)
+	assert.Equal(t, "session", actualSessionID)
 }
 
-func TestLocalEvaluateExpectedRunnerEnabledWithoutExpectedRunnerMarksCaseFailed(t *testing.T) {
+func TestLocalEvaluateConversationScenarioExpectedRunnerEnabledUsesActualUserSequence(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case"
+	metricName := "metric"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{
+		EvalID:                caseID,
+		ExpectedRunnerEnabled: true,
+		ConversationScenario: &evalset.ConversationScenario{
+			ConversationPlan: "Ask one follow-up and stop when done.",
+			StopSignal:       "</finished>",
+		},
+		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
+	}))
+
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: metricName,
+		result: &evaluator.EvaluateResult{
+			OverallScore:  1,
+			OverallStatus: status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{
+				{Score: 1, Status: status.EvalStatusPassed},
+			},
+		},
+	}
+	assert.NoError(t, reg.Register(metricName, fakeEval))
+
+	actualRunner := &fakeRunner{events: []*event.Event{makeFinalEvent("actual")}}
+	expectedRunner := &fakeRunner{events: []*event.Event{makeFinalEvent("expected")}}
+	simulator := &scenarioTestSimulator{
+		conversation: &scenarioTestConversation{
+			decisions: []*usersimulation.Decision{
+				{Message: &model.Message{Role: model.RoleUser, Content: "Please book tomorrow morning."}},
+				{Message: &model.Message{Role: model.RoleUser, Content: "Use a refundable option and stay near line 2."}},
+				{Stop: true},
+			},
+		},
+	}
+	svc, err := New(
+		actualRunner,
+		service.WithEvalSetManager(mgr),
+		service.WithRegistry(reg),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+		service.WithExpectedRunner(expectedRunner),
+		service.WithUserSimulator(simulator),
+	)
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	inferenceResults, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.NoError(t, err)
+	assert.Len(t, inferenceResults, 1)
+	if assert.Len(t, inferenceResults, 1) {
+		assert.Len(t, inferenceResults[0].ExpectedInferences, 2)
+	}
+	expectedRunner.mu.Lock()
+	callsAfterInference := len(expectedRunner.calls)
+	expectedRunner.mu.Unlock()
+	assert.Equal(t, 2, callsAfterInference)
+
+	runResult, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: inferenceResults,
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{{MetricName: metricName, Threshold: 0.5}},
+		},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, runResult)
+
+	if assert.Len(t, fakeEval.receivedActuals, 2) {
+		assert.Equal(t, "Please book tomorrow morning.", fakeEval.receivedActuals[0].UserContent.Content)
+		assert.Equal(t, "Use a refundable option and stay near line 2.", fakeEval.receivedActuals[1].UserContent.Content)
+		assert.Equal(t, "actual", fakeEval.receivedActuals[0].FinalResponse.Content)
+		assert.Equal(t, "actual", fakeEval.receivedActuals[1].FinalResponse.Content)
+	}
+	if assert.Len(t, fakeEval.receivedExpecteds, 2) {
+		assert.Equal(t, "Please book tomorrow morning.", fakeEval.receivedExpecteds[0].UserContent.Content)
+		assert.Equal(t, "Use a refundable option and stay near line 2.", fakeEval.receivedExpecteds[1].UserContent.Content)
+		assert.Equal(t, "expected", fakeEval.receivedExpecteds[0].FinalResponse.Content)
+		assert.Equal(t, "expected", fakeEval.receivedExpecteds[1].FinalResponse.Content)
+	}
+	expectedRunner.mu.Lock()
+	expectedCalls := len(expectedRunner.calls)
+	expectedSessionID := ""
+	if expectedCalls > 0 {
+		expectedSessionID = expectedRunner.sessionIDs[0]
+	}
+	expectedMessages := append([]model.Message(nil), expectedRunner.calls...)
+	expectedRunner.mu.Unlock()
+	assert.Equal(t, 2, expectedCalls)
+	assert.Equal(t, "session-expected", expectedSessionID)
+	if assert.Len(t, expectedMessages, 2) {
+		assert.Equal(t, "Please book tomorrow morning.", expectedMessages[0].Content)
+		assert.Equal(t, "Use a refundable option and stay near line 2.", expectedMessages[1].Content)
+	}
+	actualRunner.mu.Lock()
+	actualCalls := len(actualRunner.calls)
+	actualSessionID := ""
+	if actualCalls > 0 {
+		actualSessionID = actualRunner.sessionIDs[0]
+	}
+	actualMessages := append([]model.Message(nil), actualRunner.calls...)
+	actualRunner.mu.Unlock()
+	assert.Equal(t, 2, actualCalls)
+	assert.Equal(t, "session", actualSessionID)
+	if assert.Len(t, actualMessages, 2) {
+		assert.Equal(t, "Please book tomorrow morning.", actualMessages[0].Content)
+		assert.Equal(t, "Use a refundable option and stay near line 2.", actualMessages[1].Content)
+	}
+}
+
+func TestLocalEvaluateConversationScenarioExpectedDriverReusesPrecomputedExpecteds(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case"
+	metricName := "metric"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{
+		EvalID:                caseID,
+		ExpectedRunnerEnabled: true,
+		ConversationScenario: &evalset.ConversationScenario{
+			Driver:           evalset.ConversationScenarioDriverExpected,
+			ConversationPlan: "Ask one follow-up and stop when done.",
+			StopSignal:       "</finished>",
+		},
+		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
+	}))
+
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: metricName,
+		result: &evaluator.EvaluateResult{
+			OverallScore:  1,
+			OverallStatus: status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{
+				{Score: 1, Status: status.EvalStatusPassed},
+				{Score: 1, Status: status.EvalStatusPassed},
+			},
+		},
+	}
+	assert.NoError(t, reg.Register(metricName, fakeEval))
+
+	actualRunner := &fakeRunner{events: []*event.Event{makeFinalEvent("actual")}}
+	expectedRunner := &fakeRunner{events: []*event.Event{makeFinalEvent("expected")}}
+	simulator := &scenarioTestSimulator{
+		conversation: &scenarioTestConversation{
+			decisions: []*usersimulation.Decision{
+				{Message: &model.Message{Role: model.RoleUser, Content: "Please book tomorrow morning."}},
+				{Message: &model.Message{Role: model.RoleUser, Content: "Use a refundable option and stay near line 2."}},
+				{Stop: true},
+			},
+		},
+	}
+	svc, err := New(
+		actualRunner,
+		service.WithEvalSetManager(mgr),
+		service.WithRegistry(reg),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+		service.WithExpectedRunner(expectedRunner),
+		service.WithUserSimulator(simulator),
+	)
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	inferenceResults, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.NoError(t, err)
+	assert.Len(t, inferenceResults, 1)
+	expectedRunner.mu.Lock()
+	callsAfterInference := len(expectedRunner.calls)
+	expectedMessagesAfterInference := append([]model.Message(nil), expectedRunner.calls...)
+	expectedRunner.mu.Unlock()
+	assert.Equal(t, 2, callsAfterInference)
+	if assert.Len(t, expectedMessagesAfterInference, 2) {
+		assert.Equal(t, "Please book tomorrow morning.", expectedMessagesAfterInference[0].Content)
+		assert.Equal(t, "Use a refundable option and stay near line 2.", expectedMessagesAfterInference[1].Content)
+	}
+
+	runResult, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          appName,
+		EvalSetID:        evalSetID,
+		InferenceResults: inferenceResults,
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{{MetricName: metricName, Threshold: 0.5}},
+		},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, runResult)
+
+	if assert.Len(t, fakeEval.receivedActuals, 2) {
+		assert.Equal(t, "Please book tomorrow morning.", fakeEval.receivedActuals[0].UserContent.Content)
+		assert.Equal(t, "Use a refundable option and stay near line 2.", fakeEval.receivedActuals[1].UserContent.Content)
+		assert.Equal(t, "actual", fakeEval.receivedActuals[0].FinalResponse.Content)
+		assert.Equal(t, "actual", fakeEval.receivedActuals[1].FinalResponse.Content)
+	}
+	if assert.Len(t, fakeEval.receivedExpecteds, 2) {
+		assert.Equal(t, "Please book tomorrow morning.", fakeEval.receivedExpecteds[0].UserContent.Content)
+		assert.Equal(t, "Use a refundable option and stay near line 2.", fakeEval.receivedExpecteds[1].UserContent.Content)
+		assert.Equal(t, "expected", fakeEval.receivedExpecteds[0].FinalResponse.Content)
+		assert.Equal(t, "expected", fakeEval.receivedExpecteds[1].FinalResponse.Content)
+	}
+	expectedRunner.mu.Lock()
+	callsAfterEvaluate := len(expectedRunner.calls)
+	expectedSessionID := ""
+	if callsAfterEvaluate > 0 {
+		expectedSessionID = expectedRunner.sessionIDs[0]
+	}
+	expectedRunner.mu.Unlock()
+	assert.Equal(t, 2, callsAfterEvaluate)
+	assert.Equal(t, "session-expected", expectedSessionID)
+	actualRunner.mu.Lock()
+	actualCalls := len(actualRunner.calls)
+	actualSessionID := ""
+	if actualCalls > 0 {
+		actualSessionID = actualRunner.sessionIDs[0]
+	}
+	actualMessages := append([]model.Message(nil), actualRunner.calls...)
+	actualRunner.mu.Unlock()
+	assert.Equal(t, 2, actualCalls)
+	assert.Equal(t, "session", actualSessionID)
+	if assert.Len(t, actualMessages, 2) {
+		assert.Equal(t, "Please book tomorrow morning.", actualMessages[0].Content)
+		assert.Equal(t, "Use a refundable option and stay near line 2.", actualMessages[1].Content)
+	}
+}
+
+func TestLocalInferenceExpectedRunnerEnabledWithoutExpectedRunnerMarksCaseFailed(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"
 	evalSetID := "set"
@@ -2307,26 +2690,62 @@ func TestLocalEvaluateExpectedRunnerEnabledWithoutExpectedRunnerMarksCaseFailed(
 	inferenceResults, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
 	assert.NoError(t, err)
 	assert.Len(t, inferenceResults, 1)
+	if assert.Len(t, inferenceResults, 1) {
+		assert.Equal(t, status.EvalStatusFailed, inferenceResults[0].Status)
+		assert.Contains(t, inferenceResults[0].ErrorMessage, "expected runner is nil")
+	}
+}
+
+func TestLocalEvaluateExpectedRunnerEnabledWithoutExpectedInferencesMarksCaseFailed(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{
+		EvalID:                caseID,
+		ExpectedRunnerEnabled: true,
+		Conversation: []*evalset.Invocation{
+			makeInvocation("inv-1", "prompt"),
+		},
+		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
+	}))
+
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+	)
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
 
 	runResult, err := svc.Evaluate(ctx, &service.EvaluateRequest{
-		AppName:          appName,
-		EvalSetID:        evalSetID,
-		InferenceResults: inferenceResults,
+		AppName:   appName,
+		EvalSetID: evalSetID,
+		InferenceResults: []*service.InferenceResult{
+			makeInferenceResult(appName, evalSetID, caseID, "session", []*evalset.Invocation{
+				makeActualInvocation("inv-1", "prompt", "actual"),
+			}),
+		},
 		EvaluateConfig: &service.EvaluateConfig{
 			EvalMetrics: []*metric.EvalMetric{{MetricName: "missing_metric", Threshold: 0.5}},
 		},
 	})
 	assert.NoError(t, err)
 	assert.NotNil(t, runResult)
-	assert.Len(t, runResult.EvalCaseResults, 1)
-	assert.Equal(t, status.EvalStatusFailed, runResult.EvalCaseResults[0].FinalEvalStatus)
-	assert.Contains(t, runResult.EvalCaseResults[0].ErrorMessage, "expected runner is nil")
+	if assert.Len(t, runResult.EvalCaseResults, 1) {
+		assert.Equal(t, status.EvalStatusFailed, runResult.EvalCaseResults[0].FinalEvalStatus)
+		assert.Contains(t, runResult.EvalCaseResults[0].ErrorMessage, "expected inferences are empty")
+	}
 }
 
-func TestInferExpectedsForEvalValidationErrors(t *testing.T) {
+func TestInferExpectedInferencesValidationErrors(t *testing.T) {
 	ctx := context.Background()
 	svc := &local{expectedRunner: &fakeRunner{}}
-	inferenceResult := &service.InferenceResult{SessionID: "session"}
 	evalCase := &evalset.EvalCase{
 		EvalID: "case",
 		SessionInput: &evalset.SessionInput{
@@ -2336,27 +2755,28 @@ func TestInferExpectedsForEvalValidationErrors(t *testing.T) {
 		},
 	}
 	tests := []struct {
-		name    string
-		actuals []*evalset.Invocation
-		want    string
+		name   string
+		inputs []*evalset.Invocation
+		want   string
 	}{
-		{name: "empty_actuals", actuals: []*evalset.Invocation{}, want: "actual invocations are empty"},
-		{name: "nil_actual", actuals: []*evalset.Invocation{nil}, want: "actual invocation is nil at index 0"},
-		{name: "nil_user_content", actuals: []*evalset.Invocation{{InvocationID: "inv-1"}}, want: "actual invocation user content is nil at index 0"},
+		{name: "empty_inputs", inputs: []*evalset.Invocation{}, want: "input invocations are empty"},
+		{name: "nil_input", inputs: []*evalset.Invocation{nil}, want: "input invocation is nil at index 0"},
+		{name: "nil_user_content", inputs: []*evalset.Invocation{{InvocationID: "inv-1"}}, want: "input invocation user content is nil at index 0"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := svc.inferExpectedsForEval(ctx, inferenceResult, evalCase, tc.actuals)
+			_, err := svc.inferExpectedInferences(ctx, evalCase, tc.inputs, "session", &service.Options{
+				ExpectedRunner: svc.expectedRunner,
+			})
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tc.want)
 		})
 	}
 }
 
-func TestInferExpectedsForEvalPropagatesRunnerError(t *testing.T) {
+func TestInferExpectedInferencesPropagatesRunnerError(t *testing.T) {
 	ctx := context.Background()
 	svc := &local{expectedRunner: &fakeRunner{err: errors.New("run failed")}}
-	inferenceResult := &service.InferenceResult{SessionID: "session"}
 	evalCase := &evalset.EvalCase{
 		EvalID: "case",
 		SessionInput: &evalset.SessionInput{
@@ -2365,10 +2785,66 @@ func TestInferExpectedsForEvalPropagatesRunnerError(t *testing.T) {
 			State:   map[string]any{},
 		},
 	}
-	_, err := svc.inferExpectedsForEval(ctx, inferenceResult, evalCase, []*evalset.Invocation{makeInvocation("inv-1", "prompt")})
+	_, err := svc.inferExpectedInferences(ctx, evalCase, []*evalset.Invocation{makeInvocation("inv-1", "prompt")}, "session", &service.Options{
+		ExpectedRunner: svc.expectedRunner,
+	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "run expected runner")
 	assert.Contains(t, err.Error(), "run failed")
+}
+
+func TestLocalInferenceTraceModeExpectedRunnerEnabledPrecomputesExpecteds(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case"
+
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{
+		EvalID:                caseID,
+		EvalMode:              evalset.EvalModeTrace,
+		ExpectedRunnerEnabled: true,
+		ActualConversation: []*evalset.Invocation{
+			makeActualInvocation("inv-1", "prompt", "recorded-actual"),
+		},
+		SessionInput: &evalset.SessionInput{AppName: appName, UserID: "demo-user", State: map[string]any{}},
+	}))
+
+	actualRunner := &fakeRunner{err: errors.New("actual runner should not be called")}
+	expectedRunner := &fakeRunner{events: []*event.Event{makeFinalEvent("expected")}}
+	svc, err := New(
+		actualRunner,
+		service.WithEvalSetManager(mgr),
+		service.WithRegistry(registry.New()),
+		service.WithSessionIDSupplier(func(ctx context.Context) string { return "session" }),
+		service.WithExpectedRunner(expectedRunner),
+	)
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	inferenceResults, err := svc.Inference(ctx, &service.InferenceRequest{AppName: appName, EvalSetID: evalSetID})
+	assert.NoError(t, err)
+	if assert.Len(t, inferenceResults, 1) {
+		assert.Equal(t, status.EvalStatusPassed, inferenceResults[0].Status)
+		if assert.Len(t, inferenceResults[0].ExpectedInferences, 1) {
+			assert.Equal(t, "expected", inferenceResults[0].ExpectedInferences[0].FinalResponse.Content)
+		}
+	}
+	actualRunner.mu.Lock()
+	actualCalls := len(actualRunner.calls)
+	actualRunner.mu.Unlock()
+	assert.Zero(t, actualCalls)
+	expectedRunner.mu.Lock()
+	expectedCalls := len(expectedRunner.calls)
+	expectedSessionID := ""
+	if expectedCalls > 0 {
+		expectedSessionID = expectedRunner.sessionIDs[0]
+	}
+	expectedRunner.mu.Unlock()
+	assert.Equal(t, 1, expectedCalls)
+	assert.Equal(t, "session-expected", expectedSessionID)
 }
 
 func TestLocalInferenceParallelBeforeInferenceCaseReceivesSharedRequest(t *testing.T) {
@@ -3013,7 +3489,12 @@ func TestLocalEvaluateAfterEvaluateSetReceivesNilResultWhenEvaluateFails(t *test
 		return nil, nil
 	})
 
-	svc := &local{callbacks: callbacks, evalSetManager: evalsetinmemory.New(), registry: registry.New()}
+	svc := &local{
+		callbacks:      callbacks,
+		evalSetManager: evalsetinmemory.New(),
+		registry:       registry.New(),
+		metricRegistry: metricregistry.New(),
+	}
 	_, err := svc.Evaluate(ctx, req)
 	assert.Error(t, err)
 	assert.NotNil(t, got)
@@ -3051,7 +3532,12 @@ func TestLocalEvaluateAfterEvaluateSetReceivesRunResultOnSuccess(t *testing.T) {
 		return nil, nil
 	})
 
-	svc := &local{callbacks: callbacks, evalSetManager: evalsetinmemory.New(), registry: registry.New()}
+	svc := &local{
+		callbacks:      callbacks,
+		evalSetManager: evalsetinmemory.New(),
+		registry:       registry.New(),
+		metricRegistry: metricregistry.New(),
+	}
 	res, err := svc.Evaluate(ctx, req)
 	assert.NoError(t, err)
 	assert.NotNil(t, res)
@@ -3141,7 +3627,7 @@ func TestPrepareCaseEvaluationInputs_AttachesContextMessagesToEachInvocation(t *
 	}
 
 	svc := &local{}
-	inputs, err := svc.prepareCaseEvaluationInputs(ctx, inferenceResult, evalCase)
+	inputs, err := svc.prepareCaseEvaluationInputs(ctx, inferenceResult, evalCase, &service.Options{})
 	assert.NoError(t, err)
 	assert.Len(t, inputs.actuals, 2)
 	assert.Len(t, inputs.expecteds, 2)
@@ -3175,4 +3661,73 @@ func TestAttachContextMessages_SkipsNilAndPrePopulatedInvocations(t *testing.T) 
 
 	assert.Equal(t, existing, invWithExisting.ContextMessages)
 	assert.Equal(t, contextMessages, invEmpty.ContextMessages)
+}
+
+func TestPrepareCaseEvaluationInputsScenarioBuildsPlaceholderExpecteds(t *testing.T) {
+	systemMessage := model.NewSystemMessage("You are a helper.")
+	evalCase := makeScenarioEvalCase("app", "case-1")
+	evalCase.ContextMessages = []*model.Message{&systemMessage}
+	inferenceResult := makeInferenceResult("app", "set", "case-1", "session-1", []*evalset.Invocation{
+		makeActualInvocation("inv-1", "user prompt", "assistant reply"),
+	})
+	svc := &local{}
+	inputs, err := svc.prepareCaseEvaluationInputs(context.Background(), inferenceResult, evalCase, &service.Options{})
+	assert.NoError(t, err)
+	assert.Len(t, inputs.actuals, 1)
+	assert.Len(t, inputs.expecteds, 1)
+	assert.Equal(t, "demo-user", inputs.userID)
+	if assert.NotNil(t, inputs.expecteds[0]) {
+		assert.Equal(t, "inv-1", inputs.expecteds[0].InvocationID)
+		assert.Same(t, inputs.actuals[0].UserContent, inputs.expecteds[0].UserContent)
+		assert.Nil(t, inputs.expecteds[0].FinalResponse)
+		assert.Len(t, inputs.expecteds[0].ContextMessages, 1)
+	}
+	if assert.NotNil(t, inputs.actuals[0]) {
+		assert.Len(t, inputs.actuals[0].ContextMessages, 1)
+	}
+}
+
+func TestEvaluatePerCaseScenarioRunsConfiguredMetric(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	evalCase := makeScenarioEvalCase(appName, "case-1")
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	reg := registry.New()
+	fakeEval := &fakeEvaluator{
+		name: "llm_rubric_response",
+		result: &evaluator.EvaluateResult{
+			OverallScore:  1,
+			OverallStatus: status.EvalStatusPassed,
+			PerInvocationResults: []*evaluator.PerInvocationResult{
+				{Score: 1, Status: status.EvalStatusPassed},
+			},
+		},
+	}
+	assert.NoError(t, reg.Register(fakeEval.name, fakeEval))
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-1")
+	inferenceResult := makeInferenceResult(appName, evalSetID, "case-1", "session-1", []*evalset.Invocation{
+		makeActualInvocation("inv-1", "user prompt", "assistant reply"),
+	})
+	result, err := svc.evaluatePerCase(ctx, inferenceResult, &service.EvaluateConfig{
+		EvalMetrics: []*metric.EvalMetric{
+			{MetricName: "llm_rubric_response"},
+		},
+	}, &service.Options{
+		EvalSetManager: mgr,
+		Registry:       reg,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusPassed, result.FinalEvalStatus)
+	assert.Len(t, result.OverallEvalMetricResults, 1)
+	if assert.Len(t, result.EvalMetricResultPerInvocation, 1) {
+		assert.Len(t, result.EvalMetricResultPerInvocation[0].EvalMetricResults, 1)
+		assert.Equal(t, status.EvalStatusPassed, result.EvalMetricResultPerInvocation[0].EvalMetricResults[0].EvalStatus)
+	}
+	assert.Equal(t, status.EvalStatusPassed, result.OverallEvalMetricResults[0].EvalStatus)
+	assert.Equal(t, inferenceResult.Inferences, fakeEval.receivedActuals)
+	assert.Len(t, fakeEval.receivedExpecteds, 1)
 }

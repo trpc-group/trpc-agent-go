@@ -10,7 +10,7 @@ Runner 提供了运行 Agent 的接口，负责会话管理和事件流处理。
 - **🔄 事件处理**：接收 Agent 事件流，将非 partial 响应事件追加到会话中
 - **🆔 ID 生成**：自动生成 Invocation ID 和事件 ID
 - **📊 可观测集成**：集成 telemetry/trace，自动记录 span
-- **✅ 完成事件**：在 Agent 事件流结束后生成 runner-completion 事件
+- **✅ 完成事件**：在 Agent 事件流结束后生成 `runner.completion` 事件
 - **🔌 插件**：在 Runner 上注册一次，全局作用于该 Runner 管理的 Agent、Tool 和模型调用。
 
 ## 架构设计
@@ -203,6 +203,28 @@ _ = err
 - 每次调用 `Runner.Run(...)`，Factory 会被调用一次。
 - `agent.WithAgent(...)` 依然优先生效（测试时很方便）。
 
+#### Agent Factory 中的资源边界
+
+`AgentFactory` 适合按请求拼装 Agent 配置，但它**不会改变资源所有权**。
+
+- `Runner` 只负责调用 factory 获取一个 `agent.Agent`。
+- `Runner.Close()` 只会关闭 Runner 自己创建或持有的资源；它**不会**
+  自动关闭 factory 内部新建的 `tool.ToolSet`、临时 MCP 连接、沙箱会话
+  等请求级资源。
+- 原因是 `agent.Agent` 接口本身没有 `Close()`，因此 Runner 无法统一接管
+  这类资源的释放。
+
+实践建议：
+
+- 如果某个 `ToolSet` 或外部连接适合跨请求复用，优先在 factory 外创建一次，
+  然后在 factory 中复用；应用退出时再统一 `Close()`。
+- 如果资源必须按请求创建，调用方需要在本次 run 结束后自行清理。
+  常见做法是包装一个带清理逻辑的 Agent，或者在 Agent 的
+  after callback 中执行清理。
+
+这类边界在使用 MCP ToolSet 时尤其常见，详细说明可继续参考
+`tool` 文档中的 ToolSet 生命周期章节。
+
 ### 🔌 插件
 
 Runner 插件是一类全局、Runner 作用域的 Hook（钩子）。只需要在创建 Runner 时
@@ -293,6 +315,132 @@ _ = ok
 managed.Cancel(requestID)
 ```
 
+#### 在同一轮 run 中排队插入新的用户消息
+
+有些场景下，你并不想启动第二轮 run，而是希望继续使用当前的
+`requestID`，把新的 `role=user` 消息排队，等当前这一轮 assistant 处理完后，
+再插入到同一轮 run 里。
+
+可以使用 `runner.EnqueueUserMessage(...)`：
+
+```go
+requestID := "req-123"
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Draft a launch note."),
+    agent.WithRequestID(requestID),
+)
+if err != nil {
+    panic(err)
+}
+
+go func() {
+    time.Sleep(time.Second)
+    err := runner.EnqueueUserMessage(
+        r,
+        requestID,
+        model.NewUserMessage("Also make the tone warmer."),
+    )
+    if err != nil {
+        log.Printf("enqueue steer failed: %v", err)
+    }
+}()
+
+_ = eventChan
+```
+
+可以把一次 assistant 输出看成一轮：
+
+- 如果这次 assistant 只是普通回复，那么这一轮到 assistant 回复结束为止
+- 如果这次 assistant 发起了 `tool_call`，那么这一轮要等这批 tool 全部执行完
+
+新的用户消息只能插在两轮之间，不会插到一轮中间。
+
+最直观的理解是：
+
+```text
+user(Q1)
+assistant(tool_call A)
+tool(result A)
+user(Q2, queued steer)
+assistant(...)
+```
+
+如果一条 assistant 消息里一次发起了多个 tool，那么也要等这一整轮结束：
+
+```text
+user(Q1)
+assistant(tool_calls A, B)
+tool(result A)
+tool(result B)
+user(Q2, queued steer)
+assistant(...)
+```
+
+不会出现下面这种插法：
+
+```text
+user(Q1)
+assistant(tool_calls A, B)
+tool(result A)
+user(Q2, queued steer)
+tool(result B)
+```
+
+因为这会把同一轮里的 `tool_call -> tool_response` 结构拆开。
+
+所以它的行为可以简单理解成：
+
+- 这**不会**启动第二轮 run
+- 新消息会先进入队列，不会立刻写 Session
+- 只有上一轮 assistant 及其附属 tool 全部完成后，才会把消息追加进去
+- 这能保证 `tool_call -> tool_response` 结构保持完整
+- 如果 run 已经结束，enqueue 会返回错误
+
+如果你想和实现对应起来看，它实际发生在一次 `runOneStep()` 结束之后、下一次
+`runOneStep()` 开始之前。
+
+可运行示例：`examples/steer/`
+
+#### 按请求覆盖 AppName（多租户隔离）
+
+默认情况下，Runner 使用构造时传入的 `appName` 作为 session key 和事件过滤 key。
+如果一个 Runner 实例需要同时服务多个项目或租户，可以在每次 `Run` 调用时通过
+`agent.WithAppName` 覆盖 app name：
+
+```go
+// 一个 Runner，两个项目。
+r := runner.NewRunner("default-app", myAgent)
+
+// 项目 A — session 数据存储在 "project-a" 下。
+evA, _ := r.Run(ctx, userID, sessionID, msg,
+    agent.WithAppName("project-a"),
+)
+
+// 项目 B — session 数据存储在 "project-b" 下，与 A 完全隔离。
+evB, _ := r.Run(ctx, userID, sessionID, msg,
+    agent.WithAppName("project-b"),
+)
+```
+
+当 **未传入** `WithAppName`（或值为空字符串）时，Runner 会回退到构造函数提供的
+默认 app name。此覆盖影响的维度如下：
+
+| 维度 | 默认（无覆盖） | 使用 `WithAppName("X")` |
+|---|---|---|
+| `session.Key.AppName` | 构造时 `appName` | `"X"` |
+| 默认 `EventFilterKey` | 构造时 `appName` | `"X"` |
+
+Runner 级别的其他注册（可观测性 `appid`、agent 注册表）仍然绑定到构造时的原始
+`appName`。
+
+!!! note
+    `appName` 不能为空。如果构造函数和 `WithAppName` 都没有提供非空值，
+    session 服务会返回 `session.ErrAppNameRequired`。
+
 #### DetachedCancel（忽略父 ctx cancel）
 
 在 Go 里，`context.Context`（通常命名为 `ctx`）同时承载“取消信号”和“截止时间”。
@@ -355,7 +503,7 @@ eventChan, err := r.Run(
 
 部分模型在生成 `tool_calls` 时，可能产出非严格 JSON 的参数（例如对象 key 未加引号、尾逗号等），从而导致工具执行或外部解析失败。
 
-在 `runner.Run` 中启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)` 后，框架会对 `toolCall.Function.Arguments` 做一次尽力修复，详细使用方法可参照 [ToolCall参数自动修复](./runner.md#tool-call-参数自动修复)。
+在 `runner.Run` 中启用 `agent.WithToolCallArgumentsJSONRepairEnabled(true)` 后，框架会对 `toolCall.Function.Arguments` 做一次尽力修复，详细使用方法可参照 [ToolCall参数自动修复](./runner.md#tool-call)。
 
 #### 传入对话历史（auto-seed + 复用 Session）
 
@@ -389,6 +537,51 @@ ch, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithMessages(msg
 Session。内容处理器不会读取这个选项，它只会从 Session 事件中派生消息（或在 Session
 没有事件时回退到单条 `invocation.Message`）。`RunWithMessages` 仍会把最新的用户消息写入
 `invocation.Message`。
+
+#### 按 `nodeID` 覆盖指定节点的运行时 surface
+
+如果你需要在一次 `runner.Run(...)` 中只修改某个节点，而不是修改整个 Agent，可以传入
+`agent.WithSurfacePatchForNode(nodeID, patch)`。
+
+```go
+var patch agent.SurfacePatch
+patch.SetInstruction("Answer in one short paragraph.")
+
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Summarize this report."),
+    agent.WithSurfacePatchForNode(nodeID, patch),
+)
+```
+
+推荐先通过 `structure.Export(...)` 获取稳定 `nodeID`，再把它传给
+`WithSurfacePatchForNode(...)`。同一次运行中如果要覆盖多个节点，可以重复传多个
+`WithSurfacePatchForNode(...)`。完整说明与更多示例见
+[Agent 使用文档：按 `nodeID` 覆盖运行时 surface](./agent.md#nodeid-surface)。
+
+#### 按运行临时覆盖 `code executor`
+
+如果需要为会从 `RunOptions.CodeExecutor` 解析执行器的 Agent 在不同请求中指定不同的执行环境，例如 `LLMAgent`，可以在 `runner.Run(...)` 中直接传入 `agent.WithCodeExecutor(exec)`。
+
+```go
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("Run the release checklist skill."),
+    agent.WithCodeExecutor(containerExec),
+)
+```
+
+说明：
+
+- 该选项仅对当前这一次 `runner.Run(...)` 调用生效，不会修改 Agent 的默认配置。
+- 该选项仅对会读取 `RunOptions.CodeExecutor` 的 Agent 生效；如果使用自定义 Agent，请确认其实现会处理该运行参数。
+- 如果创建 Agent 时已经设置 `llmagent.WithCodeExecutor(...)`，则此处传入的执行器会在本次运行中临时覆盖默认值。
+- 本次运行中所有依赖代码执行器的能力，均会使用此处传入的执行器，例如 `workspace_exec`、`skill_run` 和交互式 skill 会话工具。
+- 如果仅需为 `skill_run` 提供运行环境，而不希望模型自动执行回复中的 Markdown 围栏代码，可在创建 Agent 时设置 `llmagent.WithEnableCodeExecutionResponseProcessor(false)`。更多说明见 [Skill 文档](./skill.md)。
 
 ## ✅ 图式流程的“优雅结束”与最终结果读取
 
@@ -432,6 +625,9 @@ for e := range eventChan {
 
 有些运行不会走到最终的 `graph.execution` 完成事件，就已经因为致命错误提前结束。一个很常见的场景是：
 
+如果你想看 graph、Runner、subgraph、A2A 串起来的完整推荐方案，见
+[Error Handling](error-handling.md)。
+
 - 某个节点回调先发出一条自定义 `StateDelta`，里面带了致命错误详情
 - 随后流程直接中止，图本身来不及产出正常的最终快照
 
@@ -450,33 +646,107 @@ for e := range eventChan {
 
 这样业务代码就可以继续保持同一个规则：优先看最后一条事件里的业务错误详情，而不是为了拿错误信息去遍历整条事件流。
 
+如果 graph 侧用了 `graph.NewExecutionErrorCollector()`，那么这条
+`StateDelta` 里的 `execution_errors` 也可能来自默认 recoverable 约定，
+例如错误实现了 `Recoverable() bool`，或者通过
+`graph.MarkRecoverable(err)` 做了显式标记。
+
 示例：
 
 ```go
+package main
+
 import (
+    "context"
     "encoding/json"
     "fmt"
 
     "trpc.group/trpc-go/trpc-agent-go/event"
+    "trpc.group/trpc-go/trpc-agent-go/graph"
+    "trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const stateKeyNodeFatal = "node_fatal_error"
 
-func readLastEvent(eventChan <-chan *event.Event) error {
-    for e := range eventChan {
-        if !e.IsRunnerCompletion() {
+type RunSummary struct {
+    TransportError  *model.ResponseError
+    FatalDetail     map[string]any
+    ExecutionErrors []graph.ExecutionError
+}
+
+func ConsumeRun(
+    ctx context.Context,
+    eventChan <-chan *event.Event,
+) (*RunSummary, error) {
+    summary := &RunSummary{}
+
+    for {
+        select {
+        case <-ctx.Done():
+            return nil, ctx.Err()
+        case evt, ok := <-eventChan:
+            if !ok {
+                return summary, nil
+            }
+            if evt.Response != nil && evt.Response.Error != nil {
+                summary.TransportError = evt.Response.Error
+            }
+            if !evt.IsRunnerCompletion() {
+                continue
+            }
+
+            if b, ok := evt.StateDelta[stateKeyNodeFatal]; ok {
+                var detail map[string]any
+                if err := json.Unmarshal(b, &detail); err != nil {
+                    return nil, err
+                }
+                summary.FatalDetail = detail
+            }
+
+            executionErrors, err := graph.ExecutionErrorsFromStateDelta(
+                evt.StateDelta,
+                graph.StateKeyExecutionErrors,
+            )
+            if err != nil {
+                return nil, err
+            }
+            summary.ExecutionErrors = executionErrors
+            return summary, nil
+        }
+    }
+}
+
+func PrintSummary(summary *RunSummary) {
+    if summary.TransportError != nil {
+        fmt.Printf(
+            "transport error: type=%s code=%s message=%s\n",
+            summary.TransportError.Type,
+            ptrValue(summary.TransportError.Code),
+            summary.TransportError.Message,
+        )
+    }
+    if summary.FatalDetail != nil {
+        fmt.Printf("fatal detail: %+v\n", summary.FatalDetail)
+    }
+    for _, record := range summary.ExecutionErrors {
+        if record.Error == nil {
             continue
         }
-
-        if b, ok := e.StateDelta[stateKeyNodeFatal]; ok {
-            var detail map[string]any
-            if err := json.Unmarshal(b, &detail); err == nil {
-                fmt.Printf("fatal detail: %+v\n", detail)
-            }
-        }
-        return nil
+        fmt.Printf(
+            "execution error: severity=%s node=%s code=%s message=%s\n",
+            record.Severity,
+            record.NodeName,
+            ptrValue(record.Error.Code),
+            record.Error.Message,
+        )
     }
-    return nil
+}
+
+func ptrValue(value *string) string {
+    if value == nil {
+        return ""
+    }
+    return *value
 }
 ```
 
@@ -495,7 +765,7 @@ func readLastEvent(eventChan <-chan *event.Event) error {
 
 - 分片（`partial`）事件：`IsPartial=true`、`Done=false`，增量文本在
   `choice.Delta.Content`
-- 最终（`final`）事件：`IsPartial=false`、`Done=true`，完整文本在
+- 模型调用的最终事件：`IsPartial=false`、`Done=true`，完整文本在
   `choice.Message.Content`
 
 默认情况下，Graph 的 LLM 节点只输出分片事件，不输出最终 `Done=true` 的 assistant 消息
@@ -542,6 +812,39 @@ eventChan, err := r.Run(
 建议：在 GraphAgent 场景里，请始终以 Runner “完成事件”的 `StateDelta` 作为最终输出的
 唯一来源（例如 `graph.StateKeyLastResponse`）。当开启该选项时，请把“完成事件”里的
 `Response.Choices` 当作可选字段，不要作为唯一依赖。
+
+#### 开关：只保留 terminal Graph 消息事件
+
+当一个图里有多个 LLM 节点或多个子 Agent 节点时，业务侧拿到的消息流里可能会出现前面
+节点的中间草稿。为了保持 100% 向后兼容，这仍然是默认行为。
+
+如果你希望“对调用方可见”的消息流只保留 terminal 节点的消息事件，可以开启：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithGraphTerminalMessagesOnly(true),
+)
+```
+
+行为总结：
+
+- 默认值（`false`）：完全不变，仍然会转发中间图节点的消息事件。
+- 开启后（`true`）：对调用方可见的消息事件会被限制为 terminal LLM 节点和 terminal
+  子 Agent 节点。
+- 如果图的最后一步是并行的，所有 terminal 节点都会保留，不会强行只留最快或最后一条。
+- 图内部执行不会变。state 传递、历史聚合、tracing、token 统计仍然基于完整原始事件流。
+
+这个开关适合“产品只想流式展示最后一个用户可见步骤”的场景，同时又不影响图内部多个
+节点之间的协作。
+
+如果你的图里用到真实的 LLM 节点，并且你还希望看到 terminal 节点的最终
+`Done=true` assistant 消息事件，请配合
+`agent.WithGraphEmitFinalModelResponses(true)` 使用。可参考
+`examples/graph/terminal_messages_only`。
 
 #### 🎛️ 开关：StreamMode
 
@@ -725,6 +1028,15 @@ r := runner.NewRunner("multi-app", multiAgent)
 
 ## 📊 事件处理
 
+### 结束语义
+
+Runner 相关文档里有两个容易混淆的“结束”概念，这里统一说明：
+
+- `Done=true`：表示**当前这条事件本身已经完整**。它可以出现在 assistant 最终消息、
+  tool response、graph 事件以及 runner completion 事件上。
+- `runner.completion` / `event.IsRunnerCompletion()`：表示**整次 Runner.Run 已经结束**。
+  这是业务代码停止消费 `eventChan` 的唯一推荐判据。
+
 ### 事件类型
 
 ```go
@@ -750,8 +1062,8 @@ for event := range eventChan {
         }
     }
 
-    // 完成事件
-    if event.Done {
+    // 整次 Runner 结束
+    if event.IsRunnerCompletion() {
         break
     }
 }
@@ -804,7 +1116,7 @@ func processEvents(eventChan <-chan *event.Event) error {
             }
         }
 
-        if event.Done {
+        if event.IsRunnerCompletion() {
             fmt.Println() // 换行
             break
         }
@@ -914,7 +1226,7 @@ for evt := range eventCh {
         continue
     }
     // ... 处理事件 ...
-    if evt.IsFinalResponse() {
+    if evt.IsRunnerCompletion() {
         break
     }
     turns++
@@ -1096,7 +1408,7 @@ if err != nil {
 
 for event := range eventChan {
 	// 处理事件
-	if event.Done {
+	if event.IsRunnerCompletion() {
 		break
 	}
 }
@@ -1126,7 +1438,7 @@ func checkRunner(r runner.Runner, ctx context.Context) error {
         if event.Error != nil {
             return fmt.Errorf("收到错误事件: %s", event.Error.Message)
         }
-        if event.Done {
+        if event.IsRunnerCompletion() {
             break
         }
     }

@@ -87,11 +87,15 @@ type StreamEvent = gwproto.StreamEvent
 // APIError matches gateway error payloads.
 type APIError = gwproto.APIError
 
+// Usage matches gateway token usage payloads.
+type Usage = gwproto.Usage
+
 // MessageResponse matches the gateway /messages response JSON.
 type MessageResponse struct {
 	SessionID string    `json:"session_id,omitempty"`
 	RequestID string    `json:"request_id,omitempty"`
 	Reply     string    `json:"reply,omitempty"`
+	Usage     *Usage    `json:"usage,omitempty"`
 	Ignored   bool      `json:"ignored,omitempty"`
 	Error     *APIError `json:"error,omitempty"`
 
@@ -100,13 +104,24 @@ type MessageResponse struct {
 
 // ScheduledJobSummary is a transport-safe view of one scheduled job.
 type ScheduledJobSummary struct {
-	ID         string     `json:"id,omitempty"`
-	Name       string     `json:"name,omitempty"`
-	Enabled    bool       `json:"enabled"`
-	Schedule   string     `json:"schedule,omitempty"`
-	NextRunAt  *time.Time `json:"next_run_at,omitempty"`
-	LastStatus string     `json:"last_status,omitempty"`
-	LastError  string     `json:"last_error,omitempty"`
+	ID               string     `json:"id,omitempty"`
+	Name             string     `json:"name,omitempty"`
+	Enabled          bool       `json:"enabled"`
+	Schedule         string     `json:"schedule,omitempty"`
+	Message          string     `json:"message,omitempty"`
+	MaxRuns          int        `json:"max_runs,omitempty"`
+	RunCount         int        `json:"run_count,omitempty"`
+	SuccessCount     int        `json:"success_count,omitempty"`
+	FailureCount     int        `json:"failure_count,omitempty"`
+	DeliveryFailures int        `json:"delivery_failures,omitempty"`
+	EndsAt           *time.Time `json:"ends_at,omitempty"`
+	OverlapPolicy    string     `json:"overlap_policy,omitempty"`
+	NextRunAt        *time.Time `json:"next_run_at,omitempty"`
+	LastStatus       string     `json:"last_status,omitempty"`
+	LastError        string     `json:"last_error,omitempty"`
+	LastOutput       string     `json:"last_output,omitempty"`
+	DeliveryChannel  string     `json:"delivery_channel,omitempty"`
+	DeliveryTarget   string     `json:"delivery_target,omitempty"`
 }
 
 // SendMessage sends one message to the gateway handler.

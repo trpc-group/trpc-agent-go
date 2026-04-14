@@ -70,7 +70,7 @@ func (t *ListDocsTool) Call(ctx context.Context, args []byte) (any, error) {
 	if t.repo == nil {
 		return []string{}, nil
 	}
-	sk, err := t.repo.Get(in.Skill)
+	sk, err := skill.GetForContext(ctx, t.repo, in.Skill)
 	if err != nil || sk == nil {
 		return nil, fmt.Errorf("unknown skill: %s", in.Skill)
 	}

@@ -1086,3 +1086,474 @@ func newSessionEventWithBranch(author, filterKey, branch string, msg model.Messa
 		Version:   event.CurrentVersion,
 	}
 }
+
+// Test that session summary is injected as user message when SessionSummaryInjectionUser is used.
+func TestProcessRequest_SessionSummary_UserInjectionMode(t *testing.T) {
+	summaryTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"test-agent": {
+				Summary:   "user mode summary content",
+				UpdatedAt: summaryTime,
+			},
+		},
+	}
+
+	t.Run("no_existing_system_prompt", func(t *testing.T) {
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationEventFilterKey("test-agent"),
+			agent.WithInvocationMessage(model.NewUserMessage("current request")),
+		)
+		inv.AgentName = "test-agent"
+
+		req := &model.Request{}
+		p := NewContentRequestProcessor(
+			WithAddSessionSummary(true),
+			WithSessionSummaryInjectionMode(SessionSummaryInjectionUser),
+		)
+		p.ProcessRequest(context.Background(), inv, req, nil)
+
+		raw, ok := inv.GetState(contentHasSessionSummaryStateKey)
+		require.True(t, ok)
+		require.Equal(t, true, raw)
+
+		// Should have at least 1 message. No system message should be present.
+		require.GreaterOrEqual(t, len(req.Messages), 1)
+		for _, msg := range req.Messages {
+			require.NotEqual(t, model.RoleSystem, msg.Role,
+				"user injection mode should not produce system messages for summary")
+		}
+		// First message should contain the summary.
+		require.Contains(t, req.Messages[0].Content, "user mode summary content")
+		require.Equal(t, model.RoleUser, req.Messages[0].Role)
+	})
+
+	t.Run("with_existing_system_prompt", func(t *testing.T) {
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationEventFilterKey("test-agent"),
+			agent.WithInvocationMessage(model.NewUserMessage("current request")),
+		)
+		inv.AgentName = "test-agent"
+
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewSystemMessage("existing system prompt"),
+			},
+		}
+		p := NewContentRequestProcessor(
+			WithAddSessionSummary(true),
+			WithSessionSummaryInjectionMode(SessionSummaryInjectionUser),
+		)
+		p.ProcessRequest(context.Background(), inv, req, nil)
+
+		// System prompt should remain untouched (summary not merged into it).
+		require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+		require.Equal(t, "existing system prompt", req.Messages[0].Content)
+		// Summary should be a user message after system.
+		found := false
+		for _, msg := range req.Messages {
+			if msg.Role == model.RoleUser && strings.Contains(msg.Content, "user mode summary content") {
+				found = true
+				break
+			}
+		}
+		require.True(t, found, "should find summary content in a user message")
+	})
+
+	t.Run("merges_with_first_user_history", func(t *testing.T) {
+		historyTime := summaryTime.Add(time.Second)
+		sessWithHistory := &session.Session{
+			Summaries: map[string]*session.Summary{
+				"test-agent": {
+					Summary:   "summary to merge",
+					UpdatedAt: summaryTime,
+				},
+			},
+			Events: []event.Event{
+				{
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.NewUserMessage("hello from history"),
+						}},
+					},
+					Author:    "user",
+					Timestamp: historyTime,
+					FilterKey: "test-agent",
+					Version:   event.CurrentVersion,
+				},
+			},
+		}
+
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sessWithHistory),
+			agent.WithInvocationEventFilterKey("test-agent"),
+			agent.WithInvocationMessage(model.NewUserMessage("current request")),
+		)
+		inv.AgentName = "test-agent"
+
+		req := &model.Request{}
+		p := NewContentRequestProcessor(
+			WithAddSessionSummary(true),
+			WithSessionSummaryInjectionMode(SessionSummaryInjectionUser),
+		)
+		p.ProcessRequest(context.Background(), inv, req, nil)
+
+		// The first user message in history should have the summary merged into it.
+		require.GreaterOrEqual(t, len(req.Messages), 1)
+		require.Equal(t, model.RoleUser, req.Messages[0].Role)
+		require.Contains(t, req.Messages[0].Content, "summary to merge",
+			"summary should be merged into first user history message")
+		require.Contains(t, req.Messages[0].Content, "hello from history",
+			"original history content should be preserved")
+	})
+
+	t.Run("system_mode_default_still_works", func(t *testing.T) {
+		inv := agent.NewInvocation(
+			agent.WithInvocationSession(sess),
+			agent.WithInvocationEventFilterKey("test-agent"),
+			agent.WithInvocationMessage(model.NewUserMessage("current request")),
+		)
+		inv.AgentName = "test-agent"
+
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewSystemMessage("existing system prompt"),
+			},
+		}
+		// Default mode (system) should merge into system message.
+		p := NewContentRequestProcessor(
+			WithAddSessionSummary(true),
+		)
+		p.ProcessRequest(context.Background(), inv, req, nil)
+
+		require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+		require.Contains(t, req.Messages[0].Content, "user mode summary content")
+		require.Contains(t, req.Messages[0].Content, "existing system prompt")
+	})
+}
+
+// Test formatSummaryForUser output.
+func TestFormatSummaryForUser(t *testing.T) {
+	p := NewContentRequestProcessor()
+	result := p.formatSummaryForUser("test summary")
+	require.Contains(t, result, "test summary")
+	require.Contains(t, result, "Context from previous interactions")
+	require.Contains(t, result, "summary_of_previous_interactions")
+}
+
+// Test prependSummaryUserMessage edge cases.
+func TestPrependSummaryUserMessage(t *testing.T) {
+	p := NewContentRequestProcessor()
+
+	t.Run("empty_summary", func(t *testing.T) {
+		msgs := []model.Message{model.NewUserMessage("hello")}
+		result := p.prependSummaryUserMessage("", msgs, nil)
+		require.Equal(t, msgs, result)
+	})
+
+	t.Run("empty_messages", func(t *testing.T) {
+		result := p.prependSummaryUserMessage("some summary", nil, nil)
+		require.Len(t, result, 1)
+		require.Equal(t, model.RoleUser, result[0].Role)
+		require.Contains(t, result[0].Content, "some summary")
+	})
+
+	t.Run("later_user_message_merges", func(t *testing.T) {
+		msgs := []model.Message{
+			model.NewAssistantMessage("hi"),
+			model.NewUserMessage("hello"),
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, nil)
+		require.Len(t, result, 2)
+		require.Equal(t, model.RoleAssistant, result[0].Role)
+		require.Equal(t, model.RoleUser, result[1].Role)
+		require.Contains(t, result[1].Content, "some summary")
+		require.Contains(t, result[1].Content, "hello")
+	})
+
+	t.Run("first_message_is_user_merges", func(t *testing.T) {
+		msgs := []model.Message{
+			model.NewUserMessage("hello"),
+			model.NewAssistantMessage("hi"),
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, nil)
+		require.Len(t, result, 2)
+		require.Equal(t, model.RoleUser, result[0].Role)
+		require.Contains(t, result[0].Content, "some summary")
+		require.Contains(t, result[0].Content, "hello")
+		require.Equal(t, model.RoleAssistant, result[1].Role)
+	})
+
+	t.Run("does_not_mutate_original", func(t *testing.T) {
+		original := []model.Message{
+			model.NewUserMessage("original content"),
+		}
+		originalContent := original[0].Content
+		result := p.prependSummaryUserMessage("summary", original, nil)
+		// Original should not be mutated.
+		require.Equal(t, originalContent, original[0].Content)
+		// Result should have merged content.
+		require.Contains(t, result[0].Content, "summary")
+		require.Contains(t, result[0].Content, "original content")
+	})
+
+	t.Run("first_history_user_preferred_over_req_prefix_user", func(t *testing.T) {
+		prefix := []model.Message{
+			model.NewSystemMessage("system prompt"),
+			model.NewUserMessage("few-shot user example"),
+		}
+		msgs := []model.Message{
+			model.NewUserMessage("history user"),
+			model.NewAssistantMessage("history assistant"),
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, prefix)
+		// Summary should stay attached to the live history user message.
+		require.Equal(t, "few-shot user example", prefix[len(prefix)-1].Content)
+		require.Len(t, result, 2)
+		require.Contains(t, result[0].Content, "some summary")
+		require.Contains(t, result[0].Content, "history user")
+		require.Equal(t, model.RoleAssistant, result[1].Role)
+	})
+
+	t.Run("later_history_user_preferred_over_req_prefix_user", func(t *testing.T) {
+		prefix := []model.Message{
+			model.NewSystemMessage("system prompt"),
+			model.NewUserMessage("few-shot user example"),
+		}
+		msgs := []model.Message{
+			model.NewAssistantMessage("history assistant"),
+			model.NewUserMessage("current user"),
+			model.NewToolMessage("tool-1", "search", "tool result"),
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, prefix)
+		// Even when history starts with assistant/tool output, the summary
+		// should merge into the first available user message in history/current.
+		require.Equal(t, "few-shot user example", prefix[len(prefix)-1].Content)
+		require.Len(t, result, 3)
+		require.Equal(t, model.RoleAssistant, result[0].Role)
+		require.Contains(t, result[1].Content, "some summary")
+		require.Contains(t, result[1].Content, "current user")
+		require.Equal(t, model.RoleTool, result[2].Role)
+	})
+
+	t.Run("later_empty_history_user_preferred_over_req_prefix_user", func(t *testing.T) {
+		prefix := []model.Message{
+			model.NewSystemMessage("system prompt"),
+			model.NewUserMessage("few-shot user example"),
+		}
+		msgs := []model.Message{
+			model.NewAssistantMessage("history assistant"),
+			{Role: model.RoleUser, Content: ""},
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, prefix)
+		// An empty user message later in history/current should still win over
+		// the trailing prefix user, and the summary should become its content.
+		require.Equal(t, "few-shot user example", prefix[len(prefix)-1].Content)
+		require.Len(t, result, 2)
+		require.Equal(t, model.RoleAssistant, result[0].Role)
+		require.Equal(t, model.RoleUser, result[1].Role)
+		require.Contains(t, result[1].Content, "some summary")
+	})
+
+	t.Run("req_prefix_ends_with_user_merges_into_prefix_as_fallback", func(t *testing.T) {
+		prefix := []model.Message{
+			model.NewSystemMessage("system prompt"),
+			model.NewUserMessage("few-shot user example"),
+		}
+		msgs := []model.Message{
+			model.NewAssistantMessage("history assistant"),
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, prefix)
+		// With no user history/current message to attach to, fall back to the
+		// trailing prefix user message.
+		require.Contains(t, prefix[len(prefix)-1].Content, "some summary")
+		require.Contains(t, prefix[len(prefix)-1].Content, "few-shot user example")
+		require.Equal(t, msgs, result)
+	})
+
+	t.Run("req_prefix_ends_with_system_no_merge_into_prefix", func(t *testing.T) {
+		prefix := []model.Message{
+			model.NewSystemMessage("system prompt"),
+		}
+		msgs := []model.Message{
+			model.NewUserMessage("history user"),
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, prefix)
+		// Should merge into first history user message instead.
+		require.Len(t, result, 1)
+		require.Contains(t, result[0].Content, "some summary")
+		require.Contains(t, result[0].Content, "history user")
+		// Prefix should be untouched.
+		require.Equal(t, "system prompt", prefix[0].Content)
+	})
+
+	t.Run("req_prefix_ends_with_empty_user_sets_content", func(t *testing.T) {
+		prefix := []model.Message{
+			model.NewSystemMessage("system prompt"),
+			{Role: model.RoleUser, Content: ""},
+		}
+		msgs := []model.Message{
+			model.NewAssistantMessage("history assistant"),
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, prefix)
+		// Summary should be set (not appended) on the empty user message.
+		require.Contains(t, prefix[len(prefix)-1].Content, "some summary")
+		require.Equal(t, msgs, result)
+	})
+
+	t.Run("custom_formatter_empty_return_skips", func(t *testing.T) {
+		custom := NewContentRequestProcessor(
+			WithSummaryFormatter(func(_ string) string { return "" }),
+		)
+		msgs := []model.Message{model.NewUserMessage("hello")}
+		result := custom.prependSummaryUserMessage("some summary", msgs, nil)
+		require.Equal(t, msgs, result)
+	})
+}
+
+// Test formatSummaryForUser with custom SummaryFormatter.
+func TestFormatSummaryForUser_CustomFormatter(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithSummaryFormatter(func(s string) string {
+			return "CUSTOM: " + s
+		}),
+	)
+	result := p.formatSummaryForUser("test summary")
+	require.Equal(t, "CUSTOM: test summary", result)
+}
+
+// Test WithSessionSummaryInjectionMode option.
+func TestWithSessionSummaryInjectionMode(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithSessionSummaryInjectionMode(SessionSummaryInjectionUser),
+	)
+	require.Equal(t, SessionSummaryInjectionUser, p.SessionSummaryInjectionMode)
+
+	p2 := NewContentRequestProcessor(
+		WithSessionSummaryInjectionMode(SessionSummaryInjectionSystem),
+	)
+	require.Equal(t, SessionSummaryInjectionSystem, p2.SessionSummaryInjectionMode)
+
+	// Unknown value defaults to system.
+	p3 := NewContentRequestProcessor(
+		WithSessionSummaryInjectionMode("unknown"),
+	)
+	require.Equal(t, SessionSummaryInjectionSystem, p3.SessionSummaryInjectionMode)
+}
+
+// Test user injection mode with injected context ending in user message.
+func TestProcessRequest_SessionSummary_UserMode_PrefersCurrentUserOverInjectedContext(t *testing.T) {
+	summaryTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"test-agent": {
+				Summary:   "injected context summary",
+				UpdatedAt: summaryTime,
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-agent"),
+		agent.WithInvocationMessage(model.NewUserMessage("current request")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			InjectedContextMessages: []model.Message{
+				model.NewUserMessage("injected context user msg"),
+			},
+		}),
+	)
+	inv.AgentName = "test-agent"
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system prompt"),
+		},
+	}
+	p := NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+		WithSessionSummaryInjectionMode(SessionSummaryInjectionUser),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	// The summary should stay attached to the live current user message instead
+	// of being merged into the injected-context prefix user message.
+	// System prompt should NOT contain the summary.
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.NotContains(t, req.Messages[0].Content, "injected context summary",
+		"system prompt should not contain summary in user injection mode")
+
+	// Injected-context user message should remain untouched.
+	require.Equal(t, "injected context user msg", req.Messages[1].Content)
+
+	// Find the current user message and verify summary was merged into it.
+	foundMerged := false
+	for _, msg := range req.Messages {
+		if msg.Role == model.RoleUser &&
+			strings.Contains(msg.Content, "current request") &&
+			strings.Contains(msg.Content, "injected context summary") {
+			foundMerged = true
+			break
+		}
+	}
+	require.True(t, foundMerged,
+		"summary should be merged into the current user message")
+}
+
+func TestProcessRequest_SessionSummary_UserMode_FallsBackToInjectedContextUser(t *testing.T) {
+	summaryTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+	sess := &session.Session{
+		Summaries: map[string]*session.Summary{
+			"test-agent": {
+				Summary:   "fallback summary",
+				UpdatedAt: summaryTime,
+			},
+		},
+		Events: []event.Event{
+			{
+				Response: &model.Response{
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage("history assistant"),
+					}},
+				},
+				Author:    "test-agent",
+				Timestamp: summaryTime.Add(time.Second),
+				FilterKey: "test-agent",
+				Version:   event.CurrentVersion,
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-agent"),
+		agent.WithInvocationMessage(model.NewToolMessage("tool-1", "search", "tool result")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			InjectedContextMessages: []model.Message{
+				model.NewUserMessage("injected context user msg"),
+			},
+		}),
+	)
+	inv.AgentName = "test-agent"
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system prompt"),
+		},
+	}
+	p := NewContentRequestProcessor(
+		WithAddSessionSummary(true),
+		WithSessionSummaryInjectionMode(SessionSummaryInjectionUser),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.NotContains(t, req.Messages[0].Content, "fallback summary")
+
+	// No user history/current message is available, so fallback merges into the
+	// injected-context user message instead of inserting a standalone user block.
+	require.Contains(t, req.Messages[1].Content, "injected context user msg")
+	require.Contains(t, req.Messages[1].Content, "fallback summary")
+}

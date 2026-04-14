@@ -5,6 +5,7 @@
 本目录是一个基于 `trpc-agent-go` 构建的小型可运行二进制文件，实现了类 OpenClaw 架构：
 
 - 一个长期运行的 **gateway** 进程（HTTP 端点）。
+- 一个可选的 **A2A** 接口，可作为子 agent / 沙箱入口。
 - 真正的 IM **通道**：Telegram（长轮询）。
 - 基于 DM（私聊）与群组聊天派生的稳定 **session_id**。
 - 通过 `llmagent` 内置的 skills 工具支持技能。
@@ -62,13 +63,74 @@ OpenClaw 支持 YAML 配置文件，以避免冗长的 CLI 参数列表。
 
 - 传入 `-config /path/to/openclaw.yaml`，或
 - 设置 `OPENCLAW_CONFIG=/path/to/openclaw.yaml`。
-- 如果两者都未设置，OpenClaw 还会尝试 `~/.trpc-agent-go/openclaw/openclaw.yaml`
+- 如果两者都未设置，OpenClaw 还会尝试
+  `~/.trpc-agent-go-github/openclaw/openclaw.yaml`
   （仅当文件存在时）。
 
 CLI 参数始终会覆盖配置文件中的值。
 
 配置文件支持 `${NAME}` 形式的环境变量占位符。
 缺少的环境变量会导致 OpenClaw 立即报错退出。
+
+### 原生 Browser Use
+
+OpenClaw 现在支持原生 `browser` tool provider，用来做真实浏览器
+自动化。
+
+适合这些场景：
+
+- JS 很重的页面
+- tab 管理和页面跳转
+- 截图或页面快照
+- 点击、输入、选择、弹窗处理
+
+这个 provider 对模型暴露的是一个统一的 `browser` 工具，底层仍然
+复用 Playwright MCP，因此截图图片仍然会被转发回模型。
+
+默认情况下，browser 导航会拦截：
+
+- `localhost` 这类 loopback host
+- 私有网段 IP
+- `file://` URL
+
+如果需要放开或细化，可以使用这些配置项：
+`allowed_domains`、`blocked_domains`、`allow_loopback`、
+`allow_private_networks`、`allow_file_urls`。
+
+示例配置：
+
+```yaml
+tools:
+  providers:
+    - type: "browser"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        allowed_domains: ["example.com"]
+        profiles:
+          - name: "openclaw"
+            transport: "stdio"
+            command: "npx"
+            args:
+              - "--yes"
+              - "@playwright/mcp@latest"
+              - "--headless"
+              - "--isolated"
+              - "--caps"
+              - "vision,pdf"
+            timeout: "5m"
+```
+
+可运行示例：
+[examples/browser_use/README.md](./examples/browser_use/README.md)
+
+browser-server 示例：
+[examples/browser_server_use/README.md](./examples/browser_server_use/README.md)
+
+完整的 browser runtime 脚手架还在这里：
+
+- [`./browser-server/`](./browser-server/)
+- [`./browser-extension/`](./browser-extension/)
 
 ### 调试记录器（可选）
 
@@ -132,7 +194,10 @@ admin:
 
 agent:
   # 简短指令文本（可选）。
-  instruction: "You are a helpful assistant. Reply in a friendly tone."
+  instruction: |
+    You are a helpful assistant. Reply in a friendly tone.
+    Use browser for JS-heavy sites, page interactions, snapshots,
+    screenshots, downloads, uploads, and current-tab relay workflows.
   # 可选：加载并合并多个 markdown 文件到 system prompt 中。
   # 文件按字母顺序读取。
   # system_prompt_dir: "./prompts/system"
@@ -149,11 +214,37 @@ model:
   name: "gpt-5"
   openai_variant: "auto"
 
+# 可选：knowledge 后端，用于 knowledge search tools。
+# 这里只配置 embedder 和 vector store，知识内容加载需要在运行时单独触发。
+knowledges:
+  entries:
+    - name: "docs"
+      embedder:
+        type: "openai"
+        model: "text-embedding-3-small"
+        dimensions: 1536
+      vector_store:
+        type: "inmemory"
+        max_results: 5
+
 tools:
   # 可选；默认为串行执行。
   # 启用后，当模型在一个步骤中返回多个 tool call 时，
   # OpenClaw 会并发执行它们。
   enable_parallel_tools: true
+  providers:
+    - type: "browser"
+      name: "browser-runtime"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        server_url: "http://127.0.0.1:19790"
+        sandbox_server_url: "http://127.0.0.1:20790"
+        profiles:
+          - name: "openclaw"
+            description: "Managed Playwright profile from browser-server."
+          - name: "chrome"
+            description: "Current Chromium tab attached through relay."
 
 channels:
   - type: "telegram"
@@ -185,6 +276,41 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 - 时长字段使用 Go 风格的字符串，如 `60s`、`10m`、`1h`。
 - 对于密钥（模型 key、Telegram token），请勿将其纳入版本控制。
   建议尽可能使用环境变量。
+- `knowledges` 当前只负责把 embedder / vector store 接到 runtime；
+  文档加载是独立的运行时动作。
+- `pgvector` knowledge 配置示例：
+
+  ```yaml
+  knowledges:
+    entries:
+      - name: "trpc_agent_go"
+        embedder:
+          type: "openai"
+          model: "text-embedding-3-small"
+          base_url: "${OPENAI_BASE_URL}"
+          api_key: "${OPENAI_API_KEY}"
+          dimensions: 1536
+        vector_store:
+          type: "pgvector"
+          url: "postgres://postgres:${PGPASSWORD}@localhost:5432/vectordb?sslmode=disable"
+          table: "trpc_agent_go"
+          index_dimension: 1536
+          enable_tsvector: true
+          max_results: 5
+  ```
+
+  表名建议使用 `trpc_agent_go` 这类安全标识符，不要直接用
+  `trpc-agent-go` 这样的原始名字。
+- 示例 Telegram 配置已经把原生 `browser` 工具接到了本地默认
+  browser-server 地址。当 `server_url` 指向
+  `http://127.0.0.1:19790` 时，`go run ./cmd/openclaw` 会先探活该地址，
+  如果未启动则自动拉起 `openclaw/browser-server`。前提是当前仓库里的
+  `openclaw/browser-server` 依赖已经安装好（`npm install` 和
+  `npx playwright install chromium`），并且托管进程日志会写到
+  `<state_dir>/debug/services/`，同时显示在 admin 的 Browser 卡片里。
+  如果自动拉起找不到本地 browser-server 目录，可以设置
+  `OPENCLAW_BROWSER_SERVER_DIR`，或者手动启动该服务。
+  参见 `openclaw/examples/browser_server_use/`。
 - `./openclaw.yaml` 中的示例配置可直接用于
   `go run ./cmd/openclaw -config ./openclaw.yaml`。
 - `./openclaw.stdin.yaml` 中的示例配置可直接用于
@@ -197,6 +323,45 @@ go run ./cmd/openclaw -config ./openclaw.yaml
   - `tools.providers` 和 `tools.toolsets` 对本仓库内置的类型开箱即用。
     自定义类型仍需自定义二进制文件。参见 `openclaw/INTEGRATIONS.md` 和
     `openclaw/EXTENDING.md`。
+
+## 将 OpenClaw 暴露为 A2A 子 agent
+
+OpenClaw 可以在 HTTP gateway 旁边原生发布 A2A 接口。
+当你需要把一个带完整 skills / 二进制环境的 OpenClaw 沙箱挂到
+另一个 `trpc-agent-go` 主脑下面时，这就是推荐做法。
+
+YAML：
+
+```yaml
+a2a:
+  enabled: true
+  host: "http://127.0.0.1:8080/a2a"
+  user_id_header: "X-User-ID" # 可选
+  streaming: true
+  advertise_tools: false
+  name: "openclaw-sandbox"
+  description: "Sandbox agent for bundled skills and host binaries."
+```
+
+CLI：
+
+```bash
+cd openclaw
+go run ./cmd/openclaw \
+  -a2a \
+  -a2a-host http://127.0.0.1:8080/a2a
+```
+
+说明：
+
+- `a2a.host` 必须带一个非根路径，例如 `/a2a`。
+- A2A 接口和 gateway 复用同一个 OpenClaw runner、session、
+  memory、skills 和 tools。
+- 默认 agent card 只发布一个稳定的 “OpenClaw sandbox” skill，
+  不会把所有 tool 全部展开。只有在调用方确实需要逐 tool 元数据时，
+  才建议开启 `advertise_tools: true`。
+- 可运行示例见
+  [`./examples/a2a_subagent`](./examples/a2a_subagent/)。
 
 ## 自定义 Prompt
 
@@ -419,10 +584,12 @@ go run ./cmd/openclaw \
 
 ### DeepSeek（OpenAI 兼容）
 
-如果使用 DeepSeek，请设置 `DEEPSEEK_API_KEY`：
+如果你直连 DeepSeek，请同时设置 `DEEPSEEK_API_KEY` 和官方
+DeepSeek base URL：
 
 ```bash
 export DEEPSEEK_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 
 cd openclaw
 go run ./cmd/openclaw \
@@ -444,8 +611,11 @@ go run ./cmd/openclaw \
   -http-addr :8080
 ```
 
-默认情况下，`-openai-variant` 为 `auto`，会从 `-model` 推断。
-你可以显式覆盖：
+默认情况下，`-openai-variant` 为 `auto`，会根据已配置的
+base URL host 自动推断（`OPENAI_BASE_URL`、`-openai-base-url`
+或 `model.base_url`）。对于自定义代理或其他兼容端点，请显式设置
+`-openai-variant`。
+你也可以显式覆盖：
 
 ```bash
 export OPENAI_API_KEY="your-api-key"
@@ -687,7 +857,7 @@ OpenClaw 根据入站消息是 DM（私聊）还是群组消息来派生 `sessio
 OpenClaw 将 Telegram `getUpdates` 偏移存储在磁盘上，以便重启后
 可以从上次处理的更新继续。
 
-- 默认 state 目录：`$HOME/.trpc-agent-go/openclaw`
+- 默认 state 目录：`$HOME/.trpc-agent-go-github/openclaw`
 - 通过 `-state-dir` 覆盖
 
 首次运行时（当偏移文件不存在时），轮询器默认会排空待处理的更新，
@@ -820,10 +990,15 @@ OpenClaw 将上游 OpenClaw 技能包打包在 `openclaw/skills/` 下
 2) 项目 AgentSkills：`./.agents/skills`
 3) 个人 AgentSkills：`$HOME/.agents/skills`
 4) 托管技能：`<state-dir>/skills`
-5) 仓库内置技能（从仓库根目录运行时）：`./openclaw/skills`
-6) 额外目录：`-skills-extra-dirs`（逗号分隔，最低优先级）
+5) 已安装 release 自带的内置技能：`<state-dir>/bundled-skills`
+6) 仓库内置技能（从仓库根目录运行时）：`./openclaw/skills`
+7) 额外目录：`-skills-extra-dirs`（逗号分隔，最低优先级）
 
 如果两个技能同名，优先级更高的那个生效。
+
+预编译 release 每次安装和升级时都会刷新
+`<state-dir>/bundled-skills`，而 `<state-dir>/skills` 仍然留给你放自己的
+托管技能。
 
 ### OpenClaw 元数据过滤（可选）
 
@@ -886,7 +1061,7 @@ OpenClaw 会将加载的技能正文/文档中的 `{baseDir}` 替换为本地技
 cd openclaw
 go run ./cmd/openclaw \
   -mode openai \
-  -model deepseek-chat \
+  -model gpt-5 \
   -skills-extra-dirs "/path/to/openclaw/skills"
 ```
 
@@ -1080,7 +1255,7 @@ OpenClaw 为默认 LLM agent 暴露了一个面向代码 agent 的宿主机 tool
 ```bash
 go run ./cmd/openclaw \
   -mode openai \
-  -model deepseek-chat \
+  -model gpt-5 \
   -config ./openclaw.yaml \
   -enable-openclaw-tools=false
 ```

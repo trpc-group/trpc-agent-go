@@ -92,6 +92,21 @@ func TestStateKeys_ScopedAndLegacy(t *testing.T) {
 	require.Equal(t, StateKeyLoadedPrefix, LoadedPrefix(" "))
 	require.Equal(t, StateKeyDocsPrefix, DocsPrefix(""))
 	require.Equal(t, StateKeyDocsPrefix, DocsPrefix(" "))
+	require.Equal(
+		t,
+		StateKeyLoadedOrderPrefix,
+		LoadedOrderKey(""),
+	)
+	require.Equal(
+		t,
+		StateKeyLoadedOrderPrefix,
+		LoadedOrderKey(" "),
+	)
+	require.Equal(
+		t,
+		StateKeyLoadedOrderByAgentPrefix+agentName,
+		LoadedOrderKey(paddedAgent),
+	)
 
 	loadedKey := LoadedKey(childAgent, skillName)
 	parentPrefix := LoadedPrefix(parentAgent)
@@ -99,6 +114,29 @@ func TestStateKeys_ScopedAndLegacy(t *testing.T) {
 
 	childPrefix := LoadedPrefix(childAgent)
 	require.True(t, strings.HasPrefix(loadedKey, childPrefix))
+
+	childOrderKey := LoadedOrderKey(childAgent)
+	require.Equal(
+		t,
+		StateKeyLoadedOrderByAgentPrefix+url.PathEscape(childAgent),
+		childOrderKey,
+	)
+}
+
+func TestLoadedOrderHelpers(t *testing.T) {
+	order := ParseLoadedOrder([]byte(`["a"," b ","a","","c"]`))
+	require.Equal(t, []string{"a", "b", "c"}, order)
+
+	order = TouchLoadedOrder(order, "b", "d", " ", "c")
+	require.Equal(t, []string{"a", "b", "d", "c"}, order)
+
+	require.Nil(t, ParseLoadedOrder([]byte("{")))
+	require.Nil(t, MarshalLoadedOrder(nil))
+	require.Equal(
+		t,
+		`["a","b","d","c"]`,
+		string(MarshalLoadedOrder(order)),
+	)
 }
 
 func TestFSRepository_Path(t *testing.T) {
@@ -343,12 +381,105 @@ func TestFSRepository_DuplicateSkill_PrefersFirst(t *testing.T) {
 	require.Contains(t, sk.Body, "from root1")
 }
 
+func TestFSRepository_Refresh(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "alpha")
+
+	repo, err := NewFSRepository(root)
+	require.NoError(t, err)
+	require.Len(t, repo.Summaries(), 1)
+
+	writeSkill(t, root, "beta")
+	require.Len(t, repo.Summaries(), 1)
+
+	require.NoError(t, repo.Refresh())
+	require.Len(t, repo.Summaries(), 2)
+
+	_, err = repo.Get("beta")
+	require.NoError(t, err)
+
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "beta")))
+	require.NoError(t, repo.Refresh())
+
+	require.Len(t, repo.Summaries(), 1)
+	_, err = repo.Get("beta")
+	require.Error(t, err)
+}
+
 func TestSplitFrontMatter_NoClosing(t *testing.T) {
 	txt := "---\nname: z\n"
 	m, body := splitFrontMatter(txt)
 	// No closing delimiter: body should be original text.
 	require.Equal(t, 0, len(m))
 	require.Equal(t, txt, body)
+}
+
+// TestSplitFrontMatter_BlockScalarDescription verifies that multi-line YAML
+// block scalars (the "|-" and "|" chomping indicators) are parsed correctly.
+// The previous hand-rolled parser only handled "key: value" on a single line
+// and left Description empty for skills that used block scalar syntax.
+func TestSplitFrontMatter_BlockScalarDescription(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantKey string
+		wantVal string
+	}{
+		{
+			name:    "strip_block_scalar",
+			input:   "---\nname: my-skill\ndescription: |-\n  A multi-line\n  description.\n---\nbody\n",
+			wantKey: "description",
+			wantVal: "A multi-line\ndescription.",
+		},
+		{
+			name:    "literal_block_scalar",
+			input:   "---\nname: my-skill\ndescription: |\n  Line one.\n  Line two.\n---\nbody\n",
+			wantKey: "description",
+			wantVal: "Line one.\nLine two.",
+		},
+		{
+			name:    "folded_block_scalar",
+			input:   "---\nname: my-skill\ndescription: >\n  Folded line one.\n  Folded line two.\n---\nbody\n",
+			wantKey: "description",
+			wantVal: "Folded line one. Folded line two.",
+		},
+		{
+			name:    "plain_single_line",
+			input:   "---\nname: my-skill\ndescription: plain description\n---\nbody\n",
+			wantKey: "description",
+			wantVal: "plain description",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m, body := splitFrontMatter(tc.input)
+			require.Equal(t, tc.wantVal, m[tc.wantKey],
+				"description must be parsed correctly from front matter")
+			require.Equal(t, "my-skill", m["name"])
+			require.Equal(t, "body\n", body)
+		})
+	}
+}
+
+// TestParseSummary_BlockScalarDescription verifies the end-to-end path:
+// writing a SKILL.md with a block-scalar description and reading it back
+// via parseSummary / Summaries() returns the correct description.
+func TestParseSummary_BlockScalarDescription(t *testing.T) {
+	dir := t.TempDir()
+	sdir := filepath.Join(dir, "explore-repos")
+	require.NoError(t, os.MkdirAll(sdir, 0o755))
+	content := "---\nname: explore-repos\ndescription: |-\n  Explore repository structure\n  and list files.\n---\n# Skill body\n"
+	require.NoError(t, os.WriteFile(filepath.Join(sdir, "SKILL.md"), []byte(content), 0o644))
+
+	repo, err := NewFSRepository(dir)
+	require.NoError(t, err)
+
+	summaries := repo.Summaries()
+	require.Len(t, summaries, 1)
+	require.Equal(t, "explore-repos", summaries[0].Name)
+	require.Equal(t, "Explore repository structure\nand list files.", summaries[0].Description,
+		"block scalar description must be parsed correctly by Summaries()")
 }
 
 // errAfterReader returns one line then a non-EOF error to exercise the
@@ -969,4 +1100,88 @@ func buildTarGZ(t *testing.T, files map[string]string) []byte {
 	require.NoError(t, tw.Close())
 	require.NoError(t, gz.Close())
 	return buf.Bytes()
+}
+
+// TestParseFrontMatterYAML_HashPreservedInPlainValue verifies the hybrid
+// parser's key behaviour: unquoted '#' characters in plain single-line values
+// must NOT be treated as YAML comments. The full value must be preserved.
+func TestParseFrontMatterYAML_HashPreservedInPlainValue(t *testing.T) {
+	m := parseFrontMatterYAML("name: issue #123 helper\nversion: v1.0 # tag")
+	require.Equal(t, "issue #123 helper", m["name"],
+		"'#' in an unquoted value must not be stripped as a YAML comment")
+	require.Equal(t, "v1.0 # tag", m["version"])
+}
+
+// TestParseFrontMatterYAML_KeyWithNoValue verifies that a key with no value
+// ("key:") is stored as an empty string, exercising the empty-val path in
+// isBlockScalarIndicator and the plain-value assignment.
+func TestParseFrontMatterYAML_KeyWithNoValue(t *testing.T) {
+	m := parseFrontMatterYAML("empty:\nname: skill")
+	require.Equal(t, "", m["empty"])
+	require.Equal(t, "skill", m["name"])
+}
+
+// TestParseFrontMatterYAML_BlankLinesAreSkipped verifies that blank lines
+// within the front-matter block (common in multi-key SKILL.md files) are
+// silently skipped without affecting key/value parsing.
+func TestParseFrontMatterYAML_BlankLinesAreSkipped(t *testing.T) {
+	src := "\nname: my-skill\n\nversion: 2\n"
+	m := parseFrontMatterYAML(src)
+	require.Equal(t, "my-skill", m["name"])
+	require.Equal(t, "2", m["version"])
+}
+
+// TestParseFrontMatterYAML_BlockScalarFollowedByPlainKey verifies that the
+// continuation-line collector stops at the next non-indented key, so that
+// a block scalar and a subsequent plain key are both parsed correctly.
+func TestParseFrontMatterYAML_BlockScalarFollowedByPlainKey(t *testing.T) {
+	src := "description: |-\n  line one\n  line two\nname: my-skill"
+	m := parseFrontMatterYAML(src)
+	require.Equal(t, "line one\nline two", m["description"])
+	require.Equal(t, "my-skill", m["name"])
+}
+
+// TestParseFrontMatterYAML_LinesWithoutColonAreSkipped verifies that lines
+// that do not contain a colon (e.g. free-form text, dividers) are silently
+// ignored without panicking or affecting other keys.
+func TestParseFrontMatterYAML_LinesWithoutColonAreSkipped(t *testing.T) {
+	src := "name: my-skill\nthis line has no colon at all\nversion: 1"
+	m := parseFrontMatterYAML(src)
+	require.Equal(t, "my-skill", m["name"])
+	require.Equal(t, "1", m["version"])
+	_, hasGarbage := m["this line has no colon at all"]
+	require.False(t, hasGarbage)
+}
+
+// TestParseFrontMatterYAML_InvalidBlockScalarYAMLSkipped verifies that a
+// block-scalar entry whose YAML is malformed is silently skipped (no panic,
+// no partial data), while other plain-value entries are still returned.
+func TestParseFrontMatterYAML_InvalidBlockScalarYAMLSkipped(t *testing.T) {
+	// The block scalar fragment "| \t:" is invalid YAML; the key must be absent.
+	src := "name: good-skill\nbad: |\n  \t: malformed"
+	m := parseFrontMatterYAML(src)
+	require.Equal(t, "good-skill", m["name"], "plain value must still be parsed")
+}
+
+// TestParseFrontMatterYAML_BlockScalarEmptyProducesEmptyString verifies that
+// an empty block scalar ("key: |" with no indented content) is stored as an
+// empty string, consistent with yaml.v3 behaviour.
+func TestParseFrontMatterYAML_BlockScalarEmptyProducesEmptyString(t *testing.T) {
+	src := "key: |\nname: skill"
+	m := parseFrontMatterYAML(src)
+	require.Equal(t, "", m["key"], "empty block scalar must yield empty string")
+	require.Equal(t, "skill", m["name"])
+}
+
+// TestReadFrontMatter_SuccessPath verifies the happy path of readFrontMatter:
+// a valid "---\n...\n---\nbody" input returns the parsed map and the body text.
+// This exercises the parseFrontMatterYAML delegation on line 279 of repository.go.
+func TestReadFrontMatter_SuccessPath(t *testing.T) {
+	input := "---\nname: my-skill\ndescription: does things\n---\nBody text here\n"
+	rd := bufio.NewReader(strings.NewReader(input))
+	m, body, err := readFrontMatter(rd)
+	require.NoError(t, err)
+	require.Equal(t, "my-skill", m["name"])
+	require.Equal(t, "does things", m["description"])
+	require.Contains(t, body, "Body text here")
 }

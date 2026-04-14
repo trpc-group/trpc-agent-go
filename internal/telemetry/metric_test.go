@@ -176,8 +176,14 @@ func TestNewChatMetricsTracker(t *testing.T) {
 	if !tracker.isFirstToken {
 		t.Error("isFirstToken should be true initially")
 	}
-	if tracker.invocation != invocation {
-		t.Error("invocation not set correctly")
+	if tracker.invocation == invocation {
+		t.Error("invocation view should not reuse the original pointer")
+	}
+	if tracker.invocation == nil || tracker.invocation.AgentName != invocation.AgentName {
+		t.Error("invocation view not set correctly")
+	}
+	if tracker.sourceInvocation != invocation {
+		t.Error("source invocation not set correctly")
 	}
 	if tracker.llmRequest != llmRequest {
 		t.Error("llmRequest not set correctly")

@@ -182,6 +182,7 @@ type AfterToolArgs struct {
 type AfterToolResult struct {
     Context      context.Context  // 可选，用于后续操作的上下文
     CustomResult any              // 非空时替换原始结果
+    SkipSummarization bool        // 为 true 时在 tool.response 后结束本轮
 }
 ```
 
@@ -200,6 +201,10 @@ type AfterToolCallbackStructured  func(ctx context.Context, args *tool.AfterTool
 - 可通过 `args.Arguments` 直接修改参数
 - BeforeToolCallbackStructured 返回非空自定义结果时，会跳过工具执行并直接使用该结果
 - `BeforeToolArgs` 和 `AfterToolArgs` 中提供了 `ToolCallID`
+- `AfterToolResult.SkipSummarization` 允许回调在判断工具结果后，让本轮在
+  `tool.response` 后直接结束
+- `SkipSummarization` 只会跳过额外的总结型 LLM 调用；真正的结束信号仍然是
+  `runner.completion` / `event.IsRunnerCompletion()`
 
 
 ### 回调执行控制
@@ -267,6 +272,27 @@ toolCallbacks := tool.NewCallbacks().
     return nil, nil
   })
 ```
+
+动态 skip summarization 示例：
+
+```go
+toolCallbacks.RegisterAfterTool(func(ctx context.Context, args *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+  if args.Error != nil {
+    return nil, nil
+  }
+  out, ok := args.Result.(map[string]any)
+  if ok && out["action"] != nil {
+    return &tool.AfterToolResult{
+      SkipSummarization: true,
+    }, nil
+  }
+  return nil, nil
+})
+```
+
+这会让本轮在工具响应后结束，但不会把 `tool.response` 变成最终
+assistant 响应。若消费侧需要真正的终止标记，仍应持续读取直到
+`runner.completion`。
 
 **使用方式**：创建 callbacks 后，需要在创建 LLM Agent 时通过 `llmagent.WithToolCallbacks()` 选项传入：
 

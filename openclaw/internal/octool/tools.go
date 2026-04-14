@@ -23,6 +23,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
@@ -64,6 +66,8 @@ const (
 	envLastPDFName    = "OPENCLAW_LAST_PDF_NAME"
 	envLastPDFMIME    = "OPENCLAW_LAST_PDF_MIME"
 
+	envMemoryFile = "OPENCLAW_MEMORY_FILE"
+
 	recentUploadsLimit = 6
 
 	execOutputMediaMarker    = "MEDIA:"
@@ -89,8 +93,9 @@ type execUploadMeta struct {
 }
 
 type execTool struct {
-	mgr     *Manager
-	uploads *uploads.Store
+	mgr         *Manager
+	uploads     *uploads.Store
+	memoryStore *memoryfile.Store
 }
 
 // NewExecCommandTool creates the canonical host command tool.
@@ -105,6 +110,20 @@ func NewExecCommandTool(
 	return &execTool{
 		mgr:     mgr,
 		uploads: store,
+	}
+}
+
+// NewExecCommandToolWithMemoryFileStore creates the canonical host command
+// tool with file-based memory environment injection.
+func NewExecCommandToolWithMemoryFileStore(
+	mgr *Manager,
+	uploadStore *uploads.Store,
+	memoryStore *memoryfile.Store,
+) tool.Tool {
+	return &execTool{
+		mgr:         mgr,
+		uploads:     uploadStore,
+		memoryStore: memoryStore,
 	}
 }
 
@@ -185,6 +204,60 @@ func (t *execTool) Declaration() *tool.Declaration {
 			},
 		},
 	}
+}
+
+func execToolDescription(hasMemoryFile bool) string {
+	parts := []string{
+		"Execute a host shell command. Use this for general local shell work.",
+		"Interactive commands can continue with write_stdin.",
+		"Protected shell and credential paths may be blocked by policy.",
+		"Sensitive env values may be redacted from returned output.",
+		"Do not use this just to inspect a PDF or spreadsheet already " +
+			"in chat; prefer read_document or read_spreadsheet for that.",
+	}
+	uploadText := "When a chat upload is available, " +
+		"OPENCLAW_LAST_UPLOAD_PATH, OPENCLAW_LAST_UPLOAD_HOST_REF, " +
+		"OPENCLAW_LAST_UPLOAD_NAME, OPENCLAW_LAST_UPLOAD_MIME, " +
+		"kind-specific OPENCLAW_LAST_*_PATH vars, " +
+		"OPENCLAW_SESSION_UPLOADS_DIR, and " +
+		"OPENCLAW_RECENT_UPLOADS_JSON point to stable " +
+		"attachment metadata, host refs, and host paths."
+	if hasMemoryFile {
+		uploadText = "When a chat upload is available, " +
+			"OPENCLAW_LAST_UPLOAD_PATH, OPENCLAW_LAST_UPLOAD_HOST_REF, " +
+			"OPENCLAW_LAST_UPLOAD_NAME, OPENCLAW_LAST_UPLOAD_MIME, " +
+			"kind-specific OPENCLAW_LAST_*_PATH vars, " +
+			"OPENCLAW_MEMORY_FILE, OPENCLAW_SESSION_UPLOADS_DIR, and " +
+			"OPENCLAW_RECENT_UPLOADS_JSON point to stable attachment " +
+			"metadata, memory-file paths, host refs, and host paths."
+	}
+	parts = append(
+		parts,
+		uploadText,
+	)
+	if hasMemoryFile {
+		parts = append(
+			parts,
+			"OPENCLAW_MEMORY_FILE is a visible MEMORY.md file for the "+
+				"current scope, not hidden internal state. If the user "+
+				"asks what you remember or asks to inspect that file, "+
+				"read it and quote or summarize the relevant lines.",
+			"If the user explicitly says 'remember this' or asks you to "+
+				"remember a durable fact, preference, or workflow rule, "+
+				"update OPENCLAW_MEMORY_FILE with a short bullet.",
+			"Use OPENCLAW_MEMORY_FILE only for stable, cross-session "+
+				"facts, preferences, and working style.",
+		)
+	}
+	parts = append(
+		parts,
+		"Write derived outputs under OPENCLAW_SESSION_UPLOADS_DIR when "+
+			"you plan to send them back to the user.",
+		"If the command prints lines like `MEDIA: /path/to/file` or "+
+			"`MEDIA_DIR: /path/to/dir`, those paths are returned in "+
+			"structured media_files/media_dirs fields.",
+	)
+	return strings.Join(parts, " ")
 }
 
 type execInput struct {
@@ -666,6 +739,35 @@ func uploadEnvFromContext(
 		envLastPDFMIME,
 	)
 	return env
+}
+
+func memoryFileEnvFromContext(
+	ctx context.Context,
+	store *memoryfile.Store,
+) map[string]string {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.Session == nil || store == nil {
+		return nil
+	}
+
+	appName := strings.TrimSpace(inv.Session.AppName)
+	userID := strings.TrimSpace(inv.Session.UserID)
+	userID = conversationscope.StorageUserIDFromContext(ctx, userID)
+	if appName == "" || userID == "" {
+		return nil
+	}
+
+	path, err := store.EnsureMemory(
+		context.Background(),
+		appName,
+		userID,
+	)
+	if err != nil || strings.TrimSpace(path) == "" {
+		return nil
+	}
+	return map[string]string{
+		envMemoryFile: path,
+	}
 }
 
 func addLatestKindUploadEnv(

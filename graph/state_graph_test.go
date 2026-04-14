@@ -12,6 +12,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"reflect"
 	"strings"
@@ -25,7 +26,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
-	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -40,6 +40,14 @@ func TestNewBuilder(t *testing.T) {
 	if builder.graph == nil {
 		t.Error("Expected builder to have initialized state graph")
 	}
+}
+
+func TestExecutionContextFromState_EdgeCases(t *testing.T) {
+	require.Nil(t, executionContextFromState(nil))
+	require.Nil(t, executionContextFromState(State{}))
+	require.Nil(t, executionContextFromState(State{
+		StateKeyExecContext: "not-an-exec-context",
+	}))
 }
 
 func TestBuilderAddFunctionNode(t *testing.T) {
@@ -362,6 +370,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 
 	res, err := processAgentEventStream(
 		ctx,
+		nil,
 		agentEvents,
 		nil,
 		"node",
@@ -369,7 +378,6 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 		parentEventChan,
 		"agent",
 		"",
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "", res.lastResponse)
@@ -377,7 +385,7 @@ func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
 	require.Len(t, res.rawDelta, 1)
 }
 
-func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
+func TestProcessAgentEventStream_CapturesLastResponseFromFinalEvent(t *testing.T) {
 	ctx := context.Background()
 	agentEvents := make(chan *event.Event, 2)
 	parentEventChan := make(chan *event.Event, 2)
@@ -411,6 +419,7 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 
 	res, err := processAgentEventStream(
 		ctx,
+		nil,
 		agentEvents,
 		nil,
 		"node",
@@ -418,19 +427,147 @@ func TestProcessAgentEventStream_AccumulatesTokenUsage(t *testing.T) {
 		parentEventChan,
 		"agent",
 		"",
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "final", res.lastResponse)
-	require.Equal(t, finalUsage.PromptTokens, res.tokenUsage.PromptTokens)
+	require.Len(t, parentEventChan, 2)
+}
+
+func TestProcessAgentEventStream_UsesFallbackStateOnFatalError(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	agentEvents := make(chan *event.Event, 2)
+	parentEventChan := make(chan *event.Event, 2)
+
+	executionErrors := []ExecutionError{{
+		Severity: ExecutionErrorSeverityFatal,
+		Error: &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: "child boom",
+		},
+	}}
+	raw, err := json.Marshal(executionErrors)
+	require.NoError(t, err)
+
+	agentEvents <- event.New(
+		"inv",
+		"child-node",
+		event.WithObject(ObjectTypeGraphNodeCustom),
+		event.WithStateDelta(map[string][]byte{
+			StateKeyExecutionErrors: raw,
+		}),
+	)
+	agentEvents <- event.New(
+		"inv",
+		"child-node",
+		event.WithResponse(&model.Response{
+			Object: model.ObjectTypeError,
+			Error: &model.ResponseError{
+				Type:    model.ErrorTypeFlowError,
+				Message: "child boom",
+			},
+		}),
+	)
+	close(agentEvents)
+
+	res, err := processAgentEventStream(
+		ctx,
+		nil,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		"",
+	)
+	require.NoError(t, err)
+	require.Nil(t, res.rawDelta)
+	require.Nil(t, res.finalState)
+	require.Len(t, res.fallbackRawDelta, 1)
+	require.NotNil(t, res.fallbackState)
+
+	got, err := ExecutionErrorsFromStateDelta(
+		res.fallbackRawDelta,
+		StateKeyExecutionErrors,
+	)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
 	require.Equal(
 		t,
-		finalUsage.CompletionTokens,
-		res.tokenUsage.CompletionTokens,
+		ExecutionErrorSeverityFatal,
+		got[0].Severity,
 	)
-	require.Equal(t, finalUsage.TotalTokens, res.tokenUsage.TotalTokens)
-	require.Equal(t, finalEvent, res.fullRespEvent)
-	require.Len(t, parentEventChan, 2)
+}
+
+func TestSubgraphResult_EffectiveStatePrefersFinalState(t *testing.T) {
+	result := SubgraphResult{
+		FinalState: State{"final": true},
+		RawStateDelta: map[string][]byte{
+			"final": []byte(`true`),
+		},
+		FallbackState: State{"fallback": true},
+		FallbackStateDelta: map[string][]byte{
+			"fallback": []byte(`true`),
+		},
+	}
+
+	require.Equal(t, true, result.EffectiveState()["final"])
+	require.Equal(t, "true", string(result.EffectiveStateDelta()["final"]))
+}
+
+func TestSubgraphResult_EffectiveStateFallsBack(t *testing.T) {
+	result := SubgraphResult{
+		FallbackState: State{"fallback": true},
+		FallbackStateDelta: map[string][]byte{
+			"fallback": []byte(`true`),
+		},
+	}
+
+	require.Equal(t, true, result.EffectiveState()["fallback"])
+	require.Equal(
+		t,
+		"true",
+		string(result.EffectiveStateDelta()["fallback"]),
+	)
+}
+
+func TestMergeAgentEventCallbacks_AppendsGlobalAndPerNode(t *testing.T) {
+	globalCalled := false
+	perNodeCalled := false
+
+	global := NewNodeCallbacks().RegisterAgentEvent(func(
+		ctx context.Context,
+		callbackCtx *NodeCallbackContext,
+		state State,
+		evt *event.Event,
+	) {
+		globalCalled = true
+	})
+	perNode := NewNodeCallbacks().RegisterAgentEvent(func(
+		ctx context.Context,
+		callbackCtx *NodeCallbackContext,
+		state State,
+		evt *event.Event,
+	) {
+		perNodeCalled = true
+	})
+
+	merged := mergeAgentEventCallbacks(State{
+		StateKeyNodeCallbacks: global,
+	}, perNode)
+	require.NotNil(t, merged)
+	require.Len(t, merged.AgentEvent, 2)
+
+	merged.RunAgentEvent(
+		context.Background(),
+		&NodeCallbackContext{NodeID: "agent-node"},
+		State{},
+		event.New("inv", "agent"),
+	)
+	require.True(t, globalCalled)
+	require.True(t, perNodeCalled)
 }
 
 func TestProcessAgentEventStream_StreamOutputWritesDeltas(t *testing.T) {
@@ -474,6 +611,7 @@ func TestProcessAgentEventStream_StreamOutputWritesDeltas(t *testing.T) {
 
 	_, err = processAgentEventStream(
 		ctx,
+		inv,
 		agentEvents,
 		nil,
 		"node",
@@ -481,7 +619,6 @@ func TestProcessAgentEventStream_StreamOutputWritesDeltas(t *testing.T) {
 		parentEventChan,
 		"agent",
 		streamName,
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 
@@ -516,6 +653,7 @@ func TestProcessAgentEventStream_StreamOutputWritesFinalWhenNoDeltas(
 
 	_, err = processAgentEventStream(
 		ctx,
+		inv,
 		agentEvents,
 		nil,
 		"node",
@@ -523,13 +661,182 @@ func TestProcessAgentEventStream_StreamOutputWritesFinalWhenNoDeltas(
 		parentEventChan,
 		"agent",
 		streamName,
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 
 	b, err := io.ReadAll(r)
 	require.NoError(t, err)
 	require.Equal(t, "final", string(b))
+}
+
+func TestProcessAgentEventStream_StreamOutputWritesHiddenGraphCompletionFinal(
+	t *testing.T,
+) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-stream-hidden-final"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithDisableGraphCompletionEvent(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	agent.GetOrCreateStreamHub(inv)
+	const streamName = "s"
+	r, err := OpenStreamReader(ctx, streamName)
+	require.NoError(t, err)
+	defer r.Close()
+	agentEvents := make(chan *event.Event, 1)
+	parentEventChan := make(chan *event.Event, 1)
+	agentEvents <- NewGraphCompletionEvent(
+		WithCompletionEventInvocationID(inv.InvocationID),
+		WithCompletionEventFinalState(State{
+			StateKeyLastResponse: "hidden-final",
+		}),
+	)
+	close(agentEvents)
+	res, err := processAgentEventStream(
+		ctx,
+		inv,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		streamName,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "hidden-final", res.lastResponse)
+	b, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "hidden-final", string(b))
+}
+
+func TestProcessAgentEventStream_CapturesAssistantLastResponseID(t *testing.T) {
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-last-response-id"))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	agentEvents := make(chan *event.Event, 1)
+	parentEventChan := make(chan *event.Event, 1)
+	agentEvents <- event.NewResponseEvent(
+		inv.InvocationID,
+		"child",
+		&model.Response{
+			ID:        "resp-child-final",
+			Object:    model.ObjectTypeChatCompletion,
+			Done:      true,
+			IsPartial: false,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.NewAssistantMessage("child final"),
+			}},
+		},
+	)
+	close(agentEvents)
+
+	res, err := processAgentEventStream(
+		ctx,
+		inv,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"child",
+		"",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "child final", res.lastResponse)
+	require.Equal(t, "resp-child-final", res.lastResponseID)
+}
+
+func TestUpdateAgentLastResponseValue_IgnoresResponseIDWithoutMessageContent(t *testing.T) {
+	lastResponse := "existing"
+	lastResponseID := "existing-id"
+	updateAgentLastResponseValue(
+		&lastResponse,
+		&lastResponseID,
+		&event.Event{
+			Response: &model.Response{
+				ID: "resp-only-id",
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(""),
+				}},
+			},
+		},
+	)
+	require.Equal(t, "existing", lastResponse)
+	require.Equal(t, "existing-id", lastResponseID)
+}
+
+func TestFinalizeAgentNodeOutput_DefaultPreservesStateContractAndStoresFallback(t *testing.T) {
+	execCtx := &ExecutionContext{}
+	out := finalizeAgentNodeOutput(
+		State{StateKeyExecContext: execCtx},
+		"child-node",
+		agentEventStreamResult{
+			lastResponse:   "child final",
+			lastResponseID: "resp-child-final",
+		},
+		nil,
+		"",
+	)
+
+	state, ok := out.(State)
+	require.True(t, ok)
+	require.Equal(t, "child final", state[StateKeyLastResponse])
+	_, exists := state[StateKeyLastResponseID]
+	require.False(t, exists)
+	require.Equal(
+		t,
+		map[string]any{"child-node": "child final"},
+		state[StateKeyNodeResponses],
+	)
+	require.Equal(t, "child final", execCtx.completionIdentityText)
+	require.Equal(t, "resp-child-final", execCtx.completionIdentity)
+}
+
+func TestFinalizeAgentNodeOutput_OutputMapperDoesNotInjectLastResponseID(t *testing.T) {
+	execCtx := &ExecutionContext{}
+	out := finalizeAgentNodeOutput(
+		State{StateKeyExecContext: execCtx},
+		"child-node",
+		agentEventStreamResult{
+			lastResponse:   "child final",
+			lastResponseID: "resp-child-final",
+		},
+		func(_ State, _ SubgraphResult) State {
+			return State{"custom": "value"}
+		},
+		"",
+	)
+
+	state, ok := out.(State)
+	require.True(t, ok)
+	require.Equal(t, "value", state["custom"])
+	_, exists := state[StateKeyLastResponseID]
+	require.False(t, exists)
+	require.Equal(t, "", state[StateKeyUserInput])
+	require.Equal(t, "child final", execCtx.completionIdentityText)
+	require.Equal(t, "resp-child-final", execCtx.completionIdentity)
+}
+
+func TestFinalizeAgentNodeOutput_OutputMapperEmptyPreservesNoUpdateContract(t *testing.T) {
+	execCtx := &ExecutionContext{}
+	out := finalizeAgentNodeOutput(
+		State{StateKeyExecContext: execCtx},
+		"child-node",
+		agentEventStreamResult{
+			lastResponseID: "resp-child-final",
+		},
+		func(_ State, _ SubgraphResult) State {
+			return State{}
+		},
+		"",
+	)
+
+	state, ok := out.(State)
+	require.True(t, ok)
+	require.Len(t, state, 0)
+	require.Equal(t, "resp-child-final", execCtx.completionIdentity)
 }
 
 func TestProcessAgentEventStream_StreamOutputCloseWithError(
@@ -561,6 +868,7 @@ func TestProcessAgentEventStream_StreamOutputCloseWithError(
 
 	_, err = processAgentEventStream(
 		ctx,
+		inv,
 		agentEvents,
 		nil,
 		"node",
@@ -568,7 +876,6 @@ func TestProcessAgentEventStream_StreamOutputCloseWithError(
 		parentEventChan,
 		"agent",
 		streamName,
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.ErrorIs(t, err, context.Canceled)
 
@@ -596,6 +903,224 @@ func TestAgentDeltaFromEvent(t *testing.T) {
 			}},
 		},
 	}))
+}
+
+func TestClearAgentTerminalErrorOnContinuedOutput_ClearsOnRecoveredAssistantMessage(
+	t *testing.T,
+) {
+	res := agentEventStreamResult{
+		terminalErr: errors.New("boom"),
+	}
+	recoveredEvent := event.NewResponseEvent(
+		"",
+		"child",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("ok"),
+			}},
+		},
+	)
+	clearAgentTerminalErrorOnContinuedOutput(&res, recoveredEvent)
+	require.NoError(t, res.terminalErr)
+}
+
+func TestProcessAgentEventStream_RecoveredErrorDoesNotFail(t *testing.T) {
+	ctx := context.Background()
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-recovered-error"),
+		agent.WithInvocationEventFilterKey("parent/child/grandchild"),
+	)
+	agentEvents := make(chan *event.Event, 2)
+	parentEventChan := make(chan *event.Event, 2)
+	agentEvents <- event.NewErrorEvent(
+		inv.InvocationID,
+		"child",
+		model.ErrorTypeFlowError,
+		"recoverable",
+	)
+	agentEvents <- event.NewResponseEvent(
+		inv.InvocationID,
+		"child",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("recovered"),
+			}},
+		},
+	)
+	close(agentEvents)
+	res, err := processAgentEventStream(
+		agent.NewInvocationContext(ctx, inv),
+		inv,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		"",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "recovered", res.lastResponse)
+}
+
+func TestProcessAgentEventStream_DefaultKeepsLegacyTerminalErrorCompatibility(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-terminal-error-default"),
+	)
+	agentEvents := make(chan *event.Event, 2)
+	parentEventChan := make(chan *event.Event, 2)
+	agentEvents <- event.NewResponseEvent(
+		inv.InvocationID,
+		"child",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("partial-success"),
+			}},
+		},
+	)
+	agentEvents <- event.NewErrorEvent(
+		inv.InvocationID,
+		"child",
+		model.ErrorTypeFlowError,
+		"boom",
+	)
+	close(agentEvents)
+	res, err := processAgentEventStream(
+		agent.NewInvocationContext(ctx, inv),
+		inv,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		"",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "partial-success", res.lastResponse)
+	require.NoError(t, res.terminalErr)
+	require.Len(t, parentEventChan, 2)
+}
+
+func TestProcessAgentEventStream_PropagatesTerminalErrorWhenEnabled(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-terminal-error-strict"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithPropagateChildAgentErrors(true),
+		)),
+	)
+	agentEvents := make(chan *event.Event, 2)
+	parentEventChan := make(chan *event.Event, 2)
+	agentEvents <- event.NewResponseEvent(
+		inv.InvocationID,
+		"child",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("partial-success"),
+			}},
+		},
+	)
+	agentEvents <- event.NewErrorEvent(
+		inv.InvocationID,
+		"child",
+		model.ErrorTypeFlowError,
+		"boom",
+	)
+	close(agentEvents)
+	res, err := processAgentEventStream(
+		agent.NewInvocationContext(ctx, inv),
+		inv,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		"",
+	)
+	require.EqualError(t, err, "boom")
+	require.Equal(t, "", res.lastResponse)
+	require.EqualError(t, res.terminalErr, "boom")
+	require.Len(t, parentEventChan, 2)
+}
+
+func TestProcessAgentEventStream_PreservesExternalEventMetadataWhileTrackingTerminalErrors(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	parentInvocation := agent.NewInvocation(
+		agent.WithInvocationID("inv-parent"),
+	)
+	inv := parentInvocation.Clone(
+		agent.WithInvocationID("inv-terminal-error-raw"),
+		agent.WithInvocationBranch("branch/raw"),
+		agent.WithInvocationEventFilterKey("branch/raw/filter"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRequestID("req-terminal-error-raw"),
+			agent.WithPropagateChildAgentErrors(true),
+		)),
+	)
+	agentEvents := make(chan *event.Event, 1)
+	parentEventChan := make(chan *event.Event, 1)
+	var callbackEvent *event.Event
+	callbacks := NewNodeCallbacks()
+	callbacks.AgentEvent = append(callbacks.AgentEvent, func(
+		_ context.Context,
+		_ *NodeCallbackContext,
+		_ State,
+		evt *event.Event,
+	) {
+		callbackEvent = evt
+	})
+	agentEvents <- event.NewErrorEvent(
+		"",
+		"child",
+		model.ErrorTypeFlowError,
+		"boom",
+	)
+	close(agentEvents)
+	res, err := processAgentEventStream(
+		agent.NewInvocationContext(ctx, inv),
+		inv,
+		agentEvents,
+		callbacks,
+		"node",
+		State{},
+		parentEventChan,
+		"agent",
+		"",
+	)
+	require.EqualError(t, err, "boom")
+	require.EqualError(t, res.terminalErr, "boom")
+	forwarded := <-parentEventChan
+	require.Same(t, callbackEvent, forwarded)
+	require.Empty(t, forwarded.RequestID)
+	require.Empty(t, forwarded.InvocationID)
+	require.Empty(t, forwarded.ParentInvocationID)
+	require.Empty(t, forwarded.Branch)
+	require.Empty(t, forwarded.FilterKey)
+}
+
+func TestClearAgentTerminalErrorOnContinuedOutput_IgnoresLifecycleOnlyEvents(
+	t *testing.T,
+) {
+	res := agentEventStreamResult{
+		terminalErr: errors.New("boom"),
+	}
+	lifecycleEvent := NewNodeStartEvent(
+		WithNodeEventInvocationID("inv"),
+		WithNodeEventNodeID("node"),
+		WithNodeEventNodeType(NodeTypeAgent),
+		WithNodeEventStartTime(time.Now()),
+	)
+	clearAgentTerminalErrorOnContinuedOutput(&res, lifecycleEvent)
+	require.Error(t, res.terminalErr)
 }
 
 func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
@@ -628,6 +1153,7 @@ func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
 
 	res, err := processAgentEventStream(
 		ctx,
+		nil,
 		agentEvents,
 		nil,
 		"node",
@@ -635,7 +1161,6 @@ func TestProcessAgentEventStream_CapturesStructuredOutput(t *testing.T) {
 		parentEventChan,
 		"agent",
 		"",
-		&itelemetry.InvokeAgentTracker{},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "final", res.lastResponse)
@@ -774,6 +1299,137 @@ func TestNewToolsNodeFunc_WithToolCallbacks(t *testing.T) {
 	msgs, ok := res.(State)[StateKeyMessages].([]model.Message)
 	require.True(t, ok, "expected messages in result state")
 	require.Len(t, msgs, 1, "expected one tool result message")
+}
+
+func TestNewToolsNodeFunc_RetryDoesNotReplayCallbacks(t *testing.T) {
+	var beforeCalls int
+	var afterCalls int
+	var toolCalls int
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		beforeCalls++
+		return &tool.BeforeToolResult{}, nil
+	})
+	callbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		afterCalls++
+		require.NoError(t, args.Error)
+		return &tool.AfterToolResult{}, nil
+	})
+	nf := NewToolsNodeFunc(
+		map[string]tool.Tool{
+			"retry": &retryTool{
+				name: "retry",
+				callFn: func(ctx context.Context, args []byte) (any, error) {
+					toolCalls++
+					if toolCalls == 1 {
+						return nil, io.ErrUnexpectedEOF
+					}
+					return map[string]any{"ok": true}, nil
+				},
+			},
+		},
+		WithToolCallbacks(callbacks),
+		WithToolCallRetryPolicy(&tool.RetryPolicy{
+			MaxAttempts:     2,
+			InitialInterval: 0,
+		}),
+	)
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: makeToolCalls("retry"),
+		}},
+	}
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.Equal(t, 1, beforeCalls)
+	require.Equal(t, 1, afterCalls)
+	require.Equal(t, 2, toolCalls)
+	msgs := res.(State)[StateKeyMessages].([]model.Message)
+	require.Len(t, msgs, 1)
+	require.Contains(t, msgs[0].Content, `"ok":true`)
+}
+
+func TestNewToolsNodeFunc_RetryOnResultError(t *testing.T) {
+	var toolCalls int
+	nf := NewToolsNodeFunc(
+		map[string]tool.Tool{
+			"retry": &retryTool{
+				name: "retry",
+				callFn: func(ctx context.Context, args []byte) (any, error) {
+					toolCalls++
+					if toolCalls == 1 {
+						return &retryToolResult{Value: "first", Fail: true}, nil
+					}
+					return &retryToolResult{Value: "second"}, nil
+				},
+			},
+		},
+		WithToolCallRetryPolicy(&tool.RetryPolicy{
+			MaxAttempts:     2,
+			InitialInterval: 0,
+			RetryOn: func(ctx context.Context, info *tool.RetryInfo) (bool, error) {
+				return info.ResultError, nil
+			},
+		}),
+	)
+	state := State{
+		StateKeyMessages: []model.Message{{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "retry",
+					Arguments: []byte(`{}`),
+				},
+			}},
+		}},
+	}
+	res, err := nf(context.Background(), state)
+	require.NoError(t, err)
+	require.Equal(t, 2, toolCalls)
+	msgs := res.(State)[StateKeyMessages].([]model.Message)
+	require.Len(t, msgs, 1)
+	require.Contains(t, msgs[0].Content, `"value":"second"`)
+}
+
+func TestRunToolWithEventContexts_NoRetryPolicyCallsToolOnCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var toolCalls int
+	rt := &retryTool{
+		name: "retry",
+		callFn: func(callCtx context.Context, _ []byte) (any, error) {
+			toolCalls++
+			require.ErrorIs(t, callCtx.Err(), context.Canceled)
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "retry",
+			Arguments: []byte(`{}`),
+		},
+	}
+	_, _, _, _, result, modifiedArgs, err := runToolWithEventContexts(
+		ctx,
+		toolCall,
+		nil,
+		rt,
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, toolCalls)
+	require.Equal(t, map[string]any{"ok": true}, result)
+	require.Equal(t, toolCall.Function.Arguments, modifiedArgs)
 }
 
 func TestNewToolsNodeFunc_ToolCallbacksPrecedence(t *testing.T) {
@@ -1676,6 +2332,7 @@ func TestStateGraph_NodeOptionSetters(t *testing.T) {
 		func(ctx context.Context, s State) (any, error) { return s, nil },
 		WithCacheKeyFields("a", "b"),
 		WithToolCallbacks(&toolCB),
+		WithToolCallRetryPolicy(&tool.RetryPolicy{MaxAttempts: 2}),
 		WithSubgraphInputMapper(inMapper),
 		WithSubgraphOutputMapper(outMapper),
 		WithSubgraphIsolatedMessages(true),
@@ -1699,6 +2356,8 @@ func TestStateGraph_NodeOptionSetters(t *testing.T) {
 	if n.toolCallbacks != &toolCB {
 		t.Fatalf("toolCallbacks not set")
 	}
+	require.NotNil(t, n.toolCallRetryPolicy)
+	require.Equal(t, 2, n.toolCallRetryPolicy.MaxAttempts)
 	if n.agentInputMapper == nil || n.agentOutputMapper == nil {
 		t.Fatalf("subgraph mappers not set")
 	}
@@ -2503,6 +3162,28 @@ func (s *simpleTool) Call(ctx context.Context, _ []byte) (any, error) {
 	return map[string]any{"ok": true}, nil
 }
 
+type retryTool struct {
+	name   string
+	callFn func(context.Context, []byte) (any, error)
+}
+
+func (t *retryTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+func (t *retryTool) Call(ctx context.Context, args []byte) (any, error) {
+	return t.callFn(ctx, args)
+}
+
+type retryToolResult struct {
+	Value string `json:"value"`
+	Fail  bool   `json:"-"`
+}
+
+func (r *retryToolResult) RetryResultError() bool {
+	return r.Fail
+}
+
 type countingToolSet struct {
 	name  string
 	calls int
@@ -2640,6 +3321,28 @@ func TestAddLLMNode_RefreshToolSetsOnRun(t *testing.T) {
 	require.NotEmpty(t, secondTools)
 
 	require.Equal(t, 2, ts.calls)
+}
+
+func TestAddLLMNode_UsesUpdatedToolsMapAtRunTime(t *testing.T) {
+	schema := MessagesStateSchema()
+	rm := &recordingModel{}
+	sg := NewStateGraph(schema)
+	tools := map[string]tool.Tool{
+		"base": &simpleTool{name: "base"},
+	}
+	sg.AddLLMNode("llm", rm, "inst", tools)
+	n := sg.graph.nodes["llm"]
+	require.NotNil(t, n)
+	require.Contains(t, n.baseTools, "base")
+	require.NotContains(t, n.baseTools, "late")
+	tools["late"] = &simpleTool{name: "late"}
+	_, err := n.Function(context.Background(), State{StateKeyUserInput: "hi"})
+	require.NoError(t, err)
+	require.NotNil(t, rm.lastTools)
+	require.Contains(t, rm.lastTools, "base")
+	require.Contains(t, rm.lastTools, "late")
+	require.Contains(t, n.baseTools, "base")
+	require.NotContains(t, n.baseTools, "late")
 }
 
 func TestAddLLMNode_PlaceholderInvocationState(t *testing.T) {
@@ -2986,6 +3689,41 @@ func TestNewToolsNodeFunc_RefreshToolSetsOnRun(t *testing.T) {
 	require.Equal(t, 2, ts.calls)
 }
 
+func TestAddToolsNode_DoesNotReplayOptionsExtraTimes(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	calls := 0
+	sg.AddToolsNode(
+		"tools",
+		nil,
+		func(node *Node) {
+			calls++
+			node.refreshToolSetsOnRun = false
+		},
+	)
+	require.Equal(t, 2, calls)
+}
+
+func TestAddToolsNode_DuplicateIDDoesNotOverwriteExistingBaseTools(t *testing.T) {
+	sg := NewStateGraph(MessagesStateSchema())
+	firstTools := map[string]tool.Tool{
+		"first": &simpleTool{name: "first"},
+	}
+	secondTools := map[string]tool.Tool{
+		"second": &simpleTool{name: "second"},
+	}
+	sg.AddToolsNode("tools", firstTools)
+	firstNode := sg.graph.nodes["tools"]
+	require.NotNil(t, firstNode)
+	require.Contains(t, firstNode.baseTools, "first")
+	require.NotContains(t, firstNode.baseTools, "second")
+	sg.AddToolsNode("tools", secondTools)
+	require.Error(t, sg.buildErr())
+	secondNode := sg.graph.nodes["tools"]
+	require.Same(t, firstNode, secondNode)
+	require.Contains(t, secondNode.baseTools, "first")
+	require.NotContains(t, secondNode.baseTools, "second")
+}
+
 func TestStateGraph_StaticInterruptNodes_SetFlags(t *testing.T) {
 	const (
 		nodeA = "a"
@@ -3140,6 +3878,9 @@ func TestExtractPregelInterrupt(t *testing.T) {
 		nodeID       = "n"
 		interruptKey = "k"
 		interruptVal = "prompt"
+		lineageID    = "ln-1"
+		checkpointID = "ck-1"
+		checkpointNS = "ns-1"
 	)
 
 	_, ok := extractPregelInterrupt(nil)
@@ -3203,6 +3944,9 @@ func TestExtractPregelInterrupt(t *testing.T) {
 		NodeID:         nodeID,
 		InterruptKey:   interruptKey,
 		InterruptValue: interruptVal,
+		LineageID:      lineageID,
+		CheckpointID:   checkpointID,
+		CheckpointNS:   checkpointNS,
 	}
 	b, err = json.Marshal(meta)
 	require.NoError(t, err)
@@ -3221,6 +3965,13 @@ func TestExtractPregelInterrupt(t *testing.T) {
 	require.Equal(t, interruptKey, intr.TaskID)
 	require.Equal(t, interruptKey, intr.Key)
 	require.Equal(t, interruptVal, intr.Value)
+
+	info, ok := extractPregelInterruptInfo(e)
+	require.True(t, ok)
+	require.NotNil(t, info)
+	require.Equal(t, lineageID, info.lineageID)
+	require.Equal(t, checkpointID, info.checkpointID)
+	require.Equal(t, checkpointNS, info.checkpointNS)
 
 	meta = PregelStepMetadata{
 		NodeID:         testEmptyString,
@@ -3252,6 +4003,41 @@ func TestExtractPregelInterrupt(t *testing.T) {
 	)
 	_, ok = extractPregelInterrupt(e)
 	require.False(t, ok)
+}
+
+func TestSetSubgraphInterruptState_PrefersInterruptMetadata(t *testing.T) {
+	state := State{}
+	childState := State{
+		CfgKeyLineageID:    "child-ln-local",
+		CfgKeyCheckpointNS: "child-ns-local",
+	}
+	targetAgent := &inspectAgent{name: "remote-child"}
+
+	setSubgraphInterruptState(
+		context.Background(),
+		state,
+		"parent-node",
+		"remote-child",
+		targetAgent,
+		childState,
+		&agent.Invocation{InvocationID: "fallback-ln"},
+		"approval",
+		&extractedPregelInterrupt{
+			interrupt:    &InterruptError{TaskID: "approval"},
+			lineageID:    "child-ln-remote",
+			checkpointID: "child-ck-remote",
+			checkpointNS: "child-ns-remote",
+		},
+	)
+
+	info, ok := subgraphInterruptInfoFromState(state)
+	require.True(t, ok)
+	require.Equal(t, "parent-node", info.parentNodeID)
+	require.Equal(t, "remote-child", info.childAgentName)
+	require.Equal(t, "child-ln-remote", info.childLineageID)
+	require.Equal(t, "child-ck-remote", info.childCheckpointID)
+	require.Equal(t, "child-ns-remote", info.childCheckpointNS)
+	require.Equal(t, "approval", info.childTaskID)
 }
 
 func TestLatestInterruptedCheckpointID(t *testing.T) {

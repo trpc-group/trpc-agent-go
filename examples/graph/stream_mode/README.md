@@ -43,3 +43,8 @@ When `messages` is selected, Runner forwards only message events
 (`chat.completion.chunk`, `chat.completion`) plus the final `runner.completion`
 event. For graphs that contain real Large Language Model (LLM) nodes, messages
 mode also enables final model response events for that run by default.
+
+If your graph contains multiple user-facing message nodes and you want only the
+terminal graph messages to remain visible, combine StreamMode with
+`agent.WithGraphTerminalMessagesOnly(true)`. See
+`examples/graph/terminal_messages_only`.

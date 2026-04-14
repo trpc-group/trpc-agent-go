@@ -10,10 +10,12 @@
 package gateway
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 )
 
@@ -60,6 +62,7 @@ const (
 )
 
 func (s *Server) uploadContextMessages(
+	ctx context.Context,
 	userID string,
 	sessionID string,
 ) []model.Message {
@@ -68,10 +71,14 @@ func (s *Server) uploadContextMessages(
 	}
 
 	channel := channelFromSessionID(sessionID)
+	storageUserID := conversationscope.StorageUserIDFromContext(
+		ctx,
+		userID,
+	)
 	files, err := s.uploads.ListScope(
 		uploads.Scope{
 			Channel:   channel,
-			UserID:    userID,
+			UserID:    storageUserID,
 			SessionID: sessionID,
 		},
 		recentUploadContextLimit,

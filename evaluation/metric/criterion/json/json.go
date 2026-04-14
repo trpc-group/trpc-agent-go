@@ -17,6 +17,9 @@ import (
 	"reflect"
 )
 
+// CompareFunc defines custom JSON comparison logic.
+type CompareFunc func(actual, expected any) (bool, error)
+
 // JSONCriterion compares two JSON objects using exact matching.
 type JSONCriterion struct {
 	// Ignore skips comparison when true.
@@ -29,8 +32,10 @@ type JSONCriterion struct {
 	MatchStrategy JSONMatchStrategy `json:"matchStrategy,omitempty"`
 	// NumberTolerance defines the allowed absolute difference between numeric values. 1e-6 is the default.
 	NumberTolerance *float64 `json:"numberTolerance,omitempty"`
+	// CompareName selects a registered comparison implementation by name.
+	CompareName string `json:"compareName,omitempty"`
 	// Compare overrides default comparison when provided.
-	Compare func(actual, expected any) (bool, error) `json:"-"`
+	Compare CompareFunc `json:"-"`
 }
 
 // JSONMatchStrategy enumerates supported JSON comparison strategies.
@@ -50,6 +55,7 @@ func New(opt ...Option) *JSONCriterion {
 		OnlyTree:        opts.onlyTree,
 		MatchStrategy:   opts.matchStrategy,
 		NumberTolerance: opts.numberTolerance,
+		CompareName:     opts.compareName,
 		Compare:         opts.compare,
 	}
 }

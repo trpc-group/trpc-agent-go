@@ -138,7 +138,10 @@ func WithHTTPClient(client *http.Client) Option {
 	}
 }
 
-// WithChatRequestCallback sets the function to be called before sending a chat request.
+// WithChatRequestCallback sets the function to be called before sending a
+// chat request. The callback runs synchronously in GenerateContent before
+// the response goroutine starts. Start your own goroutine in the callback
+// if asynchronous behavior is needed.
 func WithChatRequestCallback(fn ChatRequestCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatRequestCallback = fn
@@ -161,7 +164,8 @@ func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 	}
 }
 
-// WithChatStreamCompleteCallback sets the function to be called when streaming is completed.
+// WithChatStreamCompleteCallback sets the function to be called when
+// streaming is completed.
 // Called for both successful and failed streaming completions.
 func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	return func(opts *options) {

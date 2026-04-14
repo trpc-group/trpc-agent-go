@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -47,6 +48,32 @@ func TestWithRuntimeState(t *testing.T) {
 	require.Equal(t, "12345", ro.RuntimeState["user_id"])
 	require.Equal(t, 678, ro.RuntimeState["room_id"])
 	require.Equal(t, true, ro.RuntimeState["config"])
+}
+
+func TestMergeRuntimeState(t *testing.T) {
+	state := map[string]any{
+		"user_id": "12345",
+		"room_id": 678,
+	}
+
+	other := map[string]any{
+		"room_id":  999,
+		"config":   true,
+		"roomName": "demo",
+	}
+
+	var ro RunOptions
+	WithRuntimeState(state)(&ro)
+	MergeRuntimeState(other)(&ro)
+
+	require.NotNil(t, ro.RuntimeState)
+	require.Equal(t, "12345", ro.RuntimeState["user_id"])
+	require.Equal(t, 999, ro.RuntimeState["room_id"])
+	require.Equal(t, true, ro.RuntimeState["config"])
+	require.Equal(t, "demo", ro.RuntimeState["roomName"])
+	require.Equal(t, 999, other["room_id"])
+	require.Equal(t, true, other["config"])
+	require.Equal(t, "demo", other["roomName"])
 }
 
 func TestWithKnowledgeFilter(t *testing.T) {
@@ -107,6 +134,13 @@ func TestWithMaxRunDuration(t *testing.T) {
 	require.Equal(t, maxRun, ro.MaxRunDuration)
 }
 
+func TestWithCodeExecutor(t *testing.T) {
+	exec := &invocationTestCodeExecutor{}
+	var ro RunOptions
+	WithCodeExecutor(exec)(&ro)
+	require.Same(t, exec, ro.CodeExecutor)
+}
+
 func TestWithA2ARequestOptions(t *testing.T) {
 	tests := []struct {
 		name string
@@ -137,6 +171,19 @@ func TestWithA2ARequestOptions(t *testing.T) {
 			}
 		})
 	}
+}
+
+type invocationTestCodeExecutor struct{}
+
+func (*invocationTestCodeExecutor) ExecuteCode(
+	context.Context,
+	codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (*invocationTestCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
 }
 
 func TestMultipleRunOptions(t *testing.T) {
@@ -178,6 +225,15 @@ func TestWithGraphEmitFinalModelResponses(t *testing.T) {
 
 	WithGraphEmitFinalModelResponses(false)(&ro)
 	require.False(t, ro.GraphEmitFinalModelResponses)
+}
+
+func TestWithGraphTerminalMessagesOnly(t *testing.T) {
+	var ro RunOptions
+	WithGraphTerminalMessagesOnly(true)(&ro)
+	require.True(t, ro.GraphTerminalMessagesOnly)
+
+	WithGraphTerminalMessagesOnly(false)(&ro)
+	require.False(t, ro.GraphTerminalMessagesOnly)
 }
 
 func TestWithStreamMode(t *testing.T) {

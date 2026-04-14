@@ -48,9 +48,14 @@ summarizer := summary.NewSummarizer(
 
 ```go
 import (
+    "context"
     "time"
+    "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/session/mysql"
+    "trpc.group/trpc-go/trpc-agent-go/session/postgres"
     "trpc.group/trpc-go/trpc-agent-go/session/redis"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 // 内存存储（开发/测试）
@@ -146,6 +151,36 @@ type SessionSummarizer interface {
 }
 ```
 
+## 上下文感知的摘要检查
+
+已发布的 `SessionSummarizer` 接口保持不变。
+
+如果摘要触发条件依赖请求上下文，可以直接使用 `ContextChecker`
+以及带 context 的检查选项：
+
+```go
+type asyncSummaryKey struct{}
+
+eventThreshold := summary.CheckEventThreshold(20)
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithChecksAnyContext(
+        func(ctx context.Context, sess *session.Session) bool {
+            if eventThreshold(sess) {
+                return true
+            }
+            async, _ := ctx.Value(asyncSummaryKey{}).(bool)
+            return async
+        },
+    ),
+)
+```
+
+框架本身不会为摘要触发方式预留 context key。如果业务需要区分不同的
+摘要入口，可以在调用 session API 之前自行往 `ctx` 写入标记，并在
+`ContextChecker` 中读取。
+
 ## 摘要器选项
 
 ### 触发条件
@@ -162,6 +197,10 @@ type SessionSummarizer interface {
 | --- | --- |
 | `WithChecksAll(checks ...Checker)` | 要求所有条件都满足（AND 逻辑），使用 `Check*` 函数 |
 | `WithChecksAny(checks ...Checker)` | 任何条件满足即触发（OR 逻辑），使用 `Check*` 函数 |
+| `WithChecksAllContext(checks ...ContextChecker)` | 要求所有带请求上下文的条件都满足（AND 逻辑） |
+| `WithChecksAnyContext(checks ...ContextChecker)` | 任一带请求上下文的条件满足即触发（OR 逻辑） |
+
+`ContextChecker` 的签名为 `(ctx context.Context, sess *session.Session)`。
 
 **注意**：在 `WithChecksAll` 和 `WithChecksAny` 中使用 `Check*` 函数（如 `CheckEventThreshold`），而不是 `With*` 函数。
 
@@ -185,6 +224,7 @@ summary.WithChecksAny(
 | --- | --- |
 | `WithMaxSummaryWords(maxWords int)` | 限制摘要的最大字数，包含在提示词中指导模型生成 |
 | `WithPrompt(prompt string)` | 自定义摘要提示词，必须包含 `{conversation_text}` 占位符 |
+| `WithSystemPrompt(prompt string)` | 为摘要额外添加独立的 system message 指令；不能包含 `{conversation_text}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | 自定义函数跳过最近事件 |
 
 ### Hook 选项
@@ -315,7 +355,36 @@ summarizer := summary.NewSummarizer(
 **必需占位符**：
 
 - `{conversation_text}`：必须包含，会被对话内容替换
-- `{max_summary_words}`：当 `maxSummaryWords > 0` 时必须包含
+- `{max_summary_words}`：当 `maxSummaryWords > 0` 时，必须包含在 `WithPrompt(...)` 或 `WithSystemPrompt(...)` 其中之一
+
+如果希望把摘要指令放到独立的 system message，可以组合使用
+`WithSystemPrompt` 和一个更轻量的 user prompt：
+
+```go
+systemPrompt := `请忠实总结这段对话。
+重点关注关键决策和待办事项。
+请控制在 {max_summary_words} 字以内。`
+
+userPrompt := `<conversation>
+{conversation_text}
+</conversation>
+
+摘要：`
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSystemPrompt(systemPrompt),
+    summary.WithPrompt(userPrompt),
+    summary.WithMaxSummaryWords(100),
+    summary.WithEventThreshold(15),
+)
+```
+
+说明：
+
+- `WithPrompt` 仍然渲染到 **user message**
+- `WithSystemPrompt` 会渲染到独立的 **system message**
+- `WithSystemPrompt` 不能包含 `{conversation_text}`；对话内容必须保留在 user prompt 中
 
 ## Token 计数器配置
 
@@ -563,6 +632,113 @@ llmagent.WithAddSessionSummary(true)
 - 保证完整上下文：浓缩历史 + 完整新对话
 - **`WithMaxHistoryRuns` 参数被忽略**
 
+#### 摘要注入模式
+
+默认情况下，摘要以 **system message** 的方式注入（合并到已有 system prompt 中）。这种方式下，摘要会被 token tailoring 的 preserved head 保护，不会被滑动窗口裁剪掉。
+
+如果希望摘要能参与 token 预算裁剪，形成真正的**滑动窗口**效果，可以将注入模式切换为 `user`：
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithSessionSummaryInjectionMode(llmagent.SessionSummaryInjectionUser),
+)
+```
+
+**两种注入模式的区别**：
+
+| 模式 | 注入位置 | Token Tailoring 行为 | 适用场景 |
+| --- | --- | --- | --- |
+| `SessionSummaryInjectionSystem`（默认） | 合并到 system message | 摘要在 preserved head 中，不会被裁剪 | 需要摘要始终存在的场景 |
+| `SessionSummaryInjectionUser` | 优先合并到第一条 user history/current message；否则在靠近 history 的位置注入 | 摘要参与普通轮次裁剪，可被滑动窗口淘汰 | 超长对话的滑动窗口场景 |
+
+**User 模式的消息结构**：
+
+当 history 第一条消息为 user role 时，摘要会自动合并进去：
+
+```text
+┌─────────────────────────────────────────┐
+│ System Prompt                           │ ← 不包含摘要
+├─────────────────────────────────────────┤
+│ [Few-shot examples, if any]             │
+├─────────────────────────────────────────┤
+│ User: [summary context] + [original    │
+│        first user message]              │ ← 摘要合并到第一条 user history
+├─────────────────────────────────────────┤
+│ Assistant: ...                          │
+│ User: ...                               │
+│ ...                                     │
+│ User: current message                   │
+└─────────────────────────────────────────┘
+```
+
+当 history 第一条消息不是 user role 时，摘要作为独立 user message 插入：
+
+```text
+┌─────────────────────────────────────────┐
+│ System Prompt                           │ ← 不包含摘要
+├─────────────────────────────────────────┤
+│ [Few-shot examples, if any]             │
+├─────────────────────────────────────────┤
+│ User: Context from previous             │
+│ interactions: <summary>...</summary>    │ ← 独立的摘要 user message
+├─────────────────────────────────────────┤
+│ Assistant/Tool history events           │
+│ ...                                     │
+│ User: current message                   │
+└─────────────────────────────────────────┘
+```
+
+**注意事项**：
+
+- User 模式下，processor 会优先把摘要合并到第一条 user history/current message，让摘要贴近当前生效的 user 轮次
+- 如果没有可合并的 user history/current message，但 prompt 前缀最后一条已经是 user message（例如 injected context），则会回退合并到那条 user message，避免额外再插入一条相邻的 user block
+- User 模式使用更中性的默认文案（"Context from previous interactions"），避免以系统指令的语气出现在 user role 中
+- 自定义的 `WithSummaryFormatter` 同样对 user 模式生效
+- 摘要的**生成链路不受影响**——注入模式只影响 prompt assembly 层，不影响 summarizer 本身
+
+> **提示**：如果你的场景是超长对话（数百轮），且希望旧摘要能被自然淘汰（被新的摘要替代），建议使用 `SessionSummaryInjectionUser` 模式。
+
+**可选：Prompt 侧上下文压缩**
+
+当开启 `WithEnableContextCompaction(true)` 时，框架会在真正调用模型前执行两遍压缩：
+
+**Pass 1 — 历史 tool result 占位替换**（`ContextCompactionToolResultMaxTokens`，默认 1024 tokens）：
+
+- 只作用于**旧 request** 中超过阈值的 `tool result`，将其内容整体替换为简短占位符，但保留 `ToolID` 和 `ToolName`
+- 当前 request 和最近 `ContextCompactionKeepRecentRequests` 个已完成 request 不受影响
+- 适合清理已不重要的历史工具输出
+
+**Pass 2 — 超大 tool result 截断**（`ContextCompactionOversizedToolResultMaxTokens`，默认 8192 tokens）：
+
+- 作用于**所有 tool result，包括当前 request 的**
+- 超过阈值的 tool result 会使用首尾保留策略截断：保留内容的开头和结尾，中间插入 `[...N characters truncated...]` 标记
+- 这是防止单个超大 tool result 直接撑爆 context window 的安全网（例如 `web_fetch` 返回 800K+ 字符的 HTML）
+
+两遍压缩的定位不同：Pass 1 低阈值、全量替换，激进清理旧历史；Pass 2 高阈值、只在极端情况触发，但能保护当前 request。
+
+Pass 2 独立于 `EnableContextCompaction`，只要 `ContextCompactionOversizedToolResultMaxTokens > 0` 就会生效。
+
+此外：
+
+- 如果同时开启了 `WithAddSessionSummary(true)`，并且压完后请求仍接近 context window，会在 LLM 调用前同步执行一次 `CreateSessionSummary(...)` 并重建 request
+- 模型层的 token tailoring 仍然作为最后兜底
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithContextCompactionThresholdRatio(0.7),
+    llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: 旧 tool result → 占位符
+    llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: 任意超大 result → 首尾保留截断
+    llmagent.WithContextCompactionKeepRecentRequests(1),
+)
+```
+
 **上下文结构**：
 
 ```
@@ -598,6 +774,8 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 - 不添加摘要消息
 - 只包含最近 `MaxHistoryRuns` 轮对话
 - `MaxHistoryRuns=0` 时不限制，包含所有历史
+- 如果开启 `WithEnableContextCompaction(true)`，保留下来的旧 request 中超长 `tool result` 仍可在 request projection 阶段被压缩；此外只要 `ContextCompactionOversizedToolResultMaxTokens > 0`（即使未开启 `EnableContextCompaction`），任意 request 中的超大 tool result 也会被首尾保留截断
+- 这个模式下不会触发 pre-LLM 的同步摘要重试
 
 **上下文结构**：
 
@@ -620,6 +798,10 @@ llmagent.WithMaxHistoryRuns(10)  // 限制历史轮次
 | 短期会话（单次咨询） | `AddSessionSummary=false`<br>`MaxHistoryRuns=10` | 简单直接，无需摘要开销 |
 | 调试测试 | `AddSessionSummary=false`<br>`MaxHistoryRuns=5` | 快速验证，减少干扰 |
 | 高并发场景 | `AddSessionSummary=true`<br>增加 worker 数量 | 异步处理，不影响响应速度 |
+
+如果你的长会话里经常出现搜索结果、日志、代码扫描输出这类长 `tool result`，建议开启 `EnableContextCompaction=true`。如果你还希望在接近 context window 时多一次同步摘要兜底，再配合 `AddSessionSummary=true` 一起使用。
+
+> **提示**：如果你的 agent 使用了 `web_fetch` 等可能单次返回超大结果的工具，`ContextCompactionOversizedToolResultMaxTokens` 尤为重要——它能防止单个 tool result 吃光整个 context window，即使该 result 属于当前正在处理的（受保护的）request。它独立于 `EnableContextCompaction`，默认开启。
 
 ## 摘要格式自定义
 
@@ -828,3 +1010,4 @@ func main() {
 
 - [摘要示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary)
 - [FilterKey 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey)
+- [注入模式示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/injection)

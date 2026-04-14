@@ -27,8 +27,8 @@ import (
 // readMultipleFilesRequest represents the input for the read multiple files
 // operation.
 type readMultipleFilesRequest struct {
-	Patterns      []string `json:"patterns" jsonschema:"description=Globs"`
-	CaseSensitive bool     `json:"case_sensitive" jsonschema:"description=Case"`
+	Patterns      []string `json:"patterns" jsonschema:"description=Glob patterns to read such as *.go or workspace://out/*.txt"`
+	CaseSensitive bool     `json:"case_sensitive" jsonschema:"description=Whether glob matching should be case-sensitive"`
 }
 
 // readMultipleFilesResponse represents the output from the

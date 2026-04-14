@@ -21,10 +21,11 @@ func TestTextCriterionJSONRoundTrip(t *testing.T) {
 		WithIgnore(true),
 		WithCaseInsensitive(true),
 		WithMatchStrategy(TextMatchStrategyRegex),
+		WithCompareName("trim_equal"),
 	)
 	data, err := json.Marshal(criterion)
 	assert.NoError(t, err)
-	assert.JSONEq(t, `{"ignore":true,"caseInsensitive":true,"matchStrategy":"regex"}`, string(data))
+	assert.JSONEq(t, `{"ignore":true,"caseInsensitive":true,"matchStrategy":"regex","compareName":"trim_equal"}`, string(data))
 
 	var decoded TextCriterion
 	err = json.Unmarshal(data, &decoded)
@@ -32,6 +33,7 @@ func TestTextCriterionJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, criterion.Ignore, decoded.Ignore)
 	assert.Equal(t, criterion.CaseInsensitive, decoded.CaseInsensitive)
 	assert.Equal(t, criterion.MatchStrategy, decoded.MatchStrategy)
+	assert.Equal(t, criterion.CompareName, decoded.CompareName)
 }
 
 func TestTextCriterionMatchStrategies(t *testing.T) {

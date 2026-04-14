@@ -1,0 +1,144 @@
+// Copyright 2025 Tencent Inc. All rights reserved.
+// This is a sample protocol buffer definition file for demonstration purposes.
+
+syntax = "proto3";
+
+package tencent.trpc.example.v1;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+option go_package = "git.woa.com/trpc-go/trpc-agent-go/example/api";
+
+// ServiceStatus represents the current status of a service
+enum ServiceStatus {
+  SERVICE_STATUS_UNSPECIFIED = 0;
+  SERVICE_STATUS_HEALTHY = 1;
+  SERVICE_STATUS_DEGRADED = 2;
+  SERVICE_STATUS_UNHEALTHY = 3;
+}
+
+// AgentRequest represents a request to process a task
+message AgentRequest {
+  // Unique request identifier
+  string request_id = 1;
+  // User query or task description
+  string query = 2;
+  // Optional context information
+  map<string, string> context = 3;
+  // Timestamp when the request was created
+  google.protobuf.Timestamp created_at = 4;
+}
+
+// AgentResponse represents the response from processing a task
+message AgentResponse {
+  // Unique response identifier (matches request_id)
+  string response_id = 1;
+  // The result content
+  string content = 2;
+  // Metadata about the processing
+  ResponseMetadata metadata = 3;
+}
+
+// ResponseMetadata contains additional information about the response
+message ResponseMetadata {
+  // Processing time in milliseconds
+  int64 processing_time_ms = 1;
+  // Model or agent version used
+  string version = 2;
+  // Confidence score (0-1)
+  float confidence = 3;
+}
+
+// ToolCall represents a call to an external tool
+message ToolCall {
+  // Tool identifier
+  string tool_name = 1;
+  // Tool-specific parameters
+  string parameters = 2;
+}
+
+// ToolResult represents the result of a tool call
+message ToolResult {
+  // Tool identifier
+  string tool_name = 1;
+  // Success status
+  bool success = 2;
+  // Result data as JSON string
+  string result = 3;
+  // Error message if failed
+  string error_message = 4;
+}
+
+// AgentService provides AI agent capabilities
+service AgentService {
+  // Process a user query and return a response
+  rpc ProcessQuery(AgentRequest) returns (AgentResponse);
+
+  // Stream responses for a query (server-side streaming)
+  rpc StreamQuery(AgentRequest) returns (stream AgentResponse);
+
+  // Execute a tool call
+  rpc ExecuteTool(ToolCall) returns (ToolResult);
+
+  // Get service health status
+  rpc GetHealth(google.protobuf.Empty) returns (HealthResponse);
+}
+
+// HealthResponse represents the health status of the service
+message HealthResponse {
+  ServiceStatus status = 1;
+  string message = 2;
+  google.protobuf.Timestamp checked_at = 3;
+}
+
+// KnowledgeSearchRequest represents a search query against the knowledge base
+message KnowledgeSearchRequest {
+  // Search query string
+  string query = 1;
+  // Maximum number of results
+  int32 max_results = 2;
+  // Optional filter conditions
+  map<string, string> filters = 3;
+}
+
+// KnowledgeDocument represents a single document from the knowledge base
+message KnowledgeDocument {
+  // Unique document identifier
+  string doc_id = 1;
+  // Document content
+  string content = 2;
+  // Source information
+  string source = 3;
+  // Relevance score
+  float score = 4;
+  // Document metadata
+  map<string, string> metadata = 5;
+}
+
+// KnowledgeSearchResponse represents search results from the knowledge base
+message KnowledgeSearchResponse {
+  // List of matching documents
+  repeated KnowledgeDocument documents = 1;
+  // Total number of matches
+  int32 total_count = 2;
+  // Search execution time
+  int64 search_time_ms = 3;
+}
+
+// KnowledgeService provides knowledge base operations
+service KnowledgeService {
+  // Search the knowledge base
+  rpc Search(KnowledgeSearchRequest) returns (KnowledgeSearchResponse);
+
+  // Add a document to the knowledge base
+  rpc AddDocument(KnowledgeDocument) returns (google.protobuf.Empty);
+
+  // Delete a document from the knowledge base
+  rpc DeleteDocument(DeleteDocumentRequest) returns (google.protobuf.Empty);
+}
+
+// DeleteDocumentRequest represents a request to delete a document
+message DeleteDocumentRequest {
+  string doc_id = 1;
+}

@@ -1,7 +1,0 @@
-# Ignore result data and logs (large, machine-generated).
-checkpoint.json
-results.json
-*.log
-*.pdf
-tmp/
-tools/

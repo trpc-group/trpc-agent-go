@@ -21,8 +21,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -100,24 +100,25 @@ type searchToolResponse struct {
 
 func searchTools(ctx context.Context, m model.Model, req *model.Request, tools map[string]tool.Tool) (context.Context, []string, error) {
 	var err error
-	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(m.Info().Name))
-	defer span.End()
+	originalCtx := ctx
 	invocation := invocationFromContextOrNew(ctx)
+	ctx, span, startedSpan := itrace.StartSpan(ctx, invocation, itelemetry.NewChatSpanName(m.Info().Name))
+	if startedSpan {
+		defer span.End()
+	}
 	timingInfo := invocation.GetOrCreateTimingInfo()
 	tracker := itelemetry.NewChatMetricsTracker(ctx, invocation, req, timingInfo, nil, &err)
 	defer tracker.RecordMetrics()()
 
 	final, err := generateFinalResponse(ctx, m, req)
 	if err != nil {
-		return ctx, nil, err
+		return originalCtx, nil, err
 	}
 	content, err := extractFirstChoiceContent(final)
 	if err != nil {
-		return ctx, nil, err
+		return originalCtx, nil, err
 	}
-
-	ctx = trackAndTraceToolSearch(ctx, span, tracker, invocation, req, final, timingInfo)
-
+	ctx = trackAndTraceToolSearch(originalCtx, span, tracker, invocation, req, final, timingInfo, startedSpan)
 	parsed, err := parseSearchToolResponse(content)
 	if err != nil {
 		return ctx, nil, err
@@ -177,6 +178,7 @@ func trackAndTraceToolSearch(
 	req *model.Request,
 	final *model.Response,
 	timingInfo *model.TimingInfo,
+	startedSpan bool,
 ) context.Context {
 	tracker.TrackResponse(final)
 	if final.Usage == nil {
@@ -185,13 +187,15 @@ func trackAndTraceToolSearch(
 	final.Usage.TimingInfo = timingInfo
 	// Store usage in context
 	ctx = SetToolSearchUsage(ctx, final.Usage)
-	itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
-		Invocation:       invocation,
-		Request:          req,
-		Response:         final,
-		EventID:          "",
-		TimeToFirstToken: tracker.FirstTokenTimeDuration(),
-	})
+	if startedSpan {
+		itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
+			Invocation:       invocation,
+			Request:          req,
+			Response:         final,
+			EventID:          "",
+			TimeToFirstToken: tracker.FirstTokenTimeDuration(),
+		})
+	}
 	return ctx
 }
 

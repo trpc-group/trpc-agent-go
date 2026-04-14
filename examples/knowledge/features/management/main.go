@@ -39,7 +39,7 @@ import (
 )
 
 var (
-	vectorStore = flag.String("vectorstore", "pgvector", "Vector store type: inmemory|pgvector|tcvector|elasticsearch")
+	vectorStore = flag.String("vectorstore", "pgvector", "Vector store type: inmemory|sqlitevec|pgvector|tcvector|elasticsearch")
 )
 
 func main() {

@@ -40,7 +40,7 @@ const (
 	tgChatMemberStatusKicked = "kicked"
 	tgChatMemberStatusLeft   = "left"
 
-	defaultStateRootDir = ".trpc-agent-go"
+	defaultStateRootDir = ".trpc-agent-go-github"
 	defaultStateAppName = "openclaw"
 
 	mentionPrefix = "@"
@@ -732,6 +732,15 @@ func (c *Channel) handleMessage(
 				msg.MessageID,
 				laneKey,
 				fromID,
+			)
+		case commandCron:
+			return c.handleCronCommand(
+				ctx,
+				chatID,
+				messageThreadID,
+				msg.MessageID,
+				fromID,
+				cmd.Args,
 			)
 		case commandJobs:
 			return c.handleJobsCommand(

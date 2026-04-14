@@ -24,9 +24,11 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwclient"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
@@ -41,6 +43,7 @@ const (
 	errNilGatewayServer = "gateway client: nil server"
 	errNilCronService   = "gateway client: cron service unavailable"
 	errNilPersonaStore  = "gateway client: persona store unavailable"
+	errUnknownJob       = "gateway client: unknown scheduled job"
 
 	debugTraceMetaFile = "meta.json"
 
@@ -55,9 +58,10 @@ type inProcGatewayClient struct {
 	memories memory.Service
 	cronSvc  *cron.Service
 
-	debugDir string
-	uploads  *uploads.Store
-	personas *persona.Store
+	debugDir        string
+	uploads         *uploads.Store
+	personas        *persona.Store
+	memoryFileStore *memoryfile.Store
 }
 
 func newInProcGatewayClient(
@@ -96,6 +100,13 @@ func (c *inProcGatewayClient) SetPersonaStore(store *persona.Store) {
 	c.personas = store
 }
 
+func (c *inProcGatewayClient) SetMemoryFileStore(store *memoryfile.Store) {
+	if c == nil {
+		return
+	}
+	c.memoryFileStore = store
+}
+
 func (c *inProcGatewayClient) SendMessage(
 	ctx context.Context,
 	req gwclient.MessageRequest,
@@ -109,6 +120,7 @@ func (c *inProcGatewayClient) SendMessage(
 		SessionID:  rsp.SessionID,
 		RequestID:  rsp.RequestID,
 		Reply:      rsp.Reply,
+		Usage:      rsp.Usage,
 		Ignored:    rsp.Ignored,
 		Error:      rsp.Error,
 		StatusCode: status,
@@ -183,26 +195,46 @@ func (c *inProcGatewayClient) ForgetUser(
 		}
 	}
 
+	storageUserIDs := []string{userID}
+	var indexedStorageUsers []string
+	var err error
 	if c.sessions != nil {
-		userKey := session.UserKey{AppName: appName, UserID: userID}
-		sessions, err := c.sessions.ListSessions(ctx, userKey)
+		indexedStorageUsers, err = conversationscope.ListIndexedStorageUsers(
+			ctx,
+			c.sessions,
+			appName,
+			userID,
+		)
 		if err != nil {
-			return fmt.Errorf("forget: list sessions: %w", err)
+			return fmt.Errorf("forget: list storage scopes: %w", err)
 		}
-		for _, sess := range sessions {
-			if sess == nil || strings.TrimSpace(sess.ID) == "" {
-				continue
+		storageUserIDs = appendUniqueUserIDs(
+			storageUserIDs,
+			indexedStorageUsers...,
+		)
+		for _, storageUserID := range storageUserIDs {
+			sessions, err := c.sessions.ListSessions(
+				ctx,
+				session.UserKey{AppName: appName, UserID: storageUserID},
+			)
+			if err != nil {
+				return fmt.Errorf("forget: list sessions: %w", err)
 			}
-			if cron.IsRunSessionID(sess.ID) {
-				continue
-			}
-			key := session.Key{
-				AppName:   appName,
-				UserID:    userID,
-				SessionID: sess.ID,
-			}
-			if err := c.sessions.DeleteSession(ctx, key); err != nil {
-				return fmt.Errorf("forget: delete session: %w", err)
+			for _, sess := range sessions {
+				if sess == nil || strings.TrimSpace(sess.ID) == "" {
+					continue
+				}
+				if cron.IsRunSessionID(sess.ID) {
+					continue
+				}
+				key := session.Key{
+					AppName:   appName,
+					UserID:    storageUserID,
+					SessionID: sess.ID,
+				}
+				if err := c.sessions.DeleteSession(ctx, key); err != nil {
+					return fmt.Errorf("forget: delete session: %w", err)
+				}
 			}
 		}
 	}
@@ -215,13 +247,42 @@ func (c *inProcGatewayClient) ForgetUser(
 	}
 
 	if c.uploads != nil {
-		if err := c.uploads.DeleteUser(ctx, channel, userID); err != nil {
-			return fmt.Errorf("forget: delete uploads: %w", err)
+		for _, storageUserID := range storageUserIDs {
+			if err := c.uploads.DeleteUser(
+				ctx,
+				channel,
+				storageUserID,
+			); err != nil {
+				return fmt.Errorf("forget: delete uploads: %w", err)
+			}
 		}
 	}
 	if c.personas != nil {
 		if err := c.personas.ForgetUser(ctx, channel, userID); err != nil {
 			return fmt.Errorf("forget: delete personas: %w", err)
+		}
+	}
+	if c.memoryFileStore != nil {
+		for _, storageUserID := range storageUserIDs {
+			if err := c.memoryFileStore.DeleteUser(ctx, appName, storageUserID); err != nil {
+				return fmt.Errorf("forget: delete user memory files: %w", err)
+			}
+		}
+	}
+	if c.sessions != nil {
+		for _, storageUserID := range indexedStorageUsers {
+			if err := conversationscope.DeleteIndexedStorageUser(
+				ctx,
+				c.sessions,
+				appName,
+				userID,
+				storageUserID,
+			); err != nil {
+				return fmt.Errorf(
+					"forget: delete storage scope index: %w",
+					err,
+				)
+			}
 		}
 	}
 
@@ -236,6 +297,26 @@ func (c *inProcGatewayClient) ForgetUser(
 	}
 
 	return nil
+}
+
+func appendUniqueUserIDs(
+	base []string,
+	extra ...string,
+) []string {
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	out := make([]string, 0, len(base)+len(extra))
+	for _, userID := range append(base, extra...) {
+		userID = strings.TrimSpace(userID)
+		if userID == "" {
+			continue
+		}
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+		out = append(out, userID)
+	}
+	return out
 }
 
 func (c *inProcGatewayClient) ListPresetPersonas() []persona.Preset {
@@ -305,6 +386,66 @@ func (c *inProcGatewayClient) ClearScheduledJobs(
 	)
 }
 
+func (c *inProcGatewayClient) SetScheduledJobEnabled(
+	_ context.Context,
+	channel string,
+	userID string,
+	target string,
+	jobID string,
+	enabled bool,
+) (gwclient.ScheduledJobSummary, error) {
+	if c == nil || c.cronSvc == nil {
+		return gwclient.ScheduledJobSummary{},
+			errors.New(errNilCronService)
+	}
+
+	job, err := c.scopedScheduledJob(
+		channel,
+		userID,
+		target,
+		jobID,
+	)
+	if err != nil {
+		return gwclient.ScheduledJobSummary{}, err
+	}
+
+	updated, err := c.cronSvc.Update(
+		job.ID,
+		cron.Patch{Enabled: &enabled},
+	)
+	if err != nil {
+		return gwclient.ScheduledJobSummary{}, err
+	}
+	return summarizeScheduledJob(updated), nil
+}
+
+func (c *inProcGatewayClient) RemoveScheduledJob(
+	_ context.Context,
+	channel string,
+	userID string,
+	target string,
+	jobID string,
+) (bool, error) {
+	if c == nil || c.cronSvc == nil {
+		return false, errors.New(errNilCronService)
+	}
+
+	job, err := c.scopedScheduledJob(
+		channel,
+		userID,
+		target,
+		jobID,
+	)
+	if err != nil {
+		return false, err
+	}
+
+	if err := c.cronSvc.Remove(job.ID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func errorForGWStatus(status int, apiErr *gwclient.APIError) error {
 	if status == http.StatusOK {
 		return nil
@@ -332,14 +473,51 @@ func cronDeliveryTarget(
 
 func summarizeScheduledJob(job *cron.Job) gwclient.ScheduledJobSummary {
 	return gwclient.ScheduledJobSummary{
-		ID:         job.ID,
-		Name:       job.Name,
-		Enabled:    job.Enabled,
-		Schedule:   jobScheduleSummary(job.Schedule),
-		NextRunAt:  cloneTime(job.NextRunAt),
-		LastStatus: job.LastStatus,
-		LastError:  job.LastError,
+		ID:               job.ID,
+		Name:             job.Name,
+		Enabled:          job.Enabled,
+		Schedule:         jobScheduleSummary(job.Schedule),
+		Message:          job.Message,
+		MaxRuns:          job.Policy.MaxRuns,
+		RunCount:         job.Stats.RunCount,
+		SuccessCount:     job.Stats.SuccessCount,
+		FailureCount:     job.Stats.FailureCount,
+		DeliveryFailures: job.Stats.DeliveryFailureCount,
+		EndsAt:           cloneTime(job.Policy.EndsAt),
+		OverlapPolicy:    job.Policy.OverlapPolicy,
+		NextRunAt:        cloneTime(job.NextRunAt),
+		LastStatus:       job.LastStatus,
+		LastError:        job.LastError,
+		LastOutput:       job.LastOutput,
+		DeliveryChannel:  job.Delivery.Channel,
+		DeliveryTarget:   job.Delivery.Target,
 	}
+}
+
+func (c *inProcGatewayClient) scopedScheduledJob(
+	channel string,
+	userID string,
+	target string,
+	jobID string,
+) (*cron.Job, error) {
+	trimmedID := strings.TrimSpace(jobID)
+	if trimmedID == "" {
+		return nil, fmt.Errorf("%s: empty id", errUnknownJob)
+	}
+
+	jobs := c.cronSvc.ListForUser(
+		userID,
+		cronDeliveryTarget(channel, target),
+	)
+	for _, job := range jobs {
+		if job == nil {
+			continue
+		}
+		if strings.TrimSpace(job.ID) == trimmedID {
+			return job, nil
+		}
+	}
+	return nil, fmt.Errorf("%s: %s", errUnknownJob, trimmedID)
 }
 
 func jobScheduleSummary(schedule cron.Schedule) string {

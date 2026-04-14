@@ -20,6 +20,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -46,6 +47,7 @@ const (
 	//nolint:gosec
 	deepSeekAPIKeyName     string = "DEEPSEEK_API_KEY"
 	defaultDeepSeekBaseURL string = "https://api.deepseek.com"
+	deepSeekAPIHost        string = "api.deepseek.com"
 
 	//nolint:gosec
 	qwenAPIKeyName     string = "DASHSCOPE_API_KEY"
@@ -100,6 +102,8 @@ type variantConfig struct {
 	fileUploadRequestConvertor fileUploadRequestConvertor
 	// Whether to skip file type in content parts for this variant.
 	skipFileTypeInContent bool
+	// Whether user message content must be reduced to text only.
+	textOnlyMessageContent bool
 
 	// Default base URL for this variant.
 	defaultBaseURL string
@@ -140,6 +144,7 @@ var variantConfigs = map[Variant]variantConfig{
 		filePurpose:               openai.FilePurposeUserData,
 		fileDeletionMethod:        http.MethodDelete,
 		skipFileTypeInContent:     false,
+		textOnlyMessageContent:    true,
 		fileDeletionBodyConvertor: defaultFileDeletionBodyConvertor,
 		apiKeyName:                deepSeekAPIKeyName,
 		defaultBaseURL:            defaultDeepSeekBaseURL,
@@ -219,6 +224,7 @@ type Model struct {
 	showToolCallDelta          bool
 	channelBufferSize          int
 	chatRequestCallback        ChatRequestCallbackFunc
+	chatRequestJSONCallback    ChatRequestJSONCallbackFunc
 	chatResponseCallback       ChatResponseCallbackFunc
 	chatChunkCallback          ChatChunkCallbackFunc
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
@@ -250,6 +256,9 @@ func New(name string, opts ...Option) *Model {
 	o := defaultOptions
 	for _, opt := range opts {
 		opt(&o)
+	}
+	if !o.variantSet {
+		o.Variant = inferVariant(o.BaseURL)
 	}
 
 	cfg, cfgOK := variantConfigs[o.Variant]
@@ -294,6 +303,7 @@ func New(name string, opts ...Option) *Model {
 		showToolCallDelta:          o.ShowToolCallDelta,
 		channelBufferSize:          o.ChannelBufferSize,
 		chatRequestCallback:        o.ChatRequestCallback,
+		chatRequestJSONCallback:    o.ChatRequestJSONCallback,
 		chatResponseCallback:       o.ChatResponseCallback,
 		chatChunkCallback:          o.ChatChunkCallback,
 		chatStreamCompleteCallback: o.ChatStreamCompleteCallback,
@@ -319,11 +329,88 @@ func New(name string, opts ...Option) *Model {
 	}
 }
 
+func inferVariant(baseURL string) Variant {
+	if isDeepSeekBaseURL(baseURL) {
+		return VariantDeepSeek
+	}
+	return VariantOpenAI
+}
+
+func isDeepSeekBaseURL(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Hostname(), deepSeekAPIHost)
+}
+
 // Info implements the model.Model interface.
 func (m *Model) Info() model.Info {
 	return model.Info{
 		Name: m.name,
 	}
+}
+
+func (m *Model) runChatRequestCallback(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+) {
+	if m.chatRequestCallback == nil {
+		return
+	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat request callback")
+	m.chatRequestCallback(ctx, chatRequest)
+}
+
+func (m *Model) runChatRequestJSONCallback(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+) {
+	if m.chatRequestJSONCallback == nil {
+		return
+	}
+
+	var (
+		raw []byte
+		err error
+	)
+	if chatRequest != nil {
+		raw, err = chatRequest.MarshalJSON()
+	}
+
+	defer imodel.RecoverCallbackPanic(
+		ctx,
+		"chat request json callback",
+	)
+	m.chatRequestJSONCallback(ctx, raw, err)
+}
+
+func (m *Model) runChatResponseCallback(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+	chatResponse *openai.ChatCompletion,
+) {
+	if m.chatResponseCallback == nil {
+		return
+	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat response callback")
+	m.chatResponseCallback(ctx, chatRequest, chatResponse)
+}
+
+func (m *Model) runChatChunkCallback(
+	ctx context.Context,
+	chatRequest *openai.ChatCompletionNewParams,
+	chatChunk *openai.ChatCompletionChunk,
+) {
+	if m.chatChunkCallback == nil {
+		return
+	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat chunk callback")
+	m.chatChunkCallback(ctx, chatRequest, chatChunk)
 }
 
 // prepareChatRequest validates and mutates the request in-place before sending it to the provider.
@@ -353,12 +440,14 @@ func (m *Model) GenerateContent(
 	if err != nil {
 		return nil, err
 	}
+	// Execute callback synchronously before starting the goroutine
+	// to avoid a race where the runner and HTTP handler finish
+	// (closing the SSE writer) while the callback is still running.
+	m.runChatRequestCallback(ctx, chatRequest)
+	m.runChatRequestJSONCallback(ctx, chatRequest)
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
-		if m.chatRequestCallback != nil {
-			m.chatRequestCallback(ctx, chatRequest)
-		}
 		if request.Stream {
 			m.handleStreamingResponse(ctx, *chatRequest, responseChan, opts...)
 		} else {
@@ -378,9 +467,8 @@ func (m *Model) GenerateContentIter(
 		return nil, err
 	}
 	return func(yield func(*model.Response) bool) {
-		if m.chatRequestCallback != nil {
-			m.chatRequestCallback(ctx, chatRequest)
-		}
+		m.runChatRequestCallback(ctx, chatRequest)
+		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {
 				return false
@@ -726,6 +814,9 @@ func (m *Model) convertUserMessageContent(
 	if fileHint != "" {
 		contentParts = append(contentParts, userTextPart(fileHint))
 	}
+	if omittedHint := m.omittedContentHint(msg.ContentParts); omittedHint != "" {
+		contentParts = append(contentParts, userTextPart(omittedHint))
+	}
 	extraFields := m.appendUserContentParts(&contentParts, msg.ContentParts)
 
 	if strings.TrimSpace(msg.Content) == "" &&
@@ -808,6 +899,10 @@ func (m *Model) appendUserContentParts(
 ) map[string]any {
 	var extraFields map[string]any
 	for _, part := range parts {
+		if m.variantConfig.textOnlyMessageContent &&
+			part.Type != model.ContentTypeText {
+			continue
+		}
 		if part.Type == model.ContentTypeFile &&
 			m.omitFileContentParts {
 			continue
@@ -829,6 +924,63 @@ func (m *Model) appendUserContentParts(
 		*dst = append(*dst, *contentPart)
 	}
 	return extraFields
+}
+
+func (m *Model) omittedContentHint(parts []model.ContentPart) string {
+	if !m.variantConfig.textOnlyMessageContent {
+		return ""
+	}
+
+	var imageCount, audioCount, fileCount int
+	for _, part := range parts {
+		switch part.Type {
+		case model.ContentTypeImage:
+			imageCount++
+		case model.ContentTypeAudio:
+			audioCount++
+		case model.ContentTypeFile:
+			fileCount++
+		}
+	}
+	return omittedAttachmentHint(imageCount, audioCount, fileCount)
+}
+
+func omittedAttachmentHint(
+	imageCount int,
+	audioCount int,
+	fileCount int,
+) string {
+	const (
+		omittedHintPrefix  = "Omitted non-text attachments for this provider: "
+		omittedHintSuffix  = "."
+		omittedImageSingle = "1 image"
+		omittedImagePlural = "%d images"
+		omittedAudioSingle = "1 audio clip"
+		omittedAudioPlural = "%d audio clips"
+		omittedFileSingle  = "1 file"
+		omittedFilePlural  = "%d files"
+	)
+
+	parts := make([]string, 0, 3)
+	if imageCount == 1 {
+		parts = append(parts, omittedImageSingle)
+	} else if imageCount > 1 {
+		parts = append(parts, fmt.Sprintf(omittedImagePlural, imageCount))
+	}
+	if audioCount == 1 {
+		parts = append(parts, omittedAudioSingle)
+	} else if audioCount > 1 {
+		parts = append(parts, fmt.Sprintf(omittedAudioPlural, audioCount))
+	}
+	if fileCount == 1 {
+		parts = append(parts, omittedFileSingle)
+	} else if fileCount > 1 {
+		parts = append(parts, fmt.Sprintf(omittedFilePlural, fileCount))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return omittedHintPrefix + strings.Join(parts, ", ") + omittedHintSuffix
 }
 
 func appendFileID(
@@ -1217,19 +1369,20 @@ func (m *Model) handleStreamingResponseWithEmitter(
 			}
 		}
 
-		if m.chatChunkCallback != nil {
-			m.chatChunkCallback(ctx, &chatRequest, &chunk)
-		}
+		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
 
 		if !emit(m.createPartialResponse(chunk)) {
+			if err := ctx.Err(); err != nil {
+				m.handleStreamCompleteCallback(ctx, chatRequest, acc, err)
+			}
 			return
 		}
 	}
 
-	m.emitStreamingFinalResponse(ctx, stream, acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), emit)
-
-	// Call the stream complete callback after final response is emitted.
+	// Call the stream complete callback before the final response is emitted.
 	m.handleStreamCompleteCallback(ctx, chatRequest, acc, stream.Err())
+
+	m.emitStreamingFinalResponse(ctx, stream, acc, idToIndexMap, extraFieldsMap, reasoningBuf.String(), emit)
 }
 
 // sanitizeChunkForAccumulator returns a defensive copy of the given chunk that
@@ -1538,9 +1691,189 @@ func (m *Model) handleStreamCompleteCallback(
 	}
 	var callbackAcc *openai.ChatCompletionAccumulator
 	if streamErr == nil {
-		callbackAcc = &acc
+		clonedAcc := cloneChatCompletionAccumulator(acc)
+		callbackAcc = &clonedAcc
 	}
+	defer imodel.RecoverCallbackPanic(ctx, "chat stream complete callback")
 	m.chatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, streamErr)
+}
+
+func cloneChatCompletionAccumulator(acc openai.ChatCompletionAccumulator) openai.ChatCompletionAccumulator {
+	cloned := acc
+	cloned.ChatCompletion = cloneChatCompletion(acc.ChatCompletion)
+	return cloned
+}
+
+func cloneChatCompletion(chatCompletion openai.ChatCompletion) openai.ChatCompletion {
+	cloned := chatCompletion
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(chatCompletion.JSON.ExtraFields)
+	cloned.Usage = cloneCompletionUsage(chatCompletion.Usage)
+	if chatCompletion.Choices != nil {
+		cloned.Choices = make([]openai.ChatCompletionChoice, len(chatCompletion.Choices))
+		for i, choice := range chatCompletion.Choices {
+			cloned.Choices[i] = cloneChatCompletionChoice(choice)
+		}
+	}
+	return cloned
+}
+
+func cloneChatCompletionChoice(choice openai.ChatCompletionChoice) openai.ChatCompletionChoice {
+	cloned := choice
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(choice.JSON.ExtraFields)
+	cloned.Logprobs = cloneChatCompletionChoiceLogprobs(choice.Logprobs)
+	cloned.Message = cloneChatCompletionMessage(choice.Message)
+	return cloned
+}
+
+func cloneChatCompletionChoiceLogprobs(
+	logprobs openai.ChatCompletionChoiceLogprobs,
+) openai.ChatCompletionChoiceLogprobs {
+	cloned := logprobs
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(logprobs.JSON.ExtraFields)
+	if logprobs.Content != nil {
+		cloned.Content = make([]openai.ChatCompletionTokenLogprob, len(logprobs.Content))
+		for i, token := range logprobs.Content {
+			cloned.Content[i] = cloneChatCompletionTokenLogprob(token)
+		}
+	}
+	if logprobs.Refusal != nil {
+		cloned.Refusal = make([]openai.ChatCompletionTokenLogprob, len(logprobs.Refusal))
+		for i, token := range logprobs.Refusal {
+			cloned.Refusal[i] = cloneChatCompletionTokenLogprob(token)
+		}
+	}
+	return cloned
+}
+
+func cloneChatCompletionTokenLogprob(
+	token openai.ChatCompletionTokenLogprob,
+) openai.ChatCompletionTokenLogprob {
+	cloned := token
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(token.JSON.ExtraFields)
+	if token.Bytes != nil {
+		cloned.Bytes = append([]int64(nil), token.Bytes...)
+	}
+	if token.TopLogprobs != nil {
+		cloned.TopLogprobs = make([]openai.ChatCompletionTokenLogprobTopLogprob, len(token.TopLogprobs))
+		for i, top := range token.TopLogprobs {
+			cloned.TopLogprobs[i] = cloneChatCompletionTokenLogprobTopLogprob(top)
+		}
+	}
+	return cloned
+}
+
+func cloneChatCompletionTokenLogprobTopLogprob(
+	token openai.ChatCompletionTokenLogprobTopLogprob,
+) openai.ChatCompletionTokenLogprobTopLogprob {
+	cloned := token
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(token.JSON.ExtraFields)
+	if token.Bytes != nil {
+		cloned.Bytes = append([]int64(nil), token.Bytes...)
+	}
+	return cloned
+}
+
+func cloneChatCompletionMessage(message openai.ChatCompletionMessage) openai.ChatCompletionMessage {
+	cloned := message
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(message.JSON.ExtraFields)
+	cloned.Audio = cloneChatCompletionAudio(message.Audio)
+	cloned.FunctionCall = cloneChatCompletionMessageFunctionCall(message.FunctionCall)
+	if message.Annotations != nil {
+		cloned.Annotations = make([]openai.ChatCompletionMessageAnnotation, len(message.Annotations))
+		for i, annotation := range message.Annotations {
+			cloned.Annotations[i] = cloneChatCompletionMessageAnnotation(annotation)
+		}
+	}
+	if message.ToolCalls != nil {
+		cloned.ToolCalls = make([]openai.ChatCompletionMessageToolCall, len(message.ToolCalls))
+		for i, toolCall := range message.ToolCalls {
+			cloned.ToolCalls[i] = cloneChatCompletionMessageToolCall(toolCall)
+		}
+	}
+	return cloned
+}
+
+func cloneChatCompletionMessageAnnotation(
+	annotation openai.ChatCompletionMessageAnnotation,
+) openai.ChatCompletionMessageAnnotation {
+	cloned := annotation
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(annotation.JSON.ExtraFields)
+	cloned.URLCitation = cloneChatCompletionMessageAnnotationURLCitation(annotation.URLCitation)
+	return cloned
+}
+
+func cloneChatCompletionMessageAnnotationURLCitation(
+	urlCitation openai.ChatCompletionMessageAnnotationURLCitation,
+) openai.ChatCompletionMessageAnnotationURLCitation {
+	cloned := urlCitation
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(urlCitation.JSON.ExtraFields)
+	return cloned
+}
+
+func cloneChatCompletionAudio(audio openai.ChatCompletionAudio) openai.ChatCompletionAudio {
+	cloned := audio
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(audio.JSON.ExtraFields)
+	return cloned
+}
+
+func cloneChatCompletionMessageFunctionCall(
+	functionCall openai.ChatCompletionMessageFunctionCall,
+) openai.ChatCompletionMessageFunctionCall {
+	cloned := functionCall
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(functionCall.JSON.ExtraFields)
+	return cloned
+}
+
+func cloneChatCompletionMessageToolCall(
+	toolCall openai.ChatCompletionMessageToolCall,
+) openai.ChatCompletionMessageToolCall {
+	cloned := toolCall
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(toolCall.JSON.ExtraFields)
+	cloned.Function = cloneChatCompletionMessageToolCallFunction(toolCall.Function)
+	return cloned
+}
+
+func cloneChatCompletionMessageToolCallFunction(
+	function openai.ChatCompletionMessageToolCallFunction,
+) openai.ChatCompletionMessageToolCallFunction {
+	cloned := function
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(function.JSON.ExtraFields)
+	return cloned
+}
+
+func cloneCompletionUsage(usage openai.CompletionUsage) openai.CompletionUsage {
+	cloned := usage
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(usage.JSON.ExtraFields)
+	cloned.CompletionTokensDetails = cloneCompletionUsageCompletionTokensDetails(usage.CompletionTokensDetails)
+	cloned.PromptTokensDetails = cloneCompletionUsagePromptTokensDetails(usage.PromptTokensDetails)
+	return cloned
+}
+
+func cloneCompletionUsageCompletionTokensDetails(
+	details openai.CompletionUsageCompletionTokensDetails,
+) openai.CompletionUsageCompletionTokensDetails {
+	cloned := details
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(details.JSON.ExtraFields)
+	return cloned
+}
+
+func cloneCompletionUsagePromptTokensDetails(
+	details openai.CompletionUsagePromptTokensDetails,
+) openai.CompletionUsagePromptTokensDetails {
+	cloned := details
+	cloned.JSON.ExtraFields = cloneRespJSONFieldMap(details.JSON.ExtraFields)
+	return cloned
+}
+
+func cloneRespJSONFieldMap(fields map[string]respjson.Field) map[string]respjson.Field {
+	if fields == nil {
+		return nil
+	}
+	cloned := make(map[string]respjson.Field, len(fields))
+	for key, value := range fields {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 // shouldSuppressChunk returns true when the chunk contains no meaningful delta
@@ -1952,9 +2285,7 @@ func (m *Model) handleNonStreamingResponseWithEmitter(
 		return
 	}
 	// Call response callback on successful completion.
-	if m.chatResponseCallback != nil {
-		m.chatResponseCallback(ctx, &chatRequest, chatCompletion)
-	}
+	m.runChatResponseCallback(ctx, &chatRequest, chatCompletion)
 	emit(m.createResponseFromCompletion(chatCompletion))
 }
 

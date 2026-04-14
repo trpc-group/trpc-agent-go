@@ -32,7 +32,9 @@ import (
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillstage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspacesession"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -46,12 +48,29 @@ type RunTool struct {
 	repo skill.Repository
 	exec codeexecutor.CodeExecutor
 	reg  *codeexecutor.WorkspaceRegistry
+	wsr  *workspacesession.Resolver
+	sst  *skillstage.Stager
+
+	skillStager SkillStager
 
 	allowedCmds map[string]struct{}
 	deniedCmds  map[string]struct{}
 
 	forceSaveArtifacts bool
 	requireSkillLoaded bool
+	outputLimits       RunOutputLimits
+}
+
+// RunOutputLimits controls how much inline text skill_run returns.
+//
+// These limits apply to stdout/stderr and primary_output selection only.
+// Collected files still follow the workspace collector limits.
+type RunOutputLimits struct {
+	// StdoutStderrBytes is the per-stream inline limit for stdout/stderr.
+	StdoutStderrBytes int
+	// PrimaryOutputBytes is the largest text file eligible for
+	// primary_output.
+	PrimaryOutputBytes int
 }
 
 // SkillRunEnvProvider is an optional interface for skill repositories that
@@ -77,13 +96,21 @@ func NewRunTool(
 	rt := &RunTool{
 		repo: repo,
 		exec: exec,
-		reg:  codeexecutor.NewWorkspaceRegistry(),
+		sst:  skillstage.New(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(rt)
 		}
 	}
+	rt.outputLimits = normalizeRunOutputLimits(rt.outputLimits)
+	if rt.skillStager == nil {
+		rt.skillStager = newCopySkillStager(rt)
+	}
+	if rt.reg == nil {
+		rt.reg = codeexecutor.NewWorkspaceRegistry()
+	}
+	rt.wsr = workspacesession.NewResolver(exec, rt.reg)
 	rt.loadAllowedCommandsFromEnv()
 	rt.loadDeniedCommandsFromEnv()
 	return rt
@@ -165,6 +192,18 @@ func WithForceSaveArtifacts(enable bool) func(*RunTool) {
 	}
 }
 
+// WithRunOutputLimits customizes the inline stdout/stderr limit and the
+// maximum file size eligible for primary_output.
+//
+// These limits do not change output_files collection limits. For large text
+// payloads, prefer writing files under out/ and collecting them with
+// output_files or outputs.
+func WithRunOutputLimits(limits RunOutputLimits) func(*RunTool) {
+	return func(t *RunTool) {
+		t.outputLimits = limits
+	}
+}
+
 // WithRequireSkillLoaded rejects skill_run calls unless the skill has been
 // loaded via skill_load in the current session state.
 //
@@ -173,6 +212,16 @@ func WithForceSaveArtifacts(enable bool) func(*RunTool) {
 func WithRequireSkillLoaded(enable bool) func(*RunTool) {
 	return func(t *RunTool) {
 		t.requireSkillLoaded = enable
+	}
+}
+
+// WithWorkspaceRegistry reuses a caller-provided workspace registry so
+// skill_run can share the same invocation workspace with other tools.
+func WithWorkspaceRegistry(
+	reg *codeexecutor.WorkspaceRegistry,
+) func(*RunTool) {
+	return func(t *RunTool) {
+		t.reg = reg
 	}
 }
 
@@ -315,6 +364,9 @@ func (t *RunTool) Declaration() *tool.Declaration {
 	desc := "Run a command inside a skill workspace. " +
 		"Use it only for commands required by the skill " +
 		"docs (not for generic shell tasks). " +
+		"Use stdout/stderr for short logs; for large or " +
+		"structured text, write files under out/ and " +
+		"return them via output_files or outputs. " +
 		"User-uploaded file inputs are staged under " +
 		"$WORK_DIR/inputs (also visible as inputs/). " +
 		"For declarative inputs, to paths starting with " +
@@ -433,15 +485,16 @@ func (t *RunTool) Call(
 		ctx,
 		in,
 	)
-	eng, ws, ctxIO, staged, stageWarn, err := t.prepareWorkspaceForRun(
-		ctx,
-		in,
-	)
+	eng, ws, skillRoot, ctxIO, staged, stageWarn, err := t.
+		prepareWorkspaceForRun(
+			ctx,
+			in,
+		)
 	if err != nil {
 		return nil, err
 	}
-	cwd := resolveCWD(in.Cwd, in.Skill)
-	rr, err := t.runProgram(ctxIO, eng, ws, cwd, in)
+	cwd := resolveCWD(in.Cwd, skillRoot)
+	rr, err := t.runProgram(ctxIO, eng, ws, skillRoot, cwd, in)
 	if err != nil {
 		return nil, err
 	}
@@ -580,31 +633,54 @@ func (t *RunTool) prepareWorkspaceForRun(
 ) (
 	codeexecutor.Engine,
 	codeexecutor.Workspace,
+	string,
 	context.Context,
 	[]stagedInput,
 	[]string,
 	error,
 ) {
-	root, err := t.repo.Path(in.Skill)
-	if err != nil {
-		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
-	}
 	eng := t.ensureEngine()
 	ws, err := t.createWorkspace(ctx, eng, in.Skill)
 	if err != nil {
-		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
 	}
-	if err := t.stageSkill(ctx, eng, ws, root, in.Skill); err != nil {
-		return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+	stageRes, err := t.stageSkillForRun(ctx, eng, ws, in.Skill)
+	if err != nil {
+		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
 	}
 	staged, stageWarn := t.stageUserFileInputs(ctx, eng, ws)
 	ctxIO := withArtifactContext(ctx)
 	if len(in.Inputs) > 0 {
 		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
-			return nil, codeexecutor.Workspace{}, nil, nil, nil, err
+			return nil, codeexecutor.Workspace{}, "", nil, nil,
+				nil, err
 		}
 	}
-	return eng, ws, ctxIO, staged, stageWarn, nil
+	return eng, ws, stageRes.WorkspaceSkillDir, ctxIO, staged, stageWarn,
+		nil
+}
+
+func (t *RunTool) stageSkillForRun(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	name string,
+) (SkillStageResult, error) {
+	if t.skillStager == nil {
+		return SkillStageResult{}, fmt.Errorf(
+			errSkillStagerNotConfigured,
+		)
+	}
+	res, err := t.skillStager.StageSkill(ctx, SkillStageRequest{
+		SkillName:  name,
+		Repository: t.repo,
+		Engine:     eng,
+		Workspace:  ws,
+	})
+	if err != nil {
+		return SkillStageResult{}, err
+	}
+	return normalizeSkillStageResult(res)
 }
 
 func (t *RunTool) buildRunOutput(
@@ -618,8 +694,12 @@ func (t *RunTool) buildRunOutput(
 	outputsSaveSkipReason string,
 ) (runOutput, error) {
 	trimTruncatedUTF8TextFiles(files)
-	out := buildRunOutput(rr, files)
-	mergeAutoPrimaryOutput(autoFiles, &out)
+	out := buildRunOutputWithLimits(rr, files, t.outputLimits)
+	mergeAutoPrimaryOutputWithLimit(
+		autoFiles,
+		&out,
+		t.outputLimits.PrimaryOutputBytes,
+	)
 	appendOutputsSaveWarning(&out, outputsSaveSkipReason)
 	saveArtifacts := in.SaveArtifacts && len(in.OutputFiles) > 0
 	if err := t.attachArtifactsIfRequested(
@@ -1099,37 +1179,27 @@ func normalizeInputTo(to string) string {
 
 // ensureEngine gets engine from executor or builds a local one.
 func (t *RunTool) ensureEngine() codeexecutor.Engine {
-	if ep, ok := t.exec.(codeexecutor.EngineProvider); ok && ep != nil {
-		if e := ep.Engine(); e != nil {
-			return e
-		}
+	if t.wsr == nil {
+		log.Warnf(
+			"skill_run: falling back to local engine; " +
+				"workspace resolver is not configured",
+		)
+		rt := localexec.NewRuntime("")
+		return codeexecutor.NewEngine(rt, rt, rt)
 	}
-	log.Warnf(
-		"skill_run: falling back to local engine; " +
-			"no EngineProvider on executor",
-	)
-	rt := localexec.NewRuntime("")
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return t.wsr.EnsureEngine()
 }
 
 func (t *RunTool) createWorkspace(
 	ctx context.Context, eng codeexecutor.Engine, name string,
 ) (codeexecutor.Workspace, error) {
-	// Acquire a session-scoped workspace using a persistent registry.
-	reg := t.reg
-	if reg == nil {
-		reg = codeexecutor.NewWorkspaceRegistry()
-		t.reg = reg
-	}
-	// Prefer session ID from invocation context; otherwise fallback
-	// to skill name.
-	sid := name
-	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-		if inv.Session != nil && inv.Session.ID != "" {
-			sid = inv.Session.ID
+	if t.reg == nil || t.wsr == nil {
+		if t.reg == nil {
+			t.reg = codeexecutor.NewWorkspaceRegistry()
 		}
+		t.wsr = workspacesession.NewResolver(t.exec, t.reg)
 	}
-	return reg.Acquire(ctx, eng.Manager(), sid)
+	return t.wsr.CreateWorkspace(ctx, eng, name)
 }
 
 func (t *RunTool) stageSkill(
@@ -1139,59 +1209,10 @@ func (t *RunTool) stageSkill(
 	root string,
 	name string,
 ) error {
-	// Compute digest of the skill directory on host.
-	dg, err := codeexecutor.DirDigest(root)
-	if err != nil {
-		return err
+	if t.sst == nil {
+		t.sst = skillstage.New()
 	}
-	md, err := t.loadWorkspaceMetadata(ctx, eng, ws)
-	if err != nil {
-		return err
-	}
-	// Stage into /skills/<name> inside workspace.
-	dest := path.Join(codeexecutor.DirSkills, name)
-	// If metadata has same digest, skip staging.
-	if s, ok := md.Skills[name]; ok &&
-		s.Digest == dg && s.Mounted {
-		ok, err := t.skillLinksPresent(ctx, eng, ws, name)
-		if err != nil {
-			return err
-		}
-		if ok {
-			return nil
-		}
-	}
-	if err := t.removeWorkspacePath(ctx, eng, ws, dest); err != nil {
-		return err
-	}
-	// Stage as a regular directory first (no read-only mount). We will
-	// add convenience links and then make files read-only except those
-	// links. This enables relative paths like "scripts/..." and
-	// "out/..." to work from the skill root.
-	if err := eng.FS().StageDirectory(
-		ctx, ws, root, dest,
-		codeexecutor.StageOptions{ReadOnly: false, AllowMount: false},
-	); err != nil {
-		return err
-	}
-
-	// Link workspace-level dirs under the skill root: out, work, inputs.
-	if err := t.linkWorkspaceDirs(ctx, eng, ws, name); err != nil {
-		return err
-	}
-	// Make everything under skill root read-only while keeping symlinks
-	// untouched so writes land in workspace-level targets.
-	if err := t.readOnlyExceptSymlinks(ctx, eng, ws, dest); err != nil {
-		return err
-	}
-	md.Skills[name] = codeexecutor.SkillMeta{
-		Name:     name,
-		RelPath:  dest,
-		Digest:   dg,
-		Mounted:  true,
-		StagedAt: time.Now(),
-	}
-	return t.saveWorkspaceMetadata(ctx, eng, ws, md)
+	return t.sst.StageSkill(ctx, eng, ws, root, name)
 }
 
 func (t *RunTool) loadWorkspaceMetadata(
@@ -1199,40 +1220,10 @@ func (t *RunTool) loadWorkspaceMetadata(
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 ) (codeexecutor.WorkspaceMetadata, error) {
-	now := time.Now()
-	md := codeexecutor.WorkspaceMetadata{
-		Version:    1,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		LastAccess: now,
-		Skills:     map[string]codeexecutor.SkillMeta{},
+	if t.sst == nil {
+		t.sst = skillstage.New()
 	}
-	if eng == nil || eng.FS() == nil {
-		return md, fmt.Errorf("workspace fs is not configured")
-	}
-	files, err := eng.FS().Collect(
-		ctx, ws, []string{codeexecutor.MetaFileName},
-	)
-	if err != nil {
-		return md, err
-	}
-	if len(files) == 0 || strings.TrimSpace(files[0].Content) == "" {
-		return md, nil
-	}
-	if err := json.Unmarshal([]byte(files[0].Content), &md); err != nil {
-		return codeexecutor.WorkspaceMetadata{}, err
-	}
-	if md.Version == 0 {
-		md.Version = 1
-	}
-	if md.CreatedAt.IsZero() {
-		md.CreatedAt = now
-	}
-	md.LastAccess = now
-	if md.Skills == nil {
-		md.Skills = map[string]codeexecutor.SkillMeta{}
-	}
-	return md, nil
+	return t.sst.LoadWorkspaceMetadata(ctx, eng, ws)
 }
 
 func (t *RunTool) saveWorkspaceMetadata(
@@ -1241,50 +1232,10 @@ func (t *RunTool) saveWorkspaceMetadata(
 	ws codeexecutor.Workspace,
 	md codeexecutor.WorkspaceMetadata,
 ) error {
-	if eng == nil || eng.FS() == nil {
-		return fmt.Errorf("workspace fs is not configured")
+	if t.sst == nil {
+		t.sst = skillstage.New()
 	}
-	if eng.Runner() == nil {
-		return fmt.Errorf("workspace runner is not configured")
-	}
-	if md.Version == 0 {
-		md.Version = 1
-	}
-	now := time.Now()
-	if md.CreatedAt.IsZero() {
-		md.CreatedAt = now
-	}
-	md.UpdatedAt = now
-	md.LastAccess = now
-	if md.Skills == nil {
-		md.Skills = map[string]codeexecutor.SkillMeta{}
-	}
-	buf, err := json.MarshalIndent(md, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := eng.FS().PutFiles(ctx, ws, []codeexecutor.PutFile{{
-		Path:    workspaceMetadataTmpFile,
-		Content: buf,
-		Mode:    workspaceMetadataFileMode,
-	}}); err != nil {
-		return err
-	}
-	var sb strings.Builder
-	sb.WriteString("set -e; mv -f ")
-	sb.WriteString(shellQuote(workspaceMetadataTmpFile))
-	sb.WriteString(" ")
-	sb.WriteString(shellQuote(codeexecutor.MetaFileName))
-	_, err = eng.Runner().RunProgram(
-		ctx, ws, codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", sb.String()},
-			Env:     map[string]string{},
-			Cwd:     ".",
-			Timeout: 5 * time.Second,
-		},
-	)
-	return err
+	return t.sst.SaveWorkspaceMetadata(ctx, eng, ws, md)
 }
 
 func (t *RunTool) skillLinksPresent(
@@ -1293,82 +1244,10 @@ func (t *RunTool) skillLinksPresent(
 	ws codeexecutor.Workspace,
 	name string,
 ) (bool, error) {
-	skillName := strings.TrimSpace(name)
-	if skillName == "" {
-		return false, nil
+	if t.sst == nil {
+		t.sst = skillstage.New()
 	}
-	if eng == nil || eng.Runner() == nil {
-		return false, fmt.Errorf("workspace runner is not configured")
-	}
-	base := path.Join(codeexecutor.DirSkills, skillName)
-	var sb strings.Builder
-	sb.WriteString("test -L ")
-	sb.WriteString(shellQuote(path.Join(base, codeexecutor.DirOut)))
-	sb.WriteString(" && test -L ")
-	sb.WriteString(shellQuote(path.Join(base, codeexecutor.DirWork)))
-	sb.WriteString(" && test -L ")
-	sb.WriteString(shellQuote(path.Join(base, skillDirInputs)))
-	rr, err := eng.Runner().RunProgram(
-		ctx, ws, codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", sb.String()},
-			Env:     map[string]string{},
-			Cwd:     ".",
-			Timeout: 5 * time.Second,
-		},
-	)
-	if err != nil {
-		return false, err
-	}
-	if rr.ExitCode == 0 {
-		return true, nil
-	}
-	return false, nil
-}
-
-// linkWorkspaceDirs creates convenience symlinks under the staged
-// skill root so commands that write to "out/" (relative to the skill
-// CWD) resolve to the workspace output directory. It also links work
-// and inputs for consistency.
-func (t *RunTool) linkWorkspaceDirs(
-	ctx context.Context, eng codeexecutor.Engine,
-	ws codeexecutor.Workspace, name string,
-) error {
-	skillRoot := path.Join(codeexecutor.DirSkills, name)
-	// Relative links from skills/<name> to workspace dirs.
-	toOut := path.Join("..", "..", codeexecutor.DirOut)
-	toWork := path.Join("..", "..", codeexecutor.DirWork)
-	toInputs := path.Join(
-		"..", "..", codeexecutor.DirWork, skillDirInputs,
-	)
-	var sb strings.Builder
-	sb.WriteString("set -e; cd ")
-	sb.WriteString(shellQuote(skillRoot))
-	sb.WriteString("; rm -rf out work ")
-	sb.WriteString(skillDirInputs)
-	sb.WriteString(" ")
-	sb.WriteString(shellQuote(skillDirVenv))
-	sb.WriteString("; mkdir -p ")
-	sb.WriteString(shellQuote(toInputs))
-	sb.WriteString(" ")
-	sb.WriteString(shellQuote(skillDirVenv))
-	sb.WriteString("; ln -sfn ")
-	sb.WriteString(shellQuote(toOut))
-	sb.WriteString(" out; ln -sfn ")
-	sb.WriteString(shellQuote(toWork))
-	sb.WriteString(" work; ln -sfn ")
-	sb.WriteString(shellQuote(toInputs))
-	sb.WriteString(" inputs")
-	_, err := eng.Runner().RunProgram(
-		ctx, ws, codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", sb.String()},
-			Env:     map[string]string{},
-			Cwd:     ".",
-			Timeout: 5 * time.Second,
-		},
-	)
-	return err
+	return t.sst.SkillLinksPresent(ctx, eng, ws, name)
 }
 
 func (t *RunTool) removeWorkspacePath(
@@ -1377,60 +1256,10 @@ func (t *RunTool) removeWorkspacePath(
 	ws codeexecutor.Workspace,
 	rel string,
 ) error {
-	target := strings.TrimSpace(rel)
-	if target == "" {
-		return nil
+	if t.sst == nil {
+		t.sst = skillstage.New()
 	}
-	if eng == nil || eng.Runner() == nil {
-		return fmt.Errorf("workspace runner is not configured")
-	}
-	var sb strings.Builder
-	sb.WriteString("set -e; if [ -e ")
-	sb.WriteString(shellQuote(target))
-	sb.WriteString(" ]; then find ")
-	sb.WriteString(shellQuote(target))
-	sb.WriteString(" -type l -prune -o -exec chmod u+w {} +; fi")
-	sb.WriteString("; rm -rf ")
-	sb.WriteString(shellQuote(target))
-	_, err := eng.Runner().RunProgram(
-		ctx,
-		ws,
-		codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", sb.String()},
-			Env:     map[string]string{},
-			Cwd:     ".",
-			Timeout: 5 * time.Second,
-		},
-	)
-	return err
-}
-
-// readOnlyExceptSymlinks removes write bits on all regular files and
-// directories under the staged skill root while skipping symlinks to
-// avoid changing workspace-level targets like out/.
-func (t *RunTool) readOnlyExceptSymlinks(
-	ctx context.Context, eng codeexecutor.Engine,
-	ws codeexecutor.Workspace, dest string,
-) error {
-	venv := path.Join(dest, skillDirVenv)
-	var sb strings.Builder
-	// Use find to skip symlinks and chmod others.
-	sb.WriteString("set -e; find ")
-	sb.WriteString(shellQuote(dest))
-	sb.WriteString(" -path ")
-	sb.WriteString(shellQuote(venv))
-	sb.WriteString(" -prune -o -type l -prune -o -exec chmod a-w {} +")
-	_, err := eng.Runner().RunProgram(
-		ctx, ws, codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", sb.String()},
-			Env:     map[string]string{},
-			Cwd:     ".",
-			Timeout: 5 * time.Second,
-		},
-	)
-	return err
+	return t.sst.RemoveWorkspacePath(ctx, eng, ws, rel)
 }
 
 // shellQuote wraps a string for safe single-quoted usage in a
@@ -1511,7 +1340,10 @@ func resolveCWD(cwd string, name string) string {
 	// skill root. "$WORK_DIR" style paths resolve to workspace-relative
 	// roots. Absolute paths are treated as workspace-absolute and must
 	// start with known workspace dirs like "/skills" or "/work".
-	base := path.Join(codeexecutor.DirSkills, name)
+	base := strings.TrimSpace(name)
+	if base == "" {
+		base = "."
+	}
 	s := strings.TrimSpace(cwd)
 	s = strings.ReplaceAll(s, "\\", "/")
 	if s == "" {
@@ -1557,10 +1389,18 @@ func (t *RunTool) runProgram(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
+	skillRoot string,
 	cwd string,
 	in runInput,
 ) (codeexecutor.RunResult, error) {
-	spec, err := t.buildRunProgramSpec(ctx, eng, ws, cwd, in)
+	spec, err := t.buildRunProgramSpec(
+		ctx,
+		eng,
+		ws,
+		skillRoot,
+		cwd,
+		in,
+	)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
@@ -1571,6 +1411,7 @@ func (t *RunTool) buildRunProgramSpec(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
+	skillRoot string,
 	cwd string,
 	in runInput,
 ) (codeexecutor.RunProgramSpec, error) {
@@ -1587,7 +1428,7 @@ func (t *RunTool) buildRunProgramSpec(
 		return codeexecutor.RunProgramSpec{}, err
 	}
 
-	venvRel, venvBinRel := venvRelPaths(cwd, in.Skill)
+	venvRel, venvBinRel := venvRelPaths(cwd, skillRoot)
 
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
 		injectVenvEnv(env, venvRel, venvBinRel)
@@ -1629,12 +1470,15 @@ func (t *RunTool) buildRunProgramSpec(
 	}, nil
 }
 
-func venvRelPaths(cwd string, skillName string) (string, string) {
+func venvRelPaths(cwd string, skillRoot string) (string, string) {
 	base := path.Clean(strings.TrimSpace(cwd))
 	if base == "" {
 		base = "."
 	}
-	skillRoot := path.Join(codeexecutor.DirSkills, skillName)
+	skillRoot = path.Clean(strings.TrimSpace(skillRoot))
+	if skillRoot == "" {
+		skillRoot = "."
+	}
 	venv := path.Join(skillRoot, skillDirVenv)
 	venvBin := path.Join(venv, "bin")
 
@@ -2024,8 +1868,27 @@ func (t *RunTool) prepareOutputs(
 func buildRunOutput(
 	rr codeexecutor.RunResult, files []codeexecutor.File,
 ) runOutput {
-	stdout, stdoutTrunc := truncateOutput(rr.Stdout)
-	stderr, stderrTrunc := truncateOutput(rr.Stderr)
+	return buildRunOutputWithLimits(
+		rr,
+		files,
+		defaultRunOutputLimits(),
+	)
+}
+
+func buildRunOutputWithLimits(
+	rr codeexecutor.RunResult,
+	files []codeexecutor.File,
+	limits RunOutputLimits,
+) runOutput {
+	limits = normalizeRunOutputLimits(limits)
+	stdout, stdoutTrunc := truncateOutputWithLimit(
+		rr.Stdout,
+		limits.StdoutStderrBytes,
+	)
+	stderr, stderrTrunc := truncateOutputWithLimit(
+		rr.Stderr,
+		limits.StdoutStderrBytes,
+	)
 	var warnings []string
 	if stdoutTrunc {
 		warnings = append(warnings, warnStdoutTruncated)
@@ -2036,14 +1899,17 @@ func buildRunOutput(
 
 	outFiles := toRunFiles(files)
 	return runOutput{
-		OutputFiles:   outFiles,
-		PrimaryOutput: selectPrimaryOutput(outFiles),
-		Stdout:        stdout,
-		Stderr:        stderr,
-		ExitCode:      rr.ExitCode,
-		TimedOut:      rr.TimedOut,
-		Duration:      rr.Duration.Milliseconds(),
-		Warnings:      warnings,
+		OutputFiles: outFiles,
+		PrimaryOutput: selectPrimaryOutputWithLimit(
+			outFiles,
+			limits.PrimaryOutputBytes,
+		),
+		Stdout:   stdout,
+		Stderr:   stderr,
+		ExitCode: rr.ExitCode,
+		TimedOut: rr.TimedOut,
+		Duration: rr.Duration.Milliseconds(),
+		Warnings: warnings,
 	}
 }
 
@@ -2161,11 +2027,8 @@ func filterFailedEmptyManifestFiles(
 }
 
 const (
-	maxOutputChars = 16 * 1024
-)
-
-const (
-	maxPrimaryOutputChars = 32 * 1024
+	defaultStdoutStderrBytes = 16 * 1024
+	defaultPrimaryOutputSize = 32 * 1024
 )
 
 const (
@@ -2177,10 +2040,28 @@ const (
 )
 
 func truncateOutput(s string) (string, bool) {
-	if len(s) <= maxOutputChars {
+	return truncateOutputWithLimit(
+		s,
+		defaultStdoutStderrBytes,
+	)
+}
+
+func truncateOutputWithLimit(s string, limit int) (string, bool) {
+	if limit <= 0 {
+		limit = defaultStdoutStderrBytes
+	}
+	if len(s) <= limit {
 		return s, false
 	}
-	return s[:maxOutputChars], true
+	truncated := s[:limit]
+	if utf8.ValidString(truncated) {
+		return truncated, true
+	}
+	n := validUTF8PrefixLen(truncated)
+	if n <= 0 {
+		return "", true
+	}
+	return truncated[:n], true
 }
 
 func toRunFiles(files []codeexecutor.File) []runFile {
@@ -2251,6 +2132,19 @@ func validUTF8PrefixLen(s string) int {
 }
 
 func selectPrimaryOutput(files []runFile) *runFile {
+	return selectPrimaryOutputWithLimit(
+		files,
+		defaultPrimaryOutputSize,
+	)
+}
+
+func selectPrimaryOutputWithLimit(
+	files []runFile,
+	limit int,
+) *runFile {
+	if limit <= 0 {
+		limit = defaultPrimaryOutputSize
+	}
 	var best *runFile
 	for _, f := range files {
 		if strings.TrimSpace(f.Content) == "" {
@@ -2259,7 +2153,7 @@ func selectPrimaryOutput(files []runFile) *runFile {
 		if !codeexecutor.IsTextMIME(f.MIMEType) {
 			continue
 		}
-		if len(f.Content) > maxPrimaryOutputChars {
+		if len(f.Content) > limit {
 			continue
 		}
 		if best != nil && best.Name < f.Name {
@@ -2272,11 +2166,43 @@ func selectPrimaryOutput(files []runFile) *runFile {
 }
 
 func mergeAutoPrimaryOutput(files []codeexecutor.File, out *runOutput) {
+	mergeAutoPrimaryOutputWithLimit(
+		files,
+		out,
+		defaultPrimaryOutputSize,
+	)
+}
+
+func mergeAutoPrimaryOutputWithLimit(
+	files []codeexecutor.File,
+	out *runOutput,
+	limit int,
+) {
 	if out == nil || out.PrimaryOutput != nil || len(files) == 0 {
 		return
 	}
 	runFiles := toRunFiles(files)
-	out.PrimaryOutput = selectPrimaryOutput(runFiles)
+	out.PrimaryOutput = selectPrimaryOutputWithLimit(
+		runFiles,
+		limit,
+	)
+}
+
+func defaultRunOutputLimits() RunOutputLimits {
+	return RunOutputLimits{
+		StdoutStderrBytes:  defaultStdoutStderrBytes,
+		PrimaryOutputBytes: defaultPrimaryOutputSize,
+	}
+}
+
+func normalizeRunOutputLimits(limits RunOutputLimits) RunOutputLimits {
+	if limits.StdoutStderrBytes <= 0 {
+		limits.StdoutStderrBytes = defaultStdoutStderrBytes
+	}
+	if limits.PrimaryOutputBytes <= 0 {
+		limits.PrimaryOutputBytes = defaultPrimaryOutputSize
+	}
+	return limits
 }
 
 // attachArtifactsIfRequested saves files as artifacts when requested

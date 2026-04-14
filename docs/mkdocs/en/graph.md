@@ -750,6 +750,13 @@ Model (LLM) messages, you can enable `agent.WithStreamMode(...)` (see
 "Event Monitoring"). When `agent.StreamModeMessages` is selected, graph LLM
 nodes enable final model responses automatically for that run.
 
+If your graph contains multiple LLM nodes or sub-agent nodes, and the
+caller-visible stream should keep only terminal graph messages, enable
+`agent.WithGraphTerminalMessagesOnly(true)` on the run. This keeps default
+behavior fully backward compatible when disabled, preserves all terminal nodes
+in parallel fan-out graphs, and does not change internal graph state handoff or
+tracing. See `examples/graph/terminal_messages_only`.
+
 Tip: parsing JSON / structured output from streaming
 
 - Streaming chunks (`choice.Delta.Content`) are incremental and are not
@@ -1319,6 +1326,10 @@ Use cases:
   GraphAgent, `SubgraphResult.FinalState` contains the child's final state
   snapshot and can be mapped into parent keys. Runnable example:
   `examples/graph/agent_state_handoff`.
+- **Handle fatal child fallback state separately**: if the child stops before
+  `graph.execution`, read `SubgraphResult.FallbackState` /
+  `SubgraphResult.FallbackStateDelta`, or use
+  `SubgraphResult.EffectiveState()` when you want one code path.
 - **Store the child LLM's final text under your own keys**: `SubgraphResult`
   always includes `LastResponse`, so output mappers work for both GraphAgent and
   non-graph agents.
@@ -1516,6 +1527,31 @@ stateGraph.AddToolsNode(
     graph.WithEnableParallelTools(true), // optional; default is serial
 )
 ```
+
+Configure tool call retry for a ToolsNode:
+
+```go
+policy := &tool.RetryPolicy{
+    MaxAttempts:     2,
+    InitialInterval: 200 * time.Millisecond,
+    BackoffFactor:   2.0,
+    MaxInterval:     time.Second,
+}
+
+stateGraph.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithToolCallRetryPolicy(policy),
+)
+```
+
+Notes:
+
+- The retry applies only to the current tool call. It does not rerun the whole ToolsNode.
+- It is disabled by default, so the ToolsNode keeps its existing behavior unless you opt in.
+- It currently applies only to `CallableTool`; `StreamableTool` is not retried yet.
+- The default retry rule covers common transient raw errors. If you also want to retry result-level failures, customize `tool.RetryPolicy.RetryOn`.
+- Runnable example: [examples/graph/tool_call_retry](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/graph/tool_call_retry).
 
 Tool-call pairing and second entry into LLM:
 
@@ -4357,6 +4393,9 @@ Recommendations:
 - For textual intermediate outputs, prefer existing model streaming events (`choice.Delta.Content`).
 
 #### Recover from non-fatal node errors
+
+For the recommended standardized pattern that also covers fatal fallback state,
+subgraph propagation, and A2A alignment, see [Error Handling](error-handling.md).
 
 By default, if a node returns a non‑nil `error`, graph execution stops and the
 Executor emits an error event.

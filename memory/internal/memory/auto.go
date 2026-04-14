@@ -51,10 +51,11 @@ type AutoMemoryConfig struct {
 	MemoryQueueSize  int
 	MemoryJobTimeout time.Duration
 	// EnabledTools controls which memory operations the worker
-	// is allowed to execute. When non-empty, only operations
-	// whose corresponding tool name is present are executed;
-	// others are silently skipped. A nil or empty map means all
-	// operations are allowed (default).
+	// is allowed to execute. When nil, all operations are
+	// allowed (default). When non-nil, only operations whose
+	// corresponding tool name is present are executed; others
+	// are silently skipped. A non-nil empty map disables all
+	// operations.
 	EnabledTools map[string]struct{}
 }
 
@@ -79,14 +80,24 @@ func ConfigureExtractorEnabledTools(
 }
 
 // MemoryOperator defines the interface for memory operations.
-// This allows the auto memory worker to work with different storage backends.
+// This allows the auto memory worker to work with different
+// storage backends.
 type MemoryOperator interface {
-	ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error)
-	SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error)
-	AddMemory(ctx context.Context, userKey memory.UserKey, memory string, topics []string) error
-	UpdateMemory(ctx context.Context, memoryKey memory.Key, memory string, topics []string) error
-	DeleteMemory(ctx context.Context, memoryKey memory.Key) error
-	ClearMemories(ctx context.Context, userKey memory.UserKey) error
+	ReadMemories(ctx context.Context, userKey memory.UserKey,
+		limit int) ([]*memory.Entry, error)
+	SearchMemories(ctx context.Context, userKey memory.UserKey,
+		query string,
+		opts ...memory.SearchOption) ([]*memory.Entry, error)
+	AddMemory(ctx context.Context, userKey memory.UserKey,
+		mem string, topics []string,
+		opts ...memory.AddOption) error
+	UpdateMemory(ctx context.Context, memoryKey memory.Key,
+		mem string, topics []string,
+		opts ...memory.UpdateOption) error
+	DeleteMemory(ctx context.Context,
+		memoryKey memory.Key) error
+	ClearMemories(ctx context.Context,
+		userKey memory.UserKey) error
 }
 
 // AutoMemoryWorker manages async memory extraction workers.
@@ -305,9 +316,9 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	// likely to need updating or deduplication.
 	existing, err := w.searchRelevantMemories(ctx, userKey, messages)
 	if err != nil {
-		log.WarnfContext(ctx, "auto_memory: failed to search existing memories for user %s/%s: %v",
+		log.WarnfContext(ctx, "auto_memory: failed to prepare existing memories for user %s/%s: %v",
 			userKey.AppName, userKey.UserID, err)
-		existing = nil
+		return fmt.Errorf("auto_memory: prepare existing memories failed: %w", err)
 	}
 
 	// Extract memory operations.
@@ -330,7 +341,9 @@ func (w *AutoMemoryWorker) createAutoMemory(
 // and searches for existing memories that are semantically related.
 // This avoids injecting the full memory set into the extractor prompt,
 // keeping token usage proportional to the conversation size rather than
-// the total memory count.
+// the total memory count. When the search path fails, it falls back to
+// loading a small set of recent memories so extraction still has
+// deduplication context instead of silently proceeding with none.
 func (w *AutoMemoryWorker) searchRelevantMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -340,23 +353,60 @@ func (w *AutoMemoryWorker) searchRelevantMemories(
 	if query == "" {
 		return nil, nil
 	}
-	return w.operator.SearchMemories(ctx, userKey, query)
+	entries, err := w.operator.SearchMemories(ctx, userKey, query)
+	if err == nil {
+		return entries, nil
+	}
+	fallback, readErr := w.operator.ReadMemories(
+		ctx, userKey, DefaultMaxSearchResults,
+	)
+	if readErr != nil {
+		return nil, fmt.Errorf(
+			"search existing memories failed: %w; fallback read failed: %v",
+			err, readErr,
+		)
+	}
+	log.WarnfContext(ctx,
+		"auto_memory: search existing memories failed, using recent fallback for user %s/%s: %v",
+		userKey.AppName, userKey.UserID, err)
+	return fallback, nil
 }
 
 // buildSearchQuery extracts user-side text from conversation messages
 // and concatenates it into a single search query.
 func buildSearchQuery(messages []model.Message) string {
-	var sb strings.Builder
-	for _, m := range messages {
-		if m.Role != model.RoleUser || m.Content == "" {
+	parts := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role != model.RoleUser {
 			continue
 		}
-		if sb.Len() > 0 {
-			sb.WriteByte(' ')
+		text := messageSearchText(msg)
+		if text == "" {
+			continue
 		}
-		sb.WriteString(m.Content)
+		parts = append(parts, text)
 	}
-	return sb.String()
+	return strings.Join(parts, " ")
+}
+
+// messageSearchText extracts searchable text from a user message.
+// It preserves both the legacy Content field and text ContentParts.
+func messageSearchText(msg model.Message) string {
+	parts := make([]string, 0, 1+len(msg.ContentParts))
+	if text := strings.TrimSpace(msg.Content); text != "" {
+		parts = append(parts, text)
+	}
+	for _, part := range msg.ContentParts {
+		if part.Type != model.ContentTypeText || part.Text == nil {
+			continue
+		}
+		text := strings.TrimSpace(*part.Text)
+		if text == "" {
+			continue
+		}
+		parts = append(parts, text)
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 func isMemoryNotFoundError(err error) bool {
@@ -379,10 +429,10 @@ var operationToolName = map[extractor.OperationType]string{
 
 // isToolEnabled checks whether the given tool name is allowed
 // by the EnabledTools configuration. Returns true when the
-// allow-list is nil or empty (all tools enabled by default).
+// allow-list is nil. A non-nil empty map disables all tools.
 func (w *AutoMemoryWorker) isToolEnabled(toolName string) bool {
 	et := w.config.EnabledTools
-	if len(et) == 0 {
+	if et == nil {
 		return true
 	}
 	_, ok := et[toolName]
@@ -411,8 +461,13 @@ func (w *AutoMemoryWorker) executeOperation(
 
 	switch op.Type {
 	case extractor.OperationAdd:
-		if err := w.operator.AddMemory(ctx, userKey, op.Memory, op.Topics); err != nil {
-			log.WarnfContext(ctx, "auto_memory: add memory failed for user %s/%s: %v",
+		ep := opToMetadata(op)
+		if err := w.operator.AddMemory(ctx, userKey,
+			op.Memory, op.Topics,
+			memory.WithMetadata(ep)); err != nil {
+			log.WarnfContext(ctx,
+				"auto_memory: add memory failed "+
+					"for user %s/%s: %v",
 				userKey.AppName, userKey.UserID, err)
 		}
 	case extractor.OperationUpdate:
@@ -421,28 +476,39 @@ func (w *AutoMemoryWorker) executeOperation(
 			UserID:   userKey.UserID,
 			MemoryID: op.MemoryID,
 		}
-		if err := w.operator.UpdateMemory(ctx, memKey, op.Memory, op.Topics); err != nil {
+		ep := opToMetadata(op)
+		if err := w.operator.UpdateMemory(ctx, memKey,
+			op.Memory, op.Topics,
+			memory.WithUpdateMetadata(ep)); err != nil {
 			if isMemoryNotFoundError(err) {
 				if !w.isToolEnabled(memory.AddToolName) {
 					log.DebugfContext(ctx,
-						"auto_memory: update-not-found fallback "+
-							"skipped (add disabled) for user %s/%s, "+
-							"memory_id=%s",
-						userKey.AppName, userKey.UserID, op.MemoryID)
+						"auto_memory: update-not-found "+
+							"fallback skipped (add disabled)"+
+							" for user %s/%s, memory_id=%s",
+						userKey.AppName, userKey.UserID,
+						op.MemoryID)
 					return
 				}
 				if addErr := w.operator.AddMemory(
 					ctx, userKey, op.Memory, op.Topics,
+					memory.WithMetadata(ep),
 				); addErr != nil {
 					log.WarnfContext(ctx,
-						"auto_memory: update missing, add memory failed for user %s/%s, memory_id=%s: %v",
-						userKey.AppName, userKey.UserID, op.MemoryID, addErr,
+						"auto_memory: update missing, "+
+							"add memory failed for user "+
+							"%s/%s, memory_id=%s: %v",
+						userKey.AppName, userKey.UserID,
+						op.MemoryID, addErr,
 					)
 				}
 				return
 			}
-			log.WarnfContext(ctx, "auto_memory: update memory failed for user %s/%s, memory_id=%s: %v",
-				userKey.AppName, userKey.UserID, op.MemoryID, err)
+			log.WarnfContext(ctx,
+				"auto_memory: update memory failed "+
+					"for user %s/%s, memory_id=%s: %v",
+				userKey.AppName, userKey.UserID,
+				op.MemoryID, err)
 		}
 	case extractor.OperationDelete:
 		memKey := memory.Key{
@@ -462,6 +528,23 @@ func (w *AutoMemoryWorker) executeOperation(
 	default:
 		log.WarnfContext(ctx, "auto_memory: unknown operation type '%s' for user %s/%s",
 			op.Type, userKey.AppName, userKey.UserID)
+	}
+}
+
+// opToMetadata converts extractor.Operation episodic
+// fields to memory.Metadata. Always returns a non-nil
+// value; defaults to Kind=KindFact when no episodic data
+// is present so that backends do not need nil-guard logic.
+func opToMetadata(op *extractor.Operation) *memory.Metadata {
+	kind := op.MemoryKind
+	if kind == "" {
+		kind = memory.KindFact
+	}
+	return &memory.Metadata{
+		Kind:         kind,
+		EventTime:    op.EventTime,
+		Participants: op.Participants,
+		Location:     op.Location,
 	}
 }
 

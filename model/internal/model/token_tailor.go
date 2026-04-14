@@ -25,10 +25,6 @@ const (
 	// reasonable processing. Below this limit, the model may not function properly.
 	DefaultInputTokensFloor = 1024
 
-	// DefaultOutputTokensFloor is the minimum number of output tokens to ensure
-	// a meaningful response. Below this limit, responses may be truncated.
-	DefaultOutputTokensFloor = 256
-
 	// DefaultSafetyMarginRatio is the safety margin ratio (10%) used to account for
 	// token counting inaccuracies. This provides a buffer between the calculated
 	// limit and the actual model limits.
@@ -84,52 +80,4 @@ func CalculateMaxInputTokensWithParams(
 		protocolOverheadTokens-safetyMargin, 0)
 	ratioLimit := int(float64(contextWindow) * maxInputTokensRatio)
 	return max(min(calculatedMax, ratioLimit), inputTokensFloor)
-}
-
-// CalculateMaxOutputTokens calculates the maximum output tokens based on the
-// context window and actual used input tokens.
-//
-// Formula:
-//
-//	safetyMargin = contextWindow × safetyMarginRatio (10%)
-//	remainingTokens = contextWindow - usedInputTokens - protocolOverheadTokens - safetyMargin
-//	maxOutputTokens = max(remainingTokens, outputTokensFloor)
-//
-// Example for deepseek-chat (contextWindow = 131072, usedInputTokens = 115383):
-//
-//	safetyMargin = 131072 × 0.10 = 13107 tokens
-//	remainingTokens = 131072 - 115383 - 512 - 13107 = 2070 tokens
-//	maxOutputTokens = max(2070, 256) = 2070 tokens
-//
-// This ensures:
-//   - Total tokens (input + output + overhead + safety margin) stay within context window
-//   - At least outputTokensFloor (256) tokens for meaningful response
-//   - 10% safety margin for token counting inaccuracies
-//   - Protocol overhead (512 tokens) for request/response formatting
-//
-// Returns 0 if there are insufficient remaining tokens (even below outputTokensFloor).
-func CalculateMaxOutputTokens(contextWindow int, usedInputTokens int) int {
-	safetyMargin := int(float64(contextWindow) * DefaultSafetyMarginRatio)
-	remainingTokens := contextWindow - usedInputTokens - DefaultProtocolOverheadTokens - safetyMargin
-	if remainingTokens <= 0 {
-		return 0
-	}
-	return max(remainingTokens, DefaultOutputTokensFloor)
-}
-
-// CalculateMaxOutputTokensWithParams calculates the maximum output tokens
-// with custom budget parameters.
-func CalculateMaxOutputTokensWithParams(
-	contextWindow int,
-	usedInputTokens int,
-	protocolOverheadTokens int,
-	outputTokensFloor int,
-	safetyMarginRatio float64,
-) int {
-	safetyMargin := int(float64(contextWindow) * safetyMarginRatio)
-	remainingTokens := contextWindow - usedInputTokens - protocolOverheadTokens - safetyMargin
-	if remainingTokens <= 0 {
-		return 0
-	}
-	return max(remainingTokens, outputTokensFloor)
 }

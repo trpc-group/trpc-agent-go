@@ -31,7 +31,6 @@ import (
 
 const (
 	defaultInteractiveMaxLines = 20_000
-	defaultInteractiveIODrain  = 1 * time.Second
 	defaultInteractiveKillWait = 2 * time.Second
 )
 
@@ -51,6 +50,10 @@ type interactiveSession struct {
 	doneCh chan struct{}
 	ioDone chan struct{}
 	ioWG   sync.WaitGroup
+
+	// pipeDrain closes parent-held stdout/stderr write ends (os.Pipe path only).
+	// Called after cmd.Wait() so read goroutines observe EOF before ioWG.Wait().
+	pipeDrain func()
 
 	mu       sync.Mutex
 	started  time.Time
@@ -238,6 +241,21 @@ func (s *interactiveSession) Close() error {
 	return err
 }
 
+func (s *interactiveSession) State() codeexecutor.ProgramState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := codeexecutor.ProgramState{
+		Status: codeexecutor.ProgramStatusRunning,
+	}
+	if s.finished.IsZero() {
+		return state
+	}
+	state.Status = codeexecutor.ProgramStatusExited
+	code := s.exitCode
+	state.ExitCode = &code
+	return state
+}
+
 func (s *interactiveSession) RunResult() codeexecutor.RunResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -388,13 +406,15 @@ func (r *Runtime) StartProgram(
 			sess.readFrom(master, "stdout")
 		}()
 	} else {
-		stdin, stdout, stderr, err := startPipes(cmd)
+		stdin, stdout, stderr, closeWritePipes, err := startPipes(cmd)
 		if err != nil {
 			cancel()
 			return nil, err
 		}
 		sess.stdin = stdin
+		sess.pipeDrain = closeWritePipes
 		sess.closeIO = func() error {
+			closeWritePipes()
 			_ = stdin.Close()
 			_ = stdout.Close()
 			_ = stderr.Close()
@@ -417,13 +437,12 @@ func (r *Runtime) StartProgram(
 	}
 
 	go func() {
+		err := cmd.Wait()
+		if sess.pipeDrain != nil {
+			sess.pipeDrain()
+		}
 		sess.ioWG.Wait()
 		close(sess.ioDone)
-	}()
-
-	go func() {
-		err := cmd.Wait()
-		waitInteractiveIODone(sess.ioDone, defaultInteractiveIODrain)
 		sess.markDone(
 			interactiveExitCode(err),
 			time.Since(startedAt),
@@ -506,35 +525,40 @@ func interactiveExitCode(err error) int {
 	return -1
 }
 
-func waitInteractiveIODone(
-	done <-chan struct{},
-	timeout time.Duration,
-) {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-done:
-	case <-timer.C:
-	}
-}
-
 func startPipes(
 	cmd *exec.Cmd,
-) (io.WriteCloser, io.ReadCloser, io.ReadCloser, error) {
+) (io.WriteCloser, io.ReadCloser, io.ReadCloser, func(), error) {
+	if cmd.Stdout != nil {
+		return nil, nil, nil, nil, errors.New("exec: Stdout already set")
+	}
+	if cmd.Stderr != nil {
+		return nil, nil, nil, nil, errors.New("exec: Stderr already set")
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	stdout, err := cmd.StdoutPipe()
+	outR, outW, err := os.Pipe()
 	if err != nil {
 		_ = stdin.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	stderr, err := cmd.StderrPipe()
+	cmd.Stdout = outW
+	errR, errW, err := os.Pipe()
 	if err != nil {
 		_ = stdin.Close()
-		_ = stdout.Close()
-		return nil, nil, nil, err
+		_ = outR.Close()
+		_ = outW.Close()
+		return nil, nil, nil, nil, err
 	}
-	return stdin, stdout, stderr, nil
+	cmd.Stderr = errW
+
+	var closeOnce sync.Once
+	closeWritePipes := func() {
+		closeOnce.Do(func() {
+			_ = outW.Close()
+			_ = errW.Close()
+		})
+	}
+	return stdin, outR, errR, closeWritePipes, nil
 }

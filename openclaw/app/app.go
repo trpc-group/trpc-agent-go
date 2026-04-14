@@ -18,18 +18,23 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"hash/crc32"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
@@ -39,16 +44,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/admin"
+	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationtool"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/cron"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/octool"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
@@ -67,8 +78,9 @@ const (
 
 	defaultOpenAIModel = "gpt-5"
 
-	defaultSkillsDir = "skills"
-	defaultAgentsDir = ".agents"
+	defaultSkillsDir        = "skills"
+	defaultAgentsDir        = ".agents"
+	defaultBundledSkillsDir = "bundled-skills"
 
 	csvDelimiter = ","
 
@@ -95,6 +107,7 @@ const (
 		"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_HOST_REF, " +
 		"OPENCLAW_LAST_UPLOAD_NAME, " +
 		"OPENCLAW_LAST_UPLOAD_MIME, and " +
+		"OPENCLAW_MEMORY_FILE, " +
 		"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing " +
 		"attachment paths. When a user follows " +
 		"up about 'the PDF/audio/video I just sent', assume they " +
@@ -161,7 +174,20 @@ const (
 		"OPENCLAW_SESSION_UPLOADS_DIR. Prefer writing derived " +
 		"files under " +
 		"OPENCLAW_SESSION_UPLOADS_DIR when you will send them " +
-		"back to the user. Prefer already installed local tools " +
+		"back to the user. OPENCLAW_MEMORY_FILE is a visible " +
+		"MEMORY.md file for the current scope, not hidden " +
+		"internal state. If the user asks what you remember or " +
+		"asks to inspect that file, read it and quote or " +
+		"summarize the relevant " +
+		"lines. If the user explicitly says 'remember this' " +
+		"or asks you to remember a durable fact, preference, " +
+		"or workflow rule, update OPENCLAW_MEMORY_FILE with a " +
+		"short bullet in the same turn. Use " +
+		"OPENCLAW_MEMORY_FILE only for stable cross-session " +
+		"facts, preferences, or working style. Do not store " +
+		"secrets or large transcripts in that file. " +
+		"If a memory file does not exist yet, you may create it " +
+		"at that exact path. Prefer already installed local tools " +
 		"for OCR, PDF, audio, image, and video work before " +
 		"trying package installs or long downloads. " +
 		"When creating a cron job from chat, omit channel and " +
@@ -174,6 +200,14 @@ const (
 		"recurring work. " +
 		"Use skill_run only for skill workspace workflows."
 
+	browserToolingGuidance = "For real browser automation, use " +
+		"browser. Prefer browser snapshot plus act for page " +
+		"interaction, use browser screenshot when visual " +
+		"verification matters, and keep using the same targetId " +
+		"after tabs or snapshot calls. When the user mentions " +
+		"their current browser tab, relay, or extension attach " +
+		"flow, use profile=\"chrome\" when that profile exists."
+
 	agentTypeLLM        = "llm"
 	agentTypeClaudeCode = "claude-code"
 
@@ -181,9 +215,9 @@ const (
 
 	defaultOpenAIVariant = openAIVariantAuto
 
-	deepSeekModelHint = "deepseek"
-	qwenModelHint     = "qwen"
-	hunyuanModelHint  = "hunyuan"
+	deepSeekAPIHost = "api.deepseek.com"
+	qwenAPIHost     = "dashscope.aliyuncs.com"
+	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
 
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
 	openAIModelEnvName   = "OPENAI_MODEL"
@@ -287,6 +321,84 @@ func logStartupLines(lines []startupLogLine) {
 	}
 }
 
+func runtimeStartupLines(
+	opts runOptions,
+	stateDir string,
+	channels []channel.Channel,
+	needsModel bool,
+) []startupLogLine {
+	return []startupLogLine{
+		{text: fmt.Sprintf("App name: %s", strings.TrimSpace(opts.AppName))},
+		{text: configStartupSummary(opts.ConfigPath)},
+		{text: fmt.Sprintf(
+			"State dir: %s",
+			startupPathSummary(stateDir),
+		)},
+		{text: fmt.Sprintf(
+			"Channels: %s",
+			channelStartupSummary(channels),
+		)},
+		{text: fmt.Sprintf(
+			"Model: %s",
+			modelStartupSummary(opts, needsModel),
+		)},
+		{text: fmt.Sprintf(
+			"Storage: session=%s memory=%s",
+			strings.TrimSpace(opts.SessionBackend),
+			resolveMemoryBackendType(opts.MemoryBackend),
+		)},
+	}
+}
+
+func configStartupSummary(configPath string) string {
+	path := strings.TrimSpace(configPath)
+	if path == "" {
+		return "Config: built-in defaults and CLI flags"
+	}
+	return fmt.Sprintf("Config: %s", startupPathSummary(path))
+}
+
+func startupPathSummary(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return ""
+	}
+	absPath, err := filepath.Abs(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	return absPath
+}
+
+func channelStartupSummary(channels []channel.Channel) string {
+	ids := channelIDs(channels)
+	if len(ids) == 0 {
+		return "none"
+	}
+	return strings.Join(ids, ", ")
+}
+
+func modelStartupSummary(
+	opts runOptions,
+	needsModel bool,
+) string {
+	if !needsModel {
+		return "disabled"
+	}
+	mode := strings.ToLower(strings.TrimSpace(opts.ModelMode))
+	if mode == "" {
+		mode = modeOpenAI
+	}
+	if mode != modeOpenAI {
+		return mode
+	}
+	modelName := strings.TrimSpace(opts.OpenAIModel)
+	if modelName == "" {
+		return mode
+	}
+	return fmt.Sprintf("%s/%s", mode, modelName)
+}
+
 func gatewayStartupLines(
 	httpAddr string,
 	gwSrv *gateway.Server,
@@ -349,15 +461,22 @@ func adminStartupLines(
 // default OpenClaw runner + channel wiring.
 type Runtime struct {
 	Gateway  Gateway
+	A2A      A2ASurface
 	Admin    AdminSurface
 	Channels []channel.Channel
+	prompts  *RuntimePromptController
+	adminCfg *admin.Config
+	appName  string
+	session  session.Service
 
-	runner     runner.Runner
-	cronRunner closeFunc
-	sessionSvc closeFunc
-	memorySvc  closeFunc
-	cronSvc    closeFunc
-	toolSets   []tool.ToolSet
+	runner            runner.Runner
+	cronRunner        closeFunc
+	sessionSvc        closeFunc
+	memorySvc         closeFunc
+	cronSvc           closeFunc
+	skillsWatch       closeFunc
+	toolSets          []tool.ToolSet
+	telemetryShutdown func(context.Context) error
 }
 
 // Gateway provides the HTTP handler and routes served by OpenClaw.
@@ -373,6 +492,143 @@ type AdminSurface struct {
 	Handler http.Handler
 	Addr    string
 	URL     string
+}
+
+type PromptSnapshot struct {
+	Instruction  string
+	SystemPrompt string
+}
+
+type RuntimePromptController struct {
+	agent agent.Agent
+
+	mu       sync.RWMutex
+	snapshot PromptSnapshot
+}
+
+func newRuntimePromptController(
+	agt agent.Agent,
+	instruction string,
+	systemPrompt string,
+) *RuntimePromptController {
+	if agt == nil {
+		return nil
+	}
+	if _, ok := agt.(*llmagent.LLMAgent); !ok {
+		return nil
+	}
+	return &RuntimePromptController{
+		agent: agt,
+		snapshot: PromptSnapshot{
+			Instruction:  instruction,
+			SystemPrompt: systemPrompt,
+		},
+	}
+}
+
+// PromptController exposes runtime prompt updates without changing
+// Runtime's exported struct layout.
+func (r *Runtime) PromptController() *RuntimePromptController {
+	if r == nil {
+		return nil
+	}
+	return r.prompts
+}
+
+func (r *Runtime) AppName() string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.appName)
+}
+
+func (r *Runtime) SessionService() session.Service {
+	if r == nil {
+		return nil
+	}
+	return r.session
+}
+
+func (r *Runtime) ConfigureAdmin(
+	configure func(*admin.Config),
+) {
+	if r == nil || r.adminCfg == nil || configure == nil {
+		return
+	}
+	cfg := *r.adminCfg
+	configure(&cfg)
+	r.applyAdminConfig(cfg)
+}
+
+func (r *Runtime) applyAdminConfig(cfg admin.Config) {
+	if r == nil {
+		return
+	}
+	r.adminCfg = &cfg
+	r.Admin.Handler = admin.New(cfg).Handler()
+	r.Admin.Addr = strings.TrimSpace(cfg.AdminAddr)
+	r.Admin.URL = strings.TrimSpace(cfg.AdminURL)
+}
+
+func (c *RuntimePromptController) Snapshot() PromptSnapshot {
+	if c == nil {
+		return PromptSnapshot{}
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.snapshot
+}
+
+func (c *RuntimePromptController) SetInstruction(
+	instruction string,
+) {
+	if c == nil {
+		return
+	}
+	llm, ok := c.agent.(*llmagent.LLMAgent)
+	if !ok {
+		return
+	}
+	llm.SetInstruction(instruction)
+	c.mu.Lock()
+	c.snapshot.Instruction = instruction
+	c.mu.Unlock()
+}
+
+func (c *RuntimePromptController) SetSystemPrompt(
+	systemPrompt string,
+) {
+	if c == nil {
+		return
+	}
+	llm, ok := c.agent.(*llmagent.LLMAgent)
+	if !ok {
+		return
+	}
+	llm.SetGlobalInstruction(systemPrompt)
+	c.mu.Lock()
+	c.snapshot.SystemPrompt = systemPrompt
+	c.mu.Unlock()
+}
+
+func (c *RuntimePromptController) SetPrompts(
+	instruction string,
+	systemPrompt string,
+) {
+	if c == nil {
+		return
+	}
+	llm, ok := c.agent.(*llmagent.LLMAgent)
+	if !ok {
+		return
+	}
+	llm.SetPrompts(instruction, systemPrompt)
+	c.mu.Lock()
+	c.snapshot = PromptSnapshot{
+		Instruction:  instruction,
+		SystemPrompt: systemPrompt,
+	}
+	c.mu.Unlock()
 }
 
 // NewRuntime constructs an OpenClaw runtime based on CLI args / config file,
@@ -428,6 +684,18 @@ func NewRuntime(
 			Err:  fmt.Errorf("debug recorder config failed: %w", err),
 		}
 	}
+	langfuseRT, err := maybeEnableLangfuse(ctx, opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("langfuse config failed: %w", err),
+		}
+	}
+	langfuseStatus := admin.LangfuseStatus{}
+	if langfuseRT != nil {
+		langfuseStatus = langfuseRT.adminStatus
+		rt.telemetryShutdown = langfuseRT.shutdown
+	}
 
 	needsModel := agentType == agentTypeLLM ||
 		opts.SessionSummaryEnabled ||
@@ -451,6 +719,7 @@ func NewRuntime(
 		resolvedStateDir,
 	)
 	log.Infof("Instance: %s", instanceID)
+	rt.appName = opts.AppName
 
 	sessionSvc, err := newSessionService(mdl, opts)
 	if err != nil {
@@ -470,6 +739,14 @@ func NewRuntime(
 	}
 	rt.memorySvc = memSvc
 
+	stores, err := newRuntimeStores(resolvedStateDir)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create runtime stores failed: %w", err),
+		}
+	}
+
 	prompts, err := resolveAgentPrompts(opts)
 	if err != nil {
 		return nil, &exitError{
@@ -478,16 +755,24 @@ func NewRuntime(
 		}
 	}
 
+	fileMemoryStore := fileMemoryStoreForBackend(
+		opts.MemoryBackend,
+		stores.memoryFiles,
+	)
 	openClawTools := buildOpenClawTools(
 		opts.EnableOpenClawTools,
 		resolvedStateDir,
+		stores.uploads,
+		fileMemoryStore,
 	)
-	extraTools := append([]tool.Tool(nil), memSvc.Tools()...)
+	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
 
 	var (
-		toolSets []tool.ToolSet
-		ag       agent.Agent
+		toolSets    []tool.ToolSet
+		ag          agent.Agent
+		skillsRepo  *ocskills.Repository
+		skillsWatch *ocskills.WatchService
 	)
 	if agentType == agentTypeClaudeCode {
 		ag, err = newClaudeCodeAgent(opts)
@@ -504,13 +789,16 @@ func NewRuntime(
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
-		ag, err = newAgent(mdl, agentConfig{
-			AppName:           opts.AppName,
-			AddSessionSummary: opts.AddSessionSummary,
-			MaxHistoryRuns:    opts.MaxHistoryRuns,
-			PreloadMemory:     opts.PreloadMemory,
-			Instruction:       prompts.Instruction,
-			SystemPrompt:      prompts.SystemPrompt,
+		agentCfg := agentConfig{
+			AppName:                 opts.AppName,
+			AddSessionSummary:       opts.AddSessionSummary,
+			EnableContextCompaction: opts.EnableContextCompaction,
+			ContextCompactionOversizedToolResultMaxTokens: opts.ContextCompactionOversizedToolResultMaxTokens,
+			MaxHistoryRuns:   opts.MaxHistoryRuns,
+			PreloadMemory:    opts.PreloadMemory,
+			GenerationConfig: opts.GenerationConfig,
+			Instruction:      prompts.Instruction,
+			SystemPrompt:     prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -518,14 +806,19 @@ func NewRuntime(
 			SkillsAllowBundled: splitCSV(
 				opts.SkillsAllowBundled,
 			),
-			SkillConfigs:       opts.SkillConfigs,
-			SkillConfigKeys:    resolveSkillConfigKeys(opts),
-			SkillsLoadMode:     opts.SkillsLoadMode,
-			SkillsMaxLoaded:    opts.SkillsMaxLoaded,
-			SkillsToolResults:  opts.SkillsToolResults,
-			SkillsSkipFallback: opts.SkillsSkipFallback,
-			SkillsToolingGuide: opts.SkillsToolingGuide,
-			StateDir:           resolvedStateDir,
+			SkillConfigs:        opts.SkillConfigs,
+			SkillConfigKeys:     resolveSkillConfigKeys(opts),
+			SkillsWatch:         opts.SkillsWatch,
+			SkillsWatchBundled:  opts.SkillsWatchBundled,
+			SkillsWatchDebounce: opts.SkillsWatchDebounce,
+			SkillsLoadMode:      opts.SkillsLoadMode,
+			SkillsMaxLoaded:     opts.SkillsMaxLoaded,
+			SkillsToolResults:   opts.SkillsToolResults,
+			SkillsSkipFallback:  opts.SkillsSkipFallback,
+			SkillsToolingGuide:  opts.SkillsToolingGuide,
+			KnowledgesConfig:    opts.KnowledgesConfig,
+			StateDir:            resolvedStateDir,
+			MemoryFileStore:     fileMemoryStore,
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
@@ -535,7 +828,21 @@ func NewRuntime(
 			ToolSets:      opts.ToolSets,
 
 			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
-		}, extraTools, toolSets)
+		}
+		ag, skillsRepo, err = newAgent(
+			mdl,
+			agentCfg,
+			extraTools,
+			toolSets,
+		)
+		if err == nil {
+			cwd, _ := os.Getwd()
+			skillsWatch = newSkillsWatchService(
+				cwd,
+				agentCfg,
+				skillsRepo,
+			)
+		}
 	}
 	if err != nil {
 		closeToolSets(toolSets)
@@ -544,12 +851,21 @@ func NewRuntime(
 			Err:  fmt.Errorf("create agent failed: %w", err),
 		}
 	}
+	rt.prompts = newRuntimePromptController(
+		ag,
+		prompts.Instruction,
+		prompts.SystemPrompt,
+	)
 	rt.toolSets = toolSets
+	rt.skillsWatch = skillsWatch
 
+	bridgedSessionSvc := conversationscope.WrapSessionService(sessionSvc)
+	rt.session = bridgedSessionSvc
 	runnerOpts := []runner.Option{
-		runner.WithSessionService(sessionSvc),
-		runner.WithMemoryService(memSvc),
+		runner.WithSessionService(bridgedSessionSvc),
+		runner.WithPlugins(conversation.Plugin{}),
 	}
+	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
 	if err != nil {
 		return nil, &exitError{
@@ -567,38 +883,47 @@ func NewRuntime(
 	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 	rt.runner = r
 
-	uploadStore, err := uploads.NewStore(resolvedStateDir)
-	if err != nil {
-		return nil, &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create upload store failed: %w", err),
-		}
-	}
-	personaPath, err := persona.DefaultStorePath(resolvedStateDir)
-	if err != nil {
-		return nil, &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create persona store path failed: %w", err),
-		}
-	}
-	personaStore, err := persona.NewStore(personaPath)
-	if err != nil {
-		return nil, &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create persona store failed: %w", err),
-		}
-	}
-
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
 	)
-	gwOpts = append(gwOpts, gateway.WithUploadStore(uploadStore))
-	gwOpts = append(gwOpts, gateway.WithPersonaStore(personaStore))
+	gwOpts = append(gwOpts, gateway.WithAppName(opts.AppName))
+	gwOpts = append(gwOpts, gateway.WithUploadStore(stores.uploads))
+	gwOpts = append(gwOpts, gateway.WithPersonaStore(stores.personas))
+	if fileMemoryStore != nil {
+		gwOpts = append(
+			gwOpts,
+			gateway.WithMemoryFileStore(fileMemoryStore),
+		)
+	}
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
+	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
+		gwOpts = append(
+			gwOpts,
+			gateway.WithRunOptionResolver(
+				langfuseRT.runOptionResolver,
+			),
+		)
+	}
+	gwOpts = append(
+		gwOpts,
+		gateway.WithRunOptionResolver(
+			buildDeliveryRunOptionResolver(),
+		),
+		gateway.WithRunOptionResolver(
+			buildConversationRunOptionResolver(
+				opts.AppName,
+				bridgedSessionSvc,
+				conversation.HistoryOptions{
+					AddSessionSummary: opts.AddSessionSummary,
+					MaxHistoryRuns:    opts.MaxHistoryRuns,
+				},
+			),
+		),
+	)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return nil, &exitError{
@@ -613,6 +938,13 @@ func NewRuntime(
 		StatusPath:   gwSrv.StatusPath(),
 		CancelPath:   gwSrv.CancelPath(),
 	}
+	rt.A2A, err = newA2ASurface(ag, r, opts)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create a2a failed: %w", err),
+		}
+	}
 
 	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
 	if debugRec != nil {
@@ -624,9 +956,10 @@ func NewRuntime(
 		sessionSvc,
 		memSvc,
 		debugDir,
-		uploadStore,
+		stores.uploads,
 	)
-	gw.SetPersonaStore(personaStore)
+	gw.SetPersonaStore(stores.personas)
+	gw.SetMemoryFileStore(fileMemoryStore)
 
 	if len(opts.Channels) > 0 {
 		extra, err := channelsFromRegistry(
@@ -683,10 +1016,11 @@ func NewRuntime(
 
 	if opts.AdminEnabled {
 		adminURL := listenURL(opts.AdminAddr)
-		adminSvc := admin.New(buildAdminConfig(
+		adminCfg := buildAdminConfig(
 			opts,
 			agentType,
 			instanceID,
+			langfuseStatus,
 			resolvedStateDir,
 			debugDir,
 			startedAt,
@@ -699,14 +1033,16 @@ func NewRuntime(
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			rt.prompts,
+			nil,
 			opts.AdminAddr,
 			adminURL,
-		))
-		rt.Admin = AdminSurface{
-			Handler: adminSvc.Handler(),
-			Addr:    opts.AdminAddr,
-			URL:     adminURL,
-		}
+			skillsRepo,
+			skillsWatch,
+			fileMemoryStore,
+			rt.SessionService(),
+		)
+		rt.applyAdminConfig(adminCfg)
 	}
 
 	return rt, nil
@@ -718,20 +1054,31 @@ func (r *Runtime) Close() error {
 		return nil
 	}
 
+	var errs []error
 	if r.cronSvc != nil {
 		_ = r.cronSvc.Close()
 	}
 	if r.cronRunner != nil {
 		_ = r.cronRunner.Close()
 	}
+	if r.skillsWatch != nil {
+		if err := r.skillsWatch.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	closeToolSets(r.toolSets)
 	closeMemoryService(r.memorySvc)
 	closeSessionService(r.sessionSvc)
 
-	if r.runner == nil {
-		return nil
+	if r.runner != nil {
+		if err := r.runner.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return r.runner.Close()
+	if err := shutdownTelemetry(r.telemetryShutdown); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
 }
 
 func run(ctx context.Context, args []string) error {
@@ -774,6 +1121,40 @@ func run(ctx context.Context, args []string) error {
 			Err:  fmt.Errorf("debug recorder config failed: %w", err),
 		}
 	}
+	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
+	if debugRec != nil {
+		debugDir = debugRec.Dir()
+	}
+
+	browserServerSup, err := maybeStartBrowserServerSupervisor(
+		ctx,
+		opts.ToolProviders,
+		debugDir,
+	)
+	if err != nil {
+		log.Warnf("browser server auto-start failed: %v", err)
+	}
+	langfuseRT, err := maybeEnableLangfuse(ctx, opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("langfuse config failed: %w", err),
+		}
+	}
+	langfuseStatus := admin.LangfuseStatus{}
+	var langfuseShutdown func(context.Context) error
+	if langfuseRT != nil {
+		langfuseStatus = langfuseRT.adminStatus
+		langfuseShutdown = langfuseRT.shutdown
+	}
+	defer func() {
+		if langfuseShutdown == nil {
+			return
+		}
+		if err := shutdownTelemetry(langfuseShutdown); err != nil {
+			log.Warnf("shutdown langfuse failed: %v", err)
+		}
+	}()
 
 	needsModel := agentType == agentTypeLLM ||
 		opts.SessionSummaryEnabled ||
@@ -816,6 +1197,14 @@ func run(ctx context.Context, args []string) error {
 	}
 	defer closeMemoryService(memSvc)
 
+	stores, err := newRuntimeStores(resolvedStateDir)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create runtime stores failed: %w", err),
+		}
+	}
+
 	prompts, err := resolveAgentPrompts(opts)
 	if err != nil {
 		return &exitError{
@@ -824,19 +1213,35 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
+	fileMemoryStore := fileMemoryStoreForBackend(
+		opts.MemoryBackend,
+		stores.memoryFiles,
+	)
 	openClawTools := buildOpenClawTools(
 		opts.EnableOpenClawTools,
 		resolvedStateDir,
+		stores.uploads,
+		fileMemoryStore,
 	)
-	extraTools := append([]tool.Tool(nil), memSvc.Tools()...)
+	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
 
 	var (
-		toolSets []tool.ToolSet
-		ag       agent.Agent
+		toolSets    []tool.ToolSet
+		ag          agent.Agent
+		skillsRepo  *ocskills.Repository
+		skillsWatch *ocskills.WatchService
 	)
 	defer func() {
 		closeToolSets(toolSets)
+	}()
+	defer func() {
+		if skillsWatch == nil {
+			return
+		}
+		if err := skillsWatch.Close(); err != nil {
+			log.Warnf("close skills watch failed: %v", err)
+		}
 	}()
 	if agentType == agentTypeClaudeCode {
 		ag, err = newClaudeCodeAgent(opts)
@@ -853,13 +1258,16 @@ func run(ctx context.Context, args []string) error {
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
-		ag, err = newAgent(mdl, agentConfig{
-			AppName:           opts.AppName,
-			AddSessionSummary: opts.AddSessionSummary,
-			MaxHistoryRuns:    opts.MaxHistoryRuns,
-			PreloadMemory:     opts.PreloadMemory,
-			Instruction:       prompts.Instruction,
-			SystemPrompt:      prompts.SystemPrompt,
+		agentCfg := agentConfig{
+			AppName:                 opts.AppName,
+			AddSessionSummary:       opts.AddSessionSummary,
+			EnableContextCompaction: opts.EnableContextCompaction,
+			ContextCompactionOversizedToolResultMaxTokens: opts.ContextCompactionOversizedToolResultMaxTokens,
+			MaxHistoryRuns:   opts.MaxHistoryRuns,
+			PreloadMemory:    opts.PreloadMemory,
+			GenerationConfig: opts.GenerationConfig,
+			Instruction:      prompts.Instruction,
+			SystemPrompt:     prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -867,14 +1275,19 @@ func run(ctx context.Context, args []string) error {
 			SkillsAllowBundled: splitCSV(
 				opts.SkillsAllowBundled,
 			),
-			SkillConfigs:       opts.SkillConfigs,
-			SkillConfigKeys:    resolveSkillConfigKeys(opts),
-			SkillsLoadMode:     opts.SkillsLoadMode,
-			SkillsMaxLoaded:    opts.SkillsMaxLoaded,
-			SkillsToolResults:  opts.SkillsToolResults,
-			SkillsSkipFallback: opts.SkillsSkipFallback,
-			SkillsToolingGuide: opts.SkillsToolingGuide,
-			StateDir:           resolvedStateDir,
+			SkillConfigs:        opts.SkillConfigs,
+			SkillConfigKeys:     resolveSkillConfigKeys(opts),
+			SkillsWatch:         opts.SkillsWatch,
+			SkillsWatchBundled:  opts.SkillsWatchBundled,
+			SkillsWatchDebounce: opts.SkillsWatchDebounce,
+			SkillsLoadMode:      opts.SkillsLoadMode,
+			SkillsMaxLoaded:     opts.SkillsMaxLoaded,
+			SkillsToolResults:   opts.SkillsToolResults,
+			SkillsSkipFallback:  opts.SkillsSkipFallback,
+			SkillsToolingGuide:  opts.SkillsToolingGuide,
+			KnowledgesConfig:    opts.KnowledgesConfig,
+			StateDir:            resolvedStateDir,
+			MemoryFileStore:     fileMemoryStore,
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
@@ -884,7 +1297,21 @@ func run(ctx context.Context, args []string) error {
 			ToolSets:      opts.ToolSets,
 
 			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
-		}, extraTools, toolSets)
+		}
+		ag, skillsRepo, err = newAgent(
+			mdl,
+			agentCfg,
+			extraTools,
+			toolSets,
+		)
+		if err == nil {
+			cwd, _ := os.Getwd()
+			skillsWatch = newSkillsWatchService(
+				cwd,
+				agentCfg,
+				skillsRepo,
+			)
+		}
 	}
 	if err != nil {
 		return &exitError{
@@ -892,11 +1319,18 @@ func run(ctx context.Context, args []string) error {
 			Err:  fmt.Errorf("create agent failed: %w", err),
 		}
 	}
+	promptController := newRuntimePromptController(
+		ag,
+		prompts.Instruction,
+		prompts.SystemPrompt,
+	)
 
+	bridgedSessionSvc := conversationscope.WrapSessionService(sessionSvc)
 	runnerOpts := []runner.Option{
-		runner.WithSessionService(sessionSvc),
-		runner.WithMemoryService(memSvc),
+		runner.WithSessionService(bridgedSessionSvc),
+		runner.WithPlugins(conversation.Plugin{}),
 	}
+	runnerOpts = appendMemoryServiceRunnerOption(runnerOpts, memSvc)
 	rlCfg, err := ralphLoopConfigFromRunOptions(opts)
 	if err != nil {
 		return &exitError{
@@ -912,38 +1346,47 @@ func run(ctx context.Context, args []string) error {
 	}
 	r := runner.NewRunner(opts.AppName, ag, runnerOpts...)
 
-	uploadStore, err := uploads.NewStore(resolvedStateDir)
-	if err != nil {
-		return &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create upload store failed: %w", err),
-		}
-	}
-	personaPath, err := persona.DefaultStorePath(resolvedStateDir)
-	if err != nil {
-		return &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create persona store path failed: %w", err),
-		}
-	}
-	personaStore, err := persona.NewStore(personaPath)
-	if err != nil {
-		return &exitError{
-			Code: 1,
-			Err:  fmt.Errorf("create persona store failed: %w", err),
-		}
-	}
-
 	gwOpts := makeGatewayOptions(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
 	)
-	gwOpts = append(gwOpts, gateway.WithUploadStore(uploadStore))
-	gwOpts = append(gwOpts, gateway.WithPersonaStore(personaStore))
+	gwOpts = append(gwOpts, gateway.WithAppName(opts.AppName))
+	gwOpts = append(gwOpts, gateway.WithUploadStore(stores.uploads))
+	gwOpts = append(gwOpts, gateway.WithPersonaStore(stores.personas))
+	if fileMemoryStore != nil {
+		gwOpts = append(
+			gwOpts,
+			gateway.WithMemoryFileStore(fileMemoryStore),
+		)
+	}
 	if debugRec != nil {
 		gwOpts = append(gwOpts, gateway.WithDebugRecorder(debugRec))
 	}
+	if langfuseRT != nil && langfuseRT.runOptionResolver != nil {
+		gwOpts = append(
+			gwOpts,
+			gateway.WithRunOptionResolver(
+				langfuseRT.runOptionResolver,
+			),
+		)
+	}
+	gwOpts = append(
+		gwOpts,
+		gateway.WithRunOptionResolver(
+			buildDeliveryRunOptionResolver(),
+		),
+		gateway.WithRunOptionResolver(
+			buildConversationRunOptionResolver(
+				opts.AppName,
+				bridgedSessionSvc,
+				conversation.HistoryOptions{
+					AddSessionSummary: opts.AddSessionSummary,
+					MaxHistoryRuns:    opts.MaxHistoryRuns,
+				},
+			),
+		),
+	)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return &exitError{
@@ -952,26 +1395,42 @@ func run(ctx context.Context, args []string) error {
 		}
 	}
 
-	debugDir := filepath.Join(resolvedStateDir, defaultDebugRecorderDir)
-	if debugRec != nil {
-		debugDir = debugRec.Dir()
-	}
 	gw := newInProcGatewayClient(
 		gwSrv,
 		opts.AppName,
 		sessionSvc,
 		memSvc,
 		debugDir,
-		uploadStore,
+		stores.uploads,
 	)
-	gw.SetPersonaStore(personaStore)
+	gw.SetPersonaStore(stores.personas)
+	gw.SetMemoryFileStore(fileMemoryStore)
+
+	a2aSurface, err := newA2ASurface(ag, r, opts)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create a2a failed: %w", err),
+		}
+	}
+
+	httpHandler, err := buildRuntimeHTTPHandler(
+		gwSrv.Handler(),
+		a2aSurface,
+	)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("build runtime handler failed: %w", err),
+		}
+	}
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 
 	httpSrv := &http.Server{
 		Addr:              opts.HTTPAddr,
-		Handler:           gwSrv.Handler(),
+		Handler:           httpHandler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	var (
@@ -1046,6 +1505,7 @@ func run(ctx context.Context, args []string) error {
 			opts,
 			agentType,
 			instanceID,
+			langfuseStatus,
 			resolvedStateDir,
 			debugDir,
 			startedAt,
@@ -1058,8 +1518,14 @@ func run(ctx context.Context, args []string) error {
 			},
 			cronSvc,
 			openClawTools.execMgr,
+			promptController,
+			browserServerSup,
 			adminBinding.addr,
 			adminBinding.url,
+			skillsRepo,
+			skillsWatch,
+			fileMemoryStore,
+			bridgedSessionSvc,
 		))
 		adminSrv = &http.Server{
 			Handler:           adminSvc.Handler(),
@@ -1073,6 +1539,13 @@ func run(ctx context.Context, args []string) error {
 	}
 	errCh := make(chan error, workerCount)
 
+	logStartupLines(runtimeStartupLines(
+		opts,
+		resolvedStateDir,
+		channels,
+		needsModel,
+	))
+	logStartupLines(browserServerSup.startupLines())
 	logStartupLines(gatewayStartupLines(httpSrv.Addr, gwSrv))
 	logStartupLines(toolDepsStartupLines(openClawTools.deps))
 	go func() {
@@ -1123,7 +1596,19 @@ func run(ctx context.Context, args []string) error {
 	if cronRunner != nil {
 		_ = cronRunner.Close()
 	}
+	if browserServerSup != nil {
+		if err := browserServerSup.Close(); err != nil {
+			log.Warnf("close browser server failed: %v", err)
+		}
+	}
 	_ = r.Close()
+	if err := shutdownTelemetryWithContext(
+		shutdownCtx,
+		langfuseShutdown,
+	); err != nil {
+		log.Warnf("shutdown langfuse failed: %v", err)
+	}
+	langfuseShutdown = nil
 
 	for received < workerCount {
 		select {
@@ -1162,6 +1647,33 @@ func closeMemoryService(svc closeFunc) {
 	}
 }
 
+func memoryServiceTools(svc memory.Service) []tool.Tool {
+	if svc == nil {
+		return nil
+	}
+	return append([]tool.Tool(nil), svc.Tools()...)
+}
+
+func fileMemoryStoreForBackend(
+	backend string,
+	store *memoryfile.Store,
+) *memoryfile.Store {
+	if resolveMemoryBackendType(backend) != memoryBackendFile {
+		return nil
+	}
+	return store
+}
+
+func appendMemoryServiceRunnerOption(
+	opts []runner.Option,
+	svc memory.Service,
+) []runner.Option {
+	if svc == nil {
+		return opts
+	}
+	return append(opts, runner.WithMemoryService(svc))
+}
+
 func closeToolSets(sets []tool.ToolSet) {
 	for _, ts := range sets {
 		if ts == nil {
@@ -1171,6 +1683,33 @@ func closeToolSets(sets []tool.ToolSet) {
 			log.Warnf("close toolset %q failed: %v", ts.Name(), err)
 		}
 	}
+}
+
+func shutdownTelemetry(
+	shutdown func(context.Context) error,
+) error {
+	if shutdown == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		5*time.Second,
+	)
+	defer cancel()
+	return shutdownTelemetryWithContext(ctx, shutdown)
+}
+
+func shutdownTelemetryWithContext(
+	ctx context.Context,
+	shutdown func(context.Context) error,
+) error {
+	if shutdown == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return shutdown(ctx)
 }
 
 func newCronRunner(
@@ -1183,8 +1722,8 @@ func newCronRunner(
 		runner.WithSessionService(
 			sessioninmemory.NewSessionService(),
 		),
-		runner.WithMemoryService(memSvc),
 	}
+	opts = appendMemoryServiceRunnerOption(opts, memSvc)
 	if rlCfg != nil {
 		opts = append(opts, runner.WithRalphLoop(*rlCfg))
 	}
@@ -1358,6 +1897,11 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support tools.toolsets",
 		)
 	}
+	if len(opts.KnowledgesConfig) > 0 {
+		return errors.New(
+			"claude-code agent does not support knowledges",
+		)
+	}
 	if opts.RefreshToolSetsOnRun {
 		return errors.New(
 			"claude-code agent does not support refresh-toolsets-on-run",
@@ -1497,7 +2041,7 @@ func newAgent(
 	cfg agentConfig,
 	extraTools []tool.Tool,
 	toolSets []tool.ToolSet,
-) (agent.Agent, error) {
+) (agent.Agent, *ocskills.Repository, error) {
 	instruction := strings.TrimSpace(cfg.Instruction)
 	if instruction == "" {
 		instruction = defaultAgentInstruction
@@ -1507,20 +2051,13 @@ func newAgent(
 			instruction + "\n\n" + openClawToolingGuidance,
 		)
 	}
-
-	opts := []llmagent.Option{
-		llmagent.WithModel(mdl),
-		llmagent.WithInstruction(instruction),
-		llmagent.WithGlobalInstruction(strings.TrimSpace(cfg.SystemPrompt)),
-		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
-		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
-		llmagent.WithPreloadMemory(cfg.PreloadMemory),
-		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
+	knowledgeTools, err := buildKnowledgeTools(cfg.KnowledgesConfig)
+	if err != nil {
+		return nil, nil, err
 	}
-
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
-	bundledRoot := filepath.Join(cwd, appName, defaultSkillsDir)
+	bundledRoot := resolveBundledSkillsRoot(cwd, cfg.StateDir)
 	repo, err := ocskills.NewRepository(
 		roots,
 		ocskills.WithDebug(cfg.SkillsDebug),
@@ -1530,9 +2067,52 @@ func newAgent(
 		ocskills.WithSkillConfigs(cfg.SkillConfigs),
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	tools := append([]tool.Tool(nil), extraTools...)
+	if knowledgeTools != nil && len(knowledgeTools.tools) > 0 {
+		tools = append(tools, knowledgeTools.tools...)
+	}
+	tools = append(tools, ocskills.NewListTool(repo))
+	if len(cfg.ToolProviders) > 0 {
+		extra, err := toolsFromProviders(
+			mdl,
+			cfg.AppName,
+			cfg.StateDir,
+			cfg.ToolProviders,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		tools = append(tools, extra...)
+	}
+	if hasToolNamed(tools, ocbrowser.ToolName) {
+		instruction = strings.TrimSpace(
+			instruction + "\n\n" + browserToolingGuidance,
+		)
+	}
+
+	genConfig := model.GenerationConfig{Stream: true}
+	if cfg.GenerationConfig != nil {
+		genConfig = *cfg.GenerationConfig
+	}
+
+	opts := []llmagent.Option{
+		llmagent.WithModel(mdl),
+		llmagent.WithInstruction(instruction),
+		llmagent.WithGlobalInstruction(strings.TrimSpace(cfg.SystemPrompt)),
+		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
+		llmagent.WithEnableContextCompaction(cfg.EnableContextCompaction),
+		llmagent.WithContextCompactionOversizedToolResultMaxTokens(cfg.ContextCompactionOversizedToolResultMaxTokens),
+		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
+		llmagent.WithPreloadMemory(cfg.PreloadMemory),
+		llmagent.WithEventMessageProjector(
+			conversation.ProjectEventMessage,
+		),
+		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
+	}
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
 		opts,
@@ -1558,21 +2138,6 @@ func newAgent(
 			),
 		)
 	}
-
-	tools := append([]tool.Tool(nil), extraTools...)
-	tools = append(tools, ocskills.NewListTool(repo))
-	if len(cfg.ToolProviders) > 0 {
-		extra, err := toolsFromProviders(
-			mdl,
-			cfg.AppName,
-			cfg.StateDir,
-			cfg.ToolProviders,
-		)
-		if err != nil {
-			return nil, err
-		}
-		tools = append(tools, extra...)
-	}
 	if len(tools) > 0 {
 		opts = append(opts, llmagent.WithTools(tools))
 	}
@@ -1588,10 +2153,28 @@ func newAgent(
 	}
 
 	callbacks := tool.NewCallbacks()
+	registerMemoryFileToolCallback(
+		callbacks,
+		cfg.MemoryFileStore,
+		cfg.StateDir,
+	)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
 
-	return llmagent.New(defaultAgentName, opts...), nil
+	return llmagent.New(defaultAgentName, opts...), repo, nil
+}
+
+func hasToolNamed(tools []tool.Tool, name string) bool {
+	for i := range tools {
+		decl := tools[i].Declaration()
+		if decl == nil {
+			continue
+		}
+		if decl.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func toolsFromProviders(
@@ -1749,25 +2332,34 @@ func channelsFromRegistry(
 type agentConfig struct {
 	AppName string
 
-	AddSessionSummary bool
-	MaxHistoryRuns    int
-	PreloadMemory     int
-	Instruction       string
-	SystemPrompt      string
+	AddSessionSummary                             bool
+	EnableContextCompaction                       bool
+	ContextCompactionOversizedToolResultMaxTokens int
+	MaxHistoryRuns                                int
+	PreloadMemory                                 int
+	GenerationConfig                              *model.GenerationConfig
+	Instruction                                   string
+	SystemPrompt                                  string
 
-	SkillsRoot         string
-	SkillsExtraDirs    []string
-	SkillsDebug        bool
-	SkillsAllowBundled []string
-	SkillConfigs       map[string]ocskills.SkillConfig
-	SkillConfigKeys    []string
-	SkillsLoadMode     string
-	SkillsMaxLoaded    int
-	SkillsToolResults  bool
-	SkillsSkipFallback bool
-	SkillsToolingGuide *string
+	SkillsRoot          string
+	SkillsExtraDirs     []string
+	SkillsDebug         bool
+	SkillsAllowBundled  []string
+	SkillConfigs        map[string]ocskills.SkillConfig
+	SkillConfigKeys     []string
+	SkillsWatch         bool
+	SkillsWatchBundled  bool
+	SkillsWatchDebounce time.Duration
+	SkillsLoadMode      string
+	SkillsMaxLoaded     int
+	SkillsToolResults   bool
+	SkillsSkipFallback  bool
+	SkillsToolingGuide  *string
+	KnowledgesConfig    map[string]*yaml.Node
 
 	StateDir string
+
+	MemoryFileStore *memoryfile.Store
 
 	EnableLocalExec bool
 
@@ -1792,6 +2384,8 @@ type openClawToolsBundle struct {
 func buildOpenClawTools(
 	enabled bool,
 	stateDir string,
+	uploadStore *uploads.Store,
+	memoryFileStore *memoryfile.Store,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
@@ -1802,9 +2396,13 @@ func buildOpenClawTools(
 	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
-	var uploadStore *uploads.Store
-	if store, err := uploads.NewStore(stateDir); err == nil {
-		uploadStore = store
+	var depsReport *deps.Report
+	if sources, err := deps.SourcesForProfiles(deps.DefaultProfiles()); err ==
+		nil {
+		report, err := deps.InspectStartup(stateDir, sources)
+		if err == nil {
+			depsReport = &report
+		}
 	}
 	var depsReport *deps.Report
 	if sources, err := deps.SourcesForProfiles(deps.DefaultProfiles()); err ==
@@ -1815,6 +2413,14 @@ func buildOpenClawTools(
 		}
 	}
 
+	execTool := octool.NewExecCommandTool(mgr, uploadStore)
+	if memoryFileStore != nil {
+		execTool = octool.NewExecCommandToolWithMemoryFileStore(
+			mgr,
+			uploadStore,
+			memoryFileStore,
+		)
+	}
 	tools := []tool.Tool{
 		octool.NewReadDocumentTool(uploadStore),
 		octool.NewReadSpreadsheetTool(uploadStore),
@@ -1847,18 +2453,43 @@ func resolveSkillRoots(cwd string, cfg agentConfig) []string {
 		defaultSkillsDir,
 	)
 	managedSkills := filepath.Join(cfg.StateDir, defaultSkillsDir)
-	bundledSkills := filepath.Join(cwd, appName, defaultSkillsDir)
+	bundledSkills := resolveBundledSkillsRoot(cwd, cfg.StateDir)
 
 	roots := make([]string, 0, 6+len(cfg.SkillsExtraDirs))
 	roots = append(roots, workspaceSkills)
 	roots = append(roots, projectAgentsSkills)
 	roots = append(roots, personalAgentsSkills)
 	roots = append(roots, managedSkills)
-	if bundledSkills != workspaceSkills {
+	if bundledSkills != workspaceSkills &&
+		bundledSkills != managedSkills {
 		roots = append(roots, bundledSkills)
 	}
 	roots = append(roots, cfg.SkillsExtraDirs...)
 	return roots
+}
+
+func newSkillsWatchService(
+	cwd string,
+	cfg agentConfig,
+	repo *ocskills.Repository,
+) *ocskills.WatchService {
+	if repo == nil {
+		return nil
+	}
+
+	return ocskills.NewWatchService(
+		repo,
+		resolveSkillRoots(cwd, cfg),
+		ocskills.WatchConfig{
+			Enabled:      cfg.SkillsWatch,
+			Debounce:     cfg.SkillsWatchDebounce,
+			WatchBundled: cfg.SkillsWatchBundled,
+			BundledRoot: resolveBundledSkillsRoot(
+				cwd,
+				cfg.StateDir,
+			),
+		},
+	)
 }
 
 func resolveWorkspaceSkillsRoot(cwd, raw string) string {
@@ -1887,6 +2518,25 @@ func dirExists(path string) bool {
 	return st.IsDir()
 }
 
+func resolveBundledSkillsRoot(cwd, stateDir string) string {
+	installedBundled := filepath.Join(
+		stateDir,
+		defaultBundledSkillsDir,
+	)
+	if dirExists(installedBundled) {
+		return installedBundled
+	}
+
+	repoBundled := filepath.Join(cwd, appName, defaultSkillsDir)
+	if dirExists(repoBundled) {
+		return repoBundled
+	}
+	if strings.TrimSpace(stateDir) != "" {
+		return installedBundled
+	}
+	return repoBundled
+}
+
 func resolveStateDir(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 	if s != "" {
@@ -1896,7 +2546,7 @@ func resolveStateDir(raw string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".trpc-agent-go", appName), nil
+	return filepath.Join(home, ".trpc-agent-go-github", appName), nil
 }
 
 func maybeEnableDebugRecorder(
@@ -1942,13 +2592,43 @@ func newMockModel(_ registry.ModelSpec) (model.Model, error) {
 	return &echoModel{name: "mock-echo"}, nil
 }
 
+func recordDebugOpenAIChatRequestJSON(
+	ctx context.Context,
+	raw []byte,
+	marshalErr error,
+) {
+	if debugrecorder.TraceFromContext(ctx) == nil {
+		return
+	}
+
+	err := marshalErr
+	if err == nil && len(raw) > 0 {
+		var payload any
+		err = json.Unmarshal(raw, &payload)
+		if err == nil {
+			err = debugrecorder.RecordModelRequest(
+				ctx,
+				debugrecorder.ProviderOpenAIChatCompletions,
+				payload,
+			)
+		}
+	}
+	if err != nil {
+		log.Warnf(
+			"debug recorder failed to capture chat request: %v",
+			err,
+		)
+	}
+}
+
 func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	name := strings.TrimSpace(spec.Name)
 	if name == "" {
 		return nil, errors.New("openai model name is empty")
 	}
 
-	variant, err := parseOpenAIVariant(spec.OpenAIVariant, name)
+	baseURL := strings.TrimSpace(spec.BaseURL)
+	variant, err := parseOpenAIVariant(spec.OpenAIVariant, baseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -1957,7 +2637,14 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
 	}
-	baseURL := strings.TrimSpace(spec.BaseURL)
+	if spec.DebugRecorderEnabled {
+		opts = append(
+			opts,
+			openai.WithChatRequestJSONCallback(
+				recordDebugOpenAIChatRequestJSON,
+			),
+		)
+	}
 	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))
 	}
@@ -1981,22 +2668,23 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 	}
 
 	spec := registry.ModelSpec{
-		Type:          mode,
-		Name:          opts.OpenAIModel,
-		BaseURL:       baseURL,
-		OpenAIVariant: opts.OpenAIVariant,
-		Config:        opts.ModelConfig,
+		Type:                 mode,
+		Name:                 opts.OpenAIModel,
+		BaseURL:              baseURL,
+		OpenAIVariant:        opts.OpenAIVariant,
+		DebugRecorderEnabled: opts.DebugRecorderEnabled,
+		Config:               opts.ModelConfig,
 	}
 	return f(spec)
 }
 
 func parseOpenAIVariant(
 	raw string,
-	modelName string,
+	baseURL string,
 ) (openai.Variant, error) {
 	v := strings.ToLower(strings.TrimSpace(raw))
 	if v == "" || v == openAIVariantAuto {
-		return inferOpenAIVariant(modelName), nil
+		return inferOpenAIVariant(baseURL), nil
 	}
 
 	variant := openai.Variant(v)
@@ -2011,18 +2699,37 @@ func parseOpenAIVariant(
 	}
 }
 
-func inferOpenAIVariant(modelName string) openai.Variant {
-	name := strings.ToLower(strings.TrimSpace(modelName))
+func inferOpenAIVariant(baseURL string) openai.Variant {
+	host, ok := openAIBaseURLHost(baseURL)
+	if !ok {
+		return openai.VariantOpenAI
+	}
 	switch {
-	case strings.Contains(name, deepSeekModelHint):
+	case strings.EqualFold(host, deepSeekAPIHost):
 		return openai.VariantDeepSeek
-	case strings.Contains(name, qwenModelHint):
+	case strings.EqualFold(host, qwenAPIHost):
 		return openai.VariantQwen
-	case strings.Contains(name, hunyuanModelHint):
+	case strings.EqualFold(host, hunyuanAPIHost):
 		return openai.VariantHunyuan
 	default:
 		return openai.VariantOpenAI
 	}
+}
+
+func openAIBaseURLHost(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", false
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return "", false
+	}
+	return host, true
 }
 
 func splitCSV(input string) []string {

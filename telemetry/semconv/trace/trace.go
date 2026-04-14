@@ -64,6 +64,8 @@ const (
 	KeyGenAIOutputMessages = "gen_ai.output.messages"
 	// KeyGenAIAgentName is the attribute key for agent name.
 	KeyGenAIAgentName = "gen_ai.agent.name"
+	// KeyGenAIAgentID is the attribute key for agent ID.
+	KeyGenAIAgentID = "gen_ai.agent.id"
 	// KeyGenAIConversationID is the attribute key for conversation ID.
 	KeyGenAIConversationID = "gen_ai.conversation.id"
 	// KeyGenAIUsageOutputTokens is the attribute key for output token count.

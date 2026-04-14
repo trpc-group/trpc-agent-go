@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -87,6 +88,40 @@ func (e *errorEmbedder) GetDimensions() int {
 	return e.dimension
 }
 
+type mapEmbedder struct {
+	dimension  int
+	embeddings map[string][]float64
+}
+
+func (m *mapEmbedder) GetEmbedding(
+	ctx context.Context,
+	text string,
+) ([]float64, error) {
+	_ = ctx
+	if embedding, ok := m.embeddings[text]; ok {
+		out := make([]float64, len(embedding))
+		copy(out, embedding)
+		return out, nil
+	}
+	out := make([]float64, m.dimension)
+	if m.dimension > 0 {
+		out[0] = 1
+	}
+	return out, nil
+}
+
+func (m *mapEmbedder) GetEmbeddingWithUsage(
+	ctx context.Context,
+	text string,
+) ([]float64, map[string]any, error) {
+	emb, err := m.GetEmbedding(ctx, text)
+	return emb, nil, err
+}
+
+func (m *mapEmbedder) GetDimensions() int {
+	return m.dimension
+}
+
 func openTempSQLiteDB(t *testing.T) (*sql.DB, func()) {
 	t.Helper()
 
@@ -146,18 +181,227 @@ func TestService_CRUD_HardDelete(t *testing.T) {
 		UserID:   userKey.UserID,
 		MemoryID: got[0].ID,
 	}
+	updateResult := &memory.UpdateResult{}
 	require.NoError(t,
-		svc.UpdateMemory(ctx, memKey, "alpha", []string{"updated"}))
+		svc.UpdateMemory(ctx, memKey, "gamma", []string{"updated"}, memory.WithUpdateResult(updateResult)))
+	memKey.MemoryID = updateResult.MemoryID
 
-	results, err := svc.SearchMemories(ctx, userKey, "alpha")
+	results, err := svc.SearchMemories(ctx, userKey, "gamma")
 	require.NoError(t, err)
 	require.NotEmpty(t, results)
-	require.Equal(t, "alpha", results[0].Memory.Memory)
+	require.Equal(t, "gamma", results[0].Memory.Memory)
 
 	require.NoError(t, svc.DeleteMemory(ctx, memKey))
 	got, err = svc.ReadMemories(ctx, userKey, 0)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
+}
+
+func TestService_EpisodicMetadataRoundTrip(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	eventTime := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha",
+		[]string{"travel"},
+		memory.WithMetadata(&memory.Metadata{
+			Kind:         memory.KindEpisode,
+			EventTime:    &eventTime,
+			Participants: []string{"Alice", "Bob"},
+			Location:     "Kyoto",
+		}),
+	))
+
+	got, err := svc.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.NotNil(t, got[0].Memory)
+	require.NotNil(t, got[0].Memory.EventTime)
+	require.Equal(t, memory.KindEpisode, got[0].Memory.Kind)
+	require.Equal(t, eventTime, *got[0].Memory.EventTime)
+	require.Equal(t, []string{"Alice", "Bob"}, got[0].Memory.Participants)
+	require.Equal(t, "Kyoto", got[0].Memory.Location)
+}
+
+func TestService_UpdateMemory_PreservesMetadataWhenNotProvided(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	eventTime := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind:         memory.KindEpisode,
+			EventTime:    &eventTime,
+			Participants: []string{"Alice"},
+			Location:     "Kyoto",
+		}),
+	))
+
+	got, err := svc.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	memKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: got[0].ID,
+	}
+	require.NoError(t, svc.UpdateMemory(ctx, memKey, "alpha", []string{"updated"}))
+
+	got, err = svc.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, memory.KindEpisode, got[0].Memory.Kind)
+	require.NotNil(t, got[0].Memory.EventTime)
+	require.Equal(t, eventTime, *got[0].Memory.EventTime)
+	require.Equal(t, []string{"Alice"}, got[0].Memory.Participants)
+	require.Equal(t, "Kyoto", got[0].Memory.Location)
+	require.Equal(t, []string{"updated"}, got[0].Memory.Topics)
+}
+
+func TestService_UpdateMemory_SameIdentityKeepsID(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", []string{"old"}))
+
+	got, err := svc.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	oldID := got[0].ID
+	memKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: oldID,
+	}
+	updateResult := &memory.UpdateResult{}
+	require.NoError(t, svc.UpdateMemory(
+		ctx,
+		memKey,
+		"alpha",
+		[]string{"new"},
+		memory.WithUpdateResult(updateResult),
+	))
+	require.Equal(t, oldID, updateResult.MemoryID)
+
+	got, err = svc.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, oldID, got[0].ID)
+	require.Equal(t, []string{"new"}, got[0].Memory.Topics)
+}
+
+func TestService_Search_WithEpisodicOptions(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+		WithMaxResults(10),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	day1 := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	day2 := time.Date(2024, 5, 2, 0, 0, 0, 0, time.UTC)
+
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind:      memory.KindEpisode,
+			EventTime: &day2,
+		}),
+	))
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha older",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind:      memory.KindEpisode,
+			EventTime: &day1,
+		}),
+	))
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha fact",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind: memory.KindFact,
+		}),
+	))
+
+	results, err := svc.SearchMemories(
+		ctx,
+		userKey,
+		"alpha",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:            "alpha",
+			Kind:             memory.KindEpisode,
+			TimeAfter:        &day1,
+			OrderByEventTime: true,
+			KindFallback:     true,
+			MaxResults:       10,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+	require.Equal(t, memory.KindEpisode, results[0].Memory.Kind)
+	require.NotNil(t, results[0].Memory.EventTime)
+	require.Equal(t, day1, *results[0].Memory.EventTime)
+	require.Equal(t, memory.KindEpisode, results[1].Memory.Kind)
+	require.NotNil(t, results[1].Memory.EventTime)
+	require.Equal(t, day2, *results[1].Memory.EventTime)
+	require.Equal(t, memory.KindFact, results[2].Memory.Kind)
 }
 
 func TestService_SoftDelete_ResurrectOnAdd(t *testing.T) {
@@ -241,6 +485,180 @@ func TestService_Search_EmptyQuery(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Empty(t, results)
+}
+
+func TestService_SearchMemories_HybridSearchUsesRRF(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mapEmbedder{
+			dimension: 2,
+			embeddings: map[string][]float64{
+				"alpha":           {1, 0},
+				"vector favorite": {1, 0},
+				"alpha lexical":   {0.6, 0.8},
+			},
+		}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(ctx, userKey, "vector favorite", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha lexical", nil))
+
+	results, err := svc.SearchMemories(
+		ctx,
+		userKey,
+		"alpha",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:        "alpha",
+			HybridSearch: true,
+			MaxResults:   2,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	require.Equal(t, "alpha lexical", results[0].Memory.Memory)
+	require.Equal(t, "vector favorite", results[1].Memory.Memory)
+	require.Greater(t, results[0].Score, results[1].Score)
+}
+
+func TestService_SearchMemories_OrderByEventTimeKeepsHigherSimilarityFirst(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mapEmbedder{
+			dimension: 2,
+			embeddings: map[string][]float64{
+				"alpha":       {1, 0},
+				"alpha high":  {1, 0},
+				"alpha lower": {0.6, 0.8},
+			},
+		}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	day1 := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	day2 := day1.Add(24 * time.Hour)
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha lower",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind:      memory.KindEpisode,
+			EventTime: &day1,
+		}),
+	))
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"alpha high",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind:      memory.KindEpisode,
+			EventTime: &day2,
+		}),
+	))
+
+	results, err := svc.SearchMemories(
+		ctx,
+		userKey,
+		"alpha",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:            "alpha",
+			OrderByEventTime: true,
+			MaxResults:       10,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	require.Equal(t, "alpha high", results[0].Memory.Memory)
+	require.Equal(t, "alpha lower", results[1].Memory.Memory)
+	require.Greater(t, results[0].Score, results[1].Score)
+}
+
+func TestService_SearchMemories_KindFallbackKeepsRequestedKindFirst(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mapEmbedder{
+			dimension: 2,
+			embeddings: map[string][]float64{
+				"alpha":            {1, 0},
+				"episode primary":  {0.6, 0.8},
+				"episode fallback": {0.7, 0.7},
+				"fact fallback":    {1, 0},
+			},
+		}),
+		WithIndexDimension(2),
+		WithMaxResults(10),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"episode primary",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind: memory.KindEpisode,
+		}),
+	))
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"episode fallback",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind: memory.KindEpisode,
+		}),
+	))
+	require.NoError(t, svc.AddMemory(
+		ctx,
+		userKey,
+		"fact fallback",
+		nil,
+		memory.WithMetadata(&memory.Metadata{
+			Kind: memory.KindFact,
+		}),
+	))
+
+	results, err := svc.SearchMemories(
+		ctx,
+		userKey,
+		"alpha",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:        "alpha",
+			Kind:         memory.KindEpisode,
+			KindFallback: true,
+			MaxResults:   10,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 3)
+	require.Equal(t, memory.KindEpisode, results[0].Memory.Kind)
+	require.Equal(t, "episode fallback", results[0].Memory.Memory)
+	require.Equal(t, memory.KindEpisode, results[1].Memory.Kind)
+	require.Equal(t, "episode primary", results[1].Memory.Memory)
+	require.Equal(t, memory.KindFact, results[2].Memory.Kind)
+	require.Equal(t, "fact fallback", results[2].Memory.Memory)
 }
 
 func TestService_Search_SoftDeleteFiltered(t *testing.T) {
@@ -563,6 +981,437 @@ func TestService_Tools_EnqueueAutoMemoryJob(t *testing.T) {
 	require.NoError(t, svc.EnqueueAutoMemoryJob(context.Background(), nil))
 }
 
+func TestEnsureSchemaColumns(t *testing.T) {
+	t.Run("accepts table with all episodic columns", func(t *testing.T) {
+		db, cleanup := openTempSQLiteDB(t)
+		defer cleanup()
+
+		_, err := db.Exec(`
+CREATE TABLE memories (
+  memory_id TEXT,
+  embedding BLOB,
+  app_name TEXT,
+  user_id TEXT,
+  created_at INTEGER,
+  updated_at INTEGER,
+  deleted_at INTEGER,
+  memory_content TEXT,
+  topics TEXT,
+  memory_kind TEXT,
+  event_time INTEGER,
+  participants TEXT,
+  location TEXT
+)`)
+		require.NoError(t, err)
+
+		svc := &Service{db: db, tableName: "memories"}
+		require.NoError(t, svc.ensureSchemaColumns(context.Background()))
+	})
+
+	t.Run("rejects outdated table with missing episodic columns", func(t *testing.T) {
+		db, cleanup := openTempSQLiteDB(t)
+		defer cleanup()
+
+		_, err := db.Exec(`
+CREATE TABLE memories (
+  memory_id TEXT,
+  embedding BLOB,
+  app_name TEXT,
+  user_id TEXT,
+  created_at INTEGER,
+  updated_at INTEGER,
+  deleted_at INTEGER,
+  memory_content TEXT,
+  topics TEXT
+)`)
+		require.NoError(t, err)
+
+		svc := &Service{db: db, tableName: "memories"}
+		err = svc.ensureSchemaColumns(context.Background())
+		require.Error(t, err)
+		require.ErrorContains(t, err, "outdated schema")
+		require.ErrorContains(t, err, "event_time")
+		require.ErrorContains(t, err, "location")
+		require.ErrorContains(t, err, "memory_kind")
+		require.ErrorContains(t, err, "participants")
+	})
+}
+
+func TestNewService_MigratesLegacySchema(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	vecAuto()
+	createLegacyMemoriesTable(t, db)
+	insertLegacyMemoryRow(t, db, "memories", "m1")
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	entries, err := svc.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "m1", entries[0].ID)
+	require.Equal(t, "alpha", entries[0].Memory.Memory)
+	require.Equal(t, []string{"pref"}, entries[0].Memory.Topics)
+	require.Equal(t, memory.KindFact, entries[0].Memory.Kind)
+	require.Nil(t, entries[0].Memory.EventTime)
+	require.Empty(t, entries[0].Memory.Participants)
+	require.Empty(t, entries[0].Memory.Location)
+	require.NoError(t, svc.ensureSchemaColumns(context.Background()))
+	require.False(
+		t,
+		sqliteTableExists(
+			t,
+			db,
+			"memories"+schemaBackupName,
+		),
+	)
+}
+
+func TestNewService_RestoresSchemaBackup(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	vecAuto()
+	createSchemaBackupTable(t, db, "memories"+schemaBackupName)
+	insertSchemaBackupRow(t, db, "memories"+schemaBackupName, "m1")
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	entries, err := svc.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "m1", entries[0].ID)
+	require.Equal(t, "alpha", entries[0].Memory.Memory)
+	require.Equal(t, []string{"pref"}, entries[0].Memory.Topics)
+	require.Equal(t, memory.KindFact, entries[0].Memory.Kind)
+	require.False(
+		t,
+		sqliteTableExists(
+			t,
+			db,
+			"memories"+schemaBackupName,
+		),
+	)
+}
+
+func TestNewService_RestoresSchemaBackupOverExistingTable(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	vecAuto()
+	createCurrentMemoriesTable(t, db)
+	createSchemaBackupTable(t, db, "memories"+schemaBackupName)
+	insertSchemaBackupRow(t, db, "memories"+schemaBackupName, "m1")
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	entries, err := svc.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u1"},
+		10,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "m1", entries[0].ID)
+	require.Equal(t, "alpha", entries[0].Memory.Memory)
+	require.False(
+		t,
+		sqliteTableExists(
+			t,
+			db,
+			"memories"+schemaBackupName,
+		),
+	)
+}
+
+func createLegacyMemoriesTable(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	_, err := db.Exec(`
+CREATE VIRTUAL TABLE memories USING vec0(
+  memory_id text primary key,
+  embedding float[2] distance_metric=cosine,
+  app_name text,
+  user_id text,
+  created_at integer,
+  updated_at integer,
+  deleted_at integer,
+  +memory_content text,
+  +topics text
+)`)
+	require.NoError(t, err)
+}
+
+func createCurrentMemoriesTable(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	_, err := db.Exec(`
+CREATE VIRTUAL TABLE memories USING vec0(
+  memory_id text primary key,
+  embedding float[2] distance_metric=cosine,
+  app_name text,
+  user_id text,
+  created_at integer,
+  updated_at integer,
+  deleted_at integer,
+  +memory_content text,
+  +topics text,
+  +memory_kind text,
+  +event_time integer,
+  +participants text,
+  +location text
+)`)
+	require.NoError(t, err)
+}
+
+func insertLegacyMemoryRow(
+	t *testing.T,
+	db *sql.DB,
+	tableName string,
+	memoryID string,
+) {
+	t.Helper()
+
+	blob, err := vecSerializeFloat32([]float32{1, 0})
+	require.NoError(t, err)
+
+	query := fmt.Sprintf(
+		`INSERT INTO %s (
+memory_id, embedding, app_name, user_id,
+created_at, updated_at, deleted_at,
+memory_content, topics
+) VALUES (?, vec_f32(?), ?, ?, ?, ?, ?, ?, ?)`,
+		tableName,
+	)
+	_, err = db.Exec(
+		query,
+		memoryID,
+		blob,
+		"app",
+		"u1",
+		int64(1),
+		int64(2),
+		int64(0),
+		"alpha",
+		`["pref"]`,
+	)
+	require.NoError(t, err)
+}
+
+func createSchemaBackupTable(
+	t *testing.T,
+	db *sql.DB,
+	tableName string,
+) {
+	t.Helper()
+
+	_, err := db.Exec(fmt.Sprintf(sqlCreateSchemaBackupTable, tableName))
+	require.NoError(t, err)
+}
+
+func insertSchemaBackupRow(
+	t *testing.T,
+	db *sql.DB,
+	tableName string,
+	memoryID string,
+) {
+	t.Helper()
+
+	blob, err := vecSerializeFloat32([]float32{1, 0})
+	require.NoError(t, err)
+
+	query := fmt.Sprintf(
+		`INSERT INTO %s (
+memory_id, embedding, app_name, user_id,
+created_at, updated_at, deleted_at,
+memory_content, topics, memory_kind,
+event_time, participants, location
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		tableName,
+	)
+	_, err = db.Exec(
+		query,
+		memoryID,
+		blob,
+		"app",
+		"u1",
+		int64(1),
+		int64(2),
+		int64(0),
+		"alpha",
+		`["pref"]`,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+}
+
+func sqliteTableExists(t *testing.T, db *sql.DB, tableName string) bool {
+	t.Helper()
+
+	var count int
+	err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master
+WHERE type IN ('table', 'view') AND name = ?`,
+		tableName,
+	).Scan(&count)
+	require.NoError(t, err)
+	return count > 0
+}
+
+func TestSearchHelperFunctions(t *testing.T) {
+	day1 := time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)
+	day2 := time.Date(2024, 5, 2, 0, 0, 0, 0, time.UTC)
+	results := []*memory.Entry{
+		nil,
+		{Memory: nil},
+		{
+			ID: "episode-1",
+			Memory: &memory.Memory{
+				Kind:      memory.KindEpisode,
+				EventTime: &day1,
+			},
+		},
+		{
+			ID: "episode-2",
+			Memory: &memory.Memory{
+				Kind:      memory.KindEpisode,
+				EventTime: &day2,
+			},
+		},
+		{
+			ID: "fact",
+			Memory: &memory.Memory{
+				Kind: memory.KindFact,
+			},
+		},
+	}
+
+	filtered := applySearchFilters(results, memory.SearchOptions{
+		Kind:      memory.KindEpisode,
+		TimeAfter: &day2,
+	})
+	require.Len(t, filtered, 1)
+	require.Equal(t, "episode-2", filtered[0].ID)
+
+	require.Equal(t, 5, resolveSearchLimit(5, 0))
+	require.Equal(t, 7, resolveSearchLimit(5, 7))
+	require.Equal(t, 9, resolveSearchCandidateLimit(5, 0, 9, memory.SearchOptions{
+		Kind: memory.KindEpisode,
+	}))
+	require.Equal(t, 7, resolveSearchCandidateLimit(5, 7, 9, memory.SearchOptions{}))
+	require.Nil(t, metadataEventTimeNS(nil))
+	require.Equal(t, day1.UnixNano(), metadataEventTimeNS(&day1))
+	require.Nil(t, metadataLocationValue("   "))
+	require.Equal(t, "Kyoto", metadataLocationValue(" Kyoto "))
+}
+
+func TestScanEntryAndStringSliceHelpers(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	rows, err := db.Query(
+		`SELECT 'id', 'alpha', '["topic"]', '', NULL, '[" Bob ","bob"]', ' Kyoto ', 0, 0`,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+	require.True(t, rows.Next())
+
+	entry, err := scanEntry(rows, "app", "user")
+	require.NoError(t, err)
+	require.Equal(t, memory.KindFact, entry.Memory.Kind)
+	require.Equal(t, []string{"Bob"}, entry.Memory.Participants)
+	require.Equal(t, "Kyoto", entry.Memory.Location)
+
+	rows, err = db.Query(
+		`SELECT 'id', 'alpha', '["topic"]', '', NULL, 'not-json', 'Kyoto', 0, 0`,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+	require.True(t, rows.Next())
+
+	_, err = scanEntry(rows, "app", "user")
+	require.Error(t, err)
+	require.ErrorContains(t, err, "unmarshal string slice")
+
+	encoded, err := marshalStringSlice([]string{"Alice"})
+	require.NoError(t, err)
+	require.Equal(t, `["Alice"]`, encoded)
+
+	decoded, err := parseStringSlice(encoded)
+	require.NoError(t, err)
+	require.Equal(t, []string{"Alice"}, decoded)
+
+	decoded, err = parseTopics("")
+	require.NoError(t, err)
+	require.Nil(t, decoded)
+}
+
+func TestServiceResolveSearchCandidateLimit_CountsStoredMemories(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+		WithMaxResults(1),
+		WithMemoryLimit(10),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "beta", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "gamma", nil))
+
+	limit, err := svc.resolveSearchCandidateLimit(ctx, userKey, memory.SearchOptions{})
+	require.NoError(t, err)
+	require.Equal(t, 1, limit)
+
+	count, err := svc.countMemories(ctx, userKey)
+	require.NoError(t, err)
+	require.Equal(t, 3, count)
+
+	limit, err = svc.resolveSearchCandidateLimit(ctx, userKey, memory.SearchOptions{
+		Kind: memory.KindEpisode,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 10, limit)
+}
+
 func TestWithTableName_InvalidPanics(t *testing.T) {
 	require.Panics(t, func() {
 		opt := WithTableName("bad-name")
@@ -669,6 +1518,8 @@ func TestServiceOpts_Coverage(t *testing.T) {
 	require.True(t, ok)
 	_, ok = opts.enabledTools[memory.ClearToolName]
 	require.True(t, ok)
+	_, ok = opts.userExplicitlySet[memory.ClearToolName]
+	require.True(t, ok)
 
 	WithCustomTool("bad_tool", func() tool.Tool { return nil })(&opts)
 	WithCustomTool(memory.ClearToolName, nil)(&opts)
@@ -677,14 +1528,31 @@ func TestServiceOpts_Coverage(t *testing.T) {
 	WithToolEnabled(memory.LoadToolName, true)(&opts2)
 	_, ok = opts2.enabledTools[memory.LoadToolName]
 	require.True(t, ok)
-	require.True(t, opts2.userExplicitlySet[memory.LoadToolName])
+	_, ok = opts2.userExplicitlySet[memory.LoadToolName]
+	require.True(t, ok)
 
 	WithToolEnabled(memory.LoadToolName, false)(&opts2)
 	_, ok = opts2.enabledTools[memory.LoadToolName]
 	require.False(t, ok)
-	require.True(t, opts2.userExplicitlySet[memory.LoadToolName])
+	_, ok = opts2.userExplicitlySet[memory.LoadToolName]
+	require.True(t, ok)
 
 	WithToolEnabled("bad_tool", true)(&opts2)
+	WithAutoMemoryExposedTools(memory.AddToolName)(&opts2)
+	_, ok = opts2.toolExposed[memory.AddToolName]
+	require.True(t, ok)
+	_, ok = opts2.toolHidden[memory.AddToolName]
+	require.False(t, ok)
+
+	WithToolExposed(memory.AddToolName, false)(&opts2)
+	_, ok = opts2.toolExposed[memory.AddToolName]
+	require.False(t, ok)
+	_, ok = opts2.toolHidden[memory.AddToolName]
+	require.True(t, ok)
+
+	WithAutoMemoryExposedTools("bad_tool")(&opts2)
+	_, ok = opts2.toolExposed["bad_tool"]
+	require.False(t, ok)
 }
 
 func TestNewService_SkipDBInit(t *testing.T) {

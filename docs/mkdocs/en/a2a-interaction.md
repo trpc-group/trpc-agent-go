@@ -260,7 +260,12 @@ sequenceDiagram
 
 ### Client-Side Filtering Rules
 
-- `TaskStatusUpdateEvent` (submitted/completed): Task lifecycle signals, no user content
+- `TaskStatusUpdateEvent` (submitted/completed): task lifecycle signals, no
+  user content
+- `TaskStatusUpdateEvent` (failed/rejected/canceled) with structured error
+  metadata: terminal failure. Read outer metadata first for machine branching,
+  treat `status.message.metadata` as the `0.1` compatibility mirror, and use
+  `status.message.parts` only for display text.
 - `TaskArtifactUpdateEvent` with `lastChunk=true`: Stream end signal or aggregated result
 
 ### Role of `llm_response_id`
@@ -294,6 +299,7 @@ A single Message can contain both reasoning content and formal reply as two Text
 | ---------------- | --------------- | -------------------------------------------------- |
 | HTTP Header      | `X-User-ID`    | User identifier (primary source)                   |
 | HTTP Header      | `traceparent`  | W3C Trace Context (auto-injected by OpenTelemetry) |
+| Message.Metadata | `interaction_spec_version` | Interaction specification version supported by the Client, used for capability negotiation |
 | Message.Metadata | `invocation_id`| Client-side invocation ID for trace correlation    |
 | Message.Metadata | `user_id`      | User identifier (supplementary)                    |
 
@@ -337,6 +343,7 @@ traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
         { "kind": "text", "text": "What's the weather in Beijing?" }
       ],
       "metadata": {
+        "interaction_spec_version": "0.1",
         "invocation_id": "inv-001",
         "user_id": "user_12345"
       }
@@ -443,6 +450,7 @@ Accept: text/event-stream
         { "kind": "text", "text": "What's the weather in Beijing?" }
       ],
       "metadata": {
+        "interaction_spec_version": "0.1",
         "invocation_id": "inv-002",
         "user_id": "user_12345"
       }

@@ -21,20 +21,23 @@ import (
 
 func TestToolTrajectoryCriterionJSONRoundTrip(t *testing.T) {
 	criterion := &ToolTrajectoryCriterion{
+		CompareName: "match_tools",
 		DefaultStrategy: &ToolTrajectoryStrategy{
 			Name: &text.TextCriterion{
 				Ignore:          true,
 				CaseInsensitive: true,
 				MatchStrategy:   text.TextMatchStrategyExact,
+				CompareName:     "case_fold_equal",
 			},
-			Arguments: &criterionjson.JSONCriterion{},
-			Result:    &criterionjson.JSONCriterion{},
+			Arguments: &criterionjson.JSONCriterion{CompareName: "args_equal"},
+			Result:    &criterionjson.JSONCriterion{CompareName: "result_equal"},
 		},
 		ToolStrategy: map[string]*ToolTrajectoryStrategy{
 			"foo": {
 				Name: &text.TextCriterion{
 					Ignore:        true,
 					MatchStrategy: text.TextMatchStrategyContains,
+					CompareName:   "contains_ignore_case",
 				},
 			},
 		},
@@ -44,13 +47,14 @@ func TestToolTrajectoryCriterionJSONRoundTrip(t *testing.T) {
 	data, err := json.Marshal(criterion)
 	assert.NoError(t, err)
 	assert.JSONEq(t, `{
+		"compareName":"match_tools",
 		"defaultStrategy":{
-			"name":{"ignore":true,"caseInsensitive":true,"matchStrategy":"exact"},
-			"arguments":{},
-			"result":{}
+			"name":{"ignore":true,"caseInsensitive":true,"matchStrategy":"exact","compareName":"case_fold_equal"},
+			"arguments":{"compareName":"args_equal"},
+			"result":{"compareName":"result_equal"}
 		},
 		"toolStrategy":{
-			"foo":{"name":{"ignore":true,"matchStrategy":"contains"}}
+			"foo":{"name":{"ignore":true,"matchStrategy":"contains","compareName":"contains_ignore_case"}}
 		},
 		"orderSensitive":true,
 		"subsetMatching":true
@@ -60,11 +64,16 @@ func TestToolTrajectoryCriterionJSONRoundTrip(t *testing.T) {
 	assert.NoError(t, json.Unmarshal(data, &decoded))
 	assert.True(t, decoded.OrderSensitive)
 	assert.True(t, decoded.SubsetMatching)
+	assert.Equal(t, "match_tools", decoded.CompareName)
 	assert.Equal(t, text.TextMatchStrategyExact, decoded.DefaultStrategy.Name.MatchStrategy)
 	assert.True(t, decoded.DefaultStrategy.Name.Ignore)
 	assert.True(t, decoded.DefaultStrategy.Name.CaseInsensitive)
+	assert.Equal(t, "case_fold_equal", decoded.DefaultStrategy.Name.CompareName)
+	assert.Equal(t, "args_equal", decoded.DefaultStrategy.Arguments.CompareName)
+	assert.Equal(t, "result_equal", decoded.DefaultStrategy.Result.CompareName)
 	assert.Equal(t, text.TextMatchStrategyContains, decoded.ToolStrategy["foo"].Name.MatchStrategy)
 	assert.True(t, decoded.ToolStrategy["foo"].Name.Ignore)
+	assert.Equal(t, "contains_ignore_case", decoded.ToolStrategy["foo"].Name.CompareName)
 }
 
 func TestToolTrajectoryStrategyJSONRoundTrip(t *testing.T) {

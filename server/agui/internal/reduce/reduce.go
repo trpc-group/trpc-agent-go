@@ -63,6 +63,7 @@ type reasoningState struct {
 	content strings.Builder
 	phase   reasoningPhase
 	index   int
+	started bool
 }
 
 // toolPhase is the phase of the tool call.
@@ -97,7 +98,11 @@ func Reduce(appName, userID string, events []session.TrackEvent) ([]aguievents.M
 	r.finalizePartial()
 	messages := make([]aguievents.Message, 0, len(r.messages))
 	for _, message := range r.messages {
-		messages = append(messages, *message)
+		sanitized := r.sanitizeSnapshotMessage(message)
+		if sanitized == nil {
+			continue
+		}
+		messages = append(messages, *sanitized)
 	}
 	// In order to fetch the history messages as much as possible, still return the messages even if there is an error.
 	return messages, err
@@ -233,6 +238,26 @@ func (r *reducer) finalizePartial() {
 	}
 }
 
+func (r *reducer) sanitizeSnapshotMessage(message *aguievents.Message) *aguievents.Message {
+	if message == nil {
+		return nil
+	}
+	if message.Role != types.RoleReasoning {
+		return message
+	}
+	if _, ok := message.ContentString(); ok {
+		return message
+	}
+	state, ok := r.reasonings[message.ID]
+	if message.EncryptedValue == "" && (!ok || state.phase != reasoningReceiving || !state.started) {
+		return nil
+	}
+	cloned := *message
+	empty := ""
+	cloned.Content = &empty
+	return &cloned
+}
+
 // handleTextStart handles the text message start event.
 func (r *reducer) handleTextStart(e *aguievents.TextMessageStartEvent) error {
 	if e.MessageID == "" {
@@ -361,10 +386,11 @@ func (r *reducer) handleReasoningMessageStart(e *aguievents.ReasoningMessageStar
 	}
 	r.messages = append(r.messages, msg)
 	r.reasonings[e.MessageID] = &reasoningState{
-		role:  role,
-		name:  name,
-		phase: reasoningReceiving,
-		index: len(r.messages) - 1,
+		role:    role,
+		name:    name,
+		phase:   reasoningReceiving,
+		index:   len(r.messages) - 1,
+		started: true,
 	}
 	return nil
 }

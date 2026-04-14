@@ -79,7 +79,7 @@ func TestOpenClawToolResultMessages_AttachesOutputImagePaths(t *testing.T) {
 		&tool.ToolResultMessagesInput{
 			DefaultToolMessage: defaultMsg,
 			Result: map[string]any{
-				"output": path + "\n",
+				"output": toolResultMediaLineFile + " " + path + "\n",
 			},
 		},
 	)
@@ -132,9 +132,7 @@ func TestOpenClawToolResultMessages_RecordsTraceEvent(t *testing.T) {
 		debugrecorder.TraceEnd{Status: "ok"},
 	))
 
-	data, err := os.ReadFile(
-		filepath.Join(trace.Dir(), "events.jsonl"),
-	)
+	data, err := debugrecorder.ReadEventsFile(trace.Dir())
 	require.NoError(t, err)
 	require.Contains(t, string(data), toolResultImagesTraceKind)
 	require.Contains(t, string(data), "frame.png")
@@ -290,9 +288,8 @@ func TestToolResultPathHelpers(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, path, got)
 
-	got, ok = toolResultPathFromLine(path)
-	require.True(t, ok)
-	require.Equal(t, path, got)
+	_, ok = toolResultPathFromLine(path)
+	require.False(t, ok)
 
 	_, ok = toolResultPathFromLine("MEDIA: relative.png")
 	require.False(t, ok)
@@ -325,6 +322,36 @@ func TestToolResultPathHelpers(t *testing.T) {
 			{Name: "two.jpg"},
 		}),
 	)
+}
+
+func TestOpenClawToolResultMessages_IgnoresBareDirectoryOutput(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := writeTestFile(t, root, "frame.png", []byte("png"))
+	defaultMsg := model.Message{
+		Role:    model.RoleTool,
+		ToolID:  "tool-1",
+		Content: "{}",
+	}
+
+	got, err := openClawToolResultMessages(
+		context.Background(),
+		&tool.ToolResultMessagesInput{
+			DefaultToolMessage: defaultMsg,
+			Result: map[string]any{
+				"output": root + "\n",
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Nil(t, got)
+
+	paths := toolResultOutputPaths(root + "\n")
+	require.Nil(t, paths)
+	require.FileExists(t, path)
 }
 
 func writeTestImage(t *testing.T, name string) string {

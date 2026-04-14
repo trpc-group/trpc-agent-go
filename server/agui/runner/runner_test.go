@@ -23,14 +23,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	toolcallidplugin "trpc.group/trpc-go/trpc-agent-go/plugin/toolcallid"
+	baserunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 func TestNew(t *testing.T) {
@@ -48,7 +53,7 @@ func TestNew(t *testing.T) {
 	assert.NoError(t, err)
 	assert.IsType(t, expected, trans)
 	assert.NotNil(t, runner.runOptionResolver)
-
+	assert.False(t, runner.toolResultInputTranslationEnabled)
 	userID, err := runner.userIDResolver(context.Background(),
 		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"})
 	assert.NoError(t, err)
@@ -99,6 +104,79 @@ func TestRunEmitsGraphNodeStartActivityWhenEnabled(t *testing.T) {
 		}
 	}
 	assert.True(t, found)
+}
+
+func TestRunEmitsCanonicalAgentNodeLifecycleWhenEmitterMetadataPresent(t *testing.T) {
+	startTime := time.Unix(1710000000, 0)
+	endTime := startTime.Add(2 * time.Second)
+
+	agentEvents := make(chan *agentevent.Event, 4)
+	agentEvents <- graph.NewNodeStartEvent(
+		graph.WithNodeEventInvocationID("inv-1"),
+		graph.WithNodeEventNodeID("agent-node-1"),
+		graph.WithNodeEventNodeType(graph.NodeTypeAgent),
+		graph.WithNodeEventEmitter(graph.NodeEventEmitterAgentHelper),
+		graph.WithNodeEventStartTime(startTime),
+	)
+	agentEvents <- graph.NewNodeStartEvent(
+		graph.WithNodeEventInvocationID("inv-1"),
+		graph.WithNodeEventNodeID("agent-node-1"),
+		graph.WithNodeEventNodeType(graph.NodeTypeAgent),
+		graph.WithNodeEventEmitter(graph.NodeEventEmitterExecutor),
+		graph.WithNodeEventAttempt(1),
+		graph.WithNodeEventStartTime(startTime),
+	)
+	agentEvents <- graph.NewNodeCompleteEvent(
+		graph.WithNodeEventInvocationID("inv-1"),
+		graph.WithNodeEventNodeID("agent-node-1"),
+		graph.WithNodeEventNodeType(graph.NodeTypeAgent),
+		graph.WithNodeEventEmitter(graph.NodeEventEmitterAgentHelper),
+		graph.WithNodeEventStartTime(startTime),
+		graph.WithNodeEventEndTime(endTime),
+	)
+	agentEvents <- graph.NewNodeCompleteEvent(
+		graph.WithNodeEventInvocationID("inv-1"),
+		graph.WithNodeEventNodeID("agent-node-1"),
+		graph.WithNodeEventNodeType(graph.NodeTypeAgent),
+		graph.WithNodeEventEmitter(graph.NodeEventEmitterExecutor),
+		graph.WithNodeEventStepNumber(1),
+		graph.WithNodeEventStartTime(startTime),
+		graph.WithNodeEventEndTime(endTime),
+	)
+	close(agentEvents)
+
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+
+	r := New(underlying, WithGraphNodeLifecycleActivityEnabled(true))
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+
+	evts := collectEvents(t, eventsCh)
+	var phases []string
+	for _, evt := range evts {
+		delta, ok := evt.(*aguievents.ActivityDeltaEvent)
+		if !ok || delta.ActivityType != "graph.node.lifecycle" || len(delta.Patch) == 0 {
+			continue
+		}
+		raw, err := json.Marshal(delta.Patch[0].Value)
+		require.NoError(t, err)
+		var patchValue map[string]any
+		require.NoError(t, json.Unmarshal(raw, &patchValue))
+		phase, _ := patchValue["phase"].(string)
+		phases = append(phases, phase)
+	}
+
+	require.Equal(t, []string{"start", "complete"}, phases)
 }
 
 func TestRunEmitsGraphNodeInterruptActivityWhenEnabled(t *testing.T) {
@@ -450,7 +528,9 @@ func TestRunIgnoresRequestCancelButRespectsBackendTimeout(t *testing.T) {
 		return errors.Is(runCtx.Err(), context.DeadlineExceeded)
 	}, time.Second, 5*time.Millisecond)
 
-	_ = collectEvents(t, eventsCh)
+	evts := collectEvents(t, eventsCh)
+	assert.False(t, hasRunFinishedEvent(evts))
+	assert.True(t, hasRunErrorEvent(evts))
 }
 
 func TestRunCancelsOnRequestCancelWhenEnabled(t *testing.T) {
@@ -503,7 +583,9 @@ func TestRunCancelsOnRequestCancelWhenEnabled(t *testing.T) {
 		return errors.Is(runCtx.Err(), context.Canceled)
 	}, time.Second, 5*time.Millisecond)
 
-	_ = collectEvents(t, eventsCh)
+	evts := collectEvents(t, eventsCh)
+	assert.False(t, hasRunFinishedEvent(evts))
+	assert.True(t, hasRunErrorEvent(evts))
 }
 
 func TestRunTimeoutUsesMinRequestDeadlineAndBackendTimeout(t *testing.T) {
@@ -742,7 +824,6 @@ func TestRunToolMessageRecordedInTrackAndForwarded(t *testing.T) {
 			},
 		},
 	}
-
 	eventsCh, err := r.Run(context.Background(), input)
 	require.NoError(t, err)
 	evts := collectEvents(t, eventsCh)
@@ -806,6 +887,94 @@ func TestRecordUserMessageTracksCustomEvent(t *testing.T) {
 	content, ok := userMessage.ContentString()
 	require.True(t, ok)
 	assert.Equal(t, "hi", content)
+}
+
+func TestRunUsesResolvedAppNameForTrackKey(t *testing.T) {
+	tracker := &recordingTracker{}
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := &runner{
+		appName:            "static-app",
+		appNameResolver:    forwardedPropsAppNameResolver,
+		runner:             underlying,
+		translatorFactory:  defaultTranslatorFactory,
+		userIDResolver:     func(context.Context, *adapter.RunAgentInput) (string, error) { return "demo-user", nil },
+		stateResolver:      defaultStateResolver,
+		runOptionResolver:  defaultRunOptionResolver,
+		tracker:            tracker,
+		startSpan:          defaultStartSpan,
+		translateCallbacks: nil,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"appName": "dynamic-app"},
+		Messages:       []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.NotEmpty(t, tracker.keys)
+	for _, key := range tracker.keys {
+		assert.Equal(t, "dynamic-app", key.AppName)
+		assert.Equal(t, "demo-user", key.UserID)
+		assert.Equal(t, "thread", key.SessionID)
+	}
+}
+
+func TestRunAppNameResolverError(t *testing.T) {
+	underlying := &fakeRunner{}
+	r := &runner{
+		runner:            underlying,
+		appNameResolver:   func(context.Context, *adapter.RunAgentInput) (string, error) { return "", errors.New("boom") },
+		translatorFactory: defaultTranslatorFactory,
+		userIDResolver:    func(context.Context, *adapter.RunAgentInput) (string, error) { return "demo-user", nil },
+		stateResolver:     defaultStateResolver,
+		runOptionResolver: defaultRunOptionResolver,
+		startSpan:         defaultStartSpan,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	assert.Nil(t, ch)
+	assert.ErrorContains(t, err, "resolve app name")
+	assert.Equal(t, 0, underlying.calls)
+}
+
+func TestResolveAppNameFallsBackToStaticAppName(t *testing.T) {
+	r := &runner{appName: "static-app"}
+	appName, err := r.resolveAppName(context.Background(), &adapter.RunAgentInput{})
+	assert.NoError(t, err)
+	assert.Equal(t, "static-app", appName)
+	r.appNameResolver = func(context.Context, *adapter.RunAgentInput) (string, error) {
+		return "", nil
+	}
+	appName, err = r.resolveAppName(context.Background(), &adapter.RunAgentInput{})
+	assert.NoError(t, err)
+	assert.Equal(t, "static-app", appName)
+}
+
+func TestResolveAppNameReturnsResolverError(t *testing.T) {
+	r := &runner{
+		appName: "static-app",
+		appNameResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
+			return "", errors.New("boom")
+		},
+	}
+	appName, err := r.resolveAppName(context.Background(), &adapter.RunAgentInput{})
+	assert.Empty(t, appName)
+	assert.EqualError(t, err, "boom")
 }
 
 func TestRecordUserMessageRejectsNilAndNonUserRole(t *testing.T) {
@@ -997,7 +1166,6 @@ func TestRunToolMessageSSEOrderAfterRunStarted(t *testing.T) {
 			},
 		},
 	}
-
 	eventsCh, err := r.Run(context.Background(), input)
 	require.NoError(t, err)
 	evts := collectEvents(t, eventsCh)
@@ -1006,12 +1174,78 @@ func TestRunToolMessageSSEOrderAfterRunStarted(t *testing.T) {
 	assert.IsType(t, (*aguievents.ToolCallResultEvent)(nil), evts[1])
 	assert.IsType(t, (*aguievents.ActivityDeltaEvent)(nil), evts[2])
 	assert.IsType(t, (*aguievents.TextMessageStartEvent)(nil), evts[3])
-
 	resultEvent, ok := evts[1].(*aguievents.ToolCallResultEvent)
 	require.True(t, ok)
 	assert.Equal(t, "tool-msg-1", resultEvent.MessageID)
 	assert.Equal(t, "call-1", resultEvent.ToolCallID)
 	assert.Equal(t, "tool result", resultEvent.Content)
+	require.Len(t, fakeTrans.seen, 1)
+	assert.Equal(t, "assistant", fakeTrans.seen[0].Author)
+	assert.False(t, fakeTrans.seen[0].Response.IsToolResultResponse())
+}
+
+func TestRunToolMessageTranslatedWhenEnabled(t *testing.T) {
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	fakeTrans := &fakeTranslator{
+		events: [][]aguievents.Event{{
+			aguievents.NewCustomEvent("translated-tool-result", aguievents.WithValue("ok")),
+		}},
+	}
+	r := &runner{
+		runner: underlying,
+		translatorFactory: func(ctx context.Context, input *adapter.RunAgentInput, _ ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		stateResolver:                     defaultStateResolver,
+		runOptionResolver:                 defaultRunOptionResolver,
+		startSpan:                         defaultStartSpan,
+		toolResultInputTranslationEnabled: true,
+	}
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{
+			{
+				ID:         "tool-msg-1",
+				Role:       types.RoleTool,
+				Content:    "tool result",
+				Name:       "calculator",
+				ToolCallID: "call-1",
+			},
+		},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	require.Len(t, evts, 2)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
+	customEvent, ok := evts[1].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Equal(t, "translated-tool-result", customEvent.Name)
+	require.Len(t, fakeTrans.seen, 1)
+	seen := fakeTrans.seen[0]
+	require.NotNil(t, seen)
+	assert.Equal(t, toolResultInputEventAuthor, seen.Author)
+	assert.Empty(t, seen.Tag)
+	assert.Equal(t, "tool-msg-1", seen.ID)
+	require.NotNil(t, seen.Response)
+	assert.Equal(t, model.ObjectTypeToolResponse, seen.Response.Object)
+	assert.True(t, seen.Response.IsToolResultResponse())
+	require.Len(t, seen.Response.Choices, 1)
+	assert.Equal(t, model.RoleTool, seen.Response.Choices[0].Message.Role)
+	assert.Equal(t, "tool result", seen.Response.Choices[0].Message.Content)
+	assert.Equal(t, "call-1", seen.Response.Choices[0].Message.ToolID)
+	assert.Equal(t, "calculator", seen.Response.Choices[0].Message.ToolName)
 }
 
 func TestRunRunOptionResolverError(t *testing.T) {
@@ -1841,7 +2075,10 @@ func TestRunnerAfterTranslateCallbackOverridesEmission(t *testing.T) {
 	fakeTrans := &fakeTranslator{events: [][]aguievents.Event{{aguievents.NewRunFinishedEvent("thread", "run")}}}
 	callbacks := translator.NewCallbacks().
 		RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
-			return replacement, nil
+			if _, ok := evt.(*aguievents.RunFinishedEvent); ok {
+				return replacement, nil
+			}
+			return nil, nil
 		})
 
 	underlying := &fakeRunner{
@@ -1875,16 +2112,18 @@ func TestRunnerAfterTranslateCallbackOverridesEmission(t *testing.T) {
 	ch, err := r.Run(context.Background(), input)
 	assert.NoError(t, err)
 	out := collectEvents(t, ch)
-	assert.Len(t, out, 2)
+	require.Len(t, out, 2)
 	assert.IsType(t, (*aguievents.RunErrorEvent)(nil), out[1])
 }
 
 type fakeTranslator struct {
 	events [][]aguievents.Event
 	err    error
+	seen   []*agentevent.Event
 }
 
 func (f *fakeTranslator) Translate(ctx context.Context, evt *agentevent.Event) ([]aguievents.Event, error) {
+	f.seen = append(f.seen, evt)
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -1918,12 +2157,14 @@ func (f *flushRecorder) Flush(ctx context.Context, key session.Key) error {
 type recordingTracker struct {
 	mu         sync.Mutex
 	events     []aguievents.Event
+	keys       []session.Key
 	flushCount int
 }
 
 func (r *recordingTracker) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.keys = append(r.keys, key)
 	r.events = append(r.events, event)
 	return nil
 }
@@ -1957,6 +2198,15 @@ func (e *errorTracker) GetEvents(ctx context.Context,
 func (e *errorTracker) Flush(ctx context.Context,
 	_ session.Key) error {
 	return e.flushErr
+}
+
+func forwardedPropsAppNameResolver(_ context.Context, input *adapter.RunAgentInput) (string, error) {
+	props, ok := input.ForwardedProps.(map[string]any)
+	if !ok || props == nil {
+		return "", nil
+	}
+	appName, _ := props["appName"].(string)
+	return appName, nil
 }
 
 type spySpan struct {
@@ -2035,6 +2285,225 @@ func TestRunTrackingErrorsAreIgnored(t *testing.T) {
 	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), evts[0])
 }
 
+func TestRunUsesCanonicalToolCallIDFromInstalledPlugin(t *testing.T) {
+	modelStub := &toolCallIDRunnerIntegrationModel{
+		responses: [][]*model.Response{
+			{{
+				ID:        "rsp-tool",
+				Object:    model.ObjectTypeChatCompletion,
+				Done:      true,
+				IsPartial: false,
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							ID:   "call-1",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "echo",
+								Arguments: []byte(`{"value":"ok"}`),
+							},
+						}},
+					},
+				}},
+			}},
+			{{
+				ID:        "rsp-final",
+				Object:    model.ObjectTypeChatCompletion,
+				Done:      true,
+				IsPartial: false,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("done"),
+				}},
+			}},
+		},
+	}
+	echoTool := function.NewFunctionTool(
+		func(_ context.Context, input struct {
+			Value string `json:"value"`
+		}) (string, error) {
+			return input.Value, nil
+		},
+		function.WithName("echo"),
+		function.WithDescription("Echoes the input."),
+	)
+	ag := llmagent.New(
+		"assistant",
+		llmagent.WithModel(modelStub),
+		llmagent.WithTools([]tool.Tool{echoTool}),
+	)
+	underlying := baserunner.NewRunner(
+		"toolcallid-agui-app",
+		ag,
+		baserunner.WithPlugins(toolcallidplugin.New()),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, underlying.Close())
+	})
+	r := New(underlying)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hello"}},
+	}
+	eventCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	events := collectEvents(t, eventCh)
+	var (
+		startID  string
+		argsID   string
+		endID    string
+		resultID string
+	)
+	for _, evt := range events {
+		switch v := evt.(type) {
+		case *aguievents.ToolCallStartEvent:
+			startID = v.ToolCallID
+		case *aguievents.ToolCallArgsEvent:
+			argsID = v.ToolCallID
+		case *aguievents.ToolCallEndEvent:
+			endID = v.ToolCallID
+		case *aguievents.ToolCallResultEvent:
+			resultID = v.ToolCallID
+		}
+	}
+	require.NotEmpty(t, startID)
+	require.Equal(t, startID, argsID)
+	require.Equal(t, startID, endID)
+	require.Equal(t, startID, resultID)
+	require.NotEqual(t, "call-1", startID)
+	require.Contains(t, startID, "trpc-agent-go-toolcall:")
+}
+
+func TestRunGraphToolMetadataUsesCanonicalToolCallID(t *testing.T) {
+	const canonicalToolCallID = "trpc-agent-go-toolcall:inv-1:rsp-1:call-1:c0:t0"
+	rawToolMeta, err := json.Marshal(graph.ToolExecutionMetadata{
+		ResponseID: "assistant-1",
+		ToolName:   "echo",
+		ToolID:     canonicalToolCallID,
+		Phase:      graph.ToolExecutionPhaseStart,
+		Input:      `{"value":"ok"}`,
+	})
+	require.NoError(t, err)
+	agentEvents := make(chan *agentevent.Event, 2)
+	agentEvents <- &agentevent.Event{
+		ID: "tool-start",
+		StateDelta: map[string][]byte{
+			graph.MetadataKeyTool: rawToolMeta,
+		},
+	}
+	agentEvents <- &agentevent.Event{
+		ID: "tool-result",
+		Response: &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					Content:  "ok",
+					ToolID:   canonicalToolCallID,
+					ToolName: "echo",
+				},
+			}},
+		},
+	}
+	close(agentEvents)
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	r := New(underlying)
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hello"}},
+	}
+	eventCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	events := collectEvents(t, eventCh)
+	var (
+		startID  string
+		argsID   string
+		endID    string
+		resultID string
+	)
+	for _, evt := range events {
+		switch v := evt.(type) {
+		case *aguievents.ToolCallStartEvent:
+			startID = v.ToolCallID
+		case *aguievents.ToolCallArgsEvent:
+			argsID = v.ToolCallID
+		case *aguievents.ToolCallEndEvent:
+			endID = v.ToolCallID
+		case *aguievents.ToolCallResultEvent:
+			resultID = v.ToolCallID
+		}
+	}
+	require.Equal(t, canonicalToolCallID, startID)
+	require.Equal(t, canonicalToolCallID, argsID)
+	require.Equal(t, canonicalToolCallID, endID)
+	require.Equal(t, canonicalToolCallID, resultID)
+}
+
+type toolCallIDRunnerIntegrationModel struct {
+	mu        sync.Mutex
+	responses [][]*model.Response
+	callIndex int
+}
+
+func (m *toolCallIDRunnerIntegrationModel) Info() model.Info {
+	return model.Info{Name: "toolcallid-agui-model"}
+}
+
+func (m *toolCallIDRunnerIntegrationModel) GenerateContent(
+	_ context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	callIndex := m.callIndex
+	m.callIndex++
+	var responses []*model.Response
+	if callIndex < len(m.responses) {
+		responses = m.responses[callIndex]
+	}
+	m.mu.Unlock()
+	ch := make(chan *model.Response, len(responses))
+	for _, rsp := range responses {
+		ch <- cloneToolCallIDRunnerIntegrationResponse(rsp)
+	}
+	close(ch)
+	return ch, nil
+}
+
+func cloneToolCallIDRunnerIntegrationResponse(rsp *model.Response) *model.Response {
+	if rsp == nil {
+		return nil
+	}
+	cloned := rsp.Clone()
+	choices := make([]model.Choice, len(rsp.Choices))
+	for i, choice := range rsp.Choices {
+		choices[i] = choice
+		choices[i].Message = cloneToolCallIDRunnerIntegrationMessage(choice.Message)
+		choices[i].Delta = cloneToolCallIDRunnerIntegrationMessage(choice.Delta)
+	}
+	cloned.Choices = choices
+	return cloned
+}
+
+func cloneToolCallIDRunnerIntegrationMessage(message model.Message) model.Message {
+	cloned := message
+	if len(message.ToolCalls) > 0 {
+		cloned.ToolCalls = append([]model.ToolCall(nil), message.ToolCalls...)
+	}
+	if len(message.ContentParts) > 0 {
+		cloned.ContentParts = append([]model.ContentPart(nil), message.ContentParts...)
+	}
+	return cloned
+}
+
 func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event {
 	t.Helper()
 	var out []aguievents.Event
@@ -2050,6 +2519,24 @@ func collectEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Event 
 			return out
 		}
 	}
+}
+
+func hasRunFinishedEvent(events []aguievents.Event) bool {
+	for _, evt := range events {
+		if _, ok := evt.(*aguievents.RunFinishedEvent); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRunErrorEvent(events []aguievents.Event) bool {
+	for _, evt := range events {
+		if _, ok := evt.(*aguievents.RunErrorEvent); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTranslateCallbackError(t *testing.T) {

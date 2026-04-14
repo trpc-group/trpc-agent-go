@@ -8,7 +8,7 @@
 #   ./run_examples.sh [OPTIONS]
 #
 # Options:
-#   -v, --vectorstore TYPE   Vector store type: inmemory|pgvector|tcvector|elasticsearch|milvus (default: inmemory)
+#   -v, --vectorstore TYPE   Vector store type: inmemory|sqlitevec|pgvector|tcvector|elasticsearch|milvus (default: inmemory)
 #   -o, --output DIR         Output directory for results (default: ./output)
 #   -e, --examples LIST      Comma-separated list of examples to run (default: all)
 #                            Available examples:
@@ -22,7 +22,7 @@
 #                              - sources/url-source
 #                            Example: -e "basic,features/management"
 #   -r, --randomtable        Generate random collection/table name for each run
-#   -a, --all-stores         Run with all vector stores (inmemory, pgvector, tcvector, elasticsearch)
+#   -a, --all-stores         Run with all vector stores (inmemory, sqlitevec, pgvector, tcvector, elasticsearch, milvus)
 #   -h, --help               Show this help message
 #
 # Environment Variables (auto-detected):
@@ -30,6 +30,7 @@
 #   PGVector:      PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER, PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_TABLE
 #   Elasticsearch: ELASTICSEARCH_HOSTS, ELASTICSEARCH_USERNAME, ELASTICSEARCH_PASSWORD, ELASTICSEARCH_INDEX_NAME
 #   Milvus:        MILVUS_ADDRESS, MILVUS_USERNAME, MILVUS_PASSWORD, MILVUS_DB_NAME, MILVUS_COLLECTION
+#   SQLiteVec:     SQLITEVEC_DSN, SQLITEVEC_TABLE, SQLITEVEC_METADATA_TABLE
 #   OpenAI:        OPENAI_API_KEY, OPENAI_BASE_URL, MODEL_NAME
 #
 
@@ -51,7 +52,7 @@ ALL_STORES=false
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # All available vector stores
-ALL_VECTORSTORES=("inmemory" "tcvector" "pgvector" "elasticsearch" "milvus")
+ALL_VECTORSTORES=("inmemory" "sqlitevec" "tcvector" "pgvector" "elasticsearch" "milvus")
 
 # Generate random table/collection name
 generate_random_name() {
@@ -114,11 +115,11 @@ done
 
 # Validate vector store type
 case $VECTORSTORE in
-    inmemory|pgvector|tcvector|elasticsearch|milvus)
+    inmemory|sqlitevec|pgvector|tcvector|elasticsearch|milvus)
         ;;
     *)
         echo -e "${RED}Invalid vector store type: $VECTORSTORE${NC}"
-        echo "Valid types: inmemory, pgvector, tcvector, elasticsearch, milvus"
+        echo "Valid types: inmemory, sqlitevec, pgvector, tcvector, elasticsearch, milvus"
         exit 1
         ;;
 esac
@@ -159,6 +160,25 @@ print_env_status() {
         echo -e "  Password: ${GREEN}configured${NC}"
     else
         echo -e "  Password: ${YELLOW}not set${NC}"
+    fi
+
+    # SQLiteVec
+    echo ""
+    echo "SQLiteVec:"
+    if [[ -n "$SQLITEVEC_DSN" ]]; then
+        echo -e "  DSN: ${GREEN}$SQLITEVEC_DSN${NC}"
+    else
+        echo -e "  DSN: ${YELLOW}default (generated per run)${NC}"
+    fi
+    if [[ -n "$SQLITEVEC_TABLE" ]]; then
+        echo -e "  Table: ${GREEN}$SQLITEVEC_TABLE${NC}"
+    else
+        echo -e "  Table: ${YELLOW}default (knowledge_documents)${NC}"
+    fi
+    if [[ -n "$SQLITEVEC_METADATA_TABLE" ]]; then
+        echo -e "  Metadata Table: ${GREEN}$SQLITEVEC_METADATA_TABLE${NC}"
+    else
+        echo -e "  Metadata Table: ${YELLOW}default (knowledge_document_meta)${NC}"
     fi
     
     # PGVector
@@ -258,6 +278,8 @@ check_vectorstore_env() {
     local missing=0
     
     case $store in
+        sqlitevec)
+            ;;
         tcvector)
             if [[ -z "$TCVECTOR_URL" ]]; then
                 echo -e "${RED}Error: TCVECTOR_URL is required for tcvector${NC}"
@@ -300,6 +322,19 @@ check_vectorstore_env() {
     return $missing
 }
 
+setup_sqlitevec_env() {
+    local example=$1
+    local output_dir=$2
+    local example_suffix
+
+    example_suffix=$(echo "$example" | tr '/' '_' | tr '-' '_')
+    mkdir -p "$output_dir"
+
+    export SQLITEVEC_DSN="file:${output_dir}/${example_suffix}.sqlite?_busy_timeout=5000"
+    export SQLITEVEC_TABLE="knowledge_documents"
+    export SQLITEVEC_METADATA_TABLE="knowledge_document_meta"
+}
+
 # Run a single example
 run_example() {
     local example_path=$1
@@ -327,7 +362,7 @@ run_example() {
     local start_time=$(date +%s)
     
     # Run the example and capture output
-    if go run main.go -vectorstore "$VECTORSTORE" > "$output_file" 2>&1; then
+    if go run . -vectorstore "$VECTORSTORE" > "$output_file" 2>&1; then
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         echo -e "${GREEN}✓ Success${NC} (${duration}s)"
@@ -403,8 +438,8 @@ main() {
         # Parse comma-separated list
         IFS=',' read -ra examples_to_run <<< "$EXAMPLES"
     else
-        # Run all examples (basic + features)
-        examples_to_run=("${BASIC_EXAMPLES[@]}" "${FEATURE_EXAMPLES[@]}")
+        # Run all examples (basic + features + sources)
+        examples_to_run=("${BASIC_EXAMPLES[@]}" "${FEATURE_EXAMPLES[@]}" "${SOURCE_EXAMPLES[@]}")
     fi
     
     # Summary file
@@ -444,6 +479,9 @@ main() {
             export ELASTICSEARCH_INDEX_NAME=$(generate_random_name "kb_${example_suffix}")
             export MILVUS_COLLECTION=$(generate_random_name "kb_${example_suffix}")
         fi
+        if [[ "$VECTORSTORE" == "sqlitevec" ]]; then
+            setup_sqlitevec_env "$example" "$vector_output_dir"
+        fi
         
         ((total++)) || true
         
@@ -455,7 +493,7 @@ main() {
         
         local start_time=$(date +%s)
         
-        if go run main.go -vectorstore "$VECTORSTORE" > "$output_file" 2>&1; then
+        if go run . -vectorstore "$VECTORSTORE" > "$output_file" 2>&1; then
             local end_time=$(date +%s)
             local duration=$((end_time - start_time))
             echo -e "${GREEN}✓ $example${NC} (${duration}s)"
@@ -544,7 +582,7 @@ run_for_store() {
     if [[ -n "$EXAMPLES" ]]; then
         IFS=',' read -ra examples_to_run <<< "$EXAMPLES"
     else
-        examples_to_run=("${BASIC_EXAMPLES[@]}" "${FEATURE_EXAMPLES[@]}")
+        examples_to_run=("${BASIC_EXAMPLES[@]}" "${FEATURE_EXAMPLES[@]}" "${SOURCE_EXAMPLES[@]}")
     fi
     
     local store_passed=0
@@ -577,6 +615,9 @@ run_for_store() {
             export ELASTICSEARCH_INDEX_NAME=$(generate_random_name "kb_${example_suffix}")
             export MILVUS_COLLECTION=$(generate_random_name "kb_${example_suffix}")
         fi
+        if [[ "$VECTORSTORE" == "sqlitevec" ]]; then
+            setup_sqlitevec_env "$example" "$vector_output_dir"
+        fi
         
         echo -e "${BLUE}----------------------------------------${NC}"
         
@@ -586,7 +627,7 @@ run_for_store() {
         
         local start_time=$(date +%s)
         
-        if go run main.go -vectorstore "$VECTORSTORE" > "$output_file" 2>&1; then
+        if go run . -vectorstore "$VECTORSTORE" > "$output_file" 2>&1; then
             local end_time=$(date +%s)
             local duration=$((end_time - start_time))
             echo -e "${GREEN}✓ [$VECTORSTORE] $example${NC} (${duration}s)"
@@ -672,4 +713,3 @@ if [[ "$ALL_STORES" == "true" ]]; then
 else
     main
 fi
-

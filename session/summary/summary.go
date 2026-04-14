@@ -30,9 +30,9 @@ type SessionSummarizer interface {
 	// SetPrompt updates the summarizer's prompt dynamically.
 	// The prompt must include the placeholder {conversation_text}, which will
 	// be replaced with the extracted conversation when generating the summary.
-	// If maxSummaryWords > 0, the prompt must also include {max_summary_words}.
-	// If an empty prompt is provided, it will be ignored and the current
-	// prompt will remain unchanged.
+	// If maxSummaryWords > 0, either the prompt or the configured system prompt
+	// must include {max_summary_words}. If an empty prompt is provided, it will
+	// be ignored and the current prompt will remain unchanged.
 	SetPrompt(prompt string)
 
 	// SetModel updates the summarizer's model dynamically.
@@ -43,6 +43,18 @@ type SessionSummarizer interface {
 
 	// Metadata returns metadata about the summarizer configuration.
 	Metadata() map[string]any
+}
+
+// ContextAwareSummarizer is an optional extension interface for
+// SessionSummarizer implementations that need request-scoped context during
+// the summary decision phase.
+type ContextAwareSummarizer interface {
+	// SessionSummarizer is the base interface that all summarizers must implement.
+	SessionSummarizer
+
+	// ShouldSummarizeWithContext checks if the session should be summarized
+	// using the current request context.
+	ShouldSummarizeWithContext(context.Context, *session.Session) bool
 }
 
 // SessionSummary represents a summary of a session's conversation history.

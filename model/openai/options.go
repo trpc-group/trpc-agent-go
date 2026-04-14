@@ -32,6 +32,14 @@ type ChatRequestCallbackFunc func(
 	chatRequest *openai.ChatCompletionNewParams,
 )
 
+// ChatRequestJSONCallbackFunc is the function type for the chat request
+// JSON callback.
+type ChatRequestJSONCallbackFunc func(
+	ctx context.Context,
+	chatRequestJSON []byte,
+	marshalErr error,
+)
+
 // ChatResponseCallbackFunc is the function type for the chat response callback.
 type ChatResponseCallbackFunc func(
 	ctx context.Context,
@@ -67,6 +75,8 @@ type options struct {
 	HTTPClientOptions []HTTPClientOption
 	// Callback for the chat request.
 	ChatRequestCallback ChatRequestCallbackFunc
+	// Callback for the marshaled chat request JSON.
+	ChatRequestJSONCallback ChatRequestJSONCallbackFunc
 	// Callback for the chat response.
 	ChatResponseCallback ChatResponseCallbackFunc
 	// Callback for the chat chunk.
@@ -79,6 +89,8 @@ type options struct {
 	ExtraFields map[string]any
 	// Variant for model-specific behavior.
 	Variant Variant
+	// variantSet tracks whether WithVariant was explicitly provided.
+	variantSet bool
 	// Batch completion window for batch processing.
 	BatchCompletionWindow openai.BatchNewParamsCompletionWindow
 	// Batch metadata for batch processing.
@@ -128,7 +140,6 @@ var (
 			ReserveOutputTokens:    imodel.DefaultReserveOutputTokens,
 			SafetyMarginRatio:      imodel.DefaultSafetyMarginRatio,
 			InputTokensFloor:       imodel.DefaultInputTokensFloor,
-			OutputTokensFloor:      imodel.DefaultOutputTokensFloor,
 			MaxInputTokensRatio:    imodel.DefaultMaxInputTokensRatio,
 		},
 		OptimizeForCache: false,
@@ -162,10 +173,21 @@ func WithChannelBufferSize(size int) Option {
 	}
 }
 
-// WithChatRequestCallback sets the function to be called before sending a chat request.
+// WithChatRequestCallback sets the function to be called before sending a
+// chat request. The callback runs synchronously in GenerateContent before
+// the response goroutine starts. Start your own goroutine in the callback
+// if asynchronous behavior is needed.
 func WithChatRequestCallback(fn ChatRequestCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatRequestCallback = fn
+	}
+}
+
+// WithChatRequestJSONCallback sets the function to be called with the
+// marshaled chat request JSON before sending the request.
+func WithChatRequestJSONCallback(fn ChatRequestJSONCallbackFunc) Option {
+	return func(opts *options) {
+		opts.ChatRequestJSONCallback = fn
 	}
 }
 
@@ -185,7 +207,9 @@ func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 	}
 }
 
-// WithChatStreamCompleteCallback sets the function to be called when streaming is completed.
+// WithChatStreamCompleteCallback sets the function to be called when
+// streaming is completed. The callback runs synchronously before the
+// terminal streaming result is surfaced to the caller.
 // Called for both successful and failed streaming completions.
 func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	return func(opts *options) {
@@ -261,6 +285,7 @@ func WithExtraFields(extraFields map[string]any) Option {
 func WithVariant(variant Variant) Option {
 	return func(opts *options) {
 		opts.Variant = variant
+		opts.variantSet = true
 	}
 }
 
@@ -409,9 +434,6 @@ func WithTokenTailoringConfig(config *model.TokenTailoringConfig) Option {
 		}
 		if config.InputTokensFloor <= 0 {
 			config.InputTokensFloor = imodel.DefaultInputTokensFloor
-		}
-		if config.OutputTokensFloor <= 0 {
-			config.OutputTokensFloor = imodel.DefaultOutputTokensFloor
 		}
 		if config.MaxInputTokensRatio <= 0 {
 			config.MaxInputTokensRatio = imodel.DefaultMaxInputTokensRatio

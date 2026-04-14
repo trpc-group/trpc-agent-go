@@ -34,11 +34,26 @@ type SkipRecentFunc func(events []event.Event) int
 
 // WithPrompt sets the custom prompt for summarization.
 // The prompt must include the placeholder {conversation_text}, which will be
-// replaced with the extracted conversation when generating the summary.
+// replaced with the extracted conversation when generating the summary. When
+// WithMaxSummaryWords is configured, {max_summary_words} must be included in
+// either this prompt or WithSystemPrompt.
 func WithPrompt(prompt string) Option {
 	return func(s *sessionSummarizer) {
 		if prompt != "" {
 			s.prompt = prompt
+		}
+	}
+}
+
+// WithSystemPrompt sets an additional system prompt for summarization.
+// The prompt is rendered into a dedicated system message before the user prompt.
+// It must not include the {conversation_text} placeholder; keep conversation
+// content in the user prompt instead. When WithMaxSummaryWords is configured,
+// {max_summary_words} may be included here instead of the user prompt.
+func WithSystemPrompt(prompt string) Option {
+	return func(s *sessionSummarizer) {
+		if prompt != "" {
+			s.systemPrompt = prompt
 		}
 	}
 }
@@ -85,24 +100,30 @@ func WithSkipRecent(skipFunc SkipRecentFunc) Option {
 	}
 }
 
-// WithTokenThreshold creates a token-based check function.
+// WithTokenThreshold appends a token-based check.
+// Note: all checks in a summarizer are combined with global AND semantics.
+// If you call multiple threshold options (e.g. token + event), all must pass.
 func WithTokenThreshold(tokenCount int) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, CheckTokenThreshold(tokenCount))
+		s.checks = append(s.checks, CheckTokenThresholdContext(tokenCount))
 	}
 }
 
-// WithEventThreshold creates an event-count-based check function.
+// WithEventThreshold appends an event-count-based check.
+// Note: all checks in a summarizer are combined with global AND semantics.
+// If you call multiple threshold options (e.g. token + event), all must pass.
 func WithEventThreshold(eventCount int) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, CheckEventThreshold(eventCount))
+		s.checks = append(s.checks, wrapChecker(CheckEventThreshold(eventCount)))
 	}
 }
 
-// WithTimeThreshold creates a time-based check function.
+// WithTimeThreshold appends a time-based check.
+// Note: all checks in a summarizer are combined with global AND semantics.
+// If you call multiple threshold options (e.g. event + time), all must pass.
 func WithTimeThreshold(interval time.Duration) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, CheckTimeThreshold(interval))
+		s.checks = append(s.checks, wrapChecker(CheckTimeThreshold(interval)))
 	}
 }
 
@@ -110,7 +131,7 @@ func WithTimeThreshold(interval time.Duration) Option {
 func WithChecksAll(checks ...Checker) Option {
 	return func(s *sessionSummarizer) {
 		if len(checks) > 0 {
-			s.checks = append(s.checks, ChecksAll(checks))
+			s.checks = append(s.checks, wrapChecker(ChecksAll(checks)))
 		}
 	}
 }
@@ -119,7 +140,27 @@ func WithChecksAll(checks ...Checker) Option {
 func WithChecksAny(checks ...Checker) Option {
 	return func(s *sessionSummarizer) {
 		if len(checks) > 0 {
-			s.checks = append(s.checks, ChecksAny(checks))
+			s.checks = append(s.checks, wrapChecker(ChecksAny(checks)))
+		}
+	}
+}
+
+// WithChecksAllContext appends a single composite context-aware check that
+// requires all provided checks (AND logic).
+func WithChecksAllContext(checks ...ContextChecker) Option {
+	return func(s *sessionSummarizer) {
+		if len(checks) > 0 {
+			s.checks = append(s.checks, allContextChecks(checks))
+		}
+	}
+}
+
+// WithChecksAnyContext appends a single composite context-aware check that
+// passes if any provided check passes (OR logic).
+func WithChecksAnyContext(checks ...ContextChecker) Option {
+	return func(s *sessionSummarizer) {
+		if len(checks) > 0 {
+			s.checks = append(s.checks, anyContextChecks(checks))
 		}
 	}
 }
@@ -188,5 +229,43 @@ func WithToolCallFormatter(f ToolCallFormatter) Option {
 func WithToolResultFormatter(f ToolResultFormatter) Option {
 	return func(s *sessionSummarizer) {
 		s.toolResultFormatter = f
+	}
+}
+
+// WithContextThreshold enables automatic summarization based on the model's
+// context window, resolved dynamically at runtime from the invocation
+// context. This is the recommended zero-configuration option for most
+// use cases.
+//
+// The summarizer does not need to know the model name at creation time.
+// When the user switches models mid-session, the threshold adjusts
+// automatically because the checker reads the current model from the
+// invocation attached to each request's context.
+//
+// Usage:
+//
+//	summary.NewSummarizer(model, summary.WithContextThreshold())
+//	summary.NewSummarizer(model, summary.WithContextThreshold(
+//	    summary.WithContextThresholdRatio(0.6)))
+func WithContextThreshold(opts ...ContextThresholdOption) Option {
+	return func(s *sessionSummarizer) {
+		// If no explicit fallback window is configured, try to resolve one
+		// from the summarizer's own model. This ensures that when invocation
+		// context is unavailable (e.g. manual CreateSessionSummary calls),
+		// the checker uses the summarizer model's context window instead of
+		// the conservative framework default (8192).
+		o := contextThresholdOptions{
+			fallbackContextWindow: defaultContextThresholdFallbackWindow,
+		}
+		for _, opt := range opts {
+			opt(&o)
+		}
+		if o.fallbackContextWindow == defaultContextThresholdFallbackWindow && s.model != nil {
+			name := s.model.Info().Name
+			if w, ok := model.LookupModelContextWindow(name); ok {
+				opts = append(opts, WithContextThresholdFallbackWindow(w))
+			}
+		}
+		s.checks = append(s.checks, CheckContextThreshold(opts...))
 	}
 }

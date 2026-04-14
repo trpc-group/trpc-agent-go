@@ -95,7 +95,7 @@ func SummarizeSession(
 	filterKey string,
 	force bool,
 ) (updated bool, err error) {
-	if m == nil || base == nil {
+	if base == nil {
 		return false, nil
 	}
 
@@ -129,6 +129,10 @@ func SummarizeSession(
 		return true, nil
 	}
 
+	if m == nil {
+		return false, nil
+	}
+
 	// Compute delta events with both time and filterKey filtering in one pass.
 	delta, latestTs := computeDeltaSince(base, prevAt, filterKey)
 	if !force && len(delta) == 0 {
@@ -138,7 +142,7 @@ func SummarizeSession(
 	// Build input with previous summary prepended.
 	input := prependPrevSummary(prevText, delta, time.Now())
 	tmp := buildFilterSession(base, filterKey, input)
-	if !force && !m.ShouldSummarize(tmp) {
+	if !force && !ShouldSummarize(ctx, m, tmp) {
 		return false, nil
 	}
 

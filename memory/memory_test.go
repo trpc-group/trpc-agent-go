@@ -312,3 +312,75 @@ func TestToolCreator(t *testing.T) {
 	}
 	assert.NotNil(t, creator, "ToolCreator should accept function assignment.")
 }
+
+func TestResolveAddOptions(t *testing.T) {
+	now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	meta := &Metadata{
+		Kind:         KindEpisode,
+		EventTime:    &now,
+		Participants: []string{"Alice"},
+		Location:     "Kyoto",
+	}
+
+	assert.Nil(t, ResolveAddOptions(nil))
+	assert.Nil(t, ResolveAddOptions([]AddOption{}))
+	assert.Same(t, meta, ResolveAddOptions([]AddOption{
+		WithMetadata(nil),
+		WithMetadata(meta),
+	}))
+}
+
+func TestResolveUpdateOptions(t *testing.T) {
+	meta := &Metadata{
+		Kind:     KindFact,
+		Location: "Tokyo",
+	}
+
+	assert.Nil(t, ResolveUpdateOptions(nil))
+	assert.Nil(t, ResolveUpdateOptions([]UpdateOption{}))
+	assert.Same(t, meta, ResolveUpdateOptions([]UpdateOption{
+		WithUpdateMetadata(nil),
+		WithUpdateMetadata(meta),
+	}))
+}
+
+func TestResolveUpdateResult(t *testing.T) {
+	result := &UpdateResult{MemoryID: "rotated"}
+
+	assert.Nil(t, ResolveUpdateResult(nil))
+	assert.Nil(t, ResolveUpdateResult([]UpdateOption{}))
+	assert.Same(t, result, ResolveUpdateResult([]UpdateOption{
+		WithUpdateMetadata(&Metadata{Kind: KindEpisode}),
+		WithUpdateResult(nil),
+		WithUpdateResult(result),
+	}))
+}
+
+func TestResolveSearchOptions(t *testing.T) {
+	t.Run("default query is preserved", func(t *testing.T) {
+		got := ResolveSearchOptions("coffee", nil)
+		assert.Equal(t, "coffee", got.Query)
+		assert.False(t, got.HybridSearch)
+		assert.Zero(t, got.MaxResults)
+	})
+
+	t.Run("search options can override the base query", func(t *testing.T) {
+		expected := SearchOptions{
+			Query:               "tea",
+			Kind:                KindEpisode,
+			MaxResults:          5,
+			SimilarityThreshold: 0.8,
+			OrderByEventTime:    true,
+			KindFallback:        true,
+			Deduplicate:         true,
+			HybridSearch:        true,
+			HybridRRFK:          42,
+		}
+
+		got := ResolveSearchOptions("coffee", []SearchOption{
+			WithSearchOptions(expected),
+		})
+
+		assert.Equal(t, expected, got)
+	})
+}

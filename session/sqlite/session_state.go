@@ -48,6 +48,9 @@ func (s *Service) UpdateSessionState(
 		}
 	}
 
+	s.stateWriteMu.Lock()
+	defer s.stateWriteMu.Unlock()
+
 	var current []byte
 	err := s.db.QueryRowContext(
 		ctx,

@@ -27,7 +27,7 @@ func (s *Service) CreateSessionSummary(
 	filterKey string,
 	force bool,
 ) error {
-	if s.opts.summarizer == nil {
+	if !isummary.HasSummarizer(s.opts.summarizer) {
 		return nil
 	}
 	if sess == nil {
@@ -100,7 +100,7 @@ func (s *Service) EnqueueSummaryJob(
 	filterKey string,
 	force bool,
 ) error {
-	if s.opts.summarizer == nil {
+	if !isummary.HasSummarizer(s.opts.summarizer) {
 		return nil
 	}
 	if sess == nil {

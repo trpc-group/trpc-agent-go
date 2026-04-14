@@ -96,6 +96,8 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		opts.extractor,
 		opts.toolCreators,
 		opts.enabledTools,
+		opts.toolExposed,
+		opts.toolHidden,
 		s.cachedTools,
 	)
 
@@ -119,10 +121,14 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 }
 
 // AddMemory adds or updates a memory for a user (idempotent).
-func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string) error {
+func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey,
+	memoryStr string, topics []string,
+	opts ...memory.AddOption) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
+
+	ep := memory.ResolveAddOptions(opts)
 
 	// Enforce memory limit.
 	if s.opts.memoryLimit > 0 {
@@ -146,6 +152,7 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		Topics:      topics,
 		LastUpdated: &now,
 	}
+	imemory.ApplyMetadata(mem, ep)
 	entry := &memory.Entry{
 		ID:        imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
 		AppName:   userKey.AppName,
@@ -160,8 +167,6 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		return fmt.Errorf("marshal memory entry failed: %w", err)
 	}
 
-	// Note: memory_data contains the full JSON with topics, so updating memory_data
-	// will also update the topics field.
 	insertQuery := fmt.Sprintf(
 		"INSERT INTO `%s` (app_name, user_id, memory_id, memory_data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "+
 			"ON DUPLICATE KEY UPDATE memory_data = VALUES(memory_data), updated_at = VALUES(updated_at)",
@@ -171,17 +176,19 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 	if err != nil {
 		return fmt.Errorf("store memory entry failed: %w", err)
 	}
-
 	return nil
 }
 
 // UpdateMemory updates an existing memory for a user.
-func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memoryStr string, topics []string) error {
+func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key,
+	memoryStr string, topics []string,
+	opts ...memory.UpdateOption) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
 
-	// Get existing entry.
+	ep := memory.ResolveUpdateOptions(opts)
+
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
 		s.tableName,
@@ -202,12 +209,18 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	if err := json.Unmarshal(memoryData, entry); err != nil {
 		return fmt.Errorf("unmarshal memory entry failed: %w", err)
 	}
+	imemory.NormalizeEntry(entry)
 
 	now := time.Now()
-	entry.Memory.Memory = memoryStr
-	entry.Memory.Topics = topics
-	entry.Memory.LastUpdated = &now
-	entry.UpdatedAt = now
+	newID := imemory.ApplyMemoryUpdate(
+		entry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		ep,
+		now,
+	)
 
 	updated, err := json.Marshal(entry)
 	if err != nil {
@@ -215,17 +228,19 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	}
 
 	updateQuery := fmt.Sprintf(
-		"UPDATE %s SET memory_data = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+		"UPDATE %s SET memory_id = ?, memory_data = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ?",
 		s.tableName,
 	)
 	if s.opts.softDelete {
 		updateQuery += " AND deleted_at IS NULL"
 	}
-	_, err = s.db.Exec(ctx, updateQuery, updated, now, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
+	_, err = s.db.Exec(ctx, updateQuery, newID, updated, now, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
 	if err != nil {
 		return fmt.Errorf("update memory entry failed: %w", err)
 	}
-
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
+	}
 	return nil
 }
 
@@ -318,6 +333,7 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 		if err := json.Unmarshal(memoryData, e); err != nil {
 			return fmt.Errorf("unmarshal memory entry failed: %w", err)
 		}
+		imemory.NormalizeEntry(e)
 		entries = append(entries, e)
 		return nil
 	}, query, userKey.AppName, userKey.UserID)
@@ -330,7 +346,10 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 }
 
 // SearchMemories searches memories for a user.
-func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, query string) ([]*memory.Entry, error) {
+// Results are ranked by a normalized BM25-style keyword score and only
+// the top entries above the minimum threshold are returned.
+func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey,
+	query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
@@ -355,6 +374,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		if err := json.Unmarshal(memoryData, e); err != nil {
 			return fmt.Errorf("unmarshal memory entry failed: %w", err)
 		}
+		imemory.NormalizeEntry(e)
 		entries = append(entries, e)
 		return nil
 	}, selectQuery, userKey.AppName, userKey.UserID)
@@ -363,16 +383,19 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		return nil, fmt.Errorf("search memories failed: %w", err)
 	}
 
-	return imemory.SearchMemoryEntries(entries, query, imemory.SearchOptions{
-		MinScore:   s.opts.searchMinScore,
-		MaxResults: s.opts.maxSearchResults,
-	}), nil
+	return imemory.SearchEntries(
+		entries,
+		memory.ResolveSearchOptions(query, opts),
+		s.opts.searchMinScore,
+		s.opts.maxSearchResults,
+	), nil
 }
 
 // Tools returns the list of available memory tools.
-// In auto memory mode (extractor is set), only front-end tools are returned.
-// By default, only Search is enabled; Load can be enabled explicitly.
-// In agentic mode, all enabled tools are returned.
+// In auto memory mode (extractor is set), memory_search is exposed by default,
+// memory_load is exposed once enabled, and other enabled tools remain hidden
+// unless explicitly exposed.
+// Without an extractor, enabled tools are exposed directly.
 // The tools list is pre-computed at service creation time.
 func (s *Service) Tools() []tool.Tool {
 	return slices.Clone(s.precomputedTools)

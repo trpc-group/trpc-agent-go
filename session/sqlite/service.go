@@ -45,6 +45,8 @@ type Service struct {
 	opts ServiceOpts
 	db   *sql.DB
 
+	stateWriteMu sync.Mutex
+
 	eventPairChans  []chan *sessionEventPair
 	trackEventChans []chan *trackEventPair
 	persistWg       sync.WaitGroup
@@ -141,7 +143,7 @@ func NewService(db *sql.DB, options ...ServiceOpt) (*Service, error) {
 		s.startAsyncPersistWorker()
 	}
 
-	if opts.summarizer != nil && opts.asyncSummaryNum > 0 {
+	if isummary.HasSummarizer(opts.summarizer) && opts.asyncSummaryNum > 0 {
 		s.asyncWorker = isummary.NewAsyncSummaryWorker(
 			isummary.AsyncSummaryConfig{
 				Summarizer:        opts.summarizer,
@@ -407,6 +409,9 @@ func (s *Service) GetSession(
 	}
 
 	opt := applyOptions(opts...)
+	if err := session.ValidateGetSessionOptions(opt, false); err != nil {
+		return nil, err
+	}
 	hctx := &session.GetSessionContext{
 		Context: ctx,
 		Key:     key,
@@ -444,6 +449,9 @@ func (s *Service) ListSessions(
 	}
 
 	opt := applyOptions(opts...)
+	if err := session.ValidateListSessionsOptions(opt); err != nil {
+		return nil, err
+	}
 	return s.listSessions(ctx, userKey, opt.EventNum, opt.EventTime)
 }
 

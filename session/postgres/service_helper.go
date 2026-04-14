@@ -27,6 +27,7 @@ func (s *Service) getSession(
 	key session.Key,
 	limit int,
 	afterTime time.Time,
+	page *session.EventPage,
 ) (*session.Session, error) {
 	// Query session state (always filter deleted records)
 	var sessState *SessionState
@@ -77,7 +78,7 @@ func (s *Service) getSession(
 
 	// Query events (always filter deleted records)
 	// Note: limit here only controls how many events to return, not delete from database
-	eventsList, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, []session.Key{key}, limit, afterTime, page)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
@@ -183,7 +184,7 @@ func (s *Service) listSessions(
 
 	// Batch load events for all sessions
 	// Note: limit here only controls how many events to return per session, not delete from database
-	eventsList, err := s.getEventsList(ctx, sessionKeys, limit, afterTime)
+	eventsList, err := s.getEventsList(ctx, sessionKeys, limit, afterTime, nil)
 	if err != nil {
 		return nil, fmt.Errorf("get events list failed: %w", err)
 	}
@@ -233,75 +234,55 @@ func (s *Service) listSessions(
 }
 
 func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Event) error {
-	now := time.Now()
-
-	// Get current session state (always filter deleted records, but allow expired sessions).
-	var sessState *SessionState
-	var currentExpiresAt *time.Time
-	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
-		if rows.Next() {
-			var stateBytes []byte
-			if err := rows.Scan(&stateBytes, &currentExpiresAt); err != nil {
-				return err
-			}
-			sessState = &SessionState{}
-			if err := json.Unmarshal(stateBytes, sessState); err != nil {
-				return fmt.Errorf("unmarshal session state failed: %w", err)
-			}
-		}
-		return nil
-	}, fmt.Sprintf(`SELECT state, expires_at FROM %s
-		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
-		AND deleted_at IS NULL`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID)
-
-	if err != nil {
-		return fmt.Errorf("get session state failed: %w", err)
-	}
-	if sessState == nil {
-		return fmt.Errorf("session not found")
-	}
-
-	// Check if session is expired, log info if so.
-	if currentExpiresAt != nil && currentExpiresAt.Before(now) {
-		log.InfofContext(
-			ctx,
-			"appending event to expired session (app=%s, user=%s, "+
-				"session=%s), will extend expires_at",
-			key.AppName,
-			key.UserID,
-			key.SessionID,
-		)
-	}
-
-	sessState.UpdatedAt = now
-	if sessState.State == nil {
-		sessState.State = make(session.StateMap)
-	}
-	session.ApplyEventStateDeltaMap(sessState.State, event)
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("marshal session state failed: %w", err)
-	}
-
 	eventBytes, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("marshal event failed: %w", err)
 	}
-
-	var expiresAt *time.Time
-	if s.opts.sessionTTL > 0 {
-		t := now.Add(s.opts.sessionTTL)
-		expiresAt = &t
-	}
+	var updatedAt time.Time
+	var updatedStateBytes []byte
 
 	// Use transaction to update session state and insert event.
 	err = s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+		sessState, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		if err != nil {
+			return err
+		}
+
+		now := time.Now()
+		if currentExpiresAt != nil && currentExpiresAt.Before(now) {
+			log.InfofContext(
+				ctx,
+				"appending event to expired session (app=%s, user=%s, "+
+					"session=%s), will extend expires_at",
+				key.AppName,
+				key.UserID,
+				key.SessionID,
+			)
+		}
+
+		sessState.UpdatedAt = now
+		if sessState.State == nil {
+			sessState.State = make(session.StateMap)
+		}
+		session.ApplyEventStateDeltaMap(sessState.State, event)
+		updatedAt = now
+
+		updatedStateBytes, err = json.Marshal(sessState)
+		if err != nil {
+			return fmt.Errorf("marshal session state failed: %w", err)
+		}
+
+		var expiresAt *time.Time
+		if s.opts.sessionTTL > 0 {
+			t := now.Add(s.opts.sessionTTL)
+			expiresAt = &t
+		}
+
 		// Update session state
-		_, err := tx.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
 			 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
-			updatedStateBytes, sessState.UpdatedAt, expiresAt,
+			updatedStateBytes, updatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -327,82 +308,64 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 }
 
 func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
-	now := time.Now()
-
-	// Get current session state (always filter deleted records, but allow expired sessions).
-	var sessState *SessionState
-	var currentExpiresAt *time.Time
-	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
-		if rows.Next() {
-			var stateBytes []byte
-			if err := rows.Scan(&stateBytes, &currentExpiresAt); err != nil {
-				return err
-			}
-			sessState = &SessionState{}
-			if err := json.Unmarshal(stateBytes, sessState); err != nil {
-				return fmt.Errorf("unmarshal session state failed: %w", err)
-			}
-		}
-		return nil
-	}, fmt.Sprintf(`SELECT state, expires_at FROM %s
-		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
-		AND deleted_at IS NULL`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID)
-
-	if err != nil {
-		return fmt.Errorf("get session state failed: %w", err)
-	}
-	if sessState == nil {
-		return fmt.Errorf("session not found")
-	}
-
-	// Check if session is expired, log info if so.
-	if currentExpiresAt != nil && currentExpiresAt.Before(now) {
-		log.InfofContext(
-			ctx,
-			"appending track event to expired session (app=%s, "+
-				"user=%s, session=%s), will extend expires_at",
-			key.AppName,
-			key.UserID,
-			key.SessionID,
-		)
-	}
-
-	sess := &session.Session{
-		ID:      key.SessionID,
-		AppName: key.AppName,
-		UserID:  key.UserID,
-		State:   sessState.State,
-	}
-	if err := sess.AppendTrackEvent(trackEvent); err != nil {
-		return err
-	}
-	sessState.State = sess.SnapshotState()
-	sessState.UpdatedAt = sess.UpdatedAt
-
-	updatedStateBytes, err := json.Marshal(sessState)
-	if err != nil {
-		return fmt.Errorf("marshal session state failed: %w", err)
-	}
-
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf("marshal track event failed: %w", err)
 	}
-
-	var expiresAt *time.Time
-	if s.opts.sessionTTL > 0 {
-		t := now.Add(s.opts.sessionTTL)
-		expiresAt = &t
-	}
+	var updatedAt time.Time
+	var updatedStateBytes []byte
 
 	// Use transaction to update session state and insert track event.
 	err = s.pgClient.Transaction(ctx, func(tx *sql.Tx) error {
+		sessState, currentExpiresAt, err := loadSessionStateForUpdate(ctx, tx, s.tableSessionStates, key)
+		if err != nil {
+			return err
+		}
+
+		now := time.Now()
+		if currentExpiresAt != nil && currentExpiresAt.Before(now) {
+			log.InfofContext(
+				ctx,
+				"appending track event to expired session (app=%s, "+
+					"user=%s, session=%s), will extend expires_at",
+				key.AppName,
+				key.UserID,
+				key.SessionID,
+			)
+		}
+
+		if sessState.State == nil {
+			sessState.State = make(session.StateMap)
+		}
+		sess := &session.Session{
+			ID:      key.SessionID,
+			AppName: key.AppName,
+			UserID:  key.UserID,
+			State:   sessState.State,
+		}
+		if err := sess.AppendTrackEvent(trackEvent); err != nil {
+			return err
+		}
+		sessState.State = sess.SnapshotState()
+		sessState.UpdatedAt = now
+		updatedAt = now
+
+		updatedStateBytes, err = json.Marshal(sessState)
+		if err != nil {
+			return fmt.Errorf("marshal session state failed: %w", err)
+		}
+
+		var expiresAt *time.Time
+		if s.opts.sessionTTL > 0 {
+			t := now.Add(s.opts.sessionTTL)
+			expiresAt = &t
+		}
+
 		// Update session state.
-		_, err := tx.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
 			 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
-			updatedStateBytes, sessState.UpdatedAt, expiresAt,
+			updatedStateBytes, updatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -423,6 +386,38 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		return fmt.Errorf("store track event failed: %w", err)
 	}
 	return nil
+}
+
+func loadSessionStateForUpdate(
+	ctx context.Context,
+	tx *sql.Tx,
+	tableSessionStates string,
+	key session.Key,
+) (*SessionState, *time.Time, error) {
+	var stateBytes []byte
+	var currentExpiresAt *time.Time
+	err := tx.QueryRowContext(
+		ctx,
+		fmt.Sprintf(`SELECT state, expires_at FROM %s
+		WHERE app_name = $1 AND user_id = $2 AND session_id = $3
+		AND deleted_at IS NULL
+		FOR UPDATE`, tableSessionStates),
+		key.AppName, key.UserID, key.SessionID,
+	).Scan(&stateBytes, &currentExpiresAt)
+	if err == sql.ErrNoRows {
+		return nil, nil, errSessionNotFound
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("get session state failed: %w", err)
+	}
+
+	var sessState SessionState
+	if len(stateBytes) > 0 {
+		if err := json.Unmarshal(stateBytes, &sessState); err != nil {
+			return nil, nil, fmt.Errorf("unmarshal session state failed: %w", err)
+		}
+	}
+	return &sessState, currentExpiresAt, nil
 }
 
 func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error {
@@ -613,34 +608,49 @@ func applyOptions(opts ...session.Option) *session.Options {
 }
 
 // getEventsList batch loads events for multiple sessions.
-// Note: limit here only controls how many events to return per session, not delete from database
+//
+// When page is nil (context-window mode), time filtering and user-message
+// anchoring are done in memory via ApplyEventFiltering on the full event
+// history. When page is non-nil (pagination mode), strict offset/limit is
+// applied in SQL for GetSession and ApplyEventFiltering is skipped.
 func (s *Service) getEventsList(
 	ctx context.Context,
 	sessionKeys []session.Key,
 	limit int,
 	afterTime time.Time,
+	page *session.EventPage,
 ) ([][]event.Event, error) {
 	if len(sessionKeys) == 0 {
 		return nil, nil
 	}
 
-	// Build session IDs array
+	if page != nil {
+		if len(sessionKeys) != 1 {
+			return nil, fmt.Errorf("event paging only supports a single session")
+		}
+		return s.getPagedEvents(ctx, sessionKeys[0], afterTime, page)
+	}
+
 	sessionIDs := make([]string, len(sessionKeys))
 	for i, key := range sessionKeys {
 		sessionIDs[i] = key.SessionID
 	}
 
-	// Query events for all sessions
+	if limit <= 0 {
+		limit = s.opts.sessionEventLimit
+	}
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+
 	query := fmt.Sprintf(`
-			SELECT session_id, event
-			FROM %s
-			WHERE app_name = $1 AND user_id = $2
-			AND session_id = ANY($3::varchar[])
-			AND deleted_at IS NULL
-			ORDER BY session_id, created_at ASC`, s.tableSessionEvents)
+		SELECT session_id, event FROM %s
+		WHERE app_name = $1 AND user_id = $2
+		AND session_id = ANY($3::varchar[])
+		AND deleted_at IS NULL
+		ORDER BY session_id, created_at ASC, id ASC`, s.tableSessionEvents)
 	args := []any{sessionKeys[0].AppName, sessionKeys[0].UserID, sessionIDs}
 
-	// Execute query and group events by session
 	eventsMap := make(map[string][]event.Event)
 	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
@@ -650,7 +660,6 @@ func (s *Service) getEventsList(
 				return err
 			}
 
-			// Skip null events (from LEFT JOIN when no events exist)
 			if eventBytes == nil {
 				continue
 			}
@@ -668,13 +677,6 @@ func (s *Service) getEventsList(
 		return nil, fmt.Errorf("query events failed: %w", err)
 	}
 
-	if limit <= 0 {
-		limit = s.opts.sessionEventLimit
-	}
-	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
-		afterTime = time.Now().Add(-s.opts.sessionTTL)
-	}
-	// Build result list in the same order as sessionKeys
 	result := make([][]event.Event, len(sessionKeys))
 	for i, key := range sessionKeys {
 		events := eventsMap[key.SessionID]
@@ -690,6 +692,56 @@ func (s *Service) getEventsList(
 	}
 
 	return result, nil
+}
+
+func (s *Service) getPagedEvents(
+	ctx context.Context,
+	key session.Key,
+	afterTime time.Time,
+	page *session.EventPage,
+) ([][]event.Event, error) {
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT session_id, event FROM (
+			SELECT session_id, event, created_at, id
+			FROM %s
+			WHERE app_name = $1 AND user_id = $2 AND session_id = $3
+			AND created_at >= $4
+			AND deleted_at IS NULL
+			ORDER BY created_at DESC, id DESC
+			LIMIT $5 OFFSET $6
+		) page
+		ORDER BY created_at ASC, id ASC`, s.tableSessionEvents)
+
+	events := make([]event.Event, 0, page.Limit)
+	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
+		for rows.Next() {
+			var sessionID string
+			var eventBytes []byte
+			if err := rows.Scan(&sessionID, &eventBytes); err != nil {
+				return err
+			}
+
+			if eventBytes == nil {
+				continue
+			}
+
+			var evt event.Event
+			if err := json.Unmarshal(eventBytes, &evt); err != nil {
+				return fmt.Errorf("unmarshal event failed: %w", err)
+			}
+			events = append(events, evt)
+		}
+		return nil
+	}, query, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("query events failed: %w", err)
+	}
+
+	return [][]event.Event{events}, nil
 }
 
 // getTrackEvents batch loads track events for multiple tracks.

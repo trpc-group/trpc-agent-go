@@ -485,7 +485,7 @@ Good for local use where you want persistence across restarts.
 If `session.config` is omitted, it defaults to:
 
 - `<state_dir>/sessions.sqlite` (where `state_dir` defaults to
-  `~/.trpc-agent-go/openclaw`)
+  `~/.trpc-agent-go-github/openclaw`)
 - `<state_dir>/debug` (when `debug_recorder.enabled: true`)
 
 Explicit path example:
@@ -807,16 +807,21 @@ threads.
 
 ### Preload memories into the prompt (optional)
 
-If you use a memory backend, you can preload recent memories into the
-system prompt:
+If you use a memory backend, you can preload memories into the system
+prompt:
 
 ```yaml
 agent:
-  preload_memory: 10   # 0=off, -1=all, N>0=most recent N
+  preload_memory: 10   # 0=off, -1=all, N>0=adaptive preload budget
 ```
 
 Recommendation: keep this small (like 10–50) so it stays readable and
 doesn't dominate the prompt.
+With a positive value, OpenClaw preloads all memories when the user has
+at most `N` memories, and otherwise injects the top `N` search results
+for the current user message. If query extraction is empty, the search
+fails, or the search returns no matches, it falls back to directly
+loading up to `N` memories.
 
 ### Cap raw history when you do not use summary (optional)
 
@@ -939,6 +944,136 @@ Optional config fields:
 
 ## Built-in ToolSets
 
+### Tool Provider: browser
+
+Adds one native `browser` tool that maps official-style browser actions
+onto either a Playwright MCP backend or the dedicated browser server.
+
+Use this when you want OpenClaw to expose a single browser capability to
+the model instead of a raw namespace full of `browser_*` MCP tools.
+
+Highlights:
+
+- Native actions:
+  `status/start/stop/profiles/tabs/open/focus/close/snapshot/screenshot/navigate/console/pdf/upload/dialog/act`
+- Browser screenshots still flow back to the model as real image
+  messages.
+- Root-level browser-server routing is supported with:
+  - `server_url`
+  - `sandbox_server_url`
+  - `nodes`
+- Multiple profiles are supported, for example:
+  - `openclaw` for an isolated browser session
+  - `chrome` for a current-tab relay profile
+- `evaluate_enabled: false` blocks custom page JavaScript unless you
+  explicitly allow it.
+- Navigation is guarded by default:
+  - loopback hosts are blocked
+  - private-network IPs are blocked
+  - `file://` URLs are blocked
+- You can refine navigation policy with:
+  - `allowed_domains`
+  - `blocked_domains`
+  - `allow_loopback`
+  - `allow_private_networks`
+  - `allow_file_urls`
+
+Runnable example: `openclaw/examples/browser_use/`.
+Browser-server example: `openclaw/examples/browser_server_use/`.
+
+```yaml
+tools:
+  providers:
+    - type: "browser"
+      config:
+        default_profile: "openclaw"
+        evaluate_enabled: false
+        allowed_domains: ["example.com"]
+        profiles:
+          - name: "openclaw"
+            transport: "stdio"
+            command: "npx"
+            args:
+              - "--yes"
+              - "@playwright/mcp@latest"
+              - "--headless"
+              - "--isolated"
+              - "--caps"
+              - "vision,pdf"
+            timeout: "5m"
+            reconnect:
+              enabled: true
+              max_attempts: 3
+```
+
+To allow localhost or private-network targets explicitly:
+
+```yaml
+tools:
+  providers:
+    - type: "browser"
+      config:
+        allow_loopback: true
+        allow_private_networks: true
+        allow_file_urls: true
+        profiles:
+          - name: "openclaw"
+            transport: "stdio"
+            command: "npx"
+            args:
+              - "--yes"
+              - "@playwright/mcp@latest"
+```
+
+Optional second profile for Playwright MCP Chrome extension mode:
+
+```yaml
+tools:
+  providers:
+    - type: "browser"
+      config:
+        default_profile: "openclaw"
+        profiles:
+          - name: "openclaw"
+            transport: "stdio"
+            command: "npx"
+            args:
+              - "--yes"
+              - "@playwright/mcp@latest"
+              - "--headless"
+          - name: "chrome"
+            transport: "stdio"
+            command: "npx"
+            args:
+              - "--yes"
+              - "@playwright/mcp@latest"
+              - "--extension"
+```
+
+Browser-server routing example:
+
+```yaml
+tools:
+  providers:
+    - type: "browser"
+      name: "browser-runtime"
+      config:
+        default_profile: "openclaw"
+        server_url: "http://127.0.0.1:19790"
+        sandbox_server_url: "http://127.0.0.1:20790"
+        profiles:
+          - name: "openclaw"
+          - name: "chrome"
+        nodes:
+          - id: "edge"
+            server_url: "http://node.example:29790"
+```
+
+Related runtime pieces:
+
+- `openclaw/browser-server/` for the local Node/Playwright browser plane
+- `openclaw/browser-extension/` for current-tab attach/detach relay
+
 ### ToolSet: mcp
 
 Connects to an MCP server and exposes its tools.
@@ -971,6 +1106,10 @@ tools:
 ```
 
 Example: Playwright MCP "browser use" (stdio) via `npx`:
+
+This is still useful when you explicitly want raw MCP tools for
+debugging. For normal OpenClaw browser use, prefer the native
+`tools.providers: [{type: "browser"}]` flow above.
 
 This starts the Playwright MCP server as a subprocess and exposes its browser
 tools under the `browser_` namespace prefix.

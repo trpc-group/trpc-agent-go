@@ -11,6 +11,8 @@
 // Package gwproto defines the JSON payloads used by the OpenClaw gateway.
 package gwproto
 
+import "encoding/json"
+
 // MessageRequest matches the gateway /messages JSON payload.
 //
 // The request supports both:
@@ -28,9 +30,13 @@ type MessageRequest struct {
 
 	ContentParts []ContentPart `json:"content_parts,omitempty"`
 
+	RequestSystemPrompt string `json:"request_system_prompt,omitempty"`
+
 	UserID    string `json:"user_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
+
+	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
 }
 
 // APIError matches gateway error payloads.
@@ -39,11 +45,26 @@ type APIError struct {
 	Message string `json:"message"`
 }
 
+// Usage is a transport-safe subset of model token usage.
+type Usage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
+
+	// LastPromptTokens is the prompt_tokens from the most recent LLM call
+	// within the request. Unlike PromptTokens which aggregates across all
+	// LLM calls in a request (tool-call loops), this field reflects the
+	// actual context window occupancy of the final call and is used for
+	// accurate context usage display.
+	LastPromptTokens int `json:"last_prompt_tokens,omitempty"`
+}
+
 // MessageResponse matches the gateway /messages response JSON.
 type MessageResponse struct {
 	SessionID string    `json:"session_id,omitempty"`
 	RequestID string    `json:"request_id,omitempty"`
 	Reply     string    `json:"reply,omitempty"`
+	Usage     *Usage    `json:"usage,omitempty"`
 	Ignored   bool      `json:"ignored,omitempty"`
 	Error     *APIError `json:"error,omitempty"`
 }

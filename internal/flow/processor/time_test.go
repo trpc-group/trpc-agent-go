@@ -164,6 +164,32 @@ func TestTimeRequestProcessor_ProcessRequest_WithExistingSystemMessage(t *testin
 	}
 }
 
+func TestTimeRequestProcessor_RebuildRequestForContextCompaction(t *testing.T) {
+	processor := NewTimeRequestProcessor(WithAddCurrentTime(true))
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("Existing system message"),
+		},
+	}
+
+	if !processor.SupportsContextCompactionRebuild(&agent.Invocation{}) {
+		t.Fatal("expected rebuild support")
+	}
+
+	processor.RebuildRequestForContextCompaction(
+		context.Background(),
+		&agent.Invocation{},
+		req,
+	)
+
+	if len(req.Messages) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(req.Messages))
+	}
+	if !strings.Contains(req.Messages[0].Content, "The current time is:") {
+		t.Fatalf("Expected time content to be added, got: %s", req.Messages[0].Content)
+	}
+}
+
 func TestTimeRequestProcessor_ProcessRequest_AppendsToLastSystem(
 	t *testing.T,
 ) {

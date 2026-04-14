@@ -48,6 +48,11 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Same(t, input, modified)
 
+	assert.NotNil(t, opts.AppNameResolver)
+	appName, err := opts.AppNameResolver(context.Background(), input)
+	assert.NoError(t, err)
+	assert.Empty(t, appName)
+
 	assert.NotNil(t, opts.StateResolver)
 	resolvedState, err := opts.StateResolver(context.Background(), input)
 	assert.NoError(t, err)
@@ -65,12 +70,14 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.Equal(t, rootCtx, ctx)
 	assert.NotNil(t, span)
 
+	assert.Equal(t, 5*time.Second, opts.PostRunFinalizationTimeout)
 	assert.Equal(t, time.Hour, opts.Timeout)
 	assert.False(t, opts.CancelOnContextDoneEnabled)
 	assert.False(t, opts.GraphNodeLifecycleActivityEnabled)
 	assert.False(t, opts.GraphNodeInterruptActivityEnabled)
 	assert.False(t, opts.GraphNodeInterruptActivityTopLevelOnly)
 	assert.False(t, opts.ReasoningContentEnabled)
+	assert.False(t, opts.ToolResultInputTranslationEnabled)
 }
 
 func TestWithUserIDResolver(t *testing.T) {
@@ -130,6 +137,16 @@ func TestWithReasoningContentEnabled(t *testing.T) {
 	assert.True(t, opts.ReasoningContentEnabled)
 }
 
+func TestWithToolResultInputTranslationEnabled(t *testing.T) {
+	opts := NewOptions(WithToolResultInputTranslationEnabled(true))
+	assert.True(t, opts.ToolResultInputTranslationEnabled)
+}
+
+func TestWithPostRunFinalizationTimeout(t *testing.T) {
+	opts := NewOptions(WithPostRunFinalizationTimeout(2 * time.Second))
+	assert.Equal(t, 2*time.Second, opts.PostRunFinalizationTimeout)
+}
+
 func TestWithTranslateCallbacks(t *testing.T) {
 	cb := translator.NewCallbacks()
 	opts := NewOptions(WithTranslateCallbacks(cb))
@@ -157,6 +174,20 @@ func TestWithRunAgentInputHook(t *testing.T) {
 func TestWithAppName(t *testing.T) {
 	opts := NewOptions(WithAppName("custom-app"))
 	assert.Equal(t, "custom-app", opts.AppName)
+}
+
+func TestWithAppNameResolver(t *testing.T) {
+	called := false
+	resolver := func(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
+		called = true
+		return "custom-app", nil
+	}
+	opts := NewOptions(WithAppNameResolver(resolver))
+	assert.NotNil(t, opts.AppNameResolver)
+	appName, err := opts.AppNameResolver(context.Background(), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, "custom-app", appName)
+	assert.True(t, called)
 }
 
 func TestWithSessionService(t *testing.T) {

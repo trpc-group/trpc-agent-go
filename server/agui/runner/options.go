@@ -23,11 +23,13 @@ import (
 )
 
 const (
+	defaultPostRunFinalizationTimeout             = 5 * time.Second
 	defaultTimeout                                = time.Hour
 	defaultGraphNodeLifecycleActivityEnabled      = false
 	defaultGraphNodeInterruptActivityEnabled      = false
 	defaultGraphNodeInterruptActivityTopLevelOnly = false
 	defaultReasoningContentEnabled                = false
+	defaultToolResultInputTranslationEnabled      = false
 )
 
 // Options holds the options for the runner.
@@ -37,6 +39,7 @@ type Options struct {
 	TranslateCallbacks                     *translator.Callbacks // TranslateCallbacks translates the run events to AG-UI events.
 	RunAgentInputHook                      RunAgentInputHook     // RunAgentInputHook allows modifying the run input before processing.
 	AppName                                string                // AppName is the name of the application.
+	AppNameResolver                        AppNameResolver       // AppNameResolver derives the app name for an AG-UI run.
 	SessionService                         session.Service       // SessionService is the session service.
 	StateResolver                          StateResolver         // StateResolver resolves runtime state for an AG-UI run.
 	RunOptionResolver                      RunOptionResolver     // RunOptionResolver resolves the runner options for an AG-UI run.
@@ -46,12 +49,14 @@ type Options struct {
 	MessagesSnapshotFollowEnabled          bool                  // MessagesSnapshotFollowEnabled enables tailing persisted AG-UI track events after MESSAGES_SNAPSHOT.
 	MessagesSnapshotFollowMaxDuration      time.Duration         // MessagesSnapshotFollowMaxDuration bounds how long tailing can run before emitting RUN_ERROR.
 	StartSpan                              StartSpan             // StartSpan starts a span for an AG-UI run.
+	PostRunFinalizationTimeout             time.Duration         // PostRunFinalizationTimeout bounds how long post-run finalization is allowed to take.
 	Timeout                                time.Duration         // Timeout controls how long a run is allowed to execute.
 	CancelOnContextDoneEnabled             bool                  // CancelOnContextDoneEnabled cancels the run when the parent context is done.
 	GraphNodeLifecycleActivityEnabled      bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
 	GraphNodeInterruptActivityEnabled      bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
 	GraphNodeInterruptActivityTopLevelOnly bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
 	ReasoningContentEnabled                bool                  // ReasoningContentEnabled controls whether reasoning content events are emitted.
+	ToolResultInputTranslationEnabled      bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
 }
 
 // NewOptions creates a new options instance.
@@ -60,16 +65,19 @@ func NewOptions(opt ...Option) *Options {
 		UserIDResolver:                         defaultUserIDResolver,
 		TranslatorFactory:                      defaultTranslatorFactory,
 		RunAgentInputHook:                      defaultRunAgentInputHook,
+		AppNameResolver:                        defaultAppNameResolver,
 		StateResolver:                          defaultStateResolver,
 		RunOptionResolver:                      defaultRunOptionResolver,
 		AggregatorFactory:                      aggregator.New,
 		FlushInterval:                          track.DefaultFlushInterval,
 		StartSpan:                              defaultStartSpan,
+		PostRunFinalizationTimeout:             defaultPostRunFinalizationTimeout,
 		Timeout:                                defaultTimeout,
 		GraphNodeLifecycleActivityEnabled:      defaultGraphNodeLifecycleActivityEnabled,
 		GraphNodeInterruptActivityEnabled:      defaultGraphNodeInterruptActivityEnabled,
 		GraphNodeInterruptActivityTopLevelOnly: defaultGraphNodeInterruptActivityTopLevelOnly,
 		ReasoningContentEnabled:                defaultReasoningContentEnabled,
+		ToolResultInputTranslationEnabled:      defaultToolResultInputTranslationEnabled,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -90,9 +98,7 @@ func WithUserIDResolver(u UserIDResolver) Option {
 	}
 }
 
-// TranslatorFactory is a function that creates a translator for an AG-UI run.
-type TranslatorFactory func(ctx context.Context, input *adapter.RunAgentInput,
-	opts ...translator.Option) (translator.Translator, error)
+type TranslatorFactory = translator.Factory
 
 // WithTranslatorFactory sets the translator factory.
 func WithTranslatorFactory(factory TranslatorFactory) Option {
@@ -122,6 +128,16 @@ func WithRunAgentInputHook(hook RunAgentInputHook) Option {
 func WithAppName(n string) Option {
 	return func(o *Options) {
 		o.AppName = n
+	}
+}
+
+// AppNameResolver is a function that derives the app name for an AG-UI run.
+type AppNameResolver func(ctx context.Context, input *adapter.RunAgentInput) (string, error)
+
+// WithAppNameResolver sets the app name resolver.
+func WithAppNameResolver(r AppNameResolver) Option {
+	return func(o *Options) {
+		o.AppNameResolver = r
 	}
 }
 
@@ -204,6 +220,13 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
+// WithPostRunFinalizationTimeout sets the maximum duration allowed for post-run finalization.
+func WithPostRunFinalizationTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		o.PostRunFinalizationTimeout = d
+	}
+}
+
 // WithCancelOnContextDoneEnabled controls whether a run is canceled when the parent context is done.
 func WithCancelOnContextDoneEnabled(enabled bool) Option {
 	return func(o *Options) {
@@ -239,6 +262,13 @@ func WithReasoningContentEnabled(enabled bool) Option {
 	}
 }
 
+// WithToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
+func WithToolResultInputTranslationEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.ToolResultInputTranslationEnabled = enabled
+	}
+}
+
 // defaultUserIDResolver is the default user ID resolver.
 func defaultUserIDResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
 	return "user", nil
@@ -246,12 +276,18 @@ func defaultUserIDResolver(ctx context.Context, input *adapter.RunAgentInput) (s
 
 func defaultTranslatorFactory(ctx context.Context, input *adapter.RunAgentInput,
 	opts ...translator.Option) (translator.Translator, error) {
-	return translator.New(ctx, input.ThreadID, input.RunID, opts...)
+	factory := translator.NewFactory()
+	return factory(ctx, input, opts...)
 }
 
 // defaultRunAgentInputHook returns the input unchanged.
 func defaultRunAgentInputHook(ctx context.Context, input *adapter.RunAgentInput) (*adapter.RunAgentInput, error) {
 	return input, nil
+}
+
+// defaultAppNameResolver returns no dynamic app name.
+func defaultAppNameResolver(ctx context.Context, input *adapter.RunAgentInput) (string, error) {
+	return "", nil
 }
 
 // defaultRunOptionResolver is the default run option resolver.

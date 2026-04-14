@@ -12,6 +12,8 @@ package tool
 import (
 	"context"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestToolCallIDContext(t *testing.T) {
@@ -68,4 +70,22 @@ func TestToolCallIDContext_WrongType(t *testing.T) {
 	if ok {
 		t.Error("expected toolCallID not to be found when value is wrong type")
 	}
+}
+
+func TestStructuredStreamErrorsContext(t *testing.T) {
+	require.False(t, StructuredStreamErrorsFromContext(nil))
+	require.False(t, StructuredStreamErrorsFromContext(context.Background()))
+	ctx := WithStructuredStreamErrors(nil)
+	require.True(t, StructuredStreamErrorsFromContext(ctx))
+	ctx = context.WithValue(ctx, contextKeyStructuredStreamErrors{}, false)
+	require.False(t, StructuredStreamErrorsFromContext(ctx))
+}
+
+func TestFinalResultChunksContext(t *testing.T) {
+	require.False(t, FinalResultChunksFromContext(nil))
+	require.False(t, FinalResultChunksFromContext(context.Background()))
+	ctx := WithFinalResultChunks(nil)
+	require.True(t, FinalResultChunksFromContext(ctx))
+	ctx = context.WithValue(ctx, contextKeyFinalResultChunks{}, false)
+	require.False(t, FinalResultChunksFromContext(ctx))
 }

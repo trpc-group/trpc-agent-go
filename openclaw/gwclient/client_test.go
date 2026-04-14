@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -112,6 +113,42 @@ func TestClient_SendMessage_Success(t *testing.T) {
 	require.Equal(t, 200, rsp.StatusCode)
 	require.Equal(t, "ok", rsp.Reply)
 	require.Equal(t, "req-1", rsp.RequestID)
+}
+
+func TestClient_SendMessage_IncludesUsage(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(&staticRunner{
+		events: []*event.Event{{
+			Response: &model.Response{
+				Object: model.ObjectTypeChatCompletion,
+				Choices: []model.Choice{
+					{Message: model.NewAssistantMessage("ok")},
+				},
+				Usage: &model.Usage{
+					PromptTokens:     12000,
+					CompletionTokens: 345,
+					TotalTokens:      12345,
+				},
+				Done: true,
+			},
+			RequestID: "req-1",
+		}},
+	})
+	require.NoError(t, err)
+
+	cli, err := New(srv.Handler(), srv.MessagesPath(), srv.CancelPath())
+	require.NoError(t, err)
+
+	rsp, err := cli.SendMessage(context.Background(), MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, rsp.Usage)
+	require.Equal(t, 12000, rsp.Usage.PromptTokens)
+	require.Equal(t, 345, rsp.Usage.CompletionTokens)
+	require.Equal(t, 12345, rsp.Usage.TotalTokens)
 }
 
 func TestClient_SendMessage_MentionGating(t *testing.T) {

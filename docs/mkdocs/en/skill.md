@@ -52,7 +52,7 @@ the prompt up-front, it can dominate your prompt-token budget and even
 exceed the model context window.
 
 For a reproducible, **runtime** token comparison (progressive disclosure
-vs full injection), see `benchmark/anthropic_skills/README.md` and run
+vs full injection), see [trpc-agent-go-benchmark/anthropic_skills/README.md](https://github.com/trpc-group/trpc-agent-go-benchmark/blob/main/anthropic_skills/README.md) and run
 the `token-report` suite described there.
 
 ### Prompt Cache
@@ -94,7 +94,7 @@ To restore the legacy fallback behavior in summary mode:
 `llmagent.WithSkipSkillsFallbackOnSessionSummary(false)`.
 
 To measure the impact in a real tool-using flow, run the
-`benchmark/anthropic_skills` `prompt-cache` suite.
+[trpc-agent-go-benchmark/anthropic_skills](https://github.com/trpc-group/trpc-agent-go-benchmark/tree/main/anthropic_skills) `prompt-cache` suite.
 
 How this relates to `SkillLoadMode` (common pitfall):
 
@@ -245,6 +245,49 @@ agent := llmagent.New(
 )
 ```
 
+`NewFSRepository` can scan multiple roots. A common pattern is one
+shared skills directory plus one user-private skills directory:
+
+```go
+repo, _ := skill.NewFSRepository(
+    "./skills/common",
+    "./skills/users/alice",
+)
+```
+
+If one long-lived agent serves many requests against a shared
+repository view, add a per-run visibility filter. The filter can read
+any business signal available in `ctx` / runtime state (for example
+`user_id`, `tenant_id`, role, or other request-scoped flags) and hides
+non-matching skills from the overview, tool declarations, and runtime
+checks. `user_id` below is only one example:
+
+```go
+agt := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithSkillFilter(func(ctx context.Context, s skill.Summary) bool {
+        userID, _ := agent.GetRuntimeStateValueFromContext[string](ctx, "user_id")
+        return allow(userID, s.Name)
+    }),
+)
+
+r := runner.NewRunner("skills-app", agt)
+
+ch, _ := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    model.NewUserMessage("..."),
+    agent.WithRuntimeState(map[string]any{"user_id": userID}),
+)
+```
+
+If a long-lived process installs, deletes, or renames skills after
+startup, call `repo.Refresh()` after the filesystem update is committed.
+`Refresh()` is meant for repository structure changes, not for every
+request.
+
 Knowledge-only mode:
 
 ```go
@@ -257,6 +300,18 @@ agent := llmagent.New(
 )
 ```
 
+Fine-grained allowlist:
+
+```go
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithAllowedSkillTools(
+        llmagent.SkillToolLoad,
+    ),
+)
+```
+
 Key points:
 - Request processor injects overview and on‑demand content:
   [internal/flow/processor/skills.go]
@@ -264,23 +319,36 @@ Key points:
 - `WithSkills` auto-registers built-in skill tools; no manual wiring is
   required.
   - Default `full` profile: `skill_load`, `skill_select_docs`,
-    `skill_list_docs`, `skill_run`, `skill_exec`,
-    `skill_write_stdin`, `skill_poll_session`, `skill_kill_session`.
+    `skill_list_docs`, `skill_run`, and — when the executor supports
+    interactive sessions — `skill_exec`, `skill_write_stdin`,
+    `skill_poll_session`, `skill_kill_session`.  If the executor does
+    not implement `InteractiveProgramRunner` (and no local fallback
+    applies), these session tools are omitted and the corresponding
+    prompt guidance is suppressed.
   - `knowledge_only` profile: only `skill_load`, `skill_select_docs`,
     and `skill_list_docs`.
-  - Executor requirement follows the profile:
-    `full` usually also needs `WithCodeExecutor(...)`;
-    `knowledge_only` does not.
-- Note: when `WithCodeExecutor` is set, LLMAgent will (by default) try to
-  execute Markdown fenced code blocks in model responses. If you only need
-  the executor for `skill_run`, disable this behavior with
+  - `WithAllowedSkillTools(...)` overrides the profile with an explicit
+    allowlist, for example `SkillToolLoad` only.
+  - If the allowlist includes `skill_run` / `skill_exec`, the default
+    `WithSkillRunRequireSkillLoaded(true)` still requires `skill_load`
+    to be enabled as well. To omit `skill_load`, explicitly set
+    `llmagent.WithSkillRunRequireSkillLoaded(false)`.
+  - Executor requirement follows the final registered tool set:
+    any configuration without `skill_run` / `skill_exec` does not need
+    `llmagent.WithCodeExecutor(...)` or `agent.WithCodeExecutor(...)`.
+- Note: when `llmagent.WithCodeExecutor(...)` is set, or when
+  `agent.WithCodeExecutor(...)` is passed to `runner.Run(...)`, LLMAgent will
+  (by default) try to execute Markdown fenced code blocks in model responses.
+  If you only need the executor for `skill_run`, disable this behavior with
   `llmagent.WithEnableCodeExecutionResponseProcessor(false)`.
 - By default, the framework appends a small `Tooling and workspace guidance:`
   block after the `Available skills:` list in the system message.
   - Disable it (to save prompt tokens): `llmagent.WithSkillsToolingGuidance("")`.
   - Or replace it with your own text: `llmagent.WithSkillsToolingGuidance("...")`.
+  - Guidance follows the final registered skill tools, including
+    `WithAllowedSkillTools(...)`.
   - If you disable it, make sure your instruction tells the model which
-    skill tools are available in your chosen profile.
+    skill tools are available in your chosen profile or allowlist.
   - Loader: [tool/skill/load.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go)
   - Runner: [tool/skill/run.go](https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go)
 
@@ -305,6 +373,15 @@ GAIA benchmark demo (skills + file tools):
 
 It includes a dataset downloader script and notes on Python dependencies
 for skills like `whisper` (audio) and `ocr` (images).
+
+Real discovery/install demo (real model + real web/GitHub):
+[examples/skillfind/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillfind/README.md)
+
+It starts with a built-in `skill-find` skill, searches the public web for
+candidate skills, installs a public skill from GitHub into a user-private
+directory, refreshes the repository, and uses the new skill in the same
+conversation. Local execution stays disabled by default and is only
+enabled when you opt in.
 
 SkillLoadMode demo (no API key required):
 [examples/skillloadmode/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillloadmode/README.md)
@@ -384,6 +461,8 @@ Behavior:
 - Writes session-scoped `temp:*` keys:
   - `temp:skill:loaded_by_agent:<agent>/<name>` = "1"
   - `temp:skill:docs_by_agent:<agent>/<name>` = "*" or JSON array
+  - `temp:skill:loaded_order_by_agent:<agent>` = JSON array of touched
+    skill names, from oldest to newest
   - Legacy keys (`temp:skill:loaded:<name>`, `temp:skill:docs:<name>`) are
     still supported and migrated when seen.
 - Multi-agent note: sub-agents typically share the same Session. With
@@ -489,7 +568,8 @@ Notes:
 
 - `SkillLoadModeTurn` (default) clears the agent-scoped `temp:skill:*`
   keys (for example, `temp:skill:loaded_by_agent:*` /
-  `temp:skill:docs_by_agent:*`) at the start of the **next**
+  `temp:skill:docs_by_agent:*` /
+  `temp:skill:loaded_order_by_agent:*`) at the start of the **next**
   `Runner.Run` call, so the loaded list is usually non-empty only within
   the current turn/tool loop.
 - `SkillLoadModeSession` keeps them across turns, so the loaded list can
@@ -503,8 +583,9 @@ the built-in option:
 - `llmagent.WithMaxLoadedSkills(N)`
 
 This enforces the cap **before every model request** by clearing older
-`temp:skill:*` state keys, based on recent `skill_load` /
-`skill_select_docs` tool responses in the session.
+`temp:skill:*` state keys. Recent skill touches are tracked in session
+state and updated by `skill_load` / `skill_select_docs`, so the cap does
+not depend on alphabetical fallback or surviving tool-result history.
 
 Example:
 
@@ -733,7 +814,7 @@ svc := inmemory.NewSessionService(
 _ = svc
 ```
 
-See `docs/mkdocs/en/session.md` (“AppendEventHook”) for the hook API, and
+See [Session docs](session/index.md) (“AppendEventHook”) for the hook API, and
 `examples/session/hook` for a runnable example.
 
 Notes:
@@ -886,6 +967,8 @@ Behavior:
 - Updates doc selection state for the current agent:
   - `temp:skill:docs_by_agent:<agent>/<name>` = `*` for include all
   - `temp:skill:docs_by_agent:<agent>/<name>` = JSON array for explicit list
+  - Also refreshes `temp:skill:loaded_order_by_agent:<agent>` so
+    `WithMaxLoadedSkills(N)` treats doc selection as a recent touch
   - Legacy key `temp:skill:docs:<name>` is still supported and migrated.
 
 ### `skill_list_docs`
@@ -1004,19 +1087,35 @@ Optional behavior (force artifact persistence):
   / `outputs.save`:
   - `llmagent.WithSkillRunForceSaveArtifacts(true)`
 
+Optional behavior (inline output limits):
+- In code, you can customize how much inline text `skill_run` returns:
+  - `llmagent.WithSkillRunOutputLimits(toolskill.RunOutputLimits{StdoutStderrBytes: 128 * 1024, PrimaryOutputBytes: 128 * 1024})`
+- This changes only `stdout`, `stderr`, and `primary_output`.
+  `output_files` / `outputs` still use the workspace collector limits
+  (default 4 MiB/file).
+
 Output:
 - `stdout`, `stderr`, `exit_code`, `timed_out`, `duration_ms`
+  - `stdout` / `stderr` are for logs and short status text. They may be
+    truncated at the configured inline limit (default 16 KiB each).
+    For large or structured text that the model must read, prefer
+    `output_files` or `outputs`.
 - `staged_inputs` (optional): files staged from the conversation into
   `work/inputs/` for this run
 - `primary_output` (optional) with `name`, `ref`, `content`, `mime_type`,
   `size_bytes`, `truncated`
   - Convenience pointer to the "best" small text output file (when one
     exists). Prefer this when there is a single main output.
+  - Only text files within the configured size limit (default 32 KiB)
+    are considered for `primary_output`.
 - `output_files` with `name`, `ref`, `content`, `mime_type`, `size_bytes`,
   `truncated`
   - `ref` is a stable `workspace://<name>` reference that can be passed
     to other tools
   - For non-text files, `content` is omitted.
+  - Prefer this path for large or structured text outputs; file
+    collection uses workspace collector limits instead of the smaller
+    stdout/stderr inline budget.
   - When `omit_inline_content=true`, `content` is omitted for all files.
     Use `ref` with `read_file` to fetch text content on demand.
   - `size_bytes` is the file size on disk; `truncated=true` means the
@@ -1214,6 +1313,48 @@ Common spans:
 - Isolation: Scripts run within a workspace boundary and only selected
   output files are brought back, not the script source.
 
+## Executor Environment Variable Injection
+
+When the executor runs remotely (containers, cloud functions, etc.),
+host environment variables are not automatically available.
+`codeexecutor.NewEnvInjectingCodeExecutor` wraps any `CodeExecutor`
+so that a provider function is called on every `RunProgram` /
+`StartProgram` to merge extra env vars into `RunProgramSpec.Env`.
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+
+wrapped := codeexecutor.NewEnvInjectingCodeExecutor(exec,
+    func(ctx context.Context) map[string]string {
+        // Read caller-supplied env from ctx.
+        // Source is up to you: RuntimeState, request headers, DB, etc.
+        return map[string]string{"GITHUB_TOKEN": "..."}
+    },
+)
+
+agent := llmagent.New(
+    "skills-assistant",
+    llmagent.WithSkills(repo),
+    llmagent.WithCodeExecutor(wrapped),  // use wrapped instead of raw exec
+)
+```
+
+Behavior:
+
+- Covers all paths through `Engine.Runner()`: `skill_run`,
+  `workspace_exec`, and interactive sessions.
+- Provider-returned keys **never override** keys already set in
+  the tool's `env` argument.
+- Evaluated on each `RunProgram` call; no state shared between calls.
+- Zero overhead when the provider returns `nil`.
+- You can also wrap at the Engine level:
+  `codeexecutor.NewEnvInjectingEngine(eng, provider)`.
+
+Typical use case: in a multi-user agent service, each user passes
+their tokens via AG-UI `state` or HTTP headers; the provider reads
+them from the request context and injects them into the executor
+transparently — the LLM never sees the credentials.
+
 ## Troubleshooting
 
 - Unknown skill: verify name and repository path; ensure the overview
@@ -1240,5 +1381,7 @@ Common spans:
 - This repo:
   - Interactive demo: [examples/skillrun/main.go]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/main.go)
+  - Real discovery/install demo: [examples/skillfind/README.md]
+    (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillfind/README.md)
   - Sample skill: [examples/skillrun/skills/python_math/SKILL.md]
     (https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skillrun/skills/python_math/SKILL.md)

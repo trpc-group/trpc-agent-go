@@ -27,6 +27,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	sessionpkg "trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -436,6 +438,51 @@ func TestProcessTool_Write(t *testing.T) {
 	require.Contains(t, output, "got:ok")
 }
 
+func TestProcessTool_WriteRedactsSensitiveValueOutput(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithJobTTL(10*time.Second),
+		WithOutputRedactor(NewChatCommandOutputRedactor()),
+	)
+	execTool := newExecCommandTool(mgr)
+	writeTool := newWriteStdinTool(mgr)
+
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command": "read -r x; printf %s 'sk-live-secret'",
+			"env": map[string]string{
+				"OPENAI_API_KEY": "sk-live-secret",
+			},
+			"background": true,
+		}),
+	)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	writeAny, err := writeTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"session_id": res.SessionID,
+			"chars":      "ok\n",
+		}),
+	)
+	require.NoError(t, err)
+
+	output := outputField(writeAny.(map[string]any))
+	output += pollUntilExited(t, mgr, res.SessionID)
+	require.Contains(t, output, "[REDACTED:OPENAI_API_KEY]")
+	require.NotContains(t, output, "sk-live-secret")
+
+	logAny, err := mgr.log(res.SessionID, nil, nil)
+	require.NoError(t, err)
+	require.Contains(t, logAny.Output, "[REDACTED:OPENAI_API_KEY]")
+	require.NotContains(t, logAny.Output, "sk-live-secret")
+}
+
 func TestTools_InvalidArgs(t *testing.T) {
 	mgr := NewManager()
 	execTool := newExecCommandTool(mgr)
@@ -466,6 +513,35 @@ func TestTools_Declaration(t *testing.T) {
 	require.Equal(t, toolExecCommand, execTool.Declaration().Name)
 	require.Equal(t, toolWriteStdin, writeTool.Declaration().Name)
 	require.Equal(t, toolKillSession, killTool.Declaration().Name)
+}
+
+func TestExecToolDeclaration_HidesMemoryFileGuidanceWithoutStore(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	decl := newExecCommandTool(NewManager()).Declaration()
+	require.NotNil(t, decl)
+	require.NotContains(t, decl.Description, envMemoryFile)
+}
+
+func TestExecToolDeclaration_ExposesMemoryFileGuidanceWithStore(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	decl := NewExecCommandToolWithMemoryFileStore(
+		NewManager(),
+		nil,
+		store,
+	).Declaration()
+	require.NotNil(t, decl)
+	require.Contains(t, decl.Description, envMemoryFile)
 }
 
 func TestManager_ListIncludesExitedSession(t *testing.T) {
@@ -626,11 +702,175 @@ func TestTools_NilManagers(t *testing.T) {
 func TestManager_ExecErrors(t *testing.T) {
 	mgr := NewManager()
 
-	_, err := mgr.Exec(nil, execParams{Command: "echo hi"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := mgr.Exec(ctx, execParams{Command: "echo hi"})
 	require.Error(t, err)
 
 	_, err = mgr.Exec(context.Background(), execParams{})
 	require.Error(t, err)
+}
+
+func TestManager_ExecSkipsShellSnapshotWithoutHooks(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager()
+	mgr.shellEnvSnapshot = func(
+		context.Context,
+		string,
+	) map[string]string {
+		t.Fatal("unexpected shell env snapshot")
+		return nil
+	}
+
+	yieldMs := 0
+	out, err := mgr.Exec(context.Background(), execParams{
+		Command: "echo ok",
+		YieldMs: &yieldMs,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "exited", out.Status)
+	require.Contains(t, out.Output, "ok")
+}
+
+func TestManager_CommandEnvUsesWorkdirSnapshot(t *testing.T) {
+	mgr := NewManager(WithBaseEnv(map[string]string{
+		"BASE_ONLY": "base",
+		"SHARED":    "base",
+		" ":         "skip",
+	}))
+
+	var gotWorkdir string
+	mgr.shellEnvSnapshot = func(
+		_ context.Context,
+		workdir string,
+	) map[string]string {
+		gotWorkdir = workdir
+		return map[string]string{
+			"OPENAI_API_KEY": "sk-shell-secret",
+			"SHARED":         "shell",
+		}
+	}
+
+	env := mgr.commandEnv(
+		context.Background(),
+		"/tmp/work",
+		map[string]string{
+			"EXTRA_ONLY": "extra",
+			"SHARED":     "extra",
+			" ":          "skip",
+		},
+	)
+	require.Equal(t, "/tmp/work", gotWorkdir)
+	require.Equal(t, "sk-shell-secret", env["OPENAI_API_KEY"])
+	require.Equal(t, "base", env["BASE_ONLY"])
+	require.Equal(t, "extra", env["EXTRA_ONLY"])
+	require.Equal(t, "extra", env["SHARED"])
+	_, ok := env[" "]
+	require.False(t, ok)
+}
+
+func TestManager_CommandEnvFallsBackToProcessEnv(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-process-secret")
+
+	mgr := NewManager()
+	mgr.shellEnvSnapshot = func(
+		context.Context,
+		string,
+	) map[string]string {
+		return nil
+	}
+
+	env := mgr.commandEnv(
+		context.Background(),
+		"",
+		map[string]string{
+			"EXTRA_ONLY": "extra",
+		},
+	)
+	require.Equal(t, "sk-process-secret", env["OPENAI_API_KEY"])
+	require.Equal(t, "extra", env["EXTRA_ONLY"])
+}
+
+func TestMergeEnvMaps_EmptyInputsReturnNil(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, mergeEnvMaps(nil, nil))
+}
+
+func TestEnvListToMap_IgnoresInvalidPairs(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, envListToMap(nil))
+
+	env := envListToMap([]string{
+		"OPENAI_API_KEY=sk-test-secret",
+		"EMPTY_VALUE=",
+		"INVALID",
+		"=MISSING_KEY",
+		"",
+	})
+	require.Equal(t, "sk-test-secret", env["OPENAI_API_KEY"])
+	require.Equal(t, "", env["EMPTY_VALUE"])
+	_, ok := env[""]
+	require.False(t, ok)
+}
+
+func TestBlocksSensitivePathValue_EmptyInput(t *testing.T) {
+	t.Parallel()
+
+	require.False(t, blocksSensitivePathValue("", nil, nil, nil))
+}
+
+func TestAppendProtectedPathDir_IgnoresRelativePath(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, appendProtectedPathDir(nil, "env.sh"))
+}
+
+func TestManager_LoginShellEnvRespectsContextAndWorkdir(
+	t *testing.T,
+) {
+	mgr := NewManager()
+	calls := 0
+	workdirs := make([]string, 0, 2)
+	mgr.shellEnvSnapshot = func(
+		ctx context.Context,
+		workdir string,
+	) map[string]string {
+		calls++
+		workdirs = append(workdirs, workdir)
+		if calls == 1 {
+			<-ctx.Done()
+			return nil
+		}
+		return map[string]string{
+			"OPENAI_API_KEY": "sk-test-secret",
+		}
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan map[string]string, 1)
+	go func() {
+		done <- mgr.loginShellEnv(canceled, "/tmp/one")
+	}()
+
+	select {
+	case env := <-done:
+		require.Nil(t, env)
+	case <-time.After(time.Second):
+		t.Fatal("login shell env snapshot ignored request context")
+	}
+
+	env := mgr.loginShellEnv(context.Background(), "/tmp/two")
+	require.Equal(t, "sk-test-secret", env["OPENAI_API_KEY"])
+	require.Equal(t, 2, calls)
+	require.Equal(t, []string{"/tmp/one", "/tmp/two"}, workdirs)
 }
 
 func TestUploadEnvFromContext(t *testing.T) {

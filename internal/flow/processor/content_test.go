@@ -12,14 +12,17 @@ package processor
 import (
 	"context"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -289,6 +292,31 @@ func TestContentRequestProcessor_ToolResponses(t *testing.T) {
 func TestContentRequestProcessor_WithAddSessionSummary_Option(t *testing.T) {
 	p := NewContentRequestProcessor(WithAddSessionSummary(true))
 	assert.True(t, p.AddSessionSummary)
+}
+
+func TestContentRequestProcessor_WithEventMessageProjector_Option(
+	t *testing.T,
+) {
+	projector := func(
+		_ *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		msg.Content = "projected"
+		return msg
+	}
+
+	p := NewContentRequestProcessor(
+		WithEventMessageProjector(projector),
+	)
+	assert.NotNil(t, p.EventMessageProjector)
+
+	msg := p.EventMessageProjector(
+		nil,
+		event.Event{},
+		model.NewUserMessage("hello"),
+	)
+	assert.Equal(t, "projected", msg.Content)
 }
 
 func TestContentRequestProcessor_InjectSystemContextMessage(t *testing.T) {
@@ -700,6 +728,128 @@ func TestContentRequestProcessor_getFilterIncrementalMessagesWithTime(t *testing
 			}
 		})
 	}
+}
+
+func TestContentRequestProcessor_getIncrementMessages_ProjectsEvents(
+	t *testing.T,
+) {
+	projector := func(
+		_ *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		if msg.Role != model.RoleUser {
+			return msg
+		}
+		msg.Content = "Projected: " + msg.Content
+		return msg
+	}
+
+	p := NewContentRequestProcessor(
+		WithEventMessageProjector(projector),
+	)
+	sess := &session.Session{
+		Events: []event.Event{
+			createTestEvent(
+				"user",
+				"hello",
+				time.Now(),
+			),
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("test-filter"),
+	)
+
+	messages := p.getIncrementMessages(inv, time.Time{})
+	assert.Len(t, messages, 1)
+	assert.Equal(t, "Projected: hello", messages[0].Content)
+}
+
+func TestContentRequestProcessor_getCurrentInvocationMessages_ProjectsOnce(
+	t *testing.T,
+) {
+	const (
+		requestID    = "req-1"
+		invocationID = "inv-1"
+	)
+
+	projector := func(
+		_ *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		if msg.Role != model.RoleUser {
+			return msg
+		}
+		msg.Content = "Projected: " + msg.Content
+		return msg
+	}
+
+	evt := event.NewResponseEvent(
+		invocationID,
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("hello"),
+			}},
+		},
+	)
+	evt.RequestID = requestID
+	evt.FilterKey = "test-filter"
+
+	sess := &session.Session{
+		Events: []event.Event{*evt},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(
+			model.NewUserMessage("hello"),
+		),
+		agent.WithInvocationEventFilterKey("test-filter"),
+	)
+	inv.InvocationID = invocationID
+	inv.RunOptions.RequestID = requestID
+
+	p := NewContentRequestProcessor(
+		WithEventMessageProjector(projector),
+	)
+	messages := p.getCurrentInvocationMessages(inv)
+
+	assert.Len(t, messages, 1)
+	assert.Equal(t, "Projected: hello", messages[0].Content)
+}
+
+func TestContentRequestProcessor_ProcessRequest_ProjectsInvocationMessage(
+	t *testing.T,
+) {
+	projector := func(
+		inv *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		if inv == nil || msg.Role != model.RoleUser {
+			return msg
+		}
+		msg.Content = "Projected: " + msg.Content
+		return msg
+	}
+
+	p := NewContentRequestProcessor(
+		WithEventMessageProjector(projector),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(
+			model.NewUserMessage("hello"),
+		),
+	)
+	req := &model.Request{}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	assert.Len(t, req.Messages, 1)
+	assert.Equal(t, "Projected: hello", req.Messages[0].Content)
 }
 
 func TestContentRequestProcessor_ConcurrentSummariesAccess(t *testing.T) {
@@ -1321,6 +1471,14 @@ func createTestEvent(author, content string, timestamp time.Time) event.Event {
 	}
 }
 
+func TestIsEventEligibleForInclusion_SkipsSnapshotOnlyCompletion(t *testing.T) {
+	evt := createTestEvent("graph", "snapshot", time.Now())
+	evt.StateDelta = map[string][]byte{}
+	graph.SetCompletionSnapshotOnlyInStateDelta(evt.StateDelta, true)
+
+	assert.False(t, isEventEligibleForInclusion(evt))
+}
+
 // TestContentRequestProcessor_Integration_MaxHistoryRunsAndAddSessionSummary tests the interaction
 // between MaxHistoryRuns and AddSessionSummary settings.
 func TestContentRequestProcessor_Integration_MaxHistoryRunsAndAddSessionSummary(t *testing.T) {
@@ -1461,13 +1619,19 @@ func Test_toMap(t *testing.T) {
 func TestNewContentRequestProcessor(t *testing.T) {
 
 	defaultWant := &ContentRequestProcessor{
-		BranchFilterMode:   "prefix",
-		AddContextPrefix:   true,
-		PreserveSameBranch: false,
-		TimelineFilterMode: "all",
-		AddSessionSummary:  false,
-		MaxHistoryRuns:     0,
-		PreloadMemory:      0, // Default to disable preloading.
+		BranchFilterMode:               "prefix",
+		AddContextPrefix:               true,
+		PreserveSameBranch:             false,
+		TimelineFilterMode:             "all",
+		AddSessionSummary:              false,
+		MaxHistoryRuns:                 0,
+		PreloadMemory:                  0, // Default to disable preloading.
+		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
+		ContextCompactionConfig: ContextCompactionConfig{
+			KeepRecentRequests:           DefaultContextCompactionKeepRecentRequests,
+			ToolResultMaxTokens:          DefaultContextCompactionToolResultMaxTokens,
+			OversizedToolResultMaxTokens: DefaultContextCompactionOversizedToolResultMaxTokens,
+		},
 	}
 
 	tests := []struct {
@@ -1500,15 +1664,14 @@ func TestNewContentRequestProcessor(t *testing.T) {
 				WithTimelineFilterMode(TimelineFilterCurrentRequest),
 				WithBranchFilterMode("all"),
 			},
-			want: &ContentRequestProcessor{
-				BranchFilterMode:   "all",
-				AddContextPrefix:   false,
-				PreserveSameBranch: false,
-				TimelineFilterMode: TimelineFilterCurrentRequest,
-				AddSessionSummary:  false,
-				MaxHistoryRuns:     0,
-				PreloadMemory:      0,
-			},
+			want: func() *ContentRequestProcessor {
+				w := *defaultWant
+				w.BranchFilterMode = "all"
+				w.AddContextPrefix = false
+				w.PreserveSameBranch = false
+				w.TimelineFilterMode = TimelineFilterCurrentRequest
+				return &w
+			}(),
 		},
 
 		{
@@ -1541,6 +1704,17 @@ func TestNewContentRequestProcessor(t *testing.T) {
 			want: func() *ContentRequestProcessor {
 				w := *defaultWant
 				w.BranchFilterMode = "exact"
+				return &w
+			}(),
+		},
+		{
+			name: "oversized tool result limit option",
+			args: []ContentOption{
+				WithContextCompactionOversizedToolResultMaxTokens(64),
+			},
+			want: func() *ContentRequestProcessor {
+				w := *defaultWant
+				w.ContextCompactionConfig.OversizedToolResultMaxTokens = 64
 				return &w
 			}(),
 		},
@@ -2292,6 +2466,80 @@ func TestContentRequestProcessor_IncludeContentsNoneSkipsHistory(t *testing.T) {
 	if msg.Role != model.RoleUser || msg.Content != "current" {
 		t.Fatalf("unexpected message: %+v", msg)
 	}
+}
+
+func TestContentRequestProcessor_IncludeContentsNoneTruncatesOversizedToolResults(t *testing.T) {
+	p := NewContentRequestProcessor(
+		WithEnableContextCompaction(true),
+		WithContextCompactionOversizedToolResultMaxTokens(32),
+	)
+
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			{
+				Author:       "assistant",
+				RequestID:    "req-1",
+				InvocationID: "inv-1",
+				Response: &model.Response{
+					Choices: []model.Choice{
+						{
+							Message: model.Message{
+								Role: model.RoleAssistant,
+								ToolCalls: []model.ToolCall{
+									{
+										ID: "call-1",
+										Function: model.FunctionDefinitionParam{
+											Name:      "fetch",
+											Arguments: []byte(`{}`),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				Author:       "tool",
+				RequestID:    "req-1",
+				InvocationID: "inv-1",
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+					Choices: []model.Choice{
+						{
+							Message: model.NewToolMessage(
+								"call-1",
+								"fetch",
+								"HEAD-"+strings.Repeat("middle-", 400)+"-TAIL",
+							),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv-1"),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			RequestID: "req-1",
+			RuntimeState: map[string]any{
+				"include_contents": "none",
+			},
+		}),
+	)
+
+	req := &model.Request{}
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 3)
+	require.Equal(t, model.RoleTool, req.Messages[2].Role)
+	require.Contains(t, req.Messages[2].Content, "[... ")
+	require.True(t, strings.HasPrefix(req.Messages[2].Content, "HEAD-"))
+	require.True(t, strings.HasSuffix(req.Messages[2].Content, "-TAIL"))
 }
 
 func TestContentRequestProcessor_getFilterIncrementMessages(t *testing.T) {

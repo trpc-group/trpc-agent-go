@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -26,10 +27,17 @@ import (
 // When no custom checkers are supplied, a default set is used.
 type Checker func(sess *session.Session) bool
 
+// ContextChecker evaluates whether a summary should be triggered using the
+// current request context.
+type ContextChecker func(context.Context, *session.Session) bool
+
 var (
 	defaultTokenCounterMu sync.RWMutex
 	defaultTokenCounter   model.TokenCounter = model.NewSimpleTokenCounter()
 )
+
+const tokenThresholdConversationTextStateKey = session.StateTempPrefix +
+	"summary:token_threshold_conversation_text"
 
 func getTokenCounter() model.TokenCounter {
 	defaultTokenCounterMu.RLock()
@@ -183,14 +191,21 @@ func CheckTimeThreshold(interval time.Duration) Checker {
 }
 
 // checkTokenThresholdFromText checks if the token count of the given text exceeds the threshold.
-func checkTokenThresholdFromText(tokenCount int, conversationText string) bool {
+func checkTokenThresholdFromText(
+	ctx context.Context,
+	tokenCount int,
+	conversationText string,
+) bool {
 	if conversationText == "" {
 		return false
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	// SimpleTokenCounter.CountTokens currently never returns an error.
 	tokens, _ := getTokenCounter().CountTokens(
-		context.Background(),
+		ctx,
 		model.Message{Content: conversationText},
 	)
 	return tokens > tokenCount
@@ -200,28 +215,73 @@ func checkTokenThresholdFromText(tokenCount int, conversationText string) bool {
 // token count of the primary-agent events since the last summary exceeds
 // the given threshold. Sub-agent events (FilterKey != AppName) are excluded
 // so that child agent tokens do not inflate the parent threshold check.
+// When a summarizer injects effective summary text into the session state,
+// that text takes precedence over the default event extraction logic.
 //
 // Note:
 // Token accounting via model usage is not stable once session summary
 // injection is enabled. For consistent gating, we estimate tokens from
 // the delta events.
+//
+// Because Checker does not accept a context, this legacy helper evaluates
+// token counts with context.Background(). Use CheckTokenThresholdContext or
+// WithTokenThreshold when token counting depends on request-scoped context.
 func CheckTokenThreshold(tokenCount int) Checker {
 	return func(sess *session.Session) bool {
-		delta := filterDeltaEvents(sess)
-		if len(delta) == 0 {
-			return false
-		}
-		primary := filterPrimaryEvents(delta, sess.AppName)
-		if len(primary) == 0 {
-			return false
-		}
-		conversationText := extractConversationText(
-			primary, nil, nil,
-		)
+		return checkTokenThreshold(context.Background(), tokenCount, sess)
+	}
+}
+
+// CheckTokenThresholdContext creates a context-aware checker that triggers
+// when the estimated token count of the primary-agent events since the last
+// summary exceeds the given threshold.
+func CheckTokenThresholdContext(tokenCount int) ContextChecker {
+	return func(ctx context.Context, sess *session.Session) bool {
+		return checkTokenThreshold(ctx, tokenCount, sess)
+	}
+}
+
+func checkTokenThreshold(
+	ctx context.Context,
+	tokenCount int,
+	sess *session.Session,
+) bool {
+	if conversationText, ok := getInjectedTokenThresholdConversationText(sess); ok {
 		return checkTokenThresholdFromText(
-			tokenCount, conversationText,
+			ctx,
+			tokenCount,
+			conversationText,
 		)
 	}
+	delta := filterDeltaEvents(sess)
+	if len(delta) == 0 {
+		return false
+	}
+	primary := filterPrimaryEvents(delta, sess.AppName)
+	if len(primary) == 0 {
+		return false
+	}
+	conversationText := extractConversationText(
+		primary, nil, nil,
+	)
+	return checkTokenThresholdFromText(
+		ctx,
+		tokenCount,
+		conversationText,
+	)
+}
+
+func getInjectedTokenThresholdConversationText(
+	sess *session.Session,
+) (string, bool) {
+	if sess == nil {
+		return "", false
+	}
+	raw, ok := sess.GetState(tokenThresholdConversationTextStateKey)
+	if !ok {
+		return "", false
+	}
+	return string(raw), true
 }
 
 // ChecksAll composes multiple checkers using AND logic.
@@ -250,4 +310,161 @@ func ChecksAny(checks []Checker) Checker {
 		}
 		return false
 	}
+}
+
+func wrapChecker(check Checker) ContextChecker {
+	return func(_ context.Context, sess *session.Session) bool {
+		return check(sess)
+	}
+}
+
+func allContextChecks(checks []ContextChecker) ContextChecker {
+	return func(ctx context.Context, sess *session.Session) bool {
+		for _, check := range checks {
+			if !check(ctx, sess) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
+func anyContextChecks(checks []ContextChecker) ContextChecker {
+	return func(ctx context.Context, sess *session.Session) bool {
+		for _, check := range checks {
+			if check(ctx, sess) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// Default context-threshold constants.
+const (
+	// defaultContextThresholdRatio is the default fraction of the model's
+	// context window that triggers summarization.
+	defaultContextThresholdRatio = 0.5
+
+	// defaultContextThresholdMinTokens is the absolute minimum token count
+	// before summarization can trigger, regardless of ratio. This prevents
+	// premature summarization for very small context windows.
+	defaultContextThresholdMinTokens = 2000
+
+	// defaultContextThresholdFallbackWindow is the context window used when
+	// the model cannot be identified from the invocation context or the
+	// model registry.
+	defaultContextThresholdFallbackWindow = 8192
+)
+
+// ContextThresholdOption configures the context-threshold checker.
+type ContextThresholdOption func(*contextThresholdOptions)
+
+// contextThresholdOptions holds configuration for CheckContextThreshold.
+type contextThresholdOptions struct {
+	// thresholdRatio is the fraction of context window that triggers
+	// summarization. Default: 0.5 (50%).
+	thresholdRatio float64
+
+	// fallbackContextWindow is used when the model's context window
+	// cannot be determined from the invocation context or registry.
+	// Default: 8192.
+	fallbackContextWindow int
+
+	// minTokenThreshold is the absolute minimum token count before
+	// summarization can trigger, regardless of ratio.
+	// Default: 2000.
+	minTokenThreshold int
+}
+
+// WithContextThresholdRatio sets the fraction of the model's context
+// window at which summarization triggers. Default: 0.5 (50%).
+// Values outside (0, 1] are ignored.
+func WithContextThresholdRatio(ratio float64) ContextThresholdOption {
+	return func(o *contextThresholdOptions) {
+		if ratio > 0 && ratio <= 1 {
+			o.thresholdRatio = ratio
+		}
+	}
+}
+
+// WithContextThresholdFallbackWindow sets the context window used when
+// the model cannot be identified at runtime. Default: 8192.
+func WithContextThresholdFallbackWindow(tokens int) ContextThresholdOption {
+	return func(o *contextThresholdOptions) {
+		if tokens > 0 {
+			o.fallbackContextWindow = tokens
+		}
+	}
+}
+
+// WithContextThresholdMinTokens sets the absolute minimum token count
+// before summarization can trigger. Default: 2000.
+func WithContextThresholdMinTokens(tokens int) ContextThresholdOption {
+	return func(o *contextThresholdOptions) {
+		if tokens >= 0 {
+			o.minTokenThreshold = tokens
+		}
+	}
+}
+
+// CheckContextThreshold creates a context-aware checker that dynamically
+// resolves the model's context window at evaluation time and triggers
+// summarization when the estimated token count of delta events exceeds
+// a percentage of that context window.
+//
+// Unlike CheckTokenThreshold which uses a fixed token count, this
+// checker adapts automatically when the user switches models — the
+// threshold is recalculated on every evaluation based on the model
+// currently attached to the invocation in ctx.
+//
+// This provides a zero-configuration experience similar to Codex CLI
+// and Claude Code, where the framework automatically decides when to
+// compress conversation history based on the model's capacity.
+//
+// When the model cannot be determined from ctx, falls back to
+// the summarizer model's context window (when used via WithContextThreshold),
+// then to the configured fallbackContextWindow (default 8192).
+func CheckContextThreshold(opts ...ContextThresholdOption) ContextChecker {
+	o := contextThresholdOptions{
+		thresholdRatio:        defaultContextThresholdRatio,
+		fallbackContextWindow: defaultContextThresholdFallbackWindow,
+		minTokenThreshold:     defaultContextThresholdMinTokens,
+	}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	return func(ctx context.Context, sess *session.Session) bool {
+		contextWindow := resolveContextWindowFromCtx(
+			ctx, o.fallbackContextWindow,
+		)
+		threshold := int(float64(contextWindow) * o.thresholdRatio)
+		if threshold < o.minTokenThreshold {
+			threshold = o.minTokenThreshold
+		}
+		return checkTokenThreshold(ctx, threshold, sess)
+	}
+}
+
+// resolveContextWindowFromCtx attempts to determine the model's context
+// window from the current request context. It tries, in order:
+//  1. invocation.Model from ctx → model registry lookup by name
+//  2. user-configured fallback
+//  3. framework default (8192)
+func resolveContextWindowFromCtx(ctx context.Context, fallback int) int {
+	if ctx != nil {
+		if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+			if inv.Model != nil {
+				name := inv.Model.Info().Name
+				if w, ok := model.LookupModelContextWindow(name); ok {
+					return w
+				}
+			}
+		}
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return defaultContextThresholdFallbackWindow
 }

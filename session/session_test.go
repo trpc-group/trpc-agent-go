@@ -90,6 +90,59 @@ func TestWithEventTime(t *testing.T) {
 	}
 }
 
+func TestWithGetSessionEventPage(t *testing.T) {
+	option := WithGetSessionEventPage(20, 50)
+	opts := &Options{}
+	option(opts)
+
+	require.NotNil(t, opts.EventPage)
+	assert.Equal(t, 20, opts.EventPage.Offset)
+	assert.Equal(t, 50, opts.EventPage.Limit)
+}
+
+func TestValidateGetSessionOptions(t *testing.T) {
+	t.Run("no page", func(t *testing.T) {
+		err := ValidateGetSessionOptions(&Options{}, false)
+		require.NoError(t, err)
+	})
+
+	t.Run("unsupported backend", func(t *testing.T) {
+		err := ValidateGetSessionOptions(&Options{
+			EventPage: &EventPage{Offset: 0, Limit: 10},
+		}, false)
+		require.ErrorIs(t, err, ErrEventPageUnsupported)
+	})
+
+	t.Run("invalid page", func(t *testing.T) {
+		err := ValidateGetSessionOptions(&Options{
+			EventPage: &EventPage{Offset: -1, Limit: 0},
+		}, true)
+		require.ErrorIs(t, err, ErrInvalidEventPage)
+	})
+
+	t.Run("conflicts with event filters", func(t *testing.T) {
+		err := ValidateGetSessionOptions(&Options{
+			EventNum:  5,
+			EventPage: &EventPage{Offset: 0, Limit: 10},
+		}, true)
+		require.ErrorIs(t, err, ErrEventPageConflictsWithEventFilters)
+	})
+
+	t.Run("valid page", func(t *testing.T) {
+		err := ValidateGetSessionOptions(&Options{
+			EventPage: &EventPage{Offset: 0, Limit: 10},
+		}, true)
+		require.NoError(t, err)
+	})
+}
+
+func TestValidateListSessionsOptions(t *testing.T) {
+	err := ValidateListSessionsOptions(&Options{
+		EventPage: &EventPage{Offset: 0, Limit: 10},
+	})
+	require.ErrorIs(t, err, ErrEventPageOnlyForGetSession)
+}
+
 func TestWithSummaryFilterKey(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -2132,4 +2185,310 @@ func TestNewSession_OptionOrder(t *testing.T) {
 	if !sess.CreatedAt.Equal(secondTime) {
 		t.Errorf("NewSession() option order: CreatedAt = %v, want %v (last option should win)", sess.CreatedAt, secondTime)
 	}
+}
+
+// TestSession_Clone_ServiceMeta tests that ServiceMeta is properly deep copied during Clone.
+func TestSession_Clone_ServiceMeta(t *testing.T) {
+	tests := []struct {
+		name           string
+		setupSession   func() *Session
+		expectNilMeta  bool
+		expectedValues map[string]string
+	}{
+		{
+			name: "session with ServiceMeta populated",
+			setupSession: func() *Session {
+				return &Session{
+					ID:      "session-with-meta",
+					AppName: "test-app",
+					UserID:  "user-123",
+					ServiceMeta: map[string]string{
+						"version":    "v2",
+						"storage":    "hashidx",
+						"routingKey": "abc123",
+					},
+					State:     StateMap{},
+					Events:    []event.Event{},
+					Summaries: map[string]*Summary{},
+				}
+			},
+			expectNilMeta: false,
+			expectedValues: map[string]string{
+				"version":    "v2",
+				"storage":    "hashidx",
+				"routingKey": "abc123",
+			},
+		},
+		{
+			name: "session with nil ServiceMeta",
+			setupSession: func() *Session {
+				return &Session{
+					ID:          "session-nil-meta",
+					AppName:     "test-app",
+					UserID:      "user-123",
+					ServiceMeta: nil,
+					State:       StateMap{},
+					Events:      []event.Event{},
+					Summaries:   map[string]*Summary{},
+				}
+			},
+			expectNilMeta:  true,
+			expectedValues: nil,
+		},
+		{
+			name: "session with empty ServiceMeta",
+			setupSession: func() *Session {
+				return &Session{
+					ID:          "session-empty-meta",
+					AppName:     "test-app",
+					UserID:      "user-123",
+					ServiceMeta: map[string]string{},
+					State:       StateMap{},
+					Events:      []event.Event{},
+					Summaries:   map[string]*Summary{},
+				}
+			},
+			expectNilMeta:  false,
+			expectedValues: map[string]string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := tt.setupSession()
+			cloned := original.Clone()
+
+			// Check if ServiceMeta is nil as expected
+			if tt.expectNilMeta {
+				if cloned.ServiceMeta != nil {
+					t.Errorf("Clone() ServiceMeta = %v, want nil", cloned.ServiceMeta)
+				}
+				return
+			}
+
+			// Verify ServiceMeta is a different map instance (deep copy)
+			if (cloned.ServiceMeta == nil) != (original.ServiceMeta == nil) {
+				t.Error("Clone() ServiceMeta nil status mismatch")
+			}
+			if cloned.ServiceMeta != nil && original.ServiceMeta != nil {
+				// Check if they point to the same underlying map
+				if len(cloned.ServiceMeta) == len(original.ServiceMeta) {
+					// Modify cloned and check if original changes
+					cloned.ServiceMeta["__test_key__"] = "test"
+					if _, exists := original.ServiceMeta["__test_key__"]; exists {
+						t.Error("Clone() ServiceMeta should be a different map instance")
+					}
+					delete(cloned.ServiceMeta, "__test_key__")
+				}
+			}
+
+			// Verify content equality
+			if len(cloned.ServiceMeta) != len(tt.expectedValues) {
+				t.Errorf("Clone() ServiceMeta length = %v, want %v", len(cloned.ServiceMeta), len(tt.expectedValues))
+			}
+
+			for k, expectedVal := range tt.expectedValues {
+				if clonedVal, ok := cloned.ServiceMeta[k]; !ok {
+					t.Errorf("Clone() ServiceMeta missing key %s", k)
+				} else if clonedVal != expectedVal {
+					t.Errorf("Clone() ServiceMeta[%s] = %v, want %v", k, clonedVal, expectedVal)
+				}
+			}
+
+			// Test deep copy by modifying clone
+			if len(cloned.ServiceMeta) > 0 {
+				for k := range cloned.ServiceMeta {
+					originalVal := original.ServiceMeta[k]
+					cloned.ServiceMeta[k] = "modified"
+
+					// Original should remain unchanged
+					if original.ServiceMeta[k] != originalVal {
+						t.Errorf("Clone() ServiceMeta are not deep copied - modifying clone affected original at key %s", k)
+					}
+					break // Only need to test one key
+				}
+			}
+		})
+	}
+}
+
+func TestSession_Clone_WithTracksAndNilSummary(t *testing.T) {
+	original := &Session{
+		ID:      "session-tracks",
+		AppName: "app",
+		UserID:  "user",
+		Tracks: map[Track]*TrackEvents{
+			"track-empty": {
+				Track:  "track-empty",
+				Events: nil,
+			},
+			"track-data": {
+				Track: "track-data",
+				Events: []TrackEvent{
+					{Track: "track-data", Payload: json.RawMessage(`"payload"`), Timestamp: time.Now()},
+				},
+			},
+		},
+		Summaries: map[string]*Summary{
+			"empty": nil,
+			"full":  {Summary: "copied"},
+		},
+		State: StateMap{},
+	}
+
+	cloned := original.Clone()
+	require.NotNil(t, cloned)
+	require.NotNil(t, cloned.Tracks)
+	require.Contains(t, cloned.Tracks, Track("track-empty"))
+	require.Contains(t, cloned.Tracks, Track("track-data"))
+	assert.Nil(t, cloned.Summaries["empty"])
+	require.NotNil(t, cloned.Summaries["full"])
+	assert.Equal(t, "copied", cloned.Summaries["full"].Summary)
+}
+
+func TestSession_HasStateKeyWithPrefix_EmptyStateMap(t *testing.T) {
+	sess := &Session{State: StateMap{}}
+	assert.False(t, sess.HasStateKeyWithPrefix("foo:"))
+}
+
+func TestApplyEventStateDelta_InitializesStateAndCopiesNilValue(t *testing.T) {
+	sess := &Session{}
+	ev := createTestEvent(model.RoleUser, "test", time.Now(), StateMap{"key": nil})
+
+	sess.ApplyEventStateDelta(ev)
+
+	require.NotNil(t, sess.State)
+	value, ok := sess.State["key"]
+	require.True(t, ok)
+	assert.Nil(t, value)
+}
+
+func TestWithListSessionOnlyMeta(t *testing.T) {
+	opt := &Options{}
+	WithListSessionOnlyMeta()(opt)
+	assert.True(t, opt.ListSessionOnlyMeta)
+}
+
+// TestSession_SnapshotTracksState tests the SnapshotTracksState method.
+func TestSession_SnapshotTracksState(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupState  func() StateMap
+		wantNil     bool
+		wantContent []byte
+	}{
+		{
+			name: "returns nil when State is nil",
+			setupState: func() StateMap {
+				return nil
+			},
+			wantNil: true,
+		},
+		{
+			name: "returns nil when tracks key not present",
+			setupState: func() StateMap {
+				return StateMap{
+					"otherKey": []byte("some value"),
+				}
+			},
+			wantNil: true,
+		},
+		{
+			name: "returns nil when tracks key is empty slice",
+			setupState: func() StateMap {
+				return StateMap{
+					tracksStateKey: []byte{},
+				}
+			},
+			wantNil: true,
+		},
+		{
+			name: "returns copy of tracks state",
+			setupState: func() StateMap {
+				return StateMap{
+					tracksStateKey: []byte(`["track1","track2"]`),
+				}
+			},
+			wantNil:     false,
+			wantContent: []byte(`["track1","track2"]`),
+		},
+		{
+			name: "returns copy not reference",
+			setupState: func() StateMap {
+				return StateMap{
+					tracksStateKey: []byte(`["alpha","beta"]`),
+				}
+			},
+			wantNil:     false,
+			wantContent: []byte(`["alpha","beta"]`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := &Session{
+				ID:      "test-session",
+				AppName: "test-app",
+				UserID:  "user-123",
+				State:   tt.setupState(),
+			}
+
+			got := sess.SnapshotTracksState()
+
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("SnapshotTracksState() = %v, want nil", got)
+				}
+				return
+			}
+
+			if got == nil {
+				t.Fatal("SnapshotTracksState() = nil, want non-nil")
+			}
+
+			// Verify content
+			if !bytes.Equal(got, tt.wantContent) {
+				t.Errorf("SnapshotTracksState() = %v, want %v", got, tt.wantContent)
+			}
+
+			// Verify it's a copy (modifying returned bytes doesn't affect original)
+			originalState := tt.setupState()
+			originalValue := originalState[tracksStateKey]
+			got[0] = 'X' // Modify first byte
+
+			if !bytes.Equal(sess.State[tracksStateKey], originalValue) {
+				t.Error("SnapshotTracksState() returned slice that shares underlying array with State")
+			}
+		})
+	}
+}
+
+// TestSession_SnapshotTracksState_Concurrent tests concurrent access to SnapshotTracksState.
+func TestSession_SnapshotTracksState_Concurrent(t *testing.T) {
+	sess := &Session{
+		ID:      "concurrent-track-session",
+		AppName: "test-app",
+		UserID:  "user-123",
+		State: StateMap{
+			tracksStateKey: []byte(`["track1","track2","track3"]`),
+		},
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := sess.SnapshotTracksState()
+			if result == nil {
+				t.Error("SnapshotTracksState() returned nil")
+				return
+			}
+			expected := []byte(`["track1","track2","track3"]`)
+			if !bytes.Equal(result, expected) {
+				t.Errorf("SnapshotTracksState() = %v, want %v", result, expected)
+			}
+		}()
+	}
+	wg.Wait()
 }

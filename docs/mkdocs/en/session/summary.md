@@ -46,9 +46,14 @@ Integrate the summarizer into a session service:
 
 ```go
 import (
+    "context"
     "time"
+    "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
     "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/session/mysql"
+    "trpc.group/trpc-go/trpc-agent-go/session/postgres"
     "trpc.group/trpc-go/trpc-agent-go/session/redis"
+    "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 // Memory storage (dev/test)
@@ -141,6 +146,37 @@ type SessionSummarizer interface {
 }
 ```
 
+## Context-Aware Summary Checks
+
+The released `SessionSummarizer` interface stays unchanged.
+
+When summary gating depends on request context, use `ContextChecker` with the
+context-aware check options:
+
+```go
+type asyncSummaryKey struct{}
+
+eventThreshold := summary.CheckEventThreshold(20)
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithChecksAnyContext(
+        func(ctx context.Context, sess *session.Session) bool {
+            if eventThreshold(sess) {
+                return true
+            }
+            async, _ := ctx.Value(asyncSummaryKey{}).(bool)
+            return async
+        },
+    ),
+)
+```
+
+The framework does not reserve any context keys for summary triggering. If your
+application needs to distinguish different summary entry points, annotate the
+context before calling the session APIs and read the value inside your
+`ContextChecker`.
+
 ## Summarizer Options
 
 ### Trigger Conditions
@@ -157,8 +193,13 @@ type SessionSummarizer interface {
 | --- | --- |
 | `WithChecksAll(checks ...Checker)` | All conditions must be met (AND logic), use `Check*` functions |
 | `WithChecksAny(checks ...Checker)` | Any condition triggers (OR logic), use `Check*` functions |
+| `WithChecksAllContext(checks ...ContextChecker)` | All request-scoped conditions must be met (AND logic) |
+| `WithChecksAnyContext(checks ...ContextChecker)` | Any request-scoped condition triggers (OR logic) |
 
-**Note**: Use `Check*` functions (e.g., `CheckEventThreshold`) inside `WithChecksAll` and `WithChecksAny`, not `With*` functions.
+`ContextChecker` receives `(ctx context.Context, sess *session.Session)`.
+
+**Note**: Use `Check*` functions (for example `CheckEventThreshold`) inside
+`WithChecksAll` and `WithChecksAny`, not `With*` functions.
 
 ```go
 // AND logic: all conditions must be met
@@ -180,6 +221,7 @@ summary.WithChecksAny(
 | --- | --- |
 | `WithMaxSummaryWords(maxWords int)` | Limit summary word count; included in prompt to guide model |
 | `WithPrompt(prompt string)` | Custom summary prompt; must contain `{conversation_text}` placeholder |
+| `WithSystemPrompt(prompt string)` | Add a separate system message for summarization instructions; must not contain `{conversation_text}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | Custom function to skip recent events |
 
 ### Hook Options
@@ -310,7 +352,37 @@ summarizer := summary.NewSummarizer(
 **Required placeholders**:
 
 - `{conversation_text}`: Must be included; replaced with conversation content
-- `{max_summary_words}`: Must be included when `maxSummaryWords > 0`
+- `{max_summary_words}`: Must be included in either `WithPrompt(...)` or `WithSystemPrompt(...)` when `maxSummaryWords > 0`
+
+If you want to keep summarization instructions in a dedicated system message,
+combine `WithSystemPrompt` with a lighter user prompt that only carries the
+conversation payload:
+
+```go
+systemPrompt := `Summarize the conversation faithfully.
+Focus on key decisions and action items.
+Keep it within {max_summary_words} words.`
+
+userPrompt := `<conversation>
+{conversation_text}
+</conversation>
+
+Summary:`
+
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithSystemPrompt(systemPrompt),
+    summary.WithPrompt(userPrompt),
+    summary.WithMaxSummaryWords(100),
+    summary.WithEventThreshold(15),
+)
+```
+
+Notes:
+
+- `WithPrompt` still renders into the **user message**
+- `WithSystemPrompt` renders into a dedicated **system message**
+- `WithSystemPrompt` must not include `{conversation_text}`; keep conversation content in the user prompt
 
 ## Token Counter Configuration
 
@@ -557,6 +629,115 @@ llmagent.WithAddSessionSummary(true)
 - Guarantees complete context: compressed history + full new conversation
 - **`WithMaxHistoryRuns` parameter is ignored**
 
+#### Summary Injection Mode
+
+By default, the summary is injected as a **system message** (merged into the existing system prompt). In this mode, the summary is protected by token tailoring's preserved head and will not be trimmed by the sliding window.
+
+To allow the summary to participate in token-budget trimming for a true **sliding-window** experience, switch the injection mode to `user`:
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithSessionSummaryInjectionMode(llmagent.SessionSummaryInjectionUser),
+)
+```
+
+**Injection mode comparison**:
+
+| Mode | Injection Position | Token Tailoring Behavior | Use Case |
+| --- | --- | --- | --- |
+| `SessionSummaryInjectionSystem` (default) | Merged into system message | Summary in preserved head, never trimmed | Summary must always be present |
+| `SessionSummaryInjectionUser` | Merged into the first user history/current message when possible; otherwise inserted near history | Summary participates in round trimming, can be evicted | Sliding window for very long conversations |
+
+**User mode message structure**:
+
+When the first history message is a user role, the summary is merged into it:
+
+```text
+┌─────────────────────────────────────────┐
+│ System Prompt                           │ ← Does not contain summary
+├─────────────────────────────────────────┤
+│ [Few-shot examples, if any]             │
+├─────────────────────────────────────────┤
+│ User: [summary context] + [original    │
+│        first user message]              │ ← Summary merged into first user history
+├─────────────────────────────────────────┤
+│ Assistant: ...                          │
+│ User: ...                               │
+│ ...                                     │
+│ User: current message                   │
+└─────────────────────────────────────────┘
+```
+
+When the first history message is not a user role, the summary is a standalone user message:
+
+```text
+┌─────────────────────────────────────────┐
+│ System Prompt                           │ ← Does not contain summary
+├─────────────────────────────────────────┤
+│ [Few-shot examples, if any]             │
+├─────────────────────────────────────────┤
+│ User: Context from previous             │
+│ interactions: <summary>...</summary>    │ ← Standalone summary user message
+├─────────────────────────────────────────┤
+│ Assistant/Tool history events           │
+│ ...                                     │
+│ User: current message                   │
+└─────────────────────────────────────────┘
+```
+
+**Notes**:
+
+- In user mode, the processor first tries to merge the summary into the first user history/current message so it stays attached to the live user turn
+- If there is no user history/current message and the prompt prefix already ends with a user message (for example, injected context), the summary falls back to that trailing user message instead of adding another adjacent user block
+- User mode uses a more neutral default template ("Context from previous interactions") to avoid system-instruction tone in a user role message
+- Custom `WithSummaryFormatter` also applies to user mode
+- The summary **generation pipeline is unaffected** — injection mode only changes prompt assembly, not the summarizer itself
+
+> **Tip**: For very long conversations (hundreds of turns) where you want old summaries to naturally age out (replaced by newer summaries), use `SessionSummaryInjectionUser` mode.
+
+**Optional: Prompt-side context compaction**
+
+When `WithEnableContextCompaction(true)` is enabled, the framework adds two compaction passes before the LLM call:
+
+**Pass 1 — Historical tool result placeholder** (`ContextCompactionToolResultMaxTokens`, default 1024 tokens):
+
+- Tool results from **older** requests that exceed the threshold are replaced entirely with a short placeholder while keeping `ToolID` and `ToolName`
+- The current request and the latest `ContextCompactionKeepRecentRequests` completed requests are never affected
+- This cleans up accumulated long tool outputs from earlier conversation turns
+
+**Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, default 8192 tokens):
+
+- Applies to **all** tool results including the current request
+- Tool results exceeding this threshold are truncated using head+tail preservation: the beginning and end of the content are kept, with a `[...N characters truncated...]` marker in the middle
+- This is the safety net for single tool results large enough to overflow the context window on their own (e.g. `web_fetch` returning 800K+ chars of HTML)
+
+The two passes have different roles: Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases but protects the current request too.
+
+Additionally:
+
+Pass 2 fires regardless of `EnableContextCompaction`; it only requires `ContextCompactionOversizedToolResultMaxTokens > 0`.
+
+Additionally:
+
+- If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model
+- Model-layer token tailoring remains the final fallback
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithEnableContextCompaction(true),
+    llmagent.WithContextCompactionThresholdRatio(0.7),
+    llmagent.WithContextCompactionToolResultMaxTokens(1024),  // Pass 1: old tool results → placeholder
+    llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
+    llmagent.WithContextCompactionKeepRecentRequests(1),
+)
+```
+
 **Context structure**:
 
 ```
@@ -592,6 +773,8 @@ llmagent.WithMaxHistoryRuns(10)
 - No summary message added
 - Only includes the most recent `MaxHistoryRuns` conversation turns
 - `MaxHistoryRuns=0` means no limit, includes all history
+- If `WithEnableContextCompaction(true)` is enabled, oversized tool results in older retained requests can still be compacted during request projection; additionally, extremely large tool results in any request (including the current one) will be head+tail truncated whenever `ContextCompactionOversizedToolResultMaxTokens > 0` (this fires even without `EnableContextCompaction`)
+- The pre-LLM synchronous summary retry is disabled in this mode
 
 **Context structure**:
 
@@ -614,6 +797,10 @@ llmagent.WithMaxHistoryRuns(10)
 | Short sessions (single consultation) | `AddSessionSummary=false`<br>`MaxHistoryRuns=10` | Simple and direct, no summary overhead |
 | Debug/Test | `AddSessionSummary=false`<br>`MaxHistoryRuns=5` | Quick validation, reduce noise |
 | High concurrency | `AddSessionSummary=true`<br>Increase worker count | Async processing, no impact on response speed |
+
+If your long sessions frequently contain large tool outputs such as search results, logs, or code scan output, enable `EnableContextCompaction=true`. Pair it with `AddSessionSummary=true` when you also want the pre-LLM synchronous summary retry.
+
+> **Tip**: If your agent uses tools like `web_fetch` that can return extremely large results in a single call, `ContextCompactionOversizedToolResultMaxTokens` is particularly valuable — it prevents a single tool result from consuming the entire context window, even when that result belongs to the current (protected) request. It fires independently of `EnableContextCompaction`.
 
 ## Summary Format Customization
 
@@ -821,3 +1008,4 @@ func main() {
 
 - [Summary Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary)
 - [FilterKey Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/filterkey)
+- [Injection Mode Examples](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary/injection)

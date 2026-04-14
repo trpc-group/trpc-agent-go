@@ -24,6 +24,7 @@ import (
 type mcpToolResult struct {
 	Content []mcp.Content
 	Meta    map[string]any
+	IsError bool
 }
 
 // MarshalJSON implements json.Marshaler.
@@ -35,6 +36,17 @@ func (r *mcpToolResult) MarshalJSON() ([]byte, error) {
 // GetMeta returns the metadata from the tool result.
 func (r *mcpToolResult) GetMeta() map[string]any {
 	return r.Meta
+}
+
+// GetCallbackResult returns the callback-facing result payload.
+// AfterTool callbacks should continue to receive the raw content slice.
+func (r *mcpToolResult) GetCallbackResult() any {
+	return r.Content
+}
+
+// RetryResultError reports whether the MCP result should be treated as a result-level failure.
+func (r *mcpToolResult) RetryResultError() bool {
+	return r.IsError
 }
 
 // mcpTool implements the Tool interface for MCP tools.
@@ -98,6 +110,7 @@ func (t *mcpTool) callOnce(ctx context.Context, arguments map[string]any) (any, 
 	return &mcpToolResult{
 		Content: result.Content,
 		Meta:    result.Meta,
+		IsError: result.IsError,
 	}, nil
 }
 
