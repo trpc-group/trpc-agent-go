@@ -436,6 +436,9 @@ func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializab
 		StateKeyLastResponse: "ok",
 		"keep1":              1,
 		"keep2":              map[string]any{"a": 1},
+		StateKeyMessages: []model.Message{
+			model.NewUserMessage("large history should not persist"),
+		},
 		// internal keys that must be skipped.
 		MetadataKeyNode:        []byte("x"),
 		MetadataKeyPregel:      []byte("y"),
@@ -462,6 +465,7 @@ func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializab
 	// Should include keep1 and keep2, exclude internal keys and unserializable key.
 	require.Contains(t, e.StateDelta, "keep1")
 	require.Contains(t, e.StateDelta, "keep2")
+	require.NotContains(t, e.StateDelta, StateKeyMessages)
 	require.NotContains(t, e.StateDelta, MetadataKeyNode)
 	require.NotContains(t, e.StateDelta, MetadataKeyPregel)
 	require.NotContains(t, e.StateDelta, MetadataKeyChannel)
@@ -475,6 +479,10 @@ func TestNewGraphCompletionEvent_SerializeFinalStateSkipsInternalAndUnserializab
 	require.NotContains(t, e.StateDelta, StateKeyCurrentNodeID)
 	require.NotContains(t, e.StateDelta, StateKeySession)
 	require.NotContains(t, e.StateDelta, "bad")
+
+	var cm CompletionMetadata
+	require.NoError(t, json.Unmarshal(e.StateDelta[MetadataKeyCompletion], &cm))
+	require.Equal(t, 3, cm.FinalStateKeys) // StateKeyLastResponse + keep1 + keep2
 }
 
 func TestNewGraphCompletionEvent_NilFinalState(t *testing.T) {
