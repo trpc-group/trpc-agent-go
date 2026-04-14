@@ -19,6 +19,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/metric/histogram"
@@ -276,6 +277,32 @@ func TestChatMetricsTracker_SetInvocationState_PreservesExistingMetricsAttribute
 	require.Equal(t, baseInvocation.Session.ID, attrs.SessionID)
 	require.Equal(t, baseInvocation.Session.UserID, attrs.UserID)
 	require.Equal(t, baseInvocation.Session.AppName, attrs.AppName)
+}
+
+func TestChatMetricsTracker_BuildAttributesFormatsErrorCode(t *testing.T) {
+	tracker := NewChatMetricsTracker(
+		context.Background(),
+		nil,
+		nil,
+		&model.TimingInfo{},
+		nil,
+		nil,
+	)
+	code := "429"
+	tracker.SetLastEvent(event.NewResponseEvent(
+		"inv-123",
+		"test-author",
+		&model.Response{
+			Error: &model.ResponseError{
+				Type:    "rate_limit",
+				Code:    &code,
+				Message: "rate limit exceeded",
+			},
+		},
+	))
+
+	attrs := tracker.buildAttributes()
+	require.Equal(t, "rate_limit_429", attrs.ErrorType)
 }
 
 func TestChatMetricsTracker_SetInvocationState_PreservesReasoningTimingWhenDisabled(t *testing.T) {

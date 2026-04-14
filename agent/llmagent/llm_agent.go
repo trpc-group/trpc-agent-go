@@ -1146,74 +1146,165 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 		var responseErrorType string
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
-			if startedSpan && fullRespEvent != nil {
-				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
-			}
-			tracker.SetResponseErrorType(responseErrorType)
-			tracker.RecordMetrics()()
-			if startedSpan {
-				span.End()
-			}
-			close(wrappedChan)
+			finalizeWrappedTelemetry(
+				span,
+				tracker,
+				fullRespEvent,
+				responseErrorType,
+				tokenUsage,
+				startedSpan,
+				wrappedChan,
+			)
 		}()
 		// Forward all events from the original channel
 		for evt := range originalChan {
-			if evt != nil && evt.Response != nil {
-				tracker.TrackResponse(evt.Response)
-				if !evt.Response.IsPartial {
-					if evt.Response.Usage != nil {
-						tokenUsage.PromptTokens += evt.Response.Usage.PromptTokens
-						tokenUsage.CompletionTokens += evt.Response.Usage.CompletionTokens
-						tokenUsage.TotalTokens += evt.Response.Usage.TotalTokens
-					}
-					fullRespEvent = evt
-				}
+			if trackedEvent := recordWrappedEventTelemetry(
+				evt,
+				tracker,
+				tokenUsage,
+				&responseErrorType,
+			); trackedEvent != nil {
+				fullRespEvent = trackedEvent
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
 			}
 		}
-		// Collect error from the final response event.
-		var agentErr error
-		if fullRespEvent != nil && fullRespEvent.Response != nil && fullRespEvent.Response.Error != nil {
-			responseErrorType = fullRespEvent.Response.Error.Type
-			agentErr = fmt.Errorf("%s: %s", fullRespEvent.Response.Error.Type, fullRespEvent.Response.Error.Message)
-		}
-
-		// After all events are processed, run after agent callbacks
-		if a.agentCallbacks != nil {
-			result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
-				Invocation:        invocation,
-				Error:             agentErr,
-				FullResponseEvent: fullRespEvent,
-			})
-			// Use the context from result if provided.
-			if result != nil && result.Context != nil {
-				ctx = result.Context
-			}
-			var evt *event.Event
-			if err != nil {
-				// Send error event.
-				evt = event.NewErrorEvent(
-					invocation.InvocationID,
-					invocation.AgentName,
-					agent.ErrorTypeAgentCallbackError,
-					err.Error(),
-				)
-				responseErrorType = agent.ErrorTypeAgentCallbackError
-			} else if result != nil && result.CustomResponse != nil {
-				// Create an event from the custom response.
-				evt = event.NewResponseEvent(invocation.InvocationID, invocation.AgentName, result.CustomResponse)
-			}
-			if evt != nil {
-				fullRespEvent = evt
-			}
-
+		if ctx, evt := a.runAfterAgentCallback(ctx, invocation, fullRespEvent); evt != nil {
+			fullRespEvent = evt
 			agent.EmitEvent(ctx, invocation, wrappedChan, evt)
 		}
 	}(runCtx)
 
 	return wrappedChan
+}
+
+func finalizeWrappedTelemetry(
+	span sdktrace.Span,
+	tracker *itelemetry.InvokeAgentTracker,
+	fullRespEvent *event.Event,
+	responseErrorType string,
+	tokenUsage *itelemetry.TokenUsage,
+	startedSpan bool,
+	wrappedChan chan *event.Event,
+) {
+	responseErrorType = resolveWrappedResponseErrorType(fullRespEvent, responseErrorType)
+	if startedSpan && fullRespEvent != nil {
+		itelemetry.TraceAfterInvokeAgent(
+			span,
+			fullRespEvent,
+			tokenUsage,
+			tracker.FirstTokenTimeDuration(),
+			model.ErrorTypeRunError,
+		)
+	}
+	tracker.SetResponseErrorType(responseErrorType)
+	tracker.RecordMetrics()()
+	if startedSpan {
+		span.End()
+	}
+	close(wrappedChan)
+}
+
+func resolveWrappedResponseErrorType(fullRespEvent *event.Event, responseErrorType string) string {
+	if fullRespEvent == nil || fullRespEvent.Response == nil {
+		return responseErrorType
+	}
+	if fullRespEvent.Response.Error == nil {
+		return ""
+	}
+	return itelemetry.FormatResponseErrorLabel(
+		fullRespEvent.Response.Error,
+		model.ErrorTypeRunError,
+	)
+}
+
+func recordWrappedEventTelemetry(
+	evt *event.Event,
+	tracker *itelemetry.InvokeAgentTracker,
+	tokenUsage *itelemetry.TokenUsage,
+	responseErrorType *string,
+) *event.Event {
+	if evt == nil {
+		return nil
+	}
+	var fullRespEvent *event.Event
+	if evt.Response != nil {
+		tracker.TrackResponse(evt.Response)
+		if !evt.Response.IsPartial {
+			addWrappedTokenUsage(tokenUsage, evt.Response.Usage)
+			fullRespEvent = evt
+		}
+	}
+	if evt.Error != nil {
+		*responseErrorType = itelemetry.FormatResponseErrorLabel(
+			evt.Error,
+			model.ErrorTypeRunError,
+		)
+	}
+	return fullRespEvent
+}
+
+func addWrappedTokenUsage(tokenUsage *itelemetry.TokenUsage, usage *model.Usage) {
+	if usage == nil {
+		return
+	}
+	tokenUsage.PromptTokens += usage.PromptTokens
+	tokenUsage.CompletionTokens += usage.CompletionTokens
+	tokenUsage.TotalTokens += usage.TotalTokens
+}
+
+func (a *LLMAgent) runAfterAgentCallback(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	fullRespEvent *event.Event,
+) (context.Context, *event.Event) {
+	if a.agentCallbacks == nil {
+		return ctx, nil
+	}
+	result, err := a.agentCallbacks.RunAfterAgent(ctx, &agent.AfterAgentArgs{
+		Invocation:        invocation,
+		Error:             wrappedAgentError(fullRespEvent),
+		FullResponseEvent: fullRespEvent,
+	})
+	if result != nil && result.Context != nil {
+		ctx = result.Context
+	}
+	return ctx, wrappedAfterAgentEvent(invocation, result, err)
+}
+
+func wrappedAgentError(fullRespEvent *event.Event) error {
+	if fullRespEvent == nil || fullRespEvent.Response == nil || fullRespEvent.Response.Error == nil {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s: %s",
+		fullRespEvent.Response.Error.Type,
+		fullRespEvent.Response.Error.Message,
+	)
+}
+
+func wrappedAfterAgentEvent(
+	invocation *agent.Invocation,
+	result *agent.AfterAgentResult,
+	callbackErr error,
+) *event.Event {
+	if callbackErr != nil {
+		return event.NewErrorEvent(
+			invocation.InvocationID,
+			invocation.AgentName,
+			agent.ErrorTypeAgentCallbackError,
+			callbackErr.Error(),
+		)
+	}
+	if result == nil || result.CustomResponse == nil {
+		return nil
+	}
+	return event.NewResponseEvent(
+		invocation.InvocationID,
+		invocation.AgentName,
+		result.CustomResponse,
+	)
 }
 
 // Info implements the agent.Agent interface.

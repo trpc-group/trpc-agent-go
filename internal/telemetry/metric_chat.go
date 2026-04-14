@@ -462,7 +462,10 @@ func (t *ChatMetricsTracker) buildAttributes() chatAttributes {
 			attrs.ResponseModelName = t.lastEvent.Response.Model
 		}
 		if t.lastEvent.Error != nil {
-			attrs.ErrorType = t.lastEvent.Error.Type
+			attrs.ErrorType = FormatResponseErrorLabel(
+				t.lastEvent.Error,
+				semconvtrace.ValueDefaultErrorType,
+			)
 		}
 	}
 

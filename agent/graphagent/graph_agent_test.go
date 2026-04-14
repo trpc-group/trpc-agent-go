@@ -4166,6 +4166,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 }
 
 func TestResolveGraphAgentErrorType(t *testing.T) {
+	code := "70002"
 	testCases := []struct {
 		name               string
 		fullRespEvent      *event.Event
@@ -4200,6 +4201,21 @@ func TestResolveGraphAgentErrorType(t *testing.T) {
 				"callback failed",
 			),
 			want: agent.ErrorTypeAgentCallbackError,
+		},
+		{
+			name: "final error response keeps code suffix",
+			fullRespEvent: event.NewResponseEvent(
+				"inv",
+				"graph-agent",
+				&model.Response{
+					Error: &model.ResponseError{
+						Type:    model.ErrorTypeFlowError,
+						Code:    &code,
+						Message: "graph failed",
+					},
+				},
+			),
+			want: model.ErrorTypeFlowError + "_70002",
 		},
 	}
 

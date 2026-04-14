@@ -25,6 +25,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -40,6 +42,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessionmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	teletrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -442,6 +445,107 @@ func TestWrapEventChannelWithTelemetry_AccumulatesTokenUsage(t *testing.T) {
 	if !hasAttr(attrs, attribute.Int(semconvtrace.KeyGenAIUsageOutputTokens, finalEvent.Response.Usage.CompletionTokens)) {
 		t.Fatalf("expected output token usage to be recorded, attrs=%v", attrs)
 	}
+}
+
+func TestWrapEventChannelWithTelemetry_PreservesFallbackErrorTypeWithoutFinalResponse(t *testing.T) {
+	reader := setupInvokeAgentMetricCapture(t)
+	invocation := &agent.Invocation{InvocationID: "inv-fallback", AgentName: "a2a"}
+	var trackerErr error
+	tracker := itelemetry.NewInvokeAgentTracker(context.Background(), invocation, false, &trackerErr)
+	originalChan := make(chan *event.Event, 1)
+	code := "429"
+	partialErrorEvent := &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Error: &model.ResponseError{
+				Type:    "rate_limit",
+				Code:    &code,
+				Message: "rate limited",
+			},
+		},
+	}
+	originalChan <- partialErrorEvent
+	close(originalChan)
+
+	wrappedChan := (&A2AAgent{}).wrapEventChannelWithTelemetry(
+		context.Background(),
+		invocation,
+		originalChan,
+		oteltrace.SpanFromContext(context.Background()),
+		tracker,
+		false,
+	)
+
+	var received []*event.Event
+	for evt := range wrappedChan {
+		received = append(received, evt)
+	}
+	require.Len(t, received, 1)
+	require.Same(t, partialErrorEvent, received[0])
+
+	rm := collectInvokeAgentMetrics(t, reader)
+	require.True(t, hasInvokeAgentMetricStringAttribute(
+		rm,
+		"gen_ai.client.request.cnt",
+		semconvtrace.KeyErrorType,
+		"rate_limit_429",
+	))
+}
+
+func TestWrapEventChannelWithTelemetry_ClearsFallbackErrorTypeOnFinalSuccess(t *testing.T) {
+	reader := setupInvokeAgentMetricCapture(t)
+	invocation := &agent.Invocation{InvocationID: "inv-success", AgentName: "a2a"}
+	var trackerErr error
+	tracker := itelemetry.NewInvokeAgentTracker(context.Background(), invocation, false, &trackerErr)
+	originalChan := make(chan *event.Event, 2)
+	code := "429"
+	partialErrorEvent := &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Error: &model.ResponseError{
+				Type:    "rate_limit",
+				Code:    &code,
+				Message: "rate limited",
+			},
+		},
+	}
+	finalSuccessEvent := event.NewResponseEvent(
+		"inv-success",
+		"a2a",
+		&model.Response{
+			IsPartial: false,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("ok"),
+			}},
+		},
+	)
+	originalChan <- partialErrorEvent
+	originalChan <- finalSuccessEvent
+	close(originalChan)
+
+	wrappedChan := (&A2AAgent{}).wrapEventChannelWithTelemetry(
+		context.Background(),
+		invocation,
+		originalChan,
+		oteltrace.SpanFromContext(context.Background()),
+		tracker,
+		false,
+	)
+
+	var received []*event.Event
+	for evt := range wrappedChan {
+		received = append(received, evt)
+	}
+	require.Len(t, received, 2)
+	require.Same(t, partialErrorEvent, received[0])
+	require.Same(t, finalSuccessEvent, received[1])
+
+	rm := collectInvokeAgentMetrics(t, reader)
+	require.False(t, hasInvokeAgentMetricAttributeKey(
+		rm,
+		"gen_ai.client.request.cnt",
+		semconvtrace.KeyErrorType,
+	))
 }
 
 func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
@@ -2715,6 +2819,95 @@ func hasAttr(attrs []attribute.KeyValue, target attribute.KeyValue) bool {
 	for _, attr := range attrs {
 		if attr.Key == target.Key && attr.Value == target.Value {
 			return true
+		}
+	}
+	return false
+}
+
+func setupInvokeAgentMetricCapture(t *testing.T) *sdkmetric.ManualReader {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+
+	originalProvider := itelemetry.MeterProvider
+	originalMeter := itelemetry.InvokeAgentMeter
+	originalRequestCnt := itelemetry.InvokeAgentMetricGenAIRequestCnt
+	originalTokenUsage := itelemetry.InvokeAgentMetricGenAIClientTokenUsage
+	originalTimeToFirstToken := itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken
+	originalDuration := itelemetry.InvokeAgentMetricGenAIClientOperationDuration
+	t.Cleanup(func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.InvokeAgentMeter = originalMeter
+		itelemetry.InvokeAgentMetricGenAIRequestCnt = originalRequestCnt
+		itelemetry.InvokeAgentMetricGenAIClientTokenUsage = originalTokenUsage
+		itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken = originalTimeToFirstToken
+		itelemetry.InvokeAgentMetricGenAIClientOperationDuration = originalDuration
+	})
+
+	itelemetry.MeterProvider = provider
+	itelemetry.InvokeAgentMeter = provider.Meter(metrics.MeterNameInvokeAgent)
+	var err error
+	itelemetry.InvokeAgentMetricGenAIRequestCnt, err = itelemetry.InvokeAgentMeter.Int64Counter("gen_ai.client.request.cnt")
+	require.NoError(t, err)
+	itelemetry.InvokeAgentMetricGenAIClientTokenUsage = nil
+	itelemetry.InvokeAgentMetricGenAIClientTimeToFirstToken = nil
+	itelemetry.InvokeAgentMetricGenAIClientOperationDuration = nil
+	return reader
+}
+
+func collectInvokeAgentMetrics(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	return rm
+}
+
+func hasInvokeAgentMetricStringAttribute(
+	rm metricdata.ResourceMetrics,
+	metricName string,
+	key string,
+	value string,
+) bool {
+	for _, scopeMetric := range rm.ScopeMetrics {
+		for _, metric := range scopeMetric.Metrics {
+			if metric.Name != metricName {
+				continue
+			}
+			sum, ok := metric.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, point := range sum.DataPoints {
+				for _, attr := range point.Attributes.ToSlice() {
+					if string(attr.Key) == key && attr.Value.AsString() == value {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func hasInvokeAgentMetricAttributeKey(
+	rm metricdata.ResourceMetrics,
+	metricName string,
+	key string,
+) bool {
+	for _, scopeMetric := range rm.ScopeMetrics {
+		for _, metric := range scopeMetric.Metrics {
+			if metric.Name != metricName {
+				continue
+			}
+			sum, ok := metric.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, point := range sum.DataPoints {
+				for _, attr := range point.Attributes.ToSlice() {
+					if string(attr.Key) == key {
+						return true
+					}
+				}
+			}
 		}
 	}
 	return false
