@@ -46,11 +46,13 @@ const (
 	SessionSummaryInjectionSystem SessionSummaryInjectionMode = "system"
 
 	// SessionSummaryInjectionUser injects the summary as a user message
-	// placed between few-shot examples and session history. If the first
-	// history message is also a user message, the summary is merged into it
-	// to avoid consecutive user messages that some models reject. This mode
-	// allows the summary to participate in token-budget trimming like any
-	// other user-anchored round, enabling a true sliding-window experience.
+	// placed near session history. The processor prefers merging it into the
+	// first user history/current message when possible; if none exists and
+	// the existing prompt prefix already ends with a user message, it falls
+	// back to merging there to avoid introducing an extra adjacent user
+	// block. This mode allows the summary to participate in token-budget
+	// trimming like any other user-anchored round, enabling a true
+	// sliding-window experience.
 	SessionSummaryInjectionUser SessionSummaryInjectionMode = "user"
 )
 
@@ -223,9 +225,10 @@ func WithAddSessionSummary(add bool) ContentOption {
 // Available modes:
 //   - SessionSummaryInjectionSystem (default): injects as system message,
 //     merged into existing system message or prepended.
-//   - SessionSummaryInjectionUser: injects as a user message between few-shot
-//     examples and session history. If the first history message is also user,
-//     the summary is merged into it to avoid consecutive user messages.
+//   - SessionSummaryInjectionUser: injects as a user message near history.
+//     The processor first tries to merge it into the first user
+//     history/current message; if none exists and the existing prompt prefix
+//     already ends with user, it falls back to merging there.
 func WithSessionSummaryInjectionMode(mode SessionSummaryInjectionMode) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		switch mode {
@@ -593,11 +596,11 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	}
 
 	// When user-mode summary injection is active, prepend the summary as a
-	// user message before history. If the first history message is also a user
-	// message, merge the summary into it to avoid consecutive user messages
-	// that some providers reject. Also check if req.Messages already ends with
-	// a user message (e.g. from injected context or few-shot) and merge there
-	// instead of creating adjacent user messages.
+	// user message near history. Prefer merging into the first user
+	// history/current message so the summary stays attached to the live user
+	// turn. If no such message exists, fall back to a trailing user message in
+	// req.Messages (for example, injected context) to avoid creating an extra
+	// adjacent user block.
 	if summaryText != "" && p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
 		messages = p.prependSummaryUserMessage(summaryText, messages, req.Messages)
 	}
@@ -688,9 +691,12 @@ func (p *ContentRequestProcessor) getSessionSummaryMessage(inv *agent.Invocation
 
 // prependSummaryUserMessage prepends the session summary as a user message
 // before history messages. It checks three merge opportunities in order:
-//  1. If reqPrefix (req.Messages before history) ends with a user message,
-//     merge the summary into that trailing message to avoid adjacent user roles.
-//  2. If the first history message is a user message, merge the summary into it.
+//  1. If history/current contains a user message, merge the summary into the
+//     first available one so the summary stays attached to the live user turn.
+//  2. If no such history/current user message exists and reqPrefix
+//     (req.Messages before history) ends with a user message, merge the
+//     summary into that trailing prefix message to avoid an extra adjacent
+//     user block.
 //  3. Otherwise prepend as an independent user message.
 //
 // When merging into reqPrefix, the function mutates reqPrefix in place and
@@ -709,8 +715,24 @@ func (p *ContentRequestProcessor) prependSummaryUserMessage(
 		return messages
 	}
 
-	// Case 1: reqPrefix (existing req.Messages) ends with a user message.
-	// Merge summary into that message to avoid consecutive user roles.
+	// Case 1: merge into the first available user history/current message.
+	for i := range messages {
+		if messages[i].Role != model.RoleUser {
+			continue
+		}
+		merged := make([]model.Message, len(messages))
+		copy(merged, messages)
+		if merged[i].Content == "" {
+			merged[i].Content = formatted
+		} else {
+			merged[i].Content = formatted + mergedUserSeparator + merged[i].Content
+		}
+		return merged
+	}
+
+	// Case 2: reqPrefix (existing req.Messages) ends with a user message.
+	// Merge summary into that message only as a fallback when there is no
+	// user history/current message to attach the summary to.
 	if len(reqPrefix) > 0 && reqPrefix[len(reqPrefix)-1].Role == model.RoleUser {
 		last := &reqPrefix[len(reqPrefix)-1]
 		if last.Content == "" {
@@ -719,18 +741,6 @@ func (p *ContentRequestProcessor) prependSummaryUserMessage(
 			last.Content = last.Content + mergedUserSeparator + formatted
 		}
 		return messages
-	}
-
-	// Case 2: first history message is user — merge into it.
-	if len(messages) > 0 && messages[0].Role == model.RoleUser {
-		merged := make([]model.Message, len(messages))
-		copy(merged, messages)
-		if merged[0].Content == "" {
-			merged[0].Content = formatted
-		} else {
-			merged[0].Content = formatted + mergedUserSeparator + merged[0].Content
-		}
-		return merged
 	}
 
 	// Case 3: prepend as independent user message.

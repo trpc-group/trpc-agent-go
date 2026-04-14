@@ -46,6 +46,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
@@ -470,6 +471,8 @@ type Runtime struct {
 	Channels []channel.Channel
 	prompts  *RuntimePromptController
 	adminCfg *admin.Config
+	appName  string
+	session  session.Service
 
 	runner            runner.Runner
 	cronRunner        closeFunc
@@ -535,6 +538,20 @@ func (r *Runtime) PromptController() *RuntimePromptController {
 		return nil
 	}
 	return r.prompts
+}
+
+func (r *Runtime) AppName() string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.appName)
+}
+
+func (r *Runtime) SessionService() session.Service {
+	if r == nil {
+		return nil
+	}
+	return r.session
 }
 
 func (r *Runtime) ConfigureAdmin(
@@ -707,6 +724,7 @@ func NewRuntime(
 		resolvedStateDir,
 	)
 	log.Infof("Instance: %s", instanceID)
+	rt.appName = opts.AppName
 
 	sessionSvc, err := newSessionService(mdl, opts)
 	if err != nil {
@@ -847,6 +865,7 @@ func NewRuntime(
 	rt.skillsWatch = skillsWatch
 
 	bridgedSessionSvc := conversationscope.WrapSessionService(sessionSvc)
+	rt.session = bridgedSessionSvc
 	runnerOpts := []runner.Option{
 		runner.WithSessionService(bridgedSessionSvc),
 		runner.WithPlugins(conversation.Plugin{}),
@@ -1026,6 +1045,7 @@ func NewRuntime(
 			skillsRepo,
 			skillsWatch,
 			fileMemoryStore,
+			rt.SessionService(),
 		)
 		rt.applyAdminConfig(adminCfg)
 	}
@@ -1510,6 +1530,7 @@ func run(ctx context.Context, args []string) error {
 			skillsRepo,
 			skillsWatch,
 			fileMemoryStore,
+			bridgedSessionSvc,
 		))
 		adminSrv = &http.Server{
 			Handler:           adminSvc.Handler(),

@@ -84,8 +84,9 @@ const (
 	SessionSummaryInjectionSystem = processor.SessionSummaryInjectionSystem
 	// SessionSummaryInjectionUser injects the session summary as a user
 	// message that participates in token-budget trimming for sliding-window
-	// behavior. If the first history message is also user, the summary is
-	// merged into it.
+	// behavior. The processor prefers merging it into the first user
+	// history/current message and only falls back to a trailing prefix user
+	// message when needed.
 	SessionSummaryInjectionUser = processor.SessionSummaryInjectionUser
 )
 
