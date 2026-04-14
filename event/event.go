@@ -225,9 +225,10 @@ func cloneExecutionTraceStep(step trace.Step) trace.Step {
 			[]string(nil),
 			step.PredecessorStepIDs...,
 		),
-		Input:  cloneExecutionTraceSnapshot(step.Input),
-		Output: cloneExecutionTraceSnapshot(step.Output),
-		Error:  step.Error,
+		AppliedSurfaceIDs: append([]string(nil), step.AppliedSurfaceIDs...),
+		Input:             cloneExecutionTraceSnapshot(step.Input),
+		Output:            cloneExecutionTraceSnapshot(step.Output),
+		Error:             step.Error,
 	}
 }
 
