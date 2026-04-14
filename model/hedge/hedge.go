@@ -181,7 +181,13 @@ func (r *hedgeRun) run() {
 }
 
 func (r *hedgeRun) advance(now time.Time) bool {
+	if r.drainReadyEvents() {
+		return true
+	}
 	r.launchReadyAttempts(now)
+	if r.drainReadyEvents() {
+		return true
+	}
 	if r.winnerIndex == -1 && r.activeCount == 0 && r.nextLaunchIndex >= len(r.hedge.candidates) {
 		if len(r.failures) == 0 {
 			return true
@@ -191,6 +197,19 @@ func (r *hedgeRun) advance(now time.Time) bool {
 	}
 	r.updateLaunchTimer(now)
 	return false
+}
+
+func (r *hedgeRun) drainReadyEvents() bool {
+	for {
+		select {
+		case event := <-r.eventChan:
+			if r.handleEvent(event) {
+				return true
+			}
+		default:
+			return false
+		}
+	}
 }
 
 func (r *hedgeRun) wait() bool {

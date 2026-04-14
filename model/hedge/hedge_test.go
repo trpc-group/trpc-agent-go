@@ -603,6 +603,40 @@ func TestHandleEventStateTransitions(t *testing.T) {
 	})
 }
 
+func TestAdvanceProcessesQueuedWinnerBeforeLaunchingDueCandidates(t *testing.T) {
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	run := &hedgeRun{
+		hedge: &hedgeModel{
+			candidates: []model.Model{
+				&scriptedIterModel{name: "primary"},
+				&scriptedIterModel{name: "backup"},
+			},
+			launchOffsets: []time.Duration{0, 0},
+		},
+		request: &model.Request{
+			Messages: []model.Message{model.NewUserMessage("hello")},
+		},
+		yield:           func(*model.Response) bool { return true },
+		ctx:             runCtx,
+		cancel:          cancel,
+		attempts:        make([]*attempt, 2),
+		failures:        make([]failureRecord, 0, 2),
+		eventChan:       make(chan attemptEvent, 1),
+		nextLaunchIndex: 1,
+		winnerIndex:     -1,
+	}
+	run.eventChan <- attemptEvent{
+		index:    0,
+		response: assistantResponse("winner", true),
+	}
+	done := run.advance(time.Now())
+	assert.False(t, done)
+	assert.Equal(t, 0, run.winnerIndex)
+	assert.Nil(t, run.attempts[1])
+	assert.Equal(t, 1, run.nextLaunchIndex)
+}
+
 type scriptedIterModel struct {
 	name                string
 	startupErr          error
