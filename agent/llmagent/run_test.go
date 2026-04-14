@@ -14,11 +14,15 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
@@ -49,6 +53,53 @@ func useSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
 		trace.Tracer = originalTracer
 	})
 	return recorder
+}
+
+func TestFinalizeWrappedTelemetry_MarksSpanFromFallbackErrorType(t *testing.T) {
+	recorder := useSpanRecorder(t)
+	ctx, span := trace.Tracer.Start(context.Background(), "wrap")
+	var trackerErr error
+	tracker := itelemetry.NewInvokeAgentTracker(
+		ctx,
+		&agent.Invocation{InvocationID: "id", AgentName: "agent"},
+		false,
+		&trackerErr,
+	)
+	wrappedChan := make(chan *event.Event)
+
+	finalizeWrappedTelemetry(
+		span,
+		tracker,
+		nil,
+		"rate_limit_429",
+		nil,
+		true,
+		wrappedChan,
+	)
+
+	select {
+	case _, ok := <-wrappedChan:
+		require.False(t, ok, "wrapped channel should be closed")
+	default:
+		t.Fatal("wrapped channel should be closed")
+	}
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, codes.Error, spans[0].Status().Code)
+	require.True(
+		t,
+		hasSpanAttr(spans[0].Attributes(), semconvtrace.KeyErrorType, "rate_limit_429"),
+	)
+}
+
+func hasSpanAttr(attrs []attribute.KeyValue, key string, value string) bool {
+	for _, attr := range attrs {
+		if string(attr.Key) == key && attr.Value.AsString() == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLLMAgent_Run_BeforeCallbackCust(t *testing.T) {
