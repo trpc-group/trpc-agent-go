@@ -266,7 +266,7 @@ func TestTraceFunctions_NonRecordingSpan_ReturnsEarly(t *testing.T) {
 
 	TraceWorkflow(span, &Workflow{Name: "wf", ID: "wf-1"})
 	TraceBeforeInvokeAgent(span, nil, "", "", nil)
-	TraceAfterInvokeAgent(span, nil, nil, 0)
+	TraceAfterInvokeAgent(span, nil, nil, 0, model.ErrorTypeRunError)
 	TraceChat(span, nil)
 }
 
@@ -289,12 +289,22 @@ func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
 
 	// After invoke with error and choices
 	stop := "stop"
-	rsp := &model.Response{ID: "rid", Model: "m-1", Usage: &model.Usage{PromptTokens: 1, CompletionTokens: 2}, Choices: []model.Choice{{FinishReason: &stop}, {}}, Error: &model.ResponseError{Message: "oops", Type: "api_error"}}
+	code := "70002"
+	rsp := &model.Response{
+		ID:      "rid",
+		Model:   "m-1",
+		Usage:   &model.Usage{PromptTokens: 1, CompletionTokens: 2},
+		Choices: []model.Choice{{FinishReason: &stop}, {}},
+		Error:   &model.ResponseError{Message: "oops", Type: "api_error", Code: &code},
+	}
 	evt := event.New("eid", "alpha", event.WithResponse(rsp))
 	s2 := newRecordingSpan()
-	TraceAfterInvokeAgent(s2, evt, nil, 0)
+	TraceAfterInvokeAgent(s2, evt, nil, 0, model.ErrorTypeRunError)
 	if s2.status != codes.Error {
 		t.Fatalf("expected error status")
+	}
+	if !hasAttr(s2.attrs, semconvtrace.KeyErrorType, "api_error_70002") {
+		t.Fatalf("missing error type suffix")
 	}
 
 	// Tool call and merged
@@ -712,7 +722,13 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			span := newRecordingSpan()
-			TraceAfterInvokeAgent(span, tt.rspEvent, tt.tokenUsage, tt.timeToFirstToken)
+			TraceAfterInvokeAgent(
+				span,
+				tt.rspEvent,
+				tt.tokenUsage,
+				tt.timeToFirstToken,
+				model.ErrorTypeRunError,
+			)
 
 			if tt.tokenUsage != nil {
 				require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUsageInputTokens, int64(tt.tokenUsage.PromptTokens)))
@@ -723,6 +739,32 @@ func TestTraceAfterInvokeAgent_NilPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTraceAfterInvokeAgent_UsesFallbackForCodeOnlyErrors(t *testing.T) {
+	code := "70002"
+	span := newRecordingSpan()
+	TraceAfterInvokeAgent(
+		span,
+		event.New("evt-code", "author", event.WithResponse(&model.Response{
+			Error: &model.ResponseError{
+				Message: "failed",
+				Code:    &code,
+			},
+		})),
+		nil,
+		0,
+		model.ErrorTypeFlowError,
+	)
+
+	require.True(
+		t,
+		hasAttr(
+			span.attrs,
+			semconvtrace.KeyErrorType,
+			model.ErrorTypeFlowError+"_70002",
+		),
+	)
 }
 
 func TestTraceChat_WithTimeToFirstToken(t *testing.T) {
@@ -969,7 +1011,7 @@ func TestBuildResponseAttributes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			attrs := buildResponseAttributes(tt.rsp)
+			attrs := buildResponseAttributes(tt.rsp, semconvtrace.ValueDefaultErrorType)
 			if tt.rsp == nil {
 				require.Nil(t, attrs)
 			} else {
@@ -1060,6 +1102,25 @@ func TestTraceToolCall_EmptyToolCallIDs(t *testing.T) {
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIToolName, "test_tool"))
 }
 
+func TestTraceToolCall_UsesFormattedErrorType(t *testing.T) {
+	span := newRecordingSpan()
+	decl := &tool.Declaration{Name: "test_tool", Description: "test description"}
+	args, _ := json.Marshal(map[string]string{"key": "value"})
+	code := "42"
+	evt := event.New("evt1", "author", event.WithResponse(&model.Response{
+		Error: &model.ResponseError{
+			Type:    "api_error",
+			Code:    &code,
+			Message: "test error",
+		},
+	}))
+
+	TraceToolCall(span, nil, decl, args, evt, nil)
+
+	require.Equal(t, codes.Error, span.status)
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyErrorType, "api_error_42"))
+}
+
 func TestTraceMergedToolCalls_WithError(t *testing.T) {
 	span := newRecordingSpan()
 
@@ -1067,6 +1128,7 @@ func TestTraceMergedToolCalls_WithError(t *testing.T) {
 	rsp := &model.Response{
 		Error: &model.ResponseError{
 			Type:    "api_error",
+			Code:    func() *string { s := "42"; return &s }(),
 			Message: "test error",
 		},
 		Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "call1"}}}}},
@@ -1077,6 +1139,7 @@ func TestTraceMergedToolCalls_WithError(t *testing.T) {
 
 	require.Equal(t, codes.Error, span.status)
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIToolCallID, "call1"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyErrorType, "api_error_42"))
 }
 
 func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
@@ -1121,7 +1184,7 @@ func TestBuildResponseAttributes_JSONMarshalPaths(t *testing.T) {
 		Model:   "gpt-4",
 		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "test"}}},
 	}
-	attrs := buildResponseAttributes(rsp)
+	attrs := buildResponseAttributes(rsp, semconvtrace.ValueDefaultErrorType)
 	require.NotNil(t, attrs)
 
 	// Verify LLM response attribute is set
@@ -1162,7 +1225,14 @@ func TestTraceChat_WithChoicesAndError(t *testing.T) {
 	inv := &agent.Invocation{InvocationID: "i2"}
 	req := &model.Request{GenerationConfig: model.GenerationConfig{Stop: []string{"Z"}}, Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}}}
 	stop := "stop"
-	rsp := &model.Response{ID: "rid3", Model: "m3", Usage: &model.Usage{PromptTokens: 2, CompletionTokens: 3}, Choices: []model.Choice{{FinishReason: &stop}}, Error: &model.ResponseError{Message: "bad", Type: "api_error"}}
+	code := "500"
+	rsp := &model.Response{
+		ID:      "rid3",
+		Model:   "m3",
+		Usage:   &model.Usage{PromptTokens: 2, CompletionTokens: 3},
+		Choices: []model.Choice{{FinishReason: &stop}},
+		Error:   &model.ResponseError{Message: "bad", Type: "api_error", Code: &code},
+	}
 	s := newRecordingSpan()
 	TraceChat(s, &TraceChatAttributes{
 		Invocation:       inv,
@@ -1174,6 +1244,7 @@ func TestTraceChat_WithChoicesAndError(t *testing.T) {
 	if s.status != codes.Error {
 		t.Fatalf("expected error status on chat")
 	}
+	require.True(t, hasAttr(s.attrs, semconvtrace.KeyErrorType, "api_error_500"))
 }
 
 // Cover error branch of NewGRPCConn using injected dialer.

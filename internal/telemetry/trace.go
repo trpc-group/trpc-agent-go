@@ -172,7 +172,7 @@ func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Dec
 	if rspEvent != nil && rspEvent.Response != nil {
 		if e := rspEvent.Response.Error; e != nil {
 			span.SetStatus(codes.Error, e.Message)
-			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, e.Type), attribute.String(semconvtrace.KeyErrorMessage, e.Message))
+			span.SetAttributes(responseErrorAttributes(e, semconvtrace.ValueDefaultErrorType)...)
 		} else if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, ToErrorType(err, semconvtrace.ValueDefaultErrorType)), attribute.String(semconvtrace.KeyErrorMessage, err.Error()))
@@ -216,7 +216,7 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 		}
 		if e := rspEvent.Response.Error; e != nil {
 			span.SetStatus(codes.Error, e.Message)
-			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, e.Type), attribute.String(semconvtrace.KeyErrorMessage, e.Message))
+			span.SetAttributes(responseErrorAttributes(e, semconvtrace.ValueDefaultErrorType)...)
 		}
 		span.SetAttributes(attribute.String(semconvtrace.KeyEventID, rspEvent.ID))
 
@@ -327,7 +327,13 @@ type TokenUsage struct {
 }
 
 // TraceAfterInvokeAgent traces the after invocation of an agent.
-func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *TokenUsage, timeToFirstToken time.Duration) {
+func TraceAfterInvokeAgent(
+	span trace.Span,
+	rspEvent *event.Event,
+	tokenUsage *TokenUsage,
+	timeToFirstToken time.Duration,
+	errorTypeFallback string,
+) {
 	if !span.IsRecording() {
 		return
 	}
@@ -366,7 +372,7 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 
 	if e := rsp.Error; e != nil {
 		span.SetStatus(codes.Error, e.Message)
-		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, e.Type), attribute.String(semconvtrace.KeyErrorMessage, e.Message))
+		span.SetAttributes(responseErrorAttributes(e, errorTypeFallback)...)
 	}
 }
 
@@ -422,7 +428,7 @@ func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 	attrs = append(attrs, buildRequestAttributes(attributes.Request)...)
 
 	// Add response attributes
-	attrs = append(attrs, buildResponseAttributes(attributes.Response)...)
+	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType)...)
 
 	// Set all attributes at once
 	span.SetAttributes(attrs...)
@@ -530,7 +536,7 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 }
 
 // buildResponseAttributes builds response-related attributes.
-func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
+func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []attribute.KeyValue {
 	if rsp == nil {
 		return nil
 	}
@@ -542,7 +548,7 @@ func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
 
 	// Add error type if present
 	if e := rsp.Error; e != nil {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyErrorType, e.Type), attribute.String(semconvtrace.KeyErrorMessage, e.Message))
+		attrs = append(attrs, responseErrorAttributes(e, errorTypeFallback)...)
 	}
 
 	// Add usage attributes
@@ -592,6 +598,19 @@ func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
 	}
 
 	return attrs
+}
+
+func responseErrorAttributes(respErr *model.ResponseError, fallback string) []attribute.KeyValue {
+	if respErr == nil {
+		return nil
+	}
+	return []attribute.KeyValue{
+		attribute.String(
+			semconvtrace.KeyErrorType,
+			FormatResponseErrorLabel(respErr, fallback),
+		),
+		attribute.String(semconvtrace.KeyErrorMessage, respErr.Message),
+	}
 }
 
 // NewGRPCConn creates a new gRPC connection to the OpenTelemetry Collector.

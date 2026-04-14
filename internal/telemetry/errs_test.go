@@ -21,6 +21,65 @@ func strPtr(s string) *string {
 	return &s
 }
 
+func TestFormatResponseErrorLabel(t *testing.T) {
+	tests := []struct {
+		name     string
+		respErr  *model.ResponseError
+		fallback string
+		expected string
+	}{
+		{
+			name:     "nil response error returns fallback",
+			respErr:  nil,
+			fallback: "default_error",
+			expected: "default_error",
+		},
+		{
+			name: "response error with type and code returns type code",
+			respErr: &model.ResponseError{
+				Type: "api_error",
+				Code: strPtr("500"),
+			},
+			fallback: "default_error",
+			expected: "api_error_500",
+		},
+		{
+			name: "response error with type only returns type",
+			respErr: &model.ResponseError{
+				Type: "timeout",
+			},
+			fallback: "default_error",
+			expected: "timeout",
+		},
+		{
+			name: "response error with code only uses fallback",
+			respErr: &model.ResponseError{
+				Code: strPtr("404"),
+			},
+			fallback: "default_error",
+			expected: "default_error_404",
+		},
+		{
+			name: "response error with empty code ignores code",
+			respErr: &model.ResponseError{
+				Type: "validation_error",
+				Code: strPtr(""),
+			},
+			fallback: "default_error",
+			expected: "validation_error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := FormatResponseErrorLabel(tt.respErr, tt.fallback)
+			if result != tt.expected {
+				t.Errorf("FormatResponseErrorLabel(%v, %q) = %q, want %q", tt.respErr, tt.fallback, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestToErrorType(t *testing.T) {
 	tests := []struct {
 		name      string
