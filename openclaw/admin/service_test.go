@@ -2014,7 +2014,13 @@ func TestService_ChatsPageAndJSON(t *testing.T) {
 	require.Contains(t, body, "href=\"identity#identity-global\"")
 	require.Contains(t, body, "Alice Chen (alice)")
 	require.Contains(t, body, "data-chat-history-root")
-	require.Contains(t, body, routeChatHistoryJSON)
+	require.Contains(
+		t,
+		body,
+		`data-chat-history-path="api/chats/history"`,
+	)
+	require.Contains(t, body, "window.location.href")
+	require.NotContains(t, body, "window.location.origin")
 	require.Contains(
 		t,
 		body,
@@ -4496,6 +4502,9 @@ func TestRewriteHTMLBody(t *testing.T) {
 	body := []byte(`
 <html><body>
 <a href="/skills" data-path="/skills">Skills</a>
+<div
+  data-page-state-path="/api/page/state?view=overview"
+  data-chat-history-path="/api/chats/history"></div>
 <form action="/api/skills/refresh">
 <button formaction="/api/cron/jobs/run">Run</button>
 </form>
@@ -4525,6 +4534,16 @@ func TestRewriteHTMLBody(t *testing.T) {
 		`src="uploads/file?path=clip.mp4"`,
 	)
 	require.Contains(t, string(got), `data-path="/skills"`)
+	require.Contains(
+		t,
+		string(got),
+		`data-page-state-path="api/page/state?view=overview"`,
+	)
+	require.Contains(
+		t,
+		string(got),
+		`data-chat-history-path="api/chats/history"`,
+	)
 }
 
 func TestRewriteHTMLBodySkipsNonHTML(t *testing.T) {
