@@ -12,7 +12,9 @@ package dify
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -365,6 +367,14 @@ func (r *DifyAgent) runStreaming(ctx context.Context, invocation *agent.Invocati
 			if err := agent.CheckContextCancelled(ctx); err != nil {
 				return
 			}
+
+			// Dify SDK emits Err with io.EOF on normal stream close; ignore it.
+			// Only surface real streaming failures (e.g., token limit exceeded, server errors).
+			if streamEvent.Err != nil && !errors.Is(streamEvent.Err, io.EOF) {
+				r.sendErrorEvent(ctx, eventChan, invocation, streamEvent.Err.Error())
+				return
+			}
+
 			evt, content, err := r.processStreamEvent(ctx, streamEvent, invocation)
 			if err != nil {
 				r.sendErrorEvent(ctx, eventChan, invocation, err.Error())
