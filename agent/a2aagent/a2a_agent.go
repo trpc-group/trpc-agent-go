@@ -471,6 +471,19 @@ func (r *A2AAgent) processStreamingEvents(
 			if evt == nil {
 				continue
 			}
+			currentResponseID := result.responseID
+			if evt.Response != nil && evt.Response.ID != "" {
+				currentResponseID = evt.Response.ID
+			}
+			if evt.Response != nil && !evt.Response.IsPartial {
+				r.flushBufferedContent(
+					ctx,
+					invocation,
+					eventChan,
+					currentResponseID,
+					&contentBuilder,
+				)
+			}
 			result.responseID, _ = r.aggregateEventContent(
 				ctx,
 				invocation,
@@ -491,6 +504,43 @@ func (r *A2AAgent) processStreamingEvents(
 	}
 	result.aggregatedContent = contentBuilder.String()
 	return result
+}
+
+// flushBufferedContent emits buffered streaming text as a complete assistant
+// message before forwarding a non-partial event such as a tool call or tool
+// response. This preserves the original turn order in session history.
+func (r *A2AAgent) flushBufferedContent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	responseID string,
+	contentBuilder *strings.Builder,
+) {
+	if contentBuilder == nil || contentBuilder.Len() == 0 {
+		return
+	}
+
+	content := contentBuilder.String()
+	contentBuilder.Reset()
+
+	agent.EmitEvent(ctx, invocation, eventChan, event.New(
+		invocation.InvocationID,
+		r.name,
+		event.WithResponse(&model.Response{
+			ID:        responseID,
+			Object:    model.ObjectTypeChatCompletion,
+			Done:      false,
+			IsPartial: false,
+			Timestamp: time.Now(),
+			Created:   time.Now().Unix(),
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: content,
+				},
+			}},
+		}),
+	))
 }
 
 // aggregateEventContent aggregates content from event delta.
