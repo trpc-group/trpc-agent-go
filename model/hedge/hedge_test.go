@@ -129,6 +129,35 @@ func TestGenerateContentUsesNonIterCandidate(t *testing.T) {
 	assert.Equal(t, "hello from channel", responses[0].Choices[0].Message.Content)
 }
 
+func TestGenerateContentIterReturnsErrorForNilRequest(t *testing.T) {
+	llm, err := New(WithCandidates(&scriptedIterModel{name: "primary"}))
+	require.NoError(t, err)
+	iterModel, ok := llm.(model.IterModel)
+	require.True(t, ok)
+	seq, err := iterModel.GenerateContentIter(context.Background(), nil)
+	require.Error(t, err)
+	assert.EqualError(t, err, "request cannot be nil")
+	assert.Nil(t, seq)
+}
+
+func TestGenerateContentStopsWhenContextCanceled(t *testing.T) {
+	llm, err := New(WithCandidates(&scriptedIterModel{
+		name:       "primary",
+		startDelay: 50 * time.Millisecond,
+		responses: []*model.Response{
+			assistantResponse("late response", true),
+		},
+	}))
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	responseChan, err := llm.GenerateContent(ctx, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+	})
+	require.NoError(t, err)
+	cancel()
+	assert.Empty(t, collectResponsesFromChannel(responseChan))
+}
+
 func TestHedgeDelayLaunchesNextCandidateAfterTimer(t *testing.T) {
 	primaryStarted := make(chan struct{})
 	primaryStopped := make(chan struct{})
@@ -354,6 +383,188 @@ func TestBuildFailureMessageIncludesWinnerSelectionWording(t *testing.T) {
 	assert.True(t, strings.Contains(message, "fallback preparation failed"))
 }
 
+func TestFailureHelpersPreserveFailureRecords(t *testing.T) {
+	records := []failureRecord{
+		{candidate: "primary", message: "primary failed", errType: model.ErrorTypeAPIError},
+	}
+	err := newFailureError(records)
+	require.EqualError(t, err, `candidate model "primary" failed before winner selection: primary failed`)
+	assert.Equal(t, records, failuresFromError(err, nil))
+	fallback := failuresFromError(errors.New("prepare failed"), nil)
+	require.Len(t, fallback, 1)
+	assert.Equal(t, "prepare failed", fallback[0].message)
+	assert.Equal(t, "", fallback[0].candidate)
+}
+
+func TestBuildFailureResponseUsesDefaultErrorType(t *testing.T) {
+	response := buildFailureResponse([]failureRecord{{candidate: "primary", message: "primary failed"}})
+	require.NotNil(t, response.Error)
+	assert.Equal(t, model.ErrorTypeAPIError, response.Error.Type)
+}
+
+func TestLaunchAttemptRecordsCloneFailure(t *testing.T) {
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	candidate := &scriptedIterModel{name: "primary"}
+	run := &hedgeRun{
+		hedge: &hedgeModel{
+			candidates: []model.Model{candidate},
+		},
+		request: &model.Request{
+			StructuredOutput: &model.StructuredOutput{
+				Type: model.StructuredOutputJSONSchema,
+				JSONSchema: &model.JSONSchemaConfig{
+					Name: "answer",
+					Schema: map[string]any{
+						"unsupported": func() {},
+					},
+				},
+			},
+		},
+		yield:       func(*model.Response) bool { return true },
+		ctx:         runCtx,
+		cancel:      cancel,
+		attempts:    make([]*attempt, 1),
+		failures:    make([]failureRecord, 0, 1),
+		eventChan:   make(chan attemptEvent, 1),
+		winnerIndex: -1,
+	}
+	run.launchAttempt(0)
+	require.Len(t, run.failures, 1)
+	assert.Equal(t, "primary", run.failures[0].candidate)
+	assert.Contains(t, run.failures[0].message, "marshal request")
+	assert.Equal(t, 0, run.activeCount)
+}
+
+func TestSequenceForCandidateReturnsErrorForNilResults(t *testing.T) {
+	request := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+	}
+	seq, err := sequenceForCandidate(context.Background(), &nilIterModel{name: "iter-primary"}, request)
+	require.Error(t, err)
+	assert.EqualError(t, err, `candidate model "iter-primary" returned nil response sequence`)
+	assert.Nil(t, seq)
+	seq, err = sequenceForCandidate(context.Background(), &nilChannelModel{name: "channel-primary"}, request)
+	require.Error(t, err)
+	assert.EqualError(t, err, `candidate model "channel-primary" returned nil response channel`)
+	assert.Nil(t, seq)
+}
+
+func TestCloneRequestReturnsMarshalError(t *testing.T) {
+	request := &model.Request{
+		StructuredOutput: &model.StructuredOutput{
+			Type: model.StructuredOutputJSONSchema,
+			JSONSchema: &model.JSONSchemaConfig{
+				Name: "answer",
+				Schema: map[string]any{
+					"unsupported": func() {},
+				},
+			},
+		},
+	}
+	cloned, err := cloneRequest(request)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "marshal request")
+	assert.Nil(t, cloned)
+}
+
+func TestResponseErrorMessageBranches(t *testing.T) {
+	code := "bad-request"
+	param := "temperature"
+	assert.Equal(t, "unknown response error", responseErrorMessage(nil))
+	assert.Equal(t, "rate limit", responseErrorMessage(&model.ResponseError{Message: "rate limit"}))
+	assert.Equal(t, model.ErrorTypeAPIError, responseErrorMessage(&model.ResponseError{Type: model.ErrorTypeAPIError}))
+	assert.Equal(t, code, responseErrorMessage(&model.ResponseError{Code: &code}))
+	assert.Equal(t, param, responseErrorMessage(&model.ResponseError{Param: &param}))
+	assert.Equal(t, "unknown response error", responseErrorMessage(&model.ResponseError{}))
+}
+
+func TestSendAttemptEventReturnsFalseWhenContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.False(t, sendAttemptEvent(ctx, make(chan attemptEvent), attemptEvent{}))
+}
+
+func TestWaitReturnsForContextAndTimer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	run := &hedgeRun{
+		ctx:         ctx,
+		cancel:      func() {},
+		winnerIndex: -1,
+	}
+	assert.True(t, run.wait())
+	run = &hedgeRun{
+		ctx:         context.Background(),
+		cancel:      func() {},
+		winnerIndex: -1,
+	}
+	run.launchTimer = time.NewTimer(0)
+	run.launchTimerChan = run.launchTimer.C
+	assert.False(t, run.wait())
+	assert.Nil(t, run.launchTimer)
+	assert.Nil(t, run.launchTimerChan)
+}
+
+func TestHandleEventStateTransitions(t *testing.T) {
+	t.Run("select winner and cancel losers", func(t *testing.T) {
+		loserCanceled := false
+		run := &hedgeRun{
+			yield: func(*model.Response) bool {
+				return true
+			},
+			cancel: func() {},
+			attempts: []*attempt{
+				{index: 0, cancel: func() {}},
+				{index: 1, cancel: func() { loserCanceled = true }},
+			},
+			winnerIndex: -1,
+		}
+		done := run.handleEvent(attemptEvent{
+			index:    0,
+			response: assistantResponse("winner", true),
+		})
+		assert.False(t, done)
+		assert.Equal(t, 0, run.winnerIndex)
+		assert.True(t, loserCanceled)
+	})
+	t.Run("record pre-winner failure", func(t *testing.T) {
+		run := &hedgeRun{
+			yield: func(*model.Response) bool {
+				return true
+			},
+			cancel:      func() {},
+			activeCount: 1,
+			failures:    make([]failureRecord, 0, 1),
+			winnerIndex: -1,
+		}
+		done := run.handleEvent(attemptEvent{
+			index:   0,
+			failure: &failureRecord{candidate: "primary", message: "primary failed"},
+		})
+		assert.False(t, done)
+		assert.Equal(t, 0, run.activeCount)
+		require.Len(t, run.failures, 1)
+		assert.Equal(t, "primary failed", run.failures[0].message)
+	})
+	t.Run("stop when winner stream is rejected", func(t *testing.T) {
+		canceled := false
+		run := &hedgeRun{
+			yield: func(*model.Response) bool {
+				return false
+			},
+			cancel:      func() { canceled = true },
+			winnerIndex: 0,
+		}
+		done := run.handleEvent(attemptEvent{
+			index:    0,
+			response: partialResponse("winner"),
+		})
+		assert.True(t, done)
+		assert.True(t, canceled)
+	})
+}
+
 type scriptedIterModel struct {
 	name                string
 	startupErr          error
@@ -415,6 +626,30 @@ func (m *scriptedIterModel) Info() model.Info {
 	return model.Info{Name: m.name}
 }
 
+type nilIterModel struct {
+	name string
+}
+
+func (m *nilIterModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (m *nilIterModel) GenerateContentIter(
+	ctx context.Context,
+	request *model.Request,
+) (model.Seq[*model.Response], error) {
+	return nil, nil
+}
+
+func (m *nilIterModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
 type scriptedChannelModel struct {
 	name                string
 	responses           []*model.Response
@@ -461,6 +696,21 @@ func (m *scriptedChannelModel) GenerateContent(
 }
 
 func (m *scriptedChannelModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+type nilChannelModel struct {
+	name string
+}
+
+func (m *nilChannelModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	return nil, nil
+}
+
+func (m *nilChannelModel) Info() model.Info {
 	return model.Info{Name: m.name}
 }
 
