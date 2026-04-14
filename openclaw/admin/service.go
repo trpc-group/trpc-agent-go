@@ -4972,17 +4972,33 @@ const adminPageHTML = `<!doctype html>
     </section>
     {{end}}
   <script>
+    const resolveRequestURL = (reference) => {
+      const trimmed = typeof reference === "string"
+        ? reference.trim()
+        : "";
+      if (!trimmed) {
+        return null;
+      }
+      try {
+        return new URL(trimmed, window.location.href);
+      } catch (_) {
+        return null;
+      }
+    };
+
     (function () {
       const root = document.querySelector("[data-page-stale-root]");
       if (!root) return;
 
-      const statePath = root.getAttribute("data-page-state-path") || "";
+      const stateURL = resolveRequestURL(
+        root.getAttribute("data-page-state-path") || ""
+      );
       const initialToken =
         root.getAttribute("data-page-state-token") || "";
       const intervalValue = Number(
         root.getAttribute("data-page-refresh-interval") || "0"
       );
-      if (!statePath || !initialToken || intervalValue <= 0) {
+      if (!stateURL || !initialToken || intervalValue <= 0) {
         return;
       }
 
@@ -4994,7 +5010,7 @@ const adminPageHTML = `<!doctype html>
           return;
         }
         try {
-          const response = await fetch(statePath, {
+          const response = await fetch(stateURL.toString(), {
             headers: { Accept: "application/json" },
           });
           if (!response.ok) {
@@ -5409,9 +5425,13 @@ const adminPageHTML = `<!doctype html>
       };
 
       const fetchHistory = async (root, cursor) => {
-        const path = root.getAttribute("data-chat-history-path") || "";
         const chatID = root.getAttribute("data-chat-id") || "";
-        const url = new URL(path, window.location.origin);
+        const url = resolveRequestURL(
+          root.getAttribute("data-chat-history-path") || ""
+        );
+        if (!url) {
+          throw new Error(fallbackHistoryError);
+        }
         url.searchParams.set("chat_id", chatID);
         if (cursor) {
           url.searchParams.set("cursor", cursor);
