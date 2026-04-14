@@ -412,7 +412,7 @@ func sendAttemptEvent(
 
 func resolveLaunchOffsets(candidateCount int, opts *options) ([]time.Duration, error) {
 	launchOffsets := make([]time.Duration, candidateCount)
-	if len(opts.delays) > 0 {
+	if opts.delays != nil {
 		if len(opts.delays) != candidateCount-1 {
 			return nil, fmt.Errorf(
 				"hedge: expected %d explicit delays, got %d",
@@ -466,9 +466,17 @@ func sequenceForCandidate(
 		return nil, fmt.Errorf("candidate model %q returned nil response channel", candidate.Info().Name)
 	}
 	return func(yield func(*model.Response) bool) {
-		for response := range responseChan {
-			if !yield(response) {
+		for {
+			select {
+			case <-ctx.Done():
 				return
+			case response, ok := <-responseChan:
+				if !ok {
+					return
+				}
+				if !yield(response) {
+					return
+				}
 			}
 		}
 	}, nil

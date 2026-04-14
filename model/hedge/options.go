@@ -38,6 +38,7 @@ func newOptions(opt ...Option) options {
 type Option func(*options)
 
 // WithCandidates appends hedge candidates in launch order.
+// Multiple calls accumulate candidates instead of replacing them.
 func WithCandidates(candidates ...model.Model) Option {
 	return func(o *options) {
 		o.candidates = append(o.candidates, candidates...)
@@ -61,6 +62,7 @@ func WithDelay(delay time.Duration) Option {
 // WithDelays sets absolute launch offsets for candidates[1:].
 func WithDelays(delays ...time.Duration) Option {
 	return func(o *options) {
-		o.delays = append([]time.Duration(nil), delays...)
+		o.delays = make([]time.Duration, len(delays))
+		copy(o.delays, delays)
 	}
 }

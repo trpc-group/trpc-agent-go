@@ -54,6 +54,13 @@ func TestNewReturnsErrorForInvalidDelays(t *testing.T) {
 	assert.EqualError(t, err, "hedge: expected 1 explicit delays, got 2")
 	assert.Nil(t, llm)
 	llm, err = New(
+		WithCandidates(primary, backup),
+		WithDelays(),
+	)
+	require.Error(t, err)
+	assert.EqualError(t, err, "hedge: expected 1 explicit delays, got 0")
+	assert.Nil(t, llm)
+	llm, err = New(
 		WithCandidates(primary, backup, &scriptedIterModel{name: "third"}),
 		WithDelays(20*time.Millisecond, 10*time.Millisecond),
 	)
@@ -177,7 +184,7 @@ func TestHedgeDelayLaunchesNextCandidateAfterTimer(t *testing.T) {
 	}
 	llm, err := New(
 		WithCandidates(primary, backup),
-		WithDelay(40*time.Millisecond),
+		WithDelay(80*time.Millisecond),
 	)
 	require.NoError(t, err)
 	responseChan, err := llm.GenerateContent(context.Background(), &model.Request{
@@ -185,8 +192,8 @@ func TestHedgeDelayLaunchesNextCandidateAfterTimer(t *testing.T) {
 	})
 	require.NoError(t, err)
 	waitForClosed(t, primaryStarted, 100*time.Millisecond)
-	assertNotClosed(t, backupStarted, 15*time.Millisecond)
-	waitForClosed(t, backupStarted, 250*time.Millisecond)
+	assertNotClosed(t, backupStarted, 40*time.Millisecond)
+	waitForClosed(t, backupStarted, 300*time.Millisecond)
 	responses := collectResponsesFromChannel(responseChan)
 	require.Len(t, responses, 1)
 	assert.Equal(t, "backup wins", responses[0].Choices[0].Message.Content)
@@ -216,7 +223,7 @@ func TestExplicitHedgeDelaysLaunchCandidatesAtConfiguredOffsets(t *testing.T) {
 	}
 	llm, err := New(
 		WithCandidates(primary, second, third),
-		WithDelays(40*time.Millisecond, 100*time.Millisecond),
+		WithDelays(80*time.Millisecond, 220*time.Millisecond),
 	)
 	require.NoError(t, err)
 	responseChan, err := llm.GenerateContent(context.Background(), &model.Request{
@@ -224,10 +231,10 @@ func TestExplicitHedgeDelaysLaunchCandidatesAtConfiguredOffsets(t *testing.T) {
 	})
 	require.NoError(t, err)
 	waitForClosed(t, primaryStarted, 100*time.Millisecond)
-	assertNotClosed(t, secondStarted, 15*time.Millisecond)
-	waitForClosed(t, secondStarted, 200*time.Millisecond)
-	assertNotClosed(t, thirdStarted, 25*time.Millisecond)
-	waitForClosed(t, thirdStarted, 250*time.Millisecond)
+	assertNotClosed(t, secondStarted, 40*time.Millisecond)
+	waitForClosed(t, secondStarted, 250*time.Millisecond)
+	assertNotClosed(t, thirdStarted, 80*time.Millisecond)
+	waitForClosed(t, thirdStarted, 400*time.Millisecond)
 	responses := collectResponsesFromChannel(responseChan)
 	require.Len(t, responses, 1)
 	assert.Equal(t, "third wins", responses[0].Choices[0].Message.Content)
@@ -448,6 +455,24 @@ func TestSequenceForCandidateReturnsErrorForNilResults(t *testing.T) {
 	require.Error(t, err)
 	assert.EqualError(t, err, `candidate model "channel-primary" returned nil response channel`)
 	assert.Nil(t, seq)
+}
+
+func TestSequenceForCandidateStopsWhenContextCanceledForChannelModel(t *testing.T) {
+	request := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	seq, err := sequenceForCandidate(ctx, &blockingChannelModel{name: "blocking-primary"}, request)
+	require.NoError(t, err)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		seq(func(*model.Response) bool {
+			return true
+		})
+	}()
+	cancel()
+	waitForClosed(t, done, 100*time.Millisecond)
 }
 
 func TestCloneRequestReturnsMarshalError(t *testing.T) {
@@ -711,6 +736,21 @@ func (m *nilChannelModel) GenerateContent(
 }
 
 func (m *nilChannelModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+type blockingChannelModel struct {
+	name string
+}
+
+func (m *blockingChannelModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	return make(chan *model.Response), nil
+}
+
+func (m *blockingChannelModel) Info() model.Info {
 	return model.Info{Name: m.name}
 }
 

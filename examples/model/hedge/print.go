@@ -70,7 +70,7 @@ func (c *hedgeChat) processResponse(eventChan <-chan *event.Event) error {
 }
 
 func (c *hedgeChat) extractContent(choice model.Choice) string {
-	if c.config.streaming {
+	if choice.Delta.Content != "" {
 		return choice.Delta.Content
 	}
 	return choice.Message.Content
