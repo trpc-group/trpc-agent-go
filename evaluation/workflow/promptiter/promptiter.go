@@ -9,6 +9,6 @@
 // Package promptiter defines domain entities used across PromptIter workflow stages.
 //
 // The package owns the contracts shared by traces, surfaces, gradients, losses,
-// profiles, and patches so that sampler, backwarder, optimizer, and engine
-// components exchange a consistent signal representation.
+// profiles, and patches so that backwarder, optimizer, and engine components
+// exchange a consistent signal representation.
 package promptiter

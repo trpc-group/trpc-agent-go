@@ -9,8 +9,7 @@
 // Package promptiter exposes HTTP payload contracts for PromptIter control APIs.
 //
 // The package bridges external callers and internal workflow types by translating
-// request and response shapes used by run, structure, and trace reporter
-// operations.
+// request and response shapes used by run and structure operations.
 package promptiter
 
 import (
@@ -34,30 +33,4 @@ type RunResponse struct {
 type GetStructureResponse struct {
 	// Structure is the target structure snapshot shared with clients.
 	Structure *astructure.Snapshot `json:"structure"`
-}
-
-// TraceReporterConfig controls optional trace reporting to server endpoints.
-type TraceReporterConfig struct {
-	// Enabled enables or disables trace reporter emission.
-	Enabled bool `json:"enabled"`
-	// SampleRate defines the fraction of traces to report when enabled.
-	SampleRate float64 `json:"sample_rate"`
-}
-
-// GetTraceReporterConfigResponse returns the current trace reporter config.
-type GetTraceReporterConfigResponse struct {
-	// Config stores effective trace reporter settings from runtime.
-	Config *TraceReporterConfig `json:"config"`
-}
-
-// PutTraceReporterConfigRequest carries trace reporter settings update input.
-type PutTraceReporterConfigRequest struct {
-	// Config is the target trace reporter configuration.
-	Config *TraceReporterConfig `json:"config"`
-}
-
-// PutTraceReporterConfigResponse returns trace reporter settings after update.
-type PutTraceReporterConfigResponse struct {
-	// Config stores the persisted trace reporter configuration.
-	Config *TraceReporterConfig `json:"config"`
 }
