@@ -14,6 +14,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -31,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/a2a"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessionmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -38,10 +42,11 @@ import (
 
 var (
 	modelName  = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-chat"), "Model to use")
-	host       = flag.String("host", "0.0.0.0:8888", "Host to use")
+	host       = flag.String("host", "127.0.0.1:8888", "Host to use")
 	streaming  = flag.Bool("streaming", true, "Streaming to use")
 	serverMode = flag.String("server-mode", "agent", "A2A server build mode: agent or runner-card")
 	remoteOnly = flag.Bool("remote-only", false, "Only output remote agent responses")
+	debugMode  = flag.Bool("debug", true, "Enable debug mode to print session events after each turn")
 )
 
 // ANSI color codes for terminal output
@@ -52,14 +57,16 @@ const (
 
 const (
 	optionalStateKey = "meta"
+	appName          = "a2aagent-demo"
 )
 
 func main() {
 	flag.Parse()
 
 	// runRemoteAgent will start a a2a server that build with a remote agent
-	runA2AServerByAgent("agent_remote_joker", "I am a remote agent, I can tell a joke", *host)
-	time.Sleep(1 * time.Second)
+	if err := runA2AServerByAgent("agent_remote_joker", "I am a remote agent, I can tell a joke", *host); err != nil {
+		log.Fatalf("Failed to start a2a server: %v", err)
+	}
 
 	httpURL := fmt.Sprintf("http://%s", *host)
 	a2aAgent := buildA2AAgent(httpURL)
@@ -72,6 +79,7 @@ func main() {
 				function.WithName("getCurrentTime"),
 				function.WithDescription("This is tool that can get current time")),
 		}))
+	fmt.Printf("Debug Mode: %t\n", *debugMode)
 	startChat(localAgent, a2aAgent)
 }
 
@@ -87,8 +95,8 @@ func startChat(localAgent agent.Agent, a2aAgent *a2aagent.A2AAgent) {
 	localSessionService := sessionmemory.NewSessionService()
 	remoteSessionService := sessionmemory.NewSessionService()
 
-	remoteRunner := runner.NewRunner("test", a2aAgent, runner.WithSessionService(remoteSessionService))
-	localRunner := runner.NewRunner("test", localAgent, runner.WithSessionService(localSessionService))
+	remoteRunner := runner.NewRunner(appName, a2aAgent, runner.WithSessionService(remoteSessionService))
+	localRunner := runner.NewRunner(appName, localAgent, runner.WithSessionService(localSessionService))
 
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
 	defer remoteRunner.Close()
@@ -111,9 +119,131 @@ func startChat(localAgent agent.Agent, a2aAgent *a2aagent.A2AAgent) {
 			}
 			fmt.Printf("❌ Error: %v\n", err)
 		}
+		if *debugMode {
+			printDebugSessions(
+				context.Background(),
+				remoteSessionService,
+				remoteUserID,
+				remoteSessionID,
+				localSessionService,
+				localUserID,
+				localSessionID,
+			)
+		}
 
 		fmt.Println() // Add spacing between turns
 	}
+}
+
+func printDebugSessions(
+	ctx context.Context,
+	remoteSessionService session.Service,
+	remoteUserID string,
+	remoteSessionID string,
+	localSessionService session.Service,
+	localUserID string,
+	localSessionID string,
+) {
+	fmt.Println()
+	fmt.Println("------- Debug Sessions -------")
+	fmt.Println("[remote a2a agent]")
+	if err := printSessionEvents(
+		ctx,
+		remoteSessionService,
+		appName,
+		remoteUserID,
+		remoteSessionID,
+	); err != nil {
+		fmt.Printf("Debug error (remote): %v\n", err)
+	}
+	if *remoteOnly {
+		fmt.Println("------------------------------")
+		return
+	}
+	fmt.Println("[local agent]")
+	if err := printSessionEvents(
+		ctx,
+		localSessionService,
+		appName,
+		localUserID,
+		localSessionID,
+	); err != nil {
+		fmt.Printf("Debug error (local): %v\n", err)
+	}
+	fmt.Println("------------------------------")
+}
+
+func printSessionEvents(
+	ctx context.Context,
+	svc session.Service,
+	appName string,
+	userID string,
+	sessionID string,
+) error {
+	key := session.Key{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sessionID,
+	}
+
+	sess, err := svc.GetSession(ctx, key)
+	if err != nil {
+		return fmt.Errorf("get session failed: %w", err)
+	}
+	if sess == nil {
+		return fmt.Errorf("session not found")
+	}
+
+	events := sess.GetEvents()
+	fmt.Printf("│\n")
+	fmt.Printf("│  [DEBUG] Session Events: %d\n", len(events))
+	for i, evt := range events {
+		role := ""
+		detail := ""
+		if evt.Response != nil && len(evt.Response.Choices) > 0 {
+			msg := evt.Response.Choices[0].Message
+			role = string(msg.Role)
+			detail = buildDebugEventDetail(msg)
+		}
+		if detail == "" {
+			detail = "<empty>"
+		}
+		fmt.Printf(
+			"│    %d. %-9s: %s\n",
+			i+1,
+			role,
+			strings.ReplaceAll(detail, "\n", "\n│              "),
+		)
+	}
+	return nil
+}
+
+func buildDebugEventDetail(msg model.Message) string {
+	var parts []string
+	if msg.Content != "" {
+		parts = append(parts, msg.Content)
+	}
+	if len(msg.ToolCalls) > 0 {
+		var toolCallLines []string
+		for _, toolCall := range msg.ToolCalls {
+			line := fmt.Sprintf("tool_call: %s", toolCall.Function.Name)
+			if len(toolCall.Function.Arguments) > 0 {
+				line += fmt.Sprintf(" args=%s", string(toolCall.Function.Arguments))
+			}
+			if toolCall.ID != "" {
+				line += fmt.Sprintf(" id=%s", toolCall.ID)
+			}
+			toolCallLines = append(toolCallLines, line)
+		}
+		parts = append(parts, strings.Join(toolCallLines, "\n"))
+	}
+	if msg.ToolID != "" {
+		parts = append(parts, fmt.Sprintf("tool_id: %s", msg.ToolID))
+	}
+	if msg.ToolName != "" {
+		parts = append(parts, fmt.Sprintf("tool_name: %s", msg.ToolName))
+	}
+	return strings.Join(parts, "\n")
 }
 
 func processMessage(
@@ -218,7 +348,8 @@ func (h *hookProcessor) ProcessMessage(
 	return h.next.ProcessMessage(ctx, message, options, handler)
 }
 
-func runA2AServerByAgent(agentName, desc, host string) {
+func runA2AServerByAgent(agentName, desc, host string) error {
+	fmt.Printf("A2A Server: starting on %s\n", host)
 	remoteAgent := buildAgent(agentName, desc, llmagent.WithTools([]tool.Tool{
 		function.NewFunctionTool(
 			getCurrentTime,
@@ -281,11 +412,68 @@ func runA2AServerByAgent(agentName, desc, host string) {
 
 	server, err := a2a.New(append(commonOpts, serverOpts...)...)
 	if err != nil {
-		log.Fatalf("Failed to create a2a server: %v", err)
+		return fmt.Errorf("create a2a server: %w", err)
 	}
+	if err := ensureHostAvailable(host); err != nil {
+		return err
+	}
+
+	serverErrCh := make(chan error, 1)
 	go func() {
-		server.Start(host)
+		if err := server.Start(host); err != nil {
+			select {
+			case serverErrCh <- err:
+			default:
+				slog.Error("A2A server exited", "error", err)
+			}
+		}
 	}()
+
+	if err := waitForAgentCardReady(host, serverErrCh, 5*time.Second); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureHostAvailable(host string) error {
+	listener, err := net.Listen("tcp", host)
+	if err != nil {
+		return fmt.Errorf("host %s is unavailable: %w", host, err)
+	}
+	return listener.Close()
+}
+
+func waitForAgentCardReady(host string, serverErrCh <-chan error, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	httpClient := &http.Client{Timeout: time.Second}
+	agentCardURL := fmt.Sprintf("http://%s%s", host, protocol.AgentCardPath)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			select {
+			case err := <-serverErrCh:
+				return fmt.Errorf("a2a server failed before ready: %w", err)
+			default:
+			}
+			return fmt.Errorf("timed out waiting for a2a server readiness at %s", agentCardURL)
+		case err := <-serverErrCh:
+			return fmt.Errorf("a2a server exited before ready: %w", err)
+		case <-ticker.C:
+			resp, err := httpClient.Get(agentCardURL)
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+	}
 }
 
 func buildAgent(agentName, desc string, extraOptions ...llmagent.Option) agent.Agent {

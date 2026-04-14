@@ -37,7 +37,9 @@ import (
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessionmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	teletrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -2147,6 +2149,110 @@ func TestA2AAgentRunStreamingPreservesResponseID(t *testing.T) {
 			t.Fatalf("expected aggregated content 'partial response', got %q", finalResponse.Choices[0].Message.Content)
 		}
 	})
+
+	t.Run("uses_current_event_response_id_when_flushing_buffered_text", func(t *testing.T) {
+		sseBody := mustBuildSSEBody(t, []sseEvent{
+			{
+				eventType: protocol.EventArtifactUpdate,
+				payload: protocol.TaskArtifactUpdateEvent{
+					Kind:      protocol.KindTaskArtifactUpdate,
+					TaskID:    "task-1",
+					ContextID: "ctx-1",
+					Artifact: protocol.Artifact{
+						ArtifactID: "",
+						Parts: []protocol.Part{
+							&protocol.TextPart{Kind: protocol.KindText, Text: "preface"},
+						},
+					},
+				},
+			},
+			{
+				eventType: protocol.EventArtifactUpdate,
+				payload: protocol.TaskArtifactUpdateEvent{
+					Kind:      protocol.KindTaskArtifactUpdate,
+					TaskID:    "task-1",
+					ContextID: "ctx-1",
+					Artifact: protocol.Artifact{
+						ArtifactID: "resp-1",
+						Parts: []protocol.Part{
+							buildToolCallDataPart("call-1", "tool-1", `{"a":1}`),
+						},
+					},
+				},
+			},
+			{
+				eventType: protocol.EventStatusUpdate,
+				payload: protocol.TaskStatusUpdateEvent{
+					Kind:      protocol.KindTaskStatusUpdate,
+					TaskID:    "task-1",
+					ContextID: "ctx-1",
+					Final:     true,
+					Status: protocol.TaskStatus{
+						State: protocol.TaskStateCompleted,
+					},
+				},
+			},
+		})
+
+		testClient := newTestStreamClient(t, sseBody)
+		a := &A2AAgent{
+			name:                "test-agent",
+			agentCard:           &server.AgentCard{URL: "http://stream.test/"},
+			eventConverter:      &defaultA2AEventConverter{},
+			a2aMessageConverter: stubInvocationConverter{},
+			streamingBufSize:    4,
+			a2aClient:           testClient,
+		}
+		invocation := &agent.Invocation{
+			InvocationID: "inv-test",
+			Message:      model.Message{Role: model.RoleUser, Content: "hello"},
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		eventCh, err := a.runStreaming(ctx, invocation)
+		if err != nil {
+			t.Fatalf("runStreaming() error = %v", err)
+		}
+
+		var (
+			bufferedResponse *model.Response
+			toolCallResponse *model.Response
+		)
+		for evt := range eventCh {
+			if evt.Response == nil || len(evt.Response.Choices) == 0 {
+				continue
+			}
+			msg := evt.Response.Choices[0].Message
+			switch {
+			case !evt.Response.Done &&
+				!evt.Response.IsPartial &&
+				msg.Role == model.RoleAssistant &&
+				msg.Content == "preface" &&
+				len(msg.ToolCalls) == 0:
+				bufferedResponse = evt.Response
+			case !evt.Response.Done &&
+				!evt.Response.IsPartial &&
+				msg.Role == model.RoleAssistant &&
+				len(msg.ToolCalls) == 1:
+				toolCallResponse = evt.Response
+			}
+		}
+
+		if bufferedResponse == nil {
+			t.Fatal("expected flushed buffered assistant response, got nil")
+		}
+		if bufferedResponse.ID != "resp-1" {
+			t.Fatalf("expected flushed buffered response ID 'resp-1', got %q", bufferedResponse.ID)
+		}
+		if toolCallResponse == nil {
+			t.Fatal("expected tool call response, got nil")
+		}
+		if toolCallResponse.ID != "resp-1" {
+			t.Fatalf("expected tool call response ID 'resp-1', got %q", toolCallResponse.ID)
+		}
+	})
 }
 
 func TestA2AAgentRunStreaming_SkipsSyntheticFinalOnTaskError(
@@ -2202,6 +2308,192 @@ func TestA2AAgentRunStreaming_SkipsSyntheticFinalOnTaskError(
 	require.NotNil(t, events[0].Response.Error)
 	require.Equal(t, model.ObjectTypeError, events[0].Response.Object)
 	require.True(t, events[0].Response.Done)
+}
+
+func TestA2AAgentRunStreaming_PersistsBufferedTextBeforeToolEvents(
+	t *testing.T,
+) {
+	sseBody := mustBuildSSEBody(t, []sseEvent{
+		{
+			eventType: protocol.EventStatusUpdate,
+			payload: protocol.TaskStatusUpdateEvent{
+				Kind:      protocol.KindTaskStatusUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateSubmitted,
+				},
+			},
+		},
+		{
+			eventType: protocol.EventArtifactUpdate,
+			payload: protocol.TaskArtifactUpdateEvent{
+				Kind:      protocol.KindTaskArtifactUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Artifact: protocol.Artifact{
+					ArtifactID: "resp-1",
+					Parts: []protocol.Part{
+						&protocol.TextPart{Kind: protocol.KindText, Text: "我要调用xxx"},
+					},
+				},
+			},
+		},
+		{
+			eventType: protocol.EventArtifactUpdate,
+			payload: protocol.TaskArtifactUpdateEvent{
+				Kind:      protocol.KindTaskArtifactUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Artifact: protocol.Artifact{
+					ArtifactID: "resp-1",
+					Parts: []protocol.Part{
+						buildToolCallDataPart("call-1", "tool-1", `{"a":1}`),
+					},
+				},
+			},
+		},
+		{
+			eventType: protocol.EventArtifactUpdate,
+			payload: protocol.TaskArtifactUpdateEvent{
+				Kind:      protocol.KindTaskArtifactUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Artifact: protocol.Artifact{
+					ArtifactID: "resp-1",
+					Parts: []protocol.Part{
+						buildToolResponseDataPart("call-1", "tool-1", "result-1"),
+					},
+				},
+			},
+		},
+		{
+			eventType: protocol.EventArtifactUpdate,
+			payload: protocol.TaskArtifactUpdateEvent{
+				Kind:      protocol.KindTaskArtifactUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Artifact: protocol.Artifact{
+					ArtifactID: "resp-1",
+					Parts: []protocol.Part{
+						&protocol.TextPart{Kind: protocol.KindText, Text: "我要继续调用xxxx"},
+					},
+				},
+			},
+		},
+		{
+			eventType: protocol.EventArtifactUpdate,
+			payload: protocol.TaskArtifactUpdateEvent{
+				Kind:      protocol.KindTaskArtifactUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Artifact: protocol.Artifact{
+					ArtifactID: "resp-1",
+					Parts: []protocol.Part{
+						buildToolCallDataPart("call-2", "tool-2", `{"b":2}`),
+					},
+				},
+			},
+		},
+		{
+			eventType: protocol.EventArtifactUpdate,
+			payload: protocol.TaskArtifactUpdateEvent{
+				Kind:      protocol.KindTaskArtifactUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Artifact: protocol.Artifact{
+					ArtifactID: "resp-1",
+					Parts: []protocol.Part{
+						buildToolResponseDataPart("call-2", "tool-2", "result-2"),
+					},
+				},
+			},
+		},
+		{
+			eventType: protocol.EventArtifactUpdate,
+			payload: protocol.TaskArtifactUpdateEvent{
+				Kind:      protocol.KindTaskArtifactUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Artifact: protocol.Artifact{
+					ArtifactID: "resp-1",
+					Parts: []protocol.Part{
+						&protocol.TextPart{Kind: protocol.KindText, Text: "final answer"},
+					},
+				},
+			},
+		},
+		{
+			eventType: protocol.EventArtifactUpdate,
+			payload: protocol.TaskArtifactUpdateEvent{
+				Kind:      protocol.KindTaskArtifactUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				LastChunk: boolPtr(true),
+				Artifact: protocol.Artifact{
+					ArtifactID: "resp-1",
+				},
+			},
+		},
+		{
+			eventType: protocol.EventStatusUpdate,
+			payload: protocol.TaskStatusUpdateEvent{
+				Kind:      protocol.KindTaskStatusUpdate,
+				TaskID:    "task-1",
+				ContextID: "ctx-1",
+				Final:     true,
+				Status: protocol.TaskStatus{
+					State: protocol.TaskStateCompleted,
+				},
+			},
+		},
+	})
+
+	testClient := newTestStreamClient(t, sseBody)
+	a := &A2AAgent{
+		name:                "test-agent",
+		agentCard:           &server.AgentCard{URL: "http://stream.test/", Capabilities: server.AgentCapabilities{Streaming: boolPtr(true)}},
+		eventConverter:      &defaultA2AEventConverter{},
+		a2aMessageConverter: stubInvocationConverter{},
+		streamingBufSize:    16,
+		a2aClient:           testClient,
+	}
+	sessionService := sessionmemory.NewSessionService()
+	run := runner.NewRunner("test-app", a, runner.WithSessionService(sessionService))
+	t.Cleanup(func() { _ = run.Close() })
+	t.Cleanup(func() { _ = sessionService.Close() })
+
+	eventCh, err := run.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("hello"),
+		agent.WithStream(true),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+
+	sess, err := sessionService.GetSession(context.Background(), session.Key{
+		AppName:   "test-app",
+		UserID:    "user-1",
+		SessionID: "session-1",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	events := sess.GetEvents()
+	require.Len(t, events, 8)
+	require.Equal(t, model.RoleUser, events[0].Response.Choices[0].Message.Role)
+	require.Equal(t, "我要调用xxx", events[1].Response.Choices[0].Message.Content)
+	require.Len(t, events[2].Response.Choices[0].Message.ToolCalls, 1)
+	require.Equal(t, "call-1", events[2].Response.Choices[0].Message.ToolCalls[0].ID)
+	require.Equal(t, "result-1", events[3].Response.Choices[0].Message.Content)
+	require.Equal(t, "我要继续调用xxxx", events[4].Response.Choices[0].Message.Content)
+	require.Len(t, events[5].Response.Choices[0].Message.ToolCalls, 1)
+	require.Equal(t, "call-2", events[5].Response.Choices[0].Message.ToolCalls[0].ID)
+	require.Equal(t, "result-2", events[6].Response.Choices[0].Message.Content)
+	require.Equal(t, "final answer", events[7].Response.Choices[0].Message.Content)
 }
 
 func TestA2AAgent_sendErrorEvent_UsesRunErrorType(t *testing.T) {
@@ -2360,6 +2652,31 @@ func newTestStreamClient(t *testing.T, body string) *client.A2AClient {
 type sseEvent struct {
 	eventType string
 	payload   any
+}
+
+func buildToolCallDataPart(id, name, args string) *protocol.DataPart {
+	dataPart := protocol.NewDataPart(map[string]any{
+		ia2a.ToolCallFieldID:   id,
+		ia2a.ToolCallFieldType: "function",
+		ia2a.ToolCallFieldName: name,
+		ia2a.ToolCallFieldArgs: args,
+	})
+	dataPart.Metadata = map[string]any{
+		ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionCall,
+	}
+	return &dataPart
+}
+
+func buildToolResponseDataPart(id, name, response string) *protocol.DataPart {
+	dataPart := protocol.NewDataPart(map[string]any{
+		ia2a.ToolCallFieldID:       id,
+		ia2a.ToolCallFieldName:     name,
+		ia2a.ToolCallFieldResponse: response,
+	})
+	dataPart.Metadata = map[string]any{
+		ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionResp,
+	}
+	return &dataPart
 }
 
 func mustBuildSSEBody(t *testing.T, events []sseEvent) string {
