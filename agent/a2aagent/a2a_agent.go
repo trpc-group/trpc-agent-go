@@ -633,14 +633,17 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
 		var fullRespEvent *event.Event
+		var responseErrorType string
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
-			responseErrorType := ""
-			if fullRespEvent != nil && fullRespEvent.Response != nil && fullRespEvent.Response.Error != nil {
-				responseErrorType = itelemetry.FormatResponseErrorLabel(
-					fullRespEvent.Response.Error,
-					model.ErrorTypeRunError,
-				)
+			if fullRespEvent != nil && fullRespEvent.Response != nil {
+				responseErrorType = ""
+				if fullRespEvent.Response.Error != nil {
+					responseErrorType = itelemetry.FormatResponseErrorLabel(
+						fullRespEvent.Response.Error,
+						model.ErrorTypeRunError,
+					)
+				}
 			}
 			if startedSpan && fullRespEvent != nil {
 				log.DebugContext(ctx, "fullRespEvent is not ni")
@@ -670,6 +673,12 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 					}
 					fullRespEvent = evt
 				}
+			}
+			if evt != nil && evt.Error != nil {
+				responseErrorType = itelemetry.FormatResponseErrorLabel(
+					evt.Error,
+					model.ErrorTypeRunError,
+				)
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
