@@ -19,8 +19,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// Test that when a node returns State{messages: MessageOp}, the schema reducer
-// applies the operation and messages remain a []model.Message, not []MessageOp.
+// Test that when a node returns State{messages: MessageOp}, execution still
+// succeeds and the terminal completion snapshot omits bulky messages state.
 func TestMessagesReducerAppliesMessageOps(t *testing.T) {
 	schema := MessagesStateSchema()
 	sg := NewStateGraph(schema)
@@ -45,19 +45,18 @@ func TestMessagesReducerAppliesMessageOps(t *testing.T) {
 	ch, err := exec.Execute(context.Background(), State{}, inv)
 	require.NoError(t, err)
 
-	var finalMessages []model.Message
+	var lastResponse string
+	var sawMessages bool
 	for e := range ch {
 		if e.Done && e.StateDelta != nil {
-			if data, ok := e.StateDelta[StateKeyMessages]; ok {
-				var msgs []model.Message
-				require.NoError(t, json.Unmarshal(data, &msgs))
-				finalMessages = msgs
+			if data, ok := e.StateDelta[StateKeyLastResponse]; ok {
+				require.NoError(t, json.Unmarshal(data, &lastResponse))
 			}
+			_, sawMessages = e.StateDelta[StateKeyMessages]
 		}
 	}
-	require.Len(t, finalMessages, 2)
-	require.Equal(t, model.RoleUser, finalMessages[0].Role)
-	require.Equal(t, model.RoleAssistant, finalMessages[1].Role)
+	require.Equal(t, "a", lastResponse)
+	require.False(t, sawMessages)
 }
 
 // Test that AddToolsConditionalEdges routes to the tools node when tool-calls
