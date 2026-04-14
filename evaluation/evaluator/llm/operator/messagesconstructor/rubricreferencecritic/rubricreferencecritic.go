@@ -32,7 +32,7 @@ Only respond to the rubric items provided. Do not invent new rubric items.
 # Rubric
 
 "yes": The final answer fulfills the rubric item. Accept paraphrases and different sentence structure when the answer keeps the same meaning, fidelity, and live-call quality as the reference answer.
-"no": The final answer fails the rubric item, drifts away from the current play or decisive cue shown by the reference answer, becomes materially less specific or less natural, or cannot be verified from the user prompt plus the reference answer.
+"no": The final answer fails the rubric item, drifts away from the decisive context shown by the reference answer, becomes materially less specific or less natural, or cannot be verified from the user prompt plus the reference answer.
 
 # Key Evaluation Principles
 
@@ -40,17 +40,17 @@ Only respond to the rubric items provided. Do not invent new rubric items.
    Judge only the quality of <final_answer>. Do not evaluate tool usage, chain-of-thought, or intermediate steps.
 
 2. **Use the reference answer as a quality anchor, not an exact-match target**
-   The reference answer shows the intended level of grounding, live-call sharpness, and detail. The final answer does not need to copy wording or sentence structure exactly, but it should preserve the same decisive play focus and comparable level of useful detail when supported by the user prompt.
+   The reference answer shows the intended level of grounding, specificity, and detail. The final answer does not need to copy wording or sentence structure exactly, but it should preserve the same decisive context and comparable level of useful detail when supported by the user prompt.
 
 3. **Restricted evidence sources**
    Base your judgment only on:
    * the original text of <user_prompt>,
    * the text of <reference_answer>, and
    * the text of <final_answer>.
-   Do not use external knowledge, hidden assumptions, or guessed basketball context.
+   Do not use external knowledge, hidden assumptions, or inferred domain context.
 
 4. **Prefer grounded equivalence**
-   Accept different wording when the final answer stays faithful to the same current play, actor, action, result, and decisive live cue that the reference answer highlights. Fail when the final answer becomes generic, misses an important grounded cue, or introduces unsupported specificity.
+   Accept different wording when the final answer stays faithful to the same decisive context, actor, action, result, and grounded cue that the reference answer highlights. Fail when the final answer becomes generic, misses an important grounded cue, or introduces unsupported specificity.
 
 # Output Format (repeat this format for every rubric item, starting on a new line)
 
@@ -109,10 +109,25 @@ func (e *rubricReferenceCriticMessagesConstructor) ConstructMessages(ctx context
 	if len(expecteds) == 0 {
 		return nil, fmt.Errorf("expecteds is empty")
 	}
+	if evalMetric == nil {
+		return nil, fmt.Errorf("eval metric is nil")
+	}
+	if evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
+		return nil, fmt.Errorf("llm judge criterion is required")
+	}
+	if effectiveRubricCount(evalMetric) == 0 {
+		return nil, fmt.Errorf("llm judge rubrics are required")
+	}
 	actual := actuals[len(actuals)-1]
 	expected := expecteds[len(expecteds)-1]
+	if actual == nil {
+		return nil, fmt.Errorf("actual invocation is nil")
+	}
+	if expected == nil {
+		return nil, fmt.Errorf("expected invocation is nil")
+	}
 	if expected.FinalResponse == nil {
-		return nil, fmt.Errorf("expected final response is nil")
+		return nil, fmt.Errorf("expected final response is required for llm_rubric_reference_critic")
 	}
 	data := rubricReferenceCriticPromptData{
 		UserInput:             content.ExtractTextFromContent(actual.UserContent),
@@ -137,4 +152,18 @@ type rubricReferenceCriticPromptData struct {
 	ExpectedFinalResponse string
 	ActualFinalResponse   string
 	Rubrics               string
+}
+
+func effectiveRubricCount(evalMetric *metric.EvalMetric) int {
+	if evalMetric == nil || evalMetric.Criterion == nil || evalMetric.Criterion.LLMJudge == nil {
+		return 0
+	}
+	count := 0
+	for _, rubric := range evalMetric.Criterion.LLMJudge.Rubrics {
+		if rubric == nil || rubric.Content == nil {
+			continue
+		}
+		count++
+	}
+	return count
 }
