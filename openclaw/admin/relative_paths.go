@@ -28,14 +28,29 @@ const (
 	htmlMediaType = "text/html"
 
 	htmlAttrAction     = "action"
+	htmlAttrDataPrefix = "data-"
 	htmlAttrFormAction = "formaction"
 	htmlAttrHref       = "href"
 	htmlAttrSrc        = "src"
+
+	htmlAttrActionSuffix = "-action"
+	htmlAttrHrefSuffix   = "-href"
+	htmlAttrPathSuffix   = "-path"
+	htmlAttrSrcSuffix    = "-src"
+	htmlAttrURLSuffix    = "-url"
 
 	rootPath           = "/"
 	currentPathSegment = "."
 	parentPathSegment  = ".."
 )
+
+var htmlDataReferenceAttrSuffixes = []string{
+	htmlAttrActionSuffix,
+	htmlAttrHrefSuffix,
+	htmlAttrPathSuffix,
+	htmlAttrSrcSuffix,
+	htmlAttrURLSuffix,
+}
 
 // wrapRelativeLinks keeps admin navigation working when the
 // service is exposed behind a reverse-proxy subpath.
@@ -193,15 +208,32 @@ func rewriteHTMLReferences(node *html.Node, requestPath string) {
 }
 
 func isHTMLReferenceAttr(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(key)) {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	switch normalized {
 	case htmlAttrAction,
 		htmlAttrFormAction,
 		htmlAttrHref,
 		htmlAttrSrc:
 		return true
 	default:
+		return isHTMLDataReferenceAttr(normalized)
+	}
+}
+
+func isHTMLDataReferenceAttr(key string) bool {
+	if !strings.HasPrefix(key, htmlAttrDataPrefix) {
 		return false
 	}
+	for _, suffix := range htmlDataReferenceAttrSuffixes {
+		if !strings.HasSuffix(key, suffix) {
+			continue
+		}
+		if len(key) <= len(htmlAttrDataPrefix)+len(suffix) {
+			return false
+		}
+		return true
+	}
+	return false
 }
 
 func relativeRequestReference(requestPath string, rawTarget string) string {
