@@ -52,7 +52,9 @@ const (
 	// message (default behavior).
 	SessionSummaryInjectionSystem = processor.SessionSummaryInjectionSystem
 	// SessionSummaryInjectionUser injects the session summary as a user
-	// message that participates in token-budget trimming.
+	// message that participates in token-budget trimming. The processor
+	// prefers merging it into the first user history/current message and only
+	// falls back to a trailing prefix user message when needed.
 	SessionSummaryInjectionUser = processor.SessionSummaryInjectionUser
 )
 
