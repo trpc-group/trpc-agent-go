@@ -849,6 +849,7 @@ type Criterion struct {
 - `llm_final_response`: LLM final response evaluator, requires expected output.
 - `llm_hallucinations`: LLM hallucination evaluator, checks whether the final answer is supported by evidence captured during execution, and typically does not require expected output.
 - `llm_rubric_critic`: LLM rubric critic evaluator, requires expected output plus LLMJudge rubrics.
+- `llm_rubric_reference_critic`: LLM rubric reference critic evaluator, requires expected output plus LLMJudge rubrics, and uses the reference answer as a quality anchor instead of an exact-match golden target.
 - `llm_rubric_response`: LLM rubric response evaluator, requires EvalSet to provide session input and LLMJudge plus rubrics.
 - `llm_rubric_knowledge_recall`: LLM rubric knowledge recall evaluator, requires EvalSet to provide session input and LLMJudge plus rubrics.
 
@@ -1769,6 +1770,7 @@ The framework includes the following LLM Judge evaluators:
 - `llm_final_response` focuses on consistency between the final answer and reference answer, typically requiring `finalResponse` on the expected side.
 - `llm_hallucinations` checks whether the final answer is supported by evidence collected during execution, and is well suited to tool-calling, RAG, and workflow scenarios.
 - `llm_rubric_critic` focuses on a failure-oriented rubric review against the reference answer, requiring `finalResponse` on the expected side plus `criterion.llmJudge.rubrics`.
+- `llm_rubric_reference_critic` focuses on rubric-based review against a reference answer while allowing faithful paraphrases and non-identical wording, requiring `finalResponse` on the expected side plus `criterion.llmJudge.rubrics`.
 - `llm_rubric_response` focuses on whether the final answer satisfies evaluation rubrics, requires `criterion.llmJudge.rubrics`, and aggregates scores by rubric pass status.
 - `llm_rubric_knowledge_recall` focuses on whether tool retrieval results support rubrics, typically requiring knowledge retrieval tool calls in the actual trace and extracting retrieval content as judge input.
 
@@ -1821,6 +1823,7 @@ The framework includes multiple `MessagesConstructor` implementations for differ
 - `messagesconstructor/finalresponse` for `llm_final_response`, organizing user input, actual final response, and expected final response as judge input.
 - `messagesconstructor/hallucination` for `llm_hallucinations`, splitting the actual final answer into sentence-level or bullet-level items and combining them with captured execution context, tool calls, and tool outputs.
 - `messagesconstructor/rubriccritic` for `llm_rubric_critic`, organizing user input, actual final response, expected final response, and `rubrics` as judge input, with stricter failure-oriented instructions.
+- `messagesconstructor/rubricreferencecritic` for `llm_rubric_reference_critic`, organizing user input, actual final response, expected final response, and `rubrics` as judge input, and treating the reference answer as a quality anchor rather than an exact-match target.
 - `messagesconstructor/rubricresponse` for `llm_rubric_response`, organizing user input, actual final response, and `rubrics` as judge input.
 - `messagesconstructor/rubricknowledgerecall` for `llm_rubric_knowledge_recall`, extracting knowledge retrieval tool outputs from actual traces as judge evidence, and combining with user input and `rubrics` as judge input.
 
@@ -1849,7 +1852,7 @@ The framework includes multiple `ResponseScorer` implementations. Default select
 
 - `responsescorer/finalresponse` for `llm_final_response`, parsing `valid` or `invalid` from judge output and mapping to 1 or 0, while preserving `reasoning` as `reason`.
 - `responsescorer/hallucination` for `llm_hallucinations`, parsing sentence-level judgments, scoring supported or non-factual sentences as 1 and the rest as 0, and averaging across sentences for the turn score.
-- `responsescorer/rubricresponse` for `llm_rubric_critic`, `llm_rubric_response`, and `llm_rubric_knowledge_recall`, parsing verdict `yes` or `no` for each rubric, mapping each to 1 or 0, averaging as the turn score, and outputting `rubricScores`.
+- `responsescorer/rubricresponse` for `llm_rubric_critic`, `llm_rubric_reference_critic`, `llm_rubric_response`, and `llm_rubric_knowledge_recall`, parsing verdict `yes` or `no` for each rubric, mapping each to 1 or 0, averaging as the turn score, and outputting `rubricScores`.
 
 ##### Samples Aggregator Operator
 
@@ -1989,7 +1992,7 @@ See [examples/evaluation/llm/finalresponse](https://github.com/trpc-group/trpc-a
 
 ##### LLM Hallucination Evaluator
 
-The LLM hallucination evaluator uses the metric name `llm_hallucinations`. It checks whether statements in the final answer are supported by evidence collected during the run. Unlike `llm_final_response` or `llm_rubric_critic`, it usually does not rely on an expected `finalResponse`. Instead, it looks directly at the evidence in the actual trace, such as context, tool calls, and tool outputs. This makes it a good fit for tool-calling, RAG, and workflow scenarios where you want to detect answers that drift away from available evidence.
+The LLM hallucination evaluator uses the metric name `llm_hallucinations`. It checks whether statements in the final answer are supported by evidence collected during the run. Unlike `llm_final_response`, `llm_rubric_critic`, or `llm_rubric_reference_critic`, it usually does not rely on an expected `finalResponse`. Instead, it looks directly at the evidence in the actual trace, such as context, tool calls, and tool outputs. This makes it a good fit for tool-calling, RAG, and workflow scenarios where you want to detect answers that drift away from available evidence.
 
 During evaluation, the framework first splits the final answer into sentences or bullet items, then compares each item against the captured evidence. Sentences that are supported by evidence score 1. Sentences that are contradicted, unsupported, or disputed score 0. Content that does not need factual grounding, such as greetings or filler text, also scores 1. The turn score is the average across all items.
 
@@ -2068,6 +2071,59 @@ Example metric configuration for LLM rubric critic:
             "type": "FINAL_RESPONSE_COMPLETENESS",
             "content": {
               "text": "Check whether the final answer preserves the key constraint, caveat, or scope limitation required by the reference answer. If a required limitation is missing or weakened, fail this item."
+            }
+          }
+        ]
+      }
+    }
+  }
+]
+```
+
+##### LLM Rubric Reference Critic Evaluator
+
+The LLM rubric reference critic evaluator has the metric name `llm_rubric_reference_critic` and is an LLM Judge evaluator. It also compares the agent final answer against a reference final answer and scores by rubric item, but it is less failure-oriented than `llm_rubric_critic`. The reference answer serves as a quality anchor that defines the target level of grounding, specificity, and completeness, while still allowing faithful paraphrases and different sentence structure.
+
+The evaluator constructs judge input from user input, actual final response, expected final response, and `criterion.llmJudge.rubrics`. The default prompt tells the judge to preserve the same decisive facts, level of useful detail, and overall fidelity demonstrated by the reference answer, while avoiding exact-match bias. The judge returns `yes` or `no` for each rubric. A single sample score is the average across rubrics, and with multiple samples the evaluator uses majority vote before comparing with `threshold`.
+
+Use `llm_rubric_reference_critic` when `llm_final_response` is too coarse-grained, `llm_rubric_response` is too permissive because it ignores the reference answer, and `llm_rubric_critic` is too strict because it treats the reference as an authoritative golden answer. Rubrics should still remain atomic and directly checkable. Because this evaluator depends on a reference answer, it usually requires `finalResponse` on the expected side. For security, avoid writing `judgeModel.apiKey` and `judgeModel.baseURL` in plain text, and use environment variables instead.
+
+Example metric configuration for LLM rubric reference critic:
+
+```json
+[
+  {
+    "metricName": "llm_rubric_reference_critic",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "deepseek-chat",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 3,
+          "generationConfig": {
+            "max_tokens": 512,
+            "temperature": 1.0,
+            "stream": false
+          }
+        },
+        "rubrics": [
+          {
+            "id": "1",
+            "description": "The final answer preserves the decisive grounded fact emphasized by the reference answer.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "Check whether the final answer keeps the same core fact, actor, action, result, or conclusion highlighted by the reference answer, without introducing a material mismatch."
+            }
+          },
+          {
+            "id": "2",
+            "description": "The final answer reaches a comparable level of useful detail and fidelity as the reference answer.",
+            "type": "FINAL_RESPONSE_COMPLETENESS",
+            "content": {
+              "text": "Check whether the final answer preserves the same level of useful, grounded detail shown by the reference answer when that detail is supported by the user prompt. Accept paraphrases and different sentence structure."
             }
           }
         ]
@@ -2188,6 +2244,7 @@ Registry manages evaluator registrations. Evaluation uses `metricName` to fetch 
 - `llm_final_response`: LLM final response evaluator, requires expected output.
 - `llm_hallucinations`: LLM hallucination evaluator, checks whether the final answer is supported by evidence captured during execution, and typically does not require expected output.
 - `llm_rubric_critic`: LLM rubric critic evaluator, requires expected output and LLMJudge with rubrics.
+- `llm_rubric_reference_critic`: LLM rubric reference critic evaluator, requires expected output and LLMJudge with rubrics, and treats the reference answer as a quality anchor.
 - `llm_rubric_response`: LLM rubric response evaluator, requires EvalSet to provide session input and LLMJudge with rubrics.
 - `llm_rubric_knowledge_recall`: LLM rubric knowledge recall evaluator, requires EvalSet to provide session input and LLMJudge with rubrics.
 
@@ -2708,7 +2765,7 @@ Enable it by setting `evalMode` to `trace` in EvalCase. In trace mode, `actualCo
 
 In Trace mode, the inference phase does not run Runner and instead writes `actualConversation` into `InferenceResult.Inferences` as actual traces. `conversation` provides expected traces. If `conversation` is omitted, the evaluation phase builds placeholder expecteds that keep only per-turn `userContent`, to avoid treating trace outputs as reference answers in comparisons.
 
-When only actual traces are provided, it is suitable for metrics that depend only on actual traces, such as `llm_rubric_response`, `llm_rubric_knowledge_recall`, and `llm_hallucinations`. If you need metrics that compare reference tool traces or reference final responses, such as `llm_final_response` or `llm_rubric_critic`, you can additionally configure expected traces.
+When only actual traces are provided, it is suitable for metrics that depend only on actual traces, such as `llm_rubric_response`, `llm_rubric_knowledge_recall`, and `llm_hallucinations`. If you need metrics that compare reference tool traces or reference final responses, such as `llm_final_response`, `llm_rubric_critic`, or `llm_rubric_reference_critic`, you can additionally configure expected traces.
 
 See [examples/evaluation/trace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/trace) for the full example.
 
