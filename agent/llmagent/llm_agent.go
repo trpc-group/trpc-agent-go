@@ -1189,14 +1189,21 @@ func finalizeWrappedTelemetry(
 	wrappedChan chan *event.Event,
 ) {
 	responseErrorType = resolveWrappedResponseErrorType(fullRespEvent, responseErrorType)
-	if startedSpan && fullRespEvent != nil {
-		itelemetry.TraceAfterInvokeAgent(
-			span,
-			fullRespEvent,
-			tokenUsage,
-			tracker.FirstTokenTimeDuration(),
-			model.ErrorTypeRunError,
-		)
+	if startedSpan {
+		if fullRespEvent != nil {
+			itelemetry.TraceAfterInvokeAgent(
+				span,
+				fullRespEvent,
+				tokenUsage,
+				tracker.FirstTokenTimeDuration(),
+				model.ErrorTypeRunError,
+			)
+		} else if responseErrorType != "" {
+			span.SetStatus(codes.Error, responseErrorType)
+			span.SetAttributes(
+				attribute.String(semconvtrace.KeyErrorType, responseErrorType),
+			)
+		}
 	}
 	tracker.SetResponseErrorType(responseErrorType)
 	tracker.RecordMetrics()()
