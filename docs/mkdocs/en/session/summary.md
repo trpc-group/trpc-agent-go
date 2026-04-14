@@ -649,7 +649,7 @@ agent := llmagent.New(
 | Mode | Injection Position | Token Tailoring Behavior | Use Case |
 | --- | --- | --- | --- |
 | `SessionSummaryInjectionSystem` (default) | Merged into system message | Summary in preserved head, never trimmed | Summary must always be present |
-| `SessionSummaryInjectionUser` | User message between few-shot and history | Summary participates in round trimming, can be evicted | Sliding window for very long conversations |
+| `SessionSummaryInjectionUser` | Merged into the first user history/current message when possible; otherwise inserted near history | Summary participates in round trimming, can be evicted | Sliding window for very long conversations |
 
 **User mode message structure**:
 
@@ -690,7 +690,8 @@ When the first history message is not a user role, the summary is a standalone u
 
 **Notes**:
 
-- In user mode, if the first session history message is also a user role, the summary is **automatically merged** into it to avoid consecutive user messages (which some models reject)
+- In user mode, the processor first tries to merge the summary into the first user history/current message so it stays attached to the live user turn
+- If there is no user history/current message and the prompt prefix already ends with a user message (for example, injected context), the summary falls back to that trailing user message instead of adding another adjacent user block
 - User mode uses a more neutral default template ("Context from previous interactions") to avoid system-instruction tone in a user role message
 - Custom `WithSummaryFormatter` also applies to user mode
 - The summary **generation pipeline is unaffected** — injection mode only changes prompt assembly, not the summarizer itself
