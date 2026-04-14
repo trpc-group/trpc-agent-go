@@ -207,7 +207,13 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	var operationErrorType string
 	defer func() {
 		if tracingEnabled && fullRespEvent != nil {
-			itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
+			itelemetry.TraceAfterInvokeAgent(
+				span,
+				fullRespEvent,
+				tokenUsage,
+				tracker.FirstTokenTimeDuration(),
+				model.ErrorTypeFlowError,
+			)
 		}
 		tracker.SetResponseErrorType(resolveGraphAgentErrorType(fullRespEvent, operationErrorType))
 		tracker.RecordMetrics()()

@@ -143,7 +143,13 @@ func (a *ChainAgent) executeChainRun(
 		)
 	}
 	if startedSpan {
-		itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage, tracker.FirstTokenTimeDuration())
+		itelemetry.TraceAfterInvokeAgent(
+			span,
+			e,
+			tokenUsage,
+			tracker.FirstTokenTimeDuration(),
+			model.ErrorTypeFlowError,
+		)
 	}
 }
 

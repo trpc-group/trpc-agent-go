@@ -3008,6 +3008,7 @@ func TestStartNodeSpan_DisableTracingUsesNoopSpan(t *testing.T) {
 		),
 		nil,
 		0,
+		model.ErrorTypeFlowError,
 	)
 
 	require.Empty(t, parentSpan.attributes)
