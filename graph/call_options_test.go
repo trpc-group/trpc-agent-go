@@ -397,26 +397,28 @@ func TestScopeCallOptionsForSubgraph(t *testing.T) {
 	require.Equal(t, callOptsTestTempNode, *patch.Temperature)
 }
 
-func TestWithCallResumeStateWhitelist_ScopesToSubgraph(t *testing.T) {
+func TestWithCallResumeStateOverrideKeys_ScopesToSubgraph(t *testing.T) {
 	runOpts := agent.RunOptions{}
 	WithCallOptions(
-		WithCallResumeStateWhitelist("root"),
+		WithCallResumeStateOverrideKeys("root"),
 		DesignateNode(
 			callOptsTestNodeChild,
-			WithCallResumeStateWhitelist("child"),
+			WithCallResumeStateOverrideKeys("child"),
 		),
 	)(&runOpts)
 
 	parent := graphCallOptionsFromConfigs(runOpts.CustomAgentConfigs)
 	require.NotNil(t, parent)
-	_, ok := parent.resumeStateWhitelist["root"]
+	_, ok := parent.resumeStateOverrideKeys["root"]
 	require.True(t, ok)
+	_, ok = parent.resumeStateOverrideKeys["child"]
+	require.False(t, ok)
 
 	child := scopeCallOptionsForSubgraph(parent, callOptsTestNodeChild)
 	require.NotNil(t, child)
-	_, ok = child.resumeStateWhitelist["root"]
+	_, ok = child.resumeStateOverrideKeys["root"]
 	require.True(t, ok)
-	_, ok = child.resumeStateWhitelist["child"]
+	_, ok = child.resumeStateOverrideKeys["child"]
 	require.True(t, ok)
 }
 

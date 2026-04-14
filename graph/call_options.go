@@ -61,19 +61,19 @@ func WithCallGenerationConfigPatch(p model.GenerationConfigPatch) CallOption {
 	}
 }
 
-// WithCallResumeStateWhitelist preserves caller-provided runtime state values
+// WithCallResumeStateOverrideKeys preserves caller-provided runtime state values
 // for the selected keys when resuming from a checkpoint.
 //
 // When one of these keys is present in RunOptions.RuntimeState for the current
 // graph scope, its value overrides the checkpoint-restored value during resume.
 // Keys filtered by the existing resume merge logic are still ignored.
-func WithCallResumeStateWhitelist(keys ...string) CallOption {
+func WithCallResumeStateOverrideKeys(keys ...string) CallOption {
 	return func(c *callOptions) {
 		if c == nil || len(keys) == 0 {
 			return
 		}
-		c.resumeStateWhitelist = mergeStringSet(
-			c.resumeStateWhitelist,
+		c.resumeStateOverrideKeys = mergeStringSet(
+			c.resumeStateOverrideKeys,
 			newStringSet(keys...),
 		)
 	}
@@ -95,13 +95,13 @@ func DesignateNode(nodeID string, opts ...CallOption) CallOption {
 			return
 		}
 		node.generation = mergeGenPatch(node.generation, scope.generation)
-		if len(scope.resumeStateWhitelist) > 0 || len(scope.nodes) > 0 {
+		if len(scope.resumeStateOverrideKeys) > 0 || len(scope.nodes) > 0 {
 			if node.child == nil {
 				node.child = &callOptions{}
 			}
-			node.child.resumeStateWhitelist = mergeStringSet(
-				node.child.resumeStateWhitelist,
-				scope.resumeStateWhitelist,
+			node.child.resumeStateOverrideKeys = mergeStringSet(
+				node.child.resumeStateOverrideKeys,
+				scope.resumeStateOverrideKeys,
 			)
 			node.child.nodes = mergeCallNodes(node.child.nodes, scope.nodes)
 		}
@@ -136,7 +136,7 @@ func DesignateNodeWithPath(path NodePath, opts ...CallOption) CallOption {
 
 type callOptions struct {
 	generation           model.GenerationConfigPatch
-	resumeStateWhitelist map[string]struct{}
+	resumeStateOverrideKeys map[string]struct{}
 	nodes                map[string]*callNodeOptions
 }
 
@@ -169,7 +169,7 @@ func (c *callOptions) isEmpty() bool {
 	if !isEmptyGenPatch(c.generation) {
 		return false
 	}
-	if len(c.resumeStateWhitelist) > 0 {
+	if len(c.resumeStateOverrideKeys) > 0 {
 		return false
 	}
 	return len(c.nodes) == 0
@@ -196,9 +196,9 @@ func mergeCallOptions(a, b *callOptions) *callOptions {
 	}
 	out := &callOptions{
 		generation: mergeGenPatch(a.generation, b.generation),
-		resumeStateWhitelist: mergeStringSet(
-			a.resumeStateWhitelist,
-			b.resumeStateWhitelist,
+		resumeStateOverrideKeys: mergeStringSet(
+			a.resumeStateOverrideKeys,
+			b.resumeStateOverrideKeys,
 		),
 		nodes: mergeCallNodes(a.nodes, b.nodes),
 	}
@@ -250,7 +250,7 @@ func cloneCallOptions(in *callOptions) *callOptions {
 	}
 	out := &callOptions{
 		generation:           cloneGenPatch(in.generation),
-		resumeStateWhitelist: cloneStringSet(in.resumeStateWhitelist),
+		resumeStateOverrideKeys: cloneStringSet(in.resumeStateOverrideKeys),
 		nodes:                cloneCallNodeMap(in.nodes),
 	}
 	if out.isEmpty() {
@@ -470,16 +470,16 @@ func scopeCallOptionsForSubgraph(
 		return cloneCallOptions(parent)
 	}
 	merged := cloneGenPatch(parent.generation)
-	resumeStateWhitelist := cloneStringSet(parent.resumeStateWhitelist)
+	resumeStateOverrideKeys := cloneStringSet(parent.resumeStateOverrideKeys)
 	var childNodes map[string]*callNodeOptions
 	if parent.nodes != nil {
 		if node := parent.nodes[nodeID]; node != nil {
 			merged = mergeGenPatch(merged, node.generation)
 			if node.child != nil {
 				merged = mergeGenPatch(merged, node.child.generation)
-				resumeStateWhitelist = mergeStringSet(
-					resumeStateWhitelist,
-					node.child.resumeStateWhitelist,
+				resumeStateOverrideKeys = mergeStringSet(
+					resumeStateOverrideKeys,
+					node.child.resumeStateOverrideKeys,
 				)
 				childNodes = node.child.nodes
 			}
@@ -487,7 +487,7 @@ func scopeCallOptionsForSubgraph(
 	}
 	out := &callOptions{
 		generation:           merged,
-		resumeStateWhitelist: resumeStateWhitelist,
+		resumeStateOverrideKeys: resumeStateOverrideKeys,
 		nodes:                childNodes,
 	}
 	if out.isEmpty() {

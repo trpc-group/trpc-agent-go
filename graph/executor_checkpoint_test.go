@@ -484,11 +484,11 @@ func TestExecutor_Resume_AppliesPendingWrites(t *testing.T) {
 	}
 }
 
-func TestExecutor_Resume_RuntimeStateWhitelistOverridesCheckpoint(t *testing.T) {
+func TestExecutor_Resume_RuntimeStateOverrideKeysOverrideCheckpoint(t *testing.T) {
 	const (
-		lineageID = "ln-runtime-whitelist"
-		namespace = "ns-runtime-whitelist"
-		checkID   = "ck-runtime-whitelist"
+		lineageID = "ln-runtime-override-keys"
+		namespace = "ns-runtime-override-keys"
+		checkID   = "ck-runtime-override-keys"
 	)
 
 	g, err := NewStateGraph(NewStateSchema()).
@@ -522,8 +522,8 @@ func TestExecutor_Resume_RuntimeStateWhitelistOverridesCheckpoint(t *testing.T) 
 	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
 	require.NoError(t, err)
 
-	inv := &agent.Invocation{InvocationID: "inv-runtime-whitelist"}
-	WithCallOptions(WithCallResumeStateWhitelist("override"))(&inv.RunOptions)
+	inv := &agent.Invocation{InvocationID: "inv-runtime-override-keys"}
+	WithCallOptions(WithCallResumeStateOverrideKeys("override"))(&inv.RunOptions)
 
 	restored, _, resumed, resumedStep, _, _, err := exec.resumeOrInitWithSaver(
 		context.Background(),

@@ -3648,9 +3648,9 @@ API:
 - `graph.WithCallOptions(...)` attaches call options to this run.
 - `graph.WithCallGenerationConfigPatch(...)` overrides `model.GenerationConfig`
   fields for LLM nodes in the current graph scope.
-- `graph.WithCallResumeStateWhitelist(keys...)` allows selected
-  `RuntimeState` keys to override checkpoint-restored values during resume in
-  the current graph scope.
+- `graph.WithCallResumeStateOverrideKeys(keys...)` configures resume-time
+  `RuntimeState` override keys for the current graph scope. During resume,
+  those keys may override checkpoint-restored values with the caller-provided values.
 - `graph.DesignateNode(nodeID, ...)` targets a specific node in the current
   graph.
   - For LLM nodes: affects that node's model call.
@@ -3698,13 +3698,14 @@ ch, err := r.Run(ctx, userID, sessionID, msg, runOpts)
 
 See `examples/graph/call_options_generation_config` for a runnable demo.
 
-Resume-state whitelist example:
+Resume-state override keys example:
 
 ```go
 runOpts := graph.WithCallOptions(
-    graph.WithCallResumeStateWhitelist("request_id", "tenant_config"),
+    graph.WithCallResumeStateOverrideKeys("request_id", "tenant_config"),
     graph.DesignateNode("child_agent",
-        graph.WithCallResumeStateWhitelist("request_id"),
+        // child_agent inherits the parent's override keys, then adds its own key.
+        graph.WithCallResumeStateOverrideKeys("child_only_key"),
     ),
 )
 
@@ -3715,14 +3716,16 @@ eventCh, err := r.Run(ctx, userID, sessionID,
         graph.CfgKeyCheckpointID: checkpointID,
         "request_id":            requestID,
         "tenant_config":         tenantConfig,
+        "child_only_key":        childValue,
     }),
     runOpts,
 )
 ```
 
-Without a whitelist, resume still prefers checkpoint values. The whitelist is
-useful for request-scoped values that should be refreshed on every resume while
-leaving the rest of the checkpointed state unchanged.
+`child_agent` sees `request_id`, `tenant_config`, and `child_only_key`. Without
+configured override keys, resume still prefers checkpoint values. The override
+keys are useful for request-scoped values that should be refreshed on every
+resume while leaving the rest of the checkpointed state unchanged.
 
 #### ToolSets in Graphs vs Agents
 
@@ -4034,7 +4037,7 @@ Important detail: on resume, the executor restores state from the checkpoint
 first. By default, `runtime_state` does not override existing checkpoint keys;
 it only fills missing non-internal keys. If you need to override a small set of
 existing keys for one resume, use
-`graph.WithCallOptions(graph.WithCallResumeStateWhitelist(...))`. If you need to
+`graph.WithCallOptions(graph.WithCallResumeStateOverrideKeys(...))`. If you need to
 change the checkpointed state itself, write a new checkpoint.
 
 Use `graph.TimeTravel`:
