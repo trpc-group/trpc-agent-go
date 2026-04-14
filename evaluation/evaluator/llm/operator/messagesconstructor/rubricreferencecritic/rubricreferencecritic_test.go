@@ -21,16 +21,21 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestConstructMessagesIncludesReferenceAnswer(t *testing.T) {
-	constructor := New()
-	actual := &evalset.Invocation{
+func newValidInvocation() *evalset.Invocation {
+	return &evalset.Invocation{
 		UserContent:   &model.Message{Content: "test_user_content"},
 		FinalResponse: &model.Message{Content: "test_actual_final_response"},
 	}
-	expected := &evalset.Invocation{
+}
+
+func newValidExpectedInvocation() *evalset.Invocation {
+	return &evalset.Invocation{
 		FinalResponse: &model.Message{Content: "test_expected_final_response"},
 	}
-	evalMetric := &metric.EvalMetric{
+}
+
+func newValidEvalMetric() *metric.EvalMetric {
+	return &metric.EvalMetric{
 		Criterion: &criterion.Criterion{
 			LLMJudge: &criterionllm.LLMCriterion{
 				Rubrics: []*criterionllm.Rubric{
@@ -44,6 +49,13 @@ func TestConstructMessagesIncludesReferenceAnswer(t *testing.T) {
 			},
 		},
 	}
+}
+
+func TestConstructMessagesIncludesReferenceAnswer(t *testing.T) {
+	constructor := New()
+	actual := newValidInvocation()
+	expected := newValidExpectedInvocation()
+	evalMetric := newValidEvalMetric()
 	messages, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{actual}, []*evalset.Invocation{expected}, evalMetric)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
@@ -58,10 +70,7 @@ func TestConstructMessagesIncludesReferenceAnswer(t *testing.T) {
 
 func TestConstructMessagesRequiresReferenceAnswer(t *testing.T) {
 	constructor := New()
-	actual := &evalset.Invocation{
-		UserContent:   &model.Message{Content: "test_user_content"},
-		FinalResponse: &model.Message{Content: "test_actual_final_response"},
-	}
+	actual := newValidInvocation()
 	evalMetric := &metric.EvalMetric{
 		Criterion: &criterion.Criterion{
 			LLMJudge: &criterionllm.LLMCriterion{},
@@ -74,13 +83,8 @@ func TestConstructMessagesRequiresReferenceAnswer(t *testing.T) {
 
 func TestConstructMessagesRequiresLLMJudgeRubrics(t *testing.T) {
 	constructor := New()
-	actual := &evalset.Invocation{
-		UserContent:   &model.Message{Content: "test_user_content"},
-		FinalResponse: &model.Message{Content: "test_actual_final_response"},
-	}
-	expected := &evalset.Invocation{
-		FinalResponse: &model.Message{Content: "test_expected_final_response"},
-	}
+	actual := newValidInvocation()
+	expected := newValidExpectedInvocation()
 	evalMetric := &metric.EvalMetric{
 		Criterion: &criterion.Criterion{
 			LLMJudge: &criterionllm.LLMCriterion{},
@@ -93,14 +97,86 @@ func TestConstructMessagesRequiresLLMJudgeRubrics(t *testing.T) {
 
 func TestConstructMessagesRequiresLLMJudgeCriterion(t *testing.T) {
 	constructor := New()
-	actual := &evalset.Invocation{
-		UserContent:   &model.Message{Content: "test_user_content"},
-		FinalResponse: &model.Message{Content: "test_actual_final_response"},
-	}
-	expected := &evalset.Invocation{
-		FinalResponse: &model.Message{Content: "test_expected_final_response"},
-	}
+	actual := newValidInvocation()
+	expected := newValidExpectedInvocation()
 	_, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{actual}, []*evalset.Invocation{expected}, nil)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "eval metric is nil")
+}
+
+func TestConstructMessagesValidationErrors(t *testing.T) {
+	constructor := New()
+	tests := []struct {
+		name       string
+		actuals    []*evalset.Invocation
+		expecteds  []*evalset.Invocation
+		evalMetric *metric.EvalMetric
+		wantErr    string
+	}{
+		{
+			name:       "empty actuals",
+			actuals:    nil,
+			expecteds:  []*evalset.Invocation{newValidExpectedInvocation()},
+			evalMetric: newValidEvalMetric(),
+			wantErr:    "actuals is empty",
+		},
+		{
+			name:       "nil criterion",
+			actuals:    []*evalset.Invocation{newValidInvocation()},
+			expecteds:  []*evalset.Invocation{newValidExpectedInvocation()},
+			evalMetric: &metric.EvalMetric{},
+			wantErr:    "llm judge criterion is required",
+		},
+		{
+			name:       "nil actual invocation",
+			actuals:    []*evalset.Invocation{nil},
+			expecteds:  []*evalset.Invocation{newValidExpectedInvocation()},
+			evalMetric: newValidEvalMetric(),
+			wantErr:    "actual invocation is nil",
+		},
+		{
+			name:       "nil expected invocation",
+			actuals:    []*evalset.Invocation{newValidInvocation()},
+			expecteds:  []*evalset.Invocation{nil},
+			evalMetric: newValidEvalMetric(),
+			wantErr:    "expected invocation is nil",
+		},
+		{
+			name:    "nil expected final response",
+			actuals: []*evalset.Invocation{newValidInvocation()},
+			expecteds: []*evalset.Invocation{
+				{},
+			},
+			evalMetric: newValidEvalMetric(),
+			wantErr:    "expected final response is required for llm_rubric_reference_critic",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := constructor.ConstructMessages(context.Background(), tt.actuals, tt.expecteds, tt.evalMetric)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestEffectiveRubricCount(t *testing.T) {
+	assert.Equal(t, 0, effectiveRubricCount(nil))
+	assert.Equal(t, 0, effectiveRubricCount(&metric.EvalMetric{}))
+	assert.Equal(t, 1, effectiveRubricCount(&metric.EvalMetric{
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{
+				Rubrics: []*criterionllm.Rubric{
+					nil,
+					{ID: "1"},
+					{
+						ID: "2",
+						Content: &criterionllm.RubricContent{
+							Text: "valid",
+						},
+					},
+				},
+			},
+		},
+	}))
 }
