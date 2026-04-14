@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/server/promptiter
 
-go 1.24.4
+go 1.24.1
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../..
