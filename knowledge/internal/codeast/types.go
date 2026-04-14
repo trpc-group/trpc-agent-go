@@ -20,30 +20,37 @@ import (
 type EntityType string
 
 const (
-	EntityFunction  EntityType = "Function"
-	EntityMethod    EntityType = "Method"
-	EntityStruct    EntityType = "Struct"
+	// EntityFunction represents a standalone function declaration.
+	EntityFunction EntityType = "Function"
+	// EntityMethod represents a method bound to a receiver type.
+	EntityMethod EntityType = "Method"
+	// EntityStruct represents a struct type declaration.
+	EntityStruct EntityType = "Struct"
+	// EntityInterface represents an interface type declaration.
 	EntityInterface EntityType = "Interface"
-	EntityVariable  EntityType = "Variable"
-	EntityAlias     EntityType = "Alias"
-	EntityPackage   EntityType = "Package"
-	// Class-based languages (Python, C++, Java, etc.)
+	// EntityVariable represents a variable or constant declaration.
+	EntityVariable EntityType = "Variable"
+	// EntityAlias represents a type alias declaration.
+	EntityAlias EntityType = "Alias"
+	// EntityPackage represents a package-level grouping node.
+	EntityPackage EntityType = "Package"
+	// EntityClass represents a class declaration in class-based languages.
 	EntityClass EntityType = "Class"
-
-	// Python specific
+	// EntityModule represents a module declaration, such as in Python.
 	EntityModule EntityType = "Module"
-
-	// C++ specific
+	// EntityNamespace represents a namespace declaration, such as in C++.
 	EntityNamespace EntityType = "Namespace"
-	EntityTemplate  EntityType = "Template"
-	EntityEnum      EntityType = "Enum"
-
-	// Proto specific
+	// EntityTemplate represents a template declaration in C++.
+	EntityTemplate EntityType = "Template"
+	// EntityEnum represents an enum declaration.
+	EntityEnum EntityType = "Enum"
+	// EntityService represents a proto service declaration.
 	EntityService EntityType = "Service"
-	EntityRPC     EntityType = "RPC"
+	// EntityRPC represents a proto RPC declaration.
+	EntityRPC EntityType = "RPC"
+	// EntityMessage represents a proto message declaration.
 	EntityMessage EntityType = "Message"
-
-	// Document type for file parser (markdown, pdf, txt, etc.)
+	// EntityDocument represents a non-code document node.
 	EntityDocument EntityType = "Document"
 )
 
@@ -51,22 +58,34 @@ const (
 type RelationType string
 
 const (
-	RelationCalls      RelationType = "CALLS"
-	RelationMethod     RelationType = "METHOD"
-	RelationField      RelationType = "FIELD"
+	// RelationCalls marks a call-site dependency between code entities.
+	RelationCalls RelationType = "CALLS"
+	// RelationMethod links a receiver type to one of its methods.
+	RelationMethod RelationType = "METHOD"
+	// RelationField links a composite type to one of its fields.
+	RelationField RelationType = "FIELD"
+	// RelationImplements marks that a type implements an interface.
 	RelationImplements RelationType = "IMPLEMENTS"
-	RelationParam      RelationType = "PARAM"
-	RelationReturns    RelationType = "RETURNS"
-	RelationAliasOf    RelationType = "ALIAS_OF"
-	RelationTyped      RelationType = "TYPE"
-	// Python specific
-	RelationImports  RelationType = "IMPORTS"
+	// RelationParam links a callable entity to one of its parameters.
+	RelationParam RelationType = "PARAM"
+	// RelationReturns links a callable entity to one of its return values.
+	RelationReturns RelationType = "RETURNS"
+	// RelationAliasOf links a type alias to its target type.
+	RelationAliasOf RelationType = "ALIAS_OF"
+	// RelationTyped links a declaration to its referenced type.
+	RelationTyped RelationType = "TYPE"
+	// RelationImports marks an import dependency between files or modules.
+	RelationImports RelationType = "IMPORTS"
+	// RelationInherits marks an inheritance relationship.
 	RelationInherits RelationType = "INHERITS"
-	// C++ specific
+	// RelationContains marks a namespace-style containment relationship.
 	RelationContains RelationType = "CONTAINS"
 )
 
-// Metadata keys.
+// MetadataKeyCodeChunkIndex stores the code chunk index in node metadata.
+// MetadataKeyReceiverType stores the receiver type for method nodes.
+// MetadataKeyScope stores the retrieval scope label.
+// MetadataKeyLanguage stores the language label.
 const (
 	MetadataKeyCodeChunkIndex string = "code_chunk_index"
 	MetadataKeyReceiverType   string = "receiver_type"
@@ -81,19 +100,27 @@ const TrpcAstMetaPrefix string = "trpc_ast_"
 type Scope string
 
 const (
-	ScopeCode     Scope = "code"
+	// ScopeCode marks code entities intended for code-aware retrieval.
+	ScopeCode Scope = "code"
+	// ScopeDocument marks document-style content intended for document retrieval.
 	ScopeDocument Scope = "document"
-	ScopeExample  Scope = "example"
+	// ScopeExample marks example or tutorial-style content.
+	ScopeExample Scope = "example"
 )
 
 // Language defines the programming language.
 type Language string
 
 const (
-	LanguageGo         Language = "go"
-	LanguageCpp        Language = "cpp"
-	LanguagePython     Language = "python"
-	LanguageProto      Language = "proto"
+	// LanguageGo identifies Go source code.
+	LanguageGo Language = "go"
+	// LanguageCpp identifies C++ source code.
+	LanguageCpp Language = "cpp"
+	// LanguagePython identifies Python source code.
+	LanguagePython Language = "python"
+	// LanguageProto identifies Protocol Buffers source code.
+	LanguageProto Language = "proto"
+	// LanguageJavascript identifies JavaScript source code.
 	LanguageJavascript Language = "javascript"
 )
 

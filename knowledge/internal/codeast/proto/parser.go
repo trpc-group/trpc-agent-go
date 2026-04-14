@@ -226,7 +226,6 @@ func ExtractFileMetadata(content string) map[string]any {
 	handler := reporter.NewHandler(nil)
 	fileNode, err := parserpkg.Parse("metadata.proto", strings.NewReader(content), handler)
 	if err != nil {
-		_ = fileNode
 		return map[string]any{}
 	}
 	result, err := parserpkg.ResultFromAST(fileNode, false, handler)

@@ -218,7 +218,7 @@ This example intentionally focuses on repo source as the single ingestion entryp
 ```go
 // One repo source handles one repository
 repo.New(nil,
-  repo.WithRepositorie(repo.Repository{URL: "https://github.com/trpc-group/trpc-go", Branch: "main"}),
+  repo.WithRepository(repo.Repository{URL: "https://github.com/trpc-group/trpc-go", Branch: "main"}),
   repo.WithFileExtensions([]string{".go", ".md"}),
 )
 ```

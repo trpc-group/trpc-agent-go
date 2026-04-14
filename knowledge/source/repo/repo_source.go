@@ -107,11 +107,13 @@ func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error
 		defer cleanup()
 	}
 
-	rootToScan := repoRoot
-	if repository.Subdir != "" {
-		rootToScan = filepath.Join(repoRoot, filepath.Clean(repository.Subdir))
-	} else if s.subdir != "" {
-		rootToScan = filepath.Join(repoRoot, filepath.Clean(s.subdir))
+	subdir := repository.Subdir
+	if subdir == "" {
+		subdir = s.subdir
+	}
+	rootToScan, err := resolveScanRoot(repoRoot, subdir)
+	if err != nil {
+		return nil, err
 	}
 
 	filePaths, err := s.getFilePaths(rootToScan)
@@ -163,6 +165,28 @@ type fileClassification struct {
 	codeFiles     []string                       // code language files (e.g. .proto), sorted
 	textFiles     []string                       // plain-text/doc files (e.g. .md, .txt), sorted
 	allowedByType map[string]map[string]struct{} // allowed repo-relative paths per fileType
+}
+
+func resolveScanRoot(repoRoot, subdir string) (string, error) {
+	if subdir == "" {
+		return repoRoot, nil
+	}
+
+	cleanedSubdir := filepath.Clean(subdir)
+	if filepath.IsAbs(cleanedSubdir) {
+		return "", fmt.Errorf("subdir must be relative to repository root: %s", subdir)
+	}
+
+	scanRoot := filepath.Join(repoRoot, cleanedSubdir)
+	relPath, err := filepath.Rel(repoRoot, scanRoot)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve subdir %q: %w", subdir, err)
+	}
+	relPath = filepath.Clean(relPath)
+	if relPath == ".." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("subdir escapes repository root: %s", subdir)
+	}
+	return scanRoot, nil
 }
 
 func (s *Source) classifyFiles(repoRoot string, filePaths []string) (*fileClassification, error) {

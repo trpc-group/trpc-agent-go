@@ -194,73 +194,99 @@ func (e *defaultExtractor) extractFunction(pkg *parsedPackage, fset *token.FileS
 
 func (e *defaultExtractor) buildFunctionSignature(fset *token.FileSet, decl *ast.FuncDecl, receiverType string) string {
 	var sig strings.Builder
-	sig.WriteString("func ")
-
-	if receiverType != "" {
-		sig.WriteString("(")
-		if decl.Recv != nil && len(decl.Recv.List) > 0 {
-			if len(decl.Recv.List[0].Names) > 0 {
-				sig.WriteString(decl.Recv.List[0].Names[0].Name)
-				sig.WriteString(" ")
-			}
-			sig.WriteString(receiverType)
-		}
-		sig.WriteString(") ")
-	}
-
-	sig.WriteString(decl.Name.Name)
-	if decl.Type.TypeParams != nil && len(decl.Type.TypeParams.List) > 0 {
-		sig.WriteString("[")
-		sig.WriteString(fieldListToString(fset, decl.Type.TypeParams))
-		sig.WriteString("]")
-	}
-
-	sig.WriteString("(")
-	if decl.Type.Params != nil {
-		for i, field := range decl.Type.Params.List {
-			if i > 0 {
-				sig.WriteString(", ")
-			}
-			for j, name := range field.Names {
-				if j > 0 {
-					sig.WriteString(", ")
-				}
-				sig.WriteString(name.Name)
-			}
-			if len(field.Names) > 0 {
-				sig.WriteString(" ")
-			}
-			sig.WriteString(typeToString(fset, field.Type))
-		}
-	}
-	sig.WriteString(")")
-
-	if decl.Type.Results != nil && len(decl.Type.Results.List) > 0 {
-		sig.WriteString(" ")
-		if len(decl.Type.Results.List) > 1 || len(decl.Type.Results.List[0].Names) > 0 {
-			sig.WriteString("(")
-		}
-		for i, field := range decl.Type.Results.List {
-			if i > 0 {
-				sig.WriteString(", ")
-			}
-			for j, name := range field.Names {
-				if j > 0 {
-					sig.WriteString(", ")
-				}
-				sig.WriteString(name.Name)
-			}
-			if len(field.Names) > 0 {
-				sig.WriteString(" ")
-			}
-			sig.WriteString(typeToString(fset, field.Type))
-		}
-		if len(decl.Type.Results.List) > 1 || len(decl.Type.Results.List[0].Names) > 0 {
-			sig.WriteString(")")
-		}
-	}
-
+	writeFunctionPrefix(&sig, decl, receiverType)
+	writeFunctionTypeParams(&sig, fset, decl)
+	writeFunctionParams(&sig, fset, decl)
+	writeResultSignature(&sig, fset, decl.Type.Results)
 	return sig.String()
+}
+
+func writeFunctionPrefix(sig *strings.Builder, decl *ast.FuncDecl, receiverType string) {
+	sig.WriteString("func ")
+	writeReceiverSignature(sig, decl, receiverType)
+	sig.WriteString(decl.Name.Name)
+}
+
+func writeFunctionTypeParams(sig *strings.Builder, fset *token.FileSet, decl *ast.FuncDecl) {
+	if decl.Type.TypeParams == nil || len(decl.Type.TypeParams.List) == 0 {
+		return
+	}
+	sig.WriteString("[")
+	sig.WriteString(fieldListToString(fset, decl.Type.TypeParams))
+	sig.WriteString("]")
+}
+
+func writeFunctionParams(sig *strings.Builder, fset *token.FileSet, decl *ast.FuncDecl) {
+	sig.WriteString("(")
+	sig.WriteString(formatFieldList(fset, decl.Type.Params))
+	sig.WriteString(")")
+}
+
+func writeReceiverSignature(sig *strings.Builder, decl *ast.FuncDecl, receiverType string) {
+	if receiverType == "" {
+		return
+	}
+	sig.WriteString("(")
+	if decl.Recv != nil && len(decl.Recv.List) > 0 {
+		recv := decl.Recv.List[0]
+		if len(recv.Names) > 0 {
+			sig.WriteString(recv.Names[0].Name)
+			sig.WriteString(" ")
+		}
+		sig.WriteString(receiverType)
+	}
+	sig.WriteString(") ")
+}
+
+func writeResultSignature(sig *strings.Builder, fset *token.FileSet, results *ast.FieldList) {
+	if results == nil || len(results.List) == 0 {
+		return
+	}
+	formatted := formatFieldList(fset, results)
+	if formatted == "" {
+		return
+	}
+	sig.WriteString(" ")
+	if requiresResultParens(results) {
+		sig.WriteString("(")
+		sig.WriteString(formatted)
+		sig.WriteString(")")
+		return
+	}
+	sig.WriteString(formatted)
+}
+
+func requiresResultParens(results *ast.FieldList) bool {
+	if results == nil || len(results.List) == 0 {
+		return false
+	}
+	return len(results.List) > 1 || len(results.List[0].Names) > 0
+}
+
+func formatFieldList(fset *token.FileSet, fields *ast.FieldList) string {
+	if fields == nil || len(fields.List) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(fields.List))
+	for _, field := range fields.List {
+		parts = append(parts, formatField(fset, field))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatField(fset *token.FileSet, field *ast.Field) string {
+	var part strings.Builder
+	for i, name := range field.Names {
+		if i > 0 {
+			part.WriteString(", ")
+		}
+		part.WriteString(name.Name)
+	}
+	if len(field.Names) > 0 {
+		part.WriteString(" ")
+	}
+	part.WriteString(typeToString(fset, field.Type))
+	return part.String()
 }
 
 func (e *defaultExtractor) extractType(pkg *parsedPackage, fset *token.FileSet, spec *ast.TypeSpec, genDecl *ast.GenDecl, doc *ast.CommentGroup, chunkIndex int) []*codeast.Node {
