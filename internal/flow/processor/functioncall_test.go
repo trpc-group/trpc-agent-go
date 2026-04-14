@@ -117,7 +117,11 @@ func (t *delayedLoadTool) Call(
 	}
 	_ = json.Unmarshal(args, &in)
 	if delay := t.delays[in.Skill]; delay > 0 {
-		time.Sleep(delay)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	return t.LoadTool.Call(ctx, args)
 }
@@ -225,6 +229,7 @@ func TestExecuteToolCallsInParallel_DisableTracingSkipsSpanCreation(t *testing.T
 
 type mockInvocationStateDeltaTool struct {
 	declaration *tool.Declaration
+	callFn      func(context.Context, []byte) (any, error)
 	delta       map[string][]byte
 }
 
@@ -235,6 +240,16 @@ func (m *mockInvocationStateDeltaTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{Name: "mock"}
 }
 
+func (m *mockInvocationStateDeltaTool) Call(
+	ctx context.Context,
+	args []byte,
+) (any, error) {
+	if m.callFn != nil {
+		return m.callFn(ctx, args)
+	}
+	return map[string]any{"ok": true}, nil
+}
+
 func (m *mockInvocationStateDeltaTool) StateDeltaForInvocation(
 	_ *agent.Invocation,
 	_ string,
@@ -242,6 +257,44 @@ func (m *mockInvocationStateDeltaTool) StateDeltaForInvocation(
 	_ []byte,
 ) map[string][]byte {
 	return m.delta
+}
+
+type sessionReadingStateDeltaTool struct {
+	declaration *tool.Declaration
+	readKey     string
+	writeKey    string
+}
+
+func (t *sessionReadingStateDeltaTool) Declaration() *tool.Declaration {
+	if t.declaration != nil {
+		return t.declaration
+	}
+	return &tool.Declaration{Name: "session-reading"}
+}
+
+func (t *sessionReadingStateDeltaTool) Call(
+	context.Context,
+	[]byte,
+) (any, error) {
+	return map[string]any{"ok": true}, nil
+}
+
+func (t *sessionReadingStateDeltaTool) StateDeltaForInvocation(
+	inv *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	if inv == nil || inv.Session == nil {
+		return nil
+	}
+	value, ok := inv.Session.GetState(t.readKey)
+	if !ok {
+		return nil
+	}
+	return map[string][]byte{
+		t.writeKey: append([]byte(nil), value...),
+	}
 }
 
 type mockStateDeltaTool struct {
@@ -315,6 +368,64 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 	assert.Equal(t, "What's the weather like in Tokyo?", got.Message)
 }
 
+func TestExecuteSingleToolCallSequential_AttachesMappedToolStateDelta(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{
+		InvocationID: "inv-map-delta",
+		AgentName:    "coordinator",
+		Agent: &mockTransferAgent{
+			subAgents: []agent.Agent{
+				&mockTransferSubAgent{
+					info: &mockTransferAgentInfo{name: "weather-agent"},
+				},
+			},
+		},
+	}
+	tc := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "weather-agent",
+			Arguments: []byte(`{"message":"weather"}`),
+		},
+	}
+	rsp := &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:      model.RoleAssistant,
+				ToolCalls: []model.ToolCall{tc},
+			},
+		}},
+	}
+	const mappedStateKey = "mapped-state"
+	tools := map[string]tool.Tool{
+		transfer.TransferToolName: &mockInvocationStateDeltaTool{
+			declaration: &tool.Declaration{
+				Name: transfer.TransferToolName,
+			},
+			delta: map[string][]byte{
+				mappedStateKey: []byte("1"),
+			},
+		},
+	}
+
+	ev, err := p.executeSingleToolCallSequential(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		nil,
+		0,
+		tc,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, []byte("1"), ev.StateDelta[mappedStateKey])
+}
+
 func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 	const (
 		deltaKey1 = "k1"
@@ -354,6 +465,53 @@ func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 	}
 	p.attachStateDelta(inv, tl2, args, choice, ev2)
 	require.Equal(t, []byte(deltaVal2), ev2.StateDelta[deltaKey2])
+}
+
+func TestAttachStateDeltaToToolResults_ReplaysPendingStateDeltas(
+	t *testing.T,
+) {
+	const (
+		readKey  = "existing"
+		writeKey = "copied"
+	)
+	p := &FunctionCallResponseProcessor{}
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session:   &session.Session{State: session.StateMap{}},
+	}
+	choice := model.Choice{
+		Message: model.Message{
+			ToolID:  "call-2",
+			Content: `{"ok":true}`,
+			Role:    model.RoleTool,
+		},
+	}
+	results := []toolResult{
+		{
+			index: 0,
+			event: &event.Event{
+				StateDelta: map[string][]byte{
+					readKey: []byte("v1"),
+				},
+			},
+		},
+		{
+			index: 1,
+			event: &event.Event{},
+			stateDelta: &toolEventStateDelta{
+				tool: &sessionReadingStateDeltaTool{
+					readKey:  readKey,
+					writeKey: writeKey,
+				},
+				args:   []byte(`{}`),
+				choice: choice,
+			},
+		},
+	}
+
+	events := p.attachStateDeltaToToolResults(inv, results)
+	require.Len(t, events, 2)
+	require.Equal(t, []byte("v1"), events[1].StateDelta[writeKey])
 }
 
 func marshalSkillLoadArgs(

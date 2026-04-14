@@ -72,6 +72,8 @@ type toolEventStateDelta struct {
 	choice model.Choice
 }
 
+type resolvedToolContextKey struct{}
+
 // toolResult holds the result of a single tool execution.
 type toolResult struct {
 	index      int
@@ -450,8 +452,6 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	if err == nil {
 		stateDelta = p.buildToolEventStateDelta(
 			ctx,
-			tools,
-			toolCall.Function.Name,
 			modifiedArgs,
 			choices,
 		)
@@ -667,8 +667,6 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}
 	stateDelta := p.buildToolEventStateDelta(
 		ctx,
-		tools,
-		tc.Function.Name,
 		modifiedArgs,
 		choices,
 	)
@@ -817,15 +815,13 @@ func (p *FunctionCallResponseProcessor) annotateSkipSummarization(
 
 func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 	ctx context.Context,
-	tools map[string]tool.Tool,
-	toolName string,
 	args []byte,
 	choices []model.Choice,
 ) *toolEventStateDelta {
 	if len(choices) == 0 || hasSyntheticStateOnlyToolChoice(ctx) {
 		return nil
 	}
-	tl, ok := tools[toolName]
+	tl, ok := resolvedToolFromContext(ctx)
 	if !ok {
 		return nil
 	}
@@ -849,11 +845,32 @@ func newStateDeltaInvocationView(
 	return view
 }
 
+func withResolvedToolContext(
+	ctx context.Context,
+	tl tool.Tool,
+) context.Context {
+	if ctx == nil || tl == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, resolvedToolContextKey{}, tl)
+}
+
+func resolvedToolFromContext(ctx context.Context) (tool.Tool, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	tl, ok := ctx.Value(resolvedToolContextKey{}).(tool.Tool)
+	return tl, ok
+}
+
 func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 	invocation *agent.Invocation,
 	results []toolResult,
 ) []*event.Event {
-	stateDeltaInv := newStateDeltaInvocationView(invocation)
+	var (
+		stateDeltaInv     *agent.Invocation
+		pendingStateDelta []*event.Event
+	)
 	events := make([]*event.Event, 0, len(results))
 	for i := 0; i < len(results); i++ {
 		result := results[i]
@@ -861,6 +878,16 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 			continue
 		}
 		if result.stateDelta != nil {
+			if stateDeltaInv == nil {
+				stateDeltaInv = newStateDeltaInvocationView(invocation)
+				if stateDeltaInv != nil && stateDeltaInv.Session != nil {
+					for j := 0; j < len(pendingStateDelta); j++ {
+						stateDeltaInv.Session.ApplyEventStateDelta(
+							pendingStateDelta[j],
+						)
+					}
+				}
+			}
 			p.attachStateDelta(
 				stateDeltaInv,
 				result.stateDelta.tool,
@@ -873,6 +900,11 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 			stateDeltaInv.Session != nil &&
 			len(result.event.StateDelta) > 0 {
 			stateDeltaInv.Session.ApplyEventStateDelta(result.event)
+		} else if len(result.event.StateDelta) > 0 {
+			pendingStateDelta = append(
+				pendingStateDelta,
+				result.event,
+			)
 		}
 		events = append(events, result.event)
 	}
@@ -986,6 +1018,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		tl,
 		eventChan,
 	)
+	ctx = withResolvedToolContext(ctx, tl)
 	// Only return error when it's a stop error
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
