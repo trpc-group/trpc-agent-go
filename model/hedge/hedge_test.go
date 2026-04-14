@@ -61,6 +61,13 @@ func TestNewReturnsErrorForInvalidDelays(t *testing.T) {
 	assert.EqualError(t, err, "hedge: expected 1 explicit delays, got 0")
 	assert.Nil(t, llm)
 	llm, err = New(
+		WithCandidates(primary, backup),
+		WithDelays(-time.Millisecond),
+	)
+	require.Error(t, err)
+	assert.EqualError(t, err, "hedge: delay at index 0 cannot be negative")
+	assert.Nil(t, llm)
+	llm, err = New(
 		WithCandidates(primary, backup, &scriptedIterModel{name: "third"}),
 		WithDelays(20*time.Millisecond, 10*time.Millisecond),
 	)
@@ -202,16 +209,20 @@ func TestHedgeDelayLaunchesNextCandidateAfterTimer(t *testing.T) {
 
 func TestExplicitHedgeDelaysLaunchCandidatesAtConfiguredOffsets(t *testing.T) {
 	primaryStarted := make(chan struct{})
+	primaryStopped := make(chan struct{})
 	secondStarted := make(chan struct{})
+	secondStopped := make(chan struct{})
 	thirdStarted := make(chan struct{})
 	primary := &scriptedIterModel{
 		name:      "primary",
 		started:   primaryStarted,
+		stopped:   primaryStopped,
 		holdAfter: true,
 	}
 	second := &scriptedIterModel{
 		name:      "second",
 		started:   secondStarted,
+		stopped:   secondStopped,
 		holdAfter: true,
 	}
 	third := &scriptedIterModel{
@@ -238,6 +249,8 @@ func TestExplicitHedgeDelaysLaunchCandidatesAtConfiguredOffsets(t *testing.T) {
 	responses := collectResponsesFromChannel(responseChan)
 	require.Len(t, responses, 1)
 	assert.Equal(t, "third wins", responses[0].Choices[0].Message.Content)
+	waitForClosed(t, primaryStopped, 100*time.Millisecond)
+	waitForClosed(t, secondStopped, 100*time.Millisecond)
 }
 
 func TestHedgeLaunchesNextCandidateImmediatelyWhenAllActiveAttemptsFail(t *testing.T) {
