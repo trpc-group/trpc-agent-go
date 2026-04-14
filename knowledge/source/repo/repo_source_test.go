@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
@@ -27,13 +29,13 @@ func TestReadDocumentsFromRemoteBranch(t *testing.T) {
 	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
 		branch: "main",
 		files: map[string]string{
-			"go.mod":    "module example.com/demo\n\ngo 1.21\n",
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
 			"service.go": "package demo\n\n// MainBranch marks the main branch.\nfunc MainBranch() {}\n",
 		},
 	}, {
 		branch: "feature",
 		files: map[string]string{
-			"go.mod":    "module example.com/demo\n\ngo 1.21\n",
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
 			"service.go": "package demo\n\n// FeatureBranch marks the feature branch.\nfunc FeatureBranch() {}\n",
 		},
 	}}, nil)
@@ -57,14 +59,14 @@ func TestReadDocumentsFromRemoteTag(t *testing.T) {
 	remoteURL, tags := createRemoteRepo(t, []repoCommit{{
 		branch: "main",
 		files: map[string]string{
-			"go.mod":    "module example.com/demo\n\ngo 1.21\n",
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
 			"service.go": "package demo\n\n// TaggedVersion marks the tagged revision.\nfunc TaggedVersion() {}\n",
 		},
 		tag: "v1.0.0",
 	}, {
 		branch: "main",
 		files: map[string]string{
-			"go.mod":    "module example.com/demo\n\ngo 1.21\n",
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
 			"service.go": "package demo\n\n// HeadVersion marks the head revision.\nfunc HeadVersion() {}\n",
 		},
 	}}, nil)
@@ -91,13 +93,13 @@ func TestReadDocumentsFromRemoteCommit(t *testing.T) {
 	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
 		branch: "main",
 		files: map[string]string{
-			"go.mod":    "module example.com/demo\n\ngo 1.21\n",
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
 			"service.go": "package demo\n\n// FirstVersion marks the first revision.\nfunc FirstVersion() {}\n",
 		},
 	}, {
 		branch: "main",
 		files: map[string]string{
-			"go.mod":    "module example.com/demo\n\ngo 1.21\n",
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
 			"service.go": "package demo\n\n// SecondVersion marks the second revision.\nfunc SecondVersion() {}\n",
 		},
 	}}, nil)
@@ -122,20 +124,20 @@ func TestReadDocumentsRemoteVersionPriorityPrefersCommit(t *testing.T) {
 	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
 		branch: "main",
 		files: map[string]string{
-			"go.mod":    "module example.com/demo\n\ngo 1.21\n",
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
 			"service.go": "package demo\n\n// FirstVersion marks the first revision.\nfunc FirstVersion() {}\n",
 		},
 		tag: "v1.0.0",
 	}, {
 		branch: "main",
 		files: map[string]string{
-			"go.mod":    "module example.com/demo\n\ngo 1.21\n",
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
 			"service.go": "package demo\n\n// SecondVersion marks the second revision.\nfunc SecondVersion() {}\n",
 		},
 	}, {
 		branch: "feature",
 		files: map[string]string{
-			"go.mod":    "module example.com/demo\n\ngo 1.21\n",
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
 			"service.go": "package demo\n\n// FeatureVersion marks the feature revision.\nfunc FeatureVersion() {}\n",
 		},
 	}}, nil)
@@ -168,7 +170,7 @@ func TestReadDocumentsRemoteBranchNotFound(t *testing.T) {
 	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
 		branch: "main",
 		files: map[string]string{
-			"go.mod":    "module example.com/demo\n\ngo 1.21\n",
+			"go.mod":     "module example.com/demo\n\ngo 1.21\n",
 			"service.go": "package demo\n\nfunc MainBranch() {}\n",
 		},
 	}}, nil)
@@ -275,6 +277,35 @@ func TestReadDocumentsParserTaskRespectsSubdirFilter(t *testing.T) {
 	}
 }
 
+func TestReadDocumentsRejectsEscapingSubdir(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(repoRoot, "service.go"), "package demo\n\nfunc Root() {}\n")
+
+	src := New([]string{repoRoot}, WithSubdir("../outside"))
+	_, err := src.ReadDocuments(context.Background())
+	if err == nil {
+		t.Fatal("expected error for escaping subdir")
+	}
+	if !strings.Contains(err.Error(), "escapes repository root") {
+		t.Fatalf("expected escaping subdir error, got %v", err)
+	}
+}
+
+func TestReadDocumentsRejectsAbsoluteSubdir(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+
+	src := New([]string{repoRoot}, WithSubdir(filepath.Join(string(filepath.Separator), "tmp", "demo")))
+	_, err := src.ReadDocuments(context.Background())
+	if err == nil {
+		t.Fatal("expected error for absolute subdir")
+	}
+	if !strings.Contains(err.Error(), "must be relative to repository root") {
+		t.Fatalf("expected absolute subdir error, got %v", err)
+	}
+}
+
 func TestReadDocumentsFromModuleParsesCrossFilePackage(t *testing.T) {
 	repoRoot := t.TempDir()
 	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
@@ -371,6 +402,266 @@ func TestWithFileExtensionsCopiesCallerSlice(t *testing.T) {
 	assertEqual(t, src.fileExtensions[1], ".proto")
 }
 
+func TestOptionSettersBasicCoverage(t *testing.T) {
+	src := New(
+		nil,
+		WithName("repo-src"),
+		WithMetadata(map[string]any{"k": "v"}),
+		WithMetadataValue("k2", "v2"),
+		WithTag("v1.0.0"),
+		WithCommit("commit-sha"),
+		WithSkipDirs([]string{"vendor", "third_party"}),
+	)
+
+	assertEqual(t, src.name, "repo-src")
+	assertEqual(t, src.metadata["k"], "v")
+	assertEqual(t, src.metadata["k2"], "v2")
+	assertEqual(t, src.tag, "v1.0.0")
+	assertEqual(t, src.commit, "commit-sha")
+	if len(src.skipDirs) != 2 {
+		t.Fatalf("skipDirs len = %d, want 2", len(src.skipDirs))
+	}
+}
+
+func TestSourceMetadataAndHelpers(t *testing.T) {
+	src := New(nil,
+		WithName("repo-src"),
+		WithMetadata(map[string]any{"k": "v"}),
+	)
+
+	assertEqual(t, src.Name(), "repo-src")
+	assertEqual(t, src.Type(), source.TypeRepo)
+
+	meta := src.GetMetadata()
+	assertEqual(t, meta["k"], "v")
+	meta["k"] = "changed"
+	assertEqual(t, src.metadata["k"], "v")
+
+	if !src.shouldSkipDir(".git") {
+		t.Fatal(".git should be skipped by default")
+	}
+	src.skipSuffixes = []string{".pb.go"}
+	if !src.shouldSkipFile("xx.pb.go") {
+		t.Fatal("xx.pb.go should be skipped by suffix")
+	}
+}
+
+func TestResolveScanRootAndRelativePathHelpers(t *testing.T) {
+	repoRoot := t.TempDir()
+
+	root, err := resolveScanRoot(repoRoot, "")
+	if err != nil {
+		t.Fatalf("resolveScanRoot empty subdir error = %v", err)
+	}
+	assertEqual(t, root, repoRoot)
+
+	root, err = resolveScanRoot(repoRoot, "a/b")
+	if err != nil {
+		t.Fatalf("resolveScanRoot relative subdir error = %v", err)
+	}
+	assertEqual(t, root, filepath.Join(repoRoot, filepath.Clean("a/b")))
+
+	if _, err := resolveScanRoot(repoRoot, "../escape"); err == nil {
+		t.Fatal("expected error when subdir escapes repo root")
+	}
+
+	abs := filepath.Join(repoRoot, "a", "b.go")
+	rel := toRelativeRepoPath(repoRoot, abs)
+	assertEqual(t, rel, "a/b.go")
+
+	rel = toRelativeRepoPath(repoRoot, "x/y.go")
+	assertEqual(t, rel, "x/y.go")
+
+	rel = toRelativeRepoPath(repoRoot, nil)
+	assertEqual(t, rel, "")
+}
+
+func TestLooksLikeGitURLAndChooseRepoHelpers(t *testing.T) {
+	if !looksLikeGitURL("https://github.com/trpc-group/trpc-agent-go") {
+		t.Fatal("https URL should be treated as git URL")
+	}
+	if looksLikeGitURL("./local/path") {
+		t.Fatal("local path should not be treated as git URL")
+	}
+
+	assertEqual(t, chooseRepoName("explicit", "https://github.com/a/b.git", "/tmp/fallback"), "explicit")
+	assertEqual(t, chooseRepoName("", "https://github.com/a/b.git", "/tmp/fallback"), "b")
+	assertEqual(t, chooseRepoURL("explicit-url", "https://github.com/a/b.git"), "explicit-url")
+	assertEqual(t, chooseRepoURL("", "https://github.com/a/b.git"), "https://github.com/a/b.git")
+	assertEqual(t, firstNonEmpty("", "x", "y"), "x")
+}
+
+func TestCloneRemoteRepositoryWithBranchTagAndDefault(t *testing.T) {
+	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
+		branch: "main",
+		files: map[string]string{
+			"go.mod": "module example.com/demo\n\ngo 1.21\n",
+		},
+		tag: "v1.0.0",
+	}}, nil)
+
+	for _, tc := range []struct {
+		name string
+		repo Repository
+	}{
+		{name: "default", repo: Repository{URL: remoteURL}},
+		{name: "branch", repo: Repository{URL: remoteURL, Branch: "main"}},
+		{name: "tag", repo: Repository{URL: remoteURL, Tag: "v1.0.0"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			if _, err := cloneRemoteRepository(context.Background(), tc.repo, tmp); err != nil {
+				t.Fatalf("cloneRemoteRepository(%s) error = %v", tc.name, err)
+			}
+		})
+	}
+}
+
+func TestCloneRemoteRepositoryUnknownTargetKind(t *testing.T) {
+	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
+		branch: "main",
+		files:  map[string]string{"go.mod": "module example.com/demo\n\ngo 1.21\n"},
+	}}, nil)
+	tmp := t.TempDir()
+
+	if _, err := cloneRemoteRepository(context.Background(), Repository{URL: remoteURL, Branch: "main"}, tmp); err != nil {
+		t.Fatalf("cloneRemoteRepository baseline error = %v", err)
+	}
+	if _, err := resolveScanRoot(tmp, "../../escape"); err == nil {
+		t.Fatal("expected resolveScanRoot to reject escaping path")
+	}
+}
+
+func TestInitializeReadersWithTransformerOptionCoverage(t *testing.T) {
+	src := New(nil, WithTransformers(noopTransformer{}))
+	if src.readers == nil || len(src.readers) == 0 {
+		t.Fatal("expected readers to be initialized")
+	}
+}
+
+func TestGetFilePathsHonorsSkipAndExtensions(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeRepoFile(t, filepath.Join(repoRoot, "keep.go"), "package demo\n")
+	writeRepoFile(t, filepath.Join(repoRoot, "keep.md"), "# keep\n")
+	writeRepoFile(t, filepath.Join(repoRoot, "skip.pb.go"), "package demo\n")
+	writeRepoFile(t, filepath.Join(repoRoot, "vendor", "x.go"), "package vendor\n")
+	writeRepoFile(t, filepath.Join(repoRoot, ".git", "HEAD"), "ref: refs/heads/main\n")
+
+	src := New(nil,
+		WithFileExtensions([]string{".go"}),
+		WithSkipDirs([]string{".git", "vendor"}),
+		WithSkipSuffixes([]string{".pb.go"}),
+	)
+	filePaths, err := src.getFilePaths(repoRoot)
+	if err != nil {
+		t.Fatalf("getFilePaths() error = %v", err)
+	}
+	if len(filePaths) != 1 {
+		t.Fatalf("len(filePaths) = %d, want 1", len(filePaths))
+	}
+	if filepath.Base(filePaths[0]) != "keep.go" {
+		t.Fatalf("filePaths[0] = %s, want keep.go", filePaths[0])
+	}
+}
+
+func TestIsUnpopulatedGitLink(t *testing.T) {
+	root := t.TempDir()
+
+	unpopulated := filepath.Join(root, "sub1")
+	if err := os.MkdirAll(unpopulated, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", unpopulated, err)
+	}
+	if err := os.WriteFile(filepath.Join(unpopulated, ".git"), []byte("gitdir: ../.git/modules/sub1\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+	if !isUnpopulatedGitLink(unpopulated) {
+		t.Fatal("expected unpopulated submodule link")
+	}
+
+	populated := filepath.Join(root, "sub2")
+	if err := os.MkdirAll(populated, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", populated, err)
+	}
+	if err := os.WriteFile(filepath.Join(populated, ".git"), []byte("gitdir: ../.git/modules/sub2\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(.git) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(populated, "main.go"), []byte("package demo\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(main.go) error = %v", err)
+	}
+	if isUnpopulatedGitLink(populated) {
+		t.Fatal("expected populated submodule directory to be allowed")
+	}
+
+	normal := filepath.Join(root, "normal")
+	if err := os.MkdirAll(filepath.Join(normal, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(normal/.git) error = %v", err)
+	}
+	if isUnpopulatedGitLink(normal) {
+		t.Fatal("directory with .git dir should not be treated as unpopulated submodule")
+	}
+}
+
+func TestResolveRepositoryLocalPathMustBeDirectory(t *testing.T) {
+	root := t.TempDir()
+	filePath := filepath.Join(root, "not-dir.txt")
+	writeRepoFile(t, filePath, "x")
+
+	src := New(nil)
+	_, _, _, err := src.resolveRepository(context.Background(), Repository{Dir: filePath})
+	if err == nil {
+		t.Fatal("expected error for non-directory local repository path")
+	}
+}
+
+func TestCloneRemoteRepositoryCommitFetchFailure(t *testing.T) {
+	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
+		branch: "main",
+		files: map[string]string{
+			"go.mod": "module example.com/demo\n\ngo 1.21\n",
+		},
+	}}, nil)
+	tmp := t.TempDir()
+
+	_, err := cloneRemoteRepository(context.Background(), Repository{URL: remoteURL, Commit: "deadbeef"}, tmp)
+	if err == nil {
+		t.Fatal("expected cloneRemoteRepository commit fetch failure")
+	}
+}
+
+func TestLooksLikeGitURLAdditionalCases(t *testing.T) {
+	if !looksLikeGitURL("git@github.com:trpc-group/trpc-agent-go.git") {
+		t.Fatal("git@ URL should be treated as git URL")
+	}
+	if !looksLikeGitURL("ssh://git@github.com/trpc-group/trpc-agent-go.git") {
+		t.Fatal("ssh:// URL should be treated as git URL")
+	}
+	if looksLikeGitURL("C:/work/repo") {
+		t.Fatal("local windows-like path should not be treated as git URL")
+	}
+}
+
+func TestRunGitErrorPath(t *testing.T) {
+	err := runGit(context.Background(), t.TempDir(), "not-a-real-git-arg-xxx")
+	if err == nil {
+		t.Fatal("expected runGit to fail for invalid args")
+	}
+}
+
+type noopTransformer struct{}
+
+func (noopTransformer) Name() string { return "noop" }
+
+func (noopTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (noopTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+var _ transform.Transformer = noopTransformer{}
+var _ io.Reader = strings.NewReader("")
+
 func assertEqual(t *testing.T, got, want any) {
 	t.Helper()
 	if got != want {
@@ -455,7 +746,7 @@ func createRemoteRepo(t *testing.T, commits []repoCommit, extraBranches map[stri
 		runGitCommand(t, remotePath, "git", "symbolic-ref", "HEAD", "refs/heads/main")
 	}
 
-	return remotePath, tagSHAs
+	return "file://" + filepath.ToSlash(remotePath), tagSHAs
 }
 
 func latestCommitSHA(t *testing.T, remoteURL string, revision string) string {

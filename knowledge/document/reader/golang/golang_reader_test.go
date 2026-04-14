@@ -11,8 +11,13 @@ package golang
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -196,6 +201,143 @@ func Nested() {}
 	if findDocByFullName(t, docs, "example.com/nested.Nested") == nil {
 		t.Fatal("expected nested module document")
 	}
+}
+
+func TestReadFromReaderAndSupportedExtensions(t *testing.T) {
+	r := New().(*Reader)
+	docs, err := r.ReadFromReader("inline.go", strings.NewReader(`package demo
+func Inline() {}
+`))
+	if err != nil {
+		t.Fatalf("ReadFromReader() error = %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected docs from reader input")
+	}
+	exts := r.SupportedExtensions()
+	if len(exts) != 1 || exts[0] != ".go" {
+		t.Fatalf("SupportedExtensions() = %v, want [.go]", exts)
+	}
+}
+
+func TestReadFromURLAndExtractFileNameFromURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "package demo\nfunc URLFunc() {}\n")
+	}))
+	defer srv.Close()
+
+	r := New().(*Reader)
+	docs, err := r.ReadFromURL(srv.URL + "/service.go?x=1#y")
+	if err != nil {
+		t.Fatalf("ReadFromURL() error = %v", err)
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected docs from URL input")
+	}
+	if got := r.extractFileNameFromURL(srv.URL + "/service.go?x=1#y"); got != "service.go" {
+		t.Fatalf("extractFileNameFromURL() = %s, want service.go", got)
+	}
+	if got := r.extractFileNameFromURL(srv.URL + "/"); got == "" {
+		t.Fatal("extractFileNameFromURL() should not return empty")
+	}
+}
+
+func TestReadFromURLErrors(t *testing.T) {
+	r := New().(*Reader)
+	if _, err := r.ReadFromURL("://bad-url"); err == nil {
+		t.Fatal("expected invalid URL error")
+	}
+	if _, err := r.ReadFromURL("file:///tmp/demo.go"); err == nil {
+		t.Fatal("expected invalid URL scheme error")
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	if _, err := r.ReadFromURL(srv.URL + "/x.go"); err == nil {
+		t.Fatal("expected HTTP status error")
+	}
+}
+
+type errTransformer struct{}
+
+func (errTransformer) Name() string { return "errTransformer" }
+
+func (errTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	return nil, fmt.Errorf("preprocess error")
+}
+
+func (errTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func TestApplyTransformersErrorPath(t *testing.T) {
+	r := New(reader.WithTransformers(errTransformer{})).(*Reader)
+	_, err := r.ReadFromReader("inline.go", strings.NewReader("package demo\nfunc F(){}\n"))
+	if err == nil {
+		t.Fatal("expected transformer preprocess error")
+	}
+}
+
+type postErrTransformer struct{}
+
+func (postErrTransformer) Name() string { return "postErrTransformer" }
+
+func (postErrTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
+	return docs, nil
+}
+
+func (postErrTransformer) Postprocess(docs []*document.Document) ([]*document.Document, error) {
+	return nil, fmt.Errorf("postprocess error")
+}
+
+func TestApplyTransformersPostprocessErrorPath(t *testing.T) {
+	r := New(reader.WithTransformers(postErrTransformer{})).(*Reader)
+	_, err := r.ReadFromReader("inline.go", strings.NewReader("package demo\nfunc F(){}\n"))
+	if err == nil {
+		t.Fatal("expected transformer postprocess error")
+	}
+}
+
+func TestReadFromFileAndDirectoryErrorPaths(t *testing.T) {
+	r := New().(*Reader)
+
+	if _, err := r.ReadFromFile("not-go.txt"); err == nil {
+		t.Fatal("expected unsupported extension error")
+	}
+	if _, err := r.ReadFromFile(filepath.Join(t.TempDir(), "missing.go")); err == nil {
+		t.Fatal("expected read file error for missing file")
+	}
+
+	missingDir := filepath.Join(t.TempDir(), "missing-dir")
+	if _, err := r.ReadFromDirectory(missingDir); err == nil {
+		t.Fatal("expected stat error for missing directory")
+	}
+
+	filePath := filepath.Join(t.TempDir(), "x.go")
+	writeTestFile(t, filePath, "package demo\n")
+	if _, err := r.ReadFromDirectory(filePath); err == nil {
+		t.Fatal("expected not-a-directory error")
+	}
+}
+
+func TestReadFromReaderInvalidGoChunkModes(t *testing.T) {
+	chunkReader := New().(*Reader)
+	if _, err := chunkReader.ReadFromReader("bad.go", strings.NewReader("package demo\nfunc Broken( {")); err == nil {
+		t.Fatal("expected parse error in chunk mode")
+	}
+
+	nonChunkReader := New(reader.WithChunk(false)).(*Reader)
+	docs, err := nonChunkReader.ReadFromReader("bad.go", strings.NewReader("package demo\nfunc Broken( {"))
+	if err != nil {
+		t.Fatalf("ReadFromReader() non-chunk error = %v", err)
+	}
+	if len(docs) != 1 {
+		t.Fatalf("len(docs) = %d, want 1", len(docs))
+	}
+	assertMetadataEquals(t, docs[0].Metadata, "trpc_ast_type", "file")
 }
 
 func findDocByFullName(t *testing.T, docs []*document.Document, fullName string) *document.Document {
