@@ -283,7 +283,6 @@ func hasInvokeAgentMetricStringAttribute(
 	}
 	return false
 }
-
 func TestLLMAgent_WithToolSet(t *testing.T) {
 	ct := &mockTool{name: "foo"}
 	ts := &mockToolSet{tools: []tool.Tool{ct}, name: "mock"}
