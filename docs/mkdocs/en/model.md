@@ -2410,3 +2410,90 @@ if err != nil {
 - Switching is allowed only before the first non-error chunk is received.
 - If the current candidate returns an `error` directly before that point, or returns an error response with `Response.Error`, the wrapper continues with the next candidate.
 - Once any non-error chunk has been returned to the caller, later streaming failures are surfaced directly instead of replaying the request on the backup candidate.
+
+## Model Hedge
+
+`model/hedge` provides a wrapper for hedging the time to first meaningful response. It starts the primary candidate immediately, then launches later candidates according to the configured hedge delay. If all currently active candidates have already failed, it launches the next candidate early. The first candidate that produces a meaningful response becomes the winner, and the remaining candidates are canceled.
+
+**Quick Start:**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model/hedge"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+primary := openai.New(
+    "gpt-4o-mini",
+    openai.WithBaseURL("https://api.openai.com/v1"),
+)
+backup := openai.New(
+    "deepseek-chat",
+    openai.WithBaseURL("https://api.deepseek.com/v1"),
+)
+
+llm, err := hedge.New(
+    hedge.WithName("chat-hedge"),
+    hedge.WithCandidates(primary, backup),
+)
+if err != nil {
+    return err
+}
+```
+
+`hedge.New(...)` also returns a regular `model.Model`, so it can be passed directly to places that accept `model.Model`, such as `llmagent.WithModel(...)`. This quick start uses the package default delay. Use `WithDelay(...)` or `WithDelays(...)` when you need explicit launch scheduling. For a complete example, see [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge).
+
+**Scheduling And Commit Rules**:
+
+- The first candidate always starts immediately when the request begins.
+- `WithDelay(...)` defines one fixed interval between successive hedge launches, while `WithDelays(...)` can specify explicit launch offsets for candidates `1..n`.
+- If all currently active candidates have already failed and there are still candidates that have not started, the wrapper launches the next candidate immediately instead of waiting for the timer.
+- Only the first candidate that starts producing meaningful content becomes the winner. Empty or metadata-only responses do not win.
+- Once a winner has been committed, the other candidates are canceled and only the winner's stream is forwarded to the caller.
+
+**Configuration Examples**:
+
+The following snippets show only the scheduling differences.
+
+```go
+llm, err := hedge.New(
+    hedge.WithCandidates(primary, backupA, backupB),
+    hedge.WithDelay(100*time.Millisecond),
+)
+```
+
+This configuration means:
+
+- `candidate[0]` starts at `0ms`.
+- `candidate[1]` starts at `100ms`.
+- `candidate[2]` starts at `200ms`.
+
+```go
+llm, err := hedge.New(
+    hedge.WithCandidates(primary, backupA, backupB),
+    hedge.WithDelays(80*time.Millisecond, 250*time.Millisecond),
+)
+```
+
+This configuration means:
+
+- `candidate[0]` starts at `0ms`.
+- `candidate[1]` starts at `80ms`.
+- `candidate[2]` starts at `250ms`.
+
+`WithDelays(...)` uses absolute launch offsets from request start, not incremental gaps relative to the previous candidate.
+
+```go
+llm, err := hedge.New(
+    hedge.WithCandidates(primary, backupA, backupB),
+    hedge.WithDelays(0, 0),
+)
+```
+
+This configuration means:
+
+- `candidate[0]` starts at `0ms`.
+- `candidate[1]` starts at `0ms`.
+- `candidate[2]` starts at `0ms`.
+
+This is the all-at-once case where every candidate launches immediately when the request begins. In fixed-interval form, the same setup can be written as `WithDelay(0)`.
