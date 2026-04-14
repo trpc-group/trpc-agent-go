@@ -686,9 +686,24 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 		var responseErrorType string
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
+			if fullRespEvent != nil && fullRespEvent.Response != nil {
+				responseErrorType = ""
+				if fullRespEvent.Response.Error != nil {
+					responseErrorType = itelemetry.FormatResponseErrorLabel(
+						fullRespEvent.Response.Error,
+						model.ErrorTypeRunError,
+					)
+				}
+			}
 			if startedSpan && fullRespEvent != nil {
 				log.DebugContext(ctx, "fullRespEvent is not ni")
-				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
+				itelemetry.TraceAfterInvokeAgent(
+					span,
+					fullRespEvent,
+					tokenUsage,
+					tracker.FirstTokenTimeDuration(),
+					model.ErrorTypeRunError,
+				)
 			}
 			tracker.SetResponseErrorType(responseErrorType)
 			tracker.RecordMetrics()()
@@ -710,7 +725,10 @@ func (r *A2AAgent) wrapEventChannelWithTelemetry(
 				}
 			}
 			if evt != nil && evt.Error != nil {
-				responseErrorType = evt.Error.Type
+				responseErrorType = itelemetry.FormatResponseErrorLabel(
+					evt.Error,
+					model.ErrorTypeRunError,
+				)
 			}
 			if err := event.EmitEvent(ctx, wrappedChan, evt); err != nil {
 				return
