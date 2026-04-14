@@ -34,10 +34,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	skillstate "trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+	skilltool "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
 
@@ -99,6 +101,25 @@ type mockCallableTool struct {
 func (m *mockCallableTool) Declaration() *tool.Declaration { return m.declaration }
 func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 	return m.callFn(ctx, args)
+}
+
+type delayedLoadTool struct {
+	*skilltool.LoadTool
+	delays map[string]time.Duration
+}
+
+func (t *delayedLoadTool) Call(
+	ctx context.Context,
+	args []byte,
+) (any, error) {
+	var in struct {
+		Skill string `json:"skill"`
+	}
+	_ = json.Unmarshal(args, &in)
+	if delay := t.delays[in.Skill]; delay > 0 {
+		time.Sleep(delay)
+	}
+	return t.LoadTool.Call(ctx, args)
 }
 
 type mockCallbackCompatibleResult struct {
@@ -333,6 +354,136 @@ func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 	}
 	p.attachStateDelta(inv, tl2, args, choice, ev2)
 	require.Equal(t, []byte(deltaVal2), ev2.StateDelta[deltaKey2])
+}
+
+func marshalSkillLoadArgs(
+	t *testing.T,
+	skillName string,
+) []byte {
+	t.Helper()
+	args, err := json.Marshal(map[string]string{
+		"skill": skillName,
+	})
+	require.NoError(t, err)
+	return args
+}
+
+func newSkillLoadToolCall(
+	t *testing.T,
+	id string,
+	skillName string,
+) model.ToolCall {
+	t.Helper()
+	return model.ToolCall{
+		ID: id,
+		Function: model.FunctionDefinitionParam{
+			Name:      "skill_load",
+			Arguments: marshalSkillLoadArgs(t, skillName),
+		},
+	}
+}
+
+func newToolCallResponseWithCalls(
+	toolCalls []model.ToolCall,
+) *model.Response {
+	return &model.Response{
+		Model: "mock-model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:      model.RoleAssistant,
+				ToolCalls: toolCalls,
+			},
+		}},
+	}
+}
+
+func TestHandleFunctionCalls_SequentialUsesMergedInvocationStateDelta(
+	t *testing.T,
+) {
+	const agentName = "tester"
+	loadTool := skilltool.NewLoadTool(nil)
+	tools := map[string]tool.Tool{
+		loadTool.Declaration().Name: loadTool,
+	}
+	inv := &agent.Invocation{
+		AgentName: agentName,
+		Session: &session.Session{
+			State: session.StateMap{
+				skillstate.LoadedOrderKey(agentName): []byte(
+					`["a","b","c","d"]`,
+				),
+			},
+		},
+	}
+	toolCalls := []model.ToolCall{
+		newSkillLoadToolCall(t, "call-1", "a"),
+		newSkillLoadToolCall(t, "call-2", "b"),
+	}
+
+	ev, err := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+	).handleFunctionCalls(
+		context.Background(),
+		inv,
+		newToolCallResponseWithCalls(toolCalls),
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(
+		t,
+		`["c","d","a","b"]`,
+		string(ev.StateDelta[skillstate.LoadedOrderKey(agentName)]),
+	)
+}
+
+func TestHandleFunctionCalls_ParallelUsesMergedInvocationStateDelta(
+	t *testing.T,
+) {
+	const agentName = "tester"
+	loadTool := &delayedLoadTool{
+		LoadTool: skilltool.NewLoadTool(nil),
+		delays: map[string]time.Duration{
+			"a": 50 * time.Millisecond,
+		},
+	}
+	tools := map[string]tool.Tool{
+		loadTool.Declaration().Name: loadTool,
+	}
+	inv := &agent.Invocation{
+		AgentName: agentName,
+		Session: &session.Session{
+			State: session.StateMap{
+				skillstate.LoadedOrderKey(agentName): []byte(
+					`["a","b","c","d"]`,
+				),
+			},
+		},
+	}
+	toolCalls := []model.ToolCall{
+		newSkillLoadToolCall(t, "call-1", "a"),
+		newSkillLoadToolCall(t, "call-2", "b"),
+	}
+
+	ev, err := NewFunctionCallResponseProcessor(
+		true,
+		nil,
+	).handleFunctionCalls(
+		context.Background(),
+		inv,
+		newToolCallResponseWithCalls(toolCalls),
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(
+		t,
+		`["c","d","a","b"]`,
+		string(ev.StateDelta[skillstate.LoadedOrderKey(agentName)]),
+	)
 }
 
 func TestExecuteToolCall(t *testing.T) {
