@@ -135,9 +135,9 @@ func DesignateNodeWithPath(path NodePath, opts ...CallOption) CallOption {
 }
 
 type callOptions struct {
-	generation           model.GenerationConfigPatch
+	generation              model.GenerationConfigPatch
 	resumeStateOverrideKeys map[string]struct{}
-	nodes                map[string]*callNodeOptions
+	nodes                   map[string]*callNodeOptions
 }
 
 type callNodeOptions struct {
@@ -249,9 +249,9 @@ func cloneCallOptions(in *callOptions) *callOptions {
 		return nil
 	}
 	out := &callOptions{
-		generation:           cloneGenPatch(in.generation),
+		generation:              cloneGenPatch(in.generation),
 		resumeStateOverrideKeys: cloneStringSet(in.resumeStateOverrideKeys),
-		nodes:                cloneCallNodeMap(in.nodes),
+		nodes:                   cloneCallNodeMap(in.nodes),
 	}
 	if out.isEmpty() {
 		return nil
@@ -486,9 +486,9 @@ func scopeCallOptionsForSubgraph(
 		}
 	}
 	out := &callOptions{
-		generation:           merged,
+		generation:              merged,
 		resumeStateOverrideKeys: resumeStateOverrideKeys,
-		nodes:                childNodes,
+		nodes:                   childNodes,
 	}
 	if out.isEmpty() {
 		return nil
