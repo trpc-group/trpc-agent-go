@@ -10,6 +10,7 @@
 package admin
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -195,6 +196,56 @@ func TestHandleResetRuntimeConfig(t *testing.T) {
 	)
 }
 
+func TestServiceRuntimeConfigStatus_Error(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		RuntimeConfig: &stubRuntimeConfigProvider{
+			err: errors.New(" status failed "),
+		},
+	})
+
+	status := svc.runtimeConfigStatus()
+	require.True(t, status.Enabled)
+	require.Equal(t, "status failed", status.Error)
+}
+
+func TestHandleConfigJSON(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		RuntimeConfig: &stubRuntimeConfigProvider{
+			status: RuntimeConfigStatus{
+				ConfigPath: "/tmp/openclaw.yaml",
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeConfigJSON, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var status RuntimeConfigStatus
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &status))
+	require.True(t, status.Enabled)
+	require.Equal(t, "/tmp/openclaw.yaml", status.ConfigPath)
+}
+
+func TestHandleConfigJSON_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+
+	req := httptest.NewRequest(http.MethodPost, routeConfigJSON, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	require.Contains(t, rr.Body.String(), "method not allowed")
+}
+
 func TestHandleSaveRuntimeConfig_ProviderError(t *testing.T) {
 	t.Parallel()
 
@@ -225,5 +276,184 @@ func TestHandleSaveRuntimeConfig_ProviderError(t *testing.T) {
 		t,
 		rr.Header().Get("Location"),
 		"config?error=write+failed",
+	)
+}
+
+func TestHandleSaveRuntimeConfig_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+
+	req := httptest.NewRequest(http.MethodGet, routeConfigSave, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	require.Contains(t, rr.Body.String(), "method not allowed")
+}
+
+func TestHandleSaveRuntimeConfig_NoProvider(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+
+	values := url.Values{
+		formConfigFieldKey: {"skills.max_loaded_skills"},
+		formConfigValue:    {"10"},
+		formReturnPath:     {routeConfigPage},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeConfigSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Contains(
+		t,
+		rr.Header().Get("Location"),
+		"config?error=runtime+config+provider+is+not+available",
+	)
+}
+
+func TestHandleSaveRuntimeConfig_MissingField(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		RuntimeConfig: &stubRuntimeConfigProvider{},
+	})
+
+	values := url.Values{
+		formConfigValue: {"10"},
+		formReturnPath:  {routeConfigPage},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeConfigSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Contains(
+		t,
+		rr.Header().Get("Location"),
+		"config?error=config+field+is+required",
+	)
+}
+
+func TestHandleResetRuntimeConfig_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+
+	req := httptest.NewRequest(http.MethodGet, routeConfigReset, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	require.Contains(t, rr.Body.String(), "method not allowed")
+}
+
+func TestHandleResetRuntimeConfig_NoProvider(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{})
+
+	values := url.Values{
+		formConfigFieldKey: {"skills.max_loaded_skills"},
+		formReturnPath:     {routeConfigPage},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeConfigReset,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Contains(
+		t,
+		rr.Header().Get("Location"),
+		"config?error=runtime+config+provider+is+not+available",
+	)
+}
+
+func TestHandleResetRuntimeConfig_MissingField(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		RuntimeConfig: &stubRuntimeConfigProvider{},
+	})
+
+	values := url.Values{
+		formReturnPath: {routeConfigPage},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeConfigReset,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Contains(
+		t,
+		rr.Header().Get("Location"),
+		"config?error=config+field+is+required",
+	)
+}
+
+func TestHandleResetRuntimeConfig_ProviderError(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		RuntimeConfig: &stubRuntimeConfigProvider{
+			resetErr: errors.New("reset failed"),
+		},
+	})
+
+	values := url.Values{
+		formConfigFieldKey: {"skills.max_loaded_skills"},
+		formReturnPath:     {routeConfigPage},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeConfigReset,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Contains(
+		t,
+		rr.Header().Get("Location"),
+		"config?error=reset+failed",
 	)
 }
