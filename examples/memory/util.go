@@ -28,7 +28,6 @@ import (
 	memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
 	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 	memorysqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
-	memorysqlitevec "trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -219,60 +218,6 @@ func newOpenAIEmbedder(defaultModel string) *openaiembedder.Embedder {
 	}
 
 	return openaiembedder.New(opts...)
-}
-
-func newSQLiteVecMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
-	dsn := GetEnvOrDefault(
-		sqliteVecMemoryDSNEnvKey,
-		defaultSQLiteVecMemoryDBDSN,
-	)
-	db, err := sql.Open(sqliteDriverName, dsn)
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(defaultSQLiteMaxOpenConns)
-	db.SetMaxIdleConns(defaultSQLiteMaxIdleConns)
-
-	embedderModel := GetEnvOrDefault(
-		sqliteVecEmbedderModelEnvKey,
-		openaiembedder.DefaultModel,
-	)
-	emb := newOpenAIEmbedder(embedderModel)
-
-	opts := []memorysqlitevec.ServiceOpt{
-		memorysqlitevec.WithEmbedder(emb),
-		memorysqlitevec.WithSoftDelete(cfg.SoftDelete),
-	}
-
-	if cfg.Extractor != nil {
-		opts = append(opts, memorysqlitevec.WithExtractor(cfg.Extractor))
-		if cfg.AsyncMemoryNum > 0 {
-			opts = append(
-				opts,
-				memorysqlitevec.WithAsyncMemoryNum(cfg.AsyncMemoryNum),
-			)
-		}
-		if cfg.MemoryQueueSize > 0 {
-			opts = append(
-				opts,
-				memorysqlitevec.WithMemoryQueueSize(cfg.MemoryQueueSize),
-			)
-		}
-		if cfg.MemoryJobTimeout > 0 {
-			opts = append(
-				opts,
-				memorysqlitevec.WithMemoryJobTimeout(cfg.MemoryJobTimeout),
-			)
-		}
-	}
-
-	svc, err := memorysqlitevec.NewService(db, opts...)
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-
-	return svc, nil
 }
 
 // newInMemoryMemoryService creates an in-memory memory service.
