@@ -25,7 +25,7 @@ type observer struct {
 	run     *engine.RunResult
 }
 
-func (o *observer) append(_ context.Context, event *engine.Event) error {
+func (o *observer) append(ctx context.Context, event *engine.Event) error {
 	if event == nil {
 		return errors.New("promptiter event is nil")
 	}
@@ -115,7 +115,7 @@ func (o *observer) append(_ context.Context, event *engine.Event) error {
 	default:
 		return fmt.Errorf("promptiter event kind %q is unsupported", event.Kind)
 	}
-	return o.manager.store.Update(context.Background(), o.run)
+	return o.manager.store.Update(ctx, o.run)
 }
 
 func (o *observer) ensureRound(roundNumber int) *engine.RoundResult {

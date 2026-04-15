@@ -22,8 +22,8 @@ func printSummary(
 	initialInstruction string,
 	targetSurfaceID string,
 ) error {
-	if result == nil || result.Structure == nil || len(result.Rounds) == 0 {
-		return errors.New("run result is incomplete")
+	if result == nil {
+		return errors.New("run result is nil")
 	}
 	acceptedInstruction := initialInstruction
 	if result.AcceptedProfile != nil {
@@ -37,10 +37,16 @@ func printSummary(
 	}
 	initialScore := initialValidationScore(result)
 	finalScore := finalAcceptedValidationScore(result)
+	structureID := ""
+	if result.Structure != nil {
+		structureID = result.Structure.StructureID
+	}
 	fmt.Println("✅ PromptIter asyncrun sports commentary example completed")
 	fmt.Printf("Data directory: %s\n", dataDir)
 	fmt.Printf("Result directory: %s\n", outputDir)
-	fmt.Printf("Structure ID: %s\n", result.Structure.StructureID)
+	if structureID != "" {
+		fmt.Printf("Structure ID: %s\n", structureID)
+	}
 	fmt.Printf("Target node: %s\n", candidateAgentName)
 	fmt.Printf("Target surface ID: %s\n", targetSurfaceID)
 	fmt.Printf("Initial instruction: %q\n", initialInstruction)
@@ -51,16 +57,31 @@ func printSummary(
 	for _, round := range result.Rounds {
 		trainScore := evaluationResultScore(round.Train)
 		validationScore := evaluationResultScore(round.Validation)
+		accepted := false
+		scoreDelta := 0.0
+		if round.Acceptance != nil {
+			accepted = round.Acceptance.Accepted
+			scoreDelta = round.Acceptance.ScoreDelta
+		}
+		shouldStop := false
+		stopReason := ""
+		if round.Stop != nil {
+			shouldStop = round.Stop.ShouldStop
+			stopReason = round.Stop.Reason
+		}
 		fmt.Printf(
 			"Round %d -> train %.2f, validation %.2f, accepted %t, delta %.2f, stop=%t (%s)\n",
 			round.Round,
 			trainScore,
 			validationScore,
-			round.Acceptance.Accepted,
-			round.Acceptance.ScoreDelta,
-			round.Stop.ShouldStop,
-			round.Stop.Reason,
+			accepted,
+			scoreDelta,
+			shouldStop,
+			stopReason,
 		)
+		if round.Patches == nil {
+			continue
+		}
 		for _, patch := range round.Patches.Patches {
 			if patch.SurfaceID != targetSurfaceID || patch.Value.Text == nil {
 				continue
@@ -73,17 +94,26 @@ func printSummary(
 }
 
 func initialValidationScore(result *promptiterengine.RunResult) float64 {
+	if result == nil {
+		return 0
+	}
 	if result.BaselineValidation != nil {
 		return result.BaselineValidation.OverallScore
+	}
+	if len(result.Rounds) == 0 || result.Rounds[0].Validation == nil || result.Rounds[0].Acceptance == nil {
+		return 0
 	}
 	candidateScore := evaluationResultScore(result.Rounds[0].Validation)
 	return candidateScore - result.Rounds[0].Acceptance.ScoreDelta
 }
 
 func finalAcceptedValidationScore(result *promptiterengine.RunResult) float64 {
+	if result == nil {
+		return 0
+	}
 	currentScore := initialValidationScore(result)
 	for _, round := range result.Rounds {
-		if !round.Acceptance.Accepted {
+		if round.Acceptance == nil || !round.Acceptance.Accepted || round.Validation == nil {
 			continue
 		}
 		currentScore = evaluationResultScore(round.Validation)
@@ -92,5 +122,8 @@ func finalAcceptedValidationScore(result *promptiterengine.RunResult) float64 {
 }
 
 func evaluationResultScore(result *promptiterengine.EvaluationResult) float64 {
+	if result == nil {
+		return 0
+	}
 	return result.OverallScore
 }

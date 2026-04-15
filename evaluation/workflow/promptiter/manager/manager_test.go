@@ -21,6 +21,33 @@ import (
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
+type recordingStore struct {
+	updateCtx context.Context
+	updateRun *promptiterengine.RunResult
+}
+
+func (s *recordingStore) Create(ctx context.Context, run *promptiterengine.RunResult) error {
+	_ = ctx
+	_ = run
+	return nil
+}
+
+func (s *recordingStore) Get(ctx context.Context, runID string) (*promptiterengine.RunResult, error) {
+	_ = ctx
+	_ = runID
+	return nil, os.ErrNotExist
+}
+
+func (s *recordingStore) Update(ctx context.Context, run *promptiterengine.RunResult) error {
+	s.updateCtx = ctx
+	s.updateRun = run
+	return nil
+}
+
+func (s *recordingStore) Close() error {
+	return nil
+}
+
 type fakePromptIterEngine struct {
 	describe func(ctx context.Context) (*astructure.Snapshot, error)
 	run      func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error)
@@ -248,6 +275,35 @@ func TestRunObserverBuildsIncrementalRun(t *testing.T) {
 	assert.True(t, current.Rounds[0].Stop.ShouldStop)
 	require.NotNil(t, current.AcceptedProfile)
 	assert.Equal(t, "structure_1", current.AcceptedProfile.StructureID)
+}
+
+func TestRunObserverPassesContextToStoreUpdate(t *testing.T) {
+	store := &recordingStore{}
+	managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, managerInstance.Close())
+	})
+	concreteManager, ok := managerInstance.(*manager)
+	require.True(t, ok)
+	run := &promptiterengine.RunResult{
+		ID:     "run-ctx",
+		Status: promptiterengine.RunStatusRunning,
+	}
+	observer := &observer{
+		manager: concreteManager,
+		run:     run,
+	}
+	type ctxKey struct{}
+	ctx := context.WithValue(context.Background(), ctxKey{}, "store-update")
+	err = observer.append(ctx, &promptiterengine.Event{
+		Kind:    promptiterengine.EventKindBaselineValidation,
+		Payload: newEvaluationResult(0.55),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, store.updateCtx)
+	assert.Equal(t, "store-update", store.updateCtx.Value(ctxKey{}))
+	assert.Same(t, run, store.updateRun)
 }
 
 func TestManagerGetReturnsNotFoundForMissingRun(t *testing.T) {

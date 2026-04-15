@@ -130,6 +130,14 @@ func TestDefaultMessageBuilder(t *testing.T) {
 	}, &payload)
 }
 
+func TestDefaultMessageBuilderRejectsNilRequest(t *testing.T) {
+	builder := defaultMessageBuilder()
+	message, err := builder(context.Background(), nil)
+	assert.Nil(t, message)
+	assert.Error(t, err)
+	assert.ErrorContains(t, err, "request is nil")
+}
+
 func extractRequestJSON(content string) (string, bool) {
 	const marker = "Request JSON:\n"
 	start := strings.Index(content, marker)

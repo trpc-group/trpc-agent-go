@@ -46,8 +46,8 @@ The eval sets are generated from the same sports-business source data as the syn
 
 ```bash
 cd examples/evaluation/promptiter/server
-export OPENAI_BASE_URL="http://v2.open.venus.oa.com/llmproxy/"
-export OPENAI_API_KEY="***"
+export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
+export OPENAI_API_KEY="your-api-key"
 export CANDIDATE_MODEL_NAME="deepseek-chat"
 export JUDGE_MODEL_NAME="gpt-5.4"
 export WORKER_MODEL_NAME="gpt-5.4"
@@ -61,7 +61,9 @@ go run . \
   -worker-model "gpt-5.4"
 ```
 
-The default settings enable parallel evaluation for throughput. If you use the public llmproxy endpoint, you may need to lower parallelism or disable parallel flags when the service returns rate-limit errors.
+Replace the model identifiers when your endpoint exposes different model names.
+
+The default settings enable parallel evaluation for throughput. If your endpoint enforces stricter concurrency limits, lower the parallelism or disable the parallel flags.
 
 The shared metric file combines one reference-aware LLM rubric metric and one deterministic final-response length evaluator. This keeps the concise-output objective while evaluating against fixed reference commentary without double-counting overlapping rubric signals.
 

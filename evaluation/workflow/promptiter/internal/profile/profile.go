@@ -21,7 +21,9 @@ func Clone(profile *promptiter.Profile) *promptiter.Profile {
 	}
 	cloned := &promptiter.Profile{
 		StructureID: profile.StructureID,
-		Overrides:   make([]promptiter.SurfaceOverride, 0, len(profile.Overrides)),
+	}
+	if profile.Overrides != nil {
+		cloned.Overrides = make([]promptiter.SurfaceOverride, 0, len(profile.Overrides))
 	}
 	for _, override := range profile.Overrides {
 		clonedValue := isurface.CloneValue(override.Value)

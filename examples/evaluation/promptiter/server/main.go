@@ -34,6 +34,9 @@ var (
 func main() {
 	flag.Parse()
 	baseURL := strings.TrimRight(*basePath, "/")
+	if baseURL == "" {
+		baseURL = "/"
+	}
 	structureURL := fmt.Sprintf("%s/%s/structure", baseURL, appName)
 	runsURL := fmt.Sprintf("%s/%s/runs", baseURL, appName)
 	asyncRunsURL := fmt.Sprintf("%s/%s/async-runs", baseURL, appName)
@@ -43,7 +46,7 @@ func main() {
 	log.Printf("PromptIter async runs route: POST %s", asyncRunsURL)
 	if err := runPromptIterServer(context.Background(), serverConfig{
 		Addr:                      *addr,
-		BasePath:                  *basePath,
+		BasePath:                  baseURL,
 		DataDir:                   *dataDir,
 		OutputDir:                 *outputDir,
 		CandidateModelName:        *modelName,

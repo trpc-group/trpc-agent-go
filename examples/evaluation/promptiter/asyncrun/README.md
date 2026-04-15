@@ -44,15 +44,17 @@ The train and validation sets are generated directly from a real sports-business
 
 ```bash
 cd examples/evaluation/promptiter/asyncrun
-export OPENAI_BASE_URL="http://v2.open.venus.oa.com/llmproxy/"
-export OPENAI_API_KEY="***"
+export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
+export OPENAI_API_KEY="your-api-key"
 go run . \
   -model "deepseek-chat" \
   -judge-model "gpt-5.2" \
   -worker-model "gpt-5.4"
 ```
 
-The default settings enable parallel evaluation for throughput. If you use the public llmproxy endpoint, you may need to lower parallelism or disable parallel flags when the service returns rate-limit errors.
+Replace the model identifiers when your endpoint exposes different model names.
+
+The default settings enable parallel evaluation for throughput. If your endpoint enforces stricter concurrency limits, lower the parallelism or disable the parallel flags.
 
 ## What It Does
 

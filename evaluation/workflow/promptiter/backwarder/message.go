@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"text/template"
 
@@ -47,6 +48,9 @@ func defaultMessageBuilder() MessageBuilder {
 		}
 	}
 	return func(ctx context.Context, request *Request) (*model.Message, error) {
+		if request == nil {
+			return nil, errors.New("render backward message template: request is nil")
+		}
 		var content bytes.Buffer
 		if err := tmpl.Execute(&content, request); err != nil {
 			return nil, fmt.Errorf("render backward message template: %w", err)
