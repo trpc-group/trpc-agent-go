@@ -84,100 +84,132 @@
           ],
           "properties": {
             "q1": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q2": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q3": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q4": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q5": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q6": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q7": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q8": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q9": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q10": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q11": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q12": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q13": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q14": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q15": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q16": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q17": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q18": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q19": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q20": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q21": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q22": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q23": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q24": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q25": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q26": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q27": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q28": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q29": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "q30": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[123]?$"
             },
             "drink_gate_q1": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[1234]?$"
             },
             "drink_gate_q2": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^[12]?$"
             }
           }
         },

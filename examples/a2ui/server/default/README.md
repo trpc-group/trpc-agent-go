@@ -22,6 +22,9 @@ This folder provides the basic server-side A2UI example.
 From repository root:
 
 ```bash
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.openai.com/v1" # Optional for OpenAI-compatible gateways.
+
 cd examples/a2ui/server/default
 go run .
 ```

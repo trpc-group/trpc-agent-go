@@ -49,7 +49,7 @@ The example intentionally follows `sbti.ai` on content and scoring while divergi
 - Two questions per scored dimension across `15` dimensions.
 - Dimension scores converted to `L / M / H` levels with the official thresholds.
 - Final type selected by nearest-pattern matching.
-- `drink_gate_q2 == 2` overrides the normal match with `DRUNK`.
+- `drink_gate_q1 == 3` and `drink_gate_q2 == 2` together override the normal match with `DRUNK`.
 - Rare combinations still fall back to `HHHH`.
 
 ## Low-Code Mapping
