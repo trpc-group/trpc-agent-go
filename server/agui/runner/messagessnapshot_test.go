@@ -633,7 +633,7 @@ func TestMessagesSnapshotFollowContinuesOpenReasoningFromSnapshot(t *testing.T) 
 	initial := &session.TrackEvents{
 		Track: track.TrackAGUI,
 		Events: []session.TrackEvent{
-			newTrackEventAt(t, aguievents.NewReasoningMessageStartEvent("reasoning-msg-1", "assistant"), base),
+			newTrackEventAt(t, aguievents.NewReasoningMessageStartEvent("reasoning-msg-1", "reasoning"), base),
 		},
 	}
 	follow := &session.TrackEvents{
