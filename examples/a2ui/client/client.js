@@ -1373,7 +1373,7 @@ function normalizeContextValue(surfaceId, rawValue, dataContextPath = "/") {
       if (resolved === undefined) {
         return null;
       }
-      return projectActionContextValue(normalizeContextValue(surfaceId, resolved, dataContextPath));
+      return normalizeContextValue(surfaceId, resolved, dataContextPath);
     }
     if (typeof rawValue.literalString === "string") {
       return rawValue.literalString;
@@ -1549,6 +1549,15 @@ function buildUserActionPayload(surfaceId, sourceComponentId, action, dataContex
   const actionName = isObject(action) && typeof action.name === "string" && action.name.trim()
     ? action.name.trim()
     : "unknown";
+  const context = extractActionContext(normalizedSurfaceId, isObject(action) ? action.context : undefined, dataContextPath);
+  if (actionName === "submit_test") {
+    if (Object.prototype.hasOwnProperty.call(context, "questions")) {
+      context.questions = projectActionContextValue(context.questions);
+    }
+    if (Object.prototype.hasOwnProperty.call(context, "special")) {
+      context.special = projectActionContextValue(context.special);
+    }
+  }
   return {
     userAction: {
       name: actionName,
@@ -1557,7 +1566,7 @@ function buildUserActionPayload(surfaceId, sourceComponentId, action, dataContex
         ? action.sourceComponentId.trim()
         : sourceComponentId,
       timestamp: new Date().toISOString(),
-      context: extractActionContext(normalizedSurfaceId, isObject(action) ? action.context : undefined, dataContextPath),
+      context,
     },
   };
 }
