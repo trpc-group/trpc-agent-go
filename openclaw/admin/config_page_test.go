@@ -161,6 +161,38 @@ func TestServiceHandlerRendersConfigPageRestartCTA(t *testing.T) {
 	)
 }
 
+func TestServiceHandlerRendersConfigPageRuntimeControlLink(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	svc := New(
+		Config{},
+		WithRuntimeConfigProvider(&stubRuntimeConfigProvider{
+			status: RuntimeConfigStatus{
+				ConfigPath: "/tmp/openclaw.yaml",
+				Sections: []RuntimeConfigSection{{
+					Key:   "skills",
+					Title: "Skills",
+				}},
+			},
+		}),
+		WithRuntimeLifecycleProvider(
+			&stubRuntimeLifecycleProvider{},
+		),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, routeConfigPage, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "Runtime control")
+	require.Contains(t, body, "Restart and version actions")
+	require.Contains(t, body, "Open Runtime Control")
+}
+
 func TestHandleSaveRuntimeConfig(t *testing.T) {
 	t.Parallel()
 

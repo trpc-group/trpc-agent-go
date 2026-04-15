@@ -4229,6 +4229,21 @@ const adminPageHTML = `<!doctype html>
             shows both the saved config and the live runtime side by side.
           </div>
         </div>
+        {{if .ConfigCanRestart}}
+        <div class="skills-op-card">
+          <div class="skills-op-label">Runtime control</div>
+          <div class="skills-op-value">Restart and version actions</div>
+          <div class="skills-op-note">
+            Use the runtime controls page for graceful restarts, forced
+            restarts, and target-version actions.
+          </div>
+          <div class="skills-op-actions">
+            <a class="page-refresh-link" href="/runtime-control">
+              Open Runtime Control
+            </a>
+          </div>
+        </div>
+        {{end}}
       </div>
       {{if gt .ConfigPending 0}}
       <div class="skills-ops-grid">
