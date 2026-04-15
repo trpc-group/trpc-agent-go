@@ -2101,7 +2101,7 @@ func TestBackwardCoversAdditionalBranches(t *testing.T) {
 				Gradients: []promptiter.SurfaceGradient{{SurfaceID: testSurfaceID, Gradient: "g"}},
 				Upstream: []backwarder.Propagation{{
 					PredecessorStepID: "step_1",
-					Gradients: []backwarder.GradientPacket{{Gradient: "upstream"}},
+					Gradients:         []backwarder.GradientPacket{{Gradient: "upstream"}},
 				}},
 			}, nil
 		},

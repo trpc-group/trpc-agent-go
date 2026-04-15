@@ -29,93 +29,154 @@ func (o *observer) append(ctx context.Context, event *engine.Event) error {
 	if event == nil {
 		return errors.New("promptiter event is nil")
 	}
+	if err := o.applyEvent(event); err != nil {
+		return err
+	}
+	return o.manager.store.Update(ctx, o.run)
+}
+
+func (o *observer) applyEvent(event *engine.Event) error {
 	switch event.Kind {
 	case engine.EventKindStructureSnapshot:
-		payload, ok := event.Payload.(*astructure.Snapshot)
-		if !ok || payload == nil {
-			return fmt.Errorf("event %q payload is invalid", event.Kind)
-		}
-		o.run.Structure = payload
+		return o.applyStructureSnapshot(event)
 	case engine.EventKindBaselineValidation:
-		payload, ok := event.Payload.(*engine.EvaluationResult)
-		if !ok || payload == nil {
-			return fmt.Errorf("event %q payload is invalid", event.Kind)
-		}
-		o.run.BaselineValidation = payload
+		return o.applyBaselineValidation(event)
 	case engine.EventKindRoundStarted:
 		o.run.CurrentRound = event.Round
 		o.ensureRound(event.Round)
 	case engine.EventKindRoundTrainEvaluation:
-		payload, ok := event.Payload.(*engine.EvaluationResult)
-		if !ok || payload == nil {
-			return fmt.Errorf("event %q payload is invalid", event.Kind)
-		}
-		round := o.ensureRound(event.Round)
-		round.Train = payload
+		return o.applyRoundTrainEvaluation(event)
 	case engine.EventKindRoundLosses:
-		payload, ok := event.Payload.([]promptiter.CaseLoss)
-		if !ok {
-			return fmt.Errorf("event %q payload is invalid", event.Kind)
-		}
-		round := o.ensureRound(event.Round)
-		round.Losses = append([]promptiter.CaseLoss(nil), payload...)
+		return o.applyRoundLosses(event)
 	case engine.EventKindRoundBackward:
-		payload, ok := event.Payload.(*engine.BackwardResult)
-		if !ok || payload == nil {
-			return fmt.Errorf("event %q payload is invalid", event.Kind)
-		}
-		round := o.ensureRound(event.Round)
-		round.Backward = payload
+		return o.applyRoundBackward(event)
 	case engine.EventKindRoundAggregation:
-		payload, ok := event.Payload.(*engine.AggregationResult)
-		if !ok || payload == nil {
-			return fmt.Errorf("event %q payload is invalid", event.Kind)
-		}
-		round := o.ensureRound(event.Round)
-		round.Aggregation = payload
+		return o.applyRoundAggregation(event)
 	case engine.EventKindRoundPatchSet:
-		payload, ok := event.Payload.(*promptiter.PatchSet)
-		if !ok || payload == nil {
-			return fmt.Errorf("event %q payload is invalid", event.Kind)
-		}
-		round := o.ensureRound(event.Round)
-		round.Patches = payload
+		return o.applyRoundPatchSet(event)
 	case engine.EventKindRoundOutputProfile:
-		payload, ok := event.Payload.(*promptiter.Profile)
-		if !ok || payload == nil {
-			return fmt.Errorf("event %q payload is invalid", event.Kind)
-		}
-		round := o.ensureRound(event.Round)
-		round.OutputProfile = payload
+		return o.applyRoundOutputProfile(event)
 	case engine.EventKindRoundValidation:
-		payload, ok := event.Payload.(*engine.EvaluationResult)
-		if !ok || payload == nil {
-			return fmt.Errorf("event %q payload is invalid", event.Kind)
-		}
-		round := o.ensureRound(event.Round)
-		round.Validation = payload
+		return o.applyRoundValidation(event)
 	case engine.EventKindRoundCompleted:
-		payload, ok := event.Payload.(*engine.RoundCompleted)
-		if !ok || payload == nil {
-			return fmt.Errorf("event %q payload is invalid", event.Kind)
-		}
-		round := o.ensureRound(event.Round)
-		round.Acceptance = &engine.AcceptanceDecision{
-			Accepted:   payload.Accepted,
-			ScoreDelta: payload.ScoreDelta,
-			Reason:     payload.AcceptanceReason,
-		}
-		round.Stop = &engine.StopDecision{
-			ShouldStop: payload.ShouldStop,
-			Reason:     payload.StopReason,
-		}
-		if payload.Accepted && round.OutputProfile != nil {
-			o.run.AcceptedProfile = iprofile.Clone(round.OutputProfile)
-		}
+		return o.applyRoundCompleted(event)
 	default:
 		return fmt.Errorf("promptiter event kind %q is unsupported", event.Kind)
 	}
-	return o.manager.store.Update(ctx, o.run)
+	return nil
+}
+
+func (o *observer) applyStructureSnapshot(event *engine.Event) error {
+	payload, ok := event.Payload.(*astructure.Snapshot)
+	if !ok || payload == nil {
+		return invalidEventPayloadError(event.Kind)
+	}
+	o.run.Structure = payload
+	return nil
+}
+
+func (o *observer) applyBaselineValidation(event *engine.Event) error {
+	payload, ok := event.Payload.(*engine.EvaluationResult)
+	if !ok || payload == nil {
+		return invalidEventPayloadError(event.Kind)
+	}
+	o.run.BaselineValidation = payload
+	return nil
+}
+
+func (o *observer) applyRoundTrainEvaluation(event *engine.Event) error {
+	payload, ok := event.Payload.(*engine.EvaluationResult)
+	if !ok || payload == nil {
+		return invalidEventPayloadError(event.Kind)
+	}
+	round := o.ensureRound(event.Round)
+	round.Train = payload
+	return nil
+}
+
+func (o *observer) applyRoundLosses(event *engine.Event) error {
+	payload, ok := event.Payload.([]promptiter.CaseLoss)
+	if !ok {
+		return invalidEventPayloadError(event.Kind)
+	}
+	round := o.ensureRound(event.Round)
+	round.Losses = append([]promptiter.CaseLoss(nil), payload...)
+	return nil
+}
+
+func (o *observer) applyRoundBackward(event *engine.Event) error {
+	payload, ok := event.Payload.(*engine.BackwardResult)
+	if !ok || payload == nil {
+		return invalidEventPayloadError(event.Kind)
+	}
+	round := o.ensureRound(event.Round)
+	round.Backward = payload
+	return nil
+}
+
+func (o *observer) applyRoundAggregation(event *engine.Event) error {
+	payload, ok := event.Payload.(*engine.AggregationResult)
+	if !ok || payload == nil {
+		return invalidEventPayloadError(event.Kind)
+	}
+	round := o.ensureRound(event.Round)
+	round.Aggregation = payload
+	return nil
+}
+
+func (o *observer) applyRoundPatchSet(event *engine.Event) error {
+	payload, ok := event.Payload.(*promptiter.PatchSet)
+	if !ok || payload == nil {
+		return invalidEventPayloadError(event.Kind)
+	}
+	round := o.ensureRound(event.Round)
+	round.Patches = payload
+	return nil
+}
+
+func (o *observer) applyRoundOutputProfile(event *engine.Event) error {
+	payload, ok := event.Payload.(*promptiter.Profile)
+	if !ok || payload == nil {
+		return invalidEventPayloadError(event.Kind)
+	}
+	round := o.ensureRound(event.Round)
+	round.OutputProfile = payload
+	return nil
+}
+
+func (o *observer) applyRoundValidation(event *engine.Event) error {
+	payload, ok := event.Payload.(*engine.EvaluationResult)
+	if !ok || payload == nil {
+		return invalidEventPayloadError(event.Kind)
+	}
+	round := o.ensureRound(event.Round)
+	round.Validation = payload
+	return nil
+}
+
+func (o *observer) applyRoundCompleted(event *engine.Event) error {
+	payload, ok := event.Payload.(*engine.RoundCompleted)
+	if !ok || payload == nil {
+		return invalidEventPayloadError(event.Kind)
+	}
+	round := o.ensureRound(event.Round)
+	round.Acceptance = &engine.AcceptanceDecision{
+		Accepted:   payload.Accepted,
+		ScoreDelta: payload.ScoreDelta,
+		Reason:     payload.AcceptanceReason,
+	}
+	round.Stop = &engine.StopDecision{
+		ShouldStop: payload.ShouldStop,
+		Reason:     payload.StopReason,
+	}
+	if payload.Accepted && round.OutputProfile != nil {
+		o.run.AcceptedProfile = iprofile.Clone(round.OutputProfile)
+	}
+	return nil
+}
+
+func invalidEventPayloadError(kind engine.EventKind) error {
+	return fmt.Errorf("event %q payload is invalid", kind)
 }
 
 func (o *observer) ensureRound(roundNumber int) *engine.RoundResult {
