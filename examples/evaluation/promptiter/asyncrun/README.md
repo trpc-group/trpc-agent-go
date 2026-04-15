@@ -28,7 +28,7 @@ The train and validation sets are generated directly from a real sports-business
 | `-data-dir` | Base directory containing `promptiter-nba-commentary-app/` | `./data` |
 | `-output-dir` | Directory where evaluation results will be stored | `./output` |
 | `-model` | Model identifier used by the candidate agent | `deepseek-chat` |
-| `-judge-model` | Model identifier used by the judge agent | `gpt-5.2` |
+| `-judge-model` | Model identifier used by the judge agent | `gpt-5.4` |
 | `-worker-model` | Model identifier used by the PromptIter backwarder, aggregator, and optimizer agents | `gpt-5.4` |
 | `-max-rounds` | Maximum PromptIter optimization rounds | `4` |
 | `-min-score-gain` | Minimum validation score gain required to accept a patch | `0.005` |
@@ -47,7 +47,7 @@ export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
 export OPENAI_API_KEY="your-api-key"
 go run . \
   -model "deepseek-chat" \
-  -judge-model "gpt-5.2" \
+  -judge-model "gpt-5.4" \
   -worker-model "gpt-5.4"
 ```
 

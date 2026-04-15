@@ -375,17 +375,20 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 	t.Cleanup(func() {
 		require.NoError(t, managerInstance.Close())
 	})
+	concreteManager := managerInstance.(*manager)
 	observer := &observer{
-		manager: managerInstance.(*manager),
+		manager: concreteManager,
 		run: &promptiterengine.RunResult{
 			ID:     "run-1",
 			Status: promptiterengine.RunStatusRunning,
 		},
 	}
+	require.NoError(t, concreteManager.store.Create(context.Background(), observer.run))
 	assert.EqualError(t, observer.append(context.Background(), nil), "promptiter event is nil")
 	testCases := []struct {
-		name  string
-		event *promptiterengine.Event
+		name       string
+		event      *promptiterengine.Event
+		errContain string
 	}{
 		{
 			name: "invalid structure payload",
@@ -393,6 +396,7 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Kind:    promptiterengine.EventKindStructureSnapshot,
 				Payload: "invalid",
 			},
+			errContain: `event "structure_snapshot" payload is invalid`,
 		},
 		{
 			name: "invalid baseline payload",
@@ -400,6 +404,7 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Kind:    promptiterengine.EventKindBaselineValidation,
 				Payload: "invalid",
 			},
+			errContain: `event "baseline_validation" payload is invalid`,
 		},
 		{
 			name: "invalid train payload",
@@ -408,6 +413,7 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Round:   1,
 				Payload: "invalid",
 			},
+			errContain: `event "round_train_evaluation" payload is invalid`,
 		},
 		{
 			name: "invalid losses payload",
@@ -416,6 +422,7 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Round:   1,
 				Payload: "invalid",
 			},
+			errContain: `event "round_losses" payload is invalid`,
 		},
 		{
 			name: "invalid backward payload",
@@ -424,6 +431,7 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Round:   1,
 				Payload: "invalid",
 			},
+			errContain: `event "round_backward" payload is invalid`,
 		},
 		{
 			name: "invalid aggregation payload",
@@ -432,6 +440,7 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Round:   1,
 				Payload: "invalid",
 			},
+			errContain: `event "round_aggregation" payload is invalid`,
 		},
 		{
 			name: "invalid patch payload",
@@ -440,6 +449,7 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Round:   1,
 				Payload: "invalid",
 			},
+			errContain: `event "round_patch_set" payload is invalid`,
 		},
 		{
 			name: "invalid profile payload",
@@ -448,6 +458,7 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Round:   1,
 				Payload: "invalid",
 			},
+			errContain: `event "round_output_profile" payload is invalid`,
 		},
 		{
 			name: "invalid validation payload",
@@ -456,6 +467,7 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Round:   1,
 				Payload: "invalid",
 			},
+			errContain: `event "round_validation" payload is invalid`,
 		},
 		{
 			name: "invalid completed payload",
@@ -464,18 +476,21 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Round:   1,
 				Payload: "invalid",
 			},
+			errContain: `event "round_completed" payload is invalid`,
 		},
 		{
 			name: "unsupported kind",
 			event: &promptiterengine.Event{
 				Kind: "unknown",
 			},
+			errContain: `promptiter event kind "unknown" is unsupported`,
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := observer.append(context.Background(), tc.event)
 			require.Error(t, err)
+			assert.ErrorContains(t, err, tc.errContain)
 		})
 	}
 }
