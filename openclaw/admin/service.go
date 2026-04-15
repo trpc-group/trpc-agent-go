@@ -168,6 +168,7 @@ type Config struct {
 	Channels      []string
 	GatewayRoutes Routes
 	Skills        SkillsStatusProvider
+	RuntimeConfig RuntimeConfigProvider
 	Prompts       PromptsProvider
 	Identity      IdentityProvider
 	Personas      PersonasProvider
@@ -295,6 +296,10 @@ func (s *Service) Handler() http.Handler {
 		wrapRelativeLinksFunc(s.handleSkillsPage),
 	)
 	mux.HandleFunc(
+		routeConfigPage,
+		wrapRelativeLinksFunc(s.handleConfigPage),
+	)
+	mux.HandleFunc(
 		routePrompts,
 		wrapRelativeLinksFunc(s.handlePromptsPage),
 	)
@@ -333,6 +338,7 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeStatusJSON, s.handleStatusJSON)
 	mux.HandleFunc(routePageStateJSON, s.handlePageStateJSON)
 	mux.HandleFunc(routeSkillsJSON, s.handleSkillsJSON)
+	mux.HandleFunc(routeConfigJSON, s.handleConfigJSON)
 	mux.HandleFunc(routePromptsJSON, s.handlePromptsJSON)
 	mux.HandleFunc(routeIdentityJSON, s.handleIdentityJSON)
 	mux.HandleFunc(routePersonasJSON, s.handlePersonasJSON)
@@ -340,6 +346,14 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeChatHistoryJSON, s.handleChatHistoryJSON)
 	mux.HandleFunc(routeMemoryFilesJSON, s.handleMemoryFilesJSON)
 	mux.HandleFunc(routeMemoryFile, s.handleMemoryFile)
+	mux.HandleFunc(
+		routeConfigSave,
+		wrapRelativeLinksFunc(s.handleSaveRuntimeConfig),
+	)
+	mux.HandleFunc(
+		routeConfigReset,
+		wrapRelativeLinksFunc(s.handleResetRuntimeConfig),
+	)
 	mux.HandleFunc(
 		routePromptInlineSave,
 		wrapRelativeLinksFunc(s.handleSavePromptInline),
@@ -584,6 +598,7 @@ type skillInstallView struct {
 
 type pageData struct {
 	Snapshot          snapshot
+	Config            RuntimeConfigStatus
 	Prompts           PromptsStatus
 	Identity          IdentityStatus
 	Personas          PersonasStatus
@@ -616,6 +631,7 @@ type pageStateStatus struct {
 
 type pageRefreshInput struct {
 	Snapshot          snapshot
+	Config            RuntimeConfigStatus
 	Prompts           PromptsStatus
 	Identity          IdentityStatus
 	Personas          PersonasStatus
@@ -691,6 +707,7 @@ func (s *Service) snapshotForView(view adminView) snapshot {
 	switch view {
 	case viewSkills:
 		out.Skills = s.skillsStatus()
+	case viewConfig:
 	case viewMemory:
 		out.Memory = s.memoryStatus()
 	case viewAutomation:
@@ -1093,12 +1110,14 @@ func (s *Service) renderPage(
 	}
 
 	snapshot := s.snapshotForView(view)
+	configStatus := s.runtimeConfigStatus()
 	prompts := s.promptsStatus()
 	identity := s.identityStatus()
 	personas := s.personasStatus()
 	chats := s.chatsStatus()
 	data := pageData{
 		Snapshot:        snapshot,
+		Config:          configStatus,
 		Prompts:         prompts,
 		Identity:        identity,
 		Personas:        personas,
@@ -1123,6 +1142,7 @@ func (s *Service) renderPage(
 		view,
 		pageRefreshInput{
 			Snapshot:          snapshot,
+			Config:            configStatus,
 			Prompts:           prompts,
 			Identity:          identity,
 			Personas:          personas,
@@ -1268,6 +1288,7 @@ func adminNavSections(active adminView) []adminNavSection {
 			Label: "Control",
 			Items: []adminNavItem{
 				{Label: "Overview", Path: routeOverview},
+				{Label: "Config", Path: routeConfigPage},
 				{Label: "Skills", Path: routeSkillsPage},
 				{Label: "Prompts", Path: routePrompts},
 				{Label: "Identity", Path: routeIdentity},
@@ -1297,6 +1318,8 @@ func adminNavSections(active adminView) []adminNavSection {
 
 func pageTitle(view adminView) string {
 	switch view {
+	case viewConfig:
+		return "Config"
 	case viewSkills:
 		return "Skills"
 	case viewPrompts:
@@ -1324,6 +1347,8 @@ func pageTitle(view adminView) string {
 
 func pageSummary(view adminView) string {
 	switch view {
+	case viewConfig:
+		return pageSummaryConfig
 	case viewSkills:
 		return "Discover installed skills, refresh folders from disk, and manage config-backed enablement."
 	case viewPrompts:
@@ -1352,6 +1377,7 @@ func pageSummary(view adminView) string {
 func pageRefreshWatch(view adminView) bool {
 	switch view {
 	case viewOverview,
+		viewConfig,
 		viewSkills,
 		viewChats,
 		viewMemory,
@@ -1416,6 +1442,8 @@ func pageRefreshToken(
 	input pageRefreshInput,
 ) string {
 	switch view {
+	case viewConfig:
+		return refreshTokenForValue(input.Config)
 	case viewPrompts:
 		return refreshTokenForValue(input.Prompts)
 	case viewIdentity:
@@ -1464,6 +1492,7 @@ func (s *Service) pageRefreshInput(
 ) pageRefreshInput {
 	input := pageRefreshInput{
 		Snapshot: s.snapshotForView(view),
+		Config:   s.runtimeConfigStatus(),
 		Prompts:  s.promptsStatus(),
 		Identity: s.identityStatus(),
 		Personas: s.personasStatus(),
@@ -1677,6 +1706,8 @@ func navPath(raw string) string {
 	switch strings.TrimSpace(raw) {
 	case routeIndex, routeOverview:
 		return routeOverview
+	case routeConfigPage:
+		return routeConfigPage
 	case routeSkillsPage:
 		return routeSkillsPage
 	case routePrompts:
@@ -1706,6 +1737,8 @@ func navViewForPath(path string) adminView {
 	switch strings.TrimSpace(path) {
 	case routeIndex, routeOverview:
 		return viewOverview
+	case routeConfigPage:
+		return viewConfig
 	case routeSkillsPage:
 		return viewSkills
 	case routePrompts:
@@ -2876,6 +2909,106 @@ const adminPageHTML = `<!doctype html>
       padding: 7px 12px;
       font-size: 14px;
     }
+    .config-sections {
+      display: grid;
+      gap: 18px;
+      margin-top: 16px;
+    }
+    .config-section-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      background: rgba(255, 253, 248, 0.8);
+      box-shadow: 0 10px 24px rgba(35, 29, 22, 0.04);
+    }
+    .config-field-list {
+      display: grid;
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .config-field {
+      border: 1px solid rgba(215, 207, 194, 0.9);
+      border-radius: 16px;
+      padding: 14px 16px;
+      background: rgba(255, 252, 247, 0.94);
+    }
+    .config-field-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .config-field-title {
+      margin: 0;
+      font-size: 18px;
+    }
+    .config-badges {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .config-badge {
+      border-radius: 999px;
+      border: 1px solid rgba(15, 111, 97, 0.18);
+      background: rgba(15, 111, 97, 0.08);
+      color: var(--accent);
+      padding: 4px 10px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .config-badge.warn {
+      border-color: rgba(154, 47, 47, 0.18);
+      background: rgba(154, 47, 47, 0.08);
+      color: var(--warn);
+    }
+    .config-meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px 16px;
+      margin-top: 12px;
+    }
+    .config-meta-block {
+      border-radius: 14px;
+      background: rgba(243, 238, 231, 0.62);
+      padding: 10px 12px;
+    }
+    .config-meta-label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .config-meta-value {
+      margin-top: 6px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .config-form {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .config-form-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .config-form input,
+    .config-form select {
+      min-width: min(100%, 320px);
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--ink);
+      font: inherit;
+    }
+    .config-form .subtle {
+      margin: 0;
+    }
     .skills-group {
       margin-top: 18px;
     }
@@ -3857,6 +3990,148 @@ const adminPageHTML = `<!doctype html>
           <dd><a href="/browser">Browser</a></dd>
         </dl>
       </article>
+    </section>
+    {{end}}
+
+    {{if eq .View "config"}}
+    <section class="card" style="margin-top: 24px;" id="config-admin">
+      <div class="skills-header">
+        <div class="skills-header-copy">
+          <h2>Runtime Config</h2>
+          <p class="skills-lead">
+            This page writes directly to the main runtime config file and keeps
+            unset fields distinct from explicit values.
+          </p>
+        </div>
+      </div>
+      <div class="skills-ops-grid">
+        <div class="skills-op-card">
+          <div class="skills-op-label">Config file</div>
+          <div class="skills-op-value">
+            {{if .Config.ConfigPath}}
+              <code>{{.Config.ConfigPath}}</code>
+            {{else}}
+              Runtime config path is not available
+            {{end}}
+          </div>
+          <div class="skills-op-note">
+            Reset deletes the YAML key so the runtime falls back to inherited
+            behavior.
+          </div>
+        </div>
+        <div class="skills-op-card">
+          <div class="skills-op-label">Apply model</div>
+          <div class="skills-op-value">Restart required by default</div>
+          <div class="skills-op-note">
+            The current runtime stays unchanged until you restart, so this page
+            shows both the saved config and the live runtime side by side.
+          </div>
+        </div>
+      </div>
+      {{if .Config.Error}}
+      <div class="notice err" style="margin-top: 12px;">
+        {{.Config.Error}}
+      </div>
+      {{end}}
+      {{if .Config.Sections}}
+      <div class="config-sections">
+        {{range .Config.Sections}}
+        <section class="config-section-card" id="config-section-{{.Key}}">
+          <h3>{{.Title}}</h3>
+          {{if .Summary}}
+          <p class="subtle">{{.Summary}}</p>
+          {{end}}
+          <div class="config-field-list">
+            {{range .Fields}}
+            <article class="config-field" id="config-field-{{.Key}}">
+              {{$field := .}}
+              <div class="config-field-top">
+                <div>
+                  <h4 class="config-field-title">{{.Title}}</h4>
+                  {{if .Summary}}
+                  <p class="subtle">{{.Summary}}</p>
+                  {{end}}
+                </div>
+                <div class="config-badges">
+                  <span class="config-badge">
+                    {{if eq .ApplyMode "hot"}}Hot apply{{else if eq .ApplyMode "next_turn"}}Next turn{{else}}Restart{{end}}
+                  </span>
+                  {{if .PendingRestart}}
+                  <span class="config-badge warn">Pending restart</span>
+                  {{end}}
+                </div>
+              </div>
+              <div class="config-meta">
+                <div class="config-meta-block">
+                  <div class="config-meta-label">Configured</div>
+                  <div class="config-meta-value">
+                    {{if eq .ConfiguredSource "explicit"}}
+                      {{if .ConfiguredValue}}<code>{{.ConfiguredValue}}</code>{{else}}<code>(empty)</code>{{end}}
+                    {{else}}
+                      <span class="subtle">Inherited</span>
+                    {{end}}
+                  </div>
+                  {{if .ConfiguredSourceLabel}}
+                  <div class="subtle">{{.ConfiguredSourceLabel}}</div>
+                  {{end}}
+                </div>
+                <div class="config-meta-block">
+                  <div class="config-meta-label">Current runtime</div>
+                  <div class="config-meta-value">
+                    {{if .RuntimeValue}}<code>{{.RuntimeValue}}</code>{{else}}<span class="subtle">-</span>{{end}}
+                  </div>
+                  {{if .RuntimeSourceLabel}}
+                  <div class="subtle">{{.RuntimeSourceLabel}}</div>
+                  {{end}}
+                </div>
+              </div>
+              <form method="post" action="/api/config/save" class="config-form">
+                <input type="hidden" name="field_key" value="{{.Key}}">
+                <input type="hidden" name="return_to" value="config-field-{{.Key}}">
+                <input type="hidden" name="return_path" value="/config">
+                {{if eq .InputType "select"}}
+                <select name="value">
+                  {{range $field.Options}}
+                  <option value="{{.Value}}" {{if eq $field.EditorValue .Value}}selected{{end}}>
+                    {{.Label}}
+                  </option>
+                  {{end}}
+                </select>
+                {{else if eq .InputType "number"}}
+                <input
+                  type="number"
+                  name="value"
+                  value="{{.EditorValue}}"
+                  {{if .Placeholder}}placeholder="{{.Placeholder}}"{{end}}
+                >
+                {{else}}
+                <input
+                  type="text"
+                  name="value"
+                  value="{{.EditorValue}}"
+                  {{if .Placeholder}}placeholder="{{.Placeholder}}"{{end}}
+                >
+                {{end}}
+                <div class="config-form-row">
+                  <button type="submit">Save</button>
+                  {{if .Resettable}}
+                  <button class="secondary" type="submit" formaction="/api/config/reset">
+                    Reset
+                  </button>
+                  {{end}}
+                </div>
+              </form>
+            </article>
+            {{end}}
+          </div>
+        </section>
+        {{end}}
+      </div>
+      {{else if not .Config.Error}}
+      <p class="subtle" style="margin-top: 12px;">
+        Runtime config editing is not available for this runtime.
+      </p>
+      {{end}}
     </section>
     {{end}}
 

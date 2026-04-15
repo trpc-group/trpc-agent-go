@@ -1,0 +1,229 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package admin
+
+import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+type stubRuntimeConfigProvider struct {
+	status RuntimeConfigStatus
+	err    error
+
+	saveErr    error
+	resetErr   error
+	saveKey    string
+	saveValue  string
+	saveCount  int
+	resetKey   string
+	resetCount int
+}
+
+func (p *stubRuntimeConfigProvider) RuntimeConfigStatus() (
+	RuntimeConfigStatus,
+	error,
+) {
+	if p == nil {
+		return RuntimeConfigStatus{}, nil
+	}
+	return p.status, p.err
+}
+
+func (p *stubRuntimeConfigProvider) SaveRuntimeConfigValue(
+	key string,
+	value string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.saveCount++
+	p.saveKey = key
+	p.saveValue = value
+	return p.saveErr
+}
+
+func (p *stubRuntimeConfigProvider) ResetRuntimeConfigValue(
+	key string,
+) error {
+	if p == nil {
+		return nil
+	}
+	p.resetCount++
+	p.resetKey = key
+	return p.resetErr
+}
+
+func TestServiceHandlerRendersConfigPage(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{
+		RuntimeConfig: &stubRuntimeConfigProvider{
+			status: RuntimeConfigStatus{
+				ConfigPath: "/tmp/openclaw.yaml",
+				Sections: []RuntimeConfigSection{{
+					Key:     "skills",
+					Title:   "Skills",
+					Summary: "Skill loading and fallback policy.",
+					Fields: []RuntimeConfigField{{
+						Key:                   "skills.max_loaded_skills",
+						Title:                 "Max Loaded Skills",
+						Summary:               "Cap the active skill set.",
+						InputType:             configInputNumber,
+						ApplyMode:             configApplyRestart,
+						EditorValue:           "10",
+						ConfiguredValue:       "10",
+						ConfiguredSource:      configSourceExplicit,
+						ConfiguredSourceLabel: "Explicit in config",
+						RuntimeValue:          "6",
+						RuntimeSourceLabel:    "Current runtime",
+						PendingRestart:        true,
+						Resettable:            true,
+					}},
+				}},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, routeConfigPage, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "Runtime Config")
+	require.Contains(t, body, "Max Loaded Skills")
+	require.Contains(t, body, "/tmp/openclaw.yaml")
+	require.Contains(t, body, `action="api/config/save"`)
+	require.Contains(t, body, `formaction="api/config/reset"`)
+	require.Contains(t, body, "Pending restart")
+}
+
+func TestHandleSaveRuntimeConfig(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubRuntimeConfigProvider{}
+	svc := New(Config{RuntimeConfig: provider})
+
+	values := url.Values{
+		formConfigFieldKey: {"skills.max_loaded_skills"},
+		formConfigValue:    {"10"},
+		formReturnPath:     {routeConfigPage},
+		formReturnTo:       {"config-field-skills.max_loaded_skills"},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeConfigSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Equal(t, "skills.max_loaded_skills", provider.saveKey)
+	require.Equal(t, "10", provider.saveValue)
+	location := rr.Header().Get("Location")
+	require.Contains(t, location, "config?notice=Saved+config+field.")
+	require.Contains(
+		t,
+		location,
+		"Restart+the+runtime+to+apply+restart-bound+changes.",
+	)
+	require.True(
+		t,
+		strings.HasSuffix(
+			location,
+			"#config-field-skills.max_loaded_skills",
+		),
+	)
+}
+
+func TestHandleResetRuntimeConfig(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubRuntimeConfigProvider{}
+	svc := New(Config{RuntimeConfig: provider})
+
+	values := url.Values{
+		formConfigFieldKey: {"skills.max_loaded_skills"},
+		formReturnPath:     {routeConfigPage},
+		formReturnTo:       {"config-field-skills.max_loaded_skills"},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeConfigReset,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Equal(t, "skills.max_loaded_skills", provider.resetKey)
+	location := rr.Header().Get("Location")
+	require.Contains(
+		t,
+		location,
+		"config?notice=Reset+config+field+to+inherited+behavior.",
+	)
+	require.True(
+		t,
+		strings.HasSuffix(
+			location,
+			"#config-field-skills.max_loaded_skills",
+		),
+	)
+}
+
+func TestHandleSaveRuntimeConfig_ProviderError(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubRuntimeConfigProvider{
+		saveErr: errors.New("write failed"),
+	}
+	svc := New(Config{RuntimeConfig: provider})
+
+	values := url.Values{
+		formConfigFieldKey: {"skills.max_loaded_skills"},
+		formConfigValue:    {"10"},
+		formReturnPath:     {routeConfigPage},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeConfigSave,
+		strings.NewReader(values.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Contains(
+		t,
+		rr.Header().Get("Location"),
+		"config?error=write+failed",
+	)
+}
