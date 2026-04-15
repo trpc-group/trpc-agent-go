@@ -41,6 +41,7 @@ import (
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
+	toolsubtask "trpc.group/trpc-go/trpc-agent-go/tool/subtask"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
@@ -99,6 +100,9 @@ func New(name string, opts ...Option) *LLMAgent {
 		}
 		if len(options.SubAgents) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
+		}
+		if options.Subtask {
+			panic("Invalid LLMAgent configuration: if output_schema is set, WithSubtask must not be enabled")
 		}
 	}
 
@@ -1367,6 +1371,9 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 		}
 	}
 
+	if a.option.Subtask {
+		base = append(base, toolsubtask.NewSubtaskTool(a.option.subtaskToolOptions...))
+	}
 	if len(a.subAgents) == 0 {
 		return base
 	}

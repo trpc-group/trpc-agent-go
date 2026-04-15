@@ -602,6 +602,55 @@ Compound Interest Calculation Result:
 - Result: $7,969.24 (interest approximately $2,969.24)
 ```
 
+### Subtask Delegation
+
+Agents can delegate sub-tasks to ephemeral sub-agents at runtime, without developer pre-configuration.
+
+**Why?** LLM attention is a finite resource — as the context window grows, attention to key information dilutes. When the parent agent recognizes a sub-task will generate heavy intermediate reasoning (tool calls, retries, exploration), it can delegate to a sub-agent with an independent context. The sub-agent may consume tens of thousands of tokens internally, but the parent agent only sees the final result (a few hundred tokens) — effectively creating a **context compression boundary** that keeps the parent agent focused.
+
+Enabled via `WithSubtask()`.
+
+#### Setup
+
+```go
+llmAgent := llmagent.New("my-agent",
+    llmagent.WithModel(model),
+    llmagent.WithTools(userTools),
+    llmagent.WithSubtask(),  // enables `subtask` tool
+)
+```
+
+#### How It Works
+
+Once enabled, the `subtask` tool is registered as a function call available to the LLM. The **LLM autonomously decides** when to delegate — developers only need to call `WithSubtask()` during setup; no manual invocation is required.
+
+When the LLM determines that a sub-task would benefit from context isolation, it generates a tool call like this:
+
+```text
+subtask({
+  request: "Analyze this code for security vulnerabilities",
+  instruction: "You are a security auditor",   // optional system prompt
+  model: "gpt-4o",                             // optional: pick from parent agent's WithModels()
+  tools: ["read_file", "search"],              // optional tool subset
+  inherit_context: true                        // optional: see parent history
+})
+```
+
+The framework then creates an ephemeral sub-agent that inherits the parent's model and user tools (framework tools like `subtask` and `transfer_to_agent` are automatically stripped to prevent recursion) but runs in a clean context window. Only the final result is returned to the parent.
+
+- `inherit_context: false` (default): the sub-agent starts with a clean context
+- `inherit_context: true`: the sub-agent can see the parent's conversation history (via filter key prefix matching)
+
+The LLM may issue multiple `subtask` calls in a single response. By default these run serially; add `WithEnableParallelTools(true)` to execute them concurrently.
+
+#### Example
+
+```bash
+cd examples/subtask
+export OPENAI_API_KEY="your-key"
+go run . -model=gpt-4o-mini
+```
+
 ## Environment Variable Configuration
 
 All multi-agent examples require the following environment variables:
