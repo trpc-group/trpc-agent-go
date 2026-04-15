@@ -53,7 +53,6 @@ type serverConfig struct {
 	CandidateInstruction      string
 	JudgeModelName            string
 	WorkerModelName           string
-	NumRuns                   int
 	EvalCaseParallelism       int
 	ParallelInferenceEnabled  bool
 	ParallelEvaluationEnabled bool
@@ -124,7 +123,7 @@ func buildPromptIterRuntime(ctx context.Context, cfg serverConfig) (*promptIterR
 		evaluation.WithEvalResultManager(evalResultManager),
 		evaluation.WithRegistry(registry),
 		evaluation.WithJudgeRunner(judgeRunner),
-		evaluation.WithNumRuns(cfg.NumRuns),
+		evaluation.WithNumRuns(1),
 		evaluation.WithEvalCaseParallelism(cfg.EvalCaseParallelism),
 		evaluation.WithEvalCaseParallelInferenceEnabled(cfg.ParallelInferenceEnabled),
 		evaluation.WithEvalCaseParallelEvaluationEnabled(cfg.ParallelEvaluationEnabled),

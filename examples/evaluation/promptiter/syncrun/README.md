@@ -30,7 +30,6 @@ The train and validation sets are generated directly from a real sports-business
 | `-model` | Model identifier used by the candidate agent | `deepseek-chat` |
 | `-judge-model` | Model identifier used by the judge agent | `gpt-5.2` |
 | `-worker-model` | Model identifier used by the PromptIter backwarder, aggregator, and optimizer agents | `gpt-5.4` |
-| `-runs` | Number of evaluation repetitions per case | `1` |
 | `-max-rounds` | Maximum PromptIter optimization rounds | `4` |
 | `-min-score-gain` | Minimum validation score gain required to accept a patch | `0.005` |
 | `-max-rounds-without-acceptance` | Maximum consecutive rejected rounds before stopping | `5` |

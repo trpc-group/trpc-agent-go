@@ -29,10 +29,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
-// EvaluationOptions configures how many traces and parallel branches run in evaluation.
+// EvaluationOptions configures evaluation concurrency behavior.
 type EvaluationOptions struct {
-	// NumRuns controls repeat count for each case to reduce variance.
-	NumRuns int
 	// EvalCaseParallelism caps parallel case executions per evaluation set.
 	EvalCaseParallelism int
 	// EvalCaseParallelInferenceEnabled enables concurrent teacher inference calls.
@@ -51,7 +49,7 @@ type EvaluationRequest struct {
 	Teacher runner.Runner
 	// Judge is the optional runner used by the evaluation runtime.
 	Judge runner.Runner
-	// Options controls evaluation parallelism and repeat count.
+	// Options controls evaluation parallelism.
 	Options EvaluationOptions
 }
 
@@ -173,9 +171,7 @@ func buildEvaluationCallOptions(
 	if request.Judge != nil {
 		options = append(options, evaluation.WithJudgeRunner(request.Judge))
 	}
-	if request.Options.NumRuns > 0 {
-		options = append(options, evaluation.WithNumRuns(request.Options.NumRuns))
-	}
+	options = append(options, evaluation.WithNumRuns(1))
 	if request.Options.EvalCaseParallelism > 0 {
 		options = append(options, evaluation.WithEvalCaseParallelism(request.Options.EvalCaseParallelism))
 	}

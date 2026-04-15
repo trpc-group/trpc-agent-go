@@ -32,12 +32,6 @@ def parse_args() -> argparse.Namespace:
         help="Polling interval in seconds for async mode.",
     )
     parser.add_argument(
-        "--runs",
-        type=int,
-        default=1,
-        help="Number of evaluation repetitions per case.",
-    )
-    parser.add_argument(
         "--max-rounds",
         type=int,
         default=4,
@@ -145,7 +139,6 @@ def build_run_request(args: argparse.Namespace, target_surface_id: str) -> dict:
             "ValidationEvalSetIDs": ["nba-commentary-validation"],
             "TargetSurfaceIDs": [target_surface_id],
             "EvaluationOptions": {
-                "NumRuns": args.runs,
                 "EvalCaseParallelism": args.eval_case_parallelism,
                 "EvalCaseParallelInferenceEnabled": args.parallel_inference,
                 "EvalCaseParallelEvaluationEnabled": args.parallel_evaluation,

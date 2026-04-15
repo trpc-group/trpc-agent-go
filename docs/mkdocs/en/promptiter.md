@@ -162,7 +162,6 @@ result, err := engineInstance.Run(ctx, &engine.RunRequest{
 	TrainEvalSetIDs:      []string{"nba-commentary-train"},
 	ValidationEvalSetIDs: []string{"nba-commentary-validation"},
 	EvaluationOptions: engine.EvaluationOptions{
-		NumRuns:                           1,
 		EvalCaseParallelism:               8,
 		EvalCaseParallelInferenceEnabled:  true,
 		EvalCaseParallelEvaluationEnabled: true,
@@ -457,18 +456,17 @@ type RunRequest struct {
 
 #### EvaluationOptions
 
-`EvaluationOptions` controls repeat count and concurrency in the evaluation phase.
+`EvaluationOptions` controls concurrency in the evaluation phase.
 
 ```go
 type EvaluationOptions struct {
-	NumRuns                           int  // NumRuns is the repeat count for each sample. PromptIter currently requires this value to be 1.
 	EvalCaseParallelism               int  // EvalCaseParallelism is the upper bound of parallel evaluation cases.
 	EvalCaseParallelInferenceEnabled  bool // EvalCaseParallelInferenceEnabled controls whether inference runs in parallel.
 	EvalCaseParallelEvaluationEnabled bool // EvalCaseParallelEvaluationEnabled controls whether evaluation runs in parallel.
 }
 ```
 
-Its semantics stay aligned with Evaluation. PromptIter directly reuses the Evaluation execution model, but the current runtime requires `NumRuns` to stay fixed at `1`.
+Its semantics stay aligned with Evaluation. PromptIter directly reuses the Evaluation concurrency model and fixes execution to a single run internally.
 
 #### AcceptancePolicy And StopPolicy
 

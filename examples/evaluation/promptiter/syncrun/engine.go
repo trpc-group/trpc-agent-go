@@ -54,7 +54,6 @@ type syncRunConfig struct {
 	CandidateInstruction       string
 	JudgeModelName             string
 	WorkerModelName            string
-	NumRuns                    int
 	MaxRounds                  int
 	MinScoreGain               float64
 	MaxRoundsWithoutAcceptance int
@@ -170,7 +169,7 @@ func buildPromptIterRuntime(ctx context.Context, cfg syncRunConfig) (*promptIter
 		evaluation.WithEvalResultManager(evalResultManager),
 		evaluation.WithRegistry(registry),
 		evaluation.WithJudgeRunner(judgeLoggedRunner),
-		evaluation.WithNumRuns(cfg.NumRuns),
+		evaluation.WithNumRuns(1),
 	)
 	if err != nil {
 		closeAll()
@@ -222,7 +221,6 @@ func buildRunRequest(cfg syncRunConfig, targetSurfaceID string) *promptiterengin
 		TrainEvalSetIDs:      []string{trainEvalSetID},
 		ValidationEvalSetIDs: []string{validationEvalSetID},
 		EvaluationOptions: promptiterengine.EvaluationOptions{
-			NumRuns:                           cfg.NumRuns,
 			EvalCaseParallelism:               cfg.EvalCaseParallelism,
 			EvalCaseParallelInferenceEnabled:  cfg.ParallelInferenceEnabled,
 			EvalCaseParallelEvaluationEnabled: cfg.ParallelEvaluationEnabled,

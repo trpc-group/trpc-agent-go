@@ -162,7 +162,6 @@ result, err := engineInstance.Run(ctx, &engine.RunRequest{
 	TrainEvalSetIDs:      []string{"nba-commentary-train"},
 	ValidationEvalSetIDs: []string{"nba-commentary-validation"},
 	EvaluationOptions: engine.EvaluationOptions{
-		NumRuns:                           1,
 		EvalCaseParallelism:               8,
 		EvalCaseParallelInferenceEnabled:  true,
 		EvalCaseParallelEvaluationEnabled: true,
@@ -457,18 +456,17 @@ type RunRequest struct {
 
 #### EvaluationOptions
 
-`EvaluationOptions` 用于控制评估阶段的重复次数和并发方式。
+`EvaluationOptions` 用于控制评估阶段的并发方式。
 
 ```go
 type EvaluationOptions struct {
-	NumRuns                           int  // NumRuns 表示每个样本的重复运行次数。当前 PromptIter 要求该值为 1。
 	EvalCaseParallelism               int  // EvalCaseParallelism 表示评估样本并发数上限。
 	EvalCaseParallelInferenceEnabled  bool // EvalCaseParallelInferenceEnabled 表示是否并行执行推理。
 	EvalCaseParallelEvaluationEnabled bool // EvalCaseParallelEvaluationEnabled 表示是否并行执行评估。
 }
 ```
 
-它与 Evaluation 中的评估选项保持一致。PromptIter 直接复用 Evaluation 的运行方式，但当前运行时要求 `NumRuns` 固定为 `1`。
+它与 Evaluation 中的评估选项保持一致。PromptIter 直接复用 Evaluation 的并发执行方式，并在内部固定使用单次评估结果。
 
 #### AcceptancePolicy 与 StopPolicy
 

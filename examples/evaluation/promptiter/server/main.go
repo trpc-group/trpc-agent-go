@@ -25,7 +25,6 @@ var (
 	candidateInstruction      = flag.String("candidate-instruction", defaultCandidateInstruction, "Instruction used by the candidate agent")
 	judgeModelName            = flag.String("judge-model", "gpt-5.4", "Model identifier used by the judge agent")
 	workerModelName           = flag.String("worker-model", "gpt-5.4", "Model identifier used by the PromptIter backwarder, aggregator, and optimizer agents")
-	numRuns                   = flag.Int("runs", 1, "Number of evaluation repeats per case")
 	evalCaseParallelism       = flag.Int("eval-case-parallelism", 8, "Maximum number of eval cases processed in parallel")
 	parallelInferenceEnabled  = flag.Bool("parallel-inference", true, "Enable parallel inference across eval cases")
 	parallelEvaluationEnabled = flag.Bool("parallel-evaluation", true, "Enable parallel evaluation across eval cases")
@@ -53,7 +52,6 @@ func main() {
 		CandidateInstruction:      *candidateInstruction,
 		JudgeModelName:            *judgeModelName,
 		WorkerModelName:           *workerModelName,
-		NumRuns:                   *numRuns,
 		EvalCaseParallelism:       *evalCaseParallelism,
 		ParallelInferenceEnabled:  *parallelInferenceEnabled,
 		ParallelEvaluationEnabled: *parallelEvaluationEnabled,

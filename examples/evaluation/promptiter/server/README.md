@@ -27,7 +27,6 @@ The candidate app behind the server is a single `llmagent` with a deliberately s
 | `-candidate-instruction` | Instruction used by the candidate agent | The shared default summary seed |
 | `-judge-model` | Model identifier used by the judge agent | `$JUDGE_MODEL_NAME` or `gpt-5.4` |
 | `-worker-model` | Model identifier used by the PromptIter backwarder, aggregator, and optimizer agents | `$WORKER_MODEL_NAME` or `gpt-5.4` |
-| `-runs` | Number of evaluation repetitions per case | `1` |
 | `-eval-case-parallelism` | Maximum number of eval cases processed in parallel | `8` |
 | `-parallel-inference` | Enable parallel inference across eval cases | `true` |
 | `-parallel-evaluation` | Enable parallel evaluation across eval cases | `true` |
@@ -79,7 +78,7 @@ The server exposes:
 
 The example also includes a minimal Python client at [client.py](/cbs/workspace/external-trpc-agent-go/promptiter-docs/trpc-agent-go/examples/evaluation/promptiter/server/client.py). It uses only the Python standard library, resolves the target instruction surface from `/structure`, submits a run request, prints asynchronous progress and validation scores while polling, and then prints a compact final summary.
 
-The client uses the same run-policy defaults as `syncrun` and `asyncrun`: `runs=1`, `max-rounds=4`, `min-score-gain=0.005`, `max-rounds-without-acceptance=5`, `target-score=1.0`, and parallel evaluation enabled with parallelism `8`.
+The client uses the same run-policy defaults as `syncrun` and `asyncrun`: `max-rounds=4`, `min-score-gain=0.005`, `max-rounds-without-acceptance=5`, `target-score=1.0`, and parallel evaluation enabled with parallelism `8`.
 
 Run the default asynchronous flow:
 
@@ -171,7 +170,6 @@ curl -X POST "http://127.0.0.1:8080/promptiter/v1/apps/promptiter-nba-commentary
       "ValidationEvalSetIDs": ["nba-commentary-validation"],
       "TargetSurfaceIDs": ["candidate#instruction"],
         "EvaluationOptions": {
-          "NumRuns": 1,
           "EvalCaseParallelism": 8,
           "EvalCaseParallelInferenceEnabled": true,
           "EvalCaseParallelEvaluationEnabled": true
@@ -201,7 +199,6 @@ curl -X POST "http://127.0.0.1:8080/promptiter/v1/apps/promptiter-nba-commentary
       "ValidationEvalSetIDs": ["nba-commentary-validation"],
       "TargetSurfaceIDs": ["candidate#instruction"],
       "EvaluationOptions": {
-          "NumRuns": 1,
           "EvalCaseParallelism": 8,
           "EvalCaseParallelInferenceEnabled": true,
           "EvalCaseParallelEvaluationEnabled": true

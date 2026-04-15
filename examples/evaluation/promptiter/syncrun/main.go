@@ -21,7 +21,6 @@ var (
 	candidateInstruction       = flag.String("candidate-instruction", defaultCandidateInstruction, "Instruction used by the candidate agent")
 	judgeModelName             = flag.String("judge-model", "gpt-5.4", "Model identifier used by the judge agent")
 	workerModelName            = flag.String("worker-model", "gpt-5.4", "Model identifier used by the PromptIter backwarder, aggregator, and optimizer agents")
-	numRuns                    = flag.Int("runs", 1, "Number of evaluation repeats per case")
 	maxRounds                  = flag.Int("max-rounds", 4, "Maximum PromptIter optimization rounds")
 	minScoreGain               = flag.Float64("min-score-gain", 0.005, "Minimum validation score gain required to accept a patch")
 	maxRoundsWithoutAcceptance = flag.Int("max-rounds-without-acceptance", 5, "Maximum consecutive rejected rounds before stopping")
@@ -42,7 +41,6 @@ func main() {
 		CandidateInstruction:       *candidateInstruction,
 		JudgeModelName:             *judgeModelName,
 		WorkerModelName:            *workerModelName,
-		NumRuns:                    *numRuns,
 		MaxRounds:                  *maxRounds,
 		MinScoreGain:               *minScoreGain,
 		MaxRoundsWithoutAcceptance: *maxRoundsWithoutAcceptance,
