@@ -500,7 +500,7 @@ type StopDecision struct {
 }
 ```
 
-下面这些参数通常作为示例推荐值使用，并非框架强制默认值；实际行为仍以 API 与实现为准：
+下面这些参数通常作为示例推荐值使用，并非框架强制默认值：
 
 - `MinScoreGain = 0.005`
 - `MaxRounds = 4`

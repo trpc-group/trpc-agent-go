@@ -500,7 +500,7 @@ type StopDecision struct {
 }
 ```
 
-The values below are example starting points rather than framework-enforced defaults. The actual behavior is still defined by the API and implementation:
+The values below are example starting points rather than framework-enforced defaults:
 
 - `MinScoreGain = 0.005`
 - `MaxRounds = 4`
