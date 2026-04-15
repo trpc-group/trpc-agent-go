@@ -17,6 +17,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+func TestToResponseError_Nil(t *testing.T) {
+	if got := ToResponseError(nil); got != nil {
+		t.Fatalf("ToResponseError(nil) = %#v, want nil", got)
+	}
+}
+
 func TestToResponseError_PreservesOuterMessageAndStructuredFields(t *testing.T) {
 	code := "429"
 	err := fmt.Errorf("request failed: %w", &model.ResponseError{
