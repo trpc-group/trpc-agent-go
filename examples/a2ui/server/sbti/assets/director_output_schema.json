@@ -1,0 +1,277 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "director_output_version",
+    "quiz_state"
+  ],
+  "properties": {
+    "director_output_version": {
+      "type": "string",
+      "enum": [
+        "sbti_v2"
+      ]
+    },
+    "quiz_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "surface_id",
+        "title",
+        "description",
+        "notice",
+        "questions",
+        "answers",
+        "result"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "quiz",
+            "result"
+          ]
+        },
+        "surface_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "notice": {
+          "type": "string"
+        },
+        "answers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "q1",
+            "q2",
+            "q3",
+            "q4",
+            "q5",
+            "q6",
+            "q7",
+            "q8",
+            "q9",
+            "q10",
+            "q11",
+            "q12",
+            "q13",
+            "q14",
+            "q15",
+            "q16",
+            "q17",
+            "q18",
+            "q19",
+            "q20",
+            "q21",
+            "q22",
+            "q23",
+            "q24",
+            "q25",
+            "q26",
+            "q27",
+            "q28",
+            "q29",
+            "q30",
+            "drink_gate_q1",
+            "drink_gate_q2"
+          ],
+          "properties": {
+            "q1": {
+              "type": "string"
+            },
+            "q2": {
+              "type": "string"
+            },
+            "q3": {
+              "type": "string"
+            },
+            "q4": {
+              "type": "string"
+            },
+            "q5": {
+              "type": "string"
+            },
+            "q6": {
+              "type": "string"
+            },
+            "q7": {
+              "type": "string"
+            },
+            "q8": {
+              "type": "string"
+            },
+            "q9": {
+              "type": "string"
+            },
+            "q10": {
+              "type": "string"
+            },
+            "q11": {
+              "type": "string"
+            },
+            "q12": {
+              "type": "string"
+            },
+            "q13": {
+              "type": "string"
+            },
+            "q14": {
+              "type": "string"
+            },
+            "q15": {
+              "type": "string"
+            },
+            "q16": {
+              "type": "string"
+            },
+            "q17": {
+              "type": "string"
+            },
+            "q18": {
+              "type": "string"
+            },
+            "q19": {
+              "type": "string"
+            },
+            "q20": {
+              "type": "string"
+            },
+            "q21": {
+              "type": "string"
+            },
+            "q22": {
+              "type": "string"
+            },
+            "q23": {
+              "type": "string"
+            },
+            "q24": {
+              "type": "string"
+            },
+            "q25": {
+              "type": "string"
+            },
+            "q26": {
+              "type": "string"
+            },
+            "q27": {
+              "type": "string"
+            },
+            "q28": {
+              "type": "string"
+            },
+            "q29": {
+              "type": "string"
+            },
+            "q30": {
+              "type": "string"
+            },
+            "drink_gate_q1": {
+              "type": "string"
+            },
+            "drink_gate_q2": {
+              "type": "string"
+            }
+          }
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "title",
+            "tagline",
+            "match_summary",
+            "image_url",
+            "description",
+            "dimension_portraits"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "tagline": {
+              "type": "string"
+            },
+            "match_summary": {
+              "type": "string"
+            },
+            "image_url": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "dimension_portraits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "title",
+                  "level",
+                  "description"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "level": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "number",
+              "prompt",
+              "options"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "number": {
+                "type": "integer"
+              },
+              "prompt": {
+                "type": "string"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

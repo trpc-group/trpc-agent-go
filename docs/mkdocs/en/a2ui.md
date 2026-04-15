@@ -10,7 +10,7 @@ It is important to understand that A2UI is built on top of AG-UI. It constrains 
 
 This section walks through a minimal example to help you quickly understand how to integrate A2UI with `tRPC-Agent-Go`.
 
-This example is based on the A2UI demo in this repository. The complete server example is available at [examples/a2ui/server](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/server), and the frontend demo is available at [examples/a2ui/client](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/client).
+This example is based on the A2UI demo in this repository. The complete code example is available at [examples/a2ui/server/default](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/server/default), and the frontend demo is available at [examples/a2ui/client](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/client).
 
 ### Prerequisites
 
@@ -146,7 +146,7 @@ if err := http.ListenAndServe(*address, server.Handler()); err != nil {
 
 ```bash
 # Start the A2UI server.
-cd examples/a2ui/server
+cd examples/a2ui/server/default
 go run . -model gpt-5.4 -stream=true -address 127.0.0.1:8080 -path /a2ui
 ```
 
@@ -727,3 +727,28 @@ A2UI does not replace AG-UI's session, routing, or transport capabilities. Inste
 - Continue extending `userID`, session storage, and event translation logic through custom Runner options
 
 For full AG-UI usage details, see the [AG-UI Guide](./agui.md). For the general Planner capabilities, see [Planner](./planner.md).
+
+## Best Practices
+
+### SBTI Personality Test
+
+The complete example is available at [examples/a2ui/server/sbti](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/server/sbti), and the frontend example is available at [examples/a2ui/client](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/client).
+
+Quiz page:
+
+![SBTI quiz](../assets/img/a2ui/sbti-test.png)
+
+Result page:
+
+![SBTI result](../assets/img/a2ui/sbti-report.png)
+
+- It splits business logic from UI rendering into two agent nodes. `sbti_director` owns the fixed question bank, scoring, and type matching, while `sbti_a2ui_renderer` only turns structured state into A2UI.
+- It drives the key contracts through static assets. `director_instruction.txt`, `director_output_schema.json`, `renderer_instruction.txt`, and `type_profiles.json` are all fixed files, so business rules do not drift into scattered code paths.
+- It keeps a stable interaction boundary. The questionnaire is carried by the standard `MultipleChoice` component with local data binding, so answering questions does not require a round trip for every click. Only explicit actions such as `submit_test` and `restart_test` trigger another agent run.
+
+If your use case also follows a "fixed rules + dynamic interface" pattern, this split is a good starting point:
+
+1. Use an upstream agent for rules, state, and result computation.
+2. Use a downstream A2UI agent only for rendering.
+3. Keep reference data, output schemas, and rendering constraints in static asset files.
+4. Keep the frontend centered on standard input components and explicit actions rather than business-specific client branches.
