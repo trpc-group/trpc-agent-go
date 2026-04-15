@@ -71,8 +71,9 @@ func (p *stubRuntimeConfigProvider) ResetRuntimeConfigValue(
 func TestServiceHandlerRendersConfigPage(t *testing.T) {
 	t.Parallel()
 
-	svc := New(Config{
-		RuntimeConfig: &stubRuntimeConfigProvider{
+	svc := New(
+		Config{},
+		WithRuntimeConfigProvider(&stubRuntimeConfigProvider{
 			status: RuntimeConfigStatus{
 				ConfigPath: "/tmp/openclaw.yaml",
 				Sections: []RuntimeConfigSection{{
@@ -96,8 +97,8 @@ func TestServiceHandlerRendersConfigPage(t *testing.T) {
 					}},
 				}},
 			},
-		},
-	})
+		}),
+	)
 
 	req := httptest.NewRequest(http.MethodGet, routeConfigPage, nil)
 	rr := httptest.NewRecorder()
@@ -117,7 +118,7 @@ func TestHandleSaveRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
 	provider := &stubRuntimeConfigProvider{}
-	svc := New(Config{RuntimeConfig: provider})
+	svc := New(Config{}, WithRuntimeConfigProvider(provider))
 
 	values := url.Values{
 		formConfigFieldKey: {"skills.max_loaded_skills"},
@@ -160,7 +161,7 @@ func TestHandleResetRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
 	provider := &stubRuntimeConfigProvider{}
-	svc := New(Config{RuntimeConfig: provider})
+	svc := New(Config{}, WithRuntimeConfigProvider(provider))
 
 	values := url.Values{
 		formConfigFieldKey: {"skills.max_loaded_skills"},
@@ -199,27 +200,37 @@ func TestHandleResetRuntimeConfig(t *testing.T) {
 func TestServiceRuntimeConfigStatus_Error(t *testing.T) {
 	t.Parallel()
 
-	svc := New(Config{
-		RuntimeConfig: &stubRuntimeConfigProvider{
+	svc := New(
+		Config{},
+		WithRuntimeConfigProvider(&stubRuntimeConfigProvider{
 			err: errors.New(" status failed "),
-		},
-	})
+		}),
+	)
 
 	status := svc.runtimeConfigStatus()
 	require.True(t, status.Enabled)
 	require.Equal(t, "status failed", status.Error)
 }
 
+func TestServiceRuntimeConfigProviderHelpers_NilService(t *testing.T) {
+	t.Parallel()
+
+	var svc *Service
+	require.Nil(t, svc.runtimeConfigProvider())
+	require.False(t, svc.hasRuntimeConfigProvider())
+}
+
 func TestHandleConfigJSON(t *testing.T) {
 	t.Parallel()
 
-	svc := New(Config{
-		RuntimeConfig: &stubRuntimeConfigProvider{
+	svc := New(
+		Config{},
+		WithRuntimeConfigProvider(&stubRuntimeConfigProvider{
 			status: RuntimeConfigStatus{
 				ConfigPath: "/tmp/openclaw.yaml",
 			},
-		},
-	})
+		}),
+	)
 
 	req := httptest.NewRequest(http.MethodGet, routeConfigJSON, nil)
 	rr := httptest.NewRecorder()
@@ -252,7 +263,7 @@ func TestHandleSaveRuntimeConfig_ProviderError(t *testing.T) {
 	provider := &stubRuntimeConfigProvider{
 		saveErr: errors.New("write failed"),
 	}
-	svc := New(Config{RuntimeConfig: provider})
+	svc := New(Config{}, WithRuntimeConfigProvider(provider))
 
 	values := url.Values{
 		formConfigFieldKey: {"skills.max_loaded_skills"},
@@ -325,9 +336,7 @@ func TestHandleSaveRuntimeConfig_NoProvider(t *testing.T) {
 func TestHandleSaveRuntimeConfig_MissingField(t *testing.T) {
 	t.Parallel()
 
-	svc := New(Config{
-		RuntimeConfig: &stubRuntimeConfigProvider{},
-	})
+	svc := New(Config{}, WithRuntimeConfigProvider(&stubRuntimeConfigProvider{}))
 
 	values := url.Values{
 		formConfigValue: {"10"},
@@ -398,9 +407,7 @@ func TestHandleResetRuntimeConfig_NoProvider(t *testing.T) {
 func TestHandleResetRuntimeConfig_MissingField(t *testing.T) {
 	t.Parallel()
 
-	svc := New(Config{
-		RuntimeConfig: &stubRuntimeConfigProvider{},
-	})
+	svc := New(Config{}, WithRuntimeConfigProvider(&stubRuntimeConfigProvider{}))
 
 	values := url.Values{
 		formReturnPath: {routeConfigPage},
@@ -428,11 +435,12 @@ func TestHandleResetRuntimeConfig_MissingField(t *testing.T) {
 func TestHandleResetRuntimeConfig_ProviderError(t *testing.T) {
 	t.Parallel()
 
-	svc := New(Config{
-		RuntimeConfig: &stubRuntimeConfigProvider{
+	svc := New(
+		Config{},
+		WithRuntimeConfigProvider(&stubRuntimeConfigProvider{
 			resetErr: errors.New("reset failed"),
-		},
-	})
+		}),
+	)
 
 	values := url.Values{
 		formConfigFieldKey: {"skills.max_loaded_skills"},

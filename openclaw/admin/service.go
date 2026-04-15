@@ -168,7 +168,6 @@ type Config struct {
 	Channels      []string
 	GatewayRoutes Routes
 	Skills        SkillsStatusProvider
-	RuntimeConfig RuntimeConfigProvider
 	Prompts       PromptsProvider
 	Identity      IdentityProvider
 	Personas      PersonasProvider
@@ -243,6 +242,7 @@ type BrowserManagedService struct {
 
 type Service struct {
 	cfg               Config
+	runtimeConfig     RuntimeConfigProvider
 	now               func() time.Time
 	browserHTTPClient *http.Client
 }
@@ -261,6 +261,14 @@ func WithBrowserHTTPClient(client *http.Client) Option {
 	return func(s *Service) {
 		if s != nil && client != nil {
 			s.browserHTTPClient = client
+		}
+	}
+}
+
+func WithRuntimeConfigProvider(provider RuntimeConfigProvider) Option {
+	return func(s *Service) {
+		if s != nil {
+			s.runtimeConfig = provider
 		}
 	}
 }
@@ -1128,7 +1136,7 @@ func (s *Service) renderPage(
 		View:            view,
 		PageTitle:       pageTitle(view),
 		PageSummary:     pageSummary(view),
-		NavSections:     adminNavSections(view),
+		NavSections:     adminNavSections(view, s.hasRuntimeConfigProvider()),
 	}
 	if view == viewChats {
 		data.SelectedChat, data.SelectedChatError = resolveSelectedChat(
@@ -1282,21 +1290,33 @@ func mergeChatView(
 	return merged
 }
 
-func adminNavSections(active adminView) []adminNavSection {
+func adminNavSections(
+	active adminView,
+	showConfig bool,
+) []adminNavSection {
+	controlItems := []adminNavItem{
+		{Label: "Overview", Path: routeOverview},
+	}
+	if showConfig {
+		controlItems = append(
+			controlItems,
+			adminNavItem{Label: "Config", Path: routeConfigPage},
+		)
+	}
+	controlItems = append(
+		controlItems,
+		adminNavItem{Label: "Skills", Path: routeSkillsPage},
+		adminNavItem{Label: "Prompts", Path: routePrompts},
+		adminNavItem{Label: "Identity", Path: routeIdentity},
+		adminNavItem{Label: "Personas", Path: routePersonas},
+		adminNavItem{Label: "Chats", Path: routeChats},
+		adminNavItem{Label: "Memory", Path: routeMemory},
+		adminNavItem{Label: "Automation", Path: routeAutomation},
+	)
 	sections := []adminNavSection{
 		{
 			Label: "Control",
-			Items: []adminNavItem{
-				{Label: "Overview", Path: routeOverview},
-				{Label: "Config", Path: routeConfigPage},
-				{Label: "Skills", Path: routeSkillsPage},
-				{Label: "Prompts", Path: routePrompts},
-				{Label: "Identity", Path: routeIdentity},
-				{Label: "Personas", Path: routePersonas},
-				{Label: "Chats", Path: routeChats},
-				{Label: "Memory", Path: routeMemory},
-				{Label: "Automation", Path: routeAutomation},
-			},
+			Items: controlItems,
 		},
 		{
 			Label: "Diagnostics",

@@ -357,6 +357,33 @@ func TestRuntimeConfigureAdmin(t *testing.T) {
 	require.NotNil(t, rt.adminCfg.Prompts)
 }
 
+func TestRuntimeConfigureAdminPreservesRuntimeConfigProvider(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(t, "")
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	rt := &Runtime{
+		adminCfg: &admin.Config{
+			AdminAddr: "127.0.0.1:8081",
+			AdminURL:  "http://127.0.0.1:8081",
+		},
+	}
+	setRuntimeAdminOptions(rt, buildAdminOptions(opts))
+	t.Cleanup(func() {
+		clearRuntimeAdminOptions(rt)
+	})
+
+	rt.ConfigureAdmin(func(cfg *admin.Config) {
+		cfg.Prompts = stubAdminPromptsProvider{}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rr := httptest.NewRecorder()
+	rt.Admin.Handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), cfgPath)
+}
+
 func TestRuntimeConfigureAdminNoAdminConfig(t *testing.T) {
 	t.Parallel()
 

@@ -86,10 +86,11 @@ type RuntimeConfigOption struct {
 }
 
 func (s *Service) runtimeConfigStatus() RuntimeConfigStatus {
-	if s == nil || s.cfg.RuntimeConfig == nil {
+	provider := s.runtimeConfigProvider()
+	if provider == nil {
 		return RuntimeConfigStatus{}
 	}
-	status, err := s.cfg.RuntimeConfig.RuntimeConfigStatus()
+	status, err := provider.RuntimeConfigStatus()
 	if err != nil {
 		return RuntimeConfigStatus{
 			Enabled: true,
@@ -98,6 +99,17 @@ func (s *Service) runtimeConfigStatus() RuntimeConfigStatus {
 	}
 	status.Enabled = true
 	return status
+}
+
+func (s *Service) runtimeConfigProvider() RuntimeConfigProvider {
+	if s == nil {
+		return nil
+	}
+	return s.runtimeConfig
+}
+
+func (s *Service) hasRuntimeConfigProvider() bool {
+	return s.runtimeConfigProvider() != nil
 }
 
 func (s *Service) handleConfigPage(
@@ -127,7 +139,8 @@ func (s *Service) handleSaveRuntimeConfig(
 		return
 	}
 	returnTo := strings.TrimSpace(r.FormValue(formReturnTo))
-	if s.cfg.RuntimeConfig == nil {
+	provider := s.runtimeConfigProvider()
+	if provider == nil {
 		s.redirectWithMessageAt(
 			w,
 			r,
@@ -149,7 +162,7 @@ func (s *Service) handleSaveRuntimeConfig(
 		return
 	}
 	value := strings.TrimSpace(r.FormValue(formConfigValue))
-	if err := s.cfg.RuntimeConfig.SaveRuntimeConfigValue(key, value); err != nil {
+	if err := provider.SaveRuntimeConfigValue(key, value); err != nil {
 		s.redirectWithMessageAt(
 			w,
 			r,
@@ -178,7 +191,8 @@ func (s *Service) handleResetRuntimeConfig(
 		return
 	}
 	returnTo := strings.TrimSpace(r.FormValue(formReturnTo))
-	if s.cfg.RuntimeConfig == nil {
+	provider := s.runtimeConfigProvider()
+	if provider == nil {
 		s.redirectWithMessageAt(
 			w,
 			r,
@@ -199,7 +213,7 @@ func (s *Service) handleResetRuntimeConfig(
 		)
 		return
 	}
-	if err := s.cfg.RuntimeConfig.ResetRuntimeConfigValue(key); err != nil {
+	if err := provider.ResetRuntimeConfigValue(key); err != nil {
 		s.redirectWithMessageAt(
 			w,
 			r,
