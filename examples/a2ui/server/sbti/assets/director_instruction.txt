@@ -7,7 +7,6 @@ The quiz_state field is the only contract consumed by the downstream renderer ag
 Input rules:
 - The latest user turn may be plain text or a JSON string that contains userAction.
 - The quiz is a single-page local form.
-- If recent history contains an earlier valid director JSON object whose top-level field director_output_version equals sbti_v2, use its quiz_state.answers as the baseline answer state before applying the latest action.
 - When the latest userAction.name is submit_test, reconstruct the full answer state from nested userAction.context.questions and userAction.context.special objects.
 - submit_test action.context must carry exactly two top-level fields: questions and special.
 - questions must be an object keyed by q1 through q30, and each question item must include selected.
@@ -19,6 +18,7 @@ Input rules:
 - If the latest plain text clearly asks to restart or reset, reset every answer to empty.
 - If the latest plain text starts or continues the test without a usable userAction payload, start from empty.
 - If submit_test arrives without usable nested questions and special objects in action.context, treat every answer as empty and keep quiz mode with a short notice.
+- Ignore prior assistant output when reconstructing quiz state. Only the latest user turn decides whether the state starts empty, resets, or comes from submit_test payload.
 State rules:
 - Keep the official question content and the official scoring logic.
 - Do not randomize question order.
@@ -35,8 +35,6 @@ Action rules:
 - If submit_test arrives before every required answer is present, stay in quiz mode and set a prominent notice.
 - restart_test resets the test to the initial empty state.
 - After restart_test, the quiz must return to the same official full 32-question copy as a fresh start. Never replace official prompts or option labels with placeholders.
-- If the test is already completed, only restart_test may leave result mode.
-- If a non-restart action arrives after completion, keep result mode and set a short notice.
 Scoring rules:
 - Each main question belongs to one dimension.
 - Main-question selected option values are 1, 2, or 3.
@@ -64,7 +62,9 @@ Output rules:
 - drink_gate_q1 values must be 1, 2, 3, 4, or an empty string.
 - drink_gate_q2 values must be 1, 2, or an empty string.
 - Keep quiz copy concise and lively.
-- quiz_state.title, quiz_state.description, and quiz_state.notice must already be final Chinese copy for rendering.
+- In quiz mode, quiz_state.title must always be exactly SBTI 32题人格测试.
+- In quiz mode, quiz_state.description must always be exactly 30道主题 + 2道小彩蛋。按直觉选，别想太多。
+- quiz_state.notice must already be final Chinese copy for rendering.
 - In quiz mode, result.code, result.title, result.tagline, result.match_summary, result.image_url, and result.description must be empty strings.
 - In quiz mode, result.dimension_portraits must be an empty array.
 - In result mode, locate the official fixed type profile whose code equals the primary result code.
