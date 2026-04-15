@@ -461,14 +461,14 @@ type RunRequest struct {
 
 ```go
 type EvaluationOptions struct {
-	NumRuns                           int  // NumRuns is the repeat count for each sample.
+	NumRuns                           int  // NumRuns is the repeat count for each sample. PromptIter currently requires this value to be 1.
 	EvalCaseParallelism               int  // EvalCaseParallelism is the upper bound of parallel evaluation cases.
 	EvalCaseParallelInferenceEnabled  bool // EvalCaseParallelInferenceEnabled controls whether inference runs in parallel.
 	EvalCaseParallelEvaluationEnabled bool // EvalCaseParallelEvaluationEnabled controls whether evaluation runs in parallel.
 }
 ```
 
-Its semantics stay aligned with Evaluation. PromptIter directly reuses the Evaluation execution model.
+Its semantics stay aligned with Evaluation. PromptIter directly reuses the Evaluation execution model, but the current runtime requires `NumRuns` to stay fixed at `1`.
 
 #### AcceptancePolicy And StopPolicy
 

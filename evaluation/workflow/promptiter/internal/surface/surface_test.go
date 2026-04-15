@@ -31,6 +31,10 @@ func TestValidateValue(t *testing.T) {
 		astructure.SurfaceValue{Text: &text},
 	))
 	assert.NoError(t, ValidateValue(
+		astructure.SurfaceTypeGlobalInstruction,
+		astructure.SurfaceValue{Text: &text},
+	))
+	assert.NoError(t, ValidateValue(
 		astructure.SurfaceTypeFewShot,
 		astructure.SurfaceValue{FewShot: []astructure.FewShotExample{}},
 	))
@@ -98,7 +102,7 @@ func TestBuildIndexRejectsInvalidSurface(t *testing.T) {
 		},
 	})
 
-	assert.Error(t, err)
+	assert.ErrorContains(t, err, `duplicate surface id "surf_1"`)
 }
 
 func TestSanitizeValue(t *testing.T) {
@@ -115,6 +119,16 @@ func TestSanitizeValue(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, &text, sanitizedInstruction.Text)
 	assert.Nil(t, sanitizedInstruction.Model)
+	sanitizedGlobalInstruction, err := SanitizeValue(
+		astructure.SurfaceTypeGlobalInstruction,
+		astructure.SurfaceValue{
+			Text:  &text,
+			Model: &astructure.ModelRef{},
+		},
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, &text, sanitizedGlobalInstruction.Text)
+	assert.Nil(t, sanitizedGlobalInstruction.Model)
 
 	sanitizedFewShot, err := SanitizeValue(
 		astructure.SurfaceTypeFewShot,
@@ -270,10 +284,14 @@ func TestCloneValueDeepCopiesAllFields(t *testing.T) {
 	cloned := CloneValue(value)
 	assert.NotNil(t, cloned.Text)
 	assert.NotNil(t, cloned.Model)
+	assert.Equal(t, "openai", cloned.Model.Provider)
+	assert.Equal(t, "gpt", cloned.Model.Name)
 	cloned.FewShot[0].Messages[0].Content = "changed"
 	*cloned.Text = "changed"
 	cloned.Model.Headers["X-Test"] = "2"
 	assert.Equal(t, "instruction", *value.Text)
 	assert.Equal(t, "hi", value.FewShot[0].Messages[0].Content)
+	assert.Equal(t, " openai ", value.Model.Provider)
+	assert.Equal(t, " gpt ", value.Model.Name)
 	assert.Equal(t, "1", value.Model.Headers["X-Test"])
 }

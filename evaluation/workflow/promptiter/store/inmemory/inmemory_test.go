@@ -24,6 +24,9 @@ import (
 func TestInMemoryStoreCreateGetUpdate(t *testing.T) {
 	ctx := context.Background()
 	store := New().(*inMemoryStore)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close())
+	})
 	run := &engine.RunResult{
 		ID:     "run-1",
 		Status: engine.RunStatusQueued,
@@ -71,20 +74,24 @@ func TestInMemoryStoreCreateGetUpdate(t *testing.T) {
 	require.NotNil(t, loadedOnceMore)
 	require.NotNil(t, loadedOnceMore.AcceptedProfile)
 	assert.Equal(t, "loaded-mutated", loadedOnceMore.AcceptedProfile.StructureID)
-	assert.NoError(t, store.Close())
 }
 
 func TestInMemoryStoreValidationAndNotFoundErrors(t *testing.T) {
 	ctx := context.Background()
 	store := New().(*inMemoryStore)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close())
+	})
 	assert.EqualError(t, store.Create(ctx, nil), "promptiter run is nil")
 	assert.EqualError(t, store.Create(ctx, &engine.RunResult{}), "promptiter run id is empty")
-	assert.NoError(t, store.Close())
 }
 
 func TestInMemoryStoreGetMissingRun(t *testing.T) {
 	ctx := context.Background()
 	store := New().(*inMemoryStore)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close())
+	})
 	run, err := store.Get(ctx, "missing")
 	assert.Nil(t, run)
 	assert.Error(t, err)
@@ -94,6 +101,9 @@ func TestInMemoryStoreGetMissingRun(t *testing.T) {
 func TestInMemoryStoreCreateDuplicateAndUpdateMissing(t *testing.T) {
 	ctx := context.Background()
 	store := New().(*inMemoryStore)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close())
+	})
 	run := &engine.RunResult{ID: "run-1", Status: engine.RunStatusQueued}
 	require.NoError(t, store.Create(ctx, run))
 	err := store.Create(ctx, run)
@@ -110,6 +120,9 @@ func TestInMemoryStoreCreateDuplicateAndUpdateMissing(t *testing.T) {
 func TestInMemoryStoreCloneErrors(t *testing.T) {
 	ctx := context.Background()
 	store := New().(*inMemoryStore)
+	t.Cleanup(func() {
+		assert.NoError(t, store.Close())
+	})
 	badRun := &engine.RunResult{
 		ID: "run-1",
 		BaselineValidation: &engine.EvaluationResult{

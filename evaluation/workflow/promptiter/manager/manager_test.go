@@ -362,7 +362,11 @@ func TestRunObserverPassesContextToStoreUpdate(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, store.updateCtx)
 	assert.Equal(t, "store-update", store.updateCtx.Value(ctxKey{}))
-	assert.Same(t, run, store.updateRun)
+	require.NotNil(t, store.updateRun)
+	assert.Equal(t, run.ID, store.updateRun.ID)
+	assert.Equal(t, run.Status, store.updateRun.Status)
+	require.NotNil(t, store.updateRun.BaselineValidation)
+	assert.InDelta(t, 0.55, store.updateRun.BaselineValidation.OverallScore, 0.0001)
 }
 
 func TestRunObserverRejectsInvalidEvents(t *testing.T) {

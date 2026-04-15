@@ -461,14 +461,14 @@ type RunRequest struct {
 
 ```go
 type EvaluationOptions struct {
-	NumRuns                           int  // NumRuns 表示每个样本的重复运行次数。
+	NumRuns                           int  // NumRuns 表示每个样本的重复运行次数。当前 PromptIter 要求该值为 1。
 	EvalCaseParallelism               int  // EvalCaseParallelism 表示评估样本并发数上限。
 	EvalCaseParallelInferenceEnabled  bool // EvalCaseParallelInferenceEnabled 表示是否并行执行推理。
 	EvalCaseParallelEvaluationEnabled bool // EvalCaseParallelEvaluationEnabled 表示是否并行执行评估。
 }
 ```
 
-它与 Evaluation 中的评估选项保持一致。PromptIter 直接复用 Evaluation 的运行方式。
+它与 Evaluation 中的评估选项保持一致。PromptIter 直接复用 Evaluation 的运行方式，但当前运行时要求 `NumRuns` 固定为 `1`。
 
 #### AcceptancePolicy 与 StopPolicy
 
