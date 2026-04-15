@@ -513,12 +513,14 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 	assert.NoError(t, err)
 
 	testCases := []struct {
-		name    string
-		request *Request
+		name            string
+		request         *Request
+		wantErrContains string
 	}{
 		{
-			name:    "nil request",
-			request: nil,
+			name:            "nil request",
+			request:         nil,
+			wantErrContains: "request is nil",
 		},
 		{
 			name: "nil surface",
@@ -530,6 +532,7 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "g"}},
 				},
 			},
+			wantErrContains: "surface is nil",
 		},
 		{
 			name: "nil gradient",
@@ -540,6 +543,7 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 					Type:      astructure.SurfaceTypeInstruction,
 				},
 			},
+			wantErrContains: "aggregated gradient is nil",
 		},
 		{
 			name: "empty surface id",
@@ -555,6 +559,7 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "g"}},
 				},
 			},
+			wantErrContains: "surface id is empty",
 		},
 		{
 			name: "empty node id",
@@ -570,6 +575,7 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "g"}},
 				},
 			},
+			wantErrContains: "node id is empty",
 		},
 		{
 			name: "invalid surface type",
@@ -586,6 +592,7 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "g"}},
 				},
 			},
+			wantErrContains: "surface type \"unknown\" is invalid",
 		},
 		{
 			name: "empty gradient surface id",
@@ -601,6 +608,7 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "g"}},
 				},
 			},
+			wantErrContains: "aggregated gradient surface id is empty",
 		},
 		{
 			name: "gradient surface id mismatch",
@@ -617,6 +625,7 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "g"}},
 				},
 			},
+			wantErrContains: "aggregated gradient surface id \"surf_2\" does not match surface id \"surf_1\"",
 		},
 		{
 			name: "empty gradient node id",
@@ -632,6 +641,7 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "g"}},
 				},
 			},
+			wantErrContains: "aggregated gradient node id is empty",
 		},
 		{
 			name: "gradient node id mismatch",
@@ -648,6 +658,7 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "g"}},
 				},
 			},
+			wantErrContains: "aggregated gradient node id \"node_2\" does not match surface node id \"node_1\"",
 		},
 		{
 			name: "gradient type mismatch",
@@ -664,6 +675,7 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 					Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "g"}},
 				},
 			},
+			wantErrContains: "aggregated gradient surface type",
 		},
 		{
 			name: "aggregated gradients are empty",
@@ -679,14 +691,15 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 					Type:      astructure.SurfaceTypeInstruction,
 				},
 			},
+			wantErrContains: "aggregated gradients are empty",
 		},
 	}
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			rsp, err := oz.Optimize(context.Background(), testCase.request)
-
 			assert.Error(t, err)
+			assert.ErrorContains(t, err, testCase.wantErrContains)
 			assert.Nil(t, rsp)
 		})
 	}
