@@ -407,6 +407,14 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 			errContain: `event "baseline_validation" payload is invalid`,
 		},
 		{
+			name: "run-level event uses non-zero round",
+			event: &promptiterengine.Event{
+				Kind:  promptiterengine.EventKindBaselineValidation,
+				Round: 1,
+			},
+			errContain: `event "baseline_validation" must use round 0, got 1`,
+		},
+		{
 			name: "invalid train payload",
 			event: &promptiterengine.Event{
 				Kind:    promptiterengine.EventKindRoundTrainEvaluation,
@@ -414,6 +422,14 @@ func TestRunObserverRejectsInvalidEvents(t *testing.T) {
 				Payload: "invalid",
 			},
 			errContain: `event "round_train_evaluation" payload is invalid`,
+		},
+		{
+			name: "round event uses non-positive round",
+			event: &promptiterengine.Event{
+				Kind:  promptiterengine.EventKindRoundStarted,
+				Round: 0,
+			},
+			errContain: `event "round_started" must use round >= 1, got 0`,
 		},
 		{
 			name: "invalid losses payload",

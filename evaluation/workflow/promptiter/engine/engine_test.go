@@ -11,7 +11,9 @@ package engine
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/provider"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -541,7 +544,7 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 		optimizerInstance,
 	)
 	assert.NoError(t, err)
-	var observedKinds []EventKind
+	var observedEvents []Event
 	result, err := engineInstance.Run(context.Background(), &RunRequest{
 		TrainEvalSetIDs:      []string{"train"},
 		ValidationEvalSetIDs: []string{"validation"},
@@ -555,25 +558,46 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	}, WithObserver(func(ctx context.Context, event *Event) error {
 		_ = ctx
 		if assert.NotNil(t, event) {
-			observedKinds = append(observedKinds, event.Kind)
+			observedEvents = append(observedEvents, *event)
 		}
 		return nil
 	}))
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, []EventKind{
-		EventKindStructureSnapshot,
-		EventKindBaselineValidation,
-		EventKindRoundStarted,
-		EventKindRoundTrainEvaluation,
-		EventKindRoundLosses,
-		EventKindRoundBackward,
-		EventKindRoundAggregation,
-		EventKindRoundPatchSet,
-		EventKindRoundOutputProfile,
-		EventKindRoundValidation,
-		EventKindRoundCompleted,
-	}, observedKinds)
+	require.Len(t, observedEvents, 11)
+	assert.Equal(t, EventKindStructureSnapshot, observedEvents[0].Kind)
+	assert.Zero(t, observedEvents[0].Round)
+	assert.IsType(t, &astructure.Snapshot{}, observedEvents[0].Payload)
+	assert.Equal(t, EventKindBaselineValidation, observedEvents[1].Kind)
+	assert.Zero(t, observedEvents[1].Round)
+	assert.IsType(t, &EvaluationResult{}, observedEvents[1].Payload)
+	assert.Equal(t, EventKindRoundStarted, observedEvents[2].Kind)
+	assert.Equal(t, 1, observedEvents[2].Round)
+	assert.Nil(t, observedEvents[2].Payload)
+	assert.Equal(t, EventKindRoundTrainEvaluation, observedEvents[3].Kind)
+	assert.Equal(t, 1, observedEvents[3].Round)
+	assert.IsType(t, &EvaluationResult{}, observedEvents[3].Payload)
+	assert.Equal(t, EventKindRoundLosses, observedEvents[4].Kind)
+	assert.Equal(t, 1, observedEvents[4].Round)
+	assert.IsType(t, []promptiter.CaseLoss{}, observedEvents[4].Payload)
+	assert.Equal(t, EventKindRoundBackward, observedEvents[5].Kind)
+	assert.Equal(t, 1, observedEvents[5].Round)
+	assert.IsType(t, &BackwardResult{}, observedEvents[5].Payload)
+	assert.Equal(t, EventKindRoundAggregation, observedEvents[6].Kind)
+	assert.Equal(t, 1, observedEvents[6].Round)
+	assert.IsType(t, &AggregationResult{}, observedEvents[6].Payload)
+	assert.Equal(t, EventKindRoundPatchSet, observedEvents[7].Kind)
+	assert.Equal(t, 1, observedEvents[7].Round)
+	assert.IsType(t, &promptiter.PatchSet{}, observedEvents[7].Payload)
+	assert.Equal(t, EventKindRoundOutputProfile, observedEvents[8].Kind)
+	assert.Equal(t, 1, observedEvents[8].Round)
+	assert.IsType(t, &promptiter.Profile{}, observedEvents[8].Payload)
+	assert.Equal(t, EventKindRoundValidation, observedEvents[9].Kind)
+	assert.Equal(t, 1, observedEvents[9].Round)
+	assert.IsType(t, &EvaluationResult{}, observedEvents[9].Payload)
+	assert.Equal(t, EventKindRoundCompleted, observedEvents[10].Kind)
+	assert.Equal(t, 1, observedEvents[10].Round)
+	assert.IsType(t, &RoundCompleted{}, observedEvents[10].Payload)
 }
 
 func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
@@ -829,8 +853,8 @@ func TestEvaluateValidatesRequests(t *testing.T) {
 func TestBuildEvaluationCallOptionsUsesConfiguredRunnersAndFlags(t *testing.T) {
 	structure, err := newStructureState(testStructureSnapshot(t))
 	require.NoError(t, err)
-	teacher := stubRunner{}
-	judge := stubRunner{}
+	teacher := &stubRunner{}
+	judge := &stubRunner{}
 	options, buildErr := buildEvaluationCallOptions(structure, &EvaluationRequest{
 		EvalSetIDs: []string{"validation"},
 		Teacher:    teacher,
@@ -842,7 +866,23 @@ func TestBuildEvaluationCallOptionsUsesConfiguredRunnersAndFlags(t *testing.T) {
 		},
 	})
 	require.NoError(t, buildErr)
-	assert.Len(t, options, 8)
+	agentEvaluator, newErr := evaluation.New("promptiter-test", &stubRunner{}, options...)
+	require.NoError(t, newErr)
+	t.Cleanup(func() {
+		require.NoError(t, agentEvaluator.Close())
+	})
+	assert.Same(t, teacher, readPrivateField[runner.Runner](t, agentEvaluator, "expectedRunner"))
+	assert.Same(t, judge, readPrivateField[runner.Runner](t, agentEvaluator, "judgeRunner"))
+	assert.Equal(t, 1, readPrivateField[int](t, agentEvaluator, "numRuns"))
+	parallelism := readPrivateField[*int](t, agentEvaluator, "evalCaseParallelism")
+	require.NotNil(t, parallelism)
+	assert.Equal(t, 3, *parallelism)
+	parallelInferenceEnabled := readPrivateField[*bool](t, agentEvaluator, "evalCaseParallelInferenceEnabled")
+	require.NotNil(t, parallelInferenceEnabled)
+	assert.True(t, *parallelInferenceEnabled)
+	parallelEvaluationEnabled := readPrivateField[*bool](t, agentEvaluator, "evalCaseParallelEvaluationEnabled")
+	require.NotNil(t, parallelEvaluationEnabled)
+	assert.True(t, *parallelEvaluationEnabled)
 }
 
 func TestBuildEvaluationCallOptionsRejectsInvalidRequest(t *testing.T) {
@@ -2252,14 +2292,16 @@ func TestOptimizeHelpersAndLossValidation(t *testing.T) {
 	}, targetSurfaceSet{testSurfaceID: {}})
 	assert.Nil(t, patchSet)
 	assert.EqualError(t, err, `optimize surface "node_1#instruction": boom`)
-	clonedGradient := cloneAggregatedGradient(promptiter.AggregatedSurfaceGradient{
+	originalGradient := promptiter.AggregatedSurfaceGradient{
 		SurfaceID: testSurfaceID,
 		Gradients: []promptiter.SurfaceGradient{
 			{Gradient: "g1"},
 		},
-	})
+	}
+	clonedGradient := cloneAggregatedGradient(originalGradient)
 	clonedGradient.Gradients[0].Gradient = "mutated"
 	assert.Equal(t, "mutated", clonedGradient.Gradients[0].Gradient)
+	assert.Equal(t, "g1", originalGradient.Gradients[0].Gradient)
 	losses, err := (&engine{}).loss(nil)
 	assert.Nil(t, losses)
 	assert.EqualError(t, err, "evaluation result is nil")
@@ -2811,4 +2853,14 @@ func profileText(profile *promptiter.Profile) string {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func readPrivateField[T any](t *testing.T, target any, fieldName string) T {
+	t.Helper()
+	value := reflect.ValueOf(target)
+	require.Equal(t, reflect.Ptr, value.Kind())
+	value = value.Elem()
+	field := value.FieldByName(fieldName)
+	require.True(t, field.IsValid())
+	return reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface().(T)
 }

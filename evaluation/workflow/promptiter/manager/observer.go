@@ -29,6 +29,9 @@ func (o *observer) append(ctx context.Context, event *engine.Event) error {
 	if event == nil {
 		return errors.New("promptiter event is nil")
 	}
+	if err := validateEventRound(event); err != nil {
+		return err
+	}
 	if err := o.applyEvent(event); err != nil {
 		return err
 	}
@@ -177,6 +180,28 @@ func (o *observer) applyRoundCompleted(event *engine.Event) error {
 
 func invalidEventPayloadError(kind engine.EventKind) error {
 	return fmt.Errorf("event %q payload is invalid", kind)
+}
+
+func validateEventRound(event *engine.Event) error {
+	switch event.Kind {
+	case engine.EventKindStructureSnapshot, engine.EventKindBaselineValidation:
+		if event.Round != 0 {
+			return fmt.Errorf("event %q must use round 0, got %d", event.Kind, event.Round)
+		}
+	case engine.EventKindRoundStarted,
+		engine.EventKindRoundTrainEvaluation,
+		engine.EventKindRoundLosses,
+		engine.EventKindRoundBackward,
+		engine.EventKindRoundAggregation,
+		engine.EventKindRoundPatchSet,
+		engine.EventKindRoundOutputProfile,
+		engine.EventKindRoundValidation,
+		engine.EventKindRoundCompleted:
+		if event.Round <= 0 {
+			return fmt.Errorf("event %q must use round >= 1, got %d", event.Kind, event.Round)
+		}
+	}
+	return nil
 }
 
 func (o *observer) ensureRound(roundNumber int) *engine.RoundResult {
