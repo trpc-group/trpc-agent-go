@@ -11,5 +11,10 @@ import "trpc.group/trpc-go/trpc-agent-go/model"
 
 // ToResponseError converts an error to a ResponseError.
 var ToResponseError = func(err error) *model.ResponseError {
-	return model.ResponseErrorFromError(err, "")
+	respErr := model.ResponseErrorFromError(err, "")
+	if respErr == nil {
+		return nil
+	}
+	respErr.Message = err.Error()
+	return respErr
 }
