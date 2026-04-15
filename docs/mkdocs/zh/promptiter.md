@@ -500,14 +500,14 @@ type StopDecision struct {
 }
 ```
 
-常用初始值如下所示：
+下面这些参数通常作为示例推荐值使用，并非框架强制默认值；实际行为仍以 API 与实现为准：
 
 - `MinScoreGain = 0.005`
 - `MaxRounds = 4`
 - `MaxRoundsWithoutAcceptance = 5`
 - `TargetScore = 1.0`
 
-默认语义如下：
+这些示例推荐值通常对应以下运行语义：
 
 - 当验证集分数提升达到 `MinScoreGain` 时，当前轮改动才会被接受。
 - 当达到 `MaxRounds`、连续多轮未接受，或已达到 `TargetScore` 时，本次运行停止。
@@ -908,17 +908,17 @@ return http.ListenAndServe(":8080", server.Handler())
 
 #### 路由
 
-当前接口包括：
+当 `WithBasePath("/promptiter/v1/apps")` 与 `WithAppName(appName)` 同时生效时，完整接口路径如下：
 
-- `GET /structure`
-- `POST /runs`
-- `POST /async-runs`
-- `GET /async-runs/{run_id}`
-- `POST /async-runs/{run_id}/cancel`
+- `GET /promptiter/v1/apps/{appName}/structure`
+- `POST /promptiter/v1/apps/{appName}/runs`
+- `POST /promptiter/v1/apps/{appName}/async-runs`
+- `GET /promptiter/v1/apps/{appName}/async-runs/{run_id}`
+- `POST /promptiter/v1/apps/{appName}/async-runs/{run_id}/cancel`
 
 推荐的调用顺序如下：
 
-1. 通过 `/structure` 获取结构快照和目标可编辑位置。
+1. 通过 `/promptiter/v1/apps/{appName}/structure` 获取结构快照和目标可编辑位置。
 2. 构造 `RunRequest` 并写入 `TargetSurfaceIDs`。
-3. 简单调用场景使用阻塞 `POST /runs`。
-4. 需要生命周期管理时使用异步 `POST /async-runs` 与 `GET /async-runs/{run_id}`。
+3. 简单调用场景使用阻塞 `POST /promptiter/v1/apps/{appName}/runs`。
+4. 需要生命周期管理时使用异步 `POST /promptiter/v1/apps/{appName}/async-runs` 与 `GET /promptiter/v1/apps/{appName}/async-runs/{run_id}`。

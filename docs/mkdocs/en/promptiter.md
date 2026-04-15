@@ -500,14 +500,14 @@ type StopDecision struct {
 }
 ```
 
-Common initial values are:
+The values below are example starting points rather than framework-enforced defaults. The actual behavior is still defined by the API and implementation:
 
 - `MinScoreGain = 0.005`
 - `MaxRounds = 4`
 - `MaxRoundsWithoutAcceptance = 5`
 - `TargetScore = 1.0`
 
-Default semantics are:
+These example values usually correspond to the following runtime semantics:
 
 - The current round is accepted only when the validation score gain reaches `MinScoreGain`.
 - The run stops when it reaches `MaxRounds`, when too many consecutive rounds are not accepted, or when `TargetScore` is reached.
@@ -912,17 +912,17 @@ return http.ListenAndServe(":8080", server.Handler())
 
 #### Routes
 
-The current API surface includes:
+When `WithBasePath("/promptiter/v1/apps")` and `WithAppName(appName)` are used together, the effective routes are:
 
-- `GET /structure`
-- `POST /runs`
-- `POST /async-runs`
-- `GET /async-runs/{run_id}`
-- `POST /async-runs/{run_id}/cancel`
+- `GET /promptiter/v1/apps/{appName}/structure`
+- `POST /promptiter/v1/apps/{appName}/runs`
+- `POST /promptiter/v1/apps/{appName}/async-runs`
+- `GET /promptiter/v1/apps/{appName}/async-runs/{run_id}`
+- `POST /promptiter/v1/apps/{appName}/async-runs/{run_id}/cancel`
 
 The recommended call order is:
 
-1. Use `/structure` to fetch the structure snapshot and target editable positions.
+1. Use `/promptiter/v1/apps/{appName}/structure` to fetch the structure snapshot and target editable positions.
 2. Construct `RunRequest` and write `TargetSurfaceIDs`.
-3. For simple scenarios, use blocking `POST /runs`.
-4. When lifecycle management is needed, use asynchronous `POST /async-runs` and `GET /async-runs/{run_id}`.
+3. For simple scenarios, use blocking `POST /promptiter/v1/apps/{appName}/runs`.
+4. When lifecycle management is needed, use asynchronous `POST /promptiter/v1/apps/{appName}/async-runs` and `GET /promptiter/v1/apps/{appName}/async-runs/{run_id}`.
