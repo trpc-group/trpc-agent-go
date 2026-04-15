@@ -1093,3 +1093,28 @@ The effect is shown below. For a full example, refer to
 [examples/agui/server/report](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report). The corresponding client implementation lives in [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 
 ![report](../assets/gif/agui/report.gif)
+
+### Streaming Tool Execution Results
+
+When a tool runs on the server and the frontend needs to show execution progress continuously, it is helpful to separate the event stream into three layers. `TOOL_CALL_START`, `TOOL_CALL_ARGS`, and `TOOL_CALL_END` describe the tool invocation itself. `ACTIVITY_SNAPSHOT` and `ACTIVITY_DELTA` carry progress, phases, or intermediate status during execution. `TOOL_CALL_RESULT` remains the final tool result. This gives the frontend a clear boundary between in-progress state and the completed result, while keeping Message Snapshot replay aligned with the standard tool-result semantics.
+
+A typical event stream looks like this:
+
+```text
+RUN_STARTED
+→ TOOL_CALL_START
+→ TOOL_CALL_ARGS
+→ TOOL_CALL_END
+→ ACTIVITY_SNAPSHOT
+→ ACTIVITY_DELTA
+→ ACTIVITY_DELTA
+→ ...
+→ ACTIVITY_DELTA   # completed
+→ TOOL_CALL_RESULT
+→ TEXT_MESSAGE_*
+→ RUN_FINISHED
+```
+
+In practice, this is usually implemented by wrapping the default Translator. The default Translator continues to handle the standard `TOOL_CALL_*` events and the final `TOOL_CALL_RESULT`. The custom layer only rewrites intermediate tool-result updates. A robust approach is to iterate over the `innerEvents` returned by the default Translator and examine each event in order. Non-target events pass through unchanged. A target `ToolCallResultEvent` can be rewritten into `ACTIVITY_SNAPSHOT` or `ACTIVITY_DELTA` while the tool is still running. When the tool finishes, a completed `ACTIVITY_DELTA` can be inserted immediately before the original `TOOL_CALL_RESULT`. This keeps the default behavior intact for text events, graph activity events, and other tool events.
+
+For a complete example, see [examples/agui/server/streamtool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/streamtool). The example uses a minimal `StreamableTool` that emits incrementing numbers and a custom Translator that turns partial `tool.response` updates into `tool.execution` activity events while preserving the final `TOOL_CALL_RESULT`.
