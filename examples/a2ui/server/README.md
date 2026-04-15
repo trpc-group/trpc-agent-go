@@ -1,43 +1,27 @@
-# A2UI Server
+# A2UI Server Examples
 
-This folder provides the server side of the A2UI example.
+This directory contains the server-side A2UI examples.
 
-## Contents
+## Layout
 
-- `main.go`: AG-UI server bootstrap and translator wiring.
-- `agent.go`: LLM agent registration, tool configuration, and A2UI planner setup.
+- `default/`: basic A2UI server bootstrap with one planner-driven agent.
+- `sbti/`: graph-based SBTI server example built from a director agent and an A2UI renderer agent.
 
-## What this server does
+## Run examples
 
-- Creates an in-memory session service for AG-UI run state.
-- Builds an AG-UI runner with A2UI translator enabled.
-- Exposes HTTP endpoint:
-  - default path: `/a2ui`
-  - default address: `127.0.0.1:8080`
-- Forwards control-type AG-UI events (`RUN_*`) by default while dropping unsupported non-text events unless custom pass-through options are introduced by callers.
-- Keeps error logs only in this example to avoid noisy request-level output.
-
-## Run the server directly
-
-From repository root:
+Default server example:
 
 ```bash
-cd examples/a2ui/server
+cd examples/a2ui/server/default
 go run .
 ```
 
-The default endpoint is:
+SBTI server example:
 
-```text
-http://127.0.0.1:8080/a2ui
+```bash
+cd examples/a2ui/server/sbti
+go run .
 ```
-
-## Runtime flags
-
-- `-model`: model name, defaults to `gpt-5.4`
-- `-stream`: stream mode, defaults to `true`
-- `-address`: listen address, defaults to `127.0.0.1:8080`
-- `-path`: HTTP path, defaults to `/a2ui`
 
 ## Related docs
 
