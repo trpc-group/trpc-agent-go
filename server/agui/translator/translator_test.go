@@ -17,6 +17,7 @@ import (
 	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	aguitypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
@@ -864,7 +865,9 @@ func TestTranslateReasoningStreamEndsOnContent(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, events, 3)
 	assert.IsType(t, (*aguievents.ReasoningStartEvent)(nil), events[0])
-	assert.IsType(t, (*aguievents.ReasoningMessageStartEvent)(nil), events[1])
+	start, ok := events[1].(*aguievents.ReasoningMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, string(aguitypes.RoleReasoning), start.Role)
 	assert.IsType(t, (*aguievents.ReasoningMessageContentEvent)(nil), events[2])
 	assert.True(t, tr.receivingReasoning)
 	assert.Equal(t, "msg-1", tr.lastReasoningMessageID)
@@ -936,7 +939,9 @@ func TestTranslateReasoningNonStreamPrecedesText(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, events, 8)
 	assert.IsType(t, (*aguievents.ReasoningStartEvent)(nil), events[0])
-	assert.IsType(t, (*aguievents.ReasoningMessageStartEvent)(nil), events[1])
+	start, ok := events[1].(*aguievents.ReasoningMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, string(aguitypes.RoleReasoning), start.Role)
 	assert.IsType(t, (*aguievents.ReasoningMessageContentEvent)(nil), events[2])
 	assert.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), events[3])
 	assert.IsType(t, (*aguievents.ReasoningEndEvent)(nil), events[4])
