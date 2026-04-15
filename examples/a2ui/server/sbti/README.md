@@ -62,12 +62,12 @@ If your platform only exposes agent-node level configuration, this example maps 
 In platform terms, the split is:
 
 - `director.model`: use the logic model that handles state reconstruction and score matching. Local runtime defaults to `gpt-5.2`.
-- `director.instruction`: `server/assets/director_instruction.txt`.
-- `director.output schema`: `server/assets/director_output_schema.json`.
+- `director.instruction`: `assets/director_instruction.txt`.
+- `director.output schema`: `assets/director_output_schema.json`.
 - `director.tool`: none are required.
 - `director.skill`: optional, if you want to package the rulebook externally.
 - `renderer.model`: use the rendering-quality model. Local runtime defaults to `gpt-5.2`.
-- `renderer.instruction`: `server/assets/renderer_instruction.txt`. This shared file expects the previous director output to be injected through `{{input.output_text}}`. The local repo runtime rewrites that placeholder to its internal output-key placeholder automatically.
+- `renderer.instruction`: `assets/renderer_instruction.txt`. This shared file expects the previous director output to be injected through `{{input.output_text}}`. The local repo runtime rewrites that placeholder to its internal output-key placeholder automatically.
 - `renderer.planner`: use `a2ui` in the local repo runtime.
 - `renderer.state input`: inject the previous director output JSON into `{{input.output_text}}` when the platform runs the renderer node.
 - `renderer.planner fallback`: if your platform does not support `planner/a2ui`, you need to provide an equivalent A2UI planner instruction from your own platform integration. This example no longer ships a separate fallback planner asset.
