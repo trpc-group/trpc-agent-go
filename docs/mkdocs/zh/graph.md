@@ -3559,6 +3559,8 @@ API：
 - `graph.WithCallOptions(...)`：把 call options 绑定到本次运行。
 - `graph.WithCallGenerationConfigPatch(...)`：在当前图作用域内，对 LLM 节点的
   `model.GenerationConfig` 做“按字段覆盖”。
+- `graph.WithCallResumeStateOverrideKeys(keys...)`：为恢复阶段指定
+  `RuntimeState` 覆盖 key 集合；这些 key 在当前图作用域恢复时可覆盖 checkpoint 中的同名字段。
 - `graph.DesignateNode(nodeID, ...)`：把覆盖精确打到当前图中的某个节点。
   - 对 LLM 节点：影响该节点的模型调用。
   - 对 Agent 节点（子图）：影响子 Invocation，因此会成为子图的默认覆盖。
@@ -3602,6 +3604,32 @@ ch, err := r.Run(ctx, userID, sessionID, msg, runOpts)
 ```
 
 可直接运行示例：`examples/graph/call_options_generation_config`。
+
+恢复覆盖 key 示例：
+
+```go
+runOpts := graph.WithCallOptions(
+    graph.WithCallResumeStateOverrideKeys("request_id", "tenant_config"),
+    graph.DesignateNode("child_agent",
+        // child_agent 会继承父图的覆盖 key，再追加自己的 key。
+        graph.WithCallResumeStateOverrideKeys("child_only_key"),
+    ),
+)
+
+eventCh, err := r.Run(ctx, userID, sessionID,
+    model.NewUserMessage("resume"),
+    agent.WithRuntimeState(map[string]any{
+        graph.CfgKeyLineageID:    lineageID,
+        graph.CfgKeyCheckpointID: checkpointID,
+        "request_id":            requestID,
+        "tenant_config":         tenantConfig,
+        "child_only_key":        childValue,
+    }),
+    runOpts,
+)
+```
+
+`child_agent` 会看到 `request_id`、`tenant_config` 和 `child_only_key`；如果不配置覆盖 key，恢复时仍然是 checkpoint 优先。这个能力适合那些“每次恢复都应以本次请求值为准”的请求级参数，同时不影响其他 checkpoint state。
 
 #### Graph 中的 ToolSet 与 Agent 的区别
 
@@ -3909,7 +3937,7 @@ _ = cm.DeleteLineage(ctx, lineageID)
 
 从检查点恢复可以做“时间旅行”（回到任意 checkpoint 继续跑）。在 HITL 和调试场景里，你通常还需要：在某个 checkpoint 上把 state 改掉，然后从这个点继续跑。
 
-关键点：恢复时，执行器会先用 checkpoint 的 state 还原；`runtime_state` 不会覆盖 checkpoint 里已有的 key，只会补齐缺失且非内部的 key。要改“已有 key”，需要写一个新的 checkpoint。
+关键点：恢复时，执行器会先用 checkpoint 的 state 还原。默认情况下，`runtime_state` 不会覆盖 checkpoint 里已有的 key，只会补齐缺失且非内部的 key。若只是想在某次恢复时覆盖少量已有 key，可以使用 `graph.WithCallOptions(graph.WithCallResumeStateOverrideKeys(...))`；如果要真正修改 checkpoint 里的 state，仍然应该写一个新的 checkpoint。
 
 使用 `graph.TimeTravel`：
 
