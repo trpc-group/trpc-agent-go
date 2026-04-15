@@ -681,6 +681,63 @@ func TestBackwardRejectsEmptyRunnerIdentity(t *testing.T) {
 	})
 }
 
+func TestBackwardRejectsMissingRuntimeDependencies(t *testing.T) {
+	request := newInstructionRequest()
+	_, err := (&backwarder{}).Backward(context.Background(), request)
+	assert.EqualError(t, err, "runner is nil")
+	_, err = (&backwarder{runner: &fakeRunner{}}).Backward(context.Background(), request)
+	assert.EqualError(t, err, "message builder is nil")
+	_, err = (&backwarder{
+		runner:         &fakeRunner{},
+		messageBuilder: defaultMessageBuilder(),
+	}).Backward(context.Background(), request)
+	assert.EqualError(t, err, "user id supplier is nil")
+	_, err = (&backwarder{
+		runner:         &fakeRunner{},
+		messageBuilder: defaultMessageBuilder(),
+		userIDSupplier: defaultUserIDSupplier(),
+	}).Backward(context.Background(), request)
+	assert.EqualError(t, err, "session id supplier is nil")
+}
+
+func TestBackwardRejectsMessageBuildAndEmptyDecodedResult(t *testing.T) {
+	t.Run("message builder error", func(t *testing.T) {
+		bw, err := New(
+			context.Background(),
+			&fakeRunner{},
+			WithMessageBuilder(func(ctx context.Context, request *Request) (*model.Message, error) {
+				_ = ctx
+				_ = request
+				return nil, errors.New("boom")
+			}),
+		)
+		assert.NoError(t, err)
+		result, runErr := bw.Backward(context.Background(), newInstructionRequest())
+		assert.Nil(t, result)
+		assert.EqualError(t, runErr, "build backward message: boom")
+	})
+	t.Run("empty decoded result", func(t *testing.T) {
+		bw, err := New(context.Background(), &fakeRunner{
+			events: []*event.Event{
+				event.NewResponseEvent(
+					"invocation-id",
+					"backwarder",
+					&model.Response{
+						Done: true,
+						Choices: []model.Choice{
+							{Message: model.NewAssistantMessage("null")},
+						},
+					},
+				),
+			},
+		})
+		assert.NoError(t, err)
+		result, runErr := bw.Backward(context.Background(), newInstructionRequest())
+		assert.Nil(t, result)
+		assert.EqualError(t, runErr, "sanitize backward result: backward result is empty")
+	})
+}
+
 func TestBackwardRejectsInvalidRequests(t *testing.T) {
 	bw, err := New(context.Background(), &fakeRunner{})
 	assert.NoError(t, err)
@@ -900,6 +957,105 @@ func TestNormalizeRequestAndSanitizeBackwardResult(t *testing.T) {
 	assert.Len(t, result.Upstream, 1)
 	assert.Equal(t, "pred_1", result.Upstream[0].PredecessorStepID)
 	assert.Equal(t, request.StepID, result.Upstream[0].Gradients[0].FromStepID)
+	result, err = sanitizeBackwardResult(func() *Request {
+		req := newInstructionRequest()
+		req.Surfaces = append(req.Surfaces, req.Surfaces[0])
+		return req
+	}(), &Result{
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "surf_1", Gradient: "keep this"},
+		},
+	})
+	assert.Nil(t, result)
+	assert.EqualError(t, err, `build surface index: duplicate surface id "surf_1"`)
+	result, err = sanitizeBackwardResult(func() *Request {
+		req := newInstructionRequest()
+		req.AllowedGradientSurfaceIDs = []string{"missing"}
+		return req
+	}(), &Result{
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "surf_1", Gradient: "keep this"},
+		},
+	})
+	assert.Nil(t, result)
+	assert.EqualError(t, err, `build allowed gradient surface index: allowed gradient surface id "missing" is not part of request surfaces`)
+	result, err = sanitizeBackwardResult(func() *Request {
+		req := newInstructionRequest()
+		req.Predecessors = []Predecessor{{StepID: "pred_1"}}
+		return req
+	}(), &Result{
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "surf_1", Gradient: "keep this"},
+		},
+	})
+	assert.Nil(t, result)
+	assert.EqualError(t, err, "build predecessor index: predecessor node id is empty")
+	result, err = sanitizeBackwardResult(request, &Result{
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "surf_1", EvalSetID: "other", Gradient: "keep this"},
+		},
+	})
+	assert.Nil(t, result)
+	assert.EqualError(t, err, `sanitize surface gradient: gradient eval set id "other" does not match request eval set id "set_a"`)
+	result, err = sanitizeBackwardResult(request, &Result{
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "surf_1", EvalCaseID: "other", Gradient: "keep this"},
+		},
+	})
+	assert.Nil(t, result)
+	assert.EqualError(t, err, `sanitize surface gradient: gradient eval case id "other" does not match request eval case id "case_1"`)
+	result, err = sanitizeBackwardResult(request, &Result{
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "surf_1", StepID: "other", Gradient: "keep this"},
+		},
+	})
+	assert.Nil(t, result)
+	assert.EqualError(t, err, `sanitize surface gradient: gradient step id "other" does not match request step id "step_1"`)
+	result, err = sanitizeBackwardResult(request, &Result{
+		Upstream: []Propagation{
+			{
+				PredecessorStepID: "pred_1",
+				Gradients: []GradientPacket{
+					{FromStepID: "other", Gradient: "send upstream"},
+				},
+			},
+		},
+	})
+	assert.Nil(t, result)
+	assert.EqualError(t, err, `sanitize propagation: propagation packet from step id "other" does not match request step id "step_1"`)
+	result, err = sanitizeBackwardResult(request, &Result{
+		Upstream: []Propagation{
+			{
+				PredecessorStepID: "pred_1",
+				Gradients: []GradientPacket{
+					{Gradient: "send upstream"},
+				},
+			},
+			{
+				PredecessorStepID: "pred_1",
+				Gradients: []GradientPacket{
+					{Gradient: "send upstream again"},
+				},
+			},
+		},
+	})
+	assert.Nil(t, result)
+	assert.EqualError(t, err, `duplicate propagation for predecessor step id "pred_1"`)
+	result, err = sanitizeBackwardResult(request, &Result{
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "surf_1", Gradient: ""},
+		},
+		Upstream: []Propagation{
+			{
+				PredecessorStepID: "pred_1",
+				Gradients: []GradientPacket{
+					{Gradient: ""},
+				},
+			},
+		},
+	})
+	assert.Nil(t, result)
+	assert.EqualError(t, err, "backward result is empty")
 }
 
 func TestSanitizeHelpers(t *testing.T) {
@@ -937,6 +1093,53 @@ func TestSanitizeHelpers(t *testing.T) {
 	}, "missing")
 	assert.Empty(t, stepID)
 	assert.EqualError(t, err, `propagation predecessor step id "missing" is not part of request predecessors`)
+	_, keep, err := sanitizeSurfaceGradient(newInstructionRequest(), map[string]astructure.Surface{
+		"surf_1": {SurfaceID: "surf_1"},
+	}, promptiter.SurfaceGradient{})
+	assert.NoError(t, err)
+	assert.False(t, keep)
+	_, keep, err = sanitizePropagation(newInstructionRequest(), map[string]Predecessor{
+		"pred_1": {StepID: "pred_1", NodeID: "node_pred"},
+	}, Propagation{
+		PredecessorStepID: "pred_1",
+		Gradients: []GradientPacket{
+			{Gradient: ""},
+		},
+	})
+	assert.NoError(t, err)
+	assert.False(t, keep)
+	index, err := buildPredecessorIndex([]Predecessor{
+		{StepID: "pred_1", NodeID: "node_pred"},
+		{StepID: "pred_1", NodeID: "node_pred"},
+	})
+	assert.Nil(t, index)
+	assert.EqualError(t, err, `duplicate predecessor step id "pred_1"`)
+	normalized, err := normalizeAllowedGradientSurfaceIDs(func() *Request {
+		req := newInstructionRequest()
+		req.AllowedGradientSurfaceIDs = []string{"surf_1", "surf_1"}
+		return req
+	}(), map[string]astructure.Surface{
+		"surf_1": {SurfaceID: "surf_1"},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"surf_1"}, normalized)
+	normalized, err = normalizeAllowedGradientSurfaceIDs(func() *Request {
+		req := newInstructionRequest()
+		req.AllowedGradientSurfaceIDs = []string{""}
+		return req
+	}(), map[string]astructure.Surface{
+		"surf_1": {SurfaceID: "surf_1"},
+	})
+	assert.Nil(t, normalized)
+	assert.EqualError(t, err, "allowed gradient surface id is empty")
+	indexedSurfaces, err := buildAllowedGradientSurfaceIndex(&Request{
+		Surfaces:                  []astructure.Surface{{SurfaceID: "surf_1"}},
+		AllowedGradientSurfaceIDs: []string{"missing"},
+	}, map[string]astructure.Surface{
+		"surf_1": {SurfaceID: "surf_1"},
+	})
+	assert.Nil(t, indexedSurfaces)
+	assert.EqualError(t, err, `allowed gradient surface id "missing" is not part of request surfaces`)
 }
 
 func TestRequestHelpersHandleNilAndDeduplicate(t *testing.T) {

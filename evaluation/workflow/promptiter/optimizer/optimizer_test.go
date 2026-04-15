@@ -451,6 +451,63 @@ func TestOptimizeRejectsEmptyRunnerIdentity(t *testing.T) {
 	})
 }
 
+func TestOptimizeRejectsMissingRuntimeDependencies(t *testing.T) {
+	request := newInstructionRequest("current instruction")
+	_, err := (&optimizer{}).Optimize(context.Background(), request)
+	assert.EqualError(t, err, "runner is nil")
+	_, err = (&optimizer{runner: &fakeRunner{}}).Optimize(context.Background(), request)
+	assert.EqualError(t, err, "message builder is nil")
+	_, err = (&optimizer{
+		runner:         &fakeRunner{},
+		messageBuilder: defaultMessageBuilder(),
+	}).Optimize(context.Background(), request)
+	assert.EqualError(t, err, "user id supplier is nil")
+	_, err = (&optimizer{
+		runner:         &fakeRunner{},
+		messageBuilder: defaultMessageBuilder(),
+		userIDSupplier: defaultUserIDSupplier(),
+	}).Optimize(context.Background(), request)
+	assert.EqualError(t, err, "session id supplier is nil")
+}
+
+func TestOptimizeRejectsMessageBuildAndEmptyDecodedPatch(t *testing.T) {
+	t.Run("message builder error", func(t *testing.T) {
+		oz, err := New(
+			context.Background(),
+			&fakeRunner{},
+			WithMessageBuilder(func(ctx context.Context, request *Request) (*model.Message, error) {
+				_ = ctx
+				_ = request
+				return nil, errors.New("boom")
+			}),
+		)
+		assert.NoError(t, err)
+		result, runErr := oz.Optimize(context.Background(), newInstructionRequest("current instruction"))
+		assert.Nil(t, result)
+		assert.EqualError(t, runErr, "build optimization message: boom")
+	})
+	t.Run("empty decoded patch", func(t *testing.T) {
+		oz, err := New(context.Background(), &fakeRunner{
+			events: []*event.Event{
+				event.NewResponseEvent(
+					"invocation-id",
+					"optimizer",
+					&model.Response{
+						Done: true,
+						Choices: []model.Choice{
+							{Message: model.NewAssistantMessage("null")},
+						},
+					},
+				),
+			},
+		})
+		assert.NoError(t, err)
+		result, runErr := oz.Optimize(context.Background(), newInstructionRequest("current instruction"))
+		assert.Nil(t, result)
+		assert.EqualError(t, runErr, "sanitize surface patch: patch reason is empty")
+	})
+}
+
 func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 	oz, err := New(context.Background(), &fakeRunner{})
 	assert.NoError(t, err)
@@ -633,6 +690,26 @@ func TestOptimizeRejectsInvalidRequests(t *testing.T) {
 			assert.Nil(t, rsp)
 		})
 	}
+}
+
+func TestSanitizeSurfacePatchValidationErrors(t *testing.T) {
+	patch, err := sanitizeSurfacePatch(nil, &promptiter.SurfacePatch{})
+	assert.Nil(t, patch)
+	assert.EqualError(t, err, "request is nil")
+	patch, err = sanitizeSurfacePatch(&Request{}, &promptiter.SurfacePatch{})
+	assert.Nil(t, patch)
+	assert.EqualError(t, err, "surface is nil")
+	patch, err = sanitizeSurfacePatch(newInstructionRequest("current instruction"), nil)
+	assert.Nil(t, patch)
+	assert.EqualError(t, err, "surface patch is nil")
+	patch, err = sanitizeSurfacePatch(newInstructionRequest("current instruction"), &promptiter.SurfacePatch{
+		Reason: "update",
+		Value: astructure.SurfaceValue{
+			Model: &astructure.ModelRef{Name: "gpt-test"},
+		},
+	})
+	assert.Nil(t, patch)
+	assert.EqualError(t, err, "sanitize patch value: text is nil")
 }
 
 func newInstructionRequest(currentText string) *Request {

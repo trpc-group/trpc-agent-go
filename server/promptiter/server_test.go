@@ -236,6 +236,15 @@ func TestHandleRunsRejectsInvalidRequest(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "run must not be nil")
 }
 
+func TestHandleRunsSupportsOptions(t *testing.T) {
+	srv := newTestServer(t)
+	req := httptest.NewRequest(http.MethodOptions, srv.RunsPath(), nil)
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	assert.Equal(t, "*", recorder.Header().Get(headerAccessControlOrigin))
+}
+
 func TestHandleRunsRejectsUnknownTargetSurfaceID(t *testing.T) {
 	srv := newTestServer(t)
 	body, err := json.Marshal(&RunRequest{
@@ -309,6 +318,36 @@ func TestHandleAsyncRunsRejectsInvalidMethodWhenManagerIsConfigured(t *testing.T
 	srv.Handler().ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusMethodNotAllowed, recorder.Code)
 	assert.Equal(t, http.MethodPost, recorder.Header().Get(headerAllow))
+}
+
+func TestHandleAsyncRunsSupportsOptionsAndMapsStartErrors(t *testing.T) {
+	srv := newTestServer(t,
+		WithManager(&fakeManager{
+			start: func(ctx context.Context, request *enginepkg.RunRequest) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = request
+				return nil, context.Canceled
+			},
+		}),
+	)
+	optionsReq := httptest.NewRequest(http.MethodOptions, srv.AsyncRunsPath(), nil)
+	optionsRecorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(optionsRecorder, optionsReq)
+	require.Equal(t, http.StatusNoContent, optionsRecorder.Code)
+	body, err := json.Marshal(&RunRequest{
+		Run: &enginepkg.RunRequest{
+			TrainEvalSetIDs:      []string{"train"},
+			ValidationEvalSetIDs: []string{"validation"},
+			TargetSurfaceIDs:     []string{"candidate#instruction"},
+			MaxRounds:            1,
+		},
+	})
+	require.NoError(t, err)
+	postReq := httptest.NewRequest(http.MethodPost, srv.AsyncRunsPath(), bytes.NewReader(body))
+	postRecorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(postRecorder, postReq)
+	require.Equal(t, http.StatusRequestTimeout, postRecorder.Code)
+	assert.Contains(t, postRecorder.Body.String(), context.Canceled.Error())
 }
 
 func TestHandleGetRunReturnsRun(t *testing.T) {
@@ -473,6 +512,10 @@ func TestHandleRunResourceNotFoundAndManagerErrors(t *testing.T) {
 	srv.Handler().ServeHTTP(cancelRecorder, cancelReq)
 	require.Equal(t, http.StatusGatewayTimeout, cancelRecorder.Code)
 	assert.Contains(t, cancelRecorder.Body.String(), context.DeadlineExceeded.Error())
+	missingReq := httptest.NewRequest(http.MethodGet, srv.AsyncRunsPath()+"/run_1/unknown", nil)
+	missingRecorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(missingRecorder, missingReq)
+	require.Equal(t, http.StatusNotFound, missingRecorder.Code)
 }
 
 func TestRedirectTrailingSlashToCanonicalPath(t *testing.T) {
@@ -502,6 +545,38 @@ func TestValidateTargetSurfaceIDs(t *testing.T) {
 		}),
 	)
 	assert.EqualError(t, nilStructureServer.validateTargetSurfaceIDs(context.Background(), []string{"candidate#instruction"}), "structure is nil")
+	describeErrServer := newTestServer(t,
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return nil, errors.New("boom")
+			},
+		}),
+	)
+	assert.EqualError(t, describeErrServer.validateTargetSurfaceIDs(context.Background(), []string{"candidate#instruction"}), "describe structure for target surface validation: boom")
+	unsupportedSurfaceServer := newTestServer(t,
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return &astructure.Snapshot{
+					StructureID: "struct_1",
+					EntryNodeID: "node_1",
+					Nodes: []astructure.Node{
+						{NodeID: "node_1", Name: "candidate", Kind: astructure.NodeKindLLM},
+					},
+					Surfaces: []astructure.Surface{
+						{
+							SurfaceID: "candidate#unsupported",
+							NodeID:    "node_1",
+							Type:      astructure.SurfaceType("unsupported"),
+						},
+					},
+				}, nil
+			},
+		}),
+	)
+	err = unsupportedSurfaceServer.validateTargetSurfaceIDs(context.Background(), []string{"candidate#unsupported"})
+	assert.EqualError(t, err, `target surface id "candidate#unsupported" is unknown`)
 }
 
 func TestStatusCodeFromError(t *testing.T) {
@@ -528,6 +603,11 @@ func TestRespondJSONWritesPayloadAndHandlesEncodeError(t *testing.T) {
 	require.Equal(t, http.StatusCreated, recorder.Code)
 	assert.Equal(t, contentTypeJSON, recorder.Header().Get(headerContentType))
 	assert.JSONEq(t, `{"status":"ok"}`, recorder.Body.String())
+	fallbackRecorder := httptest.NewRecorder()
+	srv.respondJSON(fallbackRecorder, req, http.StatusOK, map[string]any{"status": make(chan int)})
+	require.Equal(t, http.StatusInternalServerError, fallbackRecorder.Code)
+	assert.Equal(t, contentTypeJSON, fallbackRecorder.Header().Get(headerContentType))
+	assert.Contains(t, fallbackRecorder.Body.String(), "encode response")
 	srv.respondJSON(failingWriter{}, req, http.StatusOK, map[string]string{"status": "ok"})
 }
 

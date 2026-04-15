@@ -1748,6 +1748,14 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	state, err = newStructureState(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
+			{},
+		},
+	})
+	assert.Nil(t, state)
+	assert.EqualError(t, err, "node id is empty")
+	state, err = newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		Nodes: []astructure.Node{
 			{NodeID: "node_1"},
 			{NodeID: "node_1"},
 		},
@@ -1798,6 +1806,57 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, state)
 	assert.EqualError(t, err, `duplicate surface type "instruction" for node id "node_1"`)
+	state, err = newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "candidate#instruction",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
+					Text: stringPtr("prompt"),
+				},
+			},
+			{
+				SurfaceID: "candidate#instruction",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeModel,
+				Value: astructure.SurfaceValue{
+					Model: &astructure.ModelRef{Provider: "openai", Name: "gpt"},
+				},
+			},
+		},
+	})
+	assert.Nil(t, state)
+	assert.EqualError(t, err, `build surface index: duplicate surface id "candidate#instruction"`)
+	state, err = newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "candidate#unsupported",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceType("unsupported"),
+			},
+			{
+				SurfaceID: "candidate#instruction",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value: astructure.SurfaceValue{
+					Text: stringPtr("prompt"),
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Contains(t, state.surfaceIndex, "candidate#instruction")
+	assert.NotContains(t, state.surfaceIndex, "candidate#unsupported")
 }
 
 func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
@@ -1889,6 +1948,34 @@ func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
 	assert.NoError(t, err)
 	require.NotNil(t, applied)
 	assert.Empty(t, applied.Overrides)
+	applied, err = applyPatchSet(structure, profile, &promptiter.PatchSet{
+		Patches: []promptiter.SurfacePatch{
+			{
+				SurfaceID: testSurfaceID,
+				Value: astructure.SurfaceValue{
+					Text: stringPtr("override one"),
+				},
+			},
+			{
+				SurfaceID: testSurfaceID,
+				Value: astructure.SurfaceValue{
+					Text: stringPtr("override two"),
+				},
+			},
+		},
+	})
+	assert.Nil(t, applied)
+	assert.EqualError(t, err, `duplicate patch surface id "node_1#instruction"`)
+	applied, err = applyPatchSet(structure, profile, &promptiter.PatchSet{
+		Patches: []promptiter.SurfacePatch{
+			{
+				SurfaceID: testSurfaceID,
+				Value:     astructure.SurfaceValue{},
+			},
+		},
+	})
+	assert.Nil(t, applied)
+	assert.EqualError(t, err, `sanitize patch "node_1#instruction": text is nil`)
 	surface, err := resolveProfileSurface(nil, nil, testSurfaceID)
 	assert.Equal(t, astructure.Surface{}, surface)
 	assert.EqualError(t, err, "structure state is nil")
@@ -1923,6 +2010,220 @@ func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
 	assert.False(t, targets.contains("unknown"))
 	var nilTargets targetSurfaceSet
 	assert.True(t, nilTargets.contains(testSurfaceID))
+}
+
+func TestBackwardCoversAdditionalBranches(t *testing.T) {
+	structure, err := newStructureState(testStructureSnapshot(t))
+	assert.NoError(t, err)
+	engineInstance := &engine{}
+	result, backwardErr := engineInstance.backward(context.Background(), structure, nil, nil, nil, nil)
+	assert.Nil(t, result)
+	assert.EqualError(t, backwardErr, "backwarder is nil")
+	engineInstance.backwarder = &fakeBackwarder{}
+	result, backwardErr = engineInstance.backward(context.Background(), nil, nil, nil, nil, nil)
+	assert.Nil(t, result)
+	assert.EqualError(t, backwardErr, "structure state is nil")
+	result, backwardErr = engineInstance.backward(context.Background(), structure, nil, &EvaluationResult{}, []promptiter.CaseLoss{
+		{EvalSetID: "train", EvalCaseID: "case_1"},
+	}, nil)
+	assert.Nil(t, result)
+	assert.EqualError(t, backwardErr, `eval case "case_1" from eval set "train" is missing from training result`)
+	caseResult, backwardErr := engineInstance.backwardCase(context.Background(), structure, nil, CaseResult{
+		EvalSetID:  "train",
+		EvalCaseID: "case_1",
+	}, promptiter.CaseLoss{EvalSetID: "train", EvalCaseID: "case_1"}, nil)
+	assert.Nil(t, caseResult)
+	assert.EqualError(t, backwardErr, `trace is nil for eval case "case_1" in eval set "train"`)
+	caseResult, backwardErr = engineInstance.backwardCase(context.Background(), structure, nil, CaseResult{
+		EvalSetID:  "train",
+		EvalCaseID: "case_1",
+		Trace: &atrace.Trace{
+			Steps: []atrace.Step{{StepID: "step_1", NodeID: "node_1"}},
+		},
+	}, promptiter.CaseLoss{
+		EvalSetID:  "train",
+		EvalCaseID: "case_1",
+		TerminalLosses: []promptiter.TerminalLoss{
+			{StepID: "missing", Loss: "boom"},
+		},
+	}, nil)
+	assert.Nil(t, caseResult)
+	assert.EqualError(t, backwardErr, `terminal loss step id "missing" is not part of trace for eval case "case_1"`)
+	caseResult, backwardErr = engineInstance.backwardCase(context.Background(), structure, nil, CaseResult{
+		EvalSetID:  "train",
+		EvalCaseID: "case_1",
+		Trace: &atrace.Trace{
+			Steps: []atrace.Step{{
+				StepID:            "step_1",
+				NodeID:            "node_1",
+				AppliedSurfaceIDs: []string{""},
+			}},
+		},
+	}, promptiter.CaseLoss{
+		EvalSetID:  "train",
+		EvalCaseID: "case_1",
+		TerminalLosses: []promptiter.TerminalLoss{
+			{StepID: "step_1", Loss: "boom"},
+		},
+	}, nil)
+	assert.Nil(t, caseResult)
+	assert.EqualError(t, backwardErr, `build backward request for eval case "case_1" step "step_1": step "step_1" applied surface id is empty`)
+	engineInstance.backwarder = &fakeBackwarder{
+		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
+			_ = ctx
+			_ = request
+			return nil, errors.New("boom")
+		},
+	}
+	caseResult, backwardErr = engineInstance.backwardCase(context.Background(), structure, nil, CaseResult{
+		EvalSetID:  "train",
+		EvalCaseID: "case_1",
+		Trace: &atrace.Trace{
+			Steps: []atrace.Step{{
+				StepID: "step_1",
+				NodeID: "node_1",
+			}},
+		},
+	}, promptiter.CaseLoss{
+		EvalSetID:  "train",
+		EvalCaseID: "case_1",
+		TerminalLosses: []promptiter.TerminalLoss{
+			{StepID: "step_1", Loss: "boom"},
+		},
+	}, nil)
+	assert.Nil(t, caseResult)
+	assert.EqualError(t, backwardErr, `backward eval case "case_1" step "step_1": boom`)
+	engineInstance.backwarder = &fakeBackwarder{
+		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
+			_ = ctx
+			_ = request
+			return &backwarder.Result{
+				Gradients: []promptiter.SurfaceGradient{{SurfaceID: testSurfaceID, Gradient: "g"}},
+				Upstream: []backwarder.Propagation{{
+					PredecessorStepID: "step_1",
+					Gradients: []backwarder.GradientPacket{{Gradient: "upstream"}},
+				}},
+			}, nil
+		},
+	}
+	result, backwardErr = engineInstance.backward(context.Background(), structure, nil, &EvaluationResult{
+		EvalSets: []EvalSetResult{{
+			EvalSetID: "train",
+			Cases: []CaseResult{{
+				EvalSetID:  "set_b",
+				EvalCaseID: "case_b",
+				Trace: &atrace.Trace{
+					Steps: []atrace.Step{{
+						StepID:            "step_1",
+						NodeID:            "node_1",
+						AppliedSurfaceIDs: []string{testSurfaceID},
+					}},
+				},
+			}, {
+				EvalSetID:  "set_a",
+				EvalCaseID: "case_a",
+				Trace: &atrace.Trace{
+					Steps: []atrace.Step{{
+						StepID:            "step_1",
+						NodeID:            "node_1",
+						AppliedSurfaceIDs: []string{testSurfaceID},
+					}},
+				},
+			}},
+		}},
+	}, []promptiter.CaseLoss{
+		{EvalSetID: "set_b", EvalCaseID: "case_b", TerminalLosses: []promptiter.TerminalLoss{{StepID: "step_1", Loss: "b"}}},
+		{EvalSetID: "set_a", EvalCaseID: "case_a", TerminalLosses: []promptiter.TerminalLoss{{StepID: "step_1", Loss: "a"}}},
+	}, targetSurfaceSet{testSurfaceID: {}})
+	assert.NoError(t, backwardErr)
+	require.NotNil(t, result)
+	require.Len(t, result.Cases, 2)
+	assert.Equal(t, "set_a", result.Cases[0].EvalSetID)
+	assert.Equal(t, "case_a", result.Cases[0].EvalCaseID)
+	assert.Equal(t, "set_b", result.Cases[1].EvalSetID)
+	assert.Equal(t, "case_b", result.Cases[1].EvalCaseID)
+}
+
+func TestLossStopAndEventHelpers(t *testing.T) {
+	losses, err := (&engine{}).loss(&EvaluationResult{
+		EvalSets: []EvalSetResult{{
+			EvalSetID: "train",
+			Cases: []CaseResult{
+				{
+					EvalSetID:  "train",
+					EvalCaseID: "skip_incomplete",
+					Trace: &atrace.Trace{
+						Status: atrace.TraceStatusIncomplete,
+						Steps:  []atrace.Step{{StepID: "step_1", NodeID: "node_1"}},
+					},
+					Metrics: []MetricResult{{
+						MetricName: "quality",
+						Status:     status.EvalStatusFailed,
+						Reason:     "ignored",
+					}},
+				},
+				{
+					EvalSetID:  "train",
+					EvalCaseID: "skip_passed",
+					Trace: &atrace.Trace{
+						Status: atrace.TraceStatusCompleted,
+						Steps:  []atrace.Step{{StepID: "step_1", NodeID: "node_1"}},
+					},
+					Metrics: []MetricResult{{
+						MetricName: "quality",
+						Status:     status.EvalStatusPassed,
+						Reason:     "ignored",
+					}},
+				},
+			},
+		}},
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, losses)
+	losses, err = (&engine{}).loss(&EvaluationResult{
+		EvalSets: []EvalSetResult{{
+			EvalSetID: "train",
+			Cases: []CaseResult{{
+				EvalSetID:  "train",
+				EvalCaseID: "case_1",
+				Trace: &atrace.Trace{
+					Status: atrace.TraceStatusCompleted,
+					Steps: []atrace.Step{{
+						StepID:             "step_1",
+						NodeID:             "node_1",
+						PredecessorStepIDs: []string{"step_1"},
+					}},
+				},
+				Metrics: []MetricResult{{
+					MetricName: "quality",
+					Status:     status.EvalStatusFailed,
+					Reason:     "boom",
+				}},
+			}},
+		}},
+	})
+	assert.Nil(t, losses)
+	assert.EqualError(t, err, `resolve terminal step for eval case "case_1": execution trace has no terminal step`)
+	decision := (&engine{}).stop(1, 4, StopPolicy{
+		TargetScore: func() *float64 {
+			value := 0.8
+			return &value
+		}(),
+	}, 0, 0.8)
+	require.NotNil(t, decision)
+	assert.True(t, decision.ShouldStop)
+	assert.Equal(t, "target score reached", decision.Reason)
+	decision = (&engine{}).stop(1, 4, StopPolicy{}, 0, 0.1)
+	require.NotNil(t, decision)
+	assert.False(t, decision.ShouldStop)
+	assert.Equal(t, "continue optimization", decision.Reason)
+	assert.NoError(t, appendRunEvent(context.Background(), nil, EventKindRoundStarted, 1, nil))
+	err = appendRunEvent(context.Background(), func(ctx context.Context, event *Event) error {
+		_ = ctx
+		_ = event
+		return errors.New("boom")
+	}, EventKindRoundStarted, 1, nil)
+	assert.EqualError(t, err, `append run event "round_started": boom`)
 }
 
 func TestOptimizeHelpersAndLossValidation(t *testing.T) {

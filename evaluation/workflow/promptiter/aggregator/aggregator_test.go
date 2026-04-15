@@ -566,6 +566,78 @@ func TestAggregateRejectsEmptyRunnerIdentity(t *testing.T) {
 	})
 }
 
+func TestAggregateRejectsMissingRuntimeDependencies(t *testing.T) {
+	request := &Request{
+		SurfaceID: "surf_1",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeInstruction,
+		Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "citation issue"}},
+	}
+	_, err := (&aggregator{}).Aggregate(context.Background(), request)
+	assert.EqualError(t, err, "runner is nil")
+	_, err = (&aggregator{runner: &fakeRunner{}}).Aggregate(context.Background(), request)
+	assert.EqualError(t, err, "message builder is nil")
+	_, err = (&aggregator{
+		runner:         &fakeRunner{},
+		messageBuilder: defaultMessageBuilder(),
+	}).Aggregate(context.Background(), request)
+	assert.EqualError(t, err, "user id supplier is nil")
+	_, err = (&aggregator{
+		runner:         &fakeRunner{},
+		messageBuilder: defaultMessageBuilder(),
+		userIDSupplier: defaultUserIDSupplier(),
+	}).Aggregate(context.Background(), request)
+	assert.EqualError(t, err, "session id supplier is nil")
+}
+
+func TestAggregateRejectsMessageBuildAndEmptyDecodedGradient(t *testing.T) {
+	t.Run("message builder error", func(t *testing.T) {
+		ag, err := New(
+			context.Background(),
+			&fakeRunner{},
+			WithMessageBuilder(func(ctx context.Context, request *Request) (*model.Message, error) {
+				_ = ctx
+				_ = request
+				return nil, errors.New("boom")
+			}),
+		)
+		assert.NoError(t, err)
+		result, runErr := ag.Aggregate(context.Background(), &Request{
+			SurfaceID: "surf_1",
+			NodeID:    "node_1",
+			Type:      astructure.SurfaceTypeInstruction,
+			Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "citation issue"}},
+		})
+		assert.Nil(t, result)
+		assert.EqualError(t, runErr, "build aggregation message: boom")
+	})
+	t.Run("empty decoded gradient", func(t *testing.T) {
+		ag, err := New(context.Background(), &fakeRunner{
+			events: []*event.Event{
+				event.NewResponseEvent(
+					"invocation-id",
+					"aggregator",
+					&model.Response{
+						Done: true,
+						Choices: []model.Choice{
+							{Message: model.NewAssistantMessage("null")},
+						},
+					},
+				),
+			},
+		})
+		assert.NoError(t, err)
+		result, runErr := ag.Aggregate(context.Background(), &Request{
+			SurfaceID: "surf_1",
+			NodeID:    "node_1",
+			Type:      astructure.SurfaceTypeInstruction,
+			Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "citation issue"}},
+		})
+		assert.Nil(t, result)
+		assert.EqualError(t, runErr, "sanitize aggregated gradient: aggregated gradient is empty")
+	})
+}
+
 func TestAggregateRejectsInvalidRequests(t *testing.T) {
 	ag, err := New(context.Background(), &fakeRunner{})
 	assert.NoError(t, err)
@@ -725,35 +797,46 @@ func TestNormalizeRequestAndSanitizeAggregatedGradient(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, request)
 	assert.Equal(t, "grounding", request.Gradients[0].Gradient)
+	validRequest := request
+	request, err = normalizeRequest(&Request{
+		SurfaceID: "surf_1",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeInstruction,
+		Gradients: []promptiter.SurfaceGradient{
+			{Gradient: "grounding"},
+		},
+	})
+	assert.Nil(t, request)
+	assert.EqualError(t, err, "normalize gradients: gradient surface id is empty")
 	gradient, err := sanitizeAggregatedGradient(nil, &promptiter.AggregatedSurfaceGradient{})
 	assert.Nil(t, gradient)
 	assert.EqualError(t, err, "request is nil")
-	gradient, err = sanitizeAggregatedGradient(request, nil)
+	gradient, err = sanitizeAggregatedGradient(validRequest, nil)
 	assert.Nil(t, gradient)
 	assert.EqualError(t, err, "aggregated gradient is nil")
-	gradient, err = sanitizeAggregatedGradient(request, &promptiter.AggregatedSurfaceGradient{
+	gradient, err = sanitizeAggregatedGradient(validRequest, &promptiter.AggregatedSurfaceGradient{
 		SurfaceID: "other",
 	})
 	assert.Nil(t, gradient)
 	assert.EqualError(t, err, `aggregated gradient surface id "other" does not match request surface id "surf_1"`)
-	gradient, err = sanitizeAggregatedGradient(request, &promptiter.AggregatedSurfaceGradient{
+	gradient, err = sanitizeAggregatedGradient(validRequest, &promptiter.AggregatedSurfaceGradient{
 		NodeID: "other",
 	})
 	assert.Nil(t, gradient)
 	assert.EqualError(t, err, `aggregated gradient node id "other" does not match request node id "node_1"`)
-	gradient, err = sanitizeAggregatedGradient(request, &promptiter.AggregatedSurfaceGradient{
+	gradient, err = sanitizeAggregatedGradient(validRequest, &promptiter.AggregatedSurfaceGradient{
 		Type: astructure.SurfaceTypeModel,
 	})
 	assert.Nil(t, gradient)
 	assert.EqualError(t, err, `aggregated gradient surface type "model" does not match request surface type "instruction"`)
-	gradient, err = sanitizeAggregatedGradient(request, &promptiter.AggregatedSurfaceGradient{
+	gradient, err = sanitizeAggregatedGradient(validRequest, &promptiter.AggregatedSurfaceGradient{
 		Gradients: []promptiter.SurfaceGradient{
 			{Gradient: ""},
 		},
 	})
 	assert.Nil(t, gradient)
 	assert.EqualError(t, err, "aggregated gradient is empty")
-	gradient, err = sanitizeAggregatedGradient(request, &promptiter.AggregatedSurfaceGradient{
+	gradient, err = sanitizeAggregatedGradient(validRequest, &promptiter.AggregatedSurfaceGradient{
 		Gradients: []promptiter.SurfaceGradient{
 			{Gradient: "detail", Severity: promptiter.LossSeverityP2},
 			{SurfaceID: "surf_1", Gradient: "grounding", Severity: promptiter.LossSeverityP0},
@@ -765,6 +848,13 @@ func TestNormalizeRequestAndSanitizeAggregatedGradient(t *testing.T) {
 	assert.Equal(t, "node_1", gradient.NodeID)
 	assert.Equal(t, astructure.SurfaceTypeInstruction, gradient.Type)
 	assert.Equal(t, "grounding", gradient.Gradients[0].Gradient)
+	gradient, err = sanitizeAggregatedGradient(validRequest, &promptiter.AggregatedSurfaceGradient{
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "other", Gradient: "grounding"},
+		},
+	})
+	assert.Nil(t, gradient)
+	assert.EqualError(t, err, `aggregated gradient item surface id "other" does not match request surface id "surf_1"`)
 }
 
 func TestCompareGradientsOrdersByAllTieBreakers(t *testing.T) {
@@ -792,4 +882,5 @@ func TestCompareGradientsOrdersByAllTieBreakers(t *testing.T) {
 	right.EvalCaseID = left.EvalCaseID
 	right.EvalSetID = "set_b"
 	assert.Equal(t, -1, compareGradients(left, right))
+	assert.Equal(t, 1, compareGradients(right, left))
 }
