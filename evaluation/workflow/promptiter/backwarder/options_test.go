@@ -11,6 +11,7 @@ package backwarder
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 
@@ -146,4 +147,11 @@ func extractRequestJSON(content string) (string, bool) {
 	}
 	start += len(marker)
 	return strings.TrimSpace(content[start:]), true
+}
+
+func TestToPrettyJSONRejectsUnsupportedValue(t *testing.T) {
+	rendered, err := toPrettyJSON(map[string]float64{"score": math.NaN()})
+	assert.Empty(t, rendered)
+	assert.Error(t, err)
+	assert.ErrorContains(t, err, "marshal backward request")
 }

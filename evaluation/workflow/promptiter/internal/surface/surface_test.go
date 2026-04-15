@@ -173,3 +173,107 @@ func TestSanitizeValueRejectsInvalidInput(t *testing.T) {
 	)
 	assert.Error(t, err)
 }
+
+func TestBuildIndexRejectsSpecificInvalidInputs(t *testing.T) {
+	text := "instruction"
+	_, err := BuildIndex([]astructure.Surface{
+		{
+			NodeID: "node_1",
+			Type:   astructure.SurfaceTypeInstruction,
+			Value:  astructure.SurfaceValue{Text: &text},
+		},
+	})
+	assert.EqualError(t, err, "surface id is empty")
+	_, err = BuildIndex([]astructure.Surface{
+		{
+			SurfaceID: "surf_1",
+			Type:      astructure.SurfaceTypeInstruction,
+			Value:     astructure.SurfaceValue{Text: &text},
+		},
+	})
+	assert.EqualError(t, err, "surface node id is empty")
+	_, err = BuildIndex([]astructure.Surface{
+		{
+			SurfaceID: "surf_1",
+			NodeID:    "node_1",
+			Type:      astructure.SurfaceType("unknown"),
+			Value:     astructure.SurfaceValue{Text: &text},
+		},
+	})
+	assert.EqualError(t, err, `surface type "unknown" is invalid`)
+	_, err = BuildIndex([]astructure.Surface{
+		{
+			SurfaceID: "surf_1",
+			NodeID:    "node_1",
+			Type:      astructure.SurfaceTypeInstruction,
+		},
+	})
+	assert.ErrorContains(t, err, `surface "surf_1" value is invalid`)
+}
+
+func TestValidateValueRejectsExtraFields(t *testing.T) {
+	text := "instruction"
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeInstruction,
+		astructure.SurfaceValue{
+			Text:    &text,
+			FewShot: []astructure.FewShotExample{{}},
+		},
+	), "messages are not empty")
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeInstruction,
+		astructure.SurfaceValue{
+			Text:  &text,
+			Model: &astructure.ModelRef{Name: "m"},
+		},
+	), "model is not nil")
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeFewShot,
+		astructure.SurfaceValue{
+			FewShot: []astructure.FewShotExample{},
+			Model:   &astructure.ModelRef{Name: "m"},
+		},
+	), "model is not nil")
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeModel,
+		astructure.SurfaceValue{
+			Model: &astructure.ModelRef{Name: "m"},
+			Text:  &text,
+		},
+	), "text is not nil")
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeModel,
+		astructure.SurfaceValue{
+			Model:   &astructure.ModelRef{Name: "m"},
+			FewShot: []astructure.FewShotExample{{}},
+		},
+	), "messages are not empty")
+}
+
+func TestCloneValueDeepCopiesAllFields(t *testing.T) {
+	text := "instruction"
+	value := astructure.SurfaceValue{
+		Text: &text,
+		FewShot: []astructure.FewShotExample{
+			{
+				Messages: []astructure.FewShotMessage{
+					{Role: "user", Content: "hi"},
+				},
+			},
+		},
+		Model: &astructure.ModelRef{
+			Provider: " openai ",
+			Name:     " gpt ",
+			Headers:  map[string]string{"X-Test": "1"},
+		},
+	}
+	cloned := CloneValue(value)
+	assert.NotNil(t, cloned.Text)
+	assert.NotNil(t, cloned.Model)
+	cloned.FewShot[0].Messages[0].Content = "changed"
+	*cloned.Text = "changed"
+	cloned.Model.Headers["X-Test"] = "2"
+	assert.Equal(t, "instruction", *value.Text)
+	assert.Equal(t, "hi", value.FewShot[0].Messages[0].Content)
+	assert.Equal(t, "1", value.Model.Headers["X-Test"])
+}

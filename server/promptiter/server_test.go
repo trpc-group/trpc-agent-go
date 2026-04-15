@@ -15,7 +15,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -324,6 +326,189 @@ func TestHandleCancelRunCancelsAsyncRun(t *testing.T) {
 	srv.Handler().ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusAccepted, recorder.Code)
 	assert.Equal(t, "run_1", capturedRunID)
+}
+
+func TestHandleStructureSupportsOptionsAndRejectsInvalidMethod(t *testing.T) {
+	srv := newTestServer(t)
+	optionsReq := httptest.NewRequest(http.MethodOptions, srv.StructurePath(), nil)
+	optionsRecorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(optionsRecorder, optionsReq)
+	require.Equal(t, http.StatusNoContent, optionsRecorder.Code)
+	assert.Equal(t, "*", optionsRecorder.Header().Get(headerAccessControlOrigin))
+	postReq := httptest.NewRequest(http.MethodPost, srv.StructurePath(), nil)
+	postRecorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(postRecorder, postReq)
+	require.Equal(t, http.StatusMethodNotAllowed, postRecorder.Code)
+	assert.Equal(t, http.MethodGet, postRecorder.Header().Get(headerAllow))
+	assert.Contains(t, postRecorder.Body.String(), "method not allowed")
+}
+
+func TestHandleStructureMapsDescribeErrors(t *testing.T) {
+	srv := newTestServer(t,
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return nil, context.DeadlineExceeded
+			},
+		}),
+	)
+	req := httptest.NewRequest(http.MethodGet, srv.StructurePath(), nil)
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusGatewayTimeout, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), context.DeadlineExceeded.Error())
+}
+
+func TestHandleRunsMethodAndExecutionErrors(t *testing.T) {
+	srv := newTestServer(t,
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return &astructure.Snapshot{
+					StructureID: "struct_1",
+					EntryNodeID: "node_1",
+					Nodes: []astructure.Node{
+						{NodeID: "node_1", Name: "candidate", Kind: astructure.NodeKindLLM},
+					},
+					Surfaces: []astructure.Surface{
+						{
+							SurfaceID: "candidate#instruction",
+							NodeID:    "node_1",
+							Type:      astructure.SurfaceTypeInstruction,
+						},
+					},
+				}, nil
+			},
+			run: func(ctx context.Context, request *enginepkg.RunRequest, opts ...enginepkg.Option) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = request
+				_ = opts
+				return nil, context.Canceled
+			},
+		}),
+	)
+	getReq := httptest.NewRequest(http.MethodGet, srv.RunsPath(), nil)
+	getRecorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(getRecorder, getReq)
+	require.Equal(t, http.StatusMethodNotAllowed, getRecorder.Code)
+	assert.Equal(t, http.MethodPost, getRecorder.Header().Get(headerAllow))
+	body, err := json.Marshal(&RunRequest{
+		Run: &enginepkg.RunRequest{
+			TrainEvalSetIDs:      []string{"train"},
+			ValidationEvalSetIDs: []string{"validation"},
+			TargetSurfaceIDs:     []string{"candidate#instruction"},
+			MaxRounds:            1,
+		},
+	})
+	require.NoError(t, err)
+	postReq := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewReader(body))
+	postRecorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(postRecorder, postReq)
+	require.Equal(t, http.StatusRequestTimeout, postRecorder.Code)
+	assert.Contains(t, postRecorder.Body.String(), context.Canceled.Error())
+}
+
+func TestHandleRunResourceNotFoundAndManagerErrors(t *testing.T) {
+	srv := newTestServer(t,
+		WithManager(&fakeManager{
+			get: func(ctx context.Context, runID string) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = runID
+				return nil, os.ErrNotExist
+			},
+			cancel: func(ctx context.Context, runID string) error {
+				_ = ctx
+				_ = runID
+				return context.DeadlineExceeded
+			},
+		}),
+	)
+	notFoundReq := httptest.NewRequest(http.MethodGet, srv.AsyncRunsPath()+"/run_1/extra", nil)
+	notFoundRecorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(notFoundRecorder, notFoundReq)
+	require.Equal(t, http.StatusNotFound, notFoundRecorder.Code)
+	getReq := httptest.NewRequest(http.MethodGet, srv.AsyncRunsPath()+"/run_1", nil)
+	getRecorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(getRecorder, getReq)
+	require.Equal(t, http.StatusNotFound, getRecorder.Code)
+	cancelReq := httptest.NewRequest(http.MethodPost, srv.AsyncRunsPath()+"/run_1/cancel", nil)
+	cancelRecorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(cancelRecorder, cancelReq)
+	require.Equal(t, http.StatusGatewayTimeout, cancelRecorder.Code)
+	assert.Contains(t, cancelRecorder.Body.String(), context.DeadlineExceeded.Error())
+}
+
+func TestRedirectTrailingSlashToCanonicalPath(t *testing.T) {
+	srv := newTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, srv.RunsPath()+"/?a=1", nil)
+	recorder := httptest.NewRecorder()
+	srv.redirectTrailingSlashToCanonicalPath(recorder, req)
+	require.Equal(t, http.StatusPermanentRedirect, recorder.Code)
+	assert.Equal(t, srv.RunsPath()+"?a=1", recorder.Header().Get("Location"))
+}
+
+func TestValidateTargetSurfaceIDs(t *testing.T) {
+	srv := newTestServer(t)
+	assert.NoError(t, srv.validateTargetSurfaceIDs(context.Background(), nil))
+	assert.EqualError(t, srv.validateTargetSurfaceIDs(context.Background(), []string{}), "target surface ids must not be empty")
+	assert.EqualError(t, srv.validateTargetSurfaceIDs(context.Background(), []string{""}), "target surface ids must not contain empty values")
+	err := srv.validateTargetSurfaceIDs(context.Background(), []string{"unknown#instruction"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), `target surface id "unknown#instruction" is unknown`)
+	assert.NoError(t, srv.validateTargetSurfaceIDs(context.Background(), []string{"candidate#instruction"}))
+	nilStructureServer := newTestServer(t,
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return nil, nil
+			},
+		}),
+	)
+	assert.EqualError(t, nilStructureServer.validateTargetSurfaceIDs(context.Background(), []string{"candidate#instruction"}), "structure is nil")
+}
+
+func TestStatusCodeFromError(t *testing.T) {
+	assert.Equal(t, http.StatusGatewayTimeout, statusCodeFromError(context.DeadlineExceeded))
+	assert.Equal(t, http.StatusRequestTimeout, statusCodeFromError(context.Canceled))
+	assert.Equal(t, http.StatusNotFound, statusCodeFromError(os.ErrNotExist))
+	assert.Equal(t, http.StatusInternalServerError, statusCodeFromError(errors.New("boom")))
+}
+
+func TestNewExecutionContext(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	derived, derivedCancel := newExecutionContext(parent, time.Second)
+	defer derivedCancel()
+	deadline, ok := derived.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, time.Now().Add(20*time.Millisecond), deadline, 20*time.Millisecond)
+	noTimeoutCtx, noTimeoutCancel := newExecutionContext(context.Background(), 0)
+	defer noTimeoutCancel()
+	_, ok = noTimeoutCtx.Deadline()
+	assert.False(t, ok)
+}
+
+func TestDecodeJSONBodyRejectsInvalidPayloads(t *testing.T) {
+	respondCalls := make([]int, 0, 2)
+	respond := func(w http.ResponseWriter, r *http.Request, statusCode int, payload any) {
+		_ = w
+		_ = r
+		_ = payload
+		respondCalls = append(respondCalls, statusCode)
+	}
+	invalidReq := httptest.NewRequest(http.MethodPost, "/runs", bytes.NewBufferString("{"))
+	_, err := decodeJSONBody[RunRequest](httptest.NewRecorder(), invalidReq, respond)
+	assert.Error(t, err)
+	extraReq := httptest.NewRequest(http.MethodPost, "/runs", bytes.NewBufferString(`{} {}`))
+	_, err = decodeJSONBody[RunRequest](httptest.NewRecorder(), extraReq, respond)
+	assert.Error(t, err)
+	assert.Equal(t, []int{http.StatusBadRequest, http.StatusBadRequest}, respondCalls)
+}
+
+func TestValidateRunRequest(t *testing.T) {
+	assert.EqualError(t, validateRunRequest(nil), "request must not be nil")
+	assert.EqualError(t, validateRunRequest(&RunRequest{}), "run must not be nil")
+	assert.NoError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{}}))
 }
 
 var _ managerpkg.Manager = (*fakeManager)(nil)

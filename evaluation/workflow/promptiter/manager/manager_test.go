@@ -10,6 +10,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -46,6 +47,64 @@ func (s *recordingStore) Update(ctx context.Context, run *promptiterengine.RunRe
 
 func (s *recordingStore) Close() error {
 	return nil
+}
+
+type scriptedStore struct {
+	createErr       error
+	getErr          error
+	updateErr       error
+	updateErrAtCall int
+	closeErr        error
+	closeCalls      int
+	updateCalls     int
+	runs            map[string]*promptiterengine.RunResult
+}
+
+func (s *scriptedStore) Create(ctx context.Context, run *promptiterengine.RunResult) error {
+	_ = ctx
+	if s.createErr != nil {
+		return s.createErr
+	}
+	if s.runs == nil {
+		s.runs = make(map[string]*promptiterengine.RunResult)
+	}
+	s.runs[run.ID] = run
+	return nil
+}
+
+func (s *scriptedStore) Get(ctx context.Context, runID string) (*promptiterengine.RunResult, error) {
+	_ = ctx
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	if s.runs == nil {
+		return nil, os.ErrNotExist
+	}
+	run, ok := s.runs[runID]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return run, nil
+}
+
+func (s *scriptedStore) Update(ctx context.Context, run *promptiterengine.RunResult) error {
+	_ = ctx
+	s.updateCalls++
+	if s.updateErr != nil {
+		if s.updateErrAtCall == 0 || s.updateCalls == s.updateErrAtCall {
+			return s.updateErr
+		}
+	}
+	if s.runs == nil {
+		s.runs = make(map[string]*promptiterengine.RunResult)
+	}
+	s.runs[run.ID] = run
+	return nil
+}
+
+func (s *scriptedStore) Close() error {
+	s.closeCalls++
+	return s.closeErr
 }
 
 type fakePromptIterEngine struct {
@@ -306,6 +365,117 @@ func TestRunObserverPassesContextToStoreUpdate(t *testing.T) {
 	assert.Same(t, run, store.updateRun)
 }
 
+func TestRunObserverRejectsInvalidEvents(t *testing.T) {
+	managerInstance, err := New(&fakePromptIterEngine{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, managerInstance.Close())
+	})
+	observer := &observer{
+		manager: managerInstance.(*manager),
+		run: &promptiterengine.RunResult{
+			ID:     "run-1",
+			Status: promptiterengine.RunStatusRunning,
+		},
+	}
+	assert.EqualError(t, observer.append(context.Background(), nil), "promptiter event is nil")
+	testCases := []struct {
+		name  string
+		event *promptiterengine.Event
+	}{
+		{
+			name: "invalid structure payload",
+			event: &promptiterengine.Event{
+				Kind:    promptiterengine.EventKindStructureSnapshot,
+				Payload: "invalid",
+			},
+		},
+		{
+			name: "invalid baseline payload",
+			event: &promptiterengine.Event{
+				Kind:    promptiterengine.EventKindBaselineValidation,
+				Payload: "invalid",
+			},
+		},
+		{
+			name: "invalid train payload",
+			event: &promptiterengine.Event{
+				Kind:    promptiterengine.EventKindRoundTrainEvaluation,
+				Round:   1,
+				Payload: "invalid",
+			},
+		},
+		{
+			name: "invalid losses payload",
+			event: &promptiterengine.Event{
+				Kind:    promptiterengine.EventKindRoundLosses,
+				Round:   1,
+				Payload: "invalid",
+			},
+		},
+		{
+			name: "invalid backward payload",
+			event: &promptiterengine.Event{
+				Kind:    promptiterengine.EventKindRoundBackward,
+				Round:   1,
+				Payload: "invalid",
+			},
+		},
+		{
+			name: "invalid aggregation payload",
+			event: &promptiterengine.Event{
+				Kind:    promptiterengine.EventKindRoundAggregation,
+				Round:   1,
+				Payload: "invalid",
+			},
+		},
+		{
+			name: "invalid patch payload",
+			event: &promptiterengine.Event{
+				Kind:    promptiterengine.EventKindRoundPatchSet,
+				Round:   1,
+				Payload: "invalid",
+			},
+		},
+		{
+			name: "invalid profile payload",
+			event: &promptiterengine.Event{
+				Kind:    promptiterengine.EventKindRoundOutputProfile,
+				Round:   1,
+				Payload: "invalid",
+			},
+		},
+		{
+			name: "invalid validation payload",
+			event: &promptiterengine.Event{
+				Kind:    promptiterengine.EventKindRoundValidation,
+				Round:   1,
+				Payload: "invalid",
+			},
+		},
+		{
+			name: "invalid completed payload",
+			event: &promptiterengine.Event{
+				Kind:    promptiterengine.EventKindRoundCompleted,
+				Round:   1,
+				Payload: "invalid",
+			},
+		},
+		{
+			name: "unsupported kind",
+			event: &promptiterengine.Event{
+				Kind: "unknown",
+			},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := observer.append(context.Background(), tc.event)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestManagerGetReturnsNotFoundForMissingRun(t *testing.T) {
 	managerInstance, err := New(&fakePromptIterEngine{})
 	require.NoError(t, err)
@@ -315,6 +485,305 @@ func TestManagerGetReturnsNotFoundForMissingRun(t *testing.T) {
 	_, err = managerInstance.Get(context.Background(), "missing")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestManagerStartRejectsClosedManager(t *testing.T) {
+	managerInstance, err := New(&fakePromptIterEngine{})
+	require.NoError(t, err)
+	require.NoError(t, managerInstance.Close())
+	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		MaxRounds:            1,
+	})
+	assert.Nil(t, run)
+	assert.EqualError(t, err, "promptiter manager is closed")
+}
+
+func TestNewRejectsNilEngine(t *testing.T) {
+	managerInstance, err := New(nil)
+	assert.Nil(t, managerInstance)
+	assert.EqualError(t, err, "promptiter manager: engine must not be nil")
+}
+
+func TestManagerStartReturnsCreateError(t *testing.T) {
+	store := &scriptedStore{createErr: errors.New("create failed")}
+	managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, managerInstance.Close())
+	})
+	run, err := managerInstance.Start(context.Background(), &promptiterengine.RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		MaxRounds:            1,
+	})
+	assert.Nil(t, run)
+	assert.ErrorContains(t, err, "create run")
+	assert.ErrorContains(t, err, "create failed")
+}
+
+func TestManagerCancelRejectsMissingRun(t *testing.T) {
+	managerInstance, err := New(&fakePromptIterEngine{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, managerInstance.Close())
+	})
+	err = managerInstance.Cancel(context.Background(), "missing")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestManagerCancelReturnsStoreErrors(t *testing.T) {
+	t.Run("get error", func(t *testing.T) {
+		store := &scriptedStore{
+			getErr: errors.New("load failed"),
+			runs: map[string]*promptiterengine.RunResult{
+				"run-1": {
+					ID:     "run-1",
+					Status: promptiterengine.RunStatusRunning,
+				},
+			},
+		}
+		managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, managerInstance.Close())
+		})
+		concreteManager := managerInstance.(*manager)
+		concreteManager.cancelFuncs["run-1"] = func() {}
+		err = managerInstance.Cancel(context.Background(), "run-1")
+		assert.EqualError(t, err, "load failed")
+	})
+	t.Run("update error", func(t *testing.T) {
+		store := &scriptedStore{
+			updateErr: errors.New("update failed"),
+			runs: map[string]*promptiterengine.RunResult{
+				"run-1": {
+					ID:     "run-1",
+					Status: promptiterengine.RunStatusRunning,
+				},
+			},
+		}
+		managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, managerInstance.Close())
+		})
+		concreteManager := managerInstance.(*manager)
+		concreteManager.cancelFuncs["run-1"] = func() {}
+		err = managerInstance.Cancel(context.Background(), "run-1")
+		assert.EqualError(t, err, "update failed")
+	})
+}
+
+func TestManagerCloseIsIdempotent(t *testing.T) {
+	store := &scriptedStore{}
+	managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+	require.NoError(t, err)
+	require.NoError(t, managerInstance.Close())
+	require.NoError(t, managerInstance.Close())
+	assert.Equal(t, 1, store.closeCalls)
+}
+
+func TestManagerRunHandlesErrorBranches(t *testing.T) {
+	t.Run("get error clears cancel", func(t *testing.T) {
+		store := &scriptedStore{getErr: errors.New("load failed")}
+		managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+		require.NoError(t, err)
+		concreteManager := managerInstance.(*manager)
+		concreteManager.cancelFuncs["run-1"] = func() {}
+		concreteManager.run(context.Background(), "run-1", &promptiterengine.RunRequest{})
+		_, ok := concreteManager.cancelFuncs["run-1"]
+		assert.False(t, ok)
+	})
+	t.Run("initial update error clears cancel", func(t *testing.T) {
+		store := &scriptedStore{
+			updateErr:       errors.New("update failed"),
+			updateErrAtCall: 1,
+			runs: map[string]*promptiterengine.RunResult{
+				"run-1": {
+					ID:     "run-1",
+					Status: promptiterengine.RunStatusQueued,
+				},
+			},
+		}
+		managerInstance, err := New(&fakePromptIterEngine{}, WithStore(store))
+		require.NoError(t, err)
+		concreteManager := managerInstance.(*manager)
+		concreteManager.cancelFuncs["run-1"] = func() {}
+		concreteManager.run(context.Background(), "run-1", &promptiterengine.RunRequest{})
+		_, ok := concreteManager.cancelFuncs["run-1"]
+		assert.False(t, ok)
+	})
+	t.Run("engine canceled updates status", func(t *testing.T) {
+		store := &scriptedStore{
+			runs: map[string]*promptiterengine.RunResult{
+				"run-1": {
+					ID:     "run-1",
+					Status: promptiterengine.RunStatusRunning,
+				},
+			},
+		}
+		engineInstance := &fakePromptIterEngine{
+			run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
+				_ = request
+				_ = opts
+				return nil, context.Canceled
+			},
+		}
+		managerInstance, err := New(engineInstance, WithStore(store))
+		require.NoError(t, err)
+		concreteManager := managerInstance.(*manager)
+		concreteManager.cancelFuncs["run-1"] = func() {}
+		concreteManager.run(context.Background(), "run-1", &promptiterengine.RunRequest{})
+		run := store.runs["run-1"]
+		assert.Equal(t, promptiterengine.RunStatusCanceled, run.Status)
+		assert.Equal(t, "run canceled", run.ErrorMessage)
+	})
+	t.Run("engine failure updates status", func(t *testing.T) {
+		store := &scriptedStore{
+			runs: map[string]*promptiterengine.RunResult{
+				"run-1": {
+					ID:     "run-1",
+					Status: promptiterengine.RunStatusRunning,
+				},
+			},
+		}
+		engineInstance := &fakePromptIterEngine{
+			run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
+				_ = ctx
+				_ = request
+				_ = opts
+				return nil, errors.New("engine failed")
+			},
+		}
+		managerInstance, err := New(engineInstance, WithStore(store))
+		require.NoError(t, err)
+		concreteManager := managerInstance.(*manager)
+		concreteManager.cancelFuncs["run-1"] = func() {}
+		concreteManager.run(context.Background(), "run-1", &promptiterengine.RunRequest{})
+		run := store.runs["run-1"]
+		assert.Equal(t, promptiterengine.RunStatusFailed, run.Status)
+		assert.Equal(t, "engine failed", run.ErrorMessage)
+	})
+	t.Run("nil engine result updates status", func(t *testing.T) {
+		store := &scriptedStore{
+			runs: map[string]*promptiterengine.RunResult{
+				"run-1": {
+					ID:     "run-1",
+					Status: promptiterengine.RunStatusRunning,
+				},
+			},
+		}
+		engineInstance := &fakePromptIterEngine{
+			run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
+				_ = ctx
+				_ = request
+				_ = opts
+				return nil, nil
+			},
+		}
+		managerInstance, err := New(engineInstance, WithStore(store))
+		require.NoError(t, err)
+		concreteManager := managerInstance.(*manager)
+		concreteManager.cancelFuncs["run-1"] = func() {}
+		concreteManager.run(context.Background(), "run-1", &promptiterengine.RunRequest{})
+		run := store.runs["run-1"]
+		assert.Equal(t, promptiterengine.RunStatusFailed, run.Status)
+		assert.Equal(t, "engine returned nil run", run.ErrorMessage)
+	})
+	t.Run("final update error stores failure", func(t *testing.T) {
+		store := &scriptedStore{
+			updateErr:       errors.New("persist failed"),
+			updateErrAtCall: 2,
+			runs: map[string]*promptiterengine.RunResult{
+				"run-1": {
+					ID:     "run-1",
+					Status: promptiterengine.RunStatusRunning,
+				},
+			},
+		}
+		engineInstance := &fakePromptIterEngine{
+			run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
+				_ = ctx
+				_ = request
+				_ = opts
+				return &promptiterengine.RunResult{}, nil
+			},
+		}
+		managerInstance, err := New(engineInstance, WithStore(store))
+		require.NoError(t, err)
+		concreteManager := managerInstance.(*manager)
+		concreteManager.cancelFuncs["run-1"] = func() {}
+		concreteManager.run(context.Background(), "run-1", &promptiterengine.RunRequest{})
+		run := store.runs["run-1"]
+		assert.Equal(t, promptiterengine.RunStatusFailed, run.Status)
+		assert.Equal(t, "persist failed", run.ErrorMessage)
+	})
+}
+
+func TestValidateRunRequest(t *testing.T) {
+	assert.EqualError(t, validateRunRequest(nil), "run request is nil")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{}), "train evaluation set ids are empty")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		TrainEvalSetIDs: []string{"train"},
+	}), "validation evaluation set ids are empty")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+	}), "max rounds must be greater than 0")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		MaxRounds:            1,
+		TargetSurfaceIDs:     []string{},
+	}), "target surface ids must not be empty")
+	assert.NoError(t, validateRunRequest(&promptiterengine.RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		MaxRounds:            1,
+		TargetSurfaceIDs:     []string{"candidate#instruction"},
+	}))
+}
+
+func TestCloneRunRequestDeepCopiesFields(t *testing.T) {
+	targetScore := 0.9
+	request := &promptiterengine.RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		InitialProfile: &promptiter.Profile{
+			StructureID: "structure_1",
+			Overrides: []promptiter.SurfaceOverride{
+				{
+					SurfaceID: "candidate#instruction",
+					Value: astructure.SurfaceValue{
+						Text: stringPtr("prompt"),
+					},
+				},
+			},
+		},
+		TargetSurfaceIDs: []string{"candidate#instruction"},
+		StopPolicy: promptiterengine.StopPolicy{
+			TargetScore: &targetScore,
+		},
+	}
+	cloned := cloneRunRequest(request)
+	require.NotNil(t, cloned)
+	cloned.TrainEvalSetIDs[0] = "mutated"
+	cloned.ValidationEvalSetIDs[0] = "mutated"
+	cloned.TargetSurfaceIDs[0] = "mutated"
+	*cloned.InitialProfile.Overrides[0].Value.Text = "mutated"
+	*cloned.StopPolicy.TargetScore = 1.0
+	assert.Equal(t, "train", request.TrainEvalSetIDs[0])
+	assert.Equal(t, "validation", request.ValidationEvalSetIDs[0])
+	assert.Equal(t, "candidate#instruction", request.TargetSurfaceIDs[0])
+	assert.Equal(t, "prompt", *request.InitialProfile.Overrides[0].Value.Text)
+	assert.Equal(t, 0.9, *request.StopPolicy.TargetScore)
+}
+
+func TestCloneRunRequestNil(t *testing.T) {
+	assert.Nil(t, cloneRunRequest(nil))
 }
 
 func newEvaluationResult(score float64) *promptiterengine.EvaluationResult {
@@ -327,4 +796,8 @@ func newEvaluationResult(score float64) *promptiterengine.EvaluationResult {
 			},
 		},
 	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }

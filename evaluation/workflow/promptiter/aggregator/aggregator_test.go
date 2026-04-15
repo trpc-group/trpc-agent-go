@@ -611,3 +611,92 @@ func TestAggregateRejectsInvalidRequests(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeRequestAndSanitizeAggregatedGradient(t *testing.T) {
+	request, err := normalizeRequest(nil)
+	assert.Nil(t, request)
+	assert.EqualError(t, err, "request is nil")
+	request, err = normalizeRequest(&Request{})
+	assert.Nil(t, request)
+	assert.EqualError(t, err, "surface id is empty")
+	request, err = normalizeRequest(&Request{
+		SurfaceID: "surf_1",
+	})
+	assert.Nil(t, request)
+	assert.EqualError(t, err, "node id is empty")
+	request, err = normalizeRequest(&Request{
+		SurfaceID: "surf_1",
+		NodeID:    "node_1",
+	})
+	assert.Nil(t, request)
+	assert.EqualError(t, err, `surface type "" is invalid`)
+	request, err = normalizeRequest(&Request{
+		SurfaceID: "surf_1",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeInstruction,
+	})
+	assert.Nil(t, request)
+	assert.EqualError(t, err, "gradients are empty")
+	request, err = normalizeRequest(&Request{
+		SurfaceID: "surf_1",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeInstruction,
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "other", Gradient: "wrong"},
+		},
+	})
+	assert.Nil(t, request)
+	assert.EqualError(t, err, `normalize gradients: gradient surface id "other" does not match request surface id "surf_1"`)
+	request, err = normalizeRequest(&Request{
+		SurfaceID: "surf_1",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeInstruction,
+		Gradients: []promptiter.SurfaceGradient{
+			{SurfaceID: "surf_1", Severity: promptiter.LossSeverityP2, Gradient: "detail"},
+			{SurfaceID: "surf_1", Severity: promptiter.LossSeverityP0, Gradient: "grounding"},
+		},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, request)
+	assert.Equal(t, "grounding", request.Gradients[0].Gradient)
+	gradient, err := sanitizeAggregatedGradient(nil, &promptiter.AggregatedSurfaceGradient{})
+	assert.Nil(t, gradient)
+	assert.EqualError(t, err, "request is nil")
+	gradient, err = sanitizeAggregatedGradient(request, nil)
+	assert.Nil(t, gradient)
+	assert.EqualError(t, err, "aggregated gradient is nil")
+	gradient, err = sanitizeAggregatedGradient(request, &promptiter.AggregatedSurfaceGradient{
+		SurfaceID: "other",
+	})
+	assert.Nil(t, gradient)
+	assert.EqualError(t, err, `aggregated gradient surface id "other" does not match request surface id "surf_1"`)
+	gradient, err = sanitizeAggregatedGradient(request, &promptiter.AggregatedSurfaceGradient{
+		NodeID: "other",
+	})
+	assert.Nil(t, gradient)
+	assert.EqualError(t, err, `aggregated gradient node id "other" does not match request node id "node_1"`)
+	gradient, err = sanitizeAggregatedGradient(request, &promptiter.AggregatedSurfaceGradient{
+		Type: astructure.SurfaceTypeModel,
+	})
+	assert.Nil(t, gradient)
+	assert.EqualError(t, err, `aggregated gradient surface type "model" does not match request surface type "instruction"`)
+	gradient, err = sanitizeAggregatedGradient(request, &promptiter.AggregatedSurfaceGradient{
+		Gradients: []promptiter.SurfaceGradient{
+			{Gradient: ""},
+		},
+	})
+	assert.Nil(t, gradient)
+	assert.EqualError(t, err, "aggregated gradient is empty")
+	gradient, err = sanitizeAggregatedGradient(request, &promptiter.AggregatedSurfaceGradient{
+		Gradients: []promptiter.SurfaceGradient{
+			{Gradient: "detail", Severity: promptiter.LossSeverityP2},
+			{SurfaceID: "surf_1", Gradient: "grounding", Severity: promptiter.LossSeverityP0},
+		},
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, gradient)
+	assert.Equal(t, "surf_1", gradient.SurfaceID)
+	assert.Equal(t, "node_1", gradient.NodeID)
+	assert.Equal(t, astructure.SurfaceTypeInstruction, gradient.Type)
+	assert.Equal(t, "grounding", gradient.Gradients[0].Gradient)
+}
