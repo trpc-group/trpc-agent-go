@@ -565,12 +565,37 @@ func (r *Runtime) ConfigureAdmin(
 	r.applyAdminConfig(cfg)
 }
 
+// AddAdminOptions appends runtime-scoped admin options without changing
+// Runtime's exported struct layout.
+func (r *Runtime) AddAdminOptions(opts ...admin.Option) {
+	if r == nil || len(opts) == 0 {
+		return
+	}
+
+	filtered := make([]admin.Option, 0, len(opts))
+	filtered = append(filtered, runtimeAdminOptions(r)...)
+	for _, opt := range opts {
+		if opt != nil {
+			filtered = append(filtered, opt)
+		}
+	}
+	if len(filtered) == 0 {
+		return
+	}
+
+	setRuntimeAdminOptions(r, filtered)
+	if r.adminCfg == nil {
+		return
+	}
+	r.applyAdminConfig(*r.adminCfg)
+}
+
 func (r *Runtime) applyAdminConfig(cfg admin.Config) {
 	if r == nil {
 		return
 	}
 	r.adminCfg = &cfg
-	r.Admin.Handler = admin.New(cfg).Handler()
+	r.Admin.Handler = admin.New(cfg, runtimeAdminOptions(r)...).Handler()
 	r.Admin.Addr = strings.TrimSpace(cfg.AdminAddr)
 	r.Admin.URL = strings.TrimSpace(cfg.AdminURL)
 }
@@ -1047,6 +1072,7 @@ func NewRuntime(
 			fileMemoryStore,
 			rt.SessionService(),
 		)
+		setRuntimeAdminOptions(rt, buildAdminOptions(opts))
 		rt.applyAdminConfig(adminCfg)
 	}
 
@@ -1083,6 +1109,7 @@ func (r *Runtime) Close() error {
 	if err := shutdownTelemetry(r.telemetryShutdown); err != nil {
 		errs = append(errs, err)
 	}
+	clearRuntimeAdminOptions(r)
 	return errors.Join(errs...)
 }
 
@@ -1506,32 +1533,35 @@ func run(ctx context.Context, args []string) error {
 				Err:  err,
 			}
 		}
-		adminSvc := admin.New(buildAdminConfig(
-			opts,
-			agentType,
-			instanceID,
-			langfuseStatus,
-			resolvedStateDir,
-			debugDir,
-			startedAt,
-			channels,
-			admin.Routes{
-				HealthPath:   gwSrv.HealthPath(),
-				MessagesPath: gwSrv.MessagesPath(),
-				StatusPath:   gwSrv.StatusPath(),
-				CancelPath:   gwSrv.CancelPath(),
-			},
-			cronSvc,
-			openClawTools.execMgr,
-			promptController,
-			browserServerSup,
-			adminBinding.addr,
-			adminBinding.url,
-			skillsRepo,
-			skillsWatch,
-			fileMemoryStore,
-			bridgedSessionSvc,
-		))
+		adminSvc := admin.New(
+			buildAdminConfig(
+				opts,
+				agentType,
+				instanceID,
+				langfuseStatus,
+				resolvedStateDir,
+				debugDir,
+				startedAt,
+				channels,
+				admin.Routes{
+					HealthPath:   gwSrv.HealthPath(),
+					MessagesPath: gwSrv.MessagesPath(),
+					StatusPath:   gwSrv.StatusPath(),
+					CancelPath:   gwSrv.CancelPath(),
+				},
+				cronSvc,
+				openClawTools.execMgr,
+				promptController,
+				browserServerSup,
+				adminBinding.addr,
+				adminBinding.url,
+				skillsRepo,
+				skillsWatch,
+				fileMemoryStore,
+				bridgedSessionSvc,
+			),
+			buildAdminOptions(opts)...,
+		)
 		adminSrv = &http.Server{
 			Handler:           adminSvc.Handler(),
 			ReadHeaderTimeout: 5 * time.Second,
