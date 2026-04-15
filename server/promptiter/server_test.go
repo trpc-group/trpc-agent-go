@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -56,6 +57,8 @@ type fakeManager struct {
 	cancel func(ctx context.Context, runID string) error
 }
 
+type failingWriter struct{}
+
 func (f *fakeManager) Start(ctx context.Context, request *enginepkg.RunRequest) (*enginepkg.RunResult, error) {
 	if f.start != nil {
 		return f.start(ctx, request)
@@ -79,6 +82,18 @@ func (f *fakeManager) Cancel(ctx context.Context, runID string) error {
 
 func (f *fakeManager) Close() error {
 	return nil
+}
+
+func (failingWriter) Header() http.Header {
+	return http.Header{}
+}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
+func (failingWriter) WriteHeader(statusCode int) {
+	_ = statusCode
 }
 
 func newTestServer(t *testing.T, opts ...Option) *Server {
@@ -285,6 +300,17 @@ func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 	assert.Equal(t, enginepkg.RunStatusQueued, resp.Result.Status)
 }
 
+func TestHandleAsyncRunsRejectsInvalidMethodWhenManagerIsConfigured(t *testing.T) {
+	srv := newTestServer(t,
+		WithManager(&fakeManager{}),
+	)
+	req := httptest.NewRequest(http.MethodGet, srv.AsyncRunsPath(), nil)
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusMethodNotAllowed, recorder.Code)
+	assert.Equal(t, http.MethodPost, recorder.Header().Get(headerAllow))
+}
+
 func TestHandleGetRunReturnsRun(t *testing.T) {
 	srv := newTestServer(t,
 		WithManager(&fakeManager{
@@ -326,6 +352,17 @@ func TestHandleCancelRunCancelsAsyncRun(t *testing.T) {
 	srv.Handler().ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusAccepted, recorder.Code)
 	assert.Equal(t, "run_1", capturedRunID)
+}
+
+func TestHandleRunResourceSupportsOptions(t *testing.T) {
+	srv := newTestServer(t,
+		WithManager(&fakeManager{}),
+	)
+	req := httptest.NewRequest(http.MethodOptions, srv.AsyncRunsPath()+"/run_1/cancel", nil)
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	assert.Equal(t, "*", recorder.Header().Get(headerAccessControlOrigin))
 }
 
 func TestHandleStructureSupportsOptionsAndRejectsInvalidMethod(t *testing.T) {
@@ -472,6 +509,26 @@ func TestStatusCodeFromError(t *testing.T) {
 	assert.Equal(t, http.StatusRequestTimeout, statusCodeFromError(context.Canceled))
 	assert.Equal(t, http.StatusNotFound, statusCodeFromError(os.ErrNotExist))
 	assert.Equal(t, http.StatusInternalServerError, statusCodeFromError(errors.New("boom")))
+}
+
+func TestServerHelpers(t *testing.T) {
+	srv := newTestServer(t, WithTimeout(3*time.Second))
+	assert.Equal(t, 3*time.Second, srv.timeout)
+	assert.Equal(t, "/promptiter", normalizeBasePath("/promptiter/"))
+	assert.Equal(t, "/promptiter", normalizeBasePath("promptiter"))
+	assert.Equal(t, defaultBasePath, normalizeBasePath("   "))
+	assert.NoError(t, srv.Close())
+}
+
+func TestRespondJSONWritesPayloadAndHandlesEncodeError(t *testing.T) {
+	srv := newTestServer(t)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/runs", nil)
+	srv.respondJSON(recorder, req, http.StatusCreated, map[string]string{"status": "ok"})
+	require.Equal(t, http.StatusCreated, recorder.Code)
+	assert.Equal(t, contentTypeJSON, recorder.Header().Get(headerContentType))
+	assert.JSONEq(t, `{"status":"ok"}`, recorder.Body.String())
+	srv.respondJSON(failingWriter{}, req, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func TestNewExecutionContext(t *testing.T) {

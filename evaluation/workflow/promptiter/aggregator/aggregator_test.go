@@ -74,6 +74,27 @@ func TestNewRejectsNilRunner(t *testing.T) {
 	assert.Nil(t, ag)
 }
 
+func TestNewRejectsNilDependencies(t *testing.T) {
+	t.Run("message builder", func(t *testing.T) {
+		ag, err := New(context.Background(), &fakeRunner{}, WithMessageBuilder(nil))
+
+		assert.EqualError(t, err, "message builder is nil")
+		assert.Nil(t, ag)
+	})
+	t.Run("user id supplier", func(t *testing.T) {
+		ag, err := New(context.Background(), &fakeRunner{}, WithUserIDSupplier(nil))
+
+		assert.EqualError(t, err, "user id supplier is nil")
+		assert.Nil(t, ag)
+	})
+	t.Run("session id supplier", func(t *testing.T) {
+		ag, err := New(context.Background(), &fakeRunner{}, WithSessionIDSupplier(nil))
+
+		assert.EqualError(t, err, "session id supplier is nil")
+		assert.Nil(t, ag)
+	})
+}
+
 func TestAggregateUsesRunnerStructuredOutput(t *testing.T) {
 	r := &fakeRunner{
 		events: []*event.Event{
@@ -500,6 +521,51 @@ func TestAggregateRejectsNilMessage(t *testing.T) {
 	assert.Nil(t, rsp)
 }
 
+func TestAggregateRejectsEmptyRunnerIdentity(t *testing.T) {
+	t.Run("empty user id", func(t *testing.T) {
+		ag, err := New(
+			context.Background(),
+			&fakeRunner{},
+			WithUserIDSupplier(func(ctx context.Context) string {
+				_ = ctx
+				return ""
+			}),
+		)
+		assert.NoError(t, err)
+
+		rsp, runErr := ag.Aggregate(context.Background(), &Request{
+			SurfaceID: "surf_1",
+			NodeID:    "node_1",
+			Type:      astructure.SurfaceTypeInstruction,
+			Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Severity: promptiter.LossSeverityP1, Gradient: "citation issue"}},
+		})
+
+		assert.EqualError(t, runErr, "user id is empty")
+		assert.Nil(t, rsp)
+	})
+	t.Run("empty session id", func(t *testing.T) {
+		ag, err := New(
+			context.Background(),
+			&fakeRunner{},
+			WithSessionIDSupplier(func(ctx context.Context) string {
+				_ = ctx
+				return ""
+			}),
+		)
+		assert.NoError(t, err)
+
+		rsp, runErr := ag.Aggregate(context.Background(), &Request{
+			SurfaceID: "surf_1",
+			NodeID:    "node_1",
+			Type:      astructure.SurfaceTypeInstruction,
+			Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Severity: promptiter.LossSeverityP1, Gradient: "citation issue"}},
+		})
+
+		assert.EqualError(t, runErr, "session id is empty")
+		assert.Nil(t, rsp)
+	})
+}
+
 func TestAggregateRejectsInvalidRequests(t *testing.T) {
 	ag, err := New(context.Background(), &fakeRunner{})
 	assert.NoError(t, err)
@@ -699,4 +765,31 @@ func TestNormalizeRequestAndSanitizeAggregatedGradient(t *testing.T) {
 	assert.Equal(t, "node_1", gradient.NodeID)
 	assert.Equal(t, astructure.SurfaceTypeInstruction, gradient.Type)
 	assert.Equal(t, "grounding", gradient.Gradients[0].Gradient)
+}
+
+func TestCompareGradientsOrdersByAllTieBreakers(t *testing.T) {
+	left := promptiter.SurfaceGradient{
+		Severity:   promptiter.LossSeverityP1,
+		EvalSetID:  "set_a",
+		EvalCaseID: "case_1",
+		StepID:     "step_1",
+		Gradient:   "alpha",
+	}
+	right := promptiter.SurfaceGradient{
+		Severity:   promptiter.LossSeverityP1,
+		EvalSetID:  "set_a",
+		EvalCaseID: "case_1",
+		StepID:     "step_1",
+		Gradient:   "beta",
+	}
+	assert.Equal(t, -1, compareGradients(left, right))
+	right.Gradient = left.Gradient
+	right.StepID = "step_2"
+	assert.Equal(t, -1, compareGradients(left, right))
+	right.StepID = left.StepID
+	right.EvalCaseID = "case_2"
+	assert.Equal(t, -1, compareGradients(left, right))
+	right.EvalCaseID = left.EvalCaseID
+	right.EvalSetID = "set_b"
+	assert.Equal(t, -1, compareGradients(left, right))
 }

@@ -74,6 +74,27 @@ func TestNewRejectsNilRunner(t *testing.T) {
 	assert.Nil(t, oz)
 }
 
+func TestNewRejectsNilDependencies(t *testing.T) {
+	t.Run("message builder", func(t *testing.T) {
+		oz, err := New(context.Background(), &fakeRunner{}, WithMessageBuilder(nil))
+
+		assert.EqualError(t, err, "message builder is nil")
+		assert.Nil(t, oz)
+	})
+	t.Run("user id supplier", func(t *testing.T) {
+		oz, err := New(context.Background(), &fakeRunner{}, WithUserIDSupplier(nil))
+
+		assert.EqualError(t, err, "user id supplier is nil")
+		assert.Nil(t, oz)
+	})
+	t.Run("session id supplier", func(t *testing.T) {
+		oz, err := New(context.Background(), &fakeRunner{}, WithSessionIDSupplier(nil))
+
+		assert.EqualError(t, err, "session id supplier is nil")
+		assert.Nil(t, oz)
+	})
+}
+
 func TestOptimizeUsesRunnerStructuredOutput(t *testing.T) {
 	currentText := "current instruction"
 	updatedText := "updated instruction"
@@ -393,6 +414,41 @@ func TestOptimizeRejectsNilMessage(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, rsp)
+}
+
+func TestOptimizeRejectsEmptyRunnerIdentity(t *testing.T) {
+	t.Run("empty user id", func(t *testing.T) {
+		oz, err := New(
+			context.Background(),
+			&fakeRunner{},
+			WithUserIDSupplier(func(ctx context.Context) string {
+				_ = ctx
+				return ""
+			}),
+		)
+		assert.NoError(t, err)
+
+		rsp, runErr := oz.Optimize(context.Background(), newInstructionRequest("current instruction"))
+
+		assert.EqualError(t, runErr, "user id is empty")
+		assert.Nil(t, rsp)
+	})
+	t.Run("empty session id", func(t *testing.T) {
+		oz, err := New(
+			context.Background(),
+			&fakeRunner{},
+			WithSessionIDSupplier(func(ctx context.Context) string {
+				_ = ctx
+				return ""
+			}),
+		)
+		assert.NoError(t, err)
+
+		rsp, runErr := oz.Optimize(context.Background(), newInstructionRequest("current instruction"))
+
+		assert.EqualError(t, runErr, "session id is empty")
+		assert.Nil(t, rsp)
+	})
 }
 
 func TestOptimizeRejectsInvalidRequests(t *testing.T) {

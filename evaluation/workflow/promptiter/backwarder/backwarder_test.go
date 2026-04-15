@@ -76,6 +76,27 @@ func TestNewRejectsNilRunner(t *testing.T) {
 	assert.Nil(t, bw)
 }
 
+func TestNewRejectsNilDependencies(t *testing.T) {
+	t.Run("message builder", func(t *testing.T) {
+		bw, err := New(context.Background(), &fakeRunner{}, WithMessageBuilder(nil))
+
+		assert.EqualError(t, err, "message builder is nil")
+		assert.Nil(t, bw)
+	})
+	t.Run("user id supplier", func(t *testing.T) {
+		bw, err := New(context.Background(), &fakeRunner{}, WithUserIDSupplier(nil))
+
+		assert.EqualError(t, err, "user id supplier is nil")
+		assert.Nil(t, bw)
+	})
+	t.Run("session id supplier", func(t *testing.T) {
+		bw, err := New(context.Background(), &fakeRunner{}, WithSessionIDSupplier(nil))
+
+		assert.EqualError(t, err, "session id supplier is nil")
+		assert.Nil(t, bw)
+	})
+}
+
 func TestBackwardUsesRunnerStructuredOutput(t *testing.T) {
 	r := &fakeRunner{
 		events: []*event.Event{
@@ -625,6 +646,41 @@ func TestBackwardRejectsNilMessage(t *testing.T) {
 	assert.Nil(t, rsp)
 }
 
+func TestBackwardRejectsEmptyRunnerIdentity(t *testing.T) {
+	t.Run("empty user id", func(t *testing.T) {
+		bw, err := New(
+			context.Background(),
+			&fakeRunner{},
+			WithUserIDSupplier(func(ctx context.Context) string {
+				_ = ctx
+				return ""
+			}),
+		)
+		assert.NoError(t, err)
+
+		rsp, runErr := bw.Backward(context.Background(), newInstructionRequest())
+
+		assert.EqualError(t, runErr, "user id is empty")
+		assert.Nil(t, rsp)
+	})
+	t.Run("empty session id", func(t *testing.T) {
+		bw, err := New(
+			context.Background(),
+			&fakeRunner{},
+			WithSessionIDSupplier(func(ctx context.Context) string {
+				_ = ctx
+				return ""
+			}),
+		)
+		assert.NoError(t, err)
+
+		rsp, runErr := bw.Backward(context.Background(), newInstructionRequest())
+
+		assert.EqualError(t, runErr, "session id is empty")
+		assert.Nil(t, rsp)
+	})
+}
+
 func TestBackwardRejectsInvalidRequests(t *testing.T) {
 	bw, err := New(context.Background(), &fakeRunner{})
 	assert.NoError(t, err)
@@ -881,6 +937,27 @@ func TestSanitizeHelpers(t *testing.T) {
 	}, "missing")
 	assert.Empty(t, stepID)
 	assert.EqualError(t, err, `propagation predecessor step id "missing" is not part of request predecessors`)
+}
+
+func TestRequestHelpersHandleNilAndDeduplicate(t *testing.T) {
+	assert.Nil(t, requestSurfaceIDs(nil))
+	assert.Nil(t, requestAllowedGradientSurfaceIDs(nil))
+	assert.Nil(t, requestPredecessorStepIDs(nil))
+	request := newInstructionRequest()
+	request.AllowedGradientSurfaceIDs = nil
+	request.Surfaces = append(request.Surfaces,
+		astructure.Surface{SurfaceID: "surf_1"},
+		astructure.Surface{SurfaceID: ""},
+		astructure.Surface{SurfaceID: "surf_2"},
+	)
+	request.Predecessors = append(request.Predecessors,
+		Predecessor{StepID: "pred_1"},
+		Predecessor{StepID: ""},
+		Predecessor{StepID: "pred_2"},
+	)
+	assert.Equal(t, []string{"surf_1", "surf_2"}, requestSurfaceIDs(request))
+	assert.Equal(t, []string{"surf_1", "surf_2"}, requestAllowedGradientSurfaceIDs(request))
+	assert.Equal(t, []string{"pred_1", "pred_2"}, requestPredecessorStepIDs(request))
 }
 
 func newInstructionRequest() *Request {
