@@ -565,6 +565,31 @@ func (r *Runtime) ConfigureAdmin(
 	r.applyAdminConfig(cfg)
 }
 
+// AddAdminOptions appends runtime-scoped admin options without changing
+// Runtime's exported struct layout.
+func (r *Runtime) AddAdminOptions(opts ...admin.Option) {
+	if r == nil || len(opts) == 0 {
+		return
+	}
+
+	filtered := make([]admin.Option, 0, len(opts))
+	filtered = append(filtered, runtimeAdminOptions(r)...)
+	for _, opt := range opts {
+		if opt != nil {
+			filtered = append(filtered, opt)
+		}
+	}
+	if len(filtered) == 0 {
+		return
+	}
+
+	setRuntimeAdminOptions(r, filtered)
+	if r.adminCfg == nil {
+		return
+	}
+	r.applyAdminConfig(*r.adminCfg)
+}
+
 func (r *Runtime) applyAdminConfig(cfg admin.Config) {
 	if r == nil {
 		return

@@ -243,6 +243,7 @@ type BrowserManagedService struct {
 type Service struct {
 	cfg               Config
 	runtimeConfig     RuntimeConfigProvider
+	runtimeLifecycle  RuntimeLifecycleProvider
 	now               func() time.Time
 	browserHTTPClient *http.Client
 }
@@ -269,6 +270,16 @@ func WithRuntimeConfigProvider(provider RuntimeConfigProvider) Option {
 	return func(s *Service) {
 		if s != nil {
 			s.runtimeConfig = provider
+		}
+	}
+}
+
+func WithRuntimeLifecycleProvider(
+	provider RuntimeLifecycleProvider,
+) Option {
+	return func(s *Service) {
+		if s != nil {
+			s.runtimeLifecycle = provider
 		}
 	}
 }
@@ -306,6 +317,10 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(
 		routeConfigPage,
 		wrapRelativeLinksFunc(s.handleConfigPage),
+	)
+	mux.HandleFunc(
+		routeRuntimeControlPage,
+		wrapRelativeLinksFunc(s.handleRuntimeControlPage),
 	)
 	mux.HandleFunc(
 		routePrompts,
@@ -361,6 +376,10 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(
 		routeConfigReset,
 		wrapRelativeLinksFunc(s.handleResetRuntimeConfig),
+	)
+	mux.HandleFunc(
+		routeRuntimeControlAction,
+		wrapRelativeLinksFunc(s.handleRuntimeControlAction),
 	)
 	mux.HandleFunc(
 		routePromptInlineSave,
@@ -607,6 +626,7 @@ type skillInstallView struct {
 type pageData struct {
 	Snapshot          snapshot
 	Config            RuntimeConfigStatus
+	RuntimeControl    RuntimeLifecyclePageStatus
 	Prompts           PromptsStatus
 	Identity          IdentityStatus
 	Personas          PersonasStatus
@@ -640,6 +660,7 @@ type pageStateStatus struct {
 type pageRefreshInput struct {
 	Snapshot          snapshot
 	Config            RuntimeConfigStatus
+	RuntimeControl    RuntimeLifecyclePageStatus
 	Prompts           PromptsStatus
 	Identity          IdentityStatus
 	Personas          PersonasStatus
@@ -1119,6 +1140,11 @@ func (s *Service) renderPage(
 
 	snapshot := s.snapshotForView(view)
 	configStatus := s.runtimeConfigStatus()
+	runtimeControl := s.runtimeLifecycleStatus(r)
+	refreshRuntimeControl := runtimeControl
+	if view == viewRuntimeControl {
+		refreshRuntimeControl = s.runtimeLifecycleRefreshStatus(r)
+	}
 	prompts := s.promptsStatus()
 	identity := s.identityStatus()
 	personas := s.personasStatus()
@@ -1126,6 +1152,7 @@ func (s *Service) renderPage(
 	data := pageData{
 		Snapshot:        snapshot,
 		Config:          configStatus,
+		RuntimeControl:  runtimeControl,
 		Prompts:         prompts,
 		Identity:        identity,
 		Personas:        personas,
@@ -1136,7 +1163,11 @@ func (s *Service) renderPage(
 		View:            view,
 		PageTitle:       pageTitle(view),
 		PageSummary:     pageSummary(view),
-		NavSections:     adminNavSections(view, s.hasRuntimeConfigProvider()),
+		NavSections: adminNavSections(
+			view,
+			s.hasRuntimeConfigProvider(),
+			s.hasRuntimeLifecycleProvider(),
+		),
 	}
 	if view == viewChats {
 		data.SelectedChat, data.SelectedChatError = resolveSelectedChat(
@@ -1151,6 +1182,7 @@ func (s *Service) renderPage(
 		pageRefreshInput{
 			Snapshot:          snapshot,
 			Config:            configStatus,
+			RuntimeControl:    refreshRuntimeControl,
 			Prompts:           prompts,
 			Identity:          identity,
 			Personas:          personas,
@@ -1293,6 +1325,7 @@ func mergeChatView(
 func adminNavSections(
 	active adminView,
 	showConfig bool,
+	showRuntimeControl bool,
 ) []adminNavSection {
 	controlItems := []adminNavItem{
 		{Label: "Overview", Path: routeOverview},
@@ -1320,11 +1353,7 @@ func adminNavSections(
 		},
 		{
 			Label: "Diagnostics",
-			Items: []adminNavItem{
-				{Label: "Runtime Sessions", Path: routeSessions},
-				{Label: "Debug", Path: routeDebug},
-				{Label: "Browser", Path: routeBrowser},
-			},
+			Items: runtimeDiagnosticsNavItems(showRuntimeControl),
 		},
 	}
 	for i := range sections {
@@ -1336,10 +1365,34 @@ func adminNavSections(
 	return sections
 }
 
+func runtimeDiagnosticsNavItems(
+	showRuntimeControl bool,
+) []adminNavItem {
+	items := []adminNavItem{}
+	if showRuntimeControl {
+		items = append(
+			items,
+			adminNavItem{
+				Label: "Runtime Control",
+				Path:  routeRuntimeControlPage,
+			},
+		)
+	}
+	items = append(
+		items,
+		adminNavItem{Label: "Runtime Sessions", Path: routeSessions},
+		adminNavItem{Label: "Debug", Path: routeDebug},
+		adminNavItem{Label: "Browser", Path: routeBrowser},
+	)
+	return items
+}
+
 func pageTitle(view adminView) string {
 	switch view {
 	case viewConfig:
 		return "Config"
+	case viewRuntimeControl:
+		return "Runtime Control"
 	case viewSkills:
 		return "Skills"
 	case viewPrompts:
@@ -1369,6 +1422,8 @@ func pageSummary(view adminView) string {
 	switch view {
 	case viewConfig:
 		return pageSummaryConfig
+	case viewRuntimeControl:
+		return pageSummaryRuntimeControl
 	case viewSkills:
 		return "Discover installed skills, refresh folders from disk, and manage config-backed enablement."
 	case viewPrompts:
@@ -1398,6 +1453,7 @@ func pageRefreshWatch(view adminView) bool {
 	switch view {
 	case viewOverview,
 		viewConfig,
+		viewRuntimeControl,
 		viewSkills,
 		viewChats,
 		viewMemory,
@@ -1454,6 +1510,14 @@ func pageRefreshStatePath(
 			values.Set(queryChatID, chatID)
 		}
 	}
+	if view == viewRuntimeControl && r != nil && r.URL != nil {
+		version := strings.TrimSpace(
+			r.URL.Query().Get(queryRuntimeVersion),
+		)
+		if version != "" {
+			values.Set(queryRuntimeVersion, version)
+		}
+	}
 	return routePageStateJSON + "?" + values.Encode()
 }
 
@@ -1464,6 +1528,8 @@ func pageRefreshToken(
 	switch view {
 	case viewConfig:
 		return refreshTokenForValue(input.Config)
+	case viewRuntimeControl:
+		return refreshTokenForValue(input.RuntimeControl)
 	case viewPrompts:
 		return refreshTokenForValue(input.Prompts)
 	case viewIdentity:
@@ -1517,6 +1583,11 @@ func (s *Service) pageRefreshInput(
 		Identity: s.identityStatus(),
 		Personas: s.personasStatus(),
 		Chats:    s.chatsStatus(),
+	}
+	if view == viewRuntimeControl {
+		input.RuntimeControl = s.runtimeLifecycleRefreshStatus(r)
+	} else {
+		input.RuntimeControl = s.runtimeLifecycleStatus(r)
 	}
 	if view == viewChats {
 		input.SelectedChat, input.SelectedChatError = resolveSelectedChat(
@@ -1728,6 +1799,8 @@ func navPath(raw string) string {
 		return routeOverview
 	case routeConfigPage:
 		return routeConfigPage
+	case routeRuntimeControlPage:
+		return routeRuntimeControlPage
 	case routeSkillsPage:
 		return routeSkillsPage
 	case routePrompts:
@@ -1759,6 +1832,8 @@ func navViewForPath(path string) adminView {
 		return viewOverview
 	case routeConfigPage:
 		return viewConfig
+	case routeRuntimeControlPage:
+		return viewRuntimeControl
 	case routeSkillsPage:
 		return viewSkills
 	case routePrompts:
@@ -3046,6 +3121,80 @@ const adminPageHTML = `<!doctype html>
     .config-form .subtle {
       margin: 0;
     }
+    .runtime-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px 16px;
+      margin-top: 12px;
+    }
+    .runtime-meta-card {
+      border-radius: 14px;
+      background: rgba(243, 238, 231, 0.62);
+      padding: 10px 12px;
+    }
+    .runtime-meta-label {
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .runtime-meta-value {
+      margin-top: 6px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .runtime-pending {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(215, 207, 194, 0.65);
+    }
+    .runtime-pending h3,
+    .runtime-version-card h3,
+    .runtime-changelog-card h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+    .runtime-summary-list {
+      margin: 12px 0 0;
+      padding-left: 20px;
+    }
+    .runtime-summary-list li {
+      color: var(--muted);
+    }
+    .runtime-version-form,
+    .runtime-version-view-form {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .runtime-version-form select,
+    .runtime-version-view-form select {
+      min-width: min(100%, 320px);
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--ink);
+      font: inherit;
+    }
+    .runtime-version-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .runtime-changelog {
+      margin-top: 12px;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(215, 207, 194, 0.85);
+      background: rgba(255, 253, 248, 0.9);
+      white-space: pre-wrap;
+      font-family: "SFMono-Regular", "SFMono-Regular", monospace;
+      line-height: 1.45;
+      max-height: 420px;
+      overflow: auto;
+    }
     .skills-group {
       margin-top: 18px;
     }
@@ -4174,6 +4323,291 @@ const adminPageHTML = `<!doctype html>
       </p>
       {{end}}
     </section>
+    {{end}}
+
+    {{if eq .View "runtime_control"}}
+    {{if .RuntimeControl.Error}}
+    <div class="notice err" style="margin-top: 24px;">
+      {{.RuntimeControl.Error}}
+    </div>
+    {{end}}
+    {{if .RuntimeControl.Enabled}}
+    <section class="panels" style="margin-top: 24px;">
+      <article class="card" id="runtime-control-state">
+        <h2>Runtime State</h2>
+        <p class="subtle">
+          Review the current version, queue depth, and any lifecycle action
+          that is already in flight.
+        </p>
+        <div class="runtime-meta-grid">
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">Current Version</div>
+            <div class="runtime-meta-value">
+              {{if .RuntimeControl.Status.CurrentVersion}}
+                <code>{{.RuntimeControl.Status.CurrentVersion}}</code>
+              {{else}}
+                <span class="subtle">-</span>
+              {{end}}
+            </div>
+          </div>
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">Latest Version</div>
+            <div class="runtime-meta-value">
+              {{if .RuntimeControl.Index.LatestVersion}}
+                <code>{{.RuntimeControl.Index.LatestVersion}}</code>
+              {{else}}
+                <span class="subtle">Unavailable</span>
+              {{end}}
+            </div>
+          </div>
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">State</div>
+            <div class="runtime-meta-value">
+              {{if .RuntimeControl.Status.State}}
+                {{.RuntimeControl.Status.State}}
+              {{else}}
+                <span class="subtle">Unknown</span>
+              {{end}}
+            </div>
+          </div>
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">Exit Code</div>
+            <div class="runtime-meta-value">
+              {{.RuntimeControl.Status.ExitCode}}
+            </div>
+          </div>
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">Running Requests</div>
+            <div class="runtime-meta-value">
+              {{.RuntimeControl.Status.RunningRequests}}
+            </div>
+          </div>
+          <div class="runtime-meta-card">
+            <div class="runtime-meta-label">Queued Requests</div>
+            <div class="runtime-meta-value">
+              {{.RuntimeControl.Status.QueuedRequests}}
+            </div>
+          </div>
+        </div>
+        {{if .RuntimeControl.Status.Pending}}
+        <div class="runtime-pending">
+          <h3>Pending Action</h3>
+          <dl class="meta">
+            <dt>Kind</dt>
+            <dd>{{.RuntimeControl.Status.Pending.Kind}}</dd>
+            <dt>Mode</dt>
+            <dd>{{.RuntimeControl.Status.Pending.Mode}}</dd>
+            {{if .RuntimeControl.Status.Pending.TargetVersion}}
+            <dt>Target Version</dt>
+            <dd>
+              <code>{{.RuntimeControl.Status.Pending.TargetVersion}}</code>
+            </dd>
+            {{end}}
+            {{if .RuntimeControl.Status.Pending.Actor}}
+            <dt>Actor</dt>
+            <dd>{{.RuntimeControl.Status.Pending.Actor}}</dd>
+            {{end}}
+            {{if .RuntimeControl.Status.Pending.Source}}
+            <dt>Source</dt>
+            <dd>{{.RuntimeControl.Status.Pending.Source}}</dd>
+            {{end}}
+            {{if hasTime .RuntimeControl.Status.Pending.RequestedAt}}
+            <dt>Requested</dt>
+            <dd>{{formatTime .RuntimeControl.Status.Pending.RequestedAt}}</dd>
+            {{end}}
+            {{if hasTime .RuntimeControl.Status.UpdatedAt}}
+            <dt>Updated</dt>
+            <dd>{{formatTime .RuntimeControl.Status.UpdatedAt}}</dd>
+            {{end}}
+          </dl>
+          {{if .RuntimeControl.Status.Pending.Summary}}
+          <ul class="runtime-summary-list">
+            {{range .RuntimeControl.Status.Pending.Summary}}
+            <li>{{.}}</li>
+            {{end}}
+          </ul>
+          {{end}}
+        </div>
+        {{else}}
+        <p class="subtle" style="margin-top: 14px;">
+          No restart or version switch is currently pending.
+        </p>
+        {{end}}
+      </article>
+
+      <article class="card" id="runtime-control-quick-actions">
+        <h2>Quick Actions</h2>
+        <p class="subtle">
+          These controls line up with the runtime lifecycle card behavior:
+          graceful actions wait for in-flight work, forced actions exit after
+          the forced-shutdown window.
+        </p>
+        <div class="skills-ops-grid">
+          <div class="skills-op-card">
+            <div class="skills-op-label">Restart</div>
+            <div class="skills-op-value">Graceful restart</div>
+            <div class="skills-op-note">
+              Stop admitting new work, drain active requests, and then restart.
+            </div>
+            <div class="skills-op-actions">
+              <form method="post" action="/api/runtime/control/action">
+                <input type="hidden" name="kind" value="restart">
+                <input type="hidden" name="mode" value="graceful">
+                <input type="hidden" name="return_path" value="/runtime-control">
+                <input type="hidden" name="return_to" value="runtime-control-quick-actions">
+                <button type="submit">Graceful Restart</button>
+              </form>
+            </div>
+          </div>
+          <div class="skills-op-card">
+            <div class="skills-op-label">Restart</div>
+            <div class="skills-op-value">Force restart</div>
+            <div class="skills-op-note">
+              Request a restart and exit once the forced shutdown timeout lands.
+            </div>
+            <div class="skills-op-actions">
+              <form method="post" action="/api/runtime/control/action">
+                <input type="hidden" name="kind" value="restart">
+                <input type="hidden" name="mode" value="force">
+                <input type="hidden" name="return_path" value="/runtime-control">
+                <input type="hidden" name="return_to" value="runtime-control-quick-actions">
+                <button class="warn" type="submit">Force Restart</button>
+              </form>
+            </div>
+          </div>
+          <div class="skills-op-card">
+            <div class="skills-op-label">Upgrade</div>
+            <div class="skills-op-value">Latest version</div>
+            <div class="skills-op-note">
+              Ask the runtime to switch to the latest published release.
+            </div>
+            <div class="skills-op-actions">
+              <form method="post" action="/api/runtime/control/action">
+                <input type="hidden" name="kind" value="upgrade">
+                <input type="hidden" name="mode" value="graceful">
+                <input type="hidden" name="return_path" value="/runtime-control">
+                <input type="hidden" name="return_to" value="runtime-control-quick-actions">
+                <button type="submit">Upgrade to Latest</button>
+              </form>
+            </div>
+          </div>
+          <div class="skills-op-card">
+            <div class="skills-op-label">Upgrade</div>
+            <div class="skills-op-value">Force latest upgrade</div>
+            <div class="skills-op-note">
+              Request the latest version and force the handoff after the drain
+              window ends.
+            </div>
+            <div class="skills-op-actions">
+              <form method="post" action="/api/runtime/control/action">
+                <input type="hidden" name="kind" value="upgrade">
+                <input type="hidden" name="mode" value="force">
+                <input type="hidden" name="return_path" value="/runtime-control">
+                <input type="hidden" name="return_to" value="runtime-control-quick-actions">
+                <button class="warn" type="submit">Force Upgrade to Latest</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panels" style="margin-top: 16px;">
+      <article class="card runtime-version-card" id="runtime-control-version">
+        <h2>Target Version</h2>
+        <p class="subtle">
+          Pick a release to inspect notes or request a direct switch to that
+          version.
+        </p>
+        {{if .RuntimeControl.Index.MinSupportedTarget}}
+        <p class="subtle">
+          Minimum supported target:
+          <code>{{.RuntimeControl.Index.MinSupportedTarget}}</code>
+        </p>
+        {{end}}
+        {{if .RuntimeControl.Index.Versions}}
+        <form method="get" action="/runtime-control" class="runtime-version-view-form">
+          <select name="version">
+            {{range .RuntimeControl.Index.Versions}}
+            <option value="{{.Version}}" {{if eq $.RuntimeControl.SelectedVersion .Version}}selected{{end}}>
+              {{.Version}}
+            </option>
+            {{end}}
+          </select>
+          <div class="runtime-version-actions">
+            <button class="secondary" type="submit">View Release Notes</button>
+          </div>
+        </form>
+        <form method="post" action="/api/runtime/control/action" class="runtime-version-form">
+          <input type="hidden" name="kind" value="upgrade">
+          <input type="hidden" name="return_path" value="/runtime-control">
+          <input type="hidden" name="return_to" value="runtime-control-version">
+          <select name="target_version">
+            {{range .RuntimeControl.Index.Versions}}
+            <option value="{{.Version}}" {{if eq $.RuntimeControl.SelectedVersion .Version}}selected{{end}}>
+              {{.Version}}
+            </option>
+            {{end}}
+          </select>
+          <div class="runtime-version-actions">
+            <button type="submit" name="mode" value="graceful">
+              Switch Gracefully
+            </button>
+            <button class="warn" type="submit" name="mode" value="force">
+              Switch Forcefully
+            </button>
+          </div>
+        </form>
+        {{else}}
+        <p class="subtle" style="margin-top: 14px;">
+          No published versions are available from the configured release
+          source.
+        </p>
+        {{end}}
+      </article>
+
+      <article class="card runtime-changelog-card" id="runtime-control-changelog">
+        <h2>Release Notes</h2>
+        {{if .RuntimeControl.Changelog.Version}}
+        <p class="subtle">
+          Notes for <code>{{.RuntimeControl.Changelog.Version}}</code>.
+        </p>
+        {{else if .RuntimeControl.SelectedVersion}}
+        <p class="subtle">
+          Notes for <code>{{.RuntimeControl.SelectedVersion}}</code> are not
+          available yet.
+        </p>
+        {{else}}
+        <p class="subtle">
+          Pick a version to inspect release notes.
+        </p>
+        {{end}}
+        {{if .RuntimeControl.Changelog.Summary}}
+        <ul class="runtime-summary-list">
+          {{range .RuntimeControl.Changelog.Summary}}
+          <li>{{.}}</li>
+          {{end}}
+        </ul>
+        {{end}}
+        {{if .RuntimeControl.Changelog.Changelog}}
+        <div class="runtime-changelog">
+          {{.RuntimeControl.Changelog.Changelog}}
+        </div>
+        {{else}}
+        <p class="subtle" style="margin-top: 14px;">
+          The selected version does not currently have release notes.
+        </p>
+        {{end}}
+      </article>
+    </section>
+    {{else if not .RuntimeControl.Error}}
+    <section class="card" style="margin-top: 24px;">
+      <h2>Runtime Control</h2>
+      <p class="subtle">
+        Runtime lifecycle controls are not available for this runtime.
+      </p>
+    </section>
+    {{end}}
     {{end}}
 
     {{if eq .View "skills"}}
