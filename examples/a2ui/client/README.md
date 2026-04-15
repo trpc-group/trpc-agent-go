@@ -1,6 +1,6 @@
 # A2UI Client Demo
 
-This is a lightweight frontend demo that consumes the A2UI example server SSE stream directly in a browser.
+This is a lightweight frontend demo that consumes the A2UI example server SSE stream directly in a browser. It is a reusable demo renderer for the examples in this repo, not a full reference implementation of every A2UI transport and catalog feature.
 
 ## Features
 
@@ -9,7 +9,7 @@ This is a lightweight frontend demo that consumes the A2UI example server SSE st
 - Send natural-language prompts to the server.
 - Observe AG-UI and A2UI streams, with a switch to view one at a time.
 - Render `surfaceUpdate`, `dataModelUpdate`, and `deleteSurface` to visible UI components.
-- Send `userAction` events by clicking rendered buttons.
+- Send `userAction` events from explicit action components and keep data-bound input state local when the component contract allows it.
 
 ## Quick start
 
@@ -35,7 +35,7 @@ http://127.0.0.1:4173
 - `AG-UI / A2UI`: toggle visible logs.
 - Render canvas: shows the current surface and interactive controls.
 
-## Request payload examples
+## Example transport payloads
 
 Normal text prompt:
 
@@ -50,7 +50,7 @@ Normal text prompt:
 }
 ```
 
-Button click sends:
+Action-triggered request in this demo sends:
 
 ```json
 {
@@ -65,4 +65,6 @@ Button click sends:
 
 ## Notes
 
-This frontend intentionally keeps dependencies minimal and does not rely on extra UI frameworks.
+- This frontend intentionally keeps dependencies minimal and does not rely on extra UI frameworks.
+- The request payload format shown here is the example server contract used in this repo, not a claim about every possible A2UI server transport.
+- The renderer focuses on the subset of A2UI components and binding patterns used by the bundled examples.
