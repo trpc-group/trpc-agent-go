@@ -1063,6 +1063,31 @@ func TestServiceHandlerRendersAdminPages(t *testing.T) {
 	}
 }
 
+func TestServiceOverviewConfigNavVisibility(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, routeOverview, nil)
+
+	hidden := New(Config{})
+	hiddenRec := httptest.NewRecorder()
+	hidden.Handler().ServeHTTP(hiddenRec, req)
+	require.Equal(t, http.StatusOK, hiddenRec.Code)
+	require.NotContains(t, hiddenRec.Body.String(), `href="config"`)
+
+	visible := New(
+		Config{},
+		WithRuntimeConfigProvider(&stubRuntimeConfigProvider{
+			status: RuntimeConfigStatus{
+				ConfigPath: "/tmp/openclaw.yaml",
+			},
+		}),
+	)
+	visibleRec := httptest.NewRecorder()
+	visible.Handler().ServeHTTP(visibleRec, req)
+	require.Equal(t, http.StatusOK, visibleRec.Code)
+	require.Contains(t, visibleRec.Body.String(), `href="config"`)
+}
+
 func TestServiceRenderPageRejectsNonGET(t *testing.T) {
 	t.Parallel()
 

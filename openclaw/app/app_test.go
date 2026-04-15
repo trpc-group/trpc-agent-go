@@ -70,6 +70,10 @@ type stubRuntimeAgent struct{}
 
 type stubAdminPromptsProvider struct{}
 
+type stubAdminRuntimeLifecycleProvider struct {
+	status admin.RuntimeLifecycleStatus
+}
+
 func (stubRuntimeAgent) Run(
 	context.Context,
 	*agent.Invocation,
@@ -125,6 +129,35 @@ func (stubAdminPromptsProvider) DeletePromptFile(
 	string,
 ) error {
 	return nil
+}
+
+func (p stubAdminRuntimeLifecycleProvider) RuntimeLifecycleStatus() (
+	admin.RuntimeLifecycleStatus,
+	error,
+) {
+	return p.status, nil
+}
+
+func (stubAdminRuntimeLifecycleProvider) RuntimeLifecycleVersions() (
+	admin.RuntimeLifecycleVersionIndex,
+	error,
+) {
+	return admin.RuntimeLifecycleVersionIndex{}, nil
+}
+
+func (stubAdminRuntimeLifecycleProvider) RuntimeLifecycleChangelog(
+	string,
+) (admin.RuntimeLifecycleChangelog, error) {
+	return admin.RuntimeLifecycleChangelog{}, nil
+}
+
+func (p stubAdminRuntimeLifecycleProvider) RequestRuntimeLifecycleAction(
+	admin.RuntimeLifecycleActionRequest,
+) (admin.RuntimeLifecycleActionResult, error) {
+	return admin.RuntimeLifecycleActionResult{
+		Status:  p.status,
+		Started: true,
+	}, nil
 }
 
 func (stubRuntimeAgent) Info() agent.Info {
@@ -357,6 +390,71 @@ func TestRuntimeConfigureAdmin(t *testing.T) {
 	require.NotNil(t, rt.adminCfg.Prompts)
 }
 
+func TestRuntimeConfigureAdminPreservesRuntimeConfigProvider(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(t, "")
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	rt := &Runtime{
+		adminCfg: &admin.Config{
+			AdminAddr: "127.0.0.1:8081",
+			AdminURL:  "http://127.0.0.1:8081",
+		},
+	}
+	setRuntimeAdminOptions(rt, buildAdminOptions(opts))
+	t.Cleanup(func() {
+		clearRuntimeAdminOptions(rt)
+	})
+
+	rt.ConfigureAdmin(func(cfg *admin.Config) {
+		cfg.Prompts = stubAdminPromptsProvider{}
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rr := httptest.NewRecorder()
+	rt.Admin.Handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), cfgPath)
+}
+
+func TestRuntimeAddAdminOptionsPreservesExistingProviders(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(t, "")
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	rt := &Runtime{
+		adminCfg: &admin.Config{
+			AdminAddr: "127.0.0.1:8081",
+			AdminURL:  "http://127.0.0.1:8081",
+		},
+	}
+	setRuntimeAdminOptions(rt, buildAdminOptions(opts))
+	t.Cleanup(func() {
+		clearRuntimeAdminOptions(rt)
+	})
+
+	rt.AddAdminOptions(admin.WithRuntimeLifecycleProvider(
+		stubAdminRuntimeLifecycleProvider{
+			status: admin.RuntimeLifecycleStatus{
+				CurrentVersion: "v0.0.70",
+			},
+		},
+	))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rr := httptest.NewRecorder()
+	rt.Admin.Handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), cfgPath)
+
+	req = httptest.NewRequest(http.MethodGet, "/runtime-control", nil)
+	rr = httptest.NewRecorder()
+	rt.Admin.Handler.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), "Runtime Control")
+	require.Contains(t, rr.Body.String(), "v0.0.70")
+}
+
 func TestRuntimeConfigureAdminNoAdminConfig(t *testing.T) {
 	t.Parallel()
 
@@ -364,6 +462,7 @@ func TestRuntimeConfigureAdminNoAdminConfig(t *testing.T) {
 	rt.ConfigureAdmin(func(cfg *admin.Config) {
 		cfg.AppName = "ignored"
 	})
+	rt.AddAdminOptions(nil)
 	require.Nil(t, rt.adminCfg)
 	require.Empty(t, rt.Admin)
 
