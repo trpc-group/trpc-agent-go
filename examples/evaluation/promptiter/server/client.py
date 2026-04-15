@@ -87,7 +87,10 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Disable parallel evaluation across eval cases.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.poll_interval <= 0:
+        parser.error("--poll-interval must be > 0")
+    return args
 
 
 def request_json(method: str, url: str, payload: dict | None = None) -> dict:
