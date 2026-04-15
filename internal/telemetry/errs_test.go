@@ -11,6 +11,7 @@ package telemetry
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -198,5 +199,19 @@ func TestToErrorType(t *testing.T) {
 				t.Errorf("ToErrorType(%v, %q) = %q, want %q", tt.err, tt.errorType, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestToErrorType_UsesRealResponseErrorConversion(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", &model.ResponseError{
+		Message: "rate limit",
+		Type:    model.ErrorTypeAPIError,
+		Code:    strPtr("429"),
+	})
+
+	got := ToErrorType(err, "default_error")
+	want := model.ErrorTypeAPIError + "_429"
+	if got != want {
+		t.Fatalf("ToErrorType(%v, %q) = %q, want %q", err, "default_error", got, want)
 	}
 }
