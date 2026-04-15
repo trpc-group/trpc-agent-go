@@ -626,6 +626,8 @@ type skillInstallView struct {
 type pageData struct {
 	Snapshot          snapshot
 	Config            RuntimeConfigStatus
+	ConfigPending     int
+	ConfigCanRestart  bool
 	RuntimeControl    RuntimeLifecyclePageStatus
 	Prompts           PromptsStatus
 	Identity          IdentityStatus
@@ -1150,19 +1152,21 @@ func (s *Service) renderPage(
 	personas := s.personasStatus()
 	chats := s.chatsStatus()
 	data := pageData{
-		Snapshot:        snapshot,
-		Config:          configStatus,
-		RuntimeControl:  runtimeControl,
-		Prompts:         prompts,
-		Identity:        identity,
-		Personas:        personas,
-		Chats:           chats,
-		ChatHistoryPath: routeChatHistoryJSON,
-		Notice:          strings.TrimSpace(r.URL.Query().Get(queryNotice)),
-		Error:           strings.TrimSpace(r.URL.Query().Get(queryError)),
-		View:            view,
-		PageTitle:       pageTitle(view),
-		PageSummary:     pageSummary(view),
+		Snapshot:         snapshot,
+		Config:           configStatus,
+		ConfigPending:    pendingRestartFields(configStatus),
+		ConfigCanRestart: s.hasRuntimeLifecycleProvider(),
+		RuntimeControl:   runtimeControl,
+		Prompts:          prompts,
+		Identity:         identity,
+		Personas:         personas,
+		Chats:            chats,
+		ChatHistoryPath:  routeChatHistoryJSON,
+		Notice:           strings.TrimSpace(r.URL.Query().Get(queryNotice)),
+		Error:            strings.TrimSpace(r.URL.Query().Get(queryError)),
+		View:             view,
+		PageTitle:        pageTitle(view),
+		PageSummary:      pageSummary(view),
 		NavSections: adminNavSections(
 			view,
 			s.hasRuntimeConfigProvider(),
@@ -1200,6 +1204,18 @@ func (s *Service) renderPage(
 			http.StatusInternalServerError,
 		)
 	}
+}
+
+func pendingRestartFields(status RuntimeConfigStatus) int {
+	count := 0
+	for _, section := range status.Sections {
+		for _, field := range section.Fields {
+			if field.PendingRestart {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func resolveSelectedChat(
@@ -4214,6 +4230,28 @@ const adminPageHTML = `<!doctype html>
           </div>
         </div>
       </div>
+      {{if gt .ConfigPending 0}}
+      <div class="skills-ops-grid">
+        <div class="skills-op-card">
+          <div class="skills-op-label">Pending restart</div>
+          <div class="skills-op-value">
+            {{.ConfigPending}} saved field{{if ne .ConfigPending 1}}s{{end}}
+            still need a restart before the running runtime will use them.
+          </div>
+          <div class="skills-op-note">
+            Saved config changes are already on disk. The live runtime stays on
+            the previous values until the next restart.
+          </div>
+          {{if .ConfigCanRestart}}
+          <div class="skills-op-actions">
+            <a class="page-refresh-link" href="/runtime-control">
+              Open Runtime Control
+            </a>
+          </div>
+          {{end}}
+        </div>
+      </div>
+      {{end}}
       {{if .Config.Error}}
       <div class="notice err" style="margin-top: 12px;">
         {{.Config.Error}}

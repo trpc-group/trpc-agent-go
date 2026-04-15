@@ -121,6 +121,46 @@ func TestServiceHandlerRendersConfigPage(t *testing.T) {
 	require.Contains(t, body, "Pending restart")
 }
 
+func TestServiceHandlerRendersConfigPageRestartCTA(t *testing.T) {
+	t.Parallel()
+
+	svc := New(
+		Config{},
+		WithRuntimeConfigProvider(&stubRuntimeConfigProvider{
+			status: RuntimeConfigStatus{
+				ConfigPath: "/tmp/openclaw.yaml",
+				Sections: []RuntimeConfigSection{{
+					Key:   "skills",
+					Title: "Skills",
+					Fields: []RuntimeConfigField{{
+						Key:            "skills.max_loaded_skills",
+						Title:          "Max Loaded Skills",
+						PendingRestart: true,
+					}},
+				}},
+			},
+		}),
+		WithRuntimeLifecycleProvider(
+			&stubRuntimeLifecycleProvider{},
+		),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, routeConfigPage, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "Open Runtime Control")
+	require.Contains(t, body, `href="runtime-control"`)
+	require.Contains(t, body, "1 saved field")
+	require.Contains(
+		t,
+		body,
+		"still need a restart before the running runtime will use them.",
+	)
+}
+
 func TestHandleSaveRuntimeConfig(t *testing.T) {
 	t.Parallel()
 
