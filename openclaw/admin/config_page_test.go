@@ -109,6 +109,8 @@ func TestServiceHandlerRendersConfigPage(t *testing.T) {
 	require.Contains(t, body, "Runtime Config")
 	require.Contains(t, body, "Max Loaded Skills")
 	require.Contains(t, body, "/tmp/openclaw.yaml")
+	require.Contains(t, body, `<details class="config-field"`)
+	require.Contains(t, body, `<summary class="config-field-summary">`)
 	require.Contains(t, body, `action="api/config/save"`)
 	require.Contains(t, body, `formaction="api/config/reset"`)
 	require.Contains(t, body, "Pending restart")

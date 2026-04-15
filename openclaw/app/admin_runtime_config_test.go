@@ -67,6 +67,43 @@ func TestBuildAdminOptions_WiresRuntimeConfigProvider(t *testing.T) {
 	require.NotEmpty(t, status.Sections)
 }
 
+func TestBuildAdminOptions_UsesAdminSourceConfigPathEnv(t *testing.T) {
+	sourcePath := writeAdminRuntimeConfigTestFile(
+		t,
+		"skills:\n  max_loaded_skills: 3\n",
+	)
+	runtimePath := writeAdminRuntimeConfigTestFile(
+		t,
+		"skills:\n  max_loaded_skills: 7\n",
+	)
+	t.Setenv(AdminSourceConfigPathEnvName, sourcePath)
+
+	opts := adminRuntimeConfigTestOptions(runtimePath)
+	opts.SkillsMaxLoaded = 7
+
+	provider, ok := buildAdminRuntimeConfigProvider(
+		opts,
+	).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	require.Equal(t, sourcePath, status.ConfigPath)
+
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"skills.max_loaded_skills",
+		"10",
+	))
+
+	sourceData, err := os.ReadFile(sourcePath)
+	require.NoError(t, err)
+	require.Contains(t, string(sourceData), "max_loaded_skills: 10")
+
+	runtimeData, err := os.ReadFile(runtimePath)
+	require.NoError(t, err)
+	require.Contains(t, string(runtimeData), "max_loaded_skills: 7")
+}
+
 func TestBuildAdminOptions_WithoutConfigPath(t *testing.T) {
 	t.Parallel()
 
@@ -597,7 +634,6 @@ func TestAdminRuntimeConfigHelperErrorBranches(t *testing.T) {
 		1,
 		len(adminRuntimeStringOptions("", "turn")),
 	)
-
 	boolPath := []adminRuntimeConfigKeyRef{
 		adminRuntimeKey("admin"),
 		adminRuntimeKey("enabled"),
@@ -621,6 +657,21 @@ func TestAdminRuntimeConfigHelperErrorBranches(t *testing.T) {
 	))
 	require.Equal(t, "true", adminRuntimeFieldNode(root, boolPath).Value)
 
+}
+
+func TestAdminWritableConfigPath(t *testing.T) {
+	t.Setenv(AdminSourceConfigPathEnvName, "  /tmp/source.yaml ")
+	require.Equal(
+		t,
+		"/tmp/source.yaml",
+		adminWritableConfigPath("/tmp/runtime.yaml"),
+	)
+	t.Setenv(AdminSourceConfigPathEnvName, " ")
+	require.Equal(
+		t,
+		"/tmp/runtime.yaml",
+		adminWritableConfigPath(" /tmp/runtime.yaml "),
+	)
 }
 
 func TestRuntimeAdminOptionsHelpers(t *testing.T) {

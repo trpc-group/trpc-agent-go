@@ -289,6 +289,41 @@ description: "Probe weather prerequisites"
 	require.False(t, provider.SkillsRefreshable())
 }
 
+func TestBuildAdminSkillsProvider_UsesAdminSourceConfigPathEnv(t *testing.T) {
+	sourcePath := filepath.Join(t.TempDir(), "openclaw.yaml")
+	require.NoError(t, os.WriteFile(
+		sourcePath,
+		[]byte("app_name: source\n"),
+		0o600,
+	))
+	runtimePath := filepath.Join(t.TempDir(), "runtime.yaml")
+	require.NoError(t, os.WriteFile(
+		runtimePath,
+		[]byte("app_name: runtime\n"),
+		0o600,
+	))
+	t.Setenv(AdminSourceConfigPathEnvName, sourcePath)
+
+	provider, ok := buildAdminSkillsProvider(
+		runOptions{ConfigPath: runtimePath},
+		t.TempDir(),
+		nil,
+		nil,
+	).(*adminSkillsProvider)
+	require.True(t, ok)
+	require.Equal(t, sourcePath, provider.SkillsConfigPath())
+
+	require.NoError(t, provider.SetSkillEnabled("weather-api", false))
+
+	sourceBody, err := os.ReadFile(sourcePath)
+	require.NoError(t, err)
+	require.Contains(t, string(sourceBody), "weather-api:")
+
+	runtimeBody, err := os.ReadFile(runtimePath)
+	require.NoError(t, err)
+	require.NotContains(t, string(runtimeBody), "weather-api:")
+}
+
 func TestAdminSkillsProviderSetSkillEnabled_ErrorPaths(t *testing.T) {
 	t.Parallel()
 

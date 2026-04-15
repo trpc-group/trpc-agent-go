@@ -43,6 +43,9 @@ const (
 
 var runtimeAdminOptionsStore sync.Map
 
+// AdminSourceConfigPathEnvName overrides the writable admin config file path.
+const AdminSourceConfigPathEnvName = "TRPC_CLAW_ADMIN_SOURCE_CONFIG_PATH"
+
 type adminRuntimeConfigProvider struct {
 	configPath string
 	opts       runOptions
@@ -81,7 +84,7 @@ type adminRuntimeConfiguredValue struct {
 func buildAdminRuntimeConfigProvider(
 	opts runOptions,
 ) admin.RuntimeConfigProvider {
-	path := strings.TrimSpace(opts.ConfigPath)
+	path := adminWritableConfigPath(opts.ConfigPath)
 	if path == "" {
 		return nil
 	}
@@ -89,6 +92,16 @@ func buildAdminRuntimeConfigProvider(
 		configPath: path,
 		opts:       opts,
 	}
+}
+
+func adminWritableConfigPath(configPath string) string {
+	override := strings.TrimSpace(
+		os.Getenv(AdminSourceConfigPathEnvName),
+	)
+	if override != "" {
+		return override
+	}
+	return strings.TrimSpace(configPath)
 }
 
 func buildAdminOptions(opts runOptions) []admin.Option {

@@ -2949,8 +2949,25 @@ const adminPageHTML = `<!doctype html>
     .config-field {
       border: 1px solid rgba(215, 207, 194, 0.9);
       border-radius: 16px;
-      padding: 14px 16px;
       background: rgba(255, 252, 247, 0.94);
+      overflow: hidden;
+      transition: box-shadow 140ms ease, border-color 140ms ease;
+    }
+    .config-field[open] {
+      border-color: rgba(15, 111, 97, 0.28);
+      box-shadow: 0 14px 28px rgba(35, 29, 22, 0.08);
+    }
+    .config-field summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 14px 16px;
+    }
+    .config-field summary::-webkit-details-marker {
+      display: none;
+    }
+    .config-field-detail {
+      padding: 0 16px 16px;
+      border-top: 1px solid rgba(215, 207, 194, 0.65);
     }
     .config-field-top {
       display: flex;
@@ -4063,85 +4080,90 @@ const adminPageHTML = `<!doctype html>
           {{end}}
           <div class="config-field-list">
             {{range .Fields}}
-            <article class="config-field" id="config-field-{{.Key}}">
+            <details class="config-field" id="config-field-{{.Key}}">
               {{$field := .}}
-              <div class="config-field-top">
-                <div>
-                  <h4 class="config-field-title">{{.Title}}</h4>
-                  {{if .Summary}}
-                  <p class="subtle">{{.Summary}}</p>
-                  {{end}}
-                </div>
-                <div class="config-badges">
-                  <span class="config-badge">
-                    {{if eq .ApplyMode "hot"}}Hot apply{{else if eq .ApplyMode "next_turn"}}Next turn{{else}}Restart{{end}}
-                  </span>
-                  {{if .PendingRestart}}
-                  <span class="config-badge warn">Pending restart</span>
-                  {{end}}
-                </div>
-              </div>
-              <div class="config-meta">
-                <div class="config-meta-block">
-                  <div class="config-meta-label">Configured</div>
-                  <div class="config-meta-value">
-                    {{if eq .ConfiguredSource "explicit"}}
-                      {{if .ConfiguredValue}}<code>{{.ConfiguredValue}}</code>{{else}}<code>(empty)</code>{{end}}
-                    {{else}}
-                      <span class="subtle">Inherited</span>
+              <summary class="config-field-summary">
+                <div class="config-field-top">
+                  <div>
+                    <h4 class="config-field-title">{{.Title}}</h4>
+                    {{if .Summary}}
+                    <p class="subtle">{{.Summary}}</p>
                     {{end}}
                   </div>
-                  {{if .ConfiguredSourceLabel}}
-                  <div class="subtle">{{.ConfiguredSourceLabel}}</div>
-                  {{end}}
-                </div>
-                <div class="config-meta-block">
-                  <div class="config-meta-label">Current runtime</div>
-                  <div class="config-meta-value">
-                    {{if .RuntimeValue}}<code>{{.RuntimeValue}}</code>{{else}}<span class="subtle">-</span>{{end}}
+                  <div class="config-badges">
+                    <span class="config-badge">
+                      {{if eq .ApplyMode "hot"}}Hot apply{{else if eq .ApplyMode "next_turn"}}Next turn{{else}}Restart{{end}}
+                    </span>
+                    {{if .PendingRestart}}
+                    <span class="config-badge warn">Pending restart</span>
+                    {{end}}
                   </div>
-                  {{if .RuntimeSourceLabel}}
-                  <div class="subtle">{{.RuntimeSourceLabel}}</div>
-                  {{end}}
                 </div>
+                  </div>
+              </summary>
+              <div class="config-field-detail">
+                <div class="config-meta">
+                  <div class="config-meta-block">
+                    <div class="config-meta-label">Configured</div>
+                    <div class="config-meta-value">
+                      {{if eq .ConfiguredSource "explicit"}}
+                        {{if .ConfiguredValue}}<code>{{.ConfiguredValue}}</code>{{else}}<code>(empty)</code>{{end}}
+                      {{else}}
+                        <span class="subtle">Inherited</span>
+                      {{end}}
+                    </div>
+                    {{if .ConfiguredSourceLabel}}
+                    <div class="subtle">{{.ConfiguredSourceLabel}}</div>
+                    {{end}}
+                  </div>
+                  <div class="config-meta-block">
+                    <div class="config-meta-label">Current runtime</div>
+                    <div class="config-meta-value">
+                      {{if .RuntimeValue}}<code>{{.RuntimeValue}}</code>{{else}}<span class="subtle">-</span>{{end}}
+                    </div>
+                    {{if .RuntimeSourceLabel}}
+                    <div class="subtle">{{.RuntimeSourceLabel}}</div>
+                    {{end}}
+                  </div>
+                </div>
+                <form method="post" action="/api/config/save" class="config-form">
+                  <input type="hidden" name="field_key" value="{{.Key}}">
+                  <input type="hidden" name="return_to" value="config-field-{{.Key}}">
+                  <input type="hidden" name="return_path" value="/config">
+                  {{if eq .InputType "select"}}
+                  <select name="value">
+                    {{range $field.Options}}
+                    <option value="{{.Value}}" {{if eq $field.EditorValue .Value}}selected{{end}}>
+                      {{.Label}}
+                    </option>
+                    {{end}}
+                  </select>
+                  {{else if eq .InputType "number"}}
+                  <input
+                    type="number"
+                    name="value"
+                    value="{{.EditorValue}}"
+                    {{if .Placeholder}}placeholder="{{.Placeholder}}"{{end}}
+                  >
+                  {{else}}
+                  <input
+                    type="text"
+                    name="value"
+                    value="{{.EditorValue}}"
+                    {{if .Placeholder}}placeholder="{{.Placeholder}}"{{end}}
+                  >
+                  {{end}}
+                  <div class="config-form-row">
+                    <button type="submit">Save</button>
+                    {{if .Resettable}}
+                    <button class="secondary" type="submit" formaction="/api/config/reset">
+                      Reset
+                    </button>
+                    {{end}}
+                  </div>
+                </form>
               </div>
-              <form method="post" action="/api/config/save" class="config-form">
-                <input type="hidden" name="field_key" value="{{.Key}}">
-                <input type="hidden" name="return_to" value="config-field-{{.Key}}">
-                <input type="hidden" name="return_path" value="/config">
-                {{if eq .InputType "select"}}
-                <select name="value">
-                  {{range $field.Options}}
-                  <option value="{{.Value}}" {{if eq $field.EditorValue .Value}}selected{{end}}>
-                    {{.Label}}
-                  </option>
-                  {{end}}
-                </select>
-                {{else if eq .InputType "number"}}
-                <input
-                  type="number"
-                  name="value"
-                  value="{{.EditorValue}}"
-                  {{if .Placeholder}}placeholder="{{.Placeholder}}"{{end}}
-                >
-                {{else}}
-                <input
-                  type="text"
-                  name="value"
-                  value="{{.EditorValue}}"
-                  {{if .Placeholder}}placeholder="{{.Placeholder}}"{{end}}
-                >
-                {{end}}
-                <div class="config-form-row">
-                  <button type="submit">Save</button>
-                  {{if .Resettable}}
-                  <button class="secondary" type="submit" formaction="/api/config/reset">
-                    Reset
-                  </button>
-                  {{end}}
-                </div>
-              </form>
-            </article>
+            </details>
             {{end}}
           </div>
         </section>
@@ -5489,6 +5511,28 @@ const adminPageHTML = `<!doctype html>
       });
       refresh();
       restoreScrollPosition();
+    })();
+
+    (function () {
+      const revealHashDetails = () => {
+        if (!window.location.hash) {
+          return;
+        }
+        const target = document.querySelector(window.location.hash);
+        if (!target) {
+          return;
+        }
+        const disclosure = target.matches("details")
+          ? target
+          : target.closest("details");
+        if (!disclosure) {
+          return;
+        }
+        disclosure.open = true;
+      };
+
+      window.addEventListener("hashchange", revealHashDetails);
+      revealHashDetails();
     })();
 
     (function () {

@@ -307,7 +307,7 @@ func buildAdminSkillsProvider(
 		StateDir:        stateDir,
 	}
 	return &adminSkillsProvider{
-		configPath:   strings.TrimSpace(opts.ConfigPath),
+		configPath:   adminWritableConfigPath(opts.ConfigPath),
 		repo:         repo,
 		watch:        watch,
 		roots:        resolveSkillRoots(cwd, cfg),
