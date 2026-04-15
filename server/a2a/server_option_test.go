@@ -20,6 +20,7 @@ import (
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
 	"trpc.group/trpc-go/trpc-a2a-go/taskmanager"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -471,6 +472,21 @@ func TestWithOptions(t *testing.T) {
 			) {
 				if opts.eventToA2AConverter == nil {
 					t.Error("WithEventToA2AConverter() should set eventToA2AConverter")
+				}
+			},
+		},
+		{
+			name: "WithEventToA2APartMapper",
+			option: WithEventToA2APartMapper(func(ctx context.Context, event *event.Event) ([]protocol.Part, error) {
+				return nil, nil
+			}),
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
+				if len(opts.eventPartMappers) != 1 {
+					t.Error("WithEventToA2APartMapper() should append eventPartMappers")
 				}
 			},
 		},

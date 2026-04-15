@@ -26,6 +26,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+const testCustomDataPartType = "custom_data"
+
 func TestDefaultA2AMessageToAgentMessage_ConvertToAgentMessage(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -3532,4 +3534,257 @@ func TestDefaultEventToA2AMessage_StreamingReasoningContent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDefaultEventToA2AMessage_DoesNotAutoConvertStructuredOutput(t *testing.T) {
+	evt := &event.Event{
+		Tag: "network.rpc.trace",
+		Response: &model.Response{
+			ID:      "resp-custom-1",
+			Object:  graph.ObjectTypeGraphNodeCustom,
+			Choices: []model.Choice{},
+		},
+		StructuredOutput: map[string]any{"trace": true},
+	}
+
+	converter := &defaultEventToA2AMessage{
+		graphEventObjectAllowlist: []string{"graph.node.*"},
+	}
+
+	result, err := converter.ConvertToA2AMessage(context.Background(), evt, EventToA2AUnaryOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	msg, ok := result.(*protocol.Message)
+	require.True(t, ok)
+	assert.Empty(t, msg.Parts)
+	assert.Equal(t, graph.ObjectTypeGraphNodeCustom, msg.Metadata[ia2a.MessageMetadataObjectTypeKey])
+	assert.Equal(t, "network.rpc.trace", msg.Metadata[ia2a.MessageMetadataTagKey])
+}
+
+func TestDefaultEventToA2AMessage_EventPartMapperUnary(t *testing.T) {
+	evt := &event.Event{
+		Tag: "network.rpc.trace",
+		Response: &model.Response{
+			ID:      "resp-custom-2",
+			Object:  graph.ObjectTypeGraphNodeCustom,
+			Choices: []model.Choice{},
+		},
+		StructuredOutput: map[string]any{
+			"layer_details": []any{map[string]any{"layer_name": "engine"}},
+		},
+	}
+
+	mapperCalled := false
+	converter := &defaultEventToA2AMessage{
+		graphEventObjectAllowlist: []string{"graph.node.*"},
+		eventPartMappers: []EventToA2APartMapper{
+			func(ctx context.Context, event *event.Event) ([]protocol.Part, error) {
+				mapperCalled = true
+				data := event.StructuredOutput.(map[string]any)
+				part := protocol.NewDataPart(data)
+				part.Metadata = map[string]any{
+					ia2a.DataPartMetadataTypeKey: testCustomDataPartType,
+				}
+				return []protocol.Part{&part}, nil
+			},
+		},
+	}
+
+	result, err := converter.ConvertToA2AMessage(context.Background(), evt, EventToA2AUnaryOptions{})
+	require.NoError(t, err)
+	require.True(t, mapperCalled)
+	require.NotNil(t, result)
+
+	msg, ok := result.(*protocol.Message)
+	require.True(t, ok)
+	require.Len(t, msg.Parts, 1)
+
+	part, ok := msg.Parts[0].(*protocol.DataPart)
+	require.True(t, ok)
+	assert.Equal(t, testCustomDataPartType, part.Metadata[ia2a.DataPartMetadataTypeKey])
+	assert.Equal(t, graph.ObjectTypeGraphNodeCustom, msg.Metadata[ia2a.MessageMetadataObjectTypeKey])
+	assert.Equal(t, "network.rpc.trace", msg.Metadata[ia2a.MessageMetadataTagKey])
+	assert.Equal(t, map[string]any{
+		"layer_details": []any{map[string]any{"layer_name": "engine"}},
+	}, part.Data)
+}
+
+func TestDefaultEventToA2AMessage_EventPartMapperStreaming(t *testing.T) {
+	evt := &event.Event{
+		Tag: "network.rpc.trace",
+		Response: &model.Response{
+			ID:      "resp-custom-3",
+			Object:  graph.ObjectTypeGraphNodeCustom,
+			Choices: []model.Choice{},
+		},
+		StructuredOutput: map[string]any{"trace": "ok"},
+	}
+
+	converter := &defaultEventToA2AMessage{
+		graphEventObjectAllowlist: []string{"graph.node.*"},
+		eventPartMappers: []EventToA2APartMapper{
+			func(ctx context.Context, event *event.Event) ([]protocol.Part, error) {
+				part := protocol.NewDataPart(event.StructuredOutput)
+				part.Metadata = map[string]any{
+					ia2a.DataPartMetadataTypeKey: testCustomDataPartType,
+				}
+				return []protocol.Part{&part}, nil
+			},
+		},
+	}
+
+	result, err := converter.ConvertStreamingToA2AMessage(
+		context.Background(),
+		evt,
+		EventToA2AStreamingOptions{TaskID: "task-1", CtxID: "ctx-1"},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	artifact, ok := result.(*protocol.TaskArtifactUpdateEvent)
+	require.True(t, ok)
+	require.Len(t, artifact.Artifact.Parts, 1)
+
+	part, ok := artifact.Artifact.Parts[0].(*protocol.DataPart)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"trace": "ok"}, part.Data)
+	assert.Equal(t, testCustomDataPartType, part.Metadata[ia2a.DataPartMetadataTypeKey])
+	assert.Equal(t, graph.ObjectTypeGraphNodeCustom, artifact.Metadata[ia2a.MessageMetadataObjectTypeKey])
+}
+
+func TestDefaultEventToA2AMessage_EventPartMapperRunsAfterBuiltins(t *testing.T) {
+	mapperCalled := false
+	converter := &defaultEventToA2AMessage{
+		eventPartMappers: []EventToA2APartMapper{
+			func(ctx context.Context, event *event.Event) ([]protocol.Part, error) {
+				mapperCalled = true
+				part := protocol.NewDataPart(map[string]any{"unexpected": true})
+				part.Metadata = map[string]any{
+					ia2a.DataPartMetadataTypeKey: testCustomDataPartType,
+				}
+				return []protocol.Part{&part}, nil
+			},
+		},
+	}
+
+	evt := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					ToolCalls: []model.ToolCall{{
+						ID:   "call-1",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "lookup",
+							Arguments: []byte(`{"query":"test"}`),
+						},
+					}},
+				},
+			}},
+		},
+	}
+
+	result, err := converter.ConvertToA2AMessage(context.Background(), evt, EventToA2AUnaryOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, mapperCalled)
+
+	msg, ok := result.(*protocol.Message)
+	require.True(t, ok)
+	require.Len(t, msg.Parts, 1)
+
+	var part *protocol.DataPart
+	switch p := msg.Parts[0].(type) {
+	case *protocol.DataPart:
+		part = p
+	case protocol.DataPart:
+		part = &p
+	default:
+		t.Fatalf("expected DataPart, got %T", msg.Parts[0])
+	}
+	assert.Equal(t, ia2a.DataPartMetadataTypeFunctionCall, part.Metadata[ia2a.DataPartMetadataTypeKey])
+
+	data, ok := part.Data.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "lookup", data[ia2a.ToolCallFieldName])
+}
+
+func TestDefaultEventToA2AMessage_EventPartMapperAppendsAfterText(t *testing.T) {
+	converter := &defaultEventToA2AMessage{
+		eventPartMappers: []EventToA2APartMapper{
+			func(ctx context.Context, event *event.Event) ([]protocol.Part, error) {
+				part := protocol.NewDataPart(map[string]any{"trace": "ok"})
+				part.Metadata = map[string]any{
+					ia2a.DataPartMetadataTypeKey: testCustomDataPartType,
+				}
+				return []protocol.Part{&part}, nil
+			},
+		},
+	}
+
+	evt := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					ReasoningContent: "thinking",
+					Content:          "answer",
+				},
+			}},
+		},
+	}
+
+	result, err := converter.ConvertToA2AMessage(context.Background(), evt, EventToA2AUnaryOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	msg, ok := result.(*protocol.Message)
+	require.True(t, ok)
+	require.Len(t, msg.Parts, 3)
+
+	assert.Equal(t, protocol.KindText, msg.Parts[0].GetKind())
+	assert.Equal(t, protocol.KindText, msg.Parts[1].GetKind())
+	assert.Equal(t, protocol.KindData, msg.Parts[2].GetKind())
+}
+
+func TestDefaultEventToA2AMessage_EventPartMapperAppendsAfterStreamingText(t *testing.T) {
+	converter := &defaultEventToA2AMessage{
+		eventPartMappers: []EventToA2APartMapper{
+			func(ctx context.Context, event *event.Event) ([]protocol.Part, error) {
+				part := protocol.NewDataPart(map[string]any{"trace": "ok"})
+				part.Metadata = map[string]any{
+					ia2a.DataPartMetadataTypeKey: testCustomDataPartType,
+				}
+				return []protocol.Part{&part}, nil
+			},
+		},
+	}
+
+	evt := &event.Event{
+		Response: &model.Response{
+			ID: "resp-streaming-custom",
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					ReasoningContent: "thinking",
+					Content:          "answer",
+				},
+			}},
+		},
+	}
+
+	result, err := converter.ConvertStreamingToA2AMessage(
+		context.Background(),
+		evt,
+		EventToA2AStreamingOptions{TaskID: "task-1", CtxID: "ctx-1"},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	artifact, ok := result.(*protocol.TaskArtifactUpdateEvent)
+	require.True(t, ok)
+	require.Len(t, artifact.Artifact.Parts, 3)
+
+	assert.Equal(t, protocol.KindText, artifact.Artifact.Parts[0].GetKind())
+	assert.Equal(t, protocol.KindText, artifact.Artifact.Parts[1].GetKind())
+	assert.Equal(t, protocol.KindData, artifact.Artifact.Parts[2].GetKind())
 }

@@ -1550,6 +1550,80 @@ func TestProcessDataPartInto_ADKMetadataKey(t *testing.T) {
 	}
 }
 
+func TestProcessDataPartWithMappers_CustomMapperHandlesUnknownType(t *testing.T) {
+	result := &parseResult{}
+	part := &protocol.DataPart{
+		Data: map[string]any{
+			"business": "payload",
+		},
+		Metadata: map[string]any{
+			"type": "biz_custom",
+		},
+	}
+
+	processDataPartWithMappers(part, result, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			if ia2a.GetDataPartType(p.Metadata) != "biz_custom" {
+				return false, nil
+			}
+			out.SetTextContent("mapped-by-custom")
+			return true, nil
+		},
+	})
+
+	if result.textContent != "mapped-by-custom" {
+		t.Fatalf("expected mapper to set text content, got %q", result.textContent)
+	}
+}
+
+func TestParseA2AMessagePartsWithMappers_CustomMapperPreservesMappedText(t *testing.T) {
+	msg := &protocol.Message{
+		Parts: []protocol.Part{
+			&protocol.DataPart{
+				Data: map[string]any{"business": "payload"},
+				Metadata: map[string]any{
+					"type": "biz_custom",
+				},
+			},
+		},
+	}
+
+	result := parseA2AMessagePartsWithMappers(msg, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			if ia2a.GetDataPartType(p.Metadata) != "biz_custom" {
+				return false, nil
+			}
+			out.SetTextContent("mapped-by-custom")
+			return true, nil
+		},
+	})
+
+	if result.textContent != "mapped-by-custom" {
+		t.Fatalf("expected mapper-mapped text content, got %q", result.textContent)
+	}
+}
+
+func TestProcessDataPartWithMappers_UnmatchedMapperDoesNotApplyChanges(t *testing.T) {
+	result := &parseResult{textContent: "existing"}
+	part := &protocol.DataPart{
+		Data: map[string]any{"business": "payload"},
+		Metadata: map[string]any{
+			"type": "biz_custom",
+		},
+	}
+
+	processDataPartWithMappers(part, result, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			out.SetTextContent("should-not-apply")
+			return false, nil
+		},
+	})
+
+	if result.textContent != "existing" {
+		t.Fatalf("expected unmatched mapper changes to be ignored, got %q", result.textContent)
+	}
+}
+
 // TestProcessExecutableCode tests processing of executable code DataParts
 func TestProcessExecutableCode(t *testing.T) {
 	tests := []struct {

@@ -12,7 +12,6 @@ package a2aagent
 import (
 	"encoding/base64"
 	"encoding/json"
-	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -43,6 +42,7 @@ type InvocationA2AConverter interface {
 }
 
 type defaultA2AEventConverter struct {
+	dataPartMappers []A2ADataPartMapper
 }
 
 func (d *defaultA2AEventConverter) ConvertToEvents(
@@ -320,7 +320,7 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 	invocation *agent.Invocation) *event.Event {
 
 	// Parse A2A message parts to extract content and tool information
-	parseResult := parseA2AMessageParts(msg)
+	parseResult := parseA2AMessagePartsWithMappers(msg, d.dataPartMappers)
 
 	// Create event with appropriate response structure
 	return buildEventResponse(isStreaming, msg.MessageID, parseResult, invocation, agentName, msg.Role)
@@ -373,11 +373,58 @@ type toolResponseData struct {
 	content string
 }
 
+func newDataPartMappingResult(result *parseResult) *A2ADataPartMappingResult {
+	if result == nil {
+		return &A2ADataPartMappingResult{}
+	}
+	return &A2ADataPartMappingResult{
+		textContent:         result.textContent,
+		reasoningContent:    result.reasoningContent,
+		codeExecution:       result.codeExecution,
+		codeExecutionResult: result.codeExecutionResult,
+	}
+}
+
+func applyDataPartMappingResult(dst *parseResult, mapped *A2ADataPartMappingResult) {
+	if dst == nil || mapped == nil {
+		return
+	}
+	if mapped.textContentSet {
+		dst.textContent = mapped.textContent
+	}
+	if mapped.reasoningContentSet {
+		dst.reasoningContent = mapped.reasoningContent
+	}
+	if mapped.codeExecutionSet {
+		dst.codeExecution = mapped.codeExecution
+	}
+	if mapped.codeExecutionResultSet {
+		dst.codeExecutionResult = mapped.codeExecutionResult
+	}
+	if len(mapped.toolCalls) > 0 {
+		dst.toolCalls = append(dst.toolCalls, mapped.toolCalls...)
+	}
+	if len(mapped.toolResponses) > 0 {
+		for _, resp := range mapped.toolResponses {
+			dst.toolResponses = append(dst.toolResponses, toolResponseData{
+				id:      resp.ID,
+				name:    resp.Name,
+				content: resp.Content,
+			})
+		}
+	}
+}
+
 // parseA2AMessageParts processes all parts in the A2A message and extracts content and tool information
 func parseA2AMessageParts(msg *protocol.Message) *parseResult {
+	return parseA2AMessagePartsWithMappers(msg, nil)
+}
+
+func parseA2AMessagePartsWithMappers(
+	msg *protocol.Message,
+	mappers []A2ADataPartMapper,
+) *parseResult {
 	parts := msg.Parts
-	var textContent strings.Builder
-	var reasoningContent strings.Builder
 	result := &parseResult{}
 
 	for _, part := range parts {
@@ -385,12 +432,12 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 		case protocol.KindText:
 			text, isThought := processTextPart(part)
 			if isThought {
-				reasoningContent.WriteString(text)
+				result.reasoningContent += text
 			} else {
-				textContent.WriteString(text)
+				result.textContent += text
 			}
 		case protocol.KindData:
-			processDataPart(part, result)
+			processDataPartWithMappers(part, result, mappers)
 		}
 	}
 
@@ -409,8 +456,6 @@ func parseA2AMessageParts(msg *protocol.Message) *parseResult {
 		}
 	}
 
-	result.textContent = textContent.String()
-	result.reasoningContent = reasoningContent.String()
 	result.taskState = taskStateFromMetadata(msg.Metadata)
 	result.responseError = ia2a.ResponseErrorFromMetadata(
 		msg.Metadata,
@@ -449,6 +494,14 @@ func processTextPart(part protocol.Part) (text string, isThought bool) {
 
 // processDataPart processes a DataPart and updates the parseResult accordingly
 func processDataPart(part protocol.Part, result *parseResult) {
+	processDataPartWithMappers(part, result, nil)
+}
+
+func processDataPartWithMappers(
+	part protocol.Part,
+	result *parseResult,
+	mappers []A2ADataPartMapper,
+) {
 	d, ok := part.(*protocol.DataPart)
 	if !ok {
 		return
@@ -457,29 +510,55 @@ func processDataPart(part protocol.Part, result *parseResult) {
 	// Use GetDataPartType to get the type with correct precedence (adk_type first, then type)
 	// GetDataPartType handles nil metadata internally
 	typeStr := ia2a.GetDataPartType(d.Metadata)
-	if typeStr == "" {
+	builtInHandled := false
+	if typeStr != "" {
+		switch typeStr {
+		case ia2a.DataPartMetadataTypeFunctionCall:
+			if toolCall := processFunctionCall(d); toolCall != nil {
+				result.toolCalls = append(result.toolCalls, *toolCall)
+			}
+			builtInHandled = true
+		case ia2a.DataPartMetadataTypeFunctionResp:
+			content, id, name := processFunctionResponse(d)
+			result.toolResponses = append(result.toolResponses, toolResponseData{
+				id:      id,
+				name:    name,
+				content: content,
+			})
+			builtInHandled = true
+		case ia2a.DataPartMetadataTypeExecutableCode:
+			result.codeExecution = processExecutableCode(d)
+			builtInHandled = true
+		case ia2a.DataPartMetadataTypeCodeExecutionResult:
+			result.codeExecutionResult = processCodeExecutionResult(d)
+			builtInHandled = true
+		}
+	}
+
+	if builtInHandled {
 		return
 	}
 
-	switch typeStr {
-	case ia2a.DataPartMetadataTypeFunctionCall:
-		if toolCall := processFunctionCall(d); toolCall != nil {
-			result.toolCalls = append(result.toolCalls, *toolCall)
+	for _, mapper := range mappers {
+		if mapper == nil {
+			continue
 		}
-	case ia2a.DataPartMetadataTypeFunctionResp:
-		content, id, name := processFunctionResponse(d)
-		result.toolResponses = append(result.toolResponses, toolResponseData{
-			id:      id,
-			name:    name,
-			content: content,
-		})
-	case ia2a.DataPartMetadataTypeExecutableCode:
-		result.codeExecution = processExecutableCode(d)
-	case ia2a.DataPartMetadataTypeCodeExecutionResult:
-		result.codeExecutionResult = processCodeExecutionResult(d)
-	default:
-		log.Debugf("unknown DataPart type: %s", typeStr)
+		mappedResult := newDataPartMappingResult(result)
+		matched, err := mapper(d, mappedResult)
+		if err != nil {
+			log.Warnf("A2ADataPartMapper returns error, skip part: %v", err)
+			continue
+		}
+		if matched {
+			applyDataPartMappingResult(result, mappedResult)
+			return
+		}
 	}
+	if typeStr == "" {
+		log.Debugf("unknown DataPart with empty type skipped")
+		return
+	}
+	log.Debugf("unknown DataPart type skipped: %s", typeStr)
 }
 
 // processFunctionCall processes a function call DataPart and returns the ToolCall
