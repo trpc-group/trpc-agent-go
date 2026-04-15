@@ -484,6 +484,67 @@ func TestExecutor_Resume_AppliesPendingWrites(t *testing.T) {
 	}
 }
 
+func TestExecutor_Resume_RuntimeStateOverrideKeysOverrideCheckpoint(t *testing.T) {
+	const (
+		lineageID = "ln-runtime-override-keys"
+		namespace = "ns-runtime-override-keys"
+		checkID   = "ck-runtime-override-keys"
+	)
+
+	g, err := NewStateGraph(NewStateSchema()).
+		AddNode("noop",
+			func(ctx context.Context, state State) (any, error) {
+				return nil, nil
+			},
+		).
+		SetEntryPoint("noop").
+		SetFinishPoint("noop").
+		Compile()
+	require.NoError(t, err)
+
+	saver := newMockSaver()
+	ck := NewCheckpoint(
+		map[string]any{
+			"keep":     "checkpoint",
+			"override": "checkpoint",
+		},
+		map[string]int64{},
+		nil,
+	)
+	ck.ID = checkID
+	cfg := CreateCheckpointConfig(lineageID, checkID, namespace)
+	saver.byID[lineageID+":"+namespace+":"+checkID] = &CheckpointTuple{
+		Config:     cfg,
+		Checkpoint: ck,
+		Metadata:   NewCheckpointMetadata(CheckpointSourceLoop, 3),
+	}
+
+	exec, err := NewExecutor(g, WithCheckpointSaver(saver))
+	require.NoError(t, err)
+
+	inv := &agent.Invocation{InvocationID: "inv-runtime-override-keys"}
+	WithCallOptions(WithCallResumeStateOverrideKeys("override"))(&inv.RunOptions)
+
+	restored, _, resumed, resumedStep, _, _, err := exec.resumeOrInitWithSaver(
+		context.Background(),
+		State{
+			CfgKeyLineageID:    lineageID,
+			CfgKeyCheckpointNS: namespace,
+			CfgKeyCheckpointID: checkID,
+			"keep":             "runtime",
+			"override":         "runtime",
+			"added":            "runtime",
+		},
+		inv,
+	)
+	require.NoError(t, err)
+	require.True(t, resumed)
+	require.Equal(t, 3, resumedStep)
+	require.Equal(t, "checkpoint", restored["keep"])
+	require.Equal(t, "runtime", restored["override"])
+	require.Equal(t, "runtime", restored["added"])
+}
+
 // Interrupt test to cover handleInterrupt path
 func TestExecutor_HandleInterrupt(t *testing.T) {
 	g, err := NewStateGraph(NewStateSchema()).

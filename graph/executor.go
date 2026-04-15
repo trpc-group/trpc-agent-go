@@ -621,8 +621,20 @@ func (e *Executor) resumeOrInitWithSaver(
 		"Resuming from checkpoint ID=%s",
 		tuple.Checkpoint.ID,
 	)
+	var resumeStateOverrideKeys map[string]struct{}
+	if invocation != nil {
+		if callOpts := graphCallOptionsFromConfigs(
+			invocation.RunOptions.CustomAgentConfigs,
+		); callOpts != nil {
+			resumeStateOverrideKeys = callOpts.resumeStateOverrideKeys
+		}
+	}
 	restored := e.restoreStateFromCheckpoint(tuple)
-	restored = e.mergeInitialStateNonInternal(restored, initialState)
+	restored = e.mergeInitialStateNonInternal(
+		restored,
+		initialState,
+		resumeStateOverrideKeys,
+	)
 
 	resumedStep := 0
 	if tuple.Metadata != nil {
@@ -690,15 +702,23 @@ func (e *Executor) restoreStateFromCheckpoint(tuple *CheckpointTuple) State {
 }
 
 // mergeInitialStateNonInternal merges caller-provided initial values that are
-// not internal (do not start with "_") and not already present in restored.
-// This preserves the previous behavior where pre-populated inputs could be
-// respected when resuming from checkpoints.
+// not internal (do not start with "_"). By default checkpoint-restored values
+// win, but runtime-state override keys can explicitly override the restored
+// state during resume.
 func (e *Executor) mergeInitialStateNonInternal(
 	restored,
 	initial State,
+	resumeStateOverrideKeys map[string]struct{},
 ) State {
 	for key, value := range initial {
-		if _, exists := restored[key]; !exists && !strings.HasPrefix(key, "_") {
+		if strings.HasPrefix(key, "_") {
+			continue
+		}
+		if _, ok := resumeStateOverrideKeys[key]; ok {
+			restored[key] = value
+			continue
+		}
+		if _, exists := restored[key]; !exists {
 			restored[key] = value
 		}
 	}

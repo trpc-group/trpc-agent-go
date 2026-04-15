@@ -61,6 +61,24 @@ func WithCallGenerationConfigPatch(p model.GenerationConfigPatch) CallOption {
 	}
 }
 
+// WithCallResumeStateOverrideKeys preserves caller-provided runtime state values
+// for the selected keys when resuming from a checkpoint.
+//
+// When one of these keys is present in RunOptions.RuntimeState for the current
+// graph scope, its value overrides the checkpoint-restored value during resume.
+// Keys filtered by the existing resume merge logic are still ignored.
+func WithCallResumeStateOverrideKeys(keys ...string) CallOption {
+	return func(c *callOptions) {
+		if c == nil || len(keys) == 0 {
+			return
+		}
+		c.resumeStateOverrideKeys = mergeStringSet(
+			c.resumeStateOverrideKeys,
+			newStringSet(keys...),
+		)
+	}
+}
+
 // DesignateNode applies options to a specific node in the current graph
 // scope.
 //
@@ -77,10 +95,14 @@ func DesignateNode(nodeID string, opts ...CallOption) CallOption {
 			return
 		}
 		node.generation = mergeGenPatch(node.generation, scope.generation)
-		if len(scope.nodes) > 0 {
+		if len(scope.resumeStateOverrideKeys) > 0 || len(scope.nodes) > 0 {
 			if node.child == nil {
 				node.child = &callOptions{}
 			}
+			node.child.resumeStateOverrideKeys = mergeStringSet(
+				node.child.resumeStateOverrideKeys,
+				scope.resumeStateOverrideKeys,
+			)
 			node.child.nodes = mergeCallNodes(node.child.nodes, scope.nodes)
 		}
 	}
@@ -113,8 +135,9 @@ func DesignateNodeWithPath(path NodePath, opts ...CallOption) CallOption {
 }
 
 type callOptions struct {
-	generation model.GenerationConfigPatch
-	nodes      map[string]*callNodeOptions
+	generation              model.GenerationConfigPatch
+	resumeStateOverrideKeys map[string]struct{}
+	nodes                   map[string]*callNodeOptions
 }
 
 type callNodeOptions struct {
@@ -146,6 +169,9 @@ func (c *callOptions) isEmpty() bool {
 	if !isEmptyGenPatch(c.generation) {
 		return false
 	}
+	if len(c.resumeStateOverrideKeys) > 0 {
+		return false
+	}
 	return len(c.nodes) == 0
 }
 
@@ -170,7 +196,11 @@ func mergeCallOptions(a, b *callOptions) *callOptions {
 	}
 	out := &callOptions{
 		generation: mergeGenPatch(a.generation, b.generation),
-		nodes:      mergeCallNodes(a.nodes, b.nodes),
+		resumeStateOverrideKeys: mergeStringSet(
+			a.resumeStateOverrideKeys,
+			b.resumeStateOverrideKeys,
+		),
+		nodes: mergeCallNodes(a.nodes, b.nodes),
 	}
 	if out.isEmpty() {
 		return nil
@@ -219,8 +249,9 @@ func cloneCallOptions(in *callOptions) *callOptions {
 		return nil
 	}
 	out := &callOptions{
-		generation: cloneGenPatch(in.generation),
-		nodes:      cloneCallNodeMap(in.nodes),
+		generation:              cloneGenPatch(in.generation),
+		resumeStateOverrideKeys: cloneStringSet(in.resumeStateOverrideKeys),
+		nodes:                   cloneCallNodeMap(in.nodes),
 	}
 	if out.isEmpty() {
 		return nil
@@ -335,6 +366,63 @@ func copyCustomAgentConfigs(in map[string]any) map[string]any {
 	return out
 }
 
+func newStringSet(keys ...string) map[string]struct{} {
+	if len(keys) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		out[key] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func cloneStringSet(in map[string]struct{}) map[string]struct{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(in))
+	for key := range in {
+		if key == "" {
+			continue
+		}
+		out[key] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func mergeStringSet(
+	a map[string]struct{},
+	b map[string]struct{},
+) map[string]struct{} {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	out := cloneStringSet(a)
+	if out == nil && len(b) > 0 {
+		out = make(map[string]struct{}, len(b))
+	}
+	for key := range b {
+		if key == "" {
+			continue
+		}
+		out[key] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func graphCallOptionsFromConfigs(cfgs map[string]any) *callOptions {
 	if cfgs == nil {
 		return nil
@@ -382,19 +470,25 @@ func scopeCallOptionsForSubgraph(
 		return cloneCallOptions(parent)
 	}
 	merged := cloneGenPatch(parent.generation)
+	resumeStateOverrideKeys := cloneStringSet(parent.resumeStateOverrideKeys)
 	var childNodes map[string]*callNodeOptions
 	if parent.nodes != nil {
 		if node := parent.nodes[nodeID]; node != nil {
 			merged = mergeGenPatch(merged, node.generation)
 			if node.child != nil {
 				merged = mergeGenPatch(merged, node.child.generation)
+				resumeStateOverrideKeys = mergeStringSet(
+					resumeStateOverrideKeys,
+					node.child.resumeStateOverrideKeys,
+				)
 				childNodes = node.child.nodes
 			}
 		}
 	}
 	out := &callOptions{
-		generation: merged,
-		nodes:      childNodes,
+		generation:              merged,
+		resumeStateOverrideKeys: resumeStateOverrideKeys,
+		nodes:                   childNodes,
 	}
 	if out.isEmpty() {
 		return nil
