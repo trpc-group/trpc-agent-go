@@ -197,10 +197,11 @@ func (c *mcpBrokerChat) buildBrokerOptions(serverPath string) (
 		mcpbroker.WithAllowAdHocHTTP(true),
 		mcpbroker.WithServers(map[string]mcpcfg.ConnectionConfig{
 			"local_stdio_code": {
-				Transport: "stdio",
-				Command:   "go",
-				Args:      []string{"run", serverPath},
-				Timeout:   10 * time.Second,
+				Transport:   "stdio",
+				Command:     "go",
+				Args:        []string{"run", serverPath},
+				Timeout:     10 * time.Second,
+				Description: "Project management, documentation, calendar, and meeting tools for the local workspace.",
 			},
 		}),
 	}
