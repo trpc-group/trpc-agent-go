@@ -4099,7 +4099,6 @@ const adminPageHTML = `<!doctype html>
                     {{end}}
                   </div>
                 </div>
-                  </div>
               </summary>
               <div class="config-field-detail">
                 <div class="config-meta">
