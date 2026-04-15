@@ -302,6 +302,8 @@ func (e *engine) validateRunRequest(request *RunRequest) error {
 		return errors.New("train evaluation set ids are empty")
 	case len(request.ValidationEvalSetIDs) == 0:
 		return errors.New("validation evaluation set ids are empty")
+	case request.EvaluationOptions.NumRuns > 1:
+		return errors.New("evaluation num runs greater than 1 is not supported")
 	case request.MaxRounds <= 0:
 		return errors.New("max rounds must be greater than 0")
 	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:

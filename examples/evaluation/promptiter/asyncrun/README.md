@@ -1,12 +1,12 @@
 # PromptIter AsyncRun Example
 
-This example runs PromptIter end to end through `manager.Start` and `manager.Get`.
+This example runs PromptIter end-to-end through `manager.Start` and `manager.Get`.
 
 The candidate agent is a single `llmagent` with a deliberately simple instruction. PromptIter directly optimizes that one instruction so the example highlights asynchronous run lifecycle management instead of HTTP transport.
 
 ## Data Files
 
-The example loads these files from `./data/promptiter-nba-commentary-app/` by default:
+By default, `-data-dir` is `./data`, and this example reads files from `./data/promptiter-nba-commentary-app/`:
 
 - `nba-commentary-train.evalset.json`
 - `nba-commentary-validation.evalset.json`
@@ -25,7 +25,7 @@ The train and validation sets are generated directly from a real sports-business
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `-data-dir` | Directory containing evaluation set and metric files | `./data` |
+| `-data-dir` | Base directory containing `promptiter-nba-commentary-app/` | `./data` |
 | `-output-dir` | Directory where evaluation results will be stored | `./output` |
 | `-model` | Model identifier used by the candidate agent | `deepseek-chat` |
 | `-judge-model` | Model identifier used by the judge agent | `gpt-5.2` |

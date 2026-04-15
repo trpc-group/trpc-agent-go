@@ -1032,6 +1032,28 @@ func TestRunRejectsEmptyValidationEvalSetIDs(t *testing.T) {
 	assert.Contains(t, err.Error(), "validation evaluation set ids are empty")
 }
 
+func TestRunRejectsNumRunsGreaterThanOne(t *testing.T) {
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgent(),
+		newTestAgentEvaluator(t, newScriptedEvalService(scriptedOutcome)),
+		&fakeBackwarder{},
+		&fakeAggregator{},
+		&fakeOptimizer{},
+	)
+	assert.NoError(t, err)
+	_, err = engineInstance.Run(context.Background(), &RunRequest{
+		TrainEvalSetIDs:      []string{"train"},
+		ValidationEvalSetIDs: []string{"validation"},
+		EvaluationOptions: EvaluationOptions{
+			NumRuns: 2,
+		},
+		MaxRounds: 1,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "evaluation num runs greater than 1 is not supported")
+}
+
 func TestRunRejectsInvalidInitialProfile(t *testing.T) {
 	backward := &fakeBackwarder{}
 	aggregatorInstance := &fakeAggregator{}
