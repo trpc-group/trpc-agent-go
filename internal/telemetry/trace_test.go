@@ -135,6 +135,15 @@ func hasAttrKey(attrs []attribute.KeyValue, key string) bool {
 	return false
 }
 
+func attrStringValue(attrs []attribute.KeyValue, key string) (string, bool) {
+	for _, kv := range attrs {
+		if string(kv.Key) == key {
+			return kv.Value.AsString(), true
+		}
+	}
+	return "", false
+}
+
 func TestNewWorkflowSpanName(t *testing.T) {
 	require.Equal(t, "workflow myflow", NewWorkflowSpanName("myflow"))
 }
@@ -1156,6 +1165,50 @@ func TestTraceBeforeInvokeAgent_JSONMarshalError(t *testing.T) {
 
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "test-agent"))
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentID, "test-agent"))
+}
+
+func TestTraceBeforeAfterInvokeAgent_NormalizesToolResponseMessageFields(t *testing.T) {
+	beforeSpan := newRecordingSpan()
+	inv := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "inv1",
+		Message: model.Message{
+			Role:     model.RoleTool,
+			Content:  "ok",
+			ToolID:   "call-before",
+			ToolName: "search",
+		},
+	}
+
+	TraceBeforeInvokeAgent(beforeSpan, inv, "desc", "instructions", nil)
+	beforeJSON, ok := attrStringValue(beforeSpan.attrs, semconvtrace.KeyGenAIInputMessages)
+	require.True(t, ok)
+	require.Contains(t, beforeJSON, `"tool_call_id":"call-before"`)
+	require.Contains(t, beforeJSON, `"name":"search"`)
+	require.NotContains(t, beforeJSON, `"tool_id"`)
+	require.NotContains(t, beforeJSON, `"tool_name"`)
+
+	afterSpan := newRecordingSpan()
+	rsp := &model.Response{
+		ID:    "resp1",
+		Model: "gpt-4",
+		Choices: []model.Choice{{
+			Index: 0,
+			Message: model.Message{
+				Role:     model.RoleTool,
+				Content:  "ok",
+				ToolID:   "call-after",
+				ToolName: "search",
+			},
+		}},
+	}
+	TraceAfterInvokeAgent(afterSpan, event.New("evt1", "author", event.WithResponse(rsp)), nil, 0, model.ErrorTypeRunError)
+	afterJSON, ok := attrStringValue(afterSpan.attrs, semconvtrace.KeyGenAIOutputMessages)
+	require.True(t, ok)
+	require.Contains(t, afterJSON, `"tool_call_id":"call-after"`)
+	require.Contains(t, afterJSON, `"name":"search"`)
+	require.NotContains(t, afterJSON, `"tool_id"`)
+	require.NotContains(t, afterJSON, `"tool_name"`)
 }
 
 func TestBuildRequestAttributes_JSONMarshalPaths(t *testing.T) {
