@@ -2035,6 +2035,30 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      最佳实践
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="最佳实践">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sbti" class="md-nav__link">
+    <span class="md-ellipsis">
+      SBTI 人格测试
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2297,6 +2321,30 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      最佳实践
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="最佳实践">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sbti" class="md-nav__link">
+    <span class="md-ellipsis">
+      SBTI 人格测试
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2335,7 +2383,7 @@
 <p>需要注意的是，A2UI 构建在 AG-UI 之上，它约束的是消息载荷而不是传输层。本质上，请求仍然走 AG-UI 的 <code>RunAgentInput</code>，响应仍然走 AG-UI 事件流，只是其中的文本内容被约束为 A2UI JSONL，并由 A2UI Translator 转换为前端可消费的 <code>RAW</code> 事件。</p>
 <h2 id="_1">快速开始</h2>
 <p>本节给出一个最小使用示例，帮助读者快速感受 tRPC-Agent-Go A2UI 的接入方式。</p>
-<p>本示例基于仓库中的 A2UI Demo，服务端完整代码见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/server">examples/a2ui/server</a>，前端演示代码见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/client">examples/a2ui/client</a>。</p>
+<p>本示例基于仓库中的 A2UI Demo。完整代码示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/server/default">examples/a2ui/server/default</a>，前端演示代码可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/client">examples/a2ui/client</a>。</p>
 <h3 id="_2">环境准备</h3>
 <ul>
 <li>Go 1.24+</li>
@@ -2555,7 +2603,7 @@
 <div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
 <span class="normal"><a href="#__codelineno-3-2">2</a></span>
 <span class="normal"><a href="#__codelineno-3-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="c1"># 启动 A2UI 服务端</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="nb">cd</span><span class="w"> </span>examples/a2ui/server
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="nb">cd</span><span class="w"> </span>examples/a2ui/server/default
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-model<span class="w"> </span>gpt-5.4<span class="w"> </span>-stream<span class="o">=</span><span class="nb">true</span><span class="w"> </span>-address<span class="w"> </span><span class="m">127</span>.0.0.1:8080<span class="w"> </span>-path<span class="w"> </span>/a2ui
 </span></code></pre></div></td></tr></table></div>
 <p>启动成功后，服务默认监听如下地址。</p>
@@ -2571,7 +2619,7 @@
 </span></code></pre></div></td></tr></table></div>
 <h3 id="_6">交互示例</h3>
 <p>A2UI 路由本质上仍然接收 AG-UI 的 <code>RunAgentInput</code>。普通用户输入仍然通过最后一条 <code>role=user</code> 的消息承载。</p>
-<p>下面以计算器场景为例说明交互过程。由于当前 <code>planner/a2ui</code> 默认注入的是标准 Catalog Schema，而仓库示例前端对标准 Catalog 中的选择类控件主要通过 <code>MultipleChoice</code> 进行渲染，因此下例使用 <code>MultipleChoice</code> 的单选形式承载运算符选择。</p>
+<p>下面以计算器场景为例说明交互过程。由于当前 <code>planner/a2ui</code> 默认注入的是标准 Catalog Schema，而仓库示例前端会把 <code>MultipleChoice</code> 作为标准输入组件处理，并在本地先完成绑定值更新，因此下例使用 <code>MultipleChoice</code> 的单选形式承载运算符选择。</p>
 <div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
@@ -3156,7 +3204,7 @@
 </span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9"></a><span class="w">  </span><span class="p">]</span>
 </span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>当前仓库示例前端会把输入组件绑定到数据模型，再在按钮动作触发时解析 <code>path</code> 并将当前值写入 <code>context</code>。其中数字输入默认仍以字符串形式回传，服务端可按自身约定做类型转换。</p>
+<p>当前仓库示例前端会先把输入组件绑定到本地数据模型，再在显式动作触发时解析 <code>path</code> 并将当前值写入 <code>context</code>。其中数字输入默认仍以字符串形式回传，服务端可按自身约定做类型转换。</p>
 <p>如果客户端要上报自身异常，也可以发送 <code>error</code> 事件。其事件 payload 结构由业务自行扩展，例如：</p>
 <p>下面这段 JSON 只展示 <code>error</code> 事件自身的 payload 结构；实际接入时通常仍需将其序列化后放入 <code>RunAgentInput.messages[].content</code>。</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
@@ -3429,6 +3477,25 @@
 <li>继续通过自定义 Runner 选项扩展 <code>userID</code>、会话存储与事件翻译逻辑。</li>
 </ul>
 <p>AG-UI 的完整使用方法可参见 <a href="../agui/">AG-UI 使用指南</a>，Planner 的通用能力可参见 <a href="../planner/">Planner</a>。</p>
+<h2 id="_10">最佳实践</h2>
+<h3 id="sbti">SBTI 人格测试</h3>
+<p>完整示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/server/sbti">examples/a2ui/server/sbti</a>，前端可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/client">examples/a2ui/client</a>。</p>
+<p>问卷页示意：</p>
+<p><img alt="SBTI quiz" src="../../assets/img/a2ui/sbti-test.png" /></p>
+<p>结果页示意：</p>
+<p><img alt="SBTI result" src="../../assets/img/a2ui/sbti-report.png" /></p>
+<ul>
+<li>它把业务逻辑和 UI 渲染拆成两个 Agent 节点：<code>sbti_director</code> 负责固定题库、固定判分和结果匹配，<code>sbti_a2ui_renderer</code> 只负责把结构化状态渲染成 A2UI。</li>
+<li>它使用静态资产驱动关键契约：<code>director_instruction.txt</code>、<code>director_output_schema.json</code>、<code>renderer_instruction.txt</code> 和 <code>type_profiles.json</code> 都是固定文件，避免把业务规则散落在代码里。</li>
+<li>它遵循更稳的交互边界：问卷题面通过标准 <code>MultipleChoice</code> 与本地数据绑定承载，选择过程不需要每题都向服务端发请求，只有显式动作如 <code>submit_test</code>、<code>restart_test</code> 才触发下一轮 Agent 执行。</li>
+</ul>
+<p>如果你的业务也是“固定规则 + 动态界面”的模式，推荐参考这套拆法：</p>
+<ol>
+<li>用一个上游 Agent 负责规则、状态和结果计算。</li>
+<li>用一个下游 A2UI Agent 只负责界面渲染。</li>
+<li>把规则资料、输出 Schema 和渲染约束都固化成静态资产文件。</li>
+<li>保持前端以标准输入组件和显式 action 为主，不在客户端硬编码业务分支。</li>
+</ol>
 
 
 
@@ -3451,7 +3518,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年3月20日 01:55:39 UTC">2026-03-20 01:55:39</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月15日 03:01:56 UTC">2026-04-15 03:01:56</span>
   </span>
 
     

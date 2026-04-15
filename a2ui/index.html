@@ -2035,6 +2035,30 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best Practices
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sbti-personality-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      SBTI Personality Test
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2297,6 +2321,30 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Best Practices
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sbti-personality-test" class="md-nav__link">
+    <span class="md-ellipsis">
+      SBTI Personality Test
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2335,7 +2383,7 @@
 <p>It is important to understand that A2UI is built on top of AG-UI. It constrains the message payload rather than the transport layer. Requests still use AG-UI's <code>RunAgentInput</code>, and responses still use the AG-UI event stream. The only difference is that the text content inside the stream is constrained to A2UI JSONL and then translated by the A2UI Translator into <code>RAW</code> events that the frontend can consume.</p>
 <h2 id="getting-started">Getting Started</h2>
 <p>This section walks through a minimal example to help you quickly understand how to integrate A2UI with <code>tRPC-Agent-Go</code>.</p>
-<p>This example is based on the A2UI demo in this repository. The complete server example is available at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/server">examples/a2ui/server</a>, and the frontend demo is available at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/client">examples/a2ui/client</a>.</p>
+<p>This example is based on the A2UI demo in this repository. The complete code example is available at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/server/default">examples/a2ui/server/default</a>, and the frontend demo is available at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/client">examples/a2ui/client</a>.</p>
 <h3 id="prerequisites">Prerequisites</h3>
 <ul>
 <li>Go 1.24+</li>
@@ -2555,7 +2603,7 @@
 <div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
 <span class="normal"><a href="#__codelineno-3-2">2</a></span>
 <span class="normal"><a href="#__codelineno-3-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="c1"># Start the A2UI server.</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="nb">cd</span><span class="w"> </span>examples/a2ui/server
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="nb">cd</span><span class="w"> </span>examples/a2ui/server/default
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-model<span class="w"> </span>gpt-5.4<span class="w"> </span>-stream<span class="o">=</span><span class="nb">true</span><span class="w"> </span>-address<span class="w"> </span><span class="m">127</span>.0.0.1:8080<span class="w"> </span>-path<span class="w"> </span>/a2ui
 </span></code></pre></div></td></tr></table></div>
 <p>Once started, the service listens on:</p>
@@ -3429,6 +3477,25 @@
 <li>Continue extending <code>userID</code>, session storage, and event translation logic through custom Runner options</li>
 </ul>
 <p>For full AG-UI usage details, see the <a href="../agui/">AG-UI Guide</a>. For the general Planner capabilities, see <a href="../planner/">Planner</a>.</p>
+<h2 id="best-practices">Best Practices</h2>
+<h3 id="sbti-personality-test">SBTI Personality Test</h3>
+<p>The complete example is available at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/server/sbti">examples/a2ui/server/sbti</a>, and the frontend example is available at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/a2ui/client">examples/a2ui/client</a>.</p>
+<p>Quiz page:</p>
+<p><img alt="SBTI quiz" src="../assets/img/a2ui/sbti-test.png" /></p>
+<p>Result page:</p>
+<p><img alt="SBTI result" src="../assets/img/a2ui/sbti-report.png" /></p>
+<ul>
+<li>It splits business logic from UI rendering into two agent nodes. <code>sbti_director</code> owns the fixed question bank, scoring, and type matching, while <code>sbti_a2ui_renderer</code> only turns structured state into A2UI.</li>
+<li>It drives the key contracts through static assets. <code>director_instruction.txt</code>, <code>director_output_schema.json</code>, <code>renderer_instruction.txt</code>, and <code>type_profiles.json</code> are all fixed files, so business rules do not drift into scattered code paths.</li>
+<li>It keeps a stable interaction boundary. The questionnaire is carried by the standard <code>MultipleChoice</code> component with local data binding, so answering questions does not require a round trip for every click. Only explicit actions such as <code>submit_test</code> and <code>restart_test</code> trigger another agent run.</li>
+</ul>
+<p>If your use case also follows a "fixed rules + dynamic interface" pattern, this split is a good starting point:</p>
+<ol>
+<li>Use an upstream agent for rules, state, and result computation.</li>
+<li>Use a downstream A2UI agent only for rendering.</li>
+<li>Keep reference data, output schemas, and rendering constraints in static asset files.</li>
+<li>Keep the frontend centered on standard input components and explicit actions rather than business-specific client branches.</li>
+</ol>
 
 
 
@@ -3451,7 +3518,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="March 20, 2026 01:55:39 UTC">2026-03-20 01:55:39</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 15, 2026 03:01:56 UTC">2026-04-15 03:01:56</span>
   </span>
 
     
