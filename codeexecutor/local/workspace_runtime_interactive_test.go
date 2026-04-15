@@ -342,6 +342,24 @@ func TestInteractiveSession_KillRunningProcess(t *testing.T) {
 	})
 }
 
+func TestInteractiveSession_KillIgnoresProcessDone(t *testing.T) {
+	cmdName := "sh"
+	args := []string{"-lc", "true"}
+	if runtime.GOOS == "windows" {
+		cmdName = "cmd"
+		args = []string{"/c", "exit 0"}
+	}
+
+	cmd := exec.Command(cmdName, args...) //nolint:gosec
+	require.NoError(t, cmd.Start())
+	require.NoError(t, cmd.Wait())
+
+	sess := newInteractiveSession("done", "true", 2)
+	sess.cmd = cmd
+
+	require.NoError(t, sess.Kill(10*time.Millisecond))
+}
+
 func TestRuntime_StartProgram_StdinAndPipeErrors(t *testing.T) {
 	rt := NewRuntime(t.TempDir())
 	ws := codeexecutor.Workspace{

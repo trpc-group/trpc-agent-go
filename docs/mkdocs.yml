@@ -17,6 +17,7 @@ nav:
           - Dify Agent: dify.md
           - Claude Code Agent: claudecode.md
       - Runner: runner.md
+      - Code Executor: codeexecutor.md
       - Error Handling: error-handling.md
       - Model: model.md
       - Callbacks: callbacks.md
@@ -90,6 +91,7 @@ plugins:
                     - Dify Agent: dify.md
                     - Claude Code Agent: claudecode.md
                 - Runner: runner.md
+                - Code Executor: codeexecutor.md
                 - 错误处理: error-handling.md
                 - Model: model.md
                 - Callbacks: callbacks.md
