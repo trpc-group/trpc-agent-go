@@ -11,7 +11,7 @@ The candidate app behind the server is a single `llmagent` with a deliberately s
 | --- | --- | --- |
 | `OPENAI_API_KEY` | API key for the OpenAI-compatible endpoint | `` |
 | `OPENAI_BASE_URL` | Base URL for the OpenAI-compatible endpoint | `https://api.openai.com/v1` |
-| `CANDIDATE_MODEL_NAME` | Default model used by the candidate agent | `deepseek-v3-local-II` |
+| `CANDIDATE_MODEL_NAME` | Default model used by the candidate agent | `deepseek-chat` |
 | `JUDGE_MODEL_NAME` | Default model used by the judge agent | `gpt-5.4` |
 | `WORKER_MODEL_NAME` | Default model used by the PromptIter backwarder, aggregator, and optimizer agents | `gpt-5.4` |
 
@@ -23,7 +23,7 @@ The candidate app behind the server is a single `llmagent` with a deliberately s
 | `-base-path` | Base path exposed by the PromptIter server | `/promptiter/v1/apps` |
 | `-data-dir` | Directory containing evaluation set and metric files | `./data` |
 | `-output-dir` | Directory where evaluation results are written | `./output` |
-| `-model` | Model identifier used by the candidate agent | `$CANDIDATE_MODEL_NAME` or `deepseek-v3-local-II` |
+| `-model` | Model identifier used by the candidate agent | `$CANDIDATE_MODEL_NAME` or `deepseek-chat` |
 | `-candidate-instruction` | Instruction used by the candidate agent | The shared default summary seed |
 | `-judge-model` | Model identifier used by the judge agent | `$JUDGE_MODEL_NAME` or `gpt-5.4` |
 | `-worker-model` | Model identifier used by the PromptIter backwarder, aggregator, and optimizer agents | `$WORKER_MODEL_NAME` or `gpt-5.4` |
@@ -48,7 +48,7 @@ The eval sets are generated from the same sports-business source data as the syn
 cd examples/evaluation/promptiter/server
 export OPENAI_BASE_URL="http://v2.open.venus.oa.com/llmproxy/"
 export OPENAI_API_KEY="***"
-export CANDIDATE_MODEL_NAME="deepseek-v3-local-II"
+export CANDIDATE_MODEL_NAME="deepseek-chat"
 export JUDGE_MODEL_NAME="gpt-5.4"
 export WORKER_MODEL_NAME="gpt-5.4"
 go run . \
@@ -56,7 +56,7 @@ go run . \
   -base-path "/promptiter/v1/apps" \
   -data-dir "./data" \
   -output-dir "./output" \
-  -model "deepseek-v3-local-II" \
+  -model "deepseek-chat" \
   -judge-model "gpt-5.4" \
   -worker-model "gpt-5.4"
 ```

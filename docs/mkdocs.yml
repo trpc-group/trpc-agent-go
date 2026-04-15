@@ -56,6 +56,7 @@ nav:
       - Planner: planner.md
       - Event: event.md
       - Evaluation: evaluation.md
+      - PromptIter: promptiter.md
   - Server:
     - Gateway: gateway.md
     - AG-UI: agui.md
@@ -129,6 +130,7 @@ plugins:
                 - Planner: planner.md
                 - Event: event.md
                 - Evaluation: evaluation.md
+                - PromptIter: promptiter.md
             - 服务:
               - Gateway: gateway.md
               - AG-UI: agui.md

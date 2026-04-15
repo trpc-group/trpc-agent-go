@@ -27,7 +27,7 @@ The train and validation sets are generated directly from a real sports-business
 | --- | --- | --- |
 | `-data-dir` | Directory containing evaluation set and metric files | `./data` |
 | `-output-dir` | Directory where evaluation results will be stored | `./output` |
-| `-model` | Model identifier used by the candidate agent | `deepseek-v3-local-II` |
+| `-model` | Model identifier used by the candidate agent | `deepseek-chat` |
 | `-judge-model` | Model identifier used by the judge agent | `gpt-5.2` |
 | `-worker-model` | Model identifier used by the PromptIter backwarder, aggregator, and optimizer agents | `gpt-5.4` |
 | `-runs` | Number of evaluation repetitions per case | `1` |
@@ -47,7 +47,7 @@ cd examples/evaluation/promptiter/asyncrun
 export OPENAI_BASE_URL="http://v2.open.venus.oa.com/llmproxy/"
 export OPENAI_API_KEY="***"
 go run . \
-  -model "deepseek-v3-local-II" \
+  -model "deepseek-chat" \
   -judge-model "gpt-5.2" \
   -worker-model "gpt-5.4"
 ```
