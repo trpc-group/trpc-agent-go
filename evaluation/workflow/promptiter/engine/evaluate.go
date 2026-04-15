@@ -291,7 +291,7 @@ func buildModelInstance(ref *astructure.ModelRef) (model.Model, error) {
 	}
 	providerName := strings.TrimSpace(ref.Provider)
 	if providerName == "" {
-		providerName = "openai"
+		return nil, errors.New("model provider is empty")
 	}
 	modelName := strings.TrimSpace(ref.Name)
 	if modelName == "" {

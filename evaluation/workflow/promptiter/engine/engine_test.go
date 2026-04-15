@@ -749,7 +749,7 @@ func TestCompileProfileRunOptionsUsesModelSurfacePatch(t *testing.T) {
 	assert.Equal(t, map[string]string{"X-Test": "1"}, capturedOptions.Headers)
 }
 
-func TestCompileProfileRunOptionsDefaultsModelProviderToOpenAI(t *testing.T) {
+func TestCompileProfileRunOptionsRejectsEmptyModelProvider(t *testing.T) {
 	structure, err := newStructureState(&astructure.Snapshot{
 		StructureID: "structure_1",
 		EntryNodeID: "entry",
@@ -779,13 +779,8 @@ func TestCompileProfileRunOptionsDefaultsModelProviderToOpenAI(t *testing.T) {
 			},
 		},
 	})
-	assert.NoError(t, err)
-	opts := agent.NewRunOptions(runOptions...)
-	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "entry")
-	assert.True(t, ok)
-	modelValue, ok := patch.Model()
-	assert.True(t, ok)
-	assert.Equal(t, "patched-model", modelValue.Info().Name)
+	assert.ErrorContains(t, err, "model provider is empty")
+	assert.Nil(t, runOptions)
 }
 
 func TestBuildBackwardRequestKeepsContextSurfacesButRestrictsAllowedGradientSurfaceIDs(t *testing.T) {
