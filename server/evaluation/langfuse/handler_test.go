@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	coreevaluation "trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -32,6 +33,7 @@ import (
 	finalresponsecriterion "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/finalresponse"
 	textcriterion "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/text"
 	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
+	evalstatus "trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -266,6 +268,21 @@ func TestBuildCaseSpecAllowsEmptyExpectedOutput(t *testing.T) {
 	assert.Equal(t, "", spec.EvalCase.Conversation[0].FinalResponse.Content)
 }
 
+func TestBuildCaseSpecRejectsNilItem(t *testing.T) {
+	spec, err := buildCaseSpec(context.Background(), nil)
+	require.Error(t, err)
+	assert.Nil(t, spec)
+}
+
+func TestBuildCaseSpecRejectsNonSerializableInput(t *testing.T) {
+	spec, err := buildCaseSpec(context.Background(), &DatasetItem{
+		ID:    "item-5",
+		Input: map[string]any{"unsupported": make(chan int)},
+	})
+	require.Error(t, err)
+	assert.Nil(t, spec)
+}
+
 func TestNormalizeCaseSpecUsesExplicitUserIDForSessionInput(t *testing.T) {
 	handler := &Handler{appName: "demo-app"}
 	spec, err := handler.normalizeCaseSpec(
@@ -301,6 +318,249 @@ func TestResolveSessionIDPrefersCaseSpec(t *testing.T) {
 		SessionID: "case-session",
 	})
 	assert.Equal(t, "case-session", sessionID)
+}
+
+func TestResolveSessionIDFallsBackToInferenceAndEmpty(t *testing.T) {
+	sessionID := resolveSessionID(&coreevaluation.EvaluationInferenceDetails{
+		SessionID: "inference-session",
+	}, &CaseSpec{})
+	assert.Equal(t, "inference-session", sessionID)
+	assert.Equal(t, "", resolveSessionID(nil, &CaseSpec{}))
+}
+
+func TestResolveUserIDPrefersInferenceDetail(t *testing.T) {
+	userID := resolveUserID(&coreevaluation.EvaluationInferenceDetails{
+		UserID: "inference-user",
+	}, &CaseSpec{
+		UserID: "case-user",
+	}, executionOptions{userID: "default-user"})
+	assert.Equal(t, "inference-user", userID)
+}
+
+func TestResolveUserIDFallsBackToCaseSpecAndDefault(t *testing.T) {
+	userID := resolveUserID(nil, &CaseSpec{UserID: "case-user"}, executionOptions{userID: "default-user"})
+	assert.Equal(t, "case-user", userID)
+	userID = resolveUserID(nil, &CaseSpec{}, executionOptions{userID: "default-user"})
+	assert.Equal(t, "default-user", userID)
+}
+
+func TestResolveMetricReasonFallsBackToDefaultMessage(t *testing.T) {
+	reason := resolveMetricReason(&evalresult.EvalMetricResult{
+		MetricName: "final_response_avg_score",
+		EvalStatus: evalstatus.EvalStatusPassed,
+		Score:      1,
+		Threshold:  0.8,
+	})
+	assert.Contains(t, reason, "final_response_avg_score")
+	assert.Contains(t, reason, "1.00")
+}
+
+func TestResolveMetricReasonUsesExplicitReason(t *testing.T) {
+	reason := resolveMetricReason(&evalresult.EvalMetricResult{
+		MetricName: "final_response_avg_score",
+		Details: &evalresult.EvalMetricResultDetails{
+			Reason: "explicit reason",
+		},
+	})
+	assert.Equal(t, "explicit reason", reason)
+}
+
+func TestExtractFinalOutputValidatesInferenceDetails(t *testing.T) {
+	_, err := extractFinalOutput(nil)
+	require.Error(t, err)
+	_, err = extractFinalOutput(&coreevaluation.EvaluationInferenceDetails{})
+	require.Error(t, err)
+	_, err = extractFinalOutput(&coreevaluation.EvaluationInferenceDetails{
+		Inferences: []*evalset.Invocation{{}},
+	})
+	require.Error(t, err)
+	output, err := extractFinalOutput(&coreevaluation.EvaluationInferenceDetails{
+		Inferences: []*evalset.Invocation{{
+			FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "hello"},
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "hello", output)
+}
+
+func TestResolveRemoteExperimentOptionsSupportsPayloadForms(t *testing.T) {
+	handler := &Handler{
+		traceTags: []string{"framework-tag"},
+		userIDSupplier: func(_ context.Context) string {
+			return "framework-user"
+		},
+	}
+	ctx := context.Background()
+	opts, err := handler.resolveRemoteExperimentOptions(ctx, nil, "demo-dataset")
+	require.NoError(t, err)
+	assert.Equal(t, "framework-user", opts.userID)
+	assert.Equal(t, []string{"framework-tag"}, opts.traceTags)
+	assert.Contains(t, opts.runName, "demo-dataset")
+	opts, err = handler.resolveRemoteExperimentOptions(ctx, "nightly-run", "demo-dataset")
+	require.NoError(t, err)
+	assert.Equal(t, "nightly-run", opts.runName)
+	opts, err = handler.resolveRemoteExperimentOptions(ctx, `{"runName":"json-run","userId":"payload-user","traceTags":["payload-tag"]}`, "demo-dataset")
+	require.NoError(t, err)
+	assert.Equal(t, "json-run", opts.runName)
+	assert.Equal(t, "payload-user", opts.userID)
+	assert.Equal(t, []string{"payload-tag"}, opts.traceTags)
+}
+
+func TestResolveRemoteExperimentOptionsRejectsUnmarshallablePayload(t *testing.T) {
+	handler := &Handler{
+		traceTags: []string{"framework-tag"},
+		userIDSupplier: func(_ context.Context) string {
+			return "framework-user"
+		},
+	}
+	_, err := handler.resolveRemoteExperimentOptions(context.Background(), map[string]any{
+		"runName": make(chan int),
+	}, "demo-dataset")
+	require.Error(t, err)
+}
+
+func TestRegisterRoutesValidatesArguments(t *testing.T) {
+	handler := &Handler{path: "/langfuse/remote-experiment"}
+	err := handler.RegisterRoutes(nil, &serverevaluation.Server{})
+	require.Error(t, err)
+	err = handler.RegisterRoutes(http.NewServeMux(), nil)
+	require.Error(t, err)
+}
+
+func TestServeHTTPValidatesMethodAndRequestBody(t *testing.T) {
+	handler := &Handler{timeout: time.Second}
+	methodRequest := httptest.NewRequest(http.MethodGet, "/langfuse/remote-experiment", nil)
+	methodRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(methodRecorder, methodRequest)
+	assert.Equal(t, http.StatusMethodNotAllowed, methodRecorder.Code)
+	decodeRequest := httptest.NewRequest(http.MethodPost, "/langfuse/remote-experiment", bytes.NewBufferString("{"))
+	decodeRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(decodeRecorder, decodeRequest)
+	assert.Equal(t, http.StatusBadRequest, decodeRecorder.Code)
+}
+
+func TestServeHTTPValidatesDatasetNameAndDatasetFetch(t *testing.T) {
+	handler := &Handler{timeout: time.Second}
+	missingDatasetRequest := httptest.NewRequest(http.MethodPost, "/langfuse/remote-experiment", bytes.NewBufferString(`{"projectId":"project-1"}`))
+	missingDatasetRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(missingDatasetRecorder, missingDatasetRequest)
+	assert.Equal(t, http.StatusBadRequest, missingDatasetRecorder.Code)
+	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		http.Error(writer, "upstream failed", http.StatusBadGateway)
+	}))
+	defer apiServer.Close()
+	handler = &Handler{
+		timeout:     time.Second,
+		client:      newClient(apiServer.URL, "pk", "sk", apiServer.Client()),
+		caseBuilder: buildCaseSpec,
+		traceTags:   []string{"framework-tag"},
+		userIDSupplier: func(_ context.Context) string {
+			return "framework-user"
+		},
+	}
+	fetchRequest := httptest.NewRequest(http.MethodPost, "/langfuse/remote-experiment", bytes.NewBufferString(`{"projectId":"project-1","datasetName":"demo-dataset"}`))
+	fetchRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(fetchRecorder, fetchRequest)
+	assert.Equal(t, http.StatusBadGateway, fetchRecorder.Code)
+}
+
+func TestServeHTTPReturnsBuildCaseErrors(t *testing.T) {
+	apiServer := &recordedAPIServer{
+		dataset: &dataset{
+			ID:        "dataset-1",
+			ProjectID: "project-1",
+			Name:      "demo-dataset",
+			Items: []*DatasetItem{{
+				ID:        "item-1",
+				DatasetID: "dataset-1",
+				Input:     123,
+			}},
+		},
+	}
+	testServer := httptest.NewServer(apiServer)
+	defer testServer.Close()
+	handler, err := New(
+		"demo-app",
+		&fakeAgentEvaluator{},
+		newTestEvalSetManager(t),
+		newTestMetricManager(t),
+		newTestEvalResultManager(t),
+		WithBaseURL(testServer.URL),
+		WithPublicKey("pk"),
+		WithSecretKey("sk"),
+		WithCaseBuilder(buildStringCaseSpec),
+	)
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, handler.Path(), bytes.NewBufferString(`{"projectId":"project-1","datasetName":"demo-dataset"}`))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+}
+
+func TestBuildCaseSpecsValidatesDatasetShapes(t *testing.T) {
+	handler := &Handler{caseBuilder: buildStringCaseSpec}
+	_, err := handler.buildCaseSpecs(context.Background(), &remoteExperimentRequest{}, executionOptions{}, nil)
+	require.Error(t, err)
+	_, err = handler.buildCaseSpecs(context.Background(), &remoteExperimentRequest{}, executionOptions{}, &dataset{Name: "demo-dataset"})
+	require.Error(t, err)
+	_, err = handler.buildCaseSpecs(context.Background(), &remoteExperimentRequest{}, executionOptions{}, &dataset{
+		Name:  "demo-dataset",
+		Items: []*DatasetItem{nil},
+	})
+	require.Error(t, err)
+	_, err = handler.buildCaseSpecs(context.Background(), &remoteExperimentRequest{}, executionOptions{}, &dataset{
+		Name: "demo-dataset",
+		Items: []*DatasetItem{{
+			ID: "item-1",
+		}},
+	})
+	require.Error(t, err)
+}
+
+func TestFindHelpersValidateMissingArtifacts(t *testing.T) {
+	_, err := findEvaluationCaseResult(nil, "case-1")
+	require.Error(t, err)
+	_, err = findEvalCaseResult(&coreevaluation.EvaluationResult{}, "case-1")
+	require.Error(t, err)
+	_, err = findInferenceDetail(&coreevaluation.EvaluationCaseResult{EvalCaseID: "case-1"})
+	require.Error(t, err)
+}
+
+func TestInjectRemoteTraceParentCreatesTraceContext(t *testing.T) {
+	ctx, traceID, err := injectRemoteTraceParent(context.Background())
+	require.NoError(t, err)
+	assert.NotEmpty(t, traceID)
+	spanContext := oteltrace.SpanContextFromContext(ctx)
+	assert.True(t, spanContext.IsValid())
+	assert.True(t, spanContext.IsRemote())
+}
+
+func TestNewExecutionContextRespectsExistingDeadline(t *testing.T) {
+	parent, cancelParent := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelParent()
+	ctx, cancel := newExecutionContext(parent, time.Hour)
+	defer cancel()
+	parentDeadline, ok := parent.Deadline()
+	require.True(t, ok)
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.WithinDuration(t, parentDeadline, deadline, 5*time.Millisecond)
+}
+
+func TestForceFlushTelemetryReturnsNilWithDefaultProvider(t *testing.T) {
+	assert.NoError(t, forceFlushTelemetry(context.Background()))
+}
+
+func TestDefaultRunNameFallsBackToTimestamp(t *testing.T) {
+	runName := defaultRunName(" ")
+	assert.NotEmpty(t, runName)
+	assert.NotContains(t, runName, " ")
+}
+
+func TestLogResponseWriteErrorAcceptsRequest(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/langfuse/remote-experiment", nil)
+	logResponseWriteError(nil, errors.New("nil request"))
+	logResponseWriteError(request, errors.New("request error"))
 }
 
 func TestNewValidatesRequiredOptions(t *testing.T) {
@@ -616,6 +876,168 @@ func TestHandlerServeHTTPExecutesRemoteExperiment(t *testing.T) {
 	assert.NotEmpty(t, apiServer.scoreRequests[0].Comment)
 }
 
+func TestHandlerServeHTTPExecutesRemoteExperimentForMultipleItems(t *testing.T) {
+	apiServer := &recordedAPIServer{
+		dataset: &dataset{
+			ID:        "dataset-1",
+			ProjectID: "project-1",
+			Name:      "demo-dataset",
+			Items: []*DatasetItem{
+				{
+					ID:             "item-1",
+					DatasetID:      "dataset-1",
+					Input:          "say hello",
+					ExpectedOutput: "hello",
+				},
+				{
+					ID:             "item-2",
+					DatasetID:      "dataset-1",
+					Input:          "say hello again",
+					ExpectedOutput: "hello",
+				},
+			},
+		},
+	}
+	testServer := httptest.NewServer(apiServer)
+	defer testServer.Close()
+	agentEvaluator := newTestRuntime(
+		t,
+		"demo-app",
+		&fakeRunner{events: []*event.Event{makeFinalEvent("hello")}},
+	)
+	metricManager := metricinmemory.New()
+	t.Cleanup(func() {
+		assert.NoError(t, metricManager.Close())
+	})
+	require.NoError(t, metricManager.Add(context.Background(), "demo-app", "dataset-1", buildFinalResponseMetric()))
+	handler, err := New(
+		"demo-app",
+		agentEvaluator,
+		newTestEvalSetManager(t),
+		metricManager,
+		newTestEvalResultManager(t),
+		WithBaseURL(testServer.URL),
+		WithPublicKey("pk"),
+		WithSecretKey("sk"),
+		WithCaseBuilder(buildStringCaseSpec),
+	)
+	require.NoError(t, err)
+	requestBody, err := json.Marshal(remoteExperimentRequest{
+		ProjectID:   "project-1",
+		DatasetID:   "dataset-1",
+		DatasetName: "demo-dataset",
+		Payload: map[string]any{
+			"runName": "nightly-run",
+		},
+	})
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, handler.Path(), bytes.NewReader(requestBody))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response remoteExperimentResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, 2, response.ProcessedCases)
+	assert.Equal(t, 2, response.TraceCount)
+	assert.Equal(t, 4, response.ScoreCount)
+	apiServer.mu.Lock()
+	defer apiServer.mu.Unlock()
+	require.Len(t, apiServer.traceRequests, 2)
+	require.Len(t, apiServer.runItemRequest, 2)
+	require.Len(t, apiServer.scoreRequests, 4)
+	assert.Equal(t, "nightly-run/item-1", apiServer.traceRequests[0].Name)
+	assert.Equal(t, "nightly-run/item-2", apiServer.traceRequests[1].Name)
+}
+
+func TestProcessCaseReturnsTraceCreationErrors(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/public/traces":
+			writeJSON(writer, request, http.StatusBadGateway, errorResponse{Message: "trace failed"})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/public/dataset-run-items":
+			writeJSON(writer, request, http.StatusOK, map[string]any{
+				"id":             "run-item-1",
+				"datasetRunId":   "dataset-run-1",
+				"datasetRunName": "nightly-run",
+				"datasetItemId":  "item-1",
+				"traceId":        "trace-1",
+			})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/public/scores":
+			writeJSON(writer, request, http.StatusOK, map[string]string{"id": "score-1"})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer apiServer.Close()
+	agentEvaluator := &fakeAgentEvaluator{
+		result: &coreevaluation.EvaluationResult{
+			EvalCases: []*coreevaluation.EvaluationCaseResult{{
+				EvalCaseID:    "item-1",
+				OverallStatus: evalstatus.EvalStatusPassed,
+				RunDetails: []*coreevaluation.EvaluationCaseRunDetails{{
+					Inference: &coreevaluation.EvaluationInferenceDetails{
+						SessionID: "session-1",
+						UserID:    "demo-user",
+						Inferences: []*evalset.Invocation{{
+							FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "hello"},
+						}},
+					},
+				}},
+			}},
+			EvalResult: &evalresult.EvalSetResult{
+				EvalCaseResults: []*evalresult.EvalCaseResult{{
+					EvalID:          "item-1",
+					FinalEvalStatus: evalstatus.EvalStatusPassed,
+				}},
+			},
+		},
+	}
+	evalSetManager := newTestEvalSetManager(t)
+	metricManager := newTestMetricManager(t)
+	require.NoError(t, metricManager.Add(context.Background(), "demo-app", "dataset-1", buildFinalResponseMetric()))
+	handler, err := New(
+		"demo-app",
+		agentEvaluator,
+		evalSetManager,
+		metricManager,
+		newTestEvalResultManager(t),
+		WithBaseURL(apiServer.URL),
+		WithPublicKey("pk"),
+		WithSecretKey("sk"),
+	)
+	require.NoError(t, err)
+	require.NoError(t, handler.syncEvalSet(context.Background(), "dataset-1", []*CaseSpec{{
+		DatasetItemID: "item-1",
+		TraceInput:    "say hello",
+		EvalCase: &evalset.EvalCase{
+			EvalID: "item-1",
+			Conversation: []*evalset.Invocation{{
+				UserContent:   &model.Message{Role: model.RoleUser, Content: "say hello"},
+				FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "hello"},
+			}},
+		},
+	}}))
+	_, _, _, err = handler.processCase(context.Background(), "dataset-1", executionOptions{
+		runName:   "nightly-run",
+		userID:    "demo-user",
+		traceTags: []string{"framework-tag"},
+	}, &CaseSpec{
+		DatasetItemID: "item-1",
+		TraceName:     "nightly-run/item-1",
+		TraceInput:    "say hello",
+		UserID:        "demo-user",
+		EvalCase: &evalset.EvalCase{
+			EvalID: "item-1",
+			Conversation: []*evalset.Invocation{{
+				UserContent:   &model.Message{Role: model.RoleUser, Content: "say hello"},
+				FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "hello"},
+			}},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create trace")
+}
+
 func TestHandlerServeHTTPPayloadOverridesFrameworkDefaults(t *testing.T) {
 	apiServer := &recordedAPIServer{
 		dataset: &dataset{
@@ -783,10 +1205,13 @@ func TestHandlerRegisterRoutesMountsUnderEvaluationBasePath(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, recorder.Code)
 }
 
-type fakeAgentEvaluator struct{}
+type fakeAgentEvaluator struct {
+	result *coreevaluation.EvaluationResult
+	err    error
+}
 
 func (f *fakeAgentEvaluator) Evaluate(ctx context.Context, evalSetID string, opt ...coreevaluation.Option) (*coreevaluation.EvaluationResult, error) {
-	return &coreevaluation.EvaluationResult{}, nil
+	return f.result, f.err
 }
 
 func (f *fakeAgentEvaluator) Close() error {
