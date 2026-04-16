@@ -151,6 +151,10 @@ type Options struct {
 	// conversations. This is useful for models like DeepSeek that output reasoning_content
 	// in thinking mode.
 	ReasoningContentMode string
+	// PreserveForeignMessages keeps messages authored by other agents in their
+	// original roles/order instead of rewriting them into user-context messages
+	// when graph history is seeded into state.
+	PreserveForeignMessages bool
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
 	EventMessageProjector EventMessageProjector
@@ -360,6 +364,15 @@ func WithReasoningContentMode(mode string) Option {
 func WithSummaryFormatter(formatter func(summary string) string) Option {
 	return func(opts *Options) {
 		opts.summaryFormatter = formatter
+	}
+}
+
+// WithPreserveForeignMessages controls whether messages authored by other
+// agents should preserve their original assistant/tool roles and order instead
+// of being rewritten into user context when graph history is seeded.
+func WithPreserveForeignMessages(preserve bool) Option {
+	return func(opts *Options) {
+		opts.PreserveForeignMessages = preserve
 	}
 }
 

@@ -414,6 +414,98 @@ func TestDefaultA2AEventConverter_ConvertStreamingToEvents(t *testing.T) {
 	}
 }
 
+func TestDefaultA2AEventConverter_ConvertToEvents_PreservesAssistantTextBeforeToolCall(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{InvocationID: "test-id"}
+
+	dataPart := protocol.NewDataPart(map[string]any{
+		ia2a.ToolCallFieldID:   "call-1",
+		ia2a.ToolCallFieldType: "function",
+		ia2a.ToolCallFieldName: "lookup_policy",
+		ia2a.ToolCallFieldArgs: `{"city":"beijing"}`,
+	})
+	dataPart.Metadata = map[string]any{
+		ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionCall,
+	}
+
+	events, err := converter.ConvertToEvents(protocol.MessageResult{
+		Result: &protocol.Message{
+			MessageID: "msg-1",
+			Role:      protocol.MessageRoleAgent,
+			Parts: []protocol.Part{
+				&protocol.TextPart{Text: "I will help you call the tool."},
+				&dataPart,
+			},
+		},
+	}, "test-agent", invocation)
+	if err != nil {
+		t.Fatalf("ConvertToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	evt := events[0]
+	if evt.Response == nil || len(evt.Response.Choices) != 1 {
+		t.Fatalf("expected one response choice, got %#v", evt.Response)
+	}
+	msg := evt.Response.Choices[0].Message
+	if msg.Content != "I will help you call the tool." {
+		t.Fatalf("expected assistant content preserved, got %q", msg.Content)
+	}
+	if len(msg.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(msg.ToolCalls))
+	}
+	if msg.ToolCalls[0].Function.Name != "lookup_policy" {
+		t.Fatalf("expected tool name lookup_policy, got %q", msg.ToolCalls[0].Function.Name)
+	}
+}
+
+func TestDefaultA2AEventConverter_ConvertStreamingToEvents_PreservesAssistantTextBeforeToolCall(t *testing.T) {
+	converter := &defaultA2AEventConverter{}
+	invocation := &agent.Invocation{InvocationID: "test-id"}
+
+	dataPart := protocol.NewDataPart(map[string]any{
+		ia2a.ToolCallFieldID:   "call-1",
+		ia2a.ToolCallFieldType: "function",
+		ia2a.ToolCallFieldName: "lookup_policy",
+		ia2a.ToolCallFieldArgs: `{"city":"beijing"}`,
+	})
+	dataPart.Metadata = map[string]any{
+		ia2a.DataPartMetadataTypeKey: ia2a.DataPartMetadataTypeFunctionCall,
+	}
+
+	events, err := converter.ConvertStreamingToEvents(protocol.StreamingMessageEvent{
+		Result: &protocol.TaskArtifactUpdateEvent{
+			TaskID:    "task-1",
+			ContextID: "ctx-1",
+			Artifact: protocol.Artifact{
+				ArtifactID: "artifact-1",
+				Parts: []protocol.Part{
+					&protocol.TextPart{Text: "I will help you call the tool."},
+					&dataPart,
+				},
+			},
+		},
+	}, "test-agent", invocation)
+	if err != nil {
+		t.Fatalf("ConvertStreamingToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	evt := events[0]
+	if evt.Response == nil || len(evt.Response.Choices) != 1 {
+		t.Fatalf("expected one response choice, got %#v", evt.Response)
+	}
+	msg := evt.Response.Choices[0].Message
+	if msg.Content != "I will help you call the tool." {
+		t.Fatalf("expected assistant content preserved, got %q", msg.Content)
+	}
+	if len(msg.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(msg.ToolCalls))
+	}
+}
+
 func TestDefaultEventA2AConverter_ConvertToA2AMessage(t *testing.T) {
 	type testCase struct {
 		name         string

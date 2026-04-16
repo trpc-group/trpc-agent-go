@@ -280,6 +280,15 @@ func TestWithEventMessageProjector(t *testing.T) {
 	require.Equal(t, "projected", got.Content)
 }
 
+func TestWithPreserveForeignMessages(t *testing.T) {
+	opts := &Options{}
+	WithPreserveForeignMessages(true)(opts)
+	require.True(t, opts.PreserveForeignMessages)
+
+	WithPreserveForeignMessages(false)(opts)
+	require.False(t, opts.PreserveForeignMessages)
+}
+
 // TestGraphAgent_ReasoningContentMode verifies that
 // ReasoningContentMode option is correctly applied in createInitialState.
 func TestGraphAgent_ReasoningContentMode(t *testing.T) {

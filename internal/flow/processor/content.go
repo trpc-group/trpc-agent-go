@@ -127,6 +127,11 @@ type ContentRequestProcessor struct {
 	// allows graph executions to retain authentic assistant/tool transcripts
 	// while still enabling cross-agent contextualization when branches differ.
 	PreserveSameBranch bool
+	// PreserveForeignMessages keeps events authored by other agents in their
+	// original roles and order instead of converting them into user-context
+	// messages. This is opt-in because some handoff flows rely on the default
+	// foreign-event contextualization behavior.
+	PreserveForeignMessages bool
 	// TimelineFilterMode controls whether to append history messages to the request.
 	TimelineFilterMode string
 	// ReasoningContentMode controls how reasoning_content is handled in multi-turn
@@ -255,6 +260,14 @@ func WithMaxHistoryRuns(maxRuns int) ContentOption {
 func WithPreserveSameBranch(preserve bool) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.PreserveSameBranch = preserve
+	}
+}
+
+// WithPreserveForeignMessages toggles preserving original roles/order for
+// events emitted by other agents instead of rewriting them into user context.
+func WithPreserveForeignMessages(preserve bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.PreserveForeignMessages = preserve
 	}
 }
 
@@ -1656,6 +1669,9 @@ func (p *ContentRequestProcessor) isOtherAgentReply(
 		return false
 	}
 	if evt.Author == "" || evt.Author == "user" || evt.Author == currentAgentName {
+		return false
+	}
+	if p.PreserveForeignMessages {
 		return false
 	}
 	if p.PreserveSameBranch && currentBranch != "" && evt.Branch != "" {
