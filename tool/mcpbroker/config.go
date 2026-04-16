@@ -94,13 +94,14 @@ func normalizeConnectionConfig(cfg mcpcfg.ConnectionConfig, adHoc bool) (mcpcfg.
 	}
 
 	return mcpcfg.ConnectionConfig{
-		Transport:  transport,
-		ServerURL:  serverURL,
-		Headers:    cloneStringMap(cfg.Headers),
-		Command:    command,
-		Args:       cloneStringSlice(cfg.Args),
-		Timeout:    cfg.Timeout,
-		ClientInfo: cfg.ClientInfo,
+		Transport:   transport,
+		ServerURL:   serverURL,
+		Headers:     cloneStringMap(cfg.Headers),
+		Command:     command,
+		Args:        cloneStringSlice(cfg.Args),
+		Timeout:     cfg.Timeout,
+		Description: strings.TrimSpace(cfg.Description),
+		ClientInfo:  cfg.ClientInfo,
 	}, kind, nil
 }
 

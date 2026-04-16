@@ -28,8 +28,9 @@ type listServersOutput struct {
 }
 
 type listServersServer struct {
-	Name      string `json:"name"`
-	Transport string `json:"transport"`
+	Name        string `json:"name"`
+	Transport   string `json:"transport"`
+	Description string `json:"description,omitempty"`
 }
 
 type listToolsInput struct {
@@ -89,7 +90,7 @@ func newBrokerTools(b *Broker) []tool.Tool {
 		function.NewFunctionTool(
 			b.listServers,
 			function.WithName(listServersToolName),
-			function.WithDescription("List named MCP servers already configured for this broker. Use this first when you expect the platform to have preconfigured MCP connections. This tool only returns named broker servers; it does not inspect arbitrary URLs."),
+			function.WithDescription("List named MCP servers already configured for this broker. Use this first when you expect the platform to have preconfigured MCP connections. When configured, server descriptions help choose which server to inspect next. This tool only returns named broker servers; it does not inspect arbitrary URLs."),
 			function.WithInputSchema(emptyObjectSchema()),
 			function.WithOutputSchema(listServersOutputSchema()),
 		),
@@ -415,8 +416,9 @@ func listServersOutputSchema() *tool.Schema {
 					AdditionalProperties: false,
 					Required:             []string{"name", "transport"},
 					Properties: map[string]*tool.Schema{
-						"name":      {Type: "string", Description: "Configured server name."},
-						"transport": {Type: "string", Description: "Resolved MCP transport."},
+						"name":        {Type: "string", Description: "Configured server name."},
+						"transport":   {Type: "string", Description: "Resolved MCP transport."},
+						"description": {Type: "string", Description: "Capability summary of the server. Use this to decide which server to explore next. Present only when configured."},
 					},
 				},
 			},

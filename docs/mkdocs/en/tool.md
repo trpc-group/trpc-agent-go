@@ -813,10 +813,11 @@ import (
 broker := mcpbroker.New(
     mcpbroker.WithServers(map[string]mcp.ConnectionConfig{
         "local_stdio_code": {
-            Transport: "stdio",
-            Command:   "go",
-            Args:      []string{"run", "./stdio_server/main.go"},
-            Timeout:   10 * time.Second,
+            Transport:   "stdio",
+            Command:     "go",
+            Args:        []string{"run", "./stdio_server/main.go"},
+            Timeout:     10 * time.Second,
+            Description: "Project management, documentation, and calendar tools.",
         },
     }),
     mcpbroker.WithAllowAdHocHTTP(true),
@@ -828,6 +829,34 @@ agent := llmagent.New(
     llmagent.WithTools(broker.Tools()),
 )
 ```
+
+#### Server Description
+
+The `Description` field on `ConnectionConfig` provides a capability
+summary for the MCP server, helping the model decide which server to
+explore at the `mcp_list_servers` stage. The output includes the
+description:
+
+```json
+{
+  "servers": [
+    {
+      "name": "local_stdio_code",
+      "transport": "stdio",
+      "description": "Project management, documentation, and calendar tools."
+    }
+  ]
+}
+```
+
+This is analogous to the `description` field on an OpenAI tool namespace:
+the model can read it at the `mcp_list_servers` step and decide which
+server to explore next, without needing to `mcp_list_tools` every server
+one by one. The more servers you have, or the less self-explanatory the
+server names are, the more valuable this description becomes.
+
+The field is optional. When omitted, the output simply does not include
+a `description` property, and existing behavior is unchanged.
 
 Today `mcpbroker` is a **tool-layer integration**. Unlike `Skill`, it
 does not automatically inject routing guidance into the system prompt.
