@@ -42,6 +42,7 @@ type options struct {
 	callbacks                         *service.Callbacks
 	judgeRunner                       runner.Runner
 	numRuns                           int
+	evalCaseIDs                       []string
 	numRunsParallelEnabled            *bool
 	evalCaseParallelism               *int
 	evalCaseParallelInferenceEnabled  *bool
@@ -146,6 +147,13 @@ func WithExpectedRunner(r runner.Runner) Option {
 func WithNumRuns(numRuns int) Option {
 	return func(o *options) {
 		o.numRuns = numRuns
+	}
+}
+
+// WithEvalCaseIDs limits evaluation to the specified eval case IDs.
+func WithEvalCaseIDs(evalCaseIDs ...string) Option {
+	return func(o *options) {
+		o.evalCaseIDs = append([]string(nil), evalCaseIDs...)
 	}
 }
 

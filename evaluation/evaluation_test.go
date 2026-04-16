@@ -436,6 +436,7 @@ func TestNewAgentEvaluatorWithParallelOptionsBuildsLocalService(t *testing.T) {
 type optionProbeService struct {
 	lastInferenceOptions *service.Options
 	lastEvaluateOptions  *service.Options
+	lastInferenceRequest *service.InferenceRequest
 }
 
 func (s *optionProbeService) Inference(ctx context.Context, req *service.InferenceRequest, opt ...service.Option) ([]*service.InferenceResult, error) {
@@ -448,6 +449,11 @@ func (s *optionProbeService) Inference(ctx context.Context, req *service.Inferen
 		o(options)
 	}
 	s.lastInferenceOptions = options
+	if req != nil {
+		cloned := *req
+		cloned.EvalCaseIDs = append([]string(nil), req.EvalCaseIDs...)
+		s.lastInferenceRequest = &cloned
+	}
 	return []*service.InferenceResult{}, nil
 }
 
@@ -515,6 +521,41 @@ func TestAgentEvaluatorEvaluateDoesNotOverrideServiceCallOptionsByDefault(t *tes
 	assert.Equal(t, -456, probeSvc.lastEvaluateOptions.EvalCaseParallelism)
 	assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelInferenceEnabled)
 	assert.True(t, probeSvc.lastEvaluateOptions.EvalCaseParallelEvaluationEnabled)
+}
+
+func TestAgentEvaluatorEvaluatePassesEvalCaseIDsToInference(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	evalSetMgr := evalsetinmemory.New()
+	_, err := evalSetMgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "case-1"}))
+	assert.NoError(t, evalSetMgr.AddCase(ctx, appName, evalSetID, &evalset.EvalCase{EvalID: "case-2"}))
+	probeSvc := &optionProbeService{}
+	ae, err := New(
+		appName,
+		stubRunner{},
+		WithEvalSetManager(evalSetMgr),
+		WithEvalResultManager(evalresultinmemory.New()),
+		WithMetricManager(metricinmemory.New()),
+		WithRegistry(registry.New()),
+		WithEvaluationService(probeSvc),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+	_, err = ae.Evaluate(ctx, evalSetID, WithEvalCaseIDs("case-2"))
+	assert.NoError(t, err)
+	assert.NotNil(t, probeSvc.lastInferenceRequest)
+	if probeSvc.lastInferenceRequest == nil {
+		return
+	}
+	assert.Equal(t, []string{"case-2"}, probeSvc.lastInferenceRequest.EvalCaseIDs)
 }
 
 func TestAgentEvaluatorEvaluatePassesExpectedRunnerToInferenceAndEvaluate(t *testing.T) {

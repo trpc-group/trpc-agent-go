@@ -420,8 +420,9 @@ func (a *agentEvaluator) runEvaluationOnce(
 	runID int,
 ) ([]*evalresult.EvalCaseResult, error) {
 	inferenceRequest := &service.InferenceRequest{
-		AppName:   a.appName,
-		EvalSetID: evalSetID,
+		AppName:     a.appName,
+		EvalSetID:   evalSetID,
+		EvalCaseIDs: append([]string(nil), opts.evalCaseIDs...),
 	}
 	inferenceOpts := []service.Option{
 		service.WithEvalSetManager(opts.evalSetManager),

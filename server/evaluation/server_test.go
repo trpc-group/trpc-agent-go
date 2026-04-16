@@ -167,6 +167,17 @@ type stubLogger struct {
 	errorfCalls []string
 }
 
+type stubRouteRegistrar struct {
+	register func(mux *http.ServeMux, server *Server) error
+}
+
+func (s *stubRouteRegistrar) RegisterRoutes(mux *http.ServeMux, server *Server) error {
+	if s.register != nil {
+		return s.register(mux, server)
+	}
+	return nil
+}
+
 func (s *stubLogger) Debug(args ...any) {}
 
 func (s *stubLogger) Debugf(format string, args ...any) {}
@@ -295,6 +306,34 @@ func TestNewCustomPaths(t *testing.T) {
 	assert.Equal(t, "/api/evaluation/executions", srv.RunsPath())
 	assert.Equal(t, "/api/evaluation/datasets", srv.SetsPath())
 	assert.Equal(t, "/api/evaluation/outputs", srv.ResultsPath())
+}
+
+func TestNewRegistersExtraRoutes(t *testing.T) {
+	srv := newTestServer(t, WithRouteRegistrar(&stubRouteRegistrar{register: func(mux *http.ServeMux, server *Server) error {
+		mux.HandleFunc("/custom/health", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		return nil
+	}}))
+	request := httptest.NewRequest(http.MethodGet, "/custom/health", nil)
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, request)
+	assert.Equal(t, http.StatusNoContent, recorder.Code)
+}
+
+func TestNewPropagatesRouteRegistrarError(t *testing.T) {
+	_, err := New(
+		WithAppName("demo-app"),
+		WithAgentEvaluator(&fakeAgentEvaluator{}),
+		WithEvalSetManager(&fakeEvalSetManager{}),
+		WithEvalResultManager(&fakeEvalResultManager{}),
+		WithRouteRegistrar(&stubRouteRegistrar{register: func(mux *http.ServeMux, server *Server) error {
+			return errors.New("register failed")
+		}}),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "register extra routes")
+	assert.Contains(t, err.Error(), "register failed")
 }
 
 func TestDefaultPathsAreRESTful(t *testing.T) {

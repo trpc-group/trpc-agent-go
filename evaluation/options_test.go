@@ -143,6 +143,11 @@ func TestWithNumRuns(t *testing.T) {
 	assert.Equal(t, 5, opts.numRuns)
 }
 
+func TestWithEvalCaseIDs(t *testing.T) {
+	opts := newOptions(WithEvalCaseIDs("case-1", "case-2"))
+	assert.Equal(t, []string{"case-1", "case-2"}, opts.evalCaseIDs)
+}
+
 func TestWithNumRunsParallelEnabled(t *testing.T) {
 	opts := newOptions(WithNumRunsParallelEnabled(true))
 	assert.NotNil(t, opts.numRunsParallelEnabled)
