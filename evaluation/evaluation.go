@@ -68,6 +68,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		callbacks:                         opts.callbacks,
 		expectedRunner:                    opts.expectedRunner,
 		numRuns:                           opts.numRuns,
+		evalCaseIDs:                       append([]string(nil), opts.evalCaseIDs...),
 		numRunsParallelEnabled:            opts.numRunsParallelEnabled,
 		runDetailsEnabled:                 opts.runDetailsEnabled,
 		runOptions:                        opts.runOptions,
@@ -124,6 +125,7 @@ type agentEvaluator struct {
 	callbacks                         *service.Callbacks
 	expectedRunner                    runner.Runner
 	numRuns                           int
+	evalCaseIDs                       []string
 	numRunsParallelEnabled            *bool
 	runDetailsEnabled                 bool
 	runOptions                        []agent.RunOption
@@ -215,6 +217,7 @@ func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 		callbacks:                         a.callbacks,
 		expectedRunner:                    a.expectedRunner,
 		numRuns:                           a.numRuns,
+		evalCaseIDs:                       append([]string(nil), a.evalCaseIDs...),
 		numRunsParallelEnabled:            a.numRunsParallelEnabled,
 		runDetailsEnabled:                 a.runDetailsEnabled,
 		runOptions:                        append([]agent.RunOption(nil), a.runOptions...),
@@ -420,8 +423,9 @@ func (a *agentEvaluator) runEvaluationOnce(
 	runID int,
 ) ([]*evalresult.EvalCaseResult, error) {
 	inferenceRequest := &service.InferenceRequest{
-		AppName:   a.appName,
-		EvalSetID: evalSetID,
+		AppName:     a.appName,
+		EvalSetID:   evalSetID,
+		EvalCaseIDs: append([]string(nil), opts.evalCaseIDs...),
 	}
 	inferenceOpts := []service.Option{
 		service.WithEvalSetManager(opts.evalSetManager),
