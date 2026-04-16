@@ -66,10 +66,8 @@ func buildGraph() (*graph.Graph, error) {
 
 func buildDirectorAgent(schema map[string]any) agent.Agent {
 	generationConfig := model.GenerationConfig{
-		MaxTokens:       intPtr(16384),
-		Temperature:     floatPtr(1.0),
-		ReasoningEffort: stringPtr("medium"),
-		Stream:          *isStream,
+		MaxTokens: intPtr(16384),
+		Stream:    *isStream,
 	}
 	return llmagent.New(
 		directorAgentName,
@@ -88,10 +86,8 @@ func localDirectorInstructionText() string {
 
 func buildRendererAgent() agent.Agent {
 	generationConfig := model.GenerationConfig{
-		MaxTokens:       intPtr(32768),
-		Temperature:     floatPtr(1.0),
-		ReasoningEffort: stringPtr("medium"),
-		Stream:          *isStream,
+		MaxTokens: intPtr(32768),
+		Stream:    *isStream,
 	}
 	return llmagent.New(
 		rendererAgentName,
@@ -116,13 +112,5 @@ func directorOutputSchemaMap() (map[string]any, error) {
 }
 
 func intPtr(v int) *int {
-	return &v
-}
-
-func floatPtr(v float64) *float64 {
-	return &v
-}
-
-func stringPtr(v string) *string {
 	return &v
 }

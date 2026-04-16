@@ -272,7 +272,7 @@ function parseDataModelValue(rawValue) {
       if (!isObject(entry) || typeof entry.key !== "string") {
         return;
       }
-      result[entry.key] = parseDataModelValue(entry.value);
+      result[entry.key] = parseDataModelValue(entry.value !== undefined ? entry.value : entry);
     });
     return result;
   }
@@ -417,6 +417,17 @@ function parseAguiEvent(rawEvent) {
 }
 
 function extractRawPayload(rawEvent) {
+  if (typeof rawEvent === "string") {
+    const trimmed = rawEvent.trim();
+    if (trimmed) {
+      try {
+        return extractRawPayload(JSON.parse(trimmed));
+      } catch {
+        return rawEvent;
+      }
+    }
+    return rawEvent;
+  }
   if (!isObject(rawEvent)) {
     return rawEvent;
   }
@@ -1382,6 +1393,32 @@ function normalizeContextValue(surfaceId, rawValue, dataContextPath = "/") {
   return String(rawValue);
 }
 
+function projectActionContextValue(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => projectActionContextValue(item));
+  }
+  if (!isObject(value)) {
+    return value;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "selected")) {
+    return { selected: projectActionContextValue(value.selected) };
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "value")) {
+    return { value: projectActionContextValue(value.value) };
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "checked")) {
+    return { checked: projectActionContextValue(value.checked) };
+  }
+  const projected = {};
+  Object.keys(value).forEach((key) => {
+    projected[key] = projectActionContextValue(value[key]);
+  });
+  return projected;
+}
+
 function clearLogs() {
   aguiLog.replaceChildren();
   a2uiLog.replaceChildren();
@@ -1512,6 +1549,15 @@ function buildUserActionPayload(surfaceId, sourceComponentId, action, dataContex
   const actionName = isObject(action) && typeof action.name === "string" && action.name.trim()
     ? action.name.trim()
     : "unknown";
+  const context = extractActionContext(normalizedSurfaceId, isObject(action) ? action.context : undefined, dataContextPath);
+  if (actionName === "submit_test") {
+    if (Object.prototype.hasOwnProperty.call(context, "questions")) {
+      context.questions = projectActionContextValue(context.questions);
+    }
+    if (Object.prototype.hasOwnProperty.call(context, "special")) {
+      context.special = projectActionContextValue(context.special);
+    }
+  }
   return {
     userAction: {
       name: actionName,
@@ -1520,7 +1566,7 @@ function buildUserActionPayload(surfaceId, sourceComponentId, action, dataContex
         ? action.sourceComponentId.trim()
         : sourceComponentId,
       timestamp: new Date().toISOString(),
-      context: extractActionContext(normalizedSurfaceId, isObject(action) ? action.context : undefined, dataContextPath),
+      context,
     },
   };
 }
