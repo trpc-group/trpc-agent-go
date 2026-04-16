@@ -21,6 +21,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	coreevaluation "trpc.group/trpc-go/trpc-agent-go/evaluation"
@@ -517,6 +519,23 @@ func TestBuildCaseSpecsValidatesDatasetShapes(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestResolveCaseArtifactsReturnsResolvedValues(t *testing.T) {
+	handler := &Handler{}
+	evaluationResult := buildEvaluationResult("item-1", []*evalresult.EvalMetricResult{{
+		MetricName: "final_response_avg_score",
+		Score:      1,
+		Threshold:  1,
+	}})
+	caseAggregate, runCaseResult, inferenceDetail, err := handler.resolveCaseArtifacts(evaluationResult, "item-1")
+	require.NoError(t, err)
+	require.NotNil(t, caseAggregate)
+	require.NotNil(t, runCaseResult)
+	require.NotNil(t, inferenceDetail)
+	assert.Equal(t, "item-1", caseAggregate.EvalCaseID)
+	assert.Equal(t, "item-1", runCaseResult.EvalID)
+	assert.Equal(t, "session-1", inferenceDetail.SessionID)
+}
+
 func TestFindHelpersValidateMissingArtifacts(t *testing.T) {
 	_, err := findEvaluationCaseResult(nil, "case-1")
 	require.Error(t, err)
@@ -551,10 +570,26 @@ func TestForceFlushTelemetryReturnsNilWithDefaultProvider(t *testing.T) {
 	assert.NoError(t, forceFlushTelemetry(context.Background()))
 }
 
+func TestForceFlushTelemetryFlushesSDKProvider(t *testing.T) {
+	previousProvider := otel.GetTracerProvider()
+	provider := sdktrace.NewTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		assert.NoError(t, provider.Shutdown(context.Background()))
+		otel.SetTracerProvider(previousProvider)
+	})
+	assert.NoError(t, forceFlushTelemetry(context.Background()))
+}
+
 func TestDefaultRunNameFallsBackToTimestamp(t *testing.T) {
 	runName := defaultRunName(" ")
 	assert.NotEmpty(t, runName)
 	assert.NotContains(t, runName, " ")
+}
+
+func TestAverageFloat64HandlesEmptyAndMultipleValues(t *testing.T) {
+	assert.Equal(t, 0.0, averageFloat64(nil))
+	assert.Equal(t, 2.0, averageFloat64([]float64{1, 2, 3}))
 }
 
 func TestLogResponseWriteErrorAcceptsRequest(t *testing.T) {
