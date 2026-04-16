@@ -2383,11 +2383,12 @@ func stringPtr(s string) *string {
 func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 	// Test cases covering different streaming scenarios.
 	tests := []struct {
-		name          string
-		chunks        []string
-		expectedTool  string
-		expectedArgs  string
-		expectedCount int
+		name           string
+		chunks         []string
+		expectedTool   string
+		expectedArgs   string
+		expectedCount  int
+		expectedReason string
 	}{
 		{
 			name: "Normal_Sandwich_Mode", // Normal "sandwich" mode: content does not exist in tool call chunks {0}.
@@ -2410,6 +2411,17 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 			expectedTool:  "calculate",
 			expectedArgs:  `{"expr":"2+2"}`,
 			expectedCount: 1,
+		},
+		{
+			name: "Reasoning_ToolCalls_SameChunk",
+			chunks: []string{
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"tool planning","tool_calls":[{"index":0,"id":"call_reasoning","type":"function","function":{"name":"lookup_weather","arguments":"{\"city\":\"Shenzhen\"}"}}]},"finish_reason":null}]}`,
+				`data: {"id":"test","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":""},"finish_reason":"tool_calls"}]}`,
+			},
+			expectedTool:   "lookup_weather",
+			expectedArgs:   `{"city":"Shenzhen"}`,
+			expectedCount:  1,
+			expectedReason: "tool planning",
 		},
 		{
 			name: "Multiple_ToolCalls_Sandwich", // multiple tool calls in normal mode.
@@ -2537,6 +2549,14 @@ func TestModel_GenerateContent_StreamingBatchProcessing(t *testing.T) {
 				assert.Equalf(t, tt.expectedArgs, string(tc.Function.Arguments), "Expected args '%s', got '%s'", tt.expectedArgs, string(tc.Function.Arguments))
 				// Verify Done=false for tool call responses.
 				assert.Falsef(t, toolCallResponse.Done, "Tool call response should have Done=false")
+			}
+
+			if tt.expectedReason != "" {
+				assert.Equal(
+					t,
+					tt.expectedReason,
+					toolCallResponse.Choices[0].Message.ReasoningContent,
+				)
 			}
 
 			// Special verification for ID_Index_Mapping_Verification test case.
@@ -5125,6 +5145,39 @@ func TestSanitizeChunkForAccumulator_NoFinishReason(t *testing.T) {
 	assert.Len(t, sanitized.Choices[0].Delta.ToolCalls, 0)
 }
 
+func TestStripReasoningFromChunkForAccumulator(t *testing.T) {
+	chunk := parseChunkWithExtraFields(t, `{
+		"id": "test",
+		"object": "chat.completion.chunk",
+		"created": 1699200000,
+		"model": "gpt-3.5-turbo",
+		"choices": [
+			{
+				"index": 0,
+				"delta": {
+					"content": "hello",
+					"reasoning_content": "plan"
+				}
+			}
+		]
+	}`)
+
+	stripped, ok := stripReasoningFromChunkForAccumulator(chunk)
+
+	require.True(t, ok)
+	require.Len(t, stripped.Choices, 1)
+	assert.Equal(t, "hello", stripped.Choices[0].Delta.Content)
+	assert.Empty(
+		t,
+		extractReasoningContent(stripped.Choices[0].Delta.JSON.ExtraFields),
+	)
+	assert.Equal(
+		t,
+		"plan",
+		extractReasoningContent(chunk.Choices[0].Delta.JSON.ExtraFields),
+	)
+}
+
 // TestStreamingCallbackIntegration tests the integration of streaming callbacks.
 func TestStreamingCallbackIntegration(t *testing.T) {
 	t.Run("streaming with chat stream complete callback", func(t *testing.T) {
@@ -5340,6 +5393,15 @@ func TestStreamingCallbackIntegration(t *testing.T) {
 			}
 		}
 		assert.True(t, hasReasoning, "expected at least one response to contain reasoning content")
+		require.NotEmpty(t, responses)
+		finalResp := responses[len(responses)-1]
+		require.True(t, finalResp.Done)
+		require.Len(t, finalResp.Choices, 1)
+		assert.Equal(
+			t,
+			"I think the answer is 42.",
+			finalResp.Choices[0].Message.Content,
+		)
 	})
 
 	t.Run("streaming with malformed reasoning content", func(t *testing.T) {
@@ -6709,11 +6771,11 @@ func TestModel_accumulateChunk(t *testing.T) {
 		assert.Equal(t, "", reasoningBuf.String())
 	})
 
-	t.Run("skip chunk with reasoning content", func(t *testing.T) {
+	t.Run("skip pure reasoning-only chunk", func(t *testing.T) {
 		chunk := parseChunkWithExtraFields(t, `{
-			"id": "test-id",
-			"object": "chat.completion.chunk",
-			"created": 1699200000,
+				"id": "test-id",
+				"object": "chat.completion.chunk",
+				"created": 1699200000,
 			"model": "test-model",
 			"choices": [{
 				"index": 0,
@@ -6729,6 +6791,72 @@ func TestModel_accumulateChunk(t *testing.T) {
 
 		assert.Equal(t, "First reasoning", reasoningBuf.String())
 		assert.Empty(t, acc.Choices)
+	})
+
+	t.Run("accumulate chunk with reasoning and content", func(t *testing.T) {
+		chunk := parseChunkWithExtraFields(t, `{
+				"id": "test-id",
+				"object": "chat.completion.chunk",
+				"created": 1699200000,
+				"model": "test-model",
+				"choices": [{
+					"index": 0,
+					"delta": {
+						"content": "Hello",
+						"reasoning_content": "plan"
+					}
+				}]
+			}`)
+		acc := openai.ChatCompletionAccumulator{}
+		var reasoningBuf bytes.Buffer
+
+		m.accumulateChunk(chunk, &acc, &reasoningBuf)
+
+		require.Len(t, acc.Choices, 1)
+		assert.Equal(t, "Hello", acc.Choices[0].Message.Content)
+		assert.Equal(t, "plan", reasoningBuf.String())
+	})
+
+	t.Run("accumulate chunk with reasoning and tool calls", func(t *testing.T) {
+		chunk := parseChunkWithExtraFields(t, `{
+				"id": "test-id",
+				"object": "chat.completion.chunk",
+				"created": 1699200000,
+				"model": "test-model",
+				"choices": [{
+					"index": 0,
+					"delta": {
+						"reasoning_content": "tool planning",
+						"tool_calls": [{
+							"index": 0,
+							"id": "call_123",
+							"type": "function",
+							"function": {
+								"name": "lookup_weather",
+								"arguments": "{\"city\":\"Shenzhen\"}"
+							}
+						}]
+					}
+				}]
+			}`)
+		acc := openai.ChatCompletionAccumulator{}
+		var reasoningBuf bytes.Buffer
+
+		m.accumulateChunk(chunk, &acc, &reasoningBuf)
+
+		require.Len(t, acc.Choices, 1)
+		require.Len(t, acc.Choices[0].Message.ToolCalls, 1)
+		assert.Equal(
+			t,
+			"lookup_weather",
+			acc.Choices[0].Message.ToolCalls[0].Function.Name,
+		)
+		assert.Equal(
+			t,
+			`{"city":"Shenzhen"}`,
+			acc.Choices[0].Message.ToolCalls[0].Function.Arguments,
+		)
+		assert.Equal(t, "tool planning", reasoningBuf.String())
 	})
 
 	t.Run("accumulate with custom usage function", func(t *testing.T) {
