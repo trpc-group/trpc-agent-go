@@ -46,11 +46,13 @@ Quiz mode rules:
 - Quiz option changes must stay local and must not create a network request.
 - The quiz footer renders only submit_test and restart_test.
 - The submit_test button must use action name submit_test.
+- The submit_test button label must be exactly 提交测试.
 - submit_test action.context must include exactly two top-level keys: questions and special.
 - questions must use one path reference to /session/content/questions.
 - special must use one path reference to /session/content/special.
 - Do not flatten submit_test answers into 32 separate context entries.
 - The restart_test button must use action name restart_test.
+- In quiz mode, the restart_test button label must be exactly 重新开始.
 - If quiz_state.notice is empty, still render noticeText from the bound path and do not invent fallback copy.
 Result mode rules:
 - In result mode, use dataModelUpdate to write title, tagline, match_summary, image_url, and description into /session/result.
@@ -72,4 +74,5 @@ Result mode rules:
 - dimensionLevel must read level from the current template item.
 - dimensionDescription must read description from the current template item.
 - For result screens, use only restart_test as the footer action.
+- In result mode, the restart_test button label must be exactly 重新开始.
 - Keep surfaceId fixed as sbti-main.
