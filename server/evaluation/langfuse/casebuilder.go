@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -71,13 +70,12 @@ func stringifyValue(fieldName string, raw any) (string, error) {
 	}
 	switch value := raw.(type) {
 	case string:
-		return strings.TrimSpace(value), nil
+		return value, nil
 	default:
 		payloadBytes, err := json.Marshal(value)
 		if err != nil {
 			return "", fmt.Errorf("%s must be JSON serializable: %w", fieldName, err)
 		}
-		stringValue := strings.TrimSpace(string(payloadBytes))
-		return stringValue, nil
+		return string(payloadBytes), nil
 	}
 }

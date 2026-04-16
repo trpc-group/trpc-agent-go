@@ -221,6 +221,18 @@ func TestBuildCaseSpecBuildsFinalResponseCase(t *testing.T) {
 	assert.Equal(t, "hello", spec.EvalCase.Conversation[0].FinalResponse.Content)
 }
 
+func TestBuildCaseSpecPreservesStringWhitespace(t *testing.T) {
+	spec, err := buildCaseSpec(context.Background(), &DatasetItem{
+		ID:             "item-1",
+		Input:          "  Say hello.  ",
+		ExpectedOutput: "  hello  ",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, spec)
+	assert.Equal(t, "  Say hello.  ", spec.EvalCase.Conversation[0].UserContent.Content)
+	assert.Equal(t, "  hello  ", spec.EvalCase.Conversation[0].FinalResponse.Content)
+}
+
 func TestBuildCaseSpecStringifiesObjectInput(t *testing.T) {
 	spec, err := buildCaseSpec(context.Background(), &DatasetItem{
 		ID:             "item-2",
@@ -252,6 +264,43 @@ func TestBuildCaseSpecAllowsEmptyExpectedOutput(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, spec)
 	assert.Equal(t, "", spec.EvalCase.Conversation[0].FinalResponse.Content)
+}
+
+func TestNormalizeCaseSpecUsesExplicitUserIDForSessionInput(t *testing.T) {
+	handler := &Handler{appName: "demo-app"}
+	spec, err := handler.normalizeCaseSpec(
+		&remoteExperimentRequest{
+			ProjectID:   "project-1",
+			DatasetID:   "dataset-1",
+			DatasetName: "demo-dataset",
+		},
+		executionOptions{
+			runName: "nightly-run",
+			userID:  "default-user",
+		},
+		&DatasetItem{ID: "item-1"},
+		&CaseSpec{
+			UserID: "case-user",
+			EvalCase: &evalset.EvalCase{
+				EvalID: "item-1",
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, spec)
+	require.NotNil(t, spec.EvalCase)
+	require.NotNil(t, spec.EvalCase.SessionInput)
+	assert.Equal(t, "case-user", spec.UserID)
+	assert.Equal(t, "case-user", spec.EvalCase.SessionInput.UserID)
+}
+
+func TestResolveSessionIDPrefersCaseSpec(t *testing.T) {
+	sessionID := resolveSessionID(&coreevaluation.EvaluationInferenceDetails{
+		SessionID: "inference-session",
+	}, &CaseSpec{
+		SessionID: "case-session",
+	})
+	assert.Equal(t, "case-session", sessionID)
 }
 
 func TestNewValidatesRequiredOptions(t *testing.T) {

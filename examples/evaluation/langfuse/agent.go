@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -82,6 +83,9 @@ func calculate(_ context.Context, args calculatorInput) (calculatorToolResult, e
 	case "multiply":
 		result.Result = args.A * args.B
 	case "divide":
+		if args.B == 0 {
+			return result, errors.New("division by zero")
+		}
 		result.Result = args.A / args.B
 	default:
 		return result, fmt.Errorf("invalid operation: %s", args.Operation)

@@ -270,14 +270,14 @@ func (h *Handler) normalizeCaseSpec(
 	if strings.TrimSpace(spec.EvalCase.SessionInput.AppName) == "" {
 		spec.EvalCase.SessionInput.AppName = h.appName
 	}
+	if strings.TrimSpace(spec.UserID) == "" {
+		spec.UserID = opts.userID
+	}
 	if strings.TrimSpace(spec.EvalCase.SessionInput.UserID) == "" {
-		spec.EvalCase.SessionInput.UserID = opts.userID
+		spec.EvalCase.SessionInput.UserID = spec.UserID
 	}
 	if strings.TrimSpace(spec.TraceName) == "" {
 		spec.TraceName = fmt.Sprintf("%s/%s", opts.runName, item.ID)
-	}
-	if strings.TrimSpace(spec.UserID) == "" {
-		spec.UserID = opts.userID
 	}
 	if strings.TrimSpace(spec.SessionID) == "" {
 		spec.SessionID = fmt.Sprintf("%s-%s", opts.runName, item.ID)
@@ -686,11 +686,11 @@ func extractFinalOutput(inferenceDetail *coreevaluation.EvaluationInferenceDetai
 }
 
 func resolveSessionID(inferenceDetail *coreevaluation.EvaluationInferenceDetails, spec *CaseSpec) string {
-	if inferenceDetail != nil && strings.TrimSpace(inferenceDetail.SessionID) != "" {
-		return inferenceDetail.SessionID
-	}
 	if spec != nil && strings.TrimSpace(spec.SessionID) != "" {
 		return spec.SessionID
+	}
+	if inferenceDetail != nil && strings.TrimSpace(inferenceDetail.SessionID) != "" {
+		return inferenceDetail.SessionID
 	}
 	return ""
 }

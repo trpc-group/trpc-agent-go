@@ -114,14 +114,14 @@ If `userId` or `traceTags` are missing from the payload, the handler falls back 
 | Variable | Description |
 | --- | --- |
 | `OPENAI_API_KEY` | API key used by the example agent model and the judge runner |
+| `LANGFUSE_HOST` | Host:port used by Langfuse telemetry export |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse public API key used by telemetry and the remote experiment handler |
+| `LANGFUSE_SECRET_KEY` | Langfuse secret API key used by telemetry and the remote experiment handler |
 
 ## Optional Environment Variables
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `LANGFUSE_HOST` | Host:port used by Langfuse telemetry export | unset |
-| `LANGFUSE_PUBLIC_KEY` | Langfuse public API key used by telemetry and the remote experiment handler | unset |
-| `LANGFUSE_SECRET_KEY` | Langfuse secret API key used by telemetry and the remote experiment handler | unset |
 | `LANGFUSE_INSECURE` | Use plain HTTP when Langfuse is served without TLS | `false` |
 | `OPENAI_BASE_URL` | Optional custom endpoint used by the example agent model and the judge runner | `https://api.openai.com/v1` |
 
