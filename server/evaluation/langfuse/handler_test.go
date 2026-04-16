@@ -1038,6 +1038,165 @@ func TestProcessCaseReturnsTraceCreationErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "create trace")
 }
 
+func TestProcessCaseReturnsDatasetRunItemCreationErrors(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/public/traces":
+			writeJSON(writer, request, http.StatusOK, map[string]string{"id": "trace-1"})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/public/dataset-run-items":
+			http.Error(writer, "run item failed", http.StatusBadGateway)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer apiServer.Close()
+	handler, err := New(
+		"demo-app",
+		&fakeAgentEvaluator{
+			result: buildEvaluationResult("item-1", nil),
+		},
+		newTestEvalSetManager(t),
+		newTestMetricManager(t),
+		newTestEvalResultManager(t),
+		WithBaseURL(apiServer.URL),
+		WithPublicKey("pk"),
+		WithSecretKey("sk"),
+	)
+	require.NoError(t, err)
+	_, _, _, err = handler.processCase(context.Background(), "dataset-1", executionOptions{
+		runName: "nightly-run",
+		userID:  "demo-user",
+	}, buildTestCaseSpec("item-1"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create dataset run item")
+}
+
+func TestProcessCaseReturnsScoreCreationErrors(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/public/traces":
+			writeJSON(writer, request, http.StatusOK, map[string]string{"id": "trace-1"})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/public/dataset-run-items":
+			writeJSON(writer, request, http.StatusOK, map[string]any{
+				"id":             "run-item-1",
+				"datasetRunId":   "dataset-run-1",
+				"datasetRunName": "nightly-run",
+				"datasetItemId":  "item-1",
+				"traceId":        "trace-1",
+			})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/public/scores":
+			http.Error(writer, "score failed", http.StatusBadGateway)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer apiServer.Close()
+	handler, err := New(
+		"demo-app",
+		&fakeAgentEvaluator{
+			result: buildEvaluationResult("item-1", []*evalresult.EvalMetricResult{{
+				MetricName: "final_response_avg_score",
+				Score:      1,
+				Threshold:  1,
+			}}),
+		},
+		newTestEvalSetManager(t),
+		newTestMetricManager(t),
+		newTestEvalResultManager(t),
+		WithBaseURL(apiServer.URL),
+		WithPublicKey("pk"),
+		WithSecretKey("sk"),
+	)
+	require.NoError(t, err)
+	_, _, scoreCount, err := handler.processCase(context.Background(), "dataset-1", executionOptions{
+		runName: "nightly-run",
+		userID:  "demo-user",
+	}, buildTestCaseSpec("item-1"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create score final_response_avg_score")
+	assert.Equal(t, 0, scoreCount)
+}
+
+func TestProcessCaseReturnsSummaryWithoutMetricReasons(t *testing.T) {
+	apiServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/public/traces":
+			writeJSON(writer, request, http.StatusOK, map[string]string{"id": "trace-1"})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/public/dataset-run-items":
+			writeJSON(writer, request, http.StatusOK, map[string]any{
+				"id":             "run-item-1",
+				"datasetRunId":   "dataset-run-1",
+				"datasetRunName": "nightly-run",
+				"datasetItemId":  "item-1",
+				"traceId":        "trace-1",
+			})
+		case request.Method == http.MethodPost && request.URL.Path == "/api/public/scores":
+			writeJSON(writer, request, http.StatusOK, map[string]string{"id": "score-1"})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer apiServer.Close()
+	handler, err := New(
+		"demo-app",
+		&fakeAgentEvaluator{
+			result: buildEvaluationResult("item-1", nil),
+		},
+		newTestEvalSetManager(t),
+		newTestMetricManager(t),
+		newTestEvalResultManager(t),
+		WithBaseURL(apiServer.URL),
+		WithPublicKey("pk"),
+		WithSecretKey("sk"),
+	)
+	require.NoError(t, err)
+	summary, datasetRunID, scoreCount, err := handler.processCase(context.Background(), "dataset-1", executionOptions{
+		runName: "nightly-run",
+		userID:  "demo-user",
+	}, buildTestCaseSpec("item-1"))
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.Equal(t, "dataset-run-1", datasetRunID)
+	assert.Equal(t, 0, scoreCount)
+	assert.Empty(t, summary.MetricScores)
+	assert.Nil(t, summary.MetricReasons)
+}
+
+func TestSyncEvalSetReturnsDeleteErrorsForExistingEvalSet(t *testing.T) {
+	handler := &Handler{
+		appName:        "demo-app",
+		evalSetManager: &stubEvalSetManager{delegate: newTestEvalSetManager(t), deleteErr: errors.New("delete failed")},
+	}
+	_, err := handler.evalSetManager.Create(context.Background(), "demo-app", "dataset-1")
+	require.NoError(t, err)
+	err = handler.syncEvalSet(context.Background(), "dataset-1", []*CaseSpec{buildTestCaseSpec("item-1")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete eval set")
+}
+
+func TestSyncEvalSetReturnsCreateErrors(t *testing.T) {
+	handler := &Handler{
+		appName:        "demo-app",
+		evalSetManager: &stubEvalSetManager{delegate: newTestEvalSetManager(t), createErr: errors.New("create failed")},
+	}
+	err := handler.syncEvalSet(context.Background(), "dataset-1", []*CaseSpec{buildTestCaseSpec("item-1")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create eval set")
+}
+
+func TestSyncEvalSetReturnsAddCaseErrors(t *testing.T) {
+	handler := &Handler{
+		appName: "demo-app",
+		evalSetManager: &stubEvalSetManager{
+			delegate:   newTestEvalSetManager(t),
+			addCaseErr: errors.New("add case failed"),
+		},
+	}
+	err := handler.syncEvalSet(context.Background(), "dataset-1", []*CaseSpec{buildTestCaseSpec("item-1")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "add eval case item-1")
+}
+
 func TestHandlerServeHTTPPayloadOverridesFrameworkDefaults(t *testing.T) {
 	apiServer := &recordedAPIServer{
 		dataset: &dataset{
@@ -1215,5 +1374,103 @@ func (f *fakeAgentEvaluator) Evaluate(ctx context.Context, evalSetID string, opt
 }
 
 func (f *fakeAgentEvaluator) Close() error {
+	return nil
+}
+
+func buildTestCaseSpec(evalCaseID string) *CaseSpec {
+	return &CaseSpec{
+		DatasetItemID: evalCaseID,
+		TraceName:     "nightly-run/" + evalCaseID,
+		TraceInput:    "say hello",
+		UserID:        "demo-user",
+		EvalCase: &evalset.EvalCase{
+			EvalID: evalCaseID,
+			Conversation: []*evalset.Invocation{{
+				UserContent:   &model.Message{Role: model.RoleUser, Content: "say hello"},
+				FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "hello"},
+			}},
+		},
+	}
+}
+
+func buildEvaluationResult(
+	evalCaseID string,
+	metricResults []*evalresult.EvalMetricResult,
+) *coreevaluation.EvaluationResult {
+	return &coreevaluation.EvaluationResult{
+		EvalCases: []*coreevaluation.EvaluationCaseResult{{
+			EvalCaseID:    evalCaseID,
+			OverallStatus: evalstatus.EvalStatusPassed,
+			RunDetails: []*coreevaluation.EvaluationCaseRunDetails{{
+				Inference: &coreevaluation.EvaluationInferenceDetails{
+					SessionID: "session-1",
+					UserID:    "demo-user",
+					Inferences: []*evalset.Invocation{{
+						FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "hello"},
+					}},
+				},
+			}},
+		}},
+		EvalResult: &evalresult.EvalSetResult{
+			EvalCaseResults: []*evalresult.EvalCaseResult{{
+				EvalID:                   evalCaseID,
+				FinalEvalStatus:          evalstatus.EvalStatusPassed,
+				OverallEvalMetricResults: metricResults,
+				SessionID:                "session-1",
+				UserID:                   "demo-user",
+			}},
+		},
+	}
+}
+
+type stubEvalSetManager struct {
+	delegate   evalset.Manager
+	deleteErr  error
+	createErr  error
+	addCaseErr error
+}
+
+func (m *stubEvalSetManager) Get(ctx context.Context, appName string, evalSetID string) (*evalset.EvalSet, error) {
+	return m.delegate.Get(ctx, appName, evalSetID)
+}
+
+func (m *stubEvalSetManager) Create(ctx context.Context, appName string, evalSetID string) (*evalset.EvalSet, error) {
+	if m.createErr != nil {
+		return nil, m.createErr
+	}
+	return m.delegate.Create(ctx, appName, evalSetID)
+}
+
+func (m *stubEvalSetManager) List(ctx context.Context, appName string) ([]string, error) {
+	return m.delegate.List(ctx, appName)
+}
+
+func (m *stubEvalSetManager) Delete(ctx context.Context, appName string, evalSetID string) error {
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
+	return m.delegate.Delete(ctx, appName, evalSetID)
+}
+
+func (m *stubEvalSetManager) GetCase(ctx context.Context, appName string, evalSetID string, evalCaseID string) (*evalset.EvalCase, error) {
+	return m.delegate.GetCase(ctx, appName, evalSetID, evalCaseID)
+}
+
+func (m *stubEvalSetManager) AddCase(ctx context.Context, appName string, evalSetID string, evalCase *evalset.EvalCase) error {
+	if m.addCaseErr != nil {
+		return m.addCaseErr
+	}
+	return m.delegate.AddCase(ctx, appName, evalSetID, evalCase)
+}
+
+func (m *stubEvalSetManager) UpdateCase(ctx context.Context, appName string, evalSetID string, evalCase *evalset.EvalCase) error {
+	return m.delegate.UpdateCase(ctx, appName, evalSetID, evalCase)
+}
+
+func (m *stubEvalSetManager) DeleteCase(ctx context.Context, appName string, evalSetID string, evalCaseID string) error {
+	return m.delegate.DeleteCase(ctx, appName, evalSetID, evalCaseID)
+}
+
+func (m *stubEvalSetManager) Close() error {
 	return nil
 }
