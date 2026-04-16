@@ -3168,6 +3168,8 @@ func TestModel_GenerateContent_Streaming_FinalReasoningAggregated(t *testing.T) 
 	got := final.Choices[0].Message.ReasoningContent
 	want := "First second final"
 	assert.Equalf(t, want, got, "final ReasoningContent mismatch: got %q want %q", got, want)
+	require.NotNil(t, final.Choices[0].FinishReason)
+	assert.Equal(t, "stop", *final.Choices[0].FinishReason)
 	assert.Truef(t, final.Done, "expected final.Done == true")
 	assert.Falsef(t, final.IsPartial, "expected final.IsPartial == false")
 }
@@ -6857,6 +6859,30 @@ func TestModel_accumulateChunk(t *testing.T) {
 			acc.Choices[0].Message.ToolCalls[0].Function.Arguments,
 		)
 		assert.Equal(t, "tool planning", reasoningBuf.String())
+	})
+
+	t.Run("accumulate chunk with reasoning and finish reason", func(t *testing.T) {
+		chunk := parseChunkWithExtraFields(t, `{
+				"id": "test-id",
+				"object": "chat.completion.chunk",
+				"created": 1699200000,
+				"model": "test-model",
+				"choices": [{
+					"index": 0,
+					"delta": {
+						"reasoning_content": "final step"
+					},
+					"finish_reason": "stop"
+				}]
+			}`)
+		acc := openai.ChatCompletionAccumulator{}
+		var reasoningBuf bytes.Buffer
+
+		m.accumulateChunk(chunk, &acc, &reasoningBuf)
+
+		require.Len(t, acc.Choices, 1)
+		assert.Equal(t, "stop", acc.Choices[0].FinishReason)
+		assert.Equal(t, "final step", reasoningBuf.String())
 	})
 
 	t.Run("accumulate with custom usage function", func(t *testing.T) {

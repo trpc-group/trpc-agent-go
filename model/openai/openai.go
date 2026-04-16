@@ -1402,13 +1402,18 @@ func stripReasoningFromChunkForAccumulator(
 
 // hasAccumulatorPayloadBeyondReasoning reports whether the stripped chunk still
 // contains payload the SDK accumulator must keep, such as content, refusal,
-// tool calls, or usage. Pure reasoning-only chunks intentionally keep the old
-// behavior and stay out of the accumulator.
+// tool calls, finish reasons, or usage. Pure reasoning-only chunks
+// intentionally keep the old behavior and stay out of the accumulator.
 func hasAccumulatorPayloadBeyondReasoning(
 	chunk openai.ChatCompletionChunk,
 ) bool {
 	if len(chunk.Choices) > 0 {
-		delta := chunk.Choices[0].Delta
+		choice := chunk.Choices[0]
+		if choice.FinishReason != "" {
+			return true
+		}
+
+		delta := choice.Delta
 		if delta.JSON.Content.Valid() || delta.JSON.Refusal.Valid() {
 			return true
 		}
