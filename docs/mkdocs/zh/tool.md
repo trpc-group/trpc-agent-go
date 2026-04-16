@@ -802,10 +802,11 @@ import (
 broker := mcpbroker.New(
     mcpbroker.WithServers(map[string]mcp.ConnectionConfig{
         "local_stdio_code": {
-            Transport: "stdio",
-            Command:   "go",
-            Args:      []string{"run", "./stdio_server/main.go"},
-            Timeout:   10 * time.Second,
+            Transport:   "stdio",
+            Command:     "go",
+            Args:        []string{"run", "./stdio_server/main.go"},
+            Timeout:     10 * time.Second,
+            Description: "Project management, documentation, and calendar tools.",
         },
     }),
     mcpbroker.WithAllowAdHocHTTP(true),
@@ -817,6 +818,32 @@ agent := llmagent.New(
     llmagent.WithTools(broker.Tools()),
 )
 ```
+
+#### Server Description（服务描述）
+
+`ConnectionConfig` 上的 `Description` 字段为 MCP server 提供一段能力摘要，
+帮助模型在 `mcp_list_servers` 阶段判断该去哪个 server 探索。
+`mcp_list_servers` 的返回值会包含这个 description：
+
+```json
+{
+  "servers": [
+    {
+      "name": "local_stdio_code",
+      "transport": "stdio",
+      "description": "Project management, documentation, and calendar tools."
+    }
+  ]
+}
+```
+
+这类似于 OpenAI tool namespace 的 `description`：模型在第一步
+`mcp_list_servers` 时就能根据描述决定"去哪个 server 看"，而不需要
+逐个 `mcp_list_tools` 试探。server 数量越多、名字越不直观时，
+description 的价值越大。
+
+这个字段是可选的。如果不填，输出中不会出现 `description`，对现有行为
+没有任何影响。
 
 当前 `mcpbroker` 是**工具层接入**，不会像 `Skill` 那样自动向
 `System Prompt` 注入策略提示。如果你希望模型更稳定地理解：

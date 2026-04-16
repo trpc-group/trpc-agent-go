@@ -255,8 +255,9 @@ func (b *Broker) listServers(ctx context.Context, _ listServersInput) (listServe
 	output := listServersOutput{Servers: make([]listServersServer, 0, len(servers))}
 	for _, server := range servers {
 		output.Servers = append(output.Servers, listServersServer{
-			Name:      server.Name,
-			Transport: server.Config.Transport,
+			Name:        server.Name,
+			Transport:   server.Config.Transport,
+			Description: server.Config.Description,
 		})
 	}
 	return output, nil
