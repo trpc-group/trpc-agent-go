@@ -2228,6 +2228,17 @@ func (m *Model) handleNonStreamingResponseWithEmitter(
 		})
 		return
 	}
+	// Some OpenAI-compatible providers return HTTP 200 with an error body
+	// instead of a proper 4xx/5xx status code. The SDK does not treat these
+	// as errors because it only inspects the HTTP status. However the error
+	// payload is still preserved in ChatCompletion.JSON.ExtraFields["error"].
+	// Detect this case and convert it into an explicit error response so that
+	// downstream consumers see a clear failure instead of an empty completion
+	// that can cause silent infinite loops in the agent flow.
+	if resp := extractEmbeddedErrorResponse(chatCompletion); resp != nil {
+		emit(resp)
+		return
+	}
 	// Call response callback on successful completion.
 	m.runChatResponseCallback(ctx, &chatRequest, chatCompletion)
 	emit(m.createResponseFromCompletion(chatCompletion))
@@ -2612,4 +2623,106 @@ func (m *Model) DownloadFile(
 		mime = "application/octet-stream"
 	}
 	return data, mime, nil
+}
+
+// extractEmbeddedErrorResponse detects an error payload hidden inside an
+// otherwise "successful" ChatCompletion. Some OpenAI-compatible providers
+// return HTTP 200 with a JSON body like:
+//
+//	{"error": {"message": "...", "type": "...", "code": "..."}}
+//
+// The OpenAI SDK only checks HTTP status codes for errors, so it silently
+// parses this into an empty ChatCompletion. The error object ends up in
+// ChatCompletion.JSON.ExtraFields["error"] because "error" is not a
+// recognized field in the ChatCompletion schema.
+//
+// This function checks for that specific condition and, when found, returns
+// a model.Response with the original error information restored.
+// Returns nil when no embedded error is detected.
+func extractEmbeddedErrorResponse(cc *openai.ChatCompletion) *model.Response {
+	if cc == nil {
+		return nil
+	}
+	// Only inspect ExtraFields when the completion is empty (no choices).
+	// A completion with valid choices is never treated as an error, even if
+	// the provider happens to include extra fields named "error".
+	if len(cc.Choices) > 0 {
+		return nil
+	}
+	errField, ok := cc.JSON.ExtraFields["error"]
+	if !ok {
+		return nil
+	}
+	// Parse the raw error JSON to extract message and type.
+	// Use Raw() instead of Valid() because the SDK may mark non-schema
+	// object fields as "invalid" status even though the content is present.
+	raw := errField.Raw()
+	if raw == "" || raw == "null" {
+		return nil
+	}
+	var errBody struct {
+		Message string          `json:"message"`
+		Type    string          `json:"type"`
+		Code    json.RawMessage `json:"code"`
+		Param   json.RawMessage `json:"param"`
+	}
+	if err := json.Unmarshal([]byte(raw), &errBody); err != nil {
+		// ExtraFields["error"] exists but is not a recognizable error object;
+		// leave it for the normal completion path.
+		return nil
+	}
+	if errBody.Message == "" && errBody.Type == "" {
+		return nil
+	}
+	errMsg := errBody.Message
+	if errMsg == "" {
+		errMsg = "OpenAI-compatible API returned an embedded error in HTTP 200 response"
+	}
+	log.Debugf("OpenAI-compatible API returned HTTP 200 with embedded error (type=%s)", errBody.Type)
+	respErr := &model.ResponseError{
+		Message: errMsg,
+		Type:    model.ErrorTypeAPIError,
+	}
+	if code := normalizeEmbeddedErrorCode(errBody.Code); code != "" {
+		respErr.Code = &code
+	}
+	if p := normalizeEmbeddedErrorString(errBody.Param); p != "" {
+		respErr.Param = &p
+	}
+	return &model.Response{
+		Error:     respErr,
+		Timestamp: time.Now(),
+		Done:      true,
+	}
+}
+
+// normalizeEmbeddedErrorString extracts a JSON string value.
+// Returns "" for absent, null, or non-string values.
+func normalizeEmbeddedErrorString(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return ""
+}
+
+// normalizeEmbeddedErrorCode converts a JSON code value (string, number, or
+// null) into a string suitable for model.ResponseError.Code.
+// Returns "" when the value is absent, null, or unparsable.
+func normalizeEmbeddedErrorCode(raw json.RawMessage) string {
+	if s := normalizeEmbeddedErrorString(raw); s != "" {
+		return s
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	// Try number (some providers return numeric codes).
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err == nil {
+		return n.String()
+	}
+	return ""
 }

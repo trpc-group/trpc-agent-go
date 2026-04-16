@@ -7515,3 +7515,266 @@ func TestChatRequestCallbackSynchronous(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractEmbeddedErrorResponse(t *testing.T) {
+	mustCompletion := func(t *testing.T, raw string) *openaigo.ChatCompletion {
+		t.Helper()
+		var cc openaigo.ChatCompletion
+		require.NoError(t, cc.UnmarshalJSON([]byte(raw)))
+		return &cc
+	}
+
+	tests := []struct {
+		name        string
+		completion  *openaigo.ChatCompletion
+		wantNil     bool
+		wantMessage string
+		wantType    string
+		wantCode    string
+		wantParam   string
+	}{
+		{
+			name:       "nil completion",
+			completion: nil,
+			wantNil:    true,
+		},
+		{
+			name: "normal completion with choices",
+			completion: mustCompletion(t, `{
+				"id": "chatcmpl-123",
+				"object": "chat.completion",
+				"choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+				"model": "gpt-4"
+			}`),
+			wantNil: true,
+		},
+		{
+			name: "normal completion with choices and extra error field is not treated as error",
+			completion: mustCompletion(t, `{
+				"id": "chatcmpl-123",
+				"object": "chat.completion",
+				"choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+				"model": "gpt-4",
+				"error": {"message": "some warning", "type": "info"}
+			}`),
+			wantNil: true,
+		},
+		{
+			name:       "empty completion without error field",
+			completion: mustCompletion(t, `{}`),
+			wantNil:    true,
+		},
+		{
+			name: "empty completion with embedded error",
+			completion: mustCompletion(t, `{
+				"error": {
+					"message": "When using tool_choice, 'tools' must be set.",
+					"type": "invalid_request_error",
+					"code": "validation_error"
+				}
+			}`),
+			wantNil:     false,
+			wantMessage: "When using tool_choice, 'tools' must be set.",
+			wantType:    model.ErrorTypeAPIError,
+			wantCode:    "validation_error",
+		},
+		{
+			name: "empty completion with embedded error containing ret_code",
+			completion: mustCompletion(t, `{
+				"error": {
+					"message": "API key exceeded rate limit",
+					"type": "requestAuthError",
+					"code": "rate_limited",
+					"ret_code": -2000
+				}
+			}`),
+			wantNil:     false,
+			wantMessage: "API key exceeded rate limit",
+			wantType:    model.ErrorTypeAPIError,
+			wantCode:    "rate_limited",
+		},
+		{
+			name: "empty completion with error message only, type defaults to api_error",
+			completion: mustCompletion(t, `{
+				"error": {"message": "something went wrong"}
+			}`),
+			wantNil:     false,
+			wantMessage: "something went wrong",
+			wantType:    model.ErrorTypeAPIError,
+		},
+		{
+			name: "empty completion with embedded error where code is a number",
+			completion: mustCompletion(t, `{
+				"error": {
+					"message": "rate limit",
+					"type": "requestAuthError",
+					"code": -2000
+				}
+			}`),
+			wantNil:     false,
+			wantMessage: "rate limit",
+			wantType:    model.ErrorTypeAPIError,
+			wantCode:    "-2000",
+		},
+		{
+			name: "empty completion with embedded error containing param",
+			completion: mustCompletion(t, `{
+				"error": {
+					"message": "invalid parameter",
+					"type": "invalid_request_error",
+					"param": "tool_choice"
+				}
+			}`),
+			wantNil:     false,
+			wantMessage: "invalid parameter",
+			wantType:    model.ErrorTypeAPIError,
+			wantParam:   "tool_choice",
+		},
+		{
+			name: "empty completion with error field that is not a valid object",
+			completion: mustCompletion(t, `{
+				"error": "plain string error"
+			}`),
+			wantNil: true,
+		},
+		{
+			name: "empty completion with error field that is null",
+			completion: mustCompletion(t, `{
+				"error": null
+			}`),
+			wantNil: true,
+		},
+		{
+			name: "empty completion with error object but empty message and type",
+			completion: mustCompletion(t, `{
+				"error": {"code": "unknown"}
+			}`),
+			wantNil: true,
+		},
+		{
+			name: "empty completion with type only and no message falls back to generic message",
+			completion: mustCompletion(t, `{
+				"error": {"type": "server_error"}
+			}`),
+			wantNil:     false,
+			wantMessage: "OpenAI-compatible API returned an embedded error in HTTP 200 response",
+			wantType:    model.ErrorTypeAPIError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := extractEmbeddedErrorResponse(tt.completion)
+			if tt.wantNil {
+				assert.Nil(t, resp, "expected nil response")
+				return
+			}
+			require.NotNil(t, resp, "expected non-nil error response")
+			require.NotNil(t, resp.Error, "expected Error field")
+			assert.Equal(t, tt.wantMessage, resp.Error.Message)
+			assert.Equal(t, tt.wantType, resp.Error.Type)
+			assert.True(t, resp.Done, "error response must be Done")
+			if tt.wantCode != "" {
+				require.NotNil(t, resp.Error.Code, "expected Code field")
+				assert.Equal(t, tt.wantCode, *resp.Error.Code)
+			}
+			if tt.wantParam != "" {
+				require.NotNil(t, resp.Error.Param, "expected Param field")
+				assert.Equal(t, tt.wantParam, *resp.Error.Param)
+			}
+		})
+	}
+}
+
+func TestModel_GenerateContent_EmbeddedErrorHTTP200(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// Simulate a provider returning HTTP 200 with an error body.
+		fmt.Fprint(w, `{
+			"error": {
+				"message": "When using tool_choice, 'tools' must be set.",
+				"type": "invalid_request_error",
+				"ret_code": -1000
+			}
+		}`)
+	}))
+	defer server.Close()
+
+	m := New("test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
+		GenerationConfig: model.GenerationConfig{Stream: false},
+	}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	for resp := range ch {
+		responses = append(responses, resp)
+	}
+
+	require.Len(t, responses, 1, "expected exactly one response")
+	resp := responses[0]
+	require.NotNil(t, resp.Error, "response must carry an error")
+	assert.Equal(t, "When using tool_choice, 'tools' must be set.", resp.Error.Message)
+	assert.Equal(t, model.ErrorTypeAPIError, resp.Error.Type)
+	assert.True(t, resp.Done)
+	assert.Empty(t, resp.Choices, "error response should have no choices")
+}
+
+func TestModel_GenerateContentIter_EmbeddedErrorHTTP200(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"error": {
+				"message": "rate limit exceeded",
+				"type": "requestAuthError",
+				"ret_code": -2000
+			}
+		}`)
+	}))
+	defer server.Close()
+
+	m := New("test-model",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+	)
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
+		GenerationConfig: model.GenerationConfig{Stream: false},
+	}
+
+	seq, err := m.GenerateContentIter(context.Background(), req)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	seq(func(resp *model.Response) bool {
+		responses = append(responses, resp)
+		return true
+	})
+
+	require.Len(t, responses, 1)
+	resp := responses[0]
+	require.NotNil(t, resp.Error)
+	assert.Equal(t, "rate limit exceeded", resp.Error.Message)
+	assert.Equal(t, model.ErrorTypeAPIError, resp.Error.Type)
+	assert.True(t, resp.Done)
+}
