@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	toolcallidplugin "trpc.group/trpc-go/trpc-agent-go/plugin/toolcallid"
 	baserunner "trpc.group/trpc-go/trpc-agent-go/runner"
@@ -2613,20 +2614,16 @@ func TestTranslateCallbackError(t *testing.T) {
 func TestEmitEventStopsWhenContextDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-
 	r := &runner{}
 	events := make(chan aguievents.Event)
 	input := &runInput{threadID: "thread", runID: "run"}
-
 	ok := r.emitEvent(ctx, events, aguievents.NewRunStartedEvent("thread", "run"), input)
-
 	assert.False(t, ok)
 }
 
 func TestEmitEventStopsWhenAfterTranslateFailsAndContextDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-
 	r := &runner{
 		translateCallbacks: translator.NewCallbacks().RegisterAfterTranslate(
 			func(context.Context, aguievents.Event) (aguievents.Event, error) {
@@ -2636,16 +2633,41 @@ func TestEmitEventStopsWhenAfterTranslateFailsAndContextDone(t *testing.T) {
 	}
 	events := make(chan aguievents.Event)
 	input := &runInput{threadID: "thread", runID: "run"}
-
 	ok := r.emitEvent(ctx, events, aguievents.NewRunStartedEvent("thread", "run"), input)
-
 	assert.False(t, ok)
+}
+
+func TestEmitEventLogsAtTraceLevel(t *testing.T) {
+	originalTracefContext := log.TracefContext
+	originalDebugfContext := log.DebugfContext
+	traceCalls := 0
+	debugCalls := 0
+	log.TracefContext = func(_ context.Context, format string, args ...any) {
+		traceCalls++
+		assert.Equal(t, "agui emit event: emitted event: %v, threadID: %s, runID: %s", format)
+		require.Len(t, args, 3)
+		assert.Equal(t, "thread", args[1])
+		assert.Equal(t, "run", args[2])
+	}
+	log.DebugfContext = func(_ context.Context, _ string, _ ...any) {
+		debugCalls++
+	}
+	t.Cleanup(func() {
+		log.TracefContext = originalTracefContext
+		log.DebugfContext = originalDebugfContext
+	})
+	r := &runner{}
+	events := make(chan aguievents.Event, 1)
+	input := &runInput{threadID: "thread", runID: "run"}
+	ok := r.emitEvent(context.Background(), events, aguievents.NewRunStartedEvent("thread", "run"), input)
+	assert.True(t, ok)
+	assert.Equal(t, 1, traceCalls)
+	assert.Zero(t, debugCalls)
 }
 
 func TestHandleAgentEventStopsWhenEmitCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-
 	r := &runner{}
 	events := make(chan aguievents.Event)
 	input := &runInput{
@@ -2653,8 +2675,6 @@ func TestHandleAgentEventStopsWhenEmitCanceled(t *testing.T) {
 		runID:      "run",
 		translator: &fakeTranslator{events: [][]aguievents.Event{{aguievents.NewRunFinishedEvent("thread", "run")}}},
 	}
-
 	ok := r.handleAgentEvent(ctx, events, input, agentevent.New("inv", "assistant"))
-
 	assert.False(t, ok)
 }
