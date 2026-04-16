@@ -21,7 +21,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -40,6 +39,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	serverevaluation "trpc.group/trpc-go/trpc-agent-go/server/evaluation"
+	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 type fakeRunner struct {
@@ -536,6 +536,42 @@ func TestResolveCaseArtifactsReturnsResolvedValues(t *testing.T) {
 	assert.Equal(t, "session-1", inferenceDetail.SessionID)
 }
 
+func TestResolveCaseArtifactsReturnsAggregateErrors(t *testing.T) {
+	handler := &Handler{}
+	_, _, _, err := handler.resolveCaseArtifacts(&coreevaluation.EvaluationResult{}, "item-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "eval case item-1 not found")
+}
+
+func TestResolveCaseArtifactsReturnsRunResultErrors(t *testing.T) {
+	handler := &Handler{}
+	evaluationResult := &coreevaluation.EvaluationResult{
+		EvalCases: []*coreevaluation.EvaluationCaseResult{{
+			EvalCaseID: "item-1",
+		}},
+	}
+	_, _, _, err := handler.resolveCaseArtifacts(evaluationResult, "item-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not contain an eval set result")
+}
+
+func TestResolveCaseArtifactsReturnsInferenceErrors(t *testing.T) {
+	handler := &Handler{}
+	evaluationResult := &coreevaluation.EvaluationResult{
+		EvalCases: []*coreevaluation.EvaluationCaseResult{{
+			EvalCaseID: "item-1",
+		}},
+		EvalResult: &evalresult.EvalSetResult{
+			EvalCaseResults: []*evalresult.EvalCaseResult{{
+				EvalID: "item-1",
+			}},
+		},
+	}
+	_, _, _, err := handler.resolveCaseArtifacts(evaluationResult, "item-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "do not contain inference details")
+}
+
 func TestFindHelpersValidateMissingArtifacts(t *testing.T) {
 	_, err := findEvaluationCaseResult(nil, "case-1")
 	require.Error(t, err)
@@ -543,6 +579,33 @@ func TestFindHelpersValidateMissingArtifacts(t *testing.T) {
 	require.Error(t, err)
 	_, err = findInferenceDetail(&coreevaluation.EvaluationCaseResult{EvalCaseID: "case-1"})
 	require.Error(t, err)
+}
+
+func TestFindHelpersValidateNotFoundBranches(t *testing.T) {
+	_, err := findEvaluationCaseResult(&coreevaluation.EvaluationResult{
+		EvalCases: []*coreevaluation.EvaluationCaseResult{{
+			EvalCaseID: "case-2",
+		}},
+	}, "case-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "eval case case-1 not found")
+	_, err = findEvalCaseResult(&coreevaluation.EvaluationResult{
+		EvalResult: &evalresult.EvalSetResult{
+			EvalCaseResults: []*evalresult.EvalCaseResult{{
+				EvalID: "case-2",
+			}},
+		},
+	}, "case-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "eval case case-1 not found")
+	_, err = findInferenceDetail(&coreevaluation.EvaluationCaseResult{
+		EvalCaseID: "case-1",
+		RunDetails: []*coreevaluation.EvaluationCaseRunDetails{{
+			Inference: nil,
+		}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "do not contain inference details")
 }
 
 func TestInjectRemoteTraceParentCreatesTraceContext(t *testing.T) {
@@ -571,12 +634,12 @@ func TestForceFlushTelemetryReturnsNilWithDefaultProvider(t *testing.T) {
 }
 
 func TestForceFlushTelemetryFlushesSDKProvider(t *testing.T) {
-	previousProvider := otel.GetTracerProvider()
+	previousProvider := atrace.TracerProvider
 	provider := sdktrace.NewTracerProvider()
-	otel.SetTracerProvider(provider)
+	atrace.TracerProvider = provider
 	t.Cleanup(func() {
 		assert.NoError(t, provider.Shutdown(context.Background()))
-		otel.SetTracerProvider(previousProvider)
+		atrace.TracerProvider = previousProvider
 	})
 	assert.NoError(t, forceFlushTelemetry(context.Background()))
 }
