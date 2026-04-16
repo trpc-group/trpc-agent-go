@@ -37,6 +37,8 @@ type Option func(*config)
 
 type config struct {
 	httpClient            *http.Client
+	timeout               time.Duration
+	timeoutSet            bool
 	maxContentLength      int
 	maxTotalContentLength int
 	allowedDomains        []string
@@ -83,6 +85,21 @@ func WithBlockedDomains(domains []string) Option {
 	}
 }
 
+// WithTimeout sets the HTTP request timeout. When combined with WithHTTPClient,
+// the custom client's Transport/Proxy/Jar settings are preserved via shallow
+// copy - the caller's original *http.Client is never mutated.
+// Passing 0 explicitly disables the default 30s timeout (Go http.Client
+// treats Timeout==0 as "no timeout"). Negative values are ignored.
+func WithTimeout(timeout time.Duration) Option {
+	return func(cfg *config) {
+		if timeout < 0 {
+			return
+		}
+		cfg.timeout = timeout
+		cfg.timeoutSet = true
+	}
+}
+
 // fetchRequest is the input for the tool.
 type fetchRequest struct {
 	URLS []string `json:"urls" jsonschema:"description=The list of URLs to fetch content from"`
@@ -102,6 +119,22 @@ type resultItem struct {
 	Error        string `json:"error,omitempty"`
 }
 
+// resolveHTTPClient builds the final *http.Client from config, applying
+// nil fallback and timeout override via shallow copy - the caller's
+// original client is never mutated.
+func resolveHTTPClient(cfg *config) *http.Client {
+	client := cfg.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: defaultTimeout}
+	}
+	if cfg.timeoutSet {
+		cloned := *client
+		cloned.Timeout = cfg.timeout
+		client = &cloned
+	}
+	return client
+}
+
 // NewTool creates the web-fetch tool.
 func NewTool(opts ...Option) tool.CallableTool {
 	cfg := &config{
@@ -111,8 +144,10 @@ func NewTool(opts ...Option) tool.CallableTool {
 		opt(cfg)
 	}
 
+	client := resolveHTTPClient(cfg)
+
 	t := &webFetchTool{
-		client:                cfg.httpClient,
+		client:                client,
 		maxContentLength:      cfg.maxContentLength,
 		maxTotalContentLength: cfg.maxTotalContentLength,
 	}
