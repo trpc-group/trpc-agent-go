@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -681,4 +682,80 @@ func TestTruncateString_ExactLength(t *testing.T) {
 	// Test when string length equals limit
 	assert.Equal(t, "hello", truncateString("hello", 5))
 	assert.Equal(t, "hello", truncateString("hello", 10))
+}
+
+// applyOpts builds a config and calls the production resolveHTTPClient,
+// so tests exercise the same code path as NewTool.
+func applyOpts(opts ...Option) *http.Client {
+	cfg := &config{
+		httpClient: &http.Client{Timeout: defaultTimeout},
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return resolveHTTPClient(cfg)
+}
+
+func TestWithTimeout_Standalone(t *testing.T) {
+	client := applyOpts(WithTimeout(60 * time.Second))
+	assert.Equal(t, 60*time.Second, client.Timeout)
+}
+
+func TestWithTimeout_DoesNotMutateOriginalClient(t *testing.T) {
+	original := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: http.DefaultTransport,
+	}
+
+	client := applyOpts(WithHTTPClient(original), WithTimeout(99*time.Second))
+
+	assert.Equal(t, 99*time.Second, client.Timeout)
+	assert.Equal(t, 10*time.Second, original.Timeout, "original client timeout must not be mutated")
+	assert.Equal(t, http.DefaultTransport, original.Transport, "original client transport must be preserved")
+}
+
+func TestWithTimeout_PreservesCustomTransport(t *testing.T) {
+	customTransport := &http.Transport{MaxIdleConns: 42}
+	original := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: customTransport,
+	}
+
+	client := applyOpts(WithHTTPClient(original), WithTimeout(120*time.Second))
+
+	assert.Equal(t, 120*time.Second, client.Timeout)
+	assert.Equal(t, customTransport, client.Transport, "custom transport must be preserved after WithTimeout")
+}
+
+func TestWithTimeout_ZeroDisablesDefault(t *testing.T) {
+	client := applyOpts(WithTimeout(0))
+	assert.Equal(t, time.Duration(0), client.Timeout, "WithTimeout(0) should disable default timeout")
+}
+
+func TestWithTimeout_NegativeIgnored(t *testing.T) {
+	client := applyOpts(WithTimeout(-1 * time.Second))
+	assert.Equal(t, defaultTimeout, client.Timeout, "negative timeout should be ignored, keeping default")
+}
+
+func TestWithHTTPClient_NilFallsBackToDefault(t *testing.T) {
+	client := applyOpts(WithHTTPClient(nil))
+	assert.NotNil(t, client)
+	assert.Equal(t, defaultTimeout, client.Timeout)
+}
+
+func TestWithHTTPClient_NilPlusTimeout(t *testing.T) {
+	client := applyOpts(WithHTTPClient(nil), WithTimeout(45*time.Second))
+	assert.NotNil(t, client)
+	assert.Equal(t, 45*time.Second, client.Timeout)
+}
+
+func TestWithTimeout_OrderIndependent(t *testing.T) {
+	custom := &http.Client{Timeout: 5 * time.Second, Transport: http.DefaultTransport}
+
+	client1 := applyOpts(WithHTTPClient(custom), WithTimeout(60*time.Second))
+	client2 := applyOpts(WithTimeout(60*time.Second), WithHTTPClient(custom))
+
+	assert.Equal(t, 60*time.Second, client1.Timeout)
+	assert.Equal(t, 60*time.Second, client2.Timeout)
+	assert.Equal(t, 5*time.Second, custom.Timeout, "original must not be mutated regardless of order")
 }
