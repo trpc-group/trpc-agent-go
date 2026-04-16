@@ -2756,6 +2756,66 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#evaluating-with-langfuse-remote-experiments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Evaluating with Langfuse Remote Experiments
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Evaluating with Langfuse Remote Experiments">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#code_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#data-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      Data Format
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metric-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metric Files
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#running" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#viewing-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      Viewing Results
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4028,6 +4088,66 @@
       Online Evaluation Service
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#evaluating-with-langfuse-remote-experiments" class="md-nav__link">
+    <span class="md-ellipsis">
+      Evaluating with Langfuse Remote Experiments
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Evaluating with Langfuse Remote Experiments">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#code_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#data-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      Data Format
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metric-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metric Files
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#running" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#viewing-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      Viewing Results
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -9359,10 +9479,28 @@
 <li><code>results</code>: query evaluation results and individual result details.</li>
 </ul>
 <p>On success, <code>POST /evaluation/runs</code> returns the result of <code>AgentEvaluator.Evaluate</code> in the <code>evaluationResult</code> field. For frontend integration, platform access, or SDK generation, the OpenAPI description should be treated as the API contract.</p>
-<h2 id="best-practices">Best Practices</h2>
-<p>Integrating evaluation into engineering workflows often delivers more value than expected. It is not about producing a polished report; it is about turning key Agent behaviors into sustainable regression signals.</p>
-<p>Two things are most dangerous in Agent evolution: small-looking changes that cause silent behavior drift, and issues that only surface for users, which multiplies diagnosis cost. Evaluation exists to block these risks early.</p>
-<p>tRPC-Agent-Go in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner">examples/runner</a> encodes critical paths into evaluation sets and metrics and runs them in the release pipeline. The Runner quickstart cases cover common scenarios such as calculator, time tool, and compound interest, with a clear goal to guard tool selection and output shape. If behavior drifts, the pipeline fails early, and you can locate the issue directly with the corresponding case and trace.</p>
+<h3 id="evaluating-with-langfuse-remote-experiments">Evaluating with Langfuse Remote Experiments</h3>
+<p><code>server/evaluation/langfuse</code> provides an integration layer for Langfuse Remote Experiments. It receives remote evaluation requests that Langfuse starts for a dataset, runs local Agent inference and evaluation, and writes the results back to Langfuse.</p>
+<p>From a usage perspective, this flow is best understood as a collaboration between two systems. Langfuse manages datasets, triggers experiments, and displays results. tRPC-Agent-Go turns dataset items into evaluation cases, executes local inference and evaluation, and writes traces, case-level scores, and run-level aggregates back to Langfuse.</p>
+<p>To wire this integration, first prepare a complete local evaluation runtime. In practice, that usually includes the following components:</p>
+<ul>
+<li><code>AgentEvaluator</code>, which runs inference and evaluation.</li>
+<li><code>EvalSetManager</code>, which manages the <code>EvalSet</code> mapped from the dataset.</li>
+<li><code>MetricManager</code>, which provides the metrics used for that dataset.</li>
+<li><code>EvalResultManager</code>, which stores evaluation results.</li>
+</ul>
+<p>Once that runtime is available, you can attach <code>langfuse.Handler</code> and let Langfuse drive remote evaluations through it.</p>
+<p>This integration keeps the native framework evaluation model. The mapping is:</p>
+<ul>
+<li>A Langfuse dataset maps to one <code>EvalSet</code>.</li>
+<li>A Langfuse dataset item maps to one <code>EvalCase</code>.</li>
+<li><code>dataset.ID</code> is used directly as <code>evalSetID</code>.</li>
+<li>By default, one dataset corresponds to one metric set.</li>
+</ul>
+<p>In other words, Langfuse mainly provides dataset organization and the trigger entrypoint, while the evaluation semantics remain owned by tRPC-Agent-Go. <code>CaseBuilder</code> decides how a dataset item maps to an <code>EvalCase</code>, and <code>MetricManager</code> decides how metrics are organized and loaded. With the default local implementation, metrics are typically organized by <code>dataset.ID</code>. If your system needs multiple datasets to reuse the same metrics, you can adjust the mapping with a custom manager or locator.</p>
+<h4 id="code_1">Code</h4>
+<p>For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/langfuse">examples/evaluation/langfuse</a>.</p>
+<p>The following snippet uses local managers and shows how to register <code>langfuse.Handler</code> on top of <code>server/evaluation</code>.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-92-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-92-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-92-3"> 3</a></span>
@@ -9416,82 +9554,415 @@
 <span class="normal"><a href="#__codelineno-92-51">51</a></span>
 <span class="normal"><a href="#__codelineno-92-52">52</a></span>
 <span class="normal"><a href="#__codelineno-92-53">53</a></span>
-<span class="normal"><a href="#__codelineno-92-54">54</a></span>
-<span class="normal"><a href="#__codelineno-92-55">55</a></span>
-<span class="normal"><a href="#__codelineno-92-56">56</a></span>
-<span class="normal"><a href="#__codelineno-92-57">57</a></span>
-<span class="normal"><a href="#__codelineno-92-58">58</a></span>
-<span class="normal"><a href="#__codelineno-92-59">59</a></span>
-<span class="normal"><a href="#__codelineno-92-60">60</a></span>
-<span class="normal"><a href="#__codelineno-92-61">61</a></span>
-<span class="normal"><a href="#__codelineno-92-62">62</a></span>
-<span class="normal"><a href="#__codelineno-92-63">63</a></span>
-<span class="normal"><a href="#__codelineno-92-64">64</a></span>
-<span class="normal"><a href="#__codelineno-92-65">65</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-92-1"><a id="__codelineno-92-1" name="__codelineno-92-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-92-54">54</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-92-1"><a id="__codelineno-92-1" name="__codelineno-92-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-92-2"><a id="__codelineno-92-2" name="__codelineno-92-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
 </span><span id="__span-92-3"><a id="__codelineno-92-3" name="__codelineno-92-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult&quot;</span>
-</span><span id="__span-92-4"><a id="__codelineno-92-4" name="__codelineno-92-4"></a><span class="w">    </span><span class="nx">localevalresult</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local&quot;</span>
+</span><span id="__span-92-4"><a id="__codelineno-92-4" name="__codelineno-92-4"></a><span class="w">    </span><span class="nx">evalresultlocal</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local&quot;</span>
 </span><span id="__span-92-5"><a id="__codelineno-92-5" name="__codelineno-92-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset&quot;</span>
-</span><span id="__span-92-6"><a id="__codelineno-92-6" name="__codelineno-92-6"></a><span class="w">    </span><span class="nx">localevalset</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local&quot;</span>
+</span><span id="__span-92-6"><a id="__codelineno-92-6" name="__codelineno-92-6"></a><span class="w">    </span><span class="nx">evalsetlocal</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local&quot;</span>
 </span><span id="__span-92-7"><a id="__codelineno-92-7" name="__codelineno-92-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
-</span><span id="__span-92-8"><a id="__codelineno-92-8" name="__codelineno-92-8"></a><span class="w">    </span><span class="nx">localmetric</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local&quot;</span>
-</span><span id="__span-92-9"><a id="__codelineno-92-9" name="__codelineno-92-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/status&quot;</span>
-</span><span id="__span-92-10"><a id="__codelineno-92-10" name="__codelineno-92-10"></a><span class="p">)</span>
-</span><span id="__span-92-11"><a id="__codelineno-92-11" name="__codelineno-92-11"></a>
-</span><span id="__span-92-12"><a id="__codelineno-92-12" name="__codelineno-92-12"></a><span class="kd">func</span><span class="w"> </span><span class="nx">TestTool</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-92-13"><a id="__codelineno-92-13" name="__codelineno-92-13"></a><span class="w">    </span><span class="nx">tests</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-92-14"><a id="__codelineno-92-14" name="__codelineno-92-14"></a><span class="w">        </span><span class="nx">name</span><span class="w">      </span><span class="kt">string</span>
-</span><span id="__span-92-15"><a id="__codelineno-92-15" name="__codelineno-92-15"></a><span class="w">        </span><span class="nx">evalSetID</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-92-16"><a id="__codelineno-92-16" name="__codelineno-92-16"></a><span class="w">    </span><span class="p">}{</span>
-</span><span id="__span-92-17"><a id="__codelineno-92-17" name="__codelineno-92-17"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-92-18"><a id="__codelineno-92-18" name="__codelineno-92-18"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;calculator&quot;</span><span class="p">,</span>
-</span><span id="__span-92-19"><a id="__codelineno-92-19" name="__codelineno-92-19"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;calculator_tool&quot;</span><span class="p">,</span>
-</span><span id="__span-92-20"><a id="__codelineno-92-20" name="__codelineno-92-20"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-92-21"><a id="__codelineno-92-21" name="__codelineno-92-21"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-92-22"><a id="__codelineno-92-22" name="__codelineno-92-22"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;currenttime&quot;</span><span class="p">,</span>
-</span><span id="__span-92-23"><a id="__codelineno-92-23" name="__codelineno-92-23"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;currenttime_tool&quot;</span><span class="p">,</span>
-</span><span id="__span-92-24"><a id="__codelineno-92-24" name="__codelineno-92-24"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-92-25"><a id="__codelineno-92-25" name="__codelineno-92-25"></a><span class="w">        </span><span class="p">{</span>
-</span><span id="__span-92-26"><a id="__codelineno-92-26" name="__codelineno-92-26"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
-</span><span id="__span-92-27"><a id="__codelineno-92-27" name="__codelineno-92-27"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
-</span><span id="__span-92-28"><a id="__codelineno-92-28" name="__codelineno-92-28"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-92-29"><a id="__codelineno-92-29" name="__codelineno-92-29"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-92-30"><a id="__codelineno-92-30" name="__codelineno-92-30"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">tests</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-92-31"><a id="__codelineno-92-31" name="__codelineno-92-31"></a><span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">tt</span><span class="p">.</span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-92-32"><a id="__codelineno-92-32" name="__codelineno-92-32"></a><span class="w">            </span><span class="nx">chat</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">multiTurnChat</span><span class="p">{</span>
-</span><span id="__span-92-33"><a id="__codelineno-92-33" name="__codelineno-92-33"></a><span class="w">                </span><span class="nx">modelName</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">modelName</span><span class="p">,</span>
-</span><span id="__span-92-34"><a id="__codelineno-92-34" name="__codelineno-92-34"></a><span class="w">                </span><span class="nx">streaming</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">streaming</span><span class="p">,</span>
-</span><span id="__span-92-35"><a id="__codelineno-92-35" name="__codelineno-92-35"></a><span class="w">                </span><span class="nx">variant</span><span class="p">:</span><span class="w">   </span><span class="o">*</span><span class="nx">variant</span><span class="p">,</span>
-</span><span id="__span-92-36"><a id="__codelineno-92-36" name="__codelineno-92-36"></a><span class="w">            </span><span class="p">}</span>
-</span><span id="__span-92-37"><a id="__codelineno-92-37" name="__codelineno-92-37"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithTimeout</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">)</span>
-</span><span id="__span-92-38"><a id="__codelineno-92-38" name="__codelineno-92-38"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
-</span><span id="__span-92-39"><a id="__codelineno-92-39" name="__codelineno-92-39"></a><span class="w">            </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">setup</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
-</span><span id="__span-92-40"><a id="__codelineno-92-40" name="__codelineno-92-40"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-92-41"><a id="__codelineno-92-41" name="__codelineno-92-41"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-</span><span id="__span-92-42"><a id="__codelineno-92-42" name="__codelineno-92-42"></a><span class="w">            </span><span class="nx">evaluationDir</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;evaluation&quot;</span>
-</span><span id="__span-92-43"><a id="__codelineno-92-43" name="__codelineno-92-43"></a><span class="w">            </span><span class="nx">localEvalSetManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalset</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
-</span><span id="__span-92-44"><a id="__codelineno-92-44" name="__codelineno-92-44"></a><span class="w">            </span><span class="nx">localMetricManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localmetric</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">metric</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
-</span><span id="__span-92-45"><a id="__codelineno-92-45" name="__codelineno-92-45"></a><span class="w">            </span><span class="nx">localEvalResultManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalresult</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
-</span><span id="__span-92-46"><a id="__codelineno-92-46" name="__codelineno-92-46"></a><span class="w">            </span><span class="nx">evaluator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-92-47"><a id="__codelineno-92-47" name="__codelineno-92-47"></a><span class="w">                </span><span class="nx">appName</span><span class="p">,</span>
-</span><span id="__span-92-48"><a id="__codelineno-92-48" name="__codelineno-92-48"></a><span class="w">                </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-92-49"><a id="__codelineno-92-49" name="__codelineno-92-49"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalSetManager</span><span class="p">(</span><span class="nx">localEvalSetManager</span><span class="p">),</span>
-</span><span id="__span-92-50"><a id="__codelineno-92-50" name="__codelineno-92-50"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithMetricManager</span><span class="p">(</span><span class="nx">localMetricManager</span><span class="p">),</span>
-</span><span id="__span-92-51"><a id="__codelineno-92-51" name="__codelineno-92-51"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalResultManager</span><span class="p">(</span><span class="nx">localEvalResultManager</span><span class="p">),</span>
-</span><span id="__span-92-52"><a id="__codelineno-92-52" name="__codelineno-92-52"></a><span class="w">            </span><span class="p">)</span>
-</span><span id="__span-92-53"><a id="__codelineno-92-53" name="__codelineno-92-53"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-92-54"><a id="__codelineno-92-54" name="__codelineno-92-54"></a><span class="w">            </span><span class="nx">t</span><span class="p">.</span><span class="nx">Cleanup</span><span class="p">(</span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-92-55"><a id="__codelineno-92-55" name="__codelineno-92-55"></a><span class="w">                </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Close</span><span class="p">())</span>
-</span><span id="__span-92-56"><a id="__codelineno-92-56" name="__codelineno-92-56"></a><span class="w">            </span><span class="p">})</span>
-</span><span id="__span-92-57"><a id="__codelineno-92-57" name="__codelineno-92-57"></a><span class="w">            </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="p">.</span><span class="nx">evalSetID</span><span class="p">)</span>
-</span><span id="__span-92-58"><a id="__codelineno-92-58" name="__codelineno-92-58"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-92-59"><a id="__codelineno-92-59" name="__codelineno-92-59"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NotNil</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">)</span>
-</span><span id="__span-92-60"><a id="__codelineno-92-60" name="__codelineno-92-60"></a><span class="w">            </span><span class="nx">resultData</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">MarshalIndent</span><span class="p">(</span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;  &quot;</span><span class="p">)</span>
-</span><span id="__span-92-61"><a id="__codelineno-92-61" name="__codelineno-92-61"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-92-62"><a id="__codelineno-92-62" name="__codelineno-92-62"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatusPassed</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">OverallStatus</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">resultData</span><span class="p">))</span>
-</span><span id="__span-92-63"><a id="__codelineno-92-63" name="__codelineno-92-63"></a><span class="w">        </span><span class="p">})</span>
-</span><span id="__span-92-64"><a id="__codelineno-92-64" name="__codelineno-92-64"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-92-65"><a id="__codelineno-92-65" name="__codelineno-92-65"></a><span class="p">}</span>
+</span><span id="__span-92-8"><a id="__codelineno-92-8" name="__codelineno-92-8"></a><span class="w">    </span><span class="nx">metriclocal</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local&quot;</span>
+</span><span id="__span-92-9"><a id="__codelineno-92-9" name="__codelineno-92-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-92-10"><a id="__codelineno-92-10" name="__codelineno-92-10"></a><span class="w">    </span><span class="nx">sevaluation</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/evaluation&quot;</span>
+</span><span id="__span-92-11"><a id="__codelineno-92-11" name="__codelineno-92-11"></a><span class="w">    </span><span class="nx">langfuseeval</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/evaluation/langfuse&quot;</span>
+</span><span id="__span-92-12"><a id="__codelineno-92-12" name="__codelineno-92-12"></a><span class="p">)</span>
+</span><span id="__span-92-13"><a id="__codelineno-92-13" name="__codelineno-92-13"></a>
+</span><span id="__span-92-14"><a id="__codelineno-92-14" name="__codelineno-92-14"></a><span class="nx">agentRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">appNameValue</span><span class="p">,</span><span class="w"> </span><span class="nx">newRemoteEvalAgent</span><span class="p">(</span><span class="o">*</span><span class="nx">modelName</span><span class="p">,</span><span class="w"> </span><span class="o">*</span><span class="nx">streaming</span><span class="p">))</span>
+</span><span id="__span-92-15"><a id="__codelineno-92-15" name="__codelineno-92-15"></a><span class="nx">judgeRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">appNameValue</span><span class="o">+</span><span class="s">&quot;-judge&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">newJudgeAgent</span><span class="p">(</span><span class="o">*</span><span class="nx">modelName</span><span class="p">))</span>
+</span><span id="__span-92-16"><a id="__codelineno-92-16" name="__codelineno-92-16"></a><span class="nx">evalSetManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evalsetlocal</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="o">*</span><span class="nx">dataDir</span><span class="p">))</span>
+</span><span id="__span-92-17"><a id="__codelineno-92-17" name="__codelineno-92-17"></a><span class="nx">metricManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">metriclocal</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">metric</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="o">*</span><span class="nx">dataDir</span><span class="p">))</span>
+</span><span id="__span-92-18"><a id="__codelineno-92-18" name="__codelineno-92-18"></a><span class="nx">evalResultManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evalresultlocal</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="o">*</span><span class="nx">outputDir</span><span class="p">))</span>
+</span><span id="__span-92-19"><a id="__codelineno-92-19" name="__codelineno-92-19"></a>
+</span><span id="__span-92-20"><a id="__codelineno-92-20" name="__codelineno-92-20"></a><span class="nx">agentEvaluator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-92-21"><a id="__codelineno-92-21" name="__codelineno-92-21"></a><span class="w">    </span><span class="nx">appNameValue</span><span class="p">,</span>
+</span><span id="__span-92-22"><a id="__codelineno-92-22" name="__codelineno-92-22"></a><span class="w">    </span><span class="nx">agentRunner</span><span class="p">,</span>
+</span><span id="__span-92-23"><a id="__codelineno-92-23" name="__codelineno-92-23"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalSetManager</span><span class="p">(</span><span class="nx">evalSetManager</span><span class="p">),</span>
+</span><span id="__span-92-24"><a id="__codelineno-92-24" name="__codelineno-92-24"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithMetricManager</span><span class="p">(</span><span class="nx">metricManager</span><span class="p">),</span>
+</span><span id="__span-92-25"><a id="__codelineno-92-25" name="__codelineno-92-25"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalResultManager</span><span class="p">(</span><span class="nx">evalResultManager</span><span class="p">),</span>
+</span><span id="__span-92-26"><a id="__codelineno-92-26" name="__codelineno-92-26"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
+</span><span id="__span-92-27"><a id="__codelineno-92-27" name="__codelineno-92-27"></a><span class="p">)</span>
+</span><span id="__span-92-28"><a id="__codelineno-92-28" name="__codelineno-92-28"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-92-29"><a id="__codelineno-92-29" name="__codelineno-92-29"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;create agent evaluator: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-92-30"><a id="__codelineno-92-30" name="__codelineno-92-30"></a><span class="p">}</span>
+</span><span id="__span-92-31"><a id="__codelineno-92-31" name="__codelineno-92-31"></a>
+</span><span id="__span-92-32"><a id="__codelineno-92-32" name="__codelineno-92-32"></a><span class="nx">langfuseHandler</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">langfuseeval</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-92-33"><a id="__codelineno-92-33" name="__codelineno-92-33"></a><span class="w">    </span><span class="nx">appNameValue</span><span class="p">,</span>
+</span><span id="__span-92-34"><a id="__codelineno-92-34" name="__codelineno-92-34"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
+</span><span id="__span-92-35"><a id="__codelineno-92-35" name="__codelineno-92-35"></a><span class="w">    </span><span class="nx">evalSetManager</span><span class="p">,</span>
+</span><span id="__span-92-36"><a id="__codelineno-92-36" name="__codelineno-92-36"></a><span class="w">    </span><span class="nx">metricManager</span><span class="p">,</span>
+</span><span id="__span-92-37"><a id="__codelineno-92-37" name="__codelineno-92-37"></a><span class="w">    </span><span class="nx">evalResultManager</span><span class="p">,</span>
+</span><span id="__span-92-38"><a id="__codelineno-92-38" name="__codelineno-92-38"></a><span class="w">    </span><span class="nx">langfuseeval</span><span class="p">.</span><span class="nx">WithCaseBuilder</span><span class="p">(</span><span class="nx">buildCaseSpec</span><span class="p">),</span>
+</span><span id="__span-92-39"><a id="__codelineno-92-39" name="__codelineno-92-39"></a><span class="p">)</span>
+</span><span id="__span-92-40"><a id="__codelineno-92-40" name="__codelineno-92-40"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-92-41"><a id="__codelineno-92-41" name="__codelineno-92-41"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;create Langfuse handler: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-92-42"><a id="__codelineno-92-42" name="__codelineno-92-42"></a><span class="p">}</span>
+</span><span id="__span-92-43"><a id="__codelineno-92-43" name="__codelineno-92-43"></a>
+</span><span id="__span-92-44"><a id="__codelineno-92-44" name="__codelineno-92-44"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sevaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-92-45"><a id="__codelineno-92-45" name="__codelineno-92-45"></a><span class="w">    </span><span class="nx">sevaluation</span><span class="p">.</span><span class="nx">WithAppName</span><span class="p">(</span><span class="nx">appNameValue</span><span class="p">),</span>
+</span><span id="__span-92-46"><a id="__codelineno-92-46" name="__codelineno-92-46"></a><span class="w">    </span><span class="nx">sevaluation</span><span class="p">.</span><span class="nx">WithBasePath</span><span class="p">(</span><span class="s">&quot;/evaluation&quot;</span><span class="p">),</span>
+</span><span id="__span-92-47"><a id="__codelineno-92-47" name="__codelineno-92-47"></a><span class="w">    </span><span class="nx">sevaluation</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-92-48"><a id="__codelineno-92-48" name="__codelineno-92-48"></a><span class="w">    </span><span class="nx">sevaluation</span><span class="p">.</span><span class="nx">WithEvalSetManager</span><span class="p">(</span><span class="nx">evalSetManager</span><span class="p">),</span>
+</span><span id="__span-92-49"><a id="__codelineno-92-49" name="__codelineno-92-49"></a><span class="w">    </span><span class="nx">sevaluation</span><span class="p">.</span><span class="nx">WithEvalResultManager</span><span class="p">(</span><span class="nx">evalResultManager</span><span class="p">),</span>
+</span><span id="__span-92-50"><a id="__codelineno-92-50" name="__codelineno-92-50"></a><span class="w">    </span><span class="nx">sevaluation</span><span class="p">.</span><span class="nx">WithRouteRegistrar</span><span class="p">(</span><span class="nx">langfuseHandler</span><span class="p">),</span>
+</span><span id="__span-92-51"><a id="__codelineno-92-51" name="__codelineno-92-51"></a><span class="p">)</span>
+</span><span id="__span-92-52"><a id="__codelineno-92-52" name="__codelineno-92-52"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-92-53"><a id="__codelineno-92-53" name="__codelineno-92-53"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;create evaluation server: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-92-54"><a id="__codelineno-92-54" name="__codelineno-92-54"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h4 id="data-format">Data Format</h4>
+<p>Langfuse allows users to define the structure of dataset items on the platform side, so <code>input</code>, <code>expectedOutput</code>, and <code>metadata</code> do not need to follow a fixed schema. On the tRPC-Agent-Go side, evaluation still needs to run against an explicit <code>EvalCase</code>. <code>CaseBuilder</code> is the layer that bridges those two models.</p>
+<p>In practice, <code>CaseBuilder</code> extracts the user question, expected answer, and expected tool trajectory from the raw dataset item, then maps them into an <code>EvalCase</code> that the local evaluation runtime can consume directly. This keeps dataset authoring flexible in Langfuse while making the boundary between platform data and evaluation semantics explicit in code.</p>
+<p>The example below uses a simple <code>question/answer</code> structure to show how a dataset item maps into an <code>EvalCase</code>.</p>
+<p><code>input</code>:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-93-1">1</a></span>
+<span class="normal"><a href="#__codelineno-93-2">2</a></span>
+<span class="normal"><a href="#__codelineno-93-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-93-1"><a id="__codelineno-93-1" name="__codelineno-93-1"></a><span class="p">{</span>
+</span><span id="__span-93-2"><a id="__codelineno-93-2" name="__codelineno-93-2"></a><span class="w">  </span><span class="nt">&quot;question&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;What is 2 + 3? Use the calculator tool.&quot;</span>
+</span><span id="__span-93-3"><a id="__codelineno-93-3" name="__codelineno-93-3"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>expectedOutput</code>:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-94-1">1</a></span>
+<span class="normal"><a href="#__codelineno-94-2">2</a></span>
+<span class="normal"><a href="#__codelineno-94-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-94-1"><a id="__codelineno-94-1" name="__codelineno-94-1"></a><span class="p">{</span>
+</span><span id="__span-94-2"><a id="__codelineno-94-2" name="__codelineno-94-2"></a><span class="w">  </span><span class="nt">&quot;answer&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;5&quot;</span>
+</span><span id="__span-94-3"><a id="__codelineno-94-3" name="__codelineno-94-3"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>metadata.expectedTools</code> is optional and is used for tool trajectory evaluation.</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-95-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-95-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-95-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-95-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-95-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-95-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-95-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-95-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-95-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-95-10">10</a></span>
+<span class="normal"><a href="#__codelineno-95-11">11</a></span>
+<span class="normal"><a href="#__codelineno-95-12">12</a></span>
+<span class="normal"><a href="#__codelineno-95-13">13</a></span>
+<span class="normal"><a href="#__codelineno-95-14">14</a></span>
+<span class="normal"><a href="#__codelineno-95-15">15</a></span>
+<span class="normal"><a href="#__codelineno-95-16">16</a></span>
+<span class="normal"><a href="#__codelineno-95-17">17</a></span>
+<span class="normal"><a href="#__codelineno-95-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-95-1"><a id="__codelineno-95-1" name="__codelineno-95-1"></a><span class="p">{</span>
+</span><span id="__span-95-2"><a id="__codelineno-95-2" name="__codelineno-95-2"></a><span class="w">  </span><span class="nt">&quot;expectedTools&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-95-3"><a id="__codelineno-95-3" name="__codelineno-95-3"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-95-4"><a id="__codelineno-95-4" name="__codelineno-95-4"></a><span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;calculator&quot;</span><span class="p">,</span>
+</span><span id="__span-95-5"><a id="__codelineno-95-5" name="__codelineno-95-5"></a><span class="w">      </span><span class="nt">&quot;arguments&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-95-6"><a id="__codelineno-95-6" name="__codelineno-95-6"></a><span class="w">        </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
+</span><span id="__span-95-7"><a id="__codelineno-95-7" name="__codelineno-95-7"></a><span class="w">        </span><span class="nt">&quot;a&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-95-8"><a id="__codelineno-95-8" name="__codelineno-95-8"></a><span class="w">        </span><span class="nt">&quot;b&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span>
+</span><span id="__span-95-9"><a id="__codelineno-95-9" name="__codelineno-95-9"></a><span class="w">      </span><span class="p">},</span>
+</span><span id="__span-95-10"><a id="__codelineno-95-10" name="__codelineno-95-10"></a><span class="w">      </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-95-11"><a id="__codelineno-95-11" name="__codelineno-95-11"></a><span class="w">        </span><span class="nt">&quot;operation&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
+</span><span id="__span-95-12"><a id="__codelineno-95-12" name="__codelineno-95-12"></a><span class="w">        </span><span class="nt">&quot;a&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+</span><span id="__span-95-13"><a id="__codelineno-95-13" name="__codelineno-95-13"></a><span class="w">        </span><span class="nt">&quot;b&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+</span><span id="__span-95-14"><a id="__codelineno-95-14" name="__codelineno-95-14"></a><span class="w">        </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span>
+</span><span id="__span-95-15"><a id="__codelineno-95-15" name="__codelineno-95-15"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-95-16"><a id="__codelineno-95-16" name="__codelineno-95-16"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-95-17"><a id="__codelineno-95-17" name="__codelineno-95-17"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-95-18"><a id="__codelineno-95-18" name="__codelineno-95-18"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>If your business data uses a different structure, implement the conversion through <code>langfuseeval.WithCaseBuilder(...)</code>.</p>
+<p>One possible <code>CaseBuilder</code> looks like this:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-96-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-96-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-96-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-96-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-96-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-96-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-96-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-96-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-96-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-96-10">10</a></span>
+<span class="normal"><a href="#__codelineno-96-11">11</a></span>
+<span class="normal"><a href="#__codelineno-96-12">12</a></span>
+<span class="normal"><a href="#__codelineno-96-13">13</a></span>
+<span class="normal"><a href="#__codelineno-96-14">14</a></span>
+<span class="normal"><a href="#__codelineno-96-15">15</a></span>
+<span class="normal"><a href="#__codelineno-96-16">16</a></span>
+<span class="normal"><a href="#__codelineno-96-17">17</a></span>
+<span class="normal"><a href="#__codelineno-96-18">18</a></span>
+<span class="normal"><a href="#__codelineno-96-19">19</a></span>
+<span class="normal"><a href="#__codelineno-96-20">20</a></span>
+<span class="normal"><a href="#__codelineno-96-21">21</a></span>
+<span class="normal"><a href="#__codelineno-96-22">22</a></span>
+<span class="normal"><a href="#__codelineno-96-23">23</a></span>
+<span class="normal"><a href="#__codelineno-96-24">24</a></span>
+<span class="normal"><a href="#__codelineno-96-25">25</a></span>
+<span class="normal"><a href="#__codelineno-96-26">26</a></span>
+<span class="normal"><a href="#__codelineno-96-27">27</a></span>
+<span class="normal"><a href="#__codelineno-96-28">28</a></span>
+<span class="normal"><a href="#__codelineno-96-29">29</a></span>
+<span class="normal"><a href="#__codelineno-96-30">30</a></span>
+<span class="normal"><a href="#__codelineno-96-31">31</a></span>
+<span class="normal"><a href="#__codelineno-96-32">32</a></span>
+<span class="normal"><a href="#__codelineno-96-33">33</a></span>
+<span class="normal"><a href="#__codelineno-96-34">34</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-96-1"><a id="__codelineno-96-1" name="__codelineno-96-1"></a><span class="kd">func</span><span class="w"> </span><span class="nx">buildCaseSpec</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">item</span><span class="w"> </span><span class="o">*</span><span class="nx">langfuseeval</span><span class="p">.</span><span class="nx">DatasetItem</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">langfuseeval</span><span class="p">.</span><span class="nx">CaseSpec</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-96-2"><a id="__codelineno-96-2" name="__codelineno-96-2"></a><span class="w">    </span><span class="nx">question</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">requiredStringField</span><span class="p">(</span><span class="nx">item</span><span class="p">.</span><span class="nx">Input</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;input&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;question&quot;</span><span class="p">)</span>
+</span><span id="__span-96-3"><a id="__codelineno-96-3" name="__codelineno-96-3"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-96-4"><a id="__codelineno-96-4" name="__codelineno-96-4"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-96-5"><a id="__codelineno-96-5" name="__codelineno-96-5"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-96-6"><a id="__codelineno-96-6" name="__codelineno-96-6"></a><span class="w">    </span><span class="nx">answer</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">requiredStringField</span><span class="p">(</span><span class="nx">item</span><span class="p">.</span><span class="nx">ExpectedOutput</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;expectedOutput&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;answer&quot;</span><span class="p">)</span>
+</span><span id="__span-96-7"><a id="__codelineno-96-7" name="__codelineno-96-7"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-96-8"><a id="__codelineno-96-8" name="__codelineno-96-8"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-96-9"><a id="__codelineno-96-9" name="__codelineno-96-9"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-96-10"><a id="__codelineno-96-10" name="__codelineno-96-10"></a><span class="w">    </span><span class="nx">expectedTools</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">expectedToolsFromMetadata</span><span class="p">(</span><span class="nx">item</span><span class="p">.</span><span class="nx">Metadata</span><span class="p">)</span>
+</span><span id="__span-96-11"><a id="__codelineno-96-11" name="__codelineno-96-11"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-96-12"><a id="__codelineno-96-12" name="__codelineno-96-12"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-96-13"><a id="__codelineno-96-13" name="__codelineno-96-13"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-96-14"><a id="__codelineno-96-14" name="__codelineno-96-14"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">langfuseeval</span><span class="p">.</span><span class="nx">CaseSpec</span><span class="p">{</span>
+</span><span id="__span-96-15"><a id="__codelineno-96-15" name="__codelineno-96-15"></a><span class="w">        </span><span class="nx">DatasetItemID</span><span class="p">:</span><span class="w"> </span><span class="nx">item</span><span class="p">.</span><span class="nx">ID</span><span class="p">,</span>
+</span><span id="__span-96-16"><a id="__codelineno-96-16" name="__codelineno-96-16"></a><span class="w">        </span><span class="nx">TraceInput</span><span class="p">:</span><span class="w">    </span><span class="nx">item</span><span class="p">.</span><span class="nx">Input</span><span class="p">,</span>
+</span><span id="__span-96-17"><a id="__codelineno-96-17" name="__codelineno-96-17"></a><span class="w">        </span><span class="nx">EvalCase</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">EvalCase</span><span class="p">{</span>
+</span><span id="__span-96-18"><a id="__codelineno-96-18" name="__codelineno-96-18"></a><span class="w">            </span><span class="nx">EvalID</span><span class="p">:</span><span class="w"> </span><span class="nx">item</span><span class="p">.</span><span class="nx">ID</span><span class="p">,</span>
+</span><span id="__span-96-19"><a id="__codelineno-96-19" name="__codelineno-96-19"></a><span class="w">            </span><span class="nx">Conversation</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">Invocation</span><span class="p">{</span>
+</span><span id="__span-96-20"><a id="__codelineno-96-20" name="__codelineno-96-20"></a><span class="w">                </span><span class="p">{</span>
+</span><span id="__span-96-21"><a id="__codelineno-96-21" name="__codelineno-96-21"></a><span class="w">                    </span><span class="nx">UserContent</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
+</span><span id="__span-96-22"><a id="__codelineno-96-22" name="__codelineno-96-22"></a><span class="w">                        </span><span class="nx">Role</span><span class="p">:</span><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">RoleUser</span><span class="p">,</span>
+</span><span id="__span-96-23"><a id="__codelineno-96-23" name="__codelineno-96-23"></a><span class="w">                        </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="nx">question</span><span class="p">,</span>
+</span><span id="__span-96-24"><a id="__codelineno-96-24" name="__codelineno-96-24"></a><span class="w">                    </span><span class="p">},</span>
+</span><span id="__span-96-25"><a id="__codelineno-96-25" name="__codelineno-96-25"></a><span class="w">                    </span><span class="nx">FinalResponse</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">model</span><span class="p">.</span><span class="nx">Message</span><span class="p">{</span>
+</span><span id="__span-96-26"><a id="__codelineno-96-26" name="__codelineno-96-26"></a><span class="w">                        </span><span class="nx">Role</span><span class="p">:</span><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">RoleAssistant</span><span class="p">,</span>
+</span><span id="__span-96-27"><a id="__codelineno-96-27" name="__codelineno-96-27"></a><span class="w">                        </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="nx">answer</span><span class="p">,</span>
+</span><span id="__span-96-28"><a id="__codelineno-96-28" name="__codelineno-96-28"></a><span class="w">                    </span><span class="p">},</span>
+</span><span id="__span-96-29"><a id="__codelineno-96-29" name="__codelineno-96-29"></a><span class="w">                    </span><span class="nx">Tools</span><span class="p">:</span><span class="w"> </span><span class="nx">expectedTools</span><span class="p">,</span>
+</span><span id="__span-96-30"><a id="__codelineno-96-30" name="__codelineno-96-30"></a><span class="w">                </span><span class="p">},</span>
+</span><span id="__span-96-31"><a id="__codelineno-96-31" name="__codelineno-96-31"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-96-32"><a id="__codelineno-96-32" name="__codelineno-96-32"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-96-33"><a id="__codelineno-96-33" name="__codelineno-96-33"></a><span class="w">    </span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-96-34"><a id="__codelineno-96-34" name="__codelineno-96-34"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>This conversion does the following:</p>
+<ul>
+<li>Reads <code>input.question</code> into <code>UserContent</code>.</li>
+<li>Reads <code>expectedOutput.answer</code> into the expected <code>FinalResponse</code>.</li>
+<li>Reads <code>metadata.expectedTools</code> into the expected tool trajectory.</li>
+<li>Uses <code>item.ID</code> as both <code>DatasetItemID</code> and <code>EvalID</code>, so platform data and local evaluation results remain aligned one to one.</li>
+</ul>
+<p><img alt="langfuse-dataset-items" src="../assets/img/evaluation/langfuse/dataset-items.png" /></p>
+<h4 id="metric-files">Metric Files</h4>
+<p>Metrics are still managed using the native framework model. With the default local <code>MetricManager</code>, and because <code>dataset.ID</code> is used directly as <code>evalSetID</code>, metric files are typically named by <code>dataset.ID</code> and stored like this:</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-97-1">1</a></span>
+<span class="normal"><a href="#__codelineno-97-2">2</a></span>
+<span class="normal"><a href="#__codelineno-97-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-97-1"><a id="__codelineno-97-1" name="__codelineno-97-1"></a>data/
+</span><span id="__span-97-2"><a id="__codelineno-97-2" name="__codelineno-97-2"></a><span class="w">  </span>langfuse-remote-eval-app/
+</span><span id="__span-97-3"><a id="__codelineno-97-3" name="__codelineno-97-3"></a><span class="w">    </span>&lt;dataset-id&gt;.metrics.json
+</span></code></pre></div></td></tr></table></div>
+<p>When you follow this default layout, the target dataset must have a matching metric file before the remote evaluation can produce valid metric results.</p>
+<p>If several datasets should reuse the same metric configuration, you can customize the metric locator. The example below maps every dataset to the same <code>shared.metrics.json</code> file.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-98-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-98-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-98-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-98-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-98-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-98-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-98-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-98-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-98-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-98-10">10</a></span>
+<span class="normal"><a href="#__codelineno-98-11">11</a></span>
+<span class="normal"><a href="#__codelineno-98-12">12</a></span>
+<span class="normal"><a href="#__codelineno-98-13">13</a></span>
+<span class="normal"><a href="#__codelineno-98-14">14</a></span>
+<span class="normal"><a href="#__codelineno-98-15">15</a></span>
+<span class="normal"><a href="#__codelineno-98-16">16</a></span>
+<span class="normal"><a href="#__codelineno-98-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-98-1"><a id="__codelineno-98-1" name="__codelineno-98-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-98-2"><a id="__codelineno-98-2" name="__codelineno-98-2"></a><span class="w">    </span><span class="s">&quot;path/filepath&quot;</span>
+</span><span id="__span-98-3"><a id="__codelineno-98-3" name="__codelineno-98-3"></a>
+</span><span id="__span-98-4"><a id="__codelineno-98-4" name="__codelineno-98-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
+</span><span id="__span-98-5"><a id="__codelineno-98-5" name="__codelineno-98-5"></a><span class="w">    </span><span class="nx">metriclocal</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local&quot;</span>
+</span><span id="__span-98-6"><a id="__codelineno-98-6" name="__codelineno-98-6"></a><span class="p">)</span>
+</span><span id="__span-98-7"><a id="__codelineno-98-7" name="__codelineno-98-7"></a>
+</span><span id="__span-98-8"><a id="__codelineno-98-8" name="__codelineno-98-8"></a><span class="kd">type</span><span class="w"> </span><span class="nx">sharedMetricLocator</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
+</span><span id="__span-98-9"><a id="__codelineno-98-9" name="__codelineno-98-9"></a>
+</span><span id="__span-98-10"><a id="__codelineno-98-10" name="__codelineno-98-10"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">l</span><span class="w"> </span><span class="o">*</span><span class="nx">sharedMetricLocator</span><span class="p">)</span><span class="w"> </span><span class="nx">Build</span><span class="p">(</span><span class="nx">baseDir</span><span class="p">,</span><span class="w"> </span><span class="nx">appName</span><span class="p">,</span><span class="w"> </span><span class="nx">evalSetID</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-98-11"><a id="__codelineno-98-11" name="__codelineno-98-11"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">filepath</span><span class="p">.</span><span class="nx">Join</span><span class="p">(</span><span class="nx">baseDir</span><span class="p">,</span><span class="w"> </span><span class="nx">appName</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;shared.metrics.json&quot;</span><span class="p">)</span>
+</span><span id="__span-98-12"><a id="__codelineno-98-12" name="__codelineno-98-12"></a><span class="p">}</span>
+</span><span id="__span-98-13"><a id="__codelineno-98-13" name="__codelineno-98-13"></a>
+</span><span id="__span-98-14"><a id="__codelineno-98-14" name="__codelineno-98-14"></a><span class="nx">metricManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">metriclocal</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-98-15"><a id="__codelineno-98-15" name="__codelineno-98-15"></a><span class="w">    </span><span class="nx">metric</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">dataDir</span><span class="p">),</span>
+</span><span id="__span-98-16"><a id="__codelineno-98-16" name="__codelineno-98-16"></a><span class="w">    </span><span class="nx">metric</span><span class="p">.</span><span class="nx">WithLocator</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">sharedMetricLocator</span><span class="p">{}),</span>
+</span><span id="__span-98-17"><a id="__codelineno-98-17" name="__codelineno-98-17"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>This is useful when multiple datasets share the same evaluation goals and differ only in sample content.</p>
+<h4 id="running">Running</h4>
+<p>Once the local evaluation runtime is ready, wiring Langfuse Remote Experiments is straightforward: start the evaluation service, configure the remote evaluation address in Langfuse, and let Langfuse trigger a remote evaluation.</p>
+<p>Langfuse connection settings can be passed explicitly through <code>WithBaseURL(...)</code>, <code>WithPublicKey(...)</code>, and <code>WithSecretKey(...)</code>, or provided through environment variables:</p>
+<ul>
+<li><code>LANGFUSE_BASE_URL</code>: Langfuse base address, for example <code>http://127.0.0.1:3000</code>.</li>
+<li><code>LANGFUSE_PUBLIC_KEY</code>: Langfuse public key.</li>
+<li><code>LANGFUSE_SECRET_KEY</code>: Langfuse secret key.</li>
+</ul>
+<p>If you use the official example, you also need model settings for both the target Agent and the Judge Runner. The following environment variables and command correspond to the minimal runnable setup for the official example:</p>
+<ul>
+<li><code>LANGFUSE_HOST</code>: Langfuse host in <code>host:port</code> form, for example <code>127.0.0.1:3000</code>.</li>
+<li><code>LANGFUSE_INSECURE</code>: Set to <code>true</code> when using plain HTTP locally.</li>
+<li><code>OPENAI_BASE_URL</code>: Base URL for an OpenAI-compatible model service.</li>
+<li><code>OPENAI_API_KEY</code>: API key used by both the target Agent and the Judge Runner.</li>
+</ul>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-99-1">1</a></span>
+<span class="normal"><a href="#__codelineno-99-2">2</a></span>
+<span class="normal"><a href="#__codelineno-99-3">3</a></span>
+<span class="normal"><a href="#__codelineno-99-4">4</a></span>
+<span class="normal"><a href="#__codelineno-99-5">5</a></span>
+<span class="normal"><a href="#__codelineno-99-6">6</a></span>
+<span class="normal"><a href="#__codelineno-99-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-99-1"><a id="__codelineno-99-1" name="__codelineno-99-1"></a><span class="nb">cd</span><span class="w"> </span>trpc-agent-go/examples/evaluation/langfuse
+</span><span id="__span-99-2"><a id="__codelineno-99-2" name="__codelineno-99-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">LANGFUSE_HOST</span><span class="o">=</span><span class="s2">&quot;127.0.0.1:3000&quot;</span>
+</span><span id="__span-99-3"><a id="__codelineno-99-3" name="__codelineno-99-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">LANGFUSE_INSECURE</span><span class="o">=</span><span class="s2">&quot;true&quot;</span>
+</span><span id="__span-99-4"><a id="__codelineno-99-4" name="__codelineno-99-4"></a><span class="nb">export</span><span class="w"> </span><span class="nv">LANGFUSE_PUBLIC_KEY</span><span class="o">=</span><span class="s2">&quot;pk-lf-xxx&quot;</span>
+</span><span id="__span-99-5"><a id="__codelineno-99-5" name="__codelineno-99-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">LANGFUSE_SECRET_KEY</span><span class="o">=</span><span class="s2">&quot;sk-lf-xxx&quot;</span>
+</span><span id="__span-99-6"><a id="__codelineno-99-6" name="__codelineno-99-6"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;sk-xxx&quot;</span>
+</span><span id="__span-99-7"><a id="__codelineno-99-7" name="__codelineno-99-7"></a>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-addr<span class="w"> </span>:8088
+</span></code></pre></div></td></tr></table></div>
+<p>The command above starts the official example. Its webhook address is:</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-100-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-100-1"><a id="__codelineno-100-1" name="__codelineno-100-1"></a>http://127.0.0.1:8088/evaluation/langfuse/remote-experiment
+</span></code></pre></div></td></tr></table></div>
+<p>The Langfuse Web UI currently accepts only remote evaluation URLs on ports <code>80</code> or <code>443</code>. If the service listens on <code>8088</code>, you will usually need a reverse proxy, port mapping, or a gateway to expose it on <code>80/443</code>. The same constraint applies even if you are not using the official example and instead run your own evaluation service.</p>
+<p><img alt="langfuse-run-experiment-entry" src="../assets/img/evaluation/langfuse/run-experiment-entry.png" /></p>
+<h4 id="viewing-results">Viewing Results</h4>
+<p>After the remote evaluation completes, Langfuse shows the results at multiple layers of the local evaluation run:</p>
+<ul>
+<li>One trace for each dataset item.</li>
+<li>Trace-level case scores such as <code>tool_trajectory_avg_score</code> and <code>llm_rubric_response</code>.</li>
+<li>Dataset-run-level aggregate scores such as <code>pass_rate</code> and the mean values of each metric.</li>
+</ul>
+<p>How results are persisted depends on the <code>EvalResultManager</code> implementation. With the local implementation, results are written to a local directory, which is useful for offline debugging and regression comparison.</p>
+<p><img alt="langfuse-run-results" src="../assets/img/evaluation/langfuse/run-results.png" /></p>
+<h2 id="best-practices">Best Practices</h2>
+<p>Integrating evaluation into engineering workflows often delivers more value than expected. It is not about producing a polished report; it is about turning key Agent behaviors into sustainable regression signals.</p>
+<p>Two things are most dangerous in Agent evolution: small-looking changes that cause silent behavior drift, and issues that only surface for users, which multiplies diagnosis cost. Evaluation exists to block these risks early.</p>
+<p>tRPC-Agent-Go in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner">examples/runner</a> encodes critical paths into evaluation sets and metrics and runs them in the release pipeline. The Runner quickstart cases cover common scenarios such as calculator, time tool, and compound interest, with a clear goal to guard tool selection and output shape. If behavior drifts, the pipeline fails early, and you can locate the issue directly with the corresponding case and trace.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-101-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-101-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-101-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-101-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-101-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-101-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-101-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-101-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-101-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-101-10">10</a></span>
+<span class="normal"><a href="#__codelineno-101-11">11</a></span>
+<span class="normal"><a href="#__codelineno-101-12">12</a></span>
+<span class="normal"><a href="#__codelineno-101-13">13</a></span>
+<span class="normal"><a href="#__codelineno-101-14">14</a></span>
+<span class="normal"><a href="#__codelineno-101-15">15</a></span>
+<span class="normal"><a href="#__codelineno-101-16">16</a></span>
+<span class="normal"><a href="#__codelineno-101-17">17</a></span>
+<span class="normal"><a href="#__codelineno-101-18">18</a></span>
+<span class="normal"><a href="#__codelineno-101-19">19</a></span>
+<span class="normal"><a href="#__codelineno-101-20">20</a></span>
+<span class="normal"><a href="#__codelineno-101-21">21</a></span>
+<span class="normal"><a href="#__codelineno-101-22">22</a></span>
+<span class="normal"><a href="#__codelineno-101-23">23</a></span>
+<span class="normal"><a href="#__codelineno-101-24">24</a></span>
+<span class="normal"><a href="#__codelineno-101-25">25</a></span>
+<span class="normal"><a href="#__codelineno-101-26">26</a></span>
+<span class="normal"><a href="#__codelineno-101-27">27</a></span>
+<span class="normal"><a href="#__codelineno-101-28">28</a></span>
+<span class="normal"><a href="#__codelineno-101-29">29</a></span>
+<span class="normal"><a href="#__codelineno-101-30">30</a></span>
+<span class="normal"><a href="#__codelineno-101-31">31</a></span>
+<span class="normal"><a href="#__codelineno-101-32">32</a></span>
+<span class="normal"><a href="#__codelineno-101-33">33</a></span>
+<span class="normal"><a href="#__codelineno-101-34">34</a></span>
+<span class="normal"><a href="#__codelineno-101-35">35</a></span>
+<span class="normal"><a href="#__codelineno-101-36">36</a></span>
+<span class="normal"><a href="#__codelineno-101-37">37</a></span>
+<span class="normal"><a href="#__codelineno-101-38">38</a></span>
+<span class="normal"><a href="#__codelineno-101-39">39</a></span>
+<span class="normal"><a href="#__codelineno-101-40">40</a></span>
+<span class="normal"><a href="#__codelineno-101-41">41</a></span>
+<span class="normal"><a href="#__codelineno-101-42">42</a></span>
+<span class="normal"><a href="#__codelineno-101-43">43</a></span>
+<span class="normal"><a href="#__codelineno-101-44">44</a></span>
+<span class="normal"><a href="#__codelineno-101-45">45</a></span>
+<span class="normal"><a href="#__codelineno-101-46">46</a></span>
+<span class="normal"><a href="#__codelineno-101-47">47</a></span>
+<span class="normal"><a href="#__codelineno-101-48">48</a></span>
+<span class="normal"><a href="#__codelineno-101-49">49</a></span>
+<span class="normal"><a href="#__codelineno-101-50">50</a></span>
+<span class="normal"><a href="#__codelineno-101-51">51</a></span>
+<span class="normal"><a href="#__codelineno-101-52">52</a></span>
+<span class="normal"><a href="#__codelineno-101-53">53</a></span>
+<span class="normal"><a href="#__codelineno-101-54">54</a></span>
+<span class="normal"><a href="#__codelineno-101-55">55</a></span>
+<span class="normal"><a href="#__codelineno-101-56">56</a></span>
+<span class="normal"><a href="#__codelineno-101-57">57</a></span>
+<span class="normal"><a href="#__codelineno-101-58">58</a></span>
+<span class="normal"><a href="#__codelineno-101-59">59</a></span>
+<span class="normal"><a href="#__codelineno-101-60">60</a></span>
+<span class="normal"><a href="#__codelineno-101-61">61</a></span>
+<span class="normal"><a href="#__codelineno-101-62">62</a></span>
+<span class="normal"><a href="#__codelineno-101-63">63</a></span>
+<span class="normal"><a href="#__codelineno-101-64">64</a></span>
+<span class="normal"><a href="#__codelineno-101-65">65</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-101-1"><a id="__codelineno-101-1" name="__codelineno-101-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-101-2"><a id="__codelineno-101-2" name="__codelineno-101-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
+</span><span id="__span-101-3"><a id="__codelineno-101-3" name="__codelineno-101-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult&quot;</span>
+</span><span id="__span-101-4"><a id="__codelineno-101-4" name="__codelineno-101-4"></a><span class="w">    </span><span class="nx">localevalresult</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local&quot;</span>
+</span><span id="__span-101-5"><a id="__codelineno-101-5" name="__codelineno-101-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset&quot;</span>
+</span><span id="__span-101-6"><a id="__codelineno-101-6" name="__codelineno-101-6"></a><span class="w">    </span><span class="nx">localevalset</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local&quot;</span>
+</span><span id="__span-101-7"><a id="__codelineno-101-7" name="__codelineno-101-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
+</span><span id="__span-101-8"><a id="__codelineno-101-8" name="__codelineno-101-8"></a><span class="w">    </span><span class="nx">localmetric</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local&quot;</span>
+</span><span id="__span-101-9"><a id="__codelineno-101-9" name="__codelineno-101-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/status&quot;</span>
+</span><span id="__span-101-10"><a id="__codelineno-101-10" name="__codelineno-101-10"></a><span class="p">)</span>
+</span><span id="__span-101-11"><a id="__codelineno-101-11" name="__codelineno-101-11"></a>
+</span><span id="__span-101-12"><a id="__codelineno-101-12" name="__codelineno-101-12"></a><span class="kd">func</span><span class="w"> </span><span class="nx">TestTool</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-101-13"><a id="__codelineno-101-13" name="__codelineno-101-13"></a><span class="w">    </span><span class="nx">tests</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-101-14"><a id="__codelineno-101-14" name="__codelineno-101-14"></a><span class="w">        </span><span class="nx">name</span><span class="w">      </span><span class="kt">string</span>
+</span><span id="__span-101-15"><a id="__codelineno-101-15" name="__codelineno-101-15"></a><span class="w">        </span><span class="nx">evalSetID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-101-16"><a id="__codelineno-101-16" name="__codelineno-101-16"></a><span class="w">    </span><span class="p">}{</span>
+</span><span id="__span-101-17"><a id="__codelineno-101-17" name="__codelineno-101-17"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-101-18"><a id="__codelineno-101-18" name="__codelineno-101-18"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;calculator&quot;</span><span class="p">,</span>
+</span><span id="__span-101-19"><a id="__codelineno-101-19" name="__codelineno-101-19"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;calculator_tool&quot;</span><span class="p">,</span>
+</span><span id="__span-101-20"><a id="__codelineno-101-20" name="__codelineno-101-20"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-101-21"><a id="__codelineno-101-21" name="__codelineno-101-21"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-101-22"><a id="__codelineno-101-22" name="__codelineno-101-22"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;currenttime&quot;</span><span class="p">,</span>
+</span><span id="__span-101-23"><a id="__codelineno-101-23" name="__codelineno-101-23"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;currenttime_tool&quot;</span><span class="p">,</span>
+</span><span id="__span-101-24"><a id="__codelineno-101-24" name="__codelineno-101-24"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-101-25"><a id="__codelineno-101-25" name="__codelineno-101-25"></a><span class="w">        </span><span class="p">{</span>
+</span><span id="__span-101-26"><a id="__codelineno-101-26" name="__codelineno-101-26"></a><span class="w">            </span><span class="nx">name</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
+</span><span id="__span-101-27"><a id="__codelineno-101-27" name="__codelineno-101-27"></a><span class="w">            </span><span class="nx">evalSetID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;compound_interest&quot;</span><span class="p">,</span>
+</span><span id="__span-101-28"><a id="__codelineno-101-28" name="__codelineno-101-28"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-101-29"><a id="__codelineno-101-29" name="__codelineno-101-29"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-101-30"><a id="__codelineno-101-30" name="__codelineno-101-30"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">tests</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-101-31"><a id="__codelineno-101-31" name="__codelineno-101-31"></a><span class="w">        </span><span class="nx">t</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">tt</span><span class="p">.</span><span class="nx">name</span><span class="p">,</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-101-32"><a id="__codelineno-101-32" name="__codelineno-101-32"></a><span class="w">            </span><span class="nx">chat</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">multiTurnChat</span><span class="p">{</span>
+</span><span id="__span-101-33"><a id="__codelineno-101-33" name="__codelineno-101-33"></a><span class="w">                </span><span class="nx">modelName</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">modelName</span><span class="p">,</span>
+</span><span id="__span-101-34"><a id="__codelineno-101-34" name="__codelineno-101-34"></a><span class="w">                </span><span class="nx">streaming</span><span class="p">:</span><span class="w"> </span><span class="o">*</span><span class="nx">streaming</span><span class="p">,</span>
+</span><span id="__span-101-35"><a id="__codelineno-101-35" name="__codelineno-101-35"></a><span class="w">                </span><span class="nx">variant</span><span class="p">:</span><span class="w">   </span><span class="o">*</span><span class="nx">variant</span><span class="p">,</span>
+</span><span id="__span-101-36"><a id="__codelineno-101-36" name="__codelineno-101-36"></a><span class="w">            </span><span class="p">}</span>
+</span><span id="__span-101-37"><a id="__codelineno-101-37" name="__codelineno-101-37"></a><span class="w">            </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithTimeout</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="mi">5</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Minute</span><span class="p">)</span>
+</span><span id="__span-101-38"><a id="__codelineno-101-38" name="__codelineno-101-38"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
+</span><span id="__span-101-39"><a id="__codelineno-101-39" name="__codelineno-101-39"></a><span class="w">            </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">setup</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+</span><span id="__span-101-40"><a id="__codelineno-101-40" name="__codelineno-101-40"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-101-41"><a id="__codelineno-101-41" name="__codelineno-101-41"></a><span class="w">            </span><span class="k">defer</span><span class="w"> </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-101-42"><a id="__codelineno-101-42" name="__codelineno-101-42"></a><span class="w">            </span><span class="nx">evaluationDir</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;evaluation&quot;</span>
+</span><span id="__span-101-43"><a id="__codelineno-101-43" name="__codelineno-101-43"></a><span class="w">            </span><span class="nx">localEvalSetManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalset</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalset</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
+</span><span id="__span-101-44"><a id="__codelineno-101-44" name="__codelineno-101-44"></a><span class="w">            </span><span class="nx">localMetricManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localmetric</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">metric</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
+</span><span id="__span-101-45"><a id="__codelineno-101-45" name="__codelineno-101-45"></a><span class="w">            </span><span class="nx">localEvalResultManager</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">localevalresult</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">evalresult</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="nx">evaluationDir</span><span class="p">))</span>
+</span><span id="__span-101-46"><a id="__codelineno-101-46" name="__codelineno-101-46"></a><span class="w">            </span><span class="nx">evaluator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-101-47"><a id="__codelineno-101-47" name="__codelineno-101-47"></a><span class="w">                </span><span class="nx">appName</span><span class="p">,</span>
+</span><span id="__span-101-48"><a id="__codelineno-101-48" name="__codelineno-101-48"></a><span class="w">                </span><span class="nx">chat</span><span class="p">.</span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-101-49"><a id="__codelineno-101-49" name="__codelineno-101-49"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalSetManager</span><span class="p">(</span><span class="nx">localEvalSetManager</span><span class="p">),</span>
+</span><span id="__span-101-50"><a id="__codelineno-101-50" name="__codelineno-101-50"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithMetricManager</span><span class="p">(</span><span class="nx">localMetricManager</span><span class="p">),</span>
+</span><span id="__span-101-51"><a id="__codelineno-101-51" name="__codelineno-101-51"></a><span class="w">                </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalResultManager</span><span class="p">(</span><span class="nx">localEvalResultManager</span><span class="p">),</span>
+</span><span id="__span-101-52"><a id="__codelineno-101-52" name="__codelineno-101-52"></a><span class="w">            </span><span class="p">)</span>
+</span><span id="__span-101-53"><a id="__codelineno-101-53" name="__codelineno-101-53"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-101-54"><a id="__codelineno-101-54" name="__codelineno-101-54"></a><span class="w">            </span><span class="nx">t</span><span class="p">.</span><span class="nx">Cleanup</span><span class="p">(</span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-101-55"><a id="__codelineno-101-55" name="__codelineno-101-55"></a><span class="w">                </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Close</span><span class="p">())</span>
+</span><span id="__span-101-56"><a id="__codelineno-101-56" name="__codelineno-101-56"></a><span class="w">            </span><span class="p">})</span>
+</span><span id="__span-101-57"><a id="__codelineno-101-57" name="__codelineno-101-57"></a><span class="w">            </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluator</span><span class="p">.</span><span class="nx">Evaluate</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">tt</span><span class="p">.</span><span class="nx">evalSetID</span><span class="p">)</span>
+</span><span id="__span-101-58"><a id="__codelineno-101-58" name="__codelineno-101-58"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-101-59"><a id="__codelineno-101-59" name="__codelineno-101-59"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NotNil</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">)</span>
+</span><span id="__span-101-60"><a id="__codelineno-101-60" name="__codelineno-101-60"></a><span class="w">            </span><span class="nx">resultData</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">json</span><span class="p">.</span><span class="nx">MarshalIndent</span><span class="p">(</span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;  &quot;</span><span class="p">)</span>
+</span><span id="__span-101-61"><a id="__codelineno-101-61" name="__codelineno-101-61"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">NoError</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-101-62"><a id="__codelineno-101-62" name="__codelineno-101-62"></a><span class="w">            </span><span class="nx">assert</span><span class="p">.</span><span class="nx">Equal</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">EvalStatusPassed</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">OverallStatus</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">resultData</span><span class="p">))</span>
+</span><span id="__span-101-63"><a id="__codelineno-101-63" name="__codelineno-101-63"></a><span class="w">        </span><span class="p">})</span>
+</span><span id="__span-101-64"><a id="__codelineno-101-64" name="__codelineno-101-64"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-101-65"><a id="__codelineno-101-65" name="__codelineno-101-65"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 
 
@@ -9515,7 +9986,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 14, 2026 07:36:37 UTC">2026-04-14 07:36:37</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 16, 2026 11:37:13 UTC">2026-04-16 11:37:13</span>
   </span>
 
     
