@@ -1,0 +1,37 @@
+[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": true
+      }
+    }
+  },
+  {
+    "metricName": "llm_rubric_response",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "rubrics": [
+          {
+            "id": "1",
+            "description": "The final answer is correct.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "Evaluate whether the final answer is factually correct and directly satisfies the user's request."
+            }
+          },
+          {
+            "id": "2",
+            "description": "The final answer is relevant to the user's prompt.",
+            "type": "CONTEXT_RELEVANCE",
+            "content": {
+              "text": "Evaluate whether the final answer stays focused on the user's prompt and does not introduce unrelated information."
+            }
+          }
+        ]
+      }
+    }
+  }
+]
