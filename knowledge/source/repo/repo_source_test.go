@@ -21,8 +21,9 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
-	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+	docreader "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
 func TestReadDocumentsFromRemoteBranch(t *testing.T) {
@@ -645,6 +646,259 @@ func TestRunGitErrorPath(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected runGit to fail for invalid args")
 	}
+}
+
+func TestProcessFileMetadataAndErrors(t *testing.T) {
+	t.Run("success metadata and file node rename", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		filePath := filepath.Join(repoRoot, "docs", "readme.go")
+		writeRepoFile(t, filePath, "package demo\n")
+
+		src := New(nil, WithName("repo-src"), WithMetadata(map[string]any{"k": "v"}))
+		src.readers = map[string]docreader.Reader{
+			"go": &stubReader{
+				fileDocs: []*document.Document{
+					{},
+					{Metadata: map[string]any{"trpc_ast_type": "file"}},
+				},
+			},
+		}
+
+		docs, err := src.processFile(filePath, repoRoot, &repoInfo{name: "repo", url: "https://example.com/repo.git", branch: "main"})
+		if err != nil {
+			t.Fatalf("processFile() error = %v", err)
+		}
+		if len(docs) != 2 {
+			t.Fatalf("len(docs) = %d, want 2", len(docs))
+		}
+
+		relPath := "docs/readme.go"
+		for _, doc := range docs {
+			assertEqual(t, doc.Metadata[source.MetaSource], source.TypeRepo)
+			assertEqual(t, doc.Metadata[source.MetaSourceName], "repo-src")
+			assertEqual(t, doc.Metadata[source.MetaRepoName], "repo")
+			assertEqual(t, doc.Metadata[source.MetaRepoURL], "https://example.com/repo.git")
+			assertEqual(t, doc.Metadata[source.MetaBranch], "main")
+			assertEqual(t, doc.Metadata[source.MetaFilePath], relPath)
+			assertEqual(t, doc.Metadata["trpc_ast_file_path"], relPath)
+			assertEqual(t, doc.Metadata["k"], "v")
+		}
+		if docs[1].Metadata["trpc_ast_name"] != relPath || docs[1].Metadata["trpc_ast_full_name"] != relPath {
+			t.Fatalf("expected file node metadata to be rewritten, got name=%v full=%v", docs[1].Metadata["trpc_ast_name"], docs[1].Metadata["trpc_ast_full_name"])
+		}
+	})
+
+	t.Run("stat file error", func(t *testing.T) {
+		src := New(nil)
+		_, err := src.processFile(filepath.Join(t.TempDir(), "missing.go"), t.TempDir(), nil)
+		if err == nil {
+			t.Fatal("expected processFile stat error")
+		}
+	})
+
+	t.Run("no reader available", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		filePath := filepath.Join(repoRoot, "demo.go")
+		writeRepoFile(t, filePath, "package demo\n")
+
+		src := New(nil)
+		src.readers = map[string]docreader.Reader{}
+		_, err := src.processFile(filePath, repoRoot, nil)
+		if err == nil {
+			t.Fatal("expected missing reader error")
+		}
+	})
+
+	t.Run("reader returns error", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		filePath := filepath.Join(repoRoot, "demo.go")
+		writeRepoFile(t, filePath, "package demo\n")
+
+		src := New(nil)
+		src.readers = map[string]docreader.Reader{
+			"go": &stubReader{fileErr: fmt.Errorf("boom")},
+		}
+		_, err := src.processFile(filePath, repoRoot, nil)
+		if err == nil {
+			t.Fatal("expected reader error")
+		}
+	})
+}
+
+func TestProcessDirectoryMetadataFilteringAndErrors(t *testing.T) {
+	t.Run("success with allowed paths and skip suffix", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		a := filepath.Join(repoRoot, "a.go")
+		b := filepath.Join(repoRoot, "b.go")
+		skip := filepath.Join(repoRoot, "skip.pb.go")
+		missing := filepath.Join(repoRoot, "missing.go")
+		writeRepoFile(t, a, "package demo\n")
+		writeRepoFile(t, b, "package demo\n")
+		writeRepoFile(t, skip, "package demo\n")
+
+		src := New(nil, WithSkipSuffixes([]string{".pb.go"}), WithName("repo-src"), WithMetadata(map[string]any{"x": "y"}))
+		src.readers = map[string]docreader.Reader{
+			"go": &stubDirectoryReader{stubReader: &stubReader{}, dirDocs: []*document.Document{
+				{Metadata: map[string]any{"trpc_ast_file_path": a, "trpc_ast_type": "file"}},
+				{Metadata: map[string]any{source.MetaFilePath: b}},
+				{Metadata: map[string]any{"trpc_ast_file_path": filepath.Join(repoRoot, "outside.go")}},
+				{Metadata: map[string]any{"trpc_ast_file_path": skip}},
+				{},
+				{Metadata: map[string]any{"trpc_ast_file_path": missing}},
+			}},
+		}
+
+		allowed := map[string]struct{}{"": {}, "a.go": {}, "b.go": {}, "skip.pb.go": {}, "missing.go": {}}
+		docs, err := src.processDirectory(repoRoot, "go", repoRoot, &repoInfo{name: "repo"}, allowed)
+		if err != nil {
+			t.Fatalf("processDirectory() error = %v", err)
+		}
+		if len(docs) != 4 {
+			t.Fatalf("len(docs) = %d, want 4", len(docs))
+		}
+
+		assertEqual(t, docs[0].Metadata[source.MetaFilePath], "a.go")
+		assertEqual(t, docs[0].Metadata["trpc_ast_name"], "a.go")
+		assertEqual(t, docs[0].Metadata["trpc_ast_full_name"], "a.go")
+		assertEqual(t, docs[1].Metadata[source.MetaFilePath], "b.go")
+		if _, ok := docs[2].Metadata[source.MetaFilePath]; ok {
+			t.Fatalf("expected doc with empty relative path to keep no %s", source.MetaFilePath)
+		}
+		assertEqual(t, docs[3].Metadata[source.MetaFilePath], "missing.go")
+		if _, ok := docs[3].Metadata[source.MetaFileSize]; ok {
+			t.Fatal("expected missing file to skip file stat metadata enrichment")
+		}
+		for _, doc := range docs {
+			assertEqual(t, doc.Metadata[source.MetaSource], source.TypeRepo)
+			assertEqual(t, doc.Metadata[source.MetaSourceName], "repo-src")
+			assertEqual(t, doc.Metadata["x"], "y")
+		}
+	})
+
+	t.Run("missing reader", func(t *testing.T) {
+		src := New(nil)
+		src.readers = map[string]docreader.Reader{}
+		_, err := src.processDirectory(t.TempDir(), "go", t.TempDir(), nil, nil)
+		if err == nil {
+			t.Fatal("expected missing reader error")
+		}
+	})
+
+	t.Run("reader not directory capable", func(t *testing.T) {
+		src := New(nil)
+		src.readers = map[string]docreader.Reader{"go": &stubReader{}}
+		_, err := src.processDirectory(t.TempDir(), "go", t.TempDir(), nil, nil)
+		if err == nil {
+			t.Fatal("expected not directory-capable error")
+		}
+	})
+
+	t.Run("directory reader error", func(t *testing.T) {
+		src := New(nil)
+		src.readers = map[string]docreader.Reader{"go": &stubDirectoryReader{stubReader: &stubReader{}, dirErr: fmt.Errorf("bad dir")}}
+		_, err := src.processDirectory(t.TempDir(), "go", t.TempDir(), nil, nil)
+		if err == nil {
+			t.Fatal("expected directory reader error")
+		}
+	})
+}
+
+func TestClassifyFilesAndRelativePathExtraCoverage(t *testing.T) {
+	t.Run("classify files missing reader", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		txt := filepath.Join(repoRoot, "a.txt")
+		writeRepoFile(t, txt, "x")
+
+		src := New(nil)
+		src.readers = map[string]docreader.Reader{}
+		_, err := src.classifyFiles(repoRoot, []string{txt})
+		if err == nil {
+			t.Fatal("expected classifyFiles missing reader error")
+		}
+	})
+
+	t.Run("toRelativeRepoPath extra inputs", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		if got := toRelativeRepoPath(repoRoot, 123); got != "" {
+			t.Fatalf("toRelativeRepoPath(non-string) = %q, want empty", got)
+		}
+		if got := toRelativeRepoPath(repoRoot, "   "); got != "" {
+			t.Fatalf("toRelativeRepoPath(blank) = %q, want empty", got)
+		}
+		if got := toRelativeRepoPath(repoRoot, filepath.Join(repoRoot, "..", "other", "a.go")); got != "" {
+			t.Fatalf("toRelativeRepoPath(outside) = %q, want empty", got)
+		}
+	})
+}
+
+func TestChooseRepoNameAndLooksLikeGitURLExtraCoverage(t *testing.T) {
+	if got := chooseRepoName("", "git@github.com:trpc-group/trpc-agent-go.git", "/tmp/fallback"); got != "trpc-agent-go" {
+		t.Fatalf("chooseRepoName(git@...) = %q, want trpc-agent-go", got)
+	}
+	if got := chooseRepoName("", "", "/tmp/fallback-name"); got != "fallback-name" {
+		t.Fatalf("chooseRepoName(fallback) = %q, want fallback-name", got)
+	}
+	if looksLikeGitURL("%") {
+		t.Fatal("invalid URL should not be treated as git URL")
+	}
+}
+
+func TestResolveRepositoryAndBuildBaseMetadataExtraCoverage(t *testing.T) {
+	src := New(nil)
+
+	_, _, _, err := src.resolveRepository(context.Background(), Repository{Dir: filepath.Join(t.TempDir(), "missing")})
+	if err == nil {
+		t.Fatal("expected resolveRepository stat error")
+	}
+
+	base := src.buildBaseMetadata("/tmp/repo", nil)
+	if base[source.MetaSource] != source.TypeRepo {
+		t.Fatalf("unexpected source type: %v", base[source.MetaSource])
+	}
+	if _, ok := base[source.MetaRepoName]; ok {
+		t.Fatalf("did not expect repo name in metadata without repo info")
+	}
+}
+
+type stubReader struct {
+	fileDocs []*document.Document
+	fileErr  error
+}
+
+func (s *stubReader) ReadFromReader(_ string, _ io.Reader) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (s *stubReader) ReadFromFile(_ string) ([]*document.Document, error) {
+	if s.fileErr != nil {
+		return nil, s.fileErr
+	}
+	return s.fileDocs, nil
+}
+
+func (s *stubReader) ReadFromURL(_ string) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (s *stubReader) Name() string {
+	return "stub"
+}
+
+func (s *stubReader) SupportedExtensions() []string {
+	return []string{".txt", ".go"}
+}
+
+type stubDirectoryReader struct {
+	*stubReader
+	dirDocs []*document.Document
+	dirErr  error
+}
+
+func (s *stubDirectoryReader) ReadFromDirectory(_ string) ([]*document.Document, error) {
+	if s.dirErr != nil {
+		return nil, s.dirErr
+	}
+	return s.dirDocs, nil
 }
 
 type noopTransformer struct{}

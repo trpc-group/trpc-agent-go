@@ -9,7 +9,11 @@
 
 package codeast
 
-import "testing"
+import (
+	"path/filepath"
+	"reflect"
+	"testing"
+)
 
 func TestNodeToDocumentPayload(t *testing.T) {
 	node := &Node{
@@ -27,7 +31,7 @@ func TestNodeToDocumentPayload(t *testing.T) {
 		LineEnd:    12,
 		ChunkIndex: 3,
 		Package:    "example.com/demo",
-		Metadata: map[string]any{},
+		Metadata:   map[string]any{},
 	}
 
 	payload := NodeToDocumentPayload(node, NodeDocumentPayloadOptions{
@@ -57,6 +61,109 @@ func TestNodeToDocumentPayload(t *testing.T) {
 	}
 	if payload.EmbeddingText != "demo.Service.Do" {
 		t.Fatalf("unexpected embedding text: %s", payload.EmbeddingText)
+	}
+}
+
+func TestNodesToDocumentPayloads(t *testing.T) {
+	result := &Result{
+		Nodes: []*Node{
+			nil,
+			{
+				Name:     "A",
+				Type:     EntityFunction,
+				Code:     "func A() {}",
+				Language: LanguageGo,
+				Scope:    ScopeCode,
+			},
+			{
+				Name:     "B",
+				Type:     EntityMethod,
+				Code:     "func (s *S) B() {}",
+				Language: LanguageGo,
+				Scope:    ScopeCode,
+			},
+		},
+	}
+
+	payloads := NodesToDocumentPayloads(result, NodeDocumentPayloadOptions{})
+	if len(payloads) != 2 {
+		t.Fatalf("expected 2 payloads, got %d", len(payloads))
+	}
+	if payloads[0].Name != "A" || payloads[1].Name != "B" {
+		t.Fatalf("unexpected payload order: %q, %q", payloads[0].Name, payloads[1].Name)
+	}
+}
+
+func TestNodeToDocumentPayloadOptionalBranches(t *testing.T) {
+	node := &Node{
+		Name:       "Do",
+		Type:       EntityMethod,
+		FullName:   "demo.Service.Do",
+		Scope:      ScopeCode,
+		Language:   LanguageGo,
+		Comment:    "  comment with spaces  \n",
+		Code:       "func (s *Service) Do() {}",
+		ChunkIndex: 2,
+		Metadata: map[string]any{
+			"receiver_type": "Service",
+		},
+	}
+	payload := NodeToDocumentPayload(node, NodeDocumentPayloadOptions{
+		BaseMetadata: map[string]any{"source": "unit"},
+		FileInfo: &FileInfo{
+			Imports: []string{"context", "fmt"},
+		},
+	})
+	if payload == nil {
+		t.Fatal("expected payload")
+	}
+	if payload.Metadata[TrpcAstMetaPrefix+"type"] != "Method" {
+		t.Fatalf("unexpected type metadata: %v", payload.Metadata[TrpcAstMetaPrefix+"type"])
+	}
+	if payload.Metadata[TrpcAstMetaPrefix+"comment"] != "comment with spaces" {
+		t.Fatalf("unexpected trimmed comment: %v", payload.Metadata[TrpcAstMetaPrefix+"comment"])
+	}
+	imports, ok := payload.Metadata[TrpcAstMetaPrefix+"imports"].([]string)
+	if !ok {
+		t.Fatalf("imports metadata type mismatch: %T", payload.Metadata[TrpcAstMetaPrefix+"imports"])
+	}
+	if !reflect.DeepEqual(imports, []string{"context", "fmt"}) {
+		t.Fatalf("unexpected imports metadata: %v", imports)
+	}
+	if payload.Metadata[TrpcAstMetaPrefix+"import_count"] != 2 {
+		t.Fatalf("unexpected import count: %v", payload.Metadata[TrpcAstMetaPrefix+"import_count"])
+	}
+	if payload.Metadata[TrpcAstMetaPrefix+"receiver_type"] != "Service" {
+		t.Fatalf("missing prefixed node metadata: %v", payload.Metadata[TrpcAstMetaPrefix+"receiver_type"])
+	}
+}
+
+func TestIsExamplePath(t *testing.T) {
+	repoRoot := filepath.Join("workspace", "repo")
+
+	if !IsExamplePath(filepath.Join(repoRoot, "examples", "demo", "main.go"), repoRoot) {
+		t.Fatal("expected examples path to be detected")
+	}
+	if !IsExamplePath(filepath.Join(repoRoot, "Example", "demo.go"), repoRoot) {
+		t.Fatal("expected case-insensitive example path to be detected")
+	}
+	if IsExamplePath(filepath.Join(repoRoot, "internal", "service.go"), repoRoot) {
+		t.Fatal("non-example path should not be detected as example")
+	}
+}
+
+func TestSplitPath(t *testing.T) {
+	parts := splitPath(filepath.Join("a", "b", "c.go"))
+	if !reflect.DeepEqual(parts, []string{"a", "b", "c.go"}) {
+		t.Fatalf("unexpected split parts: %v", parts)
+	}
+
+	if parts := splitPath(filepath.Join("a", "b", "")); !reflect.DeepEqual(parts, []string{"a", "b"}) {
+		t.Fatalf("unexpected split parts for dir path: %v", parts)
+	}
+
+	if got := splitPath(""); len(got) != 0 {
+		t.Fatalf("expected empty parts for empty path, got %v", got)
 	}
 }
 
