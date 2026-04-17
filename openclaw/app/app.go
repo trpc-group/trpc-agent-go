@@ -847,9 +847,10 @@ func NewRuntime(
 			StateDir:            resolvedStateDir,
 			MemoryFileStore:     fileMemoryStore,
 
-			EnableLocalExec:     opts.EnableLocalExec,
-			EnableOpenClawTools: opts.EnableOpenClawTools,
-			EnableParallelTools: opts.EnableParallelTools,
+			EnableLocalExec:      opts.EnableLocalExec,
+			EnableOpenClawTools:  opts.EnableOpenClawTools,
+			OpenClawToolingGuide: opts.OpenClawToolingGuide,
+			EnableParallelTools:  opts.EnableParallelTools,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -2081,9 +2082,11 @@ func newAgent(
 		instruction = defaultAgentInstruction
 	}
 	if cfg.EnableOpenClawTools {
-		instruction = strings.TrimSpace(
-			instruction + "\n\n" + buildOpenClawToolingGuidance(cfg),
-		)
+		if guidance := buildOpenClawToolingGuidance(cfg); strings.TrimSpace(guidance) != "" {
+			instruction = strings.TrimSpace(
+				instruction + "\n\n" + guidance,
+			)
+		}
 	}
 	knowledgeTools, err := buildKnowledgeTools(cfg.KnowledgesConfig)
 	if err != nil {
@@ -2202,7 +2205,9 @@ func newAgent(
 }
 
 func buildOpenClawToolingGuidance(cfg agentConfig) string {
-	_ = cfg
+	if cfg.OpenClawToolingGuide != nil {
+		return strings.TrimSpace(*cfg.OpenClawToolingGuide)
+	}
 	return strings.TrimSpace(openClawToolingGuidance)
 }
 
@@ -2406,8 +2411,9 @@ type agentConfig struct {
 
 	EnableLocalExec bool
 
-	EnableOpenClawTools bool
-	EnableParallelTools bool
+	EnableOpenClawTools  bool
+	OpenClawToolingGuide *string
+	EnableParallelTools  bool
 
 	ToolProviders []pluginSpec
 

@@ -630,6 +630,7 @@ skills:
 tools:
   enable_local_exec: true
   enable_openclaw_tools: true
+  openclaw_tooling_guidance: ""
   enable_parallel_tools: true
   refresh_toolsets_on_run: true
   providers:
@@ -785,6 +786,8 @@ memory:
 
 	require.True(t, opts.EnableLocalExec)
 	require.True(t, opts.EnableOpenClawTools)
+	require.NotNil(t, opts.OpenClawToolingGuide)
+	require.Equal(t, "", *opts.OpenClawToolingGuide)
 	require.True(t, opts.EnableParallelTools)
 	require.True(t, opts.RefreshToolSetsOnRun)
 

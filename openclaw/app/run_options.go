@@ -233,9 +233,10 @@ type runOptions struct {
 	SessionSummaryMaxWords            int
 	SessionSummaryApproxRunesPerToken float64
 
-	EnableLocalExec     bool
-	EnableOpenClawTools bool
-	EnableParallelTools bool
+	EnableLocalExec      bool
+	EnableOpenClawTools  bool
+	OpenClawToolingGuide *string
+	EnableParallelTools  bool
 
 	enableOpenClawToolsExplicit bool
 
@@ -1082,10 +1083,12 @@ type skillEntryConfig struct {
 }
 
 type toolsConfig struct {
-	EnableLocalExec      *bool `yaml:"enable_local_exec,omitempty"`
-	EnableOpenClawTools  *bool `yaml:"enable_openclaw_tools,omitempty"`
-	EnableParallelTools  *bool `yaml:"enable_parallel_tools,omitempty"`
-	RefreshToolSetsOnRun *bool `yaml:"refresh_toolsets_on_run,omitempty"`
+	EnableLocalExec           *bool   `yaml:"enable_local_exec,omitempty"`
+	EnableOpenClawTools       *bool   `yaml:"enable_openclaw_tools,omitempty"`
+	OpenClawToolingGuide      *string `yaml:"openclaw_tooling_guidance,omitempty"`
+	OpenClawToolingGuideCamel *string `yaml:"openClawToolingGuidance,omitempty"`
+	EnableParallelTools       *bool   `yaml:"enable_parallel_tools,omitempty"`
+	RefreshToolSetsOnRun      *bool   `yaml:"refresh_toolsets_on_run,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -1607,6 +1610,10 @@ func (cfg *fileConfig) apply(
 					*cfg.Tools.EnableOpenClawTools
 			}
 		}
+		opts.OpenClawToolingGuide = firstStringPtr(
+			cfg.Tools.OpenClawToolingGuide,
+			cfg.Tools.OpenClawToolingGuideCamel,
+		)
 		if cfg.Tools.EnableParallelTools != nil &&
 			!flagWasSet(set, flagEnableParallelTools) {
 			opts.EnableParallelTools = *cfg.Tools.EnableParallelTools

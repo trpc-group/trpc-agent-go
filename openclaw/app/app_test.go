@@ -1498,6 +1498,69 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 	)
 }
 
+func TestNewAgent_OpenClawToolingGuidance_OverrideApplied(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	guide := "Use internal runtime guidance only."
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:              "demo",
+		SkillsRoot:           root,
+		StateDir:             t.TempDir(),
+		EnableOpenClawTools:  true,
+		OpenClawToolingGuide: &guide,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	content := joinAllMessageContent(req)
+	require.Contains(t, content, guide)
+	require.NotContains(
+		t,
+		content,
+		strings.TrimSpace(openClawToolingGuidance),
+	)
+}
+
+func TestNewAgent_OpenClawToolingGuidance_EmptyDisables(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	guide := ""
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:              "demo",
+		SkillsRoot:           root,
+		StateDir:             t.TempDir(),
+		EnableOpenClawTools:  true,
+		OpenClawToolingGuide: &guide,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	content := joinAllMessageContent(req)
+	require.NotContains(
+		t,
+		content,
+		strings.TrimSpace(openClawToolingGuidance),
+	)
+}
+
 func TestNewAgent_DefaultGenerationConfigStreams(t *testing.T) {
 	t.Parallel()
 

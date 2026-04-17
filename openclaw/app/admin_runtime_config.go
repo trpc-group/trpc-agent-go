@@ -505,6 +505,27 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 						return strconv.FormatBool(opts.EnableOpenClawTools)
 					},
 				),
+				adminRuntimeTextField(
+					"tools.openclaw_tooling_guidance",
+					"OpenClaw Tooling Guidance",
+					"Override or disable the built-in OpenClaw tooling guidance. Leave unset to use the built-in default, or set an empty string to disable injection.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"openclaw_tooling_guidance",
+							"openClawToolingGuidance",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.OpenClawToolingGuide != nil {
+							return *opts.OpenClawToolingGuide
+						}
+						return strings.TrimSpace(
+							openClawToolingGuidance,
+						)
+					},
+				),
 				adminRuntimeBoolField(
 					"tools.enable_parallel_tools",
 					"Enable Parallel Tools",

@@ -812,3 +812,37 @@ func TestBuildAdminOptions_ExposesSkillsToolProfileField(
 		field.Options[1].Value,
 	)
 }
+
+func TestBuildAdminOptions_ExposesOpenClawToolingGuidanceField(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		"tools:\n  openclaw_tooling_guidance: \"\"\n",
+	)
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	guide := ""
+	opts.OpenClawToolingGuide = &guide
+
+	provider, ok := buildAdminRuntimeConfigProvider(
+		opts,
+	).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	field := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.openclaw_tooling_guidance",
+	)
+	require.Equal(t, "", field.RuntimeValue)
+	require.Equal(t, "", field.ConfiguredValue)
+	require.Equal(
+		t,
+		adminRuntimeConfigInputText,
+		field.InputType,
+	)
+}

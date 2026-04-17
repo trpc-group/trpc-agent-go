@@ -279,6 +279,9 @@ tools:
   # When enabled and the model returns multiple tool calls in one step,
   # OpenClaw executes them concurrently.
   enable_parallel_tools: true
+  # Optional: override the built-in OpenClaw tooling guidance prompt.
+  # Leave unset to use the built-in default, or set to "" to disable it.
+  openclaw_tooling_guidance: ""
   providers:
     - type: "browser"
       name: "browser-runtime"

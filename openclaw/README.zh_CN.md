@@ -268,6 +268,9 @@ tools:
   # 启用后，当模型在一个步骤中返回多个 tool call 时，
   # OpenClaw 会并发执行它们。
   enable_parallel_tools: true
+  # 可选：覆盖内置的 OpenClaw tooling guidance 提示词。
+  # 不设置时使用内置默认值，设为 "" 可禁用它。
+  openclaw_tooling_guidance: ""
   providers:
     - type: "browser"
       name: "browser-runtime"
