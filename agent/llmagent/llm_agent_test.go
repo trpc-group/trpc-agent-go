@@ -378,6 +378,32 @@ func TestBuildRequestProcessors_PreserveSameBranchWiring(t *testing.T) {
 	require.False(t, crp.PreserveSameBranch)
 }
 
+func TestBuildRequestProcessors_PreserveForeignMessagesWiring(t *testing.T) {
+	optsTrue := &Options{}
+	WithPreserveForeignMessages(true)(optsTrue)
+	procs := buildRequestProcessors("tester", optsTrue)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.True(t, crp.PreserveForeignMessages)
+
+	optsFalse := &Options{}
+	WithPreserveForeignMessages(false)(optsFalse)
+	procs = buildRequestProcessors("tester", optsFalse)
+	crp = nil
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.False(t, crp.PreserveForeignMessages)
+}
+
 func TestBuildRequestProcessors_PreloadSessionRecallWiring(t *testing.T) {
 	opts := &Options{}
 	WithPreloadSessionRecall(4)(opts)
