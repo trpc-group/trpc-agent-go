@@ -7,8 +7,9 @@
 //
 //
 
-// Package memoryutils provides identity helpers for memory records: stable IDs,
-// kind normalization, and participant metadata used by persistence backends.
+// Package memoryutils provides identity and mutation helpers for memory records:
+// stable IDs, kind normalization, participant metadata, and ApplyMetadata-style
+// entry updates shared with built-in persistence backends.
 package memoryutils
 
 import (
@@ -38,7 +39,6 @@ func EffectiveKind(mem *memory.Memory) memory.Kind {
 // for memory identity and normalization.
 func MetadataIdentityParticipants(mem *memory.Memory) []string {
 	return imemory.MetadataIdentityParticipants(mem)
-
 }
 
 // NormalizeMemory canonicalizes memory metadata for runtime use and new writes.
