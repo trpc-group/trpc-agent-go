@@ -79,7 +79,7 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 	threadID := input.threadID
 	runID := input.runID
 	// Emit a RUN_STARTED event to anchor the synthetic run.
-	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input) {
+	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input, true) {
 		return
 	}
 
@@ -95,18 +95,18 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 		)
 		if messagesSnapshotEvent == nil {
 			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("load history: %v", err),
-				aguievents.WithRunID(runID)), input)
+				aguievents.WithRunID(runID)), input, true)
 			return
 		}
 	}
 	// In order to fetch the history messages as much as possible, still emit the messages even if there is an error.
 	// Emit a MESSAGES_SNAPSHOT event to send the snapshot payload.
-	if !r.emitEvent(ctx, events, messagesSnapshotEvent, input) {
+	if !r.emitEvent(ctx, events, messagesSnapshotEvent, input, true) {
 		return
 	}
 	if err != nil {
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("load history: %v", err),
-			aguievents.WithRunID(runID)), input)
+			aguievents.WithRunID(runID)), input, true)
 		return
 	}
 
@@ -115,7 +115,7 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 		return
 	}
 	// Emit a RUN_FINISHED event to signal downstream consumers there is no more data.
-	if !r.emitEvent(ctx, events, aguievents.NewRunFinishedEvent(threadID, runID), input) {
+	if !r.emitEvent(ctx, events, aguievents.NewRunFinishedEvent(threadID, runID), input, true) {
 		return
 	}
 }
@@ -145,7 +145,7 @@ func (r *runner) messagesSnapshotFollow(
 	pollInterval := r.flushInterval
 	if pollInterval <= 0 {
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("messages snapshot follow requires a positive flush interval",
-			aguievents.WithRunID(input.runID)), input)
+			aguievents.WithRunID(input.runID)), input, true)
 		return
 	}
 	maxDuration := r.messagesSnapshotFollowMaxDuration
@@ -167,7 +167,7 @@ func (r *runner) messagesSnapshotFollow(
 			return
 		case <-timeout:
 			r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("messages snapshot follow timeout",
-				aguievents.WithRunID(input.runID)), input)
+				aguievents.WithRunID(input.runID)), input, true)
 			return
 		case <-ticker.C:
 			if !r.handleMessagesSnapshotFollowTick(ctx, input, events, &cursorTime) {
@@ -186,7 +186,7 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 	trackEvents, err := r.tracker.GetEvents(ctx, input.key, session.WithEventTime(*cursorTime))
 	if err != nil {
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("follow track events: %v", err),
-			aguievents.WithRunID(input.runID)), input)
+			aguievents.WithRunID(input.runID)), input, true)
 		return false
 	}
 	if trackEvents == nil || len(trackEvents.Events) == 0 {
@@ -209,13 +209,13 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 		if terminal {
 			if terminalErr != "" {
 				r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(terminalErr,
-					aguievents.WithRunID(input.runID)), input)
+					aguievents.WithRunID(input.runID)), input, true)
 				return false
 			}
-			r.emitEvent(ctx, events, aguievents.NewRunFinishedEvent(input.threadID, input.runID), input)
+			r.emitEvent(ctx, events, aguievents.NewRunFinishedEvent(input.threadID, input.runID), input, true)
 			return false
 		}
-		if !r.emitEvent(ctx, events, evt, input) {
+		if !r.emitEvent(ctx, events, evt, input, true) {
 			return false
 		}
 	}
