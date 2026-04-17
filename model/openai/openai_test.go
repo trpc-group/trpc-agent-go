@@ -721,6 +721,119 @@ func TestModel_convertMessages_ReasoningContent(t *testing.T) {
 		assert.False(t, ok, "reasoning_content should NOT be present when empty")
 	})
 
+	t.Run("assistant tool call backfills empty reasoning_content",
+		func(t *testing.T) {
+			msgs := []model.Message{
+				{
+					Role:    model.RoleAssistant,
+					Content: "Calling a tool.",
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-backfill",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "calculator",
+								Arguments: []byte(`{"expression":"2+2"}`),
+							},
+						},
+					},
+				},
+			}
+
+			converted := New(
+				"dummy-model",
+				WithReasoningContentBackfill(true),
+			).convertMessages(msgs)
+			require.Len(t, converted, 1)
+			require.NotNil(t, converted[0].OfAssistant)
+
+			data, err := json.Marshal(converted[0].OfAssistant)
+			require.NoError(t, err)
+
+			var parsed map[string]any
+			err = json.Unmarshal(data, &parsed)
+			require.NoError(t, err)
+
+			reasoningValue, ok := parsed[model.ReasoningContentKey]
+			require.True(
+				t,
+				ok,
+				"reasoning_content should be present when backfill "+
+					"is enabled",
+			)
+			assert.Equal(t, "", reasoningValue)
+		})
+
+	t.Run("assistant tool call is not backfilled by default",
+		func(t *testing.T) {
+			msgs := []model.Message{
+				{
+					Role:    model.RoleAssistant,
+					Content: "Calling a tool.",
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   "call-default-off",
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      "calculator",
+								Arguments: []byte(`{"expression":"2+2"}`),
+							},
+						},
+					},
+				},
+			}
+
+			converted := New("dummy-model").convertMessages(msgs)
+			require.Len(t, converted, 1)
+			require.NotNil(t, converted[0].OfAssistant)
+
+			data, err := json.Marshal(converted[0].OfAssistant)
+			require.NoError(t, err)
+
+			var parsed map[string]any
+			err = json.Unmarshal(data, &parsed)
+			require.NoError(t, err)
+
+			_, ok := parsed[model.ReasoningContentKey]
+			assert.False(
+				t,
+				ok,
+				"reasoning_content should stay absent when backfill "+
+					"is disabled",
+			)
+		})
+
+	t.Run("assistant message without tool calls is not backfilled",
+		func(t *testing.T) {
+			msgs := []model.Message{
+				{
+					Role:    model.RoleAssistant,
+					Content: "Simple response without tool calls.",
+				},
+			}
+
+			converted := New(
+				"dummy-model",
+				WithReasoningContentBackfill(true),
+			).convertMessages(msgs)
+			require.Len(t, converted, 1)
+			require.NotNil(t, converted[0].OfAssistant)
+
+			data, err := json.Marshal(converted[0].OfAssistant)
+			require.NoError(t, err)
+
+			var parsed map[string]any
+			err = json.Unmarshal(data, &parsed)
+			require.NoError(t, err)
+
+			_, ok := parsed[model.ReasoningContentKey]
+			assert.False(
+				t,
+				ok,
+				"reasoning_content should stay absent without tool calls",
+			)
+		})
+
 	t.Run("assistant message with tool calls and reasoning_content", func(t *testing.T) {
 		msgs := []model.Message{
 			{

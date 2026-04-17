@@ -112,8 +112,13 @@ type options struct {
 	// chunks from the provider will be forwarded via
 	// Response.Choices[].Delta.ToolCalls instead of being
 	// suppressed until the final aggregated response.
-	ShowToolCallDelta    bool
-	accumulateChunkUsage AccumulateChunkUsage
+	ShowToolCallDelta bool
+	// ReasoningContentBackfill controls whether assistant
+	// tool-call messages should replay an empty
+	// reasoning_content field when the message has no
+	// reasoning text.
+	ReasoningContentBackfill bool
+	accumulateChunkUsage     AccumulateChunkUsage
 	// OptimizeForCache controls whether to optimize message structure for prompt caching.
 	// When enabled, system messages will be moved to the front to improve cache hit rates.
 	// OpenAI's prompt caching is automatic and doesn't require explicit cache control,
@@ -214,6 +219,15 @@ func WithChatChunkCallback(fn ChatChunkCallbackFunc) Option {
 func WithChatStreamCompleteCallback(fn ChatStreamCompleteCallbackFunc) Option {
 	return func(opts *options) {
 		opts.ChatStreamCompleteCallback = fn
+	}
+}
+
+// WithReasoningContentBackfill enables replay-time
+// reasoning_content backfill for assistant tool-call
+// messages that have no reasoning text.
+func WithReasoningContentBackfill(enabled bool) Option {
+	return func(opts *options) {
+		opts.ReasoningContentBackfill = enabled
 	}
 }
 
