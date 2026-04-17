@@ -646,8 +646,8 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 
 	// MaxTokens is deprecated and not compatible with o-series models.
 	// Use MaxCompletionTokens instead.
-	if request.MaxTokens != nil {
-		chatRequest.MaxCompletionTokens = openai.Int(int64(*request.MaxTokens))
+	if mt := model.SanitizeMaxTokensPtr(request.MaxTokens); mt != nil {
+		chatRequest.MaxCompletionTokens = openai.Int(int64(*mt))
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = openai.Float(*request.Temperature)

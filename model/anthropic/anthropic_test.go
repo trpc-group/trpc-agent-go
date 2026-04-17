@@ -1895,8 +1895,7 @@ func TestWithEnableTokenTailoring_ErrorInCountTokens(t *testing.T) {
 	require.NotNil(t, captured, "expected request callback to capture request")
 	// Tailoring succeeds but token counting fails, messages should be tailored.
 	require.Len(t, captured.Messages, 1, "expected tailored messages even when token counting fails, got %d", len(captured.Messages))
-	// MaxTokens should not be set when token counting fails.
-	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to be 0 when token counting fails")
+	require.Equal(t, int64(4096), captured.MaxTokens, "expected default MaxTokens when user did not set GenerationConfig.MaxTokens")
 }
 
 // zeroTokenCounter always returns 0 for testing edge cases.
@@ -1943,8 +1942,7 @@ func TestWithEnableTokenTailoring_RemainingTokensNegative(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// MaxTokens should not be auto-set by token tailoring.
-	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to remain unset")
+	require.Equal(t, int64(4096), captured.MaxTokens, "expected default MaxTokens when user did not set GenerationConfig.MaxTokens")
 }
 
 // TestWithEnableTokenTailoring_AutoSetMaxTokens tests automatic MaxTokens setting.
@@ -1973,8 +1971,7 @@ func TestWithEnableTokenTailoring_AutoSetMaxTokens(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// MaxTokens should stay unset when not specified by user.
-	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to remain unset")
+	require.Equal(t, int64(4096), captured.MaxTokens, "expected default MaxTokens when user did not set GenerationConfig.MaxTokens")
 }
 
 // TestWithEnableTokenTailoring_UserSpecifiedMaxTokens tests user-specified MaxTokens is preserved.

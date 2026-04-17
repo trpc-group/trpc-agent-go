@@ -22,7 +22,7 @@ func (m *Model) convertRequest(req *model.Request) (*ChatCompletionRequest, erro
 	hfReq := &ChatCompletionRequest{
 		Model:            m.name,
 		Messages:         make([]ChatMessage, 0, len(req.Messages)),
-		MaxTokens:        req.MaxTokens,
+		MaxTokens:        model.SanitizeMaxTokensPtr(req.MaxTokens),
 		Temperature:      req.Temperature,
 		TopP:             req.TopP,
 		Stream:           req.Stream,
