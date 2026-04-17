@@ -2617,7 +2617,7 @@ func TestEmitEventStopsWhenContextDone(t *testing.T) {
 	r := &runner{}
 	events := make(chan aguievents.Event)
 	input := &runInput{threadID: "thread", runID: "run"}
-	ok := r.emitEvent(ctx, events, aguievents.NewRunStartedEvent("thread", "run"), input, nil)
+	ok := r.emitEvent(ctx, events, aguievents.NewRunStartedEvent("thread", "run"), input)
 	assert.False(t, ok)
 }
 
@@ -2633,7 +2633,7 @@ func TestEmitEventStopsWhenAfterTranslateFailsAndContextDone(t *testing.T) {
 	}
 	events := make(chan aguievents.Event)
 	input := &runInput{threadID: "thread", runID: "run"}
-	ok := r.emitEvent(ctx, events, aguievents.NewRunStartedEvent("thread", "run"), input, nil)
+	ok := r.emitEvent(ctx, events, aguievents.NewRunStartedEvent("thread", "run"), input)
 	assert.False(t, ok)
 }
 
@@ -2659,7 +2659,7 @@ func TestEmitEventLogsAtTraceLevel(t *testing.T) {
 	r := &runner{}
 	events := make(chan aguievents.Event, 1)
 	input := &runInput{threadID: "thread", runID: "run"}
-	ok := r.emitEvent(context.Background(), events, aguievents.NewRunStartedEvent("thread", "run"), input, nil)
+	ok := r.emitEvent(context.Background(), events, aguievents.NewRunStartedEvent("thread", "run"), input)
 	assert.True(t, ok)
 	assert.Equal(t, 1, traceCalls)
 	assert.Zero(t, debugCalls)
@@ -2677,133 +2677,4 @@ func TestHandleAgentEventStopsWhenEmitCanceled(t *testing.T) {
 	}
 	ok := r.handleAgentEvent(ctx, events, input, agentevent.New("inv", "assistant"))
 	assert.False(t, ok)
-}
-
-func TestHandleAgentEventPartialToolResultSkipsTrackButKeepsFinalResult(t *testing.T) {
-	tracker := &recordingTracker{}
-	fakeTrans := &fakeTranslator{events: [][]aguievents.Event{
-		{aguievents.NewToolCallResultEvent("tool-msg-partial", "call-1", "partial")},
-		{aguievents.NewToolCallResultEvent("tool-msg-final", "call-1", "final")},
-	}}
-	r := &runner{tracker: tracker}
-	events := make(chan aguievents.Event, 2)
-	input := &runInput{
-		key:         session.Key{AppName: "app", UserID: "user", SessionID: "thread"},
-		threadID:    "thread",
-		runID:       "run",
-		translator:  fakeTrans,
-		enableTrack: true,
-	}
-	ok := r.handleAgentEvent(context.Background(), events, input, &agentevent.Event{
-		Response: &model.Response{IsPartial: true},
-	})
-	require.True(t, ok)
-	ok = r.handleAgentEvent(context.Background(), events, input, &agentevent.Event{
-		Response: &model.Response{},
-	})
-	require.True(t, ok)
-	close(events)
-	out := collectEvents(t, events)
-	require.Len(t, out, 2)
-	first, ok := out[0].(*aguievents.ToolCallResultEvent)
-	require.True(t, ok)
-	assert.Equal(t, "tool-msg-partial", first.MessageID)
-	assert.Equal(t, "partial", first.Content)
-	second, ok := out[1].(*aguievents.ToolCallResultEvent)
-	require.True(t, ok)
-	assert.Equal(t, "tool-msg-final", second.MessageID)
-	assert.Equal(t, "final", second.Content)
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	require.Len(t, tracker.events, 1)
-	tracked, ok := tracker.events[0].(*aguievents.ToolCallResultEvent)
-	require.True(t, ok)
-	assert.Equal(t, "tool-msg-final", tracked.MessageID)
-	assert.Equal(t, "call-1", tracked.ToolCallID)
-	assert.Equal(t, "final", tracked.Content)
-}
-
-func TestHandleAgentEventPartialToolResultTracksAfterTranslateRewrite(t *testing.T) {
-	tracker := &recordingTracker{}
-	fakeTrans := &fakeTranslator{events: [][]aguievents.Event{
-		{aguievents.NewToolCallResultEvent("tool-msg-partial", "call-1", "partial")},
-	}}
-	callbacks := translator.NewCallbacks().RegisterAfterTranslate(
-		func(context.Context, aguievents.Event) (aguievents.Event, error) {
-			return aguievents.NewActivityDeltaEvent(
-				"activity-1",
-				"graph.node.lifecycle",
-				[]aguievents.JSONPatchOperation{{
-					Op:    "add",
-					Path:  "/status",
-					Value: "streaming",
-				}},
-			), nil
-		},
-	)
-	r := &runner{tracker: tracker, translateCallbacks: callbacks}
-	events := make(chan aguievents.Event, 1)
-	input := &runInput{
-		key:         session.Key{AppName: "app", UserID: "user", SessionID: "thread"},
-		threadID:    "thread",
-		runID:       "run",
-		translator:  fakeTrans,
-		enableTrack: true,
-	}
-	ok := r.handleAgentEvent(context.Background(), events, input, &agentevent.Event{
-		Response: &model.Response{IsPartial: true},
-	})
-	require.True(t, ok)
-	close(events)
-	out := collectEvents(t, events)
-	require.Len(t, out, 1)
-	emitted, ok := out[0].(*aguievents.ActivityDeltaEvent)
-	require.True(t, ok)
-	assert.Equal(t, "activity-1", emitted.MessageID)
-	assert.Equal(t, "graph.node.lifecycle", emitted.ActivityType)
-	require.Len(t, emitted.Patch, 1)
-	assert.Equal(t, "streaming", emitted.Patch[0].Value)
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	require.Len(t, tracker.events, 1)
-	tracked, ok := tracker.events[0].(*aguievents.ActivityDeltaEvent)
-	require.True(t, ok)
-	assert.Equal(t, "activity-1", tracked.MessageID)
-	assert.Equal(t, "graph.node.lifecycle", tracked.ActivityType)
-	require.Len(t, tracked.Patch, 1)
-	assert.Equal(t, "streaming", tracked.Patch[0].Value)
-}
-
-func TestHandleAgentEventPartialNonToolResultStillTracks(t *testing.T) {
-	tracker := &recordingTracker{}
-	fakeTrans := &fakeTranslator{events: [][]aguievents.Event{
-		{aguievents.NewTextMessageContentEvent("assistant-msg-1", "partial text")},
-	}}
-	r := &runner{tracker: tracker}
-	events := make(chan aguievents.Event, 1)
-	input := &runInput{
-		key:         session.Key{AppName: "app", UserID: "user", SessionID: "thread"},
-		threadID:    "thread",
-		runID:       "run",
-		translator:  fakeTrans,
-		enableTrack: true,
-	}
-	ok := r.handleAgentEvent(context.Background(), events, input, &agentevent.Event{
-		Response: &model.Response{IsPartial: true},
-	})
-	require.True(t, ok)
-	close(events)
-	out := collectEvents(t, events)
-	require.Len(t, out, 1)
-	emitted, ok := out[0].(*aguievents.TextMessageContentEvent)
-	require.True(t, ok)
-	assert.Equal(t, "assistant-msg-1", emitted.MessageID)
-	assert.Equal(t, "partial text", emitted.Delta)
-	tracker.mu.Lock()
-	defer tracker.mu.Unlock()
-	require.Len(t, tracker.events, 1)
-	tracked, ok := tracker.events[0].(*aguievents.TextMessageContentEvent)
-	require.True(t, ok)
-	assert.Equal(t, "assistant-msg-1", tracked.MessageID)
-	assert.Equal(t, "partial text", tracked.Delta)
 }
