@@ -197,11 +197,76 @@ func (m *Model) generateBatchJSONL(requests []*BatchRequestInput) ([]byte, error
 		if r.Body.Model == "" {
 			r.Body.Model = m.name
 		}
-		if err := enc.Encode(r); err != nil {
+		payload := m.batchRequestPayload(r)
+		if err := enc.Encode(payload); err != nil {
 			return nil, fmt.Errorf("failed to encode jsonl line: %w", err)
 		}
 	}
 	return buf.Bytes(), nil
+}
+
+func (m *Model) batchRequestPayload(
+	r *BatchRequestInput,
+) batchRequestPayload {
+	messages := make([]batchMessagePayload, len(r.Body.Messages))
+	for i, msg := range r.Body.Messages {
+		messages[i] = m.newBatchMessagePayload(msg)
+	}
+
+	return batchRequestPayload{
+		CustomID: r.CustomID,
+		Method:   r.Method,
+		URL:      r.URL,
+		Body: batchRequestBodyPayload{
+			Messages:         messages,
+			GenerationConfig: r.Body.GenerationConfig,
+			StructuredOutput: r.Body.StructuredOutput,
+			Model:            r.Body.Model,
+		},
+	}
+}
+
+func (m *Model) newBatchMessagePayload(
+	msg model.Message,
+) batchMessagePayload {
+	payload := batchMessagePayload{
+		Role:         msg.Role,
+		Content:      msg.Content,
+		ContentParts: msg.ContentParts,
+		ToolID:       msg.ToolID,
+		ToolName:     msg.ToolName,
+		ToolCalls:    msg.ToolCalls,
+	}
+	if msg.ReasoningContent != "" ||
+		m.shouldBackfillReasoningContent(msg) {
+		reasoningContent := msg.ReasoningContent
+		payload.ReasoningContent = &reasoningContent
+	}
+	return payload
+}
+
+type batchRequestPayload struct {
+	CustomID string                  `json:"custom_id"`
+	Method   string                  `json:"method"`
+	URL      string                  `json:"url"`
+	Body     batchRequestBodyPayload `json:"body"`
+}
+
+type batchRequestBodyPayload struct {
+	Messages         []batchMessagePayload   `json:"messages"`
+	GenerationConfig model.GenerationConfig  `json:"generation_config,omitempty"`
+	StructuredOutput *model.StructuredOutput `json:"structured_output,omitempty"`
+	Model            string                  `json:"model"`
+}
+
+type batchMessagePayload struct {
+	Role             model.Role          `json:"role"`
+	Content          string              `json:"content,omitempty"`
+	ContentParts     []model.ContentPart `json:"content_parts,omitempty"`
+	ToolID           string              `json:"tool_id,omitempty"`
+	ToolName         string              `json:"tool_name,omitempty"`
+	ToolCalls        []model.ToolCall    `json:"tool_calls,omitempty"`
+	ReasoningContent *string             `json:"reasoning_content,omitempty"`
 }
 
 // RetrieveBatch retrieves a batch job by ID.
