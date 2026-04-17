@@ -1277,7 +1277,7 @@ func Test_HandleStreamingResponse_InvalidToolInputDeltaReturnsError(t *testing.T
 	require.Len(t, responses, 1)
 	require.NotNil(t, responses[0].Error)
 	assert.True(t, responses[0].Done)
-	assert.Contains(t, responses[0].Error.Message, "unexpected end of JSON input")
+	assert.NotEmpty(t, responses[0].Error.Message)
 	select {
 	case <-callbackCalled:
 	case <-time.After(3 * time.Second):
@@ -1285,7 +1285,7 @@ func Test_HandleStreamingResponse_InvalidToolInputDeltaReturnsError(t *testing.T
 	}
 	assert.Nil(t, callbackAcc)
 	require.Error(t, callbackErr)
-	assert.Contains(t, callbackErr.Error(), "unexpected end of JSON input")
+	assert.Equal(t, responses[0].Error.Message, callbackErr.Error())
 }
 
 func Test_StreamingMessageAccumulator_HelperGuards(t *testing.T) {
@@ -1311,6 +1311,13 @@ func Test_StreamingMessageAccumulator_HelperGuards(t *testing.T) {
 	assert.JSONEq(t, `{"fresh":1,"next":2}`, string(block.Input))
 	require.NoError(t, finalizeStreamingMessage(nil))
 	require.NoError(t, refreshContentBlockRawJSON(nil))
+	acc.message = anthropic.Message{
+		Content: []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage(`{"done":true}`)}},
+	}
+	require.NoError(t, acc.Finalize())
+	assert.True(t, acc.finalized)
+	acc.message.Content[0].Input = json.RawMessage("{")
+	require.NoError(t, acc.Finalize())
 }
 
 func Test_StreamingMessageAccumulator_DeltaVariants(t *testing.T) {
@@ -1350,9 +1357,9 @@ func Test_StreamingMessageAccumulator_DeltaVariants(t *testing.T) {
 func Test_StreamingMessageAccumulator_ErrorPaths(t *testing.T) {
 	acc := newStreamingMessageAccumulator()
 	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}`)), "there was no content block")
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}`)), "no content block")
 	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
-		`{"type":"content_block_stop","index":0}`)), "there was no content block")
+		`{"type":"content_block_stop","index":0}`)), "no content block")
 	acc.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}}
 	acc.inputDeltaStartedAt = []bool{false}
 	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,

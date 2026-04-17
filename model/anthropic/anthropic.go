@@ -558,6 +558,7 @@ loop:
 type streamingMessageAccumulator struct {
 	message             anthropic.Message
 	inputDeltaStartedAt []bool
+	finalized           bool
 }
 
 func newStreamingMessageAccumulator() *streamingMessageAccumulator {
@@ -579,12 +580,13 @@ func (a *streamingMessageAccumulator) Accumulate(event anthropic.MessageStreamEv
 	case anthropic.MessageStartEvent:
 		a.message = event.Message
 		a.inputDeltaStartedAt = make([]bool, len(a.message.Content))
+		a.finalized = false
 	case anthropic.MessageDeltaEvent:
 		a.message.StopReason = event.Delta.StopReason
 		a.message.StopSequence = event.Delta.StopSequence
 		a.message.Usage.OutputTokens = event.Usage.OutputTokens
 	case anthropic.MessageStopEvent:
-		return finalizeStreamingMessage(&a.message)
+		return a.finalize()
 	case anthropic.ContentBlockStartEvent:
 		var block anthropic.ContentBlockUnion
 		if err := block.UnmarshalJSON([]byte(event.ContentBlock.RawJSON())); err != nil {
@@ -595,7 +597,7 @@ func (a *streamingMessageAccumulator) Accumulate(event anthropic.MessageStreamEv
 	case anthropic.ContentBlockDeltaEvent:
 		block, started, err := a.lastContentBlock()
 		if err != nil {
-			return fmt.Errorf("received event of type %s but there was no content block", event.Type)
+			return fmt.Errorf("received event of type %s but %w", event.Type, err)
 		}
 		switch delta := event.Delta.AsAny().(type) {
 		case anthropic.TextDelta:
@@ -616,7 +618,7 @@ func (a *streamingMessageAccumulator) Accumulate(event anthropic.MessageStreamEv
 	case anthropic.ContentBlockStopEvent:
 		block, _, err := a.lastContentBlock()
 		if err != nil {
-			return fmt.Errorf("received event of type %s but there was no content block", event.Type)
+			return fmt.Errorf("received event of type %s but %w", event.Type, err)
 		}
 		if err := refreshContentBlockRawJSON(block); err != nil {
 			return fmt.Errorf("error converting content block to JSON: %w", err)
@@ -629,7 +631,7 @@ func (a *streamingMessageAccumulator) Finalize() error {
 	if a == nil {
 		return nil
 	}
-	return finalizeStreamingMessage(&a.message)
+	return a.finalize()
 }
 
 func (a *streamingMessageAccumulator) lastContentBlock() (*anthropic.ContentBlockUnion, *bool, error) {
@@ -638,6 +640,17 @@ func (a *streamingMessageAccumulator) lastContentBlock() (*anthropic.ContentBloc
 	}
 	last := len(a.message.Content) - 1
 	return &a.message.Content[last], &a.inputDeltaStartedAt[last], nil
+}
+
+func (a *streamingMessageAccumulator) finalize() error {
+	if a == nil || a.finalized {
+		return nil
+	}
+	if err := finalizeStreamingMessage(&a.message); err != nil {
+		return err
+	}
+	a.finalized = true
+	return nil
 }
 
 func appendInputJSONDelta(block *anthropic.ContentBlockUnion, started *bool, partial string) {
