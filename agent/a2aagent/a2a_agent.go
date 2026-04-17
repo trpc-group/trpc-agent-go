@@ -481,6 +481,7 @@ func (r *A2AAgent) processStreamingEvents(
 					invocation,
 					eventChan,
 					currentResponseID,
+					evt.Timestamp,
 					&contentBuilder,
 				)
 			}
@@ -514,6 +515,7 @@ func (r *A2AAgent) flushBufferedContent(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 	responseID string,
+	anchorTimestamp time.Time,
 	contentBuilder *strings.Builder,
 ) {
 	if contentBuilder == nil || contentBuilder.Len() == 0 {
@@ -523,7 +525,12 @@ func (r *A2AAgent) flushBufferedContent(
 	content := contentBuilder.String()
 	contentBuilder.Reset()
 
-	agent.EmitEvent(ctx, invocation, eventChan, event.New(
+	flushTime := time.Now()
+	if !anchorTimestamp.IsZero() {
+		flushTime = anchorTimestamp.Add(-1 * time.Nanosecond)
+	}
+
+	evt := event.New(
 		invocation.InvocationID,
 		r.name,
 		event.WithResponse(&model.Response{
@@ -531,8 +538,8 @@ func (r *A2AAgent) flushBufferedContent(
 			Object:    model.ObjectTypeChatCompletion,
 			Done:      false,
 			IsPartial: false,
-			Timestamp: time.Now(),
-			Created:   time.Now().Unix(),
+			Timestamp: flushTime,
+			Created:   flushTime.Unix(),
 			Choices: []model.Choice{{
 				Message: model.Message{
 					Role:    model.RoleAssistant,
@@ -540,7 +547,9 @@ func (r *A2AAgent) flushBufferedContent(
 				},
 			}},
 		}),
-	))
+	)
+	evt.Timestamp = flushTime
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
 // aggregateEventContent aggregates content from event delta.
