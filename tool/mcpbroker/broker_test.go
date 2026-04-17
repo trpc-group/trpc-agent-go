@@ -225,6 +225,34 @@ func TestListServers_ReturnsConfiguredServers(t *testing.T) {
 
 	require.Equal(t, "from_code", output.Servers[0].Name)
 	require.Equal(t, "stdio", output.Servers[0].Transport)
+	require.Empty(t, output.Servers[0].Description)
+}
+
+func TestListServers_ReturnsDescription(t *testing.T) {
+	broker := New(
+		WithServers(map[string]legacymcp.ConnectionConfig{
+			"crm": {
+				ServerURL:   "https://crm.example.com/mcp",
+				Description: "CRM tools for customer lookup and order management.",
+			},
+			"code": {
+				Command: "go",
+				Args:    []string{"run", "./server"},
+			},
+		}),
+	)
+
+	output, err := broker.listServers(context.Background(), listServersInput{})
+	require.NoError(t, err)
+	require.Len(t, output.Servers, 2)
+
+	serverByName := make(map[string]listServersServer, len(output.Servers))
+	for _, s := range output.Servers {
+		serverByName[s.Name] = s
+	}
+
+	require.Equal(t, "CRM tools for customer lookup and order management.", serverByName["crm"].Description)
+	require.Empty(t, serverByName["code"].Description)
 }
 
 func TestResolveNamedServers_TrimsNamesAndRejectsCollisions(t *testing.T) {

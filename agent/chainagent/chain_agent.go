@@ -130,18 +130,26 @@ func (a *ChainAgent) executeChainRun(
 	}
 	// Execute sub-agents in sequence.
 	e, tokenUsage := a.executeSubAgents(ctx, invocation, eventChan, tracker)
-	if e != nil && e.Error != nil {
-		trackerErr = fmt.Errorf("%s: %s", e.Error.Type, e.Error.Message)
-		tracker.SetResponseErrorType(e.Error.Type)
-	}
 	// Handle after agent callbacks.
 	if a.agentCallbacks != nil {
 		if afterEvent := a.handleAfterAgentCallbacks(ctx, invocation, eventChan, e); afterEvent != nil {
 			e = afterEvent
 		}
 	}
+	if e != nil && e.Error != nil {
+		trackerErr = fmt.Errorf("%s: %s", e.Error.Type, e.Error.Message)
+		tracker.SetResponseErrorType(
+			itelemetry.FormatResponseErrorLabel(e.Error, model.ErrorTypeFlowError),
+		)
+	}
 	if startedSpan {
-		itelemetry.TraceAfterInvokeAgent(span, e, tokenUsage, tracker.FirstTokenTimeDuration())
+		itelemetry.TraceAfterInvokeAgent(
+			span,
+			e,
+			tokenUsage,
+			tracker.FirstTokenTimeDuration(),
+			model.ErrorTypeFlowError,
+		)
 	}
 }
 

@@ -96,6 +96,56 @@ func NewWorkflowSpanName(workflowName string) string {
 	return OperationWorkflow + " " + workflowName
 }
 
+type telemetryMessage struct {
+	Role             model.Role          `json:"role"`
+	Content          string              `json:"content,omitempty"`
+	ContentParts     []model.ContentPart `json:"content_parts,omitempty"`
+	ToolCallID       string              `json:"tool_call_id,omitempty"`
+	Name             string              `json:"name,omitempty"`
+	ToolCalls        []model.ToolCall    `json:"tool_calls,omitempty"`
+	ReasoningContent string              `json:"reasoning_content,omitempty"`
+}
+
+type telemetryChoice struct {
+	Index        int              `json:"index"`
+	Message      telemetryMessage `json:"message,omitempty"`
+	Delta        telemetryMessage `json:"delta,omitempty"`
+	FinishReason *string          `json:"finish_reason,omitempty"`
+}
+
+func telemetryMessageFromModel(msg model.Message) telemetryMessage {
+	return telemetryMessage{
+		Role:             msg.Role,
+		Content:          msg.Content,
+		ContentParts:     msg.ContentParts,
+		ToolCallID:       msg.ToolID,
+		Name:             msg.ToolName,
+		ToolCalls:        msg.ToolCalls,
+		ReasoningContent: msg.ReasoningContent,
+	}
+}
+
+func marshalTelemetryMessages(messages []model.Message) ([]byte, error) {
+	out := make([]telemetryMessage, len(messages))
+	for i, msg := range messages {
+		out[i] = telemetryMessageFromModel(msg)
+	}
+	return json.Marshal(out)
+}
+
+func marshalTelemetryChoices(choices []model.Choice) ([]byte, error) {
+	out := make([]telemetryChoice, len(choices))
+	for i, choice := range choices {
+		out[i] = telemetryChoice{
+			Index:        choice.Index,
+			Message:      telemetryMessageFromModel(choice.Message),
+			Delta:        telemetryMessageFromModel(choice.Delta),
+			FinishReason: choice.FinishReason,
+		}
+	}
+	return json.Marshal(out)
+}
+
 // TraceWorkflow traces the workflow.
 func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	if !span.IsRecording() {
@@ -172,7 +222,7 @@ func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Dec
 	if rspEvent != nil && rspEvent.Response != nil {
 		if e := rspEvent.Response.Error; e != nil {
 			span.SetStatus(codes.Error, e.Message)
-			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, e.Type), attribute.String(semconvtrace.KeyErrorMessage, e.Message))
+			span.SetAttributes(responseErrorAttributes(e, semconvtrace.ValueDefaultErrorType)...)
 		} else if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, ToErrorType(err, semconvtrace.ValueDefaultErrorType)), attribute.String(semconvtrace.KeyErrorMessage, err.Error()))
@@ -216,7 +266,7 @@ func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
 		}
 		if e := rspEvent.Response.Error; e != nil {
 			span.SetStatus(codes.Error, e.Message)
-			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, e.Type), attribute.String(semconvtrace.KeyErrorMessage, e.Message))
+			span.SetAttributes(responseErrorAttributes(e, semconvtrace.ValueDefaultErrorType)...)
 		}
 		span.SetAttributes(attribute.String(semconvtrace.KeyEventID, rspEvent.ID))
 
@@ -269,7 +319,7 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 				callback(spanContext)
 			}
 		}
-		if bts, err := json.Marshal([]model.Message{invoke.Message}); err == nil {
+		if bts, err := marshalTelemetryMessages([]model.Message{invoke.Message}); err == nil {
 			span.SetAttributes(
 				attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
 			)
@@ -327,7 +377,13 @@ type TokenUsage struct {
 }
 
 // TraceAfterInvokeAgent traces the after invocation of an agent.
-func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *TokenUsage, timeToFirstToken time.Duration) {
+func TraceAfterInvokeAgent(
+	span trace.Span,
+	rspEvent *event.Event,
+	tokenUsage *TokenUsage,
+	timeToFirstToken time.Duration,
+	errorTypeFallback string,
+) {
 	if !span.IsRecording() {
 		return
 	}
@@ -346,7 +402,7 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 		return
 	}
 	if len(rsp.Choices) > 0 {
-		if bts, err := json.Marshal(rsp.Choices); err == nil {
+		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
 			span.SetAttributes(
 				attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)),
 			)
@@ -366,7 +422,7 @@ func TraceAfterInvokeAgent(span trace.Span, rspEvent *event.Event, tokenUsage *T
 
 	if e := rsp.Error; e != nil {
 		span.SetStatus(codes.Error, e.Message)
-		span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, e.Type), attribute.String(semconvtrace.KeyErrorMessage, e.Message))
+		span.SetAttributes(responseErrorAttributes(e, errorTypeFallback)...)
 	}
 }
 
@@ -422,7 +478,7 @@ func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 	attrs = append(attrs, buildRequestAttributes(attributes.Request)...)
 
 	// Add response attributes
-	attrs = append(attrs, buildResponseAttributes(attributes.Response)...)
+	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType)...)
 
 	// Set all attributes at once
 	span.SetAttributes(attrs...)
@@ -520,7 +576,7 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	}
 
 	// Add messages
-	if bts, err := json.Marshal(req.Messages); err == nil {
+	if bts, err := marshalTelemetryMessages(req.Messages); err == nil {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)))
 	} else {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
@@ -530,7 +586,7 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 }
 
 // buildResponseAttributes builds response-related attributes.
-func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
+func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []attribute.KeyValue {
 	if rsp == nil {
 		return nil
 	}
@@ -542,7 +598,7 @@ func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
 
 	// Add error type if present
 	if e := rsp.Error; e != nil {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyErrorType, e.Type), attribute.String(semconvtrace.KeyErrorMessage, e.Message))
+		attrs = append(attrs, responseErrorAttributes(e, errorTypeFallback)...)
 	}
 
 	// Add usage attributes
@@ -568,7 +624,7 @@ func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
 
 	// Add choices attributes
 	if len(rsp.Choices) > 0 {
-		if bts, err := json.Marshal(rsp.Choices); err == nil {
+		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
 			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)))
 		}
 
@@ -592,6 +648,19 @@ func buildResponseAttributes(rsp *model.Response) []attribute.KeyValue {
 	}
 
 	return attrs
+}
+
+func responseErrorAttributes(respErr *model.ResponseError, fallback string) []attribute.KeyValue {
+	if respErr == nil {
+		return nil
+	}
+	return []attribute.KeyValue{
+		attribute.String(
+			semconvtrace.KeyErrorType,
+			FormatResponseErrorLabel(respErr, fallback),
+		),
+		attribute.String(semconvtrace.KeyErrorMessage, respErr.Message),
+	}
 }
 
 // NewGRPCConn creates a new gRPC connection to the OpenTelemetry Collector.

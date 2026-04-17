@@ -23,7 +23,9 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceinput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacesession"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -168,7 +170,9 @@ func (t *ExecTool) Declaration() *tool.Declaration {
 		"repo inspection, validation commands, and " +
 		"environment-dependent network commands such as curl or " +
 		"git. It does not require a skill name and runs in the " +
-		"shared executor workspace, not on the agent host."
+		"shared executor workspace, not on the agent host. " +
+		"Conversation file inputs are staged automatically under " +
+		"work/inputs when available."
 	outputDesc := "Result of workspace_exec. The output field is aggregated terminal text and does not guarantee preservation of the original stdout/stderr interleaving."
 	props := map[string]*tool.Schema{
 		"command": {
@@ -344,6 +348,10 @@ func (t *ExecTool) prepareExec(
 	if err != nil {
 		return execRequest{}, err
 	}
+	_, warnings := workspaceinput.StageConversationFiles(ctx, eng, ws)
+	for _, warning := range warnings {
+		log.WarnfContext(ctx, "workspace_exec input staging warning: %s", warning)
+	}
 	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
 	if timeout <= 0 {
 		timeout = in.Timeout
@@ -374,7 +382,11 @@ func (t *ExecTool) callNonSessional(
 			"workspace_exec interactive sessions are not supported by the current executor",
 		)
 	}
-	return runOneShot(ctx, req.eng, req.ws, req.spec)
+	out, err := runOneShot(ctx, req.eng, req.ws, req.spec)
+	if err != nil {
+		return execOutput{}, err
+	}
+	return out, nil
 }
 
 func (t *ExecTool) callSessional(
@@ -382,7 +394,11 @@ func (t *ExecTool) callSessional(
 	req execRequest,
 ) (execOutput, error) {
 	if !req.background && !req.tty && (req.yield == nil || *req.yield == 0) {
-		return runOneShot(ctx, req.eng, req.ws, req.spec)
+		out, err := runOneShot(ctx, req.eng, req.ws, req.spec)
+		if err != nil {
+			return execOutput{}, err
+		}
+		return out, nil
 	}
 	return t.startInteractive(ctx, req)
 }

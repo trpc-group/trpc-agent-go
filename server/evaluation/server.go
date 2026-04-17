@@ -48,6 +48,7 @@ type Server struct {
 	agentEvaluator    coreevaluation.AgentEvaluator
 	evalSetManager    evalset.Manager
 	evalResultManager evalresult.Manager
+	routeRegistrars   []RouteRegistrar
 	handler           http.Handler
 }
 
@@ -89,8 +90,11 @@ func New(opts ...Option) (*Server, error) {
 		agentEvaluator:    options.agentEvaluator,
 		evalSetManager:    options.evalSetManager,
 		evalResultManager: options.evalResultManager,
+		routeRegistrars:   append([]RouteRegistrar(nil), options.routeRegistrars...),
 	}
-	server.setupHandler()
+	if err := server.setupHandler(); err != nil {
+		return nil, err
+	}
 	return server, nil
 }
 
@@ -124,7 +128,7 @@ func (s *Server) Close() error {
 	return nil
 }
 
-func (s *Server) setupHandler() {
+func (s *Server) setupHandler() error {
 	mux := http.NewServeMux()
 	// Register collection and item routes for evaluation sets.
 	mux.HandleFunc(s.setsPath, s.handleSets)
@@ -139,7 +143,13 @@ func (s *Server) setupHandler() {
 	mux.HandleFunc(s.resultsPath+"/{$}", s.redirectTrailingSlashToCanonicalPath)
 	mux.HandleFunc(s.resultsPath+"/{resultId}", s.handleResultByID)
 	mux.HandleFunc(s.resultsPath+"/{resultId}/{$}", s.redirectTrailingSlashToCanonicalPath)
+	for _, registrar := range s.routeRegistrars {
+		if err := registrar.RegisterRoutes(mux, s); err != nil {
+			return fmt.Errorf("evaluation server: register extra routes: %w", err)
+		}
+	}
 	s.handler = mux
+	return nil
 }
 
 func normalizeBasePath(path string) string {

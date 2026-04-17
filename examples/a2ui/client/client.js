@@ -99,6 +99,28 @@ function splitPath(path) {
   return normalizedPath.split("/").filter((part) => part.trim().length > 0);
 }
 
+function resolveDataPath(path, dataContextPath = "/") {
+  const normalized = normalizePath(path);
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === ".") {
+    return normalizePath(dataContextPath) || "/";
+  }
+  if (normalized.startsWith("/")) {
+    return normalized;
+  }
+  const normalizedContext = normalizePath(dataContextPath) || "/";
+  const relativePath = normalized.replace(/^\.\/?/, "").replace(/^\/+/, "");
+  if (!relativePath) {
+    return normalizedContext;
+  }
+  if (normalizedContext === "/") {
+    return `/${relativePath}`;
+  }
+  return `${normalizedContext.replace(/\/$/, "")}/${relativePath}`;
+}
+
 function getDataModelValueByPath(state, path) {
   const segments = splitPath(path);
   if (!Array.isArray(segments)) {
@@ -123,6 +145,48 @@ function getDataModelValueByPath(state, path) {
     return current;
   }
   return findDataModelValueByKey(state, segments[segments.length - 1]);
+}
+
+function getDataModelValueInContext(state, path, dataContextPath = "/") {
+  const resolvedPath = resolveDataPath(path, dataContextPath);
+  if (!resolvedPath) {
+    return undefined;
+  }
+  return getDataModelValueByPath(state, resolvedPath);
+}
+
+function setDataModelValueInContext(state, path, value, dataContextPath = "/") {
+  const resolvedPath = resolveDataPath(path, dataContextPath);
+  if (!resolvedPath) {
+    return;
+  }
+  setDataModelValueByPath(state, resolvedPath, value);
+}
+
+function resolveTemplateInstances(state, templateConfig, dataContextPath = "/") {
+  if (!isObject(templateConfig) || typeof templateConfig.componentId !== "string" || !templateConfig.componentId.trim()) {
+    return [];
+  }
+  const bindingPath = resolveDataPath(templateConfig.dataBinding, dataContextPath);
+  if (!bindingPath) {
+    return [];
+  }
+  const collection = getDataModelValueByPath(state, bindingPath);
+  if (Array.isArray(collection)) {
+    return collection.map((_, index) => ({
+      componentId: templateConfig.componentId.trim(),
+      dataContextPath: `${bindingPath}/${index}`,
+      idSuffix: `:${index}`,
+    }));
+  }
+  if (isObject(collection)) {
+    return Object.keys(collection).map((key) => ({
+      componentId: templateConfig.componentId.trim(),
+      dataContextPath: `${bindingPath}/${key}`,
+      idSuffix: `:${key}`,
+    }));
+  }
+  return [];
 }
 
 function findDataModelValueByKey(state, key) {
@@ -208,7 +272,7 @@ function parseDataModelValue(rawValue) {
       if (!isObject(entry) || typeof entry.key !== "string") {
         return;
       }
-      result[entry.key] = parseDataModelValue(entry.value);
+      result[entry.key] = parseDataModelValue(entry.value !== undefined ? entry.value : entry);
     });
     return result;
   }
@@ -353,6 +417,17 @@ function parseAguiEvent(rawEvent) {
 }
 
 function extractRawPayload(rawEvent) {
+  if (typeof rawEvent === "string") {
+    const trimmed = rawEvent.trim();
+    if (trimmed) {
+      try {
+        return extractRawPayload(JSON.parse(trimmed));
+      } catch {
+        return rawEvent;
+      }
+    }
+    return rawEvent;
+  }
   if (!isObject(rawEvent)) {
     return rawEvent;
   }
@@ -505,26 +580,26 @@ function normalizeImageUsageHint(value) {
   }
 }
 
-function readLiteralOrPath(value, surfaceId, fallback = "") {
+function readLiteralOrPath(value, surfaceId, fallback = "", dataContextPath = "/") {
   if (value === undefined || value === null) {
     return fallback;
   }
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
-    if (isObject(value)) {
-      if (typeof value.literalString === "string") {
-        return value.literalString;
+  if (isObject(value)) {
+    if (typeof value.literalString === "string") {
+      return value.literalString;
+    }
+    if (typeof value.path === "string") {
+      const state = getSurfaceState(surfaceId || "");
+      const resolved = getDataModelValueInContext(state, value.path, dataContextPath);
+      if (resolved === undefined) {
+        return fallback;
       }
-      if (typeof value.path === "string") {
-        const state = getSurfaceState(surfaceId || "");
-        const resolved = getDataModelValueByPath(state, value.path);
-        if (resolved === undefined) {
-          return fallback;
-        }
-        if (resolved === null) {
-          return "";
-        }
+      if (resolved === null) {
+        return "";
+      }
       if (typeof resolved === "string" || typeof resolved === "number" || typeof resolved === "boolean") {
         return String(resolved);
       }
@@ -534,7 +609,7 @@ function readLiteralOrPath(value, surfaceId, fallback = "") {
   return fallback;
 }
 
-function readBooleanValue(value, defaultValue, surfaceId) {
+function readBooleanValue(value, defaultValue, surfaceId, dataContextPath = "/") {
   if (typeof value === "boolean") {
     return value;
   }
@@ -547,7 +622,7 @@ function readBooleanValue(value, defaultValue, surfaceId) {
     }
     if (typeof value.path === "string" && value.path.trim()) {
       const state = getSurfaceState(surfaceId || "");
-      const resolved = getDataModelValueByPath(state, value.path);
+      const resolved = getDataModelValueInContext(state, value.path, dataContextPath);
       if (typeof resolved === "boolean") {
         return resolved;
       }
@@ -557,7 +632,7 @@ function readBooleanValue(value, defaultValue, surfaceId) {
   return defaultValue;
 }
 
-function readSelectionValues(selection, surfaceId) {
+function readSelectionValues(selection, surfaceId, dataContextPath = "/") {
   if (!isObject(selection) && !Array.isArray(selection)) {
     if (typeof selection === "string") {
       return [selection];
@@ -575,7 +650,7 @@ function readSelectionValues(selection, surfaceId) {
   }
   if (typeof selection.path === "string" && selection.path.trim()) {
     const state = getSurfaceState(surfaceId || "");
-    const resolved = getDataModelValueByPath(state, selection.path);
+    const resolved = getDataModelValueInContext(state, selection.path, dataContextPath);
     if (Array.isArray(resolved)) {
       return resolved.map((item) => String(item)).filter((item) => item.trim() !== "");
     }
@@ -601,6 +676,9 @@ function collectChildIdsFromPayload(payload) {
   if (payload.children && Array.isArray(payload.children.explicitList)) {
     payload.children.explicitList.forEach(pushIfString);
   }
+  if (payload.children && isObject(payload.children.template)) {
+    pushIfString(payload.children.template.componentId);
+  }
   if (Array.isArray(payload.items)) {
     payload.items.forEach((item) => {
       if (typeof item === "string") {
@@ -622,6 +700,34 @@ function collectChildIdsFromPayload(payload) {
     pushIfString(payload.icon);
   }
   return ids;
+}
+
+function renderReferencedChildren(payload, componentMap, surfaceId, visited, dataContextPath = "/", idSuffix = "") {
+  const nodes = [];
+  if (!isObject(payload)) {
+    return nodes;
+  }
+  if (typeof payload.child === "string" && payload.child.trim()) {
+    nodes.push(renderA2UINode(payload.child.trim(), componentMap, surfaceId, new Set(visited), dataContextPath, idSuffix));
+  }
+  if (isObject(payload.children)) {
+    if (Array.isArray(payload.children.explicitList)) {
+      payload.children.explicitList.forEach((id) => {
+        if (typeof id !== "string" || !id.trim()) {
+          return;
+        }
+        nodes.push(renderA2UINode(id.trim(), componentMap, surfaceId, new Set(visited), dataContextPath, idSuffix));
+      });
+    }
+    if (isObject(payload.children.template)) {
+      const state = getSurfaceState(surfaceId);
+      const instances = resolveTemplateInstances(state, payload.children.template, dataContextPath);
+      instances.forEach((instance) => {
+        nodes.push(renderA2UINode(instance.componentId, componentMap, surfaceId, new Set(visited), instance.dataContextPath, instance.idSuffix));
+      });
+    }
+  }
+  return nodes;
 }
 
 function resolveRootComponentId(surfaceId, components) {
@@ -674,46 +780,44 @@ function updateSurfaceState(surfaceId, payload) {
   surfaceStates.set(surfaceId, state);
 }
 
-function renderA2UINode(componentId, componentMap, surfaceId, visited) {
+function renderA2UINode(componentId, componentMap, surfaceId, visited, dataContextPath = "/", idSuffix = "") {
   if (!visited) {
     visited = new Set();
   }
+  const instanceId = `${componentId}${idSuffix}`;
   const normalizedSurfaceId = normalizeSurfaceId(surfaceId);
   const state = getSurfaceState(normalizedSurfaceId);
-  if (!isObject(componentMap) || !componentMap.has(componentId) || visited.has(componentId)) {
+  if (!isObject(componentMap) || !componentMap.has(componentId) || visited.has(instanceId)) {
     const empty = document.createElement("div");
     empty.className = "a2ui-unknown";
-    empty.textContent = `Missing or cyclic component: ${componentId}`;
+    empty.textContent = `Missing or cyclic component: ${instanceId}`;
     return empty;
   }
   const component = componentMap.get(componentId);
   if (!isObject(component)) {
     const empty = document.createElement("div");
     empty.className = "a2ui-unknown";
-    empty.textContent = `Invalid component node: ${componentId}`;
+    empty.textContent = `Invalid component node: ${instanceId}`;
     return empty;
   }
   const wrapper = component.component;
   if (!isObject(wrapper)) {
     const empty = document.createElement("div");
     empty.className = "a2ui-unknown";
-    empty.textContent = `Invalid component wrapper: ${componentId}`;
+    empty.textContent = `Invalid component wrapper: ${instanceId}`;
     return empty;
   }
   const type = Object.keys(wrapper)[0];
   const config = isObject(wrapper[type]) ? wrapper[type] : {};
-  visited.add(componentId);
-  const commonStyle = component.weight !== undefined ? `; --a2ui-weight: ${Number(component.weight)}` : "";
+  visited.add(instanceId);
   let node;
-  let childrenIds = [];
-
   switch (type) {
     case "Text": {
       const hint = typeof config.usageHint === "string" ? config.usageHint.toLowerCase() : "body";
       const tag = hint === "h1" ? "h1" : hint === "h2" ? "h2" : hint === "h3" ? "h3" : hint === "h4" ? "h4" : hint === "h5" ? "h5" : "p";
       const textNode = document.createElement(tag);
       textNode.className = `a2ui-node-root a2ui-text a2ui-text-${hint}`;
-      textNode.textContent = readLiteralOrPath(config.text, normalizedSurfaceId);
+      textNode.textContent = readLiteralOrPath(config.text, normalizedSurfaceId, "", dataContextPath);
       node = textNode;
       break;
     }
@@ -723,18 +827,16 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
       node.className = `a2ui-node-root ${type.toLowerCase()}`;
       node.style.alignItems = mapAlignment(config.alignment);
       node.style.justifyContent = mapDistribution(config.distribution);
-      if (type === "Column") {
-        node.style.flexDirection = "column";
-      } else {
-        node.style.flexDirection = "row";
-      }
+      node.style.flexDirection = type === "Column" ? "column" : "row";
       if (type === "Row") {
         const explicitAlign = mapAlignment(config.alignment);
         node.style.alignItems = explicitAlign === "stretch" ? "stretch" : explicitAlign;
       }
-      childrenIds = collectChildIdsFromPayload(config);
-      childrenIds.forEach((id) => {
-        node.appendChild(renderA2UINode(id, componentMap, normalizedSurfaceId, new Set(visited)));
+      const childNodes = renderReferencedChildren(config, componentMap, normalizedSurfaceId, visited, dataContextPath, idSuffix);
+      childNodes.forEach((childNode) => {
+        if (childNode) {
+          node.appendChild(childNode);
+        }
       });
       if (!node.hasChildNodes()) {
         const placeholder = document.createElement("div");
@@ -747,9 +849,11 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
     case "Card": {
       node = document.createElement("div");
       node.className = "a2ui-node-root a2ui-card";
-      childrenIds = collectChildIdsFromPayload(config);
-      childrenIds.forEach((id) => {
-        node.appendChild(renderA2UINode(id, componentMap, normalizedSurfaceId, new Set(visited)));
+      const childNodes = renderReferencedChildren(config, componentMap, normalizedSurfaceId, visited, dataContextPath, idSuffix);
+      childNodes.forEach((childNode) => {
+        if (childNode) {
+          node.appendChild(childNode);
+        }
       });
       break;
     }
@@ -761,31 +865,31 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
     case "Button": {
       node = document.createElement("button");
       node.className = "a2ui-node-root a2ui-button";
-      const buttonLabel = readLiteralOrPath(config.label, normalizedSurfaceId)
-        || readLiteralOrPath(config.text, normalizedSurfaceId)
-        || readLiteralOrPath(config.children, normalizedSurfaceId);
-      childrenIds = collectChildIdsFromPayload(config);
-      if (childrenIds.length > 0) {
-        childrenIds.forEach((id) => {
-          node.appendChild(renderA2UINode(id, componentMap, normalizedSurfaceId, new Set(visited)));
-        });
-      }
+      const buttonLabel = readLiteralOrPath(config.label, normalizedSurfaceId, "", dataContextPath)
+        || readLiteralOrPath(config.text, normalizedSurfaceId, "", dataContextPath)
+        || readLiteralOrPath(config.children, normalizedSurfaceId, "", dataContextPath);
+      const childNodes = renderReferencedChildren(config, componentMap, normalizedSurfaceId, visited, dataContextPath, idSuffix);
+      childNodes.forEach((childNode) => {
+        if (childNode) {
+          node.appendChild(childNode);
+        }
+      });
       if (!node.hasChildNodes()) {
         node.textContent = buttonLabel || "Button";
       }
-      bindButtonAction(node, normalizedSurfaceId, componentId, config.action);
+      bindButtonAction(node, normalizedSurfaceId, instanceId, config.action, dataContextPath);
       node.disabled = !!config.disabled;
       break;
     }
     case "Image": {
-      const imageUrl = readLiteralOrPath(config.url, normalizedSurfaceId);
+      const imageUrl = readLiteralOrPath(config.url, normalizedSurfaceId, "", dataContextPath);
       const usageHint = normalizeImageUsageHint(config.usageHint);
       const fitHint = (typeof config.fit === "string" ? config.fit.toLowerCase() : "").trim();
       if (imageUrl) {
         node = document.createElement("img");
         node.className = "a2ui-image";
         node.src = imageUrl;
-        node.alt = readLiteralOrPath(config.alt, normalizedSurfaceId) || "A2UI Image";
+        node.alt = readLiteralOrPath(config.alt, normalizedSurfaceId, "", dataContextPath) || "A2UI Image";
         if (fitHint) {
           node.classList.add(`a2ui-image--${fitHint.replace(/[^a-z-]/g, "")}`);
         }
@@ -802,12 +906,12 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
     case "Icon": {
       node = document.createElement("span");
       node.className = "a2ui-node-root a2ui-text";
-      node.textContent = `[icon] ${readLiteralOrPath(config.name, normalizedSurfaceId) || "icon"}`;
+      node.textContent = `[icon] ${readLiteralOrPath(config.name, normalizedSurfaceId, "", dataContextPath) || "icon"}`;
       break;
     }
     case "Video":
     case "AudioPlayer": {
-      const mediaUrl = readLiteralOrPath(config.url || config.src, normalizedSurfaceId);
+      const mediaUrl = readLiteralOrPath(config.url || config.src, normalizedSurfaceId, "", dataContextPath);
       node = document.createElement(type === "Video" ? "video" : "audio");
       node.className = "a2ui-media";
       node.controls = true;
@@ -823,24 +927,28 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
     case "List": {
       node = document.createElement("div");
       node.className = "a2ui-node-root a2ui-column";
-      childrenIds = collectChildIdsFromPayload(config);
-      if (childrenIds.length === 0 && Array.isArray(config.items)) {
+      const childNodes = renderReferencedChildren(config, componentMap, normalizedSurfaceId, visited, dataContextPath, idSuffix);
+      if (childNodes.length === 0 && Array.isArray(config.items)) {
         config.items.forEach((item) => {
           const entry = document.createElement("div");
           entry.className = "a2ui-text";
-          entry.textContent = isObject(item) ? readLiteralOrPath(item.text || item.label || item.value, normalizedSurfaceId) : String(item);
+          entry.textContent = isObject(item)
+            ? readLiteralOrPath(item.text || item.label || item.value, normalizedSurfaceId, "", dataContextPath)
+            : String(item);
           node.appendChild(entry);
         });
       } else {
-        childrenIds.forEach((id) => {
-          node.appendChild(renderA2UINode(id, componentMap, normalizedSurfaceId, new Set(visited)));
+        childNodes.forEach((childNode) => {
+          if (childNode) {
+            node.appendChild(childNode);
+          }
         });
       }
       break;
     }
     case "TextField": {
       const fieldType = typeof config.textFieldType === "string" ? config.textFieldType.toLowerCase() : "shorttext";
-      const label = readLiteralOrPath(config.label, normalizedSurfaceId, "");
+      const label = readLiteralOrPath(config.label, normalizedSurfaceId, "", dataContextPath);
       const valueSource = isObject(config.value)
         ? config.value
         : isObject(config.text)
@@ -849,7 +957,7 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
             ? config.initialValue
             : "";
       const valuePath = isObject(valueSource) && typeof valueSource.path === "string" && valueSource.path.trim()
-        ? valueSource.path.trim()
+        ? resolveDataPath(valueSource.path.trim(), dataContextPath)
         : "";
       const inputNode = fieldType === "longtext"
         ? document.createElement("textarea")
@@ -863,8 +971,8 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
         inputNode.rows = 4;
         inputNode.className = "a2ui-node-root";
       }
-      inputNode.value = readLiteralOrPath(valueSource, normalizedSurfaceId, "");
-      inputNode.placeholder = readLiteralOrPath(config.placeholder, normalizedSurfaceId);
+      inputNode.value = readLiteralOrPath(valueSource, normalizedSurfaceId, "", dataContextPath);
+      inputNode.placeholder = readLiteralOrPath(config.placeholder, normalizedSurfaceId, "", dataContextPath);
       if (valuePath) {
         state.inputBindings.set(valuePath, inputNode);
         setDataModelValueByPath(state, valuePath, inputNode.value);
@@ -879,7 +987,7 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
         fieldContainer.className = "a2ui-node-root a2ui-form-field";
         labelNode.className = "a2ui-text a2ui-form-field-label";
         labelNode.textContent = label;
-        const fieldId = `textfield-${componentId}`;
+        const fieldId = `textfield-${instanceId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
         inputNode.id = fieldId;
         labelNode.htmlFor = fieldId;
         fieldContainer.appendChild(labelNode);
@@ -891,14 +999,14 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
       break;
     }
     case "DateTimeInput": {
-      const label = readLiteralOrPath(config.label, normalizedSurfaceId, "");
+      const label = readLiteralOrPath(config.label, normalizedSurfaceId, "", dataContextPath);
       const inputNode = document.createElement("input");
       inputNode.className = "a2ui-node-root";
       inputNode.type = "datetime-local";
       const valuePath = isObject(config.value) && typeof config.value.path === "string" && config.value.path.trim()
-        ? config.value.path.trim()
+        ? resolveDataPath(config.value.path.trim(), dataContextPath)
         : "";
-      inputNode.value = readLiteralOrPath(config.value, normalizedSurfaceId) || "";
+      inputNode.value = readLiteralOrPath(config.value, normalizedSurfaceId, "", dataContextPath) || "";
       if (valuePath) {
         state.inputBindings.set(valuePath, inputNode);
         setDataModelValueByPath(state, valuePath, inputNode.value);
@@ -911,7 +1019,7 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
         fieldContainer.className = "a2ui-node-root a2ui-form-field";
         labelNode.className = "a2ui-text a2ui-form-field-label";
         labelNode.textContent = label;
-        const fieldId = `datetime-${componentId}`;
+        const fieldId = `datetime-${instanceId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
         inputNode.id = fieldId;
         labelNode.htmlFor = fieldId;
         fieldContainer.appendChild(labelNode);
@@ -926,11 +1034,11 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
       node = document.createElement("label");
       node.className = "a2ui-node-root a2ui-checkbox";
       const valuePath = isObject(config.value) && typeof config.value.path === "string" && config.value.path.trim()
-        ? config.value.path.trim()
+        ? resolveDataPath(config.value.path.trim(), dataContextPath)
         : "";
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
-      checkbox.checked = readBooleanValue(config.value, readBooleanValue(config.checked, false), normalizedSurfaceId);
+      checkbox.checked = readBooleanValue(config.value, readBooleanValue(config.checked, false, normalizedSurfaceId, dataContextPath), normalizedSurfaceId, dataContextPath);
       checkbox.disabled = !!config.disabled;
       checkbox.className = "a2ui-input";
       if (valuePath) {
@@ -941,7 +1049,7 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
       node.appendChild(checkbox);
       const text = document.createElement("span");
       text.className = "a2ui-text";
-      text.textContent = readLiteralOrPath(config.label, normalizedSurfaceId) || "";
+      text.textContent = readLiteralOrPath(config.label, normalizedSurfaceId, "", dataContextPath) || "";
       node.appendChild(text);
       break;
     }
@@ -954,13 +1062,13 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
         break;
       }
       const selectionsPath = isObject(config.selections) && typeof config.selections.path === "string" && config.selections.path.trim()
-        ? config.selections.path.trim()
+        ? resolveDataPath(config.selections.path.trim(), dataContextPath)
         : "";
-      const selectedValues = readSelectionValues(config.selections, normalizedSurfaceId);
+      const selectedValues = readSelectionValues(config.selections, normalizedSurfaceId, dataContextPath);
       const selectedSet = new Set(selectedValues);
       const isRadio = typeof config.maxAllowedSelections === "number" ? config.maxAllowedSelections <= 1 : true;
       const inputType = isRadio ? "radio" : "checkbox";
-      const optionName = `choice_${componentId}`;
+      const optionName = `choice_${instanceId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
       options.forEach((option) => {
         if (!isObject(option)) {
           return;
@@ -982,24 +1090,20 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
             const checked = [...node.querySelectorAll(`input[type='${inputType}']`)]
               .filter((el) => (el instanceof HTMLInputElement && el.checked))
               .map((el) => el.value);
-            const nextValue = isRadio ? (checked[0] || "") : checked;
-            if (typeof nextValue === "string") {
-              setDataModelValueByPath(state, selectionsPath, nextValue);
-            } else {
-              setDataModelValueByPath(state, selectionsPath, String(nextValue));
-            }
+            const nextValue = isRadio ? checked.slice(0, 1) : checked;
+            setDataModelValueByPath(state, selectionsPath, nextValue);
           };
           input.addEventListener("change", syncSelections);
         }
         const optionText = document.createElement("span");
         optionText.className = "a2ui-text";
-        optionText.textContent = readLiteralOrPath(option.label, normalizedSurfaceId) || "";
+        optionText.textContent = readLiteralOrPath(option.label, normalizedSurfaceId, "", dataContextPath) || "";
         optionNode.appendChild(input);
         optionNode.appendChild(optionText);
         node.appendChild(optionNode);
       });
-      if (selectionsPath && selectedValues.length > 0) {
-        setDataModelValueByPath(state, selectionsPath, isRadio ? selectedValues[0] : selectedValues);
+      if (selectionsPath) {
+        setDataModelValueByPath(state, selectionsPath, isRadio ? selectedValues.slice(0, 1) : selectedValues);
       }
       break;
     }
@@ -1010,7 +1114,7 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
       if (config.min !== undefined) node.min = String(config.min);
       if (config.max !== undefined) node.max = String(config.max);
       if (config.step !== undefined) node.step = String(config.step);
-      if (config.value !== undefined) node.value = readLiteralOrPath(config.value, normalizedSurfaceId);
+      if (config.value !== undefined) node.value = readLiteralOrPath(config.value, normalizedSurfaceId, "", dataContextPath);
       break;
     }
     default: {
@@ -1025,14 +1129,11 @@ function renderA2UINode(componentId, componentMap, surfaceId, visited) {
       break;
     }
   }
-  if (commonStyle) {
-    node.style.flexGrow = String(component.weight || 0);
-    node.style.flex = node.style.flexGrow;
-  }
   if (node && component.weight !== undefined) {
     const ratio = Number(component.weight);
     if (!Number.isNaN(ratio) && ratio > 0) {
       node.style.flexGrow = String(ratio);
+      node.style.flex = node.style.flexGrow;
     }
   }
   return node;
@@ -1069,7 +1170,7 @@ function renderSurfaceUpdateMessage(surfaceId, surfaceUpdate) {
     holder.body.appendChild(empty);
     return;
   }
-  const rootNode = renderA2UINode(rootId, componentMap, normalizedSurfaceId);
+  const rootNode = renderA2UINode(rootId, componentMap, normalizedSurfaceId, new Set(), "/", "");
   if (rootNode) {
     rootNode.classList.add("a2ui-node-root");
     holder.body.appendChild(rootNode);
@@ -1129,7 +1230,7 @@ function renderDataModelUpdate(surfaceId) {
   if (!rootId) {
     return;
   }
-  const rootNode = renderA2UINode(rootId, state.componentMap, normalizedSurfaceId);
+  const rootNode = renderA2UINode(rootId, state.componentMap, normalizedSurfaceId, new Set(), "/", "");
   holder.body.replaceChildren();
   if (rootNode) {
     rootNode.classList.add("a2ui-node-root");
@@ -1255,52 +1356,67 @@ function renderAguiEvent(event) {
   }
 }
 
-function normalizeActionLiteralValue(rawValue) {
-  if (rawValue === null || rawValue === undefined) {
-    return null;
-  }
-  if (typeof rawValue === "string") {
-    return { literalString: rawValue };
-  }
-  if (typeof rawValue === "number") {
-    return { literalNumber: rawValue };
-  }
-  if (typeof rawValue === "boolean") {
-    return { literalBoolean: rawValue };
-  }
-  return { literalString: String(rawValue) };
-}
-
-function normalizeContextValue(surfaceId, rawValue) {
+function normalizeContextValue(surfaceId, rawValue, dataContextPath = "/") {
   if (rawValue === null || rawValue === undefined) {
     return null;
   }
   if (typeof rawValue === "string" || typeof rawValue === "number" || typeof rawValue === "boolean") {
-    return normalizeActionLiteralValue(rawValue);
+    return rawValue;
+  }
+  if (Array.isArray(rawValue)) {
+    return rawValue.map((item) => normalizeContextValue(surfaceId, item, dataContextPath));
   }
   if (isObject(rawValue)) {
     if (typeof rawValue.path === "string" && rawValue.path.trim()) {
       const state = getSurfaceState(surfaceId || "");
-      const resolved = getDataModelValueByPath(state, rawValue.path);
+      const resolved = getDataModelValueInContext(state, rawValue.path, dataContextPath);
       if (resolved === undefined) {
-        return { path: rawValue.path };
+        return null;
       }
-      if (resolved === null) {
-        return { literalString: "" };
-      }
-      return normalizeActionLiteralValue(resolved);
+      return normalizeContextValue(surfaceId, resolved, dataContextPath);
     }
     if (typeof rawValue.literalString === "string") {
-      return { literalString: rawValue.literalString };
+      return rawValue.literalString;
     }
     if (typeof rawValue.literalNumber === "number") {
-      return { literalNumber: rawValue.literalNumber };
+      return rawValue.literalNumber;
     }
     if (typeof rawValue.literalBoolean === "boolean") {
-      return { literalBoolean: rawValue.literalBoolean };
+      return rawValue.literalBoolean;
     }
+    const normalized = {};
+    Object.keys(rawValue).forEach((key) => {
+      normalized[key] = normalizeContextValue(surfaceId, rawValue[key], dataContextPath);
+    });
+    return normalized;
   }
-  return { literalString: String(rawValue) };
+  return String(rawValue);
+}
+
+function projectActionContextValue(value) {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => projectActionContextValue(item));
+  }
+  if (!isObject(value)) {
+    return value;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "selected")) {
+    return { selected: projectActionContextValue(value.selected) };
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "value")) {
+    return { value: projectActionContextValue(value.value) };
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "checked")) {
+    return { checked: projectActionContextValue(value.checked) };
+  }
+  const projected = {};
+  Object.keys(value).forEach((key) => {
+    projected[key] = projectActionContextValue(value[key]);
+  });
+  return projected;
 }
 
 function clearLogs() {
@@ -1411,7 +1527,7 @@ function normalizeA2uiValue(value) {
   return String(value);
 }
 
-function extractActionContext(surfaceId, rawContext) {
+function extractActionContext(surfaceId, rawContext, dataContextPath = "/") {
   const context = {};
   if (!Array.isArray(rawContext)) {
     return context;
@@ -1423,16 +1539,25 @@ function extractActionContext(surfaceId, rawContext) {
     if (typeof entry.key !== "string" || !entry.key.trim()) {
       return;
     }
-    context[entry.key.trim()] = normalizeContextValue(surfaceId, entry.value);
+    context[entry.key.trim()] = normalizeContextValue(surfaceId, entry.value, dataContextPath);
   });
   return context;
 }
 
-function buildUserActionPayload(surfaceId, sourceComponentId, action) {
+function buildUserActionPayload(surfaceId, sourceComponentId, action, dataContextPath = "/") {
   const normalizedSurfaceId = normalizeSurfaceId(surfaceId);
   const actionName = isObject(action) && typeof action.name === "string" && action.name.trim()
     ? action.name.trim()
     : "unknown";
+  const context = extractActionContext(normalizedSurfaceId, isObject(action) ? action.context : undefined, dataContextPath);
+  if (actionName === "submit_test") {
+    if (Object.prototype.hasOwnProperty.call(context, "questions")) {
+      context.questions = projectActionContextValue(context.questions);
+    }
+    if (Object.prototype.hasOwnProperty.call(context, "special")) {
+      context.special = projectActionContextValue(context.special);
+    }
+  }
   return {
     userAction: {
       name: actionName,
@@ -1441,7 +1566,7 @@ function buildUserActionPayload(surfaceId, sourceComponentId, action) {
         ? action.sourceComponentId.trim()
         : sourceComponentId,
       timestamp: new Date().toISOString(),
-      context: extractActionContext(normalizedSurfaceId, isObject(action) ? action.context : undefined),
+      context,
     },
   };
 }
@@ -1453,14 +1578,14 @@ function isUserActionButtonActionSupported(actionConfig) {
   return typeof actionConfig.name === "string" && actionConfig.name.trim().length > 0;
 }
 
-function bindButtonAction(node, surfaceId, componentId, actionConfig) {
+function bindButtonAction(node, surfaceId, componentId, actionConfig, dataContextPath = "/") {
   if (!isUserActionButtonActionSupported(actionConfig)) {
     return;
   }
   node.type = "button";
   node.addEventListener("click", async (event) => {
     event.preventDefault();
-    const actionPayload = buildUserActionPayload(surfaceId, componentId, actionConfig);
+    const actionPayload = buildUserActionPayload(surfaceId, componentId, actionConfig, dataContextPath);
     await sendUserAction(surfaceId, componentId, actionPayload.userAction);
   });
 }

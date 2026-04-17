@@ -324,6 +324,10 @@ type Options struct {
 	// Default is false, so same-branch events are merged into user context
 	// unless explicitly opted into preserving roles.
 	PreserveSameBranch bool
+	// PreserveForeignMessages keeps messages authored by other agents in their
+	// original roles/order instead of rewriting them into user-context messages.
+	// Default is false to preserve current handoff behavior.
+	PreserveForeignMessages bool
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
 	EventMessageProjector EventMessageProjector
@@ -1106,6 +1110,15 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 func WithPreserveSameBranch(preserve bool) Option {
 	return func(opts *Options) {
 		opts.PreserveSameBranch = preserve
+	}
+}
+
+// WithPreserveForeignMessages controls whether messages authored by other
+// agents should preserve their original assistant/tool roles and order instead
+// of being rewritten into user context when used as history. Default is false.
+func WithPreserveForeignMessages(preserve bool) Option {
+	return func(opts *Options) {
+		opts.PreserveForeignMessages = preserve
 	}
 }
 

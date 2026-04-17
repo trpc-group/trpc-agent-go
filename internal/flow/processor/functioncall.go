@@ -66,11 +66,20 @@ type streamInnerPreference interface {
 	StreamInner() bool
 }
 
+type toolEventStateDelta struct {
+	tool   tool.Tool
+	args   []byte
+	choice model.Choice
+}
+
+type resolvedToolContextKey struct{}
+
 // toolResult holds the result of a single tool execution.
 type toolResult struct {
-	index int
-	event *event.Event
-	err   error
+	index      int
+	event      *event.Event
+	err        error
+	stateDelta *toolEventStateDelta
 }
 
 // Default message used when transferring to a sub-agent without an explicit message.
@@ -326,18 +335,22 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 		return p.executeToolCallsInParallel(ctx, invocation, llmResponse, toolCalls, tools, eventChan)
 	}
 
-	var toolCallResponsesEvents []*event.Event
+	toolResults := make([]toolResult, 0, len(toolCalls))
 	for i, tc := range toolCalls {
-		toolEvent, err := p.executeSingleToolCallSequential(
+		result, err := p.executeSingleToolCallSequentialResult(
 			ctx, invocation, llmResponse, tools, eventChan, i, tc,
 		)
 		if err != nil {
 			return nil, err
 		}
-		if toolEvent != nil {
-			toolCallResponsesEvents = append(toolCallResponsesEvents, toolEvent)
+		if result.event != nil {
+			toolResults = append(toolResults, result)
 		}
 	}
+	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
+		invocation,
+		toolResults,
+	)
 
 	if len(toolCallResponsesEvents) == 0 &&
 		invocation != nil &&
@@ -367,6 +380,37 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 	index int,
 	toolCall model.ToolCall,
 ) (*event.Event, error) {
+	result, err := p.executeSingleToolCallSequentialResult(
+		ctx,
+		invocation,
+		llmResponse,
+		tools,
+		eventChan,
+		index,
+		toolCall,
+	)
+	if result.event == nil {
+		return nil, err
+	}
+	toolEvents := p.attachStateDeltaToToolResults(
+		invocation,
+		[]toolResult{result},
+	)
+	if len(toolEvents) == 0 {
+		return nil, err
+	}
+	return toolEvents[0], err
+}
+
+func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmResponse *model.Response,
+	tools map[string]tool.Tool,
+	eventChan chan<- *event.Event,
+	index int,
+	toolCall model.ToolCall,
+) (toolResult, error) {
 	ctx, span, startedSpan := itrace.StartSpan(ctx, invocation, itelemetry.NewExecuteToolSpanName(toolCall.Function.Name))
 	if startedSpan {
 		defer span.End()
@@ -388,7 +432,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 			choices = []model.Choice{*choice}
 		} else {
 			// Return critical errors (e.g., stop errors) immediately
-			return nil, err
+			return toolResult{}, err
 		}
 	}
 	toolEvent := p.buildToolCallResponseEvent(
@@ -401,31 +445,23 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		skipSummarization,
 	)
 	if toolEvent == nil {
-		return nil, nil
+		return toolResult{index: index}, nil
 	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
+	var stateDelta *toolEventStateDelta
+	if err == nil {
+		stateDelta = p.buildToolEventStateDelta(
+			ctx,
+			modifiedArgs,
+			choices,
+		)
+	}
 
 	var (
 		sess      = &session.Session{}
 		modelName string
 		agentName string
 	)
-	// Attach state delta if the tool provides it.
-	if err == nil && len(choices) > 0 &&
-		!hasSyntheticStateOnlyToolChoice(ctx) {
-		if tl, ok := tools[toolCall.Function.Name]; ok {
-			// Use the first choice as the canonical tool result for state
-			// delta.
-			p.attachStateDelta(
-				invocation,
-				tl,
-				modifiedArgs,
-				&choices[0],
-				toolEvent,
-			)
-		}
-	}
-
 	if invocation != nil {
 		if invocation.Session != nil {
 			sess = invocation.Session
@@ -450,7 +486,11 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		AgentName:        agentName,
 		Error:            err,
 	}, time.Since(startTime))
-	return toolEvent, nil
+	return toolResult{
+		index:      index,
+		event:      toolEvent,
+		stateDelta: stateDelta,
+	}, nil
 }
 
 // executeToolCallsInParallel runs multiple tool calls concurrently and merges
@@ -481,10 +521,10 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		close(done)
 	}()
 
-	toolCallResponsesEvents, err := p.collectParallelToolResults(
+	toolResults, err := p.collectParallelToolResults(
 		ctx, resultChan, len(toolCalls),
 	)
-	if len(toolCallResponsesEvents) == 0 &&
+	if len(toolResults) == 0 &&
 		invocation != nil &&
 		invocation.RunOptions.ToolExecutionFilter != nil {
 		filter := invocation.RunOptions.ToolExecutionFilter
@@ -495,6 +535,10 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 			}
 		}
 	}
+	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
+		invocation,
+		toolResults,
+	)
 	mergedEvent := p.buildMergedParallelEvent(
 		ctx, invocation, llmResponse, tools, toolCalls, toolCallResponsesEvents,
 	)
@@ -621,19 +665,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			agentName = invocation.AgentName
 		}
 	}
-	// Attach state delta if the tool provides it.
-	if len(choices) > 0 && !hasSyntheticStateOnlyToolChoice(ctx) {
-		if tl, ok := tools[tc.Function.Name]; ok {
-			// Use the first choice as the canonical tool result for state delta.
-			p.attachStateDelta(
-				invocation,
-				tl,
-				modifiedArgs,
-				&choices[0],
-				toolCallResponseEvent,
-			)
-		}
-	}
+	stateDelta := p.buildToolEventStateDelta(
+		ctx,
+		modifiedArgs,
+		choices,
+	)
 	if startedSpan {
 		itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
 	}
@@ -648,7 +684,11 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}, time.Since(startTime))
 	// Send result back to aggregator.
 	p.sendToolResult(
-		ctx, resultChan, toolResult{index: index, event: toolCallResponseEvent},
+		ctx, resultChan, toolResult{
+			index:      index,
+			event:      toolCallResponseEvent,
+			stateDelta: stateDelta,
+		},
 	)
 }
 
@@ -773,6 +813,104 @@ func (p *FunctionCallResponseProcessor) annotateSkipSummarization(
 	}
 }
 
+func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
+	ctx context.Context,
+	args []byte,
+	choices []model.Choice,
+) *toolEventStateDelta {
+	if len(choices) == 0 || hasSyntheticStateOnlyToolChoice(ctx) {
+		return nil
+	}
+	tl, ok := resolvedToolFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	return &toolEventStateDelta{
+		tool:   tl,
+		args:   args,
+		choice: choices[0],
+	}
+}
+
+func newStateDeltaInvocationView(
+	invocation *agent.Invocation,
+) *agent.Invocation {
+	if invocation == nil {
+		return nil
+	}
+	view := invocation.View()
+	if invocation.Session != nil {
+		view.Session = invocation.Session.Clone()
+	}
+	return view
+}
+
+func withResolvedToolContext(
+	ctx context.Context,
+	tl tool.Tool,
+) context.Context {
+	if ctx == nil || tl == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, resolvedToolContextKey{}, tl)
+}
+
+func resolvedToolFromContext(ctx context.Context) (tool.Tool, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	tl, ok := ctx.Value(resolvedToolContextKey{}).(tool.Tool)
+	return tl, ok
+}
+
+func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
+	invocation *agent.Invocation,
+	results []toolResult,
+) []*event.Event {
+	var (
+		stateDeltaInv     *agent.Invocation
+		pendingStateDelta []*event.Event
+	)
+	events := make([]*event.Event, 0, len(results))
+	for i := 0; i < len(results); i++ {
+		result := results[i]
+		if result.event == nil {
+			continue
+		}
+		if result.stateDelta != nil {
+			if stateDeltaInv == nil {
+				stateDeltaInv = newStateDeltaInvocationView(invocation)
+				if stateDeltaInv != nil && stateDeltaInv.Session != nil {
+					for j := 0; j < len(pendingStateDelta); j++ {
+						stateDeltaInv.Session.ApplyEventStateDelta(
+							pendingStateDelta[j],
+						)
+					}
+				}
+			}
+			p.attachStateDelta(
+				stateDeltaInv,
+				result.stateDelta.tool,
+				result.stateDelta.args,
+				&result.stateDelta.choice,
+				result.event,
+			)
+		}
+		if stateDeltaInv != nil &&
+			stateDeltaInv.Session != nil &&
+			len(result.event.StateDelta) > 0 {
+			stateDeltaInv.Session.ApplyEventStateDelta(result.event)
+		} else if len(result.event.StateDelta) > 0 {
+			pendingStateDelta = append(
+				pendingStateDelta,
+				result.event,
+			)
+		}
+		events = append(events, result.event)
+	}
+	return events
+}
+
 // lookupDeclaration returns a declaration or a safe placeholder.
 func (p *FunctionCallResponseProcessor) lookupDeclaration(
 	tools map[string]tool.Tool, name string,
@@ -880,6 +1018,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		tl,
 		eventChan,
 	)
+	ctx = withResolvedToolContext(ctx, tl)
 	// Only return error when it's a stop error
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
@@ -1098,18 +1237,18 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 	ctx context.Context,
 	resultChan <-chan toolResult,
 	toolCallsCount int,
-) ([]*event.Event, error) {
-	results := make([]*event.Event, toolCallsCount)
+) ([]toolResult, error) {
+	results := make([]toolResult, toolCallsCount)
 	var err error
 	for {
 		select {
 		case result, ok := <-resultChan:
 			if !ok {
 				// Channel closed, all results received.
-				return p.filterNilEvents(results), err
+				return p.filterNilToolResults(results), err
 			}
 			if result.index >= 0 && result.index < len(results) {
-				results[result.index] = result.event
+				results[result.index] = result
 				if err == nil && result.err != nil {
 					err = result.err
 				}
@@ -1127,7 +1266,7 @@ func (p *FunctionCallResponseProcessor) collectParallelToolResults(
 				ctx,
 				"Context cancelled while waiting for tool results",
 			)
-			return p.filterNilEvents(results), nil
+			return p.filterNilToolResults(results), nil
 		}
 	}
 }
@@ -1850,14 +1989,16 @@ func marshalChunkToText(content any) string {
 	}
 }
 
-// filterNilEvents filters out nil events from a slice of events while preserving order.
+// filterNilToolResults filters out nil events while preserving order.
 // Pre-allocates capacity to avoid multiple memory allocations.
-func (p *FunctionCallResponseProcessor) filterNilEvents(results []*event.Event) []*event.Event {
+func (p *FunctionCallResponseProcessor) filterNilToolResults(
+	results []toolResult,
+) []toolResult {
 	// Pre-allocate with capacity to reduce allocations
-	filtered := make([]*event.Event, 0, len(results))
-	for _, event := range results {
-		if event != nil {
-			filtered = append(filtered, event)
+	filtered := make([]toolResult, 0, len(results))
+	for _, result := range results {
+		if result.event != nil {
+			filtered = append(filtered, result)
 		}
 	}
 	return filtered

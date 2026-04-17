@@ -207,7 +207,13 @@ func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invo
 	var operationErrorType string
 	defer func() {
 		if tracingEnabled && fullRespEvent != nil {
-			itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
+			itelemetry.TraceAfterInvokeAgent(
+				span,
+				fullRespEvent,
+				tokenUsage,
+				tracker.FirstTokenTimeDuration(),
+				model.ErrorTypeFlowError,
+			)
 		}
 		tracker.SetResponseErrorType(resolveGraphAgentErrorType(fullRespEvent, operationErrorType))
 		tracker.RecordMetrics()()
@@ -286,7 +292,10 @@ func resolveGraphAgentErrorType(fullRespEvent *event.Event, operationErrorType s
 	if fullRespEvent == nil || fullRespEvent.Response == nil || fullRespEvent.Response.Error == nil {
 		return ""
 	}
-	return fullRespEvent.Response.Error.Type
+	return itelemetry.FormatResponseErrorLabel(
+		fullRespEvent.Response.Error,
+		model.ErrorTypeFlowError,
+	)
 }
 
 func recordTraceEvent(
@@ -436,6 +445,9 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 				ga.options.ContextCompactionOversizedToolResultMaxTokens,
 			),
 			processor.WithPreserveSameBranch(true),
+			processor.WithPreserveForeignMessages(
+				ga.options.PreserveForeignMessages,
+			),
 			processor.WithTimelineFilterMode(ga.options.messageTimelineFilterMode),
 			processor.WithBranchFilterMode(ga.options.messageBranchFilterMode),
 			processor.WithEventMessageProjector(

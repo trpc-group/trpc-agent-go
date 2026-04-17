@@ -702,7 +702,7 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 		return false
 	}
 	isTerminal, _ := terminalRunSignal(event)
-	log.DebugfContext(
+	log.TracefContext(
 		ctx,
 		"agui emit event: emitted event: %v, threadID: %s, runID: %s",
 		event,

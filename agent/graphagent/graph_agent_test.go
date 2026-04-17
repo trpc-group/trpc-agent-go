@@ -1412,6 +1412,76 @@ func TestGraphAgent_CreateInitialStateWithEventMessageProjector(
 	require.Equal(t, "Projected: hello", messages[0].Content)
 }
 
+func TestGraphAgent_CreateInitialStateWithPreserveForeignMessages(t *testing.T) {
+	const (
+		agentName    = "test-agent"
+		requestID    = "req-1"
+		invocationID = "inv-1"
+	)
+
+	schema := graph.NewStateSchema().
+		AddField("messages", graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		})
+
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(
+			ctx context.Context,
+			state graph.State,
+		) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+
+	graphAgent, err := New(
+		agentName,
+		g,
+		WithPreserveForeignMessages(true),
+	)
+	require.NoError(t, err)
+
+	assistantEvt := event.NewResponseEvent(
+		invocationID,
+		"other-agent",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("foreign assistant"),
+			}},
+		},
+	)
+	assistantEvt.RequestID = requestID
+	assistantEvt.FilterKey = agentName
+	assistantEvt.Branch = "other-agent"
+
+	sess := &session.Session{
+		ID:     "test-session",
+		Events: []event.Event{*assistantEvt},
+	}
+	invocation := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationEventFilterKey(agentName),
+	)
+	invocation.InvocationID = invocationID
+	invocation.RunOptions.RequestID = requestID
+	invocation.AgentName = agentName
+	invocation.Branch = agentName
+	graphAgent.setupInvocation(invocation)
+
+	state := graphAgent.createInitialState(context.Background(), invocation)
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.Len(t, messages, 2)
+	require.Equal(t, model.RoleUser, messages[0].Role)
+	require.Equal(t, "hello", messages[0].Content)
+	require.Equal(t, model.RoleAssistant, messages[1].Role)
+	require.Equal(t, "foreign assistant", messages[1].Content)
+}
+
 func TestGraphAgent_CreateInitialStateWithSessionSummary_FromService(t *testing.T) {
 	const agentName = "test-agent"
 	ctx := context.Background()
@@ -4166,6 +4236,7 @@ func TestGraphAgent_Run_ExecutionTraceCapturesComplexGraph(t *testing.T) {
 }
 
 func TestResolveGraphAgentErrorType(t *testing.T) {
+	code := "70002"
 	testCases := []struct {
 		name               string
 		fullRespEvent      *event.Event
@@ -4200,6 +4271,21 @@ func TestResolveGraphAgentErrorType(t *testing.T) {
 				"callback failed",
 			),
 			want: agent.ErrorTypeAgentCallbackError,
+		},
+		{
+			name: "final error response keeps code suffix",
+			fullRespEvent: event.NewResponseEvent(
+				"inv",
+				"graph-agent",
+				&model.Response{
+					Error: &model.ResponseError{
+						Type:    model.ErrorTypeFlowError,
+						Code:    &code,
+						Message: "graph failed",
+					},
+				},
+			),
+			want: model.ErrorTypeFlowError + "_70002",
 		},
 	}
 
