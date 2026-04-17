@@ -66,6 +66,11 @@ type visibleCompletionThenErrorAgent struct {
 	name string
 }
 
+type assistantSequenceAgent struct {
+	name     string
+	messages []string
+}
+
 func newGraphAgentWithAfterCallback(
 	t *testing.T,
 	state graph.State,
@@ -409,6 +414,48 @@ func (a *visibleCompletionThenErrorAgent) FindSubAgent(name string) agent.Agent 
 	return nil
 }
 
+func (a *assistantSequenceAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event, len(a.messages))
+	go func() {
+		defer close(ch)
+		invocationID := "assistant-sequence-agent"
+		author := a.name
+		if invocation != nil {
+			invocationID = invocation.InvocationID
+			if invocation.AgentName != "" {
+				author = invocation.AgentName
+			}
+		}
+		for i, message := range a.messages {
+			evt := event.NewResponseEvent(invocationID, author, &model.Response{
+				ID:   fmt.Sprintf("resp-%d", i+1),
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage(message),
+				}},
+			})
+			_ = agent.EmitEvent(ctx, invocation, ch, evt)
+		}
+	}()
+	return ch, nil
+}
+
+func (a *assistantSequenceAgent) Tools() []tool.Tool { return nil }
+
+func (a *assistantSequenceAgent) Info() agent.Info {
+	return agent.Info{Name: a.name}
+}
+
+func (a *assistantSequenceAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *assistantSequenceAgent) FindSubAgent(name string) agent.Agent {
+	_ = name
+	return nil
+}
+
 func (m *mockAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
 	// Mock implementation - return a simple response.
 	eventChan := make(chan *event.Event, 1)
@@ -618,6 +665,24 @@ func TestTool_Call_DisableGraphCompletionEvent_DedupsCapturedGraphCompletionAfte
 	require.Equal(t, "child-final", resultText)
 }
 
+func TestTool_Call_LegacyCallableDedupsRepeatedFinalAssistantMessage(t *testing.T) {
+	at := NewTool(&assistantSequenceAgent{
+		name:     "legacy-child",
+		messages: []string{`{"doc_id":"1","title":"dup"}`, `{"doc_id":"1","title":"dup"}`},
+	})
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, `{"doc_id":"1","title":"dup"}`, resultText)
+}
+
 func TestTool_Call_DisableGraphCompletionEvent_PrefersAfterCallbackCustomResponse(t *testing.T) {
 	ga := newGraphAgentWithAfterCallback(
 		t,
@@ -778,13 +843,13 @@ func TestTool_Call_DisableGraphExecutorEvents_SuppressesBarrierEvents(t *testing
 	require.Equal(t, "child-final", resultText)
 }
 
-func TestTool_Call_VisibleCompletionSnapshot_PreservesLegacyConcatenation(t *testing.T) {
+func TestTool_Call_VisibleCompletionSnapshot_PrefersLatestFinalAssistantMessage(t *testing.T) {
 	at := NewTool(&assistantThenVisibleCompletionAgent{name: "visible-agent"})
 	result, err := at.Call(context.Background(), []byte(`{"request":"ignored"}`))
 	require.NoError(t, err)
 	resultText, ok := result.(string)
 	require.True(t, ok)
-	require.Equal(t, "draftchild-finalchild-final", resultText)
+	require.Equal(t, "child-final", resultText)
 }
 
 func TestTool_DefaultSkipSummarization(t *testing.T) {

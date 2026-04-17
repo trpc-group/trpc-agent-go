@@ -721,16 +721,34 @@ func (at *Tool) collectResponse(inv *agent.Invocation, evCh <-chan *event.Event)
 
 func collectLegacyResponse(evCh <-chan *event.Event) (string, error) {
 	var response strings.Builder
+	var lastAssistantMessage string
+	var sawFinalAssistant bool
 	for ev := range evCh {
 		if ev.Error != nil {
 			return "", fmt.Errorf("agent error: %s", ev.Error.Message)
 		}
-		if ev.Response != nil && len(ev.Response.Choices) > 0 {
-			choice := ev.Response.Choices[0]
-			if choice.Message.Role == model.RoleAssistant && choice.Message.Content != "" {
-				response.WriteString(choice.Message.Content)
-			}
+		content, ok := assistantMessageContent(ev)
+		if !ok {
+			continue
 		}
+		if ev.IsPartial {
+			if sawFinalAssistant {
+				response.Reset()
+				lastAssistantMessage = ""
+				sawFinalAssistant = false
+			}
+			response.WriteString(content)
+			continue
+		}
+		if content == lastAssistantMessage {
+			continue
+		}
+		if response.Len() > 0 {
+			response.Reset()
+		}
+		response.WriteString(content)
+		lastAssistantMessage = content
+		sawFinalAssistant = true
 	}
 	return response.String(), nil
 }
