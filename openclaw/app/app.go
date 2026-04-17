@@ -2212,9 +2212,6 @@ func buildOpenClawToolingGuidance(cfg agentConfig) string {
 	if skillprofile.IsKnowledgeOnly(cfg.SkillsToolProfile) {
 		return guidance
 	}
-	if guidance == "" {
-		return openClawSkillRunGuidance
-	}
 	return strings.TrimSpace(
 		guidance + " " + openClawSkillRunGuidance,
 	)

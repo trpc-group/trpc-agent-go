@@ -1688,11 +1688,46 @@ func TestNewAgent_KnowledgeOnlyProfileOmitsSkillRunGuidance(
 		mdl,
 		&session.Session{},
 	)
+	content := joinAllMessageContent(req)
 	require.NotContains(
 		t,
-		joinAllMessageContent(req),
+		content,
 		openClawSkillRunGuidance,
 	)
+	require.Contains(
+		t,
+		content,
+		strings.TrimSpace(openClawToolingGuidance),
+	)
+}
+
+func TestNewAgent_FullProfileIncludesSkillRunGuidance(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:             "demo",
+		SkillsRoot:          root,
+		StateDir:            t.TempDir(),
+		SkillsToolProfile:   skillprofile.Full,
+		EnableOpenClawTools: true,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	content := joinAllMessageContent(req)
+	require.Contains(
+		t,
+		content,
+		strings.TrimSpace(openClawToolingGuidance),
+	)
+	require.Contains(t, content, openClawSkillRunGuidance)
 }
 
 func TestRun_HTTPListenErrorPath(t *testing.T) {

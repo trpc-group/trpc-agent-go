@@ -1103,6 +1103,18 @@ func TestParseRunOptions_SkillsToolProfile_InvalidFails(
 	require.Equal(t, 2, exitErr.Code)
 }
 
+func TestParseRunOptions_SkillsToolProfile_FullAccepted(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	opts, err := parseRunOptions([]string{
+		"-skills-tool-profile", "FULL",
+	})
+	require.NoError(t, err)
+	require.Equal(t, skillprofile.Full, opts.SkillsToolProfile)
+}
+
 func TestParseRunOptions_SkillsToolProfile_ConfigInvalidFails(
 	t *testing.T,
 ) {
@@ -1119,6 +1131,26 @@ skills:
 	var exitErr *exitError
 	require.True(t, errors.As(err, &exitErr))
 	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestSkillsOptionExitCode(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		2,
+		skillsOptionExitCode(map[string]struct{}{
+			flagSkillsToolProfile: {},
+		}),
+	)
+	require.Equal(
+		t,
+		2,
+		skillsOptionExitCode(map[string]struct{}{
+			flagSkillsLoadMode: {},
+		}),
+	)
+	require.Equal(t, 1, skillsOptionExitCode(map[string]struct{}{}))
 }
 
 func TestParseRunOptions_AdminDefaults(t *testing.T) {
