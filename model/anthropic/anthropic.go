@@ -177,10 +177,12 @@ func (m *Model) GenerateContent(
 		return nil, errors.New("request cannot be nil")
 	}
 
+	hadMessages := len(request.Messages) > 0
 	// Apply token tailoring if configured.
 	m.applyTokenTailoring(ctx, request)
+	allowTailoredEmpty := hadMessages && len(request.Messages) == 0
 
-	chatRequest, err := m.buildChatRequest(request)
+	chatRequest, err := m.buildChatRequest(request, allowTailoredEmpty)
 	if err != nil {
 		return nil, fmt.Errorf("build chat request: %w", err)
 	}
@@ -251,72 +253,69 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 
 	request.Messages = tailored
 
-	// Calculate remaining tokens for output based on context window.
-	usedTokens := 0
-	if len(request.Messages) > 0 {
-		var err error
-		usedTokens, err = m.tokenCounter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
-		if err != nil {
-			log.WarnContext(
-				ctx,
-				"failed to count tokens after tailoring",
-				err,
-			)
-			return
-		}
-	}
-
-	// Set max output tokens only if user hasn't specified it.
-	// This respects user's explicit configuration while providing a safe default.
-	if request.GenerationConfig.MaxTokens == nil {
-		if m.explicitMaxTokens != nil {
-			request.GenerationConfig.MaxTokens = m.explicitMaxTokens
-		} else {
-			contextWindow := imodel.ResolveContextWindow(m.name)
-			var maxOutputTokens int
-			if m.protocolOverheadTokens > 0 || m.outputTokensFloor > 0 {
-				// Use custom parameters if any are set.
-				maxOutputTokens = imodel.CalculateMaxOutputTokensWithParams(
-					contextWindow,
-					usedTokens,
-					m.protocolOverheadTokens,
-					m.outputTokensFloor,
-					m.safetyMarginRatio,
-				)
-			} else {
-				// Use default parameters.
-				maxOutputTokens = imodel.CalculateMaxOutputTokens(contextWindow, usedTokens)
-			}
-			if maxOutputTokens > 0 {
-				// Cap to model's known max output tokens if applicable.
-				// Models like claude-sonnet-4 have a 200K context window but only
-				// support 128K max output tokens.
-				if modelCap := imodel.ResolveMaxOutputTokens(m.name); modelCap > 0 && maxOutputTokens > modelCap {
-					maxOutputTokens = modelCap
-				}
-				request.GenerationConfig.MaxTokens = &maxOutputTokens
-				log.DebugfContext(
-					ctx,
-					"token tailoring: contextWindow=%d, usedTokens=%d, "+
-						"maxOutputTokens=%d",
-					contextWindow,
-					usedTokens,
-					maxOutputTokens,
-				)
-			}
-		}
+	// Optional model-level default for MaxTokens (explicit option only).
+	// Do not infer max completion tokens here; tests and API defaults expect
+	// GenerationConfig.MaxTokens to stay nil unless set on the request.
+	if request.GenerationConfig.MaxTokens == nil && m.explicitMaxTokens != nil {
+		request.GenerationConfig.MaxTokens = m.explicitMaxTokens
 	}
 }
 
+// buildTailoredEmptyChatRequest builds params when tailoring removed all messages.
+func (m *Model) buildTailoredEmptyChatRequest(
+	request *model.Request,
+	systemPrompts []anthropic.TextBlockParam,
+) (*anthropic.MessageNewParams, error) {
+	tools := convertTools(request.Tools)
+	messages := []anthropic.MessageParam(nil)
+	if m.cacheSystemPrompt || m.cacheTools || m.cacheMessages {
+		systemPrompts, tools, messages = m.applyCacheControl(systemPrompts, tools, messages)
+	}
+	chatRequest := &anthropic.MessageNewParams{
+		Model:    anthropic.Model(m.name),
+		Messages: messages,
+		Tools:    tools,
+	}
+	if len(systemPrompts) > 0 {
+		chatRequest.System = systemPrompts
+	}
+	if request.GenerationConfig.MaxTokens != nil {
+		chatRequest.MaxTokens = int64(*request.GenerationConfig.MaxTokens)
+	}
+	if chatRequest.MaxTokens == 0 && !m.enableTokenTailoring {
+		chatRequest.MaxTokens = 4096
+	}
+	if request.Temperature != nil {
+		chatRequest.Temperature = anthropic.Float(*request.Temperature)
+	}
+	if request.TopP != nil {
+		chatRequest.TopP = anthropic.Float(*request.TopP)
+	}
+	if len(request.Stop) > 0 {
+		chatRequest.StopSequences = append(chatRequest.StopSequences, request.Stop...)
+	}
+	if request.ThinkingEnabled != nil && *request.ThinkingEnabled && request.ThinkingTokens != nil {
+		chatRequest.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(*request.ThinkingTokens))
+	}
+	return chatRequest, nil
+}
+
 // buildChatRequest builds the chat request for the Anthropic API.
-func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewParams, error) {
+// allowTailoredEmpty is true when tailoring removed every message from a non-empty request.
+func (m *Model) buildChatRequest(
+	request *model.Request,
+	allowTailoredEmpty bool,
+) (*anthropic.MessageNewParams, error) {
 	// Convert messages to Anthropic format.
 	messages, systemPrompts, err := convertMessages(request.Messages)
 	if err != nil {
 		return nil, err
 	}
 	if len(messages) == 0 {
-		return nil, fmt.Errorf("request must include at least one message")
+		if !m.enableTokenTailoring || !allowTailoredEmpty {
+			return nil, fmt.Errorf("request must include at least one message")
+		}
+		return m.buildTailoredEmptyChatRequest(request, systemPrompts)
 	}
 
 	// Convert tools

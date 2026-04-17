@@ -104,7 +104,7 @@ func GenerateMemoryID(mem *memory.Memory, appName, userID string) string {
 		builder.WriteString("|event_time:")
 		builder.WriteString(mem.EventTime.UTC().Format("2006-01-02T15:04:05Z07:00"))
 	}
-	if participants := metadataIdentityParticipants(mem); len(participants) > 0 {
+	if participants := MetadataIdentityParticipants(mem); len(participants) > 0 {
 		builder.WriteString("|participants:")
 		builder.WriteString(strings.Join(participants, ","))
 	}
@@ -144,7 +144,7 @@ func EffectiveKind(mem *memory.Memory) memory.Kind {
 	return memory.KindFact
 }
 
-func metadataIdentityParticipants(mem *memory.Memory) []string {
+func MetadataIdentityParticipants(mem *memory.Memory) []string {
 	if mem == nil {
 		return nil
 	}
@@ -850,7 +850,7 @@ func normalizeAddMetadata(ep *memory.Metadata) *memory.Metadata {
 	normalized := &memory.Metadata{
 		Kind:         ep.Kind,
 		EventTime:    ep.EventTime,
-		Participants: metadataIdentityParticipants(&memory.Memory{Participants: ep.Participants}),
+		Participants: MetadataIdentityParticipants(&memory.Memory{Participants: ep.Participants}),
 		Location:     strings.TrimSpace(ep.Location),
 	}
 	if normalized.Kind == "" && (normalized.EventTime != nil ||
@@ -868,7 +868,7 @@ func normalizeUpdateMetadata(ep *memory.Metadata) *memory.Metadata {
 	return &memory.Metadata{
 		Kind:         ep.Kind,
 		EventTime:    ep.EventTime,
-		Participants: metadataIdentityParticipants(&memory.Memory{Participants: ep.Participants}),
+		Participants: MetadataIdentityParticipants(&memory.Memory{Participants: ep.Participants}),
 		Location:     strings.TrimSpace(ep.Location),
 	}
 }
@@ -879,7 +879,7 @@ func NormalizeMemory(mem *memory.Memory) {
 		return
 	}
 	mem.Kind = EffectiveKind(mem)
-	mem.Participants = metadataIdentityParticipants(mem)
+	mem.Participants = MetadataIdentityParticipants(mem)
 	mem.Location = strings.TrimSpace(mem.Location)
 }
 

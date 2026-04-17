@@ -137,17 +137,22 @@ func (e *CodeExecutor) ExecuteCode(
 				"failed to create work directory: %w", err,
 			)
 		}
-		// Create a unique temp subdirectory for script files to prevent
-		// concurrent calls from overwriting each other's code_0.sh.
-		tmpDir, err := os.MkdirTemp(cmdDir, ".exec_")
-		if err != nil {
-			return codeexecutor.CodeExecutionResult{}, fmt.Errorf(
-				"failed to create script temp directory: %w", err,
-			)
+		if e.CleanTempFiles {
+			// Isolate script files in a unique subdirectory so concurrent runs
+			// cannot clash, and remove it after execution.
+			tmpDir, err := os.MkdirTemp(cmdDir, ".exec_")
+			if err != nil {
+				// Fall back to the work directory (e.g. read-only workdir tests expect
+				// per-block write failures instead of failing the whole run here).
+				scriptDir = cmdDir
+			} else {
+				scriptDir = tmpDir
+				defer os.RemoveAll(scriptDir)
+			}
+		} else {
+			// Keep helper files in the work directory for callers that disable cleanup.
+			scriptDir = cmdDir
 		}
-		scriptDir = tmpDir
-		// Always clean up the temp script directory.
-		defer os.RemoveAll(scriptDir)
 	} else {
 		tempDir, err := os.MkdirTemp("", "codeexec_"+input.ExecutionID)
 		if err != nil {
@@ -187,7 +192,7 @@ func (e *CodeExecutor) executeCodeBlock(
 	ctx context.Context, cmdDir, scriptDir string,
 	block codeexecutor.CodeBlock, blockIndex int,
 ) (string, error) {
-	filePath, err := e.prepareCodeFile(scriptDir, block, blockIndex)
+	filePath, err := e.prepareCodeFile(scriptDir, block)
 	if err != nil {
 		return "", err
 	}

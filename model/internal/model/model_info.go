@@ -369,6 +369,26 @@ var ModelMaxOutputTokens = map[string]int{
 	"gemini-1.5-flash": 8192,
 }
 
+// isModelPrefixMatch reports whether modelName matches prefix at a model-ID boundary:
+// exact match, or modelName equals prefix followed by '-', '@', or ':' and more characters.
+func isModelPrefixMatch(modelName, prefix string) bool {
+	if prefix == "" {
+		return false
+	}
+	if !strings.HasPrefix(modelName, prefix) {
+		return false
+	}
+	if len(modelName) == len(prefix) {
+		return true
+	}
+	switch modelName[len(prefix)] {
+	case '-', '@', ':':
+		return true
+	default:
+		return false
+	}
+}
+
 // ResolveContextWindow returns the context window size for a given model name.
 // - Exact match (case-insensitive) first
 // - Prefix-based fallback second at a model-ID boundary

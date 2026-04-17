@@ -41,6 +41,27 @@ const (
 	maxReadSizeBytes  = 4 * 1024 * 1024 // 4 MiB per output file
 )
 
+// safeErrorString returns err.Error(), but recovers if Error panics (possible for
+// some fs errors on newer Go releases when formatting for telemetry).
+func safeErrorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	var msg string
+	func() {
+		defer func() {
+			if recover() != nil {
+				msg = fmt.Sprintf("%T", err)
+			}
+		}()
+		msg = err.Error()
+	}()
+	if msg != "" {
+		return msg
+	}
+	return fmt.Sprintf("%T", err)
+}
+
 // Runtime implements the workspace-based executor using local processes.
 type Runtime struct {
 	WorkRoot            string
@@ -158,7 +179,7 @@ func (r *Runtime) CreateWorkspace(
 	suf := time.Now().UnixNano()
 	wsPath := filepath.Join(base, fmt.Sprintf("ws_%s_%d", safe, suf))
 	if err := os.MkdirAll(wsPath, 0o777); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, safeErrorString(err))
 		return codeexecutor.Workspace{}, err
 	}
 	_ = os.Chmod(wsPath, 0o777)
@@ -168,7 +189,7 @@ func (r *Runtime) CreateWorkspace(
 
 	// Ensure standard layout and metadata.json.
 	if _, err := codeexecutor.EnsureLayout(wsPath); err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, safeErrorString(err))
 		return codeexecutor.Workspace{}, err
 	}
 	ws := codeexecutor.Workspace{ID: execID, Path: wsPath}
@@ -181,7 +202,7 @@ func (r *Runtime) CreateWorkspace(
 			Mode: "link",
 		}}
 		if err := r.StageInputs(ctx, ws, specs); err != nil {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, safeErrorString(err))
 			return codeexecutor.Workspace{}, err
 		}
 	}
@@ -241,7 +262,7 @@ func (r *Runtime) Cleanup(
 	}
 	err := os.RemoveAll(ws.Path)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, safeErrorString(err))
 	}
 	return err
 }
@@ -257,7 +278,7 @@ func (r *Runtime) PutFiles(
 	defer span.End()
 	for _, f := range files {
 		if err := r.writeFileSafe(ws.Path, f); err != nil {
-			span.SetStatus(codes.Error, err.Error())
+			span.SetStatus(codes.Error, safeErrorString(err))
 			return err
 		}
 	}
@@ -282,13 +303,13 @@ func (r *Runtime) PutDirectory(
 	}
 	src, err := filepath.Abs(hostPath)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, safeErrorString(err))
 		return err
 	}
 	dst := filepath.Join(ws.Path, filepath.Clean(to))
 	err = copyDir(src, dst)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, safeErrorString(err))
 	}
 	return err
 }
@@ -427,7 +448,7 @@ func (r *Runtime) RunProgram(
 		attribute.Bool(codeexecutor.AttrTimedOut, res.TimedOut),
 	)
 	if runErr != nil {
-		span.SetStatus(codes.Error, runErr.Error())
+		span.SetStatus(codes.Error, safeErrorString(runErr))
 	}
 
 	return res, nil
@@ -498,7 +519,7 @@ func (r *Runtime) Collect(
 						continue
 					}
 				}
-				span.SetStatus(codes.Error, statErr.Error())
+				span.SetStatus(codes.Error, safeErrorString(statErr))
 				return nil, statErr
 			}
 			if st.IsDir() {
@@ -506,7 +527,7 @@ func (r *Runtime) Collect(
 			}
 			content, mime, err := readLimited(realp)
 			if err != nil {
-				span.SetStatus(codes.Error, err.Error())
+				span.SetStatus(codes.Error, safeErrorString(err))
 				return nil, err
 			}
 			sizeBytes := st.Size()
@@ -841,7 +862,7 @@ func (r *Runtime) ExecuteInline(
 		ctx, execID, codeexecutor.WorkspacePolicy{},
 	)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, safeErrorString(err))
 		return codeexecutor.RunResult{}, err
 	}
 	defer r.Cleanup(ctx, ws)
@@ -851,7 +872,7 @@ func (r *Runtime) ExecuteInline(
 	for i, b := range blocks {
 		fn, mode, cmd, args, err := codeexecutor.BuildBlockSpec(i, b)
 		if err != nil {
-			allErr.WriteString(err.Error())
+			allErr.WriteString(safeErrorString(err))
 			allErr.WriteString("\n")
 			continue
 		}
@@ -861,7 +882,7 @@ func (r *Runtime) ExecuteInline(
 			Mode:    mode,
 		}
 		if err := r.PutFiles(ctx, ws, []codeexecutor.PutFile{pf}); err != nil {
-			allErr.WriteString(err.Error())
+			allErr.WriteString(safeErrorString(err))
 			allErr.WriteString("\n")
 			continue
 		}
@@ -876,7 +897,7 @@ func (r *Runtime) ExecuteInline(
 		}
 		res, err := r.RunProgram(ctx, ws, spec)
 		if err != nil {
-			allErr.WriteString(err.Error())
+			allErr.WriteString(safeErrorString(err))
 			allErr.WriteString("\n")
 		}
 		if res.Stdout != "" {

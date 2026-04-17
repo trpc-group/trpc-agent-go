@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -33,13 +34,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
-	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
+	teletrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
@@ -991,16 +992,13 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	// instead of creating a redundant child span that ends asynchronously
 	// and may be lost during batch flushes, causing phantom parent IDs
 	// in Langfuse and broken DAG visualizations.
-	span, ownsSpan := resolveOrCreateInvokeAgentSpan(ctx, a.name)
-	if ownsSpan {
-		ctx = sdktrace.ContextWithSpan(ctx, span)
-	}
+	ctx, span, ownsSpan := resolveOrCreateInvokeAgentSpan(ctx, invocation, a.name)
 
 	effectiveGenConfig := a.genConfig
 	effectiveGenConfig.Stream = iagent.ResolveInvokeAgentStream(invocation, &effectiveGenConfig)
 	promptText := a.systemPromptForInvocation(invocation) +
 		a.instructionForInvocation(invocation)
-	if startedSpan {
+	if span.IsRecording() {
 		itelemetry.TraceBeforeInvokeAgent(
 			span,
 			invocation,
@@ -1042,7 +1040,14 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 // returns it with ownsSpan=false so the caller does not end it. When the parent
 // span is absent or has a different operation, a new child span is created and
 // ownsSpan=true is returned.
-func resolveOrCreateInvokeAgentSpan(ctx context.Context, agentName string) (sdktrace.Span, bool) {
+func resolveOrCreateInvokeAgentSpan(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	agentName string,
+) (context.Context, sdktrace.Span, bool) {
+	if invocation != nil && invocation.RunOptions.DisableTracing {
+		return ctx, noop.Span{}, false
+	}
 	parentSpan := sdktrace.SpanFromContext(ctx)
 	if parentSpan != nil && parentSpan.SpanContext().IsValid() && parentSpan.IsRecording() {
 		// Use the instrumentation span interface to access the span name.
@@ -1052,16 +1057,16 @@ func resolveOrCreateInvokeAgentSpan(ctx context.Context, agentName string) (sdkt
 		// the invoke_agent prefix by inspecting the span's string representation.
 		if namer, ok := parentSpan.(interface{ Name() string }); ok {
 			if strings.HasPrefix(namer.Name(), itelemetry.OperationInvokeAgent+" ") {
-				return parentSpan, false
+				return ctx, parentSpan, false
 			}
 		}
 	}
 	// No suitable parent span — create a new one.
-	_, span := trace.Tracer.Start(
+	ctx, span := teletrace.Tracer.Start(
 		ctx,
 		fmt.Sprintf("%s %s", itelemetry.OperationInvokeAgent, agentName),
 	)
-	return span, true
+	return ctx, span, true
 }
 
 // executeAgentFlow executes the agent flow with before agent callbacks.
@@ -1178,8 +1183,23 @@ func (a *LLMAgent) wrapEventChannelWithTelemetry(
 		var responseErrorType string
 		tokenUsage := &itelemetry.TokenUsage{}
 		defer func() {
-			if startedSpan && fullRespEvent != nil {
-				itelemetry.TraceAfterInvokeAgent(span, fullRespEvent, tokenUsage, tracker.FirstTokenTimeDuration())
+			if fullRespEvent != nil && fullRespEvent.Response != nil {
+				responseErrorType = ""
+				if fullRespEvent.Response.Error != nil {
+					responseErrorType = itelemetry.FormatResponseErrorLabel(
+						fullRespEvent.Response.Error,
+						model.ErrorTypeRunError,
+					)
+				}
+			}
+			if span.IsRecording() && fullRespEvent != nil {
+				itelemetry.TraceAfterInvokeAgent(
+					span,
+					fullRespEvent,
+					tokenUsage,
+					tracker.FirstTokenTimeDuration(),
+					model.ErrorTypeRunError,
+				)
 			}
 			tracker.SetResponseErrorType(responseErrorType)
 			tracker.RecordMetrics()()
@@ -1217,11 +1237,11 @@ func finalizeWrappedTelemetry(
 	fullRespEvent *event.Event,
 	responseErrorType string,
 	tokenUsage *itelemetry.TokenUsage,
-	startedSpan bool,
+	ownsSpan bool,
 	wrappedChan chan *event.Event,
 ) {
 	responseErrorType = resolveWrappedResponseErrorType(fullRespEvent, responseErrorType)
-	if startedSpan {
+	if span.IsRecording() {
 		if fullRespEvent != nil {
 			itelemetry.TraceAfterInvokeAgent(
 				span,
@@ -1239,7 +1259,7 @@ func finalizeWrappedTelemetry(
 	}
 	tracker.SetResponseErrorType(responseErrorType)
 	tracker.RecordMetrics()()
-	if startedSpan {
+	if ownsSpan {
 		span.End()
 	}
 	close(wrappedChan)

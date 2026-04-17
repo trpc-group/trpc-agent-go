@@ -719,7 +719,7 @@ func Test_buildChatRequest_AllBranchesAndErrors(t *testing.T) {
 		},
 		Tools: map[string]tool.Tool{},
 	}
-	chatReq, err := m.buildChatRequest(req)
+	chatReq, err := m.buildChatRequest(req, false)
 	assert.NoError(t, err)
 	assert.Equal(t, anthropic.Model("claude-test"), chatReq.Model)
 	assert.True(t, chatReq.Temperature.Valid())
@@ -727,7 +727,7 @@ func Test_buildChatRequest_AllBranchesAndErrors(t *testing.T) {
 	assert.Equal(t, int64(maxTokens), chatReq.MaxTokens)
 	// Error when no messages are present in conversation.
 	req2 := &model.Request{Messages: []model.Message{model.NewSystemMessage("s")}}
-	chatReq, err = m.buildChatRequest(req2)
+	chatReq, err = m.buildChatRequest(req2, false)
 	assert.Error(t, err)
 	assert.Nil(t, chatReq)
 
@@ -738,7 +738,7 @@ func Test_buildChatRequest_AllBranchesAndErrors(t *testing.T) {
 			Stop: []string{"<END>"},
 		},
 	}
-	chatReq, err = m.buildChatRequest(reqStop)
+	chatReq, err = m.buildChatRequest(reqStop, false)
 	assert.NoError(t, err)
 	assert.True(t, len(chatReq.StopSequences) == 1)
 }
@@ -759,7 +759,7 @@ func Test_buildChatRequest_ThinkingIgnoredWhenTokensNil(t *testing.T) {
 			ThinkingEnabled: &thinking,
 		},
 	}
-	chatReq, err := m.buildChatRequest(req)
+	chatReq, err := m.buildChatRequest(req, false)
 	assert.NoError(t, err)
 	// When tokens are nil, thinking should not be set.
 	// The SDK union has both enabled/disabled variants omitted by default.

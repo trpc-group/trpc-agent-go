@@ -73,6 +73,11 @@ type Session struct {
 	// This field is computed once during session creation and never modified.
 	Hash int `json:"-"`
 
+	// ServiceMeta stores service-layer metadata (memory only, not persisted).
+	// Used internally by session service implementations for version routing, etc.
+	// Users should not access or modify this field directly.
+	ServiceMeta map[string]string `json:"-"`
+
 	// maskedEventIDs tracks events that have been soft-hidden from LLM context.
 	// Masked events remain in the Events slice for audit/debug purposes but
 	// are excluded from GetVisibleEvents(). This implements the Pensieve
