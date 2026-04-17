@@ -520,6 +520,81 @@ func TestProcessRequest_CrossBranch_RewritesToUser(t *testing.T) {
 	require.Contains(t, req.Messages[0].Content, "For context")
 }
 
+func TestProcessRequest_PreserveForeignMessagesKeepsOriginalTranscript(t *testing.T) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationMessage(model.NewUserMessage("ask")),
+		agent.WithInvocationEventFilterKey("graph-agent"),
+	)
+	inv.AgentName = "graph-agent"
+	inv.Branch = "graph-agent"
+
+	toolCallID := "call_select"
+	sess := &session.Session{}
+	sess.Events = append(sess.Events,
+		newSessionEventWithBranch(
+			"other-agent",
+			"graph-agent",
+			"other-root",
+			model.NewAssistantMessage("我来帮你调用上车点选择工具。"),
+		),
+		newSessionEventWithBranch(
+			"other-agent",
+			"graph-agent",
+			"other-root",
+			model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   toolCallID,
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "select_get_on_address",
+						Arguments: []byte(`{"title":"请问你要从哪里出发？"}`),
+					},
+				}},
+			},
+		),
+		newSessionEventWithBranch(
+			"other-agent",
+			"graph-agent",
+			"other-root",
+			model.Message{
+				Role:     model.RoleTool,
+				ToolID:   toolCallID,
+				ToolName: "select_get_on_address",
+				Content:  `{"title":"凌波门"}`,
+			},
+		),
+		newSessionEventWithBranch(
+			"other-agent",
+			"graph-agent",
+			"other-root",
+			model.NewAssistantMessage("正在为你搜索武汉大学。"),
+		),
+	)
+	inv.Session = sess
+
+	req := &model.Request{}
+	p := NewContentRequestProcessor(
+		WithPreserveSameBranch(true),
+		WithPreserveForeignMessages(true),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 5)
+	require.Equal(t, model.RoleAssistant, req.Messages[0].Role)
+	require.Equal(t, "我来帮你调用上车点选择工具。", req.Messages[0].Content)
+	require.Equal(t, model.RoleAssistant, req.Messages[1].Role)
+	require.Len(t, req.Messages[1].ToolCalls, 1)
+	require.Equal(t, "select_get_on_address", req.Messages[1].ToolCalls[0].Function.Name)
+	require.Equal(t, model.RoleTool, req.Messages[2].Role)
+	require.Equal(t, `{"title":"凌波门"}`, req.Messages[2].Content)
+	require.Equal(t, model.RoleAssistant, req.Messages[3].Role)
+	require.Equal(t, "正在为你搜索武汉大学。", req.Messages[3].Content)
+	require.Equal(t, model.RoleUser, req.Messages[4].Role)
+	require.Equal(t, "ask", req.Messages[4].Content)
+}
+
 func newSessionEvent(author string, msg model.Message) event.Event {
 	return event.Event{
 		Response: &model.Response{
