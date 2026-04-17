@@ -248,7 +248,9 @@ func TestGetCodeWithHelpersFallbackBranches(t *testing.T) {
 	if got := formatFieldList(fset, nil); got != "" {
 		t.Fatalf("formatFieldList(nil) = %q, want empty", got)
 	}
-	if got := formatField(fset, &goast.Field{Names: []*goast.Ident{{Name: "a"}, {Name: "b"},}, Type: &goast.Ident{Name: "int"}}); !strings.Contains(got, "a, b int") {
+	if got := formatField(fset, &goast.Field{
+		Names: []*goast.Ident{{Name: "a"}, {Name: "b"}},
+		Type:  &goast.Ident{Name: "int"}}); !strings.Contains(got, "a, b int") {
 		t.Fatalf("formatField() = %q, want 'a, b int'", got)
 	}
 
