@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
@@ -608,6 +609,7 @@ skills:
   watch: false
   watch_bundled: true
   watch_debounce_ms: 125
+  tool_profile: "knowledge_only"
   load_mode: "session"
   max_loaded_skills: 3
   loaded_content_in_tool_results: false
@@ -750,6 +752,11 @@ memory:
 	require.False(t, opts.SkillsWatch)
 	require.True(t, opts.SkillsWatchBundled)
 	require.Equal(t, 125*time.Millisecond, opts.SkillsWatchDebounce)
+	require.Equal(
+		t,
+		skillprofile.KnowledgeOnly,
+		opts.SkillsToolProfile,
+	)
 	require.Equal(t, "session", opts.SkillsLoadMode)
 	require.Equal(t, 3, opts.SkillsMaxLoaded)
 	require.False(t, opts.SkillsToolResults)
@@ -1056,6 +1063,11 @@ func TestParseRunOptions_SkillsDefaults(t *testing.T) {
 		defaultSkillsWatchDebounce,
 		opts.SkillsWatchDebounce,
 	)
+	require.Equal(
+		t,
+		defaultSkillsToolProfile,
+		opts.SkillsToolProfile,
+	)
 	require.Equal(t, defaultSkillsLoadMode, opts.SkillsLoadMode)
 	require.True(t, opts.SkillsToolResults)
 	require.True(t, opts.SkillsSkipFallback)
@@ -1068,6 +1080,21 @@ func TestParseRunOptions_SkillsLoadMode_InvalidFails(t *testing.T) {
 
 	_, err := parseRunOptions([]string{
 		"-skills-load-mode", "bad",
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 2, exitErr.Code)
+}
+
+func TestParseRunOptions_SkillsToolProfile_InvalidFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-skills-tool-profile", "bad",
 	})
 	require.Error(t, err)
 

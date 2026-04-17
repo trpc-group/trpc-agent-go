@@ -841,6 +841,7 @@ func NewRuntime(
 			SkillsWatch:         opts.SkillsWatch,
 			SkillsWatchBundled:  opts.SkillsWatchBundled,
 			SkillsWatchDebounce: opts.SkillsWatchDebounce,
+			SkillsToolProfile:   opts.SkillsToolProfile,
 			SkillsLoadMode:      opts.SkillsLoadMode,
 			SkillsMaxLoaded:     opts.SkillsMaxLoaded,
 			SkillsToolResults:   opts.SkillsToolResults,
@@ -1312,6 +1313,7 @@ func run(ctx context.Context, args []string) error {
 			SkillsWatch:         opts.SkillsWatch,
 			SkillsWatchBundled:  opts.SkillsWatchBundled,
 			SkillsWatchDebounce: opts.SkillsWatchDebounce,
+			SkillsToolProfile:   opts.SkillsToolProfile,
 			SkillsLoadMode:      opts.SkillsLoadMode,
 			SkillsMaxLoaded:     opts.SkillsMaxLoaded,
 			SkillsToolResults:   opts.SkillsToolResults,
@@ -2152,6 +2154,9 @@ func newAgent(
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
 		opts,
+		llmagent.WithSkillToolProfile(
+			llmagent.SkillToolProfile(cfg.SkillsToolProfile),
+		),
 		llmagent.WithSkillLoadMode(cfg.SkillsLoadMode),
 		llmagent.WithSkillsLoadedContentInToolResults(
 			cfg.SkillsToolResults,
@@ -2386,6 +2391,7 @@ type agentConfig struct {
 	SkillsWatch         bool
 	SkillsWatchBundled  bool
 	SkillsWatchDebounce time.Duration
+	SkillsToolProfile   string
 	SkillsLoadMode      string
 	SkillsMaxLoaded     int
 	SkillsToolResults   bool

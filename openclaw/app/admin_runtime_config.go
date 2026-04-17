@@ -19,6 +19,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 )
 
@@ -405,6 +406,22 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 							int(opts.SkillsWatchDebounce / time.Millisecond),
 						)
 					},
+				),
+				adminRuntimeSelectField(
+					"skills.tool_profile",
+					"Tool Profile",
+					"Which built-in skill tools are exposed.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("skills"),
+						adminRuntimeKey("tool_profile"),
+					},
+					func(opts runOptions) string {
+						return strings.TrimSpace(
+							opts.SkillsToolProfile,
+						)
+					},
+					skillprofile.Full,
+					skillprofile.KnowledgeOnly,
 				),
 				adminRuntimeSelectField(
 					"skills.load_mode",

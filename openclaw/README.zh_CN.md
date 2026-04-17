@@ -1059,6 +1059,7 @@ skills:
   # 可选：限制默认启用的内置技能。
   # 仅适用于 ./openclaw/skills 下的内置技能。
   allowBundled: ["gh-issues", "notion"]
+  tool_profile: "full" # full|knowledge_only
   load_mode: "turn" # once|turn|session
   loaded_content_in_tool_results: true
   max_loaded_skills: 0
@@ -1079,6 +1080,11 @@ skills:
 OpenClaw 默认将加载的技能正文/文档物化到 tool result 消息中。
 这样可以保持 system prompt 更稳定，同时仍允许 `SkillLoadMode`
 控制加载的技能状态的存活时间。
+
+将 `tool_profile` 设为 `"knowledge_only"` 时，会保留
+`skill_load`、`skill_list_docs`、`skill_select_docs`，但隐藏
+`skill_run` 这类执行工具。适合让技能只提供说明和补充文档，
+实际执行仍统一走常规 runtime tool 表面。
 
 内置技能指导默认更面向运行时：agent 在有技能自带脚本时优先使用，
 并可以使用最小的只读探测（如 `--help` 或 `--version`）来验证外部 CLI

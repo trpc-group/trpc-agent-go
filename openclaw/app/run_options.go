@@ -25,6 +25,7 @@ import (
 
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 )
@@ -62,6 +63,7 @@ const (
 
 	defaultSessionSummaryEventThreshold = 20
 	defaultSkillsLoadMode               = "turn"
+	defaultSkillsToolProfile            = skillprofile.Full
 	defaultSkillsWatchDebounce          = 250 * time.Millisecond
 
 	flagAddSessionSummary                             = "add-session-summary"
@@ -93,6 +95,7 @@ const (
 	flagSkillsWatch         = "skills-watch"
 	flagSkillsWatchBundled  = "skills-watch-bundled"
 	flagSkillsWatchDebounce = "skills-watch-debounce"
+	flagSkillsToolProfile   = "skills-tool-profile"
 	flagSkillsLoadMode      = "skills-load-mode"
 	flagSkillsMaxLoaded     = "skills-max-loaded"
 	flagSkillsToolResults   = "skills-loaded-content-in-tool-results"
@@ -185,6 +188,7 @@ type runOptions struct {
 	SkillsWatch         bool
 	SkillsWatchBundled  bool
 	SkillsWatchDebounce time.Duration
+	SkillsToolProfile   string
 	SkillsLoadMode      string
 	SkillsMaxLoaded     int
 	SkillsToolResults   bool
@@ -261,6 +265,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		SkillsWatch:         true,
 		SkillsWatchDebounce: defaultSkillsWatchDebounce,
+		SkillsToolProfile:   defaultSkillsToolProfile,
 		SkillsLoadMode:      defaultSkillsLoadMode,
 		SkillsToolResults:   true,
 		SkillsSkipFallback:  true,
@@ -592,6 +597,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Also watch bundled skills roots for local changes",
 	)
 	fs.StringVar(
+		&opts.SkillsToolProfile,
+		flagSkillsToolProfile,
+		defaultSkillsToolProfile,
+		"Built-in skill tool profile: full|knowledge_only",
+	)
+	fs.StringVar(
 		&opts.SkillsLoadMode,
 		flagSkillsLoadMode,
 		defaultSkillsLoadMode,
@@ -845,7 +856,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 	if err := finalizeRunOptions(&opts); err != nil {
 		return runOptions{}, &exitError{
-			Code: loadModeExitCode(setFlags),
+			Code: skillsOptionExitCode(setFlags),
 			Err:  err,
 		}
 	}
@@ -1046,6 +1057,8 @@ type skillsConfig struct {
 	WatchBundledCamel  *bool    `yaml:"watchBundled,omitempty"`
 	WatchDebounceMS    *int     `yaml:"watch_debounce_ms,omitempty"`
 	WatchDebounceCamel *int     `yaml:"watchDebounceMs,omitempty"`
+	ToolProfile        *string  `yaml:"tool_profile,omitempty"`
+	ToolProfileCamel   *string  `yaml:"toolProfile,omitempty"`
 	LoadMode           *string  `yaml:"load_mode,omitempty"`
 	LoadModeCamel      *string  `yaml:"loadMode,omitempty"`
 	MaxLoadedSkills    *int     `yaml:"max_loaded_skills,omitempty"`
@@ -1539,6 +1552,14 @@ func (cfg *fileConfig) apply(
 				cfg.Skills.Entries,
 			)
 		}
+		toolProfile := firstStringPtr(
+			cfg.Skills.ToolProfile,
+			cfg.Skills.ToolProfileCamel,
+		)
+		if toolProfile != nil &&
+			!flagWasSet(set, flagSkillsToolProfile) {
+			opts.SkillsToolProfile = strings.TrimSpace(*toolProfile)
+		}
 		loadMode := firstStringPtr(
 			cfg.Skills.LoadMode,
 			cfg.Skills.LoadModeCamel,
@@ -1992,8 +2013,9 @@ func flagWasSet(set map[string]struct{}, name string) bool {
 	return ok
 }
 
-func loadModeExitCode(set map[string]struct{}) int {
-	if flagWasSet(set, flagSkillsLoadMode) {
+func skillsOptionExitCode(set map[string]struct{}) int {
+	if flagWasSet(set, flagSkillsToolProfile) ||
+		flagWasSet(set, flagSkillsLoadMode) {
 		return 2
 	}
 	return 1
@@ -2003,6 +2025,11 @@ func finalizeRunOptions(opts *runOptions) error {
 	if opts == nil {
 		return nil
 	}
+	profile, err := normalizeSkillsToolProfile(opts.SkillsToolProfile)
+	if err != nil {
+		return err
+	}
+	opts.SkillsToolProfile = profile
 	mode, err := normalizeSkillsLoadMode(opts.SkillsLoadMode)
 	if err != nil {
 		return err
@@ -2052,6 +2079,23 @@ func normalizeA2AHost(raw string) string {
 		return ""
 	}
 	return ia2a.NormalizeURL(host)
+}
+
+func normalizeSkillsToolProfile(raw string) (string, error) {
+	profile := strings.ToLower(strings.TrimSpace(raw))
+	if profile == "" {
+		return defaultSkillsToolProfile, nil
+	}
+	switch profile {
+	case skillprofile.Full, skillprofile.KnowledgeOnly:
+		return profile, nil
+	default:
+		return "", fmt.Errorf(
+			"invalid skills tool profile %q: "+
+				"want full|knowledge_only",
+			raw,
+		)
+	}
 }
 
 func normalizeSkillsLoadMode(raw string) (string, error) {

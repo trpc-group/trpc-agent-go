@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -1605,6 +1606,29 @@ func TestNewAgent_SkillsToolResults_ConfigApplied(t *testing.T) {
 	sys := joinSystemMessages(req)
 	require.Contains(t, sys, "Loaded skill context:")
 	require.Contains(t, sys, "[Loaded] echoer")
+}
+
+func TestNewAgent_KnowledgeOnlyProfileHidesSkillRun(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:           "demo",
+		SkillsRoot:        root,
+		StateDir:          t.TempDir(),
+		SkillsToolProfile: skillprofile.KnowledgeOnly,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	require.NotNil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolRun),
+	)
 }
 
 func TestRun_HTTPListenErrorPath(t *testing.T) {
