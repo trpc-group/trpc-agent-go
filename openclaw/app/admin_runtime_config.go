@@ -420,8 +420,8 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 							opts.SkillsToolProfile,
 						)
 					},
-					skillprofile.Full,
 					skillprofile.KnowledgeOnly,
+					skillprofile.Full,
 				),
 				adminRuntimeSelectField(
 					"skills.load_mode",

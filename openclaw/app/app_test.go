@@ -1715,7 +1715,7 @@ func TestNewAgent_FullProfileUsesToolingGuidance(t *testing.T) {
 			profile: skillprofile.Full,
 		},
 		{
-			name:    "zero-value profile defaults to full",
+			name:    "zero-value profile defaults to knowledge-only",
 			profile: "",
 		},
 	}

@@ -63,7 +63,7 @@ const (
 
 	defaultSessionSummaryEventThreshold = 20
 	defaultSkillsLoadMode               = "turn"
-	defaultSkillsToolProfile            = skillprofile.Full
+	defaultSkillsToolProfile            = skillprofile.KnowledgeOnly
 	defaultSkillsWatchDebounce          = 250 * time.Millisecond
 
 	flagAddSessionSummary                             = "add-session-summary"

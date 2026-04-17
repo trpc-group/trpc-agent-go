@@ -801,10 +801,14 @@ func TestBuildAdminOptions_ExposesSkillsToolProfileField(
 		field.InputType,
 	)
 	require.Len(t, field.Options, 2)
-	require.Equal(t, skillprofile.Full, field.Options[0].Value)
 	require.Equal(
 		t,
 		skillprofile.KnowledgeOnly,
+		field.Options[0].Value,
+	)
+	require.Equal(
+		t,
+		skillprofile.Full,
 		field.Options[1].Value,
 	)
 }

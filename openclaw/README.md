@@ -1163,7 +1163,7 @@ skills:
   watch: true
   watch_bundled: false
   watch_debounce_ms: 250
-  tool_profile: "full" # full|knowledge_only
+  tool_profile: "knowledge_only" # knowledge_only|full
   load_mode: "turn" # once|turn|session
   loaded_content_in_tool_results: true
   max_loaded_skills: 0
@@ -1185,11 +1185,14 @@ OpenClaw defaults to materializing loaded skill bodies/docs into tool
 result messages. This keeps the system prompt more stable while still
 letting `SkillLoadMode` control how long loaded skill state survives.
 
-`tool_profile: "knowledge_only"` keeps `skill_load`,
+`tool_profile: "knowledge_only"` is the default. It keeps `skill_load`,
 `skill_list_docs`, and `skill_select_docs`, while hiding execution
 tools such as `skill_run`. This is useful when you want skills to
 provide guidance and supporting docs but keep actual execution on the
 normal runtime tool surface.
+
+Use `tool_profile: "full"` only when you explicitly want the built-in
+skill execution tools to be visible to the model.
 
 When `skills.watch` is enabled, changes under local filesystem skill
 roots are picked up automatically after the watch debounce fires.

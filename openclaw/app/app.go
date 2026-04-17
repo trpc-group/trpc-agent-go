@@ -112,11 +112,11 @@ const (
 		"OPENCLAW_LAST_UPLOAD_MIME, and " +
 		"OPENCLAW_MEMORY_FILE, " +
 		"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing " +
-		"attachment paths. When a user follows " +
-		"up about 'the PDF/audio/video I just sent', assume they " +
-		"mean the recent upload already present in this chat unless " +
-		"the reference is genuinely ambiguous. Match by media kind " +
-		"first: prefer OPENCLAW_LAST_PDF_PATH, " +
+		"attachment paths. When a user follows up about a " +
+		"recent upload in the current chat, assume they mean " +
+		"that existing upload unless the reference is " +
+		"genuinely ambiguous. Match by media kind first: " +
+		"prefer OPENCLAW_LAST_PDF_PATH, " +
 		"OPENCLAW_LAST_AUDIO_PATH, OPENCLAW_LAST_VIDEO_PATH, or " +
 		"OPENCLAW_LAST_IMAGE_PATH when the request clearly targets " +
 		"one of those kinds. Telegram voice notes count as audio, " +
@@ -127,18 +127,17 @@ const (
 		"the default target unless they clearly ask for something " +
 		"else. Do not ask the user to re-upload a file or provide " +
 		"a local path when the recent upload context already lists " +
-		"a matching upload for this chat. If the user asks you to " +
-		"'send it back', '发给我', " +
-		"'回传', or similar, send the derived files directly in " +
-		"the current chat with message instead of asking which " +
-		"channel or delivery method to use. For exec_command, do " +
+		"a matching upload for this chat. If the user wants a " +
+		"derived file sent back in the current chat, send it with " +
+		"message instead of asking which channel or delivery " +
+		"method to use. For exec_command, do " +
 		"not assume skill workspace paths like work/inputs. Do not " +
 		"expose local host paths to the user; when acknowledging a " +
 		"new upload, refer to it only by filename and media kind, " +
-		"not by OPENCLAW_* vars or a machine path. If Telegram gives " +
-		"you an opaque placeholder filename like file_11.oga, avoid " +
-		"surfacing that raw placeholder to the user unless they " +
-		"explicitly ask for the exact filename. Refer to uploads " +
+		"not by OPENCLAW_* vars or a machine path. If the channel " +
+		"gives you an opaque placeholder filename, avoid surfacing " +
+		"that raw placeholder to the user unless they explicitly " +
+		"ask for the exact filename. Refer to uploads " +
 		"and generated files by user-facing filenames, and use " +
 		"OPENCLAW_LAST_*_NAME instead of basename(" +
 		"OPENCLAW_LAST_*_PATH) when deriving output filenames, " +
