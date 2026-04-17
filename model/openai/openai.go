@@ -656,6 +656,10 @@ func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestO
 	return opts
 }
 
+// shouldBackfillReasoningContent reports whether replay should emit
+// model.ReasoningContentKey as an empty string for assistant tool-call
+// messages. Some providers require the key to be present during tool-call
+// replay even when no reasoning text was returned.
 func (m *Model) shouldBackfillReasoningContent(
 	msg model.Message,
 ) bool {

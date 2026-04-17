@@ -197,11 +197,56 @@ func (m *Model) generateBatchJSONL(requests []*BatchRequestInput) ([]byte, error
 		if r.Body.Model == "" {
 			r.Body.Model = m.name
 		}
-		if err := enc.Encode(r); err != nil {
+		payload, err := m.batchRequestPayload(r)
+		if err != nil {
+			return nil, err
+		}
+		if err := enc.Encode(payload); err != nil {
 			return nil, fmt.Errorf("failed to encode jsonl line: %w", err)
 		}
 	}
 	return buf.Bytes(), nil
+}
+
+func (m *Model) batchRequestPayload(
+	r *BatchRequestInput,
+) (any, error) {
+	if !m.reasoningContentBackfill {
+		return r, nil
+	}
+
+	rawRequest, err := json.Marshal(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal batch request: %w", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rawRequest, &payload); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal batch request: %w", err)
+	}
+
+	body, ok := payload["body"].(map[string]any)
+	if !ok {
+		return payload, nil
+	}
+	messageValues, ok := body["messages"].([]any)
+	if !ok {
+		return payload, nil
+	}
+
+	for idx, msg := range r.Body.Messages {
+		if idx >= len(messageValues) ||
+			!m.shouldBackfillReasoningContent(msg) {
+			continue
+		}
+		messageValue, ok := messageValues[idx].(map[string]any)
+		if !ok {
+			continue
+		}
+		messageValue[model.ReasoningContentKey] = msg.ReasoningContent
+	}
+
+	return payload, nil
 }
 
 // RetrieveBatch retrieves a batch job by ID.
