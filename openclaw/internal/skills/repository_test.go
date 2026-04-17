@@ -981,9 +981,8 @@ x
 }
 
 func TestListTool_ReturnsDisabledSkillsWithReasons(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
+	t.Setenv(skillsPathEnvName, "/usr/local/bin:/usr/bin")
 	writeSkill(t, root, "ok", `---
 name: ok
 description: ok
@@ -1021,6 +1020,16 @@ metadata:
 	require.True(t, byName["ok"].Enabled)
 	require.False(t, byName["needsbin"].Enabled)
 	require.Contains(t, byName["needsbin"].Reason, "missing bins")
+	require.Contains(
+		t,
+		byName["needsbin"].Reason,
+		"searched PATH dirs: /usr/local/bin, /usr/bin",
+	)
+	require.Contains(
+		t,
+		byName["needsbin"].Reason,
+		skillsExtraPathEnvName,
+	)
 }
 
 func TestListTool_Declaration(t *testing.T) {

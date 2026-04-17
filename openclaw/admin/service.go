@@ -4327,6 +4327,11 @@ const adminPageHTML = `<!doctype html>
                     {{end}}
                   </div>
                 </div>
+                {{if eq .InputType "readonly"}}
+                <p class="subtle" style="margin-top: 12px;">
+                  Read-only runtime diagnostics.
+                </p>
+                {{else}}
                 <form method="post" action="/api/config/save" class="config-form">
                   <input type="hidden" name="field_key" value="{{.Key}}">
                   <input type="hidden" name="return_to" value="config-field-{{.Key}}">
@@ -4363,6 +4368,7 @@ const adminPageHTML = `<!doctype html>
                     {{end}}
                   </div>
                 </form>
+                {{end}}
               </div>
             </details>
             {{end}}

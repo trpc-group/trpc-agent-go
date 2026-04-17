@@ -28,6 +28,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
 )
 
+const (
+	skillsPathEnvName      = "PATH"
+	skillsExtraPathEnvName = "TRPC_CLAW_EXTRA_PATH_DIRS"
+
+	missingBinsReasonFormat = "" +
+		"missing bins: %s; searched PATH dirs: %s; fix: move " +
+		"the binary into an existing PATH dir or add its " +
+		"directory to %s"
+	missingAnyBinsReasonFormat = "" +
+		"missing anyBins (need one): %s; searched PATH dirs: %s; " +
+		"fix: install one of these binaries into an existing " +
+		"PATH dir or add its directory to %s"
+
+	emptySkillsSearchDirs = "(empty)"
+)
+
 type SkillConfig struct {
 	Enabled *bool
 	APIKey  string
@@ -555,8 +571,10 @@ func evaluateRequiredBins(bins []string) string {
 		return ""
 	}
 	return fmt.Sprintf(
-		"missing bins: %s",
+		missingBinsReasonFormat,
 		strings.Join(missing, ", "),
+		formatSkillsSearchDirs(),
+		skillsExtraPathEnvName,
 	)
 }
 
@@ -578,9 +596,27 @@ func evaluateRequiredAnyBins(bins []string) string {
 		}
 	}
 	return fmt.Sprintf(
-		"missing anyBins (need one): %s",
+		missingAnyBinsReasonFormat,
 		strings.Join(any, ", "),
+		formatSkillsSearchDirs(),
+		skillsExtraPathEnvName,
 	)
+}
+
+func formatSkillsSearchDirs() string {
+	parts := filepath.SplitList(os.Getenv(skillsPathEnvName))
+	out := make([]string, 0, len(parts))
+	for _, entry := range parts {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		out = append(out, entry)
+	}
+	if len(out) == 0 {
+		return emptySkillsSearchDirs
+	}
+	return strings.Join(out, ", ")
 }
 
 func evaluateRequiredEnv(
