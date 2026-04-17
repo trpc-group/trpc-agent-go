@@ -121,6 +121,43 @@ func TestServiceHandlerRendersConfigPage(t *testing.T) {
 	require.Contains(t, body, "Pending restart")
 }
 
+func TestServiceHandlerRendersReadOnlyConfigField(t *testing.T) {
+	t.Parallel()
+
+	svc := New(
+		Config{},
+		WithRuntimeConfigProvider(&stubRuntimeConfigProvider{
+			status: RuntimeConfigStatus{
+				ConfigPath: "/tmp/openclaw.yaml",
+				Sections: []RuntimeConfigSection{{
+					Key:   "runtime",
+					Title: "Runtime",
+					Fields: []RuntimeConfigField{{
+						Key:                "runtime.effective_path",
+						Title:              "Effective PATH",
+						Summary:            "Read-only path diagnostics.",
+						InputType:          configInputReadOnly,
+						ApplyMode:          configApplyHot,
+						EditorValue:        "/usr/local/bin:/usr/bin",
+						RuntimeValue:       "/usr/local/bin:/usr/bin",
+						RuntimeSourceLabel: "Current process PATH.",
+					}},
+				}},
+			},
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, routeConfigPage, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, "Read-only runtime diagnostics.")
+	require.NotContains(t, body, `class="config-form"`)
+	require.Contains(t, body, "Effective PATH")
+}
+
 func TestServiceHandlerRendersConfigPageRestartCTA(t *testing.T) {
 	t.Parallel()
 
