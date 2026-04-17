@@ -1288,6 +1288,88 @@ func Test_HandleStreamingResponse_InvalidToolInputDeltaReturnsError(t *testing.T
 	assert.Contains(t, callbackErr.Error(), "unexpected end of JSON input")
 }
 
+func Test_StreamingMessageAccumulator_HelperGuards(t *testing.T) {
+	var nilAcc *streamingMessageAccumulator
+	assert.Equal(t, anthropic.Message{}, nilAcc.Message())
+	require.EqualError(t, nilAcc.Accumulate(anthropic.MessageStreamEventUnion{}), "accumulate: cannot accumulate into nil accumulator")
+	require.NoError(t, nilAcc.Finalize())
+	acc := newStreamingMessageAccumulator()
+	_, _, err := acc.lastContentBlock()
+	require.EqualError(t, err, "no content block")
+	block := anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage(`{"seed":1}`)}
+	appendInputJSONDelta(nil, nil, "")
+	appendInputJSONDelta(&block, nil, `{"ignored":true}`)
+	assert.JSONEq(t, `{"seed":1}`, string(block.Input))
+	started := false
+	appendInputJSONDelta(&block, &started, "")
+	assert.False(t, started)
+	assert.JSONEq(t, `{"seed":1}`, string(block.Input))
+	appendInputJSONDelta(&block, &started, `{"fresh":1`)
+	assert.True(t, started)
+	assert.Equal(t, `{"fresh":1`, string(block.Input))
+	appendInputJSONDelta(&block, &started, `,"next":2}`)
+	assert.JSONEq(t, `{"fresh":1,"next":2}`, string(block.Input))
+	require.NoError(t, finalizeStreamingMessage(nil))
+	require.NoError(t, refreshContentBlockRawJSON(nil))
+}
+
+func Test_StreamingMessageAccumulator_DeltaVariants(t *testing.T) {
+	acc := newStreamingMessageAccumulator()
+	acc.message = anthropic.Message{Content: []anthropic.ContentBlockUnion{{Type: "text", Text: "Hello"}}}
+	acc.inputDeltaStartedAt = []bool{false}
+	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}`)))
+	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"char_location","cited_text":"Hello","document_index":0,"document_title":"Doc","start_char_index":0,"end_char_index":5}}}`)))
+	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":0}`)))
+	acc.message.Content = append(acc.message.Content, anthropic.ContentBlockUnion{Type: "thinking", Thinking: "Plan", Signature: "sig"})
+	acc.inputDeltaStartedAt = append(acc.inputDeltaStartedAt, false)
+	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":" more"}}`)))
+	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_delta","index":1,"delta":{"type":"signature_delta","signature":"-next"}}`)))
+	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":1}`)))
+	require.NoError(t, acc.Finalize())
+	require.Len(t, acc.message.Content, 2)
+	textBlock, ok := acc.message.Content[0].AsAny().(anthropic.TextBlock)
+	require.True(t, ok)
+	assert.Equal(t, "Hello world", textBlock.Text)
+	require.Len(t, textBlock.Citations, 1)
+	citation, ok := textBlock.Citations[0].AsAny().(anthropic.CitationCharLocation)
+	require.True(t, ok)
+	assert.Equal(t, int64(0), citation.StartCharIndex)
+	assert.Equal(t, int64(5), citation.EndCharIndex)
+	thinkingBlock, ok := acc.message.Content[1].AsAny().(anthropic.ThinkingBlock)
+	require.True(t, ok)
+	assert.Equal(t, "Plan more", thinkingBlock.Thinking)
+	assert.Equal(t, "sig-next", thinkingBlock.Signature)
+}
+
+func Test_StreamingMessageAccumulator_ErrorPaths(t *testing.T) {
+	acc := newStreamingMessageAccumulator()
+	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}`)), "there was no content block")
+	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":0}`)), "there was no content block")
+	acc.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}}
+	acc.inputDeltaStartedAt = []bool{false}
+	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":0}`)), "error converting content block to JSON")
+	require.Error(t, refreshContentBlockRawJSON(&anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("{")}))
+	require.Error(t, finalizeStreamingMessage(&anthropic.Message{
+		Content: []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}},
+	}))
+}
+
+func mustMessageStreamEventUnion(t *testing.T, raw string) anthropic.MessageStreamEventUnion {
+	t.Helper()
+	var event anthropic.MessageStreamEventUnion
+	require.NoError(t, event.UnmarshalJSON([]byte(raw)))
+	return event
+}
+
 func Test_HandleStreamingResponse_ContextCancelStillCallsCallback(t *testing.T) {
 	sse := strings.Join([]string{
 		"event: message_start",
