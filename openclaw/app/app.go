@@ -40,6 +40,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -89,6 +90,8 @@ const (
 	defaultAgentName        = "assistant"
 	defaultAgentInstruction = "You are a helpful assistant. " +
 		"Keep replies concise."
+	openClawSkillRunGuidance = "Use skill_run only for skill " +
+		"workspace workflows."
 
 	openClawToolingGuidance = "For general local shell work, use " +
 		"read_document or read_spreadsheet first for common PDF, " +
@@ -202,8 +205,7 @@ const (
 		"scheduling request. Prefer concise, outcome-oriented " +
 		"tasks over brittle shell transcripts unless exact " +
 		"commands are truly required. Use cron for future or " +
-		"recurring work. " +
-		"Use skill_run only for skill workspace workflows."
+		"recurring work."
 
 	browserToolingGuidance = "For real browser automation, use " +
 		"browser. Prefer browser snapshot plus act for page " +
@@ -2086,7 +2088,7 @@ func newAgent(
 	}
 	if cfg.EnableOpenClawTools {
 		instruction = strings.TrimSpace(
-			instruction + "\n\n" + openClawToolingGuidance,
+			instruction + "\n\n" + buildOpenClawToolingGuidance(cfg),
 		)
 	}
 	knowledgeTools, err := buildKnowledgeTools(cfg.KnowledgesConfig)
@@ -2203,6 +2205,19 @@ func newAgent(
 	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
 
 	return llmagent.New(defaultAgentName, opts...), repo, nil
+}
+
+func buildOpenClawToolingGuidance(cfg agentConfig) string {
+	guidance := strings.TrimSpace(openClawToolingGuidance)
+	if skillprofile.IsKnowledgeOnly(cfg.SkillsToolProfile) {
+		return guidance
+	}
+	if guidance == "" {
+		return openClawSkillRunGuidance
+	}
+	return strings.TrimSpace(
+		guidance + " " + openClawSkillRunGuidance,
+	)
 }
 
 func hasToolNamed(tools []tool.Tool, name string) bool {

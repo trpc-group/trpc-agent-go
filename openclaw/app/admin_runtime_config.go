@@ -413,7 +413,7 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					"Which built-in skill tools are exposed.",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("skills"),
-						adminRuntimeKey("tool_profile"),
+						adminRuntimeKey("tool_profile", "toolProfile"),
 					},
 					func(opts runOptions) string {
 						return strings.TrimSpace(

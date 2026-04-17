@@ -1103,6 +1103,24 @@ func TestParseRunOptions_SkillsToolProfile_InvalidFails(
 	require.Equal(t, 2, exitErr.Code)
 }
 
+func TestParseRunOptions_SkillsToolProfile_ConfigInvalidFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  tool_profile: "bad"
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+}
+
 func TestParseRunOptions_AdminDefaults(t *testing.T) {
 	t.Parallel()
 

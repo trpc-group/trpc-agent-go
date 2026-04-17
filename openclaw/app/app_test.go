@@ -255,6 +255,17 @@ func joinSystemMessages(req *model.Request) string {
 	return strings.Join(parts, "\n\n")
 }
 
+func joinAllMessageContent(req *model.Request) string {
+	if req == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(req.Messages))
+	for _, msg := range req.Messages {
+		parts = append(parts, msg.Content)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 func TestRuntimePromptControllerUpdatesAgentPrompts(
 	t *testing.T,
 ) {
@@ -1625,9 +1636,62 @@ func TestNewAgent_KnowledgeOnlyProfileHidesSkillRun(t *testing.T) {
 		t,
 		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad),
 	)
+	require.NotNil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolListDocs),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolSelectDocs),
+	)
 	require.Nil(
 		t,
 		findToolDeclaration(agt.Tools(), skillprofile.ToolRun),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolExec),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolWriteStdin),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolPollSession),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolKillSession),
+	)
+}
+
+func TestNewAgent_KnowledgeOnlyProfileOmitsSkillRunGuidance(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:             "demo",
+		SkillsRoot:          root,
+		StateDir:            t.TempDir(),
+		SkillsToolProfile:   skillprofile.KnowledgeOnly,
+		EnableOpenClawTools: true,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	require.NotContains(
+		t,
+		joinAllMessageContent(req),
+		openClawSkillRunGuidance,
 	)
 }
 

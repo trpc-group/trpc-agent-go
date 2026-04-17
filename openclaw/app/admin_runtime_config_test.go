@@ -772,7 +772,7 @@ func TestBuildAdminOptions_ExposesSkillsToolProfileField(
 
 	cfgPath := writeAdminRuntimeConfigTestFile(
 		t,
-		"skills:\n  tool_profile: knowledge_only\n",
+		"skills:\n  toolProfile: knowledge_only\n",
 	)
 	opts := adminRuntimeConfigTestOptions(cfgPath)
 	opts.SkillsToolProfile = skillprofile.KnowledgeOnly
