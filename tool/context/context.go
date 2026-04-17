@@ -143,12 +143,30 @@ type NoteOutput struct {
 func NewNoteTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		func(ctx context.Context, input NoteInput) (NoteOutput, error) {
-			sess := sessionFromContext(ctx)
-			if sess == nil {
+			inv, ok := agent.InvocationFromContext(ctx)
+			if !ok || inv == nil || inv.Session == nil {
 				return NoteOutput{Message: "no session available"}, nil
 			}
 
-			sess.SetState(noteKeyPrefix+input.Key, []byte(input.Content))
+			keyStr := noteKeyPrefix + input.Key
+			byteContent := []byte(input.Content)
+
+			inv.Session.SetState(keyStr, byteContent)
+
+			if inv.SessionService != nil {
+				key := session.Key{
+					AppName:   inv.Session.AppName,
+					UserID:    inv.Session.UserID,
+					SessionID: inv.Session.ID,
+				}
+				err := inv.SessionService.UpdateSessionState(ctx, key, session.StateMap{
+					keyStr: byteContent,
+				})
+				if err != nil {
+					return NoteOutput{Message: fmt.Sprintf("failed to persist note: %v", err)}, nil
+				}
+			}
+
 			return NoteOutput{
 				Message: fmt.Sprintf("note '%s' saved (%d bytes)", input.Key, len(input.Content)),
 			}, nil
