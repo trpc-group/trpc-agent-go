@@ -248,19 +248,21 @@ func TestTransformSpan(t *testing.T) {
 }
 
 func TestTransformInvokeAgent(t *testing.T) {
+	inputMessages := `[{"role":"tool","content":"ok","tool_call_id":"call-123","name":"search"}]`
+	outputChoices := `[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]`
 	span := &tracepb.Span{
 		Name: "agent-span",
 		Attributes: []*commonpb.KeyValue{
 			{
 				Key: semconvtrace.KeyGenAIInputMessages,
 				Value: &commonpb.AnyValue{
-					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"user","content":"hi"}]`},
+					Value: &commonpb.AnyValue_StringValue{StringValue: inputMessages},
 				},
 			},
 			{
 				Key: semconvtrace.KeyGenAIOutputMessages,
 				Value: &commonpb.AnyValue{
-					Value: &commonpb.AnyValue_StringValue{StringValue: `[{"role":"assistant","content":"hello"}]`},
+					Value: &commonpb.AnyValue_StringValue{StringValue: outputChoices},
 				},
 			},
 			{
@@ -294,8 +296,8 @@ func TestTransformInvokeAgent(t *testing.T) {
 	}
 
 	assert.Equal(t, observationTypeAgent, attrMap[observationType])
-	assert.Equal(t, `[{"role":"user","content":"hi"}]`, attrMap[observationInput])
-	assert.Equal(t, `[{"role":"assistant","content":"hello"}]`, attrMap[observationOutput])
+	assert.Equal(t, inputMessages, attrMap[observationInput])
+	assert.Equal(t, outputChoices, attrMap[observationOutput])
 	assert.Equal(t, "keep-this", attrMap["other.attribute"])
 
 	// Token usage attributes should be filtered out for InvokeAgent observations.

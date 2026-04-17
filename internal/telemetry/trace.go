@@ -96,6 +96,56 @@ func NewWorkflowSpanName(workflowName string) string {
 	return OperationWorkflow + " " + workflowName
 }
 
+type telemetryMessage struct {
+	Role             model.Role          `json:"role"`
+	Content          string              `json:"content,omitempty"`
+	ContentParts     []model.ContentPart `json:"content_parts,omitempty"`
+	ToolCallID       string              `json:"tool_call_id,omitempty"`
+	Name             string              `json:"name,omitempty"`
+	ToolCalls        []model.ToolCall    `json:"tool_calls,omitempty"`
+	ReasoningContent string              `json:"reasoning_content,omitempty"`
+}
+
+type telemetryChoice struct {
+	Index        int              `json:"index"`
+	Message      telemetryMessage `json:"message,omitempty"`
+	Delta        telemetryMessage `json:"delta,omitempty"`
+	FinishReason *string          `json:"finish_reason,omitempty"`
+}
+
+func telemetryMessageFromModel(msg model.Message) telemetryMessage {
+	return telemetryMessage{
+		Role:             msg.Role,
+		Content:          msg.Content,
+		ContentParts:     msg.ContentParts,
+		ToolCallID:       msg.ToolID,
+		Name:             msg.ToolName,
+		ToolCalls:        msg.ToolCalls,
+		ReasoningContent: msg.ReasoningContent,
+	}
+}
+
+func marshalTelemetryMessages(messages []model.Message) ([]byte, error) {
+	out := make([]telemetryMessage, len(messages))
+	for i, msg := range messages {
+		out[i] = telemetryMessageFromModel(msg)
+	}
+	return json.Marshal(out)
+}
+
+func marshalTelemetryChoices(choices []model.Choice) ([]byte, error) {
+	out := make([]telemetryChoice, len(choices))
+	for i, choice := range choices {
+		out[i] = telemetryChoice{
+			Index:        choice.Index,
+			Message:      telemetryMessageFromModel(choice.Message),
+			Delta:        telemetryMessageFromModel(choice.Delta),
+			FinishReason: choice.FinishReason,
+		}
+	}
+	return json.Marshal(out)
+}
+
 // TraceWorkflow traces the workflow.
 func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	if !span.IsRecording() {
@@ -269,7 +319,7 @@ func TraceBeforeInvokeAgent(span trace.Span, invoke *agent.Invocation, agentDesc
 				callback(spanContext)
 			}
 		}
-		if bts, err := json.Marshal([]model.Message{invoke.Message}); err == nil {
+		if bts, err := marshalTelemetryMessages([]model.Message{invoke.Message}); err == nil {
 			span.SetAttributes(
 				attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)),
 			)
@@ -352,7 +402,7 @@ func TraceAfterInvokeAgent(
 		return
 	}
 	if len(rsp.Choices) > 0 {
-		if bts, err := json.Marshal(rsp.Choices); err == nil {
+		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
 			span.SetAttributes(
 				attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)),
 			)
@@ -526,7 +576,7 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	}
 
 	// Add messages
-	if bts, err := json.Marshal(req.Messages); err == nil {
+	if bts, err := marshalTelemetryMessages(req.Messages); err == nil {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)))
 	} else {
 		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
@@ -574,7 +624,7 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 
 	// Add choices attributes
 	if len(rsp.Choices) > 0 {
-		if bts, err := json.Marshal(rsp.Choices); err == nil {
+		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
 			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)))
 		}
 
