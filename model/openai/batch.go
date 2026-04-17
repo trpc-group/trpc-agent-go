@@ -197,10 +197,7 @@ func (m *Model) generateBatchJSONL(requests []*BatchRequestInput) ([]byte, error
 		if r.Body.Model == "" {
 			r.Body.Model = m.name
 		}
-		payload, err := m.batchRequestPayload(r)
-		if err != nil {
-			return nil, err
-		}
+		payload := m.batchRequestPayload(r)
 		if err := enc.Encode(payload); err != nil {
 			return nil, fmt.Errorf("failed to encode jsonl line: %w", err)
 		}
@@ -210,43 +207,66 @@ func (m *Model) generateBatchJSONL(requests []*BatchRequestInput) ([]byte, error
 
 func (m *Model) batchRequestPayload(
 	r *BatchRequestInput,
-) (any, error) {
-	if !m.reasoningContentBackfill {
-		return r, nil
+) batchRequestPayload {
+	messages := make([]batchMessagePayload, len(r.Body.Messages))
+	for i, msg := range r.Body.Messages {
+		messages[i] = m.newBatchMessagePayload(msg)
 	}
 
-	rawRequest, err := json.Marshal(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal batch request: %w", err)
+	return batchRequestPayload{
+		CustomID: r.CustomID,
+		Method:   r.Method,
+		URL:      r.URL,
+		Body: batchRequestBodyPayload{
+			Messages:         messages,
+			GenerationConfig: r.Body.GenerationConfig,
+			StructuredOutput: r.Body.StructuredOutput,
+			Model:            r.Body.Model,
+		},
 	}
+}
 
-	var payload map[string]any
-	if err := json.Unmarshal(rawRequest, &payload); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal batch request: %w", err)
+func (m *Model) newBatchMessagePayload(
+	msg model.Message,
+) batchMessagePayload {
+	payload := batchMessagePayload{
+		Role:         msg.Role,
+		Content:      msg.Content,
+		ContentParts: msg.ContentParts,
+		ToolID:       msg.ToolID,
+		ToolName:     msg.ToolName,
+		ToolCalls:    msg.ToolCalls,
 	}
+	if msg.ReasoningContent != "" ||
+		m.shouldBackfillReasoningContent(msg) {
+		reasoningContent := msg.ReasoningContent
+		payload.ReasoningContent = &reasoningContent
+	}
+	return payload
+}
 
-	body, ok := payload["body"].(map[string]any)
-	if !ok {
-		return payload, nil
-	}
-	messageValues, ok := body["messages"].([]any)
-	if !ok {
-		return payload, nil
-	}
+type batchRequestPayload struct {
+	CustomID string                  `json:"custom_id"`
+	Method   string                  `json:"method"`
+	URL      string                  `json:"url"`
+	Body     batchRequestBodyPayload `json:"body"`
+}
 
-	for idx, msg := range r.Body.Messages {
-		if idx >= len(messageValues) ||
-			!m.shouldBackfillReasoningContent(msg) {
-			continue
-		}
-		messageValue, ok := messageValues[idx].(map[string]any)
-		if !ok {
-			continue
-		}
-		messageValue[model.ReasoningContentKey] = msg.ReasoningContent
-	}
+type batchRequestBodyPayload struct {
+	Messages         []batchMessagePayload   `json:"messages"`
+	GenerationConfig model.GenerationConfig  `json:"generation_config,omitempty"`
+	StructuredOutput *model.StructuredOutput `json:"structured_output,omitempty"`
+	Model            string                  `json:"model"`
+}
 
-	return payload, nil
+type batchMessagePayload struct {
+	Role             model.Role          `json:"role"`
+	Content          string              `json:"content,omitempty"`
+	ContentParts     []model.ContentPart `json:"content_parts,omitempty"`
+	ToolID           string              `json:"tool_id,omitempty"`
+	ToolName         string              `json:"tool_name,omitempty"`
+	ToolCalls        []model.ToolCall    `json:"tool_calls,omitempty"`
+	ReasoningContent *string             `json:"reasoning_content,omitempty"`
 }
 
 // RetrieveBatch retrieves a batch job by ID.

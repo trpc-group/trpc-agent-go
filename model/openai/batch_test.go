@@ -346,6 +346,7 @@ func TestGenerateBatchJSONL_ReasoningContentBackfill(t *testing.T) {
 	const toolCallID = "call-backfill"
 	const toolName = "calculator"
 	const toolArgs = `{"expression":"2+2"}`
+	const reasoningContent = "I should call the calculator."
 
 	requests := []*BatchRequestInput{
 		{
@@ -418,6 +419,55 @@ func TestGenerateBatchJSONL_ReasoningContentBackfill(t *testing.T) {
 			_, ok := message[model.ReasoningContentKey]
 			assert.False(t, ok)
 		})
+
+	t.Run("preserves non-empty reasoning_content", func(t *testing.T) {
+		requests := []*BatchRequestInput{
+			{
+				CustomID: customID,
+				Body: BatchRequest{
+					Request: model.Request{
+						Messages: []model.Message{
+							{
+								Role:             model.RoleAssistant,
+								Content:          "Calling a tool.",
+								ReasoningContent: reasoningContent,
+								ToolCalls: []model.ToolCall{
+									{
+										ID:   toolCallID,
+										Type: "function",
+										Function: model.FunctionDefinitionParam{
+											Name:      toolName,
+											Arguments: []byte(toolArgs),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		m := New("default-model")
+
+		jsonlData, err := m.generateBatchJSONL(requests)
+		require.NoError(t, err)
+
+		lines := strings.Split(strings.TrimSpace(string(jsonlData)), "\n")
+		require.Len(t, lines, 1)
+
+		var decoded map[string]any
+		err = json.Unmarshal([]byte(lines[0]), &decoded)
+		require.NoError(t, err)
+
+		body := decoded["body"].(map[string]any)
+		messages := body["messages"].([]any)
+		message := messages[0].(map[string]any)
+
+		reasoningValue, ok := message[model.ReasoningContentKey]
+		require.True(t, ok)
+		assert.Equal(t, reasoningContent, reasoningValue)
+	})
 }
 
 func TestBatchRequestOutput_JSON(t *testing.T) {
