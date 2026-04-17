@@ -314,7 +314,7 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 			}
 		}
 	}
-	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input, true) {
+	if !r.emitEvent(ctx, events, aguievents.NewRunStartedEvent(threadID, runID), input, nil) {
 		return
 	}
 	if input.inputMessage.Role == model.RoleTool {
@@ -323,7 +323,7 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 		}
 	}
 	if input.resume != nil && r.graphNodeInterruptActivityEnabled {
-		if !r.emitEvent(ctx, events, newGraphInterruptResumeEvent(input.resume), input, true) {
+		if !r.emitEvent(ctx, events, newGraphInterruptResumeEvent(input.resume), input, nil) {
 			return
 		}
 	}
@@ -337,7 +337,7 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 			err,
 		)
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("run agent: %v", err),
-			aguievents.WithRunID(runID)), input, true)
+			aguievents.WithRunID(runID)), input, nil)
 		return
 	}
 	for {
@@ -392,7 +392,7 @@ func (r *runner) emitPostRunTerminalEvent(ctx context.Context, events chan<- agu
 			aguievents.WithRunID(input.runID),
 		)
 	}
-	r.emitEvent(emitCtx, events, terminalEvent, input, true)
+	r.emitEvent(emitCtx, events, terminalEvent, input, nil)
 }
 
 func (r *runner) newPostRunContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -427,7 +427,7 @@ func (r *runner) emitPostRunFinalizationEvents(ctx context.Context, events chan<
 	}
 	pending, err := finalizer.PostRunFinalizationEvents(ctx)
 	for _, evt := range pending {
-		if !r.emitEvent(ctx, events, evt, input, true) {
+		if !r.emitEvent(ctx, events, evt, input, nil) {
 			return ctx.Err()
 		}
 	}
@@ -543,7 +543,7 @@ func (r *runner) emitToolResultEvent(ctx context.Context, events chan<- aguieven
 	msg := input.inputMessage
 	if msg.ToolID == "" {
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent("tool message missing tool id",
-			aguievents.WithRunID(input.runID)), input, true)
+			aguievents.WithRunID(input.runID)), input, nil)
 		return false
 	}
 	messageID := input.inputMessageID
@@ -554,7 +554,7 @@ func (r *runner) emitToolResultEvent(ctx context.Context, events chan<- aguieven
 		return r.handleAgentEvent(ctx, events, input, newToolResultInputEvent(messageID, msg))
 	}
 	toolResultEvent := aguievents.NewToolCallResultEvent(messageID, msg.ToolID, msg.Content)
-	return r.emitEvent(ctx, events, toolResultEvent, input, true)
+	return r.emitEvent(ctx, events, toolResultEvent, input, nil)
 }
 
 // newToolResultInputEvent normalizes a tool-result input into an internal event for translation.
@@ -590,7 +590,7 @@ func (r *runner) handleAgentEvent(ctx context.Context, events chan<- aguievents.
 			err,
 		)
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("before translate callback: %v", err),
-			aguievents.WithRunID(runID)), input, true)
+			aguievents.WithRunID(runID)), input, nil)
 		return false
 	}
 	aguiEvents, err := input.translator.Translate(ctx, customEvent)
@@ -604,12 +604,11 @@ func (r *runner) handleAgentEvent(ctx context.Context, events chan<- aguievents.
 			err,
 		)
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("translate event: %v", err),
-			aguievents.WithRunID(runID)), input, true)
+			aguievents.WithRunID(runID)), input, nil)
 		return false
 	}
 	for _, aguiEvent := range aguiEvents {
-		trackEvent := shouldTrackTranslatedEvent(customEvent, aguiEvent)
-		if !r.emitEvent(ctx, events, aguiEvent, input, trackEvent) {
+		if !r.emitEvent(ctx, events, aguiEvent, input, customEvent) {
 			return false
 		}
 	}
@@ -682,7 +681,7 @@ func (r *runner) handleAfterTranslate(ctx context.Context, event aguievents.Even
 }
 
 func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, event aguievents.Event,
-	input *runInput, trackEvent bool) bool {
+	input *runInput, source *event.Event) bool {
 	if input != nil && input.terminalEmitted {
 		return false
 	}
@@ -718,7 +717,7 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 		input.threadID,
 		input.runID,
 	)
-	if input.enableTrack && trackEvent {
+	if input.enableTrack && shouldTrackTranslatedEvent(source, event) {
 		if err := r.recordTrackEvent(ctx, input.key, event); err != nil {
 			log.WarnfContext(
 				ctx,
