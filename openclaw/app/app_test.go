@@ -1669,7 +1669,7 @@ func TestNewAgent_KnowledgeOnlyProfileHidesSkillRun(t *testing.T) {
 	)
 }
 
-func TestNewAgent_KnowledgeOnlyProfileOmitsSkillRunGuidance(
+func TestNewAgent_KnowledgeOnlyProfileUsesToolingGuidance(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -1696,11 +1696,6 @@ func TestNewAgent_KnowledgeOnlyProfileOmitsSkillRunGuidance(
 		&session.Session{},
 	)
 	content := joinAllMessageContent(req)
-	require.NotContains(
-		t,
-		content,
-		openClawSkillRunGuidance,
-	)
 	require.Contains(
 		t,
 		content,
@@ -1708,7 +1703,7 @@ func TestNewAgent_KnowledgeOnlyProfileOmitsSkillRunGuidance(
 	)
 }
 
-func TestNewAgent_FullProfileIncludesSkillRunGuidance(t *testing.T) {
+func TestNewAgent_FullProfileUsesToolingGuidance(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
@@ -1749,7 +1744,6 @@ func TestNewAgent_FullProfileIncludesSkillRunGuidance(t *testing.T) {
 				content,
 				strings.TrimSpace(openClawToolingGuidance),
 			)
-			require.Contains(t, content, openClawSkillRunGuidance)
 		})
 	}
 }

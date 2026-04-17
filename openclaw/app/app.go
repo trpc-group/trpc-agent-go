@@ -40,7 +40,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
-	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -90,14 +89,10 @@ const (
 	defaultAgentName        = "assistant"
 	defaultAgentInstruction = "You are a helpful assistant. " +
 		"Keep replies concise."
-	openClawSkillRunGuidance = "Use skill_run only for skill " +
-		"workspace workflows."
-
-	openClawToolingGuidance = "For general local shell work, use " +
-		"read_document or read_spreadsheet first for common PDF, " +
-		"DOCX, text, CSV, and spreadsheet uploads already in the " +
-		"chat. Only fall back to " +
-		"exec_command when those tools cannot satisfy the task. " +
+	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
+		"and spreadsheet uploads already in the chat, prefer " +
+		"read_document or read_spreadsheet before falling back " +
+		"to exec_command. " +
 		"For questions about the active chat history, recent " +
 		"turns, or who said something in the current session, use " +
 		"conversation_history before searching long-term memory. " +
@@ -105,9 +100,9 @@ const (
 		"available in the current session. " +
 		"Do not call exec_command just to print OPENCLAW_* upload " +
 		"vars or inspect recent upload metadata when a matching " +
-		"chat file is already available. For general local shell " +
-		"work, use " +
-		"exec_command. For interactive follow-up input, use " +
+		"chat file is already available. For other general local " +
+		"shell work, use exec_command. For interactive follow-up " +
+		"input, use " +
 		"write_stdin and kill_session when needed. Use message " +
 		"to send to the current chat or an explicit target. " +
 		"Chat uploads are saved to stable host paths. For host " +
@@ -2208,13 +2203,8 @@ func newAgent(
 }
 
 func buildOpenClawToolingGuidance(cfg agentConfig) string {
-	guidance := strings.TrimSpace(openClawToolingGuidance)
-	if skillprofile.IsKnowledgeOnly(cfg.SkillsToolProfile) {
-		return guidance
-	}
-	return strings.TrimSpace(
-		guidance + " " + openClawSkillRunGuidance,
-	)
+	_ = cfg
+	return strings.TrimSpace(openClawToolingGuidance)
 }
 
 func hasToolNamed(tools []tool.Tool, name string) bool {
