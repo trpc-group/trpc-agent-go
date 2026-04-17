@@ -1681,6 +1681,10 @@ func TestNewAgent_KnowledgeOnlyProfileOmitsSkillRunGuidance(
 		EnableOpenClawTools: true,
 	}, nil, nil)
 	require.NoError(t, err)
+	require.Nil(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolRun),
+	)
 
 	req := runAgentAndCapture(
 		t,
@@ -1704,30 +1708,47 @@ func TestNewAgent_KnowledgeOnlyProfileOmitsSkillRunGuidance(
 func TestNewAgent_FullProfileIncludesSkillRunGuidance(t *testing.T) {
 	t.Parallel()
 
-	root := createAppTestSkill(t)
-	mdl := &captureRequestModel{}
-	agt, _, err := newAgent(mdl, agentConfig{
-		AppName:             "demo",
-		SkillsRoot:          root,
-		StateDir:            t.TempDir(),
-		SkillsToolProfile:   skillprofile.Full,
-		EnableOpenClawTools: true,
-	}, nil, nil)
-	require.NoError(t, err)
+	testCases := []struct {
+		name    string
+		profile string
+	}{
+		{
+			name:    "explicit full profile",
+			profile: skillprofile.Full,
+		},
+		{
+			name:    "zero-value profile defaults to full",
+			profile: "",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := createAppTestSkill(t)
+			mdl := &captureRequestModel{}
+			agt, _, err := newAgent(mdl, agentConfig{
+				AppName:             "demo",
+				SkillsRoot:          root,
+				StateDir:            t.TempDir(),
+				SkillsToolProfile:   tc.profile,
+				EnableOpenClawTools: true,
+			}, nil, nil)
+			require.NoError(t, err)
 
-	req := runAgentAndCapture(
-		t,
-		agt,
-		mdl,
-		&session.Session{},
-	)
-	content := joinAllMessageContent(req)
-	require.Contains(
-		t,
-		content,
-		strings.TrimSpace(openClawToolingGuidance),
-	)
-	require.Contains(t, content, openClawSkillRunGuidance)
+			req := runAgentAndCapture(
+				t,
+				agt,
+				mdl,
+				&session.Session{},
+			)
+			content := joinAllMessageContent(req)
+			require.Contains(
+				t,
+				content,
+				strings.TrimSpace(openClawToolingGuidance),
+			)
+			require.Contains(t, content, openClawSkillRunGuidance)
+		})
+	}
 }
 
 func TestRun_HTTPListenErrorPath(t *testing.T) {
