@@ -11,6 +11,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -495,7 +496,7 @@ func (m *Model) handleStreamingResponse(
 	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.anthropicRequestOptions...)
 	defer stream.Close()
 	// Accumulator to build final response.
-	acc := anthropic.Message{}
+	acc := newStreamingMessageAccumulator()
 	var (
 		finalResponse *model.Response
 		streamErr     error
@@ -511,7 +512,7 @@ loop:
 		}
 		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
 		// Build partial response.
-		response, err := buildStreamingPartialResponse(acc, chunk)
+		response, err := buildStreamingPartialResponse(acc.Message(), chunk)
 		if err != nil {
 			streamErr = err
 			break
@@ -531,11 +532,16 @@ loop:
 		streamErr = stream.Err()
 	}
 	if streamErr == nil {
-		finalResponse = buildStreamingFinalResponse(acc)
+		if err := acc.Finalize(); err != nil {
+			streamErr = err
+		} else {
+			finalResponse = buildStreamingFinalResponse(acc.Message())
+		}
 	}
 	var callbackAcc *anthropic.Message
 	if streamErr == nil {
-		callbackAcc = &acc
+		finalAcc := acc.Message()
+		callbackAcc = &finalAcc
 	}
 	m.runChatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, streamErr)
 	// Propagate stream error.
@@ -547,6 +553,145 @@ loop:
 	case responseChan <- finalResponse:
 	case <-ctx.Done():
 	}
+}
+
+type streamingMessageAccumulator struct {
+	message             anthropic.Message
+	inputDeltaStartedAt []bool
+	finalized           bool
+}
+
+func newStreamingMessageAccumulator() *streamingMessageAccumulator {
+	return &streamingMessageAccumulator{}
+}
+
+func (a *streamingMessageAccumulator) Message() anthropic.Message {
+	if a == nil {
+		return anthropic.Message{}
+	}
+	return a.message
+}
+
+func (a *streamingMessageAccumulator) Accumulate(event anthropic.MessageStreamEventUnion) error {
+	if a == nil {
+		return errors.New("accumulate: cannot accumulate into nil accumulator")
+	}
+	switch event := event.AsAny().(type) {
+	case anthropic.MessageStartEvent:
+		a.message = event.Message
+		a.inputDeltaStartedAt = make([]bool, len(a.message.Content))
+		a.finalized = false
+	case anthropic.MessageDeltaEvent:
+		a.message.StopReason = event.Delta.StopReason
+		a.message.StopSequence = event.Delta.StopSequence
+		a.message.Usage.OutputTokens = event.Usage.OutputTokens
+	case anthropic.MessageStopEvent:
+		return a.finalize()
+	case anthropic.ContentBlockStartEvent:
+		var block anthropic.ContentBlockUnion
+		if err := block.UnmarshalJSON([]byte(event.ContentBlock.RawJSON())); err != nil {
+			return err
+		}
+		a.message.Content = append(a.message.Content, block)
+		a.inputDeltaStartedAt = append(a.inputDeltaStartedAt, false)
+	case anthropic.ContentBlockDeltaEvent:
+		block, started, err := a.lastContentBlock()
+		if err != nil {
+			return fmt.Errorf("received event of type %s but %w", event.Type, err)
+		}
+		switch delta := event.Delta.AsAny().(type) {
+		case anthropic.TextDelta:
+			block.Text += delta.Text
+		case anthropic.InputJSONDelta:
+			appendInputJSONDelta(block, started, delta.PartialJSON)
+		case anthropic.ThinkingDelta:
+			block.Thinking += delta.Thinking
+		case anthropic.SignatureDelta:
+			block.Signature += delta.Signature
+		case anthropic.CitationsDelta:
+			citation := anthropic.TextCitationUnion{}
+			if err := citation.UnmarshalJSON([]byte(delta.Citation.RawJSON())); err != nil {
+				return fmt.Errorf("could not unmarshal citation delta into citation type: %w", err)
+			}
+			block.Citations = append(block.Citations, citation)
+		}
+	case anthropic.ContentBlockStopEvent:
+		block, _, err := a.lastContentBlock()
+		if err != nil {
+			return fmt.Errorf("received event of type %s but %w", event.Type, err)
+		}
+		if err := refreshContentBlockRawJSON(block); err != nil {
+			return fmt.Errorf("error converting content block to JSON: %w", err)
+		}
+	}
+	return nil
+}
+
+func (a *streamingMessageAccumulator) Finalize() error {
+	if a == nil {
+		return nil
+	}
+	return a.finalize()
+}
+
+func (a *streamingMessageAccumulator) lastContentBlock() (*anthropic.ContentBlockUnion, *bool, error) {
+	if len(a.message.Content) == 0 {
+		return nil, nil, errors.New("no content block")
+	}
+	last := len(a.message.Content) - 1
+	return &a.message.Content[last], &a.inputDeltaStartedAt[last], nil
+}
+
+func (a *streamingMessageAccumulator) finalize() error {
+	if a == nil || a.finalized {
+		return nil
+	}
+	if err := finalizeStreamingMessage(&a.message); err != nil {
+		return err
+	}
+	a.finalized = true
+	return nil
+}
+
+func appendInputJSONDelta(block *anthropic.ContentBlockUnion, started *bool, partial string) {
+	if block == nil || started == nil || partial == "" {
+		return
+	}
+	if !*started {
+		// Treat the first streamed input delta as authoritative to avoid
+		// concatenating a complete start-event value with a second JSON value.
+		block.Input = bytes.Clone([]byte(partial))
+		*started = true
+		return
+	}
+	block.Input = append(block.Input, partial...)
+}
+
+func finalizeStreamingMessage(message *anthropic.Message) error {
+	if message == nil {
+		return nil
+	}
+	for i := range message.Content {
+		if err := refreshContentBlockRawJSON(&message.Content[i]); err != nil {
+			return err
+		}
+	}
+	raw, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
+	return message.UnmarshalJSON(raw)
+}
+
+func refreshContentBlockRawJSON(block *anthropic.ContentBlockUnion) error {
+	if block == nil {
+		return nil
+	}
+	raw, err := json.Marshal(block)
+	if err != nil {
+		return err
+	}
+	return block.UnmarshalJSON(raw)
 }
 
 // buildStreamingPartialResponse builds a partial streaming response for a chunk.
