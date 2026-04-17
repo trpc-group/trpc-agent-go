@@ -261,6 +261,9 @@ func joinAllMessageContent(req *model.Request) string {
 	}
 	parts := make([]string, 0, len(req.Messages))
 	for _, msg := range req.Messages {
+		if msg.Role == model.RoleUser {
+			continue
+		}
 		parts = append(parts, msg.Content)
 	}
 	return strings.Join(parts, "\n\n")
