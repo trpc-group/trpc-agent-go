@@ -24,16 +24,15 @@ import (
 const (
 	statusInstallKindPathHint = "path_hint"
 
-	statusInstallIDExtraPath = "path-hint-extra-path-dirs"
-	statusInstallIDMovePath  = "path-hint-existing-path"
+	statusInstallIDRestartPath = "path-hint-restart-with-path"
+	statusInstallIDMovePath    = "path-hint-existing-path"
 
-	statusInstallLabelExtraPath = "" +
-		"Add the binary directory to TRPC_CLAW_EXTRA_PATH_DIRS " +
-		"in Admin > Config > Runtime Environment"
+	statusInstallLabelRestartPath = "" +
+		"Restart openclaw after updating PATH to include " +
+		"the binary directory"
 	statusInstallLabelMovePath = "" +
 		"Move the binary into one of the existing PATH " +
-		"directories shown in Admin > Config > Runtime " +
-		"Environment"
+		"directories"
 )
 
 type StatusRequirements struct {
@@ -374,11 +373,11 @@ func appendRuntimePathInstallHints(
 		return options
 	}
 	out := append([]StatusInstallOption(nil), options...)
-	if !statusInstallOptionExists(out, statusInstallIDExtraPath) {
+	if !statusInstallOptionExists(out, statusInstallIDRestartPath) {
 		out = append(out, StatusInstallOption{
-			ID:    statusInstallIDExtraPath,
+			ID:    statusInstallIDRestartPath,
 			Kind:  statusInstallKindPathHint,
-			Label: statusInstallLabelExtraPath,
+			Label: statusInstallLabelRestartPath,
 		})
 	}
 	if !statusInstallOptionExists(out, statusInstallIDMovePath) {

@@ -154,11 +154,7 @@ func TestServiceHandlerRendersReadOnlyConfigField(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
 	require.Contains(t, body, "Read-only runtime diagnostics.")
-	require.NotContains(
-		t,
-		body,
-		`action="api/config/save" class="config-form"`,
-	)
+	require.NotContains(t, body, `class="config-form"`)
 	require.Contains(t, body, "Effective PATH")
 }
 

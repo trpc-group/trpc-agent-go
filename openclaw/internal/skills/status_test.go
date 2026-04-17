@@ -60,7 +60,7 @@ metadata:
 	require.Equal(t, "OPENAI_API_KEY", entry.PrimaryEnv)
 	require.Equal(t, "https://example.com/weather", entry.Homepage)
 	require.Len(t, entry.Install, 2)
-	require.Equal(t, statusInstallIDExtraPath, entry.Install[0].ID)
+	require.Equal(t, statusInstallIDRestartPath, entry.Install[0].ID)
 	require.Equal(t, statusInstallIDMovePath, entry.Install[1].ID)
 }
 
@@ -239,9 +239,9 @@ func TestStatusHelpers_MissingRequirementsAndInstallers(t *testing.T) {
 		t,
 		[]StatusInstallOption{
 			{
-				ID:    statusInstallIDExtraPath,
+				ID:    statusInstallIDRestartPath,
 				Kind:  statusInstallKindPathHint,
-				Label: statusInstallLabelExtraPath,
+				Label: statusInstallLabelRestartPath,
 			},
 			{
 				ID:    statusInstallIDMovePath,
@@ -251,6 +251,24 @@ func TestStatusHelpers_MissingRequirementsAndInstallers(t *testing.T) {
 		},
 		pathHints,
 	)
+
+	existingHints := appendRuntimePathInstallHints(
+		StatusRequirements{
+			AnyBins: []string{"missing-bin"},
+		},
+		[]StatusInstallOption{
+			{
+				ID:   statusInstallIDRestartPath,
+				Kind: statusInstallKindPathHint,
+			},
+			{
+				ID:   statusInstallIDMovePath,
+				Kind: statusInstallKindPathHint,
+			},
+		},
+	)
+	require.Len(t, existingHints, 2)
+	require.False(t, statusInstallOptionExists(existingHints, ""))
 }
 
 func TestStatusHelpers_SourceAndConfigResolution(t *testing.T) {

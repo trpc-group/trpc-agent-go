@@ -29,17 +29,21 @@ import (
 )
 
 const (
-	skillsPathEnvName      = "PATH"
-	skillsExtraPathEnvName = "TRPC_CLAW_EXTRA_PATH_DIRS"
+	skillsPathEnvName = "PATH"
+
+	skillsBinPathFixHint = "" +
+		"move the binary into an existing PATH dir or restart " +
+		"openclaw with PATH including its directory"
+	skillsAnyBinPathFixHint = "" +
+		"install one of these binaries into an existing PATH " +
+		"dir or restart openclaw with PATH including its " +
+		"directory"
 
 	missingBinsReasonFormat = "" +
-		"missing bins: %s; searched PATH dirs: %s; fix: move " +
-		"the binary into an existing PATH dir or add its " +
-		"directory to %s"
+		"missing bins: %s; searched PATH dirs: %s; fix: %s"
 	missingAnyBinsReasonFormat = "" +
 		"missing anyBins (need one): %s; searched PATH dirs: %s; " +
-		"fix: install one of these binaries into an existing " +
-		"PATH dir or add its directory to %s"
+		"fix: %s"
 
 	emptySkillsSearchDirs = "(empty)"
 )
@@ -574,7 +578,7 @@ func evaluateRequiredBins(bins []string) string {
 		missingBinsReasonFormat,
 		strings.Join(missing, ", "),
 		formatSkillsSearchDirs(),
-		skillsExtraPathEnvName,
+		skillsBinPathFixHint,
 	)
 }
 
@@ -599,7 +603,7 @@ func evaluateRequiredAnyBins(bins []string) string {
 		missingAnyBinsReasonFormat,
 		strings.Join(any, ", "),
 		formatSkillsSearchDirs(),
-		skillsExtraPathEnvName,
+		skillsAnyBinPathFixHint,
 	)
 }
 
