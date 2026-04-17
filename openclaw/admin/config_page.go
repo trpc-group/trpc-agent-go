@@ -23,9 +23,10 @@ const (
 	formConfigFieldKey = "field_key"
 	formConfigValue    = "value"
 
-	configInputText   = "text"
-	configInputNumber = "number"
-	configInputSelect = "select"
+	configInputText     = "text"
+	configInputNumber   = "number"
+	configInputSelect   = "select"
+	configInputReadOnly = "readonly"
 
 	configApplyHot        = "hot"
 	configApplyNextTurn   = "next_turn"

@@ -21,6 +21,20 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
+const (
+	statusInstallKindPathHint = "path_hint"
+
+	statusInstallIDRestartPath = "path-hint-restart-with-path"
+	statusInstallIDMovePath    = "path-hint-existing-path"
+
+	statusInstallLabelRestartPath = "" +
+		"Restart openclaw after updating PATH to include " +
+		"the binary directory"
+	statusInstallLabelMovePath = "" +
+		"Move the binary into one of the existing PATH " +
+		"directories"
+)
+
 type StatusRequirements struct {
 	OS      []string `json:"os,omitempty"`
 	Bins    []string `json:"bins,omitempty"`
@@ -151,7 +165,10 @@ func (r *Repository) statusEntryForSummary(
 	entry.Homepage = strings.TrimSpace(meta.Homepage)
 	entry.Requirements = requiredStatus(meta)
 	entry.Missing = missingStatus(meta, r.configKeys, cfg)
-	entry.Install = normalizeStatusInstall(meta.Install)
+	entry.Install = appendRuntimePathInstallHints(
+		entry.Missing,
+		normalizeStatusInstall(meta.Install),
+	)
 	return entry
 }
 
@@ -345,6 +362,53 @@ func normalizeStatusInstall(
 	if len(out) == 0 {
 		return nil
 	}
+	return out
+}
+
+func appendRuntimePathInstallHints(
+	missing StatusRequirements,
+	options []StatusInstallOption,
+) []StatusInstallOption {
+	if len(missingStatusBins(missing)) == 0 {
+		return options
+	}
+	out := append([]StatusInstallOption(nil), options...)
+	if !statusInstallOptionExists(out, statusInstallIDRestartPath) {
+		out = append(out, StatusInstallOption{
+			ID:    statusInstallIDRestartPath,
+			Kind:  statusInstallKindPathHint,
+			Label: statusInstallLabelRestartPath,
+		})
+	}
+	if !statusInstallOptionExists(out, statusInstallIDMovePath) {
+		out = append(out, StatusInstallOption{
+			ID:    statusInstallIDMovePath,
+			Kind:  statusInstallKindPathHint,
+			Label: statusInstallLabelMovePath,
+		})
+	}
+	return out
+}
+
+func statusInstallOptionExists(
+	options []StatusInstallOption,
+	id string,
+) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	for _, option := range options {
+		if strings.TrimSpace(option.ID) == id {
+			return true
+		}
+	}
+	return false
+}
+
+func missingStatusBins(missing StatusRequirements) []string {
+	out := append([]string(nil), missing.Bins...)
+	out = append(out, missing.AnyBins...)
 	return out
 }
 
