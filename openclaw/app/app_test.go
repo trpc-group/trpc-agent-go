@@ -1461,7 +1461,12 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 		sys,
 		"Start with one brief user-visible preamble "+
 			"about the immediate next step, then call "+
-			"`skill_load` for that skill right away.",
+			"`skill_load` for that skill right away",
+	)
+	require.Contains(
+		t,
+		sys,
+		"not a pause to ask what to do next",
 	)
 	require.Contains(
 		t,
@@ -1495,6 +1500,32 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.NotContains(t, sys, "Skill tool availability:")
 	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
 	require.NotContains(t, sys, "Only describe a blocker")
+}
+
+func TestNewAgent_LocalExecKeepsExecCommandButOmitsWorkspaceExec(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	agt, _, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:         "demo",
+		SkillsRoot:      root,
+		StateDir:        t.TempDir(),
+		EnableLocalExec: true,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	names := make(map[string]bool)
+	for _, tl := range agt.Tools() {
+		if decl := tl.Declaration(); decl != nil {
+			names[decl.Name] = true
+		}
+	}
+
+	require.False(t, names["workspace_exec"])
+	require.False(t, names["workspace_write_stdin"])
+	require.False(t, names["workspace_kill_session"])
 }
 
 func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
@@ -1811,7 +1842,8 @@ func TestNewAgent_KnowledgeOnlyProfileHidesSkillRun(t *testing.T) {
 		t,
 		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad).
 			Description,
-		"A brief preamble that announces the immediate next",
+		"Before the first matching load, start with one "+
+			"brief user-visible preamble",
 	)
 }
 

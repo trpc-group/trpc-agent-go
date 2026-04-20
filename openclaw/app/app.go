@@ -99,7 +99,9 @@ const (
 		"you must use that skill in the same turn. Start " +
 		"with one brief user-visible preamble about the " +
 		"immediate next step, then call `skill_load` for " +
-		"that skill right away. That preamble may " +
+		"that skill right away in the same turn. That " +
+		"brief preamble is part of acting immediately, " +
+		"not a pause to ask what to do next. That preamble may " +
 		"announce the immediate task, but do not use it " +
 		"for substantive guidance, capability " +
 		"disclaimers, or explanations about which " +
@@ -138,13 +140,18 @@ const (
 		"docs. This is a blocking requirement when the user " +
 		"names a listed skill, names a slash command, or the " +
 		"task clearly matches a listed skill description. " +
-		"A brief preamble that announces the immediate next " +
-		"step is allowed, but call this tool before any " +
-		"substantive guidance about that task. Do not answer " +
-		"from a short skill summary, prior knowledge, or " +
-		"partial memory when a matching skill exists. Load " +
-		"`SKILL.md` first, then load only the extra docs " +
-		"you still need."
+		"Before the first matching load, start with one " +
+		"brief user-visible preamble that says which skill " +
+		"or skill docs you are reading next, then call this " +
+		"tool right away in the same turn. Do not pause " +
+		"after that preamble to ask what to do next. Do " +
+		"not use that preamble for " +
+		"capability disclaimers, implementation-split " +
+		"explanations, or substantive guidance about the " +
+		"task. Do not answer from a short skill summary, " +
+		"prior knowledge, or partial memory when a matching " +
+		"skill exists. Load `SKILL.md` first, then load " +
+		"only the extra docs you still need."
 	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
 		"and spreadsheet uploads already in the chat, prefer " +
 		"read_document or read_spreadsheet before falling back " +
@@ -2221,6 +2228,7 @@ func newAgent(
 		llmagent.WithSkillLoadToolDescription(
 			openClawSkillLoadToolDescription,
 		),
+		llmagent.WithWorkspaceExecSurfaceEnabled(false),
 		llmagent.WithSkipSkillsFallbackOnSessionSummary(
 			cfg.SkillsSkipFallback,
 		),
