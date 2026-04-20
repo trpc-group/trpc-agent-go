@@ -185,6 +185,65 @@ func TestToolSet_TaskOutputReadsBackgroundBashTask(t *testing.T) {
 	require.Equal(t, "completed", blocking.Task.Status)
 }
 
+func TestToolSet_TaskOutputCoversPollingBranches(t *testing.T) {
+	t.Parallel()
+	runtime := newToolRuntime(t.TempDir(), maxEditableFileSize)
+	taskOutputTool, err := newTaskOutputTool(runtime)
+	require.NoError(t, err)
+	callable, ok := taskOutputTool.(tool.CallableTool)
+	require.True(t, ok)
+	_, err = callToolRaw(callable, taskOutputInput{})
+	require.EqualError(t, err, "task_id is required")
+	runningLog := filepath.Join(t.TempDir(), "running.log")
+	require.NoError(t, os.WriteFile(runningLog, []byte("partial"), 0o644))
+	runtime.taskState.tasks["running"] = &backgroundTask{
+		ID:         "running",
+		Command:    "sleep 10",
+		Type:       toolBash,
+		OutputPath: runningLog,
+		Status:     "running",
+	}
+	nonBlocking := callToolAs[taskOutputOutput](t, callable, taskOutputInput{
+		TaskID: "running",
+		Block:  boolPtr(false),
+	})
+	require.Equal(t, "not_ready", nonBlocking.RetrievalStatus)
+	require.NotNil(t, nonBlocking.Task)
+	require.Equal(t, "partial", nonBlocking.Task.Output)
+	blockingTimeout := callToolAs[taskOutputOutput](t, callable, taskOutputInput{
+		TaskID:  "running",
+		Timeout: intPtr(0),
+	})
+	require.Equal(t, "timeout", blockingTimeout.RetrievalStatus)
+	finishedLog := filepath.Join(t.TempDir(), "done.log")
+	require.NoError(t, os.WriteFile(finishedLog, []byte("done"), 0o644))
+	exitCode := 0
+	runtime.taskState.tasks["done"] = &backgroundTask{
+		ID:         "done",
+		Command:    "echo done",
+		Type:       toolBash,
+		OutputPath: finishedLog,
+		Status:     "completed",
+		ExitCode:   &exitCode,
+	}
+	completed := callToolAs[taskOutputOutput](t, callable, taskOutputInput{
+		TaskID: "done",
+		Block:  boolPtr(false),
+	})
+	require.Equal(t, "success", completed.RetrievalStatus)
+	require.NotNil(t, completed.Task)
+	require.Equal(t, "done", completed.Task.Output)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = callToolRawWithContext(callable, ctx, taskOutputInput{
+		TaskID:  "running",
+		Timeout: intPtr(1000),
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = snapshotBackgroundTask(runtime, "missing")
+	require.EqualError(t, err, "no task found with ID: missing")
+}
+
 func TestToolSet_ReadWriteEditFlow(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -349,6 +408,10 @@ func TestToolSet_ReadSupportsNotebookImageAndDedup(t *testing.T) {
 
 func TestToolSet_ReadSupportsPDFAndPageRanges(t *testing.T) {
 	t.Parallel()
+	pdftoppmTestMu.Lock()
+	t.Cleanup(func() {
+		pdftoppmTestMu.Unlock()
+	})
 	dir := t.TempDir()
 	pdfPath := filepath.Join(dir, "paper.pdf")
 	require.NoError(t, os.WriteFile(pdfPath, newTestPDF(t, []string{"Page 1", "Page 2"}), 0o644))
@@ -693,6 +756,83 @@ func TestToolSet_AskUserQuestionRejectsDuplicateQuestionText(t *testing.T) {
 		},
 	})
 	require.ErrorContains(t, err, "question texts must be unique")
+}
+
+func TestToolSet_AskUserQuestionCoversValidationBranches(t *testing.T) {
+	t.Parallel()
+	askTool, err := newAskUserQuestionTool()
+	require.NoError(t, err)
+	callable, ok := askTool.(tool.CallableTool)
+	require.True(t, ok)
+	_, err = callToolRaw(callable, askUserQuestionInput{})
+	require.EqualError(t, err, "at least one question is required")
+	_, err = callToolRaw(callable, askUserQuestionInput{
+		Questions: []askUserQuestion{
+			{Question: "Q1", Options: []askUserQuestionOption{{Label: "A"}, {Label: "B"}}},
+			{Question: "Q2", Options: []askUserQuestionOption{{Label: "A"}, {Label: "B"}}},
+			{Question: "Q3", Options: []askUserQuestionOption{{Label: "A"}, {Label: "B"}}},
+			{Question: "Q4", Options: []askUserQuestionOption{{Label: "A"}, {Label: "B"}}},
+			{Question: "Q5", Options: []askUserQuestionOption{{Label: "A"}, {Label: "B"}}},
+		},
+	})
+	require.EqualError(t, err, "at most 4 questions are allowed")
+	_, err = callToolRaw(callable, askUserQuestionInput{
+		Questions: []askUserQuestion{{
+			Question: " ",
+			Options:  []askUserQuestionOption{{Label: "A"}, {Label: "B"}},
+		}},
+	})
+	require.EqualError(t, err, "question text is required")
+	_, err = callToolRaw(callable, askUserQuestionInput{
+		Questions: []askUserQuestion{{
+			Question: "Only one option",
+			Options:  []askUserQuestionOption{{Label: "A"}},
+		}},
+	})
+	require.EqualError(t, err, `question "Only one option" must have 2-4 options`)
+	_, err = callToolRaw(callable, askUserQuestionInput{
+		Questions: []askUserQuestion{{
+			Question: "Too many options",
+			Options: []askUserQuestionOption{
+				{Label: "A"},
+				{Label: "B"},
+				{Label: "C"},
+				{Label: "D"},
+				{Label: "E"},
+			},
+		}},
+	})
+	require.EqualError(t, err, `question "Too many options" must have 2-4 options`)
+	_, err = callToolRaw(callable, askUserQuestionInput{
+		Questions: []askUserQuestion{{
+			Question: "Empty option",
+			Options: []askUserQuestionOption{
+				{Label: "A"},
+				{Label: " "},
+			},
+		}},
+	})
+	require.EqualError(t, err, `question "Empty option" has an option with empty label`)
+	_, err = callToolRaw(callable, askUserQuestionInput{
+		Questions: []askUserQuestion{{
+			Question: "Duplicate option",
+			Options: []askUserQuestionOption{
+				{Label: "A"},
+				{Label: "A"},
+			},
+		}},
+	})
+	require.EqualError(t, err, `option labels must be unique within question "Duplicate option"`)
+	out := callToolAs[askUserQuestionOutput](t, callable, askUserQuestionInput{
+		Questions: []askUserQuestion{{
+			Question: "Choose one",
+			Options: []askUserQuestionOption{
+				{Label: "A"},
+				{Label: "B"},
+			},
+		}},
+	})
+	require.Empty(t, out.Answers)
 }
 
 func TestToolSet_WebFetchTool(t *testing.T) {
@@ -1483,8 +1623,78 @@ func TestPDFAndNotebookHelpersCoverFallbackBranches(t *testing.T) {
 	}))
 }
 
+func TestPDFHelpersCoverRemainingBranches(t *testing.T) {
+	t.Parallel()
+	pdftoppmTestMu.Lock()
+	t.Cleanup(func() {
+		pdftoppmTestMu.Unlock()
+	})
+	_, err := pdfPageCount([]byte("not-a-pdf"))
+	require.ErrorContains(t, err, "failed to create PDF reader")
+	rangeOne, err := resolvePDFPageRange("2", 4)
+	require.NoError(t, err)
+	require.Equal(t, pdfPageRange{FirstPage: 2, LastPage: 2, Count: 1}, rangeOne)
+	_, err = resolvePDFPageRange("bad", 4)
+	require.EqualError(t, err, `Invalid pages parameter: "bad". Use formats like "1-5", "3", or "10-20". Pages are 1-indexed.`)
+	_, err = resolvePDFPageRange("6-", 4)
+	require.EqualError(t, err, `Page range "6-" is outside the PDF page count of 4.`)
+	_, err = resolvePDFPageRange("5-6", 4)
+	require.EqualError(t, err, `Page range "5-6" exceeds the PDF page count of 4.`)
+	scriptDir := t.TempDir()
+	successScript := filepath.Join(scriptDir, "pdftoppm-success")
+	require.NoError(t, os.WriteFile(successScript, []byte("#!/bin/bash\nprefix=\"${@: -1}\"\ntouch \"${prefix}-1.jpg\" \"${prefix}-2.jpg\"\n"), 0o755))
+	oldLookPath := pdftoppmLookPath
+	oldPath := pdftoppmPath
+	oldOnce := pdftoppmOnce
+	pdftoppmLookPath = func(string) (string, error) {
+		return successScript, nil
+	}
+	pdftoppmPath = ""
+	pdftoppmOnce = sync.Once{}
+	t.Cleanup(func() {
+		pdftoppmLookPath = oldLookPath
+		pdftoppmPath = oldPath
+		pdftoppmOnce = oldOnce
+	})
+	path, err := pdftoppmBinary()
+	require.NoError(t, err)
+	require.Equal(t, successScript, path)
+	outputDir, count, err := extractPDFPages(filepath.Join(t.TempDir(), "fake.pdf"), pdfPageRange{
+		FirstPage: 1,
+		LastPage:  2,
+		Count:     2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+	defer os.RemoveAll(outputDir)
+	_, statErr := os.Stat(filepath.Join(outputDir, "page-1.jpg"))
+	require.NoError(t, statErr)
+	noImageScript := filepath.Join(scriptDir, "pdftoppm-empty")
+	require.NoError(t, os.WriteFile(noImageScript, []byte("#!/bin/bash\nexit 0\n"), 0o755))
+	pdftoppmPath = noImageScript
+	_, _, err = extractPDFPages(filepath.Join(t.TempDir(), "fake.pdf"), pdfPageRange{
+		FirstPage: 1,
+		LastPage:  1,
+		Count:     1,
+	})
+	require.EqualError(t, err, "failed to extract PDF pages: no rendered page images were produced")
+	failScript := filepath.Join(scriptDir, "pdftoppm-fail")
+	require.NoError(t, os.WriteFile(failScript, []byte("#!/bin/bash\necho render failed >&2\nexit 1\n"), 0o755))
+	pdftoppmPath = failScript
+	_, _, err = extractPDFPages(filepath.Join(t.TempDir(), "fake.pdf"), pdfPageRange{
+		FirstPage: 1,
+		LastPage:  1,
+		Count:     1,
+	})
+	require.EqualError(t, err, "failed to extract PDF pages: render failed")
+}
+
 func TestExtractPDFPagesFailsWhenPdftoppmIsUnavailable(t *testing.T) {
 	t.Parallel()
+	pdftoppmTestMu.Lock()
+	t.Cleanup(func() {
+		pdftoppmTestMu.Unlock()
+	})
 	oldLookPath := pdftoppmLookPath
 	oldPath := pdftoppmPath
 	oldOnce := pdftoppmOnce
@@ -1555,6 +1765,7 @@ var tinyPNGBytes = []byte{
 }
 
 var ripgrepTestMu sync.Mutex
+var pdftoppmTestMu sync.Mutex
 
 func mustCallableTool(t *testing.T, tools []tool.Tool, name string) tool.CallableTool {
 	t.Helper()
@@ -1576,6 +1787,14 @@ func callToolRaw(target tool.CallableTool, input any) (any, error) {
 		return nil, err
 	}
 	return target.Call(context.Background(), args)
+}
+
+func callToolRawWithContext(target tool.CallableTool, ctx context.Context, input any) (any, error) {
+	args, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	return target.Call(ctx, args)
 }
 
 func callToolAs[T any](t *testing.T, target tool.CallableTool, input any) T {
