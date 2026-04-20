@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -1408,6 +1409,152 @@ func TestLoadNotebookEditStateConvertsReplacePastEndIntoInsert(t *testing.T) {
 	require.Equal(t, 1, state.cellIndex)
 }
 
+func TestFileStateHelpersCoverRemainingBranches(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	_, err := readLocalFileSnapshot(dir, maxEditableFileSize)
+	require.ErrorContains(t, err, "is a directory")
+	missingSnapshot, err := readLocalFileSnapshot(filepath.Join(dir, "missing.txt"), maxEditableFileSize)
+	require.NoError(t, err)
+	require.False(t, missingSnapshot.Exists)
+	largePath := filepath.Join(dir, "large.txt")
+	require.NoError(t, os.WriteFile(largePath, []byte("0123456789"), 0o644))
+	_, err = readLocalFileSnapshot(largePath, 4)
+	require.ErrorContains(t, err, "exceeds max size")
+	writtenPath := filepath.Join(dir, "nested", "written.txt")
+	require.NoError(t, writeLocalFile(writtenPath, "alpha\nbeta\n", 0, "utf8", "\n"))
+	writtenSnapshot, err := readLocalFileSnapshot(writtenPath, maxEditableFileSize)
+	require.NoError(t, err)
+	require.True(t, writtenSnapshot.Exists)
+	require.Equal(t, "alpha\nbeta\n", writtenSnapshot.Content)
+	state := &fileState{views: map[string]fileView{}}
+	err = ensureWriteAllowed(writtenPath, writtenSnapshot, state)
+	require.EqualError(t, err, "File has not been read yet. Read it first before writing to it.")
+	state.views[writtenPath] = fileView{IsPartialView: true}
+	err = ensureWriteAllowed(writtenPath, writtenSnapshot, state)
+	require.EqualError(t, err, "File has not been read yet. Read it first before writing to it.")
+	state.views[writtenPath] = fileView{
+		Content:   writtenSnapshot.Content,
+		Timestamp: writtenSnapshot.Timestamp - 1,
+		FromRead:  true,
+	}
+	require.NoError(t, ensureWriteAllowed(writtenPath, writtenSnapshot, state))
+	state.views[writtenPath] = fileView{
+		Content:   "different",
+		Timestamp: writtenSnapshot.Timestamp - 1,
+		FromRead:  true,
+	}
+	err = ensureWriteAllowed(writtenPath, writtenSnapshot, state)
+	require.EqualError(t, err, "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.")
+	require.True(t, matchesReadView(fileView{
+		FromRead: true,
+		Offset:   intPtr(1),
+		Limit:    intPtr(2),
+		Pages:    "1-2",
+	}, intPtr(1), intPtr(2), "1-2"))
+	require.False(t, matchesReadView(fileView{FromRead: false}, nil, nil, ""))
+	require.True(t, intPtrsEqual(nil, nil))
+	require.False(t, intPtrsEqual(intPtr(1), nil))
+	require.False(t, intPtrsEqual(nil, intPtr(1)))
+	require.True(t, intPtrsEqual(intPtr(2), intPtr(2)))
+	actualDouble := findActualString("“quoted text”", "\"quoted text\"")
+	require.Equal(t, "“quoted text”", actualDouble)
+	require.Equal(t, "“new text”", preserveQuoteStyle("\"quoted text\"", actualDouble, "\"new text\""))
+	require.Equal(t, "fallback", notebookCellType(map[string]any{}, "fallback"))
+}
+
+func TestNotebookHelpersCoverRemainingBranches(t *testing.T) {
+	t.Parallel()
+	_, _, err := parseNotebook([]byte(`{"cells":{}}`))
+	require.ErrorContains(t, err, "notebook cells are invalid")
+	_, _, err = parseNotebook([]byte(`{"cells":[1]}`))
+	require.ErrorContains(t, err, "notebook cell is invalid")
+	cellType, err := normalizeNotebookCellType("")
+	require.NoError(t, err)
+	require.Empty(t, cellType)
+	cellType, err = normalizeNotebookCellType(" markdown ")
+	require.NoError(t, err)
+	require.Equal(t, "markdown", cellType)
+	_, err = normalizeNotebookCellType("raw")
+	require.EqualError(t, err, "Cell type must be code or markdown.")
+	require.Equal(t, "python", notebookLanguage(map[string]any{}))
+	require.Equal(t, "python", notebookLanguage(map[string]any{"metadata": map[string]any{}}))
+	require.Equal(t, "python", notebookLanguage(map[string]any{
+		"metadata": map[string]any{"language_info": map[string]any{"name": " "}},
+	}))
+	require.Equal(t, "go", notebookLanguage(map[string]any{
+		"metadata": map[string]any{"language_info": map[string]any{"name": "go"}},
+	}))
+	require.False(t, notebookSupportsCellIDs(map[string]any{"nbformat": 4, "nbformat_minor": 4}))
+	require.True(t, notebookSupportsCellIDs(map[string]any{"nbformat": 5, "nbformat_minor": 0}))
+	value, ok := notebookInt(float64(4))
+	require.True(t, ok)
+	require.Equal(t, 4, value)
+	value, ok = notebookInt(3)
+	require.True(t, ok)
+	require.Equal(t, 3, value)
+	_, ok = notebookInt("bad")
+	require.False(t, ok)
+	deleteState := notebookEditState{cells: []map[string]any{}, cellIndex: 0}
+	_, _, err = deleteNotebookCell(&deleteState, notebookEditInput{CellID: "missing"})
+	require.EqualError(t, err, `Cell with ID "missing" not found in notebook.`)
+	replaceState := notebookEditState{
+		cells: []map[string]any{{
+			"id":              "cell-1",
+			"cell_type":       "markdown",
+			"execution_count": 1,
+			"outputs":         []any{"old"},
+		}},
+		cellIndex: 0,
+		cellType:  "markdown",
+	}
+	resultCellID, resultCellType, err := replaceNotebookCell(&replaceState, notebookEditInput{
+		CellID:    "cell-1",
+		NewSource: "updated",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "cell-1", resultCellID)
+	require.Equal(t, "markdown", resultCellType)
+	require.NotContains(t, replaceState.cells[0], "execution_count")
+	require.NotContains(t, replaceState.cells[0], "outputs")
+	replaceState = notebookEditState{
+		cells:     []map[string]any{{"id": "cell-1"}},
+		cellIndex: 1,
+	}
+	_, _, err = replaceNotebookCell(&replaceState, notebookEditInput{CellID: "missing"})
+	require.EqualError(t, err, `Cell with ID "missing" not found in notebook.`)
+	_, err = marshalNotebook(map[string]any{"bad": func() {}})
+	require.Error(t, err)
+	dir := t.TempDir()
+	runtime := newToolRuntime(dir, maxEditableFileSize)
+	missingPath := filepath.Join(dir, "missing.ipynb")
+	_, err = loadNotebookEditState(missingPath, notebookEditInput{
+		EditMode: "insert",
+		CellType: "code",
+	}, runtime)
+	require.EqualError(t, err, "Notebook file does not exist.")
+	invalidPath := filepath.Join(dir, "invalid.ipynb")
+	require.NoError(t, os.WriteFile(invalidPath, []byte("not-json"), 0o644))
+	invalidSnapshot, err := readLocalFileSnapshot(invalidPath, maxEditableFileSize)
+	require.NoError(t, err)
+	storeReadView(runtime.fileState, invalidPath, invalidSnapshot.Content, invalidSnapshot.Timestamp, nil, nil, "", false, true)
+	_, err = loadNotebookEditState(invalidPath, notebookEditInput{
+		EditMode: "insert",
+		CellType: "code",
+	}, runtime)
+	require.EqualError(t, err, "Notebook is not valid JSON.")
+	outOfRangePath := filepath.Join(dir, "out-of-range.ipynb")
+	require.NoError(t, os.WriteFile(outOfRangePath, []byte(`{"cells":[{"id":"cell-0","cell_type":"code","metadata":{},"source":"x"}],"metadata":{},"nbformat":4,"nbformat_minor":5}`), 0o644))
+	outOfRangeSnapshot, err := readLocalFileSnapshot(outOfRangePath, maxEditableFileSize)
+	require.NoError(t, err)
+	storeReadView(runtime.fileState, outOfRangePath, outOfRangeSnapshot.Content, outOfRangeSnapshot.Timestamp, nil, nil, "", false, true)
+	_, err = loadNotebookEditState(outOfRangePath, notebookEditInput{
+		EditMode: "replace",
+		CellID:   "2",
+	}, runtime)
+	require.EqualError(t, err, "Cell with index 2 does not exist in notebook.")
+}
+
 func TestCommonHelpersCoverPathAndHTTPBranches(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1486,6 +1633,41 @@ func TestCommonHelpersCoverRemainingErrorBranches(t *testing.T) {
 	require.Equal(t, 2, totalLines)
 }
 
+func TestToolSearchHelpersCoverRemainingBranches(t *testing.T) {
+	t.Parallel()
+	allTools := []tool.Tool{
+		nil,
+		stubTool{},
+		stubTool{decl: &tool.Declaration{Name: ""}},
+		stubTool{decl: &tool.Declaration{Name: toolToolSearch}},
+		stubTool{decl: &tool.Declaration{Name: "Read", Description: "Read file content"}},
+		stubTool{decl: &tool.Declaration{Name: "Read", Description: "Duplicate read tool"}},
+		stubTool{decl: &tool.Declaration{Name: "WebFetch", Description: "Fetch current web pages"}},
+		stubTool{decl: &tool.Declaration{Name: "TaskOutput", Description: "Inspect task output"}},
+	}
+	filtered := searchableTools(allTools)
+	require.Equal(t, []string{"Read", "WebFetch", "TaskOutput"}, toolNames(filtered))
+	require.Equal(t, []string{"Read", "WebFetch"}, selectToolNames("Read, WebFetch, Unknown, Read", filtered))
+	require.Equal(t, "Read", exactToolMatch("read", filtered))
+	require.Empty(t, keywordSearchTools(" ", filtered, 5))
+	requiredTerms, optionalTerms := splitToolSearchTerms("+read tool +x")
+	require.Equal(t, []string{"read"}, requiredTerms)
+	require.Equal(t, []string{"tool", "+x"}, optionalTerms)
+	info := parseToolName("TaskOutputTool")
+	require.Equal(t, []string{"task", "output", "tool"}, info.Parts)
+	require.Equal(t, "task output tool", info.Full)
+	require.True(t, containsAnyPart(info.Parts, "put"))
+	require.False(t, containsAnyPart(info.Parts, "zip"))
+	require.True(t, containsWholeWord("read task output", "task"))
+	require.False(t, containsWholeWord("reader output", "read"))
+	require.True(t, toolMatchesRequiredTerms(info, "inspect task output", []string{"task"}))
+	require.False(t, toolMatchesRequiredTerms(info, "inspect task output", []string{"fetch"}))
+	require.Equal(t, []string{"WebFetch"}, keywordSearchTools("fetch", filtered, 5))
+	require.Equal(t, []string{"TaskOutput"}, keywordSearchTools("+task output", filtered, 1))
+	require.Equal(t, []string{"Read"}, scoreKeywordToolMatches([]string{"read"}, []string{"read"}, filtered, 5))
+	require.Equal(t, "Read", filtered[0].Declaration().Name)
+}
+
 func TestGrepTypePatternsExposeKnownAliases(t *testing.T) {
 	t.Parallel()
 	require.Contains(t, typePatterns("go"), "**/*.go")
@@ -1530,6 +1712,8 @@ func TestGrepAndPDFHelpersCoverRemainingBranches(t *testing.T) {
 func TestWebSearchHelpersNormalizeWrappedDuckDuckGoURLs(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, "https://golang.org/doc/", normalizeDuckDuckGoResultURL("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fgolang.org%2Fdoc%2F"))
+	require.Equal(t, "https://example.com", normalizeDuckDuckGoResultURL("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com"))
+	require.Equal(t, "https://duckduckgo.com/l/?uddg=%ZZ", normalizeDuckDuckGoResultURL("https://duckduckgo.com/l/?uddg=%ZZ"))
 	require.Equal(t, "not a url", normalizeDuckDuckGoResultURL("not a url"))
 	require.Empty(t, normalizeDuckDuckGoResultURL("   "))
 }
@@ -1542,6 +1726,62 @@ func TestResolveRedirectURLAndDomainFiltersHandleEdgeCases(t *testing.T) {
 	_, err = resolveRedirectURL("://bad", "/next")
 	require.Error(t, err)
 	require.False(t, matchSearchDomainFilters("not a url", []string{"example.com"}, nil))
+}
+
+func TestWebSearchBackendsCoverRemainingErrorBranches(t *testing.T) {
+	t.Parallel()
+	duckBackend := &duckDuckGoSearchBackend{
+		client:  http.DefaultClient,
+		baseURL: "://bad",
+	}
+	_, err := duckBackend.search(context.Background(), webSearchInput{Query: "example"})
+	require.Error(t, err)
+	requestFailedClient := &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, fs.ErrInvalid
+		}),
+	}
+	duckBackend = &duckDuckGoSearchBackend{
+		client:  requestFailedClient,
+		baseURL: "https://example.com/search",
+	}
+	_, err = duckBackend.search(context.Background(), webSearchInput{Query: "example"})
+	require.ErrorIs(t, err, fs.ErrInvalid)
+	bodyFailedClient := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			require.Equal(t, "tester", req.Header.Get("User-Agent"))
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     http.Header{},
+				Body:       io.NopCloser(errReader{err: fs.ErrInvalid}),
+				Request:    req,
+			}, nil
+		}),
+	}
+	duckBackend = &duckDuckGoSearchBackend{
+		client:    bodyFailedClient,
+		baseURL:   "https://example.com/search",
+		userAgent: "tester",
+	}
+	_, err = duckBackend.search(context.Background(), webSearchInput{Query: "example"})
+	require.ErrorIs(t, err, fs.ErrInvalid)
+	googleBackend := &googleSearchBackend{
+		client:  http.DefaultClient,
+		options: &WebSearchOptions{APIKey: "key", EngineID: "engine", BaseURL: "://bad"},
+	}
+	_, err = googleBackend.search(context.Background(), webSearchInput{Query: "example"})
+	require.Error(t, err)
+	googleBackend = &googleSearchBackend{
+		client: requestFailedClient,
+		options: &WebSearchOptions{
+			APIKey:   "key",
+			EngineID: "engine",
+			BaseURL:  "https://example.com/search",
+		},
+	}
+	_, err = googleBackend.search(context.Background(), webSearchInput{Query: "example"})
+	require.ErrorIs(t, err, fs.ErrInvalid)
 }
 
 func TestExecRipgrepReturnsErrorForInvalidArguments(t *testing.T) {
@@ -1589,6 +1829,77 @@ func TestGrepHelpersHandleContextAndCountOutput(t *testing.T) {
 	require.Equal(t, 3, out.NumFiles)
 	require.Equal(t, 5, out.NumMatches)
 	require.Equal(t, "a.txt:2\nb.txt:3\nraw", out.Content)
+}
+
+func TestGrepHelpersCoverRemainingFallbackAndRipgrepBranches(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\nbeta\nalpha\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {\nprintln(\"alpha\")\nprintln(\"beta\")\n}\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "note.md"), []byte("alpha beta"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "data.bin"), []byte{0x00, 'a', 'l', 'p', 'h', 'a'}, 0o644))
+	runtime := newToolRuntime(dir, maxEditableFileSize)
+	_, err := runFallbackGrep(runtime, dir, grepInput{Pattern: "("})
+	require.Error(t, err)
+	fileCandidates, err := collectGrepCandidates(dir, "a.txt", "", "")
+	require.NoError(t, err)
+	require.Equal(t, []string{filepath.Join(dir, "a.txt")}, fileCandidates)
+	typeCandidates, err := collectGrepCandidates(dir, "", "", "go")
+	require.NoError(t, err)
+	require.Equal(t, []string{filepath.Join(dir, "main.go")}, typeCandidates)
+	globCandidates, err := collectGrepCandidates(dir, "", "*.md", "")
+	require.NoError(t, err)
+	require.Equal(t, []string{filepath.Join(dir, "note.md")}, globCandidates)
+	_, err = collectGrepCandidates(dir, "missing", "", "")
+	require.Error(t, err)
+	require.False(t, matchesAnyPattern("main.go", []string{"["}))
+	require.Equal(t, []string{"*.go", "*.md", "{foo,bar}.txt"}, splitGlobPatterns("*.go,*.md {foo,bar}.txt"))
+	contentCollector := newFallbackGrepCollector("content")
+	err = collectFallbackLineMatch("alpha\nbeta\n", "a.txt", regexp.MustCompile("alpha"), grepInput{
+		ShowLineNum: boolPtr(false),
+	}, contentCollector)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a.txt:alpha"}, contentCollector.contentLines)
+	countCollector := newFallbackGrepCollector("count")
+	err = collectFallbackMultilineMatch("alpha\nbeta\nalpha\n", "a.txt", regexp.MustCompile("alpha(?s).*beta"), grepInput{}, countCollector)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a.txt:1"}, countCollector.countLines)
+	fileCollector := newFallbackGrepCollector("files_with_matches")
+	err = collectFallbackMultilineMatch("alpha\nbeta\n", "a.txt", regexp.MustCompile("alpha(?s).*beta"), grepInput{}, fileCollector)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a.txt"}, fileCollector.fileMatches)
+	fallbackOut, err := runFallbackGrep(runtime, dir, grepInput{
+		Pattern:   "alpha",
+		HeadLimit: intPtr(1),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "files_with_matches", fallbackOut.Mode)
+	require.Len(t, fallbackOut.Filenames, 1)
+	restore := withRipgrepForTest(func(string) (string, error) {
+		return writeExecutableFile(t, dir, "fake-rg.sh", "#!/bin/sh\nprintf 'main.go:1:alpha\\nmain.go:2:beta\\n'\n"), nil
+	})
+	ripgrepContentOut, handled, err := runRipgrepCommand(context.Background(), dir, ".", grepInput{
+		Pattern:    "alpha",
+		OutputMode: "content",
+	})
+	restore()
+	require.True(t, handled)
+	require.NoError(t, err)
+	require.Equal(t, "content", ripgrepContentOut.Mode)
+	require.Contains(t, ripgrepContentOut.Content, "main.go:1:alpha")
+	restore = withRipgrepForTest(func(string) (string, error) {
+		return writeExecutableFile(t, dir, "fake-rg-empty.sh", "#!/bin/sh\nexit 1\n"), nil
+	})
+	lines, err := execRipgrep(context.Background(), dir, "alpha")
+	restore()
+	require.NoError(t, err)
+	require.Empty(t, lines)
+	restore = withRipgrepForTest(func(string) (string, error) {
+		return writeExecutableFile(t, dir, "fake-rg-error.sh", "#!/bin/sh\nexit 2\n"), nil
+	})
+	_, err = execRipgrep(context.Background(), dir, "alpha")
+	restore()
+	require.EqualError(t, err, "ripgrep failed: ripgrep exited with code 2")
 }
 
 func TestExecRipgrepReturnsEmptyOnNoMatches(t *testing.T) {
@@ -1895,6 +2206,20 @@ func (r errReader) Read(_ []byte) (int, error) {
 	return 0, r.err
 }
 
+type stubTool struct {
+	decl *tool.Declaration
+}
+
+func (s stubTool) Declaration() *tool.Declaration {
+	return s.decl
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func newTestPDF(t *testing.T, pages []string) []byte {
 	t.Helper()
 	pdfDoc := fpdf.New("P", "mm", "A4", "")
@@ -1906,6 +2231,13 @@ func newTestPDF(t *testing.T, pages []string) []byte {
 	var buf bytes.Buffer
 	require.NoError(t, pdfDoc.Output(&buf))
 	return buf.Bytes()
+}
+
+func writeExecutableFile(t *testing.T, dir string, name string, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
+	return path
 }
 
 var tinyPNGBytes = []byte{
