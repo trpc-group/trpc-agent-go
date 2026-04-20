@@ -305,9 +305,9 @@ type orderReq struct {
 	applyErr error
 }
 
-func (r *orderReq) Key() string   { return r.key }
-func (r *orderReq) Kind() Kind    { return r.kind }
-func (r *orderReq) Phase() Phase  { return r.phase }
+func (r *orderReq) Key() string  { return r.key }
+func (r *orderReq) Kind() Kind   { return r.kind }
+func (r *orderReq) Phase() Phase { return r.phase }
 func (r *orderReq) Required() bool {
 	return !r.optional
 }

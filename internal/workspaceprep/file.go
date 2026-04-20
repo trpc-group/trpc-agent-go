@@ -82,11 +82,11 @@ type fileRequirement struct {
 	spec FileSpec
 }
 
-func (r *fileRequirement) Key() string     { return r.spec.Key }
-func (r *fileRequirement) Kind() Kind      { return KindFile }
-func (r *fileRequirement) Phase() Phase    { return PhaseFile }
-func (r *fileRequirement) Required() bool  { return !r.spec.Optional }
-func (r *fileRequirement) Target() string  { return r.spec.Target }
+func (r *fileRequirement) Key() string    { return r.spec.Key }
+func (r *fileRequirement) Kind() Kind     { return KindFile }
+func (r *fileRequirement) Phase() Phase   { return PhaseFile }
+func (r *fileRequirement) Required() bool { return !r.spec.Optional }
+func (r *fileRequirement) Target() string { return r.spec.Target }
 
 func (r *fileRequirement) Fingerprint(
 	ctx context.Context, rctx ApplyContext,

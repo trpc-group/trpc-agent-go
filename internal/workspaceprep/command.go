@@ -111,10 +111,10 @@ type commandRequirement struct {
 	spec CommandSpec
 }
 
-func (r *commandRequirement) Key() string     { return r.spec.Key }
-func (r *commandRequirement) Kind() Kind      { return KindCommand }
-func (r *commandRequirement) Phase() Phase    { return PhaseCommand }
-func (r *commandRequirement) Required() bool  { return !r.spec.Optional }
+func (r *commandRequirement) Key() string    { return r.spec.Key }
+func (r *commandRequirement) Kind() Kind     { return KindCommand }
+func (r *commandRequirement) Phase() Phase   { return PhaseCommand }
+func (r *commandRequirement) Required() bool { return !r.spec.Optional }
 func (r *commandRequirement) Target() string {
 	if r.spec.MarkerPath != "" {
 		return r.spec.MarkerPath

@@ -20,8 +20,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	rootskill "trpc.group/trpc-go/trpc-agent-go/skill"
 	sessionpkg "trpc.group/trpc-go/trpc-agent-go/session"
+	rootskill "trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 func TestBootstrapProvider_FilesAndCommands(t *testing.T) {
