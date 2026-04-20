@@ -1,0 +1,40 @@
+[
+  {
+    "metricName": "final_response_length_compliance",
+    "threshold": 1.0
+  },
+  {
+    "metricName": "llm_rubric_reference_critic",
+    "threshold": 0.9,
+    "criterion": {
+      "llmJudge": {
+        "rubrics": [
+          {
+            "id": "1",
+            "description": "The answer stays aligned with the same decisive play focus as the reference answer.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "Compared with the reference answer, the final answer must stay on the same current play and preserve the same decisive actor, action, or result when those details are explicit in the user prompt and the reference answer. Fail if it shifts to a different moment, becomes generic, or drops the core live-play focus."
+            }
+          },
+          {
+            "id": "2",
+            "description": "The answer keeps a similar level of grounded live detail as the reference answer.",
+            "type": "FINAL_RESPONSE_QUALITY",
+            "content": {
+              "text": "Compared with the reference answer, the final answer should include a similarly useful grounded cue when the user prompt supports it, such as clock, score state, margin, result, or a decisive recent event. Do not require identical wording, but fail if the final answer becomes materially less informative or loses an obviously important cue present in the reference answer."
+            }
+          },
+          {
+            "id": "3",
+            "description": "The answer matches the reference answer in live-call sharpness without requiring exact wording.",
+            "type": "FORMAT_COMPLIANCE",
+            "content": {
+              "text": "Compared with the reference answer, the final answer should sound comparably like a natural Chinese live basketball call: spoken, immediate, and ready for live audio. Do not require exact wording or sentence structure, but fail if it sounds much flatter, more recap-like, or more explanatory than the reference answer."
+            }
+          }
+        ]
+      }
+    }
+  }
+]
