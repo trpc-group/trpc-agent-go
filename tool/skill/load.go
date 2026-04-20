@@ -60,7 +60,12 @@ func WithLoadToolDescription(
 }
 
 // NewLoadTool creates a new LoadTool.
-func NewLoadTool(
+func NewLoadTool(repo skill.Repository) *LoadTool {
+	return NewLoadToolWithOptions(repo)
+}
+
+// NewLoadToolWithOptions creates a new LoadTool with optional overrides.
+func NewLoadToolWithOptions(
 	repo skill.Repository,
 	opts ...LoadToolOption,
 ) *LoadTool {

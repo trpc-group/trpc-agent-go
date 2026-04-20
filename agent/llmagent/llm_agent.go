@@ -709,7 +709,10 @@ func appendSkillToolsWithRepoAndFlags(
 		}
 		allTools = append(
 			allTools,
-			toolskill.NewLoadTool(repo, loadOpts...),
+			toolskill.NewLoadToolWithOptions(
+				repo,
+				loadOpts...,
+			),
 		)
 	}
 	if skillFlags.SelectDocs {

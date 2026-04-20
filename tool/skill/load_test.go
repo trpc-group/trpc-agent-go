@@ -112,7 +112,10 @@ func TestLoadTool_Declaration(t *testing.T) {
 func TestLoadTool_DeclarationOverride(t *testing.T) {
 	const description = "Always load the matching skill first."
 
-	lt := NewLoadTool(nil, WithLoadToolDescription(description))
+	lt := NewLoadToolWithOptions(
+		nil,
+		WithLoadToolDescription(description),
+	)
 	d := lt.Declaration()
 	require.Equal(t, description, d.Description)
 }
