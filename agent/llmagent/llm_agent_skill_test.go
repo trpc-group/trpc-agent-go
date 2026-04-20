@@ -143,6 +143,26 @@ func TestLLMAgent_WorkspaceExecSessionToolsRegisteredForInteractiveExecutor(
 	require.True(t, names["workspace_kill_session"])
 }
 
+func TestLLMAgent_WorkspaceExecSurfaceDisabledForExplicitExecutor(
+	t *testing.T,
+) {
+	a := New(
+		"tester",
+		WithCodeExecutor(&interactiveStubExec{}),
+		WithWorkspaceExecSurfaceEnabled(false),
+	)
+	names := make(map[string]bool)
+	for _, tl := range a.Tools() {
+		if d := tl.Declaration(); d != nil {
+			names[d.Name] = true
+		}
+	}
+
+	require.False(t, names["workspace_exec"])
+	require.False(t, names["workspace_write_stdin"])
+	require.False(t, names["workspace_kill_session"])
+}
+
 func TestLLMAgent_WorkspaceExecDeclarationOmitsSessionFieldsForNonInteractiveExecutor(
 	t *testing.T,
 ) {
@@ -1577,6 +1597,14 @@ func TestExecutorSupportsWorkspaceExec(t *testing.T) {
 	}
 }
 
+func TestExecutorSupportsWorkspaceExecDisabledByOption(t *testing.T) {
+	opts := &Options{
+		codeExecutor: &stubExec{},
+	}
+	WithWorkspaceExecSurfaceEnabled(false)(opts)
+	require.False(t, executorSupportsWorkspaceExec(opts))
+}
+
 func TestExecutorSupportsWorkspaceExecSessions(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1615,6 +1643,16 @@ func TestExecutorSupportsWorkspaceExecSessions(t *testing.T) {
 			require.Equal(t, tt.want, executorSupportsWorkspaceExecSessions(opts))
 		})
 	}
+}
+
+func TestExecutorSupportsWorkspaceExecSessionsDisabledByOption(
+	t *testing.T,
+) {
+	opts := &Options{
+		codeExecutor: &interactiveStubExec{},
+	}
+	WithWorkspaceExecSurfaceEnabled(false)(opts)
+	require.False(t, executorSupportsWorkspaceExecSessions(opts))
 }
 
 func TestLLMAgent_GuidanceOmitsExecForNonInteractiveExecutor(t *testing.T) {
@@ -1750,6 +1788,27 @@ func TestLLMAgent_WorkspaceExecGuidanceWithoutSkillsRepo(t *testing.T) {
 	require.NotContains(t, sys, "skills/")
 	require.NotContains(t, sys, "workspace_write_stdin")
 	require.NotContains(t, sys, skillsOverviewHeader)
+}
+
+func TestLLMAgent_WorkspaceExecGuidanceDisabledByOption(t *testing.T) {
+	opts := &Options{}
+	WithCodeExecutor(&interactiveStubExec{})(opts)
+	WithWorkspaceExecSurfaceEnabled(false)(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	sys := findSystemMessageContaining(req, workspaceExecGuidanceHeader)
+	require.Empty(t, sys)
 }
 
 func TestLLMAgent_WorkspaceExecGuidanceIncludesSaveArtifactWhenAvailable(

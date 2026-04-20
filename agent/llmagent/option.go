@@ -202,6 +202,12 @@ type Options struct {
 	// ChannelBufferSize is the buffer size for event channels (default: 256).
 	ChannelBufferSize int
 	codeExecutor      codeexecutor.CodeExecutor
+	// workspaceExecSurfaceEnabled controls whether generic workspace
+	// execution tools such as workspace_exec are exposed to the model
+	// when a code executor is available.
+	//
+	// Default: true.
+	workspaceExecSurfaceEnabled *bool
 	// EnableCodeExecutionResponseProcessor controls whether the agent
 	// auto-executes fenced code blocks from model responses.
 	//
@@ -621,6 +627,22 @@ func WithChannelBufferSize(size int) Option {
 func WithCodeExecutor(ce codeexecutor.CodeExecutor) Option {
 	return func(opts *Options) {
 		opts.codeExecutor = ce
+	}
+}
+
+// WithWorkspaceExecSurfaceEnabled controls whether generic workspace
+// execution tools are exposed to the model when a code executor is
+// available.
+//
+// This does not disable the configured code executor itself; it only
+// suppresses model-visible workspace tools such as workspace_exec and
+// its session helpers.
+//
+// Default: true.
+func WithWorkspaceExecSurfaceEnabled(enable bool) Option {
+	return func(opts *Options) {
+		value := enable
+		opts.workspaceExecSurfaceEnabled = &value
 	}
 }
 

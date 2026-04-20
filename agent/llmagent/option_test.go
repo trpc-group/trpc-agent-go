@@ -280,6 +280,19 @@ func TestWithSkillLoadToolDescription(t *testing.T) {
 	require.Equal(t, description, *b.option.skillLoadToolDescription)
 }
 
+func TestWithWorkspaceExecSurfaceEnabled(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.workspaceExecSurfaceEnabled)
+	require.True(t, workspaceExecSurfaceEnabled(&a.option))
+
+	b := New(
+		"test-agent",
+		WithWorkspaceExecSurfaceEnabled(false),
+	)
+	require.NotNil(t, b.option.workspaceExecSurfaceEnabled)
+	require.False(t, *b.option.workspaceExecSurfaceEnabled)
+}
+
 func TestWithSkillsCapabilityGuidance(t *testing.T) {
 	a := New("test-agent")
 	require.Nil(t, a.option.skillsCapabilityGuidance)

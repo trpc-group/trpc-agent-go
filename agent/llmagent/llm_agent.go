@@ -817,8 +817,8 @@ func appendWorkspaceExecTool(
 	return appendWorkspaceExecToolWithExecutor(
 		allTools,
 		exec,
-		codeExecutorSupportsWorkspaceExec(exec),
-		codeExecutorSupportsWorkspaceExecSessions(exec),
+		executorSupportsWorkspaceExec(options),
+		executorSupportsWorkspaceExecSessions(options),
 		reg,
 		inv,
 	)
@@ -975,7 +975,7 @@ func codeExecutorSupportsInteractive(exec codeexecutor.CodeExecutor) bool {
 // not fall back to the local engine because that would silently move
 // commands onto the agent host instead of the configured executor.
 func executorSupportsWorkspaceExec(options *Options) bool {
-	if options == nil {
+	if !workspaceExecSurfaceEnabled(options) {
 		return false
 	}
 	return codeExecutorSupportsWorkspaceExec(options.codeExecutor)
@@ -999,10 +999,20 @@ func codeExecutorSupportsWorkspaceExec(exec codeexecutor.CodeExecutor) bool {
 // executorSupportsWorkspaceExecSessions reports whether workspace_exec can
 // expose interactive session helpers such as workspace_write_stdin.
 func executorSupportsWorkspaceExecSessions(options *Options) bool {
-	if options == nil {
+	if !workspaceExecSurfaceEnabled(options) {
 		return false
 	}
 	return codeExecutorSupportsWorkspaceExecSessions(options.codeExecutor)
+}
+
+func workspaceExecSurfaceEnabled(options *Options) bool {
+	if options == nil {
+		return false
+	}
+	if options.workspaceExecSurfaceEnabled == nil {
+		return true
+	}
+	return *options.workspaceExecSurfaceEnabled
 }
 
 func codeExecutorSupportsWorkspaceExecSessions(
