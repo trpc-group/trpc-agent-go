@@ -1343,7 +1343,9 @@ func TestRunLocalRipgrepReturnsFalseWhenRipgrepIsUnavailable(t *testing.T) {
 
 func TestRunLocalRipgrepRejectsPathsOutsideBaseDir(t *testing.T) {
 	t.Parallel()
-	restore := withRipgrepForTest(exec.LookPath)
+	restore := withRipgrepForTest(func(string) (string, error) {
+		return "/bin/true", nil
+	})
 	defer restore()
 	_, ok, err := runLocalRipgrep(context.Background(), t.TempDir(), grepInput{
 		Pattern: "alpha",
