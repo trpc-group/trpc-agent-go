@@ -335,7 +335,7 @@ func (b *googleSearchBackend) search(
 			Snippet: item.Snippet,
 		})
 	}
-	return applySearchWindow(hits, webSearchOffset(b.options), webSearchSize(b.options)), nil
+	return hits, nil
 }
 
 func applySearchWindow(hits []webSearchHit, offset int, limit int) []webSearchHit {

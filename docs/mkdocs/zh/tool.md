@@ -545,6 +545,7 @@ searchTool := duckduckgo.NewTool(
 
 ```go
 import (
+	"log"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/claudecode"

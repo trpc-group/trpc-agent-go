@@ -212,11 +212,14 @@ func splitToolSearchTerms(query string) ([]string, []string) {
 	required := make([]string, 0, len(parts))
 	optional := make([]string, 0, len(parts))
 	for _, part := range parts {
-		if len(part) < 2 {
+		if strings.HasPrefix(part, "+") {
+			term := strings.TrimPrefix(part, "+")
+			if term != "" {
+				required = append(required, term)
+			}
 			continue
 		}
-		if strings.HasPrefix(part, "+") && len(part) > 2 {
-			required = append(required, strings.TrimPrefix(part, "+"))
+		if len(part) < 2 {
 			continue
 		}
 		optional = append(optional, part)

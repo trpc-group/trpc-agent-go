@@ -42,7 +42,6 @@ func newTaskStopTool(runtime *runtime) (tool.Tool, error) {
 			process := task.Process
 			command := task.Command
 			taskType := task.Type
-			task.Status = "killed"
 			runtime.taskState.mu.Unlock()
 			if process == nil {
 				return taskStopOutput{}, fmt.Errorf("Task %s has no running process", taskID)
@@ -50,6 +49,11 @@ func newTaskStopTool(runtime *runtime) (tool.Tool, error) {
 			if err := process.Kill(); err != nil {
 				return taskStopOutput{}, err
 			}
+			runtime.taskState.mu.Lock()
+			if current := runtime.taskState.tasks[taskID]; current != nil {
+				current.Status = "killed"
+			}
+			runtime.taskState.mu.Unlock()
 			return taskStopOutput{
 				Message:  fmt.Sprintf("Successfully stopped task: %s (%s)", taskID, command),
 				TaskID:   taskID,

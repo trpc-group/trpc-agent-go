@@ -732,6 +732,13 @@ func TestToolSet_ToolSearchFindsCurrentTools(t *testing.T) {
 	require.Contains(t, requiredOut.Matches, toolRead)
 }
 
+func TestSplitToolSearchTermsTreatsSingleCharacterRequiredTermsAsRequired(t *testing.T) {
+	t.Parallel()
+	required, optional := splitToolSearchTerms("+x read")
+	require.Equal(t, []string{"x"}, required)
+	require.Equal(t, []string{"read"}, optional)
+}
+
 func TestToolSearchCoversProviderAndEmptyResultBranches(t *testing.T) {
 	t.Parallel()
 	_, err := newToolSearchTool(nil)
@@ -1151,7 +1158,8 @@ func TestGoogleSearchBackendSearchUsesConfiguredOptions(t *testing.T) {
 		AllowedDomains: []string{"golang.org"},
 	})
 	require.NoError(t, err)
-	require.Len(t, hits, 0)
+	require.Len(t, hits, 1)
+	require.Equal(t, "https://golang.org/doc/", hits[0].URL)
 	unwindowedBackend := &googleSearchBackend{
 		client: server.Client(),
 		options: &WebSearchOptions{
@@ -1651,8 +1659,8 @@ func TestToolSearchHelpersCoverRemainingBranches(t *testing.T) {
 	require.Equal(t, "Read", exactToolMatch("read", filtered))
 	require.Empty(t, keywordSearchTools(" ", filtered, 5))
 	requiredTerms, optionalTerms := splitToolSearchTerms("+read tool +x")
-	require.Equal(t, []string{"read"}, requiredTerms)
-	require.Equal(t, []string{"tool", "+x"}, optionalTerms)
+	require.Equal(t, []string{"read", "x"}, requiredTerms)
+	require.Equal(t, []string{"tool"}, optionalTerms)
 	info := parseToolName("TaskOutputTool")
 	require.Equal(t, []string{"task", "output", "tool"}, info.Parts)
 	require.Equal(t, "task output tool", info.Full)
@@ -2039,6 +2047,15 @@ func TestProcessPipeHelpersAndTaskStopErrors(t *testing.T) {
 	}
 	_, err = callToolRaw(callable, taskStopInput{TaskID: "done"})
 	require.EqualError(t, err, "Task done is not running (status: completed)")
+	runtime.taskState.tasks["running"] = &backgroundTask{
+		ID:      "running",
+		Command: "sleep 30",
+		Type:    toolBash,
+		Status:  "running",
+	}
+	_, err = callToolRaw(callable, taskStopInput{TaskID: "running"})
+	require.EqualError(t, err, "Task running has no running process")
+	require.Equal(t, "running", runtime.taskState.tasks["running"].Status)
 }
 
 func TestPDFAndNotebookHelpersCoverFallbackBranches(t *testing.T) {
