@@ -95,6 +95,7 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	p := NewSkillsRequestProcessor(
 		repo,
 		WithSkillLoadMode(SkillLoadModeSession),
+		WithSkillToolProfile(skillprofile.Full),
 	)
 	p.ProcessRequest(context.Background(), inv, req, ch)
 

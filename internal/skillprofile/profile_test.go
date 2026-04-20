@@ -18,12 +18,12 @@ import (
 
 func TestNormalize(t *testing.T) {
 	tests := map[string]string{
-		"":                   Full,
+		"":                   KnowledgeOnly,
 		"full":               Full,
 		" FULL ":             Full,
 		"knowledge_only":     KnowledgeOnly,
 		" KNOWLEDGE_ONLY \n": KnowledgeOnly,
-		"unknown":            Full,
+		"unknown":            KnowledgeOnly,
 	}
 	for in, want := range tests {
 		if got := Normalize(in); got != want {
@@ -171,5 +171,9 @@ func TestFlagsHelpers(t *testing.T) {
 func TestIsKnowledgeOnly(t *testing.T) {
 	require.True(t, IsKnowledgeOnly(" KNOWLEDGE_ONLY "))
 	require.False(t, IsKnowledgeOnly("full"))
-	require.False(t, IsKnowledgeOnly("unknown"))
+	// Unknown profiles fall back to the KnowledgeOnly default, matching
+	// the framework-level behavior that leaves execution tools off
+	// unless they are explicitly opted in via Full.
+	require.True(t, IsKnowledgeOnly("unknown"))
+	require.True(t, IsKnowledgeOnly(""))
 }

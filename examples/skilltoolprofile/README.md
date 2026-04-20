@@ -1,6 +1,13 @@
-# SkillToolProfile Example
+# SkillToolProfile Example (Archival Reference)
 
-This example demonstrates the new `WithSkillToolProfile(...)` option with a
+> This demo exercises an older surface for configuring which built-in
+> skill tools get registered. For the recommended way to wire Agent
+> Skills in new code, see
+> [docs/mkdocs/en/skill.md](../../docs/mkdocs/en/skill.md) — the
+> default behavior already does the right thing, and most users do not
+> need to call `WithSkillToolProfile(...)` at all.
+
+This example demonstrates the `WithSkillToolProfile(...)` option with a
 deterministic mock model, so it does not require any API key.
 
 It supports:

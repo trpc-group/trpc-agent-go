@@ -108,6 +108,10 @@ func run() error {
 		llmagent.WithInstruction(instructionText),
 		llmagent.WithGenerationConfig(genConfig),
 		llmagent.WithSkills(repo),
+		// The demo calls skill_run to execute scripts/hello.sh, which
+		// requires the full skill tool profile; the default profile is
+		// knowledge_only and does not register skill_run.
+		llmagent.WithSkillToolProfile(llmagent.SkillToolProfileFull),
 		llmagent.WithCodeExecutor(exec),
 		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithStructuredOutputJSON(

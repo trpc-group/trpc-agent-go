@@ -1383,10 +1383,15 @@ func createGAIAAgent() agent.Agent {
 		)
 	}
 
-	// Enable skills if configured.
+	// Enable skills if configured. This benchmark reuses an older
+	// output-collection path, so it is pinned to the legacy full
+	// skill tool surface. New code should not copy this wiring; see
+	// docs/mkdocs/en/skill.md for the recommended setup (WithSkills +
+	// an explicit CodeExecutor is enough, no profile needed).
 	if skillRepo != nil && codeExec != nil {
 		agentOpts = append(agentOpts,
 			llmagent.WithSkills(skillRepo),
+			llmagent.WithSkillToolProfile(llmagent.SkillToolProfileFull),
 			llmagent.WithCodeExecutor(codeExec),
 		)
 		log.Printf("Agent Skills enabled")

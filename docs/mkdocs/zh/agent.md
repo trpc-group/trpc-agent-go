@@ -814,7 +814,7 @@ llmagent := llmagent.New("llmagent", llmagent.WithAgentCallbacks(callbacks))
 
 **注意：**
 - “允许使用工具”表示 Agent 仍可发起工具调用（包括 Skills 的
-  `skill_load` / `skill_run`）。
+  `skill_load` 与 `workspace_exec`）。
 - 当模型需要调用工具时，可能会先返回工具调用事件而不是最终 JSON；
   只有最终答复才需要满足 schema，并且必须是单个 JSON 对象。
 

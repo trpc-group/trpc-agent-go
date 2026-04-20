@@ -1,5 +1,11 @@
 # Skill-Driven Dynamic Structured Output (JSON Schema)
 
+> This demo is built on top of an older skill execution surface. For
+> the recommended way to wire Agent Skills in new code, see
+> [docs/mkdocs/en/skill.md](../../docs/mkdocs/en/skill.md). The
+> dynamic-schema pattern shown here is orthogonal to skill execution
+> and also applies on top of the recommended setup.
+
 This example demonstrates a **Skill-driven** pattern for selecting a **JSON Schema at runtime**, applying it to the **current invocation**, and returning a final JSON response that is extracted into `event.StructuredOutput`.
 
 Key ideas:

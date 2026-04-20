@@ -1,11 +1,17 @@
 # Skill Call Evaluation Example
 
-This example demonstrates how to evaluate whether an agent correctly uses **Agent Skills** tools (`skill_load` / `skill_run`) with the existing evaluation pipeline.
+> This demo intentionally pins the agent to an older skill execution
+> surface so the tool-trajectory test can assert against its specific
+> tool names. For the recommended way to wire Agent Skills in new
+> code, see [docs/mkdocs/en/skill.md](../../../docs/mkdocs/en/skill.md);
+> the evaluation patterns shown here transfer over unchanged.
+
+This example demonstrates how to evaluate whether an agent correctly uses **Agent Skills** tools with the existing evaluation pipeline.
 
 It uses the **tool trajectory** evaluator (`tool_trajectory_avg_score`) to verify:
 - The agent loads the expected skill first.
-- The agent then runs the skill via `skill_run`.
-- The skill execution succeeds (`exit_code == 0`).
+- The agent then invokes the skill.
+- Skill execution succeeds (`exit_code == 0`).
 
 ## Environment Variables
 

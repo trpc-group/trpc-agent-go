@@ -921,15 +921,24 @@ func defaultKnowledgeOnlyGuidance(flags skillprofile.Flags) string {
 	b.WriteString(skillsToolingGuidanceHeader)
 	b.WriteString("\n")
 	b.WriteString("- Use skills for progressive disclosure only: load ")
-	b.WriteString("SKILL.md first, then inspect only the documentation ")
-	b.WriteString("needed for the current task.\n")
+	b.WriteString("SKILL.md first with skill_load, then inspect only the ")
+	b.WriteString("documentation needed for the current task. The ")
+	b.WriteString("catalog overview elsewhere in this prompt is a ")
+	b.WriteString("routing summary; do not infer commands, script ")
+	b.WriteString("entrypoints, or resource layouts from it.\n")
+	b.WriteString("- Before doing anything attributed to a skill, call ")
+	b.WriteString("skill_load for that skill so the full SKILL.md is in ")
+	b.WriteString("context.\n")
 	appendKnowledgeGuidance(&b, flags)
-	b.WriteString("- Treat loaded skill content as domain guidance. Do ")
-	b.WriteString("not claim you executed scripts, shell commands, or ")
-	b.WriteString("interactive flows described by the skill.\n")
-	b.WriteString("- If a skill depends on execution to complete the ")
-	b.WriteString("task, switch to other registered tools (for example, ")
-	b.WriteString("MCP tools) or explain the limitation clearly.\n")
+	b.WriteString("- skill_load returns instructions and bundled ")
+	b.WriteString("resources but does not execute the skill by itself. ")
+	b.WriteString("If the loaded SKILL.md describes shell commands or ")
+	b.WriteString("scripts and a shell-execution tool is registered for ")
+	b.WriteString("this agent (see the executor workspace guidance ")
+	b.WriteString("below for what is available), invoke that tool to ")
+	b.WriteString("actually run the steps. If no execution tool is ")
+	b.WriteString("registered, treat the loaded content as reference ")
+	b.WriteString("and explain the limitation clearly.\n")
 	return b.String()
 }
 
@@ -1276,16 +1285,27 @@ func appendKnowledgeGuidance(
 	if !flags.Load {
 		return
 	}
+	b.WriteString("- Beyond SKILL.md itself, extra docs are loaded only ")
+	b.WriteString("on demand. SKILL.md is the entry point and usually ")
+	b.WriteString("references any auxiliary docs that exist, so do not ")
+	b.WriteString("probe for docs before reading SKILL.md and do not ")
+	b.WriteString("treat an empty doc list as a reason to skip ")
+	b.WriteString("skill_load.\n")
 	switch {
 	case flags.ListDocs && flags.SelectDocs:
 		b.WriteString("- Use the available doc listing and selection helpers ")
-		b.WriteString("to keep documentation loads targeted.\n")
+		b.WriteString("only after skill_load, and only when SKILL.md hints ")
+		b.WriteString("at auxiliary docs you still need; if SKILL.md alone ")
+		b.WriteString("is enough, do not call them.\n")
 	case flags.ListDocs:
 		b.WriteString("- Use the available doc listing helper to discover ")
-		b.WriteString("doc names, then load only the docs you need.\n")
+		b.WriteString("doc names only after skill_load, and only when ")
+		b.WriteString("SKILL.md hints at auxiliary docs you still need; if ")
+		b.WriteString("SKILL.md alone is enough, do not call it.\n")
 	case flags.SelectDocs:
 		b.WriteString("- If doc names are already known, use the available ")
-		b.WriteString("doc selection helper to keep loaded docs targeted.\n")
+		b.WriteString("doc selection helper to keep loaded docs targeted; ")
+		b.WriteString("do not call it before SKILL.md is loaded.\n")
 	default:
 		b.WriteString("- If you need docs, request them directly with ")
 		b.WriteString("skill_load.docs or include_all_docs.\n")

@@ -504,11 +504,17 @@ type SkillToolProfile string
 type SkillTool string
 
 const (
-	// SkillToolProfileFull keeps the existing behavior and registers the full
-	// built-in skill tool suite, including execution tools.
+	// SkillToolProfileFull registers the full built-in skill tool suite,
+	// including skill_run, skill_exec, and the interactive exec-session
+	// helpers. This profile is opt-in; callers that want skill-driven
+	// execution must request it explicitly. New code should prefer
+	// workspace_exec together with skill_load for script execution.
 	SkillToolProfileFull SkillToolProfile = skillprofile.Full
-	// SkillToolProfileKnowledgeOnly registers only progressive-disclosure skill
-	// tools used for knowledge injection. No execution tools are exposed.
+	// SkillToolProfileKnowledgeOnly registers only progressive-disclosure
+	// skill tools (skill_load / skill_list_docs / skill_select_docs) and
+	// omits every execution tool. This is the default profile: agents
+	// that only configure a skill repository get knowledge injection and
+	// rely on workspace_exec for running scripts.
 	SkillToolProfileKnowledgeOnly SkillToolProfile = skillprofile.KnowledgeOnly
 
 	// SkillToolLoad loads SKILL.md and optional docs into model context.
@@ -694,6 +700,21 @@ func WithRefreshToolSetsOnRun(refresh bool) Option {
 // WithSkills enables model-agnostic Agent Skills support using the
 // provided repository. The processor will inject a small overview
 // and on-demand content according to session state.
+//
+// Code executor auto-fallback: when WithSkills is configured without an
+// explicit WithCodeExecutor, the agent will auto-wire a local
+// codeexecutor so that workspace_exec is available and the zero-config
+// upgrade path keeps working. The fallback is skipped when any of the
+// following hold:
+//
+//   - an explicit executor was provided via WithCodeExecutor,
+//   - WithAllowedSkillTools was used to drive fine-grained selection, or
+//   - WithSkillToolProfile(SkillToolProfileKnowledgeOnly) was explicitly
+//     set (the documented opt-out for "no convenience execution").
+//
+// For production, prefer configuring an explicit code executor (for
+// example, a container-backed executor) rather than relying on the
+// local fallback.
 func WithSkills(repo skill.Repository) Option {
 	return func(opts *Options) {
 		opts.skillsRepository = repo
@@ -713,8 +734,28 @@ func WithSkillFilter(filter skill.VisibilityFilter) Option {
 // skills are enabled via WithSkills.
 //
 // Supported profiles:
-//   - SkillToolProfileFull (default)
-//   - SkillToolProfileKnowledgeOnly
+//   - SkillToolProfileKnowledgeOnly (default): progressive-disclosure tools
+//     only (skill_load / skill_list_docs / skill_select_docs). Execution is
+//     expected to happen through workspace_exec against the writable skill
+//     working copy materialized under /skills/<name>.
+//   - SkillToolProfileFull: additionally registers skill_run, skill_exec,
+//     and the interactive exec-session helpers. This path predates
+//     workspace_exec-based execution and is kept for backward compatibility;
+//     new code should prefer the default profile.
+//
+// Explicit vs default: not calling WithSkillToolProfile(...) and calling
+// WithSkillToolProfile(SkillToolProfileKnowledgeOnly) register the same
+// built-in skill tool set, but carry different intent around the
+// convenience executor fallback documented on WithSkills:
+//
+//   - Unconfigured (default): if no WithCodeExecutor is supplied,
+//     the framework auto-falls back to a local executor so
+//     workspace_exec is still available out of the box.
+//   - Explicit SkillToolProfileKnowledgeOnly: the framework treats
+//     this as an opt-out and will NOT auto-fall back to a local
+//     executor. Pass this when you intentionally want a
+//     knowledge-only agent, or when you are wiring execution through
+//     your own user-registered tools.
 func WithSkillToolProfile(profile SkillToolProfile) Option {
 	return func(opts *Options) {
 		opts.skillToolProfile = string(profile)
@@ -725,7 +766,7 @@ func WithSkillToolProfile(profile SkillToolProfile) Option {
 // with an explicit allowlist.
 //
 // When not configured, built-in skill tools continue to follow
-// WithSkillToolProfile (default: full).
+// WithSkillToolProfile (default: knowledge_only).
 //
 // When configured with no tools, no built-in skill tools are registered.
 func WithAllowedSkillTools(tools ...SkillTool) Option {

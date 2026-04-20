@@ -88,6 +88,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		opt(&options)
 	}
 	prepareSkillsRepository(&options)
+	applySkillsExecutorFallback(&options)
 
 	// Validate output_schema configuration before registering tools.
 	if options.OutputSchema != nil {
@@ -510,6 +511,34 @@ func prepareSkillsRepository(options *Options) {
 		options.skillsRepository,
 		options.skillFilter,
 	)
+}
+
+// applySkillsExecutorFallback auto-wires a local code executor when the
+// caller enabled skills via WithSkills but did not provide an executor.
+// This preserves the zero-config upgrade path (WithSkills alone should
+// keep working) while still letting callers fully opt out.
+//
+// The fallback is intentionally skipped when:
+//   - an executor was already configured via WithCodeExecutor,
+//   - the caller used WithAllowedSkillTools to drive fine-grained tool
+//     selection (they are being explicit about what they want), or
+//   - the caller explicitly selected SkillToolProfileKnowledgeOnly,
+//     which is the opt-out signal for "no convenience execution wiring
+//     from the framework".
+//
+// Note: the distinction between the unconfigured default and an
+// explicit KnowledgeOnly profile is intentional; both normalize to the
+// same built-in skill tool set, but only an explicit opt-in disables
+// the fallback.
+func applySkillsExecutorFallback(options *Options) {
+	if options == nil ||
+		options.skillsRepository == nil ||
+		options.codeExecutor != nil ||
+		options.allowedSkillTools != nil ||
+		skillprofile.IsExplicitKnowledgeOnly(options.skillToolProfile) {
+		return
+	}
+	options.codeExecutor = defaultCodeExecutor()
 }
 
 // initializeModels initializes the models map and determines the initial
