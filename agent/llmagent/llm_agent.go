@@ -261,6 +261,22 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	// deciding on tool calls.
 	skillFlags := mustResolveSkillToolFlags(options)
 	var skillsOpts []processor.SkillsRequestProcessorOption
+	if options.skillsCapabilityGuidance != nil {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillsCapabilityGuidance(
+				*options.skillsCapabilityGuidance,
+			),
+		)
+	}
+	if options.skillsProtocolGuidance != nil {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillsProtocolGuidance(
+				*options.skillsProtocolGuidance,
+			),
+		)
+	}
 	if options.skillsToolingGuidance != nil {
 		skillsOpts = append(
 			skillsOpts,
@@ -278,6 +294,12 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithSkillToolFlags(skillFlags),
 		processor.WithSkillToolFlagsResolver(
 			a.skillToolFlagsForInvocation,
+		),
+		processor.WithSkillsDirectoryHints(
+			options.skillsDirectoryHints,
+		),
+		processor.WithSkillsFilePathHints(
+			options.skillsFilePathHints,
 		),
 	)
 	if options.MaxLoadedSkills > 0 {
@@ -420,6 +442,12 @@ func appendSkillsToolResultProcessor(a *LLMAgent, options *Options, requestProce
 			),
 			processor.WithSkillsToolResultLoadMode(
 				options.SkillLoadMode,
+			),
+			processor.WithSkillsToolResultDirectoryHints(
+				options.skillsDirectoryHints,
+			),
+			processor.WithSkillsToolResultFilePathHints(
+				options.skillsFilePathHints,
 			),
 			processor.WithSkipSkillsFallbackOnSessionSummary(
 				options.SkipSkillsFallbackOnSessionSummary,
@@ -670,9 +698,21 @@ func appendSkillToolsWithRepoAndFlags(
 		return allTools
 	}
 	if skillFlags.Load {
+		loadOpts := []toolskill.LoadToolOption{}
+		if options.skillLoadToolDescription != nil {
+			loadOpts = append(
+				loadOpts,
+				toolskill.WithLoadToolDescription(
+					*options.skillLoadToolDescription,
+				),
+			)
+		}
 		allTools = append(
 			allTools,
-			toolskill.NewLoadTool(repo),
+			toolskill.NewLoadToolWithOptions(
+				repo,
+				loadOpts...,
+			),
 		)
 	}
 	if skillFlags.SelectDocs {
@@ -777,8 +817,8 @@ func appendWorkspaceExecTool(
 	return appendWorkspaceExecToolWithExecutor(
 		allTools,
 		exec,
-		codeExecutorSupportsWorkspaceExec(exec),
-		codeExecutorSupportsWorkspaceExecSessions(exec),
+		executorSupportsWorkspaceExec(options),
+		executorSupportsWorkspaceExecSessions(options),
 		reg,
 		inv,
 	)
@@ -935,7 +975,7 @@ func codeExecutorSupportsInteractive(exec codeexecutor.CodeExecutor) bool {
 // not fall back to the local engine because that would silently move
 // commands onto the agent host instead of the configured executor.
 func executorSupportsWorkspaceExec(options *Options) bool {
-	if options == nil {
+	if !workspaceExecSurfaceEnabled(options) {
 		return false
 	}
 	return codeExecutorSupportsWorkspaceExec(options.codeExecutor)
@@ -959,10 +999,20 @@ func codeExecutorSupportsWorkspaceExec(exec codeexecutor.CodeExecutor) bool {
 // executorSupportsWorkspaceExecSessions reports whether workspace_exec can
 // expose interactive session helpers such as workspace_write_stdin.
 func executorSupportsWorkspaceExecSessions(options *Options) bool {
-	if options == nil {
+	if !workspaceExecSurfaceEnabled(options) {
 		return false
 	}
 	return codeExecutorSupportsWorkspaceExecSessions(options.codeExecutor)
+}
+
+func workspaceExecSurfaceEnabled(options *Options) bool {
+	if options == nil {
+		return false
+	}
+	if options.workspaceExecSurfaceEnabled == nil {
+		return true
+	}
+	return *options.workspaceExecSurfaceEnabled
 }
 
 func codeExecutorSupportsWorkspaceExecSessions(
