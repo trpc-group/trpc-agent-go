@@ -14,7 +14,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -466,6 +468,36 @@ func TestToolSet_ReadRejectsLargePDFWithoutPages(t *testing.T) {
 		Pages:    "1-21",
 	})
 	require.ErrorContains(t, err, "exceeds maximum")
+}
+
+func TestToolSet_ReadCoversOffsetAndErrorBranches(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ts, err := NewToolSet(WithBaseDir(dir))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, ts.Close())
+	})
+	readTool := mustCallableTool(t, ts.Tools(context.Background()), toolRead)
+	_, err = callToolRaw(readTool, readInput{FilePath: filepath.Join(dir, "missing.txt")})
+	require.EqualError(t, err, fmt.Sprintf("File does not exist: %s", filepath.Join(dir, "missing.txt")))
+	binaryPath := filepath.Join(dir, "data.bin")
+	require.NoError(t, os.WriteFile(binaryPath, []byte{0x00, 0x01, 0x02}, 0o644))
+	_, err = callToolRaw(readTool, readInput{FilePath: binaryPath})
+	require.EqualError(t, err, "This tool cannot read binary files.")
+	textPath := filepath.Join(dir, "notes.txt")
+	require.NoError(t, os.WriteFile(textPath, []byte("alpha\nbeta\ngamma\n"), 0o644))
+	out := callToolAs[readOutput](t, readTool, readInput{
+		FilePath: textPath,
+		Offset:   intPtr(2),
+		Limit:    intPtr(1),
+	})
+	require.Equal(t, "text", out.Type)
+	require.NotNil(t, out.File)
+	require.Equal(t, 2, out.File.StartLine)
+	require.Equal(t, 3, out.File.TotalLines)
+	require.Equal(t, 1, out.File.NumLines)
+	require.Equal(t, "beta", out.File.Content)
 }
 
 func TestToolSet_NotebookEditFlow(t *testing.T) {
@@ -1396,6 +1428,17 @@ func TestCommonHelpersCoverTextAndPatchBranches(t *testing.T) {
 	require.Nil(t, buildStructuredPatch("same\n", "same\n"))
 }
 
+func TestCommonHelpersCoverRemainingErrorBranches(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, filepath.ToSlash(filepath.Clean("file.txt")), relativePath("\x00", "file.txt"))
+	_, err := readHTTPBody(&http.Response{Body: io.NopCloser(errReader{err: fs.ErrInvalid})}, 8, 0)
+	require.ErrorIs(t, err, fs.ErrInvalid)
+	sliced, startLine, totalLines := sliceLines("alpha\nbeta\n", 10, nil)
+	require.Empty(t, sliced)
+	require.Equal(t, 10, startLine)
+	require.Equal(t, 2, totalLines)
+}
+
 func TestGrepTypePatternsExposeKnownAliases(t *testing.T) {
 	t.Parallel()
 	require.Contains(t, typePatterns("go"), "**/*.go")
@@ -1795,6 +1838,14 @@ func TestReadTaskSnapshotReturnsReadErrorForDirectoryOutputPath(t *testing.T) {
 	}
 	_, err := readTaskSnapshot(runtime, "task-1")
 	require.Error(t, err)
+}
+
+type errReader struct {
+	err error
+}
+
+func (r errReader) Read(_ []byte) (int, error) {
+	return 0, r.err
 }
 
 func newTestPDF(t *testing.T, pages []string) []byte {
