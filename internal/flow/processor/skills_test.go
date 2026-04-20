@@ -375,6 +375,11 @@ func TestSkillsRequestProcessor_ProtocolGuidanceOverride(t *testing.T) {
 		sys,
 		"Always load SKILL.md before answering.",
 	)
+	require.Less(
+		t,
+		strings.Index(sys, "Always load SKILL.md before answering."),
+		strings.Index(sys, skillsOverviewHeader),
+	)
 	require.NotContains(t, sys, skillsCapabilityHeader)
 	require.NotContains(t, sys, skillsToolingGuidanceHeader)
 }

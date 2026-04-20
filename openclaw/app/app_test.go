@@ -1477,6 +1477,12 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
+		"Do not answer a matching skill task from the short "+
+			"summary, prior knowledge, or partial memory.",
+	)
+	require.Contains(
+		t,
+		sys,
 		"Keep exploring nearby runtime facts, retries, "+
 			"and recovery paths",
 	)

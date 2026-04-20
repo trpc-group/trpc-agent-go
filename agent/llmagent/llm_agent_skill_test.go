@@ -987,6 +987,11 @@ func TestLLMAgent_WithSkillsProtocolGuidance_WiresPrompt(t *testing.T) {
 		sys,
 		"Use the matching skill before answering.",
 	)
+	require.Less(
+		t,
+		strings.Index(sys, "Use the matching skill before answering."),
+		strings.Index(sys, skillsOverviewHeader),
+	)
 	require.NotContains(t, sys, skillsCapabilityHeader)
 	require.NotContains(t, sys, skillsToolingGuidanceHeader)
 }

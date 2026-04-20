@@ -89,7 +89,7 @@ const (
 	defaultAgentName        = "assistant"
 	defaultAgentInstruction = "You are a helpful assistant. " +
 		"Keep replies concise."
-	openClawSkillsGuidance = "Treat the skill overview as the " +
+	openClawSkillsGuidance = "Treat the skill overview below as the " +
 		"skills available in this session. Each entry " +
 		"includes a path to that skill's SKILL.md on disk. " +
 		"This is a blocking requirement for matching " +
@@ -103,8 +103,12 @@ const (
 		"unless you already called `skill_load` for it in " +
 		"this turn. Never say that you could read or load " +
 		"a matching skill later without actually doing it " +
-		"first. Load `SKILL.md` before giving substantive " +
-		"guidance or acting on the workflow. When " +
+		"first. Do not answer a matching skill task from " +
+		"the short summary, prior knowledge, or partial " +
+		"memory. Even if you think you already know the " +
+		"answer, load `SKILL.md` first. Load `SKILL.md` " +
+		"before giving substantive guidance or acting on " +
+		"the workflow. When " +
 		"`SKILL.md` references " +
 		"relative paths, resolve them from the skill " +
 		"directory first. Read only the supporting docs, " +

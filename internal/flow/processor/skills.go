@@ -742,26 +742,43 @@ func (p *SkillsRequestProcessor) injectOverview(
 		return
 	}
 	var b strings.Builder
-	b.WriteString(skillsOverviewHeader)
-	b.WriteString("\n")
-	if p.directoryHints || p.filePathHints {
-		if rootsText := buildSkillRootsText(repo); rootsText != "" {
-			b.WriteString(rootsText)
-		}
-	}
-	for _, s := range sums {
-		line := fmt.Sprintf(
-			"- %s: %s%s\n",
-			s.Name,
-			s.Description,
-			p.skillOverviewSuffix(ctx, repo, s.Name),
-		)
-		b.WriteString(line)
-	}
 	flags := p.toolFlagsForInvocation(inv)
 	if protocol := p.protocolGuidanceText(flags); protocol != "" {
 		b.WriteString(protocol)
+		b.WriteString("\n")
+		b.WriteString(skillsOverviewHeader)
+		b.WriteString("\n")
+		if p.directoryHints || p.filePathHints {
+			if rootsText := buildSkillRootsText(repo); rootsText != "" {
+				b.WriteString(rootsText)
+			}
+		}
+		for _, s := range sums {
+			line := fmt.Sprintf(
+				"- %s: %s%s\n",
+				s.Name,
+				s.Description,
+				p.skillOverviewSuffix(ctx, repo, s.Name),
+			)
+			b.WriteString(line)
+		}
 	} else {
+		b.WriteString(skillsOverviewHeader)
+		b.WriteString("\n")
+		if p.directoryHints || p.filePathHints {
+			if rootsText := buildSkillRootsText(repo); rootsText != "" {
+				b.WriteString(rootsText)
+			}
+		}
+		for _, s := range sums {
+			line := fmt.Sprintf(
+				"- %s: %s%s\n",
+				s.Name,
+				s.Description,
+				p.skillOverviewSuffix(ctx, repo, s.Name),
+			)
+			b.WriteString(line)
+		}
 		if capability := p.capabilityGuidanceText(flags); capability != "" {
 			b.WriteString(capability)
 		}
@@ -775,7 +792,13 @@ func (p *SkillsRequestProcessor) injectOverview(
 	if idx >= 0 {
 		sys := &req.Messages[idx]
 		if !strings.Contains(sys.Content, skillsOverviewHeader) {
-			if sys.Content != "" {
+			if p.protocolGuidanceText(flags) != "" {
+				if sys.Content != "" {
+					sys.Content = overview + "\n\n" + sys.Content
+				} else {
+					sys.Content = overview
+				}
+			} else if sys.Content != "" {
 				sys.Content += "\n\n" + overview
 			} else {
 				sys.Content = overview
