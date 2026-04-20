@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 )
 
@@ -277,6 +278,7 @@ func TestAdminRuntimeConfigProvider_ErrorPaths(t *testing.T) {
 	require.Error(t, provider.ResetRuntimeConfigValue("missing"))
 	require.Error(t, provider.SaveRuntimeConfigValue("admin.auto_port", "maybe"))
 	require.Error(t, provider.SaveRuntimeConfigValue("skills.max_loaded_skills", "nan"))
+	require.Error(t, provider.SaveRuntimeConfigValue("skills.tool_profile", "invalid"))
 	require.Error(t, provider.SaveRuntimeConfigValue("skills.load_mode", "invalid"))
 
 	badPath := writeAdminRuntimeConfigTestFile(
@@ -717,6 +719,7 @@ func adminRuntimeConfigTestOptions(configPath string) runOptions {
 		OpenAIVariant:        defaultOpenAIVariant,
 		SkillsWatch:          true,
 		SkillsWatchDebounce:  defaultSkillsWatchDebounce,
+		SkillsToolProfile:    defaultSkillsToolProfile,
 		SkillsLoadMode:       defaultSkillsLoadMode,
 		SkillsMaxLoaded:      0,
 		SkillsToolResults:    true,
@@ -760,4 +763,86 @@ func findAdminRuntimeConfigField(
 	}
 	t.Fatalf("runtime config field %q not found", key)
 	return admin.RuntimeConfigField{}
+}
+
+func TestBuildAdminOptions_ExposesSkillsToolProfileField(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		"skills:\n  toolProfile: knowledge_only\n",
+	)
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	opts.SkillsToolProfile = skillprofile.KnowledgeOnly
+
+	provider, ok := buildAdminRuntimeConfigProvider(
+		opts,
+	).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	field := findAdminRuntimeConfigField(
+		t,
+		status,
+		"skills.tool_profile",
+	)
+	require.Equal(t, skillprofile.KnowledgeOnly, field.RuntimeValue)
+	require.Equal(
+		t,
+		skillprofile.KnowledgeOnly,
+		field.ConfiguredValue,
+	)
+	require.Equal(
+		t,
+		adminRuntimeConfigInputSelect,
+		field.InputType,
+	)
+	require.Len(t, field.Options, 2)
+	require.Equal(
+		t,
+		skillprofile.KnowledgeOnly,
+		field.Options[0].Value,
+	)
+	require.Equal(
+		t,
+		skillprofile.Full,
+		field.Options[1].Value,
+	)
+}
+
+func TestBuildAdminOptions_ExposesOpenClawToolingGuidanceField(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		"tools:\n  openclaw_tooling_guidance: \"\"\n",
+	)
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	guide := ""
+	opts.OpenClawToolingGuide = &guide
+
+	provider, ok := buildAdminRuntimeConfigProvider(
+		opts,
+	).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	field := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.openclaw_tooling_guidance",
+	)
+	require.Equal(t, "", field.RuntimeValue)
+	require.Equal(t, "", field.ConfiguredValue)
+	require.Equal(
+		t,
+		adminRuntimeConfigInputText,
+		field.InputType,
+	)
 }

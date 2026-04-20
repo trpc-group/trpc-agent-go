@@ -97,13 +97,33 @@ func (a *LLMAgent) codeExecutorForInvocation(
 func (a *LLMAgent) supportsWorkspaceExecForInvocation(
 	inv *agent.Invocation,
 ) bool {
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	options := a.option
+	a.mu.RUnlock()
+	if !workspaceExecSurfaceEnabled(&options) {
+		return false
+	}
 	return codeExecutorSupportsWorkspaceExec(a.codeExecutorForInvocation(inv))
 }
 
 func (a *LLMAgent) supportsWorkspaceExecSessionsForInvocation(
 	inv *agent.Invocation,
 ) bool {
-	return codeExecutorSupportsWorkspaceExecSessions(a.codeExecutorForInvocation(inv))
+	if a == nil {
+		return false
+	}
+	a.mu.RLock()
+	options := a.option
+	a.mu.RUnlock()
+	if !workspaceExecSurfaceEnabled(&options) {
+		return false
+	}
+	return codeExecutorSupportsWorkspaceExecSessions(
+		a.codeExecutorForInvocation(inv),
+	)
 }
 
 func (a *LLMAgent) skillToolFlagsForInvocation(
@@ -175,17 +195,21 @@ func (a *LLMAgent) InvocationToolSurface(
 
 	effectiveSkills := a.skillRepositoryForInvocation(inv)
 	effectiveExec := a.codeExecutorForInvocation(inv)
+	workspaceExecEnabled := workspaceExecSurfaceEnabled(&options) &&
+		codeExecutorSupportsWorkspaceExec(effectiveExec)
+	workspaceExecSessions := workspaceExecEnabled &&
+		codeExecutorSupportsWorkspaceExecSessions(effectiveExec)
 	var workspaceRegistry *codeexecutor.WorkspaceRegistry
 	if effectiveSkills != nil && effectiveExec != nil {
 		workspaceRegistry = buildWorkspaceRegistry()
-	} else if codeExecutorSupportsWorkspaceExec(effectiveExec) {
+	} else if workspaceExecEnabled {
 		workspaceRegistry = buildWorkspaceRegistry()
 	}
 	allTools = appendWorkspaceExecToolWithExecutor(
 		allTools,
 		effectiveExec,
-		codeExecutorSupportsWorkspaceExec(effectiveExec),
-		codeExecutorSupportsWorkspaceExecSessions(effectiveExec),
+		workspaceExecEnabled,
+		workspaceExecSessions,
 		workspaceRegistry,
 		inv,
 	)

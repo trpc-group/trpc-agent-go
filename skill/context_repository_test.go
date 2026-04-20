@@ -27,6 +27,11 @@ type visibilityTestRepo struct {
 	env       map[string]map[string]string
 }
 
+type rootedVisibilityTestRepo struct {
+	*visibilityTestRepo
+	roots []string
+}
+
 func (r *visibilityTestRepo) Summaries() []rootskill.Summary {
 	out := make([]rootskill.Summary, len(r.summaries))
 	copy(out, r.summaries)
@@ -55,6 +60,10 @@ func (r *visibilityTestRepo) SkillRunEnv(
 		return env, nil
 	}
 	return nil, fmt.Errorf("skill %q not found", skillName)
+}
+
+func (r *rootedVisibilityTestRepo) Roots() []string {
+	return append([]string(nil), r.roots...)
 }
 
 func testRuntimeStateContext(userID string) context.Context {
@@ -207,6 +216,46 @@ func TestFilteredRepository_DelegatesPlainRepositoryMethods(t *testing.T) {
 	path, err := repo.Path("alpha")
 	require.NoError(t, err)
 	require.Equal(t, "/skills/alpha", path)
+}
+
+func TestFilteredRepository_RootsDelegatesWhenAvailable(t *testing.T) {
+	base := &rootedVisibilityTestRepo{
+		visibilityTestRepo: &visibilityTestRepo{
+			summaries: []rootskill.Summary{
+				{Name: "alpha", Description: "A"},
+			},
+			skills: map[string]*rootskill.Skill{
+				"alpha": {
+					Summary: rootskill.Summary{Name: "alpha"},
+					Body:    "alpha body",
+				},
+			},
+			paths: map[string]string{"alpha": "/skills/alpha"},
+		},
+		roots: []string{"/skills", "/more-skills"},
+	}
+
+	repo := rootskill.NewFilteredRepository(
+		base,
+		func(context.Context, rootskill.Summary) bool { return true },
+	)
+	rooted, ok := repo.(interface{ Roots() []string })
+	require.True(t, ok)
+	require.Equal(t, []string{"/skills", "/more-skills"}, rooted.Roots())
+
+	got := rooted.Roots()
+	got[0] = "mutated"
+	require.Equal(t, []string{"/skills", "/more-skills"}, rooted.Roots())
+}
+
+func TestFilteredRepository_RootsNilWithoutRootedBase(t *testing.T) {
+	repo := rootskill.NewFilteredRepository(
+		&visibilityTestRepo{},
+		func(context.Context, rootskill.Summary) bool { return true },
+	)
+	rooted, ok := repo.(interface{ Roots() []string })
+	require.True(t, ok)
+	require.Nil(t, rooted.Roots())
 }
 
 func TestNewFilteredRepository_NilBaseReturnsNil(t *testing.T) {
