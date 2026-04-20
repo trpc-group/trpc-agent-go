@@ -14,7 +14,7 @@
         <link rel="prev" href="../event/">
       
       
-        <link rel="next" href="../gateway/">
+        <link rel="next" href="../promptiter/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -2839,6 +2839,29 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PromptIter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -4201,6 +4224,7 @@
 <p>随着大模型能力与工具生态逐步成熟，Agent 系统从试验性场景走向业务关键链路，版本迭代频率不断提高，但是交付质量不再取决于一次演示的正确输出，而取决于在模型、提示词、工具、知识库与编排持续演进下的稳定性与可回归性。版本迭代过程中，关键行为可能发生隐蔽漂移，例如工具选择、参数结构或输出形态的变化，稳定回归问题亟待解决。</p>
 <p>与确定性系统不同，Agent 系统问题通常表现为概率性偏离，复现与回放困难，定位需要跨越日志、轨迹与外部依赖，导致问题闭环成本显著上升。</p>
 <p>评估的核心目的在于将关键场景与验收标准资产化，沉淀为可持续的回归信号，而 tRPC-Agent-Go 提供开箱即用的评估能力，支持基于评估集与评估指标的资产管理与结果落盘，内置静态评估器与 LLM Judge 评估器，并提供多轮会话评估、多次重复运行、<code>Trace</code> 评估模式、回调点、上下文注入与并发推理等能力，以支撑本地调试与流水线回归的工程化接入。</p>
+<p>如果你希望在评估基础上进一步自动优化提示词，可以继续阅读 <a href="../promptiter/">PromptIter 使用文档</a>。PromptIter 建立在 Evaluation 之上，提供训练集与验证集分离、多轮优化、异步运行管理和 HTTP 接口等能力。</p>
 <h2 id="_1">快速开始</h2>
 <p>本节给出一个最小使用示例，帮助读者快速感受 tRPC-Agent-Go 评估功能的使用方法。</p>
 <p>本示例基于本地文件评估，完整代码见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/local">examples/evaluation/local</a>。此外，框架还提供了基于内存的评估实现，完整示例参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/inmemory">examples/evaluation/inmemory</a>。</p>
@@ -9986,7 +10010,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月16日 11:37:13 UTC">2026-04-16 11:37:13</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月20日 02:19:11 UTC">2026-04-20 02:19:11</span>
   </span>
 
     
@@ -10094,13 +10118,13 @@
         
         
           
-          <a href="../gateway/" class="md-footer__link md-footer__link--next" aria-label="下一页: Gateway">
+          <a href="../promptiter/" class="md-footer__link md-footer__link--next" aria-label="下一页: PromptIter">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 下一页
               </span>
               <div class="md-ellipsis">
-                Gateway
+                PromptIter
               </div>
             </div>
             <div class="md-footer__button md-icon">
