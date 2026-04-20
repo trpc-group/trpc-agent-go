@@ -1265,6 +1265,11 @@ Environment and CWD:
   `OUTPUT_DIR`, `RUN_DIR`; the tool injects `SKILL_NAME`
 - Convenience symlinks are created under the skill root: `out/`,
   `work/`, and `inputs/` point to workspace‑level dirs
+- The skill root `/skills/<name>` is a writable working copy for the
+  current session: scripts may create caches, `__pycache__`, `.venv/`,
+  or other files next to the source. Treat the upstream skill
+  repository as the source of truth; the workspace copy is replaced
+  on the next reconcile when the source digest changes.
 - `.venv/` is a writable directory under the skill root for per-skill
   dependencies (for example, `python -m venv .venv` + `pip install ...`)
 - File tools accept `inputs/<path>` as an alias to `<path>` when the
@@ -1287,7 +1292,8 @@ Container notes:
 
 Security & limits:
 - Reads/writes confined to the workspace
-- Timeouts and read‑only skill trees reduce risk
+- The skill working copy under `/skills/<name>` is writable by
+  default; the canonical skill repository remains the source of truth
 - `stdout`/`stderr` may be truncated (see `warnings`)
 - Output file read size is capped to prevent oversized payloads
 

@@ -811,8 +811,10 @@ func appendWorkspaceExecTool(
 	inv *agent.Invocation,
 ) []tool.Tool {
 	var exec codeexecutor.CodeExecutor
+	var loadedSkillsRepo skill.Repository
 	if options != nil {
 		exec = options.codeExecutor
+		loadedSkillsRepo = options.skillsRepository
 	}
 	return appendWorkspaceExecToolWithExecutor(
 		allTools,
@@ -821,9 +823,21 @@ func appendWorkspaceExecTool(
 		executorSupportsWorkspaceExecSessions(options),
 		reg,
 		inv,
+		options,
+		loadedSkillsRepo,
 	)
 }
 
+// appendWorkspaceExecToolWithExecutor wires workspace_exec and its
+// companion tools into allTools.
+//
+// loadedSkillsRepo is the effective skill repository for the current
+// invocation. Callers on the invocation-scoped path pass the result
+// of skillRepositoryForInvocation so that surface-patch repo
+// overrides propagate into workspace_exec's loaded-skills reconcile;
+// static callers (agent construction time) pass
+// options.skillsRepository because no invocation context exists yet.
+// Passing nil disables loaded-skills reconcile for this ExecTool.
 func appendWorkspaceExecToolWithExecutor(
 	allTools []tool.Tool,
 	exec codeexecutor.CodeExecutor,
@@ -831,14 +845,20 @@ func appendWorkspaceExecToolWithExecutor(
 	sessional bool,
 	reg *codeexecutor.WorkspaceRegistry,
 	inv *agent.Invocation,
+	options *Options,
+	loadedSkillsRepo skill.Repository,
 ) []tool.Tool {
 	if !enabled {
 		return allTools
 	}
-	execTool := toolworkspaceexec.NewExecTool(
-		exec,
+	toolOpts := []func(*toolworkspaceexec.ExecTool){
 		toolworkspaceexec.WithWorkspaceRegistry(reg),
+	}
+	toolOpts = append(
+		toolOpts,
+		workspacePrepOptions(options, loadedSkillsRepo)...,
 	)
+	execTool := toolworkspaceexec.NewExecTool(exec, toolOpts...)
 	allTools = append(
 		allTools,
 		execTool,
@@ -861,6 +881,41 @@ func appendWorkspaceExecToolWithExecutor(
 
 func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
 	return codeexecutor.NewWorkspaceRegistry()
+}
+
+// workspacePrepOptions translates llmagent-level workspace options
+// (WithWorkspaceBootstrap, invocation-scoped loaded-skills wiring,
+// explicit disable switch) into the public workspaceexec options.
+// The workspaceexec package owns reconciler construction and
+// conversation-files wiring, so no internal workspaceprep type ever
+// crosses this boundary.
+//
+// loadedSkillsRepo is the repository the caller has already resolved
+// for the current invocation; see appendWorkspaceExecToolWithExecutor
+// for how callers pick between invocation-scoped and agent-default
+// repos. Passing a nil repo skips the loaded-skills wiring entirely,
+// which is what we want when the agent has no skill support
+// configured at all.
+func workspacePrepOptions(
+	opts *Options,
+	loadedSkillsRepo skill.Repository,
+) []func(*toolworkspaceexec.ExecTool) {
+	if opts == nil || opts.disableWorkspacePreparers {
+		return nil
+	}
+	var out []func(*toolworkspaceexec.ExecTool)
+	if len(opts.workspaceBootstrap.Files) > 0 ||
+		len(opts.workspaceBootstrap.Commands) > 0 {
+		out = append(out, toolworkspaceexec.WithWorkspaceBootstrap(
+			opts.workspaceBootstrap,
+		))
+	}
+	if loadedSkillsRepo != nil {
+		out = append(out, toolworkspaceexec.WithLoadedSkills(
+			loadedSkillsRepo,
+		))
+	}
+	return out
 }
 
 func buildSkillRunTool(

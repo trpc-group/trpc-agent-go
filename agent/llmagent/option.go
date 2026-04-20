@@ -434,7 +434,17 @@ type Options struct {
 	skillRunRequireSkillLoaded bool
 	// skillRunStager overrides how skill_run materializes a skill in
 	// the workspace.
-	skillRunStager            toolskill.SkillStager
+	skillRunStager toolskill.SkillStager
+	// workspaceBootstrap declares static files and commands that
+	// must be present/executed in the workspace before user
+	// commands run. When non-empty it is converted into a Provider
+	// and attached to workspace_exec.
+	workspaceBootstrap codeexecutor.WorkspaceBootstrapSpec
+	// disableWorkspacePreparers keeps workspace_exec on the legacy
+	// StageConversationFiles-only path even when a skills repo or
+	// bootstrap spec is configured. Useful for tests and for users
+	// that want to opt out of the new reconciler.
+	disableWorkspacePreparers bool
 	messageTimelineFilterMode string
 	messageBranchFilterMode   string
 
@@ -915,6 +925,36 @@ func WithSkillRunRequireSkillLoaded(enable bool) Option {
 func WithSkillRunStager(stager toolskill.SkillStager) Option {
 	return func(opts *Options) {
 		opts.skillRunStager = stager
+	}
+}
+
+// WithWorkspaceBootstrap declares the static files and one-shot
+// commands that must be materialized in every workspace before
+// workspace_exec runs user commands. Files are applied first, then
+// commands execute in declaration order. The spec is converted into
+// reconcile work behind the scenes; idempotency and
+// skip-on-fingerprint-match are handled by the framework.
+//
+// This is currently the only public hook into workspace preparation.
+// The underlying Requirement / Provider / Reconciler abstractions
+// live in an internal package while their semantics are still being
+// refined; if a custom-provider extension point becomes necessary it
+// will be added here.
+func WithWorkspaceBootstrap(
+	spec codeexecutor.WorkspaceBootstrapSpec,
+) Option {
+	return func(opts *Options) {
+		opts.workspaceBootstrap = spec
+	}
+}
+
+// WithWorkspacePreparersDisabled keeps workspace_exec on its legacy
+// "stage conversation files only" path even when a skills repository
+// or a bootstrap spec is configured. Primarily useful for regression
+// tests that assert pre-reconciler behavior.
+func WithWorkspacePreparersDisabled(disabled bool) Option {
+	return func(opts *Options) {
+		opts.disableWorkspacePreparers = disabled
 	}
 }
 

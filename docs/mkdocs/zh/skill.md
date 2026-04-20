@@ -1226,6 +1226,10 @@ agent := llmagent.New(
   - `SKILL_NAME`（由工具注入）
 - 便捷符号链接：在技能根目录下自动创建 `out/`、`work/`、
   `inputs/` 链接到工作区对应目录，方便按文档中的相对路径使用。
+- 技能根目录 `/skills/<name>` 默认是会话级的可写工作副本：脚本
+  可以在源码旁创建缓存、`__pycache__`、`.venv/` 等文件。上游
+  技能仓库仍是事实来源；当源摘要发生变化时，下次 reconcile
+  会替换工作区中的副本。
 - `.venv/`：技能根目录下的可写目录，用于安装技能依赖
   （例如 `python -m venv .venv` + `pip install ...`）。
 - 文件工具在 base directory 下不存在真实 `inputs/` 目录时，会将
@@ -1248,7 +1252,8 @@ agent := llmagent.New(
 
 安全与资源：
 - 本地/容器均限制读取与写入在工作区内
-- 可通过超时、脚本权限（如只读挂载技能树）降低风险
+- `/skills/<name>` 工作副本默认可写；canonical 技能仓库仍是
+  唯一事实来源
 - `stdout`/`stderr` 可能会被截断（见 `warnings`）
 - 输出文件读取大小有限制，避免过大文件影响
 

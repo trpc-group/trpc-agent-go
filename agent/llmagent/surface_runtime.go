@@ -205,6 +205,13 @@ func (a *LLMAgent) InvocationToolSurface(
 	} else if workspaceExecEnabled {
 		workspaceRegistry = buildWorkspaceRegistry()
 	}
+	// Pass effectiveSkills so workspace_exec's loaded-skills
+	// reconcile reads the same repository that skill tools and the
+	// skills request processor use on this invocation. Without this
+	// alignment, a surface-patch repo override would be honored by
+	// the skill tools but silently ignored by the reconciler path
+	// added in this change set, causing the model context and the
+	// materialized skill working copy to drift apart.
 	allTools = appendWorkspaceExecToolWithExecutor(
 		allTools,
 		effectiveExec,
@@ -212,6 +219,8 @@ func (a *LLMAgent) InvocationToolSurface(
 		workspaceExecSessions,
 		workspaceRegistry,
 		inv,
+		&options,
+		effectiveSkills,
 	)
 	allTools = appendSkillToolsWithRepoAndFlags(
 		allTools,

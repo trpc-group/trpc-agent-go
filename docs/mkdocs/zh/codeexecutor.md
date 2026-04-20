@@ -264,6 +264,123 @@ func main() {
 目录约定的作用，是让模型和工具在稳定路径上协作，而不需要暴露底层
 staging 过程。
 
+## Workspace Bootstrap：在用户命令前先把 workspace 准备好
+
+有些 workspace 在执行用户命令之前就需要固定的前置状态：一份预置的配置文件、
+一个钉死版本的 Python 虚拟环境、一次性的 `pip install` 等。让模型自己在对话里
+反复做这些事既容易出错，也会浪费 prompt token。框架允许你在 agent 构造期声明
+一次，由 `workspace_exec` 在运行前自动收敛到期望状态。
+
+用 `codeexecutor.WorkspaceBootstrapSpec` 列出要准备的文件和命令，再通过
+`llmagent.WithWorkspaceBootstrap(...)` 挂到 agent 上即可。每个 workspace 在第
+一次调用 `workspace_exec` 时完成收敛，后续调用会直接跳过已经满足的部分。
+
+```go
+package main
+
+import (
+    "time"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+    "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+)
+
+func newAgent() *llmagent.LLMAgent {
+    bootstrap := codeexecutor.WorkspaceBootstrapSpec{
+        Files: []codeexecutor.WorkspaceFile{
+            {
+                Target:  "work/config.json",
+                Content: []byte(`{"threshold": 0.8}`),
+            },
+            {
+                Target: "work/requirements.txt",
+                Content: []byte(
+                    "numpy==1.26.4\npandas==2.2.2\n",
+                ),
+            },
+        },
+        Commands: []codeexecutor.WorkspaceCommand{
+            {
+                Cmd: "bash",
+                Args: []string{
+                    "-lc",
+                    "python3 -m venv .venv && " +
+                        ".venv/bin/pip install -q -r work/requirements.txt",
+                },
+                MarkerPath: ".venv/bin/pip",
+                // FingerprintInputs 把 requirements.txt 的内容
+                // 纳入命令 fingerprint，pin 的版本号变了时会自动
+                // 重装。如果不设这个字段，首次装完之后 marker 一直
+                // 存在，哪怕后续改了 requirements.txt 也不会重跑。
+                FingerprintInputs: []string{"work/requirements.txt"},
+                Timeout:           2 * time.Minute,
+            },
+        },
+    }
+
+    return llmagent.New(
+        "analyst",
+        llmagent.WithCodeExecutor(local.New()),
+        llmagent.WithWorkspaceBootstrap(bootstrap),
+    )
+}
+```
+
+### 字段说明
+
+`WorkspaceFile`：
+
+- `Target`：workspace 相对目标路径（必填）。父目录会自动创建。
+- `Content`：要写入的字节内容。
+- `Input`：另一种写法，传 `codeexecutor.InputSpec`，支持 `artifact://`、
+  `host://`、`workspace://`、`skill://` 这几类 URI。`Content` 和 `Input`
+  二选一。
+- `Mode`：文件权限（八进制），默认 `0o644`。
+- `Key`：用于幂等性的稳定标识；不填时从 `Target` 推导。
+- `Optional`：置 true 时，provider 失败只会记 warning，不会阻断 workspace 准备。
+
+`WorkspaceCommand`：
+
+- `Cmd` / `Args` / `Env` / `Cwd`：标准命令参数。`Cwd` 为 workspace 相对路径，
+  默认在 workspace 根目录。
+- `Timeout`：单次调用的最长耗时。
+- `MarkerPath`：workspace 相对文件，**存在即代表命令已经跑过**。这是让命令在
+  被误删后能自动重跑的最简单方式。不设 marker 时，reconciler 只能靠 fingerprint
+  跳过。
+- `ObservedPaths`：当成功状态由多个文件决定时，可以替代 `MarkerPath`。
+- `FingerprintInputs` / `FingerprintSalt`：把外部输入纳入命令的 fingerprint，
+  输入变化时会重跑命令。**命令 fingerprint 不会自动对命令行里引用到的文件
+  做哈希**，所以像 `pip install -r work/requirements.txt` 这种命令必须把
+  `work/requirements.txt` 显式列进这里——否则第一次装完 marker 就一直在，
+  后续改 `requirements.txt` 也不会触发重装。
+- `Key`：稳定标识；不填时从 `Cmd`/`Args` 推导。
+- `Optional`：语义同上。
+
+### 执行顺序与幂等性
+
+- 先 stage 所有文件，再执行所有命令；两组内部都按声明顺序。
+- 每条 requirement 都会计算 fingerprint（文件按内容，命令按命令行 + 可选输入）。
+  后续调用时，reconciler 会同时校验 fingerprint **和** 磁盘上的 sentinel，
+  所以用户在 `workspace_exec` 里 `rm -rf` 掉某个产物后，下一次调用会重新补上，
+  不会出现 "metadata 说准备好了，但文件其实已经没了" 的假阳性。
+- 同一个 workspace 的 reconcile 过程会在进程内串行化，两个并行的
+  `workspace_exec` 调用不会在准备阶段互相踩踏。
+- `Required`（默认值）条目失败时，`workspace_exec` 会在用户命令执行前就返回
+  错误；`Optional` 条目只会降级为 warning。
+
+### 关闭开关
+
+如果因为兼容或回归测试原因需要保留旧的"只 stage 会话文件"行为，可以显式传
+`llmagent.WithWorkspacePreparersDisabled(true)`。正常使用下不需要这个开关。
+
+### 与 `skill_load` 的关系
+
+通过 `skill_load` 加载的技能会通过同一条 reconcile 路径被 materialize 到
+`skills/<name>`。你**不需要**为技能往 `WorkspaceBootstrapSpec` 里加任何东西
+——`workspace_exec` 运行时会自动从 session state 里读取当前 session 已加载的
+技能并准备好。`WorkspaceBootstrapSpec` 只负责与会话状态无关的固定前置物料。
+
 ## 哪些文件会保留
 
 通常有两类情况：
