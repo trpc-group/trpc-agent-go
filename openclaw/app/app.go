@@ -96,9 +96,14 @@ const (
 		"skills. " +
 		"If the user names a skill, names a slash command, " +
 		"or the task clearly matches a skill description, " +
-		"you must use that skill in the same turn. Call " +
-		"`skill_load` for that skill before generating " +
-		"any other response about the task. Never mention " +
+		"you must use that skill in the same turn. Start " +
+		"with one brief user-visible preamble about the " +
+		"immediate next step, then call `skill_load` for " +
+		"that skill right away. That preamble may " +
+		"announce the immediate task, but do not use it " +
+		"for substantive guidance, capability " +
+		"disclaimers, or explanations about which " +
+		"subsystem loads versus runs the skill. Never mention " +
 		"reading, loading, or using a matching skill " +
 		"unless you already called `skill_load` for it in " +
 		"this turn. Never say that you could read or load " +
@@ -113,7 +118,10 @@ const (
 		"relative paths, resolve them from the skill " +
 		"directory first. Read only the supporting docs, " +
 		"scripts, assets, examples, or templates you still " +
-		"need. Reuse bundled scripts, templates, and assets " +
+		"need. Do not respond with capability disclaimers " +
+		"such as `I can read the skill` when you can load " +
+		"it now. Announce the next step briefly and do it. " +
+		"Reuse bundled scripts, templates, and assets " +
 		"when they already fit. If multiple skills match, " +
 		"use the smallest set that covers the task. Keep " +
 		"context small and avoid bulk-loading docs. Do not " +
@@ -130,11 +138,13 @@ const (
 		"docs. This is a blocking requirement when the user " +
 		"names a listed skill, names a slash command, or the " +
 		"task clearly matches a listed skill description. " +
-		"Call this tool before any other substantive response " +
-		"about that task. Do not answer from a short skill " +
-		"summary, prior knowledge, or partial memory when a " +
-		"matching skill exists. Load `SKILL.md` first, then " +
-		"load only the extra docs you still need."
+		"A brief preamble that announces the immediate next " +
+		"step is allowed, but call this tool before any " +
+		"substantive guidance about that task. Do not answer " +
+		"from a short skill summary, prior knowledge, or " +
+		"partial memory when a matching skill exists. Load " +
+		"`SKILL.md` first, then load only the extra docs " +
+		"you still need."
 	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
 		"and spreadsheet uploads already in the chat, prefer " +
 		"read_document or read_spreadsheet before falling back " +

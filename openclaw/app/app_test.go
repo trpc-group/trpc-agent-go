@@ -1459,8 +1459,9 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
-		"Call `skill_load` for that skill before generating "+
-			"any other response about the task.",
+		"Start with one brief user-visible preamble "+
+			"about the immediate next step, then call "+
+			"`skill_load` for that skill right away.",
 	)
 	require.Contains(
 		t,
@@ -1810,7 +1811,7 @@ func TestNewAgent_KnowledgeOnlyProfileHidesSkillRun(t *testing.T) {
 		t,
 		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad).
 			Description,
-		"Call this tool before any other substantive response",
+		"A brief preamble that announces the immediate next",
 	)
 }
 
