@@ -2040,3 +2040,95 @@ func TestLLMAgent_SkillsExecutorFallback_AllowedSkillToolsSkipsFallback(
 	require.False(t, names["workspace_exec"])
 	require.False(t, names["skill_run"])
 }
+
+// TestApplySkillsExecutorFallback_DisablesAutoExecWhenNotConfigured verifies
+// that the skills convenience fallback, when it injects a local code
+// executor for WithSkills(repo), also turns off the fenced-code
+// auto-execution response processor. The fallback is a compatibility path
+// meant to keep workspace_exec available; it must not silently expand the
+// agent's execution surface to also auto-execute fenced code blocks in
+// assistant replies.
+func TestApplySkillsExecutorFallback_DisablesAutoExecWhenNotConfigured(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := Options{
+		EnableCodeExecutionResponseProcessor: true, // matches defaultOptions.
+		skillsRepository:                     repo,
+	}
+	applySkillsExecutorFallback(&opts)
+
+	require.NotNil(
+		t,
+		opts.codeExecutor,
+		"fallback should inject a local executor for WithSkills alone",
+	)
+	require.False(
+		t,
+		opts.EnableCodeExecutionResponseProcessor,
+		"fallback must disable fenced-code auto-exec when the caller did "+
+			"not explicitly configure it",
+	)
+}
+
+// TestApplySkillsExecutorFallback_HonorsExplicitAutoExecTrue verifies that
+// callers who explicitly opt in to fenced-code auto-execution via
+// WithEnableCodeExecutionResponseProcessor(true) keep that behavior even
+// when the skills fallback injects the executor.
+func TestApplySkillsExecutorFallback_HonorsExplicitAutoExecTrue(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := Options{
+		EnableCodeExecutionResponseProcessor:   true,
+		codeExecutionResponseProcessorExplicit: true,
+		skillsRepository:                       repo,
+	}
+	applySkillsExecutorFallback(&opts)
+
+	require.NotNil(t, opts.codeExecutor)
+	require.True(
+		t,
+		opts.EnableCodeExecutionResponseProcessor,
+		"explicit WithEnableCodeExecutionResponseProcessor(true) must not "+
+			"be silently overridden by the skills fallback",
+	)
+}
+
+// TestApplySkillsExecutorFallback_DoesNotTouchAutoExecWhenExecutorExplicit
+// verifies that when the caller already supplies a CodeExecutor, the
+// skills fallback does not fire and therefore does not modify the
+// fenced-code auto-exec switch — regardless of whether that switch was
+// set explicitly.
+func TestApplySkillsExecutorFallback_DoesNotTouchAutoExecWhenExecutorExplicit(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	userExec := &stubExec{}
+	opts := Options{
+		EnableCodeExecutionResponseProcessor: true, // framework default.
+		codeExecutor:                         userExec,
+		skillsRepository:                     repo,
+	}
+	applySkillsExecutorFallback(&opts)
+
+	require.Same(
+		t,
+		codeexecutor.CodeExecutor(userExec),
+		opts.codeExecutor,
+		"user-supplied executor must be preserved",
+	)
+	require.True(
+		t,
+		opts.EnableCodeExecutionResponseProcessor,
+		"framework skills logic must not mutate EnableCodeExecutionResponse"+
+			"Processor when the user supplied an explicit CodeExecutor",
+	)
+}

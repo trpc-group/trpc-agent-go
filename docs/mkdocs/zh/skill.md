@@ -299,11 +299,22 @@ agent := llmagent.New(
   （"我不要框架帮我起执行器"的 opt-out 信号）。生产环境建议显式
   配置容器 executor，而不是依赖本地 fallback —— 本地 fallback 只是
   开发期便利，不是上线目标形态。
-- 配置 CodeExecutor 后，默认也会打开 Markdown 围栏代码自动执行——
-  框架会扫描模型文本回复里的围栏代码块并直接执行。如果你只想让
-  executor 服务于 `workspace_exec`，不希望自动执行回复里的代码块，
-  显式关掉：
-  `llmagent.WithEnableCodeExecutionResponseProcessor(false)`。
+- **`CodeExecutor` 与围栏代码自动执行是两个独立开关**：
+  配置 `CodeExecutor` 只是让执行类**工具**（例如 `workspace_exec`）
+  可用，本身并不会让框架扫描模型回复里的 Markdown 围栏代码块并直接
+  运行。后者由独立的 `EnableCodeExecutionResponseProcessor` 控制
+  （默认：`true`）。两条推论：
+  - 当你**显式** `WithCodeExecutor(...)` 时，围栏代码自动执行保持框架
+    默认值，不会被 skills 逻辑偷偷改动。如果你只想让 executor 服务
+    `workspace_exec`，请显式传
+    `llmagent.WithEnableCodeExecutionResponseProcessor(false)`。
+  - 当 skills fallback 代你注入本地 executor 时（即上面的
+    `WithSkills(repo)` 场景），该隐式 executor 的用途被严格收敛为
+    "给 `workspace_exec` 供电"：如果你没有显式调用过
+    `WithEnableCodeExecutionResponseProcessor(...)`，fallback 路径
+    会自动把 `EnableCodeExecutionResponseProcessor` 置为 `false`，
+    避免 `WithSkills(repo)` 的升级路径偷偷打开你原本没配过的围栏
+    代码自动执行能力。
 - 默认提示指引：框架会在系统消息里，在 `Available skills:` 列表后
   追加一段 `Tooling and workspace guidance:` 指引文本。
   - 关闭该指引（减少提示词占用）：

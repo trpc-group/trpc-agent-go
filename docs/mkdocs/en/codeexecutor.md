@@ -60,16 +60,28 @@ More complete examples:
 - [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go)
 - [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md)
 
-### Default Behavior of `WithCodeExecutor`
+### `WithCodeExecutor` vs fenced-code auto-execution
 
-`llmagent.WithCodeExecutor(...)` does more than provide a runtime.
+`llmagent.WithCodeExecutor(...)` and the response-side fenced-code
+auto-execution processor are **two independent switches**. It is worth
+internalising this distinction up front, because a lot of confusion
+comes from treating them as a single knob.
 
-By default, it also enables the response-side code execution processor. If the
-assistant reply is exactly one runnable fenced code block, the framework will
-extract and execute that block automatically.
+- `WithCodeExecutor(...)` supplies a *runtime* that execution-backed
+  tools — most notably `workspace_exec` — use to run commands. It does
+  not, by itself, cause anything to be executed from the assistant's
+  reply.
+- `EnableCodeExecutionResponseProcessor` (default: `true`, toggled via
+  `WithEnableCodeExecutionResponseProcessor(enable bool)`) controls
+  whether the framework scans the assistant reply and, if it is exactly
+  one runnable fenced code block, runs that block automatically.
 
-If you only want workspace support, `workspace_exec`, or other executor-backed
-tools, and do not want model output code blocks to auto-run, disable it:
+Auto-execution of fenced code actually fires only when *both* are true:
+an executor is available **and** the response processor is enabled.
+
+If you only want the executor to power `workspace_exec` or other
+tool-backed execution paths, and do not want assistant replies to be
+auto-executed, opt out of the response-side processor explicitly:
 
 ```go
 agent := llmagent.New(
@@ -80,11 +92,20 @@ agent := llmagent.New(
 )
 ```
 
-Common cases for disabling auto-execution:
+Common cases for disabling fenced-code auto-execution:
 
 - using `workspace_exec` only
 - providing a runtime for other tools
 - requiring code execution to happen only through explicit tool calls
+
+Interaction with `WithSkills(repo)` auto-fallback: when the skills
+layer implicitly injects a local `CodeExecutor` on your behalf (see the
+Agent Skills guide), that implicit executor is treated as "only here to
+power `workspace_exec`". In that case the framework automatically sets
+`EnableCodeExecutionResponseProcessor=false` unless you explicitly
+called `WithEnableCodeExecutionResponseProcessor(...)` yourself. Using
+`WithCodeExecutor(...)` explicitly, by contrast, leaves the switch at
+its framework default so your existing behavior is preserved.
 
 ## Choosing a Backend
 

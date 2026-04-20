@@ -530,6 +530,15 @@ func prepareSkillsRepository(options *Options) {
 // explicit KnowledgeOnly profile is intentional; both normalize to the
 // same built-in skill tool set, but only an explicit opt-in disables
 // the fallback.
+//
+// Scope of the fallback: the auto-injected CodeExecutor exists to power
+// execution tools such as workspace_exec. It must not silently expand
+// the agent's execution surface to also auto-execute fenced code from
+// assistant replies. Therefore, when this path injects an executor and
+// the caller has NOT explicitly configured
+// WithEnableCodeExecutionResponseProcessor, the function also disables
+// EnableCodeExecutionResponseProcessor. Callers who explicitly set
+// that option (true or false) keep their configured value.
 func applySkillsExecutorFallback(options *Options) {
 	if options == nil ||
 		options.skillsRepository == nil ||
@@ -539,6 +548,9 @@ func applySkillsExecutorFallback(options *Options) {
 		return
 	}
 	options.codeExecutor = defaultCodeExecutor()
+	if !options.codeExecutionResponseProcessorExplicit {
+		options.EnableCodeExecutionResponseProcessor = false
+	}
 }
 
 // initializeModels initializes the models map and determines the initial

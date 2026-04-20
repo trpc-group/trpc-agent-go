@@ -60,15 +60,26 @@ func main() {
 - [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go)
 - [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md)
 
-### `WithCodeExecutor` 的默认行为
+### `WithCodeExecutor` 与围栏代码自动执行
 
-`llmagent.WithCodeExecutor(...)` 不只是给 Agent 提供执行环境。
+`llmagent.WithCodeExecutor(...)` 和响应阶段的围栏代码自动执行是
+**两个独立开关**。一开始就把它们彻底区分开，可以避免后面一大堆
+"我只是配了个 executor，怎么就自动跑代码了"之类的困惑。
 
-默认情况下，它还会启用响应阶段的代码执行处理器。只要 assistant 的回复内容
-恰好是一个可执行的 fenced code block，框架就会自动提取并执行这段代码。
+- `WithCodeExecutor(...)` 提供的是**运行时**（runtime），给那些依赖
+  执行器的工具（最典型的就是 `workspace_exec`）执行命令用。它本身
+  不会让框架去扫描模型的最终回复、然后自动跑里面的代码。
+- `EnableCodeExecutionResponseProcessor`（默认：`true`，由
+  `WithEnableCodeExecutionResponseProcessor(enable bool)` 控制）
+  决定框架是否扫描 assistant 回复，如果恰好是一个可执行的围栏代码块
+  就自动运行。
 
-如果只想复用 workspace、`workspace_exec` 或其他依赖执行器的能力，而不希望
-自动执行模型输出中的代码块，建议同时设置：
+回复里的代码块真的被自动执行，必须**两个条件同时满足**：有可用的
+executor**且**响应处理器开着。
+
+如果你只想让 executor 服务于 `workspace_exec` 或其他工具驱动的
+执行路径，不希望自动执行模型回复里的代码块，**显式**关掉响应
+处理器：
 
 ```go
 agent := llmagent.New(
@@ -79,11 +90,20 @@ agent := llmagent.New(
 )
 ```
 
-适合关闭自动代码执行的常见场景：
+适合关掉围栏代码自动执行的典型场景：
 
 - 只想使用 `workspace_exec`
 - 只需要给某些工具提供 workspace/runtime
 - 希望代码执行必须通过显式工具调用触发
+
+与 `WithSkills(repo)` auto-fallback 的联动：当 skills 层代你**隐式**
+注入本地 `CodeExecutor` 时（见 Agent Skills 指南），这个隐式 executor
+的用途被严格收敛为 "只是给 `workspace_exec` 供电"：如果你没有显式
+调用过 `WithEnableCodeExecutionResponseProcessor(...)`，框架会自动
+把 `EnableCodeExecutionResponseProcessor` 置为 `false`，避免在你原
+本没开的能力上悄悄加戏。相对地，**显式** `WithCodeExecutor(...)`
+会让这个开关保留框架默认值，不会被 skills 逻辑偷偷改，从而不影响
+你原有的行为。
 
 ## 怎么选后端
 

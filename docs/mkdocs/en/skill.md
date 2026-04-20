@@ -321,12 +321,27 @@ Key points:
   explicit container-backed executor rather than relying on the local
   fallback — the local fallback is a development convenience, not a
   deployment target.
-- Enabling `CodeExecutor` also turns on Markdown fenced-code
-  auto-execution by default — the framework scans fenced code blocks
-  in model text responses and runs them directly. If you only want the
-  executor to serve `workspace_exec` and do not want fenced-code
-  auto-exec, disable it explicitly with
-  `llmagent.WithEnableCodeExecutionResponseProcessor(false)`.
+- **`CodeExecutor` vs fenced-code auto-execution (two separate
+  switches)**. Configuring a `CodeExecutor` only makes
+  execution *tools* available (for example, `workspace_exec`). It does
+  not by itself cause the framework to scan assistant replies for
+  Markdown fenced code blocks and run them. That behavior is controlled
+  independently by `EnableCodeExecutionResponseProcessor` (default:
+  `true`). Two consequences to be aware of:
+  - When you explicitly configure `WithCodeExecutor(...)`, the
+    fenced-code auto-execution switch keeps its framework default
+    unless you set it yourself; if you want the executor *only* for
+    `workspace_exec`, pass
+    `llmagent.WithEnableCodeExecutionResponseProcessor(false)`.
+  - When the skills fallback injects a local executor on your behalf
+    (the case above, `WithSkills(repo)` alone), that implicit executor
+    is scoped strictly to powering `workspace_exec`: the fallback path
+    automatically sets `EnableCodeExecutionResponseProcessor=false`
+    unless you explicitly called
+    `WithEnableCodeExecutionResponseProcessor(...)` yourself. This
+    prevents `WithSkills(repo)` upgrades from quietly enabling fenced
+    code auto-execution that was not part of your original
+    configuration.
 - By default, the framework appends a small `Tooling and workspace guidance:`
   block after the `Available skills:` list in the system message.
   - Disable it (to save prompt tokens): `llmagent.WithSkillsToolingGuidance("")`.

@@ -211,8 +211,23 @@ type Options struct {
 	// EnableCodeExecutionResponseProcessor controls whether the agent
 	// auto-executes fenced code blocks from model responses.
 	//
+	// This switch is independent of WithCodeExecutor: a CodeExecutor may
+	// be configured purely so that execution tools such as workspace_exec
+	// can be registered, without also opting into auto-executing fenced
+	// code in the assistant's final reply. When the skills auto-fallback
+	// injects a CodeExecutor (see applySkillsExecutorFallback in
+	// llm_agent.go) and the caller has not explicitly set this option,
+	// the fallback path force-disables it so the implicit executor only
+	// powers workspace_exec, never the fenced-code auto-exec chain.
+	//
 	// Default: true (preserves existing behavior).
 	EnableCodeExecutionResponseProcessor bool
+	// codeExecutionResponseProcessorExplicit records whether the caller
+	// explicitly set EnableCodeExecutionResponseProcessor via
+	// WithEnableCodeExecutionResponseProcessor. It is used by the skills
+	// auto-fallback to decide whether it may suppress the fenced-code
+	// auto-exec chain on behalf of the caller.
+	codeExecutionResponseProcessorExplicit bool
 	// Tools is the list of tools available to the agent.
 	Tools []tool.Tool
 	// ToolSets is the list of tool sets available to the agent.
@@ -665,9 +680,21 @@ func WithWorkspaceExecSurfaceEnabled(enable bool) Option {
 // WithEnableCodeExecutionResponseProcessor controls whether the agent
 // auto-executes assistant replies that are exactly one runnable fenced
 // code block.
+//
+// This option is independent of WithCodeExecutor: configuring a
+// CodeExecutor only enables execution tools (for example, workspace_exec)
+// and does not by itself cause the agent to execute fenced code from
+// assistant replies. Use this option explicitly when you want to opt
+// into — or out of — the fenced-code auto-execution response processor.
+//
+// Calling this option (with either value) marks the setting as
+// explicit, which prevents the skills auto-fallback from quietly
+// disabling the processor when it injects a local CodeExecutor on
+// behalf of WithSkills.
 func WithEnableCodeExecutionResponseProcessor(enable bool) Option {
 	return func(opts *Options) {
 		opts.EnableCodeExecutionResponseProcessor = enable
+		opts.codeExecutionResponseProcessorExplicit = true
 	}
 }
 

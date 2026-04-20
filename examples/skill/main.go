@@ -1393,6 +1393,11 @@ func createGAIAAgent() agent.Agent {
 			llmagent.WithSkills(skillRepo),
 			llmagent.WithSkillToolProfile(llmagent.SkillToolProfileFull),
 			llmagent.WithCodeExecutor(codeExec),
+			// Keep the CodeExecutor strictly for tool-backed execution
+			// (skill_run / workspace_exec). Fenced-code auto-execution
+			// is an independent switch and is opted out here so the
+			// benchmark is driven only by tool calls.
+			llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		)
 		log.Printf("Agent Skills enabled")
 	}
