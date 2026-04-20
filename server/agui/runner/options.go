@@ -30,6 +30,7 @@ const (
 	defaultGraphNodeInterruptActivityTopLevelOnly = false
 	defaultReasoningContentEnabled                = false
 	defaultToolResultInputTranslationEnabled      = false
+	defaultStreamingToolResultActivityEnabled     = false
 )
 
 // Options holds the options for the runner.
@@ -57,6 +58,7 @@ type Options struct {
 	GraphNodeInterruptActivityTopLevelOnly bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
 	ReasoningContentEnabled                bool                  // ReasoningContentEnabled controls whether reasoning content events are emitted.
 	ToolResultInputTranslationEnabled      bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
+	StreamingToolResultActivityEnabled     bool                  // StreamingToolResultActivityEnabled rewrites partial tool results as activity events.
 }
 
 // NewOptions creates a new options instance.
@@ -78,6 +80,7 @@ func NewOptions(opt ...Option) *Options {
 		GraphNodeInterruptActivityTopLevelOnly: defaultGraphNodeInterruptActivityTopLevelOnly,
 		ReasoningContentEnabled:                defaultReasoningContentEnabled,
 		ToolResultInputTranslationEnabled:      defaultToolResultInputTranslationEnabled,
+		StreamingToolResultActivityEnabled:     defaultStreamingToolResultActivityEnabled,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -266,6 +269,15 @@ func WithReasoningContentEnabled(enabled bool) Option {
 func WithToolResultInputTranslationEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.ToolResultInputTranslationEnabled = enabled
+	}
+}
+
+// WithStreamingToolResultActivityEnabled controls whether partial tool-result
+// chunks are emitted as activity events while only the final tool result
+// remains on the tool-result path.
+func WithStreamingToolResultActivityEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.StreamingToolResultActivityEnabled = enabled
 	}
 }
 

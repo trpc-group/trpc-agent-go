@@ -170,6 +170,15 @@ func WithToolResultInputTranslationEnabled(enabled bool) Option {
 	}
 }
 
+// WithStreamingToolResultActivityEnabled controls whether partial tool-result
+// chunks are emitted as activity events while only the final tool result is
+// retained on the tool-result path and in message snapshots.
+func WithStreamingToolResultActivityEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithStreamingToolResultActivityEnabled(enabled))
+	}
+}
+
 // WithMessagesSnapshotPath sets the HTTP path for the messages snapshot handler, "/history" in default.
 func WithMessagesSnapshotPath(p string) Option {
 	return func(o *options) {

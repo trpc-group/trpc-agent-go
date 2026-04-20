@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
+	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -2503,6 +2504,82 @@ func TestStreamToolResultEvent(t *testing.T) {
 	assert.Equal(t, "tool-1", toolResultEvt.ToolCallID)
 	assert.Equal(t, "World", toolResultEvt.Content)
 	assert.Equal(t, "tool", *toolResultEvt.Role)
+}
+
+func TestStreamToolResultEventAsActivityWhenEnabled(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithStreamingToolResultActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+	chunkRsp1 := &model.Response{
+		ID:        "msg-1",
+		Object:    string(model.ObjectTypeToolResponse),
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "Hello", ToolID: "tool-1"},
+		}},
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{ID: "evt-1", Response: chunkRsp1})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	snapshot, ok := events[0].(*aguievents.ActivitySnapshotEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "tool.result.stream", snapshot.ActivityType)
+	content, ok := snapshot.Content.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "tool-1", content["toolCallId"])
+	assert.Equal(t, "Hello", content["content"])
+	assert.True(t, aguitool.IsStreamingToolResultActivityEvent(snapshot))
+	chunkRsp2 := &model.Response{
+		ID:        "msg-1",
+		Object:    string(model.ObjectTypeToolResponse),
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: " World", ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-2", Response: chunkRsp2})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	delta, ok := events[0].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "tool.result.stream", delta.ActivityType)
+	assert.Len(t, delta.Patch, 1)
+	assert.Equal(t, "add", delta.Patch[0].Op)
+	assert.Equal(t, "/content", delta.Patch[0].Path)
+	assert.Equal(t, "Hello World", delta.Patch[0].Value)
+	assert.True(t, aguitool.IsStreamingToolResultActivityEvent(delta))
+	finalRsp := &model.Response{
+		ID:     "msg-1-final",
+		Object: string(model.ObjectTypeToolResponse),
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleTool, Content: `{"done":true}`, ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-final", Response: finalRsp})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	result, ok := events[0].(*aguievents.ToolCallResultEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "evt-final", result.MessageID)
+	assert.Equal(t, "tool-1", result.ToolCallID)
+	assert.Equal(t, `{"done":true}`, result.Content)
+	chunkRsp3 := &model.Response{
+		ID:        "msg-2",
+		Object:    string(model.ObjectTypeToolResponse),
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleTool, Content: "Reset", ToolID: "tool-1"},
+		}},
+	}
+	events, err = tr.Translate(context.Background(), &agentevent.Event{ID: "evt-3", Response: chunkRsp3})
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	snapshot, ok = events[0].(*aguievents.ActivitySnapshotEvent)
+	assert.True(t, ok)
+	content, ok = snapshot.Content.(map[string]any)
+	assert.True(t, ok)
+	assert.Equal(t, "Reset", content["content"])
 }
 
 func TestTranslateStreamableToolCallAndResultEvents(t *testing.T) {
