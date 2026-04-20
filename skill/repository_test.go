@@ -181,6 +181,24 @@ func TestFSRepository_Path_WithSymlinkRoot(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestFSRepository_RootsReturnsCopyAndSkillFileConstant(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	writeSkill(t, root, "alpha")
+
+	repo, err := NewFSRepository("", root)
+	require.NoError(t, err)
+
+	require.Equal(t, skillFile, SkillFile)
+
+	roots := repo.Roots()
+	require.Equal(t, []string{root}, roots)
+
+	roots[0] = "mutated"
+	require.Equal(t, []string{root}, repo.Roots())
+}
+
 func TestFSRepository_Summaries_And_Get_WithDocs(t *testing.T) {
 	root := t.TempDir()
 	sdir := writeSkill(t, root, "one")

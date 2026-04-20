@@ -541,6 +541,8 @@ func TestLLMAgent_InvocationToolSurface_HidesWorkspaceExecWhenDisabled(
 func TestLLMAgent_SurfaceRuntimeHelpers_NilAgentBranches(t *testing.T) {
 	var agt *LLMAgent
 	require.Nil(t, agt.codeExecutorForInvocation(nil))
+	require.False(t, agt.supportsWorkspaceExecForInvocation(nil))
+	require.False(t, agt.supportsWorkspaceExecSessionsForInvocation(nil))
 	flags := agt.skillToolFlagsForInvocation(nil)
 	require.False(t, flags.Load)
 	require.False(t, flags.SelectDocs)
@@ -550,6 +552,30 @@ func TestLLMAgent_SurfaceRuntimeHelpers_NilAgentBranches(t *testing.T) {
 	require.False(t, flags.WriteStdin)
 	require.False(t, flags.PollSession)
 	require.False(t, flags.KillSession)
+}
+
+func TestLLMAgent_SurfaceRuntimeHelpers_WorkspaceExecOptionRespected(
+	t *testing.T,
+) {
+	disabled := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithCodeExecutor(&interactiveStubExec{}),
+		WithWorkspaceExecSurfaceEnabled(false),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+	)
+	require.False(t, disabled.supportsWorkspaceExecForInvocation(inv))
+	require.False(t, disabled.supportsWorkspaceExecSessionsForInvocation(inv))
+
+	enabled := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithCodeExecutor(&interactiveStubExec{}),
+	)
+	require.True(t, enabled.supportsWorkspaceExecForInvocation(inv))
+	require.True(t, enabled.supportsWorkspaceExecSessionsForInvocation(inv))
 }
 
 func TestLLMAgent_AppendSkillToolsWithRepo_UsesResolvedFlags(t *testing.T) {
