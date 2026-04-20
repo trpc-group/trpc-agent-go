@@ -1353,6 +1353,49 @@ func TestCommonHelpersCoverPathAndHTTPBranches(t *testing.T) {
 	require.Equal(t, "docs.example.com", searchURLHost("https://docs.example.com/path"))
 }
 
+func TestCommonHelpersCoverTextAndPatchBranches(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	absPath := filepath.Join(dir, "nested", "file.txt")
+	relPath, normalizedAbs, err := normalizePath(dir, absPath)
+	require.NoError(t, err)
+	require.Equal(t, "nested/file.txt", relPath)
+	require.Equal(t, filepath.Clean(absPath), normalizedAbs)
+	_, _, err = normalizePath(dir, "")
+	require.EqualError(t, err, "path is required")
+	_, _, err = normalizePath(dir, filepath.Join(filepath.Dir(dir), "outside.txt"))
+	require.ErrorContains(t, err, "path is outside base_dir")
+	require.Equal(t, filepath.ToSlash(filepath.Clean("\x00")), relativePath(dir, "\x00"))
+	body, err := readHTTPBody(&http.Response{}, 8, 0)
+	require.NoError(t, err)
+	require.Nil(t, body)
+	body, err = readHTTPBody(&http.Response{Body: io.NopCloser(strings.NewReader("abcd"))}, 0, 4)
+	require.NoError(t, err)
+	require.Equal(t, []byte("abcd"), body)
+	require.Zero(t, countLines(""))
+	require.Equal(t, 2, countLines("alpha\nbeta\n"))
+	require.Empty(t, splitTextLines(""))
+	require.Equal(t, []string{"alpha", "beta"}, splitTextLines("alpha\nbeta\n"))
+	sliced, startLine, totalLines := sliceLines("alpha\nbeta\ngamma\n", 0, intPtr(2))
+	require.Equal(t, "alpha\nbeta", sliced)
+	require.Equal(t, 1, startLine)
+	require.Equal(t, 3, totalLines)
+	require.Equal(t, "alpha\nbeta\ngamma\n", normalizeNewlines("alpha\r\nbeta\rgamma\n"))
+	require.Equal(t, "\r\n", detectLineEnding([]byte("alpha\r\nbeta")))
+	require.Equal(t, "alpha\r\nbeta", applyLineEnding("alpha\nbeta", "\r\n"))
+	utf8Encoded, err := encodeTextBytes("alpha\nbeta", "utf8", "\n")
+	require.NoError(t, err)
+	require.Equal(t, []byte("alpha\nbeta"), utf8Encoded)
+	require.Equal(t, "YQ==", fileBase64([]byte("a")))
+	require.True(t, isProbablyBinary([]byte("a\x00b")))
+	require.False(t, isProbablyBinary([]byte{0xff, 0xfe, 'a', 0x00}))
+	patch := buildStructuredPatch("alpha\nbeta\n", "alpha\ngamma\n")
+	require.Len(t, patch, 1)
+	require.Equal(t, 2, patch[0].OldStart)
+	require.Equal(t, []string{"-beta", "+gamma"}, patch[0].Lines)
+	require.Nil(t, buildStructuredPatch("same\n", "same\n"))
+}
+
 func TestGrepTypePatternsExposeKnownAliases(t *testing.T) {
 	t.Parallel()
 	require.Contains(t, typePatterns("go"), "**/*.go")
@@ -1737,6 +1780,21 @@ func TestReadTaskSnapshotHandlesMissingOutputFile(t *testing.T) {
 	require.Empty(t, snapshot.Output)
 	require.NotNil(t, snapshot.ExitCode)
 	require.Equal(t, 17, *snapshot.ExitCode)
+}
+
+func TestReadTaskSnapshotReturnsReadErrorForDirectoryOutputPath(t *testing.T) {
+	t.Parallel()
+	outputDir := t.TempDir()
+	runtime := newToolRuntime(t.TempDir(), maxEditableFileSize)
+	runtime.taskState.tasks["task-1"] = &backgroundTask{
+		ID:         "task-1",
+		Command:    "echo hi",
+		Type:       toolBash,
+		OutputPath: outputDir,
+		Status:     "completed",
+	}
+	_, err := readTaskSnapshot(runtime, "task-1")
+	require.Error(t, err)
 }
 
 func newTestPDF(t *testing.T, pages []string) []byte {
