@@ -113,6 +113,23 @@ func TestToolSet_BashToolRunsCommand(t *testing.T) {
 	require.False(t, out.TimedOut)
 }
 
+func TestToolSet_BashToolTimeoutsLongCommand(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	ts, err := NewToolSet(WithBaseDir(dir))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, ts.Close())
+	})
+	bashTool := mustCallableTool(t, ts.Tools(context.Background()), toolBash)
+	out := callToolAs[bashOutput](t, bashTool, bashInput{
+		Command: "sleep 1",
+		Timeout: intPtr(1),
+	})
+	require.True(t, out.TimedOut)
+	require.NotEqual(t, 0, out.ExitCode)
+}
+
 func TestToolSet_TaskStopStopsBackgroundBashTask(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -1324,6 +1341,19 @@ func TestRunLocalRipgrepReturnsFalseWhenRipgrepIsUnavailable(t *testing.T) {
 	require.Equal(t, grepOutput{}, out)
 }
 
+func TestRunLocalRipgrepRejectsPathsOutsideBaseDir(t *testing.T) {
+	t.Parallel()
+	restore := withRipgrepForTest(exec.LookPath)
+	defer restore()
+	_, ok, err := runLocalRipgrep(context.Background(), t.TempDir(), grepInput{
+		Pattern: "alpha",
+		Path:    "../outside.txt",
+	})
+	require.Error(t, err)
+	require.True(t, ok)
+	require.Contains(t, err.Error(), "path is outside base_dir")
+}
+
 func TestRunLocalRipgrepSupportsFilesContentAndCountModes(t *testing.T) {
 	if _, err := exec.LookPath("rg"); err != nil {
 		t.Skip("ripgrep is not available")
@@ -1449,6 +1479,29 @@ func TestPDFAndNotebookHelpersCoverFallbackBranches(t *testing.T) {
 			"language_info": map[string]any{"name": "go"},
 		},
 	}))
+}
+
+func TestExtractPDFPagesFailsWhenPdftoppmIsUnavailable(t *testing.T) {
+	t.Parallel()
+	oldLookPath := pdftoppmLookPath
+	oldPath := pdftoppmPath
+	oldOnce := pdftoppmOnce
+	pdftoppmLookPath = func(string) (string, error) {
+		return "", errors.New("not found")
+	}
+	pdftoppmPath = ""
+	pdftoppmOnce = sync.Once{}
+	t.Cleanup(func() {
+		pdftoppmLookPath = oldLookPath
+		pdftoppmPath = oldPath
+		pdftoppmOnce = oldOnce
+	})
+	_, _, err := extractPDFPages(filepath.Join(t.TempDir(), "missing.pdf"), pdfPageRange{
+		FirstPage: 1,
+		LastPage:  1,
+		Count:     1,
+	})
+	require.EqualError(t, err, "pdftoppm is not installed. Install poppler-utils (e.g. `brew install poppler` or `apt-get install poppler-utils`) to enable PDF page rendering.")
 }
 
 func TestReadTaskSnapshotHandlesMissingOutputFile(t *testing.T) {
