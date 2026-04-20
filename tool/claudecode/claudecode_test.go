@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -898,6 +899,571 @@ func TestToolSet_WebSearchDuckDuckGoAppliesConfiguredWindowAndReturnsNoResultBlo
 	require.Empty(t, emptyOut.Results)
 }
 
+func TestGoogleSearchBackendSearchUsesConfiguredOptions(t *testing.T) {
+	t.Parallel()
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		require.Equal(t, "api-key", r.URL.Query().Get("key"))
+		require.Equal(t, "engine-id", r.URL.Query().Get("cx"))
+		require.Equal(t, "golang", r.URL.Query().Get("q"))
+		if requestCount == 1 {
+			require.Equal(t, "2", r.URL.Query().Get("num"))
+			require.Equal(t, "1", r.URL.Query().Get("start"))
+			require.Equal(t, "lang_en", r.URL.Query().Get("lr"))
+		} else {
+			require.Empty(t, r.URL.Query().Get("num"))
+			require.Empty(t, r.URL.Query().Get("start"))
+			require.Empty(t, r.URL.Query().Get("lr"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"items": [
+				{"link": "https://golang.org/doc/", "title": "Go", "snippet": "Official docs."},
+				{"link": "https://golang.org/doc/", "title": "Go duplicate", "snippet": "Duplicate."},
+				{"link": "https://example.com/", "title": "Example", "snippet": "Filtered out."}
+			]
+		}`))
+	}))
+	defer server.Close()
+	backend := &googleSearchBackend{
+		client: server.Client(),
+		options: &WebSearchOptions{
+			BaseURL:  server.URL,
+			APIKey:   "api-key",
+			EngineID: "engine-id",
+			Size:     2,
+			Offset:   1,
+			Lang:     "en",
+		},
+	}
+	hits, err := backend.search(context.Background(), webSearchInput{
+		Query:          "golang",
+		AllowedDomains: []string{"golang.org"},
+	})
+	require.NoError(t, err)
+	require.Len(t, hits, 0)
+	unwindowedBackend := &googleSearchBackend{
+		client: server.Client(),
+		options: &WebSearchOptions{
+			BaseURL:  server.URL,
+			APIKey:   "api-key",
+			EngineID: "engine-id",
+		},
+	}
+	unwindowedHits, err := unwindowedBackend.search(context.Background(), webSearchInput{
+		Query: "golang",
+	})
+	require.NoError(t, err)
+	require.Len(t, unwindowedHits, 2)
+	require.Equal(t, "https://golang.org/doc/", unwindowedHits[0].URL)
+}
+
+func TestGoogleSearchBackendSearchUsesEnvironmentFallback(t *testing.T) {
+	t.Setenv(envGoogleAPIKey, "env-api-key")
+	t.Setenv(envGoogleEngineID, "env-engine-id")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "env-api-key", r.URL.Query().Get("key"))
+		require.Equal(t, "env-engine-id", r.URL.Query().Get("cx"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[{"link":"https://example.com/","title":"Example","snippet":"Snippet"}]}`))
+	}))
+	defer server.Close()
+	backend := &googleSearchBackend{
+		client:  server.Client(),
+		options: &WebSearchOptions{BaseURL: server.URL},
+	}
+	hits, err := backend.search(context.Background(), webSearchInput{Query: "example"})
+	require.NoError(t, err)
+	require.Len(t, hits, 1)
+	require.Equal(t, "https://example.com/", hits[0].URL)
+}
+
+func TestGoogleSearchBackendSearchRejectsMissingConfig(t *testing.T) {
+	t.Parallel()
+	backend := &googleSearchBackend{client: http.DefaultClient}
+	_, err := backend.search(context.Background(), webSearchInput{Query: "example"})
+	require.EqualError(t, err, "google search config is required")
+	backend = &googleSearchBackend{client: http.DefaultClient, options: &WebSearchOptions{}}
+	_, err = backend.search(context.Background(), webSearchInput{Query: "example"})
+	require.EqualError(t, err, "google search requires api_key and engine_id")
+}
+
+func TestEncodingHelpersPreserveUTF16AndLineEndings(t *testing.T) {
+	t.Parallel()
+	encoded, err := encodeTextBytes("alpha\nbeta\n", "utf16le", "\r\n")
+	require.NoError(t, err)
+	decoded, encoding, err := decodeTextBytes(encoded)
+	require.NoError(t, err)
+	require.Equal(t, "utf16le", encoding)
+	require.Equal(t, "alpha\nbeta\n", decoded)
+	utf8Decoded, utf8Encoding, err := decodeTextBytes([]byte("one\r\ntwo\r\n"))
+	require.NoError(t, err)
+	require.Equal(t, "utf8", utf8Encoding)
+	require.Equal(t, "one\ntwo\n", utf8Decoded)
+}
+
+func TestQuoteHelpersNormalizeAndPreserveSingleQuotes(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "\"quote\" and 'apostrophe'", normalizeQuotes("“quote” and ‘apostrophe’"))
+	require.Equal(t, "‘quoted text’ and don’t", applyCurlySingleQuotes("'quoted text' and don't"))
+	actual := findActualString("‘quoted text’ and don’t", "'quoted text' and don't")
+	require.Equal(t, "‘quoted text’ and don’t", actual)
+	require.Equal(t, "‘new text’ and can’t", preserveQuoteStyle("'quoted text' and don't", actual, "'new text' and can't"))
+}
+
+func TestWriteOutputToEditOutputPreservesOriginalFileAndPatch(t *testing.T) {
+	t.Parallel()
+	out := writeOutputToEditOutput("/tmp/file.txt", editInput{
+		FilePath:   "/tmp/file.txt",
+		OldString:  "before",
+		NewString:  "after",
+		ReplaceAll: true,
+	}, strPtr("before"), "after")
+	require.Equal(t, "/tmp/file.txt", out.FilePath)
+	require.Equal(t, "before", out.OriginalFile)
+	require.True(t, out.ReplaceAll)
+	require.NotEmpty(t, out.StructuredPatch)
+}
+
+func TestOptionHelpersApplyCustomValues(t *testing.T) {
+	t.Parallel()
+	options := &toolSetOptions{}
+	WithName("custom")(options)
+	WithMaxFileSize(2048)(options)
+	require.Equal(t, "custom", options.name)
+	require.EqualValues(t, 2048, options.maxFileSize)
+	require.True(t, options.hasMaxSize)
+}
+
+func TestEditLocalFileCreatesMissingFileWithoutReadState(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runtime := newToolRuntime(dir, maxEditableFileSize)
+	absPath := filepath.Join(dir, "created.txt")
+	out, err := editLocalFile(absPath, editInput{
+		FilePath:  absPath,
+		OldString: "",
+		NewString: "created content\n",
+	}, runtime)
+	require.NoError(t, err)
+	require.Equal(t, "", out.OriginalFile)
+	require.NotEmpty(t, out.StructuredPatch)
+	raw, readErr := os.ReadFile(absPath)
+	require.NoError(t, readErr)
+	require.Equal(t, "created content\n", string(raw))
+}
+
+func TestEditLocalFileRejectsBinaryAndNoopChanges(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runtime := newToolRuntime(dir, maxEditableFileSize)
+	binaryPath := filepath.Join(dir, "data.bin")
+	require.NoError(t, os.WriteFile(binaryPath, []byte{0x00, 0x01, 0x02}, 0o644))
+	_, err := editLocalFile(binaryPath, editInput{
+		FilePath:  binaryPath,
+		OldString: "a",
+		NewString: "b",
+	}, runtime)
+	require.EqualError(t, err, "This tool cannot edit binary files.")
+	textPath := filepath.Join(dir, "notes.txt")
+	require.NoError(t, os.WriteFile(textPath, []byte("same"), 0o644))
+	_, err = editLocalFile(textPath, editInput{
+		FilePath:  textPath,
+		OldString: "same",
+		NewString: "same",
+	}, runtime)
+	require.EqualError(t, err, "No changes to make: old_string and new_string are exactly the same.")
+}
+
+func TestEditLocalFileCoversInsertAndReplaceErrorBranches(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runtime := newToolRuntime(dir, maxEditableFileSize)
+	emptyPath := filepath.Join(dir, "empty.txt")
+	require.NoError(t, os.WriteFile(emptyPath, nil, 0o644))
+	snapshot, err := readLocalFileSnapshot(emptyPath, maxEditableFileSize)
+	require.NoError(t, err)
+	storeReadView(runtime.fileState, emptyPath, snapshot.Content, snapshot.Timestamp, nil, nil, "", false, true)
+	out, err := editLocalFile(emptyPath, editInput{
+		FilePath:  emptyPath,
+		OldString: "",
+		NewString: "inserted\n",
+	}, runtime)
+	require.NoError(t, err)
+	require.Equal(t, "", out.OriginalFile)
+	require.NotEmpty(t, out.StructuredPatch)
+	missingPath := filepath.Join(dir, "missing.txt")
+	require.NoError(t, os.WriteFile(missingPath, []byte("alpha\nbeta\n"), 0o644))
+	snapshot, err = readLocalFileSnapshot(missingPath, maxEditableFileSize)
+	require.NoError(t, err)
+	storeReadView(runtime.fileState, missingPath, snapshot.Content, snapshot.Timestamp, nil, nil, "", false, true)
+	_, err = editLocalFile(missingPath, editInput{
+		FilePath:  missingPath,
+		OldString: "gamma",
+		NewString: "delta",
+	}, runtime)
+	require.EqualError(t, err, "String to replace not found in file.\nString: gamma")
+	duplicatePath := filepath.Join(dir, "duplicate.txt")
+	require.NoError(t, os.WriteFile(duplicatePath, []byte("alpha\nalpha\n"), 0o644))
+	snapshot, err = readLocalFileSnapshot(duplicatePath, maxEditableFileSize)
+	require.NoError(t, err)
+	storeReadView(runtime.fileState, duplicatePath, snapshot.Content, snapshot.Timestamp, nil, nil, "", false, true)
+	_, err = editLocalFile(duplicatePath, editInput{
+		FilePath:  duplicatePath,
+		OldString: "alpha",
+		NewString: "omega",
+	}, runtime)
+	require.EqualError(t, err, "Found 2 matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: alpha")
+	replaceAllOut, err := editLocalFile(duplicatePath, editInput{
+		FilePath:   duplicatePath,
+		OldString:  "alpha",
+		NewString:  "omega",
+		ReplaceAll: true,
+	}, runtime)
+	require.NoError(t, err)
+	require.True(t, replaceAllOut.ReplaceAll)
+	raw, readErr := os.ReadFile(duplicatePath)
+	require.NoError(t, readErr)
+	require.Equal(t, "omega\nomega\n", string(raw))
+}
+
+func TestLoadNotebookEditStateRejectsInvalidInputs(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runtime := newToolRuntime(dir, maxEditableFileSize)
+	_, err := loadNotebookEditState(filepath.Join(dir, "plain.txt"), notebookEditInput{}, runtime)
+	require.EqualError(t, err, "File must be a Jupyter notebook (.ipynb file).")
+	notebookPath := filepath.Join(dir, "test.ipynb")
+	require.NoError(t, os.WriteFile(notebookPath, []byte(`{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}`), 0o644))
+	snapshot, err := readLocalFileSnapshot(notebookPath, maxEditableFileSize)
+	require.NoError(t, err)
+	storeReadView(runtime.fileState, notebookPath, snapshot.Content, snapshot.Timestamp, nil, nil, "", false, true)
+	_, err = loadNotebookEditState(notebookPath, notebookEditInput{EditMode: "bad"}, runtime)
+	require.EqualError(t, err, "Edit mode must be replace, insert, or delete.")
+	_, err = loadNotebookEditState(notebookPath, notebookEditInput{EditMode: "insert"}, runtime)
+	require.EqualError(t, err, "Cell type is required when using edit_mode=insert.")
+	_, err = loadNotebookEditState(notebookPath, notebookEditInput{EditMode: "replace"}, runtime)
+	require.EqualError(t, err, "Cell ID must be specified when not inserting a new cell.")
+}
+
+func TestLoadNotebookEditStateConvertsReplacePastEndIntoInsert(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	runtime := newToolRuntime(dir, maxEditableFileSize)
+	notebookPath := filepath.Join(dir, "test.ipynb")
+	require.NoError(t, os.WriteFile(notebookPath, []byte(`{
+		"cells":[{"id":"cell-0","cell_type":"markdown","metadata":{},"source":"hello"}],
+		"metadata":{"language_info":{"name":"python"}},
+		"nbformat":4,
+		"nbformat_minor":5
+	}`), 0o644))
+	snapshot, err := readLocalFileSnapshot(notebookPath, maxEditableFileSize)
+	require.NoError(t, err)
+	storeReadView(runtime.fileState, notebookPath, snapshot.Content, snapshot.Timestamp, nil, nil, "", false, true)
+	state, err := loadNotebookEditState(notebookPath, notebookEditInput{
+		EditMode: "replace",
+		CellID:   "cell-1",
+	}, runtime)
+	require.NoError(t, err)
+	require.Equal(t, "insert", state.editMode)
+	require.Equal(t, "code", state.cellType)
+	require.Equal(t, "python", state.language)
+	require.Equal(t, 1, state.cellIndex)
+}
+
+func TestCommonHelpersCoverPathAndHTTPBranches(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	relPath, absPath, err := normalizePath(dir, "nested/file.txt")
+	require.NoError(t, err)
+	require.Equal(t, "nested/file.txt", relPath)
+	require.Equal(t, filepath.Join(dir, "nested/file.txt"), absPath)
+	_, _, err = normalizePath(dir, "../outside.txt")
+	require.EqualError(t, err, "path is outside base_dir: ../outside.txt")
+	runtime := newToolRuntime(dir, maxEditableFileSize)
+	runtime.setBaseDir(filepath.Join(dir, "other"))
+	require.Equal(t, filepath.Join(dir, "other"), runtime.currentBaseDir())
+	require.Equal(t, "file.txt", relativePath(dir, filepath.Join(dir, "file.txt")))
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader("abcdef"))}
+	body, err := readHTTPBody(resp, 3, 0)
+	require.EqualError(t, err, "response body exceeded limit of 3 bytes")
+	require.Nil(t, body)
+	require.Equal(t, 2, countLines("alpha\nbeta"))
+	require.True(t, matchDomainRule("docs.example.com", "*.example.com"))
+	require.True(t, matchSearchDomainFilters("https://docs.example.com/path", []string{"example.com"}, nil))
+	require.False(t, matchSearchDomainFilters("https://docs.example.com/path", nil, []string{"docs.example.com"}))
+	require.Equal(t, "docs.example.com", searchURLHost("https://docs.example.com/path"))
+}
+
+func TestGrepTypePatternsExposeKnownAliases(t *testing.T) {
+	t.Parallel()
+	require.Contains(t, typePatterns("go"), "**/*.go")
+	require.Contains(t, typePatterns("js"), "**/*.js")
+	require.Contains(t, typePatterns("ts"), "**/*.tsx")
+	require.Contains(t, typePatterns("py"), "**/*.py")
+	require.Contains(t, typePatterns("java"), "**/*.java")
+	require.Contains(t, typePatterns("rs"), "**/*.rs")
+	require.Contains(t, typePatterns("json"), "**/*.json")
+	require.Contains(t, typePatterns("md"), "**/*.md")
+	require.Contains(t, typePatterns("yaml"), "**/*.yaml")
+	require.Contains(t, typePatterns("txt"), "**/*.txt")
+	require.Equal(t, []string{"**/*.unknown"}, typePatterns("unknown"))
+}
+
+func TestGrepAndPDFHelpersCoverRemainingBranches(t *testing.T) {
+	t.Parallel()
+	items, limit := sliceStrings([]string{"a", "b", "c"}, 1, 1)
+	require.Equal(t, []string{"b"}, items)
+	require.NotNil(t, limit)
+	require.Equal(t, 1, *limit)
+	items, limit = sliceStrings([]string{"a", "b", "c"}, 5, 1)
+	require.Empty(t, items)
+	require.Nil(t, limit)
+	require.Equal(t, []string{"-e", "-pattern"}, appendRipgrepPattern(nil, "-pattern"))
+	require.Equal(t, []string{"pattern"}, appendRipgrepPattern(nil, "pattern"))
+	require.Equal(t, 0, grepOffset(grepInput{}))
+	require.Equal(t, 3, grepOffset(grepInput{Offset: intPtr(3)}))
+	require.Equal(t, defaultGrepHeadLimit, grepLimit(grepInput{}))
+	require.Equal(t, 5, grepLimit(grepInput{HeadLimit: intPtr(5)}))
+	rangeAll, err := resolvePDFPageRange("2-", 4)
+	require.NoError(t, err)
+	require.Equal(t, pdfPageRange{FirstPage: 2, LastPage: 4, Count: 3}, rangeAll)
+	_, err = resolvePDFPageRange("", 4)
+	require.EqualError(t, err, `Invalid pages parameter: "". Use formats like "1-5", "3", or "10-20". Pages are 1-indexed.`)
+	_, err = resolvePDFPageRange("3-1", 4)
+	require.EqualError(t, err, `Invalid pages parameter: "3-1". Use formats like "1-5", "3", or "10-20". Pages are 1-indexed.`)
+	_, err = resolvePDFPageRange("1-21", 30)
+	require.EqualError(t, err, `Page range "1-21" exceeds maximum of 20 pages per request. Please use a smaller range.`)
+}
+
+func TestWebSearchHelpersNormalizeWrappedDuckDuckGoURLs(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, "https://golang.org/doc/", normalizeDuckDuckGoResultURL("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fgolang.org%2Fdoc%2F"))
+	require.Equal(t, "not a url", normalizeDuckDuckGoResultURL("not a url"))
+	require.Empty(t, normalizeDuckDuckGoResultURL("   "))
+}
+
+func TestExecRipgrepReturnsErrorForInvalidArguments(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep is not available")
+	}
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("alpha\n"), 0o644))
+	_, err := execRipgrep(context.Background(), dir, "--definitely-invalid-flag", "alpha")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ripgrep failed")
+}
+
+func TestNotebookCellHelpersResolveIDsAndIndexes(t *testing.T) {
+	t.Parallel()
+	idx, ok := parseNotebookCellID(" cell-3 ")
+	require.True(t, ok)
+	require.Equal(t, 3, idx)
+	_, ok = parseNotebookCellID("-1")
+	require.False(t, ok)
+	cells := []map[string]any{
+		{"id": "first"},
+		{"id": "second"},
+	}
+	byID, err := notebookCellIndex(cells, "second")
+	require.NoError(t, err)
+	require.Equal(t, 1, byID)
+	byNumericID, err := notebookCellIndex(cells, "cell-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, byNumericID)
+	_, err = notebookCellIndex(cells, "missing")
+	require.EqualError(t, err, `Cell with ID "missing" not found in notebook.`)
+}
+
+func TestGrepHelpersHandleContextAndCountOutput(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, []string{"-C", "2"}, appendRipgrepContext(nil, grepInput{ContextAlt: intPtr(2)}))
+	require.Equal(t, []string{"-C", "1"}, appendRipgrepContext(nil, grepInput{Context: intPtr(1)}))
+	require.Equal(t, []string{"-B", "3", "-A", "4"}, appendRipgrepContext(nil, grepInput{
+		Before: intPtr(3),
+		After:  intPtr(4),
+	}))
+	out := formatRipgrepCountOutput(0, 0, []string{"a.txt:2", "b.txt:3", "raw"})
+	require.Equal(t, "count", out.Mode)
+	require.Equal(t, 3, out.NumFiles)
+	require.Equal(t, 5, out.NumMatches)
+	require.Equal(t, "a.txt:2\nb.txt:3\nraw", out.Content)
+}
+
+func TestExecRipgrepReturnsEmptyOnNoMatches(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep is not available")
+	}
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("alpha\nbeta\n"), 0o644))
+	lines, err := execRipgrep(context.Background(), dir, "--files-with-matches", "missing-pattern")
+	require.NoError(t, err)
+	require.Empty(t, lines)
+}
+
+func TestRunLocalRipgrepReturnsFalseWhenRipgrepIsUnavailable(t *testing.T) {
+	t.Parallel()
+	restore := withRipgrepForTest(func(string) (string, error) {
+		return "", errors.New("not found")
+	})
+	defer restore()
+	out, ok, err := runLocalRipgrep(context.Background(), t.TempDir(), grepInput{Pattern: "alpha"})
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Equal(t, grepOutput{}, out)
+}
+
+func TestRunLocalRipgrepSupportsFilesContentAndCountModes(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep is not available")
+	}
+	restore := withRipgrepForTest(exec.LookPath)
+	defer restore()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\nbeta\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.txt"), []byte("alpha\n"), 0o644))
+	filesOut, ok, err := runLocalRipgrep(context.Background(), dir, grepInput{
+		Pattern:    "alpha",
+		OutputMode: "files_with_matches",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.ElementsMatch(t, []string{"a.txt", "b.txt"}, filesOut.Filenames)
+	contentOut, ok, err := runLocalRipgrep(context.Background(), dir, grepInput{
+		Pattern:     "alpha",
+		OutputMode:  "content",
+		ContextAlt:  intPtr(1),
+		ShowLineNum: boolPtr(true),
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Contains(t, contentOut.Content, "a.txt:1:alpha")
+	countOut, ok, err := runLocalRipgrep(context.Background(), dir, grepInput{
+		Pattern:    "alpha",
+		OutputMode: "count",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 2, countOut.NumMatches)
+}
+
+func TestBashAndProcessHelpersCoverTimeoutAndExitState(t *testing.T) {
+	t.Setenv("BASH_DEFAULT_TIMEOUT_MS", "50")
+	require.Equal(t, 50, bashTimeout(nil))
+	require.Equal(t, defaultBashTimeoutMs, bashTimeout(intPtr(0)))
+	require.Equal(t, maxBashTimeoutMs, bashTimeout(intPtr(maxBashTimeoutMs+1)))
+	proc, err := os.StartProcess("/bin/true", []string{"true"}, &os.ProcAttr{
+		Env:   processEnv(nil),
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	})
+	require.NoError(t, err)
+	state, waitErr := proc.Wait()
+	require.NoError(t, waitErr)
+	require.Equal(t, "completed", backgroundTaskStatus(nil, state))
+	require.Equal(t, 0, backgroundTaskExitCode(nil, state))
+	require.Equal(t, "exited", backgroundTaskStatus(errors.New("wait failed"), nil))
+	require.Equal(t, 1, backgroundTaskExitCode(errors.New("wait failed"), nil))
+	require.Equal(t, 0, backgroundTaskExitCode(nil, nil))
+	require.Equal(t, "stdout\nstderr", joinOutput("stdout", "stderr"))
+	require.Equal(t, "stderr", joinOutput("", "stderr"))
+}
+
+func TestRunCapturedProcessAndWaitForProcess(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	result, err := runCapturedProcess(context.Background(), dir, []string{"TEST_KEY=VALUE"}, "bash", "-lc", "printf \"$TEST_KEY\"")
+	require.NoError(t, err)
+	require.Equal(t, "VALUE", string(result.Stdout))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	proc, err := os.StartProcess("/bin/sleep", []string{"sleep", "1"}, &os.ProcAttr{
+		Dir:   dir,
+		Env:   processEnv(nil),
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	})
+	require.NoError(t, err)
+	state := waitForProcess(ctx, proc)
+	require.ErrorIs(t, state.Err, context.DeadlineExceeded)
+	require.NotNil(t, state.State)
+}
+
+func TestProcessPipeHelpersAndTaskStopErrors(t *testing.T) {
+	t.Parallel()
+	stdin, stdoutReader, stdoutWriter, stderrReader, stderrWriter, closeAll, err := processPipes()
+	require.NoError(t, err)
+	require.NotNil(t, stdin)
+	require.NotNil(t, stdoutReader)
+	require.NotNil(t, stdoutWriter)
+	require.NotNil(t, stderrReader)
+	require.NotNil(t, stderrWriter)
+	require.NoError(t, closeAll())
+	runtime := newToolRuntime(t.TempDir(), maxEditableFileSize)
+	stopTool, err := newTaskStopTool(runtime)
+	require.NoError(t, err)
+	callable, ok := stopTool.(tool.CallableTool)
+	require.True(t, ok)
+	_, err = callToolRaw(callable, taskStopInput{})
+	require.EqualError(t, err, "Missing required parameter: task_id")
+	runtime.taskState.tasks["done"] = &backgroundTask{
+		ID:      "done",
+		Command: "echo done",
+		Type:    toolBash,
+		Status:  "completed",
+	}
+	_, err = callToolRaw(callable, taskStopInput{TaskID: "done"})
+	require.EqualError(t, err, "Task done is not running (status: completed)")
+}
+
+func TestPDFAndNotebookHelpersCoverFallbackBranches(t *testing.T) {
+	t.Parallel()
+	pdfBytes := newTestPDF(t, []string{"page one", "page two", "page three"})
+	pageCount, err := pdfPageCount(pdfBytes)
+	require.NoError(t, err)
+	require.Equal(t, 3, pageCount)
+	pages, err := resolvePDFPageRange("1-3", 3)
+	require.NoError(t, err)
+	require.Equal(t, pdfPageRange{FirstPage: 1, LastPage: 3, Count: 3}, pages)
+	_, err = resolvePDFPageRange("4", 3)
+	require.EqualError(t, err, "Page 4 exceeds the PDF page count of 3.")
+	require.Equal(t, "cell-2", notebookResultCellID(map[string]any{}, 2, ""))
+	require.Equal(t, "fallback", notebookResultCellID(map[string]any{}, 2, "fallback"))
+	value, ok := notebookInt(float64(3))
+	require.True(t, ok)
+	require.Equal(t, 3, value)
+	_, ok = notebookInt("bad")
+	require.False(t, ok)
+	require.Equal(t, "python", notebookLanguage(map[string]any{}))
+	require.Equal(t, "go", notebookLanguage(map[string]any{
+		"metadata": map[string]any{
+			"language_info": map[string]any{"name": "go"},
+		},
+	}))
+}
+
+func TestReadTaskSnapshotHandlesMissingOutputFile(t *testing.T) {
+	t.Parallel()
+	runtime := newToolRuntime(t.TempDir(), maxEditableFileSize)
+	exitCode := 17
+	runtime.taskState.tasks["task-1"] = &backgroundTask{
+		ID:         "task-1",
+		Command:    "echo hi",
+		Type:       toolBash,
+		OutputPath: filepath.Join(t.TempDir(), "missing.log"),
+		Status:     "completed",
+		ExitCode:   &exitCode,
+	}
+	snapshot, err := readTaskSnapshot(runtime, "task-1")
+	require.NoError(t, err)
+	require.Equal(t, "task-1", snapshot.TaskID)
+	require.Equal(t, toolBash, snapshot.TaskType)
+	require.Equal(t, "completed", snapshot.Status)
+	require.Equal(t, "echo hi", snapshot.Description)
+	require.Empty(t, snapshot.Output)
+	require.NotNil(t, snapshot.ExitCode)
+	require.Equal(t, 17, *snapshot.ExitCode)
+}
+
 func newTestPDF(t *testing.T, pages []string) []byte {
 	t.Helper()
 	pdfDoc := fpdf.New("P", "mm", "A4", "")
@@ -974,6 +1540,10 @@ func intPtr(value int) *int {
 }
 
 func boolPtr(value bool) *bool {
+	return &value
+}
+
+func strPtr(value string) *string {
 	return &value
 }
 
