@@ -1061,7 +1061,7 @@ RUN_STARTED
 
 其中 `ACTIVITY_DELTA` 的 `patch.path` 对内置 `tool.result.stream` activity 固定为 `/content`，表示更新这份 activity state 里的 `content` 字段。
 
-activity 中的 `content` 不是单次 chunk，而是服务端按现有 merge 规则累计后的完整过程内容，因此前端可以直接按最新 activity 状态覆盖展示，而不需要自己拼接字符串。最终 `TOOL_CALL_RESULT` 的内容仍遵循 runner 的原始语义：
+activity 中的 `content` 不是单次 chunk，而是服务端按收到的非空 partial `Content` 顺序累计后的完整过程内容，因此前端可以直接按最新 activity 状态覆盖展示，而不需要自己拼接字符串。最终 `TOOL_CALL_RESULT` 的内容仍遵循 runner 的原始语义：
 - 如果工具流中没有显式 final result chunk，则最终 `TOOL_CALL_RESULT` 使用之前 chunk 按框架现有 merge 规则聚合后的结果。
 - 如果工具流中显式返回了 `tool.FinalResultChunk` 或 `tool.FinalResultStateChunk`，则最终 `TOOL_CALL_RESULT` 直接使用该显式 final result。
 - 在显式 final result 场景下，之前过程中的 chunk 不会自动并入最终 `TOOL_CALL_RESULT`。

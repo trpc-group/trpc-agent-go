@@ -1186,7 +1186,7 @@ The corresponding events usually look like this:
 
 For the built-in `tool.result.stream` activity, the `patch.path` in `ACTIVITY_DELTA` is fixed to `/content`, which means the patch updates the `content` field inside that activity state.
 
-The `content` carried by each activity event is not the raw single chunk. It is the full accumulated process content after applying the existing merge rules on the server. The frontend can therefore render the latest activity state directly without concatenating strings on its own. The content of the final `TOOL_CALL_RESULT` still follows the runner's original behavior:
+The `content` carried by each activity event is not the raw single chunk. It is the full accumulated process content built by appending non-empty partial `Content` values in the order they arrive on the server. The frontend can therefore render the latest activity state directly without concatenating strings on its own. The content of the final `TOOL_CALL_RESULT` still follows the runner's original behavior:
 - If the tool stream does not contain an explicit final-result chunk, the final `TOOL_CALL_RESULT` uses the merged result produced from the previous chunks.
 - If the tool stream explicitly returns `tool.FinalResultChunk` or `tool.FinalResultStateChunk`, the final `TOOL_CALL_RESULT` uses that explicit final result directly.
 - In the explicit final-result case, earlier process chunks are not automatically merged into the final `TOOL_CALL_RESULT`.
