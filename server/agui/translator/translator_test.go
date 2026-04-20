@@ -2582,6 +2582,71 @@ func TestStreamToolResultEventAsActivityWhenEnabled(t *testing.T) {
 	assert.Equal(t, "Reset", content["content"])
 }
 
+func TestToolResultActivityEventSkipsEmptyInputs(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithStreamingToolResultActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+	event, ok := tr.toolResultActivityEvent("", "hello")
+	assert.False(t, ok)
+	assert.Nil(t, event)
+	event, ok = tr.toolResultActivityEvent("tool-1", "")
+	assert.False(t, ok)
+	assert.Nil(t, event)
+	assert.Empty(t, tr.streamingToolResultContent)
+}
+
+func TestClearToolResultActivityState(t *testing.T) {
+	var nilTranslator *translator
+	nilTranslator.clearToolResultActivityState(nil)
+
+	tr := &translator{
+		streamingToolResultContent: map[string]string{
+			"tool-1": "hello",
+			"tool-2": "world",
+			"tool-3": "keep",
+		},
+	}
+	tr.clearToolResultActivityState(nil)
+	assert.Equal(t, "hello", tr.streamingToolResultContent["tool-1"])
+	assert.Equal(t, "world", tr.streamingToolResultContent["tool-2"])
+	assert.Equal(t, "keep", tr.streamingToolResultContent["tool-3"])
+	tr.clearToolResultActivityState(&model.Response{
+		Choices: []model.Choice{
+			{Message: model.Message{ToolID: "tool-1"}},
+			{Delta: model.Message{ToolID: "tool-2"}},
+		},
+	})
+	assert.NotContains(t, tr.streamingToolResultContent, "tool-1")
+	assert.NotContains(t, tr.streamingToolResultContent, "tool-2")
+	assert.Equal(t, "keep", tr.streamingToolResultContent["tool-3"])
+}
+
+func TestToolResultActivityEvents(t *testing.T) {
+	tr := newTranslatorImplForTest(t, WithStreamingToolResultActivityEnabled(true))
+	if tr == nil {
+		return
+	}
+	events, err := tr.toolResultActivityEvents(nil)
+	assert.NoError(t, err)
+	assert.Nil(t, events)
+	events, err = tr.toolResultActivityEvents(&model.Response{})
+	assert.NoError(t, err)
+	assert.Nil(t, events)
+	events, err = tr.toolResultActivityEvents(&model.Response{
+		Choices: []model.Choice{
+			{Message: model.Message{ToolID: "tool-1", Content: "Hello"}},
+			{Delta: model.Message{ToolID: "tool-1", Content: " World"}},
+		},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	_, ok := events[0].(*aguievents.ActivitySnapshotEvent)
+	assert.True(t, ok)
+	_, ok = events[1].(*aguievents.ActivityDeltaEvent)
+	assert.True(t, ok)
+}
+
 func TestTranslateStreamableToolCallAndResultEvents(t *testing.T) {
 	tr := newTranslatorImplForTest(t)
 	if tr == nil {
