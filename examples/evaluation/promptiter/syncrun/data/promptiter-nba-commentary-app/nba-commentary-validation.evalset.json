@@ -1,0 +1,906 @@
+{
+  "evalSetId": "nba-commentary-validation",
+  "name": "nba-commentary-validation",
+  "evalCases": [
+    {
+      "evalId": "case_1",
+      "conversation": [
+        {
+          "invocationId": "case_1-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节最后一分钟\",\n  \"current_score\": \"火箭 98 - 111 国王 (【国王】 领先 13 分)\",\n  \"score_state\": \"国王领先13分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺勾手命中\",\n    \"杜兰特接到阿门的分球直接在弧顶起手，这球手起刀落就飘进去了，火箭总算把外线的火力顶上来。\",\n    \"国王一次走步。\",\n    \"威斯布鲁克这球想从侧翼把球吊进去，结果直接被阿门的横移断掉了，火箭这一下等于是白拿了个反击机会。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-00:36】杜兰特收到阿门助攻，三分投篮命中 [98-111]\",\n    \"【Q4-00:10】国王队失误 [98-111]\",\n    \"【Q4-00:10】国王违例 [98-111]\",\n    \"【Q4-00:00】第4节比赛结束 [98-111]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:27:17\",\n    \"description\": \"第4节比赛结束\",\n    \"score_at_event\": \"火箭 98-111 国王\",\n    \"clock\": \"Q4-00:00\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "终场哨响，第四节00:00定格在火箭98比111国王，国王带着13分优势收下比赛！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_2",
+      "conversation": [
+        {
+          "invocationId": "case_2-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节最后一分钟\",\n  \"current_score\": \"火箭 98 - 111 国王 (【国王】 领先 13 分)\",\n  \"score_state\": \"国王领先13分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺把篮板收下了。\",\n    \"雷诺把这个前场板硬生生从人堆里抢了出来，直接把国王的进攻续上了。\",\n    \"雷诺勾手命中\",\n    \"杜兰特接到阿门的分球直接在弧顶起手，这球手起刀落就飘进去了，火箭总算把外线的火力顶上来。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:00】雷诺抢到防守篮板球 [95-109]\",\n    \"【Q4-00:43】雷诺收到威斯布鲁克助攻，勾手命中 [95-111]\",\n    \"【Q4-00:36】杜兰特收到阿门助攻，三分投篮命中 [98-111]\",\n    \"【Q4-00:10】国王队失误 [98-111]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:27:22\",\n    \"description\": \"国王队失误\",\n    \"score_at_event\": \"火箭 98-111 国王\",\n    \"clock\": \"Q4-00:10\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩10秒国王这边直接出现失误，比分火箭98比111落后13分，火箭赶紧抓住这次球权机会！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_3",
+      "conversation": [
+        {
+          "invocationId": "case_3-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节最后一分钟\",\n  \"current_score\": \"火箭 98 - 111 国王 (【国王】 领先 13 分)\",\n  \"score_state\": \"国王领先13分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺把篮板收下了。\",\n    \"雷诺把这个前场板硬生生从人堆里抢了出来，直接把国王的进攻续上了。\",\n    \"雷诺勾手命中\",\n    \"杜兰特接到阿门的分球直接在弧顶起手，这球手起刀落就飘进去了，火箭总算把外线的火力顶上来。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-00:43】雷诺收到威斯布鲁克助攻，勾手命中 [95-111]\",\n    \"【Q4-00:36】杜兰特收到阿门助攻，三分投篮命中 [98-111]\",\n    \"【Q4-00:10】国王队失误 [98-111]\",\n    \"【Q4-00:10】国王违例 [98-111]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:27:20\",\n    \"description\": \"国王违例\",\n    \"score_at_event\": \"火箭 98-111 国王\",\n    \"clock\": \"Q4-00:10\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩10秒比分火箭98比111落后13分，国王这边直接一个违例把球权白送出来！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_4",
+      "conversation": [
+        {
+          "invocationId": "case_4-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节最后一分钟\",\n  \"current_score\": \"火箭 98 - 111 国王 (【国王】 领先 13 分)\",\n  \"score_state\": \"国王领先13分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"申京第二罚还是没进。\",\n    \"雷诺把篮板收下了。\",\n    \"雷诺把这个前场板硬生生从人堆里抢了出来，直接把国王的进攻续上了。\",\n    \"雷诺勾手命中\"\n  ],\n  \"recent_events\": [\n    \"【Q4-03:07】雷诺抢到进攻篮板球 [92-102]\",\n    \"【Q4-01:00】雷诺抢到防守篮板球 [95-109]\",\n    \"【Q4-00:43】雷诺收到威斯布鲁克助攻，勾手命中 [95-111]\",\n    \"【Q4-00:36】杜兰特收到阿门助攻，三分投篮命中 [98-111]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:26:52\",\n    \"description\": \"杜兰特收到阿门助攻，三分投篮命中\",\n    \"score_at_event\": \"火箭 98-111 国王\",\n    \"clock\": \"Q4-00:36\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "还剩36秒，阿门一分球喂到外线，杜兰特接球拔起三分命中，火箭追到98比111仍落后国王13分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_5",
+      "conversation": [
+        {
+          "invocationId": "case_5-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节最后一分钟\",\n  \"current_score\": \"火箭 95 - 111 国王 (【国王】 领先 16 分)\",\n  \"score_state\": \"国王领先16分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"霍勒迪把盖帽给补上了。\",\n    \"申京第二罚还是没进。\",\n    \"雷诺把篮板收下了。\",\n    \"雷诺把这个前场板硬生生从人堆里抢了出来，直接把国王的进攻续上了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-03:07】德罗赞的跳投被霍勒迪封盖，不中 [92-102]\",\n    \"【Q4-03:07】雷诺抢到进攻篮板球 [92-102]\",\n    \"【Q4-01:00】雷诺抢到防守篮板球 [95-109]\",\n    \"【Q4-00:43】雷诺收到威斯布鲁克助攻，勾手命中 [95-111]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:26:42\",\n    \"description\": \"雷诺收到威斯布鲁克助攻，勾手命中\",\n    \"score_at_event\": \"火箭 95-111 国王\",\n    \"clock\": \"Q4-00:43\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩43秒，威斯布鲁克送出助攻，雷诺篮下勾手打进，比分来到火箭95比111国王领先16分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_6",
+      "conversation": [
+        {
+          "invocationId": "case_6-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 102 国王 (【国王】 领先 10 分)\",\n  \"score_state\": \"国王领先10分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"小史密斯这一撞上篮被威斯布鲁克直接拍了下来，出手点完全被盖死了。\",\n    \"雷诺这一扑直接打到申京出手点上了，裁判给了两罚。\",\n    \"申京第一罚没进。\",\n    \"申京都把这个后场板抓住了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-03:07】德罗赞的跳投被霍勒迪封盖，不中 [92-102]\",\n    \"【Q4-03:07】雷诺抢到进攻篮板球 [92-102]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:18:22\",\n    \"description\": \"雷诺抢到进攻篮板球\",\n    \"score_at_event\": \"火箭 92-102 国王\",\n    \"clock\": \"Q4-03:07\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩3分07秒，德罗赞跳投被霍勒迪一巴掌封掉没进，雷诺立刻冲上来抢下进攻篮板，国王还以92比102领先10分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_8",
+      "conversation": [
+        {
+          "invocationId": "case_8-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节最后一分钟\",\n  \"current_score\": \"火箭 95 - 109 国王 (【国王】 领先 14 分)\",\n  \"score_state\": \"国王领先14分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"小史密斯这一撞上篮被威斯布鲁克直接拍了下来，出手点完全被盖死了。\",\n    \"雷诺这一扑直接打到申京出手点上了，裁判给了两罚。\",\n    \"申京第一罚没进。\",\n    \"申京都把这个后场板抓住了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:02】申京第2罚不中 [95-109]\",\n    \"【Q4-03:07】德罗赞的跳投被霍勒迪封盖，不中 [92-102]\",\n    \"【Q4-03:07】雷诺抢到进攻篮板球 [92-102]\",\n    \"【Q4-01:00】雷诺抢到防守篮板球 [95-109]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:26:26\",\n    \"description\": \"雷诺抢到防守篮板球\",\n    \"score_at_event\": \"火箭 95-109 国王\",\n    \"clock\": \"Q4-01:00\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分00秒，国王109比95领先14分，雷诺在篮下强硬摘下这记防守篮板把球稳稳收下！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_9",
+      "conversation": [
+        {
+          "invocationId": "case_9-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 102 国王 (【国王】 领先 10 分)\",\n  \"score_state\": \"国王领先10分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"小史密斯这一撞上篮被威斯布鲁克直接拍了下来，出手点完全被盖死了。\",\n    \"雷诺这一扑直接打到申京出手点上了，裁判给了两罚。\",\n    \"申京第一罚没进。\",\n    \"申京都把这个后场板抓住了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-03:07】德罗赞的跳投被霍勒迪封盖，不中 [92-102]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:18:24\",\n    \"description\": \"德罗赞的跳投被霍勒迪封盖，不中\",\n    \"score_at_event\": \"火箭 92-102 国王\",\n    \"clock\": \"Q4-03:07\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩3分07秒，德罗赞中距离起跳出手被霍勒迪迎面一巴掌扇掉，火箭这一下硬生生把比分咬在92比102！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_10",
+      "conversation": [
+        {
+          "invocationId": "case_10-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 95 - 109 国王 (【国王】 领先 14 分)\",\n  \"score_state\": \"国王领先14分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺顺着中路直接把上篮放进去了，靠着身体挤开了空间。\",\n    \"小史密斯这一撞上篮被威斯布鲁克直接拍了下来，出手点完全被盖死了。\",\n    \"雷诺这一扑直接打到申京出手点上了，裁判给了两罚。\",\n    \"申京第一罚没进。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:06】火箭获得篮板球 [95-109]\",\n    \"【Q4-01:02】雷诺对申京投篮犯规，申京2次罚球 [95-109]\",\n    \"【Q4-01:02】申京第1罚不中 [95-109]\",\n    \"【Q4-01:02】火箭获得篮板球 [95-109]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:25:48\",\n    \"description\": \"火箭获得篮板球\",\n    \"score_at_event\": \"火箭 95-109 国王\",\n    \"clock\": \"Q4-01:02\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分02秒火箭95比109落后14分，申京第一罚没进但火箭自己抢下篮板继续二次进攻！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_11",
+      "conversation": [
+        {
+          "invocationId": "case_11-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 95 - 109 国王 (【国王】 领先 14 分)\",\n  \"score_state\": \"国王领先14分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"申京把前场板收下来了，靠着身体把位置顶得很死。\",\n    \"雷诺顺着中路直接把上篮放进去了，靠着身体挤开了空间。\",\n    \"小史密斯这一撞上篮被威斯布鲁克直接拍了下来，出手点完全被盖死了。\",\n    \"雷诺这一扑直接打到申京出手点上了，裁判给了两罚。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:06】小史密斯的上篮被威斯布鲁克封盖，不中 [95-109]\",\n    \"【Q4-01:06】火箭获得篮板球 [95-109]\",\n    \"【Q4-01:02】雷诺对申京投篮犯规，申京2次罚球 [95-109]\",\n    \"【Q4-01:02】申京第1罚不中 [95-109]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:26:11\",\n    \"description\": \"申京第1罚不中\",\n    \"score_at_event\": \"火箭 95-109 国王\",\n    \"clock\": \"Q4-01:02\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分02秒火箭95比109落后，申京站上罚球线第一罚砸筐不中！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_12",
+      "conversation": [
+        {
+          "invocationId": "case_12-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 95 - 109 国王 (【国王】 领先 14 分)\",\n  \"score_state\": \"国王领先14分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"申京弧顶这下三分偏出了。\",\n    \"申京把前场板收下来了，靠着身体把位置顶得很死。\",\n    \"雷诺顺着中路直接把上篮放进去了，靠着身体挤开了空间。\",\n    \"小史密斯这一撞上篮被威斯布鲁克直接拍了下来，出手点完全被盖死了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:20】雷诺上篮命中 [95-109]\",\n    \"【Q4-01:06】小史密斯的上篮被威斯布鲁克封盖，不中 [95-109]\",\n    \"【Q4-01:06】火箭获得篮板球 [95-109]\",\n    \"【Q4-01:02】雷诺对申京投篮犯规，申京2次罚球 [95-109]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:25:47\",\n    \"description\": \"雷诺对申京投篮犯规，申京2次罚球\",\n    \"score_at_event\": \"火箭 95-109 国王\",\n    \"clock\": \"Q4-01:02\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分02秒火箭95比109落后，雷诺这球对申京出手犯规送上两罚，申京站上罚球线要追分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_13",
+      "conversation": [
+        {
+          "invocationId": "case_13-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 95 - 109 国王 (【国王】 领先 14 分)\",\n  \"score_state\": \"国王领先14分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺在篮下把进攻板抓住了，国王还能再打一次。\",\n    \"申京弧顶这下三分偏出了。\",\n    \"申京把前场板收下来了，靠着身体把位置顶得很死。\",\n    \"雷诺顺着中路直接把上篮放进去了，靠着身体挤开了空间。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:10】申京三分投篮不中 [95-109]\",\n    \"【Q4-01:20】雷诺上篮命中 [95-109]\",\n    \"【Q4-01:06】小史密斯的上篮被威斯布鲁克封盖，不中 [95-109]\",\n    \"【Q4-01:06】火箭获得篮板球 [95-109]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:25:33\",\n    \"description\": \"小史密斯的上篮被威斯布鲁克封盖，不中\",\n    \"score_at_event\": \"火箭 95-109 国王\",\n    \"clock\": \"Q4-01:06\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分06秒，火箭95比109落后， 小史密斯冲到篮下想上篮却被威斯布鲁克一巴掌钉板封盖，球没进！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_14",
+      "conversation": [
+        {
+          "invocationId": "case_14-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 95 - 109 国王 (【国王】 领先 14 分)\",\n  \"score_state\": \"国王领先14分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿门把这个前场板抓住了，火箭还能继续打一回合。\",\n    \"阿门把第二罚送进去了，火箭把回合稳住了。\",\n    \"德罗赞中路这下急停没打进，出手点有点被阿门干扰到。\",\n    \"雷诺在篮下把进攻板抓住了，国王还能再打一次。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:20】雷诺上篮命中 [95-109]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:25:16\",\n    \"description\": \"雷诺上篮命中\",\n    \"score_at_event\": \"火箭 95-109 国王\",\n    \"clock\": \"Q4-01:20\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分20秒，雷诺杀到篮下一个上篮打进，比分来到国王109比95领先火箭14分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_16",
+      "conversation": [
+        {
+          "invocationId": "case_16-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 95 - 109 国王 (【国王】 领先 14 分)\",\n  \"score_state\": \"国王领先14分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿门把这个前场板抓住了，火箭还能继续打一回合。\",\n    \"阿门把第二罚送进去了，火箭把回合稳住了。\",\n    \"德罗赞中路这下急停没打进，出手点有点被阿门干扰到。\",\n    \"雷诺在篮下把进攻板抓住了，国王还能再打一次。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:21】德罗赞投篮不中 [95-107]\",\n    \"【Q4-01:19】雷诺抢到进攻篮板球 [95-107]\",\n    \"【Q4-01:07】申京抢到进攻篮板球 [95-109]\",\n    \"【Q4-01:10】申京三分投篮不中 [95-109]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:25:32\",\n    \"description\": \"申京抢到进攻篮板球\",\n    \"score_at_event\": \"火箭 95-109 国王\",\n    \"clock\": \"Q4-01:07\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分07秒，申京在火箭95比109落后国王14分的情况下硬生生抢下前场进攻篮板，火箭又有二次进攻机会！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_17",
+      "conversation": [
+        {
+          "invocationId": "case_17-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 95 - 107 国王 (【国王】 领先 12 分)\",\n  \"score_state\": \"国王领先12分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿门这一冲，蒙克的手直接碰到出手点了，裁判给了两罚。\",\n    \"阿门这第一罚偏了，手上明显有点发软。\",\n    \"阿门把这个前场板抓住了，火箭还能继续打一回合。\",\n    \"阿门把第二罚送进去了，火箭把回合稳住了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:42】火箭获得篮板球 [94-107]\",\n    \"【Q4-01:42】阿门第2罚命中 [95-107]\",\n    \"【Q4-01:21】德罗赞投篮不中 [95-107]\",\n    \"【Q4-01:19】雷诺抢到进攻篮板球 [95-107]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:25:20\",\n    \"description\": \"雷诺抢到进攻篮板球\",\n    \"score_at_event\": \"火箭 95-107 国王\",\n    \"clock\": \"Q4-01:19\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分19秒，德罗赞这球没进但雷诺硬是冲抢下进攻篮板，比分仍是国王107比95领先火箭12分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_18",
+      "conversation": [
+        {
+          "invocationId": "case_18-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 95 - 107 国王 (【国王】 领先 12 分)\",\n  \"score_state\": \"国王领先12分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿门这一冲，蒙克的手直接碰到出手点了，裁判给了两罚。\",\n    \"阿门这第一罚偏了，手上明显有点发软。\",\n    \"阿门把这个前场板抓住了，火箭还能继续打一回合。\",\n    \"阿门把第二罚送进去了，火箭把回合稳住了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:42】火箭获得篮板球 [94-107]\",\n    \"【Q4-01:42】阿门第2罚命中 [95-107]\",\n    \"【Q4-01:21】德罗赞投篮不中 [95-107]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:25:15\",\n    \"description\": \"德罗赞投篮不中\",\n    \"score_at_event\": \"火箭 95-107 国王\",\n    \"clock\": \"Q4-01:21\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分21秒德罗赞这球投丢了，比分还是火箭95比107落后国王12分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_19",
+      "conversation": [
+        {
+          "invocationId": "case_19-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 95 - 107 国王 (【国王】 领先 12 分)\",\n  \"score_state\": \"国王领先12分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿门冲进去把进攻板抓住了，这一下给火箭又续上了一次机会。\",\n    \"阿门这一冲，蒙克的手直接碰到出手点了，裁判给了两罚。\",\n    \"阿门这第一罚偏了，手上明显有点发软。\",\n    \"阿门这第二罚总算稳稳送进去了，火箭追回1分。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:42】蒙克对阿门犯规，阿门2次罚球 [94-107]\",\n    \"【Q4-01:42】阿门第1罚不中 [94-107]\",\n    \"【Q4-01:42】阿门第2罚命中 [95-107]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:24:52\",\n    \"description\": \"阿门第2罚命中\",\n    \"score_at_event\": \"火箭 95-107 国王\",\n    \"clock\": \"Q4-01:42\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分42秒，阿门顶着蒙克的犯规站上罚球线第二罚稳稳命中，火箭追到95比107但仍落后国王12分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_20",
+      "conversation": [
+        {
+          "invocationId": "case_20-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 94 - 107 国王 (【国王】 领先 13 分)\",\n  \"score_state\": \"国王领先13分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"霍勒迪这记外线偏了。\",\n    \"阿门冲进去把进攻板抓住了，这一下给火箭又续上了一次机会。\",\n    \"阿门这一冲，蒙克的手直接碰到出手点了，裁判给了两罚。\",\n    \"阿门两罚都没能送进，但火箭还是把前场板拼了下来。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:42】蒙克对阿门犯规，阿门2次罚球 [94-107]\",\n    \"【Q4-01:42】阿门第1罚不中 [94-107]\",\n    \"【Q4-01:42】阿门第2罚不中 [94-107]\",\n    \"【Q4-01:42】火箭获得篮板球 [94-107]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:24:08\",\n    \"description\": \"火箭获得篮板球\",\n    \"score_at_event\": \"火箭 94-107 国王\",\n    \"clock\": \"Q4-01:42\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分42秒火箭94比107落后13分，阿门两罚全丢后火箭还是把前场篮板拼了下来继续追分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_21",
+      "conversation": [
+        {
+          "invocationId": "case_21-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 94 - 107 国王 (【国王】 领先 13 分)\",\n  \"score_state\": \"国王领先13分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"威斯布鲁克左底角这球直接甩手就进了，德罗赞那一下分球给得很准。\",\n    \"霍勒迪这记外线偏了。\",\n    \"阿门冲进去把进攻板抓住了，这一下给火箭又续上了一次机会。\",\n    \"阿门这一冲，蒙克的手直接碰到出手点了，裁判给了两罚。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-01:46】阿门抢到进攻篮板球 [94-107]\",\n    \"【Q4-01:50】霍勒迪三分投篮不中 [94-107]\",\n    \"【Q4-01:42】蒙克对阿门犯规，阿门2次罚球 [94-107]\",\n    \"【Q4-01:42】阿门第1罚不中 [94-107]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:24:36\",\n    \"description\": \"阿门第1罚不中\",\n    \"score_at_event\": \"火箭 94-107 国王\",\n    \"clock\": \"Q4-01:42\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分42秒火箭94比107落后国王13分，阿门站上罚球线第一罚竟然弹框而出！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_22",
+      "conversation": [
+        {
+          "invocationId": "case_22-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 94 - 107 国王 (【国王】 领先 13 分)\",\n  \"score_state\": \"国王领先13分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"杜兰特右侧这下直接干拔，动作很利索，球从他指尖一甩就进了。\",\n    \"威斯布鲁克左底角这球直接甩手就进了，德罗赞那一下分球给得很准。\",\n    \"霍勒迪这记外线偏了。\",\n    \"阿门冲进去把进攻板抓住了，这一下给火箭又续上了一次机会。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-02:01】威斯布鲁克收到德罗赞助攻，三分投篮命中 [94-107]\",\n    \"【Q4-01:46】阿门抢到进攻篮板球 [94-107]\",\n    \"【Q4-01:50】霍勒迪三分投篮不中 [94-107]\",\n    \"【Q4-01:42】蒙克对阿门犯规，阿门2次罚球 [94-107]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:24:08\",\n    \"description\": \"蒙克对阿门犯规，阿门2次罚球\",\n    \"score_at_event\": \"火箭 94-107 国王\",\n    \"clock\": \"Q4-01:42\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分42秒，蒙克这下直接对阿门下手犯规，火箭94比107落后13分，阿门站上罚球线两罚！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_23",
+      "conversation": [
+        {
+          "invocationId": "case_23-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 94 - 107 国王 (【国王】 领先 13 分)\",\n  \"score_state\": \"国王领先13分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺上篮没打进。\",\n    \"雷诺抢下前场板。\",\n    \"杜兰特右侧这下直接干拔，动作很利索，球从他指尖一甩就进了。\",\n    \"威斯布鲁克左底角这球直接甩手就进了，德罗赞那一下分球给得很准。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-02:22】杜兰特投篮命中 [94-104]\",\n    \"【Q4-02:01】威斯布鲁克收到德罗赞助攻，三分投篮命中 [94-107]\",\n    \"【Q4-01:46】阿门抢到进攻篮板球 [94-107]\",\n    \"【Q4-01:50】霍勒迪三分投篮不中 [94-107]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:24:04\",\n    \"description\": \"阿门抢到进攻篮板球\",\n    \"score_at_event\": \"火箭 94-107 国王\",\n    \"clock\": \"Q4-01:46\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分46秒，火箭94比107落后13分，阿门硬是冲进来抢下进攻篮板把球权续上！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_24",
+      "conversation": [
+        {
+          "invocationId": "case_24-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"第4节即将结束\",\n  \"current_score\": \"火箭 94 - 107 国王 (【国王】 领先 13 分)\",\n  \"score_state\": \"国王领先13分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺上篮没打进。\",\n    \"雷诺抢下前场板。\",\n    \"杜兰特右侧这下直接干拔，动作很利索，球从他指尖一甩就进了。\",\n    \"威斯布鲁克左底角这球直接甩手就进了，德罗赞那一下分球给得很准。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-02:22】杜兰特投篮命中 [94-104]\",\n    \"【Q4-02:01】威斯布鲁克收到德罗赞助攻，三分投篮命中 [94-107]\",\n    \"【Q4-01:50】霍勒迪三分投篮不中 [94-107]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:24:00\",\n    \"description\": \"霍勒迪三分投篮不中\",\n    \"score_at_event\": \"火箭 94-107 国王\",\n    \"clock\": \"Q4-01:50\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩1分50秒，霍勒迪外线三分出手偏出，比分仍是火箭94比107落后国王13分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_25",
+      "conversation": [
+        {
+          "invocationId": "case_25-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 94 - 107 国王 (【国王】 领先 13 分)\",\n  \"score_state\": \"国王领先13分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺顺着中路直接把上篮放进去了，动作挺利索的。\",\n    \"雷诺上篮没打进。\",\n    \"雷诺抢下前场板。\",\n    \"杜兰特右侧这下直接干拔，动作很利索，球从他指尖一甩就进了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-02:31】雷诺抢到进攻篮板球 [92-102]\",\n    \"【Q4-02:35】雷诺上篮不中 [92-102]\",\n    \"【Q4-02:22】杜兰特投篮命中 [94-104]\",\n    \"【Q4-02:01】威斯布鲁克收到德罗赞助攻，三分投篮命中 [94-107]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:23:47\",\n    \"description\": \"威斯布鲁克收到德罗赞助攻，三分投篮命中\",\n    \"score_at_event\": \"火箭 94-107 国王\",\n    \"clock\": \"Q4-02:01\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩2分01秒，德罗赞一喂到位，威斯布鲁克迎着三分拔起就进，比分来到国王107比94领先13分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_26",
+      "conversation": [
+        {
+          "invocationId": "case_26-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 94 - 104 国王 (【国王】 领先 10 分)\",\n  \"score_state\": \"国王领先10分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"霍勒迪这下上去封得有点冒失，手直接打到德罗赞的出手，裁判又给了犯规。\",\n    \"雷诺顺着中路直接把上篮放进去了，动作挺利索的。\",\n    \"雷诺上篮没打进。\",\n    \"雷诺抢下前场板。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-02:30】雷诺上篮命中 [92-104]\",\n    \"【Q4-02:31】雷诺抢到进攻篮板球 [92-102]\",\n    \"【Q4-02:35】雷诺上篮不中 [92-102]\",\n    \"【Q4-02:22】杜兰特投篮命中 [94-104]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:23:26\",\n    \"description\": \"杜兰特投篮命中\",\n    \"score_at_event\": \"火箭 94-104 国王\",\n    \"clock\": \"Q4-02:22\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩2分22秒，杜兰特这球稳稳投进，火箭追到94比104但国王仍领先10分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_27",
+      "conversation": [
+        {
+          "invocationId": "case_27-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 102 国王 (【国王】 领先 10 分)\",\n  \"score_state\": \"国王领先10分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"火箭这暂停算是止血了，前面两次外线都被国王点穿，节奏确实乱了点。\",\n    \"德罗赞第二罚没进。\",\n    \"雷诺把这个后场板控制住了。\",\n    \"霍勒迪这下上去封得有点冒失，手直接打到德罗赞的出手，裁判又给了犯规。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-02:47】霍勒迪对德罗赞犯规 [92-102]\",\n    \"【Q4-02:35】雷诺上篮不中 [92-102]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:23:13\",\n    \"description\": \"雷诺上篮不中\",\n    \"score_at_event\": \"火箭 92-102 国王\",\n    \"clock\": \"Q4-02:35\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩2分35秒，国王雷诺杀到篮下强起上篮却没放进，比分仍是国王102比92领先火箭10分。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_28",
+      "conversation": [
+        {
+          "invocationId": "case_28-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 102 国王 (【国王】 领先 10 分)\",\n  \"score_state\": \"国王领先10分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"火箭这暂停算是止血了，前面两次外线都被国王点穿，节奏确实乱了点。\",\n    \"德罗赞第二罚没进。\",\n    \"雷诺把这个后场板控制住了。\",\n    \"霍勒迪这下上去封得有点冒失，手直接打到德罗赞的出手，裁判又给了犯规。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-02:54】火箭获得篮板球 [92-102]\",\n    \"【Q4-02:47】霍勒迪对德罗赞犯规 [92-102]\",\n    \"【Q4-02:31】雷诺抢到进攻篮板球 [92-102]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:23:17\",\n    \"description\": \"雷诺抢到进攻篮板球\",\n    \"score_at_event\": \"火箭 92-102 国王\",\n    \"clock\": \"Q4-02:31\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩2分31秒，雷诺在篮下硬生生抢下进攻篮板，国王这会儿还以102比92领先火箭10分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_29",
+      "conversation": [
+        {
+          "invocationId": "case_29-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 104 国王 (【国王】 领先 12 分)\",\n  \"score_state\": \"国王领先12分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"火箭这暂停算是止血了，前面两次外线都被国王点穿，节奏确实乱了点。\",\n    \"德罗赞第二罚没进。\",\n    \"雷诺把这个后场板控制住了。\",\n    \"霍勒迪这下上去封得有点冒失，手直接打到德罗赞的出手，裁判又给了犯规。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-02:54】火箭获得篮板球 [92-102]\",\n    \"【Q4-02:47】霍勒迪对德罗赞犯规 [92-102]\",\n    \"【Q4-02:30】雷诺上篮命中 [92-104]\",\n    \"【Q4-02:31】雷诺抢到进攻篮板球 [92-102]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:23:18\",\n    \"description\": \"雷诺上篮命中\",\n    \"score_at_event\": \"火箭 92-104 国王\",\n    \"clock\": \"Q4-02:30\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩2分30秒，国王雷诺抢下前场板顺势杀到篮下上篮打进，比分拉开到104比92领先12分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_31",
+      "conversation": [
+        {
+          "invocationId": "case_31-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 102 国王 (【国王】 领先 10 分)\",\n  \"score_state\": \"国王领先10分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿丘瓦从弱侧溜到底线，德罗赞这分球时机抓得挺准，阿丘瓦顺下直接把球放进去了。\",\n    \"申京这下在高位想往内线塞球，力量没控制好，被德罗赞直接把线路断掉了。\",\n    \"霍勒迪这下上前追得有点狠，手直接碰到德罗赞的出手，裁判给了两罚。\",\n    \"火箭这暂停算是止血了，前面两次外线都被国王点穿，节奏确实乱了点。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-02:54】霍勒迪对德罗赞投篮犯规，德罗赞2次罚球 [92-102]\",\n    \"【Q4-02:54】火箭请求暂停 [92-102]\",\n    \"【Q4-02:54】德罗赞第2罚不中 [92-102]\",\n    \"【Q4-02:54】火箭获得篮板球 [92-102]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:21:14\",\n    \"description\": \"火箭获得篮板球\",\n    \"score_at_event\": \"火箭 92-102 国王\",\n    \"clock\": \"Q4-02:54\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩2分54秒，德罗赞第二罚没进，火箭抢下篮板但仍以92比102落后国王10分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_32",
+      "conversation": [
+        {
+          "invocationId": "case_32-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 102 国王 (【国王】 领先 10 分)\",\n  \"score_state\": \"国王领先10分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿丘瓦从弱侧溜到底线，德罗赞这分球时机抓得挺准，阿丘瓦顺下直接把球放进去了。\",\n    \"申京这下在高位想往内线塞球，力量没控制好，被德罗赞直接把线路断掉了。\",\n    \"霍勒迪这下上前追得有点狠，手直接碰到德罗赞的出手，裁判给了两罚。\",\n    \"火箭这暂停算是止血了，前面两次外线都被国王点穿，节奏确实乱了点。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-02:54】霍勒迪对德罗赞投篮犯规，德罗赞2次罚球 [92-102]\",\n    \"【Q4-02:54】火箭请求暂停 [92-102]\",\n    \"【Q4-02:54】德罗赞第2罚不中 [92-102]\",\n    \"【Q4-02:54】火箭获得篮板球 [92-102]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:22:33\",\n    \"description\": \"德罗赞第2罚不中\",\n    \"score_at_event\": \"火箭 92-102 国王\",\n    \"clock\": \"Q4-02:54\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩2分54秒，德罗赞第二罚砸筐不中，比分仍是国王102比92领先10分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_33",
+      "conversation": [
+        {
+          "invocationId": "case_33-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 102 国王 (【国王】 领先 10 分)\",\n  \"score_state\": \"国王领先10分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺把篮板抓住了。\",\n    \"阿丘瓦从弱侧溜到底线，德罗赞这分球时机抓得挺准，阿丘瓦顺下直接把球放进去了。\",\n    \"申京这下在高位想往内线塞球，力量没控制好，被德罗赞直接把线路断掉了。\",\n    \"霍勒迪这下上前追得有点狠，手直接碰到德罗赞的出手，裁判给了两罚。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-03:17】阿丘瓦收到德罗赞助攻，空切上篮命中 [92-102]\",\n    \"【Q4-03:07】申京失误 [92-102]\",\n    \"【Q4-02:54】霍勒迪对德罗赞投篮犯规，德罗赞2次罚球 [92-102]\",\n    \"【Q4-02:54】火箭请求暂停 [92-102]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:18:58\",\n    \"description\": \"火箭请求暂停\",\n    \"score_at_event\": \"火箭 92-102 国王\",\n    \"clock\": \"Q4-02:54\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩2分54秒火箭92比102落后10分赶紧叫暂停，刚才霍勒迪对德罗赞投篮犯规送他两罚，这波得赶紧稳住了。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_34",
+      "conversation": [
+        {
+          "invocationId": "case_34-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 102 国王 (【国王】 领先 10 分)\",\n  \"score_state\": \"国王领先10分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"杜兰特弧顶这下三分有点发浮，直接擦筐弹出来了。火箭得赶紧把这次进攻再组织好。\",\n    \"雷诺把篮板抓住了。\",\n    \"阿丘瓦从弱侧溜到底线，德罗赞这分球时机抓得挺准，阿丘瓦顺下直接把球放进去了。\",\n    \"申京这下在高位想往内线塞球，力量没控制好，被德罗赞直接把线路断掉了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-03:38】杜兰特三分投篮不中 [92-100]\",\n    \"【Q4-03:17】阿丘瓦收到德罗赞助攻，空切上篮命中 [92-102]\",\n    \"【Q4-03:07】申京失误 [92-102]\",\n    \"【Q4-02:54】霍勒迪对德罗赞投篮犯规，德罗赞2次罚球 [92-102]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:18:38\",\n    \"description\": \"霍勒迪对德罗赞投篮犯规，德罗赞2次罚球\",\n    \"score_at_event\": \"火箭 92-102 国王\",\n    \"clock\": \"Q4-02:54\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩2分54秒，霍勒迪这下投篮犯规送德罗赞上罚球线两罚，国王102比92领先10分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_35",
+      "conversation": [
+        {
+          "invocationId": "case_35-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 102 国王 (【国王】 领先 10 分)\",\n  \"score_state\": \"国王领先10分，优势明显\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"小史密斯上来应该是为了把外线尺度再撑一撑，火箭这波要靠他和杜兰特在两侧把空间先拉开。\",\n    \"杜兰特弧顶这下三分有点发浮，直接擦筐弹出来了。火箭得赶紧把这次进攻再组织好。\",\n    \"雷诺把篮板抓住了。\",\n    \"阿丘瓦从弱侧溜到底线，德罗赞这分球时机抓得挺准，阿丘瓦顺下直接把球放进去了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-03:34】雷诺抢到防守篮板球 [92-100]\",\n    \"【Q4-03:38】杜兰特三分投篮不中 [92-100]\",\n    \"【Q4-03:17】阿丘瓦收到德罗赞助攻，空切上篮命中 [92-102]\",\n    \"【Q4-03:07】申京失误 [92-102]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:18:18\",\n    \"description\": \"申京失误\",\n    \"score_at_event\": \"火箭 92-102 国王\",\n    \"clock\": \"Q4-03:07\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩3分07秒，火箭92比102落后，申京这球处理太急直接失误把球权送给了国王！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_38",
+      "conversation": [
+        {
+          "invocationId": "case_38-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 100 国王 (【国王】 领先 8 分)\",\n  \"score_state\": \"国王领先8分\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿门在弧顶这一扣球有点随意，被威斯布鲁克从侧面直接把球掏走了。\",\n    \"火箭这个暂停来得很关键，连着被蒙克外线点了两下，节奏确实得先稳一稳。\",\n    \"蒙克右底角这下手起刀落，威斯布鲁克把人吸过来再分出去，整个路线都挺顺的。\",\n    \"小史密斯上来应该是为了把外线尺度再撑一撑，火箭这波要靠他和杜兰特在两侧把空间先拉开。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-03:47】火箭请求暂停 [92-100]\",\n    \"【Q4-03:47】火箭队换人，小史密斯上场，换下亚当斯 [92-100]\",\n    \"【Q4-03:38】杜兰特三分投篮不中 [92-100]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:17:44\",\n    \"description\": \"杜兰特三分投篮不中\",\n    \"score_at_event\": \"火箭 92-100 国王\",\n    \"clock\": \"Q4-03:38\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩3分38秒，火箭92比100落后，杜兰特外线三分拔起出手却弹框而出！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_39",
+      "conversation": [
+        {
+          "invocationId": "case_39-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 100 国王 (【国王】 领先 8 分)\",\n  \"score_state\": \"国王领先8分\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"蒙克左底角直接出手就进了，这一下把火箭的防线戳开了。\",\n    \"阿门在弧顶这一扣球有点随意，被威斯布鲁克从侧面直接把球掏走了。\",\n    \"火箭这个暂停来得很关键，连着被蒙克外线点了两下，节奏确实得先稳一稳。\",\n    \"蒙克右底角这下手起刀落，威斯布鲁克把人吸过来再分出去，整个路线都挺顺的。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:05】阿门失误，球被威斯布鲁克抢断 [92-97]\",\n    \"【Q4-03:49】蒙克收到威斯布鲁克助攻，三分投篮命中 [92-100]\",\n    \"【Q4-03:47】火箭请求暂停 [92-100]\",\n    \"【Q4-03:47】火箭队换人，小史密斯上场，换下亚当斯 [92-100]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:16:40\",\n    \"description\": \"火箭队换人，小史密斯上场，换下亚当斯\",\n    \"score_at_event\": \"火箭 92-100 国王\",\n    \"clock\": \"Q4-03:47\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"小史密斯\",\n      \"阿门\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩3分47秒火箭92比100落后8分，暂停后立刻换人让小史密斯上来顶掉亚当斯！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_40",
+      "conversation": [
+        {
+          "invocationId": "case_40-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 100 国王 (【国王】 领先 8 分)\",\n  \"score_state\": \"国王领先8分\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿门把后场板收下来了。\",\n    \"阿门这下想从侧翼把球拉出来，运得有点松，被阿丘瓦从身后直接把球掏走了。\",\n    \"蒙克左底角直接出手就进了，这一下把火箭的防线戳开了。\",\n    \"阿门在弧顶这一扣球有点随意，被威斯布鲁克从侧面直接把球掏走了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:20】蒙克收到德罗赞助攻，三分投篮命中 [92-97]\",\n    \"【Q4-04:05】阿门失误，球被威斯布鲁克抢断 [92-97]\",\n    \"【Q4-03:49】蒙克收到威斯布鲁克助攻，三分投篮命中 [92-100]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:15:53\",\n    \"description\": \"蒙克收到威斯布鲁克助攻，三分投篮命中\",\n    \"score_at_event\": \"火箭 92-100 国王\",\n    \"clock\": \"Q4-03:49\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"阿门\",\n      \"亚当斯\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩3分49秒，威斯布鲁克喂到外线，蒙克接球拔起就是一记三分穿心，比分拉开到国王100比92领先8分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_41",
+      "conversation": [
+        {
+          "invocationId": "case_41-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"current_score\": \"火箭 92 - 100 国王 (【国王】 领先 8 分)\",\n  \"score_state\": \"国王领先8分\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿门把后场板收下来了。\",\n    \"阿门这下想从侧翼把球拉出来，运得有点松，被阿丘瓦从身后直接把球掏走了。\",\n    \"蒙克左底角直接出手就进了，这一下把火箭的防线戳开了。\",\n    \"阿门在弧顶这一扣球有点随意，被威斯布鲁克从侧面直接把球掏走了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:20】蒙克收到德罗赞助攻，三分投篮命中 [92-97]\",\n    \"【Q4-04:05】阿门失误，球被威斯布鲁克抢断 [92-97]\",\n    \"【Q4-03:49】蒙克收到威斯布鲁克助攻，三分投篮命中 [92-100]\",\n    \"【Q4-03:47】火箭请求暂停 [92-100]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:16:05\",\n    \"description\": \"火箭请求暂停\",\n    \"score_at_event\": \"火箭 92-100 国王\",\n    \"clock\": \"Q4-03:47\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"阿门\",\n      \"亚当斯\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩3分47秒，蒙克刚连中三分把比分拉到国王100比92领先8分，火箭这边立刻叫了暂停稳一稳。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_42",
+      "conversation": [
+        {
+          "invocationId": "case_42-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"进入关键时刻，比分咬得很紧\",\n  \"current_score\": \"火箭 92 - 97 国王 (【国王】 领先 5 分)\",\n  \"score_state\": \"国王领先5分\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺近距离的抛投没打进，力度稍微大了点，球直接弹出来。\",\n    \"阿门把后场板收下来了。\",\n    \"阿门这下想从侧翼把球拉出来，运得有点松，被阿丘瓦从身后直接把球掏走了。\",\n    \"蒙克左底角直接出手就进了，这一下把火箭的防线戳开了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:28】阿门失误，球被阿丘瓦抢断 [92-94]\",\n    \"【Q4-04:31】阿门抢到防守篮板球 [92-94]\",\n    \"【Q4-04:20】蒙克收到德罗赞助攻，三分投篮命中 [92-97]\",\n    \"【Q4-04:05】阿门失误，球被威斯布鲁克抢断 [92-97]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:15:37\",\n    \"description\": \"阿门失误，球被威斯布鲁克抢断\",\n    \"score_at_event\": \"火箭 92-97 国王\",\n    \"clock\": \"Q4-04:05\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"阿门\",\n      \"亚当斯\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩4分05秒火箭92比97落后，阿门这球又失误了，被威斯布鲁克直接抢断！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_43",
+      "conversation": [
+        {
+          "invocationId": "case_43-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"进入关键时刻，比分咬得很紧\",\n  \"current_score\": \"火箭 92 - 97 国王 (【国王】 领先 5 分)\",\n  \"score_state\": \"国王领先5分\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"蒙克换下拉文，国王这调整挺直接，就是要在外线再多一个能自己处理球的人。\",\n    \"雷诺近距离的抛投没打进，力度稍微大了点，球直接弹出来。\",\n    \"阿门把后场板收下来了。\",\n    \"阿门这下想从侧翼把球拉出来，运得有点松，被阿丘瓦从身后直接把球掏走了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:34】雷诺投篮不中 [92-94]\",\n    \"【Q4-04:28】阿门失误，球被阿丘瓦抢断 [92-94]\",\n    \"【Q4-04:31】阿门抢到防守篮板球 [92-94]\",\n    \"【Q4-04:20】蒙克收到德罗赞助攻，三分投篮命中 [92-97]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:15:23\",\n    \"description\": \"蒙克收到德罗赞助攻，三分投篮命中\",\n    \"score_at_event\": \"火箭 92-97 国王\",\n    \"clock\": \"Q4-04:20\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"阿门\",\n      \"亚当斯\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩4分20秒，德罗赞一喂到位，蒙克外线三分手起刀落，国王把比分拉开到97比92领先5分！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_44",
+      "conversation": [
+        {
+          "invocationId": "case_44-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"进入关键时刻，比分咬得很紧\",\n  \"current_score\": \"火箭 92 - 94 国王 (【国王】 领先 2 分)\",\n  \"score_state\": \"国王微弱领先2分，比赛焦灼\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺把后场板抓住了，火箭刚才那两罚都没能拿下分。\",\n    \"国王这暂停叫得挺及时，两边这段完全是互相飙分的节奏，他们得先把外线对位重新排一排。\",\n    \"蒙克换下拉文，国王这调整挺直接，就是要在外线再多一个能自己处理球的人。\",\n    \"雷诺近距离的抛投没打进，力度稍微大了点，球直接弹出来。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:47】国王请求暂停 [92-94]\",\n    \"【Q4-04:47】国王队换人，蒙克上场，换下拉文 [92-94]\",\n    \"【Q4-04:34】雷诺投篮不中 [92-94]\",\n    \"【Q4-04:28】阿门失误，球被阿丘瓦抢断 [92-94]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:15:14\",\n    \"description\": \"阿门失误，球被阿丘瓦抢断\",\n    \"score_at_event\": \"火箭 92-94 国王\",\n    \"clock\": \"Q4-04:28\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"阿门\",\n      \"亚当斯\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩4分28秒火箭92比94落后2分，阿门这球处理失误被阿丘瓦直接抢断，国王反击机会来了！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_45",
+      "conversation": [
+        {
+          "invocationId": "case_45-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"进入关键时刻，比分咬得很紧\",\n  \"current_score\": \"火箭 92 - 94 国王 (【国王】 领先 2 分)\",\n  \"score_state\": \"国王微弱领先2分，比赛焦灼\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"雷诺把后场板抓住了，火箭刚才那两罚都没能拿下分。\",\n    \"国王这暂停叫得挺及时，两边这段完全是互相飙分的节奏，他们得先把外线对位重新排一排。\",\n    \"蒙克换下拉文，国王这调整挺直接，就是要在外线再多一个能自己处理球的人。\",\n    \"雷诺近距离的抛投没打进，力度稍微大了点，球直接弹出来。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:47】国王队换人，蒙克上场，换下拉文 [92-94]\",\n    \"【Q4-04:34】雷诺投篮不中 [92-94]\",\n    \"【Q4-04:31】阿门抢到防守篮板球 [92-94]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:15:11\",\n    \"description\": \"阿门抢到防守篮板球\",\n    \"score_at_event\": \"火箭 92-94 国王\",\n    \"clock\": \"Q4-04:31\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"阿门\",\n      \"亚当斯\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩4分31秒火箭92比94落后，阿门在篮下强硬摘下防守篮板把球牢牢控制住！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_46",
+      "conversation": [
+        {
+          "invocationId": "case_46-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"进入关键时刻，比分咬得很紧\",\n  \"current_score\": \"火箭 92 - 94 国王 (【国王】 领先 2 分)\",\n  \"score_state\": \"国王微弱领先2分，比赛焦灼\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"申京第二罚又弹出来了，火箭还是把球权留在手里。\",\n    \"雷诺把后场板抓住了，火箭刚才那两罚都没能拿下分。\",\n    \"国王这暂停叫得挺及时，两边这段完全是互相飙分的节奏，他们得先把外线对位重新排一排。\",\n    \"蒙克换下拉文，国王这调整挺直接，就是要在外线再多一个能自己处理球的人。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:47】国王获得篮板球 [92-94]\",\n    \"【Q4-04:47】国王请求暂停 [92-94]\",\n    \"【Q4-04:47】国王队换人，蒙克上场，换下拉文 [92-94]\",\n    \"【Q4-04:34】雷诺投篮不中 [92-94]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:15:11\",\n    \"description\": \"雷诺投篮不中\",\n    \"score_at_event\": \"火箭 92-94 国王\",\n    \"clock\": \"Q4-04:34\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"阿门\",\n      \"亚当斯\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩4分34秒国王94比92领先，雷诺这球出手砸筐不中，关键时刻这一次进攻没把分差拉开！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_47",
+      "conversation": [
+        {
+          "invocationId": "case_47-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"进入关键时刻，比分咬得很紧\",\n  \"current_score\": \"火箭 92 - 94 国王 (【国王】 领先 2 分)\",\n  \"score_state\": \"国王微弱领先2分，比赛焦灼\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿门把球抓住了，火箭这回合还能继续压着往前打。\",\n    \"申京第二罚又弹出来了，火箭还是把球权留在手里。\",\n    \"雷诺把后场板抓住了，火箭刚才那两罚都没能拿下分。\",\n    \"国王这暂停叫得挺及时，两边这段完全是互相飙分的节奏，他们得先把外线对位重新排一排。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:49】申京第2罚不中 [92-94]\",\n    \"【Q4-04:47】国王获得篮板球 [92-94]\",\n    \"【Q4-04:47】国王请求暂停 [92-94]\",\n    \"【Q4-04:47】国王队换人，蒙克上场，换下拉文 [92-94]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:12:51\",\n    \"description\": \"国王队换人，蒙克上场，换下拉文\",\n    \"score_at_event\": \"火箭 92-94 国王\",\n    \"clock\": \"Q4-04:47\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"阿门\",\n      \"亚当斯\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"蒙克\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩4分47秒国王94比92领先2分，暂停后直接换人调整——蒙克登场把拉文换下！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_48",
+      "conversation": [
+        {
+          "invocationId": "case_48-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"进入关键时刻，比分咬得很紧\",\n  \"current_score\": \"火箭 92 - 94 国王 (【国王】 领先 2 分)\",\n  \"score_state\": \"国王微弱领先2分，比赛焦灼\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"申京第一罚没进。\",\n    \"申京走回罚球线准备第二罚。\",\n    \"申京第二罚又弹出来了。\",\n    \"雷诺把后场板抓住了，火箭刚才那两罚都没能拿下分。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:49】申京第1罚不中 [92-94]\",\n    \"【Q4-04:49】申京第2罚不中 [92-94]\",\n    \"【Q4-04:47】国王获得篮板球 [92-94]\",\n    \"【Q4-04:47】国王请求暂停 [92-94]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:12:00\",\n    \"description\": \"国王请求暂停\",\n    \"score_at_event\": \"火箭 92-94 国王\",\n    \"clock\": \"Q4-04:47\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"阿门\",\n      \"亚当斯\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"拉文\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩4分47秒国王92比94领先两分直接喊暂停，刚才申京两罚全丢让火箭没能追平！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_49",
+      "conversation": [
+        {
+          "invocationId": "case_49-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"进入关键时刻，比分咬得很紧\",\n  \"current_score\": \"火箭 92 - 94 国王 (【国王】 领先 2 分)\",\n  \"score_state\": \"国王微弱领先2分，比赛焦灼\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿丘瓦这一扑明显拍到申京的手上了，这犯规太实了，申京要站上罚球线。\",\n    \"申京第一罚没进。\",\n    \"申京走回罚球线准备第二罚。\",\n    \"申京第二罚又弹出来了。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:49】阿丘瓦对申京投篮犯规，申京2次罚球 [92-94]\",\n    \"【Q4-04:49】申京第1罚不中 [92-94]\",\n    \"【Q4-04:49】申京第2罚不中 [92-94]\",\n    \"【Q4-04:47】国王获得篮板球 [92-94]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:11:49\",\n    \"description\": \"国王获得篮板球\",\n    \"score_at_event\": \"火箭 92-94 国王\",\n    \"clock\": \"Q4-04:47\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"阿门\",\n      \"亚当斯\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"拉文\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩4分47秒，申京两罚全丢后国王抢下篮板，94比92继续握着2分领先准备推进！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    },
+    {
+      "evalId": "case_50",
+      "conversation": [
+        {
+          "invocationId": "case_50-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\n  \"matchup\": \"火箭 vs 国王\",\n  \"time_node\": \"进入关键时刻，比分咬得很紧\",\n  \"current_score\": \"火箭 92 - 94 国王 (【国王】 领先 2 分)\",\n  \"score_state\": \"国王微弱领先2分，比赛焦灼\",\n  \"game_stats\": \"27次领先交替, 12次平分\",\n  \"tactical_context\": \"当前场面：双方展开对攻，命中率很高。\",\n  \"recent_commentary\": [\n    \"阿丘瓦这一扑明显拍到申京的手上了，这犯规太实了，申京要站上罚球线。\",\n    \"申京第一罚没进。\",\n    \"申京走回罚球线准备第二罚。\",\n    \"申京第二罚又弹筐而出。\"\n  ],\n  \"recent_events\": [\n    \"【Q4-04:49】阿丘瓦对申京投篮犯规，申京2次罚球 [92-94]\",\n    \"【Q4-04:49】申京第1罚不中 [92-94]\",\n    \"【Q4-04:49】申京第2罚不中 [92-94]\"\n  ],\n  \"current_event\": {\n    \"event_id\": \"2026-01-12 12:11:45\",\n    \"description\": \"申京第2罚不中\",\n    \"score_at_event\": \"火箭 92-94 国王\",\n    \"clock\": \"Q4-04:49\"\n  },\n  \"on_court\": {\n    \"火箭\": [\n      \"申京\",\n      \"阿门\",\n      \"亚当斯\",\n      \"杜兰特\",\n      \"霍勒迪\"\n    ],\n    \"国王\": [\n      \"阿丘瓦\",\n      \"雷诺\",\n      \"德罗赞\",\n      \"威斯布鲁克\",\n      \"拉文\"\n    ]\n  }\n}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "第四节还剩4分49秒，火箭92比94落后国王2分，申京第二罚又弹筐而出！"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-nba-commentary-app",
+        "userId": "sports-demo-user"
+      }
+    }
+  ]
+}
