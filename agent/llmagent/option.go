@@ -396,8 +396,14 @@ type Options struct {
 	// allowedSkillTools, when non-nil, overrides skillToolProfile and limits
 	// the final built-in skill tool registration set to this explicit allowlist.
 	allowedSkillTools []string
+	// skillsCapabilityGuidance overrides the built-in skill capability
+	// disclosure block.
+	skillsCapabilityGuidance *string
 	// skillsToolingGuidance overrides the built-in skills guidance block.
 	skillsToolingGuidance *string
+	// skillsDirectoryHints exposes skill directory locators in prompt
+	// materialization when enabled.
+	skillsDirectoryHints bool
 	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
@@ -752,6 +758,32 @@ func WithSkillsToolingGuidance(
 	return func(opts *Options) {
 		text := guidance
 		opts.skillsToolingGuidance = &text
+	}
+}
+
+// WithSkillsCapabilityGuidance overrides the capability disclosure block
+// appended to the skills overview.
+//
+// Behavior:
+//   - Not configured: use the built-in default disclosure.
+//   - Configured with empty string: omit the capability block.
+//   - Configured with non-empty string: append the provided text.
+func WithSkillsCapabilityGuidance(
+	guidance string,
+) Option {
+	return func(opts *Options) {
+		text := guidance
+		opts.skillsCapabilityGuidance = &text
+	}
+}
+
+// WithSkillsDirectoryHints exposes skill directory locators in the skills
+// overview and in loaded skill materialization.
+//
+// Default: false.
+func WithSkillsDirectoryHints(enable bool) Option {
+	return func(opts *Options) {
+		opts.skillsDirectoryHints = enable
 	}
 }
 

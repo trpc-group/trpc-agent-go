@@ -40,6 +40,7 @@ const (
 	skillsOverviewHeader        = "Available skills:"
 	skillsCapabilityHeader      = "Skill tool availability:"
 	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
+	skillRootsHeader            = "Skill roots:"
 	workspaceExecGuidanceHeader = "Executor workspace guidance:"
 )
 
@@ -824,6 +825,87 @@ func TestLLMAgent_WithSkillToolProfile_KnowledgeOnly_GuidanceDisabled(
 	require.NotEmpty(t, sys)
 	require.NotContains(t, sys, skillsCapabilityHeader)
 	require.NotContains(t, sys, skillsToolingGuidanceHeader)
+}
+
+func TestLLMAgent_WithSkillsDirectoryHints_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillsDirectoryHints(true)(opts)
+	WithSkillToolProfile(SkillToolProfileKnowledgeOnly)(opts)
+	WithSkillsCapabilityGuidance("")(opts)
+	WithSkillsToolingGuidance("")(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, skillRootsHeader)
+	require.Contains(t, sys, "(dir: [s1]/echoer)")
+}
+
+func TestLLMAgent_WithSkillsCapabilityGuidance_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillToolProfile(SkillToolProfileKnowledgeOnly)(opts)
+	WithSkillsCapabilityGuidance("Use skills as directory bundles.")(opts)
+	WithSkillsToolingGuidance("")(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, "Use skills as directory bundles.")
+	require.NotContains(
+		t,
+		sys,
+		"Built-in skill execution tools are unavailable",
+	)
 }
 
 func TestLLMAgent_WithAllowedSkillTools_LoadOnly_WiresPrompt(

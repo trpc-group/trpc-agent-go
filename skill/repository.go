@@ -70,6 +70,13 @@ type Repository interface {
 	Path(name string) (string, error)
 }
 
+// RootedRepository optionally exposes the configured skill roots.
+// Runtimes can use this to render compact directory locators in prompts.
+type RootedRepository interface {
+	Repository
+	Roots() []string
+}
+
 // RefreshableRepository can rescan its backing skill sources.
 type RefreshableRepository interface {
 	Repository
@@ -128,6 +135,13 @@ func (r *FSRepository) Path(name string) (string, error) {
 		return "", fmt.Errorf("skill %q not found", name)
 	}
 	return dir, nil
+}
+
+// Roots returns the configured filesystem roots.
+func (r *FSRepository) Roots() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]string(nil), r.roots...)
 }
 
 func scanRoots(roots []string) (map[string]string, error) {

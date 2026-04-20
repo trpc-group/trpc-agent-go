@@ -26,8 +26,10 @@ import (
 )
 
 type mockRepo struct {
-	sums []skill.Summary
-	full map[string]*skill.Skill
+	sums  []skill.Summary
+	full  map[string]*skill.Skill
+	paths map[string]string
+	roots []string
 }
 
 func (m *mockRepo) Summaries() []skill.Summary { return m.sums }
@@ -37,7 +39,16 @@ func (m *mockRepo) Get(name string) (*skill.Skill, error) {
 	}
 	return nil, nil
 }
-func (m *mockRepo) Path(name string) (string, error) { return "", nil }
+func (m *mockRepo) Path(name string) (string, error) {
+	if dir, ok := m.paths[name]; ok {
+		return dir, nil
+	}
+	return "", nil
+}
+
+func (m *mockRepo) Roots() []string {
+	return append([]string(nil), m.roots...)
+}
 
 func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	t *testing.T,
@@ -221,6 +232,78 @@ func TestSkillsRequestProcessor_ToolingGuidance_Disabled(t *testing.T) {
 	require.Contains(t, sys, skillsOverviewHeader)
 	require.NotContains(t, sys, skillsCapabilityHeader)
 	require.NotContains(t, sys, skillsToolingGuidanceHeader)
+}
+
+func TestSkillsRequestProcessor_DirectoryHints(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math ops"}},
+		full: map[string]*skill.Skill{
+			"calc": {
+				Summary: skill.Summary{Name: "calc"},
+				Body:    "Calc body",
+			},
+		},
+		paths: map[string]string{
+			"calc": "/tmp/skills/local/calc",
+		},
+		roots: []string{"/tmp/skills/local"},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+		},
+	}
+
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillLoadMode(SkillLoadModeSession),
+		WithSkillsDirectoryHints(true),
+		WithSkillsCapabilityGuidance(""),
+		WithSkillsToolingGuidance(""),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, skillRootsHeader)
+	require.Contains(t, sys, "- [s1]=/tmp/skills/local")
+	require.Contains(t, sys, "- calc: math ops (dir: [s1]/calc)")
+	require.Contains(t, sys, "[Loaded] calc")
+	require.Contains(t, sys, skillDirLabel+"/tmp/skills/local/calc")
+}
+
+func TestSkillsRequestProcessor_CapabilityGuidanceOverride(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "x", Description: "d"}},
+		full: map[string]*skill.Skill{},
+	}
+	inv := &agent.Invocation{Session: &session.Session{}}
+	req := &model.Request{Messages: nil}
+	p := NewSkillsRequestProcessor(
+		repo,
+		WithSkillToolProfile(skillprofile.KnowledgeOnly),
+		WithSkillsCapabilityGuidance("Use skills as directory bundles."),
+		WithSkillsToolingGuidance(""),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	sys := req.Messages[0].Content
+	require.Contains(t, sys, "Use skills as directory bundles.")
+	require.NotContains(
+		t,
+		sys,
+		"Built-in skill execution tools are unavailable",
+	)
 }
 
 func TestSkillsRequestProcessor_ExecToolsDisabled(t *testing.T) {
@@ -1553,6 +1636,53 @@ func TestSkillsToolResultRequestProcessor_FallbackSystemMessageAdded(
 			continue
 		}
 		require.NotContains(t, m.Content, skillsLoadedContextHeader)
+	}
+}
+
+func TestSkillsToolResultRequestProcessor_DirectoryHints(t *testing.T) {
+	repo := &mockRepo{
+		sums: []skill.Summary{{Name: "calc", Description: "math"}},
+		full: map[string]*skill.Skill{
+			"calc": {Summary: skill.Summary{Name: "calc"}, Body: "B"},
+		},
+		paths: map[string]string{
+			"calc": "/tmp/skills/local/calc",
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("sys"),
+			model.NewUserMessage("u"),
+		},
+	}
+
+	p := NewSkillsToolResultRequestProcessor(
+		repo,
+		WithSkillsToolResultLoadMode(SkillLoadModeSession),
+		WithSkillsToolResultDirectoryHints(true),
+	)
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	for _, m := range req.Messages {
+		if m.Role != model.RoleSystem {
+			continue
+		}
+		if !strings.Contains(m.Content, skillsLoadedContextHeader) {
+			continue
+		}
+		require.Contains(t, m.Content, "[Loaded] calc")
+		require.Contains(t, m.Content, skillDirLabel+"/tmp/skills/local/calc")
 	}
 }
 

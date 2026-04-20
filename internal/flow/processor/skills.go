@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -32,6 +33,9 @@ const (
 
 	skillsToolingGuidanceHeader = "Tooling and workspace guidance:"
 
+	skillRootsHeader = "Skill roots:"
+	skillDirLabel    = "Skill dir: "
+
 	// SkillLoadModeOnce injects loaded skill content for the next model
 	// request, then offloads it from session state.
 	SkillLoadModeOnce = "once"
@@ -47,16 +51,18 @@ const (
 )
 
 type skillsRequestProcessorOptions struct {
-	toolingGuidance   *string
-	loadMode          string
-	toolResultMode    bool
-	maxLoadedSkills   int
-	toolProfile       string
-	toolFlags         skillprofile.Flags
-	toolFlagsResolver func(*agent.Invocation) skillprofile.Flags
-	hasToolFlags      bool
-	execToolsDisabled bool
-	repoResolver      func(*agent.Invocation) skill.Repository
+	capabilityGuidance *string
+	toolingGuidance    *string
+	loadMode           string
+	toolResultMode     bool
+	maxLoadedSkills    int
+	toolProfile        string
+	toolFlags          skillprofile.Flags
+	toolFlagsResolver  func(*agent.Invocation) skillprofile.Flags
+	hasToolFlags       bool
+	execToolsDisabled  bool
+	repoResolver       func(*agent.Invocation) skill.Repository
+	directoryHints     bool
 }
 
 // SkillsRequestProcessorOption configures SkillsRequestProcessor.
@@ -89,6 +95,22 @@ func WithSkillsToolingGuidance(
 	return func(o *skillsRequestProcessorOptions) {
 		text := guidance
 		o.toolingGuidance = &text
+	}
+}
+
+// WithSkillsCapabilityGuidance overrides the capability disclosure block
+// appended to the skills overview.
+//
+// Behavior:
+//   - Not configured: use the built-in default disclosure.
+//   - Configured with empty string: omit the capability block.
+//   - Configured with non-empty string: append the provided text.
+func WithSkillsCapabilityGuidance(
+	guidance string,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		text := guidance
+		o.capabilityGuidance = &text
 	}
 }
 
@@ -167,6 +189,16 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 	}
 }
 
+// WithSkillsDirectoryHints exposes skill directory locators in the skills
+// overview and in loaded skill materialization.
+func WithSkillsDirectoryHints(
+	enable bool,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.directoryHints = enable
+	}
+}
+
 // SkillsRequestProcessor injects skill overviews and loaded contents.
 //
 // Behavior:
@@ -179,14 +211,16 @@ func WithMaxLoadedSkills(max int) SkillsRequestProcessorOption {
 //   - skill.DocsKey(agentName, skillName) ->
 //     "*" or JSON array of file names.
 type SkillsRequestProcessor struct {
-	repo              skill.Repository
-	repoResolver      func(*agent.Invocation) skill.Repository
-	toolingGuidance   *string
-	loadMode          string
-	toolResultMode    bool
-	maxLoadedSkills   int
-	toolFlags         skillprofile.Flags
-	toolFlagsResolver func(*agent.Invocation) skillprofile.Flags
+	repo               skill.Repository
+	repoResolver       func(*agent.Invocation) skill.Repository
+	capabilityGuidance *string
+	toolingGuidance    *string
+	loadMode           string
+	toolResultMode     bool
+	maxLoadedSkills    int
+	toolFlags          skillprofile.Flags
+	toolFlagsResolver  func(*agent.Invocation) skillprofile.Flags
+	directoryHints     bool
 }
 
 const (
@@ -218,14 +252,16 @@ func NewSkillsRequestProcessor(
 		flags = flags.WithoutInteractiveExecution()
 	}
 	return &SkillsRequestProcessor{
-		repo:              repo,
-		repoResolver:      options.repoResolver,
-		toolingGuidance:   options.toolingGuidance,
-		loadMode:          normalizeSkillLoadMode(options.loadMode),
-		toolResultMode:    options.toolResultMode,
-		maxLoadedSkills:   options.maxLoadedSkills,
-		toolFlags:         flags,
-		toolFlagsResolver: options.toolFlagsResolver,
+		repo:               repo,
+		repoResolver:       options.repoResolver,
+		capabilityGuidance: options.capabilityGuidance,
+		toolingGuidance:    options.toolingGuidance,
+		loadMode:           normalizeSkillLoadMode(options.loadMode),
+		toolResultMode:     options.toolResultMode,
+		maxLoadedSkills:    options.maxLoadedSkills,
+		toolFlags:          flags,
+		toolFlagsResolver:  options.toolFlagsResolver,
+		directoryHints:     options.directoryHints,
 	}
 }
 
@@ -292,7 +328,15 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 		if sk.Body != "" {
 			lb.WriteString("\n[Loaded] ")
 			lb.WriteString(name)
-			lb.WriteString("\n\n")
+			lb.WriteString("\n")
+			if p.directoryHints {
+				if dir := skillDirectoryText(ctx, repo, name); dir != "" {
+					lb.WriteString(skillDirLabel)
+					lb.WriteString(dir)
+					lb.WriteString("\n")
+				}
+			}
+			lb.WriteString("\n")
 			lb.WriteString(sk.Body)
 			lb.WriteString("\n")
 		}
@@ -672,8 +716,18 @@ func (p *SkillsRequestProcessor) injectOverview(
 	var b strings.Builder
 	b.WriteString(skillsOverviewHeader)
 	b.WriteString("\n")
+	if p.directoryHints {
+		if rootsText := buildSkillRootsText(repo); rootsText != "" {
+			b.WriteString(rootsText)
+		}
+	}
 	for _, s := range sums {
-		line := fmt.Sprintf("- %s: %s\n", s.Name, s.Description)
+		line := fmt.Sprintf(
+			"- %s: %s%s\n",
+			s.Name,
+			s.Description,
+			p.skillDirectorySuffix(ctx, repo, s.Name),
+		)
 		b.WriteString(line)
 	}
 	flags := p.toolFlagsForInvocation(inv)
@@ -723,6 +777,9 @@ func (p *SkillsRequestProcessor) toolingGuidanceText(
 func (p *SkillsRequestProcessor) capabilityGuidanceText(
 	flags skillprofile.Flags,
 ) string {
+	if p.capabilityGuidance != nil {
+		return normalizeGuidance(*p.capabilityGuidance)
+	}
 	if p.toolingGuidance != nil && *p.toolingGuidance == "" {
 		return ""
 	}
@@ -957,6 +1014,125 @@ func defaultFullToolingAndWorkspaceGuidance(flags skillprofile.Flags) string {
 	b.WriteString("rather than inventing shell syntax or command ")
 	b.WriteString("arguments.\n")
 	return b.String()
+}
+
+type skillRootAlias struct {
+	alias string
+	root  string
+}
+
+func buildSkillRootsText(repo skill.Repository) string {
+	aliases := skillRootAliases(repo)
+	if len(aliases) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(skillRootsHeader)
+	b.WriteString("\n")
+	for _, item := range aliases {
+		b.WriteString("- [")
+		b.WriteString(item.alias)
+		b.WriteString("]=")
+		b.WriteString(item.root)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func skillRootAliases(repo skill.Repository) []skillRootAlias {
+	rooted, ok := repo.(skill.RootedRepository)
+	if !ok || rooted == nil {
+		return nil
+	}
+	roots := rooted.Roots()
+	if len(roots) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(roots))
+	aliases := make([]skillRootAlias, 0, len(roots))
+	for _, root := range roots {
+		root = filepath.Clean(strings.TrimSpace(root))
+		if root == "" {
+			continue
+		}
+		if _, ok := seen[root]; ok {
+			continue
+		}
+		seen[root] = struct{}{}
+		aliases = append(aliases, skillRootAlias{
+			alias: fmt.Sprintf("s%d", len(aliases)+1),
+			root:  root,
+		})
+	}
+	return aliases
+}
+
+func (p *SkillsRequestProcessor) skillDirectorySuffix(
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) string {
+	if !p.directoryHints {
+		return ""
+	}
+	locator := skillDirectoryLocator(ctx, repo, name)
+	if locator == "" {
+		return ""
+	}
+	return " (dir: " + locator + ")"
+}
+
+func skillDirectoryLocator(
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) string {
+	dir := skillDirectoryText(ctx, repo, name)
+	if dir == "" {
+		return ""
+	}
+	for _, item := range skillRootAliases(repo) {
+		rel, ok := relativeSkillDir(item.root, dir)
+		if !ok {
+			continue
+		}
+		if rel == "" {
+			return "[" + item.alias + "]"
+		}
+		return "[" + item.alias + "]/" + rel
+	}
+	return dir
+}
+
+func skillDirectoryText(
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) string {
+	dir, err := skill.PathForContext(ctx, repo, name)
+	if err != nil {
+		return ""
+	}
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if dir == "" {
+		return ""
+	}
+	return filepath.ToSlash(dir)
+}
+
+func relativeSkillDir(root string, dir string) (string, bool) {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return "", false
+	}
+	rel = filepath.Clean(rel)
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	if rel == "." {
+		return "", true
+	}
+	return filepath.ToSlash(rel), true
 }
 
 func appendKnowledgeGuidance(

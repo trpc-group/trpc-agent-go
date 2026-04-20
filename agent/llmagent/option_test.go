@@ -250,6 +250,30 @@ func TestWithSkillsLoadedContentInToolResults(t *testing.T) {
 	require.True(t, b.option.SkillsLoadedContentInToolResults)
 }
 
+func TestWithSkillsDirectoryHints(t *testing.T) {
+	a := New("test-agent")
+	require.False(t, a.option.skillsDirectoryHints)
+
+	b := New("test-agent", WithSkillsDirectoryHints(true))
+	require.True(t, b.option.skillsDirectoryHints)
+}
+
+func TestWithSkillsCapabilityGuidance(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.skillsCapabilityGuidance)
+
+	b := New(
+		"test-agent",
+		WithSkillsCapabilityGuidance("Use directory bundles."),
+	)
+	require.NotNil(t, b.option.skillsCapabilityGuidance)
+	require.Equal(
+		t,
+		"Use directory bundles.",
+		*b.option.skillsCapabilityGuidance,
+	)
+}
+
 func TestWithSkillFilter(t *testing.T) {
 	a := New("test-agent")
 	require.Nil(t, a.option.skillFilter)

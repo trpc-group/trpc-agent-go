@@ -1418,6 +1418,41 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 		sys,
 		"Tooling and workspace guidance:",
 	)
+	require.NotContains(t, sys, "Skill tool availability:")
+}
+
+func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	sys := joinSystemMessages(req)
+	require.Contains(t, sys, "Available skills:")
+	require.Contains(
+		t,
+		sys,
+		"Treat the skill overview as an index of skill directories.",
+	)
+	require.Contains(t, sys, "(dir: ")
+	require.NotContains(t, sys, "Skill tool availability:")
+	require.NotContains(
+		t,
+		sys,
+		"Built-in skill execution tools are unavailable",
+	)
 }
 
 func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {

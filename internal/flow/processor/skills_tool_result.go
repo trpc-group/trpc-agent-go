@@ -34,6 +34,7 @@ type skillsToolResultProcessorOptions struct {
 	loadMode                     string
 	skipFallbackOnSessionSummary bool
 	repoResolver                 func(*agent.Invocation) skill.Repository
+	directoryHints               bool
 }
 
 // SkillsToolResultRequestProcessorOption configures
@@ -79,6 +80,16 @@ func WithSkillsToolResultRepositoryResolver(
 	}
 }
 
+// WithSkillsToolResultDirectoryHints exposes skill directory locators in
+// loaded skill materialization.
+func WithSkillsToolResultDirectoryHints(
+	enable bool,
+) SkillsToolResultRequestProcessorOption {
+	return func(o *skillsToolResultProcessorOptions) {
+		o.directoryHints = enable
+	}
+}
+
 // SkillsToolResultRequestProcessor materializes loaded skill content
 // into tool result messages (skill_load / skill_select_docs) when
 // possible.
@@ -96,6 +107,7 @@ type SkillsToolResultRequestProcessor struct {
 	loadMode     string
 
 	skipFallbackOnSessionSummary bool
+	directoryHints               bool
 }
 
 // NewSkillsToolResultRequestProcessor creates a processor instance.
@@ -117,6 +129,7 @@ func NewSkillsToolResultRequestProcessor(
 		repoResolver:                 options.repoResolver,
 		loadMode:                     normalizeSkillLoadMode(options.loadMode),
 		skipFallbackOnSessionSummary: options.skipFallbackOnSessionSummary,
+		directoryHints:               options.directoryHints,
 	}
 }
 
@@ -393,7 +406,15 @@ func (p *SkillsToolResultRequestProcessor) buildToolResultContent(
 	if strings.TrimSpace(sk.Body) != "" {
 		b.WriteString("[Loaded] ")
 		b.WriteString(skillName)
-		b.WriteString("\n\n")
+		b.WriteString("\n")
+		if p.directoryHints {
+			if dir := skillDirectoryText(ctx, repo, skillName); dir != "" {
+				b.WriteString(skillDirLabel)
+				b.WriteString(dir)
+				b.WriteString("\n")
+			}
+		}
+		b.WriteString("\n")
 		b.WriteString(sk.Body)
 		b.WriteString("\n")
 	}
@@ -509,7 +530,15 @@ func (p *SkillsToolResultRequestProcessor) buildFallbackSystemContent(
 		if strings.TrimSpace(sk.Body) != "" {
 			b.WriteString("\n[Loaded] ")
 			b.WriteString(name)
-			b.WriteString("\n\n")
+			b.WriteString("\n")
+			if p.directoryHints {
+				if dir := skillDirectoryText(ctx, repo, name); dir != "" {
+					b.WriteString(skillDirLabel)
+					b.WriteString(dir)
+					b.WriteString("\n")
+				}
+			}
+			b.WriteString("\n")
 			b.WriteString(sk.Body)
 			b.WriteString("\n")
 			appended = true

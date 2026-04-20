@@ -261,6 +261,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	// deciding on tool calls.
 	skillFlags := mustResolveSkillToolFlags(options)
 	var skillsOpts []processor.SkillsRequestProcessorOption
+	if options.skillsCapabilityGuidance != nil {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillsCapabilityGuidance(
+				*options.skillsCapabilityGuidance,
+			),
+		)
+	}
 	if options.skillsToolingGuidance != nil {
 		skillsOpts = append(
 			skillsOpts,
@@ -278,6 +286,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithSkillToolFlags(skillFlags),
 		processor.WithSkillToolFlagsResolver(
 			a.skillToolFlagsForInvocation,
+		),
+		processor.WithSkillsDirectoryHints(
+			options.skillsDirectoryHints,
 		),
 	)
 	if options.MaxLoadedSkills > 0 {
@@ -420,6 +431,9 @@ func appendSkillsToolResultProcessor(a *LLMAgent, options *Options, requestProce
 			),
 			processor.WithSkillsToolResultLoadMode(
 				options.SkillLoadMode,
+			),
+			processor.WithSkillsToolResultDirectoryHints(
+				options.skillsDirectoryHints,
 			),
 			processor.WithSkipSkillsFallbackOnSessionSummary(
 				options.SkipSkillsFallbackOnSessionSummary,

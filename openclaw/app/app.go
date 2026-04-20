@@ -89,6 +89,23 @@ const (
 	defaultAgentName        = "assistant"
 	defaultAgentInstruction = "You are a helpful assistant. " +
 		"Keep replies concise."
+	openClawSkillsGuidance = "Treat the skill overview as an index " +
+		"of skill directories. When a skill looks relevant, " +
+		"call skill_load promptly so SKILL.md is in context " +
+		"before giving precise guidance or acting on the " +
+		"workflow. After loading a skill, inspect only the " +
+		"supporting docs, scripts, assets, examples, or " +
+		"templates you still need from that skill's " +
+		"directory. Follow the loaded skill instructions " +
+		"and bundled resources to complete the task, and " +
+		"reuse bundled scripts or templates when they " +
+		"already fit. Do not invent commands, flags, auth " +
+		"steps, file layouts, or release procedures from a " +
+		"short summary or partial memory alone. If a " +
+		"needed detail is missing, read the relevant skill " +
+		"files first. Only describe a blocker when a real " +
+		"missing permission, credential, network path, or " +
+		"runtime tool prevents completion."
 	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
 		"and spreadsheet uploads already in the chat, prefer " +
 		"read_document or read_spreadsheet before falling back " +
@@ -2156,6 +2173,8 @@ func newAgent(
 		llmagent.WithSkillToolProfile(
 			llmagent.SkillToolProfile(cfg.SkillsToolProfile),
 		),
+		llmagent.WithSkillsDirectoryHints(true),
+		llmagent.WithSkillsCapabilityGuidance(""),
 		llmagent.WithSkillLoadMode(cfg.SkillsLoadMode),
 		llmagent.WithSkillsLoadedContentInToolResults(
 			cfg.SkillsToolResults,
@@ -2163,19 +2182,14 @@ func newAgent(
 		llmagent.WithSkipSkillsFallbackOnSessionSummary(
 			cfg.SkillsSkipFallback,
 		),
+		llmagent.WithSkillsToolingGuidance(
+			buildOpenClawSkillsGuidance(cfg),
+		),
 	)
 	if cfg.SkillsMaxLoaded > 0 {
 		opts = append(
 			opts,
 			llmagent.WithMaxLoadedSkills(cfg.SkillsMaxLoaded),
-		)
-	}
-	if cfg.SkillsToolingGuide != nil {
-		opts = append(
-			opts,
-			llmagent.WithSkillsToolingGuidance(
-				*cfg.SkillsToolingGuide,
-			),
 		)
 	}
 	if len(tools) > 0 {
@@ -2209,6 +2223,13 @@ func buildOpenClawToolingGuidance(cfg agentConfig) string {
 		return strings.TrimSpace(*cfg.OpenClawToolingGuide)
 	}
 	return strings.TrimSpace(openClawToolingGuidance)
+}
+
+func buildOpenClawSkillsGuidance(cfg agentConfig) string {
+	if cfg.SkillsToolingGuide != nil {
+		return strings.TrimSpace(*cfg.SkillsToolingGuide)
+	}
+	return strings.TrimSpace(openClawSkillsGuidance)
 }
 
 func hasToolNamed(tools []tool.Tool, name string) bool {
