@@ -30,7 +30,7 @@ var _ embedder.Embedder = (*Embedder)(nil)
 
 const (
 	// DefaultModel is the default Gemini embedding model.
-	DefaultModel = ModelGeminiEmbeddingExp0307
+	DefaultModel = ModelGeminiEmbedding001
 	// DefaultDimensions is the default embedding dimension.
 	DefaultDimensions = 1536
 	// DefaultTaskType is the default task type.
