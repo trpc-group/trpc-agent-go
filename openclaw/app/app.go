@@ -126,6 +126,15 @@ const (
 		"input after reasonable local exploration, state " +
 		"the issue briefly and continue with the best " +
 		"fallback."
+	openClawSkillLoadToolDescription = "Load a skill body and optional " +
+		"docs. This is a blocking requirement when the user " +
+		"names a listed skill, names a slash command, or the " +
+		"task clearly matches a listed skill description. " +
+		"Call this tool before any other substantive response " +
+		"about that task. Do not answer from a short skill " +
+		"summary, prior knowledge, or partial memory when a " +
+		"matching skill exists. Load `SKILL.md` first, then " +
+		"load only the extra docs you still need."
 	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
 		"and spreadsheet uploads already in the chat, prefer " +
 		"read_document or read_spreadsheet before falling back " +
@@ -2198,6 +2207,9 @@ func newAgent(
 		llmagent.WithSkillLoadMode(cfg.SkillsLoadMode),
 		llmagent.WithSkillsLoadedContentInToolResults(
 			cfg.SkillsToolResults,
+		),
+		llmagent.WithSkillLoadToolDescription(
+			openClawSkillLoadToolDescription,
 		),
 		llmagent.WithSkipSkillsFallbackOnSessionSummary(
 			cfg.SkillsSkipFallback,

@@ -410,6 +410,9 @@ type Options struct {
 	// skillsFilePathHints exposes SKILL.md file locators in prompt
 	// materialization when enabled.
 	skillsFilePathHints bool
+	// skillLoadToolDescription overrides the built-in skill_load tool
+	// description when non-nil.
+	skillLoadToolDescription *string
 	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
@@ -817,6 +820,22 @@ func WithSkillsDirectoryHints(enable bool) Option {
 func WithSkillsFilePathHints(enable bool) Option {
 	return func(opts *Options) {
 		opts.skillsFilePathHints = enable
+	}
+}
+
+// WithSkillLoadToolDescription overrides the skill_load tool
+// description.
+//
+// Behavior:
+//   - Not configured: use the built-in default description.
+//   - Configured with empty string: set an empty description.
+//   - Configured with non-empty string: use the provided text.
+func WithSkillLoadToolDescription(
+	description string,
+) Option {
+	return func(opts *Options) {
+		text := description
+		opts.skillLoadToolDescription = &text
 	}
 }
 

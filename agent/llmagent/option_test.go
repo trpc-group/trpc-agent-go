@@ -266,6 +266,20 @@ func TestWithSkillsFilePathHints(t *testing.T) {
 	require.True(t, b.option.skillsFilePathHints)
 }
 
+func TestWithSkillLoadToolDescription(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.skillLoadToolDescription)
+
+	const description = "Load the matching skill before answering."
+
+	b := New(
+		"test-agent",
+		WithSkillLoadToolDescription(description),
+	)
+	require.NotNil(t, b.option.skillLoadToolDescription)
+	require.Equal(t, description, *b.option.skillLoadToolDescription)
+}
+
 func TestWithSkillsCapabilityGuidance(t *testing.T) {
 	a := New("test-agent")
 	require.Nil(t, a.option.skillsCapabilityGuidance)

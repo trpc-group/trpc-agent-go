@@ -1806,6 +1806,12 @@ func TestNewAgent_KnowledgeOnlyProfileHidesSkillRun(t *testing.T) {
 		t,
 		findToolDeclaration(agt.Tools(), skillprofile.ToolKillSession),
 	)
+	require.Contains(
+		t,
+		findToolDeclaration(agt.Tools(), skillprofile.ToolLoad).
+			Description,
+		"Call this tool before any other substantive response",
+	)
 }
 
 func TestNewAgent_KnowledgeOnlyProfileUsesToolingGuidance(

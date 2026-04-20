@@ -698,9 +698,18 @@ func appendSkillToolsWithRepoAndFlags(
 		return allTools
 	}
 	if skillFlags.Load {
+		loadOpts := []toolskill.LoadToolOption{}
+		if options.skillLoadToolDescription != nil {
+			loadOpts = append(
+				loadOpts,
+				toolskill.WithLoadToolDescription(
+					*options.skillLoadToolDescription,
+				),
+			)
+		}
 		allTools = append(
 			allTools,
-			toolskill.NewLoadTool(repo),
+			toolskill.NewLoadTool(repo, loadOpts...),
 		)
 	}
 	if skillFlags.SelectDocs {

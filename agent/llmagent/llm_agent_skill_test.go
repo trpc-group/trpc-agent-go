@@ -1250,6 +1250,27 @@ func TestLLMAgent_WithSkillFilter_WiresOption(t *testing.T) {
 	require.NotNil(t, opts.skillFilter)
 }
 
+func TestLLMAgent_WithSkillLoadToolDescription_WiresTool(
+	t *testing.T,
+) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	const description = "Always load the matching skill first."
+
+	agt := New(
+		"tester",
+		WithSkills(repo),
+		WithSkillLoadToolDescription(description),
+	)
+	tl := findTool(agt.Tools(), "skill_load")
+	require.NotNil(t, tl)
+	decl := tl.Declaration()
+	require.NotNil(t, decl)
+	require.Equal(t, description, decl.Description)
+}
+
 func TestLLMAgent_WithSkillsLoadedContentInToolResults_WiresProcessor(
 	t *testing.T,
 ) {
