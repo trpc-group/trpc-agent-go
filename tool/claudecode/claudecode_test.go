@@ -731,6 +731,25 @@ func TestToolSet_ToolSearchFindsCurrentTools(t *testing.T) {
 	require.Contains(t, requiredOut.Matches, toolRead)
 }
 
+func TestToolSearchCoversProviderAndEmptyResultBranches(t *testing.T) {
+	t.Parallel()
+	_, err := newToolSearchTool(nil)
+	require.EqualError(t, err, "tool list provider is required")
+	searchTool, err := newToolSearchTool(func() []tool.Tool { return nil })
+	require.NoError(t, err)
+	callable, ok := searchTool.(tool.CallableTool)
+	require.True(t, ok)
+	_, err = callToolRaw(callable, toolSearchInput{})
+	require.EqualError(t, err, "query is required")
+	out := callToolAs[toolSearchOutput](t, callable, toolSearchInput{
+		Query:      "read",
+		MaxResults: intPtr(0),
+	})
+	require.Empty(t, out.Matches)
+	require.Equal(t, "read", out.Query)
+	require.Zero(t, out.TotalDeferredTools)
+}
+
 func TestToolSet_AskUserQuestionPassesThroughValidatedPayload(t *testing.T) {
 	t.Parallel()
 	askTool, err := newAskUserQuestionTool()
@@ -1176,6 +1195,34 @@ func TestGoogleSearchBackendSearchRejectsMissingConfig(t *testing.T) {
 	backend = &googleSearchBackend{client: http.DefaultClient, options: &WebSearchOptions{}}
 	_, err = backend.search(context.Background(), webSearchInput{Query: "example"})
 	require.EqualError(t, err, "google search requires api_key and engine_id")
+}
+
+func TestWebSearchToolCoversValidationAndProviderBranches(t *testing.T) {
+	t.Parallel()
+	backend, err := newSearchBackend(&WebSearchOptions{
+		Provider: "google",
+		Timeout:  2 * time.Second,
+	})
+	require.NoError(t, err)
+	googleBackend, ok := backend.(*googleSearchBackend)
+	require.True(t, ok)
+	require.Equal(t, 2*time.Second, googleBackend.client.Timeout)
+	_, err = newSearchBackend(&WebSearchOptions{Provider: "bing"})
+	require.EqualError(t, err, "unsupported web search provider: bing")
+	searchTool, err := newWebSearchTool(&WebSearchOptions{
+		BaseURL: "http://127.0.0.1",
+	})
+	require.NoError(t, err)
+	callable, ok := searchTool.(tool.CallableTool)
+	require.True(t, ok)
+	_, err = callToolRaw(callable, webSearchInput{})
+	require.EqualError(t, err, "query is required")
+	_, err = callToolRaw(callable, webSearchInput{
+		Query:          "example",
+		AllowedDomains: []string{"example.com"},
+		BlockedDomains: []string{"example.org"},
+	})
+	require.EqualError(t, err, "cannot specify both allowed_domains and blocked_domains")
 }
 
 func TestEncodingHelpersPreserveUTF16AndLineEndings(t *testing.T) {
