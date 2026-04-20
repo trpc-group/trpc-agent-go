@@ -26,7 +26,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-const testCustomDataPartType = "custom_data"
+const (
+	testCustomDataPartType         = "custom_data"
+	testCustomDataPartExtensionKey = "trpc.a2a.custom_payload"
+)
 
 func TestDefaultA2AMessageToAgentMessage_ConvertToAgentMessage(t *testing.T) {
 	tests := []struct {
@@ -3570,18 +3573,24 @@ func TestDefaultEventToA2AMessage_EventPartMapperUnary(t *testing.T) {
 			Object:  graph.ObjectTypeGraphNodeCustom,
 			Choices: []model.Choice{},
 		},
-		StructuredOutput: map[string]any{
-			"layer_details": []any{map[string]any{"layer_name": "engine"}},
-		},
 	}
+	require.NoError(t, event.SetExtension(evt, testCustomDataPartExtensionKey, map[string]any{
+		"layer_details": []any{map[string]any{"layer_name": "engine"}},
+	}))
 
 	mapperCalled := false
 	converter := &defaultEventToA2AMessage{
 		graphEventObjectAllowlist: []string{"graph.node.*"},
 		eventPartMappers: []EventToA2APartMapper{
-			func(ctx context.Context, event *event.Event) ([]protocol.Part, error) {
+			func(ctx context.Context, evt *event.Event) ([]protocol.Part, error) {
 				mapperCalled = true
-				data := event.StructuredOutput.(map[string]any)
+				data, ok, err := event.GetExtension[map[string]any](evt, testCustomDataPartExtensionKey)
+				if err != nil {
+					return nil, err
+				}
+				if !ok {
+					return nil, nil
+				}
 				part := protocol.NewDataPart(data)
 				part.Metadata = map[string]any{
 					ia2a.DataPartMetadataTypeKey: testCustomDataPartType,
@@ -3618,14 +3627,21 @@ func TestDefaultEventToA2AMessage_EventPartMapperStreaming(t *testing.T) {
 			Object:  graph.ObjectTypeGraphNodeCustom,
 			Choices: []model.Choice{},
 		},
-		StructuredOutput: map[string]any{"trace": "ok"},
 	}
+	require.NoError(t, event.SetExtension(evt, testCustomDataPartExtensionKey, map[string]any{"trace": "ok"}))
 
 	converter := &defaultEventToA2AMessage{
 		graphEventObjectAllowlist: []string{"graph.node.*"},
 		eventPartMappers: []EventToA2APartMapper{
-			func(ctx context.Context, event *event.Event) ([]protocol.Part, error) {
-				part := protocol.NewDataPart(event.StructuredOutput)
+			func(ctx context.Context, evt *event.Event) ([]protocol.Part, error) {
+				data, ok, err := event.GetExtension[map[string]any](evt, testCustomDataPartExtensionKey)
+				if err != nil {
+					return nil, err
+				}
+				if !ok {
+					return nil, nil
+				}
+				part := protocol.NewDataPart(data)
 				part.Metadata = map[string]any{
 					ia2a.DataPartMetadataTypeKey: testCustomDataPartType,
 				}

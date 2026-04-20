@@ -1624,6 +1624,96 @@ func TestProcessDataPartWithMappers_UnmatchedMapperDoesNotApplyChanges(t *testin
 	}
 }
 
+func TestProcessDataPartWithMappers_CustomMapperSetsEventExtension(t *testing.T) {
+	result := &parseResult{}
+	part := &protocol.DataPart{
+		Data: map[string]any{
+			"business": "payload",
+		},
+		Metadata: map[string]any{
+			"type": "biz_custom",
+		},
+	}
+
+	processDataPartWithMappers(part, result, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			if ia2a.GetDataPartType(p.Metadata) != "biz_custom" {
+				return false, nil
+			}
+			if err := out.SetEventExtension("trpc.a2a.biz_payload", p.Data); err != nil {
+				return false, err
+			}
+			return true, nil
+		},
+	})
+
+	evt := &event.Event{Extensions: result.extensions}
+	payload, ok, err := event.GetExtension[map[string]any](evt, "trpc.a2a.biz_payload")
+	if err != nil {
+		t.Fatalf("expected extension decode to succeed, got error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected mapped event extension to be present")
+	}
+	if payload["business"] != "payload" {
+		t.Fatalf("expected payload business field to be preserved, got %+v", payload)
+	}
+}
+
+func TestBuildEventResponse_WithMappedEventExtensions(t *testing.T) {
+	msg := &protocol.Message{
+		Parts: []protocol.Part{
+			&protocol.DataPart{
+				Data: map[string]any{
+					"trace_id": "trace-1",
+					"hint":     "mapped",
+				},
+				Metadata: map[string]any{
+					"type": "biz_custom",
+				},
+			},
+		},
+	}
+
+	result := parseA2AMessagePartsWithMappers(msg, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			if ia2a.GetDataPartType(p.Metadata) != "biz_custom" {
+				return false, nil
+			}
+			if err := out.SetEventExtension("trpc.a2a.biz_payload", p.Data); err != nil {
+				return false, err
+			}
+			return true, nil
+		},
+	})
+
+	evt := buildEventResponse(
+		false,
+		"msg-1",
+		result,
+		&agent.Invocation{InvocationID: "inv-1"},
+		"remote-agent",
+		protocol.MessageRoleAgent,
+	)
+
+	payload, ok, err := event.GetExtension[map[string]any](evt, "trpc.a2a.biz_payload")
+	if err != nil {
+		t.Fatalf("expected extension decode to succeed, got error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected mapped extension on converted event")
+	}
+	if payload["trace_id"] != "trace-1" || payload["hint"] != "mapped" {
+		t.Fatalf("unexpected extension payload: %+v", payload)
+	}
+	if evt.Response == nil || len(evt.Response.Choices) != 1 {
+		t.Fatalf("expected placeholder response to be preserved, got %+v", evt.Response)
+	}
+	if evt.Response.Choices[0].Message.Content != "" {
+		t.Fatalf("expected empty message content for extension-only event, got %q", evt.Response.Choices[0].Message.Content)
+	}
+}
+
 // TestProcessExecutableCode tests processing of executable code DataParts
 func TestProcessExecutableCode(t *testing.T) {
 	tests := []struct {

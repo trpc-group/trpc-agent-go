@@ -11,6 +11,8 @@ package a2aagent
 
 import (
 	"testing"
+
+	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
 func TestWithStreamingChannelBufSize(t *testing.T) {
@@ -52,5 +54,16 @@ func TestWithStreamingChannelBufSize(t *testing.T) {
 				t.Errorf("got buf size %d, want %d", agent.streamingBufSize, tt.wantBufSize)
 			}
 		})
+	}
+}
+
+func TestWithA2ADataPartMapper(t *testing.T) {
+	agent := &A2AAgent{}
+	WithA2ADataPartMapper(func(part *protocol.DataPart, result *A2ADataPartMappingResult) (bool, error) {
+		return false, nil
+	})(agent)
+
+	if len(agent.dataPartMappers) != 1 {
+		t.Fatalf("expected one data part mapper, got %d", len(agent.dataPartMappers))
 	}
 }

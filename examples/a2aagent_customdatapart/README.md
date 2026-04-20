@@ -1,41 +1,64 @@
-# A2AAgent Custom DataPart 示例
+# A2AAgent Custom DataPart Example
 
-该示例演示一条完整链路：
+This example shows how to carry a custom structured payload across an A2A boundary without putting that payload into `Message.Content`.
 
-1. 远端 agent 正常生成文本回复。
-2. wrapper 额外发出一个 `graph.node.custom` 事件，并把摘要 hint 放进 `StructuredOutput`。
-3. 服务端通过 `a2a.WithEventToA2APartMapper()` 把这个 custom event 映射成 `DataPart(type="custom_data")`。
-4. 客户端 A2AAgent 通过 `a2aagent.WithA2ADataPartMapper()` 再把这个 `DataPart` 映射成一条可见提示文本。
+## What This Example Shows
 
-## 环境变量
+1. A remote agent produces a normal text response.
+2. A wrapper emits one extra `graph.node.custom` event and stores a fixed payload in `event.Extensions`.
+3. The A2A server uses `a2a.WithEventToA2APartMapper()` to convert that extension payload into `DataPart(type="custom_data")`.
+4. The A2A client agent uses `a2aagent.WithA2ADataPartMapper()` to convert the custom `DataPart` back into `event.Extensions`.
+5. The local UI reads the restored extension payload and prints a visible custom line.
 
-示例与 [`a2aagent`](../a2aagent/README.md) 一样需要模型配置。
+## DataPart Mapping Path
+
+The custom payload goes through the following round-trip:
+
+1. Local event payload:
+   `event.Extensions["trpc.a2a.custom_payload"] = customPayload{...}`
+2. Server-side mapping:
+   `WithEventToA2APartMapper()` reads that extension and emits `DataPart(type="custom_data")`.
+3. A2A transport:
+   the payload is now carried as a custom A2A `DataPart`.
+4. Client-side mapping:
+   `WithA2ADataPartMapper()` detects `type="custom_data"` and writes the payload back into `event.Extensions`.
+5. Local consumption:
+   application code reads the restored extension and handles it as structured data.
+
+In other words, the payload shape is:
+
+`event.Extensions -> A2A DataPart -> event.Extensions`
+
+## Environment Variables
+
+This example needs the same model configuration as [`a2aagent`](../a2aagent/README.md).
 
 ```bash
-# 例如 DeepSeek
+# Example: DeepSeek
 export OPENAI_API_KEY="your-deepseek-api-key"
 export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 export MODEL_NAME="deepseek-chat"
 ```
 
-## 运行
+## Run
 
-在仓库根目录执行：
+From the repository root:
 
 ```bash
 cd examples && go run ./a2aagent_customdatapart \
   -model "${MODEL_NAME:-deepseek-chat}" \
-  -host "127.0.0.1:8899" \
   -streaming=true
 ```
 
-## 预期输出
+The example automatically picks an available local port and prints the actual A2A server URL at startup.
 
-你会看到两类输出：
+## Expected Output
 
-- 常规文本回复：
-  - `🤖 Assistant: ...`（由远端 LLM 生成，内容不固定）
-- 自定义 mapper 提示：
-  - `🧩 Agent mapper(custom_data): ...`
+You should see two kinds of output:
 
-第二行就是 client-side mapper 消费 server-side DataPart 后生成的可见输出。
+- Normal assistant text:
+  `🤖 Assistant: ...`
+- Custom mapper output:
+  `🧩 Agent mapper(custom_data): Curstom data part data`
+
+The second line is produced after the client-side mapper restores the custom payload into `event.Extensions` and the local UI reads it back.

@@ -364,6 +364,9 @@ type parseResult struct {
 
 	// stateDelta holds structured state updates reconstructed from A2A metadata.
 	stateDelta map[string][]byte
+
+	// extensions holds custom event payloads reconstructed by DataPart mappers.
+	extensions map[string]json.RawMessage
 }
 
 // toolResponseData holds tool response information
@@ -382,6 +385,7 @@ func newDataPartMappingResult(result *parseResult) *A2ADataPartMappingResult {
 		reasoningContent:    result.reasoningContent,
 		codeExecution:       result.codeExecution,
 		codeExecutionResult: result.codeExecutionResult,
+		eventExtensions:     cloneA2AExtensions(result.extensions),
 	}
 }
 
@@ -400,6 +404,14 @@ func applyDataPartMappingResult(dst *parseResult, mapped *A2ADataPartMappingResu
 	}
 	if mapped.codeExecutionResultSet {
 		dst.codeExecutionResult = mapped.codeExecutionResult
+	}
+	if len(mapped.eventExtensions) > 0 {
+		if dst.extensions == nil {
+			dst.extensions = make(map[string]json.RawMessage, len(mapped.eventExtensions))
+		}
+		for key, raw := range mapped.eventExtensions {
+			dst.extensions[key] = cloneA2AExtensionRawMessage(raw)
+		}
 	}
 	if len(mapped.toolCalls) > 0 {
 		dst.toolCalls = append(dst.toolCalls, mapped.toolCalls...)
@@ -703,6 +715,9 @@ func buildEventResponse(
 	}
 
 	evt := event.New(invocation.InvocationID, agentName, opts...)
+	if len(result.extensions) > 0 {
+		evt.Extensions = cloneA2AExtensions(result.extensions)
+	}
 
 	// Use llm_response_id from metadata when available (preserves original LLM Response.ID),
 	// fall back to messageID (which is ArtifactID in streaming, or Message.MessageID in unary).

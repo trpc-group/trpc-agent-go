@@ -10,6 +10,7 @@
 package a2aagent
 
 import (
+	"encoding/json"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-a2a-go/client"
@@ -54,6 +55,7 @@ type A2ADataPartMappingResult struct {
 	toolResponses          []A2ADataPartToolResponse
 	codeExecution          string
 	codeExecutionResult    string
+	eventExtensions        map[string]json.RawMessage
 	textContentSet         bool
 	reasoningContentSet    bool
 	codeExecutionSet       bool
@@ -142,6 +144,47 @@ func (r *A2ADataPartMappingResult) SetCodeExecutionResult(result string) {
 	}
 	r.codeExecutionResult = result
 	r.codeExecutionResultSet = true
+}
+
+// SetEventExtension stores one serialized event extension when the mapper matches.
+//
+// This is useful for preserving custom A2A DataPart payloads through graph and
+// server pipelines without forcing them into Message.Content.
+func (r *A2ADataPartMappingResult) SetEventExtension(key string, value any) error {
+	if r == nil || key == "" {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if r.eventExtensions == nil {
+		r.eventExtensions = make(map[string]json.RawMessage)
+	}
+	r.eventExtensions[key] = cloneA2AExtensionRawMessage(raw)
+	return nil
+}
+
+func cloneA2AExtensionRawMessage(raw json.RawMessage) json.RawMessage {
+	if raw == nil {
+		return nil
+	}
+	cloned := make([]byte, len(raw))
+	copy(cloned, raw)
+	return json.RawMessage(cloned)
+}
+
+func cloneA2AExtensions(
+	extensions map[string]json.RawMessage,
+) map[string]json.RawMessage {
+	if len(extensions) == 0 {
+		return nil
+	}
+	cloned := make(map[string]json.RawMessage, len(extensions))
+	for key, raw := range extensions {
+		cloned[key] = cloneA2AExtensionRawMessage(raw)
+	}
+	return cloned
 }
 
 // A2ADataPartMapper maps an inbound A2A DataPart into the default parser result.

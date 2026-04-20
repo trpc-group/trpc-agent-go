@@ -67,10 +67,7 @@ type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager
 //
 // Returning nil or empty parts means this mapper contributes nothing and the
 // default converter continues with its normal behavior.
-type EventToA2APartMapper func(
-	ctx context.Context,
-	event *event.Event,
-) ([]protocol.Part, error)
+type EventToA2APartMapper func(ctx context.Context, event *event.Event) ([]protocol.Part, error)
 
 type defaultAuthProvider struct {
 	userIDHeader string

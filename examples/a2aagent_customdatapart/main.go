@@ -38,7 +38,6 @@ import (
 
 var (
 	modelName = flag.String("model", getEnvOrDefault("MODEL_NAME", "deepseek-chat"), "Model to use")
-	host      = flag.String("host", "127.0.0.1:8899", "Host to use")
 	streaming = flag.Bool("streaming", true, "Enable streaming output")
 )
 
@@ -46,6 +45,8 @@ const (
 	appName            = "a2aagent-customdatapart-demo"
 	customEventTag     = "demo.custom_data"
 	customDataPartType = "custom_data"
+	customEventExtKey  = "trpc.a2a.custom_payload"
+	customEventHint    = "Curstom data part data"
 	colorReset         = "\033[0m"
 	colorCyan          = "\033[36m"
 )
@@ -59,11 +60,10 @@ type customPayload struct {
 func main() {
 	flag.Parse()
 
-	if err := runA2AServer(*host); err != nil {
+	httpURL, err := runA2AServer()
+	if err != nil {
 		log.Fatalf("failed to start a2a server: %v", err)
 	}
-
-	httpURL := fmt.Sprintf("http://%s", *host)
 	a2aAgent := buildA2AAgent(httpURL)
 	startChat(a2aAgent)
 }
@@ -76,9 +76,10 @@ func startChat(a2aAgent *a2aagent.A2AAgent) {
 	fmt.Printf("- URL: %s\n", card.URL)
 	fmt.Printf("\nExample flow\n")
 	fmt.Printf("1. Remote agent emits normal text\n")
-	fmt.Printf("2. Wrapper emits one extra graph.node.custom event with payload hint\n")
-	fmt.Printf("3. Server mapper converts that custom event into DataPart(type=%q)\n", customDataPartType)
-	fmt.Printf("4. Agent mapper converts that DataPart back into a visible custom line\n\n")
+	fmt.Printf("2. Wrapper emits one extra graph.node.custom event with payload hint in event.Extensions\n")
+	fmt.Printf("3. a2a.WithEventToA2APartMapper converts that extension into DataPart(type=%q)\n", customDataPartType)
+	fmt.Printf("4. a2aagent.WithA2ADataPartMapper restores that DataPart into event.Extensions\n")
+	fmt.Printf("5. Demo UI reads the extension payload and prints a custom line\n\n")
 	fmt.Printf("Reasoning content is shown in %scyan%s. Type 'new' for a new session, or 'exit' to quit.\n\n", colorCyan, colorReset)
 
 	run := runner.NewRunner(appName, a2aAgent, runner.WithSessionService(sessionmemory.NewSessionService()))
@@ -123,7 +124,11 @@ func startChat(a2aAgent *a2aagent.A2AAgent) {
 	}
 }
 
-func runA2AServer(host string) error {
+func runA2AServer() (string, error) {
+	host, err := allocateDemoHost()
+	if err != nil {
+		return "", err
+	}
 	remoteAgent := wrapAgentWithCustomDataPart(
 		buildAgent(
 			"agent_remote_customdatapart",
@@ -139,10 +144,7 @@ func runA2AServer(host string) error {
 		a2a.WithEventToA2APartMapper(customDataPartMapper),
 	)
 	if err != nil {
-		return fmt.Errorf("create a2a server: %w", err)
-	}
-	if err := ensureHostAvailable(host); err != nil {
-		return err
+		return "", fmt.Errorf("create a2a server: %w", err)
 	}
 
 	serverErrCh := make(chan error, 1)
@@ -156,9 +158,11 @@ func runA2AServer(host string) error {
 	}()
 
 	if err := waitForAgentCardReady(host, serverErrCh, 5*time.Second); err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	httpURL := fmt.Sprintf("http://%s", host)
+	fmt.Printf("Auto-selected demo A2A server: %s\n", httpURL)
+	return httpURL, nil
 }
 
 type customDataPartWrapper struct {
@@ -179,20 +183,22 @@ func (w *customDataPartWrapper) Run(ctx context.Context, invocation *agent.Invoc
 	out := make(chan *event.Event)
 	go func() {
 		defer close(out)
-		emittedCustomEvent := false
+		hasVisibleContent := false
 		for evt := range baseCh {
+			// Always forward the original event stream unchanged so the wrapped
+			// agent keeps its normal behavior.
 			out <- evt
-
-			if emittedCustomEvent {
-				continue
+			if eventContent(evt) != "" {
+				hasVisibleContent = true
 			}
-			content := eventContent(evt)
-			if content == "" {
-				continue
-			}
-			out <- newCustomDataPartEvent(invocation.InvocationID, w.name, truncate(content, 40))
-			emittedCustomEvent = true
 		}
+
+		if !hasVisibleContent {
+			return
+		}
+		// Emit the custom event only after the original response stream finishes,
+		// so the UI prints the structured payload after the normal assistant text.
+		out <- newCustomDataPartEvent(invocation.InvocationID, w.name, customEventHint)
 	}()
 	return out, nil
 }
@@ -215,13 +221,17 @@ func newCustomDataPartEvent(invocationID, author, hint string) *event.Event {
 		Timestamp: time.Now(),
 		Created:   time.Now().Unix(),
 	}
-	evt := event.NewResponseEvent(invocationID, author, resp, event.WithTag(customEventTag))
-	evt.StructuredOutput = customPayload{
-		TraceID: fmt.Sprintf("trace-%d", time.Now().UnixNano()),
-		Source:  author,
-		Hint:    hint,
-	}
-	return evt
+	return event.NewResponseEvent(
+		invocationID,
+		author,
+		resp,
+		event.WithTag(customEventTag),
+		event.WithExtension(customEventExtKey, customPayload{
+			TraceID: fmt.Sprintf("trace-%d", time.Now().UnixNano()),
+			Source:  author,
+			Hint:    hint,
+		}),
+	)
 }
 
 func customDataPartMapper(ctx context.Context, evt *event.Event) ([]protocol.Part, error) {
@@ -229,7 +239,10 @@ func customDataPartMapper(ctx context.Context, evt *event.Event) ([]protocol.Par
 	if evt == nil || evt.Response == nil || evt.Response.Object != graph.ObjectTypeGraphNodeCustom {
 		return nil, nil
 	}
-	payload, ok := evt.StructuredOutput.(customPayload)
+	payload, ok, err := event.GetExtension[customPayload](evt, customEventExtKey)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, nil
 	}
@@ -257,6 +270,8 @@ func buildAgent(agentName, desc string, extraOptions ...llmagent.Option) agent.A
 func buildA2AAgent(httpURL string) *a2aagent.A2AAgent {
 	a2aAgent, err := a2aagent.New(
 		a2aagent.WithAgentCardURL(httpURL),
+		// Restore the custom DataPart back into event.Extensions so downstream
+		// graph logic and UI code can consume the structured payload directly.
 		a2aagent.WithA2ADataPartMapper(func(
 			part *protocol.DataPart,
 			result *a2aagent.A2ADataPartMappingResult,
@@ -264,6 +279,8 @@ func buildA2AAgent(httpURL string) *a2aagent.A2AAgent {
 			if part == nil || result == nil {
 				return false, nil
 			}
+			// Ignore all built-in and unrelated DataParts; this mapper only handles
+			// the custom payload emitted by the demo server-side mapper.
 			if ia2a.GetDataPartType(part.Metadata) != customDataPartType {
 				return false, nil
 			}
@@ -275,11 +292,11 @@ func buildA2AAgent(httpURL string) *a2aagent.A2AAgent {
 			if !ok {
 				return false, nil
 			}
-			hint, _ := payloadMap["hint"].(string)
-			if hint == "" {
-				return false, nil
+			// Rehydrate the wire-format DataPart payload back into event.Extensions
+			// so the rest of the local pipeline can consume typed structured data.
+			if err := result.SetEventExtension(customEventExtKey, payloadMap); err != nil {
+				return false, err
 			}
-			result.SetTextContent(hint)
 			return true, nil
 		}),
 	)
@@ -295,10 +312,6 @@ func processResponse(eventChan <-chan *event.Event) error {
 		if err := handleEvent(evt, &assistantStarted); err != nil {
 			return err
 		}
-		if evt.IsFinalResponse() {
-			fmt.Printf("\n")
-			break
-		}
 	}
 	return nil
 }
@@ -311,21 +324,21 @@ func handleEvent(evt *event.Event, assistantStarted *bool) error {
 		fmt.Printf("\nError: %s\n", evt.Error.Message)
 		return nil
 	}
-	if evt.Tag == customEventTag {
+	if evt.ContainsTag(customEventTag) {
 		return printMappedCustomHint(evt)
 	}
 	return printAssistantContent(evt, assistantStarted)
 }
 
 func printMappedCustomHint(evt *event.Event) error {
-	if evt.Response == nil || len(evt.Response.Choices) == 0 {
+	payload, ok, err := event.GetExtension[customPayload](evt, customEventExtKey)
+	if err != nil {
+		return err
+	}
+	if !ok || payload.Hint == "" {
 		return nil
 	}
-	content, _ := extractContent(evt.Response.Choices[0])
-	if content == "" {
-		return nil
-	}
-	fmt.Printf("\n🧩 Agent mapper(custom_data): %s\n", content)
+	fmt.Printf("\n🧩 Agent mapper(custom_data): %s\n", payload.Hint)
 	return nil
 }
 
@@ -366,19 +379,16 @@ func eventContent(evt *event.Event) string {
 	return choice.Delta.Content
 }
 
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max]
-}
-
-func ensureHostAvailable(host string) error {
-	listener, err := net.Listen("tcp", host)
+func allocateDemoHost() (string, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return fmt.Errorf("host %s is unavailable: %w", host, err)
+		return "", fmt.Errorf("allocate demo host: %w", err)
 	}
-	return listener.Close()
+	host := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		return "", fmt.Errorf("close demo host listener %s: %w", host, err)
+	}
+	return host, nil
 }
 
 func waitForAgentCardReady(host string, serverErrCh <-chan error, timeout time.Duration) error {
