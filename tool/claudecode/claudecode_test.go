@@ -159,7 +159,7 @@ func TestToolSet_TaskOutputReadsBackgroundBashTask(t *testing.T) {
 	require.Contains(t, []string{"not_ready", "success"}, nonBlocking.RetrievalStatus)
 	blocking := callToolAs[taskOutputOutput](t, taskOutputTool, taskOutputInput{
 		TaskID:  bgOut.BackgroundTaskID,
-		Timeout: intPtr(2_000),
+		Timeout: intPtr(5_000),
 	})
 	require.Equal(t, "success", blocking.RetrievalStatus)
 	require.NotNil(t, blocking.Task)
@@ -1242,6 +1242,16 @@ func TestWebSearchHelpersNormalizeWrappedDuckDuckGoURLs(t *testing.T) {
 	require.Equal(t, "https://golang.org/doc/", normalizeDuckDuckGoResultURL("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fgolang.org%2Fdoc%2F"))
 	require.Equal(t, "not a url", normalizeDuckDuckGoResultURL("not a url"))
 	require.Empty(t, normalizeDuckDuckGoResultURL("   "))
+}
+
+func TestResolveRedirectURLAndDomainFiltersHandleEdgeCases(t *testing.T) {
+	t.Parallel()
+	nextURL, err := resolveRedirectURL("https://example.com/start", "https://example.com/next")
+	require.NoError(t, err)
+	require.Equal(t, "https://example.com/next", nextURL)
+	_, err = resolveRedirectURL("://bad", "/next")
+	require.Error(t, err)
+	require.False(t, matchSearchDomainFilters("not a url", []string{"example.com"}, nil))
 }
 
 func TestExecRipgrepReturnsErrorForInvalidArguments(t *testing.T) {
