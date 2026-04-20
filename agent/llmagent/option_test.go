@@ -250,6 +250,81 @@ func TestWithSkillsLoadedContentInToolResults(t *testing.T) {
 	require.True(t, b.option.SkillsLoadedContentInToolResults)
 }
 
+func TestWithSkillsDirectoryHints(t *testing.T) {
+	a := New("test-agent")
+	require.False(t, a.option.skillsDirectoryHints)
+
+	b := New("test-agent", WithSkillsDirectoryHints(true))
+	require.True(t, b.option.skillsDirectoryHints)
+}
+
+func TestWithSkillsFilePathHints(t *testing.T) {
+	a := New("test-agent")
+	require.False(t, a.option.skillsFilePathHints)
+
+	b := New("test-agent", WithSkillsFilePathHints(true))
+	require.True(t, b.option.skillsFilePathHints)
+}
+
+func TestWithSkillLoadToolDescription(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.skillLoadToolDescription)
+
+	const description = "Load the matching skill before answering."
+
+	b := New(
+		"test-agent",
+		WithSkillLoadToolDescription(description),
+	)
+	require.NotNil(t, b.option.skillLoadToolDescription)
+	require.Equal(t, description, *b.option.skillLoadToolDescription)
+}
+
+func TestWithWorkspaceExecSurfaceEnabled(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.workspaceExecSurfaceEnabled)
+	require.True(t, workspaceExecSurfaceEnabled(&a.option))
+
+	b := New(
+		"test-agent",
+		WithWorkspaceExecSurfaceEnabled(false),
+	)
+	require.NotNil(t, b.option.workspaceExecSurfaceEnabled)
+	require.False(t, *b.option.workspaceExecSurfaceEnabled)
+}
+
+func TestWithSkillsCapabilityGuidance(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.skillsCapabilityGuidance)
+
+	b := New(
+		"test-agent",
+		WithSkillsCapabilityGuidance("Use directory bundles."),
+	)
+	require.NotNil(t, b.option.skillsCapabilityGuidance)
+	require.Equal(
+		t,
+		"Use directory bundles.",
+		*b.option.skillsCapabilityGuidance,
+	)
+}
+
+func TestWithSkillsProtocolGuidance(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.skillsProtocolGuidance)
+
+	b := New(
+		"test-agent",
+		WithSkillsProtocolGuidance("Always load SKILL.md first."),
+	)
+	require.NotNil(t, b.option.skillsProtocolGuidance)
+	require.Equal(
+		t,
+		"Always load SKILL.md first.",
+		*b.option.skillsProtocolGuidance,
+	)
+}
+
 func TestWithSkillFilter(t *testing.T) {
 	a := New("test-agent")
 	require.Nil(t, a.option.skillFilter)

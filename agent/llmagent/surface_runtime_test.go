@@ -515,9 +515,34 @@ func TestLLMAgent_Run_SurfacePatch_AddsSkillsWithoutStaticRepository(t *testing.
 	require.Contains(t, m.got.Tools, "workspace_exec")
 }
 
+func TestLLMAgent_InvocationToolSurface_HidesWorkspaceExecWhenDisabled(
+	t *testing.T,
+) {
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithCodeExecutor(&interactiveStubExec{}),
+		WithWorkspaceExecSurfaceEnabled(false),
+	)
+
+	tools, _ := agt.InvocationToolSurface(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+			agent.WithInvocationSession(&session.Session{}),
+		),
+	)
+
+	require.Nil(t, findTool(tools, "workspace_exec"))
+	require.Nil(t, findTool(tools, "workspace_write_stdin"))
+	require.Nil(t, findTool(tools, "workspace_kill_session"))
+}
+
 func TestLLMAgent_SurfaceRuntimeHelpers_NilAgentBranches(t *testing.T) {
 	var agt *LLMAgent
 	require.Nil(t, agt.codeExecutorForInvocation(nil))
+	require.False(t, agt.supportsWorkspaceExecForInvocation(nil))
+	require.False(t, agt.supportsWorkspaceExecSessionsForInvocation(nil))
 	flags := agt.skillToolFlagsForInvocation(nil)
 	require.False(t, flags.Load)
 	require.False(t, flags.SelectDocs)
@@ -527,6 +552,30 @@ func TestLLMAgent_SurfaceRuntimeHelpers_NilAgentBranches(t *testing.T) {
 	require.False(t, flags.WriteStdin)
 	require.False(t, flags.PollSession)
 	require.False(t, flags.KillSession)
+}
+
+func TestLLMAgent_SurfaceRuntimeHelpers_WorkspaceExecOptionRespected(
+	t *testing.T,
+) {
+	disabled := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithCodeExecutor(&interactiveStubExec{}),
+		WithWorkspaceExecSurfaceEnabled(false),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+	)
+	require.False(t, disabled.supportsWorkspaceExecForInvocation(inv))
+	require.False(t, disabled.supportsWorkspaceExecSessionsForInvocation(inv))
+
+	enabled := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithCodeExecutor(&interactiveStubExec{}),
+	)
+	require.True(t, enabled.supportsWorkspaceExecForInvocation(inv))
+	require.True(t, enabled.supportsWorkspaceExecSessionsForInvocation(inv))
 }
 
 func TestLLMAgent_AppendSkillToolsWithRepo_UsesResolvedFlags(t *testing.T) {
