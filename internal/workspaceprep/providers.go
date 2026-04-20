@@ -204,7 +204,12 @@ func (p *conversationFilesProvider) Name() string {
 func (p *conversationFilesProvider) Requirements(
 	_ context.Context, inv *agent.Invocation,
 ) ([]Requirement, error) {
-	if inv == nil || inv.Session == nil {
+	// allConversationFiles already handles inv.Session == nil safely
+	// by falling back to the current invocation's message parts, so we
+	// only require the invocation itself to exist. Gating on Session !=
+	// nil would regress the pre-refactor behavior where a user message
+	// carrying a file part but no session history still got staged.
+	if inv == nil {
 		return nil, nil
 	}
 	return []Requirement{&conversationFilesRequirement{}}, nil

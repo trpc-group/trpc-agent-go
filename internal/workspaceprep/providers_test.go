@@ -73,12 +73,46 @@ func TestBootstrapProvider_RejectsInvalidSpecs(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestConversationFilesProvider_NoSessionIsNoop(t *testing.T) {
+func TestConversationFilesProvider_NoInvocationIsNoop(t *testing.T) {
 	ctx := context.Background()
 	provider := NewConversationFilesProvider()
 	reqs, err := provider.Requirements(ctx, nil)
 	require.NoError(t, err)
 	require.Empty(t, reqs)
+}
+
+// TestConversationFilesProvider_NoSessionStillStagesMessageFiles locks in
+// the contract that a user message carrying a file part triggers
+// conversation-file staging even when no session is attached to the
+// invocation. The legacy StageConversationFiles helper supported this
+// case, and gating the provider on inv.Session != nil silently regressed
+// it. The reconciler is responsible for re-checking fingerprints and
+// sentinels, so emitting a requirement here is the minimum we owe the
+// current turn.
+func TestConversationFilesProvider_NoSessionStillStagesMessageFiles(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	provider := NewConversationFilesProvider()
+
+	inv := &agent.Invocation{
+		Message: model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					FileID: "upload-1",
+					Name:   "note.txt",
+					Data:   []byte("hello"),
+				},
+			}},
+		},
+	}
+
+	reqs, err := provider.Requirements(ctx, inv)
+	require.NoError(t, err)
+	require.Len(t, reqs, 1)
+	require.Equal(t, KindConversationFile, reqs[0].Kind())
 }
 
 // TestLoadedSkillsFromInvocation_ScansScopedAndLegacyPrefixes locks in
