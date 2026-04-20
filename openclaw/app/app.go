@@ -103,9 +103,12 @@ const (
 		"steps, file layouts, or release procedures from a " +
 		"short summary or partial memory alone. If a " +
 		"needed detail is missing, read the relevant skill " +
-		"files first. Only describe a blocker when a real " +
-		"missing permission, credential, network path, or " +
-		"runtime tool prevents completion."
+		"files first and keep exploring nearby runtime " +
+		"facts, retries, and recovery paths before asking " +
+		"for more input. If completion still depends on an " +
+		"external input you cannot derive locally, state " +
+		"the exact missing piece tersely and keep the " +
+		"answer factual."
 	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
 		"and spreadsheet uploads already in the chat, prefer " +
 		"read_document or read_spreadsheet before falling back " +

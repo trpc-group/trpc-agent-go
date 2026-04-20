@@ -1446,6 +1446,12 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 		sys,
 		"Treat the skill overview as an index of skill directories.",
 	)
+	require.Contains(
+		t,
+		sys,
+		"keep exploring nearby runtime facts, retries, "+
+			"and recovery paths",
+	)
 	require.Contains(t, sys, "(dir: ")
 	require.NotContains(t, sys, "Skill tool availability:")
 	require.NotContains(
@@ -1453,6 +1459,7 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 		sys,
 		"Built-in skill execution tools are unavailable",
 	)
+	require.NotContains(t, sys, "Only describe a blocker")
 }
 
 func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
