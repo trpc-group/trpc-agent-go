@@ -92,13 +92,20 @@ const (
 	openClawSkillsGuidance = "Treat the skill overview as the " +
 		"skills available in this session. Each entry " +
 		"includes a path to that skill's SKILL.md on disk. " +
+		"This is a blocking requirement for matching " +
+		"skills. " +
 		"If the user names a skill, names a slash command, " +
 		"or the task clearly matches a skill description, " +
-		"you must use that skill in the same turn. Never " +
-		"say that you could read or load a matching skill " +
-		"later without actually doing it first. Load " +
-		"SKILL.md before giving substantive guidance or " +
-		"acting on the workflow. When SKILL.md references " +
+		"you must use that skill in the same turn. Call " +
+		"`skill_load` for that skill before generating " +
+		"any other response about the task. Never mention " +
+		"reading, loading, or using a matching skill " +
+		"unless you already called `skill_load` for it in " +
+		"this turn. Never say that you could read or load " +
+		"a matching skill later without actually doing it " +
+		"first. Load `SKILL.md` before giving substantive " +
+		"guidance or acting on the workflow. When " +
+		"`SKILL.md` references " +
 		"relative paths, resolve them from the skill " +
 		"directory first. Read only the supporting docs, " +
 		"scripts, assets, examples, or templates you still " +

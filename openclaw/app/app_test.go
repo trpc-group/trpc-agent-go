@@ -1454,7 +1454,25 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
+		"This is a blocking requirement for matching skills.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Call `skill_load` for that skill before generating "+
+			"any other response about the task.",
+	)
+	require.Contains(
+		t,
+		sys,
 		"Never say that you could read or load a matching skill later",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Never mention reading, loading, or using a matching "+
+			"skill unless you already called `skill_load` for "+
+			"it in this turn.",
 	)
 	require.Contains(
 		t,
