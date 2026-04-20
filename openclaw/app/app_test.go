@@ -1416,7 +1416,7 @@ func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
 	require.NotContains(
 		t,
 		sys,
-		"Tooling and workspace guidance:",
+		"Each entry includes a path to that skill's SKILL.md on disk.",
 	)
 	require.NotContains(t, sys, "Skill tool availability:")
 }
@@ -1444,21 +1444,31 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
-		"Treat the skill overview as an index of skill directories.",
+		"Each entry includes a path to that skill's SKILL.md on disk.",
 	)
 	require.Contains(
 		t,
 		sys,
-		"keep exploring nearby runtime facts, retries, "+
-			"and recovery paths",
+		"you must use that skill in the same turn.",
 	)
-	require.Contains(t, sys, "(dir: ")
-	require.NotContains(t, sys, "Skill tool availability:")
-	require.NotContains(
+	require.Contains(
 		t,
 		sys,
-		"Built-in skill execution tools are unavailable",
+		"Never say that you could read or load a matching skill later",
 	)
+	require.Contains(
+		t,
+		sys,
+		"Keep exploring nearby runtime facts, retries, "+
+			"and recovery paths",
+	)
+	require.Contains(
+		t,
+		sys,
+		"echoer/"+skill.SkillFile,
+	)
+	require.NotContains(t, sys, "Skill tool availability:")
+	require.NotContains(t, sys, "Built-in skill execution tools are unavailable")
 	require.NotContains(t, sys, "Only describe a blocker")
 }
 

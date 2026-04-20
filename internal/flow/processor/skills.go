@@ -35,6 +35,7 @@ const (
 
 	skillRootsHeader = "Skill roots:"
 	skillDirLabel    = "Skill dir: "
+	skillFileLabel   = "Skill file: "
 
 	// SkillLoadModeOnce injects loaded skill content for the next model
 	// request, then offloads it from session state.
@@ -52,6 +53,7 @@ const (
 
 type skillsRequestProcessorOptions struct {
 	capabilityGuidance *string
+	protocolGuidance   *string
 	toolingGuidance    *string
 	loadMode           string
 	toolResultMode     bool
@@ -63,6 +65,7 @@ type skillsRequestProcessorOptions struct {
 	execToolsDisabled  bool
 	repoResolver       func(*agent.Invocation) skill.Repository
 	directoryHints     bool
+	filePathHints      bool
 }
 
 // SkillsRequestProcessorOption configures SkillsRequestProcessor.
@@ -111,6 +114,23 @@ func WithSkillsCapabilityGuidance(
 	return func(o *skillsRequestProcessorOptions) {
 		text := guidance
 		o.capabilityGuidance = &text
+	}
+}
+
+// WithSkillsProtocolGuidance overrides the full skill protocol block
+// appended after the skills overview.
+//
+// Behavior:
+//   - Not configured: use the built-in capability/tooling guidance flow.
+//   - Configured with empty string: omit all built-in skill guidance.
+//   - Configured with non-empty string: append the provided text and skip
+//     the built-in capability/tooling guidance blocks.
+func WithSkillsProtocolGuidance(
+	guidance string,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		text := guidance
+		o.protocolGuidance = &text
 	}
 }
 
@@ -199,6 +219,16 @@ func WithSkillsDirectoryHints(
 	}
 }
 
+// WithSkillsFilePathHints exposes SKILL.md file locators in the skills
+// overview and in loaded skill materialization.
+func WithSkillsFilePathHints(
+	enable bool,
+) SkillsRequestProcessorOption {
+	return func(o *skillsRequestProcessorOptions) {
+		o.filePathHints = enable
+	}
+}
+
 // SkillsRequestProcessor injects skill overviews and loaded contents.
 //
 // Behavior:
@@ -214,6 +244,7 @@ type SkillsRequestProcessor struct {
 	repo               skill.Repository
 	repoResolver       func(*agent.Invocation) skill.Repository
 	capabilityGuidance *string
+	protocolGuidance   *string
 	toolingGuidance    *string
 	loadMode           string
 	toolResultMode     bool
@@ -221,6 +252,7 @@ type SkillsRequestProcessor struct {
 	toolFlags          skillprofile.Flags
 	toolFlagsResolver  func(*agent.Invocation) skillprofile.Flags
 	directoryHints     bool
+	filePathHints      bool
 }
 
 const (
@@ -255,6 +287,7 @@ func NewSkillsRequestProcessor(
 		repo:               repo,
 		repoResolver:       options.repoResolver,
 		capabilityGuidance: options.capabilityGuidance,
+		protocolGuidance:   options.protocolGuidance,
 		toolingGuidance:    options.toolingGuidance,
 		loadMode:           normalizeSkillLoadMode(options.loadMode),
 		toolResultMode:     options.toolResultMode,
@@ -262,6 +295,7 @@ func NewSkillsRequestProcessor(
 		toolFlags:          flags,
 		toolFlagsResolver:  options.toolFlagsResolver,
 		directoryHints:     options.directoryHints,
+		filePathHints:      options.filePathHints,
 	}
 }
 
@@ -329,13 +363,7 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 			lb.WriteString("\n[Loaded] ")
 			lb.WriteString(name)
 			lb.WriteString("\n")
-			if p.directoryHints {
-				if dir := skillDirectoryText(ctx, repo, name); dir != "" {
-					lb.WriteString(skillDirLabel)
-					lb.WriteString(dir)
-					lb.WriteString("\n")
-				}
-			}
+			p.appendSkillPathHints(&lb, ctx, repo, name)
 			lb.WriteString("\n")
 			lb.WriteString(sk.Body)
 			lb.WriteString("\n")
@@ -716,7 +744,7 @@ func (p *SkillsRequestProcessor) injectOverview(
 	var b strings.Builder
 	b.WriteString(skillsOverviewHeader)
 	b.WriteString("\n")
-	if p.directoryHints {
+	if p.directoryHints || p.filePathHints {
 		if rootsText := buildSkillRootsText(repo); rootsText != "" {
 			b.WriteString(rootsText)
 		}
@@ -726,16 +754,20 @@ func (p *SkillsRequestProcessor) injectOverview(
 			"- %s: %s%s\n",
 			s.Name,
 			s.Description,
-			p.skillDirectorySuffix(ctx, repo, s.Name),
+			p.skillOverviewSuffix(ctx, repo, s.Name),
 		)
 		b.WriteString(line)
 	}
 	flags := p.toolFlagsForInvocation(inv)
-	if capability := p.capabilityGuidanceText(flags); capability != "" {
-		b.WriteString(capability)
-	}
-	if guidance := p.toolingGuidanceText(flags); guidance != "" {
-		b.WriteString(guidance)
+	if protocol := p.protocolGuidanceText(flags); protocol != "" {
+		b.WriteString(protocol)
+	} else {
+		if capability := p.capabilityGuidanceText(flags); capability != "" {
+			b.WriteString(capability)
+		}
+		if guidance := p.toolingGuidanceText(flags); guidance != "" {
+			b.WriteString(guidance)
+		}
 	}
 	overview := b.String()
 
@@ -763,6 +795,16 @@ func (p *SkillsRequestProcessor) toolFlagsForInvocation(
 		return p.toolFlagsResolver(inv)
 	}
 	return p.toolFlags
+}
+
+func (p *SkillsRequestProcessor) protocolGuidanceText(
+	flags skillprofile.Flags,
+) string {
+	if p.protocolGuidance == nil {
+		return ""
+	}
+	_ = flags
+	return normalizeGuidance(*p.protocolGuidance)
 }
 
 func (p *SkillsRequestProcessor) toolingGuidanceText(
@@ -1067,19 +1109,24 @@ func skillRootAliases(repo skill.Repository) []skillRootAlias {
 	return aliases
 }
 
-func (p *SkillsRequestProcessor) skillDirectorySuffix(
+func (p *SkillsRequestProcessor) skillOverviewSuffix(
 	ctx context.Context,
 	repo skill.Repository,
 	name string,
 ) string {
-	if !p.directoryHints {
-		return ""
+	if p.filePathHints {
+		locator := skillFileLocator(ctx, repo, name)
+		if locator != "" {
+			return " (file: " + locator + ")"
+		}
 	}
-	locator := skillDirectoryLocator(ctx, repo, name)
-	if locator == "" {
-		return ""
+	if p.directoryHints {
+		locator := skillDirectoryLocator(ctx, repo, name)
+		if locator != "" {
+			return " (dir: " + locator + ")"
+		}
 	}
-	return " (dir: " + locator + ")"
+	return ""
 }
 
 func skillDirectoryLocator(
@@ -1092,7 +1139,7 @@ func skillDirectoryLocator(
 		return ""
 	}
 	for _, item := range skillRootAliases(repo) {
-		rel, ok := relativeSkillDir(item.root, dir)
+		rel, ok := relativeSkillPath(item.root, dir)
 		if !ok {
 			continue
 		}
@@ -1102,6 +1149,28 @@ func skillDirectoryLocator(
 		return "[" + item.alias + "]/" + rel
 	}
 	return dir
+}
+
+func skillFileLocator(
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) string {
+	path := skillFileText(ctx, repo, name)
+	if path == "" {
+		return ""
+	}
+	for _, item := range skillRootAliases(repo) {
+		rel, ok := relativeSkillPath(item.root, path)
+		if !ok {
+			continue
+		}
+		if rel == "" {
+			return "[" + item.alias + "]"
+		}
+		return "[" + item.alias + "]/" + rel
+	}
+	return path
 }
 
 func skillDirectoryText(
@@ -1120,8 +1189,25 @@ func skillDirectoryText(
 	return filepath.ToSlash(dir)
 }
 
-func relativeSkillDir(root string, dir string) (string, bool) {
-	rel, err := filepath.Rel(root, dir)
+func skillFileText(
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) string {
+	dir := skillDirectoryText(ctx, repo, name)
+	if dir == "" {
+		return ""
+	}
+	path := filepath.Join(dir, skill.SkillFile)
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "" {
+		return ""
+	}
+	return filepath.ToSlash(path)
+}
+
+func relativeSkillPath(root string, path string) (string, bool) {
+	rel, err := filepath.Rel(root, path)
 	if err != nil {
 		return "", false
 	}
@@ -1133,6 +1219,31 @@ func relativeSkillDir(root string, dir string) (string, bool) {
 		return "", true
 	}
 	return filepath.ToSlash(rel), true
+}
+
+func (p *SkillsRequestProcessor) appendSkillPathHints(
+	b *strings.Builder,
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) {
+	if b == nil {
+		return
+	}
+	if p.directoryHints {
+		if dir := skillDirectoryText(ctx, repo, name); dir != "" {
+			b.WriteString(skillDirLabel)
+			b.WriteString(dir)
+			b.WriteString("\n")
+		}
+	}
+	if p.filePathHints {
+		if path := skillFileText(ctx, repo, name); path != "" {
+			b.WriteString(skillFileLabel)
+			b.WriteString(path)
+			b.WriteString("\n")
+		}
+	}
 }
 
 func appendKnowledgeGuidance(

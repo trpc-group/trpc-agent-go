@@ -269,6 +269,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			),
 		)
 	}
+	if options.skillsProtocolGuidance != nil {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithSkillsProtocolGuidance(
+				*options.skillsProtocolGuidance,
+			),
+		)
+	}
 	if options.skillsToolingGuidance != nil {
 		skillsOpts = append(
 			skillsOpts,
@@ -289,6 +297,9 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		),
 		processor.WithSkillsDirectoryHints(
 			options.skillsDirectoryHints,
+		),
+		processor.WithSkillsFilePathHints(
+			options.skillsFilePathHints,
 		),
 	)
 	if options.MaxLoadedSkills > 0 {
@@ -434,6 +445,9 @@ func appendSkillsToolResultProcessor(a *LLMAgent, options *Options, requestProce
 			),
 			processor.WithSkillsToolResultDirectoryHints(
 				options.skillsDirectoryHints,
+			),
+			processor.WithSkillsToolResultFilePathHints(
+				options.skillsFilePathHints,
 			),
 			processor.WithSkipSkillsFallbackOnSessionSummary(
 				options.SkipSkillsFallbackOnSessionSummary,

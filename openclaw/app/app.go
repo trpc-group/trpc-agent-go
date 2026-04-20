@@ -89,26 +89,32 @@ const (
 	defaultAgentName        = "assistant"
 	defaultAgentInstruction = "You are a helpful assistant. " +
 		"Keep replies concise."
-	openClawSkillsGuidance = "Treat the skill overview as an index " +
-		"of skill directories. When a skill looks relevant, " +
-		"call skill_load promptly so SKILL.md is in context " +
-		"before giving precise guidance or acting on the " +
-		"workflow. After loading a skill, inspect only the " +
-		"supporting docs, scripts, assets, examples, or " +
-		"templates you still need from that skill's " +
-		"directory. Follow the loaded skill instructions " +
-		"and bundled resources to complete the task, and " +
-		"reuse bundled scripts or templates when they " +
-		"already fit. Do not invent commands, flags, auth " +
-		"steps, file layouts, or release procedures from a " +
-		"short summary or partial memory alone. If a " +
-		"needed detail is missing, read the relevant skill " +
-		"files first and keep exploring nearby runtime " +
-		"facts, retries, and recovery paths before asking " +
-		"for more input. If completion still depends on an " +
-		"external input you cannot derive locally, state " +
-		"the exact missing piece tersely and keep the " +
-		"answer factual."
+	openClawSkillsGuidance = "Treat the skill overview as the " +
+		"skills available in this session. Each entry " +
+		"includes a path to that skill's SKILL.md on disk. " +
+		"If the user names a skill, names a slash command, " +
+		"or the task clearly matches a skill description, " +
+		"you must use that skill in the same turn. Never " +
+		"say that you could read or load a matching skill " +
+		"later without actually doing it first. Load " +
+		"SKILL.md before giving substantive guidance or " +
+		"acting on the workflow. When SKILL.md references " +
+		"relative paths, resolve them from the skill " +
+		"directory first. Read only the supporting docs, " +
+		"scripts, assets, examples, or templates you still " +
+		"need. Reuse bundled scripts, templates, and assets " +
+		"when they already fit. If multiple skills match, " +
+		"use the smallest set that covers the task. Keep " +
+		"context small and avoid bulk-loading docs. Do not " +
+		"invent commands, flags, auth steps, file layouts, " +
+		"or workflows from a short summary or partial " +
+		"memory. Keep exploring nearby runtime facts, " +
+		"retries, and recovery paths yourself before asking " +
+		"for more input. If a matching skill is missing, " +
+		"unreadable, or still lacks a required external " +
+		"input after reasonable local exploration, state " +
+		"the issue briefly and continue with the best " +
+		"fallback."
 	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
 		"and spreadsheet uploads already in the chat, prefer " +
 		"read_document or read_spreadsheet before falling back " +
@@ -2176,8 +2182,8 @@ func newAgent(
 		llmagent.WithSkillToolProfile(
 			llmagent.SkillToolProfile(cfg.SkillsToolProfile),
 		),
+		llmagent.WithSkillsFilePathHints(true),
 		llmagent.WithSkillsDirectoryHints(true),
-		llmagent.WithSkillsCapabilityGuidance(""),
 		llmagent.WithSkillLoadMode(cfg.SkillsLoadMode),
 		llmagent.WithSkillsLoadedContentInToolResults(
 			cfg.SkillsToolResults,
@@ -2185,7 +2191,7 @@ func newAgent(
 		llmagent.WithSkipSkillsFallbackOnSessionSummary(
 			cfg.SkillsSkipFallback,
 		),
-		llmagent.WithSkillsToolingGuidance(
+		llmagent.WithSkillsProtocolGuidance(
 			buildOpenClawSkillsGuidance(cfg),
 		),
 	)

@@ -35,6 +35,10 @@ import (
 // skillFile is the canonical skill definition filename.
 const skillFile = "SKILL.md"
 
+// SkillFile is the canonical skill definition filename exposed for
+// prompt rendering and other callers that need the on-disk path.
+const SkillFile = skillFile
+
 // EnvSkillsRoot is the environment variable name that points to the
 // skills repository root directory used by examples and runtimes.
 // Defining it here avoids repeated string literals across the codebase.

@@ -35,6 +35,7 @@ type skillsToolResultProcessorOptions struct {
 	skipFallbackOnSessionSummary bool
 	repoResolver                 func(*agent.Invocation) skill.Repository
 	directoryHints               bool
+	filePathHints                bool
 }
 
 // SkillsToolResultRequestProcessorOption configures
@@ -90,6 +91,16 @@ func WithSkillsToolResultDirectoryHints(
 	}
 }
 
+// WithSkillsToolResultFilePathHints exposes SKILL.md file paths in loaded
+// skill materialization.
+func WithSkillsToolResultFilePathHints(
+	enable bool,
+) SkillsToolResultRequestProcessorOption {
+	return func(o *skillsToolResultProcessorOptions) {
+		o.filePathHints = enable
+	}
+}
+
 // SkillsToolResultRequestProcessor materializes loaded skill content
 // into tool result messages (skill_load / skill_select_docs) when
 // possible.
@@ -108,6 +119,7 @@ type SkillsToolResultRequestProcessor struct {
 
 	skipFallbackOnSessionSummary bool
 	directoryHints               bool
+	filePathHints                bool
 }
 
 // NewSkillsToolResultRequestProcessor creates a processor instance.
@@ -130,6 +142,7 @@ func NewSkillsToolResultRequestProcessor(
 		loadMode:                     normalizeSkillLoadMode(options.loadMode),
 		skipFallbackOnSessionSummary: options.skipFallbackOnSessionSummary,
 		directoryHints:               options.directoryHints,
+		filePathHints:                options.filePathHints,
 	}
 }
 
@@ -407,13 +420,7 @@ func (p *SkillsToolResultRequestProcessor) buildToolResultContent(
 		b.WriteString("[Loaded] ")
 		b.WriteString(skillName)
 		b.WriteString("\n")
-		if p.directoryHints {
-			if dir := skillDirectoryText(ctx, repo, skillName); dir != "" {
-				b.WriteString(skillDirLabel)
-				b.WriteString(dir)
-				b.WriteString("\n")
-			}
-		}
+		p.appendSkillPathHints(&b, ctx, repo, skillName)
 		b.WriteString("\n")
 		b.WriteString(sk.Body)
 		b.WriteString("\n")
@@ -531,13 +538,7 @@ func (p *SkillsToolResultRequestProcessor) buildFallbackSystemContent(
 			b.WriteString("\n[Loaded] ")
 			b.WriteString(name)
 			b.WriteString("\n")
-			if p.directoryHints {
-				if dir := skillDirectoryText(ctx, repo, name); dir != "" {
-					b.WriteString(skillDirLabel)
-					b.WriteString(dir)
-					b.WriteString("\n")
-				}
-			}
+			p.appendSkillPathHints(&b, ctx, repo, name)
 			b.WriteString("\n")
 			b.WriteString(sk.Body)
 			b.WriteString("\n")
@@ -562,6 +563,31 @@ func (p *SkillsToolResultRequestProcessor) buildFallbackSystemContent(
 		return ""
 	}
 	return strings.TrimSpace(b.String())
+}
+
+func (p *SkillsToolResultRequestProcessor) appendSkillPathHints(
+	b *strings.Builder,
+	ctx context.Context,
+	repo skill.Repository,
+	name string,
+) {
+	if b == nil {
+		return
+	}
+	if p.directoryHints {
+		if dir := skillDirectoryText(ctx, repo, name); dir != "" {
+			b.WriteString(skillDirLabel)
+			b.WriteString(dir)
+			b.WriteString("\n")
+		}
+	}
+	if p.filePathHints {
+		if path := skillFileText(ctx, repo, name); path != "" {
+			b.WriteString(skillFileLabel)
+			b.WriteString(path)
+			b.WriteString("\n")
+		}
+	}
 }
 
 func (p *SkillsToolResultRequestProcessor) upsertLoadedContextMessage(

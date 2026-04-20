@@ -399,11 +399,17 @@ type Options struct {
 	// skillsCapabilityGuidance overrides the built-in skill capability
 	// disclosure block.
 	skillsCapabilityGuidance *string
+	// skillsProtocolGuidance overrides the full built-in skill protocol
+	// text appended after the overview.
+	skillsProtocolGuidance *string
 	// skillsToolingGuidance overrides the built-in skills guidance block.
 	skillsToolingGuidance *string
 	// skillsDirectoryHints exposes skill directory locators in prompt
 	// materialization when enabled.
 	skillsDirectoryHints bool
+	// skillsFilePathHints exposes SKILL.md file locators in prompt
+	// materialization when enabled.
+	skillsFilePathHints bool
 	// skillRunAllowedCommands restricts skill_run to allowlisted commands.
 	skillRunAllowedCommands []string
 	// skillRunDeniedCommands rejects denylisted commands for skill_run.
@@ -777,6 +783,23 @@ func WithSkillsCapabilityGuidance(
 	}
 }
 
+// WithSkillsProtocolGuidance overrides the full skill protocol text
+// appended after the skills overview.
+//
+// Behavior:
+//   - Not configured: use the built-in capability/tooling guidance flow.
+//   - Configured with empty string: omit all built-in skill guidance.
+//   - Configured with non-empty string: append the provided text and skip
+//     the built-in capability/tooling guidance blocks.
+func WithSkillsProtocolGuidance(
+	guidance string,
+) Option {
+	return func(opts *Options) {
+		text := guidance
+		opts.skillsProtocolGuidance = &text
+	}
+}
+
 // WithSkillsDirectoryHints exposes skill directory locators in the skills
 // overview and in loaded skill materialization.
 //
@@ -784,6 +807,16 @@ func WithSkillsCapabilityGuidance(
 func WithSkillsDirectoryHints(enable bool) Option {
 	return func(opts *Options) {
 		opts.skillsDirectoryHints = enable
+	}
+}
+
+// WithSkillsFilePathHints exposes SKILL.md file locators in the skills
+// overview and in loaded skill materialization.
+//
+// Default: false.
+func WithSkillsFilePathHints(enable bool) Option {
+	return func(opts *Options) {
+		opts.skillsFilePathHints = enable
 	}
 }
 

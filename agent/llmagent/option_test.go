@@ -258,6 +258,14 @@ func TestWithSkillsDirectoryHints(t *testing.T) {
 	require.True(t, b.option.skillsDirectoryHints)
 }
 
+func TestWithSkillsFilePathHints(t *testing.T) {
+	a := New("test-agent")
+	require.False(t, a.option.skillsFilePathHints)
+
+	b := New("test-agent", WithSkillsFilePathHints(true))
+	require.True(t, b.option.skillsFilePathHints)
+}
+
 func TestWithSkillsCapabilityGuidance(t *testing.T) {
 	a := New("test-agent")
 	require.Nil(t, a.option.skillsCapabilityGuidance)
@@ -271,6 +279,22 @@ func TestWithSkillsCapabilityGuidance(t *testing.T) {
 		t,
 		"Use directory bundles.",
 		*b.option.skillsCapabilityGuidance,
+	)
+}
+
+func TestWithSkillsProtocolGuidance(t *testing.T) {
+	a := New("test-agent")
+	require.Nil(t, a.option.skillsProtocolGuidance)
+
+	b := New(
+		"test-agent",
+		WithSkillsProtocolGuidance("Always load SKILL.md first."),
+	)
+	require.NotNil(t, b.option.skillsProtocolGuidance)
+	require.Equal(
+		t,
+		"Always load SKILL.md first.",
+		*b.option.skillsProtocolGuidance,
 	)
 }
 

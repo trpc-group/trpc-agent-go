@@ -866,6 +866,45 @@ func TestLLMAgent_WithSkillsDirectoryHints_WiresPrompt(t *testing.T) {
 	require.Contains(t, sys, "(dir: [s1]/echoer)")
 }
 
+func TestLLMAgent_WithSkillsFilePathHints_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillsFilePathHints(true)(opts)
+	WithSkillToolProfile(SkillToolProfileKnowledgeOnly)(opts)
+	WithSkillsCapabilityGuidance("")(opts)
+	WithSkillsToolingGuidance("")(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(t, sys, skillRootsHeader)
+	require.Contains(t, sys, "(file: [s1]/echoer/"+skill.SkillFile+")")
+}
+
 func TestLLMAgent_WithSkillsCapabilityGuidance_WiresPrompt(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
@@ -906,6 +945,50 @@ func TestLLMAgent_WithSkillsCapabilityGuidance_WiresPrompt(t *testing.T) {
 		sys,
 		"Built-in skill execution tools are unavailable",
 	)
+}
+
+func TestLLMAgent_WithSkillsProtocolGuidance_WiresPrompt(t *testing.T) {
+	root := createTestSkill(t)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	opts := &Options{}
+	WithSkills(repo)(opts)
+	WithSkillToolProfile(SkillToolProfileKnowledgeOnly)(opts)
+	WithSkillsProtocolGuidance(
+		"Use the matching skill before answering.",
+	)(opts)
+
+	procs := buildRequestProcessors("tester", opts)
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		Message:      model.NewUserMessage("u"),
+		Session:      &session.Session{},
+	}
+	req := &model.Request{}
+	for _, p := range procs {
+		p.ProcessRequest(context.Background(), inv, req, nil)
+	}
+
+	var sys string
+	for _, msg := range req.Messages {
+		if msg.Role != model.RoleSystem {
+			continue
+		}
+		if strings.Contains(msg.Content, skillsOverviewHeader) {
+			sys = msg.Content
+			break
+		}
+	}
+	require.NotEmpty(t, sys)
+	require.Contains(
+		t,
+		sys,
+		"Use the matching skill before answering.",
+	)
+	require.NotContains(t, sys, skillsCapabilityHeader)
+	require.NotContains(t, sys, skillsToolingGuidanceHeader)
 }
 
 func TestLLMAgent_WithAllowedSkillTools_LoadOnly_WiresPrompt(
