@@ -2907,6 +2907,36 @@ func (m *mockStreamTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*
 	return stream.Reader, nil
 }
 
+type innerTextPrefStreamTool struct {
+	name      string
+	chunks    []any
+	innerText tool.InnerTextMode
+}
+
+func (m *innerTextPrefStreamTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: m.name}
+}
+
+func (m *innerTextPrefStreamTool) InnerTextMode() tool.InnerTextMode {
+	return m.innerText
+}
+
+func (m *innerTextPrefStreamTool) StreamableCall(
+	ctx context.Context,
+	jsonArgs []byte,
+) (*tool.StreamReader, error) {
+	stream := tool.NewStream(8)
+	go func() {
+		defer stream.Writer.Close()
+		for _, c := range m.chunks {
+			if stream.Writer.Send(tool.StreamChunk{Content: c}, nil) {
+				return
+			}
+		}
+	}()
+	return stream.Reader, nil
+}
+
 // Test that newToolCallResponseEvent constructs events via helpers and fills metadata correctly.
 func TestNewToolCallResponseEvent_Constructor(t *testing.T) {
 	inv := &agent.Invocation{InvocationID: "inv-1", AgentName: "tester", Branch: "main"}
@@ -3056,7 +3086,8 @@ func TestProcessStreamChunk_ForwardsEvent(t *testing.T) {
 	var innerEventState streamInnerEventState
 	err := f.processStreamChunk(ctx, inv,
 		model.ToolCall{ID: "x"},
-		tool.StreamChunk{Content: ev}, ch, &contents, &finalResult, &innerEventState, false,
+		tool.StreamChunk{Content: ev}, ch, &contents, &finalResult,
+		&innerEventState, tool.InnerTextModeInclude, false,
 	)
 	require.NoError(t, err)
 	select {
@@ -3526,10 +3557,12 @@ func (m *mockTransferCallableTool) Call(ctx context.Context, args []byte) (any, 
 type prefTool struct {
 	name        string
 	preferInner bool
+	innerText   tool.InnerTextMode
 }
 
 func (p *prefTool) Declaration() *tool.Declaration                  { return &tool.Declaration{Name: p.name} }
 func (p *prefTool) StreamInner() bool                               { return p.preferInner }
+func (p *prefTool) InnerTextMode() tool.InnerTextMode               { return p.innerText }
 func (p *prefTool) Call(ctx context.Context, _ []byte) (any, error) { return "called:" + p.name, nil }
 func (p *prefTool) StreamableCall(ctx context.Context, _ []byte) (*tool.StreamReader, error) {
 	s := tool.NewStream(2)
@@ -3571,6 +3604,74 @@ func TestExecuteTool_RespectsStreamInnerPreference(t *testing.T) {
 	default:
 		t.Fatalf("expected a partial tool.response event when streaming")
 	}
+}
+
+func TestExecuteStreamableTool_HidesInnerAssistantText(t *testing.T) {
+	f := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{
+		InvocationID: "inv-inner-text",
+		AgentName:    "tester",
+		Model:        &mockModel{},
+	}
+	toolCall := model.ToolCall{
+		ID:       "call-inner-text",
+		Function: model.FunctionDefinitionParam{Name: "pref"},
+	}
+
+	toolCallEvent := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID: "child-tool",
+						Function: model.FunctionDefinitionParam{
+							Name:      "lookup",
+							Arguments: []byte(`{"q":"x"}`),
+						},
+					}},
+				},
+			}},
+		},
+	}
+	textEvent := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: "hello"},
+			}},
+		},
+	}
+
+	st := &innerTextPrefStreamTool{
+		name:      "pref",
+		innerText: tool.InnerTextModeExclude,
+		chunks: []any{
+			toolCallEvent,
+			textEvent,
+		},
+	}
+	ch := make(chan *event.Event, 4)
+	_, res, _, err := f.executeStreamableTool(
+		ctx,
+		inv,
+		toolCall,
+		st,
+		ch,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "hello", res)
+
+	var forwarded []*event.Event
+	for len(ch) > 0 {
+		evt := <-ch
+		forwarded = append(forwarded, evt)
+	}
+	require.Len(t, forwarded, 1)
+	require.Len(t, forwarded[0].Choices, 1)
+	require.Len(t, forwarded[0].Choices[0].Message.ToolCalls, 1)
+	require.Empty(t, forwarded[0].Choices[0].Message.Content)
 }
 
 func TestMergeParallelToolCallResponseEvents_PropagatesSkipSummarization(t *testing.T) {
@@ -4310,6 +4411,7 @@ func TestProcessStreamChunk_PointerFinalResultChunkMarksSeen(t *testing.T) {
 		&contents,
 		&finalResult,
 		&innerEventState,
+		tool.InnerTextModeInclude,
 		false,
 	)
 	require.NoError(t, err)
@@ -4341,6 +4443,7 @@ func TestProcessStreamChunk_NilPointerFinalResultChunkDoesNotMarkSeen(t *testing
 		&contents,
 		&finalResult,
 		&innerEventState,
+		tool.InnerTextModeInclude,
 		false,
 	)
 	require.NoError(t, err)
@@ -4954,6 +5057,7 @@ func TestProcessStreamChunk_EmptyText_NoEvent(t *testing.T) {
 		&out,
 		&finalResult,
 		&innerEventState,
+		tool.InnerTextModeInclude,
 		false,
 	)
 	require.NoError(t, err)
@@ -4980,6 +5084,7 @@ func TestProcessStreamChunk_TextWithoutEventChannel_AppendsContent(t *testing.T)
 		&out,
 		&finalResult,
 		&innerEventState,
+		tool.InnerTextModeInclude,
 		false,
 	)
 	require.NoError(t, err)
