@@ -3618,12 +3618,23 @@ func TestExecuteStreamableTool_HidesInnerAssistantText(t *testing.T) {
 		ID:       "call-inner-text",
 		Function: model.FunctionDefinitionParam{Name: "pref"},
 	}
+	partText := "part-text"
 
 	toolCallEvent := &event.Event{
 		Response: &model.Response{
 			Choices: []model.Choice{{
 				Message: model.Message{
 					Role: model.RoleAssistant,
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: &partText,
+						},
+						{
+							Type: model.ContentTypeFile,
+							File: &model.File{Name: "report.txt"},
+						},
+					},
 					ToolCalls: []model.ToolCall{{
 						ID: "child-tool",
 						Function: model.FunctionDefinitionParam{
@@ -3672,6 +3683,77 @@ func TestExecuteStreamableTool_HidesInnerAssistantText(t *testing.T) {
 	require.Len(t, forwarded[0].Choices, 1)
 	require.Len(t, forwarded[0].Choices[0].Message.ToolCalls, 1)
 	require.Empty(t, forwarded[0].Choices[0].Message.Content)
+	require.Len(t, forwarded[0].Choices[0].Message.ContentParts, 1)
+	require.Equal(
+		t,
+		model.ContentTypeFile,
+		forwarded[0].Choices[0].Message.ContentParts[0].Type,
+	)
+}
+
+func TestFilterForwardedInnerTextEvent_DropsTextOnlyContentParts(t *testing.T) {
+	partText := "secret"
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ContentParts: []model.ContentPart{{
+						Type: model.ContentTypeText,
+						Text: &partText,
+					}},
+				},
+			}},
+		},
+	}
+
+	filtered, shouldEmit := filterForwardedInnerTextEvent(
+		ev,
+		tool.InnerTextModeExclude,
+	)
+	require.False(t, shouldEmit)
+	require.NotNil(t, filtered)
+	require.Empty(t, filtered.Response.Choices[0].Message.ContentParts)
+}
+
+func TestFilterForwardedInnerTextEvent_PreservesNonTextContentParts(
+	t *testing.T,
+) {
+	partText := "hidden"
+	ev := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: &partText,
+						},
+						{
+							Type: model.ContentTypeImage,
+							Image: &model.Image{
+								URL: "https://example.com/image.png",
+							},
+						},
+					},
+				},
+			}},
+		},
+	}
+
+	filtered, shouldEmit := filterForwardedInnerTextEvent(
+		ev,
+		tool.InnerTextModeExclude,
+	)
+	require.True(t, shouldEmit)
+	require.NotNil(t, filtered)
+	require.Len(t, filtered.Response.Choices[0].Delta.ContentParts, 1)
+	require.Equal(
+		t,
+		model.ContentTypeImage,
+		filtered.Response.Choices[0].Delta.ContentParts[0].Type,
+	)
 }
 
 func TestMergeParallelToolCallResponseEvents_PropagatesSkipSummarization(t *testing.T) {

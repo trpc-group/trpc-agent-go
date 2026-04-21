@@ -2404,13 +2404,11 @@ func filterForwardedInnerTextEvent(
 	for i := range filtered.Response.Choices {
 		choice := &filtered.Response.Choices[i]
 		if filtered.Response.Object == model.ObjectTypeChatCompletionChunk &&
-			choice.Delta.Content != "" {
-			choice.Delta.Content = ""
+			clearForwardedMessageText(&choice.Delta) {
 			modified = true
 		}
 		if choice.Message.Role == model.RoleAssistant &&
-			choice.Message.Content != "" {
-			choice.Message.Content = ""
+			clearForwardedMessageText(&choice.Message) {
 			modified = true
 		}
 	}
@@ -2437,6 +2435,46 @@ func shouldEmitFilteredInnerEvent(ev *event.Event) bool {
 		ev.Object != model.ObjectTypeChatCompletionChunk
 }
 
+func clearForwardedMessageText(msg *model.Message) bool {
+	if msg == nil {
+		return false
+	}
+	modified := false
+	if msg.Content != "" {
+		msg.Content = ""
+		modified = true
+	}
+	filteredParts, removed := removeForwardedTextContentParts(
+		msg.ContentParts,
+	)
+	if removed {
+		msg.ContentParts = filteredParts
+		modified = true
+	}
+	return modified
+}
+
+func removeForwardedTextContentParts(
+	parts []model.ContentPart,
+) ([]model.ContentPart, bool) {
+	if len(parts) == 0 {
+		return parts, false
+	}
+	kept := make([]model.ContentPart, 0, len(parts))
+	removed := false
+	for _, part := range parts {
+		if part.Type == model.ContentTypeText {
+			removed = true
+			continue
+		}
+		kept = append(kept, part)
+	}
+	if !removed {
+		return parts, false
+	}
+	return kept, true
+}
+
 func responseHasForwardablePayload(rsp *model.Response) bool {
 	if rsp == nil {
 		return false
@@ -2447,11 +2485,13 @@ func responseHasForwardablePayload(rsp *model.Response) bool {
 	for i := range rsp.Choices {
 		choice := rsp.Choices[i]
 		if choice.Delta.Content != "" || choice.Delta.ToolID != "" ||
+			len(choice.Delta.ContentParts) > 0 ||
 			len(choice.Delta.ToolCalls) > 0 ||
 			choice.Delta.ReasoningContent != "" {
 			return true
 		}
 		if choice.Message.Content != "" || choice.Message.ToolID != "" ||
+			len(choice.Message.ContentParts) > 0 ||
 			len(choice.Message.ToolCalls) > 0 ||
 			choice.Message.ReasoningContent != "" {
 			return true

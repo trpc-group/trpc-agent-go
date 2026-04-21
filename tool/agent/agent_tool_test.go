@@ -1768,6 +1768,15 @@ func TestTool_InnerTextMode(t *testing.T) {
 		WithInnerTextMode(InnerTextModeExclude),
 	)
 	require.Equal(t, InnerTextModeExclude, excluded.InnerTextMode())
+
+	invalid := NewTool(
+		&mockAgent{name: "child"},
+		WithInnerTextMode(InnerTextMode("unexpected")),
+	)
+	require.Equal(t, InnerTextModeInclude, invalid.InnerTextMode())
+
+	var nilTool *Tool
+	require.Equal(t, InnerTextModeInclude, nilTool.InnerTextMode())
 }
 
 func countToolResultEvents(
