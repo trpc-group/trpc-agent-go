@@ -10,7 +10,9 @@
 
 package team
 
-import "trpc.group/trpc-go/trpc-agent-go/tool"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
 
 type options struct {
 	description          string
@@ -40,11 +42,31 @@ const (
 	HistoryScopeParentBranch
 )
 
+// InnerTextMode controls whether forwarded inner assistant text is visible
+// in the parent flow when StreamInner is enabled.
+type InnerTextMode = tool.InnerTextMode
+
+const (
+	// InnerTextModeDefault preserves the default behavior.
+	InnerTextModeDefault = tool.InnerTextModeDefault
+
+	// InnerTextModeInclude forwards inner assistant text to the parent flow.
+	InnerTextModeInclude = tool.InnerTextModeInclude
+
+	// InnerTextModeExclude suppresses forwarded inner assistant text while
+	// still aggregating that text into the final tool response.
+	InnerTextModeExclude = tool.InnerTextModeExclude
+)
+
 // MemberToolConfig controls how member Agents are wrapped as tools for the
 // coordinator.
 type MemberToolConfig struct {
 	// StreamInner forwards member streaming events to the parent flow.
 	StreamInner bool
+
+	// InnerTextMode controls whether forwarded inner assistant text is
+	// visible in the parent flow when StreamInner is enabled.
+	InnerTextMode InnerTextMode
 
 	// SkipSummarization makes the coordinator end the current invocation after
 	// the member tool returns, skipping the coordinator's post-tool LLM call.
@@ -66,6 +88,7 @@ func DefaultMemberToolConfig() MemberToolConfig {
 type memberToolOptions struct {
 	name              string
 	streamInner       bool
+	innerTextMode     InnerTextMode
 	skipSummarization bool
 	historyScope      HistoryScope
 }
@@ -100,6 +123,14 @@ func WithMemberToolStreamInner(enabled bool) Option {
 	}
 }
 
+// WithMemberToolInnerTextMode controls whether forwarded inner assistant text
+// is visible in the parent flow when StreamInner is enabled.
+func WithMemberToolInnerTextMode(mode InnerTextMode) Option {
+	return func(o *options) {
+		o.memberTools.innerTextMode = mode
+	}
+}
+
 // WithMemberToolConfig configures how the Team exposes member Agents as
 // tools.
 //
@@ -107,6 +138,7 @@ func WithMemberToolStreamInner(enabled bool) Option {
 func WithMemberToolConfig(cfg MemberToolConfig) Option {
 	return func(o *options) {
 		o.memberTools.streamInner = cfg.StreamInner
+		o.memberTools.innerTextMode = cfg.InnerTextMode
 		o.memberTools.skipSummarization = cfg.SkipSummarization
 
 		if cfg.HistoryScope == HistoryScopeDefault {

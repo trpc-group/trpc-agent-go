@@ -2907,6 +2907,36 @@ func (m *mockStreamTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*
 	return stream.Reader, nil
 }
 
+type innerTextPrefStreamTool struct {
+	name      string
+	chunks    []any
+	innerText tool.InnerTextMode
+}
+
+func (m *innerTextPrefStreamTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: m.name}
+}
+
+func (m *innerTextPrefStreamTool) InnerTextMode() tool.InnerTextMode {
+	return m.innerText
+}
+
+func (m *innerTextPrefStreamTool) StreamableCall(
+	ctx context.Context,
+	jsonArgs []byte,
+) (*tool.StreamReader, error) {
+	stream := tool.NewStream(8)
+	go func() {
+		defer stream.Writer.Close()
+		for _, c := range m.chunks {
+			if stream.Writer.Send(tool.StreamChunk{Content: c}, nil) {
+				return
+			}
+		}
+	}()
+	return stream.Reader, nil
+}
+
 // Test that newToolCallResponseEvent constructs events via helpers and fills metadata correctly.
 func TestNewToolCallResponseEvent_Constructor(t *testing.T) {
 	inv := &agent.Invocation{InvocationID: "inv-1", AgentName: "tester", Branch: "main"}
@@ -3056,7 +3086,8 @@ func TestProcessStreamChunk_ForwardsEvent(t *testing.T) {
 	var innerEventState streamInnerEventState
 	err := f.processStreamChunk(ctx, inv,
 		model.ToolCall{ID: "x"},
-		tool.StreamChunk{Content: ev}, ch, &contents, &finalResult, &innerEventState, false,
+		tool.StreamChunk{Content: ev}, ch, &contents, &finalResult,
+		&innerEventState, tool.InnerTextModeInclude, false,
 	)
 	require.NoError(t, err)
 	select {
@@ -3526,10 +3557,12 @@ func (m *mockTransferCallableTool) Call(ctx context.Context, args []byte) (any, 
 type prefTool struct {
 	name        string
 	preferInner bool
+	innerText   tool.InnerTextMode
 }
 
 func (p *prefTool) Declaration() *tool.Declaration                  { return &tool.Declaration{Name: p.name} }
 func (p *prefTool) StreamInner() bool                               { return p.preferInner }
+func (p *prefTool) InnerTextMode() tool.InnerTextMode               { return p.innerText }
 func (p *prefTool) Call(ctx context.Context, _ []byte) (any, error) { return "called:" + p.name, nil }
 func (p *prefTool) StreamableCall(ctx context.Context, _ []byte) (*tool.StreamReader, error) {
 	s := tool.NewStream(2)
@@ -3570,6 +3603,318 @@ func TestExecuteTool_RespectsStreamInnerPreference(t *testing.T) {
 		require.True(t, e.IsPartial)
 	default:
 		t.Fatalf("expected a partial tool.response event when streaming")
+	}
+}
+
+func TestExecuteStreamableTool_HidesInnerAssistantText(t *testing.T) {
+	f := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{
+		InvocationID: "inv-inner-text",
+		AgentName:    "tester",
+		Model:        &mockModel{},
+	}
+	toolCall := model.ToolCall{
+		ID:       "call-inner-text",
+		Function: model.FunctionDefinitionParam{Name: "pref"},
+	}
+	partText := "part-text"
+
+	toolCallEvent := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: &partText,
+						},
+						{
+							Type: model.ContentTypeFile,
+							File: &model.File{Name: "report.txt"},
+						},
+					},
+					ToolCalls: []model.ToolCall{{
+						ID: "child-tool",
+						Function: model.FunctionDefinitionParam{
+							Name:      "lookup",
+							Arguments: []byte(`{"q":"x"}`),
+						},
+					}},
+				},
+			}},
+		},
+	}
+	textEvent := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{Content: "hello"},
+			}},
+		},
+	}
+
+	st := &innerTextPrefStreamTool{
+		name:      "pref",
+		innerText: tool.InnerTextModeExclude,
+		chunks: []any{
+			toolCallEvent,
+			textEvent,
+		},
+	}
+	ch := make(chan *event.Event, 4)
+	_, res, _, err := f.executeStreamableTool(
+		ctx,
+		inv,
+		toolCall,
+		st,
+		ch,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "hello", res)
+
+	var forwarded []*event.Event
+	for len(ch) > 0 {
+		evt := <-ch
+		forwarded = append(forwarded, evt)
+	}
+	require.Len(t, forwarded, 1)
+	require.Len(t, forwarded[0].Choices, 1)
+	require.Len(t, forwarded[0].Choices[0].Message.ToolCalls, 1)
+	require.Empty(t, forwarded[0].Choices[0].Message.Content)
+	require.Len(t, forwarded[0].Choices[0].Message.ContentParts, 1)
+	require.Equal(
+		t,
+		model.ContentTypeFile,
+		forwarded[0].Choices[0].Message.ContentParts[0].Type,
+	)
+}
+
+func TestFilterForwardedInnerTextEvent_DropsTextOnlyContentParts(t *testing.T) {
+	partText := "secret"
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ContentParts: []model.ContentPart{{
+						Type: model.ContentTypeText,
+						Text: &partText,
+					}},
+				},
+			}},
+		},
+	}
+
+	filtered, shouldEmit := filterForwardedInnerTextEvent(
+		ev,
+		tool.InnerTextModeExclude,
+	)
+	require.False(t, shouldEmit)
+	require.NotNil(t, filtered)
+	require.Empty(t, filtered.Response.Choices[0].Message.ContentParts)
+}
+
+func TestFilterForwardedInnerTextEvent_PreservesNonTextContentParts(
+	t *testing.T,
+) {
+	partText := "hidden"
+	ev := &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					ContentParts: []model.ContentPart{
+						{
+							Type: model.ContentTypeText,
+							Text: &partText,
+						},
+						{
+							Type: model.ContentTypeImage,
+							Image: &model.Image{
+								URL: "https://example.com/image.png",
+							},
+						},
+					},
+				},
+			}},
+		},
+	}
+
+	filtered, shouldEmit := filterForwardedInnerTextEvent(
+		ev,
+		tool.InnerTextModeExclude,
+	)
+	require.True(t, shouldEmit)
+	require.NotNil(t, filtered)
+	require.Len(t, filtered.Response.Choices[0].Delta.ContentParts, 1)
+	require.Equal(
+		t,
+		model.ContentTypeImage,
+		filtered.Response.Choices[0].Delta.ContentParts[0].Type,
+	)
+}
+
+func TestInnerTextModeForTool_NilAndNamedTool(t *testing.T) {
+	const toolName = "inner-text-pref"
+
+	require.Equal(
+		t,
+		tool.InnerTextModeInclude,
+		innerTextModeForTool(nil),
+	)
+	require.Equal(
+		t,
+		tool.InnerTextModeInclude,
+		innerTextModeForTool(&mockStreamTool{name: toolName}),
+	)
+
+	baseTool := &innerTextPrefStreamTool{
+		name:      toolName,
+		innerText: tool.InnerTextModeExclude,
+	}
+	namedTools := itool.NewNamedToolSet(&mockToolSet{
+		tools: []tool.Tool{baseTool},
+	}).Tools(context.Background())
+	require.Len(t, namedTools, 1)
+	namedStreamTool, ok := namedTools[0].(tool.StreamableTool)
+	require.True(t, ok)
+	require.Equal(
+		t,
+		tool.InnerTextModeExclude,
+		innerTextModeForTool(namedStreamTool),
+	)
+}
+
+func TestShouldEmitFilteredInnerEvent_SupplementalSignals(t *testing.T) {
+	const errMessage = "boom"
+	tests := []struct {
+		name string
+		ev   *event.Event
+		want bool
+	}{
+		{
+			name: "nil event",
+			want: false,
+		},
+		{
+			name: "state delta",
+			ev: &event.Event{
+				StateDelta: map[string][]byte{"k": []byte("v")},
+			},
+			want: true,
+		},
+		{
+			name: "error event",
+			ev: &event.Event{
+				Response: &model.Response{
+					Error: &model.ResponseError{Message: errMessage},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "tool response object",
+			ev: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "chat completion object",
+			ev: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(
+				t,
+				tc.want,
+				shouldEmitFilteredInnerEvent(tc.ev),
+			)
+		})
+	}
+}
+
+func TestClearForwardedMessageText_NilMessage(t *testing.T) {
+	require.False(t, clearForwardedMessageText(nil))
+}
+
+func TestRemoveForwardedTextContentParts_NoText(t *testing.T) {
+	parts := []model.ContentPart{{
+		Type: model.ContentTypeImage,
+		Image: &model.Image{
+			URL: "https://example.com/image.png",
+		},
+	}}
+
+	filtered, removed := removeForwardedTextContentParts(parts)
+	require.False(t, removed)
+	require.Equal(t, parts, filtered)
+}
+
+func TestResponseHasForwardablePayload_SupplementalCases(t *testing.T) {
+	const errMessage = "boom"
+	finishStop := "stop"
+	partText := "visible"
+	tests := []struct {
+		name string
+		rsp  *model.Response
+		want bool
+	}{
+		{
+			name: "nil response",
+			want: false,
+		},
+		{
+			name: "response error",
+			rsp: &model.Response{
+				Error: &model.ResponseError{Message: errMessage},
+			},
+			want: true,
+		},
+		{
+			name: "message content parts",
+			rsp: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						ContentParts: []model.ContentPart{{
+							Type: model.ContentTypeText,
+							Text: &partText,
+						}},
+					},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "finish reason",
+			rsp: &model.Response{
+				Choices: []model.Choice{{
+					FinishReason: &finishStop,
+				}},
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(
+				t,
+				tc.want,
+				responseHasForwardablePayload(tc.rsp),
+			)
+		})
 	}
 }
 
@@ -4310,6 +4655,7 @@ func TestProcessStreamChunk_PointerFinalResultChunkMarksSeen(t *testing.T) {
 		&contents,
 		&finalResult,
 		&innerEventState,
+		tool.InnerTextModeInclude,
 		false,
 	)
 	require.NoError(t, err)
@@ -4341,6 +4687,7 @@ func TestProcessStreamChunk_NilPointerFinalResultChunkDoesNotMarkSeen(t *testing
 		&contents,
 		&finalResult,
 		&innerEventState,
+		tool.InnerTextModeInclude,
 		false,
 	)
 	require.NoError(t, err)
@@ -4954,6 +5301,7 @@ func TestProcessStreamChunk_EmptyText_NoEvent(t *testing.T) {
 		&out,
 		&finalResult,
 		&innerEventState,
+		tool.InnerTextModeInclude,
 		false,
 	)
 	require.NoError(t, err)
@@ -4980,6 +5328,7 @@ func TestProcessStreamChunk_TextWithoutEventChannel_AppendsContent(t *testing.T)
 		&out,
 		&finalResult,
 		&innerEventState,
+		tool.InnerTextModeInclude,
 		false,
 	)
 	require.NoError(t, err)

@@ -38,7 +38,8 @@ Agent tools provide a way to wrap any agent as a tool that can be called by othe
 | Argument      | Description                                     | Default Value   |
 | ------------- | ----------------------------------------------- | --------------- |
 | `-model`      | Name of the model to use                        | `deepseek-chat` |
-| `-show-inner` | Show inner agent deltas streamed by AgentTool   | `false`         |
+| `-show-inner` | Show inner agent deltas streamed by AgentTool   | `true`          |
+| `-inner-text` | Inner text mode: `include` or `exclude`         | `include`       |
 | `-show-tool`  | Show tool.response deltas/finals in transcript  | `false`         |
 | `-debug`      | Prefix streamed lines with author for debugging | `false`         |
 
@@ -58,6 +59,75 @@ go run .
 export OPENAI_API_KEY="your-api-key"
 go run . -model gpt-4o
 ```
+
+## How to Read the Output
+
+This example exposes three visibility controls:
+
+- `-show-inner`: whether AgentTool forwards inner events at all
+- `-inner-text`: whether forwarded inner assistant text is visible
+- `-show-tool`: whether the example prints the aggregated final
+  `tool.response`
+
+The flags map directly to the AgentTool configuration:
+
+```go
+agentTool := agenttool.NewTool(
+    mathAgent,
+    agenttool.WithSkipSummarization(true),
+    agenttool.WithStreamInner(showInner),
+    agenttool.WithInnerTextMode(innerTextMode),
+)
+```
+
+### Full Inner Transcript
+
+```bash
+go run . -show-inner=true -inner-text=include
+```
+
+Use this when you want to watch the child agent's natural-language output as it
+streams.
+
+You will see:
+
+- tool call markers such as `math-specialist` and `calculator`
+- streamed child text from the math specialist
+- a completion marker when the tool finishes
+
+### Progress Only, No Child Prose
+
+```bash
+go run . -show-inner=true -inner-text=exclude -show-tool=true
+```
+
+Use this when you want users to see that work is happening, but you do not want
+to render the child agent's prose token by token.
+
+You will see:
+
+- tool call markers
+- tool execution progress
+- the final aggregated `tool.response`
+- no streamed child assistant prose
+
+This is the clearest way to learn `InnerTextModeExclude`, because the result
+stays visible through `tool.response` while the child transcript remains hidden.
+
+### Callable-Only Tool View
+
+```bash
+go run . -show-inner=false -show-tool=true
+```
+
+Use this when you want the child agent to behave like a regular tool from the
+user's point of view.
+
+You will see:
+
+- the outer assistant's own text
+- tool response output if `-show-tool=true`
+- no forwarded inner events
 
 ## Implemented Tools
 
@@ -94,7 +164,8 @@ Chat Assistant (Main Agent)
 ### How Agent Tools Work
 
 1. **Agent Creation**: A specialized agent (e.g., math specialist) is created with specific instructions and capabilities
-2. **Tool Wrapping**: The agent is wrapped as a tool using `agent.NewAgentTool()`
+2. **Tool Wrapping**: The agent is wrapped as a tool using
+   `agenttool.NewTool()`
 3. **Tool Integration**: The agent tool is added to the main agent's tool list
 4. **Delegation**: When the main agent encounters tasks that match the specialized agent's expertise, it delegates to the agent tool
 5. **Response Processing**: The agent tool executes the specialized agent and returns the result. When the agent tool streams, you will receive `tool.response` events with partial chunks.
@@ -122,6 +193,9 @@ The interface is simple and intuitive:
 ```
 🚀 Agent Tool Example
 Model: gpt-4o-mini
+Show inner: true
+Inner text mode: include
+Show tool: false
 Available tools: current_time, math-specialist(agent_tool)
 ==================================================
 ✅ Chat ready! Session: chat-session-1703123456
@@ -163,25 +237,18 @@ I calculated the product of 923,476 and 273,472,354. The result of this multipli
 
 ## Agent Tool Implementation
 
-The agent tool implementation follows the runner/ example structure with separate files:
+The important parts all live in `main.go`:
 
 ### main.go
 
-Contains the main chat logic and agent setup.
-
-### tools.go
-
-Contains all tool definitions and implementations with proper JSON schema:
+Contains the main chat logic, visibility flags, and tool setup:
 
 ```go
-// Tool arguments with JSON schema
-type calculatorArgs struct {
-    Operation string  `json:"operation" jsonschema:"description=The operation to perform,enum=add,enum=subtract,enum=multiply,enum=divide"`
-    A         float64 `json:"a" jsonschema:"description=First number"`
-    B         float64 `json:"b" jsonschema:"description=Second number"`
+innerTextMode, err := parseInnerTextMode(*innerTextMode)
+if err != nil {
+    log.Fatalf("invalid -inner-text: %v", err)
 }
 
-// Math agent with input schema
 mathAgent := llmagent.New(
     "math-specialist",
     llmagent.WithDescription("A specialized agent for mathematical operations"),
@@ -200,10 +267,11 @@ mathAgent := llmagent.New(
 )
 
 // Wrap the agent as a tool
-agentTool := agent.NewTool(
+agentTool := agenttool.NewTool(
     mathAgent,
-    agent.WithSkipSummarization(true), // opt-in: skip parent summarization after the tool response
-    agent.WithStreamInner(true),
+    agenttool.WithSkipSummarization(true),
+    agenttool.WithStreamInner(*showInner),
+    agenttool.WithInnerTextMode(innerTextMode),
 )
 ```
 
@@ -248,24 +316,36 @@ This lets the agent tool stream results progressively while keeping the main con
 
 ### AgentTool Defaults and Flags
 
-- Default behavior: AgentTool lets the outer agent run its follow-up turn after `tool.response`, allowing it to summarize or combine results.
-- Streaming inner transcript: By default, inner agent deltas are not forwarded. Pass `-show-inner` to see the inner agent’s streamed deltas in the parent transcript. Under the hood this enables `agenttool.WithStreamInner(true)`.
-- Tool output printing: The framework always emits a final non-partial `tool.response` with merged content for session history and provider compliance. To avoid printing the merged content again when you already saw deltas, the example hides it unless `-show-tool` is set.
+- This example opts into `agenttool.WithSkipSummarization(true)`, so the child
+  result is surfaced directly instead of asking the outer agent for one more
+  summarization turn.
+- Inner forwarding is enabled by default in the example
+  (`-show-inner=true`), which is why you can immediately see child progress.
+- `-inner-text=include` shows the child agent's prose as it streams.
+- `-inner-text=exclude` hides child prose but still lets you keep tool
+  progress and the aggregated final `tool.response`.
+- The framework always emits a final non-partial `tool.response` with merged
+  content for session history and provider compliance. The example hides it
+  unless `-show-tool` is set.
 
 Examples:
 
 ```bash
-# Clean UX, no inner streaming; outer agent summarizes after tool.response (default)
+# Default example mode: show inner child prose
 go run . -model gpt-4o-mini
 
-# Stream inner agent deltas and show tool messages
-go run . -show-inner -show-tool
+# Show progress only, then render the aggregated tool response
+go run . -show-inner -inner-text=exclude -show-tool
 
-# Stream inner agent deltas but keep tool messages hidden (marker only)
-go run . -show-inner
+# Hide all inner events and only print tool outputs
+go run . -show-inner=false -show-tool
 ```
 
 Notes:
 
-- Even when inner deltas are streamed, the example suppresses the inner agent’s final full content to avoid duplication. The final `tool.response` persists the merged content for history, but the UI prints only a completion marker unless `-show-tool` is used.
-- The default configuration keeps the outer-agent summary after the tool finishes; pass `agenttool.WithSkipSummarization(true)` if you want the tool result to be surfaced directly instead.
+- Even when inner deltas are streamed, the framework does not forward the child
+  agent's final full message again. That content is merged into the final
+  `tool.response`.
+- If you choose `-inner-text=exclude` and also keep `-show-tool=false`, you
+  will only see progress markers. That is expected: the child prose is hidden,
+  and the example is also choosing not to print the final tool message.

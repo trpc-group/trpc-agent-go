@@ -430,6 +430,8 @@ When `WithStreamInner(true)` is enabled for the Agent tool:
 
 - Child Agent events are forwarded as streaming `event.Event` items; you can directly display `choice.Delta.Content`
 - To avoid duplicates, the child Agent’s final full text is not forwarded again; it is aggregated into the final `tool.response` that follows tool_calls (satisfying provider requirements)
+- To keep inner progress but hide child assistant prose, add
+  `WithInnerTextMode(agenttool.InnerTextModeExclude)`
 - UI recommendations:
   - Show forwarded child deltas as they stream
   - By default, don’t reprint the final aggregated tool response text unless debugging
@@ -458,6 +460,10 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 - `WithSkipSummarization(true)`: Skip the outer summarization so the tool output is surfaced directly
 - `WithStreamInner(true)`: Forward child Agent events (use `Stream: true` on both parent and child Agents)
 - `WithStreamInner(false)`: Treat as a callable-only tool, without inner forwarding
+- `WithInnerTextMode(agenttool.InnerTextModeInclude)`: show child
+  assistant text when inner streaming is enabled
+- `WithInnerTextMode(agenttool.InnerTextModeExclude)`: keep inner
+  progress events, but suppress forwarded child assistant text
 
 ### Agent Transfer
 

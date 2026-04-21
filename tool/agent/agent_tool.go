@@ -37,6 +37,7 @@ type Tool struct {
 	agent                  agent.Agent
 	skipSummarization      bool
 	streamInner            bool
+	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
 	name                   string
@@ -52,10 +53,27 @@ type Option func(*agentToolOptions)
 type agentToolOptions struct {
 	skipSummarization      bool
 	streamInner            bool
+	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
 	description            *string
 }
+
+// InnerTextMode controls whether forwarded inner assistant text is visible
+// in the parent flow when StreamInner is enabled.
+type InnerTextMode = tool.InnerTextMode
+
+const (
+	// InnerTextModeDefault preserves the default behavior.
+	InnerTextModeDefault = tool.InnerTextModeDefault
+
+	// InnerTextModeInclude forwards inner assistant text to the parent flow.
+	InnerTextModeInclude = tool.InnerTextModeInclude
+
+	// InnerTextModeExclude suppresses forwarded inner assistant text while
+	// still aggregating that text into the final tool response.
+	InnerTextModeExclude = tool.InnerTextModeExclude
+)
 
 // WithSkipSummarization sets whether to skip summarization of the agent output.
 func WithSkipSummarization(skip bool) Option {
@@ -70,6 +88,14 @@ func WithSkipSummarization(skip bool) Option {
 func WithStreamInner(enabled bool) Option {
 	return func(opts *agentToolOptions) {
 		opts.streamInner = enabled
+	}
+}
+
+// WithInnerTextMode controls whether forwarded inner assistant text is
+// visible in the parent flow when StreamInner is enabled.
+func WithInnerTextMode(mode InnerTextMode) Option {
+	return func(opts *agentToolOptions) {
+		opts.innerTextMode = tool.NormalizeInnerTextMode(mode)
 	}
 }
 
@@ -170,6 +196,7 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		agent:                  agent,
 		skipSummarization:      options.skipSummarization,
 		streamInner:            options.streamInner,
+		innerTextMode:          tool.NormalizeInnerTextMode(options.innerTextMode),
 		structuredStreamErrors: options.structuredStreamErrors,
 		historyScope:           options.historyScope,
 		name:                   info.Name,
@@ -1199,6 +1226,15 @@ func (at *Tool) TRPCAgentGoStructuredStreamErrorsOptIn() bool {
 // StreamInner exposes whether this AgentTool prefers the flow to treat it as
 // streamable (forwarding inner deltas) versus callable-only.
 func (at *Tool) StreamInner() bool { return at.streamInner }
+
+// InnerTextMode exposes how forwarded inner assistant text should be handled
+// when StreamInner is enabled.
+func (at *Tool) InnerTextMode() InnerTextMode {
+	if at == nil {
+		return tool.InnerTextModeInclude
+	}
+	return tool.NormalizeInnerTextMode(at.innerTextMode)
+}
 
 // Declaration returns the tool's declaration information.
 //

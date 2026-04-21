@@ -66,6 +66,10 @@ type streamInnerPreference interface {
 	StreamInner() bool
 }
 
+type innerTextModePreference interface {
+	InnerTextMode() tool.InnerTextMode
+}
+
 type toolEventStateDelta struct {
 	tool   tool.Tool
 	args   []byte
@@ -1730,6 +1734,21 @@ func shouldRequestStructuredStreamErrors(tl tool.StreamableTool) bool {
 	return ok && pref.TRPCAgentGoStructuredStreamErrorsOptIn()
 }
 
+func innerTextModeForTool(tl tool.StreamableTool) tool.InnerTextMode {
+	if tl == nil {
+		return tool.InnerTextModeInclude
+	}
+	candidate := any(tl)
+	if namedTool, ok := tl.(*itool.NamedTool); ok {
+		candidate = namedTool.Original()
+	}
+	pref, ok := candidate.(innerTextModePreference)
+	if !ok {
+		return tool.InnerTextModeInclude
+	}
+	return pref.InnerTextMode()
+}
+
 // executeStreamableTool executes a streamable tool.
 func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	ctx context.Context,
@@ -1762,6 +1781,7 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 		toolCall,
 		reader,
 		eventChan,
+		innerTextModeForTool(tl),
 		shouldRequestStructuredStreamErrors(tl),
 	)
 	if err != nil {
@@ -1813,6 +1833,7 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 	toolCall model.ToolCall,
 	reader *tool.StreamReader,
 	eventChan chan<- *event.Event,
+	innerTextMode tool.InnerTextMode,
 	structuredErrors bool,
 ) ([]any, streamFinalResult, error) {
 	var contents []any
@@ -1844,6 +1865,7 @@ func (f *FunctionCallResponseProcessor) consumeStream(
 			&contents,
 			&finalResult,
 			&innerEventState,
+			innerTextMode,
 			structuredErrors,
 		); err != nil {
 			return contents, finalResult, err
@@ -2236,6 +2258,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 	contents *[]any,
 	finalResult *streamFinalResult,
 	innerEventState *streamInnerEventState,
+	innerTextMode tool.InnerTextMode,
 	structuredErrors bool,
 ) error {
 	if finalChunk, ok := normalizeFinalResultChunk(chunk.Content); ok {
@@ -2257,6 +2280,7 @@ func (f *FunctionCallResponseProcessor) processStreamChunk(
 			contents,
 			innerEventState,
 			ev,
+			innerTextMode,
 			structuredErrors,
 		)
 	}
@@ -2335,13 +2359,20 @@ func (f *FunctionCallResponseProcessor) handleStreamInnerEvent(
 	contents *[]any,
 	innerEventState *streamInnerEventState,
 	ev *event.Event,
+	innerTextMode tool.InnerTextMode,
 	structuredErrors bool,
 ) error {
 	if err := flushPendingGraphToolError(innerEventState, ev, structuredErrors); err != nil {
 		return err
 	}
-	if err := event.EmitEvent(ctx, eventChan, ev); err != nil {
-		return err
+	filteredEvent, shouldEmit := filterForwardedInnerTextEvent(
+		ev,
+		innerTextMode,
+	)
+	if shouldEmit {
+		if err := event.EmitEvent(ctx, eventChan, filteredEvent); err != nil {
+			return err
+		}
 	}
 	f.appendInnerEventContent(ev, contents)
 	if !structuredErrors {
@@ -2354,6 +2385,122 @@ func (f *FunctionCallResponseProcessor) handleStreamInnerEvent(
 		return nil
 	}
 	return streamToolEventError(ev)
+}
+
+func filterForwardedInnerTextEvent(
+	ev *event.Event,
+	mode tool.InnerTextMode,
+) (*event.Event, bool) {
+	if ev == nil || mode != tool.InnerTextModeExclude {
+		return ev, ev != nil
+	}
+	if ev.Response == nil || len(ev.Response.Choices) == 0 {
+		return ev, true
+	}
+
+	filtered := *ev
+	filtered.Response = ev.Response.Clone()
+	modified := false
+	for i := range filtered.Response.Choices {
+		choice := &filtered.Response.Choices[i]
+		if filtered.Response.Object == model.ObjectTypeChatCompletionChunk &&
+			clearForwardedMessageText(&choice.Delta) {
+			modified = true
+		}
+		if choice.Message.Role == model.RoleAssistant &&
+			clearForwardedMessageText(&choice.Message) {
+			modified = true
+		}
+	}
+	if !modified {
+		return ev, true
+	}
+	return &filtered, shouldEmitFilteredInnerEvent(&filtered)
+}
+
+func shouldEmitFilteredInnerEvent(ev *event.Event) bool {
+	if ev == nil {
+		return false
+	}
+	if responseHasForwardablePayload(ev.Response) {
+		return true
+	}
+	if len(ev.StateDelta) > 0 || ev.Error != nil ||
+		ev.StructuredOutput != nil || ev.ExecutionTrace != nil ||
+		ev.Actions != nil || ev.RequiresCompletion {
+		return true
+	}
+	return ev.Object != "" &&
+		ev.Object != model.ObjectTypeChatCompletion &&
+		ev.Object != model.ObjectTypeChatCompletionChunk
+}
+
+func clearForwardedMessageText(msg *model.Message) bool {
+	if msg == nil {
+		return false
+	}
+	modified := false
+	if msg.Content != "" {
+		msg.Content = ""
+		modified = true
+	}
+	filteredParts, removed := removeForwardedTextContentParts(
+		msg.ContentParts,
+	)
+	if removed {
+		msg.ContentParts = filteredParts
+		modified = true
+	}
+	return modified
+}
+
+func removeForwardedTextContentParts(
+	parts []model.ContentPart,
+) ([]model.ContentPart, bool) {
+	if len(parts) == 0 {
+		return parts, false
+	}
+	kept := make([]model.ContentPart, 0, len(parts))
+	removed := false
+	for _, part := range parts {
+		if part.Type == model.ContentTypeText {
+			removed = true
+			continue
+		}
+		kept = append(kept, part)
+	}
+	if !removed {
+		return parts, false
+	}
+	return kept, true
+}
+
+func responseHasForwardablePayload(rsp *model.Response) bool {
+	if rsp == nil {
+		return false
+	}
+	if rsp.Error != nil {
+		return true
+	}
+	for i := range rsp.Choices {
+		choice := rsp.Choices[i]
+		if choice.Delta.Content != "" || choice.Delta.ToolID != "" ||
+			len(choice.Delta.ContentParts) > 0 ||
+			len(choice.Delta.ToolCalls) > 0 ||
+			choice.Delta.ReasoningContent != "" {
+			return true
+		}
+		if choice.Message.Content != "" || choice.Message.ToolID != "" ||
+			len(choice.Message.ContentParts) > 0 ||
+			len(choice.Message.ToolCalls) > 0 ||
+			choice.Message.ReasoningContent != "" {
+			return true
+		}
+		if choice.FinishReason != nil && *choice.FinishReason != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *FunctionCallResponseProcessor) handlePlainStreamChunk(
