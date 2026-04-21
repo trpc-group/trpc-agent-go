@@ -3649,12 +3649,13 @@
 </span><span id="__span-6-125"><a id="__codelineno-6-125" name="__codelineno-6-125"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">topics</span>
 </span><span id="__span-6-126"><a id="__codelineno-6-126" name="__codelineno-6-126"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>For quick implementation, you can directly integrate with existing Memory platforms/services (such as mem0). Recommendations:</p>
+<p>For externally hosted memory platforms/services such as mem0, prefer an <strong>ingest-first integration</strong> instead of forcing the platform into the full <code>memory.Service</code> CRUD contract.</p>
+<p>Recommendations:</p>
 <ul>
-<li>Provide implementation in <code>memory/mem0/</code>, following the <code>memory.Service</code> interface.</li>
-<li>Reuse existing <code>memory/tool</code> tools (<code>memory_add</code>, <code>memory_search</code>, <code>memory_load</code>, etc.), expose through <code>Tools()</code>.</li>
-<li>Map topics and search according to target service capabilities, maintain lightweight local indexes when necessary to enhance query experience.</li>
-<li>Optional: Reuse <code>storage</code> module client management for unified authentication, connection and reuse.</li>
+<li>Place the package under <code>memory/mem0/</code> for better discoverability within the memory domain.</li>
+<li>Let Runner hand the completed session transcript to the platform after each turn via <code>runner.WithSessionIngestor(...)</code>.</li>
+<li>Expose only the platform capabilities that naturally fit agent usage. For mem0, that typically means read-only tools such as <code>memory_search</code> and optional <code>memory_load</code>.</li>
+<li>Keep platform-specific ingestion, polling, authentication and retry logic inside <code>memory/mem0</code> rather than spreading it across core memory abstractions.</li>
 </ul>
 <p>Example skeleton (simplified):</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
@@ -3677,104 +3678,34 @@
 <span class="normal"><a href="#__codelineno-7-18">18</a></span>
 <span class="normal"><a href="#__codelineno-7-19">19</a></span>
 <span class="normal"><a href="#__codelineno-7-20">20</a></span>
-<span class="normal"><a href="#__codelineno-7-21">21</a></span>
-<span class="normal"><a href="#__codelineno-7-22">22</a></span>
-<span class="normal"><a href="#__codelineno-7-23">23</a></span>
-<span class="normal"><a href="#__codelineno-7-24">24</a></span>
-<span class="normal"><a href="#__codelineno-7-25">25</a></span>
-<span class="normal"><a href="#__codelineno-7-26">26</a></span>
-<span class="normal"><a href="#__codelineno-7-27">27</a></span>
-<span class="normal"><a href="#__codelineno-7-28">28</a></span>
-<span class="normal"><a href="#__codelineno-7-29">29</a></span>
-<span class="normal"><a href="#__codelineno-7-30">30</a></span>
-<span class="normal"><a href="#__codelineno-7-31">31</a></span>
-<span class="normal"><a href="#__codelineno-7-32">32</a></span>
-<span class="normal"><a href="#__codelineno-7-33">33</a></span>
-<span class="normal"><a href="#__codelineno-7-34">34</a></span>
-<span class="normal"><a href="#__codelineno-7-35">35</a></span>
-<span class="normal"><a href="#__codelineno-7-36">36</a></span>
-<span class="normal"><a href="#__codelineno-7-37">37</a></span>
-<span class="normal"><a href="#__codelineno-7-38">38</a></span>
-<span class="normal"><a href="#__codelineno-7-39">39</a></span>
-<span class="normal"><a href="#__codelineno-7-40">40</a></span>
-<span class="normal"><a href="#__codelineno-7-41">41</a></span>
-<span class="normal"><a href="#__codelineno-7-42">42</a></span>
-<span class="normal"><a href="#__codelineno-7-43">43</a></span>
-<span class="normal"><a href="#__codelineno-7-44">44</a></span>
-<span class="normal"><a href="#__codelineno-7-45">45</a></span>
-<span class="normal"><a href="#__codelineno-7-46">46</a></span>
-<span class="normal"><a href="#__codelineno-7-47">47</a></span>
-<span class="normal"><a href="#__codelineno-7-48">48</a></span>
-<span class="normal"><a href="#__codelineno-7-49">49</a></span>
-<span class="normal"><a href="#__codelineno-7-50">50</a></span>
-<span class="normal"><a href="#__codelineno-7-51">51</a></span>
-<span class="normal"><a href="#__codelineno-7-52">52</a></span>
-<span class="normal"><a href="#__codelineno-7-53">53</a></span>
-<span class="normal"><a href="#__codelineno-7-54">54</a></span>
-<span class="normal"><a href="#__codelineno-7-55">55</a></span>
-<span class="normal"><a href="#__codelineno-7-56">56</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">mem0</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">    </span><span class="s">&quot;net/http&quot;</span>
-</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a>
-</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/memory&quot;</span>
-</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="w">    </span><span class="nx">memorytool</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/memory/tool&quot;</span>
-</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
-</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="p">)</span>
-</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a>
-</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Service</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">    </span><span class="nx">client</span><span class="w">  </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Client</span>
-</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="w">    </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="w">    </span><span class="nx">apiKey</span><span class="w">  </span><span class="kt">string</span>
-</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="w">    </span><span class="nx">tools</span><span class="w">   </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span>
-</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="p">}</span>
-</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a>
-</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">baseURL</span><span class="p">,</span><span class="w"> </span><span class="nx">apiKey</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">    </span><span class="nx">s</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Service</span><span class="p">{</span>
-</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="w">        </span><span class="nx">client</span><span class="p">:</span><span class="w">  </span><span class="o">&amp;</span><span class="nx">http</span><span class="p">.</span><span class="nx">Client</span><span class="p">{},</span>
-</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">        </span><span class="nx">baseURL</span><span class="p">:</span><span class="w"> </span><span class="nx">baseURL</span><span class="p">,</span>
-</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a><span class="w">        </span><span class="nx">apiKey</span><span class="p">:</span><span class="w">  </span><span class="nx">apiKey</span><span class="p">,</span>
-</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a><span class="w">        </span><span class="nx">tools</span><span class="p">:</span><span class="w">   </span><span class="nb">make</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">),</span>
-</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26"></a><span class="w">    </span><span class="nx">s</span><span class="p">.</span><span class="nx">tools</span><span class="p">[</span><span class="nx">memory</span><span class="p">.</span><span class="nx">AddToolName</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">memorytool</span><span class="p">.</span><span class="nx">NewAddTool</span><span class="p">(</span><span class="nx">s</span><span class="p">)</span>
-</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27"></a><span class="w">    </span><span class="nx">s</span><span class="p">.</span><span class="nx">tools</span><span class="p">[</span><span class="nx">memory</span><span class="p">.</span><span class="nx">SearchToolName</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">memorytool</span><span class="p">.</span><span class="nx">NewSearchTool</span><span class="p">(</span><span class="nx">s</span><span class="p">)</span>
-</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28"></a><span class="w">    </span><span class="nx">s</span><span class="p">.</span><span class="nx">tools</span><span class="p">[</span><span class="nx">memory</span><span class="p">.</span><span class="nx">LoadToolName</span><span class="p">]</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">memorytool</span><span class="p">.</span><span class="nx">NewLoadTool</span><span class="p">(</span><span class="nx">s</span><span class="p">)</span>
-</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">s</span>
-</span><span id="__span-7-30"><a id="__codelineno-7-30" name="__codelineno-7-30"></a><span class="p">}</span>
-</span><span id="__span-7-31"><a id="__codelineno-7-31" name="__codelineno-7-31"></a>
-</span><span id="__span-7-32"><a id="__codelineno-7-32" name="__codelineno-7-32"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">Tools</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-33"><a id="__codelineno-7-33" name="__codelineno-7-33"></a><span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">ts</span><span class="w"> </span><span class="p">[]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span>
-</span><span id="__span-7-34"><a id="__codelineno-7-34" name="__codelineno-7-34"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">t</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">tools</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-35"><a id="__codelineno-7-35" name="__codelineno-7-35"></a><span class="w">        </span><span class="nx">ts</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">ts</span><span class="p">,</span><span class="w"> </span><span class="nx">t</span><span class="p">)</span>
-</span><span id="__span-7-36"><a id="__codelineno-7-36" name="__codelineno-7-36"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-37"><a id="__codelineno-7-37" name="__codelineno-7-37"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">ts</span>
-</span><span id="__span-7-38"><a id="__codelineno-7-38" name="__codelineno-7-38"></a><span class="p">}</span>
-</span><span id="__span-7-39"><a id="__codelineno-7-39" name="__codelineno-7-39"></a>
-</span><span id="__span-7-40"><a id="__codelineno-7-40" name="__codelineno-7-40"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">AddMemory</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="w"> </span><span class="nx">memory</span><span class="p">.</span><span class="nx">UserKey</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">topics</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-41"><a id="__codelineno-7-41" name="__codelineno-7-41"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">key</span><span class="p">.</span><span class="nx">CheckUserKey</span><span class="p">();</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-42"><a id="__codelineno-7-42" name="__codelineno-7-42"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-7-43"><a id="__codelineno-7-43" name="__codelineno-7-43"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-44"><a id="__codelineno-7-44" name="__codelineno-7-44"></a><span class="w">    </span><span class="c1">// Call mem0 API to write memory.</span>
-</span><span id="__span-7-45"><a id="__codelineno-7-45" name="__codelineno-7-45"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-7-46"><a id="__codelineno-7-46" name="__codelineno-7-46"></a><span class="p">}</span>
-</span><span id="__span-7-47"><a id="__codelineno-7-47" name="__codelineno-7-47"></a>
-</span><span id="__span-7-48"><a id="__codelineno-7-48" name="__codelineno-7-48"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="p">)</span><span class="w"> </span><span class="nx">SearchMemories</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="w"> </span><span class="nx">memory</span><span class="p">.</span><span class="nx">UserKey</span><span class="p">,</span><span class="w"> </span><span class="nx">q</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="o">*</span><span class="nx">memory</span><span class="p">.</span><span class="nx">Entry</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-49"><a id="__codelineno-7-49" name="__codelineno-7-49"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">key</span><span class="p">.</span><span class="nx">CheckUserKey</span><span class="p">();</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-7-50"><a id="__codelineno-7-50" name="__codelineno-7-50"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-7-51"><a id="__codelineno-7-51" name="__codelineno-7-51"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-7-52"><a id="__codelineno-7-52" name="__codelineno-7-52"></a><span class="w">    </span><span class="c1">// Call mem0 API to search, and convert to []*memory.Entry.</span>
-</span><span id="__span-7-53"><a id="__codelineno-7-53" name="__codelineno-7-53"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-7-54"><a id="__codelineno-7-54" name="__codelineno-7-54"></a><span class="p">}</span>
-</span><span id="__span-7-55"><a id="__codelineno-7-55" name="__codelineno-7-55"></a>
-</span><span id="__span-7-56"><a id="__codelineno-7-56" name="__codelineno-7-56"></a><span class="c1">// Other interfaces Update/Delete/Clear/Read map according to mem0 capabilities</span>
+<span class="normal"><a href="#__codelineno-7-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="nx">mem0Svc</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memorymem0</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="nx">memorymem0</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">&quot;MEM0_API_KEY&quot;</span><span class="p">)),</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="nx">memorymem0</span><span class="p">.</span><span class="nx">WithLoadToolEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="p">)</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a><span class="p">}</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="k">defer</span><span class="w"> </span><span class="nx">mem0Svc</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="nx">ag</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">modelName</span><span class="p">)),</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">mem0Svc</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="p">)</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">    </span><span class="nx">appName</span><span class="p">,</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">    </span><span class="nx">ag</span><span class="p">,</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionSvc</span><span class="p">),</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionIngestor</span><span class="p">(</span><span class="nx">mem0Svc</span><span class="p">),</span>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Implementation points:</p>
 <ul>
-<li>Configure authentication and rate limiting according to target service guidelines.</li>
-<li>Return values strictly align with <code>memory.Entry</code> and <code>memory.Memory</code>, use UTC for time fields.</li>
-<li>Tool declarations should accurately describe input and output for frontend and model understanding.</li>
-<li>Add README, examples and tests to ensure compatibility with runner-based integrations.</li>
+<li>Preserve the raw transcript for native platform ingest whenever the platform already performs its own extraction.</li>
+<li>Avoid introducing shadow CRUD state unless the external platform truly requires it.</li>
+<li>Keep tool declarations aligned with the integration's real guarantees and return shapes.</li>
+<li>Add README, examples and tests to ensure the integration works cleanly with runner-based flows.</li>
 </ul>
 <p><strong>Open Source Components That Can Be Integrated:</strong></p>
 <ul>
@@ -4387,7 +4318,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="December 17, 2025 02:13:29 UTC">2025-12-17 02:13:29</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 21, 2026 02:13:13 UTC">2026-04-21 02:13:13</span>
   </span>
 
     
