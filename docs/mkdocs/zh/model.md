@@ -2401,3 +2401,90 @@ if err != nil {
 - 只有在收到首个非错误 chunk 之前，才允许从当前候选模型切换到下一个候选模型。
 - 如果当前候选模型在此之前直接返回 `error`，或返回带 `Response.Error` 的错误响应，就会继续尝试下一个候选模型。
 - 一旦已经向调用方返回过任意非错误 chunk，后续即使流式过程中再出错，也不会重放到备模型，而是直接将错误返回给调用方。
+
+## 模型对冲（Hedge）
+
+`model/hedge` 提供了一个用于对冲首 token 尾延迟的模型包装器。它会先启动主候选，再按配置的 hedge delay 逐步补发后续候选；如果当前已启动候选都已经失败，则会提前拉起下一个候选。谁先返回首个有意义响应，谁就成为本次请求的胜者，其余候选会被取消。
+
+**快速开始：**
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/model/hedge"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+)
+
+primary := openai.New(
+    "gpt-4o-mini",
+    openai.WithBaseURL("https://api.openai.com/v1"),
+)
+backup := openai.New(
+    "deepseek-chat",
+    openai.WithBaseURL("https://api.deepseek.com/v1"),
+)
+
+llm, err := hedge.New(
+    hedge.WithName("chat-hedge"),
+    hedge.WithCandidates(primary, backup),
+)
+if err != nil {
+    return err
+}
+```
+
+`hedge.New(...)` 同样返回普通的 `model.Model`，可以直接传给 `llmagent.WithModel(...)` 等接受 `model.Model` 的位置使用。上面这段代码使用包默认 delay；如果要显式控制补发时序，可继续使用 `WithDelay(...)` 或 `WithDelays(...)`。完整示例见 [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge)。
+
+**调度与提交规则：**
+
+- 第一个候选总是在请求开始时立即启动。
+- `WithDelay(...)` 表示相邻 hedge 候选的固定补发间隔；`WithDelays(...)` 可显式指定候选 `1..n` 的启动偏移。
+- 如果当前所有已启动候选都已经失败，且仍有未启动候选，包装器会立即拉起下一个候选，而不是继续等待定时器。
+- 只有真正开始产出有效内容的候选才会成为胜者；只返回空内容或元数据的响应不会抢占胜者。
+- 一旦已经提交胜者，其他候选会被取消，后续只继续向调用方转发胜者的流。
+
+**配置示例：**
+
+下面的片段只展示调度配置差异。
+
+```go
+llm, err := hedge.New(
+    hedge.WithCandidates(primary, backupA, backupB),
+    hedge.WithDelay(100*time.Millisecond),
+)
+```
+
+上面这段配置表示：
+
+- `candidate[0]` 在 `0ms` 启动。
+- `candidate[1]` 在 `100ms` 启动。
+- `candidate[2]` 在 `200ms` 启动。
+
+```go
+llm, err := hedge.New(
+    hedge.WithCandidates(primary, backupA, backupB),
+    hedge.WithDelays(80*time.Millisecond, 250*time.Millisecond),
+)
+```
+
+上面这段配置表示：
+
+- `candidate[0]` 在 `0ms` 启动。
+- `candidate[1]` 在 `80ms` 启动。
+- `candidate[2]` 在 `250ms` 启动。
+
+这里 `WithDelays(...)` 传入的是相对请求开始时刻的绝对启动偏移，不是相对上一个候选的增量间隔。
+
+```go
+llm, err := hedge.New(
+    hedge.WithCandidates(primary, backupA, backupB),
+    hedge.WithDelays(0, 0),
+)
+```
+
+上面这段配置表示：
+
+- `candidate[0]` 在 `0ms` 启动。
+- `candidate[1]` 在 `0ms` 启动。
+- `candidate[2]` 在 `0ms` 启动。
+
+这相当于所有候选在请求开始时立即并发发起；如果是固定间隔模式，也可以写成 `WithDelay(0)`。
