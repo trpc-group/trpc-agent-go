@@ -343,7 +343,8 @@ appRunner := runner.NewRunner(
 ### Memory Service
 
 Configure the memory service in code. Five backends are supported: in-memory,
-Redis, MySQL, PostgreSQL, and pgvector.
+Redis, MySQL, PostgreSQL, and pgvector. Two vector search backends are also
+available: sqlitevec and mysqlvec.
 
 #### Configuration Example
 
@@ -545,6 +546,11 @@ go run main.go -memory redis
 export MYSQL_HOST=localhost
 export MYSQL_PASSWORD=password
 go run main.go -memory mysql -soft-delete
+
+# Use MySQL Vector storage
+export MYSQLVEC_HOST=localhost
+export MYSQLVEC_PASSWORD=password
+go run main.go -memory mysqlvec -soft-delete
 
 # Use PostgreSQL storage
 export PG_HOST=localhost
@@ -973,6 +979,73 @@ CREATE TABLE memories (
 defer mysqlService.Close()
 ```
 
+### MySQL Vector (mysqlvec) Storage
+
+**Use case**: Production, vector similarity search with MySQL + native VECTOR type
+
+MySQL Vector stores memories in MySQL with embedding vectors for semantic similarity
+search. It uses MySQL 9.0+ native `VECTOR` type when available, and automatically
+falls back to `BLOB` storage with Go-side cosine similarity for older versions (8.x).
+
+```go
+import memorymysqlvec "trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec"
+import openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+
+embedder := openaiembedder.New(openaiembedder.WithModel("text-embedding-3-small"))
+
+mysqlvecService, err := memorymysqlvec.NewService(
+    memorymysqlvec.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
+    memorymysqlvec.WithEmbedder(embedder),
+    memorymysqlvec.WithSoftDelete(true),
+)
+```
+
+**Configuration options**:
+
+- `WithMySQLClientDSN(dsn)`: MySQL DSN connection string (recommended, requires `parseTime=true`)
+- `WithMySQLInstance(name)`: Use pre-registered MySQL instance
+- `WithEmbedder(embedder)`: Text embedder for vector generation (required)
+- `WithSoftDelete(enabled)`: Enable soft delete (default false)
+- `WithTableName(name)`: Custom table name (default "memories")
+- `WithIndexDimension(dim)`: Vector dimension (default 1536)
+- `WithMaxResults(limit)`: Max search results (default 15)
+- `WithMemoryLimit(limit)`: Memory limit per user
+- `WithCustomTool(toolName, creator)`: Register custom tool
+- `WithToolEnabled(toolName, enabled)`: Enable/disable tool
+- `WithExtraOptions(...options)`: Extra options passed to MySQL client
+- `WithSkipDBInit(skip)`: Skip table initialization (for users without DDL permissions)
+
+**Note**: Requires MySQL 5.7.8+ (for JSON column type). Uses native VECTOR on MySQL 9.0+; falls back to BLOB + Go-side cosine similarity on MySQL 5.7/8.x. No additional vector library required.
+
+**Table schema** (auto-created, MySQL 9.0+):
+
+```sql
+CREATE TABLE memories (
+    memory_id VARCHAR(64) PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    memory_content TEXT NOT NULL,
+    topics JSON,
+    embedding VECTOR(1536),
+    memory_kind VARCHAR(32) NOT NULL DEFAULT 'fact',
+    event_time TIMESTAMP(6) NULL,
+    participants JSON,
+    location VARCHAR(1024) NULL,
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+    INDEX idx_app_user (app_name, user_id),
+    INDEX idx_updated_at (updated_at DESC),
+    INDEX idx_deleted_at (deleted_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+**Resource cleanup**: Call `Close()` method to release database connection:
+
+```go
+defer mysqlvecService.Close()
+```
+
 ### PostgreSQL Storage
 
 **Use case**: Production, advanced JSONB features
@@ -1102,17 +1175,17 @@ defer pgvectorService.Close()
 
 ### Backend Comparison
 
-| Feature           | InMemory  | SQLite            | SQLiteVec        | Redis            | MySQL      | PostgreSQL        | pgvector      |
-| ----------------- | --------- | ----------------- | ---------------- | ---------------- | ---------- | ----------------- | ------------- |
-| **Persistence**   | ❌        | ✅                | ✅               | ✅               | ✅         | ✅                | ✅            |
-| **Distributed**   | ❌        | ❌                | ❌               | ✅               | ✅         | ✅                | ✅            |
-| **Transactions**  | ❌        | ✅ ACID           | ✅ ACID          | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID       |
-| **Queries**       | Simple    | SQL               | SQL + Vector     | Medium           | SQL        | SQL               | SQL + Vector  |
-| **JSON**          | ❌        | Basic             | Basic            | Basic            | JSON       | JSONB             | JSONB         |
-| **Performance**   | Very High | Med-High          | Med-High         | High             | Med-High   | Med-High          | Med-High      |
-| **Configuration** | Zero      | Simple            | Medium           | Simple           | Medium     | Medium            | Medium        |
-| **Soft Delete**   | ❌        | ✅                | ✅               | ❌               | ✅         | ✅                | ✅            |
-| **Use Case**      | Dev/Test  | Local Persistence | Local Vector     | High Concurrency | Enterprise | Advanced Features | Vector Search |
+| Feature           | InMemory  | SQLite            | SQLiteVec        | Redis            | MySQL      | MySQL Vec         | PostgreSQL        | pgvector      |
+| ----------------- | --------- | ----------------- | ---------------- | ---------------- | ---------- | ----------------- | ----------------- | ------------- |
+| **Persistence**   | ❌        | ✅                | ✅               | ✅               | ✅         | ✅                | ✅                | ✅            |
+| **Distributed**   | ❌        | ❌                | ❌               | ✅               | ✅         | ✅                | ✅                | ✅            |
+| **Transactions**  | ❌        | ✅ ACID           | ✅ ACID          | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID           | ✅ ACID       |
+| **Queries**       | Simple    | SQL               | SQL + Vector     | Medium           | SQL        | SQL + Vector      | SQL               | SQL + Vector  |
+| **JSON**          | ❌        | Basic             | Basic            | Basic            | JSON       | JSON              | JSONB             | JSONB         |
+| **Performance**   | Very High | Med-High          | Med-High         | High             | Med-High   | Med-High          | Med-High          | Med-High      |
+| **Configuration** | Zero      | Simple            | Medium           | Simple           | Medium     | Medium            | Medium            | Medium        |
+| **Soft Delete**   | ❌        | ✅                | ✅               | ❌               | ✅         | ✅                | ✅                | ✅            |
+| **Use Case**      | Dev/Test  | Local Persistence | Local Vector     | High Concurrency | Enterprise | MySQL Vector Search | Advanced Features | Vector Search |
 
 **Selection guide**:
 
@@ -1123,6 +1196,7 @@ Local Vector Search → SQLiteVec (single-file DB + embeddings)
 High Concurrency → Redis (memory-level performance)
 ACID Requirements → MySQL/PostgreSQL (transaction guarantees)
 Complex JSON → PostgreSQL (JSONB indexing and queries)
+MySQL Vector Search → mysqlvec (similarity search on MySQL 9.0+)
 Vector Search → pgvector (similarity search with embeddings)
 Audit Trail → MySQL/PostgreSQL/pgvector (soft delete support)
 ```
@@ -1224,9 +1298,9 @@ memory.AddMemory(ctx, userKey, "User likes programming", []string{"hobby"})
 Search behavior depends on the backend:
 
 - For `inmemory` / `redis` / `mysql` / `postgres`: `SearchMemories` uses **token matching** (not semantic search).
-- For `pgvector`: `SearchMemories` uses **vector similarity search** and requires an embedder.
+- For `pgvector` / `mysqlvec` / `sqlitevec`: `SearchMemories` uses **vector similarity search** and requires an embedder.
 
-**Token matching details** (non-pgvector backends):
+**Token matching details** (non-vector backends):
 
 **English tokenization**: lowercase → filter stopwords (a, the, is, etc.) → split by spaces
 
@@ -1249,7 +1323,7 @@ Search: "编程" ✅ Match (word-level hit)
 Search: "写代码" ❌ No match (different words)
 ```
 
-**Limitations** (non-pgvector backends):
+**Limitations** (non-vector backends):
 
 - These backends perform filtering and sorting in **application layer** (\[O(n)\] complexity)
 - Performance affected by data volume
@@ -1260,7 +1334,7 @@ Search: "写代码" ❌ No match (different words)
 **Recommendations**:
 
 - Use explicit keywords and topic tags to improve hit rate
-- If you need semantic similarity search, use the pgvector backend
+- If you need semantic similarity search, use the pgvector, mysqlvec, or sqlitevec backend
 
 ### Soft Delete Considerations
 

@@ -5,6 +5,7 @@ go 1.24.4
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../../memory/mysql
+	trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec => ../../memory/mysqlvec
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => ../../memory/pgvector
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres => ../../memory/postgres
 	trpc.group/trpc-go/trpc-agent-go/memory/redis => ../../memory/redis
@@ -18,8 +19,9 @@ require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/ncruces/go-sqlite3 v0.32.0
-	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
+	trpc.group/trpc-go/trpc-agent-go v1.8.1
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.1.1
+	trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v1.1.1
@@ -77,7 +79,7 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
-	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.6.0 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql v1.8.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.1.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
 )

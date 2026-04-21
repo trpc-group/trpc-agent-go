@@ -231,6 +231,7 @@ type Model struct {
 	extraFields                map[string]any
 	variant                    Variant
 	variantConfig              variantConfig
+	reasoningContentBackfill   bool
 	batchCompletionWindow      openai.BatchNewParamsCompletionWindow
 	batchMetadata              map[string]string
 	batchBaseURL               string
@@ -310,6 +311,7 @@ func New(name string, opts ...Option) *Model {
 		extraFields:                o.ExtraFields,
 		variant:                    o.Variant,
 		variantConfig:              variantConfigs[o.Variant],
+		reasoningContentBackfill:   o.ReasoningContentBackfill,
 		batchCompletionWindow:      o.BatchCompletionWindow,
 		batchMetadata:              o.BatchMetadata,
 		batchBaseURL:               o.BatchBaseURL,
@@ -654,6 +656,18 @@ func (m *Model) buildThinkingOption(request *model.Request) []openaiopt.RequestO
 	return opts
 }
 
+// shouldBackfillReasoningContent reports whether replay should emit
+// model.ReasoningContentKey as an empty string for assistant tool-call
+// messages. Some providers require the key to be present during tool-call
+// replay even when no reasoning text was returned.
+func (m *Model) shouldBackfillReasoningContent(
+	msg model.Message,
+) bool {
+	return m.reasoningContentBackfill &&
+		msg.ReasoningContent == "" &&
+		len(msg.ToolCalls) > 0
+}
+
 // convertMessages converts our Message format to OpenAI's format.
 func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletionMessageParamUnion {
 	result := make([]openai.ChatCompletionMessageParamUnion, len(messages))
@@ -685,7 +699,8 @@ func (m *Model) convertMessages(messages []model.Message) []openai.ChatCompletio
 			}
 			// Pass reasoning_content to API if present (required by DeepSeek for
 			// tool call scenarios within the same request turn).
-			if msg.ReasoningContent != "" {
+			if msg.ReasoningContent != "" ||
+				m.shouldBackfillReasoningContent(msg) {
 				assistantMsg.SetExtraFields(map[string]any{
 					model.ReasoningContentKey: msg.ReasoningContent,
 				})

@@ -31,12 +31,56 @@ type stateDeltaProvider interface {
 // LoadTool enables loading a skill into session state.
 // It produces deltas under prefixes defined by skill package.
 type LoadTool struct {
-	repo skill.Repository
+	repo        skill.Repository
+	description string
+}
+
+const defaultLoadToolDescription = "Load a skill body and optional docs. " +
+	"Prefer progressive disclosure: load SKILL.md first, " +
+	"then load only needed docs. " +
+	"Safe to call multiple times to add or replace docs. " +
+	"Do not call this to list skills; names and descriptions " +
+	"are already in context. Use when a task needs a skill's " +
+	"SKILL.md body and selected docs in context."
+
+type loadToolOptions struct {
+	description string
+}
+
+// LoadToolOption configures LoadTool.
+type LoadToolOption func(*loadToolOptions)
+
+// WithLoadToolDescription overrides the skill_load tool description.
+func WithLoadToolDescription(
+	description string,
+) LoadToolOption {
+	return func(o *loadToolOptions) {
+		o.description = description
+	}
 }
 
 // NewLoadTool creates a new LoadTool.
 func NewLoadTool(repo skill.Repository) *LoadTool {
-	return &LoadTool{repo: repo}
+	return NewLoadToolWithOptions(repo)
+}
+
+// NewLoadToolWithOptions creates a new LoadTool with optional overrides.
+func NewLoadToolWithOptions(
+	repo skill.Repository,
+	opts ...LoadToolOption,
+) *LoadTool {
+	options := loadToolOptions{
+		description: defaultLoadToolDescription,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
+	return &LoadTool{
+		repo:        repo,
+		description: options.description,
+	}
 }
 
 // loadInput is the schema for skill_load.
@@ -49,14 +93,8 @@ type loadInput struct {
 // Declaration implements tool.Tool.
 func (t *LoadTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name: "skill_load",
-		Description: "Load a skill body and optional docs. " +
-			"Prefer progressive disclosure: load SKILL.md first, " +
-			"then load only needed docs. " +
-			"Safe to call multiple times to add or replace docs. " +
-			"Do not call this to list skills; names and descriptions " +
-			"are already in context. Use when a task needs a skill's " +
-			"SKILL.md body and selected docs in context.",
+		Name:        "skill_load",
+		Description: t.description,
 		InputSchema: &tool.Schema{
 			Type:        "object",
 			Description: "Load skill input",

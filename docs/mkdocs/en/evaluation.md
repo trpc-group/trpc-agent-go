@@ -6,6 +6,8 @@ Unlike deterministic systems, Agent issues often appear as probabilistic deviati
 
 The core purpose of evaluation is to turn key scenarios and acceptance criteria into assets and distill them into sustainable regression signals. tRPC-Agent-Go provides out-of-the-box evaluation capabilities, supporting asset management and result persistence based on evaluation sets and metrics. It includes static evaluators and LLM Judge evaluators, and provides multi-turn evaluation, repeated runs, `Trace` evaluation mode, callbacks, context injection, and concurrent inference to support local debugging and pipeline regression at engineering scale.
 
+If you want to further automate prompt optimization on top of evaluation, continue with the [PromptIter Guide](promptiter.md). PromptIter is built on top of Evaluation and provides train/validation separation, multi-round optimization, asynchronous run management, and HTTP APIs.
+
 ## Quick Start
 
 This section provides a minimal example to help you quickly understand how to use tRPC-Agent-Go evaluation.

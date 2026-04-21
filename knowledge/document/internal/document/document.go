@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 )
 
 // CreateDocument creates a new document with the given content and name.
@@ -30,6 +31,19 @@ func CreateDocument(content string, name string) *document.Document {
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}
+}
+
+// CreateDocumentFromPayload creates a document from a code AST payload.
+func CreateDocumentFromPayload(payload *codeast.DocumentPayload) *document.Document {
+	if payload == nil {
+		return nil
+	}
+	doc := CreateDocument(payload.Content, payload.Name)
+	for k, v := range payload.Metadata {
+		doc.Metadata[k] = v
+	}
+	doc.EmbeddingText = payload.EmbeddingText
+	return doc
 }
 
 // GenerateDocumentID generates a unique ID for a document.

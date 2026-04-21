@@ -762,80 +762,47 @@ func (p *PostgreSQLMemoryService) unmarshalTopics(data []byte) []string {
 }
 ```
 
-For quick implementation, you can directly integrate with existing Memory platforms/services (such as mem0). Recommendations:
+For externally hosted memory platforms/services such as mem0, prefer an **ingest-first integration** instead of forcing the platform into the full `memory.Service` CRUD contract.
 
-- Provide implementation in `memory/mem0/`, following the `memory.Service` interface.
-- Reuse existing `memory/tool` tools (`memory_add`, `memory_search`, `memory_load`, etc.), expose through `Tools()`.
-- Map topics and search according to target service capabilities, maintain lightweight local indexes when necessary to enhance query experience.
-- Optional: Reuse `storage` module client management for unified authentication, connection and reuse.
+Recommendations:
+
+- Place the package under `memory/mem0/` for better discoverability within the memory domain.
+- Let Runner hand the completed session transcript to the platform after each turn via `runner.WithSessionIngestor(...)`.
+- Expose only the platform capabilities that naturally fit agent usage. For mem0, that typically means read-only tools such as `memory_search` and optional `memory_load`.
+- Keep platform-specific ingestion, polling, authentication and retry logic inside `memory/mem0` rather than spreading it across core memory abstractions.
 
 Example skeleton (simplified):
 
 ```go
-package mem0
+mem0Svc, err := memorymem0.NewService(
+    memorymem0.WithAPIKey(os.Getenv("MEM0_API_KEY")),
+    memorymem0.WithLoadToolEnabled(true),
+)
+if err != nil {
+    return err
+}
+defer mem0Svc.Close()
 
-import (
-    "context"
-    "net/http"
-
-    "trpc.group/trpc-go/trpc-agent-go/memory"
-    memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
-    "trpc.group/trpc-go/trpc-agent-go/tool"
+ag := llmagent.New(
+    "assistant",
+    llmagent.WithModel(openai.New(modelName)),
+    llmagent.WithTools(mem0Svc.Tools()),
 )
 
-type Service struct {
-    client  *http.Client
-    baseURL string
-    apiKey  string
-    tools   map[string]tool.Tool
-}
-
-func New(baseURL, apiKey string) *Service {
-    s := &Service{
-        client:  &http.Client{},
-        baseURL: baseURL,
-        apiKey:  apiKey,
-        tools:   make(map[string]tool.Tool),
-    }
-    s.tools[memory.AddToolName] = memorytool.NewAddTool(s)
-    s.tools[memory.SearchToolName] = memorytool.NewSearchTool(s)
-    s.tools[memory.LoadToolName] = memorytool.NewLoadTool(s)
-    return s
-}
-
-func (s *Service) Tools() []tool.Tool {
-    var ts []tool.Tool
-    for _, t := range s.tools {
-        ts = append(ts, t)
-    }
-    return ts
-}
-
-func (s *Service) AddMemory(ctx context.Context, key memory.UserKey, m string, topics []string) error {
-    if err := key.CheckUserKey(); err != nil {
-        return err
-    }
-    // Call mem0 API to write memory.
-    return nil
-}
-
-func (s *Service) SearchMemories(ctx context.Context, key memory.UserKey, q string) ([]*memory.Entry, error) {
-    if err := key.CheckUserKey(); err != nil {
-        return nil, err
-    }
-    // Call mem0 API to search, and convert to []*memory.Entry.
-    return nil, nil
-}
-
-// Other interfaces Update/Delete/Clear/Read map according to mem0 capabilities
+r := runner.NewRunner(
+    appName,
+    ag,
+    runner.WithSessionService(sessionSvc),
+    runner.WithSessionIngestor(mem0Svc),
+)
 ```
 
 Implementation points:
 
-- Configure authentication and rate limiting according to target service guidelines.
-- Return values strictly align with `memory.Entry` and `memory.Memory`, use UTC for time fields.
-- Tool declarations should accurately describe input and output for frontend and model understanding.
-- Add README, examples and tests to ensure compatibility with runner-based integrations.
+- Preserve the raw transcript for native platform ingest whenever the platform already performs its own extraction.
+- Avoid introducing shadow CRUD state unless the external platform truly requires it.
+- Keep tool declarations aligned with the integration's real guarantees and return shapes.
+- Add README, examples and tests to ensure the integration works cleanly with runner-based flows.
 
 **Open Source Components That Can Be Integrated:**
 
