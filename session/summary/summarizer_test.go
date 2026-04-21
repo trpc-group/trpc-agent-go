@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 )
 
 func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
@@ -144,6 +145,93 @@ func TestSessionSummarizer_Summarize(t *testing.T) {
 		for _, event := range sess.Events {
 			assert.NotEqual(t, "system", event.Author, "no system events should be added.")
 		}
+	})
+
+	t.Run("branch scope excludes ancestor root events from summary text", func(t *testing.T) {
+		s := NewSummarizer(
+			&fakeModel{},
+			WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
+		)
+		sess := &session.Session{
+			ID:      "branch-scope",
+			AppName: "app",
+			Events: []event.Event{
+				{
+					Author:    "user",
+					FilterKey: "app",
+					Timestamp: time.Now().Add(-3 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "root message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub",
+					Timestamp: time.Now().Add(-2 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "branch message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub/tool",
+					Timestamp: time.Now().Add(-1 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "descendant message"},
+					}}},
+				},
+			},
+		}
+		isummaryscope.SetScopeFilterKey(sess, "app/sub")
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.NotContains(t, text, "root message")
+		assert.Contains(t, text, "branch message")
+		assert.Contains(t, text, "descendant message")
+	})
+
+	t.Run("full-session summary keeps child branch content", func(t *testing.T) {
+		s := NewSummarizer(
+			&fakeModel{},
+			WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
+		)
+		sess := &session.Session{
+			ID:      "full-session-mixed",
+			AppName: "app",
+			Events: []event.Event{
+				{
+					Author:    "user",
+					FilterKey: "app",
+					Timestamp: time.Now().Add(-3 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "root message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub",
+					Timestamp: time.Now().Add(-2 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "child message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub/tool",
+					Timestamp: time.Now().Add(-1 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "descendant message"},
+					}}},
+				},
+			},
+		}
+
+		text, err := s.Summarize(context.Background(), sess)
+		require.NoError(t, err)
+		assert.Contains(t, text, "root message")
+		assert.Contains(t, text, "child message")
+		assert.Contains(t, text, "descendant message")
 	})
 
 }
@@ -1538,6 +1626,50 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 		raw, ok := checkSess.GetState(tokenThresholdConversationTextStateKey)
 		require.True(t, ok)
 		assert.Empty(t, string(raw))
+	})
+
+	t.Run("uses branch scope when building injected token text", func(t *testing.T) {
+		s := &sessionSummarizer{}
+		sess := &session.Session{
+			AppName: "app",
+			Events: []event.Event{
+				{
+					Author:    "user",
+					FilterKey: "app",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "root message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "branch message"},
+					}}},
+				},
+				{
+					Author:    "assistant",
+					FilterKey: "app/sub/tool",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{Content: "descendant message"},
+					}}},
+				},
+			},
+		}
+		isummaryscope.SetScopeFilterKey(sess, "app/sub")
+
+		checkSess := s.buildCheckSession(sess)
+		require.NotNil(t, checkSess)
+
+		raw, ok := checkSess.GetState(tokenThresholdConversationTextStateKey)
+		require.True(t, ok)
+		text := string(raw)
+		assert.NotContains(t, text, "root message")
+		assert.Contains(t, text, "branch message")
+		assert.Contains(t, text, "descendant message")
 	})
 }
 
