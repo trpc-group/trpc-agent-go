@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -32,11 +33,6 @@ type countProgressArgs struct {
 	DelayMS int `json:"delay_ms,omitempty" description:"Delay in milliseconds between streamed updates."`
 }
 
-type countProgressUpdate struct {
-	Current int `json:"current"`
-	Total   int `json:"total"`
-}
-
 type countProgressResult struct {
 	Completed int `json:"completed"`
 	Total     int `json:"total"`
@@ -50,7 +46,7 @@ func newCountProgressTool() tool.Tool {
 			return stream.Reader, nil
 		},
 		function.WithName(countProgressToolName),
-		function.WithDescription("Count upward step by step and stream numeric progress updates before returning a final result."),
+		function.WithDescription("Count upward step by step and stream text progress updates before returning a final result."),
 	)
 }
 
@@ -88,10 +84,7 @@ func runCountProgress(ctx context.Context, args countProgressArgs, writer *tool.
 			writer.Send(tool.StreamChunk{}, err)
 			return
 		}
-		if err := sendCountProgressUpdate(ctx, writer, countProgressUpdate{
-			Current: step,
-			Total:   args.Steps,
-		}, delay); err != nil {
+		if err := sendCountProgressUpdate(ctx, writer, step, args.Steps, delay); err != nil {
 			writer.Send(tool.StreamChunk{}, err)
 			return
 		}
@@ -104,11 +97,18 @@ func runCountProgress(ctx context.Context, args countProgressArgs, writer *tool.
 	}, nil)
 }
 
-func sendCountProgressUpdate(ctx context.Context, writer *tool.StreamWriter, progress countProgressUpdate, delay time.Duration) error {
+func sendCountProgressUpdate(
+	ctx context.Context,
+	writer *tool.StreamWriter,
+	current int,
+	total int,
+	delay time.Duration,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if closed := writer.Send(tool.StreamChunk{Content: progress}, nil); closed {
+	update := fmt.Sprintf("Counted %d of %d.\n", current, total)
+	if closed := writer.Send(tool.StreamChunk{Content: update}, nil); closed {
 		return context.Canceled
 	}
 	return sleepWithContext(ctx, delay)
