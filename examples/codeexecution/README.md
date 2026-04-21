@@ -25,11 +25,15 @@ The code execution system allows you to execute code snippets in various program
 
 ### LocalCodeExecutor
 
-Executes code directly on the local machine. Suitable for trusted environments.
+Executes code directly on the local machine. Suitable for trusted environments. This is what `main.go` in this directory demonstrates.
 
 ### ContainerCodeExecutor
 
-Executes code in isolated Docker containers. Provides better security and isolation.
+Executes code in isolated Docker containers. Provides better security and isolation. See the [`./container`](./container) sub-example.
+
+### JupyterCodeExecutor
+
+Executes code against a Jupyter kernel, preserving variable state across snippets. See the [`./jupyter`](./jupyter) sub-example.
 
 ## Environment Variables
 

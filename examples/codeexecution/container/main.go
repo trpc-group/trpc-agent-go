@@ -7,7 +7,8 @@
 //
 //
 
-// Package main demonstrates how to use the code execution capabilities of the LLMAgent.
+// Package main demonstrates how to use the Container (Docker) code execution
+// capabilities with LLMAgent.
 package main
 
 import (
@@ -15,10 +16,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -29,14 +29,15 @@ func main() {
 	modelName := flag.String("model", "deepseek-chat", "Name of the model to use")
 	flag.Parse()
 
-	fmt.Printf("Creating LLMAgent with configuration:\n")
+	fmt.Printf("Creating LLMAgent with Container code executor:\n")
 	fmt.Printf("- Model Name: %s\n", *modelName)
+	fmt.Printf("- Code Executor: Docker container\n")
 	fmt.Printf("- OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment\n")
 	fmt.Println()
 
 	// Create a model instance.
 	// The OpenAI SDK will automatically read OPENAI_API_KEY and OPENAI_BASE_URL from environment variables.
-	modelInstance := openai.New(*modelName) // Larger buffer for agent use.
+	modelInstance := openai.New(*modelName)
 
 	// Create generation config.
 	genConfig := model.GenerationConfig{
@@ -45,48 +46,84 @@ func main() {
 		Stream:      true,
 	}
 
-	name := "data_science_agent"
-	// Create an LLMAgent with configuration.
+	// Create a Container code executor.
+	// This will pull the default python:3.9-slim image and launch a disposable
+	// container with no network access. Make sure Docker is installed and the
+	// daemon is reachable (DOCKER_HOST or /var/run/docker.sock).
+	containerExecutor, err := container.New()
+	if err != nil {
+		log.Fatalf("Failed to create container executor: %v", err)
+	}
+	defer func() {
+		if cerr := containerExecutor.Close(); cerr != nil {
+			log.Printf("Failed to close container executor: %v", cerr)
+		}
+	}()
+
+	// Alternative configurations:
+	//
+	// 1) Use a custom image:
+	// containerExecutor, err := container.New(
+	//     container.WithContainerConfig(dockercontainer.Config{
+	//         Image:      "python:3.11-slim",
+	//         WorkingDir: "/",
+	//         Cmd:        []string{"tail", "-f", "/dev/null"},
+	//         Tty:        true,
+	//         OpenStdin:  true,
+	//     }),
+	// )
+	//
+	// 2) Build the image from a local Dockerfile directory:
+	// containerExecutor, err := container.New(
+	//     container.WithDockerFilePath("./docker"),
+	// )
+	//
+	// 3) Bind-mount a host directory (e.g. read-only inputs):
+	// containerExecutor, err := container.New(
+	//     container.WithBindMount("/host/inputs", "/data/inputs", "ro"),
+	// )
+
+	name := "container_data_agent"
+	// Create an LLMAgent with the Container code executor.
 	llmAgent := llmagent.New(
 		name,
 		llmagent.WithModel(modelInstance),
-		llmagent.WithDescription("agent for data science tasks"),
-		llmagent.WithInstruction(baseSystemInstruction()+
-			`You need to assist the user with their queries by looking at the data and the context in the conversation.
-You final answer should summarize the code and code execution relavant to the user query.
+		llmagent.WithDescription("agent for data science tasks running in a sandboxed Docker container"),
+		llmagent.WithInstruction(`You are a data assistant. Your code is executed inside an isolated Docker container with no network access.
+You need to assist the user with their queries by writing small Python snippets and analyzing the results.
 
-You should include all pieces of data to answer the user query, such as the table from code execution results.
-If you cannot answer the question directly, you should follow the guidelines above to generate the next step.
-If the question can be answered directly with writing any code, you should do that.
-If you doesn't have enough data to answer the question, you should ask for clarification from the user.
+Your workflow:
+1. Understand the user's data analysis request.
+2. Write a single self-contained Python snippet to analyze the data.
+3. Print the results so they appear in the execution output.
+4. Summarize the findings for the user.
 
-You should NEVER install any package on your own like pip install ....
-	`,
-		),
+Constraints:
+- You should NEVER install any package on your own like pip install .... The container does not have internet access.
+- Only use Python's standard library.
+- Keep code snippets short and focused.
+`),
 		llmagent.WithGenerationConfig(genConfig),
-		// A Docker-based container executor is also available, see the
-		// ./container sub-example:
-		//   import "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
-		//   exec, _ := container.New()
-		//   llmagent.WithCodeExecutor(exec)
-		// Or a Jupyter kernel executor, see the ./jupyter sub-example.
-		llmagent.WithCodeExecutor(local.New()),
+		llmagent.WithCodeExecutor(containerExecutor),
 	)
 
 	r := runner.NewRunner(
-		"data_science_agent",
+		"container_data_agent",
 		llmAgent,
 	)
 
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
 	defer r.Close()
 
-	eventChan, err := r.Run(context.Background(), "user-id", "session-id", model.NewUserMessage("analyze some sample data: 5, 12, 8, 15, 7, 9, 11"))
+	query := "analyze some sample data: 5, 12, 8, 15, 7, 9, 11. " +
+		"Compute the mean, median, variance and standard deviation using only Python's standard library."
+
+	eventChan, err := r.Run(context.Background(), "user-id", "session-id", model.NewUserMessage(query))
 	if err != nil {
 		log.Fatalf("Failed to run LLMAgent: %v", err)
 	}
 
-	fmt.Println("\n=== LLMAgent Execution ===")
+	fmt.Println("\n=== LLMAgent with Container Execution ===")
 	fmt.Println("Processing events from LLMAgent:")
 
 	// Process events from the agent.
@@ -139,6 +176,7 @@ You should NEVER install any package on your own like pip install ....
 		fmt.Println("No events were generated. This might indicate:")
 		fmt.Println("- Model configuration issues")
 		fmt.Println("- Network connectivity problems")
+		fmt.Println("- Docker daemon not reachable")
 		fmt.Println("- Check the logs for more details")
 	}
 
@@ -153,14 +191,4 @@ func intPtr(i int) *int {
 // floatPtr returns a pointer to the given float64 value.
 func floatPtr(f float64) *float64 {
 	return &f
-}
-
-func baseSystemInstruction() string {
-	// Read content from instruction.md file.
-	content, err := os.ReadFile("instruction.md")
-	if err != nil {
-		log.Printf("Failed to read instruction.md: %v", err)
-		return ""
-	}
-	return string(content)
 }
