@@ -4883,7 +4883,8 @@ description 的价值越大。</p>
 <span class="normal"><a href="#__codelineno-24-26">26</a></span>
 <span class="normal"><a href="#__codelineno-24-27">27</a></span>
 <span class="normal"><a href="#__codelineno-24-28">28</a></span>
-<span class="normal"><a href="#__codelineno-24-29">29</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-24-29">29</a></span>
+<span class="normal"><a href="#__codelineno-24-30">30</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
 </span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
 </span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
@@ -4903,15 +4904,16 @@ description 的价值越大。</p>
 </span><span id="__span-24-18"><a id="__codelineno-24-18" name="__codelineno-24-18"></a><span class="w">    </span><span class="nx">mathAgent</span><span class="p">,</span>
 </span><span id="__span-24-19"><a id="__codelineno-24-19" name="__codelineno-24-19"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithSkipSummarization</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span><span class="w"> </span><span class="c1">// 可选，默认 false，当设置为 true 时会跳过外层模型总结，在 tool.response 后直接结束本轮</span>
 </span><span id="__span-24-20"><a id="__codelineno-24-20" name="__codelineno-24-20"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithStreamInner</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w">        </span><span class="c1">// 开启：把子 Agent 的流式事件转发给父流程</span>
-</span><span id="__span-24-21"><a id="__codelineno-24-21" name="__codelineno-24-21"></a><span class="p">)</span>
-</span><span id="__span-24-22"><a id="__codelineno-24-22" name="__codelineno-24-22"></a>
-</span><span id="__span-24-23"><a id="__codelineno-24-23" name="__codelineno-24-23"></a><span class="c1">// 3) 在父 Agent 中使用该工具</span>
-</span><span id="__span-24-24"><a id="__codelineno-24-24" name="__codelineno-24-24"></a><span class="nx">parent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-24-25"><a id="__codelineno-24-25" name="__codelineno-24-25"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-24-26"><a id="__codelineno-24-26" name="__codelineno-24-26"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
-</span><span id="__span-24-27"><a id="__codelineno-24-27" name="__codelineno-24-27"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span><span class="nx">Stream</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}),</span>
-</span><span id="__span-24-28"><a id="__codelineno-24-28" name="__codelineno-24-28"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">mathTool</span><span class="p">}),</span>
-</span><span id="__span-24-29"><a id="__codelineno-24-29" name="__codelineno-24-29"></a><span class="p">)</span>
+</span><span id="__span-24-21"><a id="__codelineno-24-21" name="__codelineno-24-21"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithInnerTextMode</span><span class="p">(</span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">InnerTextModeExclude</span><span class="p">),</span><span class="w"> </span><span class="c1">// 隐藏子 Agent 正文，仅保留内部进度</span>
+</span><span id="__span-24-22"><a id="__codelineno-24-22" name="__codelineno-24-22"></a><span class="p">)</span>
+</span><span id="__span-24-23"><a id="__codelineno-24-23" name="__codelineno-24-23"></a>
+</span><span id="__span-24-24"><a id="__codelineno-24-24" name="__codelineno-24-24"></a><span class="c1">// 3) 在父 Agent 中使用该工具</span>
+</span><span id="__span-24-25"><a id="__codelineno-24-25" name="__codelineno-24-25"></a><span class="nx">parent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-24-26"><a id="__codelineno-24-26" name="__codelineno-24-26"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-24-27"><a id="__codelineno-24-27" name="__codelineno-24-27"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-24-28"><a id="__codelineno-24-28" name="__codelineno-24-28"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span><span class="nx">Stream</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}),</span>
+</span><span id="__span-24-29"><a id="__codelineno-24-29" name="__codelineno-24-29"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">mathTool</span><span class="p">}),</span>
+</span><span id="__span-24-30"><a id="__codelineno-24-30" name="__codelineno-24-30"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="_23">流式内部转发详解</h3>
 <p>当 <code>WithStreamInner(true)</code> 时，AgentTool 会把子 Agent 在运行时产生的事件直接转发到父流程的事件流中：</p>
@@ -4919,6 +4921,7 @@ description 的价值越大。</p>
 <li>转发的事件本质是子 Agent 里的 <code>event.Event</code>，包含增量内容（<code>choice.Delta.Content</code>）</li>
 <li>为避免重复，子 Agent 在结束时产生的“完整大段内容”不会再次作为转发事件打印；但会被聚合到最终 <code>tool.response</code> 的内容里，供下一次 LLM 调用作为工具消息使用</li>
 <li>UI 层建议：展示“转发的子 Agent 增量内容”，但默认不重复打印最终聚合的 <code>tool.response</code> 内容（除非用于调试）</li>
+<li>通过 <code>WithInnerTextMode(agenttool.InnerTextModeExclude)</code>，你可以保留内部 tool 进度，同时隐藏子 Agent 的 assistant 正文。这在外层协调者还会继续总结时尤其有用。</li>
 </ul>
 <p>示例：仅在需要时显示工具片段，避免重复输出</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-25-1"> 1</a></span>
@@ -4931,17 +4934,19 @@ description 的价值越大。</p>
 <span class="normal"><a href="#__codelineno-25-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-25-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-25-10">10</a></span>
-<span class="normal"><a href="#__codelineno-25-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1"></a><span class="k">if</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Object</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">ObjectTypeToolResponse</span><span class="w"> </span><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-25-11">11</a></span>
+<span class="normal"><a href="#__codelineno-25-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1"></a><span class="k">if</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Object</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">ObjectTypeToolResponse</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2"></a><span class="w">    </span><span class="c1">// 工具响应（包含聚合后的内容），默认不打印，避免和子 Agent 转发的内容重复</span>
 </span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3"></a><span class="w">    </span><span class="c1">// ...仅在调试或需要展示工具细节时再打印</span>
 </span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4"></a><span class="p">}</span>
 </span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5"></a>
 </span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6"></a><span class="c1">// 子 Agent 转发的流式增量（作者不是父 Agent）</span>
-</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Author</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">parentName</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">ev</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">delta</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">;</span><span class="w"> </span><span class="nx">delta</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-25-9"><a id="__codelineno-25-9" name="__codelineno-25-9"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">delta</span><span class="p">)</span>
-</span><span id="__span-25-10"><a id="__codelineno-25-10" name="__codelineno-25-10"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-25-11"><a id="__codelineno-25-11" name="__codelineno-25-11"></a><span class="p">}</span>
+</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Author</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">parentName</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span>
+</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8"></a><span class="w">    </span><span class="nb">len</span><span class="p">(</span><span class="nx">ev</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-25-9"><a id="__codelineno-25-9" name="__codelineno-25-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">delta</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ev</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Choices</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">Delta</span><span class="p">.</span><span class="nx">Content</span><span class="p">;</span><span class="w"> </span><span class="nx">delta</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-25-10"><a id="__codelineno-25-10" name="__codelineno-25-10"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Print</span><span class="p">(</span><span class="nx">delta</span><span class="p">)</span>
+</span><span id="__span-25-11"><a id="__codelineno-25-11" name="__codelineno-25-11"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-25-12"><a id="__codelineno-25-12" name="__codelineno-25-12"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="_24">选项说明</h3>
 <ul>
@@ -4963,6 +4968,15 @@ description 的价值越大。</p>
 </li>
 </ul>
 <ul>
+<li>
+<p>WithInnerTextMode(InnerTextMode)：</p>
+<ul>
+<li><code>InnerTextModeInclude</code>：实际默认行为，开启内部转发时继续展示子 Agent 的 assistant 文本</li>
+<li><code>InnerTextModeExclude</code>：隐藏子 Agent 的 assistant 文本，但继续保留内部 tool call、tool.done，以及聚合后的最终工具响应</li>
+</ul>
+</li>
+</ul>
+<ul>
 <li>WithHistoryScope(HistoryScope)：<ul>
 <li><code>HistoryScopeIsolated</code>（默认）：保持子调用完全隔离，只读取本次工具参数（不继承父历史）。</li>
 <li><code>HistoryScopeParentBranch</code>：通过分层过滤键 <code>父键/子名-UUID（Universally Unique Identifier，通用唯一识别码）</code> 继承父会话历史；内容处理器会基于前缀匹配纳入父事件，同时子事件仍写入独立子分支。典型场景：基于上一轮产出进行“编辑/优化/续写”。</li>
@@ -4975,17 +4989,20 @@ description 的价值越大。</p>
 <span class="normal"><a href="#__codelineno-26-3">3</a></span>
 <span class="normal"><a href="#__codelineno-26-4">4</a></span>
 <span class="normal"><a href="#__codelineno-26-5">5</a></span>
-<span class="normal"><a href="#__codelineno-26-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1"></a><span class="nx">child</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-26-6">6</a></span>
+<span class="normal"><a href="#__codelineno-26-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1"></a><span class="nx">child</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span>
 </span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2"></a><span class="w">    </span><span class="nx">childAgent</span><span class="p">,</span>
 </span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithSkipSummarization</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span>
 </span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithStreamInner</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithHistoryScope</span><span class="p">(</span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">HistoryScopeParentBranch</span><span class="p">),</span>
-</span><span id="__span-26-6"><a id="__codelineno-26-6" name="__codelineno-26-6"></a><span class="p">)</span>
+</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithInnerTextMode</span><span class="p">(</span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">InnerTextModeExclude</span><span class="p">),</span>
+</span><span id="__span-26-6"><a id="__codelineno-26-6" name="__codelineno-26-6"></a><span class="w">    </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">WithHistoryScope</span><span class="p">(</span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">HistoryScopeParentBranch</span><span class="p">),</span>
+</span><span id="__span-26-7"><a id="__codelineno-26-7" name="__codelineno-26-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="_25">注意事项</h3>
 <ul>
 <li>事件完成信号：工具响应事件会被标记 <code>RequiresCompletion=true</code>，Runner 会自动发送完成信号，无需手工处理</li>
 <li>内容去重：如果已转发子 Agent 的增量内容，默认不要再把最终 <code>tool.response</code> 的聚合内容打印出来</li>
+<li>“只看进度”体验：当你希望用户看到内部进度、但不想重复看到子 Agent 正文时，可组合使用 <code>WithStreamInner(true)</code> 和 <code>WithInnerTextMode(agenttool.InnerTextModeExclude)</code></li>
 <li>模型兼容性：一些模型要求工具调用后必须跟随工具消息，AgentTool 已自动填充聚合后的工具内容满足此要求</li>
 <li><code>WithSkipSummarization(true)</code> 只会跳过额外的外层总结型 LLM 调用，不会把 <code>tool.response</code> 变成 assistant final response；如果你需要真正的终止信号，仍应持续消费到 <code>runner.completion</code></li>
 </ul>
@@ -5988,7 +6005,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月16日 02:25:29 UTC">2026-04-16 02:25:29</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月21日 12:17:05 UTC">2026-04-21 12:17:05</span>
   </span>
 
     

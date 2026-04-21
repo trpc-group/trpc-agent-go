@@ -724,6 +724,30 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#innertextmode" class="md-nav__link">
+    <span class="md-ellipsis">
+      InnerTextMode
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      常见可见性组合
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="常见可见性组合">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#historyscope" class="md-nav__link">
     <span class="md-ellipsis">
       HistoryScope
@@ -752,7 +776,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_5" class="md-nav__link">
+  <a href="#_6" class="md-nav__link">
     <span class="md-ellipsis">
       成员并行调用（协调者团队）
     </span>
@@ -780,7 +804,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_6" class="md-nav__link">
+  <a href="#_7" class="md-nav__link">
     <span class="md-ellipsis">
       动态成员（运行时增删）
     </span>
@@ -803,7 +827,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_7" class="md-nav__link">
+  <a href="#_8" class="md-nav__link">
     <span class="md-ellipsis">
       示例
     </span>
@@ -812,7 +836,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_8" class="md-nav__link">
+  <a href="#_9" class="md-nav__link">
     <span class="md-ellipsis">
       设计说明
     </span>
@@ -2312,6 +2336,30 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#innertextmode" class="md-nav__link">
+    <span class="md-ellipsis">
+      InnerTextMode
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      常见可见性组合
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="常见可见性组合">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#historyscope" class="md-nav__link">
     <span class="md-ellipsis">
       HistoryScope
@@ -2340,7 +2388,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_5" class="md-nav__link">
+  <a href="#_6" class="md-nav__link">
     <span class="md-ellipsis">
       成员并行调用（协调者团队）
     </span>
@@ -2368,7 +2416,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_6" class="md-nav__link">
+  <a href="#_7" class="md-nav__link">
     <span class="md-ellipsis">
       动态成员（运行时增删）
     </span>
@@ -2391,7 +2439,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_7" class="md-nav__link">
+  <a href="#_8" class="md-nav__link">
     <span class="md-ellipsis">
       示例
     </span>
@@ -2400,7 +2448,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_8" class="md-nav__link">
+  <a href="#_9" class="md-nav__link">
     <span class="md-ellipsis">
       设计说明
     </span>
@@ -2756,8 +2804,8 @@
 Tool（通过 ToolSet）安装到协调者上。<code>team.MemberToolConfig</code> 用来控制这个包装层的
 行为。</p>
 <p>在实现上，<code>team.MemberToolConfig</code> 会直接映射到 AgentTool 的选项：
-<code>agenttool.WithStreamInner</code>、<code>agenttool.WithHistoryScope</code>、
-<code>agenttool.WithSkipSummarization</code>。</p>
+<code>agenttool.WithStreamInner</code>、<code>agenttool.WithInnerTextMode</code>、
+<code>agenttool.WithHistoryScope</code>、<code>agenttool.WithSkipSummarization</code>。</p>
 <h3 id="_3">快速上手</h3>
 <p>建议从默认配置开始，再按需覆盖：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
@@ -2769,20 +2817,23 @@ Tool（通过 ToolSet）安装到协调者上。<code>team.MemberToolConfig</cod
 <span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
 <span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-2-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">memberCfg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">team</span><span class="p">.</span><span class="nx">DefaultMemberToolConfig</span><span class="p">()</span>
+<span class="normal"><a href="#__codelineno-2-10">10</a></span>
+<span class="normal"><a href="#__codelineno-2-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">memberCfg</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">team</span><span class="p">.</span><span class="nx">DefaultMemberToolConfig</span><span class="p">()</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="nx">memberCfg</span><span class="p">.</span><span class="nx">StreamInner</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="nx">memberCfg</span><span class="p">.</span><span class="nx">HistoryScope</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">team</span><span class="p">.</span><span class="nx">HistoryScopeParentBranch</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="nx">memberCfg</span><span class="p">.</span><span class="nx">SkipSummarization</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">false</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="nx">tm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">team</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">    </span><span class="nx">coordinator</span><span class="p">,</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">    </span><span class="nx">members</span><span class="p">,</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">    </span><span class="nx">team</span><span class="p">.</span><span class="nx">WithMemberToolConfig</span><span class="p">(</span><span class="nx">memberCfg</span><span class="p">),</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="p">)</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="nx">memberCfg</span><span class="p">.</span><span class="nx">InnerTextMode</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">team</span><span class="p">.</span><span class="nx">InnerTextModeExclude</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="nx">memberCfg</span><span class="p">.</span><span class="nx">HistoryScope</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">team</span><span class="p">.</span><span class="nx">HistoryScopeParentBranch</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="nx">memberCfg</span><span class="p">.</span><span class="nx">SkipSummarization</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">false</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="nx">tm</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">team</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">    </span><span class="nx">coordinator</span><span class="p">,</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">    </span><span class="nx">members</span><span class="p">,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="nx">team</span><span class="p">.</span><span class="nx">WithMemberToolConfig</span><span class="p">(</span><span class="nx">memberCfg</span><span class="p">),</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>默认值（来自 <code>team.DefaultMemberToolConfig()</code>）：</p>
 <ul>
 <li><code>StreamInner=false</code></li>
+<li><code>InnerTextMode=team.InnerTextModeInclude</code></li>
 <li><code>HistoryScope=team.HistoryScopeParentBranch</code></li>
 <li><code>SkipSummarization=false</code></li>
 </ul>
@@ -2795,6 +2846,31 @@ Tool（通过 ToolSet）安装到协调者上。<code>team.MemberToolConfig</cod
 <li><strong>用法</strong>：先让协调者和成员都启用流式输出（例如
   <code>GenerationConfig{Stream: true}</code>），再设置
   <code>MemberToolConfig.StreamInner=true</code>。</li>
+</ul>
+<h4 id="innertextmode"><code>InnerTextMode</code></h4>
+<ul>
+<li><strong>实际默认行为</strong>：<code>team.InnerTextModeInclude</code></li>
+<li><strong>作用</strong>：当 <code>StreamInner=true</code> 时，控制成员 assistant 文本是否会继续透传到父流程。</li>
+<li><strong>不会改变的部分</strong>：它不会阻止成员结果被聚合进最终的工具响应；协调者后续推理仍然能拿到这份内容。</li>
+<li><strong>适合 <code>team.InnerTextModeInclude</code> 的场景</strong>：你希望看到成员完整的实时 transcript，包括成员自然语言正文。</li>
+<li><strong>适合 <code>team.InnerTextModeExclude</code> 的场景</strong>：你希望用户看到成员的进度信号（例如 tool call、tool.done），但最终正文只由协调者输出一份。</li>
+</ul>
+<p><code>InnerTextMode</code> 只有在 <code>StreamInner=true</code> 时才有意义。若
+<code>StreamInner=false</code>，则不会有任何内部事件被透传。</p>
+<h3 id="_5">常见可见性组合</h3>
+<ul>
+<li><code>StreamInner=false</code><ul>
+<li>隐藏全部成员内部过程，用户只看到协调者最终答案。</li>
+</ul>
+</li>
+<li><code>StreamInner=true</code> + <code>InnerTextMode=team.InnerTextModeInclude</code><ul>
+<li>展示成员完整 transcript，之后再展示协调者的最终答案。</li>
+</ul>
+</li>
+<li><code>StreamInner=true</code> + <code>InnerTextMode=team.InnerTextModeExclude</code><ul>
+<li>保留成员进度，但隐藏成员 assistant 正文，让协调者成为唯一可见的最终回答者。</li>
+</ul>
+</li>
 </ul>
 <h4 id="historyscope"><code>HistoryScope</code></h4>
 <p><code>HistoryScope</code> 控制成员运行时是否能看到协调者的历史对话。</p>
@@ -2819,7 +2895,7 @@ Tool（通过 ToolSet）安装到协调者上。<code>team.MemberToolConfig</cod
 <li><strong>适用场景</strong>：你希望“成员直接回复用户”，而不是由协调者综合（例如纯路由/透传团队）。</li>
 <li><strong>不适用场景</strong>：你需要协调者汇总多个成员输出并生成最终答案（这也是协调者团队的默认模式）。</li>
 </ul>
-<h2 id="_5">成员并行调用（协调者团队）</h2>
+<h2 id="_6">成员并行调用（协调者团队）</h2>
 <p>由于成员是以工具的形式暴露给协调者的，你可以在协调者上开启并行工具执行：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
 <span class="normal"><a href="#__codelineno-3-2">2</a></span>
@@ -2877,7 +2953,7 @@ Tool（通过 ToolSet）安装到协调者上。<code>team.MemberToolConfig</cod
 <p>开启后：当某个成员通过 <code>transfer_to_agent</code> 交接并产出最后一次回复时，
 下一条用户输入将从该成员开始（直到再次发生 <code>transfer_to_agent</code>）。该能力通过
 Session State 实现，因此需要复用同一个 session。</p>
-<h3 id="_6">动态成员（运行时增删）</h3>
+<h3 id="_7">动态成员（运行时增删）</h3>
 <p>在长时间运行的服务中，Swarm 的成员列表可能会变化（例如远程 Agent
 上线/下线、服务注册表变更）。</p>
 <p>你可以在运行时更新 Swarm Team 的成员列表：</p>
@@ -2969,10 +3045,10 @@ transfer。它是一种比较粗略但高效的判断：只看最近 N 次的“
 <p>注意：如果把 M 设为 2，那么 A↔B 这种“两人来回”的情况不会被拦截
 （因为不同成员数刚好等于 2，并不小于 2）。想要覆盖这种情况，通常需要
 把 M 设为 3 或更大。</p>
-<h2 id="_7">示例</h2>
+<h2 id="_8">示例</h2>
 <p>可以直接参考 <code>examples/team/coord</code>（协调者团队）和 <code>examples/team/swarm</code>
 （Swarm），它们分别提供可运行示例。</p>
-<h2 id="_8">设计说明</h2>
+<h2 id="_9">设计说明</h2>
 <ul>
 <li>协调者团队会把成员通过 AgentTool 包装成工具，并安装到协调者上。</li>
 <li>Swarm 会通过 <code>SetSubAgents</code> 把成员互相“连起来”，handoff（交接）走
@@ -3002,7 +3078,7 @@ transfer。它是一种比较粗略但高效的判断：只看最近 N 次的“
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年2月25日 02:22:50 UTC">2026-02-25 02:22:50</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月21日 12:17:05 UTC">2026-04-21 12:17:05</span>
   </span>
 
     
