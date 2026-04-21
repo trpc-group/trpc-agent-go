@@ -157,6 +157,36 @@ func (s *Store) UpdateMemory(
 	return path, nil
 }
 
+// SaveResolvedMemoryFile writes a validated file path while holding the
+// same store lock used by logical memory updates.
+func (s *Store) SaveResolvedMemoryFile(
+	ctx context.Context,
+	path string,
+	content string,
+) error {
+	if s == nil {
+		return errors.New("memoryfile: nil store")
+	}
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return errors.New("memoryfile: empty file path")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := contextErr(ctx); err != nil {
+		return err
+	}
+	if !fileExists(path) {
+		return os.ErrNotExist
+	}
+	return writeFileAtomic(path, []byte(content))
+}
+
 func (s *Store) ReadFile(path string, maxBytes int) (string, error) {
 	if s == nil {
 		return "", errors.New("memoryfile: nil store")

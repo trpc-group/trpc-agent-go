@@ -10,6 +10,8 @@
 package admin
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -27,11 +29,42 @@ const (
 	maxMemoryFilePreviewBytes = 4 * 1024
 	maxMemoryFilePreviewRunes = 220
 	maxMemoryPreviewLines     = 3
+
+	memoryCardIDPrefix      = "memory-file-"
+	memoryFilePerm          = 0o600
+	memoryTempPatternSuffix = ".tmp-*"
 )
 
 type MemoryFileStore interface {
 	Root() string
 	ReadFile(path string, maxBytes int) (string, error)
+}
+
+type MemoryUserLabelResolver interface {
+	ResolveMemoryUserLabel(appName string, userID string) string
+}
+
+type MemoryUserLabelResolverFunc func(
+	appName string,
+	userID string,
+) string
+
+func (f MemoryUserLabelResolverFunc) ResolveMemoryUserLabel(
+	appName string,
+	userID string,
+) string {
+	if f == nil {
+		return ""
+	}
+	return f(appName, userID)
+}
+
+type memoryFileSaver interface {
+	SaveResolvedMemoryFile(
+		ctx context.Context,
+		path string,
+		content string,
+	) error
 }
 
 type memoryStatus struct {
@@ -49,10 +82,26 @@ type memoryStatus struct {
 type memoryFileView struct {
 	AppName      string    `json:"app_name,omitempty"`
 	UserID       string    `json:"user_id,omitempty"`
+	UserLabel    string    `json:"user_label,omitempty"`
 	RelativePath string    `json:"relative_path,omitempty"`
 	Path         string    `json:"path,omitempty"`
 	OpenURL      string    `json:"open_url,omitempty"`
+	LoadURL      string    `json:"load_url,omitempty"`
+	CardID       string    `json:"card_id,omitempty"`
+	SearchValue  string    `json:"search_value,omitempty"`
 	Preview      string    `json:"preview,omitempty"`
+	SizeBytes    int64     `json:"size_bytes"`
+	ModifiedAt   time.Time `json:"modified_at"`
+}
+
+type memoryFileDetail struct {
+	AppName      string    `json:"app_name,omitempty"`
+	UserID       string    `json:"user_id,omitempty"`
+	UserLabel    string    `json:"user_label,omitempty"`
+	RelativePath string    `json:"relative_path,omitempty"`
+	OpenURL      string    `json:"open_url,omitempty"`
+	LoadURL      string    `json:"load_url,omitempty"`
+	Content      string    `json:"content,omitempty"`
 	SizeBytes    int64     `json:"size_bytes"`
 	ModifiedAt   time.Time `json:"modified_at"`
 }
@@ -85,7 +134,11 @@ func (s *Service) memoryStatusWithFiles(includeFiles bool) memoryStatus {
 	out.FileEnabled = true
 	out.Root = root
 
-	files, err := memoryFileViews(s.cfg.MemoryFiles, includeFiles)
+	files, err := memoryFileViewsWithResolver(
+		s.cfg.MemoryFiles,
+		s.cfg.MemoryUserLabels,
+		includeFiles,
+	)
 	if err != nil {
 		out.Error = err.Error()
 		return out
@@ -124,6 +177,14 @@ func configuredMemoryRoot(
 
 func memoryFileViews(
 	store MemoryFileStore,
+	includePreview bool,
+) ([]memoryFileView, error) {
+	return memoryFileViewsWithResolver(store, nil, includePreview)
+}
+
+func memoryFileViewsWithResolver(
+	store MemoryFileStore,
+	resolver MemoryUserLabelResolver,
 	includePreview bool,
 ) ([]memoryFileView, error) {
 	root, configured, err := configuredMemoryRoot(store)
@@ -177,14 +238,33 @@ func memoryFileViews(
 					maxMemoryFilePreviewBytes,
 				)
 			}
+			appName := decodeMemoryPathPart(appDir.Name())
+			userID := decodeMemoryPathPart(userDir.Name())
+			userLabel := resolveMemoryUserLabel(
+				resolver,
+				appName,
+				userID,
+			)
 			files = append(files, memoryFileView{
-				AppName:      decodeMemoryPathPart(appDir.Name()),
-				UserID:       decodeMemoryPathPart(userDir.Name()),
+				AppName:      appName,
+				UserID:       userID,
+				UserLabel:    userLabel,
 				RelativePath: rel,
 				Path:         filePath,
 				OpenURL: routeMemoryFile + "?" + url.Values{
 					queryPath: {rel},
 				}.Encode(),
+				LoadURL: routeMemoryFileAPI + "?" + url.Values{
+					queryPath: {rel},
+				}.Encode(),
+				CardID: memoryCardID(rel),
+				SearchValue: buildMemorySearchValue(
+					appName,
+					userID,
+					userLabel,
+					rel,
+					preview,
+				),
 				Preview: summarizeMemoryPreview(
 					preview,
 					maxMemoryPreviewLines,
@@ -261,18 +341,12 @@ func resolveMemoryFile(root string, relPath string) (string, error) {
 	if root == "" {
 		return "", fmt.Errorf("memory file store is not configured")
 	}
-	clean := filepath.Clean(filepath.FromSlash(strings.TrimSpace(relPath)))
-	if clean == "." || clean == "" {
-		return "", fmt.Errorf("memory file path is required")
-	}
-	if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
-		return "", fmt.Errorf("invalid memory file path")
-	}
-	if filepath.Base(clean) != memoryFileName {
-		return "", fmt.Errorf("unsupported memory file: %s", clean)
+	clean, err := normalizeMemoryRelativePath(relPath)
+	if err != nil {
+		return "", err
 	}
 
-	candidate := filepath.Join(root, clean)
+	candidate := filepath.Join(root, filepath.FromSlash(clean))
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return "", fmt.Errorf("resolve memory root: %w", err)
@@ -320,4 +394,195 @@ func resolveMemoryFile(root string, relPath string) (string, error) {
 		return "", fmt.Errorf("memory path is a directory")
 	}
 	return absResolved, nil
+}
+
+func normalizeMemoryRelativePath(relPath string) (string, error) {
+	clean := filepath.Clean(
+		filepath.FromSlash(strings.TrimSpace(relPath)),
+	)
+	if clean == "." || clean == "" {
+		return "", fmt.Errorf("memory file path is required")
+	}
+	parentPrefix := ".." + string(filepath.Separator)
+	if filepath.IsAbs(clean) ||
+		clean == ".." ||
+		strings.HasPrefix(clean, parentPrefix) {
+		return "", fmt.Errorf("invalid memory file path")
+	}
+	if filepath.Base(clean) != memoryFileName {
+		return "", fmt.Errorf("unsupported memory file: %s", clean)
+	}
+	return filepath.ToSlash(clean), nil
+}
+
+func readMemoryFileDetail(
+	root string,
+	relPath string,
+) (memoryFileDetail, error) {
+	return readMemoryFileDetailWithResolver(root, relPath, nil)
+}
+
+func readMemoryFileDetailWithResolver(
+	root string,
+	relPath string,
+	resolver MemoryUserLabelResolver,
+) (memoryFileDetail, error) {
+	cleanRelPath, err := normalizeMemoryRelativePath(relPath)
+	if err != nil {
+		return memoryFileDetail{}, err
+	}
+	filePath, err := resolveMemoryFile(root, cleanRelPath)
+	if err != nil {
+		return memoryFileDetail{}, err
+	}
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		return memoryFileDetail{}, fmt.Errorf(
+			"read memory file: %w",
+			err,
+		)
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return memoryFileDetail{}, fmt.Errorf(
+			"stat memory file: %w",
+			err,
+		)
+	}
+	appName, userID := memoryScopeFromRelativePath(cleanRelPath)
+	userLabel := resolveMemoryUserLabel(resolver, appName, userID)
+	return memoryFileDetail{
+		AppName:      appName,
+		UserID:       userID,
+		UserLabel:    userLabel,
+		RelativePath: cleanRelPath,
+		OpenURL: routeMemoryFile + "?" + url.Values{
+			queryPath: {cleanRelPath},
+		}.Encode(),
+		LoadURL: routeMemoryFileAPI + "?" + url.Values{
+			queryPath: {cleanRelPath},
+		}.Encode(),
+		Content:    string(raw),
+		SizeBytes:  info.Size(),
+		ModifiedAt: info.ModTime(),
+	}, nil
+}
+
+func saveMemoryFile(
+	ctx context.Context,
+	store MemoryFileStore,
+	relPath string,
+	content string,
+) error {
+	root, configured, err := configuredMemoryRoot(store)
+	if err != nil || !configured {
+		return fmt.Errorf("memory file store is not configured")
+	}
+	filePath, err := resolveMemoryFile(root, relPath)
+	if err != nil {
+		return err
+	}
+	if saver, ok := store.(memoryFileSaver); ok {
+		return saver.SaveResolvedMemoryFile(ctx, filePath, content)
+	}
+	return writeMemoryFileAtomic(filePath, []byte(content))
+}
+
+func memoryScopeFromRelativePath(relPath string) (string, string) {
+	parts := strings.Split(
+		filepath.ToSlash(strings.TrimSpace(relPath)),
+		"/",
+	)
+	if len(parts) < 3 {
+		return "", ""
+	}
+	return decodeMemoryPathPart(parts[0]),
+		decodeMemoryPathPart(parts[1])
+}
+
+func buildMemorySearchValue(
+	appName string,
+	userID string,
+	userLabel string,
+	relPath string,
+	preview string,
+) string {
+	return strings.Join(
+		[]string{
+			strings.TrimSpace(appName),
+			strings.TrimSpace(userID),
+			strings.TrimSpace(userLabel),
+			strings.TrimSpace(relPath),
+			strings.TrimSpace(preview),
+		},
+		" ",
+	)
+}
+
+func resolveMemoryUserLabel(
+	resolver MemoryUserLabelResolver,
+	appName string,
+	userID string,
+) string {
+	if resolver == nil {
+		return ""
+	}
+	label := strings.TrimSpace(
+		resolver.ResolveMemoryUserLabel(appName, userID),
+	)
+	if label == "" || label == strings.TrimSpace(userID) {
+		return ""
+	}
+	return label
+}
+
+func memoryCardID(relPath string) string {
+	trimmed := strings.TrimSpace(relPath)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return fmt.Sprintf(
+		"%s%x",
+		memoryCardIDPrefix,
+		sum[:6],
+	)
+}
+
+func writeMemoryFileAtomic(path string, data []byte) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("memory file path is required")
+	}
+	dir := filepath.Dir(path)
+	file, err := os.CreateTemp(
+		dir,
+		filepath.Base(path)+memoryTempPatternSuffix,
+	)
+	if err != nil {
+		return fmt.Errorf("create temp memory file: %w", err)
+	}
+	tempPath := file.Name()
+	removeTemp := true
+	defer func() {
+		_ = file.Close()
+		if removeTemp {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	if _, err := file.Write(data); err != nil {
+		return fmt.Errorf("write temp memory file: %w", err)
+	}
+	if err := file.Chmod(memoryFilePerm); err != nil {
+		return fmt.Errorf("chmod temp memory file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close temp memory file: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("replace memory file: %w", err)
+	}
+	removeTemp = false
+	return nil
 }
