@@ -1055,6 +1055,8 @@ mathTool := agenttool.NewTool(
     agenttool.WithSkipSummarization(false),
     // forward child Agent streaming events to parent flow.
     agenttool.WithStreamInner(true),
+    // hide child assistant prose while still forwarding inner tool progress.
+    agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
 )
 
 // 3) Use in parent Agent
@@ -1068,11 +1070,15 @@ parent := llmagent.New(
 
 ### Streaming Inner Forwarding
 
-When `WithStreamInner(true)` is enabled, AgentTool forwards child Agent events to the parent flow as they happen:
+When `WithStreamInner(true)` is enabled, AgentTool forwards child Agent events
+to the parent flow as they happen:
 
 - Forwarded items are actual `event.Event` instances, carrying incremental text in `choice.Delta.Content`
 - To avoid duplication, the child Agent’s final full message is not forwarded again; it is aggregated into the final `tool.response` content for the next LLM turn (to satisfy providers requiring tool messages)
 - UI guidance: show forwarded child deltas; avoid printing the aggregated final `tool.response` content unless debugging
+- `WithInnerTextMode(agenttool.InnerTextModeExclude)` lets you keep inner tool
+  progress visible while suppressing forwarded child assistant text. This is
+  useful when an outer coordinator will produce the final user-facing answer.
 
 Example: Only show tool fragments when needed to avoid duplicates
 
@@ -1082,8 +1088,9 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 }
 
 // Child Agent forwarded deltas (author != parent)
-if ev.Author != parentName && len(ev.Choices) > 0 {
-    if delta := ev.Choices[0].Delta.Content; delta != "" {
+if ev.Author != parentName && ev.Response != nil &&
+    len(ev.Response.Choices) > 0 {
+    if delta := ev.Response.Choices[0].Delta.Content; delta != "" {
         fmt.Print(delta)
     }
 }
@@ -1101,6 +1108,14 @@ if ev.Author != parentName && len(ev.Choices) > 0 {
   - true: Forward child Agent events to the parent flow (recommended: enable `GenerationConfig{Stream: true}` for both parent and child Agents)
   - false: Treat as a callable-only tool, without inner event forwarding
 
+- WithInnerTextMode(InnerTextMode):
+
+  - `InnerTextModeInclude`: (effective default) forward child assistant text
+    when inner streaming is enabled
+  - `InnerTextModeExclude`: suppress forwarded child assistant text while
+    keeping inner tool calls, tool completions, and the aggregated final tool
+    response
+
 - WithHistoryScope(HistoryScope):
   - `HistoryScopeIsolated` (default): Keep the child Agent fully isolated; it only sees the current tool arguments (no inherited history).
   - `HistoryScopeParentBranch`: Inherit parent conversation history by using a hierarchical filter key `parent/child-uuid`. This allows the content processor to include parent events via prefix matching while keeping child events isolated under a sub-branch. Typical use cases: “edit/optimize/continue previous output”.
@@ -1112,6 +1127,7 @@ child := agenttool.NewTool(
     childAgent,
     agenttool.WithSkipSummarization(false),
     agenttool.WithStreamInner(true),
+    agenttool.WithInnerTextMode(agenttool.InnerTextModeExclude),
     agenttool.WithHistoryScope(agenttool.HistoryScopeParentBranch),
 )
 ```
@@ -1120,6 +1136,9 @@ child := agenttool.NewTool(
 
 - Completion signaling: Tool response events are marked `RequiresCompletion=true`; Runner sends completion automatically
 - De-duplication: When inner deltas are forwarded, avoid printing the aggregated final `tool.response` text again by default
+- Progress-only UX: combine `WithStreamInner(true)` with
+  `WithInnerTextMode(agenttool.InnerTextModeExclude)` when users should see
+  inner progress without seeing duplicated child prose
 - Model compatibility: Some providers require a tool message after tool_calls; AgentTool automatically supplies the aggregated content
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
 
