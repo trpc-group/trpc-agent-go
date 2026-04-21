@@ -190,6 +190,9 @@ func insertNotebookCell(state *notebookEditState, in notebookEditInput) string {
 	insertAt := 0
 	if strings.TrimSpace(in.CellID) != "" {
 		insertAt = state.cellIndex + 1
+		if insertAt > len(state.cells) {
+			insertAt = len(state.cells)
+		}
 	}
 	newCell := newNotebookCell(state.cellType, in.NewSource, notebookSupportsCellIDs(state.notebook))
 	resultCellID := notebookResultCellID(newCell, insertAt, "")

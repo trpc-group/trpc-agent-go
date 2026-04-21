@@ -143,8 +143,12 @@ func (b *duckDuckGoSearchBackend) search(
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, _ := readHTTPBody(resp, 16*1024, 16*1024)
+		return nil, fmt.Errorf("duckduckgo search request failed: status=%d body=%s", resp.StatusCode, body)
+	}
 	body, err := readHTTPBody(resp, 512*1024, 512*1024)
-	_ = resp.Body.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +179,7 @@ func parseDuckDuckGoHTML(body []byte, in webSearchInput, offset int, limit int) 
 			}
 			results = append(results, partialResult{Title: title, URL: link})
 		}
-		if node.Type == html.ElementNode && (htmlHasClass(node, "result__snippet") || htmlHasClass(node, "result__body")) {
+		if node.Type == html.ElementNode && htmlHasClass(node, "result__snippet") {
 			if len(results) > 0 && results[len(results)-1].Snippet == "" {
 				results[len(results)-1].Snippet = strings.TrimSpace(htmlNodeText(node))
 			}
@@ -215,9 +219,6 @@ func normalizeDuckDuckGoResultURL(rawURL string) string {
 		return trimmed
 	}
 	if uddg := strings.TrimSpace(parsed.Query().Get("uddg")); uddg != "" {
-		if decoded, decodeErr := url.QueryUnescape(uddg); decodeErr == nil && strings.TrimSpace(decoded) != "" {
-			return strings.TrimSpace(decoded)
-		}
 		return uddg
 	}
 	return trimmed

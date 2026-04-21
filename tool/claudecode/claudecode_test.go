@@ -1115,6 +1115,24 @@ func TestToolSet_WebSearchDuckDuckGoAppliesConfiguredWindowAndReturnsNoResultBlo
 	require.Empty(t, emptyOut.Results)
 }
 
+func TestParseDuckDuckGoHTMLLeavesSnippetEmptyWithoutDedicatedSnippetNode(t *testing.T) {
+	t.Parallel()
+	hits := parseDuckDuckGoHTML([]byte(`
+		<html><body>
+			<div class="result">
+				<div class="result__body">
+					<a class="result__a" href="https://example.com/doc">Example Title</a>
+					<span class="result__url">example.com/doc</span>
+				</div>
+			</div>
+		</body></html>
+	`), webSearchInput{Query: "example"}, 0, 0)
+	require.Len(t, hits, 1)
+	require.Equal(t, "Example Title", hits[0].Title)
+	require.Equal(t, "https://example.com/doc", hits[0].URL)
+	require.Empty(t, hits[0].Snippet)
+}
+
 func TestGoogleSearchBackendSearchUsesConfiguredOptions(t *testing.T) {
 	t.Parallel()
 	requestCount := 0
@@ -1561,6 +1579,23 @@ func TestNotebookHelpersCoverRemainingBranches(t *testing.T) {
 		CellID:   "2",
 	}, runtime)
 	require.EqualError(t, err, "Cell with index 2 does not exist in notebook.")
+	insertState := notebookEditState{
+		notebook: map[string]any{"nbformat": 4, "nbformat_minor": 4},
+		cells: []map[string]any{
+			{"id": "cell-0", "source": "x = 1"},
+			{"id": "cell-1", "source": "x = 2"},
+		},
+		cellType:  "code",
+		cellIndex: 2,
+	}
+	var insertedCellID string
+	insertedCellID = insertNotebookCell(&insertState, notebookEditInput{
+		CellID:    "cell-2",
+		NewSource: "x = 3",
+	})
+	require.Equal(t, "cell-2", insertedCellID)
+	require.Len(t, insertState.cells, 3)
+	require.Equal(t, "x = 3", insertState.cells[2]["source"])
 }
 
 func TestCommonHelpersCoverPathAndHTTPBranches(t *testing.T) {
@@ -1721,7 +1756,8 @@ func TestWebSearchHelpersNormalizeWrappedDuckDuckGoURLs(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, "https://golang.org/doc/", normalizeDuckDuckGoResultURL("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fgolang.org%2Fdoc%2F"))
 	require.Equal(t, "https://example.com", normalizeDuckDuckGoResultURL("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com"))
-	require.Equal(t, "https://duckduckgo.com/l/?uddg=%ZZ", normalizeDuckDuckGoResultURL("https://duckduckgo.com/l/?uddg=%ZZ"))
+	require.Equal(t, "https://example.com/a%20b", normalizeDuckDuckGoResultURL("https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa%2520b"))
+	require.Equal(t, "%ZZ", normalizeDuckDuckGoResultURL("https://duckduckgo.com/l/?uddg=%25ZZ"))
 	require.Equal(t, "not a url", normalizeDuckDuckGoResultURL("not a url"))
 	require.Empty(t, normalizeDuckDuckGoResultURL("   "))
 }
@@ -1774,6 +1810,23 @@ func TestWebSearchBackendsCoverRemainingErrorBranches(t *testing.T) {
 	}
 	_, err = duckBackend.search(context.Background(), webSearchInput{Query: "example"})
 	require.ErrorIs(t, err, fs.ErrInvalid)
+	statusFailedClient := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusTooManyRequests,
+				Status:     "429 Too Many Requests",
+				Header:     http.Header{},
+				Body:       io.NopCloser(strings.NewReader("rate limited")),
+				Request:    req,
+			}, nil
+		}),
+	}
+	duckBackend = &duckDuckGoSearchBackend{
+		client:  statusFailedClient,
+		baseURL: "https://example.com/search",
+	}
+	_, err = duckBackend.search(context.Background(), webSearchInput{Query: "example"})
+	require.EqualError(t, err, "duckduckgo search request failed: status=429 body=rate limited")
 	googleBackend := &googleSearchBackend{
 		client:  http.DefaultClient,
 		options: &WebSearchOptions{APIKey: "key", EngineID: "engine", BaseURL: "://bad"},
