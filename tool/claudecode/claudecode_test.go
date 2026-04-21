@@ -1143,7 +1143,7 @@ func TestGoogleSearchBackendSearchUsesConfiguredOptions(t *testing.T) {
 		require.Equal(t, "golang", r.URL.Query().Get("q"))
 		if requestCount == 1 {
 			require.Equal(t, "2", r.URL.Query().Get("num"))
-			require.Equal(t, "1", r.URL.Query().Get("start"))
+			require.Equal(t, "2", r.URL.Query().Get("start"))
 			require.Equal(t, "lang_en", r.URL.Query().Get("lr"))
 		} else {
 			require.Empty(t, r.URL.Query().Get("num"))

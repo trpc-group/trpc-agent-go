@@ -290,7 +290,7 @@ func (b *googleSearchBackend) search(
 		query.Set("num", strconv.Itoa(b.options.Size))
 	}
 	if b.options.Offset > 0 {
-		query.Set("start", strconv.Itoa(b.options.Offset))
+		query.Set("start", strconv.Itoa(b.options.Offset+1))
 	}
 	if strings.TrimSpace(b.options.Lang) != "" {
 		query.Set("lr", "lang_"+strings.TrimSpace(b.options.Lang))
