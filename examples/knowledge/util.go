@@ -75,8 +75,8 @@ func newPGVectorStore() (vectorstore.VectorStore, error) {
 	portStr := GetEnvOrDefault("PGVECTOR_PORT", "5432")
 	port, _ := strconv.Atoi(portStr)
 	user := GetEnvOrDefault("PGVECTOR_USER", "root")
-	password := GetEnvOrDefault("PGVECTOR_PASSWORD", "")
-	database := GetEnvOrDefault("PGVECTOR_DATABASE", "vectordb")
+	password := GetEnvOrDefault("PGVECTOR_PASSWORD", "123")
+	database := GetEnvOrDefault("PGVECTOR_DATABASE", "contextengine")
 	table := GetEnvOrDefault("PGVECTOR_TABLE", "trpc_agent_go")
 
 	encodedUser := url.QueryEscape(user)
@@ -87,6 +87,7 @@ func newPGVectorStore() (vectorstore.VectorStore, error) {
 	return pgvector.New(
 		pgvector.WithPGVectorClientDSN(dsn),
 		pgvector.WithTable(table),
+		pgvector.WithIndexDimension(1024),
 	)
 }
 

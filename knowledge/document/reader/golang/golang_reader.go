@@ -223,7 +223,7 @@ func (r *Reader) createFileDocumentFromInfo(content, name string, baseMetadata m
 	doc.Metadata["trpc_ast_name"] = name
 	doc.Metadata["trpc_ast_full_name"] = name
 	doc.Metadata["trpc_ast_language"] = "go"
-	doc.Metadata["trpc_ast_scope"] = "code"
+	doc.Metadata["trpc_ast_scope"] = resolveScope(name, baseMetadata)
 	doc.Metadata["trpc_ast_file_path"] = name
 	if fileInfo != nil {
 		if fileInfo.Package != "" {
@@ -288,4 +288,26 @@ func (r *Reader) Name() string {
 // SupportedExtensions returns the file extensions this reader supports.
 func (r *Reader) SupportedExtensions() []string {
 	return supportedExtensions
+}
+
+// resolveScope returns the AST scope ("code" or "example") for a file-level
+// document. It is shared by the chunked AST path and the no-chunk fallback so
+// that both paths agree on how "example" content is classified. When the
+// baseMetadata provides a repository root (under source.MetaRepoPath), the
+// "example" detection is anchored at that root so that directories such as
+// "examples" are matched relative to the repo rather than the absolute file
+// path.
+func resolveScope(filePath string, baseMetadata map[string]any) string {
+	basePath := ""
+	if baseMetadata != nil {
+		if v, ok := baseMetadata[source.MetaRepoPath]; ok {
+			if s, ok := v.(string); ok {
+				basePath = s
+			}
+		}
+	}
+	if codeast.IsExamplePath(filePath, basePath) {
+		return string(codeast.ScopeExample)
+	}
+	return string(codeast.ScopeCode)
 }

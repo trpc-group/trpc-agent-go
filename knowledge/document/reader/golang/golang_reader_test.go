@@ -146,6 +146,30 @@ func main() {}
 	}
 }
 
+func TestReadFromFileWithoutChunkMarksExampleScope(t *testing.T) {
+	tmpDir := t.TempDir()
+	exampleDir := filepath.Join(tmpDir, "examples")
+	if err := os.MkdirAll(exampleDir, 0755); err != nil {
+		t.Fatalf("failed to create examples dir: %v", err)
+	}
+	goFile := filepath.Join(exampleDir, "main.go")
+	writeTestFile(t, goFile, `package main
+
+func main() {}
+`)
+
+	r := New(reader.WithChunk(false)).(*Reader)
+	docs, err := r.ReadFromFile(goFile)
+	if err != nil {
+		t.Fatalf("ReadFromFile() error = %v", err)
+	}
+
+	if len(docs) != 1 {
+		t.Fatalf("len(docs) = %d, want 1", len(docs))
+	}
+	assertMetadataEquals(t, docs[0].Metadata, "trpc_ast_scope", "example")
+}
+
 func TestReadFromDirectoryParsesWholeModule(t *testing.T) {
 	tmpDir := t.TempDir()
 	writeTestFile(t, filepath.Join(tmpDir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
