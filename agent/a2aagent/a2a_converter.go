@@ -852,13 +852,8 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 
 	// Text content: final assistant response
 	// Only add if no tool calls (tool calls already include text content)
-	if len(result.toolCalls) == 0 && (result.textContent != "" || result.reasoningContent != "" || result.codeExecution != "" || result.codeExecutionResult != "") {
-		content := result.textContent
-		if result.codeExecution != "" {
-			content = result.codeExecution
-		} else if result.codeExecutionResult != "" {
-			content = result.codeExecutionResult
-		}
+	content := nonStreamingResponseContent(result)
+	if len(result.toolCalls) == 0 && (content != "" || result.reasoningContent != "") {
 		internalRole := convertA2ARoleToModelRole(role)
 		choices = append(choices, model.Choice{
 			Message: model.Message{
@@ -879,7 +874,7 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 		}}
 	}
 
-	objectType := extractObjectType(result)
+	objectType := nonStreamingResponseObjectType(result)
 	if objectType == "" {
 		objectType = model.ObjectTypeChatCompletion
 	}
@@ -914,14 +909,11 @@ func buildErrorResponse(
 func taskResponseError(
 	result *parseResult,
 ) *model.ResponseError {
-	if result == nil {
+	if result == nil || !isTaskFailureState(result.taskState) {
 		return nil
 	}
 	if result.responseError != nil {
 		return result.responseError
-	}
-	if !isTaskFailureState(result.taskState) {
-		return nil
 	}
 	message := result.textContent
 	if message == "" {
@@ -931,6 +923,39 @@ func taskResponseError(
 		Type:    model.ErrorTypeFlowError,
 		Message: message,
 	}
+}
+
+func nonStreamingResponseContent(
+	result *parseResult,
+) string {
+	if result == nil {
+		return ""
+	}
+	content := result.textContent
+	if result.codeExecution != "" {
+		content = result.codeExecution
+	} else if result.codeExecutionResult != "" {
+		content = result.codeExecutionResult
+	}
+	if content == "" &&
+		result.responseError != nil &&
+		!isTaskFailureState(result.taskState) {
+		content = result.responseError.Message
+	}
+	return content
+}
+
+func nonStreamingResponseObjectType(
+	result *parseResult,
+) string {
+	objectType := extractObjectType(result)
+	if objectType == model.ObjectTypeError &&
+		result != nil &&
+		result.responseError != nil &&
+		!isTaskFailureState(result.taskState) {
+		return ""
+	}
+	return objectType
 }
 
 func taskFailureMessage(

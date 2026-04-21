@@ -1082,6 +1082,54 @@ func TestDefaultA2AEventConverter_ConvertToEvents_FailedTask(
 	}
 }
 
+func TestDefaultA2AEventConverter_ConvertToEvents_MessageStructuredError(
+	t *testing.T,
+) {
+	converter := &defaultA2AEventConverter{}
+	code := "tool_not_found"
+	events, err := converter.ConvertToEvents(
+		protocol.MessageResult{
+			Result: &protocol.Message{
+				Kind:      protocol.KindMessage,
+				MessageID: "msg-structured-error",
+				Role:      protocol.MessageRoleAgent,
+				Parts: []protocol.Part{
+					&protocol.TextPart{
+						Kind: protocol.KindText,
+						Text: "Tool 'upload_to_cos' not found",
+					},
+				},
+				Metadata: map[string]any{
+					ia2a.MessageMetadataErrorCodeKey: code,
+				},
+			},
+		},
+		"test-agent",
+		&agent.Invocation{InvocationID: "inv"},
+	)
+	if err != nil {
+		t.Fatalf("ConvertToEvents() error = %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Response == nil {
+		t.Fatal("expected Response to be populated")
+	}
+	if events[0].Response.Error != nil {
+		t.Fatalf("expected structured message error to be downgraded, got %+v", events[0].Response.Error)
+	}
+	if !events[0].Response.Done {
+		t.Fatal("expected final non-streaming event")
+	}
+	if got := events[0].Response.Choices[0].Message.Content; got != "Tool 'upload_to_cos' not found" {
+		t.Fatalf("message content = %q, want %q", got, "Tool 'upload_to_cos' not found")
+	}
+	if events[0].Response.Object == model.ObjectTypeError {
+		t.Fatalf("unexpected error object type for downgraded message event: %s", events[0].Response.Object)
+	}
+}
+
 func TestTaskResponseError_EdgeCases(t *testing.T) {
 	if taskResponseError(nil) != nil {
 		t.Fatal("expected nil response error for nil result")
@@ -1103,6 +1151,12 @@ func TestTaskResponseError_EdgeCases(t *testing.T) {
 		textContent:   "ignored",
 	}); got != passthrough {
 		t.Fatal("expected structured response error to be reused")
+	}
+	if taskResponseError(&parseResult{
+		responseError: passthrough,
+		textContent:   "ignored",
+	}) != nil {
+		t.Fatal("expected structured message error to be ignored without task failure state")
 	}
 }
 
@@ -3079,6 +3133,49 @@ func TestBuildNonStreamingResponse_WithReasoningContent(t *testing.T) {
 	}
 	if msg.ReasoningContent != "Thinking..." {
 		t.Errorf("expected reasoningContent %q, got %q", "Thinking...", msg.ReasoningContent)
+	}
+}
+
+func TestBuildNonStreamingResponse_PassesThroughStructuredMessageError(t *testing.T) {
+	code := "tool_not_found"
+	resp := buildNonStreamingResponse("msg-123", &parseResult{
+		textContent: "Tool 'upload_to_cos' not found",
+		responseError: &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: "Tool 'upload_to_cos' not found",
+			Code:    &code,
+		},
+		objectType: model.ObjectTypeError,
+	}, protocol.MessageRoleAgent)
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
+	if resp.Error != nil {
+		t.Fatalf("expected downgraded non-streaming response, got error %+v", resp.Error)
+	}
+	if got := resp.Choices[0].Message.Content; got != "Tool 'upload_to_cos' not found" {
+		t.Fatalf("message content = %q, want %q", got, "Tool 'upload_to_cos' not found")
+	}
+	if resp.Object == model.ObjectTypeError {
+		t.Fatalf("unexpected error object type for downgraded response: %s", resp.Object)
+	}
+}
+
+func TestBuildNonStreamingResponse_UsesStructuredErrorMessageWhenTextMissing(t *testing.T) {
+	resp := buildNonStreamingResponse("msg-123", &parseResult{
+		responseError: &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: "tool invocation failed",
+		},
+	}, protocol.MessageRoleAgent)
+	if resp == nil {
+		t.Fatal("expected response, got nil")
+	}
+	if resp.Error != nil {
+		t.Fatalf("expected downgraded non-streaming response, got error %+v", resp.Error)
+	}
+	if got := resp.Choices[0].Message.Content; got != "tool invocation failed" {
+		t.Fatalf("message content = %q, want %q", got, "tool invocation failed")
 	}
 }
 
