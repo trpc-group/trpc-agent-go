@@ -683,6 +683,17 @@ func TestServiceHandlerRendersMemoryInventory(t *testing.T) {
 	svc := New(Config{
 		MemoryBackend: "file",
 		MemoryFiles:   store,
+		MemoryUserLabels: MemoryUserLabelResolverFunc(
+			func(appName string, userID string) string {
+				if appName != "openclaw" {
+					return ""
+				}
+				if userID != "alice" {
+					return ""
+				}
+				return "RTX alice.dev (Alice Chen)"
+			},
+		),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, routeMemory, nil)
@@ -694,6 +705,7 @@ func TestServiceHandlerRendersMemoryInventory(t *testing.T) {
 	require.Contains(t, body, "Memory Files")
 	require.Contains(t, body, "openclaw")
 	require.Contains(t, body, "alice")
+	require.Contains(t, body, "RTX alice.dev (Alice Chen)")
 	require.Contains(t, body, "Alice prefers concise updates.")
 	require.Contains(t, body, `href="api/memory/files"`)
 	require.Contains(t, body, `href="memory/file?path=`)
@@ -747,6 +759,14 @@ func TestServiceMemoryFilesJSONEndpoint(t *testing.T) {
 	svc := New(Config{
 		MemoryBackend: "file",
 		MemoryFiles:   store,
+		MemoryUserLabels: MemoryUserLabelResolverFunc(
+			func(appName string, userID string) string {
+				if appName == "openclaw" && userID == "alice" {
+					return "RTX alice.dev (Alice Chen)"
+				}
+				return ""
+			},
+		),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, routeMemoryFilesJSON, nil)
@@ -758,6 +778,11 @@ func TestServiceMemoryFilesJSONEndpoint(t *testing.T) {
 	require.Contains(t, body, `"file_count": 1`)
 	require.Contains(t, body, `"app_name": "openclaw"`)
 	require.Contains(t, body, `"user_id": "alice"`)
+	require.Contains(
+		t,
+		body,
+		`"user_label": "RTX alice.dev (Alice Chen)"`,
+	)
 }
 
 func TestServiceMemoryFilesJSONEndpoint_MethodNotAllowed(t *testing.T) {
@@ -791,6 +816,14 @@ func TestServiceMemoryFileAPIEndpoint(t *testing.T) {
 	svc := New(Config{
 		MemoryBackend: "file",
 		MemoryFiles:   store,
+		MemoryUserLabels: MemoryUserLabelResolverFunc(
+			func(appName string, userID string) string {
+				if appName == "openclaw" && userID == "alice" {
+					return "RTX alice.dev (Alice Chen)"
+				}
+				return ""
+			},
+		),
 	})
 	status := svc.memoryStatus()
 	require.Len(t, status.Files, 1)
@@ -810,6 +843,11 @@ func TestServiceMemoryFileAPIEndpoint(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &detail))
 	require.Equal(t, "openclaw", detail.AppName)
 	require.Equal(t, "alice", detail.UserID)
+	require.Equal(
+		t,
+		"RTX alice.dev (Alice Chen)",
+		detail.UserLabel,
+	)
 	require.Equal(
 		t,
 		"# Memory\n\n- Alice prefers concise updates.\n",
@@ -878,10 +916,15 @@ func TestServiceMemoryFileAPIEndpoint_Save(t *testing.T) {
 	svc.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusSeeOther, rr.Code)
-	require.Contains(t, rr.Header().Get("Location"), "Saved+memory+file.")
+	assertRedirectQueryValue(
+		t,
+		rr.Header().Get(headerLocation),
+		queryNotice,
+		"Saved memory file.",
+	)
 	require.Contains(
 		t,
-		rr.Header().Get("Location"),
+		rr.Header().Get(headerLocation),
 		"#"+status.Files[0].CardID,
 	)
 
@@ -933,7 +976,12 @@ func TestServiceMemoryFileAPIEndpoint_SaveValidation(t *testing.T) {
 	rr = httptest.NewRecorder()
 	svc.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusSeeOther, rr.Code)
-	require.Contains(t, rr.Header().Get("Location"), "path+is+required")
+	assertRedirectQueryValue(
+		t,
+		rr.Header().Get(headerLocation),
+		queryError,
+		"path is required",
+	)
 
 	form = url.Values{
 		queryPath:         {"/tmp/not-memory-file"},
@@ -953,10 +1001,11 @@ func TestServiceMemoryFileAPIEndpoint_SaveValidation(t *testing.T) {
 	rr = httptest.NewRecorder()
 	svc.Handler().ServeHTTP(rr, req)
 	require.Equal(t, http.StatusSeeOther, rr.Code)
-	require.Contains(
+	assertRedirectQueryValue(
 		t,
-		rr.Header().Get("Location"),
-		"invalid+memory+file+path",
+		rr.Header().Get(headerLocation),
+		queryError,
+		"invalid memory file path",
 	)
 }
 
@@ -3495,6 +3544,19 @@ func TestSkillInstallViewsFromStatus_TrimsValues(t *testing.T) {
 		out,
 	)
 	require.Nil(t, skillInstallViewsFromStatus(nil))
+}
+
+func assertRedirectQueryValue(
+	t *testing.T,
+	location string,
+	key string,
+	want string,
+) {
+	t.Helper()
+
+	target, err := url.Parse(location)
+	require.NoError(t, err)
+	require.Equal(t, want, target.Query().Get(key))
 }
 
 func TestServiceToggleSkillEndpointRequiresConfigPath(t *testing.T) {

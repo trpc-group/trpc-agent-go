@@ -166,15 +166,16 @@ type Config struct {
 	StateDir string
 	DebugDir string
 
-	Channels      []string
-	GatewayRoutes Routes
-	Skills        SkillsStatusProvider
-	Prompts       PromptsProvider
-	Identity      IdentityProvider
-	Personas      PersonasProvider
-	Chats         ChatsProvider
-	MemoryFiles   MemoryFileStore
-	Browser       BrowserConfig
+	Channels         []string
+	GatewayRoutes    Routes
+	Skills           SkillsStatusProvider
+	Prompts          PromptsProvider
+	Identity         IdentityProvider
+	Personas         PersonasProvider
+	Chats            ChatsProvider
+	MemoryFiles      MemoryFileStore
+	MemoryUserLabels MemoryUserLabelResolver
+	Browser          BrowserConfig
 
 	Cron *cron.Service
 	Exec *octool.Manager
@@ -1700,9 +1701,10 @@ func (s *Service) handleMemoryFileJSON(
 		)
 		return
 	}
-	detail, err := readMemoryFileDetail(
+	detail, err := readMemoryFileDetailWithResolver(
 		root,
 		strings.TrimSpace(r.URL.Query().Get(queryPath)),
+		s.cfg.MemoryUserLabels,
 	)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1715,7 +1717,7 @@ func (s *Service) handleSaveMemoryFile(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
-	root, configured, err := configuredMemoryRoot(s.cfg.MemoryFiles)
+	_, configured, err := configuredMemoryRoot(s.cfg.MemoryFiles)
 	if err != nil || !configured {
 		http.Error(
 			w,
@@ -1741,7 +1743,8 @@ func (s *Service) handleSaveMemoryFile(
 		return
 	}
 	if err := saveMemoryFile(
-		root,
+		r.Context(),
+		s.cfg.MemoryFiles,
 		path,
 		r.FormValue(formPromptContent),
 	); err != nil {
@@ -3578,6 +3581,11 @@ const adminPageHTML = `<!doctype html>
       display: grid;
       gap: 4px;
     }
+    .memory-user-label {
+      color: var(--muted);
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
     .memory-controls {
       margin: 18px 0 12px;
     }
@@ -5240,7 +5248,12 @@ const adminPageHTML = `<!doctype html>
               <div>
                 <div class="memory-scope">
                   <span>app <code>{{.AppName}}</code></span>
-                  <span>user <code>{{.UserID}}</code></span>
+                  <span>
+                    user <code>{{.UserID}}</code>
+                    {{if .UserLabel}}
+                    <span class="memory-user-label">{{.UserLabel}}</span>
+                    {{end}}
+                  </span>
                 </div>
                 <div class="memory-path">
                   <code>{{.RelativePath}}</code>
