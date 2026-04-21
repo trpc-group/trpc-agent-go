@@ -2148,6 +2148,15 @@
           <li class="md-nav__item">
   <a href="#_16" class="md-nav__link">
     <span class="md-ellipsis">
+      流式工具执行结果
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_17" class="md-nav__link">
+    <span class="md-ellipsis">
       外部工具
     </span>
   </a>
@@ -2160,7 +2169,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_17" class="md-nav__link">
+  <a href="#_18" class="md-nav__link">
     <span class="md-ellipsis">
       最佳实践
     </span>
@@ -2170,18 +2179,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_18" class="md-nav__link">
-    <span class="md-ellipsis">
-      生成文档
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#_19" class="md-nav__link">
     <span class="md-ellipsis">
-      流式工具执行结果
+      生成文档
     </span>
   </a>
   
@@ -2636,6 +2636,15 @@
           <li class="md-nav__item">
   <a href="#_16" class="md-nav__link">
     <span class="md-ellipsis">
+      流式工具执行结果
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_17" class="md-nav__link">
+    <span class="md-ellipsis">
       外部工具
     </span>
   </a>
@@ -2648,7 +2657,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_17" class="md-nav__link">
+  <a href="#_18" class="md-nav__link">
     <span class="md-ellipsis">
       最佳实践
     </span>
@@ -2658,18 +2667,9 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_18" class="md-nav__link">
-    <span class="md-ellipsis">
-      生成文档
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#_19" class="md-nav__link">
     <span class="md-ellipsis">
-      流式工具执行结果
+      生成文档
     </span>
   </a>
   
@@ -4047,33 +4047,22 @@
 </span><span id="__span-31-24"><a id="__codelineno-31-24" name="__codelineno-31-24"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>完整示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph">examples/agui/server/graph</a>，前端渲染与审批交互可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat">examples/agui/client/tdesign-chat</a>。</p>
-<h3 id="_16">外部工具</h3>
-<p>当工具必须在客户端或业务侧执行时，可以采用外部工具模式。后端只生成工具调用并在工具节点触发中断，前端执行工具并回传结果，后端从中断点恢复继续运行。该模式要求工具结果进入 LLM 上下文，并写入会话历史，便于后续通过消息快照回放完整对话。</p>
-<p>建议在服务端开启 <code>agui.WithGraphNodeInterruptActivityEnabled(true)</code>，用于在 <code>graph.node.interrupt</code> 事件中携带 <code>lineageId</code> 与 <code>checkpointId</code>，以便前端定位恢复点并发起下一次请求。</p>
-<p>一次外部工具调用对应两次请求。第一次请求使用 <code>role=user</code>，当 LLM 触发工具调用时，事件流会输出 <code>TOOL_CALL_START</code>、<code>TOOL_CALL_ARGS</code>、<code>TOOL_CALL_END</code>，随后在工具节点输出 <code>ACTIVITY_DELTA graph.node.interrupt</code> 并结束本次 SSE。前端在事件流中获取 <code>toolCallId</code> 与参数，并从中断事件获取 <code>lineageId</code>。</p>
-<p>第二次请求使用 <code>role=tool</code>，把工具执行结果回传给后端。<code>toolCallId</code> 必须与第一次请求一致，<code>content</code> 为工具输出字符串，同时在 <code>forwardedProps.lineage_id</code> 填入第一次中断事件返回的 <code>lineageId</code>。服务端会先把该 tool message 翻译为 <code>TOOL_CALL_RESULT</code> 并写入会话，再从对应 checkpoint 恢复继续生成最终回复。</p>
-<p>如果希望这条 <code>role=tool</code> 输入回显经过 Translator，可以开启 <code>agui.WithToolResultInputTranslationEnabled(true)</code>；开启后，AG-UI Runner 会先把 tool result 输入规范化为内部事件，再交给 Translator 处理，示例如下。</p>
+<h3 id="_16">流式工具执行结果</h3>
+<p><code>StreamableTool</code> 在底层 runner 事件流里，通常会先产生若干条 partial <code>tool.response</code>，工具结束时再补一条非 partial 的最终 <code>tool.response</code>。如果工具流中显式返回了 <code>tool.FinalResultChunk</code> 或 <code>tool.FinalResultStateChunk</code>，runner 会直接使用它作为最终结果；如果没有显式 final result，则会继续按现有 merge 规则把之前的 chunk 聚合成最终结果。开启下面这个选项后，前端在工具执行过程中看到的是 activity 事件，工具结束时再收到一条最终的 <code>TOOL_CALL_RESULT</code>：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-32-1">1</a></span>
 <span class="normal"><a href="#__codelineno-32-2">2</a></span>
 <span class="normal"><a href="#__codelineno-32-3">3</a></span>
 <span class="normal"><a href="#__codelineno-32-4">4</a></span>
 <span class="normal"><a href="#__codelineno-32-5">5</a></span>
-<span class="normal"><a href="#__codelineno-32-6">6</a></span>
-<span class="normal"><a href="#__codelineno-32-7">7</a></span>
-<span class="normal"><a href="#__codelineno-32-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
-</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3"></a><span class="p">)</span>
-</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4"></a>
-</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithToolResultInputTranslationEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-32-8"><a id="__codelineno-32-8" name="__codelineno-32-8"></a><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-32-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2"></a>
+</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithStreamingToolResultActivityEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>如果第一次请求中 LLM 未触发任何工具调用，则不会出现中断事件，也不需要发起第二次请求。</p>
-<p>两次请求需要保持 <code>threadId</code> 一致，每次请求使用新的 <code>runId</code>。当前框架仅处理 <code>messages</code> 的最后一条消息，且只支持 <code>role=user</code> 或 <code>role=tool</code>，<code>content</code> 仅支持字符串。</p>
-<p>请求示例如下：</p>
-<p>第一次请求：</p>
-<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-33-1"> 1</a></span>
+<p>该选项默认关闭。未开启时，同一次 tool call 的实时事件流通常会表现为：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-33-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-33-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-33-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-33-4"> 4</a></span>
@@ -4082,19 +4071,20 @@
 <span class="normal"><a href="#__codelineno-33-7"> 7</a></span>
 <span class="normal"><a href="#__codelineno-33-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-33-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-33-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1"></a><span class="p">{</span>
-</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2"></a><span class="w">  </span><span class="nt">&quot;threadId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-thread&quot;</span><span class="p">,</span>
-</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3"></a><span class="w">  </span><span class="nt">&quot;runId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-run-1&quot;</span><span class="p">,</span>
-</span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4"></a><span class="w">  </span><span class="nt">&quot;messages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6"></a><span class="w">      </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
-</span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7"></a><span class="w">      </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Search and answer my question.&quot;</span>
-</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-33-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1"></a>RUN_STARTED
+</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2"></a>→ TOOL_CALL_START
+</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3"></a>→ TOOL_CALL_ARGS
+</span><span id="__span-33-4"><a id="__codelineno-33-4" name="__codelineno-33-4"></a>→ TOOL_CALL_END
+</span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5"></a>→ TOOL_CALL_RESULT
+</span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6"></a>→ TOOL_CALL_RESULT
+</span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7"></a>→ TOOL_CALL_RESULT
+</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a>→ ...
+</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a>→ TEXT_MESSAGE_*
+</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a>→ RUN_FINISHED
 </span></code></pre></div></td></tr></table></div>
-<p>第二次请求：</p>
-<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-34-1"> 1</a></span>
+<p>也就是说，工具执行过程中的 partial <code>tool.response</code> 与工具结束时的最终 <code>tool.response</code> 都会继续按现有 <code>TOOL_CALL_RESULT</code> 翻译逻辑发送给前端。</p>
+<p>启用后，同一次 tool call 的实时事件流通常会表现为：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-34-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-34-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-34-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-34-4"> 4</a></span>
@@ -4104,59 +4094,196 @@
 <span class="normal"><a href="#__codelineno-34-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-34-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-34-10">10</a></span>
-<span class="normal"><a href="#__codelineno-34-11">11</a></span>
-<span class="normal"><a href="#__codelineno-34-12">12</a></span>
-<span class="normal"><a href="#__codelineno-34-13">13</a></span>
-<span class="normal"><a href="#__codelineno-34-14">14</a></span>
-<span class="normal"><a href="#__codelineno-34-15">15</a></span>
-<span class="normal"><a href="#__codelineno-34-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1"></a><span class="p">{</span>
-</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2"></a><span class="w">  </span><span class="nt">&quot;threadId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-thread&quot;</span><span class="p">,</span>
-</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3"></a><span class="w">  </span><span class="nt">&quot;runId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-run-2&quot;</span><span class="p">,</span>
-</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4"></a><span class="w">  </span><span class="nt">&quot;forwardedProps&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-34-5"><a id="__codelineno-34-5" name="__codelineno-34-5"></a><span class="w">    </span><span class="nt">&quot;lineage_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;lineage-from-graph-node-interrupt&quot;</span>
-</span><span id="__span-34-6"><a id="__codelineno-34-6" name="__codelineno-34-6"></a><span class="w">  </span><span class="p">},</span>
-</span><span id="__span-34-7"><a id="__codelineno-34-7" name="__codelineno-34-7"></a><span class="w">  </span><span class="nt">&quot;messages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-34-8"><a id="__codelineno-34-8" name="__codelineno-34-8"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-34-9"><a id="__codelineno-34-9" name="__codelineno-34-9"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool-result-&lt;toolCallId&gt;&quot;</span><span class="p">,</span>
-</span><span id="__span-34-10"><a id="__codelineno-34-10" name="__codelineno-34-10"></a><span class="w">      </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool&quot;</span><span class="p">,</span>
-</span><span id="__span-34-11"><a id="__codelineno-34-11" name="__codelineno-34-11"></a><span class="w">      </span><span class="nt">&quot;toolCallId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;toolCallId&gt;&quot;</span><span class="p">,</span>
-</span><span id="__span-34-12"><a id="__codelineno-34-12" name="__codelineno-34-12"></a><span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;external_search&quot;</span><span class="p">,</span>
-</span><span id="__span-34-13"><a id="__codelineno-34-13" name="__codelineno-34-13"></a><span class="w">      </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;external tool output as string&quot;</span>
-</span><span id="__span-34-14"><a id="__codelineno-34-14" name="__codelineno-34-14"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-34-15"><a id="__codelineno-34-15" name="__codelineno-34-15"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-34-16"><a id="__codelineno-34-16" name="__codelineno-34-16"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-34-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1"></a>RUN_STARTED
+</span><span id="__span-34-2"><a id="__codelineno-34-2" name="__codelineno-34-2"></a>→ TOOL_CALL_START
+</span><span id="__span-34-3"><a id="__codelineno-34-3" name="__codelineno-34-3"></a>→ TOOL_CALL_ARGS
+</span><span id="__span-34-4"><a id="__codelineno-34-4" name="__codelineno-34-4"></a>→ TOOL_CALL_END
+</span><span id="__span-34-5"><a id="__codelineno-34-5" name="__codelineno-34-5"></a>→ ACTIVITY_SNAPSHOT
+</span><span id="__span-34-6"><a id="__codelineno-34-6" name="__codelineno-34-6"></a>→ ACTIVITY_DELTA
+</span><span id="__span-34-7"><a id="__codelineno-34-7" name="__codelineno-34-7"></a>→ ACTIVITY_DELTA
+</span><span id="__span-34-8"><a id="__codelineno-34-8" name="__codelineno-34-8"></a>→ ...
+</span><span id="__span-34-9"><a id="__codelineno-34-9" name="__codelineno-34-9"></a>→ TOOL_CALL_RESULT
+</span><span id="__span-34-10"><a id="__codelineno-34-10" name="__codelineno-34-10"></a>→ TEXT_MESSAGE_*
+</span><span id="__span-34-11"><a id="__codelineno-34-11" name="__codelineno-34-11"></a>→ RUN_FINISHED
+</span></code></pre></div></td></tr></table></div>
+<ul>
+<li>第一段非空 partial tool result chunk 会被翻译为 <code>ACTIVITY_SNAPSHOT</code>。</li>
+<li>后续非空 partial chunk 会被翻译为 <code>ACTIVITY_DELTA</code>。</li>
+<li>这些 activity 的 <code>activityType</code> 固定为 <code>tool.result.stream</code>。</li>
+<li>同一次 tool call 的 activity 会复用同一个合成 <code>messageId</code>，前端可以把它当作同一条 activity 流来更新。</li>
+<li>工具真正结束时，仍然只会发送一条正式的 <code>TOOL_CALL_RESULT</code>。</li>
+</ul>
+<p>内置 <code>tool.result.stream</code> activity 的状态结构固定为：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-35-1">1</a></span>
+<span class="normal"><a href="#__codelineno-35-2">2</a></span>
+<span class="normal"><a href="#__codelineno-35-3">3</a></span>
+<span class="normal"><a href="#__codelineno-35-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1"></a><span class="p">{</span>
+</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2"></a><span class="w">  </span><span class="nt">&quot;toolCallId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;call_xxx&quot;</span><span class="p">,</span>
+</span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3"></a><span class="w">  </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Counted 1 of 3.\n&quot;</span>
+</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>对应的事件通常会表现为：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-36-1">1</a></span>
+<span class="normal"><a href="#__codelineno-36-2">2</a></span>
+<span class="normal"><a href="#__codelineno-36-3">3</a></span>
+<span class="normal"><a href="#__codelineno-36-4">4</a></span>
+<span class="normal"><a href="#__codelineno-36-5">5</a></span>
+<span class="normal"><a href="#__codelineno-36-6">6</a></span>
+<span class="normal"><a href="#__codelineno-36-7">7</a></span>
+<span class="normal"><a href="#__codelineno-36-8">8</a></span>
+<span class="normal"><a href="#__codelineno-36-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1"></a><span class="p">{</span>
+</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ACTIVITY_SNAPSHOT&quot;</span><span class="p">,</span>
+</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool-result-activity-call_xxx&quot;</span><span class="p">,</span>
+</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4"></a><span class="w">  </span><span class="nt">&quot;activityType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool.result.stream&quot;</span><span class="p">,</span>
+</span><span id="__span-36-5"><a id="__codelineno-36-5" name="__codelineno-36-5"></a><span class="w">  </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-36-6"><a id="__codelineno-36-6" name="__codelineno-36-6"></a><span class="w">    </span><span class="nt">&quot;toolCallId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;call_xxx&quot;</span><span class="p">,</span>
+</span><span id="__span-36-7"><a id="__codelineno-36-7" name="__codelineno-36-7"></a><span class="w">    </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Counted 1 of 3.\n&quot;</span>
+</span><span id="__span-36-8"><a id="__codelineno-36-8" name="__codelineno-36-8"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-36-9"><a id="__codelineno-36-9" name="__codelineno-36-9"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-37-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-37-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-37-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-37-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-37-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-37-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-37-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-37-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-37-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-37-10">10</a></span>
+<span class="normal"><a href="#__codelineno-37-11">11</a></span>
+<span class="normal"><a href="#__codelineno-37-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1"></a><span class="p">{</span>
+</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ACTIVITY_DELTA&quot;</span><span class="p">,</span>
+</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool-result-activity-call_xxx&quot;</span><span class="p">,</span>
+</span><span id="__span-37-4"><a id="__codelineno-37-4" name="__codelineno-37-4"></a><span class="w">  </span><span class="nt">&quot;activityType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool.result.stream&quot;</span><span class="p">,</span>
+</span><span id="__span-37-5"><a id="__codelineno-37-5" name="__codelineno-37-5"></a><span class="w">  </span><span class="nt">&quot;patch&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-37-6"><a id="__codelineno-37-6" name="__codelineno-37-6"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-37-7"><a id="__codelineno-37-7" name="__codelineno-37-7"></a><span class="w">      </span><span class="nt">&quot;op&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
+</span><span id="__span-37-8"><a id="__codelineno-37-8" name="__codelineno-37-8"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/content&quot;</span><span class="p">,</span>
+</span><span id="__span-37-9"><a id="__codelineno-37-9" name="__codelineno-37-9"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Counted 1 of 3.\nCounted 2 of 3.\n&quot;</span>
+</span><span id="__span-37-10"><a id="__codelineno-37-10" name="__codelineno-37-10"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-37-11"><a id="__codelineno-37-11" name="__codelineno-37-11"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-37-12"><a id="__codelineno-37-12" name="__codelineno-37-12"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>其中 <code>ACTIVITY_DELTA</code> 的 <code>patch.path</code> 对内置 <code>tool.result.stream</code> activity 固定为 <code>/content</code>，表示更新这份 activity state 里的 <code>content</code> 字段。</p>
+<p>activity 中的 <code>content</code> 不是单次 chunk，而是服务端按收到的非空 partial <code>Content</code> 顺序累计后的完整过程内容，因此前端可以直接按最新 activity 状态覆盖展示，而不需要自己拼接字符串。最终 <code>TOOL_CALL_RESULT</code> 的内容仍遵循 runner 的原始语义：
+- 如果工具流中没有显式 final result chunk，则最终 <code>TOOL_CALL_RESULT</code> 使用之前 chunk 按框架现有 merge 规则聚合后的结果。
+- 如果工具流中显式返回了 <code>tool.FinalResultChunk</code> 或 <code>tool.FinalResultStateChunk</code>，则最终 <code>TOOL_CALL_RESULT</code> 直接使用该显式 final result。
+- 在显式 final result 场景下，之前过程中的 chunk 不会自动并入最终 <code>TOOL_CALL_RESULT</code>。</p>
+<p>消息快照路由中，由 partial tool result 改写出来的 activity 不会写入 <code>SessionService</code> track，因此：
+- 通过消息快照路由返回的 <code>MESSAGES_SNAPSHOT</code> 中不会包含这些过程 activity。
+- 每次 tool call 在快照消息列表里只保留一条最终 <code>tool</code> 消息。
+- 这条最终 <code>tool</code> 消息的内容与实时对话路由里的最终 <code>TOOL_CALL_RESULT</code> 一致。</p>
+<h3 id="_17">外部工具</h3>
+<p>当工具必须在客户端或业务侧执行时，可以采用外部工具模式。后端只生成工具调用并在工具节点触发中断，前端执行工具并回传结果，后端从中断点恢复继续运行。该模式要求工具结果进入 LLM 上下文，并写入会话历史，便于后续通过消息快照回放完整对话。</p>
+<p>建议在服务端开启 <code>agui.WithGraphNodeInterruptActivityEnabled(true)</code>，用于在 <code>graph.node.interrupt</code> 事件中携带 <code>lineageId</code> 与 <code>checkpointId</code>，以便前端定位恢复点并发起下一次请求。</p>
+<p>一次外部工具调用对应两次请求。第一次请求使用 <code>role=user</code>，当 LLM 触发工具调用时，事件流会输出 <code>TOOL_CALL_START</code>、<code>TOOL_CALL_ARGS</code>、<code>TOOL_CALL_END</code>，随后在工具节点输出 <code>ACTIVITY_DELTA graph.node.interrupt</code> 并结束本次 SSE。前端在事件流中获取 <code>toolCallId</code> 与参数，并从中断事件获取 <code>lineageId</code>。</p>
+<p>第二次请求使用 <code>role=tool</code>，把工具执行结果回传给后端。<code>toolCallId</code> 必须与第一次请求一致，<code>content</code> 为工具输出字符串，同时在 <code>forwardedProps.lineage_id</code> 填入第一次中断事件返回的 <code>lineageId</code>。服务端会先把该 tool message 翻译为 <code>TOOL_CALL_RESULT</code> 并写入会话，再从对应 checkpoint 恢复继续生成最终回复。</p>
+<p>如果希望这条 <code>role=tool</code> 输入回显经过 Translator，可以开启 <code>agui.WithToolResultInputTranslationEnabled(true)</code>；开启后，AG-UI Runner 会先把 tool result 输入规范化为内部事件，再交给 Translator 处理，示例如下。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-38-1">1</a></span>
+<span class="normal"><a href="#__codelineno-38-2">2</a></span>
+<span class="normal"><a href="#__codelineno-38-3">3</a></span>
+<span class="normal"><a href="#__codelineno-38-4">4</a></span>
+<span class="normal"><a href="#__codelineno-38-5">5</a></span>
+<span class="normal"><a href="#__codelineno-38-6">6</a></span>
+<span class="normal"><a href="#__codelineno-38-7">7</a></span>
+<span class="normal"><a href="#__codelineno-38-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-38-2"><a id="__codelineno-38-2" name="__codelineno-38-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-38-3"><a id="__codelineno-38-3" name="__codelineno-38-3"></a><span class="p">)</span>
+</span><span id="__span-38-4"><a id="__codelineno-38-4" name="__codelineno-38-4"></a>
+</span><span id="__span-38-5"><a id="__codelineno-38-5" name="__codelineno-38-5"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-38-6"><a id="__codelineno-38-6" name="__codelineno-38-6"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-38-7"><a id="__codelineno-38-7" name="__codelineno-38-7"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithToolResultInputTranslationEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-38-8"><a id="__codelineno-38-8" name="__codelineno-38-8"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>如果第一次请求中 LLM 未触发任何工具调用，则不会出现中断事件，也不需要发起第二次请求。</p>
+<p>两次请求需要保持 <code>threadId</code> 一致，每次请求使用新的 <code>runId</code>。当前框架仅处理 <code>messages</code> 的最后一条消息，且只支持 <code>role=user</code> 或 <code>role=tool</code>，<code>content</code> 仅支持字符串。</p>
+<p>请求示例如下：</p>
+<p>第一次请求：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-39-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-39-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-39-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-39-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-39-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-39-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-39-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-39-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-39-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="p">{</span>
+</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a><span class="w">  </span><span class="nt">&quot;threadId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-thread&quot;</span><span class="p">,</span>
+</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3"></a><span class="w">  </span><span class="nt">&quot;runId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-run-1&quot;</span><span class="p">,</span>
+</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4"></a><span class="w">  </span><span class="nt">&quot;messages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6"></a><span class="w">      </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;user&quot;</span><span class="p">,</span>
+</span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7"></a><span class="w">      </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Search and answer my question.&quot;</span>
+</span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-39-10"><a id="__codelineno-39-10" name="__codelineno-39-10"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>第二次请求：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-40-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-40-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-40-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-40-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-40-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-40-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-40-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-40-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-40-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-40-10">10</a></span>
+<span class="normal"><a href="#__codelineno-40-11">11</a></span>
+<span class="normal"><a href="#__codelineno-40-12">12</a></span>
+<span class="normal"><a href="#__codelineno-40-13">13</a></span>
+<span class="normal"><a href="#__codelineno-40-14">14</a></span>
+<span class="normal"><a href="#__codelineno-40-15">15</a></span>
+<span class="normal"><a href="#__codelineno-40-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1"></a><span class="p">{</span>
+</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2"></a><span class="w">  </span><span class="nt">&quot;threadId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-thread&quot;</span><span class="p">,</span>
+</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3"></a><span class="w">  </span><span class="nt">&quot;runId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-run-2&quot;</span><span class="p">,</span>
+</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4"></a><span class="w">  </span><span class="nt">&quot;forwardedProps&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-40-5"><a id="__codelineno-40-5" name="__codelineno-40-5"></a><span class="w">    </span><span class="nt">&quot;lineage_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;lineage-from-graph-node-interrupt&quot;</span>
+</span><span id="__span-40-6"><a id="__codelineno-40-6" name="__codelineno-40-6"></a><span class="w">  </span><span class="p">},</span>
+</span><span id="__span-40-7"><a id="__codelineno-40-7" name="__codelineno-40-7"></a><span class="w">  </span><span class="nt">&quot;messages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-40-8"><a id="__codelineno-40-8" name="__codelineno-40-8"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-40-9"><a id="__codelineno-40-9" name="__codelineno-40-9"></a><span class="w">      </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool-result-&lt;toolCallId&gt;&quot;</span><span class="p">,</span>
+</span><span id="__span-40-10"><a id="__codelineno-40-10" name="__codelineno-40-10"></a><span class="w">      </span><span class="nt">&quot;role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;tool&quot;</span><span class="p">,</span>
+</span><span id="__span-40-11"><a id="__codelineno-40-11" name="__codelineno-40-11"></a><span class="w">      </span><span class="nt">&quot;toolCallId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;toolCallId&gt;&quot;</span><span class="p">,</span>
+</span><span id="__span-40-12"><a id="__codelineno-40-12" name="__codelineno-40-12"></a><span class="w">      </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;external_search&quot;</span><span class="p">,</span>
+</span><span id="__span-40-13"><a id="__codelineno-40-13" name="__codelineno-40-13"></a><span class="w">      </span><span class="nt">&quot;content&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;external tool output as string&quot;</span>
+</span><span id="__span-40-14"><a id="__codelineno-40-14" name="__codelineno-40-14"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-40-15"><a id="__codelineno-40-15" name="__codelineno-40-15"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-40-16"><a id="__codelineno-40-16" name="__codelineno-40-16"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>事件流示例如下：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-35-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-35-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-35-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-35-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-35-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-35-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-35-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-35-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-35-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-35-10">10</a></span>
-<span class="normal"><a href="#__codelineno-35-11">11</a></span>
-<span class="normal"><a href="#__codelineno-35-12">12</a></span>
-<span class="normal"><a href="#__codelineno-35-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1"></a>第一次请求 role=user
-</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2"></a>  → RUN_STARTED
-</span><span id="__span-35-3"><a id="__codelineno-35-3" name="__codelineno-35-3"></a>  → TOOL_CALL_START
-</span><span id="__span-35-4"><a id="__codelineno-35-4" name="__codelineno-35-4"></a>  → TOOL_CALL_ARGS
-</span><span id="__span-35-5"><a id="__codelineno-35-5" name="__codelineno-35-5"></a>  → TOOL_CALL_END
-</span><span id="__span-35-6"><a id="__codelineno-35-6" name="__codelineno-35-6"></a>  → ACTIVITY_DELTA graph.node.interrupt
-</span><span id="__span-35-7"><a id="__codelineno-35-7" name="__codelineno-35-7"></a>  → RUN_FINISHED
-</span><span id="__span-35-8"><a id="__codelineno-35-8" name="__codelineno-35-8"></a>
-</span><span id="__span-35-9"><a id="__codelineno-35-9" name="__codelineno-35-9"></a>第二次请求 role=tool
-</span><span id="__span-35-10"><a id="__codelineno-35-10" name="__codelineno-35-10"></a>  → RUN_STARTED
-</span><span id="__span-35-11"><a id="__codelineno-35-11" name="__codelineno-35-11"></a>  → TOOL_CALL_RESULT 由输入的 tool message 生成
-</span><span id="__span-35-12"><a id="__codelineno-35-12" name="__codelineno-35-12"></a>  → TEXT_MESSAGE_* 恢复后继续生成
-</span><span id="__span-35-13"><a id="__codelineno-35-13" name="__codelineno-35-13"></a>  → RUN_FINISHED
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-41-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-41-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-41-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-41-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-41-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-41-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-41-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-41-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-41-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-41-10">10</a></span>
+<span class="normal"><a href="#__codelineno-41-11">11</a></span>
+<span class="normal"><a href="#__codelineno-41-12">12</a></span>
+<span class="normal"><a href="#__codelineno-41-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a>第一次请求 role=user
+</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2"></a>  → RUN_STARTED
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a>  → TOOL_CALL_START
+</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a>  → TOOL_CALL_ARGS
+</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a>  → TOOL_CALL_END
+</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a>  → ACTIVITY_DELTA graph.node.interrupt
+</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7"></a>  → RUN_FINISHED
+</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8"></a>
+</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9"></a>第二次请求 role=tool
+</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10"></a>  → RUN_STARTED
+</span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11"></a>  → TOOL_CALL_RESULT 由输入的 tool message 生成
+</span><span id="__span-41-12"><a id="__codelineno-41-12" name="__codelineno-41-12"></a>  → TEXT_MESSAGE_* 恢复后继续生成
+</span><span id="__span-41-13"><a id="__codelineno-41-13" name="__codelineno-41-13"></a>  → RUN_FINISHED
 </span></code></pre></div></td></tr></table></div>
 <p>完整示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool">examples/agui/server/externaltool</a>，前端实现可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat">examples/agui/client/tdesign-chat</a>。</p>
-<h2 id="_17">最佳实践</h2>
+<h2 id="_18">最佳实践</h2>
 <p>默认优先使用服务端工具执行路径。只有当工具必须在客户端或业务侧执行时，才建议采用“外部工具”模式；这类场景更适合作为进阶用法来设计与评估。</p>
-<h3 id="_18">生成文档</h3>
+<h3 id="_19">生成文档</h3>
 <p>长篇文档如果直接插入到对话正文，很容易把主对话“刷屏”，用户也难以区分对话内容和文档内容。为了解决这个问题，建议使用“文档面板”来承载长文档。通过 AG-UI 的事件流约定一套“打开文档面板 → 写入文档内容 → 关闭文档面板”的工作流，将长文档从对话中“抽离”出来，避免干扰正常交流，示例方案如下。</p>
 <ol>
 <li>
@@ -4169,37 +4296,37 @@
 <li>最后调用“关闭文档面板”工具</li>
 </ol>
 <p>转换为 AG-UI 事件流，大致形态如下：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-36-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-36-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-36-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-36-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-36-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-36-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-36-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-36-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-36-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-36-10">10</a></span>
-<span class="normal"><a href="#__codelineno-36-11">11</a></span>
-<span class="normal"><a href="#__codelineno-36-12">12</a></span>
-<span class="normal"><a href="#__codelineno-36-13">13</a></span>
-<span class="normal"><a href="#__codelineno-36-14">14</a></span>
-<span class="normal"><a href="#__codelineno-36-15">15</a></span>
-<span class="normal"><a href="#__codelineno-36-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1"></a>打开文档面板工具
-</span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2"></a>  → ToolCallStart
-</span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3"></a>  → ToolCallArgs
-</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4"></a>  → ToolCallEnd
-</span><span id="__span-36-5"><a id="__codelineno-36-5" name="__codelineno-36-5"></a>  → ToolCallResult
-</span><span id="__span-36-6"><a id="__codelineno-36-6" name="__codelineno-36-6"></a>
-</span><span id="__span-36-7"><a id="__codelineno-36-7" name="__codelineno-36-7"></a>文档内容
-</span><span id="__span-36-8"><a id="__codelineno-36-8" name="__codelineno-36-8"></a>  → TextMessageStart
-</span><span id="__span-36-9"><a id="__codelineno-36-9" name="__codelineno-36-9"></a>  → TextMessageContent
-</span><span id="__span-36-10"><a id="__codelineno-36-10" name="__codelineno-36-10"></a>  → TextMessageEnd
-</span><span id="__span-36-11"><a id="__codelineno-36-11" name="__codelineno-36-11"></a>
-</span><span id="__span-36-12"><a id="__codelineno-36-12" name="__codelineno-36-12"></a>关闭文档面板工具
-</span><span id="__span-36-13"><a id="__codelineno-36-13" name="__codelineno-36-13"></a>  → ToolCallStart
-</span><span id="__span-36-14"><a id="__codelineno-36-14" name="__codelineno-36-14"></a>  → ToolCallArgs
-</span><span id="__span-36-15"><a id="__codelineno-36-15" name="__codelineno-36-15"></a>  → ToolCallEnd
-</span><span id="__span-36-16"><a id="__codelineno-36-16" name="__codelineno-36-16"></a>  → ToolCallResult
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-42-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-42-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-42-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-42-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-42-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-42-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-42-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-42-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-42-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-42-10">10</a></span>
+<span class="normal"><a href="#__codelineno-42-11">11</a></span>
+<span class="normal"><a href="#__codelineno-42-12">12</a></span>
+<span class="normal"><a href="#__codelineno-42-13">13</a></span>
+<span class="normal"><a href="#__codelineno-42-14">14</a></span>
+<span class="normal"><a href="#__codelineno-42-15">15</a></span>
+<span class="normal"><a href="#__codelineno-42-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1"></a>打开文档面板工具
+</span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2"></a>  → ToolCallStart
+</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3"></a>  → ToolCallArgs
+</span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4"></a>  → ToolCallEnd
+</span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5"></a>  → ToolCallResult
+</span><span id="__span-42-6"><a id="__codelineno-42-6" name="__codelineno-42-6"></a>
+</span><span id="__span-42-7"><a id="__codelineno-42-7" name="__codelineno-42-7"></a>文档内容
+</span><span id="__span-42-8"><a id="__codelineno-42-8" name="__codelineno-42-8"></a>  → TextMessageStart
+</span><span id="__span-42-9"><a id="__codelineno-42-9" name="__codelineno-42-9"></a>  → TextMessageContent
+</span><span id="__span-42-10"><a id="__codelineno-42-10" name="__codelineno-42-10"></a>  → TextMessageEnd
+</span><span id="__span-42-11"><a id="__codelineno-42-11" name="__codelineno-42-11"></a>
+</span><span id="__span-42-12"><a id="__codelineno-42-12" name="__codelineno-42-12"></a>关闭文档面板工具
+</span><span id="__span-42-13"><a id="__codelineno-42-13" name="__codelineno-42-13"></a>  → ToolCallStart
+</span><span id="__span-42-14"><a id="__codelineno-42-14" name="__codelineno-42-14"></a>  → ToolCallArgs
+</span><span id="__span-42-15"><a id="__codelineno-42-15" name="__codelineno-42-15"></a>  → ToolCallEnd
+</span><span id="__span-42-16"><a id="__codelineno-42-16" name="__codelineno-42-16"></a>  → ToolCallResult
 </span></code></pre></div></td></tr></table></div>
 </li>
 <li>
@@ -4213,35 +4340,6 @@
 </ol>
 <p>实际效果如下图所示，完整示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/report">examples/agui/server/report</a>，前端实现可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat">examples/agui/client/tdesign-chat</a>。</p>
 <p><img alt="report" src="../../assets/gif/agui/report.gif" /></p>
-<h3 id="_19">流式工具执行结果</h3>
-<p>当工具在服务端执行，且前端需要持续展示执行中的状态时，可以将事件流分成三层来组织。<code>TOOL_CALL_START</code>、<code>TOOL_CALL_ARGS</code>、<code>TOOL_CALL_END</code> 用于描述工具调用本身，<code>ACTIVITY_SNAPSHOT</code>、<code>ACTIVITY_DELTA</code> 用于承载执行过程中的进度、阶段或日志，<code>TOOL_CALL_RESULT</code> 则保留给最终工具结果。这样前端可以分别渲染执行中的状态和最终结果，消息快照回放时也能继续依赖标准的工具结果语义。</p>
-<p>推荐的事件流大致如下：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-37-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-37-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-37-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-37-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-37-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-37-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-37-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-37-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-37-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-37-10">10</a></span>
-<span class="normal"><a href="#__codelineno-37-11">11</a></span>
-<span class="normal"><a href="#__codelineno-37-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1"></a>RUN_STARTED
-</span><span id="__span-37-2"><a id="__codelineno-37-2" name="__codelineno-37-2"></a>→ TOOL_CALL_START
-</span><span id="__span-37-3"><a id="__codelineno-37-3" name="__codelineno-37-3"></a>→ TOOL_CALL_ARGS
-</span><span id="__span-37-4"><a id="__codelineno-37-4" name="__codelineno-37-4"></a>→ TOOL_CALL_END
-</span><span id="__span-37-5"><a id="__codelineno-37-5" name="__codelineno-37-5"></a>→ ACTIVITY_SNAPSHOT
-</span><span id="__span-37-6"><a id="__codelineno-37-6" name="__codelineno-37-6"></a>→ ACTIVITY_DELTA
-</span><span id="__span-37-7"><a id="__codelineno-37-7" name="__codelineno-37-7"></a>→ ACTIVITY_DELTA
-</span><span id="__span-37-8"><a id="__codelineno-37-8" name="__codelineno-37-8"></a>→ ...
-</span><span id="__span-37-9"><a id="__codelineno-37-9" name="__codelineno-37-9"></a>→ ACTIVITY_DELTA   # completed
-</span><span id="__span-37-10"><a id="__codelineno-37-10" name="__codelineno-37-10"></a>→ TOOL_CALL_RESULT
-</span><span id="__span-37-11"><a id="__codelineno-37-11" name="__codelineno-37-11"></a>→ TEXT_MESSAGE_*
-</span><span id="__span-37-12"><a id="__codelineno-37-12" name="__codelineno-37-12"></a>→ RUN_FINISHED
-</span></code></pre></div></td></tr></table></div>
-<p>在实现上，通常可以通过自定义 Translator 包装默认 Translator。默认 Translator 继续负责标准 <code>TOOL_CALL_*</code> 与最终 <code>TOOL_CALL_RESULT</code> 的翻译，自定义部分只处理工具执行过程中的中间结果。比较稳妥的写法是遍历默认 Translator 返回的 <code>innerEvents</code>，逐个判断事件类型，并仅对目标 <code>ToolCallResultEvent</code> 做改写。partial 结果可以改写为 <code>ACTIVITY_SNAPSHOT</code> 或 <code>ACTIVITY_DELTA</code>，final 结果则在原始 <code>TOOL_CALL_RESULT</code> 之前插入一条 completed 的 <code>ACTIVITY_DELTA</code>。其余事件保持原样透传，这样可以保留文本、Graph 活动和其他工具事件的既有行为。</p>
-<p>完整示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/streamtool">examples/agui/server/streamtool</a>。该示例使用一个最小 <code>StreamableTool</code> 持续输出递增数字，并通过自定义 Translator 将 partial <code>tool.response</code> 转为 <code>tool.execution</code> 活动事件，同时保留标准 <code>TOOL_CALL_RESULT</code> 作为最终结果。</p>
 
 
 
@@ -4264,7 +4362,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月15日 02:39:00 UTC">2026-04-15 02:39:00</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月21日 02:19:28 UTC">2026-04-21 02:19:28</span>
   </span>
 
     
