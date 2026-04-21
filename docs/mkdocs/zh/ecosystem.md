@@ -756,82 +756,47 @@ func (p *PostgreSQLMemoryService) unmarshalTopics(data []byte) []string {
 }
 ```
 
-为便于快速落地，可直接对接现有 Memory 平台/服务（如 mem0）。建议：
+对于 mem0 这类外部托管的记忆平台/服务，更推荐采用 **ingest-first integration**，而不是强行把平台适配成完整的 `memory.Service` CRUD 后端。
 
-- 在 `memory/mem0/` 提供实现，遵循 `memory.Service` 接口。
-- 复用现有 `memory/tool` 工具（`memory_add`、`memory_search`、
-  `memory_load` 等），通过 `Tools()` 暴露。
-- 主题（topics）与检索（search）按目标服务能力做映射，必要时在本地
-  维护轻量索引以增强查询体验。
-- 可选：复用 `storage` 模块的客户端管理统一鉴权、连接与复用。
+建议：
+
+- 将包放回 `memory/mem0/`，在 memory 领域下更直观、更易发现。
+- 让 Runner 在每轮对话结束后，通过 `runner.WithSessionIngestor(...)` 把完整 session transcript 交给外部长时记忆平台。
+- 只暴露真正符合平台能力边界的工具。对 mem0 来说，通常是只读的 `memory_search`，以及可选的 `memory_load`。
+- 平台特有的 ingest、轮询、鉴权、重试逻辑，都收敛在 `memory/mem0` 内部，不污染 core memory 抽象。
 
 示例骨架（简化）：
 
 ```go
-package mem0
+mem0Svc, err := memorymem0.NewService(
+    memorymem0.WithAPIKey(os.Getenv("MEM0_API_KEY")),
+    memorymem0.WithLoadToolEnabled(true),
+)
+if err != nil {
+    return err
+}
+defer mem0Svc.Close()
 
-import (
-    "context"
-    "net/http"
-
-    "trpc.group/trpc-go/trpc-agent-go/memory"
-    memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
-    "trpc.group/trpc-go/trpc-agent-go/tool"
+ag := llmagent.New(
+    "assistant",
+    llmagent.WithModel(openai.New(modelName)),
+    llmagent.WithTools(mem0Svc.Tools()),
 )
 
-type Service struct {
-    client  *http.Client
-    baseURL string
-    apiKey  string
-    tools   map[string]tool.Tool
-}
-
-func New(baseURL, apiKey string) *Service {
-    s := &Service{
-        client:  &http.Client{},
-        baseURL: baseURL,
-        apiKey:  apiKey,
-        tools:   make(map[string]tool.Tool),
-    }
-    s.tools[memory.AddToolName] = memorytool.NewAddTool(s)
-    s.tools[memory.SearchToolName] = memorytool.NewSearchTool(s)
-    s.tools[memory.LoadToolName] = memorytool.NewLoadTool(s)
-    return s
-}
-
-func (s *Service) Tools() []tool.Tool {
-    var ts []tool.Tool
-    for _, t := range s.tools {
-        ts = append(ts, t)
-    }
-    return ts
-}
-
-func (s *Service) AddMemory(ctx context.Context, key memory.UserKey, m string, topics []string) error {
-    if err := key.CheckUserKey(); err != nil {
-        return err
-    }
-    // 调用 mem0 API 写入记忆
-    return nil
-}
-
-func (s *Service) SearchMemories(ctx context.Context, key memory.UserKey, q string) ([]*memory.Entry, error) {
-    if err := key.CheckUserKey(); err != nil {
-        return nil, err
-    }
-    // 调用 mem0 API 检索, 并转换为 []*memory.Entry
-    return nil, nil
-}
-
-// 其余接口 Update/Delete/Clear/Read 按 mem0 能力做映射实现
+r := runner.NewRunner(
+    appName,
+    ag,
+    runner.WithSessionService(sessionSvc),
+    runner.WithSessionIngestor(mem0Svc),
+)
 ```
 
 实现要点：
 
-- 鉴权与限流按目标服务指南配置。
-- 返回值严格对齐 `memory.Entry` 与 `memory.Memory`，时间字段使用 UTC。
-- 工具声明（Declaration）应准确描述输入输出，便于前端与模型理解。
-- 补充 README、示例与测试，确保与 runner 相关集成可用。
+- 如果目标平台本身就提供 native ingest / extraction，优先保留原始 transcript，而不是先在框架内做一轮影子抽取。
+- 除非外部平台确实要求，否则不要额外引入 shadow CRUD 状态。
+- 工具声明（Declaration）和返回结构要严格对齐集成真实保证的能力边界。
+- 补充 README、示例与测试，确保与 runner 驱动的流程配合良好。
 
 **可以集成的开源组件示例：**
 

@@ -72,6 +72,31 @@ go run main.go
 
 [Read full documentation →](./auto/README.md)
 
+### 📁 mem0/
+
+**Mem0 Integration - External Long-Term Memory Platform**
+
+Demonstrates ingest-first integration with [mem0.ai](https://mem0.ai). The
+runner sends session transcripts to mem0 after each turn; the agent accesses
+stored memories through read-only tools.
+
+**Key Features:**
+
+- Session ingestion via `runner.WithSessionIngestor(...)`
+- Read-only `memory_search` and optional `memory_load` tools
+- No local LLM extractor needed — mem0 handles extraction natively
+
+**Getting Started:**
+
+```bash
+cd examples/memory/mem0
+export MEM0_API_KEY="your-mem0-api-key"
+export OPENAI_API_KEY="your-api-key"
+go run .
+```
+
+[Read full documentation →](./mem0/README.md)
+
 ### 📁 compare/
 
 **Retrieval Comparison - SQLite vs SQLiteVec**
