@@ -12,11 +12,11 @@ import (
 	"context"
 
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	psummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 // HasSummarizer reports whether summary generation is configured.
-func HasSummarizer(summarizer psummary.SessionSummarizer) bool {
+func HasSummarizer(summarizer summary.SessionSummarizer) bool {
 	return summarizer != nil
 }
 
@@ -24,13 +24,13 @@ func HasSummarizer(summarizer psummary.SessionSummarizer) bool {
 // context-aware summary path when available.
 func ShouldSummarize(
 	ctx context.Context,
-	summarizer psummary.SessionSummarizer,
+	summarizer summary.SessionSummarizer,
 	sess *session.Session,
 ) bool {
 	if summarizer == nil {
 		return false
 	}
-	if contextual, ok := summarizer.(psummary.ContextAwareSummarizer); ok {
+	if contextual, ok := summarizer.(summary.ContextAwareSummarizer); ok {
 		return contextual.ShouldSummarizeWithContext(ctx, sess)
 	}
 	return summarizer.ShouldSummarize(sess)

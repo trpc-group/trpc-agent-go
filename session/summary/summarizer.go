@@ -257,7 +257,10 @@ func (s *sessionSummarizer) ShouldSummarizeWithContext(
 	if sess == nil || len(sess.Events) == 0 {
 		return false
 	}
-	if len(s.filterEventsForSummary(sess.Events)) == 0 {
+	if len(filterSummaryInputEventsForSession(
+		s.filterEventsForSummary(sess.Events),
+		sess,
+	)) == 0 {
 		return false
 	}
 
@@ -282,7 +285,10 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 
 	// Extract conversation text from events. Use filtered events for summarization
 	// to skip recent events while ensuring proper context.
-	eventsToSummarize := s.filterEventsForSummary(sess.Events)
+	eventsToSummarize := filterSummaryInputEventsForSession(
+		s.filterEventsForSummary(sess.Events),
+		sess,
+	)
 
 	conversationText := s.extractConversationText(eventsToSummarize)
 	if s.preHook != nil {
@@ -355,10 +361,10 @@ func (s *sessionSummarizer) buildCheckSession(
 	checkSess := sess.Clone()
 	delta := filterDeltaEvents(checkSess)
 	filtered := s.filterEventsForSummary(delta)
-	primary := filterPrimaryEvents(filtered, checkSess.AppName)
+	thresholdEvents := filterThresholdEventsForSession(filtered, checkSess)
 	checkSess.SetState(
 		tokenThresholdConversationTextStateKey,
-		[]byte(s.extractConversationText(primary)),
+		[]byte(s.extractConversationText(thresholdEvents)),
 	)
 	return checkSess
 }
