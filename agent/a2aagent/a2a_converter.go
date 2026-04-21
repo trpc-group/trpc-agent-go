@@ -662,7 +662,7 @@ func markGraphCompletionEvent(evt *event.Event, result *parseResult) {
 // - Text content uses Delta for incremental updates
 func buildStreamingResponse(messageID string, result *parseResult, role protocol.MessageRole) *model.Response {
 	now := time.Now()
-	if respErr := taskResponseError(result); respErr != nil {
+	if respErr := streamingResponseError(result); respErr != nil {
 		return buildErrorResponse(messageID, respErr, now)
 	}
 
@@ -711,14 +711,8 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 	}
 
 	// Text content: use Delta for streaming incremental updates
-	content := result.textContent
-	if result.codeExecution != "" {
-		content = result.codeExecution
-	} else if result.codeExecutionResult != "" {
-		content = result.codeExecutionResult
-	}
-
-	objectType := extractObjectType(result)
+	content := streamingResponseContent(result)
+	objectType := streamingResponseObjectType(result)
 	if objectType == "" {
 		objectType = model.ObjectTypeChatCompletionChunk
 	}
@@ -740,6 +734,61 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 		IsPartial: true,
 		Done:      false,
 	}
+}
+
+func streamingResponseError(
+	result *parseResult,
+) *model.ResponseError {
+	if result == nil || !isTaskFailureState(result.taskState) {
+		return nil
+	}
+	if result.responseError != nil {
+		return result.responseError
+	}
+	message := result.textContent
+	if message == "" {
+		message = taskFailureMessage(result.taskState)
+	}
+	return &model.ResponseError{
+		Type:    model.ErrorTypeFlowError,
+		Message: message,
+	}
+}
+
+func streamingResponseContent(
+	result *parseResult,
+) string {
+	if result == nil {
+		return ""
+	}
+	content := result.textContent
+	if result.codeExecution != "" {
+		content = result.codeExecution
+	} else if result.codeExecutionResult != "" {
+		content = result.codeExecutionResult
+	}
+	// Some A2A servers surface invocation errors as a regular message decorated
+	// with structured error metadata. Preserve that message as normal stream
+	// content so callers can drain the stream to EOF instead of short-circuiting.
+	if content == "" &&
+		result.responseError != nil &&
+		!isTaskFailureState(result.taskState) {
+		content = result.responseError.Message
+	}
+	return content
+}
+
+func streamingResponseObjectType(
+	result *parseResult,
+) string {
+	objectType := extractObjectType(result)
+	if objectType == model.ObjectTypeError &&
+		result != nil &&
+		result.responseError != nil &&
+		!isTaskFailureState(result.taskState) {
+		return ""
+	}
+	return objectType
 }
 
 // extractObjectType determines the response object type from parseResult.
