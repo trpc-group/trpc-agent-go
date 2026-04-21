@@ -7,8 +7,8 @@
 //
 //
 
-// Package proto provides protocol buffer definition file reader implementation.
-package proto
+// Package golang provides Go source file reader implementation.
+package golang
 
 import (
 	"fmt"
@@ -24,7 +24,7 @@ import (
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
-	codeproto "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast/proto"
+	codegolang "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast/golang"
 	itransform "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/transform"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
@@ -32,22 +32,22 @@ import (
 
 var (
 	// supportedExtensions defines the file extensions supported by this reader.
-	supportedExtensions = []string{".proto"}
+	supportedExtensions = []string{".go"}
 )
 
-// init registers the proto reader with the global registry.
+// init registers the Go reader with the global registry.
 func init() {
 	reader.RegisterReader(supportedExtensions, New)
 }
 
-// Reader reads protocol buffer definition files and extracts AST-based entities.
+// Reader reads Go files and extracts AST-based entities.
 type Reader struct {
 	chunk        bool
 	transformers []transform.Transformer
-	parser       *codeproto.Parser
+	parser       *codegolang.Parser
 }
 
-// New creates a new proto reader with the given options.
+// New creates a new Go reader with the given options.
 func New(opts ...reader.Option) reader.Reader {
 	config := &reader.Config{Chunk: true}
 	for _, opt := range opts {
@@ -57,11 +57,11 @@ func New(opts ...reader.Option) reader.Reader {
 	return &Reader{
 		chunk:        config.Chunk,
 		transformers: config.Transformers,
-		parser:       codeproto.NewParser(),
+		parser:       codegolang.NewParser(),
 	}
 }
 
-// ReadFromReader reads proto content from an io.Reader and returns a list of documents.
+// ReadFromReader reads Go content from an io.Reader and returns a list of documents.
 func (r *Reader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
 	content, err := io.ReadAll(rd)
 	if err != nil {
@@ -71,11 +71,10 @@ func (r *Reader) ReadFromReader(name string, rd io.Reader) ([]*document.Document
 	return r.processContent(string(content), name, nil)
 }
 
-// ReadFromFile reads a proto file and returns a list of documents.
+// ReadFromFile reads a Go file and returns a list of AST entity documents.
 func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
-	ext := strings.ToLower(filepath.Ext(filePath))
-	if ext != ".proto" {
-		return nil, fmt.Errorf("unsupported file extension: %s", ext)
+	if strings.ToLower(filepath.Ext(filePath)) != ".go" {
+		return nil, fmt.Errorf("unsupported file extension: %s", filepath.Ext(filePath))
 	}
 
 	content, err := os.ReadFile(filePath)
@@ -103,17 +102,20 @@ func (r *Reader) ReadFromFile(filePath string) ([]*document.Document, error) {
 		source.MetaModifiedAt:    fileInfo.ModTime().UTC(),
 		source.MetaURI:           (&url.URL{Scheme: "file", Path: absPath}).String(),
 		source.MetaSourceName:    r.Name(),
-		source.MetaContentLength: utf8.RuneCount(content),
+		source.MetaContentLength: utf8.RuneCountInString(string(content)),
 	}
 
 	return r.processContent(string(content), filePath, baseMetadata)
 }
 
-// ReadFromURL reads proto content from a URL and returns a list of documents.
+// ReadFromURL reads Go content from a URL and returns a list of documents.
 func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 	parsedURL, err := url.Parse(urlStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return nil, fmt.Errorf("invalid URL scheme: %s", urlStr)
 	}
 
 	resp, err := http.Get(parsedURL.String())
@@ -134,7 +136,36 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 	return r.processContent(string(content), r.extractFileNameFromURL(urlStr), nil)
 }
 
-// processContent processes proto content and extracts AST-based entities.
+// ReadFromDirectory reads a Go module or directory and returns AST entity documents.
+// It performs package-aware parsing across the directory instead of processing files independently.
+func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error) {
+	absDir, err := filepath.Abs(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	}
+	stat, err := os.Stat(absDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat directory: %w", err)
+	}
+	if !stat.IsDir() {
+		return nil, fmt.Errorf("not a directory: %s", dirPath)
+	}
+
+	result, err := r.parser.ParseDirectory(absDir)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil || len(result.Nodes) == 0 {
+		return nil, nil
+	}
+
+	baseMetadata := map[string]any{
+		source.MetaSource:     source.TypeDir,
+		source.MetaSourceName: r.Name(),
+	}
+	return r.applyTransformers(r.nodesToDocuments(result, baseMetadata))
+}
+
 func (r *Reader) processContent(content, name string, baseMetadata map[string]any) ([]*document.Document, error) {
 	if !r.chunk {
 		doc := r.createFileDocument(content, name, baseMetadata)
@@ -148,7 +179,7 @@ func (r *Reader) processContent(content, name string, baseMetadata map[string]an
 
 	docs := r.nodesToDocuments(result, baseMetadata)
 	if len(docs) == 0 {
-		doc := r.createFileDocument(content, name, baseMetadata)
+		doc := r.createFileDocumentFromInfo(content, name, baseMetadata, result.File)
 		return r.applyTransformers([]*document.Document{doc})
 	}
 
@@ -160,9 +191,9 @@ func (r *Reader) nodesToDocuments(result *codeast.Result, baseMetadata map[strin
 		BaseMetadata: baseMetadata,
 		FileInfo:     result.File,
 		FormatType: func(entityType codeast.EntityType) string {
-			return strings.ToLower(string(entityType))
+			return string(entityType)
 		},
-		BuildEmbeddingText: codeproto.BuildNodeEmbeddingText,
+		BuildEmbeddingText: codegolang.BuildNodeEmbeddingText,
 	})
 	docs := make([]*document.Document, 0, len(payloads))
 	for _, payload := range payloads {
@@ -172,6 +203,14 @@ func (r *Reader) nodesToDocuments(result *codeast.Result, baseMetadata map[strin
 }
 
 func (r *Reader) createFileDocument(content, name string, baseMetadata map[string]any) *document.Document {
+	fileInfo, err := r.parser.ParseFileInfo(name, content)
+	if err != nil {
+		return r.createFileDocumentFromInfo(content, name, baseMetadata, nil)
+	}
+	return r.createFileDocumentFromInfo(content, name, baseMetadata, fileInfo)
+}
+
+func (r *Reader) createFileDocumentFromInfo(content, name string, baseMetadata map[string]any, fileInfo *codeast.FileInfo) *document.Document {
 	doc := idocument.CreateDocument(content, name)
 	if doc.Metadata == nil {
 		doc.Metadata = make(map[string]any)
@@ -180,41 +219,35 @@ func (r *Reader) createFileDocument(content, name string, baseMetadata map[strin
 		doc.Metadata[k] = v
 	}
 
-	fileMetadata := codeproto.ExtractFileMetadata(content)
-	for k, v := range fileMetadata {
-		doc.Metadata[codeast.TrpcAstMetaPrefix+k] = v
+	doc.Metadata["trpc_ast_type"] = "file"
+	doc.Metadata["trpc_ast_name"] = name
+	doc.Metadata["trpc_ast_full_name"] = name
+	doc.Metadata["trpc_ast_language"] = "go"
+	doc.Metadata["trpc_ast_scope"] = "code"
+	doc.Metadata["trpc_ast_file_path"] = name
+	if fileInfo != nil {
+		if fileInfo.Package != "" {
+			doc.Metadata["trpc_ast_package"] = fileInfo.Package
+		}
+		if len(fileInfo.Imports) > 0 {
+			doc.Metadata["trpc_ast_imports"] = append([]string(nil), fileInfo.Imports...)
+			doc.Metadata["trpc_ast_import_count"] = len(fileInfo.Imports)
+		}
 	}
-
-	doc.Metadata[codeast.TrpcAstMetaPrefix+"type"] = "file"
-	doc.Metadata[codeast.TrpcAstMetaPrefix+"name"] = name
-	doc.Metadata[codeast.TrpcAstMetaPrefix+"full_name"] = name
-	doc.Metadata[codeast.TrpcAstMetaPrefix+"language"] = string(codeast.LanguageProto)
-	doc.Metadata[codeast.TrpcAstMetaPrefix+"scope"] = string(codeast.ScopeCode)
-	doc.Metadata[codeast.TrpcAstMetaPrefix+"file_path"] = name
 	doc.Metadata[source.MetaChunkIndex] = 0
 	doc.Metadata[source.MetaChunkSize] = utf8.RuneCountInString(content)
 	doc.Metadata[source.MetaContentLength] = utf8.RuneCountInString(content)
-	doc.EmbeddingText = codeproto.BuildFileEmbeddingText(content, name, fileMetadata)
+
+	packagePath := ""
+	imports := []string(nil)
+	if fileInfo != nil {
+		packagePath = fileInfo.Package
+		imports = fileInfo.Imports
+	}
+	doc.EmbeddingText = codegolang.BuildFileEmbeddingText(content, name, packagePath, imports)
 	return doc
 }
 
-// extractFileNameFromURL extracts a file name from a URL.
-func (r *Reader) extractFileNameFromURL(url string) string {
-	parts := strings.Split(url, "/")
-	if len(parts) > 0 {
-		fileName := parts[len(parts)-1]
-		fileName = strings.Split(fileName, "?")[0]
-		fileName = strings.Split(fileName, "#")[0]
-		if fileName == "" {
-			return "proto_file"
-		}
-		fileName = strings.TrimSuffix(fileName, filepath.Ext(fileName))
-		return fileName
-	}
-	return "proto_file"
-}
-
-// applyTransformers applies all transformers to the documents.
 func (r *Reader) applyTransformers(docs []*document.Document) ([]*document.Document, error) {
 	result, err := itransform.ApplyPreprocess(docs, r.transformers...)
 	if err != nil {
@@ -229,9 +262,27 @@ func (r *Reader) applyTransformers(docs []*document.Document) ([]*document.Docum
 	return result, nil
 }
 
+func (r *Reader) extractFileNameFromURL(urlStr string) string {
+	parts := strings.Split(urlStr, "/")
+	if len(parts) == 0 {
+		return "go_file"
+	}
+	fileName := parts[len(parts)-1]
+	if idx := strings.Index(fileName, "?"); idx != -1 {
+		fileName = fileName[:idx]
+	}
+	if idx := strings.Index(fileName, "#"); idx != -1 {
+		fileName = fileName[:idx]
+	}
+	if fileName == "" {
+		return "go_file"
+	}
+	return fileName
+}
+
 // Name returns the name of this reader.
 func (r *Reader) Name() string {
-	return "Proto Reader"
+	return "GoReader"
 }
 
 // SupportedExtensions returns the file extensions this reader supports.
