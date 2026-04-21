@@ -632,6 +632,11 @@ export MYSQL_HOST=localhost
 export MYSQL_PASSWORD=password
 go run main.go -memory mysql -soft-delete
 
+# 使用 MySQL Vector 存储
+export MYSQLVEC_HOST=localhost
+export MYSQLVEC_PASSWORD=password
+go run main.go -memory mysqlvec -soft-delete
+
 # 使用 PostgreSQL 存储
 export PG_HOST=localhost
 export PG_PASSWORD=password
@@ -1062,6 +1067,78 @@ CREATE TABLE memories (
 defer mysqlService.Close()
 ```
 
+### MySQL Vector（mysqlvec）存储
+
+**适用场景**：生产环境、MySQL 向量相似度搜索
+
+MySQL Vector 将记忆存储在 MySQL 中，通过 embedding 向量提供语义相似度搜索。
+MySQL 9.0+ 使用原生 `VECTOR` 类型，旧版本自动降级为 `BLOB` 存储 + Go 侧余弦相似度计算。
+
+**MySQL 版本要求**：
+
+- **MySQL 5.7.8+**：支持（BLOB 降级路径，Go 侧暴力余弦相似度）
+- **MySQL 8.x**：支持（BLOB 降级路径）
+- **MySQL 9.0+**：完整支持，使用原生 VECTOR 类型进行数据库侧相似度搜索
+
+```go
+import memorymysqlvec "trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec"
+import openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+
+embedder := openaiembedder.New(openaiembedder.WithModel("text-embedding-3-small"))
+
+mysqlvecService, err := memorymysqlvec.NewService(
+    memorymysqlvec.WithMySQLClientDSN("user:password@tcp(localhost:3306)/dbname?parseTime=true"),
+    memorymysqlvec.WithEmbedder(embedder),
+    memorymysqlvec.WithSoftDelete(true),
+)
+```
+
+**配置选项**：
+
+- `WithMySQLClientDSN(dsn)`: MySQL DSN 连接字符串（推荐，必需 `parseTime=true`）
+- `WithMySQLInstance(name)`: 使用预注册的 MySQL 实例
+- `WithEmbedder(embedder)`: 文本嵌入器，用于生成向量（必需）
+- `WithSoftDelete(enabled)`: 启用软删除（默认 false）
+- `WithTableName(name)`: 自定义表名（默认 "memories"）
+- `WithIndexDimension(dim)`: 向量维度（默认 1536）
+- `WithMaxResults(limit)`: 最大搜索结果数（默认 15）
+- `WithMemoryLimit(limit)`: 每用户记忆上限
+- `WithCustomTool(toolName, creator)`: 注册自定义工具
+- `WithToolEnabled(toolName, enabled)`: 启用/禁用工具
+- `WithExtraOptions(...options)`: 传递给 MySQL 客户端的额外选项
+- `WithSkipDBInit(skip)`: 跳过表初始化（适用于无 DDL 权限场景）
+
+**注意**：需要 MySQL 5.7.8+（JSON 列类型）。MySQL 9.0+ 使用原生 VECTOR 支持；MySQL 5.7/8.x 自动降级为 BLOB + Go 侧余弦相似度。不需要额外的向量库。
+
+**表结构**（自动创建，MySQL 9.0+）：
+
+```sql
+CREATE TABLE memories (
+    memory_id VARCHAR(64) PRIMARY KEY,
+    app_name VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    memory_content TEXT NOT NULL,
+    topics JSON,
+    embedding VECTOR(1536),
+    memory_kind VARCHAR(32) NOT NULL DEFAULT 'fact',
+    event_time TIMESTAMP(6) NULL,
+    participants JSON,
+    location VARCHAR(1024) NULL,
+    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    deleted_at TIMESTAMP(6) NULL DEFAULT NULL,
+    INDEX idx_app_user (app_name, user_id),
+    INDEX idx_updated_at (updated_at DESC),
+    INDEX idx_deleted_at (deleted_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+**资源清理**：使用完毕后需调用 `Close()` 方法释放数据库连接：
+
+```go
+defer mysqlvecService.Close()
+```
+
 ### PostgreSQL 存储
 
 **适用场景**：生产环境、需要 JSONB 高级特性
@@ -1269,9 +1346,9 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"爱好"})
 搜索行为取决于后端：
 
 - 对 `inmemory` / `redis` / `mysql` / `postgres`：`SearchMemories` 使用**Token 匹配**（不是语义搜索）。
-- 对 `pgvector`：`SearchMemories` 使用**向量相似度检索**，并且需要配置 Embedder。
+- 对 `pgvector` / `mysqlvec` / `sqlitevec`：`SearchMemories` 使用**向量相似度检索**，并且需要配置 Embedder。
 
-**Token 匹配细节**（非 pgvector 后端）：
+**Token 匹配细节**（非向量后端）：
 
 **英文分词**：转小写 → 过滤停用词（a、the、is 等）→ 空格分割
 
@@ -1294,7 +1371,7 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"爱好"})
 搜索："写代码" ❌ 不匹配（词不同）
 ```
 
-**限制**（非 pgvector 后端）：
+**限制**（非向量后端）：
 
 - 这些后端均在**应用层**过滤和排序（\[O(n)\] 复杂度）
 - 数据量大时性能受影响
@@ -1305,7 +1382,7 @@ memory.AddMemory(ctx, userKey, "用户喜欢编程", []string{"爱好"})
 **建议**：
 
 - 使用明确关键词和主题标签提高命中率
-- 如需语义相似度检索，使用 pgvector 后端
+- 如需语义相似度检索，使用 pgvector、mysqlvec 或 sqlitevec 后端
 
 ### 软删除的注意事项
 

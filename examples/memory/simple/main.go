@@ -17,6 +17,7 @@
 //	go run main.go -memory=sqlitevec
 //	go run main.go -memory=redis
 //	go run main.go -memory=mysql
+//	go run main.go -memory=mysqlvec
 //	go run main.go -memory=postgres
 //	go run main.go -memory=pgvector
 //
@@ -38,6 +39,14 @@
 //		export MYSQL_USER="root"
 //		export MYSQL_PASSWORD=""
 //		export MYSQL_DATABASE="trpc_agent_go"
+//
+//	mysqlvec:
+//		export MYSQLVEC_HOST="localhost"
+//		export MYSQLVEC_PORT="3306"
+//		export MYSQLVEC_USER="root"
+//		export MYSQLVEC_PASSWORD=""
+//		export MYSQLVEC_DATABASE="trpc_agent_go"
+//		export MYSQLVEC_EMBEDDER_MODEL="text-embedding-3-small"
 //
 //	postgres:
 //		export PG_HOST="localhost"
@@ -86,7 +95,7 @@ var (
 		"inmemory",
 		"Name of the memory service to use, "+
 			"inmemory / sqlite / sqlitevec / redis / "+
-			"mysql / postgres / pgvector",
+			"mysql / mysqlvec / postgres / pgvector",
 	)
 	streaming = flag.Bool(
 		"streaming",
