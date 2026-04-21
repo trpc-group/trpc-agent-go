@@ -15,6 +15,7 @@ type options struct {
 	graphNodeInterruptActivityEnabled      bool // graphNodeInterruptActivityEnabled enables graph interrupt activity events.
 	graphNodeInterruptActivityTopLevelOnly bool // graphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
 	reasoningContentEnabled                bool // reasoningContentEnabled controls whether reasoning content events are emitted.
+	streamingToolResultActivityEnabled     bool // streamingToolResultActivityEnabled rewrites partial tool results as activity events.
 }
 
 // Option is a function that configures the options.
@@ -57,5 +58,14 @@ func WithGraphNodeInterruptActivityTopLevelOnly(enabled bool) Option {
 func WithReasoningContentEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.reasoningContentEnabled = enabled
+	}
+}
+
+// WithStreamingToolResultActivityEnabled controls whether the translator rewrites
+// partial tool-result chunks into activity events and leaves only the final
+// tool result on the tool-result path.
+func WithStreamingToolResultActivityEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.streamingToolResultActivityEnabled = enabled
 	}
 }
