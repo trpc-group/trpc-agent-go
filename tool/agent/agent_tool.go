@@ -719,17 +719,36 @@ func (at *Tool) collectResponse(inv *agent.Invocation, evCh <-chan *event.Event)
 	return response.String(), nil
 }
 
+// collectLegacyResponse preserves the pre-#1365 concatenation semantics for the
+// default callable path. It applies a narrow fix for issue #1640 by skipping a
+// trailing graph-completion snapshot event that re-emits the same non-partial
+// assistant content that was already collected. Divergent snapshot content is
+// still concatenated to keep default output bytes stable for existing callers;
+// broader alignment with the snapshot-aware collector is tracked as a separate
+// semantic-change request.
 func collectLegacyResponse(evCh <-chan *event.Event) (string, error) {
 	var response strings.Builder
+	var lastNonPartialAssistantContent string
 	for ev := range evCh {
 		if ev.Error != nil {
 			return "", fmt.Errorf("agent error: %s", ev.Error.Message)
 		}
-		if ev.Response != nil && len(ev.Response.Choices) > 0 {
-			choice := ev.Response.Choices[0]
-			if choice.Message.Role == model.RoleAssistant && choice.Message.Content != "" {
-				response.WriteString(choice.Message.Content)
-			}
+		if ev.Response == nil || len(ev.Response.Choices) == 0 {
+			continue
+		}
+		choice := ev.Response.Choices[0]
+		if choice.Message.Role != model.RoleAssistant || choice.Message.Content == "" {
+			continue
+		}
+		content := choice.Message.Content
+		if !ev.IsPartial &&
+			isGraphCompletionSnapshotEvent(ev) &&
+			content == lastNonPartialAssistantContent {
+			continue
+		}
+		response.WriteString(content)
+		if !ev.IsPartial {
+			lastNonPartialAssistantContent = content
 		}
 	}
 	return response.String(), nil

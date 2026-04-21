@@ -596,6 +596,29 @@ func TestTool_Call_DisableGraphCompletionEvent_KeepsFinalText(t *testing.T) {
 	require.Equal(t, "child-final", resultText)
 }
 
+func TestTool_Call_GraphEmitFinalModelResponses_DedupsGraphCompletionSnapshot(t *testing.T) {
+	const finalJSON = `{"doc_id":"doc-1","title":"demo"}`
+
+	sg := graph.NewStateGraph(graph.MessagesStateSchema())
+	sg.AddLLMNode("llm", &fixedResponseModel{response: finalJSON}, "", nil)
+	compiled := sg.SetEntryPoint("llm").SetFinishPoint("llm").MustCompile()
+	ga, err := graphagent.New("graph-child", compiled)
+	require.NoError(t, err)
+	at := NewTool(ga, WithHistoryScope(HistoryScopeParentBranch))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithGraphEmitFinalModelResponses(true),
+		)),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	result, err := at.Call(ctx, []byte(`{"request":"ignored"}`))
+	require.NoError(t, err)
+	resultText, ok := result.(string)
+	require.True(t, ok)
+	require.Equal(t, finalJSON, resultText)
+}
+
 func TestTool_Call_DisableGraphCompletionEvent_DedupsCapturedGraphCompletionAfterFinalModelResponse(t *testing.T) {
 	sg := graph.NewStateGraph(graph.MessagesStateSchema())
 	sg.AddLLMNode("llm", &fixedResponseModel{response: "child-final"}, "", nil)
