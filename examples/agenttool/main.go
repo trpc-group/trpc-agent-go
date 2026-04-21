@@ -31,28 +31,63 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
+const (
+	defaultModelName     = "deepseek-chat"
+	defaultInnerTextMode = string(agenttool.InnerTextModeInclude)
+)
+
 var (
-	modelName    = flag.String("model", "deepseek-chat", "Name of the model to use")
-	debugAuthors = flag.Bool("debug", false, "Print event author names with streamed text")
-	showTool     = flag.Bool("show-tool", false, "Show tool outputs (tool.response) in the transcript")
-	showInner    = flag.Bool("show-inner", true, "Show inner agent transcript forwarded by agent tool")
+	modelName = flag.String(
+		"model",
+		defaultModelName,
+		"Name of the model to use",
+	)
+	debugAuthors = flag.Bool(
+		"debug",
+		false,
+		"Print event author names with streamed text",
+	)
+	showTool = flag.Bool(
+		"show-tool",
+		false,
+		"Show tool outputs (tool.response) in the transcript",
+	)
+	showInner = flag.Bool(
+		"show-inner",
+		true,
+		"Show inner agent transcript forwarded by agent tool",
+	)
+	innerTextMode = flag.String(
+		"inner-text",
+		defaultInnerTextMode,
+		"Inner text mode: include or exclude",
+	)
 )
 
 func main() {
 	// Parse command line flags.
 	flag.Parse()
 
+	mode, err := parseInnerTextMode(*innerTextMode)
+	if err != nil {
+		log.Fatalf("invalid -inner-text: %v", err)
+	}
+
 	fmt.Printf("🚀 Agent Tool Example\n")
 	fmt.Printf("Model: %s\n", *modelName)
+	fmt.Printf("Show inner: %t\n", *showInner)
+	fmt.Printf("Inner text mode: %s\n", mode)
+	fmt.Printf("Show tool: %t\n", *showTool)
 	fmt.Printf("Available tools: current_time, math-specialist(agent_tool)\n")
 	fmt.Println(strings.Repeat("=", 50))
 
 	// Create and run the chat.
 	chat := &agentToolChat{
-		modelName:    *modelName,
-		debugAuthors: *debugAuthors,
-		showTool:     *showTool,
-		showInner:    *showInner,
+		modelName:     *modelName,
+		debugAuthors:  *debugAuthors,
+		showTool:      *showTool,
+		showInner:     *showInner,
+		innerTextMode: mode,
 	}
 
 	if err := chat.run(); err != nil {
@@ -62,15 +97,16 @@ func main() {
 
 // agentToolChat manages the conversation with agent tools.
 type agentToolChat struct {
-	modelName    string
-	runner       runner.Runner
-	userID       string
-	sessionID    string
-	debugAuthors bool
-	agentName    string
-	streaming    bool
-	showTool     bool
-	showInner    bool
+	modelName     string
+	runner        runner.Runner
+	userID        string
+	sessionID     string
+	debugAuthors  bool
+	agentName     string
+	streaming     bool
+	showTool      bool
+	showInner     bool
+	innerTextMode agenttool.InnerTextMode
 }
 
 // run starts the interactive chat session.
@@ -141,7 +177,8 @@ func (c *agentToolChat) setup(_ context.Context) error {
 	agentTool := agenttool.NewTool(
 		mathAgent,
 		agenttool.WithSkipSummarization(true),
-		agenttool.WithStreamInner(c.showInner), // Stream inner agent deltas when requested
+		agenttool.WithStreamInner(c.showInner),
+		agenttool.WithInnerTextMode(c.innerTextMode),
 	)
 
 	// Create LLM agent with tools including the agent tool.
@@ -392,4 +429,15 @@ func (c *agentToolChat) handleToolResponses(ev *event.Event) bool {
 func (c *agentToolChat) startNewSession() {
 	c.sessionID = fmt.Sprintf("chat-session-%d", time.Now().Unix())
 	fmt.Printf("🔄 New session started: %s\n\n", c.sessionID)
+}
+
+func parseInnerTextMode(mode string) (agenttool.InnerTextMode, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", string(agenttool.InnerTextModeInclude):
+		return agenttool.InnerTextModeInclude, nil
+	case string(agenttool.InnerTextModeExclude):
+		return agenttool.InnerTextModeExclude, nil
+	default:
+		return "", fmt.Errorf("unsupported mode %q", mode)
+	}
 }

@@ -233,8 +233,8 @@ the coordinator as a Tool (via a ToolSet). `team.MemberToolConfig` controls
 how that wrapper behaves.
 
 Under the hood, `team.MemberToolConfig` maps directly to AgentTool options:
-`agenttool.WithStreamInner`, `agenttool.WithHistoryScope`, and
-`agenttool.WithSkipSummarization`.
+`agenttool.WithStreamInner`, `agenttool.WithInnerTextMode`,
+`agenttool.WithHistoryScope`, and `agenttool.WithSkipSummarization`.
 
 ### Quickstart
 
@@ -243,6 +243,7 @@ Start from defaults, then override what you need:
 ```go
 memberCfg := team.DefaultMemberToolConfig()
 memberCfg.StreamInner = true
+memberCfg.InnerTextMode = team.InnerTextModeExclude
 memberCfg.HistoryScope = team.HistoryScopeParentBranch
 memberCfg.SkipSummarization = false
 
@@ -256,6 +257,7 @@ tm, err := team.New(
 Defaults (from `team.DefaultMemberToolConfig()`):
 
 - `StreamInner=false`
+- `InnerTextMode=team.InnerTextModeInclude`
 - `HistoryScope=team.HistoryScopeParentBranch`
 - `SkipSummarization=false`
 
@@ -270,6 +272,34 @@ Defaults (from `team.DefaultMemberToolConfig()`):
 - **How to use it**: enable streaming for the coordinator and members (for
   example, `GenerationConfig{Stream: true}`), then set
   `MemberToolConfig.StreamInner=true`.
+
+#### `InnerTextMode`
+
+- **Effective default**: `team.InnerTextModeInclude`
+- **What it does**: when `StreamInner=true`, controls whether forwarded member
+  assistant text is visible in the parent flow.
+- **What it does not do**: it does not stop the member result from being
+  aggregated into the final tool response that the coordinator uses for its
+  next turn.
+- **Use `team.InnerTextModeInclude` when**: you want the full live transcript
+  from each member, including the member's natural-language answer as it
+  streams.
+- **Use `team.InnerTextModeExclude` when**: you want users to see member
+  progress such as tool calls and tool completion markers, but you want the
+  coordinator to be the only Agent that prints the final prose answer.
+
+`InnerTextMode` is only relevant when `StreamInner=true`. When
+`StreamInner=false`, no inner events are forwarded.
+
+### Common Visibility Setups
+
+- `StreamInner=false`
+  - Hide all member internals. Users only see the coordinator's final answer.
+- `StreamInner=true` + `InnerTextMode=team.InnerTextModeInclude`
+  - Show the full member transcript and then the coordinator's final answer.
+- `StreamInner=true` + `InnerTextMode=team.InnerTextModeExclude`
+  - Show member progress, but hide member assistant text so the coordinator
+    remains the only visible final answer.
 
 #### `HistoryScope`
 

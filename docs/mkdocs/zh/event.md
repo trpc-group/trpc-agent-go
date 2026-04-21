@@ -363,6 +363,9 @@ evt := event.NewResponseEvent("invoke-123", "agent", response)
 
 - 子 Agent 转发事件依然是 `event.Event`，其中增量内容同样在 `choice.Delta.Content`
 - 为避免重复打印，子 Agent 最终整段文本不会再次作为转发事件出现，但会被聚合到最终的 `tool.response` 内容中，供下一轮 LLM 使用
+- 如果你只想保留内部进度、不想转发子 Agent 的 assistant 正文，可以把
+  `WithStreamInner(true)` 和
+  `WithInnerTextMode(agenttool.InnerTextModeExclude)` 搭配使用
 
 Runner 会自动针对需要完成信号的事件（`RequiresCompletion=true`）发送完成信号，使用者无需额外处理。
 

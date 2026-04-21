@@ -431,6 +431,7 @@ mainAgent := llmagent.New(
 
 - 子 Agent 的事件会以流式形式转发到父流程（`event.Event`），可直接显示 `choice.Delta.Content`
 - 为避免重复打印，子 Agent 最终的整段文本默认不会作为转发事件再次输出；但会被聚合写入最终的 `tool.response`，用于满足模型“工具消息跟随”的要求
+- 如果你想保留内部进度、但隐藏子 Agent 的 assistant 正文，可以再加上 `WithInnerTextMode(agenttool.InnerTextModeExclude)`
 - 建议在 UI 层：
   - 展示子 Agent 转发的增量内容
   - 如非调试，不再额外打印最终聚合的工具响应内容
@@ -459,6 +460,8 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 - `WithSkipSummarization(true)`：工具返回后跳过外层模型的总结调用
 - `WithStreamInner(true)`：启用子 Agent 事件转发（父/子 Agent 建议都 `Stream: true`）
 - `WithStreamInner(false)`：按普通可调用工具处理，不转发内部流
+- `WithInnerTextMode(agenttool.InnerTextModeInclude)`：启用内部转发时，继续展示子 Agent 的 assistant 文本
+- `WithInnerTextMode(agenttool.InnerTextModeExclude)`：保留内部进度事件，但不再转发子 Agent 的 assistant 正文
 
 ### Agent 委托 (Agent Transfer)
 

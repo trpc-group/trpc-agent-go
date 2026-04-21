@@ -1759,6 +1759,26 @@ func TestTool_StreamInner_And_StreamableCall(t *testing.T) {
 	}
 }
 
+func TestTool_InnerTextMode(t *testing.T) {
+	at := NewTool(&mockAgent{name: "child"})
+	require.Equal(t, InnerTextModeInclude, at.InnerTextMode())
+
+	excluded := NewTool(
+		&mockAgent{name: "child"},
+		WithInnerTextMode(InnerTextModeExclude),
+	)
+	require.Equal(t, InnerTextModeExclude, excluded.InnerTextMode())
+
+	invalid := NewTool(
+		&mockAgent{name: "child"},
+		WithInnerTextMode(InnerTextMode("unexpected")),
+	)
+	require.Equal(t, InnerTextModeInclude, invalid.InnerTextMode())
+
+	var nilTool *Tool
+	require.Equal(t, InnerTextModeInclude, nilTool.InnerTextMode())
+}
+
 func countToolResultEvents(
 	sess *session.Session,
 	invocationID string,

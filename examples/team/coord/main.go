@@ -45,8 +45,12 @@ const (
 	memberHistoryParent   = "parent"
 	memberHistoryIsolated = "isolated"
 
-	defaultModelName = "deepseek-chat"
-	defaultVariant   = "openai"
+	memberInnerTextInclude = string(team.InnerTextModeInclude)
+	memberInnerTextExclude = string(team.InnerTextModeExclude)
+
+	defaultModelName           = "deepseek-chat"
+	defaultVariant             = "openai"
+	defaultMemberInnerTextMode = memberInnerTextInclude
 
 	defaultTimeout = 5 * time.Minute
 
@@ -90,6 +94,11 @@ var (
 		memberHistoryParent,
 		"Member history scope: parent or isolated",
 	)
+	memberInnerText = flag.String(
+		"member-inner-text",
+		defaultMemberInnerTextMode,
+		"Member inner text mode: include or exclude",
+	)
 	memberSkipSummarization = flag.Bool(
 		"member-skip-summarization",
 		false,
@@ -111,6 +120,7 @@ func main() {
 		*streaming,
 		*showInner,
 		*memberHistory,
+		*memberInnerText,
 		*memberSkipSummarization,
 		*enableParallelTools,
 	)
@@ -125,6 +135,7 @@ func main() {
 	fmt.Printf("Timeout: %s\n", timeout.String())
 	fmt.Printf("ShowInner: %t\n", *showInner)
 	fmt.Printf("MemberHistory: %s\n", *memberHistory)
+	fmt.Printf("MemberInnerText: %s\n", *memberInnerText)
 	fmt.Printf(
 		"MemberSkipSummarization: %t\n",
 		*memberSkipSummarization,
@@ -154,6 +165,7 @@ func buildRunner(
 	streaming bool,
 	showInner bool,
 	memberHistory string,
+	memberInnerText string,
 	memberSkipSummarization bool,
 	parallelTools bool,
 ) (runner.Runner, error) {
@@ -230,6 +242,11 @@ func buildRunner(
 
 	memberCfg := team.DefaultMemberToolConfig()
 	memberCfg.StreamInner = showInner
+	mode, err := parseMemberInnerTextMode(memberInnerText)
+	if err != nil {
+		return nil, err
+	}
+	memberCfg.InnerTextMode = mode
 	memberCfg.SkipSummarization = memberSkipSummarization
 
 	switch memberHistory {
@@ -259,6 +276,20 @@ func buildRunner(
 		teamInstance,
 		runner.WithSessionService(sessionService),
 	), nil
+}
+
+func parseMemberInnerTextMode(mode string) (team.InnerTextMode, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", memberInnerTextInclude:
+		return team.InnerTextModeInclude, nil
+	case memberInnerTextExclude:
+		return team.InnerTextModeExclude, nil
+	default:
+		return "", fmt.Errorf(
+			"unknown member-inner-text %q",
+			mode,
+		)
+	}
 }
 
 func intPtr(v int) *int { return &v }
