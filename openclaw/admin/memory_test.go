@@ -201,6 +201,10 @@ func TestMemoryFileViews_CoversFilesystemVariants(t *testing.T) {
 	require.Equal(t, userBlank, views[2].UserID)
 	require.Equal(t, "demo", views[2].AppName)
 	require.Contains(t, views[2].OpenURL, routeMemoryFile+"?path=")
+	require.Contains(t, views[2].LoadURL, routeMemoryFileAPI+"?path=")
+	require.NotEmpty(t, views[0].CardID)
+	require.Contains(t, views[0].SearchValue, "openclaw")
+	require.Contains(t, views[0].SearchValue, "alice")
 }
 
 func TestMemoryFileViews_SortsByModifiedAtAppAndUser(t *testing.T) {
@@ -338,4 +342,50 @@ func TestResolveMemoryFile_RejectsSymlinkEscapes(t *testing.T) {
 
 	_, err := resolveMemoryFile(root, "app/user/MEMORY.md")
 	require.ErrorContains(t, err, "memory file escapes memory root")
+}
+
+func TestReadMemoryFileDetailPreservesExactContent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	appDir := base64.RawURLEncoding.EncodeToString([]byte("app"))
+	userDir := base64.RawURLEncoding.EncodeToString([]byte("user"))
+	dir := filepath.Join(root, appDir, userDir)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	body := "# Memory\n\n- first line\n- second line\n"
+	require.NoError(
+		t,
+		os.WriteFile(filepath.Join(dir, memoryFileName), []byte(body), 0o600),
+	)
+
+	detail, err := readMemoryFileDetail(
+		root,
+		appDir+"/"+userDir+"/MEMORY.md",
+	)
+	require.NoError(t, err)
+	require.Equal(t, body, detail.Content)
+	require.Equal(t, "app", detail.AppName)
+	require.Equal(t, "user", detail.UserID)
+	require.Contains(t, detail.OpenURL, routeMemoryFile+"?path=")
+	require.Contains(t, detail.LoadURL, routeMemoryFileAPI+"?path=")
+}
+
+func TestSaveMemoryFileWritesExactContent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "app", "user")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	path := filepath.Join(dir, memoryFileName)
+	require.NoError(t, os.WriteFile(path, []byte("old"), 0o600))
+
+	next := "# Memory\n\n- updated\n"
+	require.NoError(t, saveMemoryFile(root, "app/user/MEMORY.md", next))
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, next, string(raw))
+
+	err = saveMemoryFile(root, "../MEMORY.md", "bad")
+	require.ErrorContains(t, err, "invalid memory file path")
 }
