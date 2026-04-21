@@ -10,6 +10,7 @@ The source module provides various document source types, each supporting rich c
 |-------------|-------------|---------|
 | **File Source (file)** | Single file processing | [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/file-source) |
 | **Directory Source (dir)** | Batch directory processing | [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/directory-source) |
+| **Repo Source (repo)** | Git repository / local repo directory | [AST Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/ast) |
 | **URL Source (url)** | Fetch content from web pages | [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/url-source) |
 | **Auto Source (auto)** | Intelligent type detection | [Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/auto-source) |
 
@@ -107,7 +108,211 @@ autoSrc := autosource.New(
 )
 ```
 
+## Repo Source
+
+The repo source targets code repository scenarios, suited for:
+
+- Loading a remote **Git URL** directly
+- Loading a locally checked-out **repository directory**
+- Uniformly processing Go / Proto / Markdown and other content within a single repository
+
+> **Current open-source status**: AST-aware code parsing is currently open-sourced for **Go** and **Proto / PB**. Support for `Python`, `C++`, `JavaScript`, and other languages is being progressively open-sourced. For languages not yet open-sourced, the repo source can still process text files via plain document readers, but without AST-level semantic entities.
+
+### Typical Use Cases
+
+- Loading a remote Git repository to build a code knowledge base
+- Loading a local repository restricted to a specific subdirectory
+- Unified ingest of Go + Markdown (and other supported types) within a single repository
+
+### Basic Usage
+
+```go
+import (
+    reposource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo"
+)
+
+repoSrc := reposource.New(
+    nil,
+    reposource.WithRepository(
+        reposource.Repository{
+            URL:    "https://github.com/trpc-group/trpc-go",
+            Branch: "main",
+        },
+    ),
+    reposource.WithName("Code Repository"),
+    reposource.WithFileExtensions([]string{".go", ".md"}),
+)
+```
+
+### Repository Struct
+
+`Repository` describes a single repository input with independent version and scope configuration:
+
+| Field | Description |
+|-------|-------------|
+| `URL` | Remote Git repository URL |
+| `Dir` | Local repository directory |
+| `Branch` | Target branch |
+| `Tag` | Target tag |
+| `Commit` | Target commit |
+| `Subdir` | Scan only a subdirectory within the repository |
+| `RepoName` | Custom repository name |
+| `RepoURL` | Custom repository URL (overrides auto-detection) |
+
+> `URL` and `Dir` are mutually exclusive. A single `repo.Source` processes only one repository input.
+
+### Version Selection Priority
+
+When multiple version fields are set, the priority is:
+
+1. `Commit`
+2. `Tag`
+3. `Branch`
+
+That is, if both `Commit` and `Branch` are provided, `Commit` is checked out.
+
+### Scan Scope Control
+
+- [`WithFileExtensions`](https://github.com/trpc-group/trpc-agent-go/blob/main/knowledge/source/repo/options.go) — controls which file extensions are scanned
+- [`WithSkipDirs`](https://github.com/trpc-group/trpc-agent-go/blob/main/knowledge/source/repo/options.go) — controls which directory names are skipped
+- [`WithSkipSuffixes`](https://github.com/trpc-group/trpc-agent-go/blob/main/knowledge/source/repo/options.go) — controls which file suffixes are skipped
+- `Repository.Subdir` — restricts scanning to a subdirectory within the repository
+
+Example: scan only Go and Markdown files under `server/`:
+
+```go
+repoSrc := reposource.New(
+    nil,
+    reposource.WithRepository(
+        reposource.Repository{
+            URL:    "https://github.com/trpc-group/trpc-go",
+            Branch: "main",
+            Subdir: "server",
+        },
+    ),
+    reposource.WithFileExtensions([]string{".go", ".md"}),
+    reposource.WithSkipSuffixes([]string{".pb.go", ".trpc.go", "_mock.go"}),
+)
+```
+
+### Metadata
+
+The repo source enriches documents produced by readers with repository-level metadata:
+
+| Metadata Key | Description |
+|---|---|
+| `trpc_agent_go_source=repo` | Document originates from a repo source |
+| `trpc_agent_go_repo_path` | Local root directory of the cloned repository |
+| `trpc_ast_repo_name` | Repository name |
+| `trpc_ast_repo_url` | Repository URL |
+| `trpc_ast_branch` | Version identifier being parsed (branch/tag/commit) |
+| `trpc_ast_file_path` | Repo-relative file path |
+
+Notes:
+
+- `trpc_ast_file_path` represents the **logical path within the repository**, not a remote Git URL.
+- For Git URL inputs, the repo source first clones to a temporary directory, then writes the repo-relative path into `trpc_ast_file_path`.
+
+### Relation to AST Readers
+
+The repo source does not parse code itself; it dispatches to the appropriate reader based on file type:
+
+- `.go` → Go AST reader
+- `.proto` → Proto AST reader
+- `.md` → Markdown reader
+- Other registered extensions → corresponding reader
+
+### Parsed Output Example
+
+Below is a sample output from chunking a struct definition in a remote Go repository:
+
+```text
+parsed content:
+index: 7
+name: Server
+content_length: 570
+
+content:
+// Server is a tRPC server.
+// One process, one server. A server may offer one or more services.
+type Server struct {
+    MaxCloseWaitTime time.Duration
+
+    services map[string]Service
+
+    mux sync.Mutex
+    onShutdownHooks []func()
+
+    failedServices sync.Map
+    signalCh       chan os.Signal
+    closeCh        chan struct{}
+    closeOnce      sync.Once
+}
+
+embedding text:
+{
+  "comment": "Server is a tRPC server.\nOne process, one server. A server may offer one or more services.",
+  "file_path": "/tmp/trpc-agent-go-repo-483441217/server/server.go",
+  "full_name": "trpc.group/trpc-go/trpc-go/server.Server",
+  "id": "trpc.group/trpc-go/trpc-go/server.Server",
+  "name": "Server",
+  "package": "trpc.group/trpc-go/trpc-go/server",
+  "signature": "type Server struct",
+  "type": "Struct"
+}
+
+metadata:
+trpc_agent_go_source: repo
+trpc_agent_go_file_path: server/server.go
+trpc_ast_repo_name: trpc-go
+trpc_ast_repo_url: https://github.com/trpc-group/trpc-go
+trpc_ast_file_path: server/server.go
+trpc_ast_full_name: trpc.group/trpc-go/trpc-go/server.Server
+trpc_ast_type: Struct
+trpc_ast_signature: type Server struct
+trpc_ast_language: go
+...
+```
+
+The output has three layers:
+
+#### 1. `content`: Raw chunk content
+
+The `content` field stores the final text written to the knowledge base. For AST-aware Go / Proto readers, content is not a character-truncated fragment but a **semantically complete code entity**.
+
+In the example above, the entity is the `Server` struct, so the content includes the struct comment, `type Server struct { ... }`, and all field definitions.
+
+#### 2. `embedding text`: Structured summary for vectorization
+
+`embedding text` is a compact summary optimized for semantic embedding, retaining fields such as `name`, `full_name`, `package`, `signature`, `comment`, and `file_path`. This helps embeddings focus on "what this entity is, which package it belongs to, and what it does."
+
+#### 3. `metadata`: Filtering, locating, and display
+
+`metadata` is primarily used for retrieval filtering, display, and source tracking — not for embedding.
+
+##### `trpc_agent_go_*`
+
+Framework-level metadata describing the document origin:
+
+- `trpc_agent_go_source=repo`: document comes from a repo source
+- `trpc_agent_go_file_path`: repo-relative file path
+- `trpc_agent_go_repo_path`: local root of the cloned repository
+- `trpc_agent_go_uri`: actual file URI
+
+##### `trpc_ast_*`
+
+AST semantic metadata describing the code entity:
+
+- `trpc_ast_type=Struct`
+- `trpc_ast_full_name`
+- `trpc_ast_signature`
+- `trpc_ast_language=go`
+- `trpc_ast_repo_name` / `trpc_ast_repo_url`
+
+These are used for precise filtering, such as retrieving all `Struct` types in a given package, or all `rpc` / `message` definitions in a proto service.
+
 ## Combined Usage
+
 
 ```go
 import (
