@@ -10,6 +10,7 @@ package summary
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 )
 
 // Checker defines a function type for checking if summarization is needed.
@@ -95,68 +97,71 @@ func filterDeltaEvents(sess *session.Session) []event.Event {
 	return out
 }
 
-// filterPrimaryEvents prevents sub-agent events from inflating
-// parent-level threshold checks in the full-session summary scenario.
-//
-// The function distinguishes two cases by inspecting whether the events
-// contain multiple distinct non-empty FilterKey values:
-//
-//  1. Single non-empty FilterKey (branch summary) — all events with a
-//     non-empty FilterKey share the same value because computeDeltaSince
-//     already filtered by that branch. No further filtering is needed;
-//     return the events as-is.
-//
-//  2. Mixed non-empty FilterKeys (full-session summary) — events come
-//     from both the primary agent and one or more sub-agents. Only
-//     events whose FilterKey matches the session's AppName (the primary
-//     agent's key) are retained so that sub-agent tokens/counts do not
-//     inflate the parent threshold.
-//
-// Events with an empty FilterKey (e.g. synthetic summary events created
-// by prependPrevSummary) are ignored when determining whether the set is
-// mixed, and are always kept in the output. This prevents a single
-// prepended summary event from incorrectly triggering the mixed-key
-// filtering path for what is actually a single-branch summary.
-//
-// When AppName is empty, no filtering is applied for backward
-// compatibility with sessions that do not set an AppName.
-func filterPrimaryEvents(
-	events []event.Event, appName string,
+func effectiveFilterKey(e event.Event) string {
+	if e.FilterKey != "" {
+		return e.FilterKey
+	}
+	if e.Version != event.CurrentVersion {
+		return e.Branch
+	}
+	return ""
+}
+
+func filterSummaryInputEventsForSession(
+	events []event.Event,
+	sess *session.Session,
 ) []event.Event {
-	if appName == "" || len(events) == 0 {
+	if sess == nil {
 		return events
 	}
-	// Detect whether the events contain multiple distinct non-empty
-	// FilterKeys. Empty FilterKeys are ignored because they come
-	// from synthetic events (e.g. prepended previous summary).
-	var firstNonEmpty string
-	mixed := false
-	for i := range events {
-		fk := events[i].FilterKey
-		if fk == "" {
-			continue
-		}
-		if firstNonEmpty == "" {
-			firstNonEmpty = fk
-			continue
-		}
-		if fk != firstNonEmpty {
-			mixed = true
-			break
-		}
+	if scopeKey := isummaryscope.GetScopeFilterKey(sess); scopeKey != "" {
+		return filterEventsInScope(events, scopeKey)
 	}
-	if !mixed {
-		// All non-empty FilterKeys are identical (branch summary)
-		// or there are no non-empty keys at all — no additional
-		// filtering required.
+	return events
+}
+
+func filterThresholdEventsForSession(
+	events []event.Event,
+	sess *session.Session,
+) []event.Event {
+	if sess == nil {
 		return events
 	}
-	// Mixed non-empty FilterKeys (full-session summary) — keep
-	// events that belong to the primary agent plus any events with
-	// an empty FilterKey (synthetic summary events).
+	if scopeKey := isummaryscope.GetScopeFilterKey(sess); scopeKey != "" {
+		return filterEventsInScope(events, scopeKey)
+	}
+	return filterEventsWithExactKey(events, sess.AppName)
+}
+
+// filterEventsInScope keeps only events in the requested branch scope plus
+// synthetic events with an empty filter key.
+func filterEventsInScope(events []event.Event, scopeKey string) []event.Event {
+	if scopeKey == "" || len(events) == 0 {
+		return events
+	}
+	out := make([]event.Event, 0, len(events))
+	prefix := scopeKey + event.FilterKeyDelimiter
+	for _, e := range events {
+		fk := effectiveFilterKey(e)
+		if fk == "" || fk == scopeKey || strings.HasPrefix(fk, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// filterEventsWithExactKey keeps only events whose effective filter key
+// matches filterKey exactly, plus synthetic events with an empty filter key.
+// This isolates full-session threshold checks to primary-agent activity.
+func filterEventsWithExactKey(events []event.Event, filterKey string) []event.Event {
+	if filterKey == "" || len(events) == 0 {
+		return events
+	}
+
 	out := make([]event.Event, 0, len(events))
 	for _, e := range events {
-		if e.FilterKey == appName || e.FilterKey == "" {
+		fk := effectiveFilterKey(e)
+		if fk == "" || fk == filterKey {
 			out = append(out, e)
 		}
 	}
@@ -164,28 +169,34 @@ func filterPrimaryEvents(
 }
 
 // CheckEventThreshold creates a checker that triggers when the number of
-// primary-agent events since the last summary exceeds the given threshold.
-// Sub-agent events (FilterKey != AppName) are excluded from the count so
-// that child agent activity does not inflate the parent threshold.
+// threshold events since the last summary exceeds the given threshold.
+// Full-session checks count only primary-agent activity, while branch-scoped
+// checks count the scoped branch and its descendants.
 func CheckEventThreshold(eventCount int) Checker {
 	return func(sess *session.Session) bool {
 		delta := filterDeltaEvents(sess)
 		if len(delta) == 0 {
 			return false
 		}
-		primary := filterPrimaryEvents(delta, sess.AppName)
-		return len(primary) > eventCount
+		thresholdEvents := filterThresholdEventsForSession(delta, sess)
+		return len(thresholdEvents) > eventCount
 	}
 }
 
 // CheckTimeThreshold creates a checker that triggers when the time elapsed
-// since the last event is greater than the given interval.
+// since the last relevant event is greater than the given interval. Scoped
+// branch checks use the last event in that branch subtree; full-session checks
+// use the last event in the session.
 func CheckTimeThreshold(interval time.Duration) Checker {
 	return func(sess *session.Session) bool {
 		if sess == nil || len(sess.Events) == 0 {
 			return false
 		}
-		lastEvent := sess.Events[len(sess.Events)-1]
+		relevant := filterSummaryInputEventsForSession(sess.Events, sess)
+		if len(relevant) == 0 {
+			return false
+		}
+		lastEvent := relevant[len(relevant)-1]
 		return time.Since(lastEvent.Timestamp) > interval
 	}
 }
@@ -212,11 +223,11 @@ func checkTokenThresholdFromText(
 }
 
 // CheckTokenThreshold creates a checker that triggers when the estimated
-// token count of the primary-agent events since the last summary exceeds
-// the given threshold. Sub-agent events (FilterKey != AppName) are excluded
-// so that child agent tokens do not inflate the parent threshold check.
-// When a summarizer injects effective summary text into the session state,
-// that text takes precedence over the default event extraction logic.
+// token count of the threshold events since the last summary exceeds the given
+// threshold. Full-session checks count only primary-agent activity, while
+// branch-scoped checks count the scoped branch and its descendants. When a
+// summarizer injects effective summary text into the session state, that text
+// takes precedence over the default event extraction logic.
 //
 // Note:
 // Token accounting via model usage is not stable once session summary
@@ -257,12 +268,12 @@ func checkTokenThreshold(
 	if len(delta) == 0 {
 		return false
 	}
-	primary := filterPrimaryEvents(delta, sess.AppName)
-	if len(primary) == 0 {
+	thresholdEvents := filterThresholdEventsForSession(delta, sess)
+	if len(thresholdEvents) == 0 {
 		return false
 	}
 	conversationText := extractConversationText(
-		primary, nil, nil,
+		thresholdEvents, nil, nil,
 	)
 	return checkTokenThresholdFromText(
 		ctx,

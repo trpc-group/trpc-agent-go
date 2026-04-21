@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
@@ -71,7 +72,7 @@ func prependPrevSummary(prevSummary string, delta []event.Event, now time.Time) 
 // buildFilterSession builds a temporary session containing filterKey events.
 // When filterKey=="", it represents the full-session input.
 func buildFilterSession(base *session.Session, filterKey string, evs []event.Event) *session.Session {
-	return &session.Session{
+	tmp := &session.Session{
 		ID:        base.ID + ":" + filterKey,
 		AppName:   base.AppName,
 		UserID:    base.UserID,
@@ -80,6 +81,8 @@ func buildFilterSession(base *session.Session, filterKey string, evs []event.Eve
 		UpdatedAt: time.Now(),
 		CreatedAt: base.CreatedAt,
 	}
+	isummaryscope.SetScopeFilterKey(tmp, filterKey)
+	return tmp
 }
 
 // SummarizeSession performs per-filterKey delta summarization using the given
