@@ -133,12 +133,36 @@ func TestCall_ClearOnAllDone(t *testing.T) {
 		{Content: "a", ActiveForm: "Aing", Status: StatusCompleted},
 		{Content: "b", ActiveForm: "Bing", Status: StatusCompleted},
 	}})
-	if _, err := tl.Call(ctx, args); err != nil {
+	raw, err := tl.Call(ctx, args)
+	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	got, _ := GetTodos(sess, "")
 	if len(got) != 0 {
 		t.Fatalf("expected empty list after all-done clear, got %#v", got)
+	}
+
+	// Regression guard: the cleared list must marshal to "todos": [],
+	// not "todos": null. Output.Todos has no omitempty and the
+	// declared output schema says the field is an array, so emitting
+	// null here would break schema-aware LLMs and AG-UI-style
+	// frontends that call .length / .map directly on the field.
+	out, ok := raw.(Output)
+	if !ok {
+		t.Fatalf("Call returned unexpected type %T", raw)
+	}
+	if out.Todos == nil {
+		t.Fatalf("Output.Todos must be non-nil after clear, got nil")
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal Output: %v", err)
+	}
+	if !strings.Contains(string(encoded), `"todos":[]`) {
+		t.Fatalf("expected marshalled output to contain \"todos\":[], got %s", encoded)
+	}
+	if strings.Contains(string(encoded), `"todos":null`) {
+		t.Fatalf("output must not emit \"todos\":null, got %s", encoded)
 	}
 
 	// With clear disabled, items should be retained.

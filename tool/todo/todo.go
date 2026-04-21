@@ -267,9 +267,12 @@ func (t *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 	key := stateKey(t.opts.stateKeyPrefix, branch)
 
 	// Compute next list. All-done => clear to avoid unbounded growth.
+	// Normalise the cleared list to an empty (non-nil) slice so that
+	// the marshalled Output.Todos and the persisted state both emit
+	// `[]` rather than `null`, matching the declared output schema.
 	newTodos := in.Todos
 	if t.opts.clearOnAllDone && allCompleted(newTodos) {
-		newTodos = nil
+		newTodos = []Item{}
 	}
 
 	// Read old list (best-effort) and persist new list.
