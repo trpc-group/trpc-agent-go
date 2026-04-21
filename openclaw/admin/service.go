@@ -49,6 +49,7 @@ const (
 	routeSkillsRefresh     = "/api/skills/refresh"
 	routeSkillToggle       = "/api/skills/toggle"
 	routeMemoryFilesJSON   = "/api/memory/files"
+	routeMemoryFileAPI     = "/api/memory/file"
 	routeMemoryFile        = "/memory/file"
 	routeJobsJSON          = "/api/cron/jobs"
 	routeJobRun            = "/api/cron/jobs/run"
@@ -165,15 +166,16 @@ type Config struct {
 	StateDir string
 	DebugDir string
 
-	Channels      []string
-	GatewayRoutes Routes
-	Skills        SkillsStatusProvider
-	Prompts       PromptsProvider
-	Identity      IdentityProvider
-	Personas      PersonasProvider
-	Chats         ChatsProvider
-	MemoryFiles   MemoryFileStore
-	Browser       BrowserConfig
+	Channels         []string
+	GatewayRoutes    Routes
+	Skills           SkillsStatusProvider
+	Prompts          PromptsProvider
+	Identity         IdentityProvider
+	Personas         PersonasProvider
+	Chats            ChatsProvider
+	MemoryFiles      MemoryFileStore
+	MemoryUserLabels MemoryUserLabelResolver
+	Browser          BrowserConfig
 
 	Cron *cron.Service
 	Exec *octool.Manager
@@ -368,6 +370,10 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc(routeChatsJSON, s.handleChatsJSON)
 	mux.HandleFunc(routeChatHistoryJSON, s.handleChatHistoryJSON)
 	mux.HandleFunc(routeMemoryFilesJSON, s.handleMemoryFilesJSON)
+	mux.HandleFunc(
+		routeMemoryFileAPI,
+		wrapRelativeLinksFunc(s.handleMemoryFileAPI),
+	)
 	mux.HandleFunc(routeMemoryFile, s.handleMemoryFile)
 	mux.HandleFunc(
 		routeConfigSave,
@@ -1451,7 +1457,8 @@ func pageSummary(view adminView) string {
 	case viewChats:
 		return pageSummaryChats
 	case viewMemory:
-		return "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory."
+		return "Inspect durable memory storage, expand file-backed " +
+			"MEMORY.md scopes, and edit full files in place."
 	case viewAutomation:
 		return "Inspect scheduled jobs, trigger one-off runs, and clear automation state."
 	case viewSessions:
@@ -1665,6 +1672,98 @@ func (s *Service) handleMemoryFilesJSON(
 		return
 	}
 	writeJSON(w, http.StatusOK, s.memoryStatus())
+}
+
+func (s *Service) handleMemoryFileAPI(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleMemoryFileJSON(w, r)
+	case http.MethodPost:
+		s.handleSaveMemoryFile(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Service) handleMemoryFileJSON(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	root, configured, err := configuredMemoryRoot(s.cfg.MemoryFiles)
+	if err != nil || !configured {
+		http.Error(
+			w,
+			"memory file store is not configured",
+			http.StatusNotFound,
+		)
+		return
+	}
+	detail, err := readMemoryFileDetailWithResolver(
+		root,
+		strings.TrimSpace(r.URL.Query().Get(queryPath)),
+		s.cfg.MemoryUserLabels,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
+}
+
+func (s *Service) handleSaveMemoryFile(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	_, configured, err := configuredMemoryRoot(s.cfg.MemoryFiles)
+	if err != nil || !configured {
+		http.Error(
+			w,
+			"memory file store is not configured",
+			http.StatusNotFound,
+		)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	returnTo := strings.TrimSpace(r.FormValue(formReturnTo))
+	path := strings.TrimSpace(r.FormValue(queryPath))
+	if path == "" {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			"path is required",
+			returnTo,
+		)
+		return
+	}
+	if err := saveMemoryFile(
+		r.Context(),
+		s.cfg.MemoryFiles,
+		path,
+		r.FormValue(formPromptContent),
+	); err != nil {
+		s.redirectWithMessageAt(
+			w,
+			r,
+			queryError,
+			err.Error(),
+			returnTo,
+		)
+		return
+	}
+	s.redirectWithMessageAt(
+		w,
+		r,
+		queryNotice,
+		"Saved memory file.",
+		returnTo,
+	)
 }
 
 func (s *Service) handleMemoryFile(
@@ -3482,6 +3581,11 @@ const adminPageHTML = `<!doctype html>
       display: grid;
       gap: 4px;
     }
+    .memory-user-label {
+      color: var(--muted);
+      font-size: 0.92rem;
+      font-weight: 700;
+    }
     .memory-controls {
       margin: 18px 0 12px;
     }
@@ -3526,6 +3630,57 @@ const adminPageHTML = `<!doctype html>
       color: var(--muted);
       font-weight: 700;
       white-space: nowrap;
+    }
+    .memory-list {
+      display: grid;
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .memory-card-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+    }
+    .memory-card-meta {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      text-align: right;
+      white-space: nowrap;
+    }
+    .memory-path {
+      margin-top: 8px;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+    .memory-card-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px 14px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .memory-editor-form {
+      margin-top: 12px;
+    }
+    .memory-editor-form textarea {
+      width: 100%;
+      min-height: 240px;
+      margin-top: 8px;
+      font: inherit;
+      resize: vertical;
+    }
+    .memory-editor-status {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 0.92rem;
+    }
+    .memory-editor-status.error {
+      color: #b6544d;
     }
     .chat-list {
       display: grid;
@@ -5072,56 +5227,110 @@ const adminPageHTML = `<!doctype html>
             <input
               id="memory-search"
               type="search"
-              placeholder="Search users or memory content"
+              placeholder="Search app, user, path, or preview"
               data-memory-search
             >
           </div>
         </div>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Scope</th>
-            <th>Preview</th>
-            <th>File</th>
-            <th>Size</th>
-            <th>Modified</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .Snapshot.Memory.Files}}
-          <tr
-            data-memory-row
-            data-memory-app="{{.AppName}}"
-            data-memory-user="{{.UserID}}"
-            data-memory-search="{{.UserID}} {{.Preview}}"
-          >
-            <td>
-              <div class="memory-scope">
-                <span>app <code>{{.AppName}}</code></span>
-                <span>user <code>{{.UserID}}</code></span>
+      <div class="memory-list">
+        {{range .Snapshot.Memory.Files}}
+        <details
+          class="card prompt-detail"
+          id="{{.CardID}}"
+          data-memory-card
+          data-memory-path="{{.RelativePath}}"
+          data-memory-load-url="{{.LoadURL}}"
+          data-memory-search="{{.SearchValue}}"
+        >
+          <summary>
+            <div class="memory-card-head">
+              <div>
+                <div class="memory-scope">
+                  <span>app <code>{{.AppName}}</code></span>
+                  <span>
+                    user <code>{{.UserID}}</code>
+                    {{if .UserLabel}}
+                    <span class="memory-user-label">{{.UserLabel}}</span>
+                    {{end}}
+                  </span>
+                </div>
+                <div class="memory-path">
+                  <code>{{.RelativePath}}</code>
+                </div>
+                <p class="subtle prompt-detail-hint">
+                  {{if .Preview}}
+                    {{.Preview}}
+                  {{else}}
+                    No visible memory content yet.
+                  {{end}}
+                </p>
               </div>
-            </td>
-            <td>
-              {{if .Preview}}
-              <div class="memory-preview">{{.Preview}}</div>
-              {{else}}
-              <span class="subtle">empty</span>
-              {{end}}
-            </td>
-            <td>
-              <a href="{{.OpenURL}}" target="_blank" rel="noopener noreferrer">
-                open
+              <div class="memory-card-meta">
+                <span>{{.SizeBytes}} bytes</span>
+                <span>{{formatTime .ModifiedAt}}</span>
+              </div>
+            </div>
+          </summary>
+          <div class="prompt-detail-body">
+            <div class="memory-card-toolbar">
+              <div class="subtle">
+                Edit the full <code>MEMORY.md</code> file for this scope.
+              </div>
+              <a
+                href="{{.OpenURL}}"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Open Raw File
               </a>
-              <br>
-              <code>{{.RelativePath}}</code>
-            </td>
-            <td>{{.SizeBytes}}</td>
-            <td>{{formatTime .ModifiedAt}}</td>
-          </tr>
-          {{end}}
-        </tbody>
-      </table>
+            </div>
+            <form
+              class="memory-editor-form"
+              method="post"
+              action="/api/memory/file"
+              data-memory-form
+            >
+              <input type="hidden" name="path" value="{{.RelativePath}}">
+              <input type="hidden" name="return_path" value="/memory">
+              <input type="hidden" name="return_to" value="{{.CardID}}">
+              <label for="editor-{{.CardID}}">
+                Full file content
+              </label>
+              <textarea
+                id="editor-{{.CardID}}"
+                name="content"
+                data-memory-editor
+                placeholder="Open this scope to load MEMORY.md"
+                disabled
+              ></textarea>
+              <div class="memory-editor-status" data-memory-status>
+                Open this scope to load its full file.
+              </div>
+              <div
+                class="notice err"
+                style="margin-top: 12px;"
+                data-memory-error
+                hidden
+              ></div>
+              <div class="actions" style="margin-top: 12px;">
+                <button type="submit" data-memory-save disabled>
+                  Save File
+                </button>
+                <button
+                  class="secondary"
+                  type="button"
+                  data-memory-reset
+                  disabled
+                >
+                  Revert
+                </button>
+              </div>
+            </form>
+          </div>
+        </details>
+        {{end}}
+      </div>
       <p class="empty" data-memory-empty hidden>No matching memory files.</p>
       {{else if not .Snapshot.Memory.Error}}
       <p class="empty">
@@ -6382,26 +6591,185 @@ const adminPageHTML = `<!doctype html>
       const search = root.querySelector("[data-memory-search]");
       const shown = root.querySelector("[data-memory-shown]");
       const empty = document.querySelector("[data-memory-empty]");
-      const rows = Array.from(document.querySelectorAll("[data-memory-row]"));
+      const cards = Array.from(
+        document.querySelectorAll("[data-memory-card]")
+      );
 
-      const matches = (row) => {
-        const needle = (search && search.value ? search.value : "").trim().toLowerCase();
+      const readControls = (card) => ({
+        editor: card.querySelector("[data-memory-editor]"),
+        save: card.querySelector("[data-memory-save]"),
+        reset: card.querySelector("[data-memory-reset]"),
+        error: card.querySelector("[data-memory-error]"),
+        status: card.querySelector("[data-memory-status]"),
+      });
+
+      const setStatus = (card, message, isError) => {
+        const status = readControls(card).status;
+        if (!status) return;
+        status.textContent = message;
+        status.classList.toggle("error", Boolean(isError));
+      };
+
+      const clearError = (card) => {
+        const error = readControls(card).error;
+        if (!error) return;
+        error.hidden = true;
+        error.textContent = "";
+      };
+
+      const showError = (card, message) => {
+        const error = readControls(card).error;
+        if (!error) return;
+        error.hidden = false;
+        error.textContent = message;
+        setStatus(card, message, true);
+      };
+
+      const updateDirtyState = (card) => {
+        const controls = readControls(card);
+        const editor = controls.editor;
+        if (!editor) return;
+        const original = editor.dataset.original || "";
+        const loaded = card.dataset.memoryLoaded === "true";
+        const dirty = !editor.disabled && editor.value !== original;
+        if (controls.save) {
+          controls.save.disabled = editor.disabled || !dirty;
+        }
+        if (controls.reset) {
+          controls.reset.disabled = editor.disabled || !dirty;
+        }
+        if (editor.disabled) {
+          setStatus(
+            card,
+            "Open this scope to load its full file.",
+            false
+          );
+          return;
+        }
+        if (dirty) {
+          setStatus(card, "Unsaved changes.", false);
+          return;
+        }
+        if (loaded) {
+          setStatus(
+            card,
+            "Loaded from disk. Edit the file to enable save.",
+            false
+          );
+        }
+      };
+
+      const loadCard = async (card) => {
+        if (
+          card.dataset.memoryLoaded === "true" ||
+          card.dataset.memoryLoading === "true"
+        ) {
+          updateDirtyState(card);
+          return;
+        }
+        const controls = readControls(card);
+        const editor = controls.editor;
+        card.dataset.memoryLoading = "true";
+        clearError(card);
+        setStatus(card, "Loading full file...", false);
+        if (editor) {
+          editor.disabled = true;
+        }
+        if (controls.save) {
+          controls.save.disabled = true;
+        }
+        if (controls.reset) {
+          controls.reset.disabled = true;
+        }
+        try {
+          const url = resolveRequestURL(
+            card.getAttribute("data-memory-load-url") || ""
+          );
+          if (!url) {
+            throw new Error("memory file endpoint is unavailable");
+          }
+          const response = await fetch(url.toString(), {
+            headers: { Accept: "application/json" },
+          });
+          if (!response.ok) {
+            const text = (await response.text()).trim();
+            throw new Error(text || "failed to load memory file");
+          }
+          const payload = await response.json();
+          const content =
+            typeof payload.content === "string" ? payload.content : "";
+          if (editor) {
+            editor.value = content;
+            editor.dataset.original = content;
+            editor.disabled = false;
+          }
+          card.dataset.memoryLoaded = "true";
+          updateDirtyState(card);
+        } catch (err) {
+          showError(
+            card,
+            err && typeof err.message === "string"
+              ? err.message
+              : "failed to load memory file"
+          );
+        } finally {
+          delete card.dataset.memoryLoading;
+        }
+      };
+
+      const matches = (card) => {
+        const needle =
+          (search && search.value ? search.value : "")
+            .trim()
+            .toLowerCase();
         if (!needle) return true;
-        const haystack = (row.getAttribute("data-memory-search") || "").toLowerCase();
+        const haystack = (
+          card.getAttribute("data-memory-search") || ""
+        ).toLowerCase();
         if (haystack.indexOf(needle) === -1) return false;
         return true;
       };
 
       const refresh = () => {
         let visibleCount = 0;
-        rows.forEach((row) => {
-          const visible = matches(row);
-          row.hidden = !visible;
+        cards.forEach((card) => {
+          const visible = matches(card);
+          card.hidden = !visible;
           if (visible) visibleCount += 1;
         });
         if (shown) shown.textContent = String(visibleCount);
         if (empty) empty.hidden = visibleCount !== 0;
       };
+
+      cards.forEach((card) => {
+        const disclosure = card.matches("details")
+          ? card
+          : card.closest("details");
+        const controls = readControls(card);
+        if (controls.editor) {
+          controls.editor.addEventListener("input", () => {
+            updateDirtyState(card);
+          });
+        }
+        if (controls.reset) {
+          controls.reset.addEventListener("click", () => {
+            if (!controls.editor) return;
+            controls.editor.value =
+              controls.editor.dataset.original || "";
+            updateDirtyState(card);
+          });
+        }
+        if (disclosure) {
+          disclosure.addEventListener("toggle", () => {
+            if (disclosure.open) {
+              loadCard(card);
+            }
+          });
+          if (disclosure.open) {
+            loadCard(card);
+          }
+        }
+      });
 
       if (search) {
         search.addEventListener("input", refresh);

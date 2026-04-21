@@ -683,6 +683,17 @@ func TestServiceHandlerRendersMemoryInventory(t *testing.T) {
 	svc := New(Config{
 		MemoryBackend: "file",
 		MemoryFiles:   store,
+		MemoryUserLabels: MemoryUserLabelResolverFunc(
+			func(appName string, userID string) string {
+				if appName != "openclaw" {
+					return ""
+				}
+				if userID != "alice" {
+					return ""
+				}
+				return "RTX alice.dev (Alice Chen)"
+			},
+		),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, routeMemory, nil)
@@ -694,16 +705,19 @@ func TestServiceHandlerRendersMemoryInventory(t *testing.T) {
 	require.Contains(t, body, "Memory Files")
 	require.Contains(t, body, "openclaw")
 	require.Contains(t, body, "alice")
+	require.Contains(t, body, "RTX alice.dev (Alice Chen)")
 	require.Contains(t, body, "Alice prefers concise updates.")
 	require.Contains(t, body, `href="api/memory/files"`)
 	require.Contains(t, body, `href="memory/file?path=`)
 	require.Contains(t, body, `data-memory-root`)
 	require.Contains(t, body, `data-memory-search`)
-	require.Contains(t, body, `data-memory-row`)
-	require.Contains(t, body, `data-memory-app="openclaw"`)
-	require.Contains(t, body, `data-memory-user="alice"`)
-	require.Contains(t, body, `data-memory-search="alice`)
-	require.Contains(t, body, "Search users or memory content")
+	require.Contains(t, body, `data-memory-card`)
+	require.Contains(t, body, `data-memory-path=`)
+	require.Contains(t, body, `data-memory-load-url=`)
+	require.Contains(t, body, `data-memory-editor`)
+	require.Contains(t, body, "Search app, user, path, or preview")
+	require.Contains(t, body, "Edit the full")
+	require.Contains(t, body, "Open Raw File")
 }
 
 func TestServiceHandlerRendersMemoryInventory_FileBackendUnconfigured(t *testing.T) {
@@ -745,6 +759,14 @@ func TestServiceMemoryFilesJSONEndpoint(t *testing.T) {
 	svc := New(Config{
 		MemoryBackend: "file",
 		MemoryFiles:   store,
+		MemoryUserLabels: MemoryUserLabelResolverFunc(
+			func(appName string, userID string) string {
+				if appName == "openclaw" && userID == "alice" {
+					return "RTX alice.dev (Alice Chen)"
+				}
+				return ""
+			},
+		),
 	})
 
 	req := httptest.NewRequest(http.MethodGet, routeMemoryFilesJSON, nil)
@@ -756,6 +778,11 @@ func TestServiceMemoryFilesJSONEndpoint(t *testing.T) {
 	require.Contains(t, body, `"file_count": 1`)
 	require.Contains(t, body, `"app_name": "openclaw"`)
 	require.Contains(t, body, `"user_id": "alice"`)
+	require.Contains(
+		t,
+		body,
+		`"user_label": "RTX alice.dev (Alice Chen)"`,
+	)
 }
 
 func TestServiceMemoryFilesJSONEndpoint_MethodNotAllowed(t *testing.T) {
@@ -767,6 +794,250 @@ func TestServiceMemoryFilesJSONEndpoint_MethodNotAllowed(t *testing.T) {
 	svc.Handler().ServeHTTP(rr, req)
 
 	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+}
+
+func TestServiceMemoryFileAPIEndpoint(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+	_, err = store.UpdateMemory(
+		context.Background(),
+		"openclaw",
+		"alice",
+		func(string) (string, error) {
+			return "# Memory\n\n- Alice prefers concise updates.\n", nil
+		},
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+		MemoryUserLabels: MemoryUserLabelResolverFunc(
+			func(appName string, userID string) string {
+				if appName == "openclaw" && userID == "alice" {
+					return "RTX alice.dev (Alice Chen)"
+				}
+				return ""
+			},
+		),
+	})
+	status := svc.memoryStatus()
+	require.Len(t, status.Files, 1)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		routeMemoryFileAPI+"?path="+url.QueryEscape(
+			status.Files[0].RelativePath,
+		),
+		nil,
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	var detail memoryFileDetail
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &detail))
+	require.Equal(t, "openclaw", detail.AppName)
+	require.Equal(t, "alice", detail.UserID)
+	require.Equal(
+		t,
+		"RTX alice.dev (Alice Chen)",
+		detail.UserLabel,
+	)
+	require.Equal(
+		t,
+		"# Memory\n\n- Alice prefers concise updates.\n",
+		detail.Content,
+	)
+}
+
+func TestServiceMemoryFileAPIEndpoint_UnconfiguredStore(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{MemoryBackend: "file"})
+
+	req := httptest.NewRequest(http.MethodGet, routeMemoryFileAPI, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	require.Contains(t, rr.Body.String(), "not configured")
+
+	req = httptest.NewRequest(http.MethodPost, routeMemoryFileAPI, nil)
+	rr = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	require.Contains(t, rr.Body.String(), "not configured")
+}
+
+func TestServiceMemoryFileAPIEndpoint_Save(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+	_, err = store.UpdateMemory(
+		context.Background(),
+		"openclaw",
+		"alice",
+		func(string) (string, error) {
+			return "# Memory\n\n- before\n", nil
+		},
+	)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+	status := svc.memoryStatus()
+	require.Len(t, status.Files, 1)
+
+	form := url.Values{
+		queryPath:         {status.Files[0].RelativePath},
+		formPromptContent: {"# Memory\n\n- after\n"},
+		formReturnPath:    {routeMemory},
+		formReturnTo:      {status.Files[0].CardID},
+	}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeMemoryFileAPI,
+		strings.NewReader(form.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	assertRedirectQueryValue(
+		t,
+		rr.Header().Get(headerLocation),
+		queryNotice,
+		"Saved memory file.",
+	)
+	require.Contains(
+		t,
+		rr.Header().Get(headerLocation),
+		"#"+status.Files[0].CardID,
+	)
+
+	raw, err := os.ReadFile(status.Files[0].Path)
+	require.NoError(t, err)
+	require.Equal(t, "# Memory\n\n- after\n", string(raw))
+}
+
+func TestServiceMemoryFileAPIEndpoint_SaveValidation(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeMemoryFileAPI,
+		strings.NewReader("%zz"),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	form := url.Values{
+		formPromptContent: {"# Memory\n\n- after\n"},
+		formReturnPath:    {routeMemory},
+		formReturnTo:      {"memory-file-demo"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routeMemoryFileAPI,
+		strings.NewReader(form.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	assertRedirectQueryValue(
+		t,
+		rr.Header().Get(headerLocation),
+		queryError,
+		"path is required",
+	)
+
+	form = url.Values{
+		queryPath:         {"/tmp/not-memory-file"},
+		formPromptContent: {"# Memory\n\n- after\n"},
+		formReturnPath:    {routeMemory},
+		formReturnTo:      {"memory-file-demo"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routeMemoryFileAPI,
+		strings.NewReader(form.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	assertRedirectQueryValue(
+		t,
+		rr.Header().Get(headerLocation),
+		queryError,
+		"invalid memory file path",
+	)
+}
+
+func TestServiceMemoryFileAPIEndpoint_MethodAndPathValidation(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, routeMemoryFileAPI, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+
+	req = httptest.NewRequest(
+		http.MethodGet,
+		routeMemoryFileAPI+"?path="+url.QueryEscape(
+			filepath.Join(root, "app", "user", "MEMORY.md"),
+		),
+		nil,
+	)
+	rr = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "invalid memory file path")
 }
 
 func TestServiceMemoryFileEndpoint(t *testing.T) {
@@ -1019,7 +1290,7 @@ func TestServiceHandlerRendersAdminPages(t *testing.T) {
 			name:    "memory",
 			path:    routeMemory,
 			title:   "Memory",
-			summary: "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory.",
+			summary: "Inspect durable memory storage, expand file-backed MEMORY.md scopes, and edit full files in place.",
 		},
 		{
 			name:    "automation",
@@ -1436,7 +1707,7 @@ func TestAdminHelpers_PageMetadataAndNavigation(t *testing.T) {
 			path:    routeMemory,
 			view:    viewMemory,
 			title:   "Memory",
-			summary: "Inspect durable memory storage, file-backed MEMORY.md scopes, and memory inventory.",
+			summary: "Inspect durable memory storage, expand file-backed MEMORY.md scopes, and edit full files in place.",
 		},
 		{
 			path:    routeAutomation,
@@ -3273,6 +3544,19 @@ func TestSkillInstallViewsFromStatus_TrimsValues(t *testing.T) {
 		out,
 	)
 	require.Nil(t, skillInstallViewsFromStatus(nil))
+}
+
+func assertRedirectQueryValue(
+	t *testing.T,
+	location string,
+	key string,
+	want string,
+) {
+	t.Helper()
+
+	target, err := url.Parse(location)
+	require.NoError(t, err)
+	require.Equal(t, want, target.Query().Get(key))
 }
 
 func TestServiceToggleSkillEndpointRequiresConfigPath(t *testing.T) {

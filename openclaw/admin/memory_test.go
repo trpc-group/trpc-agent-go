@@ -10,10 +10,12 @@
 package admin
 
 import (
+	"context"
 	"encoding/base64"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +30,13 @@ type memoryStoreStub struct {
 	readCount *atomic.Int32
 }
 
+type memoryStoreSaverStub struct {
+	root         string
+	savedPath    string
+	savedContent string
+	saveCount    int
+}
+
 func (s memoryStoreStub) Root() string {
 	return s.root
 }
@@ -37,6 +46,31 @@ func (s memoryStoreStub) ReadFile(string, int) (string, error) {
 		s.readCount.Add(1)
 	}
 	return "", nil
+}
+
+func (s *memoryStoreSaverStub) Root() string {
+	if s == nil {
+		return ""
+	}
+	return s.root
+}
+
+func (s *memoryStoreSaverStub) ReadFile(string, int) (string, error) {
+	return "", nil
+}
+
+func (s *memoryStoreSaverStub) SaveResolvedMemoryFile(
+	_ context.Context,
+	path string,
+	content string,
+) error {
+	if s == nil {
+		return nil
+	}
+	s.saveCount++
+	s.savedPath = path
+	s.savedContent = content
+	return nil
 }
 
 func TestMemoryStatusWithFiles_ReportsStoreErrors(t *testing.T) {
@@ -201,6 +235,57 @@ func TestMemoryFileViews_CoversFilesystemVariants(t *testing.T) {
 	require.Equal(t, userBlank, views[2].UserID)
 	require.Equal(t, "demo", views[2].AppName)
 	require.Contains(t, views[2].OpenURL, routeMemoryFile+"?path=")
+	require.Contains(t, views[2].LoadURL, routeMemoryFileAPI+"?path=")
+	require.NotEmpty(t, views[0].CardID)
+	require.Contains(t, views[0].SearchValue, "openclaw")
+	require.Contains(t, views[0].SearchValue, "alice")
+}
+
+func TestMemoryFileViewsWithResolver_AddsUserLabel(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	appDir := base64.RawURLEncoding.EncodeToString([]byte("openclaw"))
+	userDir := base64.RawURLEncoding.EncodeToString(
+		[]byte("wecom:dm:T00320026A"),
+	)
+	dir := filepath.Join(root, appDir, userDir)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(dir, memoryFileName),
+			[]byte("# Memory\n\n- note\n"),
+			0o600,
+		),
+	)
+
+	views, err := memoryFileViewsWithResolver(
+		store,
+		MemoryUserLabelResolverFunc(
+			func(appName string, userID string) string {
+				require.Equal(t, "openclaw", appName)
+				require.Equal(t, "wecom:dm:T00320026A", userID)
+				return "RTX wineguo (Guo Qizhou)"
+			},
+		),
+		true,
+	)
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Equal(
+		t,
+		"RTX wineguo (Guo Qizhou)",
+		views[0].UserLabel,
+	)
+	require.Contains(
+		t,
+		views[0].SearchValue,
+		"RTX wineguo (Guo Qizhou)",
+	)
 }
 
 func TestMemoryFileViews_SortsByModifiedAtAppAndUser(t *testing.T) {
@@ -338,4 +423,208 @@ func TestResolveMemoryFile_RejectsSymlinkEscapes(t *testing.T) {
 
 	_, err := resolveMemoryFile(root, "app/user/MEMORY.md")
 	require.ErrorContains(t, err, "memory file escapes memory root")
+}
+
+func TestReadMemoryFileDetailPreservesExactContent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	appDir := base64.RawURLEncoding.EncodeToString([]byte("app"))
+	userDir := base64.RawURLEncoding.EncodeToString([]byte("user"))
+	dir := filepath.Join(root, appDir, userDir)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	body := "# Memory\n\n- first line\n- second line\n"
+	require.NoError(
+		t,
+		os.WriteFile(filepath.Join(dir, memoryFileName), []byte(body), 0o600),
+	)
+
+	detail, err := readMemoryFileDetail(
+		root,
+		appDir+"/"+userDir+"/MEMORY.md",
+	)
+	require.NoError(t, err)
+	require.Equal(t, body, detail.Content)
+	require.Equal(t, "app", detail.AppName)
+	require.Equal(t, "user", detail.UserID)
+	require.Equal(t, appDir+"/"+userDir+"/"+memoryFileName, detail.RelativePath)
+	require.Contains(t, detail.OpenURL, routeMemoryFile+"?path=")
+	require.Contains(t, detail.LoadURL, routeMemoryFileAPI+"?path=")
+}
+
+func TestReadMemoryFileDetailWithResolver_AddsUserLabel(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	appDir := base64.RawURLEncoding.EncodeToString([]byte("app"))
+	userDir := base64.RawURLEncoding.EncodeToString(
+		[]byte("wecom:dm:T00320026A"),
+	)
+	dir := filepath.Join(root, appDir, userDir)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(dir, memoryFileName),
+			[]byte("# Memory\n"),
+			0o600,
+		),
+	)
+
+	detail, err := readMemoryFileDetailWithResolver(
+		root,
+		appDir+"/"+userDir+"/"+memoryFileName,
+		MemoryUserLabelResolverFunc(
+			func(appName string, userID string) string {
+				require.Equal(t, "app", appName)
+				require.Equal(t, "wecom:dm:T00320026A", userID)
+				return "RTX wineguo (Guo Qizhou)"
+			},
+		),
+	)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"RTX wineguo (Guo Qizhou)",
+		detail.UserLabel,
+	)
+}
+
+func TestReadMemoryFileDetailKeepsRequestedRelativePath(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions are not reliable on windows")
+	}
+
+	realRoot := t.TempDir()
+	linkRoot := filepath.Join(t.TempDir(), "memory-link")
+	require.NoError(t, os.Symlink(realRoot, linkRoot))
+
+	appDir := base64.RawURLEncoding.EncodeToString([]byte("app"))
+	userDir := base64.RawURLEncoding.EncodeToString([]byte("user"))
+	relPath := appDir + "/" + userDir + "/" + memoryFileName
+	dir := filepath.Join(realRoot, appDir, userDir)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(
+		t,
+		os.WriteFile(
+			filepath.Join(dir, memoryFileName),
+			[]byte("# Memory\n\n- line\n"),
+			0o600,
+		),
+	)
+
+	detail, err := readMemoryFileDetail(linkRoot, relPath)
+	require.NoError(t, err)
+	require.Equal(t, relPath, detail.RelativePath)
+	require.NotContains(t, detail.RelativePath, "..")
+}
+
+func TestReadMemoryFileDetailReadError(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-denied file reads are not reliable on windows")
+	}
+
+	root := t.TempDir()
+	appDir := base64.RawURLEncoding.EncodeToString([]byte("app"))
+	userDir := base64.RawURLEncoding.EncodeToString([]byte("user"))
+	dir := filepath.Join(root, appDir, userDir)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	path := filepath.Join(dir, memoryFileName)
+	require.NoError(t, os.WriteFile(path, []byte("secret"), 0o600))
+	require.NoError(t, os.Chmod(path, 0))
+	t.Cleanup(func() {
+		_ = os.Chmod(path, 0o600)
+	})
+
+	_, err := readMemoryFileDetail(root, appDir+"/"+userDir+"/"+memoryFileName)
+	require.ErrorContains(t, err, "read memory file")
+}
+
+func TestSaveMemoryFileWritesExactContent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.MemoryPath("app", "user")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("old"), 0o600))
+
+	next := "# Memory\n\n- updated\n"
+	relPath := filepath.ToSlash(strings.TrimPrefix(path, root+string(os.PathSeparator)))
+	require.NoError(
+		t,
+		saveMemoryFile(
+			context.Background(),
+			store,
+			relPath,
+			next,
+		),
+	)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, next, string(raw))
+
+	err = saveMemoryFile(
+		context.Background(),
+		store,
+		"../MEMORY.md",
+		"bad",
+	)
+	require.ErrorContains(t, err, "invalid memory file path")
+}
+
+func TestSaveMemoryFileUsesStoreSaver(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "app", "user")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	path := filepath.Join(dir, memoryFileName)
+	require.NoError(t, os.WriteFile(path, []byte("old"), 0o600))
+
+	store := &memoryStoreSaverStub{root: root}
+	next := "# Memory\n\n- updated\n"
+	require.NoError(
+		t,
+		saveMemoryFile(
+			context.Background(),
+			store,
+			"app/user/MEMORY.md",
+			next,
+		),
+	)
+	require.Equal(t, 1, store.saveCount)
+	require.Equal(t, path, store.savedPath)
+	require.Equal(t, next, store.savedContent)
+}
+
+func TestMemoryHelpers_HandleShortAndEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	appName, userID := memoryScopeFromRelativePath(memoryFileName)
+	require.Empty(t, appName)
+	require.Empty(t, userID)
+	require.Empty(t, memoryCardID(""))
+}
+
+func TestWriteMemoryFileAtomic_ValidatesPathAndDirectory(t *testing.T) {
+	t.Parallel()
+
+	err := writeMemoryFileAtomic("", []byte("data"))
+	require.ErrorContains(t, err, "memory file path is required")
+
+	err = writeMemoryFileAtomic(
+		filepath.Join(t.TempDir(), "missing", memoryFileName),
+		[]byte("data"),
+	)
+	require.ErrorContains(t, err, "create temp memory file")
 }
