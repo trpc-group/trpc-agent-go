@@ -177,3 +177,17 @@ func TestIsKnowledgeOnly(t *testing.T) {
 	require.True(t, IsKnowledgeOnly("unknown"))
 	require.True(t, IsKnowledgeOnly(""))
 }
+
+// TestIsExplicitKnowledgeOnly locks down the distinction that
+// llmagent's auto-fallback relies on: an empty profile still
+// normalizes to knowledge-only but counts as "unconfigured", while a
+// literal "knowledge_only" (in any casing) is an explicit opt-out of
+// the convenience fallbacks.
+func TestIsExplicitKnowledgeOnly(t *testing.T) {
+	require.True(t, IsExplicitKnowledgeOnly("knowledge_only"))
+	require.True(t, IsExplicitKnowledgeOnly(" KNOWLEDGE_ONLY "))
+	require.False(t, IsExplicitKnowledgeOnly(""))
+	require.False(t, IsExplicitKnowledgeOnly("   "))
+	require.False(t, IsExplicitKnowledgeOnly("full"))
+	require.False(t, IsExplicitKnowledgeOnly("unknown"))
+}

@@ -235,6 +235,56 @@ func TestStager_StageSkillAndLinks(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestStager_StageSkillWithOptionsReadOnly exercises the legacy
+// ReadOnly staging path used by the phased-out skill_run tool. The
+// default path is already covered by TestStager_StageSkillAndLinks;
+// this test additionally triggers readOnlyExceptSymlinks so the
+// framework does not silently regress the old contract, and gives
+// the chmod walk non-trivial coverage.
+func TestStager_StageSkillWithOptionsReadOnly(t *testing.T) {
+	ctx := context.Background()
+	rt := localexec.NewRuntime("")
+	eng := codeexecutor.NewEngine(rt, rt, rt)
+	ws, err := rt.CreateWorkspace(ctx, "stage-skill-ro", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rt.Cleanup(ctx, ws) })
+
+	root := t.TempDir()
+	skillRoot := filepath.Join(root, "echoer")
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(skillRoot, "nested"), 0o755,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillRoot, "SKILL.md"),
+		[]byte("body"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(skillRoot, "nested", "helper.sh"),
+		[]byte("echo hi"),
+		0o755,
+	))
+
+	st := New()
+	err = st.StageSkillWithOptions(
+		ctx, eng, ws, skillRoot, "echoer",
+		StageOptions{ReadOnly: true},
+	)
+	require.NoError(t, err)
+
+	// Regular files under the staged tree should have the write bit
+	// cleared after readOnlyExceptSymlinks runs.
+	fi, err := os.Stat(filepath.Join(ws.Path, "skills", "echoer", "SKILL.md"))
+	require.NoError(t, err)
+	require.Zero(t, fi.Mode()&0o200,
+		"read-only staging must clear the owner-write bit on regular files")
+
+	// Symlinks must stay intact.
+	fi, err = os.Lstat(filepath.Join(ws.Path, "skills", "echoer", "work"))
+	require.NoError(t, err)
+	require.NotZero(t, fi.Mode()&os.ModeSymlink)
+}
+
 func TestSkillStagingHelpers_EarlyReturns(t *testing.T) {
 	st := New()
 	ctx := context.Background()

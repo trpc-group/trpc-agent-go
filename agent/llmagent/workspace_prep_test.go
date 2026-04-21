@@ -25,6 +25,49 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+// TestWithWorkspaceBootstrap_SetsOptionsField exercises the public
+// llmagent.WithWorkspaceBootstrap helper. The option should flow the
+// caller-supplied spec through to Options.workspaceBootstrap
+// verbatim; that value is later consumed by workspacePrepOptions.
+func TestWithWorkspaceBootstrap_SetsOptionsField(t *testing.T) {
+	spec := codeexecutor.WorkspaceBootstrapSpec{
+		Files: []codeexecutor.WorkspaceFile{{
+			Target:  "work/seed.txt",
+			Content: []byte("seed"),
+		}},
+		Commands: []codeexecutor.WorkspaceCommand{{
+			Cmd:        "bash",
+			Args:       []string{"-lc", "true"},
+			MarkerPath: "work/.done",
+		}},
+	}
+
+	opts := &Options{}
+	WithWorkspaceBootstrap(spec)(opts)
+	require.Len(t, opts.workspaceBootstrap.Files, 1)
+	require.Len(t, opts.workspaceBootstrap.Commands, 1)
+	require.Equal(t,
+		"work/seed.txt",
+		opts.workspaceBootstrap.Files[0].Target,
+	)
+	require.Equal(t,
+		"work/.done",
+		opts.workspaceBootstrap.Commands[0].MarkerPath,
+	)
+}
+
+// TestWithWorkspacePreparersDisabled_Toggles validates both branches
+// of the disable switch. Keeping the API boolean-driven lets test
+// fixtures opt back into the legacy path without resorting to
+// unexported struct fields.
+func TestWithWorkspacePreparersDisabled_Toggles(t *testing.T) {
+	opts := &Options{}
+	WithWorkspacePreparersDisabled(true)(opts)
+	require.True(t, opts.disableWorkspacePreparers)
+	WithWorkspacePreparersDisabled(false)(opts)
+	require.False(t, opts.disableWorkspacePreparers)
+}
+
 // TestWorkspacePrepOptions_UsesInvocationRepoNotAgentDefault pins
 // down the invocation-level alignment: workspace_exec's
 // loaded-skills reconcile must use the repository the caller has
