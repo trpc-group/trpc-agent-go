@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -71,6 +72,8 @@ func New(ctx context.Context, threadID, runID string, opts ...Option) (Translato
 		graphNodeInterruptActivityEnabled:      options.graphNodeInterruptActivityEnabled,
 		graphNodeInterruptActivityTopLevelOnly: options.graphNodeInterruptActivityTopLevelOnly,
 		reasoningContentEnabled:                options.reasoningContentEnabled,
+		streamingToolResultActivityEnabled:     options.streamingToolResultActivityEnabled,
+		streamingToolResultContent:             make(map[string]string),
 	}, nil
 }
 
@@ -88,6 +91,8 @@ type translator struct {
 	graphNodeInterruptActivityEnabled      bool
 	graphNodeInterruptActivityTopLevelOnly bool
 	reasoningContentEnabled                bool
+	streamingToolResultActivityEnabled     bool
+	streamingToolResultContent             map[string]string
 }
 
 const skillRunArtifactsStateKey = skill.StateKeyArtifacts
@@ -153,11 +158,22 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 		events = append(events, toolCallEvents...)
 	}
 	if rsp.IsToolResultResponse() {
-		toolResultEvents, err := t.toolResultEvent(rsp, event.ID)
-		if err != nil {
-			return nil, err
+		if t.streamingToolResultActivityEnabled && rsp.IsPartial {
+			toolResultActivityEvents, err := t.toolResultActivityEvents(rsp)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, toolResultActivityEvents...)
+		} else {
+			toolResultEvents, err := t.toolResultEvent(rsp, event.ID)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, toolResultEvents...)
+			if t.streamingToolResultActivityEnabled {
+				t.clearToolResultActivityState(rsp)
+			}
 		}
-		events = append(events, toolResultEvents...)
 	}
 	if event.IsRunnerCompletion() {
 		finalizationEvents, err := t.PostRunFinalizationEvents(ctx)
@@ -569,6 +585,62 @@ func (t *translator) toolResultEvent(rsp *model.Response, messageID string) ([]a
 	}
 	t.lastMessageID = messageID
 	return events, nil
+}
+
+func (t *translator) toolResultActivityEvents(rsp *model.Response) ([]aguievents.Event, error) {
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return nil, nil
+	}
+	events := make([]aguievents.Event, 0, len(rsp.Choices))
+	for _, choice := range rsp.Choices {
+		if event, ok := t.toolResultActivityEvent(choice.Message.ToolID, choice.Message.Content); ok {
+			events = append(events, event)
+		}
+		if event, ok := t.toolResultActivityEvent(choice.Delta.ToolID, choice.Delta.Content); ok {
+			events = append(events, event)
+		}
+	}
+	return events, nil
+}
+
+func (t *translator) toolResultActivityEvent(toolCallID, chunk string) (aguievents.Event, bool) {
+	if toolCallID == "" || chunk == "" {
+		return nil, false
+	}
+	content := t.streamingToolResultContent[toolCallID] + chunk
+	t.streamingToolResultContent[toolCallID] = content
+	messageID := aguitool.StreamingToolResultActivityMessageID(toolCallID)
+	if len(content) == len(chunk) {
+		return aguievents.NewActivitySnapshotEvent(
+			messageID,
+			aguitool.StreamingToolResultActivityType,
+			map[string]any{
+				"toolCallId": toolCallID,
+				"content":    content,
+			},
+		), true
+	}
+	return aguievents.NewActivityDeltaEvent(
+		messageID,
+		aguitool.StreamingToolResultActivityType,
+		[]aguievents.JSONPatchOperation{
+			{Op: "add", Path: "/content", Value: content},
+		},
+	), true
+}
+
+func (t *translator) clearToolResultActivityState(rsp *model.Response) {
+	if t == nil || rsp == nil {
+		return
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Message.ToolID != "" {
+			delete(t.streamingToolResultContent, choice.Message.ToolID)
+		}
+		if choice.Delta.ToolID != "" {
+			delete(t.streamingToolResultContent, choice.Delta.ToolID)
+		}
+	}
 }
 
 // formatToolCallArguments formats a tool call arguments event to a string.

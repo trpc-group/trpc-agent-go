@@ -1,8 +1,8 @@
 # Stream Tool AG-UI Server
 
-This example demonstrates a minimal real `StreamableTool` wired into AG-UI with a custom translator.
+This example demonstrates a minimal real `StreamableTool` wired into AG-UI with the built-in streamed tool-result activity option.
 
-The tool simply counts upward and streams numeric progress updates:
+The tool simply counts upward and streams text progress updates:
 
 - partial tool output becomes `ACTIVITY_SNAPSHOT` and `ACTIVITY_DELTA`
 - the final tool output remains a standard `TOOL_CALL_RESULT`
@@ -12,9 +12,9 @@ This keeps the example focused on the event model instead of tool-specific busin
 ## What This Example Shows
 
 - A real `StreamableTool` built with `function.NewStreamableFunctionTool`.
-- A custom translator that turns partial `tool.response` events into `tool.execution` activity updates.
+- `agui.WithStreamingToolResultActivityEnabled(true)` rewriting partial `tool.response` into activity updates.
 - A final `TOOL_CALL_RESULT` that still carries the structured tool result for the next LLM turn and for history replay.
-- `MessagesSnapshot` enabled, so activity and final tool result can be replayed from `/history`.
+- `MessagesSnapshot` enabled, while `/history` only keeps the final tool result.
 
 ## Run
 
@@ -54,11 +54,10 @@ RUN_STARTED
 TOOL_CALL_START
 TOOL_CALL_ARGS
 TOOL_CALL_END
-ACTIVITY_SNAPSHOT(activityType="tool.execution")
-ACTIVITY_DELTA(activityType="tool.execution")
-ACTIVITY_DELTA(activityType="tool.execution")
+ACTIVITY_SNAPSHOT(activityType="tool.result.stream")
+ACTIVITY_DELTA(activityType="tool.result.stream")
+ACTIVITY_DELTA(activityType="tool.result.stream")
 ...
-ACTIVITY_DELTA(activityType="tool.execution")   # phase=completed
 TOOL_CALL_RESULT
 TEXT_MESSAGE_*
 RUN_FINISHED
@@ -68,6 +67,7 @@ This is the key behavior demonstrated by the example:
 
 - intermediate tool execution is rendered as activity updates
 - the final tool output remains a standard `TOOL_CALL_RESULT`
+- `/history` keeps only the final tool message for the tool call
 
 ## Inspect the Raw SSE Stream
 
@@ -91,10 +91,11 @@ curl -N http://127.0.0.1:8080/agui \
 Look for:
 
 - `TOOL_CALL_*` frames
-- `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` with `activityType: "tool.execution"`
+- `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` with `activityType: "tool.result.stream"`
 - a single final `TOOL_CALL_RESULT`
 
 ## Notes
 
 - The counting tool is intentionally small so the event flow is easy to inspect.
+- The streamed activity content is cumulative text progress, so the raw SSE output is easy to read without a custom translator.
 - The final tool result is still returned through the normal tool-response path, so the assistant can summarize the completed step count in its final answer.
