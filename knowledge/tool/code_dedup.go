@@ -24,13 +24,14 @@ import (
 // through a code search tool many times within a single user turn.
 const defaultMaxDedupKeysPerInvocation = 1024
 
+const codeDedupRuntimeStateKey = "tool:code_search:dedup_state"
+
 // codeDedupStore keeps a per-invocation set of already-seen code chunk keys.
-// It is intended to be embedded inside a single code search tool instance so
-// that multiple tool calls within the same invocation can avoid returning the
-// same AST chunk more than once.
+// It stores the per-turn state on the invocation itself, so the dedup cache
+// naturally disappears when the invocation finishes instead of accumulating on
+// the long-lived tool instance.
 type codeDedupStore struct {
-	// inv invocation id -> *dedupEntry
-	inv sync.Map
+	mu sync.Mutex
 	// maxKeys caps the number of unique keys tracked per invocation. When
 	// <= 0, defaultMaxDedupKeysPerInvocation is used.
 	maxKeys int
@@ -72,14 +73,14 @@ func (s *codeDedupStore) filter(ctx context.Context, resp *KnowledgeSearchRespon
 	if resp == nil || len(resp.Documents) == 0 {
 		return resp
 	}
-	invID := invocationIDFromContext(ctx)
-	if invID == "" {
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || invocation == nil {
 		// No invocation context means we cannot safely scope the dedup set;
 		// fall back to a no-op rather than leaking state across requests.
 		return resp
 	}
 
-	entry := s.loadOrCreate(invID)
+	entry := s.loadOrCreate(invocation)
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 
@@ -129,23 +130,21 @@ func (s *codeDedupStore) filter(ctx context.Context, resp *KnowledgeSearchRespon
 	return resp
 }
 
-func (s *codeDedupStore) loadOrCreate(invID string) *dedupEntry {
-	if v, ok := s.inv.Load(invID); ok {
-		return v.(*dedupEntry)
+func (s *codeDedupStore) loadOrCreate(invocation *agent.Invocation) *dedupEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if invocation.RunOptions.RuntimeState == nil {
+		invocation.RunOptions.RuntimeState = make(map[string]any, 1)
+	}
+	if v, ok := invocation.RunOptions.RuntimeState[codeDedupRuntimeStateKey]; ok {
+		if entry, ok := v.(*dedupEntry); ok && entry != nil {
+			return entry
+		}
 	}
 	e := &dedupEntry{keys: make(map[string]struct{})}
-	actual, _ := s.inv.LoadOrStore(invID, e)
-	return actual.(*dedupEntry)
-}
-
-// invocationIDFromContext extracts the invocation id from ctx. Returns empty
-// string when no invocation is attached.
-func invocationIDFromContext(ctx context.Context) string {
-	inv, ok := agent.InvocationFromContext(ctx)
-	if !ok || inv == nil {
-		return ""
-	}
-	return inv.InvocationID
+	invocation.RunOptions.RuntimeState[codeDedupRuntimeStateKey] = e
+	return e
 }
 
 // codeDedupKey returns a stable key identifying the underlying code chunk.

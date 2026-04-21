@@ -36,15 +36,16 @@ import (
 )
 
 const (
-	serverName         = "trpc-agent-code-search-mcp"
-	serverVersion      = "0.1.0"
-	defaultServerAddr  = ":3001"
-	defaultServerPath  = "/mcp"
-	repoURL            = "https://github.com/trpc-group/trpc-agent-go"
-	repoName           = "trpc-agent-go"
-	repoBranch         = "main"
-	maxResults         = 5
-	embeddingModelName = "server:277357"
+	serverName                = "trpc-agent-code-search-mcp"
+	serverVersion             = "0.1.0"
+	defaultServerAddr         = ":3001"
+	defaultServerPath         = "/mcp"
+	repoURL                   = "https://github.com/trpc-group/trpc-agent-go"
+	repoName                  = "trpc-agent-go"
+	repoBranch                = "main"
+	maxResults                = 5
+	embeddingModelNameEnvKey  = "EMBEDDING_MODEL_NAME"
+	defaultEmbeddingModelName = "server:277357"
 )
 
 // queryParamDescription tells the LLM what goes into the "query" field.
@@ -131,6 +132,10 @@ func run() error {
 	defer cancel()
 
 	storeType := util.VectorStoreType(util.VectorStorePGVector)
+	embeddingModelName := util.GetEnvOrDefault(
+		embeddingModelNameEnvKey,
+		defaultEmbeddingModelName,
+	)
 
 	skipLoad := *flagSkipLoad
 	truncateOld := *flagTruncateOld
@@ -144,7 +149,7 @@ func run() error {
 	log.Printf("vector store: %s, embedding model: %s", storeType, embeddingModelName)
 	log.Printf("skip-load: %t, truncate-old: %t", skipLoad, truncateOld)
 
-	kb, err := buildKnowledge(storeType)
+	kb, err := buildKnowledge(storeType, embeddingModelName)
 	if err != nil {
 		return fmt.Errorf("build knowledge: %w", err)
 	}
@@ -175,12 +180,6 @@ func run() error {
 	searchTool := knowledgetool.NewCodeSearchTool(
 		kb,
 		knowledgetool.WithCodeSearchMaxResults(maxResults),
-		knowledgetool.WithCodeSearchRepoInfos([]knowledgetool.CodeRepoInfo{
-			{
-				Name:        repoName,
-				Description: "tRPC agent framework for Go (this repository).",
-			},
-		}),
 	)
 	callable, ok := searchTool.(agenttool.CallableTool)
 	if !ok {
@@ -235,21 +234,24 @@ func run() error {
 	}
 }
 
-func buildKnowledge(storeType util.VectorStoreType) (*knowledge.BuiltinKnowledge, error) {
+func buildKnowledge(
+	storeType util.VectorStoreType,
+	embeddingModelName string,
+) (*knowledge.BuiltinKnowledge, error) {
 	emb := openaiembedder.New(openaiembedder.WithModel(embeddingModelName))
 
-	vs, err := util.NewVectorStoreByType(storeType)
+	vs, err := util.NewVectorStoreByTypeWithDimension(storeType, emb.GetDimensions())
 	if err != nil {
 		return nil, fmt.Errorf("create vector store: %w", err)
 	}
 
 	repoSource := repo.New(
-		nil,
 		repo.WithRepository(repo.Repository{
-			URL:      repoURL,
-			Branch:   repoBranch,
-			RepoName: repoName,
-			RepoURL:  repoURL,
+			URL:         repoURL,
+			Branch:      repoBranch,
+			RepoName:    repoName,
+			Description: "tRPC agent framework for Go (this repository).",
+			RepoURL:     repoURL,
 		}),
 		repo.WithFileExtensions([]string{".go", ".md"}),
 		repo.WithSkipSuffixes([]string{".pb.go", ".pb.grpc.go", ".trpc.go", "_mock.go", "_test.go"}),

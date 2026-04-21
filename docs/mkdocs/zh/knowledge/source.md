@@ -132,7 +132,6 @@ import (
 )
 
 repoSrc := reposource.New(
-    nil,
     reposource.WithRepository(
         reposource.Repository{
             URL:    "https://github.com/trpc-group/trpc-go",
@@ -184,7 +183,6 @@ repoSrc := reposource.New(
 
 ```go
 repoSrc := reposource.New(
-    nil,
     reposource.WithRepository(
         reposource.Repository{
             URL:    "https://github.com/trpc-group/trpc-go",

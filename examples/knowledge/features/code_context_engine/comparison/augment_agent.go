@@ -98,4 +98,10 @@ func (r *augmentCodeAgentRunner) Close() error {
 	return firstErr
 }
 
-const augmentCodeSearchAgentInstruction = `You are a repository code assistant.`
+const augmentCodeSearchAgentInstruction = `You are a repository code assistant.
+
+When calling augment_code_search, always use:
+- repo_owner: trpc-group
+- repo_name:  trpc-agent-go
+- branch:     main
+`

@@ -20,6 +20,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	reposource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	ctool "trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -105,6 +107,20 @@ func TestCodeSearchTool(t *testing.T) {
 		require.Contains(t, decl.Description, "repo-a")
 		require.NotNil(t, decl.InputSchema)
 		require.NotNil(t, decl.OutputSchema)
+	})
+
+	t.Run("declaration auto-derives repo descriptions from repo sources", func(t *testing.T) {
+		kb := knowledge.New(knowledge.WithSources([]source.Source{
+			reposource.New(reposource.WithRepository(reposource.Repository{
+				URL:         "https://example.com/repo-a.git",
+				RepoName:    "repo-a",
+				Description: "core framework",
+			})),
+		}))
+		searchTool := NewCodeSearchTool(kb)
+		decl := searchTool.Declaration()
+		require.Contains(t, decl.Description, "repo-a")
+		require.Contains(t, decl.Description, "core framework")
 	})
 
 	t.Run("passes configured max score and static filter through wrapper", func(t *testing.T) {

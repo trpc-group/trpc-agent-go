@@ -16,6 +16,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -60,6 +61,14 @@ type codeSearchOptions struct {
 	extraExcludeMetadataKeys  []string
 	dedupEnabled              bool
 	maxDedupKeysPerInvocation int
+}
+
+type sourceProvider interface {
+	Sources() []source.Source
+}
+
+type repoDescriptorProvider interface {
+	RepositoryDescriptor() (name, description string, ok bool)
 }
 
 // CodeEntityTypes contains all available entity types for filtering.
@@ -167,8 +176,8 @@ func WithCodeSearchExtraExcludeMetadataKeys(keys ...string) CodeSearchOption {
 // results. When enabled (the default), documents already returned by a
 // previous tool call within the same invocation are filtered out, so that
 // multi-round tool use within a single user turn does not keep re-serving the
-// same AST chunk to the LLM. Deduplication state is keyed by invocation ID
-// and is automatically scoped to a single user turn.
+// same AST chunk to the LLM. Deduplication state is stored on the invocation's
+// runtime state, so it is automatically scoped to a single user turn.
 func WithCodeSearchDedup(enabled bool) CodeSearchOption {
 	return func(o *codeSearchOptions) {
 		o.dedupEnabled = enabled
@@ -197,6 +206,9 @@ func NewCodeSearchTool(kb knowledge.Knowledge, opts ...CodeSearchOption) tool.To
 	}
 	for _, opt := range opts {
 		opt(o)
+	}
+	if len(o.repoInfos) == 0 {
+		o.repoInfos = deriveCodeRepoInfos(kb)
 	}
 
 	agenticFilterInfo := map[string][]any{
@@ -259,6 +271,10 @@ func buildCodeRepoSection(infos []CodeRepoInfo) string {
 	var sb strings.Builder
 	sb.WriteString("\n\n== AVAILABLE REPOSITORIES ==\n\n")
 	for _, info := range infos {
+		if strings.TrimSpace(info.Description) == "" {
+			sb.WriteString(fmt.Sprintf("- %s\n", info.Name))
+			continue
+		}
 		sb.WriteString(fmt.Sprintf("- %s: %s\n", info.Name, info.Description))
 	}
 	return sb.String()
@@ -270,6 +286,38 @@ func codeRepoNamesToAnySlice(infos []CodeRepoInfo) []any {
 		result[i] = info.Name
 	}
 	return result
+}
+
+func deriveCodeRepoInfos(kb knowledge.Knowledge) []CodeRepoInfo {
+	provider, ok := kb.(sourceProvider)
+	if !ok {
+		return nil
+	}
+	sources := provider.Sources()
+	if len(sources) == 0 {
+		return nil
+	}
+	infos := make([]CodeRepoInfo, 0, len(sources))
+	seen := make(map[string]struct{}, len(sources))
+	for _, src := range sources {
+		repoSrc, ok := src.(repoDescriptorProvider)
+		if !ok {
+			continue
+		}
+		name, description, ok := repoSrc.RepositoryDescriptor()
+		if !ok || strings.TrimSpace(name) == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		infos = append(infos, CodeRepoInfo{
+			Name:        name,
+			Description: strings.TrimSpace(description),
+		})
+	}
+	return infos
 }
 
 // codeSearchToolDescription is the single source of truth for the natural

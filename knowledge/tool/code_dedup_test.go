@@ -116,6 +116,31 @@ func TestCodeDedupFilter_NoInvocationIsNoOp(t *testing.T) {
 	require.Len(t, out.Documents, 2)
 }
 
+// TestCodeDedupFilter_StateIsScopedToInvocation ensures the dedup cache lives
+// on the invocation runtime state instead of the tool instance, so separate
+// invocations do not share suppression state even when their InvocationID
+// strings happen to match.
+func TestCodeDedupFilter_StateIsScopedToInvocation(t *testing.T) {
+	store := newCodeDedupStore()
+
+	invA := &agent.Invocation{InvocationID: "same-id"}
+	ctxA := agent.NewInvocationContext(context.Background(), invA)
+	store.filter(ctxA, &KnowledgeSearchResponse{
+		Documents: []*DocumentResult{newDedupDoc("pkg.A")},
+	})
+
+	entry, ok := invA.RunOptions.RuntimeState[codeDedupRuntimeStateKey]
+	require.True(t, ok, "dedup entry should be stored on invocation runtime state")
+	require.NotNil(t, entry)
+
+	invB := &agent.Invocation{InvocationID: "same-id"}
+	ctxB := agent.NewInvocationContext(context.Background(), invB)
+	out := store.filter(ctxB, &KnowledgeSearchResponse{
+		Documents: []*DocumentResult{newDedupDoc("pkg.A")},
+	})
+	require.Len(t, out.Documents, 1, "separate invocations must not share dedup state")
+}
+
 // TestCodeDedupKey_RepoPrefixIsolatesSameSymbolAcrossRepos verifies that the
 // dedup key includes trpc_ast_repo_name, so that the same full_name coming
 // from different repositories is NOT mistakenly collapsed.
