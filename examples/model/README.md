@@ -15,6 +15,7 @@ See also the focused sub-examples in this directory:
 - `retry/` for SDK-level retry configuration.
 - `switch/` for runtime model switching.
 - `failover/` for primary/backup model failover before the first non-error chunk.
+- `hedge/` for delayed or failure-triggered hedge requests across multiple candidates.
 
 ## Key Features
 
