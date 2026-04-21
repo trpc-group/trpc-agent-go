@@ -817,6 +817,24 @@ func TestServiceMemoryFileAPIEndpoint(t *testing.T) {
 	)
 }
 
+func TestServiceMemoryFileAPIEndpoint_UnconfiguredStore(t *testing.T) {
+	t.Parallel()
+
+	svc := New(Config{MemoryBackend: "file"})
+
+	req := httptest.NewRequest(http.MethodGet, routeMemoryFileAPI, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	require.Contains(t, rr.Body.String(), "not configured")
+
+	req = httptest.NewRequest(http.MethodPost, routeMemoryFileAPI, nil)
+	rr = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusNotFound, rr.Code)
+	require.Contains(t, rr.Body.String(), "not configured")
+}
+
 func TestServiceMemoryFileAPIEndpoint_Save(t *testing.T) {
 	t.Parallel()
 
@@ -870,6 +888,76 @@ func TestServiceMemoryFileAPIEndpoint_Save(t *testing.T) {
 	raw, err := os.ReadFile(status.Files[0].Path)
 	require.NoError(t, err)
 	require.Equal(t, "# Memory\n\n- after\n", string(raw))
+}
+
+func TestServiceMemoryFileAPIEndpoint_SaveValidation(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	svc := New(Config{
+		MemoryBackend: "file",
+		MemoryFiles:   store,
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		routeMemoryFileAPI,
+		strings.NewReader("%zz"),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+
+	form := url.Values{
+		formPromptContent: {"# Memory\n\n- after\n"},
+		formReturnPath:    {routeMemory},
+		formReturnTo:      {"memory-file-demo"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routeMemoryFileAPI,
+		strings.NewReader(form.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Contains(t, rr.Header().Get("Location"), "path+is+required")
+
+	form = url.Values{
+		queryPath:         {"/tmp/not-memory-file"},
+		formPromptContent: {"# Memory\n\n- after\n"},
+		formReturnPath:    {routeMemory},
+		formReturnTo:      {"memory-file-demo"},
+	}
+	req = httptest.NewRequest(
+		http.MethodPost,
+		routeMemoryFileAPI,
+		strings.NewReader(form.Encode()),
+	)
+	req.Header.Set(
+		"Content-Type",
+		"application/x-www-form-urlencoded",
+	)
+	rr = httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+	require.Equal(t, http.StatusSeeOther, rr.Code)
+	require.Contains(
+		t,
+		rr.Header().Get("Location"),
+		"invalid+memory+file+path",
+	)
 }
 
 func TestServiceMemoryFileAPIEndpoint_MethodAndPathValidation(t *testing.T) {

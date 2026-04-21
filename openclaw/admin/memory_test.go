@@ -370,6 +370,30 @@ func TestReadMemoryFileDetailPreservesExactContent(t *testing.T) {
 	require.Contains(t, detail.LoadURL, routeMemoryFileAPI+"?path=")
 }
 
+func TestReadMemoryFileDetailReadError(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-denied file reads are not reliable on windows")
+	}
+
+	root := t.TempDir()
+	appDir := base64.RawURLEncoding.EncodeToString([]byte("app"))
+	userDir := base64.RawURLEncoding.EncodeToString([]byte("user"))
+	dir := filepath.Join(root, appDir, userDir)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	path := filepath.Join(dir, memoryFileName)
+	require.NoError(t, os.WriteFile(path, []byte("secret"), 0o600))
+	require.NoError(t, os.Chmod(path, 0))
+	t.Cleanup(func() {
+		_ = os.Chmod(path, 0o600)
+	})
+
+	_, err := readMemoryFileDetail(root, appDir+"/"+userDir+"/"+memoryFileName)
+	require.ErrorContains(t, err, "read memory file")
+}
+
 func TestSaveMemoryFileWritesExactContent(t *testing.T) {
 	t.Parallel()
 
@@ -388,4 +412,26 @@ func TestSaveMemoryFileWritesExactContent(t *testing.T) {
 
 	err = saveMemoryFile(root, "../MEMORY.md", "bad")
 	require.ErrorContains(t, err, "invalid memory file path")
+}
+
+func TestMemoryHelpers_HandleShortAndEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	appName, userID := memoryScopeFromRelativePath(memoryFileName)
+	require.Empty(t, appName)
+	require.Empty(t, userID)
+	require.Empty(t, memoryCardID(""))
+}
+
+func TestWriteMemoryFileAtomic_ValidatesPathAndDirectory(t *testing.T) {
+	t.Parallel()
+
+	err := writeMemoryFileAtomic("", []byte("data"))
+	require.ErrorContains(t, err, "memory file path is required")
+
+	err = writeMemoryFileAtomic(
+		filepath.Join(t.TempDir(), "missing", memoryFileName),
+		[]byte("data"),
+	)
+	require.ErrorContains(t, err, "create temp memory file")
 }
