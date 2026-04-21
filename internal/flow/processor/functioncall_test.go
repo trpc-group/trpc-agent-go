@@ -3756,6 +3756,168 @@ func TestFilterForwardedInnerTextEvent_PreservesNonTextContentParts(
 	)
 }
 
+func TestInnerTextModeForTool_NilAndNamedTool(t *testing.T) {
+	const toolName = "inner-text-pref"
+
+	require.Equal(
+		t,
+		tool.InnerTextModeInclude,
+		innerTextModeForTool(nil),
+	)
+	require.Equal(
+		t,
+		tool.InnerTextModeInclude,
+		innerTextModeForTool(&mockStreamTool{name: toolName}),
+	)
+
+	baseTool := &innerTextPrefStreamTool{
+		name:      toolName,
+		innerText: tool.InnerTextModeExclude,
+	}
+	namedTools := itool.NewNamedToolSet(&mockToolSet{
+		tools: []tool.Tool{baseTool},
+	}).Tools(context.Background())
+	require.Len(t, namedTools, 1)
+	namedStreamTool, ok := namedTools[0].(tool.StreamableTool)
+	require.True(t, ok)
+	require.Equal(
+		t,
+		tool.InnerTextModeExclude,
+		innerTextModeForTool(namedStreamTool),
+	)
+}
+
+func TestShouldEmitFilteredInnerEvent_SupplementalSignals(t *testing.T) {
+	const errMessage = "boom"
+	tests := []struct {
+		name string
+		ev   *event.Event
+		want bool
+	}{
+		{
+			name: "nil event",
+			want: false,
+		},
+		{
+			name: "state delta",
+			ev: &event.Event{
+				StateDelta: map[string][]byte{"k": []byte("v")},
+			},
+			want: true,
+		},
+		{
+			name: "error event",
+			ev: &event.Event{
+				Response: &model.Response{
+					Error: &model.ResponseError{Message: errMessage},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "tool response object",
+			ev: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeToolResponse,
+				},
+			},
+			want: true,
+		},
+		{
+			name: "chat completion object",
+			ev: &event.Event{
+				Response: &model.Response{
+					Object: model.ObjectTypeChatCompletion,
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(
+				t,
+				tc.want,
+				shouldEmitFilteredInnerEvent(tc.ev),
+			)
+		})
+	}
+}
+
+func TestClearForwardedMessageText_NilMessage(t *testing.T) {
+	require.False(t, clearForwardedMessageText(nil))
+}
+
+func TestRemoveForwardedTextContentParts_NoText(t *testing.T) {
+	parts := []model.ContentPart{{
+		Type: model.ContentTypeImage,
+		Image: &model.Image{
+			URL: "https://example.com/image.png",
+		},
+	}}
+
+	filtered, removed := removeForwardedTextContentParts(parts)
+	require.False(t, removed)
+	require.Equal(t, parts, filtered)
+}
+
+func TestResponseHasForwardablePayload_SupplementalCases(t *testing.T) {
+	const errMessage = "boom"
+	finishStop := "stop"
+	partText := "visible"
+	tests := []struct {
+		name string
+		rsp  *model.Response
+		want bool
+	}{
+		{
+			name: "nil response",
+			want: false,
+		},
+		{
+			name: "response error",
+			rsp: &model.Response{
+				Error: &model.ResponseError{Message: errMessage},
+			},
+			want: true,
+		},
+		{
+			name: "message content parts",
+			rsp: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						ContentParts: []model.ContentPart{{
+							Type: model.ContentTypeText,
+							Text: &partText,
+						}},
+					},
+				}},
+			},
+			want: true,
+		},
+		{
+			name: "finish reason",
+			rsp: &model.Response{
+				Choices: []model.Choice{{
+					FinishReason: &finishStop,
+				}},
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(
+				t,
+				tc.want,
+				responseHasForwardablePayload(tc.rsp),
+			)
+		})
+	}
+}
+
 func TestMergeParallelToolCallResponseEvents_PropagatesSkipSummarization(t *testing.T) {
 	e1 := event.New("inv", "a", event.WithResponse(&model.Response{Model: "m1"}))
 	e2 := event.New("inv", "a", event.WithResponse(&model.Response{Model: "m1"}))
