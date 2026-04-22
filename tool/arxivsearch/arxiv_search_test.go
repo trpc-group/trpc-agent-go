@@ -385,7 +385,7 @@ func applyOpts(opts ...Option) (*arxiv.ClientConfig, *http.Client) {
 func TestWithHTTPClient_Set(t *testing.T) {
 	custom := &http.Client{Timeout: 7 * time.Second, Transport: http.DefaultTransport}
 	_, got := applyOpts(WithHTTPClient(custom))
-	assert.Equal(t, custom, got, "WithHTTPClient should pass through caller's client when no timeout override")
+	assert.Same(t, custom, got, "WithHTTPClient should pass through caller's client (no clone) when no timeout override")
 }
 
 func TestWithHTTPClient_NilFallsBackToDefault(t *testing.T) {
@@ -424,7 +424,7 @@ func TestWithTimeout_PreservesCustomTransport(t *testing.T) {
 	}
 	_, got := applyOpts(WithHTTPClient(original), WithTimeout(120*time.Second))
 	assert.Equal(t, 120*time.Second, got.Timeout)
-	assert.Equal(t, customTransport, got.Transport, "custom transport must be preserved after WithTimeout")
+	assert.Same(t, customTransport, got.Transport, "custom transport must be preserved (same object) after WithTimeout")
 }
 
 func TestWithTimeout_ZeroDisablesDefault(t *testing.T) {
@@ -450,11 +450,20 @@ func TestWithTimeout_OrderIndependent(t *testing.T) {
 // us exercise the Client.Timeout path deterministically - when the timeout
 // fires, net/http cancels the request context and RoundTrip returns its error.
 // No time.Sleep, no race, no real server.
+//
+// The short fail-safe branch guards against a regression where WithTimeout
+// stops being applied: without it, the context would never cancel and the test
+// would hang until the package-level go test timeout. The fail-safe returns a
+// distinct (non-DeadlineExceeded) error so the timeout assertion fails fast.
 type blockingRoundTripper struct{}
 
 func (blockingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	<-req.Context().Done()
-	return nil, req.Context().Err()
+	select {
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
+	case <-time.After(200 * time.Millisecond):
+		return nil, fmt.Errorf("blockingRoundTripper fail-safe: request context still active, WithTimeout may not be applied")
+	}
 }
 
 func TestWithTimeout_EnforcedAtCallPath(t *testing.T) {
