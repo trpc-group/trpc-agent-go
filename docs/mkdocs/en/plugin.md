@@ -503,6 +503,60 @@ defer runnerInstance.Close()
 
 Full example: [examples/plugin/messagemerger](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/messagemerger).
 
+### ErrorMessage
+
+`errormessage.New(opts...)` from `plugin/errormessage` rewrites the assistant-visible content of error events before Runner persists them into the session.
+
+When an event carries `Response.Error` but no `Choices[].Message.Content` — for example, the `stop_agent_error` event produced by `llmflow` for `agent.StopError`, or any raw `event.NewErrorEvent(...)` — Runner falls back to a generic English message: `"An error occurred during execution. Please contact the service provider."`. This plugin runs in `OnEvent` before that fallback and fills the content itself, so callers can surface a customised, localised, or tenant-specific message to end users. The structured `Response.Error` is left intact, so debugging and downstream consumers still see the original reason.
+
+The plugin only rewrites events where no valid content exists yet, so a partial assistant message produced before the failure is never overwritten.
+
+Static content:
+
+```go
+rewriter := errormessage.New(
+    errormessage.WithContent("The request was stopped. Please try again later."),
+)
+runnerInstance := runner.NewRunner(
+    "my-app",
+    agentInstance,
+    runner.WithPlugins(rewriter),
+)
+defer runnerInstance.Close()
+```
+
+Dynamic resolver (for example, friendlier copy for `stop_agent_error`):
+
+```go
+rewriter := errormessage.New(
+    errormessage.WithResolver(func(
+        _ context.Context,
+        _ *agent.Invocation,
+        e *event.Event,
+    ) (string, bool) {
+        if e == nil || e.Response == nil || e.Response.Error == nil {
+            return "", false
+        }
+        if e.Response.Error.Type == agent.ErrorTypeStopAgentError {
+            return "The request was stopped by policy. Please try again later.", true
+        }
+        return "Execution failed. Please try again later.", true
+    }),
+)
+```
+
+Returning `ok=false` or an empty string from the resolver leaves the event untouched, which means Runner's built-in fallback message still applies.
+
+Finish reason:
+
+By default the plugin sets the synthesised choice's `FinishReason` to `"error"`. Use `errormessage.WithFinishReason("stop")` or another value if your downstream protocol expects a different reason. If the original choice already has a `FinishReason`, the plugin preserves it and does not override downstream expectations.
+
+Scope:
+
+The plugin is installed via `runner.WithPlugins(...)` and runs on every event the runner processes, so it covers errors that agents emit on their event channel (for example, the `stop_agent_error` event produced by `llmflow` for `agent.StopError`, or any raw `event.NewErrorEvent(...)`). Errors returned synchronously from `agent.Run` (before any event channel is produced) are handled directly by Runner using its built-in fallback content, so this plugin does not rewrite the persisted content on that specific path.
+
+Full example: [examples/plugin/errormessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/errormessage).
+
 ### Guardrail
 
 `guardrail.New(...)` from `plugin/guardrail` is the top-level plugin that wires one or more guardrail capabilities into the runner.
@@ -808,10 +862,10 @@ The example includes verified scenarios for:
 - A clearly unsafe request that is blocked
 - A defensive analysis request that is allowed
 
-The repository currently includes Logging, GlobalInstruction, ToolCallID, and
-Guardrail as built-in plugins. Tool Approval, Prompt Injection, and Unsafe
-Intent are currently built-in capabilities under the Guardrail plugin.
-Additional plugins can be implemented as custom plugins.
+The repository currently includes Logging, GlobalInstruction, ToolCallID,
+MessageMerger, ErrorMessage, and Guardrail as built-in plugins. Tool Approval,
+Prompt Injection, and Unsafe Intent are currently built-in capabilities under
+the Guardrail plugin. Additional plugins can be implemented as custom plugins.
 
 ## Writing Your Own Plugin
 
