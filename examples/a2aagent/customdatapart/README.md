@@ -59,6 +59,6 @@ You should see two kinds of output:
 - Normal assistant text:
   `🤖 Assistant: ...`
 - Custom mapper output:
-  `🧩 Agent mapper(custom_data): Curstom data part data`
+  `🧩 Agent mapper(custom_data): Custom data part data`
 
 The second line is produced after the client-side mapper restores the custom payload into `event.Extensions` and the local UI reads it back.

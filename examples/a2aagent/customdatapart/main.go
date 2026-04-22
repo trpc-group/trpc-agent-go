@@ -46,7 +46,7 @@ const (
 	customDataPartType = "custom_data"
 	customDataPartKind = "custom_part_kind"
 	customEventExtKey  = "trpc.a2a.custom_payload"
-	customEventHint    = "Curstom data part data"
+	customEventHint    = "Custom data part data"
 	colorReset         = "\033[0m"
 	colorCyan          = "\033[36m"
 )
@@ -184,10 +184,30 @@ func (w *customDataPartWrapper) Run(ctx context.Context, invocation *agent.Invoc
 	go func() {
 		defer close(out)
 		hasVisibleContent := false
-		for evt := range baseCh {
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			var evt *event.Event
+			var ok bool
+			select {
+			case <-ctx.Done():
+				return
+			case evt, ok = <-baseCh:
+			}
+			if !ok {
+				break
+			}
 			// Always forward the original event stream unchanged so the wrapped
 			// agent keeps its normal behavior.
-			out <- evt
+			if ctx.Err() != nil {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case out <- evt:
+			}
 			if eventContent(evt) != "" {
 				hasVisibleContent = true
 			}
@@ -198,7 +218,14 @@ func (w *customDataPartWrapper) Run(ctx context.Context, invocation *agent.Invoc
 		}
 		// Emit the custom event only after the original response stream finishes,
 		// so the UI prints the structured payload after the normal assistant text.
-		out <- newCustomDataPartEvent(invocation.InvocationID, w.name, customEventHint)
+		if ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case out <- newCustomDataPartEvent(invocation.InvocationID, w.name, customEventHint):
+		}
 	}()
 	return out, nil
 }

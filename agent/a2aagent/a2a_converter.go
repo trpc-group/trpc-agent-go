@@ -12,6 +12,7 @@ package a2aagent
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -438,20 +439,24 @@ func parseA2AMessagePartsWithMappers(
 ) *parseResult {
 	parts := msg.Parts
 	result := &parseResult{}
+	var textBuilder strings.Builder
+	var reasoningBuilder strings.Builder
 
 	for _, part := range parts {
 		switch part.GetKind() {
 		case protocol.KindText:
 			text, isThought := processTextPart(part)
 			if isThought {
-				result.reasoningContent += text
+				reasoningBuilder.WriteString(text)
 			} else {
-				result.textContent += text
+				textBuilder.WriteString(text)
 			}
 		case protocol.KindData:
+			flushParseResultText(result, &textBuilder, &reasoningBuilder)
 			processDataPartWithMappers(part, result, mappers)
 		}
 	}
+	flushParseResultText(result, &textBuilder, &reasoningBuilder)
 
 	if msg.Metadata != nil {
 		if objectType, ok := msg.Metadata[ia2a.MessageMetadataObjectTypeKey].(string); ok {
@@ -477,10 +482,32 @@ func parseA2AMessagePartsWithMappers(
 	return result
 }
 
+func flushParseResultText(
+	result *parseResult,
+	textBuilder *strings.Builder,
+	reasoningBuilder *strings.Builder,
+) {
+	if result == nil {
+		return
+	}
+	if textBuilder != nil && textBuilder.Len() > 0 {
+		result.textContent += textBuilder.String()
+		textBuilder.Reset()
+	}
+	if reasoningBuilder != nil && reasoningBuilder.Len() > 0 {
+		result.reasoningContent += reasoningBuilder.String()
+		reasoningBuilder.Reset()
+	}
+}
+
 // processTextPart processes a TextPart and returns its content and whether it's a thought
 func processTextPart(part protocol.Part) (text string, isThought bool) {
-	p, ok := part.(*protocol.TextPart)
-	if !ok {
+	var p *protocol.TextPart
+	if textPart, ok := part.(*protocol.TextPart); ok {
+		p = textPart
+	} else if textPart, ok := part.(protocol.TextPart); ok {
+		p = &textPart
+	} else {
 		log.Warnf("unexpected part type: %T", part)
 		return "", false
 	}
@@ -514,8 +541,12 @@ func processDataPartWithMappers(
 	result *parseResult,
 	mappers []A2ADataPartMapper,
 ) {
-	d, ok := part.(*protocol.DataPart)
-	if !ok {
+	var d *protocol.DataPart
+	if dataPart, ok := part.(*protocol.DataPart); ok {
+		d = dataPart
+	} else if dataPart, ok := part.(protocol.DataPart); ok {
+		d = &dataPart
+	} else {
 		return
 	}
 

@@ -1577,6 +1577,28 @@ func TestProcessDataPartWithMappers_CustomMapperHandlesUnknownType(t *testing.T)
 	}
 }
 
+func TestProcessDataPartWithMappers_ValueTypedBuiltInDataPart(t *testing.T) {
+	result := &parseResult{}
+	part := protocol.NewDataPart(map[string]any{
+		ia2a.ToolCallFieldID:   "call-1",
+		ia2a.ToolCallFieldType: "function",
+		ia2a.ToolCallFieldName: "lookup",
+		ia2a.ToolCallFieldArgs: `{"query":"value-part"}`,
+	})
+	part.Metadata = map[string]any{
+		"type": ia2a.DataPartMetadataTypeFunctionCall,
+	}
+
+	processDataPartWithMappers(part, result, nil)
+
+	if len(result.toolCalls) != 1 {
+		t.Fatalf("expected built-in handling for value DataPart, got %d tool calls", len(result.toolCalls))
+	}
+	if result.toolCalls[0].Function.Name != "lookup" {
+		t.Fatalf("unexpected tool call name: %s", result.toolCalls[0].Function.Name)
+	}
+}
+
 func TestParseA2AMessagePartsWithMappers_CustomMapperPreservesMappedText(t *testing.T) {
 	msg := &protocol.Message{
 		Parts: []protocol.Part{
@@ -1601,6 +1623,35 @@ func TestParseA2AMessagePartsWithMappers_CustomMapperPreservesMappedText(t *test
 
 	if result.textContent != "mapped-by-custom" {
 		t.Fatalf("expected mapper-mapped text content, got %q", result.textContent)
+	}
+}
+
+func TestParseA2AMessagePartsWithMappers_FlushesTextAroundValueTypedCustomDataPart(t *testing.T) {
+	customPart := protocol.NewDataPart(map[string]any{"business": "payload"})
+	customPart.Metadata = map[string]any{
+		"type": "biz_custom",
+	}
+
+	msg := &protocol.Message{
+		Parts: []protocol.Part{
+			protocol.NewTextPart("prefix "),
+			customPart,
+			protocol.NewTextPart("suffix"),
+		},
+	}
+
+	result := parseA2AMessagePartsWithMappers(msg, []A2ADataPartMapper{
+		func(p *protocol.DataPart, out *A2ADataPartMappingResult) (bool, error) {
+			if got := out.GetTextContent(); got != "prefix " {
+				t.Fatalf("expected mapper to observe prior text, got %q", got)
+			}
+			out.SetTextContent(out.GetTextContent() + "mapped ")
+			return true, nil
+		},
+	})
+
+	if result.textContent != "prefix mapped suffix" {
+		t.Fatalf("expected text from before and after mapper to be preserved, got %q", result.textContent)
 	}
 }
 
