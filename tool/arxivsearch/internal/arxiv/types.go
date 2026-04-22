@@ -10,6 +10,7 @@
 package arxiv
 
 import (
+	"net/http"
 	"time"
 )
 
@@ -80,6 +81,15 @@ type ClientConfig struct {
 	PageSize     int           `json:"page_size"`
 	DelaySeconds time.Duration `json:"delay_seconds"`
 	NumRetries   int           `json:"num_retries"`
+	// HTTPClient is the optional underlying HTTP client. If nil, a default
+	// client with a 30s timeout is used. The caller's *http.Client is never
+	// mutated; a shallow copy is taken when Timeout overrides are applied.
+	HTTPClient *http.Client `json:"-"`
+	// Timeout, when non-nil, overrides the HTTP request timeout on the
+	// underlying HTTPClient. A nil pointer means "not set" (use the
+	// HTTPClient's own Timeout). A non-nil zero value explicitly disables
+	// the timeout (Go http.Client treats Timeout==0 as "no deadline").
+	Timeout *time.Duration `json:"-"`
 }
 
 // DefaultConfig returns the default configuration for the arXiv client
