@@ -204,9 +204,7 @@ Some “after” hooks can override:
 - **AfterModel** can return a custom response to replace the model response.
 - **AfterTool** can return a custom result to replace the tool result.
 
-!!! note "Caveats for multi-agent (ChainAgent, ParallelAgent,
-CycleAgent, Graph agent-nodes)"
-
+!!! note "Caveats for multi-agent (ChainAgent, ParallelAgent, CycleAgent, Graph agent-nodes)"
     `BeforeAgent` / `AfterAgent` fire **once per sub-agent invocation**, not
     just once for the root Runner run. A hook that assumes "one call per
     turn" must look at `args.Invocation.Agent` (or `AgentName`) to

@@ -4542,7 +4542,6 @@ graphAgent, _ := graphagent.New("workflow", g,
 ```
 
 !!! note "Runner 级插件与 Graph Agent 节点"
-
     通过 `graphagent.WithAgentCallbacks` 注册的回调，只作用在 **GraphAgent 自身**
     这一层。如果你在 Runner 上注册了 `PluginManager`（即 Runner 插件的
     `BeforeAgent` / `AfterAgent`），Graph Agent 节点中用

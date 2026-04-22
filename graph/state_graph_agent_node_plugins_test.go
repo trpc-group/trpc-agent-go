@@ -165,10 +165,10 @@ func invokeAgentNode(
 	fn := NewAgentNodeFunc(sub.Info().Name, opts...)
 	out, err := fn(ctx, state)
 
-	// Give background goroutines (e.g. AfterAgent wrapper) a short moment to
-	// flush. In practice processAgentEventStream drains before returning.
-	time.Sleep(10 * time.Millisecond)
-
+	// fn returns only after processAgentEventStream drains the sub-agent
+	// event channel, which already accounts for events appended by the
+	// AfterAgent wrapper goroutine (close-on-completion). Drain the parent
+	// event channel directly without a timing-dependent wait.
 	events := drainEvents(ch)
 	return out, err, events
 }
@@ -306,11 +306,11 @@ func TestAgentNode_Stage2_BeforeAgent_CustomResponse_ShortCircuits(t *testing.T)
 
 	// The short-circuit response should be reflected as the node's last
 	// response value (downstream nodes read StateKeyLastResponse).
-	if st, ok := out.(State); ok {
-		if last, ok := st[StateKeyLastResponse].(string); ok {
-			require.Equal(t, "early", last)
-		}
-	}
+	st, ok := out.(State)
+	require.True(t, ok, "expected node output to be a graph.State")
+	last, ok := st[StateKeyLastResponse].(string)
+	require.True(t, ok, "expected StateKeyLastResponse to be a string")
+	require.Equal(t, "early", last)
 }
 
 // -------- Group C: AfterAgent ----------------------------------------------
@@ -362,12 +362,12 @@ func TestAgentNode_Stage2_AfterAgent_CustomResponse_AppendedAndOverrides(t *test
 	require.Contains(t, responseTexts, "orig")
 	require.Contains(t, responseTexts, "after")
 
-	if st, ok := out.(State); ok {
-		if last, ok := st[StateKeyLastResponse].(string); ok {
-			require.Equal(t, "after", last,
-				"AfterAgent CustomResponse must override lastResponse")
-		}
-	}
+	st, ok := out.(State)
+	require.True(t, ok, "expected node output to be a graph.State")
+	last, ok := st[StateKeyLastResponse].(string)
+	require.True(t, ok, "expected StateKeyLastResponse to be a string")
+	require.Equal(t, "after", last,
+		"AfterAgent CustomResponse must override lastResponse")
 }
 
 // C3: AfterAgent returning an error appends an error event at the tail of

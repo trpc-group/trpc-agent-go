@@ -239,9 +239,7 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 - **AfterModel**：可以返回自定义响应，替换模型响应。
 - **AfterTool**：可以返回自定义结果，替换工具结果。
 
-!!! note "多 Agent 场景下的注意事项（ChainAgent、ParallelAgent、
-CycleAgent、Graph Agent 节点）"
-
+!!! note "多 Agent 场景下的注意事项（ChainAgent、ParallelAgent、CycleAgent、Graph Agent 节点）"
     `BeforeAgent` / `AfterAgent` 会**为每一个子 Agent invocation 各触发一次**，
     而不是每个 Runner 执行只触发一次。如果你的 Hook 假设“一次 turn 只调用一次”，
     请通过 `args.Invocation.Agent`（或 `AgentName`）来区分当前是哪一层。
