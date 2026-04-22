@@ -167,7 +167,7 @@ func fromEventOverride(ev *agentevent.Event) (Metadata, bool) {
 	}
 	var metadata Metadata
 	if err := json.Unmarshal(raw, &metadata); err != nil {
-		return Metadata{}, true
+		return Metadata{}, false
 	}
 	return metadata, true
 }

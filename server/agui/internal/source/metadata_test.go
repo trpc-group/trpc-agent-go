@@ -50,6 +50,26 @@ func TestFromEventOverrideSuppressesFallback(t *testing.T) {
 	assert.Equal(t, Metadata{}, metadata)
 }
 
+func TestFromEventMalformedOverrideFallsBackToFields(t *testing.T) {
+	ev := agentevent.NewResponseEvent("inv-1", "member-a", &model.Response{})
+	ev.ID = "evt-1"
+	ev.ParentInvocationID = "parent-1"
+	ev.Branch = "root.member-a"
+	ev.Extensions = map[string]json.RawMessage{
+		ExtensionKey: json.RawMessage("{"),
+	}
+
+	metadata, ok := FromEvent(ev)
+	require.True(t, ok)
+	assert.Equal(t, Metadata{
+		EventID:            "evt-1",
+		Author:             "member-a",
+		InvocationID:       "inv-1",
+		ParentInvocationID: "parent-1",
+		Branch:             "root.member-a",
+	}, metadata)
+}
+
 func TestFromRawEventSupportsMapPayload(t *testing.T) {
 	metadata, ok := FromRawEvent(map[string]any{
 		"eventId":            "evt-1",
