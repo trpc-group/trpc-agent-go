@@ -319,6 +319,12 @@ func (t *Tool) StateDeltaForInvocation(
 	args []byte,
 	_ []byte,
 ) map[string][]byte {
+	// The function-call response processor only reaches here after
+	// Call() has already returned successfully, so args is guaranteed
+	// to decode and validate. We re-check defensively and silently
+	// drop the delta on mismatch: if this path ever fires it indicates
+	// a framework-level bug, and corrupting the canonical session
+	// store is strictly worse than losing one turn of persistence.
 	var in writeInput
 	if err := json.Unmarshal(args, &in); err != nil {
 		return nil
@@ -332,9 +338,13 @@ func (t *Tool) StateDeltaForInvocation(
 	}
 	key := stateKey(t.opts.stateKeyPrefix, branch)
 
+	// Mirror the clear-on-all-done normalisation performed by Call():
+	// an empty (non-nil) slice so that the persisted state serialises
+	// to []  - keeping the in-run SetState and the canonical store
+	// byte-identical regardless of backend (inmemory, Redis, ...).
 	newTodos := in.Todos
 	if t.opts.clearOnAllDone && allCompleted(newTodos) {
-		newTodos = nil
+		newTodos = []Item{}
 	}
 	encoded, err := json.Marshal(newTodos)
 	if err != nil {

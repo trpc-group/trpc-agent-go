@@ -177,6 +177,36 @@ func TestCall_ClearOnAllDone(t *testing.T) {
 	}
 }
 
+// TestStateDeltaForInvocation_ClearOnAllDone guards against the
+// canonical session store receiving "null" bytes when clear-on-all-done
+// fires. Call() persists `[]` via SetState, and StateDeltaForInvocation
+// must publish a matching delta so every backend (inmemory, Redis, ...)
+// converges on the same on-disk shape.
+func TestStateDeltaForInvocation_ClearOnAllDone(t *testing.T) {
+	tl := New()
+	inv := &agent.Invocation{AgentName: "tester", Session: session.NewSession("app", "user", "sid")}
+
+	args, err := json.Marshal(writeInput{Todos: []Item{
+		{Content: "a", ActiveForm: "Aing", Status: StatusCompleted},
+		{Content: "b", ActiveForm: "Bing", Status: StatusCompleted},
+	}})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+
+	delta := tl.StateDeltaForInvocation(inv, "", args, nil)
+	if delta == nil {
+		t.Fatalf("expected non-nil state delta")
+	}
+	encoded, ok := delta[stateKey(DefaultStateKeyPrefix, "")]
+	if !ok {
+		t.Fatalf("state delta missing default key, got %v", delta)
+	}
+	if string(encoded) != `[]` {
+		t.Fatalf("expected cleared state to encode as `[]`, got %q", encoded)
+	}
+}
+
 func TestCall_NudgeHook(t *testing.T) {
 	ctx, _ := newTestCtx("")
 	called := false
