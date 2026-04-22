@@ -197,6 +197,20 @@ func TestAggregateInvocationsRejectsUnknownAggregator(t *testing.T) {
 	assert.Contains(t, err.Error(), `unsupported invocations aggregator "missing"`)
 }
 
+func TestAggregateHelpersPreserveTemplateConfigErrors(t *testing.T) {
+	e := New().(*templateEvaluator)
+	_, err := e.AggregateSamples(context.Background(), nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing llm judge criterion")
+	_, err = e.AggregateInvocations(context.Background(), nil, &metric.EvalMetric{
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "template is nil")
+}
+
 func TestJudgeTemplateOptionsRejectsMissingLLMJudgeCriterion(t *testing.T) {
 	_, err := judgeTemplateOptions(nil)
 	require.Error(t, err)
@@ -206,18 +220,15 @@ func TestJudgeTemplateOptionsRejectsMissingLLMJudgeCriterion(t *testing.T) {
 func TestTemplateEvaluatorNameHelpers(t *testing.T) {
 	assert.Equal(t, templateresolver.SampleAggregatorMajorityVoteName, sampleAggregatorName(nil))
 	assert.Equal(t, templateresolver.InvocationAggregatorAverageName, invocationAggregatorName(nil))
-	assert.Equal(t, "custom_sample", sampleAggregatorName(buildTemplateMetric(
+	templateOptions, err := judgeTemplateOptions(buildTemplateMetric(
 		"Answer: {{answer}}",
 		templateresolver.ResponseScorerSingleScoreName,
 		"custom_sample",
-		"",
-	)))
-	assert.Equal(t, "custom_invocation", invocationAggregatorName(buildTemplateMetric(
-		"Answer: {{answer}}",
-		templateresolver.ResponseScorerSingleScoreName,
-		"",
 		"custom_invocation",
-	)))
+	))
+	require.NoError(t, err)
+	assert.Equal(t, "custom_sample", sampleAggregatorName(templateOptions))
+	assert.Equal(t, "custom_invocation", invocationAggregatorName(templateOptions))
 }
 
 func buildTemplateMetric(promptText string, responseScorerName string,

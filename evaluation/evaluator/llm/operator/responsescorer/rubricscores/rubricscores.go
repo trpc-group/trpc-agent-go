@@ -23,9 +23,9 @@ import (
 )
 
 type rubricScoreItem struct {
-	ID     string  `json:"id"`
-	Score  float64 `json:"score"`
-	Reason string  `json:"reason"`
+	ID     *string  `json:"id"`
+	Score  *float64 `json:"score"`
+	Reason *string  `json:"reason"`
 }
 
 type rubricScoresResponse struct {
@@ -56,19 +56,25 @@ func (s *rubricScoresResponseScorer) ScoreBasedOnResponse(ctx context.Context, r
 	reasons := make([]string, 0, len(payload.RubricScores))
 	total := 0.0
 	for _, item := range payload.RubricScores {
-		if strings.TrimSpace(item.ID) == "" {
+		if item.ID == nil || strings.TrimSpace(*item.ID) == "" {
 			return nil, fmt.Errorf("rubric score id is empty")
 		}
-		if item.Score < 0 || item.Score > 1 {
+		if item.Score == nil {
+			return nil, fmt.Errorf("rubric score is required")
+		}
+		if item.Reason == nil {
+			return nil, fmt.Errorf("rubric score reason is required")
+		}
+		if *item.Score < 0 || *item.Score > 1 {
 			return nil, fmt.Errorf("rubric score must be between 0 and 1")
 		}
 		result.RubricScores = append(result.RubricScores, &evalresult.RubricScore{
-			ID:     item.ID,
-			Score:  item.Score,
-			Reason: item.Reason,
+			ID:     *item.ID,
+			Score:  *item.Score,
+			Reason: *item.Reason,
 		})
-		total += item.Score
-		reasons = append(reasons, item.Reason)
+		total += *item.Score
+		reasons = append(reasons, *item.Reason)
 	}
 	result.Score = total / float64(len(payload.RubricScores))
 	result.Reason = strings.Join(reasons, "\n")

@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
@@ -66,6 +67,8 @@ func main() {
 }
 
 func runExample(ctx context.Context, factory evaluatorFactory, opts runOptions) error {
+	restoreModelName := setModelNameEnv(opts.ModelName)
+	defer restoreModelName()
 	agentEvaluator, err := factory(appName, opts)
 	if err != nil {
 		return fmt.Errorf("create evaluator: %w", err)
@@ -77,6 +80,21 @@ func runExample(ctx context.Context, factory evaluatorFactory, opts runOptions) 
 	}
 	printSummary(result, opts.OutputDir)
 	return nil
+}
+
+func setModelNameEnv(modelName string) func() {
+	if modelName == "" {
+		return func() {}
+	}
+	originalValue, existed := os.LookupEnv("MODEL_NAME")
+	_ = os.Setenv("MODEL_NAME", modelName)
+	return func() {
+		if existed {
+			_ = os.Setenv("MODEL_NAME", originalValue)
+			return
+		}
+		_ = os.Unsetenv("MODEL_NAME")
+	}
 }
 
 func newLocalEvaluator(appName string, opts runOptions) (exampleEvaluator, error) {

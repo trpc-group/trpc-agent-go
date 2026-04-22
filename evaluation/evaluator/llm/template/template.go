@@ -80,7 +80,11 @@ func (e *templateEvaluator) ScoreBasedOnResponse(ctx context.Context, response *
 // AggregateSamples aggregates samples with the configured strategy.
 func (e *templateEvaluator) AggregateSamples(ctx context.Context, samples []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
-	aggregator, err := templateresolver.ResolveSamplesAggregator(sampleAggregatorName(evalMetric))
+	templateOptions, err := judgeTemplateOptions(evalMetric)
+	if err != nil {
+		return nil, err
+	}
+	aggregator, err := templateresolver.ResolveSamplesAggregator(sampleAggregatorName(templateOptions))
 	if err != nil {
 		return nil, err
 	}
@@ -90,7 +94,11 @@ func (e *templateEvaluator) AggregateSamples(ctx context.Context, samples []*eva
 // AggregateInvocations aggregates invocation results with the configured strategy.
 func (e *templateEvaluator) AggregateInvocations(ctx context.Context, results []*evaluator.PerInvocationResult,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
-	aggregator, err := templateresolver.ResolveInvocationsAggregator(invocationAggregatorName(evalMetric))
+	templateOptions, err := judgeTemplateOptions(evalMetric)
+	if err != nil {
+		return nil, err
+	}
+	aggregator, err := templateresolver.ResolveInvocationsAggregator(invocationAggregatorName(templateOptions))
 	if err != nil {
 		return nil, err
 	}
@@ -108,17 +116,15 @@ func responseScorerName(evalMetric *metric.EvalMetric) (string, error) {
 	return templateOptions.ResponseScorerName, nil
 }
 
-func sampleAggregatorName(evalMetric *metric.EvalMetric) string {
-	templateOptions, err := judgeTemplateOptions(evalMetric)
-	if err != nil || templateOptions.SampleAggregatorName == "" {
+func sampleAggregatorName(templateOptions *metricllm.JudgeTemplateOptions) string {
+	if templateOptions == nil || templateOptions.SampleAggregatorName == "" {
 		return templateresolver.SampleAggregatorMajorityVoteName
 	}
 	return templateOptions.SampleAggregatorName
 }
 
-func invocationAggregatorName(evalMetric *metric.EvalMetric) string {
-	templateOptions, err := judgeTemplateOptions(evalMetric)
-	if err != nil || templateOptions.InvocationAggregatorName == "" {
+func invocationAggregatorName(templateOptions *metricllm.JudgeTemplateOptions) string {
+	if templateOptions == nil || templateOptions.InvocationAggregatorName == "" {
 		return templateresolver.InvocationAggregatorAverageName
 	}
 	return templateOptions.InvocationAggregatorName

@@ -93,6 +93,27 @@ func TestRunExampleReturnsEvaluateError(t *testing.T) {
 	assert.Contains(t, err.Error(), "evaluate")
 }
 
+func TestRunExampleSetsModelNameForJudge(t *testing.T) {
+	t.Setenv("MODEL_NAME", "original-model")
+	stub := &stubEvaluator{
+		result: &evaluation.EvaluationResult{
+			AppName:       appName,
+			EvalSetID:     "template-basic",
+			OverallStatus: status.EvalStatusPassed,
+		},
+	}
+	err := runExample(context.Background(), func(gotAppName string, opts runOptions) (exampleEvaluator, error) {
+		assert.Equal(t, appName, gotAppName)
+		assert.Equal(t, "judge-model", os.Getenv("MODEL_NAME"))
+		return stub, nil
+	}, runOptions{
+		ModelName: "judge-model",
+		EvalSetID: "template-basic",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "original-model", os.Getenv("MODEL_NAME"))
+}
+
 func TestNewLocalEvaluator(t *testing.T) {
 	dataDir := filepath.Join("data")
 	outputDir := t.TempDir()

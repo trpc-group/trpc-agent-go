@@ -20,7 +20,7 @@ The metric configuration in `data/` expands `${OPENAI_API_KEY}`, `${OPENAI_BASE_
 
 | Flag | Description | Default |
 | --- | --- | --- |
-| `-model` | Model identifier used by the agent. | `gpt-5.2` |
+| `-model` | Model identifier used by the agent and judge. | `gpt-5.2` |
 | `-streaming` | Enable streaming responses from the agent. | `false` |
 | `-data-dir` | Directory containing `.evalset.json` and `.metrics.json`. | `./data` |
 | `-output-dir` | Directory where evaluation results are written. | `./output` |
@@ -31,7 +31,6 @@ The metric configuration in `data/` expands `${OPENAI_API_KEY}`, `${OPENAI_BASE_
 ```bash
 cd examples/evaluation/llm/template
 go run . \
-  -model "${MODEL_NAME}" \
   -data-dir "./data" \
   -output-dir "./output" \
   -eval-set "template-basic"

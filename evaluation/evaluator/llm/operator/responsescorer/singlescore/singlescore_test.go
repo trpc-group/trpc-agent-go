@@ -30,10 +30,19 @@ func TestScoreBasedOnResponseParsesStructuredJSON(t *testing.T) {
 
 func TestScoreBasedOnResponseRejectsOutOfRangeScore(t *testing.T) {
 	scorer := New()
-
 	_, err := scorer.ScoreBasedOnResponse(context.Background(), makeResponse(`{"score":1.2,"reason":"too high"}`), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "score must be between 0 and 1")
+}
+
+func TestScoreBasedOnResponseRejectsMissingRequiredFields(t *testing.T) {
+	scorer := New()
+	_, err := scorer.ScoreBasedOnResponse(context.Background(), makeResponse(`{"reason":"missing score"}`), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "score is required")
+	_, err = scorer.ScoreBasedOnResponse(context.Background(), makeResponse(`{"score":0.2}`), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reason is required")
 }
 
 func TestScoreBasedOnResponseRejectsInvalidJSON(t *testing.T) {

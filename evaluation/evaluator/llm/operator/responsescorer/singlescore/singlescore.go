@@ -21,8 +21,8 @@ import (
 )
 
 type singleScoreResponse struct {
-	Score  float64 `json:"score"`
-	Reason string  `json:"reason"`
+	Score  *float64 `json:"score"`
+	Reason *string  `json:"reason"`
 }
 
 type singleScoreResponseScorer struct {
@@ -40,11 +40,17 @@ func (s *singleScoreResponseScorer) ScoreBasedOnResponse(ctx context.Context, re
 	if err := responsejson.UnmarshalContent(response, &payload); err != nil {
 		return nil, err
 	}
-	if payload.Score < 0 || payload.Score > 1 {
+	if payload.Score == nil {
+		return nil, fmt.Errorf("score is required")
+	}
+	if payload.Reason == nil {
+		return nil, fmt.Errorf("reason is required")
+	}
+	if *payload.Score < 0 || *payload.Score > 1 {
 		return nil, fmt.Errorf("score must be between 0 and 1")
 	}
 	return &evaluator.ScoreResult{
-		Score:  payload.Score,
-		Reason: payload.Reason,
+		Score:  *payload.Score,
+		Reason: *payload.Reason,
 	}, nil
 }
