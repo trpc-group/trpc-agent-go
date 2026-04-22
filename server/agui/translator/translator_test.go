@@ -288,6 +288,20 @@ func TestFinalizeEventsHandlesNilInputs(t *testing.T) {
 	result = translator.finalizeEvents(nil, events)
 	assert.Equal(t, events, result)
 	assert.Nil(t, events[2].GetBaseEvent().RawEvent)
+
+	src := &agentevent.Event{Author: "member-a"}
+	events = []aguievents.Event{
+		nil,
+		stubEventWithNilBase{},
+		aguievents.NewRunStartedEvent("thread", "run"),
+	}
+	result = translator.finalizeEvents(src, events)
+	assert.Equal(t, events, result)
+	assert.Nil(t, events[0])
+
+	got, ok := events[2].GetBaseEvent().RawEvent.(source.Metadata)
+	require.True(t, ok)
+	assert.Equal(t, source.Metadata{Author: "member-a"}, got)
 }
 
 type stubEventWithNilBase struct{}
