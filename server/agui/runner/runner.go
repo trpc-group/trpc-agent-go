@@ -558,7 +558,9 @@ func (r *runner) emitToolResultEvent(ctx context.Context, events chan<- aguieven
 		messageID = msg.ToolID
 	}
 	if r.toolResultInputTranslationEnabled {
-		return r.handleAgentEvent(ctx, events, input, newToolResultInputEvent(messageID, msg))
+		event := newToolResultInputEvent(messageID, msg)
+		r.attachToolResultInputSourceMetadata(ctx, input.key, event, msg.ToolID)
+		return r.handleAgentEvent(ctx, events, input, event)
 	}
 	toolResultEvent := aguievents.NewToolCallResultEvent(messageID, msg.ToolID, msg.Content)
 	return r.emitEvent(ctx, events, toolResultEvent, input)

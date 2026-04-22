@@ -19,11 +19,13 @@ import (
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	aguitypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
 	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -214,7 +216,7 @@ func TestTranslateAttachesEventSourceMetadataWhenEnabled(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, events, 3)
 
-	want := eventSourceMetadata{
+	want := source.Metadata{
 		EventID:            "evt-1",
 		Author:             "member-a",
 		InvocationID:       "inv-1",
@@ -222,7 +224,7 @@ func TestTranslateAttachesEventSourceMetadataWhenEnabled(t *testing.T) {
 		Branch:             "root.member-a",
 	}
 	for _, evt := range events {
-		got, ok := evt.GetBaseEvent().RawEvent.(eventSourceMetadata)
+		got, ok := evt.GetBaseEvent().RawEvent.(source.Metadata)
 		assert.True(t, ok)
 		assert.Equal(t, want, got)
 	}
@@ -233,6 +235,80 @@ func TestTranslateAttachesEventSourceMetadataWhenEnabled(t *testing.T) {
 	assert.Contains(t, string(payload), `"author":"member-a"`)
 	assert.Contains(t, string(payload), `"invocationId":"inv-1"`)
 }
+
+func TestFinalizeEventsSkipsExistingRawEvent(t *testing.T) {
+	translator := &translator{eventSourceMetadataEnabled: true}
+	existing := map[string]any{"keep": true}
+	event := aguievents.NewRunStartedEvent("thread", "run")
+	event.GetBaseEvent().RawEvent = existing
+
+	events := translator.finalizeEvents(
+		&agentevent.Event{Author: "member-a"},
+		[]aguievents.Event{event},
+	)
+	require.Len(t, events, 1)
+	assert.Equal(t, existing, events[0].GetBaseEvent().RawEvent)
+}
+
+func TestFinalizeEventsSuppressesZeroOverride(t *testing.T) {
+	translator := &translator{eventSourceMetadataEnabled: true}
+	src := agentevent.NewResponseEvent("inv-1", "agui.runner", &model.Response{})
+	require.NoError(t, source.SetEventOverride(src, source.Metadata{}))
+
+	events := translator.finalizeEvents(
+		src,
+		[]aguievents.Event{
+			aguievents.NewRunStartedEvent("thread", "run"),
+		},
+	)
+	require.Len(t, events, 1)
+	assert.Nil(t, events[0].GetBaseEvent().RawEvent)
+}
+
+func TestFinalizeEventsHandlesNilInputs(t *testing.T) {
+	var nilTranslator *translator
+	assert.Nil(t, nilTranslator.finalizeEvents(nil, nil))
+
+	translator := &translator{}
+	assert.Nil(t, translator.finalizeEvents(nil, nil))
+
+	events := []aguievents.Event{nil}
+	result := translator.finalizeEvents(
+		&agentevent.Event{Author: "member-a"},
+		events,
+	)
+	assert.Equal(t, events, result)
+
+	translator.eventSourceMetadataEnabled = true
+	events = []aguievents.Event{
+		nil,
+		stubEventWithNilBase{},
+		aguievents.NewRunStartedEvent("thread", "run"),
+	}
+	result = translator.finalizeEvents(nil, events)
+	assert.Equal(t, events, result)
+	assert.Nil(t, events[2].GetBaseEvent().RawEvent)
+}
+
+type stubEventWithNilBase struct{}
+
+func (stubEventWithNilBase) Type() aguievents.EventType {
+	return aguievents.EventTypeRunStarted
+}
+
+func (stubEventWithNilBase) Timestamp() *int64 { return nil }
+
+func (stubEventWithNilBase) SetTimestamp(int64) {}
+
+func (stubEventWithNilBase) ThreadID() string { return "" }
+
+func (stubEventWithNilBase) RunID() string { return "" }
+
+func (stubEventWithNilBase) Validate() error { return nil }
+
+func (stubEventWithNilBase) ToJSON() ([]byte, error) { return nil, nil }
+
+func (stubEventWithNilBase) GetBaseEvent() *aguievents.BaseEvent { return nil }
 
 func TestTextMessageEventStreamingAndCompletion(t *testing.T) {
 	translator := newTranslatorImplForTest(t)

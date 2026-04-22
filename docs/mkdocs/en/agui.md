@@ -427,6 +427,36 @@ activity events will carry a `rawEvent` object similar to:
 }
 ```
 
+`rawEvent` is optional. It only appears on AG-UI events produced by the
+AG-UI translator or the AG-UI messages snapshot builder, and it is omitted
+when the framework has no non-empty source metadata to expose.
+
+On the `/history` route, the `MESSAGES_SNAPSHOT` event uses `rawEvent` as a
+source index instead of a single-event payload:
+
+```json
+{
+  "rawEvent": {
+    "messages": {
+      "assistant-1": {
+        "eventId": "evt-assistant",
+        "author": "member-a",
+        "invocationId": "inv-1",
+        "branch": "root.member-a"
+      }
+    },
+    "toolCalls": {
+      "tool-call-1": {
+        "eventId": "evt-tool-call",
+        "author": "member-a",
+        "invocationId": "inv-1",
+        "branch": "root.member-a"
+      }
+    }
+  }
+}
+```
+
 Recommended frontend usage:
 
 - Group by `rawEvent.author` when you want a stable "which agent emitted
@@ -435,6 +465,9 @@ Recommended frontend usage:
   block per run, even if the same agent name appears multiple times.
 - Keep `rawEvent.invocationId` if you need a unique execution key but do not
   want to expose the full branch string in UI state.
+- When restoring history from `MESSAGES_SNAPSHOT`, read
+  `rawEvent.toolCalls[toolCallId]` or `rawEvent.messages[messageId]` to
+  rebuild the same grouping state before the live stream resumes.
 
 Compatibility notes:
 

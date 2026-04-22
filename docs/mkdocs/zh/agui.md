@@ -423,6 +423,36 @@ server, err := agui.New(
 }
 ```
 
+`rawEvent` 是可选字段。它只会出现在 AG-UI translator 或消息快照构建
+器生成的 AG-UI 事件上；如果当前事件没有可暴露的非空 source 元数据，
+就不会携带这个字段。
+
+在 `/history` 路由上，`MESSAGES_SNAPSHOT` 的 `rawEvent` 不是单条事件
+source，而是一份 source 索引：
+
+```json
+{
+  "rawEvent": {
+    "messages": {
+      "assistant-1": {
+        "eventId": "evt-assistant",
+        "author": "member-a",
+        "invocationId": "inv-1",
+        "branch": "root.member-a"
+      }
+    },
+    "toolCalls": {
+      "tool-call-1": {
+        "eventId": "evt-tool-call",
+        "author": "member-a",
+        "invocationId": "inv-1",
+        "branch": "root.member-a"
+      }
+    }
+  }
+}
+```
+
 前端推荐这样使用：
 
 - 想按“这是哪个 Agent 发的”分组时，用 `rawEvent.author`。
@@ -430,6 +460,9 @@ server, err := agui.New(
   这样即使同名 Agent 在一次 run 中被调用多次，也不会混在一起。
 - 如果你需要唯一执行键，但不想直接把 branch 暴露到 UI 状态里，可以
   使用 `rawEvent.invocationId`。
+- 如果你是在恢复 `MESSAGES_SNAPSHOT` 历史消息，可以读取
+  `rawEvent.toolCalls[toolCallId]` 或 `rawEvent.messages[messageId]`，
+  用同一套规则还原前端分组状态。
 
 兼容性说明：
 

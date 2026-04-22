@@ -34,12 +34,17 @@ server, err := agui.New(
 When enabled, translated AG-UI events carry a compact `rawEvent` object.
 Typical fields include:
 
+- `eventId`: the original `trpc-agent-go` event identifier
 - `author`: the agent that emitted the original event
 - `invocationId`: the concrete invocation that produced the event
 - `parentInvocationId`: the parent invocation when the event came from a
   nested sub-agent
 - `branch`: the execution branch, useful when the same agent runs multiple
   times in one request
+
+`rawEvent` is optional. It only appears on AG-UI events produced by the
+AG-UI translator or the AG-UI message snapshot builder, and it is omitted
+when the framework has no non-empty source metadata to expose.
 
 Recommended grouping strategy:
 

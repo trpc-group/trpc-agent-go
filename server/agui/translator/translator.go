@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
 	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
@@ -95,14 +96,6 @@ type translator struct {
 	eventSourceMetadataEnabled             bool
 	streamingToolResultActivityEnabled     bool
 	streamingToolResultContent             map[string]string
-}
-
-type eventSourceMetadata struct {
-	EventID            string `json:"eventId,omitempty"`
-	Author             string `json:"author,omitempty"`
-	InvocationID       string `json:"invocationId,omitempty"`
-	ParentInvocationID string `json:"parentInvocationId,omitempty"`
-	Branch             string `json:"branch,omitempty"`
 }
 
 const skillRunArtifactsStateKey = skill.StateKeyArtifacts
@@ -227,7 +220,8 @@ func (t *translator) finalizeEvents(
 		len(events) == 0 {
 		return events
 	}
-	metadata, ok := newEventSourceMetadata(src)
+	// A zero-value override intentionally suppresses rawEvent export.
+	metadata, ok := source.FromEvent(src)
 	if !ok {
 		return events
 	}
@@ -242,25 +236,6 @@ func (t *translator) finalizeEvents(
 		base.RawEvent = metadata
 	}
 	return events
-}
-
-func newEventSourceMetadata(
-	ev *agentevent.Event,
-) (eventSourceMetadata, bool) {
-	if ev == nil {
-		return eventSourceMetadata{}, false
-	}
-	metadata := eventSourceMetadata{
-		EventID:            ev.ID,
-		Author:             ev.Author,
-		InvocationID:       ev.InvocationID,
-		ParentInvocationID: ev.ParentInvocationID,
-		Branch:             ev.Branch,
-	}
-	if metadata == (eventSourceMetadata{}) {
-		return eventSourceMetadata{}, false
-	}
-	return metadata, true
 }
 
 type artifactRef struct {
