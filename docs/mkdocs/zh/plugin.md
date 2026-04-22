@@ -234,8 +234,24 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 
 某些 After* 回调支持“覆盖”输出：
 
+- **AfterAgent**：可以返回自定义响应，作为一条额外的“终态”响应事件**追加**到
+  Agent 事件流末尾（不替换之前的事件）。
 - **AfterModel**：可以返回自定义响应，替换模型响应。
 - **AfterTool**：可以返回自定义结果，替换工具结果。
+
+!!! note "多 Agent 场景下的注意事项（ChainAgent、ParallelAgent、CycleAgent、Graph Agent 节点）"
+    `BeforeAgent` / `AfterAgent` 会**为每一个子 Agent invocation 各触发一次**，
+    而不是每个 Runner 执行只触发一次。如果你的 Hook 假设“一次 turn 只调用一次”，
+    请通过 `args.Invocation.Agent`（或 `AgentName`）来区分当前是哪一层。
+
+    `BeforeAgent.CustomResponse` 会**完全短路**子 Agent：`Run` 不会被调用，
+    子 Agent 自己发出的终态事件（例如 Graph Agent 节点依赖的
+    `GraphCompletionEvent`，它负责填充 `SubgraphResult.FinalState`）也**不会**
+    被发出。自定义的 `outputMapper` 需要在 `FinalState` 为 `nil` 时也能正常处理。
+
+    `AfterAgent.CustomResponse` 会**追加**一条终态响应事件。在 Graph Agent 节点
+    里，这条追加的响应会成为下游节点看到的 `StateKeyLastResponse`。如果你就是
+    想让 Runner 作用域插件覆盖子 Agent 输出，请有意识地使用它。
 
 ### 错误处理
 
