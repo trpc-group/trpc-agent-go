@@ -10552,6 +10552,16 @@ A2A 对齐，见 <a href="../error-handling/">Error Handling</a>。</p>
 </span><span id="__span-103-19"><a id="__codelineno-103-19" name="__codelineno-103-19"></a><span class="w">    </span><span class="nx">graphagent</span><span class="p">.</span><span class="nx">WithAgentCallbacks</span><span class="p">(</span><span class="nx">cb</span><span class="p">),</span>
 </span><span id="__span-103-20"><a id="__codelineno-103-20" name="__codelineno-103-20"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<div class="admonition note">
+<p class="admonition-title">Runner 级插件与 Graph Agent 节点</p>
+<p>通过 <code>graphagent.WithAgentCallbacks</code> 注册的回调，只作用在 <strong>GraphAgent 自身</strong>
+这一层。如果你在 Runner 上注册了 <code>PluginManager</code>（即 Runner 插件的
+<code>BeforeAgent</code> / <code>AfterAgent</code>），Graph Agent 节点中用
+<code>AddAgentNode(name, ...)</code> 挂进来的<strong>子 Agent</strong> 也会触发这些插件回调——
+每个子 invocation 各触发一次。完整语义（短路影响 <code>SubgraphResult.FinalState</code>、
+AfterAgent <code>CustomResponse</code> 会覆盖下游 <code>StateKeyLastResponse</code> 等）见
+<a href="../plugin/">Plugin 文档</a> "执行顺序与短路" 小节中的多 Agent 容器注意事项。</p>
+</div>
 <h2 id="_43">常见问题排查</h2>
 <p><strong>Q1: 报错 "graph must have an entry point"</strong></p>
 <ul>
@@ -10887,7 +10897,7 @@ A2A 对齐，见 <a href="../error-handling/">Error Handling</a>。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月15日 02:52:07 UTC">2026-04-15 02:52:07</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月22日 08:17:03 UTC">2026-04-22 08:17:03</span>
   </span>
 
     
