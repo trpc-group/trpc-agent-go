@@ -1545,7 +1545,58 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#mem0" class="md-nav__link">
+    <span class="md-ellipsis">
+      外部长时记忆平台集成（mem0）
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="外部长时记忆平台集成（mem0）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#_43" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置示例
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#withsessioningestor-withmemoryservice" class="md-nav__link">
+    <span class="md-ellipsis">
+      为什么用 WithSessionIngestor(...)，而不是 WithMemoryService(...)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_44" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置选项
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_45" class="md-nav__link">
+    <span class="md-ellipsis">
+      注意事项
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_46" class="md-nav__link">
     <span class="md-ellipsis">
       参考链接
     </span>
@@ -3346,7 +3397,58 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#mem0" class="md-nav__link">
+    <span class="md-ellipsis">
+      外部长时记忆平台集成（mem0）
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="外部长时记忆平台集成（mem0）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#_43" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置示例
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#withsessioningestor-withmemoryservice" class="md-nav__link">
+    <span class="md-ellipsis">
+      为什么用 WithSessionIngestor(...)，而不是 WithMemoryService(...)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_44" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置选项
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_45" class="md-nav__link">
+    <span class="md-ellipsis">
+      注意事项
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_46" class="md-nav__link">
     <span class="md-ellipsis">
       参考链接
     </span>
@@ -6104,11 +6206,172 @@ Hybrid 用法。</p>
 </span><span id="__span-48-10"><a id="__codelineno-48-10" name="__codelineno-48-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadMemory</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span><span class="w">             </span><span class="c1">// 自适应预加载预算。</span>
 </span><span id="__span-48-11"><a id="__codelineno-48-11" name="__codelineno-48-11"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_43">参考链接</h2>
+<h2 id="mem0">外部长时记忆平台集成（<code>mem0</code>）</h2>
+<p><code>memory/mem0</code> 是当前对 <a href="https://mem0.ai">mem0</a> 的集成实现，适合把长期记忆的提取与存储交给外部托管平台，同时仍然让 Agent 通过标准记忆工具查询结果。</p>
+<p>它与上文介绍的内置 Memory 后端不同：<code>memory/mem0</code> <strong>不是</strong> 完整的 <code>memory.Service</code> 实现，而是采用 ingest-first 模式。Runner 会在每轮对话后把 session transcript 发送给 mem0，由 mem0 在平台侧完成提取，Agent 再通过只读工具读取结果。</p>
+<p><strong>适用场景</strong>：外部长时记忆平台、每轮响应后的后台提取，以及不需要本地 CRUD 写路径的场景。</p>
+<h3 id="_43">配置示例</h3>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-49-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-49-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-49-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-49-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-49-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-49-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-49-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-49-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-49-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-49-10">10</a></span>
+<span class="normal"><a href="#__codelineno-49-11">11</a></span>
+<span class="normal"><a href="#__codelineno-49-12">12</a></span>
+<span class="normal"><a href="#__codelineno-49-13">13</a></span>
+<span class="normal"><a href="#__codelineno-49-14">14</a></span>
+<span class="normal"><a href="#__codelineno-49-15">15</a></span>
+<span class="normal"><a href="#__codelineno-49-16">16</a></span>
+<span class="normal"><a href="#__codelineno-49-17">17</a></span>
+<span class="normal"><a href="#__codelineno-49-18">18</a></span>
+<span class="normal"><a href="#__codelineno-49-19">19</a></span>
+<span class="normal"><a href="#__codelineno-49-20">20</a></span>
+<span class="normal"><a href="#__codelineno-49-21">21</a></span>
+<span class="normal"><a href="#__codelineno-49-22">22</a></span>
+<span class="normal"><a href="#__codelineno-49-23">23</a></span>
+<span class="normal"><a href="#__codelineno-49-24">24</a></span>
+<span class="normal"><a href="#__codelineno-49-25">25</a></span>
+<span class="normal"><a href="#__codelineno-49-26">26</a></span>
+<span class="normal"><a href="#__codelineno-49-27">27</a></span>
+<span class="normal"><a href="#__codelineno-49-28">28</a></span>
+<span class="normal"><a href="#__codelineno-49-29">29</a></span>
+<span class="normal"><a href="#__codelineno-49-30">30</a></span>
+<span class="normal"><a href="#__codelineno-49-31">31</a></span>
+<span class="normal"><a href="#__codelineno-49-32">32</a></span>
+<span class="normal"><a href="#__codelineno-49-33">33</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2"></a><span class="w">    </span><span class="s">&quot;os&quot;</span>
+</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3"></a>
+</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-49-5"><a id="__codelineno-49-5" name="__codelineno-49-5"></a><span class="w">    </span><span class="nx">memorymem0</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/memory/mem0&quot;</span>
+</span><span id="__span-49-6"><a id="__codelineno-49-6" name="__codelineno-49-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-49-7"><a id="__codelineno-49-7" name="__codelineno-49-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-49-8"><a id="__codelineno-49-8" name="__codelineno-49-8"></a><span class="w">    </span><span class="nx">sessioninmemory</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
+</span><span id="__span-49-9"><a id="__codelineno-49-9" name="__codelineno-49-9"></a><span class="p">)</span>
+</span><span id="__span-49-10"><a id="__codelineno-49-10" name="__codelineno-49-10"></a>
+</span><span id="__span-49-11"><a id="__codelineno-49-11" name="__codelineno-49-11"></a><span class="nx">mem0Svc</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memorymem0</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-49-12"><a id="__codelineno-49-12" name="__codelineno-49-12"></a><span class="w">    </span><span class="nx">memorymem0</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">&quot;MEM0_API_KEY&quot;</span><span class="p">)),</span>
+</span><span id="__span-49-13"><a id="__codelineno-49-13" name="__codelineno-49-13"></a><span class="w">    </span><span class="nx">memorymem0</span><span class="p">.</span><span class="nx">WithLoadToolEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-49-14"><a id="__codelineno-49-14" name="__codelineno-49-14"></a><span class="p">)</span>
+</span><span id="__span-49-15"><a id="__codelineno-49-15" name="__codelineno-49-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-49-16"><a id="__codelineno-49-16" name="__codelineno-49-16"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-49-17"><a id="__codelineno-49-17" name="__codelineno-49-17"></a><span class="p">}</span>
+</span><span id="__span-49-18"><a id="__codelineno-49-18" name="__codelineno-49-18"></a><span class="k">defer</span><span class="w"> </span><span class="nx">mem0Svc</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-49-19"><a id="__codelineno-49-19" name="__codelineno-49-19"></a>
+</span><span id="__span-49-20"><a id="__codelineno-49-20" name="__codelineno-49-20"></a><span class="nx">sessionSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessioninmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
+</span><span id="__span-49-21"><a id="__codelineno-49-21" name="__codelineno-49-21"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-49-22"><a id="__codelineno-49-22" name="__codelineno-49-22"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-49-23"><a id="__codelineno-49-23" name="__codelineno-49-23"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">)),</span>
+</span><span id="__span-49-24"><a id="__codelineno-49-24" name="__codelineno-49-24"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">mem0Svc</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
+</span><span id="__span-49-25"><a id="__codelineno-49-25" name="__codelineno-49-25"></a><span class="p">)</span>
+</span><span id="__span-49-26"><a id="__codelineno-49-26" name="__codelineno-49-26"></a>
+</span><span id="__span-49-27"><a id="__codelineno-49-27" name="__codelineno-49-27"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-49-28"><a id="__codelineno-49-28" name="__codelineno-49-28"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-49-29"><a id="__codelineno-49-29" name="__codelineno-49-29"></a><span class="w">    </span><span class="nx">agent</span><span class="p">,</span>
+</span><span id="__span-49-30"><a id="__codelineno-49-30" name="__codelineno-49-30"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionSvc</span><span class="p">),</span>
+</span><span id="__span-49-31"><a id="__codelineno-49-31" name="__codelineno-49-31"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionIngestor</span><span class="p">(</span><span class="nx">mem0Svc</span><span class="p">),</span>
+</span><span id="__span-49-32"><a id="__codelineno-49-32" name="__codelineno-49-32"></a><span class="p">)</span>
+</span><span id="__span-49-33"><a id="__codelineno-49-33" name="__codelineno-49-33"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>接入要点</strong>：</p>
+<ul>
+<li>通过 <code>llmagent.WithTools(mem0Svc.Tools())</code> 注册工具</li>
+<li>通过 <code>runner.WithSessionIngestor(mem0Svc)</code> 把 session transcript 交给 mem0</li>
+<li>不要对该集成使用 <code>runner.WithMemoryService(...)</code></li>
+</ul>
+<h3 id="withsessioningestor-withmemoryservice">为什么用 <code>WithSessionIngestor(...)</code>，而不是 <code>WithMemoryService(...)</code></h3>
+<p><code>runner.WithMemoryService(...)</code> 面向的是实现完整 <code>memory.Service</code> 契约的内置 Memory 后端。这个契约除了读接口，还包括 <code>AddMemory</code>、<code>UpdateMemory</code>、<code>DeleteMemory</code>、<code>ClearMemories</code>、<code>EnqueueAutoMemoryJob(...)</code> 等由框架直接拥有语义的写入与自动提取能力。</p>
+<p><code>memory/mem0</code> 的边界不同。它并不把完整的 CRUD 生命周期暴露给框架，而是接收完整的 session transcript，转交给 mem0 做托管提取，然后再通过只读工具把检索能力暴露给 Agent。</p>
+<p>使用 <code>runner.WithSessionIngestor(...)</code> 可以更准确地表达这层边界：</p>
+<ul>
+<li>Runner 在每轮结束后把完整 session transcript 发送出去</li>
+<li>记忆提取与存储由 mem0 在服务端完成</li>
+<li><code>metadata</code>、<code>agent_id</code>、<code>run_id</code> 这类按请求传递的 ingest 字段，可以通过 <code>session.IngestOption</code> 透传</li>
+<li>不会把该集成误解成支持完整框架侧 CRUD 或 preload 的内置后端</li>
+</ul>
+<p>简单说，<code>MemoryService</code> 表示“框架直接管理记忆”，而 <code>SessionIngestor</code> 表示“框架把 transcript 交给外部记忆系统”。<code>mem0</code> 属于后者。</p>
+<h3 id="_44">配置选项</h3>
+<table>
+<thead>
+<tr>
+<th>选项</th>
+<th>作用</th>
+<th>默认值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithAPIKey(key)</code></td>
+<td>mem0 API Key，所有请求必需。</td>
+<td>必填</td>
+</tr>
+<tr>
+<td><code>WithHost(url)</code></td>
+<td>覆盖 mem0 API Host / Base URL。</td>
+<td><code>https://api.mem0.ai</code></td>
+</tr>
+<tr>
+<td><code>WithOrgProject(orgID, projectID)</code></td>
+<td>为 ingest 与读取请求追加 mem0 的 <code>org_id</code> / <code>project_id</code>。</td>
+<td>空</td>
+</tr>
+<tr>
+<td><code>WithAsyncMode(bool)</code></td>
+<td>控制 ingest 请求里的 <code>async_mode</code>。</td>
+<td><code>true</code></td>
+</tr>
+<tr>
+<td><code>WithVersion(v)</code></td>
+<td>设置 mem0 ingest 请求里的版本字段。</td>
+<td><code>v2</code></td>
+</tr>
+<tr>
+<td><code>WithTimeout(d)</code></td>
+<td>HTTP 客户端超时时间。</td>
+<td><code>10s</code></td>
+</tr>
+<tr>
+<td><code>WithLoadToolEnabled(bool)</code></td>
+<td>是否在 <code>Tools()</code> 里暴露 <code>memory_load</code>。</td>
+<td><code>false</code></td>
+</tr>
+<tr>
+<td><code>WithAsyncMemoryNum(n)</code></td>
+<td>后台 ingest worker 数量。</td>
+<td><code>1</code></td>
+</tr>
+<tr>
+<td><code>WithMemoryQueueSize(n)</code></td>
+<td>每个 worker 的队列长度。</td>
+<td><code>10</code></td>
+</tr>
+<tr>
+<td><code>WithMemoryJobTimeout(d)</code></td>
+<td>队列任务与同步 fallback ingest 的超时时间。</td>
+<td><code>30s</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="_45">注意事项</h3>
+<ul>
+<li><code>Tools()</code> 默认暴露 <code>memory_search</code>；<code>memory_load</code> 可按需开启。</li>
+<li>所有读取仍然基于当前 <code>&lt;appName, userID&gt;</code> 做隔离。</li>
+<li>Runner 会自动把 session 上下文带入 ingest；如果有需要，也可以通过 <code>session.WithIngestMetadata</code>、<code>session.WithIngestAgentID</code>、<code>session.WithIngestRunID</code> 追加信息。</li>
+<li>当 mem0 返回结构化 metadata 时，检索结果仍可携带 <code>Topics</code>、<code>Kind</code>、<code>EventTime</code>、<code>Participants</code>、<code>Location</code> 等字段。</li>
+<li>使用完成后请调用 <code>Close()</code>，确保后台 worker 干净退出。</li>
+<li>如果你需要完整的 CRUD 工具面，或依赖框架侧 preload，建议优先选择内置 Memory 后端。</li>
+</ul>
+<h2 id="_46">参考链接</h2>
 <ul>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/memory">Memory 模块源码</a></li>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory">工具驱动模式示例</a></li>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto">自动提取模式示例</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/mem0">mem0 示例</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/zh/ecosystem.md">生态建设文档</a></li>
 <li><a href="https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory">API 文档</a></li>
 </ul>
 
@@ -6133,7 +6396,7 @@ Hybrid 用法。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月21日 02:14:21 UTC">2026-04-21 02:14:21</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月22日 08:16:40 UTC">2026-04-22 08:16:40</span>
   </span>
 
     

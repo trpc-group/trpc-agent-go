@@ -1488,6 +1488,57 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#external-long-term-memory-integration-mem0" class="md-nav__link">
+    <span class="md-ellipsis">
+      External Long-Term Memory Integration (mem0)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="External Long-Term Memory Integration (mem0)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration-example_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Example
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-withsessioningestor-instead-of-withmemoryservice" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why WithSessionIngestor(...) Instead of WithMemoryService(...)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Notes
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#references" class="md-nav__link">
     <span class="md-ellipsis">
       References
@@ -3221,6 +3272,57 @@
   <a href="#hybrid-approach" class="md-nav__link">
     <span class="md-ellipsis">
       Hybrid Approach
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#external-long-term-memory-integration-mem0" class="md-nav__link">
+    <span class="md-ellipsis">
+      External Long-Term Memory Integration (mem0)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="External Long-Term Memory Integration (mem0)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration-example_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Example
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-withsessioningestor-instead-of-withmemoryservice" class="md-nav__link">
+    <span class="md-ellipsis">
+      Why WithSessionIngestor(...) Instead of WithMemoryService(...)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#configuration-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Notes
     </span>
   </a>
   
@@ -5965,11 +6067,172 @@ to balance performance and cost.</p>
 </span><span id="__span-47-10"><a id="__codelineno-47-10" name="__codelineno-47-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadMemory</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span><span class="w">             </span><span class="c1">// Adaptive preload budget.</span>
 </span><span id="__span-47-11"><a id="__codelineno-47-11" name="__codelineno-47-11"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
+<h2 id="external-long-term-memory-integration-mem0">External Long-Term Memory Integration (<code>mem0</code>)</h2>
+<p><code>memory/mem0</code> integrates <a href="https://mem0.ai">mem0</a>, an externally hosted long-term memory platform. It is suitable when you want mem0 to handle memory extraction and storage, while the Agent continues to query memories through standard tools.</p>
+<p>Unlike the built-in backends above, <code>memory/mem0</code> is <strong>not</strong> a full <code>memory.Service</code> implementation. It uses an ingest-first pattern: Runner forwards session transcripts to mem0 after each turn, mem0 performs extraction on the service side, and the Agent uses read-oriented tools to query the results.</p>
+<p><strong>Use case</strong>: Hosted long-term memory, background extraction after each turn, and no local CRUD write path.</p>
+<h3 id="configuration-example_1">Configuration Example</h3>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-48-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-48-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-48-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-48-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-48-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-48-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-48-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-48-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-48-10">10</a></span>
+<span class="normal"><a href="#__codelineno-48-11">11</a></span>
+<span class="normal"><a href="#__codelineno-48-12">12</a></span>
+<span class="normal"><a href="#__codelineno-48-13">13</a></span>
+<span class="normal"><a href="#__codelineno-48-14">14</a></span>
+<span class="normal"><a href="#__codelineno-48-15">15</a></span>
+<span class="normal"><a href="#__codelineno-48-16">16</a></span>
+<span class="normal"><a href="#__codelineno-48-17">17</a></span>
+<span class="normal"><a href="#__codelineno-48-18">18</a></span>
+<span class="normal"><a href="#__codelineno-48-19">19</a></span>
+<span class="normal"><a href="#__codelineno-48-20">20</a></span>
+<span class="normal"><a href="#__codelineno-48-21">21</a></span>
+<span class="normal"><a href="#__codelineno-48-22">22</a></span>
+<span class="normal"><a href="#__codelineno-48-23">23</a></span>
+<span class="normal"><a href="#__codelineno-48-24">24</a></span>
+<span class="normal"><a href="#__codelineno-48-25">25</a></span>
+<span class="normal"><a href="#__codelineno-48-26">26</a></span>
+<span class="normal"><a href="#__codelineno-48-27">27</a></span>
+<span class="normal"><a href="#__codelineno-48-28">28</a></span>
+<span class="normal"><a href="#__codelineno-48-29">29</a></span>
+<span class="normal"><a href="#__codelineno-48-30">30</a></span>
+<span class="normal"><a href="#__codelineno-48-31">31</a></span>
+<span class="normal"><a href="#__codelineno-48-32">32</a></span>
+<span class="normal"><a href="#__codelineno-48-33">33</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a><span class="w">    </span><span class="s">&quot;os&quot;</span>
+</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a>
+</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a><span class="w">    </span><span class="nx">memorymem0</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/memory/mem0&quot;</span>
+</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8"></a><span class="w">    </span><span class="nx">sessioninmemory</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/inmemory&quot;</span>
+</span><span id="__span-48-9"><a id="__codelineno-48-9" name="__codelineno-48-9"></a><span class="p">)</span>
+</span><span id="__span-48-10"><a id="__codelineno-48-10" name="__codelineno-48-10"></a>
+</span><span id="__span-48-11"><a id="__codelineno-48-11" name="__codelineno-48-11"></a><span class="nx">mem0Svc</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memorymem0</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-48-12"><a id="__codelineno-48-12" name="__codelineno-48-12"></a><span class="w">    </span><span class="nx">memorymem0</span><span class="p">.</span><span class="nx">WithAPIKey</span><span class="p">(</span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">&quot;MEM0_API_KEY&quot;</span><span class="p">)),</span>
+</span><span id="__span-48-13"><a id="__codelineno-48-13" name="__codelineno-48-13"></a><span class="w">    </span><span class="nx">memorymem0</span><span class="p">.</span><span class="nx">WithLoadToolEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-48-14"><a id="__codelineno-48-14" name="__codelineno-48-14"></a><span class="p">)</span>
+</span><span id="__span-48-15"><a id="__codelineno-48-15" name="__codelineno-48-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-48-16"><a id="__codelineno-48-16" name="__codelineno-48-16"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-48-17"><a id="__codelineno-48-17" name="__codelineno-48-17"></a><span class="p">}</span>
+</span><span id="__span-48-18"><a id="__codelineno-48-18" name="__codelineno-48-18"></a><span class="k">defer</span><span class="w"> </span><span class="nx">mem0Svc</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-48-19"><a id="__codelineno-48-19" name="__codelineno-48-19"></a>
+</span><span id="__span-48-20"><a id="__codelineno-48-20" name="__codelineno-48-20"></a><span class="nx">sessionSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessioninmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
+</span><span id="__span-48-21"><a id="__codelineno-48-21" name="__codelineno-48-21"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-48-22"><a id="__codelineno-48-22" name="__codelineno-48-22"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-48-23"><a id="__codelineno-48-23" name="__codelineno-48-23"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">)),</span>
+</span><span id="__span-48-24"><a id="__codelineno-48-24" name="__codelineno-48-24"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">mem0Svc</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
+</span><span id="__span-48-25"><a id="__codelineno-48-25" name="__codelineno-48-25"></a><span class="p">)</span>
+</span><span id="__span-48-26"><a id="__codelineno-48-26" name="__codelineno-48-26"></a>
+</span><span id="__span-48-27"><a id="__codelineno-48-27" name="__codelineno-48-27"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-48-28"><a id="__codelineno-48-28" name="__codelineno-48-28"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-48-29"><a id="__codelineno-48-29" name="__codelineno-48-29"></a><span class="w">    </span><span class="nx">agent</span><span class="p">,</span>
+</span><span id="__span-48-30"><a id="__codelineno-48-30" name="__codelineno-48-30"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionSvc</span><span class="p">),</span>
+</span><span id="__span-48-31"><a id="__codelineno-48-31" name="__codelineno-48-31"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionIngestor</span><span class="p">(</span><span class="nx">mem0Svc</span><span class="p">),</span>
+</span><span id="__span-48-32"><a id="__codelineno-48-32" name="__codelineno-48-32"></a><span class="p">)</span>
+</span><span id="__span-48-33"><a id="__codelineno-48-33" name="__codelineno-48-33"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>Integration points</strong>:</p>
+<ul>
+<li>Register tools with <code>llmagent.WithTools(mem0Svc.Tools())</code></li>
+<li>Use <code>runner.WithSessionIngestor(mem0Svc)</code> to send session transcripts to mem0</li>
+<li>Do <strong>not</strong> use <code>runner.WithMemoryService(...)</code> with this integration</li>
+</ul>
+<h3 id="why-withsessioningestor-instead-of-withmemoryservice">Why <code>WithSessionIngestor(...)</code> Instead of <code>WithMemoryService(...)</code></h3>
+<p><code>runner.WithMemoryService(...)</code> is designed for built-in memory backends that implement the full <code>memory.Service</code> contract. In addition to read APIs, that contract includes framework-owned write semantics such as <code>AddMemory</code>, <code>UpdateMemory</code>, <code>DeleteMemory</code>, <code>ClearMemories</code>, and <code>EnqueueAutoMemoryJob(...)</code>.</p>
+<p><code>memory/mem0</code> has a different boundary. It does not expose the full CRUD lifecycle to the framework. Instead, it accepts a completed session transcript, forwards it to mem0 for hosted extraction, and then exposes read-oriented tools for retrieval.</p>
+<p>Using <code>runner.WithSessionIngestor(...)</code> makes that boundary explicit:</p>
+<ul>
+<li>Runner sends the completed session transcript after each turn</li>
+<li>mem0 performs extraction and storage on the service side</li>
+<li>per-request ingest fields such as <code>metadata</code>, <code>agent_id</code>, and <code>run_id</code> can be passed through <code>session.IngestOption</code></li>
+<li>the integration is not mistaken for a built-in backend that supports full framework-side CRUD or preload behavior</li>
+</ul>
+<p>In short, <code>MemoryService</code> means "the framework manages memories directly", while <code>SessionIngestor</code> means "the framework hands the transcript to an external memory system". <code>mem0</code> matches the second model.</p>
+<h3 id="configuration-options">Configuration Options</h3>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Purpose</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithAPIKey(key)</code></td>
+<td>mem0 API key. Required for all requests.</td>
+<td>required</td>
+</tr>
+<tr>
+<td><code>WithHost(url)</code></td>
+<td>Override the mem0 API host/base URL.</td>
+<td><code>https://api.mem0.ai</code></td>
+</tr>
+<tr>
+<td><code>WithOrgProject(orgID, projectID)</code></td>
+<td>Add mem0 <code>org_id</code> / <code>project_id</code> to ingest and retrieval requests.</td>
+<td>empty</td>
+</tr>
+<tr>
+<td><code>WithAsyncMode(bool)</code></td>
+<td>Controls mem0's <code>async_mode</code> flag on ingest requests.</td>
+<td><code>true</code></td>
+</tr>
+<tr>
+<td><code>WithVersion(v)</code></td>
+<td>Sets the mem0 ingestion API version field.</td>
+<td><code>v2</code></td>
+</tr>
+<tr>
+<td><code>WithTimeout(d)</code></td>
+<td>HTTP timeout used by the client.</td>
+<td><code>10s</code></td>
+</tr>
+<tr>
+<td><code>WithLoadToolEnabled(bool)</code></td>
+<td>Expose <code>memory_load</code> from <code>Tools()</code>.</td>
+<td><code>false</code></td>
+</tr>
+<tr>
+<td><code>WithAsyncMemoryNum(n)</code></td>
+<td>Number of background ingest workers.</td>
+<td><code>1</code></td>
+</tr>
+<tr>
+<td><code>WithMemoryQueueSize(n)</code></td>
+<td>Queue size per ingest worker.</td>
+<td><code>10</code></td>
+</tr>
+<tr>
+<td><code>WithMemoryJobTimeout(d)</code></td>
+<td>Timeout for queued jobs and synchronous fallback ingest.</td>
+<td><code>30s</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="notes">Notes</h3>
+<ul>
+<li><code>Tools()</code> exposes <code>memory_search</code> by default; <code>memory_load</code> can be enabled explicitly.</li>
+<li>All reads remain scoped to the current <code>&lt;appName, userID&gt;</code>.</li>
+<li>Runner automatically passes session context into ingest. Custom callers can also use <code>session.WithIngestMetadata</code>, <code>session.WithIngestAgentID</code>, and <code>session.WithIngestRunID</code> when needed.</li>
+<li>When mem0 metadata is available, search results can still carry structured fields such as <code>Topics</code>, <code>Kind</code>, <code>EventTime</code>, <code>Participants</code>, and <code>Location</code>.</li>
+<li>Call <code>Close()</code> on the service so background workers shut down cleanly.</li>
+<li>If you need full CRUD tools or framework-side preload, use one of the built-in memory backends instead.</li>
+</ul>
 <h2 id="references">References</h2>
 <ul>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/memory">Memory Module Source</a></li>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory">Agentic Mode Example</a></li>
 <li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto">Auto Mode Example</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/mem0">mem0 Example</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/ecosystem.md">Ecosystem Guide</a></li>
 <li><a href="https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory">API Documentation</a></li>
 </ul>
 
@@ -5994,7 +6257,7 @@ to balance performance and cost.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 21, 2026 02:14:21 UTC">2026-04-21 02:14:21</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 22, 2026 08:16:40 UTC">2026-04-22 08:16:40</span>
   </span>
 
     
